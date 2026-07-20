@@ -102,7 +102,8 @@
             <label for="default_theme">Default Theme</label>
             <select id="default_theme" name="default_theme">
               <optgroup label="Classic">
-                <option value="atomic">Atomic ⚛ (default)</option>
+                <option value="atomic">Reactor ⚛ (default)</option>
+                <option value="uranium">Uranium Classic ☢</option>
                 <option value="nexus">Nexus</option>
                 <option value="light">Light</option>
               </optgroup>
@@ -195,9 +196,15 @@
             </div>
           </div>
 
-          <div class="form-group">
-            <label for="website_link">Website URL</label>
-            <input type="url" id="website_link" name="website_link" placeholder="https://...">
+          <div class="form-row">
+            <div class="form-group">
+              <label for="nostr_link">Nostr Profile (web URL, e.g. njump.me)</label>
+              <input type="url" id="nostr_link" name="nostr_link" placeholder="https://njump.me/npub1...">
+            </div>
+            <div class="form-group">
+              <label for="website_link">Website URL</label>
+              <input type="url" id="website_link" name="website_link" placeholder="https://...">
+            </div>
           </div>
 
           <div class="form-group">

@@ -219,10 +219,26 @@ flr_guided_setup() {
     echo ""
     echo -e "   ${BOLD}Share it:${RESET} wallet users add ${BOLD}wss://${domain}${RESET} in their relay list"
     echo -e "   ${DIM}(Goblin wallet: Settings → Relays)${RESET}"
+    # Offer the daily encrypted backup inline (was a passive "see menu B" hint).
+    # It preserves the NIP-05 username registry + stored events — the data a fresh
+    # relay on a new VPS would otherwise lose. On a same-domain migration the wss
+    # CONNECTION survives via DNS+cert, but the name@domain registry lives only in
+    # the relay DB, so without this backup every nickname resets. flr_backup_schedule
+    # prompts once for the shared personal key (needed to decrypt on restore).
+    echo ""
+    echo -e "   ${BOLD}Protect your relay data${RESET}"
+    echo -e "   ${DIM}A daily encrypted backup preserves your NIP-05 usernames + events so you can${RESET}"
+    echo -e "   ${DIM}migrate to a new VPS with nicknames intact. Archives → ${GBE_BACKUP_DIR:-/opt/grin/backups}.${RESET}"
+    echo -ne "   ${BOLD}Enable it now? [Y/n]: ${RESET}"
+    local _bk; read -r _bk || true
+    if [[ "${_bk,,}" != "n" ]]; then
+        flr_backup_schedule || warn "Backup not scheduled — set it up later via menu B."
+    else
+        info "Skipped — enable later via menu B (also included in the toolkit-wide Script 089 backup)."
+    fi
     echo ""
     echo -e "   ${BOLD}Recommended next steps:${RESET}"
     echo -e "    • Menu ${BOLD}3${RESET} — status dashboard (service, SSL, stored events)"
-    echo -e "    • Menu ${BOLD}B${RESET} — enable the encrypted daily backup"
     if [[ "$want_names" -eq 1 ]]; then
         echo -e "    • ${GREEN}Usernames live${RESET} — users can register name@${domain} (manage via menu ${BOLD}9${RESET})"
     else

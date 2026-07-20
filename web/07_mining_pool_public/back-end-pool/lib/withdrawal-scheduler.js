@@ -2,6 +2,13 @@ const { getDb } = require('./db');
 const WalletTor = require('./wallet-tor');
 const IncentivesManager = require('./incentives');
 
+// Every status that occupies the ONE-pending-per-address slot — across ALL payout rails
+// (Tor, slatepack, and any future method that reuses these states, e.g. the designed Nostr
+// rail, which parks in slatepack_pending). Both create paths MUST share this list: a
+// rail-specific subset re-opens the hole where a miner with a pending slatepack could start
+// a Tor payout in parallel (found + fixed 2026-07-17).
+const PENDING_SQL = "status IN ('tor_checking','tor_sending','retry_scheduled','slatepack_pending')";
+
 class WithdrawalScheduler {
   constructor(config, wallet = null) {
     this.config = config;
@@ -10,12 +17,21 @@ class WithdrawalScheduler {
     // WalletAPI (Owner API v3) — required only for the slatepack payout rail. Tor payouts use
     // walletTor (CLI). Left null in deployments that never enable slatepack.
     this.wallet = wallet;
+    // Goblin/Nostr payout bridge (design §15) — injected by index.js AFTER construction
+    // (the bridge needs a response handler that calls back into this scheduler, so the two
+    // are wired post-hoc to avoid a construction cycle). Null when the feature is off.
+    this.nostrBridge = null;
     this.incentives = new IncentivesManager(config);
     this.isRunning = false;
     this.checkInterval = 60000;
     // How long an unfinalized slatepack payout stays pending before it's cancelled and the
     // locked balance is returned (the miner never imported/returned the slate).
     this.slatepackTtlSeconds = (config.slatepack_ttl_hours || 24) * 3600;
+    // Goblin/Nostr rows (method='nostr') expire on a much shorter clock: the wallet AutoReceives,
+    // so a live miner answers in seconds — no human paste-back to wait for. Bounds a stranded
+    // lock when the wallet is offline. See config.nostr_pending_ttl_minutes.
+    this.nostrPendingTtlSeconds =
+      (config.nostr_pending_ttl_minutes !== undefined ? config.nostr_pending_ttl_minutes : 10) * 60;
     this.retryDelays = config.withdrawal_retry_delays || [
       6 * 3600,
       12 * 3600,
@@ -39,15 +55,106 @@ class WithdrawalScheduler {
   async schedulerLoop() {
     while (this.isRunning) {
       try {
-        await this.processRetryQueue();
-        await this.processTorChecks();
-        await this.processSlatepackExpiry();
+        if (this.isFrozen()) {
+          // Kill-switch engaged (auto by AlertMonitor on a critical money trip, or manual admin).
+          // Skip every OUTBOUND send path; still run slatepack expiry (it only REFUNDS expired
+          // slates back to miners — safe and desirable while frozen).
+          await this.processSlatepackExpiry();
+        } else {
+          await this.processRetryQueue();
+          await this.processTorChecks();
+          await this.processSlatepackExpiry();
+        }
+        // Read-only: attach on-chain kernel proofs to confirmed payouts. Never moves funds, so
+        // it runs regardless of the freeze state. Self-throttled + no-op when nothing's pending.
+        await this.backfillKernelProofs();
       } catch (err) {
         console.error(`[ERROR] Withdrawal scheduler error: ${err.message}`);
       }
 
       await this.sleep(this.checkInterval);
     }
+  }
+
+  // ─── Payout kill-switch ──────────────────────────────────────────────────────
+  // State lives in payout_control (single row id=1) so it survives restarts and is shared with
+  // the admin API + AlertMonitor. A missing row means "not frozen".
+  isFrozen() {
+    try {
+      const row = this.db.prepare('SELECT frozen FROM payout_control WHERE id = 1').get();
+      return !!(row && row.frozen);
+    } catch (e) { return false; }
+  }
+
+  // Freeze gate for every NEW fund-moving entry point (Tor create, slatepack create, slatepack
+  // finalize). The scheduler loop skipping sends is NOT enough: the slatepack rail moves coins
+  // synchronously in the request (create locks wallet outputs, finalize broadcasts on-chain), so
+  // without this gate a miner could complete a payout end-to-end DURING a wallet_drain /
+  // integrity_drift incident — the exact scenario the kill-switch exists for. Throws the same
+  // shaped 4xx the routes already map (409, like the admin retry gate). Cancels and slatepack
+  // expiry stay allowed while frozen — they only refund locked balances.
+  _assertNotFrozen() {
+    if (this.isFrozen()) {
+      const e = new Error('payouts are temporarily frozen by the pool operator — try again later');
+      e.code = 409;
+      throw e;
+    }
+  }
+
+  // Cross-rail cooldown after a reversed payout (operator decision 2026-07-17, default 30 min).
+  // When a payout's lock is reversed back to balance — Tor final-failure, slatepack expiry or
+  // creation failure, admin cancel — the miner must wait before requesting ANOTHER payout on
+  // ANY rail. Two jobs: (1) safety margin for the known theoretical double-pay window (a Tor
+  // send that looked failed may still land — see audit §E.1; the slate_id/retrieve_txs check
+  // is the real fix, this narrows the race meanwhile), (2) stops rapid-fire rail-hopping after
+  // failures. Configured via payout.withdrawal_cooldown_minutes (applied at startup, like
+  // min_withdrawal); 0 disables.
+  _assertNoRecentReversal(grinAddress) {
+    const mins = this.config.withdrawal_cooldown_minutes;
+    const cooldown = (mins === undefined || mins === null ? 30 : mins) * 60;
+    if (!cooldown) return;
+    const row = this.db.prepare(`
+      SELECT MAX(created_at) AS t FROM balance_log
+      WHERE grin_address = ? AND event_type = 'reversal' AND reference_type = 'withdrawal'
+    `).get(grinAddress);
+    if (!row || !row.t) return;
+    const remaining = cooldown - (Math.floor(Date.now() / 1000) - row.t);
+    if (remaining > 0) {
+      const waitMin = Math.ceil(remaining / 60);
+      const e = new Error(
+        `a recent payout was returned to your balance — please wait ${waitMin} min before requesting another`
+      );
+      e.code = 429;
+      throw e;
+    }
+  }
+
+  freeze(reason, by) {
+    try {
+      const now = Math.floor(Date.now() / 1000);
+      this.db.prepare(`
+        INSERT INTO payout_control (id, frozen, reason, frozen_by, frozen_at, updated_at)
+        VALUES (1, 1, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET frozen = 1, reason = excluded.reason,
+          frozen_by = excluded.frozen_by, frozen_at = excluded.frozen_at, updated_at = excluded.updated_at
+      `).run(reason || null, by || null, now, now);
+      console.warn(`[${new Date().toISOString()}] ⛔ PAYOUTS FROZEN by ${by || 'unknown'}: ${reason || ''}`);
+      return true;
+    } catch (e) { console.error(`freeze() failed: ${e.message}`); return false; }
+  }
+
+  resume(by) {
+    try {
+      const now = Math.floor(Date.now() / 1000);
+      this.db.prepare(`
+        INSERT INTO payout_control (id, frozen, reason, frozen_by, frozen_at, updated_at)
+        VALUES (1, 0, NULL, ?, NULL, ?)
+        ON CONFLICT(id) DO UPDATE SET frozen = 0, reason = NULL, frozen_by = excluded.frozen_by,
+          frozen_at = NULL, updated_at = excluded.updated_at
+      `).run(by || null, now);
+      console.warn(`[${new Date().toISOString()}] ▶ PAYOUTS RESUMED by ${by || 'unknown'}`);
+      return true;
+    } catch (e) { console.error(`resume() failed: ${e.message}`); return false; }
   }
 
   async processRetryQueue() {
@@ -110,10 +217,13 @@ class WithdrawalScheduler {
 
       if (!withdrawal) return;
 
-      const stmt = this.db.prepare(`
-        UPDATE withdrawals SET status = 'tor_checking' WHERE id = ?
-      `);
-      stmt.run(withdrawalId);
+      // Guarded transition: only a row still in retry_scheduled may be picked up. A miner
+      // cancel (or a competing pass) between the retry-queue SELECT and this call would
+      // otherwise be flipped back to tor_checking AFTER its lock was reversed — double-pay.
+      const claimed = this.db.prepare(`
+        UPDATE withdrawals SET status = 'tor_checking' WHERE id = ? AND status = 'retry_scheduled'
+      `).run(withdrawalId);
+      if (claimed.changes !== 1) return;
 
       const eventStmt = this.db.prepare(`
         INSERT INTO withdrawal_events
@@ -158,6 +268,8 @@ class WithdrawalScheduler {
       );
 
       if (sendResult.success) {
+        await this.recordTorFee(withdrawalId, withdrawal.amount);
+        await this._captureTorSlateId(withdrawalId, withdrawal.amount); // best-effort proof metadata
         await this.markConfirmed(withdrawalId, sendResult.output);
       } else {
         console.error(`Send failed for withdrawal ${withdrawalId}: ${sendResult.error}`);
@@ -212,6 +324,81 @@ class WithdrawalScheduler {
     }
   }
 
+  // ─── On-chain kernel proof (payment-proof deep-link surface) ────────────────
+  // Fill in the kernel excess of each confirmed payout so the account page can deep-link it to a
+  // chain explorer (scan.grin.money/kernel/<excess>). READ-ONLY w.r.t. balances — it only writes
+  // the proof column, never moves or unlocks funds — so it is safe to run even while payouts are
+  // frozen. Requires the Owner-API wallet (this.wallet): the Tor CLI rail exposes no structured
+  // kernel, so a Tor-only deployment without the Owner API simply gets no kernel column.
+  //
+  // Matching: the wallet's TxLogEntry carries kernel_excess (populated once the tx mines) and
+  // tx_slate_id. Slatepack/nostr payouts store their slate_id, so they match exactly. Tor rows
+  // get their slate_id captured post-send by _captureTorSlateId(), so they match the same way.
+  async backfillKernelProofs() {
+    if (!this.wallet) return;
+    try {
+      const cutoff = Math.floor(Date.now() / 1000) - 30 * 86400; // bound the scan to recent payouts
+      const pending = this.db.prepare(
+        `SELECT id, slate_id FROM withdrawals
+         WHERE status = 'confirmed' AND kernel_excess IS NULL AND slate_id IS NOT NULL
+           AND created_at >= ?
+         ORDER BY created_at DESC LIMIT 200`
+      ).all(cutoff);
+      if (!pending.length) return;
+
+      // The tx scan refreshes from the node (slow); throttle to at most once every 3 min even if
+      // rows linger — a just-broadcast payout's kernel isn't mined for a minute or two anyway.
+      if (this._lastKernelScan && (Date.now() - this._lastKernelScan) < 180000) return;
+      this._lastKernelScan = Date.now();
+
+      const txs = await this.wallet.getTransactions(true);
+      if (!Array.isArray(txs) || !txs.length) return;
+
+      const bySlate = new Map();
+      for (const t of txs) {
+        if (t && t.tx_slate_id && t.kernel_excess) bySlate.set(String(t.tx_slate_id), t.kernel_excess);
+      }
+      if (!bySlate.size) return;
+
+      const upd = this.db.prepare(
+        'UPDATE withdrawals SET kernel_excess = ? WHERE id = ? AND kernel_excess IS NULL'
+      );
+      let filled = 0;
+      for (const w of pending) {
+        const excess = bySlate.get(String(w.slate_id));
+        if (excess) { upd.run(excess, w.id); filled++; }
+      }
+      if (filled) {
+        console.log(`[${new Date().toISOString()}] kernel-proof backfill: attached ${filled} payout proof(s)`);
+      }
+    } catch (err) {
+      console.warn(`[kernel-proof] backfill skipped: ${err.message}`);
+    }
+  }
+
+  // After a Tor CLI send, record the slate_id of the just-broadcast tx so backfillKernelProofs()
+  // can later attach its on-chain kernel excess (the CLI rail never returns a structured slate).
+  // Best-effort + READ-ONLY: any failure leaves slate_id NULL (that payout just won't get a proof
+  // link) and never touches the payout itself. Runs right after send when the newest sent tx in
+  // the wallet log is ours (sends are serialized through the scheduler).
+  async _captureTorSlateId(withdrawalId, amountGrin) {
+    if (!this.wallet) return;
+    try {
+      const txs = await this.wallet.getTransactions(false); // local tx log — no node refresh needed
+      if (!Array.isArray(txs) || !txs.length) return;
+      const wantNano = Math.round(Number(amountGrin || 0) * 1e9);
+      const candidate = txs
+        .filter((t) => t && t.tx_slate_id && /Sent/.test(String(t.tx_type || '')))
+        .filter((t) => (Number(t.amount_debited || 0) - Number(t.amount_credited || 0)) >= wantNano)
+        .sort((a, b) => Number(b.id || 0) - Number(a.id || 0))[0];
+      if (candidate) {
+        this.db.prepare(
+          'UPDATE withdrawals SET slate_id = ? WHERE id = ? AND slate_id IS NULL'
+        ).run(String(candidate.tx_slate_id), withdrawalId);
+      }
+    } catch (e) { /* best-effort proof metadata — never affects the payout */ }
+  }
+
   async markConfirmed(withdrawalId, txOutput = null) {
     try {
       const stmt = this.db.prepare(`
@@ -230,23 +417,7 @@ class WithdrawalScheduler {
         'SELECT * FROM withdrawals WHERE id = ?'
       ).get(withdrawalId);
 
-      const balanceStmt = this.db.prepare(`
-        UPDATE miner_accounts
-        SET balance_locked = CASE
-          WHEN balance_locked >= ? THEN balance_locked - ?
-          ELSE 0
-        END
-        WHERE grin_address = ?
-      `);
-      balanceStmt.run(withdrawal.amount, withdrawal.amount, withdrawal.grin_address);
-
-      const logStmt = this.db.prepare(`
-        INSERT INTO balance_log
-        (grin_address, event_type, amount, balance_before, balance_after,
-         locked_before, locked_after, reference_type, reference_id)
-        VALUES (?, 'debit', ?, 0, 0, 0, 0, 'withdrawal', ?)
-      `);
-      logStmt.run(withdrawal.grin_address, withdrawal.amount, withdrawalId);
+      this._releaseLockAndDebit(withdrawal);
 
       console.log(
         `[${new Date().toISOString()}] Withdrawal ${withdrawalId} confirmed (${withdrawal.amount} GRIN to ${withdrawal.grin_address})`
@@ -309,17 +480,20 @@ class WithdrawalScheduler {
   //   balance −= amount ; balance_locked += amount  (only if balance ≥ amount)
   // Then the scheduler's tor_checking → tor_sending → confirmed/failed states take over.
   // Throws an Error carrying a numeric `.code` (400/404/409/429) so the route maps it to
-  // the right HTTP status. fee is held at 0 to stay consistent with the existing
-  // markConfirmed/markFailed math (which un-lock/reverse `amount`); per-tx network fees
-  // are part of the deferred nanoGRIN rework (design §12 D2).
+  // the right HTTP status. fee starts at 0 and is backfilled with the REAL network fee once
+  // known (recordTorFee after a successful Tor send; _slateFeeGrin at slatepack creation).
+  // The fee never enters the miner's ledger math (un-lock/reverse always move `amount`) —
+  // it exists so reconciliation can explain the wallet-vs-ledger gap (sender pays fees).
   createWithdrawal(grinAddress, amount, method = 'tor') {
     const fail = (msg, code) => { const e = new Error(msg); e.code = code; throw e; };
 
     if (!grinAddress) fail('address required', 400);
     if (method !== 'tor') fail('only Tor withdrawals are supported', 400);
+    this._assertNotFrozen();
+    this._assertNoRecentReversal(grinAddress);
 
     const acct0 = this.db.prepare(
-      'SELECT balance, min_payout FROM miner_accounts WHERE grin_address = ?'
+      'SELECT balance FROM miner_accounts WHERE grin_address = ?'
     ).get(grinAddress);
     if (!acct0) fail('account not found', 404);
 
@@ -330,22 +504,21 @@ class WithdrawalScheduler {
     if (isNaN(amt) || amt <= 0) fail('invalid amount', 400);
     amt = parseFloat(amt.toFixed(9));
 
-    // Per-miner payout threshold: the account's own min_payout (set via the IP-gated endpoint)
-    // overrides the pool default when present. It can only RAISE the floor (enforced at write
-    // time), so this never lets a withdrawal slip below the pool minimum.
-    const minW = (acct0.min_payout != null) ? acct0.min_payout : (this.config.min_withdrawal || 5.0);
+    // Withdrawals are manual with an explicit amount, so only the pool-wide floor applies
+    // (the per-account min_payout override was retired 2026-07-17).
+    const minW = this.config.min_withdrawal || 25.0;
     if (amt < minW) fail(`amount below minimum withdrawal (${minW} GRIN)`, 400);
 
     const txn = this.db.transaction(() => {
       const totalPending = this.db.prepare(
-        "SELECT COUNT(*) AS c FROM withdrawals WHERE status IN ('tor_checking','tor_sending','retry_scheduled')"
+        `SELECT COUNT(*) AS c FROM withdrawals WHERE ${PENDING_SQL}`
       ).get().c;
       if (totalPending >= this.MAX_PENDING_WITHDRAWALS) {
         fail(`pool has reached maximum pending withdrawals (${this.MAX_PENDING_WITHDRAWALS})`, 429);
       }
-      // Design §8: at most ONE pending withdrawal per address.
+      // Design §8: at most ONE pending withdrawal per address — across ALL rails.
       const userPending = this.db.prepare(
-        "SELECT COUNT(*) AS c FROM withdrawals WHERE grin_address = ? AND status IN ('tor_checking','tor_sending','retry_scheduled')"
+        `SELECT COUNT(*) AS c FROM withdrawals WHERE grin_address = ? AND ${PENDING_SQL}`
       ).get(grinAddress).c;
       if (userPending >= 1) fail('you already have a pending withdrawal', 429);
 
@@ -399,11 +572,11 @@ class WithdrawalScheduler {
     const fail = (msg, code) => { const e = new Error(msg); e.code = code; throw e; };
     if (!grinAddress) fail('address required', 400);
     if (!this.wallet) fail('slatepack payouts are not configured on this pool', 503);
-
-    const PENDING = "status IN ('tor_checking','tor_sending','retry_scheduled','slatepack_pending')";
+    this._assertNotFrozen();
+    this._assertNoRecentReversal(grinAddress);
 
     const acct0 = this.db.prepare(
-      'SELECT balance, min_payout FROM miner_accounts WHERE grin_address = ?'
+      'SELECT balance FROM miner_accounts WHERE grin_address = ?'
     ).get(grinAddress);
     if (!acct0) fail('account not found', 404);
 
@@ -411,15 +584,16 @@ class WithdrawalScheduler {
     if (isNaN(amt) || amt <= 0) fail('invalid amount', 400);
     amt = parseFloat(amt.toFixed(9));
 
-    const minW = (acct0.min_payout != null) ? acct0.min_payout : (this.config.min_withdrawal || 5.0);
+    // Pool-wide floor only (per-account min_payout retired 2026-07-17 — manual withdrawals).
+    const minW = this.config.min_withdrawal || 25.0;
     if (amt < minW) fail(`amount below minimum withdrawal (${minW} GRIN)`, 400);
 
     // Lock the pool-side balance first (authoritative for accounting); the wallet-side output
     // lock happens during tx_lock_outputs below, and is released via cancelTx on failure.
     const txn = this.db.transaction(() => {
-      const totalPending = this.db.prepare(`SELECT COUNT(*) AS c FROM withdrawals WHERE ${PENDING}`).get().c;
+      const totalPending = this.db.prepare(`SELECT COUNT(*) AS c FROM withdrawals WHERE ${PENDING_SQL}`).get().c;
       if (totalPending >= this.MAX_PENDING_WITHDRAWALS) fail(`pool has reached maximum pending withdrawals (${this.MAX_PENDING_WITHDRAWALS})`, 429);
-      const userPending = this.db.prepare(`SELECT COUNT(*) AS c FROM withdrawals WHERE grin_address = ? AND ${PENDING}`).get(grinAddress).c;
+      const userPending = this.db.prepare(`SELECT COUNT(*) AS c FROM withdrawals WHERE grin_address = ? AND ${PENDING_SQL}`).get(grinAddress).c;
       if (userPending >= 1) fail('you already have a pending withdrawal', 429);
 
       const before = this.db.prepare('SELECT balance, balance_locked FROM miner_accounts WHERE grin_address = ?').get(grinAddress);
@@ -457,7 +631,12 @@ class WithdrawalScheduler {
       await this.wallet.txLockOutputs(slate);
       const armored = await this.wallet.createSlatepackMessage(slate, [grinAddress]);
       const slateId = slate && slate.id ? slate.id : null;
-      this.db.prepare('UPDATE withdrawals SET slate_id = ? WHERE id = ?').run(slateId, withdrawalId);
+      // Record the real network fee (sender-pays in Grin: the wallet spends amount + fee while
+      // the ledger debits only amount). Reconciliation reads withdrawals.fee to explain the
+      // wallet-vs-ledger gap — a permanent fee = 0 makes coverage erode silently.
+      const feeGrin = this._slateFeeGrin(slate);
+      this.db.prepare('UPDATE withdrawals SET slate_id = ?, fee = COALESCE(?, fee) WHERE id = ?')
+        .run(slateId, feeGrin, withdrawalId);
       console.log(`[${new Date().toISOString()}] Slatepack withdrawal ${withdrawalId} created for ${grinAddress} (${amt} GRIN, slate ${slateId})`);
       return { success: true, withdrawal_id: withdrawalId, amount: amt, slatepack: armored };
     } catch (err) {
@@ -471,6 +650,10 @@ class WithdrawalScheduler {
   async finalizeSlatepackWithdrawal(grinAddress, withdrawalId, responseSlatepack) {
     const fail = (msg, code) => { const e = new Error(msg); e.code = code; throw e; };
     if (!this.wallet) fail('slatepack payouts are not configured on this pool', 503);
+    // Finalize is the on-chain broadcast — it MUST honour the kill-switch too. The row stays
+    // slatepack_pending, so the miner can simply re-submit the response slate after a resume
+    // (or the TTL expiry refunds the lock).
+    this._assertNotFrozen();
     if (!responseSlatepack || typeof responseSlatepack !== 'string') fail('response slatepack required', 400);
 
     const w = this.db.prepare('SELECT * FROM withdrawals WHERE id = ?').get(withdrawalId);
@@ -496,13 +679,198 @@ class WithdrawalScheduler {
     return { success: true, withdrawal_id: withdrawalId, status: 'confirmed' };
   }
 
+  // ─── Goblin/Nostr payout (design §15) ───────────────────────────────────────
+  // Third-party rail: the slate is delivered to the miner's registered Goblin username
+  // over a Nostr DM. The route has ALREADY resolved + TOFU-verified `recipientPubHex`
+  // against the stored destination and enforced the destination cooldown — this method
+  // never trusts a raw username. It reuses the slatepack state machine end-to-end:
+  //   • parks in 'slatepack_pending' with method='nostr' → inside PENDING_SQL (one-pending
+  //     cross-rail) and processSlatepackExpiry (TTL refund) with no extra code;
+  //   • the same freeze + failed-payout-cooldown gates as every other rail;
+  //   • the S1 is PLAIN armor (recipients:[]) — confidentiality is the Nostr DM layer, and
+  //     goblin's AutoReceive expects plain armor (verified, design §15.1). This is the ONE
+  //     difference from the manual slatepack rail (which age-encrypts to the mining address).
+  // On any wallet OR relay failure the balance lock is reversed so funds are never stranded.
+  async createNostrWithdrawal(grinAddress, amount, recipientPubHex, note) {
+    const fail = (msg, code) => { const e = new Error(msg); e.code = code; throw e; };
+    if (!grinAddress) fail('address required', 400);
+    if (!this.wallet) fail('slatepack payouts are not configured on this pool', 503);
+    if (!this.nostrBridge || !this.nostrBridge.isEnabled()) fail('nostr payouts are not enabled on this pool', 503);
+    if (!/^[0-9a-f]{64}$/.test(String(recipientPubHex || ''))) fail('invalid destination', 400);
+    this._assertNotFrozen();
+    this._assertNoRecentReversal(grinAddress);
+
+    const acct0 = this.db.prepare('SELECT balance FROM miner_accounts WHERE grin_address = ?').get(grinAddress);
+    if (!acct0) fail('account not found', 404);
+
+    let amt = amount === undefined || amount === null || amount === '' ? acct0.balance : parseFloat(amount);
+    if (isNaN(amt) || amt <= 0) fail('invalid amount', 400);
+    amt = parseFloat(amt.toFixed(9));
+    const minW = this.config.min_withdrawal || 25.0;
+    if (amt < minW) fail(`amount below minimum withdrawal (${minW} GRIN)`, 400);
+
+    // Lock the pool-side balance first (authoritative). Same CAS + caps as the other rails.
+    const txn = this.db.transaction(() => {
+      const totalPending = this.db.prepare(`SELECT COUNT(*) AS c FROM withdrawals WHERE ${PENDING_SQL}`).get().c;
+      if (totalPending >= this.MAX_PENDING_WITHDRAWALS) fail(`pool has reached maximum pending withdrawals (${this.MAX_PENDING_WITHDRAWALS})`, 429);
+      const userPending = this.db.prepare(`SELECT COUNT(*) AS c FROM withdrawals WHERE grin_address = ? AND ${PENDING_SQL}`).get(grinAddress).c;
+      if (userPending >= 1) fail('you already have a pending withdrawal', 429);
+
+      const before = this.db.prepare('SELECT balance, balance_locked FROM miner_accounts WHERE grin_address = ?').get(grinAddress);
+      const locked = this.db.prepare(
+        `UPDATE miner_accounts SET balance = balance - ?, balance_locked = balance_locked + ?, updated_at = unixepoch()
+         WHERE grin_address = ? AND balance >= ?`
+      ).run(amt, amt, grinAddress, amt);
+      if (locked.changes !== 1) fail('insufficient balance', 409);
+
+      const wid = this.db.prepare(
+        "INSERT INTO withdrawals (grin_address, amount, fee, status, method) VALUES (?, ?, 0, 'slatepack_pending', 'nostr')"
+      ).run(grinAddress, amt).lastInsertRowid;
+
+      this.db.prepare(`
+        INSERT INTO balance_log
+        (grin_address, event_type, amount, balance_before, balance_after, locked_before, locked_after, reference_type, reference_id)
+        VALUES (?, 'lock', ?, ?, ?, ?, ?, 'withdrawal', ?)
+      `).run(grinAddress, amt, before.balance, before.balance - amt, before.balance_locked, before.balance_locked + amt, wid);
+
+      this.db.prepare(`
+        INSERT INTO withdrawal_events (withdrawal_id, from_status, to_status, triggered_by, note)
+        VALUES (?, NULL, 'slatepack_pending', 'miner', ?)
+      `).run(wid, `nostr payout requested (${amt} GRIN)`);
+
+      return wid;
+    });
+
+    const withdrawalId = txn();
+
+    // Build the S1 slate (plain armor) and hand it to the bridge to wrap + publish. Any
+    // failure (wallet OR no relay accepted) reverses the lock — nothing is stranded.
+    let slate = null;
+    try {
+      slate = await this.wallet.initSendTx(amt);
+      await this.wallet.txLockOutputs(slate);
+      const armored = await this.wallet.createSlatepackMessage(slate, []); // recipients:[] → plain armor
+      const slateId = slate && slate.id ? slate.id : null;
+      const feeGrin = this._slateFeeGrin(slate);
+      this.db.prepare('UPDATE withdrawals SET slate_id = ?, fee = COALESCE(?, fee) WHERE id = ?')
+        .run(slateId, feeGrin, withdrawalId);
+
+      await this.nostrBridge.publishSlatepack(recipientPubHex, armored, note);
+
+      console.log(`[${new Date().toISOString()}] Nostr payout ${withdrawalId} sent for ${grinAddress} (${amt} GRIN, slate ${slateId})`);
+      return { success: true, withdrawal_id: withdrawalId, amount: amt, status: 'slatepack_pending' };
+    } catch (err) {
+      try { if (slate && slate.id) await this.wallet.cancelTx(slate.id); } catch (_) { /* best-effort */ }
+      this._reverseLock(withdrawalId, 'nostr_failed', 'slatepack_pending', `nostr send failed: ${err.message}`);
+      const e = new Error(`failed to send nostr payout: ${err.message}`); e.code = err.code && err.code >= 400 && err.code < 600 ? err.code : 502; throw e;
+    }
+  }
+
+  // Called by the bridge when a RESPONSE (S2) slatepack arrives for a pending nostr row.
+  // `senderPubHex` is the seal-verified Nostr sender — re-checked here (defence in depth)
+  // against the address's registered destination before any on-chain action. Errors are
+  // logged and the row is LEFT pending (goblin may resend; the TTL sweep refunds otherwise)
+  // — this runs off a relay event, not a request, so throwing would only spam the log.
+  async finalizeNostrWithdrawal(withdrawalId, grinAddress, responseSlatepack, senderPubHex) {
+    if (!this.wallet) return;
+    if (this.isFrozen()) {
+      console.warn(`[nostr-payout] finalize ${withdrawalId} skipped — payouts frozen; will retry on resend/TTL`);
+      return;
+    }
+    try {
+      const w = this.db.prepare('SELECT * FROM withdrawals WHERE id = ?').get(withdrawalId);
+      if (!w || w.status !== 'slatepack_pending' || w.method !== 'nostr') return;
+      if (w.grin_address !== grinAddress) return;
+
+      const acct = this.db.prepare('SELECT nostr_npub FROM miner_accounts WHERE grin_address = ?').get(grinAddress);
+      if (!acct || !acct.nostr_npub || acct.nostr_npub !== senderPubHex) {
+        console.warn(`[nostr-payout] finalize ${withdrawalId} rejected — sender ${senderPubHex.slice(0, 12)}… ≠ registered destination`);
+        return;
+      }
+
+      const slate = await this.wallet.slateFromSlatepackMessage(responseSlatepack, [0]);
+      if (w.slate_id && slate && slate.id && slate.id !== w.slate_id) {
+        console.warn(`[nostr-payout] finalize ${withdrawalId} rejected — slate ${slate && slate.id} ≠ issued ${w.slate_id}`);
+        return;
+      }
+      const finalized = await this.wallet.finalizeTx(slate);
+      await this.wallet.postTx(finalized, true);
+      this._creditConfirm(withdrawalId, 'slatepack_pending', 'nostr response finalized + posted');
+      console.log(`[${new Date().toISOString()}] Nostr payout ${withdrawalId} confirmed (${w.amount} GRIN to ${grinAddress})`);
+    } catch (err) {
+      console.warn(`[nostr-payout] finalize ${withdrawalId} error (left pending): ${err.message}`);
+    }
+  }
+
+  // Miner-initiated cancel: frees the one-pending-per-address slot and returns the locked
+  // amount to spendable balance. NOTE: the public cancel route was removed 2026-07-17 (parked
+  // states self-recover; a late cancel after a send that actually posted would double-pay) —
+  // this method is kept for admin/support tooling only. Only PARKED states are cancellable — retry_scheduled (Tor
+  // payout waiting hours for its next attempt) and slatepack_pending (miner never returned
+  // the slate). tor_checking/tor_sending are actively being sent and must settle first.
+  // The status transition is a guarded UPDATE inside a transaction, so it can never race the
+  // scheduler (whose pickup is likewise guarded in initiateWithdrawal) into a double-reverse.
+  async cancelWithdrawal(grinAddress, withdrawalId) {
+    const fail = (msg, code) => { const e = new Error(msg); e.code = code; throw e; };
+    if (!grinAddress) fail('address required', 400);
+
+    const w = this.db.prepare('SELECT * FROM withdrawals WHERE id = ?').get(withdrawalId);
+    if (!w) fail('withdrawal not found', 404);
+    if (w.grin_address !== grinAddress) fail('withdrawal does not belong to this address', 403);
+    if (w.status !== 'retry_scheduled' && w.status !== 'slatepack_pending') {
+      fail(`withdrawal cannot be cancelled while ${w.status} — wait for the current attempt to settle`, 409);
+    }
+
+    const txn = this.db.transaction(() => {
+      const claimed = this.db.prepare(
+        "UPDATE withdrawals SET status = 'cancelled' WHERE id = ? AND status = ?"
+      ).run(withdrawalId, w.status);
+      if (claimed.changes !== 1) fail('withdrawal state changed — refresh and try again', 409);
+
+      this.db.prepare(`
+        INSERT INTO withdrawal_events (withdrawal_id, from_status, to_status, triggered_by, note)
+        VALUES (?, ?, 'cancelled', 'miner', 'cancelled by miner')
+      `).run(withdrawalId, w.status);
+
+      const before = this.db.prepare(
+        'SELECT balance, balance_locked FROM miner_accounts WHERE grin_address = ?'
+      ).get(grinAddress);
+      this.db.prepare(
+        'UPDATE miner_accounts SET balance = balance + ?, balance_locked = balance_locked - ?, updated_at = unixepoch() WHERE grin_address = ?'
+      ).run(w.amount, w.amount, grinAddress);
+      this.db.prepare(`
+        INSERT INTO balance_log
+        (grin_address, event_type, amount, balance_before, balance_after, locked_before, locked_after, reference_type, reference_id)
+        VALUES (?, 'reversal', ?, ?, ?, ?, ?, 'withdrawal', ?)
+      `).run(grinAddress, w.amount, before.balance, before.balance + w.amount,
+             before.balance_locked, Math.max(0, before.balance_locked - w.amount), withdrawalId);
+    });
+    txn();
+
+    // Best-effort wallet-side cleanup — a slatepack payout locked wallet outputs at creation.
+    if (w.status === 'slatepack_pending' && this.wallet && w.slate_id) {
+      try { await this.wallet.cancelTx(w.slate_id); }
+      catch (e) { console.warn(`[cancel] cancelTx ${w.slate_id}: ${e.message}`); }
+    }
+
+    console.log(`[${new Date().toISOString()}] Withdrawal ${withdrawalId} cancelled by miner (${w.amount} GRIN returned to ${grinAddress})`);
+    return { success: true, withdrawal_id: withdrawalId, status: 'cancelled', amount: w.amount };
+  }
+
   // Cancel + reverse slatepack payouts the miner never completed within the TTL.
   async processSlatepackExpiry() {
     try {
-      const cutoff = Math.floor(Date.now() / 1000) - this.slatepackTtlSeconds;
+      const now = Math.floor(Date.now() / 1000);
+      const cutoff = now - this.slatepackTtlSeconds;             // manual slatepack rail (24h default)
+      const nostrCutoff = now - this.nostrPendingTtlSeconds;     // Goblin/Nostr rail (10 min default)
+      // Nostr rows expire on the shorter clock; every other pending rail uses the long TTL.
       const stale = this.db.prepare(
-        "SELECT * FROM withdrawals WHERE status = 'slatepack_pending' AND created_at <= ? ORDER BY created_at ASC LIMIT 10"
-      ).all(cutoff);
+        `SELECT * FROM withdrawals
+          WHERE status = 'slatepack_pending'
+            AND ( (method = 'nostr' AND created_at <= ?)
+                  OR ((method IS NULL OR method != 'nostr') AND created_at <= ?) )
+          ORDER BY created_at ASC LIMIT 10`
+      ).all(nostrCutoff, cutoff);
       for (const w of stale) {
         if (this.wallet && w.slate_id) {
           try { await this.wallet.cancelTx(w.slate_id); } catch (e) { console.warn(`[slatepack] cancelTx ${w.slate_id}: ${e.message}`); }
@@ -513,6 +881,78 @@ class WithdrawalScheduler {
     } catch (err) {
       console.error(`Error processing slatepack expiry: ${err.message}`);
     }
+  }
+
+  // Network fee from a slate (V4 serialises `fee` as a nanoGRIN string; older shapes nest it
+  // as an object) → GRIN, or null when absent so the caller keeps the existing column value.
+  _slateFeeGrin(slate) {
+    if (!slate) return null;
+    let f = slate.fee;
+    if (f && typeof f === 'object') f = f.fee;
+    const n = Number(f);
+    return Number.isFinite(n) && n > 0 ? parseFloat((n / 1e9).toFixed(9)) : null;
+  }
+
+  // The Tor rail sends via the grin-wallet CLI, which doesn't report the network fee — but the
+  // wallet's own tx log does. Best-effort right after a successful send: read the newest TxSent
+  // whose net recipient amount matches this payout and store its fee, so reconciliation can
+  // explain the wallet-vs-ledger gap. Fee stays 0 when the Owner API isn't configured.
+  async recordTorFee(withdrawalId, amountGrin) {
+    if (!this.wallet || typeof this.wallet.getTransactions !== 'function') return;
+    try {
+      const entries = await this.wallet.getTransactions(false);
+      if (!Array.isArray(entries)) return;
+      const feeNano = (e) => {
+        if (e.fee == null) return 0;
+        if (typeof e.fee === 'object') return Number(e.fee.fee || 0) || 0;
+        return Number(e.fee) || 0;
+      };
+      let best = null;
+      for (const e of entries) {
+        if (!e || e.tx_type !== 'TxSent') continue;
+        const fee = feeNano(e);
+        if (!fee) continue;
+        const recipient = (Number(e.amount_debited || 0) - Number(e.amount_credited || 0) - fee) / 1e9;
+        if (Math.abs(recipient - amountGrin) > 1e-6) continue;
+        if (!best || Number(e.id || 0) > Number(best.id || 0)) best = e;
+      }
+      if (!best) return;
+      this.db.prepare('UPDATE withdrawals SET fee = ? WHERE id = ?')
+        .run(parseFloat((feeNano(best) / 1e9).toFixed(9)), withdrawalId);
+    } catch (e) {
+      console.warn(`[fee] could not record network fee for withdrawal ${withdrawalId}: ${e.message}`);
+    }
+  }
+
+  // Release the payout lock and write the matching ledger debit ATOMICALLY, debiting exactly what
+  // was unlocked. If balance_locked < amount (possible only under prior corruption — a lock always
+  // precedes in normal flow), BOTH the release and the logged debit are clamped: releasing less
+  // while logging the full amount would make the account total fall by less than the ledger
+  // records → integrity_drift → an auto-freeze the alarm itself can't explain.
+  _releaseLockAndDebit(withdrawal) {
+    const txn = this.db.transaction(() => {
+      const acct = this.db.prepare(
+        'SELECT balance_locked FROM miner_accounts WHERE grin_address = ?'
+      ).get(withdrawal.grin_address);
+      const lockedBefore = acct ? acct.balance_locked : 0;
+      const released = Math.min(lockedBefore, withdrawal.amount);
+      if (released < withdrawal.amount) {
+        console.error(
+          `⚠️  Withdrawal ${withdrawal.id}: balance_locked (${lockedBefore}) < amount (${withdrawal.amount}) — ` +
+          `releasing only ${released}; the locked balance was corrupted BEFORE this payout, investigate`
+        );
+      }
+      this.db.prepare(
+        'UPDATE miner_accounts SET balance_locked = balance_locked - ?, updated_at = unixepoch() WHERE grin_address = ?'
+      ).run(released, withdrawal.grin_address);
+      this.db.prepare(`
+        INSERT INTO balance_log
+        (grin_address, event_type, amount, balance_before, balance_after,
+         locked_before, locked_after, reference_type, reference_id)
+        VALUES (?, 'debit', ?, 0, 0, ?, ?, 'withdrawal', ?)
+      `).run(withdrawal.grin_address, released, lockedBefore, lockedBefore - released, withdrawal.id);
+    });
+    txn();
   }
 
   // Confirm a payout: mark confirmed, release the lock (locked −= amount = paid out), ledger debit,
@@ -526,16 +966,7 @@ class WithdrawalScheduler {
       `).run(withdrawalId, fromStatus, note);
 
       const w = this.db.prepare('SELECT * FROM withdrawals WHERE id = ?').get(withdrawalId);
-      this.db.prepare(`
-        UPDATE miner_accounts
-        SET balance_locked = CASE WHEN balance_locked >= ? THEN balance_locked - ? ELSE 0 END
-        WHERE grin_address = ?
-      `).run(w.amount, w.amount, w.grin_address);
-      this.db.prepare(`
-        INSERT INTO balance_log
-        (grin_address, event_type, amount, balance_before, balance_after, locked_before, locked_after, reference_type, reference_id)
-        VALUES (?, 'debit', ?, 0, 0, 0, 0, 'withdrawal', ?)
-      `).run(w.grin_address, w.amount, withdrawalId);
+      this._releaseLockAndDebit(w);
 
       console.log(`[${new Date().toISOString()}] Withdrawal ${withdrawalId} confirmed (${w.amount} GRIN to ${w.grin_address})`);
       try { this.incentives.maybePayJoinBonus(w.grin_address); }

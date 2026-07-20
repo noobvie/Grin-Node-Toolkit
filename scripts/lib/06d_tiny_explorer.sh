@@ -252,7 +252,7 @@ tinyx_setup_nginx() {
     echo -e "\n${BOLD}${CYAN}── Tiny Explorer: Setup Nginx ──${RESET}\n"
 
     command -v nginx   &>/dev/null || { die "Nginx not installed. Run option N first."; return; }
-    command -v certbot &>/dev/null || apt-get install -y certbot python3-certbot-nginx -qq
+    nginx_ensure_certbot
 
     local domain=""
     [[ -f "$TINYX_CONFIG" ]] && domain=$(grep -oE '"domain":[[:space:]]*"[^"]*"' "$TINYX_CONFIG" | head -1 | sed 's/.*"\([^"]*\)"$/\1/')

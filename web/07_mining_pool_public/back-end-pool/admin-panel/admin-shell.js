@@ -26,7 +26,7 @@
         { file: 'miners.html',   title: 'Miners' },
         { file: 'payments.html', title: 'Payouts' },
         { file: 'blocks.html',   title: 'Blocks' },
-        { file: 'users.html',    title: 'Users' },
+        { file: 'users.html',    title: 'Sessions' },
         { file: 'regions.html',  title: 'Regions' },
         { file: 'health.html',   title: 'System Health' }
       ] },
@@ -62,6 +62,42 @@
       return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
     });
   }
+
+  // ── Chain explorer deep-links (window.Explorer) ─────────────────────────
+  // Any block height / hash / kernel / output shown anywhere in the admin UI links out
+  // to a public Grin chain explorer in a new tab. To spread load — and avoid tying the
+  // pool to a single explorer — each mainnet link randomly picks between grinscan.org
+  // and scan.grin.money; both share the same path scheme (/block/<h>, /kernel/<excess>,
+  // /output/<commit>). scan.grin.money is mainnet-only, so on testnet every link uses
+  // testnet.grinscan.org. Network is resolved once by decoratePoolIdentity() (below) and
+  // cached in sessionStorage; until then we assume mainnet (the common deployment).
+  var NETWORK_KEY = 'pool-network';
+  function explorerNetwork() {
+    try { var n = sessionStorage.getItem(NETWORK_KEY); if (n) return n; } catch (e) {}
+    return 'mainnet';
+  }
+  var EXPLORERS = ['https://grinscan.org', 'https://scan.grin.money'];
+  function explorerBase(kind) {
+    if (explorerNetwork() === 'testnet') return 'https://testnet.grinscan.org';
+    // kernel/output deep-links are only guaranteed on scan.grin.money; heights & hashes
+    // resolve on both, so those randomize across the two explorers.
+    if (kind === 'kernel' || kind === 'output') return 'https://scan.grin.money';
+    return EXPLORERS[Math.random() < 0.5 ? 0 : 1];
+  }
+  function explorerUrl(kind, value) {
+    var path = (kind === 'kernel') ? 'kernel' : (kind === 'output') ? 'output' : 'block';
+    return explorerBase(kind) + '/' + path + '/' + encodeURIComponent(String(value));
+  }
+  // Returns an <a> that opens the explorer in a new tab. `label` defaults to `value`.
+  // Both URL and label are HTML-escaped — safe to embed untrusted chain strings.
+  function explorerLink(kind, value, label, cls) {
+    if (value == null || value === '') return esc(label == null ? '' : label);
+    return '<a href="' + esc(explorerUrl(kind, value)) + '" target="_blank" rel="noopener"' +
+      (cls ? ' class="' + esc(cls) + '"' : '') +
+      ' title="Open on Grin chain explorer ↗">' +
+      esc(label == null ? value : label) + '</a>';
+  }
+  window.Explorer = { url: explorerUrl, link: explorerLink, network: explorerNetwork };
 
   // ── Theme (Dark default, Light) ─────────────────────────────────────────
   // Own key — must NOT be 'admin-theme': branding.js writes the operator's public
@@ -237,6 +273,8 @@
   function decoratePoolIdentity() {
     fetch('/api/pool/stats').then(function (r) { return r.json(); }).then(function (d) {
       if (!d) return;
+      // Cache the chain so window.Explorer builds testnet-correct deep-links.
+      if (d.network) { try { sessionStorage.setItem(NETWORK_KEY, d.network); } catch (e) {} }
       if (d.pool_name) {
         var bn = sidebar.querySelector('.brand-name');
         if (bn) bn.textContent = d.pool_name;

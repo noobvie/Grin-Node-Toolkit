@@ -212,6 +212,77 @@ grin_sync_wallets() {
     return 0
 }
 
+# Public pool hub (Script 07) — re-apply the pool's stratum wiring to the LIVE
+# node's grin-server.toml after a node rebuild (design §13.10a). A rebuild wipes
+# the toml, losing enable_stratum_server / stratum_server_addr / the
+# wallet_listener_url coinbase pointer — the pool then mines nothing. Guarded:
+# only when a pool install exists (its JSON conf). Values come from that conf
+# (node_stratum_port) + the fixed pool wallet owner port (3420/13420, base URL —
+# the node appends /v2/foreign itself). Replaces EXISTING keys only (commented
+# or active) — never appends, which could land in the wrong TOML section.
+# Also re-applies group-read (root:grinsecret 640) on the node's two secret
+# files for the de-rooted grin-pool-manager (lib/grin-node.js reads both).
+# The node is NOT restarted automatically — a drifted toml is flagged on stdout
+# (timer journal); the operator/watchdog restarts.
+_gns_toml_repatch() {  # <file> <key> <desired-val-literal> → 0 changed, 1 no-op
+    local file="$1" key="$2" val="$3" cur want
+    grep -qE "^[#[:space:]]*${key}[[:space:]]*=" "$file" 2>/dev/null || return 1
+    # Both sides quote-normalised (xargs strips surrounding quotes) so a correct
+    # quoted value is a no-op — otherwise the timer would cry "drift" every 5 min.
+    cur=$(grep -E "^[[:space:]]*${key}[[:space:]]*=" "$file" 2>/dev/null \
+          | head -1 | sed -E 's/^[^=]+=[[:space:]]*//' | xargs 2>/dev/null || true)
+    want=$(printf '%s' "$val" | xargs 2>/dev/null || printf '%s' "$val")
+    [[ "$cur" == "$want" ]] && return 1
+    sed -i -E "s|^[#[:space:]]*${key}[[:space:]]*=.*|${key} = ${val}|" "$file"
+    return 0
+}
+
+grin_sync_pool_stratum() {
+    local net conf dir toml port owner_port changed sf
+    for net in mainnet testnet; do
+        if [[ "$net" == "testnet" ]]; then
+            conf=/opt/grin/conf/grin_pubpool_testnet.json; owner_port=13420
+        else
+            conf=/opt/grin/conf/grin_pubpool.json;         owner_port=3420
+        fi
+        [[ -f "$conf" ]] || continue
+        dir=$(grin_live_node_dir "$net" 2>/dev/null || true)
+        [[ -n "$dir" ]] || continue
+        toml="$dir/grin-server.toml"
+        [[ -f "$toml" ]] || continue
+
+        # pool.json is pretty-printed one key per line — grep is enough here
+        # (no node dependency; this lib must run on any box the timer lands on).
+        port=$(grep -oE '"node_stratum_port"[[:space:]]*:[[:space:]]*[0-9]+' "$conf" 2>/dev/null \
+               | grep -oE '[0-9]+$' | head -1 || true)
+        [[ -n "$port" ]] || { [[ "$net" == "testnet" ]] && port=13416 || port=3416; }
+
+        changed=0
+        # xargs-normalised comparisons: toml strings compare without their quotes.
+        _gns_toml_repatch "$toml" "enable_stratum_server" "true" && changed=1 || true
+        if ! grep -qE "^[[:space:]]*stratum_server_addr[[:space:]]*=[[:space:]]*\"127\.0\.0\.1:${port}\"" "$toml" 2>/dev/null; then
+            _gns_toml_repatch "$toml" "stratum_server_addr" "\"127.0.0.1:${port}\"" && changed=1 || true
+        fi
+        if ! grep -qE "^[[:space:]]*wallet_listener_url[[:space:]]*=[[:space:]]*\"http://127\.0\.0\.1:${owner_port}\"" "$toml" 2>/dev/null; then
+            _gns_toml_repatch "$toml" "wallet_listener_url" "\"http://127.0.0.1:${owner_port}\"" && changed=1 || true
+        fi
+        if [[ "$changed" == 1 ]]; then
+            echo "[grin-secret-sync] pool stratum wiring re-applied to $toml — RESTART the $net node to take effect."
+        fi
+
+        # De-rooted backend secret access (root:grinsecret 640) — a rebuild
+        # regenerates the files 600 root:root, silently 403-ing the pool.
+        if getent group grinsecret >/dev/null 2>&1; then
+            for sf in "$dir/.api_secret" "$dir/.foreign_api_secret"; do
+                [[ -f "$sf" ]] || continue
+                chgrp grinsecret "$sf" 2>/dev/null || true
+                chmod 640 "$sf" 2>/dev/null || true
+            done
+        fi
+    done
+    return 0
+}
+
 # Script 04 node-API nginx — re-embed the foreign secret in the Basic-Auth header;
 # reload nginx only when the header actually changed. Covers BOTH the public
 # MODE-B vhost and the Tor vhost, for each network (4 possible confs). Each is a
@@ -247,6 +318,7 @@ grin_secrets_sync_all() {
     grin_sync_tiny_explorer   || true
     grin_sync_wallets         || true
     grin_sync_node_api_nginx  || true
+    grin_sync_pool_stratum    || true
     return 0
 }
 

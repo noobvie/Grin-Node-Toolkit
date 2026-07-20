@@ -208,7 +208,8 @@ Core tables (`/opt/grin/pubpool/<net>/pool.sqlite`):
 | `shares` | PPLNS input (grin_address, worker, difficulty, block_height, **region**, created_at) — `region` tags the originating region (local stratum → `config.region`; ingested → satellite's region) for per-region stats; PPLNS weighting is region-agnostic | sliding window (pruned) |
 | `blocks` | found blocks + maturity (height, hash, nonce, reward, status, found_by) | forever |
 | `withdrawals` | payouts (amount, fee, method tor\|slatepack, status, retry_count, txid) | forever |
-| `balance_log` | append-only ledger of every balance/locked change | forever |
+| `balance_log` | append-only ledger of every balance/locked change | raw window `balance_log_keep_days` (default 60, floor 45) — rolled into `balance_log_daily` first; see §14 |
+| `balance_log_daily` | daily rollup of the ledger — (UTC day, address, event_type, reference_type) → total_amount, event_count | **forever** (≈150 MB/10 yr @1000 miners) |
 | `withdrawal_events` | per-withdrawal state-transition log | forever |
 | `users` | admin accounts only (bcrypt, lockout columns) | forever |
 | `admin_audit_log` | every admin mutation (admin_id, action, target, before/after, ip) | forever |
@@ -225,7 +226,7 @@ out of every miner-facing surface. Money flows through `balance_log` for audit.
 
 ## 6. API catalog (Express routes)
 
-> **Verified against `back-end-pool/index.js` (2026-06-08).** ✅ = wired in the backend ·
+> **Verified against `back-end-pool/index.js` (2026-06-08; account + payout routes re-verified 2026-07-13).** ✅ = wired in the backend ·
 > ❌ = documented target, not yet built (see "Not yet implemented" below). Paths are the
 > *actual* registered routes — earlier drafts of this catalog overstated the surface.
 
@@ -236,10 +237,14 @@ out of every miner-facing surface. Money flows through `balance_log` for audit.
 ✅ GET  /api/pool/miners (by balance) | /api/miners/top | /api/pool/locations
 ✅ GET  /api/stratum/stats | /api/stratum/hashrate | /api/config/pool-info
 ✅ GET  /api/account/:addr | /:addr/balance | /:addr/balance/log | /:addr/shares | /:addr/tor-check
-✅ POST /api/account/:addr/withdraw   { amount?, method? }   (Tor only; method!='tor' → 400)
+✅ GET  /api/account/:addr/workers | /:addr/hashrate/history
+✅ POST /api/account/:addr/withdraw   { amount?, method?, ip_proof? }   (Tor auto; Slatepack IP-gated)   [IMPLEMENTED 2026-07]
+✅ POST /api/account/:addr/withdraw/:id/finalize   { response_slatepack, ip_proof }   (Slatepack S2 finalize)   [IMPLEMENTED 2026-07]
+✅ POST /api/account/:addr/min-payout   { min_payout, ip_proof }   (per-miner threshold; IP-gated, ≥ pool min)   [IMPLEMENTED 2026-07]
 ✅ GET  /api/public/branding | /public/page/:key | /public/lottery/winners
 ✅ GET  /robots.txt | /sitemap.xml | /manifest.json     (dynamic, exact-match nginx proxies)
-❌ GET/POST /api/claim/:id?token=…                      (Slatepack claim — NOT built; design §8/§12)
+⚠ /api/claim/:id?token=…   — claim-token route SUPERSEDED (never built); Slatepack payout now ships via the
+                              IP-gated account self-service flow above (§8), not a claim link
 ```
 
 **Ingestion (satellites only — IP allowlist + shared secret; region-tagged):**
@@ -269,18 +274,21 @@ Both also feed the in-memory satellite-liveness monitor surfaced at `/api/admin/
 ✅ GET/POST /api/admin/incentives/prize-pool[/topup] | /incentives/lottery/draws|draw-now
 ✅ GET/POST /api/admin/security/* | /poolstats/*
 ❌ PUT  /api/admin/miners/:addr                         (admin edit of a miner — NOT built)
-❌ POST /api/admin/withdrawals/:id/retry|cancel  ❌ GET /…/:id/events   (manual payout ops — NOT built)
+✅ POST /api/admin/withdrawals/:id/retry|cancel  (freshAdmin)   [IMPLEMENTED]   ❌ GET /…/:id/events  (NOT built)
 ❌ GET/PUT /api/admin/users[/:id]                       (admin user CRUD — NOT built; create via CLI)
 ❌ GET  /api/admin/payment-stats                        (reconciliation page API — NOT built)
 ```
 
 ### Not yet implemented (doc-vs-code, 2026-06-08)
 These remain **documented targets without backend routes**; tracked so the catalog stays honest:
-- **Slatepack claim** (`/api/claim/:id`) — needs a claim-token store + payment-proof-bound
-  `init_send_tx`/`finalize_tx`; the Tor transport is the only wired payout rail. Design §8/§12 D-items.
-- **Admin user CRUD** (`/api/admin/users[/:id]`) and **manual withdrawal ops**
-  (`retry`/`cancel`/`events`) — the legacy `back-end-pool/admin-panel/users.html` UI references
-  some of these; the primary admin surface (`public_html/admin-dashboard.html`) does not depend on them.
+- **Slatepack claim** (`/api/claim/:id`) — the *claim-token route shape* was superseded and never
+  built. The Slatepack payout **rail itself IS now wired** (2026-07) via the account self-service flow
+  (`POST /api/account/:addr/withdraw` method=slatepack → `/withdraw/:id/finalize`), IP-gated + encrypted
+  to the miner address (§8). Tor is **no longer** the only wired payout rail.
+- **Admin user CRUD** (`/api/admin/users[/:id]`) — NOT built (create via CLI). Manual withdrawal
+  `retry`/`cancel` **ARE now built** (`freshAdmin`-gated); only the `/…/:id/events` timeline is missing.
+  The legacy `back-end-pool/admin-panel/users.html` UI references user-CRUD; the primary admin surface
+  (`public_html/admin-dashboard.html`) does not depend on it.
 - **`/api/admin/miners/:addr` PUT**, **`/api/auth/reauth` + `/me`**, **`/api/admin/payment-stats`**.
 
 ---
@@ -303,10 +311,17 @@ These remain **documented targets without backend routes**; tracked so the catal
 - **Double-pay guard:** distributed shares are marked paid (per-block) inside the distribution
   transaction so overlapping windows can't pay a share twice.
 - **Fee routing:** `fee = gross − net`; credited to the `pool_fee` pseudo-address. Default
-  `pool_fee_percent` is **1.0** (`config.js`, `pool.json.template`, `pool-settings.js`, and the bash
+  `pool_fee_percent` is **1.0** (`config.js`, `pool-settings.js`, and the bash
   installers all agree); operator-editable via the admin panel.
 - **Orphan reversal** reads the *actual* credited amounts from `balance_log` and reverses those
   exact values (PPLNS-weighted, including the fee credit); never pushes a balance below 0.
+- **Payout threshold:** default `min_withdrawal` = **25 GRIN** (raised from 5.0 on 2026-07-13; agrees
+  across `config.js`, `pool-settings.js`, admin `settings-payout.html`, and the
+  bash installer). Rationale: each payout is an interactive tx that adds a **permanent kernel** to the
+  chain, so a low floor multiplies both chain growth and pool payout load. Operator-editable in the
+  admin panel. Each miner may set a personal `min_payout` override (IP-gated
+  `POST /api/account/:addr/min-payout`) that can only **raise** the floor — enforced at write time and
+  re-checked in `withdrawal-scheduler.js`, so an override never drops a payout below the pool minimum.
 
 ---
 
@@ -325,11 +340,14 @@ same slate round-trip, so there is **one** withdrawal state machine with a `meth
 **Auto-payout** (6h scheduler, no human) can only attempt the zero-interaction method (Tor); on Tor
 failure to an offline miner the withdrawal becomes **Slatepack-claimable** instead of reversing.
 
-**Slatepack security:** the slate isn't inherently address-bound (the receiver supplies their output
-in S2), so two controls are required: (1) a one-time **claim token** (anti-spam) gating the
-`/claim/<id>?token=…` link; (2) **payment proof** (anti-theft) — `init_send_tx` sets
-`payment_proof_recipient_address = <miner address>` and finalize is refused unless S2 carries a valid
-proof signed by that address's key. Tor needs neither (listener is address-bound).
+**Slatepack security — IMPLEMENTED 2026-07 (differs from the original claim-token/payment-proof plan):**
+the slate isn't inherently address-bound (the receiver supplies their output in S2), so two controls
+apply: (1) an **IP ownership gate** (`lib/owner-proof.js`, anti-grief/anti-spam) — the requester must
+present one of the address's last-2 mining source IPs, throttled 8/10min → 5min lockout; (2) **encryption
+to the address** (anti-theft) — the S1 slatepack is age-encrypted to the miner's grin address
+(`createSlatepackMessage(slate, [grinAddress])`), so a non-owner who clears the IP gate only gets an
+undecryptable blob. `payment_proof_recipient_address` is left **`null`** — encryption, not payment proof,
+is the anti-theft control actually shipped. Tor needs neither (listener is address-bound).
 
 **Balance model** (`miner_accounts`, always in sync, each change logged):
 
@@ -446,6 +464,537 @@ interpolation sink; worker-name regex enforced at the stratum layer.
 - Unify the public `body.<theme>-theme` system onto the `theme.js` CSS-variable system.
 - Admin live-preview iframe + WCAG contrast check in the theme builder.
 - Optional free miner accounts for true one-person-one-entry lottery.
+
+---
+
+## 13. Admin-panel gateway pairing — IMPLEMENTED 2026-07-13 (same day as design; NOT VPS-tested — see §13.6b)
+
+> Collapses the 4-hop WireGuard pairing ping-pong (gateway pubkey → SSH to hub CLI →
+> pairing string → back to gateway → *then* declare the region again in admin → Regions)
+> into **one admin-panel form** that does the WG peer add and the `pool_locations` upsert
+> atomically. Kills the dual-registry drift that `pool_wg_list` currently warns about.
+> **Implementation branch: `add-ons`** — operator decision 2026-07-13: pool work moves to
+> `add-ons` (it contains the `publicpool` tip; WG hub↔gateway path is E2E-verified, so the
+> separate testing branch is retired for new work — fast-forward `publicpool` or leave frozen).
+
+### 13.1 Target UX (after)
+
+```
+GATEWAY BOX                          HUB ADMIN PANEL (browser)
+1. Toolkit → Gateway → 1) Install
+   → prints WG public key   ────────→ 2. Regions & Gateways → ➕ New region
+                                         fill label/country/stratum URL
+                                         + paste gateway pubkey → Save
+                            ←──────────  panel shows GRINGW1|… (copy button)
+3. 2) Configure → paste GRINGW1
+4. 3) Tunnel up → 4) Start           5. Status chip goes green (handshake age)
+```
+
+Two human hops instead of four; no SSH session on the hub; region exists in exactly one
+place. The gateway-side flow ([`07_lib_gateway.sh`](../../scripts/lib/07_lib_gateway.sh))
+is **unchanged** — it already consumes the `GRINGW1` string.
+
+### 13.2 Component 1 — `grin-gateway-ctl` root helper (single WG mutation path)
+
+One root-owned executable becomes the **only** code that mutates `/etc/wireguard/wg-grinpool*.conf`
+and `region_ports`; both the CLI `W` menu and the panel backend call it. Logic moves out of
+`pool_wg_add_peer` / `pool_wg_list` / `pool_wg_remove_peer` (currently
+`07_grin_mining_public_pool.sh` ~1927–2140) into the helper; those menu functions become thin
+callers that pretty-print its JSON.
+
+- **Deployed to:** `/usr/local/bin/grin-gateway-ctl` (root:root `0755`), written from a heredoc
+  by a new sourced lib **`scripts/lib/07_lib_gwctl.sh`** (`pool_gwctl_install()`), called from
+  `pool_wg_setup_server` and on every hub setup run (idempotent regen, like other units).
+- **Language:** bash + embedded `node` for JSON (the hub always has Node; the *gateway* box
+  doesn't, but the helper never runs there).
+- **Per-network:** every subcommand takes `--net mainnet|testnet` and derives
+  `WG_IFACE` / tunnel `/24` / `ListenPort` / `REGION_PORT_BASE` / `$POOL_CONF` exactly as
+  `07_grin_mining_public_pool.sh:1853-1866` does today (single source: the helper).
+
+| Subcommand | Does | stdout (always JSON) |
+|---|---|---|
+| `add-peer --net N --region R --pubkey K` | validate → dup-guard → assign next free `/32` + region port (existing region KEEPS its port) → append `[Peer]` → `wg syncconf` → write `region_ports` + `region_listen_host` into pool.json | `{ok, existing:false, region, peer_ip, region_port, hub_pubkey, hub_endpoint, hub_tunnel_ip, pairing:"GRINGW1\|…"}` |
+| same, pubkey already a peer | **no write** (preserves the 2026-07-05 cryptokey-routing lesson) | same shape with `existing:true` |
+| `remove-peer --net N --region R` | delete `[Peer]` block + `region_ports[R]` → `wg syncconf` | `{ok, removed:R}` |
+| `list --net N` | re-derive pairing strings from wg conf + pool.json | `{ok, gateways:[{region, peer_ip, region_port, pairing}]}` |
+| `status --net N` | `wg show <iface> dump` → per-region handshake age + rx/tx bytes | `{ok, gateways:[{region, handshake_age, rx_bytes, tx_bytes}]}` |
+
+**Validation inside the helper (never trusts the caller, even root):**
+
+| Input | Rule |
+|---|---|
+| `--net` | literally `mainnet` or `testnet` |
+| `--region` | `^[a-z0-9-]{2,12}$` |
+| `--pubkey` | `^[A-Za-z0-9+/]{43}=$` (wg key wire format) |
+| AllowedIPs | **not an input** — helper computes next free `/32`; `0.0.0.0/0` is unrepresentable |
+
+Errors → non-zero exit + `{ok:false, error:"…"}` on stdout so `execFile` callers get one parse path.
+
+**Privilege note:** `grin-pool-manager` currently runs `User=root`
+(`07_grin_mining_public_pool.sh:470`) — historical convenience, not a requirement. §13.9
+de-roots it as part of this work; the backend calls the helper via
+`sudo grin-gateway-ctl …` under a one-line scoped sudoers entry. Design the backend call as a
+single `gwctl()` wrapper so the sudo prefix lives in exactly one place.
+
+### 13.3 Component 2 — backend (`back-end-pool/index.js`)
+
+All handlers call the helper via `execFile('/usr/local/bin/grin-gateway-ctl', [...], {timeout: 10000})`
+— argv array, never a shell string. One shared `gwctl(args)` promise wrapper.
+
+1. **Extend `POST /api/admin/locations`** (`secureAdmin`, exists at ~3068) with an optional
+   `wg_pubkey` body field. When present and non-empty: after the `pool_locations` upsert,
+   call `add-peer`; on success include `pairing` + `peer_ip` + `region_port` (and `existing`)
+   in the JSON response; on helper failure return `502` **with the location still saved** and
+   a `wg_error` field (metadata save must not be hostage to wg state). Audit-log action
+   `gateway_pair` with `{region, pubkey, peer_ip, region_port, existing}`.
+2. **New `GET /api/admin/gateways/:region/pairing`** (`secureAdmin`) → helper `list`, filter
+   by region → `{pairing}`. Powers a "Show pairing string" button for lost strings (replaces
+   SSH `W → 3`).
+3. **Extend `DELETE /api/admin/locations/:id`** (`freshAdmin`, exists at ~3101): optional
+   `?remove_peer=1` also calls `remove-peer` for that region. Peer removal is destructive →
+   stays behind `freshAdmin` (recent re-auth), audit action `gateway_unpair`.
+4. **Status:** no new endpoint — `GET /api/admin/health/gateways` (~2977) already merges share
+   recency + `readWgHandshakes()` + active TCP probe. Optionally later: enrich with rx/tx from
+   helper `status` (the existing `readWgHandshakes()` stays as the zero-dependency fallback).
+
+**Listener activation without a stratum blip (hot-bind).** Today a new region requires a
+`grin-pool-manager` restart so `stratum-server.js` binds the new tunnel-IP listener
+(`lib/stratum-server.js:126-128` reads `region_ports` only at start). The panel backend *is*
+that same process, so restarting it from a request handler is self-defeating. Design:
+
+- Add `bindRegionListener(region, port)` to `StratumServer` — same accept/stamp logic as the
+  boot-time loop, callable at runtime; update in-memory `config.region_ports[region]` after the
+  helper succeeds, then call it. No restart, zero miner disruption.
+- The **CLI** path (`W → 2`, now helper-backed) keeps its existing
+  `systemctl restart grin-pool-manager` since it runs outside the process; on next boot the
+  hot-bound listener is rebuilt from pool.json anyway (helper already persisted it).
+- `remove-peer` v1 does **not** hot-unbind (rare op; listener on a removed region just goes
+  idle until the next natural restart — document in UI copy).
+
+### 13.4 Component 3 — panel page (`admin-panel/regions.html`)
+
+Page renames to **"Regions & Gateways"**. Changes to the existing form/table (482-line page,
+form fields at ~180–210):
+
+- New form field: **Gateway WireGuard public key** *(optional — leave empty for a
+  metadata-only region / satellite-era entry)*, with inline format hint (44 chars, ends `=`).
+- After save-with-pubkey: result card showing the `GRINGW1|…` string in a monospace box with a
+  📋 copy button + the four-step "what to do on the gateway box now" mini-guide. Warn banner
+  when `existing:true` ("key already paired — existing tunnel IP/port kept").
+- Per-row **tunnel chip** fed by the already-polled `/api/admin/health/gateways`:
+  `🔒 handshake 12s` (green <180s / yellow <600s / red otherwise / grey "no peer") next to the
+  existing stratum-probe status; plus a "Show pairing string" row action (endpoint #2).
+- Delete flow gains a checkbox "also remove the WireGuard peer (unpair the gateway box)" →
+  `?remove_peer=1`.
+- **Field guide** (collapsible at top, currently "STEP 1 of 4") rewritten to the new 2-hop
+  flow: 1 install on gateway box → 2 this form → 3 paste string there → 4 watch chip go green.
+
+### 13.5 CLI (`W` menu) after the refactor
+
+`W → 1` setup server: unchanged + installs the helper. `W → 2/3/R`: thin wrappers —
+prompt as today, call the helper, pretty-print (colored) from its JSON. Kept as the offline
+fallback and for headless operators; because both paths share the helper, drift is impossible.
+The "region wired but not declared in admin" warning in `pool_wg_list` stays (still reachable
+via CLI-only pairing) but should become rare.
+
+### 13.6 Security summary
+
+- **No key material moves.** Only public keys and internal addressing cross the panel; both
+  private keys stay in their boxes' root-only files. Trust model identical to the CLI flow.
+- **Blast radius of a compromised admin session** = add/remove a stratum-forwarder peer with a
+  helper-chosen `/32` — strictly less than the payout/config power an admin session already has.
+  Tunnel-side listeners are only the per-region stratum ports (Central API stays on localhost).
+- Helper self-validates all inputs (§13.2), `execFile` argv only, `freshAdmin` on unpair,
+  audit log on pair/unpair, dup-pubkey guard preserved verbatim.
+
+### 13.6b Implementation deltas (2026-07-13 — what building it changed vs the plan)
+
+- **grinsecret group covers BOTH node secrets, not just foreign.** The §13.9 audit missed
+  that `lib/grin-node.js` reads the node's `.api_secret` (Owner, `get_status`) *and*
+  `.foreign_api_secret` directly by path (the pool runs as root). `pool_deroot` +
+  `grin_sync_pool_stratum` set `root:grinsecret 640`
+  on both (the secret self-heal re-applies it after a node rebuild).
+- **The pool wallet LISTENER is de-rooted too.** The backend spawns `grin-wallet send`
+  (payouts) as `grinpool`; a root-run tmux listener would leave root-owned lmdb/tx-log
+  files that EACCES the send. `pw_write_launchers` now drops the listener to `grinpool`
+  (su + `HOME=<wallet dir>` + pre-launch chown sweep, mirroring the node launch contract)
+  whenever the user exists.
+- **Helper gained a region-replace flow.** `add-peer` on an existing region with a NEW
+  pubkey swaps the key in place — the region keeps its tunnel IP *and* port (the §13.10d
+  gateway-box-replacement story, previously only implicit). Response carries `replaced:true`.
+- **Panel delete "checkbox" is a second `confirm()`** (native dialogs can't host one);
+  a third confirm guards unpairing a gateway that handshook <180 s ago.
+- **`wg_endpoint_host` (§13.10b) is a plain pool.json key** set via CLI menu `W → 5`
+  (no helper subcommand — the helper reads it when composing endpoints).
+- **§13.10c backup:** the legacy plain `pool_backup` + cron wrapper were replaced outright
+  (wrapper/cron file names kept so cleanup keeps matching); product names `pubpool` /
+  `pubpooltestnet`; C) cron menu option 1 delegates to the same `pbk_schedule`.
+- **Local verification done:** `bash -n` + `node --check` on all touched files; the
+  generated `grin-gateway-ctl` exercised end-to-end with stubbed `wg`/paths (fresh add,
+  dup-key no-write, region replace, validation rejects, remove, list/status, DNS
+  endpoint); `_gns_toml_repatch` unit-tested (quote-normalised no-op fix baked in);
+  `_pbk_make_tar` include/exclude verified. **The §13.8 VPS plan still stands** — real
+  wg syncconf, the sudo path from the de-rooted service, hot-bind E2E, and the live-box
+  migration order (testnet hub → payout round → mainnet) are untested.
+
+### 13.7 Files changed (branch `add-ons`)
+
+| File | Change |
+|---|---|
+| `scripts/lib/07_lib_gwctl.sh` | **new** — writes `/usr/local/bin/grin-gateway-ctl` (heredoc), `pool_gwctl_install()` |
+| `scripts/07_grin_mining_public_pool.sh` | source new lib; install helper in `pool_wg_setup_server`; refactor `pool_wg_add_peer`/`pool_wg_list`/`pool_wg_remove_peer` into helper callers; `pool_deroot()` (§13.9): grinpool user, chown sweep, hardened unit, sudoers |
+| `web/07_mining_pool_public/back-end-pool/index.js` | `gwctl()` wrapper; extend locations POST/DELETE; pairing GET |
+| `web/07_mining_pool_public/back-end-pool/lib/stratum-server.js` | `bindRegionListener()` hot-bind |
+| `web/07_mining_pool_public/back-end-pool/admin-panel/regions.html` | pubkey field, pairing card, tunnel chip, unpair checkbox, guide rewrite |
+| `scripts/lib/07_lib_gateway.sh` | none (consumes `GRINGW1` unchanged) |
+| `scripts/lib/07_lib_pool_backup.sh` | **new** (§13.10c) — hub backup on shared gbe_*/gbp_* engine |
+| `scripts/lib/grin_node_secrets.sh` | add `grin_sync_pool_stratum` consumer (§13.10a) |
+| hub menu / `07_lib_pool_wallet.sh` | "Replace pool wallet" entry reusing existing `pw_*` steps (§13.10e); `wg_endpoint_host` option (§13.10b) |
+
+### 13.8 Test plan
+
+1. `bash -n` all touched scripts; `node --check` index.js / stratum-server.js.
+2. Helper unit pass on a VPS: `add-peer` (fresh + dup + second region), `list`, `status`,
+   `remove-peer`; verify `wg show` peers and pool.json after each.
+3. Panel E2E on testnet: create region with pubkey → copy string → gateway `2) Configure` →
+   tunnel up → chip green → `nc` a raw stratum login through the gateway → share stamped with
+   region (proves hot-bind worked **without** restarting `grin-pool-manager`).
+4. Regression: CLI `W → 2` add for a *second* gateway while the panel-added one stays alive
+   (syncconf must not drop the live tunnel); dup-pubkey re-add from the panel shows the
+   `existing:true` banner and changes nothing.
+
+### 13.9 De-rooting `grin-pool-manager` (part of this work)
+
+**Why root is unacceptable here:** this one process parses untrusted input from the public
+internet on TWO surfaces — the HTTP API behind nginx AND the raw stratum TCP socket (:3333,
+arbitrary miners, JSON protocol parsing) — on top of a large npm dependency tree. Any RCE or
+supply-chain hit is currently an instant **full root** compromise: hub WG private key (tunnel
+impersonation + pivot into every gateway), node `.api_secret`s, Let's Encrypt keys, audit-log
+tamper, persistence. Honest caveat: de-rooting does NOT protect the hot wallet — the backend
+must be able to spend (payouts) by design, so a compromised backend can still drain it at any
+privilege level (see `script07_security_audit.md` §Residual risks). De-rooting protects the
+*box*, the *keys*, and the *other products* on it.
+
+**Audit result (2026-07-13):** the running service has exactly ONE root dependency —
+`readWgHandshakes()` (`index.js:50-70`: reads root-only `/etc/wireguard/*.conf` + runs
+`wg show`). No `systemctl` calls, no other privileged ops; ports are unprivileged;
+everything else is file-ownership convenience.
+
+Plan (new `pool_deroot()` in the hub setup, runs on install + idempotently on upgrade):
+
+1. **Service user:** `useradd -r -s /usr/sbin/nologin grinpool` (per-box, both nets share it).
+2. **Ownership sweep:** `chown -R grinpool:grinpool` on `$POOL_APP_DIR` (app + pool.db + logs),
+   `$POOL_CONF` (admin panel writes config), and the pool **wallet dir** (grin-wallet spawn +
+   `.wallet_pass` + tor send dirs). Node secrets: `grinpool` needs read on the node's
+   `.foreign_api_secret` — group-read via a `grinsecret` group rather than world-read.
+3. **Unit changes:** `User=grinpool`, plus hardening now that it's meaningful:
+   `ProtectSystem=strict` + `ReadWritePaths=` (app dir, wallet dir, conf dir), `ProtectHome=yes`,
+   `PrivateTmp=yes`, `RestrictSUIDSGID=yes`. **Do NOT set `NoNewPrivileges=yes`** — it blocks
+   sudo, which the helper path needs (revisit only if the helper ever moves to a socket-
+   activated root service).
+4. **Sudoers:** one file `/etc/sudoers.d/grin-pool-gwctl`:
+   `grinpool ALL=(root) NOPASSWD: /usr/local/bin/grin-gateway-ctl` (helper is root-owned 0755,
+   root-writable only — sudoers on a non-root-writable absolute path).
+5. **Code swap:** `readWgHandshakes()` is replaced by the `gwctl('status')` wrapper
+   (`sudo grin-gateway-ctl status --net …`); keep the existing silent-`catch` fallback so a
+   box without the helper (old install, gateway-only role) degrades to share-recency status
+   exactly as today.
+6. **Migration on live boxes:** re-running hub setup applies user+chown+unit+sudoers, then
+   restarts. Test order: testnet hub first; verify stratum accepts shares, admin login works,
+   a payout round completes (wallet spawn as `grinpool`), THEN mainnet.
+
+Blast-radius after: compromised backend = hot-wallet funds (unavoidable by design) + peer
+add/remove via the validated helper. It can no longer read the WG/hub private keys, node
+owner secrets, or write outside its own dirs.
+
+### 13.10 Operational scenarios & disaster recovery (added 2026-07-13)
+
+Five real-life scenarios, scoped honestly: two need **new code**, three are **runbooks**
+(documentation + small menu affordances). All belong to this work package.
+
+**a) Grin node rebuild (new api/foreign secrets) — mostly already automatic.**
+`07_lib_pool_wallet.sh:577` already installs the shared secret self-heal
+(`grin_node_secrets.sh` timer, every 5 min): a rebuilt node's new `.foreign_api_secret` is
+re-applied to the pool wallet's `node_api_secret_path` without operator action
+(`grin_sync_wallets` sweeps `/opt/grin/**/grin-wallet.toml`). **The uncovered half:** a
+rebuild wipes the node's own `grin-server.toml`, losing the pool's stratum wiring
+(`enable_stratum_server`, `stratum_server_addr` :3334/:13334, `wallet_listener_url` → :3420).
+→ **New code:** add a pool consumer to the self-heal chain per the CLAUDE.md "new consumer"
+pattern — `grin_sync_pool_stratum` re-applies `pw_patch_node_toml`-equivalent keys when the
+live node's toml has drifted (guarded: only when a pool install exists; node restart is NOT
+automatic — the sync prints/flags it, the watchdog or operator restarts). Runbook line:
+after any node rebuild, `grin-secret-sync` once + restart node + check admin health page.
+
+**b) Provider/IP change of the HUB — make endpoints DNS-based (small helper feature).**
+Today `add-peer` bakes the ipify-resolved raw IP into every pairing string; an IP change
+strands every gateway (each needs `wg_hub_endpoint` edited by hand). → **New code (cheap):**
+optional `wg_endpoint_host` in pool.json (set once in helper/panel, e.g. `hub.grinium.net`);
+when set, pairing strings carry `host:port` instead of the raw IP. WireGuard resolves the
+name at `wg-quick up` — so a provider IP change becomes: update DNS A record → each gateway
+`systemctl restart wg-quick@wg-grinpool` (or the toolkit's 3) Bring up tunnel). Existing
+IP-paired gateways: one-field edit in `2) Configure` (manual path already supports it).
+Gateway IP changes need nothing on the hub (gateway dials out) — only the miner-facing DNS
+(`stratum_url` in pool_locations) moves.
+
+**c) Hub disaster recovery — NEW `07_lib_pool_backup.sh` on the shared engine.**
+The pool hub is the ONLY money-holding product without backup today (solo has
+`07_solo_backup.sh`, drop has `052_lib_backup.sh`, both on the shared `grin_backup_engine.sh`
+gbe_*/gbp_* + offsite push). Same model (personal key, `grin_pubpool_backup_DDMMYYYY`,
+daily cron, scp push). Backup set — everything a fresh `07` install can't regenerate:
+`pool.db` (balances/shares/audit — snapshot via SQLite `.backup` or two-phase tar like 052,
+never a live copy of a WAL db), `$POOL_CONF` (incl. `region_ports`), wallet dir (seed +
+`.wallet_pass` + tor keys), WG identity (`$WG_DIR_CONF/server_*.key` + `/etc/wireguard/wg-grinpool*.conf`
+— restoring these means **gateways reconnect with zero re-pairing**), nginx vhost + cert
+note. Restore runbook: fresh box → Script 01 node (or restore alongside) → `07` hub install
+→ restore backup → `grin-secret-sync` → re-point DNS (trivial if (b) is DNS-based) →
+gateways reconnect on their PersistentKeepalive with no operator action on any gateway box.
+
+**d) Gateway disaster recovery — runbook only, by design (< 5 min).**
+A gateway's total state = `grin_gateway.json` + one WG keypair; everything else is
+regenerated. Two paths: (1) *no backup needed*: fresh box → Gateway `1) Install` (new
+keypair) → panel: unpair old key / pair new pubkey (region **keeps** its tunnel IP + port by
+the existing replace-guard) → paste new GRINGW1 → up; miners' DNS unchanged if the new box
+takes over the IP, else one A-record flip. (2) *with the (c) engine, optional*: a tiny
+`grin_gateway_backup` tar of `/opt/grin/gateway` + `/etc/wireguard/wg-grinpool.conf` +
+`grin_gateway.json` restores the SAME identity — no hub-side action at all. Document both;
+(1) is the primary story because it needs nothing prepared in advance.
+
+**e) Hot-wallet switch (compromise / corruption) — runbook + menu option.**
+Safe by architecture: miner balances/owed amounts live in **pool.db**, not the wallet, so
+swapping wallets never loses accounting. Procedure (new hub menu entry "Replace pool
+wallet", also documented for manual use): 1 pause payouts (admin toggle) → 2 move old wallet
+dir aside → 3 `grin-wallet init` fresh (new seed, recorded offline) → 4 re-run the existing
+wallet setup path (toml patch, `.wallet_pass`, ECDH unlock, node `wallet_listener_url`
+re-patch + node restart — all existing `pw_*` code) → 5 sweep old wallet balance → new
+wallet from a separate box/dir (old seed still valid unless truly compromised; if
+compromised, sweep FIRST, fastest wins) → 6 resume payouts. Coinbase maturity note: rewards
+mined to the old wallet in the last 1440 blocks must mature before the sweep completes —
+keep the old dir until balance is zero.
+
+### 13.11 Out of scope (deferred)
+
+**Level 2 token enrollment** — panel mints a one-time token; gateway box POSTs its pubkey to a
+public `POST /api/gateway/enroll` and receives the pairing payload (zero human key-carrying).
+Bolts onto this design (same helper, same response shape); revisit only if third-party
+operators run gateways at scale.
+
+---
+
+## 14. Data retention & ledger rollup — IMPLEMENTED 2026-07-16 (branch `add-ons`; NOT VPS-tested)
+
+Industry-standard three-tier retention (mirrors Miningcore/NOMP/commercial pools: raw shares
+ephemeral, daily earnings kept for years, blocks/payouts forever). Keeps the SQLite file at a
+**bounded steady state (~2–4 GB modest / ~8–12 GB at 1000-miner scale)** instead of unbounded
+growth (~30+ GB/yr raw), while every *lifetime* public/audit figure stays exact forever.
+
+### 14.1 What is kept, what is pruned
+
+| Tier | Table | Retention | Why safe |
+|---|---|---|---|
+| working buffer | `shares` | height floor: confirm_depth + PPLNS 60 + `shares_margin_blocks` (default 360 → ~31 h) | PPLNS + orphan reversal read nothing older; luck/effort snapshotted into `blocks.network_difficulty`/`round_shares` at find time |
+| display detail | `hashrate_history` | `hashrate_keep_days` (100) | per-miner wiggle-line only; pool-wide trends live forever in `pool_metrics_hourly` |
+| **ledger detail** | `balance_log` | `balance_log_keep_days` (default 60, **floor 45**) | rolled into `balance_log_daily` first, verify-before-delete (14.2) |
+| aggregates | `pool_metrics_hourly`, `balance_log_daily` | **forever** (~1 MB/yr + ~150 MB/10 yr) | size independent of miner count × time detail |
+| money record | `blocks`, `withdrawals`, `withdrawal_events`, lottery | **forever** (~50 MB/yr) | the actual audit/tax record; payouts also mirrored on-chain |
+
+Floor 45 on `balance_log_keep_days`: raw-only readers use windows up to 30 d (reconciliation
+wallet-send audit `window_days=30`, account earnings 30 d, payments day/week/month ranges) + slack.
+
+### 14.2 Ledger rollup — `lib/ledger-rollup.js` (the one contract to remember)
+
+`balance_log_daily (day, grin_address, event_type, reference_type, total_amount, event_count)`
+— these dimensions exactly reconstruct every lifetime consumer (verified by test, 14.4).
+
+**Horizon contract:** marker `pool_config('_state','balance_log_rollup_horizon')` = **H**
+(UTC-day-aligned) ⇒ rollup fully covers `created_at < H`. Composite lifetime reads =
+`rollup(day < H) + raw(created_at >= H)` — no gap, no double-count, at every prune state.
+Window reads with cutoff ≥ now − keep_days may read raw only.
+
+Retention pass (hourly, `lib/retention.js`): ① `rollupCompletedDays` — whole completed UTC days,
+idempotent replace-on-conflict, marker advanced in the same tx; ② `verifyAndPruneRaw` — deletes
+one day at a time, **only after** that day's raw COUNT/SUM matches its rollup; a mismatch halts
+pruning (`ledger_rollup_mismatch` in retention status/log) and never deletes an unverified day.
+Rollup rows are never pruned. File space reclaimed by the weekly VACUUM cron, as before.
+
+### 14.3 Consumers repointed to composite reads (all in this change)
+
+- `hashrate-tracker.getPaymentsHistory` — lifetime totals (fee %, to-miners, giveaways) always
+  composite; `year`/`all` series merge rollup+raw **additively** per bucket (a week/month bucket
+  can straddle H); day/week/month ranges stay raw-only (≤30 d < floor 45).
+- `lib/reconciliation.js` — lifetime flows, `pool_fee`/`prize_pool` funding detail, and the
+  **integrity invariant** (Σledger vs Σbalances, feeds auto-freeze) are composite; d1/d7 raw.
+- NOT repointed (verified within raw window): account earnings 1h/24h/7d/30d, ledger statement +
+  CSV (row detail now labeled "kept 60 days", presets 30/60/all-retained), incentives jackpot
+  dedup, prize-pool activity feed.
+
+### 14.4 Chart/stat ↔ retention audit (2026-07-16, all pages)
+
+| Surface | Source | Longest window | Verdict |
+|---|---|---|---|
+| Dashboard strip-chart + 24h peak, KPIs, top-miners 1h | `hashrate_history` 24 h; `shares` ≤24 h | 24 h vs ~31 h shares floor | ✅ (height-based prune fails toward *keeping more*) |
+| miners-stats trends Day→All-Time | `pool_metrics_hourly` | all-time | ✅ forever |
+| miners-stats leaderboards (30 d) | `blocks` / `hashrate_history` | 30 d vs forever/100 d | ✅ |
+| blocks page explorer + P-01…P-04 (incl. luck) | `blocks` (+ snapshot cols) | all-time | ✅ forever |
+| payment-history tiles + 4 charts, every range | `withdrawals` + composite ledger | all-time | ✅ exact via rollup |
+| account P-01 hashrate (Day/Week/Month) | `hashrate_history` | 30 d vs 100 d | ✅ (Year/All already disabled with note) |
+| account earnings / ledger cards | raw `balance_log` | 30 d vs 45-floor | ✅ |
+| account P-06/P-07 row ledger + CSV | raw `balance_log` | keep_days | ✅ labeled; older detail = daily granularity |
+| admin reconciliation + money alerts | composite + raw d1/d7; wallet-send audit 30 d | ✅ |
+| lottery/campaign eligibility | `hashrate_history` | campaign window | ✅ while campaigns ≤ `hashrate_keep_days` (100) — enforce if longer campaigns are ever added |
+
+**Smoke-tested** (scratchpad `test-ledger-rollup.js`, node:sqlite): synthetic 90-day ledger
+(1526 rows) → rollup + prune to 45 d (763 rows deleted) ⇒ payments `all` totals, `year` series
+bucket-by-bucket, reconciliation lifetime flows, fee/prize buckets and `integrity_drift = 0`
+all **identical** before/after; re-run is a no-op. NOT yet run against a live VPS DB.
+
+### 14.5 Size forecast (5–7 yr, with this design)
+
+Modest pool (~20 blk/day): **2–4 GB** total. Large pool (1000 miners, ~400 blk/day): **8–12 GB**
+— dominated by *constant-size* working windows (shares ~1 GB, hashrate ~1.5 GB, raw ledger 60 d
+~4–5 GB), plus slow-growing forever-tables (~0.2 GB/yr). Deferred (size-only, not correctness):
+vardiff (bounds share-row rate), per-miner **hourly** hashrate rollup w/ optional `worker_name`
+dimension (would allow cutting `hashrate_keep_days` and enable per-rig history >24 h — worker
+detail today exists only in `shares`). Optional future: yearly SQLite/CSV cold archive of pruned
+raw ledger as a public transparency download.
+
+---
+
+## 15. Goblin nickname payouts over Nostr — DESIGN ONLY (2026-07-17, NOT built)
+
+Operator idea: on the account page, a miner passes the ownership gate, enters their **Goblin
+wallet username** (e.g. `alice` → `alice@goblin.st` via NIP-05), and the pool delivers the
+payout slatepack to their Goblin wallet over Nostr — no Tor listener, no manual copy/paste.
+Decision 2026-07-17: **design first, build later** (after the current batch is VPS-tested).
+
+### 15.1 Why it's feasible (verified groundwork)
+
+The slatepack-over-Nostr wire format was SOURCE-VERIFIED 2026-07-09 against goblin
+`src/nostr/*.rs` (full detail → `script05_planning_goblin.md`, memory
+`reference_goblin_ecosystem`). Facts that matter here:
+
+- **Payload**: NIP-17 private DM — kind-14 rumor, content = `"[Goblin] GRIN payment message …"`
+  preamble + blank line + **plain-armor** slatepack (confidentiality = the DM layer, so the
+  pool's existing `recipients: []` slatepack creation is byte-compatible). Tags `["goblin","1"]`.
+  Caps: rumor 32 KB, slatepack 30 KB, note 256 chars.
+- **Encryption**: standard **NIP-44 v2 always works** (goblin's "v3" is its own negotiated
+  extension, only used when the peer advertises it — a Node bridge never needs it).
+  `nostr-tools` (nip44/nip59/nip17/nip05 + SimplePool over ws) covers everything.
+- **Ingest**: goblin AutoReceive (default policy Everyone) signs S2 automatically when the
+  wallet is online; it finalizes only if the sender pubkey == stored counterparty ⇒ **the pool
+  must send from the same Nostr key it listens on** (one persistent pool identity key).
+- **Relays**: shared floor `wss://relay.floonet.dev` is pinned in every goblin publish+inbox
+  set (plus relay.0xchat.com, offchain.pub). Public wss — no relay of our own is required
+  (the 091 floonet-rs deployer stays optional compose-when-present).
+- **Timing**: goblin pending-send expiry is **24 h**; catch-up lookback 3 days (wrap
+  `created_at` fuzzed ≤ 2 d past). Pairs naturally with our slatepack TTL expiry/refund.
+
+### 15.2 The security tension — this rail pays a THIRD PARTY
+
+Every existing rail can only pay the miner's own wallet: Tor dials the mining address's
+`.onion`; the manual slatepack is age-encrypted **to the mining address**. That is why the
+ownership gate is anti-griefing, not authentication — a passed gate cannot redirect funds.
+A nickname rail breaks that invariant: coins go to **whoever controls the npub** behind the
+username. A guessed IP (CGNAT neighbour!) or a leaked rig password would become real theft.
+The IP-or-password gate MUST NOT be the only thing standing between an attacker and an
+arbitrary-destination payout.
+
+**Mitigation — registered destination + cooldown (exchange-style address whitelisting):**
+1. `POST /api/account/:addr/nostr-destination` (ownership-gated, rate-limited): resolves the
+   NIP-05 username → npub, stores `{username, npub, registered_at}` on `miner_accounts`,
+   audit-logs the change. Re-registration overwrites and **resets the clock**.
+2. A Nostr payout is allowed only when `now - registered_at ≥ cooldown` (config, default
+   **48 h**, operator-tunable ≥ 24 h). Until then the account page shows "activates at <UTC>".
+3. The pending registration is prominently visible on the account page (and in the account
+   audit trail), so the legitimate owner — who checks their stats — has the whole cooldown
+   window to notice a hijack attempt, re-register (clock reset evicts the attacker's entry),
+   and rotate their rig password.
+4. Registration + first use each raise an admin money-alert (reuses AlertMonitor channels);
+   per-rail spend caps can piggyback on the existing large_withdrawal alert.
+5. The npub is pinned at registration time (TOFU): at send time the pool re-resolves the
+   NIP-05 name and **refuses if the npub changed** (a goblin.st account takeover must not
+   silently redirect payouts — the miner must re-register through the gate + cooldown).
+
+### 15.3 Bridge module sketch (`lib/nostr-payout.js`, in-process — no separate daemon)
+
+- One pool Nostr identity key (generated at setup, stored like `.wallet_pass`; NEVER the
+  operator's social `nostr_link` key from branding).
+- `SimplePool` over `wss://relay.floonet.dev` + 2 fallback relays (operator-configurable
+  JSON list in pool_config; compose-with-091 just prepends the self-hosted relay).
+- Send path (piggybacks the existing slatepack state machine — NEW `method='nostr'` rows
+  reuse `slatepack_pending`): create S1 (same wallet call as the manual rail, `recipients:
+  []` plain armor) → wrap per NIP-17 (kind-14 rumor → NIP-44 v2 seal → gift wrap) → publish
+  to the destination's inbox relays (kind-10050 lookup, fallback to the shared floor).
+- Receive path: persistent subscription for gift wraps addressed to the pool key; unwrap →
+  regex-extract exactly ONE `BEGINSLATEPACK` block (tag-distrusting, same as goblin) →
+  classify by parsed slate state → if it's S2 for a `slatepack_pending` nostr row, run the
+  existing finalize path (same code as the manual rail's finalize, minus the HTTP route).
+- Failure states map onto what already exists: no S2 within TTL → the standard slatepack
+  expiry refund (goblin's own 24 h pending expiry means a dead wallet fails fast); relay
+  publish failure → park as `retry_scheduled` and reuse the Tor retry ladder; NIP-05
+  resolution failure or npub mismatch → 4xx at request time, nothing locked.
+- Freeze/kill-switch: `_assertNotFrozen()` gates the new entry point exactly like the other
+  rails; the reconciliation coverage math needs no change (locked balances behave identically
+  to the manual slatepack rail).
+- **Pending exclusivity + cooldown come for free.** Because `method='nostr'` rows park in
+  `slatepack_pending`, they are already counted by the shared `PENDING_SQL`, so the
+  one-pending-per-address rule holds across Tor + slatepack + Nostr with no new code — a miner
+  can never run a Nostr payout alongside another rail. The nostr create entry point must also
+  call `_assertNoRecentReversal()` (added round 3, 2026-07-17) so the failed-payout cooldown
+  spans this rail too; a Nostr failure that reverses the lock goes through the same
+  `_reverseLock` → `balance_log` reversal row that arms the cooldown. This is the concrete
+  payoff of "reuse the withdrawal state machine": the cross-rail double-pay guard already
+  covers a rail that isn't built yet.
+
+### 15.4 Build order (when green-lit)
+
+1. Schema + registration endpoint + cooldown + account-page UI (no sending yet) — smallest
+   reviewable slice, and the cooldown clock can already be running for early adopters.
+2. Bridge send/receive with a testnet goblin wallet against the public relay floor.
+3. Alerts + admin visibility (registered destinations list, per-rail counters).
+4. VPS E2E with a real Goblin wallet, then enable on mainnet behind a pool_config flag
+   (default OFF).
+
+Est. scope: ~1 session for slice 1, 1–2 for the bridge. Deps: `nostr-tools` (+ `ws`) — the
+only new npm packages; everything else reuses the existing withdrawal state machine.
+
+### 15.5 BUILT 2026-07-18 (add-ons, NOT VPS-tested) — what shipped vs the sketch
+
+Implemented as one in-process bridge `lib/nostr-payout.js` + a `method='nostr'` rail on the
+existing scheduler. Feature flag `nostr_payouts_enabled` defaults **OFF**; nostr-tools + ws are
+lazy-required inside `start()` so a pool without `npm install` (or with the flag off) boots
+normally. Deviations from the sketch, all deliberate:
+
+- **Send-only rail (no donation-receive).** The pool is always the payout *sender*; the bridge
+  subscribes for the S2 *response* only. The §3.2 donation-ingest flow is out of scope here
+  (that was a Drop feature) — the receive pipeline finalizes S2s for our own pending sends and
+  drops everything else.
+- **S1 is plain armor (`recipients:[]`)** — the ONE wallet-call difference from the manual
+  slatepack rail (which age-encrypts to the mining address). Confidentiality is the Nostr DM
+  layer, and goblin's AutoReceive expects plain armor (§2.4). Everything else reuses
+  `createSlatepackWithdrawal`'s lock/fee/expiry machinery verbatim.
+- **Publish failure reverses immediately** (status `nostr_failed`) rather than entering the Tor
+  retry ladder (which is Tor-transport-specific). Simpler and safe: the miner just re-requests.
+  A *delivered but unanswered* send still parks in `slatepack_pending` and refunds via the
+  normal TTL sweep, so a genuinely-offline wallet is covered.
+- **NIP-05 domain allowlist** (`nostr_nip05_domains`, default `["goblin.st"]`) added as an
+  explicit SSRF + look-alike-domain guard beyond §2.6's hostname validation — the pool will
+  only resolve a username against an allowlisted domain.
+- **TOFU re-pin at send time**: the route re-resolves the stored username and refuses the
+  payout if the npub changed since registration (§15.2 #5), on top of the ≥48 h cooldown.
+- **Response binding is defence-in-depth**: the bridge routes an incoming S2 to a pending row
+  by matching the seal-sender pubkey to the registered `nostr_npub`; the scheduler then
+  re-checks that match AND binds `slate.id` before finalizing.
+
+Files: `lib/nostr-payout.js` (bridge, all nostr-tools calls isolated in a "wire" section),
+`lib/withdrawal-scheduler.js` (`createNostrWithdrawal` / `finalizeNostrWithdrawal` +
+`nostrBridge` injection), `index.js` (startup construct+start, response-handler wiring,
+`POST`/`DELETE /api/account/:addr/nostr-destination`, `method:'nostr'` withdraw branch,
+account-summary `nostr_destination` + `nostr_payouts_enabled`), `lib/db.js`
+(miner_accounts `nostr_username`/`nostr_npub`/`nostr_registered_at`, `nostr_seen_events` dedup
+table created by the bridge), `lib/config.js` + `lib/pool-settings.js` (4 config keys),
+`admin-panel/settings-payout.html` + `settings-common.js` (admin fields),
+`public_html/account-settings.html` (P-04 Goblin option + registration UI). Security detail →
+security_audit §E.3; build notes → implementation §10.2.
 
 ---
 

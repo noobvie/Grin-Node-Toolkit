@@ -59,6 +59,24 @@ class WalletAPI {
     }
   }
 
+  // Full wallet transaction log (TxLogEntry[]) — the wallet's own record of every send/receive.
+  // Used by the wallet-send audit (lib/reconciliation.js) to catch OS-level `grin-wallet send`
+  // operations that bypass the pool ledger. retrieve_txs returns [was_refreshed, entries]; we
+  // return just the entries array. refresh=true forces a fresh node scan (slow).
+  async getTransactions(refresh = true) {
+    const result = await this._call('retrieve_txs', [null, !!refresh, null, null]);
+    return Array.isArray(result) ? result[1] : (result && result.txs) || [];
+  }
+
+  // The wallet's slatepack address at a derivation index (default 0). Deterministic from the
+  // seed, so index 0 is a stable per-wallet fingerprint used as the pool's wallet-identity anchor
+  // (lib/reconciliation.js probeWalletIdentity → AlertMonitor swap guard). grin-wallet Owner v3
+  // `get_slatepack_address` serialises the SlatepackAddress directly to its bech32 string.
+  async getSlatepackAddress(index = 0) {
+    const result = await this._call('get_slatepack_address', [null, index]);
+    return typeof result === 'string' ? result : (result && (result.slatepack_address || result.address)) || null;
+  }
+
   // --- Slatepack send flow (Owner API v3) -----------------------------------
   //
   // Reinstates the interactive (no-Tor) payout, secured by ENCRYPTION rather than transport:

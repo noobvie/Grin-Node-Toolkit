@@ -3,136 +3,322 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Fortune Board — Lottery Winners</title>
-    <meta name="description" content="Public lottery winner history — every prize paid, with a verifiable draw seed for full transparency.">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
     <meta name="robots" content="index, follow, max-image-preview:large">
+    <meta name="author" content="GRINIUM Mining Pool">
+    <title>Fortune Board — Lottery Winners | GRINIUM Mining Pool</title>
+    <meta name="description" content="Public lottery winner history — every prize the pool has paid, with a verifiable draw seed for full transparency. Prize totals, pot split and monthly trends.">
+    <meta name="keywords" content="grin lottery winners, mining pool prizes, fortune board, verifiable draw, prize pool transparency">
     <meta property="og:type" content="website">
     <meta property="og:title" content="Fortune Board — Lottery Winners | GRINIUM">
     <meta property="og:description" content="Public lottery winner history — every prize paid, with a verifiable draw seed for full transparency.">
     <meta property="og:url" content="https://pool.grin.money/fortune-board.html">
     <meta property="og:site_name" content="GRINIUM Mining Pool">
     <meta property="og:image" content="https://pool.grin.money/images/og-image.svg">
+    <meta property="og:locale" content="en_US">
     <meta name="twitter:card" content="summary">
     <meta name="twitter:title" content="Fortune Board — Lottery Winners">
     <meta name="twitter:image" content="https://pool.grin.money/images/twitter-card.svg">
     <link rel="canonical" href="https://pool.grin.money/fortune-board.html">
+    <meta name="theme-color" content="#07090c">
+    <link rel="icon" type="image/svg+xml" href="/images/favicon.svg">
+    <link rel="apple-touch-icon" href="/images/apple-touch-icon.svg">
+    <link rel="manifest" href="/manifest.json">
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "WebPage",
+      "name": "GRINIUM Mining Pool — Fortune Board",
+      "description": "Public lottery winner history with verifiable draw seeds",
+      "url": "https://pool.grin.money/fortune-board.html",
+      "isPartOf": { "@type": "WebSite", "name": "GRINIUM Mining Pool", "url": "https://pool.grin.money" }
+    }
+    </script>
+
     <link rel="stylesheet" href="/css/dashboard.css">
-    <style>
-        .container { max-width: 1100px; margin: 0 auto; padding: 2rem 1.5rem; }
-        .cards { display: flex; gap: 1rem; flex-wrap: wrap; margin-bottom: 1.5rem; }
-        .stat-card {
-            flex: 1; min-width: 200px; background: var(--t-card, #11160d);
-            border: 1px solid var(--t-border, #2d3748); border-radius: 10px; padding: 1.25rem;
-        }
-        .stat-card .label { color: var(--t-dim, #a0aec0); font-size: .85rem; text-transform: uppercase; letter-spacing: .05em; }
-        .stat-card .value { color: var(--t-accent, #b8e600); font-size: 1.5rem; font-weight: 700; margin-top: .3rem; word-break: break-all; }
-        .donate-box { display: none; }
-        .donate-box code {
-            display: block; background: var(--t-chip-bg, rgba(255,255,255,.06)); border: 1px solid var(--t-chip-border, var(--t-border, #2d3748));
-            border-radius: 6px; padding: .6rem .8rem; margin-top: .4rem; font-size: .85rem; word-break: break-all; color: var(--t-text, #e0e0e0);
-        }
-        .table-wrap { background: var(--t-card, #11160d); border: 1px solid var(--t-border, #2d3748); border-radius: 10px; overflow-x: auto; }
-        table { width: 100%; border-collapse: collapse; min-width: 640px; }
-        th, td { padding: .8rem 1rem; text-align: left; border-bottom: 1px solid var(--t-border, #2d3748); font-size: .9rem; }
-        th { color: var(--t-dim, #a0aec0); text-transform: uppercase; font-size: .75rem; letter-spacing: .05em; }
-        td .amount { color: var(--t-accent, #b8e600); font-weight: 700; }
-        td .seed { color: var(--t-dim, #a0aec0); font-size: .78rem; }
-        .pot-tag { display: inline-block; padding: .1rem .5rem; border-radius: 4px; font-size: .72rem; background: var(--t-chip-bg, rgba(255,255,255,.08)); border: 1px solid var(--t-chip-border, var(--t-border, #2d3748)); }
-        .empty, .loading { padding: 2rem; text-align: center; color: var(--t-dim, #a0aec0); }
-        .more-btn {
-            display: block; margin: 1.25rem auto 0; padding: .6rem 1.5rem; cursor: pointer;
-            background: var(--t-accent, #b8e600); color: var(--t-on-accent, #080b07); border: none; border-radius: 6px; font-weight: 700;
-        }
-        .more-btn[disabled] { opacity: .5; cursor: default; }
-        .audit-note { color: var(--t-dim, #a0aec0); font-size: .82rem; margin-top: 1rem; }
-    </style>
     <link rel="stylesheet" href="/css/themes.css">
+    <link rel="stylesheet" href="/css/reactor.css">
+    <style>
+        /* Winner-history toolbar (search + pot filter), sitting inside the P-03 panel body. */
+        .fb-toolbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 14px; }
+        .fb-toolbar input, .fb-toolbar select {
+            font: inherit; font-size: 13px;
+            background: var(--panel-2, rgba(255,255,255,.04)); color: var(--text, #e6edf3);
+            border: 1px solid var(--border, rgba(255,255,255,.10)); border-radius: 6px; padding: 8px 11px;
+        }
+        .fb-toolbar input { flex: 1; min-width: 220px; }
+        .fb-count { color: var(--text-mute, #6b7480); font-family: var(--mono, monospace); font-size: 11px; letter-spacing: .06em; margin-left: auto; }
+        .fb-amount { color: var(--accent, #7cb342); font-weight: 600; }
+        .fb-seed { color: var(--text-mute, #6b7480); font-family: var(--mono, monospace); font-size: 11px; }
+        .pot-tag {
+            display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; letter-spacing: .04em;
+            background: var(--panel-2, rgba(255,255,255,.06)); border: 1px solid var(--border, rgba(255,255,255,.10));
+        }
+        .donate-code {
+            display: block; font-family: var(--mono, ui-monospace, monospace); font-size: 12px; word-break: break-all;
+            background: var(--panel-2, rgba(255,255,255,.04)); border: 1px solid var(--border, rgba(255,255,255,.10));
+            border-radius: 6px; padding: 10px 12px; margin-top: 8px; color: var(--text, #e6edf3);
+        }
+    </style>
 </head>
 <body>
 
     <!-- header injected by /js/public-shell.js -->
 
-    <div class="container">
-        <h2 class="page-title">🎉 Fortune Board</h2>
-        <p class="audit-note">Every prize the pool has ever paid — winner, amount, and date. Each draw lists the
-            Grin block height and hash used as its random seed, so anyone can verify the result was fair.</p>
+    <div class="wrap">
+        <!-- Sidebar ad slot (filled by /js/ads.js; hidden if empty) -->
+        <div class="ad-slot ad-slot--sidebar" data-ad-slot="sidebar" style="display:none;"></div>
 
-        <div class="cards" style="margin-top:1rem;">
-            <div class="stat-card">
-                <div class="label">Prize Pool</div>
-                <div class="value" data-brand="prize-pool">—</div>
-            </div>
-            <div class="stat-card donate-box" data-brand-show="donation">
-                <div class="label">Donate to the prize pool</div>
-                <code data-brand="donation-address"></code>
+        <!-- ═══ Operator strip: heading + audit note ═══ -->
+        <div class="deck-head">
+            <div>
+                <h1>🎉 Fortune Board</h1>
+                <div class="sub">Every prize the pool has ever paid &middot; each draw seeded from a verifiable Grin block hash <span class="dim">(all times UTC)</span></div>
             </div>
         </div>
 
-        <div class="table-wrap">
-            <table>
-                <thead>
-                    <tr>
-                        <th>Event</th><th>Winner</th><th>Pot</th><th>Amount</th><th>Date</th><th>Draw seed (audit)</th>
-                    </tr>
-                </thead>
-                <tbody id="winners-body">
-                    <tr><td colspan="6" class="loading">Loading…</td></tr>
-                </tbody>
-            </table>
+        <!-- ═══ Spec placard: headline figures ═══ -->
+        <div class="placard" aria-label="Lottery headline figures">
+            <span><i>Prize pool</i><b data-brand="prize-pool">—</b></span>
+            <span><i>Total prizes paid</i><b id="fb-total-prizes">—</b></span>
+            <span><i>Draws held</i><b id="fb-draws">—</b></span>
+            <span><i>Unique winners</i><b id="fb-unique">—</b></span>
         </div>
-        <button id="more-btn" class="more-btn" style="display:none;" onclick="loadWinners()">Load more</button>
+
+        <!-- ═══ Upcoming contests (branding.js hook; hidden until campaigns exist) ═══ -->
+        <div class="settings-section" data-brand-show="campaigns" style="display:none;margin-top:14px;">
+            <h3 style="margin-bottom:.5rem;">🏆 Upcoming Contests</h3>
+            <div data-brand="upcoming-campaigns"></div>
+        </div>
+
+        <div class="deck">
+
+            <div class="deck-row half">
+                <!-- ═══ P-01 · PRIZES PAID OVER TIME ═══ -->
+                <div class="panel"><span class="screws"></span>
+                    <h2 class="panel-title"><span class="tag">P-01</span> Prizes paid over time <span class="right">GRIN per month</span></h2>
+                    <div class="panel-body chart-wrap">
+                        <canvas id="fb-chart-prizes" aria-label="GRIN paid in prizes per month" role="img"></canvas>
+                        <div class="chart-empty" id="fb-empty-prizes">NO PRIZES PAID YET</div>
+                    </div>
+                </div>
+
+                <!-- ═══ P-02 · POT SPLIT ═══ -->
+                <div class="panel"><span class="screws"></span>
+                    <h2 class="panel-title"><span class="tag">P-02</span> Prize split by pot <span class="right">share-weighted vs equal chance</span></h2>
+                    <div class="panel-body chart-wrap">
+                        <canvas id="fb-chart-pots" aria-label="GRIN awarded by pot type" role="img"></canvas>
+                        <div class="chart-empty" id="fb-empty-pots">NO PRIZES PAID YET</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ═══ P-03 · PRIZES BY EVENT ═══ -->
+            <div class="panel"><span class="screws"></span>
+                <h2 class="panel-title"><span class="tag">P-03</span> Prizes by event <span class="right">top events &amp; campaigns · GRIN awarded</span></h2>
+                <div class="panel-body chart-wrap">
+                    <canvas id="fb-chart-events" aria-label="GRIN awarded per event or campaign" role="img"></canvas>
+                    <div class="chart-empty" id="fb-empty-events">NO PRIZES PAID YET</div>
+                </div>
+            </div>
+
+            <!-- ═══ P-04 · WINNER HISTORY ═══ -->
+            <div class="panel"><span class="screws"></span>
+                <h2 class="panel-title"><span class="tag">P-04</span> Winner history
+                    <span class="right">winner · amount · verifiable draw seed</span></h2>
+                <div class="panel-body">
+                    <div class="fb-toolbar">
+                        <input id="fb-search" type="search" placeholder="🔍 Search winner address, event, or seed hash…" autocomplete="off">
+                        <select id="fb-pot" aria-label="Filter by pot type">
+                            <option value="">All pots</option>
+                            <option value="a">Share-weighted</option>
+                            <option value="b">Equal chance</option>
+                        </select>
+                        <span id="fb-count" class="fb-count"></span>
+                    </div>
+                    <div class="table-wrap">
+                        <table class="data-table">
+                            <thead>
+                                <tr><th>Event</th><th>Winner</th><th>Pot</th><th class="num">Amount</th><th>Date</th><th>Draw seed (audit)</th></tr>
+                            </thead>
+                            <tbody id="winners-body">
+                                <tr><td colspan="6">Loading…</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    <div class="pager" id="fb-pager" style="display:none;align-items:center;justify-content:center;gap:14px;margin-top:16px;">
+                        <button class="btn sm" id="more-btn" onclick="loadWinners()">Load more</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ═══ P-05 · DONATE TO THE PRIZE POOL (branding.js hook; hidden until configured) ═══ -->
+            <div class="panel" data-brand-show="donation" style="display:none;"><span class="screws"></span>
+                <h2 class="panel-title"><span class="tag">P-05</span> Donate to the prize pool</h2>
+                <div class="panel-body">
+                    <p class="dim" style="margin:0 0 4px;font-size:13px;">Top up the prize pool for every miner. Send GRIN to the pool's Slatepack address:</p>
+                    <code class="donate-code" data-brand="donation-address"></code>
+                </div>
+            </div>
+
+        </div>
     </div>
 
     <!-- footer injected by /js/public-shell.js -->
 
+    <script src="/js/vendor/chart.umd.min.js"></script>
+    <script src="/js/charts-init.js"></script>
     <script>
-        // Paginated fortune board, fed by the public winner-history endpoint.
+        // Paginated fortune board, fed by the public winner-history endpoint. All fetched winners
+        // accumulate in `all`; the search box + pot filter narrow them client-side (over what's
+        // loaded), and "Load more" pulls older draws into the searchable set. Headline tiles + the
+        // three charts come from /api/public/lottery/stats (server-side aggregate over ALL history).
         var offset = 0;
         var PAGE = 25;
         var total = 0;
         var loadedAny = false;
+        var all = [];
 
         function esc(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
-        function fmtDate(sec) { return sec ? new Date(sec * 1000).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) : '—'; }
+        function fmtDate(sec) { return sec ? new Date(sec * 1000).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric', timeZone: 'UTC' }) : '—'; }
         function shortHash(h) { return h ? esc(h.slice(0, 10)) + '…' : '—'; }
+        function potLabel(p) { return p === 'a' ? 'Share-weighted' : 'Equal chance'; }
+        function fmtGrin(v) { return Number(v || 0).toLocaleString('en-US', { maximumFractionDigits: 3 }) + ' GRIN'; }
+        function setStat(id, text) { var el = document.getElementById(id); if (el) el.textContent = text; }
+        function toggleEmpty(id, show) { var el = document.getElementById(id); if (el) el.style.display = show ? 'flex' : 'none'; }
+
+        // "2026-07" → "Jul 26" (UTC calendar month, matches the server aggregation).
+        function monthLabel(ym) {
+            var parts = String(ym || '').split('-');
+            if (parts.length < 2) return ym || '';
+            var d = new Date(Date.UTC(+parts[0], +parts[1] - 1, 1));
+            return d.toLocaleDateString('en-US', { month: 'short', year: '2-digit', timeZone: 'UTC' });
+        }
+
+        function filtered() {
+            var q = (document.getElementById('fb-search').value || '').trim().toLowerCase();
+            var pot = document.getElementById('fb-pot').value;
+            return all.filter(function (w) {
+                if (pot && w.pot !== pot) return false;
+                if (!q) return true;
+                var hay = (w.address + ' ' + (w.event || '') + ' ' + (w.seed_hash || '') + ' ' + potLabel(w.pot)).toLowerCase();
+                return hay.indexOf(q) !== -1;
+            });
+        }
+
+        function render() {
+            var body = document.getElementById('winners-body');
+            var count = document.getElementById('fb-count');
+            if (!loadedAny) return; // initial loading / empty states handled in loadWinners
+            var rows = filtered();
+            var q = (document.getElementById('fb-search').value || '').trim();
+            var isFiltering = q || document.getElementById('fb-pot').value;
+            if (!rows.length) {
+                body.innerHTML = '<tr><td colspan="6">' +
+                    (isFiltering ? 'No loaded winners match — try “Load more” to search older draws.' : 'No winners yet.') +
+                    '</td></tr>';
+            } else {
+                body.innerHTML = rows.map(function (w) {
+                    // Seed = the verifiable Grin block each draw is derived from. Deep-link the
+                    // height out to a chain explorer (new tab) so anyone can audit the draw.
+                    var seedH = w.seed_height;
+                    var seedLabel = '#' + (seedH || '?') + ' · ' +
+                        (w.seed_hash ? w.seed_hash.slice(0, 10) + '…' : '—');
+                    var seedCell = (seedH && window.Explorer)
+                        ? Explorer.link('block', seedH, seedLabel)
+                        : esc(seedLabel);
+                    return '<tr>' +
+                        '<td>' + esc(w.event) + '</td>' +
+                        '<td>' + esc(w.address) + '</td>' +
+                        '<td><span class="pot-tag">' + potLabel(w.pot) + '</span></td>' +
+                        '<td class="num"><span class="fb-amount">' + (w.amount || 0).toFixed(4) + ' GRIN</span></td>' +
+                        '<td>' + fmtDate(w.drawn_at) + '</td>' +
+                        '<td class="fb-seed">' + seedCell + '</td>' +
+                        '</tr>';
+                }).join('');
+            }
+            count.textContent = isFiltering
+                ? (rows.length + ' of ' + all.length + ' loaded' + (all.length < total ? ' · ' + total + ' total' : ''))
+                : (all.length + (all.length < total ? ' of ' + total + ' total' : ' total'));
+        }
 
         function loadWinners() {
             var btn = document.getElementById('more-btn');
+            var pager = document.getElementById('fb-pager');
             btn.disabled = true;
             fetch('/api/public/lottery/winners?limit=' + PAGE + '&offset=' + offset, { credentials: 'same-origin' })
                 .then(function (r) { return r.ok ? r.json() : null; })
                 .then(function (json) {
                     var body = document.getElementById('winners-body');
-                    if (!json || !json.data) { if (!loadedAny) body.innerHTML = '<tr><td colspan="6" class="empty">Winners will appear here after the first draw.</td></tr>'; return; }
+                    if (!json || !json.data) { if (!loadedAny) body.innerHTML = '<tr><td colspan="6">Winners will appear here after the first draw.</td></tr>'; return; }
                     total = json.data.total || 0;
                     var rows = json.data.winners || [];
-                    if (!loadedAny) body.innerHTML = '';
                     if (!rows.length && !loadedAny) {
-                        body.innerHTML = '<tr><td colspan="6" class="empty">Winners will appear here after the first draw.</td></tr>';
+                        body.innerHTML = '<tr><td colspan="6">Winners will appear here after the first draw.</td></tr>';
                         return;
                     }
-                    rows.forEach(function (w) {
-                        loadedAny = true;
-                        var tr = document.createElement('tr');
-                        tr.innerHTML =
-                            '<td>' + esc(w.event) + '</td>' +
-                            '<td>' + esc(w.address) + '</td>' +
-                            '<td><span class="pot-tag">' + (w.pot === 'a' ? 'Share-weighted' : 'Equal chance') + '</span></td>' +
-                            '<td><span class="amount">' + (w.amount || 0).toFixed(4) + ' GRIN</span></td>' +
-                            '<td>' + fmtDate(w.drawn_at) + '</td>' +
-                            '<td class="seed">#' + esc(w.seed_height || '?') + ' · ' + shortHash(w.seed_hash) + '</td>';
-                        body.appendChild(tr);
-                    });
+                    loadedAny = true;
+                    all = all.concat(rows);
                     offset += rows.length;
-                    btn.style.display = offset < total ? 'block' : 'none';
+                    render();
+                    pager.style.display = offset < total ? 'flex' : 'none';
                     btn.disabled = false;
                 })
                 .catch(function () {
                     if (!loadedAny) document.getElementById('winners-body').innerHTML =
-                        '<tr><td colspan="6" class="empty">Could not load winners.</td></tr>';
+                        '<tr><td colspan="6">Could not load winners.</td></tr>';
                 });
         }
+
+        // Headline tiles + the two charts, from the server-side aggregate (covers all history).
+        function loadStats() {
+            fetch('/api/public/lottery/stats', { credentials: 'same-origin' })
+                .then(function (r) { return r.ok ? r.json() : null; })
+                .then(function (json) {
+                    if (!json || !json.data) return;
+                    var d = json.data;
+                    setStat('fb-total-prizes', fmtGrin(d.total_prizes_grin));
+                    setStat('fb-draws', Number(d.total_draws || 0).toLocaleString('en-US'));
+                    setStat('fb-unique', Number(d.unique_winners || 0).toLocaleString('en-US'));
+                    renderCharts(d);
+                })
+                .catch(function () { /* tiles keep placeholders, charts keep empty state */ });
+        }
+
+        function renderCharts(d) {
+            if (typeof PoolCharts === 'undefined') return;
+
+            // P-01 — GRIN paid per calendar month (bar).
+            var monthly = Array.isArray(d.monthly) ? d.monthly : [];
+            toggleEmpty('fb-empty-prizes', monthly.length === 0);
+            PoolCharts.renderBarChart('fb-chart-prizes',
+                monthly.map(function (m) { return monthLabel(m.month); }),
+                monthly.map(function (m) { return m.amount; }),
+                { valueFmt: fmtGrin, label: 'Prizes paid' });
+
+            // P-02 — GRIN awarded by pot type (doughnut). a = share-weighted, b = equal chance.
+            var byPot = { a: 0, b: 0 };
+            (d.by_pot || []).forEach(function (p) { byPot[p.pot] = p.amount; });
+            var a = byPot.a || 0, b = byPot.b || 0;
+            toggleEmpty('fb-empty-pots', (a + b) === 0);
+            PoolCharts.renderDoughnutChart('fb-chart-pots',
+                ['Share-weighted (Pot A)', 'Equal chance (Pot B)'],
+                [a, b],
+                { colors: ['#7cb342', '#58a6ff'] });
+
+            // P-03 — GRIN awarded per event/campaign (horizontal bar, top events by amount).
+            var byEvent = Array.isArray(d.by_event) ? d.by_event : [];
+            toggleEmpty('fb-empty-events', byEvent.length === 0);
+            PoolCharts.renderBarChart('fb-chart-events',
+                byEvent.map(function (e) { return e.event; }),
+                byEvent.map(function (e) { return e.amount; }),
+                { valueFmt: fmtGrin, label: 'Prizes paid', horizontal: true });
+        }
+
+        document.getElementById('fb-search').addEventListener('input', render);
+        document.getElementById('fb-pot').addEventListener('change', render);
         loadWinners();
+        loadStats();
     </script>
     <script src="/js/public-shell.js"></script>
     <script src="/js/public-theme.js"></script>

@@ -9,6 +9,43 @@ function hashStr(s) {
   return h;
 }
 
+// Normalise a settings value (JSON array OR comma/newline-separated string) into a
+// deduped JSON-array string. `each(s)` validates+transforms one entry (return null to
+// drop it); an empty result falls back to `opts.fallback`. Throws on malformed JSON.
+function normStrArray(val, opts) {
+  const { cap = 50, each = (s) => s, fallback = [], label = 'list' } = opts || {};
+  let arr = val;
+  if (typeof arr === 'string') {
+    const s = arr.trim();
+    if (s === '') return JSON.stringify(fallback);
+    if (s.startsWith('[')) {
+      try { arr = JSON.parse(s); } catch (e) { throw new Error(`${label} must be a JSON array or a comma/newline-separated list`); }
+    } else {
+      arr = s.split(/[\n,]+/);
+    }
+  }
+  if (!Array.isArray(arr)) throw new Error(`${label} must be an array`);
+  const cleaned = [];
+  const seen = new Set();
+  for (const raw of arr) {
+    const t = each(String(raw).trim());
+    if (t && !seen.has(t)) { seen.add(t); cleaned.push(t); }
+  }
+  if (cleaned.length === 0) return JSON.stringify(fallback);
+  if (cleaned.length > cap) throw new Error(`${label}: max ${cap} entries`);
+  return JSON.stringify(cleaned);
+}
+
+// Parse a stored JSON-array string (already validator-normalised) back to an array at
+// startup; tolerate a value that is already an array, and fall back on any corruption.
+function parseJsonArray(val, fallback) {
+  if (Array.isArray(val)) return val;
+  if (typeof val === 'string') {
+    try { const a = JSON.parse(val); if (Array.isArray(a)) return a; } catch (_) { /* fall through */ }
+  }
+  return fallback;
+}
+
 class PoolSettings {
   constructor(db) {
     this.db = db;
@@ -55,8 +92,9 @@ class PoolSettings {
       // enabled_themes: JSON array of theme keys visitors may switch between on the
       // public pages. With ≤1 entry (or allow_theme_switch off) no switcher is shown
       // and default_theme is forced. default_theme need not be in this list.
-      // Default = the two polished looks (Atomic dark + Light); nexus and the 10
-      // white-label extras stay opt-in via the admin panel checkbox grid.
+      // Default = a clean two-way pick: the original "Reactor" dark and "Light".
+      // Uranium/Nexus and the 10 white-label extras stay opt-in via the admin
+      // panel checkbox grid.
       enabled_themes: '["atomic","light"]',
       // custom_theme: JSON map of CSS variable name -> value (theme builder output)
       custom_theme: '{}',
@@ -75,6 +113,9 @@ class PoolSettings {
       discord_link: '',
       telegram_link: '',
       twitter_link: 'https://twitter.com/grinium',
+      // Nostr profile as a full web URL (e.g. https://njump.me/npub1...) so the footer
+      // link works for visitors without a Nostr client.
+      nostr_link: '',
       website_link: 'https://grinium.com',
       footer_text: '',
     },
@@ -82,6 +123,10 @@ class PoolSettings {
       meta_description: 'GRINIUM is a low-fee Grin (GRIN) mining pool — PPLNS rewards, anonymous Tor payouts, prize draws and bonuses. No sign-up; point your miner and start earning.',
       meta_keywords: 'grin mining pool, grin pool, GRIN, mimblewimble, cuckatoo32, PPLNS pool, anonymous mining, tor payout, asic mining, cryptocurrency mining, GRINIUM',
       title_template: '%page% — %pool_name%',
+      // Home page gets its own title (the %page% token is empty on home, so the
+      // generic template would render "%pool_name% — %pool_name%"). Tokens:
+      // %pool_name%, %tagline%. Leave blank to fall back to the pool name alone.
+      home_title: '%pool_name% — Fast & Secure Grin Mining Pool',
       og_title: 'GRINIUM — Grin Mining Pool',
       og_description: 'Mine Grin with low fees, PPLNS rewards and anonymous Tor payouts — plus prize draws, join bonuses and a community fortune board. No account needed.',
       og_image_file: '',
@@ -114,7 +159,7 @@ class PoolSettings {
       cookie_consent_text: 'We use analytics cookies to improve your experience.',
     },
     payout: {
-      min_withdrawal: 5.0,
+      min_withdrawal: 25.0,
       auto_payout: 'false',
       payout_frequency: 'manual',
       confirm_depth_mainnet: 1440,
@@ -122,6 +167,22 @@ class PoolSettings {
       max_pending_withdrawals: 100,
       max_user_pending: 10,
       withdrawal_retry_delays: '[21600,43200,86400,172800]',
+      // Minutes a miner must wait after a reversed payout (Tor failure, slatepack expiry,
+      // admin cancel) before requesting another payout on ANY rail. 0 disables.
+      withdrawal_cooldown_minutes: 30,
+      // Pre-flight Tor reachability gate: refuse a Tor payout up front when the miner's wallet
+      // listener isn't answering over Tor now (probe = onion:80 SOCKS5 connect). Fails OPEN if
+      // the pool box can't run the probe, so it never blocks every payout. ON by default.
+      tor_preflight_gate: 'true',
+      // ── Goblin/Nostr payout rail (design §15). OFF by default. Relays + NIP-05 domains
+      // are JSON arrays of strings; the domain list is the SSRF/typo-squat allowlist.
+      nostr_payouts_enabled: 'false',
+      nostr_relays: '["wss://relay.floonet.dev","wss://relay.0xchat.com","wss://offchain.pub"]',
+      nostr_nip05_domains: '["goblin.st"]',
+      nostr_destination_cooldown_hours: 48,
+      // Minutes a DELIVERED-but-unanswered Goblin payout stays locked before it auto-refunds.
+      // Goblin AutoReceives, so a live miner answers in seconds; short bounds a stranded lock.
+      nostr_pending_ttl_minutes: 10,
     },
     access: {
       admin_ip_allowlist: '[]',
@@ -129,6 +190,12 @@ class PoolSettings {
       session_timeout_hours: 1,
       invite_codes_enabled: 'false',
       invite_codes: '[]',
+      // Extra stratum passwords banned from the ownership gate, ON TOP of the hardcoded
+      // seed in lib/owner-proof.js — additions-only: the seed and the structural rules
+      // (length, d= prefix) always apply and cannot be removed here. Use it for newly
+      // discovered firmware defaults (per-ASIC-model factory passwords etc.).
+      // Stored as a JSON array of lowercase strings.
+      extra_banned_passwords: '[]',
     },
     alerts: {
       alert_check_interval_secs: 60,
@@ -287,7 +354,8 @@ class PoolSettings {
     // Incentive features (prize pool, join bonus, jackpot, streaks, lottery).
     // All funded from a single prize_pool pseudo-address bucket; see lib/incentives.js.
     incentives: {
-      incentives_enabled: 'false',           // master switch
+      incentives_enabled: 'true',            // master switch (on by default; no payouts until the
+                                             // prize pool is funded and a specific feature is enabled)
       // Funding
       prize_fee_cut_percent: 0,              // % OF the collected pool fee diverted to prize_pool (0-100)
       allow_miner_donations: 'true',         // miners opt in via a `donateN` worker-name tag
@@ -307,9 +375,12 @@ class PoolSettings {
       // Lottery
       lottery_enabled: 'false',
       lottery_weekly_enabled: 'true',
-      lottery_pot_share_weighted_percent: 50,  // Pot A: tickets ∝ valid shares
+      lottery_pot_share_weighted_percent: 50,  // Pot A: tickets ∝ sustained work (hashrate_history)
       lottery_pot_equal_chance_percent: 50,    // Pot B: one entry per qualifying address
-      lottery_min_shares: 10,                  // min valid shares in the period to qualify
+      lottery_min_shares: 10,                  // legacy gate (unused since eligibility moved to
+                                               // hashrate_history; kept for backward compat)
+      lottery_min_active_days: 1,              // min distinct active days to qualify (anti-sybil gate)
+      lottery_max_ticket_share_percent: 0,     // whale cap on Pot A tickets (% of total; 0 = off)
       lottery_pot_fraction_percent: 100,       // % of prize_pool paid out per draw
       // special events: JSON array of {name, date:"MM-DD", pot_grin, enabled}
       lottery_special_events: JSON.stringify([
@@ -339,9 +410,15 @@ class PoolSettings {
     database: {
       retention_enabled: 'true',
       shares_margin_blocks: 360,        // safety blocks kept BEYOND confirm_depth + PPLNS window
-      hashrate_keep_days: 30,           // prune hashrate_history rows older than this
+      hashrate_keep_days: 100,          // prune per-miner hashrate_history rows older than this
+                                        // (pool-wide trends live forever in pool_metrics_hourly)
       resolved_alerts_keep_days: 30,    // prune resolved/acknowledged alerts older than this
       prune_interval_minutes: 60,       // how often retention.js runs (applied at restart)
+      balance_log_keep_days: 60,        // raw ledger rows older than this are pruned AFTER being
+                                        // rolled up into balance_log_daily (verified per day; the
+                                        // rollup is never pruned so lifetime analytics stay exact).
+                                        // Runtime floor 45: raw-only readers use windows up to 30d
+                                        // (reconciliation wallet-send audit, account earnings).
     },
   };
 
@@ -356,9 +433,10 @@ class PoolSettings {
 
   // Every valid theme key (public_html/css/themes.css + js/theme.js + js/public-theme.js).
   // 'dark' is the retired pre-mockup public default — still accepted for stored
-  // configs; the public pages normalise it to 'atomic'. 'nexus' is public+admin;
-  // 'cyber'/'uranium'/'gradient' (the moved old looks) and matrix/naruto/japan
-  // are admin-panel-only palettes.
+  // configs; the public pages normalise it to 'atomic' (since 2026-07 that default is
+  // the Reactor control-room skin). 'nexus' is public+admin; 'uranium' is BOTH the
+  // public "Uranium Classic" theme (the pre-2026-07 uranium-lime default) and an
+  // admin-panel palette; 'cyber'/'gradient' and matrix/naruto/japan are admin-only.
   static THEME_KEYS = [
     'atomic', 'nexus', 'light', 'dark', 'custom',
     'matrix', 'naruto', 'japan', 'cyber', 'uranium', 'gradient',
@@ -442,6 +520,10 @@ class PoolSettings {
         if (val && val.length > 120) throw new Error('title_template too long (max 120)');
         return val;
       },
+      home_title: (val) => {
+        if (val && val.length > 120) throw new Error('home_title too long (max 120)');
+        return val;
+      },
       twitter_card_type: (val) => {
         if (val && !['summary', 'summary_large_image'].includes(val)) {
           throw new Error('invalid twitter_card_type');
@@ -521,12 +603,79 @@ class PoolSettings {
         if (!['manual', 'hourly', 'daily', 'weekly'].includes(val)) throw new Error('invalid payout_frequency');
         return val;
       },
+      withdrawal_cooldown_minutes: (val) => {
+        const n = parseInt(val, 10);
+        if (isNaN(n) || n < 0 || n > 1440) throw new Error('withdrawal_cooldown_minutes must be 0-1440');
+        return n;
+      },
+      tor_preflight_gate: (val) => {
+        if (val === true || val === 'true') return 'true';
+        if (val === false || val === 'false' || val === undefined || val === '') return 'false';
+        throw new Error('tor_preflight_gate must be true or false');
+      },
+      nostr_payouts_enabled: (val) => {
+        if (val === true || val === 'true') return 'true';
+        if (val === false || val === 'false' || val === undefined || val === '') return 'false';
+        throw new Error('nostr_payouts_enabled must be true or false');
+      },
+      // Accepts a JSON array or a comma/newline-separated list; normalises to a JSON array
+      // of trimmed wss:// URLs (deduped, cap 6). Empty → the relay floor only.
+      nostr_relays: (val) => normStrArray(val, {
+        cap: 6,
+        each: (s) => (/^wss:\/\/[^\s]+$/.test(s) ? s : null),
+        fallback: ['wss://relay.floonet.dev'],
+        label: 'nostr_relays (wss:// URLs)',
+      }),
+      // JSON array or comma/newline list of bare hostnames (no scheme, no path). Deduped,
+      // lowercased, cap 20. Empty → goblin.st.
+      nostr_nip05_domains: (val) => normStrArray(val, {
+        cap: 20,
+        each: (s) => {
+          const d = s.toLowerCase();
+          return /^[a-z0-9.-]{1,253}$/.test(d) && !/^\d+\.\d+\.\d+\.\d+$/.test(d) &&
+                 !d.startsWith('.') && !d.endsWith('.') && !d.includes('..') ? d : null;
+        },
+        fallback: ['goblin.st'],
+        label: 'nostr_nip05_domains (hostnames)',
+      }),
+      nostr_destination_cooldown_hours: (val) => {
+        const n = parseInt(val, 10);
+        if (isNaN(n) || n < 0 || n > 720) throw new Error('nostr_destination_cooldown_hours must be 0-720');
+        return n;
+      },
+      nostr_pending_ttl_minutes: (val) => {
+        // Floor of 2: the expiry sweep runs every 60s, so a TTL under ~2 min can't be enforced
+        // accurately. Cap of 1440 (24h) keeps it at or below the manual slatepack rail.
+        const n = parseInt(val, 10);
+        if (isNaN(n) || n < 2 || n > 1440) throw new Error('nostr_pending_ttl_minutes must be 2-1440');
+        return n;
+      },
     },
     access: {
       session_timeout_hours: (val) => {
         const n = parseInt(val, 10);
         if (isNaN(n) || n < 1 || n > 168) throw new Error('session_timeout_hours must be 1-168');
         return n;
+      },
+      // Accepts a JSON array or a comma/newline-separated list; normalises to a deduped
+      // lowercase JSON array (matching is case-insensitive in owner-proof).
+      extra_banned_passwords: (val) => {
+        let arr = val;
+        if (typeof arr === 'string') {
+          const s = arr.trim();
+          if (s === '') return '[]';
+          if (s.startsWith('[')) {
+            try { arr = JSON.parse(s); } catch (e) { throw new Error('extra_banned_passwords must be a JSON array or a comma/newline-separated list'); }
+          } else {
+            arr = s.split(/[\n,]+/);
+          }
+        }
+        if (!Array.isArray(arr)) throw new Error('extra_banned_passwords must be a JSON array or a comma/newline-separated list');
+        const cleaned = [...new Set(
+          arr.map((p) => String(p).trim().toLowerCase()).filter((p) => p.length >= 1 && p.length <= 128)
+        )];
+        if (cleaned.length > 500) throw new Error('extra_banned_passwords: max 500 entries');
+        return JSON.stringify(cleaned);
       },
     },
     alerts: {
@@ -570,6 +719,8 @@ class PoolSettings {
         lottery_pot_equal_chance_percent: percent('lottery_pot_equal_chance_percent'),
         lottery_pot_fraction_percent: percent('lottery_pot_fraction_percent'),
         lottery_min_shares: intRange('lottery_min_shares', 0, 1000000),
+        lottery_min_active_days: intRange('lottery_min_active_days', 0, 366),
+        lottery_max_ticket_share_percent: percent('lottery_max_ticket_share_percent'),
         lottery_special_events: (val) => {
           let arr = val;
           if (typeof arr === 'string') {
@@ -613,6 +764,11 @@ class PoolSettings {
       prune_interval_minutes: (val) => {
         const n = parseInt(val, 10);
         if (isNaN(n) || n < 5 || n > 10080) throw new Error('prune_interval_minutes must be 5-10080');
+        return n;
+      },
+      balance_log_keep_days: (val) => {
+        const n = parseInt(val, 10);
+        if (isNaN(n) || n < 45 || n > 3650) throw new Error('balance_log_keep_days must be 45-3650');
         return n;
       },
     },
@@ -716,6 +872,7 @@ class PoolSettings {
           discord: b.discord_link || '',
           telegram: b.telegram_link || '',
           twitter: b.twitter_link || '',
+          nostr: b.nostr_link || '',
           website: b.website_link || '',
         },
         logo_url: assetUrlFor('logo'),
@@ -729,6 +886,7 @@ class PoolSettings {
         meta_description: seo.meta_description || '',
         meta_keywords: seo.meta_keywords || '',
         title_template: seo.title_template || '%page% — %pool_name%',
+        home_title: seo.home_title || '',
         og_title: seo.og_title || '',
         og_description: seo.og_description || '',
         og_image_url: assetUrlFor('og_image'),
@@ -859,7 +1017,11 @@ class PoolSettings {
           validated = validators[key](value);
         }
 
-        let valueStr = value;
+        // Persist the VALIDATED value, not the raw input: validators normalise
+        // (trim donation_address, dedupe enabled_themes, re-serialise cleaned JSON) and a
+        // validator may turn an object/array input into a storable JSON string — storing
+        // `value` would silently keep the un-normalised raw (or bind a raw array).
+        let valueStr = validated;
         let valueType = 'string';
 
         if (typeof validated === 'number') {
@@ -941,6 +1103,29 @@ class PoolSettings {
     }
     if (payout.max_user_pending !== undefined) {
       config.max_user_pending = payout.max_user_pending;
+    }
+    if (payout.withdrawal_cooldown_minutes !== undefined) {
+      config.withdrawal_cooldown_minutes = payout.withdrawal_cooldown_minutes;
+    }
+    if (payout.tor_preflight_gate !== undefined) {
+      config.tor_preflight_gate = payout.tor_preflight_gate === true || payout.tor_preflight_gate === 'true';
+    }
+    // Nostr payout rail — stored as strings/JSON; coerce to the runtime shapes the bridge
+    // expects (boolean, arrays, number). Malformed JSON falls back to the safe default.
+    if (payout.nostr_payouts_enabled !== undefined) {
+      config.nostr_payouts_enabled = payout.nostr_payouts_enabled === true || payout.nostr_payouts_enabled === 'true';
+    }
+    if (payout.nostr_relays !== undefined) {
+      config.nostr_relays = parseJsonArray(payout.nostr_relays, ['wss://relay.floonet.dev']);
+    }
+    if (payout.nostr_nip05_domains !== undefined) {
+      config.nostr_nip05_domains = parseJsonArray(payout.nostr_nip05_domains, ['goblin.st']);
+    }
+    if (payout.nostr_destination_cooldown_hours !== undefined) {
+      config.nostr_destination_cooldown_hours = payout.nostr_destination_cooldown_hours;
+    }
+    if (payout.nostr_pending_ttl_minutes !== undefined) {
+      config.nostr_pending_ttl_minutes = payout.nostr_pending_ttl_minutes;
     }
     if (pool_info.pool_name !== undefined) {
       config.pool_name = pool_info.pool_name;

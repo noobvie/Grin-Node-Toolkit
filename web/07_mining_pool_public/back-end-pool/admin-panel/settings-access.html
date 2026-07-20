@@ -73,6 +73,22 @@
         </div>
 
         <div class="form-section">
+          <h3 class="section-title">Banned Miner Passwords (ownership gate)</h3>
+          <div class="helper-text">
+            Stratum passwords listed here are <strong>never</strong> accepted as ownership proof on the
+            public account page — additions on top of the built-in list (<code>x</code>, <code>123</code>,
+            <code>worker</code>, common factory defaults, anything under 4 characters). Add entries when you
+            spot a new firmware default in the wild. Case-insensitive; the built-in list cannot be removed.
+          </div>
+          <div class="form-group">
+            <label for="extra_banned_passwords">Extra banned entries</label>
+            <textarea id="extra_banned_passwords" rows="4" placeholder="one entry per line (comma-separated also works)"></textarea>
+            <div class="helper-text">Takes effect within a minute of saving — an added password immediately stops
+            counting as proof, even for accounts that already recorded it.</div>
+          </div>
+        </div>
+
+        <div class="form-section">
           <h3 class="section-title">Live IP Filter (admin panel)</h3>
           <div id="ipfilter-status" class="helper-text">Loading filter status…</div>
           <div class="helper-text" style="margin-top:.4rem;">

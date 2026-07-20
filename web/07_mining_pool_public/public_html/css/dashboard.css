@@ -18,14 +18,17 @@
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
 :root {
-    /* Atomic default (mockup-v3) — legacy var names kept; themes.css remaps them per theme */
-    --dark-bg: #080b07;
-    --dark-card: #11160d;
-    --dark-text: #e8f5cf;
-    --dark-dim: #9db077;
-    --neon-cyan: #b8e600;
-    --neon-magenta: #00f7ff;
-    --neon-lime: #d4ff3d;
+    /* Reactor default (v4 control-room skin) — legacy var names kept; themes.css remaps
+       them per theme. Slot mapping: cyan-slot = phosphor green (accent/ok), magenta-slot =
+       hot magenta (accent2), lime-slot = instrument amber (gold). The old uranium-lime
+       default lives on as body.uranium-theme ("Uranium Classic"). */
+    --dark-bg: #07090c;
+    --dark-card: #10141a;
+    --dark-text: #cfd8d3;
+    --dark-dim: #8a978f;
+    --neon-cyan: #5dff73;
+    --neon-magenta: #ff4fd8;
+    --neon-lime: #ffb63d;
     /* structural tokens (theme-independent) */
     --radius: 10px;
     --radius-sm: 6px;
@@ -64,11 +67,10 @@ body {
     --btn-text: var(--dark-bg);
 
     background-color: var(--bg);
-    /* faint reactor grid in the theme accent */
+    /* control-room ambience: soft overhead glow instead of the old full-page grid
+       (the reactor panels carry their own graph-paper texture) */
     background-image:
-        linear-gradient(0deg, transparent 23%, color-mix(in srgb, var(--accent) 4%, transparent) 24%, color-mix(in srgb, var(--accent) 4%, transparent) 26%, transparent 27%, transparent 73%, color-mix(in srgb, var(--accent) 4%, transparent) 74%, color-mix(in srgb, var(--accent) 4%, transparent) 76%, transparent 77%),
-        linear-gradient(90deg, transparent 23%, color-mix(in srgb, var(--accent) 4%, transparent) 24%, color-mix(in srgb, var(--accent) 4%, transparent) 26%, transparent 27%, transparent 73%, color-mix(in srgb, var(--accent) 4%, transparent) 74%, color-mix(in srgb, var(--accent) 4%, transparent) 76%, transparent 77%);
-    background-size: 48px 48px;
+        radial-gradient(1100px 520px at 50% -12%, color-mix(in srgb, var(--accent) 6%, var(--bg-elev)), transparent 70%);
     background-attachment: fixed;
     color: var(--text);
     font-family: var(--sans);
@@ -139,6 +141,40 @@ header {
     color: var(--accent); background: var(--accent-soft);
     text-shadow: 0 0 8px var(--glow);
 }
+/* ── Nav dropdown group (e.g. Pool Stats → Miners Stats / Network Map) ─────────
+   A group is a non-link parent (.nav-group) with a caret trigger + a floating
+   .nav-dropdown of child links. Opens on hover / keyboard focus (desktop) and via
+   the .open class toggled by public-shell.js (touch / keyboard). */
+.nav-group { position: relative; display: inline-flex; }
+.nav-group-trigger { background: none; border: 0; cursor: pointer; font: inherit; }
+.nav-caret { font-size: 10px; opacity: .7; margin-left: -1px; transition: transform .15s ease; }
+.nav-group:hover .nav-caret,
+.nav-group:focus-within .nav-caret,
+.nav-group.open .nav-caret { transform: rotate(180deg); }
+/* Parent stays lit when one of its children is the active page. */
+.nav-group.active > .nav-group-trigger {
+    color: var(--accent); background: var(--accent-soft);
+    text-shadow: 0 0 8px var(--glow);
+}
+.nav-dropdown {
+    position: absolute; top: 100%; left: 0; z-index: 60;
+    min-width: 180px; margin-top: 6px; padding: 6px;
+    display: none; flex-direction: column; gap: 2px;
+    border: 1px solid var(--border); border-radius: var(--radius-sm);
+    background: var(--bg-elev1); box-shadow: 0 12px 30px rgba(0, 0, 0, .45);
+}
+/* Bridge the 6px gap so hover doesn't drop while moving cursor into the menu. */
+.nav-dropdown::before {
+    content: ""; position: absolute; top: -6px; left: 0; right: 0; height: 6px;
+}
+.nav-group:hover > .nav-dropdown,
+.nav-group:focus-within > .nav-dropdown,
+.nav-group.open > .nav-dropdown { display: flex; }
+.nav-dropdown .nav-link { width: 100%; }
+.nav-dropdown .nav-label { display: inline; } /* always show labels inside the menu */
+/* The mobile header clips its overflow for horizontal scroll; lift that only while a
+   dropdown is open so the floating menu isn't cut off. */
+.header-nav:has(.nav-group.open) { overflow: visible; }
 .nav-right, .header-buttons { display: flex; align-items: center; gap: 10px; }
 .theme-switcher { display: flex; align-items: center; color: var(--accent); }
 /* Theme control = a single palette icon that cycles enabled themes on click. */
@@ -149,7 +185,11 @@ header {
     background: var(--bg-elev2); color: var(--accent); line-height: 1;
 }
 .theme-cycle-btn:hover { background: var(--accent-soft); border-color: var(--accent); }
-.theme-cycle-btn .theme-cycle-ico { font-size: 18px; line-height: 1; }
+/* Kill the default square focus outline (it framed the round button when clicking to
+   switch); replace with a circular ring that follows the 50% radius. */
+.theme-cycle-btn:focus { outline: none; }
+.theme-cycle-btn:focus-visible { box-shadow: 0 0 0 3px var(--accent-soft); border-color: var(--accent); }
+.theme-cycle-btn .theme-cycle-ico { display: inline-flex; align-items: center; justify-content: center; line-height: 1; }
 
 /* ── Buttons (new + every legacy button class) ─────────────────────────── */
 .btn, .header-btn, .copy-btn, .more-btn {
@@ -407,6 +447,12 @@ footer a:hover { color: var(--accent); }
 }
 .footer-donate:hover { color: var(--accent); text-decoration: underline; }
 .footer-donate-ico { color: #ff5d5d; }
+/* Fortune Board CTA, right under Donate (moved out of the Pool column). */
+.footer-fortune {
+    display: inline-flex; align-items: center; gap: 6px; align-self: flex-start;
+    margin-top: 2px; font-weight: 600; color: var(--text-dim);
+}
+.footer-fortune:hover { color: var(--text); text-decoration: underline; }
 
 /* Live mini-stats bar */
 .footer-stats {
@@ -431,10 +477,15 @@ footer a:hover { color: var(--accent); }
 .footer-bottom {
     max-width: 1100px; margin: 18px auto 0; padding-top: 14px;
     border-top: 1px solid var(--border); text-align: center;
+    /* Copyright + Saigon signature share one centered line; on narrow screens each
+       phrase stays intact (no mid-phrase break) and they stack, still centered. */
+    display: flex; flex-wrap: wrap; justify-content: center;
+    align-items: baseline; column-gap: 8px;
 }
 .footer-bottom p { margin: 3px 0; }
-.footer-copyright { color: var(--text-dim); font-weight: 600; }
-.footer-meta { opacity: .75; font-size: 12px; }
+.footer-copyright { color: var(--text-dim); font-weight: 600; white-space: nowrap; }
+.footer-saigon { white-space: nowrap; }
+.footer-sep { color: var(--text-dim); opacity: .6; }
 
 @media (max-width: 760px) {
     .footer-cols { grid-template-columns: 1fr 1fr; gap: 22px; }
@@ -442,6 +493,8 @@ footer a:hover { color: var(--accent); }
 }
 @media (max-width: 440px) {
     .footer-cols { grid-template-columns: 1fr; }
+    /* Copyright + Saigon stack here — drop the now-dangling separator. */
+    .footer-sep { display: none; }
 }
 
 /* ── Service status strip (homepage) ───────────────────────────────────── */
@@ -579,6 +632,10 @@ footer a:hover { color: var(--accent); }
 }
 .ad-unit { display: inline-block; max-width: 100%; }
 .ad-unit img { max-width: 100%; height: auto; display: block; border-radius: 8px; }
+/* Rotation (ads.js): slots with 2+ ads cycle them one at a time; the incoming ad fades in. */
+.ad-unit--hidden { display: none; }
+.ad-unit--rotor:not(.ad-unit--hidden) { animation: ad-fade-in .6s ease; }
+@keyframes ad-fade-in { from { opacity: 0; } to { opacity: 1; } }
 .ad-slot--header { margin-top: 8px; }
 .ad-slot--footer { margin-bottom: 8px; }
 /* In-content sits inside the page flow; sidebar is a narrower right-aligned rail on wide screens. */

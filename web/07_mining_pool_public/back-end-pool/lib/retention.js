@@ -1,5 +1,6 @@
 const { getDb } = require('./db');
 const PoolSettings = require('./pool-settings');
+const LedgerRollup = require('./ledger-rollup');
 
 // PPLNS window in blocks — mirrors RewardDistributor.pplnsWindow (rewards.js).
 // Distribution reads shares in [foundHeight - PPLNS_WINDOW_BLOCKS, foundHeight];
@@ -62,6 +63,9 @@ class RetentionManager {
       shares_deleted: 0,
       hashrate_deleted: 0,
       alerts_deleted: 0,
+      balance_log_deleted: 0,
+      ledger_rollup_horizon: null,
+      ledger_rollup_mismatch: null,
     };
 
     if (!enabled) {
@@ -71,8 +75,11 @@ class RetentionManager {
     }
 
     const margin = parseInt(s.shares_margin_blocks, 10) || 0;
-    const hashrateKeepDays = parseInt(s.hashrate_keep_days, 10) || 30;
+    const hashrateKeepDays = parseInt(s.hashrate_keep_days, 10) || 100;
     const alertsKeepDays = parseInt(s.resolved_alerts_keep_days, 10) || 30;
+    // Raw ledger window. Floor of 45 days: must stay above the longest raw-only window
+    // reader (reconciliation 7d flows + 30d wallet-send audit, account 30d earnings) + slack.
+    const ledgerKeepDays = Math.max(45, parseInt(s.balance_log_keep_days, 10) || 60);
     const now = Math.floor(Date.now() / 1000);
 
     const tx = this.db.transaction(() => {
@@ -98,12 +105,27 @@ class RetentionManager {
     });
     tx();
 
+    // 4. balance_log — roll completed UTC days into balance_log_daily FIRST (the rollup
+    //    is what lifetime analytics read forever), then prune raw rows older than
+    //    balance_log_keep_days, each day verified against its rollup before deletion.
+    //    Runs outside the tx above: ledger-rollup manages its own per-day transactions.
+    try {
+      const roll = LedgerRollup.rollupCompletedDays(this.db);
+      result.ledger_rollup_horizon = roll.horizon;
+      const prune = LedgerRollup.verifyAndPruneRaw(this.db, ledgerKeepDays);
+      result.balance_log_deleted = prune.deleted;
+      result.ledger_rollup_mismatch = prune.mismatch; // non-null = verify failed, prune halted
+    } catch (e) {
+      console.error(`[Retention] ledger rollup/prune failed: ${e.message}`);
+    }
+
     this.lastRun = result.ran_at;
     this.lastResult = result;
     console.log(
       `[Retention] shares=${result.shares_deleted} hashrate=${result.hashrate_deleted} ` +
-      `alerts=${result.alerts_deleted}` +
-      (result.shares_cutoff_height ? ` (shares cutoff height ${result.shares_cutoff_height})` : '')
+      `alerts=${result.alerts_deleted} balance_log=${result.balance_log_deleted}` +
+      (result.shares_cutoff_height ? ` (shares cutoff height ${result.shares_cutoff_height})` : '') +
+      (result.ledger_rollup_mismatch ? ' [LEDGER ROLLUP MISMATCH — ledger prune halted]' : '')
     );
     return result;
   }
@@ -130,7 +152,10 @@ class RetentionManager {
         shares: count('shares'),
         hashrate_history: count('hashrate_history'),
         alerts: count('alerts'),
+        balance_log: count('balance_log'),
+        balance_log_daily: count('balance_log_daily'),
       },
+      ledger_rollup_horizon: LedgerRollup.getHorizon(this.db),
       settings: this.settings.getSection('database'),
     };
   }

@@ -12,6 +12,9 @@
 <main>
   <div class="container">
     <section>
+      <!-- Payout kill-switch state (auto-set on a critical money trip, or manual). -->
+      <div id="freeze-banner"></div>
+
       <h2>
         Payments
         <span id="queue-summary" style="font-size:.82rem;color:var(--text-dim);font-weight:400;margin-left:.8rem;"></span>
@@ -28,6 +31,7 @@
           <button class="tab-btn"        data-filter="cancelled"       onclick="setFilter('cancelled', this)">Cancelled</button>
         </div>
         <span style="flex:1 1 auto;"></span>
+        <button id="freeze-toggle" class="btn btn-sm btn-outline" onclick="togglePayouts()" style="display:none;"></button>
         <a class="btn btn-sm btn-outline" href="/api/admin/export/payouts.csv">⤓ Payouts CSV</a>
         <a class="btn btn-sm btn-outline" href="/api/admin/export/fee-revenue.csv">⤓ Fee-revenue CSV</a>
       </div>
@@ -54,6 +58,137 @@
         </div>
       </div>
       <p class="error-msg" id="pay-msg" style="display:none;margin-top:.6rem;"></p>
+    </section>
+
+    <!-- ── Wallet ↔ Ledger Reconciliation (custodial money statement) ──────── -->
+    <section>
+      <h2>
+        Wallet ↔ Ledger Reconciliation
+        <span id="recon-refresh" style="font-size:.75rem;color:var(--text-dim);font-weight:400;margin-left:.8rem;"></span>
+      </h2>
+      <p style="font-size:.82rem;color:var(--text-dim);margin:-.4rem 0 .8rem;">
+        Does the on-chain wallet hold at least what the pool owes? Money IN must always exceed OUT.
+        A nonzero <strong>integrity drift</strong> means a balance moved without a ledger row — a bug
+        or tampering. All amounts in GRIN (ツ). Times UTC.
+      </p>
+
+      <div id="recon-banner"></div>
+
+      <!-- Coverage -->
+      <h3 style="margin:1rem 0 .5rem;font-size:1rem;">Coverage</h3>
+      <div class="kpi-grid" id="recon-cov">
+        <div class="kpi-card"><div class="kpi-label">Wallet Spendable</div><div class="kpi-value" id="rc-w-spend">—</div></div>
+        <div class="kpi-card"><div class="kpi-label">Owed (withdrawable now)</div><div class="kpi-value" id="rc-owed-spend">—</div></div>
+        <div class="kpi-card"><div class="kpi-label">Liquid Gap (pay-now)</div><div class="kpi-value" id="rc-gap-liquid">—</div></div>
+        <div class="kpi-card"><div class="kpi-label">Wallet Total</div><div class="kpi-value" id="rc-w-total">—</div></div>
+        <div class="kpi-card"><div class="kpi-label">Owed (all)</div><div class="kpi-value" id="rc-owed-total">—</div></div>
+        <div class="kpi-card"><div class="kpi-label">Full Gap (solvency)</div><div class="kpi-value" id="rc-gap-full">—</div></div>
+      </div>
+
+      <!-- Wallet maturity + pending -->
+      <h3 style="margin:1rem 0 .5rem;font-size:1rem;">Balance maturity</h3>
+      <div class="kpi-grid" id="recon-mat">
+        <div class="kpi-card"><div class="kpi-label">Maturing coinbase (wallet)</div><div class="kpi-value" id="rc-w-immature">—</div></div>
+        <div class="kpi-card"><div class="kpi-label">Immature blocks (not yet owed)</div><div class="kpi-value" id="rc-imm-blocks">—</div></div>
+        <div class="kpi-card"><div class="kpi-label">In-flight payouts (wallet locked)</div><div class="kpi-value" id="rc-w-locked">—</div></div>
+        <div class="kpi-card"><div class="kpi-label">Pending payouts (ledger)</div><div class="kpi-value" id="rc-pending">—</div></div>
+        <div class="kpi-card"><div class="kpi-label">Locked Drift</div><div class="kpi-value" id="rc-drift-locked">—</div></div>
+        <div class="kpi-card"><div class="kpi-label">Integrity Drift</div><div class="kpi-value" id="rc-drift-integrity">—</div></div>
+      </div>
+
+      <!-- Flow statement -->
+      <h3 style="margin:1.2rem 0 .5rem;font-size:1rem;">Flow statement (external money)</h3>
+      <div class="card" style="padding:0;">
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Direction</th><th>Item</th><th style="text-align:right;">24h ツ</th><th style="text-align:right;">7d ツ</th><th style="text-align:right;">Lifetime ツ</th></tr>
+            </thead>
+            <tbody id="recon-flow-tbody">
+              <tr class="loading-row"><td colspan="5"><span class="spinner"></span>Loading…</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Buckets: donation + fee → contest budget -->
+      <h3 style="margin:1.2rem 0 .5rem;font-size:1rem;">Fee &amp; prize buckets</h3>
+      <div class="card" style="padding:0;">
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Bucket</th><th>Current balance ツ</th><th>Details</th></tr>
+            </thead>
+            <tbody id="recon-bucket-tbody">
+              <tr class="loading-row"><td colspan="3"><span class="spinner"></span>Loading…</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <p class="error-msg" id="recon-msg" style="display:none;margin-top:.6rem;"></p>
+
+      <!-- Wallet-send audit: the wallet's OWN sends vs the pool ledger -->
+      <h3 style="margin:1.2rem 0 .5rem;font-size:1rem;">
+        Wallet-send audit
+        <span id="wa-summary" style="font-size:.78rem;color:var(--text-dim);font-weight:400;margin-left:.5rem;"></span>
+      </h3>
+      <p style="font-size:.82rem;color:var(--text-dim);margin:-.2rem 0 .6rem;">
+        Every confirmed send from the pool wallet, matched against the payout ledger. Anything
+        <strong>unmatched</strong> is an out-of-band <code>grin-wallet send</code> (operator sweep or theft) —
+        it does not appear in the queue above because it never went through the pool.
+      </p>
+      <div id="wa-banner"></div>
+      <div class="card" id="wa-card" style="padding:0;display:none;">
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Wallet tx</th><th style="text-align:right;">Amount ツ</th><th>When (UTC)</th><th>Slate</th></tr>
+            </thead>
+            <tbody id="wa-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Wallet-identity guard + switch wizard -->
+      <h3 style="margin:1.2rem 0 .5rem;font-size:1rem;">
+        Wallet identity
+        <span id="wi-summary" style="font-size:.78rem;color:var(--text-dim);font-weight:400;margin-left:.5rem;"></span>
+      </h3>
+      <p style="font-size:.82rem;color:var(--text-dim);margin:-.2rem 0 .6rem;">
+        The pool pins its wallet's address (slatepack index 0, derived from the seed). If a different
+        wallet ever answers the owner API, payouts auto-freeze. <strong>Before switching wallets,
+        run the wizard</strong> so the guard adopts the new wallet instead of tripping.
+      </p>
+      <div id="wi-banner"></div>
+      <div style="display:flex;gap:.5rem;flex-wrap:wrap;margin-bottom:.4rem;">
+        <button class="btn btn-sm" onclick="openSwitchWizard()">🔁 Switch wallet (guided)</button>
+      </div>
+
+      <!-- Guided switch flow -->
+      <div class="card" id="sw-card" style="display:none;padding:1rem;margin-top:.6rem;border:1px solid var(--accent);">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.6rem;">
+          <strong id="sw-title">Switch wallet</strong>
+          <button class="btn btn-sm btn-outline" onclick="closeSwitchWizard()">✕ Close</button>
+        </div>
+        <ol id="sw-steps" style="margin:0;padding-left:1.2rem;font-size:.9rem;line-height:1.7;">
+          <li id="sw-s1"><strong>Freeze payouts</strong> — stop the scheduler before touching the wallet.
+            <span id="sw-s1-state" class="badge" style="margin-left:.4rem;"></span>
+            <div><button class="btn btn-sm" id="sw-freeze-btn" onclick="wizFreeze()" style="margin-top:.3rem;">Freeze now</button></div></li>
+          <li id="sw-s2" style="margin-top:.5rem;"><strong>Let in-flight payouts settle</strong> —
+            <span id="sw-inflight">checking…</span>. Don't swap the wallet while sends are mid-flight.</li>
+          <li id="sw-s3" style="margin-top:.5rem;"><strong>Switch the wallet on the server</strong> — restore the seed / repoint the
+            listener, then wait for a full rescan so the balance is accurate. (Manual step on the VPS.)</li>
+          <li id="sw-s4" style="margin-top:.5rem;"><strong>Verify the new wallet</strong>
+            <button class="btn btn-sm btn-outline" onclick="wizVerify()" style="margin-left:.4rem;">Re-check</button>
+            <div id="sw-verify" style="margin-top:.3rem;font-size:.85rem;color:var(--text-dim);">not checked yet</div></li>
+          <li id="sw-s5" style="margin-top:.5rem;"><strong>Adopt new wallet + resume</strong> — pins the new wallet as the pool identity, then resumes payouts.
+            <div style="margin-top:.3rem;display:flex;gap:.5rem;flex-wrap:wrap;">
+              <button class="btn btn-sm" id="sw-adopt-btn" onclick="wizAdopt()" disabled>Adopt new wallet</button>
+              <button class="btn btn-sm btn-outline" id="sw-resume-btn" onclick="wizResume()" disabled>Resume payouts</button>
+            </div></li>
+        </ol>
+        <p id="sw-msg" style="margin:.6rem 0 0;font-size:.85rem;"></p>
+      </div>
     </section>
   </div>
 </main>
@@ -187,10 +322,328 @@ async function cancelWithdrawal(id, amount) {
   } catch (err) { flash(err.message, true); }
 }
 
-function refresh() { loadQueueSummary(); loadWithdrawals(); }
+// ── Payout kill-switch ────────────────────────────────────────────────────────
+let _frozen = false;
+function renderFreeze(ctrl) {
+  _frozen = !!(ctrl && ctrl.frozen);
+  const banner = document.getElementById('freeze-banner');
+  const btn = document.getElementById('freeze-toggle');
+  if (_frozen) {
+    const when = ctrl.frozen_at ? new Date(ctrl.frozen_at * 1000).toLocaleString() : '—';
+    banner.innerHTML = `<div class="health-card error" style="margin-bottom:1rem;">
+      <div class="health-name">⛔ PAYOUTS FROZEN <span class="badge badge-error">no payouts are being sent</span></div>
+      <div class="health-detail" style="margin-top:.4rem;">
+        Reason: ${escHtml(ctrl.reason || '—')}<br>By: ${escHtml(ctrl.frozen_by || '—')} · ${escHtml(when)} UTC-local</div></div>`;
+    btn.textContent = '▶ Resume payouts';
+    btn.className = 'btn btn-sm';
+  } else {
+    banner.innerHTML = '';
+    btn.textContent = '⛔ Freeze payouts';
+    btn.className = 'btn btn-sm btn-outline';
+  }
+  btn.style.display = '';
+}
 
-document.addEventListener('DOMContentLoaded', refresh);
+async function loadPayoutControl() {
+  try {
+    const ctrl = await API.get('/api/admin/payouts/control');
+    renderFreeze(ctrl);
+  } catch (e) {}
+}
+
+async function togglePayouts() {
+  if (_frozen) {
+    if (!confirm('Resume automated payouts? Only do this once you have confirmed the wallet and ledger are safe.')) return;
+    try {
+      const res = await adminFetch('/api/admin/payouts/resume', { method: 'POST' });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || ('HTTP ' + res.status));
+      renderFreeze(body);
+      flash('Payouts resumed.', false);
+    } catch (err) { flash(err.message, true); }
+  } else {
+    const reason = prompt('Freeze ALL automated payouts now?\n\nOptional reason:');
+    if (reason === null) return;
+    try {
+      const res = await adminFetch('/api/admin/payouts/freeze', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason })
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || ('HTTP ' + res.status));
+      renderFreeze(body);
+      flash('Payouts frozen — no payouts will be sent until resumed.', false);
+    } catch (err) { flash(err.message, true); }
+  }
+}
+
+function refresh() { loadQueueSummary(); loadWithdrawals(); loadPayoutControl(); }
+
+// ── Reconciliation ──────────────────────────────────────────────────────────
+// Signed money-value formatter with an explicit + on positives (gaps/drift read clearer).
+function fmtSigned(v) { const n = Number(v) || 0; return (n >= 0 ? '+' : '') + n.toFixed(4); }
+
+// Colour a gap/drift KPI: green when healthy (≥0 for gaps, ~0 for drift), red otherwise.
+function setGap(id, value, ok) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.textContent = fmtSigned(value) + ' ツ';
+  el.style.color = ok === false ? 'var(--danger)' : (ok === true ? 'var(--success)' : 'var(--text)');
+}
+
+async function loadReconciliation() {
+  const msg = document.getElementById('recon-msg');
+  try {
+    const d = await API.get('/api/admin/reconciliation');
+    const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+    const w = d.wallet || {};
+    const c = d.checks || {};
+
+    // Coverage
+    set('rc-w-spend',    w.reachable ? fmtGrin(w.spendable) + ' ツ' : 'unreachable');
+    set('rc-owed-spend', fmtGrin(d.ledger.spendable_owed) + ' ツ');
+    setGap('rc-gap-liquid', c.coverage_liquid_gap, c.coverage_liquid_ok);
+    set('rc-w-total',    w.reachable ? fmtGrin(w.total) + ' ツ' : 'unreachable');
+    set('rc-owed-total', fmtGrin(d.ledger.total_owed) + ' ツ');
+    setGap('rc-gap-full', c.coverage_full_gap, c.coverage_full_ok);
+
+    // Maturity
+    set('rc-w-immature',  w.reachable ? fmtGrin(w.immature) + ' ツ' : '—');
+    set('rc-imm-blocks',  `${d.immature_blocks.count} (${fmtGrin(d.immature_blocks.reward_sum)} ツ)`);
+    set('rc-w-locked',    w.reachable ? fmtGrin(w.locked) + ' ツ' : '—');
+    set('rc-pending',     `${d.pending_withdrawals.count} (${fmtGrin(d.pending_withdrawals.amount)} ツ)`);
+    setGap('rc-drift-locked',    c.locked_drift, c.locked_ok);
+    setGap('rc-drift-integrity', c.integrity_drift, c.integrity_ok);
+
+    // Flow statement — 24h / 7d / lifetime columns
+    const F = d.flows || {};
+    const flowRow = (dir, label, field, strong) => {
+      const val = (win) => fmtGrin((((F[win] || {})[dir] || {})[field]) || 0);
+      const lbl = strong ? `<strong>${label}</strong>` : label;
+      return `<tr${strong ? ' style="background:color-mix(in srgb, var(--accent) 8%, transparent);"' : ''}>
+        <td>${dir === 'in' ? 'IN' : 'OUT'}</td><td>${lbl}</td>
+        <td class="mono" style="text-align:right;">${val('d1')}</td>
+        <td class="mono" style="text-align:right;">${val('d7')}</td>
+        <td class="mono" style="text-align:right;">${val('lifetime')}</td></tr>`;
+    };
+    const netRow = () => {
+      const net = (win) => fmtSigned(((F[win] || {}).net) || 0);
+      const bad = ((F.lifetime || {}).net || 0) < 0;
+      return `<tr style="border-top:2px solid var(--border);font-weight:600;${bad ? 'color:var(--danger);' : ''}">
+        <td colspan="2">NET (in − out)</td>
+        <td class="mono" style="text-align:right;">${net('d1')}</td>
+        <td class="mono" style="text-align:right;">${net('d7')}</td>
+        <td class="mono" style="text-align:right;">${net('lifetime')}</td></tr>`;
+    };
+    document.getElementById('recon-flow-tbody').innerHTML =
+      flowRow('in',  'Block rewards → miners', 'block_rewards') +
+      flowRow('in',  'Pool fee collected',     'pool_fee') +
+      flowRow('in',  'Prize-pool top-ups',     'prize_topup') +
+      flowRow('in',  'Admin injections',       'admin_inject') +
+      flowRow('in',  'Total IN',               'total', true) +
+      flowRow('out', 'Payouts confirmed',      'payouts') +
+      flowRow('out', 'Orphan clawbacks',       'orphan_clawback') +
+      flowRow('out', '(of which network fees)', 'payout_network_fees') +
+      flowRow('out', 'Total OUT',              'total', true) +
+      netRow();
+
+    // Buckets
+    const b = d.ledger.buckets || {};
+    const fee = b.pool_fee || {}, prize = b.prize_pool || {};
+    document.getElementById('recon-bucket-tbody').innerHTML = `
+      <tr>
+        <td><strong>Pool fee</strong><br><span style="color:var(--text-dim);font-size:.8rem;">operator revenue</span></td>
+        <td class="mono">${fmtGrin(fee.balance)} ツ</td>
+        <td style="font-size:.85rem;">Collected ${fmtGrin(fee.collected)} · diverted to prizes ${fmtGrin(fee.diverted_to_prizes)} · realized ${fmtGrin(fee.operator_realized)}</td>
+      </tr>
+      <tr>
+        <td><strong>Prize pool</strong><br><span style="color:var(--text-dim);font-size:.8rem;">contest budget available</span></td>
+        <td class="mono">${fmtGrin(prize.balance)} ツ</td>
+        <td style="font-size:.85rem;">Funded ${fmtGrin(prize.funded)} (fee ${fmtGrin(prize.from_fee)} · donations ${fmtGrin(prize.from_donations)} · top-ups ${fmtGrin(prize.from_topups)}) · awarded ${fmtGrin(prize.awarded)}</td>
+      </tr>`;
+
+    // Overall banner
+    const banner = document.getElementById('recon-banner');
+    const problems = [];
+    if (c.coverage_liquid_ok === false) problems.push('⚠ Wallet spendable does NOT cover currently-withdrawable balances (cannot pay out now).');
+    if (c.coverage_full_ok === false) problems.push('⚠ Wallet total does NOT cover everything owed (under-funded).');
+    if (c.locked_ok === false) problems.push('⚠ Locked-balance ledger does not match in-flight withdrawals.');
+    if (c.integrity_ok === false) problems.push(`⚠ INTEGRITY DRIFT ${fmtSigned(c.integrity_drift)} ツ — a balance moved without a ledger row (bug or tampering).`);
+    if (((F.lifetime || {}).net || 0) < 0) problems.push('⚠ Lifetime OUT exceeds IN — impossible under correct accounting.');
+    if (!w.reachable) problems.push('Wallet was unreachable — coverage checks skipped.');
+    if (problems.length) {
+      banner.innerHTML = `<div class="health-card error" style="margin-bottom:.8rem;">
+        <div class="health-detail">${problems.map(escHtml).join('<br>')}</div></div>`;
+    } else {
+      banner.innerHTML = `<div class="health-card ok" style="margin-bottom:.8rem;">
+        <div class="health-detail">✓ Wallet covers all balances · ledger reconciles with the log · IN &gt; OUT.</div></div>`;
+    }
+
+    document.getElementById('recon-refresh').textContent =
+      '(refreshed ' + new Date().toLocaleTimeString() + ' — every 3 min)';
+    if (msg) msg.style.display = 'none';
+  } catch (err) {
+    if (msg) { msg.textContent = 'Reconciliation error: ' + err.message; msg.style.display = ''; }
+  }
+}
+
+// ── Wallet-send audit ─────────────────────────────────────────────────────────
+async function loadWalletAudit() {
+  const banner = document.getElementById('wa-banner');
+  const card = document.getElementById('wa-card');
+  const summary = document.getElementById('wa-summary');
+  try {
+    const a = await API.get('/api/admin/payouts/wallet-audit');
+    if (!a.reachable) {
+      summary.textContent = '(wallet unreachable)';
+      banner.innerHTML = ''; card.style.display = 'none';
+      return;
+    }
+    summary.textContent = `${a.matched} matched · ${a.scanned} scanned (last ${a.window_days}d)`;
+    const un = a.unrecorded || [];
+    if (un.length) {
+      banner.innerHTML = `<div class="health-card error" style="margin-bottom:.6rem;">
+        <div class="health-name">⚠ ${un.length} UNRECORDED wallet send(s) — ${(a.total_unrecorded || 0).toFixed(4)} ツ
+          <span class="badge badge-error">not in the pool ledger</span></div>
+        <div class="health-detail" style="margin-top:.3rem;">These left the wallet without a pool payout. If this was you (e.g. a cold-storage sweep), resume payouts above once confirmed; otherwise treat as a compromise.</div></div>`;
+      document.getElementById('wa-tbody').innerHTML = un
+        .slice().sort((x, y) => y.amount - x.amount)
+        .map(s => `<tr>
+          <td class="mono" title="${escHtml(String(s.tx_id))}">#${escHtml(String(s.tx_id))}</td>
+          <td class="mono" style="text-align:right;color:var(--danger);">${(s.amount || 0).toFixed(4)}</td>
+          <td>${escHtml(new Date(s.when * 1000).toISOString().replace('T', ' ').slice(0, 19))}</td>
+          <td class="mono">${escHtml(s.slate_id ? (s.slate_id.slice(0, 8) + '…') : '—')}</td>
+        </tr>`).join('');
+      card.style.display = '';
+    } else {
+      banner.innerHTML = `<div class="health-card ok" style="margin-bottom:.6rem;">
+        <div class="health-detail">✓ Every wallet send matches a pool payout — no out-of-band sends.</div></div>`;
+      card.style.display = 'none';
+    }
+  } catch (err) {
+    summary.textContent = '';
+    banner.innerHTML = `<div class="health-card error" style="margin-bottom:.6rem;"><div class="health-detail">Audit error: ${escHtml(err.message)}</div></div>`;
+    card.style.display = 'none';
+  }
+}
+
+// ── Wallet-identity guard ─────────────────────────────────────────────────────
+function renderIdentity(id) {
+  const banner = document.getElementById('wi-banner');
+  const summary = document.getElementById('wi-summary');
+  if (!id || !id.reachable) {
+    summary.textContent = '(wallet unreachable)';
+    banner.innerHTML = `<div class="health-card" style="margin-bottom:.6rem;"><div class="health-detail">Wallet unreachable — identity not verified this cycle.</div></div>`;
+    return;
+  }
+  const short = (a) => a ? (a.slice(0, 12) + '…' + a.slice(-6)) : '—';
+  if (id.firstRun || id.match) {
+    summary.textContent = 'pinned ✓';
+    banner.innerHTML = `<div class="health-card ok" style="margin-bottom:.6rem;">
+      <div class="health-detail">✓ Live wallet matches the adopted identity <span class="mono">${escHtml(short(id.live))}</span>.</div></div>`;
+  } else {
+    summary.textContent = 'MISMATCH';
+    banner.innerHTML = `<div class="health-card error" style="margin-bottom:.6rem;">
+      <div class="health-name">⛔ WALLET IDENTITY CHANGED <span class="badge badge-error">payouts auto-frozen</span></div>
+      <div class="health-detail" style="margin-top:.3rem;">
+        Adopted: <span class="mono">${escHtml(short(id.expected))}</span><br>
+        Live now: <span class="mono" style="color:var(--danger);">${escHtml(short(id.live))}</span><br>
+        If you switched wallets on purpose, run the switch wizard to adopt the new wallet. Otherwise treat as a compromise.</div></div>`;
+  }
+}
+
+async function loadWalletIdentity() {
+  try { renderIdentity(await API.get('/api/admin/wallet/identity')); }
+  catch (e) { /* leave last state */ }
+}
+
+// ── Switch-wallet wizard ──────────────────────────────────────────────────────
+function swMsg(t, err) { const el = document.getElementById('sw-msg'); el.textContent = t || ''; el.style.color = err ? 'var(--danger)' : 'var(--success)'; }
+
+function openSwitchWizard() { document.getElementById('sw-card').style.display = ''; wizRefreshState(); }
+function closeSwitchWizard() { document.getElementById('sw-card').style.display = 'none'; }
+
+// Reflect freeze state + in-flight payout count into the wizard steps (uses already-loaded data).
+function wizRefreshState() {
+  const s1 = document.getElementById('sw-s1-state');
+  s1.textContent = _frozen ? 'frozen ✓' : 'not frozen';
+  s1.className = 'badge ' + (_frozen ? 'badge-success' : 'badge-warning');
+  document.getElementById('sw-freeze-btn').disabled = _frozen;
+  const inflightStatuses = ['tor_sending', 'tor_checking', 'retry_scheduled', 'slatepack_pending'];
+  const n = (_withdrawals || []).filter(w => inflightStatuses.includes(w.status)).length;
+  const el = document.getElementById('sw-inflight');
+  el.innerHTML = n === 0
+    ? '<span style="color:var(--success);">none in flight ✓</span>'
+    : `<span style="color:var(--danger);">${n} still in flight</span> — wait for these to finish before switching`;
+}
+
+async function wizFreeze() {
+  try {
+    const res = await adminFetch('/api/admin/payouts/freeze', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reason: 'wallet switch (wizard)' })
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.error || ('HTTP ' + res.status));
+    renderFreeze(body); wizRefreshState();
+    swMsg('Payouts frozen — safe to switch the wallet on the server now.', false);
+  } catch (err) { swMsg(err.message, true); }
+}
+
+let _wizVerified = false;
+async function wizVerify() {
+  swMsg('Checking new wallet…', false);
+  try {
+    const [id, recon] = await Promise.all([
+      API.get('/api/admin/wallet/identity'),
+      API.get('/api/admin/reconciliation')
+    ]);
+    renderIdentity(id);
+    const c = (recon && recon.checks) || {};
+    const w = (recon && recon.wallet) || {};
+    const lines = [];
+    if (!id.reachable) lines.push('⚠ Wallet unreachable — cannot adopt yet.');
+    else if (id.firstRun) lines.push('New wallet detected — no prior identity was pinned.');
+    else if (id.match) lines.push('Live wallet matches the CURRENTLY-adopted identity (no change detected).');
+    else lines.push('New wallet differs from the adopted one — adopting will re-pin to it.');
+    if (w.reachable) lines.push(`Coverage: wallet total ${Number(w.total).toFixed(4)} ツ vs owed ${Number(recon.ledger.total_owed).toFixed(4)} ツ → ${c.coverage_full_ok === false ? '⚠ UNDER-FUNDED' : 'covered ✓'}`);
+    document.getElementById('sw-verify').innerHTML = lines.map(escHtml).join('<br>');
+    _wizVerified = !!id.reachable;
+    document.getElementById('sw-adopt-btn').disabled = !_wizVerified;
+    swMsg(_wizVerified ? 'Verified — you can adopt the new wallet.' : 'Wallet not reachable yet; re-check after it finishes syncing.', !_wizVerified);
+  } catch (err) { swMsg(err.message, true); }
+}
+
+async function wizAdopt() {
+  if (!confirm('Adopt the currently-connected wallet as the pool identity?\n\nDo this only after confirming the new wallet is the correct one and has synced.')) return;
+  try {
+    const res = await adminFetch('/api/admin/wallet/adopt-identity', { method: 'POST' });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.error || ('HTTP ' + res.status));
+    await loadWalletIdentity();
+    document.getElementById('sw-resume-btn').disabled = false;
+    swMsg('New wallet adopted. Resume payouts when ready.', false);
+  } catch (err) { swMsg(err.message, true); }
+}
+
+async function wizResume() {
+  try {
+    const res = await adminFetch('/api/admin/payouts/resume', { method: 'POST' });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.error || ('HTTP ' + res.status));
+    renderFreeze(body); wizRefreshState();
+    swMsg('Payouts resumed. Wallet switch complete.', false);
+    flash('Wallet switched and payouts resumed.', false);
+  } catch (err) { swMsg(err.message, true); }
+}
+
+document.addEventListener('DOMContentLoaded', () => { refresh(); loadReconciliation(); loadWalletAudit(); loadWalletIdentity(); });
+// Withdrawal queue + freeze state are cheap — 30s. Reconciliation, the wallet-send audit, and the
+// wallet-identity probe each force a wallet call (slow) — keep them on the relaxed 3-min cadence.
 setInterval(refresh, 30000);
+setInterval(loadReconciliation, 180000);
+setInterval(loadWalletAudit, 180000);
+setInterval(loadWalletIdentity, 180000);
 </script>
 </body>
 </html>

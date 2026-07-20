@@ -224,6 +224,84 @@ class BlockManager {
     }
   }
 
+  // Durable block-history series for the public blocks.html deck. Blocks are never pruned, so we
+  // bucket straight from the blocks table (found_at) and stay accurate at every range. One call
+  // feeds all four charts: time-bucketed counts/reward (bar + cumulative area), a per-block luck
+  // trend, and window status totals (doughnut). Returns { range, bucket_seconds, points, luck,
+  // status }. Synchronous (all sqlite .all/.get). UTC-aligned buckets, mirroring getMetricsHistory.
+  getBlocksHistory(range = 'month') {
+    const DAY = 86400;
+    const empty = { range, bucket_seconds: null, points: [], luck: [], status: { confirmed: 0, immature: 0, orphaned: 0 } };
+    try {
+      const now = Math.floor(Date.now() / 1000);
+      let bucket, cutoff;
+
+      if (range === 'all') {
+        const first = this.db.prepare('SELECT MIN(found_at) AS b FROM blocks').get();
+        const earliest = (first && first.b != null) ? first.b : now - 30 * DAY;
+        const totalSpan = Math.max(now - earliest, DAY);
+        bucket = totalSpan <= 90 * DAY ? DAY : (totalSpan <= 730 * DAY ? 7 * DAY : 30 * DAY);
+        cutoff = earliest;
+      } else {
+        let span;
+        switch (range) {
+          case 'week':  span = 7 * DAY;   bucket = DAY;     break;
+          case 'year':  span = 365 * DAY; bucket = 7 * DAY; break;
+          case 'month':
+          default:      span = 30 * DAY;  bucket = DAY;     break;
+        }
+        cutoff = now - span;
+      }
+
+      // Time-bucketed counts + reward (drives the blocks-per-period columns and cumulative area).
+      const points = this.db.prepare(`
+        SELECT CAST(found_at / ? AS INTEGER) * ?              AS t,
+               COUNT(*)                                       AS blocks,
+               COALESCE(SUM(reward), 0)                       AS reward,
+               COALESCE(SUM(CASE WHEN status = 'confirmed' THEN 1 ELSE 0 END), 0) AS confirmed,
+               COALESCE(SUM(CASE WHEN status = 'orphaned'  THEN 1 ELSE 0 END), 0) AS orphaned
+        FROM blocks
+        WHERE found_at >= ?
+        GROUP BY t
+        ORDER BY t ASC
+      `).all(bucket, bucket, cutoff).map(r => ({
+        t: r.t,
+        blocks: r.blocks || 0,
+        reward: parseFloat((r.reward || 0).toFixed(9)),
+        confirmed: r.confirmed || 0,
+        orphaned: r.orphaned || 0
+      }));
+
+      // Per-block luck % over the window (round shares ÷ network difficulty × 100), oldest→newest,
+      // capped for a readable line. Only blocks with both captured stats contribute.
+      const luck = this.db.prepare(`
+        SELECT height, round_shares, network_difficulty, found_at
+        FROM blocks
+        WHERE found_at >= ? AND network_difficulty > 0 AND round_shares > 0
+        ORDER BY height DESC
+        LIMIT 120
+      `).all(cutoff)
+        .map(r => ({ height: r.height, t: r.found_at, luck: parseFloat(((r.round_shares / r.network_difficulty) * 100).toFixed(1)) }))
+        .reverse();
+
+      // Window status totals (drives the doughnut — a true orphaned count, unlike /api/pool/stats
+      // which folds orphaned into "immature").
+      const status = { confirmed: 0, immature: 0, orphaned: 0 };
+      this.db.prepare(`
+        SELECT status, COUNT(*) AS n FROM blocks WHERE found_at >= ? GROUP BY status
+      `).all(cutoff).forEach(r => {
+        if (r.status === 'confirmed') status.confirmed = r.n;
+        else if (r.status === 'orphaned') status.orphaned = r.n;
+        else status.immature += r.n; // 'immature' (and any legacy/unknown) count as maturing
+      });
+
+      return { range, bucket_seconds: bucket, points, luck, status };
+    } catch (err) {
+      console.error(`Error fetching blocks history: ${err.message}`);
+      return empty;
+    }
+  }
+
   // Most recently found block (by height), or null. Synchronous.
   getLastBlock() {
     try {

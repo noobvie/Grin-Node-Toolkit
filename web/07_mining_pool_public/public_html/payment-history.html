@@ -1,111 +1,350 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-page="payment-history">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Payment History — Mining Pool</title>
-    <link rel="stylesheet" href="/css/dashboard.css">
-    <link rel="stylesheet" href="/css/themes.css">
+  <!-- ===== ESSENTIAL META TAGS ===== -->
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="robots" content="index, follow, max-snippet:-1">
+  <meta name="language" content="English">
+  <meta name="author" content="GRINIUM Mining Pool">
+  <meta name="revisit-after" content="1 days">
+
+  <!-- ===== DESCRIPTION & KEYWORDS ===== -->
+  <title>Payments &amp; Transparency — GRINIUM Mining Pool</title>
+  <meta name="description" content="Full payout ledger and pool transparency: total GRIN paid to miners, payout sizes, where each block reward goes, giveaways distributed and donations received. Verifiable, always in UTC.">
+  <meta name="keywords" content="mining pool payouts, pool transparency, GRIN paid, payout history, pool fee, mining giveaways, Grin pool ledger">
+
+  <!-- ===== OPEN GRAPH ===== -->
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="GRINIUM Mining Pool — Payments &amp; Transparency">
+  <meta property="og:description" content="Full payout ledger and pool transparency: total paid, payout sizes, reward split, giveaways and donations.">
+  <meta property="og:url" content="https://pool.grin.money/payment-history.html">
+  <meta property="og:site_name" content="GRINIUM Mining Pool">
+  <meta property="og:image" content="https://pool.grin.money/images/og-miners-stats.svg">
+  <meta property="og:locale" content="en_US">
+
+  <!-- ===== TWITTER CARD ===== -->
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="GRINIUM Payments &amp; Transparency">
+  <meta name="twitter:description" content="Full payout ledger: total paid, payout sizes, reward split, giveaways and donations">
+  <meta name="twitter:image" content="https://pool.grin.money/images/twitter-miners-stats.svg">
+  <meta name="twitter:domain" content="pool.grin.money">
+
+  <!-- ===== CANONICAL ===== -->
+  <link rel="canonical" href="https://pool.grin.money/payment-history.html">
+
+  <!-- ===== ADDITIONAL SEO ===== -->
+  <meta name="theme-color" content="#07090c">
+  <link rel="icon" type="image/svg+xml" href="/images/favicon.svg">
+  <link rel="apple-touch-icon" href="/images/apple-touch-icon.svg">
+  <link rel="manifest" href="/manifest.json">
+
+  <!-- ===== JSON-LD STRUCTURED DATA ===== -->
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "WebPage",
+    "name": "GRINIUM Mining Pool — Payments & Transparency",
+    "description": "Full payout ledger and pool transparency for the GRINIUM Grin mining pool",
+    "url": "https://pool.grin.money/payment-history.html",
+    "isPartOf": {
+      "@type": "WebSite",
+      "name": "GRINIUM Mining Pool",
+      "url": "https://pool.grin.money"
+    }
+  }
+  </script>
+
+  <link rel="stylesheet" href="/css/dashboard.css">
+  <link rel="stylesheet" href="/css/themes.css">
+  <link rel="stylesheet" href="/css/reactor.css">
+  <style>
+    /* Full miner address, clickable → account lookup (mirrors miners-stats.html). */
+    .addr-link {
+      font-family: var(--mono, ui-monospace, monospace);
+      font-size: 12px;
+      word-break: break-all;
+      color: var(--accent, #58a6ff);
+      text-decoration: none;
+    }
+    .addr-link:hover { text-decoration: underline; }
+
+    /* Shared timeframe toggle driving the trend recorders (Day/Week/Month/Year/All). */
+    .rangebar { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-bottom: 2px; }
+    .rangebar .rng-btn {
+      font: inherit; font-size: 12px; letter-spacing: .08em; text-transform: uppercase;
+      padding: 6px 13px; border-radius: 6px; cursor: pointer;
+      background: var(--panel-2, rgba(255,255,255,.04)); color: var(--text-dim, #9aa4b2);
+      border: 1px solid var(--border, rgba(255,255,255,.10)); transition: background .12s, color .12s;
+    }
+    .rangebar .rng-btn:hover { color: var(--text, #e6edf3); }
+    .rangebar .rng-btn.active {
+      background: var(--accent, #7cb342); color: #07090c;
+      border-color: var(--accent, #7cb342); font-weight: 600;
+    }
+    .rangebar .rng-spacer { margin-left: auto; }
+    .rangebar .rng-note {
+      color: var(--text-mute, #6b7480); font-family: var(--mono, monospace);
+      font-size: 11px; letter-spacing: .1em;
+    }
+  </style>
 </head>
 <body>
 
     <!-- header injected by /js/public-shell.js -->
 
-    <div class="container">
-        <h2 class="page-title">Payment History</h2>
+    <div class="wrap">
+        <!-- Sidebar ad slot (filled by /js/ads.js; hidden if empty) -->
+        <div class="ad-slot ad-slot--sidebar" data-ad-slot="sidebar" style="display:none;"></div>
 
-        <div class="stats-grid">
-            <div class="stat-card">
-                <div class="stat-label">Paid Out (7 days)</div>
-                <div class="stat-value" id="ph-paid-7d">—</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-label">Last Payout</div>
-                <div class="stat-value" id="ph-last">—</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-label">Payouts (7 days)</div>
-                <div class="stat-value" id="ph-count-7d">—</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-label">Avg Payout</div>
-                <div class="stat-value" id="ph-avg">—</div>
+        <!-- ═══ Operator strip: heading + intent ═══ -->
+        <div class="deck-head">
+            <div>
+                <h1>Payments &amp; Transparency</h1>
+                <div class="sub">Every GRIN this pool pays out &middot; where the reward goes &middot; giveaways &amp; donations <span class="dim">(all times UTC)</span></div>
             </div>
         </div>
 
-        <h3 class="section-title">Recent Payouts</h3>
+        <!-- ═══ Spec placard: lifetime transparency figures ═══ -->
+        <div class="placard" aria-label="Lifetime payment figures">
+            <span><i>Total paid all-time</i><b id="ph-paid-all">—</b></span>
+            <span><i>Payouts all-time</i><b id="ph-count-all">—</b></span>
+            <span><i>Avg payout</i><b id="ph-avg">—</b></span>
+            <span><i>Effective pool fee</i><b id="ph-fee-pct">—</b></span>
+            <span><i>Given away</i><b id="ph-giveaways">—</b></span>
+            <span><i>Donations received</i><b id="ph-donations">—</b></span>
+        </div>
 
-        <table class="data-table">
-            <thead>
-                <tr>
-                    <th>Date & Time</th>
-                    <th>Miner</th>
-                    <th>Amount</th>
-                    <th>Status</th>
-                </tr>
-            </thead>
-            <tbody id="payouts">
-                <tr><td colspan="4">Loading…</td></tr>
-            </tbody>
-        </table>
+        <div class="deck">
+
+            <!-- ═══ Shared timeframe toggle ═══ -->
+            <div class="rangebar" id="ph-rangebar" role="tablist" aria-label="Chart timeframe">
+                <button class="rng-btn"        data-range="day"   role="tab">Day</button>
+                <button class="rng-btn"        data-range="week"  role="tab">Week</button>
+                <button class="rng-btn active"  data-range="month" role="tab">Month</button>
+                <button class="rng-btn"        data-range="year"  role="tab">Year</button>
+                <button class="rng-btn"        data-range="all"   role="tab">All Time</button>
+                <span class="rng-spacer"></span>
+                <span class="rng-note" id="ph-range-note">last 30 days &middot; daily</span>
+            </div>
+
+            <!-- ═══ P-01 · CUMULATIVE GRIN PAID ═══ -->
+            <div class="panel"><span class="screws"></span>
+                <h2 class="panel-title"><span class="tag">P-01</span> Ledger recorder — cumulative GRIN paid
+                    <span class="right">running total sent to miners over the window</span></h2>
+                <div class="panel-body chart-wrap">
+                    <canvas id="ph-chart-cumulative" aria-label="Cumulative GRIN paid to miners over the selected timeframe" role="img"></canvas>
+                    <div class="chart-empty" id="ph-empty-cumulative">NO PAYOUT DATA YET</div>
+                </div>
+            </div>
+
+            <div class="deck-row half">
+                <!-- ═══ P-02 · PAYOUT SIZE DISTRIBUTION ═══ -->
+                <div class="panel"><span class="screws"></span>
+                    <h2 class="panel-title"><span class="tag">P-02</span> Payout size distribution <span class="right">count by GRIN band</span></h2>
+                    <div class="panel-body chart-wrap">
+                        <canvas id="ph-chart-distribution" aria-label="Distribution of payout sizes by GRIN band" role="img"></canvas>
+                        <div class="chart-empty" id="ph-empty-distribution">NO PAYOUT DATA YET</div>
+                    </div>
+                </div>
+
+                <!-- ═══ P-03 · WHERE THE REWARD GOES ═══ -->
+                <div class="panel"><span class="screws"></span>
+                    <h2 class="panel-title"><span class="tag">P-03</span> Where the reward goes <span class="right">miners vs pool fee</span></h2>
+                    <div class="panel-body chart-wrap">
+                        <canvas id="ph-chart-split" aria-label="Split of block rewards between miners and the pool fee" role="img"></canvas>
+                        <div class="chart-empty" id="ph-empty-split">NO REWARD DATA YET</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ═══ P-04 · GIVEAWAYS DISTRIBUTED ═══ -->
+            <div class="panel"><span class="screws"></span>
+                <h2 class="panel-title"><span class="tag">P-04</span> Giveaways distributed to miners
+                    <span class="right">jackpots &middot; lotteries &middot; streaks &middot; join bonuses</span></h2>
+                <div class="panel-body chart-wrap">
+                    <canvas id="ph-chart-giveaways" aria-label="GRIN given away to miners over the selected timeframe" role="img"></canvas>
+                    <div class="chart-empty" id="ph-empty-giveaways">NO GIVEAWAYS IN THIS WINDOW YET</div>
+                </div>
+            </div>
+
+            <!-- ═══ P-05 · RECENT PAYOUTS ═══ -->
+            <div class="panel"><span class="screws"></span>
+                <h2 class="panel-title"><span class="tag">P-05</span> Recent payouts <span class="right">latest confirmed withdrawals</span></h2>
+                <div class="panel-body">
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>Date &amp; Time (UTC)</th>
+                                <th>Miner</th>
+                                <th class="num">Amount (ツ)</th>
+                                <th>Status</th>
+                            </tr>
+                        </thead>
+                        <tbody id="payouts">
+                            <tr><td colspan="4">Loading…</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+        </div>
     </div>
 
     <!-- footer injected by /js/public-shell.js -->
 
     <script src="/js/auth.js"></script>
+    <script src="/js/vendor/chart.umd.min.js"></script>
+    <script src="/js/charts-init.js"></script>
     <script>
-        // Escape any value before it goes into innerHTML (defense-in-depth on tx_hash,
-        // status, and any operator/miner-derived field rendered into the table).
+        // Escape any value before it goes into innerHTML (defense-in-depth on grin_address and any
+        // operator/miner-derived field rendered into the table).
         function escHtml(v) {
             return String(v == null ? '' : v)
                 .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
                 .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
         }
 
-        // Theme switching is handled site-wide by /js/public-theme.js, which renders
-        // the theme picker and applies the 3 built-in + 10 white-label themes.
+        // Theme switching is handled site-wide by /js/public-theme.js.
 
-        // ═════════════════════════════════════════════════════════════════
-        // API Integration: confirmed payouts from the PUBLIC endpoint
-        // (/api/pool/payments — withdrawals table, status='confirmed').
-        // Timestamps are unixepoch SECONDS → multiply by 1000 for Date.
-        // ═════════════════════════════════════════════════════════════════
+        // GRIN amount for tiles / chart axes (ツ = Grin symbol, matches the tables and miners-stats).
+        function fmtGrin(v) {
+            return Number(v || 0).toLocaleString('en-US', { maximumFractionDigits: 3 }) + ' ツ';
+        }
+        function fmtInt(v) { return Number(v || 0).toLocaleString('en-US'); }
 
         function truncAddr(addr) {
             addr = String(addr || '');
             return addr.length > 16 ? addr.slice(0, 9) + '…' + addr.slice(-4) : addr;
+        }
+        // Full miner address rendered as a link into the account view.
+        function addrCell(addr) {
+            addr = String(addr || '');
+            const href = '/account-settings.html?addr=' + encodeURIComponent(addr);
+            return '<a class="addr-link" href="' + href + '" title="' + escHtml(addr) + '">' + escHtml(truncAddr(addr)) + '</a>';
         }
 
         function setStat(id, text) {
             const el = document.getElementById(id);
             if (el) el.textContent = text;
         }
+        function toggleEmpty(emptyId, show, text) {
+            const el = document.getElementById(emptyId);
+            if (!el) return;
+            if (text) el.textContent = text;
+            el.style.display = show ? 'flex' : 'none';
+        }
 
-        async function loadPaymentHistory() {
+        // UTC bucket labels for the bar/doughnut axes (site-wide UTC rule; the trend line formats
+        // its own labels from p.t + bucketSeconds inside charts-init.js).
+        function periodLabels(points, bucket) {
+            return points.map(p => {
+                const d = new Date(p.t * 1000);
+                return bucket && bucket >= 86400
+                    ? d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' })
+                    : d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'UTC' });
+            });
+        }
+
+        // ═════════════════════════════════════════════════════════════════
+        // API Integration — public endpoints only.
+        //   /api/pool/payments/history   durable payments & transparency series (tiles + 4 charts)
+        //   /api/pool/payments           recent confirmed withdrawals (P-05 table)
+        // Timestamps are unix SECONDS.
+        // ═════════════════════════════════════════════════════════════════
+
+        let phRange = 'month';
+        const RANGE_NOTE = {
+            day:   'last 24h · hourly',
+            week:  'last 7 days · daily',
+            month: 'last 30 days · daily',
+            year:  'last 365 days · weekly',
+            all:   'all time · auto-scaled'
+        };
+
+        async function loadTransparency() {
+            const note = document.getElementById('ph-range-note');
+            if (note) note.textContent = RANGE_NOTE[phRange] || '';
+            if (typeof PoolCharts === 'undefined') return;
+            try {
+                const data = await Auth.fetch('/api/pool/payments/history?range=' + encodeURIComponent(phRange));
+                const points = (data && Array.isArray(data.points)) ? data.points : [];
+                const dist   = (data && Array.isArray(data.distribution)) ? data.distribution : [];
+                const totals = (data && data.totals) ? data.totals : {};
+                const bucket = data && data.bucket_seconds;
+
+                // ── Lifetime transparency tiles (range-independent) ──
+                setStat('ph-paid-all',  fmtGrin(totals.paid_all || 0));
+                setStat('ph-count-all', fmtInt(totals.payout_count || 0));
+                setStat('ph-avg',       totals.payout_count ? fmtGrin(totals.avg_payout || 0) : '—');
+                setStat('ph-fee-pct',   (totals.to_miners_all || totals.fee_all)
+                                          ? (Number(totals.fee_percent || 0).toFixed(2) + ' %')
+                                          : '0 %');
+                setStat('ph-giveaways', fmtGrin(totals.giveaways_all || 0));
+                setStat('ph-donations', fmtGrin(totals.donations_all || 0));
+
+                // ── P-01 · cumulative GRIN paid (running sum of per-bucket payouts) ──
+                let run = 0;
+                const cumulative = points.map(p => ({ t: p.t, v: (run += (Number(p.payout) || 0)) }));
+                const hasPayout = points.some(p => (Number(p.payout) || 0) > 0);
+                toggleEmpty('ph-empty-cumulative', !hasPayout);
+                PoolCharts.renderTrendLine('ph-chart-cumulative', cumulative,
+                    { label: 'Cumulative paid', bucketSeconds: bucket, valueFmt: fmtGrin });
+
+                // ── P-02 · payout size distribution ──
+                const distTotal = dist.reduce((s, d) => s + (Number(d.count) || 0), 0);
+                toggleEmpty('ph-empty-distribution', distTotal === 0);
+                PoolCharts.renderBarChart('ph-chart-distribution',
+                    dist.map(d => d.label), dist.map(d => d.count),
+                    { label: 'Payouts', valueFmt: fmtInt });
+
+                // ── P-03 · where the reward goes (miners vs pool fee, over the window) ──
+                const toMiners = points.reduce((s, p) => s + (Number(p.to_miners) || 0), 0);
+                const fee      = points.reduce((s, p) => s + (Number(p.fee) || 0), 0);
+                const splitTotal = toMiners + fee;
+                if (splitTotal <= 0) {
+                    toggleEmpty('ph-empty-split', true, 'NO REWARD DATA YET');
+                } else if (fee <= 0) {
+                    // 0-fee pool: still render the (single-slice) doughnut, but say it plainly.
+                    toggleEmpty('ph-empty-split', false);
+                    PoolCharts.renderDoughnutChart('ph-chart-split',
+                        ['To miners', 'Pool fee'], [toMiners, 0], { colors: ['#7cb342', '#d29922'] });
+                } else {
+                    toggleEmpty('ph-empty-split', false);
+                    PoolCharts.renderDoughnutChart('ph-chart-split',
+                        ['To miners', 'Pool fee'], [toMiners, fee], { colors: ['#7cb342', '#d29922'] });
+                }
+
+                // ── P-04 · giveaways distributed to miners ──
+                const giveTotal = points.reduce((s, p) => s + (Number(p.giveaways) || 0), 0);
+                toggleEmpty('ph-empty-giveaways', giveTotal <= 0);
+                PoolCharts.renderBarChart('ph-chart-giveaways',
+                    periodLabels(points, bucket), points.map(p => p.giveaways),
+                    { label: 'Given away', valueFmt: fmtGrin });
+            } catch (e) {
+                toggleEmpty('ph-empty-cumulative', true);
+                toggleEmpty('ph-empty-distribution', true);
+                toggleEmpty('ph-empty-split', true);
+                toggleEmpty('ph-empty-giveaways', true);
+            }
+        }
+
+        async function loadRecentPayouts() {
             const tbody = document.getElementById('payouts');
             try {
                 const data = await Auth.fetch('/api/pool/payments?limit=100');
                 if (!Array.isArray(data)) throw new Error('bad response');
-
-                const now = Math.floor(Date.now() / 1000);
                 const when = w => w.confirmed_at || w.created_at || 0;
-                const last7d = data.filter(w => when(w) > now - 7 * 86400);
-                const sum = arr => arr.reduce((s, w) => s + (w.amount || 0), 0);
-
-                setStat('ph-paid-7d', sum(last7d).toFixed(2) + ' GRIN');
-                setStat('ph-count-7d', last7d.length);
-                setStat('ph-last', data.length ? new Date(when(data[0]) * 1000).toLocaleString() : 'No payouts yet');
-                setStat('ph-avg', data.length ? (sum(data) / data.length).toFixed(2) + ' GRIN' : '—');
-
                 if (tbody) {
                     if (!data.length) {
                         tbody.innerHTML = '<tr><td colspan="4">No payouts yet</td></tr>';
                     } else {
                         tbody.innerHTML = data.slice(0, 25).map(w => `
                             <tr>
-                                <td>${escHtml(new Date(when(w) * 1000).toLocaleString())}</td>
-                                <td title="${escHtml(w.grin_address)}">${escHtml(truncAddr(w.grin_address))}</td>
-                                <td>${Number(w.amount || 0).toFixed(2)} GRIN</td>
+                                <td>${escHtml(new Date(when(w) * 1000).toLocaleString('en-US', { timeZone: 'UTC' }))}</td>
+                                <td>${addrCell(w.grin_address)}</td>
+                                <td class="num">${Number(w.amount || 0).toFixed(2)}</td>
                                 <td><span class="status-badge status-active">confirmed</span></td>
                             </tr>
                         `).join('');
@@ -116,11 +355,25 @@
             }
         }
 
-        // Load on page ready
-        document.addEventListener('DOMContentLoaded', loadPaymentHistory);
+        document.addEventListener('DOMContentLoaded', function () {
+            const bar = document.getElementById('ph-rangebar');
+            if (bar) {
+                bar.addEventListener('click', function (e) {
+                    const btn = e.target.closest('.rng-btn');
+                    if (!btn) return;
+                    const r = btn.getAttribute('data-range');
+                    if (!r || r === phRange) return;
+                    phRange = r;
+                    bar.querySelectorAll('.rng-btn').forEach(b => b.classList.toggle('active', b === btn));
+                    loadTransparency();
+                });
+            }
+            loadTransparency();
+            loadRecentPayouts();
+        });
 
-        // Refresh every 60 seconds
-        setInterval(loadPaymentHistory, 60000);
+        // Refresh every 60 seconds.
+        setInterval(function () { loadTransparency(); loadRecentPayouts(); }, 60000);
     </script>
     <script src="/js/public-shell.js"></script>
     <script src="/js/public-theme.js"></script>

@@ -98,7 +98,7 @@
           <h3 class="section-title">Connection</h3>
           <div class="form-group">
             <label for="public_stratum_host">Public Stratum Host</label>
-            <input type="text" id="public_stratum_host" name="public_stratum_host" placeholder="stratum.your-pool.com">
+            <input type="text" id="public_stratum_host" name="public_stratum_host" class="settings-allow-empty" placeholder="stratum.your-pool.com">
             <div class="helper-text">Hostname miners connect to (shown by the /connect config generator). Leave blank to use the site host. Port comes from pool.json.</div>
           </div>
         </div>
@@ -108,7 +108,7 @@
           <div class="form-row">
             <div class="form-group">
               <label for="founded_year">Go-Live Year</label>
-              <input type="number" id="founded_year" name="founded_year" min="2019" max="2100" placeholder="2024">
+              <input type="number" id="founded_year" name="founded_year" class="settings-allow-empty" min="2019" max="2100" placeholder="2024">
               <div class="helper-text">Shown in the footer copyright as © &lt;year&gt;–&lt;current year&gt;. Leave blank to show only the current year.</div>
             </div>
             <div class="form-group">

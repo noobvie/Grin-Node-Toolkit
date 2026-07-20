@@ -51,7 +51,28 @@ function mergeEnvVars(config) {
     // session on each restart. The Script 07 installer writes it once into pool.json.
     jwt_secret: config.jwt_secret || process.env.JWT_SECRET || '',
     pool_fee_percent: config.pool_fee_percent !== undefined ? config.pool_fee_percent : 1.0,
-    min_withdrawal: config.min_withdrawal !== undefined ? config.min_withdrawal : 5.0,
+    min_withdrawal: config.min_withdrawal !== undefined ? config.min_withdrawal : 25.0,
+    // Cross-rail wait after a reversed payout before the miner can request another (0 disables).
+    withdrawal_cooldown_minutes: config.withdrawal_cooldown_minutes !== undefined ? config.withdrawal_cooldown_minutes : 30,
+
+    // ── Goblin/Nostr payout rail (design §15; OFF by default — needs `npm install`
+    // for nostr-tools + ws and a VPS E2E test with a real Goblin wallet). Pays a THIRD
+    // party (the miner's Goblin username), so the route/scheduler enforce a registered
+    // destination + cooldown + TOFU npub pin on top of the ownership gate.
+    nostr_payouts_enabled: config.nostr_payouts_enabled === true || config.nostr_payouts_enabled === 'true',
+    nostr_relays: config.nostr_relays || ['wss://relay.floonet.dev', 'wss://relay.0xchat.com', 'wss://offchain.pub'],
+    // NIP-05 domains the pool will resolve a username against (SSRF + typo-squat guard).
+    nostr_nip05_domains: config.nostr_nip05_domains || ['goblin.st'],
+    // Hours a registered destination must age before it can receive a payout.
+    nostr_destination_cooldown_hours: config.nostr_destination_cooldown_hours !== undefined ? config.nostr_destination_cooldown_hours : 48,
+    // Minutes a DELIVERED-but-unanswered Goblin payout stays locked before it auto-refunds.
+    // Separate from the manual slatepack rail's 24h (slatepack_ttl_hours): Goblin AutoReceives
+    // automatically, so if the miner has the wallet open the S2 comes back in seconds — a short
+    // window bounds a stranded lock without hurting the human paste-back flow. Too tight only
+    // risks a harmless false refund (retry), never a double-pay. Tune from a real pilot round-trip.
+    nostr_pending_ttl_minutes: config.nostr_pending_ttl_minutes !== undefined ? config.nostr_pending_ttl_minutes : 10,
+    // Pool Nostr identity key file (hex secret). Blank → derived next to the DB file.
+    nostr_key_file: config.nostr_key_file || '',
     // Grin COINBASE_MATURITY = 1440; a coinbase cannot be spent until 1440 confirmations,
     // so payouts must wait at least that long to be reorg-safe.
     confirm_depth_mainnet: config.confirm_depth_mainnet || 1440,
@@ -101,6 +122,18 @@ function mergeEnvVars(config) {
     tor_enabled: config.tor_enabled !== undefined ? config.tor_enabled : true,
     tor_socks_port: config.tor_socks_port || 9050,
     tor_check_timeout_ms: config.tor_check_timeout_ms || 3000,
+    // Pre-flight Tor reachability gate: when ON, a Tor withdrawal is refused up front if the
+    // miner's wallet listener isn't answering over Tor RIGHT NOW (probe = derive the v3 onion
+    // from the grin address, SOCKS5-connect to onion:80 via the tor daemon). Blocks only on a
+    // CONFIDENT offline signal — if the pool box can't run the probe at all (no tor daemon /
+    // socks lib), it fails OPEN and lets grin-wallet be the authority at send time, so a
+    // misconfigured box never bricks every Tor payout. grin-wallet maps the onion HS to
+    // virtual port 80 (impls/src/tor/config.rs: `HiddenServicePort 80 <listener>`).
+    tor_preflight_gate: config.tor_preflight_gate !== undefined ? config.tor_preflight_gate : true,
+    tor_onion_virtual_port: config.tor_onion_virtual_port || 80,
+    // Fresh-circuit retries before the probe declares a wallet offline — dodges a single
+    // transient Tor circuit failure wrongly blocking a healthy listener.
+    tor_check_retries: config.tor_check_retries || 2,
 
     alert_large_withdrawal: config.alert_large_withdrawal || 100,
     alert_tor_fails_per_week: config.alert_tor_fails_per_week || 3,

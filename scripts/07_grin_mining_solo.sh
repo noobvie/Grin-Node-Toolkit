@@ -2027,6 +2027,15 @@ solo_deploy_stats_page() {
     [[ -n "$solo_slogan" ]] && success "Slogan + connection config written (edit $web_dir/data/config.json to change)." \
         || success "Connection config written (edit $web_dir/data/config.json for slogan/ports)."
 
+    # Quiet-hours banner feed: if the energy-saver wrapper is installed, publish the
+    # current schedule/state (data/quiet.json) now so a fresh page deploy shows the
+    # banner immediately instead of waiting for the next cron window edge. Regenerate
+    # the wrapper first (idempotent) so a pre-quiet.json install gets the publisher.
+    if [[ -x "$SQ_WRAPPER" ]]; then
+        _sq_write_wrapper
+        "$SQ_WRAPPER" enforce >/dev/null 2>&1 || true
+    fi
+
     # ── Payout split (mainnet only) ─────────────────────────────────────────────
     # Optional on/off toggle. Writes $PAYMENT_CONFIG ({"enabled":true}); the
     # collector then splits by worker name automatically. Done before the initial

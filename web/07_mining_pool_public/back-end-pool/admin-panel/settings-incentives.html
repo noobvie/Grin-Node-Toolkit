@@ -166,12 +166,25 @@
           </div>
           <div class="form-row">
             <div class="form-group">
-              <label for="lottery_min_shares">Minimum shares to qualify</label>
-              <input type="number" id="lottery_min_shares" name="lottery_min_shares" min="0" step="1" value="10">
+              <label for="lottery_min_active_days">Minimum active days to qualify</label>
+              <input type="number" id="lottery_min_active_days" name="lottery_min_active_days" min="1" step="1" value="1">
+              <div class="helper-text">Anti-sybil gate: a miner must be active on at least this many distinct days in the draw window. Raise it (e.g. 3) to make the equal-chance pot resist address-splitting.</div>
             </div>
+            <div class="form-group">
+              <label for="lottery_max_ticket_share_percent">Whale cap on Pot A (%)</label>
+              <input type="number" id="lottery_max_ticket_share_percent" name="lottery_max_ticket_share_percent" min="0" max="100" step="1" value="0">
+              <div class="helper-text">Cap any single address's weighted tickets at this % of the total (0 = uncapped). Bounds how much of Pot A one big miner can sweep.</div>
+            </div>
+          </div>
+          <div class="form-row">
             <div class="form-group">
               <label for="lottery_pot_fraction_percent">Prize pool paid out per draw (%)</label>
               <input type="number" id="lottery_pot_fraction_percent" name="lottery_pot_fraction_percent" min="0" max="100" step="1" value="100">
+            </div>
+            <div class="form-group">
+              <label for="lottery_min_shares">Minimum shares (legacy)</label>
+              <input type="number" id="lottery_min_shares" name="lottery_min_shares" min="0" step="1" value="10">
+              <div class="helper-text">Legacy — eligibility now uses persistent hashrate history + active days above. Kept for compatibility.</div>
             </div>
           </div>
 
@@ -185,6 +198,111 @@
             <button type="button" class="btn btn-secondary" onclick="drawLotteryNow('weekly')">Run weekly draw now (test)</button>
             <div class="helper-text" id="lottery-draws"></div>
           </div>
+        </div>
+
+        <div class="form-section">
+          <h3 class="section-title">Contest Campaigns</h3>
+          <div class="helper-text" style="margin-bottom:1rem;">
+            A campaign is a one-off (or recurring) contest with its own date-range window and,
+            optionally, its own rules — so you can run a whale-friendly weighted contest one week and
+            a small-miner equal-chance contest the next. It runs a single lottery draw when the window
+            closes (or when you hit “Run now”), paid from the prize pool, and winners appear on the
+            public fortune board. Leave an override blank to inherit the global Lottery settings above.
+            All times are <strong>UTC</strong>.
+          </div>
+
+          <div class="form-group">
+            <label for="camp-preset">Quick start — pick a contest type</label>
+            <select id="camp-preset" class="settings-skip" onchange="applyCampaignPreset(this.value)">
+              <option value="">Custom (set rules manually)…</option>
+              <option value="balanced">⚖️ Balanced — 50% weighted / 50% equal chance</option>
+              <option value="small">🐜 Small-Miner — equal chance, 3-day gate, 5% whale cap</option>
+              <option value="whale">🐋 Hashrate King — 100% weighted by contribution</option>
+              <option value="loyalty">🔥 Loyalty Week — equal chance, 5-day gate</option>
+              <option value="jackpot">💰 Jackpot Blowout — drains 100% of the pool</option>
+            </select>
+            <div class="helper-text">Fills the rule fields below with a sensible recipe. You can still tweak any field afterwards.</div>
+          </div>
+
+          <div class="form-row">
+            <div class="form-group">
+              <label for="camp-name">Name</label>
+              <input type="text" id="camp-name" class="settings-skip" maxlength="80" placeholder="Summer Small-Miner Contest">
+            </div>
+            <div class="form-group">
+              <label for="camp-recurring">Repeat</label>
+              <select id="camp-recurring" class="settings-skip">
+                <option value="none">One-off</option>
+                <option value="weekly">Weekly</option>
+                <option value="yearly">Yearly</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-group">
+            <label for="camp-desc">Description (optional)</label>
+            <input type="text" id="camp-desc" class="settings-skip" maxlength="500" placeholder="Equal-chance draw for consistent small miners">
+          </div>
+          <div class="form-group">
+            <label>Duration — quick set (start = now)</label>
+            <div style="display:flex;gap:.4rem;flex-wrap:wrap;">
+              <button type="button" class="btn btn-secondary" style="padding:.25rem .7rem;" onclick="setCampaignDuration(1)">1 day</button>
+              <button type="button" class="btn btn-secondary" style="padding:.25rem .7rem;" onclick="setCampaignDuration(7)">1 week</button>
+              <button type="button" class="btn btn-secondary" style="padding:.25rem .7rem;" onclick="setCampaignDuration(14)">2 weeks</button>
+              <button type="button" class="btn btn-secondary" style="padding:.25rem .7rem;" onclick="setCampaignDuration(30)">1 month</button>
+            </div>
+            <div class="helper-text">Or set exact start/end times below. All times are UTC.</div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label for="camp-start">Starts (UTC)</label>
+              <input type="datetime-local" id="camp-start" class="settings-skip">
+            </div>
+            <div class="form-group">
+              <label for="camp-end">Ends / draws (UTC)</label>
+              <input type="datetime-local" id="camp-end" class="settings-skip">
+            </div>
+          </div>
+
+          <h4 style="margin-top:1rem;">Pot &amp; rule overrides <span style="font-weight:normal;color:var(--muted,#888);">(blank = inherit global)</span></h4>
+          <div class="form-row">
+            <div class="form-group">
+              <label for="camp-pot-grin">Fixed pot (GRIN)</label>
+              <input type="number" id="camp-pot-grin" class="settings-skip" min="0" step="0.01" placeholder="0 = use % of pool">
+            </div>
+            <div class="form-group">
+              <label for="camp-pot-fraction">Prize pool paid out (%)</label>
+              <input type="number" id="camp-pot-fraction" class="settings-skip" min="0" max="100" step="1" placeholder="global">
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label for="camp-weighted">Pot A — weighted (%)</label>
+              <input type="number" id="camp-weighted" class="settings-skip" min="0" max="100" step="1" placeholder="global">
+            </div>
+            <div class="form-group">
+              <label for="camp-equal">Pot B — equal chance (%)</label>
+              <input type="number" id="camp-equal" class="settings-skip" min="0" max="100" step="1" placeholder="global">
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label for="camp-min-days">Min active days</label>
+              <input type="number" id="camp-min-days" class="settings-skip" min="0" step="1" placeholder="global">
+            </div>
+            <div class="form-group">
+              <label for="camp-whale-cap">Whale cap on Pot A (%)</label>
+              <input type="number" id="camp-whale-cap" class="settings-skip" min="0" max="100" step="1" placeholder="global">
+            </div>
+          </div>
+
+          <div style="margin-top:1rem;">
+            <button type="button" class="btn btn-primary" onclick="saveCampaign()">Save campaign</button>
+            <button type="button" class="btn btn-secondary" onclick="resetCampaignForm()">Clear form</button>
+            <input type="hidden" id="camp-edit-id">
+          </div>
+
+          <h4 style="margin-top:1.5rem;">Scheduled &amp; past campaigns</h4>
+          <div id="campaigns-list" class="helper-text">Loading…</div>
         </div>
 
         <div class="form-section" style="opacity:.6;">

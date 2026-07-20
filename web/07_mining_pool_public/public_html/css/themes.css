@@ -26,9 +26,14 @@
  * "light") were retired from the public pages in 2026-06 and live on as
  * admin-panel palettes in js/theme.js (Cyber Classic / Atomic Classic /
  * Gradient Light). The legacy public key 'dark' now maps to the default.
+ *
+ * 2026-07: the default (key 'atomic', no body class) became the "Reactor"
+ * control-room skin (phosphor green / magenta / amber, defined in dashboard.css;
+ * panel components in reactor.css). The previous uranium-lime default lives on
+ * below as body.uranium-theme ("Uranium Classic").
  */
 
-/* ── Built-in default look ("Atomic", no body class) ─────────────────────────
+/* ── Built-in default look ("Reactor", key 'atomic', no body class) ───────────
  * Body text is sans (set inline per page); headings + data go mono, and the
  * cyberpunk scanline overlay breathes over everything. Nexus keeps the
  * scanlines too; Light and the white-label extras stay clean.
@@ -41,6 +46,7 @@ body:not(.themed):not(.no-fx) .addr {
 }
 
 body:not(.themed):not(.no-fx)::before,
+body.uranium-theme::before,
 body.nexus-theme::before {
   content: "";
   position: fixed; inset: 0; z-index: 9999;
@@ -61,6 +67,7 @@ body.nexus-theme::before {
 }
 @media (prefers-reduced-motion: reduce) {
   body:not(.themed):not(.no-fx)::before,
+  body.uranium-theme::before,
   body.nexus-theme::before { animation: none; }
 }
 
@@ -154,8 +161,28 @@ body.themed .theme-switcher {
 body.themed .theme-switcher .theme-select { color: var(--t-accent); }
 
 /* ════════════════════════════════════════════════════════════════════════════
- *  CLASSIC THEMES (mockup-v3) — Nexus + Light. Atomic is the no-class default.
+ *  CLASSIC THEMES — Uranium Classic + Nexus + Light. Reactor is the no-class default.
  * ════════════════════════════════════════════════════════════════════════════ */
+
+/* Uranium Classic ☢ — the pre-2026-07 default (mockup-v3 uranium-lime reactor grid).
+ * Kept switchable for operators/visitors who prefer the old look; scanlines included
+ * via the ::before selector at the top of this file. */
+body.uranium-theme {
+  --t-bg: #080b07; --t-text: #e8f5cf; --t-dim: #9db077;
+  --t-card: #11160d; --t-card2: #171e11; --t-border: #2b3a1a;
+  --t-header: linear-gradient(135deg, rgba(184, 230, 0, 0.10), rgba(0, 247, 255, 0.08));
+  --t-accent: #b8e600; --t-accent2: #00f7ff; --t-heading: #d4ff3d;
+  --t-on-accent: #101503; --t-chip-bg: rgba(184, 230, 0, 0.10);
+  --t-chip-border: rgba(184, 230, 0, 0.28);
+  --dark-bg: #080b07; --dark-card: #11160d; --dark-text: #e8f5cf; --dark-dim: #9db077;
+  --neon-cyan: #b8e600; --neon-magenta: #00f7ff; --neon-lime: #d4ff3d; --uranium: #b8e600;
+  background:
+    linear-gradient(0deg, transparent 23%, rgba(184, 230, 0, 0.04) 24%, rgba(184, 230, 0, 0.04) 26%, transparent 27%, transparent 73%, rgba(184, 230, 0, 0.04) 74%, rgba(184, 230, 0, 0.04) 76%, transparent 77%),
+    linear-gradient(90deg, transparent 23%, rgba(184, 230, 0, 0.04) 24%, rgba(184, 230, 0, 0.04) 26%, transparent 27%, transparent 73%, rgba(184, 230, 0, 0.04) 74%, rgba(184, 230, 0, 0.04) 76%, transparent 77%),
+    #080b07;
+  background-size: 48px 48px;
+  background-attachment: fixed;
+}
 
 /* Nexus — cyan/magenta neon cyberpunk (mockup-v3 "nexus") */
 body.nexus-theme {
@@ -175,17 +202,19 @@ body.nexus-theme {
   background-attachment: fixed;
 }
 
-/* Light — vibrant clean, low decoration (mockup-v3 "light") */
+/* Light — vibrant clean, low decoration (mockup-v3 "light").
+ * Accent/heading greens are deliberately dark (≈5:1 on white) — the old
+ * #1ba673/#14855c only hit ~2.8:1 and vanished against the near-white cards. */
 body.light-theme {
   --t-bg: #f4f6f9; --t-text: #1a2129; --t-dim: #51606f;
   --t-card: #ffffff; --t-card2: #f0f3f7; --t-border: #dde3ea;
   --t-header: linear-gradient(135deg, #ffffff, #eef2f7);
-  --t-accent: #1ba673; --t-accent2: #7c3aed; --t-heading: #14855c;
-  --t-on-accent: #ffffff; --t-chip-bg: rgba(27, 166, 115, 0.10);
-  --t-chip-border: rgba(27, 166, 115, 0.28); --t-switcher-bg: rgba(255, 255, 255, 0.85);
+  --t-accent: #157f52; --t-accent2: #6d28d9; --t-heading: #0e6b45;
+  --t-on-accent: #ffffff; --t-chip-bg: rgba(21, 127, 82, 0.10);
+  --t-chip-border: rgba(21, 127, 82, 0.30); --t-switcher-bg: rgba(255, 255, 255, 0.85);
   --t-font: 'Segoe UI', system-ui, sans-serif;
   --dark-bg: #f4f6f9; --dark-card: #ffffff; --dark-text: #1a2129; --dark-dim: #51606f;
-  --neon-cyan: #1ba673; --neon-magenta: #7c3aed; --neon-lime: #1ba673; --uranium: #1ba673;
+  --neon-cyan: #157f52; --neon-magenta: #6d28d9; --neon-lime: #157f52; --uranium: #157f52;
   background: linear-gradient(135deg, #f5f7fb 0%, #faf7ff 50%, #fff5f8 100%);
   background-attachment: fixed;
 }

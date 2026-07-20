@@ -1,0 +1,68 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="728" height="90" viewBox="0 0 728 90" role="img" aria-label="Mine GRIN on GRINIUM — no sign-up, point your miner and start earning">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0b0f14"/>
+      <stop offset=".55" stop-color="#07090c"/>
+      <stop offset="1" stop-color="#0c1410"/>
+    </linearGradient>
+    <radialGradient id="coreGlow" cx=".5" cy=".5" r=".5">
+      <stop offset="0" stop-color="#5dff73" stop-opacity=".85"/>
+      <stop offset=".45" stop-color="#5dff73" stop-opacity=".25"/>
+      <stop offset="1" stop-color="#5dff73" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="cta" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#6aff80"/>
+      <stop offset="1" stop-color="#3fd957"/>
+    </linearGradient>
+    <linearGradient id="sweep" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#5dff73" stop-opacity="0"/>
+      <stop offset=".5" stop-color="#5dff73" stop-opacity=".14"/>
+      <stop offset="1" stop-color="#5dff73" stop-opacity="0"/>
+    </linearGradient>
+    <clipPath id="frame"><rect x="1" y="1" width="726" height="88" rx="9"/></clipPath>
+  </defs>
+
+  <!-- panel -->
+  <rect x="1" y="1" width="726" height="88" rx="9" fill="url(#bg)" stroke="#1d3a26" stroke-width="1.5"/>
+
+  <g clip-path="url(#frame)">
+    <!-- instrument grid -->
+    <g stroke="#5dff73" stroke-opacity=".06" stroke-width="1">
+      <path d="M0 30 H728 M0 60 H728"/>
+      <path d="M91 0 V90 M182 0 V90 M273 0 V90 M364 0 V90 M455 0 V90 M546 0 V90 M637 0 V90"/>
+    </g>
+    <!-- light sweep -->
+    <rect x="-220" y="0" width="220" height="90" fill="url(#sweep)">
+      <animate attributeName="x" values="-220;728" dur="6s" repeatCount="indefinite"/>
+    </rect>
+
+    <!-- reactor core -->
+    <g transform="translate(52,45)">
+      <circle r="40" fill="url(#coreGlow)">
+        <animate attributeName="opacity" values=".7;1;.7" dur="3s" repeatCount="indefinite"/>
+      </circle>
+      <circle r="23" fill="#0b1510" stroke="#5dff73" stroke-opacity=".7" stroke-width="1.5"/>
+      <circle r="29" fill="none" stroke="#5dff73" stroke-opacity=".35" stroke-width="1" stroke-dasharray="4 6">
+        <animateTransform attributeName="transform" type="rotate" from="0" to="360" dur="14s" repeatCount="indefinite"/>
+      </circle>
+      <text x="0" y="9" text-anchor="middle" font-family="ui-monospace,Menlo,Consolas,monospace" font-size="24" fill="#5dff73">ツ</text>
+    </g>
+
+    <!-- copy -->
+    <g font-family="ui-monospace,Menlo,Consolas,monospace">
+      <text x="104" y="40" font-size="23" font-weight="bold" fill="#e6efe9" letter-spacing="1">MINE <tspan fill="#5dff73">GRIN</tspan> ON GRINIUM</text>
+      <text x="104" y="63" font-size="12.5" fill="#8a978f" letter-spacing=".5">No sign-up · PPLNS rewards · your address is your account</text>
+      <!-- live tick -->
+      <circle cx="560" cy="35" r="3.5" fill="#5dff73">
+        <animate attributeName="opacity" values="1;.2;1" dur="1.6s" repeatCount="indefinite"/>
+      </circle>
+      <text x="571" y="39" font-size="10.5" fill="#5dff73" letter-spacing="1.5">STRATUM ONLINE</text>
+    </g>
+
+    <!-- CTA -->
+    <g transform="translate(556,48)">
+      <rect x="0" y="0" width="150" height="28" rx="6" fill="url(#cta)"/>
+      <text x="75" y="19" text-anchor="middle" font-family="ui-monospace,Menlo,Consolas,monospace" font-size="13" font-weight="bold" fill="#07090c" letter-spacing="1">START MINING →</text>
+    </g>
+  </g>
+</svg>

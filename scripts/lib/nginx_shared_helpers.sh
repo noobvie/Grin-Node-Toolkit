@@ -230,6 +230,27 @@ nginx_install_with_certbot() {
 }
 
 # ═════════════════════════════════════════════════════════════════════════════
+# ENSURE certbot only (nginx assumed already present)
+# ═════════════════════════════════════════════════════════════════════════════
+# For deploy flows that already guarantee nginx and only need the Let's Encrypt
+# client + nginx plugin. No-op if certbot is already installed. Distro-aware.
+# (Use nginx_install_with_certbot instead when nginx itself may be missing.)
+nginx_ensure_certbot() {
+    command -v certbot >/dev/null 2>&1 && return 0
+    if [[ -f /etc/debian_version ]]; then
+        info "Installing certbot..."
+        apt-get install -y -qq certbot python3-certbot-nginx || { error "certbot install failed"; return 1; }
+    elif [[ -f /etc/redhat-release ]]; then
+        info "Installing certbot..."
+        rpm -q epel-release >/dev/null 2>&1 || yum install -y epel-release
+        yum install -y certbot python3-certbot-nginx || { error "certbot install failed"; return 1; }
+    else
+        error "Unsupported OS — install certbot manually."; return 1
+    fi
+    success "Certbot installed."
+}
+
+# ═════════════════════════════════════════════════════════════════════════════
 # EVICT apache2 if it's blocking ports 80/443
 # ═════════════════════════════════════════════════════════════════════════════
 # Apache and nginx can't both bind port 80. Non-interactive — just stops it.

@@ -41,7 +41,11 @@ class RateLimiter {
       public: 1200,
       auth: 200,
       api: 600,
-      admin: 2400
+      admin: 2400,
+      // Bulk CSV downloads (account ledger / withdrawal history). Deliberately tight and
+      // SEPARATE from `public` (1200/min) so a human's occasional export works but automated
+      // download-spam of the all-time extract is cut off fast. Per-IP, per-minute.
+      export: 10
     };
 
     // Override with config

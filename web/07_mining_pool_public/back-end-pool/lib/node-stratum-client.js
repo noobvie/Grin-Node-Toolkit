@@ -21,6 +21,11 @@ const { parseStratumMessage } = require('./stratum-protocol');
 
 const RECONNECT_DELAY_MS = 5000;
 const SUBMIT_TIMEOUT_MS  = 15000;
+// Cap the inbound line buffer from the node stratum. The node is trusted (localhost), so this
+// is defence-in-depth against a malformed/oversized frame growing lineBuffer without bound;
+// legitimate node messages (job push, submit responses) are well under a KB. 64 KB never trips
+// on real traffic. On breach we reset the buffer rather than tear down the node link.
+const MAX_LINE_BYTES     = 64 * 1024;
 
 class NodeStratumClient {
   constructor(config, stratumServer) {
@@ -35,6 +40,14 @@ class NodeStratumClient {
     this.msgId        = 0;
     // Map<msgId, { resolve, timer }> for pending submit responses
     this.pending      = new Map();
+    // Cap on concurrent submits awaiting node PoW validation. All miners' shares funnel through
+    // this ONE upstream socket, so a node stall would otherwise let in-flight submits pile up for
+    // the full SUBMIT_TIMEOUT_MS before timing out. In steady state the node answers in ms and
+    // pending stays tiny (≈ submit_rate × latency); this only bites during a stall, where it
+    // bounds memory and hands backpressure back to miners (resubmit) instead of OOMing. Default
+    // sized well above legitimate in-flight for a ~2000-miner pool (a few thousand at most even
+    // during a brief hiccup); tune via config.max_pending_submits.
+    this.maxPending   = config.max_pending_submits || 20000;
   }
 
   start() {
@@ -61,6 +74,11 @@ class NodeStratumClient {
       this.lineBuffer += data.toString();
       const lines = this.lineBuffer.split('\n');
       this.lineBuffer = lines.pop();
+      // Defence-in-depth: an unterminated frame past the cap is discarded (see MAX_LINE_BYTES).
+      if (this.lineBuffer.length > MAX_LINE_BYTES) {
+        console.error(`[NodeStratumClient] Oversized frame from node (${this.lineBuffer.length} bytes) — buffer reset`);
+        this.lineBuffer = '';
+      }
       for (const line of lines) {
         if (!line.trim()) continue;
         const msg = parseStratumMessage(line);
@@ -138,6 +156,14 @@ class NodeStratumClient {
   async forwardSubmit(params) {
     if (!this.connected || !this.socket) {
       return { accepted: false, blockHash: null, error: 'Not connected to node stratum' };
+    }
+
+    // Backpressure: if the validation backlog is full (node is stalling), refuse rather than
+    // grow `pending` without bound. The share isn't credited (StratumServer rejects on
+    // accepted:false) and the miner resubmits once the node recovers.
+    if (this.pending.size >= this.maxPending) {
+      console.warn(`[NodeStratumClient] Pending backlog full (${this.pending.size}) — rejecting submit (node stalled?)`);
+      return { accepted: false, blockHash: null, error: 'Node validation backlog full — retry' };
     }
 
     return new Promise((resolve) => {

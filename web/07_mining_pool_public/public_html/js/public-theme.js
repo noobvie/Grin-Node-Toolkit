@@ -25,9 +25,12 @@
 
   var STORAGE_KEY = 'grinium-theme';
 
-  // group: shown as an <optgroup>. 'atomic' is the inline no-class default.
+  // group: shown as an <optgroup>. 'atomic' is the inline no-class default — since
+  // 2026-07 that default is the "Reactor" control-room skin (key kept for stored
+  // configs); the old uranium-lime default is the 'uranium' theme below.
   var THEMES = [
-    { key: 'atomic',    label: 'Atomic ⚛',      group: 'Classic',  builtin: true },
+    { key: 'atomic',    label: 'Reactor ⚛',     group: 'Classic',  builtin: true },
+    { key: 'uranium',   label: 'Uranium Classic ☢', group: 'Classic' },
     { key: 'nexus',     label: 'Nexus',         group: 'Classic' },
     { key: 'light',     label: 'Light',         group: 'Classic' },
     { key: 'winter',    label: 'Winter Frost ❄️',   group: 'Seasonal' },
@@ -143,7 +146,16 @@
     btn.id = 'grinium-theme-cycle';
     btn.type = 'button';
     btn.className = 'theme-cycle-btn';
-    btn.innerHTML = '<span class="theme-cycle-ico" aria-hidden="true">🎨</span>';
+    // Inline SVG palette (currentColor → recolors with the active theme). Replaces the
+    // 🎨 emoji, which rendered inconsistently across platforms and showed a glyph box.
+    btn.innerHTML = '<span class="theme-cycle-ico" aria-hidden="true">' +
+      '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" ' +
+      'stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">' +
+      '<path d="M12 3a9 9 0 1 0 0 18 1.8 1.8 0 0 0 1.7-2.5 1.5 1.5 0 0 1 1.4-2.1H17a4 4 0 0 0 4-4C21 6.6 17 3.6 12 3Z"/>' +
+      '<circle cx="7.6" cy="11" r="1" fill="currentColor" stroke="none"/>' +
+      '<circle cx="12" cy="7.8" r="1" fill="currentColor" stroke="none"/>' +
+      '<circle cx="16.2" cy="11" r="1" fill="currentColor" stroke="none"/>' +
+      '</svg></span>';
     btn.addEventListener('click', cycleTheme);
     container.appendChild(btn);
 

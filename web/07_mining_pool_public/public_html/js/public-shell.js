@@ -34,9 +34,15 @@
   // Each item carries an icon: on narrow screens the header collapses to icons-only
   // (the .nav-label is hidden via CSS) so the mobile header stays tidy; desktop shows
   // icon + label. The footer "Pool" column reuses the labels only (always text).
+  // An item is either a leaf link ({href,label,icon}) or a GROUP
+  // ({label,icon,children:[…leaf links…]}). A group has NO href of its own — it
+  // only opens a dropdown of its children (Pool Stats → Miners Stats / Network Map).
   var NAV = [
     { href: 'index.html',            label: 'Dashboard',     icon: '🏠' },
-    { href: 'miners-stats.html',     label: 'Pool Stats',    icon: '📊' },
+    { label: 'Pool Stats', icon: '📊', children: [
+      { href: 'miners-stats.html',   label: 'Miners Stats',  icon: '📈' },
+      { href: 'network-map.html',    label: 'Network Map',   icon: '🛰️' }
+    ] },
     { href: 'account-settings.html', label: 'My Stats',      icon: '👤' },
     { href: 'blocks.html',           label: 'Blocks',        icon: '🧱' },
     { href: 'payment-history.html',  label: 'Payouts',       icon: '💸' },
@@ -60,12 +66,31 @@
 
   var here = currentFile();
 
-  var navLinks = NAV.map(function (l) {
+  // Render one leaf link (also used for the items inside a group dropdown).
+  function leafLink(l) {
     var active = fileOf(l.href) === here ? ' active' : '';
     return '<a href="' + l.href + '" class="nav-link' + active + '" title="' + esc(l.label) + '">' +
       '<span class="nav-ico" aria-hidden="true">' + (l.icon || '') + '</span>' +
       '<span class="nav-label">' + esc(l.label) + '</span>' +
     '</a>';
+  }
+
+  var navLinks = NAV.map(function (l) {
+    if (!l.children) return leafLink(l);
+    // Group: a caret trigger (no href) + a dropdown of children. The trigger carries
+    // .active when the current page is one of the children so the parent stays lit.
+    var childActive = l.children.some(function (c) { return fileOf(c.href) === here; });
+    return '<div class="nav-group' + (childActive ? ' active' : '') + '">' +
+      '<button type="button" class="nav-link nav-group-trigger" aria-haspopup="true" ' +
+        'aria-expanded="false" title="' + esc(l.label) + '">' +
+        '<span class="nav-ico" aria-hidden="true">' + (l.icon || '') + '</span>' +
+        '<span class="nav-label">' + esc(l.label) + '</span>' +
+        '<span class="nav-caret" aria-hidden="true">▾</span>' +
+      '</button>' +
+      '<div class="nav-dropdown" role="menu">' +
+        l.children.map(leafLink).join('') +
+      '</div>' +
+    '</div>';
   }).join('');
 
   // ── Header: byte-identical to the old per-page markup so existing CSS and
@@ -74,7 +99,7 @@
   var header = document.createElement('header');
   header.innerHTML =
     '<div class="brand">' +
-      '<img class="brand-logo" src="/images/logo.svg" alt="" aria-hidden="true">' +
+      '<img class="brand-logo" src="/images/grin_lime.svg" alt="" aria-hidden="true">' +
       '<span data-brand="pool_name">GRINIUM</span>' +
     '</div>' +
     '<nav class="header-nav" aria-label="Main" data-shell="1">' + navLinks + '</nav>' +
@@ -88,11 +113,19 @@
   // branding.js ([data-brand="page-links"]); brand/social/copyright/security hooks are
   // also enhanced by branding.js once /api/public/branding resolves. The mini-stats bar
   // (network/fee/min/price/stratum) is filled by this script's own light fetches below.
-  var YEAR = new Date().getFullYear();
 
   // Pool column reuses the canonical NAV (no anchor stays active in the footer), minus
-  // Blog — it lives in the Resources column below to avoid a duplicate link.
-  var poolCol = NAV.filter(function (l) { return fileOf(l.href) !== 'blog.html'; })
+  // Blog — it lives in the Resources column below to avoid a duplicate link. Groups have
+  // no page of their own, so they're flattened to their child links here.
+  var poolLeaves = [];
+  NAV.forEach(function (l) {
+    if (l.children) { l.children.forEach(function (c) { poolLeaves.push(c); }); }
+    else poolLeaves.push(l);
+  });
+  // Excluded from the Pool column: Blog (Resources col), Dashboard (redundant — the
+  // brand logo links home) and Fortune Board (surfaced under Donate in the brand col).
+  var POOL_COL_SKIP = { 'blog.html': 1, 'index.html': 1, 'fortune-board.html': 1 };
+  var poolCol = poolLeaves.filter(function (l) { return !POOL_COL_SKIP[fileOf(l.href)]; })
     .map(function (l) {
       return '<a href="' + l.href + '">' + esc(l.label) + '</a>';
     }).join('');
@@ -104,8 +137,9 @@
     '<div class="footer-cols">' +
       // Brand + tagline + social
       '<div class="footer-col footer-brand">' +
+        // No logo image here on purpose — the header already carries the swinging
+        // brand logo; a second one in the footer just duplicates that animation.
         '<div class="brand">' +
-          '<img class="brand-logo" src="/images/logo.svg" alt="" aria-hidden="true">' +
           '<span data-brand="pool_name">GRINIUM</span>' +
         '</div>' +
         '<p class="footer-tagline" data-brand="pool_tagline">Mine Grin, anywhere</p>' +
@@ -113,11 +147,16 @@
           '<a data-brand="social-twitter" href="#" target="_blank" rel="noopener" style="display:none">Twitter / X</a>' +
           '<a data-brand="social-discord" href="#" target="_blank" rel="noopener" style="display:none">Discord</a>' +
           '<a data-brand="social-telegram" href="#" target="_blank" rel="noopener" style="display:none">Telegram</a>' +
+          '<a data-brand="social-nostr" href="#" target="_blank" rel="noopener" style="display:none">Nostr</a>' +
         '</div>' +
         // Donate lives in the brand column, highlighted with a heart, as the primary
-        // community call-to-action (moved out of the Legal column).
+        // community call-to-action (moved out of the Legal column). Fortune Board sits
+        // right below it (moved out of the Pool column to keep the columns balanced).
         '<a class="footer-donate" href="donate.html">' +
           '<span class="footer-donate-ico" aria-hidden="true">❤</span> Donate' +
+        '</a>' +
+        '<a class="footer-fortune" href="fortune-board.html">' +
+          '<span class="footer-fortune-ico" aria-hidden="true">🎁</span> Fortune Board' +
         '</a>' +
       '</div>' +
       // Pool navigation
@@ -154,17 +193,18 @@
     '</div>' +
     // Bottom row: copyright + attribution + security contact.
     '<div class="footer-bottom">' +
-      '<p class="footer-copyright" data-brand="copyright">© ' + YEAR + ' GRINIUM</p>' +
-      '<p data-brand="footer_text">Grin Mining Pool — Professional • Reliable • Secure</p>' +
-      '<p class="footer-meta">' +
-        '<span data-brand="attribution">Powered by the ' +
-          '<a href="' + GITHUB + '" target="_blank" rel="noopener noreferrer">Grin Node Toolkit</a>' +
-        '</span>' +
-        '<span class="footer-security" data-brand-show="security" style="display:none">' +
-          ' · Security: <a data-brand="security-link" href="#"></a>' +
-          '<a class="footer-pgp" data-brand="pgp-link" href="#" target="_blank" rel="noopener" style="display:none"> (PGP)</a>' +
-        '</span>' +
-      '</p>' +
+      // Copyright + Saigon signature share one line. The signature is hardcoded
+      // (matches GrinScan / Tiny Explorer) — not a branding hook — so it stays put.
+      // Yellow flag with three red stripes = Saigon.
+      '<p class="footer-copyright" data-brand="copyright">Since 2026</p>' +
+      '<span class="footer-sep" aria-hidden="true">·</span>' +
+      '<span class="footer-saigon">Made with &#10084;&#65039; from Saigon ' +
+        '<svg viewBox="0 0 27 18" width="21" height="14" role="img" aria-label="Yellow flag with three red stripes" style="vertical-align:-2px;border-radius:2px">' +
+          '<rect width="27" height="18" fill="#FFCD00"/>' +
+          '<rect y="4" width="27" height="2" fill="#DA251D"/>' +
+          '<rect y="8" width="27" height="2" fill="#DA251D"/>' +
+          '<rect y="12" width="27" height="2" fill="#DA251D"/>' +
+        '</svg></span>' +
     '</div>';
 
   // Deterministically (re)start the brand-logo swing. The @keyframes/animation rule is
@@ -267,6 +307,39 @@
     document.body.classList.add('has-testnet-banner');
   }
 
+  // Nav dropdown groups: desktop opens on :hover / :focus-within (pure CSS); touch and
+  // keyboard need an explicit toggle. Click the trigger to open/close; clicking outside
+  // or pressing Escape closes. Only one group open at a time.
+  function wireNavGroups() {
+    var groups = header.querySelectorAll('.nav-group');
+    if (!groups.length) return;
+    function closeAll(except) {
+      groups.forEach(function (g) {
+        if (g === except) return;
+        g.classList.remove('open');
+        var t = g.querySelector('.nav-group-trigger');
+        if (t) t.setAttribute('aria-expanded', 'false');
+      });
+    }
+    groups.forEach(function (g) {
+      var trigger = g.querySelector('.nav-group-trigger');
+      if (!trigger) return;
+      trigger.addEventListener('click', function (e) {
+        e.preventDefault();
+        var willOpen = !g.classList.contains('open');
+        closeAll(g);
+        g.classList.toggle('open', willOpen);
+        trigger.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
+      });
+    });
+    document.addEventListener('click', function (e) {
+      if (!e.target.closest('.nav-group')) closeAll(null);
+    });
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape') closeAll(null);
+    });
+  }
+
   function mount() {
     // Remove any legacy hardcoded chrome a page might still carry (defensive —
     // converted pages ship none), then inject the canonical header/footer.
@@ -278,6 +351,7 @@
     document.body.appendChild(adSlot('footer'));
     document.body.appendChild(footer);
     startBrandSwing();
+    wireNavGroups();
     enhanceFooter();
 
     // Load the ad renderer once (it fills every [data-ad-slot] on the page).

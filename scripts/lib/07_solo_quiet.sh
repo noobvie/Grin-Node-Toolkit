@@ -26,6 +26,9 @@
 #   /usr/local/bin/grin-solo-quiet        self-contained pause/resume/enforce wrapper
 #   /etc/cron.d/grin-solo-quiet           pause + resume + @reboot enforce lines
 #   /opt/grin/logs/solo-quiet.log         action log
+#   /var/www/<stats>/data/quiet.json      schedule + live-state feed for the stats
+#                                         page banner — written by the wrapper on
+#                                         every action (skipped when no stats page)
 #
 # Sourced by 07_grin_mining_solo.sh (needs its colors/logging + the
 # STRATUM_PORT_* constants + _solo_pause). No shebang — this is a sourced lib.
@@ -87,6 +90,7 @@ CONF="$SQ_CONF"
 LOG="$SQ_LOG"
 PORT_MAINNET=$STRATUM_PORT_MAINNET
 PORT_TESTNET=$STRATUM_PORT_TESTNET
+WEB_DATA="/var/www/${STATS_BASENAME:-grin-solo-mining-stat}/data"
 
 SQ_ENABLED=0; SQ_PAUSE=""; SQ_RESUME=""; SQ_NETS="both"
 # shellcheck disable=SC1090
@@ -129,8 +133,26 @@ _unblock() {
     fi
 }
 
-_pause()  { local p; for p in \$(_ports); do _block "\$p"; done; _log "PAUSE  nets=\$SQ_NETS — stratum blocked (miners idle)"; }
-_resume() { local p; for p in \$(_ports); do _unblock "\$p"; done; _log "RESUME nets=\$SQ_NETS — stratum open"; }
+# Publish the schedule + live state for the stats page banner (data/quiet.json).
+# Written on EVERY action so the page tracks pause/resume within one poll cycle
+# and the UTC offset self-corrects across DST changes (cron re-runs at each window
+# edge). No stats page deployed → silently skipped. \$1 = live state: true|false.
+_status() {
+    [[ -d "\$WEB_DATA" ]] || return 0
+    local off sign oh om mins en
+    off=\$(date +%z)                       # e.g. +0700
+    sign=\${off:0:1}; oh=\${off:1:2}; om=\${off:3:2}
+    mins=\$(( 10#\$oh * 60 + 10#\$om )); [[ "\$sign" == "-" ]] && mins=\$(( -mins ))
+    en=false; [[ "\${SQ_ENABLED:-0}" == "1" ]] && en=true
+    printf '{"enabled":%s,"pause":"%s","resume":"%s","nets":"%s","tz":"%s","utc_offset_min":%s,"paused":%s,"updated":"%s"}\n' \
+        "\$en" "\${SQ_PAUSE:-}" "\${SQ_RESUME:-}" "\${SQ_NETS:-both}" "\$(date +%Z)" "\$mins" "\$1" "\$(_ts)" \
+        > "\$WEB_DATA/.quiet.json.tmp" 2>/dev/null || return 0
+    chmod 644 "\$WEB_DATA/.quiet.json.tmp" 2>/dev/null || true
+    mv -f "\$WEB_DATA/.quiet.json.tmp" "\$WEB_DATA/quiet.json" 2>/dev/null || true
+}
+
+_pause()  { local p; for p in \$(_ports); do _block "\$p"; done; _log "PAUSE  nets=\$SQ_NETS — stratum blocked (miners idle)"; _status true; }
+_resume() { local p; for p in \$(_ports); do _unblock "\$p"; done; _log "RESUME nets=\$SQ_NETS — stratum open"; _status false; }
 
 # Is 'now' inside [PAUSE,RESUME)?  HHMM compared as base-10 (leading zeros
 # stripped so 08:00 is not read as octal). Handles windows crossing midnight.
@@ -179,10 +201,12 @@ EOF
 
 sq_disable() {
     rm -f "$SQ_CRON"
-    # Clear any block left in place so miners are not stuck idle after disabling.
-    [[ -x "$SQ_WRAPPER" ]] && "$SQ_WRAPPER" resume >/dev/null 2>&1 || true
     SQ_ENABLED=0
     sq_save_conf
+    # Clear any block left in place so miners are not stuck idle after disabling.
+    # Conf is saved FIRST so the wrapper's stats-page publish (quiet.json) reports
+    # the schedule as off, not the pre-disable state.
+    [[ -x "$SQ_WRAPPER" ]] && "$SQ_WRAPPER" resume >/dev/null 2>&1 || true
     success "Quiet hours disabled — stratum reopened, schedule removed."
 }
 
@@ -246,11 +270,11 @@ quiet_hours_menu() {
         case "$c" in
             "") continue ;;
             1) sq_set_schedule || true; _solo_pause ;;
-            2) [[ -x "$SQ_WRAPPER" ]] || _sq_write_wrapper
+            2) _sq_write_wrapper   # always regenerate: cheap, and picks up new wrapper features on old installs
                "$SQ_WRAPPER" pause || true
                success "Stratum paused now — miners will idle. (Schedule re-asserts at the next window edge.)"
                _solo_pause ;;
-            3) [[ -x "$SQ_WRAPPER" ]] || _sq_write_wrapper
+            3) _sq_write_wrapper
                "$SQ_WRAPPER" resume || true
                success "Stratum reopened — miners will reconnect."
                _solo_pause ;;

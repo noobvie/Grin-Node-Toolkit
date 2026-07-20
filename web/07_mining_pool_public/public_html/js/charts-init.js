@@ -20,6 +20,19 @@
     return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   }
 
+  // Bucket-aware, UTC axis label for the durable trend charts (site-wide UTC rule): hour buckets
+  // show HH:MM, day-or-coarser buckets show "MMM D". All formatting is timeZone:'UTC'.
+  function fmtBucketLabel(unixSeconds, bucketSeconds) {
+    const d = new Date(unixSeconds * 1000);
+    if (bucketSeconds && bucketSeconds >= 86400) {
+      return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
+    }
+    return d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'UTC' });
+  }
+
+  // Plain integer formatter (for the miners-count trend y-axis / tooltips).
+  function fmtInt(v) { return Number(v || 0).toLocaleString('en-US'); }
+
   // Theme-aware accent: read the CSS custom property the themes set, fall back to a green.
   function accent() {
     try {
@@ -84,8 +97,9 @@
     return _charts[canvasId];
   }
 
-  // Generic vertical bar chart (e.g. per-worker hashrate). `labels` + `data` are parallel
-  // arrays. opts.valueFmt(v) formats the tooltip/y-axis (defaults to fmtGps for hashrate).
+  // Generic bar chart (e.g. per-worker hashrate). `labels` + `data` are parallel arrays.
+  // opts.valueFmt(v) formats the tooltip/value-axis (defaults to fmtGps for hashrate).
+  // opts.horizontal=true lays bars horizontally (value on x) — better for long category labels.
   // Returns the Chart instance, or null if Chart.js / the canvas is missing.
   function renderBarChart(canvasId, labels, data, opts) {
     opts = opts || {};
@@ -95,6 +109,7 @@
     data = Array.isArray(data) ? data.map(Number) : [];
     const col = accent();
     const valueFmt = typeof opts.valueFmt === 'function' ? opts.valueFmt : fmtGps;
+    const horizontal = !!opts.horizontal;
 
     if (_charts[canvasId]) {
       const ch = _charts[canvasId];
@@ -121,14 +136,20 @@
       options: {
         responsive: true,
         maintainAspectRatio: false,
+        indexAxis: horizontal ? 'y' : 'x',
         plugins: {
           legend: { display: false },
-          tooltip: { callbacks: { label: (ctx) => valueFmt(ctx.parsed.y) } }
+          tooltip: { callbacks: { label: (ctx) => valueFmt(horizontal ? ctx.parsed.x : ctx.parsed.y) } }
         },
-        scales: {
-          x: { grid: { display: false }, ticks: { maxRotation: 0, autoSkip: true } },
-          y: { beginAtZero: true, ticks: { callback: (v) => valueFmt(v) } }
-        }
+        scales: horizontal
+          ? {
+              x: { beginAtZero: true, ticks: { callback: (v) => valueFmt(v) } },
+              y: { grid: { display: false } }
+            }
+          : {
+              x: { grid: { display: false }, ticks: { maxRotation: 0, autoSkip: true } },
+              y: { beginAtZero: true, ticks: { callback: (v) => valueFmt(v) } }
+            }
       }
     });
     return _charts[canvasId];
@@ -180,5 +201,199 @@
     return _charts[canvasId];
   }
 
-  global.PoolCharts = { renderHashrateChart, renderBarChart, renderDoughnutChart, fmtGps };
+  // Generic area/line trend chart for the durable pool metrics. `series` = [{ t, v }] oldest→newest;
+  // opts.valueFmt formats the y-axis + tooltip (defaults to fmtGps), opts.bucketSeconds drives the
+  // UTC x-axis label granularity, opts.color overrides the theme accent. Returns the Chart instance
+  // or null if Chart.js / the canvas is missing.
+  function renderTrendLine(canvasId, series, opts) {
+    opts = opts || {};
+    const canvas = document.getElementById(canvasId);
+    if (!canvas || typeof global.Chart === 'undefined') return null;
+    series = Array.isArray(series) ? series : [];
+    const valueFmt = typeof opts.valueFmt === 'function' ? opts.valueFmt : fmtGps;
+    const labels = series.map(p => fmtBucketLabel(p.t, opts.bucketSeconds));
+    const data = series.map(p => Number(p.v) || 0);
+    const col = opts.color || accent();
+
+    if (_charts[canvasId]) {
+      const ch = _charts[canvasId];
+      ch.data.labels = labels;
+      ch.data.datasets[0].data = data;
+      ch.data.datasets[0].borderColor = col;
+      ch.data.datasets[0].backgroundColor = col + '22';
+      ch.options.plugins.tooltip.callbacks.label = (ctx) => valueFmt(ctx.parsed.y);
+      ch.options.scales.y.ticks.callback = (v) => valueFmt(v);
+      ch.update('none');
+      return ch;
+    }
+
+    _charts[canvasId] = new global.Chart(canvas.getContext('2d'), {
+      type: 'line',
+      data: {
+        labels,
+        datasets: [{
+          label: opts.label || 'Value',
+          data,
+          borderColor: col,
+          backgroundColor: col + '22',
+          borderWidth: 2,
+          pointRadius: 0,
+          pointHoverRadius: 3,
+          tension: 0.25,
+          fill: true
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { intersect: false, mode: 'index' },
+        plugins: {
+          legend: { display: false },
+          tooltip: { callbacks: { label: (ctx) => valueFmt(ctx.parsed.y) } }
+        },
+        scales: {
+          x: { ticks: { maxTicksLimit: 8, autoSkip: true }, grid: { display: false } },
+          y: { beginAtZero: true, ticks: { callback: (v) => valueFmt(v) } }
+        }
+      }
+    });
+    return _charts[canvasId];
+  }
+
+  // Fixed categorical palette for multi-series charts (per-region lines). Eight dark-surface
+  // steps validated (2026-07-17) against the pool panel background for adjacent-pair CVD
+  // separation, normal-vision separation, chroma and ≥3:1 contrast. Assign slots to entities
+  // in a FIXED order (e.g. region names sorted alphabetically), never by rank and never
+  // cycled past 8 — the public region UI is already capped at 8 regions.
+  var PALETTE = ['#3987e5', '#008300', '#d55181', '#c98500', '#199e70', '#d95926', '#9085e9', '#e66767'];
+
+  // Multi-series line chart on ONE shared y-axis (never dual-axis — two measures of different
+  // magnitude get two charts instead). `seriesList` = [{ label, points: [{t, v}], color }];
+  // series are aligned on the union of their timestamps, with nulls where a series has no
+  // bucket (gaps stay visible — an offline gateway shows a hole, not an interpolated line).
+  // A legend renders automatically for ≥2 series. opts: valueFmt, bucketSeconds, spanGaps.
+  function renderMultiTrendLine(canvasId, seriesList, opts) {
+    opts = opts || {};
+    const canvas = document.getElementById(canvasId);
+    if (!canvas || typeof global.Chart === 'undefined') return null;
+    seriesList = Array.isArray(seriesList) ? seriesList : [];
+    const valueFmt = typeof opts.valueFmt === 'function' ? opts.valueFmt : fmtGps;
+
+    // Union time grid, oldest→newest, so differently-gapped series stay x-aligned.
+    const tSet = new Set();
+    seriesList.forEach(function (s) {
+      (s.points || []).forEach(function (p) { tSet.add(p.t); });
+    });
+    const grid = [...tSet].sort(function (a, b) { return a - b; });
+    const labels = grid.map(function (t) { return fmtBucketLabel(t, opts.bucketSeconds); });
+
+    const mk = function (s, i) {
+      const c = s.color || PALETTE[i % PALETTE.length];
+      const byT = new Map((s.points || []).map(function (p) { return [p.t, Number(p.v) || 0]; }));
+      return {
+        label: s.label || ('Series ' + (i + 1)),
+        data: grid.map(function (t) { return byT.has(t) ? byT.get(t) : null; }),
+        borderColor: c,
+        backgroundColor: c + '22',
+        borderWidth: 2,
+        pointRadius: 0,
+        pointHoverRadius: 3,
+        tension: 0.25,
+        fill: false,
+        spanGaps: !!opts.spanGaps
+      };
+    };
+
+    if (_charts[canvasId]) {
+      const ch = _charts[canvasId];
+      ch.data.labels = labels;
+      ch.data.datasets = seriesList.map(mk);
+      ch.options.plugins.legend.display = seriesList.length > 1;
+      ch.options.plugins.tooltip.callbacks.label = function (ctx) {
+        return ctx.dataset.label + ': ' + valueFmt(ctx.parsed.y);
+      };
+      ch.options.scales.y.ticks.callback = function (v) { return valueFmt(v); };
+      ch.update('none');
+      return ch;
+    }
+
+    _charts[canvasId] = new global.Chart(canvas.getContext('2d'), {
+      type: 'line',
+      data: { labels, datasets: seriesList.map(mk) },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { intersect: false, mode: 'index' },
+        plugins: {
+          legend: { display: seriesList.length > 1, position: 'bottom', labels: { boxWidth: 12, padding: 12 } },
+          tooltip: { callbacks: { label: (ctx) => ctx.dataset.label + ': ' + valueFmt(ctx.parsed.y) } }
+        },
+        scales: {
+          x: { ticks: { maxTicksLimit: 8, autoSkip: true }, grid: { display: false } },
+          y: { beginAtZero: true, ticks: { callback: (v) => valueFmt(v) } }
+        }
+      }
+    });
+    return _charts[canvasId];
+  }
+
+  // Grouped (side-by-side) bar chart for multi-series buckets, e.g. earnings vs payout per period.
+  // `labels` = x categories; `datasets` = [{ label, data[], color }]; opts.valueFmt formats y-axis +
+  // tooltips (defaults to integer). Returns the Chart instance or null if unavailable.
+  function renderGroupedBarChart(canvasId, labels, datasets, opts) {
+    opts = opts || {};
+    const canvas = document.getElementById(canvasId);
+    if (!canvas || typeof global.Chart === 'undefined') return null;
+    labels = Array.isArray(labels) ? labels : [];
+    datasets = Array.isArray(datasets) ? datasets : [];
+    const valueFmt = typeof opts.valueFmt === 'function' ? opts.valueFmt : fmtInt;
+    const palette = [accent(), '#58a6ff', '#d29922', '#a371f7'];
+    const mk = (ds, i) => {
+      const c = ds.color || palette[i % palette.length];
+      return {
+        label: ds.label || ('Series ' + (i + 1)),
+        data: (ds.data || []).map(Number),
+        backgroundColor: c + 'cc',
+        borderColor: c,
+        borderWidth: 1,
+        borderRadius: 3,
+        maxBarThickness: 34
+      };
+    };
+
+    if (_charts[canvasId]) {
+      const ch = _charts[canvasId];
+      ch.data.labels = labels;
+      ch.data.datasets = datasets.map(mk);
+      ch.options.plugins.tooltip.callbacks.label = (ctx) => ctx.dataset.label + ': ' + valueFmt(ctx.parsed.y);
+      ch.options.scales.y.ticks.callback = (v) => valueFmt(v);
+      ch.update('none');
+      return ch;
+    }
+
+    _charts[canvasId] = new global.Chart(canvas.getContext('2d'), {
+      type: 'bar',
+      data: { labels, datasets: datasets.map(mk) },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { intersect: false, mode: 'index' },
+        plugins: {
+          legend: { display: true, position: 'bottom', labels: { boxWidth: 12, padding: 12 } },
+          tooltip: { callbacks: { label: (ctx) => ctx.dataset.label + ': ' + valueFmt(ctx.parsed.y) } }
+        },
+        scales: {
+          x: { grid: { display: false }, ticks: { maxRotation: 0, autoSkip: true, maxTicksLimit: 12 } },
+          y: { beginAtZero: true, ticks: { callback: (v) => valueFmt(v) } }
+        }
+      }
+    });
+    return _charts[canvasId];
+  }
+
+  global.PoolCharts = {
+    renderHashrateChart, renderBarChart, renderDoughnutChart,
+    renderTrendLine, renderMultiTrendLine, renderGroupedBarChart,
+    fmtGps, fmtInt, PALETTE
+  };
 })(window);

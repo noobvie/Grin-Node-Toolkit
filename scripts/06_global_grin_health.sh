@@ -150,25 +150,14 @@ install_nginx_certbot() {
     [[ "$confirm" == "0" ]] && return
     [[ "${confirm,,}" == "n" ]] && return
 
-    info "Updating package lists..."
-    apt-get update -qq
-
-    if [[ $nginx_ok -eq 0 ]]; then
-        info "Installing nginx..."
-        apt-get install -y nginx -qq
-        systemctl enable nginx --quiet
-        systemctl start  nginx  || true
-        success "Nginx installed."
-    fi
-
-    if [[ $certbot_ok -eq 0 ]]; then
-        info "Installing certbot + nginx plugin..."
-        apt-get install -y certbot python3-certbot-nginx -qq
-        success "Certbot installed."
+    # nginx + certbot (+ apache2 eviction) delegated to the shared lib.
+    if [[ $nginx_ok -eq 0 || $certbot_ok -eq 0 ]]; then
+        nginx_install_with_certbot || { error "nginx/certbot install failed — see above."; pause; return; }
     fi
 
     if [[ $whois_ok -eq 0 ]]; then
         info "Installing whois..."
+        apt-get update -qq
         apt-get install -y whois -qq
         success "Whois installed."
     fi
@@ -555,6 +544,12 @@ install_stats() {
     # Shared header (markup spliced via nginx SSI) + its CSS
     cp "$WEB_SRC/_header.html"   "$WWW_DIR/_header.html"
     cp "$WEB_SRC/_header.css"    "$WWW_DIR/_header.css"
+    # Static assets (Twemoji country-flag font → fixes flag emoji in
+    # Chrome/Edge on Windows, which otherwise show the bare ISO letters)
+    if [[ -d "$WEB_SRC/assets" ]]; then
+        mkdir -p "$WWW_DIR/assets"
+        cp -r "$WEB_SRC/assets/." "$WWW_DIR/assets/"
+    fi
 
     # Optional Google Analytics
     echo ""
@@ -948,7 +943,7 @@ setup_nginx_stats() {
     echo -e "\n${BOLD}${CYAN}── Setup Nginx — Network Stats ──${RESET}\n"
 
     command -v nginx &>/dev/null || { die "nginx not installed. Run option N first."; return; }
-    command -v certbot &>/dev/null || apt-get install -y certbot python3-certbot-nginx -qq
+    nginx_ensure_certbot
 
     _prompt_nginx_domain stats_domain "Stats subdomain (e.g. stats.yourdomain.com)" || return
 
@@ -1693,7 +1688,7 @@ setup_nginx_explorer() {
     echo ""
 
     command -v nginx &>/dev/null || { die "nginx not installed. Run option N first."; return; }
-    command -v certbot &>/dev/null || apt-get install -y certbot python3-certbot-nginx -qq
+    nginx_ensure_certbot
 
     _prompt_nginx_domain expl_domain "Enter domain or sub-domain for the explorer (e.g. explorer.yourdomain.com) [0 = cancel]" || return
 

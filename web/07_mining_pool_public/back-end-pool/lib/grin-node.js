@@ -151,6 +151,19 @@ class GrinNodeAPI {
     }
   }
 
+  // Owner API get_connected_peers — the live inbound+outbound peer list. Each entry carries
+  // { addr: "ip:port", direction, version, ... }. Used by the network-map peer-snapshot
+  // collector, which geolocates each peer's IP to a COUNTRY ONLY (lib/geoip) and discards the
+  // address. Returns [] on any error / unreachable node (caller treats empty as "skip").
+  async getConnectedPeers() {
+    try {
+      const result = await this._ownerRpcCall('get_connected_peers', []);
+      return Array.isArray(result) ? result : [];
+    } catch (_) {
+      return [];
+    }
+  }
+
   async _ownerRpcCall(method, params = []) {
     return this._rpcCall(`${this.nodeUrl}/v2/owner`, method, params, this.secret);
   }

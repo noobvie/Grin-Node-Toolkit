@@ -4,6 +4,7 @@ const express = require('express');
 const path = require('path');
 const { initDb, getDb, ensureLocalRegion, seedDefaultRegions } = require('./lib/db');
 const { loadConfig, mergeDbSettings } = require('./lib/config');
+const { computeReconciliation, auditWalletSends, probeWalletIdentity, adoptWalletIdentity } = require('./lib/reconciliation');
 const PoolSettings = require('./lib/pool-settings');
 const AssetManager = require('./lib/asset-manager');
 const WalletAPI = require('./lib/wallet');
@@ -18,11 +19,14 @@ const IncentivesManager = require('./lib/incentives');
 const LotteryManager = require('./lib/lottery');
 const WalletTor = require('./lib/wallet-tor');
 const WithdrawalScheduler = require('./lib/withdrawal-scheduler');
+const NostrPayoutBridge = require('./lib/nostr-payout');
 const AuthManager = require('./lib/auth');
 const Captcha = require('./lib/captcha');
 const { requireAuth, requireAdmin, requireFreshAuth } = require('./lib/auth-middleware');
 const HashrateTracker = require('./lib/hashrate-tracker');
-const { verifyIpProof, auditOwnerProof, normalizeIp } = require('./lib/owner-proof');
+const { getHorizon: getLedgerRollupHorizon } = require('./lib/ledger-rollup');
+const { verifyOwnerProof, auditOwnerProof, normalizeIp, migrateOwnerProofHashes } = require('./lib/owner-proof');
+const geoip = require('./lib/geoip');
 const PoolstatsReporter = require('./lib/poolstats-reporter');
 const RateLimiter = require('./lib/rate-limiter');
 const IpFilter = require('./lib/ip-filter');
@@ -38,15 +42,62 @@ const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
 const net = require('net');
-const { execSync } = require('child_process');
+const { execSync, execFile } = require('child_process');
+
+// ─── grin-gateway-ctl bridge (design §13.2/§13.3) ────────────────────────────
+// The root helper is the SINGLE WireGuard mutation path (peer add/remove +
+// region_ports persistence), shared with the CLI (Script 07 menu W). The
+// de-rooted grin-pool-manager reaches it via a one-line scoped sudoers entry
+// (pool_deroot); `sudo -n` never blocks on a password prompt. argv array only —
+// never a shell string — and the helper re-validates every input itself.
+const GWCTL = '/usr/local/bin/grin-gateway-ctl';
+function gwctl(args) {
+  return new Promise((resolve, reject) => {
+    const net = (config && config.network === 'testnet') ? 'testnet' : 'mainnet';
+    execFile('sudo', ['-n', GWCTL, ...args, '--net', net],
+      { timeout: 10000, maxBuffer: 1024 * 1024 }, (err, stdout) => {
+        let out = null;
+        try { out = JSON.parse(String(stdout || '').trim()); } catch (e) { /* not JSON */ }
+        if (out && out.ok) return resolve(out);
+        reject(new Error((out && out.error) ? out.error : (err ? err.message : 'gateway helper failed')));
+      });
+  });
+}
+
+// Per-region tunnel liveness for the health endpoint: helper `status` first
+// (works de-rooted, adds rx/tx), silent fallback to the direct root-only read
+// below so an old install (no helper/sudoers yet) or a gateway-only box
+// degrades to share-recency status exactly as before (§13.9 step 5).
+async function readGatewayStatus() {
+  try {
+    const st = await gwctl(['status']);
+    const out = {};
+    for (const g of st.gateways || []) {
+      // Include peers that have NEVER handshaked (handshake 0/absent). Skipping them made
+      // an all-gateways-down pool return {} — indistinguishable from "wg unavailable" — so
+      // /api/pool/stats/regions could never mark anything offline and every dead gateway
+      // showed as idle (blue) instead of red. A present-but-zero entry keeps the map
+      // non-empty ("wg data IS available") while regionStatus() treats the 0 handshake as
+      // stale → offline. The wg-less fallback below already behaves this way (`wg show
+      // latest-handshakes` prints 0 for never-handshaked peers).
+      if (!g.region) continue;
+      out[g.region] = { handshake: g.handshake || 0, rx_bytes: g.rx_bytes, tx_bytes: g.tx_bytes };
+    }
+    return out;
+  } catch (e) {
+    return readWgHandshakes();
+  }
+}
 
 // Best-effort WireGuard handshake per region (Model C gateway liveness). Maps each peer's
 // public key → region using the "# region: <name>" comment the installer writes above every
 // [Peer] in the central wg config, then reads `wg show ... latest-handshakes`. The iface is
 // per-network to match the bash installer (07 pool menu W): mainnet "wg-grinpool", testnet
 // "wg-grinpool-tn".
-// Returns { <region>: { handshake: <unix_ts> } }; {} on ANY failure (wg not installed, not the
-// central box, no permission, dev/Windows) so callers fall back to the share-activity signal.
+// Legacy/fallback path — requires root (reads /etc/wireguard); readGatewayStatus() is the
+// primary. Returns { <region>: { handshake: <unix_ts> } }; {} on ANY failure (wg not
+// installed, not the central box, no permission, dev/Windows) so callers fall back to the
+// share-activity signal.
 function readWgHandshakes() {
   const out = {};
   try {
@@ -67,6 +118,20 @@ function readWgHandshakes() {
     }
   } catch (e) { /* wg unavailable — share-activity signal is used instead */ }
   return out;
+}
+
+// Cached wrapper for the public /api/pool/stats/regions path: that endpoint is unauthenticated
+// and polled every ~60s by every open dashboard, so calling readGatewayStatus() (which spawns
+// grin-gateway-ctl / `wg show`) on every hit is a needless per-request subprocess. A 15s TTL
+// collapses a burst of public hits to at most one handshake read every 15s while staying fresh
+// enough for a liveness pill. The admin endpoint keeps its own uncached read (low call volume).
+let _gwStatusCache = { ts: 0, data: {} };
+async function cachedGatewayStatus() {
+  const now = Date.now();
+  if (now - _gwStatusCache.ts < 15000) return _gwStatusCache.data;
+  const data = await readGatewayStatus();
+  _gwStatusCache = { ts: now, data };
+  return data;
 }
 
 const app = express();
@@ -148,6 +213,7 @@ let incentivesManager = null;
 let lotteryManager = null;
 let walletTor = null;
 let withdrawalScheduler = null;
+let nostrBridge = null;
 let authManager = null;
 // Self-hosted login CAPTCHA (in-memory, single process). No external dependency.
 const loginCaptcha = new Captcha();
@@ -265,6 +331,9 @@ async function initializePool() {
     // its verifiable draw seed.
     incentivesManager = new IncentivesManager(config);
     adsManager = new AdsManager(config);
+    try {
+      if (adsManager.seedSelfPromo()) console.log(`[${new Date().toISOString()}] [ads] seeded 4 starter self-promo banners (header/sidebar×2/footer)`);
+    } catch (e) { console.error(`[ads] self-promo seed failed: ${e.message}`); }
     pagesManager = new PagesManager(config);
     postsManager = new PostsManager(config);
 
@@ -303,6 +372,7 @@ async function initializePool() {
     }, 24 * 3600 * 1000);
     setInterval(() => {
       lotteryManager.runDueDraws().catch((e) => console.error(`[Lottery] scheduler tick failed: ${e.message}`));
+      lotteryManager.runDueCampaigns().catch((e) => console.error(`[Campaigns] scheduler tick failed: ${e.message}`));
     }, 3600 * 1000);
 
     walletTor = new WalletTor(config);
@@ -312,11 +382,80 @@ async function initializePool() {
     withdrawalScheduler = new WithdrawalScheduler(config, wallet);
     withdrawalScheduler.start();
 
+    // Goblin/Nostr payout bridge (design §15). OFF unless nostr_payouts_enabled. Constructed
+    // and started here so a missing nostr-tools install (feature enabled but `npm install`
+    // not yet run) logs a warning and leaves the feature disabled instead of crashing boot.
+    // The scheduler and bridge are cross-wired post-construction: the scheduler sends via the
+    // bridge; the bridge hands incoming response slatepacks back to the scheduler to finalize.
+    if (config.nostr_payouts_enabled) {
+      try {
+        nostrBridge = new NostrPayoutBridge(config, db);
+        nostrBridge.setResponseHandler((wid, addr, slatepack, senderPub) =>
+          withdrawalScheduler.finalizeNostrWithdrawal(wid, addr, slatepack, senderPub));
+        withdrawalScheduler.nostrBridge = nostrBridge;
+        await nostrBridge.start();
+      } catch (e) {
+        console.error(`[nostr-payout] disabled — ${e.message}`);
+        nostrBridge = null;
+        withdrawalScheduler.nostrBridge = null;
+      }
+    }
+
+    // One-time background upgrade of legacy plaintext ownership-proof IPs to salted hashes
+    // (owner-proof.js v1$ format). Non-blocking; verify accepts both forms while it runs.
+    migrateOwnerProofHashes(db);
+
     authManager = new AuthManager(config);
     console.log(`[${new Date().toISOString()}] Authentication manager initialized`);
 
     hashrateTracker = new HashrateTracker(config, minerManager);
+    // Hourly network-hashrate sample for the durable rollup (homepage pool-vs-network trend).
+    // Reuses the block monitor's node client; the tracker calls this at most once per completed
+    // hour and stores NULL when the node is unreachable. 60s-target formula, same constants as
+    // /api/pool/effort: GPS = diff × 42 / 60 / 16384 (CLAUDE.md hashrate formula).
+    hashrateTracker.networkGpsProvider = async () => {
+      if (!blockMonitor || !blockMonitor.grinNode || !blockManager) return null;
+      const tip = await blockMonitor.grinNode.getTip();
+      const diff = await blockManager._fetchNetworkDifficulty(tip.height);
+      return (diff && diff > 0) ? (diff * 42) / 60 / 16384 : null;
+    };
     hashrateTracker.start();
+
+    // Network-map peer snapshot (feeds /api/network/peers). Every 20 min, read the node's
+    // connected peers, geolocate each to a COUNTRY ONLY (lib/geoip), and upsert network_peers
+    // keyed by a hash of the IP — the raw address is never stored. Rows accumulate a rolling
+    // country picture; the endpoint windows them (default 30d). No-op when the node is
+    // unreachable or geoip-lite is not installed (available() false → lookups return null).
+    const snapshotNetworkPeers = async () => {
+      try {
+        if (!geoip.available() || !blockMonitor || !blockMonitor.grinNode) return;
+        const peers = await blockMonitor.grinNode.getConnectedPeers();
+        if (!peers.length) return;
+        const net = /^main/i.test(config.network || '') ? 'main' : 'test';
+        const now = Math.floor(Date.now() / 1000);
+        const rows = [];
+        for (const p of peers) {
+          const addr = String(p.addr || p.address || '');
+          const ip = addr.replace(/:\d+$/, '').replace(/^\[|\]$/g, '');  // strip :port / [v6]
+          const geo = geoip.lookupCountry(ip);
+          if (!geo) continue;
+          const key = crypto.createHash('sha256').update(ip).digest('hex').slice(0, 32);
+          rows.push({ key, cc: geo.cc, name: geo.name });
+        }
+        if (!rows.length) return;
+        const upsert = db.prepare(`
+          INSERT INTO network_peers (peer_key, country_code, country, net, first_seen, last_seen)
+          VALUES (?, ?, ?, ?, ?, ?)
+          ON CONFLICT(peer_key) DO UPDATE SET
+            country_code = excluded.country_code, country = excluded.country,
+            net = excluded.net, last_seen = excluded.last_seen`);
+        db.transaction((rs) => { for (const r of rs) upsert.run(r.key, r.cc, r.name, net, now, now); })(rows);
+      } catch (e) {
+        console.error(`[network-map] peer snapshot failed: ${e.message}`);
+      }
+    };
+    setInterval(snapshotNetworkPeers, 20 * 60 * 1000);
+    setTimeout(snapshotNetworkPeers, 30 * 1000); // first snapshot shortly after boot
 
     // Initialize poolstats reporter (push to miningpoolstats.stream)
     poolstatsReporter = new PoolstatsReporter(config, {
@@ -565,21 +704,31 @@ function setupRoutes() {
     'GET /api/public/branding': 'White-label config (name, theme, SEO, social, footer links).',
     'GET /api/public/price': 'Cached GRIN price (USD + BTC).',
     'GET /api/public/status': 'Coarse pool/node/wallet health (no balances).',
-    'GET /api/public/ads': 'Active operator ads by placement.',
+    'GET /api/public/ads': 'Active operator ads by placement (+ rotation interval).',
+    'POST /api/public/ads/event': 'Ad impression/click beacon — aggregate counters only, no visitor data.',
     'GET /api/public/lottery/winners': 'Fortune-board winner history (truncated addresses).',
+    'GET /api/public/lottery/stats': 'Fortune-board aggregates: total prizes/winners/draws, Pot A/B split, monthly series.',
     'GET /api/public/endpoints': 'This API reference (machine-readable).',
     'GET /api/config/pool-info': 'Network, pool fee %, minimum withdrawal.',
     'GET /api/pool/stats': 'Live pool stats: hashrate, miners, blocks, share quality.',
     'GET /api/pool/stats/regions': 'Per-region stratum endpoints + live status.',
     'GET /api/pool/blocks': 'Pool-found blocks (paginated: limit, offset, status).',
-    'GET /api/pool/effort': 'Current round effort, recent luck, time since last block.',
+    'GET /api/pool/blocks/history': 'Durable block series: luck, per-period counts, status, reward (?range=week|month|year|all).',
+    'GET /api/pool/effort': 'Pool network share, recent luck, round effort, time since last block.',
     'GET /api/pool/hashrate/history': 'Pool hashrate time-series (?hours=).',
+    'GET /api/pool/metrics/history': 'Durable pool trend series: hashrate, miners, earnings, payout, network hashrate (?range=day|week|month|year|all).',
+    'GET /api/pool/metrics/history/regions': 'Per-region miners/hashrate trend series (?range=day|week|month|year|all).',
+    'GET /api/pool/payments/history': 'Durable payments & transparency series: payouts, reward split, giveaways, donations, fee + lifetime totals (?range=day|week|month|year|all).',
+    'GET /api/pool/donors': 'Donor wall: per-address lifetime donations to the prize pool, first/last donation date, current donate-tag %.',
     'GET /api/pool/status': 'Coarse service status strip.',
-    'GET /api/account/:addr': 'Account summary: balance, paid, min payout, effort.',
+    'GET /api/account/:addr': 'Account summary: balance, paid, pending payout, effort.',
     'GET /api/account/:addr/workers': 'Per-worker (rig) hashrate + share quality.',
     'GET /api/account/:addr/hashrate/history': 'Account hashrate time-series (?hours=).',
-    'POST /api/account/:addr/withdraw': 'Request a payout (Tor or Slatepack); IP-proof gated.',
-    'POST /api/account/:addr/min-payout': 'Set this address’s personal payout threshold.',
+    'POST /api/account/:addr/withdraw': 'Request a payout (Tor, Slatepack, or Nostr/Goblin); ownership-gated (recent mining IP or stratum password).',
+    'POST /api/account/:addr/nostr-destination': 'Register/replace the Goblin username for Nostr payouts; ownership-gated; starts a security cooldown.',
+    'DELETE /api/account/:addr/nostr-destination': 'Remove the registered Goblin payout destination; ownership-gated.',
+    'GET /api/account/:addr/balance/log': 'Address ledger (?direction=in|out, ?days=, ?format=csv).',
+    'GET /api/account/:addr/earnings': 'Credited earnings per period (1h/24h/7d/30d) + 30d in/out totals.',
   };
   app.get('/api/public/endpoints',
     rateLimiter.middleware('public'),
@@ -629,6 +778,26 @@ function setupRoutes() {
         res.json({ success: true, data: lotteryManager.winnerHistory(limit, offset) });
       } catch (err) {
         res.status(500).json({ error: 'Failed to load winners' });
+      }
+    }
+  );
+
+  // Aggregate fortune-board stats (headline tiles + charts). Covers all history, unlike the
+  // paginated winners feed above. Empty payload when incentives are disabled.
+  app.get('/api/public/lottery/stats',
+    rateLimiter.middleware('public'),
+    (req, res) => {
+      try {
+        if (!incentivesManager || !incentivesManager.enabled()) {
+          return res.json({
+            success: true,
+            data: { total_prizes_grin: 0, total_winners: 0, unique_winners: 0, total_draws: 0, by_pot: [], by_event: [], monthly: [] },
+          });
+        }
+        res.setHeader('Cache-Control', 'public, max-age=60');
+        res.json({ success: true, data: lotteryManager.stats() });
+      } catch (err) {
+        res.status(500).json({ error: 'Failed to load lottery stats' });
       }
     }
   );
@@ -751,10 +920,12 @@ function setupRoutes() {
     }
   );
 
-  // Public pages included in the sitemap (extension-less; nginx resolves $uri.html).
+  // Public pages included in the sitemap. Each URL MUST match that page's own
+  // <link rel="canonical"> exactly (all use the .html form) — a sitemap URL that
+  // differs from the page's canonical makes Google crawl a non-canonical variant.
   // pool-info + connect were merged into the dashboard (index) 2026-06; the dashboard
   // carries the #connect + #info anchors, so only / is listed for that content.
-  const SITEMAP_PATHS = ['/', '/miners-stats', '/blocks.html', '/fortune-board', '/donate', '/blog.html', '/api-docs.html'];
+  const SITEMAP_PATHS = ['/', '/miners-stats.html', '/blocks.html', '/network-map.html', '/payment-history.html', '/fortune-board.html', '/donate.html', '/blog.html', '/api-docs.html'];
 
   app.get('/sitemap.xml',
     rateLimiter.middleware('public'),
@@ -1027,7 +1198,7 @@ function setupRoutes() {
     }
   });
 
-  app.post('/api/auth/refresh', (req, res) => {
+  app.post('/api/auth/refresh', rateLimiter.middleware('auth'), (req, res) => {
     // FIX #4: Get refresh token from cookie instead of body
     const refreshToken = req.cookies.refresh_token || req.body.refresh_token;
     if (!refreshToken) {
@@ -1147,7 +1318,7 @@ function setupRoutes() {
   });
 
   // FIX: Add logout endpoint
-  app.post('/api/auth/logout', (req, res) => {
+  app.post('/api/auth/logout', rateLimiter.middleware('auth'), (req, res) => {
     // Server-side revoke: bump the user's token_version so the issued refresh token
     // can't be replayed after logout (clearing the cookie alone only affects this browser).
     authManager.revokeByRefreshToken(req.cookies?.refresh_token || req.body?.refresh_token);
@@ -1157,7 +1328,9 @@ function setupRoutes() {
   });
 
 
-  app.post('/api/auth/change-password', requireAuth(authManager), (req, res) => {
+  // Rate-limited like login: old_password is verified here, so an unthrottled endpoint would
+  // let a hijacked live session brute-force the account password.
+  app.post('/api/auth/change-password', rateLimiter.middleware('auth'), requireAuth(authManager), (req, res) => {
     const { old_password, new_password } = req.body;
     authManager.changePassword(req.user.user_id, old_password, new_password)
       .then(result => {
@@ -1173,7 +1346,7 @@ function setupRoutes() {
       });
   });
 
-  app.get('/api/config/pool-info', (req, res) => {
+  app.get('/api/config/pool-info', rateLimiter.middleware('public'), (req, res) => {
     res.json({
       network: config.network,
       pool_fee_percent: config.pool_fee_percent,
@@ -1210,7 +1383,7 @@ function setupRoutes() {
     }
   });
 
-  app.get('/api/pool/stats', (req, res) => {
+  app.get('/api/pool/stats', rateLimiter.middleware('public'), (req, res) => {
     try {
       const blockStats = blockManager.getPoolStats();
       const minerCount = minerManager.getActiveMinersCount();
@@ -1273,7 +1446,7 @@ function setupRoutes() {
   // Public pool-found blocks, newest first. Paginated (limit+offset) with an optional status
   // filter for the public blocks explorer. Response stays a plain array (back-compat with the
   // homepage recent-blocks table); callers detect the last page when fewer than `limit` return.
-  app.get('/api/pool/blocks', (req, res) => {
+  app.get('/api/pool/blocks', rateLimiter.middleware('public'), (req, res) => {
     try {
       const limit = Math.min(Math.max(parseInt(req.query.limit || 50, 10), 1), 500);
       const offset = Math.max(parseInt(req.query.offset || 0, 10), 0);
@@ -1291,7 +1464,21 @@ function setupRoutes() {
     }
   });
 
-  app.get('/api/account/:addr/shares', (req, res) => {
+  // Durable block-history series for the public blocks.html deck (one fetch → all four charts:
+  // luck trend, blocks-per-period columns, status doughnut, cumulative reward). Blocks are never
+  // pruned, so ?range can be arbitrarily long. See BlockManager.getBlocksHistory.
+  app.get('/api/pool/blocks/history', rateLimiter.middleware('public'), (req, res) => {
+    try {
+      const allowed = ['week', 'month', 'year', 'all'];
+      const range = allowed.includes(req.query.range) ? req.query.range : 'month';
+      res.json(blockManager ? blockManager.getBlocksHistory(range)
+                            : { range, bucket_seconds: null, points: [], luck: [], status: { confirmed: 0, immature: 0, orphaned: 0 } });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.get('/api/account/:addr/shares', rateLimiter.middleware('public'), (req, res) => {
     try {
       const { addr } = req.params;
       const limit = Math.min(parseInt(req.query.limit || 100), 500);
@@ -1367,6 +1554,9 @@ function setupRoutes() {
   app.post('/api/admin/withdrawals/:id/retry', freshAdmin, (req, res) => {
     try {
       const id = parseInt(req.params.id, 10);
+      if (getPayoutControl().frozen) {
+        return res.status(409).json({ error: 'payouts are frozen — resume payouts before retrying' });
+      }
       const w = db.prepare('SELECT * FROM withdrawals WHERE id = ?').get(id);
       if (!w) return res.status(404).json({ error: 'withdrawal not found' });
       if (!['retry_scheduled', 'tor_failed'].includes(w.status)) {
@@ -1454,70 +1644,104 @@ function setupRoutes() {
     }
   });
 
+  // Read the payout kill-switch state (single row id=1; absence = not frozen).
+  const getPayoutControl = () => {
+    const row = db.prepare('SELECT frozen, reason, frozen_by, frozen_at FROM payout_control WHERE id = 1').get();
+    return {
+      frozen: !!(row && row.frozen),
+      reason: row ? row.reason : null,
+      frozen_by: row ? row.frozen_by : null,
+      frozen_at: row ? row.frozen_at : null,
+    };
+  };
+
   // ─── WALLET ↔ LEDGER RECONCILIATION (Admin) ────────────────────────
-  // The single most important custodial safety check: does the on-chain wallet actually hold
-  // at least what the pool owes its miners? Compares wallet balance (source of truth for coins)
-  // against the SQLite ledger (source of truth for who is owed what). A negative coverage gap =
-  // the pool is under-funded; a balance_locked vs pending-withdrawals mismatch = a stuck ledger.
+  // The pool's custodial money statement (coverage, flow, buckets, integrity invariant). The
+  // full computation lives in lib/reconciliation.js so the AlertMonitor money detectors and
+  // this endpoint share one source of truth. Forces a fresh wallet→node scan (slow) — the admin
+  // page polls it on its own 3-min cadence, never the fast liveness loops.
   app.get('/api/admin/reconciliation', secureAdmin, async (req, res) => {
     try {
-      const ledger = db.prepare(
-        `SELECT COALESCE(SUM(balance),0) AS sum_balance, COALESCE(SUM(balance_locked),0) AS sum_locked,
-                COUNT(*) AS accounts FROM miner_accounts`
-      ).get();
-      const pending = db.prepare(
-        `SELECT COALESCE(SUM(amount),0) AS amt, COUNT(*) AS cnt FROM withdrawals
-         WHERE status IN ('tor_checking','tor_sending','retry_scheduled')`
-      ).get();
-      const prizePool = (() => { try { return incentivesManager ? incentivesManager.prizePoolBalance() : 0; } catch (e) { return 0; } })();
-
-      // Wallet (on-chain) balance — same path as /api/admin/health/wallet.
-      let walletReachable = false;
-      let walletBalance = { total: 0, available: 0, locked: 0 };
-      if (wallet && wallet.getBalance) {
-        try {
-          // refresh=true: custodial coverage check needs fresh on-chain numbers (runs at
-          // a relaxed 3-min cadence from the admin page, not on every dashboard poll).
-          const summary = await wallet.getBalance(true);
-          const info = Array.isArray(summary) ? summary[1] : (summary || {});
-          walletBalance = {
-            total: Number(info.total || 0) / 1e9,
-            available: Number(info.amount_currently_spendable || 0) / 1e9,
-            locked: Number(info.amount_locked || 0) / 1e9,
-          };
-          walletReachable = true;
-        } catch (e) { walletReachable = false; }
-      }
-
-      const owed = ledger.sum_balance + ledger.sum_locked; // total the pool owes (incl. prize bucket)
-      const coverage_gap = parseFloat((walletBalance.total - owed).toFixed(9)); // ≥0 healthy, <0 under-funded
-      const locked_drift = parseFloat((ledger.sum_locked - pending.amt).toFixed(9)); // should be ~0
-      const TOL = 1e-6;
-
-      res.json({
-        success: true,
-        timestamp: new Date().toISOString(),
-        wallet: { reachable: walletReachable, ...walletBalance },
-        ledger: {
-          spendable_owed: parseFloat(ledger.sum_balance.toFixed(9)),
-          locked_owed: parseFloat(ledger.sum_locked.toFixed(9)),
-          total_owed: parseFloat(owed.toFixed(9)),
-          accounts: ledger.accounts,
-          prize_pool: parseFloat((prizePool || 0).toFixed(9)),
-        },
-        pending_withdrawals: { count: pending.cnt, amount: parseFloat(pending.amt.toFixed(9)) },
-        checks: {
-          // Wallet covers what miners are owed.
-          coverage_gap,
-          coverage_ok: !walletReachable ? null : coverage_gap >= -TOL,
-          // Locked ledger equals in-flight withdrawal amounts.
-          locked_drift,
-          locked_ok: Math.abs(locked_drift) <= TOL,
-        },
-      });
+      const recon = await computeReconciliation(db, wallet, true);
+      res.json({ success: true, ...recon, payout_control: getPayoutControl() });
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
+  });
+
+  // ─── PAYOUT KILL-SWITCH (Admin) ────────────────────────────────────
+  // Emergency freeze of the withdrawal scheduler. Set automatically by AlertMonitor on a critical
+  // money trip (coverage shortfall / integrity drift / wallet drain) and manually here. Reading is
+  // secureAdmin (surfaced on the Payments page); mutating is freshAdmin (step-up — it's money-control).
+  app.get('/api/admin/payouts/control', secureAdmin, (req, res) => {
+    try { res.json({ success: true, ...getPayoutControl() }); }
+    catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.post('/api/admin/payouts/freeze', freshAdmin, (req, res) => {
+    try {
+      const reason = (req.body && req.body.reason || '').toString().slice(0, 500) || 'manual admin freeze';
+      if (withdrawalScheduler && withdrawalScheduler.freeze) withdrawalScheduler.freeze(reason, `admin:${req.user.username}`);
+      db.prepare(`INSERT INTO admin_audit_log (admin_id, action, target_type, target_id, details, ip)
+                  VALUES (?, 'payouts_freeze', 'payouts', 'payouts', ?, ?)`)
+        .run(req.user.user_id, JSON.stringify({ reason }), req.ip);
+      res.json({ success: true, ...getPayoutControl() });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.post('/api/admin/payouts/resume', freshAdmin, (req, res) => {
+    try {
+      if (withdrawalScheduler && withdrawalScheduler.resume) withdrawalScheduler.resume(`admin:${req.user.username}`);
+      db.prepare(`INSERT INTO admin_audit_log (admin_id, action, target_type, target_id, details, ip)
+                  VALUES (?, 'payouts_resume', 'payouts', 'payouts', ?, ?)`)
+        .run(req.user.user_id, JSON.stringify({}), req.ip);
+      res.json({ success: true, ...getPayoutControl() });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  // Wallet-send audit — matches the wallet's OWN confirmed outbound sends against the pool's
+  // withdrawals. Any unmatched send is an out-of-band `grin-wallet send` (invisible to the
+  // ledger). Forces a fresh wallet scan (slow) → the Payments page polls on the 3-min cadence.
+  app.get('/api/admin/payouts/wallet-audit', secureAdmin, async (req, res) => {
+    try {
+      const audit = await auditWalletSends(db, wallet, {});
+      res.json({ success: true, ...audit });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ─── WALLET-IDENTITY GUARD + SWITCH WIZARD (Admin) ─────────────────
+  // The pool pins its wallet's slatepack address (index 0, seed-deterministic). AlertMonitor
+  // freezes payouts if the live wallet stops matching. A PLANNED switch re-adopts the new wallet
+  // here so the guard doesn't fight an intentional migration. Reading is secureAdmin (forces a
+  // fresh owner-API call → the wizard polls it); adopting moves the trust anchor → freshAdmin.
+  app.get('/api/admin/wallet/identity', secureAdmin, async (req, res) => {
+    try {
+      const id = await probeWalletIdentity(db, wallet);
+      res.json({ success: true, ...id });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Adopt the CURRENTLY-connected wallet as the pool's identity anchor (step 4 of the switch
+  // wizard). Resolves the wallet_identity_changed alert; does NOT auto-resume payouts (resume is a
+  // deliberate separate step). Refuses if the wallet is unreachable — you must not adopt a phantom.
+  app.post('/api/admin/wallet/adopt-identity', freshAdmin, async (req, res) => {
+    try {
+      const id = await probeWalletIdentity(db, wallet);
+      if (!id.reachable) return res.status(503).json({ error: 'wallet unreachable — cannot adopt an unconfirmed wallet identity' });
+      const prev = id.firstRun ? null : id.expected;
+      adoptWalletIdentity(db, id.live, `admin:${req.user.username}`);
+      if (alertMonitor && typeof alertMonitor.resolveAlert === 'function') {
+        await alertMonitor.resolveAlert('wallet_identity_changed');
+      }
+      db.prepare(`INSERT INTO admin_audit_log (admin_id, action, target_type, target_id, details, ip)
+                  VALUES (?, 'wallet_adopt_identity', 'wallet', 'wallet', ?, ?)`)
+        .run(req.user.user_id, JSON.stringify({ previous: prev, adopted: id.live }), req.ip);
+      res.json({ success: true, adopted: id.live, previous: prev });
+    } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
   // ─── ADS (Admin CRUD) ──────────────────────────────────────────────
@@ -1525,7 +1749,7 @@ function setupRoutes() {
   // placement. secureAdmin (not freshAdmin) — ads are not money/destructive of funds.
   app.get('/api/admin/ads', secureAdmin, (req, res) => {
     try {
-      res.json({ ads: adsManager.list(req.query.placement), placements: AdsManager.PLACEMENTS });
+      res.json({ ads: adsManager.list(req.query.placement), placements: AdsManager.PLACEMENTS, rotate_ms: adsManager.getRotateMs() });
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
@@ -1551,15 +1775,33 @@ function setupRoutes() {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
+  // Rotation interval for the public renderer (stored in pool_config, clamped 2–60 s).
+  app.post('/api/admin/ads-config', secureAdmin, (req, res) => {
+    try {
+      res.json({ rotate_ms: adsManager.setRotateMs((req.body || {}).rotate_ms) });
+    } catch (err) { res.status(400).json({ error: err.message }); }
+  });
+
   // ─── ADS (Public) ──────────────────────────────────────────────────
   // Active, in-window ads for the public site. `?placement=header` returns one slot;
-  // no param returns all slots keyed by placement. Only render-relevant fields are exposed.
+  // no param returns all slots keyed by placement. Only render-relevant fields are
+  // exposed. Cached 60 s (every visitor on every page hits this) — ad edits take up
+  // to a minute to appear publicly.
   app.get('/api/public/ads', rateLimiter.middleware('public'), (req, res) => {
     try {
+      res.set('Cache-Control', 'public, max-age=60');
       const p = req.query.placement;
-      if (p) return res.json({ placement: p, ads: adsManager.publicByPlacement(p) });
-      res.json({ ads: adsManager.publicAll() });
+      if (p) return res.json({ placement: p, ads: adsManager.publicByPlacement(p), rotate_ms: adsManager.getRotateMs() });
+      res.json({ ads: adsManager.publicAll(), rotate_ms: adsManager.getRotateMs() });
     } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  // Impression/click beacon — coarse per-ad counters only (no per-visitor rows, no
+  // IPs). Ids are sanitised + capped in recordEvents; always 204 so the client never
+  // retries or logs (ads are non-essential).
+  app.post('/api/public/ads/event', rateLimiter.middleware('public'), (req, res) => {
+    try { adsManager.recordEvents(req.body || {}); } catch (err) { /* counters only — never fail the page */ }
+    res.status(204).end();
   });
 
   // ─── MEDIA UPLOAD (Admin) ──────────────────────────────────────────
@@ -1647,7 +1889,8 @@ function setupRoutes() {
       const where = status ? 'WHERE status = ?' : '';
       const args = status ? [status, limit, offset] : [limit, offset];
       const rows = db.prepare(
-        `SELECT id, height, hash, nonce, reward, status, found_by, found_at, confirmed_at, created_at
+        `SELECT id, height, hash, nonce, reward, status, found_by, found_at, confirmed_at, created_at,
+                network_difficulty, round_shares
          FROM blocks ${where} ORDER BY height DESC LIMIT ? OFFSET ?`
       ).all(...args);
 
@@ -1740,7 +1983,7 @@ function setupRoutes() {
     }
   });
 
-  app.get('/api/account/:addr/balance', (req, res) => {
+  app.get('/api/account/:addr/balance', rateLimiter.middleware('public'), (req, res) => {
     try {
       const { addr } = req.params;
 
@@ -1764,7 +2007,7 @@ function setupRoutes() {
     }
   });
 
-  app.get('/api/pool/miners', (req, res) => {
+  app.get('/api/pool/miners', rateLimiter.middleware('public'), (req, res) => {
     try {
       const limit = Math.min(parseInt(req.query.limit || 50), 500);
       const stmt = db.prepare(`
@@ -1778,7 +2021,32 @@ function setupRoutes() {
     }
   });
 
-  app.get('/api/pool/payments', (req, res) => {
+  // Top block finders over a recent window (default 30 days) — the "lucky miners" leaderboard.
+  // Blocks are never pruned (only raw shares are), so this window can be arbitrarily long.
+  // Orphaned blocks don't count as a find; total_reward sums the landed rewards.
+  app.get('/api/pool/top-block-finders', rateLimiter.middleware('public'), (req, res) => {
+    try {
+      const limit = Math.min(parseInt(req.query.limit || 500, 10) || 500, 1000);
+      const days = Math.min(parseInt(req.query.days || 30, 10) || 30, 3650);
+      const cutoff = Math.floor(Date.now() / 1000) - days * 86400;
+      const rows = db.prepare(`
+        SELECT found_by AS grin_address,
+               COUNT(*) AS blocks_found,
+               COALESCE(SUM(reward), 0) AS total_reward,
+               MAX(found_at) AS last_found_at
+        FROM blocks
+        WHERE status != 'orphaned' AND found_at > ?
+        GROUP BY found_by
+        ORDER BY blocks_found DESC, total_reward DESC
+        LIMIT ?
+      `).all(cutoff, limit);
+      res.json({ days, top_finders: rows });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.get('/api/pool/payments', rateLimiter.middleware('public'), (req, res) => {
     try {
       const limit = Math.min(parseInt(req.query.limit || 100), 500);
       const stmt = db.prepare(`
@@ -1800,38 +2068,58 @@ function setupRoutes() {
       const { addr } = req.params;
       const acct = db.prepare(
         `SELECT grin_address, balance, balance_locked, is_online, last_seen_at, created_at,
-                min_payout, last_ip, prev_ip
+                last_ip, prev_ip, last_pass_hash, prev_pass_hash,
+                nostr_username, nostr_npub, nostr_registered_at
          FROM miner_accounts WHERE grin_address = ?`
       ).get(addr);
       if (!acct) return res.status(404).json({ error: 'Account not found' });
 
-      const paid = db.prepare(
-        `SELECT COALESCE(SUM(amount), 0) AS total FROM withdrawals
+      // Lifetime withdrawals actually paid (confirmed only): total amount + how many.
+      const paidAgg = db.prepare(
+        `SELECT COUNT(*) AS cnt, COALESCE(SUM(amount), 0) AS total FROM withdrawals
          WHERE grin_address = ? AND status = 'confirmed'`
-      ).get(addr).total;
+      ).get(addr);
+      const paid = paidAgg.total;
 
+      // Pending set must match the scheduler's one-pending-per-address cap (which includes
+      // slatepack_pending) — otherwise the UI shows 0 pending while a new request would 429.
+      // The full row is exposed so the account page can show status/next-retry. (No public
+      // cancel — parked payouts self-recover: Tor reverses after max retries, slatepack on TTL.)
+      const pendingRow = db.prepare(
+        `SELECT id, amount, method, status, retry_count, next_retry_at, created_at
+         FROM withdrawals
+         WHERE grin_address = ? AND status IN ('tor_checking','tor_sending','retry_scheduled','slatepack_pending')
+         ORDER BY created_at DESC LIMIT 1`
+      ).get(addr);
       const pending = db.prepare(
         `SELECT COUNT(*) AS c FROM withdrawals
-         WHERE grin_address = ? AND status IN ('tor_checking','tor_sending','retry_scheduled')`
+         WHERE grin_address = ? AND status IN ('tor_checking','tor_sending','retry_scheduled','slatepack_pending')`
       ).get(addr).c;
 
       const shareAgg = db.prepare(
         `SELECT COUNT(*) AS count, MAX(created_at) AS last_share_at FROM shares WHERE grin_address = ?`
       ).get(addr);
 
+      // Blocks this address found (block-finder attribution) — orphaned ones didn't stick,
+      // so they don't count. Vanity stat only; rewards are PPLNS, not finder-take-all.
+      const blocksFound = db.prepare(
+        `SELECT COUNT(*) AS c FROM blocks WHERE found_by = ? AND status != 'orphaned'`
+      ).get(addr).c;
+
       const hr = hashrateTracker.getMinerHashrate(addr, 60) || {};
 
-      // Effective payout threshold: the account override (min_payout) if set, else the pool default.
-      // last/prev IP are NOT exposed (they back the ownership gate) — only whether one is on record.
-      const effectiveMin = (acct.min_payout != null) ? acct.min_payout : config.min_withdrawal;
-
+      // Proof values are NOT exposed (they back the ownership gate; hashed at rest anyway) —
+      // only whether one is on record, so the UI can hint which proof kinds will work.
       res.json({
         grin_address: acct.grin_address,
         balance: acct.balance,
         balance_locked: acct.balance_locked,
         total: acct.balance + acct.balance_locked,
         total_paid: paid,
+        payouts_count: paidAgg.cnt || 0,
+        blocks_found: blocksFound,
         pending_withdrawals: pending,
+        pending_withdrawal: pendingRow || null,
         is_online: !!acct.is_online,
         last_seen_at: acct.last_seen_at || null,
         created_at: acct.created_at,
@@ -1841,9 +2129,23 @@ function setupRoutes() {
         },
         hashrate_gps: parseFloat(((hr.avg_hashrate || 0)).toFixed(6)),
         min_withdrawal: config.min_withdrawal,
-        min_payout: acct.min_payout != null ? acct.min_payout : null,
-        effective_min_payout: effectiveMin,
-        has_recorded_ip: !!(acct.last_ip || acct.prev_ip)
+        // Boolean only — the freeze REASON stays admin-side (it can reveal wallet trouble).
+        payouts_frozen: withdrawalScheduler.isFrozen(),
+        has_recorded_ip: !!(acct.last_ip || acct.prev_ip),
+        has_recorded_pass: !!(acct.last_pass_hash || acct.prev_pass_hash),
+        // Goblin/Nostr payout rail (design §15). Destination npub is NOT exposed (it's the
+        // pinned secret-ish anchor); only the display username + cooldown state, so the UI
+        // can show "pending / active at <UTC>". active = past the security cooldown.
+        nostr_payouts_enabled: !!(nostrBridge && nostrBridge.isEnabled()),
+        nostr_destination: acct.nostr_npub ? {
+          username: acct.nostr_username,
+          registered_at: acct.nostr_registered_at,
+          active_at: acct.nostr_registered_at +
+            (config.nostr_destination_cooldown_hours !== undefined ? config.nostr_destination_cooldown_hours : 48) * 3600,
+          active: Math.floor(Date.now() / 1000) >=
+            acct.nostr_registered_at +
+            (config.nostr_destination_cooldown_hours !== undefined ? config.nostr_destination_cooldown_hours : 48) * 3600,
+        } : null
       });
     } catch (err) {
       res.status(500).json({ error: err.message });
@@ -1877,45 +2179,10 @@ function setupRoutes() {
     }
   });
 
-  // Set a per-miner payout threshold (address-as-identity, IP-gated). Anti-griefing: a random
-  // visitor must not be able to stall someone's payouts by raising their threshold. Proof = one
-  // of the address's last-2 mining source IPs. Range: cannot drop below the pool minimum.
-  app.post('/api/account/:addr/min-payout', rateLimiter.middleware('public'), (req, res) => {
-    const { addr } = req.params;
-    const reqIp = normalizeIp(req.ip);
-    try {
-      const acct = db.prepare('SELECT grin_address FROM miner_accounts WHERE grin_address = ?').get(addr);
-      if (!acct) return res.status(404).json({ error: 'Account not found' });
-
-      const ipProof = (req.body && req.body.ip_proof) || '';
-      const proof = verifyIpProof(db, addr, ipProof);
-      if (!proof.ok) {
-        auditOwnerProof(db, { action: 'set_min_payout', grinAddress: addr, ip: reqIp, ok: false, details: { reason: proof.reason } });
-        return res.status(403).json({ error: 'Ownership proof failed', reason: proof.reason });
-      }
-
-      let val = req.body && req.body.min_payout;
-      // null/empty → clear the override (revert to pool default).
-      if (val === null || val === undefined || val === '') {
-        db.prepare('UPDATE miner_accounts SET min_payout = NULL, updated_at = unixepoch() WHERE grin_address = ?').run(addr);
-        auditOwnerProof(db, { action: 'set_min_payout', grinAddress: addr, ip: reqIp, ok: true, details: { min_payout: null } });
-        return res.json({ success: true, min_payout: null, effective_min_payout: config.min_withdrawal });
-      }
-
-      val = Number(val);
-      const poolMin = Number(config.min_withdrawal) || 0;
-      if (!Number.isFinite(val) || val < poolMin) {
-        return res.status(400).json({ error: `min_payout must be a number ≥ pool minimum (${poolMin})` });
-      }
-      if (val > 1e6) return res.status(400).json({ error: 'min_payout too large' });
-
-      db.prepare('UPDATE miner_accounts SET min_payout = ?, updated_at = unixepoch() WHERE grin_address = ?').run(val, addr);
-      auditOwnerProof(db, { action: 'set_min_payout', grinAddress: addr, ip: reqIp, ok: true, details: { min_payout: val } });
-      res.json({ success: true, min_payout: val, effective_min_payout: val });
-    } catch (err) {
-      res.status(500).json({ error: err.message });
-    }
-  });
+  // REMOVED (2026-07-17): POST /api/account/:addr/min-payout — the per-account payout threshold
+  // was an auto-payout-era relic. Withdrawals are miner-initiated with an explicit amount, so
+  // only the pool-wide config.min_withdrawal floor applies (enforced in withdrawal-scheduler).
+  // The miner_accounts.min_payout column stays in the schema but is read by nothing.
 
   // Pool-wide hashrate time-series (SUM across addresses per bucket) for the dashboard chart.
   app.get('/api/pool/hashrate/history', rateLimiter.middleware('public'), (req, res) => {
@@ -1928,9 +2195,95 @@ function setupRoutes() {
     }
   });
 
-  // Round effort / luck / time-since-last-block — pool-trust signals.
-  //  · round_effort_pct = Σ(share diff since last block) / current per-block network diff × 100
-  //  · luck_100_pct     = mean over last 100 blocks of (network_difficulty / round_shares) × 100
+  // Durable pool-wide trend series (hashrate · miners · earnings · payout) from pool_metrics_hourly.
+  // One fetch feeds all three miners-stats.html charts; ?range selects span + bucket size.
+  app.get('/api/pool/metrics/history', rateLimiter.middleware('public'), (req, res) => {
+    try {
+      const allowed = ['day', 'week', 'month', 'year', 'all'];
+      const range = allowed.includes(req.query.range) ? req.query.range : 'day';
+      res.json(hashrateTracker.getMetricsHistory(range));
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Per-region (gateway) companion to /api/pool/metrics/history: durable miners/hashrate trend
+  // per stratum region, for the "miners by gateway" chart. Same ?range vocabulary.
+  app.get('/api/pool/metrics/history/regions', rateLimiter.middleware('public'), (req, res) => {
+    try {
+      const allowed = ['day', 'week', 'month', 'year', 'all'];
+      const range = allowed.includes(req.query.range) ? req.query.range : 'day';
+      res.json(hashrateTracker.getRegionMetricsHistory(range));
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Durable payments & transparency series (payouts · reward split · giveaways · donations · fee)
+  // from the never-pruned withdrawals + balance_log tables. One fetch feeds the whole
+  // payment-history.html ledger deck; ?range selects span + bucket size (totals stay lifetime).
+  app.get('/api/pool/payments/history', rateLimiter.middleware('public'), (req, res) => {
+    try {
+      const allowed = ['day', 'week', 'month', 'year', 'all'];
+      const range = allowed.includes(req.query.range) ? req.query.range : 'month';
+      res.json(hashrateTracker.getPaymentsHistory(range));
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Donor wall — every address that has donated payout slices (donateN worker tag) to the
+  // prize pool, with lifetime total and first/last donation date. Composite read per the
+  // ledger-rollup horizon contract: rollup(day < H) + raw(created_at >= H), so totals stay
+  // exact forever while raw rows age out. first/last dates from rolled days are UTC-day
+  // aligned — day precision is all the public wall displays anyway. Current donate-% comes
+  // from miner_incentives (0 = paused; past donors stay on the wall).
+  app.get('/api/pool/donors', rateLimiter.middleware('public'), (req, res) => {
+    try {
+      const H = getLedgerRollupHorizon(db); // 0 = no rollup yet → whole ledger is raw
+      const donors = db.prepare(`
+        SELECT d.grin_address AS address,
+               d.total_donated, d.first_donated_at, d.last_donated_at, d.donation_count,
+               COALESCE(mi.donation_percent, 0) AS current_percent
+        FROM (
+          SELECT grin_address,
+                 SUM(amt) AS total_donated,
+                 MIN(t)   AS first_donated_at,
+                 MAX(t)   AS last_donated_at,
+                 SUM(cnt) AS donation_count
+          FROM (
+            SELECT grin_address, total_amount AS amt, day AS t, event_count AS cnt
+            FROM balance_log_daily
+            WHERE event_type = 'debit' AND reference_type = 'donation' AND day < ?
+            UNION ALL
+            SELECT grin_address, amount, created_at, 1
+            FROM balance_log
+            WHERE event_type = 'debit' AND reference_type = 'donation' AND created_at >= ?
+          )
+          GROUP BY grin_address
+        ) d
+        LEFT JOIN miner_incentives mi ON mi.grin_address = d.grin_address
+        WHERE d.total_donated > 0
+        ORDER BY d.total_donated DESC
+        LIMIT 100
+      `).all(H, H);
+
+      const totals = {
+        donor_count: donors.length,
+        active_donors: donors.filter((r) => r.current_percent > 0).length,
+        total_donated: parseFloat(donors.reduce((a, r) => a + r.total_donated, 0).toFixed(9))
+      };
+      donors.forEach((r) => { r.total_donated = parseFloat(r.total_donated.toFixed(9)); });
+      res.json({ donors, totals });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Network share / luck / round effort / time-since-last-block — pool-trust signals.
+  //  · network_share_pct = pool 1h GPS / live network GPS × 100 (how often this pool wins)
+  //  · round_effort_pct  = Σ(share diff since last block) / current per-block network diff × 100
+  //  · luck_100_pct      = mean over last 100 blocks of (network_difficulty / round_shares) × 100
   //    (>100% = luckier than expected; uses captured per-block columns, NULL rows skipped)
   // Current network difficulty is cached ~60s to avoid hammering the node.
   app.get('/api/pool/effort', rateLimiter.middleware('public'), async (req, res) => {
@@ -1959,6 +2312,17 @@ function setupRoutes() {
       const roundEffortPct = (netDiff && netDiff > 0)
         ? parseFloat(((roundDiff / netDiff) * 100).toFixed(2)) : null;
 
+      // Pool's share of the live network hashrate — how often this pool wins blocks.
+      // Both hashrates use the same C32 constants, so the ratio is the honest share.
+      // Network GPS uses the 60s block target (no per-block timestamp here):
+      //   GPS = diff × 42 / 60 / 16384   (see CLAUDE.md hashrate formula)
+      const networkGps = (netDiff && netDiff > 0)
+        ? (netDiff * 42) / 60 / 16384 : null;
+      let poolGps = null;
+      try { poolGps = hashrateTracker.getHashrateStats().pool_hashrate_1h_gps || 0; } catch (_) { /* null */ }
+      const networkSharePct = (networkGps && networkGps > 0 && poolGps != null)
+        ? parseFloat(((poolGps / networkGps) * 100).toFixed(2)) : null;
+
       const luckRows = db.prepare(
         `SELECT network_difficulty AS nd, round_shares AS rs FROM blocks
          WHERE network_difficulty IS NOT NULL AND round_shares > 0
@@ -1976,6 +2340,8 @@ function setupRoutes() {
         round_shares: parseFloat(roundDiff.toFixed(6)),
         network_difficulty: netDiff,
         round_effort_pct: roundEffortPct,
+        network_hashrate_gps: networkGps != null ? parseFloat(networkGps.toFixed(6)) : null,
+        network_share_pct: networkSharePct,
         luck_100_pct: luckPct,
         luck_sample: luckRows.length
       });
@@ -1986,18 +2352,148 @@ function setupRoutes() {
 
   // Append-only ledger for an address (every balance/locked change). No auth — the
   // ledger only exposes the address's own money movements, and the address is identity.
+  // Filters: ?direction=in|out splits the ledger by money flow (in = credits + payout
+  // reversals returned to balance; out = payout debits + donations + orphan clawbacks;
+  // 'lock' events are neutral — the pending payout, surfaced separately — and only appear
+  // in the unfiltered view). ?days=30|90|365 bounds the window (default: all history).
+  // ?format=csv streams the filtered window as a CSV download (row-capped, rate-limited).
+  const LEDGER_DIRECTION_SQL = {
+    in: `(event_type = 'credit' OR (event_type = 'reversal' AND reference_type = 'withdrawal'))`,
+    out: `(event_type = 'debit' OR (event_type = 'reversal' AND reference_type != 'withdrawal'))`
+  };
   app.get('/api/account/:addr/balance/log', rateLimiter.middleware('public'), (req, res) => {
     try {
       const { addr } = req.params;
+      const direction = LEDGER_DIRECTION_SQL[req.query.direction] ? req.query.direction : null;
+      const days = parseInt(req.query.days || 0);
+      const cutoff = (days > 0) ? Math.floor(Date.now() / 1000) - Math.min(days, 3650) * 86400 : 0;
+      const where = `grin_address = ? AND created_at >= ?` +
+        (direction ? ` AND ${LEDGER_DIRECTION_SQL[direction]}` : '');
+
+      if (req.query.format === 'csv') {
+        // Same dedicated export throttle as the withdrawal-history CSV (anti download-spam).
+        const gate = rateLimiter.peek('export', req);
+        if (!gate.allowed) return rateLimiter.sendLimited(res, gate);
+        rateLimiter.consume('export', req);
+
+        const CSV_MAX_ROWS = 50000;
+        const rows = db.prepare(
+          `SELECT event_type, reference_type, reference_id, amount, balance_after, created_at
+           FROM balance_log WHERE ${where}
+           ORDER BY created_at DESC, id DESC LIMIT ${CSV_MAX_ROWS}`
+        ).all(addr, cutoff);
+        const esc = (v) => `"${String(v == null ? '' : v).replace(/"/g, '""')}"`;
+        const lines = ['created_at_utc,event_type,reference_type,reference_id,amount,balance_after'];
+        for (const r of rows) {
+          lines.push([
+            new Date(r.created_at * 1000).toISOString(),
+            esc(r.event_type), esc(r.reference_type), r.reference_id,
+            r.amount, r.balance_after
+          ].join(','));
+        }
+        const tag = direction || 'all';
+        res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+        res.setHeader('Content-Disposition',
+          `attachment; filename="pool-ledger-${tag}-${addr.slice(0, 12)}-${days > 0 ? days + 'd' : 'all'}.csv"`);
+        return res.send(lines.join('\n') + '\n');
+      }
+
       const limit = Math.min(parseInt(req.query.limit || 50), 500);
       const offset = parseInt(req.query.offset || 0);
+      const total = db.prepare(`SELECT COUNT(*) AS c FROM balance_log WHERE ${where}`).get(addr, cutoff).c;
       const rows = db.prepare(
         `SELECT event_type, amount, balance_before, balance_after, locked_before, locked_after,
                 reference_type, reference_id, created_at
-         FROM balance_log WHERE grin_address = ?
+         FROM balance_log WHERE ${where}
+         ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?`
+      ).all(addr, cutoff, limit, offset);
+      res.json({ grin_address: addr, direction, total, count: rows.length, log: rows });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Withdrawal (payout) history for an address — sourced from the `withdrawals` table, which
+  // (unlike balance_log, whose raw rows are pruned after ~60 days) is kept forever, so this is
+  // the durable record a miner can export for accounting. Payout-only: no donations or orphan
+  // clawbacks. Public like the rest of the account page (the address is identity). ?format=csv
+  // streams the full all-time history (row-capped, rate-limited); no ?days window by design.
+  app.get('/api/account/:addr/withdrawals', rateLimiter.middleware('public'), (req, res) => {
+    try {
+      const { addr } = req.params;
+
+      if (req.query.format === 'csv') {
+        // Tight, dedicated throttle on the all-time bulk export (separate from the loose
+        // `public` bucket) — one-click use is fine, download-spam is cut off after a few hits.
+        const gate = rateLimiter.peek('export', req);
+        if (!gate.allowed) return rateLimiter.sendLimited(res, gate);
+        rateLimiter.consume('export', req);
+
+        const CSV_MAX_ROWS = 50000;
+        const rows = db.prepare(
+          `SELECT id, amount, fee, method, status, created_at, confirmed_at, kernel_excess
+           FROM withdrawals WHERE grin_address = ?
+           ORDER BY created_at DESC, id DESC LIMIT ${CSV_MAX_ROWS}`
+        ).all(addr);
+        const esc = (v) => `"${String(v == null ? '' : v).replace(/"/g, '""')}"`;
+        const lines = ['id,requested_at_utc,confirmed_at_utc,method,status,amount,fee,kernel_excess'];
+        for (const r of rows) {
+          lines.push([
+            r.id,
+            new Date(r.created_at * 1000).toISOString(),
+            r.confirmed_at ? new Date(r.confirmed_at * 1000).toISOString() : '',
+            esc(r.method), esc(r.status), r.amount, r.fee, esc(r.kernel_excess)
+          ].join(','));
+        }
+        res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+        res.setHeader('Content-Disposition',
+          `attachment; filename="pool-withdrawals-${addr.slice(0, 12)}-all.csv"`);
+        return res.send(lines.join('\n') + '\n');
+      }
+
+      const limit = Math.min(parseInt(req.query.limit || 20), 200);
+      const offset = parseInt(req.query.offset || 0);
+      const total = db.prepare(
+        `SELECT COUNT(*) AS c FROM withdrawals WHERE grin_address = ?`
+      ).get(addr).c;
+      const rows = db.prepare(
+        `SELECT id, amount, fee, method, status, created_at, confirmed_at, kernel_excess
+         FROM withdrawals WHERE grin_address = ?
          ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?`
       ).all(addr, limit, offset);
-      res.json({ grin_address: addr, count: rows.length, log: rows });
+      res.json({ grin_address: addr, total, count: rows.length, withdrawals: rows });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Credited earnings summed per period (block rewards + bonuses/giveaways), plus the 30-day
+  // outflow total — drives the account page's earnings table and the ledger Σ titles. All
+  // periods work regardless of retention: balance_log is never pruned.
+  app.get('/api/account/:addr/earnings', rateLimiter.middleware('public'), (req, res) => {
+    try {
+      const { addr } = req.params;
+      const now = Math.floor(Date.now() / 1000);
+      // Earnings = true credits only. A payout reversal is "money in" for the ledger card but
+      // NOT earnings — counting it would inflate the table every time a payout is cancelled.
+      const sums = db.prepare(
+        `SELECT
+           COALESCE(SUM(CASE WHEN created_at > ? THEN amount END), 0) AS h1,
+           COALESCE(SUM(CASE WHEN created_at > ? THEN amount END), 0) AS h24,
+           COALESCE(SUM(CASE WHEN created_at > ? THEN amount END), 0) AS d7,
+           COALESCE(SUM(CASE WHEN created_at > ? THEN amount END), 0) AS d30
+         FROM balance_log
+         WHERE grin_address = ? AND event_type = 'credit'`
+      ).get(now - 3600, now - 86400, now - 7 * 86400, now - 30 * 86400, addr);
+      const in30 = db.prepare(
+        `SELECT COALESCE(SUM(amount), 0) AS s FROM balance_log
+         WHERE grin_address = ? AND created_at > ? AND ${LEDGER_DIRECTION_SQL.in}`
+      ).get(addr, now - 30 * 86400).s;
+      const out30 = db.prepare(
+        `SELECT COALESCE(SUM(amount), 0) AS s FROM balance_log
+         WHERE grin_address = ? AND created_at > ? AND ${LEDGER_DIRECTION_SQL.out}`
+      ).get(addr, now - 30 * 86400).s;
+      res.json({ grin_address: addr, periods: sums, in_30d: in30, out_30d: out30 });
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
@@ -2021,34 +2517,89 @@ function setupRoutes() {
     }
   });
 
-  // Miner-initiated withdrawal (address-as-identity). Two rails:
-  //  · tor (default) — zero-interaction; payout always goes back to the requesting address via
-  //    its Tor listener, so there is no theft vector even without auth (it only moves an
-  //    address's own balance to itself). No IP gate.
-  //  · slatepack — interactive (no Tor). Emits a slate ENCRYPTED to the requesting address, so
-  //    only that wallet can decrypt + receive (no theft). Gated by an IP-proof (one of the
-  //    address's last-2 mining IPs) purely to throttle who can trigger it.
-  // Rate-limited; CAS balance lock + 1-pending-per-address cap live in the scheduler.
+  // Miner-initiated withdrawal (address-as-identity). Two rails, BOTH ownership-gated
+  // (operator decision 2026-07-17 — "every money action goes behind the gate"): even though
+  // neither rail can steal (Tor pays only to the address's own wallet; a slatepack is encrypted
+  // to the address), an ungated trigger let anyone reading the public leaderboard force payouts
+  // for other people's addresses — burning pool-paid network fees, consuming hot-wallet outputs
+  // and force-moving coins the owner didn't ask to move. Proof = a recent mining IP (v4/v6) OR
+  // the rig's stratum password (lib/owner-proof.js; single `proof` field, legacy `ip_proof`
+  // still accepted). Rate-limited; CAS balance lock + 1-pending-per-address cap in the scheduler.
   app.post('/api/account/:addr/withdraw', rateLimiter.middleware('public'), async (req, res) => {
     try {
       const { addr } = req.params;
       const method = (req.body && req.body.method) || 'tor';
+      const reqIp = normalizeIp(req.ip);
+      const submitted = (req.body && (req.body.proof || req.body.ip_proof)) || '';
+
+      const proof = await verifyOwnerProof(db, addr, submitted);
+      if (!proof.ok) {
+        auditOwnerProof(db, { action: `withdraw_${method}`, grinAddress: addr, ip: reqIp, ok: false, details: { reason: proof.reason } });
+        return res.status(403).json({ error: 'Ownership proof failed', reason: proof.reason });
+      }
 
       if (method === 'tor') {
+        // Pre-flight reachability gate (operator toggle, default ON). Refuse up front — BEFORE
+        // any balance lock or cooldown — if the miner's wallet listener isn't answering over Tor
+        // right now, so the funds never get locked into a doomed retry ladder. Only a CONFIDENT
+        // offline (online === false) blocks; online === null (probe couldn't run) falls through
+        // and lets grin-wallet be the authority at send, so a pool box without a working probe
+        // never blocks every Tor payout.
+        if (config.tor_preflight_gate !== false) {
+          let reach = { online: null };
+          try { reach = await walletTor.probeToronlineStatus(addr); } catch (_) { reach = { online: null }; }
+          if (reach.online === false) {
+            auditOwnerProof(db, { action: 'withdraw_tor', grinAddress: addr, ip: reqIp, ok: false, details: { reason: 'tor_unreachable', probe: reach.reason } });
+            return res.status(409).json({
+              error: 'Your wallet is not reachable over Tor right now. Start your wallet listener and try again, or withdraw via Slatepack (which does not need your wallet online).',
+              reason: reach.reason || 'tor_unreachable',
+              tor_online: false,
+              suggest: 'slatepack'
+            });
+          }
+        }
         const result = withdrawalScheduler.createWithdrawal(addr, req.body && req.body.amount, method);
+        auditOwnerProof(db, { action: 'withdraw_tor', grinAddress: addr, ip: reqIp, ok: true, details: { withdrawal_id: result.withdrawal_id, amount: result.amount, proof_method: proof.method } });
         return res.json({ success: true, withdrawal_id: result.withdrawal_id, status: 'tor_checking' });
       }
 
       if (method === 'slatepack') {
-        const reqIp = normalizeIp(req.ip);
-        const proof = verifyIpProof(db, addr, (req.body && req.body.ip_proof) || '');
-        if (!proof.ok) {
-          auditOwnerProof(db, { action: 'slatepack_withdraw', grinAddress: addr, ip: reqIp, ok: false, details: { reason: proof.reason } });
-          return res.status(403).json({ error: 'Ownership proof failed', reason: proof.reason });
-        }
         const result = await withdrawalScheduler.createSlatepackWithdrawal(addr, req.body && req.body.amount);
-        auditOwnerProof(db, { action: 'slatepack_withdraw', grinAddress: addr, ip: reqIp, ok: true, details: { withdrawal_id: result.withdrawal_id, amount: result.amount } });
+        auditOwnerProof(db, { action: 'withdraw_slatepack', grinAddress: addr, ip: reqIp, ok: true, details: { withdrawal_id: result.withdrawal_id, amount: result.amount, proof_method: proof.method } });
         return res.json({ success: true, withdrawal_id: result.withdrawal_id, amount: result.amount, status: 'slatepack_pending', slatepack: result.slatepack });
+      }
+
+      if (method === 'nostr') {
+        if (!nostrBridge || !nostrBridge.isEnabled()) return res.status(503).json({ error: 'nostr payouts are not enabled on this pool' });
+        // The destination must be REGISTERED, aged past the cooldown, and still resolve to the
+        // SAME npub it was pinned to (TOFU) — this is what stops a passed ownership gate from
+        // redirecting funds to an attacker's account (design §15.2). All three are re-checked
+        // here at send time, never trusting a username supplied in the request body.
+        const dest = db.prepare(
+          'SELECT nostr_username, nostr_npub, nostr_registered_at FROM miner_accounts WHERE grin_address = ?'
+        ).get(addr);
+        if (!dest || !dest.nostr_npub || !dest.nostr_registered_at) {
+          return res.status(409).json({ error: 'no Goblin destination registered — add one first' });
+        }
+        const cooldownH = config.nostr_destination_cooldown_hours !== undefined ? config.nostr_destination_cooldown_hours : 48;
+        const activeAt = dest.nostr_registered_at + cooldownH * 3600;
+        const nowS = Math.floor(Date.now() / 1000);
+        if (nowS < activeAt) {
+          return res.status(409).json({ error: 'Goblin destination is still in its security cooldown', active_at: activeAt });
+        }
+        // TOFU re-pin: re-resolve the stored username and refuse if the npub changed.
+        let resolved;
+        try { resolved = await nostrBridge.resolveDestination(dest.nostr_username); }
+        catch (e) { return res.status(e.code && e.code < 600 ? e.code : 502).json({ error: `could not verify Goblin destination: ${e.message}` }); }
+        if (resolved.pubHex !== dest.nostr_npub) {
+          auditOwnerProof(db, { action: 'withdraw_nostr', grinAddress: addr, ip: reqIp, ok: false, details: { reason: 'npub_changed', username: dest.nostr_username } });
+          return res.status(409).json({ error: 'your Goblin username now points to a different key — re-register the destination (a fresh cooldown applies)' });
+        }
+        const result = await withdrawalScheduler.createNostrWithdrawal(
+          addr, req.body && req.body.amount, dest.nostr_npub, `Grin mining payout — ${dest.nostr_username}`
+        );
+        auditOwnerProof(db, { action: 'withdraw_nostr', grinAddress: addr, ip: reqIp, ok: true, details: { withdrawal_id: result.withdrawal_id, amount: result.amount, proof_method: proof.method, username: dest.nostr_username } });
+        return res.json({ success: true, withdrawal_id: result.withdrawal_id, amount: result.amount, status: 'slatepack_pending' });
       }
 
       return res.status(400).json({ error: `unsupported withdrawal method: ${method}` });
@@ -2058,12 +2609,12 @@ function setupRoutes() {
   });
 
   // Complete a slatepack withdrawal: the miner pastes back the RESPONSE slatepack their wallet
-  // produced after `receive`. IP-gated like the trigger. The pool finalizes + broadcasts.
+  // produced after `receive`. Ownership-gated like the trigger. The pool finalizes + broadcasts.
   app.post('/api/account/:addr/withdraw/:id/finalize', rateLimiter.middleware('public'), async (req, res) => {
     try {
       const { addr, id } = req.params;
       const reqIp = normalizeIp(req.ip);
-      const proof = verifyIpProof(db, addr, (req.body && req.body.ip_proof) || '');
+      const proof = await verifyOwnerProof(db, addr, (req.body && (req.body.proof || req.body.ip_proof)) || '');
       if (!proof.ok) {
         auditOwnerProof(db, { action: 'slatepack_finalize', grinAddress: addr, ip: reqIp, ok: false, details: { reason: proof.reason, withdrawal_id: id } });
         return res.status(403).json({ error: 'Ownership proof failed', reason: proof.reason });
@@ -2077,6 +2628,80 @@ function setupRoutes() {
       res.status(err.code && err.code >= 400 && err.code < 600 ? err.code : 500).json({ error: err.message });
     }
   });
+
+  // ─── Goblin/Nostr payout destination (design §15) ────────────────────────────
+  // Register/replace the Goblin username funds may be sent to over Nostr. Ownership-gated
+  // and rate-limited like every money action. This does NOT move funds — it stores the
+  // pinned destination and (re)starts the security cooldown. A payout on the nostr rail is
+  // refused until now - registered_at >= nostr_destination_cooldown_hours, giving the real
+  // owner (who watches their stats) the whole window to spot a hijack, re-register (which
+  // resets the clock and evicts the attacker) and rotate their rig password.
+  app.post('/api/account/:addr/nostr-destination', rateLimiter.middleware('public'), async (req, res) => {
+    try {
+      const { addr } = req.params;
+      const reqIp = normalizeIp(req.ip);
+      if (!nostrBridge || !nostrBridge.isEnabled()) return res.status(503).json({ error: 'nostr payouts are not enabled on this pool' });
+
+      const proof = await verifyOwnerProof(db, addr, (req.body && (req.body.proof || req.body.ip_proof)) || '');
+      if (!proof.ok) {
+        auditOwnerProof(db, { action: 'nostr_destination_register', grinAddress: addr, ip: reqIp, ok: false, details: { reason: proof.reason } });
+        return res.status(403).json({ error: 'Ownership proof failed', reason: proof.reason });
+      }
+
+      const acct = db.prepare('SELECT grin_address FROM miner_accounts WHERE grin_address = ?').get(addr);
+      if (!acct) return res.status(404).json({ error: 'Account not found' });
+
+      let resolved;
+      try { resolved = await nostrBridge.resolveDestination((req.body && req.body.username) || ''); }
+      catch (e) { return res.status(e.code && e.code < 600 ? e.code : 400).json({ error: e.message }); }
+
+      const nowS = Math.floor(Date.now() / 1000);
+      db.prepare(
+        `UPDATE miner_accounts SET nostr_username = ?, nostr_npub = ?, nostr_registered_at = ?, updated_at = unixepoch()
+         WHERE grin_address = ?`
+      ).run(resolved.username, resolved.pubHex, nowS, addr);
+
+      const cooldownH = config.nostr_destination_cooldown_hours !== undefined ? config.nostr_destination_cooldown_hours : 48;
+      auditOwnerProof(db, { action: 'nostr_destination_register', grinAddress: addr, ip: reqIp, ok: true, details: { username: resolved.username, proof_method: proof.method } });
+      res.json({
+        success: true,
+        username: resolved.username,
+        npub: resolved.npub,
+        registered_at: nowS,
+        active_at: nowS + cooldownH * 3600,
+        cooldown_hours: cooldownH,
+      });
+    } catch (err) {
+      res.status(err.code && err.code >= 400 && err.code < 600 ? err.code : 500).json({ error: err.message });
+    }
+  });
+
+  // Remove the registered Goblin destination (ownership-gated). Clears the pin + cooldown.
+  app.delete('/api/account/:addr/nostr-destination', rateLimiter.middleware('public'), async (req, res) => {
+    try {
+      const { addr } = req.params;
+      const reqIp = normalizeIp(req.ip);
+      const proof = await verifyOwnerProof(db, addr, (req.body && (req.body.proof || req.body.ip_proof)) || '');
+      if (!proof.ok) {
+        auditOwnerProof(db, { action: 'nostr_destination_remove', grinAddress: addr, ip: reqIp, ok: false, details: { reason: proof.reason } });
+        return res.status(403).json({ error: 'Ownership proof failed', reason: proof.reason });
+      }
+      db.prepare(
+        `UPDATE miner_accounts SET nostr_username = NULL, nostr_npub = NULL, nostr_registered_at = NULL, updated_at = unixepoch()
+         WHERE grin_address = ?`
+      ).run(addr);
+      auditOwnerProof(db, { action: 'nostr_destination_remove', grinAddress: addr, ip: reqIp, ok: true, details: {} });
+      res.json({ success: true });
+    } catch (err) {
+      res.status(err.code && err.code >= 400 && err.code < 600 ? err.code : 500).json({ error: err.message });
+    }
+  });
+
+  // Public cancel REMOVED 2026-07-17 (operator decision). Both parked states self-recover —
+  // Tor auto-reverses after max retries, slatepack auto-refunds via TTL expiry — so a public
+  // cancel was pure abuse surface: in Grin a "failed" send may actually have posted, and a
+  // late cancel reversing the lock would double-pay. Operator support cases go through the
+  // admin route (/api/admin/withdrawals/:id/cancel, step-up gated, on the payments page).
 
   // ─── Multi-region public read APIs ──────────────────────────────────────────
   // Descriptive list of operator-declared regions (for a "connect to your nearest region"
@@ -2093,22 +2718,206 @@ function setupRoutes() {
     }
   });
 
+  // ─── Network map: full pool topology (hub → gateways → miners-by-country) ───────────────
+  // One call powers /network-map.html. Everything is aggregate + privacy-clean:
+  //   · gateways — pool_locations + live share window + WireGuard liveness → status
+  //     'connected' (up + miners) | 'handshake' (up, no miners) | 'offline' (tunnel down).
+  //   · countries — LIVE stratum sessions (accurate online set + the region each connects
+  //     through) crossed with miner_geo (COUNTRY ONLY, from lib/geoip at first accepted share).
+  //     Each country is assigned to the gateway most of its miners route through. When
+  //     geoip-lite isn't installed (miner_geo empty) we fall back to the GATEWAY's country so
+  //     the map still renders; geo_source reports which path was taken.
+  //   · positions are RANDOMIZED within each country server-side (geoip.placeInCountry) — a dot
+  //     is never a real location or IP, and exact per-miner coordinates are never stored.
+  app.get('/api/pool/topology', rateLimiter.middleware('public'), async (req, res) => {
+    try {
+      const WINDOW_S = 900, OFFLINE_S = 600, CYCLE = 42, SOL = 16384;
+      const nowS = Math.floor(Date.now() / 1000), cutoff = nowS - WINDOW_S;
+
+      const locations = db.prepare(
+        `SELECT region, label, country, country_code, is_active FROM pool_locations`
+      ).all();
+      const agg = db.prepare(
+        `SELECT region, COUNT(DISTINCT grin_address) AS miners, COALESCE(SUM(difficulty),0) AS sumdiff,
+                MAX(created_at) AS last_share
+         FROM shares WHERE created_at > ? GROUP BY region`
+      ).all(cutoff);
+      const byRegion = new Map(agg.map(r => [r.region, r]));
+
+      const wgByRegion = await cachedGatewayStatus();
+      const wgAvailable = Object.keys(wgByRegion).length > 0;
+      const localRegion = (config && config.role === 'singlebox') ? config.region : null;
+      // Public gateway state (same liveness rules as /api/pool/stats/regions, mapped to the
+      // three network-map states): connected = up + miners, handshake = up + no miners, offline.
+      const statusOf = (region, hasMiners, shareAge) => {
+        let up;
+        if (region === localRegion || !wgAvailable) up = true;
+        else {
+          const wg = wgByRegion[region];
+          const hsFresh = !!(wg && wg.handshake && (nowS - wg.handshake) < OFFLINE_S);
+          const sharesFresh = shareAge !== null && shareAge < OFFLINE_S;
+          up = hsFresh || sharesFresh;
+        }
+        if (!up) return 'offline';
+        return hasMiners ? 'connected' : 'handshake';
+      };
+
+      const gateways = [], gwByRegion = {};
+      for (const loc of locations) {
+        const a = byRegion.get(loc.region) || { miners: 0, sumdiff: 0, last_share: 0 };
+        const shareAge = a.last_share ? (nowS - a.last_share) : null;
+        const status = statusOf(loc.region, a.miners > 0, shareAge);
+        const gps = (a.sumdiff * CYCLE) / (WINDOW_S * SOL);
+        const pos = geoip.placeInCountry(loc.country_code, 'gw:' + loc.region);
+        const g = {
+          region: loc.region, label: loc.label || loc.region,
+          country: loc.country || (loc.country_code ? geoip.countryName(loc.country_code) : null),
+          country_code: loc.country_code || null,
+          status, online: status !== 'offline', miners: a.miners,
+          hashrate_gps: parseFloat(gps.toFixed(6)),
+          lat: pos ? pos.lat : null, lng: pos ? pos.lng : null
+        };
+        gateways.push(g); gwByRegion[loc.region] = g;
+      }
+
+      // Miners by country from live sessions × miner_geo (with gateway-country fallback).
+      const sessions = minerManager.getActiveSessions();
+      const addrRegion = new Map();
+      for (const s of sessions) if (!addrRegion.has(s.grinAddress)) addrRegion.set(s.grinAddress, s.region);
+      const addrs = [...addrRegion.keys()];
+      const geoByAddr = new Map();
+      if (addrs.length) {
+        const rows = db.prepare(
+          `SELECT grin_address, country_code, country FROM miner_geo
+           WHERE grin_address IN (${addrs.map(() => '?').join(',')})`
+        ).all(...addrs);
+        rows.forEach(r => geoByAddr.set(r.grin_address, r));
+      }
+      const countries = new Map();
+      let geoHits = 0;
+      for (const [addr, region] of addrRegion) {
+        let cc = null, name = null;
+        const g = geoByAddr.get(addr);
+        if (g && g.country_code) { cc = g.country_code; name = g.country || geoip.countryName(cc); geoHits++; }
+        else { const loc = gwByRegion[region]; if (loc && loc.country_code) { cc = loc.country_code; name = loc.country; } }
+        if (!cc) continue;
+        let c = countries.get(cc);
+        if (!c) { c = { cc, name: name || geoip.countryName(cc), miners: 0, votes: {} }; countries.set(cc, c); }
+        c.miners++; c.votes[region] = (c.votes[region] || 0) + 1;
+      }
+      const countryList = [...countries.values()].map(c => {
+        const gw = Object.entries(c.votes).sort((a, b) => b[1] - a[1])[0][0];
+        const pos = geoip.placeInCountry(c.cc, 'mn:' + c.cc);
+        return {
+          country_code: c.cc, country: c.name, miners: c.miners, gateway: gw,
+          lat: pos ? pos.lat : null, lng: pos ? pos.lng : null
+        };
+      }).sort((a, b) => b.miners - a.miners);
+
+      // Hub = this settlement core; best-effort location (configured hub country → local
+      // region's country → busiest online gateway's country).
+      const hubCc = config.hub_country_code
+        || (localRegion && gwByRegion[localRegion] && gwByRegion[localRegion].country_code)
+        || (gateways.filter(g => g.online).sort((a, b) => b.miners - a.miners)[0] || {}).country_code
+        || null;
+      const hubPos = geoip.placeInCountry(hubCc, 'hub');
+      const hub = {
+        label: config.pool_name || config.name || 'Pool Hub',
+        country_code: hubCc, country: hubCc ? geoip.countryName(hubCc) : null,
+        lat: hubPos ? hubPos.lat : null, lng: hubPos ? hubPos.lng : null
+      };
+
+      res.json({
+        hub, gateways, countries: countryList,
+        totals: {
+          miners: countryList.reduce((s, c) => s + c.miners, 0),
+          gateways_up: gateways.filter(g => g.online).length,
+          gateways_total: gateways.length,
+          countries: countryList.length
+        },
+        geo_source: (geoip.available() && geoHits > 0) ? 'geoip' : 'gateway',
+        timestamp: new Date().toISOString()
+      });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ─── Network map: Grin P2P peers by country (rolling window) ────────────────────────────
+  // Aggregates network_peers (populated by the peer-snapshot collector — COUNTRY ONLY, no IPs)
+  // over the last ?window days (default 30, max 90). Returns per-country counts (+ main/test
+  // split) and a capped set of RANDOMIZED twinkle points for the globe. Empty when geoip-lite
+  // isn't installed or the node has no peers yet (page then shows its illustrative fallback).
+  app.get('/api/network/peers', rateLimiter.middleware('public'), (req, res) => {
+    try {
+      const days = Math.min(Math.max(parseInt(req.query.window, 10) || 30, 1), 90);
+      const cutoff = Math.floor(Date.now() / 1000) - days * 86400;
+      const rows = db.prepare(`
+        SELECT country_code, country, COUNT(*) AS peers,
+               SUM(CASE WHEN net='main' THEN 1 ELSE 0 END) AS main,
+               SUM(CASE WHEN net='test' THEN 1 ELSE 0 END) AS test
+        FROM network_peers WHERE last_seen >= ? AND country_code IS NOT NULL
+        GROUP BY country_code ORDER BY peers DESC`).all(cutoff);
+
+      const countries = rows.map(r => {
+        const pos = geoip.placeInCountry(r.country_code, 'peer:' + r.country_code);
+        return {
+          country_code: r.country_code, country: r.country || geoip.countryName(r.country_code),
+          peers: r.peers, main: r.main, test: r.test,
+          lat: pos ? pos.lat : null, lng: pos ? pos.lng : null
+        };
+      });
+
+      const totalPeers = rows.reduce((s, r) => s + r.peers, 0);
+      const CAP = 220, points = [];
+      for (const r of rows) {
+        if (points.length >= CAP) break;
+        const want = Math.max(1, Math.round(CAP * r.peers / (totalPeers || 1)));
+        const mainWant = Math.round(want * (r.main / (r.peers || 1)));
+        for (let i = 0; i < want && points.length < CAP; i++) {
+          const pos = geoip.placeInCountry(r.country_code, `pt:${r.country_code}:${i}`);
+          if (!pos) break;
+          points.push({ lat: pos.lat, lng: pos.lng, net: i < mainWant ? 'main' : 'test' });
+        }
+      }
+
+      res.json({
+        window_days: days,
+        countries, points,
+        totals: {
+          peers: totalPeers,
+          main: rows.reduce((s, r) => s + r.main, 0),
+          test: rows.reduce((s, r) => s + r.test, 0)
+        },
+        timestamp: new Date().toISOString()
+      });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // Per-region live stats. Hashrate is derived from accepted-share difficulty over a short
   // window using the canonical C32 formula (GPS = Σdiff × 42 / window_s / 16384 — matches
   // hashrate-tracker.js and CLAUDE.md), grouped by the `region` tag the central stratum
-  // stamps on each share (per-region listener / Model C gateway). Regions with a
-  // pool_locations row but no recent shares appear with online=false / status "unknown".
-  app.get('/api/pool/stats/regions', rateLimiter.middleware('public'), (req, res) => {
+  // stamps on each share (per-region listener / Model C gateway). Per-region `status` is
+  // 'online' (up + active miners) | 'idle' (up, no recent miners) | 'offline' (WireGuard
+  // tunnel down / never handshaked); see regionStatus() below for the liveness rules.
+  app.get('/api/pool/stats/regions', rateLimiter.middleware('public'), async (req, res) => {
     try {
-      const WINDOW_S = 900; // 15-minute window for "current" regional hashrate
+      const WINDOW_S = 900;  // 15-minute window for "current" regional hashrate
+      const OFFLINE_S = 600; // a WireGuard handshake older than this (or none at all) = gateway
+                             // down. Aligned with /api/admin/health/gateways so the public pill
+                             // and the admin health view never disagree about who is offline.
       const CYCLE_LENGTH = 42, SOLUTION_RATE = 16384;
-      const cutoff = Math.floor(Date.now() / 1000) - WINDOW_S;
+      const nowS = Math.floor(Date.now() / 1000);
+      const cutoff = nowS - WINDOW_S;
 
       const agg = db.prepare(
         `SELECT region,
                 COUNT(*) AS shares,
                 COUNT(DISTINCT grin_address) AS miners,
-                COALESCE(SUM(difficulty), 0) AS sumdiff
+                COALESCE(SUM(difficulty), 0) AS sumdiff,
+                MAX(created_at) AS last_share
          FROM shares WHERE created_at > ? GROUP BY region`
       ).all(cutoff);
       const byRegion = new Map(agg.map(r => [r.region, r]));
@@ -2118,29 +2927,53 @@ function setupRoutes() {
       ).all();
       const locByRegion = new Map(locations.map(l => [l.region, l]));
 
-      // Coarse per-region liveness for the public connect-page pill. With Model C the edge
-      // is a dumb forwarder that never calls back, so the honest public signal is recent
-      // share activity: shares in the window → "online"; none → "unknown" (a freshly-declared
-      // or simply-quiet region — never a false "down"). The richer wg-handshake signal is
-      // admin-only (/api/admin/health/gateways), not exposed on the public pill.
-      //
-      // EXCEPTION — the LOCAL region (the singlebox/central box itself): its stratum is this
-      // very process's in-bound listener, so if this API is answering, the local stratum is
-      // bound and accepting miners. Report it "online" regardless of recent shares — otherwise
-      // a quiet-but-healthy main host wrongly shows "○ Unknown" even with :3333/:13333 listening.
+      // Per-region tunnel liveness (Model C): WireGuard latest-handshake per gateway. Peers
+      // carry PersistentKeepalive=25, so a healthy tunnel re-handshakes every ~25s regardless
+      // of miner traffic — a handshake older than OFFLINE_S (or none at all) means the gateway
+      // is genuinely DOWN, not merely quiet. Returns {} when wg is unavailable (singlebox with
+      // no gateways, not the central box, dev/Windows): in that case we can't judge liveness,
+      // so we never mark anyone offline and degrade to the 2-state online/idle signal.
+      const wgByRegion = await cachedGatewayStatus();
+      const wgAvailable = Object.keys(wgByRegion).length > 0;
+
+      // The LOCAL/singlebox region has no WG peer (it IS the box); this API answering proves
+      // its own stratum is bound, so it is always "up" — never offline.
       const localRegion = (config && config.role === 'singlebox') ? config.region : null;
-      const regionStatus = (region, hasShares) =>
-        (hasShares || region === localRegion) ? 'online' : 'unknown';
+
+      // Three honest public states for a miner choosing where to point their rig:
+      //   online  — tunnel up AND ≥1 share in the window (miners active here right now)
+      //   idle    — tunnel up, no recent miners (perfectly fine to connect, just quiet)
+      //   offline — tunnel down / never handshaked (don't bother — you can't mine here)
+      // "up" = a fresh WireGuard handshake OR recent shares. Recent shares are independent
+      // proof-of-life: if miners are actively submitting through a region it IS reachable,
+      // even if the handshake read is momentarily stale/absent — otherwise a single-region
+      // handshake blip would flip an actively-mined region to red while its card still shows
+      // miners > 0. Matches the admin health endpoint, which takes min(shareAge, handshakeAge).
+      const regionStatus = (region, hasShares, shareAge) => {
+        let up;
+        if (region === localRegion || !wgAvailable) {
+          up = true; // local box, or liveness unknowable → assume up (never false-offline)
+        } else {
+          const wg = wgByRegion[region];
+          const hsFresh = !!(wg && wg.handshake && (nowS - wg.handshake) < OFFLINE_S);
+          const sharesFresh = shareAge !== null && shareAge < OFFLINE_S;
+          up = hsFresh || sharesFresh;
+        }
+        if (!up) return 'offline';
+        return hasShares ? 'online' : 'idle';
+      };
 
       // Union of regions seen in shares and regions declared in pool_locations.
       const regions = new Set([...byRegion.keys(), ...locByRegion.keys()]);
       const out = [];
       let totalGps = 0, totalMiners = 0, totalShares = 0;
       for (const region of regions) {
-        const a = byRegion.get(region) || { shares: 0, miners: 0, sumdiff: 0 };
+        const a = byRegion.get(region) || { shares: 0, miners: 0, sumdiff: 0, last_share: 0 };
         const loc = locByRegion.get(region) || {};
         const gps = (a.sumdiff * CYCLE_LENGTH) / (WINDOW_S * SOLUTION_RATE);
         totalGps += gps; totalMiners += a.miners; totalShares += a.shares;
+        const shareAge = a.last_share ? (nowS - a.last_share) : null;
+        const status = regionStatus(region, a.shares > 0, shareAge);
         out.push({
           region,
           label: loc.label || null,
@@ -2148,8 +2981,8 @@ function setupRoutes() {
           country_code: loc.country_code || null,
           stratum_url: loc.stratum_url || null,
           is_active: loc.is_active === undefined ? null : !!loc.is_active,
-          status: regionStatus(region, a.shares > 0),
-          online: a.shares > 0 || region === localRegion,
+          status,                       // 'online' | 'idle' | 'offline'
+          online: status !== 'offline', // reachable? (up regardless of miner count)
           hashrate_gps: parseFloat(gps.toFixed(6)),
           miners: a.miners,
           shares_window: a.shares
@@ -2173,10 +3006,41 @@ function setupRoutes() {
     }
   });
 
-  app.get('/api/stratum/hashrate', (req, res) => {
+  app.get('/api/stratum/hashrate', rateLimiter.middleware('public'), (req, res) => {
     try {
       const stats = hashrateTracker.getHashrateStats();
       res.json(stats);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Top miners by hashrate over an arbitrary window (default 24h) — powers the paginated
+  // leaderboard on miners-stats.html. Separate from /api/stratum/hashrate (fixed 10 @ 1h,
+  // shared with the poolstats reporter) so we can serve a larger list without churning it.
+  app.get('/api/stratum/top-miners', rateLimiter.middleware('public'), (req, res) => {
+    try {
+      const limit = Math.min(parseInt(req.query.limit || 500, 10) || 500, 1000);
+      const windowMinutes = Math.min(parseInt(req.query.window || 1440, 10) || 1440, 1440);
+      const miners = hashrateTracker.getTopMiners(limit, windowMinutes).map(m => ({
+        grin_address: m.grin_address,
+        hashrate_gps: parseFloat((m.avg_hashrate || 0).toFixed(6))
+      }));
+      res.json({ window_minutes: windowMinutes, top_miners: miners });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Top miners by AVERAGE hashrate over a multi-day window (default 30 days) — the "sustained
+  // contribution" leaderboard on miners-stats.html. Backed by hashrate_history (retained ~30d),
+  // not the shares table (pruned ~1d), so a 30-day window is meaningful.
+  app.get('/api/stratum/top-avg-hashrate', rateLimiter.middleware('public'), (req, res) => {
+    try {
+      const limit = Math.min(parseInt(req.query.limit || 500, 10) || 500, 1000);
+      const days = Math.min(parseInt(req.query.days || 30, 10) || 30, 90);
+      const miners = hashrateTracker.getTopAvgHashrate(days, limit);
+      res.json({ days, top_miners: miners });
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
@@ -2556,8 +3420,24 @@ function setupRoutes() {
       `);
       const lastBlock = stmt2.get() || null;
 
+      // Flat KPI fields for the Overview page (admin index.html). The pseudo-addresses
+      // pool_fee/prize_pool are internal buckets, not miners — excluded from both the
+      // account count and the unclaimed (spendable-owed) total, matching reconciliation.js.
+      const usersRow = db.prepare(
+        `SELECT COUNT(*) AS c FROM miner_accounts WHERE grin_address NOT IN ('pool_fee','prize_pool')`
+      ).get() || { c: 0 };
+      const unclaimedRow = db.prepare(
+        `SELECT COALESCE(SUM(balance),0) AS s FROM miner_accounts WHERE grin_address NOT IN ('pool_fee','prize_pool')`
+      ).get() || { s: 0 };
+
       res.json({
         timestamp: new Date().toISOString(),
+        // Flat aliases consumed by the Overview KPI tiles.
+        total_users:         usersRow.c || 0,
+        active_miners:       minerCount || 0,
+        pool_hashrate_gps:   hashrateStats?.current_hashrate || 0,
+        unclaimed_balance:   unclaimedRow.s || 0,
+        pending_withdrawals: withdrawalStatus?.pending_count || 0,
         pool_status: {
           name: config.pool_name || 'GRINIUM',
           uptime_hours: +(process.uptime() / 3600).toFixed(1),
@@ -2609,7 +3489,7 @@ function setupRoutes() {
   });
 
   // Top Miners List - FIX #3: Use real data, not hardcoded values
-  app.get('/api/miners/top', (req, res) => {
+  app.get('/api/miners/top', rateLimiter.middleware('public'), (req, res) => {
     try {
       const limit = Math.min(parseInt(req.query.limit || 10), 100);
       const offset = parseInt(req.query.offset || 0);
@@ -2766,10 +3646,9 @@ function setupRoutes() {
   // Node Health Status - FIX #2, #14: Use async/await and remove hardcoded data
   app.get('/api/admin/health/node', secureAdmin, async (req, res) => {
     try {
-      const status = await blockMonitor.grinNode.getStatus();
+      // Time the actual round-trip: start the clock BEFORE the call, read it after.
       const startTime = Date.now();
-
-      // Check if node API is reachable (by getting status successfully)
+      const status = await blockMonitor.grinNode.getStatus();
       const latencyMs = Date.now() - startTime;
       const isSynced = status?.synced === true;
 
@@ -2819,13 +3698,16 @@ function setupRoutes() {
     try {
       let walletStatus = 'unknown';
       let walletBalance = { total: 0, available: 0, locked: 0 };
+      let walletLatencyMs = 0;
       let torStatus = config.tor_enabled ? 'enabled' : 'disabled';
 
       // Attempt to query wallet if API exists. retrieve_summary_info returns
       // [was_refreshed, WalletInfo] with amounts as nanoGRIN strings — parse to GRIN.
       if (wallet && wallet.getBalance) {
         try {
+          const startTime = Date.now();
           const summary = await wallet.getBalance();
+          walletLatencyMs = Date.now() - startTime;
           const info = Array.isArray(summary) ? summary[1] : (summary || {});
           walletBalance = {
             total: Number(info.total || 0) / 1e9,
@@ -2847,7 +3729,7 @@ function setupRoutes() {
             // Combined listener: the wallet's Foreign API (build_coinbase) is mounted on the
             // Owner port via owner_api_include_foreign=true, so coinbase + payouts share one port.
             endpoint: `http://127.0.0.1:${config.wallet_owner_port || 13420}/v2/foreign`,
-            latency_ms: walletStatus === 'ok' ? 52 : 0
+            latency_ms: walletLatencyMs
           },
           tor_reachable: {
             status: torStatus,
@@ -2859,7 +3741,7 @@ function setupRoutes() {
             total: walletBalance.total || 0,
             available: walletBalance.available || 0,
             locked: walletBalance.locked || 0,
-            min_required: config.min_withdrawal || 5.0
+            min_required: config.min_withdrawal || 25.0
           },
           synced: {
             status: 'ok',
@@ -2988,7 +3870,7 @@ function setupRoutes() {
     } catch (e) { /* table may be empty */ }
     const byRegion = new Map(shareRows.map(r => [r.region, r]));
 
-    const wgByRegion = readWgHandshakes(); // {} on any failure (wg absent / not central box)
+    const wgByRegion = await readGatewayStatus(); // {} on any failure (wg absent / not central box)
 
     // Public stratum URLs per region (for the active TCP probe below).
     const locByRegion = new Map();
@@ -3023,6 +3905,8 @@ function setupRoutes() {
         shares_window: s ? s.shares : 0,
         miners: s ? s.miners : 0,
         tunnel_handshake_age: hsAge,
+        tunnel_rx_bytes: wg && wg.rx_bytes !== undefined ? wg.rx_bytes : null,
+        tunnel_tx_bytes: wg && wg.tx_bytes !== undefined ? wg.tx_bytes : null,
         stratum_reachable: null,   // filled by the probe below when a stratum_url exists
         stratum_probe_ms: null
       });
@@ -3065,12 +3949,33 @@ function setupRoutes() {
   });
 
   // Create or update a region by its unique `region` key (upsert).
-  app.post('/api/admin/locations', secureAdmin, (req, res) => {
+  // Optional `wg_pubkey` (design §13.3): when present, the WireGuard gateway peer
+  // is paired in the SAME step via grin-gateway-ctl — the panel replaces the old
+  // 4-hop SSH ping-pong. Metadata save is never hostage to wg state: a helper
+  // failure still keeps the saved location and reports 502 + wg_error.
+  app.post('/api/admin/locations', secureAdmin, async (req, res) => {
     try {
       const { region, label, country, country_code, api_url, stratum_url } = req.body || {};
       const is_active = req.body && req.body.is_active === false ? 0 : 1;
       const reg = String(region || '').trim();
       if (!reg) return res.status(400).json({ error: 'region is required' });
+      const wgPubkey = req.body && req.body.wg_pubkey ? String(req.body.wg_pubkey).trim() : '';
+      // A malformed key is a typo, not wg state — fail fast before saving anything.
+      if (wgPubkey && !/^[A-Za-z0-9+/]{43}=$/.test(wgPubkey)) {
+        return res.status(400).json({ error: 'wg_pubkey is not a WireGuard public key (44 base64 chars ending "=")' });
+      }
+      if (wgPubkey && !/^[a-z0-9-]{2,12}$/.test(reg)) {
+        return res.status(400).json({ error: 'a gateway region key must match ^[a-z0-9-]{2,12}$ (it becomes the wg peer tag)' });
+      }
+      // Step-up gate for the PAIRING branch only: adding a wg peer grants a remote box a
+      // trusted tunnel that forwards stratum with PROXY-protocol source IPs (which feed the
+      // miner ownership gate) — at least as sensitive as peer REMOVAL, which is already
+      // freshAdmin. Metadata-only saves (no wg_pubkey) stay plain secureAdmin so routine
+      // region edits don't prompt. Same challenge contract as requireFreshAuth, so the
+      // admin client's adminFetch() step-up flow handles it transparently.
+      if (wgPubkey && !authManager.isTokenFresh(req.token, STEP_UP_MAX_AGE_S)) {
+        return res.status(403).json({ error: 'Session expired', challenge_required: true });
+      }
       const cc = country_code ? String(country_code).trim().toUpperCase().slice(0, 2) : null;
 
       db.prepare(`
@@ -3092,13 +3997,70 @@ function setupRoutes() {
         VALUES (?, 'location_upsert', 'pool_location', ?, ?, ?)
       `).run(req.user.user_id, reg, JSON.stringify({ label, country, country_code: cc, api_url, stratum_url, is_active }), req.ip);
 
-      res.json({ success: true, location: row });
+      if (!wgPubkey) return res.json({ success: true, location: row });
+
+      let pair;
+      try {
+        pair = await gwctl(['add-peer', '--region', reg, '--pubkey', wgPubkey]);
+      } catch (e) {
+        return res.status(502).json({
+          success: false, location: row, wg_error: e.message,
+          error: 'Region saved, but WireGuard pairing failed: ' + e.message
+        });
+      }
+
+      // Hot-bind (§13.3): the helper persisted region_ports in pool.json; mirror it
+      // in the in-memory config and bind the tunnel listener NOW — no service
+      // restart, zero disruption to connected miners. On the next boot the
+      // listener is rebuilt from pool.json anyway. `existing` (dup pubkey) and
+      // `replaced` (new box, same region) keep their port, so bind is a no-op then.
+      if (pair.region_port) {
+        config.region_ports = config.region_ports || {};
+        config.region_ports[pair.region] = pair.region_port;
+        if (pair.hub_tunnel_ip) config.region_listen_host = pair.hub_tunnel_ip;
+        if (stratumServer) {
+          try { stratumServer.bindRegionListener(pair.region, pair.region_port); }
+          catch (e) { console.error(`[ERROR] hot-bind region listener ${pair.region}: ${e.message}`); }
+        }
+      }
+
+      db.prepare(`
+        INSERT INTO admin_audit_log (admin_id, action, target_type, target_id, details, ip)
+        VALUES (?, 'gateway_pair', 'wg_peer', ?, ?, ?)
+      `).run(req.user.user_id, pair.region, JSON.stringify({
+        region: pair.region, pubkey: wgPubkey, peer_ip: pair.peer_ip,
+        region_port: pair.region_port, existing: !!pair.existing, replaced: !!pair.replaced
+      }), req.ip);
+
+      res.json({
+        success: true, location: row,
+        pairing: pair.pairing, peer_ip: pair.peer_ip, region_port: pair.region_port,
+        existing: !!pair.existing, replaced: !!pair.replaced
+      });
     } catch (err) {
       res.status(400).json({ error: err.message });
     }
   });
 
-  app.delete('/api/admin/locations/:id', freshAdmin, (req, res) => {
+  // Re-print a region's GRINGW1 pairing string (replaces SSH `W → 3` for a lost
+  // string). Read-only — the helper re-derives it from the live wg conf + pool.json.
+  app.get('/api/admin/gateways/:region/pairing', secureAdmin, async (req, res) => {
+    try {
+      const region = String(req.params.region || '').trim();
+      if (!/^[a-z0-9-]{2,12}$/.test(region)) return res.status(400).json({ error: 'invalid region key' });
+      const list = await gwctl(['list']);
+      const g = (list.gateways || []).find((x) => x.region === region);
+      if (!g) return res.status(404).json({ error: `no WireGuard gateway peer for region "${region}"` });
+      res.json({ success: true, region, pairing: g.pairing, peer_ip: g.peer_ip, region_port: g.region_port });
+    } catch (err) {
+      res.status(502).json({ error: err.message });
+    }
+  });
+
+  // Peer removal is destructive (revokes the gateway's tunnel) → stays behind
+  // freshAdmin with the delete. `?remove_peer=1` also unpairs the wg peer; without
+  // it only the display card goes (the tunnel keeps working — legacy behaviour).
+  app.delete('/api/admin/locations/:id', freshAdmin, async (req, res) => {
     try {
       const id = parseInt(req.params.id, 10);
       const row = db.prepare('SELECT * FROM pool_locations WHERE id = ?').get(id);
@@ -3108,7 +4070,24 @@ function setupRoutes() {
         INSERT INTO admin_audit_log (admin_id, action, target_type, target_id, details, ip)
         VALUES (?, 'location_delete', 'pool_location', ?, ?, ?)
       `).run(req.user.user_id, row.region, JSON.stringify(row), req.ip);
-      res.json({ success: true, deleted: row.region });
+
+      if (String(req.query.remove_peer || '') !== '1') {
+        return res.json({ success: true, deleted: row.region });
+      }
+      try {
+        const rm = await gwctl(['remove-peer', '--region', row.region]);
+        if (config.region_ports) delete config.region_ports[row.region];
+        // v1 does NOT hot-unbind the listener (rare op) — it idles on the tunnel
+        // IP until the next natural service restart rebuilds from pool.json.
+        db.prepare(`
+          INSERT INTO admin_audit_log (admin_id, action, target_type, target_id, details, ip)
+          VALUES (?, 'gateway_unpair', 'wg_peer', ?, ?, ?)
+        `).run(req.user.user_id, row.region, JSON.stringify({ region: row.region, synced: rm.synced !== false }), req.ip);
+        res.json({ success: true, deleted: row.region, wg_removed: true });
+      } catch (e) {
+        // The card is already gone — surface the peer failure instead of 500ing.
+        res.json({ success: true, deleted: row.region, wg_removed: false, wg_error: e.message });
+      }
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
@@ -3153,7 +4132,7 @@ function setupRoutes() {
         `SELECT COALESCE(SUM(amount),0) AS t FROM withdrawals WHERE grin_address = ? AND status='confirmed'`
       ).get(addr).t;
       const pending = db.prepare(
-        `SELECT * FROM withdrawals WHERE grin_address = ? AND status IN ('tor_checking','tor_sending','retry_scheduled') ORDER BY created_at DESC`
+        `SELECT * FROM withdrawals WHERE grin_address = ? AND status IN ('tor_checking','tor_sending','retry_scheduled','slatepack_pending') ORDER BY created_at DESC`
       ).all(addr);
       const shareAgg = db.prepare(
         `SELECT COUNT(*) AS count, MAX(created_at) AS last_share_at FROM shares WHERE grin_address = ?`
@@ -3185,8 +4164,9 @@ function setupRoutes() {
 
   // Testnet-only: inject GRIN into a miner's balance to exercise the payout pipeline
   // (skip the confirm_depth wait). Hard-guarded to testnet so it can never mint mainnet
-  // balances. Records a balance_log credit + admin_audit_log row.
-  app.post('/api/admin/miners/:addr/inject', secureAdmin, (req, res) => {
+  // balances. Records a balance_log credit + admin_audit_log row. Step-up gated (freshAdmin)
+  // for parity with every other balance-mutating action (withdrawals, payouts, incentives).
+  app.post('/api/admin/miners/:addr/inject', freshAdmin, (req, res) => {
     try {
       if (config.network !== 'testnet') {
         return res.status(403).json({ error: 'balance injection is testnet-only' });
@@ -3411,11 +4391,82 @@ function setupRoutes() {
   app.post('/api/admin/incentives/lottery/draw-now', freshAdmin, async (req, res) => {
     try {
       const type = req.body.type === 'special' ? 'special' : 'weekly';
-      const result = await lotteryManager.runDraw(type, req.body.event_name || null, parseFloat(req.body.pot_grin) || 0);
+      const result = await lotteryManager.runDraw(type, {
+        eventName: req.body.event_name || null,
+        potGrinOverride: parseFloat(req.body.pot_grin) || 0,
+      });
       db.prepare(`
         INSERT INTO admin_audit_log (admin_id, action, target_type, target_id, details)
         VALUES (?, 'lottery_draw_now', 'lottery', ?, ?)
       `).run(req.user.user_id, String(result.draw_id || ''), JSON.stringify(result));
+      res.json({ success: true, result });
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  // ─── Contest campaigns (admin CRUD) ─────────────────────────────────────────
+  // A campaign is a scheduled lottery draw with an explicit date-range window and optional
+  // per-campaign rule overrides (pot split, min active days, whale cap). See lib/lottery.js.
+
+  app.get('/api/admin/incentives/campaigns', secureAdmin, (req, res) => {
+    try {
+      res.json({ success: true, campaigns: lotteryManager.listCampaigns(50) });
+    } catch (err) {
+      res.status(500).json({ error: 'Failed to load campaigns' });
+    }
+  });
+
+  app.post('/api/admin/incentives/campaigns', freshAdmin, (req, res) => {
+    try {
+      const campaign = lotteryManager.createCampaign(req.body || {});
+      db.prepare(`
+        INSERT INTO admin_audit_log (admin_id, action, target_type, target_id, details)
+        VALUES (?, 'campaign_create', 'campaign', ?, ?)
+      `).run(req.user.user_id, String(campaign.id), JSON.stringify(campaign));
+      res.json({ success: true, campaign });
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  app.put('/api/admin/incentives/campaigns/:id', freshAdmin, (req, res) => {
+    try {
+      const campaign = lotteryManager.updateCampaign(parseInt(req.params.id, 10), req.body || {});
+      db.prepare(`
+        INSERT INTO admin_audit_log (admin_id, action, target_type, target_id, details)
+        VALUES (?, 'campaign_update', 'campaign', ?, ?)
+      `).run(req.user.user_id, String(campaign.id), JSON.stringify(campaign));
+      res.json({ success: true, campaign });
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  app.post('/api/admin/incentives/campaigns/:id/cancel', freshAdmin, (req, res) => {
+    try {
+      const campaign = lotteryManager.cancelCampaign(parseInt(req.params.id, 10));
+      db.prepare(`
+        INSERT INTO admin_audit_log (admin_id, action, target_type, target_id, details)
+        VALUES (?, 'campaign_cancel', 'campaign', ?, ?)
+      `).run(req.user.user_id, String(campaign.id), JSON.stringify({ id: campaign.id }));
+      res.json({ success: true, campaign });
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  // Manually run a scheduled campaign now (testing / early close). Pays real prize-pool GRIN.
+  app.post('/api/admin/incentives/campaigns/:id/run', freshAdmin, async (req, res) => {
+    try {
+      const c = lotteryManager.getCampaign(parseInt(req.params.id, 10));
+      if (!c) return res.status(404).json({ error: 'campaign not found' });
+      if (c.status !== 'scheduled') return res.status(400).json({ error: 'campaign already drawn or cancelled' });
+      const result = await lotteryManager.runCampaign(c);
+      db.prepare(`
+        INSERT INTO admin_audit_log (admin_id, action, target_type, target_id, details)
+        VALUES (?, 'campaign_run_now', 'campaign', ?, ?)
+      `).run(req.user.user_id, String(c.id), JSON.stringify(result));
       res.json({ success: true, result });
     } catch (err) {
       res.status(400).json({ error: err.message });

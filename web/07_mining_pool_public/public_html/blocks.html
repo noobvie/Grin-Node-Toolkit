@@ -1,216 +1,422 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-page="blocks">
 <head>
+  <!-- ===== ESSENTIAL META TAGS ===== -->
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
   <meta name="robots" content="index, follow, max-snippet:-1">
+  <meta name="language" content="English">
+  <meta name="author" content="GRINIUM Mining Pool">
+  <meta name="revisit-after" content="1 days">
+
+  <!-- ===== DESCRIPTION & KEYWORDS ===== -->
   <title>Found Blocks — Grin Mining Pool</title>
-  <meta name="description" content="Live list of blocks found by the pool: height, luck/variance, reward, finder and confirmation status. Full transparency — every block is verifiable on the Grin chain explorer.">
+  <meta name="description" content="Live list of blocks found by the pool with historical luck, block cadence, status and cumulative reward trends. Full transparency — every block is verifiable on the Grin chain explorer.">
+  <meta name="keywords" content="grin blocks found, mining pool luck, block cadence, orphan rate, pool rewards, Grin pool, block explorer">
+
+  <!-- ===== OPEN GRAPH ===== -->
   <meta property="og:type" content="website">
   <meta property="og:title" content="Found Blocks — Grin Mining Pool">
-  <meta property="og:description" content="Every block the pool has found, with luck/variance and on-chain links.">
+  <meta property="og:description" content="Every block the pool has found, with luck/variance, cadence, status and on-chain links.">
+  <meta property="og:url" content="https://pool.grin.money/blocks.html">
+  <meta property="og:site_name" content="GRINIUM Mining Pool">
+  <meta property="og:locale" content="en_US">
+
+  <!-- ===== TWITTER CARD ===== -->
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Found Blocks — Grin Mining Pool">
+  <meta name="twitter:description" content="Live blocks, historical luck, cadence, status and reward trends.">
+  <meta name="twitter:domain" content="pool.grin.money">
+
+  <!-- ===== CANONICAL ===== -->
+  <link rel="canonical" href="https://pool.grin.money/blocks.html">
+
+  <!-- ===== ADDITIONAL SEO ===== -->
+  <meta name="theme-color" content="#07090c">
   <link rel="icon" type="image/svg+xml" href="/images/favicon.svg">
+  <link rel="apple-touch-icon" href="/images/apple-touch-icon.svg">
   <link rel="manifest" href="/manifest.json">
+
   <link rel="stylesheet" href="/css/dashboard.css">
   <link rel="stylesheet" href="/css/themes.css">
+  <link rel="stylesheet" href="/css/reactor.css">
   <style>
     .chip.active { background: var(--accent); color: #111; border-color: var(--accent); }
-    .dim { color: var(--dark-dim); }
+    .dim { color: var(--text-dim, var(--dark-dim)); }
+
+    /* Shared timeframe toggle driving the three historical trend charts (Week/Month/Year/All). */
+    .rangebar { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-bottom: 2px; }
+    .rangebar .rng-btn {
+      font: inherit; font-size: 12px; letter-spacing: .08em; text-transform: uppercase;
+      padding: 6px 13px; border-radius: 6px; cursor: pointer;
+      background: var(--panel-2, rgba(255,255,255,.04)); color: var(--text-dim, #9aa4b2);
+      border: 1px solid var(--border, rgba(255,255,255,.10)); transition: background .12s, color .12s;
+    }
+    .rangebar .rng-btn:hover { color: var(--text, #e6edf3); }
+    .rangebar .rng-btn.active {
+      background: var(--accent, #7cb342); color: #07090c;
+      border-color: var(--accent, #7cb342); font-weight: 600;
+    }
+    .rangebar .rng-spacer { margin-left: auto; }
+    .rangebar .rng-note {
+      color: var(--text-mute, #6b7480); font-family: var(--mono, monospace);
+      font-size: 11px; letter-spacing: .1em;
+    }
   </style>
 </head>
 <body>
 
-  <!-- header injected by /js/public-shell.js -->
+    <!-- header injected by /js/public-shell.js -->
 
-  <div class="container">
-    <h2 class="page-title">Found Blocks</h2>
-    <p style="margin-bottom:18px;color:var(--dark-dim);max-width:70ch;">
-      Every block this pool has found. <strong>Luck</strong> is the round's shares ÷ the network
-      difficulty — under 100% means the block was found with fewer shares than statistically
-      expected (lucky), over 100% means it took more (unlucky). Each block is independently
-      verifiable on the Grin chain explorer.
-    </p>
+    <div class="wrap">
+        <!-- Sidebar ad slot (filled by /js/ads.js; hidden if empty) -->
+        <div class="ad-slot ad-slot--sidebar" data-ad-slot="sidebar" style="display:none;"></div>
 
-    <div class="stats-grid">
-      <div class="stat-card"><div class="stat-label">Blocks Found</div><div class="stat-value" id="kpi-total">—</div></div>
-      <div class="stat-card"><div class="stat-label">Confirmed</div><div class="stat-value" id="kpi-confirmed">—</div></div>
-      <div class="stat-card"><div class="stat-label">Maturing</div><div class="stat-value" id="kpi-immature">—</div></div>
-      <div class="stat-card"><div class="stat-label">Found (24h / 7d)</div><div class="stat-value" id="kpi-recent">—</div></div>
+        <!-- ═══ Operator strip: heading + intro ═══ -->
+        <div class="deck-head">
+            <div>
+                <h1>Found Blocks</h1>
+                <div class="sub">Every block this pool has found &middot; luck, cadence &amp; rewards <span class="dim">(all times UTC)</span></div>
+            </div>
+        </div>
+
+        <p class="dim" style="margin:0 0 16px;max-width:78ch;font-size:13px;line-height:1.6;">
+            <strong>Luck</strong> is the round's shares &divide; the network difficulty — under 100% means the
+            block was found with fewer shares than statistically expected (lucky), over 100% means it took
+            more (unlucky). Each block is independently verifiable on the Grin chain explorer.
+        </p>
+
+        <!-- ═══ Spec placard: compact live tiles ═══ -->
+        <div class="placard" aria-label="Live block figures">
+            <span><i>Blocks found</i><b id="kpi-total">—</b></span>
+            <span><i>Confirmed</i><b id="kpi-confirmed">—</b></span>
+            <span><i>Maturing</i><b id="kpi-immature">—</b></span>
+            <span><i>Found · 24h / 7d</i><b id="kpi-recent">—</b></span>
+        </div>
+
+        <div class="deck">
+
+            <!-- ═══ Shared timeframe toggle for the three trend recorders ═══ -->
+            <div class="rangebar" id="bk-rangebar" role="tablist" aria-label="Chart timeframe">
+                <button class="rng-btn"        data-range="week"  role="tab">Week</button>
+                <button class="rng-btn active" data-range="month" role="tab">Month</button>
+                <button class="rng-btn"        data-range="year"  role="tab">Year</button>
+                <button class="rng-btn"        data-range="all"   role="tab">All Time</button>
+                <span class="rng-spacer"></span>
+                <span class="rng-note" id="bk-range-note">last 30 days &middot; daily</span>
+            </div>
+
+            <!-- ═══ P-01 · LUCK TREND ═══ -->
+            <div class="panel"><span class="screws"></span>
+                <h2 class="panel-title"><span class="tag">P-01</span> Chart recorder — block luck
+                    <span class="right">per block · 100% = statistically expected</span></h2>
+                <div class="panel-body chart-wrap">
+                    <canvas id="bk-chart-luck" aria-label="Per-block luck percentage over the selected timeframe" role="img"></canvas>
+                    <div class="chart-empty" id="bk-empty-luck">NO LUCK DATA YET</div>
+                </div>
+            </div>
+
+            <div class="deck-row half">
+                <!-- ═══ P-02 · BLOCKS FOUND PER PERIOD ═══ -->
+                <div class="panel"><span class="screws"></span>
+                    <h2 class="panel-title"><span class="tag">P-02</span> Blocks found per period</h2>
+                    <div class="panel-body chart-wrap">
+                        <canvas id="bk-chart-blocks" aria-label="Blocks found per time period" role="img"></canvas>
+                        <div class="chart-empty" id="bk-empty-blocks">NO TRACE DATA YET</div>
+                    </div>
+                </div>
+
+                <!-- ═══ P-03 · STATUS BREAKDOWN ═══ -->
+                <div class="panel"><span class="screws"></span>
+                    <h2 class="panel-title"><span class="tag">P-03</span> Status breakdown</h2>
+                    <div class="panel-body chart-wrap">
+                        <canvas id="bk-chart-status" aria-label="Confirmed, maturing and orphaned block split" role="img"></canvas>
+                        <div class="chart-empty" id="bk-empty-status">NO BLOCKS IN RANGE</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ═══ P-04 · CUMULATIVE REWARD ═══ -->
+            <div class="panel"><span class="screws"></span>
+                <h2 class="panel-title"><span class="tag">P-04</span> Ledger recorder — cumulative reward
+                    <span class="right">block rewards mined over the window</span></h2>
+                <div class="panel-body chart-wrap">
+                    <canvas id="bk-chart-reward" aria-label="Cumulative block reward over the selected timeframe" role="img"></canvas>
+                    <div class="chart-empty" id="bk-empty-reward">NO LEDGER DATA YET</div>
+                </div>
+            </div>
+
+            <!-- ═══ P-05 · BLOCK EXPLORER (filterable table) ═══ -->
+            <div class="panel"><span class="screws"></span>
+                <h2 class="panel-title"><span class="tag">P-05</span> Block explorer <span class="right">every block, newest first</span></h2>
+                <div class="panel-body">
+                    <div class="filter-chips" id="filter-chips" style="display:flex;gap:8px;flex-wrap:wrap;margin:0 0 14px;">
+                        <button class="btn sm chip active" data-filter="">All</button>
+                        <button class="btn sm chip" data-filter="immature">Maturing</button>
+                        <button class="btn sm chip" data-filter="confirmed">Confirmed</button>
+                        <button class="btn sm chip" data-filter="orphaned">Orphaned</button>
+                    </div>
+
+                    <table class="data-table" aria-label="Found blocks">
+                        <thead>
+                            <tr>
+                                <th>Height</th>
+                                <th>Status</th>
+                                <th class="num" title="Round shares ÷ network difficulty. Under 100% = lucky.">Luck</th>
+                                <th class="num">Reward</th>
+                                <th>Found by</th>
+                                <th class="num">Age</th>
+                                <th>Chain</th>
+                            </tr>
+                        </thead>
+                        <tbody id="blocks-tbody">
+                            <tr><td colspan="7">Loading…</td></tr>
+                        </tbody>
+                    </table>
+
+                    <div class="pager" id="pager" style="display:flex;align-items:center;justify-content:center;gap:14px;margin-top:16px;">
+                        <button class="btn sm" id="prev-btn" disabled>‹ Newer</button>
+                        <span class="dim" id="page-label" style="font-size:13px;">Page 1</span>
+                        <button class="btn sm" id="next-btn" disabled>Older ›</button>
+                    </div>
+                </div>
+            </div>
+
+        </div>
     </div>
 
-    <div class="filter-chips" id="filter-chips" style="display:flex;gap:8px;flex-wrap:wrap;margin:18px 0 12px;">
-      <button class="btn sm chip active" data-filter="">All</button>
-      <button class="btn sm chip" data-filter="immature">Maturing</button>
-      <button class="btn sm chip" data-filter="confirmed">Confirmed</button>
-      <button class="btn sm chip" data-filter="orphaned">Orphaned</button>
-    </div>
+    <!-- footer injected by /js/public-shell.js -->
 
-    <table class="data-table" aria-label="Found blocks">
-      <thead>
-        <tr>
-          <th>Height</th>
-          <th>Status</th>
-          <th class="num" title="Round shares ÷ network difficulty. Under 100% = lucky.">Luck</th>
-          <th class="num">Reward</th>
-          <th>Found by</th>
-          <th class="num">Age</th>
-          <th>Chain</th>
-        </tr>
-      </thead>
-      <tbody id="blocks-tbody">
-        <tr><td colspan="7">Loading…</td></tr>
-      </tbody>
-    </table>
+    <script src="/js/auth.js"></script>
+    <script src="/js/vendor/chart.umd.min.js"></script>
+    <script src="/js/charts-init.js"></script>
+    <script>
+        // Public blocks deck. All data comes from public endpoints:
+        //   /api/pool/stats                        summary KPIs (total/confirmed/immature/24h/7d)
+        //   /api/pool/blocks?limit&offset&status   paginated explorer rows (plain array; last page = short page)
+        //   /api/pool/blocks/history?range         durable series → P-01 luck / P-02 cadence / P-03 status / P-04 reward
+        // GrinScan deep-link base is network-aware (set from /api/config/pool-info on load):
+        // grinscan.org for mainnet, testnet.grinscan.org for testnet. All external fields rendered
+        // via textContent / escaped — never trust block.found_by etc. as markup.
+        const PAGE_SIZE = 25;
+        let GRINSCAN = 'https://grinscan.org';   // overridden to testnet.grinscan.org if testnet
+        let _page = 0;       // zero-based
+        let _filter = '';
+        let _lastFull = false; // did the last fetch return a full page (more may exist)?
 
-    <div id="pager" style="display:flex;align-items:center;justify-content:center;gap:14px;margin-top:16px;">
-      <button class="btn sm" id="prev-btn" disabled>‹ Newer</button>
-      <span class="dim" id="page-label" style="font-size:13px;">Page 1</span>
-      <button class="btn sm" id="next-btn" disabled>Older ›</button>
-    </div>
-  </div>
-
-  <!-- footer injected by /js/public-shell.js -->
-
-  <script src="/js/auth.js"></script>
-  <script>
-    // Public blocks explorer. All data comes from public endpoints:
-    //   /api/pool/stats               summary KPIs (total/confirmed/immature/24h/7d)
-    //   /api/pool/blocks?limit&offset&status   paginated rows (plain array; last page = short page)
-    // GrinScan deep-link base is network-aware (set from /api/config/pool-info on load):
-    // grinscan.org for mainnet, testnet.grinscan.org for testnet. All external fields rendered
-    // via textContent / escaped — never trust block.found_by etc. as markup.
-    const PAGE_SIZE = 25;
-    let GRINSCAN = 'https://grinscan.org';   // overridden to testnet.grinscan.org if testnet
-    let _page = 0;       // zero-based
-    let _filter = '';
-    let _lastFull = false; // did the last fetch return a full page (more may exist)?
-
-    function escHtml(v) {
-      return String(v == null ? '' : v)
-        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-    }
-    function shortAddr(a) {
-      a = String(a || '');
-      if (!a || a === 'unknown') return '—';
-      return a.length > 16 ? a.slice(0, 9) + '…' + a.slice(-4) : a;
-    }
-    function fmtTs(t) { return t ? new Date(t * 1000).toLocaleString() : '—'; }
-    function timeAgo(t) {
-      if (!t) return '—';
-      const s = Math.max(0, Math.floor(Date.now() / 1000) - t);
-      if (s < 60) return s + 's ago';
-      if (s < 3600) return Math.floor(s / 60) + 'm ago';
-      if (s < 86400) return Math.floor(s / 3600) + 'h ago';
-      return Math.floor(s / 86400) + 'd ago';
-    }
-
-    const STATUS = {
-      immature:  ['Maturing',  '#d29922'],
-      confirmed: ['Confirmed', '#3fb950'],
-      orphaned:  ['Orphaned',  '#f85149'],
-    };
-    function statusCell(st) {
-      const [label, color] = STATUS[st] || [st || 'unknown', 'var(--dark-dim)'];
-      return '<span class="badge" style="background:' + color + '22;color:' + color +
-             ';border:1px solid ' + color + '55;">' + escHtml(label) + '</span>';
-    }
-    function luckCell(b) {
-      const nd = Number(b.network_difficulty) || 0;
-      const rs = Number(b.round_shares) || 0;
-      if (nd <= 0 || rs <= 0) return '<td class="num dim">—</td>';
-      const v = (rs / nd) * 100;
-      const color = v <= 100 ? '#3fb950' : '#f85149';
-      return '<td class="num" style="color:' + color + '" title="round shares ÷ network difficulty">' +
-             v.toFixed(0) + '%</td>';
-    }
-
-    async function getJson(url) {
-      const r = await fetch(url, { credentials: 'same-origin' });
-      const j = await r.json().catch(() => null);
-      if (!r.ok) throw new Error((j && j.error) || ('HTTP ' + r.status));
-      return j;
-    }
-
-    async function loadSummary() {
-      try {
-        const s = await getJson('/api/pool/stats');
-        const g = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
-        g('kpi-total', s.total_blocks_found != null ? s.total_blocks_found : '—');
-        g('kpi-confirmed', s.confirmed_blocks != null ? s.confirmed_blocks : '—');
-        g('kpi-immature', s.immature_blocks != null ? s.immature_blocks : '—');
-        g('kpi-recent', (s.blocks_24h != null ? s.blocks_24h : 0) + ' / ' + (s.blocks_7d != null ? s.blocks_7d : 0));
-      } catch (e) { /* KPIs keep placeholders */ }
-    }
-
-    async function loadBlocks() {
-      const tbody = document.getElementById('blocks-tbody');
-      tbody.innerHTML = '<tr><td colspan="7">Loading…</td></tr>';
-      try {
-        const q = '?limit=' + PAGE_SIZE + '&offset=' + (_page * PAGE_SIZE) +
-                  (_filter ? '&status=' + encodeURIComponent(_filter) : '');
-        const blocks = await getJson('/api/pool/blocks' + q);
-        const rows = Array.isArray(blocks) ? blocks : [];
-        _lastFull = rows.length === PAGE_SIZE;
-        if (!rows.length) {
-          tbody.innerHTML = '<tr><td colspan="7">' +
-            (_page === 0 ? 'No blocks found yet — the pool is still searching.' : 'No more blocks.') +
-            '</td></tr>';
-        } else {
-          tbody.innerHTML = rows.map(function (b) {
-            return '<tr>' +
-              '<td>' + Number(b.height || 0).toLocaleString('en-US') + '</td>' +
-              '<td>' + statusCell(b.status) + '</td>' +
-              luckCell(b) +
-              '<td class="num">' + (Number(b.reward) || 0).toFixed(2) + ' ツ</td>' +
-              '<td title="' + escHtml(b.found_by) + '">' + escHtml(shortAddr(b.found_by)) + '</td>' +
-              '<td class="num" title="' + escHtml(fmtTs(b.found_at)) + '">' + escHtml(timeAgo(b.found_at)) + '</td>' +
-              '<td><a href="' + GRINSCAN + '/block/' + Number(b.height || 0) +
-                '" target="_blank" rel="noopener">view ↗</a></td>' +
-              '</tr>';
-          }).join('');
+        function escHtml(v) {
+            return String(v == null ? '' : v)
+                .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
         }
-      } catch (e) {
-        tbody.innerHTML = '<tr><td colspan="7">Block data unavailable</td></tr>';
-        _lastFull = false;
-      }
-      updatePager();
-    }
+        function shortAddr(a) {
+            a = String(a || '');
+            if (!a || a === 'unknown') return '—';
+            return a.length > 16 ? a.slice(0, 9) + '…' + a.slice(-4) : a;
+        }
+        function fmtTs(t) { return t ? new Date(t * 1000).toLocaleString() : '—'; }
+        function timeAgo(t) {
+            if (!t) return '—';
+            const s = Math.max(0, Math.floor(Date.now() / 1000) - t);
+            if (s < 60) return s + 's ago';
+            if (s < 3600) return Math.floor(s / 60) + 'm ago';
+            if (s < 86400) return Math.floor(s / 3600) + 'h ago';
+            return Math.floor(s / 86400) + 'd ago';
+        }
+        // GRIN amount for the reward chart y-axis / tooltips (ツ = Grin symbol, matches the table).
+        function fmtGrin(v) {
+            return Number(v || 0).toLocaleString('en-US', { maximumFractionDigits: 3 }) + ' ツ';
+        }
 
-    function updatePager() {
-      document.getElementById('prev-btn').disabled = _page === 0;
-      document.getElementById('next-btn').disabled = !_lastFull;
-      document.getElementById('page-label').textContent = 'Page ' + (_page + 1);
-    }
+        const STATUS = {
+            immature:  ['Maturing',  '#d29922'],
+            confirmed: ['Confirmed', '#3fb950'],
+            orphaned:  ['Orphaned',  '#f85149'],
+        };
+        function statusCell(st) {
+            const [label, color] = STATUS[st] || [st || 'unknown', 'var(--dark-dim)'];
+            return '<span class="badge" style="background:' + color + '22;color:' + color +
+                   ';border:1px solid ' + color + '55;">' + escHtml(label) + '</span>';
+        }
+        function luckCell(b) {
+            const nd = Number(b.network_difficulty) || 0;
+            const rs = Number(b.round_shares) || 0;
+            if (nd <= 0 || rs <= 0) return '<td class="num dim">—</td>';
+            const v = (rs / nd) * 100;
+            const color = v <= 100 ? '#3fb950' : '#f85149';
+            return '<td class="num" style="color:' + color + '" title="round shares ÷ network difficulty">' +
+                   v.toFixed(0) + '%</td>';
+        }
 
-    document.addEventListener('DOMContentLoaded', function () {
-      document.getElementById('prev-btn').addEventListener('click', function () {
-        if (_page > 0) { _page--; loadBlocks(); }
-      });
-      document.getElementById('next-btn').addEventListener('click', function () {
-        if (_lastFull) { _page++; loadBlocks(); }
-      });
-      document.querySelectorAll('#filter-chips .chip').forEach(function (btn) {
-        btn.addEventListener('click', function () {
-          document.querySelectorAll('#filter-chips .chip').forEach(function (b) { b.classList.remove('active'); });
-          btn.classList.add('active');
-          _filter = btn.getAttribute('data-filter') || '';
-          _page = 0;
-          loadBlocks();
+        async function getJson(url) {
+            const r = await fetch(url, { credentials: 'same-origin' });
+            const j = await r.json().catch(() => null);
+            if (!r.ok) throw new Error((j && j.error) || ('HTTP ' + r.status));
+            return j;
+        }
+
+        async function loadSummary() {
+            try {
+                const s = await getJson('/api/pool/stats');
+                const g = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+                g('kpi-total', s.total_blocks_found != null ? s.total_blocks_found : '—');
+                g('kpi-confirmed', s.confirmed_blocks != null ? s.confirmed_blocks : '—');
+                g('kpi-immature', s.immature_blocks != null ? s.immature_blocks : '—');
+                g('kpi-recent', (s.blocks_24h != null ? s.blocks_24h : 0) + ' / ' + (s.blocks_7d != null ? s.blocks_7d : 0));
+            } catch (e) { /* KPIs keep placeholders */ }
+        }
+
+        async function loadBlocks() {
+            const tbody = document.getElementById('blocks-tbody');
+            tbody.innerHTML = '<tr><td colspan="7">Loading…</td></tr>';
+            try {
+                const q = '?limit=' + PAGE_SIZE + '&offset=' + (_page * PAGE_SIZE) +
+                          (_filter ? '&status=' + encodeURIComponent(_filter) : '');
+                const blocks = await getJson('/api/pool/blocks' + q);
+                const rows = Array.isArray(blocks) ? blocks : [];
+                _lastFull = rows.length === PAGE_SIZE;
+                if (!rows.length) {
+                    tbody.innerHTML = '<tr><td colspan="7">' +
+                        (_page === 0 ? 'No blocks found yet — the pool is still searching.' : 'No more blocks.') +
+                        '</td></tr>';
+                } else {
+                    tbody.innerHTML = rows.map(function (b) {
+                        var h = Number(b.height || 0);
+                        return '<tr>' +
+                            '<td>' + Explorer.link('block', h, h.toLocaleString('en-US')) + '</td>' +
+                            '<td>' + statusCell(b.status) + '</td>' +
+                            luckCell(b) +
+                            '<td class="num">' + (Number(b.reward) || 0).toFixed(2) + ' ツ</td>' +
+                            '<td title="' + escHtml(b.found_by) + '">' + escHtml(shortAddr(b.found_by)) + '</td>' +
+                            '<td class="num" title="' + escHtml(fmtTs(b.found_at)) + '">' + escHtml(timeAgo(b.found_at)) + '</td>' +
+                            '<td>' + Explorer.link('block', h, 'view ↗') + '</td>' +
+                            '</tr>';
+                    }).join('');
+                }
+            } catch (e) {
+                tbody.innerHTML = '<tr><td colspan="7">Block data unavailable</td></tr>';
+                _lastFull = false;
+            }
+            updatePager();
+        }
+
+        function updatePager() {
+            document.getElementById('prev-btn').disabled = _page === 0;
+            document.getElementById('next-btn').disabled = !_lastFull;
+            document.getElementById('page-label').textContent = 'Page ' + (_page + 1);
+        }
+
+        // ── Historical trend charts (P-01…P-04), driven by the shared range toggle ──────────────
+        let bkRange = 'month';
+        const RANGE_NOTE = {
+            week:  'last 7 days · daily',
+            month: 'last 30 days · daily',
+            year:  'last 365 days · weekly',
+            all:   'all time · auto-scaled'
+        };
+
+        function toggleEmpty(emptyId, show) {
+            const el = document.getElementById(emptyId);
+            if (el) el.style.display = show ? 'flex' : 'none';
+        }
+
+        // UTC bucket label for the column chart (all block buckets are ≥ 1 day → "MMM D").
+        function bucketLabel(t) {
+            return new Date(t * 1000).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
+        }
+
+        async function loadBlockCharts() {
+            const note = document.getElementById('bk-range-note');
+            if (note) note.textContent = RANGE_NOTE[bkRange] || '';
+            if (typeof PoolCharts === 'undefined') return;
+            try {
+                const data = await getJson('/api/pool/blocks/history?range=' + encodeURIComponent(bkRange));
+                const points = (data && Array.isArray(data.points)) ? data.points : [];
+                const luck = (data && Array.isArray(data.luck)) ? data.luck : [];
+                const status = (data && data.status) || { confirmed: 0, immature: 0, orphaned: 0 };
+                const bucket = data && data.bucket_seconds;
+                const hasPeriod = points.length > 0;
+                const hasLuck = luck.length > 0;
+                const statusTotal = (status.confirmed || 0) + (status.immature || 0) + (status.orphaned || 0);
+
+                // P-01 · luck line (per block over the window; 100% = statistically expected).
+                toggleEmpty('bk-empty-luck', !hasLuck);
+                PoolCharts.renderTrendLine('bk-chart-luck',
+                    luck.map(p => ({ t: p.t, v: p.luck })),
+                    { label: 'Luck', bucketSeconds: 86400, color: '#58a6ff', valueFmt: v => (Number(v) || 0).toFixed(0) + '%' });
+
+                // P-02 · blocks found per period (plain columns).
+                toggleEmpty('bk-empty-blocks', !hasPeriod);
+                PoolCharts.renderBarChart('bk-chart-blocks',
+                    points.map(p => bucketLabel(p.t)),
+                    points.map(p => p.blocks),
+                    { label: 'Blocks found', valueFmt: PoolCharts.fmtInt });
+
+                // P-03 · status breakdown doughnut (window totals; true orphaned count).
+                toggleEmpty('bk-empty-status', statusTotal === 0);
+                PoolCharts.renderDoughnutChart('bk-chart-status',
+                    ['Confirmed', 'Maturing', 'Orphaned'],
+                    [status.confirmed || 0, status.immature || 0, status.orphaned || 0],
+                    { colors: ['#3fb950', '#d29922', '#f85149'] });
+
+                // P-04 · cumulative reward area (running sum across the window).
+                let running = 0;
+                const cum = points.map(p => ({ t: p.t, v: (running += Number(p.reward) || 0) }));
+                toggleEmpty('bk-empty-reward', !hasPeriod);
+                PoolCharts.renderTrendLine('bk-chart-reward', cum,
+                    { label: 'Cumulative reward', bucketSeconds: bucket, valueFmt: fmtGrin, color: '#7cb342' });
+            } catch (e) {
+                toggleEmpty('bk-empty-luck', true);
+                toggleEmpty('bk-empty-blocks', true);
+                toggleEmpty('bk-empty-status', true);
+                toggleEmpty('bk-empty-reward', true);
+            }
+        }
+
+        document.addEventListener('DOMContentLoaded', function () {
+            document.getElementById('prev-btn').addEventListener('click', function () {
+                if (_page > 0) { _page--; loadBlocks(); }
+            });
+            document.getElementById('next-btn').addEventListener('click', function () {
+                if (_lastFull) { _page++; loadBlocks(); }
+            });
+            document.querySelectorAll('#filter-chips .chip').forEach(function (btn) {
+                btn.addEventListener('click', function () {
+                    document.querySelectorAll('#filter-chips .chip').forEach(function (b) { b.classList.remove('active'); });
+                    btn.classList.add('active');
+                    _filter = btn.getAttribute('data-filter') || '';
+                    _page = 0;
+                    loadBlocks();
+                });
+            });
+
+            // Timeframe toggle → reload the four trend charts (explorer table is unaffected).
+            const bar = document.getElementById('bk-rangebar');
+            if (bar) {
+                bar.addEventListener('click', function (e) {
+                    const btn = e.target.closest('.rng-btn');
+                    if (!btn) return;
+                    const r = btn.getAttribute('data-range');
+                    if (!r || r === bkRange) return;
+                    bkRange = r;
+                    bar.querySelectorAll('.rng-btn').forEach(b => b.classList.toggle('active', b === btn));
+                    loadBlockCharts();
+                });
+            }
+
+            // Resolve the GrinScan base from the pool network (testnet → testnet.grinscan.org),
+            // then load — so block deep-links point at the right chain explorer.
+            fetch('/api/config/pool-info', { credentials: 'same-origin' })
+                .then(function (r) { return r.ok ? r.json() : null; })
+                .then(function (d) { if (d && d.network === 'testnet') GRINSCAN = 'https://testnet.grinscan.org'; })
+                .catch(function () {})
+                .finally(function () { loadSummary(); loadBlocks(); loadBlockCharts(); });
+            setInterval(function () { loadSummary(); loadBlockCharts(); if (_page === 0) loadBlocks(); }, 60000);
         });
-      });
-      // Resolve the GrinScan base from the pool network (testnet → testnet.grinscan.org),
-      // then load — so block deep-links point at the right chain explorer.
-      fetch('/api/config/pool-info', { credentials: 'same-origin' })
-        .then(function (r) { return r.ok ? r.json() : null; })
-        .then(function (d) { if (d && d.network === 'testnet') GRINSCAN = 'https://testnet.grinscan.org'; })
-        .catch(function () {})
-        .finally(function () { loadSummary(); loadBlocks(); });
-      setInterval(function () { loadSummary(); if (_page === 0) loadBlocks(); }, 60000);
-    });
-  </script>
-  <script src="/js/public-shell.js"></script>
-  <script src="/js/public-theme.js"></script>
-  <script src="/js/branding.js"></script>
+    </script>
+    <script src="/js/public-shell.js"></script>
+    <script src="/js/public-theme.js"></script>
+    <script src="/js/branding.js"></script>
 </body>
 </html>

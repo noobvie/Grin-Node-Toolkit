@@ -60,6 +60,58 @@
     return base.replace(/\/+$/, '') + (maybeRelative.charAt(0) === '/' ? '' : '/') + maybeRelative;
   }
 
+  // ── Chain explorer deep-links (window.Explorer) ─────────────────────────────
+  // Any block height / hash / kernel / output shown anywhere on a public page links out to a
+  // public Grin chain explorer in a new tab — the miner's independent proof. To spread load
+  // (and not tie the pool to one explorer) each mainnet link randomly picks between grinscan.org
+  // and scan.grin.money; both share the same path scheme (/block/<h>, /kernel/<excess>,
+  // /output/<commit>). scan.grin.money is mainnet-only, so on testnet every link uses
+  // testnet.grinscan.org. Network is resolved from the branding fetch (cfg.connection.network)
+  // and cached in sessionStorage; until then we assume mainnet (the common deployment).
+  var NETWORK_KEY = 'pool-network';
+  function explorerNetwork() {
+    try { var n = sessionStorage.getItem(NETWORK_KEY); if (n) return n; } catch (e) {}
+    return 'mainnet';
+  }
+  var EXPLORERS = ['https://grinscan.org', 'https://scan.grin.money'];
+  function explorerBase(kind) {
+    if (explorerNetwork() === 'testnet') return 'https://testnet.grinscan.org';
+    // kernel/output deep-links are only guaranteed on scan.grin.money; heights & hashes
+    // resolve on both, so those randomize across the two explorers.
+    if (kind === 'kernel' || kind === 'output') return 'https://scan.grin.money';
+    return EXPLORERS[Math.random() < 0.5 ? 0 : 1];
+  }
+  function explorerUrl(kind, value) {
+    var path = (kind === 'kernel') ? 'kernel' : (kind === 'output') ? 'output' : 'block';
+    return explorerBase(kind) + '/' + path + '/' + encodeURIComponent(String(value));
+  }
+  function xEsc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+  // Returns an <a> (HTML string) that opens the explorer in a new tab. `label` defaults to
+  // `value`. Both URL and label are HTML-escaped — safe for untrusted chain strings. A missing
+  // value returns just the escaped label (no dead link).
+  function explorerLink(kind, value, label, cls) {
+    if (value == null || value === '') return xEsc(label == null ? '' : label);
+    return '<a href="' + xEsc(explorerUrl(kind, value)) + '" target="_blank" rel="noopener" ' +
+      'class="xplink' + (cls ? ' ' + xEsc(cls) : '') + '" title="Open on Grin chain explorer ↗">' +
+      xEsc(label == null ? value : label) + '</a>';
+  }
+  function injectExplorerCss() {
+    if (document.getElementById('xplink-css')) return;
+    var s = document.createElement('style');
+    s.id = 'xplink-css';
+    // Inherit the surrounding colour so links embed cleanly in tables/rods; a dotted underline
+    // signals "clickable" without fighting the reactor theme.
+    s.textContent = 'a.xplink{color:inherit;text-decoration:underline;text-decoration-style:dotted;' +
+      'text-underline-offset:2px;text-decoration-thickness:1px;cursor:pointer;}' +
+      'a.xplink:hover{text-decoration-style:solid;opacity:.82;}';
+    head().appendChild(s);
+  }
+  window.Explorer = { url: explorerUrl, link: explorerLink, network: explorerNetwork };
+
   // ── 1. SEO / meta tags ─────────────────────────────────────────────────────
   function applySeo(cfg) {
     var pool = cfg.pool || {};
@@ -69,14 +121,31 @@
     var pageSeo = (seo.page_seo && seo.page_seo[page]) || {};
 
     var poolName = pool.name || '';
+    var tagline = pool.tagline || '';
     var pageLabel = pageSeo.label || prettyPage(page);
+    var isHome = (page === 'home' || page === 'index');
 
-    // Title: per-page override wins, else the title_template, else leave as-is.
-    var title = pageSeo.title;
-    if (!title && seo.title_template && poolName) {
-      title = seo.title_template
+    function fillTokens(tpl) {
+      return tpl
         .replace(/%page%/g, pageLabel || poolName)
-        .replace(/%pool_name%/g, poolName);
+        .replace(/%pool_name%/g, poolName)
+        .replace(/%tagline%/g, tagline);
+    }
+
+    // Title precedence:
+    //   1. explicit per-page override (page_seo[page].title)
+    //   2. home page → home_title (the %page% token is empty on home, so the
+    //      generic template would duplicate the pool name)
+    //   3. the generic title_template
+    // …else leave the hard-coded <title> as-is.
+    var title = pageSeo.title;
+    if (!title && isHome && poolName) {
+      // Home never uses the generic template (its %page% token is empty and would
+      // duplicate the pool name). Use home_title, else the pool name alone.
+      title = seo.home_title ? fillTokens(seo.home_title) : poolName;
+    }
+    if (!title && seo.title_template && poolName) {
+      title = fillTokens(seo.title_template);
     }
     if (title) document.title = title;
 
@@ -136,7 +205,7 @@
       if (canonical) ld.url = canonical;
       if (ogImage) ld.logo = ogImage;
       var social = (cfg.branding && cfg.branding.social) || {};
-      var sameAs = [social.twitter, social.discord, social.telegram, social.website].filter(Boolean);
+      var sameAs = [social.twitter, social.discord, social.telegram, social.nostr, social.website].filter(Boolean);
       if (sameAs.length) ld.sameAs = sameAs;
 
       var s = document.createElement('script');
@@ -321,13 +390,14 @@
       });
     });
 
-    // Footer copyright: "© <founded>–<year> <pool_name>". Collapses to a single year
-    // when founded_year is blank or equals the current year.
+    // Footer copyright: "Since <founded>". Uses the founding year when set, otherwise
+    // the current year. Pool name is intentionally omitted — it already appears in the
+    // footer brand column, so repeating it here is redundant.
     var year = new Date().getFullYear();
     var founded = parseInt(pool.founded_year, 10);
-    var range = (founded && founded < year) ? (founded + '–' + year) : String(year);
+    var since = (founded && founded <= year) ? founded : year;
     document.querySelectorAll('[data-brand="copyright"]').forEach(function (el) {
-      el.textContent = '© ' + range + (pool.name ? ' ' + pool.name : '');
+      el.textContent = 'Since ' + since;
     });
 
     // Legal-column "Contact" link, shown only when a contact email is set. The mailto: is
@@ -429,13 +499,18 @@
       if (logo) {
         if (brand.logo_url) logo.src = brand.logo_url;
       } else {
+        // Only synthesise a logo for admin/older markup that ships a .dot placeholder.
+        // A .brand with neither a logo nor a dot (e.g. the footer brand) intentionally
+        // has no logo — don't recreate one, or the footer logo comes back.
         var dot = el.querySelector('.dot');
-        logo = document.createElement('img');
-        logo.className = 'brand-logo';
-        logo.src = brand.logo_url || '/images/logo.svg';
-        logo.alt = '';
-        logo.setAttribute('aria-hidden', 'true');
-        if (dot) { el.replaceChild(logo, dot); } else { el.insertBefore(logo, el.firstChild); }
+        if (dot) {
+          logo = document.createElement('img');
+          logo.className = 'brand-logo';
+          logo.src = brand.logo_url || '/images/grin_lime.svg';
+          logo.alt = '';
+          logo.setAttribute('aria-hidden', 'true');
+          el.replaceChild(logo, dot);
+        }
       }
 
       if (nameEl && !el.querySelector('.brand-text')) {
@@ -524,6 +599,21 @@
     }
   }
 
+  // Privacy: strip the miner's grin address (?addr=) out of any URL before it reaches
+  // analytics. The account page is deep-linkable (account-settings.html?addr=grin1…), and
+  // GA4's default page_view sends page_location = the full URL — which would log the
+  // address into the operator's analytics. We drop only `addr` and keep everything else
+  // (utm_* campaign tags etc. stay intact for attribution). Returns origin+path+scrubbed-query.
+  function scrubbedLocation() {
+    try {
+      var u = new URL(window.location.href);
+      u.searchParams.delete('addr');
+      return u.origin + u.pathname + (u.search ? u.search : '');
+    } catch (e) {
+      return window.location.origin + window.location.pathname;
+    }
+  }
+
   function loadGa4(id) {
     if (!id) return;
     var s = document.createElement('script');
@@ -531,9 +621,12 @@
     s.src = 'https://www.googletagmanager.com/gtag/js?id=' + encodeURIComponent(id);
     head().appendChild(s);
     var init = document.createElement('script');
+    // page_location pinned to the scrubbed URL so the initial page_view (and every event
+    // that inherits the config default) never carries a miner's address to GA4.
     init.textContent =
       'window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments);}' +
-      "gtag('js',new Date());gtag('config','" + id.replace(/'/g, '') + "');";
+      "gtag('js',new Date());gtag('config','" + id.replace(/'/g, '') +
+      "',{page_location:" + JSON.stringify(scrubbedLocation()) + "});";
     head().appendChild(init);
   }
 
@@ -606,6 +699,12 @@
 
   // ── bootstrap ──────────────────────────────────────────────────────────────
   function apply(cfg) {
+    // Cache the chain so window.Explorer builds testnet-correct deep-links.
+    try {
+      var net = cfg.connection && cfg.connection.network;
+      if (net) sessionStorage.setItem(NETWORK_KEY, net);
+    } catch (e) {}
+
     try { applyTheme(cfg); } catch (e) {}
 
     // Maintenance mode: show a branded full-page overlay on public pages. Pages that
@@ -645,6 +744,28 @@
         var wrap = el.closest('[data-brand-show="donation"]');
         if (wrap) wrap.style.display = '';
       }
+    });
+
+    // Upcoming contest campaigns teaser (e.g. the fortune board). Fed by inc.lottery.campaigns
+    // (scheduled, not-yet-drawn) from /api/public/branding → LotteryManager.nextScheduled().
+    var campaigns = (inc.lottery && inc.lottery.campaigns) || [];
+    var fmtUtc = function (sec) {
+      return sec ? new Date(sec * 1000).toISOString().slice(0, 16).replace('T', ' ') + ' UTC' : '—';
+    };
+    document.querySelectorAll('[data-brand="upcoming-campaigns"]').forEach(function (container) {
+      var wrap = container.closest('[data-brand-show="campaigns"]');
+      if (!inc.enabled || !campaigns.length) { if (wrap) wrap.style.display = 'none'; return; }
+      if (wrap) wrap.style.display = '';
+      container.innerHTML = '';
+      campaigns.forEach(function (c) {
+        var pot = (c.pot_grin > 0) ? (' — ' + c.pot_grin + ' GRIN') : '';
+        var row = document.createElement('div');
+        row.style.cssText = 'padding:.4rem 0;border-bottom:1px solid rgba(128,128,128,.2);';
+        row.innerHTML = '<strong>🏆 ' + escapeText(c.name) + '</strong>' + escapeText(pot) +
+          (c.description ? '<br><span style="opacity:.8;">' + escapeText(c.description) + '</span>' : '') +
+          '<br><span style="font-size:.85em;opacity:.7;">Draws ' + escapeText(fmtUtc(c.ends_at)) + '</span>';
+        container.appendChild(row);
+      });
     });
 
     // Compact recent-winners list (e.g. a homepage "🎉 Latest winners" widget).
@@ -741,6 +862,9 @@
   }
 
   function load() {
+    // window.Explorer is usable immediately (defined synchronously above); inject its style now
+    // so chain deep-links render correctly even before the branding fetch resolves.
+    try { injectExplorerCss(); } catch (e) {}
     // The header/footer + base nav are now injected synchronously by public-shell.js
     // (single source of truth, no flash). branding.js only ENHANCES that chrome:
     // logo/slogan, [data-brand] hooks, and the incentives-gated 🎁 Rewards link.

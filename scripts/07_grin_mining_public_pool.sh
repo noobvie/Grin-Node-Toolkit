@@ -133,6 +133,13 @@ source "$SCRIPT_DIR/lib/grin_node_secrets.sh"
 # sourcing here — before pool_read_conf is defined — is safe.
 # shellcheck source=lib/07_lib_pool_wallet.sh
 source "$SCRIPT_DIR/lib/07_lib_pool_wallet.sh"
+# grin-gateway-ctl installer — the single WireGuard mutation path shared by the
+# CLI (menu W) and the admin panel (design §13.2).
+# shellcheck source=lib/07_lib_gwctl.sh
+source "$SCRIPT_DIR/lib/07_lib_gwctl.sh"
+# Hub backup/restore on the shared engine (pool.db + config + wallet + WG identity).
+# shellcheck source=lib/07_lib_pool_backup.sh
+source "$SCRIPT_DIR/lib/07_lib_pool_backup.sh"
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # EXCLUSIVITY GUARD — one mining type per server (public XOR solo private)
@@ -252,7 +259,7 @@ pool_ensure_defaults() {
         ["region_country"]=""
         ["region_country_code"]=""
         ["pool_fee_percent"]="1.0"
-        ["min_withdrawal"]="5.0"
+        ["min_withdrawal"]="25.0"
         ["withdrawal_fee"]="0.0"
         ["grin_wallet_dir"]="$POOL_WALLET_DIR"
         ["log_path"]="$POOL_LOG"
@@ -398,6 +405,63 @@ pool_ensure_node24() {
     success "Node.js installed: $(node --version)"
 }
 
+# ─── De-root the pool backend (design §13.9) ───────────────────────────────────
+# Creates the grinpool service user, sweeps ownership of everything the backend
+# must write (app dir + pool.db + .wallet_pass + uploads, pool.json, wallet dir,
+# log), grants group-read on the node's TWO secret files via the grinsecret group
+# (lib/grin-node.js reads .api_secret AND .foreign_api_secret directly), and
+# writes the one-line scoped sudoers so the backend may run grin-gateway-ctl as
+# root — and nothing else. Idempotent: runs on every install/upgrade; on a live
+# box a re-run of 1) Install migrates the old root service in place.
+# Honest caveat (script07_security_audit.md §Residual risks): this does NOT
+# protect the hot wallet — the backend must be able to spend by design. It
+# protects the box, the WG/node/LE keys, and the other products on it.
+pool_deroot() {
+    if ! id grinpool &>/dev/null; then
+        useradd -r -s /usr/sbin/nologin grinpool 2>/dev/null \
+            || useradd -r -s /sbin/nologin grinpool 2>/dev/null \
+            || { error "Could not create the grinpool service user."; return 1; }
+        info "Created service user grinpool."
+    fi
+    getent group grinsecret >/dev/null 2>&1 || groupadd -r grinsecret 2>/dev/null || true
+    usermod -aG grinsecret grinpool 2>/dev/null || true
+
+    # Ownership sweep — reclaims root-owned leftovers from the pre-de-root era.
+    # ||-guarded: a chown hiccup must not abort the whole install under set -e.
+    [[ -d "$POOL_APP_DIR" ]] && { chown -R grinpool:grinpool "$POOL_APP_DIR" 2>/dev/null || true; }
+    [[ -f "$POOL_CONF" ]] && { chown grinpool:grinpool "$POOL_CONF" 2>/dev/null || true; }
+    local wdir; wdir=$(pw_wallet_dir 2>/dev/null || echo "$POOL_WALLET_DIR")
+    [[ -d "$wdir" ]] && { chown -R grinpool:grinpool "$wdir" 2>/dev/null || true; }
+    touch "$POOL_LOG" 2>/dev/null || true
+    chown grinpool:grinpool "$POOL_LOG" 2>/dev/null || true
+
+    # Node secrets → group-read (640 root:grinsecret), never world-read. A node
+    # rebuild regenerates them 600 root-only; grin_sync_pool_stratum (secret
+    # self-heal chain) re-applies this, so it heals without operator action.
+    local ndir sf
+    ndir=$(grin_live_node_dir "$POOL_NET" 2>/dev/null || true)
+    if [[ -n "$ndir" ]]; then
+        for sf in "$ndir/.api_secret" "$ndir/.foreign_api_secret"; do
+            [[ -f "$sf" ]] || continue
+            chgrp grinsecret "$sf" 2>/dev/null || true
+            chmod 640 "$sf" 2>/dev/null || true
+        done
+    fi
+
+    # Scoped sudo: grin-gateway-ctl is root-owned 0755 (root-writable only), so
+    # this cannot be parlayed into arbitrary root by the grinpool user.
+    cat > /etc/sudoers.d/grin-pool-gwctl <<'EOF'
+# grin-node-toolkit: de-rooted pool backend → gateway pairing helper (design §13.9)
+grinpool ALL=(root) NOPASSWD: /usr/local/bin/grin-gateway-ctl
+EOF
+    chmod 440 /etc/sudoers.d/grin-pool-gwctl
+    if command -v visudo &>/dev/null && ! visudo -c -f /etc/sudoers.d/grin-pool-gwctl >/dev/null 2>&1; then
+        rm -f /etc/sudoers.d/grin-pool-gwctl
+        warn "sudoers validation failed — removed grin-pool-gwctl entry (panel gateway pairing disabled)."
+    fi
+    success "grinpool service user ready — ownership swept, node secrets group-read, scoped sudo installed."
+}
+
 pool_install() {
     echo -e "\n${BOLD}Installing Pool Manager (${POOL_NET_LABEL})...${RESET}\n"
 
@@ -458,7 +522,20 @@ pool_install() {
 
     pool_ensure_defaults
 
+    # De-root FIRST (creates the grinpool user + ownership + scoped sudo) so the
+    # hardened unit below can reference an existing user. Also installs the
+    # grin-gateway-ctl helper the panel/CLI pairing path depends on (§13.2/§13.9).
+    pool_gwctl_install || true
+    pool_deroot || return 1
+
     local node_bin; node_bin=$(command -v node 2>/dev/null || echo /usr/bin/node)
+    local wallet_rw; wallet_rw=$(pw_wallet_dir 2>/dev/null || echo "$POOL_WALLET_DIR")
+    # User=grinpool (§13.9): the backend parses untrusted input from the public
+    # internet on TWO surfaces (HTTP API + raw stratum TCP) atop a large npm tree —
+    # root here turned any RCE into hub-WG-key + node-secret + LE-key compromise.
+    # ReadWritePaths entries are '-'-prefixed (ignore-if-missing) because the wallet
+    # dir may not exist until step 5. Do NOT add NoNewPrivileges — it breaks the
+    # scoped `sudo grin-gateway-ctl` the panel pairing path uses.
     cat > "/etc/systemd/system/$POOL_SERVICE.service" << EOF
 [Unit]
 Description=Grin Pool Manager (GRINIUM — ${POOL_NET_LABEL})
@@ -467,7 +544,7 @@ Wants=network.target
 
 [Service]
 Type=simple
-User=root
+User=grinpool
 WorkingDirectory=$POOL_APP_DIR
 Environment="GRIN_POOL_CONF=$POOL_CONF"
 Environment="NODE_ENV=production"
@@ -477,13 +554,18 @@ ExecStart=$node_bin $POOL_APP_DIR/index.js
 Restart=on-failure
 RestartSec=5
 LimitNOFILE=65535
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+RestrictSUIDSGID=yes
+ReadWritePaths=-$POOL_APP_DIR -$(dirname "$POOL_CONF") -$wallet_rw -$LOG_DIR
 
 [Install]
 WantedBy=multi-user.target
 EOF
     systemctl daemon-reload
     systemctl enable "$POOL_SERVICE" 2>/dev/null || true
-    success "Systemd service $POOL_SERVICE installed."
+    success "Systemd service $POOL_SERVICE installed (runs as grinpool, hardened unit)."
 
     mkdir -p "$(dirname "$POOL_LOG")"
     cat > "/etc/logrotate.d/${POOL_SERVICE}" << EOF
@@ -737,6 +819,15 @@ pool_deploy_code() {
     # Frontend (public_html → /var/www/grin-pool) + admin panel + pool-config.js.
     # No-op-safe if the web files were never deployed (it recreates the dir).
     pool_deploy_web || warn "Frontend deploy reported a problem — backend is still refreshed."
+
+    # Upgrade-path de-root (§13.9): rsync ran as root, so re-sweep ownership and
+    # regenerate the pairing helper — idempotent no-ops on an already-migrated box.
+    # A pre-de-root install also needs 1) Install re-run once for the hardened unit.
+    pool_gwctl_install || true
+    pool_deroot || warn "De-root sweep failed — the service may not start as grinpool."
+    if grep -q '^User=root' "/etc/systemd/system/$POOL_SERVICE.service" 2>/dev/null; then
+        warn "Service unit still runs as root — re-run 1) Install once to apply the hardened grinpool unit."
+    fi
 
     # Make the new backend live. Only restart if it's already running; a stopped
     # service is left stopped (the operator starts it via 6) Service control).
@@ -1459,6 +1550,7 @@ pool_wallet_menu() {
         echo -e "  ${GREEN}5${RESET}) Patch node wallet_listener_url"
         echo -e "  ${GREEN}6${RESET}) Auto-restart on boot ${DIM}(enable / disable)${RESET}"
         echo -e "  ${GREEN}7${RESET}) Watchdog */5        ${DIM}(install / remove)${RESET}"
+        echo -e "  ${GREEN}8${RESET}) Replace pool wallet  ${DIM}(compromise/corruption runbook — balances live in pool.db)${RESET}"
         echo -e "  ${DIM}0) Back${RESET}"
         echo -ne "${BOLD}Select: ${RESET}"
         local c; read -r c
@@ -1480,6 +1572,7 @@ pool_wallet_menu() {
                    r) pw_watchdog_remove || true ;;
                    *) warn "Cancelled." ;;
                esac ;;
+            8) pw_replace_wallet || true ;;
             0|"") return 0 ;;
             *) warn "Invalid option." ;;
         esac
@@ -1549,31 +1642,12 @@ pool_start_service() {
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# B) BACKUP
+# B) BACKUP & RESTORE — lib/07_lib_pool_backup.sh (shared gbe_*/gbp_* engine)
 # ═══════════════════════════════════════════════════════════════════════════════
-
-pool_backup() {
-    info "Backing up the ${POOL_NET_LABEL} pool (DB + config)..."
-    local backup_dir="/opt/grin/backups/${POOL_SERVICE}"
-    mkdir -p "$backup_dir"
-    local ts; ts=$(date +%Y%m%d_%H%M%S)
-    local backup_file="$backup_dir/pool_backup_${ts}.tar.gz"
-
-    local files=()
-    [[ -f "$POOL_APP_DIR/pool.db" ]] && files+=("$POOL_APP_DIR/pool.db")
-    [[ -f "$POOL_CONF" ]]            && files+=("$POOL_CONF")
-
-    if [[ ${#files[@]} -eq 0 ]]; then
-        warn "Nothing to back up — DB and config not found."
-        return
-    fi
-
-    tar -czf "$backup_file" "${files[@]}" 2>/dev/null \
-        && success "Backup: $backup_file" \
-        || error "Backup failed."
-
-    ls -t "$backup_dir"/pool_backup_*.tar.gz 2>/dev/null | tail -n +31 | xargs rm -f 2>/dev/null || true
-}
+# The hub holds money-grade state (pool.db balances, wallet seed, WG identity) —
+# it uses the same encrypted-archive engine as solo/drop (design §13.10c).
+# pbk_* functions come from the sourced lib; the old plain pool_backup tar
+# (pool_backup_YYYYMMDD_*.tar.gz, DB+conf only, unencrypted) is superseded.
 
 # Pause helper for one-shot submenus that perform an action: keeps their success
 # output on screen. Submenus call this only after a real action (never on Back),
@@ -1604,36 +1678,11 @@ pool_cron_schedules() {
     echo -ne "Choice: "
     read -r cc
 
-    local backup_wrapper="/usr/local/bin/grin-pool-backup-${POOL_NET}"
-
     case "$cc" in
         1)
-            if [[ -f "$cron_backup" ]]; then
-                rm -f "$cron_backup" "$backup_wrapper"
-                success "Daily backup cron disabled."
-            else
-                cat > "$backup_wrapper" << SCRIPT
-#!/bin/bash
-set -euo pipefail
-BACKUP_DIR="/opt/grin/backups/${POOL_SERVICE}"
-mkdir -p "\$BACKUP_DIR"
-TS=\$(date +%Y%m%d_%H%M%S)
-FILES=()
-[[ -f "$POOL_APP_DIR/pool.db" ]] && FILES+=("$POOL_APP_DIR/pool.db")
-[[ -f "$POOL_CONF" ]]            && FILES+=("$POOL_CONF")
-if [[ \${#FILES[@]} -eq 0 ]]; then
-    echo "[grin-pool-backup-${POOL_NET}] Nothing to back up."
-    exit 0
-fi
-tar -czf "\$BACKUP_DIR/pool_backup_\${TS}.tar.gz" "\${FILES[@]}"
-ls -t "\$BACKUP_DIR"/pool_backup_*.tar.gz 2>/dev/null | tail -n +31 | xargs -r rm -f
-SCRIPT
-                chmod 750 "$backup_wrapper"
-                cat > "$cron_backup" << EOF
-0 2 * * * root $backup_wrapper >> $POOL_LOG 2>&1
-EOF
-                success "Daily backup cron enabled ($cron_backup → $backup_wrapper)."
-            fi
+            # Delegates to the shared-engine schedule (encrypted archive + offsite
+            # push + retention) — same toggle as B) Backup & Restore → Schedule.
+            pbk_schedule || true
             _pool_pause
             ;;
         2)
@@ -1865,6 +1914,28 @@ else
 fi
 WG_CONF="/etc/wireguard/${WG_IFACE}.conf"
 
+# Public wg endpoint shown to operators / carried in pairing strings. Honors the
+# optional wg_endpoint_host conf key (§13.10b): a DNS name here means a provider/IP
+# change is just a DNS A-record update + `wg-quick` restart on each gateway —
+# no re-pairing. Falls back to the ipify-resolved public IP.
+_pool_wg_endpoint() {
+    local host; host=$(pool_read_conf "wg_endpoint_host" "")
+    if [[ -n "$host" ]]; then echo "${host}:${WG_LISTEN_PORT}"; return; fi
+    echo "$(curl -s --max-time 4 https://api.ipify.org 2>/dev/null || echo '<server-public-ip>'):${WG_LISTEN_PORT}"
+}
+
+# Parse one grin-gateway-ctl JSON reply. Prints "ERR <msg>" or
+# "OK <existing> <replaced> <region> <peer_ip> <port> <synced>" + pairing on line 2.
+_pool_gwctl_parse() {
+    node -e '
+let d = {};
+try { d = JSON.parse(process.argv[1]); } catch (e) { console.log("ERR helper output was not JSON"); process.exit(0); }
+if (!d.ok) { console.log("ERR " + (d.error || "unknown helper error")); process.exit(0); }
+console.log(["OK", d.existing ? 1 : 0, d.replaced ? 1 : 0, d.region, d.peer_ip, d.region_port, d.synced === false ? 0 : 1].join(" "));
+console.log(d.pairing || "");
+' "$1" 2>/dev/null || echo "ERR helper output was not JSON"
+}
+
 pool_wg_setup_server() {
     info "Setting up the central WireGuard server..."
     if command -v apt-get &>/dev/null; then
@@ -1912,138 +1983,80 @@ EOF
         systemctl enable "wg-quick@${WG_IFACE}" 2>/dev/null || true
         # Bind the central per-region stratum listeners to the tunnel IP (never public).
         pool_write_conf_key "region_listen_host" "${WG_TUNNEL_NET}.1"
+        # The single WG mutation path — the CLI below and the admin panel both pair
+        # gateways through it, so the peer list and region_ports can never drift.
+        pool_gwctl_install || true
         success "Central tunnel up (${WG_TUNNEL_NET}.1)."
         echo ""
         echo -e "  ${BOLD}Give each gateway operator these:${RESET}"
         echo -e "    central wg public key : ${GREEN}$(cat "$WG_DIR_CONF/server_public.key")${RESET}"
-        echo -e "    central wg endpoint   : ${GREEN}$(curl -s --max-time 4 https://api.ipify.org 2>/dev/null || echo '<server-public-ip>'):${WG_LISTEN_PORT}${RESET}"
+        echo -e "    central wg endpoint   : ${GREEN}$(_pool_wg_endpoint)${RESET}"
         echo -e "    central tunnel IP     : ${GREEN}${WG_TUNNEL_NET}.1${RESET}"
+        echo ""
+        echo -e "  ${DIM}Gateways can now also be paired from the admin panel (Regions & Gateways —${RESET}"
+        echo -e "  ${DIM}paste the gateway's wg public key into the region form; no SSH needed).${RESET}"
+        echo -e "  ${DIM}Tip: set a DNS name for this hub (option 5) so a future provider/IP change${RESET}"
+        echo -e "  ${DIM}never strands your gateways.${RESET}"
     else
         error "wg-quick up failed — check $WG_CONF."
         return 1
     fi
 }
 
+# Thin caller over grin-gateway-ctl (§13.5) — ALL WireGuard/region_ports mutation
+# logic lives in the helper, shared byte-for-byte with the admin panel path, so
+# the two registries can never drift. This wrapper only prompts + pretty-prints.
 pool_wg_add_peer() {
     [[ -f "$WG_CONF" ]] || { error "Run 1) Setup WireGuard server first."; return 1; }
+    [[ -x "$GWCTL_BIN" ]] || pool_gwctl_install || return 1
     local region gwpub
     echo -ne "Region key for this gateway (airport-style code, e.g. nyc, sgn, ams): "; read -r region
     [[ -n "$region" ]] || { warn "Region key required."; return 1; }
     echo -ne "Gateway's WireGuard public key: "; read -r gwpub
     [[ -n "$gwpub" ]] || { warn "Gateway public key required."; return 1; }
 
-    # Idempotent re-add guard. wg keeps ONE entry per PublicKey, so re-adding an existing
-    # key appends a second [Peer] block whose AllowedIPs silently REPLACES the live one —
-    # the gateway keeps its old tunnel IP while the hub now only routes the new IP:
-    # handshake still succeeds, every TCP packet is dropped (cryptokey routing mismatch,
-    # the exact 10.66.67.2-vs-.4 failure debugged 2026-07-05). Reuse + re-print instead.
-    if grep -qF "PublicKey = ${gwpub}" "$WG_CONF"; then
+    local out parsed head pairing
+    out=$("$GWCTL_BIN" add-peer --net "$POOL_NET" --region "$region" --pubkey "$gwpub" 2>&1 || true)
+    parsed=$(_pool_gwctl_parse "$out")
+    head=$(head -n1 <<< "$parsed"); pairing=$(sed -n 2p <<< "$parsed")
+    if [[ "$head" == ERR* ]]; then error "${head#ERR }"; return 1; fi
+    local _ ex rep reg peer_ip port synced
+    read -r _ ex rep reg peer_ip port synced <<< "$head"
+
+    if [[ "$ex" == "1" ]]; then
+        # Dup-pubkey guard (cryptokey-routing lesson 2026-07-05): the helper wrote
+        # NOTHING — the key keeps its existing tunnel IP/port; re-print the pairing.
         warn "This public key is ALREADY a gateway peer — keeping its existing tunnel IP/port."
-        local _hub_pub _pub_ep
-        _hub_pub=$(cat "$WG_DIR_CONF/server_public.key" 2>/dev/null)
-        _pub_ep="$(curl -s --max-time 4 https://api.ipify.org 2>/dev/null || echo '<server-public-ip>'):${WG_LISTEN_PORT}"
-        echo -e "  ${BOLD}Existing pairing string for this key:${RESET}"
-        node -e '
-const fs = require("fs");
-const [conf, poolConf, key, hubPub, pubEp, hubIp] = process.argv.slice(1);
-const txt = fs.readFileSync(conf, "utf8");
-let d = {}; try { d = JSON.parse(fs.readFileSync(poolConf, "utf8")); } catch (e) {}
-const ports = d.region_ports || {};
-for (const p of txt.split(/(?=^\[Peer\])/m)) {
-  if (!p.startsWith("[Peer]") || !p.includes("PublicKey = " + key)) continue;
-  const region = (p.match(/^# region: (\S+)/m) || [])[1] || "?";
-  const ip = (p.match(/^AllowedIPs\s*=\s*(\S+)/m) || [])[1] || "?";
-  console.log("    GRINGW1|" + region + "|" + hubPub + "|" + pubEp + "|" + hubIp + "|" + ip + "|" + (ports[region] || "?"));
-  break;
-}
-' "$WG_CONF" "$POOL_CONF" "$gwpub" "$_hub_pub" "$_pub_ep" "${WG_TUNNEL_NET}.1" 2>/dev/null \
-            || warn "Could not re-print the pairing string — see 3) List gateways."
-        info "To re-pair from scratch, remove the peer first (R) — then add it again."
+        echo -e "  ${BOLD}Existing pairing string for this key (region '${reg}'):${RESET}"
+        echo -e "    ${GREEN}${pairing}${RESET}"
+        info "To re-pair from scratch, remove the peer first (4) — then add it again."
         return 0
     fi
-
-    # Assign the next free tunnel IP (max existing AllowedIPs octet + 1) and region port.
-    # A region already in region_ports KEEPS its port (replacing a region's gateway box
-    # must not move its hub_endpoint); otherwise max existing + 1, else the base.
-    local assign nextip nextport
-    assign=$(node -e '
-const fs = require("fs");
-const [wgConf, poolConf, net, base, region] = process.argv.slice(1);
-let octs = [1];
-try {
-  const t = fs.readFileSync(wgConf, "utf8");
-  const re = new RegExp("AllowedIPs\\s*=\\s*" + net.replace(/\./g,"\\.") + "\\.(\\d+)", "g");
-  let m; while ((m = re.exec(t))) octs.push(parseInt(m[1], 10));
-} catch (e) {}
-let ports = [], keep = 0;
-try {
-  const d = JSON.parse(fs.readFileSync(poolConf, "utf8"));
-  if (d.region_ports) {
-    ports = Object.values(d.region_ports).map(Number).filter(Boolean);
-    keep  = parseInt(d.region_ports[region], 10) || 0;
-  }
-} catch (e) {}
-const nextIp   = Math.max.apply(null, octs) + 1;
-const nextPort = keep || (ports.length ? Math.max.apply(null, ports) + 1 : parseInt(base, 10));
-process.stdout.write(nextIp + " " + nextPort);
-' "$WG_CONF" "$POOL_CONF" "$WG_TUNNEL_NET" "$REGION_PORT_BASE" "$region" 2>/dev/null) || true
-    nextip=$(echo "$assign" | awk '{print $1}')
-    nextport=$(echo "$assign" | awk '{print $2}')
-    if [[ -z "$nextip" || -z "$nextport" ]]; then
-        error "Could not compute peer IP/port — is node installed and $POOL_CONF valid?"
-        return 1
-    fi
-    local peer_ip="${WG_TUNNEL_NET}.${nextip}"
-
-    # Append the peer to the wg config and apply live without dropping existing tunnels.
-    cat >> "$WG_CONF" << EOF
-
-[Peer]
-# region: ${region}
-PublicKey = ${gwpub}
-AllowedIPs = ${peer_ip}/32
-EOF
-    if wg syncconf "$WG_IFACE" <(wg-quick strip "$WG_IFACE") 2>/dev/null; then
-        info "Applied peer to live tunnel."
+    [[ "$synced" == "1" ]] || warn "wg syncconf failed — peer is in the config; run wg-quick down/up ${WG_IFACE} to apply."
+    if [[ "$rep" == "1" ]]; then
+        # Gateway box replacement: same region, new key — the helper swapped the key
+        # in place, so tunnel IP + region port (hub_endpoint) are unchanged (§13.10d).
+        success "Replaced the gateway key for region '${reg}' — tunnel IP + port kept."
     else
-        warn "wg syncconf failed — run 3) restart, or wg-quick down/up ${WG_IFACE}."
-    fi
-
-    # Record the region → internal port mapping in pool.json (nested object; the scalar
-    # pool_write_conf_key can't express it). region_listen_host stays the tunnel IP.
-    node -e '
-const fs = require("fs");
-const [p, region, port, host] = process.argv.slice(1);
-let d = {}; try { d = JSON.parse(fs.readFileSync(p, "utf8")); } catch (e) {}
-d.region_ports = d.region_ports || {};
-d.region_ports[region] = parseInt(port, 10);
-d.region_listen_host = host;
-fs.writeFileSync(p, JSON.stringify(d, null, 2)); fs.chmodSync(p, 0o600);
-' "$POOL_CONF" "$region" "$nextport" "${WG_TUNNEL_NET}.1"
-
-    # Restart the pool so the new per-region listener binds on the tunnel IP.
-    if systemctl is-active --quiet "$POOL_SERVICE" 2>/dev/null; then
-        systemctl restart "$POOL_SERVICE" && info "Restarted $POOL_SERVICE (new region listener binding)."
+        success "Added gateway peer for region '${reg}'."
+        # New region → the running pool must bind its tunnel listener. (Panel-side
+        # pairing hot-binds inside the process; the CLI runs outside it → restart.)
+        if systemctl is-active --quiet "$POOL_SERVICE" 2>/dev/null; then
+            systemctl restart "$POOL_SERVICE" && info "Restarted $POOL_SERVICE (new region listener binding)."
+        fi
     fi
 
     echo ""
-    success "Added gateway peer for region '${region}'."
-    local hub_pub pub_ep
-    hub_pub=$(cat "$WG_DIR_CONF/server_public.key" 2>/dev/null)
-    pub_ep="$(curl -s --max-time 4 https://api.ipify.org 2>/dev/null || echo '<server-public-ip>'):${WG_LISTEN_PORT}"
     echo -e "  ${BOLD}Give this gateway operator:${RESET}"
-    echo -e "    region key            : ${GREEN}${region}${RESET}"
-    echo -e "    central wg public key : ${GREEN}${hub_pub}${RESET}"
-    echo -e "    central wg endpoint   : ${GREEN}${pub_ep}${RESET}"
-    echo -e "    central tunnel IP     : ${GREEN}${WG_TUNNEL_NET}.1${RESET}"
-    echo -e "    this gateway tunnel IP: ${GREEN}${peer_ip}/32${RESET}"
-    echo -e "    central region port   : ${GREEN}${nextport}${RESET}  ${DIM}(hub_endpoint = ${WG_TUNNEL_NET}.1:${nextport})${RESET}"
+    echo -e "    this gateway tunnel IP: ${GREEN}${peer_ip}${RESET}"
+    echo -e "    central region port   : ${GREEN}${port}${RESET}  ${DIM}(hub_endpoint = ${WG_TUNNEL_NET}.1:${port})${RESET}"
     echo ""
-    echo -e "  ${BOLD}Or hand over this ONE-LINE pairing string${RESET} ${DIM}(paste it at the gateway's 2) Configure${RESET}"
-    echo -e "  ${DIM}to fill every tunnel field at once; re-printable via 3) List gateways):${RESET}"
-    echo -e "    ${GREEN}GRINGW1|${region}|${hub_pub}|${pub_ep}|${WG_TUNNEL_NET}.1|${peer_ip}/32|${nextport}${RESET}"
+    echo -e "  ${BOLD}ONE-LINE pairing string${RESET} ${DIM}(paste it at the gateway's 2) Configure to fill every${RESET}"
+    echo -e "  ${DIM}tunnel field at once; re-printable via 3) List gateways or the admin panel):${RESET}"
+    echo -e "    ${GREEN}${pairing}${RESET}"
     echo ""
-    echo -e "  ${DIM}Also declare region '${region}' in admin → Regions so it shows on the connect grid.${RESET}"
+    echo -e "  ${DIM}Also declare region '${reg}' in admin → Regions & Gateways so it shows on the${RESET}"
+    echo -e "  ${DIM}connect grid — or pair from that page next time (it does both in one step).${RESET}"
 }
 
 pool_wg_list() {
@@ -2053,38 +2066,34 @@ pool_wg_list() {
         echo -e "  ${DIM}WireGuard server not set up (run option 1).${RESET}"
         return 0
     fi
-    echo -e "  ${BOLD}Region → central listener${RESET} ${DIM}(tunnel-only host:port each gateway forwards to):${RESET}"
-    node -e '
-const fs = require("fs");
-let d = {}; try { d = JSON.parse(fs.readFileSync(process.argv[1], "utf8")); } catch (e) {}
-const rp = d.region_ports || {};
-const host = d.region_listen_host || "(unset)";
-const keys = Object.keys(rp);
-if (!keys.length) { console.log("    (none yet — option 2 assigns each gateway a host:port here)"); }
-else keys.forEach(k => console.log("    " + k + "  ->  " + host + ":" + rp[k]));
-' "$POOL_CONF" 2>/dev/null || echo "    (could not read $POOL_CONF)"
+    [[ -x "$GWCTL_BIN" ]] || pool_gwctl_install || true
 
-    # Re-print each peer's one-line pairing string (same format as add-peer prints),
-    # so an operator who lost the add-peer output can still hand it to the gateway.
-    local _hub_pub _pub_ep
-    _hub_pub=$(cat "$WG_DIR_CONF/server_public.key" 2>/dev/null)
-    _pub_ep="$(curl -s --max-time 4 https://api.ipify.org 2>/dev/null || echo '<server-public-ip>'):${WG_LISTEN_PORT}"
-    echo ""
-    echo -e "  ${BOLD}Pairing strings${RESET} ${DIM}(paste into the matching gateway's 2) Configure):${RESET}"
+    # One helper call carries everything: region → listener map, pairing strings,
+    # per-region handshake age (helper `list` + `status`, same data the panel shows).
+    local list_json status_json
+    list_json=$("$GWCTL_BIN" list --net "$POOL_NET" 2>/dev/null || echo '{}')
+    status_json=$("$GWCTL_BIN" status --net "$POOL_NET" 2>/dev/null || echo '{}')
     node -e '
-const fs = require("fs");
-const [wgConf, poolConf, hubPub, pubEp, hubIp] = process.argv.slice(1);
-let txt = ""; try { txt = fs.readFileSync(wgConf, "utf8"); } catch (e) {}
-let d = {};  try { d = JSON.parse(fs.readFileSync(poolConf, "utf8")); } catch (e) {}
-const ports = d.region_ports || {};
-const re = /# region: (\S+)[^[]*?AllowedIPs\s*=\s*(\S+)/g;
-let m, n = 0;
-while ((m = re.exec(txt))) {
-  console.log("    GRINGW1|" + m[1] + "|" + hubPub + "|" + pubEp + "|" + hubIp + "|" + m[2] + "|" + (ports[m[1]] || "?"));
-  n++;
+let l = {}, s = {};
+try { l = JSON.parse(process.argv[1]); } catch (e) {}
+try { s = JSON.parse(process.argv[2]); } catch (e) {}
+const host = process.argv[3];
+const hs = {};
+for (const g of (s.gateways || [])) hs[g.region] = g;
+const gws = l.gateways || [];
+console.log("  Region → central listener (tunnel-only host:port each gateway forwards to):");
+if (!gws.length) console.log("    (none yet — option 2 or the admin panel assigns each gateway a host:port here)");
+for (const g of gws) {
+  const h = hs[g.region];
+  const age = h && h.handshake_age != null ? "handshake " + h.handshake_age + "s ago" : "no handshake yet";
+  console.log("    " + g.region + "  ->  " + host + ":" + (g.region_port || "?") + "   [" + age + "]");
 }
-if (!n) console.log("    (no gateway peers yet — add one with option 2)");
-' "$WG_CONF" "$POOL_CONF" "$_hub_pub" "$_pub_ep" "${WG_TUNNEL_NET}.1" 2>/dev/null || true
+console.log("");
+console.log("  Pairing strings (paste into the matching gateway 2) Configure):");
+if (!gws.length) console.log("    (no gateway peers yet — add one with option 2)");
+for (const g of gws) console.log("    " + g.pairing);
+' "$list_json" "$status_json" "${WG_TUNNEL_NET}.1" 2>/dev/null \
+        || echo "    (could not read gateway list — is the helper installed and node present?)"
 
     # UX guard: a region wired here (region_ports) but NOT declared in admin → Regions
     # (pool_locations) still mines + credits fine — but shows on the public connect grid
@@ -2114,24 +2123,36 @@ if (missing.length) process.stdout.write(missing.join(" "));
     echo ""
     if wg show "$WG_IFACE" &>/dev/null; then
         echo -e "  ${BOLD}Live tunnel (${WG_IFACE}):${RESET}"
-        echo -e "    central wg endpoint: ${GREEN}${_pub_ep}${RESET}  ${DIM}(what each gateway dials from outside)${RESET}"
+        echo -e "    central wg endpoint: ${GREEN}$(_pool_wg_endpoint)${RESET}  ${DIM}(what each gateway dials from outside)${RESET}"
         wg show "$WG_IFACE" 2>/dev/null | sed 's/^/    /'
     else
         echo -e "  ${DIM}Tunnel ${WG_IFACE} not up.${RESET}"
     fi
 }
 
+# Thin caller over grin-gateway-ctl remove-peer (§13.5) — this wrapper keeps the
+# interactive parts (peer listing, liveness guard, typed confirmation) and lets the
+# helper do the mutation (drop [Peer] + syncconf + region_ports), exactly as the
+# panel's "also remove the WireGuard peer" delete flow does.
 pool_wg_remove_peer() {
     [[ -f "$WG_CONF" ]] || { error "WireGuard server not set up ($WG_CONF missing) — nothing to remove."; return 1; }
+    [[ -x "$GWCTL_BIN" ]] || pool_gwctl_install || return 1
 
-    # Show the real peers so the operator picks an existing region key.
-    local peers
+    # Show the real peers (+ handshake age) so the operator picks an existing region key.
+    local list_json status_json peers
+    list_json=$("$GWCTL_BIN" list --net "$POOL_NET" 2>/dev/null || echo '{}')
+    status_json=$("$GWCTL_BIN" status --net "$POOL_NET" 2>/dev/null || echo '{}')
     peers=$(node -e '
-const fs = require("fs");
-let txt = ""; try { txt = fs.readFileSync(process.argv[1], "utf8"); } catch (e) {}
-const re = /# region: (\S+)[^[]*?AllowedIPs\s*=\s*(\S+)/g;
-let m; while ((m = re.exec(txt))) console.log("    " + m[1] + "  " + m[2]);
-' "$WG_CONF" 2>/dev/null) || true
+let l = {}, s = {};
+try { l = JSON.parse(process.argv[1]); } catch (e) {}
+try { s = JSON.parse(process.argv[2]); } catch (e) {}
+const hs = {};
+for (const g of (s.gateways || [])) hs[g.region] = g;
+for (const g of (l.gateways || [])) {
+  const h = hs[g.region];
+  const age = h && h.handshake_age != null ? "handshake " + h.handshake_age + "s ago" : "no handshake";
+  console.log("    " + g.region + "  " + g.peer_ip + "  [" + age + "]");
+}' "$list_json" "$status_json" 2>/dev/null) || true
     if [[ -z "$peers" ]]; then
         info "No gateway peers in $WG_CONF — nothing to remove."
         return 0
@@ -2143,33 +2164,16 @@ let m; while ((m = re.exec(txt))) console.log("    " + m[1] + "  " + m[2]);
     echo -ne "Region key of the gateway to REMOVE: "; read -r region
     [[ -n "$region" ]] || { warn "Region key required."; return 1; }
 
-    # Resolve the peer's public key — needed for the liveness check below, and its
-    # absence means the region key doesn't match any "# region:" tag in the conf.
-    local gwpub
-    gwpub=$(node -e '
-const fs = require("fs");
-const [conf, region] = process.argv.slice(1);
-const txt = fs.readFileSync(conf, "utf8");
-for (const p of txt.split(/(?=^\[Peer\])/m)) {
-  if (!p.startsWith("[Peer]")) continue;
-  const rm = p.match(/^# region: (\S+)/m);
-  if (!rm || rm[1] !== region) continue;
-  const km = p.match(/^PublicKey\s*=\s*(\S+)/m);
-  if (km) process.stdout.write(km[1]);
-  break;
-}
-' "$WG_CONF" "$region" 2>/dev/null) || true
-    [[ -n "$gwpub" ]] || { error "No gateway peer tagged '# region: ${region}' in $WG_CONF."; return 1; }
-
     # Liveness guard: a fresh wg handshake means the tunnel is up and miners may be
     # routed through this gateway right now — same signal the admin Regions page uses.
-    local hs age
-    hs=$(wg show "$WG_IFACE" latest-handshakes 2>/dev/null | awk -v k="$gwpub" '$1==k {print $2}' || true)
-    if [[ -n "$hs" && "$hs" != "0" ]]; then
-        age=$(( $(date +%s) - hs ))
-        if (( age < 180 )); then
-            warn "This gateway's tunnel handshook ${age}s ago — it looks LIVE (miners may be on it)."
-        fi
+    local age
+    age=$(node -e '
+let s = {}; try { s = JSON.parse(process.argv[1]); } catch (e) {}
+const g = (s.gateways || []).find(g => g.region === process.argv[2]);
+if (g && g.handshake_age != null) process.stdout.write(String(g.handshake_age));
+' "$status_json" "$region" 2>/dev/null) || true
+    if [[ "$age" =~ ^[0-9]+$ ]] && (( age < 180 )); then
+        warn "This gateway's tunnel handshook ${age}s ago — it looks LIVE (miners may be on it)."
     fi
     echo -e "  ${YELLOW}This removes: the wg peer (key revoked), region '${region}' port mapping in${RESET}"
     echo -e "  ${YELLOW}pool.json, and the '${region}' card in admin → Regions (pool.db).${RESET}"
@@ -2178,33 +2182,22 @@ for (const p of txt.split(/(?=^\[Peer\])/m)) {
     echo -ne "Type the region key again to confirm removal: "; read -r confirm
     [[ "$confirm" == "$region" ]] || { warn "Confirmation mismatch — nothing removed."; return 1; }
 
-    # 1) Drop the [Peer] block from the wg config and apply live without touching
-    #    other tunnels (same syncconf pattern as add-peer).
-    node -e '
-const fs = require("fs");
-const [conf, region] = process.argv.slice(1);
-const txt = fs.readFileSync(conf, "utf8");
-const kept = txt.split(/(?=^\[Peer\])/m).filter(p =>
-  !(p.startsWith("[Peer]") && (p.match(/^# region: (\S+)/m) || [])[1] === region));
-fs.writeFileSync(conf, kept.join("").replace(/\n{3,}/g, "\n\n").replace(/\n*$/, "\n"));
-fs.chmodSync(conf, 0o600);
-' "$WG_CONF" "$region" || { error "Failed to rewrite $WG_CONF — nothing removed."; return 1; }
-    if wg syncconf "$WG_IFACE" <(wg-quick strip "$WG_IFACE") 2>/dev/null; then
+    # 1+2) The helper drops the [Peer] block, applies it live (syncconf, without
+    #      touching other tunnels), and deletes region_ports[region]. Freed ports
+    #      are NOT reused (add-peer assigns max+1), so a stale gateway config can
+    #      never collide with a future peer.
+    local out parsed
+    out=$("$GWCTL_BIN" remove-peer --net "$POOL_NET" --region "$region" 2>&1 || true)
+    parsed=$(node -e '
+let d = {}; try { d = JSON.parse(process.argv[1]); } catch (e) { console.log("ERR helper output was not JSON"); process.exit(0); }
+console.log(d.ok ? ("OK " + (d.synced === false ? 0 : 1)) : ("ERR " + (d.error || "unknown helper error")));
+' "$out" 2>/dev/null || echo "ERR helper output was not JSON")
+    if [[ "$parsed" == ERR* ]]; then error "${parsed#ERR }"; return 1; fi
+    if [[ "$parsed" == "OK 1" ]]; then
         info "Revoked peer on the live tunnel."
     else
         warn "wg syncconf failed — peer removed from config; run wg-quick down/up ${WG_IFACE} to apply."
     fi
-
-    # 2) Drop the region → internal port mapping (the pool stops binding its listener
-    #    on restart). Freed ports are NOT reused: add-peer assigns max+1, so a stale
-    #    gateway config can never collide with a future peer.
-    node -e '
-const fs = require("fs");
-const [p, region] = process.argv.slice(1);
-let d = {}; try { d = JSON.parse(fs.readFileSync(p, "utf8")); } catch (e) {}
-if (d.region_ports) delete d.region_ports[region];
-fs.writeFileSync(p, JSON.stringify(d, null, 2)); fs.chmodSync(p, 0o600);
-' "$POOL_CONF" "$region" || warn "Could not update region_ports in $POOL_CONF — remove '${region}' manually."
 
     # 3) Drop the admin → Regions card (pool_locations is display metadata; shares
     #    keep their region tag). Silent when the DB/table doesn't exist yet.
@@ -2234,6 +2227,35 @@ try {
     echo -e "  ${DIM}a NEW tunnel IP + port — re-pair the gateway with the new pairing string).${RESET}"
 }
 
+# §13.10b — carry a DNS name (not the raw IP) in pairing strings, so a hub
+# provider/IP change becomes: update the DNS A record → each gateway restarts
+# wg-quick. Existing IP-paired gateways: one-field edit in their 2) Configure.
+pool_wg_endpoint_host() {
+    local cur host
+    cur=$(pool_read_conf "wg_endpoint_host" "")
+    echo -e "\n${BOLD}Hub endpoint DNS name${RESET} ${DIM}(carried in pairing strings instead of the raw IP)${RESET}"
+    echo -e "  ${DIM}WireGuard resolves the name at wg-quick up — after a provider/IP change,${RESET}"
+    echo -e "  ${DIM}update the A record and each gateway just restarts its tunnel (no re-pair).${RESET}"
+    echo -e "  Current: ${GREEN}${cur:-"(unset — pairing strings carry the public IP)"}${RESET}"
+    echo -ne "New DNS name (e.g. hub.example.com; '-' to clear, Enter to keep): "
+    read -r host
+    [[ -z "$host" ]] && { info "Unchanged."; return 0; }
+    if [[ "$host" == "-" ]]; then
+        pool_write_conf_key "wg_endpoint_host" ""
+        success "Cleared — pairing strings carry the public IP again."
+        return 0
+    fi
+    if ! [[ "$host" =~ ^[a-zA-Z0-9]([a-zA-Z0-9.-]*[a-zA-Z0-9])?$ && "$host" == *.* ]]; then
+        warn "'$host' does not look like a hostname — nothing changed."
+        return 1
+    fi
+    pool_write_conf_key "wg_endpoint_host" "$host"
+    success "Hub endpoint host set: ${host}:${WG_LISTEN_PORT} (used by new/re-printed pairing strings)."
+    echo -e "  ${DIM}Point a DNS A record for '${host}' at this box's public IP. Already-paired${RESET}"
+    echo -e "  ${DIM}gateways keep working on the raw IP; to migrate one, edit its 2) Configure${RESET}"
+    echo -e "  ${DIM}wg_hub_endpoint field (or paste a re-printed pairing string).${RESET}"
+}
+
 pool_wireguard_menu() {
     while true; do
         clear
@@ -2244,15 +2266,17 @@ pool_wireguard_menu() {
         echo -e "  ${DIM}Your pool already serves all your miners on :$(pool_read_conf stratum_port 3333) as region \"main\".${RESET}"
         echo -e "  ${DIM}Use this ONLY when you add a regional gateway server in ANOTHER zone/${RESET}"
         echo -e "  ${DIM}continent (a separate box near distant miners, to cut their latency).${RESET}"
-        echo -e "  ${DIM}One server = skip this menu entirely. Steps: 1) here, 2) add each peer${RESET}"
-        echo -e "  ${DIM}here, then install \"2) Regional gateway\" on the OTHER box.${RESET}"
+        echo -e "  ${DIM}One server = skip this menu entirely. After 1) here, gateways are usually${RESET}"
+        echo -e "  ${DIM}paired from the ADMIN PANEL (Regions & Gateways) — options 2–4 are the${RESET}"
+        echo -e "  ${DIM}SSH/offline fallback; both paths share the same grin-gateway-ctl helper.${RESET}"
         echo ""
         echo -e "${DIM}  Central accepts thin regional gateways over a wg tunnel.${RESET}"
         echo ""
-        echo -e "  ${GREEN}1${RESET}) Setup WireGuard server   ${DIM}(install, keys, tunnel, firewall)${RESET}"
+        echo -e "  ${GREEN}1${RESET}) Setup WireGuard server   ${DIM}(install, keys, tunnel, firewall, pairing helper)${RESET}"
         echo -e "  ${GREEN}2${RESET}) Add a gateway peer       ${DIM}(assign tunnel IP + region port)${RESET}"
         echo -e "  ${GREEN}3${RESET}) List gateways / regions"
         echo -e "  ${GREEN}4${RESET}) Remove a gateway        ${DIM}(revoke wg key, free port mapping, drop admin card)${RESET}"
+        echo -e "  ${GREEN}5${RESET}) Hub endpoint DNS name   ${DIM}(survive a provider/IP change without re-pairing)${RESET}"
         echo ""
         echo -e "  ${RED}0${RESET}) Back"
         echo ""
@@ -2264,6 +2288,7 @@ pool_wireguard_menu() {
             2)        pool_wg_add_peer || true; _pool_pause ;;
             3)        pool_wg_list || true; _pool_pause ;;
             4)        pool_wg_remove_peer || true; _pool_pause ;;
+            5)        pool_wg_endpoint_host || true; _pool_pause ;;
             0|q|exit) break ;;
             *)        warn "Invalid option."; sleep 1 ;;
         esac
@@ -2294,7 +2319,7 @@ show_menu() {
     echo -e "  ${GREEN}8${RESET}) Pool status           ${DIM}(service, port, DB, recent logs)${RESET}"
     echo -e "  ${GREEN}9${RESET}) Deploy new code       ${DIM}(refresh js/html/media from checkout + restart)${RESET}"
     echo -e "  ${GREEN}W${RESET}) Multi-region          ${DIM}(WireGuard server + add regional gateways)${RESET}"
-    echo -e "  ${GREEN}B${RESET}) Backup pool           ${DIM}(DB + config → /opt/grin/backups/)${RESET}"
+    echo -e "  ${GREEN}B${RESET}) Backup & Restore      ${DIM}(encrypted: DB + wallet + WG identity · offsite push)${RESET}"
     echo -e "  ${GREEN}C${RESET}) Cron tasks            ${DIM}(backup schedule, VACUUM)${RESET}"
     echo -e "  ${GREEN}L${RESET}) View logs             ${DIM}(tail -50 | less)${RESET}"
     echo -e "  ${GREEN}S${RESET}) Edit config           ${DIM}(${POOL_CONF})${RESET}"
@@ -2327,7 +2352,7 @@ pool_singlebox_loop() {
             8)     pool_show_status || true ;;
             9)     pool_deploy_code || true ;;
             w)     pool_wireguard_menu || true ;;
-            b)     pool_backup || true ;;
+            b)     pool_backup_menu || true ;;
             c)     pool_cron_schedules || true ;;
             l)     pool_view_logs || true ;;
             s)     ${EDITOR:-nano} "$POOL_CONF" || true ;;
@@ -2338,11 +2363,11 @@ pool_singlebox_loop() {
 
         # Pause so action output stays readable before the menu redraws.
         # Skipped for: l (pager) / s (editor) — they hold their own screen — and
-        # the submenus 5/6/c, which self-manage feedback and return on their own
+        # the submenus 5/6/b/c/w, which self-manage feedback and return on their own
         # 0) Back. Without this, picking 0 inside a submenu would trigger a second,
         # redundant "Press Enter" here even though nothing new was shown.
         case "${choice,,}" in
-            l|s|5|6|c|w) ;;
+            l|s|5|6|b|c|w) ;;
             *) echo ""; echo "Press Enter to continue..."; read -r ;;
         esac
     done
@@ -2525,12 +2550,20 @@ pool_cleanup() {
     read -r a || true
     if [[ "${a,,}" != "n" ]]; then
         rm -f "$cron_backup" "$cron_vacuum" "$backup_wrapper" "$logrotate_conf"
+        # De-root artifacts (§13.9): scoped sudoers + pairing helper — but ONLY
+        # when the other network's pool isn't still installed on this box (both
+        # nets share the helper + sudoers). The grinpool user itself is kept.
+        local other_conf="/opt/grin/conf/grin_pubpool.json"
+        [[ "$POOL_NET" == "mainnet" ]] && other_conf="/opt/grin/conf/grin_pubpool_testnet.json"
+        if [[ ! -f "$other_conf" ]]; then
+            rm -f /etc/sudoers.d/grin-pool-gwctl "$GWCTL_BIN" 2>/dev/null || true
+        fi
         pw_listener_stop   2>/dev/null || true
         pw_watchdog_remove 2>/dev/null || true
         pw_autostart_disable 2>/dev/null || true
-        success "Cron + logrotate + wrapper removed; wallet listeners stopped, watchdog + autostart removed."
+        success "Cron + logrotate + wrapper + gwctl helper/sudoers removed; wallet listeners stopped, watchdog + autostart removed."
         info "Wallet seed dir ($(pw_wallet_dir)) kept — it holds the coinbase funds."
-        log "Cleanup: removed $cron_backup, $cron_vacuum, $backup_wrapper, $logrotate_conf + wallet listeners/watchdog/autostart"
+        log "Cleanup: removed $cron_backup, $cron_vacuum, $backup_wrapper, $logrotate_conf, gwctl helper/sudoers + wallet listeners/watchdog/autostart"
     fi
     echo ""
 

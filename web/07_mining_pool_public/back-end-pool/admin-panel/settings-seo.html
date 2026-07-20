@@ -35,12 +35,21 @@
             <div class="form-group">
               <label for="title_template">Title Template</label>
               <input type="text" id="title_template" name="title_template" placeholder="%page% — %pool_name%">
-              <div class="helper-text">Tokens: <code>%page%</code>, <code>%pool_name%</code></div>
+              <div class="helper-text">Inner pages. Tokens: <code>%page%</code>, <code>%pool_name%</code>, <code>%tagline%</code></div>
             </div>
             <div class="form-group">
               <label for="site_url">Canonical Site URL</label>
               <input type="url" id="site_url" name="site_url" placeholder="https://your-pool.com">
             </div>
+          </div>
+
+          <div class="form-group">
+            <label for="home_title">Homepage Title</label>
+            <input type="text" id="home_title" name="home_title" class="settings-allow-empty" placeholder="%pool_name% — %tagline%">
+            <div class="helper-text">Browser tab title for the homepage only (the <code>%page%</code>
+              token is empty on the homepage). Tokens: <code>%pool_name%</code>, <code>%tagline%</code>.
+              Leave blank to use the pool name alone. Edit the tagline under
+              <strong>Pool Info → Tagline</strong>.</div>
           </div>
         </div>
 

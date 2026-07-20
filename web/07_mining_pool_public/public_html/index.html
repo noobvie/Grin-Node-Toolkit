@@ -239,7 +239,7 @@
                 </div>
             </div>
 
-            <div class="deck-row half">
+            <div class="deck-row half connect-row">
                 <!-- ═══ P-04 · CHART RECORDERS: hashrate (pool vs network) + miners online ═══
                      Pool and network hashrate are two ALIGNED small-multiple traces, not one
                      dual-axis chart — network GPS is orders of magnitude above pool GPS and
@@ -309,42 +309,61 @@
                                 </div>
                                 <div class="patch-meta" id="rx-meta"></div>
                                 <!-- The old USER/PASS/Algorithm paragraph that lived here was folded into the
-                                     miner-setup guide below (operator request 2026-07-17) — one place, no repeat. -->
-                                <!-- Collapsed miner-setup guide (operator request 2026-07-16): a
-                                     theme-native HTML mock of an ASIC web panel (iPollo-style) —
-                                     NOT a screenshot, so the Pool 1 host stays bound to the region
-                                     selected in the patch bay and the mock follows every theme. -->
-                                <details class="miner-guide" id="rx-miner-guide">
-                                    <summary>Miner setup example — what to type into your ASIC</summary>
-                                    <div class="mform" aria-label="Example pool configuration form as shown in an ASIC miner web panel">
-                                        <div class="mform-head">Pool Setting <span class="mform-crumb">Miners → Pool Configuration</span></div>
-                                        <div class="mform-row"><span class="mform-k">Select Coin</span><span class="mform-val">GRIN</span></div>
-                                        <div class="mform-row"><span class="mform-k">Pool 1</span><span class="mform-val is-live" id="rx-guide-uri">stratum host not configured</span></div>
-                                        <div class="mform-row"><span class="mform-k">Pool1 worker</span><span class="mform-val">&lt;your_grin_address&gt;.rig1</span></div>
-                                        <div class="mform-row"><span class="mform-k">Pool1 password</span><span class="mform-val">&lt;your_own_password&gt;</span></div>
-                                    </div>
-                                    <ol class="mguide-steps">
-                                        <li>Open your miner&rsquo;s web panel (type its IP address into a browser) and go to
-                                            <b>Miners → Pool Configuration</b> — iPollo shown; other vendors name the menu similarly.</li>
-                                        <li><b>Pool 1</b> — the endpoint shown above; it updates as you pick a region in the
-                                            patch bay. If your firmware rejects a bare <code>host:port</code>, prefix it with
-                                            <code>stratum+tcp://</code>. Algorithm: <b>Cuckatoo32</b> (GRIN).</li>
-                                        <li><b>Worker</b> — your Grin address; it <b>is</b> your login, no account or registration
-                                            needed. Add an optional <code>.rig1</code> to name this machine (lowercase
-                                            letters/digits/<code>-</code>/<code>_</code>, max 25 chars — longer names are
-                                            shortened automatically, never rejected).</li>
-                                        <li><b>Password</b> — pick your own private password or random text (4+ characters;
-                                            not defaults like <code>x</code> or <code>123</code>) and use the same one on all
-                                            your rigs. It doubles as your <b>ownership proof</b> on the account page — payouts
-                                            can be verified with either it or a recent mining IP, so a real password here
-                                            means you can always withdraw even if your IP changes.</li>
-                                        <li>Optionally set <b>Pool 2 / Pool 3</b> to other green or blue regions as automatic
-                                            backups, then save — the miner reconnects and accepted shares should appear within
-                                            a few minutes.</li>
-                                    </ol>
-                                </details>
+                                     miner-setup guide (operator request 2026-07-17) — one place, no repeat.
+                                     That guide now lives in its own full-width panel P-05b directly below. -->
+                                <p class="patch-hint">Not sure where this goes? See <b>P-05b · Miner setup</b> just below.</p>
                             </div>
                         </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ═══ P-05b · MINER SETUP: what to type into your ASIC ═══
+                 Deliberately OUTSIDE the P-04/P-05 half row. As a disclosure inside P-05 it
+                 swung that row's shared height on every toggle: the row stretch-aligns, so
+                 whichever panel was shorter carried a dead band and the page below jumped.
+                 Full width also gives the ASIC mock and the numbered steps room to sit side
+                 by side instead of a 560px form stacked over cramped prose. The Pool 1 field
+                 still follows the patch-bay selection — rx-guide-uri is written by id, so
+                 its DOM position is irrelevant. Stays collapsed by default (operator request
+                 2026-07-16); expanding it now only grows its own panel. The mock is a
+                 theme-native HTML render of an ASIC web panel (iPollo-style), NOT a
+                 screenshot, so the live host stays real and it follows every theme. -->
+            <div class="deck-row">
+                <div class="panel"><span class="screws"></span>
+                    <h2 class="panel-title"><span class="tag">P-05b</span> Miner setup — what to type into your ASIC</h2>
+                    <div class="panel-body">
+                        <details class="miner-guide" id="rx-miner-guide">
+                            <summary>Show the example panel &amp; step-by-step</summary>
+                            <div class="mguide-cols">
+                                <div class="mform" aria-label="Example pool configuration form as shown in an ASIC miner web panel">
+                                    <div class="mform-head">Pool Setting <span class="mform-crumb">Miners → Pool Configuration</span></div>
+                                    <div class="mform-row"><span class="mform-k">Select Coin</span><span class="mform-val">GRIN</span></div>
+                                    <div class="mform-row"><span class="mform-k">Pool 1</span><span class="mform-val is-live" id="rx-guide-uri">stratum host not configured</span></div>
+                                    <div class="mform-row"><span class="mform-k">Pool1 worker</span><span class="mform-val">&lt;your_grin_address&gt;.rig1</span></div>
+                                    <div class="mform-row"><span class="mform-k">Pool1 password</span><span class="mform-val">&lt;your_own_password&gt;</span></div>
+                                </div>
+                                <ol class="mguide-steps">
+                                    <li>Open your miner&rsquo;s web panel (type its IP address into a browser) and go to
+                                        <b>Miners → Pool Configuration</b> — iPollo shown; other vendors name the menu similarly.</li>
+                                    <li><b>Pool 1</b> — the endpoint from the patch bay above; it updates as you pick a
+                                        region. If your firmware rejects a bare <code>host:port</code>, prefix it with
+                                        <code>stratum+tcp://</code>. Algorithm: <b>Cuckatoo32</b> (GRIN).</li>
+                                    <li><b>Worker</b> — your Grin address; it <b>is</b> your login, no account or registration
+                                        needed. Add an optional <code>.rig1</code> to name this machine (lowercase
+                                        letters/digits/<code>-</code>/<code>_</code>, max 25 chars — longer names are
+                                        shortened automatically, never rejected).</li>
+                                    <li><b>Password</b> — pick your own private password or random text (4+ characters;
+                                        not defaults like <code>x</code> or <code>123</code>) and use the same one on all
+                                        your rigs. It doubles as your <b>ownership proof</b> on the account page — payouts
+                                        can be verified with either it or a recent mining IP, so a real password here
+                                        means you can always withdraw even if your IP changes.</li>
+                                    <li>Optionally set <b>Pool 2 / Pool 3</b> to other green or blue regions as automatic
+                                        backups, then save — the miner reconnects and accepted shares should appear within
+                                        a few minutes.</li>
+                                </ol>
+                            </div>
+                        </details>
                     </div>
                 </div>
             </div>

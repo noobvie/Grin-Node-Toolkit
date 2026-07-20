@@ -91,6 +91,11 @@ body {
    size to their own content — the annunciator no longer stretches to P-01's height and leaves
    a dead strip at its foot. (half rows stay stretched so their side-by-side panels stay matched.) */
 .deck-row.main { grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr); align-items: start; }
+/* P-04 (three stacked chart recorders, ~550px) is permanently much taller than P-05 (a
+   switch bank + one endpoint readout). Stretching P-05 to match only moves the emptiness
+   INSIDE its bezel — the panel then reads as broken rather than short. Same call, same
+   reason, as .deck-row.main above: let each size to its own content. */
+.deck-row.half.connect-row { align-items: start; }
 
 .panel {
   min-width: 0;  /* pair with minmax(0,…) so overflow:auto children clip instead of expanding the panel */
@@ -234,7 +239,9 @@ body {
 /* ── mimic flow diagram — reflowing circuit (row on desktop, column on mobile) ──
    Rebuilt from a fixed 920px SVG (needed horizontal swipe on phones) to an HTML
    flex circuit that stacks vertically on narrow screens. Stations keep their live
-   IDs (mi-miners/mi-regions/mi-core-*/mi-node) so reactor-dashboard.js is unchanged. */
+   IDs (mi-miners, mi-regions, the mi-core-… set, mi-node) so reactor-dashboard.js is
+   unchanged. NB: don't write the core IDs with a star-slash wildcard here — that
+   sequence closes the CSS comment early and the next rule gets eaten. */
 .mimic-wrap { overflow: visible; }
 .mimic { display: flex; align-items: stretch; flex-wrap: nowrap; }
 .mimic .mnode {
@@ -412,9 +419,14 @@ body {
   font-family: var(--mono); color: var(--info); background: var(--rx-inset);
   border: 1px solid var(--rx-line); border-radius: 4px; padding: 1px 6px; font-size: 12px;
 }
+/* Pointer from the patch bay down to the P-05b setup panel (the guide used to live here). */
+.patch-hint { margin-top: 12px; font-size: 12.5px; color: var(--text-mute); }
+.patch-hint b { color: var(--text-dim); font-weight: 600; }
+
 /* Collapsed miner-setup guide (default closed) — same disclosure chrome as .rgn-help,
-   wrapping a theme-native mock of an ASIC web panel's "Pool Setting" form. */
-.miner-guide { margin-top: 14px; }
+   wrapping a theme-native mock of an ASIC web panel's "Pool Setting" form.
+   Lives in the full-width P-05b panel, so no top margin fights a readout above it. */
+.miner-guide { margin-top: 0; }
 .miner-guide > summary {
   cursor: pointer; width: fit-content; list-style: none; font-family: var(--mono);
   font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase;
@@ -453,6 +465,17 @@ body {
   font-family: var(--mono); color: var(--info); background: var(--rx-inset);
   border: 1px solid var(--rx-line); border-radius: 4px; padding: 0 5px; font-size: 11.5px;
 }
+/* Two-up layout for the full-width P-05b panel: the ASIC mock beside the steps that
+   describe it, so you read a field and its explanation on the same line of sight.
+   Single column below 1000px (and inside any narrower host) — the mock's 120px label
+   column plus a wrapping value needs ~360px before it starts looking squeezed. */
+.mguide-cols { display: grid; gap: 12px 28px; align-items: start; margin-top: 14px; }
+.mguide-cols > .mform { margin-top: 0; }
+.mguide-cols > .mguide-steps { margin-top: 0; }
+@media (min-width: 1000px) {
+  .mguide-cols { grid-template-columns: minmax(0, 560px) minmax(0, 1fr); }
+}
+
 @media (max-width: 480px) {
   .mform-row { grid-template-columns: minmax(0, 1fr); gap: 3px; }
   .mform-k { text-align: left; }

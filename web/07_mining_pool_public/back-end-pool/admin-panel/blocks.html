@@ -109,8 +109,10 @@ async function loadBlocks() {
     document.getElementById('kpi-immature').textContent  = s.immature_blocks ?? '—';
     document.getElementById('kpi-recent').textContent    = `${s.blocks_24h ?? 0} / ${s.blocks_7d ?? 0}`;
     document.getElementById('kpi-reward').textContent    = (Number(s.total_reward) || 0).toFixed(2);
-    document.getElementById('tip-summary').textContent   =
-      data.tip_height ? `chain tip ${data.tip_height.toLocaleString()}` : 'node unreachable';
+    document.getElementById('tip-summary').innerHTML     =
+      data.tip_height
+        ? `chain tip ${Explorer.link('block', data.tip_height, data.tip_height.toLocaleString())}`
+        : 'node unreachable';
     document.getElementById('depth-note').textContent    = data.confirm_depth || '—';
 
     const blocks = data.blocks || [];
@@ -124,14 +126,14 @@ async function loadBlocks() {
         ? '—'
         : (b.blocks_to_maturity > 0 ? `${b.blocks_to_maturity.toLocaleString()} blocks left` : 'ready');
       return `<tr>
-        <td class="mono">${b.height.toLocaleString()}</td>
+        <td class="mono">${Explorer.link('block', b.height, b.height.toLocaleString())}</td>
         <td><span class="badge ${cls}">${escHtml(label)}</span></td>
         <td>${escHtml(maturity)}</td>
         ${luckCell(b)}
         <td class="mono">${(Number(b.reward) || 0).toFixed(2)}</td>
         <td><span class="mono" title="${escHtml(b.found_by)}">${escHtml(shortAddr(b.found_by))}</span></td>
         <td>${fmtTs(b.found_at)}</td>
-        <td><a href="${escHtml(b.grinscan_url)}" target="_blank" rel="noopener">view ↗</a></td>
+        <td>${Explorer.link('block', b.height, 'view ↗')}</td>
       </tr>`;
     }).join('');
   } catch (err) {

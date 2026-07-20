@@ -27,6 +27,11 @@ class WithdrawalScheduler {
     // How long an unfinalized slatepack payout stays pending before it's cancelled and the
     // locked balance is returned (the miner never imported/returned the slate).
     this.slatepackTtlSeconds = (config.slatepack_ttl_hours || 24) * 3600;
+    // Goblin/Nostr rows (method='nostr') expire on a much shorter clock: the wallet AutoReceives,
+    // so a live miner answers in seconds — no human paste-back to wait for. Bounds a stranded
+    // lock when the wallet is offline. See config.nostr_pending_ttl_minutes.
+    this.nostrPendingTtlSeconds =
+      (config.nostr_pending_ttl_minutes !== undefined ? config.nostr_pending_ttl_minutes : 10) * 60;
     this.retryDelays = config.withdrawal_retry_delays || [
       6 * 3600,
       12 * 3600,
@@ -60,6 +65,9 @@ class WithdrawalScheduler {
           await this.processTorChecks();
           await this.processSlatepackExpiry();
         }
+        // Read-only: attach on-chain kernel proofs to confirmed payouts. Never moves funds, so
+        // it runs regardless of the freeze state. Self-throttled + no-op when nothing's pending.
+        await this.backfillKernelProofs();
       } catch (err) {
         console.error(`[ERROR] Withdrawal scheduler error: ${err.message}`);
       }
@@ -261,6 +269,7 @@ class WithdrawalScheduler {
 
       if (sendResult.success) {
         await this.recordTorFee(withdrawalId, withdrawal.amount);
+        await this._captureTorSlateId(withdrawalId, withdrawal.amount); // best-effort proof metadata
         await this.markConfirmed(withdrawalId, sendResult.output);
       } else {
         console.error(`Send failed for withdrawal ${withdrawalId}: ${sendResult.error}`);
@@ -313,6 +322,81 @@ class WithdrawalScheduler {
     } catch (err) {
       console.error(`Error scheduling retry for withdrawal ${withdrawalId}: ${err.message}`);
     }
+  }
+
+  // ─── On-chain kernel proof (payment-proof deep-link surface) ────────────────
+  // Fill in the kernel excess of each confirmed payout so the account page can deep-link it to a
+  // chain explorer (scan.grin.money/kernel/<excess>). READ-ONLY w.r.t. balances — it only writes
+  // the proof column, never moves or unlocks funds — so it is safe to run even while payouts are
+  // frozen. Requires the Owner-API wallet (this.wallet): the Tor CLI rail exposes no structured
+  // kernel, so a Tor-only deployment without the Owner API simply gets no kernel column.
+  //
+  // Matching: the wallet's TxLogEntry carries kernel_excess (populated once the tx mines) and
+  // tx_slate_id. Slatepack/nostr payouts store their slate_id, so they match exactly. Tor rows
+  // get their slate_id captured post-send by _captureTorSlateId(), so they match the same way.
+  async backfillKernelProofs() {
+    if (!this.wallet) return;
+    try {
+      const cutoff = Math.floor(Date.now() / 1000) - 30 * 86400; // bound the scan to recent payouts
+      const pending = this.db.prepare(
+        `SELECT id, slate_id FROM withdrawals
+         WHERE status = 'confirmed' AND kernel_excess IS NULL AND slate_id IS NOT NULL
+           AND created_at >= ?
+         ORDER BY created_at DESC LIMIT 200`
+      ).all(cutoff);
+      if (!pending.length) return;
+
+      // The tx scan refreshes from the node (slow); throttle to at most once every 3 min even if
+      // rows linger — a just-broadcast payout's kernel isn't mined for a minute or two anyway.
+      if (this._lastKernelScan && (Date.now() - this._lastKernelScan) < 180000) return;
+      this._lastKernelScan = Date.now();
+
+      const txs = await this.wallet.getTransactions(true);
+      if (!Array.isArray(txs) || !txs.length) return;
+
+      const bySlate = new Map();
+      for (const t of txs) {
+        if (t && t.tx_slate_id && t.kernel_excess) bySlate.set(String(t.tx_slate_id), t.kernel_excess);
+      }
+      if (!bySlate.size) return;
+
+      const upd = this.db.prepare(
+        'UPDATE withdrawals SET kernel_excess = ? WHERE id = ? AND kernel_excess IS NULL'
+      );
+      let filled = 0;
+      for (const w of pending) {
+        const excess = bySlate.get(String(w.slate_id));
+        if (excess) { upd.run(excess, w.id); filled++; }
+      }
+      if (filled) {
+        console.log(`[${new Date().toISOString()}] kernel-proof backfill: attached ${filled} payout proof(s)`);
+      }
+    } catch (err) {
+      console.warn(`[kernel-proof] backfill skipped: ${err.message}`);
+    }
+  }
+
+  // After a Tor CLI send, record the slate_id of the just-broadcast tx so backfillKernelProofs()
+  // can later attach its on-chain kernel excess (the CLI rail never returns a structured slate).
+  // Best-effort + READ-ONLY: any failure leaves slate_id NULL (that payout just won't get a proof
+  // link) and never touches the payout itself. Runs right after send when the newest sent tx in
+  // the wallet log is ours (sends are serialized through the scheduler).
+  async _captureTorSlateId(withdrawalId, amountGrin) {
+    if (!this.wallet) return;
+    try {
+      const txs = await this.wallet.getTransactions(false); // local tx log — no node refresh needed
+      if (!Array.isArray(txs) || !txs.length) return;
+      const wantNano = Math.round(Number(amountGrin || 0) * 1e9);
+      const candidate = txs
+        .filter((t) => t && t.tx_slate_id && /Sent/.test(String(t.tx_type || '')))
+        .filter((t) => (Number(t.amount_debited || 0) - Number(t.amount_credited || 0)) >= wantNano)
+        .sort((a, b) => Number(b.id || 0) - Number(a.id || 0))[0];
+      if (candidate) {
+        this.db.prepare(
+          'UPDATE withdrawals SET slate_id = ? WHERE id = ? AND slate_id IS NULL'
+        ).run(String(candidate.tx_slate_id), withdrawalId);
+      }
+    } catch (e) { /* best-effort proof metadata — never affects the payout */ }
   }
 
   async markConfirmed(withdrawalId, txOutput = null) {
@@ -776,10 +860,17 @@ class WithdrawalScheduler {
   // Cancel + reverse slatepack payouts the miner never completed within the TTL.
   async processSlatepackExpiry() {
     try {
-      const cutoff = Math.floor(Date.now() / 1000) - this.slatepackTtlSeconds;
+      const now = Math.floor(Date.now() / 1000);
+      const cutoff = now - this.slatepackTtlSeconds;             // manual slatepack rail (24h default)
+      const nostrCutoff = now - this.nostrPendingTtlSeconds;     // Goblin/Nostr rail (10 min default)
+      // Nostr rows expire on the shorter clock; every other pending rail uses the long TTL.
       const stale = this.db.prepare(
-        "SELECT * FROM withdrawals WHERE status = 'slatepack_pending' AND created_at <= ? ORDER BY created_at ASC LIMIT 10"
-      ).all(cutoff);
+        `SELECT * FROM withdrawals
+          WHERE status = 'slatepack_pending'
+            AND ( (method = 'nostr' AND created_at <= ?)
+                  OR ((method IS NULL OR method != 'nostr') AND created_at <= ?) )
+          ORDER BY created_at ASC LIMIT 10`
+      ).all(nostrCutoff, cutoff);
       for (const w of stale) {
         if (this.wallet && w.slate_id) {
           try { await this.wallet.cancelTx(w.slate_id); } catch (e) { console.warn(`[slatepack] cancelTx ${w.slate_id}: ${e.message}`); }

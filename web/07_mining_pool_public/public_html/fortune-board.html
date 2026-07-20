@@ -219,13 +219,21 @@
                     '</td></tr>';
             } else {
                 body.innerHTML = rows.map(function (w) {
+                    // Seed = the verifiable Grin block each draw is derived from. Deep-link the
+                    // height out to a chain explorer (new tab) so anyone can audit the draw.
+                    var seedH = w.seed_height;
+                    var seedLabel = '#' + (seedH || '?') + ' · ' +
+                        (w.seed_hash ? w.seed_hash.slice(0, 10) + '…' : '—');
+                    var seedCell = (seedH && window.Explorer)
+                        ? Explorer.link('block', seedH, seedLabel)
+                        : esc(seedLabel);
                     return '<tr>' +
                         '<td>' + esc(w.event) + '</td>' +
                         '<td>' + esc(w.address) + '</td>' +
                         '<td><span class="pot-tag">' + potLabel(w.pot) + '</span></td>' +
                         '<td class="num"><span class="fb-amount">' + (w.amount || 0).toFixed(4) + ' GRIN</span></td>' +
                         '<td>' + fmtDate(w.drawn_at) + '</td>' +
-                        '<td class="fb-seed">#' + esc(w.seed_height || '?') + ' · ' + shortHash(w.seed_hash) + '</td>' +
+                        '<td class="fb-seed">' + seedCell + '</td>' +
                         '</tr>';
                 }).join('');
             }

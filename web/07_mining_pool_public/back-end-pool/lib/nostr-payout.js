@@ -158,16 +158,17 @@ class NostrPayoutBridge {
       return { username: raw, pubHex, npub: raw };
     }
 
-    // NIP-05 name → normalise to name@domain, validate both halves, enforce allowlist.
-    let name, domain;
-    if (raw.includes('@')) {
-      const parts = raw.replace(/^@/, '').split('@');
-      if (parts.length !== 2) { const e = new Error('invalid username'); e.code = 400; throw e; }
-      [name, domain] = parts;
-    } else {
-      name = raw.replace(/^@/, '');
-      domain = String(this.config.nostr_home_domain || 'goblin.st').toLowerCase();
+    // NIP-05 name → require an EXPLICIT name@domain, validate both halves, enforce allowlist.
+    // We deliberately DON'T guess a home domain for a bare "name": with an irreversible payout
+    // a silent "alice" → "alice@goblin.st" could resolve to a stranger, and the guess turns
+    // outright ambiguous the moment the operator also allowlists their own 091 name-authority
+    // domain. Force the domain (or an npub, handled above).
+    if (!raw.includes('@')) {
+      const e = new Error('include the domain (e.g. alice@goblin.st) or paste an npub'); e.code = 400; throw e;
     }
+    const parts = raw.replace(/^@/, '').split('@');
+    if (parts.length !== 2) { const e = new Error('invalid username'); e.code = 400; throw e; }
+    let [name, domain] = parts;
     name = name.toLowerCase();
     domain = domain.toLowerCase();
 

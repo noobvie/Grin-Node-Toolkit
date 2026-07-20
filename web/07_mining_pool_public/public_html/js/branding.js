@@ -60,6 +60,58 @@
     return base.replace(/\/+$/, '') + (maybeRelative.charAt(0) === '/' ? '' : '/') + maybeRelative;
   }
 
+  // ── Chain explorer deep-links (window.Explorer) ─────────────────────────────
+  // Any block height / hash / kernel / output shown anywhere on a public page links out to a
+  // public Grin chain explorer in a new tab — the miner's independent proof. To spread load
+  // (and not tie the pool to one explorer) each mainnet link randomly picks between grinscan.org
+  // and scan.grin.money; both share the same path scheme (/block/<h>, /kernel/<excess>,
+  // /output/<commit>). scan.grin.money is mainnet-only, so on testnet every link uses
+  // testnet.grinscan.org. Network is resolved from the branding fetch (cfg.connection.network)
+  // and cached in sessionStorage; until then we assume mainnet (the common deployment).
+  var NETWORK_KEY = 'pool-network';
+  function explorerNetwork() {
+    try { var n = sessionStorage.getItem(NETWORK_KEY); if (n) return n; } catch (e) {}
+    return 'mainnet';
+  }
+  var EXPLORERS = ['https://grinscan.org', 'https://scan.grin.money'];
+  function explorerBase(kind) {
+    if (explorerNetwork() === 'testnet') return 'https://testnet.grinscan.org';
+    // kernel/output deep-links are only guaranteed on scan.grin.money; heights & hashes
+    // resolve on both, so those randomize across the two explorers.
+    if (kind === 'kernel' || kind === 'output') return 'https://scan.grin.money';
+    return EXPLORERS[Math.random() < 0.5 ? 0 : 1];
+  }
+  function explorerUrl(kind, value) {
+    var path = (kind === 'kernel') ? 'kernel' : (kind === 'output') ? 'output' : 'block';
+    return explorerBase(kind) + '/' + path + '/' + encodeURIComponent(String(value));
+  }
+  function xEsc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+  // Returns an <a> (HTML string) that opens the explorer in a new tab. `label` defaults to
+  // `value`. Both URL and label are HTML-escaped — safe for untrusted chain strings. A missing
+  // value returns just the escaped label (no dead link).
+  function explorerLink(kind, value, label, cls) {
+    if (value == null || value === '') return xEsc(label == null ? '' : label);
+    return '<a href="' + xEsc(explorerUrl(kind, value)) + '" target="_blank" rel="noopener" ' +
+      'class="xplink' + (cls ? ' ' + xEsc(cls) : '') + '" title="Open on Grin chain explorer ↗">' +
+      xEsc(label == null ? value : label) + '</a>';
+  }
+  function injectExplorerCss() {
+    if (document.getElementById('xplink-css')) return;
+    var s = document.createElement('style');
+    s.id = 'xplink-css';
+    // Inherit the surrounding colour so links embed cleanly in tables/rods; a dotted underline
+    // signals "clickable" without fighting the reactor theme.
+    s.textContent = 'a.xplink{color:inherit;text-decoration:underline;text-decoration-style:dotted;' +
+      'text-underline-offset:2px;text-decoration-thickness:1px;cursor:pointer;}' +
+      'a.xplink:hover{text-decoration-style:solid;opacity:.82;}';
+    head().appendChild(s);
+  }
+  window.Explorer = { url: explorerUrl, link: explorerLink, network: explorerNetwork };
+
   // ── 1. SEO / meta tags ─────────────────────────────────────────────────────
   function applySeo(cfg) {
     var pool = cfg.pool || {};
@@ -547,6 +599,21 @@
     }
   }
 
+  // Privacy: strip the miner's grin address (?addr=) out of any URL before it reaches
+  // analytics. The account page is deep-linkable (account-settings.html?addr=grin1…), and
+  // GA4's default page_view sends page_location = the full URL — which would log the
+  // address into the operator's analytics. We drop only `addr` and keep everything else
+  // (utm_* campaign tags etc. stay intact for attribution). Returns origin+path+scrubbed-query.
+  function scrubbedLocation() {
+    try {
+      var u = new URL(window.location.href);
+      u.searchParams.delete('addr');
+      return u.origin + u.pathname + (u.search ? u.search : '');
+    } catch (e) {
+      return window.location.origin + window.location.pathname;
+    }
+  }
+
   function loadGa4(id) {
     if (!id) return;
     var s = document.createElement('script');
@@ -554,9 +621,12 @@
     s.src = 'https://www.googletagmanager.com/gtag/js?id=' + encodeURIComponent(id);
     head().appendChild(s);
     var init = document.createElement('script');
+    // page_location pinned to the scrubbed URL so the initial page_view (and every event
+    // that inherits the config default) never carries a miner's address to GA4.
     init.textContent =
       'window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments);}' +
-      "gtag('js',new Date());gtag('config','" + id.replace(/'/g, '') + "');";
+      "gtag('js',new Date());gtag('config','" + id.replace(/'/g, '') +
+      "',{page_location:" + JSON.stringify(scrubbedLocation()) + "});";
     head().appendChild(init);
   }
 
@@ -629,6 +699,12 @@
 
   // ── bootstrap ──────────────────────────────────────────────────────────────
   function apply(cfg) {
+    // Cache the chain so window.Explorer builds testnet-correct deep-links.
+    try {
+      var net = cfg.connection && cfg.connection.network;
+      if (net) sessionStorage.setItem(NETWORK_KEY, net);
+    } catch (e) {}
+
     try { applyTheme(cfg); } catch (e) {}
 
     // Maintenance mode: show a branded full-page overlay on public pages. Pages that
@@ -786,6 +862,9 @@
   }
 
   function load() {
+    // window.Explorer is usable immediately (defined synchronously above); inject its style now
+    // so chain deep-links render correctly even before the branding fetch resolves.
+    try { injectExplorerCss(); } catch (e) {}
     // The header/footer + base nav are now injected synchronously by public-shell.js
     // (single source of truth, no flash). branding.js only ENHANCES that chrome:
     // logo/slogan, [data-brand] hooks, and the incentives-gated 🎁 Rewards link.

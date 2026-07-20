@@ -49,6 +49,12 @@
             <input type="checkbox" id="auto_payout" name="auto_payout">
             <label for="auto_payout">Enable automatic payouts</label>
           </div>
+
+          <div class="checkbox-group">
+            <input type="checkbox" id="tor_preflight_gate" name="tor_preflight_gate" checked>
+            <label for="tor_preflight_gate">Pre-flight Tor reachability gate</label>
+          </div>
+          <div class="helper-text">When on, a Tor payout is refused up front if the miner's wallet listener isn't answering over Tor right now (the pool probes the wallet's onion before locking any funds), and the miner is steered to Slatepack. Blocks only on a confident offline — if the pool box can't run the probe (no tor daemon) it falls through and lets grin-wallet decide at send, so it never blocks every payout. Turn off to always attempt Tor and rely on the retry/refund ladder. Applied on backend restart.</div>
         </div>
 
         <div class="form-section">
@@ -100,6 +106,11 @@
               <label for="nostr_destination_cooldown_hours">Destination Cooldown (hours)</label>
               <input type="number" id="nostr_destination_cooldown_hours" name="nostr_destination_cooldown_hours" min="0" max="720" step="1" value="48">
               <div class="helper-text">A newly registered Goblin destination can't receive a payout until it is this old. Gives the real owner time to spot and undo a hijack. 0 disables the wait (not recommended).</div>
+            </div>
+            <div class="form-group">
+              <label for="nostr_pending_ttl_minutes">Pending Payout TTL (minutes)</label>
+              <input type="number" id="nostr_pending_ttl_minutes" name="nostr_pending_ttl_minutes" min="2" max="1440" step="1" value="10">
+              <div class="helper-text">How long a delivered-but-unanswered Goblin payout stays locked before it auto-refunds. Goblin AutoReceives, so a live miner's wallet answers in seconds. Short is safe — expiry cancels the tx and returns the balance; a late reply is ignored (never a double-pay). Min 2 (the sweep runs every 60s).</div>
             </div>
           </div>
           <div class="form-row">

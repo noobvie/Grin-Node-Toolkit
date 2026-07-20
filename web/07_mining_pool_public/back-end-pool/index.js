@@ -2074,10 +2074,12 @@ function setupRoutes() {
       ).get(addr);
       if (!acct) return res.status(404).json({ error: 'Account not found' });
 
-      const paid = db.prepare(
-        `SELECT COALESCE(SUM(amount), 0) AS total FROM withdrawals
+      // Lifetime withdrawals actually paid (confirmed only): total amount + how many.
+      const paidAgg = db.prepare(
+        `SELECT COUNT(*) AS cnt, COALESCE(SUM(amount), 0) AS total FROM withdrawals
          WHERE grin_address = ? AND status = 'confirmed'`
-      ).get(addr).total;
+      ).get(addr);
+      const paid = paidAgg.total;
 
       // Pending set must match the scheduler's one-pending-per-address cap (which includes
       // slatepack_pending) — otherwise the UI shows 0 pending while a new request would 429.
@@ -2098,6 +2100,12 @@ function setupRoutes() {
         `SELECT COUNT(*) AS count, MAX(created_at) AS last_share_at FROM shares WHERE grin_address = ?`
       ).get(addr);
 
+      // Blocks this address found (block-finder attribution) — orphaned ones didn't stick,
+      // so they don't count. Vanity stat only; rewards are PPLNS, not finder-take-all.
+      const blocksFound = db.prepare(
+        `SELECT COUNT(*) AS c FROM blocks WHERE found_by = ? AND status != 'orphaned'`
+      ).get(addr).c;
+
       const hr = hashrateTracker.getMinerHashrate(addr, 60) || {};
 
       // Proof values are NOT exposed (they back the ownership gate; hashed at rest anyway) —
@@ -2108,6 +2116,8 @@ function setupRoutes() {
         balance_locked: acct.balance_locked,
         total: acct.balance + acct.balance_locked,
         total_paid: paid,
+        payouts_count: paidAgg.cnt || 0,
+        blocks_found: blocksFound,
         pending_withdrawals: pending,
         pending_withdrawal: pendingRow || null,
         is_online: !!acct.is_online,
@@ -2361,6 +2371,11 @@ function setupRoutes() {
         (direction ? ` AND ${LEDGER_DIRECTION_SQL[direction]}` : '');
 
       if (req.query.format === 'csv') {
+        // Same dedicated export throttle as the withdrawal-history CSV (anti download-spam).
+        const gate = rateLimiter.peek('export', req);
+        if (!gate.allowed) return rateLimiter.sendLimited(res, gate);
+        rateLimiter.consume('export', req);
+
         const CSV_MAX_ROWS = 50000;
         const rows = db.prepare(
           `SELECT event_type, reference_type, reference_id, amount, balance_after, created_at
@@ -2393,6 +2408,60 @@ function setupRoutes() {
          ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?`
       ).all(addr, cutoff, limit, offset);
       res.json({ grin_address: addr, direction, total, count: rows.length, log: rows });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Withdrawal (payout) history for an address — sourced from the `withdrawals` table, which
+  // (unlike balance_log, whose raw rows are pruned after ~60 days) is kept forever, so this is
+  // the durable record a miner can export for accounting. Payout-only: no donations or orphan
+  // clawbacks. Public like the rest of the account page (the address is identity). ?format=csv
+  // streams the full all-time history (row-capped, rate-limited); no ?days window by design.
+  app.get('/api/account/:addr/withdrawals', rateLimiter.middleware('public'), (req, res) => {
+    try {
+      const { addr } = req.params;
+
+      if (req.query.format === 'csv') {
+        // Tight, dedicated throttle on the all-time bulk export (separate from the loose
+        // `public` bucket) — one-click use is fine, download-spam is cut off after a few hits.
+        const gate = rateLimiter.peek('export', req);
+        if (!gate.allowed) return rateLimiter.sendLimited(res, gate);
+        rateLimiter.consume('export', req);
+
+        const CSV_MAX_ROWS = 50000;
+        const rows = db.prepare(
+          `SELECT id, amount, fee, method, status, created_at, confirmed_at, kernel_excess
+           FROM withdrawals WHERE grin_address = ?
+           ORDER BY created_at DESC, id DESC LIMIT ${CSV_MAX_ROWS}`
+        ).all(addr);
+        const esc = (v) => `"${String(v == null ? '' : v).replace(/"/g, '""')}"`;
+        const lines = ['id,requested_at_utc,confirmed_at_utc,method,status,amount,fee,kernel_excess'];
+        for (const r of rows) {
+          lines.push([
+            r.id,
+            new Date(r.created_at * 1000).toISOString(),
+            r.confirmed_at ? new Date(r.confirmed_at * 1000).toISOString() : '',
+            esc(r.method), esc(r.status), r.amount, r.fee, esc(r.kernel_excess)
+          ].join(','));
+        }
+        res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+        res.setHeader('Content-Disposition',
+          `attachment; filename="pool-withdrawals-${addr.slice(0, 12)}-all.csv"`);
+        return res.send(lines.join('\n') + '\n');
+      }
+
+      const limit = Math.min(parseInt(req.query.limit || 20), 200);
+      const offset = parseInt(req.query.offset || 0);
+      const total = db.prepare(
+        `SELECT COUNT(*) AS c FROM withdrawals WHERE grin_address = ?`
+      ).get(addr).c;
+      const rows = db.prepare(
+        `SELECT id, amount, fee, method, status, created_at, confirmed_at, kernel_excess
+         FROM withdrawals WHERE grin_address = ?
+         ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?`
+      ).all(addr, limit, offset);
+      res.json({ grin_address: addr, total, count: rows.length, withdrawals: rows });
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
@@ -2470,6 +2539,25 @@ function setupRoutes() {
       }
 
       if (method === 'tor') {
+        // Pre-flight reachability gate (operator toggle, default ON). Refuse up front — BEFORE
+        // any balance lock or cooldown — if the miner's wallet listener isn't answering over Tor
+        // right now, so the funds never get locked into a doomed retry ladder. Only a CONFIDENT
+        // offline (online === false) blocks; online === null (probe couldn't run) falls through
+        // and lets grin-wallet be the authority at send, so a pool box without a working probe
+        // never blocks every Tor payout.
+        if (config.tor_preflight_gate !== false) {
+          let reach = { online: null };
+          try { reach = await walletTor.probeToronlineStatus(addr); } catch (_) { reach = { online: null }; }
+          if (reach.online === false) {
+            auditOwnerProof(db, { action: 'withdraw_tor', grinAddress: addr, ip: reqIp, ok: false, details: { reason: 'tor_unreachable', probe: reach.reason } });
+            return res.status(409).json({
+              error: 'Your wallet is not reachable over Tor right now. Start your wallet listener and try again, or withdraw via Slatepack (which does not need your wallet online).',
+              reason: reach.reason || 'tor_unreachable',
+              tor_online: false,
+              suggest: 'slatepack'
+            });
+          }
+        }
         const result = withdrawalScheduler.createWithdrawal(addr, req.body && req.body.amount, method);
         auditOwnerProof(db, { action: 'withdraw_tor', grinAddress: addr, ip: reqIp, ok: true, details: { withdrawal_id: result.withdrawal_id, amount: result.amount, proof_method: proof.method } });
         return res.json({ success: true, withdrawal_id: result.withdrawal_id, status: 'tor_checking' });

@@ -282,15 +282,15 @@
                         '</td></tr>';
                 } else {
                     tbody.innerHTML = rows.map(function (b) {
+                        var h = Number(b.height || 0);
                         return '<tr>' +
-                            '<td>' + Number(b.height || 0).toLocaleString('en-US') + '</td>' +
+                            '<td>' + Explorer.link('block', h, h.toLocaleString('en-US')) + '</td>' +
                             '<td>' + statusCell(b.status) + '</td>' +
                             luckCell(b) +
                             '<td class="num">' + (Number(b.reward) || 0).toFixed(2) + ' ツ</td>' +
                             '<td title="' + escHtml(b.found_by) + '">' + escHtml(shortAddr(b.found_by)) + '</td>' +
                             '<td class="num" title="' + escHtml(fmtTs(b.found_at)) + '">' + escHtml(timeAgo(b.found_at)) + '</td>' +
-                            '<td><a href="' + GRINSCAN + '/block/' + Number(b.height || 0) +
-                              '" target="_blank" rel="noopener">view ↗</a></td>' +
+                            '<td>' + Explorer.link('block', h, 'view ↗') + '</td>' +
                             '</tr>';
                     }).join('');
                 }

@@ -318,7 +318,7 @@
                                     <label for="acct-amount">Amount (GRIN) &middot;
                                         <a class="amt-chip" id="acct-amt-min" title="Fill the pool minimum">min <span id="acct-pool-min">—</span> ツ</a> &middot;
                                         <a class="amt-chip" id="acct-amt-max" title="Fill your full available balance">max <span id="acct-amt-max-val">—</span> ツ</a></label>
-                                    <input type="number" id="acct-amount" min="0" step="0.1" placeholder="tap min or max to autofill" autocomplete="off">
+                                    <input type="text" id="acct-amount" inputmode="decimal" placeholder="tap min or max to autofill" autocomplete="off">
                                 </div>
                                 <div class="radio-row" role="radiogroup" aria-label="Payout method">
                                     <label><input type="radio" name="acct-pay-method" id="acct-pay-tor" value="tor" checked> Tor</label>
@@ -328,8 +328,10 @@
 
                                 <!-- Tor method -->
                                 <div id="acct-pay-tor-pane">
-                                    <p class="note" style="margin-bottom:12px">Sends the amount to this address's wallet over Tor. Wallet reachability:
-                                        <span id="acct-tor" style="font-family:var(--mono);">checking…</span></p>
+                                    <p class="note" style="margin-bottom:12px">Sends the amount straight to this address's wallet over Tor — keep a wallet listener running.
+                                        The pool checks your wallet is reachable before sending; if it isn't, the payout is declined and you can use Slatepack instead. Wallet reachability:
+                                        <span id="acct-tor" style="font-family:var(--mono);">checking…</span>
+                                        <a class="amt-chip" id="acct-tor-recheck" title="Re-probe your wallet now — click after you start your listener" style="margin-left:6px;">re-check</a></p>
                                     <button class="btn-save" id="acct-withdraw">Request Tor Payout</button>
                                     <div class="acct-msg" id="acct-withdraw-msg"></div>
                                 </div>
@@ -367,8 +369,8 @@
                                     <div id="acct-nostr-state" class="note" style="margin-bottom:12px;font-family:var(--mono);">—</div>
 
                                     <div class="form-group">
-                                        <label for="acct-nostr-username">Goblin username (<code>name</code>, <code>name@goblin.st</code>, or an <code>npub…</code>)</label>
-                                        <input type="text" id="acct-nostr-username" placeholder="e.g. alice or alice@goblin.st" autocomplete="off" spellcheck="false">
+                                        <label for="acct-nostr-username">Goblin username (<code>name@goblin.st</code> or an <code>npub…</code>)</label>
+                                        <input type="text" id="acct-nostr-username" placeholder="e.g. alice@goblin.st or npub1…" autocomplete="off" spellcheck="false">
                                     </div>
                                     <div class="btn-row" style="display:flex;gap:8px;flex-wrap:wrap;">
                                         <button class="btn-save" id="acct-nostr-register">Register / Replace Destination</button>
@@ -388,14 +390,11 @@
                             </div>
 
                             <p class="note" style="margin:16px 0 0;font-size:12.5px;color:var(--text-mute);">
-                                One payout at a time — while one is in flight it appears above with its status.
-                                Nothing is ever stuck: a Tor payout that can't reach your wallet retries on a
-                                schedule and, after the final retry, the amount returns to your balance
-                                automatically; an unclaimed slatepack refunds itself when its expiry window
-                                passes. There is no manual cancel — in Grin a payout that looks failed can
-                                still land, so cancelling one could pay twice. For the same reason, after a
-                                payout is returned to your balance a short cooldown applies before you can
-                                request the next one (on any method).
+                                One payout at a time — while one is in flight it shows above with its status.
+                                Nothing gets stuck: a payout that can't be delivered returns to your balance
+                                automatically once its retry or expiry window passes. There's no manual cancel
+                                (a payout that looks failed can still land), and after one is returned a short
+                                cooldown applies before your next request on any method.
                             </p>
                         </div>
                     </div>
@@ -406,12 +405,15 @@
                         <div class="panel-body">
                             <ul class="detail-list">
                                 <li><span class="k">Status</span><span class="v" id="acct-status">—</span></li>
+                                <li><span class="k">First seen</span><span class="v" id="acct-since">—</span></li>
+                                <li><span class="k">Member for</span><span class="v" id="acct-age">—</span></li>
                                 <li><span class="k">Last seen</span><span class="v" id="acct-last-seen">—</span></li>
                                 <li><span class="k">Total shares submitted</span><span class="v" id="acct-shares">—</span></li>
+                                <li><span class="k">Blocks found</span><span class="v" id="acct-blocks">—</span></li>
                                 <li><span class="k">Last share</span><span class="v" id="acct-last-share">—</span></li>
-                                <li><span class="k">Pending withdrawals</span><span class="v" id="acct-pending">—</span></li>
+                                <li><span class="k">Pending withdrawal</span><span class="v" id="acct-pending">—</span></li>
+                                <li><span class="k">Payouts made</span><span class="v" id="acct-paid-count">—</span></li>
                                 <li><span class="k">Minimum payout (pool)</span><span class="v" id="acct-min">—</span></li>
-                                <li><span class="k">Mining here since</span><span class="v" id="acct-since">—</span></li>
                             </ul>
 
                             <div class="fx-head">Earnings <span class="src" id="fx-src">est. &middot; spot price</span></div>
@@ -481,6 +483,30 @@
                     </div>
                 </div>
 
+                <!-- ═══ P-08 · WITHDRAWAL HISTORY (payouts only, kept forever) ═══ -->
+                <div class="deck-row">
+                    <div class="panel"><span class="screws"></span>
+                        <h2 class="panel-title"><span class="tag">P-08</span> Withdrawal history <span class="right"><span class="dim">every payout, kept forever · </span><span id="wd-count"></span></span></h2>
+                        <div class="panel-body">
+                            <p class="note">Your payout requests only — no donations or clawbacks. Unlike the ledgers above (row detail kept 60 days), this list goes back to your first payout. Export the full history as CSV for your records.</p>
+                            <div class="table-scroll">
+                                <table class="data-table" aria-label="Withdrawal history">
+                                    <thead><tr><th>Requested</th><th>Method</th><th>Status</th><th class="num">Amount</th><th class="num">Fee</th><th>Confirmed</th><th>Proof</th></tr></thead>
+                                    <tbody id="log-wd"><tr><td colspan="7">—</td></tr></tbody>
+                                </table>
+                            </div>
+                            <div class="pager-row">
+                                <button class="btn sm" id="wd-prev" disabled>&lsaquo; Prev</button>
+                                <span class="pg-label" id="wd-page-label">Page 1</span>
+                                <button class="btn sm" id="wd-next" disabled>Next &rsaquo;</button>
+                                <span class="spacer"></span>
+                                <span class="dim" style="font-size:12px;">all-time</span>
+                                <a class="export-link" id="wd-export" href="#" download>&#10515; CSV</a>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
             </div>
         </div>
     </div>
@@ -521,6 +547,7 @@
         let acctRange = 'day';
         let acctSummary = null;   // last /api/account summary (nostr send re-reads destination state)
         const ledger = { in: { page: 0, total: 0 }, out: { page: 0, total: 0 } };
+        const wd = { page: 0, total: 0 };   // withdrawal-history pager (P-08)
 
         function $id(id) { return document.getElementById(id); }
 
@@ -556,6 +583,31 @@
             return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' }) + ' ' + hm;
         }
 
+        // "Member for" — coarse elapsed duration since first seen, plus a 🎉 on the
+        // yearly anniversary (same UTC month+day, ≥1 year old). Purely cosmetic.
+        function fmtAge(unixSeconds) {
+            if (!unixSeconds) return '—';
+            const from = new Date(unixSeconds * 1000), now = new Date();
+            let years = now.getUTCFullYear() - from.getUTCFullYear();
+            let months = now.getUTCMonth() - from.getUTCMonth();
+            let days = now.getUTCDate() - from.getUTCDate();
+            if (days < 0) months -= 1;                 // borrow a month
+            if (months < 0) { years -= 1; months += 12; }
+            if (years < 0) return 'just now';
+            let out;
+            if (years >= 1) out = years + (years === 1 ? ' year' : ' years') + (months ? ', ' + months + (months === 1 ? ' month' : ' months') : '');
+            else if (months >= 1) out = months + (months === 1 ? ' month' : ' months');
+            else {
+                const d = Math.max(0, Math.floor((now - from) / 86400000));
+                out = d + (d === 1 ? ' day' : ' days');
+            }
+            // Anniversary: same month+day, at least a full year in.
+            if (years >= 1 && now.getUTCMonth() === from.getUTCMonth() && now.getUTCDate() === from.getUTCDate()) {
+                out += ' 🎉 ' + years + '-year anniversary today!';
+            }
+            return out;
+        }
+
         function escHtml(v) {
             return String(v == null ? '' : v)
                 .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -589,12 +641,13 @@
                 renderSummary(a);
                 $id('acct-view').style.display = '';
                 setMsg(msg, '', true);
-                ledger.in.page = 0; ledger.out.page = 0;
+                ledger.in.page = 0; ledger.out.page = 0; wd.page = 0;
                 loadChart();
                 loadWorkers();
                 loadEarnings();
                 loadLedger('in');
                 loadLedger('out');
+                loadWithdrawals();
                 torCheck(addr);
             } catch (e) {
                 $id('acct-view').style.display = 'none';
@@ -612,12 +665,16 @@
             $id('acct-hashrate').textContent = fmtGps(a.hashrate_gps || 0);
             $id('acct-status').textContent = a.is_online ? 'Online ⛏' : 'Offline';
             $id('acct-status').style.color = a.is_online ? 'var(--ok)' : '';
+            $id('acct-since').textContent = fmtWhen(a.created_at);
+            $id('acct-age').textContent = fmtAge(a.created_at);
             $id('acct-last-seen').textContent = fmtWhen(a.last_seen_at);
             $id('acct-shares').textContent = Number(a.shares && a.shares.count || 0).toLocaleString('en-US');
+            $id('acct-blocks').textContent = Number(a.blocks_found || 0).toLocaleString('en-US');
             $id('acct-last-share').textContent = fmtWhen(a.shares && a.shares.last_share_at);
-            $id('acct-pending').textContent = (a.pending_withdrawals || 0) + ' (max 1 per address)';
+            // Only one payout can be in flight per address, so this is a plain yes/no.
+            $id('acct-pending').textContent = a.pending_withdrawals ? 'Yes — 1 in progress' : 'No';
+            $id('acct-paid-count').textContent = Number(a.payouts_count || 0).toLocaleString('en-US');
             $id('acct-min').textContent = fmtGrin(a.min_withdrawal);
-            $id('acct-since').textContent = fmtWhen(a.created_at);
 
             const lamp = $id('acct-lamp');
             lamp.style.display = '';
@@ -628,7 +685,8 @@
             // min/max autofill chips: min = pool minimum, max = current spendable balance
             $id('acct-amt-min').dataset.v = Number(a.min_withdrawal || 0).toFixed(1);
             $id('acct-amt-max').dataset.v = Number(a.balance || 0).toFixed(9).replace(/0+$/, '').replace(/\.$/, '');
-            $id('acct-amt-max-val').textContent = fmtGrin(a.balance);
+            // Plain number here — the label markup already carries the ツ unit (fmtGrin would double it).
+            $id('acct-amt-max-val').textContent = Number(a.balance || 0).toFixed(4);
 
             // Payout rail status (pool-wide kill-switch state; reason stays operator-side)
             const pstat = $id('acct-payout-status');
@@ -901,12 +959,21 @@
             rows.forEach(row => {
                 const tr = document.createElement('tr');
                 const sign = dir === 'in' ? '+' : '−';
+                // Block-derived rows (reward credit / orphan clawback) carry the block HEIGHT in
+                // reference_id (rewards.js + orphan-detector.js) — deep-link the event to it so the
+                // miner can independently verify the block on a chain explorer.
+                const isBlockRow = row.reference_type === 'block' && row.reference_id;
                 [fmtShort(row.created_at), eventLabel(row),
                  sign + Number(row.amount || 0).toFixed(4), Number(row.balance_after || 0).toFixed(4)
                 ].forEach((text, i) => {
                     const td = document.createElement('td');
                     if (i >= 2) td.className = 'num' + (i === 2 ? (dir === 'in' ? ' amt-in' : ' amt-out') : '');
-                    td.textContent = text;
+                    if (i === 1 && isBlockRow && window.Explorer) {
+                        const h = Number(row.reference_id);
+                        td.innerHTML = window.Explorer.link('block', h, text + ' · #' + h.toLocaleString('en-US'));
+                    } else {
+                        td.textContent = text;
+                    }
                     tr.appendChild(td);
                 });
                 tbody.appendChild(tr);
@@ -942,15 +1009,94 @@
                 '/balance/log?direction=' + dir + '&format=csv' + (days ? '&days=' + days : '');
         }
 
+        // ── Withdrawal history (P-08) — payouts only, from the withdrawals table (kept forever) ──
+        const WD_METHOD = { tor: 'Tor', slatepack: 'Slatepack', nostr: 'Goblin (Nostr)' };
+        const WD_STATUS = {
+            confirmed: 'paid ✓', tor_checking: 'sending (Tor)', tor_sending: 'sending (Tor)',
+            retry_scheduled: 'retrying', slatepack_pending: 'awaiting response',
+            nostr_sending: 'sending (Nostr)', cancelled: 'cancelled',
+            tor_failed: 'failed', slatepack_failed: 'failed', nostr_failed: 'failed', expired: 'expired'
+        };
+        function renderWithdrawals(rows, total) {
+            const tbody = $id('log-wd');
+            wd.total = total || 0;
+            $id('wd-count').textContent = wd.total + (wd.total === 1 ? ' payout' : ' payouts');
+            tbody.textContent = '';
+            if (!rows.length) {
+                const tr = document.createElement('tr'), td = document.createElement('td');
+                td.colSpan = 7; td.textContent = wd.page > 0 ? 'No more entries' : 'No payouts yet';
+                tr.appendChild(td); tbody.appendChild(tr);
+            }
+            rows.forEach(row => {
+                const tr = document.createElement('tr');
+                const cells = [
+                    fmtShort(row.created_at),
+                    WD_METHOD[row.method] || row.method || '—',
+                    WD_STATUS[row.status] || row.status || '—',
+                    '−' + Number(row.amount || 0).toFixed(4),
+                    Number(row.fee || 0).toFixed(4),
+                    row.confirmed_at ? fmtShort(row.confirmed_at) : '—'
+                ];
+                cells.forEach((text, i) => {
+                    const td = document.createElement('td');
+                    if (i === 3) td.className = 'num amt-out';
+                    else if (i === 4) td.className = 'num';
+                    td.textContent = text;
+                    tr.appendChild(td);
+                });
+                // Proof: the payout tx's on-chain kernel excess (Grin's payment-proof primitive),
+                // deep-linked to a chain explorer. Backfilled once the tx mines — until then (or
+                // for pre-feature/Tor-without-owner-API payouts) show a neutral placeholder.
+                const proof = document.createElement('td');
+                if (row.kernel_excess && window.Explorer) {
+                    proof.innerHTML = window.Explorer.link('kernel', row.kernel_excess, 'proof ↗');
+                } else {
+                    proof.className = 'dim';
+                    proof.textContent = row.status === 'confirmed' ? 'pending' : '—';
+                    proof.title = row.status === 'confirmed'
+                        ? 'On-chain proof appears once the payout tx is mined'
+                        : '';
+                }
+                tr.appendChild(proof);
+                tbody.appendChild(tr);
+            });
+            const pages = Math.max(1, Math.ceil(wd.total / PAGE_SIZE));
+            $id('wd-page-label').textContent = 'Page ' + (wd.page + 1) + ' of ' + pages;
+            $id('wd-prev').disabled = wd.page <= 0;
+            $id('wd-next').disabled = wd.page >= pages - 1;
+            $id('wd-export').href = isDemo ? '#'
+                : '/api/account/' + encodeURIComponent(currentAddr) + '/withdrawals?format=csv';
+        }
+        async function loadWithdrawals() {
+            if (isDemo) {
+                const all = DEMO.withdrawals;
+                const start = wd.page * PAGE_SIZE;
+                renderWithdrawals(all.slice(start, start + PAGE_SIZE), all.length);
+                return;
+            }
+            const tbody = $id('log-wd');
+            tbody.innerHTML = '<tr><td colspan="7">Loading…</td></tr>';
+            try {
+                const data = await getJson('/api/account/' + encodeURIComponent(currentAddr) +
+                    '/withdrawals?limit=' + PAGE_SIZE + '&offset=' + (wd.page * PAGE_SIZE));
+                renderWithdrawals((data && data.withdrawals) || [], (data && data.total) || 0);
+            } catch (e) {
+                tbody.innerHTML = '<tr><td colspan="7">History unavailable</td></tr>';
+            }
+        }
+
         // ── Tor reachability hint ──────────────────────────────────────────
         async function torCheck(addr) {
             const el = $id('acct-tor');
             el.textContent = 'checking…';
             try {
                 const r = await getJson('/api/account/' + encodeURIComponent(addr) + '/tor-check');
-                if (r.online === true) el.textContent = '✓ reachable over Tor';
-                else if (r.online === false) el.textContent = '✗ not reachable — keep your wallet listener running';
-                else el.textContent = 'verified at payout time';
+                // Advisory hint only — the pool re-probes (with retries) at request time and is the
+                // authority, so we never disable the button on this; a genuine offline is caught by
+                // the server gate with a Slatepack suggestion.
+                if (r.online === true) el.textContent = '✓ reachable now';
+                else if (r.online === false) el.textContent = '✗ not reachable right now — start your wallet listener, or use Slatepack';
+                else el.textContent = 'checked when you request the payout';
             } catch (e) {
                 el.textContent = 'unknown';
             }
@@ -1020,6 +1166,10 @@
                     lookup(); // refresh balances + pending strip
                 } else {
                     setMsg(msg, apiErr(json, 'Withdrawal failed'), false);
+                    // Tor pre-flight gate declined it: reflect the offline status and point at Slatepack.
+                    if (json && json.tor_online === false) {
+                        $id('acct-tor').textContent = '✗ not reachable right now — start your wallet listener, or use Slatepack';
+                    }
                     btn.disabled = false;
                 }
             } catch (e) {
@@ -1207,10 +1357,10 @@
             return {
                 summary: {
                     grin_address: DEMO_ADDR,
-                    balance: 31.221, balance_locked: 3.75, total_paid: 208.5,
+                    balance: 31.221, balance_locked: 3.75, total_paid: 183.5, payouts_count: 6,
                     pending_withdrawals: 0, pending_withdrawal: null,
                     is_online: true, last_seen_at: now - 40, created_at: now - 75 * 86400,
-                    shares: { count: 184207, last_share_at: now - 40 },
+                    shares: { count: 184207, last_share_at: now - 40 }, blocks_found: 3,
                     hashrate_gps: 4.82, min_withdrawal: 25.0, payouts_frozen: false,
                     has_recorded_ip: true, has_recorded_pass: true,
                     nostr_payouts_enabled: false, nostr_destination: null
@@ -1218,7 +1368,16 @@
                 series, workers10, workers24,
                 earnings: { periods: { h1: 0.2604, h24: 6.1418, d7: 41.0317, d30: 172.4402 }, in_30d: 174.4402, out_30d: 50.742 },
                 price: { data: { usd: 0.0181, btc: 0.00000028 } },
-                ledger: { in: logIn, out: logOut }
+                ledger: { in: logIn, out: logOut },
+                withdrawals: [
+                    { created_at: now - 2 * 86400,  confirmed_at: now - 2 * 86400 + 900,  method: 'tor',       status: 'confirmed', amount: 25.0, fee: 0.008, kernel_excess: '08b1f6d2c4a3e5079b8c1d2e3f405162738495a6b7c8d9e0f1a2b3c4d5e6f70819' },
+                    { created_at: now - 9 * 86400,  confirmed_at: now - 9 * 86400 + 1200, method: 'slatepack', status: 'confirmed', amount: 25.0, fee: 0.008, kernel_excess: '09a2e7c3d5b40618ac9d0e1f2031425364758697a8b9cadbecfd0e1f203142536' },
+                    { created_at: now - 16 * 86400, confirmed_at: null,                   method: 'tor',       status: 'tor_failed', amount: 20.0, fee: 0.0 },
+                    { created_at: now - 23 * 86400, confirmed_at: now - 23 * 86400 + 800,  method: 'tor',       status: 'confirmed', amount: 30.0, fee: 0.008, kernel_excess: '08c3d8e4f60517b2ad0e1f2031425364758697a8b9cadbecfd0e1f2031425364a' },
+                    { created_at: now - 38 * 86400, confirmed_at: now - 38 * 86400 + 600,  method: 'nostr',     status: 'confirmed', amount: 28.5, fee: 0.008, kernel_excess: '09d4e9f5071628c3be1f20314253647586a7b8c9daebfc0d1e2f3041526374859' },
+                    { created_at: now - 52 * 86400, confirmed_at: now - 52 * 86400 + 700,  method: 'tor',       status: 'confirmed', amount: 40.0, fee: 0.008, kernel_excess: '08e5f0061728d3c4af203142536475869708b9cadbecfd0e1f2031425364758a6' },
+                    { created_at: now - 70 * 86400, confirmed_at: now - 70 * 86400 + 900,  method: 'tor',       status: 'confirmed', amount: 35.0, fee: 0.008, kernel_excess: '09f6010728e3d4b5c02031425364758697a8b9c0d1e2f30415263748596a7b8c9' }
+                ]
             };
         })();
 
@@ -1228,13 +1387,14 @@
             renderSummary(DEMO.summary);
             $id('acct-view').style.display = '';
             setMsg($id('acct-msg'), 'Demo account — sample data, no API calls. Actions are disabled.', true);
-            ledger.in.page = 0; ledger.out.page = 0;
+            ledger.in.page = 0; ledger.out.page = 0; wd.page = 0;
             renderChart(DEMO.series(acctRange));
             renderWorkers(DEMO.workers10, DEMO.workers24);
             renderEarnings(DEMO.earnings, DEMO.price);
             loadLedger('in');
             loadLedger('out');
-            $id('acct-tor').textContent = '✓ reachable over Tor (demo)';
+            loadWithdrawals();
+            $id('acct-tor').textContent = '✓ reachable now (demo)';
             $id('acct-withdraw').disabled = false;
         }
 
@@ -1243,6 +1403,16 @@
             $id('acct-lookup').addEventListener('click', lookup);
             $id('acct-addr').addEventListener('keydown', function (e) { if (e.key === 'Enter') lookup(); });
             $id('acct-withdraw').addEventListener('click', withdraw);
+            $id('acct-tor-recheck').addEventListener('click', function () {
+                // Manual re-probe: the on-load check goes stale once the miner starts their
+                // listener. Reuses the same endpoint/status span; no-op until an address is loaded.
+                if (currentAddr && !isDemo) torCheck(currentAddr);
+            });
+            // Decimal-only amount: strip any non-digit/dot and collapse to a single decimal point.
+            $id('acct-amount').addEventListener('input', function () {
+                const clean = this.value.replace(/[^0-9.]/g, '').replace(/(\..*)\./g, '$1');
+                if (clean !== this.value) this.value = clean;
+            });
             $id('acct-sp-create').addEventListener('click', slatepackCreate);
             $id('acct-sp-finalize').addEventListener('click', slatepackFinalize);
             $id('acct-amt-min').addEventListener('click', function (e) {
@@ -1284,6 +1454,17 @@
                 $id(dir + '-export').addEventListener('click', function (e) {
                     if (isDemo) { e.preventDefault(); setMsg($id('acct-msg'), 'Demo account — export is disabled.', false); }
                 });
+            });
+
+            // Withdrawal-history (P-08) pager + all-time CSV export
+            $id('wd-prev').addEventListener('click', function () {
+                if (wd.page > 0) { wd.page--; loadWithdrawals(); }
+            });
+            $id('wd-next').addEventListener('click', function () {
+                wd.page++; loadWithdrawals();
+            });
+            $id('wd-export').addEventListener('click', function (e) {
+                if (isDemo) { e.preventDefault(); setMsg($id('acct-msg'), 'Demo account — export is disabled.', false); }
             });
 
             // Deep-link support: ?addr=grin1… (e.g. from the miners-stats leaderboard) takes

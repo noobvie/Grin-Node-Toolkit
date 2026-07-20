@@ -182,7 +182,11 @@ function migrateWithdrawals() {
     const have = new Set(cols.map(c => c.name));
     const additions = {
       method: "TEXT NOT NULL DEFAULT 'tor'",
-      slate_id: 'TEXT DEFAULT NULL'
+      slate_id: 'TEXT DEFAULT NULL',
+      // On-chain kernel excess of the finalized payout tx (Grin's payment-proof primitive),
+      // backfilled once mined by withdrawal-scheduler.backfillKernelProofs(). NULL until then
+      // (or forever, for pre-feature rows / Tor-only deployments without the Owner-API wallet).
+      kernel_excess: 'TEXT DEFAULT NULL'
     };
     for (const [name, def] of Object.entries(additions)) {
       if (!have.has(name)) {
@@ -367,7 +371,8 @@ function createSchema() {
       cancelled_by INTEGER DEFAULT NULL,
       cancel_reason TEXT DEFAULT NULL,
       created_at INTEGER NOT NULL DEFAULT (unixepoch()),
-      confirmed_at INTEGER DEFAULT NULL
+      confirmed_at INTEGER DEFAULT NULL,
+      kernel_excess TEXT DEFAULT NULL
     )`,
 
     `CREATE INDEX IF NOT EXISTS idx_withdrawal_address ON withdrawals(grin_address, status)`,

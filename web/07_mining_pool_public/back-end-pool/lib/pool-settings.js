@@ -170,12 +170,19 @@ class PoolSettings {
       // Minutes a miner must wait after a reversed payout (Tor failure, slatepack expiry,
       // admin cancel) before requesting another payout on ANY rail. 0 disables.
       withdrawal_cooldown_minutes: 30,
+      // Pre-flight Tor reachability gate: refuse a Tor payout up front when the miner's wallet
+      // listener isn't answering over Tor now (probe = onion:80 SOCKS5 connect). Fails OPEN if
+      // the pool box can't run the probe, so it never blocks every payout. ON by default.
+      tor_preflight_gate: 'true',
       // ── Goblin/Nostr payout rail (design §15). OFF by default. Relays + NIP-05 domains
       // are JSON arrays of strings; the domain list is the SSRF/typo-squat allowlist.
       nostr_payouts_enabled: 'false',
       nostr_relays: '["wss://relay.floonet.dev","wss://relay.0xchat.com","wss://offchain.pub"]',
       nostr_nip05_domains: '["goblin.st"]',
       nostr_destination_cooldown_hours: 48,
+      // Minutes a DELIVERED-but-unanswered Goblin payout stays locked before it auto-refunds.
+      // Goblin AutoReceives, so a live miner answers in seconds; short bounds a stranded lock.
+      nostr_pending_ttl_minutes: 10,
     },
     access: {
       admin_ip_allowlist: '[]',
@@ -601,6 +608,11 @@ class PoolSettings {
         if (isNaN(n) || n < 0 || n > 1440) throw new Error('withdrawal_cooldown_minutes must be 0-1440');
         return n;
       },
+      tor_preflight_gate: (val) => {
+        if (val === true || val === 'true') return 'true';
+        if (val === false || val === 'false' || val === undefined || val === '') return 'false';
+        throw new Error('tor_preflight_gate must be true or false');
+      },
       nostr_payouts_enabled: (val) => {
         if (val === true || val === 'true') return 'true';
         if (val === false || val === 'false' || val === undefined || val === '') return 'false';
@@ -629,6 +641,13 @@ class PoolSettings {
       nostr_destination_cooldown_hours: (val) => {
         const n = parseInt(val, 10);
         if (isNaN(n) || n < 0 || n > 720) throw new Error('nostr_destination_cooldown_hours must be 0-720');
+        return n;
+      },
+      nostr_pending_ttl_minutes: (val) => {
+        // Floor of 2: the expiry sweep runs every 60s, so a TTL under ~2 min can't be enforced
+        // accurately. Cap of 1440 (24h) keeps it at or below the manual slatepack rail.
+        const n = parseInt(val, 10);
+        if (isNaN(n) || n < 2 || n > 1440) throw new Error('nostr_pending_ttl_minutes must be 2-1440');
         return n;
       },
     },
@@ -1088,6 +1107,9 @@ class PoolSettings {
     if (payout.withdrawal_cooldown_minutes !== undefined) {
       config.withdrawal_cooldown_minutes = payout.withdrawal_cooldown_minutes;
     }
+    if (payout.tor_preflight_gate !== undefined) {
+      config.tor_preflight_gate = payout.tor_preflight_gate === true || payout.tor_preflight_gate === 'true';
+    }
     // Nostr payout rail — stored as strings/JSON; coerce to the runtime shapes the bridge
     // expects (boolean, arrays, number). Malformed JSON falls back to the safe default.
     if (payout.nostr_payouts_enabled !== undefined) {
@@ -1101,6 +1123,9 @@ class PoolSettings {
     }
     if (payout.nostr_destination_cooldown_hours !== undefined) {
       config.nostr_destination_cooldown_hours = payout.nostr_destination_cooldown_hours;
+    }
+    if (payout.nostr_pending_ttl_minutes !== undefined) {
+      config.nostr_pending_ttl_minutes = payout.nostr_pending_ttl_minutes;
     }
     if (pool_info.pool_name !== undefined) {
       config.pool_name = pool_info.pool_name;

@@ -104,7 +104,7 @@ function renderServiceDetail(svc) {
   const parts = [];
   if (svc.uptime    != null) parts.push('Uptime: ' + escHtml(svc.uptime));
   if (svc.pid       != null) parts.push('PID: ' + escHtml(svc.pid));
-  if (svc.height    != null) parts.push('Height: ' + escHtml(svc.height));
+  if (svc.height    != null) parts.push('Height: ' + (window.Explorer ? Explorer.link('block', svc.height, svc.height) : escHtml(svc.height)));
   if (svc.synced    != null) parts.push('Synced: ' + (svc.synced ? 'Yes' : 'No'));
   if (svc.port      != null) parts.push('Port: ' + escHtml(svc.port));
   if (svc.miners_connected != null) parts.push('Miners: ' + escHtml(svc.miners_connected));

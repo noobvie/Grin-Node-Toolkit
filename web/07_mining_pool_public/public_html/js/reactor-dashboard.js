@@ -48,6 +48,14 @@
   // ── small helpers ─────────────────────────────────────────────────────────
   function $(id) { return document.getElementById(id); }
   function setText(id, text) { var el = $(id); if (el) el.textContent = text; }
+  // Set an element to a block height that deep-links to a chain explorer (new tab).
+  function setHeightLink(id, height) {
+    var el = $(id);
+    if (!el) return;
+    var label = Number(height).toLocaleString('en-US');
+    if (height && window.Explorer) el.innerHTML = Explorer.link('block', height, label);
+    else el.textContent = label;
+  }
   function pad2(n) { return String(n).padStart(2, '0'); }
 
   // Display units follow the toolkit convention: G/s, kG/s, MG/s.
@@ -397,7 +405,7 @@
       }
       setLamp('an-wallet', walletOk ? 'ok' : 'alarm', walletOk ? 'unlocked' : 'offline');
 
-      if (nodeHeight) setText('c-height', Number(nodeHeight).toLocaleString('en-US'));
+      if (nodeHeight) setHeightLink('c-height', nodeHeight);
       var nodeVal = $('mi-node');
       if (nodeVal) {
         nodeVal.textContent = nodeOk ? (nodeSynced ? 'SYNCED' : 'SYNCING') : 'OFFLINE';
@@ -440,7 +448,7 @@
       }
       // Height counter fallback: with the node unreachable, show the newest pool block.
       if (!nodeHeight && blocks[0] && blocks[0].height) {
-        setText('c-height', Number(blocks[0].height).toLocaleString('en-US'));
+        setHeightLink('c-height', blocks[0].height);
       }
       var anyOrphan = false;
       blocks.forEach(function (b) {
@@ -464,7 +472,10 @@
         tube.appendChild(fill);
         var h = document.createElement('div');
         h.className = 'h';
-        h.textContent = '#' + height.toLocaleString('en-US');
+        var hLabel = '#' + height.toLocaleString('en-US');
+        // Link the block height out to a chain explorer (new tab) as independent proof.
+        if (height && window.Explorer) h.innerHTML = Explorer.link('block', height, hLabel);
+        else h.textContent = hLabel;
         var m = document.createElement('div');
         m.className = 'm';
         m.textContent = orphan ? 'ORPHAN' : (mature ? 'MATURE' : conf + '/1440');

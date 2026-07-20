@@ -309,11 +309,22 @@ body {
 .chart-sub {
   font-family: var(--mono); font-size: 11px; letter-spacing: .14em; text-transform: uppercase;
   color: var(--text-dim); margin: 14px 0 6px;
+  /* flex (not a float) so the right-aligned share readout wraps to its own line on narrow
+     screens instead of overlapping the label text */
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px;
 }
 .chart-sub:first-child { margin-top: 0; }
 .chart-sub .dim { color: var(--text-mute); text-transform: none; letter-spacing: .06em; }
+/* Pool share of network hashrate, printed on the network sub-label. The relationship between
+   the two traces is a NUMBER, not a second line squashed onto the pool axis — at a fraction of
+   a percent, any shared-axis or wedge rendering of it is invisible. Text tokens only. */
+.chart-sub .share { margin-left: auto; text-transform: none; letter-spacing: .04em; color: var(--text-dim); font-variant-numeric: tabular-nums; }
+.chart-sub .share[hidden] { display: none; }
+.chart-sub .share b { color: var(--accent); font-weight: 700; }
 .chart-wrap--pool canvas   { height: 170px; }
-.chart-wrap--net canvas    { height: 120px; }
+/* Network runs as a short sparkline: its job here is shape comparison against the pool trace
+   above (which carries the shared x axis), so it doesn't need full height or its own labels. */
+.chart-wrap--net canvas    { height: 70px; }
 .chart-wrap--miners canvas { height: 140px; }
 
 /* 24H/7D/30D toggle riding the panel title (same interaction as the miners-stats rangebar,

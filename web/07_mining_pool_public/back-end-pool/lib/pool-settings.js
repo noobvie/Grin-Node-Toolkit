@@ -112,7 +112,7 @@ class PoolSettings {
       cta_link: '',
       discord_link: '',
       telegram_link: '',
-      twitter_link: 'https://twitter.com/grinium',
+      twitter_link: 'https://x.com/griniumpool',
       // Nostr profile as a full web URL (e.g. https://njump.me/npub1...) so the footer
       // link works for visitors without a Nostr client.
       nostr_link: '',
@@ -131,7 +131,7 @@ class PoolSettings {
       og_description: 'Mine Grin with low fees, PPLNS rewards and anonymous Tor payouts — plus prize draws, join bonuses and a community fortune board. No account needed.',
       og_image_file: '',
       og_locale: 'en_US',
-      twitter_handle: '@grinium',
+      twitter_handle: '@GriniumPool',
       twitter_card_type: 'summary_large_image',
       theme_color: '#b8e600',
       site_url: 'https://grinium.com',

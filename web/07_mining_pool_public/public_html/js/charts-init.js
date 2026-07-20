@@ -205,6 +205,9 @@
   // opts.valueFmt formats the y-axis + tooltip (defaults to fmtGps), opts.bucketSeconds drives the
   // UTC x-axis label granularity, opts.color overrides the theme accent. Returns the Chart instance
   // or null if Chart.js / the canvas is missing.
+  // opts.compact = sparkline mode: the trace is a companion to a full chart directly above it that
+  // already carries the x axis, so drop the duplicate time labels and thin the y ticks to 3. Shape
+  // stays readable in ~70px; exact values come from the (still active) hover tooltip.
   function renderTrendLine(canvasId, series, opts) {
     opts = opts || {};
     const canvas = document.getElementById(canvasId);
@@ -252,8 +255,15 @@
           tooltip: { callbacks: { label: (ctx) => valueFmt(ctx.parsed.y) } }
         },
         scales: {
-          x: { ticks: { maxTicksLimit: 8, autoSkip: true }, grid: { display: false } },
-          y: { beginAtZero: true, ticks: { callback: (v) => valueFmt(v) } }
+          x: opts.compact
+            ? { ticks: { display: false }, grid: { display: false }, border: { display: false } }
+            : { ticks: { maxTicksLimit: 8, autoSkip: true }, grid: { display: false } },
+          y: {
+            beginAtZero: true,
+            ticks: opts.compact
+              ? { maxTicksLimit: 3, callback: (v) => valueFmt(v) }
+              : { callback: (v) => valueFmt(v) }
+          }
         }
       }
     });

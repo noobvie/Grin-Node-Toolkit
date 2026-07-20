@@ -66,7 +66,7 @@
       "url": "https://pool.grin.money/",
       "logo": "https://pool.grin.money/images/logo.svg",
       "sameAs": [
-        "https://twitter.com/GriniumPool",
+        "https://x.com/griniumpool",
         "https://github.com/griniumpool"
       ]
     }
@@ -243,9 +243,12 @@
                 <!-- ═══ P-04 · CHART RECORDERS: hashrate (pool vs network) + miners online ═══
                      Pool and network hashrate are two ALIGNED small-multiple traces, not one
                      dual-axis chart — network GPS is orders of magnitude above pool GPS and
-                     would flatten the pool line to the floor. 24H keeps the fine 5-min pool
-                     sampling; 7D/30D and the network trace read the durable hourly rollup
-                     (the network line accrues from first deploy forward — no backfill). -->
+                     would flatten the pool line to the floor. The network trace is a short
+                     sparkline (shape comparison only); the actual pool-vs-network relationship
+                     is printed as a share % on its sub-label, which stays readable at any
+                     magnitude. 24H keeps the fine 5-min pool sampling; 7D/30D and the network
+                     trace read the durable hourly rollup (the network line accrues from first
+                     deploy forward — no backfill). -->
                 <div class="panel"><span class="screws"></span>
                     <h2 class="panel-title"><span class="tag">P-04</span> Chart recorder — hashrate
                         <span class="right"><span class="chart-range" id="rx-range" role="tablist" aria-label="Hashrate chart timeframe">
@@ -259,7 +262,10 @@
                             <canvas id="rx-chart" aria-label="Pool hashrate over the selected timeframe" role="img"></canvas>
                             <div class="chart-empty" id="rx-chart-empty">NO TRACE DATA YET</div>
                         </div>
-                        <div class="chart-sub">Network hashrate <span class="dim">same timeframe — compare the shapes</span></div>
+                        <div class="chart-sub">Network hashrate
+                            <span class="dim">same timeframe — compare the shapes</span>
+                            <span class="share" id="rx-share" hidden></span>
+                        </div>
                         <div class="chart-wrap chart-wrap--net">
                             <canvas id="rx-chart-net" aria-label="Grin network hashrate over the selected timeframe" role="img"></canvas>
                             <div class="chart-empty" id="rx-chart-net-empty">NO NETWORK TRACE YET</div>
@@ -381,7 +387,9 @@
                         <li style="display:none" data-brand="social-discord"><a data-brand="social-discord" href="#" rel="noopener" target="_blank">Discord</a></li>
                         <li style="display:none" data-brand="social-telegram"><a data-brand="social-telegram" href="#" rel="noopener" target="_blank">Telegram</a></li>
                         <li style="display:none" data-brand="social-twitter"><a data-brand="social-twitter" href="#" rel="noopener" target="_blank">Twitter / X</a></li>
-                        <li style="display:none" data-brand="social-website"><a data-brand="social-website" href="#" rel="noopener" target="_blank">Website</a></li>
+                        <!-- No "Website" row here: website_link points at this very site, so on the
+                             homepage it renders a link back to the page you are already on. -->
+                        <li style="display:none" data-brand="social-nostr"><a data-brand="social-nostr" href="#" rel="noopener" target="_blank">Nostr</a></li>
                         <li id="info-no-contact">Contact channels are configured by the operator (admin → Branding → Social links)</li>
                     </ul>
                 </div>

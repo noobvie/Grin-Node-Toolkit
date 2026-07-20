@@ -91,11 +91,18 @@ body {
    size to their own content — the annunciator no longer stretches to P-01's height and leaves
    a dead strip at its foot. (half rows stay stretched so their side-by-side panels stay matched.) */
 .deck-row.main { grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr); align-items: start; }
-/* P-04 (three stacked chart recorders, ~550px) is permanently much taller than P-05 (a
-   switch bank + one endpoint readout). Stretching P-05 to match only moves the emptiness
-   INSIDE its bezel — the panel then reads as broken rather than short. Same call, same
-   reason, as .deck-row.main above: let each size to its own content. */
-.deck-row.half.connect-row { align-items: start; }
+/* P-04/P-05 connect row: neither panel can be designated the tall one. P-05 carries the
+   region-colour <details>, which swings its height ~110px, so opening it flips which side
+   is taller — and start-alignment then just moves the gap to the other panel's foot.
+   So: keep the row stretch-aligned (the two bezels always match, whatever is open) and let
+   each body centre itself, so the slack lands as symmetric padding instead of a hole at one
+   panel's foot. Same fill pattern as .gateways-panel below. */
+.connect-row > .panel { display: flex; flex-direction: column; }
+.connect-row > .panel > .panel-body {
+  flex: 1; display: flex; flex-direction: column; justify-content: center;
+}
+/* Chart wraps hold fixed-height canvases — never let the flex context shrink them. */
+.connect-row .chart-wrap { flex: none; }
 
 .panel {
   min-width: 0;  /* pair with minmax(0,…) so overflow:auto children clip instead of expanding the panel */
@@ -332,7 +339,6 @@ body {
 /* Network runs as a short sparkline: its job here is shape comparison against the pool trace
    above (which carries the shared x axis), so it doesn't need full height or its own labels. */
 .chart-wrap--net canvas    { height: 70px; }
-.chart-wrap--miners canvas { height: 140px; }
 
 /* 24H/7D/30D toggle riding the panel title (same interaction as the miners-stats rangebar,
    sized down to fit a title row). */
@@ -423,19 +429,9 @@ body {
 .patch-hint { margin-top: 12px; font-size: 12.5px; color: var(--text-mute); }
 .patch-hint b { color: var(--text-dim); font-weight: 600; }
 
-/* Collapsed miner-setup guide (default closed) — same disclosure chrome as .rgn-help,
-   wrapping a theme-native mock of an ASIC web panel's "Pool Setting" form.
-   Lives in the full-width P-05b panel, so no top margin fights a readout above it. */
-.miner-guide { margin-top: 0; }
-.miner-guide > summary {
-  cursor: pointer; width: fit-content; list-style: none; font-family: var(--mono);
-  font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase;
-  color: var(--text-mute); padding: 2px 0;
-}
-.miner-guide > summary::-webkit-details-marker { display: none; }
-.miner-guide > summary::before { content: "▸ "; color: var(--accent2); }
-.miner-guide[open] > summary::before { content: "▾ "; }
-.miner-guide > summary:hover { color: var(--text); }
+/* Miner-setup guide — a theme-native mock of an ASIC web panel's "Pool Setting" form
+   beside the steps that explain it. Always visible in the full-width P-05b panel; the
+   old .miner-guide <details> chrome was dropped with the disclosure (2026-07-19). */
 .mform {
   margin-top: 12px; max-width: 560px; border: 1px solid var(--rx-line); border-radius: 6px;
   background: var(--rx-inset); overflow: hidden; box-shadow: inset 0 2px 10px rgba(0, 0, 0, .35);
@@ -469,7 +465,7 @@ body {
    describe it, so you read a field and its explanation on the same line of sight.
    Single column below 1000px (and inside any narrower host) — the mock's 120px label
    column plus a wrapping value needs ~360px before it starts looking squeezed. */
-.mguide-cols { display: grid; gap: 12px 28px; align-items: start; margin-top: 14px; }
+.mguide-cols { display: grid; gap: 12px 28px; align-items: start; }
 .mguide-cols > .mform { margin-top: 0; }
 .mguide-cols > .mguide-steps { margin-top: 0; }
 @media (min-width: 1000px) {

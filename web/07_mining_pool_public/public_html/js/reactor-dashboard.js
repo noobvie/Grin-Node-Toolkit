@@ -589,23 +589,8 @@
       compact: true
     });
     renderPoolShare(pool, net);
-
-    // Miners online — fixed 30 days (the miners-stats P-02 chart at range=month).
-    try {
-      var mm = (chartRange === 'month')
-        ? { points: points, bucket_seconds: bucket }
-        : await Auth.fetch('/api/pool/metrics/history?range=month');
-      var mpts = (mm && mm.points) || [];
-      toggleChartEmpty('rx-chart-miners-empty', mpts.length === 0);
-      PoolCharts.renderTrendLine('rx-chart-miners',
-        mpts.map(function (p) { return { t: p.t, v: p.miner_count }; }),
-        {
-          label: 'Miners online',
-          bucketSeconds: (mm && mm.bucket_seconds) || 86400,
-          valueFmt: PoolCharts.fmtInt,
-          color: '#3987e5'
-        });
-    } catch (e) { /* chart keeps last trace */ }
+    // A fixed-30d "miners online" trace was rendered here until 2026-07-19 — removed with its
+    // canvas (see index.html P-04); miners-stats.html P-02 covers it with a full range toggle.
   }
 
   // Pool share of network hashrate, printed on the network sub-label. This is the one honest

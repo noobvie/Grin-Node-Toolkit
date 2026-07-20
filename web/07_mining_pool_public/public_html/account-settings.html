@@ -768,10 +768,15 @@
         }
 
         // ── P-01 hashrate chart (Day/Week/Month; retention caps at 100 days) ──
+        // No per-range `bucket`: /hashrate/history returns RAW 5-min samples thinned to ≤288
+        // points, so the real spacing is ~5 min (day) / ~35 min (week) / ~2.5 h (month) — never
+        // the daily bucket this table used to declare. Declaring 86400 made the week/month axes
+        // print "MMM D" on sub-hour points, repeating the same date across every tick. The chart
+        // now derives the label format from the timestamps themselves (charts-init.js).
         const RANGES = {
-            day:   { hours: 24,  bucket: 3600,  note: 'last 24h' },
-            week:  { hours: 168, bucket: 86400, note: 'last 7 days' },
-            month: { hours: 720, bucket: 86400, note: 'last 30 days' }
+            day:   { hours: 24,  note: 'last 24h' },
+            week:  { hours: 168, note: 'last 7 days' },
+            month: { hours: 720, note: 'last 30 days' }
         };
         function renderChart(series) {
             const r = RANGES[acctRange] || RANGES.day;
@@ -781,7 +786,7 @@
             if (typeof PoolCharts === 'undefined') return;
             PoolCharts.renderTrendLine('acct-hashrate-chart',
                 (series || []).map(p => ({ t: p.t, v: p.gps })),
-                { label: 'Your hashrate', bucketSeconds: r.bucket, valueFmt: PoolCharts.fmtGps });
+                { label: 'Your hashrate', valueFmt: PoolCharts.fmtGps });
         }
         async function loadChart() {
             if (isDemo) { renderChart(DEMO.series(acctRange)); return; }

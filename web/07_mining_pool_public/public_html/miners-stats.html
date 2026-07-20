@@ -398,12 +398,9 @@
                     points.map(p => ({ t: p.t, v: p.miner_count })),
                     { label: 'Miners online', bucketSeconds: bucket, valueFmt: PoolCharts.fmtInt, color: '#58a6ff' });
 
-                const labels = points.map(p => {
-                    const d = new Date(p.t * 1000);
-                    return bucket && bucket >= 86400
-                        ? d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' })
-                        : d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'UTC' });
-                });
+                // Shared elastic UTC labeller (charts-init.js) — the same span-aware format the
+                // trend lines use, so all three panels read consistently at every range.
+                const labels = PoolCharts.timeLabels(points.map(p => p.t), bucket);
                 PoolCharts.renderGroupedBarChart('ms-chart-ledger', labels, [
                     { label: 'Earnings', data: points.map(p => p.earnings), color: '#7cb342' },
                     { label: 'Payout',   data: points.map(p => p.payout),   color: '#d29922' }

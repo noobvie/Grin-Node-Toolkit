@@ -2195,9 +2195,109 @@ PYEOF
 # On pass: appends "https://$host" to READY_SOURCES; sets _HOST_TAR_NAME/_HOST_SHA_NAME
 # from the first passing host. Returns 0=pass, 1=skip.
 # Args: host  max_age_days
+# Manifest fast path — chaindata.json (schema 1), published by Script 03 step 7.
+#
+# Answers in ONE request what the four legacy probes below answer in four, and
+# replaces two fragile inferences:
+#   · filename       — was scraped from nginx autoindex HTML (href="*.tar.gz")
+#   · freshness      — was HEAD / Last-Modified, which an index.html silently
+#                      poisons with its own frozen mtime
+#   · archive type   — was guessed from substrings in the filename
+#
+# The manifest exists ONLY when the archive is complete (Script 03 deletes it at
+# step 0 and writes it at step 7), so its mere presence is the ready signal.
+#
+# Returns 0 = host accepted, 1 = fall through to the legacy probes. ANY doubt
+# returns 1: mirrors we do not control, and older toolkit versions, have no
+# manifest at all and must keep working exactly as before.
+# Args: base_url  max_age_days  site_key
+_try_chaindata_manifest() {
+    local base="$1" max_age="$2" site_key="$3"
+    local json m_tar m_sha m_key m_gen gts age_days
+
+    command -v jq >/dev/null 2>&1 || return 1
+    json=$(curl -fsSL --max-time 10 "$base/chaindata.json" 2>/dev/null) || return 1
+    jq -e . >/dev/null 2>&1 <<<"$json" || { warn "$base: manifest is not valid JSON — using directory listing."; return 1; }
+
+    m_tar=$(jq -r '.archive       // empty' <<<"$json")
+    m_sha=$(jq -r '.checksum_file // empty' <<<"$json")
+    m_key=$(jq -r '.site_key      // empty' <<<"$json")
+    m_gen=$(jq -r '.generated_utc // empty' <<<"$json")
+
+    # A field this path relies on but cannot answer is doubt, so it falls
+    # through rather than proceeding with the check silently skipped. The
+    # legacy probes below re-derive all three from the directory listing.
+    if [[ -z "$m_tar" || -z "$m_sha" || -z "$m_gen" ]]; then
+        warn "$base: manifest is incomplete — using directory listing."
+        return 1
+    fi
+
+    # Filenames are pasted into a URL, so constrain them to a bare basename —
+    # no traversal, no scheme, no absolute path. A hostile mirror can serve
+    # anything it likes anyway, but it must not steer us off its own host.
+    if [[ ! "$m_tar" =~ ^[A-Za-z0-9._-]+\.tar\.gz$ ]]; then
+        warn "$base: manifest archive name rejected — using directory listing."
+        return 1
+    fi
+    if [[ ! "$m_sha" =~ ^[A-Za-z0-9._-]+\.sha256$ ]]; then
+        warn "$base: manifest checksum name rejected — using directory listing."
+        return 1
+    fi
+
+    # Declared type must match what the caller asked for. A manifest that does
+    # not state its type cannot satisfy a typed request — downloading the wrong
+    # chain is only discovered after the (very large) transfer completes.
+    if [[ -n "$site_key" ]]; then
+        if [[ -z "$m_key" ]]; then
+            warn "$base: manifest states no site_key, expected '$site_key' — using directory listing."
+            return 1
+        fi
+        if [[ "$m_key" != "$site_key" ]]; then
+            warn "$base: manifest is '$m_key', expected '$site_key' — skipping."
+            return 1
+        fi
+    fi
+
+    # Freshness from the manifest's own stated timestamp, not file metadata.
+    # An unparseable timestamp is doubt: fall through so the legacy HEAD probes
+    # enforce max_age, rather than accepting the host with no age check at all.
+    gts=$(date -d "$m_gen" +%s 2>/dev/null) || gts=""
+    if [[ -z "$gts" ]]; then
+        warn "$base: manifest timestamp '$m_gen' unparseable — using directory listing."
+        return 1
+    fi
+    age_days=$(( ( $(date +%s) - gts ) / 86400 ))
+    if (( age_days > max_age )); then
+        warn "$base: chain data is ${age_days} day(s) old (limit: ${max_age}) — skipping."
+        return 1
+    fi
+    success "$base: manifest OK — chain data is ${age_days} day(s) old."
+
+    # Trust but verify: the manifest promises this file exists
+    curl -fsSI --max-time 10 "$base/$m_tar" >/dev/null 2>&1 \
+        || { warn "$base: manifest names '$m_tar' but it is not downloadable — skipping."; return 1; }
+
+    READY_SOURCES+=("$base")
+    if [[ -z "${_HOST_TAR_NAME:-}" ]]; then
+        _HOST_TAR_NAME="$m_tar"
+        _HOST_SHA_NAME="$m_sha"
+        # Only meaningful alongside the tar name it was published with, so it is
+        # captured in the same breath. Cross-checked against the .sha256 file in
+        # download_chain_data — two artefacts that must agree.
+        _HOST_SHA256=$(jq -r '.sha256 // empty' <<<"$json")
+        [[ "$_HOST_SHA256" =~ ^[a-fA-F0-9]{64}$ ]] || _HOST_SHA256=""
+    fi
+    return 0
+}
+
 _check_and_add_host() {
     local host="$1" max_age="$2" site_key="${3:-}"
     local base="https://$host"
+
+    # 0. Manifest fast path — falls through to the legacy probes when absent
+    if _try_chaindata_manifest "$base" "$max_age" "$site_key"; then
+        return 0
+    fi
 
     # 1. HEAD / — quick directory freshness check before downloading anything
     local dir_lm dir_age=0
@@ -2263,8 +2363,13 @@ _check_and_add_host() {
     fi
 
     READY_SOURCES+=("$base")
-    [[ -z "${_HOST_TAR_NAME:-}" ]] && _HOST_TAR_NAME="$tname"
-    [[ -z "${_HOST_SHA_NAME:-}" ]] && _HOST_SHA_NAME="${sname:-}"
+    # Both names must come from the SAME host: the checksum is fetched from
+    # READY_SOURCES[0] using whichever names won here, so a tar name from one
+    # host paired with a sha name from another is a guaranteed 404.
+    if [[ -z "${_HOST_TAR_NAME:-}" ]]; then
+        _HOST_TAR_NAME="$tname"
+        _HOST_SHA_NAME="${sname:-}"
+    fi
     return 0
 }
 
@@ -2425,7 +2530,7 @@ download_chain_data() {
 
     # Combined check: sync-status + directory listing + file age per host
     local _MAX_AGE_DAYS=5
-    local _HOST_TAR_NAME="" _HOST_SHA_NAME=""
+    local _HOST_TAR_NAME="" _HOST_SHA_NAME="" _HOST_SHA256=""
     READY_SOURCES=()
     for host in "${hosts[@]}"; do
         _check_and_add_host "$host" "$_MAX_AGE_DAYS" "$site_key" || true
@@ -2519,6 +2624,24 @@ download_chain_data() {
     curl -fsSL "${READY_SOURCES[0]}/$sha_name" -o "$SHA_FILE" \
         || die "Failed to download checksum file."
     success "Checksum saved: $SHA_FILE"
+
+    # Cross-check the two artefacts the mirror published. Step 10 verifies the
+    # tarball against this .sha256 file; that proves the download is intact, but
+    # not that the .sha256 itself is the one that belongs to this archive. When
+    # a manifest supplied a digest, the two must agree — a mismatch means a
+    # stale .sha256 left beside a fresh manifest, or one of the two was altered.
+    # (Absent for legacy/no-manifest mirrors: skipped, not failed.)
+    if [[ -n "${_HOST_SHA256:-}" ]]; then
+        local file_sha
+        file_sha=$(awk '{print $1; exit}' "$SHA_FILE" 2>/dev/null || echo "")
+        if [[ "${file_sha,,}" != "${_HOST_SHA256,,}" ]]; then
+            die "Checksum file disagrees with the manifest on ${READY_SOURCES[0]}.
+  manifest : $_HOST_SHA256
+  .sha256  : ${file_sha:-<unreadable>}
+This mirror is inconsistent — do not extract its archive. Re-run and pick another source."
+        fi
+        success "Manifest and checksum file agree."
+    fi
 
     info "Downloading chain data: $tar_name"
     info "(Large file — progress shown below. Auto-switches source on failure.)"

@@ -123,6 +123,11 @@ FIREWALL=""   # Populated by detect_firewall()
 # shellcheck source=lib/nginx_shared_helpers.sh
 source "$SCRIPT_DIR/lib/nginx_shared_helpers.sh"
 
+# ── Source landing-page generator ─────────────────────────────────────────────
+# Optional — provides landing_menu (decorated index.html for chain-data mirrors).
+# shellcheck source=lib/02_lib_landing.sh
+[[ -f "$SCRIPT_DIR/lib/02_lib_landing.sh" ]] && source "$SCRIPT_DIR/lib/02_lib_landing.sh"
+
 # Detect a running Grin instance on the given port and return the recommended
 # web dir path matching script 03's naming convention (fullmain/prunemain/prunetest).
 # Returns 1 (no output) if no Grin is found on that port.
@@ -434,6 +439,8 @@ EOF
     echo "  9) Fail2ban Management        - Status, unban IPs, list bans"
     echo " 10) IP Filtering               - Block / Unblock IPs via ufw or iptables"
     echo ""
+    echo " 11) Landing Page               - Styled download page instead of the bare file list"
+    echo ""
     echo "  0) Exit"
     echo ""
 }
@@ -442,12 +449,12 @@ EOF
 get_action() {
     if [[ -n "$ACTION" ]]; then
         case "$ACTION" in
-            grin_mainnet|grin_testnet|custom|remove|list|limit_rate|lift_rate|enhance_security|fail2ban_management|ip_filtering)
+            grin_mainnet|grin_testnet|custom|remove|list|limit_rate|lift_rate|enhance_security|fail2ban_management|ip_filtering|landing_page)
                 return 0
                 ;;
             *)
                 print_error "Invalid ACTION: $ACTION"
-                print_info "Valid options: grin_mainnet, grin_testnet, custom, remove, list, limit_rate, lift_rate, enhance_security, fail2ban_management, ip_filtering"
+                print_info "Valid options: grin_mainnet, grin_testnet, custom, remove, list, limit_rate, lift_rate, enhance_security, fail2ban_management, ip_filtering, landing_page"
                 exit 1
                 ;;
         esac
@@ -455,7 +462,7 @@ get_action() {
 
     while true; do
         show_main_menu
-        read -p "Enter choice [0-10]: " choice
+        read -p "Enter choice [0-11]: " choice
 
         case $choice in
             1)  ACTION="grin_mainnet"       ; break ;;
@@ -468,13 +475,14 @@ get_action() {
             8)  ACTION="enhance_security"   ; break ;;
             9)  ACTION="fail2ban_management"; break ;;
             10) ACTION="ip_filtering"       ; break ;;
+            11) ACTION="landing_page"       ; break ;;
             0)
                 print_info "Exiting..."
                 exit 0
                 ;;
             "")  ;;  # Enter with no input — refresh menu
             *)
-                print_error "Invalid choice. Please select 0-10."
+                print_error "Invalid choice. Please select 0-11."
                 sleep 2
                 ;;
         esac
@@ -2914,6 +2922,13 @@ _dispatch_action() {
         enhance_security)    run_enhance_security ;;
         fail2ban_management) run_fail2ban_management ;;
         ip_filtering)        run_ip_filtering ;;
+        landing_page)
+            if declare -f landing_menu >/dev/null; then
+                landing_menu || true
+            else
+                print_error "lib/02_lib_landing.sh is missing — cannot manage the landing page."
+            fi
+            ;;
         *)
             print_error "Invalid action: $ACTION"
             exit 1

@@ -236,15 +236,11 @@
             el.style.display = show ? 'flex' : 'none';
         }
 
-        // UTC bucket labels for the bar/doughnut axes (site-wide UTC rule; the trend line formats
-        // its own labels from p.t + bucketSeconds inside charts-init.js).
+        // UTC bucket labels for the bar axes — delegated to the shared elastic labeller in
+        // charts-init.js (span-aware: adds the day to sub-day buckets spanning more than 2 days,
+        // and the year once the window reaches a year), so bars match the trend lines exactly.
         function periodLabels(points, bucket) {
-            return points.map(p => {
-                const d = new Date(p.t * 1000);
-                return bucket && bucket >= 86400
-                    ? d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' })
-                    : d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'UTC' });
-            });
+            return PoolCharts.timeLabels(points.map(p => p.t), bucket);
         }
 
         // ═════════════════════════════════════════════════════════════════

@@ -360,6 +360,7 @@ show_menu() {
     echo -e "  ${GREEN}L${RESET})  Refresh landing page ${DIM}(rebuild the public homepage)${RESET}"
     echo ""
     echo -e "  ${BOLD}Maintenance${RESET}"
+    echo -e "  ${GREEN}R${RESET}) Event retention ${DIM}(prune old traffic — upstream never expires anything)${RESET}"
     echo -e "  ${GREEN}B${RESET}) Backup & restore    ${GREEN}U${RESET}) Update floonet-rs"
     echo -e "  ${GREEN}M${RESET}) Nym mixnet exit ${DIM}(optional add-on)${RESET}     ${RED}D${RESET}) Uninstall"
     echo ""
@@ -398,6 +399,7 @@ main() {
             10) _flr_need_install && flr_menu_goblinpay      || true ;;
             11) _flr_need_install && flr_edit_config         || true ;;
             [lL]) flr_menu_refresh_landing || true ;;
+            [rR]) _flr_need_install && flr_menu_retention || true ;;
             [bB]) flr_backup_menu      || true ;;
             [uU]) _flr_need_install && flr_update   || true ;;
             [mM]) _flr_need_install && flr_mixexit  || true ;;

@@ -91,6 +91,18 @@ body {
    size to their own content — the annunciator no longer stretches to P-01's height and leaves
    a dead strip at its foot. (half rows stay stretched so their side-by-side panels stay matched.) */
 .deck-row.main { grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr); align-items: start; }
+/* P-04/P-05 connect row: neither panel can be designated the tall one. P-05 carries the
+   region-colour <details>, which swings its height ~110px, so opening it flips which side
+   is taller — and start-alignment then just moves the gap to the other panel's foot.
+   So: keep the row stretch-aligned (the two bezels always match, whatever is open) and let
+   each body centre itself, so the slack lands as symmetric padding instead of a hole at one
+   panel's foot. Same fill pattern as .gateways-panel below. */
+.connect-row > .panel { display: flex; flex-direction: column; }
+.connect-row > .panel > .panel-body {
+  flex: 1; display: flex; flex-direction: column; justify-content: center;
+}
+/* Chart wraps hold fixed-height canvases — never let the flex context shrink them. */
+.connect-row .chart-wrap { flex: none; }
 
 .panel {
   min-width: 0;  /* pair with minmax(0,…) so overflow:auto children clip instead of expanding the panel */
@@ -234,7 +246,9 @@ body {
 /* ── mimic flow diagram — reflowing circuit (row on desktop, column on mobile) ──
    Rebuilt from a fixed 920px SVG (needed horizontal swipe on phones) to an HTML
    flex circuit that stacks vertically on narrow screens. Stations keep their live
-   IDs (mi-miners/mi-regions/mi-core-*/mi-node) so reactor-dashboard.js is unchanged. */
+   IDs (mi-miners, mi-regions, the mi-core-… set, mi-node) so reactor-dashboard.js is
+   unchanged. NB: don't write the core IDs with a star-slash wildcard here — that
+   sequence closes the CSS comment early and the next rule gets eaten. */
 .mimic-wrap { overflow: visible; }
 .mimic { display: flex; align-items: stretch; flex-wrap: nowrap; }
 .mimic .mnode {
@@ -309,12 +323,22 @@ body {
 .chart-sub {
   font-family: var(--mono); font-size: 11px; letter-spacing: .14em; text-transform: uppercase;
   color: var(--text-dim); margin: 14px 0 6px;
+  /* flex (not a float) so the right-aligned share readout wraps to its own line on narrow
+     screens instead of overlapping the label text */
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px;
 }
 .chart-sub:first-child { margin-top: 0; }
 .chart-sub .dim { color: var(--text-mute); text-transform: none; letter-spacing: .06em; }
+/* Pool share of network hashrate, printed on the network sub-label. The relationship between
+   the two traces is a NUMBER, not a second line squashed onto the pool axis — at a fraction of
+   a percent, any shared-axis or wedge rendering of it is invisible. Text tokens only. */
+.chart-sub .share { margin-left: auto; text-transform: none; letter-spacing: .04em; color: var(--text-dim); font-variant-numeric: tabular-nums; }
+.chart-sub .share[hidden] { display: none; }
+.chart-sub .share b { color: var(--accent); font-weight: 700; }
 .chart-wrap--pool canvas   { height: 170px; }
-.chart-wrap--net canvas    { height: 120px; }
-.chart-wrap--miners canvas { height: 140px; }
+/* Network runs as a short sparkline: its job here is shape comparison against the pool trace
+   above (which carries the shared x axis), so it doesn't need full height or its own labels. */
+.chart-wrap--net canvas    { height: 70px; }
 
 /* 24H/7D/30D toggle riding the panel title (same interaction as the miners-stats rangebar,
    sized down to fit a title row). */
@@ -401,18 +425,13 @@ body {
   font-family: var(--mono); color: var(--info); background: var(--rx-inset);
   border: 1px solid var(--rx-line); border-radius: 4px; padding: 1px 6px; font-size: 12px;
 }
-/* Collapsed miner-setup guide (default closed) — same disclosure chrome as .rgn-help,
-   wrapping a theme-native mock of an ASIC web panel's "Pool Setting" form. */
-.miner-guide { margin-top: 14px; }
-.miner-guide > summary {
-  cursor: pointer; width: fit-content; list-style: none; font-family: var(--mono);
-  font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase;
-  color: var(--text-mute); padding: 2px 0;
-}
-.miner-guide > summary::-webkit-details-marker { display: none; }
-.miner-guide > summary::before { content: "▸ "; color: var(--accent2); }
-.miner-guide[open] > summary::before { content: "▾ "; }
-.miner-guide > summary:hover { color: var(--text); }
+/* Pointer from the patch bay down to the P-05b setup panel (the guide used to live here). */
+.patch-hint { margin-top: 12px; font-size: 12.5px; color: var(--text-mute); }
+.patch-hint b { color: var(--text-dim); font-weight: 600; }
+
+/* Miner-setup guide — a theme-native mock of an ASIC web panel's "Pool Setting" form
+   beside the steps that explain it. Always visible in the full-width P-05b panel; the
+   old .miner-guide <details> chrome was dropped with the disclosure (2026-07-19). */
 .mform {
   margin-top: 12px; max-width: 560px; border: 1px solid var(--rx-line); border-radius: 6px;
   background: var(--rx-inset); overflow: hidden; box-shadow: inset 0 2px 10px rgba(0, 0, 0, .35);
@@ -442,6 +461,17 @@ body {
   font-family: var(--mono); color: var(--info); background: var(--rx-inset);
   border: 1px solid var(--rx-line); border-radius: 4px; padding: 0 5px; font-size: 11.5px;
 }
+/* Two-up layout for the full-width P-05b panel: the ASIC mock beside the steps that
+   describe it, so you read a field and its explanation on the same line of sight.
+   Single column below 1000px (and inside any narrower host) — the mock's 120px label
+   column plus a wrapping value needs ~360px before it starts looking squeezed. */
+.mguide-cols { display: grid; gap: 12px 28px; align-items: start; }
+.mguide-cols > .mform { margin-top: 0; }
+.mguide-cols > .mguide-steps { margin-top: 0; }
+@media (min-width: 1000px) {
+  .mguide-cols { grid-template-columns: minmax(0, 560px) minmax(0, 1fr); }
+}
+
 @media (max-width: 480px) {
   .mform-row { grid-template-columns: minmax(0, 1fr); gap: 3px; }
   .mform-k { text-align: left; }

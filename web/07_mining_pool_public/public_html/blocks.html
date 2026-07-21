@@ -321,9 +321,11 @@
             if (el) el.style.display = show ? 'flex' : 'none';
         }
 
-        // UTC bucket label for the column chart (all block buckets are ≥ 1 day → "MMM D").
-        function bucketLabel(t) {
-            return new Date(t * 1000).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
+        // UTC bucket labels for the column chart — shared elastic labeller (charts-init.js), which
+        // picks the format from the actual span/spacing instead of assuming every block bucket is
+        // a day (the 24h range buckets hourly, and the all-time range can bucket by month).
+        function bucketLabels(points, bucket) {
+            return PoolCharts.timeLabels(points.map(p => p.t), bucket);
         }
 
         async function loadBlockCharts() {
@@ -344,12 +346,15 @@
                 toggleEmpty('bk-empty-luck', !hasLuck);
                 PoolCharts.renderTrendLine('bk-chart-luck',
                     luck.map(p => ({ t: p.t, v: p.luck })),
-                    { label: 'Luck', bucketSeconds: 86400, color: '#58a6ff', valueFmt: v => (Number(v) || 0).toFixed(0) + '%' });
+                    // No bucketSeconds: the luck series is PER BLOCK, not per bucket, so its
+                    // labels must come from the real block timestamps (a hardcoded 1-day hint
+                    // printed the same "MMM D" for every block found on that day).
+                    { label: 'Luck', color: '#58a6ff', valueFmt: v => (Number(v) || 0).toFixed(0) + '%' });
 
                 // P-02 · blocks found per period (plain columns).
                 toggleEmpty('bk-empty-blocks', !hasPeriod);
                 PoolCharts.renderBarChart('bk-chart-blocks',
-                    points.map(p => bucketLabel(p.t)),
+                    bucketLabels(points, bucket),
                     points.map(p => p.blocks),
                     { label: 'Blocks found', valueFmt: PoolCharts.fmtInt });
 

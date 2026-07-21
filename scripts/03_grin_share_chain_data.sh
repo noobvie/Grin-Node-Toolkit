@@ -129,6 +129,7 @@ GRIN_PORT=""
 NETWORK_TYPE=""
 ARCHIVE_NODE=""
 NODE_TYPE=""
+ARCHIVE_BASE=""     # basename of the archive produced this run (no extension)
 GRIN_BINARY=""
 GRIN_DIR=""
 GRIN_DATA_DIR=""
@@ -766,7 +767,7 @@ setup_derived_variables() {
 }
 
 reset_detection_vars() {
-    GRIN_PORT="" NETWORK_TYPE="" ARCHIVE_NODE="" NODE_TYPE=""
+    GRIN_PORT="" NETWORK_TYPE="" ARCHIVE_NODE="" NODE_TYPE="" ARCHIVE_BASE=""
     GRIN_BINARY="" GRIN_DIR="" GRIN_DATA_DIR="" GRIN_CONFIG_FILE=""
     LOG_FILE="" OUTPUT_DIR="" STATUS_FILE="" FINAL_DEST="" TMUX_SESSION=""
 }
@@ -982,12 +983,39 @@ validate_nginx_config() {
 # Nginx pipeline steps
 ################################################################################
 
-# Step 0: wipe output dir
+# Step 0: clear previously published artefacts from the output dir
+#
+# OUTPUT_DIR is a live nginx web root, not a scratch dir. Only the files THIS
+# pipeline publishes are removed — anything else the operator put there is kept.
+# In particular index.html (the Script 02 landing page) must survive, otherwise
+# every sync would silently revert the site to the bare autoindex.
 clean_output_directory() {
     log "Step 0: Cleaning output directory: $OUTPUT_DIR"
     mkdir -p "$OUTPUT_DIR"
     cd "$OUTPUT_DIR" || error_exit "Cannot access $OUTPUT_DIR"
-    find . -type f -delete
+
+    local removed=0 f
+    # chaindata.json goes first on purpose: its presence is the "archive is
+    # complete and downloadable" signal, so it must never outlive the archive.
+    #
+    # The trailing entries are debris rather than published artefacts: interrupted
+    # transfers and abandoned manifest temp files. The old blanket
+    # "find . -type f -delete" swept these; now that the sweep is name-scoped to
+    # protect index.html, they have to be named or they accumulate forever.
+    for f in chaindata.json *.tar.gz *.sha256 README.txt check_status_before_download.txt \
+             *.tar.gz.part *.tar.gz.tmp *.tar.gz.[0-9] wget-log wget-log.* .chaindata.json.*; do
+        [ -f "$f" ] || continue          # unmatched glob stays literal — skip it
+        rm -f "$f" && removed=$((removed+1))
+    done
+
+    # Anything still here is the operator's (index.html, robots.txt, assets).
+    # Listed, not deleted — if the count surprises you, that dir has cruft.
+    local kept
+    kept=$(find . -maxdepth 1 -type f 2>/dev/null | wc -l)
+    log "Removed $removed published file(s); kept $kept other file(s)"
+    if [ "$kept" -gt 0 ]; then
+        log "  kept: $(find . -maxdepth 1 -type f -printf '%f ' 2>/dev/null)"
+    fi
     log "Output directory ready"
 }
 
@@ -1064,6 +1092,7 @@ compress_chain_data() {
     cd "$OUTPUT_DIR" && sha256sum "${base}.tar.gz" > "${base}.sha256"
     log "Archive size: $(du -h "$out" | cut -f1)"
 
+    ARCHIVE_BASE="$base"   # consumed by write_chaindata_manifest at step 7
     create_readme "$base"
     log "Compression complete"
 }
@@ -1173,8 +1202,68 @@ EOF
     log "README.txt generated"
 }
 
+# Step 7a: publish chaindata.json — the machine-readable manifest
+#
+# Consumers (Script 01's mirror discovery, the Script 02 landing page) read this
+# instead of scraping nginx's autoindex HTML for href="*.tar.gz".
+#
+# INVARIANT: the manifest exists ONLY when the archive is complete and
+# downloadable. There is deliberately no "status" field — absence IS the
+# not-ready signal, so a stale manifest can never disagree with a status file.
+# Step 0 deletes it before anything else for the same reason.
+#
+# Written to a temp file and mv'd into place: mv within one filesystem is
+# atomic, so a poller never observes a half-written manifest.
+#
+# No jq needed here — every value is script-controlled, so a heredoc is safe.
+# (jq is a Script 01 dependency for READING; the sharing host may not have it.)
+write_chaindata_manifest() {
+    local base=$1
+    local tar="$OUTPUT_DIR/${base}.tar.gz"
+    [ -f "$tar" ] || { log "WARNING: $tar missing — manifest not written"; return 0; }
+
+    local site_key size sha tmp
+    case "${NODE_TYPE}_${NETWORK_TYPE}" in
+        full_mainnet)   site_key="fullmain"  ;;
+        pruned_mainnet) site_key="prunemain" ;;
+        pruned_testnet) site_key="prunetest" ;;
+        *)              site_key="${NODE_TYPE}_${NETWORK_TYPE}" ;;
+    esac
+
+    size=$(stat -c %s "$tar" 2>/dev/null || echo 0)
+    # the .sha256 is "<hex>  <filename>" — take field 1
+    sha=$(awk '{print $1; exit}' "$OUTPUT_DIR/${base}.sha256" 2>/dev/null || echo "")
+
+    tmp="$OUTPUT_DIR/.chaindata.json.$$"
+    cat > "$tmp" << EOF
+{
+  "schema": 1,
+  "site_key": "${site_key}",
+  "network": "${NETWORK_TYPE}",
+  "node_type": "${NODE_TYPE}",
+  "archive_mode": ${ARCHIVE_NODE:-false},
+  "archive": "${base}.tar.gz",
+  "checksum_file": "${base}.sha256",
+  "sha256": "${sha}",
+  "size_bytes": ${size},
+  "generated_utc": "$(date -u '+%Y-%m-%dT%H:%M:%SZ')",
+  "generator": "grin-node-toolkit/03_grin_share_chain_data.sh"
+}
+EOF
+    # 644 explicitly: the file is created under root's umask and mv preserves the
+    # temp file's mode, so a tightened umask (077) would publish a manifest nginx
+    # cannot read — a 403 on the one file that signals "ready".
+    chmod 644 "$tmp" 2>/dev/null || true
+    mv -f "$tmp" "$OUTPUT_DIR/chaindata.json" \
+        || { rm -f "$tmp"; log "WARNING: could not publish chaindata.json"; return 0; }
+    log "Manifest published: chaindata.json (${site_key}, ${size} bytes)"
+}
+
 # Step 7: write status file to signal download is ready
 update_status_completed() {
+    # manifest first, then the human status note — a consumer that sees "ready"
+    # must never then fail to find the manifest it implies
+    [ -n "${ARCHIVE_BASE:-}" ] && write_chaindata_manifest "$ARCHIVE_BASE"
     echo "Sync completed. You may download the ${NODE_TYPE} ${NETWORK_TYPE} archive. Verify the checksum first. Last updated: $(get_utc_timestamp)" \
         > "$STATUS_FILE"
     log "Status set: completed"
@@ -1472,14 +1561,53 @@ run_ssh_share_for_combo() {
     ensure_package rsync rsync \
         || { log "ERROR: rsync not available and install failed — install it manually"; return 1; }
     log "Uploading via rsync..."
+    # --delete prunes stale archives on the remote. The Script 02 landing-page
+    # assets are excluded on purpose: index.html, robots.txt and sitemap.xml all
+    # have the SOURCE domain baked into them, so the remote must keep the set
+    # Script 02 generated for itself rather than inheriting ours — and --delete
+    # must not strip them either.
+    #
+    # chaindata.json is excluded for a DIFFERENT reason: it describes the archive,
+    # so unlike index.html it does belong on the remote — but only once the archive
+    # it describes has fully arrived. Sent inside this rsync it could land first and
+    # advertise a tarball still in flight. It is pushed explicitly after success
+    # below. Deleting it up front means the remote never advertises a stale archive
+    # while a new one uploads.
+    ssh -i "$key" -p "$port" "$host" "rm -f '$rdir/chaindata.json'" 2>/dev/null || true
+
     rsync -az --progress --delete \
         --exclude='.*' \
+        --exclude='index.html' \
+        --exclude='robots.txt' \
+        --exclude='sitemap.xml' \
+        --exclude='grin-logo.svg' \
+        --exclude='mirrors.json' \
+        --exclude='chaindata.json' \
         -e "ssh -i $key -p $port" \
         "$src/" "$host:$rdir/"
 
     local rc=$?
     if [ $rc -eq 0 ]; then
         log "✓ Upload complete"
+        # Manifest last: it is the "archive is complete" signal, so it may only
+        # appear now that the payload has fully landed. scp to a temp name then
+        # mv, so a poller never sees it half-written.
+        if [ -f "$src/chaindata.json" ]; then
+            # Temp name is per-run ($$): a fixed name collides when two combos
+            # share one remote dir, and because it is a dotfile rsync's
+            # --exclude='.*' shields it from --delete, so a failed scp would
+            # otherwise leave it behind permanently. Cleaned up on both paths.
+            local rtmp="$rdir/.chaindata.json.$$"
+            if scp -q -i "$key" -P "$port" "$src/chaindata.json" \
+                    "$host:$rtmp" 2>/dev/null \
+               && ssh -i "$key" -p "$port" "$host" \
+                    "chmod 644 '$rtmp' && mv -f '$rtmp' '$rdir/chaindata.json'" 2>/dev/null; then
+                log "✓ Remote manifest published"
+            else
+                log "WARNING: could not publish remote chaindata.json (consumers fall back to the file listing)"
+                ssh -i "$key" -p "$port" "$host" "rm -f '$rtmp'" 2>/dev/null || true
+            fi
+        fi
         # Write completed status
         local msg_ok="Sync completed. Download the ${ntype} ${net} archive and verify the checksum. $(get_utc_timestamp)"
         ssh -i "$key" -p "$port" "$host" "echo '$msg_ok' > '$rdir/check_status_before_download.txt'" 2>/dev/null

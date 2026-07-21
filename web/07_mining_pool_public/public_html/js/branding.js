@@ -450,13 +450,6 @@
         el.textContent = connMap[key];
       });
     });
-
-    // Reveal the footer stratum stat (with its copy button) once we have a real address.
-    if (stratumUrl) {
-      document.querySelectorAll('.footer-stratum').forEach(function (el) {
-        el.hidden = false;
-      });
-    }
   }
 
   // ── 3b. Site-wide header: swinging logo + slogan, Rewards link, miner auth ──
@@ -513,7 +506,10 @@
         }
       }
 
-      if (nameEl && !el.querySelector('.brand-text')) {
+      // The footer brand already ships its own <p class="footer-tagline"> (filled by the
+      // generic [data-brand] pass), so adding a .brand-slogan here would print the tagline
+      // twice in the footer. Header/admin brands have no tagline of their own — they get one.
+      if (nameEl && !el.closest('.footer-brand') && !el.querySelector('.brand-text')) {
         var col = document.createElement('span');
         col.className = 'brand-text';
         nameEl.parentNode.insertBefore(col, nameEl);

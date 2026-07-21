@@ -64,17 +64,33 @@ FLR_BAK_WRAPPER="/usr/local/bin/grin-floonet-backup"
 FLR_BAK_CRON="/etc/cron.d/grin-floonet-backup"
 FLR_BAK_LOG="/opt/grin/logs/floonet_backup_cron.log"
 
+# Event retention (OUR feature — floonet-rs/nostr-rs-relay never expires events)
+FLR_PRUNE_WRAPPER="/usr/local/bin/grin-floonet-prune"
+FLR_PRUNE_CRON="/etc/cron.d/grin-floonet-prune"
+FLR_PRUNE_LOG="/opt/grin/logs/floonet_prune.log"
+# Kinds that must NEVER be age-pruned: they are the operator's identity/config,
+# not traffic. 0 profile, 3 contacts, 5 deletions, plus the whole replaceable
+# (10000–19999) and addressable (30000–39999) ranges — a relay list or DM-relay
+# list has no newer copy anywhere once it's gone.
+FLR_PRUNE_DENY_KINDS="0 3 5"
+FLR_PRUNE_MIN_DAYS=7   # goblin's catch-up lookback is 3 days + 24h send expiry
+
 # Deployer settings (persisted in FLR_CONF)
 FLR_DOMAIN=""
 FLR_EMAIL=""
 FLR_BAK_KEEP=7
 FLR_BAK_HOUR=3
 FLR_BAK_MIN=25
+FLR_PRUNE_DAYS=0            # 0 = retention off (keep everything, upstream behaviour)
+FLR_PRUNE_KINDS="1059"      # gift wraps — the disposable slatepack envelopes
+FLR_PRUNE_HOUR=4
+FLR_PRUNE_MIN=10
 FLR_INSTALLED_REV=""   # source rev the installed binary was built from
 
 # ─── Deployer conf ───────────────────────────────────────────────────────────
 flr_load_conf() {
     FLR_DOMAIN=""; FLR_EMAIL=""; FLR_BAK_KEEP=7; FLR_BAK_HOUR=3; FLR_BAK_MIN=25
+    FLR_PRUNE_DAYS=0; FLR_PRUNE_KINDS="1059"; FLR_PRUNE_HOUR=4; FLR_PRUNE_MIN=10
     FLR_INSTALLED_REV=""
     # shellcheck disable=SC1090
     [[ -f "$FLR_CONF" ]] && source "$FLR_CONF" 2>/dev/null || true
@@ -89,6 +105,10 @@ FLR_EMAIL='${FLR_EMAIL}'
 FLR_BAK_KEEP=${FLR_BAK_KEEP}
 FLR_BAK_HOUR=${FLR_BAK_HOUR}
 FLR_BAK_MIN=${FLR_BAK_MIN}
+FLR_PRUNE_DAYS=${FLR_PRUNE_DAYS}
+FLR_PRUNE_KINDS='${FLR_PRUNE_KINDS}'
+FLR_PRUNE_HOUR=${FLR_PRUNE_HOUR}
+FLR_PRUNE_MIN=${FLR_PRUNE_MIN}
 FLR_INSTALLED_REV='${FLR_INSTALLED_REV}'
 EOF
     chmod 600 "$FLR_CONF"
@@ -867,6 +887,8 @@ flr_write_landing_page() {
     border:1px solid rgba(195,179,255,.22);}
   .card h3{font-size:1.24rem; margin:0 0 .45em}
   .card p{color:var(--dim); font-size:.93rem; margin:0} .card p+p{margin-top:.7em}
+  .beyond-note{color:var(--ghost); font-size:.88rem; margin:20px 0 0; max-width:70ch}
+  .beyond-note a{color:inherit; text-decoration:underline; text-underline-offset:3px}
 
   .info{background:var(--night); border:1px solid var(--veil); border-radius:16px;
     overflow:hidden; font-family:var(--mono); font-size:.9rem;}
@@ -1036,7 +1058,7 @@ flr_write_landing_page() {
         <h3>floonet &amp; goblin</h3>
         <p><strong style="color:var(--text)">floonet</strong> is the Grin-native relay stack;
         <strong style="color:var(--text)">goblin</strong> is the wallet that speaks it &mdash; pay-by-name over
-        Nostr, routed through a mixnet.</p>
+        Nostr, carried over Tor.</p>
         <p>Run your own relay and you rent no one's infrastructure.</p>
       </article>
     </div>
@@ -1066,6 +1088,44 @@ flr_write_landing_page() {
         <div class="k">endpoint</div><div class="v" id="n-url">@@RELAYURL@@</div>
       </div>
     </div>
+  </div>
+</section>
+
+<section id="beyond">
+  <div class="wrap">
+    <div class="sec-head">
+      <p class="eyebrow">Beyond Grin</p>
+      <h2>It's a Nostr relay too.</h2>
+      <p>Underneath, this is a hardened general-purpose Nostr relay &mdash; Grin is just the traffic
+      it was tuned for. The same box can quietly do a few other things for you.</p>
+    </div>
+    <div class="pillars">
+      <article class="card">
+        <div class="ic"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7.5 12 13l9-5.5"/><rect x="3" y="5" width="18" height="14" rx="2.5"/></svg></div>
+        <h3>A private DM inbox</h3>
+        <p>Sealed Nostr direct messages &mdash; NIP-17 gift wrap, NIP-44 encryption &mdash; are exactly
+        what this relay is built to carry. Point any Nostr client's <b>DM relay</b> here and your private
+        messages stop resting on somebody else's server.</p>
+        <p>Nothing to configure: the envelope kinds are carried by default.</p>
+      </article>
+      <article class="card">
+        <div class="ic"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8h18v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M2 4.5h20V8H2zM10 12h4"/></svg></div>
+        <h3>A home for your identity</h3>
+        <p>Your profile, contact list and relay list are accepted by default, so a copy of who you are
+        lives somewhere you control &mdash; not only on public relays that can drop it.</p>
+        <p>Text notes stay closed unless the operator opens them to chosen authors. This is a personal
+        keep, not a public timeline.</p>
+      </article>
+      <article class="card">
+        <div class="ic"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="5" r="2.3"/><circle cx="5" cy="17" r="2.3"/><circle cx="19" cy="17" r="2.3"/><path d="M12 7.3v4.4M10.3 13.2 6.6 15.6M13.7 13.2l3.7 2.4"/></svg></div>
+        <h3>One less chokepoint</h3>
+        <p>Nostr only stays uncensorable while relays stay plural. Most people lean on a handful of big
+        public ones; every self-hosted relay moves a little traffic back off them.</p>
+        <p>Deliberately narrow &mdash; it carries wallet and messaging traffic, not the whole firehose.</p>
+      </article>
+    </div>
+    <p class="beyond-note">Operators can restrict which message types and which authors this relay accepts
+    &mdash; the <a href="#info">relay information</a> above is what it will admit to carrying today.</p>
   </div>
 </section>
 
@@ -1624,21 +1684,28 @@ flr_menu_access() {
         echo -e "  ${DIM}tighten these if you want a private or invite-only relay.${RESET}\n"
         echo -e "  NIP-42 auth (require login to read) : $(flr_toml_get authorization nip42_auth || echo 'false')"
         echo -e "  NIP-42 for DMs only                 : $(flr_toml_get authorization nip42_dms || echo 'false')"
+        echo -e "  Require auth to WRITE               : $(flr_toml_get authorization require_auth_to_write || echo 'false')"
         echo -e "  Pubkey whitelist (writers)          : ${DIM}$(flr_toml_get authorization pubkey_whitelist || echo '(open)')${RESET}"
         echo -e "  Public note authors                 : ${DIM}$(flr_toml_get authorization public_note_authors || echo '(open)')${RESET}"
         echo ""
+        echo -e "  ${DIM}floonet-rs never expires stored events, so an open relay grows without${RESET}"
+        echo -e "  ${DIM}bound. 'Require auth to write' is the cheapest brake — it keeps anonymous${RESET}"
+        echo -e "  ${DIM}strangers from parking data on your disk while still letting anyone who${RESET}"
+        echo -e "  ${DIM}proves a key (any wallet) send you a slatepack. See R) for retention.${RESET}\n"
         echo -e "  ${GREEN}1${RESET}) Toggle NIP-42 auth"
         echo -e "  ${GREEN}2${RESET}) Toggle NIP-42 for DMs"
-        echo -e "  ${GREEN}3${RESET}) Set pubkey whitelist (hex pubkeys)"
-        echo -e "  ${GREEN}4${RESET}) Set public note authors (hex pubkeys)"
+        echo -e "  ${GREEN}3${RESET}) Toggle require auth to write ${DIM}(anti-abuse brake)${RESET}"
+        echo -e "  ${GREEN}4${RESET}) Set pubkey whitelist (hex pubkeys)"
+        echo -e "  ${GREEN}5${RESET}) Set public note authors (hex pubkeys)"
         echo -e "  ${DIM}0) Back${RESET}\n"
         echo -ne "${BOLD}Select: ${RESET}"
         local c; read -r c || true
         case "$c" in
             1) _flr_toggle_bool authorization nip42_auth "NIP-42 auth" && _flr_offer_restart ;;
             2) _flr_toggle_bool authorization nip42_dms "NIP-42 for DMs" && _flr_offer_restart ;;
-            3) _flr_set_pubkey_array authorization pubkey_whitelist "Allowed writer pubkeys" && _flr_offer_restart ;;
-            4) _flr_set_pubkey_array authorization public_note_authors "Public note author pubkeys" && _flr_offer_restart ;;
+            3) _flr_toggle_bool authorization require_auth_to_write "Require auth to write" && _flr_offer_restart ;;
+            4) _flr_set_pubkey_array authorization pubkey_whitelist "Allowed writer pubkeys" && _flr_offer_restart ;;
+            5) _flr_set_pubkey_array authorization public_note_authors "Public note author pubkeys" && _flr_offer_restart ;;
             0|"") return 0 ;;
             *) warn "Invalid option."; sleep 1 ;;
         esac
@@ -1782,6 +1849,273 @@ flr_update() {
     pause
 }
 
+# ─── Event retention ─────────────────────────────────────────────────────────
+# floonet-rs inherits nostr-rs-relay's storage model: a stored event is kept
+# FOREVER — there is no retention, pruning, or NIP-40 expiry key upstream. On a
+# relay that accepts writes from strangers that means unbounded disk growth, so
+# this is ours to provide. Two deliberate choices:
+#
+#   * Age is measured on `first_seen` (when WE received it), never `created_at`.
+#     A gift wrap's created_at is deliberately fuzzed up to 2 days into the past
+#     and is entirely sender-controlled — pruning on it is both wrong and
+#     trivially gameable by a sender who backdates.
+#   * Identity kinds are refused outright. A profile, contact list or relay list
+#     is the ONLY copy in existence; ageing it out destroys data rather than
+#     reclaiming space. Traffic is disposable, identity is not.
+#
+# No automatic VACUUM: freed pages are reused by SQLite, so the file stops
+# GROWING (the actual goal) without needing a lock-the-world rewrite. Reclaiming
+# space to the OS is a separate, explicit action.
+
+# Refuse kinds that must never be age-pruned.
+_flr_prune_kind_ok() {  # <kind>
+    local k="$1" deny
+    for deny in $FLR_PRUNE_DENY_KINDS; do
+        if [[ "$k" == "$deny" ]]; then
+            error "Kind $k is identity/config data, not traffic — refusing to prune it."
+            return 1
+        fi
+    done
+    if (( k >= 10000 && k <= 19999 )); then
+        error "Kind $k is replaceable (10000–19999) — the stored copy is the only one. Refusing."
+        return 1
+    fi
+    if (( k >= 30000 && k <= 39999 )); then
+        error "Kind $k is addressable (30000–39999) — the stored copy is the only one. Refusing."
+        return 1
+    fi
+    return 0
+}
+
+# Validate + normalise a kind list ("1059,1" or "1059 1") → space-separated.
+# Echoes the cleaned list on success.
+_flr_prune_clean_kinds() {  # <list>
+    local raw="${1//,/ }" out="" k
+    for k in $raw; do
+        [[ "$k" =~ ^[0-9]+$ ]] || { error "'$k' is not a kind number."; return 1; }
+        _flr_prune_kind_ok "$k" || return 1
+        out+="${out:+ }$k"
+    done
+    [[ -n "$out" ]] || { error "No kinds given."; return 1; }
+    printf '%s' "$out"
+}
+
+# Delete events of <kinds> older than <days>. Batched so the live relay never
+# waits on a long write lock. dry=1 counts without deleting.
+flr_prune_run() {  # <days> <kinds> [dry]
+    local days="$1" kinds="$2" dry="${3:-0}"
+    local db; db=$(flr_db_path)
+    [[ -n "$db" ]] || { error "No SQLite database found in $FLR_STATE."; return 1; }
+    command -v sqlite3 >/dev/null 2>&1 || { error "sqlite3 not installed."; return 1; }
+    [[ "$days" =~ ^[0-9]+$ ]] || { error "Days must be a number."; return 1; }
+    if (( days < FLR_PRUNE_MIN_DAYS )); then
+        error "Refusing a ${days}-day retention — minimum is ${FLR_PRUNE_MIN_DAYS} days."
+        echo -e "  ${DIM}goblin looks back 3 days for missed messages and holds unsent slates${RESET}"
+        echo -e "  ${DIM}for 24h; pruning tighter than that deletes slatepacks still in flight.${RESET}"
+        return 1
+    fi
+    local clean; clean=$(_flr_prune_clean_kinds "$kinds") || return 1
+
+    # The schema must actually have first_seen — if upstream ever renames it we
+    # must stop, not silently fall back to the sender-controlled created_at.
+    if ! sqlite3 -readonly "$db" "SELECT first_seen FROM event LIMIT 1;" >/dev/null 2>&1; then
+        error "This database has no 'first_seen' column — upstream schema changed."
+        echo -e "  ${DIM}Not falling back to created_at: it is sender-controlled and fuzzed.${RESET}"
+        return 1
+    fi
+
+    local inlist="${clean// /,}"
+    local cutoff=$(( $(date +%s) - days * 86400 ))
+    local pending
+    pending=$(sqlite3 -readonly "$db" \
+        "SELECT COUNT(*) FROM event WHERE kind IN ($inlist) AND first_seen < $cutoff;" 2>/dev/null || echo 0)
+    pending=${pending:-0}
+
+    if [[ "$dry" == "1" ]]; then
+        echo -e "  Would delete ${BOLD}${pending}${RESET} event(s) — kinds [${clean// /, }] older than ${days}d."
+        return 0
+    fi
+    if (( pending == 0 )); then
+        info "Nothing to prune (kinds [${clean// /, }] older than ${days}d)."
+        return 0
+    fi
+
+    local total=0 n
+    while true; do
+        n=$(sqlite3 "$db" \
+            "PRAGMA busy_timeout=15000; PRAGMA foreign_keys=ON;
+             DELETE FROM event WHERE id IN (
+               SELECT id FROM event
+                WHERE kind IN ($inlist) AND first_seen < $cutoff
+                LIMIT 2000);
+             SELECT changes();" 2>/dev/null) || { error "Delete failed (database locked?)."; return 1; }
+        n=${n:-0}
+        [[ "$n" =~ ^[0-9]+$ ]] || n=0
+        total=$(( total + n ))
+        (( n > 0 )) || break
+    done
+
+    # foreign_keys=ON only cascades if upstream declared the FK; sweep any
+    # orphaned tag rows regardless so they can't accumulate silently.
+    if sqlite3 -readonly "$db" "SELECT event_id FROM tag LIMIT 1;" >/dev/null 2>&1; then
+        sqlite3 "$db" "PRAGMA busy_timeout=15000;
+            DELETE FROM tag WHERE NOT EXISTS (SELECT 1 FROM event e WHERE e.id = tag.event_id);" \
+            >/dev/null 2>&1 || true
+    fi
+
+    success "Pruned ${total} event(s) — kinds [${clean// /, }] older than ${days}d."
+    return 0
+}
+
+# Cron wrapper — regenerated on every enable so settings changes land.
+_flr_write_prune_wrapper() {
+    mkdir -p "$(dirname "$FLR_PRUNE_LOG")" 2>/dev/null || true
+    cat > "$FLR_PRUNE_WRAPPER" <<WRAP
+#!/bin/bash
+# Grin Floonet relay — event retention. Generated by 091_grin_floonet_relay.sh.
+# Prunes disposable traffic by first_seen. Identity kinds are never touched.
+set -uo pipefail
+DB=\$(ls -S ${FLR_STATE}/*.db 2>/dev/null | head -n1)
+LOG="${FLR_PRUNE_LOG}"
+TS=\$(date '+%Y-%m-%d %H:%M:%S')
+DAYS=${FLR_PRUNE_DAYS}
+KINDS="${FLR_PRUNE_KINDS// /,}"
+[[ -n "\$DB" ]] || { echo "[\$TS] no database found" >> "\$LOG"; exit 0; }
+[[ "\$DAYS" -ge ${FLR_PRUNE_MIN_DAYS} ]] || { echo "[\$TS] retention below floor — skipped" >> "\$LOG"; exit 0; }
+CUTOFF=\$(( \$(date +%s) - DAYS * 86400 ))
+TOTAL=0
+while :; do
+    N=\$(sqlite3 "\$DB" \\
+        "PRAGMA busy_timeout=15000; PRAGMA foreign_keys=ON;
+         DELETE FROM event WHERE id IN (
+           SELECT id FROM event WHERE kind IN (\$KINDS) AND first_seen < \$CUTOFF LIMIT 2000);
+         SELECT changes();" 2>/dev/null) || { echo "[\$TS] delete failed (locked?)" >> "\$LOG"; exit 0; }
+    [[ "\$N" =~ ^[0-9]+\$ ]] || N=0
+    TOTAL=\$(( TOTAL + N ))
+    [[ "\$N" -gt 0 ]] || break
+done
+sqlite3 "\$DB" "PRAGMA busy_timeout=15000;
+    DELETE FROM tag WHERE NOT EXISTS (SELECT 1 FROM event e WHERE e.id = tag.event_id);" \\
+    >/dev/null 2>&1 || true
+echo "[\$TS] pruned \$TOTAL event(s) — kinds \$KINDS older than \${DAYS}d" >> "\$LOG"
+WRAP
+    chmod 750 "$FLR_PRUNE_WRAPPER"
+}
+
+flr_menu_retention() {
+    local c v db
+    while true; do
+        clear
+        flr_load_conf
+        echo -e "${BOLD}${CYAN}── Event retention (disk growth control) ──${RESET}\n"
+        echo -e "  ${DIM}floonet-rs keeps every event forever — there is no upstream retention${RESET}"
+        echo -e "  ${DIM}setting. On an open relay that means the database only ever grows.${RESET}"
+        echo -e "  ${DIM}This ages out disposable TRAFFIC. Identity events (profile, contacts,${RESET}"
+        echo -e "  ${DIM}relay lists) are refused — they have no other copy.${RESET}\n"
+
+        db=$(flr_db_path)
+        if [[ -n "$db" ]] && command -v sqlite3 >/dev/null 2>&1; then
+            local sz ev
+            sz=$(du -h "$db" 2>/dev/null | cut -f1 || echo "?")
+            ev=$(sqlite3 -readonly "$db" "SELECT COUNT(*) FROM event;" 2>/dev/null || echo "?")
+            echo -e "  Database   : ${BOLD}${sz}${RESET} ${DIM}($ev events · $db)${RESET}"
+        else
+            echo -e "  Database   : ${DIM}(not found)${RESET}"
+        fi
+        local sched="${DIM}off — keeping everything${RESET}"
+        [[ -f "$FLR_PRUNE_CRON" ]] && sched="${GREEN}daily $(printf '%02d:%02d' "$FLR_PRUNE_HOUR" "$FLR_PRUNE_MIN")${RESET}"
+        echo -e "  Schedule   : $sched"
+        echo -e "  Retention  : ${BOLD}${FLR_PRUNE_DAYS}${RESET} days ${DIM}(0 = off · floor ${FLR_PRUNE_MIN_DAYS}d)${RESET}"
+        echo -e "  Kinds      : ${BOLD}${FLR_PRUNE_KINDS}${RESET} ${DIM}(1059 = gift wraps, the slatepack envelopes)${RESET}"
+        echo -e "  Log        : ${DIM}${FLR_PRUNE_LOG}${RESET}"
+        echo ""
+        echo -e "  ${GREEN}1${RESET}) Set retention age (days)"
+        echo -e "  ${GREEN}2${RESET}) Set kinds to prune"
+        echo -e "  ${GREEN}3${RESET}) Preview ${DIM}(dry run — counts, deletes nothing)${RESET}"
+        echo -e "  ${GREEN}4${RESET}) Run prune now"
+        echo -e "  ${GREEN}5${RESET}) $([[ -f "$FLR_PRUNE_CRON" ]] && echo "Disable" || echo "Enable") daily schedule"
+        echo -e "  ${GREEN}6${RESET}) Reclaim disk space ${DIM}(VACUUM — locks the DB, needs 2× size free)${RESET}"
+        echo -e "  ${DIM}0) Back${RESET}\n"
+        echo -ne "${BOLD}Select: ${RESET}"
+        read -r c || true
+        case "$c" in
+            1) echo -ne "  Keep events for how many days? (min ${FLR_PRUNE_MIN_DAYS}, 0 = off): "
+               read -r v || true
+               if [[ "$v" =~ ^[0-9]+$ ]] && { (( v == 0 )) || (( v >= FLR_PRUNE_MIN_DAYS )); }; then
+                   FLR_PRUNE_DAYS="$v"; flr_save_conf
+                   [[ -f "$FLR_PRUNE_CRON" ]] && _flr_write_prune_wrapper
+                   success "Retention = ${v} days."
+               else
+                   warn "Must be 0 (off) or at least ${FLR_PRUNE_MIN_DAYS} — unchanged."
+               fi; sleep 1 ;;
+            2) echo -e "  ${DIM}Kind numbers to age out, e.g. 1059 (gift wraps) or 1059,1${RESET}"
+               echo -e "  ${DIM}Identity kinds (0, 3, 5, 10000–19999, 30000–39999) are refused.${RESET}"
+               echo -ne "  Kinds (blank = cancel): "
+               read -r v || true
+               if [[ -n "$v" ]]; then
+                   local cleaned
+                   if cleaned=$(_flr_prune_clean_kinds "$v"); then
+                       FLR_PRUNE_KINDS="$cleaned"; flr_save_conf
+                       [[ -f "$FLR_PRUNE_CRON" ]] && _flr_write_prune_wrapper
+                       success "Kinds = ${cleaned}"
+                   fi
+               else
+                   info "Cancelled."
+               fi; pause ;;
+            3) if (( FLR_PRUNE_DAYS == 0 )); then
+                   warn "Retention is off — set an age first."
+               else
+                   flr_prune_run "$FLR_PRUNE_DAYS" "$FLR_PRUNE_KINDS" 1 || true
+               fi; pause ;;
+            4) if (( FLR_PRUNE_DAYS == 0 )); then
+                   warn "Retention is off — set an age first."; pause
+               else
+                   flr_prune_run "$FLR_PRUNE_DAYS" "$FLR_PRUNE_KINDS" 1 || true
+                   echo -ne "\n  Proceed with the delete? [y/N]: "
+                   read -r v || true
+                   if [[ "${v,,}" == "y" ]]; then
+                       flr_prune_run "$FLR_PRUNE_DAYS" "$FLR_PRUNE_KINDS" 0 || true
+                   else
+                       info "Cancelled."
+                   fi
+                   pause
+               fi ;;
+            5) if [[ -f "$FLR_PRUNE_CRON" ]]; then
+                   rm -f "$FLR_PRUNE_CRON" "$FLR_PRUNE_WRAPPER"
+                   success "Daily prune disabled."
+               elif (( FLR_PRUNE_DAYS == 0 )); then
+                   warn "Set a retention age first (option 1)."
+               else
+                   _flr_write_prune_wrapper
+                   cat > "$FLR_PRUNE_CRON" <<EOF
+# Grin Floonet relay event retention — generated by 091_grin_floonet_relay.sh
+$FLR_PRUNE_MIN $FLR_PRUNE_HOUR * * * root $FLR_PRUNE_WRAPPER
+EOF
+                   success "Daily prune enabled ($(printf '%02d:%02d' "$FLR_PRUNE_HOUR" "$FLR_PRUNE_MIN")) → $FLR_PRUNE_CRON"
+               fi; sleep 1 ;;
+            6) db=$(flr_db_path)
+               if [[ -z "$db" ]]; then
+                   warn "No database found."
+               else
+                   echo -e "  ${DIM}VACUUM rewrites the file — the relay may block briefly and you${RESET}"
+                   echo -e "  ${DIM}need free space equal to the current database size.${RESET}"
+                   echo -ne "  Run VACUUM now? [y/N]: "
+                   read -r v || true
+                   if [[ "${v,,}" == "y" ]]; then
+                       info "Vacuuming (this can take a while)…"
+                       if sqlite3 "$db" "PRAGMA busy_timeout=60000; VACUUM;" 2>/dev/null; then
+                           success "Reclaimed — now $(du -h "$db" 2>/dev/null | cut -f1)."
+                       else
+                           error "VACUUM failed (database busy or not enough free disk)."
+                       fi
+                   fi
+               fi; pause ;;
+            0|"") return 0 ;;
+            *) warn "Invalid option."; sleep 1 ;;
+        esac
+    done
+}
+
 flr_mixexit() {
     clear
     echo -e "${BOLD}${CYAN}── Nym mixnet exit (optional add-on) ──${RESET}\n"
@@ -1839,7 +2173,7 @@ flr_uninstall() {
     clear
     flr_load_conf
     echo -e "${BOLD}${RED}── Uninstall Floonet relay ──${RESET}\n"
-    echo -e "  Removes: service, binary, nginx vhost, rate-limit zones, backup cron."
+    echo -e "  Removes: service, binary, nginx vhost, rate-limit zones, backup + prune cron."
     echo -e "  ${DIM}Backups in /opt/grin/backups are NEVER touched.${RESET}\n"
     echo -ne "  Type ${BOLD}REMOVE${RESET} to continue (anything else cancels): "
     local c; read -r c || true
@@ -1857,6 +2191,7 @@ flr_uninstall() {
     rm -rf "${FLR_WWW:?}"
     nginx_test_reload "floonet uninstall" || true
     rm -f "$FLR_BAK_CRON" "$FLR_BAK_WRAPPER" "/etc/logrotate.d/${FLR_SITE_NAME}"
+    rm -f "$FLR_PRUNE_CRON" "$FLR_PRUNE_WRAPPER"
     success "Service, binary, and nginx config removed."
 
     echo ""

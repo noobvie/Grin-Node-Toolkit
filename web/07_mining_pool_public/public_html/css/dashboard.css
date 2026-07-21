@@ -161,7 +161,10 @@ header {
     min-width: 180px; margin-top: 6px; padding: 6px;
     display: none; flex-direction: column; gap: 2px;
     border: 1px solid var(--border); border-radius: var(--radius-sm);
-    background: var(--bg-elev1); box-shadow: 0 12px 30px rgba(0, 0, 0, .45);
+    /* --bg-elev (not --bg-elev1, which is not a token here — an undefined var makes the
+       menu transparent and the page text reads straight through it). Opaque in every
+       theme, so the floating menu always covers the content behind it. */
+    background: var(--bg-elev); box-shadow: 0 12px 30px rgba(0, 0, 0, .45);
 }
 /* Bridge the 6px gap so hover doesn't drop while moving cursor into the menu. */
 .nav-dropdown::before {
@@ -454,29 +457,11 @@ footer a:hover { color: var(--accent); }
 }
 .footer-fortune:hover { color: var(--text); text-decoration: underline; }
 
-/* Live mini-stats bar */
-.footer-stats {
-    max-width: 1100px; margin: 28px auto 0; padding-top: 16px;
-    border-top: 1px solid var(--border);
-    display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: center;
-    font-size: 12.5px; color: var(--text-mute);
-}
-.footer-stat { display: inline-flex; align-items: center; gap: 6px; }
-.footer-stat[hidden] { display: none; }
-.footer-stratum code {
-    background: var(--bg-card2, rgba(127,127,127,.12)); padding: 2px 7px; border-radius: 5px;
-    font-size: 12px; color: var(--text-dim);
-}
-.footer-copy {
-    background: none; border: 1px solid var(--border); color: var(--text-dim);
-    border-radius: 5px; padding: 1px 8px; font-size: 11px; cursor: pointer;
-}
-.footer-copy:hover { border-color: var(--accent); color: var(--accent); }
-
-/* Bottom legal row */
+/* Bottom legal row. No border-top: the mini-stats bar that used to sit above it is gone,
+   and a rule right under the columns just adds a second horizontal line to the footer. */
 .footer-bottom {
-    max-width: 1100px; margin: 18px auto 0; padding-top: 14px;
-    border-top: 1px solid var(--border); text-align: center;
+    max-width: 1100px; margin: 28px auto 0; padding-top: 14px;
+    text-align: center;
     /* Copyright + Saigon signature share one centered line; on narrow screens each
        phrase stays intact (no mid-phrase break) and they stack, still centered. */
     display: flex; flex-wrap: wrap; justify-content: center;
@@ -489,7 +474,6 @@ footer a:hover { color: var(--accent); }
 
 @media (max-width: 760px) {
     .footer-cols { grid-template-columns: 1fr 1fr; gap: 22px; }
-    .footer-stats { justify-content: center; }
 }
 @media (max-width: 440px) {
     .footer-cols { grid-template-columns: 1fr; }

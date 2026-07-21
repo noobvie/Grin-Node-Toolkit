@@ -180,17 +180,6 @@
         '<a class="footer-contact" data-brand="contact-link" href="#" style="display:none">Contact</a>' +
       '</div>' +
     '</div>' +
-    // Live mini-stats bar (filled by this script's fetches; rows hide until populated).
-    '<div class="footer-stats">' +
-      '<span class="footer-stat footer-net" hidden></span>' +
-      '<span class="footer-stat footer-fee" hidden></span>' +
-      '<span class="footer-stat footer-min" hidden></span>' +
-      '<span class="footer-stat footer-price" hidden></span>' +
-      '<span class="footer-stat footer-stratum" hidden>stratum: ' +
-        '<code data-brand="stratum_url"></code> ' +
-        '<button type="button" class="footer-copy" aria-label="Copy stratum address">copy</button>' +
-      '</span>' +
-    '</div>' +
     // Bottom row: copyright + attribution + security contact.
     '<div class="footer-bottom">' +
       // Copyright + Saigon signature share one line. The signature is hardcoded
@@ -240,58 +229,17 @@
     return d;
   }
 
-  // Fill the footer mini-stats bar from light public endpoints and wire the stratum
-  // copy button. Independent of branding.js (which owns the brand/social/legal hooks).
+  // The footer used to carry a live mini-stats bar (network / fee / min payout / price /
+  // stratum) — removed as redundant: every one of those numbers already has a home on the
+  // pages themselves. The pool-info fetch stays, purely to raise the TESTNET banner.
   function enhanceFooter() {
-    // Network / fee / min withdrawal — /api/config/pool-info is unauthenticated + cheap.
+    // /api/config/pool-info is unauthenticated + cheap.
     fetch('/api/config/pool-info', { credentials: 'same-origin' })
       .then(function (r) { return r.ok ? r.json() : null; })
       .then(function (d) {
-        if (!d) return;
-        if (d.network) showStat('.footer-net', (d.network === 'testnet' ? 'Testnet' : 'Mainnet'));
-        if (d.network === 'testnet') showTestnetBanner();
-        if (d.pool_fee_percent != null) showStat('.footer-fee', 'Fee ' + d.pool_fee_percent + '%');
-        if (d.min_withdrawal != null) showStat('.footer-min', 'Min payout ' + d.min_withdrawal + ' GRIN');
+        if (d && d.network === 'testnet') showTestnetBanner();
       })
       .catch(function () {});
-
-    // GRIN price (cached server-side). Footer ticker only — hidden when unavailable.
-    fetch('/api/public/price', { credentials: 'same-origin' })
-      .then(function (r) { return r.ok ? r.json() : null; })
-      .then(function (j) {
-        var d = j && j.data;
-        if (!d || !d.available) return;
-        var parts = [];
-        if (typeof d.usd === 'number') parts.push('$' + d.usd.toFixed(4));
-        if (typeof d.btc === 'number') parts.push(d.btc.toFixed(8) + ' BTC');
-        if (parts.length) showStat('.footer-price', 'GRIN ' + parts.join(' / '));
-      })
-      .catch(function () {});
-
-    // Copy the stratum address (branding.js fills the <code> text).
-    var copyBtn = footer.querySelector('.footer-copy');
-    if (copyBtn) {
-      copyBtn.addEventListener('click', function () {
-        var code = footer.querySelector('[data-brand="stratum_url"]');
-        var val = code && code.textContent.trim();
-        if (!val) return;
-        var done = function () {
-          var prev = copyBtn.textContent;
-          copyBtn.textContent = 'copied';
-          setTimeout(function () { copyBtn.textContent = prev; }, 1500);
-        };
-        if (navigator.clipboard && navigator.clipboard.writeText) {
-          navigator.clipboard.writeText(val).then(done, done);
-        } else { done(); }
-      });
-    }
-  }
-
-  function showStat(sel, text) {
-    var el = footer.querySelector(sel);
-    if (!el) return;
-    el.textContent = text;
-    el.hidden = false;
   }
 
   // Sticky TESTNET banner so visitors never mistake test tGRIN for real coins. Idempotent;

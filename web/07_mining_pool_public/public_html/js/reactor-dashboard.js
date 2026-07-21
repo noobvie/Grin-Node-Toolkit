@@ -585,25 +585,45 @@
       label: 'Network hashrate',
       bucketSeconds: bucket,
       valueFmt: PoolCharts.fmtGps,
-      color: '#3987e5'
+      color: '#3987e5',
+      compact: true
     });
+    renderPoolShare(pool, net);
+    // A fixed-30d "miners online" trace was rendered here until 2026-07-19 — removed with its
+    // canvas (see index.html P-04); miners-stats.html P-02 covers it with a full range toggle.
+  }
 
-    // Miners online — fixed 30 days (the miners-stats P-02 chart at range=month).
-    try {
-      var mm = (chartRange === 'month')
-        ? { points: points, bucket_seconds: bucket }
-        : await Auth.fetch('/api/pool/metrics/history?range=month');
-      var mpts = (mm && mm.points) || [];
-      toggleChartEmpty('rx-chart-miners-empty', mpts.length === 0);
-      PoolCharts.renderTrendLine('rx-chart-miners',
-        mpts.map(function (p) { return { t: p.t, v: p.miner_count }; }),
-        {
-          label: 'Miners online',
-          bucketSeconds: (mm && mm.bucket_seconds) || 86400,
-          valueFmt: PoolCharts.fmtInt,
-          color: '#3987e5'
-        });
-    } catch (e) { /* chart keeps last trace */ }
+  // Pool share of network hashrate, printed on the network sub-label. This is the one honest
+  // way to show the pool/network RELATIONSHIP: at a fraction of a percent the pool is invisible
+  // on a shared axis (and a pie wedge would be ~1° of arc), but the number reads fine at any
+  // magnitude. Pool and network are sampled on different cadences (5-min vs hourly), so pair the
+  // newest network sample with the pool point closest to it in time rather than the two array tails.
+  function renderPoolShare(pool, net) {
+    var el = $('rx-share');
+    if (!el) return;
+    var hide = function () { el.hidden = true; el.textContent = ''; };
+    if (!pool.length || !net.length) return hide();
+
+    var lastNet = net[net.length - 1];
+    var netGps = Number(lastNet.v) || 0;
+    if (netGps <= 0) return hide();
+
+    var near = pool.reduce(function (best, p) {
+      return Math.abs(p.t - lastNet.t) < Math.abs(best.t - lastNet.t) ? p : best;
+    }, pool[0]);
+    var poolGps = Number(near.v) || 0;
+    if (poolGps <= 0) return hide();
+
+    // More decimals the smaller the share, so a new pool never reads as a flat "0.0%".
+    var pct = (poolGps / netGps) * 100;
+    var txt = pct >= 1 ? pct.toFixed(1) : (pct >= 0.1 ? pct.toFixed(2) : pct.toFixed(3));
+
+    el.textContent = '';
+    var b = document.createElement('b');
+    b.textContent = txt + '%';
+    el.appendChild(b);
+    el.appendChild(document.createTextNode(' of network'));
+    el.hidden = false;
   }
 
   // 24H / 7D / 30D toggle on the P-04 title → redraw the hashrate pair.
@@ -837,7 +857,9 @@
         if (fa) fa.setAttribute('href', forum);
         if (fli) fli.style.display = '';
       }
-      var any = email || forum || ['discord', 'telegram', 'twitter', 'website'].some(function (k) { return social[k]; });
+      // Keys must match the P-08 rows in index.html — 'website' is deliberately not one of
+      // them (self-referential), so counting it here would hide the note with no row shown.
+      var any = email || forum || ['discord', 'telegram', 'twitter', 'nostr'].some(function (k) { return social[k]; });
       if (any) { var note = $('info-no-contact'); if (note) note.style.display = 'none'; }
     } catch (e) { /* keep the operator note */ }
   }

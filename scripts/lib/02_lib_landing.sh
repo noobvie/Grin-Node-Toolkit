@@ -300,8 +300,8 @@ h1{
   white-space:pre-wrap;line-height:1.5}
 
 /* ── sections ───────────────────────────────────────────────────────────── */
-h2{font-size:11px;letter-spacing:.22em;text-transform:uppercase;color:var(--dim);
-  margin:40px 0 14px;font-weight:700;display:flex;align-items:center;gap:12px}
+h2{font-size:16px;letter-spacing:.16em;text-transform:uppercase;color:var(--fg);
+  margin:44px 0 16px;font-weight:700;display:flex;align-items:center;gap:14px}
 h2::after{content:"";flex:1;height:1px;
   background:linear-gradient(90deg,color-mix(in srgb,var(--a1) 45%,transparent),transparent)}
 
@@ -332,9 +332,11 @@ h2::after{content:"";flex:1;height:1px;
 
 /* ── tabs + code ────────────────────────────────────────────────────────── */
 .tabs{display:flex;gap:3px;flex-wrap:wrap;margin-bottom:-1px;position:relative;z-index:1}
-.tab{padding:9px 15px;font-family:var(--mono);font-size:12px;letter-spacing:.08em;
+.tab{display:inline-flex;align-items:center;gap:7px;
+  padding:9px 15px;font-family:var(--mono);font-size:12px;letter-spacing:.08em;
   text-transform:uppercase;cursor:pointer;color:var(--dim);background:none;
   border:1px solid transparent;border-bottom:none}
+.tab .ti{font-size:15px;line-height:1;letter-spacing:0;filter:saturate(.9)}
 .tab[aria-selected="true"]{color:var(--a1);background:var(--panel);
   border-color:var(--line);border-bottom-color:var(--panel)}
 .pre{position:relative;border:1px solid var(--line);background:var(--panel);
@@ -424,9 +426,9 @@ footer a:hover{color:var(--a1)}
 
   <h2>How to use it</h2>
   <div class="tabs" role="tablist" id="tabs">
-    <button class="tab" role="tab" aria-selected="true"  data-t="linux">Linux / macOS</button>
-    <button class="tab" role="tab" aria-selected="false" data-t="win">Windows</button>
-    <button class="tab" role="tab" aria-selected="false" data-t="stream">Stream extract</button>
+    <button class="tab" role="tab" aria-selected="true"  data-t="linux"><span class="ti">&#128039;</span>Linux / macOS</button>
+    <button class="tab" role="tab" aria-selected="false" data-t="win"><span class="ti">&#129003;</span>Windows</button>
+    <button class="tab" role="tab" aria-selected="false" data-t="stream"><span class="ti">&#9889;</span>Stream extract</button>
   </div>
   <div class="pre">
     <button class="copy" id="copyCmd">Copy</button>

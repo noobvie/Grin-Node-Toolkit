@@ -203,6 +203,8 @@ body {
   text-transform: uppercase; color: var(--text-dim); margin-top: 4px; line-height: 1.6;
 }
 .gauge-label b { color: var(--accent); text-shadow: 0 0 8px var(--glow); font-size: 12.5px; }
+/* Idle hashrate dial (zero active miners): muted amber, NOT red — "dead pool" signal. */
+#g-hash-v.idle { color: var(--warn); text-shadow: 0 0 8px color-mix(in srgb, var(--warn) 50%, transparent); }
 /* Legend for the hashrate dial's info-blue 24h-peak reference tick (matches --info). */
 .gauge-peakkey {
   font-family: var(--mono); font-size: 8.5px; letter-spacing: .1em;

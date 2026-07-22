@@ -33,6 +33,7 @@ const IpFilter = require('./lib/ip-filter');
 const AlertMonitor = require('./lib/alert-monitor');
 const AlertDelivery = require('./lib/alert-delivery');
 const RetentionManager = require('./lib/retention');
+const DormancyManager = require('./lib/dormancy');
 const AdsManager = require('./lib/ads');
 const PagesManager = require('./lib/pages');
 const PostsManager = require('./lib/posts');
@@ -232,6 +233,7 @@ let alertDelivery = null;
 let poolSettings = null;
 let assetManager = null;
 let retentionManager = null;
+let dormancyManager = null;
 let adsManager = null;
 let pagesManager = null;
 let postsManager = null;
@@ -504,6 +506,13 @@ async function initializePool() {
     // panel → Database / Cleanup. File space is reclaimed by the weekly VACUUM cron.
     retentionManager = new RetentionManager(config);
     retentionManager.start();
+
+    // Abandoned-balance disposition — sweeps balances of long-dormant addresses (default 24mo,
+    // OFF until enabled in admin → Payout) and redistributes to active miners. Freeze-aware,
+    // grandfathered, FINAL. No-op every pass while disabled. See lib/dormancy.js.
+    dormancyManager = new DormancyManager(config);
+    dormancyManager.start();
+    console.log(`[${new Date().toISOString()}] Dormancy manager started`);
 
     setupRoutes();
 
@@ -1699,6 +1708,127 @@ function setupRoutes() {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
+  // ─── ABANDONED-BALANCE DISPOSITION (Admin) ─────────────────────────
+  // Status + dry-run preview + the dormant list (UNMASKED for the operator) + disposition history.
+  // Reading is secureAdmin; the run and manual-payout mutate money → freshAdmin (step-up).
+  app.get('/api/admin/dormancy', secureAdmin, (req, res) => {
+    try {
+      if (!dormancyManager) return res.status(503).json({ error: 'dormancy manager not ready' });
+      res.json({
+        success: true,
+        status: dormancyManager.status(),
+        preview: dormancyManager.preview(),
+        dormant: dormancyManager.listDormant({ mask: false, limit: 500 }),
+        history: dormancyManager.history({ limit: 100 }),
+      });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  // Trigger a disposition pass now (respects the disabled/frozen/grandfather gates internally).
+  app.post('/api/admin/dormancy/run', freshAdmin, (req, res) => {
+    try {
+      if (!dormancyManager) return res.status(503).json({ error: 'dormancy manager not ready' });
+      const result = dormancyManager.runOnce({ triggeredBy: req.user.user_id });
+      db.prepare(`INSERT INTO admin_audit_log (admin_id, action, target_type, target_id, details, ip)
+                  VALUES (?, 'dormancy_run', 'dormancy', ?, ?, ?)`)
+        .run(req.user.user_id, String(result.disposition_id || 'none'), JSON.stringify(result), req.ip);
+      res.json({ success: true, result });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  // Was this address's ownership successfully verified by an admin in the last `windowSec`? Reads
+  // the audit trail auditOwnerProof() writes ('owner_proof:admin_verify:ok'). Gate for the money
+  // endpoints below (finding #4) so a payout can't be pushed without a recent ownership check —
+  // unless the operator explicitly acknowledges verifying by other means (verified_ack, for a
+  // no-proof-on-record account where verifyOwnerProof can never match).
+  const ownerRecentlyVerified = (addr, windowSec = 900) => {
+    try {
+      const row = db.prepare(
+        `SELECT created_at FROM admin_audit_log
+         WHERE action = 'owner_proof:admin_verify:ok' AND target_id = ?
+         ORDER BY created_at DESC LIMIT 1`
+      ).get(addr);
+      if (!row) return false;
+      return (Math.floor(Date.now() / 1000) - Number(row.created_at)) <= windowSec;
+    } catch (e) { return false; }
+  };
+
+  // Verify a miner's CLAIMED ownership proof (IP or stratum password) against what's on record —
+  // for the operator handling a sub-threshold "email support to withdraw" request. Returns a
+  // match/no-match ONLY (the stored proofs are salted-scrypt hashes; nothing is ever revealed).
+  app.post('/api/admin/dormancy/verify-owner', secureAdmin, async (req, res) => {
+    try {
+      const addr = String((req.body && req.body.address) || '').trim();
+      const submitted = String((req.body && req.body.proof) || '');
+      if (!addr) return res.status(400).json({ error: 'address required' });
+      const proof = await verifyOwnerProof(db, addr, submitted);
+      auditOwnerProof(db, { action: 'admin_verify', grinAddress: addr, ip: req.ip, ok: proof.ok, details: { by: req.user.username } });
+      res.json({ success: true, match: !!proof.ok, method: proof.method || null, reason: proof.reason });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  // Record an out-of-band manual payout (the admin already sent the coins by Tor/slatepack at the
+  // OS level after verifying the owner). Writes a confirmed withdrawals row + 'withdrawal' debit so
+  // coverage stays correct and the wallet-send audit matches it. Honours the payout freeze.
+  app.post('/api/admin/dormancy/manual-payout', freshAdmin, (req, res) => {
+    try {
+      if (!dormancyManager) return res.status(503).json({ error: 'dormancy manager not ready' });
+      if (getPayoutControl().frozen) {
+        return res.status(409).json({ error: 'payouts are frozen — resume payouts before recording a manual payout' });
+      }
+      const b = req.body || {};
+      const addr = String(b.address || '').trim();
+      if (!ownerRecentlyVerified(addr) && b.verified_ack !== true) {
+        return res.status(428).json({ error: 'verify the address owner first (no successful verification in the last 15 min)', reason: 'verify_required' });
+      }
+      const result = dormancyManager.manualPayout({
+        grinAddress: b.address,
+        amount: b.amount,
+        fee: b.fee || 0,
+        kernelExcess: b.kernel_excess || null,
+        slateId: b.slate_id || null,
+        note: b.note || null,
+        adminId: req.user.user_id,
+        allowAboveMin: b.allow_above_min === true,
+      });
+      if (!result.ok) return res.status(400).json({ error: result.reason, ...result });
+      db.prepare(`INSERT INTO admin_audit_log (admin_id, action, target_type, target_id, details, ip)
+                  VALUES (?, 'manual_payout', 'miner', ?, ?, ?)`)
+        .run(req.user.user_id, String(b.address || ''), JSON.stringify({ withdrawal_id: result.withdrawal_id, amount: result.balance_after, fee: b.fee || 0 }), req.ip);
+      res.json({ success: true, ...result });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  // Backend-INITIATED below-minimum payout (the convenient sub-threshold path). Instead of the
+  // operator sending coins out-of-band and recording it, the pool sends over Tor through the SAME
+  // locked withdrawal flow a miner uses — atomic lock, real fee/kernel captured by the scheduler,
+  // recorded automatically. adminOverride bypasses only the min floor + reversal cooldown; freeze
+  // and the one-pending-per-address cap (double-pay guard) still apply. Needs the miner's wallet
+  // listener reachable over Tor (the scheduler declines + reverses the lock if it isn't).
+  app.post('/api/admin/dormancy/send-payout', freshAdmin, (req, res) => {
+    try {
+      if (!withdrawalScheduler) return res.status(503).json({ error: 'withdrawal scheduler not ready' });
+      if (getPayoutControl().frozen) {
+        return res.status(409).json({ error: 'payouts are frozen — resume payouts before sending' });
+      }
+      const b = req.body || {};
+      const addr = String(b.address || '').trim();
+      if (!ownerRecentlyVerified(addr) && b.verified_ack !== true) {
+        return res.status(428).json({ error: 'verify the address owner first (no successful verification in the last 15 min)', reason: 'verify_required' });
+      }
+      let result;
+      try {
+        result = withdrawalScheduler.createWithdrawal(addr, b.amount, 'tor', { adminOverride: true });
+      } catch (e) {
+        return res.status(e.code && e.code >= 400 && e.code < 500 ? e.code : 500).json({ error: e.message });
+      }
+      db.prepare(`INSERT INTO admin_audit_log (admin_id, action, target_type, target_id, details, ip)
+                  VALUES (?, 'admin_send_payout', 'miner', ?, ?, ?)`)
+        .run(req.user.user_id, addr, JSON.stringify({ withdrawal_id: result.withdrawal_id, amount: result.amount, override: 'below_min' }), req.ip);
+      res.json({ success: true, ...result });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
   // Wallet-send audit — matches the wallet's OWN confirmed outbound sends against the pool's
   // withdrawals. Any unmatched send is an out-of-band `grin-wallet send` (invisible to the
   // ledger). Forces a fresh wallet scan (slow) → the Payments page polls on the 3-min cadence.
@@ -2060,6 +2190,25 @@ function setupRoutes() {
     }
   });
 
+  // ─── Unclaimed / abandoned balances (public transparency) ───────────────────
+  // A lost-and-found with a public audit trail: masked addresses of long-dormant balances with a
+  // per-address disposal countdown (owner recognises their own → reclaims via the account page
+  // BEFORE disposition), plus the historical disposition ledger (final redistributions to active
+  // miners). Addresses are masked (grin1qxy…mn4p) so this is a reunification aid, not a targeting
+  // list; the ownership gate independently protects reclaim. Returns { dormant, dispositions }.
+  app.get('/api/pool/unclaimed', rateLimiter.middleware('public'), (req, res) => {
+    try {
+      if (!dormancyManager) return res.json({ dormant: { enabled: false, totals: { count: 0, amount: 0 }, list: [] }, dispositions: { totals: {}, batches: [] } });
+      const limit = Math.min(parseInt(req.query.limit || 100, 10) || 100, 200);
+      res.json({
+        dormant: dormancyManager.listDormant({ mask: true, limit }),
+        dispositions: dormancyManager.history({ limit: 50 }),
+      });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // ─── Account summary (address-as-identity; no auth) ─────────────────────────
   // One-stop public view for a miner address: balances + lifetime paid + pending
   // withdrawal + share/hashrate snapshot. 404 if the address has never mined here.
@@ -2131,6 +2280,9 @@ function setupRoutes() {
         min_withdrawal: config.min_withdrawal,
         // Boolean only — the freeze REASON stays admin-side (it can reveal wallet trouble).
         payouts_frozen: withdrawalScheduler.isFrozen(),
+        // Abandoned-balance countdown for THIS address (state: active|idle|counting|eligible|
+        // disposed|no_balance). Drives the account-page dormancy notice + reclaim CTA.
+        dormancy: dormancyManager ? dormancyManager.statusFor(acct.grin_address) : null,
         has_recorded_ip: !!(acct.last_ip || acct.prev_ip),
         has_recorded_pass: !!(acct.last_pass_hash || acct.prev_pass_hash),
         // Goblin/Nostr payout rail (design §15). Destination npub is NOT exposed (it's the
@@ -2525,14 +2677,14 @@ function setupRoutes() {
   // and force-moving coins the owner didn't ask to move. Proof = a recent mining IP (v4/v6) OR
   // the rig's stratum password (lib/owner-proof.js; single `proof` field, legacy `ip_proof`
   // still accepted). Rate-limited; CAS balance lock + 1-pending-per-address cap in the scheduler.
-  app.post('/api/account/:addr/withdraw', rateLimiter.middleware('public'), async (req, res) => {
+  app.post('/api/account/:addr/withdraw', rateLimiter.middleware('withdraw'), async (req, res) => {
     try {
       const { addr } = req.params;
       const method = (req.body && req.body.method) || 'tor';
       const reqIp = normalizeIp(req.ip);
       const submitted = (req.body && (req.body.proof || req.body.ip_proof)) || '';
 
-      const proof = await verifyOwnerProof(db, addr, submitted);
+      const proof = await verifyOwnerProof(db, addr, submitted, reqIp);
       if (!proof.ok) {
         auditOwnerProof(db, { action: `withdraw_${method}`, grinAddress: addr, ip: reqIp, ok: false, details: { reason: proof.reason } });
         return res.status(403).json({ error: 'Ownership proof failed', reason: proof.reason });
@@ -2610,11 +2762,11 @@ function setupRoutes() {
 
   // Complete a slatepack withdrawal: the miner pastes back the RESPONSE slatepack their wallet
   // produced after `receive`. Ownership-gated like the trigger. The pool finalizes + broadcasts.
-  app.post('/api/account/:addr/withdraw/:id/finalize', rateLimiter.middleware('public'), async (req, res) => {
+  app.post('/api/account/:addr/withdraw/:id/finalize', rateLimiter.middleware('withdraw'), async (req, res) => {
     try {
       const { addr, id } = req.params;
       const reqIp = normalizeIp(req.ip);
-      const proof = await verifyOwnerProof(db, addr, (req.body && (req.body.proof || req.body.ip_proof)) || '');
+      const proof = await verifyOwnerProof(db, addr, (req.body && (req.body.proof || req.body.ip_proof)) || '', reqIp);
       if (!proof.ok) {
         auditOwnerProof(db, { action: 'slatepack_finalize', grinAddress: addr, ip: reqIp, ok: false, details: { reason: proof.reason, withdrawal_id: id } });
         return res.status(403).json({ error: 'Ownership proof failed', reason: proof.reason });
@@ -2636,13 +2788,13 @@ function setupRoutes() {
   // refused until now - registered_at >= nostr_destination_cooldown_hours, giving the real
   // owner (who watches their stats) the whole window to spot a hijack, re-register (which
   // resets the clock and evicts the attacker) and rotate their rig password.
-  app.post('/api/account/:addr/nostr-destination', rateLimiter.middleware('public'), async (req, res) => {
+  app.post('/api/account/:addr/nostr-destination', rateLimiter.middleware('withdraw'), async (req, res) => {
     try {
       const { addr } = req.params;
       const reqIp = normalizeIp(req.ip);
       if (!nostrBridge || !nostrBridge.isEnabled()) return res.status(503).json({ error: 'nostr payouts are not enabled on this pool' });
 
-      const proof = await verifyOwnerProof(db, addr, (req.body && (req.body.proof || req.body.ip_proof)) || '');
+      const proof = await verifyOwnerProof(db, addr, (req.body && (req.body.proof || req.body.ip_proof)) || '', reqIp);
       if (!proof.ok) {
         auditOwnerProof(db, { action: 'nostr_destination_register', grinAddress: addr, ip: reqIp, ok: false, details: { reason: proof.reason } });
         return res.status(403).json({ error: 'Ownership proof failed', reason: proof.reason });
@@ -2677,11 +2829,11 @@ function setupRoutes() {
   });
 
   // Remove the registered Goblin destination (ownership-gated). Clears the pin + cooldown.
-  app.delete('/api/account/:addr/nostr-destination', rateLimiter.middleware('public'), async (req, res) => {
+  app.delete('/api/account/:addr/nostr-destination', rateLimiter.middleware('withdraw'), async (req, res) => {
     try {
       const { addr } = req.params;
       const reqIp = normalizeIp(req.ip);
-      const proof = await verifyOwnerProof(db, addr, (req.body && (req.body.proof || req.body.ip_proof)) || '');
+      const proof = await verifyOwnerProof(db, addr, (req.body && (req.body.proof || req.body.ip_proof)) || '', reqIp);
       if (!proof.ok) {
         auditOwnerProof(db, { action: 'nostr_destination_remove', grinAddress: addr, ip: reqIp, ok: false, details: { reason: proof.reason } });
         return res.status(403).json({ error: 'Ownership proof failed', reason: proof.reason });

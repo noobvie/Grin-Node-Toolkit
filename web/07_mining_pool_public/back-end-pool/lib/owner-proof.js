@@ -162,34 +162,44 @@ async function matchesStoredIp(canonicalIp, stored) {
 
 // ─── In-memory failed-attempt throttle ──────────────────────────────────────
 // Single-process Central API. Slows proof brute-forcing on top of the HTTP rate-limiter.
+//
+// TWO independent counters share the same Map, distinguished by key prefix:
+//   · per-ADDRESS (bare grin address) — bounds guesses against ONE address. FAIL_MAX = 8.
+//   · per-IP (`ip:<canonical>`) — bounds TOTAL failed guesses from one source IP across ALL
+//     addresses. Without it, an attacker walking the public leaderboard gets a fresh 8-guess
+//     budget per address (and each guess forces a 16 MB scrypt — a CPU/mem-exhaustion lever).
+//     FAIL_MAX_IP is looser (a NAT/farm may host several miners that each fumble their proof)
+//     but still caps a distributed sweep from one origin. A single-address user hits their
+//     address lock (8) long before the IP lock, so this adds no false-positive for normal use.
 const FAIL_WINDOW_MS = 10 * 60 * 1000; // 10 min
-const FAIL_MAX = 8;                    // failed proofs allowed per window before a short lockout
-const LOCKOUT_MS = 5 * 60 * 1000;      // 5 min lockout once the window is exhausted
-const _fails = new Map();              // addr -> { count, first, lockedUntil }
+const FAIL_MAX = 8;                    // failed proofs per window per ADDRESS before lockout
+const FAIL_MAX_IP = 20;                // failed proofs per window per source IP before lockout
+const LOCKOUT_MS = 5 * 60 * 1000;      // 5 min lockout once a window is exhausted
+const _fails = new Map();              // key -> { count, first, lockedUntil }  (key = addr | `ip:<ip>`)
 
-function _throttleState(addr) {
+function _throttleState(key) {
   const now = Date.now();
-  let s = _fails.get(addr);
+  let s = _fails.get(key);
   if (!s || (now - s.first) > FAIL_WINDOW_MS) {
     s = { count: 0, first: now, lockedUntil: 0 };
-    _fails.set(addr, s);
+    _fails.set(key, s);
   }
   return s;
 }
 
-function isLockedOut(addr) {
-  const s = _fails.get(addr);
+function isLockedOut(key) {
+  const s = _fails.get(key);
   return !!(s && s.lockedUntil && Date.now() < s.lockedUntil);
 }
 
-function _registerFail(addr) {
-  const s = _throttleState(addr);
+function _registerFail(key, max) {
+  const s = _throttleState(key);
   s.count += 1;
-  if (s.count >= FAIL_MAX) s.lockedUntil = Date.now() + LOCKOUT_MS;
+  if (s.count >= max) s.lockedUntil = Date.now() + LOCKOUT_MS;
 }
 
-function _clearFails(addr) {
-  _fails.delete(addr);
+function _clearFails(key) {
+  _fails.delete(key);
 }
 
 // ─── Evidence capture (called on a session's first accepted share) ──────────
@@ -237,10 +247,13 @@ async function recordOwnerEvidence(db, grinAddress, rawIp, rawPass) {
 // ─── Verify (one field: IP or password) ─────────────────────────────────────
 // The account page has a single proof input. If it parses as an IP, try the IP window; a
 // usable-password-shaped value is also tried against the password window (both paths run when
-// applicable, so a password that happens to look odd still gets its chance). Honours the
-// throttle. Returns { ok, reason, method? }.
-async function verifyOwnerProof(db, grinAddress, submitted) {
-  if (isLockedOut(grinAddress)) {
+// applicable, so a password that happens to look odd still gets its chance). Honours BOTH the
+// per-address and (when clientIp is supplied) the per-IP throttle. Returns { ok, reason, method? }.
+// clientIp is optional — omitting it preserves the original address-only behaviour, so any caller
+// that doesn't have a request IP handy is unaffected.
+async function verifyOwnerProof(db, grinAddress, submitted, clientIp) {
+  const ipKey = clientIp ? `ip:${canonicalizeIp(clientIp)}` : null;
+  if (isLockedOut(grinAddress) || (ipKey && isLockedOut(ipKey))) {
     return { ok: false, reason: 'too_many_attempts' };
   }
   const raw = typeof submitted === 'string' ? submitted.trim() : '';
@@ -259,25 +272,28 @@ async function verifyOwnerProof(db, grinAddress, submitted) {
     return { ok: false, reason: 'no_recorded_proof' };
   }
 
+  const clearBoth = () => { _clearFails(grinAddress); if (ipKey) _clearFails(ipKey); };
+  const failBoth = () => { _registerFail(grinAddress, FAIL_MAX); if (ipKey) _registerFail(ipKey, FAIL_MAX_IP); };
+
   const ip = canonicalizeIp(raw);
   if (net.isIP(ip)) {
     if (await matchesStoredIp(ip, row.last_ip) || await matchesStoredIp(ip, row.prev_ip)) {
-      _clearFails(grinAddress);
+      clearBoth();
       return { ok: true, reason: 'match', method: 'ip' };
     }
   }
   if (isUsablePassword(raw, db)) {
     if (await verifyHashedProof(raw, row.last_pass_hash) || await verifyHashedProof(raw, row.prev_pass_hash)) {
-      _clearFails(grinAddress);
+      clearBoth();
       return { ok: true, reason: 'match', method: 'password' };
     }
   } else if (!net.isIP(ip)) {
     // Not an IP and too trivial to ever be captured — tell the miner why it can never work.
-    _registerFail(grinAddress);
+    failBoth();
     return { ok: false, reason: 'trivial_password' };
   }
 
-  _registerFail(grinAddress);
+  failBoth();
   return { ok: false, reason: 'no_match' };
 }
 

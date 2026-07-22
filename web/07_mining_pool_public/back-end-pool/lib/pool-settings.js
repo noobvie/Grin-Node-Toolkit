@@ -183,6 +183,21 @@ class PoolSettings {
       // Minutes a DELIVERED-but-unanswered Goblin payout stays locked before it auto-refunds.
       // Goblin AutoReceives, so a live miner answers in seconds; short bounds a stranded lock.
       nostr_pending_ttl_minutes: 10,
+      // ── Abandoned-balance disposition (lib/dormancy.js). OFF by default — turning it on
+      // is a deliberate operator decision that eventually MOVES miners' money, so it must be
+      // explicitly enabled AND disclosed (ToS + payout-page banner). When on: an address with
+      // no share and no successful payout for `dormancy_months`, still holding a balance, is
+      // swept and its balance REDISTRIBUTED to miners active in the last
+      // `dormancy_active_window_days` (PPLNS-weighted by recent hashrate). FINAL — the original
+      // owner can reclaim any time BEFORE disposition (per-address countdown on the account
+      // page), never after. Never operator revenue.
+      dormancy_enabled: 'false',
+      dormancy_months: 24,
+      dormancy_active_window_days: 30,
+      // Grandfather anchor: the 24-month clock counts from max(last_activity, this). 0 = not yet
+      // set; the first enabled dormancy run stamps it to "now" and disposes nobody that run, so
+      // EVERY address gets a full window of runway after the policy goes live. Never hand-edit.
+      dormancy_policy_effective_at: 0,
     },
     access: {
       admin_ip_allowlist: '[]',
@@ -254,23 +269,32 @@ class PoolSettings {
   <li>If a block is later orphaned by the network, the associated credits are reversed.</li>
 </ul>
 
-<h2>4. Acceptable use</h2>
+<h2>4. Abandoned and unclaimed balances</h2>
+<p>Because the pool is custodial between the time a reward is credited and the time it is paid out, an address may accumulate a balance and then stop mining without ever withdrawing it. To keep the pool solvent and its books clean, balances left <strong>completely inactive</strong> — no accepted share and no successful payout — for a prolonged period (by default <strong>24 months</strong>; the current window and a live list of affected balances are shown on the <a href="/payment-history.html">Payments &amp; Transparency</a> page) are treated as <strong>abandoned</strong>.</p>
+<ul>
+  <li>An abandoned balance is <strong>swept and redistributed to miners who are active at that time</strong>, in proportion to their recent contribution. <strong>It is never taken by, or paid to, the pool operator.</strong></li>
+  <li>Redistribution is <strong>final</strong>. You may reclaim your balance at any time <strong>before</strong> it is redistributed — simply request a payout from the <a href="/account-settings.html">Account</a> page, where each address shows how long until its balance would be redistributed. Once a balance has been redistributed it <strong>cannot be recovered</strong>.</li>
+  <li>The countdown is measured from the later of your last activity and the date this policy took effect, so every address is given the full window from that date.</li>
+  <li>If your balance is below the minimum withdrawal threshold and you wish to stop mining and withdraw it, contact the operator (see the footer or the Grin forum). After verifying that you control the address, the operator can arrange a manual payout.</li>
+</ul>
+
+<h2>5. Acceptable use</h2>
 <p>You agree not to: submit invalid or fraudulent shares; attempt to overload, attack, or gain unauthorised access to the Service; reverse-engineer or disrupt the stratum or API endpoints; or use the Service for any unlawful purpose. We may, at our discretion, throttle, ban, or refuse service to any address or IP that abuses the Service.</p>
 
-<h2>5. No warranty</h2>
+<h2>6. No warranty</h2>
 <p>The Service is provided "as is" and "as available", without warranties of any kind. Cryptocurrency mining carries financial and technical risk, including costs of hardware and electricity, network difficulty changes, and coin-price volatility. You mine at your own risk.</p>
 
-<h2>6. Limitation of liability</h2>
+<h2>7. Limitation of liability</h2>
 <p>To the maximum extent permitted by law, GRINIUM and its operators shall not be liable for any indirect, incidental, or consequential damages, or for any loss of profits, rewards, or data arising from your use of the Service.</p>
 
-<h2>7. Changes</h2>
+<h2>8. Changes</h2>
 <p>We may update these Terms or the pool's parameters (fees, thresholds, reward scheme) at any time. Continued use after a change constitutes acceptance.</p>
 
 <!-- TO BE UPDATED: confirm incentive details before publishing -->
-<h2>8. Promotions and incentives</h2>
+<h2>9. Promotions and incentives</h2>
 <p>Any prize pool, bonus, jackpot, streak reward, or lottery is optional, discretionary, and may be changed, suspended, or withdrawn at any time. Where a draw is offered, its method is intended to be publicly verifiable. <em>(To be updated.)</em></p>
 
-<h2>9. Contact</h2>
+<h2>10. Contact</h2>
 <p>Questions about these Terms can be directed to the pool operator using the contact links in the website footer, or via the Grin forum (<a href="https://forum.grin.mw/u/hellogrin" target="_blank" rel="noopener">hellogrin on forum.grin.mw</a>).</p>`,
 
       privacy: `<p class="muted">Last updated: June 2026</p>
@@ -650,6 +674,31 @@ class PoolSettings {
         if (isNaN(n) || n < 2 || n > 1440) throw new Error('nostr_pending_ttl_minutes must be 2-1440');
         return n;
       },
+      dormancy_enabled: (val) => {
+        if (val === true || val === 'true') return 'true';
+        if (val === false || val === 'false' || val === undefined || val === '') return 'false';
+        throw new Error('dormancy_enabled must be true or false');
+      },
+      dormancy_months: (val) => {
+        // Floor 12: the whole point is a long, unmistakable abandonment window before a FINAL
+        // disposition. Cap 120 (10y). Integer months.
+        const n = parseInt(val, 10);
+        if (isNaN(n) || n < 12 || n > 120) throw new Error('dormancy_months must be 12-120');
+        return n;
+      },
+      dormancy_active_window_days: (val) => {
+        const n = parseInt(val, 10);
+        if (isNaN(n) || n < 1 || n > 365) throw new Error('dormancy_active_window_days must be 1-365');
+        return n;
+      },
+      dormancy_policy_effective_at: (val) => {
+        // Grandfather anchor, unix seconds. Managed by the dormancy runner (self-stamps on first
+        // enabled run); accept a non-negative integer so an operator can only ever PUSH it later
+        // (more runway), never retroactively shorten anyone's window.
+        const n = parseInt(val, 10);
+        if (isNaN(n) || n < 0) throw new Error('dormancy_policy_effective_at must be >= 0');
+        return n;
+      },
     },
     access: {
       session_timeout_hours: (val) => {
@@ -1006,6 +1055,14 @@ class PoolSettings {
         updated_at = unixepoch()
     `);
 
+    // Grandfather re-arm (finding #5): remember whether dormancy was enabled BEFORE this write, so a
+    // false→true (re)enable can reset the effective anchor and hand every address a fresh full window
+    // — otherwise the clock kept running through a long disabled stretch and addresses could be
+    // eligible the instant it's turned back on.
+    const _flagBool = (v) => v === true || v === 'true';
+    const prevDormancyEnabled = section === 'payout'
+      ? _flagBool(this.getSection('payout').dormancy_enabled) : null;
+
     const transaction = this.db.transaction(() => {
       for (const [key, value] of Object.entries(values)) {
         if (!(key in PoolSettings.defaults[section])) {
@@ -1050,6 +1107,16 @@ class PoolSettings {
         const e = parseFloat(merged.lottery_pot_equal_chance_percent) || 0;
         if (w + e > 100) {
           throw new Error('lottery_pot_share_weighted_percent + lottery_pot_equal_chance_percent must not exceed 100');
+        }
+      }
+
+      // Dormancy re-arm: on a false→true transition (and only if the caller didn't set the anchor
+      // itself in this same update), reset dormancy_policy_effective_at to 0 so the next disposition
+      // pass re-stamps it to "now" → a full fresh window for everyone. reflects the rows just written.
+      if (section === 'payout' && 'dormancy_enabled' in values && !('dormancy_policy_effective_at' in values)) {
+        const nowEnabled = _flagBool(this.getSection('payout').dormancy_enabled);
+        if (nowEnabled && !prevDormancyEnabled) {
+          stmt.run('payout', 'dormancy_policy_effective_at', '0', 'number', userId);
         }
       }
     });

@@ -144,6 +144,34 @@
     .pstat.on  { color: var(--ok);   border: 1px solid color-mix(in srgb, var(--ok) 45%, transparent); }
     .pstat.off { color: var(--warn); border: 1px solid color-mix(in srgb, var(--warn) 45%, transparent); }
 
+    /* ── abandoned-balance countdown notice ─────────────────────────────── */
+    .dormancy-note {
+      margin: 2px 0 14px; padding: 12px 15px; border-radius: 8px; font-size: 13.5px; line-height: 1.55;
+      background: color-mix(in srgb, var(--warn, #d29922) 8%, transparent);
+      border: 1px solid color-mix(in srgb, var(--warn, #d29922) 34%, transparent);
+      color: var(--text, #e6edf3);
+    }
+    .dormancy-note.is-eligible {
+      background: color-mix(in srgb, var(--danger, #f85149) 9%, transparent);
+      border-color: color-mix(in srgb, var(--danger, #f85149) 38%, transparent);
+    }
+    .dormancy-note.is-disposed {
+      background: var(--panel-2, rgba(255,255,255,.04));
+      border-color: var(--border, rgba(255,255,255,.12)); color: var(--text-dim, #9aa4b2);
+    }
+    .dormancy-note b { color: var(--warn, #d29922); }
+    .dormancy-note.is-eligible b { color: var(--danger, #f85149); }
+    .dormancy-note a { color: var(--accent, #7cb342); }
+
+    /* ── sub-threshold "email support to withdraw" note ─────────────────── */
+    .subthreshold-note {
+      margin: 0 0 14px; padding: 11px 14px; border-radius: 8px; font-size: 13px; line-height: 1.55;
+      background: var(--panel-2, rgba(255,255,255,.04));
+      border: 1px solid var(--border, rgba(255,255,255,.12));
+      color: var(--text-dim, #9aa4b2);
+    }
+    .subthreshold-note a { color: var(--accent, #7cb342); font-weight: 600; }
+
     /* ── compact earnings → BTC/USD table (account details card) ────────── */
     .fx-head {
       font-family: var(--mono); font-size: 10.5px; font-weight: 700; letter-spacing: .18em;
@@ -225,6 +253,10 @@
                 <span><i>Workers online</i><b id="pl-workers">—</b></span>
                 <span><i>Pending payout</i><b id="pl-pending">—</b></span>
             </div>
+
+            <!-- Abandoned-balance countdown for THIS address. Hidden unless the address is idle
+                 with a balance (or already disposed). Populated by renderDormancy(a.dormancy). -->
+            <div id="acct-dormancy" class="dormancy-note" style="display:none" role="status"></div>
 
             <div class="deck">
 
@@ -314,6 +346,12 @@
 
                             <div class="withdraw-col">
                                 <h4>Withdraw</h4>
+                                <!-- Shown only when 0 < balance < pool minimum: the manual-payout escape hatch. -->
+                                <div id="acct-subthreshold" class="subthreshold-note" style="display:none" role="note">
+                                    Your balance is below the <b><span id="acct-sub-min">—</span> ツ</b> withdrawal minimum. If you've stopped
+                                    mining and want to withdraw what you have, contact the pool operator to arrange a manual payout.
+                                    <a data-brand="contact-link" style="display:none">Contact support</a>
+                                </div>
                                 <div class="form-group">
                                     <label for="acct-amount">Amount (GRIN) &middot;
                                         <a class="amt-chip" id="acct-amt-min" title="Fill the pool minimum">min <span id="acct-pool-min">—</span> ツ</a> &middot;
@@ -708,9 +746,61 @@
                 && !a.pending_withdrawals && !a.payouts_frozen;
             $id('acct-withdraw').disabled = !canWithdraw;
 
+            // Sub-threshold escape hatch: a non-zero balance too small to auto-withdraw can still be
+            // paid out manually by the operator on request. The mailto is wired by branding.js
+            // (data-brand="contact-link"), which stays hidden if no contact email is configured.
+            const subEl = $id('acct-subthreshold');
+            if (subEl) {
+                const stuck = (a.balance || 0) > 0 && (a.balance || 0) < (a.min_withdrawal || 0);
+                $id('acct-sub-min').textContent = Number(a.min_withdrawal || 0).toFixed(1);
+                subEl.style.display = stuck ? '' : 'none';
+            }
+
             acctSummary = a;
             renderNostr(a, canWithdraw);
             renderPending(a.pending_withdrawal);
+            renderDormancy(a.dormancy);
+        }
+
+        // ── Abandoned-balance countdown for this address ──────────────────────
+        // States: active/idle/no_balance → nothing; counting → warn countdown; eligible → urgent;
+        // disposed → historical note. The reclaim action is simply "request a payout" while there
+        // is still a balance — so the notice points at the withdraw controls already on this page.
+        function renderDormancy(d) {
+            const el = $id('acct-dormancy');
+            if (!el) return;
+            el.className = 'dormancy-note';
+            el.style.display = 'none';
+            if (!d || !d.state) return;
+
+            if (d.state === 'disposed') {
+                const when = d.disposed_at ? new Date(d.disposed_at * 1000).toLocaleDateString('en-US', { timeZone: 'UTC' }) : '';
+                el.classList.add('is-disposed');
+                el.innerHTML = 'This address had a long-dormant balance of <b>' + Number(d.disposed_amount || 0).toFixed(4)
+                    + ' ツ</b> redistributed to active miners' + (when ? ' on ' + escHtml(when) : '')
+                    + ' under the pool\'s abandoned-balance policy. This is final. '
+                    + '<a href="/page.html?p=terms">Terms</a>';
+                el.style.display = '';
+                return;
+            }
+            if (d.state === 'eligible') {
+                el.classList.add('is-eligible');
+                el.innerHTML = '<b>This balance is due for redistribution.</b> It has been idle beyond the '
+                    + (d.dormancy_months || 24) + '-month limit. <b>Withdraw it now</b> to keep it — after redistribution to '
+                    + 'active miners it cannot be reclaimed. <a href="/page.html?p=terms">Terms</a>';
+                el.style.display = '';
+                return;
+            }
+            if (d.state === 'counting') {
+                const days = Number(d.days_until_disposal) || 0;
+                el.innerHTML = 'This address is idle. If it stays inactive, this balance becomes eligible for '
+                    + 'redistribution to active miners in <b>' + days.toLocaleString('en-US') + ' days</b> '
+                    + '(after ' + (d.dormancy_months || 24) + ' months of no mining and no payout). '
+                    + 'Withdraw any time before then to keep it. <a href="/page.html?p=terms">Terms</a>';
+                el.style.display = '';
+                return;
+            }
+            // active / idle (policy off) / no_balance → no notice.
         }
 
         // ── Goblin/Nostr destination state (only when the pool enabled the rail) ──

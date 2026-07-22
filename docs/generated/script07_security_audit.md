@@ -422,3 +422,76 @@ Residual / to validate on the VPS: the live nostr-tools crypto (nip59 wrap/unwra
 delivery are exercised only by an E2E run — do a testnet / tiny-amount pilot before enabling on
 mainnet. The E.1 slate_id/`retrieve_txs` double-pay hardening applies here too (the failed-send
 reversal shares the exposure); the failed-payout cooldown is the current mitigation.
+
+## F. Payout-path throttle hardening — 2026-07-22 (add-ons, NOT VPS-tested)
+
+**Question raised:** should the payout button get a CAPTCHA / Cloudflare Turnstile to blunt
+proof brute-force + payout spam?
+
+**Decision: NO CAPTCHA (by default).** Rationale — do not re-litigate in a future pass:
+- Both payout rails are **theft-proof** (Tor dials the address's own onion; slatepack/Nostr are
+  encrypted to the address / pinned npub). A brute-forced ownership gate cannot *steal*; the
+  worst outcome is **griefing** (force a victim's own coins to their own wallet, burning one
+  pool-paid fee). Low damage ceiling → CAPTCHA is a heavy answer to a light threat.
+- Turnstile conflicts with the pool's **Tor-first, no-account** identity (Tor miners get
+  CF challenges on the one screen where they withdraw their own money) and forces a **strict-CSP
+  exception** (`challenges.cloudflare.com` script+frame), widening a surface §A/§B narrowed.
+
+Instead, the two *actual* holes on the money path were closed (implementation, not just design):
+
+### F1 — Money-write routes rode the loose `public` bucket (1200/min) — **FIXED**
+The 4 money-write endpoints (`POST /api/account/:addr/withdraw`, `POST …/withdraw/:id/finalize`,
+`POST` + `DELETE …/nostr-destination`) now use a **dedicated `withdraw` rate bucket**
+(`lib/rate-limiter.js`, default **20/min per-IP**, overridable via `config.rate_limits.withdraw`)
+instead of `public`. `tor-check` and every read/stats/admin route stay on their existing buckets —
+no other limit value changed. A real payout is ~2 requests (create → finalize), so 20/min leaves
+ample headroom for a small NAT'd farm while cutting automation. This bucket is the coarse DoS pad
+in front of the memory-hard scrypt verify.
+
+### F2 — Ownership-proof throttle was per-ADDRESS only → distributed sweep + scrypt CPU lever — **FIXED**
+`lib/owner-proof.js` `verifyOwnerProof` threw a per-address counter only (`FAIL_MAX=8`/10min),
+so an attacker walking the public leaderboard got a **fresh 8-guess budget per address**, and each
+guess forced a 16 MB scrypt (a CPU/mem-exhaustion lever). Added a **second, per-IP counter** in the
+same `_fails` Map (keyed `ip:<canonicalIp>`), `FAIL_MAX_IP=20`/10min, same 5-min lockout — it caps
+*total* failed guesses from one source across ALL addresses. Signature is now
+`verifyOwnerProof(db, addr, submitted, clientIp?)`; the 4th arg is **optional** (omitting it =
+old address-only behaviour, backward compatible) and all 4 index.js callsites pass `reqIp`.
+A single-address user hits the address lock (8) **before** the IP lock (20), so no new
+false-positive for normal use; only the distributed-sweep attacker trips the IP lock.
+
+**Verified:** `node --check` on index.js + both libs; a 5-case stub-DB test (distributed sweep
+locks at the 21st attempt, a different IP is unaffected, a solo user locks at the 9th, a correct
+password verifies, the no-IP path still works) — all pass. NOT yet VPS-tested.
+
+**Deferred (YAGNI, do NOT build unless a real need appears):** an *off-by-default* operator
+captcha toggle (reuse the existing login-captcha infra at `/api/auth/captcha`) or a hashcash PoW
+challenge before withdraw. Both were considered and intentionally not built — the F1/F2 throttles
+plus the theft-proof rails are the proportionate control.
+
+---
+
+## Abandoned-balance + sub-threshold payout review (add-ons, 2026-07-22)
+
+Post-build logic/security review of the dormancy disposition + manual/backend payout feature
+(lib/dormancy.js, withdrawal-scheduler.js override, index.js endpoints, admin/account frontends).
+5 findings; all resolved (node --check + temp-DB smoke tests pass; NOT yet VPS-tested).
+
+**Sound by construction (not findings):** single-threaded synchronous node:sqlite transactions make
+the disposition sweep and any live withdrawal non-interleaving (no double-spend); both dormancy paths
+read *spendable* `balance` (lock model `balance-=amt; balance_locked+=amt`) so locked funds are never
+touched; `dormant_sweep`(debit)+`dormant_payout`(credit) net to zero in reconciliation INV_CASES and
+stay out of external FLOW_CASES; disposition self-clears (balance>0 filter) so it can't double-sweep.
+
+| # | Sev | Finding | Fix |
+|---|-----|---------|-----|
+| 1 | MED | manualPayout had no double-submit guard → a resubmit wrote a 2nd confirmed withdrawal + debit (over-debit + wallet-audit drift) | dedup in manualPayout(): reject duplicate `kernel_excess`/`slate_id` (unique on-chain id) or identical (address, amount, method='manual') within 60s; frontend disables the button in-flight |
+| 2 | LOW | recorder accepted a ≥min amount with no guard → auto-payout scheduler could double-pay in the send↔record gap | manualPayout() rejects `amt >= min_withdrawal` with `above_min_needs_ack` unless `allowAboveMin`; frontend prompts once and retries; steers to the Tor path / freeze |
+| 3 | LOW | manualPayout() didn't self-check the freeze (only the endpoint did) | added `if (this.isFrozen()) return payouts_frozen` inside the lib method (defense-in-depth) |
+| 4 | LOW | no enforced link between verify-owner and record/send | both money endpoints now require a successful `owner_proof:admin_verify:ok` in admin_audit_log within 15 min, else 428 `verify_required`; explicit `verified_ack` bypass (frontend confirm) for no-proof-on-record accounts |
+| 5 | INFO | re-enabling dormancy after a long disable gave no fresh grandfather runway (clock ran through the off period) | pool-settings.updateSection re-arms on a false→true `dormancy_enabled` transition: resets `dormancy_policy_effective_at` to 0 so the next pass re-stamps to now (a full fresh window); true→true saves and disable do NOT reset |
+
+**New capability added in the same pass:** backend-initiated below-min Tor payout
+(`POST /api/admin/dormancy/send-payout`) reuses `createWithdrawal(...,{adminOverride:true})` —
+bypasses only the min floor + reversal cooldown; freeze, CAS lock, and one-pending-per-address cap
+(the double-pay guard) still apply. This is the convenient primary sub-threshold path; the recorder
+is the labeled fallback for genuine out-of-band (slatepack/CLI) sends.

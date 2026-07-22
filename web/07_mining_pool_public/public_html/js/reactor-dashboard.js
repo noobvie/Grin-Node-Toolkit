@@ -47,6 +47,22 @@
 
   // ── small helpers ─────────────────────────────────────────────────────────
   function $(id) { return document.getElementById(id); }
+  // Derive a translucent variant of a theme color for canvas gradient stops (handles
+  // #rgb / #rrggbb / rgb()/rgba()); falls back to the solid color if it can't parse.
+  function withAlpha(col, a) {
+    col = (col || '').trim();
+    if (col[0] === '#') {
+      var h = col.slice(1);
+      if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+      var n = parseInt(h, 16);
+      if (!isNaN(n)) return 'rgba(' + ((n >> 16) & 255) + ',' + ((n >> 8) & 255) + ',' + (n & 255) + ',' + a + ')';
+    }
+    if (col.indexOf('rgb') === 0) {
+      var m = col.match(/rgba?\(([^)]+)\)/);
+      if (m) return 'rgba(' + m[1].split(',').slice(0, 3).map(function (x) { return x.trim(); }).join(',') + ',' + a + ')';
+    }
+    return col;
+  }
   function setText(id, text) { var el = $(id); if (el) el.textContent = text; }
   // Set an element to a block height that deep-links to a chain explorer (new tab).
   function setHeightLink(id, height) {
@@ -114,6 +130,7 @@
 
     var g = {
       min: 0, max: 1, ticks: 8, unit: '', zones: [], marker: null,
+      gradient: null, needleColor: null,
       target: 0, cur: 0, wob: 0, running: false
     };
     Object.assign(g, opts || {});
@@ -127,13 +144,21 @@
       // dial face
       c.beginPath(); c.arc(cx, cy, R + 14, a0 - 0.06, a1 + 0.06);
       c.strokeStyle = 'rgba(0,0,0,.45)'; c.lineWidth = 30; c.stroke();
-      // colored zones
-      g.zones.forEach(function (z) {
-        c.beginPath();
-        c.arc(cx, cy, R + 7, A((z[0] - g.min) / (g.max - g.min)), A((z[1] - g.min) / (g.max - g.min)));
-        c.strokeStyle = z[2]; c.globalAlpha = 0.5; c.lineWidth = 4; c.stroke();
-        c.globalAlpha = 1;
-      });
+      // value band: an all-positive gradient sweep (hashrate — higher is better, so no
+      // danger colors) OR discrete zones (round effort — green→amber→red).
+      if (g.gradient) {
+        var lg = c.createLinearGradient(cx - (R + 7), cy, cx + (R + 7), cy);
+        g.gradient.forEach(function (s) { lg.addColorStop(s[0], s[1]); });
+        c.beginPath(); c.arc(cx, cy, R + 7, a0, a1);
+        c.strokeStyle = lg; c.lineWidth = 4; c.stroke();
+      } else {
+        g.zones.forEach(function (z) {
+          c.beginPath();
+          c.arc(cx, cy, R + 7, A((z[0] - g.min) / (g.max - g.min)), A((z[1] - g.min) / (g.max - g.min)));
+          c.strokeStyle = z[2]; c.globalAlpha = 0.5; c.lineWidth = 4; c.stroke();
+          c.globalAlpha = 1;
+        });
+      }
       // ticks + numerals
       c.font = '9px ' + MONO;
       for (var i = 0; i <= g.ticks; i++) {
@@ -164,11 +189,12 @@
         c.stroke();
         c.restore();
       }
-      // needle
+      // needle (amber when the dial is flagged idle, e.g. zero active miners)
       var na = A(g.cur);
+      var nc = g.needleColor || C.accent;
       c.save();
-      c.shadowColor = C.accent; c.shadowBlur = 8;
-      c.strokeStyle = C.accent; c.lineWidth = 2.4; c.lineCap = 'round';
+      c.shadowColor = nc; c.shadowBlur = 8;
+      c.strokeStyle = nc; c.lineWidth = 2.4; c.lineCap = 'round';
       c.beginPath();
       c.moveTo(cx - Math.cos(na) * 10, cy - Math.sin(na) * 10);
       c.lineTo(cx + Math.cos(na) * (R - 14), cy + Math.sin(na) * (R - 14));
@@ -176,7 +202,7 @@
       c.restore();
       // hub + unit
       c.beginPath(); c.arc(cx, cy, 5, 0, 7); c.fillStyle = C.mute; c.fill();
-      c.beginPath(); c.arc(cx, cy, 2, 0, 7); c.fillStyle = C.accent; c.fill();
+      c.beginPath(); c.arc(cx, cy, 2, 0, 7); c.fillStyle = nc; c.fill();
       c.fillStyle = C.mute; c.font = '9.5px ' + MONO; c.textAlign = 'center';
       c.fillText(g.unit, cx, cy - 26);
     }
@@ -195,6 +221,8 @@
       if (ticks) g.ticks = ticks;
     };
     g.setMarker = function (v) { g.marker = v; };
+    g.setGradient = function (stops) { g.gradient = stops; };
+    g.setNeedleColor = function (col) { g.needleColor = col || null; };
     g.setValue = function (v) {
       g.target = (v - g.min) / (g.max - g.min || 1);
       if (REDUCED) { g.cur = g.target; render(); }
@@ -209,10 +237,27 @@
   // 24h peak would exceed it (never pins); higher is better → single accent zone (no red
   // danger band), with an info-blue tick marking the 24h peak as a reference.
   var gaugeHash = Gauge('g-hash', { min: 0, max: 200, ticks: 8, unit: 'G/s' });
+  // All-green gradient sweep (faint → bright accent). Higher hashrate is good, so the band
+  // never turns red/amber by value — "low" is not "danger". Re-applied each refresh so a
+  // theme switch re-derives it from the live --accent token.
+  var HASH_GRAD = function () { return [[0, withAlpha(C.accent, 0.22)], [1, withAlpha(C.accent, 0.72)]]; };
+  if (gaugeHash) gaugeHash.setGradient(HASH_GRAD());
   // Round effort — current round's Σ share-diff / one block's network diff, live. <100% =
   // nominal (green), 100–150% = running long (amber), >150% = overdue/unlucky (red). The
   // big numeral carries the true %; luck (100-block) + network share ride the sub-line.
   var gaugeShare = Gauge('g-share', { min: 0, max: 200, ticks: 8, unit: '%' });
+
+  // Idle state for the hashrate dial: with zero active miners the value reads a muted amber
+  // "IDLE" (needle + numeral) — a distinct dead-pool signal, deliberately NOT a red danger
+  // band. Gated on active_miners (from /api/pool/stats), never raw gps=0 which blips to 0
+  // between shares even with miners connected. Applied from both loaders so whichever lands
+  // last keeps it fresh; null = not yet known → not idle.
+  var lastActiveMiners = null;
+  function applyHashState() {
+    var idle = lastActiveMiners === 0;
+    if (gaugeHash) gaugeHash.setNeedleColor(idle ? C.warn : null);
+    var v = $('g-hash-v'); if (v) v.classList.toggle('idle', idle);
+  }
 
   // ── LED bargraph (share quality) ──────────────────────────────────────────
   var LED_SEGS = 40;
@@ -305,7 +350,10 @@
       var g1 = fmtGps(gps);
       setText('g-hash-v', g1[0] + ' ' + g1[1]);
       var g24 = fmtGps(hr.pool_hashrate_24h_gps || 0);
-      setText('g-hash-avg', '24h avg ' + g24[0] + ' ' + g24[1]);
+      setText('g-hash-avg', lastActiveMiners === 0
+        ? 'idle · no active miners'
+        : '24h avg ' + g24[0] + ' ' + g24[1]);
+      applyHashState();
       if (gaugeHash) {
         // Scale the dial in the display unit family of the current value.
         var unit = g1[1] || 'G/s';
@@ -316,8 +364,9 @@
         // would exceed it, so the needle never pins and the peak tick always fits.
         var floor = unit === 'G/s' ? 200 : 1;
         var max = Math.max(floor, niceCeil(Math.max(val, peak) * 1.15));
-        // Higher hashrate is good → one accent sweep, no red danger band at the top.
-        gaugeHash.setScale(0, max, unit, [[0, max, C.accent]], 8);
+        // Higher hashrate is good → all-green gradient sweep, no red danger band at the top.
+        gaugeHash.setScale(0, max, unit, [], 8);
+        gaugeHash.setGradient(HASH_GRAD());
         gaugeHash.setMarker(peak > 0 ? peak : null);
         gaugeHash.setValue(val);
       }
@@ -329,6 +378,8 @@
       var s = await Auth.fetch('/api/pool/stats');
       if (!s) return;
       setText('c-miners', String(s.active_miners || 0));
+      lastActiveMiners = Number(s.active_miners) || 0;
+      applyHashState();
       setText('c-miners-sub', (s.active_connections || 0) + ' conn');
       setText('c-blocks24', String(s.blocks_24h || 0));
       setText('c-blocks24-sub', (s.blocks_7d || 0) + ' wk');

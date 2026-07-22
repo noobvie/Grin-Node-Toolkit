@@ -344,23 +344,22 @@
                                 <div class="mform-row"><span class="mform-k">Pool1 password</span><span class="mform-val">&lt;your_own_password&gt;</span></div>
                             </div>
                             <ol class="mguide-steps">
-                                <li>Open your miner&rsquo;s web panel (type its IP address into a browser) and go to
-                                    <b>Miners → Pool Configuration</b> — iPollo shown; other vendors name the menu similarly.</li>
-                                <li><b>Pool 1</b> — the endpoint from the patch bay above; it updates as you pick a
-                                    region. If your firmware rejects a bare <code>host:port</code>, prefix it with
-                                    <code>stratum+tcp://</code>. Algorithm: <b>Cuckatoo32</b> (GRIN).</li>
-                                <li><b>Worker</b> — your Grin address; it <b>is</b> your login, no account or registration
-                                    needed. Add an optional <code>.rig1</code> to name this machine (lowercase
-                                    letters/digits/<code>-</code>/<code>_</code>, max 25 chars — longer names are
-                                    shortened automatically, never rejected).</li>
-                                <li><b>Password</b> — pick your own private password or random text (4+ characters;
-                                    not defaults like <code>x</code> or <code>123</code>) and use the same one on all
-                                    your rigs. It doubles as your <b>ownership proof</b> on the account page — payouts
-                                    can be verified with either it or a recent mining IP, so a real password here
-                                    means you can always withdraw even if your IP changes.</li>
-                                <li>Optionally set <b>Pool 2 / Pool 3</b> to other green or blue regions as automatic
-                                    backups, then save — the miner reconnects and accepted shares should appear within
-                                    a few minutes.</li>
+                                <li>Open your miner&rsquo;s web panel (its IP address in a browser) →
+                                    <b>Miners → Pool Configuration</b> (iPollo shown; other vendors are similar).</li>
+                                <li><b>Pool 1</b> — the endpoint from the patch bay above (updates as you pick a
+                                    region). Algorithm: <b>Cuckatoo32</b> (GRIN). If your firmware rejects a bare
+                                    <code>host:port</code>, prefix it with <code>stratum+tcp://</code>.</li>
+                                <li><b>Worker</b> — your Grin address; it <b>is</b> your login, no signup. Optionally
+                                    add <code>.rig1</code> to name the machine (lowercase letters/digits/<code>-</code>/<code>_</code>,
+                                    max 25 chars — longer names are trimmed, never rejected).</li>
+                                <li><b>Password</b> — <b>choose a strong, private password</b> (4+ chars; never
+                                    <code>x</code>, <code>123</code> or firmware defaults). This is your
+                                    <b>ownership proof</b> for withdrawals, so treat it like a key.
+                                    <b>Use the same password on every rig</b> under this address — any of them can
+                                    then prove ownership, and a real password means you can always withdraw even if
+                                    your IP changes.</li>
+                                <li>Optionally point <b>Pool 2 / Pool 3</b> at other green or blue regions as automatic
+                                    backups, then save — accepted shares should appear within a few minutes.</li>
                             </ol>
                         </div>
                     </div>

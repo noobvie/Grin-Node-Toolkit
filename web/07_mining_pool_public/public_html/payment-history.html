@@ -88,7 +88,23 @@
       color: var(--text-mute, #6b7480); font-family: var(--mono, monospace);
       font-size: 11px; letter-spacing: .1em;
     }
-  </style>
+
+    /* Page-scoped abandoned-balance notice (NOT the site-wide banner). */
+    .payout-notice {
+      display: flex; gap: 12px; align-items: flex-start;
+      margin: 4px 0 14px; padding: 13px 16px; border-radius: 8px;
+      background: color-mix(in srgb, var(--accent, #7cb342) 9%, transparent);
+      border: 1px solid color-mix(in srgb, var(--accent, #7cb342) 32%, transparent);
+      color: var(--text, #e6edf3); font-size: 13.5px; line-height: 1.55;
+    }
+    .payout-notice__icon {
+      font-size: 20px; line-height: 1.2; color: var(--accent, #7cb342); flex: 0 0 auto;
+    }
+    .payout-notice a { color: var(--accent, #7cb342); text-decoration: none; }
+    .payout-notice a:hover { text-decoration: underline; }
+    #uc-dormant .uc-soon { color: var(--warn, #d29922); font-weight: 600; }
+    #uc-dormant .uc-eligible { color: var(--danger, #f85149); font-weight: 600; }
+</style>
 </head>
 <body>
 
@@ -187,6 +203,80 @@
                         </tbody>
                     </table>
                 </div>
+            </div>
+
+            <!-- ═══ U · UNCLAIMED / ABANDONED BALANCES ═══ -->
+            <!-- Rendered only when there is something to show (dormant balances or past
+                 dispositions); hidden entirely otherwise. Populated by loadUnclaimed(). -->
+            <div id="unclaimed-block" style="display:none;">
+
+                <!-- Payout-scoped policy notice (this page only — NOT a site-wide banner) -->
+                <div class="payout-notice" id="unclaimed-notice">
+                    <span class="payout-notice__icon" aria-hidden="true">♻</span>
+                    <div>
+                        <strong>Abandoned balances.</strong>
+                        <span id="unclaimed-notice-text">If an address stops mining and never withdraws for a long period, its
+                        unclaimed balance is eventually redistributed to <em>active</em> miners — <strong>never taken by the
+                        pool operator</strong>.</span>
+                        You can reclaim yours any time <strong>before</strong> disposition from your
+                        <a href="/account-settings.html">Account</a> page. After disposition it is final.
+                        See the <a href="/page.html?p=terms">Terms of Service</a> for the full policy.
+                    </div>
+                </div>
+
+                <!-- U-01 · aggregate figures -->
+                <div class="placard" aria-label="Unclaimed balance figures">
+                    <span><i>Unclaimed balance</i><b id="uc-total">—</b></span>
+                    <span><i>Dormant addresses</i><b id="uc-count">—</b></span>
+                    <span><i>Oldest idle</i><b id="uc-oldest">—</b></span>
+                    <span><i>Redistributed all-time</i><b id="uc-disposed">—</b></span>
+                </div>
+
+                <div class="deck-row half">
+                    <!-- U-02 · dormant list (masked) -->
+                    <div class="panel"><span class="screws"></span>
+                        <h2 class="panel-title"><span class="tag">U-02</span> Dormant balances
+                            <span class="right">masked &middot; longest idle first</span></h2>
+                        <div class="panel-body">
+                            <p class="note" style="margin:0 0 12px;">Addresses are masked for privacy — this list is a transparency count, not a lookup. To see whether <b>your</b> balance is idle and when it would be redistributed, open your own <a href="/account-settings.html">account page</a>; the status shows there in full.</p>
+                            <table class="data-table">
+                                <thead>
+                                    <tr>
+                                        <th>Address</th>
+                                        <th class="num">Balance (ツ)</th>
+                                        <th class="num">Idle (days)</th>
+                                        <th>Disposal</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="uc-dormant">
+                                    <tr><td colspan="4">Loading…</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <!-- U-03 · disposition ledger -->
+                    <div class="panel"><span class="screws"></span>
+                        <h2 class="panel-title"><span class="tag">U-03</span> Redistribution ledger
+                            <span class="right">final dispositions to active miners</span></h2>
+                        <div class="panel-body">
+                            <table class="data-table">
+                                <thead>
+                                    <tr>
+                                        <th>Date (UTC)</th>
+                                        <th class="num">Redistributed (ツ)</th>
+                                        <th class="num">From</th>
+                                        <th class="num">To miners</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="uc-history">
+                                    <tr><td colspan="4">Loading…</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
             </div>
 
         </div>
@@ -351,6 +441,93 @@
             }
         }
 
+        // ── Unclaimed / abandoned balances (transparency + reunification) ──
+        function daysAgoLabel(ts) {
+            if (!ts) return '—';
+            const d = Math.floor((Date.now() / 1000 - Number(ts)) / 86400);
+            return d <= 0 ? 'today' : (fmtInt(d) + ' d');
+        }
+        async function loadUnclaimed() {
+            const block = document.getElementById('unclaimed-block');
+            try {
+                const data = await Auth.fetch('/api/pool/unclaimed');
+                const dormant = (data && data.dormant) || { totals: {}, list: [] };
+                const disp = (data && data.dispositions) || { totals: {}, batches: [] };
+                const totals = dormant.totals || {};
+                const dispTotals = disp.totals || {};
+                const list = Array.isArray(dormant.list) ? dormant.list : [];
+                const batches = Array.isArray(disp.batches) ? disp.batches : [];
+
+                // Nothing to show → keep the whole block hidden.
+                if ((totals.count || 0) === 0 && batches.length === 0) {
+                    if (block) block.style.display = 'none';
+                    return;
+                }
+                if (block) block.style.display = '';
+
+                // Notice wording reflects whether disposition is actually active.
+                const months = dormant.dormancy_months || 24;
+                const noteEl = document.getElementById('unclaimed-notice-text');
+                if (noteEl) {
+                    noteEl.textContent = dormant.enabled
+                        ? ('If an address stops mining and never withdraws for ' + months + ' months, its unclaimed balance is '
+                            + 'redistributed to active miners — never taken by the pool operator.')
+                        : ('Balances from addresses that have stopped mining are shown here for transparency. '
+                            + 'Automatic redistribution is not currently active.');
+                }
+
+                setStat('uc-total',    fmtGrin(totals.amount || 0));
+                setStat('uc-count',    fmtInt(totals.count || 0));
+                setStat('uc-oldest',   daysAgoLabel(totals.oldest_activity_at));
+                setStat('uc-disposed', fmtGrin(dispTotals.total_disposed || 0));
+
+                // U-02 · dormant list (addresses already masked server-side)
+                const dt = document.getElementById('uc-dormant');
+                if (dt) {
+                    if (!list.length) {
+                        dt.innerHTML = '<tr><td colspan="4">No dormant balances</td></tr>';
+                    } else {
+                        dt.innerHTML = list.map(function (r) {
+                            let disposal = '—';
+                            if (r.dispose_at) {
+                                if (r.eligible) {
+                                    disposal = '<span class="uc-eligible">due</span>';
+                                } else {
+                                    const d = Number(r.days_until_disposal) || 0;
+                                    disposal = '<span class="' + (d <= 30 ? 'uc-soon' : '') + '">in ' + fmtInt(d) + ' d</span>';
+                                }
+                            }
+                            return '<tr>'
+                                + '<td><span class="addr-link" title="masked for privacy">' + escHtml(r.address) + '</span></td>'
+                                + '<td class="num">' + Number(r.balance || 0).toFixed(3) + '</td>'
+                                + '<td class="num">' + fmtInt(r.idle_days || 0) + '</td>'
+                                + '<td>' + disposal + '</td>'
+                                + '</tr>';
+                        }).join('');
+                    }
+                }
+
+                // U-03 · redistribution ledger
+                const ht = document.getElementById('uc-history');
+                if (ht) {
+                    if (!batches.length) {
+                        ht.innerHTML = '<tr><td colspan="4">No redistributions yet</td></tr>';
+                    } else {
+                        ht.innerHTML = batches.map(function (b) {
+                            return '<tr>'
+                                + '<td>' + escHtml(new Date((b.created_at || 0) * 1000).toLocaleString('en-US', { timeZone: 'UTC' })) + '</td>'
+                                + '<td class="num">' + Number(b.total_swept || 0).toFixed(3) + '</td>'
+                                + '<td class="num">' + fmtInt(b.source_count || 0) + '</td>'
+                                + '<td class="num">' + fmtInt(b.recipient_count || 0) + '</td>'
+                                + '</tr>';
+                        }).join('');
+                    }
+                }
+            } catch (e) {
+                if (block) block.style.display = 'none';
+            }
+        }
+
         document.addEventListener('DOMContentLoaded', function () {
             const bar = document.getElementById('ph-rangebar');
             if (bar) {
@@ -366,10 +543,11 @@
             }
             loadTransparency();
             loadRecentPayouts();
+            loadUnclaimed();
         });
 
         // Refresh every 60 seconds.
-        setInterval(function () { loadTransparency(); loadRecentPayouts(); }, 60000);
+        setInterval(function () { loadTransparency(); loadRecentPayouts(); loadUnclaimed(); }, 60000);
     </script>
     <script src="/js/public-shell.js"></script>
     <script src="/js/public-theme.js"></script>

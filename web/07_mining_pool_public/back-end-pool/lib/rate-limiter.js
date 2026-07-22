@@ -45,7 +45,15 @@ class RateLimiter {
       // Bulk CSV downloads (account ledger / withdrawal history). Deliberately tight and
       // SEPARATE from `public` (1200/min) so a human's occasional export works but automated
       // download-spam of the all-time extract is cut off fast. Per-IP, per-minute.
-      export: 10
+      export: 10,
+      // Money-write actions (withdraw / slatepack finalize / nostr-destination register+remove).
+      // SEPARATE from `public` (1200/min) so ownership-proof guessing and payout spam are cut off
+      // per-IP long before they can exhaust the (memory-hard) scrypt verify, WITHOUT touching the
+      // loose budget every read endpoint shares. A real payout is only ~2 requests (create then
+      // finalize); 20/min/IP leaves ample headroom for a small NAT'd farm while still blocking
+      // automation. The per-IP proof throttle in owner-proof.js is the finer brute-force control;
+      // this bucket is the coarse DoS pad in front of it. Overridable via config.rate_limits.withdraw.
+      withdraw: 20
     };
 
     // Override with config

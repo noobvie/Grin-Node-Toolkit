@@ -69,18 +69,21 @@
     .nm-note { margin: 0; padding: 12px 18px 16px; font-size: 12px; color: var(--text-mute); font-family: var(--mono); letter-spacing: .02em; line-height: 1.5; }
     .nm-note b { color: var(--text-dim); } .nm-note code { color: var(--info); }
 
-    .nm-legend { display: flex; flex-wrap: wrap; gap: 20px 26px; }
-    .nm-lg { display: grid; grid-template-columns: 20px 1fr; gap: 10px; align-items: start; min-width: 190px; flex: 1 1 200px; max-width: 300px; }
-    .nm-lg .key { display: flex; align-items: center; justify-content: center; height: 16px; margin-top: 2px; }
+    .nm-legend { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px 24px; }
+    .nm-lg { display: grid; grid-template-columns: 16px 1fr; gap: 9px; align-items: start; }
+    .nm-lg.gw-item { grid-column: 1 / -1; margin-top: 3px; padding-top: 12px; border-top: 1px solid var(--rx-line); }
+    .nm-lg .key { display: flex; align-items: center; justify-content: center; height: 14px; margin-top: 1px; }
     .nm-lg .k { border-radius: 50%; }
-    .nm-lg .khub { width: 14px; height: 14px; background: var(--accent); box-shadow: 0 0 12px var(--accent); }
+    .nm-lg .khub { width: 13px; height: 13px; background: var(--accent); box-shadow: 0 0 12px var(--accent); }
     .nm-lg .kgw { width: 12px; height: 12px; background: var(--gold); box-shadow: 0 0 10px color-mix(in srgb, var(--gold) 70%, transparent); }
     .nm-lg .kmn { width: 11px; height: 11px; background: var(--miner); box-shadow: 0 0 9px color-mix(in srgb, var(--miner) 65%, transparent); }
     .nm-lg .knm { width: 7px; height: 7px; background: var(--accent); opacity: .75; }
     .nm-lg .knt { width: 7px; height: 7px; background: var(--accent2); opacity: .75; }
     .nm-lg .name { font-family: var(--mono); font-size: 12px; color: var(--text); font-weight: 700; letter-spacing: .04em; }
-    .nm-lg .desc { font-size: 11.5px; color: var(--text-dim); line-height: 1.45; margin-top: 1px; }
-    .nm-gwst { display: flex; gap: 14px; margin-top: 6px; flex-wrap: wrap; }
+    .nm-lg .desc { font-size: 11px; color: var(--text-dim); line-height: 1.4; margin-top: 2px; }
+    .nm-lg .gw-sub { font-family: var(--mono); font-weight: 400; font-size: 11px; color: var(--text-dim); letter-spacing: .02em; }
+    .nm-lg.gw-item .gw-body { display: flex; align-items: center; gap: 6px 22px; flex-wrap: wrap; }
+    .nm-gwst { display: flex; gap: 16px; flex-wrap: wrap; }
     .nm-gwst span { display: inline-flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: 10.5px; letter-spacing: .04em; color: var(--text-dim); }
     .nm-gwst i { width: 9px; height: 9px; border-radius: 50%; flex: none; }
     .nm-gwst .c-on { background: var(--accent); box-shadow: 0 0 7px var(--accent); }
@@ -149,14 +152,16 @@
         <h2 class="panel-title">Legend <span class="right">5 layers</span></h2>
         <div class="panel-body">
           <div class="nm-legend">
-            <div class="nm-lg"><div class="key"><span class="k khub"></span></div><div><div class="name">Hub</div><div class="desc">Central settlement + payout core. One authoritative node.</div></div></div>
-            <div class="nm-lg"><div class="key"><span class="k kmn"></span></div><div><div class="name">Miner region</div><div class="desc">One dot per country with miners. Size scales with active miners; position randomized.</div></div></div>
-            <div class="nm-lg"><div class="key"><span class="k knm"></span></div><div><div class="name">Grin node · mainnet</div><div class="desc">P2P peers seen in the last 30 days. Twinkle = live sightings.</div></div></div>
-            <div class="nm-lg"><div class="key"><span class="k knt"></span></div><div><div class="name">Grin node · testnet</div><div class="desc">Testnet peers, same window. Ambient — not pool miners.</div></div></div>
-            <div class="nm-lg" style="max-width:340px;flex-basis:280px;"><div class="key"><span class="k kgw"></span></div><div>
-              <div class="name">Gateway</div><div class="desc">Thin regional edge (WireGuard + haproxy). Live status:</div>
-              <div class="nm-gwst"><span><i class="c-on"></i>Connected</span><span><i class="c-hs"></i>Handshaked · idle</span><span><i class="c-off"></i>Offline</span></div>
-            </div></div>
+            <div class="nm-lg"><div class="key"><span class="k khub"></span></div><div><div class="name">Hub</div><div class="desc">Central settlement + payout core.</div></div></div>
+            <div class="nm-lg"><div class="key"><span class="k kmn"></span></div><div><div class="name">Miner region</div><div class="desc">One dot per country · size scales with miners.</div></div></div>
+            <div class="nm-lg"><div class="key"><span class="k knm"></span></div><div><div class="name">Grin node · mainnet</div><div class="desc">P2P peers, last 30d · twinkle = live.</div></div></div>
+            <div class="nm-lg"><div class="key"><span class="k knt"></span></div><div><div class="name">Grin node · testnet</div><div class="desc">Testnet peers, same window · ambient.</div></div></div>
+            <div class="nm-lg gw-item"><div class="key"><span class="k kgw"></span></div>
+              <div class="gw-body">
+                <div><span class="name">Gateway</span> <span class="gw-sub">thin regional edge · WireGuard + haproxy</span></div>
+                <div class="nm-gwst"><span><i class="c-on"></i>Connected</span><span><i class="c-hs"></i>Handshaked · idle</span><span><i class="c-off"></i>Offline</span></div>
+              </div>
+            </div>
           </div>
         </div>
       </section>

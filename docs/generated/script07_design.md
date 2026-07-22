@@ -1346,3 +1346,116 @@ security_audit §E.3; build notes → implementation §10.2.
 ================================================================================
 
 ```
+
+================================================================================
+ ABANDONED-BALANCE DISPOSITION + MANUAL PAYOUT  (add-ons, 2026-07-22)
+================================================================================
+Problem: the pool is custodial between credit and payout. A miner can accrue a
+balance then vanish (lost seed/pass, abandoned rig). Left forever, these balances
+bloat the ledger and sit as an unbacked-looking liability. Operator question:
+what to do with them, correctly and defensibly?
+
+DECISION (locked with operator, 2026-07-22):
+  · An address with NO accepted share AND NO successful payout for `dormancy_months`
+    (default 24), still holding a balance, is "abandoned".
+  · Its balance is SWEPT and REDISTRIBUTED to miners active in the last
+    `dormancy_active_window_days` (default 30), weighted by recent sustained work
+    (hashrate_history — raw shares prune within ~a day, so they can't back a 30-day
+    window; hashrate_history is kept 100d and is the same source the lottery uses).
+  · Disposition is FINAL. The owner reclaims any time BEFORE it (account-page
+    countdown + public masked list) by simply requesting a payout. NOT after.
+  · Funds go to ACTIVE MINERS, NEVER the operator. This is the ethical anchor and
+    the line the ToS/banner must state.
+  · Why final-and-redistribute (not reserve, not reclaim-forever): the "redistribute
+    + reclaim-forever" combo is exploitable — a whale can let one address go dormant,
+    farm most of the redistribution back to its active addresses, then reclaim the
+    original from pool funds. Making disposition FINAL kills the exploit (the faker
+    just loses money waiting) while still rewarding the miners who secure the pool.
+    OFF by default — enabling it is a deliberate, disclosed operator decision.
+
+GRANDFATHERING: the clock counts from max(last_activity, dormancy_policy_effective_at).
+The first enabled run stamps `dormancy_policy_effective_at = now` and disposes NOBODY,
+so every address gets a full window of runway after the policy goes live. Operators can
+only ever push the anchor later (more runway), never retroactively shorten it.
+
+LEDGER MODEL (why it's safe on the custodial books):
+  · Disposition is an INTERNAL transfer: Σ debited from sources == Σ credited to
+    recipients (rounding remainder handed to the top-weight recipient), so the
+    reconciliation integrity invariant nets to exactly zero and the coins never leave
+    the wallet. Fresh reference_types keep it OUT of the external IN/OUT flow:
+      - debit  source     → reference_type='dormant_sweep'
+      - credit recipient  → reference_type='dormant_payout'  (reference_id = batch id)
+    reconciliation.js INV_CASES sums by event_type (credit +, debit −), so no change
+    to reconciliation.js is needed; ledger-rollup keeps (addr,event_type,ref_type) as
+    dimensions so the new types roll up automatically.
+  · Guards: excludes reserved pseudo-addresses (pool_fee/prize_pool) and banned
+    addresses; freeze-aware (skips while payouts frozen); DEFERS if there are no active
+    recipients (never sweeps into the void — balances stay put, reclaimable).
+
+SUB-THRESHOLD PAYOUT (below-min "email support to withdraw" flow):
+  A below-min miner who wants to stop and withdraw emails support. Admin first verifies
+  ownership — types the CLAIMED mining IP or rig password into
+  /api/admin/dormancy/verify-owner → verifyOwnerProof() returns match/no-match ONLY
+  (proofs are salted-scrypt hashes; nothing is revealed). Then TWO paths (the
+  "Tor + hardened recorder" scope chosen 2026-07-22):
+
+  PRIMARY — backend-initiated Tor send (/api/admin/dormancy/send-payout, freshAdmin):
+    the pool sends it itself, through the SAME locked withdrawal flow a miner uses, via
+    withdrawalScheduler.createWithdrawal(addr, amt, 'tor', {adminOverride:true}). The new
+    `adminOverride` opt bypasses ONLY the min-withdrawal floor + the post-failure reversal
+    cooldown; the freeze, the CAS balance lock, and the one-pending-per-address cap (the
+    double-pay guard — a second send while one is pending is rejected 429) ALL still apply.
+    Real network fee + kernel are captured by the scheduler and recorded automatically —
+    no out-of-band step, no send-then-record window. Requires the miner's wallet listener
+    reachable over Tor (scheduler declines + reverses the lock if not).
+    withdrawal_events.triggered_by = 'admin_override'.
+
+  FALLBACK — recorder (/api/admin/dormancy/manual-payout, freshAdmin): for a send the
+    admin already made out-of-band (slatepack / wallet CLI). manualPayout() writes a
+    CONFIRMED withdrawals row (method='manual') + a 'withdrawal' debit — SAME taxonomy as
+    an automated payout, which keeps coverage correct AND makes
+    reconciliation.auditWalletSends() MATCH the send instead of flagging false theft.
+    Never raw-subtract a balance (breaks the integrity invariant). HARDENED against
+    double-submit (review finding #1): dedup rejects a duplicate kernel_excess/slate_id
+    (a unique on-chain id) or an identical (address, amount, method='manual') within 60s
+    → {ok:false, duplicate_*}; the frontend also disables the button in-flight. Without
+    this a resubmit would write a 2nd debit for one real send → over-debit + audit drift.
+
+  SLATEPACK from the admin panel is deliberately NOT built as a broker UI — an interactive
+  Mimblewimble tx is an unavoidable 2-message round-trip (there is no non-interactive
+  slatepack send in Grin), so slatepack cases route through the recorder rather than
+  pretending the panel makes them convenient.
+
+CODE MAP:
+  · lib/dormancy.js — DormancyManager: _candidates/_activeRecipients, listDormant
+    (masked/unmasked), statusFor (account countdown), history, preview (dry-run),
+    runOnce (the atomic sweep, 6h scheduler + first pass 60s after boot), manualPayout.
+    maskAddress = grin1qxy…mn4p.
+  · db.js — dormancy_dispositions (one row/batch) + dormancy_disposed_sources (one
+    row/swept address); never pruned → historical detail behind the public page after
+    raw balance_log prunes at 60d.
+  · pool-settings.js — payout.{dormancy_enabled(false), dormancy_months(24),
+    dormancy_active_window_days(30), dormancy_policy_effective_at(0=auto)} + validators;
+    ToS `terms` default gained "4. Abandoned and unclaimed balances" (existing pools
+    must add the clause manually — pages are seeded once into the CMS `pages` table).
+  · lib/withdrawal-scheduler.js — createWithdrawal() gained a 4th arg `opts`; opts.adminOverride
+    bypasses only the min floor + reversal cooldown (all other guards intact) and stamps
+    withdrawal_events.triggered_by='admin_override'.
+  · index.js — GET /api/pool/unclaimed (public, masked: dormant list + disposition
+    ledger); account `/api/account/:addr` gains a `dormancy` field; admin GET
+    /api/admin/dormancy (status+preview+unmasked list+history, secureAdmin), POST
+    /run + /manual-payout + /send-payout (freshAdmin) + /verify-owner (secureAdmin).
+    /send-payout honours the freeze and maps createWithdrawal's numeric .code to HTTP status.
+  · Frontend — payment-history.html: page-scoped notice banner (payout part only, NOT
+    site-wide) + U-01 tiles / U-02 masked dormant list (+ "check your own account page"
+    disambiguation) / U-03 redistribution ledger. account-settings.html: per-address
+    dormancy notice (counting/eligible/disposed) + a sub-threshold "email support" note
+    (#acct-subthreshold, shown only when 0<balance<min; reuses branding.js contact-link).
+    admin payments.html: dormancy KPIs + "run now" + "Pay a below-minimum miner" (ownership
+    verify → ⚡Send Tor payout now [primary] OR Record out-of-band send [fallback, button
+    disabled in-flight]) + dormant list + history. settings-payout.html: config controls.
+
+STATUS: BUILT on `add-ons` 2026-07-22, node --check + integration smoke tests (temp DB:
+disposition weights/remainder, reserved+banned exclusion, grandfather, over-balance reject;
+below-min adminOverride locks funds + one-pending cap blocks a 2nd send; recorder dedup
+rejects duplicate kernel/slate/recent, no double-debit — all verified). NOT YET VPS-tested.

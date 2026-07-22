@@ -427,6 +427,42 @@ function createSchema() {
 
     `CREATE INDEX IF NOT EXISTS idx_withdrawal_events ON withdrawal_events(withdrawal_id, created_at)`,
 
+    // ── Abandoned-balance disposition (lib/dormancy.js) ──────────────────────────
+    // When a miner's address has had NO activity (no share, no successful payout) for
+    // dormancy_months AND still holds a balance, the pool sweeps that balance and
+    // redistributes it to CURRENTLY-active miners (PPLNS-weighted by recent hashrate).
+    // Disposition is FINAL (disclosed in the ToS + the payout-page banner): the swept
+    // balance is an INTERNAL transfer (debit source → credit recipients), never operator
+    // revenue. These two tables are the never-pruned audit trail behind the public
+    // "unclaimed balances" transparency section and the admin dormancy panel — raw
+    // balance_log rows prune at 60d, so historical disposition detail lives HERE.
+    //
+    // One batch row per run; one source row per swept address. Recipients are reconstructable
+    // from balance_log (reference_type='dormant_payout', reference_id=disposition batch id).
+    `CREATE TABLE IF NOT EXISTS dormancy_dispositions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      total_swept REAL NOT NULL,
+      remainder REAL NOT NULL DEFAULT 0,
+      source_count INTEGER NOT NULL DEFAULT 0,
+      recipient_count INTEGER NOT NULL DEFAULT 0,
+      dormancy_months INTEGER NOT NULL,
+      active_window_days INTEGER NOT NULL,
+      triggered_by INTEGER DEFAULT NULL,
+      created_at INTEGER NOT NULL DEFAULT (unixepoch())
+    )`,
+
+    `CREATE TABLE IF NOT EXISTS dormancy_disposed_sources (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      disposition_id INTEGER NOT NULL REFERENCES dormancy_dispositions(id),
+      grin_address TEXT NOT NULL,
+      amount REAL NOT NULL,
+      last_activity_at INTEGER DEFAULT NULL,
+      created_at INTEGER NOT NULL DEFAULT (unixepoch())
+    )`,
+
+    `CREATE INDEX IF NOT EXISTS idx_dormancy_src_addr ON dormancy_disposed_sources(grin_address, created_at DESC)`,
+    `CREATE INDEX IF NOT EXISTS idx_dormancy_src_batch ON dormancy_disposed_sources(disposition_id)`,
+
     `CREATE TABLE IF NOT EXISTS users (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       username TEXT NOT NULL UNIQUE,

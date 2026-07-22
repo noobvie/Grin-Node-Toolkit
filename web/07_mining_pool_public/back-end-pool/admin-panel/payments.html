@@ -190,6 +190,120 @@
         <p id="sw-msg" style="margin:.6rem 0 0;font-size:.85rem;"></p>
       </div>
     </section>
+
+    <!-- ── Abandoned-balance disposition + manual payout ─────────────────────── -->
+    <section>
+      <h2>
+        Abandoned balances
+        <span id="dorm-summary" style="font-size:.82rem;color:var(--text-dim);font-weight:400;margin-left:.8rem;"></span>
+      </h2>
+      <p style="font-size:.82rem;color:var(--text-dim);margin:-.4rem 0 .8rem;">
+        Balances of addresses idle past the dormancy window are swept and <strong>redistributed to
+        active miners</strong> (never operator revenue). Configure the window in
+        <a href="/admin/settings-payout.html">Settings → Payout</a>. Disposition is FINAL and honours
+        the payout freeze. All amounts GRIN (ツ), times UTC.
+      </p>
+
+      <div class="kpi-grid" id="dorm-kpis">
+        <div class="kpi-card"><div class="kpi-label">Policy</div><div class="kpi-value" id="dk-state">—</div></div>
+        <div class="kpi-card"><div class="kpi-label">Dormant balance</div><div class="kpi-value" id="dk-dormant">—</div></div>
+        <div class="kpi-card"><div class="kpi-label">Would sweep now</div><div class="kpi-value" id="dk-sweep">—</div></div>
+        <div class="kpi-card"><div class="kpi-label">Active recipients</div><div class="kpi-value" id="dk-recip">—</div></div>
+        <div class="kpi-card"><div class="kpi-label">Redistributed all-time</div><div class="kpi-value" id="dk-disposed">—</div></div>
+      </div>
+
+      <div style="display:flex;gap:.5rem;align-items:center;margin:.6rem 0 1rem;flex-wrap:wrap;">
+        <button class="btn btn-sm" id="dorm-run-btn" onclick="runDisposition()">♻ Run disposition now</button>
+        <span id="dorm-run-note" style="font-size:.8rem;color:var(--text-dim);"></span>
+      </div>
+      <p class="error-msg" id="dorm-msg" style="display:none;margin:.2rem 0 .8rem;"></p>
+
+      <!-- Sub-threshold ("email support to withdraw") payout for a below-minimum miner -->
+      <h3 style="margin:1rem 0 .5rem;font-size:1rem;">Pay a below-minimum miner</h3>
+      <p style="font-size:.82rem;color:var(--text-dim);margin:-.2rem 0 .7rem;">
+        For a miner below the minimum who emails to withdraw. First <strong>verify they own the address</strong>
+        (type the mining IP or rig password they gave you → match/no-match, nothing is revealed). Then either:
+        <br>• <strong>Send Tor payout now</strong> — the pool sends it over Tor through the normal locked flow
+        and records it automatically (they need their wallet listener online for a moment); or
+        <br>• <strong>Record an out-of-band send</strong> — if you already sent the coins yourself (slatepack /
+        wallet CLI), log it here so coverage stays correct and the wallet-send audit matches your send.
+      </p>
+      <div class="card" style="padding:1rem;">
+        <div style="display:grid;grid-template-columns:1fr;gap:.6rem;max-width:640px;">
+          <label>Grin address
+            <input type="text" id="mp-addr" class="input" placeholder="grin1…" autocomplete="off"
+                   oninput="document.getElementById('mp-verify-result').textContent='';">
+          </label>
+          <div style="display:flex;gap:.5rem;align-items:flex-end;flex-wrap:wrap;">
+            <label style="flex:1 1 240px;">Claimed proof (mining IP or rig password)
+              <input type="text" id="mp-proof" class="input" placeholder="e.g. 203.0.113.7 or their rig password" autocomplete="off">
+            </label>
+            <button class="btn btn-sm btn-outline" onclick="verifyOwner()">Verify ownership</button>
+            <span id="mp-verify-result" style="font-size:.85rem;font-weight:600;"></span>
+          </div>
+          <div style="display:flex;gap:.5rem;flex-wrap:wrap;">
+            <label style="flex:1 1 120px;">Amount ツ
+              <input type="number" id="mp-amount" class="input" step="0.000000001" min="0" placeholder="0.0">
+            </label>
+          </div>
+
+          <!-- Primary: backend sends over Tor + records automatically -->
+          <div style="display:flex;gap:.6rem;align-items:center;flex-wrap:wrap;">
+            <button class="btn btn-sm" id="mp-tor-btn" onclick="sendTorPayout()">⚡ Send Tor payout now</button>
+            <span id="mp-tor-result" style="font-size:.85rem;"></span>
+          </div>
+
+          <!-- Fallback: record a send you already made out-of-band -->
+          <div style="border-top:1px solid var(--border);margin:.4rem 0 .1rem;padding-top:.7rem;">
+            <div style="font-size:.8rem;color:var(--text-dim);margin-bottom:.5rem;">Already sent it yourself? Record the out-of-band send instead:</div>
+            <div style="display:flex;gap:.5rem;flex-wrap:wrap;">
+              <label style="flex:1 1 120px;">Network fee ツ (optional)
+                <input type="number" id="mp-fee" class="input" step="0.000000001" min="0" placeholder="0.0">
+              </label>
+              <label style="flex:1 1 200px;">Kernel excess (optional, for the payout proof)
+                <input type="text" id="mp-kernel" class="input" placeholder="09…" autocomplete="off">
+              </label>
+              <label style="flex:1 1 200px;">Slate ID (optional)
+                <input type="text" id="mp-slate" class="input" placeholder="uuid" autocomplete="off">
+              </label>
+            </div>
+            <label>Note (audit)
+              <input type="text" id="mp-note" class="input" placeholder="e.g. below-min withdrawal, verified via rig password, support ticket #…" autocomplete="off">
+            </label>
+            <div style="margin-top:.5rem;">
+              <button class="btn btn-sm btn-outline" id="mp-record-btn" onclick="recordManualPayout()">Record out-of-band send</button>
+              <span id="mp-result" style="font-size:.85rem;margin-left:.6rem;"></span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Dormant list (unmasked, operator) -->
+      <h3 style="margin:1.2rem 0 .5rem;font-size:1rem;">Dormant addresses <span id="dorm-list-note" style="font-size:.78rem;color:var(--text-dim);font-weight:400;"></span></h3>
+      <div class="card" style="padding:0;">
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Address</th><th style="text-align:right;">Balance ツ</th><th style="text-align:right;">Idle (days)</th><th>Disposal</th></tr>
+            </thead>
+            <tbody id="dorm-list-tbody"><tr class="loading-row"><td colspan="4"><span class="spinner"></span>Loading…</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Disposition history -->
+      <h3 style="margin:1.2rem 0 .5rem;font-size:1rem;">Redistribution history</h3>
+      <div class="card" style="padding:0;">
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Date (UTC)</th><th style="text-align:right;">Swept ツ</th><th style="text-align:right;">Sources</th><th style="text-align:right;">Recipients</th><th>Trigger</th></tr>
+            </thead>
+            <tbody id="dorm-hist-tbody"><tr class="loading-row"><td colspan="5"><span class="spinner"></span>Loading…</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
   </div>
 </main>
 
@@ -637,13 +751,168 @@ async function wizResume() {
   } catch (err) { swMsg(err.message, true); }
 }
 
-document.addEventListener('DOMContentLoaded', () => { refresh(); loadReconciliation(); loadWalletAudit(); loadWalletIdentity(); });
+// ── Abandoned-balance disposition + manual payout ──────────────────────────────
+const BLOCK_LABEL = {
+  disabled: 'policy disabled', payouts_frozen: 'payouts frozen',
+  awaiting_effective_anchor: 'window starts on first run', no_eligible_sources: 'nothing eligible',
+  no_active_recipients: 'no active miners to receive',
+};
+async function loadDormancy() {
+  try {
+    const d = await API.get('/api/admin/dormancy');
+    const st = d.status || {}, pv = d.preview || {}, dorm = d.dormant || { totals: {}, list: [] }, hist = d.history || { totals: {}, batches: [] };
+    const totals = dorm.totals || {}, htotals = hist.totals || {};
+
+    document.getElementById('dorm-summary').textContent = st.enabled
+      ? (st.dormancy_months + '-month window · ' + st.active_window_days + '-day active set')
+      : 'policy OFF (enable in Settings → Payout)';
+    document.getElementById('dk-state').textContent = st.enabled ? (pv.frozen ? 'FROZEN' : 'ON') : 'OFF';
+    document.getElementById('dk-dormant').textContent = fmtGrin(totals.amount || 0) + ' ツ';
+    document.getElementById('dk-sweep').textContent = (pv.would_sweep ? pv.would_sweep.count : 0) + ' addr · ' + fmtGrin(pv.would_sweep ? pv.would_sweep.amount : 0) + ' ツ';
+    document.getElementById('dk-recip').textContent = pv.would_credit ? pv.would_credit.recipients : 0;
+    document.getElementById('dk-disposed').textContent = fmtGrin(htotals.total_disposed || 0) + ' ツ';
+
+    const runBtn = document.getElementById('dorm-run-btn');
+    const runNote = document.getElementById('dorm-run-note');
+    runBtn.disabled = !!pv.blocked;
+    runNote.textContent = pv.blocked ? ('blocked: ' + (BLOCK_LABEL[pv.blocked] || pv.blocked)) : 'ready';
+
+    const list = Array.isArray(dorm.list) ? dorm.list : [];
+    document.getElementById('dorm-list-note').textContent = list.length ? ('(' + totals.count + ' total)') : '';
+    const lt = document.getElementById('dorm-list-tbody');
+    lt.innerHTML = list.length ? list.map(r => {
+      let disposal = '—';
+      if (r.dispose_at) disposal = r.eligible ? '<span style="color:var(--danger);font-weight:600;">due</span>' : ('in ' + (r.days_until_disposal || 0) + ' d');
+      return `<tr><td class="mono" style="word-break:break-all;">${escHtml(r.address)}</td>`
+        + `<td class="mono" style="text-align:right;">${(r.balance || 0).toFixed(4)}</td>`
+        + `<td style="text-align:right;">${r.idle_days || 0}</td><td>${disposal}</td></tr>`;
+    }).join('') : '<tr><td colspan="4" style="color:var(--text-dim);">No dormant balances.</td></tr>';
+
+    const batches = Array.isArray(hist.batches) ? hist.batches : [];
+    const ht = document.getElementById('dorm-hist-tbody');
+    ht.innerHTML = batches.length ? batches.map(b =>
+      `<tr><td>${escHtml(new Date((b.created_at || 0) * 1000).toLocaleString('en-US', { timeZone: 'UTC' }))}</td>`
+      + `<td class="mono" style="text-align:right;">${(b.total_swept || 0).toFixed(4)}</td>`
+      + `<td style="text-align:right;">${b.source_count || 0}</td><td style="text-align:right;">${b.recipient_count || 0}</td>`
+      + `<td>${b.automatic ? 'auto' : 'admin'}</td></tr>`
+    ).join('') : '<tr><td colspan="5" style="color:var(--text-dim);">No redistributions yet.</td></tr>';
+  } catch (err) {
+    document.getElementById('dorm-summary').textContent = 'unavailable';
+  }
+}
+
+async function runDisposition() {
+  if (!confirm('Run an abandoned-balance disposition NOW?\n\nThis permanently sweeps eligible dormant balances and redistributes them to active miners. It is FINAL.')) return;
+  try {
+    const res = await adminFetch('/api/admin/dormancy/run', { method: 'POST' });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.error || ('HTTP ' + res.status));
+    const r = body.result || {};
+    flash(r.disposed ? `Disposed ${(r.swept || 0).toFixed(4)} ツ from ${r.sources} address(es) → ${r.recipients} miner(s).` : `No disposition: ${r.skipped || 'nothing eligible'}.`, false);
+    loadDormancy(); refresh();
+  } catch (err) { flash(err.message, true); }
+}
+
+async function verifyOwner() {
+  const address = document.getElementById('mp-addr').value.trim();
+  const proof = document.getElementById('mp-proof').value.trim();
+  const out = document.getElementById('mp-verify-result');
+  if (!address || !proof) { out.textContent = 'enter address + proof'; out.style.color = 'var(--warn)'; return; }
+  out.textContent = 'checking…'; out.style.color = 'var(--text-dim)';
+  try {
+    const res = await adminFetch('/api/admin/dormancy/verify-owner', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ address, proof })
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.error || ('HTTP ' + res.status));
+    if (body.match) { out.textContent = '✓ MATCH (' + (body.method || 'ok') + ')'; out.style.color = 'var(--ok)'; }
+    else { out.textContent = '✗ no match (' + (body.reason || '') + ')'; out.style.color = 'var(--danger)'; }
+  } catch (err) { out.textContent = err.message; out.style.color = 'var(--danger)'; }
+}
+
+// A payout POST that transparently handles the backend's "needs acknowledgment" gates: a 428
+// verify_required (finding #4 — no ownership verification in the last 15 min) and a 400
+// above_min_needs_ack (finding #2 — at/above the pool minimum, auto-payout could double-pay). Each
+// prompts once and retries with the matching flag set. Returns the parsed body on success; throws
+// otherwise. `extra` carries the acks across retries so each is asked at most once.
+async function postPayoutWithAcks(url, base, extra) {
+  extra = extra || {};
+  const res = await adminFetch(url, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...base, ...extra })
+  });
+  const body = await res.json().catch(() => ({}));
+  if (res.ok) return body;
+  if (body.reason === 'verify_required' && !extra.verified_ack) {
+    if (!confirm('No successful ownership verification for this address in the last 15 minutes.\n\nVerify ownership first (recommended). Proceed only if you have confirmed the owner by other means?')) {
+      throw new Error('ownership not verified');
+    }
+    return postPayoutWithAcks(url, base, { ...extra, verified_ack: true });
+  }
+  if (body.reason === 'above_min_needs_ack' && !extra.allow_above_min) {
+    if (!confirm(`This amount is at or above the ${body.min} ツ minimum.\n\nThe auto-payout scheduler could also pay this balance — consider freezing payouts, or use "Send Tor payout" instead. Record it anyway?`)) {
+      throw new Error('at/above minimum — not acknowledged');
+    }
+    return postPayoutWithAcks(url, base, { ...extra, allow_above_min: true });
+  }
+  throw new Error(body.error || ('HTTP ' + res.status));
+}
+
+// Primary path: the backend sends over Tor through the normal locked withdrawal flow and records it
+// automatically. Convenient (no out-of-band send, real fee/kernel captured), but needs the miner's
+// wallet listener reachable — the scheduler declines and reverses the lock if it isn't.
+async function sendTorPayout() {
+  const address = document.getElementById('mp-addr').value.trim();
+  const amount = parseFloat(document.getElementById('mp-amount').value);
+  const out = document.getElementById('mp-tor-result');
+  const btn = document.getElementById('mp-tor-btn');
+  if (!address || !(amount > 0)) { out.textContent = 'address + positive amount required'; out.style.color = 'var(--warn)'; return; }
+  if (!confirm(`Send a Tor payout of ${amount} ツ to\n${address}?\n\nThe pool will send it over Tor and record it. The miner's wallet listener must be online.`)) return;
+  btn.disabled = true;
+  out.textContent = 'sending…'; out.style.color = 'var(--text-dim)';
+  try {
+    const body = await postPayoutWithAcks('/api/admin/dormancy/send-payout', { address, amount });
+    out.textContent = `✓ queued (#${body.withdrawal_id}, ${(body.amount || amount).toFixed(4)} ツ) — sending over Tor`;
+    out.style.color = 'var(--ok)';
+    document.getElementById('mp-amount').value = '';
+    loadDormancy(); refresh();
+  } catch (err) { out.textContent = err.message; out.style.color = 'var(--danger)'; }
+  finally { btn.disabled = false; }
+}
+
+async function recordManualPayout() {
+  const address = document.getElementById('mp-addr').value.trim();
+  const amount = parseFloat(document.getElementById('mp-amount').value);
+  const fee = parseFloat(document.getElementById('mp-fee').value) || 0;
+  const out = document.getElementById('mp-result');
+  const btn = document.getElementById('mp-record-btn');
+  if (!address || !(amount > 0)) { out.textContent = 'address + positive amount required'; out.style.color = 'var(--warn)'; return; }
+  if (!confirm(`Record a MANUAL payout of ${amount} ツ to\n${address}?\n\nOnly do this AFTER you have actually sent the coins on the server. This debits the miner's balance.`)) return;
+  btn.disabled = true;   // in-flight guard: a resubmit would double-debit the miner (finding #1)
+  try {
+    const body = await postPayoutWithAcks('/api/admin/dormancy/manual-payout', {
+      address, amount, fee,
+      kernel_excess: document.getElementById('mp-kernel').value.trim() || null,
+      slate_id: document.getElementById('mp-slate').value.trim() || null,
+      note: document.getElementById('mp-note').value.trim() || null,
+    });
+    out.textContent = `✓ recorded (#${body.withdrawal_id}, balance now ${(body.balance_after || 0).toFixed(4)} ツ)`;
+    out.style.color = 'var(--ok)';
+    ['mp-amount', 'mp-fee', 'mp-kernel', 'mp-slate', 'mp-note'].forEach(id => { document.getElementById(id).value = ''; });
+    loadDormancy(); refresh();
+  } catch (err) { out.textContent = err.message; out.style.color = 'var(--danger)'; }
+  finally { btn.disabled = false; }
+}
+
+document.addEventListener('DOMContentLoaded', () => { refresh(); loadReconciliation(); loadWalletAudit(); loadWalletIdentity(); loadDormancy(); });
 // Withdrawal queue + freeze state are cheap — 30s. Reconciliation, the wallet-send audit, and the
 // wallet-identity probe each force a wallet call (slow) — keep them on the relaxed 3-min cadence.
 setInterval(refresh, 30000);
 setInterval(loadReconciliation, 180000);
 setInterval(loadWalletAudit, 180000);
 setInterval(loadWalletIdentity, 180000);
+setInterval(loadDormancy, 120000);
 </script>
 </body>
 </html>

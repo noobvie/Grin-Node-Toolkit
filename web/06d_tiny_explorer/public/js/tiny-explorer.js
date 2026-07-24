@@ -277,10 +277,11 @@ async function pollStats() {
 
     setText('stat-g1', s.g1_per_day != null ? s.g1_per_day.toFixed(2) + ' ツ' : '—');
 
-    // Mempool — unconfirmed tx pool size; hide the card if the node didn't answer.
-    const mpCard = document.getElementById('card-mempool');
-    setText('stat-mempool', s.mempool != null ? fmtNum(s.mempool) + (s.mempool === 1 ? ' tx' : ' txs') : '—');
-    if (mpCard) mpCard.style.display = (s.mempool == null) ? 'none' : '';
+    // Mempool — shown as a sub-line under Tip Height (pending vs settled); blank
+    // if the node didn't answer get_pool_size.
+    setText('stat-mempool', s.mempool != null
+      ? fmtNum(s.mempool) + (s.mempool === 1 ? ' tx' : ' txs') + ' pending'
+      : '');
   } catch {}
 }
 

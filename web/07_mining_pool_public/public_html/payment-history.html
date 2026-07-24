@@ -216,11 +216,12 @@
                     <div>
                         <strong>Abandoned balances.</strong>
                         <span id="unclaimed-notice-text">If an address stops mining and never withdraws for a long period, its
-                        unclaimed balance is eventually redistributed to <em>active</em> miners — <strong>never taken by the
+                        unclaimed balance is eventually swept into the <em>community prize pool</em> — <strong>never taken by the
                         pool operator</strong>.</span>
                         You can reclaim yours any time <strong>before</strong> disposition from your
                         <a href="/account-settings.html">Account</a> page. After disposition it is final.
-                        See the <a href="/page.html?p=terms">Terms of Service</a> for the full policy.
+                        See the <a href="/donate.html">Prize Pool</a> page for where it goes, and the
+                        <a href="/page.html?p=terms">Terms of Service</a> for the full policy.
                     </div>
                 </div>
 
@@ -229,7 +230,7 @@
                     <span><i>Unclaimed balance</i><b id="uc-total">—</b></span>
                     <span><i>Dormant addresses</i><b id="uc-count">—</b></span>
                     <span><i>Oldest idle</i><b id="uc-oldest">—</b></span>
-                    <span><i>Redistributed all-time</i><b id="uc-disposed">—</b></span>
+                    <span><i>Swept to prizes all-time</i><b id="uc-disposed">—</b></span>
                 </div>
 
                 <div class="deck-row half">
@@ -238,7 +239,7 @@
                         <h2 class="panel-title"><span class="tag">U-02</span> Dormant balances
                             <span class="right">masked &middot; longest idle first</span></h2>
                         <div class="panel-body">
-                            <p class="note" style="margin:0 0 12px;">Addresses are masked for privacy — this list is a transparency count, not a lookup. To see whether <b>your</b> balance is idle and when it would be redistributed, open your own <a href="/account-settings.html">account page</a>; the status shows there in full.</p>
+                            <p class="note" style="margin:0 0 12px;">Addresses are masked for privacy — this list is a transparency count, not a lookup. To see whether <b>your</b> balance is idle and when it would be swept, open your own <a href="/account-settings.html">account page</a>; the status shows there in full.</p>
                             <table class="data-table">
                                 <thead>
                                     <tr>
@@ -257,16 +258,16 @@
 
                     <!-- U-03 · disposition ledger -->
                     <div class="panel"><span class="screws"></span>
-                        <h2 class="panel-title"><span class="tag">U-03</span> Redistribution ledger
-                            <span class="right">final dispositions to active miners</span></h2>
+                        <h2 class="panel-title"><span class="tag">U-03</span> Prize-pool sweep ledger
+                            <span class="right">final sweeps into the prize pool</span></h2>
                         <div class="panel-body">
                             <table class="data-table">
                                 <thead>
                                     <tr>
                                         <th>Date (UTC)</th>
-                                        <th class="num">Redistributed (ツ)</th>
+                                        <th class="num">Swept (ツ)</th>
                                         <th class="num">From</th>
-                                        <th class="num">To miners</th>
+                                        <th>To</th>
                                     </tr>
                                 </thead>
                                 <tbody id="uc-history">
@@ -471,9 +472,9 @@
                 if (noteEl) {
                     noteEl.textContent = dormant.enabled
                         ? ('If an address stops mining and never withdraws for ' + months + ' months, its unclaimed balance is '
-                            + 'redistributed to active miners — never taken by the pool operator.')
+                            + 'swept into the community prize pool — never taken by the pool operator.')
                         : ('Balances from addresses that have stopped mining are shown here for transparency. '
-                            + 'Automatic redistribution is not currently active.');
+                            + 'Automatic sweeping is not currently active.');
                 }
 
                 setStat('uc-total',    fmtGrin(totals.amount || 0));
@@ -507,18 +508,18 @@
                     }
                 }
 
-                // U-03 · redistribution ledger
+                // U-03 · prize-pool sweep ledger
                 const ht = document.getElementById('uc-history');
                 if (ht) {
                     if (!batches.length) {
-                        ht.innerHTML = '<tr><td colspan="4">No redistributions yet</td></tr>';
+                        ht.innerHTML = '<tr><td colspan="4">No sweeps yet</td></tr>';
                     } else {
                         ht.innerHTML = batches.map(function (b) {
                             return '<tr>'
                                 + '<td>' + escHtml(new Date((b.created_at || 0) * 1000).toLocaleString('en-US', { timeZone: 'UTC' })) + '</td>'
                                 + '<td class="num">' + Number(b.total_swept || 0).toFixed(3) + '</td>'
                                 + '<td class="num">' + fmtInt(b.source_count || 0) + '</td>'
-                                + '<td class="num">' + fmtInt(b.recipient_count || 0) + '</td>'
+                                + '<td>prize pool</td>'
                                 + '</tr>';
                         }).join('');
                     }

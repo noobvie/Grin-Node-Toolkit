@@ -198,8 +198,9 @@
         <span id="dorm-summary" style="font-size:.82rem;color:var(--text-dim);font-weight:400;margin-left:.8rem;"></span>
       </h2>
       <p style="font-size:.82rem;color:var(--text-dim);margin:-.4rem 0 .8rem;">
-        Balances of addresses idle past the dormancy window are swept and <strong>redistributed to
-        active miners</strong> (never operator revenue). Configure the window in
+        Balances of addresses idle past the dormancy window are swept into the <strong>community
+        prize pool</strong> (never operator revenue), where they are given away through the pool's
+        published draws. Configure the window in
         <a href="/admin/settings-payout.html">Settings → Payout</a>. Disposition is FINAL and honours
         the payout freeze. All amounts GRIN (ツ), times UTC.
       </p>
@@ -208,8 +209,8 @@
         <div class="kpi-card"><div class="kpi-label">Policy</div><div class="kpi-value" id="dk-state">—</div></div>
         <div class="kpi-card"><div class="kpi-label">Dormant balance</div><div class="kpi-value" id="dk-dormant">—</div></div>
         <div class="kpi-card"><div class="kpi-label">Would sweep now</div><div class="kpi-value" id="dk-sweep">—</div></div>
-        <div class="kpi-card"><div class="kpi-label">Active recipients</div><div class="kpi-value" id="dk-recip">—</div></div>
-        <div class="kpi-card"><div class="kpi-label">Redistributed all-time</div><div class="kpi-value" id="dk-disposed">—</div></div>
+        <div class="kpi-card"><div class="kpi-label">Destination</div><div class="kpi-value" id="dk-recip">—</div></div>
+        <div class="kpi-card"><div class="kpi-label">Swept to prizes all-time</div><div class="kpi-value" id="dk-disposed">—</div></div>
       </div>
 
       <div style="display:flex;gap:.5rem;align-items:center;margin:.6rem 0 1rem;flex-wrap:wrap;">
@@ -292,12 +293,12 @@
       </div>
 
       <!-- Disposition history -->
-      <h3 style="margin:1.2rem 0 .5rem;font-size:1rem;">Redistribution history</h3>
+      <h3 style="margin:1.2rem 0 .5rem;font-size:1rem;">Prize-pool sweep history</h3>
       <div class="card" style="padding:0;">
         <div class="table-wrap">
           <table>
             <thead>
-              <tr><th>Date (UTC)</th><th style="text-align:right;">Swept ツ</th><th style="text-align:right;">Sources</th><th style="text-align:right;">Recipients</th><th>Trigger</th></tr>
+              <tr><th>Date (UTC)</th><th style="text-align:right;">Swept ツ</th><th style="text-align:right;">Sources</th><th>Destination</th><th>Trigger</th></tr>
             </thead>
             <tbody id="dorm-hist-tbody"><tr class="loading-row"><td colspan="5"><span class="spinner"></span>Loading…</td></tr></tbody>
           </table>
@@ -754,8 +755,8 @@ async function wizResume() {
 // ── Abandoned-balance disposition + manual payout ──────────────────────────────
 const BLOCK_LABEL = {
   disabled: 'policy disabled', payouts_frozen: 'payouts frozen',
+  incentives_disabled: 'enable prize draws first (Incentives tab)',
   awaiting_effective_anchor: 'window starts on first run', no_eligible_sources: 'nothing eligible',
-  no_active_recipients: 'no active miners to receive',
 };
 async function loadDormancy() {
   try {
@@ -769,7 +770,7 @@ async function loadDormancy() {
     document.getElementById('dk-state').textContent = st.enabled ? (pv.frozen ? 'FROZEN' : 'ON') : 'OFF';
     document.getElementById('dk-dormant').textContent = fmtGrin(totals.amount || 0) + ' ツ';
     document.getElementById('dk-sweep').textContent = (pv.would_sweep ? pv.would_sweep.count : 0) + ' addr · ' + fmtGrin(pv.would_sweep ? pv.would_sweep.amount : 0) + ' ツ';
-    document.getElementById('dk-recip').textContent = pv.would_credit ? pv.would_credit.recipients : 0;
+    document.getElementById('dk-recip').textContent = 'Prize pool';
     document.getElementById('dk-disposed').textContent = fmtGrin(htotals.total_disposed || 0) + ' ツ';
 
     const runBtn = document.getElementById('dorm-run-btn');
@@ -793,22 +794,22 @@ async function loadDormancy() {
     ht.innerHTML = batches.length ? batches.map(b =>
       `<tr><td>${escHtml(new Date((b.created_at || 0) * 1000).toLocaleString('en-US', { timeZone: 'UTC' }))}</td>`
       + `<td class="mono" style="text-align:right;">${(b.total_swept || 0).toFixed(4)}</td>`
-      + `<td style="text-align:right;">${b.source_count || 0}</td><td style="text-align:right;">${b.recipient_count || 0}</td>`
+      + `<td style="text-align:right;">${b.source_count || 0}</td><td>prize pool</td>`
       + `<td>${b.automatic ? 'auto' : 'admin'}</td></tr>`
-    ).join('') : '<tr><td colspan="5" style="color:var(--text-dim);">No redistributions yet.</td></tr>';
+    ).join('') : '<tr><td colspan="5" style="color:var(--text-dim);">No sweeps yet.</td></tr>';
   } catch (err) {
     document.getElementById('dorm-summary').textContent = 'unavailable';
   }
 }
 
 async function runDisposition() {
-  if (!confirm('Run an abandoned-balance disposition NOW?\n\nThis permanently sweeps eligible dormant balances and redistributes them to active miners. It is FINAL.')) return;
+  if (!confirm('Run an abandoned-balance disposition NOW?\n\nThis permanently sweeps eligible dormant balances into the community prize pool. It is FINAL.')) return;
   try {
     const res = await adminFetch('/api/admin/dormancy/run', { method: 'POST' });
     const body = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(body.error || ('HTTP ' + res.status));
     const r = body.result || {};
-    flash(r.disposed ? `Disposed ${(r.swept || 0).toFixed(4)} ツ from ${r.sources} address(es) → ${r.recipients} miner(s).` : `No disposition: ${r.skipped || 'nothing eligible'}.`, false);
+    flash(r.disposed ? `Disposed ${(r.swept || 0).toFixed(4)} ツ from ${r.sources} address(es) → prize pool.` : `No disposition: ${r.skipped || 'nothing eligible'}.`, false);
     loadDormancy(); refresh();
   } catch (err) { flash(err.message, true); }
 }

@@ -931,6 +931,26 @@
           if (led) led.innerHTML = (d.ledger || []).slice(0, 8).map(e =>
             `${escapeHtmlSafe(new Date(e.created_at * 1000).toLocaleString())} — ${escapeHtmlSafe(e.event_type)} ${(e.amount).toFixed(4)} (${escapeHtmlSafe(e.reference_type)})`
           ).join('<br>');
+
+          // Lifetime in/out breakdown (transparency). Abandoned-balance sweeps land as the
+          // 'Abandoned balances' inflow line — never operator revenue.
+          const st = d.statement;
+          if (st) {
+            const fmtRows = (arr) => (arr || []).length
+              ? arr.map(x => `${escapeHtmlSafe(x.label)}: <strong>${(x.amount || 0).toFixed(4)}</strong>`).join('<br>')
+              : '<span style="opacity:.6;">none yet</span>';
+            const inTot = document.getElementById('pp-in-total');
+            const outTot = document.getElementById('pp-out-total');
+            const inList = document.getElementById('pp-in-list');
+            const outList = document.getElementById('pp-out-list');
+            if (inTot) inTot.textContent = (st.in && st.in.total || 0).toFixed(4);
+            if (outTot) outTot.textContent = (st.out && st.out.total || 0).toFixed(4);
+            if (inList) inList.innerHTML = fmtRows(st.in && st.in.by);
+            if (outList) outList.innerHTML = fmtRows(st.out && st.out.by);
+            const dorm = (st.in && st.in.by || []).find(x => x.key === 'dormant');
+            const dormEl = document.getElementById('pp-from-dormant');
+            if (dormEl) dormEl.textContent = ((dorm && dorm.amount) || 0).toFixed(4);
+          }
         }
       } catch (e) { /* non-fatal */ }
       try {

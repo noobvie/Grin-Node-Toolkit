@@ -1,0 +1,85 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="160" height="600" viewBox="0 0 160 600" role="img" aria-label="Why GRIN? Private by default, no addresses on chain, fair launch with no premine">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0a1014"/>
+      <stop offset=".55" stop-color="#07090c"/>
+      <stop offset="1" stop-color="#0a1215"/>
+    </linearGradient>
+    <radialGradient id="shieldGlow" cx=".5" cy=".5" r=".5">
+      <stop offset="0" stop-color="#4fd6ff" stop-opacity=".7"/>
+      <stop offset=".5" stop-color="#4fd6ff" stop-opacity=".18"/>
+      <stop offset="1" stop-color="#4fd6ff" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="cta" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#6ae0ff"/>
+      <stop offset="1" stop-color="#31b4d9"/>
+    </linearGradient>
+    <clipPath id="frame"><rect x="1" y="1" width="158" height="598" rx="9"/></clipPath>
+  </defs>
+
+  <rect x="1" y="1" width="158" height="598" rx="9" fill="url(#bg)" stroke="#1b3540" stroke-width="1.5"/>
+
+  <g clip-path="url(#frame)">
+    <!-- faint data grid -->
+    <g stroke="#4fd6ff" stroke-opacity=".055" stroke-width="1">
+      <path d="M0 120 H160 M0 240 H160 M0 360 H160 M0 480 H160"/>
+      <path d="M53 0 V600 M107 0 V600"/>
+    </g>
+
+    <!-- masked ledger rows: data that never lands on chain -->
+    <g transform="translate(24,44)">
+      <g font-family="ui-monospace,Menlo,Consolas,monospace" font-size="9" fill="#31576b">
+        <text x="0" y="0">tx ██████ ▸ ██</text>
+        <text x="0" y="15">tx ████ ▸ ██████</text>
+        <text x="0" y="30">tx ███████ ▸ █</text>
+        <animate attributeName="opacity" values=".45;.9;.45" dur="4s" repeatCount="indefinite"/>
+      </g>
+    </g>
+
+    <!-- shield -->
+    <g transform="translate(80,150)">
+      <circle r="52" fill="url(#shieldGlow)">
+        <animate attributeName="opacity" values=".65;1;.65" dur="3.4s" repeatCount="indefinite"/>
+      </circle>
+      <path d="M0 -34 L28 -22 V4 C28 22 15 32 0 38 C-15 32 -28 22 -28 4 V-22 Z"
+            fill="#08171d" stroke="#4fd6ff" stroke-opacity=".8" stroke-width="1.6"/>
+      <text x="0" y="12" text-anchor="middle" font-family="ui-monospace,Menlo,Consolas,monospace" font-size="24" fill="#4fd6ff">ツ</text>
+    </g>
+
+    <!-- headline -->
+    <g font-family="ui-monospace,Menlo,Consolas,monospace" text-anchor="middle">
+      <text x="80" y="240" font-size="24" font-weight="bold" fill="#e3eef2" letter-spacing="1.5">WHY</text>
+      <text x="80" y="270" font-size="26" font-weight="bold" fill="#4fd6ff" letter-spacing="1.5">GRIN?</text>
+    </g>
+
+    <line x1="34" y1="290" x2="126" y2="290" stroke="#4fd6ff" stroke-opacity=".28" stroke-width="1"/>
+
+    <!-- reasons -->
+    <g font-family="ui-monospace,Menlo,Consolas,monospace" fill="#93a6ad">
+      <text x="22" y="318" font-size="12.5" fill="#cfe6ee">Private</text>
+      <text x="22" y="334" font-size="10.5">by default, always</text>
+
+      <text x="22" y="364" font-size="12.5" fill="#cfe6ee">No addresses</text>
+      <text x="22" y="380" font-size="10.5">stored on the chain</text>
+
+      <text x="22" y="410" font-size="12.5" fill="#cfe6ee">Fair launch</text>
+      <text x="22" y="426" font-size="10.5">no premine, no ICO</text>
+
+      <text x="22" y="456" font-size="12.5" fill="#cfe6ee">Stays light</text>
+      <text x="22" y="472" font-size="10.5">cut-through prunes it</text>
+    </g>
+
+    <!-- emission note -->
+    <g transform="translate(20,492)">
+      <rect x="0" y="0" width="120" height="40" rx="7" fill="#08171d" stroke="#1b3540"/>
+      <text x="60" y="17" text-anchor="middle" font-family="ui-monospace,Menlo,Consolas,monospace" font-size="10" fill="#5b7883" letter-spacing=".6">1 GRIN / SECOND</text>
+      <text x="60" y="31" text-anchor="middle" font-family="ui-monospace,Menlo,Consolas,monospace" font-size="10" fill="#5b7883" letter-spacing=".6">FOREVER · NO CAP</text>
+    </g>
+
+    <!-- CTA -->
+    <g transform="translate(20,548)">
+      <rect x="0" y="0" width="120" height="32" rx="7" fill="url(#cta)"/>
+      <text x="60" y="21" text-anchor="middle" font-family="ui-monospace,Menlo,Consolas,monospace" font-size="12" font-weight="bold" fill="#06121a" letter-spacing=".8">LEARN MORE →</text>
+    </g>
+  </g>
+</svg>

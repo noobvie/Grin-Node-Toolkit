@@ -1373,6 +1373,34 @@ DECISION (locked with operator, 2026-07-22):
     just loses money waiting) while still rewarding the miners who secure the pool.
     OFF by default — enabling it is a deliberate, disclosed operator decision.
 
+┌── REVISION 2026-07-22b (operator): DESTINATION CHANGED → COMMUNITY PRIZE POOL ──────┐
+│ After discussion, the swept balance is NO LONGER split among active miners. It is    │
+│ swept into the single `prize_pool` bucket instead — where it is given away through   │
+│ the pool's existing, publicly-auditable draws (Pot A whale-cap + Pot B equal-chance).│
+│ WHY the change (simpler + more transparent + fairer):                                │
+│   · Deletes the entire recipient-selection engine — no equal-vs-weighted decision,   │
+│     no Sybil-per-address hole (equal split would be farmable), no dust-spraying a     │
+│     tiny balance across hundreds of miners (0.005 GRIN each = pointless + N log rows),│
+│     no "no active recipients → defer" edge case. Prize pool always exists.            │
+│   · Small dormant balances (the typical case — sub-threshold dust that could never    │
+│     auto-pay) accumulate and are handed out in meaningful chunks, not sprayed.        │
+│   · Small miners still get the "fair" outcome via Pot B equal-chance, but behind the  │
+│     lottery's anti-Sybil gates (min-active-days + min-work) — not a raw money split.  │
+│   · Still an INTERNAL transfer, still NEVER the operator. Because prize_pool is        │
+│     excluded from custodial liability, sweeping there correctly REDUCES miner-owed.   │
+│ LEDGER: per-source debit reference_type='dormant_sweep' UNCHANGED; the credit is now  │
+│   a SINGLE row to prize_pool, reference_type='dormant' (was per-recipient             │
+│   'dormant_payout'). Σdebit == the one credit → integrity invariant still nets 0      │
+│   (INV_CASES sums credit/debit regardless of ref_type). remainder always 0,           │
+│   recipient_count always 1. No reconciliation break; added prize.from_dormant to the  │
+│   bucket breakdown for transparency.                                                  │
+│ TRANSPARENCY (the point of the change): incentives.prizePoolStatement() = lifetime    │
+│   in/out by source over the rollup horizon; public GET /api/pool/prize-pool +          │
+│   donate.html D-05 panel; admin GET /api/admin/incentives/prize-pool statement +      │
+│   settings-incentives.html breakdown. The earlier "whale exploit" rationale below is   │
+│   now moot — a whale can't farm a lottery pot back the way it could a direct split.   │
+└──────────────────────────────────────────────────────────────────────────────────────┘
+
 GRANDFATHERING: the clock counts from max(last_activity, dormancy_policy_effective_at).
 The first enabled run stamps `dormancy_policy_effective_at = now` and disposes NOBODY,
 so every address gets a full window of runway after the policy goes live. Operators can
@@ -1427,10 +1455,13 @@ SUB-THRESHOLD PAYOUT (below-min "email support to withdraw" flow):
   pretending the panel makes them convenient.
 
 CODE MAP:
-  · lib/dormancy.js — DormancyManager: _candidates/_activeRecipients, listDormant
-    (masked/unmasked), statusFor (account countdown), history, preview (dry-run),
-    runOnce (the atomic sweep, 6h scheduler + first pass 60s after boot), manualPayout.
-    maskAddress = grin1qxy…mn4p.
+  · lib/dormancy.js — DormancyManager: _candidates, listDormant (masked/unmasked),
+    statusFor (account countdown), history, preview (dry-run), runOnce (the atomic sweep
+    → single prize_pool credit; 6h scheduler + first pass 60s after boot), manualPayout.
+    maskAddress = grin1qxy…mn4p. (_activeRecipients removed in the 2026-07-22b revision.)
+  · lib/incentives.js — prizePoolStatement(recentLimit): lifetime in/out breakdown by
+    source (fee_cut/donation/topup/dormant in; prize_award/jackpot/join_bonus/streak out)
+    over the ledger-rollup horizon + balance + recent rows. Shared by admin + public.
   · db.js — dormancy_dispositions (one row/batch) + dormancy_disposed_sources (one
     row/swept address); never pruned → historical detail behind the public page after
     raw balance_log prunes at 60d.

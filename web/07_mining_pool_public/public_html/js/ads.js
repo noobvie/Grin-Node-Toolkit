@@ -25,6 +25,9 @@
     }
     if (ad.ad_type === 'banner' && ad.image_url) {
       var img = '<img src="' + attr(ad.image_url) + '" alt="' + attr(ad.alt_text || '') + '" loading="lazy">';
+      // '#' is the shipped starter placeholder — render it as a plain image rather than
+      // a link that opens an empty tab. Clicks are still counted on the unit itself.
+      if (ad.link_url === '#') return '<div class="ad-unit ad-unit--banner"' + idAttr + '>' + img + '</div>';
       var inner = ad.link_url
         ? '<a href="' + attr(ad.link_url) + '" target="_blank" rel="noopener nofollow sponsored"' +
           (ad.alt_text ? ' title="' + attr(ad.alt_text) + '"' : '') + '>' + img + '</a>'
@@ -86,49 +89,221 @@
     });
   }
 
-  // When one placement holds several active ads, show ONE at a time and rotate
-  // (weight order from the API = cycle order; random entry point so different
-  // pageloads lead with different ads). Code-ad scripts were already activated at
-  // insert time — rotation only toggles visibility, it never re-runs snippets.
-  var rotateMs = 8000; // default; overridden by rotate_ms from the API (admin-set)
+  // ── Render settings (admin-set; defaults used if the API is unreachable) ──
+  var cfg = {
+    rotate_ms: 8000,      // multi-ad placement cycle interval
+    sidebar_mode: 'rail', // rail | inline | off
+    rail_show_ms: 12000,  // rail visible before tucking away
+    rail_hide_ms: 45000   // rail tucked before peeking back (0 = never tuck)
+  };
 
-  function startRotation(el) {
-    var units = el.querySelectorAll('.ad-unit');
-    if (units.length < 2) return;
+  // The rail only engages where there is real empty gutter beside the 1180px .wrap.
+  // MUST match the @media breakpoint on .ad-slot--rail in dashboard.css.
+  var RAIL_MQ = '(min-width: 1366px)';
+  var RAIL_DISMISS_KEY = 'grinium.adRail.dismissed';
+
+  function railDismissed() {
+    try { return sessionStorage.getItem(RAIL_DISMISS_KEY) === '1'; } catch (e) { return false; }
+  }
+  function rememberDismiss() {
+    try { sessionStorage.setItem(RAIL_DISMISS_KEY, '1'); } catch (e) { /* private mode */ }
+  }
+
+  // When one placement holds several active ads, show ONE at a time and cycle through
+  // them (weight order from the API = cycle order; random entry point so different
+  // pageloads lead with different ads). Code-ad scripts were already activated at
+  // insert time — cycling only toggles visibility, it never re-runs snippets.
+  function makeRotor(el) {
+    var units = [].slice.call(el.querySelectorAll('.ad-unit'));
+    if (!units.length) return null;
     var idx = Math.floor(Math.random() * units.length);
-    units.forEach(function (u, i) {
-      u.classList.add('ad-unit--rotor');
-      if (i !== idx) u.classList.add('ad-unit--hidden');
-    });
+    if (units.length > 1) {
+      units.forEach(function (u, i) {
+        u.classList.add('ad-unit--rotor');
+        if (i !== idx) u.classList.add('ad-unit--hidden');
+      });
+    }
+    return {
+      count: units.length,
+      current: function () { return units[idx]; },
+      advance: function () {
+        if (units.length < 2) return units[idx];
+        units[idx].classList.add('ad-unit--hidden');
+        idx = (idx + 1) % units.length;
+        units[idx].classList.remove('ad-unit--hidden');
+        return units[idx];
+      }
+    };
+  }
+
+  function startAutoRotate(rotor) {
+    if (!rotor || rotor.count < 2) return;
     setInterval(function () {
       if (document.hidden) return; // background tabs: don't burn impressions unseen
-      units[idx].classList.add('ad-unit--hidden');
-      idx = (idx + 1) % units.length;
-      units[idx].classList.remove('ad-unit--hidden');
-      queueImpression(units[idx]); // first reveal of this ad counts once
-    }, rotateMs);
+      queueImpression(rotor.advance()); // first reveal of this ad counts once
+    }, Math.max(2000, cfg.rotate_ms));
+  }
+
+  // ── Sidebar rail ─────────────────────────────────────────────────────────
+  // A slim vertical strip fixed in the page gutter: zero layout cost, and instead of
+  // sitting there permanently it peeks out for rail_show_ms, tucks away for
+  // rail_hide_ms, then slides back with the NEXT creative. Tucking is a transform, so
+  // the page never reflows; a vertical tab stays reachable to pull it back by hand.
+  function startRail(el, rotor) {
+    el.classList.add('ad-slot--rail', 'is-tucked');
+    if (railDismissed()) { el.classList.add('is-dismissed'); return; }
+
+    var close = document.createElement('button');
+    close.type = 'button';
+    close.className = 'ad-rail-close';
+    close.title = 'Hide ads for this visit';
+    close.setAttribute('aria-label', 'Hide ads for this visit');
+    close.textContent = '×';
+    el.appendChild(close);
+
+    var timer = null;
+    var out = false; // is the rail currently peeked out?
+
+    function at(ms, fn) { clearTimeout(timer); timer = setTimeout(fn, ms); }
+
+    function show(advance) {
+      if (el.classList.contains('is-dismissed')) return;
+      // Background tab: wait rather than burning a peek (and an impression) unseen.
+      if (document.hidden) { at(2000, function () { show(advance); }); return; }
+      if (advance && rotor) rotor.advance();
+      el.classList.remove('is-tucked');
+      out = true;
+      if (rotor) queueImpression(rotor.current());
+      if (cfg.rail_hide_ms > 0) at(cfg.rail_show_ms, tuck);
+    }
+
+    function tuck() {
+      el.classList.add('is-tucked');
+      out = false;
+      // rail_hide_ms = 0 is "always visible": a manual tuck then stays tucked until the
+      // visitor pulls the tab again, instead of springing straight back out.
+      if (cfg.rail_hide_ms > 0) at(cfg.rail_hide_ms, function () { show(true); });
+      else clearTimeout(timer);
+    }
+
+    // The label doubles as the pull-tab: click toggles, and a manual pull restarts the
+    // cycle from that point instead of yanking the rail away a moment later.
+    var tab = el.querySelector('.ad-slot-label');
+    if (tab) {
+      tab.setAttribute('role', 'button');
+      tab.setAttribute('tabindex', '0');
+      tab.title = 'Show/hide this ad';
+      var toggle = function (ev) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        if (out) tuck(); else show(false);
+      };
+      tab.addEventListener('click', toggle);
+      tab.addEventListener('keydown', function (ev) {
+        if (ev.key === 'Enter' || ev.key === ' ') toggle(ev);
+      });
+    }
+
+    close.addEventListener('click', function (ev) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      clearTimeout(timer);
+      el.classList.add('is-dismissed');
+      rememberDismiss();
+    });
+
+    // First peek shortly after load, so it reads as an arriving banner rather than
+    // part of the page furniture. No advance: keep the random entry creative.
+    at(1200, function () { show(false); });
+
+    // rail_hide_ms = 0 means "operator wants it always visible": there are no peeks to
+    // advance on, so fall back to the normal timed cycle for multi-creative rails.
+    if (cfg.rail_hide_ms === 0) startAutoRotate(rotor);
+  }
+
+  // ── Narrow screens: landscape / square creatives only ────────────────────────
+  // Below the rail breakpoint there is no gutter, so an ad renders in the page flow at
+  // the full column width. A tall creative there is brutal: a 160×600 rail banner in a
+  // 320px column is 1200px of forced scrolling. So on narrow screens a portrait creative
+  // is dropped before it is ever inserted, and a slot left with nothing stays hidden.
+  //
+  // The shape is measured by probing the image URL with a detached Image() rather than
+  // reading the rendered <img> — a slot starts hidden and its images are loading="lazy",
+  // so an in-place measurement would read 0×0 and let tall creatives through. The probe
+  // hits the same URL the <img> will use, so it comes from cache, not a second download.
+  // Unmeasurable creatives (ad-network 'code' units, a probe that errors or stalls) are
+  // kept: never suppress an ad on a guess.
+  var MAX_PORTRAIT_RATIO = 1.2; // natural height/width above this counts as portrait
+
+  function keepOnNarrow(ad, cb) {
+    if (ad.ad_type !== 'banner' || !ad.image_url) { cb(true); return; }
+    var probe = new Image();
+    var settled = false;
+    var finish = function (keep) {
+      if (settled) return;
+      settled = true;
+      cb(keep);
+    };
+    probe.onload = function () {
+      if (!probe.naturalWidth || !probe.naturalHeight) return finish(true);
+      finish(probe.naturalHeight / probe.naturalWidth <= MAX_PORTRAIT_RATIO);
+    };
+    probe.onerror = function () { finish(true); };
+    setTimeout(function () { finish(true); }, 2500);
+    probe.src = ad.image_url;
+  }
+
+  // Filter a placement's ads down to the mobile-safe ones, preserving weight order.
+  function filterForNarrow(ads, cb) {
+    var pending = ads.length;
+    if (!pending) { cb([]); return; }
+    var kept = new Array(ads.length);
+    ads.forEach(function (ad, i) {
+      keepOnNarrow(ad, function (keep) {
+        kept[i] = keep ? ad : null;
+        if (--pending <= 0) cb(kept.filter(Boolean));
+      });
+    });
   }
 
   function fill(byPlacement) {
+    var narrow = !!window.matchMedia && !window.matchMedia(RAIL_MQ).matches;
+    var railOK = cfg.sidebar_mode === 'rail' && !narrow;
+
     document.querySelectorAll('[data-ad-slot]').forEach(function (el) {
       var placement = el.getAttribute('data-ad-slot');
       var ads = (byPlacement && byPlacement[placement]) || [];
-      var html = ads.map(renderAd).filter(Boolean).join('');
-      if (!html) { el.style.display = 'none'; return; }
-      el.innerHTML = '<span class="ad-slot-label">Ad</span>' + html;
-      activateScripts(el);
-      el.style.display = '';
-      startRotation(el);
-      // count what's actually visible now (all units when static, the lead unit when rotating)
-      el.querySelectorAll('.ad-unit').forEach(function (u) {
-        if (!u.classList.contains('ad-unit--hidden')) queueImpression(u);
-      });
-      // click beacon (delegated; sendBeacon survives the target="_blank" navigation)
-      el.addEventListener('click', function (ev) {
-        var unit = ev.target && ev.target.closest ? ev.target.closest('.ad-unit') : null;
-        var id = unit ? unitId(unit) : 0;
-        if (id) sendEvent({ clicks: [id] });
-      });
+      var isSidebar = placement === 'sidebar';
+      if (!ads.length || (isSidebar && cfg.sidebar_mode === 'off')) { el.style.display = 'none'; return; }
+
+      function render(list) {
+        var html = list.map(renderAd).filter(Boolean).join('');
+        if (!html) { el.style.display = 'none'; return; }
+        el.innerHTML = '<span class="ad-slot-label">Ad</span>' + html;
+        activateScripts(el);
+        el.style.display = '';
+
+        var rotor = makeRotor(el);
+        if (isSidebar && railOK) {
+          startRail(el, rotor);          // rail drives its own cycling, one creative per peek
+        } else {
+          startAutoRotate(rotor);
+          // count what's actually visible now (all units when static, the lead unit when cycling)
+          el.querySelectorAll('.ad-unit').forEach(function (u) {
+            if (!u.classList.contains('ad-unit--hidden')) queueImpression(u);
+          });
+        }
+
+        // click beacon (delegated; sendBeacon survives the target="_blank" navigation)
+        el.addEventListener('click', function (ev) {
+          var unit = ev.target && ev.target.closest ? ev.target.closest('.ad-unit') : null;
+          var id = unit ? unitId(unit) : 0;
+          if (id) sendEvent({ clicks: [id] });
+        });
+      }
+
+      if (narrow) filterForNarrow(ads, render);
+      else render(ads);
     });
   }
 
@@ -136,7 +311,10 @@
     .then(function (r) { return r.ok ? r.json() : null; })
     .then(function (d) {
       if (!d) return;
-      if (d.rotate_ms > 0) rotateMs = d.rotate_ms;
+      ['rotate_ms', 'rail_show_ms', 'rail_hide_ms'].forEach(function (k) {
+        if (typeof d[k] === 'number' && d[k] >= 0) cfg[k] = d[k];
+      });
+      if (d.sidebar_mode) cfg.sidebar_mode = d.sidebar_mode;
       if (d.ads) fill(d.ads);
     })
     .catch(function () { /* ads are non-essential; fail silent */ });

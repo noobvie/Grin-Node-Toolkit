@@ -610,7 +610,7 @@ footer a:hover { color: var(--accent); }
   font-size: 10px;
   letter-spacing: .08em;
   text-transform: uppercase;
-  color: var(--text-muted, #718096);
+  color: var(--text-dim, #8a978f);
   opacity: .65;
   margin-bottom: 4px;
 }
@@ -622,9 +622,102 @@ footer a:hover { color: var(--accent); }
 @keyframes ad-fade-in { from { opacity: 0; } to { opacity: 1; } }
 .ad-slot--header { margin-top: 8px; }
 .ad-slot--footer { margin-bottom: 8px; }
-/* In-content sits inside the page flow; sidebar is a narrower right-aligned rail on wide screens. */
+/* In-content and the inline form of sidebar both sit in the page flow, centred.
+   NEVER float an ad slot: .deck is a flex container, so it establishes an independent
+   formatting context — it does not wrap around a float, it gets narrowed beside it for
+   its WHOLE height. One 250px-tall square then costs the dashboard ~340px of width all
+   the way down the page, leaving a dead gutter under the ad. */
 .ad-slot--in-content { margin: 24px auto; }
 .ad-slot--sidebar { max-width: 320px; }
-@media (min-width: 1100px) {
-  .ad-slot--sidebar { float: right; margin: 0 0 16px 20px; }
+
+/* ── Sidebar as a fixed edge rail (ads.js adds .ad-slot--rail) ────────────────
+   The rail is taken out of flow entirely and parked in the empty margin beside the
+   1180px .wrap, so it costs the layout nothing. Its width is derived from the gutter:
+     w = clamp(108px, (100vw - 1160px)/2, 168px)
+   Free space right of the CONTENT box (the wrap keeps 24px padding) is
+   (100vw - 1180)/2 + 24 - 6, which at the 1366px breakpoint below is 111px — so the
+   108px floor still clears every panel, and the rail can never sit on top of content at
+   any wider viewport either. Below the breakpoint there is no usable gutter, so the rail
+   is not used at all and the slot stays an ordinary in-flow block (ads.js gates on the
+   SAME 1366px — keep the two values in sync). Hiding is transform-only, never display,
+   so it never reflows. */
+@media (min-width: 1366px) {
+  .ad-slot--rail {
+    --ad-rail-w: clamp(108px, calc((100vw - 1160px) / 2), 168px);
+    position: fixed;
+    right: 6px;
+    top: 50%;
+    width: var(--ad-rail-w);
+    max-width: none;
+    margin: 0;
+    padding-left: 18px;              /* room for the vertical "AD" pull-tab */
+    z-index: 40;                     /* under modals/toasts, over page chrome */
+    transform: translateY(-50%);
+    transition: transform .45s cubic-bezier(.22, .61, .36, 1);
+  }
+  /* Tucked: slides off the right edge, leaving only the tab. */
+  .ad-slot--rail.is-tucked {
+    transform: translateY(-50%) translateX(calc(100% - 18px));
+  }
+  .ad-slot--rail.is-dismissed { display: none !important; }
+
+  /* The "Ad" label becomes the vertical pull-tab: the one part that stays reachable
+     while tucked, and the click target that pulls the rail back out. */
+  .ad-slot--rail .ad-slot-label {
+    position: absolute;
+    left: 0; top: 50%;
+    transform: translateY(-50%);
+    width: 18px;                     /* == the sliver left showing when tucked */
+    margin: 0;
+    padding: 8px 0;
+    writing-mode: vertical-rl;
+    text-orientation: mixed;
+    letter-spacing: .18em;
+    cursor: pointer;
+    border-radius: 5px 0 0 5px;
+    background: var(--bg-elev, #10141a);
+    border: 1px solid var(--border, #1d3a26);
+    border-right: none;
+    opacity: .8;
+  }
+  .ad-slot--rail .ad-slot-label:hover { opacity: 1; }
+  .ad-slot--rail .ad-slot-label::after { content: ' ‹'; }
+  .ad-slot--rail.is-tucked .ad-slot-label::after { content: ' ›'; }
+
+  /* Dismiss for the rest of the session. */
+  .ad-rail-close {
+    position: absolute;
+    top: -9px; right: -6px;
+    width: 20px; height: 20px;
+    line-height: 18px;
+    padding: 0;
+    font-size: 13px;
+    text-align: center;
+    cursor: pointer;
+    border-radius: 50%;
+    color: var(--text-dim, #8a978f);
+    background: var(--bg-elev, #10141a);
+    border: 1px solid var(--border, #1d3a26);
+    opacity: 0;
+    transition: opacity .2s ease;
+  }
+  .ad-slot--rail:hover .ad-rail-close,
+  .ad-rail-close:focus-visible { opacity: 1; }
+  .ad-rail-close:hover { color: var(--text, #cfd8d3); }
+
+  .ad-slot--rail .ad-unit { display: block; }
+  .ad-slot--rail .ad-unit img { width: 100%; border-radius: 6px; }
+}
+
+/* Mobile / narrow: an ad here sits in the page flow at full column width, so a tall
+   creative turns into forced scrolling. ads.js already drops portrait creatives below the
+   rail breakpoint (landscape and square only); this cap is the belt-and-braces for a
+   creative it could not measure — nothing in the flow may exceed 300px of height. */
+@media (max-width: 1365px) {
+  .ad-slot .ad-unit img { max-height: 300px; width: auto; }
+}
+
+/* Respect reduced-motion: the rail still appears and tucks, it just doesn't slide. */
+@media (prefers-reduced-motion: reduce) {
+  .ad-slot--rail { transition: none; }
 }

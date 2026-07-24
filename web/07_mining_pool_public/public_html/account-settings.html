@@ -777,26 +777,27 @@
                 const when = d.disposed_at ? new Date(d.disposed_at * 1000).toLocaleDateString('en-US', { timeZone: 'UTC' }) : '';
                 el.classList.add('is-disposed');
                 el.innerHTML = 'This address had a long-dormant balance of <b>' + Number(d.disposed_amount || 0).toFixed(4)
-                    + ' ツ</b> redistributed to active miners' + (when ? ' on ' + escHtml(when) : '')
-                    + ' under the pool\'s abandoned-balance policy. This is final. '
-                    + '<a href="/page.html?p=terms">Terms</a>';
+                    + ' ツ</b> swept into the community prize pool' + (when ? ' on ' + escHtml(when) : '')
+                    + ' under the pool\'s abandoned-balance policy. This is final. See where swept balances go on the '
+                    + '<a href="/donate.html">Prize Pool</a> page. <a href="/page.html?p=terms">Terms</a>';
                 el.style.display = '';
                 return;
             }
             if (d.state === 'eligible') {
                 el.classList.add('is-eligible');
-                el.innerHTML = '<b>This balance is due for redistribution.</b> It has been idle beyond the '
-                    + (d.dormancy_months || 24) + '-month limit. <b>Withdraw it now</b> to keep it — after redistribution to '
-                    + 'active miners it cannot be reclaimed. <a href="/page.html?p=terms">Terms</a>';
+                el.innerHTML = '<b>This balance is due to be swept.</b> It has been idle beyond the '
+                    + (d.dormancy_months || 24) + '-month limit. <b>Request a payout now</b> to keep it — that resets '
+                    + 'the countdown (even if the payout later fails). Once swept into the community prize pool it '
+                    + 'cannot be reclaimed. <a href="/page.html?p=terms">Terms</a>';
                 el.style.display = '';
                 return;
             }
             if (d.state === 'counting') {
                 const days = Number(d.days_until_disposal) || 0;
-                el.innerHTML = 'This address is idle. If it stays inactive, this balance becomes eligible for '
-                    + 'redistribution to active miners in <b>' + days.toLocaleString('en-US') + ' days</b> '
-                    + '(after ' + (d.dormancy_months || 24) + ' months of no mining and no payout). '
-                    + 'Withdraw any time before then to keep it. <a href="/page.html?p=terms">Terms</a>';
+                el.innerHTML = 'This address is idle. If it stays inactive, this balance becomes eligible to be '
+                    + 'swept into the community prize pool in <b>' + days.toLocaleString('en-US') + ' days</b> '
+                    + '(after ' + (d.dormancy_months || 24) + ' months of no mining, no payout and no withdrawal request). '
+                    + 'Requesting a payout any time before then keeps it and resets this countdown. <a href="/page.html?p=terms">Terms</a>';
                 el.style.display = '';
                 return;
             }
@@ -1032,6 +1033,7 @@
             'credit/admin_inject': 'adjustment',
             'debit/withdrawal': 'payout',
             'debit/donation': 'donation',
+            'debit/dormant_sweep': 'balance disposed (abandoned → prize pool)',
             'reversal/withdrawal': 'payout returned',
             'reversal/block': 'orphan clawback',
             'reversal/jackpot': 'jackpot clawback'

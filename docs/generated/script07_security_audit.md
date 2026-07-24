@@ -495,3 +495,29 @@ stay out of external FLOW_CASES; disposition self-clears (balance>0 filter) so i
 bypasses only the min floor + reversal cooldown; freeze, CAS lock, and one-pending-per-address cap
 (the double-pay guard) still apply. This is the convenient primary sub-threshold path; the recorder
 is the labeled fallback for genuine out-of-band (slatepack/CLI) sends.
+
+## Prize-pool reroute review (add-ons, 2026-07-23)
+
+Follow-up review after the destination change (redistribute-to-active-miners → single prize-pool
+credit, REVISION 2026-07-22b). Focus: double-claim / abuse in the reroute + anything the topic misses.
+All confirmed-safe items re-verified against live code (single-thread sqlite tx non-interleaving;
+spendable-only debit; `dormant_sweep`+`dormant` net zero in INV_CASES and absent from FLOW_CASES;
+custodial liability excludes `prize_pool`; reserved addresses excluded as sources; disposed-then-
+refunded falls through to a fresh countdown; admin money routes `freshAdmin`-gated). 4 findings, all
+fixed (node --check + 18-assertion temp-DB smoke test PASS; NOT VPS-tested).
+
+| # | Sev | Finding | Fix |
+|---|-----|---------|-----|
+| 1 | MED | The ToS reclaim promise ("request a payout to reclaim") was **not durable**: the countdown clock reset only on a *confirmed* payout / fresh share, so a reclaim payout that later **failed & auto-refunded** (or a **partial** withdrawal) left the balance sweepable with the original elapsed clock → next 6h sweep could take it | `dormancy.js` `_candidates()` + `statusFor()` now fold in `MAX(created_at)` of withdrawals of **any status** (`last_request`) into `last_activity`. A reclaim *attempt* durably resets the countdown regardless of the payout's outcome. (No `last_seen_at` write in the withdrawal path → zero side-effect on online tracking.) |
+| 2 | MED | Sweeps could run while the incentive **draws were OFF** → abandoned balances pile into a prize pool that never pays out (breaks the ToS "given away through published draws" promise; owner loses reclaim while nobody benefits) | new `_incentivesEnabled()` gate: `runOnce()` skips with `incentives_disabled`, `preview()` reports it as a `blocked` reason, `status()` exposes `incentives_enabled`, admin panel `BLOCK_LABEL` shows "enable prize draws first". No draws → no sweep |
+| 3 | LOW | batch `total_swept` was written from the **pre-tx snapshot**, not the in-tx exact sum (identical today, fragile if async ever creeps between candidate collection and the tx) | record `sweptExact` on the batch row inside the transaction (`updBatchTotal`) so the batch is authoritative for the real ledger movement |
+| 4 | LOW | `prizePoolStatement` reversal→inflow classification is display-only and could mislabel a hypothetical `reversal/dormant` row | comment clarifying it is a **display grouping only** (reconciliation.js is the accounting authority) and that a `dormant` sweep is terminal by policy — only ever a credit inflow |
+
+**Policy/ToS + wallet copy adapted to match (user directive "the ToS and policy should be adapt,
+user wallet or payout should update accordingly"):** ToS §4 (pool-settings.js default `terms`) now
+states requesting a payout resets the countdown even if it later fails, that sweeps only run while
+draws are active, and that a withdrawal *request* counts as activity; the payout-settings comment +
+admin helper text updated (incl. relabel "Active-Miner Window" → "Idle Threshold", dropping the stale
+"shared PPLNS-style among miners" text); account-page countdown copy ("counting"/"eligible"/"disposed")
+now says "request a payout … resets this countdown" and links the disposed note to the public Prize
+Pool ledger. Existing pools must re-seed the ToS page (pages are one-time CMS seeds).

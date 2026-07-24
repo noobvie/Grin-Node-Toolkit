@@ -508,7 +508,7 @@ async function initializePool() {
     retentionManager.start();
 
     // Abandoned-balance disposition — sweeps balances of long-dormant addresses (default 24mo,
-    // OFF until enabled in admin → Payout) and redistributes to active miners. Freeze-aware,
+    // OFF until enabled in admin → Payout) into the community prize pool. Freeze-aware,
     // grandfathered, FINAL. No-op every pass while disabled. See lib/dormancy.js.
     dormancyManager = new DormancyManager(config);
     dormancyManager.start();
@@ -729,6 +729,7 @@ function setupRoutes() {
     'GET /api/pool/metrics/history/regions': 'Per-region miners/hashrate trend series (?range=day|week|month|year|all).',
     'GET /api/pool/payments/history': 'Durable payments & transparency series: payouts, reward split, giveaways, donations, fee + lifetime totals (?range=day|week|month|year|all).',
     'GET /api/pool/donors': 'Donor wall: per-address lifetime donations to the prize pool, first/last donation date, current donate-tag %.',
+    'GET /api/pool/prize-pool': 'Prize-pool transparency report: current balance + lifetime in/out totals by source (fee-cut, donations, top-ups, abandoned balances) + recent flows.',
     'GET /api/pool/status': 'Coarse service status strip.',
     'GET /api/account/:addr': 'Account summary: balance, paid, pending payout, effort.',
     'GET /api/account/:addr/workers': 'Per-worker (rig) hashrate + share quality.',
@@ -1879,7 +1880,11 @@ function setupRoutes() {
   // placement. secureAdmin (not freshAdmin) — ads are not money/destructive of funds.
   app.get('/api/admin/ads', secureAdmin, (req, res) => {
     try {
-      res.json({ ads: adsManager.list(req.query.placement), placements: AdsManager.PLACEMENTS, rotate_ms: adsManager.getRotateMs() });
+      res.json({
+        ads: adsManager.list(req.query.placement),
+        placements: AdsManager.PLACEMENTS,
+        config: adsManager.getConfig()
+      });
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
@@ -1905,10 +1910,11 @@ function setupRoutes() {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
-  // Rotation interval for the public renderer (stored in pool_config, clamped 2–60 s).
+  // Render settings for the public renderer — rotation interval, sidebar layout mode
+  // and rail peek timings (stored in pool_config, each clamped to a sane range).
   app.post('/api/admin/ads-config', secureAdmin, (req, res) => {
     try {
-      res.json({ rotate_ms: adsManager.setRotateMs((req.body || {}).rotate_ms) });
+      res.json({ config: adsManager.setConfig(req.body || {}) });
     } catch (err) { res.status(400).json({ error: err.message }); }
   });
 
@@ -1921,8 +1927,9 @@ function setupRoutes() {
     try {
       res.set('Cache-Control', 'public, max-age=60');
       const p = req.query.placement;
-      if (p) return res.json({ placement: p, ads: adsManager.publicByPlacement(p), rotate_ms: adsManager.getRotateMs() });
-      res.json({ ads: adsManager.publicAll(), rotate_ms: adsManager.getRotateMs() });
+      const cfg = adsManager.getConfig();
+      if (p) return res.json({ placement: p, ads: adsManager.publicByPlacement(p), ...cfg });
+      res.json({ ads: adsManager.publicAll(), ...cfg });
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
@@ -2193,8 +2200,8 @@ function setupRoutes() {
   // ─── Unclaimed / abandoned balances (public transparency) ───────────────────
   // A lost-and-found with a public audit trail: masked addresses of long-dormant balances with a
   // per-address disposal countdown (owner recognises their own → reclaims via the account page
-  // BEFORE disposition), plus the historical disposition ledger (final redistributions to active
-  // miners). Addresses are masked (grin1qxy…mn4p) so this is a reunification aid, not a targeting
+  // BEFORE disposition), plus the historical disposition ledger (final sweeps into the prize
+  // pool). Addresses are masked (grin1qxy…mn4p) so this is a reunification aid, not a targeting
   // list; the ownership gate independently protects reclaim. Returns { dormant, dispositions }.
   app.get('/api/pool/unclaimed', rateLimiter.middleware('public'), (req, res) => {
     try {
@@ -2427,6 +2434,25 @@ function setupRoutes() {
       };
       donors.forEach((r) => { r.total_donated = parseFloat(r.total_donated.toFixed(9)); });
       res.json({ donors, totals });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Public prize-pool transparency report: current balance + lifetime in/out totals broken down by
+  // source (fee-cut · donations · operator top-ups · ABANDONED BALANCES · orphan clawbacks in;
+  // prizes · jackpots · join bonuses · streaks out) + recent flows. Composite read over the
+  // ledger-rollup horizon, so totals stay exact after raw balance_log rows prune. Incentives-gated:
+  // when incentives are off the bucket still exists (abandoned sweeps can accumulate), so the report
+  // is always available — it's a trust surface. Recent rows carry no addresses (a prize-pool row's
+  // grin_address is always 'prize_pool'); the reference_type/amount are safe to show publicly.
+  app.get('/api/pool/prize-pool', rateLimiter.middleware('public'), (req, res) => {
+    try {
+      if (!incentivesManager) return res.json({ enabled: false, balance: 0, in: { total: 0, by: [] }, out: { total: 0, by: [] }, net: 0, recent: [] });
+      const st = incentivesManager.prizePoolStatement(15);
+      let enabled = false;
+      try { enabled = incentivesManager.enabled(); } catch (_) { /* default false */ }
+      res.json({ enabled, ...st });
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
@@ -4502,10 +4528,15 @@ function setupRoutes() {
 
   app.get('/api/admin/incentives/prize-pool', secureAdmin, (req, res) => {
     try {
+      // statement = lifetime in/out breakdown (fee-cut · donations · top-ups · abandoned balances
+      // in; prizes · jackpots · join bonuses · streaks out) + current balance + recent 25 rows.
+      // `balance`/`ledger` kept for backward-compat with the existing panel wiring.
+      const statement = incentivesManager.prizePoolStatement(25);
       res.json({
         success: true,
-        balance: incentivesManager.prizePoolBalance(),
-        ledger: incentivesManager.prizePoolLedger(25),
+        balance: statement.balance,
+        ledger: statement.recent,
+        statement,
       });
     } catch (err) {
       res.status(500).json({ error: 'Failed to load prize pool' });

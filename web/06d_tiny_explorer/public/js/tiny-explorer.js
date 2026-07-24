@@ -128,6 +128,24 @@ function initChrome() {
   }
 
   initTooltips();
+  initTools();
+}
+
+// Header "Tools" dropdown — identical markup on every page, so this runs from
+// initChrome regardless of which page we're on.
+function initTools() {
+  const wrap = document.getElementById('tx-tools');
+  const btn  = document.getElementById('tx-tools-btn');
+  const menu = document.getElementById('tx-tools-menu');
+  if (!wrap || !btn || !menu) return;
+  function open(v) {
+    wrap.classList.toggle('open', v);
+    btn.setAttribute('aria-expanded', v ? 'true' : 'false');
+    menu.hidden = !v;
+  }
+  btn.addEventListener('click', e => { e.stopPropagation(); open(menu.hidden); });
+  document.addEventListener('click', e => { if (!wrap.contains(e.target)) open(false); });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') open(false); });
 }
 
 // Touch-friendly tooltips: tap the ℹ icon to toggle its bubble; tapping anywhere
@@ -163,10 +181,57 @@ function initTooltips() {
 // server-side 404.
 function searchTarget(q) {
   const s = q.trim().replace(/^0x/i, '');
+  // A pasted slatepack goes to the client-side Slate Inspector. Carry it in the
+  // query string when it is short enough to survive a URL; otherwise just open
+  // the page and let the visitor paste into the (much larger) textarea.
+  if (s.includes('BEGINSLATEPACK')) {
+    return s.length <= 3000 ? '/slate?s=' + encodeURIComponent(s) : '/slate';
+  }
   if (/^\d+$/.test(s))               return '/block/'  + encodeURIComponent(s);
   if (/^[0-9a-fA-F]{64}$/.test(s))   return '/block/'  + encodeURIComponent(s);
   if (/^[0-9a-fA-F]{66}$/.test(s))   return '/kernel/' + encodeURIComponent(s);
   return '/block/' + encodeURIComponent(s);
+}
+
+// ── Sparklines ────────────────────────────────────────────────────────────────
+// Tiny inline SVG trend lines for the Hashrate/Difficulty cards. Computed purely
+// client-side from the /api/latest series already fetched for the block table —
+// no new endpoint, no stored history. Stroke/fill colour comes from CSS.
+
+function sparkSvg(values) {
+  const vals = values.filter(v => isFinite(v) && v > 0);
+  if (vals.length < 2) return '';
+  const min = Math.min(...vals), max = Math.max(...vals);
+  const range = (max - min) || 1;
+  const W = 100, H = 26, pad = 2;
+  const pts = vals.map((v, i) => {
+    const x = pad + (i / (vals.length - 1)) * (W - 2 * pad);
+    const y = pad + (1 - (v - min) / range) * (H - 2 * pad);
+    return x.toFixed(1) + ',' + y.toFixed(1);
+  });
+  const [lx, ly] = pts[pts.length - 1].split(',');
+  return '<svg class="tx-spark-svg" viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="none" aria-hidden="true">'
+    + '<polyline points="' + pts.join(' ') + '" fill="none" stroke-width="1.5" '
+    + 'vector-effect="non-scaling-stroke" stroke-linejoin="round" stroke-linecap="round"/>'
+    + '<circle cx="' + lx + '" cy="' + ly + '" r="1.8"/></svg>';
+}
+
+// Derive per-block difficulty (Δ total_difficulty) and hashrate from the latest
+// blocks (newest-first) and paint both sparklines oldest→newest, left→right.
+function renderSparklines(blocks) {
+  if (!Array.isArray(blocks) || blocks.length < 3) return;
+  const asc = blocks.slice().sort((a, b) => a.height - b.height);
+  const diffs = [], rates = [];
+  for (let i = 1; i < asc.length; i++) {
+    const dd = Number(asc[i].total_difficulty) - Number(asc[i - 1].total_difficulty);
+    const dt = asc[i].timestamp - asc[i - 1].timestamp;
+    if (dd > 0) diffs.push(dd);
+    if (dd > 0 && dt > 0) rates.push(dd * 42 / dt / 16384);
+  }
+  const sh = document.getElementById('spark-hashrate');
+  const sd = document.getElementById('spark-difficulty');
+  if (sh) sh.innerHTML = sparkSvg(rates);
+  if (sd) sd.innerHTML = sparkSvg(diffs);
 }
 
 // ── INDEX PAGE ────────────────────────────────────────────────────────────────
@@ -211,6 +276,11 @@ async function pollStats() {
     if (peersCard && s.peers_count == null) peersCard.style.display = 'none';
 
     setText('stat-g1', s.g1_per_day != null ? s.g1_per_day.toFixed(2) + ' ツ' : '—');
+
+    // Mempool — unconfirmed tx pool size; hide the card if the node didn't answer.
+    const mpCard = document.getElementById('card-mempool');
+    setText('stat-mempool', s.mempool != null ? fmtNum(s.mempool) + (s.mempool === 1 ? ' tx' : ' txs') : '—');
+    if (mpCard) mpCard.style.display = (s.mempool == null) ? 'none' : '';
   } catch {}
 }
 
@@ -241,6 +311,7 @@ async function loadLatest() {
     if (!tb) return;
     tb.innerHTML = '';
     blocks.forEach(b => tb.appendChild(blockRow(b)));
+    renderSparklines(blocks);
     _lastUpdatedStr = new Date().toLocaleTimeString();
     _nextLatestAt   = Date.now() + LATEST_INTERVAL_MS;
     renderUpdated();
@@ -632,6 +703,31 @@ function init404() {
     `<div class="name">${f.name} ↗</div><div class="blurb">${f.blurb || ''}</div></a>`).join('');
 }
 
+// ── EMISSION PAGE ─────────────────────────────────────────────────────────────
+
+function initEmission() {
+  const calc    = document.getElementById('calc-height');
+  const calcOut = document.getElementById('calc-supply');
+  function recalc() {
+    if (!calcOut) return;
+    const h = parseInt(calc.value, 10);
+    calcOut.textContent = (isFinite(h) && h >= 0) ? fmtNum(h * 60) : '—';
+  }
+  if (calc) calc.addEventListener('input', recalc);
+
+  // Live figures: supply = height × 60; annual inflation = 60×1440×365 / supply.
+  fetch('/api/stats').then(r => r.ok ? r.json() : null).then(s => {
+    if (!s || s.tip_height == null) return;
+    setText('emit-height', fmtNum(s.tip_height));
+    setText('emit-supply', fmtNum(s.tip_height * 60));
+    setText('emit-updated', 'as of ' + new Date().toLocaleTimeString());
+    const supply = s.supply != null ? s.supply : s.tip_height * 60;
+    const annualNew = 60 * 1440 * 365; // 31,536,000 ツ/yr
+    if (supply > 0) setText('emit-inflation', '≈ ' + (annualNew / supply * 100).toFixed(2) + '%');
+    if (calc && !calc.value) { calc.value = s.tip_height; recalc(); }
+  }).catch(() => {});
+}
+
 // ── Init ─────────────────────────────────────────────────────────────────────────
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -643,4 +739,5 @@ document.addEventListener('DOMContentLoaded', () => {
   if (page === 'kernel') loadEntity('kernel');
   if (page === 'output') loadEntity('output');
   if (page === 'notfound') init404();
+  if (page === 'emission') initEmission();
 });

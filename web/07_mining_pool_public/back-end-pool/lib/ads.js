@@ -160,61 +160,156 @@ class AdsManager {
     return { impressions: impressions.length, clicks: clicks.length };
   }
 
-  // Rotation interval shown to the public renderer. Stored in pool_config (same
-  // 'ads' section as the seed marker — deliberately NOT a PoolSettings section);
-  // clamped so a typo can't make ads strobe or freeze.
-  getRotateMs() {
-    const row = this.db.prepare(
-      "SELECT value FROM pool_config WHERE section = 'ads' AND key = 'rotate_ms'"
-    ).get();
-    const n = row ? parseInt(row.value, 10) : NaN;
-    return Number.isInteger(n) ? Math.min(60000, Math.max(2000, n)) : 8000;
+  // Render settings for the public renderer. Stored in pool_config (same 'ads'
+  // section as the seed marker — deliberately NOT a PoolSettings section); every
+  // value is clamped so a typo can't make ads strobe or freeze.
+  //   rotate_ms    — how fast a multi-ad placement cycles
+  //   sidebar_mode — how the sidebar placement is laid out:
+  //                    rail   = fixed elastic strip in the empty page gutter (costs
+  //                             the layout nothing; peeks in/out on a timer)
+  //                    inline = plain centred block in the page flow
+  //                    off    = sidebar placement not rendered at all
+  //   rail_show_ms — how long the rail stays out before tucking away
+  //   rail_hide_ms — how long it stays tucked (0 = never tuck, always visible)
+  static get CONFIG_SPEC() {
+    return {
+      rotate_ms:    { type: 'number', def: 8000,  min: 2000, max: 60000 },
+      sidebar_mode: { type: 'enum',   def: 'rail', values: ['rail', 'inline', 'off'] },
+      rail_show_ms: { type: 'number', def: 12000, min: 3000, max: 120000 },
+      rail_hide_ms: { type: 'number', def: 45000, min: 0,    max: 600000 }
+    };
   }
 
-  setRotateMs(ms) {
-    const n = parseInt(ms, 10);
-    if (!Number.isInteger(n)) throw new Error('rotate_ms must be a number');
-    const clamped = Math.min(60000, Math.max(2000, n));
-    this.db.prepare(`
-      INSERT INTO pool_config (section, key, value, value_type) VALUES ('ads', 'rotate_ms', ?, 'number')
-      ON CONFLICT(section, key) DO UPDATE SET value = excluded.value, updated_at = unixepoch()
-    `).run(String(clamped));
-    return clamped;
-  }
+  getConfig() {
+    const spec = AdsManager.CONFIG_SPEC;
+    const rows = this.db.prepare(
+      "SELECT key, value FROM pool_config WHERE section = 'ads'"
+    ).all();
+    const stored = {};
+    for (const r of rows) stored[r.key] = r.value;
 
-  // One-time starter content: seed the shipped GRINIUM self-promo SVG banners
-  // (public_html/promo/) so placements aren't empty on a fresh pool. Runs once ever —
-  // a pool_config marker (not "table empty") gates it, so an operator deleting the
-  // seeds does not get them back on the next restart. The two sidebar ads share one
-  // placement on purpose: they demo the front-end rotation.
-  seedSelfPromo() {
-    const marker = this.db.prepare(
-      "SELECT value FROM pool_config WHERE section = 'ads' AND key = 'selfpromo_seeded'"
-    ).get();
-    if (marker) return false;
-    const empty = this.db.prepare('SELECT COUNT(*) AS c FROM ads').get().c === 0;
-    if (empty) {
-      const seeds = [
-        { name: 'GRINIUM promo — Mine GRIN (header 728×90)', placement: 'header',
-          image_url: '/promo/grinium-mine-728x90.svg', link_url: '/',
-          alt_text: 'Mine GRIN on GRINIUM — no sign-up, PPLNS rewards, your address is your account', weight: 10 },
-        { name: 'GRINIUM promo — Fortune board (sidebar 300×250)', placement: 'sidebar',
-          image_url: '/promo/grinium-fortune-300x250.svg', link_url: '/fortune-board.html',
-          alt_text: 'Feeling lucky? Block jackpots, prize draws, streak rewards and a monthly lottery', weight: 10 },
-        { name: 'GRINIUM promo — Anonymous mining (sidebar 300×250)', placement: 'sidebar',
-          image_url: '/promo/grinium-privacy-300x250.svg', link_url: '/payment-history.html',
-          alt_text: 'Mine anonymously — no accounts, no emails, Tor payouts', weight: 5 },
-        { name: 'GRINIUM promo — Donate (footer 728×90)', placement: 'footer',
-          image_url: '/promo/grinium-donate-728x90.svg', link_url: '/donate.html',
-          alt_text: 'Keep the reactor running — donate GRIN and join the donor wall', weight: 10 }
-      ];
-      for (const s of seeds) this.create({ ...s, ad_type: 'banner', is_active: 1 });
+    const out = {};
+    for (const [key, s] of Object.entries(spec)) {
+      const raw = stored[key];
+      if (raw === undefined) { out[key] = s.def; continue; }
+      if (s.type === 'enum') {
+        out[key] = s.values.includes(raw) ? raw : s.def;
+      } else {
+        const n = parseInt(raw, 10);
+        out[key] = Number.isInteger(n) ? Math.min(s.max, Math.max(s.min, n)) : s.def;
+      }
     }
-    this.db.prepare(`
-      INSERT INTO pool_config (section, key, value, value_type) VALUES ('ads', 'selfpromo_seeded', '1', 'boolean')
-      ON CONFLICT(section, key) DO NOTHING
-    `).run();
-    return empty;
+    return out;
+  }
+
+  // Partial patch — only the keys present in `patch` are written. Returns the full
+  // effective config so a caller can echo it straight back to the admin UI.
+  setConfig(patch) {
+    const spec = AdsManager.CONFIG_SPEC;
+    const stmt = this.db.prepare(`
+      INSERT INTO pool_config (section, key, value, value_type) VALUES ('ads', ?, ?, ?)
+      ON CONFLICT(section, key) DO UPDATE SET value = excluded.value, updated_at = unixepoch()
+    `);
+    for (const [key, s] of Object.entries(spec)) {
+      const v = (patch || {})[key];
+      if (v === undefined || v === null || v === '') continue;
+      if (s.type === 'enum') {
+        const val = String(v);
+        if (!s.values.includes(val)) throw new Error(`${key} must be one of ${s.values.join(', ')}`);
+        stmt.run(key, val, 'string');
+      } else {
+        const n = parseInt(v, 10);
+        if (!Number.isInteger(n)) throw new Error(`${key} must be a number`);
+        stmt.run(key, String(Math.min(s.max, Math.max(s.min, n))), 'number');
+      }
+    }
+    return this.getConfig();
+  }
+
+  // Starter content: seed the shipped GRINIUM self-promo SVG banners
+  // (public_html/promo/) so placements aren't empty on a fresh pool. All seeds link to
+  // '#' — they are layout/rotation demos, not real campaigns; the operator points them
+  // somewhere real (or deletes them) from the admin panel.
+  //
+  // Gated by a pool_config marker rather than "table is empty", so an operator who
+  // deletes a seed does not get it back on the next restart. The marker is versioned:
+  // v2 introduced the 160×600 rail creatives (the sidebar became a narrow fixed rail,
+  // where a 300×250 square no longer fits) and runs once for pools seeded under v1 —
+  // it inserts only creatives that aren't already present, and re-homes the two old
+  // 300×250 sidebar squares to the in-content placement where they still look right.
+  //
+  // The sidebar seeds deliberately share one placement: they demo the rail rotation.
+  seedSelfPromo() {
+    const cfgGet = (key) => this.db.prepare(
+      "SELECT value FROM pool_config WHERE section = 'ads' AND key = ?"
+    ).get(key);
+    if (cfgGet('selfpromo_seeded_v2')) return false;
+    const firstRun = !cfgGet('selfpromo_seeded');
+
+    // v1 → v2: the sidebar is a narrow rail now, so old square seeds move in-content.
+    if (!firstRun) {
+      this.db.prepare(`
+        UPDATE ads SET placement = 'in-content'
+        WHERE placement = 'sidebar'
+          AND image_url IN ('/promo/grinium-fortune-300x250.svg', '/promo/grinium-privacy-300x250.svg')
+      `).run();
+    }
+
+    // `v` = the seed generation a creative was introduced in. On the v1→v2 hop only
+    // v2 creatives are considered, so a v1 creative the operator deleted stays deleted.
+    const seeds = [
+      // Wide strips — header/footer.
+      { v: 1, name: 'GRINIUM promo — Mine GRIN (header 728×90)', placement: 'header',
+        image_url: '/promo/grinium-mine-728x90.svg', weight: 10,
+        alt_text: 'Mine GRIN on GRINIUM — no sign-up, PPLNS rewards, your address is your account' },
+      { v: 1, name: 'GRINIUM promo — Donate (footer 728×90)', placement: 'footer',
+        image_url: '/promo/grinium-donate-728x90.svg', weight: 10,
+        alt_text: 'Keep the reactor running — donate GRIN and join the donor wall' },
+
+      // Vertical rail creatives — several on purpose, so the rail has a rotation to demo.
+      { v: 2, name: 'GRINIUM rail — Mine here (160×600)', placement: 'sidebar',
+        image_url: '/promo/grinium-mine-160x600.svg', weight: 50,
+        alt_text: 'Mine GRIN here — no sign-up, PPLNS rewards, anonymous Tor payouts' },
+      { v: 2, name: 'GRINIUM rail — Why GRIN? (160×600)', placement: 'sidebar',
+        image_url: '/promo/grinium-why-grin-160x600.svg', weight: 40,
+        alt_text: 'Why GRIN? Private by default, no addresses on chain, fair launch, no premine' },
+      { v: 2, name: 'GRINIUM rail — Buy GRIN (160×600)', placement: 'sidebar',
+        image_url: '/promo/grinium-buy-grin-160x600.svg', weight: 30,
+        alt_text: 'Buy GRIN — trade it on exchanges, or earn it by pointing a miner here' },
+      { v: 2, name: 'GRINIUM rail — Feeling lucky? (160×600)', placement: 'sidebar',
+        image_url: '/promo/grinium-fortune-160x600.svg', weight: 20,
+        alt_text: 'Feeling lucky? Block jackpots, prize draws, streak rewards and a monthly lottery' },
+      { v: 2, name: 'GRINIUM rail — Anonymous (160×600)', placement: 'sidebar',
+        image_url: '/promo/grinium-privacy-160x600.svg', weight: 10,
+        alt_text: 'Mine anonymously — no accounts, no emails, Tor payouts' },
+
+      // Squares — in-content (the sidebar rail is too narrow for a 300×250). On an
+      // upgrade these already exist as the re-homed sidebar squares above.
+      { v: 1, name: 'GRINIUM promo — Fortune board (in-content 300×250)', placement: 'in-content',
+        image_url: '/promo/grinium-fortune-300x250.svg', weight: 10,
+        alt_text: 'Feeling lucky? Block jackpots, prize draws, streak rewards and a monthly lottery' },
+      { v: 1, name: 'GRINIUM promo — Anonymous mining (in-content 300×250)', placement: 'in-content',
+        image_url: '/promo/grinium-privacy-300x250.svg', weight: 5,
+        alt_text: 'Mine anonymously — no accounts, no emails, Tor payouts' }
+    ];
+
+    const seen = this.db.prepare('SELECT 1 FROM ads WHERE image_url = ? LIMIT 1');
+    let added = 0;
+    for (const s of seeds) {
+      if (!firstRun && s.v < 2) continue;        // upgrade: never resurrect a v1 creative
+      if (seen.get(s.image_url)) continue;        // operator already has (or kept) this one
+      const { v, ...ad } = s;
+      this.create({ ...ad, link_url: '#', ad_type: 'banner', is_active: 1 });
+      added++;
+    }
+
+    for (const key of ['selfpromo_seeded', 'selfpromo_seeded_v2']) {
+      this.db.prepare(`
+        INSERT INTO pool_config (section, key, value, value_type) VALUES ('ads', ?, '1', 'boolean')
+        ON CONFLICT(section, key) DO NOTHING
+      `).run(key);
+    }
+    return added > 0;
   }
 }
 

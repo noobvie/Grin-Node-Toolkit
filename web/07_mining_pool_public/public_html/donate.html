@@ -142,6 +142,17 @@
       border: 1px solid var(--border, rgba(255,255,255,.10));
     }
     .panel-note { margin-top: .75rem; color: var(--text-dim, #9aa4b2); font-size: .85rem; }
+    .pp-cols { display: flex; gap: 1.5rem; flex-wrap: wrap; margin-top: .5rem; }
+    .pp-col { flex: 1 1 240px; min-width: 240px; }
+    .pp-col-head {
+      font-weight: 700; margin-bottom: .4rem; padding-bottom: .3rem;
+      border-bottom: 1px solid var(--border, rgba(255,255,255,.10));
+    }
+    .pp-col-head span { color: var(--accent, #7ee787); }
+    .pp-table { width: 100%; border-collapse: collapse; font-size: .88rem; }
+    .pp-table td { padding: .28rem .2rem; border-bottom: 1px solid var(--border, rgba(255,255,255,.06)); }
+    .pp-table td.pp-amt { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+    .pp-table td.pp-none { color: var(--text-dim, #9aa4b2); font-style: italic; }
   </style>
 </head>
 <body>
@@ -230,6 +241,29 @@
                         <li>🎉 <strong>Lottery</strong> — weekly and special-occasion draws, with an equal-chance pot so small miners can win too.</li>
                     </ul>
                     <p class="panel-note"><a class="nav-link" href="fortune-board.html" style="text-decoration:underline;">See every prize ever paid → Fortune Board</a></p>
+                </div>
+            </div>
+
+            <!-- ═══ D-05 · PRIZE POOL LEDGER (in & out) ═══ -->
+            <div class="panel"><span class="screws"></span>
+                <h2 class="panel-title"><span class="tag">D-05</span> Prize pool ledger
+                    <span class="right">every GRIN in, every GRIN out</span></h2>
+                <div class="panel-body">
+                    <p class="panel-note">Balance now: <b id="pp-balance">—</b> GRIN. A fully public
+                        account of where the prize pool is funded from and where it is paid out —
+                        including <b>abandoned balances</b>, which are never paid to the operator and
+                        instead fund community prizes. Lifetime totals.</p>
+                    <div class="pp-cols" id="pp-cols" style="display:none;">
+                        <div class="pp-col">
+                            <div class="pp-col-head">Comes in <span id="pp-in-total">—</span> GRIN</div>
+                            <table class="pp-table"><tbody id="pp-in-body"></tbody></table>
+                        </div>
+                        <div class="pp-col">
+                            <div class="pp-col-head">Goes out <span id="pp-out-total">—</span> GRIN</div>
+                            <table class="pp-table"><tbody id="pp-out-body"></tbody></table>
+                        </div>
+                    </div>
+                    <div class="donor-empty" id="pp-empty">LOADING PRIZE POOL LEDGER…</div>
                 </div>
             </div>
 
@@ -326,6 +360,38 @@
                 })
                 .catch(function () {
                     document.getElementById('donor-empty').textContent = 'DONOR DATA UNAVAILABLE';
+                });
+        })();
+
+        // ── Prize pool ledger (/api/pool/prize-pool) ───────────────────────────
+        (function () {
+            'use strict';
+            function escHtml(s) {
+                return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+            }
+            function fmtGrin(v) { return (typeof v === 'number' ? v : 0).toFixed(4); }
+            function rows(arr) {
+                if (!arr || !arr.length) return '<tr><td class="pp-none">none yet</td><td></td></tr>';
+                return arr.map(function (x) {
+                    return '<tr><td>' + escHtml(x.label) + '</td><td class="pp-amt">' + fmtGrin(x.amount) + '</td></tr>';
+                }).join('');
+            }
+            function set(id, v) { var el = document.getElementById(id); if (el && v != null) el.textContent = v; }
+
+            fetch('/api/pool/prize-pool', { credentials: 'same-origin' })
+                .then(function (r) { return r.ok ? r.json() : null; })
+                .then(function (d) {
+                    if (!d) { document.getElementById('pp-empty').textContent = 'PRIZE POOL DATA UNAVAILABLE'; return; }
+                    set('pp-balance', fmtGrin(d.balance));
+                    set('pp-in-total', fmtGrin(d.in && d.in.total));
+                    set('pp-out-total', fmtGrin(d.out && d.out.total));
+                    document.getElementById('pp-in-body').innerHTML = rows(d.in && d.in.by);
+                    document.getElementById('pp-out-body').innerHTML = rows(d.out && d.out.by);
+                    document.getElementById('pp-cols').style.display = '';
+                    document.getElementById('pp-empty').style.display = 'none';
+                })
+                .catch(function () {
+                    document.getElementById('pp-empty').textContent = 'PRIZE POOL DATA UNAVAILABLE';
                 });
         })();
     </script>

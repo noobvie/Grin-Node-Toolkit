@@ -186,11 +186,13 @@ class PoolSettings {
       // ── Abandoned-balance disposition (lib/dormancy.js). OFF by default — turning it on
       // is a deliberate operator decision that eventually MOVES miners' money, so it must be
       // explicitly enabled AND disclosed (ToS + payout-page banner). When on: an address with
-      // no share and no successful payout for `dormancy_months`, still holding a balance, is
-      // swept and its balance REDISTRIBUTED to miners active in the last
-      // `dormancy_active_window_days` (PPLNS-weighted by recent hashrate). FINAL — the original
-      // owner can reclaim any time BEFORE disposition (per-address countdown on the account
-      // page), never after. Never operator revenue.
+      // no share, no successful payout AND no withdrawal request for `dormancy_months`, still
+      // holding a balance, is swept into the community PRIZE POOL, which is given away through the
+      // pool's published draws. Sweeps only run while the incentive draws are ON (no draws → no
+      // sweep). FINAL — the original owner can reclaim any time BEFORE disposition simply by
+      // requesting a payout (which resets the countdown even if that payout later fails), never
+      // after. `dormancy_active_window_days` is the recent-activity boundary below which an address
+      // is treated as idle (NOT a recipient window — there is no recipient split). Never operator revenue.
       dormancy_enabled: 'false',
       dormancy_months: 24,
       dormancy_active_window_days: 30,
@@ -272,9 +274,9 @@ class PoolSettings {
 <h2>4. Abandoned and unclaimed balances</h2>
 <p>Because the pool is custodial between the time a reward is credited and the time it is paid out, an address may accumulate a balance and then stop mining without ever withdrawing it. To keep the pool solvent and its books clean, balances left <strong>completely inactive</strong> — no accepted share and no successful payout — for a prolonged period (by default <strong>24 months</strong>; the current window and a live list of affected balances are shown on the <a href="/payment-history.html">Payments &amp; Transparency</a> page) are treated as <strong>abandoned</strong>.</p>
 <ul>
-  <li>An abandoned balance is <strong>swept and redistributed to miners who are active at that time</strong>, in proportion to their recent contribution. <strong>It is never taken by, or paid to, the pool operator.</strong></li>
-  <li>Redistribution is <strong>final</strong>. You may reclaim your balance at any time <strong>before</strong> it is redistributed — simply request a payout from the <a href="/account-settings.html">Account</a> page, where each address shows how long until its balance would be redistributed. Once a balance has been redistributed it <strong>cannot be recovered</strong>.</li>
-  <li>The countdown is measured from the later of your last activity and the date this policy took effect, so every address is given the full window from that date.</li>
+  <li>An abandoned balance is <strong>swept into the community prize pool</strong>, where it is given away to miners through the pool's published prize draws. <strong>It is never taken by, or paid to, the pool operator.</strong> Sweeps only run while those draws are active, so an abandoned balance is only ever moved into a pool that pays back out to miners. The prize pool's full inflows and outflows are shown publicly on the <a href="/donate.html">Prize Pool</a> page.</li>
+  <li>The sweep is <strong>final</strong>. You may reclaim your balance at any time <strong>before</strong> it is swept — simply request a payout from the <a href="/account-settings.html">Account</a> page, where each address shows how long until its balance would be swept. <strong>Requesting a payout resets your countdown</strong> (and keeps it reset even if that payout later fails and returns to your balance), so any attempt to withdraw protects the balance. Once a balance has been swept into the prize pool it <strong>cannot be recovered</strong>.</li>
+  <li>The countdown is measured from the later of your last activity — mining, a successful payout, or any withdrawal request — and the date this policy took effect, so every address is given the full window from that date.</li>
   <li>If your balance is below the minimum withdrawal threshold and you wish to stop mining and withdraw it, contact the operator (see the footer or the Grin forum). After verifying that you control the address, the operator can arrange a manual payout.</li>
 </ul>
 

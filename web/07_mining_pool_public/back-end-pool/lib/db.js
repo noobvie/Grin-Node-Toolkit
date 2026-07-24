@@ -429,16 +429,19 @@ function createSchema() {
 
     // ── Abandoned-balance disposition (lib/dormancy.js) ──────────────────────────
     // When a miner's address has had NO activity (no share, no successful payout) for
-    // dormancy_months AND still holds a balance, the pool sweeps that balance and
-    // redistributes it to CURRENTLY-active miners (PPLNS-weighted by recent hashrate).
-    // Disposition is FINAL (disclosed in the ToS + the payout-page banner): the swept
-    // balance is an INTERNAL transfer (debit source → credit recipients), never operator
-    // revenue. These two tables are the never-pruned audit trail behind the public
-    // "unclaimed balances" transparency section and the admin dormancy panel — raw
-    // balance_log rows prune at 60d, so historical disposition detail lives HERE.
+    // dormancy_months AND still holds a balance, the pool sweeps that balance into the
+    // community PRIZE POOL (the single prize_pool bucket), where it is later given away
+    // through the pool's published draws. Disposition is FINAL (disclosed in the ToS + the
+    // payout-page banner): the swept balance is an INTERNAL transfer (debit each source →
+    // ONE credit to prize_pool), never operator revenue. These two tables are the
+    // never-pruned audit trail behind the public "unclaimed balances" transparency section
+    // and the admin dormancy panel — raw balance_log rows prune at 60d, so historical
+    // disposition detail lives HERE.
     //
-    // One batch row per run; one source row per swept address. Recipients are reconstructable
-    // from balance_log (reference_type='dormant_payout', reference_id=disposition batch id).
+    // One batch row per run; one source row per swept address. The prize-pool inflow is a
+    // single balance_log row (grin_address='prize_pool', reference_type='dormant',
+    // reference_id=disposition batch id). remainder is always 0 and recipient_count always 1
+    // (the prize pool) — columns retained for schema/back-compat with pre-prize-pool batches.
     `CREATE TABLE IF NOT EXISTS dormancy_dispositions (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       total_swept REAL NOT NULL,

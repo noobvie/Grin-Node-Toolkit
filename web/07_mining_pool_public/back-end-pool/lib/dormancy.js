@@ -2,21 +2,28 @@ const { getDb } = require('./db');
 const PoolSettings = require('./pool-settings');
 const { RESERVED_ADDRESSES } = require('./incentives');
 
-// Abandoned-balance disposition.
+const PRIZE_POOL = 'prize_pool';
+
+// Abandoned-balance disposition — the simple, transparent scheme.
 //
 // Policy (operator-configurable, OFF by default, disclosed in the ToS + the payout-page banner):
 // an address with NO activity — no accepted share AND no successful payout — for `dormancy_months`
-// (default 24), still holding a balance, is considered abandoned. Its balance is swept and
-// REDISTRIBUTED to miners active in the last `dormancy_active_window_days` (default 30), weighted
-// by their recent sustained work (hashrate_history — the same durable "sustained work" source the
-// lottery uses; the raw shares table prunes within ~a day so it can't back a 30-day window).
+// (default 24), still holding a balance, is considered abandoned. Its balance is swept into the
+// COMMUNITY PRIZE POOL (the single `prize_pool` bucket funded by fee-cut + donations + top-ups),
+// where it is later given away through the pool's published, verifiable draws. There is no
+// per-recipient split here: one debit per abandoned address, ONE credit to the prize pool. That
+// removes every hard question a direct redistribution raises (equal-vs-weighted, Sybil-per-address,
+// dust-spraying tiny balances across hundreds of miners, "no active recipients") — the existing
+// contest machinery handles distribution fairly (Pot A whale-cap + Pot B equal-chance).
 //
 // Two invariants make this safe to bolt onto the custodial ledger:
-//   1. Disposition is an INTERNAL transfer — Σ debited from sources == Σ credited to recipients
-//      (remainder included), so reconciliation's integrity invariant nets to exactly zero and the
-//      swept coins never leave the wallet. Fresh reference_types ('dormant_sweep' debit,
-//      'dormant_payout' credit) keep it OUT of the external IN/OUT flow statement. It is NEVER
-//      operator revenue.
+//   1. Disposition is an INTERNAL transfer — Σ debited from sources == the single credit to
+//      prize_pool, so reconciliation's integrity invariant (which sums ALL credit/debit rows
+//      regardless of reference_type) nets to exactly zero and the swept coins never leave the
+//      wallet. The 'dormant_sweep' debit + 'dormant' prize-pool credit stay OUT of the external
+//      IN/OUT flow statement. It is NEVER operator revenue — prize_pool is a reserved bucket the
+//      operator can never pay themselves from. (Because prize_pool is excluded from custodial
+//      liability, sweeping abandoned money there correctly REDUCES what the pool owes miners.)
 //   2. Disposition is FINAL and only reachable after a long, GRANDFATHERED window: the clock counts
 //      from max(last_activity, dormancy_policy_effective_at), and the first enabled run stamps that
 //      anchor to "now" and disposes nobody — so every address gets a full window of runway after the
@@ -33,7 +40,6 @@ const { RESERVED_ADDRESSES } = require('./incentives');
 const MONTH_SECONDS = 2629800; // 30.4375 days — integer months × this
 const CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000; // disposition is not time-critical; a no-op when idle
 const r9 = (v) => parseFloat((Number(v) || 0).toFixed(9));
-const floor9 = (v) => Math.floor((Number(v) || 0) * 1e9) / 1e9;
 const flag = (v) => v === true || v === 'true';
 
 // Mask a grin address for public display: enough for the real owner to recognise their own,
@@ -72,6 +78,17 @@ class DormancyManager {
     } catch (e) { return false; }
   }
 
+  // Sweeps route into the prize pool, which is DRAINED by the incentive draws (lottery, jackpot,
+  // join bonus, streaks). If incentives are OFF, the prize pool never pays out — so a sweep would
+  // strip an owner's balance into a bucket that just accumulates forever, meeting neither the ToS
+  // promise ("given away through the pool's published draws") nor any benefit to miners. Gate on it:
+  // no draws, no sweep. (Enabling dormancy stamps the grandfather anchor via pool-settings, so once
+  // incentives come on the clock already reflects the full runway from the dormancy-enable date.)
+  _incentivesEnabled() {
+    try { return flag(this.settings.getSection('incentives').incentives_enabled); }
+    catch (e) { return false; }
+  }
+
   _reservedPlaceholders() {
     return RESERVED_ADDRESSES.map(() => '?').join(',');
   }
@@ -79,8 +96,13 @@ class DormancyManager {
   // ── Candidate query ──────────────────────────────────────────────────────────
   // Every non-reserved, non-banned address holding a balance, with its durable last-activity
   // anchor. last_activity = latest of {last_seen_at (online tracking), account creation, last
-  // successful payout}. Shares prune within ~a day so they are deliberately NOT used here — an
-  // address that mines keeps last_seen_at fresh (miners.js), which is what we key off.
+  // successful payout, last WITHDRAWAL REQUEST of ANY status}. Shares prune within ~a day so they
+  // are deliberately NOT used here — an address that mines keeps last_seen_at fresh (miners.js),
+  // which is what we key off. The withdrawal REQUEST time (last_request, any status) is included
+  // so that the ToS reclaim promise — "request a payout to reclaim before the sweep" — is DURABLE:
+  // a reclaim attempt resets the countdown even if that payout later fails and auto-refunds, or is
+  // only partial. (A confirmed payout also updates last_payout; a pending one already removes the
+  // locked funds from the balance>0 filter — this closes the failed/partial gap.)
   _candidates() {
     const ph = this._reservedPlaceholders();
     return this.db.prepare(`
@@ -89,36 +111,21 @@ class DormancyManager {
              MAX(
                COALESCE(ma.last_seen_at, 0),
                ma.created_at,
-               COALESCE(w.last_payout, 0)
+               COALESCE(w.last_payout, 0),
+               COALESCE(w.last_request, 0)
              ) AS last_activity
       FROM miner_accounts ma
       LEFT JOIN (
-        SELECT grin_address, MAX(confirmed_at) AS last_payout
-        FROM withdrawals WHERE status = 'confirmed' GROUP BY grin_address
+        SELECT grin_address,
+               MAX(CASE WHEN status = 'confirmed' THEN confirmed_at END) AS last_payout,
+               MAX(created_at) AS last_request
+        FROM withdrawals GROUP BY grin_address
       ) w ON w.grin_address = ma.grin_address
       WHERE ma.balance > 0
         AND ma.is_banned = 0
         AND ma.grin_address NOT IN (${ph})
       ORDER BY last_activity ASC
     `).all(...RESERVED_ADDRESSES);
-  }
-
-  // Miners active in the redistribution window, weighted by recent sustained work. Excludes the
-  // reserved buckets and any address in `excludeSet` (the sources being swept — inactive by
-  // definition, but excluded explicitly so a source can never also receive).
-  _activeRecipients(now, windowDays, excludeSet) {
-    const ph = this._reservedPlaceholders();
-    const rows = this.db.prepare(`
-      SELECT hh.grin_address AS grin_address, SUM(hh.hashrate_gps) AS weight
-      FROM hashrate_history hh
-      JOIN miner_accounts ma ON ma.grin_address = hh.grin_address
-      WHERE hh.recorded_at >= ?
-        AND ma.is_banned = 0
-        AND hh.grin_address NOT IN (${ph})
-      GROUP BY hh.grin_address
-      HAVING weight > 0
-    `).all(now - windowDays * 86400, ...RESERVED_ADDRESSES);
-    return rows.filter((r) => !excludeSet.has(r.grin_address) && Number(r.weight) > 0);
   }
 
   // ── Public / admin read: dormant countdown list ──────────────────────────────
@@ -204,11 +211,14 @@ class DormancyManager {
     if (!acct) return { state: 'unknown' };
 
     const balance = Number(acct.balance) || 0;
-    const payout = this.db.prepare(
-      "SELECT MAX(confirmed_at) AS t FROM withdrawals WHERE grin_address = ? AND status = 'confirmed'"
+    // Match _candidates(): a withdrawal REQUEST of any status counts as activity, so an owner who
+    // tries to reclaim keeps a durable countdown reset even if that payout later fails/refunds.
+    const wact = this.db.prepare(
+      "SELECT MAX(CASE WHEN status = 'confirmed' THEN confirmed_at END) AS confirmed, MAX(created_at) AS requested FROM withdrawals WHERE grin_address = ?"
     ).get(addr);
     const lastActivity = Math.max(
-      Number(acct.last_seen_at) || 0, Number(acct.created_at) || 0, Number(payout && payout.t) || 0
+      Number(acct.last_seen_at) || 0, Number(acct.created_at) || 0,
+      Number(wact && wact.confirmed) || 0, Number(wact && wact.requested) || 0
     );
 
     if (balance <= 0) return { state: 'no_balance', last_activity_at: lastActivity };
@@ -252,6 +262,7 @@ class DormancyManager {
         remainder: r9(b.remainder),
         source_count: b.source_count,
         recipient_count: b.recipient_count,
+        destination: 'prize_pool',
         dormancy_months: b.dormancy_months,
         active_window_days: b.active_window_days,
         automatic: b.triggered_by === null,
@@ -260,7 +271,7 @@ class DormancyManager {
     };
   }
 
-  // ── Dry run: what a disposition NOW would sweep/redistribute (no mutation) ────
+  // ── Dry run: what a disposition NOW would sweep into the prize pool (no mutation) ────
   preview() {
     const { enabled, months, windowDays, effectiveAt } = this._cfg();
     const now = Math.floor(Date.now() / 1000);
@@ -268,8 +279,6 @@ class DormancyManager {
     const sources = (effectiveAt > 0)
       ? this._candidates().filter((r) => Math.max(r.last_activity, effectiveAt) <= idleCutoff)
       : [];
-    const excludeSet = new Set(sources.map((s) => s.grin_address));
-    const recipients = sources.length ? this._activeRecipients(now, windowDays, excludeSet) : [];
     const totalSwept = r9(sources.reduce((a, s) => a + (Number(s.balance) || 0), 0));
     return {
       enabled,
@@ -278,12 +287,12 @@ class DormancyManager {
       dormancy_months: months,
       active_window_days: windowDays,
       would_sweep: { count: sources.length, amount: totalSwept },
-      would_credit: { recipients: recipients.length },
+      would_credit: { destination: PRIZE_POOL, amount: totalSwept },
       blocked: !enabled ? 'disabled'
         : this.isFrozen() ? 'payouts_frozen'
+        : !this._incentivesEnabled() ? 'incentives_disabled'
         : effectiveAt <= 0 ? 'awaiting_effective_anchor'
         : sources.length === 0 ? 'no_eligible_sources'
-        : recipients.length === 0 ? 'no_active_recipients'
         : null,
     };
   }
@@ -294,10 +303,12 @@ class DormancyManager {
   runOnce({ triggeredBy = null } = {}) {
     const now = Math.floor(Date.now() / 1000);
     const { enabled, months, windowDays, effectiveAt } = this._cfg();
-    const result = { ran_at: now, enabled, disposed: false, swept: 0, sources: 0, recipients: 0, skipped: null };
+    const result = { ran_at: now, enabled, disposed: false, swept: 0, sources: 0, destination: PRIZE_POOL, skipped: null };
 
     if (!enabled) { result.skipped = 'disabled'; this._remember(result); return result; }
     if (this.isFrozen()) { result.skipped = 'payouts_frozen'; this._remember(result); return result; }
+    // Never sweep into a prize pool that can't pay out — draws must be enabled (see _incentivesEnabled).
+    if (!this._incentivesEnabled()) { result.skipped = 'incentives_disabled'; this._remember(result); return result; }
 
     // Grandfather anchor: first enabled run stamps "now" and disposes nobody, so every address
     // gets a full window of runway from the moment the policy goes live.
@@ -316,26 +327,16 @@ class DormancyManager {
     const totalSwept = r9(sources.reduce((a, s) => a + (Number(s.balance) || 0), 0));
     if (!(totalSwept > 0)) { result.skipped = 'nothing_to_sweep'; this._remember(result); return result; }
 
-    const excludeSet = new Set(sources.map((s) => s.grin_address));
-    const recipients = this._activeRecipients(now, windowDays, excludeSet);
-    // Never sweep into the void: with no active miners to receive, DEFER — the balances stay put
-    // and reclaimable until there's someone to redistribute to.
-    if (recipients.length === 0) { result.skipped = 'no_active_recipients'; this._remember(result); return result; }
+    // Destination is the single prize_pool bucket — no recipient selection, no weighting, no
+    // "no active recipients" edge case. Ensure the bucket row exists so the credit UPDATE lands.
+    this.db.prepare('INSERT OR IGNORE INTO miner_accounts (grin_address, balance) VALUES (?, 0)').run(PRIZE_POOL);
 
-    // Split totalSwept across recipients by weight; floor each to the nanogrin, then hand the
-    // rounding remainder to the largest-weight recipient so Σcredited == totalSwept exactly.
-    const totalWeight = recipients.reduce((a, r) => a + Number(r.weight), 0);
-    let topIdx = 0;
-    for (let i = 1; i < recipients.length; i++) if (Number(recipients[i].weight) > Number(recipients[topIdx].weight)) topIdx = i;
-    const credited = recipients.map((r) => floor9(totalSwept * (Number(r.weight) / totalWeight)));
-    let sumCredited = r9(credited.reduce((a, v) => a + v, 0));
-    const remainder = r9(totalSwept - sumCredited);
-    credited[topIdx] = r9(credited[topIdx] + remainder);
-
+    // recipient_count is always 1 (the prize pool); remainder is always 0 — the single credit is the
+    // exact sum of the source debits, so Σdebit == credit and the integrity invariant nets to zero.
     const insBatch = this.db.prepare(`
       INSERT INTO dormancy_dispositions
         (total_swept, remainder, source_count, recipient_count, dormancy_months, active_window_days, triggered_by)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, 0, ?, 1, ?, ?, ?)
     `);
     const insSource = this.db.prepare(`
       INSERT INTO dormancy_disposed_sources (disposition_id, grin_address, amount, last_activity_at)
@@ -349,11 +350,13 @@ class DormancyManager {
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     const readBal = this.db.prepare('SELECT balance, balance_locked FROM miner_accounts WHERE grin_address = ?');
+    const updBatchTotal = this.db.prepare('UPDATE dormancy_dispositions SET total_swept = ? WHERE id = ?');
 
     const tx = this.db.transaction(() => {
-      const info = insBatch.run(totalSwept, remainder, sources.length, recipients.length, months, windowDays, triggeredBy);
+      const info = insBatch.run(totalSwept, sources.length, months, windowDays, triggeredBy);
       const batchId = Number(info.lastInsertRowid);
 
+      let sweptExact = 0;
       for (const src of sources) {
         const cur = readBal.get(src.grin_address);
         const before = Number(cur.balance) || 0;
@@ -361,25 +364,32 @@ class DormancyManager {
         debit.run(before, src.grin_address); // debit the exact current balance → 0
         logRow.run(src.grin_address, 'debit', r9(before), r9(before), 0, r9(locked), r9(locked), 'dormant_sweep', batchId);
         insSource.run(batchId, src.grin_address, r9(before), src.last_activity);
-      }
-      for (let i = 0; i < recipients.length; i++) {
-        const amt = credited[i];
-        if (!(amt > 0)) continue;
-        const addr = recipients[i].grin_address;
-        const cur = readBal.get(addr);
-        const before = Number(cur.balance) || 0;
-        const locked = Number(cur.balance_locked) || 0;
-        credit.run(amt, addr);
-        logRow.run(addr, 'credit', amt, r9(before), r9(before + amt), r9(locked), r9(locked), 'dormant_payout', batchId);
+        sweptExact = r9(sweptExact + before);
       }
 
-      this._audit(triggeredBy, batchId, { total_swept: totalSwept, sources: sources.length, recipients: recipients.length, remainder });
-      return batchId;
+      // Single credit of the exact swept total into the community prize pool. reference_type
+      // 'dormant' keeps it out of the external flow statement but visible in the prize-pool
+      // in/out breakdown (reconciliation.prize.from_dormant + the /api/pool/prize-pool report).
+      const pcur = readBal.get(PRIZE_POOL);
+      const pbefore = Number(pcur.balance) || 0;
+      const plocked = Number(pcur.balance_locked) || 0;
+      credit.run(sweptExact, PRIZE_POOL);
+      logRow.run(PRIZE_POOL, 'credit', sweptExact, r9(pbefore), r9(pbefore + sweptExact), r9(plocked), r9(plocked), 'dormant', batchId);
+
+      // Record the EXACT in-tx swept total on the batch (not the pre-tx snapshot). Identical under
+      // synchronous sqlite today, but this makes the batch row authoritative for the real ledger
+      // movement regardless of any future gap between candidate collection and this transaction.
+      if (sweptExact !== totalSwept) updBatchTotal.run(sweptExact, batchId);
+
+      this._audit(triggeredBy, batchId, { total_swept: sweptExact, sources: sources.length, destination: PRIZE_POOL });
+      return { batchId, sweptExact };
     });
 
     let batchId;
     try {
-      batchId = tx();
+      const out = tx();
+      batchId = out.batchId;
+      result.swept = out.sweptExact;
     } catch (e) {
       console.error(`[dormancy] disposition failed: ${e.message}`);
       result.skipped = 'error';
@@ -390,11 +400,8 @@ class DormancyManager {
 
     result.disposed = true;
     result.disposition_id = batchId;
-    result.swept = totalSwept;
     result.sources = sources.length;
-    result.recipients = recipients.length;
-    result.remainder = remainder;
-    console.warn(`[dormancy] disposed ${totalSwept} GRIN from ${sources.length} abandoned address(es) → ${recipients.length} active miner(s) (batch ${batchId})`);
+    console.warn(`[dormancy] disposed ${result.swept} GRIN from ${sources.length} abandoned address(es) → prize pool (batch ${batchId})`);
     this._remember(result);
     return result;
   }
@@ -513,6 +520,7 @@ class DormancyManager {
     const { enabled, months, windowDays, effectiveAt } = this._cfg();
     return {
       enabled,
+      incentives_enabled: this._incentivesEnabled(),
       dormancy_months: months,
       active_window_days: windowDays,
       policy_effective_at: effectiveAt || null,

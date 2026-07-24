@@ -92,13 +92,16 @@
         <div class="form-section">
           <h3 class="section-title">Abandoned Balances</h3>
           <p class="helper-text" style="margin-bottom:12px;">
-            When on, an address with <b>no accepted share and no successful payout</b> for the dormancy window,
-            still holding a balance, is swept and its balance <b>redistributed to currently-active miners</b>
-            (weighted by recent work). This is <b>final</b> and it is <b>never operator revenue</b>. The owner can
-            reclaim any time <b>before</b> disposition — the account page shows a per-address countdown, and the
-            payments page lists dormant balances publicly (masked). <b>You must disclose this in your Terms of
-            Service before enabling.</b> The clock is grandfathered: the first run after you enable stamps the
-            start date and disposes nobody, so every address gets a full window of runway.
+            When on, an address with <b>no accepted share, no successful payout and no withdrawal request</b> for
+            the dormancy window, still holding a balance, is swept into the <b>community prize pool</b>
+            (given away through the pool's published draws). This is <b>final</b> and it is <b>never operator
+            revenue</b>. The owner can reclaim any time <b>before</b> disposition simply by requesting a payout,
+            which resets their countdown (even if that payout later fails) — the account page shows a per-address
+            countdown, and the payments page lists dormant balances publicly (masked). <b>Sweeps only run while the
+            incentive draws (Incentives tab) are enabled</b>, so a balance is never moved into a pool that can't pay
+            back out. <b>You must disclose this in your Terms of Service before enabling.</b> The clock is
+            grandfathered: the first run after you enable stamps the start date and disposes nobody, so every
+            address gets a full window of runway.
           </p>
           <div class="checkbox-group">
             <input type="checkbox" id="dormancy_enabled" name="dormancy_enabled">
@@ -111,9 +114,9 @@
               <div class="helper-text">Months of total inactivity (no share, no payout) before a balance becomes eligible. Minimum 12 — a long, unmistakable abandonment window before a final disposition.</div>
             </div>
             <div class="form-group">
-              <label for="dormancy_active_window_days">Active-Miner Window (days)</label>
+              <label for="dormancy_active_window_days">Idle Threshold (days)</label>
               <input type="number" id="dormancy_active_window_days" name="dormancy_active_window_days" min="1" max="365" step="1" value="30">
-              <div class="helper-text">A swept balance is shared among miners with recent work inside this window, weighted by their sustained hashrate (PPLNS-style).</div>
+              <div class="helper-text">Recent-activity boundary: an address seen within this many days is treated as still active and is never listed as dormant or swept. (It no longer selects recipients — swept balances go to the prize pool, not a per-miner split.)</div>
             </div>
           </div>
         </div>

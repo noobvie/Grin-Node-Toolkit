@@ -36,11 +36,55 @@
         <input id="tx-search-input" type="text" placeholder="Block height or hash…  ( / )" autocomplete="off" spellcheck="false" aria-label="Search by block height or hash">
         <button class="tx-btn" type="submit">Search</button>
       </form>
+      <div class="tx-tools" id="tx-tools">
+        <button class="tx-toolbtn tx-tools-btn" id="tx-tools-btn" type="button" aria-haspopup="true" aria-expanded="false" title="Tools">
+          <span class="tx-toolbtn-icon">🧰</span><span class="tx-toolbtn-text">Tools</span><span class="tx-tools-caret" aria-hidden="true">▾</span>
+        </button>
+        <div class="tx-tools-menu" id="tx-tools-menu" role="menu" hidden>
+          <a class="tx-tools-item" href="/slate" role="menuitem">
+            <span class="tx-tools-ico">🔎</span>
+            <span class="tx-tools-txt"><b>Slate Inspector</b><small>Read a slatepack — amount, fee, step</small></span>
+          </a>
+          <a class="tx-tools-item" href="/emission" role="menuitem">
+            <span class="tx-tools-ico">⏱</span>
+            <span class="tx-tools-txt"><b>Emission &amp; Supply</b><small>Verify 1 ツ/sec · height × 60</small></span>
+          </a>
+        </div>
+      </div>
       <button id="tx-theme-toggle" class="tx-theme-toggle" aria-label="Toggle light/dark theme" title="Toggle theme">☾</button>
     </div>
   </header>
 
   <main class="tx-wrap tx-main">
+
+    <details class="tx-details">
+      <summary>Why Grin stands out</summary>
+      <div class="tx-details-body">
+        <ul>
+          <li><strong>Sound money backed by time.</strong> Gold answers to central banks; Bitcoin caps at 21M. Grin emits exactly <strong>1 ツ per second, forever</strong> — a constant, predictable heartbeat.</li>
+          <li><strong>Fair launch, endless emission.</strong> Flat rewards mean a miner joining today gets the same deal as a day-one miner — no pre-mine, no founder's reward.</li>
+          <li><strong>Privacy by default.</strong> Mimblewimble hides amounts and has no addresses on-chain — transactions are confidential out of the box.</li>
+          <li><strong>Lean &amp; scalable.</strong> Pruning keeps a full node tiny (~a few GB) — orders of magnitude smaller than BTC/ZEC/XMR.</li>
+          <li><strong>Community-run.</strong> No company, no VC — a global crew of developers and enthusiasts.</li>
+        </ul>
+      </div>
+    </details>
+
+    <details class="tx-details">
+      <summary>What can you check here?</summary>
+      <div class="tx-details-body">
+        <ul>
+          <li>Confirm a block you mined landed — and watch its <strong>1,440-block maturity</strong> tick up.</li>
+          <li>Gauge network health at a glance: hashrate, difficulty, peers, mempool.</li>
+          <li>Estimate mining income from the live hashrate.</li>
+          <li>Prove a payment settled via its <strong>kernel excess</strong> (Grin's txid equivalent).</li>
+          <li>Verify emission yourself: circulating supply is simply <strong>height × 60 ツ</strong> —
+              explore it on the <a href="/emission"><strong>Emission &amp; Supply</strong></a> page.</li>
+          <li>Read a slatepack before you act on it with the <a href="/slate"><strong>Slate Inspector</strong></a> —
+              amount, fee, which step it is on, and mainnet vs testnet, decoded in your browser.</li>
+        </ul>
+      </div>
+    </details>
 
     <section class="tx-stats" aria-label="Network statistics">
       <div class="tx-card">
@@ -52,12 +96,14 @@
           <span class="tx-info" tabindex="0" role="tooltip" data-tip="Cuckatoo32 network hashrate · GPS = diffΔ × 42 / block-time / 16384 · from this node's recent blocks">i</span>
         </div>
         <div class="tx-card-value" id="stat-hashrate">—</div>
+        <div class="tx-spark" id="spark-hashrate"></div>
       </div>
       <div class="tx-card">
         <div class="tx-card-label">Difficulty
           <span class="tx-info" tabindex="0" role="tooltip" data-tip="Latest per-block network difficulty (Owner/Foreign API)">i</span>
         </div>
         <div class="tx-card-value" id="stat-difficulty">—</div>
+        <div class="tx-spark" id="spark-difficulty"></div>
       </div>
       <div class="tx-card">
         <div class="tx-card-label">Supply
@@ -91,33 +137,34 @@
         </div>
         <div class="tx-card-value" id="stat-g1">—</div>
       </div>
+      <div class="tx-card" id="card-mempool">
+        <div class="tx-card-label">Mempool
+          <span class="tx-info" tabindex="0" role="tooltip" data-tip="Unconfirmed transactions currently waiting in this node's transaction pool">i</span>
+        </div>
+        <div class="tx-card-value" id="stat-mempool">—</div>
+      </div>
     </section>
 
-    <details class="tx-details">
-      <summary>Why Grin stands out</summary>
-      <div class="tx-details-body">
-        <ul>
-          <li><strong>Sound money backed by time.</strong> Gold answers to central banks; Bitcoin caps at 21M. Grin emits exactly <strong>1 ツ per second, forever</strong> — a constant, predictable heartbeat.</li>
-          <li><strong>Fair launch, endless emission.</strong> Flat rewards mean a miner joining today gets the same deal as a day-one miner — no pre-mine, no founder's reward.</li>
-          <li><strong>Privacy by default.</strong> Mimblewimble hides amounts and has no addresses on-chain — transactions are confidential out of the box.</li>
-          <li><strong>Lean &amp; scalable.</strong> Pruning keeps a full node tiny (~a few GB) — orders of magnitude smaller than BTC/ZEC/XMR.</li>
-          <li><strong>Community-run.</strong> No company, no VC — a global crew of developers and enthusiasts.</li>
-        </ul>
+    <section class="tx-tools-section" aria-label="Tools">
+      <h2 class="tx-tools-h">Tools</h2>
+      <div class="tx-tools-grid">
+        <a class="tx-tool-card" href="/slate">
+          <span class="tx-tool-ico">&#128269;</span>
+          <span class="tx-tool-name">Slate Inspector<span class="tx-tool-badge">New</span></span>
+          <span class="tx-tool-desc">Received a slatepack? Read what is actually inside it before you act —
+            amount, fee, which step of the transaction it is on, and mainnet vs testnet.
+            Decoded entirely in your browser; nothing is uploaded.</span>
+          <span class="tx-tool-go">Open &#8594;</span>
+        </a>
+        <a class="tx-tool-card" href="/emission">
+          <span class="tx-tool-ico">⏱</span>
+          <span class="tx-tool-name">Emission &amp; Supply</span>
+          <span class="tx-tool-desc">Grin emits exactly 1 ツ every second, forever. See the numbers and verify
+            circulating supply yourself — it is simply block height × 60. No halvening, no premine.</span>
+          <span class="tx-tool-go">Open &#8594;</span>
+        </a>
       </div>
-    </details>
-
-    <details class="tx-details">
-      <summary>What can you check here?</summary>
-      <div class="tx-details-body">
-        <ul>
-          <li>Confirm a block you mined landed — and watch its <strong>1,440-block maturity</strong> tick up.</li>
-          <li>Gauge network health at a glance: hashrate, difficulty, peers.</li>
-          <li>Estimate mining income from the live hashrate.</li>
-          <li>Prove a payment settled via its <strong>kernel excess</strong> (Grin's txid equivalent).</li>
-          <li>Verify emission yourself: circulating supply is simply <strong>height × 60 ツ</strong>.</li>
-        </ul>
-      </div>
-    </details>
+    </section>
 
     <div class="tx-section-head">
       <h2>Latest Blocks</h2>

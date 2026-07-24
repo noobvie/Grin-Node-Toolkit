@@ -53,6 +53,22 @@
             <div class="helper-text">
               <strong>Prize pool balance:</strong> <span id="prize-pool-balance">…</span> GRIN
             </div>
+            <div class="helper-text" id="prize-pool-breakdown" style="margin-top:.5rem;">
+              <strong>Where it comes from · where it goes</strong> (lifetime)
+              <div id="prize-pool-flows" style="display:flex;gap:1.5rem;flex-wrap:wrap;margin-top:.35rem;">
+                <div style="min-width:200px;">
+                  <div style="font-weight:600;">In: <span id="pp-in-total">…</span> GRIN</div>
+                  <div id="pp-in-list"></div>
+                </div>
+                <div style="min-width:200px;">
+                  <div style="font-weight:600;">Out: <span id="pp-out-total">…</span> GRIN</div>
+                  <div id="pp-out-list"></div>
+                </div>
+              </div>
+              <div style="margin-top:.35rem;">Abandoned balances swept in:
+                <strong id="pp-from-dormant">0.0000</strong> GRIN. Abandoned wallets are never
+                paid to the operator — they fund community prizes.</div>
+            </div>
             <div class="form-row">
               <div class="form-group">
                 <label for="prize-topup-amount">Manual top-up (GRIN)</label>

@@ -110,7 +110,8 @@ async function computeReconciliation(db, wallet, forceRefresh = true) {
            COALESCE(SUM(CASE WHEN event_type='debit'    THEN ${amt} END),0) AS awarded,
            COALESCE(SUM(CASE WHEN event_type='credit' AND reference_type='fee_cut'  THEN ${amt} END),0) AS from_fee,
            COALESCE(SUM(CASE WHEN event_type='credit' AND reference_type='donation' THEN ${amt} END),0) AS from_donations,
-           COALESCE(SUM(CASE WHEN event_type='credit' AND reference_type='topup'    THEN ${amt} END),0) AS from_topups`;
+           COALESCE(SUM(CASE WHEN event_type='credit' AND reference_type='topup'    THEN ${amt} END),0) AS from_topups,
+           COALESCE(SUM(CASE WHEN event_type='credit' AND reference_type='dormant'  THEN ${amt} END),0) AS from_dormant`;
   const prizeAgg = composite(
     `${PRIZE_CASES('amount')} FROM balance_log WHERE grin_address='prize_pool' AND created_at >= ?`,
     `${PRIZE_CASES('total_amount')} FROM balance_log_daily WHERE grin_address='prize_pool' AND day < ?`,
@@ -197,6 +198,7 @@ async function computeReconciliation(db, wallet, forceRefresh = true) {
           from_fee: r9(prizeAgg.from_fee),
           from_donations: r9(prizeAgg.from_donations),
           from_topups: r9(prizeAgg.from_topups),
+          from_dormant: r9(prizeAgg.from_dormant),
         },
       },
     },

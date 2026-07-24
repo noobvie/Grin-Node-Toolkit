@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Slate Inspector — Read a Grin Slatepack</title>
+  <meta name="description" content="Paste or drop a Grin slatepack to read what is inside it: amount, fee, which transaction step it is on, and whether it belongs to mainnet or testnet. Decoding happens entirely in your browser.">
+  <meta name="robots" content="index, follow">
+  <meta name="theme-color" content="#06070d">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/css/slate.css">
+</head>
+<body>
+
+  <div class="sp-wrap">
+
+    <nav class="sp-nav">
+      <a href="/">&#8592; Explorer</a>
+      <span class="sp-sep"></span>
+      <span>Slate Inspector</span>
+    </nav>
+
+    <header class="sp-head">
+      <div class="sp-kicker">Read-only &#183; nothing is sent anywhere</div>
+      <h1 class="sp-title">Slate<span>pack</span> Inspector</h1>
+      <p class="sp-sub">
+        Paste or drop a Grin slatepack to see exactly what it contains — the amount, the fee,
+        which step of the transaction it is on, and which network it belongs to. Check that a
+        slatepack says what the sender promised <em>before</em> you act on it.
+      </p>
+    </header>
+
+    <section class="sp-drop" id="drop">
+      <textarea id="input" spellcheck="false" autocomplete="off" aria-label="Paste a slatepack here"
+        placeholder="BEGINSLATEPACK. … ENDSLATEPACK.&#10;&#10;Paste here, or drop a .slatepack / .txt file anywhere on this page."></textarea>
+    </section>
+
+    <div class="sp-actions">
+      <button class="sp-btn" id="btn-decode" type="button">Inspect</button>
+      <button class="sp-btn sp-btn--ghost" id="btn-clear" type="button">Clear</button>
+      <span class="sp-privacy" title="No network request is made — decoding runs in your browser">
+        <b>&#9679;</b> Decoded locally in your browser
+      </span>
+    </div>
+
+    <section class="sp-out" id="out" hidden aria-live="polite"></section>
+
+    <details class="sp-details">
+      <summary>What this can and cannot tell you</summary>
+      <div class="sp-details-body">
+        <ul>
+          <li><strong>Plaintext slatepacks are fully readable.</strong> These come from the manual
+            flow — <code>grin-wallet send</code> <em>without</em> a <code>-d</code> destination.
+            Amount, fee, step, and sender are all visible.</li>
+          <li><strong>Encrypted slatepacks are not, and that is the point.</strong> The default
+            <code>send -d &lt;address&gt;</code> encrypts the slate to the recipient and moves the
+            sender inside that encrypted envelope. Only the recipient's wallet can open it — this
+            page will tell you it is encrypted and nothing more.</li>
+          <li><strong>Mainnet vs testnet comes from the sender's address prefix</strong> —
+            <code>grin1…</code> is mainnet, <code>tgrin1…</code> is testnet. A slate itself carries
+            <em>no</em> network field at all, which is why a testnet slate can be signed by a
+            mainnet wallet and only fails when it is broadcast.</li>
+          <li><strong>This page never signs, sends, finalizes, or broadcasts anything.</strong>
+            It holds no keys and makes no network requests. It only reads.</li>
+        </ul>
+      </div>
+    </details>
+
+    <details class="sp-details">
+      <summary>The three steps of a Grin transaction</summary>
+      <div class="sp-details-body">
+        <p>Grin transactions are <strong>interactive</strong> — both sides must take part. There are
+        two directions, and a slate tells you which one it is on:</p>
+        <ul>
+          <li><strong>Standard</strong> (<code>S1</code> &rarr; <code>S2</code> &rarr; <code>S3</code>) —
+            the <em>sender</em> starts. They offer a payment, the receiver adds their output and signs,
+            then the sender finalizes and broadcasts.</li>
+          <li><strong>Invoice</strong> (<code>I1</code> &rarr; <code>I2</code> &rarr; <code>I3</code>) —
+            the <em>receiver</em> starts. They issue a request for payment, the payer signs it, then the
+            invoicer finalizes and broadcasts.</li>
+        </ul>
+        <p>Getting lost between rounds is the most common confusion in Grin. That is what the step
+        rail above is for.</p>
+      </div>
+    </details>
+
+    <footer class="sp-foot">
+      <p class="sp-foot-links">
+        <span class="sp-foot-brand">Tiny Explorer<span id="foot-ver"></span></span>
+        <span class="sp-dot"></span>
+        <a href="/">Explorer</a>
+        <span class="sp-dot"></span>
+        <a href="https://grinscan.org" target="_blank" rel="noopener">GrinScan</a>
+        <span class="sp-dot"></span>
+        <a href="https://forum.grin.mw" target="_blank" rel="noopener">Grin Forum</a>
+        <span class="sp-dot"></span>
+        <a href="https://github.com/noobvie/Grin-Node-Toolkit" target="_blank" rel="noopener">Node Toolkit</a>
+      </p>
+      <p class="sp-foot-made">
+        Made with <span class="sp-heart">&#10084;&#65039;</span> from Saigon
+        <svg class="sp-flag" viewBox="0 0 27 18" width="21" height="14" role="img" aria-label="Yellow flag with three red stripes">
+          <rect width="27" height="18" fill="#FFCD00"/><rect y="4" width="27" height="2" fill="#DA251D"/>
+          <rect y="8" width="27" height="2" fill="#DA251D"/><rect y="12" width="27" height="2" fill="#DA251D"/>
+        </svg>
+      </p>
+    </footer>
+
+  </div>
+
+  <script src="/js/slatepack-decode.js"></script>
+  <script src="/js/slate-ui.js"></script>
+  <script src="/js/analytics.js"></script>
+</body>
+</html>

@@ -1,0 +1,318 @@
+/* ── Slate Inspector — self-contained cyberpunk theme ────────────────────────
+   Scoped to /slate only. Deliberately does NOT import tiny-explorer.css: the
+   rest of the explorer keeps its existing look, so this page carries zero
+   regression risk for /, /block, /kernel and /output.
+   ───────────────────────────────────────────────────────────────────────────*/
+
+:root {
+  --sp-bg:        #06070d;
+  --sp-bg-2:      #0b0e1a;
+  --sp-panel:     rgba(13, 18, 33, .72);
+  --sp-line:      rgba(0, 240, 255, .18);
+  --sp-grid:      rgba(0, 240, 255, .045);
+  --sp-cyan:      #00f0ff;
+  --sp-magenta:   #ff2e88;
+  --sp-amber:     #ffb300;
+  --sp-green:     #00ff9c;
+  --sp-red:       #ff4d5e;
+  --sp-text:      #cbd8ea;
+  --sp-dim:       #6b7c95;
+  --sp-mono: ui-monospace, "JetBrains Mono", "Fira Code", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background:
+    radial-gradient(ellipse 80% 55% at 50% -10%, rgba(255, 46, 136, .13), transparent 70%),
+    radial-gradient(ellipse 70% 50% at 50% 105%, rgba(0, 240, 255, .10), transparent 70%),
+    linear-gradient(var(--sp-grid) 1px, transparent 1px) 0 0 / 100% 34px,
+    linear-gradient(90deg, var(--sp-grid) 1px, transparent 1px) 0 0 / 34px 100%,
+    var(--sp-bg);
+  color: var(--sp-text);
+  font-family: var(--sp-mono);
+  font-size: 15px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Faint CRT scanline wash over the whole page. */
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 9;
+  background: repeating-linear-gradient(180deg, rgba(0,0,0,.18) 0 1px, transparent 1px 3px);
+  mix-blend-mode: multiply;
+  opacity: .5;
+}
+
+a { color: var(--sp-cyan); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+.sp-wrap { max-width: 940px; margin: 0 auto; padding: 22px 18px 64px; position: relative; z-index: 10; }
+
+/* ── Header ──────────────────────────────────────────────────────────────── */
+
+.sp-nav {
+  display: flex; align-items: center; gap: 14px;
+  font-size: 12px; letter-spacing: .14em; text-transform: uppercase;
+  color: var(--sp-dim); margin-bottom: 30px;
+}
+.sp-nav .sp-sep { flex: 1; height: 1px; background: linear-gradient(90deg, var(--sp-line), transparent); }
+
+.sp-head { margin-bottom: 26px; }
+.sp-kicker {
+  font-size: 11px; letter-spacing: .34em; text-transform: uppercase;
+  color: var(--sp-magenta); margin-bottom: 8px;
+}
+.sp-title {
+  margin: 0; font-size: clamp(28px, 6vw, 46px); font-weight: 700; letter-spacing: -.01em;
+  color: #eaf6ff; text-shadow: 0 0 18px rgba(0, 240, 255, .40), 0 0 46px rgba(0, 240, 255, .16);
+}
+.sp-title span { color: var(--sp-cyan); }
+.sp-sub { color: var(--sp-dim); margin: 10px 0 0; font-size: 14px; max-width: 62ch; }
+
+/* ── Drop zone ───────────────────────────────────────────────────────────── */
+
+.sp-drop {
+  position: relative;
+  border: 1px dashed rgba(0, 240, 255, .38);
+  border-radius: 10px;
+  background: var(--sp-panel);
+  padding: 4px;
+  transition: border-color .18s, box-shadow .18s, background .18s;
+}
+.sp-drop.is-over {
+  border-color: var(--sp-magenta);
+  box-shadow: 0 0 0 1px var(--sp-magenta), 0 0 34px rgba(255, 46, 136, .30);
+  background: rgba(255, 46, 136, .07);
+}
+.sp-drop textarea {
+  display: block; width: 100%; min-height: 172px; resize: vertical;
+  background: transparent; border: 0; outline: none;
+  color: var(--sp-text); font-family: var(--sp-mono); font-size: 13px; line-height: 1.65;
+  padding: 16px 18px; word-break: break-all;
+}
+.sp-drop textarea::placeholder { color: #46536b; }
+
+.sp-actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 14px; }
+
+.sp-btn {
+  appearance: none; cursor: pointer;
+  font-family: var(--sp-mono); font-size: 12px; letter-spacing: .16em; text-transform: uppercase;
+  padding: 11px 20px; border-radius: 6px;
+  color: var(--sp-bg); background: var(--sp-cyan);
+  border: 1px solid var(--sp-cyan);
+  box-shadow: 0 0 22px rgba(0, 240, 255, .34);
+  transition: transform .12s, box-shadow .18s, background .18s;
+}
+.sp-btn:hover { box-shadow: 0 0 34px rgba(0, 240, 255, .55); transform: translateY(-1px); }
+.sp-btn:active { transform: translateY(0); }
+.sp-btn--ghost {
+  background: transparent; color: var(--sp-dim);
+  border-color: rgba(107, 124, 149, .40); box-shadow: none;
+}
+.sp-btn--ghost:hover { color: var(--sp-cyan); border-color: var(--sp-cyan); box-shadow: 0 0 18px rgba(0,240,255,.20); }
+
+.sp-privacy {
+  margin-left: auto; font-size: 11px; color: var(--sp-dim);
+  display: inline-flex; align-items: center; gap: 7px;
+}
+.sp-privacy b { color: var(--sp-green); font-weight: 600; }
+
+/* ── Result shell ────────────────────────────────────────────────────────── */
+
+.sp-out { margin-top: 30px; }
+.sp-out[hidden] { display: none; }
+
+.sp-panel {
+  border: 1px solid var(--sp-line);
+  border-radius: 10px;
+  background: var(--sp-panel);
+  backdrop-filter: blur(3px);
+  padding: 22px;
+  margin-bottom: 16px;
+  position: relative;
+  overflow: hidden;
+}
+/* Neon rule along the top edge of every panel. */
+.sp-panel::before {
+  content: ""; position: absolute; top: 0; left: 0; right: 0; height: 1px;
+  background: linear-gradient(90deg, transparent, var(--sp-cyan), transparent);
+  opacity: .65;
+}
+.sp-panel--alert { border-color: rgba(255, 77, 94, .55); }
+.sp-panel--alert::before { background: linear-gradient(90deg, transparent, var(--sp-red), transparent); }
+.sp-panel--locked { border-color: rgba(255, 179, 0, .45); }
+.sp-panel--locked::before { background: linear-gradient(90deg, transparent, var(--sp-amber), transparent); }
+
+.sp-panel-label {
+  font-size: 10px; letter-spacing: .30em; text-transform: uppercase;
+  color: var(--sp-dim); margin-bottom: 14px;
+}
+
+/* ── Headline verdict ────────────────────────────────────────────────────── */
+
+.sp-verdict-top { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin-bottom: 18px; }
+
+.sp-badge {
+  display: inline-flex; align-items: center; gap: 7px;
+  font-size: 11px; letter-spacing: .16em; text-transform: uppercase;
+  padding: 6px 12px; border-radius: 999px;
+  border: 1px solid currentColor;
+}
+.sp-badge::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; box-shadow: 0 0 9px currentColor; }
+.sp-badge--mainnet { color: var(--sp-green); }
+.sp-badge--testnet { color: var(--sp-amber); }
+.sp-badge--unknown { color: var(--sp-dim); }
+.sp-badge--flow    { color: var(--sp-magenta); }
+
+.sp-amount { margin: 6px 0 2px; display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.sp-amount-value {
+  font-size: clamp(34px, 8vw, 58px); font-weight: 700; letter-spacing: -.02em; color: #fff;
+  text-shadow: 0 0 22px rgba(0, 240, 255, .48), 0 0 60px rgba(0, 240, 255, .18);
+  word-break: break-all;
+}
+.sp-amount-unit { font-size: 18px; color: var(--sp-cyan); letter-spacing: .1em; }
+.sp-amount-sub { color: var(--sp-dim); font-size: 13px; margin-top: 4px; }
+
+.sp-headline { font-size: 17px; color: #eaf6ff; margin: 18px 0 6px; }
+.sp-says { color: var(--sp-dim); font-size: 14px; margin: 0; }
+
+.sp-next {
+  margin-top: 18px; padding: 14px 16px;
+  border-left: 2px solid var(--sp-magenta);
+  background: rgba(255, 46, 136, .07);
+  border-radius: 0 6px 6px 0;
+}
+.sp-next-label {
+  font-size: 10px; letter-spacing: .26em; text-transform: uppercase;
+  color: var(--sp-magenta); margin-bottom: 5px;
+}
+.sp-next p { margin: 0; color: #dbe7f5; font-size: 14px; }
+
+/* ── Step rail ───────────────────────────────────────────────────────────── */
+
+.sp-steps { display: flex; align-items: center; gap: 0; margin: 22px 0 4px; }
+.sp-step { flex: 1; text-align: center; position: relative; }
+.sp-step-dot {
+  width: 30px; height: 30px; border-radius: 50%; margin: 0 auto 8px;
+  display: grid; place-items: center; font-size: 12px; font-weight: 700;
+  border: 1px solid rgba(107, 124, 149, .45); color: var(--sp-dim);
+  background: var(--sp-bg-2); position: relative; z-index: 2;
+}
+.sp-step-label { font-size: 10px; letter-spacing: .14em; text-transform: uppercase; color: var(--sp-dim); }
+.sp-step::before {
+  content: ""; position: absolute; top: 15px; left: 0; right: 0; height: 1px;
+  background: rgba(107, 124, 149, .28); z-index: 1;
+}
+.sp-step:first-child::before { left: 50%; }
+.sp-step:last-child::before  { right: 50%; }
+.sp-step.is-done .sp-step-dot { border-color: var(--sp-green); color: var(--sp-green); }
+.sp-step.is-active .sp-step-dot {
+  border-color: var(--sp-cyan); color: var(--sp-bg); background: var(--sp-cyan);
+  box-shadow: 0 0 20px rgba(0, 240, 255, .60);
+}
+.sp-step.is-active .sp-step-label { color: var(--sp-cyan); }
+
+/* ── Field table ─────────────────────────────────────────────────────────── */
+
+.sp-rows { display: grid; gap: 1px; background: rgba(0, 240, 255, .10); border-radius: 6px; overflow: hidden; }
+.sp-row {
+  display: grid; grid-template-columns: 190px 1fr; gap: 14px;
+  padding: 11px 16px; background: var(--sp-bg-2);
+  font-size: 13px; align-items: baseline;
+}
+.sp-row dt { color: var(--sp-dim); letter-spacing: .04em; margin: 0; }
+.sp-row dd { margin: 0; color: var(--sp-text); word-break: break-all; }
+.sp-row dd .sp-mute { color: var(--sp-dim); }
+
+/* ── Encrypted / error states ────────────────────────────────────────────── */
+
+.sp-locked-title { font-size: 18px; color: var(--sp-amber); margin: 0 0 8px; }
+.sp-locked-body  { color: var(--sp-dim); font-size: 14px; margin: 0; max-width: 68ch; }
+
+.sp-error-title { font-size: 17px; color: var(--sp-red); margin: 0 0 8px; }
+.sp-error-body  { color: var(--sp-dim); font-size: 14px; margin: 0; }
+
+.sp-warn {
+  margin-top: 14px; padding: 13px 15px; border-radius: 6px;
+  border: 1px solid rgba(255, 179, 0, .45); background: rgba(255, 179, 0, .07);
+  color: #ffd98a; font-size: 13px;
+}
+
+/* ── Explainer ───────────────────────────────────────────────────────────── */
+
+.sp-details { margin-top: 26px; border-top: 1px solid rgba(107,124,149,.18); padding-top: 8px; }
+.sp-details summary {
+  cursor: pointer; list-style: none; padding: 12px 0;
+  font-size: 12px; letter-spacing: .16em; text-transform: uppercase; color: var(--sp-dim);
+}
+.sp-details summary::-webkit-details-marker { display: none; }
+.sp-details summary::before { content: "▸ "; color: var(--sp-cyan); }
+.sp-details[open] summary::before { content: "▾ "; }
+.sp-details summary:hover { color: var(--sp-cyan); }
+.sp-details-body { color: var(--sp-dim); font-size: 13.5px; padding: 0 0 16px; }
+.sp-details-body ul { padding-left: 18px; margin: 8px 0; }
+.sp-details-body li { margin-bottom: 7px; }
+.sp-details-body code {
+  background: rgba(0,240,255,.09); border: 1px solid rgba(0,240,255,.18);
+  padding: 1px 6px; border-radius: 4px; color: var(--sp-cyan); font-size: 12.5px;
+}
+.sp-details-body strong { color: var(--sp-text); }
+
+/* ── Footer ──────────────────────────────────────────────────────────────── */
+
+.sp-foot {
+  margin-top: 46px; padding-top: 20px; text-align: center;
+  font-size: 11.5px; letter-spacing: .04em; color: #46536b;
+  border-top: 1px solid rgba(0,240,255,.12);
+}
+.sp-foot p { margin: 0; }
+.sp-foot-links {
+  display: flex; flex-wrap: wrap; align-items: center;
+  justify-content: center; gap: 9px;
+}
+.sp-foot-brand { color: var(--sp-cyan); text-shadow: 0 0 8px rgba(0,240,255,.35); }
+.sp-foot a {
+  color: #6f7f9c; text-decoration: none;
+  transition: color .16s ease, text-shadow .16s ease;
+}
+.sp-foot a:hover {
+  color: var(--sp-cyan); text-shadow: 0 0 8px rgba(0,240,255,.5);
+}
+.sp-dot {
+  width: 3px; height: 3px; border-radius: 50%;
+  background: rgba(0,240,255,.35); flex: 0 0 auto;
+}
+.sp-foot-made {
+  margin-top: 10px; display: flex; align-items: center;
+  justify-content: center; gap: 6px;
+}
+.sp-heart { color: var(--sp-magenta); text-shadow: 0 0 10px rgba(255,46,136,.55); }
+.sp-flag {
+  vertical-align: -2px; border-radius: 2px;
+  box-shadow: 0 0 9px rgba(255,205,0,.3);
+}
+
+/* ── Responsive ──────────────────────────────────────────────────────────── */
+
+@media (max-width: 640px) {
+  .sp-row { grid-template-columns: 1fr; gap: 3px; padding: 11px 14px; }
+  .sp-panel { padding: 18px 15px; }
+  .sp-privacy { margin-left: 0; width: 100%; }
+  .sp-step-label { font-size: 9px; }
+}
+
+/* Honour reduced-motion: kill the transitions and the scanline shimmer. */
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; animation: none !important; }
+  body::after { opacity: .25; }
+}
+
+/* The page is deliberately dark-only — it is a single self-contained scene, so
+   a light rendering would break the neon contrast the design depends on. */

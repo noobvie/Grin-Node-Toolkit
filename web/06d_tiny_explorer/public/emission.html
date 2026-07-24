@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Grin Emission &amp; Supply — Tiny Explorer</title>
+  <meta name="description" content="How Grin's monetary policy works: a constant 1 ツ every second, forever — 60 ツ per block. Verify circulating supply yourself: it is simply block height × 60. No halvening, no premine, no founder reward.">
+  <meta name="robots" content="index, follow">
+  <meta name="theme-color" content="#ff8c00">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/css/tiny-explorer.css">
+  <script>(function(){var t=localStorage.getItem('tinyexp-theme');if(t)document.documentElement.setAttribute('data-theme',t);})();</script>
+</head>
+<body data-page="emission">
+
+  <header class="tx-header">
+    <div class="tx-header-inner">
+      <a href="/" class="tx-brand">
+        <img src="/grin-logo.svg" class="tx-logo" alt="Grin logo">
+        <span class="tx-brand-text">
+          <span class="tx-title">Tiny<span class="tx-accent">Explorer</span></span>
+          <span class="tx-slogan" id="tx-slogan">Every Grin block, one link away.</span>
+        </span>
+      </a>
+      <div class="tx-header-spacer"></div>
+      <form class="tx-search" id="tx-search-form" role="search">
+        <input id="tx-search-input" type="text" placeholder="Height, hash, kernel or output…  ( / )" autocomplete="off" spellcheck="false" aria-label="Search by block height, hash, kernel excess or output commitment">
+        <button class="tx-btn" type="submit">Search</button>
+      </form>
+      <div class="tx-tools" id="tx-tools">
+        <button class="tx-toolbtn tx-tools-btn" id="tx-tools-btn" type="button" aria-haspopup="true" aria-expanded="false" title="Tools">
+          <span class="tx-toolbtn-icon">🧰</span><span class="tx-toolbtn-text">Tools</span><span class="tx-tools-caret" aria-hidden="true">▾</span>
+        </button>
+        <div class="tx-tools-menu" id="tx-tools-menu" role="menu" hidden>
+          <a class="tx-tools-item" href="/slate" role="menuitem">
+            <span class="tx-tools-ico">🔎</span>
+            <span class="tx-tools-txt"><b>Slate Inspector</b><small>Read a slatepack — amount, fee, step</small></span>
+          </a>
+          <a class="tx-tools-item" href="/emission" role="menuitem">
+            <span class="tx-tools-ico">⏱</span>
+            <span class="tx-tools-txt"><b>Emission &amp; Supply</b><small>Verify 1 ツ/sec · height × 60</small></span>
+          </a>
+        </div>
+      </div>
+      <button id="tx-theme-toggle" class="tx-theme-toggle" aria-label="Toggle light/dark theme" title="Toggle theme">☾</button>
+    </div>
+  </header>
+
+  <main class="tx-wrap tx-main">
+
+    <div class="tx-emit-hero">
+      <h1>Grin Emission &amp; Supply</h1>
+      <p>Grin has one of the simplest monetary policies in crypto: a flat reward of
+        <strong>60 ツ per block</strong>, one block a minute — exactly <strong>1 ツ every second,
+        forever</strong>. No halvening, no premine, no founder reward.</p>
+    </div>
+
+    <div class="tx-emit-big"><span id="emit-supply">—</span> <span class="tx-tsu">ツ</span></div>
+    <div class="tx-emit-caption">Circulating supply at block <span id="emit-height">—</span> · <span id="emit-updated">live</span></div>
+
+    <section class="tx-emit-grid" aria-label="Emission facts">
+      <div class="tx-card">
+        <div class="tx-card-label">Block reward</div>
+        <div class="tx-card-value">60 ツ</div>
+        <div class="tx-card-sub">flat, every block</div>
+      </div>
+      <div class="tx-card">
+        <div class="tx-card-label">Emission rate</div>
+        <div class="tx-card-value">1 ツ / sec</div>
+        <div class="tx-card-sub">86,400 ツ per day</div>
+      </div>
+      <div class="tx-card">
+        <div class="tx-card-label">New per year</div>
+        <div class="tx-card-value">31.54M ツ</div>
+        <div class="tx-card-sub">60 × 1440 × 365</div>
+      </div>
+      <div class="tx-card">
+        <div class="tx-card-label">Annual inflation
+          <span class="tx-info" tabindex="0" role="tooltip" data-tip="Yearly new supply ÷ current supply. Emission is constant, so as supply grows this ratio falls toward zero — but never reaches it.">i</span>
+        </div>
+        <div class="tx-card-value" id="emit-inflation">—</div>
+        <div class="tx-card-sub">falls toward 0, forever</div>
+      </div>
+    </section>
+
+    <div class="tx-rows" style="padding:16px 18px;display:block">
+      <div class="tx-row-label" style="margin-bottom:6px">Verify it yourself</div>
+      <p style="margin:0 0 6px;color:var(--text-soft);font-size:13px">
+        There is nothing to trust here — circulating supply is just <strong style="color:var(--text)">height × 60</strong>.
+        Pick any block height and check:</p>
+      <div class="tx-calc">
+        <input id="calc-height" type="number" min="0" inputmode="numeric" placeholder="block height" aria-label="Block height">
+        <span class="tx-calc-out">= <span id="calc-supply">—</span> ツ</span>
+      </div>
+    </div>
+
+    <div class="tx-note">
+      Because new supply is fixed while total supply keeps growing, Grin's <strong>percentage</strong>
+      inflation falls every year — asymptotically toward zero — even though the <strong>absolute</strong>
+      60 ツ/block never changes. That is the deliberate design: predictable issuance that quietly
+      disinflates without a cliff, a cap, or a founder's cut.
+    </div>
+
+    <div class="tx-list">
+      <h3>How Grin compares</h3>
+      <div class="tx-list-body" style="overflow-x:auto;padding:6px 4px 10px">
+        <table class="tx-compare">
+          <thead>
+            <tr><th>Asset</th><th>New supply</th><th>Supply cap</th><th>Schedule</th></tr>
+          </thead>
+          <tbody>
+            <tr class="is-grin"><td>Grin</td><td>Constant · 1 ツ/s</td><td>None</td><td>Linear, forever</td></tr>
+            <tr><td>Bitcoin</td><td>Halves ~4 yrs</td><td>21M</td><td>Geometric decay</td></tr>
+            <tr><td>Gold</td><td>~1.5% / yr</td><td>Unknown</td><td>Mining-driven</td></tr>
+            <tr><td>Fiat</td><td>Discretionary</td><td>None</td><td>Central-bank policy</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <details class="tx-details">
+      <summary>Why constant emission?</summary>
+      <div class="tx-details-body">
+        <ul>
+          <li><strong>Fairness across time.</strong> A flat reward means someone who starts mining today
+            faces the same issuance as a day-one miner — no early-adopter windfall baked into the schedule.</li>
+          <li><strong>Predictability.</strong> No halvening events, no supply shocks. The heartbeat is
+            literally one coin per second, so anyone can compute total supply for any point in time.</li>
+          <li><strong>Disinflation without a cap.</strong> Percentage inflation trends toward zero as the
+            base grows, so Grin tightens over time without ever hitting a hard ceiling that ends block rewards.</li>
+          <li><strong>Security funding forever.</strong> Because rewards never stop, miners are always paid
+            by issuance — the network never has to rely solely on fees for its security budget.</li>
+        </ul>
+      </div>
+    </details>
+
+  </main>
+
+  <footer class="tx-footer">
+    <div id="tx-footer-text"></div>
+  </footer>
+
+  <div id="tx-toast" class="tx-toast" role="status" aria-live="polite"></div>
+
+  <script src="/js/tiny-explorer.js"></script>
+  <script src="/js/analytics.js"></script>
+</body>
+</html>

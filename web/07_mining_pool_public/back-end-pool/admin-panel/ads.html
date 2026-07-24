@@ -55,7 +55,8 @@
       border:1px solid var(--border-soft, #1d3a26); border-radius:8px; padding:.7rem;
       background: var(--bg, #07090c); display:flex; flex-direction:column; gap:.5rem;
     }
-    .starter-card img { width:100%; height:auto; border-radius:6px; background:#07090c; }
+    /* contain, not stretch — tall 160×600 rail creatives sit next to wide 728×90 strips */
+    .starter-card img { width:100%; height:auto; max-height:200px; object-fit:contain; border-radius:6px; background:#07090c; }
     .starter-card .s-name { font-size:.85rem; color: var(--text, #cfd8d3); }
     .starter-card .s-meta { font-size:.75rem; font-family: var(--mono, monospace); color: var(--text-dim, #8a978f); }
     .ad-thumb { max-width:120px; max-height:44px; height:auto; border-radius:4px; display:block; }
@@ -96,7 +97,24 @@
         </select>
         <label for="rotate-secs">Rotate every</label>
         <input type="number" id="rotate-secs" min="2" max="60" step="1" value="8"> s
-        <button class="btn btn-sm btn-outline" onclick="saveRotate()">Set</button>
+      </div>
+    </div>
+
+    <!-- Sidebar layout — the sidebar placement is a fixed edge rail by default -->
+    <div class="table-toolbar">
+      <p class="rotate-note" style="margin:0;"><strong>Sidebar layout.</strong> In <em>rail</em> mode the sidebar placement is a slim vertical strip fixed in the empty page margin (screens ≥&nbsp;1366&nbsp;px only) — it costs the page layout nothing, peeks out for a while, tucks itself away against the edge, then slides back with the next creative. Visitors can pull it out by its tab or dismiss it for the visit. Use tall creatives here (<span class="spec-size">160×600</span>). <strong>On phones and narrow screens portrait creatives are dropped entirely</strong> — an in-flow ad there spans the full column, so a tall banner would be a screenful of scrolling. Only landscape or square creatives are served below 1366&nbsp;px, so keep your mobile inventory in the header, in-content and footer placements.</p>
+      <div class="toolbar-controls">
+        <label for="sidebar-mode">Sidebar</label>
+        <select id="sidebar-mode">
+          <option value="rail">Edge rail</option>
+          <option value="inline">Inline block</option>
+          <option value="off">Hidden</option>
+        </select>
+        <label for="rail-show-secs">Show</label>
+        <input type="number" id="rail-show-secs" min="3" max="120" step="1" value="12"> s
+        <label for="rail-hide-secs">Tuck</label>
+        <input type="number" id="rail-hide-secs" min="0" max="600" step="1" value="45"> s
+        <button class="btn btn-sm btn-outline" onclick="saveAdsConfig()">Save layout</button>
       </div>
     </div>
     <div class="card" style="padding:0;">
@@ -230,7 +248,7 @@
     <!-- Shipped self-promo starter banners -->
     <h2>Starter banners</h2>
     <div class="card">
-      <p class="rotate-note" style="margin-top:0;">Self-promo SVG banners shipped with the pool (served from <code>/promo/</code>). A fresh install seeds all four as active ads automatically — use these cards to re-add one after deleting it, or as a size template for your own creatives.</p>
+      <p class="rotate-note" style="margin-top:0;">Self-promo SVG banners shipped with the pool (served from <code>/promo/</code>). A fresh install seeds them all as active ads automatically, each linking to <code>#</code> — they exist to demo the placements and the rotation, so point them somewhere real or delete them once you have your own creatives. Use these cards to re-add one after deleting it, or as a size template.</p>
       <div class="starter-grid" id="starter-grid"></div>
     </div>
   </div>
@@ -254,26 +272,43 @@ const PLACEMENT_LABEL = { header:'Header', sidebar:'Sidebar', 'in-content':'In-c
 // was built around; anything else still renders but is scaled to fit the slot.
 const PLACEMENT_SPEC = {
   header:       { w:728, h:90,  alt:'970×90 also fits',  note:'Top of every public page; scales down responsively on mobile.' },
-  sidebar:      { w:300, h:250, alt:'300×600 also fits', note:'Right rail on wide screens (max 320 px wide); flows inline on mobile.' },
+  sidebar:      { w:160, h:600, alt:'120×600 also fits', note:'Fixed edge rail in the page margin on screens ≥1366 px (renders 108–168 px wide, so use a tall vector). Portrait creatives are NOT served below 1366 px — put mobile inventory in the other placements.' },
   'in-content': { w:728, h:90,  alt:'468×60 also fits',  note:'Inside the homepage content flow.' },
   footer:       { w:728, h:90,  alt:'970×90 also fits',  note:'Bottom of every public page.' }
 };
 
 // Self-promo SVGs shipped in public_html/promo/ (auto-seeded once on a fresh pool).
+// They all link to '#' on purpose — they demo the placements and rotation; point them
+// somewhere real (or delete them) once you have your own creatives.
 const STARTERS = [
-  { file:'/promo/grinium-mine-728x90.svg',     size:'728×90',  placement:'header',
-    name:'GRINIUM promo — Mine GRIN (header 728×90)', link:'/',
+  { file:'/promo/grinium-mine-728x90.svg',        size:'728×90',  placement:'header',
+    name:'GRINIUM promo — Mine GRIN (header 728×90)',
     alt:'Mine GRIN on GRINIUM — no sign-up, PPLNS rewards, your address is your account' },
-  { file:'/promo/grinium-fortune-300x250.svg', size:'300×250', placement:'sidebar',
-    name:'GRINIUM promo — Fortune board (sidebar 300×250)', link:'/fortune-board.html',
+  { file:'/promo/grinium-mine-160x600.svg',       size:'160×600', placement:'sidebar',
+    name:'GRINIUM rail — Mine here (160×600)',
+    alt:'Mine GRIN here — no sign-up, PPLNS rewards, anonymous Tor payouts' },
+  { file:'/promo/grinium-why-grin-160x600.svg',   size:'160×600', placement:'sidebar',
+    name:'GRINIUM rail — Why GRIN? (160×600)',
+    alt:'Why GRIN? Private by default, no addresses on chain, fair launch, no premine' },
+  { file:'/promo/grinium-buy-grin-160x600.svg',   size:'160×600', placement:'sidebar',
+    name:'GRINIUM rail — Buy GRIN (160×600)',
+    alt:'Buy GRIN — trade it on exchanges, or earn it by pointing a miner here' },
+  { file:'/promo/grinium-fortune-160x600.svg',    size:'160×600', placement:'sidebar',
+    name:'GRINIUM rail — Feeling lucky? (160×600)',
     alt:'Feeling lucky? Block jackpots, prize draws, streak rewards and a monthly lottery' },
-  { file:'/promo/grinium-privacy-300x250.svg', size:'300×250', placement:'sidebar',
-    name:'GRINIUM promo — Anonymous mining (sidebar 300×250)', link:'/payment-history.html',
+  { file:'/promo/grinium-privacy-160x600.svg',    size:'160×600', placement:'sidebar',
+    name:'GRINIUM rail — Anonymous (160×600)',
     alt:'Mine anonymously — no accounts, no emails, Tor payouts' },
-  { file:'/promo/grinium-donate-728x90.svg',   size:'728×90',  placement:'footer',
-    name:'GRINIUM promo — Donate (footer 728×90)', link:'/donate.html',
+  { file:'/promo/grinium-fortune-300x250.svg',    size:'300×250', placement:'in-content',
+    name:'GRINIUM promo — Fortune board (in-content 300×250)',
+    alt:'Feeling lucky? Block jackpots, prize draws, streak rewards and a monthly lottery' },
+  { file:'/promo/grinium-privacy-300x250.svg',    size:'300×250', placement:'in-content',
+    name:'GRINIUM promo — Anonymous mining (in-content 300×250)',
+    alt:'Mine anonymously — no accounts, no emails, Tor payouts' },
+  { file:'/promo/grinium-donate-728x90.svg',      size:'728×90',  placement:'footer',
+    name:'GRINIUM promo — Donate (footer 728×90)',
     alt:'Keep the reactor running — donate GRIN and join the donor wall' }
-];
+].map(s => ({ ...s, link: '#' }));
 
 function syncPlacement() {
   const spec = PLACEMENT_SPEC[document.getElementById('ad-placement').value] || PLACEMENT_SPEC.header;
@@ -433,10 +468,7 @@ async function loadAds() {
     const d = await API.get('/api/admin/ads');
     if (!d || d.error) throw new Error(d && d.error ? d.error : 'Failed to load ads');
     _ads = d.ads || [];
-    if (d.rotate_ms > 0) {
-      document.getElementById('rotate-secs').value = Math.round(d.rotate_ms / 1000);
-      document.getElementById('rotate-now').textContent = Math.round(d.rotate_ms / 1000);
-    }
+    applyConfig(d.config);
     renderTable();
   } catch (err) {
     tbody.innerHTML = `<tr class="empty-row"><td colspan="9">Error: ${escHtml(err.message)}</td></tr>`;
@@ -507,14 +539,36 @@ function duplicateAd(id) {
   document.getElementById('ad-form-card').scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
-async function saveRotate() {
-  const s = parseInt(document.getElementById('rotate-secs').value, 10);
-  if (!Number.isInteger(s) || s < 2 || s > 60) { flash('Rotation interval must be 2–60 seconds.', true); return; }
+// Reflect the stored render settings into the toolbar controls.
+function applyConfig(c) {
+  if (!c) return;
+  if (c.rotate_ms > 0) {
+    document.getElementById('rotate-secs').value = Math.round(c.rotate_ms / 1000);
+    document.getElementById('rotate-now').textContent = Math.round(c.rotate_ms / 1000);
+  }
+  if (c.sidebar_mode) document.getElementById('sidebar-mode').value = c.sidebar_mode;
+  if (c.rail_show_ms > 0) document.getElementById('rail-show-secs').value = Math.round(c.rail_show_ms / 1000);
+  if (typeof c.rail_hide_ms === 'number') document.getElementById('rail-hide-secs').value = Math.round(c.rail_hide_ms / 1000);
+}
+
+// One save for every public render setting (rotation + sidebar rail layout).
+async function saveAdsConfig() {
+  const rotate = parseInt(document.getElementById('rotate-secs').value, 10);
+  const show   = parseInt(document.getElementById('rail-show-secs').value, 10);
+  const hide   = parseInt(document.getElementById('rail-hide-secs').value, 10);
+  if (!Number.isInteger(rotate) || rotate < 2 || rotate > 60) { flash('Rotation interval must be 2–60 seconds.', true); return; }
+  if (!Number.isInteger(show) || show < 3 || show > 120) { flash('Rail show time must be 3–120 seconds.', true); return; }
+  if (!Number.isInteger(hide) || hide < 0 || hide > 600) { flash('Rail tuck time must be 0–600 seconds (0 = never tuck).', true); return; }
   try {
-    const r = await API.post('/api/admin/ads-config', { rotate_ms: s * 1000 });
+    const r = await API.post('/api/admin/ads-config', {
+      rotate_ms: rotate * 1000,
+      sidebar_mode: document.getElementById('sidebar-mode').value,
+      rail_show_ms: show * 1000,
+      rail_hide_ms: hide * 1000
+    });
     if (!r || r.error) throw new Error(r && r.error ? r.error : 'Save failed');
-    document.getElementById('rotate-now').textContent = Math.round(r.rotate_ms / 1000);
-    flash(`Rotation set to ${Math.round(r.rotate_ms / 1000)} s (public pages pick it up within ~1 min).`, false);
+    applyConfig(r.config);
+    flash('Ad layout saved (public pages pick it up within ~1 min).', false);
   } catch (err) { flash(err.message, true); }
 }
 

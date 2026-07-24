@@ -132,7 +132,12 @@ function migrateAds() {
     const additions = {
       impressions: 'INTEGER NOT NULL DEFAULT 0',
       clicks: 'INTEGER NOT NULL DEFAULT 0',
-      notes: 'TEXT DEFAULT NULL'
+      notes: 'TEXT DEFAULT NULL',
+      // Native text-ad type (ad_type='text'): a headline + one-line body + CTA button,
+      // composed from fields instead of a baked image or a raw HTML snippet.
+      headline: 'TEXT DEFAULT NULL',
+      body_text: 'TEXT DEFAULT NULL',
+      cta_label: 'TEXT DEFAULT NULL'
     };
     for (const [name, def] of Object.entries(additions)) {
       if (!have.has(name)) {
@@ -731,6 +736,9 @@ function createSchema() {
       impressions INTEGER NOT NULL DEFAULT 0,
       clicks INTEGER NOT NULL DEFAULT 0,
       notes TEXT DEFAULT NULL,
+      headline TEXT DEFAULT NULL,
+      body_text TEXT DEFAULT NULL,
+      cta_label TEXT DEFAULT NULL,
       created_at INTEGER NOT NULL DEFAULT (unixepoch()),
       updated_at INTEGER NOT NULL DEFAULT (unixepoch())
     )`,

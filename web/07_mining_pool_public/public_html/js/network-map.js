@@ -138,7 +138,7 @@
       const rv = rings.map(r => r.map(([lng,lat]) => toVec(lat,lng)));
       let sx=0,sy=0,sz=0; rv.forEach(r=>r.forEach(v=>{ sx+=v[0]; sy+=v[1]; sz+=v[2]; }));
       const m = Math.hypot(sx,sy,sz)||1;
-      return { name, rings: rv, centroid:[sx/m,sy/m,sz/m], flag: FLAGS[name], border: HOST_BORDER[name] || "rgba(140,205,235,0.45)", host: !!HOST_BORDER[name] };
+      return { name, rings: rv, centroid:[sx/m,sy/m,sz/m], flag: FLAGS[name], border: HOST_BORDER[name] || "rgba(140,205,235,0.45)", host: !!HOST_BORDER[name], active: false };
     });
   }
 
@@ -156,6 +156,18 @@
         v: toVec(c.lat, c.lng), gwv: gw ? gw.v : (HUB ? HUB.v : toVec(20,0)), gwStatus: gw ? gw.status : 'connected' };
     });
     NODES = [ HUB, ...GATEWAYS, ...REGIONS ];
+
+    // Activity-driven country highlight: a country lights up ONLY when the live data shows
+    // a miner, a Grin node peer, a gateway, or the hub there. Country names are the canonical
+    // Natural-Earth strings shared by BORDERS/FLAGS and the API payloads, so exact-name match
+    // works. Countries with a bespoke flag get the flag; the rest get a subtle activity tint.
+    const active = new Set();
+    const addName = (n) => { if (n) active.add(n); };
+    addName((topo.hub || {}).country);
+    (topo.gateways || []).forEach(g => addName(g.country));
+    (topo.countries || []).forEach(c => addName(c.country));
+    ((peers && peers.countries) || []).forEach(c => addName(c.country));
+    COUNTRIES.forEach(c => { c.active = active.has(c.name); });
 
     // peers → twinkle points. Prefer server-positioned points; else scatter on land.
     PEERS = [];
@@ -238,8 +250,14 @@
       const proj = c.rings.map(r => r.map(v => { const p=project(v); if (p.z < -0.02) ok=false; if (p.x<minx)minx=p.x; if (p.x>maxx)maxx=p.x; if (p.y<miny)miny=p.y; if (p.y>maxy)maxy=p.y; return p; }));
       if (!ok) continue;
       const trace = () => { ctx.beginPath(); proj.forEach(r => { r.forEach((p,i)=> i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y)); ctx.closePath(); }); };
-      if (opts.flags && c.flag) { ctx.save(); trace(); ctx.clip(); ctx.globalAlpha=0.85; c.flag(minx,miny,maxx-minx,maxy-miny); ctx.globalAlpha=1; ctx.restore(); }
-      trace(); ctx.lineWidth = c.host ? 1.6 : 1; ctx.strokeStyle = c.border; if (c.host){ ctx.shadowColor=c.border; ctx.shadowBlur=6; } ctx.stroke(); ctx.shadowBlur=0;
+      if (!c.active) {
+        // Geographic context only — faint outline, no fill, so active countries stand out.
+        trace(); ctx.lineWidth=1; ctx.strokeStyle="rgba(140,205,235,0.18)"; ctx.stroke();
+        continue;
+      }
+      if (opts.flags && c.flag) { ctx.save(); trace(); ctx.clip(); ctx.globalAlpha=0.5; c.flag(minx,miny,maxx-minx,maxy-miny); ctx.globalAlpha=1; ctx.restore(); }
+      else { ctx.save(); trace(); ctx.clip(); ctx.fillStyle="rgba(90,209,255,0.14)"; ctx.fillRect(minx,miny,maxx-minx,maxy-miny); ctx.restore(); }
+      trace(); ctx.lineWidth = c.host ? 1.6 : 1.2; ctx.strokeStyle = c.host ? c.border : "rgba(150,220,255,0.6)"; if (c.host){ ctx.shadowColor=c.border; ctx.shadowBlur=6; } ctx.stroke(); ctx.shadowBlur=0;
     }
   }
   function drawPeers(now) { for (const pr of PEERS){ const p=project(pr.v); if (p.z<=0.03) continue; let a = pr.blink ? (Math.sin(now*pr.spd*2.2+pr.phase)>0.4?1:0.12) : (0.35+0.4*(0.5+0.5*Math.sin(now*pr.spd+pr.phase))); a *= Math.min(1,p.z*1.4); const rgb = pr.net==="main"?"93,255,115":"255,79,216"; ctx.fillStyle="rgba("+rgb+","+(a*0.85).toFixed(3)+")"; ctx.shadowColor="rgba("+rgb+","+a.toFixed(3)+")"; ctx.shadowBlur=10*a; ctx.beginPath(); ctx.arc(p.x,p.y,3.2,0,7); ctx.fill(); ctx.shadowBlur=0; } }

@@ -616,6 +616,28 @@ footer a:hover { color: var(--accent); }
 }
 .ad-unit { display: inline-block; max-width: 100%; }
 .ad-unit img { max-width: 100%; height: auto; display: block; border-radius: 8px; }
+/* Native text ad (ad_type='text'): a Reactor card built from headline + body + CTA, no
+   image. A centred horizontal strip in wide placements that wraps to a stack on mobile. */
+.ad-unit--text { display: block; width: 100%; }
+.ad-text-card {
+  display: flex; align-items: center; justify-content: center; flex-wrap: wrap;
+  gap: 10px 20px; padding: 14px 20px; text-decoration: none; text-align: left;
+  border: 1px solid var(--rx-line, #1d3a26); border-radius: 10px;
+  background: var(--rx-inset, #0b0f14);
+}
+.ad-text-head { font: 700 20px/1.15 var(--mono, ui-monospace, monospace); letter-spacing: .5px; color: var(--text, #e6efe9); }
+.ad-text-body { font: 400 13px/1.45 var(--mono, ui-monospace, monospace); color: var(--text-dim, #8a978f); flex: 1 1 220px; min-width: 170px; }
+.ad-text-cta {
+  font: 700 13px var(--mono, ui-monospace, monospace); letter-spacing: .5px; white-space: nowrap;
+  color: #07090c; background: linear-gradient(180deg, #6aff80, #3fd957);
+  padding: 9px 16px; border-radius: 6px;
+}
+a.ad-text-card:hover .ad-text-cta { filter: brightness(1.07); }
+a.ad-text-card:hover { border-color: color-mix(in srgb, var(--accent, #5dff73) 45%, transparent); }
+@media (max-width: 560px) {
+  .ad-text-card { justify-content: center; text-align: center; }
+  .ad-text-body { flex-basis: 100%; }
+}
 /* Rotation (ads.js): slots with 2+ ads cycle them one at a time; the incoming ad fades in. */
 .ad-unit--hidden { display: none; }
 .ad-unit--rotor:not(.ad-unit--hidden) { animation: ad-fade-in .6s ease; }
@@ -627,7 +649,12 @@ footer a:hover { color: var(--accent); }
    formatting context — it does not wrap around a float, it gets narrowed beside it for
    its WHOLE height. One 250px-tall square then costs the dashboard ~340px of width all
    the way down the page, leaving a dead gutter under the ad. */
-.ad-slot--in-content { margin: 24px auto; }
+/* in-content shows ALL active creatives at once (ads.js skips the rotor here), so a pair
+   of 300×250 squares sits as a balanced centred row. inline-block .ad-unit + centred text
+   already lay them side by side and wrap to a stack on narrow screens; the tighter band
+   keeps the pair from being marooned in a wide empty gutter, and the margins give the gap. */
+.ad-slot--in-content { margin: 24px auto; max-width: 760px; }
+.ad-slot--in-content .ad-unit { margin: 6px 8px; vertical-align: top; }
 .ad-slot--sidebar { max-width: 320px; }
 
 /* ── Sidebar as a fixed edge rail (ads.js adds .ad-slot--rail) ────────────────

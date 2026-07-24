@@ -14,6 +14,7 @@ const BlockManager = require('./lib/blocks');
 const ShareValidator = require('./lib/shares');
 const MinerManager = require('./lib/miners');
 const BlockMonitor = require('./lib/block-monitor');
+const GrinNodeAPI = require('./lib/grin-node');
 const RewardDistributor = require('./lib/rewards');
 const IncentivesManager = require('./lib/incentives');
 const LotteryManager = require('./lib/lottery');
@@ -423,26 +424,60 @@ async function initializePool() {
     };
     hashrateTracker.start();
 
-    // Network-map peer snapshot (feeds /api/network/peers). Every 20 min, read the node's
-    // connected peers, geolocate each to a COUNTRY ONLY (lib/geoip), and upsert network_peers
-    // keyed by a hash of the IP — the raw address is never stored. Rows accumulate a rolling
-    // country picture; the endpoint windows them (default 30d). No-op when the node is
-    // unreachable or geoip-lite is not installed (available() false → lookups return null).
+    // Network-map peer snapshot (feeds /api/network/peers). Every 20 min, read each running
+    // Grin node's connected peers, geolocate each to a COUNTRY ONLY (lib/geoip), and upsert
+    // network_peers keyed by a hash of net+IP — the raw address is never stored. Rows
+    // accumulate a rolling country picture; the endpoint windows them (default 30d). No-op
+    // when geoip-lite is not installed (available() false → lookups return null).
+    //
+    // Dual-network: a Grin node only peers within its OWN network (mainnet 3414 / testnet
+    // 13414 are separate graphs), so besides this pool's own node we opportunistically read
+    // the OTHER network's node too — that is how the map shows mainnet (green) + testnet
+    // (pink) peers at once. The toolkit typically runs both nodes on the box; a network whose
+    // node isn't running simply contributes nothing (getConnectedPeers returns [] on error).
+    let otherNetNode = null;
+    try {
+      const ownIsMain = /^main/i.test(config.network || '');
+      const otherNet = ownIsMain ? 'testnet' : 'mainnet';
+      const otherUrl = ownIsMain ? 'http://127.0.0.1:13413' : 'http://127.0.0.1:3413';
+      // mainnet may run as an archive (full) node — prefer whichever dir actually holds a secret.
+      const dirs = otherNet === 'mainnet'
+        ? ['/opt/grin/node/mainnet-full', '/opt/grin/node/mainnet-prune']
+        : ['/opt/grin/node/testnet-prune'];
+      const otherDir = dirs.find((d) => { try { return fs.existsSync(path.join(d, '.api_secret')); } catch (_) { return false; } });
+      if (otherDir) {
+        otherNetNode = new GrinNodeAPI({ network: otherNet, node_api_url: otherUrl, node_dir: otherDir });
+        console.log(`[network-map] dual-network peer sensor: also reading ${otherNet} node at ${otherUrl}`);
+      }
+    } catch (e) {
+      console.error(`[network-map] other-net node init failed: ${e.message}`);
+    }
+
     const snapshotNetworkPeers = async () => {
       try {
-        if (!geoip.available() || !blockMonitor || !blockMonitor.grinNode) return;
-        const peers = await blockMonitor.grinNode.getConnectedPeers();
-        if (!peers.length) return;
-        const net = /^main/i.test(config.network || '') ? 'main' : 'test';
+        if (!geoip.available()) return;
         const now = Math.floor(Date.now() / 1000);
+        const sources = [];
+        if (blockMonitor && blockMonitor.grinNode) {
+          sources.push({ node: blockMonitor.grinNode, net: /^main/i.test(config.network || '') ? 'main' : 'test' });
+        }
+        if (otherNetNode) {
+          sources.push({ node: otherNetNode, net: /^main/i.test(otherNetNode.network || '') ? 'main' : 'test' });
+        }
         const rows = [];
-        for (const p of peers) {
-          const addr = String(p.addr || p.address || '');
-          const ip = addr.replace(/:\d+$/, '').replace(/^\[|\]$/g, '');  // strip :port / [v6]
-          const geo = geoip.lookupCountry(ip);
-          if (!geo) continue;
-          const key = crypto.createHash('sha256').update(ip).digest('hex').slice(0, 32);
-          rows.push({ key, cc: geo.cc, name: geo.name });
+        for (const src of sources) {
+          const peers = await src.node.getConnectedPeers();
+          if (!peers || !peers.length) continue;
+          for (const p of peers) {
+            const addr = String(p.addr || p.address || '');
+            const ip = addr.replace(/:\d+$/, '').replace(/^\[|\]$/g, '');  // strip :port / [v6]
+            const geo = geoip.lookupCountry(ip);
+            if (!geo) continue;
+            // Key includes net so the same IP running BOTH a mainnet and a testnet node yields
+            // two distinct rows instead of one flipping the other's colour on ON CONFLICT.
+            const key = crypto.createHash('sha256').update(src.net + '|' + ip).digest('hex').slice(0, 32);
+            rows.push({ key, cc: geo.cc, name: geo.name, net: src.net });
+          }
         }
         if (!rows.length) return;
         const upsert = db.prepare(`
@@ -451,7 +486,7 @@ async function initializePool() {
           ON CONFLICT(peer_key) DO UPDATE SET
             country_code = excluded.country_code, country = excluded.country,
             net = excluded.net, last_seen = excluded.last_seen`);
-        db.transaction((rs) => { for (const r of rs) upsert.run(r.key, r.cc, r.name, net, now, now); })(rows);
+        db.transaction((rs) => { for (const r of rs) upsert.run(r.key, r.cc, r.name, r.net, now, now); })(rows);
       } catch (e) {
         console.error(`[network-map] peer snapshot failed: ${e.message}`);
       }

@@ -67,6 +67,17 @@
     .toolbar-controls { display:flex; gap:.45rem; align-items:center; font-size:.85rem; color: var(--text-dim, #8a978f); }
     .toolbar-controls select, .toolbar-controls input { padding:.3rem .45rem; }
     .toolbar-controls input[type="number"] { width:64px; }
+    /* Text-ad live preview — mirrors the public .ad-text-card look (admin doesn't load dashboard.css). */
+    .text-preview { margin:.2rem 0 1rem; }
+    .tp-card {
+      display:flex; align-items:center; justify-content:center; flex-wrap:wrap; gap:10px 20px;
+      padding:14px 20px; border:1px solid var(--border-soft, #1d3a26); border-radius:10px;
+      background: var(--bg, #0b0f14); text-align:left;
+    }
+    .tp-head { font:700 20px/1.15 var(--mono, ui-monospace, monospace); letter-spacing:.5px; color: var(--text, #e6efe9); }
+    .tp-body { font:400 13px/1.45 var(--mono, ui-monospace, monospace); color: var(--text-dim, #8a978f); flex:1 1 220px; min-width:170px; }
+    .tp-cta { font:700 13px var(--mono, ui-monospace, monospace); letter-spacing:.5px; white-space:nowrap; color:#07090c; background:linear-gradient(180deg,#6aff80,#3fd957); padding:9px 16px; border-radius:6px; }
+    .tp-cta:empty { display:none; }
     .badge-warn { color: var(--warn, #f5b942) !important; border-color: var(--warn, #f5b942); }
     .stats-cell { font-family: var(--mono, monospace); font-size:.8rem; white-space:nowrap; }
     .notes-flag { cursor:help; margin-left:.3rem; }
@@ -79,7 +90,7 @@
   <div class="container">
     <div class="page-head">
       <h1>Ads</h1>
-      <p class="page-sub">Promotions shown on the public site — a self-hosted banner or an ad-network code snippet, bound to a placement. When a placement has several active ads they rotate automatically, one at a time (interval configurable below).</p>
+      <p class="page-sub">Promotions shown on the public site — a self-hosted <strong>banner</strong> image, a native <strong>text</strong> card (headline + button, no design needed), or an ad-network <strong>code</strong> snippet — each bound to a placement. When a placement has several active ads they rotate automatically, one at a time (interval configurable below).</p>
     </div>
 
     <!-- Existing ads -->
@@ -164,6 +175,7 @@
           <label for="ad-type">Type</label>
           <select id="ad-type" onchange="syncType()">
             <option value="banner">Banner (image + link)</option>
+            <option value="text">Text (headline + button)</option>
             <option value="code">Code snippet (HTML)</option>
           </select>
         </div>
@@ -201,6 +213,39 @@
         <div class="img-preview" id="img-preview">
           <div class="frame"><img id="preview-img" alt="Banner preview"></div>
           <div class="meta" id="preview-meta"></div>
+        </div>
+      </div>
+
+      <!-- Text fields -->
+      <div id="text-fields" style="display:none;">
+        <div class="form-row cols-3">
+          <div class="form-group">
+            <label for="ad-headline">Headline</label>
+            <input type="text" id="ad-headline" maxlength="60" placeholder="e.g. WHY GRIN?" oninput="updateTextPreview()">
+          </div>
+          <div class="form-group">
+            <label for="ad-cta">Button label (optional)</label>
+            <input type="text" id="ad-cta" maxlength="40" placeholder="e.g. Learn why →" oninput="updateTextPreview()">
+          </div>
+          <div class="form-group">
+            <label for="ad-text-link">Button / card link</label>
+            <input type="url" id="ad-text-link" placeholder="/#info or https://…" oninput="updateTextPreview()">
+            <div class="helper-text">Site paths (starting <code>/</code>) open in the same tab; full URLs open a new tab.</div>
+          </div>
+        </div>
+        <div class="form-group">
+          <label for="ad-body">Body line (optional)</label>
+          <input type="text" id="ad-body" maxlength="140" placeholder="e.g. No ICO · tail emission · private by default" oninput="updateTextPreview()">
+        </div>
+        <div class="helper-text" style="margin:-.4rem 0 .6rem;">No image or code needed — this renders as a styled card on the site and rotates with any banners in the same placement. Edit the copy here any time.</div>
+        <!-- live preview of the composed card -->
+        <div class="text-preview" id="text-preview" style="display:none;">
+          <span class="ad-slot-label" style="display:block;font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--text-dim,#8a978f);opacity:.65;margin-bottom:4px;">Ad — preview</span>
+          <div class="tp-card" id="tp-card">
+            <span class="tp-head" id="tp-head"></span>
+            <span class="tp-body" id="tp-body"></span>
+            <span class="tp-cta" id="tp-cta"></span>
+          </div>
         </div>
       </div>
 
@@ -284,6 +329,9 @@ const STARTERS = [
   { file:'/promo/grinium-mine-728x90.svg',        size:'728×90',  placement:'header',
     name:'GRINIUM promo — Mine GRIN (header 728×90)',
     alt:'Mine GRIN on GRINIUM — no sign-up, PPLNS rewards, your address is your account' },
+  { file:'/promo/grinium-why-grin-728x90.svg',    size:'728×90',  placement:'header',
+    name:'GRINIUM promo — Why GRIN? (header 728×90)',
+    alt:'Why GRIN? No ICO, no premine, tail emission, private by default' },
   { file:'/promo/grinium-mine-160x600.svg',       size:'160×600', placement:'sidebar',
     name:'GRINIUM rail — Mine here (160×600)',
     alt:'Mine GRIN here — no sign-up, PPLNS rewards, anonymous Tor payouts' },
@@ -415,7 +463,24 @@ function fmtWindow(a) {
 function syncType() {
   const t = document.getElementById('ad-type').value;
   document.getElementById('banner-fields').style.display = t === 'banner' ? '' : 'none';
+  document.getElementById('text-fields').style.display   = t === 'text' ? '' : 'none';
   document.getElementById('code-fields').style.display   = t === 'code' ? '' : 'none';
+  // The size/file-type spec box only makes sense for image banners.
+  document.getElementById('placement-spec').style.display = t === 'banner' ? '' : 'none';
+  if (t === 'text') updateTextPreview();
+}
+
+// Live preview of the composed text card (headline + body + CTA).
+function updateTextPreview() {
+  const head = document.getElementById('ad-headline').value.trim();
+  const body = document.getElementById('ad-body').value.trim();
+  const cta  = document.getElementById('ad-cta').value.trim();
+  const box  = document.getElementById('text-preview');
+  if (!head && !body && !cta) { box.style.display = 'none'; return; }
+  document.getElementById('tp-head').textContent = head;
+  document.getElementById('tp-body').textContent = body;
+  document.getElementById('tp-cta').textContent  = cta;
+  box.style.display = '';
 }
 
 function flash(msg, isErr) {
@@ -435,6 +500,11 @@ function resetForm() {
   document.getElementById('ad-link').value = '';
   document.getElementById('ad-alt').value = '';
   document.getElementById('ad-code').value = '';
+  document.getElementById('ad-headline').value = '';
+  document.getElementById('ad-body').value = '';
+  document.getElementById('ad-cta').value = '';
+  document.getElementById('ad-text-link').value = '';
+  document.getElementById('text-preview').style.display = 'none';
   document.getElementById('ad-notes').value = '';
   document.getElementById('ad-weight').value = '0';
   document.getElementById('ad-start').value = '';
@@ -489,6 +559,8 @@ function renderTable() {
       <tr>
         <td>${a.ad_type === 'banner' && a.image_url
               ? `<img class="ad-thumb" src="${escHtml(a.image_url)}" alt="" loading="lazy" onerror="this.outerHTML='<span class=&quot;ad-thumb-code&quot;>broken img</span>'">`
+              : a.ad_type === 'text'
+              ? `<span class="ad-thumb-code" title="${escHtml(a.headline || '')}">“${escHtml((a.headline || 'text ad').slice(0, 18))}”</span>`
               : '<span class="ad-thumb-code">&lt;/&gt; code</span>'}</td>
         <td>${escHtml(a.name)}${a.notes ? `<span class="notes-flag" title="${escHtml(a.notes)}">📝</span>` : ''}</td>
         <td>${escHtml(PLACEMENT_LABEL[a.placement] || a.placement)}</td>
@@ -529,8 +601,12 @@ function duplicateAd(id) {
   document.getElementById('ad-type').value = a.ad_type || 'banner';
   document.getElementById('ad-image').value = a.image_url || '';
   document.getElementById('ad-link').value = a.link_url || '';
+  document.getElementById('ad-text-link').value = a.link_url || '';
   document.getElementById('ad-alt').value = a.alt_text || '';
   document.getElementById('ad-code').value = a.html_code || '';
+  document.getElementById('ad-headline').value = a.headline || '';
+  document.getElementById('ad-body').value = a.body_text || '';
+  document.getElementById('ad-cta').value = a.cta_label || '';
   document.getElementById('ad-notes').value = a.notes || '';
   document.getElementById('ad-weight').value = a.weight != null ? a.weight : 0;
   document.getElementById('form-title').textContent = `New ad (copy of #${a.id})`;
@@ -581,8 +657,12 @@ function editAd(id) {
   document.getElementById('ad-type').value = a.ad_type || 'banner';
   document.getElementById('ad-image').value = a.image_url || '';
   document.getElementById('ad-link').value = a.link_url || '';
+  document.getElementById('ad-text-link').value = a.link_url || '';
   document.getElementById('ad-alt').value = a.alt_text || '';
   document.getElementById('ad-code').value = a.html_code || '';
+  document.getElementById('ad-headline').value = a.headline || '';
+  document.getElementById('ad-body').value = a.body_text || '';
+  document.getElementById('ad-cta').value = a.cta_label || '';
   document.getElementById('ad-notes').value = a.notes || '';
   document.getElementById('ad-weight').value = a.weight != null ? a.weight : 0;
   document.getElementById('ad-start').value = toLocalInput(a.start_at);
@@ -597,14 +677,23 @@ function editAd(id) {
 
 async function submitAd() {
   const id = document.getElementById('ad-id').value;
+  const type = document.getElementById('ad-type').value;
+  // The click-through comes from the banner Link field or the text-card Link field
+  // depending on the ad type.
+  const linkUrl = (type === 'text'
+    ? document.getElementById('ad-text-link').value
+    : document.getElementById('ad-link').value).trim();
   const body = {
     name: document.getElementById('ad-name').value.trim(),
     placement: document.getElementById('ad-placement').value,
-    ad_type: document.getElementById('ad-type').value,
+    ad_type: type,
     image_url: document.getElementById('ad-image').value.trim(),
-    link_url: document.getElementById('ad-link').value.trim(),
+    link_url: linkUrl,
     alt_text: document.getElementById('ad-alt').value.trim(),
     html_code: document.getElementById('ad-code').value,
+    headline: document.getElementById('ad-headline').value.trim(),
+    body_text: document.getElementById('ad-body').value.trim(),
+    cta_label: document.getElementById('ad-cta').value.trim(),
     notes: document.getElementById('ad-notes').value.trim(),
     weight: parseInt(document.getElementById('ad-weight').value, 10) || 0,
     start_at: fromLocalInput(document.getElementById('ad-start').value),

@@ -18,20 +18,38 @@
       .replace(/</g, '&lt;').replace(/>/g, '&gt;');
   }
 
+  // A real click-through target (anything but empty or the '#' starter placeholder).
+  function hasLink(url) { return !!url && url !== '#'; }
+  // Site paths (start with a single '/') open in the SAME tab; external URLs open in a new
+  // tab with the usual sponsored-link rels. Self-promo CTAs are internal, so they navigate
+  // in place rather than spawning a tab back to our own site.
+  function isInternal(url) { return /^\/(?!\/)/.test(url); }
+  function linkOpen(url) {
+    return isInternal(url) ? '' : ' target="_blank" rel="noopener nofollow sponsored"';
+  }
+
   function renderAd(ad) {
     var idAttr = ' data-ad-id="' + (parseInt(ad.id, 10) || 0) + '"';
     if (ad.ad_type === 'code' && ad.html_code) {
       return '<div class="ad-unit ad-unit--code"' + idAttr + '>' + ad.html_code + '</div>';
     }
+    if (ad.ad_type === 'text' && ad.headline) {
+      var card = '<span class="ad-text-head">' + attr(ad.headline) + '</span>' +
+        (ad.body_text ? '<span class="ad-text-body">' + attr(ad.body_text) + '</span>' : '') +
+        (ad.cta_label ? '<span class="ad-text-cta">' + attr(ad.cta_label) + '</span>' : '');
+      var body = hasLink(ad.link_url)
+        ? '<a class="ad-text-card" href="' + attr(ad.link_url) + '"' + linkOpen(ad.link_url) +
+          (ad.headline ? ' title="' + attr(ad.headline) + '"' : '') + '>' + card + '</a>'
+        : '<div class="ad-text-card">' + card + '</div>';
+      return '<div class="ad-unit ad-unit--text"' + idAttr + '>' + body + '</div>';
+    }
     if (ad.ad_type === 'banner' && ad.image_url) {
       var img = '<img src="' + attr(ad.image_url) + '" alt="' + attr(ad.alt_text || '') + '" loading="lazy">';
       // '#' is the shipped starter placeholder — render it as a plain image rather than
       // a link that opens an empty tab. Clicks are still counted on the unit itself.
-      if (ad.link_url === '#') return '<div class="ad-unit ad-unit--banner"' + idAttr + '>' + img + '</div>';
-      var inner = ad.link_url
-        ? '<a href="' + attr(ad.link_url) + '" target="_blank" rel="noopener nofollow sponsored"' +
-          (ad.alt_text ? ' title="' + attr(ad.alt_text) + '"' : '') + '>' + img + '</a>'
-        : img;
+      if (!hasLink(ad.link_url)) return '<div class="ad-unit ad-unit--banner"' + idAttr + '>' + img + '</div>';
+      var inner = '<a href="' + attr(ad.link_url) + '"' + linkOpen(ad.link_url) +
+        (ad.alt_text ? ' title="' + attr(ad.alt_text) + '"' : '') + '>' + img + '</a>';
       return '<div class="ad-unit ad-unit--banner"' + idAttr + '>' + inner + '</div>';
     }
     return '';
@@ -274,6 +292,7 @@
       var placement = el.getAttribute('data-ad-slot');
       var ads = (byPlacement && byPlacement[placement]) || [];
       var isSidebar = placement === 'sidebar';
+      var isInContent = placement === 'in-content';
       if (!ads.length || (isSidebar && cfg.sidebar_mode === 'off')) { el.style.display = 'none'; return; }
 
       function render(list) {
@@ -283,15 +302,22 @@
         activateScripts(el);
         el.style.display = '';
 
-        var rotor = makeRotor(el);
-        if (isSidebar && railOK) {
-          startRail(el, rotor);          // rail drives its own cycling, one creative per peek
+        if (isInContent) {
+          // in-content shows EVERY active creative side by side — a balanced centred row
+          // (two 300×250 squares on desktop) that wraps to a stack on mobile — never a
+          // one-at-a-time rotor, so there is no lone square marooned in an empty band.
+          el.querySelectorAll('.ad-unit').forEach(function (u) { queueImpression(u); });
         } else {
-          startAutoRotate(rotor);
-          // count what's actually visible now (all units when static, the lead unit when cycling)
-          el.querySelectorAll('.ad-unit').forEach(function (u) {
-            if (!u.classList.contains('ad-unit--hidden')) queueImpression(u);
-          });
+          var rotor = makeRotor(el);
+          if (isSidebar && railOK) {
+            startRail(el, rotor);          // rail drives its own cycling, one creative per peek
+          } else {
+            startAutoRotate(rotor);
+            // count what's actually visible now (all units when static, the lead unit when cycling)
+            el.querySelectorAll('.ad-unit').forEach(function (u) {
+              if (!u.classList.contains('ad-unit--hidden')) queueImpression(u);
+            });
+          }
         }
 
         // click beacon (delegated; sendBeacon survives the target="_blank" navigation)

@@ -1,13 +1,15 @@
 const { getDb } = require('./db');
 
-// Operator-managed ads shown on public pages. Two kinds:
+// Operator-managed ads shown on public pages. Three kinds:
 //   · banner — self-hosted image (image_url) linking to link_url
+//   · text   — a native card composed from headline + body_text + cta_label (+ link_url);
+//              no image or HTML needed, so the operator writes/edits copy in plain fields
 //   · code   — a raw HTML/JS snippet from an ad network (operator-trusted, like the
 //              analytics snippet the operator already pastes)
 // Each ad is bound to one placement and an optional active window. Admin CRUD is
 // secureAdmin-gated; the public read endpoint returns only active, in-window ads.
 const PLACEMENTS = ['header', 'sidebar', 'in-content', 'footer'];
-const AD_TYPES = ['banner', 'code'];
+const AD_TYPES = ['banner', 'text', 'code'];
 
 const num = (v) => {
   if (v === null || v === undefined || v === '') return null;
@@ -46,6 +48,10 @@ class AdsManager {
     if (!partial || data.link_url !== undefined)  out.link_url = str(data.link_url);
     if (!partial || data.alt_text !== undefined)  out.alt_text = str(data.alt_text);
     if (!partial || data.html_code !== undefined) out.html_code = str(data.html_code);
+    // Native text-ad fields (used when ad_type === 'text').
+    if (!partial || data.headline !== undefined)  out.headline = str(data.headline);
+    if (!partial || data.body_text !== undefined) out.body_text = str(data.body_text);
+    if (!partial || data.cta_label !== undefined) out.cta_label = str(data.cta_label);
     // Admin-only sponsor memo (contact, payment terms, …) — never exposed publicly.
     if (!partial || data.notes !== undefined)     out.notes = str(data.notes);
     if (!partial || data.is_active !== undefined) {
@@ -60,6 +66,7 @@ class AdsManager {
     if (!partial) {
       if (finalType === 'banner' && !out.image_url) throw new Error('banner ads need an image_url');
       if (finalType === 'code' && !out.html_code) throw new Error('code ads need html_code');
+      if (finalType === 'text' && !(out.headline && out.headline.trim())) throw new Error('text ads need a headline');
     }
     return out;
   }
@@ -88,11 +95,13 @@ class AdsManager {
     const c = this._clean(data);
     const r = this.db.prepare(`
       INSERT INTO ads (name, placement, ad_type, image_url, link_url, alt_text, html_code,
+                       headline, body_text, cta_label,
                        notes, is_active, weight, start_at, end_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       c.name, c.placement, c.ad_type,
       c.image_url || null, c.link_url || null, c.alt_text || null, c.html_code || null,
+      c.headline || null, c.body_text || null, c.cta_label || null,
       c.notes || null,
       c.is_active === undefined ? 1 : c.is_active,
       c.weight || 0, c.start_at || null, c.end_at || null
@@ -124,7 +133,8 @@ class AdsManager {
     if (!PLACEMENTS.includes(placement)) return [];
     const now = Math.floor(Date.now() / 1000);
     const rows = this.db.prepare(`
-      SELECT id, placement, ad_type, image_url, link_url, alt_text, html_code
+      SELECT id, placement, ad_type, image_url, link_url, alt_text, html_code,
+             headline, body_text, cta_label
       FROM ads
       WHERE placement = ? AND is_active = 1
         AND (start_at IS NULL OR start_at <= ?)
@@ -243,11 +253,16 @@ class AdsManager {
     const cfgGet = (key) => this.db.prepare(
       "SELECT value FROM pool_config WHERE section = 'ads' AND key = ?"
     ).get(key);
-    if (cfgGet('selfpromo_seeded_v2')) return false;
-    const firstRun = !cfgGet('selfpromo_seeded');
+    if (cfgGet('selfpromo_seeded_v3')) return false;
+    // Highest seed generation already applied to this pool (0 = brand-new). Each upgrade
+    // inserts only creatives NEWER than what's been seeded, so a deleted seed stays deleted.
+    let seededMax = 0;
+    if (cfgGet('selfpromo_seeded')) seededMax = 1;
+    if (cfgGet('selfpromo_seeded_v2')) seededMax = 2;
 
-    // v1 → v2: the sidebar is a narrow rail now, so old square seeds move in-content.
-    if (!firstRun) {
+    // v1 → v2 boundary only: the sidebar became a narrow rail, so old square seeds move
+    // in-content (skip if the pool was already at/after v2).
+    if (seededMax === 1) {
       this.db.prepare(`
         UPDATE ads SET placement = 'in-content'
         WHERE placement = 'sidebar'
@@ -255,55 +270,70 @@ class AdsManager {
       `).run();
     }
 
-    // `v` = the seed generation a creative was introduced in. On the v1→v2 hop only
-    // v2 creatives are considered, so a v1 creative the operator deleted stays deleted.
+    // `v` = the seed generation a creative was introduced in; only seeds with v > seededMax
+    // are inserted on this run. Self-promo CTAs point at real internal anchors (same-tab —
+    // renderAd keeps site paths in-page); a fresh pool ships working buttons, and an operator
+    // who already tuned the older '#' seeds is left untouched.
     const seeds = [
       // Wide strips — header/footer.
       { v: 1, name: 'GRINIUM promo — Mine GRIN (header 728×90)', placement: 'header',
-        image_url: '/promo/grinium-mine-728x90.svg', weight: 10,
+        image_url: '/promo/grinium-mine-728x90.svg', weight: 10, link_url: '/#connect',
         alt_text: 'Mine GRIN on GRINIUM — no sign-up, PPLNS rewards, your address is your account' },
       { v: 1, name: 'GRINIUM promo — Donate (footer 728×90)', placement: 'footer',
-        image_url: '/promo/grinium-donate-728x90.svg', weight: 10,
+        image_url: '/promo/grinium-donate-728x90.svg', weight: 10, link_url: '/donate.html',
         alt_text: 'Keep the reactor running — donate GRIN and join the donor wall' },
 
       // Vertical rail creatives — several on purpose, so the rail has a rotation to demo.
       { v: 2, name: 'GRINIUM rail — Mine here (160×600)', placement: 'sidebar',
-        image_url: '/promo/grinium-mine-160x600.svg', weight: 50,
+        image_url: '/promo/grinium-mine-160x600.svg', weight: 50, link_url: '/#connect',
         alt_text: 'Mine GRIN here — no sign-up, PPLNS rewards, anonymous Tor payouts' },
       { v: 2, name: 'GRINIUM rail — Why GRIN? (160×600)', placement: 'sidebar',
-        image_url: '/promo/grinium-why-grin-160x600.svg', weight: 40,
+        image_url: '/promo/grinium-why-grin-160x600.svg', weight: 40, link_url: '/#info',
         alt_text: 'Why GRIN? Private by default, no addresses on chain, fair launch, no premine' },
       { v: 2, name: 'GRINIUM rail — Buy GRIN (160×600)', placement: 'sidebar',
-        image_url: '/promo/grinium-buy-grin-160x600.svg', weight: 30,
+        image_url: '/promo/grinium-buy-grin-160x600.svg', weight: 30, link_url: '/#info',
         alt_text: 'Buy GRIN — trade it on exchanges, or earn it by pointing a miner here' },
       { v: 2, name: 'GRINIUM rail — Feeling lucky? (160×600)', placement: 'sidebar',
-        image_url: '/promo/grinium-fortune-160x600.svg', weight: 20,
+        image_url: '/promo/grinium-fortune-160x600.svg', weight: 20, link_url: '/fortune-board.html',
         alt_text: 'Feeling lucky? Block jackpots, prize draws, streak rewards and a monthly lottery' },
       { v: 2, name: 'GRINIUM rail — Anonymous (160×600)', placement: 'sidebar',
-        image_url: '/promo/grinium-privacy-160x600.svg', weight: 10,
+        image_url: '/promo/grinium-privacy-160x600.svg', weight: 10, link_url: '/#connect',
         alt_text: 'Mine anonymously — no accounts, no emails, Tor payouts' },
 
       // Squares — in-content (the sidebar rail is too narrow for a 300×250). On an
       // upgrade these already exist as the re-homed sidebar squares above.
       { v: 1, name: 'GRINIUM promo — Fortune board (in-content 300×250)', placement: 'in-content',
-        image_url: '/promo/grinium-fortune-300x250.svg', weight: 10,
+        image_url: '/promo/grinium-fortune-300x250.svg', weight: 10, link_url: '/fortune-board.html',
         alt_text: 'Feeling lucky? Block jackpots, prize draws, streak rewards and a monthly lottery' },
       { v: 1, name: 'GRINIUM promo — Anonymous mining (in-content 300×250)', placement: 'in-content',
-        image_url: '/promo/grinium-privacy-300x250.svg', weight: 5,
-        alt_text: 'Mine anonymously — no accounts, no emails, Tor payouts' }
+        image_url: '/promo/grinium-privacy-300x250.svg', weight: 5, link_url: '/#connect',
+        alt_text: 'Mine anonymously — no accounts, no emails, Tor payouts' },
+
+      // v3 — give the header a rotation: a second graphical strip + a native TEXT ad, so the
+      // header cycles Mine → Why GRIN → Private-by-design and the text-ad type is demoed.
+      { v: 3, name: 'GRINIUM promo — Why GRIN? (header 728×90)', placement: 'header',
+        image_url: '/promo/grinium-why-grin-728x90.svg', weight: 8, link_url: '/#info',
+        alt_text: 'Why GRIN? No ICO, no premine, tail emission, private by default' },
+      { v: 3, name: 'GRINIUM text — Private by design (header)', placement: 'header',
+        ad_type: 'text', weight: 6, link_url: '/#connect',
+        headline: 'PRIVATE BY DESIGN',
+        body_text: 'No accounts · no emails · Tor payouts · your address is your account',
+        cta_label: 'Start anonymously →' }
     ];
 
-    const seen = this.db.prepare('SELECT 1 FROM ads WHERE image_url = ? LIMIT 1');
+    const seenImg = this.db.prepare('SELECT 1 FROM ads WHERE image_url = ? LIMIT 1');
+    const seenName = this.db.prepare('SELECT 1 FROM ads WHERE name = ? LIMIT 1');
     let added = 0;
     for (const s of seeds) {
-      if (!firstRun && s.v < 2) continue;        // upgrade: never resurrect a v1 creative
-      if (seen.get(s.image_url)) continue;        // operator already has (or kept) this one
+      if (s.v <= seededMax) continue;                         // already seeded in an earlier gen
+      if (s.image_url ? seenImg.get(s.image_url)              // banner: dedup by image
+                      : seenName.get(s.name)) continue;       // text: dedup by internal name
       const { v, ...ad } = s;
-      this.create({ ...ad, link_url: '#', ad_type: 'banner', is_active: 1 });
+      this.create({ ad_type: 'banner', link_url: '#', ...ad, is_active: 1 });
       added++;
     }
 
-    for (const key of ['selfpromo_seeded', 'selfpromo_seeded_v2']) {
+    for (const key of ['selfpromo_seeded', 'selfpromo_seeded_v2', 'selfpromo_seeded_v3']) {
       this.db.prepare(`
         INSERT INTO pool_config (section, key, value, value_type) VALUES ('ads', ?, '1', 'boolean')
         ON CONFLICT(section, key) DO NOTHING

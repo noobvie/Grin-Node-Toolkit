@@ -459,19 +459,36 @@ body {
 .mform-val.is-live { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, var(--bg)); text-shadow: 0 0 8px var(--glow); }
 .mguide-steps { margin: 12px 0 2px; padding-left: 20px; font-size: 12.5px; line-height: 1.7; color: var(--text-dim); }
 .mguide-steps li + li { margin-top: 6px; }
-.mguide-steps code {
+/* Same voice as a step, deliberately without a number: the list numbers are a 1:1 index of
+   the mock's three input rows, so anything that is not one of those rows (how to reach the
+   panel, what to do after saving) must not take a number and dilute that mapping. */
+.mguide-note { margin: 0; font-size: 12.5px; line-height: 1.7; color: var(--text-dim); }
+.mguide-steps code,
+.mguide-note code {
   font-family: var(--mono); color: var(--info); background: var(--rx-inset);
   border: 1px solid var(--rx-line); border-radius: 4px; padding: 0 5px; font-size: 11.5px;
 }
 /* Two-up layout for the full-width P-05b panel: the ASIC mock beside the steps that
    describe it, so you read a field and its explanation on the same line of sight.
+   Only the steps that ARE a field of the mock go in that column (.mguide-span opts a
+   line out): the 4-row mock is far shorter than five steps, so keeping the bookends —
+   reach the panel / save and check — in the right column left a dead band of ~200px
+   under the mock and a needlessly tall, narrow wall of text next to it. Running them
+   full width above and below fills that space and shortens the panel (operator request
+   2026-07-25). They are .mguide-note, not list items, so the numbers stay a 1:1 index
+   of the mock's input rows.
    Single column below 1000px (and inside any narrower host) — the mock's 120px label
-   column plus a wrapping value needs ~360px before it starts looking squeezed. */
-.mguide-cols { display: grid; gap: 12px 28px; align-items: start; }
+   column plus a wrapping value needs ~360px before it starts looking squeezed. DOM order
+   is already lead-in → mock → 1-2-3 → closer, so the stacked order needs no fixing, and
+   .mguide-span is scoped to the two-up query so it is inert there. The base track is
+   minmax(0, 1fr), not the implicit auto: an auto track floors at its items' min-content,
+   so a long unbreakable value in the mock could push the panel wider than a 360px phone. */
+.mguide-cols { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px 28px; align-items: start; }
 .mguide-cols > .mform { margin-top: 0; }
-.mguide-cols > .mguide-steps { margin-top: 0; }
+.mguide-cols > .mguide-steps { margin: 0; }
 @media (min-width: 1000px) {
-  .mguide-cols { grid-template-columns: minmax(0, 560px) minmax(0, 1fr); }
+  .mguide-cols { grid-template-columns: minmax(0, 520px) minmax(0, 1fr); }
+  .mguide-cols > .mguide-span { grid-column: 1 / -1; }
 }
 
 @media (max-width: 480px) {

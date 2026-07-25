@@ -330,12 +330,23 @@
                  click in the way. The Pool 1 field still follows the patch-bay selection:
                  rx-guide-uri is written by id, so its DOM position is irrelevant. The mock
                  is a theme-native HTML render of an ASIC web panel (iPollo-style), NOT a
-                 screenshot, so the live host stays real and it follows every theme. -->
+                 screenshot, so the live host stays real and it follows every theme.
+                 Layout (2026-07-25): the numbered steps are a 1:1 index of the mock's three
+                 input rows and nothing else, so they sit beside it. Reaching the web panel
+                 and saving/backup pools are bookends, not fields — unnumbered .mguide-note
+                 lines running full width above and below. That also fills the ~200px dead
+                 band the 4-row mock used to leave beside a five-step column. -->
             <div class="deck-row">
                 <div class="panel"><span class="screws"></span>
                     <h2 class="panel-title"><span class="tag">P-05b</span> Miner setup — what to type into your ASIC</h2>
                     <div class="panel-body">
                         <div class="mguide-cols" id="rx-miner-guide">
+                            <!-- Unnumbered on purpose: this is how you reach the form, not one of its
+                                 fields. The numbers below count the rows of the mock, so nothing that is
+                                 not a row of the mock may take one. -->
+                            <p class="mguide-note mguide-span">Open your miner&rsquo;s web panel (its IP address
+                                in a browser) → <b>Miners → Pool Configuration</b> (iPollo shown; other vendors
+                                are similar), then fill in the three fields below.</p>
                             <div class="mform" aria-label="Example pool configuration form as shown in an ASIC miner web panel">
                                 <div class="mform-head">Pool Setting <span class="mform-crumb">Miners → Pool Configuration</span></div>
                                 <div class="mform-row"><span class="mform-k">Select Coin</span><span class="mform-val">GRIN</span></div>
@@ -343,9 +354,8 @@
                                 <div class="mform-row"><span class="mform-k">Pool1 worker</span><span class="mform-val">&lt;your_grin_address&gt;.rig1</span></div>
                                 <div class="mform-row"><span class="mform-k">Pool1 password</span><span class="mform-val">&lt;your_own_password&gt;</span></div>
                             </div>
+                            <!-- 1-2-3 = the three fields you actually type into, in mock order. -->
                             <ol class="mguide-steps">
-                                <li>Open your miner&rsquo;s web panel (its IP address in a browser) →
-                                    <b>Miners → Pool Configuration</b> (iPollo shown; other vendors are similar).</li>
                                 <li><b>Pool 1</b> — the endpoint from the patch bay above (updates as you pick a
                                     region). Algorithm: <b>Cuckatoo32</b> (GRIN). If your firmware rejects a bare
                                     <code>host:port</code>, prefix it with <code>stratum+tcp://</code>.</li>
@@ -358,9 +368,11 @@
                                     <b>Use the same password on every rig</b> under this address — any of them can
                                     then prove ownership, and a real password means you can always withdraw even if
                                     your IP changes.</li>
-                                <li>Optionally point <b>Pool 2 / Pool 3</b> at other green or blue regions as automatic
-                                    backups, then save — accepted shares should appear within a few minutes.</li>
                             </ol>
+                            <!-- Also unnumbered: this happens after the form is filled in. -->
+                            <p class="mguide-note mguide-span">Optionally point <b>Pool 2 / Pool 3</b> at other green
+                                or blue regions as automatic backups, then save — accepted shares should appear
+                                within a few minutes.</p>
                         </div>
                     </div>
                 </div>

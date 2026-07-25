@@ -41,6 +41,19 @@
     }
     .spec-box strong { color: var(--text, #cfd8d3); }
     .spec-size { font-family: var(--mono, monospace); color: var(--accent, #5dff73); }
+    /* Preview panel — sits below the Save row, separated by a rule so it reads as
+       "what this ad looks like" rather than another form field. */
+    .preview-panel {
+      margin-top: 1.2rem; padding-top: 1rem;
+      border-top: 1px dashed var(--border-soft, #1d3a26);
+    }
+    .preview-head {
+      margin: 0 0 .6rem; font-size: .8rem; letter-spacing: .08em; text-transform: uppercase;
+      color: var(--text-dim, #8a978f); font-weight: 600;
+    }
+    .preview-head .preview-sub {
+      text-transform: none; letter-spacing: 0; font-weight: 400; opacity: .8;
+    }
     .img-preview { display:none; margin:.2rem 0 1rem; }
     .img-preview .frame {
       display:inline-block; padding:10px; border:1px dashed var(--border, #2a3a30);
@@ -82,6 +95,7 @@
     .stats-cell { font-family: var(--mono, monospace); font-size:.8rem; white-space:nowrap; }
     .notes-flag { cursor:help; margin-left:.3rem; }
     td .btn-sm { margin:1px 0; }
+    /* the Actions column is icon buttons now (.row-actions/.btn-icon in styles.css) */
   </style>
 </head>
 <body>
@@ -152,9 +166,11 @@
     </div>
 
     <!-- Create / edit form -->
-    <h2>New ad</h2>
+    <h2 data-sec="New ad">Create or edit an ad</h2>
     <div class="card" id="ad-form-card">
-      <h3 id="form-title" style="margin:0 0 1rem;">New ad</h3>
+      <!-- Not a section heading — it's the form's STATE ("New ad" / "Edit ad #7"),
+           so it stays quieter than the h2 above it. -->
+      <h3 class="sub-title" id="form-title">New ad</h3>
       <input type="hidden" id="ad-id">
 
       <div class="form-row cols-3">
@@ -209,11 +225,6 @@
             <input type="text" id="ad-alt" placeholder="Describe the ad (accessibility + tooltip)">
           </div>
         </div>
-        <!-- live preview: rendered image + detected dimensions/file type vs the placement spec -->
-        <div class="img-preview" id="img-preview">
-          <div class="frame"><img id="preview-img" alt="Banner preview"></div>
-          <div class="meta" id="preview-meta"></div>
-        </div>
       </div>
 
       <!-- Text fields -->
@@ -238,15 +249,6 @@
           <input type="text" id="ad-body" maxlength="140" placeholder="e.g. No ICO · tail emission · private by default" oninput="updateTextPreview()">
         </div>
         <div class="helper-text" style="margin:-.4rem 0 .6rem;">No image or code needed — this renders as a styled card on the site and rotates with any banners in the same placement. Edit the copy here any time.</div>
-        <!-- live preview of the composed card -->
-        <div class="text-preview" id="text-preview" style="display:none;">
-          <span class="ad-slot-label" style="display:block;font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--text-dim,#8a978f);opacity:.65;margin-bottom:4px;">Ad — preview</span>
-          <div class="tp-card" id="tp-card">
-            <span class="tp-head" id="tp-head"></span>
-            <span class="tp-body" id="tp-body"></span>
-            <span class="tp-cta" id="tp-cta"></span>
-          </div>
-        </div>
       </div>
 
       <!-- Code fields -->
@@ -287,6 +289,27 @@
         <button class="btn" onclick="submitAd()">Save ad</button>
         <button class="btn btn-outline" onclick="resetForm()" id="cancel-btn" style="display:none;">Cancel edit</button>
         <span class="success-msg" id="ad-msg" style="display:none;"></span>
+      </div>
+
+      <!-- Live preview — one panel below Save for every ad type, so editing an existing
+           ad always shows its creative in the same place instead of mid-form. -->
+      <div class="preview-panel" id="preview-panel">
+        <h4 class="preview-head">Preview <span class="preview-sub" id="preview-sub"></span></h4>
+        <!-- banner: rendered image + detected dimensions/file type vs the placement spec -->
+        <div class="img-preview" id="img-preview">
+          <div class="frame"><img id="preview-img" alt="Banner preview"></div>
+          <div class="meta" id="preview-meta"></div>
+        </div>
+        <!-- text: the composed card (headline + body + CTA) -->
+        <div class="text-preview" id="text-preview" style="display:none;">
+          <span class="ad-slot-label" style="display:block;font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--text-dim,#8a978f);opacity:.65;margin-bottom:4px;">Ad — preview</span>
+          <div class="tp-card" id="tp-card">
+            <span class="tp-head" id="tp-head"></span>
+            <span class="tp-body" id="tp-body"></span>
+            <span class="tp-cta" id="tp-cta"></span>
+          </div>
+        </div>
+        <div class="helper-text" id="preview-hint" style="display:none;"></div>
       </div>
     </div>
 
@@ -374,7 +397,12 @@ function updatePreview() {
   const box = document.getElementById('img-preview');
   const img = document.getElementById('preview-img');
   const meta = document.getElementById('preview-meta');
-  if (!url) { box.style.display = 'none'; img.removeAttribute('src'); return; }
+  // syncPlacement() calls this on every placement change — a stale image URL left in
+  // the field must not surface a banner preview while a text/code type is selected.
+  if (document.getElementById('ad-type').value !== 'banner') {
+    box.style.display = 'none'; refreshPreviewPanel(); return;
+  }
+  if (!url) { box.style.display = 'none'; img.removeAttribute('src'); refreshPreviewPanel(); return; }
   const spec = PLACEMENT_SPEC[document.getElementById('ad-placement').value] || PLACEMENT_SPEC.header;
   const extMatch = url.split('?')[0].split('#')[0].match(/\.([a-z0-9]+)$/i);
   const ext = extMatch ? extMatch[1].toUpperCase() : '?';
@@ -389,6 +417,7 @@ function updatePreview() {
   meta.textContent = 'loading…';
   img.src = url;
   box.style.display = '';
+  refreshPreviewPanel();
 }
 
 // Upload a local file via the shared CMS media endpoint (multer-validated, stored in
@@ -467,7 +496,32 @@ function syncType() {
   document.getElementById('code-fields').style.display   = t === 'code' ? '' : 'none';
   // The size/file-type spec box only makes sense for image banners.
   document.getElementById('placement-spec').style.display = t === 'banner' ? '' : 'none';
+  // Refresh whichever preview belongs to the new type; the other one is hidden by
+  // its own updater / by refreshPreviewPanel.
+  if (t === 'banner') updatePreview();
+  else document.getElementById('img-preview').style.display = 'none';
   if (t === 'text') updateTextPreview();
+  else document.getElementById('text-preview').style.display = 'none';
+  refreshPreviewPanel();
+}
+
+// Decide what the preview panel below Save shows: the banner image, the composed text
+// card, or a hint telling the operator what is still missing (code snippets can't be
+// previewed here — they're rendered by the ad network on the public page).
+function refreshPreviewPanel() {
+  const t = document.getElementById('ad-type').value;
+  const imgOn  = t === 'banner' && document.getElementById('img-preview').style.display !== 'none';
+  const textOn = t === 'text'   && document.getElementById('text-preview').style.display !== 'none';
+  const hint = document.getElementById('preview-hint');
+  const sub  = document.getElementById('preview-sub');
+  let msg = '';
+  if (t === 'banner' && !imgOn) msg = 'Add an image URL (or upload a file) to preview the banner.';
+  else if (t === 'text' && !textOn) msg = 'Type a headline, body line or button label to preview the card.';
+  else if (t === 'code') msg = 'Code snippets are rendered by the ad network and are not executed here — check the placement on the public page after saving.';
+  hint.textContent = msg;
+  hint.style.display = msg ? '' : 'none';
+  const place = PLACEMENT_LABEL[document.getElementById('ad-placement').value] || '';
+  sub.textContent = place ? `— ${place} placement, ${t} ad` : '';
 }
 
 // Live preview of the composed text card (headline + body + CTA).
@@ -476,11 +530,12 @@ function updateTextPreview() {
   const body = document.getElementById('ad-body').value.trim();
   const cta  = document.getElementById('ad-cta').value.trim();
   const box  = document.getElementById('text-preview');
-  if (!head && !body && !cta) { box.style.display = 'none'; return; }
+  if (!head && !body && !cta) { box.style.display = 'none'; refreshPreviewPanel(); return; }
   document.getElementById('tp-head').textContent = head;
   document.getElementById('tp-body').textContent = body;
   document.getElementById('tp-cta').textContent  = cta;
   box.style.display = '';
+  refreshPreviewPanel();
 }
 
 function flash(msg, isErr) {
@@ -570,10 +625,12 @@ function renderTable() {
         <td>${escHtml(fmtWindow(a))}</td>
         <td class="stats-cell">${escHtml(fmtStats(a))}</td>
         <td>
-          <button class="btn btn-sm btn-outline" onclick="editAd(${a.id})">Edit</button>
-          <button class="btn btn-sm btn-outline" onclick="duplicateAd(${a.id})">Copy</button>
-          <button class="btn btn-sm btn-outline" onclick="toggleAd(${a.id})">${a.is_active ? 'Turn off' : 'Turn on'}</button>
-          <button class="btn btn-sm" onclick="deleteAd(${a.id})">Delete</button>
+          <div class="row-actions">
+            <button class="btn-icon" onclick="editAd(${a.id})" data-tip="Edit this ad" aria-label="Edit this ad">✏️</button>
+            <button class="btn-icon" onclick="duplicateAd(${a.id})" data-tip="Duplicate as a new ad" aria-label="Duplicate as a new ad">📋</button>
+            <button class="btn-icon" onclick="toggleAd(${a.id})" data-tip="${a.is_active ? 'Turn off (stop showing it)' : 'Turn on (start showing it)'}" aria-label="${a.is_active ? 'Turn off' : 'Turn on'}">${a.is_active ? '⏸️' : '▶️'}</button>
+            <button class="btn-icon btn-icon-danger" onclick="deleteAd(${a.id})" data-tip="Delete this ad" aria-label="Delete this ad">🗑️</button>
+          </div>
         </td>
       </tr>`;
   }).join('');

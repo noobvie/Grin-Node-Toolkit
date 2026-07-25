@@ -265,8 +265,183 @@
     // Settings sub-links are now real pages (not hash tabs), so the active sub-link is
     // baked in at render time — no hashchange sync needed.
 
+    // In-page section navigation for the long pages (payments, ads, settings-*)
+    buildSectionRail(wrap, main);
+
     // Page title in the browser tab + topbar pool name
     decoratePoolIdentity();
+  }
+
+  /* ── In-page section rail ─────────────────────────────────────────────────
+     Several admin pages (payments, ads, health, the bigger settings pages) are
+     several screens tall, so once you scroll there is nothing left on screen
+     saying which part you're in. This builds a sticky strip of section chips
+     directly under the topbar: scroll-spy marks the current one, clicking jumps.
+
+     It is AUTOMATIC — no page ships a hand-written table of contents. Sections
+     are detected from the two heading idioms already in use:
+       • data pages     → <h2> inside <main>
+       • settings pages → .section-title (the card headings)
+     A heading opts out with data-nosection, and overrides its chip label with
+     data-sec="Short label" (the heading itself can stay long/descriptive).
+     Fewer than 2 sections → no rail at all, so the short pages stay clean. */
+  var RAIL_MIN_SECTIONS = 2;
+
+  function slugify(s) {
+    var base = String(s).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+    return 'sec-' + (base.slice(0, 44) || 'section');
+  }
+
+  // Chip label: an explicit data-sec wins; otherwise the heading's own leading text,
+  // skipping nested <span>/<small> (those hold live counters like "3 pending", which
+  // are empty at build time and would otherwise leak into the chip once filled).
+  function headingLabel(el) {
+    var explicit = el.getAttribute('data-sec');
+    if (explicit) return explicit;
+    var t = '';
+    for (var n = el.firstChild; n; n = n.nextSibling) {
+      if (n.nodeType === 3) t += n.nodeValue;
+      else if (n.nodeType === 1 && n.tagName !== 'SPAN' && n.tagName !== 'SMALL') t += n.textContent;
+    }
+    t = t.replace(/\s+/g, ' ').trim();
+    return t || String(el.textContent || '').replace(/\s+/g, ' ').trim();
+  }
+
+  function buildSectionRail(wrap, main) {
+    if (!main) return;
+    var heads = [].slice.call(main.querySelectorAll('h2, .section-title'))
+      .filter(function (el) { return !el.hasAttribute('data-nosection') && headingLabel(el); });
+    if (heads.length < RAIL_MIN_SECTIONS) return;
+
+    var rail = document.createElement('nav');
+    rail.className = 'admin-rail';
+    rail.setAttribute('aria-label', 'Page sections');
+    var inner = document.createElement('div');
+    inner.className = 'admin-rail-inner';
+    rail.appendChild(inner);
+
+    var used = {};
+    heads.forEach(function (el) {
+      if (!el.id) {
+        var id = slugify(headingLabel(el)), i = 2;
+        while (used[id] || document.getElementById(id)) { id = slugify(headingLabel(el)) + '-' + (i++); }
+        el.id = id;
+      }
+      used[el.id] = true;
+      el.classList.add('is-section');
+      var a = document.createElement('a');
+      a.className = 'rail-chip';
+      a.href = '#' + el.id;
+      a.textContent = headingLabel(el);
+      inner.appendChild(a);
+    });
+
+    // The first section opens the page — it needs no 2.5rem gap above it.
+    heads[0].classList.add('sec-first');
+
+    // Sits between the topbar and <main> so `position:sticky; top:var(--topbar-h)`
+    // parks it right below the topbar without either overlapping the other.
+    wrap.insertBefore(rail, main);
+
+    var chips = [].slice.call(inner.querySelectorAll('.rail-chip'));
+    var reduceMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+    // Scroll/spy against the section's OUTER box where there is one: on the settings
+    // pages the heading lives inside a .form-section card, and aligning the heading
+    // would leave the card's top edge + padding cut off above the fold.
+    var anchors = heads.map(function (el) {
+      return (el.closest && el.closest('.form-section')) || el;
+    });
+
+    // Chrome height is read live: the topbar/rail can wrap or resize on narrow widths.
+    function chromeOffset() { return topbar.offsetHeight + rail.offsetHeight + 14; }
+
+    function jumpTo(i, push) {
+      var y = window.pageYOffset + anchors[i].getBoundingClientRect().top - chromeOffset();
+      window.scrollTo({ top: Math.max(0, y), behavior: reduceMotion ? 'auto' : 'smooth' });
+      // replaceState, not a real hash jump: the browser would scroll the heading under
+      // the sticky chrome, and pushState would bury the page in back-button history.
+      if (push) { try { history.replaceState(null, '', '#' + heads[i].id); } catch (e) {} }
+    }
+
+    chips.forEach(function (a, i) {
+      a.addEventListener('click', function (e) {
+        e.preventDefault();
+        jumpTo(i, true);
+        // Clicking a section already in place scrolls nowhere, so no scroll event
+        // fires and the highlight would stay on the previous chip — mark it here.
+        spy();
+      });
+    });
+
+    // Keep the active chip visible when the rail itself overflows horizontally.
+    // Scrolling the rail's own container (not scrollIntoView) so the PAGE never moves.
+    function revealChip(a) {
+      var pad = 24;
+      var left = a.offsetLeft - pad;
+      var right = a.offsetLeft + a.offsetWidth + pad;
+      if (left < inner.scrollLeft) inner.scrollLeft = left;
+      else if (right > inner.scrollLeft + inner.clientWidth) inner.scrollLeft = right - inner.clientWidth;
+    }
+
+    var activeIdx = -1;
+    function spy() {
+      var line = chromeOffset() + 10;
+      var idx = 0;
+      for (var i = 0; i < anchors.length; i++) {
+        if (anchors[i].getBoundingClientRect().top <= line) idx = i; else break;
+      }
+      // At the very bottom the last section may be too short to ever cross the line.
+      // documentElement, not body: body's own box can be shorter than the scrollable
+      // page, which would make this fire early (or never) depending on the page.
+      if (window.innerHeight + window.pageYOffset >= document.documentElement.scrollHeight - 4) {
+        idx = heads.length - 1;
+      }
+      if (idx === activeIdx) return;
+      if (chips[activeIdx]) {
+        chips[activeIdx].classList.remove('active');
+        chips[activeIdx].removeAttribute('aria-current');
+      }
+      activeIdx = idx;
+      chips[idx].classList.add('active');
+      chips[idx].setAttribute('aria-current', 'true');
+      revealChip(chips[idx]);
+    }
+
+    var ticking = false;
+    function onScroll() {
+      if (ticking) return;
+      ticking = true;
+      requestAnimationFrame(function () { spy(); toggleTopBtn(); ticking = false; });
+    }
+    window.addEventListener('scroll', onScroll, { passive: true });
+    window.addEventListener('resize', onScroll);
+
+    // Long page → offer a way back without a scroll marathon. Only ever created
+    // alongside the rail, so short pages don't grow a floating button.
+    var topBtn = document.createElement('button');
+    topBtn.type = 'button';
+    topBtn.className = 'admin-top-btn';
+    topBtn.setAttribute('aria-label', 'Back to top');
+    topBtn.innerHTML = '↑';
+    topBtn.addEventListener('click', function () {
+      window.scrollTo({ top: 0, behavior: reduceMotion ? 'auto' : 'smooth' });
+    });
+    document.body.appendChild(topBtn);
+    function toggleTopBtn() {
+      topBtn.classList.toggle('is-on', window.pageYOffset > 700);
+    }
+
+    // Deep link (#section) — re-run the jump ourselves so the heading clears the
+    // sticky chrome instead of hiding behind it.
+    if (location.hash) {
+      var hashId = location.hash.slice(1);
+      for (var h = 0; h < heads.length; h++) {
+        if (heads[h].id === hashId) { (function (k) { setTimeout(function () { jumpTo(k, false); }, 60); })(h); break; }
+      }
+    }
+    spy();
+    toggleTopBtn();
   }
 
   // ── Pool name + testnet detection (was duplicated in every page's IIFE) ──
@@ -286,6 +461,69 @@
       }
     }).catch(function () {});
   }
+
+  // ── Tooltips for [data-tip] elements (the emoji row-action buttons) ──────
+  // The icons carry no text, so the label must be one hover away. Two obvious
+  // approaches both fail here: a CSS ::after tooltip gets clipped by .table-wrap
+  // (overflow-x:auto clips BOTH axes), and the native title= tooltip only appears
+  // after ~1 s, is OS-styled, and never shows on keyboard focus. So: one shared
+  // position:fixed node parented to <body> — outside every clipping context —
+  // shown on hover AND focus after a short delay.
+  var tipEl = null, tipHost = null, tipTimer = null;
+
+  function tipShow(host) {
+    var text = host.getAttribute('data-tip');
+    if (!text) return;
+    if (!tipEl) {
+      tipEl = document.createElement('div');
+      tipEl.className = 'admin-tip';
+      // Decorative: the button's own aria-label is already its accessible name,
+      // so announcing this too would just double up for screen readers.
+      tipEl.setAttribute('aria-hidden', 'true');
+      document.body.appendChild(tipEl);
+    }
+    tipEl.textContent = text;
+    // Park at 0,0 first so the measured size is the natural (unclamped) one.
+    tipEl.style.left = '0px';
+    tipEl.style.top = '0px';
+    var r = host.getBoundingClientRect();
+    var t = tipEl.getBoundingClientRect();
+    var top = r.top - t.height - 8;
+    if (top < 4) top = r.bottom + 8;   // no room above (top table rows) → flip below
+    var left = r.left + r.width / 2 - t.width / 2;
+    left = Math.max(6, Math.min(left, window.innerWidth - t.width - 6));
+    tipEl.style.left = Math.round(left) + 'px';
+    tipEl.style.top = Math.round(top) + 'px';
+    tipEl.classList.add('is-on');
+  }
+
+  function tipHide() {
+    if (tipTimer) { clearTimeout(tipTimer); tipTimer = null; }
+    tipHost = null;
+    if (tipEl) tipEl.classList.remove('is-on');
+  }
+
+  function tipEnter(el) {
+    var host = el && el.closest ? el.closest('[data-tip]') : null;
+    if (host === tipHost) return;
+    tipHide();
+    if (!host) return;
+    tipHost = host;
+    tipTimer = setTimeout(function () { if (tipHost === host) tipShow(host); }, 120);
+  }
+
+  document.addEventListener('mouseover', function (e) { tipEnter(e.target); });
+  document.addEventListener('mouseout', function (e) {
+    // Ignore moves within the same host (icon → its own padding).
+    if (tipHost && e.relatedTarget && tipHost.contains(e.relatedTarget)) return;
+    tipHide();
+  });
+  document.addEventListener('focusin', function (e) { tipEnter(e.target); });
+  document.addEventListener('focusout', tipHide);
+  // A row re-render or a scroll leaves the tip pointing at nothing.
+  document.addEventListener('click', tipHide);
+  window.addEventListener('scroll', tipHide, true);
+  window.addEventListener('resize', tipHide);
 
   // Body already parsed up to this script (end of <body>), so mount now.
   if (document.querySelector('main')) {

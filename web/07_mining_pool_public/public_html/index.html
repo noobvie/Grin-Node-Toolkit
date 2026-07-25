@@ -292,12 +292,17 @@
                                     <span><i class="l-online"></i> online — miners active</span>
                                     <span><i class="l-idle"></i> idle — ready, no miners yet</span>
                                     <span><i class="l-down"></i> offline — gateway unreachable</span>
+                                    <span><i class="l-checking"></i> checking — verifying now</span>
                                 </div>
                                 <p class="rgn-note">
                                     Connect to any <b class="c-ok">green</b> or <b class="c-info">blue</b>
                                     region — blue only means it is up and ready with no miners on it yet,
                                     not broken. A <b class="c-bad">red</b> region is temporarily unreachable,
-                                    so just pick another. Your rewards are identical on every region, so
+                                    so just pick another. A pulsing <b>grey</b> region is still being
+                                    checked and settles into its real colour within a few seconds.
+                                    Every colour is measured live — we dial each region&rsquo;s stratum
+                                    port ourselves, so blue really does mean a miner can connect.
+                                    Your rewards are identical on every region, so
                                     choose the one nearest you for the lowest stale-share rate.
                                 </p>
                             </details>
@@ -362,8 +367,9 @@
                                 <li><b>Worker</b> — your Grin address; it <b>is</b> your login, no signup. Optionally
                                     add <code>.rig1</code> to name the machine (lowercase letters/digits/<code>-</code>/<code>_</code>,
                                     max 25 chars — longer names are trimmed, never rejected).</li>
-                                <li><b>Password</b> — <b>choose a strong, private password</b> (4+ chars; never
-                                    <code>x</code>, <code>123</code> or firmware defaults). This is your
+                                <li><b>Password</b> — <b>choose a strong, private password</b> (8+ chars; never
+                                    <code>x</code>, <code>xxxx</code>, <code>123</code> or firmware defaults —
+                                    one repeated character is rejected). This is your
                                     <b>ownership proof</b> for withdrawals, so treat it like a key.
                                     <b>Use the same password on every rig</b> under this address — any of them can
                                     then prove ownership, and a real password means you can always withdraw even if

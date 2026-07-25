@@ -97,6 +97,12 @@ function migrateMinerAccounts() {
       prev_ip: 'TEXT DEFAULT NULL',
       last_pass_hash: 'TEXT DEFAULT NULL',
       prev_pass_hash: 'TEXT DEFAULT NULL',
+      // Why the LAST-SEEN stratum password was or wasn't usable as ownership proof:
+      // 'ok' | 'none' (rig sent nothing) | a passwordRejectReason() code. Diagnostic only —
+      // never gates anything, and holds no part of the password itself. Without it a refused
+      // password is completely silent: the rig mines fine and the miner only discovers there
+      // is no password proof on withdrawal day.
+      pass_proof_state: 'TEXT DEFAULT NULL',
       is_banned: 'INTEGER NOT NULL DEFAULT 0',
       ban_reason: 'TEXT DEFAULT NULL',
       banned_at: 'INTEGER DEFAULT NULL',
@@ -274,6 +280,7 @@ function createSchema() {
       prev_ip TEXT DEFAULT NULL,
       last_pass_hash TEXT DEFAULT NULL,
       prev_pass_hash TEXT DEFAULT NULL,
+      pass_proof_state TEXT DEFAULT NULL,
       is_banned INTEGER NOT NULL DEFAULT 0,
       ban_reason TEXT DEFAULT NULL,
       banned_at INTEGER DEFAULT NULL,
@@ -702,9 +709,14 @@ function createSchema() {
     `CREATE INDEX IF NOT EXISTS idx_miner_geo_cc ON miner_geo(country_code)`,
 
     // Rolling 30-day view of Grin P2P peers seen by THIS pool's node, aggregated to country.
-    // peer_key is a truncated sha256(ip) — a stable dedup handle so the same peer isn't double
-    // counted across snapshots — the raw IP is NEVER stored. net = 'main' | 'test' (this node's
-    // network). Populated by the peer-snapshot collector in index.js; read by /api/network/peers.
+    // peer_key is a truncated UNSALTED sha256(net|ip) — a stable dedup handle so the same peer
+    // isn't double counted across snapshots. The raw IP is not stored, but be honest about what
+    // that buys: an unsalted digest of an IPv4 is reversible by brute force (2^32), so this is
+    // deduplication, NOT anonymisation. That is fine here — Grin P2P addresses are public by
+    // construction and these are peers our own node already connected to. Salting would break
+    // cross-snapshot dedup, which is the entire point of the column. See security audit §G2.
+    // net = 'main' | 'test' (this node's network).
+    // Populated by the peer-snapshot collector in index.js; read by /api/network/peers.
     `CREATE TABLE IF NOT EXISTS network_peers (
       peer_key     TEXT PRIMARY KEY,
       country_code TEXT DEFAULT NULL,

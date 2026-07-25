@@ -84,7 +84,7 @@
         </div>
 
         <div class="form-section">
-          <h3 class="section-title">Award Prize / Bonus to an Address</h3>
+          <h3 class="section-title" data-sec="Award prize">Award Prize / Bonus to an Address</h3>
           <div class="helper-text">
             Credit a contest or incentive prize straight to a miner's Grin address — no account
             needed. The prize lands on their pool balance and pays out to that address via the
@@ -140,7 +140,7 @@
         </div>
 
         <div class="form-section">
-          <h3 class="section-title">Loyalty Streak Multiplier</h3>
+          <h3 class="section-title" data-sec="Loyalty streak">Loyalty Streak Multiplier</h3>
           <div class="checkbox-group">
             <input type="checkbox" id="streak_enabled" name="streak_enabled">
             <label for="streak_enabled">Reward consecutive mining days</label>
@@ -204,7 +204,7 @@
             </div>
           </div>
 
-          <h4 style="margin-top:1rem;">Special-occasion draws</h4>
+          <h4 class="sub-title">Special-occasion draws</h4>
           <div class="helper-text">Extra draws on fixed dates (e.g. Christmas, New Year, Grin Genesis Day = 01-15). Date is MM-DD, UTC.</div>
           <input type="hidden" id="lottery_special_events" name="lottery_special_events">
           <div id="events-list"></div>
@@ -279,7 +279,7 @@
             </div>
           </div>
 
-          <h4 style="margin-top:1rem;">Pot &amp; rule overrides <span style="font-weight:normal;color:var(--muted,#888);">(blank = inherit global)</span></h4>
+          <h4 class="sub-title">Pot &amp; rule overrides <span style="font-weight:normal;color:var(--muted,#888);">(blank = inherit global)</span></h4>
           <div class="form-row">
             <div class="form-group">
               <label for="camp-pot-grin">Fixed pot (GRIN)</label>
@@ -317,12 +317,12 @@
             <input type="hidden" id="camp-edit-id">
           </div>
 
-          <h4 style="margin-top:1.5rem;">Scheduled &amp; past campaigns</h4>
+          <h4 class="sub-title">Scheduled &amp; past campaigns</h4>
           <div id="campaigns-list" class="helper-text">Loading…</div>
         </div>
 
         <div class="form-section" style="opacity:.6;">
-          <h3 class="section-title">Grin Transporter — payout rail #3 <span style="font-weight:normal;">(coming soon)</span></h3>
+          <h3 class="section-title" data-sec="Transporter">Grin Transporter — payout rail #3 <span style="font-weight:normal;">(coming soon)</span></h3>
           <div class="checkbox-group">
             <input type="checkbox" id="transporter_enabled" name="transporter_enabled" disabled>
             <label for="transporter_enabled">Enable Grin Transporter payouts</label>

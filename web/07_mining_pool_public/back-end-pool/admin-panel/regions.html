@@ -43,13 +43,8 @@
     .fieldguide .step { color: var(--accent, #b8e600); font-weight: 700; }
     .fieldguide code { font-family: var(--mono); }
 
-    /* Icon-only action buttons — the label lives in title/aria-label. */
-    .btn-icon {
-      padding: .25rem .45rem; font-size: .95rem; line-height: 1;
-      background: transparent; border: 1px solid var(--border, #2a2a2a);
-    }
-    .btn-icon:hover { border-color: var(--accent, #b8e600); background: transparent; }
-    .btn-icon.btn-icon-danger:hover { border-color: var(--error-color, #cc3333); }
+    /* .btn-icon / .btn-icon-danger now come from the shared admin styles.css so
+       every table's Actions column looks the same — no page-local override here. */
 
     /* Custom SVG flags (VN) — sized to sit inline with the emoji flags. */
     .flag-img {
@@ -112,7 +107,7 @@
     </details>
 
     <!-- Existing regions + live status -->
-    <div style="display:flex;align-items:center;justify-content:space-between;gap:1rem;">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:1rem;margin-top:2.2rem;">
       <h2 style="margin:0;">All regions status</h2>
       <button class="btn btn-sm btn-outline" onclick="loadRegions()">↻ Refresh</button>
     </div>
@@ -155,7 +150,7 @@
     <!-- Pairing result card — shown after a save-with-pubkey or the 🔑 row action.
          Holds the GRINGW1 string + copy button + what-next mini-guide. -->
     <div class="card" id="pairing-card" style="margin-top:1rem;display:none;">
-      <h3 style="margin:0 0 .5rem;">🔑 Gateway pairing string — <span id="pairing-region" class="mono"></span></h3>
+      <h3 class="sub-title">🔑 Gateway pairing string — <span id="pairing-region" class="mono"></span></h3>
       <div id="pairing-warn" class="helper-text" style="display:none;color:var(--warning-color,#e0b040);margin-bottom:.5rem;"></div>
       <div style="display:flex;gap:.6rem;align-items:flex-start;">
         <pre class="mono" id="pairing-string" style="flex:1;margin:0;padding:.6rem .8rem;border:1px solid var(--border,#2a2a2a);border-radius:4px;white-space:pre-wrap;word-break:break-all;font-family:var(--mono);"></pre>
@@ -173,12 +168,15 @@
 
     <!-- Create / edit form — collapsed until ➕ New region or a row's Edit opens it;
          the flash message lives on the toolbar so it stays visible after the form closes -->
-    <div style="margin-top:1.4rem;display:flex;gap:.6rem;align-items:center;">
+    <h2 data-sec="Add / edit region">Add or edit a region</h2>
+    <div style="display:flex;gap:.6rem;align-items:center;">
       <button class="btn" id="new-region-btn" onclick="openNewRegion()">➕ New region</button>
       <span class="success-msg" id="r-msg" style="display:none;"></span>
     </div>
     <div class="card" id="region-form" style="margin-top:.8rem;display:none;">
-      <h3 style="margin:0 0 .8rem;"><span id="form-title">New region</span></h3>
+      <!-- id on the heading itself (was on an inner span) so .sub-title's own casing
+           applies — the JS only ever sets .textContent on it. -->
+      <h3 class="sub-title" id="form-title">New region</h3>
 
       <!-- Per-field help, collapsed by default so it's there when needed but not in the way -->
       <details class="fieldguide">
@@ -503,7 +501,7 @@ async function loadRegions(silent) {
       // port is mapped — otherwise there is nothing to re-print.
       const hasPeer = hb && (hb.tunnel_handshake_age != null || hb.port);
       const pairingBtn = hasPeer
-        ? `<button class="btn btn-icon" onclick="showPairing('${escHtml(r.region)}')" title="Show pairing string (GRINGW1|…)" aria-label="Show pairing string for ${escHtml(r.region)}">🔑</button>`
+        ? `<button class="btn-icon" onclick="showPairing('${escHtml(r.region)}')" data-tip="Show pairing string (GRINGW1|…)" aria-label="Show pairing string for ${escHtml(r.region)}">🔑</button>`
         : '';
       return `
         <tr>
@@ -516,10 +514,12 @@ async function loadRegions(silent) {
           <td>${hb && hb.age_seconds != null ? fmtAge(hb.age_seconds) : '—'}</td>
           <td>${minersShares}</td>
           <td>${port}</td>
-          <td style="white-space:nowrap;">
-            <button class="btn btn-icon" onclick="editRegion(${r.id})" title="Edit region" aria-label="Edit region ${escHtml(r.region)}">✏️</button>
-            ${pairingBtn}
-            <button class="btn btn-icon btn-icon-danger" onclick="deleteRegion(${r.id})" title="Delete region" aria-label="Delete region ${escHtml(r.region)}">🗑️</button>
+          <td>
+            <div class="row-actions" style="flex-wrap:nowrap;">
+              <button class="btn-icon" onclick="editRegion(${r.id})" data-tip="Edit region" aria-label="Edit region ${escHtml(r.region)}">✏️</button>
+              ${pairingBtn}
+              <button class="btn-icon btn-icon-danger" onclick="deleteRegion(${r.id})" data-tip="Delete region" aria-label="Delete region ${escHtml(r.region)}">🗑️</button>
+            </div>
           </td>
         </tr>`;
     }).join('');

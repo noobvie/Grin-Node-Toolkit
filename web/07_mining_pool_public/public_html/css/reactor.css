@@ -377,6 +377,11 @@ body {
 .rgn.s-idle     .rgn-led { background: var(--info);   box-shadow: 0 0 7px color-mix(in srgb, var(--info) 55%, transparent); }
 .rgn.s-degraded .rgn-led { background: var(--warn); }
 .rgn.s-down     .rgn-led { background: var(--danger); box-shadow: 0 0 8px var(--danger); }
+/* checking — no verdict from the server yet. Deliberately colourless and pulsing so it can
+   never be mistaken for a settled state; it resolves within a few seconds. */
+.rgn.s-checking .rgn-led { background: color-mix(in srgb, var(--text) 45%, var(--bg)); animation: rgn-pulse 1.1s ease-in-out infinite; }
+@keyframes rgn-pulse { 0%, 100% { opacity: .30; } 50% { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .rgn.s-checking .rgn-led { animation: none; opacity: .6; } }
 .rgn .rgn-name { font-size: 11.5px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; }
 .rgn .rgn-pin  { font-size: 11px; margin-left: -2px; }
 /* selected — accent outline, deliberately NOT the LED colour */
@@ -406,6 +411,7 @@ body {
 .rgn-legend .l-online { background: var(--ok); box-shadow: 0 0 6px var(--ok); }
 .rgn-legend .l-idle   { background: var(--info); box-shadow: 0 0 6px color-mix(in srgb, var(--info) 55%, transparent); }
 .rgn-legend .l-down   { background: var(--danger); box-shadow: 0 0 6px var(--danger); }
+.rgn-legend .l-checking { background: color-mix(in srgb, var(--text) 45%, var(--bg)); }
 .rgn-note { margin-top: 8px; max-width: 620px; font-size: 11.5px; line-height: 1.55; color: var(--text-mute); }
 .rgn-note b { font-weight: 600; }
 .rgn-note .c-ok   { color: var(--ok); }

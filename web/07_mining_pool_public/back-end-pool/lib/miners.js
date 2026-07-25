@@ -1,6 +1,6 @@
 const crypto = require('crypto');
 const { getDb } = require('./db');
-const { recordOwnerEvidence } = require('./owner-proof');
+const { recordOwnerEvidence, isUsablePassword } = require('./owner-proof');
 const geoip = require('./geoip');
 
 class MinerManager {
@@ -180,6 +180,41 @@ class MinerManager {
       uniqueAddresses.add(session.grinAddress);
     }
     return uniqueAddresses.size;
+  }
+
+  // Do all of this address's live rigs use the SAME stratum password?
+  //
+  // This matters because miner_accounts keeps only last_pass_hash + prev_pass_hash — a last-2
+  // window. Three rigs on three different passwords keep overwriting each other, so only the
+  // two most recently rotated survive, and WHICH one works depends on which rig last submitted
+  // an accepted share. Silent, and confusing exactly when the miner needs the gate to work.
+  //
+  // Computed from the in-memory sessions, which already hold the password as typed by the rig
+  // (createSession above). It cannot be done from the stored hashes: those are SALTED, so two
+  // rigs on an identical password produce different digests and can never compare equal. The
+  // alternative — a deterministic HMAC fingerprint column — would put an offline-grindable
+  // digest at rest for a purely informational readout, which isn't worth it.
+  //
+  // Returns COUNTS ONLY, never a password or any digest of one. Live sessions only, so it
+  // resets on restart and reflects currently-connected rigs — which is the useful scope for a
+  // "check your rig config" hint.
+  getPasswordConsistency(grinAddress) {
+    const usable = new Set();
+    let sessions = 0;
+    let unusable = 0; // rigs sending nothing, or something that can never be proof
+    try {
+      for (const [, s] of this.activeSessions) {
+        if (s.grinAddress !== grinAddress) continue;
+        sessions++;
+        const p = typeof s.pass === 'string' ? s.pass.trim() : '';
+        if (p && isUsablePassword(p, this.db)) usable.add(p);
+        else unusable++;
+      }
+    } catch (err) {
+      console.error(`Error checking password consistency: ${err.message}`);
+      return null;
+    }
+    return { sessions, distinct: usable.size, unusable };
   }
 
   getSessionsByMiner(grinAddress) {

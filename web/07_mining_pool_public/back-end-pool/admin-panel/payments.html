@@ -15,8 +15,8 @@
       <!-- Payout kill-switch state (auto-set on a critical money trip, or manual). -->
       <div id="freeze-banner"></div>
 
-      <h2>
-        Payments
+      <h2 data-sec="Payout queue">
+        Payout queue
         <span id="queue-summary" style="font-size:.82rem;color:var(--text-dim);font-weight:400;margin-left:.8rem;"></span>
       </h2>
 
@@ -62,7 +62,7 @@
 
     <!-- ── Wallet ↔ Ledger Reconciliation (custodial money statement) ──────── -->
     <section>
-      <h2>
+      <h2 data-sec="Reconciliation">
         Wallet ↔ Ledger Reconciliation
         <span id="recon-refresh" style="font-size:.75rem;color:var(--text-dim);font-weight:400;margin-left:.8rem;"></span>
       </h2>
@@ -75,7 +75,7 @@
       <div id="recon-banner"></div>
 
       <!-- Coverage -->
-      <h3 style="margin:1rem 0 .5rem;font-size:1rem;">Coverage</h3>
+      <h3 class="sub-title">Coverage</h3>
       <div class="kpi-grid" id="recon-cov">
         <div class="kpi-card"><div class="kpi-label">Wallet Spendable</div><div class="kpi-value" id="rc-w-spend">—</div></div>
         <div class="kpi-card"><div class="kpi-label">Owed (withdrawable now)</div><div class="kpi-value" id="rc-owed-spend">—</div></div>
@@ -86,7 +86,7 @@
       </div>
 
       <!-- Wallet maturity + pending -->
-      <h3 style="margin:1rem 0 .5rem;font-size:1rem;">Balance maturity</h3>
+      <h3 class="sub-title">Balance maturity</h3>
       <div class="kpi-grid" id="recon-mat">
         <div class="kpi-card"><div class="kpi-label">Maturing coinbase (wallet)</div><div class="kpi-value" id="rc-w-immature">—</div></div>
         <div class="kpi-card"><div class="kpi-label">Immature blocks (not yet owed)</div><div class="kpi-value" id="rc-imm-blocks">—</div></div>
@@ -97,7 +97,7 @@
       </div>
 
       <!-- Flow statement -->
-      <h3 style="margin:1.2rem 0 .5rem;font-size:1rem;">Flow statement (external money)</h3>
+      <h3 class="sub-title">Flow statement (external money)</h3>
       <div class="card" style="padding:0;">
         <div class="table-wrap">
           <table>
@@ -112,7 +112,7 @@
       </div>
 
       <!-- Buckets: donation + fee → contest budget -->
-      <h3 style="margin:1.2rem 0 .5rem;font-size:1rem;">Fee &amp; prize buckets</h3>
+      <h3 class="sub-title">Fee &amp; prize buckets</h3>
       <div class="card" style="padding:0;">
         <div class="table-wrap">
           <table>
@@ -128,7 +128,7 @@
       <p class="error-msg" id="recon-msg" style="display:none;margin-top:.6rem;"></p>
 
       <!-- Wallet-send audit: the wallet's OWN sends vs the pool ledger -->
-      <h3 style="margin:1.2rem 0 .5rem;font-size:1rem;">
+      <h3 class="sub-title">
         Wallet-send audit
         <span id="wa-summary" style="font-size:.78rem;color:var(--text-dim);font-weight:400;margin-left:.5rem;"></span>
       </h3>
@@ -150,7 +150,7 @@
       </div>
 
       <!-- Wallet-identity guard + switch wizard -->
-      <h3 style="margin:1.2rem 0 .5rem;font-size:1rem;">
+      <h3 class="sub-title">
         Wallet identity
         <span id="wi-summary" style="font-size:.78rem;color:var(--text-dim);font-weight:400;margin-left:.5rem;"></span>
       </h3>
@@ -191,6 +191,62 @@
       </div>
     </section>
 
+    <!-- ── Payout request audit ──────────────────────────────────────────────── -->
+    <section>
+      <h2 data-sec="Request audit">
+        Payout request audit
+        <span id="pa-summary" style="font-size:.82rem;color:var(--text-dim);font-weight:400;margin-left:.8rem;"></span>
+      </h2>
+      <p style="font-size:.82rem;color:var(--text-dim);margin:-.4rem 0 .8rem;">
+        Every ownership-gated money request — <strong>accepted and refused</strong> — so a
+        brute-force or spam run against the payout button is visible here rather than buried in
+        the web-server log. Origin is stored as a <strong>network prefix</strong>
+        (<code>/24</code> for IPv4, <code>/48</code> for IPv6), never the full address; that is
+        still enough for repeat attempts from one origin to group together. Country is resolved
+        when the request arrives. Times UTC.
+      </p>
+
+      <div style="display:flex;gap:.5rem;align-items:center;margin:0 0 .8rem;flex-wrap:wrap;">
+        <label style="font-size:.82rem;color:var(--text-dim);">Window
+          <select id="pa-days" class="input" style="width:auto;margin-left:.35rem;" onchange="loadPayoutAudit()">
+            <option value="1">24 hours</option>
+            <option value="7">7 days</option>
+            <option value="30" selected>30 days</option>
+            <option value="90">90 days</option>
+            <option value="180">180 days</option>
+            <option value="365">1 year</option>
+          </select>
+        </label>
+        <label style="font-size:.82rem;color:var(--text-dim);">Show
+          <select id="pa-result" class="input" style="width:auto;margin-left:.35rem;" onchange="loadPayoutAudit()">
+            <option value="all" selected>All</option>
+            <option value="deny">Refused only</option>
+            <option value="ok">Accepted only</option>
+          </select>
+        </label>
+        <button class="btn btn-sm btn-outline" onclick="loadPayoutAudit()">↻ Refresh</button>
+        <span id="pa-note" style="font-size:.8rem;color:var(--text-dim);"></span>
+      </div>
+
+      <div id="pa-banner"></div>
+
+      <div class="card" style="padding:0;overflow-x:auto;">
+        <table>
+          <thead><tr>
+            <th>Time (UTC)</th><th>Action</th><th>Result</th><th>Address</th>
+            <th>Origin prefix</th><th>Country</th><th>Detail</th>
+          </tr></thead>
+          <tbody id="pa-tbody"><tr><td colspan="7">Loading…</td></tr></tbody>
+        </table>
+      </div>
+      <p style="font-size:.78rem;color:var(--text-dim);margin:.5rem 0 0;">
+        Rows are pruned on the schedule set by <strong>Keep audit trail (days)</strong> in
+        <a href="/admin/settings-database.html">Settings → Database</a>. Requests throttled by the
+        rate limiter are rejected before this check runs and leave no row here — a quiet table is
+        not by itself proof that nothing was attempted.
+      </p>
+    </section>
+
     <!-- ── Abandoned-balance disposition + manual payout ─────────────────────── -->
     <section>
       <h2>
@@ -220,7 +276,7 @@
       <p class="error-msg" id="dorm-msg" style="display:none;margin:.2rem 0 .8rem;"></p>
 
       <!-- Sub-threshold ("email support to withdraw") payout for a below-minimum miner -->
-      <h3 style="margin:1rem 0 .5rem;font-size:1rem;">Pay a below-minimum miner</h3>
+      <h3 class="sub-title">Pay a below-minimum miner</h3>
       <p style="font-size:.82rem;color:var(--text-dim);margin:-.2rem 0 .7rem;">
         For a miner below the minimum who emails to withdraw. First <strong>verify they own the address</strong>
         (type the mining IP or rig password they gave you → match/no-match, nothing is revealed). Then either:
@@ -280,7 +336,7 @@
       </div>
 
       <!-- Dormant list (unmasked, operator) -->
-      <h3 style="margin:1.2rem 0 .5rem;font-size:1rem;">Dormant addresses <span id="dorm-list-note" style="font-size:.78rem;color:var(--text-dim);font-weight:400;"></span></h3>
+      <h3 class="sub-title">Dormant addresses <span id="dorm-list-note" style="font-size:.78rem;color:var(--text-dim);font-weight:400;"></span></h3>
       <div class="card" style="padding:0;">
         <div class="table-wrap">
           <table>
@@ -293,7 +349,7 @@
       </div>
 
       <!-- Disposition history -->
-      <h3 style="margin:1.2rem 0 .5rem;font-size:1rem;">Prize-pool sweep history</h3>
+      <h3 class="sub-title">Prize-pool sweep history</h3>
       <div class="card" style="padding:0;">
         <div class="table-wrap">
           <table>
@@ -378,9 +434,11 @@ function render() {
     const canRetry  = w.status === 'retry_scheduled' || w.status === 'tor_failed';
     const canCancel = w.status === 'retry_scheduled' || w.status === 'tor_checking' || w.status === 'tor_failed';
     let actions = '';
-    if (canRetry)  actions += `<button class="btn btn-sm" onclick="retryWithdrawal(${w.id})">Retry now</button> `;
-    if (canCancel) actions += `<button class="btn btn-sm btn-outline" onclick="cancelWithdrawal(${w.id}, ${fmtGrin(w.amount)})">Cancel</button>`;
-    if (!actions)  actions = '<span style="color:var(--text-dim)">—</span>';
+    if (canRetry)  actions += `<button class="btn-icon" onclick="retryWithdrawal(${w.id})" data-tip="Retry this payout now" aria-label="Retry this payout now">🔁</button>`;
+    if (canCancel) actions += `<button class="btn-icon btn-icon-danger" onclick="cancelWithdrawal(${w.id}, ${fmtGrin(w.amount)})" data-tip="Cancel this payout (refunds the balance)" aria-label="Cancel this payout">❌</button>`;
+    actions = actions
+      ? `<div class="row-actions">${actions}</div>`
+      : '<span style="color:var(--text-dim)">—</span>';
     const reason = w.cancel_reason ? ` title="${escHtml(w.cancel_reason)}"` : '';
     return `<tr>
       <td class="mono">${w.id}</td>
@@ -639,6 +697,74 @@ async function loadWalletAudit() {
     summary.textContent = '';
     banner.innerHTML = `<div class="health-card error" style="margin-bottom:.6rem;"><div class="health-detail">Audit error: ${escHtml(err.message)}</div></div>`;
     card.style.display = 'none';
+  }
+}
+
+// ── Payout request audit ──────────────────────────────────────────────────────
+// Times are rendered as explicit UTC (not toLocaleString) — this table is read alongside
+// server logs during an incident, and a browser-local timestamp would not line up with them.
+function utcTs(t) {
+  return t ? new Date(t * 1000).toISOString().replace('T', ' ').slice(0, 19) : '—';
+}
+const PA_ACTION = {
+  withdraw_tor: 'Tor payout', withdraw_slatepack: 'Slatepack', withdraw_nostr: 'Nostr payout',
+  slatepack_finalize: 'Slatepack finalize',
+  nostr_destination_register: 'Nostr dest. register', nostr_destination_remove: 'Nostr dest. remove',
+};
+const PA_REASON = {
+  no_match: 'proof did not match', too_many_attempts: 'throttled (lockout)',
+  proof_required: 'no proof supplied', account_not_found: 'unknown address',
+  no_recorded_proof: 'no proof on file', tor_unreachable: 'wallet unreachable',
+  npub_changed: 'Nostr key changed', lookup_failed: 'lookup failed',
+};
+
+async function loadPayoutAudit() {
+  const tbody = document.getElementById('pa-tbody');
+  const summary = document.getElementById('pa-summary');
+  const banner = document.getElementById('pa-banner');
+  const note = document.getElementById('pa-note');
+  const days = document.getElementById('pa-days').value;
+  const result = document.getElementById('pa-result').value;
+  try {
+    const a = await API.get(`/api/admin/payments/audit?days=${days}&result=${result}&limit=200`);
+    summary.textContent = `${a.totals.ok} accepted · ${a.totals.deny} refused · ${a.totals.origins} origin(s) in ${a.window_days}d`;
+
+    // Be explicit when retention already deleted part of the requested window, so an empty
+    // stretch is never misread as "nobody tried".
+    note.textContent = a.truncated_by_retention
+      ? `showing ${a.window_days}d — retention keeps only ${a.retention_days}d`
+      : (a.geo_available ? '' : 'country unavailable (geoip-lite not installed)');
+
+    const top = a.top_denied_origins || [];
+    banner.innerHTML = top.length ? `<div class="health-card ${top[0].addresses > 1 ? 'error' : 'warn'}" style="margin-bottom:.6rem;">
+      <div class="health-name">${top[0].addresses > 1 ? '⚠' : 'ℹ'} Repeat refusals from ${top.length} origin(s)</div>
+      <div class="health-detail" style="margin-top:.3rem;">
+        ${top.map(t => `<span class="mono">${escHtml(t.ip_prefix)}</span> — ${t.denials} refused across
+           ${t.addresses} address${t.addresses === 1 ? '' : 'es'} (last ${escHtml(utcTs(t.last_at))})`).join('<br>')}
+        <br><br>One origin refused against <strong>several different addresses</strong> is an
+        address-sweep attempt, not a miner mistyping their own password. Block the prefix in
+        <a href="/admin/settings-access.html">Settings → Access</a> if it persists.
+      </div></div>` : '';
+
+    const ev = a.events || [];
+    tbody.innerHTML = ev.length ? ev.map(e => {
+      const okRow = e.outcome === 'ok';
+      const detail = e.reason ? (PA_REASON[e.reason] || e.reason)
+                   : (e.amount != null ? fmtGrin(e.amount) + ' ツ' : '—');
+      return `<tr>
+        <td class="mono">${escHtml(utcTs(e.at))}</td>
+        <td>${escHtml(PA_ACTION[e.action] || e.action)}</td>
+        <td><span class="badge ${okRow ? 'badge-ok' : 'badge-error'}">${okRow ? 'accepted' : 'refused'}</span></td>
+        <td class="mono" title="${escHtml(e.grin_address || '')}">${escHtml(shortAddr(e.grin_address))}</td>
+        <td class="mono">${escHtml(e.ip_prefix || '—')}</td>
+        <td>${escHtml(e.country || (e.country_code || '—'))}</td>
+        <td style="color:var(--text-dim);">${escHtml(detail)}</td>
+      </tr>`;
+    }).join('') : `<tr><td colspan="7" style="color:var(--text-dim);">No payout requests in this window.</td></tr>`;
+  } catch (err) {
+    summary.textContent = '';
+    banner.innerHTML = '';
+    tbody.innerHTML = `<tr><td colspan="7" style="color:var(--danger);">Audit error: ${escHtml(err.message)}</td></tr>`;
   }
 }
 
@@ -906,7 +1032,7 @@ async function recordManualPayout() {
   finally { btn.disabled = false; }
 }
 
-document.addEventListener('DOMContentLoaded', () => { refresh(); loadReconciliation(); loadWalletAudit(); loadWalletIdentity(); loadDormancy(); });
+document.addEventListener('DOMContentLoaded', () => { refresh(); loadReconciliation(); loadWalletAudit(); loadWalletIdentity(); loadDormancy(); loadPayoutAudit(); });
 // Withdrawal queue + freeze state are cheap — 30s. Reconciliation, the wallet-send audit, and the
 // wallet-identity probe each force a wallet call (slow) — keep them on the relaxed 3-min cadence.
 setInterval(refresh, 30000);
@@ -914,6 +1040,8 @@ setInterval(loadReconciliation, 180000);
 setInterval(loadWalletAudit, 180000);
 setInterval(loadWalletIdentity, 180000);
 setInterval(loadDormancy, 120000);
+// Pure DB read (no wallet call) but a wide scan — 2 min is enough to notice a live sweep.
+setInterval(loadPayoutAudit, 120000);
 </script>
 </body>
 </html>

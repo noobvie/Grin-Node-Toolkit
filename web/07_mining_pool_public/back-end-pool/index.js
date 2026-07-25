@@ -26,7 +26,7 @@ const Captcha = require('./lib/captcha');
 const { requireAuth, requireAdmin, requireFreshAuth } = require('./lib/auth-middleware');
 const HashrateTracker = require('./lib/hashrate-tracker');
 const { getHorizon: getLedgerRollupHorizon } = require('./lib/ledger-rollup');
-const { verifyOwnerProof, auditOwnerProof, normalizeIp, migrateOwnerProofHashes } = require('./lib/owner-proof');
+const { verifyOwnerProof, auditOwnerProof, normalizeIp, migrateOwnerProofHashes, migrateAuditLogIps } = require('./lib/owner-proof');
 const geoip = require('./lib/geoip');
 const PoolstatsReporter = require('./lib/poolstats-reporter');
 const RateLimiter = require('./lib/rate-limiter');
@@ -70,22 +70,23 @@ function gwctl(args) {
 // (works de-rooted, adds rx/tx), silent fallback to the direct root-only read
 // below so an old install (no helper/sudoers yet) or a gateway-only box
 // degrades to share-recency status exactly as before (§13.9 step 5).
+// Returns { available, regions } — `available` says whether we could READ WireGuard at all,
+// which is NOT the same as "there are peers". An empty `regions` used to be returned for both
+// "wg unreadable" and "wg readable, zero peers configured", so a pool with no gateway paired
+// yet judged every declared region live and painted the whole patch bay blue/idle. Keep the
+// two apart: available=true + no entry for a region means that region has NO tunnel.
 async function readGatewayStatus() {
   try {
     const st = await gwctl(['status']);
     const out = {};
     for (const g of st.gateways || []) {
-      // Include peers that have NEVER handshaked (handshake 0/absent). Skipping them made
-      // an all-gateways-down pool return {} — indistinguishable from "wg unavailable" — so
-      // /api/pool/stats/regions could never mark anything offline and every dead gateway
-      // showed as idle (blue) instead of red. A present-but-zero entry keeps the map
-      // non-empty ("wg data IS available") while regionStatus() treats the 0 handshake as
-      // stale → offline. The wg-less fallback below already behaves this way (`wg show
-      // latest-handshakes` prints 0 for never-handshaked peers).
+      // Include peers that have NEVER handshaked (handshake 0/absent). A present-but-zero
+      // entry means "peer declared, tunnel never came up" → regionStatus() treats the 0
+      // handshake as stale → offline. (`wg show latest-handshakes` prints 0 the same way.)
       if (!g.region) continue;
       out[g.region] = { handshake: g.handshake || 0, rx_bytes: g.rx_bytes, tx_bytes: g.tx_bytes };
     }
-    return out;
+    return { available: true, regions: out };
   } catch (e) {
     return readWgHandshakes();
   }
@@ -97,11 +98,12 @@ async function readGatewayStatus() {
 // per-network to match the bash installer (07 pool menu W): mainnet "wg-grinpool", testnet
 // "wg-grinpool-tn".
 // Legacy/fallback path — requires root (reads /etc/wireguard); readGatewayStatus() is the
-// primary. Returns { <region>: { handshake: <unix_ts> } }; {} on ANY failure (wg not
-// installed, not the central box, no permission, dev/Windows) so callers fall back to the
-// share-activity signal.
+// primary. Returns { available: true, regions: { <region>: { handshake: <unix_ts> } } };
+// available:false on ANY failure (wg not installed, not the central box, no permission,
+// dev/Windows) so callers fall back to the stratum probe / share-activity signals.
 function readWgHandshakes() {
   const out = {};
+  let available = false;
   try {
     const iface = (config && config.network === 'testnet') ? 'wg-grinpool-tn' : 'wg-grinpool';
     const conf = fs.readFileSync(`/etc/wireguard/${iface}.conf`, 'utf8');
@@ -114,26 +116,97 @@ function readWgHandshakes() {
       if (pm && curRegion) { pubToRegion[pm[1]] = curRegion; curRegion = null; }
     }
     const dump = execSync(`wg show ${iface} latest-handshakes`, { timeout: 2000 }).toString();
+    available = true;  // we READ wg — an empty peer list below is now real information
     for (const line of dump.split('\n')) {
       const [pub, ts] = line.trim().split(/\s+/);
       if (pub && ts && pubToRegion[pub]) out[pubToRegion[pub]] = { handshake: parseInt(ts, 10) || 0 };
     }
-  } catch (e) { /* wg unavailable — share-activity signal is used instead */ }
-  return out;
+  } catch (e) { /* wg unavailable — stratum probe / share activity are used instead */ }
+  return { available, regions: out };
 }
 
-// Cached wrapper for the public /api/pool/stats/regions path: that endpoint is unauthenticated
-// and polled every ~60s by every open dashboard, so calling readGatewayStatus() (which spawns
-// grin-gateway-ctl / `wg show`) on every hit is a needless per-request subprocess. A 15s TTL
-// collapses a burst of public hits to at most one handshake read every 15s while staying fresh
-// enough for a liveness pill. The admin endpoint keeps its own uncached read (low call volume).
-let _gwStatusCache = { ts: 0, data: {} };
-async function cachedGatewayStatus() {
-  const now = Date.now();
-  if (now - _gwStatusCache.ts < 15000) return _gwStatusCache.data;
-  const data = await readGatewayStatus();
-  _gwStatusCache = { ts: now, data };
-  return data;
+// Cached wrapper for the public /api/pool/stats/regions + /api/pool/topology paths: those
+// endpoints are unauthenticated and polled by every open dashboard, so calling
+// readGatewayStatus() (which spawns grin-gateway-ctl / `wg show`) on every hit is a needless
+// per-request subprocess. SYNCHRONOUS stale-while-revalidate: the caller always gets the
+// cached snapshot immediately and a stale one is refreshed in the background — a liveness
+// read must NEVER sit in front of the region list (gwctl carries a 10s exec timeout, which
+// on a cold cache used to stall the whole patch bay before it could paint). The admin
+// endpoint keeps its own uncached await (low call volume, wants ground truth).
+const GW_STATUS_TTL_MS = 15000;
+let _gwStatusCache = { ts: 0, running: false, data: { available: false, regions: {} } };
+function cachedGatewayStatus() {
+  if (!_gwStatusCache.running && Date.now() - _gwStatusCache.ts > GW_STATUS_TTL_MS) {
+    _gwStatusCache.running = true;
+    readGatewayStatus()
+      .then((d) => { _gwStatusCache.data = d; })
+      .catch(() => { /* keep the previous snapshot */ })
+      .then(() => { _gwStatusCache.ts = Date.now(); _gwStatusCache.running = false; });
+  }
+  return _gwStatusCache.data;
+}
+
+// Active wire check: TCP-dial a region's PUBLIC stratum host:port — the exact path a miner's
+// rig takes. Resolves ms-to-connect on success, null on refuse/timeout/DNS fail. Never rejects.
+// Connect-only (no stratum handshake): proves the region's HAProxy/listener is up and
+// reachable, which is all the edge can prove without a fake miner login.
+function probeStratumTcp(host, port, timeoutMs = 2500) {
+  return new Promise((resolve) => {
+    const t0 = Date.now();
+    let sock, settled = false;
+    const done = (ok) => {
+      if (settled) return;
+      settled = true;
+      try { sock.destroy(); } catch (e) { /* already gone */ }
+      resolve(ok ? Date.now() - t0 : null);
+    };
+    try { sock = net.connect({ host, port: +port }); } catch (e) { return resolve(null); }
+    sock.setTimeout(timeoutMs, () => done(false));
+    sock.once('connect', () => done(true));
+    sock.once('error', () => done(false));
+  });
+}
+
+// Public per-region reachability cache (feeds the patch bay + network map).
+// WireGuard alone cannot answer "can a miner mine here?" for a region that has no peer at
+// all — a seeded/declared endpoint with nothing behind it looked identical to a healthy quiet
+// one. This dials the advertised stratum_url instead, entirely OUT of the request path:
+// endpoints read the snapshot and kick a refresh only when it is stale, so a public hit never
+// waits on a dial. Two consecutive failures before calling a region down (a single dial can
+// lose to a momentary egress hiccup); a region with no verdict yet reports 'checking', never
+// a guess.
+const STRATUM_PROBE_TTL_MS = 60000;
+const STRATUM_PROBE_STRIKES = 2;
+let _stratumProbe = { ts: 0, running: false, byRegion: new Map() };
+function refreshStratumProbes(locations) {
+  if (_stratumProbe.running) return;
+  if (Date.now() - _stratumProbe.ts < STRATUM_PROBE_TTL_MS) return;
+  const targets = [];
+  for (const l of locations || []) {
+    const m = String(l.stratum_url || '').replace(/^\w+:\/\//, '').match(/^([^:/]+):(\d+)$/);
+    if (m) targets.push({ region: l.region, host: m[1], port: m[2] });
+  }
+  if (!targets.length) { _stratumProbe.ts = Date.now(); return; }
+  _stratumProbe.running = true;
+  Promise.all(targets.map(async (t) => {
+    const ms = await probeStratumTcp(t.host, t.port);
+    const prev = _stratumProbe.byRegion.get(t.region) || { fails: 0 };
+    _stratumProbe.byRegion.set(t.region, {
+      ok: ms !== null,
+      fails: ms !== null ? 0 : prev.fails + 1,
+      ms,
+      ts: Math.floor(Date.now() / 1000)
+    });
+  })).catch(() => { /* probeStratumTcp never rejects; belt and braces */ })
+    .then(() => { _stratumProbe.ts = Date.now(); _stratumProbe.running = false; });
+}
+// true = reachable · false = confirmed unreachable · null = no verdict yet (never probed,
+// or one lone failure that has not been confirmed).
+function stratumVerdict(region) {
+  const p = _stratumProbe.byRegion.get(region);
+  if (!p) return null;
+  if (p.ok) return true;
+  return p.fails >= STRATUM_PROBE_STRIKES ? false : null;
 }
 
 const app = express();
@@ -407,6 +480,10 @@ async function initializePool() {
     // One-time background upgrade of legacy plaintext ownership-proof IPs to salted hashes
     // (owner-proof.js v1$ format). Non-blocking; verify accepts both forms while it runs.
     migrateOwnerProofHashes(db);
+
+    // One-time in-place coarsening of historical miner audit IPs to network prefixes
+    // (/24, /48). Synchronous — truncation only, no KDF — and idempotent.
+    migrateAuditLogIps(db);
 
     authManager = new AuthManager(config);
     console.log(`[${new Date().toISOString()}] Authentication manager initialized`);
@@ -2259,7 +2336,7 @@ function setupRoutes() {
       const { addr } = req.params;
       const acct = db.prepare(
         `SELECT grin_address, balance, balance_locked, is_online, last_seen_at, created_at,
-                last_ip, prev_ip, last_pass_hash, prev_pass_hash,
+                last_ip, prev_ip, last_pass_hash, prev_pass_hash, pass_proof_state,
                 nostr_username, nostr_npub, nostr_registered_at
          FROM miner_accounts WHERE grin_address = ?`
       ).get(addr);
@@ -2327,6 +2404,17 @@ function setupRoutes() {
         dormancy: dormancyManager ? dormancyManager.statusFor(acct.grin_address) : null,
         has_recorded_ip: !!(acct.last_ip || acct.prev_ip),
         has_recorded_pass: !!(acct.last_pass_hash || acct.prev_pass_hash),
+        // Password-proof diagnostics — why the gate will or won't accept a rig password.
+        //   state — the LAST-SEEN login's verdict ('ok' | 'none' | a reject code). Persisted.
+        //   live  — cross-rig consistency among CURRENTLY CONNECTED sessions (counts only).
+        // Both are deliberately public (the page is address-addressable with no login). A
+        // non-compliant password can never be accepted as proof, so telling a visitor it is
+        // short or a factory default reveals only that a door they can't open is shut — while
+        // hiding it would hide the warning from the one person who needs it.
+        password_proof: {
+          state: acct.pass_proof_state || null,
+          live: minerManager ? minerManager.getPasswordConsistency(acct.grin_address) : null
+        },
         // Goblin/Nostr payout rail (design §15). Destination npub is NOT exposed (it's the
         // pinned secret-ish anchor); only the display username + cooldown state, so the UI
         // can show "pending / active at <UTC>". active = past the security cooldown.
@@ -2931,6 +3019,32 @@ function setupRoutes() {
     }
   });
 
+  // ─── Network-map exposure gate (access.network_map_public, OFF by default) ──────────────
+  // Guards the two feeds behind /network-map.html. Neither has ever returned an IP — peer
+  // IPs never leave the DB and every globe coordinate is randomized within its country — but
+  // both publish a per-country breakdown of who mines here / who this node peers with, and on
+  // a small pool a country with one entry names one person. Disabled → 404 (not 403: a 403
+  // confirms the feature exists and is merely switched off). network-map.js already treats a
+  // failed fetch as "no data" and renders its illustrative fallback, so the page degrades.
+  const networkMapPublic = () => {
+    try {
+      const a = poolSettings.getSection('access');
+      return a.network_map_public === true || a.network_map_public === 'true';
+    } catch (e) {
+      return false; // settings unreadable → stay closed
+    }
+  };
+  // k-anonymity floor for the country breakdowns when the feed IS enabled. Countries under
+  // the threshold are merged into a single unnamed "Other" row rather than dropped, so the
+  // published totals still add up.
+  const minBucket = () => {
+    try {
+      return Math.max(1, parseInt(poolSettings.getSection('access').network_map_min_bucket, 10) || 3);
+    } catch (e) {
+      return 3;
+    }
+  };
+
   // ─── Network map: full pool topology (hub → gateways → miners-by-country) ───────────────
   // One call powers /network-map.html. Everything is aggregate + privacy-clean:
   //   · gateways — pool_locations + live share window + WireGuard liveness → status
@@ -2944,11 +3058,12 @@ function setupRoutes() {
   //     is never a real location or IP, and exact per-miner coordinates are never stored.
   app.get('/api/pool/topology', rateLimiter.middleware('public'), async (req, res) => {
     try {
+      if (!networkMapPublic()) return res.status(404).json({ error: 'not_found' });
       const WINDOW_S = 900, OFFLINE_S = 600, CYCLE = 42, SOL = 16384;
       const nowS = Math.floor(Date.now() / 1000), cutoff = nowS - WINDOW_S;
 
       const locations = db.prepare(
-        `SELECT region, label, country, country_code, is_active FROM pool_locations`
+        `SELECT region, label, country, country_code, stratum_url, is_active FROM pool_locations`
       ).all();
       const agg = db.prepare(
         `SELECT region, COUNT(DISTINCT grin_address) AS miners, COALESCE(SUM(difficulty),0) AS sumdiff,
@@ -2957,19 +3072,28 @@ function setupRoutes() {
       ).all(cutoff);
       const byRegion = new Map(agg.map(r => [r.region, r]));
 
-      const wgByRegion = await cachedGatewayStatus();
-      const wgAvailable = Object.keys(wgByRegion).length > 0;
+      const wgSnapshot = cachedGatewayStatus();
+      const wgByRegion = wgSnapshot.regions || {};
+      refreshStratumProbes(locations);
       const localRegion = (config && config.role === 'singlebox') ? config.region : null;
-      // Public gateway state (same liveness rules as /api/pool/stats/regions, mapped to the
-      // three network-map states): connected = up + miners, handshake = up + no miners, offline.
-      const statusOf = (region, hasMiners, shareAge) => {
+      // Public gateway state — the SAME signal precedence as /api/pool/stats/regions (shares →
+      // local box → WireGuard peer → stratum dial; see the comment there), mapped to the
+      // network-map states: connected = up + miners, handshake = up + no miners, offline,
+      // checking = no verdict yet.
+      const statusOf = (region, hasMiners, shareAge, hasTarget) => {
+        const sharesFresh = shareAge !== null && shareAge < OFFLINE_S;
+        const verdict = stratumVerdict(region);
         let up;
-        if (region === localRegion || !wgAvailable) up = true;
-        else {
+        if (sharesFresh) up = true;
+        else if (region === localRegion) up = true;
+        else if (wgSnapshot.available && wgByRegion[region]) {
           const wg = wgByRegion[region];
-          const hsFresh = !!(wg && wg.handshake && (nowS - wg.handshake) < OFFLINE_S);
-          const sharesFresh = shareAge !== null && shareAge < OFFLINE_S;
-          up = hsFresh || sharesFresh;
+          up = !!(wg.handshake && (nowS - wg.handshake) < OFFLINE_S) && verdict !== false;
+        } else if (verdict === null) {
+          if (!hasTarget) return hasMiners ? 'connected' : 'handshake';
+          return 'checking';
+        } else {
+          up = verdict;
         }
         if (!up) return 'offline';
         return hasMiners ? 'connected' : 'handshake';
@@ -2979,7 +3103,7 @@ function setupRoutes() {
       for (const loc of locations) {
         const a = byRegion.get(loc.region) || { miners: 0, sumdiff: 0, last_share: 0 };
         const shareAge = a.last_share ? (nowS - a.last_share) : null;
-        const status = statusOf(loc.region, a.miners > 0, shareAge);
+        const status = statusOf(loc.region, a.miners > 0, shareAge, !!loc.stratum_url);
         const gps = (a.sumdiff * CYCLE) / (WINDOW_S * SOL);
         const pos = geoip.placeInCountry(loc.country_code, 'gw:' + loc.region);
         const g = {
@@ -3018,7 +3142,13 @@ function setupRoutes() {
         if (!c) { c = { cc, name: name || geoip.countryName(cc), miners: 0, votes: {} }; countries.set(cc, c); }
         c.miners++; c.votes[region] = (c.votes[region] || 0) + 1;
       }
-      const countryList = [...countries.values()].map(c => {
+      // k-anonymity: countries below the floor are merged into one unnamed "Other" row (no
+      // country_code, no coordinates) so the miner total stays truthful without naming a
+      // country that holds a single miner.
+      const kMin = minBucket();
+      const named = [], thin = [];
+      for (const c of countries.values()) (c.miners >= kMin ? named : thin).push(c);
+      const countryList = named.map(c => {
         const gw = Object.entries(c.votes).sort((a, b) => b[1] - a[1])[0][0];
         const pos = geoip.placeInCountry(c.cc, 'mn:' + c.cc);
         return {
@@ -3026,6 +3156,12 @@ function setupRoutes() {
           lat: pos ? pos.lat : null, lng: pos ? pos.lng : null
         };
       }).sort((a, b) => b.miners - a.miners);
+      if (thin.length) {
+        countryList.push({
+          country_code: null, country: 'Other', gateway: null, lat: null, lng: null,
+          miners: thin.reduce((s, c) => s + c.miners, 0), aggregated_countries: thin.length
+        });
+      }
 
       // Hub = this settlement core; best-effort location (configured hub country → local
       // region's country → busiest online gateway's country).
@@ -3046,7 +3182,8 @@ function setupRoutes() {
           miners: countryList.reduce((s, c) => s + c.miners, 0),
           gateways_up: gateways.filter(g => g.online).length,
           gateways_total: gateways.length,
-          countries: countryList.length
+          // True distinct-country count (thin ones are hidden by name, not by tally).
+          countries: named.length + thin.length
         },
         geo_source: (geoip.available() && geoHits > 0) ? 'geoip' : 'gateway',
         timestamp: new Date().toISOString()
@@ -3063,14 +3200,22 @@ function setupRoutes() {
   // isn't installed or the node has no peers yet (page then shows its illustrative fallback).
   app.get('/api/network/peers', rateLimiter.middleware('public'), (req, res) => {
     try {
+      if (!networkMapPublic()) return res.status(404).json({ error: 'not_found' });
       const days = Math.min(Math.max(parseInt(req.query.window, 10) || 30, 1), 90);
       const cutoff = Math.floor(Date.now() / 1000) - days * 86400;
-      const rows = db.prepare(`
+      const allRows = db.prepare(`
         SELECT country_code, country, COUNT(*) AS peers,
                SUM(CASE WHEN net='main' THEN 1 ELSE 0 END) AS main,
                SUM(CASE WHEN net='test' THEN 1 ELSE 0 END) AS test
         FROM network_peers WHERE last_seen >= ? AND country_code IS NOT NULL
         GROUP BY country_code ORDER BY peers DESC`).all(cutoff);
+
+      // k-anonymity floor. Applied BEFORE the twinkle points are built, not just to the
+      // country list — a point is placed at its country's (randomized) position, so emitting
+      // points for a thin country would re-expose exactly what the floor is hiding.
+      const kMin = minBucket();
+      const rows = allRows.filter(r => r.peers >= kMin);
+      const thinRows = allRows.filter(r => r.peers < kMin);
 
       const countries = rows.map(r => {
         const pos = geoip.placeInCountry(r.country_code, 'peer:' + r.country_code);
@@ -3094,13 +3239,26 @@ function setupRoutes() {
         }
       }
 
+      // Thin countries survive as one unnamed bucket so the published totals stay truthful.
+      if (thinRows.length) {
+        countries.push({
+          country_code: null, country: 'Other', lat: null, lng: null,
+          peers: thinRows.reduce((s, r) => s + r.peers, 0),
+          main: thinRows.reduce((s, r) => s + r.main, 0),
+          test: thinRows.reduce((s, r) => s + r.test, 0),
+          aggregated_countries: thinRows.length
+        });
+      }
+
       res.json({
         window_days: days,
         countries, points,
+        // Totals span ALL peers (including the ones folded into "Other") — the floor hides
+        // which country a thin peer is in, not that it exists.
         totals: {
-          peers: totalPeers,
-          main: rows.reduce((s, r) => s + r.main, 0),
-          test: rows.reduce((s, r) => s + r.test, 0)
+          peers: allRows.reduce((s, r) => s + r.peers, 0),
+          main: allRows.reduce((s, r) => s + r.main, 0),
+          test: allRows.reduce((s, r) => s + r.test, 0)
         },
         timestamp: new Date().toISOString()
       });
@@ -3143,34 +3301,53 @@ function setupRoutes() {
       // Per-region tunnel liveness (Model C): WireGuard latest-handshake per gateway. Peers
       // carry PersistentKeepalive=25, so a healthy tunnel re-handshakes every ~25s regardless
       // of miner traffic — a handshake older than OFFLINE_S (or none at all) means the gateway
-      // is genuinely DOWN, not merely quiet. Returns {} when wg is unavailable (singlebox with
-      // no gateways, not the central box, dev/Windows): in that case we can't judge liveness,
-      // so we never mark anyone offline and degrade to the 2-state online/idle signal.
-      const wgByRegion = await cachedGatewayStatus();
-      const wgAvailable = Object.keys(wgByRegion).length > 0;
+      // is genuinely DOWN, not merely quiet. Cached snapshot, never awaited in the request path.
+      const wgSnapshot = cachedGatewayStatus();
+      const wgByRegion = wgSnapshot.regions || {};
+
+      // Active reachability: TCP-dial each declared stratum_url in the BACKGROUND. This is the
+      // only signal that covers a region with no WireGuard peer at all — a declared/seeded
+      // endpoint pointing at nothing (never paired, DNS not up, gateway not built) used to read
+      // as 'idle' blue, i.e. "ready, just quiet", when a miner pointing a rig there gets a
+      // refused connection. Kicked here, read from cache; the first hit after boot legitimately
+      // has no verdict and reports 'checking'.
+      refreshStratumProbes(locations);
 
       // The LOCAL/singlebox region has no WG peer (it IS the box); this API answering proves
-      // its own stratum is bound, so it is always "up" — never offline.
+      // the box is alive, so it is never marked offline (its public host may also be
+      // un-dialable from itself behind hairpin NAT, so the probe is not trusted to fail it).
       const localRegion = (config && config.role === 'singlebox') ? config.region : null;
 
-      // Three honest public states for a miner choosing where to point their rig:
-      //   online  — tunnel up AND ≥1 share in the window (miners active here right now)
-      //   idle    — tunnel up, no recent miners (perfectly fine to connect, just quiet)
-      //   offline — tunnel down / never handshaked (don't bother — you can't mine here)
-      // "up" = a fresh WireGuard handshake OR recent shares. Recent shares are independent
-      // proof-of-life: if miners are actively submitting through a region it IS reachable,
-      // even if the handshake read is momentarily stale/absent — otherwise a single-region
-      // handshake blip would flip an actively-mined region to red while its card still shows
-      // miners > 0. Matches the admin health endpoint, which takes min(shareAge, handshakeAge).
-      const regionStatus = (region, hasShares, shareAge) => {
+      // Four honest public states for a miner choosing where to point their rig:
+      //   online   — reachable AND ≥1 share in the window (miners active here right now)
+      //   idle     — reachable, no recent miners (perfectly fine to connect, just quiet)
+      //   offline  — tunnel down / nothing listening (don't bother — you can't mine here)
+      //   checking — no verdict yet (first poll after a restart); say so, never guess 'idle'
+      // Signal precedence, strongest first:
+      //   ① recent shares — financial-grade proof miners ARE mining through this region; wins
+      //      over everything, so a handshake/probe blip can never flip an actively-mined
+      //      region red while its own card still shows miners > 0.
+      //   ② the local box — see above.
+      //   ③ a declared WireGuard peer — for a Model C gateway the tunnel IS the path; a stale
+      //      handshake means down even if its public port still answers (HAProxy up, no route
+      //      home). A fresh handshake is still overruled by a CONFIRMED dead public port.
+      //   ④ otherwise the stratum dial — covers every region wg cannot speak for.
+      const regionStatus = (region, hasShares, shareAge, hasTarget) => {
+        const sharesFresh = shareAge !== null && shareAge < OFFLINE_S;
+        const verdict = stratumVerdict(region);
         let up;
-        if (region === localRegion || !wgAvailable) {
-          up = true; // local box, or liveness unknowable → assume up (never false-offline)
-        } else {
+        if (sharesFresh) up = true;
+        else if (region === localRegion) up = true;
+        else if (wgSnapshot.available && wgByRegion[region]) {
           const wg = wgByRegion[region];
-          const hsFresh = !!(wg && wg.handshake && (nowS - wg.handshake) < OFFLINE_S);
-          const sharesFresh = shareAge !== null && shareAge < OFFLINE_S;
-          up = hsFresh || sharesFresh;
+          up = !!(wg.handshake && (nowS - wg.handshake) < OFFLINE_S) && verdict !== false;
+        } else if (verdict === null) {
+          // Nothing to dial and no tunnel to read → liveness is genuinely unknowable; keep the
+          // old lenient behaviour rather than stranding the region on 'checking' forever.
+          if (!hasTarget) return hasShares ? 'online' : 'idle';
+          return 'checking';
+        } else {
+          up = verdict;
         }
         if (!up) return 'offline';
         return hasShares ? 'online' : 'idle';
@@ -3179,14 +3356,15 @@ function setupRoutes() {
       // Union of regions seen in shares and regions declared in pool_locations.
       const regions = new Set([...byRegion.keys(), ...locByRegion.keys()]);
       const out = [];
-      let totalGps = 0, totalMiners = 0, totalShares = 0;
+      let totalGps = 0, totalMiners = 0, totalShares = 0, checking = 0;
       for (const region of regions) {
         const a = byRegion.get(region) || { shares: 0, miners: 0, sumdiff: 0, last_share: 0 };
         const loc = locByRegion.get(region) || {};
         const gps = (a.sumdiff * CYCLE_LENGTH) / (WINDOW_S * SOLUTION_RATE);
         totalGps += gps; totalMiners += a.miners; totalShares += a.shares;
         const shareAge = a.last_share ? (nowS - a.last_share) : null;
-        const status = regionStatus(region, a.shares > 0, shareAge);
+        const status = regionStatus(region, a.shares > 0, shareAge, !!loc.stratum_url);
+        if (status === 'checking') checking++;
         out.push({
           region,
           label: loc.label || null,
@@ -3194,7 +3372,7 @@ function setupRoutes() {
           country_code: loc.country_code || null,
           stratum_url: loc.stratum_url || null,
           is_active: loc.is_active === undefined ? null : !!loc.is_active,
-          status,                       // 'online' | 'idle' | 'offline'
+          status,                       // 'online' | 'idle' | 'offline' | 'checking'
           online: status !== 'offline', // reachable? (up regardless of miner count)
           hashrate_gps: parseFloat(gps.toFixed(6)),
           miners: a.miners,
@@ -3206,6 +3384,9 @@ function setupRoutes() {
       res.json({
         window_seconds: WINDOW_S,
         region_count: out.length,
+        // > 0 means at least one region has no liveness verdict yet — the client should
+        // repaint shortly instead of waiting out its normal poll interval.
+        checking: checking,
         totals: {
           hashrate_gps: parseFloat(totalGps.toFixed(6)),
           miners: totalMiners,
@@ -3293,6 +3474,105 @@ function setupRoutes() {
       res.json({
         count: logs.length,
         logs
+      });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ─── Payout request audit (money actions only) ──────────────────────────────────────────
+  // The ownership-gated money surface, both ACCEPTED and DENIED, so the operator can see a
+  // brute-force / spam run against the payout button rather than inferring it from nginx logs.
+  // Sourced from the same admin_audit_log rows auditOwnerProof() writes (admin_id IS NULL).
+  //
+  // `ip` is the COARSENED network prefix (/24, /48) — see lib/owner-proof.js coarsenIp(). That
+  // is deliberate and is enough for this view's purpose: repeated attempts from one origin still
+  // group together. `geo` is the country resolved from the full IP at write time (details.geo).
+  //
+  // Bounded by BOTH the requested window and database.audit_log_keep_days — asking for 365 days
+  // when retention is 180 cannot surface rows that were already pruned, so the response reports
+  // the effective window and lets the UI say so instead of implying the gap means "no attempts".
+  app.get('/api/admin/payments/audit', secureAdmin, (req, res) => {
+    try {
+      const reqDays = Math.min(Math.max(parseInt(req.query.days, 10) || 30, 1), 3650);
+      const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 200, 1), 1000);
+      const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
+      const only = String(req.query.result || 'all').toLowerCase(); // all | deny | ok
+
+      let keepDays = 180;
+      try { keepDays = Math.max(30, parseInt(poolSettings.getSection('database').audit_log_keep_days, 10) || 180); }
+      catch (e) { /* fall back to the documented default */ }
+      const effDays = Math.min(reqDays, keepDays);
+      const cutoff = Math.floor(Date.now() / 1000) - effDays * 86400;
+
+      // Money actions only. A LIKE over the action prefix keeps this in step with owner-proof.js
+      // without duplicating its action list here.
+      const MONEY = "(a.action LIKE 'owner_proof:withdraw\\_%' ESCAPE '\\'" +
+                    " OR a.action LIKE 'owner_proof:slatepack\\_finalize%' ESCAPE '\\'" +
+                    " OR a.action LIKE 'owner_proof:nostr\\_destination\\_%' ESCAPE '\\')";
+      const resultClause = only === 'deny' ? " AND a.action LIKE '%:deny'"
+                         : only === 'ok'   ? " AND a.action LIKE '%:ok'" : '';
+
+      const rows = db.prepare(
+        `SELECT a.id, a.action, a.target_id AS grin_address, a.details, a.ip, a.created_at
+         FROM admin_audit_log a
+         WHERE a.admin_id IS NULL AND ${MONEY} AND a.created_at >= ?${resultClause}
+         ORDER BY a.id DESC LIMIT ? OFFSET ?`
+      ).all(cutoff, limit, offset);
+
+      const events = rows.map(r => {
+        let d = {};
+        try { d = r.details ? JSON.parse(r.details) : {}; } catch (_) { d = {}; }
+        // 'owner_proof:withdraw_tor:deny' → rail 'withdraw_tor', outcome 'deny'
+        const parts = String(r.action || '').split(':');
+        const outcome = parts[parts.length - 1] === 'ok' ? 'ok' : 'deny';
+        const { geo, ...rest } = d;
+        return {
+          id: r.id,
+          at: r.created_at,
+          action: parts.slice(1, -1).join(':') || r.action,
+          outcome,
+          grin_address: r.grin_address,
+          ip_prefix: r.ip || null,
+          country_code: geo || null,
+          country: geo ? geoip.countryName(geo) : null,
+          reason: rest.reason || null,
+          amount: typeof rest.amount === 'number' ? rest.amount : null,
+          withdrawal_id: rest.withdrawal_id || null,
+        };
+      });
+
+      // Denial concentration over the SAME window — the signal that separates "a miner mistyped
+      // their password twice" from "one origin is sweeping addresses". Computed in SQL over the
+      // whole window, not over the returned page, so paging can't hide a burst.
+      const topDenied = db.prepare(
+        `SELECT a.ip AS ip_prefix, COUNT(*) AS denials,
+                COUNT(DISTINCT a.target_id) AS addresses, MAX(a.created_at) AS last_at
+         FROM admin_audit_log a
+         WHERE a.admin_id IS NULL AND ${MONEY} AND a.created_at >= ?
+           AND a.action LIKE '%:deny' AND a.ip IS NOT NULL
+         GROUP BY a.ip HAVING denials > 1
+         ORDER BY denials DESC, addresses DESC LIMIT 10`
+      ).all(cutoff);
+
+      const totals = db.prepare(
+        `SELECT SUM(CASE WHEN a.action LIKE '%:ok' THEN 1 ELSE 0 END) AS ok,
+                SUM(CASE WHEN a.action LIKE '%:deny' THEN 1 ELSE 0 END) AS deny,
+                COUNT(DISTINCT a.ip) AS origins
+         FROM admin_audit_log a
+         WHERE a.admin_id IS NULL AND ${MONEY} AND a.created_at >= ?`
+      ).get(cutoff);
+
+      res.json({
+        requested_days: reqDays,
+        window_days: effDays,
+        retention_days: keepDays,
+        truncated_by_retention: reqDays > keepDays,
+        geo_available: geoip.available(),
+        totals: { ok: totals.ok || 0, deny: totals.deny || 0, origins: totals.origins || 0 },
+        top_denied_origins: topDenied,
+        count: events.length,
+        events,
       });
     } catch (err) {
       res.status(500).json({ error: err.message });
@@ -4040,24 +4320,11 @@ function setupRoutes() {
     }
   });
 
-  // Active wire check: TCP-dial a region's PUBLIC stratum host:port — the exact path a
-  // miner's rig takes. Resolves ms-to-connect on success, null on refuse/timeout/DNS fail.
-  // Never rejects. Connect-only (no stratum handshake): proves the gateway's HAProxy is
-  // up and reachable, which is all the edge can prove without a fake miner login.
-  function probeStratumTcp(host, port, timeoutMs = 2500) {
-    return new Promise((resolve) => {
-      const started = Date.now();
-      let sock;
-      const done = (ok) => {
-        if (sock) { sock.removeAllListeners(); sock.destroy(); }
-        resolve(ok ? Date.now() - started : null);
-      };
-      try { sock = net.connect({ host, port: +port }); } catch (e) { return resolve(null); }
-      sock.setTimeout(timeoutMs, () => done(false));
-      sock.once('connect', () => done(true));
-      sock.once('error', () => done(false));
-    });
-  }
+  // The TCP stratum dial lives at module scope (probeStratumTcp, next to the public
+  // reachability cache it also feeds) so the admin view and the public patch bay judge a
+  // region's public port with exactly the same probe. This endpoint dials live on every
+  // call — low volume, and an admin looking at gateway health wants ground truth, not a
+  // ≤60s-old cached verdict.
 
   // Per-region GATEWAY liveness (Model C). Gateways are dumb stratum forwarders that never
   // call the Central API, so liveness is derived from two honest signals:
@@ -4083,7 +4350,9 @@ function setupRoutes() {
     } catch (e) { /* table may be empty */ }
     const byRegion = new Map(shareRows.map(r => [r.region, r]));
 
-    const wgByRegion = await readGatewayStatus(); // {} on any failure (wg absent / not central box)
+    // { available, regions } — available:false on any failure (wg absent / not central box)
+    const wgSnapshot = await readGatewayStatus();
+    const wgByRegion = wgSnapshot.regions || {};
 
     // Public stratum URLs per region (for the active TCP probe below).
     const locByRegion = new Map();

@@ -236,30 +236,36 @@ class AdsManager {
     return this.getConfig();
   }
 
-  // Starter content: seed the shipped GRINIUM self-promo SVG banners
-  // (public_html/promo/) so placements aren't empty on a fresh pool. All seeds link to
-  // '#' — they are layout/rotation demos, not real campaigns; the operator points them
-  // somewhere real (or deletes them) from the admin panel.
+  // Starter content: seed the shipped GRINIUM self-promo creatives (SVGs in
+  // public_html/promo/, plus native text ads) so placements aren't empty on a fresh pool.
+  // Seeds point at real internal anchors, but they are still layout/rotation demos rather
+  // than campaigns — the operator repoints, edits or deletes them from the admin panel.
   //
   // Gated by a pool_config marker rather than "table is empty", so an operator who
-  // deletes a seed does not get it back on the next restart. The marker is versioned:
-  // v2 introduced the 160×600 rail creatives (the sidebar became a narrow fixed rail,
-  // where a 300×250 square no longer fits) and runs once for pools seeded under v1 —
-  // it inserts only creatives that aren't already present, and re-homes the two old
-  // 300×250 sidebar squares to the in-content placement where they still look right.
+  // deletes a seed does not get it back on the next restart. The marker is versioned and
+  // each generation inserts only what it introduced (`v` on each seed, vs seededMax):
+  //   v2 — 160×600 rail creatives (the sidebar became a narrow fixed rail, where a 300×250
+  //        square no longer fits); also re-homes a v1 pool's sidebar squares to in-content.
+  //   v3 — a second header strip + the first native text ad, so the header has a rotation.
+  //   v4 — the in-content band defaults to one responsive text banner.
+  //   v5 — the two 300×250 squares return as INACTIVE starter banners (see below).
+  //
+  // A seed is active unless it sets `is_active: 0`; an inactive seed is a ready-made
+  // creative parked in the admin panel, invisible publicly until the operator enables it.
   //
   // The sidebar seeds deliberately share one placement: they demo the rail rotation.
   seedSelfPromo() {
     const cfgGet = (key) => this.db.prepare(
       "SELECT value FROM pool_config WHERE section = 'ads' AND key = ?"
     ).get(key);
-    if (cfgGet('selfpromo_seeded_v4')) return false;
+    if (cfgGet('selfpromo_seeded_v5')) return false;
     // Highest seed generation already applied to this pool (0 = brand-new). Each upgrade
     // inserts only creatives NEWER than what's been seeded, so a deleted seed stays deleted.
     let seededMax = 0;
     if (cfgGet('selfpromo_seeded')) seededMax = 1;
     if (cfgGet('selfpromo_seeded_v2')) seededMax = 2;
     if (cfgGet('selfpromo_seeded_v3')) seededMax = 3;
+    if (cfgGet('selfpromo_seeded_v4')) seededMax = 4;
 
     // v1 → v2 boundary only: the sidebar became a narrow rail, so old square seeds move
     // in-content (skip if the pool was already at/after v2).
@@ -301,10 +307,21 @@ class AdsManager {
         image_url: '/promo/grinium-privacy-160x600.svg', weight: 10, link_url: '/#connect',
         alt_text: 'Mine anonymously — no accounts, no emails, Tor payouts' },
 
-      // NOTE: the two 300×250 in-content squares are no longer auto-seeded (superseded by the
-      // v4 text banner below). They remain available as admin starter banners, and any pool
-      // that seeded them under v1–v3 keeps them (seeds only ever insert, never delete). The
-      // re-home block above still moves a v1 pool's old sidebar squares in-content on upgrade.
+      // Squares — in-content, seeded INACTIVE (is_active: 0). The v4 text banner below is
+      // what the in-content band actually shows by default; these two ship as ready-made
+      // starter banners the operator can flip on (or edit) from the admin panel without
+      // having to author a creative first. A pool that seeded them under v1–v3 keeps them
+      // exactly as-is — the dedup below matches on image_url, so an already-live square is
+      // never switched off. The re-home block above still moves a v1 pool's old sidebar
+      // squares in-content on upgrade.
+      { v: 5, name: 'GRINIUM promo — Fortune board (in-content 300×250)', placement: 'in-content',
+        image_url: '/promo/grinium-fortune-300x250.svg', weight: 10, link_url: '/fortune-board.html',
+        is_active: 0,
+        alt_text: 'Feeling lucky? Block jackpots, prize draws, streak rewards and a monthly lottery' },
+      { v: 5, name: 'GRINIUM promo — Anonymous mining (in-content 300×250)', placement: 'in-content',
+        image_url: '/promo/grinium-privacy-300x250.svg', weight: 5, link_url: '/#connect',
+        is_active: 0,
+        alt_text: 'Mine anonymously — no accounts, no emails, Tor payouts' },
 
       // v3 — give the header a rotation: a second graphical strip + a native TEXT ad, so the
       // header cycles Mine → Why GRIN → Private-by-design and the text-ad type is demoed.
@@ -336,11 +353,13 @@ class AdsManager {
       if (s.image_url ? seenImg.get(s.image_url)              // banner: dedup by image
                       : seenName.get(s.name)) continue;       // text: dedup by internal name
       const { v, ...ad } = s;
-      this.create({ ad_type: 'banner', link_url: '#', ...ad, is_active: 1 });
+      // Defaults first so a seed can opt out (is_active: 0 → an off-by-default starter ad).
+      this.create({ ad_type: 'banner', link_url: '#', is_active: 1, ...ad });
       added++;
     }
 
-    for (const key of ['selfpromo_seeded', 'selfpromo_seeded_v2', 'selfpromo_seeded_v3', 'selfpromo_seeded_v4']) {
+    for (const key of ['selfpromo_seeded', 'selfpromo_seeded_v2', 'selfpromo_seeded_v3',
+                       'selfpromo_seeded_v4', 'selfpromo_seeded_v5']) {
       this.db.prepare(`
         INSERT INTO pool_config (section, key, value, value_type) VALUES ('ads', ?, '1', 'boolean')
         ON CONFLICT(section, key) DO NOTHING

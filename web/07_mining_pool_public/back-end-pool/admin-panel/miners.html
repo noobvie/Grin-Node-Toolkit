@@ -123,8 +123,8 @@ function renderMiners(miners) {
     const bannedBadge = m.is_banned
       ? ` <span class="badge badge-error" title="${escHtml(m.ban_reason || '')}">Banned</span>` : '';
     const action = m.is_banned
-      ? `<button class="btn btn-sm" onclick="unbanMiner('${escHtml(m.grin_address)}')">Unban</button>`
-      : `<button class="btn btn-sm btn-outline" onclick="banMiner('${escHtml(m.grin_address)}')">Ban</button>`;
+      ? `<button class="btn-icon" onclick="unbanMiner('${escHtml(m.grin_address)}')" data-tip="Unban this miner" aria-label="Unban this miner">✅</button>`
+      : `<button class="btn-icon btn-icon-danger" onclick="banMiner('${escHtml(m.grin_address)}')" data-tip="Ban this miner" aria-label="Ban this miner">🚫</button>`;
     return `<tr class="${m.is_banned ? '' : ''}">
       <td><span class="mono" title="${escHtml(m.grin_address)}">${escHtml(shortAddr(m.grin_address))}</span>${bannedBadge}</td>
       <td>${onlineBadge}</td>
@@ -133,7 +133,7 @@ function renderMiners(miners) {
       <td class="mono">${m.shares_count != null ? m.shares_count : 0}</td>
       <td class="mono">${fmtGrin(m.total_paid)}</td>
       <td>${timeAgo(m.last_share_at)}</td>
-      <td>${action}</td>
+      <td><div class="row-actions">${action}</div></td>
     </tr>`;
   }).join('');
 }

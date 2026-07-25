@@ -89,6 +89,8 @@
     .nm-gwst .c-on { background: var(--accent); box-shadow: 0 0 7px var(--accent); }
     .nm-gwst .c-hs { background: var(--gold); box-shadow: 0 0 7px color-mix(in srgb, var(--gold) 60%, transparent); }
     .nm-gwst .c-off { background: var(--danger); }
+    /* no liveness verdict yet (first read after a pool restart) — colourless on purpose */
+    .nm-gwst .c-chk { background: #8b98a5; }
 
     .nm-charts { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
     @media (max-width: 820px) { .nm-charts { grid-template-columns: 1fr; } }
@@ -159,7 +161,7 @@
             <div class="nm-lg gw-item"><div class="key"><span class="k kgw"></span></div>
               <div class="gw-body">
                 <div><span class="name">Gateway</span> <span class="gw-sub">thin regional edge · WireGuard + haproxy</span></div>
-                <div class="nm-gwst"><span><i class="c-on"></i>Connected</span><span><i class="c-hs"></i>Handshaked · idle</span><span><i class="c-off"></i>Offline</span></div>
+                <div class="nm-gwst"><span><i class="c-on"></i>Connected</span><span><i class="c-hs"></i>Handshaked · idle</span><span><i class="c-off"></i>Offline</span><span><i class="c-chk"></i>Checking</span></div>
               </div>
             </div>
           </div>

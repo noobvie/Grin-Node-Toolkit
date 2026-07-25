@@ -2,6 +2,7 @@
 
 const crypto = require('crypto');
 const net = require('net');
+const geoip = require('./geoip');
 
 // Address-as-identity ownership gate (v2 — IP or password, hashed at rest).
 //
@@ -73,13 +74,50 @@ function canonicalizeIp(raw) {
 // Backwards-compatible name (older call sites normalise req.ip for audit logging).
 const normalizeIp = canonicalizeIp;
 
+// ─── Network-prefix coarsening (for the audit log) ──────────────────────────
+// The proof windows above store scrypt hashes, so the DB holds no raw mining IP — but the
+// audit trail used to write the requester's FULL IP next to the grin address, re-creating
+// exactly the (address, IP, time) linkage the hashing removed, and with no expiry.
+//
+// Hashing the audit IP too would destroy the log's purpose: incident response needs
+// "group these events by origin", and a per-row salted hash makes every row unlinkable
+// (a shared salt would just be a reversible 2^32 lookup for IPv4 — see network_peers).
+// So coarsen instead: keep the routing prefix, drop the host part.
+//   IPv4 → /24   (the ISP/NAT block; ~256 hosts)
+//   IPv6 → /48   (the standard end-site allocation — /64 is often ONE subscriber, so it
+//                 identifies a household about as well as the full address does)
+// Abuse patterns (a sweep from one block, a farm fumbling proofs) stay visible; pinning
+// the event to one subscriber line does not. Returns null for anything that isn't an IP,
+// so a malformed value is stored as NULL rather than as opaque junk.
+function coarsenIp(raw) {
+  const ip = canonicalizeIp(raw);
+  if (!ip) return null;
+  if (net.isIPv4(ip)) {
+    return ip.split('.').slice(0, 3).join('.') + '.0/24';
+  }
+  if (net.isIPv6(ip)) {
+    // canonicalizeIp already expanded `::`, so there are always 8 groups here.
+    return ip.split(':').slice(0, 3).join(':') + '::/48';
+  }
+  return null;
+}
+
 // ─── Password usability ─────────────────────────────────────────────────────
 // A password only counts as proof if it can plausibly be a secret. Factory defaults and
 // vardiff-style directives are excluded at BOTH capture and verify time.
 const TRIVIAL_PASSWORDS = new Set([
-  'x', '123', '1234', '12345', '123456', 'password', 'pass', 'pwd',
-  'worker', 'miner', 'default', 'admin', 'test', 'grin', 'asic', 'anything'
+  'x', '123', '1234', '12345', '123456', '12345678', 'password', 'password1',
+  'pass', 'pwd', 'qwerty', 'abc123', 'letmein', 'root', 'user',
+  'worker', 'miner', 'mining', 'default', 'admin', 'admin123', 'test', 'grin',
+  'grinpool', 'pool', 'solo', 'stratum', 'asic', 'anything',
+  // Per-vendor factory defaults seen in the wild (add more via admin → Access).
+  'ipollo', 'antminer', 'bitmain', 'innosilicon', 'goldshell', 'obelisk'
 ]);
+
+// Single repeated character (`xxxx`, `0000`, `aaaa`, `1111`, …) is THE most common ASIC
+// firmware default — `x` padded to satisfy a "min length" field. The seed list can't
+// enumerate every length, so this is a structural rule instead.
+const REPEATED_CHAR_RE = /^(.)\1*$/;
 
 // Operator-added banned passwords (admin → Access, access.extra_banned_passwords) —
 // additions-only ON TOP of the hardcoded seed above; the seed + structural rules always
@@ -107,14 +145,29 @@ function extraBannedSet(db) {
   return _extraBanned.set;
 }
 
-function isUsablePassword(pass, db) {
-  if (typeof pass !== 'string') return false;
+// Min 8: this is a withdrawal credential, and a 4-char secret is grindable offline if the DB
+// ever leaks (scrypt makes that expensive, not safe). Max 128 only bounds the input to the
+// 16 MB KDF below — never lower it, a short ceiling just caps entropy for no benefit.
+const PASS_MIN = 8;
+const PASS_MAX = 128;
+
+// WHY a password can't serve as proof — null when it is usable. Single source of truth for
+// both the boolean gate and the reason surfaced to the miner: telling someone their 130-char
+// password is "too common" (the old catch-all) leaves them no way to work out the real problem.
+function passwordRejectReason(pass, db) {
+  if (typeof pass !== 'string') return 'password_invalid';
   const p = pass.trim();
-  if (p.length < 4 || p.length > 128) return false;
-  if (TRIVIAL_PASSWORDS.has(p.toLowerCase())) return false;
-  if (extraBannedSet(db).has(p.toLowerCase())) return false;
-  if (/^d=/i.test(p)) return false; // difficulty-request convention, not a secret
-  return true;
+  if (p.length < PASS_MIN) return 'password_too_short';
+  if (p.length > PASS_MAX) return 'password_too_long';
+  if (TRIVIAL_PASSWORDS.has(p.toLowerCase())) return 'trivial_password';
+  if (REPEATED_CHAR_RE.test(p)) return 'trivial_password';
+  if (extraBannedSet(db).has(p.toLowerCase())) return 'trivial_password';
+  if (/^d=/i.test(p)) return 'trivial_password'; // difficulty-request convention, not a secret
+  return null;
+}
+
+function isUsablePassword(pass, db) {
+  return passwordRejectReason(pass, db) === null;
 }
 
 // ─── Salted scrypt hashing (v1$<saltB64>$<hashB64>) ─────────────────────────
@@ -210,7 +263,8 @@ async function recordOwnerEvidence(db, grinAddress, rawIp, rawPass) {
   if (!grinAddress) return false;
   try {
     const row = db.prepare(
-      'SELECT last_ip, prev_ip, last_pass_hash, prev_pass_hash FROM miner_accounts WHERE grin_address = ?'
+      `SELECT last_ip, prev_ip, last_pass_hash, prev_pass_hash, pass_proof_state
+       FROM miner_accounts WHERE grin_address = ?`
     ).get(grinAddress);
     if (!row) return false; // account not created yet — caller ensures existence first
 
@@ -226,11 +280,25 @@ async function recordOwnerEvidence(db, grinAddress, rawIp, rawPass) {
     }
 
     const pass = typeof rawPass === 'string' ? rawPass.trim() : '';
+    // Diagnostic state for THIS login's password — persisted so the account page can tell the
+    // miner why their password isn't working, instead of them finding out on withdrawal day.
+    // 'none' (rig sent nothing) is deliberately distinct from a reject code: "you set no
+    // password" and "your password was refused" need different fixes.
+    const passState = pass ? (passwordRejectReason(pass, db) || 'ok') : 'none';
+    if (passState !== row.pass_proof_state) {
+      sets.push('pass_proof_state = ?');
+      vals.push(passState);
+    }
+
     if (isUsablePassword(pass, db)) {
       if (!(await verifyHashedProof(pass, row.last_pass_hash))) {
         sets.push('prev_pass_hash = ?', 'last_pass_hash = ?');
         vals.push(row.last_pass_hash || null, await hashProof(pass));
       }
+    } else if (pass) {
+      // Also log the REASON (never the value) so the operator can answer "why won't my
+      // password work?" from the service log without asking the miner to reveal it.
+      console.warn(`[owner-proof] password not captured for ${grinAddress}: ${passState}`);
     }
 
     if (sets.length === 0) return false; // both unchanged: skip the write
@@ -288,9 +356,11 @@ async function verifyOwnerProof(db, grinAddress, submitted, clientIp) {
       return { ok: true, reason: 'match', method: 'password' };
     }
   } else if (!net.isIP(ip)) {
-    // Not an IP and too trivial to ever be captured — tell the miner why it can never work.
-    failBoth();
-    return { ok: false, reason: 'trivial_password' };
+    // Not an IP, and unusable as a password — so it was never captured and can never match.
+    // Report WHY (too short / too long / too common), and deliberately do NOT count it toward
+    // the lockout: it is rejected before any scrypt call, so it costs nothing and deters no
+    // attacker, while counting it would lock out an honest miner retrying a rejected password.
+    return { ok: false, reason: passwordRejectReason(raw, db) };
   }
 
   failBoth();
@@ -326,26 +396,77 @@ async function migrateOwnerProofHashes(db) {
 
 // Audit an ownership-gated attempt to admin_audit_log (admin_id NULL — actor is a miner address,
 // not an admin user). Best-effort; never throws into the request path.
+//
+// The IP is stored COARSENED to its network prefix (see coarsenIp) — these rows pair a real
+// person's address with their origin and are retained for months, so the full host address
+// buys nothing the prefix doesn't. Note the one admin-initiated caller (`admin_verify`) is
+// coarsened too; its actor is already identified by `details.by`, so no attribution is lost.
+// The throttle in verifyOwnerProof still keys on the FULL in-memory IP — coarsening here does
+// not widen the per-IP lockout to a whole /24.
+//
+// The origin COUNTRY is resolved here from the full IP and folded into `details.geo` — this is
+// the only place the full address still exists, and a /24 is too coarse to geolocate reliably
+// after the fact. Stored in the details JSON rather than a new column on purpose: db.js's
+// migrateAdminAuditLog() DROPS the table when its columns don't match the canonical set, so
+// adding one would delete every existing audit row on the next deploy. Resolves to null on a
+// private/loopback address or when geoip-lite isn't installed.
 function auditOwnerProof(db, { action, grinAddress, ip, ok, details }) {
   try {
+    const d = { ...(details || {}) };
+    try {
+      const geo = geoip.lookupCountry(canonicalizeIp(ip));
+      if (geo && geo.cc) d.geo = geo.cc;
+    } catch (_) { /* geo is a nice-to-have; never block the audit write */ }
     db.prepare(
       `INSERT INTO admin_audit_log (admin_id, action, target_type, target_id, details, ip)
        VALUES (NULL, ?, 'miner', ?, ?, ?)`
     ).run(
       `owner_proof:${action}:${ok ? 'ok' : 'deny'}`,
       grinAddress || null,
-      JSON.stringify(details || {}),
-      canonicalizeIp(ip) || null
+      JSON.stringify(d),
+      coarsenIp(ip)
     );
   } catch (e) {
     console.error(`[owner-proof] audit write failed: ${e.message}`);
   }
 }
 
+// ─── One-time startup migration: coarsen historical miner audit IPs ─────────
+// Existing deploys already hold full IPs on miner rows; switching the writer alone would
+// leave those on disk until they aged out of retention. Rewrite them in place.
+// Synchronous (no KDF — this is truncation, not hashing) and fast enough to run inline.
+// Idempotent: already-coarsened values contain '/' and are excluded by the WHERE clause.
+// Admin rows (admin_id NOT NULL) are deliberately untouched — the operator's own login
+// origin is operator data, and full precision is what makes it useful.
+function migrateAuditLogIps(db) {
+  try {
+    const rows = db.prepare(
+      `SELECT id, ip FROM admin_audit_log
+       WHERE admin_id IS NULL AND ip IS NOT NULL AND ip <> '' AND ip NOT LIKE '%/%'`
+    ).all();
+    if (rows.length === 0) return 0;
+    const upd = db.prepare('UPDATE admin_audit_log SET ip = ? WHERE id = ?');
+    const tx = db.transaction(() => {
+      for (const r of rows) upd.run(coarsenIp(r.ip), r.id);
+    });
+    tx();
+    console.log(`[owner-proof] coarsened ${rows.length} historical audit IP(s) to network prefixes`);
+    return rows.length;
+  } catch (e) {
+    console.error(`[owner-proof] audit IP migration failed: ${e.message}`);
+    return 0;
+  }
+}
+
 module.exports = {
   canonicalizeIp,
   normalizeIp,
+  coarsenIp,
+  migrateAuditLogIps,
   isUsablePassword,
+  passwordRejectReason,
+  PASS_MIN,
+  PASS_MAX,
   recordOwnerEvidence,
   verifyOwnerProof,
   migrateOwnerProofHashes,

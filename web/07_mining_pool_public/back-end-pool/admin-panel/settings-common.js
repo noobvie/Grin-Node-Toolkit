@@ -583,7 +583,7 @@
       item.className = 'list-item';
       item.innerHTML = `
         <span>${escapeHtmlSafe(value)}</span>
-        <button class="btn btn-danger" style="min-width: auto; padding: 0.5rem 1rem;" onclick="this.parentElement.remove()">Remove</button>
+        <button class="btn-icon btn-icon-danger" onclick="this.parentElement.remove()" data-tip="Remove from the list" aria-label="Remove from the list">🗑️</button>
       `;
       list.appendChild(item);
     }
@@ -727,7 +727,7 @@
       row.innerHTML = `
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.5rem;">
           <strong>${escapeHtmlSafe(key)}</strong>
-          <button type="button" class="btn btn-danger" style="min-width:auto;padding:.4rem .9rem;" onclick="this.closest('.page-seo-row').remove()">Remove</button>
+          <button type="button" class="btn-icon btn-icon-danger" onclick="this.closest('.page-seo-row').remove()" data-tip="Remove this page's SEO override" aria-label="Remove this page's SEO override">🗑️</button>
         </div>
         <div class="form-group">
           <label>Title</label>
@@ -790,7 +790,7 @@
             <input type="checkbox" class="banner-enabled settings-skip"${(b.enabled === false || b.enabled === 'false') ? '' : ' checked'}>
             <label>Enabled</label>
           </div>
-          <button type="button" class="btn btn-danger" style="min-width:auto;padding:.4rem .9rem;" onclick="this.closest('.banner-row').remove()">Remove</button>
+          <button type="button" class="btn-icon btn-icon-danger" onclick="this.closest('.banner-row').remove()" data-tip="Remove this banner" aria-label="Remove this banner">🗑️</button>
         </div>
         <div class="form-row">
           <div class="form-group">
@@ -873,7 +873,7 @@
             <input type="checkbox" class="event-enabled settings-skip"${(ev.enabled === false || ev.enabled === 'false') ? '' : ' checked'}>
             <label>Enabled</label>
           </div>
-          <button type="button" class="btn btn-danger" style="min-width:auto;padding:.4rem .9rem;" onclick="this.closest('.event-row').remove()">Remove</button>
+          <button type="button" class="btn-icon btn-icon-danger" onclick="this.closest('.event-row').remove()" data-tip="Remove this event" aria-label="Remove this event">🗑️</button>
         </div>
         <div class="form-row">
           <div class="form-group">
@@ -1115,10 +1115,11 @@
         const fmt = (sec) => sec ? new Date(sec * 1000).toISOString().slice(0, 16).replace('T', ' ') + ' UTC' : '—';
         el.innerHTML = _campaignsCache.map(c => {
           const scheduled = c.status === 'scheduled';
+          // No .row-actions wrapper here — the card below already lays these out in a flex row.
           const actions = scheduled
-            ? `<button type="button" class="btn btn-secondary" style="padding:.2rem .6rem;" onclick="editCampaign(${c.id})">Edit</button>
-               <button type="button" class="btn btn-secondary" style="padding:.2rem .6rem;" onclick="runCampaignNow(${c.id})">Run now</button>
-               <button type="button" class="btn btn-danger" style="padding:.2rem .6rem;" onclick="cancelCampaign(${c.id})">Cancel</button>`
+            ? `<button type="button" class="btn-icon" onclick="editCampaign(${c.id})" data-tip="Edit this campaign" aria-label="Edit this campaign">✏️</button>
+               <button type="button" class="btn-icon" onclick="runCampaignNow(${c.id})" data-tip="Run this campaign now" aria-label="Run this campaign now">▶️</button>
+               <button type="button" class="btn-icon btn-icon-danger" onclick="cancelCampaign(${c.id})" data-tip="Cancel this campaign" aria-label="Cancel this campaign">❌</button>`
             : '';
           const rules = [
             c.weighted_percent != null ? `A ${c.weighted_percent}%` : null,

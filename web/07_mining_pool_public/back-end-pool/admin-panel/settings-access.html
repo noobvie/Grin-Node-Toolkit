@@ -19,7 +19,7 @@
     <div id="access" class="settings-content active">
       <div class="settings-form">
         <div class="form-section">
-          <h3 class="section-title">Two-Factor Authentication (2FA)</h3>
+          <h3 class="section-title" data-sec="2FA">Two-Factor Authentication (2FA)</h3>
           <div id="twofa-status" class="helper-text">Loading…</div>
 
           <div id="twofa-disabled" style="display:none;margin-top:.5rem;">
@@ -73,11 +73,39 @@
         </div>
 
         <div class="form-section">
-          <h3 class="section-title">Banned Miner Passwords (ownership gate)</h3>
+          <h3 class="section-title" data-sec="Network map">Public Network Map Data</h3>
+          <div class="helper-text">
+            Controls the two feeds behind <code>/network-map.html</code>
+            (<code>/api/pool/topology</code> and <code>/api/network/peers</code>).
+            Neither ever returns an IP address — Grin peer IPs never leave the database and
+            every point on the globe is randomised inside its country — but together they
+            publish <strong>which countries mine here and which countries this node peers
+            with</strong>. Off by default. While off, both endpoints return 404 and the page
+            renders its illustrative sample globe.
+          </div>
+          <div class="checkbox-group">
+            <input type="checkbox" id="network_map_public" name="network_map_public">
+            <label for="network_map_public">Publish network map data</label>
+          </div>
+          <div class="form-group">
+            <label for="network_map_min_bucket">Minimum entries per country</label>
+            <input type="number" id="network_map_min_bucket" name="network_map_min_bucket" min="1" max="100" value="3">
+            <div class="helper-text">
+              Applies only when publishing is on. A country with fewer than this many miners
+              or peers is folded into an unnamed <em>Other</em> bucket instead of being named,
+              so a country holding one participant never points at one person. Totals still
+              include them. Raise it on a small pool; <code>1</code> disables the protection.
+            </div>
+          </div>
+        </div>
+
+        <div class="form-section">
+          <h3 class="section-title" data-sec="Banned passwords">Banned Miner Passwords (ownership gate)</h3>
           <div class="helper-text">
             Stratum passwords listed here are <strong>never</strong> accepted as ownership proof on the
             public account page — additions on top of the built-in list (<code>x</code>, <code>123</code>,
-            <code>worker</code>, common factory defaults, anything under 4 characters). Add entries when you
+            <code>worker</code>, per-vendor factory defaults, anything under 8 characters, and any single
+            repeated character such as <code>xxxx</code> or <code>0000</code>). Add entries when you
             spot a new firmware default in the wild. Case-insensitive; the built-in list cannot be removed.
           </div>
           <div class="form-group">
@@ -89,7 +117,7 @@
         </div>
 
         <div class="form-section">
-          <h3 class="section-title">Live IP Filter (admin panel)</h3>
+          <h3 class="section-title" data-sec="Live IP filter">Live IP Filter (admin panel)</h3>
           <div id="ipfilter-status" class="helper-text">Loading filter status…</div>
           <div class="helper-text" style="margin-top:.4rem;">
             ⚠ These rules apply <strong>immediately at runtime</strong> and are <strong>not</strong> saved to

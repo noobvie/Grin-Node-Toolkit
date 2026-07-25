@@ -213,6 +213,16 @@ class PoolSettings {
       // discovered firmware defaults (per-ASIC-model factory passwords etc.).
       // Stored as a JSON array of lowercase strings.
       extra_banned_passwords: '[]',
+      // Publish the network-map data feeds (/api/pool/topology + /api/network/peers)?
+      // OFF by default. Neither endpoint has ever returned an IP — globe positions are
+      // randomized within a country and peer IPs never leave the DB — but both publish a
+      // per-country breakdown of who connects to this pool, and on a small pool a country
+      // with a single entry is effectively a pointer at one operator. Opt in deliberately.
+      network_map_public: 'false',
+      // k-anonymity floor applied when the above IS enabled: a country is omitted from the
+      // public response unless it holds at least this many peers/miners. Rolled into an
+      // "Other" bucket instead, so totals stay honest without naming the thin countries.
+      network_map_min_bucket: 3,
     },
     alerts: {
       alert_check_interval_secs: 60,
@@ -445,6 +455,11 @@ class PoolSettings {
                                         // rollup is never pruned so lifetime analytics stay exact).
                                         // Runtime floor 45: raw-only readers use windows up to 30d
                                         // (reconciliation wallet-send audit, account earnings).
+      audit_log_keep_days: 180,         // prune admin_audit_log rows older than this. These rows
+                                        // pair a grin address with a (coarsened) origin IP, so they
+                                        // are personal data with a real expiry cost — but they are
+                                        // also the money-path trail, so the floor is 30 days: long
+                                        // enough to investigate a disputed payout after the fact.
     },
   };
 
@@ -728,6 +743,11 @@ class PoolSettings {
         if (cleaned.length > 500) throw new Error('extra_banned_passwords: max 500 entries');
         return JSON.stringify(cleaned);
       },
+      network_map_min_bucket: (val) => {
+        const n = parseInt(val, 10);
+        if (isNaN(n) || n < 1 || n > 100) throw new Error('network_map_min_bucket must be 1-100');
+        return n;
+      },
     },
     alerts: {
       alert_check_interval_secs: (val) => {
@@ -820,6 +840,11 @@ class PoolSettings {
       balance_log_keep_days: (val) => {
         const n = parseInt(val, 10);
         if (isNaN(n) || n < 45 || n > 3650) throw new Error('balance_log_keep_days must be 45-3650');
+        return n;
+      },
+      audit_log_keep_days: (val) => {
+        const n = parseInt(val, 10);
+        if (isNaN(n) || n < 30 || n > 3650) throw new Error('audit_log_keep_days must be 30-3650');
         return n;
       },
     },

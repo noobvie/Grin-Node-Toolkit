@@ -208,7 +208,7 @@
       hoverNode = best;
       if (best) { tip.style.display="block"; tip.style.left=best._sx+"px"; tip.style.top=best._sy+"px"; let roleTxt, roleCol, val;
         if (best.role==="hub") { roleTxt="Settlement hub"; roleCol="var(--accent, #5dff73)"; val=(totalMinersNow()+" miners settled"); }
-        else if (best.role==="gw") { const st=best.status; roleTxt = st==="connected"?"Gateway · connected":st==="handshake"?"Gateway · handshaked, idle":"Gateway · offline"; roleCol = st==="offline"?"#ff5a52":"#ffb63d"; val = st==="connected"?(best._feed+" miners routed"):st==="handshake"?"link up · 0 miners":"unreachable"; }
+        else if (best.role==="gw") { const st=best.status; roleTxt = st==="connected"?"Gateway · connected":st==="handshake"?"Gateway · handshaked, idle":st==="checking"?"Gateway · checking":"Gateway · offline"; roleCol = st==="offline"?"#ff5a52":st==="checking"?"#8b98a5":"#ffb63d"; val = st==="connected"?(best._feed+" miners routed"):st==="handshake"?"link up · 0 miners":st==="checking"?"verifying link…":"unreachable"; }
         else { roleTxt="Miner region"; roleCol="#5ad1ff"; val=best.n+" miners"; }
         tip.innerHTML = '<span class="nm-tip-role" style="color:'+roleCol+'">'+roleTxt+'</span><span class="nm-tip-name">'+best.name+'</span><br><span style="color:'+roleCol+';font-variant-numeric:tabular-nums">'+val+'</span>';
       } else tip.style.display="none";
@@ -236,7 +236,7 @@
     if (opts.nodes) drawPeers(now);
     if (opts.arcs) {
       REGIONS.forEach((r,i) => drawAnimArc(r.v, r.gwv, "90,209,255", 1, 0.10, now, i*0.09, 2600, r.gwStatus==="connected"));
-      GATEWAYS.forEach((g,i) => { if (g.status==="offline") drawAnimArc(g.v, HUB.v, "255,90,82", 1.2, 0.16, now, 0, 2000, false); else drawAnimArc(g.v, HUB.v, "255,182,61", 1.6, 0.17, now, i*0.18, g.status==="handshake"?3200:2000, true); });
+      GATEWAYS.forEach((g,i) => { if (g.status==="offline") drawAnimArc(g.v, HUB.v, "255,90,82", 1.2, 0.16, now, 0, 2000, false); else if (g.status==="checking") drawAnimArc(g.v, HUB.v, "139,152,165", 1.2, 0.12, now, 0, 2600, false); else drawAnimArc(g.v, HUB.v, "255,182,61", 1.6, 0.17, now, i*0.18, g.status==="handshake"?3200:2000, true); });
     }
     NODES.map(n => ({ n, p: project(n.v) })).sort((a,b)=>a.p.z-b.p.z).forEach(({n,p}) => { n._sx=p.x; n._sy=p.y; n._front=p.z>-0.05; if (p.z<=-0.05) return; drawNode(n,p,Math.max(0,Math.min(1,(p.z+0.1)/0.5)),now); });
   }
@@ -275,13 +275,13 @@
   function drawNode(n, p, fade, now) {
     const pulse=1+0.12*Math.sin(now/500); let rad, col, glowCol, ring=false;
     if (n.role==="hub"){ rad=8*pulse; col="#5dff73"; glowCol="rgba(93,255,115,0.9)"; ring=true; }
-    else if (n.role==="gw"){ if (n.status==="offline"){ rad=5; col="#ff5a52"; glowCol="rgba(255,90,82,0.7)"; } else if (n.status==="handshake"){ rad=5; col="#ffb63d"; glowCol="rgba(255,182,61,0.55)"; } else { rad=5.5*(1+0.08*Math.sin(now/420)); col="#ffb63d"; glowCol="rgba(255,182,61,0.85)"; ring=true; } }
+    else if (n.role==="gw"){ if (n.status==="offline"){ rad=5; col="#ff5a52"; glowCol="rgba(255,90,82,0.7)"; } else if (n.status==="checking"){ rad=5; col="#8b98a5"; glowCol="rgba(139,152,165,0.45)"; } else if (n.status==="handshake"){ rad=5; col="#ffb63d"; glowCol="rgba(255,182,61,0.55)"; } else { rad=5.5*(1+0.08*Math.sin(now/420)); col="#ffb63d"; glowCol="rgba(255,182,61,0.85)"; ring=true; } }
     else { rad=3.4+Math.sqrt(Math.max(1,n.n))*0.7; col="#5ad1ff"; glowCol="rgba(90,209,255,0.7)"; }
     if (n===hoverNode) rad*=1.5;
     ctx.globalAlpha=fade; ctx.shadowColor=glowCol; ctx.shadowBlur=(n===hoverNode)?20:12; ctx.fillStyle=col; ctx.beginPath(); ctx.arc(p.x,p.y,rad,0,7); ctx.fill(); ctx.shadowBlur=0;
     if (n.role==="gw" && n.status==="offline"){ ctx.globalAlpha=fade; ctx.strokeStyle="#ff9a95"; ctx.lineWidth=1.4; const q=rad*0.5; ctx.beginPath(); ctx.moveTo(p.x-q,p.y-q); ctx.lineTo(p.x+q,p.y+q); ctx.moveTo(p.x+q,p.y-q); ctx.lineTo(p.x-q,p.y+q); ctx.stroke(); }
     if (ring || n===hoverNode){ ctx.strokeStyle=col; ctx.lineWidth=1; ctx.globalAlpha=fade*0.5; ctx.beginPath(); ctx.arc(p.x,p.y,rad+5,0,7); ctx.stroke(); }
-    if (opts.labels && (n.role!=="region" || n===hoverNode)){ ctx.globalAlpha=fade; ctx.font="700 10px ui-monospace, monospace"; ctx.fillStyle=n.role==="gw"?(n.status==="offline"?"#ff9a95":"#ffcf7a"):n.role==="hub"?"#bfeecb":"#bfe9ff"; ctx.textAlign="left"; ctx.textBaseline="middle"; ctx.fillText(n.role==="region"?(n.name+" · "+n.n):n.name, p.x+rad+5, p.y); }
+    if (opts.labels && (n.role!=="region" || n===hoverNode)){ ctx.globalAlpha=fade; ctx.font="700 10px ui-monospace, monospace"; ctx.fillStyle=n.role==="gw"?(n.status==="offline"?"#ff9a95":n.status==="checking"?"#aab4be":"#ffcf7a"):n.role==="hub"?"#bfeecb":"#bfe9ff"; ctx.textAlign="left"; ctx.textBaseline="middle"; ctx.fillText(n.role==="region"?(n.name+" · "+n.n):n.name, p.x+rad+5, p.y); }
     ctx.globalAlpha=1;
   }
 

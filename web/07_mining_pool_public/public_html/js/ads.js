@@ -239,50 +239,14 @@
     if (cfg.rail_hide_ms === 0) startAutoRotate(rotor);
   }
 
-  // ── Narrow screens: landscape / square creatives only ────────────────────────
-  // Below the rail breakpoint there is no gutter, so an ad renders in the page flow at
-  // the full column width. A tall creative there is brutal: a 160×600 rail banner in a
-  // 320px column is 1200px of forced scrolling. So on narrow screens a portrait creative
-  // is dropped before it is ever inserted, and a slot left with nothing stays hidden.
-  //
-  // The shape is measured by probing the image URL with a detached Image() rather than
-  // reading the rendered <img> — a slot starts hidden and its images are loading="lazy",
-  // so an in-place measurement would read 0×0 and let tall creatives through. The probe
-  // hits the same URL the <img> will use, so it comes from cache, not a second download.
-  // Unmeasurable creatives (ad-network 'code' units, a probe that errors or stalls) are
-  // kept: never suppress an ad on a guess.
-  var MAX_PORTRAIT_RATIO = 1.2; // natural height/width above this counts as portrait
-
-  function keepOnNarrow(ad, cb) {
-    if (ad.ad_type !== 'banner' || !ad.image_url) { cb(true); return; }
-    var probe = new Image();
-    var settled = false;
-    var finish = function (keep) {
-      if (settled) return;
-      settled = true;
-      cb(keep);
-    };
-    probe.onload = function () {
-      if (!probe.naturalWidth || !probe.naturalHeight) return finish(true);
-      finish(probe.naturalHeight / probe.naturalWidth <= MAX_PORTRAIT_RATIO);
-    };
-    probe.onerror = function () { finish(true); };
-    setTimeout(function () { finish(true); }, 2500);
-    probe.src = ad.image_url;
-  }
-
-  // Filter a placement's ads down to the mobile-safe ones, preserving weight order.
-  function filterForNarrow(ads, cb) {
-    var pending = ads.length;
-    if (!pending) { cb([]); return; }
-    var kept = new Array(ads.length);
-    ads.forEach(function (ad, i) {
-      keepOnNarrow(ad, function (keep) {
-        kept[i] = keep ? ad : null;
-        if (--pending <= 0) cb(kept.filter(Boolean));
-      });
-    });
-  }
+  // ── The sidebar placement is the vertical-rail inventory (tall 160×600 creatives) ──
+  // Below the rail breakpoint there is no gutter to park it in, so it would fall into the
+  // page flow at full column width — a 600px-tall banner is a screenful of forced
+  // scrolling on a phone. So on narrow screens the whole sidebar placement is simply not
+  // rendered: mobile inventory belongs in header / in-content / footer. This is
+  // structural (keyed off the placement, not off measuring a creative at runtime), so it
+  // can never leak the way an aspect-ratio guess could. dashboard.css hides
+  // .ad-slot--sidebar below the same breakpoint as a CSS belt-and-braces.
 
   function fill(byPlacement) {
     var narrow = !!window.matchMedia && !window.matchMedia(RAIL_MQ).matches;
@@ -293,7 +257,9 @@
       var ads = (byPlacement && byPlacement[placement]) || [];
       var isSidebar = placement === 'sidebar';
       var isInContent = placement === 'in-content';
-      if (!ads.length || (isSidebar && cfg.sidebar_mode === 'off')) { el.style.display = 'none'; return; }
+      // Sidebar is off entirely when the operator disabled it, and always on narrow
+      // screens (see the note above — don't even build the DOM/load the image).
+      if (!ads.length || (isSidebar && (cfg.sidebar_mode === 'off' || narrow))) { el.style.display = 'none'; return; }
 
       function render(list) {
         var html = list.map(renderAd).filter(Boolean).join('');
@@ -328,8 +294,7 @@
         });
       }
 
-      if (narrow) filterForNarrow(ads, render);
-      else render(ads);
+      render(ads);
     });
   }
 

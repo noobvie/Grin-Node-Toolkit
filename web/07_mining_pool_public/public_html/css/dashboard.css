@@ -736,11 +736,16 @@ a.ad-text-card:hover { border-color: color-mix(in srgb, var(--accent, #5dff73) 4
   .ad-slot--rail .ad-unit img { width: 100%; border-radius: 6px; }
 }
 
-/* Mobile / narrow: an ad here sits in the page flow at full column width, so a tall
-   creative turns into forced scrolling. ads.js already drops portrait creatives below the
-   rail breakpoint (landscape and square only); this cap is the belt-and-braces for a
-   creative it could not measure — nothing in the flow may exceed 300px of height. */
+/* Mobile / narrow: the sidebar placement is the vertical-rail inventory (160×600), and
+   below the rail breakpoint there is no gutter for it — in the page flow a 600px-tall
+   banner is a screenful of forced scrolling. So the whole placement is hidden here. This
+   is structural (placement-based), matching ads.js, which also skips rendering it; the
+   rule is the CSS belt-and-braces in case the script is slow or blocked. Mobile inventory
+   belongs in header / in-content / footer.
+   The height cap then guards those placements against a tall creative an operator
+   misfiles into them — nothing in the flow may exceed 300px of height. */
 @media (max-width: 1365px) {
+  .ad-slot--sidebar { display: none !important; }
   .ad-slot .ad-unit img { max-height: 300px; width: auto; }
 }
 

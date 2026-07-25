@@ -9,9 +9,10 @@
 #   8.4  Nginx Extended Features   — audit · reverse proxy · security · log rotation
 #   8.5  SSH Key Hardening         — 085_ssh_hardening.sh (key-only root login)
 #   8.6  Top 20 Bandwidth Consumers— parse nginx logs, block/limit from menu
-#   8.7  Disk Cleanup              — tar archives + OS temp/logs + nginx web dirs + swap manager
-#   8.8  Self-Update               — download latest from GitHub
-#   8.9  Backup & Restore          — 089_backup_restore.sh
+#   8.7  Provider Access Watch     — 082_provider_access_watch.sh (host-tamper detect)
+#   8.8  Disk Cleanup              — tar archives + OS temp/logs + nginx web dirs + swap manager
+#   8.9  Self-Update               — download latest from GitHub
+#   8.10 Backup & Restore          — 089_backup_restore.sh
 #   DEL  Full Grin Cleanup         — 08del_clean_all_grin_things.sh
 # =============================================================================
 
@@ -45,12 +46,12 @@ success() { echo -e "${GREEN}[OK]${RESET}    $*"; log "[OK]    $*"; }
 warn()    { echo -e "${YELLOW}[WARN]${RESET}  $*"; log "[WARN]  $*"; }
 error()   { echo -e "${RED}[ERROR]${RESET} $*"; log "[ERROR] $*"; }
 
-# ─── Cleanup paths (used by 8.7 / 8.8) ───────────────────────────────────────
+# ─── Cleanup paths (used by 8.8 / 8.9) ───────────────────────────────────────
 CHAIN_SHARE_DIR="${GRIN_SHARE_DIR:-/var/www/html/grin}"
 GRIN_DATA_DIR="${GRIN_DATA_PATH:-$HOME/.grin}"
 GRIN_LOG_DIR="${GRIN_LOG_PATH:-$HOME/.grin/main/log}"
 
-# ─── Automatic disk cleanup (8.7) ─────────────────────────────────────────────
+# ─── Automatic disk cleanup (8.8) ─────────────────────────────────────────────
 AUTO_CLEANUP_SCRIPT="/opt/grin/auto_cleanup.sh"
 AUTO_CLEANUP_CRON="/etc/cron.d/grin-auto-cleanup"
 AUTO_CLEANUP_RETENTION_DEFAULT=7
@@ -98,6 +99,18 @@ menu_ssh_hardening() {
         pause; return
     fi
     bash "$ssh_script"
+}
+
+# =============================================================================
+# 8.7  Provider Access Watch  (082_provider_access_watch.sh)
+# =============================================================================
+menu_access_watch() {
+    local aw_script="$SCRIPT_DIR/082_provider_access_watch.sh"
+    if [[ ! -f "$aw_script" ]]; then
+        error "082_provider_access_watch.sh not found in $SCRIPT_DIR"
+        pause; return
+    fi
+    bash "$aw_script"
 }
 
 # =============================================================================
@@ -412,7 +425,7 @@ show_bandwidth_consumers() {
 }
 
 # =============================================================================
-# 8.7  Disk Cleanup — merged single screen
+# 8.8  Disk Cleanup — merged single screen
 # =============================================================================
 _find_tar_files() {
     find "$1" -maxdepth 3 \
@@ -490,6 +503,7 @@ _install_toolkit_logrotate() {
 /opt/grin/logs/grin-satellite.log
 /opt/grin/logs/grin-gateway.log
 /opt/grin/logs/schedule.log
+/opt/grin/logs/access-watch.log
 # Collector / stats crons (Script 06) — these are the ones that grow fastest
 /opt/grin/logs/grin_stats_cron.log
 /opt/grin/logs/price_cron.log
@@ -633,7 +647,7 @@ manage_auto_cleanup() {
 }
 
 # =============================================================================
-# Swap Manager — sub-item of 8.7 Disk Cleanup
+# Swap Manager — sub-item of 8.8 Disk Cleanup
 # =============================================================================
 # Swapfiles are just files on disk, so swap sizing lives under Disk Cleanup.
 # We manage a STACK of swapfiles under $SWAP_DIR (swap-001, swap-002, …):
@@ -1091,7 +1105,7 @@ clean_maintenance() {
 }
 
 # =============================================================================
-# 8.8  Self-Update — download latest from GitHub
+# 8.9  Self-Update — download latest from GitHub
 # =============================================================================
 self_update() {
     clear
@@ -1201,7 +1215,7 @@ self_update() {
     echo ""
     success "Update complete — branch '${branch}' installed."
     success "Restart the toolkit to apply changes."
-    log "[8.8] Installed from $tarball_url"
+    log "[8.9] Installed from $tarball_url"
 
     echo ""
     echo -e "  ${DIM}Press Enter to exit the script completely${RESET}"
@@ -1217,7 +1231,7 @@ self_update() {
 }
 
 # =============================================================================
-# 8.9  Backup & Restore — delegate to 089_backup_restore.sh
+# 8.10  Backup & Restore — delegate to 089_backup_restore.sh
 # =============================================================================
 backup() {
     local _br_script="$SCRIPT_DIR/089_backup_restore.sh"
@@ -1257,11 +1271,12 @@ show_menu() {
     echo -e "  ${CYAN}4${RESET})   Nginx Extended Features   ${DIM}audit · reverse proxy · security · logs${RESET}"
     echo -e "  ${CYAN}5${RESET})   SSH Key Hardening         ${DIM}key-only root login · disable passwords${RESET}"
     echo -e "  ${CYAN}6${RESET})   Top 20 Bandwidth Consumers${DIM} parse nginx logs, block/limit IP${RESET}"
+    echo -e "  ${CYAN}7${RESET})   Provider Access Watch     ${DIM}host-tamper detection + off-box alerts${RESET}"
     echo ""
     echo -e "${BOLD}  Maintenance${RESET}"
-    echo -e "  ${YELLOW}7${RESET})   Disk Cleanup              ${DIM}tar archives + OS temp/logs + nginx dirs${RESET}"
-    echo -e "  ${YELLOW}8${RESET})   Self-Update               ${DIM}pull latest changes from GitHub${RESET}"
-    echo -e "  ${YELLOW}9${RESET})   Backup & Restore          ${DIM}backup conf, nginx, SSL, crontabs · restore${RESET}"
+    echo -e "  ${YELLOW}8${RESET})   Disk Cleanup              ${DIM}tar archives + OS temp/logs + nginx dirs${RESET}"
+    echo -e "  ${YELLOW}9${RESET})   Self-Update               ${DIM}pull latest changes from GitHub${RESET}"
+    echo -e "  ${YELLOW}10${RESET})  Backup & Restore          ${DIM}backup conf, nginx, SSL, crontabs · restore${RESET}"
     echo ""
     echo -e "${BOLD}  Danger Zone${RESET}"
     echo -e "  ${RED}DEL${RESET}) Full Grin Cleanup         ${DIM}remove EVERYTHING about Grin now!${RESET}"
@@ -1269,7 +1284,7 @@ show_menu() {
     echo -e "  ${DIM}0${RESET})   Return to main menu"
     echo ""
     echo -e "${DIM}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo -ne "${BOLD}Select [0-9, DEL]: ${RESET}"
+    echo -ne "${BOLD}Select [0-10, DEL]: ${RESET}"
 }
 
 main() {
@@ -1284,9 +1299,10 @@ main() {
             "4")   menu_nginx_extended         ;;
             "5")   menu_ssh_hardening       ;;
             "6")   show_bandwidth_consumers ;;
-            "7")   clean_maintenance        ;;
-            "8")   self_update              ;;
-            "9")   backup                   ;;
+            "7")   menu_access_watch        ;;
+            "8")   clean_maintenance        ;;
+            "9")   self_update              ;;
+            "10")  backup                   ;;
             "del") menu_full_cleanup        ;;
             "0")   break                    ;;
             *)     warn "Invalid option." ; sleep 1 ;;

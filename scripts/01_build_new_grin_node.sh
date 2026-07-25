@@ -94,10 +94,17 @@
 #                foreign_api_secret_path → <node_dir>/.foreign_api_secret
 #              Also sets peer limits (stratum is left to Script 07).
 #
-#   Step  8b — Generate API Secret Files
-#              Creates .api_secret and .foreign_api_secret in the node
-#              directory with a 20-character random alphanumeric key.
-#              Sets permissions 600 and ownership grin:grin.
+#   Step  8b — API Secret Files (persistent key vault)
+#              Ensures .api_secret and .foreign_api_secret exist in the node
+#              directory, sourced from /opt/grin/keys/<network>/ so they
+#              SURVIVE a rebuild (a rotating secret silently 401s every
+#              consumer — Script 04's nginx header, GrinScan, the collector).
+#              Vault hit → restore; miss → adopt the existing file, else mint
+#              a 20-char random alphanumeric key and seed the vault with it.
+#              New files get permissions 600 and ownership grin:grin; an
+#              existing file is rewritten in place so a product's own
+#              ownership (e.g. Script 04's root:www-data 640) survives.
+#              Deliberate rotation: grin-secret-sync --rotate <net>
 #
 #   Step  8c — Create grin Service User
 #              Creates the 'grin' system user (no login shell, no home dir
@@ -157,6 +164,13 @@
 #              Prints network, mode, directory, tmux session name, total time
 #              taken, and log file path.
 #
+#   Step 14b — Re-sync API secrets to installed services
+#              Re-points every installed consumer (collector, GrinScan, Tiny
+#              Explorer, wallets, Script 04 nginx, pool stratum) at the node
+#              just built, and installs the grin-secret-sync 5-min self-heal
+#              timer. The vault (Step 8b) keeps the secret VALUES stable; this
+#              fixes the secret PATH, which moves on a prune↔full rebuild.
+#
 # LOG FILE
 #   Each run creates a timestamped log file:
 #     <toolkit_root>/log/01_build_new_grin_node_YYYYMMDD_HHMMSS.log
@@ -181,6 +195,11 @@ source "$SCRIPT_DIR/lib/grin_node_control.sh"
 # Source-guarded, no side effects; provides gnk_autostart_enable / gnk_watchdog_install
 # used by Super Auto's post-build hardening.
 source "$SCRIPT_DIR/lib/grin_node_keepalive.sh"
+# Persistent API-secret vault (/opt/grin/keys) + consumer self-heal. Provides
+# grin_secret_vault_ensure (Step 8b) and grin_secrets_sync_all (post-build), so a
+# rebuild keeps the node's api/foreign secrets instead of rotating them and
+# silently 401-ing every consumer. Source-guarded, no side effects.
+source "$SCRIPT_DIR/lib/grin_node_secrets.sh"
 
 # --- Session state (reset per node) ---
 NETWORK_TYPE=""
@@ -638,6 +657,11 @@ rebuild_chain_data_only() {
     # Refresh INSTANCES_CONF so ONION_HOSTNAME stays current (handles operators
     # who built the node before this field existed).
     save_instance_location "$network" "$archive_mode"
+
+    # This path never touched the secrets (chain_data only), but the sync also
+    # seeds the vault from the live node and installs the self-heal timer — so
+    # an operator who only ever uses R still ends up vault-protected.
+    _sync_secret_consumers "$network"
 
     # Reset per-node state for any subsequent action in the same script invocation
     GRIN_DIR=""
@@ -2069,40 +2093,105 @@ patch_config() {
 }
 
 # =============================================================================
-# [8b] GENERATE API SECRET FILES
+# [8b] PROVISION API SECRET FILES (persistent key vault)
 # -----------------------------------------------------------------------------
-# Creates .api_secret and .foreign_api_secret in $GRIN_DIR with a 20-character
-# random alphanumeric key (A-Z a-z 0-9). Any existing files are overwritten.
-# Permissions set to 600; ownership set to grin:grin if the grin user exists.
+# Ensures .api_secret and .foreign_api_secret exist in $GRIN_DIR, sourcing them
+# from the persistent vault at /opt/grin/keys/<network>/ so they SURVIVE a
+# rebuild. Delegates to grin_secret_vault_ensure (lib/grin_node_secrets.sh):
+#   vault hit  → restore   (rebuild — every consumer keeps working)
+#   vault miss → adopt the dir's existing secret, else mint a fresh one, and
+#                seed the vault with it
+#
+# This runs BEFORE the multi-hour chain download (see setup_one_node), which is
+# exactly why the vault write happens here and not "after a successful build":
+# a failed download would otherwise leave nothing vaulted, and the retry would
+# mint a THIRD secret. Vaulting at generation time makes the retry reuse the
+# same one.
+#
+# Usage: generate_secrets <mainnet|testnet>
+# The network MUST be passed — the global NETWORK_TYPE is "both" when the user
+# selected both networks, so it cannot be used to key the vault here.
 # =============================================================================
 generate_secrets() {
-    step_header "Step 8b: Generate API Secret Files"
+    local network="${1:-}"
+    step_header "Step 8b: API Secret Files (persistent key vault)"
+
+    [[ "$network" == "mainnet" || "$network" == "testnet" ]] \
+        || die "generate_secrets: invalid network '$network'."
+    declare -F grin_secret_vault_ensure >/dev/null 2>&1 \
+        || die "lib/grin_node_secrets.sh not loaded — cannot provision API secrets."
+
+    grin_secret_vault_ensure "$network" "$GRIN_DIR" \
+        || die "Failed to provision API secrets for $network (vault: $GNS_VAULT_DIR/$network)."
 
     local secret_file="$GRIN_DIR/.api_secret"
     local foreign_file="$GRIN_DIR/.foreign_api_secret"
+    local _n=${#GNS_SECRET_FILES[@]}
 
-    # Generate 20-char random alphanumeric string; || true handles tr SIGPIPE
-    local api_secret foreign_secret
-    api_secret=$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 20 || true)
-    foreign_secret=$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 20 || true)
-
-    [[ ${#api_secret}     -eq 20 ]] || die "Failed to generate api_secret — /dev/urandom unavailable?"
-    [[ ${#foreign_secret} -eq 20 ]] || die "Failed to generate foreign_api_secret — /dev/urandom unavailable?"
-
-    printf '%s' "$api_secret"     > "$secret_file"
-    printf '%s' "$foreign_secret" > "$foreign_file"
-
-    chmod 600 "$secret_file" "$foreign_file"
-
-    if id grin &>/dev/null; then
-        chown grin:grin "$secret_file" "$foreign_file"
-        info "Ownership set to grin:grin"
+    # The counters count FILES. Report "restored"/"adopted"/"generated" only when
+    # ALL of them took that path — otherwise a partial vault (one entry deleted
+    # or left blank by an interrupted write) would print "unchanged across this
+    # rebuild" while one secret had in fact ROTATED, and the operator would never
+    # know a consumer needed attention.
+    if [[ "$GNS_VAULT_RESTORED" -eq "$_n" ]]; then
+        success "Secrets restored from the key vault — unchanged across this rebuild:"
+        info "  vault: $GNS_VAULT_DIR/$network/"
+        info "  Consumers (Script 04 nginx, GrinScan, collector, pool) keep working."
+    elif [[ "$GNS_VAULT_ADOPTED" -eq "$_n" ]]; then
+        success "Existing secrets adopted into the key vault (values kept as-is):"
+        info "  vault: $GNS_VAULT_DIR/$network/"
+    elif [[ "$GNS_VAULT_CREATED" -eq "$_n" ]]; then
+        success "New secrets generated and saved to the key vault:"
+        info "  vault: $GNS_VAULT_DIR/$network/  ${DIM}(restored automatically on any future rebuild)${RESET}"
+    else
+        warn "Mixed outcome — the secrets did NOT all take the same path:"
+        info "  restored from vault : $GNS_VAULT_RESTORED of $_n"
+        info "  adopted into vault  : $GNS_VAULT_ADOPTED of $_n"
+        info "  newly generated     : $GNS_VAULT_CREATED of $_n"
+        if [[ "$GNS_VAULT_CREATED" -gt 0 ]]; then
+            warn "  A NEW secret was minted — consumers are re-pointed at Step 14b."
+        fi
+        info "  vault: $GNS_VAULT_DIR/$network/"
     fi
 
-    success "Secret files created:"
+    if [[ "$GNS_VAULT_WARNINGS" -gt 0 ]]; then
+        warn "Vault not writable ($GNS_VAULT_WARNINGS write(s) failed) — the node works now,"
+        warn "  but these secrets will NOT survive the next rebuild."
+        warn "  Check permissions and free space on $GNS_VAULT_DIR"
+    fi
+
     info "  $secret_file"
     info "  $foreign_file"
-    log "[STEP 8b] api_secret=$secret_file foreign_api_secret=$foreign_file"
+    log "[STEP 8b] net=$network restored=$GNS_VAULT_RESTORED adopted=$GNS_VAULT_ADOPTED created=$GNS_VAULT_CREATED warnings=$GNS_VAULT_WARNINGS vault=$GNS_VAULT_DIR/$network"
+}
+
+# -----------------------------------------------------------------------------
+# _sync_secret_consumers <network> — post-build: re-point every installed
+# consumer (collector, GrinScan, Tiny Explorer, wallets, Script 04 nginx, pool
+# stratum) at the node that was just built, and install the 5-minute self-heal
+# timer so any future out-of-band rebuild is healed automatically.
+#
+# The vault keeps the secret VALUES stable, but consumers also store the secret
+# PATH — and a prune↔full rebuild moves the node directory. That path fix is
+# what this call delivers.
+#
+# Fully guarded: every helper is a no-op when its product is absent, and the
+# whole thing is best-effort — a sync failure must never abort a good build.
+# -----------------------------------------------------------------------------
+_sync_secret_consumers() {
+    local network="${1:-}"
+    declare -F grin_secrets_sync_all >/dev/null 2>&1 || return 0
+
+    step_header "Step 14b: Re-sync API secrets to installed services"
+    if declare -F grin_install_secret_sync >/dev/null 2>&1; then
+        grin_install_secret_sync || true
+        info "Self-heal timer installed: grin-secret-sync.timer (every 5 min)"
+    fi
+    grin_secrets_sync_all || true
+    success "Consumers re-pointed at $GRIN_DIR"
+    info "  Manual re-sync any time: ${BOLD}grin-secret-sync${RESET}"
+    info "  Deliberate rotation:     ${BOLD}grin-secret-sync --rotate $network${RESET} ${DIM}(needs a node restart)${RESET}"
+    log "[STEP 14b] secret consumers re-synced for $network ($GRIN_DIR)"
 }
 
 # =============================================================================
@@ -3181,7 +3270,7 @@ setup_one_node() {
     download_grin_binary
     generate_config     "$network"
     patch_config        "$network" "$ARCHIVE_MODE"
-    generate_secrets
+    generate_secrets    "$network"
     download_chain_data "$network" "$ARCHIVE_MODE"
     if [[ "$SLOW_SYNC_MODE" == "true" ]]; then
         info "Slow sync selected — no archive downloaded. The node will sync from peers."
@@ -3210,6 +3299,13 @@ setup_one_node() {
 
     show_summary        "$network" "$ARCHIVE_MODE"
     save_instance_location "$network" "$ARCHIVE_MODE"
+
+    # Re-point every consumer at this node. Still required even though the vault
+    # kept the secret VALUES identical: consumers store the secret PATH
+    # (api_secret_path = <node_dir>/.api_secret), and a prune↔full rebuild moves
+    # that directory. Runs after save_instance_location so the resolver can see
+    # the new registry entry. Also installs the 5-min self-heal timer.
+    _sync_secret_consumers "$network"
 
     # Super Auto post-build hardening — autostart + watchdog + logrotate.
     # Runs AFTER save_instance_location so gnk_autostart_enable can resolve the

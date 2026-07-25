@@ -253,12 +253,13 @@ class AdsManager {
     const cfgGet = (key) => this.db.prepare(
       "SELECT value FROM pool_config WHERE section = 'ads' AND key = ?"
     ).get(key);
-    if (cfgGet('selfpromo_seeded_v3')) return false;
+    if (cfgGet('selfpromo_seeded_v4')) return false;
     // Highest seed generation already applied to this pool (0 = brand-new). Each upgrade
     // inserts only creatives NEWER than what's been seeded, so a deleted seed stays deleted.
     let seededMax = 0;
     if (cfgGet('selfpromo_seeded')) seededMax = 1;
     if (cfgGet('selfpromo_seeded_v2')) seededMax = 2;
+    if (cfgGet('selfpromo_seeded_v3')) seededMax = 3;
 
     // v1 → v2 boundary only: the sidebar became a narrow rail, so old square seeds move
     // in-content (skip if the pool was already at/after v2).
@@ -300,14 +301,10 @@ class AdsManager {
         image_url: '/promo/grinium-privacy-160x600.svg', weight: 10, link_url: '/#connect',
         alt_text: 'Mine anonymously — no accounts, no emails, Tor payouts' },
 
-      // Squares — in-content (the sidebar rail is too narrow for a 300×250). On an
-      // upgrade these already exist as the re-homed sidebar squares above.
-      { v: 1, name: 'GRINIUM promo — Fortune board (in-content 300×250)', placement: 'in-content',
-        image_url: '/promo/grinium-fortune-300x250.svg', weight: 10, link_url: '/fortune-board.html',
-        alt_text: 'Feeling lucky? Block jackpots, prize draws, streak rewards and a monthly lottery' },
-      { v: 1, name: 'GRINIUM promo — Anonymous mining (in-content 300×250)', placement: 'in-content',
-        image_url: '/promo/grinium-privacy-300x250.svg', weight: 5, link_url: '/#connect',
-        alt_text: 'Mine anonymously — no accounts, no emails, Tor payouts' },
+      // NOTE: the two 300×250 in-content squares are no longer auto-seeded (superseded by the
+      // v4 text banner below). They remain available as admin starter banners, and any pool
+      // that seeded them under v1–v3 keeps them (seeds only ever insert, never delete). The
+      // re-home block above still moves a v1 pool's old sidebar squares in-content on upgrade.
 
       // v3 — give the header a rotation: a second graphical strip + a native TEXT ad, so the
       // header cycles Mine → Why GRIN → Private-by-design and the text-ad type is demoed.
@@ -318,7 +315,17 @@ class AdsManager {
         ad_type: 'text', weight: 6, link_url: '/#connect',
         headline: 'PRIVATE BY DESIGN',
         body_text: 'No accounts · no emails · Tor payouts · your address is your account',
-        cta_label: 'Start anonymously →' }
+        cta_label: 'Start anonymously →' },
+
+      // v4 — the in-content band now defaults to ONE responsive TEXT banner instead of two
+      // 300×250 squares. A text card reflows and stays readable at every width (a fixed square
+      // marooned in the wide band looked imbalanced, and an image strip goes unreadable on a
+      // phone), and at ~1 line tall it reclaims vertical space in the main pool column.
+      { v: 4, name: 'GRINIUM text — Feeling lucky? (in-content)', placement: 'in-content',
+        ad_type: 'text', weight: 10, link_url: '/fortune-board.html',
+        headline: 'FEELING LUCKY?',
+        body_text: 'Block jackpots · prize draws · streak rewards · a monthly lottery — every share is a ticket',
+        cta_label: 'Open the Fortune Board →' }
     ];
 
     const seenImg = this.db.prepare('SELECT 1 FROM ads WHERE image_url = ? LIMIT 1');
@@ -333,7 +340,7 @@ class AdsManager {
       added++;
     }
 
-    for (const key of ['selfpromo_seeded', 'selfpromo_seeded_v2', 'selfpromo_seeded_v3']) {
+    for (const key of ['selfpromo_seeded', 'selfpromo_seeded_v2', 'selfpromo_seeded_v3', 'selfpromo_seeded_v4']) {
       this.db.prepare(`
         INSERT INTO pool_config (section, key, value, value_type) VALUES ('ads', ?, '1', 'boolean')
         ON CONFLICT(section, key) DO NOTHING

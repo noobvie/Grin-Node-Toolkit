@@ -113,7 +113,7 @@
 
     <!-- Sidebar layout — the sidebar placement is a fixed edge rail by default -->
     <div class="table-toolbar">
-      <p class="rotate-note" style="margin:0;"><strong>Sidebar layout.</strong> In <em>rail</em> mode the sidebar placement is a slim vertical strip fixed in the empty page margin (screens ≥&nbsp;1366&nbsp;px only) — it costs the page layout nothing, peeks out for a while, tucks itself away against the edge, then slides back with the next creative. Visitors can pull it out by its tab or dismiss it for the visit. Use tall creatives here (<span class="spec-size">160×600</span>). <strong>On phones and narrow screens portrait creatives are dropped entirely</strong> — an in-flow ad there spans the full column, so a tall banner would be a screenful of scrolling. Only landscape or square creatives are served below 1366&nbsp;px, so keep your mobile inventory in the header, in-content and footer placements.</p>
+      <p class="rotate-note" style="margin:0;"><strong>Sidebar layout.</strong> In <em>rail</em> mode the sidebar placement is a slim vertical strip fixed in the empty page margin (screens ≥&nbsp;1366&nbsp;px only) — it costs the page layout nothing, peeks out for a while, tucks itself away against the edge, then slides back with the next creative. Visitors can pull it out by its tab or dismiss it for the visit. Use tall creatives here (<span class="spec-size">160×600</span>). <strong>The sidebar placement is not shown at all below 1366&nbsp;px</strong> — with no gutter to park it in, a tall banner would drop into the page flow and become a screenful of scrolling on a phone. So keep your mobile inventory in the header, in-content and footer placements.</p>
       <div class="toolbar-controls">
         <label for="sidebar-mode">Sidebar</label>
         <select id="sidebar-mode">
@@ -317,7 +317,7 @@ const PLACEMENT_LABEL = { header:'Header', sidebar:'Sidebar', 'in-content':'In-c
 // was built around; anything else still renders but is scaled to fit the slot.
 const PLACEMENT_SPEC = {
   header:       { w:728, h:90,  alt:'970×90 also fits',  note:'Top of every public page; scales down responsively on mobile.' },
-  sidebar:      { w:160, h:600, alt:'120×600 also fits', note:'Fixed edge rail in the page margin on screens ≥1366 px (renders 108–168 px wide, so use a tall vector). Portrait creatives are NOT served below 1366 px — put mobile inventory in the other placements.' },
+  sidebar:      { w:160, h:600, alt:'120×600 also fits', note:'Fixed edge rail in the page margin on screens ≥1366 px (renders 108–168 px wide, so use a tall vector). Not shown at all below 1366 px — put mobile inventory in the other placements.' },
   'in-content': { w:728, h:90,  alt:'468×60 also fits',  note:'Inside the homepage content flow.' },
   footer:       { w:728, h:90,  alt:'970×90 also fits',  note:'Bottom of every public page.' }
 };

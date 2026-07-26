@@ -71,31 +71,12 @@ body.nexus-theme::before {
   body.nexus-theme::before { animation: none; }
 }
 
-/* ── Scalable switcher: a grouped <select> replaces the old button pill ──────── */
-.theme-switcher .theme-select {
-  appearance: none;
-  -webkit-appearance: none;
-  background: transparent;
-  border: 1px solid currentColor;
-  color: inherit;
-  font: inherit;
-  font-size: 0.72rem;
-  font-weight: 700;
-  letter-spacing: 0.3px;
-  padding: 4px 22px 4px 10px;
-  border-radius: 6px;
-  cursor: pointer;
-  max-width: 190px;
-  background-image: linear-gradient(45deg, transparent 50%, currentColor 50%),
-                    linear-gradient(135deg, currentColor 50%, transparent 50%);
-  background-position: calc(100% - 14px) center, calc(100% - 9px) center;
-  background-size: 5px 5px, 5px 5px;
-  background-repeat: no-repeat;
-}
-.theme-switcher .theme-select:focus { outline: none; }
-/* Option list always renders in the OS palette — keep it readable everywhere. */
-.theme-switcher .theme-select option,
-.theme-switcher .theme-select optgroup { color: #111; background: #fff; }
+/* NOTE: the `.theme-switcher .theme-select` block that used to live here (a styled grouped
+ * <select> with a custom caret) was DEAD — public-theme.js has rendered a single
+ * .theme-cycle-btn since the switcher became a click-to-cycle palette icon, and nothing in
+ * public_html/ or the admin panel emits .theme-select any more. Removed 2026-07-25 along
+ * with the winxp override of it and the --t-switcher-bg palette token (same orphan: its
+ * only consumer was the container background this file no longer paints). */
 
 /* ── Generic component theming (written once, driven by --t-* per palette) ──── */
 body.themed {
@@ -153,12 +134,15 @@ body.themed footer {
   color: var(--t-dim);
 }
 
-body.themed .theme-switcher {
-  background: var(--t-switcher-bg, rgba(0, 0, 0, 0.55));
-  border-color: var(--t-accent);
-  box-shadow: 0 0 14px var(--t-chip-border);
-}
-body.themed .theme-switcher .theme-select { color: var(--t-accent); }
+/* The switcher CONTAINER is a bare flex wrapper — never give it a surface. It used to
+ * get a tinted pill + glow here, from the era when it held a wide <select>. The control
+ * is now a single square icon button, so those rules painted an un-rounded, un-sized
+ * rectangle (white on the light themes, black elsewhere) with a rectangular halo behind
+ * a smaller button — which is what made the theme control look misshapen. All chrome now
+ * belongs to .theme-cycle-btn in dashboard.css, which is a fixed square. */
+body.themed .theme-switcher { background: none; border: 0; box-shadow: none; }
+body.themed .theme-cycle-btn { color: var(--t-accent); border-color: var(--t-chip-border); }
+body.themed .theme-cycle-btn:hover { background: var(--t-chip-bg); border-color: var(--t-accent); }
 
 /* ════════════════════════════════════════════════════════════════════════════
  *  CLASSIC THEMES — Uranium Classic + Nexus + Light. Reactor is the no-class default.
@@ -211,7 +195,7 @@ body.light-theme {
   --t-header: linear-gradient(135deg, #ffffff, #eef2f7);
   --t-accent: #157f52; --t-accent2: #6d28d9; --t-heading: #0e6b45;
   --t-on-accent: #ffffff; --t-chip-bg: rgba(21, 127, 82, 0.10);
-  --t-chip-border: rgba(21, 127, 82, 0.30); --t-switcher-bg: rgba(255, 255, 255, 0.85);
+  --t-chip-border: rgba(21, 127, 82, 0.30);
   --t-font: 'Segoe UI', system-ui, sans-serif;
   --dark-bg: #f4f6f9; --dark-card: #ffffff; --dark-text: #1a2129; --dark-dim: #51606f;
   --neon-cyan: #157f52; --neon-magenta: #6d28d9; --neon-lime: #157f52; --uranium: #157f52;
@@ -242,15 +226,15 @@ body.winter-theme {
 
 /* 2 — Spring Blossom 🌸 : sakura pink, soft green, cream (light) */
 body.spring-theme {
-  --t-bg: #fff5f8; --t-text: #3a2b33; --t-dim: #8a6b78;
+  --t-bg: #fff5f8; --t-text: #3a2b33; --t-dim: #7a5e6a;
   --t-card: #ffffff; --t-card2: #ffeef4; --t-border: #f3cdda;
   --t-header: linear-gradient(135deg, #ffb7c5, #ffd9e2);
-  --t-accent: #ff6f9c; --t-accent2: #7bc47f; --t-heading: #d6457a;
-  --t-on-accent: #ffffff; --t-chip-bg: rgba(255, 111, 156, 0.10);
-  --t-chip-border: rgba(255, 111, 156, 0.28); --t-switcher-bg: rgba(255, 255, 255, 0.85);
+  --t-accent: #c2185b; --t-accent2: #2a7d3c; --t-heading: #b02a5b;
+  --t-on-accent: #ffffff; --t-chip-bg: rgba(194, 24, 91, 0.10);
+  --t-chip-border: rgba(194, 24, 91, 0.28);
   --t-font: 'Segoe UI', system-ui, sans-serif;
-  --dark-bg: #fff5f8; --dark-card: #ffffff; --dark-text: #3a2b33; --dark-dim: #8a6b78;
-  --neon-cyan: #ff6f9c; --neon-magenta: #ff6f9c; --neon-lime: #7bc47f; --uranium: #ff6f9c;
+  --dark-bg: #fff5f8; --dark-card: #ffffff; --dark-text: #3a2b33; --dark-dim: #7a5e6a;
+  --neon-cyan: #c2185b; --neon-magenta: #c2185b; --neon-lime: #2a7d3c; --uranium: #c2185b;
   background:
     radial-gradient(circle at 12% 8%, rgba(255, 183, 197, 0.45), transparent 40%),
     linear-gradient(160deg, #fff5f8 0%, #fdeef8 50%, #eef9f0 100%);
@@ -259,15 +243,15 @@ body.spring-theme {
 
 /* 3 — Summer Wave 🌊 : turquoise sea, coral, sunshine (light) */
 body.summer-theme {
-  --t-bg: #f0fbff; --t-text: #063b46; --t-dim: #4f8593;
+  --t-bg: #f0fbff; --t-text: #063b46; --t-dim: #467683;
   --t-card: #ffffff; --t-card2: #dff6fb; --t-border: #a9e4ef;
   --t-header: linear-gradient(135deg, #06b6d4, #22d3ee 55%, #fbbf24);
-  --t-accent: #0891b2; --t-accent2: #f97316; --t-heading: #0e7490;
-  --t-on-accent: #ffffff; --t-chip-bg: rgba(8, 145, 178, 0.10);
-  --t-chip-border: rgba(8, 145, 178, 0.28); --t-switcher-bg: rgba(255, 255, 255, 0.85);
+  --t-accent: #0b6f88; --t-accent2: #c2410c; --t-heading: #0b5f73;
+  --t-on-accent: #ffffff; --t-chip-bg: rgba(11, 111, 136, 0.10);
+  --t-chip-border: rgba(11, 111, 136, 0.28);
   --t-font: 'Segoe UI', system-ui, sans-serif;
-  --dark-bg: #f0fbff; --dark-card: #ffffff; --dark-text: #063b46; --dark-dim: #4f8593;
-  --neon-cyan: #0891b2; --neon-magenta: #f97316; --neon-lime: #22d3ee; --uranium: #0891b2;
+  --dark-bg: #f0fbff; --dark-card: #ffffff; --dark-text: #063b46; --dark-dim: #467683;
+  --neon-cyan: #0b6f88; --neon-magenta: #c2410c; --neon-lime: #0b6f88; --uranium: #0b6f88;
   background:
     radial-gradient(circle at 88% 6%, rgba(251, 191, 36, 0.30), transparent 38%),
     linear-gradient(160deg, #eafaff 0%, #d6f3fb 55%, #fff7e6 100%);
@@ -348,34 +332,33 @@ body.galaxy-theme {
 
 /* 8 — Windows XP 🪟 : Luna blue title bar, Bliss sky-to-hill, white panels */
 body.winxp-theme {
-  --t-bg: #3a6ea5; --t-text: #1a1a1a; --t-dim: #4a5568;
+  --t-bg: #3a6ea5; --t-text: #1a1a1a; --t-dim: #333b48;
   --t-card: #ffffff; --t-card2: #eef3fb; --t-border: #9db8d2;
   --t-header: linear-gradient(180deg, #3f8cff 0%, #2058ee 10%, #245edb 100%);
-  --t-accent: #245edb; --t-accent2: #73d216; --t-heading: #0a3d91;
+  --t-accent: #245edb; --t-accent2: #3f7d0a; --t-heading: #093681;
   --t-on-accent: #ffffff; --t-chip-bg: rgba(255, 255, 255, 0.18);
-  --t-chip-border: rgba(255, 255, 255, 0.35); --t-switcher-bg: rgba(255, 255, 255, 0.9);
+  --t-chip-border: rgba(255, 255, 255, 0.35);
   --t-font: 'Tahoma', 'Segoe UI', sans-serif;
-  --dark-bg: #3a6ea5; --dark-card: #ffffff; --dark-text: #1a1a1a; --dark-dim: #4a5568;
-  --neon-cyan: #245edb; --neon-magenta: #245edb; --neon-lime: #73d216; --uranium: #245edb;
+  --dark-bg: #3a6ea5; --dark-card: #ffffff; --dark-text: #1a1a1a; --dark-dim: #333b48;
+  --neon-cyan: #245edb; --neon-magenta: #245edb; --neon-lime: #3f7d0a; --uranium: #245edb;
   background: linear-gradient(180deg, #4aa3ff 0%, #6db3f2 32%, #8fd36b 72%, #5fa830 100%);
   background-attachment: fixed;
 }
-body.winxp-theme .theme-switcher .theme-select { color: #245edb; }
 /* Luna title bar is dark blue → keep its heading white; body titles stay navy. */
 body.winxp-theme header h1,
 body.winxp-theme header .page-title { color: #ffffff; -webkit-text-fill-color: #ffffff; }
 
 /* 9 — macOS Aqua 🍎 : light graphite, Aqua blue, classic pinstripes, traffic-light green */
 body.aqua-theme {
-  --t-bg: #ececec; --t-text: #1d1d1f; --t-dim: #6e6e73;
+  --t-bg: #ececec; --t-text: #1d1d1f; --t-dim: #6c6c70;
   --t-card: #ffffff; --t-card2: #f5f5f7; --t-border: #d2d2d7;
   --t-header: linear-gradient(180deg, #fbfbfd, #e6e6ea);
-  --t-accent: #0a84ff; --t-accent2: #34c759; --t-heading: #0a3d91;
-  --t-on-accent: #ffffff; --t-chip-bg: rgba(10, 132, 255, 0.10);
-  --t-chip-border: rgba(10, 132, 255, 0.30); --t-switcher-bg: rgba(255, 255, 255, 0.85);
+  --t-accent: #0060df; --t-accent2: #187a37; --t-heading: #0a3d91;
+  --t-on-accent: #ffffff; --t-chip-bg: rgba(0, 96, 223, 0.10);
+  --t-chip-border: rgba(0, 96, 223, 0.30);
   --t-font: -apple-system, 'Lucida Grande', 'Helvetica Neue', sans-serif;
-  --dark-bg: #ececec; --dark-card: #ffffff; --dark-text: #1d1d1f; --dark-dim: #6e6e73;
-  --neon-cyan: #0a84ff; --neon-magenta: #0a84ff; --neon-lime: #34c759; --uranium: #0a84ff;
+  --dark-bg: #ececec; --dark-card: #ffffff; --dark-text: #1d1d1f; --dark-dim: #6c6c70;
+  --neon-cyan: #0060df; --neon-magenta: #0060df; --neon-lime: #187a37; --uranium: #0060df;
   background:
     repeating-linear-gradient(180deg, #efeff1 0, #efeff1 2px, #e7e7ea 2px, #e7e7ea 4px);
   background-attachment: fixed;
@@ -387,12 +370,11 @@ body.comic-theme {
   --t-bg: #fff3bf; --t-text: #1a1a1a; --t-dim: #5a4a2a;
   --t-card: #ffffff; --t-card2: #fff8db; --t-border: #1a1a1a;
   --t-header: linear-gradient(135deg, #ff3b3b, #ffd23b);
-  --t-accent: #e63946; --t-accent2: #1d4ed8; --t-heading: #1d4ed8;
+  --t-accent: #c1121f; --t-accent2: #1d4ed8; --t-heading: #1d4ed8;
   --t-on-accent: #ffffff; --t-chip-bg: #ffe066; --t-chip-border: #1a1a1a;
-  --t-switcher-bg: rgba(255, 255, 255, 0.92);
   --t-font: 'Comic Sans MS', 'Comic Neue', 'Chalkboard SE', cursive;
   --dark-bg: #fff3bf; --dark-card: #ffffff; --dark-text: #1a1a1a; --dark-dim: #5a4a2a;
-  --neon-cyan: #e63946; --neon-magenta: #1d4ed8; --neon-lime: #1d4ed8; --uranium: #e63946;
+  --neon-cyan: #c1121f; --neon-magenta: #1d4ed8; --neon-lime: #1d4ed8; --uranium: #c1121f;
   background:
     radial-gradient(circle, rgba(0, 0, 0, 0.08) 1.5px, transparent 1.6px) 0 0 / 14px 14px,
     linear-gradient(160deg, #fff7cc 0%, #ffe9a8 100%);
@@ -404,3 +386,122 @@ body.comic-theme .nav-link,
 body.comic-theme .header-btn,
 body.comic-theme .btn { border-width: 2px; border-color: #1a1a1a; }
 body.comic-theme .nav-link { color: #1a1a1a; }
+
+/* ════════════════════════════════════════════════════════════════════════════
+ *  LIGHT-MODE CORRECTIONS  (light · spring · summer · winxp · aqua · comic)
+ * ════════════════════════════════════════════════════════════════════════════
+ * Every palette above only supplies colours; the LOOK — neon glow, machined-black
+ * recesses, breathing accent borders — is baked into dashboard.css / reactor.css and
+ * was designed for a dark control room. Re-colouring it for a white page is not enough:
+ *
+ *   · `text-shadow: 0 0 10px var(--glow)` sits on almost every heading, stat value and
+ *     counter. Behind pale text on black it reads as phosphor bloom; behind DARK text on
+ *     WHITE the same halo just smears the glyph edges — that is the "blurry text" on the
+ *     light homepage, not a font problem.
+ *   · the status inks (--info #5ad1ff, --warn #f5b942) are tuned for contrast against
+ *     #07090c and land at 1.5–1.8:1 on white, i.e. effectively invisible. `.counter.alt .v`
+ *     (Miners online / Last block / Confirmed) is --info, so a third of the homepage
+ *     readouts were unreadable.
+ *   · the recessed instrument insets are hard black (see --rx-shade in reactor.css);
+ *     over a white panel they are grey smudges rather than depth.
+ *
+ * So this block re-tunes the TOKENS the effects are built from (one place, every page),
+ * then switches off the handful of glows that don't route through --glow.
+ *
+ * The palettes themselves were also re-inked (2026-07-25): --t-accent / --t-accent2 are
+ * TEXT colours here (stat values, counters, `.panel-title .tag`, `.proc` bullets), not just
+ * fills, so a vivid light-theme brand colour fails outright — sakura #ff6f9c was 2.6:1 and
+ * Aqua #0a84ff 3.7:1 on white. Each light palette now uses a darkened variant of the same
+ * hue at ≥4.5:1 (the vivid original survives in the header gradients and page background,
+ * where nothing has to be read on top of it). Same reason the `light` theme's greens were
+ * darkened in 2026-06 — see the note on that palette.
+ *
+ * ADDING A NEW LIGHT PALETTE: add its `body.<key>-theme` to BOTH selector lists below —
+ * that is the only wiring needed. The list is duplicated (not a shared class) on purpose:
+ * no JS is involved, so the correction lands however the theme class got applied
+ * (public-theme.js, branding.js default, or the branding.js no-switcher fallback).
+ */
+
+body.light-theme, body.spring-theme, body.summer-theme,
+body.winxp-theme, body.aqua-theme, body.comic-theme {
+  /* 1 — kill the bloom at its source. Nearly every glow in dashboard.css/reactor.css is
+     `var(--glow)`, so one transparent value neutralises all of them at once: text-shadows
+     stop smearing, and the accent halos on buttons/cards/panels drop out. */
+  --glow: transparent;
+
+  /* 2 — status inks re-picked for a white background (all ≥4.5:1 on #fff). The hues are
+     kept so a lamp still reads blue/amber/red at a glance. */
+  --info: #0a6398;
+  --warn: #9a5600;
+  --danger: #c62828;
+
+  /* 3 — neutral, non-tinted structure. --border/--text-mute are derived from the accent
+     and the PAGE background respectively; on a light page that gave a green-tinted rule and
+     a ~2.5:1 label. Rebuild both off the card, which is what this text actually sits on.
+     (--dark-card, not --dark-bg: see the surface note in 4.)
+
+     --text-mute is only a HAIR lighter than --text-dim here (96%), which looks like a
+     pointless token until you check the contrast: everything wearing it (.placard i,
+     .counter .k, .annun-cat, .ledbar-title, .stat-label, .gauge-peakkey) is 9–12px, so WCAG
+     treats it as normal text and demands 4.5:1 — the same floor --text-dim is already close
+     to on these palettes. There is simply no room to drop contrast below dim at that size.
+     The visual hierarchy is carried by TYPE instead (9px uppercase, .16em tracking, vs 13px
+     sentence case), which is where it belongs. Mixing at the dark-theme 70% put every one of
+     these labels at 3.0–4.2:1 on white. */
+  --text-mute: color-mix(in srgb, var(--dark-dim) 96%, var(--dark-card));
+  --border: color-mix(in srgb, var(--dark-text) 15%, var(--dark-card));
+  --border-soft: color-mix(in srgb, var(--dark-text) 8%, var(--dark-card));
+  --accent-soft: color-mix(in srgb, var(--neon-cyan) 10%, transparent);
+  --shadow: 0 1px 2px rgba(16, 24, 40, .05), 0 6px 20px rgba(16, 24, 40, .07);
+
+  /* 4 — reactor chrome: a recess on paper is a faint tint + a hairline, not black.
+     The "highlight" edge inverts to white (light comes from above on a light surface).
+     Derived from --bg-elev (the PANEL surface), never --bg (the page). On a dark theme the
+     two are near-identical so reactor.css derives from --bg, but a light palette is free to
+     make the page a full-strength colour while panels stay white — Windows XP does exactly
+     that (--dark-bg is the XP desktop blue, --dark-card is white). Deriving the insets from
+     --bg there painted every counter, lamp, tube and teletype XP-desktop-blue inside a white
+     panel, with blue-grey text on top of it. */
+  --rx-inset: color-mix(in srgb, var(--bg-elev) 93%, var(--text));
+  --rx-bezel: color-mix(in srgb, var(--text) 20%, var(--bg-elev));
+  --rx-bezel-hi: #ffffff;
+  --rx-line: color-mix(in srgb, var(--text) 12%, var(--bg-elev));
+  --rx-shade: rgba(16, 24, 40, .09);
+  --rx-shade-soft: rgba(16, 24, 40, .05);
+  --rx-drop: rgba(16, 24, 40, .30);
+}
+
+/* ── The glows that don't route through --glow ────────────────────────────────
+ * :is() takes the specificity of its strongest argument (0,1,1 here), so each rule below
+ * outranks the component rule it corrects without needing !important. */
+:is(body.light-theme, body.spring-theme, body.summer-theme, body.winxp-theme, body.aqua-theme, body.comic-theme) {
+  /* breathing accent border: a slow pulse that is atmospheric in a dark room and just
+     looks like a rendering fault on white. Cards keep their static border + --shadow. */
+  & .card, & .stat-card, & .settings-section, & .info-section, & .donate-box { animation: none; }
+
+  /* self-coloured halos on badges, dots and LEDs — on white these are coloured smudges
+     around the very shape they are meant to sharpen. */
+  & .badge, & .status-badge { box-shadow: none; }
+  & .badge::before, & .status-badge::before { box-shadow: none; }
+  & .brand .dot { animation: none; box-shadow: 0 0 0 3px var(--accent-soft); }
+  & .progress-fill { box-shadow: none; }
+  & .status-pill .status-dot,
+  & .region-tab-dot, & .region-pill .led { box-shadow: none; }
+
+  /* reactor instruments */
+  & .master-lamp, & .master-lamp .led { box-shadow: none; }
+  & .rgn .rgn-led, & .rgn-legend i, & .gauge-peakkey .pk,
+  & .ledbar span, & .rod .fill, & .mimic .mnode.core { box-shadow: none; }
+  /* unlit annunciator lamps: the dark-room value (45% dim over the background) is a
+     ~1.8:1 grey on a light recess. --text-mute is the readable "off, not broken" ink. */
+  & .lamp { color: var(--text-mute); }
+  & .lamp.warn, & .lamp.alarm { text-shadow: none; }
+  /* lit lamps keep the tinted fill + border, which carry the state on their own. */
+  & .lamp.ok { box-shadow: none; }
+
+  /* Two more spots that read var(--bg) as if it were a surface — same XP trap as the
+     --rx-* tokens above (see 4). The ASIC mock's input fields and the active chart-range
+     tab both landed on the raw page colour. */
+  & .mform-val { background: color-mix(in srgb, var(--bg-elev) 96%, var(--text)); }
+  & .chart-range button.active { color: var(--t-on-accent, #fff); }
+}

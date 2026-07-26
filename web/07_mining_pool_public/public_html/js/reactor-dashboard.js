@@ -42,6 +42,15 @@
     C.dim = tok('--text-dim', '#8a978f');
     C.mute = tok('--text-mute', '#57635c');
     C.bg = tok('--bg', '#07090c');
+    // Dial face — the wide recessed arc the needle sweeps over. Must follow the theme:
+    // as a hard-coded black it painted a dark grey band across a white panel on every
+    // light theme. --rx-inset is the same recess token the counters/tubes use, and
+    // themes.css re-tunes it per theme family.
+    C.dial = tok('--rx-inset', 'rgba(0,0,0,.45)');
+    // Light themes set --glow to transparent (themes.css "LIGHT-MODE CORRECTIONS"); mirror
+    // that on canvas so the needle doesn't carry a coloured halo across a white dial.
+    C.glow = tok('--glow', '');
+    C.bloom = (C.glow === 'transparent') ? 0 : 8;
   }
   readTokens();
 
@@ -143,7 +152,7 @@
       c.clearRect(0, 0, W, H);
       // dial face
       c.beginPath(); c.arc(cx, cy, R + 14, a0 - 0.06, a1 + 0.06);
-      c.strokeStyle = 'rgba(0,0,0,.45)'; c.lineWidth = 30; c.stroke();
+      c.strokeStyle = C.dial; c.lineWidth = 30; c.stroke();
       // value band: an all-positive gradient sweep (hashrate — higher is better, so no
       // danger colors) OR discrete zones (round effort — green→amber→red).
       if (g.gradient) {
@@ -193,7 +202,7 @@
       var na = A(g.cur);
       var nc = g.needleColor || C.accent;
       c.save();
-      c.shadowColor = nc; c.shadowBlur = 8;
+      c.shadowColor = nc; c.shadowBlur = C.bloom;
       c.strokeStyle = nc; c.lineWidth = 2.4; c.lineCap = 'round';
       c.beginPath();
       c.moveTo(cx - Math.cos(na) * 10, cy - Math.sin(na) * 10);
@@ -956,8 +965,18 @@
   // ── theme switch → re-render canvas instruments in the new palette ────────
   new MutationObserver(function () {
     readTokens();
-    if (gaugeHash) gaugeHash.render();
-    if (gaugeShare) gaugeShare.render();
+    // The dial BANDS (gradient sweep / effort zones) are baked colour stops, not tokens read
+    // at draw time — render() alone repaints the needle and numerals in the new palette but
+    // leaves the band on the old accent, so a Reactor→light switch left a phosphor-green
+    // sweep on a white dial until the next 60s refresh happened to re-apply it. Re-derive
+    // them here; the effort zones keep whatever scale the last refresh set.
+    applyHashState();  // idle needle holds a colour value too — re-pick it from the new C.warn
+    if (gaugeHash) { gaugeHash.setGradient(HASH_GRAD()); gaugeHash.render(); }
+    if (gaugeShare) {
+      gaugeShare.setScale(gaugeShare.min, gaugeShare.max, gaugeShare.unit,
+        [[0, 100, C.accent], [100, 150, C.warn], [150, gaugeShare.max, C.danger]], 8);
+      gaugeShare.render();
+    }
     // Trend charts re-read the theme accent on their update path — refresh redraws them.
     loadTrendCharts();
   }).observe(document.body, { attributes: true, attributeFilter: ['class'] });

@@ -129,7 +129,7 @@
       <section class="panel">
         <span class="screws"></span>
         <h2 class="panel-title">Global Routing <span class="tag">☢ ORTHO</span>
-          <span class="nm-info" tabindex="0">i<span class="tip"><b>Privacy.</b> Country attribution is exact, but each miner dot sits at a <b>randomized in-country position</b> — never a real location or IP, and nothing here traces to an individual. Countries with pool activity are outlined and flag-filled; gateway markers show live edge status.</span></span>
+          <span class="nm-info" tabindex="0">i<span class="tip"><b>Privacy.</b> Country is the finest location this map holds — <b>no coordinate, city or IP is ever resolved or stored</b>. Miners show as a <b>shaded country</b>, not a point, so nothing implies a spot inside it, and countries with too few miners to name are merged into an unlabelled bucket with no position at all. Gateway markers sit on the country centroid and show live edge status.</span></span>
           <span class="right">drag · scroll to zoom</span>
         </h2>
         <div class="nm-controls">
@@ -141,7 +141,7 @@
         </div>
         <div class="nm-stage">
           <canvas id="nm-globe"></canvas>
-          <div class="nm-stage-hint">aggregate view · randomized positions</div>
+          <div class="nm-stage-hint">aggregate view · country-level only</div>
           <div class="nm-zoombar"><button id="nm-zin" aria-label="Zoom in">+</button><button id="nm-zout" aria-label="Zoom out">−</button></div>
           <div class="nm-tip" id="nm-tip"></div>
         </div>
@@ -155,7 +155,7 @@
         <div class="panel-body">
           <div class="nm-legend">
             <div class="nm-lg"><div class="key"><span class="k khub"></span></div><div><div class="name">Hub</div><div class="desc">Central settlement + payout core.</div></div></div>
-            <div class="nm-lg"><div class="key"><span class="k kmn"></span></div><div><div class="name">Miner region</div><div class="desc">One dot per country · size scales with miners.</div></div></div>
+            <div class="nm-lg"><div class="key"><span class="k kmn"></span></div><div><div class="name">Miner region</div><div class="desc">Country shaded by miner count · hover the anchor for the total.</div></div></div>
             <div class="nm-lg"><div class="key"><span class="k knm"></span></div><div><div class="name">Grin node · mainnet</div><div class="desc">P2P peers, last 30d · twinkle = live.</div></div></div>
             <div class="nm-lg"><div class="key"><span class="k knt"></span></div><div><div class="name">Grin node · testnet</div><div class="desc">Testnet peers, same window · ambient.</div></div></div>
             <div class="nm-lg gw-item"><div class="key"><span class="k kgw"></span></div>
@@ -175,7 +175,7 @@
           <h2 class="panel-title">Miners by Country <span class="right">top 10 + others</span></h2>
           <div class="panel-body">
             <div class="nm-donut-wrap"><svg class="nm-donut" id="nm-donut-miners" viewBox="0 0 200 200" role="img" aria-label="Miner distribution by country"></svg><div class="nm-dlegend" id="nm-legend-miners"></div></div>
-            <p class="nm-chart-note">Share of connected miners, grouped by country. Exact counts, randomized map positions — <b>no individual is identifiable</b>.</p>
+            <p class="nm-chart-note">Share of connected miners, grouped by country. Exact counts, country-level location only — <b>no individual is identifiable</b>.</p>
           </div>
         </section>
         <section class="panel">

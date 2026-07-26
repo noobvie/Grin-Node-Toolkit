@@ -19,12 +19,20 @@
  *   .tty            payout teletype log
  */
 
-/* derived chrome tokens (neutral bezels regardless of theme accent) */
+/* derived chrome tokens (neutral bezels regardless of theme accent).
+ * The --rx-shade* / --rx-drop tokens exist so the recessed-instrument look can be
+ * re-tuned per theme family: a hard black inset reads as "machined recess" on a dark
+ * panel but as a dirty grey smear on a white one, so themes.css' light-mode block
+ * overrides these (see "LIGHT-MODE CORRECTIONS" there). Never re-inline an rgba(0,0,0)
+ * shadow here — it would be invisible to that override. */
 body {
   --rx-inset: color-mix(in srgb, var(--bg) 80%, #000);
   --rx-bezel: color-mix(in srgb, var(--text) 16%, var(--bg));
   --rx-bezel-hi: color-mix(in srgb, var(--text) 28%, var(--bg));
   --rx-line: color-mix(in srgb, var(--text) 9%, var(--bg));
+  --rx-shade: rgba(0, 0, 0, .55);       /* deep inset recess (counters, tty, tubes) */
+  --rx-shade-soft: rgba(0, 0, 0, .35);  /* shallow inset (mock form) */
+  --rx-drop: rgba(0, 0, 0, 1);          /* panel drop-shadow ink */
 }
 
 /* ── page head: operator strip (UTC clock + master lamp) ────────────────── */
@@ -108,13 +116,13 @@ body {
   min-width: 0;  /* pair with minmax(0,…) so overflow:auto children clip instead of expanding the panel */
   position: relative; border: 1px solid var(--rx-bezel); border-radius: var(--radius);
   background: linear-gradient(180deg, color-mix(in srgb, var(--bg-elev) 86%, var(--text) 3%), var(--bg-elev));
-  box-shadow: inset 0 1px 0 var(--rx-bezel-hi), 0 10px 30px -18px #000;
+  box-shadow: inset 0 1px 0 var(--rx-bezel-hi), 0 10px 30px -18px var(--rx-drop);
 }
 .panel::before, .panel::after,
 .panel > .screws::before, .panel > .screws::after {
   content: ""; position: absolute; width: 7px; height: 7px; border-radius: 50%;
   background: radial-gradient(circle at 35% 30%, var(--rx-bezel-hi), var(--rx-inset) 70%);
-  box-shadow: inset 0 0 2px #000;
+  box-shadow: inset 0 0 2px var(--rx-shade);
 }
 .panel::before { top: 7px; left: 7px; } .panel::after { top: 7px; right: 7px; }
 .panel > .screws::before { bottom: 7px; left: 7px; } .panel > .screws::after { bottom: 7px; right: 7px; }
@@ -168,7 +176,7 @@ body {
   padding: 10px 8px 9px; font-family: var(--mono); font-size: 10.5px;
   letter-spacing: .12em; text-transform: uppercase;
   color: color-mix(in srgb, var(--text-dim) 45%, var(--bg));
-  background: var(--rx-inset); box-shadow: inset 0 2px 8px rgba(0, 0, 0, .5);
+  background: var(--rx-inset); box-shadow: inset 0 2px 8px var(--rx-shade);
 }
 .lamp small { display: block; font-size: 9px; letter-spacing: .08em; margin-top: 2px; color: inherit; opacity: .8; }
 .lamp.ok {
@@ -220,7 +228,7 @@ body {
 .counters { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
 .counter {
   background: var(--rx-inset); border: 1px solid var(--rx-line); border-radius: 6px;
-  padding: 10px 14px 9px; box-shadow: inset 0 2px 10px rgba(0, 0, 0, .55);
+  padding: 10px 14px 9px; box-shadow: inset 0 2px 10px var(--rx-shade);
   /* min-width:0 lets the grid item shrink to its track; overflow guards against any
      value ever spilling the tile; container-type sizes the readout to THIS tile's
      width (cqw) so a long value like block height self-shrinks instead of overflowing. */
@@ -315,7 +323,7 @@ body {
   position: absolute; pointer-events: none; display: none; z-index: 5;
   background: var(--rx-inset); border: 1px solid var(--rx-bezel); border-radius: 5px;
   padding: 6px 10px; font-family: var(--mono); font-size: 12px; color: var(--accent);
-  white-space: nowrap; box-shadow: 0 6px 18px rgba(0, 0, 0, .55); font-variant-numeric: tabular-nums;
+  white-space: nowrap; box-shadow: 0 6px 18px var(--rx-shade); font-variant-numeric: tabular-nums;
 }
 .chart-tip .t { color: var(--text-mute); }
 .chart-empty { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; color: var(--text-mute); font-family: var(--mono); font-size: 12px; letter-spacing: .12em; }
@@ -425,7 +433,7 @@ body {
   padding: 11px 14px; background: var(--rx-inset);
   border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--bg)); border-radius: 5px;
   color: var(--accent); text-shadow: 0 0 8px var(--glow); word-break: break-all;
-  box-shadow: inset 0 2px 10px rgba(0, 0, 0, .55);
+  box-shadow: inset 0 2px 10px var(--rx-shade);
 }
 .patch-meta { font-family: var(--mono); font-size: 11.5px; color: var(--text-mute); margin-top: 8px; letter-spacing: .04em; font-variant-numeric: tabular-nums; }
 .patch-note { margin-top: 14px; font-size: 13px; color: var(--text-dim); line-height: 1.75; }
@@ -442,7 +450,7 @@ body {
    old .miner-guide <details> chrome was dropped with the disclosure (2026-07-19). */
 .mform {
   margin-top: 12px; max-width: 560px; border: 1px solid var(--rx-line); border-radius: 6px;
-  background: var(--rx-inset); overflow: hidden; box-shadow: inset 0 2px 10px rgba(0, 0, 0, .35);
+  background: var(--rx-inset); overflow: hidden; box-shadow: inset 0 2px 10px var(--rx-shade-soft);
 }
 .mform-head {
   display: flex; align-items: baseline; justify-content: space-between; gap: 10px; flex-wrap: wrap;
@@ -509,7 +517,7 @@ body {
 .rod .tube {
   width: 26px; height: 120px; border-radius: 6px; position: relative; overflow: hidden;
   background: var(--rx-inset); border: 1px solid var(--rx-line);
-  box-shadow: inset 0 2px 10px rgba(0, 0, 0, .6);
+  box-shadow: inset 0 2px 10px var(--rx-shade);
 }
 .rod .fill {
   position: absolute; left: 2px; right: 2px; bottom: 2px; border-radius: 4px; min-height: 3px;
@@ -532,7 +540,7 @@ body {
 /* ── payout teletype ────────────────────────────────────────────────────── */
 .tty {
   background: var(--rx-inset); border: 1px solid var(--rx-line); border-radius: 6px;
-  box-shadow: inset 0 2px 12px rgba(0, 0, 0, .55);
+  box-shadow: inset 0 2px 12px var(--rx-shade);
   padding: 13px 16px; font-family: var(--mono); font-size: 12px; line-height: 1.9;
   color: var(--text-dim); height: 172px; overflow: hidden; position: relative;
   font-variant-numeric: tabular-nums;

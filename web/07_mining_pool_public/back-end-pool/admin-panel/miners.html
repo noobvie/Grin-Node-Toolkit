@@ -17,14 +17,14 @@
         <span id="miner-summary" style="font-size:.82rem;color:var(--text-dim);font-weight:400;margin-left:.8rem;"></span>
       </h2>
 
+      <!-- The address filter now lives in the AdminTable tools bar directly above the
+           table (with the row count + paging); only the state toggles stay here. -->
       <div style="display:flex;gap:.6rem;align-items:center;margin-bottom:.8rem;flex-wrap:wrap;">
-        <input type="text" id="search-input" placeholder="Filter by address…"
-               style="max-width:320px;" oninput="filterMiners()">
         <label style="display:flex;align-items:center;gap:.4rem;font-size:.85rem;margin-bottom:0;">
-          <input type="checkbox" id="online-only" onchange="filterMiners()"> Online only
+          <input type="checkbox" id="online-only" onchange="filterMiners(true)"> Online only
         </label>
         <label style="display:flex;align-items:center;gap:.4rem;font-size:.85rem;margin-bottom:0;">
-          <input type="checkbox" id="banned-only" onchange="filterMiners()"> Banned only
+          <input type="checkbox" id="banned-only" onchange="filterMiners(true)"> Banned only
         </label>
       </div>
 
@@ -83,6 +83,39 @@ function shortAddr(a) {
   return a.length > 22 ? a.slice(0, 12) + '…' + a.slice(-7) : a;
 }
 
+// Address search + 20-per-page paging come from AdminTable (admin-shell.js); the
+// Online/Banned toggles stay page-side and feed it a pre-filtered array. The list can
+// run to 500 accounts, which is exactly the case that used to render in one dump.
+const minersTable = AdminTable.create({
+  tbody: 'miners-tbody',
+  search: 'Filter by address…',
+  empty: 'No miners found.',
+  note: 'Miner accounts are kept permanently — the share and hashrate history behind ' +
+        'them is pruned per <a href="/admin/settings-database.html">Settings → Database</a>. ' +
+        'Top 500 accounts by balance.',
+  text: m => m.grin_address || '',
+  row: m => {
+    const onlineBadge = m.is_online
+      ? '<span class="badge badge-ok">Online</span>'
+      : '<span class="badge badge-dim">Offline</span>';
+    const bannedBadge = m.is_banned
+      ? ` <span class="badge badge-error" title="${escHtml(m.ban_reason || '')}">Banned</span>` : '';
+    const action = m.is_banned
+      ? `<button class="btn-icon" onclick="unbanMiner('${escHtml(m.grin_address)}')" data-tip="Unban this miner" aria-label="Unban this miner">✅</button>`
+      : `<button class="btn-icon btn-icon-danger" onclick="banMiner('${escHtml(m.grin_address)}')" data-tip="Ban this miner" aria-label="Ban this miner">🚫</button>`;
+    return `<tr>
+      <td><span class="mono" title="${escHtml(m.grin_address)}">${escHtml(shortAddr(m.grin_address))}</span>${bannedBadge}</td>
+      <td>${onlineBadge}</td>
+      <td class="mono">${fmtGrin(m.balance)}</td>
+      <td class="mono">${fmtGrin(m.balance_locked)}</td>
+      <td class="mono">${m.shares_count != null ? m.shares_count : 0}</td>
+      <td class="mono">${fmtGrin(m.total_paid)}</td>
+      <td>${timeAgo(m.last_share_at)}</td>
+      <td><div class="row-actions">${action}</div></td>
+    </tr>`;
+  }
+});
+
 async function loadMiners() {
   try {
     const data = await API.get('/api/admin/miners?limit=500');
@@ -93,49 +126,20 @@ async function loadMiners() {
       `${_allMiners.length} total · ${online} online · ${banned} banned`;
     filterMiners();
   } catch (err) {
-    document.getElementById('miners-tbody').innerHTML =
-      `<tr class="empty-row"><td colspan="8">Failed to load: ${escHtml(err.message)}</td></tr>`;
+    minersTable.setError(err.message);
   }
 }
 
-function filterMiners() {
-  const q          = document.getElementById('search-input').value.toLowerCase();
+// `reset` is passed only when a toggle changed — the 30s refresh must not yank the
+// operator back to page 1 while they are reading page 4.
+function filterMiners(reset) {
   const onlineOnly = document.getElementById('online-only').checked;
   const bannedOnly = document.getElementById('banned-only').checked;
   let filtered = _allMiners;
   if (onlineOnly) filtered = filtered.filter(m => m.is_online);
   if (bannedOnly) filtered = filtered.filter(m => m.is_banned);
-  if (q) filtered = filtered.filter(m => (m.grin_address || '').toLowerCase().includes(q));
-  renderMiners(filtered);
-}
-
-function renderMiners(miners) {
-  const tbody = document.getElementById('miners-tbody');
-  if (!miners.length) {
-    tbody.innerHTML = '<tr class="empty-row"><td colspan="8">No miners found.</td></tr>';
-    return;
-  }
-  const sorted = [...miners].sort((a, b) => (b.balance || 0) - (a.balance || 0));
-  tbody.innerHTML = sorted.map(m => {
-    const onlineBadge = m.is_online
-      ? '<span class="badge badge-ok">Online</span>'
-      : '<span class="badge badge-dim">Offline</span>';
-    const bannedBadge = m.is_banned
-      ? ` <span class="badge badge-error" title="${escHtml(m.ban_reason || '')}">Banned</span>` : '';
-    const action = m.is_banned
-      ? `<button class="btn-icon" onclick="unbanMiner('${escHtml(m.grin_address)}')" data-tip="Unban this miner" aria-label="Unban this miner">✅</button>`
-      : `<button class="btn-icon btn-icon-danger" onclick="banMiner('${escHtml(m.grin_address)}')" data-tip="Ban this miner" aria-label="Ban this miner">🚫</button>`;
-    return `<tr class="${m.is_banned ? '' : ''}">
-      <td><span class="mono" title="${escHtml(m.grin_address)}">${escHtml(shortAddr(m.grin_address))}</span>${bannedBadge}</td>
-      <td>${onlineBadge}</td>
-      <td class="mono">${fmtGrin(m.balance)}</td>
-      <td class="mono">${fmtGrin(m.balance_locked)}</td>
-      <td class="mono">${m.shares_count != null ? m.shares_count : 0}</td>
-      <td class="mono">${fmtGrin(m.total_paid)}</td>
-      <td>${timeAgo(m.last_share_at)}</td>
-      <td><div class="row-actions">${action}</div></td>
-    </tr>`;
-  }).join('');
+  minersTable.setRows([...filtered].sort((a, b) => (b.balance || 0) - (a.balance || 0)),
+                      { reset: reset === true });
 }
 
 function flash(msg, isErr) {

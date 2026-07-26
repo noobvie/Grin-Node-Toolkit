@@ -1638,21 +1638,22 @@ function setupRoutes() {
   // Use /api/admin/withdrawals to view and manage withdrawal scheduler instead.
   // For testing: use withdrawal_scheduler.initiateWithdrawal() directly in backend tests.
 
+  // `limit` is honoured (1–500, default 100). The dashboard's "Recent Withdrawals" widget
+  // asks for 10 and was silently getting the full 100 back — every admin page load shipped
+  // and rendered 10× the rows it displays.
   app.get('/api/admin/withdrawals', secureAdmin, (req, res) => {
     try {
       const status = req.query.status || null;
+      const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 100, 1), 500);
 
-      let stmt;
       if (status) {
-        stmt = db.prepare(`
-          SELECT * FROM withdrawals WHERE status = ? ORDER BY created_at DESC LIMIT 100
-        `);
-        res.json(stmt.all(status));
+        res.json(db.prepare(`
+          SELECT * FROM withdrawals WHERE status = ? ORDER BY created_at DESC LIMIT ?
+        `).all(status, limit));
       } else {
-        stmt = db.prepare(`
-          SELECT * FROM withdrawals ORDER BY created_at DESC LIMIT 100
-        `);
-        res.json(stmt.all());
+        res.json(db.prepare(`
+          SELECT * FROM withdrawals ORDER BY created_at DESC LIMIT ?
+        `).all(limit));
       }
     } catch (err) {
       res.status(500).json({ error: err.message });
@@ -2153,9 +2154,13 @@ function setupRoutes() {
         tipHeight = (st && st.ok && st.height) || 0;
       } catch (e) { tipHeight = 0; }
 
-      const grinscanBase = config.network === 'testnet'
-        ? 'https://testnet.grinscan.org/block'
-        : 'https://grinscan.org/block';
+      // Must match the client-side builders in /js/branding.js + admin-panel/admin-shell.js:
+      // the two explorers do NOT share a path scheme. Mainnet → scan.grin.money (06d Tiny
+      // Explorer, /block/<h>); testnet → test.grinscan.org (06b sibling, /block.html?h=<h>).
+      // `testnet.grinscan.org` does not resolve — never use it.
+      const explorerBlockUrl = (height) => (config.network === 'testnet'
+        ? `https://test.grinscan.org/block.html?h=${encodeURIComponent(height)}`
+        : `https://scan.grin.money/block/${encodeURIComponent(height)}`);
 
       const blocks = rows.map((b) => {
         const confirmations = tipHeight ? Math.max(0, tipHeight - b.height) : 0;
@@ -2165,7 +2170,7 @@ function setupRoutes() {
           ...b,
           confirmations,
           blocks_to_maturity,
-          grinscan_url: `${grinscanBase}/${b.height}`,
+          grinscan_url: explorerBlockUrl(b.height),
         };
       });
 
@@ -3054,8 +3059,11 @@ function setupRoutes() {
   //     Each country is assigned to the gateway most of its miners route through. When
   //     geoip-lite isn't installed (miner_geo empty) we fall back to the GATEWAY's country so
   //     the map still renders; geo_source reports which path was taken.
-  //   · positions are RANDOMIZED within each country server-side (geoip.placeInCountry) — a dot
-  //     is never a real location or IP, and exact per-miner coordinates are never stored.
+  //   · positions are COUNTRY CENTROIDS (geoip.countryCentroid) — every marker here is an
+  //     aggregate whose country is published in this same payload, so scattering the point
+  //     would hide nothing and could only land the dot in the wrong country. The map draws
+  //     miner countries as a filled polygon; the centroid is just the label/hover anchor.
+  //     Exact per-miner coordinates are never resolved or stored — country is all we hold.
   app.get('/api/pool/topology', rateLimiter.middleware('public'), async (req, res) => {
     try {
       if (!networkMapPublic()) return res.status(404).json({ error: 'not_found' });
@@ -3099,13 +3107,17 @@ function setupRoutes() {
         return hasMiners ? 'connected' : 'handshake';
       };
 
-      const gateways = [], gwByRegion = {};
+      // Markers sit on the country centroid. `perCountry` counts how many we've already
+      // placed in each country so the 2nd+ marker there (a second gateway, or the hub next
+      // to a gateway) gets a small de-stack nudge instead of landing on the same pixel.
+      const gateways = [], gwByRegion = {}, perCountry = {};
+      const nudgeFor = (cc) => (cc ? (perCountry[cc] = (perCountry[cc] || 0) + 1) - 1 : 0);
       for (const loc of locations) {
         const a = byRegion.get(loc.region) || { miners: 0, sumdiff: 0, last_share: 0 };
         const shareAge = a.last_share ? (nowS - a.last_share) : null;
         const status = statusOf(loc.region, a.miners > 0, shareAge, !!loc.stratum_url);
         const gps = (a.sumdiff * CYCLE) / (WINDOW_S * SOL);
-        const pos = geoip.placeInCountry(loc.country_code, 'gw:' + loc.region);
+        const pos = geoip.countryCentroid(loc.country_code, nudgeFor(loc.country_code));
         const g = {
           region: loc.region, label: loc.label || loc.region,
           country: loc.country || (loc.country_code ? geoip.countryName(loc.country_code) : null),
@@ -3150,7 +3162,12 @@ function setupRoutes() {
       for (const c of countries.values()) (c.miners >= kMin ? named : thin).push(c);
       const countryList = named.map(c => {
         const gw = Object.entries(c.votes).sort((a, b) => b[1] - a[1])[0][0];
-        const pos = geoip.placeInCountry(c.cc, 'mn:' + c.cc);
+        // Nudged off the same counter the gateways used: a gateway's own country almost
+        // always has miners too, and an un-nudged marker would land on the exact pixel of
+        // that gateway — the hit-test keeps the first match, so the miner tooltip would be
+        // unreachable and the region→gateway arc would collapse to a zero-length spike.
+        // The index is stable per country (= how many gateways precede it there).
+        const pos = geoip.countryCentroid(c.cc, nudgeFor(c.cc));
         return {
           country_code: c.cc, country: c.name, miners: c.miners, gateway: gw,
           lat: pos ? pos.lat : null, lng: pos ? pos.lng : null
@@ -3169,7 +3186,7 @@ function setupRoutes() {
         || (localRegion && gwByRegion[localRegion] && gwByRegion[localRegion].country_code)
         || (gateways.filter(g => g.online).sort((a, b) => b.miners - a.miners)[0] || {}).country_code
         || null;
-      const hubPos = geoip.placeInCountry(hubCc, 'hub');
+      const hubPos = geoip.countryCentroid(hubCc, nudgeFor(hubCc));
       const hub = {
         label: config.pool_name || config.name || 'Pool Hub',
         country_code: hubCc, country: hubCc ? geoip.countryName(hubCc) : null,
@@ -3196,7 +3213,7 @@ function setupRoutes() {
   // ─── Network map: Grin P2P peers by country (rolling window) ────────────────────────────
   // Aggregates network_peers (populated by the peer-snapshot collector — COUNTRY ONLY, no IPs)
   // over the last ?window days (default 30, max 90). Returns per-country counts (+ main/test
-  // split) and a capped set of RANDOMIZED twinkle points for the globe. Empty when geoip-lite
+  // split) and a capped set of scattered-in-country twinkle points for the globe. Empty when geoip-lite
   // isn't installed or the node has no peers yet (page then shows its illustrative fallback).
   app.get('/api/network/peers', rateLimiter.middleware('public'), (req, res) => {
     try {
@@ -3211,14 +3228,17 @@ function setupRoutes() {
         GROUP BY country_code ORDER BY peers DESC`).all(cutoff);
 
       // k-anonymity floor. Applied BEFORE the twinkle points are built, not just to the
-      // country list — a point is placed at its country's (randomized) position, so emitting
-      // points for a thin country would re-expose exactly what the floor is hiding.
+      // country list — a point is placed inside its own country, so emitting points for a
+      // thin country would re-expose exactly what the floor is hiding.
       const kMin = minBucket();
       const rows = allRows.filter(r => r.peers >= kMin);
       const thinRows = allRows.filter(r => r.peers < kMin);
 
+      // Country rows are aggregates → centroid (the map uses them as label anchors). Only the
+      // twinkle points below are scattered, because there the spread IS the visual: many dots
+      // means many nodes. Scatter half-extents are per-country (geoip COUNTRIES[].s).
       const countries = rows.map(r => {
-        const pos = geoip.placeInCountry(r.country_code, 'peer:' + r.country_code);
+        const pos = geoip.countryCentroid(r.country_code);
         return {
           country_code: r.country_code, country: r.country || geoip.countryName(r.country_code),
           peers: r.peers, main: r.main, test: r.test,
@@ -3724,7 +3744,10 @@ function setupRoutes() {
   // refresh tokens for the account; live access tokens still expire within their 1h TTL).
   app.get('/api/admin/security/login-history', secureAdmin, (req, res) => {
     try {
-      const limit = Math.min(parseInt(req.query.limit || 50, 10), 200);
+      // Clamped low as well as high: a negative LIMIT means "no limit" to SQLite, and a
+      // non-numeric one binds as NaN and throws — so ?limit=-1 quietly returned the whole
+      // audit table. Same idiom as /api/admin/withdrawals.
+      const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 50, 1), 200);
       const rows = db.prepare(`
         SELECT a.id, a.action, a.ip, a.created_at, u.username
         FROM admin_audit_log a LEFT JOIN users u ON u.id = a.admin_id

@@ -133,7 +133,12 @@
             <label>Themes visitors can switch between</label>
             <div class="helper-text" style="margin-bottom:.6rem;">
               Tick the themes to offer in the public switcher. The default theme above is always
-              included automatically.
+              included automatically. Visitors see a palette button in the header that cycles
+              through this list; with fewer than two themes ticked, no button is shown.
+            </div>
+            <div class="helper-text" id="enabled-themes-off-note" style="display:none;margin-bottom:.6rem;">
+              <b>Switching is off</b> — this list has no effect until you tick the box above.
+              Your picks are kept.
             </div>
             <div id="enabled-themes-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:.5rem;"></div>
             <input type="hidden" id="enabled_themes" name="enabled_themes">

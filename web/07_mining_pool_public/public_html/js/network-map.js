@@ -10,8 +10,12 @@
  * miners is real data (hub + gateway·offline + node twinkle), not "empty". The small
  * illustrative sample topology is used ONLY when the topology feed is unreachable; the
  * peer layer falls back to sample twinkles until the peer collector runs (noted on-page).
- * All positions come from the server RANDOMIZED within each country — never a real
- * location or IP (see back-end lib/geoip.js).
+ * LOCATION PRECISION: country, and nothing finer — no coordinate or IP is ever resolved.
+ * Miner countries are drawn as the FILLED COUNTRY (fill intensity = miner count), so the
+ * shape itself states the precision we have and there is no point position to misread; the
+ * centroid marker is only a label/hover anchor. A country with no polygon on file, or one
+ * too small to read at the current zoom, falls back to a size-scaled dot on its centroid.
+ * Hub and gateways sit on the country centroid (see back-end lib/geoip.js).
  *
  * Canvas colours are intentionally the dark Reactor palette (the phosphor glow only
  * reads on black); the surrounding panels use the theme tokens and reskin normally.
@@ -127,7 +131,7 @@
   let seed = 20260718; const rand = () => { seed = (seed*1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
 
   // ── state populated from the API (or fallback) ─────────────────────────────
-  let HUB = null, GATEWAYS = [], gwByRegion = {}, REGIONS = [], PEERS = [], NODES = [], COUNTRIES = [];
+  let HUB = null, GATEWAYS = [], gwByRegion = {}, REGIONS = [], PEERS = [], NODES = [], COUNTRIES = [], POLY_BY_NAME = {};
   let LAND = [], MERIDIANS = [], PARALLELS = [];
 
   function buildStaticGeometry() {
@@ -138,8 +142,9 @@
       const rv = rings.map(r => r.map(([lng,lat]) => toVec(lat,lng)));
       let sx=0,sy=0,sz=0; rv.forEach(r=>r.forEach(v=>{ sx+=v[0]; sy+=v[1]; sz+=v[2]; }));
       const m = Math.hypot(sx,sy,sz)||1;
-      return { name, rings: rv, centroid:[sx/m,sy/m,sz/m], flag: FLAGS[name], border: HOST_BORDER[name] || "rgba(140,205,235,0.45)", host: !!HOST_BORDER[name], active: false };
+      return { name, rings: rv, centroid:[sx/m,sy/m,sz/m], flag: FLAGS[name], border: HOST_BORDER[name] || "rgba(140,205,235,0.45)", host: !!HOST_BORDER[name], active: false, miners: 0, share: 0 };
     });
+    POLY_BY_NAME = {}; COUNTRIES.forEach(c => { POLY_BY_NAME[c.name] = c; });
   }
 
   function ingest(topo, peers) {
@@ -150,9 +155,14 @@
       miners: g.miners || 0, _feed: g.miners || 0, v: toVec(g.lat, g.lng)
     }));
     gwByRegion = {}; GATEWAYS.forEach(g => { gwByRegion[g.region] = g; });
+    // Miner countries. `poly` is the country's own outline when we ship one — then the FILLED
+    // COUNTRY carries the miner count (drawCountries) and the centroid marker demotes to a
+    // small label/hover anchor. Countries with no polygon on file keep the sized dot, which is
+    // the only honest option there: a dot that says "this country", not "this spot".
     REGIONS = (topo.countries || []).filter(c => c.lat != null).map(c => {
       const gw = gwByRegion[c.gateway] || GATEWAYS[0] || null;
       return { role: 'region', name: c.country, cc: c.country_code, n: c.miners, gw: c.gateway,
+        poly: POLY_BY_NAME[c.country] || null,
         v: toVec(c.lat, c.lng), gwv: gw ? gw.v : (HUB ? HUB.v : toVec(20,0)), gwStatus: gw ? gw.status : 'connected' };
     });
     NODES = [ HUB, ...GATEWAYS, ...REGIONS ];
@@ -167,7 +177,11 @@
     (topo.gateways || []).forEach(g => addName(g.country));
     (topo.countries || []).forEach(c => addName(c.country));
     ((peers && peers.countries) || []).forEach(c => addName(c.country));
-    COUNTRIES.forEach(c => { c.active = active.has(c.name); });
+    // Miner load per country → choropleth weight. `share` is sqrt-scaled against the busiest
+    // country so a single dominant country doesn't flatten everyone else to invisible.
+    const peak = REGIONS.reduce((m, r) => Math.max(m, r.n), 0);
+    COUNTRIES.forEach(c => { c.active = active.has(c.name); c.miners = 0; c.share = 0; });
+    REGIONS.forEach(r => { if (r.poly) { r.poly.miners = r.n; r.poly.share = peak > 0 ? Math.sqrt(r.n / peak) : 0; } });
 
     // peers → twinkle points. Prefer server-positioned points; else scatter on land.
     PEERS = [];
@@ -243,8 +257,12 @@
   const dotSize = () => Math.max(1, Math.min(2.6, 1.05*zoom));
   function drawLand() { const s=dotSize(); for (const v of LAND){ const p=project(v); if (p.z<=0.02) continue; ctx.fillStyle="rgba(88,138,124,"+(0.09+0.22*p.z).toFixed(3)+")"; ctx.fillRect(p.x-s/2,p.y-s/2,s,s); } }
   function drawGrat(sets) { ctx.lineWidth=1; for (const pts of sets){ let st=false; for (let i=0;i<pts.length;i++){ const p=project(pts[i]); if (p.z>0){ ctx.strokeStyle="rgba(93,255,115,"+(0.04+0.09*p.z).toFixed(3)+")"; if (!st){ ctx.beginPath(); ctx.moveTo(p.x,p.y); st=true; } else ctx.lineTo(p.x,p.y); } else if (st){ ctx.stroke(); st=false; } } if (st) ctx.stroke(); } }
+  // Screen size below which a country outline is too small to read as a shape (Singapore,
+  // the Netherlands at low zoom). Those keep the sized dot instead — see drawNode.
+  const POLY_MIN_PX = 16;
   function drawCountries() {
     for (const c of COUNTRIES) {
+      c._filled = false;
       const cp = project(c.centroid); if (cp.z < 0.26) continue;
       let ok = true, minx=1e9,miny=1e9,maxx=-1e9,maxy=-1e9;
       const proj = c.rings.map(r => r.map(v => { const p=project(v); if (p.z < -0.02) ok=false; if (p.x<minx)minx=p.x; if (p.x>maxx)maxx=p.x; if (p.y<miny)miny=p.y; if (p.y>maxy)maxy=p.y; return p; }));
@@ -255,9 +273,25 @@
         trace(); ctx.lineWidth=1; ctx.strokeStyle="rgba(140,205,235,0.18)"; ctx.stroke();
         continue;
       }
-      if (opts.flags && c.flag) { ctx.save(); trace(); ctx.clip(); ctx.globalAlpha=0.5; c.flag(minx,miny,maxx-minx,maxy-miny); ctx.globalAlpha=1; ctx.restore(); }
-      else { ctx.save(); trace(); ctx.clip(); ctx.fillStyle="rgba(90,209,255,0.14)"; ctx.fillRect(minx,miny,maxx-minx,maxy-miny); ctx.restore(); }
-      trace(); ctx.lineWidth = c.host ? 1.6 : 1.2; ctx.strokeStyle = c.host ? c.border : "rgba(150,220,255,0.6)"; if (c.host){ ctx.shadowColor=c.border; ctx.shadowBlur=6; } ctx.stroke(); ctx.shadowBlur=0;
+      // The COUNTRY is the miner marker: fill intensity scales with how many miners are in it.
+      // Drawing the real outline instead of a dot means the shape itself states the precision
+      // we actually have — country, nothing finer — so there is no position to misread.
+      // Floor sits ABOVE the 0.14 no-miner activity tint below, or a country with a few
+      // miners would render FAINTER than one with none — the ramp has to stay monotone
+      // against its own baseline, not just against itself.
+      const wash = c.miners > 0 ? 0.15 + 0.27 * c.share : 0;
+      c._filled = Math.max(maxx-minx, maxy-miny) >= POLY_MIN_PX;
+      ctx.save(); trace(); ctx.clip();
+      if (opts.flags && c.flag) { ctx.globalAlpha=0.5; c.flag(minx,miny,maxx-minx,maxy-miny); ctx.globalAlpha=1; }
+      else if (!wash) { ctx.fillStyle="rgba(90,209,255,0.14)"; ctx.fillRect(minx,miny,maxx-minx,maxy-miny); }
+      if (wash) { ctx.fillStyle="rgba(90,209,255,"+wash.toFixed(3)+")"; ctx.fillRect(minx,miny,maxx-minx,maxy-miny); }
+      ctx.restore();
+      trace();
+      ctx.lineWidth = c.host ? 1.6 : (c.miners > 0 ? 1.2 + 0.8*c.share : 1.2);
+      ctx.strokeStyle = c.host ? c.border : (c.miners > 0 ? "rgba(120,225,255,"+(0.55+0.4*c.share).toFixed(3)+")" : "rgba(150,220,255,0.6)");
+      if (c.host){ ctx.shadowColor=c.border; ctx.shadowBlur=6; }
+      else if (c.miners > 0){ ctx.shadowColor="rgba(90,209,255,0.8)"; ctx.shadowBlur=4+6*c.share; }
+      ctx.stroke(); ctx.shadowBlur=0;
     }
   }
   function drawPeers(now) { for (const pr of PEERS){ const p=project(pr.v); if (p.z<=0.03) continue; let a = pr.blink ? (Math.sin(now*pr.spd*2.2+pr.phase)>0.4?1:0.12) : (0.35+0.4*(0.5+0.5*Math.sin(now*pr.spd+pr.phase))); a *= Math.min(1,p.z*1.4); const rgb = pr.net==="main"?"93,255,115":"255,79,216"; ctx.fillStyle="rgba("+rgb+","+(a*0.85).toFixed(3)+")"; ctx.shadowColor="rgba("+rgb+","+a.toFixed(3)+")"; ctx.shadowBlur=10*a; ctx.beginPath(); ctx.arc(p.x,p.y,3.2,0,7); ctx.fill(); ctx.shadowBlur=0; } }
@@ -276,7 +310,10 @@
     const pulse=1+0.12*Math.sin(now/500); let rad, col, glowCol, ring=false;
     if (n.role==="hub"){ rad=8*pulse; col="#5dff73"; glowCol="rgba(93,255,115,0.9)"; ring=true; }
     else if (n.role==="gw"){ if (n.status==="offline"){ rad=5; col="#ff5a52"; glowCol="rgba(255,90,82,0.7)"; } else if (n.status==="checking"){ rad=5; col="#8b98a5"; glowCol="rgba(139,152,165,0.45)"; } else if (n.status==="handshake"){ rad=5; col="#ffb63d"; glowCol="rgba(255,182,61,0.55)"; } else { rad=5.5*(1+0.08*Math.sin(now/420)); col="#ffb63d"; glowCol="rgba(255,182,61,0.85)"; ring=true; } }
-    else { rad=3.4+Math.sqrt(Math.max(1,n.n))*0.7; col="#5ad1ff"; glowCol="rgba(90,209,255,0.7)"; }
+    // Miner region: when its country is drawn as a filled shape this frame, the polygon
+    // already carries the count — the marker shrinks to a plain anchor for label and hover.
+    // Otherwise (no polygon on file, or too small on screen) it stays the sized dot.
+    else { const anchored = !!(n.poly && n.poly._filled); rad = anchored ? 2.6 : 3.4+Math.sqrt(Math.max(1,n.n))*0.7; col="#5ad1ff"; glowCol="rgba(90,209,255,"+(anchored?0.45:0.7)+")"; }
     if (n===hoverNode) rad*=1.5;
     ctx.globalAlpha=fade; ctx.shadowColor=glowCol; ctx.shadowBlur=(n===hoverNode)?20:12; ctx.fillStyle=col; ctx.beginPath(); ctx.arc(p.x,p.y,rad,0,7); ctx.fill(); ctx.shadowBlur=0;
     if (n.role==="gw" && n.status==="offline"){ ctx.globalAlpha=fade; ctx.strokeStyle="#ff9a95"; ctx.lineWidth=1.4; const q=rad*0.5; ctx.beginPath(); ctx.moveTo(p.x-q,p.y-q); ctx.lineTo(p.x+q,p.y+q); ctx.moveTo(p.x+q,p.y-q); ctx.lineTo(p.x-q,p.y+q); ctx.stroke(); }

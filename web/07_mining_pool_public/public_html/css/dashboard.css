@@ -180,16 +180,34 @@ header {
 .header-nav:has(.nav-group.open) { overflow: visible; }
 .nav-right, .header-buttons { display: flex; align-items: center; gap: 10px; }
 .theme-switcher { display: flex; align-items: center; color: var(--accent); }
-/* Theme control = a single palette icon that cycles enabled themes on click. */
+/* Theme control = a single palette icon that cycles enabled themes on click.
+   Shape: a rounded SQUARE (radius matches --radius-sm, same language as the nav chips
+   and .btn.sm), not a circle. A 50% radius only looks right when the box is exactly
+   square, and this button sits in a wrapping flex header where a stray background or a
+   shrink would show up as a visibly lopsided oval. So: fixed 36px box, flex:none so it
+   can never be compressed, aspect-ratio as a second guard, and a shape that stays
+   correct even if it is. (Want the circle back? border-radius: 50% on this one rule.) */
 .theme-cycle-btn {
     display: inline-flex; align-items: center; justify-content: center;
-    width: 38px; height: 38px; padding: 0; cursor: pointer;
-    border: 1px solid var(--border); border-radius: 50%;
+    width: 36px; height: 36px; aspect-ratio: 1; flex: 0 0 auto;
+    padding: 0; cursor: pointer;
+    border: 1px solid var(--border); border-radius: var(--radius-sm);
     background: var(--bg-elev2); color: var(--accent); line-height: 1;
+    transition: background .14s ease, border-color .14s ease, color .14s ease;
 }
 .theme-cycle-btn:hover { background: var(--accent-soft); border-color: var(--accent); }
-/* Kill the default square focus outline (it framed the round button when clicking to
-   switch); replace with a circular ring that follows the 50% radius. */
+.theme-cycle-btn:active { transform: translateY(1px); }
+/* Touch: 36px is a comfortable MOUSE target but below the 44×44 CSS-px minimum in
+   WCAG 2.5.5 / Apple HIG. Grow it for touch rather than bloating the desktop control —
+   the header's min-height is 60px, so this costs no layout.
+   Both conditions on purpose: `pointer: coarse` is the correct signal but some Android
+   browsers still report `fine`, and it is not emulated by a plain headless run, so the
+   width clause makes the rule deterministic and testable. */
+@media (pointer: coarse), (max-width: 640px) {
+    .theme-cycle-btn { width: 44px; height: 44px; }
+}
+/* Kill the default focus outline and replace it with a ring that follows the button's
+   own radius, so it frames the square instead of boxing it. */
 .theme-cycle-btn:focus { outline: none; }
 .theme-cycle-btn:focus-visible { box-shadow: 0 0 0 3px var(--accent-soft); border-color: var(--accent); }
 .theme-cycle-btn .theme-cycle-ico { display: inline-flex; align-items: center; justify-content: center; line-height: 1; }
@@ -627,9 +645,12 @@ footer a:hover { color: var(--accent); }
 }
 .ad-text-head { font: 700 20px/1.15 var(--mono, ui-monospace, monospace); letter-spacing: .5px; color: var(--text, #e6efe9); }
 .ad-text-body { font: 400 13px/1.45 var(--mono, ui-monospace, monospace); color: var(--text-dim, #8a978f); flex: 1 1 220px; min-width: 170px; }
+/* CTA follows the theme accent. It used to be a hard-coded Reactor-green gradient with
+   near-black ink, which stayed lurid green on every other theme and — on the light
+   themes — put a #07090c label on a colour the palette never chose. */
 .ad-text-cta {
   font: 700 13px var(--mono, ui-monospace, monospace); letter-spacing: .5px; white-space: nowrap;
-  color: #07090c; background: linear-gradient(180deg, #6aff80, #3fd957);
+  color: var(--btn-text, #07090c); background: var(--accent, #3fd957);
   padding: 9px 16px; border-radius: 6px;
 }
 a.ad-text-card:hover .ad-text-cta { filter: brightness(1.07); }

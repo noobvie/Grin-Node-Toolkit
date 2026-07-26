@@ -183,10 +183,15 @@
   }
 
   // Theme-aware accent: read the CSS custom property the themes set, fall back to a green.
+  // Read from BODY, not documentElement. dashboard.css declares the whole token bridge
+  // (--accent/--primary/…) on `body` precisely so themes.css can remap it per body class;
+  // :root carries only the raw --dark-*/--neon-* inputs, so a :root lookup returned '' and
+  // every chart on every theme silently fell back to the hard-coded #7cb342.
   function accent() {
     try {
-      const c = getComputedStyle(document.documentElement).getPropertyValue('--accent') ||
-                getComputedStyle(document.documentElement).getPropertyValue('--primary');
+      const el = document.body || document.documentElement;
+      const cs = getComputedStyle(el);
+      const c = cs.getPropertyValue('--accent') || cs.getPropertyValue('--primary');
       return (c && c.trim()) || '#7cb342';
     } catch (e) { return '#7cb342'; }
   }

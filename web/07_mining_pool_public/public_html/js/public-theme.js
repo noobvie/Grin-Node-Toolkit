@@ -45,6 +45,13 @@
     { key: 'comic',     label: 'Comic Pop 💥',      group: 'Fun' }
   ];
 
+  // Themes with a LIGHT page surface. Consumers that must react to "am I on a light
+  // background?" (branding.js picks the light-variant logo from this) read
+  // GriniumTheme.isLight(). Keep in sync with the two selector lists in the
+  // "LIGHT-MODE CORRECTIONS" section of css/themes.css — a new light palette belongs in
+  // all three, and only there.
+  var LIGHT_KEYS = ['light', 'spring', 'summer', 'winxp', 'aqua', 'comic'];
+
   var KEYS = THEMES.map(function (t) { return t.key; });
   var BY_KEY = {};
   THEMES.forEach(function (t) { BY_KEY[t.key] = t; });
@@ -119,10 +126,13 @@
     if (!container && create) {
       container = document.createElement('div');
       container.className = 'theme-switcher';
-      // Minimal fixed placement for pages that never had a switcher (login, etc.).
+      // Minimal fixed PLACEMENT only, for pages that never had a switcher (login, etc.).
+      // Deliberately no surface: this used to add a rounded black pill + border, which is
+      // a hardcoded dark chrome that theme CSS cannot override and that looked like a
+      // floating black blob on the light themes. The button inside carries all the
+      // styling (.theme-cycle-btn), so it re-skins with the theme like everywhere else.
       container.style.cssText = 'position:fixed;top:20px;right:20px;z-index:9999;' +
-        'display:flex;align-items:center;padding:6px 8px;border-radius:50px;' +
-        'background:rgba(0,0,0,.55);border:1px solid currentColor;';
+        'display:flex;align-items:center;';
       document.body.appendChild(container);
     }
     return container;
@@ -228,9 +238,18 @@
     applyTheme(initial, false);
   }
 
+  // Is the theme currently on <body> a light-surfaced one? Reads the DOM rather than a
+  // remembered value, so it is correct no matter who applied the class (this module,
+  // branding.js's operator default, or its no-switcher fallback).
+  function isLight(key) {
+    return LIGHT_KEYS.indexOf(normalizeKey(key || currentFromBody())) !== -1;
+  }
+
   window.GriniumTheme = {
     applyTheme: applyTheme,
     applyDefault: applyDefault,
+    isLight: isLight,
+    lightKeys: LIGHT_KEYS.slice(),
     themes: THEMES
   };
 

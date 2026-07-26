@@ -62,28 +62,51 @@
 
   // ── Chain explorer deep-links (window.Explorer) ─────────────────────────────
   // Any block height / hash / kernel / output shown anywhere on a public page links out to a
-  // public Grin chain explorer in a new tab — the miner's independent proof. To spread load
-  // (and not tie the pool to one explorer) each mainnet link randomly picks between grinscan.org
-  // and scan.grin.money; both share the same path scheme (/block/<h>, /kernel/<excess>,
-  // /output/<commit>). scan.grin.money is mainnet-only, so on testnet every link uses
-  // testnet.grinscan.org. Network is resolved from the branding fetch (cfg.connection.network)
-  // and cached in sessionStorage; until then we assume mainnet (the common deployment).
+  // public Grin chain explorer in a new tab — the miner's independent proof.
+  //
+  // ONE deterministic explorer per network — deliberately NOT randomized across two. The
+  // earlier 50/50 rotation assumed the two explorers shared a path scheme; they do not
+  // (verified live 2026-07-25), so every link that landed on grinscan.org 404'd, and the
+  // rotation is what hid it — half the clicks worked. The two schemes:
+  //   scan.grin.money    /block/<h>           /kernel/<excess>          /output/<commit>
+  //   *.grinscan.org     /block.html?h=<h>    /kernel.html?ex=<excess>  /output.html?c=<commit>
+  // Both accept a height OR a 64-hex block hash in the block slot.
+  //
+  // Default: mainnet → scan.grin.money (06d Tiny Explorer), testnet → test.grinscan.org
+  // (06b GrinScan's testnet sibling). scan.grin.money is mainnet-only and test.grinscan.org
+  // is testnet-only, so the pair covers both networks with no overlap. NOTE the testnet host
+  // is `test.` — `testnet.grinscan.org` does NOT resolve (that typo made every testnet link
+  // dead). To switch explorer, change DEFAULT_EXPLORER below — the style travels with the
+  // entry, so a swap can never resurrect the mismatched-scheme bug.
+  //
+  // Network is resolved from the branding fetch (cfg.connection.network) and cached in
+  // sessionStorage; until then we assume mainnet (the common deployment).
   var NETWORK_KEY = 'pool-network';
   function explorerNetwork() {
     try { var n = sessionStorage.getItem(NETWORK_KEY); if (n) return n; } catch (e) {}
     return 'mainnet';
   }
-  var EXPLORERS = ['https://grinscan.org', 'https://scan.grin.money'];
-  function explorerBase(kind) {
-    if (explorerNetwork() === 'testnet') return 'https://testnet.grinscan.org';
-    // kernel/output deep-links are only guaranteed on scan.grin.money; heights & hashes
-    // resolve on both, so those randomize across the two explorers.
-    if (kind === 'kernel' || kind === 'output') return 'https://scan.grin.money';
-    return EXPLORERS[Math.random() < 0.5 ? 0 : 1];
+  // Path styles, keyed by explorer product. The value is the segment placed between the base
+  // URL and the encoded reference.
+  var EXPLORER_STYLES = {
+    path:  { block: 'block/',            kernel: 'kernel/',             output: 'output/' },
+    query: { block: 'block.html?h=',     kernel: 'kernel.html?ex=',     output: 'output.html?c=' }
+  };
+  var EXPLORERS = {
+    tiny:             { base: 'https://scan.grin.money',  style: 'path'  }, // 06d, mainnet only
+    grinscan:         { base: 'https://grinscan.org',      style: 'query' }, // 06b mainnet
+    grinscan_testnet: { base: 'https://test.grinscan.org', style: 'query' }  // 06b testnet sibling
+  };
+  var DEFAULT_EXPLORER = { mainnet: 'tiny', testnet: 'grinscan_testnet' };
+  function explorerPick() {
+    var net = explorerNetwork() === 'testnet' ? 'testnet' : 'mainnet';
+    return EXPLORERS[DEFAULT_EXPLORER[net]] || EXPLORERS.tiny;
   }
   function explorerUrl(kind, value) {
-    var path = (kind === 'kernel') ? 'kernel' : (kind === 'output') ? 'output' : 'block';
-    return explorerBase(kind) + '/' + path + '/' + encodeURIComponent(String(value));
+    var ex = explorerPick();
+    var style = EXPLORER_STYLES[ex.style] || EXPLORER_STYLES.path;
+    var seg = (kind === 'kernel') ? style.kernel : (kind === 'output') ? style.output : style.block;
+    return ex.base.replace(/\/+$/, '') + '/' + seg + encodeURIComponent(String(value));
   }
   function xEsc(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
@@ -224,17 +247,32 @@
     // Custom theme: a map of CSS-variable name -> value. Works regardless of which
     // theme system a page uses, because both the public pages and the admin panel
     // read from CSS custom properties.
+    //
+    // Set on BOTH :root and <body>. The admin panel declares its palette on :root, but the
+    // public pages declare their whole token bridge on `body` (dashboard.css) so themes.css
+    // can remap it per theme class — and a declaration on body always beats an inherited
+    // one from :root. Writing only to :root therefore made "Accent Color" and every
+    // overlapping custom_theme var a silent no-op on the public site while appearing to
+    // work in the admin preview. See the bridge note at the top of css/dashboard.css.
+    function setVar(name, value) {
+      root.style.setProperty(name, value);
+      if (document.body) document.body.style.setProperty(name, value);
+    }
+
     var custom = brand.custom_theme || {};
     Object.keys(custom).forEach(function (k) {
       if (!custom[k]) return;
       var name = k.charAt(0) === '-' ? k : '--' + k;
-      root.style.setProperty(name, custom[k]);
+      setVar(name, custom[k]);
     });
 
-    // Accent colour drives the most common variables.
+    // Accent colour drives the most common variables. Deliberately NOT --neon-cyan (the
+    // bridge's accent input): the bridge also derives --ok from it, so branding the site
+    // red would repaint every "healthy" lamp red. This recolours the accent, not the
+    // semantic status inks.
     if (brand.accent_color) {
       ['--accent', '--primary', '--btn-bg'].forEach(function (v) {
-        root.style.setProperty(v, brand.accent_color);
+        setVar(v, brand.accent_color);
       });
     }
 
@@ -359,6 +397,7 @@
       document.querySelectorAll('[data-brand="logo"]').forEach(function (el) {
         if (el.tagName === 'IMG') el.setAttribute('src', brand.logo_url);
       });
+      applyLogoVariant();
     }
 
     // Homepage announcement banner.
@@ -452,6 +491,35 @@
     });
   }
 
+  // ── 3a. Light-theme logo variant ───────────────────────────────────────────
+  // The branding page has always offered a "Logo (Light Theme variant)" upload
+  // (asset key logo_dark) and the API has always returned logo_dark_url — but nothing on
+  // the public site read it, so the control did nothing. A single logo that reads on
+  // #07090c usually disappears on a white page, which is exactly what the light themes
+  // are, so swap it on every theme change, not just at load. GriniumTheme.isLight() owns
+  // the list of light palettes (mirrors css/themes.css).
+  var LOGOS = { main: '', light: '' };
+
+  function applyLogoVariant() {
+    if (!LOGOS.light) return;             // no variant uploaded → one logo everywhere
+    var light = !!(window.GriniumTheme && window.GriniumTheme.isLight());
+    var src = light ? LOGOS.light : (LOGOS.main || LOGOS.light);
+    document.querySelectorAll('.brand-logo, img[data-brand="logo"]').forEach(function (el) {
+      if (el.getAttribute('src') !== src) el.setAttribute('src', src);
+    });
+  }
+
+  // Theme can change after load (visitor clicks the palette button), so watch for it.
+  // Guarded: a page without <body> yet, or an environment without MutationObserver, must
+  // not break the rest of branding.
+  function watchThemeForLogo() {
+    try {
+      if (!document.body || typeof MutationObserver !== 'function') return;
+      new MutationObserver(applyLogoVariant)
+        .observe(document.body, { attributes: true, attributeFilter: ['class'] });
+    } catch (e) { /* logo just stays on the main variant */ }
+  }
+
   // ── 3b. Site-wide header: swinging logo + slogan, Rewards link, miner auth ──
   // Applied on every public page so headers stay consistent without editing each file.
   // Acts only when a .brand element exists (skips login/admin pages that have none).
@@ -522,6 +590,9 @@
         col.appendChild(slogan);
       }
     });
+    // Last word on every .brand-logo src: this pass just wrote the main logo into each of
+    // them, so the light variant has to be re-applied after it (no-op when none is set).
+    applyLogoVariant();
   }
 
   // Add a "Rewards" nav link to the incentive/contest page when incentives are live.
@@ -702,6 +773,16 @@
     } catch (e) {}
 
     try { applyTheme(cfg); } catch (e) {}
+
+    // Record both logo variants before any content hook paints one, then start watching
+    // for theme switches. Must run AFTER applyTheme (which sets the initial body class)
+    // so the first pick already matches the theme the visitor lands on.
+    try {
+      var b = cfg.branding || {};
+      LOGOS.main = b.logo_url || '';
+      LOGOS.light = b.logo_dark_url || '';
+      watchThemeForLogo();
+    } catch (e) {}
 
     // Maintenance mode: show a branded full-page overlay on public pages. Pages that
     // must stay reachable (login, admin, account) opt out with data-maintenance="exempt".

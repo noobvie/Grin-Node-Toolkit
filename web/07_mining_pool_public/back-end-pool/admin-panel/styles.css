@@ -82,6 +82,18 @@ body {
   min-height: 100vh;
 }
 
+/* Base link ink. pool.css defines no anchor rule (the public side gets this from
+   dashboard.css, which the admin panel does NOT import), so without this every
+   in-content link — explorer deep-links, table notes — renders at the browser
+   default #0000EE: unreadable on the dark surfaces. Chrome links (.admin-nav a,
+   .btn-icon, .rail-chip …) all carry a class, so they keep their own colours. */
+a {
+  color: var(--accent);
+  text-decoration: none;
+}
+a:hover { text-decoration: underline; text-underline-offset: 2px; }
+a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
 /* The page content lives inside .admin-main; pull the legacy <main>/.container
    into the content column and give it sane gutters. */
 .admin-main {
@@ -597,6 +609,105 @@ body {
 .btn-icon-danger { --icon-tint: var(--danger); }
 /* Anchors reuse the class (View opens the public page) — kill the link underline. */
 a.btn-icon, a.btn-icon:hover { text-decoration: none; }
+
+/* ============================================================================
+   AdminTable — tools bar + pager injected around history/audit tables
+   ----------------------------------------------------------------------------
+   Built by AdminTable.create() in admin-shell.js: a search box, a live
+   "showing x–y of n" count and the retention sentence above the card; rows-per-
+   page + page nav below it. Both strips are deliberately quiet — the table is
+   the content, these are chrome — and the pager hides itself when everything
+   already fits on one page.
+   ========================================================================== */
+.table-tools {
+  display: flex;
+  align-items: center;
+  gap: .55rem .9rem;
+  flex-wrap: wrap;
+  margin: 0 0 .55rem;
+}
+.table-search { display: block; margin: 0; flex: 0 1 300px; min-width: 180px; }
+/* pool.css styles input[type=text|number|email|password], textarea and select — but NOT
+   type="search", so the field colours must be restated here or the box renders as a native
+   white control on the dark panel. Kept type=search (not text) for the browser's clear "×"
+   and for the right on-screen keyboard; appearance is deliberately NOT reset, since
+   -webkit-appearance:none is what removes that clear button. */
+.table-search input[type="search"] {
+  width: 100%;
+  padding: .38rem .6rem;
+  font-size: .84rem;
+  font-family: var(--font-sans);
+  border-radius: 8px;
+  background: var(--input-bg, var(--bg-card2));
+  border: 1px solid var(--input-border, var(--border));
+  color: var(--text);
+  transition: border-color .15s;
+}
+.table-search input[type="search"]:focus { outline: none; border-color: var(--accent); }
+.table-search input[type="search"]::placeholder { color: var(--text-muted, var(--text-dim)); }
+/* The native clear "×" is drawn dark and vanishes against a dark field. */
+.table-search input[type="search"]::-webkit-search-cancel-button {
+  filter: invert(1) opacity(.55);
+  cursor: pointer;
+}
+:root[data-theme="light"] .table-search input[type="search"]::-webkit-search-cancel-button {
+  filter: opacity(.55);
+}
+.table-meta { font-size: .78rem; color: var(--text-dim); font-variant-numeric: tabular-nums; }
+/* The retention sentence pushes to the far end on wide screens and drops to its
+   own full-width line on narrow ones (flex-basis:100% once the row wraps). */
+.table-note {
+  margin-left: auto;
+  /* Basis 320px, not auto: some notes run to two sentences, and with auto the flex row
+     squeezes them into a tall narrow column beside the search box instead of wrapping
+     them onto their own full-width line. */
+  flex: 1 1 320px;
+  font-size: .76rem;
+  color: var(--text-muted, var(--text-dim));
+  text-align: right;
+}
+.table-note a { color: inherit; text-decoration: underline; text-underline-offset: 2px; }
+.table-note a:hover { color: var(--accent); }
+
+.table-pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .6rem;
+  flex-wrap: wrap;
+  margin: .55rem 0 0;
+}
+.pager-per {
+  width: auto;
+  padding: .3rem .5rem;
+  font-size: .78rem;
+  border-radius: 8px;
+}
+.pager-nav { display: flex; align-items: center; gap: .3rem; margin-left: auto; }
+.pager-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 30px; height: 28px; padding: 0 .4rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-card2);
+  color: var(--text);
+  font-size: .9rem; line-height: 1;
+  cursor: pointer;
+  transition: border-color .15s ease, color .15s ease;
+}
+.pager-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.pager-btn:disabled { opacity: .35; cursor: not-allowed; }
+.pager-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.pager-page {
+  font-size: .78rem; color: var(--text-dim);
+  padding: 0 .45rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+@media (max-width: 640px) {
+  .table-note { margin-left: 0; text-align: left; flex: 1 1 100%; }
+  .table-search { flex: 1 1 100%; }
+}
 
 /* Hover/focus label for [data-tip] elements — parented to <body> by admin-shell.js
    and positioned fixed, so .table-wrap's overflow can't clip it. */

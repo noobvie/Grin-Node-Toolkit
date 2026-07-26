@@ -65,28 +65,47 @@
 
   // ── Chain explorer deep-links (window.Explorer) ─────────────────────────
   // Any block height / hash / kernel / output shown anywhere in the admin UI links out
-  // to a public Grin chain explorer in a new tab. To spread load — and avoid tying the
-  // pool to a single explorer — each mainnet link randomly picks between grinscan.org
-  // and scan.grin.money; both share the same path scheme (/block/<h>, /kernel/<excess>,
-  // /output/<commit>). scan.grin.money is mainnet-only, so on testnet every link uses
-  // testnet.grinscan.org. Network is resolved once by decoratePoolIdentity() (below) and
-  // cached in sessionStorage; until then we assume mainnet (the common deployment).
+  // to a public Grin chain explorer in a new tab.
+  //
+  // ONE deterministic explorer per network — deliberately NOT randomized across two. The
+  // earlier 50/50 rotation assumed the two explorers shared a path scheme; they do not
+  // (verified live 2026-07-25), so every link that landed on grinscan.org 404'd, and the
+  // rotation is what hid it — half the clicks worked. The two schemes:
+  //   scan.grin.money    /block/<h>           /kernel/<excess>          /output/<commit>
+  //   *.grinscan.org     /block.html?h=<h>    /kernel.html?ex=<excess>  /output.html?c=<commit>
+  // Both accept a height OR a 64-hex block hash in the block slot.
+  //
+  // Default: mainnet → scan.grin.money (06d Tiny Explorer), testnet → test.grinscan.org
+  // (06b GrinScan's testnet sibling). NOTE the testnet host is `test.` —
+  // `testnet.grinscan.org` does NOT resolve (that typo made every testnet link dead).
+  // Keep this block in sync with the identical one in /js/branding.js.
+  //
+  // Network is resolved once by decoratePoolIdentity() (below) and cached in
+  // sessionStorage; until then we assume mainnet (the common deployment).
   var NETWORK_KEY = 'pool-network';
   function explorerNetwork() {
     try { var n = sessionStorage.getItem(NETWORK_KEY); if (n) return n; } catch (e) {}
     return 'mainnet';
   }
-  var EXPLORERS = ['https://grinscan.org', 'https://scan.grin.money'];
-  function explorerBase(kind) {
-    if (explorerNetwork() === 'testnet') return 'https://testnet.grinscan.org';
-    // kernel/output deep-links are only guaranteed on scan.grin.money; heights & hashes
-    // resolve on both, so those randomize across the two explorers.
-    if (kind === 'kernel' || kind === 'output') return 'https://scan.grin.money';
-    return EXPLORERS[Math.random() < 0.5 ? 0 : 1];
+  var EXPLORER_STYLES = {
+    path:  { block: 'block/',        kernel: 'kernel/',         output: 'output/' },
+    query: { block: 'block.html?h=', kernel: 'kernel.html?ex=', output: 'output.html?c=' }
+  };
+  var EXPLORERS = {
+    tiny:             { base: 'https://scan.grin.money',  style: 'path'  }, // 06d, mainnet only
+    grinscan:         { base: 'https://grinscan.org',      style: 'query' }, // 06b mainnet
+    grinscan_testnet: { base: 'https://test.grinscan.org', style: 'query' }  // 06b testnet sibling
+  };
+  var DEFAULT_EXPLORER = { mainnet: 'tiny', testnet: 'grinscan_testnet' };
+  function explorerPick() {
+    var net = explorerNetwork() === 'testnet' ? 'testnet' : 'mainnet';
+    return EXPLORERS[DEFAULT_EXPLORER[net]] || EXPLORERS.tiny;
   }
   function explorerUrl(kind, value) {
-    var path = (kind === 'kernel') ? 'kernel' : (kind === 'output') ? 'output' : 'block';
-    return explorerBase(kind) + '/' + path + '/' + encodeURIComponent(String(value));
+    var ex = explorerPick();
+    var style = EXPLORER_STYLES[ex.style] || EXPLORER_STYLES.path;
+    var seg = (kind === 'kernel') ? style.kernel : (kind === 'output') ? style.output : style.block;
+    return ex.base.replace(/\/+$/, '') + '/' + seg + encodeURIComponent(String(value));
   }
   // Returns an <a> that opens the explorer in a new tab. `label` defaults to `value`.
   // Both URL and label are HTML-escaped — safe to embed untrusted chain strings.
@@ -461,6 +480,285 @@
       }
     }).catch(function () {});
   }
+
+  /* ── AdminTable — search + paging + retention note for list tables ────────
+     Every history/audit table in the admin panel had the same three problems:
+     it dumped the entire result set into the DOM (the miners table can be 500
+     rows), it gave no way to find one address/height without Ctrl-F, and it
+     never said how long the rows survive — so an empty stretch was ambiguous
+     between "nothing happened" and "retention already deleted it".
+
+     One controller solves all three. A page keeps its own fetch + row markup
+     and hands the array over:
+
+       var t = AdminTable.create({
+         tbody: 'pa-tbody',                 // id or element
+         search: 'Search address, origin…', // placeholder (omit → no search box)
+         perPage: 20,                       // default 20
+         note: 'Kept {days} days.',         // {days} filled from retentionKey
+         retentionKey: 'audit_log_keep_days',
+         row:  function (e) { return '<tr>…</tr>'; },
+         text: function (e) { return e.grin_address + ' ' + e.action; }, // searchable
+         empty: 'No payout requests in this window.'
+       });
+       t.setLoading();  t.setRows(list);  t.setError(err.message);
+
+     Notes worth keeping in mind when wiring a new table:
+     • Column count is read from the table's own <thead>, so the loading/empty/
+       error rows always span correctly — no colspan argument to keep in sync.
+     • `text` is optional; the fallback searches the rendered row with tags
+       stripped PLUS every title="" value, which is what makes a truncated
+       address (full value parked in the title) findable by its full string.
+     • setRows() keeps the current query and page — these pages re-poll on a
+       timer, and resetting to page 1 mid-read (or wiping what was typed) would
+       make the table unusable while it refreshes. */
+
+  var _dbSettings = null;
+  function databaseSettings() {
+    if (!_dbSettings) {
+      var url = '/api/admin/settings/database';
+      var p = (window.API && API.get)
+        ? API.get(url)
+        : fetch(url, { credentials: 'same-origin' }).then(function (r) { return r.json(); });
+      _dbSettings = p.then(function (d) { return (d && d.data) || {}; }).catch(function () { return {}; });
+    }
+    return _dbSettings;
+  }
+
+  // Searchable fallback text for a row: visible text + every title="" value (the
+  // full address/reason that the visible cell truncates away).
+  function rowFallbackText(html) {
+    var titles = [];
+    String(html).replace(/title="([^"]*)"/g, function (_, v) { titles.push(v); return ''; });
+    return (String(html).replace(/<[^>]+>/g, ' ') + ' ' + titles.join(' '))
+      .replace(/\s+/g, ' ').toLowerCase();
+  }
+
+  var PER_PAGE_CHOICES = [20, 50, 100, 0];   // 0 = All
+
+  function createTable(opts) {
+    opts = opts || {};
+    var tbody = (typeof opts.tbody === 'string') ? document.getElementById(opts.tbody) : opts.tbody;
+    // A missing table must never take the page down with it — hand back a no-op
+    // handle so the page's load/refresh code keeps working. It must carry EVERY
+    // method of the real handle: pages call setVisible()/setNoteDays() at parse
+    // time, so one missing stub would throw before the page script finished and
+    // take down the whole page — the exact failure this guard exists to prevent.
+    if (!tbody) {
+      var noop = function () { return api; };
+      var api = {
+        setRows: noop, setLoading: noop, setError: noop, refresh: noop,
+        setNoteDays: noop, setVisible: noop,
+        rows: [], query: ''
+      };
+      return api;
+    }
+
+    var table = tbody.closest('table');
+    var cols = (table && table.querySelectorAll('thead th').length) || 1;
+    // Anchor: the surrounding .card if there is one, else the table's own wrapper,
+    // so the tools sit above the whole card and the pager below it.
+    var host = tbody.closest('.card') || tbody.closest('.table-wrap') || table;
+
+    var state = {
+      rows: [], q: '', page: 1,
+      per: (opts.perPage === 0 || opts.perPage) ? opts.perPage : 20,
+      mode: 'loading', err: '', hidden: false
+    };
+
+    // ── Tools bar (search + "showing x–y of n" + retention note) ────────────
+    var tools = document.createElement('div');
+    tools.className = 'table-tools';
+    var input = null;
+    if (opts.search) {
+      var lab = document.createElement('label');
+      lab.className = 'table-search';
+      input = document.createElement('input');
+      input.type = 'search';
+      input.placeholder = (typeof opts.search === 'string') ? opts.search : 'Search…';
+      input.setAttribute('aria-label', input.placeholder);
+      input.autocomplete = 'off';
+      lab.appendChild(input);
+      tools.appendChild(lab);
+    }
+    var meta = document.createElement('span');
+    meta.className = 'table-meta';
+    tools.appendChild(meta);
+    var note = document.createElement('span');
+    note.className = 'table-note';
+    tools.appendChild(note);
+    host.parentNode.insertBefore(tools, host);
+
+    // The note is page-authored markup (a link to Settings → Database is common), so it
+    // is inserted as HTML — never build one out of user/API text. {days} is filled from
+    // the live retention setting, from opts.retentionDays, or later via setNoteDays()
+    // for endpoints that report their own window.
+    function setNoteDays(days) {
+      if (!opts.note) return;
+      note.innerHTML = String(opts.note).replace(/\{days\}/g, (days == null || days === '') ? '—' : String(days));
+    }
+    if (opts.note) {
+      setNoteDays(opts.retentionKey ? opts.retentionDefault : opts.retentionDays);
+      if (opts.retentionKey) {
+        databaseSettings().then(function (s) {
+          var v = parseInt(s[opts.retentionKey], 10);
+          if (v > 0) setNoteDays(v);
+        });
+      }
+    }
+
+    // ── Pager ───────────────────────────────────────────────────────────────
+    var pager = document.createElement('div');
+    pager.className = 'table-pager';
+    var perSel = document.createElement('select');
+    perSel.className = 'pager-per';
+    perSel.setAttribute('aria-label', 'Rows per page');
+    // A page asking for a size that isn't one of the presets gets it added, so the
+    // select never shows "20 / page" while the table is actually rendering something else.
+    var choices = (PER_PAGE_CHOICES.indexOf(state.per) === -1)
+      ? [state.per].concat(PER_PAGE_CHOICES)
+      : PER_PAGE_CHOICES;
+    choices.forEach(function (n) {
+      var o = document.createElement('option');
+      o.value = String(n);
+      o.textContent = n ? (n + ' / page') : 'All';
+      if (n === state.per) o.selected = true;
+      perSel.appendChild(o);
+    });
+    var nav = document.createElement('div');
+    nav.className = 'pager-nav';
+    function mkBtn(label, aria) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'pager-btn';
+      b.textContent = label;
+      b.setAttribute('aria-label', aria);
+      nav.appendChild(b);
+      return b;
+    }
+    var bFirst = mkBtn('«', 'First page');
+    var bPrev  = mkBtn('‹', 'Previous page');
+    var pageLbl = document.createElement('span');
+    pageLbl.className = 'pager-page';
+    nav.appendChild(pageLbl);
+    var bNext = mkBtn('›', 'Next page');
+    var bLast = mkBtn('»', 'Last page');
+    pager.appendChild(perSel);
+    pager.appendChild(nav);
+    if (host.nextSibling) host.parentNode.insertBefore(pager, host.nextSibling);
+    else host.parentNode.appendChild(pager);
+
+    function fillRow(html, cls) {
+      tbody.innerHTML = '<tr class="' + cls + '"><td colspan="' + cols + '">' + html + '</td></tr>';
+    }
+
+    function matches(item) {
+      var t = opts.text ? String(opts.text(item)).toLowerCase()
+                        : rowFallbackText(opts.row(item));
+      // Space-separated terms are ANDed — "deny grin1ab" narrows to refused rows
+      // for one address without needing the exact column order.
+      return state.q.split(/\s+/).every(function (term) { return !term || t.indexOf(term) !== -1; });
+    }
+
+    function render() {
+      if (state.mode === 'loading') {
+        fillRow('<span class="spinner"></span>Loading…', 'loading-row');
+        meta.textContent = '';
+        pager.style.display = 'none';
+        return;
+      }
+      if (state.mode === 'error') {
+        fillRow('Error: ' + esc(state.err), 'empty-row');
+        meta.textContent = '';
+        pager.style.display = 'none';
+        return;
+      }
+      var all = state.rows;
+      var filtered = state.q ? all.filter(matches) : all;
+      var total = filtered.length;
+      var per = state.per;
+      var pages = per ? Math.max(1, Math.ceil(total / per)) : 1;
+      if (state.page > pages) state.page = pages;
+      if (state.page < 1) state.page = 1;
+      var start = per ? (state.page - 1) * per : 0;
+      var slice = per ? filtered.slice(start, start + per) : filtered;
+
+      if (!slice.length) {
+        fillRow(esc(state.q ? 'No rows match “' + state.q + '”.' : (opts.empty || 'Nothing to show.')), 'empty-row');
+      } else {
+        tbody.innerHTML = slice.map(function (item, i) { return opts.row(item, start + i); }).join('');
+      }
+
+      if (!total) {
+        meta.textContent = all.length ? 'Showing 0 of ' + all.length : '';
+      } else {
+        meta.textContent = 'Showing ' + (start + 1) + '–' + (start + slice.length) + ' of ' + total +
+          (state.q && all.length !== total ? ' (filtered from ' + all.length + ')' : '');
+      }
+
+      // Hide the pager entirely when everything already fits — the short tables
+      // (a handful of rows) should not grow a control strip they never need. A table
+      // hidden by setVisible(false) stays hidden through any later setRows(), or a
+      // refresh would leave a lone pager floating above a card that isn't displayed.
+      pager.style.display = (!state.hidden && per && total > per) ? '' : 'none';
+      pageLbl.textContent = 'Page ' + state.page + ' of ' + pages;
+      bFirst.disabled = bPrev.disabled = (state.page <= 1);
+      bNext.disabled = bLast.disabled = (state.page >= pages);
+    }
+
+    function go(p) { state.page = p; render(); tools.scrollIntoView({ block: 'nearest' }); }
+    bFirst.addEventListener('click', function () { go(1); });
+    bPrev.addEventListener('click', function () { go(state.page - 1); });
+    bNext.addEventListener('click', function () { go(state.page + 1); });
+    bLast.addEventListener('click', function () { go(Infinity); });
+    perSel.addEventListener('change', function () {
+      state.per = parseInt(perSel.value, 10) || 0;
+      state.page = 1;
+      render();
+    });
+    if (input) {
+      input.addEventListener('input', function () {
+        state.q = input.value.trim().toLowerCase();
+        state.page = 1;              // a new query always starts at the top
+        render();
+      });
+    }
+
+    var handle = {
+      // setRows(rows)                 → keep the current page (timer refresh)
+      // setRows(rows, { reset: true }) → back to page 1 (the operator changed a
+      //                                  filter chip, so the old page number is
+      //                                  meaningless against the new result set)
+      setRows: function (rows, o) {
+        state.rows = Array.isArray(rows) ? rows : [];
+        state.mode = 'ready';
+        if (o && o.reset) state.page = 1;
+        render();
+        return handle;
+      },
+      setLoading: function () { state.mode = 'loading'; render(); return handle; },
+      setError: function (msg) { state.mode = 'error'; state.err = msg || 'failed'; render(); return handle; },
+      refresh: function () { render(); return handle; },
+      // Fill {days} in the note from a window the API reports itself.
+      setNoteDays: function (d) { setNoteDays(d); return handle; },
+      // For tables whose whole card is hidden in some states (e.g. the wallet-send
+      // audit, which only appears when there is something unmatched) — the tools bar
+      // and pager must disappear with it, not float above a hidden table.
+      setVisible: function (on) {
+        state.hidden = !on;
+        tools.style.display = on ? '' : 'none';
+        if (!on) pager.style.display = 'none'; else render();
+        return handle;
+      },
+      // Read-only views for callers that need to size a summary line themselves.
+      get rows() { return state.rows; },
+      get query() { return state.q; }
+    };
+    render();
+    return handle;
+  }
+
+  window.AdminTable = { create: createTable, settings: databaseSettings };
 
   // ── Tooltips for [data-tip] elements (the emoji row-action buttons) ──────
   // The icons carry no text, so the label must be one hover away. Two obvious

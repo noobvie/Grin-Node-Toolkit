@@ -87,10 +87,17 @@
             el.value = value || '';
           } else if (el.tagName === 'SELECT') {
             let v = value || '';
-            // Retired key from pre-mockup configs: the 'dark' option no longer
-            // exists; without this the select would silently go blank and the
-            // next save would submit '' (rejected by the back-end validator).
-            if (key === 'default_theme' && v === 'dark') v = 'atomic';
+            // default_theme accepts more keys than this select offers: THEME_KEYS in
+            // lib/pool-settings.js also holds the ADMIN-ONLY palettes (cyber, gradient,
+            // matrix, naruto, japan, custom) and the retired 'dark'. A stored value the
+            // <select> has no <option> for leaves it blank, and a blank select is dropped
+            // by the save harvester — so the operator sees an empty control they cannot
+            // correct, while the public site quietly falls back to Reactor (public-theme.js
+            // only knows the public keys). Snap any such value to the theme visitors are
+            // actually being served, so what is shown matches what is live.
+            if (key === 'default_theme' && v && !el.querySelector('option[value="' + v + '"]')) {
+              v = 'atomic';
+            }
             el.value = v;
           }
         }
@@ -676,6 +683,20 @@
       if (hidden) hidden.value = JSON.stringify(arr);
     }
 
+    // The enabled list only means anything while "Let visitors switch themes" is ticked —
+    // with it off, public-theme.js hides the switcher entirely and forces default_theme.
+    // Dim + disable rather than hide, so the operator can see their picks are preserved and
+    // will come back when they re-enable switching.
+    function updateThemeSwitchUI() {
+      const on = document.getElementById('allow_theme_switch');
+      const wrap = document.getElementById('enabled-themes-wrap');
+      if (!on || !wrap) return;
+      wrap.style.opacity = on.checked ? '' : '0.45';
+      wrap.querySelectorAll('.theme-enable').forEach(cb => { cb.disabled = !on.checked; });
+      const note = document.getElementById('enabled-themes-off-note');
+      if (note) note.style.display = on.checked ? 'none' : '';
+    }
+
     function populateEnabledThemes(val) {
       renderEnabledThemes(); // ensure the checkboxes exist before ticking them
       let arr = val;
@@ -684,6 +705,7 @@
       document.querySelectorAll('#enabled-themes-grid .theme-enable').forEach(cb => {
         cb.checked = arr.indexOf(cb.dataset.theme) !== -1;
       });
+      updateThemeSwitchUI();
     }
 
     function exportTheme() {
@@ -1226,7 +1248,9 @@
     document.addEventListener('DOMContentLoaded', () => {
       _safe(renderThemeBuilder);
       _safe(renderEnabledThemes);
+      _safe(updateThemeSwitchUI);
       _safe(updateProviderFields);
+      document.getElementById('allow_theme_switch')?.addEventListener('change', updateThemeSwitchUI);
       document.getElementById('provider')?.addEventListener('change', updateProviderFields);
       document.getElementById('theme_color')?.addEventListener('input', (e) => updateColorPreview(e.target));
     });

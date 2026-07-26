@@ -196,11 +196,11 @@
         //   /api/pool/stats                        summary KPIs (total/confirmed/immature/24h/7d)
         //   /api/pool/blocks?limit&offset&status   paginated explorer rows (plain array; last page = short page)
         //   /api/pool/blocks/history?range         durable series → P-01 luck / P-02 cadence / P-03 status / P-04 reward
-        // GrinScan deep-link base is network-aware (set from /api/config/pool-info on load):
-        // grinscan.org for mainnet, testnet.grinscan.org for testnet. All external fields rendered
-        // via textContent / escaped — never trust block.found_by etc. as markup.
+        // Block deep-links are built by window.Explorer (js/branding.js) — the single source of
+        // truth for explorer base + path scheme, which differs per explorer. This page only
+        // primes the network cache Explorer reads (see the pool-info fetch below). All external
+        // fields rendered via textContent / escaped — never trust block.found_by etc. as markup.
         const PAGE_SIZE = 25;
-        let GRINSCAN = 'https://grinscan.org';   // overridden to testnet.grinscan.org if testnet
         let _page = 0;       // zero-based
         let _filter = '';
         let _lastFull = false; // did the last fetch return a full page (more may exist)?
@@ -410,11 +410,14 @@
                 });
             }
 
-            // Resolve the GrinScan base from the pool network (testnet → testnet.grinscan.org),
-            // then load — so block deep-links point at the right chain explorer.
+            // Prime the network cache BEFORE the first render, so window.Explorer picks the
+            // right explorer for the chain instead of falling back to its mainnet default
+            // (branding.js writes the same key, but may not have landed yet).
             fetch('/api/config/pool-info', { credentials: 'same-origin' })
                 .then(function (r) { return r.ok ? r.json() : null; })
-                .then(function (d) { if (d && d.network === 'testnet') GRINSCAN = 'https://testnet.grinscan.org'; })
+                .then(function (d) {
+                    if (d && d.network) { try { sessionStorage.setItem('pool-network', d.network); } catch (e) {} }
+                })
                 .catch(function () {})
                 .finally(function () { loadSummary(); loadBlocks(); loadBlockCharts(); });
             setInterval(function () { loadSummary(); loadBlockCharts(); if (_page === 0) loadBlocks(); }, 60000);

@@ -98,8 +98,36 @@ const STATUS = {
   orphaned:  ['badge-error', 'Orphaned'],
 };
 
-async function loadBlocks() {
-  const tbody = document.getElementById('blocks-tbody');
+// Search + 20-per-page paging + the retention line, from AdminTable (admin-shell.js).
+// Blocks are never pruned by the retention job — the note says so rather than leaving
+// the operator to guess how far back this table goes.
+const blocksTable = AdminTable.create({
+  tbody: 'blocks-tbody',
+  search: 'Filter by height, miner or status…',
+  empty: 'No blocks in this view.',
+  note: 'Block history is kept permanently — no retention window.',
+  text: b => [b.height, b.status, (STATUS[b.status] || [])[1], b.found_by, b.reward,
+              fmtTs(b.found_at)].join(' '),
+  row: b => {
+    const [cls, label] = STATUS[b.status] || ['badge-dim', b.status];
+    const maturity = (b.status === 'confirmed' || b.status === 'orphaned')
+      ? '—'
+      : (b.blocks_to_maturity > 0 ? `${b.blocks_to_maturity.toLocaleString()} blocks left` : 'ready');
+    return `<tr>
+      <td class="mono">${Explorer.link('block', b.height, b.height.toLocaleString())}</td>
+      <td><span class="badge ${cls}">${escHtml(label)}</span></td>
+      <td>${escHtml(maturity)}</td>
+      ${luckCell(b)}
+      <td class="mono">${(Number(b.reward) || 0).toFixed(2)}</td>
+      <td><span class="mono" title="${escHtml(b.found_by)}">${escHtml(shortAddr(b.found_by))}</span></td>
+      <td>${fmtTs(b.found_at)}</td>
+      <td>${Explorer.link('block', b.height, 'view ↗')}</td>
+    </tr>`;
+  }
+});
+
+// resetPage: a filter chip changed, so page 3 of the old result set means nothing.
+async function loadBlocks(resetPage) {
   try {
     const q = _filter ? ('?status=' + encodeURIComponent(_filter)) : '';
     const data = await API.get('/api/admin/blocks' + q);
@@ -115,29 +143,9 @@ async function loadBlocks() {
         : 'node unreachable';
     document.getElementById('depth-note').textContent    = data.confirm_depth || '—';
 
-    const blocks = data.blocks || [];
-    if (!blocks.length) {
-      tbody.innerHTML = '<tr class="empty-row"><td colspan="8">No blocks in this view.</td></tr>';
-      return;
-    }
-    tbody.innerHTML = blocks.map(b => {
-      const [cls, label] = STATUS[b.status] || ['badge-dim', b.status];
-      const maturity = (b.status === 'confirmed' || b.status === 'orphaned')
-        ? '—'
-        : (b.blocks_to_maturity > 0 ? `${b.blocks_to_maturity.toLocaleString()} blocks left` : 'ready');
-      return `<tr>
-        <td class="mono">${Explorer.link('block', b.height, b.height.toLocaleString())}</td>
-        <td><span class="badge ${cls}">${escHtml(label)}</span></td>
-        <td>${escHtml(maturity)}</td>
-        ${luckCell(b)}
-        <td class="mono">${(Number(b.reward) || 0).toFixed(2)}</td>
-        <td><span class="mono" title="${escHtml(b.found_by)}">${escHtml(shortAddr(b.found_by))}</span></td>
-        <td>${fmtTs(b.found_at)}</td>
-        <td>${Explorer.link('block', b.height, 'view ↗')}</td>
-      </tr>`;
-    }).join('');
+    blocksTable.setRows(data.blocks || [], { reset: resetPage });
   } catch (err) {
-    tbody.innerHTML = `<tr class="empty-row"><td colspan="8">Error: ${escHtml(err.message)}</td></tr>`;
+    blocksTable.setError(err.message);
   }
 }
 
@@ -145,10 +153,10 @@ function setFilter(f, btn) {
   _filter = f;
   document.querySelectorAll('#filter-chips .tab-btn').forEach(b => b.classList.remove('active'));
   if (btn) btn.classList.add('active');
-  loadBlocks();
+  loadBlocks(true);
 }
 
-document.addEventListener('DOMContentLoaded', loadBlocks);
+document.addEventListener('DOMContentLoaded', () => loadBlocks());
 setInterval(loadBlocks, 60000);
 </script>
 </body>

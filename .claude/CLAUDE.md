@@ -353,6 +353,31 @@ ALL generated docs go to `docs/generated/` — never scatter into `web/` etc. Th
 
 Before creating any `.md`, check if it should merge into an existing `script##_[type].md`.
 
+## Local Test Processes — Kill Everything You Start
+The dev machine is the user's **single Windows workstation**, not a disposable CI box. Every
+process started locally to test/verify (python `http.server`, `node <server>.js`, jsdom
+harnesses, headless browsers, watchers) MUST be killed **in the same session that started it**.
+- **Prefer a process that exits on its own** — one-shot `curl`/`Invoke-WebRequest`, `bash -n`,
+  `node -e`, a jsdom script. Only start a server when nothing one-shot can do the job.
+- **If a server is unavoidable:** bind localhost explicitly (`python -m http.server PORT
+  --bind 127.0.0.1`), capture the PID, `Stop-Process -Force` it as soon as the check is done.
+- **Kill the whole tree.** Windows `python.exe` from `WindowsApps` is a launcher stub that
+  spawns a second real `pythoncore-*\python.exe`, and Bash-tool launches sit under 2–3
+  `bash.exe` wrappers — killing one PID leaves the listener alive.
+- **Background tasks count too** — a `run_in_background` command or a spawned agent left
+  running is the same problem.
+- **End-of-session sweep**, alongside the `git status --short` temp-file check:
+  ```powershell
+  Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -match 'Temp[\\/]claude[\\/]|claude[\\/]shell-snapshots|http\.server' }
+  ```
+  Never match or kill `msedge`/`chrome`/`Code` — those are the user's own apps.
+
+**Why it compounds:** an orphan squats its port, so the next run picks a *new* port instead of
+failing loudly. On 2026-07-26 a sweep found **35 orphans from 7/23–7/25 holding 11 ports**
+(8479, 8791–8799, 8801), two bound to `::` (all interfaces — LAN-reachable, not just
+localhost). Nothing had autostart persistence; they simply survived **10 days of uptime**
+because the box hadn't rebooted. A reboot clears them — that is luck, not a cleanup strategy.
+
 ## Per-Product Detail — pointers (not in this file)
 Deep implementation facts live in local memory + committed docs. When working on a product,
 recall the relevant memory and read its doc:
@@ -383,3 +408,5 @@ plausible-looking suspect is not a confirmed cause.
 - Never use `--floonet` — the correct testnet flag is `--testnet`
 - Never mix mainnet and testnet ports or directories
 - Don't add `#!/bin/bash` to lib files — they are sourced, not executed
+- Never leave a local test process running — kill every server/probe you start, in the same
+  session (see *Local Test Processes*); never bind a test server to `0.0.0.0`/`::`

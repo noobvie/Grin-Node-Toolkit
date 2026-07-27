@@ -87,10 +87,17 @@
             el.value = value || '';
           } else if (el.tagName === 'SELECT') {
             let v = value || '';
-            // Retired key from pre-mockup configs: the 'dark' option no longer
-            // exists; without this the select would silently go blank and the
-            // next save would submit '' (rejected by the back-end validator).
-            if (key === 'default_theme' && v === 'dark') v = 'atomic';
+            // default_theme accepts more keys than this select offers: THEME_KEYS in
+            // lib/pool-settings.js also holds the ADMIN-ONLY palettes (cyber, gradient,
+            // matrix, naruto, japan, custom) and the retired 'dark'. A stored value the
+            // <select> has no <option> for leaves it blank, and a blank select is dropped
+            // by the save harvester — so the operator sees an empty control they cannot
+            // correct, while the public site quietly falls back to Reactor (public-theme.js
+            // only knows the public keys). Snap any such value to the theme visitors are
+            // actually being served, so what is shown matches what is live.
+            if (key === 'default_theme' && v && !el.querySelector('option[value="' + v + '"]')) {
+              v = 'atomic';
+            }
             el.value = v;
           }
         }
@@ -583,7 +590,7 @@
       item.className = 'list-item';
       item.innerHTML = `
         <span>${escapeHtmlSafe(value)}</span>
-        <button class="btn btn-danger" style="min-width: auto; padding: 0.5rem 1rem;" onclick="this.parentElement.remove()">Remove</button>
+        <button class="btn-icon btn-icon-danger" onclick="this.parentElement.remove()" data-tip="Remove from the list" aria-label="Remove from the list">🗑️</button>
       `;
       list.appendChild(item);
     }
@@ -676,6 +683,20 @@
       if (hidden) hidden.value = JSON.stringify(arr);
     }
 
+    // The enabled list only means anything while "Let visitors switch themes" is ticked —
+    // with it off, public-theme.js hides the switcher entirely and forces default_theme.
+    // Dim + disable rather than hide, so the operator can see their picks are preserved and
+    // will come back when they re-enable switching.
+    function updateThemeSwitchUI() {
+      const on = document.getElementById('allow_theme_switch');
+      const wrap = document.getElementById('enabled-themes-wrap');
+      if (!on || !wrap) return;
+      wrap.style.opacity = on.checked ? '' : '0.45';
+      wrap.querySelectorAll('.theme-enable').forEach(cb => { cb.disabled = !on.checked; });
+      const note = document.getElementById('enabled-themes-off-note');
+      if (note) note.style.display = on.checked ? 'none' : '';
+    }
+
     function populateEnabledThemes(val) {
       renderEnabledThemes(); // ensure the checkboxes exist before ticking them
       let arr = val;
@@ -684,6 +705,7 @@
       document.querySelectorAll('#enabled-themes-grid .theme-enable').forEach(cb => {
         cb.checked = arr.indexOf(cb.dataset.theme) !== -1;
       });
+      updateThemeSwitchUI();
     }
 
     function exportTheme() {
@@ -727,7 +749,7 @@
       row.innerHTML = `
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.5rem;">
           <strong>${escapeHtmlSafe(key)}</strong>
-          <button type="button" class="btn btn-danger" style="min-width:auto;padding:.4rem .9rem;" onclick="this.closest('.page-seo-row').remove()">Remove</button>
+          <button type="button" class="btn-icon btn-icon-danger" onclick="this.closest('.page-seo-row').remove()" data-tip="Remove this page's SEO override" aria-label="Remove this page's SEO override">🗑️</button>
         </div>
         <div class="form-group">
           <label>Title</label>
@@ -790,7 +812,7 @@
             <input type="checkbox" class="banner-enabled settings-skip"${(b.enabled === false || b.enabled === 'false') ? '' : ' checked'}>
             <label>Enabled</label>
           </div>
-          <button type="button" class="btn btn-danger" style="min-width:auto;padding:.4rem .9rem;" onclick="this.closest('.banner-row').remove()">Remove</button>
+          <button type="button" class="btn-icon btn-icon-danger" onclick="this.closest('.banner-row').remove()" data-tip="Remove this banner" aria-label="Remove this banner">🗑️</button>
         </div>
         <div class="form-row">
           <div class="form-group">
@@ -873,7 +895,7 @@
             <input type="checkbox" class="event-enabled settings-skip"${(ev.enabled === false || ev.enabled === 'false') ? '' : ' checked'}>
             <label>Enabled</label>
           </div>
-          <button type="button" class="btn btn-danger" style="min-width:auto;padding:.4rem .9rem;" onclick="this.closest('.event-row').remove()">Remove</button>
+          <button type="button" class="btn-icon btn-icon-danger" onclick="this.closest('.event-row').remove()" data-tip="Remove this event" aria-label="Remove this event">🗑️</button>
         </div>
         <div class="form-row">
           <div class="form-group">
@@ -931,6 +953,26 @@
           if (led) led.innerHTML = (d.ledger || []).slice(0, 8).map(e =>
             `${escapeHtmlSafe(new Date(e.created_at * 1000).toLocaleString())} — ${escapeHtmlSafe(e.event_type)} ${(e.amount).toFixed(4)} (${escapeHtmlSafe(e.reference_type)})`
           ).join('<br>');
+
+          // Lifetime in/out breakdown (transparency). Abandoned-balance sweeps land as the
+          // 'Abandoned balances' inflow line — never operator revenue.
+          const st = d.statement;
+          if (st) {
+            const fmtRows = (arr) => (arr || []).length
+              ? arr.map(x => `${escapeHtmlSafe(x.label)}: <strong>${(x.amount || 0).toFixed(4)}</strong>`).join('<br>')
+              : '<span style="opacity:.6;">none yet</span>';
+            const inTot = document.getElementById('pp-in-total');
+            const outTot = document.getElementById('pp-out-total');
+            const inList = document.getElementById('pp-in-list');
+            const outList = document.getElementById('pp-out-list');
+            if (inTot) inTot.textContent = (st.in && st.in.total || 0).toFixed(4);
+            if (outTot) outTot.textContent = (st.out && st.out.total || 0).toFixed(4);
+            if (inList) inList.innerHTML = fmtRows(st.in && st.in.by);
+            if (outList) outList.innerHTML = fmtRows(st.out && st.out.by);
+            const dorm = (st.in && st.in.by || []).find(x => x.key === 'dormant');
+            const dormEl = document.getElementById('pp-from-dormant');
+            if (dormEl) dormEl.textContent = ((dorm && dorm.amount) || 0).toFixed(4);
+          }
         }
       } catch (e) { /* non-fatal */ }
       try {
@@ -1095,10 +1137,11 @@
         const fmt = (sec) => sec ? new Date(sec * 1000).toISOString().slice(0, 16).replace('T', ' ') + ' UTC' : '—';
         el.innerHTML = _campaignsCache.map(c => {
           const scheduled = c.status === 'scheduled';
+          // No .row-actions wrapper here — the card below already lays these out in a flex row.
           const actions = scheduled
-            ? `<button type="button" class="btn btn-secondary" style="padding:.2rem .6rem;" onclick="editCampaign(${c.id})">Edit</button>
-               <button type="button" class="btn btn-secondary" style="padding:.2rem .6rem;" onclick="runCampaignNow(${c.id})">Run now</button>
-               <button type="button" class="btn btn-danger" style="padding:.2rem .6rem;" onclick="cancelCampaign(${c.id})">Cancel</button>`
+            ? `<button type="button" class="btn-icon" onclick="editCampaign(${c.id})" data-tip="Edit this campaign" aria-label="Edit this campaign">✏️</button>
+               <button type="button" class="btn-icon" onclick="runCampaignNow(${c.id})" data-tip="Run this campaign now" aria-label="Run this campaign now">▶️</button>
+               <button type="button" class="btn-icon btn-icon-danger" onclick="cancelCampaign(${c.id})" data-tip="Cancel this campaign" aria-label="Cancel this campaign">❌</button>`
             : '';
           const rules = [
             c.weighted_percent != null ? `A ${c.weighted_percent}%` : null,
@@ -1205,7 +1248,9 @@
     document.addEventListener('DOMContentLoaded', () => {
       _safe(renderThemeBuilder);
       _safe(renderEnabledThemes);
+      _safe(updateThemeSwitchUI);
       _safe(updateProviderFields);
+      document.getElementById('allow_theme_switch')?.addEventListener('change', updateThemeSwitchUI);
       document.getElementById('provider')?.addEventListener('change', updateProviderFields);
       document.getElementById('theme_color')?.addEventListener('input', (e) => updateColorPreview(e.target));
     });

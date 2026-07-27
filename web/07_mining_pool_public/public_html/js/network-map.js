@@ -10,8 +10,12 @@
  * miners is real data (hub + gateway·offline + node twinkle), not "empty". The small
  * illustrative sample topology is used ONLY when the topology feed is unreachable; the
  * peer layer falls back to sample twinkles until the peer collector runs (noted on-page).
- * All positions come from the server RANDOMIZED within each country — never a real
- * location or IP (see back-end lib/geoip.js).
+ * LOCATION PRECISION: country, and nothing finer — no coordinate or IP is ever resolved.
+ * Miner countries are drawn as the FILLED COUNTRY (fill intensity = miner count), so the
+ * shape itself states the precision we have and there is no point position to misread; the
+ * centroid marker is only a label/hover anchor. A country with no polygon on file, or one
+ * too small to read at the current zoom, falls back to a size-scaled dot on its centroid.
+ * Hub and gateways sit on the country centroid (see back-end lib/geoip.js).
  *
  * Canvas colours are intentionally the dark Reactor palette (the phosphor glow only
  * reads on black); the surrounding panels use the theme tokens and reskin normally.
@@ -21,7 +25,7 @@
   const REDUCED = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
   // ── real land mask (Natural Earth 110m, rasterized to 360×180) ────────────
-  const MASK_B64 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADg/wEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADA/v8/AOD//z8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD+///D/////5//AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAPAH/j/+//////8PAAAAgB0AAHgAAAAAAD8AAAAAAAAAAAAAAAAAAAAAAAAAAOD//wP8//////8BAACAfx4AAAAAAAAAAP4AAAAAAAAAAAAAAAAAAAAAAAA4+I73//n///////8AAAAAfwAAAAAAAAAAAAAfAAAAAAAAAAAAAAAAAAAAAOAQACDwP4D///////8BAAAAPAQAAAAAAAAAAAAYAAAAAAAAAAAAAAAAAAAAADzAgPP5H8D//////38AAAAAAAAAAAAA4AEAAAD+DwAAAAAAAAAAAAAAAAAAAIC/g7PfBwAA/v////8AAAAAAAAAAADgBwAAwP//PwAA4B8AAAAAAAAAAAAAAAAMAAD8AgAA+P////8AAAAAAAAAAABwAAAA/P//AwAAAAAAAAAAAAAAAAAAAP8Ahvc5OwAA8P///38AAAAAAAAAAAAcAADg////34cHAAcAAAAAAAAAAAAAgN9/xzf8RwAA4P///z8AAAAAAAAAAAAPAB7g//////8fgB8AAAAAAQAAAAAAAO//B3f8/wsA4P///z8AAAAAAAAAAAAPAG////////8f2f8HAAAAAAD4HwAAAAD8H/D4/38A4P///xMAAAAAAPAHAAAAgN//////////////DwAAAAD+///h/4//H+/Bg/8BwP7//w8AAAAAwP8fAAAAj9///////////////88/AeD///////8DB8TPB/4AAP///wAAAAAA8P//AwDjf77/////////////////DwD////////////vh/kPwP//BwAAAAAA/P//H/P//5//////////////////34H8////////////Afw/gP//AQAAAAAA/v+fH////+///////////////////vD///////////9fAPwYgP8PAOA/AAAA/+N/8P//////////////////////QID4///////////Pw/0DAP8HAMAfAACA//F//v////////////////////8/AAP4///////////BBPAHAP4HAAAAAADg//z///////////////////////9/AID///////////8AQ8ABAPwBAAAAAAD8P/7///////////////////////9fAMD//////////z8AwA8AAPgBAAAAAAD+H/7/////////////////////Of8BAID///z//////z8AwD8AAMABAAAAAAD+P/z///////////////////9/wH8AAAD8MwD//////x8AwH8MAAAAAAAAAAD+P2D///////////////////95cAAAAACAAwD8/////38AwP8eAAAAAAAAgAGcH/D//////////////////wEAOAAAAADADgDA/////38AgP8/AAAAAAAAwANAH/T//////////////////wAAfgAAAAAwAAAA//////8PgP8/AAAAAAAAwAFwD/7/////////////////PwAAfwAAAAAGAAAA//////8/wP//AAAAAAAAwAOwA/7/////////////////DwCAPwAAAIAAAAAA/v//////8///BwAAAAAAOAcgcP//////////////////HwAAHwAAAAAAAACA+P//////4///DwAAAAAAOA74/////////////////////wUADwAAAAAAAAAA8P//////4///DwAAAAAAGD///////////////////////wUAAwAAAAAAAAAA8P//////7///FwAAAAAAAB///////////////////////wUAAgAAAAAAAAAA0P//////////DAAAAAAAgOH//////////////////////w0AAAAAAAAAAAAAYP////////8xLAAAAAAAAPz//////////////////////wwAAAAAAAAAAAAAAP7//////38HfgAAAAAAgP///////////////////////wQAAAAAAAAAAAAAAP3///////8HUAAAAAAAAP7/////////////////////fwQAAAAAAAAAAAAAAP////////+XAAAAAAAAAPz///93/D/+////////////PwwAAAAAAAAAAAAAAP////////9/AAAAAAAAAPj//f9j/g/+////////////HwAAAAAAAAAAAAAAAP////////8MAAAAAAAAAPj/+P8B/Mf/////////////DwQAAAAAAAAAAAAAAP///////z8AAAAAAAAAcPzH8/8A8I//////////////Bx4AAAAAAAAAAAAAAP///////x8AAAAAAAAA+H+Aw/8AwA/+//////////9/AA8AAAAAAAAAAAAAAP///////x8AAAAAAAAA+D8Aj//w4R/8//////////8/AAAAAAAAAAAAAAAAAP///////wMAAAAAAAAA+B8wuE/+/z/+/////////98fAAMAAAAAAAAAAAAAAP///////wMAAAAAAAAA+A8wEMf//x/+/////////0cOAAMAAAAAAAAAAAAAAP7//////wEAAAAAAAAA+A8AAI7//x/8/////////wMOAAEAAAAAAAAAAAAAAP7//////wAAAAAAAAAA+AcABob//z/8/////////zccwAEAAAAAAAAAAAAAAPz//////wAAAAAAAAAAQOB/AAQ2/////////////x8c8AEAAAAAAAAAAAAAAPj//////wAAAAAAAAAAQPx/AAAA/////////////w8Y/gEAAAAAAAAAAAAAAPD/////fwAAAAAAAAAA4P8/AAAA/////////////w+EGwAAAAAAAAAAAAAAAMD/////HwAAAAAAAAAA8P9/AACA/////////////x/AAwAAAAAAAAAAAAAAAID/////DwAAAAAAAAAA+P//BwaA/////////////x/AAAAAAAAAAAAAAAAAAID9////BwAAAAAAAAAA/P//D3+E/////////////z9AAAAAAAAAAAAAAAAAAAD5////BwAAAAAAAAAA/P//f////////////////x8AAAAAAAAAAAAAAAAAAADy/x8GBgAAAAAAAAAA/P/////v/8///////////z8AAAAAAAAAAAAAAAAAAAD0/w8ABgAAAAAAAAAA/v////+//4///////////z8AAAAAAAAAAAAAAAAAAADu/wcADgAAAAAAAACA//////8f/x/+/////////x8AAAAAAAAAAAAAAAAAAACI/wcALAAAAAAAAADA//////8//z/g/////////w8AAAAAAAAAAAAAAAAAAACQ/wcACAAAAAAAAADg//////9//r+A/////////wcAAAAAAAAAAAAAAAAAAAAQ/wMAAAAAAAAAAADg//////9//n8cgP///////ycAAAAAAAAAAAAAAAAAAAAA/gMAAAAAAAAAAADw////////+P9/AP///////xEAAAAAAAAAAAAAAAAAAAAA/AMAHQAAAAAAAADw////////+P//APz/f///fxAAAAAAAAAAAAAAAAAAAAAA+AcAYAAAAAAAAAD4////////+f9/APz/B///BgAAAAAAAAAAAAAAAAAAAAAA/AccgAEAAAAAAADw////////8f9/AOD/B/5/AAAAAAAAAAAAAAAAAQAAAAAA+A8eADgAAAAAAADw////////4f8/AOD/Afw/BgAAAAAAAAAAAAAAAAAAAAAA8J8PAPwCAAAAAADw////////4/8fAOD/APw/AgAAAAAAAAAAAAAAAAAAAAAAgP8PAAAAAAAAAADw////////x/8HAOB/APx/ADAAAAAAAAAAAAAAAAAAAAAAAP4PAAAAAAAAAAD4////////h/8BAOA/APz/ADAAAAAAAAAAAAAAAAAAAAAAAID/AAAAAAAAAAD4////////j/8AAMAPAMD/ATAAAAAAAAAAAAAAAAAAAAAAAAD/AQAAAAAAAAD4////////nx8AAMAPAMD/ATAAAAAAAAAAAAAAAAAAAAAAAAD8AAAAAAAAAAD4////////vwcAAIAPAMD/AcAAAAAAAAAAAAAAAAAAAAAAAADgAQAAAAAAAAD4////////fwAAAIAPAMD8AQABAAAAAAAAAAAAAAAAAAAAAADAAAgAAAAAAADw////////f2AAAAAPAID4AUACAAAAAAAAAAAAAAAAAAAAAADAAe9TAAAAAADg/////////34AAAAPAEBwAAgAAAAAAAAAAAAAAAAAAAAAAAAAE+9/AAAAAADA/////////38AAAAXAEAgAAQCAAAAAAAAAAAAAAAAAAAAAAAAz///AAAAAACA/////////z8AAAASAMAAAIACAAAAAAAAAAAAAAAAAAAAAAAAyP//AQAAAACA/////////z8AAAAwAIAAAEAHAAAAAAAAAAAAAAAAAAAAAAAAgP//AwAAAAAA/v///////x8AAAAwAAADAAMBAAAAAAAAAAAAAAAAAAAAAAAAwP//fwAAAAAA/A/+/////x8AAAAAAAAHAAcAAAAAAAAAAAAAAAAAAAAAAAAAgP///wAAAAAAEAD8/////w8AAAAAADAGwAcAAAAAAAAAAAAAAAAAAAAAAAAAgP///wEAAAAAAADA/////wcAAAAAAGAG4AEAAAAAAAAAAAAAAAAAAAAAAAAA4P///wEAAAAAAADA/////wMAAAAAAMAM+AMAAAAAAAAAAAAAAAAAAAAAAAAA4P///wMAAAAAAADg/////wEAAAAAAIAL/gMQAAAAAAAAAAAAAAAAAAAAAAAA8P///wMAAAAAAADg////fwAAAAAAAIAH/vMQAAAAAAAAAAAAAAAAAAAAAAAA8P///wcAAAAAAADg////PwAAAAAAAAAP/gMAAQAAAAAAAAAAAAAAAAAAAAAA+P///38AAAAAAADg////PwAAAAAAAAAO/DmAAwAAAAAAAAAAAAAAAAAAAAAA+P///38BAAAAAADA////HwAAAAAAAAA+/DkA8gAAAAAAAAAAAAAAAAAAAAAA8P////8fAAAAAACA////DwAAAAAAAAA8wChE/gcAAAAAAAAAAAAAAAAAAAAA+P////8/AAAAAACA////BwAAAAAAAAA4AEAA8B8AAAAAAAAAAAAAAAAAAAAA+P//////AQAAAAAA////BwAAAAAAAAAwAEAAxD8NAAAAAAAAAAAAAAAAAAAA+P//////AQAAAAAA////BwAAAAAAAADAAQAAxP+AAAAAAAAAAAAAAAAAAAAA8P//////AQAAAAAA/v//BwAAAAAAAACAHwAAwH8ABAAAAAAAAAAAAAAAAAAA4P//////AQAAAAAA/v//BwAAAAAAAAAAQFYEAMcAAAAAAAAAAAAAAAAAAAAA4P//////AAAAAAAA/v//DwAAAAAAAAAAAAgBAIABMAAAAAAAAAAAAAAAAAAAwP//////AAAAAAAA/v//DwAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAgP////9/AAAAAAAA/P//DwAAAAAAAAAAAAAAAQQAAAAAAAAAAAAAAAAAAAAAgP////8/AAAAAAAA/v//HyAAAAAAAAAAAACAHwQAAAAAAAAAAAAAAAAAAAAAAP////8fAAAAAAAA/v//HyAAAAAAAAAAAADADwwAAAAAAAAAAAAAAAAAAAAAAP////8fAAAAAAAA////HzAAAAAAAAAAAADsDxwAAAAAAAAAAAAAAAAAAAAAAP7///8fAAAAAAAA////DzgAAAAAAAAAAAD/DxwAAAAAAAAAAAAAAAAAAAAAAPj///8fAAAAAAAA////Dz8AAAAAAAAAAAD/Pz4AAAiAAAAAAAAAAAAAAAAAAOD///8fAAAAAAAA////Ax8AAAAAAAAAAMD//z4AAABAAAAAAAAAAAAAAAAAAMD///8PAAAAAAAA////AB8AAAAAAAAAAMD//z8AAAAAAAAAAAAAAAAAAAAAAMD///8PAAAAAAAA/v9/AB8AAAAAAAAAAOD//38AAAAAAAAAAAAAAAAAAAAAAMD///8PAAAAAAAA/v9/AB8AAAAAAAAAAPz///8BAAEAAAAAAAAAAAAAAAAAAMD///8HAAAAAAAA/P9/gA8AAAAAAAAAgP////8BAAIAAAAAAAAAAAAAAAAAAMD///8DAAAAAAAA/P//gA8AAAAAAAAAwP////8DAAAAAAAAAAAAAAAAAAAAAMD//38AAAAAAAAA/P9/AA8AAAAAAAAAwP////8HAAAAAAAAAAAAAAAAAAAAAOD//x8AAAAAAAAA+P9/AAcAAAAAAAAA4P////8PAAAAAAAAAAAAAAAAAAAAAOD//w8AAAAAAAAA+P8fAAIAAAAAAAAAwP////8fAAAAAAAAAAAAAAAAAAAAAOD//wcAAAAAAAAA+P8fAAAAAAAAAAAA4P////8fAAAAAAAAAAAAAAAAAAAAAOD//wcAAAAAAAAA+P8fAAAAAAAAAAAAwP////8fAAAAAAAAAAAAAAAAAAAAAOD//wcAAAAAAAAA8P8PAAAAAAAAAAAAgP////8/AAAAAAAAAAAAAAAAAAAAAOD//wMAAAAAAAAA4P8HAAAAAAAAAAAAgP////8fAAAAAAAAAAAAAAAAAAAAAPD//wMAAAAAAAAA4P8HAAAAAAAAAAAAgP////8fAAAAAAAAAAAAAAAAAAAAAPD//wEAAAAAAAAAwP8DAAAAAAAAAAAAAP////8fAAAAAAAAAAAAAAAAAAAAAOD//wAAAAAAAAAAwP8BAAAAAAAAAAAAAP8D/P8PAAAAAAAAAAAAAAAAAAAAAPD/fwAAAAAAAAAAwH8AAAAAAAAAAAAAgP8A2P8HAAAAAAAAAAAAAAAAAAAAAPD/OwAAAAAAAAAAgAEAAAAAAAAAAAAAAAcA6P8HAAAAAAAAAAAAAAAAAAAAAPj/BwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAwP8DAAACAAAAAAAAAAAAAAAAAPj/BwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAP8DAAAEAAAAAAAAAAAAAAAAAPz/BwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAP8DAAAIAAAAAAAAAAAAAAAAAPj/AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAGgAAAA4AAAAAAAAAAAAAAAAAPg/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAcAAAAAAAAAAAAAAAAAPw/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAYAAAAAAAAAAAAAAAAAPwHAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAOAAAAALAAAAAAAAAAAAAAAAAPwfAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAOAAAIADAAAAAAAAAAAAAAAAAPgHAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEAAAMABAAAAAAAAAAAAAAAAAPwHAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHAAAAAAAAAAAAAAAAAAAP4BAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHgAAAAAAAAAAAAAAAAAAP4BAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADAAAAAAAAAAAAAAAAAAAP4DAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAP8BAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAP8AAAAAAAAAAAAAAAAAAAAAAAIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAH4AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAH6AAwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAPwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAPADAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAAAAAAAAAAAAAAAAAAAAAAAAAAOAAAAAAAAAAAAAAAAAIAfAAAAAAAeeADADwAAAAAAAAAAAAAAAAAAAAAAAAAHAAAAAAAAAAAAAAAAAPD/AADA/////////z8AAAAAAAAAAAAAAAAAAAAAAAAHAAAAAAAAAAAAAAAAgP///wH4//////////8DAAAAAAAAAAAAAAAAAAAAADAfAAAAAAAAAAAAAADw8////wP+////////////AwAAAAAAAAAAAAAAAAAAAHA/AAAAAAAAAAA8//P//////+D/////////////HwAAAAAAAAAAAAAAAAAAAP5+AAAAAAAA5v////////////D//////////////38AAAAAAAAAAAAAAAAAAAB+AAAAAACA/////////////////////////////38AAAAAAAAAYAYA4ON/OPh/AAAAAADw/////////////////////////////x8AAAAAAADwv/MXgP////8fAAAAAADw/////////////////////////////wMAAAAAAPz///////////8HAAAAAAD+/////////////////////////////wAAAAAAAPz//////////z8AAAAAAP///////////////////////////////wAAAADA/////////////wEAAAAA8P///////////////////////////////wAAAACH////////////PwAAAPgA/////////////////////////////////wcAAAAcgP//////////fwAAAP4BwP//////////////////////////////HwAAAAAAAP7//////////wf8wD8AwP//////////////////////////////DwAAAAAA/v////////////8HAAD4////////////////////////////////HwAAAAAA+P//////////////4f///////////////////////////////////wAAAAAA/P///////////////////////////////////////////////////x8A3x8AAP7///////////////////////////////////////////////////8/////f///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////";
+  const MASK_B64 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADg/wEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADA/v8/AOD//z8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD+///D/////5//AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAPAH/j/+//////8PAAAAgB0AAHgAAAAAAD8AAAAAAAAAAAAAAAAAAAAAAAAAAOD//wP8//////8BAACAfx4AAAAAAAAAAP4AAAAAAAAAAAAAAAAAAAAAAAA4+I73//n///////8AAAAAfwAAAAAAAAAAAAAfAAAAAAAAAAAAAAAAAAAAAOAQACDwP4D///////8BAAAAPAQAAAAAAAAAAAAYAAAAAAAAAAAAAAAAAAAAADzAgPP5H8D//////38AAAAAAAAAAAAA4AEAAAD+DwAAAAAAAAAAAAAAAAAAAIC/g7PfBwAA/v////8AAAAAAAAAAADgBwAAwP//PwAA4B8AAAAAAAAAAAAAAAAMAAD8AgAA+P////8AAAAAAAAAAABwAAAA/P//AwAAAAAAAAAAAAAAAAAAAP8Ahvc5OwAA8P///38AAAAAAAAAAAAcAADg////34cHAAcAAAAAAAAAAAAAgN9/xzf8RwAA4P///z8AAAAAAAAAAAAPAB7g//////8fgB8AAAAAAQAAAAAAAO//B3f8/wsA4P///z8AAAAAAAAAAAAPAG////////8f2f8HAAAAAAD4HwAAAAD8H/D4/38A4P///xMAAAAAAPAHAAAAgN//////////////DwAAAAD+///h/4//H+/Bg/8BwP7//w8AAAAAwP8fAAAAj9///////////////88/AeD///////8DB8TPB/4AAP///wAAAAAA8P//AwDjf77/////////////////DwD////////////vh/kPwP//BwAAAAAA/P//H/P//5//////////////////34H8////////////Afw/gP//AQAAAAAA/v+fH////+///////////////////vD///////////9fAPwYgP8PAOA/AAAA/+N/8P//////////////////////QID4///////////Pw/0DAP8HAMAfAACA//F//v////////////////////8/AAP4///////////BBPAHAP4HAAAAAADg//z///////////////////////9/AID///////////8AQ8ABAPwBAAAAAAD8P/7///////////////////////9fAMD//////////z8AwA8AAPgBAAAAAAD+H/7/////////////////////Of8BAID///z//////z8AwD8AAMABAAAAAAD+P/z///////////////////9/wH8AAAD8MwD//////x8AwH8MAAAAAAAAAAD+P2D///////////////////95cAAAAACAAwD8/////38AwP8eAAAAAAAAgAGcH/D//////////////////wEAOAAAAADADgDA/////38AgP8/AAAAAAAAwANAH/T//////////////////wAAfgAAAAAwAAAA//////8PgP8/AAAAAAAAwAFwD/7/////////////////PwAAfwAAAAAGAAAA//////8/wP//AAAAAAAAwAOwA/7/////////////////DwCAPwAAAIAAAAAA/v//////8///BwAAAAAAOAcgcP//////////////////HwAAHwAAAAAAAACA+P//////4///DwAAAAAAOA74/////////////////////wUADwAAAAAAAAAA8P//////4///DwAAAAAAGD///////////////////////wUAAwAAAAAAAAAA8P//////7///FwAAAAAAAB///////////////////////wUAAgAAAAAAAAAA0P//////////DAAAAAAAgOH//////////////////////w0AAAAAAAAAAAAAYP////////8xLAAAAAAAAPz//////////////////////wwAAAAAAAAAAAAAAP7//////38HfgAAAAAAgP///////////////////////wQAAAAAAAAAAAAAAP3///////8HUAAAAAAAAP7/////////////////////fwQAAAAAAAAAAAAAAP////////+XAAAAAAAAAPz///93/D/+////////////PwwAAAAAAAAAAAAAAP////////9/AAAAAAAAAPj//f9j/g/+////////////HwAAAAAAAAAAAAAAAP////////8MAAAAAAAAAPj/+P8B/Mf/////////////DwQAAAAAAAAAAAAAAP///////z8AAAAAAAAAcPzH8/8A8I//////////////Bx4AAAAAAAAAAAAAAP///////x8AAAAAAAAA+H+Aw/8AwA/+//////////9/AA8AAAAAAAAAAAAAAP///////x8AAAAAAAAA+D8Aj//w4R/8//////////8/AAAAAAAAAAAAAAAAAP///////wMAAAAAAAAA+B8wuE/+/z/+/////////98fAAMAAAAAAAAAAAAAAP///////wMAAAAAAAAA+A8wEMf//x/+/////////0cOAAMAAAAAAAAAAAAAAP7//////wEAAAAAAAAA+A8AAI7//x/8/////////wMOAAEAAAAAAAAAAAAAAP7//////wAAAAAAAAAA+AcABob//z/8/////////zccwAEAAAAAAAAAAAAAAPz//////wAAAAAAAAAAQOB/AAQ2/////////////x8c8AEAAAAAAAAAAAAAAPj//////wAAAAAAAAAAQPx/AAAA/////////////w8Y/gEAAAAAAAAAAAAAAPD/////fwAAAAAAAAAA4P8/AAAA/////////////w+EGwAAAAAAAAAAAAAAAMD/////HwAAAAAAAAAA8P9/AACA/////////////x/AAwAAAAAAAAAAAAAAAID/////DwAAAAAAAAAA+P//BwaA/////////////x/AAAAAAAAAAAAAAAAAAID9////BwAAAAAAAAAA/P//D3+E/////////////z9AAAAAAAAAAAAAAAAAAAD5////BwAAAAAAAAAA/P//f////////////////x8AAAAAAAAAAAAAAAAAAADy/x8GBgAAAAAAAAAA/P/////v/8///////////z8AAAAAAAAAAAAAAAAAAAD0/w8ABgAAAAAAAAAA/v////+//4///////////z8AAAAAAAAAAAAAAAAAAADu/wcADgAAAAAAAACA//////8f/x/+/////////x8AAAAAAAAAAAAAAAAAAACI/wcALAAAAAAAAADA//////8//z/g/////////w8AAAAAAAAAAAAAAAAAAACQ/wcACAAAAAAAAADg//////9//r+A/////////wcAAAAAAAAAAAAAAAAAAAAQ/wMAAAAAAAAAAADg//////9//n8cgP///////ycAAAAAAAAAAAAAAAAAAAAA/gMAAAAAAAAAAADw////////+P9/AP///////xEAAAAAAAAAAAAAAAAAAAAA/AMAHQAAAAAAAADw////////+P//APz/f///fxAAAAAAAAAAAAAAAAAAAAAA+AcAYAAAAAAAAAD4////////+f9/APz/B///BgAAAAAAAAAAAAAAAAAAAAAA/AccgAEAAAAAAADw////////8f9/AOD/B/5/AAAAAAAAAAAAAAAAAQAAAAAA+A8eADgAAAAAAADw////////4f8/AOD/Afw/BgAAAAAAAAAAAAAAAAAAAAAA8J8PAPwCAAAAAADw////////4/8fAOD/APw/AgAAAAAAAAAAAAAAAAAAAAAAgP8PAAAAAAAAAADw////////x/8HAOB/APx/ADAAAAAAAAAAAAAAAAAAAAAAAP4PAAAAAAAAAAD4////////h/8BAOA/APz/ADAAAAAAAAAAAAAAAAAAAAAAAID/AAAAAAAAAAD4////////j/8AAMAPAMD/ATAAAAAAAAAAAAAAAAAAAAAAAAD/AQAAAAAAAAD4////////nx8AAMAPAMD/ATAAAAAAAAAAAAAAAAAAAAAAAAD8AAAAAAAAAAD4////////vwcAAIAPAMD/AcAAAAAAAAAAAAAAAAAAAAAAAADgAQAAAAAAAAD4////////fwAAAIAPAMD8AQABAAAAAAAAAAAAAAAAAAAAAADAAAgAAAAAAADw////////f2AAAAAPAID4AUACAAAAAAAAAAAAAAAAAAAAAADAAe9TAAAAAADg/////////34AAAAPAEBwAAgAAAAAAAAAAAAAAAAAAAAAAAAAE+9/AAAAAADA/////////38AAAAXAEAgAAQCAAAAAAAAAAAAAAAAAAAAAAAAz///AAAAAACA/////////z8AAAASAMAAAIACAAAAAAAAAAAAAAAAAAAAAAAAyP//AQAAAACA/////////z8AAAAwAIAAAEAHAAAAAAAAAAAAAAAAAAAAAAAAgP//AwAAAAAA/v///////x8AAAAwAAADAAMBAAAAAAAAAAAAAAAAAAAAAAAAwP//fwAAAAAA/A/+/////x8AAAAAAAAHAAcAAAAAAAAAAAAAAAAAAAAAAAAAgP///wAAAAAAEAD8/////w8AAAAAADAGwAcAAAAAAAAAAAAAAAAAAAAAAAAAgP///wEAAAAAAADA/////wcAAAAAAGAG4AEAAAAAAAAAAAAAAAAAAAAAAAAA4P///wEAAAAAAADA/////wMAAAAAAMAM+AMAAAAAAAAAAAAAAAAAAAAAAAAA4P///wMAAAAAAADg/////wEAAAAAAIAL/gMQAAAAAAAAAAAAAAAAAAAAAAAA8P///wMAAAAAAADg////fwAAAAAAAIAH/vMQAAAAAAAAAAAAAAAAAAAAAAAA8P///wcAAAAAAADg////PwAAAAAAAAAP/gMAAQAAAAAAAAAAAAAAAAAAAAAA+P///38AAAAAAADg////PwAAAAAAAAAO/DmAAwAAAAAAAAAAAAAAAAAAAAAA+P///38BAAAAAADA////HwAAAAAAAAA+/DkA8gAAAAAAAAAAAAAAAAAAAAAA8P////8fAAAAAACA////DwAAAAAAAAA8wChE/gcAAAAAAAAAAAAAAAAAAAAA+P////8/AAAAAACA////BwAAAAAAAAA4AEAA8B8AAAAAAAAAAAAAAAAAAAAA+P//////AQAAAAAA////BwAAAAAAAAAwAEAAxD8NAAAAAAAAAAAAAAAAAAAA+P//////AQAAAAAA////BwAAAAAAAADAAQAAxP+AAAAAAAAAAAAAAAAAAAAA8P//////AQAAAAAA/v//BwAAAAAAAACAHwAAwH8ABAAAAAAAAAAAAAAAAAAA4P//////AQAAAAAA/v//BwAAAAAAAAAAQFYEAMcAAAAAAAAAAAAAAAAAAAAA4P//////AAAAAAAA/v//DwAAAAAAAAAAAAgBAIABMAAAAAAAAAAAAAAAAAAAwP//////AAAAAAAA/v//DwAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAgP////9/AAAAAAAA/P//DwAAAAAAAAAAAAAAAQQAAAAAAAAAAAAAAAAAAAAAgP////8/AAAAAAAA/v//HyAAAAAAAAAAAACAHwQAAAAAAAAAAAAAAAAAAAAAAP////8fAAAAAAAA/v//HyAAAAAAAAAAAADADwwAAAAAAAAAAAAAAAAAAAAAAP////8fAAAAAAAA////HzAAAAAAAAAAAADsDxwAAAAAAAAAAAAAAAAAAAAAAP7///8fAAAAAAAA////DzgAAAAAAAAAAAD/DxwAAAAAAAAAAAAAAAAAAAAAAPj///8fAAAAAAAA////Dz8AAAAAAAAAAAD/Pz4AAAiAAAAAAAAAAAAAAAAAAOD///8fAAAAAAAA////Ax8AAAAAAAAAAMD//z4AAABAAAAAAAAAAAAAAAAAAMD///8PAAAAAAAA////AB8AAAAAAAAAAMD//z8AAAAAAAAAAAAAAAAAAAAAAMD///8PAAAAAAAA/v9/AB8AAAAAAAAAAOD//38AAAAAAAAAAAAAAAAAAAAAAMD///8PAAAAAAAA/v9/AB8AAAAAAAAAAPz///8BAAEAAAAAAAAAAAAAAAAAAMD///8HAAAAAAAA/P9/gA8AAAAAAAAAgP////8BAAIAAAAAAAAAAAAAAAAAAMD///8DAAAAAAAA/P//gA8AAAAAAAAAwP////8DAAAAAAAAAAAAAAAAAAAAAMD//38AAAAAAAAA/P9/AA8AAAAAAAAAwP////8HAAAAAAAAAAAAAAAAAAAAAOD//x8AAAAAAAAA+P9/AAcAAAAAAAAA4P////8PAAAAAAAAAAAAAAAAAAAAAOD//w8AAAAAAAAA+P8fAAIAAAAAAAAAwP////8fAAAAAAAAAAAAAAAAAAAAAOD//wcAAAAAAAAA+P8fAAAAAAAAAAAA4P////8fAAAAAAAAAAAAAAAAAAAAAOD//wcAAAAAAAAA+P8fAAAAAAAAAAAAwP////8fAAAAAAAAAAAAAAAAAAAAAOD//wcAAAAAAAAA8P8PAAAAAAAAAAAAgP////8/AAAAAAAAAAAAAAAAAAAAAOD//wMAAAAAAAAA4P8HAAAAAAAAAAAAgP////8fAAAAAAAAAAAAAAAAAAAAAPD//wMAAAAAAAAA4P8HAAAAAAAAAAAAgP////8fAAAAAAAAAAAAAAAAAAAAAPD//wEAAAAAAAAAwP8DAAAAAAAAAAAAAP////8fAAAAAAAAAAAAAAAAAAAAAOD//wAAAAAAAAAAwP8BAAAAAAAAAAAAAP8D/P8PAAAAAAAAAAAAAAAAAAAAAPD/fwAAAAAAAAAAwH8AAAAAAAAAAAAAgP8A2P8HAAAAAAAAAAAAAAAAAAAAAPD/OwAAAAAAAAAAgAEAAAAAAAAAAAAAAAcA6P8HAAAAAAAAAAAAAAAAAAAAAPj/BwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAwP8DAAACAAAAAAAAAAAAAAAAAPj/BwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAP8DAAAEAAAAAAAAAAAAAAAAAPz/BwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAP8DAAAIAAAAAAAAAAAAAAAAAPj/AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAGgAAAA4AAAAAAAAAAAAAAAAAPg/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAcAAAAAAAAAAAAAAAAAPw/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAYAAAAAAAAAAAAAAAAAPwHAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAOAAAAALAAAAAAAAAAAAAAAAAPwfAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAOAAAIADAAAAAAAAAAAAAAAAAPgHAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEAAAMABAAAAAAAAAAAAAAAAAPwHAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHAAAAAAAAAAAAAAAAAAAP4BAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHgAAAAAAAAAAAAAAAAAAP4BAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADAAAAAAAAAAAAAAAAAAAP4DAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAP8BAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAP8AAAAAAAAAAAAAAAAAAAAAAAIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAH4AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAH6AAwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAPwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAPADAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAAAAAAAAAAAAAAAAAAAAAAAAAAOAAAAAAAAAAAAAAAAAIAfAAAAAAAeeADADwAAAAAAAAAAAAAAAAAAAAAAAAAHAAAAAAAAAAAAAAAAAPD/AADA/////////z8AAAAAAAAAAAAAAAAAAAAAAAAHAAAAAAAAAAAAAAAAgP///wH4//////////8DAAAAAAAAAAAAAAAAAAAAADAfAAAAAAAAAAAAAADw8////wP+////////////AwAAAAAAAAAAAAAAAAAAAHA/AAAAAAAAAAA8//P//////+D/////////////HwAAAAAAAAAAAAAAAAAAAP5+AAAAAAAA5v////////////D//////////////38AAAAAAAAAAAAAAAAAAAB+AAAAAACA/////////////////////////////38AAAAAAAAAYAYA4ON/OPh/AAAAAADw/////////////////////////////x8AAAAAAADwv/MXgP////8fAAAAAADw/////////////////////////////wMAAAAAAPz///////////8HAAAAAAD+/////////////////////////////wAAAAAAAPz//////////z8AAAAAAP///////////////////////////////wAAAADA/////////////wEAAAAA8P///////////////////////////////wAAAACH////////////PwAAAPgA/////////////////////////////////wcAAAAcgP//////////fwAAAP4BwP//////////////////////////////HwAAAAAAAP7//////////wf8wD8AwP//////////////////////////////DwAAAAAA/v////////////8HAAD4////////////////////////////////HwAAAAAA+P//////////////4f///////////////////////////////////wAAAAAA/P///////////////////////////////////////////////////x8A3x8AAP7///////////////////////////////////////////////////8/////f//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
   const MASK_W = 360, MASK_H = 180;
   const MASK = (() => { const b = atob(MASK_B64); const u = new Uint8Array(b.length); for (let i = 0; i < b.length; i++) u[i] = b.charCodeAt(i); return u; })();
   function isLand(lat, lng) { let c = Math.floor(lng + 180), r = Math.floor(90 - lat); if (c < 0) c += 360; if (c >= 360) c -= 360; if (r < 0) r = 0; if (r >= 180) r = 179; const i = r * 360 + c; return (MASK[i >> 3] >> (i & 7)) & 1; }
@@ -65,7 +69,10 @@
       { country: 'Taiwan', country_code: 'TW', miners: 2, gateway: 'apac', lat: 24, lng: 121 },
       { country: 'Chile', country_code: 'CL', miners: 1, gateway: 'sa', lat: -35, lng: -71 }
     ],
-    totals: { miners: 0, gateways_up: 7, gateways_total: 8, countries: 21 }, geo_source: 'sample'
+    // miners MUST equal the sum of countries[] above (343) — the placard reads totals.miners so
+    // that the k-anonymity "Other" bucket is counted on a live pool, which means a sample whose
+    // total disagreed with its own rows would render "0 miners" over a fully populated globe.
+    totals: { miners: 343, gateways_up: 7, gateways_total: 8, countries: 21 }, geo_source: 'sample'
   };
   const FALLBACK_PEERS = {
     window_days: 30, points: [],
@@ -127,7 +134,8 @@
   let seed = 20260718; const rand = () => { seed = (seed*1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
 
   // ── state populated from the API (or fallback) ─────────────────────────────
-  let HUB = null, GATEWAYS = [], gwByRegion = {}, REGIONS = [], PEERS = [], NODES = [], COUNTRIES = [];
+  let HUB = null, GATEWAYS = [], gwByRegion = {}, REGIONS = [], PEERS = [], NODES = [], COUNTRIES = [], POLY_BY_NAME = {};
+  let TOTALS = {};
   let LAND = [], MERIDIANS = [], PARALLELS = [];
 
   function buildStaticGeometry() {
@@ -138,24 +146,64 @@
       const rv = rings.map(r => r.map(([lng,lat]) => toVec(lat,lng)));
       let sx=0,sy=0,sz=0; rv.forEach(r=>r.forEach(v=>{ sx+=v[0]; sy+=v[1]; sz+=v[2]; }));
       const m = Math.hypot(sx,sy,sz)||1;
-      return { name, rings: rv, centroid:[sx/m,sy/m,sz/m], flag: FLAGS[name], border: HOST_BORDER[name] || "rgba(140,205,235,0.45)", host: !!HOST_BORDER[name] };
+      return { name, rings: rv, centroid:[sx/m,sy/m,sz/m], flag: FLAGS[name], border: HOST_BORDER[name] || "rgba(140,205,235,0.45)", host: !!HOST_BORDER[name], active: false, miners: 0, share: 0 };
     });
+    POLY_BY_NAME = {}; COUNTRIES.forEach(c => { POLY_BY_NAME[c.name] = c; });
   }
 
   function ingest(topo, peers) {
+    TOTALS = topo.totals || {};
     const h = topo.hub || {};
-    HUB = { role: 'hub', name: h.label || 'Pool Hub', v: (h.lat != null) ? toVec(h.lat, h.lng) : toVec(20, 0) };
+    // An UNLOCATED hub (no country resolved server-side → lat null) is never drawn. It used to
+    // fall back to lat 20 / lng 0, which is the middle of the Sahara: a marker labelled with the
+    // pool name sitting on a country that has nothing to do with the pool, plus every gateway arc
+    // converging on it. `v` keeps a defined vector so the geometry helpers stay simple, but
+    // `located` gates the marker and every arc that targets the hub (see draw()).
+    const hubLocated = h.lat != null;
+    HUB = { role: 'hub', name: h.label || 'Pool Hub', located: hubLocated,
+            v: hubLocated ? toVec(h.lat, h.lng) : toVec(20, 0) };
     GATEWAYS = (topo.gateways || []).filter(g => g.lat != null).map(g => ({
       role: 'gw', region: g.region, name: g.label || g.region, status: g.status || 'connected',
       miners: g.miners || 0, _feed: g.miners || 0, v: toVec(g.lat, g.lng)
     }));
-    gwByRegion = {}; GATEWAYS.forEach(g => { gwByRegion[g.region] = g; });
+    // Null prototype: a region tag of 'constructor'/'toString' would otherwise resolve to an
+    // inherited function, and `gw.v` on it is undefined → the arc maths throws and takes the
+    // whole globe down. Region tags are operator-chosen strings, so treat them as data only.
+    gwByRegion = Object.create(null); GATEWAYS.forEach(g => { gwByRegion[g.region] = g; });
+    // Miner countries. `poly` is the country's own outline when we ship one — then the FILLED
+    // COUNTRY carries the miner count (drawCountries) and the centroid marker demotes to a
+    // small label/hover anchor. Countries with no polygon on file keep the sized dot, which is
+    // the only honest option there: a dot that says "this country", not "this spot".
     REGIONS = (topo.countries || []).filter(c => c.lat != null).map(c => {
-      const gw = gwByRegion[c.gateway] || GATEWAYS[0] || null;
+      // No `|| GATEWAYS[0]` fallback: an unknown/absent gateway tag means the payload is NOT
+      // telling us which region these miners come in through (the server sends null rather than
+      // naming an unpublished one), and picking whichever gateway happens to be first drew a
+      // confident arc to a city with nothing to do with them. Unknown → arc to the hub.
+      const gw = gwByRegion[c.gateway] || null;
       return { role: 'region', name: c.country, cc: c.country_code, n: c.miners, gw: c.gateway,
-        v: toVec(c.lat, c.lng), gwv: gw ? gw.v : (HUB ? HUB.v : toVec(20,0)), gwStatus: gw ? gw.status : 'connected' };
+        poly: POLY_BY_NAME[c.country] || null,
+        // No gateway for this country's share vote → the arc lands on the hub, but only if the
+        // hub has a real position. gwv null = no arc drawn for this country (the country fill
+        // still carries its miner count).
+        v: toVec(c.lat, c.lng), gwv: gw ? gw.v : (HUB.located ? HUB.v : null), gwStatus: gw ? gw.status : 'connected' };
     });
-    NODES = [ HUB, ...GATEWAYS, ...REGIONS ];
+    NODES = [ ...(HUB.located ? [HUB] : []), ...GATEWAYS, ...REGIONS ];
+
+    // Activity-driven country highlight: a country lights up ONLY when the live data shows
+    // a miner, a Grin node peer, a gateway, or the hub there. Country names are the canonical
+    // Natural-Earth strings shared by BORDERS/FLAGS and the API payloads, so exact-name match
+    // works. Countries with a bespoke flag get the flag; the rest get a subtle activity tint.
+    const active = new Set();
+    const addName = (n) => { if (n) active.add(n); };
+    addName((topo.hub || {}).country);
+    (topo.gateways || []).forEach(g => addName(g.country));
+    (topo.countries || []).forEach(c => addName(c.country));
+    ((peers && peers.countries) || []).forEach(c => addName(c.country));
+    // Miner load per country → choropleth weight. `share` is sqrt-scaled against the busiest
+    // country so a single dominant country doesn't flatten everyone else to invisible.
+    const peak = REGIONS.reduce((m, r) => Math.max(m, r.n), 0);
+    COUNTRIES.forEach(c => { c.active = active.has(c.name); c.miners = 0; c.share = 0; });
+    REGIONS.forEach(r => { if (r.poly) { r.poly.miners = r.n; r.poly.share = peak > 0 ? Math.sqrt(r.n / peak) : 0; } });
 
     // peers → twinkle points. Prefer server-positioned points; else scatter on land.
     PEERS = [];
@@ -196,7 +244,7 @@
       hoverNode = best;
       if (best) { tip.style.display="block"; tip.style.left=best._sx+"px"; tip.style.top=best._sy+"px"; let roleTxt, roleCol, val;
         if (best.role==="hub") { roleTxt="Settlement hub"; roleCol="var(--accent, #5dff73)"; val=(totalMinersNow()+" miners settled"); }
-        else if (best.role==="gw") { const st=best.status; roleTxt = st==="connected"?"Gateway · connected":st==="handshake"?"Gateway · handshaked, idle":"Gateway · offline"; roleCol = st==="offline"?"#ff5a52":"#ffb63d"; val = st==="connected"?(best._feed+" miners routed"):st==="handshake"?"link up · 0 miners":"unreachable"; }
+        else if (best.role==="gw") { const st=best.status; roleTxt = st==="connected"?"Gateway · connected":st==="handshake"?"Gateway · handshaked, idle":st==="checking"?"Gateway · checking":"Gateway · offline"; roleCol = st==="offline"?"#ff5a52":st==="checking"?"#8b98a5":"#ffb63d"; val = st==="connected"?(best._feed+" miners routed"):st==="handshake"?"link up · 0 miners":st==="checking"?"verifying link…":"unreachable"; }
         else { roleTxt="Miner region"; roleCol="#5ad1ff"; val=best.n+" miners"; }
         tip.innerHTML = '<span class="nm-tip-role" style="color:'+roleCol+'">'+roleTxt+'</span><span class="nm-tip-name">'+best.name+'</span><br><span style="color:'+roleCol+';font-variant-numeric:tabular-nums">'+val+'</span>';
       } else tip.style.display="none";
@@ -207,7 +255,12 @@
     document.getElementById("nm-zout").onclick = () => setZoom(zoom/1.25);
     document.querySelectorAll(".nm-toggle").forEach(el => el.addEventListener("click", () => { const k=el.dataset.t; opts[k]=!opts[k]; el.classList.toggle("on",opts[k]); if (k==="spin"&&opts[k]) spinVel=0; }));
   }
-  function totalMinersNow() { return REGIONS.reduce((s,r)=>s+r.n,0); }
+  // The payload's total, not the sum of what's drawn. Three kinds of miner legitimately have no
+  // marker on this globe: a country under the k-anonymity floor (folded into one unnamed "Other"
+  // row, no coordinates), a country the map holds no centroid for, and a miner whose country
+  // isn't resolvable at all. All three are still miners, so summing the globe under-reports the
+  // pool — the server sends the same distinct-address count the homepage shows.
+  function totalMinersNow() { return TOTALS.miners != null ? TOTALS.miners : REGIONS.reduce((s,r)=>s+r.n,0); }
 
   // ── render loop ─────────────────────────────────────────────────────────────
   let t0 = performance.now();
@@ -223,23 +276,49 @@
     drawLand(); drawGrat(MERIDIANS); drawGrat(PARALLELS); drawCountries();
     if (opts.nodes) drawPeers(now);
     if (opts.arcs) {
-      REGIONS.forEach((r,i) => drawAnimArc(r.v, r.gwv, "90,209,255", 1, 0.10, now, i*0.09, 2600, r.gwStatus==="connected"));
-      GATEWAYS.forEach((g,i) => { if (g.status==="offline") drawAnimArc(g.v, HUB.v, "255,90,82", 1.2, 0.16, now, 0, 2000, false); else drawAnimArc(g.v, HUB.v, "255,182,61", 1.6, 0.17, now, i*0.18, g.status==="handshake"?3200:2000, true); });
+      REGIONS.forEach((r,i) => { if (r.gwv) drawAnimArc(r.v, r.gwv, "90,209,255", 1, 0.10, now, i*0.09, 2600, r.gwStatus==="connected"); });
+      if (HUB.located) GATEWAYS.forEach((g,i) => { if (g.status==="offline") drawAnimArc(g.v, HUB.v, "255,90,82", 1.2, 0.16, now, 0, 2000, false); else if (g.status==="checking") drawAnimArc(g.v, HUB.v, "139,152,165", 1.2, 0.12, now, 0, 2600, false); else drawAnimArc(g.v, HUB.v, "255,182,61", 1.6, 0.17, now, i*0.18, g.status==="handshake"?3200:2000, true); });
     }
     NODES.map(n => ({ n, p: project(n.v) })).sort((a,b)=>a.p.z-b.p.z).forEach(({n,p}) => { n._sx=p.x; n._sy=p.y; n._front=p.z>-0.05; if (p.z<=-0.05) return; drawNode(n,p,Math.max(0,Math.min(1,(p.z+0.1)/0.5)),now); });
   }
   const dotSize = () => Math.max(1, Math.min(2.6, 1.05*zoom));
   function drawLand() { const s=dotSize(); for (const v of LAND){ const p=project(v); if (p.z<=0.02) continue; ctx.fillStyle="rgba(88,138,124,"+(0.09+0.22*p.z).toFixed(3)+")"; ctx.fillRect(p.x-s/2,p.y-s/2,s,s); } }
   function drawGrat(sets) { ctx.lineWidth=1; for (const pts of sets){ let st=false; for (let i=0;i<pts.length;i++){ const p=project(pts[i]); if (p.z>0){ ctx.strokeStyle="rgba(93,255,115,"+(0.04+0.09*p.z).toFixed(3)+")"; if (!st){ ctx.beginPath(); ctx.moveTo(p.x,p.y); st=true; } else ctx.lineTo(p.x,p.y); } else if (st){ ctx.stroke(); st=false; } } if (st) ctx.stroke(); } }
+  // Screen size below which a country outline is too small to read as a shape (Singapore,
+  // the Netherlands at low zoom). Those keep the sized dot instead — see drawNode.
+  const POLY_MIN_PX = 16;
   function drawCountries() {
     for (const c of COUNTRIES) {
+      c._filled = false;
       const cp = project(c.centroid); if (cp.z < 0.26) continue;
       let ok = true, minx=1e9,miny=1e9,maxx=-1e9,maxy=-1e9;
       const proj = c.rings.map(r => r.map(v => { const p=project(v); if (p.z < -0.02) ok=false; if (p.x<minx)minx=p.x; if (p.x>maxx)maxx=p.x; if (p.y<miny)miny=p.y; if (p.y>maxy)maxy=p.y; return p; }));
       if (!ok) continue;
       const trace = () => { ctx.beginPath(); proj.forEach(r => { r.forEach((p,i)=> i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y)); ctx.closePath(); }); };
-      if (opts.flags && c.flag) { ctx.save(); trace(); ctx.clip(); ctx.globalAlpha=0.85; c.flag(minx,miny,maxx-minx,maxy-miny); ctx.globalAlpha=1; ctx.restore(); }
-      trace(); ctx.lineWidth = c.host ? 1.6 : 1; ctx.strokeStyle = c.border; if (c.host){ ctx.shadowColor=c.border; ctx.shadowBlur=6; } ctx.stroke(); ctx.shadowBlur=0;
+      if (!c.active) {
+        // Geographic context only — faint outline, no fill, so active countries stand out.
+        trace(); ctx.lineWidth=1; ctx.strokeStyle="rgba(140,205,235,0.18)"; ctx.stroke();
+        continue;
+      }
+      // The COUNTRY is the miner marker: fill intensity scales with how many miners are in it.
+      // Drawing the real outline instead of a dot means the shape itself states the precision
+      // we actually have — country, nothing finer — so there is no position to misread.
+      // Floor sits ABOVE the 0.14 no-miner activity tint below, or a country with a few
+      // miners would render FAINTER than one with none — the ramp has to stay monotone
+      // against its own baseline, not just against itself.
+      const wash = c.miners > 0 ? 0.15 + 0.27 * c.share : 0;
+      c._filled = Math.max(maxx-minx, maxy-miny) >= POLY_MIN_PX;
+      ctx.save(); trace(); ctx.clip();
+      if (opts.flags && c.flag) { ctx.globalAlpha=0.65; c.flag(minx,miny,maxx-minx,maxy-miny); ctx.globalAlpha=1; }
+      else if (!wash) { ctx.fillStyle="rgba(90,209,255,0.14)"; ctx.fillRect(minx,miny,maxx-minx,maxy-miny); }
+      if (wash) { ctx.fillStyle="rgba(90,209,255,"+wash.toFixed(3)+")"; ctx.fillRect(minx,miny,maxx-minx,maxy-miny); }
+      ctx.restore();
+      trace();
+      ctx.lineWidth = c.host ? 1.6 : (c.miners > 0 ? 1.2 + 0.8*c.share : 1.2);
+      ctx.strokeStyle = c.host ? c.border : (c.miners > 0 ? "rgba(120,225,255,"+(0.55+0.4*c.share).toFixed(3)+")" : "rgba(150,220,255,0.6)");
+      if (c.host){ ctx.shadowColor=c.border; ctx.shadowBlur=6; }
+      else if (c.miners > 0){ ctx.shadowColor="rgba(90,209,255,0.8)"; ctx.shadowBlur=4+6*c.share; }
+      ctx.stroke(); ctx.shadowBlur=0;
     }
   }
   function drawPeers(now) { for (const pr of PEERS){ const p=project(pr.v); if (p.z<=0.03) continue; let a = pr.blink ? (Math.sin(now*pr.spd*2.2+pr.phase)>0.4?1:0.12) : (0.35+0.4*(0.5+0.5*Math.sin(now*pr.spd+pr.phase))); a *= Math.min(1,p.z*1.4); const rgb = pr.net==="main"?"93,255,115":"255,79,216"; ctx.fillStyle="rgba("+rgb+","+(a*0.85).toFixed(3)+")"; ctx.shadowColor="rgba("+rgb+","+a.toFixed(3)+")"; ctx.shadowBlur=10*a; ctx.beginPath(); ctx.arc(p.x,p.y,3.2,0,7); ctx.fill(); ctx.shadowBlur=0; } }
@@ -257,13 +336,16 @@
   function drawNode(n, p, fade, now) {
     const pulse=1+0.12*Math.sin(now/500); let rad, col, glowCol, ring=false;
     if (n.role==="hub"){ rad=8*pulse; col="#5dff73"; glowCol="rgba(93,255,115,0.9)"; ring=true; }
-    else if (n.role==="gw"){ if (n.status==="offline"){ rad=5; col="#ff5a52"; glowCol="rgba(255,90,82,0.7)"; } else if (n.status==="handshake"){ rad=5; col="#ffb63d"; glowCol="rgba(255,182,61,0.55)"; } else { rad=5.5*(1+0.08*Math.sin(now/420)); col="#ffb63d"; glowCol="rgba(255,182,61,0.85)"; ring=true; } }
-    else { rad=3.4+Math.sqrt(Math.max(1,n.n))*0.7; col="#5ad1ff"; glowCol="rgba(90,209,255,0.7)"; }
+    else if (n.role==="gw"){ if (n.status==="offline"){ rad=5; col="#ff5a52"; glowCol="rgba(255,90,82,0.7)"; } else if (n.status==="checking"){ rad=5; col="#8b98a5"; glowCol="rgba(139,152,165,0.45)"; } else if (n.status==="handshake"){ rad=5; col="#ffb63d"; glowCol="rgba(255,182,61,0.55)"; } else { rad=5.5*(1+0.08*Math.sin(now/420)); col="#ffb63d"; glowCol="rgba(255,182,61,0.85)"; ring=true; } }
+    // Miner region: when its country is drawn as a filled shape this frame, the polygon
+    // already carries the count — the marker shrinks to a plain anchor for label and hover.
+    // Otherwise (no polygon on file, or too small on screen) it stays the sized dot.
+    else { const anchored = !!(n.poly && n.poly._filled); rad = anchored ? 2.6 : 3.4+Math.sqrt(Math.max(1,n.n))*0.7; col="#5ad1ff"; glowCol="rgba(90,209,255,"+(anchored?0.45:0.7)+")"; }
     if (n===hoverNode) rad*=1.5;
     ctx.globalAlpha=fade; ctx.shadowColor=glowCol; ctx.shadowBlur=(n===hoverNode)?20:12; ctx.fillStyle=col; ctx.beginPath(); ctx.arc(p.x,p.y,rad,0,7); ctx.fill(); ctx.shadowBlur=0;
     if (n.role==="gw" && n.status==="offline"){ ctx.globalAlpha=fade; ctx.strokeStyle="#ff9a95"; ctx.lineWidth=1.4; const q=rad*0.5; ctx.beginPath(); ctx.moveTo(p.x-q,p.y-q); ctx.lineTo(p.x+q,p.y+q); ctx.moveTo(p.x+q,p.y-q); ctx.lineTo(p.x-q,p.y+q); ctx.stroke(); }
     if (ring || n===hoverNode){ ctx.strokeStyle=col; ctx.lineWidth=1; ctx.globalAlpha=fade*0.5; ctx.beginPath(); ctx.arc(p.x,p.y,rad+5,0,7); ctx.stroke(); }
-    if (opts.labels && (n.role!=="region" || n===hoverNode)){ ctx.globalAlpha=fade; ctx.font="700 10px ui-monospace, monospace"; ctx.fillStyle=n.role==="gw"?(n.status==="offline"?"#ff9a95":"#ffcf7a"):n.role==="hub"?"#bfeecb":"#bfe9ff"; ctx.textAlign="left"; ctx.textBaseline="middle"; ctx.fillText(n.role==="region"?(n.name+" · "+n.n):n.name, p.x+rad+5, p.y); }
+    if (opts.labels && (n.role!=="region" || n===hoverNode)){ ctx.globalAlpha=fade; ctx.font="700 10px ui-monospace, monospace"; ctx.fillStyle=n.role==="gw"?(n.status==="offline"?"#ff9a95":n.status==="checking"?"#aab4be":"#ffcf7a"):n.role==="hub"?"#bfeecb":"#bfe9ff"; ctx.textAlign="left"; ctx.textBaseline="middle"; ctx.fillText(n.role==="region"?(n.name+" · "+n.n):n.name, p.x+rad+5, p.y); }
     ctx.globalAlpha=1;
   }
 
@@ -299,7 +381,10 @@
     const t = topo.totals || {};
     set('nm-s-miners', String(totalMinersNow()));
     set('nm-s-gw', (t.gateways_up != null ? t.gateways_up : GATEWAYS.filter(g=>g.online!==false && g.status!=='offline').length) + '<small>/' + (t.gateways_total != null ? t.gateways_total : GATEWAYS.length) + '</small>');
-    set('nm-s-reg', String((topo.countries||[]).length));
+    // totals.countries is the TRUE distinct-country count; the countries[] array is the
+    // publishable subset, where every country under the k-anonymity floor has been folded into
+    // a single unnamed "Other" row. Counting rows would report "n named + 1" instead.
+    set('nm-s-reg', String(t.countries != null ? t.countries : (topo.countries||[]).length));
     set('nm-s-nodes', String((peers.totals && peers.totals.peers) || (peers.countries||[]).reduce((s,c)=>s+c.peers,0)));
   }
 

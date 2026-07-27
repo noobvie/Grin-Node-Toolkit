@@ -3,31 +3,44 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Loading…</title>
+  <!-- The real <title> + description + og:* for a given /blog/<slug> are injected
+       SERVER-side (index.js "/blog/:slug" route, proxied by nginx) — a crawler never sees
+       this default. It shows only for the instant before the client script resolves, so it
+       must be a real name, not "Loading…". Favicon here: it never varies per post. -->
+  <title>Blog — GRINIUM Mining Pool</title>
+  <link rel="icon" type="image/svg+xml" href="/images/favicon.svg">
   <link rel="stylesheet" href="/css/dashboard.css">
   <style>
     .post { max-width: 820px; margin: 0 auto; padding: 2.5rem 1.5rem; }
     .post h1 { font-size: 2rem; margin: 0 0 .4rem; }
-    .post .meta { color: var(--text-dim, #8a929c); font-size: .9rem; margin-bottom: 1.5rem; }
+    .post .meta { color: var(--text-dim); font-size: .9rem; margin-bottom: 1.5rem; }
     .post .cover { width: 100%; max-height: 380px; object-fit: cover; border-radius: 10px; margin-bottom: 1.5rem; }
     .post-body { font-size: 1.05rem; line-height: 1.7; }
-    .post-body h2 { color: var(--accent, #b8e600); margin-top: 2rem; }
+    .post-body h2 { color: var(--accent); margin-top: 2rem; }
     .post-body h3 { margin-top: 1.6rem; }
-    .post-body a { color: var(--accent, #b8e600); }
+    .post-body a { color: var(--accent); }
     .post-body img { max-width: 100%; height: auto; border-radius: 8px; }
-    .post-body blockquote { border-left: 3px solid var(--accent, #b8e600); margin: 1rem 0; padding: .3rem 1rem; color: var(--text-dim, #8a929c); }
-    .post-body pre { background: #0d0f12; padding: 1rem; border-radius: 8px; overflow: auto; }
+    .post-body blockquote { border-left: 3px solid var(--accent); margin: 1rem 0; padding: .3rem 1rem; color: var(--text-dim); }
+    .post-body pre { background: var(--bg-elev2); border: 1px solid var(--border); padding: 1rem; border-radius: 8px; overflow: auto; }
     .tag { display: inline-block; font-size: .75rem; padding: .12rem .55rem; border-radius: 999px;
-      background: rgba(184,230,0,.12); color: var(--accent, #b8e600); margin: 0 .35rem 0 0; }
-    .back { display: inline-block; margin-bottom: 1.5rem; color: var(--accent, #b8e600); text-decoration: none; }
-    .muted { color: var(--text-dim, #8a929c); }
+      background: var(--accent-soft); color: var(--accent); margin: 0 .35rem 0 0; }
+    .back { display: inline-block; margin-bottom: 1.5rem; color: var(--accent); text-decoration: none; }
+    .muted { color: var(--text-dim); }
   </style>
   <link rel="stylesheet" href="/css/themes.css">
 </head>
 <body>
+  <noscript>
+    <div class="noscript-note">
+      <b>JavaScript is required.</b> This site builds its navigation and loads its live
+      figures in the browser, so with scripts blocked the page stays empty. Enable
+      JavaScript for this site to use it. The pool's data is also available as plain
+      JSON over its <a href="/api-docs.html">public API</a> if you would rather not.
+    </div>
+  </noscript>
   <!-- header injected by /js/public-shell.js -->
 
-  <main class="post">
+  <main class="post" id="main" tabindex="-1">
     <a class="back" href="/blog.html">← All posts</a>
     <h1 id="post-title" class="muted">Loading…</h1>
     <div id="post-meta" class="meta"></div>
@@ -46,13 +59,18 @@
       var slug = rawSlug.replace(/[^a-z0-9_-]/gi, '');
       if (!slug) { renderMissing(); return; }
 
-      // Canonical URL is always the clean /blog/<slug> form (dedupes the legacy ?slug= path for SEO).
-      (function () {
+      // Canonical URL is always the clean /blog/<slug> form (dedupes the legacy ?slug= path
+      // for SEO). Skip if the server already injected one: /blog/<slug> is proxied to the
+      // app, which emits a canonical built from the operator's configured site_url. Adding
+      // a second one derived from location.origin would contradict it whenever the pool is
+      // reached on a host other than site_url — and two conflicting canonicals make Google
+      // discard both. The server's value wins; this only covers the legacy ?slug= entry.
+      if (!document.querySelector('link[rel="canonical"]')) {
         var link = document.createElement('link');
         link.rel = 'canonical';
         link.href = location.origin + '/blog/' + slug;
         document.head.appendChild(link);
-      })();
+      }
 
       function esc(s) {
         return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
@@ -70,7 +88,10 @@
         .then(function (json) {
           if (!json || !json.data) { renderMissing(); return; }
           var p = json.data;
-          document.title = p.title;
+          // Only when the server did NOT render the head (the legacy ?slug= entry point).
+          // Its title is "<post> — <pool>"; overwriting it with the bare post title would
+          // make the tab disagree with the search result and the shared card.
+          if (!document.querySelector('meta[name="server-seo"]')) document.title = p.title;
           var t = document.getElementById('post-title');
           t.textContent = p.title;
           t.classList.remove('muted');

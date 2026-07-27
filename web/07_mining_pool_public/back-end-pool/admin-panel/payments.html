@@ -15,8 +15,8 @@
       <!-- Payout kill-switch state (auto-set on a critical money trip, or manual). -->
       <div id="freeze-banner"></div>
 
-      <h2>
-        Payments
+      <h2 data-sec="Payout queue">
+        Payout queue
         <span id="queue-summary" style="font-size:.82rem;color:var(--text-dim);font-weight:400;margin-left:.8rem;"></span>
       </h2>
 
@@ -62,7 +62,7 @@
 
     <!-- ── Wallet ↔ Ledger Reconciliation (custodial money statement) ──────── -->
     <section>
-      <h2>
+      <h2 data-sec="Reconciliation">
         Wallet ↔ Ledger Reconciliation
         <span id="recon-refresh" style="font-size:.75rem;color:var(--text-dim);font-weight:400;margin-left:.8rem;"></span>
       </h2>
@@ -75,7 +75,7 @@
       <div id="recon-banner"></div>
 
       <!-- Coverage -->
-      <h3 style="margin:1rem 0 .5rem;font-size:1rem;">Coverage</h3>
+      <h3 class="sub-title">Coverage</h3>
       <div class="kpi-grid" id="recon-cov">
         <div class="kpi-card"><div class="kpi-label">Wallet Spendable</div><div class="kpi-value" id="rc-w-spend">—</div></div>
         <div class="kpi-card"><div class="kpi-label">Owed (withdrawable now)</div><div class="kpi-value" id="rc-owed-spend">—</div></div>
@@ -86,7 +86,7 @@
       </div>
 
       <!-- Wallet maturity + pending -->
-      <h3 style="margin:1rem 0 .5rem;font-size:1rem;">Balance maturity</h3>
+      <h3 class="sub-title">Balance maturity</h3>
       <div class="kpi-grid" id="recon-mat">
         <div class="kpi-card"><div class="kpi-label">Maturing coinbase (wallet)</div><div class="kpi-value" id="rc-w-immature">—</div></div>
         <div class="kpi-card"><div class="kpi-label">Immature blocks (not yet owed)</div><div class="kpi-value" id="rc-imm-blocks">—</div></div>
@@ -97,7 +97,7 @@
       </div>
 
       <!-- Flow statement -->
-      <h3 style="margin:1.2rem 0 .5rem;font-size:1rem;">Flow statement (external money)</h3>
+      <h3 class="sub-title">Flow statement (external money)</h3>
       <div class="card" style="padding:0;">
         <div class="table-wrap">
           <table>
@@ -112,7 +112,7 @@
       </div>
 
       <!-- Buckets: donation + fee → contest budget -->
-      <h3 style="margin:1.2rem 0 .5rem;font-size:1rem;">Fee &amp; prize buckets</h3>
+      <h3 class="sub-title">Fee &amp; prize buckets</h3>
       <div class="card" style="padding:0;">
         <div class="table-wrap">
           <table>
@@ -128,7 +128,7 @@
       <p class="error-msg" id="recon-msg" style="display:none;margin-top:.6rem;"></p>
 
       <!-- Wallet-send audit: the wallet's OWN sends vs the pool ledger -->
-      <h3 style="margin:1.2rem 0 .5rem;font-size:1rem;">
+      <h3 class="sub-title">
         Wallet-send audit
         <span id="wa-summary" style="font-size:.78rem;color:var(--text-dim);font-weight:400;margin-left:.5rem;"></span>
       </h3>
@@ -150,7 +150,7 @@
       </div>
 
       <!-- Wallet-identity guard + switch wizard -->
-      <h3 style="margin:1.2rem 0 .5rem;font-size:1rem;">
+      <h3 class="sub-title">
         Wallet identity
         <span id="wi-summary" style="font-size:.78rem;color:var(--text-dim);font-weight:400;margin-left:.5rem;"></span>
       </h3>
@@ -188,6 +188,177 @@
             </div></li>
         </ol>
         <p id="sw-msg" style="margin:.6rem 0 0;font-size:.85rem;"></p>
+      </div>
+    </section>
+
+    <!-- ── Payout request audit ──────────────────────────────────────────────── -->
+    <section>
+      <h2 data-sec="Request audit">
+        Payout request audit
+        <span id="pa-summary" style="font-size:.82rem;color:var(--text-dim);font-weight:400;margin-left:.8rem;"></span>
+      </h2>
+      <p style="font-size:.82rem;color:var(--text-dim);margin:-.4rem 0 .8rem;">
+        Every ownership-gated money request — <strong>accepted and refused</strong> — so a
+        brute-force or spam run against the payout button is visible here rather than buried in
+        the web-server log. Origin is stored as a <strong>network prefix</strong>
+        (<code>/24</code> for IPv4, <code>/48</code> for IPv6), never the full address; that is
+        still enough for repeat attempts from one origin to group together. Country is resolved
+        when the request arrives. Times UTC.
+      </p>
+
+      <div style="display:flex;gap:.5rem;align-items:center;margin:0 0 .8rem;flex-wrap:wrap;">
+        <label style="font-size:.82rem;color:var(--text-dim);">Window
+          <select id="pa-days" class="input" style="width:auto;margin-left:.35rem;" onchange="loadPayoutAudit(true)">
+            <option value="1">24 hours</option>
+            <option value="7">7 days</option>
+            <option value="30" selected>30 days</option>
+            <option value="90">90 days</option>
+            <option value="180">180 days</option>
+            <option value="365">1 year</option>
+          </select>
+        </label>
+        <label style="font-size:.82rem;color:var(--text-dim);">Show
+          <select id="pa-result" class="input" style="width:auto;margin-left:.35rem;" onchange="loadPayoutAudit(true)">
+            <option value="all" selected>All</option>
+            <option value="deny">Refused only</option>
+            <option value="ok">Accepted only</option>
+          </select>
+        </label>
+        <button class="btn btn-sm btn-outline" onclick="loadPayoutAudit()">↻ Refresh</button>
+        <span id="pa-note" style="font-size:.8rem;color:var(--text-dim);"></span>
+      </div>
+
+      <div id="pa-banner"></div>
+
+      <div class="card" style="padding:0;overflow-x:auto;">
+        <table>
+          <thead><tr>
+            <th>Time (UTC)</th><th>Action</th><th>Result</th><th>Address</th>
+            <th>Origin prefix</th><th>Country</th><th>Detail</th>
+          </tr></thead>
+          <tbody id="pa-tbody"><tr><td colspan="7">Loading…</td></tr></tbody>
+        </table>
+      </div>
+      <p style="font-size:.78rem;color:var(--text-dim);margin:.5rem 0 0;">
+        Requests throttled by the rate limiter are rejected before this check runs and leave no
+        row here — a quiet table is not by itself proof that nothing was attempted. (Retention
+        is shown above the table and set by <strong>Keep audit trail (days)</strong> in
+        <a href="/admin/settings-database.html">Settings → Database</a>.)
+      </p>
+    </section>
+
+    <!-- ── Abandoned-balance disposition + manual payout ─────────────────────── -->
+    <section>
+      <h2>
+        Abandoned balances
+        <span id="dorm-summary" style="font-size:.82rem;color:var(--text-dim);font-weight:400;margin-left:.8rem;"></span>
+      </h2>
+      <p style="font-size:.82rem;color:var(--text-dim);margin:-.4rem 0 .8rem;">
+        Balances of addresses idle past the dormancy window are swept into the <strong>community
+        prize pool</strong> (never operator revenue), where they are given away through the pool's
+        published draws. Configure the window in
+        <a href="/admin/settings-payout.html">Settings → Payout</a>. Disposition is FINAL and honours
+        the payout freeze. All amounts GRIN (ツ), times UTC.
+      </p>
+
+      <div class="kpi-grid" id="dorm-kpis">
+        <div class="kpi-card"><div class="kpi-label">Policy</div><div class="kpi-value" id="dk-state">—</div></div>
+        <div class="kpi-card"><div class="kpi-label">Dormant balance</div><div class="kpi-value" id="dk-dormant">—</div></div>
+        <div class="kpi-card"><div class="kpi-label">Would sweep now</div><div class="kpi-value" id="dk-sweep">—</div></div>
+        <div class="kpi-card"><div class="kpi-label">Destination</div><div class="kpi-value" id="dk-recip">—</div></div>
+        <div class="kpi-card"><div class="kpi-label">Swept to prizes all-time</div><div class="kpi-value" id="dk-disposed">—</div></div>
+      </div>
+
+      <div style="display:flex;gap:.5rem;align-items:center;margin:.6rem 0 1rem;flex-wrap:wrap;">
+        <button class="btn btn-sm" id="dorm-run-btn" onclick="runDisposition()">♻ Run disposition now</button>
+        <span id="dorm-run-note" style="font-size:.8rem;color:var(--text-dim);"></span>
+      </div>
+      <p class="error-msg" id="dorm-msg" style="display:none;margin:.2rem 0 .8rem;"></p>
+
+      <!-- Sub-threshold ("email support to withdraw") payout for a below-minimum miner -->
+      <h3 class="sub-title">Pay a below-minimum miner</h3>
+      <p style="font-size:.82rem;color:var(--text-dim);margin:-.2rem 0 .7rem;">
+        For a miner below the minimum who emails to withdraw. First <strong>verify they own the address</strong>
+        (type the mining IP or rig password they gave you → match/no-match, nothing is revealed). Then either:
+        <br>• <strong>Send Tor payout now</strong> — the pool sends it over Tor through the normal locked flow
+        and records it automatically (they need their wallet listener online for a moment); or
+        <br>• <strong>Record an out-of-band send</strong> — if you already sent the coins yourself (slatepack /
+        wallet CLI), log it here so coverage stays correct and the wallet-send audit matches your send.
+      </p>
+      <div class="card" style="padding:1rem;">
+        <div style="display:grid;grid-template-columns:1fr;gap:.6rem;max-width:640px;">
+          <label>Grin address
+            <input type="text" id="mp-addr" class="input" placeholder="grin1…" autocomplete="off"
+                   oninput="document.getElementById('mp-verify-result').textContent='';">
+          </label>
+          <div style="display:flex;gap:.5rem;align-items:flex-end;flex-wrap:wrap;">
+            <label style="flex:1 1 240px;">Claimed proof (mining IP or rig password)
+              <input type="text" id="mp-proof" class="input" placeholder="e.g. 203.0.113.7 or their rig password" autocomplete="off">
+            </label>
+            <button class="btn btn-sm btn-outline" onclick="verifyOwner()">Verify ownership</button>
+            <span id="mp-verify-result" style="font-size:.85rem;font-weight:600;"></span>
+          </div>
+          <div style="display:flex;gap:.5rem;flex-wrap:wrap;">
+            <label style="flex:1 1 120px;">Amount ツ
+              <input type="number" id="mp-amount" class="input" step="0.000000001" min="0" placeholder="0.0">
+            </label>
+          </div>
+
+          <!-- Primary: backend sends over Tor + records automatically -->
+          <div style="display:flex;gap:.6rem;align-items:center;flex-wrap:wrap;">
+            <button class="btn btn-sm" id="mp-tor-btn" onclick="sendTorPayout()">⚡ Send Tor payout now</button>
+            <span id="mp-tor-result" style="font-size:.85rem;"></span>
+          </div>
+
+          <!-- Fallback: record a send you already made out-of-band -->
+          <div style="border-top:1px solid var(--border);margin:.4rem 0 .1rem;padding-top:.7rem;">
+            <div style="font-size:.8rem;color:var(--text-dim);margin-bottom:.5rem;">Already sent it yourself? Record the out-of-band send instead:</div>
+            <div style="display:flex;gap:.5rem;flex-wrap:wrap;">
+              <label style="flex:1 1 120px;">Network fee ツ (optional)
+                <input type="number" id="mp-fee" class="input" step="0.000000001" min="0" placeholder="0.0">
+              </label>
+              <label style="flex:1 1 200px;">Kernel excess (optional, for the payout proof)
+                <input type="text" id="mp-kernel" class="input" placeholder="09…" autocomplete="off">
+              </label>
+              <label style="flex:1 1 200px;">Slate ID (optional)
+                <input type="text" id="mp-slate" class="input" placeholder="uuid" autocomplete="off">
+              </label>
+            </div>
+            <label>Note (audit)
+              <input type="text" id="mp-note" class="input" placeholder="e.g. below-min withdrawal, verified via rig password, support ticket #…" autocomplete="off">
+            </label>
+            <div style="margin-top:.5rem;">
+              <button class="btn btn-sm btn-outline" id="mp-record-btn" onclick="recordManualPayout()">Record out-of-band send</button>
+              <span id="mp-result" style="font-size:.85rem;margin-left:.6rem;"></span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Dormant list (unmasked, operator) -->
+      <h3 class="sub-title">Dormant addresses <span id="dorm-list-note" style="font-size:.78rem;color:var(--text-dim);font-weight:400;"></span></h3>
+      <div class="card" style="padding:0;">
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Address</th><th style="text-align:right;">Balance ツ</th><th style="text-align:right;">Idle (days)</th><th>Disposal</th></tr>
+            </thead>
+            <tbody id="dorm-list-tbody"><tr class="loading-row"><td colspan="4"><span class="spinner"></span>Loading…</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Disposition history -->
+      <h3 class="sub-title">Prize-pool sweep history</h3>
+      <div class="card" style="padding:0;">
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Date (UTC)</th><th style="text-align:right;">Swept ツ</th><th style="text-align:right;">Sources</th><th>Destination</th><th>Trigger</th></tr>
+            </thead>
+            <tbody id="dorm-hist-tbody"><tr class="loading-row"><td colspan="5"><span class="spinner"></span>Loading…</td></tr></tbody>
+          </table>
+        </div>
       </div>
     </section>
   </div>
@@ -240,32 +411,25 @@ async function loadQueueSummary() {
   } catch (e) {}
 }
 
-async function loadWithdrawals() {
-  const tbody = document.getElementById('pay-tbody');
-  try {
-    const items = await API.get('/api/admin/withdrawals');
-    _withdrawals = Array.isArray(items) ? items : [];
-    render();
-  } catch (err) {
-    tbody.innerHTML = `<tr class="empty-row"><td colspan="8">Error: ${escHtml(err.message)}</td></tr>`;
-  }
-}
-
-function render() {
-  const tbody = document.getElementById('pay-tbody');
-  const rows = _withdrawals.filter(matchesFilter);
-  if (!rows.length) {
-    tbody.innerHTML = '<tr class="empty-row"><td colspan="8">No withdrawals in this view.</td></tr>';
-    return;
-  }
-  tbody.innerHTML = rows.map(w => {
+// Search + 20-per-page paging from AdminTable (admin-shell.js). The status chips above
+// stay page-side and feed it a pre-filtered array; the search box narrows within that.
+const payTable = AdminTable.create({
+  tbody: 'pay-tbody',
+  search: 'Filter by address, id or status…',
+  empty: 'No withdrawals in this view.',
+  note: 'Payout records are kept permanently — this view loads the 100 most recent.',
+  text: w => [w.id, w.grin_address, w.status, (STATUS[w.status] || [])[1], w.method,
+              w.cancel_reason].join(' '),
+  row: w => {
     const [cls, label] = STATUS[w.status] || ['badge-dim', w.status];
     const canRetry  = w.status === 'retry_scheduled' || w.status === 'tor_failed';
     const canCancel = w.status === 'retry_scheduled' || w.status === 'tor_checking' || w.status === 'tor_failed';
     let actions = '';
-    if (canRetry)  actions += `<button class="btn btn-sm" onclick="retryWithdrawal(${w.id})">Retry now</button> `;
-    if (canCancel) actions += `<button class="btn btn-sm btn-outline" onclick="cancelWithdrawal(${w.id}, ${fmtGrin(w.amount)})">Cancel</button>`;
-    if (!actions)  actions = '<span style="color:var(--text-dim)">—</span>';
+    if (canRetry)  actions += `<button class="btn-icon" onclick="retryWithdrawal(${w.id})" data-tip="Retry this payout now" aria-label="Retry this payout now">🔁</button>`;
+    if (canCancel) actions += `<button class="btn-icon btn-icon-danger" onclick="cancelWithdrawal(${w.id}, ${fmtGrin(w.amount)})" data-tip="Cancel this payout (refunds the balance)" aria-label="Cancel this payout">❌</button>`;
+    actions = actions
+      ? `<div class="row-actions">${actions}</div>`
+      : '<span style="color:var(--text-dim)">—</span>';
     const reason = w.cancel_reason ? ` title="${escHtml(w.cancel_reason)}"` : '';
     return `<tr>
       <td class="mono">${w.id}</td>
@@ -277,14 +441,30 @@ function render() {
       <td>${fmtTs(w.confirmed_at)}</td>
       <td>${actions}</td>
     </tr>`;
-  }).join('');
+  }
+});
+
+async function loadWithdrawals() {
+  try {
+    const items = await API.get('/api/admin/withdrawals');
+    _withdrawals = Array.isArray(items) ? items : [];
+    render();
+  } catch (err) {
+    payTable.setError(err.message);
+  }
+}
+
+// `resetPage` only when a status chip changed — the 30s refresh must not pull the
+// operator off the page they are reading.
+function render(resetPage) {
+  payTable.setRows(_withdrawals.filter(matchesFilter), { reset: resetPage === true });
 }
 
 function setFilter(f, btn) {
   _filter = f;
   document.querySelectorAll('#filter-chips .tab-btn').forEach(b => b.classList.remove('active'));
   if (btn) btn.classList.add('active');
-  render();
+  render(true);
 }
 
 function flash(msg, isErr) {
@@ -488,6 +668,23 @@ async function loadReconciliation() {
 }
 
 // ── Wallet-send audit ─────────────────────────────────────────────────────────
+// The card only appears when there ARE unmatched sends, so the tools bar + pager are
+// shown/hidden with it via setVisible() — otherwise they'd float above a hidden table.
+const waTable = AdminTable.create({
+  tbody: 'wa-tbody',
+  search: 'Filter by tx id or slate…',
+  empty: 'No unmatched sends.',
+  note: 'Read live from the wallet over the last {days} days — not stored by the pool.',
+  text: s => [s.tx_id, s.slate_id, s.amount].join(' '),
+  row: s => `<tr>
+    <td class="mono" title="${escHtml(String(s.tx_id))}">#${escHtml(String(s.tx_id))}</td>
+    <td class="mono" style="text-align:right;color:var(--danger);">${(s.amount || 0).toFixed(4)}</td>
+    <td>${escHtml(new Date(s.when * 1000).toISOString().replace('T', ' ').slice(0, 19))}</td>
+    <td class="mono">${escHtml(s.slate_id ? (s.slate_id.slice(0, 8) + '…') : '—')}</td>
+  </tr>`
+});
+waTable.setVisible(false);
+
 async function loadWalletAudit() {
   const banner = document.getElementById('wa-banner');
   const card = document.getElementById('wa-card');
@@ -497,33 +694,116 @@ async function loadWalletAudit() {
     if (!a.reachable) {
       summary.textContent = '(wallet unreachable)';
       banner.innerHTML = ''; card.style.display = 'none';
+      waTable.setVisible(false);
       return;
     }
     summary.textContent = `${a.matched} matched · ${a.scanned} scanned (last ${a.window_days}d)`;
+    waTable.setNoteDays(a.window_days);
     const un = a.unrecorded || [];
     if (un.length) {
       banner.innerHTML = `<div class="health-card error" style="margin-bottom:.6rem;">
         <div class="health-name">⚠ ${un.length} UNRECORDED wallet send(s) — ${(a.total_unrecorded || 0).toFixed(4)} ツ
           <span class="badge badge-error">not in the pool ledger</span></div>
         <div class="health-detail" style="margin-top:.3rem;">These left the wallet without a pool payout. If this was you (e.g. a cold-storage sweep), resume payouts above once confirmed; otherwise treat as a compromise.</div></div>`;
-      document.getElementById('wa-tbody').innerHTML = un
-        .slice().sort((x, y) => y.amount - x.amount)
-        .map(s => `<tr>
-          <td class="mono" title="${escHtml(String(s.tx_id))}">#${escHtml(String(s.tx_id))}</td>
-          <td class="mono" style="text-align:right;color:var(--danger);">${(s.amount || 0).toFixed(4)}</td>
-          <td>${escHtml(new Date(s.when * 1000).toISOString().replace('T', ' ').slice(0, 19))}</td>
-          <td class="mono">${escHtml(s.slate_id ? (s.slate_id.slice(0, 8) + '…') : '—')}</td>
-        </tr>`).join('');
+      waTable.setRows(un.slice().sort((x, y) => y.amount - x.amount));
       card.style.display = '';
+      waTable.setVisible(true);
     } else {
       banner.innerHTML = `<div class="health-card ok" style="margin-bottom:.6rem;">
         <div class="health-detail">✓ Every wallet send matches a pool payout — no out-of-band sends.</div></div>`;
       card.style.display = 'none';
+      waTable.setVisible(false);
     }
   } catch (err) {
     summary.textContent = '';
     banner.innerHTML = `<div class="health-card error" style="margin-bottom:.6rem;"><div class="health-detail">Audit error: ${escHtml(err.message)}</div></div>`;
     card.style.display = 'none';
+    waTable.setVisible(false);
+  }
+}
+
+// ── Payout request audit ──────────────────────────────────────────────────────
+// Times are rendered as explicit UTC (not toLocaleString) — this table is read alongside
+// server logs during an incident, and a browser-local timestamp would not line up with them.
+function utcTs(t) {
+  return t ? new Date(t * 1000).toISOString().replace('T', ' ').slice(0, 19) : '—';
+}
+const PA_ACTION = {
+  withdraw_tor: 'Tor payout', withdraw_slatepack: 'Slatepack', withdraw_nostr: 'Nostr payout',
+  slatepack_finalize: 'Slatepack finalize',
+  nostr_destination_register: 'Nostr dest. register', nostr_destination_remove: 'Nostr dest. remove',
+};
+const PA_REASON = {
+  no_match: 'proof did not match', too_many_attempts: 'throttled (lockout)',
+  proof_required: 'no proof supplied', account_not_found: 'unknown address',
+  no_recorded_proof: 'no proof on file', tor_unreachable: 'wallet unreachable',
+  npub_changed: 'Nostr key changed', lookup_failed: 'lookup failed',
+};
+
+// Retention here is the live audit_log_keep_days — the endpoint reports it per request
+// (a.retention_days), so the note is refreshed from the response as well as at load.
+const paTable = AdminTable.create({
+  tbody: 'pa-tbody',
+  search: 'Filter by address, origin, action or reason…',
+  empty: 'No payout requests in this window.',
+  note: 'Audit rows are kept {days} days, then pruned ' +
+        '(<a href="/admin/settings-database.html">Settings → Database</a>).',
+  retentionKey: 'audit_log_keep_days',
+  retentionDefault: 180,
+  text: e => [e.grin_address, e.ip_prefix, e.country, e.country_code, e.action,
+              PA_ACTION[e.action], e.outcome, e.outcome === 'ok' ? 'accepted' : 'refused',
+              e.reason, PA_REASON[e.reason], utcTs(e.at)].join(' '),
+  row: e => {
+    const okRow = e.outcome === 'ok';
+    const detail = e.reason ? (PA_REASON[e.reason] || e.reason)
+                 : (e.amount != null ? fmtGrin(e.amount) + ' ツ' : '—');
+    return `<tr>
+      <td class="mono">${escHtml(utcTs(e.at))}</td>
+      <td>${escHtml(PA_ACTION[e.action] || e.action)}</td>
+      <td><span class="badge ${okRow ? 'badge-ok' : 'badge-error'}">${okRow ? 'accepted' : 'refused'}</span></td>
+      <td class="mono" title="${escHtml(e.grin_address || '')}">${escHtml(shortAddr(e.grin_address))}</td>
+      <td class="mono">${escHtml(e.ip_prefix || '—')}</td>
+      <td>${escHtml(e.country || (e.country_code || '—'))}</td>
+      <td style="color:var(--text-dim);">${escHtml(detail)}</td>
+    </tr>`;
+  }
+});
+
+// resetPage: the window/result selects changed, so the old page number means nothing.
+// The 2-minute auto-refresh passes nothing and keeps the operator where they were.
+async function loadPayoutAudit(resetPage) {
+  const summary = document.getElementById('pa-summary');
+  const banner = document.getElementById('pa-banner');
+  const note = document.getElementById('pa-note');
+  const days = document.getElementById('pa-days').value;
+  const result = document.getElementById('pa-result').value;
+  try {
+    const a = await API.get(`/api/admin/payments/audit?days=${days}&result=${result}&limit=200`);
+    summary.textContent = `${a.totals.ok} accepted · ${a.totals.deny} refused · ${a.totals.origins} origin(s) in ${a.window_days}d`;
+
+    // Be explicit when retention already deleted part of the requested window, so an empty
+    // stretch is never misread as "nobody tried".
+    note.textContent = a.truncated_by_retention
+      ? `showing ${a.window_days}d — retention keeps only ${a.retention_days}d`
+      : (a.geo_available ? '' : 'country unavailable (geoip-lite not installed)');
+
+    const top = a.top_denied_origins || [];
+    banner.innerHTML = top.length ? `<div class="health-card ${top[0].addresses > 1 ? 'error' : 'warn'}" style="margin-bottom:.6rem;">
+      <div class="health-name">${top[0].addresses > 1 ? '⚠' : 'ℹ'} Repeat refusals from ${top.length} origin(s)</div>
+      <div class="health-detail" style="margin-top:.3rem;">
+        ${top.map(t => `<span class="mono">${escHtml(t.ip_prefix)}</span> — ${t.denials} refused across
+           ${t.addresses} address${t.addresses === 1 ? '' : 'es'} (last ${escHtml(utcTs(t.last_at))})`).join('<br>')}
+        <br><br>One origin refused against <strong>several different addresses</strong> is an
+        address-sweep attempt, not a miner mistyping their own password. Block the prefix in
+        <a href="/admin/settings-access.html">Settings → Access</a> if it persists.
+      </div></div>` : '';
+
+    if (a.retention_days) paTable.setNoteDays(a.retention_days);
+    paTable.setRows(a.events || [], { reset: resetPage === true });
+  } catch (err) {
+    summary.textContent = '';
+    banner.innerHTML = '';
+    paTable.setError(err.message);
   }
 }
 
@@ -637,13 +917,188 @@ async function wizResume() {
   } catch (err) { swMsg(err.message, true); }
 }
 
-document.addEventListener('DOMContentLoaded', () => { refresh(); loadReconciliation(); loadWalletAudit(); loadWalletIdentity(); });
+// ── Abandoned-balance disposition + manual payout ──────────────────────────────
+const BLOCK_LABEL = {
+  disabled: 'policy disabled', payouts_frozen: 'payouts frozen',
+  incentives_disabled: 'enable prize draws first (Incentives tab)',
+  awaiting_effective_anchor: 'window starts on first run', no_eligible_sources: 'nothing eligible',
+};
+// Two AdminTables: the dormant list is a live snapshot (up to 500 addresses), the sweep
+// history is a permanent money record — the notes say which is which.
+const dormListTable = AdminTable.create({
+  tbody: 'dorm-list-tbody',
+  search: 'Filter by address…',
+  empty: 'No dormant balances.',
+  note: 'Live snapshot of currently dormant accounts, not a log — rows leave it when an ' +
+        'address mines again, is paid out, or is swept. Top 500 shown.',
+  text: r => r.address || '',
+  row: r => {
+    let disposal = '—';
+    if (r.dispose_at) disposal = r.eligible ? '<span style="color:var(--danger);font-weight:600;">due</span>' : ('in ' + (r.days_until_disposal || 0) + ' d');
+    return `<tr><td class="mono" style="word-break:break-all;">${escHtml(r.address)}</td>`
+      + `<td class="mono" style="text-align:right;">${(r.balance || 0).toFixed(4)}</td>`
+      + `<td style="text-align:right;">${r.idle_days || 0}</td><td>${disposal}</td></tr>`;
+  }
+});
+
+const dormHistTable = AdminTable.create({
+  tbody: 'dorm-hist-tbody',
+  search: 'Filter by date or trigger…',
+  empty: 'No sweeps yet.',
+  note: 'Sweep batches are kept permanently — disposition is final, so the record never expires.',
+  text: b => [new Date((b.created_at || 0) * 1000).toLocaleString('en-US', { timeZone: 'UTC' }),
+              b.total_swept, b.source_count, b.automatic ? 'auto' : 'admin'].join(' '),
+  row: b => `<tr><td>${escHtml(new Date((b.created_at || 0) * 1000).toLocaleString('en-US', { timeZone: 'UTC' }))}</td>`
+    + `<td class="mono" style="text-align:right;">${(b.total_swept || 0).toFixed(4)}</td>`
+    + `<td style="text-align:right;">${b.source_count || 0}</td><td>prize pool</td>`
+    + `<td>${b.automatic ? 'auto' : 'admin'}</td></tr>`
+});
+
+async function loadDormancy() {
+  try {
+    const d = await API.get('/api/admin/dormancy');
+    const st = d.status || {}, pv = d.preview || {}, dorm = d.dormant || { totals: {}, list: [] }, hist = d.history || { totals: {}, batches: [] };
+    const totals = dorm.totals || {}, htotals = hist.totals || {};
+
+    document.getElementById('dorm-summary').textContent = st.enabled
+      ? (st.dormancy_months + '-month window · ' + st.active_window_days + '-day active set')
+      : 'policy OFF (enable in Settings → Payout)';
+    document.getElementById('dk-state').textContent = st.enabled ? (pv.frozen ? 'FROZEN' : 'ON') : 'OFF';
+    document.getElementById('dk-dormant').textContent = fmtGrin(totals.amount || 0) + ' ツ';
+    document.getElementById('dk-sweep').textContent = (pv.would_sweep ? pv.would_sweep.count : 0) + ' addr · ' + fmtGrin(pv.would_sweep ? pv.would_sweep.amount : 0) + ' ツ';
+    document.getElementById('dk-recip').textContent = 'Prize pool';
+    document.getElementById('dk-disposed').textContent = fmtGrin(htotals.total_disposed || 0) + ' ツ';
+
+    const runBtn = document.getElementById('dorm-run-btn');
+    const runNote = document.getElementById('dorm-run-note');
+    runBtn.disabled = !!pv.blocked;
+    runNote.textContent = pv.blocked ? ('blocked: ' + (BLOCK_LABEL[pv.blocked] || pv.blocked)) : 'ready';
+
+    const list = Array.isArray(dorm.list) ? dorm.list : [];
+    document.getElementById('dorm-list-note').textContent = list.length ? ('(' + totals.count + ' total)') : '';
+    dormListTable.setRows(list);
+    dormHistTable.setRows(Array.isArray(hist.batches) ? hist.batches : []);
+  } catch (err) {
+    document.getElementById('dorm-summary').textContent = 'unavailable';
+    dormListTable.setError(err.message);
+    dormHistTable.setError(err.message);
+  }
+}
+
+async function runDisposition() {
+  if (!confirm('Run an abandoned-balance disposition NOW?\n\nThis permanently sweeps eligible dormant balances into the community prize pool. It is FINAL.')) return;
+  try {
+    const res = await adminFetch('/api/admin/dormancy/run', { method: 'POST' });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.error || ('HTTP ' + res.status));
+    const r = body.result || {};
+    flash(r.disposed ? `Disposed ${(r.swept || 0).toFixed(4)} ツ from ${r.sources} address(es) → prize pool.` : `No disposition: ${r.skipped || 'nothing eligible'}.`, false);
+    loadDormancy(); refresh();
+  } catch (err) { flash(err.message, true); }
+}
+
+async function verifyOwner() {
+  const address = document.getElementById('mp-addr').value.trim();
+  const proof = document.getElementById('mp-proof').value.trim();
+  const out = document.getElementById('mp-verify-result');
+  if (!address || !proof) { out.textContent = 'enter address + proof'; out.style.color = 'var(--warn)'; return; }
+  out.textContent = 'checking…'; out.style.color = 'var(--text-dim)';
+  try {
+    const res = await adminFetch('/api/admin/dormancy/verify-owner', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ address, proof })
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.error || ('HTTP ' + res.status));
+    if (body.match) { out.textContent = '✓ MATCH (' + (body.method || 'ok') + ')'; out.style.color = 'var(--ok)'; }
+    else { out.textContent = '✗ no match (' + (body.reason || '') + ')'; out.style.color = 'var(--danger)'; }
+  } catch (err) { out.textContent = err.message; out.style.color = 'var(--danger)'; }
+}
+
+// A payout POST that transparently handles the backend's "needs acknowledgment" gates: a 428
+// verify_required (finding #4 — no ownership verification in the last 15 min) and a 400
+// above_min_needs_ack (finding #2 — at/above the pool minimum, auto-payout could double-pay). Each
+// prompts once and retries with the matching flag set. Returns the parsed body on success; throws
+// otherwise. `extra` carries the acks across retries so each is asked at most once.
+async function postPayoutWithAcks(url, base, extra) {
+  extra = extra || {};
+  const res = await adminFetch(url, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...base, ...extra })
+  });
+  const body = await res.json().catch(() => ({}));
+  if (res.ok) return body;
+  if (body.reason === 'verify_required' && !extra.verified_ack) {
+    if (!confirm('No successful ownership verification for this address in the last 15 minutes.\n\nVerify ownership first (recommended). Proceed only if you have confirmed the owner by other means?')) {
+      throw new Error('ownership not verified');
+    }
+    return postPayoutWithAcks(url, base, { ...extra, verified_ack: true });
+  }
+  if (body.reason === 'above_min_needs_ack' && !extra.allow_above_min) {
+    if (!confirm(`This amount is at or above the ${body.min} ツ minimum.\n\nThe auto-payout scheduler could also pay this balance — consider freezing payouts, or use "Send Tor payout" instead. Record it anyway?`)) {
+      throw new Error('at/above minimum — not acknowledged');
+    }
+    return postPayoutWithAcks(url, base, { ...extra, allow_above_min: true });
+  }
+  throw new Error(body.error || ('HTTP ' + res.status));
+}
+
+// Primary path: the backend sends over Tor through the normal locked withdrawal flow and records it
+// automatically. Convenient (no out-of-band send, real fee/kernel captured), but needs the miner's
+// wallet listener reachable — the scheduler declines and reverses the lock if it isn't.
+async function sendTorPayout() {
+  const address = document.getElementById('mp-addr').value.trim();
+  const amount = parseFloat(document.getElementById('mp-amount').value);
+  const out = document.getElementById('mp-tor-result');
+  const btn = document.getElementById('mp-tor-btn');
+  if (!address || !(amount > 0)) { out.textContent = 'address + positive amount required'; out.style.color = 'var(--warn)'; return; }
+  if (!confirm(`Send a Tor payout of ${amount} ツ to\n${address}?\n\nThe pool will send it over Tor and record it. The miner's wallet listener must be online.`)) return;
+  btn.disabled = true;
+  out.textContent = 'sending…'; out.style.color = 'var(--text-dim)';
+  try {
+    const body = await postPayoutWithAcks('/api/admin/dormancy/send-payout', { address, amount });
+    out.textContent = `✓ queued (#${body.withdrawal_id}, ${(body.amount || amount).toFixed(4)} ツ) — sending over Tor`;
+    out.style.color = 'var(--ok)';
+    document.getElementById('mp-amount').value = '';
+    loadDormancy(); refresh();
+  } catch (err) { out.textContent = err.message; out.style.color = 'var(--danger)'; }
+  finally { btn.disabled = false; }
+}
+
+async function recordManualPayout() {
+  const address = document.getElementById('mp-addr').value.trim();
+  const amount = parseFloat(document.getElementById('mp-amount').value);
+  const fee = parseFloat(document.getElementById('mp-fee').value) || 0;
+  const out = document.getElementById('mp-result');
+  const btn = document.getElementById('mp-record-btn');
+  if (!address || !(amount > 0)) { out.textContent = 'address + positive amount required'; out.style.color = 'var(--warn)'; return; }
+  if (!confirm(`Record a MANUAL payout of ${amount} ツ to\n${address}?\n\nOnly do this AFTER you have actually sent the coins on the server. This debits the miner's balance.`)) return;
+  btn.disabled = true;   // in-flight guard: a resubmit would double-debit the miner (finding #1)
+  try {
+    const body = await postPayoutWithAcks('/api/admin/dormancy/manual-payout', {
+      address, amount, fee,
+      kernel_excess: document.getElementById('mp-kernel').value.trim() || null,
+      slate_id: document.getElementById('mp-slate').value.trim() || null,
+      note: document.getElementById('mp-note').value.trim() || null,
+    });
+    out.textContent = `✓ recorded (#${body.withdrawal_id}, balance now ${(body.balance_after || 0).toFixed(4)} ツ)`;
+    out.style.color = 'var(--ok)';
+    ['mp-amount', 'mp-fee', 'mp-kernel', 'mp-slate', 'mp-note'].forEach(id => { document.getElementById(id).value = ''; });
+    loadDormancy(); refresh();
+  } catch (err) { out.textContent = err.message; out.style.color = 'var(--danger)'; }
+  finally { btn.disabled = false; }
+}
+
+document.addEventListener('DOMContentLoaded', () => { refresh(); loadReconciliation(); loadWalletAudit(); loadWalletIdentity(); loadDormancy(); loadPayoutAudit(); });
 // Withdrawal queue + freeze state are cheap — 30s. Reconciliation, the wallet-send audit, and the
 // wallet-identity probe each force a wallet call (slow) — keep them on the relaxed 3-min cadence.
 setInterval(refresh, 30000);
 setInterval(loadReconciliation, 180000);
 setInterval(loadWalletAudit, 180000);
 setInterval(loadWalletIdentity, 180000);
+setInterval(loadDormancy, 120000);
+// Pure DB read (no wallet call) but a wide scan — 2 min is enough to notice a live sweep.
+setInterval(loadPayoutAudit, 120000);
 </script>
 </body>
 </html>

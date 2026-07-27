@@ -42,11 +42,36 @@
     C.dim = tok('--text-dim', '#8a978f');
     C.mute = tok('--text-mute', '#57635c');
     C.bg = tok('--bg', '#07090c');
+    // Dial face — the wide recessed arc the needle sweeps over. Must follow the theme:
+    // as a hard-coded black it painted a dark grey band across a white panel on every
+    // light theme. --rx-inset is the same recess token the counters/tubes use, and
+    // themes.css re-tunes it per theme family.
+    C.dial = tok('--rx-inset', 'rgba(0,0,0,.45)');
+    // Light themes set --glow to transparent (themes.css "LIGHT-MODE CORRECTIONS"); mirror
+    // that on canvas so the needle doesn't carry a coloured halo across a white dial.
+    C.glow = tok('--glow', '');
+    C.bloom = (C.glow === 'transparent') ? 0 : 8;
   }
   readTokens();
 
   // ── small helpers ─────────────────────────────────────────────────────────
   function $(id) { return document.getElementById(id); }
+  // Derive a translucent variant of a theme color for canvas gradient stops (handles
+  // #rgb / #rrggbb / rgb()/rgba()); falls back to the solid color if it can't parse.
+  function withAlpha(col, a) {
+    col = (col || '').trim();
+    if (col[0] === '#') {
+      var h = col.slice(1);
+      if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+      var n = parseInt(h, 16);
+      if (!isNaN(n)) return 'rgba(' + ((n >> 16) & 255) + ',' + ((n >> 8) & 255) + ',' + (n & 255) + ',' + a + ')';
+    }
+    if (col.indexOf('rgb') === 0) {
+      var m = col.match(/rgba?\(([^)]+)\)/);
+      if (m) return 'rgba(' + m[1].split(',').slice(0, 3).map(function (x) { return x.trim(); }).join(',') + ',' + a + ')';
+    }
+    return col;
+  }
   function setText(id, text) { var el = $(id); if (el) el.textContent = text; }
   // Set an element to a block height that deep-links to a chain explorer (new tab).
   function setHeightLink(id, height) {
@@ -114,6 +139,7 @@
 
     var g = {
       min: 0, max: 1, ticks: 8, unit: '', zones: [], marker: null,
+      gradient: null, needleColor: null,
       target: 0, cur: 0, wob: 0, running: false
     };
     Object.assign(g, opts || {});
@@ -126,14 +152,22 @@
       c.clearRect(0, 0, W, H);
       // dial face
       c.beginPath(); c.arc(cx, cy, R + 14, a0 - 0.06, a1 + 0.06);
-      c.strokeStyle = 'rgba(0,0,0,.45)'; c.lineWidth = 30; c.stroke();
-      // colored zones
-      g.zones.forEach(function (z) {
-        c.beginPath();
-        c.arc(cx, cy, R + 7, A((z[0] - g.min) / (g.max - g.min)), A((z[1] - g.min) / (g.max - g.min)));
-        c.strokeStyle = z[2]; c.globalAlpha = 0.5; c.lineWidth = 4; c.stroke();
-        c.globalAlpha = 1;
-      });
+      c.strokeStyle = C.dial; c.lineWidth = 30; c.stroke();
+      // value band: an all-positive gradient sweep (hashrate — higher is better, so no
+      // danger colors) OR discrete zones (round effort — green→amber→red).
+      if (g.gradient) {
+        var lg = c.createLinearGradient(cx - (R + 7), cy, cx + (R + 7), cy);
+        g.gradient.forEach(function (s) { lg.addColorStop(s[0], s[1]); });
+        c.beginPath(); c.arc(cx, cy, R + 7, a0, a1);
+        c.strokeStyle = lg; c.lineWidth = 4; c.stroke();
+      } else {
+        g.zones.forEach(function (z) {
+          c.beginPath();
+          c.arc(cx, cy, R + 7, A((z[0] - g.min) / (g.max - g.min)), A((z[1] - g.min) / (g.max - g.min)));
+          c.strokeStyle = z[2]; c.globalAlpha = 0.5; c.lineWidth = 4; c.stroke();
+          c.globalAlpha = 1;
+        });
+      }
       // ticks + numerals
       c.font = '9px ' + MONO;
       for (var i = 0; i <= g.ticks; i++) {
@@ -164,11 +198,12 @@
         c.stroke();
         c.restore();
       }
-      // needle
+      // needle (amber when the dial is flagged idle, e.g. zero active miners)
       var na = A(g.cur);
+      var nc = g.needleColor || C.accent;
       c.save();
-      c.shadowColor = C.accent; c.shadowBlur = 8;
-      c.strokeStyle = C.accent; c.lineWidth = 2.4; c.lineCap = 'round';
+      c.shadowColor = nc; c.shadowBlur = C.bloom;
+      c.strokeStyle = nc; c.lineWidth = 2.4; c.lineCap = 'round';
       c.beginPath();
       c.moveTo(cx - Math.cos(na) * 10, cy - Math.sin(na) * 10);
       c.lineTo(cx + Math.cos(na) * (R - 14), cy + Math.sin(na) * (R - 14));
@@ -176,7 +211,7 @@
       c.restore();
       // hub + unit
       c.beginPath(); c.arc(cx, cy, 5, 0, 7); c.fillStyle = C.mute; c.fill();
-      c.beginPath(); c.arc(cx, cy, 2, 0, 7); c.fillStyle = C.accent; c.fill();
+      c.beginPath(); c.arc(cx, cy, 2, 0, 7); c.fillStyle = nc; c.fill();
       c.fillStyle = C.mute; c.font = '9.5px ' + MONO; c.textAlign = 'center';
       c.fillText(g.unit, cx, cy - 26);
     }
@@ -195,6 +230,8 @@
       if (ticks) g.ticks = ticks;
     };
     g.setMarker = function (v) { g.marker = v; };
+    g.setGradient = function (stops) { g.gradient = stops; };
+    g.setNeedleColor = function (col) { g.needleColor = col || null; };
     g.setValue = function (v) {
       g.target = (v - g.min) / (g.max - g.min || 1);
       if (REDUCED) { g.cur = g.target; render(); }
@@ -209,10 +246,27 @@
   // 24h peak would exceed it (never pins); higher is better → single accent zone (no red
   // danger band), with an info-blue tick marking the 24h peak as a reference.
   var gaugeHash = Gauge('g-hash', { min: 0, max: 200, ticks: 8, unit: 'G/s' });
+  // All-green gradient sweep (faint → bright accent). Higher hashrate is good, so the band
+  // never turns red/amber by value — "low" is not "danger". Re-applied each refresh so a
+  // theme switch re-derives it from the live --accent token.
+  var HASH_GRAD = function () { return [[0, withAlpha(C.accent, 0.22)], [1, withAlpha(C.accent, 0.72)]]; };
+  if (gaugeHash) gaugeHash.setGradient(HASH_GRAD());
   // Round effort — current round's Σ share-diff / one block's network diff, live. <100% =
   // nominal (green), 100–150% = running long (amber), >150% = overdue/unlucky (red). The
   // big numeral carries the true %; luck (100-block) + network share ride the sub-line.
   var gaugeShare = Gauge('g-share', { min: 0, max: 200, ticks: 8, unit: '%' });
+
+  // Idle state for the hashrate dial: with zero active miners the value reads a muted amber
+  // "IDLE" (needle + numeral) — a distinct dead-pool signal, deliberately NOT a red danger
+  // band. Gated on active_miners (from /api/pool/stats), never raw gps=0 which blips to 0
+  // between shares even with miners connected. Applied from both loaders so whichever lands
+  // last keeps it fresh; null = not yet known → not idle.
+  var lastActiveMiners = null;
+  function applyHashState() {
+    var idle = lastActiveMiners === 0;
+    if (gaugeHash) gaugeHash.setNeedleColor(idle ? C.warn : null);
+    var v = $('g-hash-v'); if (v) v.classList.toggle('idle', idle);
+  }
 
   // ── LED bargraph (share quality) ──────────────────────────────────────────
   var LED_SEGS = 40;
@@ -305,7 +359,10 @@
       var g1 = fmtGps(gps);
       setText('g-hash-v', g1[0] + ' ' + g1[1]);
       var g24 = fmtGps(hr.pool_hashrate_24h_gps || 0);
-      setText('g-hash-avg', '24h avg ' + g24[0] + ' ' + g24[1]);
+      setText('g-hash-avg', lastActiveMiners === 0
+        ? 'idle · no active miners'
+        : '24h avg ' + g24[0] + ' ' + g24[1]);
+      applyHashState();
       if (gaugeHash) {
         // Scale the dial in the display unit family of the current value.
         var unit = g1[1] || 'G/s';
@@ -316,8 +373,9 @@
         // would exceed it, so the needle never pins and the peak tick always fits.
         var floor = unit === 'G/s' ? 200 : 1;
         var max = Math.max(floor, niceCeil(Math.max(val, peak) * 1.15));
-        // Higher hashrate is good → one accent sweep, no red danger band at the top.
-        gaugeHash.setScale(0, max, unit, [[0, max, C.accent]], 8);
+        // Higher hashrate is good → all-green gradient sweep, no red danger band at the top.
+        gaugeHash.setScale(0, max, unit, [], 8);
+        gaugeHash.setGradient(HASH_GRAD());
         gaugeHash.setMarker(peak > 0 ? peak : null);
         gaugeHash.setValue(val);
       }
@@ -329,6 +387,8 @@
       var s = await Auth.fetch('/api/pool/stats');
       if (!s) return;
       setText('c-miners', String(s.active_miners || 0));
+      lastActiveMiners = Number(s.active_miners) || 0;
+      applyHashState();
       setText('c-miners-sub', (s.active_connections || 0) + ' conn');
       setText('c-blocks24', String(s.blocks_24h || 0));
       setText('c-blocks24-sub', (s.blocks_7d || 0) + ' wk');
@@ -655,11 +715,31 @@
   // the field (operator request 2026-07-14).
   function regionStratumUri(r) { return regionHostPort(r); }
   function statusCls(s) {
-    // The public regions API emits 'online' | 'idle' | 'offline'. online = tunnel up + active
-    // miners (green); idle = tunnel up, no recent miners — fine to connect (amber); offline =
-    // WireGuard tunnel down / never handshaked, don't bother (red). Backed by the gateway
-    // handshake signal server-side, so 'offline' is a real "down", not a guess.
-    return s === 'online' ? 's-online' : s === 'offline' ? 's-down' : 's-idle';
+    // The public regions API emits 'online' | 'idle' | 'offline' | 'checking'.
+    //   online   — reachable + active miners (green)
+    //   idle     — reachable, no recent miners; fine to connect (blue)
+    //   offline  — tunnel down / nothing listening on the advertised port (red)
+    //   checking — no liveness verdict yet, first poll after a pool restart (grey, pulsing)
+    // Server-side these are backed by recent shares, the WireGuard handshake AND an active
+    // TCP dial of the advertised endpoint, so 'idle' means genuinely reachable and 'offline'
+    // is a real down — neither is a guess. 'checking' exists so an unknown never masquerades
+    // as 'idle': the bay paints instantly and recolours the moment the verdict lands.
+    return s === 'online' ? 's-online'
+      : s === 'offline' ? 's-down'
+      : s === 'checking' ? 's-checking'
+      : 's-idle';
+  }
+  function statusWord(s) {
+    return s === 'online' ? '● ONLINE'
+      : s === 'offline' ? '● OFFLINE'
+      : s === 'checking' ? '◌ CHECKING'
+      : '○ IDLE';
+  }
+  function statusTitle(s) {
+    return s === 'online' ? 'online — miners active'
+      : s === 'offline' ? 'offline — gateway unreachable'
+      : s === 'checking' ? 'checking — verifying this endpoint right now'
+      : 'idle — reachable, no recent miners';
   }
 
   // Best-effort nearest region from the browser IANA timezone (no geo-IP; same
@@ -701,29 +781,47 @@
     var uri = regionStratumUri(r);
     setText('rx-uri', uri);
     setText('rx-guide-uri', uri);  // Pool 1 field in the collapsed miner-setup mock follows the selection
-    var m = r.status === 'online' ? '● ONLINE' : r.status === 'offline' ? '● OFFLINE' : '○ IDLE';
     setText('rx-meta',
       String(r.label || r.region).toUpperCase() +
       (r.country ? ' · ' + String(r.country).toUpperCase() : '') +
-      ' · ' + m + ' · ' + (r.miners > 0 ? r.miners + ' MINERS' : 'NO MINERS') +
+      ' · ' + statusWord(r.status) + ' · ' + (r.miners > 0 ? r.miners + ' MINERS' : 'NO MINERS') +
       ' · SAME PORT EVERY REGION');
   }
+
+  // When the server reports regions still being liveness-checked, repaint sooner than the
+  // 60s cycle so a grey LED settles into its real colour in seconds, not a minute. Bounded —
+  // a region that can never get a verdict must not turn this into a poll loop.
+  var checkingRetries = 0;
+  var checkingTimer = null;
 
   async function loadRegions() {
     var bank = $('rx-switches');
     try {
-      if (!BASE_PORT || !DEFAULT_URI) {
-        try {
-          var b = await Auth.fetch('/api/public/branding');
-          var conn = b && b.data && b.data.connection;
-          if (conn) {
-            BASE_PORT = conn.stratum_port || BASE_PORT;
-            if (conn.stratum_host) DEFAULT_URI = conn.stratum_host + ':' + (conn.stratum_port || '3333');
-          }
-        } catch (e) { /* fall back to 3333 */ }
+      // Region list and branding are fetched CONCURRENTLY: branding only supplies the fallback
+      // port/host, so making the patch bay wait on it just delayed first paint. The regions
+      // endpoint itself never blocks on a liveness read server-side (handshake + stratum dial
+      // are cached out of the request path), so this resolves as fast as the DB query.
+      var brandingP = (!BASE_PORT || !DEFAULT_URI)
+        ? Auth.fetch('/api/public/branding').catch(function () { return null; })
+        : Promise.resolve(null);
+      var regionsP = Auth.fetch('/api/pool/stats/regions');
+      var b = await brandingP;
+      var conn = b && b.data && b.data.connection;
+      if (conn) {
+        BASE_PORT = conn.stratum_port || BASE_PORT;
+        if (conn.stratum_host) DEFAULT_URI = conn.stratum_host + ':' + (conn.stratum_port || '3333');
       }
-      var data = await Auth.fetch('/api/pool/stats/regions');
+      var data = await regionsP;
       var regions = (data && Array.isArray(data.regions)) ? data.regions : [];
+
+      // Verdict still pending → re-poll in 4s (up to 5 times ≈ the server's 60s probe TTL).
+      if (checkingTimer) { clearTimeout(checkingTimer); checkingTimer = null; }
+      if (data && data.checking > 0 && checkingRetries < 5) {
+        checkingRetries++;
+        checkingTimer = setTimeout(loadRegions, 4000);
+      } else if (!data || !data.checking) {
+        checkingRetries = 0;
+      }
       regions = regions.filter(function (r) { return r.stratum_url && r.is_active !== false; });
 
       // Gateway array (P-02b): one lamp per region, rebuilt each poll (capped at 8).
@@ -743,6 +841,7 @@
           lamp.appendChild(document.createTextNode('REG ' + String(r.region || '').toUpperCase()));
           var small = document.createElement('small');
           small.textContent = r.status === 'offline' ? 'offline'
+            : r.status === 'checking' ? 'checking'
             : (r.miners > 0 ? r.miners + (r.miners === 1 ? ' miner' : ' miners') : 'idle');
           lamp.appendChild(small);
           lampHost.appendChild(lamp);
@@ -751,12 +850,13 @@
       setText('mi-regions', regions.length + (regions.length === 1 ? ' REGION' : ' REGIONS') +
         (BASE_PORT ? ' · :' + BASE_PORT : ''));
 
-      // Spec-plate "active regions" = declared regions that aren't offline (idle counts —
-      // a tunnel that's up but momentarily miner-less is still available to connect). A
-      // single-endpoint pool (no declared regions) reports its one endpoint as active.
+      // Spec-plate "active regions" = declared regions VERIFIED reachable (idle counts — a
+      // gateway that's up but momentarily miner-less is still available to connect; 'checking'
+      // does not, it isn't confirmed yet and resolves within seconds). A single-endpoint pool
+      // (no declared regions) reports its one endpoint as active.
       var activeRegions = regions.length === 0
         ? (DEFAULT_URI ? 1 : 0)
-        : regions.filter(function (r) { return r.status !== 'offline'; }).length;
+        : regions.filter(function (r) { return r.status === 'online' || r.status === 'idle'; }).length;
       setText('pl-regions', String(activeRegions));
 
       var help = $('rx-help');  // collapsed colour-legend + guidance disclosure
@@ -797,9 +897,7 @@
         sw.setAttribute('role', 'tab');
         sw.setAttribute('aria-selected', r.region === selectedKey ? 'true' : 'false');
         sw.title = (r.label || r.region) + (r.country ? ' · ' + r.country : '') +
-          ' — ' + (r.status === 'online' ? 'online — miners active'
-            : r.status === 'offline' ? 'offline — gateway unreachable'
-            : 'idle — no recent miners');
+          ' — ' + statusTitle(r.status);
         var led = document.createElement('span');
         led.className = 'rgn-led';
         var name = document.createElement('span');
@@ -850,31 +948,44 @@
       var email = '';
       try { email = enc ? atob(enc) : ''; } catch (e) { email = ''; }
       var forum = (data.pool && data.pool.support_forum_url) || '';
-      var social = (data.branding && data.branding.social) || {};
+      // data.branding.social is not read here: branding.js owns the social rows.
       if (email) { var li = $('info-email'); if (li) li.style.display = ''; }
       if (forum) {
         var fli = $('info-forum'), fa = $('info-forum-link');
         if (fa) fa.setAttribute('href', forum);
         if (fli) fli.style.display = '';
       }
-      // Keys must match the P-08 rows in index.html — 'website' is deliberately not one of
-      // them (self-referential), so counting it here would hide the note with no row shown.
-      var any = email || forum || ['discord', 'telegram', 'twitter', 'nostr'].some(function (k) { return social[k]; });
-      if (any) { var note = $('info-no-contact'); if (note) note.style.display = 'none'; }
-    } catch (e) { /* keep the operator note */ }
+      // The "no contact channels configured" row is gone (it was an admin instruction on a
+      // public page), so there is nothing left to toggle off when contacts DO exist — each
+      // row above reveals itself, and P-08 simply carries no contact lines otherwise.
+    } catch (e) { /* leave every contact row hidden — better silent than half-filled */ }
   }
 
   // ── theme switch → re-render canvas instruments in the new palette ────────
   new MutationObserver(function () {
     readTokens();
-    if (gaugeHash) gaugeHash.render();
-    if (gaugeShare) gaugeShare.render();
+    // The dial BANDS (gradient sweep / effort zones) are baked colour stops, not tokens read
+    // at draw time — render() alone repaints the needle and numerals in the new palette but
+    // leaves the band on the old accent, so a Reactor→light switch left a phosphor-green
+    // sweep on a white dial until the next 60s refresh happened to re-apply it. Re-derive
+    // them here; the effort zones keep whatever scale the last refresh set.
+    applyHashState();  // idle needle holds a colour value too — re-pick it from the new C.warn
+    if (gaugeHash) { gaugeHash.setGradient(HASH_GRAD()); gaugeHash.render(); }
+    if (gaugeShare) {
+      gaugeShare.setScale(gaugeShare.min, gaugeShare.max, gaugeShare.unit,
+        [[0, 100, C.accent], [100, 150, C.warn], [150, gaugeShare.max, C.danger]], 8);
+      gaugeShare.render();
+    }
     // Trend charts re-read the theme accent on their update path — refresh redraws them.
     loadTrendCharts();
   }).observe(document.body, { attributes: true, attributeFilter: ['class'] });
 
   // ── refresh cycle ─────────────────────────────────────────────────────────
   async function refresh() {
+    // Kicked BEFORE the awaited loadStatus: the patch bay is the one panel a visitor came
+    // here to act on, and it has no dependency on nodeHeight — queueing it behind the status
+    // round trip only delayed the switches appearing.
+    loadRegions();
     await loadStatus();   // first: nodeHeight feeds the fuel-rod depths
     loadPoolInfo();
     loadHashrate();
@@ -883,7 +994,6 @@
     loadBlocks();
     loadPayments();
     loadTrendCharts();
-    loadRegions();
   }
 
   function boot() { refresh(); loadInfoContact(); }

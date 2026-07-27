@@ -3,7 +3,13 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Loading…</title>
+  <!-- The real <title> + description + og:* for a given ?p=<key> are injected SERVER-side
+       (index.js "/page.html" route, proxied by nginx) — a crawler never sees this default.
+       It only shows for the instant before the client script resolves, so it must still be
+       a real name and not "Loading…", which is what a browser tab and a bookmark used to
+       get. Favicon here rather than in the injected head: it never varies per page. -->
+  <title>GRINIUM Mining Pool</title>
+  <link rel="icon" type="image/svg+xml" href="/images/favicon.svg">
   <link rel="stylesheet" href="/css/dashboard.css">
   <style>
     .content {
@@ -18,9 +24,17 @@
   <link rel="stylesheet" href="/css/themes.css">
 </head>
 <body>
+  <noscript>
+    <div class="noscript-note">
+      <b>JavaScript is required.</b> This site builds its navigation and loads its live
+      figures in the browser, so with scripts blocked the page stays empty. Enable
+      JavaScript for this site to use it. The pool's data is also available as plain
+      JSON over its <a href="/api-docs.html">public API</a> if you would rather not.
+    </div>
+  </noscript>
     <!-- header injected by /js/public-shell.js -->
 
-  <main class="content">
+  <main class="content" id="main" tabindex="-1">
     <h1 id="page-title" class="muted">Loading…</h1>
     <div id="page-body"></div>
   </main>
@@ -37,7 +51,9 @@
         .then(function (r) { return r.ok ? r.json() : null; })
         .then(function (json) {
           if (!json || !json.data) { renderMissing(); return; }
-          document.title = json.data.title;
+          // Skip when the server rendered the head: its title is "<page> — <pool>" (and may
+          // use the page's seo_title override), which the bare title here would undo.
+          if (!document.querySelector('meta[name="server-seo"]')) document.title = json.data.title;
           var t = document.getElementById('page-title');
           t.textContent = json.data.title;
           t.classList.remove('muted');

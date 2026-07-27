@@ -27,8 +27,9 @@
     </div>
 
     <!-- Create / edit form -->
+    <h2 data-sec="Write a post">Write a post</h2>
     <div class="card">
-      <h3 id="form-title" style="margin:0 0 1rem;">New post</h3>
+      <h3 class="sub-title" id="form-title">New post</h3>
       <input type="hidden" id="post-id">
 
       <div class="form-row">
@@ -210,9 +211,11 @@ async function loadPosts() {
         <td>${escHtml(dateStr)}</td>
         <td>${escHtml(p.tags || '')}</td>
         <td>
-          <a class="btn btn-sm btn-outline" href="/blog/${encodeURIComponent(p.slug)}" target="_blank" rel="noopener">View</a>
-          <button class="btn btn-sm btn-outline" onclick="editPost(${p.id})">Edit</button>
-          <button class="btn btn-sm" onclick="deletePost(${p.id})">Delete</button>
+          <div class="row-actions">
+            <a class="btn-icon" href="/blog/${encodeURIComponent(p.slug)}" target="_blank" rel="noopener" data-tip="View the live post" aria-label="View the live post">👁️</a>
+            <button class="btn-icon" onclick="editPost(${p.id})" data-tip="Edit this post" aria-label="Edit this post">✏️</button>
+            <button class="btn-icon btn-icon-danger" onclick="deletePost(${p.id})" data-tip="Delete this post" aria-label="Delete this post">🗑️</button>
+          </div>
         </td>
       </tr>`;
     }).join('');

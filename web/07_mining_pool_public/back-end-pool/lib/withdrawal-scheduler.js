@@ -484,13 +484,19 @@ class WithdrawalScheduler {
   // known (recordTorFee after a successful Tor send; _slateFeeGrin at slatepack creation).
   // The fee never enters the miner's ledger math (un-lock/reverse always move `amount`) —
   // it exists so reconciliation can explain the wallet-vs-ledger gap (sender pays fees).
-  createWithdrawal(grinAddress, amount, method = 'tor') {
+  // `opts.adminOverride` (freshAdmin-gated caller only) lets the operator push a payout BELOW the
+  // pool minimum — the sub-threshold "email support to withdraw" case — by sending it through this
+  // same locked Tor flow instead of an out-of-band send. It bypasses ONLY the min floor and the
+  // post-failure reversal cooldown; the freeze, the CAS balance lock, and the pending caps (incl.
+  // the one-pending-per-address rule that prevents a double-pay) all still apply.
+  createWithdrawal(grinAddress, amount, method = 'tor', opts = {}) {
     const fail = (msg, code) => { const e = new Error(msg); e.code = code; throw e; };
+    const adminOverride = !!(opts && opts.adminOverride);
 
     if (!grinAddress) fail('address required', 400);
     if (method !== 'tor') fail('only Tor withdrawals are supported', 400);
     this._assertNotFrozen();
-    this._assertNoRecentReversal(grinAddress);
+    if (!adminOverride) this._assertNoRecentReversal(grinAddress);
 
     const acct0 = this.db.prepare(
       'SELECT balance FROM miner_accounts WHERE grin_address = ?'
@@ -507,7 +513,7 @@ class WithdrawalScheduler {
     // Withdrawals are manual with an explicit amount, so only the pool-wide floor applies
     // (the per-account min_payout override was retired 2026-07-17).
     const minW = this.config.min_withdrawal || 25.0;
-    if (amt < minW) fail(`amount below minimum withdrawal (${minW} GRIN)`, 400);
+    if (!adminOverride && amt < minW) fail(`amount below minimum withdrawal (${minW} GRIN)`, 400);
 
     const txn = this.db.transaction(() => {
       const totalPending = this.db.prepare(
@@ -548,14 +554,15 @@ class WithdrawalScheduler {
 
       this.db.prepare(`
         INSERT INTO withdrawal_events (withdrawal_id, from_status, to_status, triggered_by, note)
-        VALUES (?, NULL, 'tor_checking', 'miner', ?)
-      `).run(wid, `withdrawal requested (${amt} GRIN)`);
+        VALUES (?, NULL, 'tor_checking', ?, ?)
+      `).run(wid, adminOverride ? 'admin_override' : 'miner',
+             adminOverride ? `admin below-min Tor payout (${amt} GRIN)` : `withdrawal requested (${amt} GRIN)`);
 
       return wid;
     });
 
     const withdrawal_id = txn();
-    console.log(`[${new Date().toISOString()}] Withdrawal ${withdrawal_id} created for ${grinAddress} (${amt} GRIN, locked)`);
+    console.log(`[${new Date().toISOString()}] Withdrawal ${withdrawal_id} created for ${grinAddress} (${amt} GRIN, locked${adminOverride ? ', admin-override' : ''})`);
     return { success: true, withdrawal_id, amount: amt };
   }
 

@@ -23,7 +23,7 @@
           <div class="form-group">
             <label>Pool Logo</label>
             <div class="file-upload" onclick="document.getElementById('logo-input').click()">
-              <input type="file" id="logo-input" accept="image/*" onchange="uploadAsset('logo')">
+              <input type="file" id="logo-input" class="settings-skip" accept="image/*" onchange="uploadAsset('logo')">
               <p>Click to upload logo (SVG, PNG, or GIF)</p>
               <div class="current-asset" id="logo-current"></div>
             </div>
@@ -33,7 +33,7 @@
           <div class="form-group">
             <label>Logo (Light Theme variant)</label>
             <div class="file-upload" onclick="document.getElementById('logo_dark-input').click()">
-              <input type="file" id="logo_dark-input" accept="image/*" onchange="uploadAsset('logo_dark')">
+              <input type="file" id="logo_dark-input" class="settings-skip" accept="image/*" onchange="uploadAsset('logo_dark')">
               <p>Optional alternate logo for light backgrounds</p>
               <div class="current-asset" id="logo_dark-current"></div>
             </div>
@@ -43,7 +43,7 @@
           <div class="form-group">
             <label>Favicon</label>
             <div class="file-upload" onclick="document.getElementById('favicon-input').click()">
-              <input type="file" id="favicon-input" accept="image/*" onchange="uploadAsset('favicon')">
+              <input type="file" id="favicon-input" class="settings-skip" accept="image/*" onchange="uploadAsset('favicon')">
               <p>Click to upload favicon (32x32)</p>
               <div class="current-asset" id="favicon-current"></div>
             </div>
@@ -52,7 +52,7 @@
         </div>
 
         <div class="form-section">
-          <h3 class="section-title">App Icons (PWA / "Add to Home Screen")</h3>
+          <h3 class="section-title" data-sec="App icons">App Icons (PWA / "Add to Home Screen")</h3>
           <div class="form-group">
             <label for="app_short_name">App Short Name</label>
             <input type="text" id="app_short_name" name="app_short_name" placeholder="GRINIUM">
@@ -63,7 +63,7 @@
             <div class="form-group">
               <label>Icon 192×192 (PNG)</label>
               <div class="file-upload" onclick="document.getElementById('icon_192-input').click()">
-                <input type="file" id="icon_192-input" accept="image/png" onchange="uploadAsset('icon_192')">
+                <input type="file" id="icon_192-input" class="settings-skip" accept="image/png" onchange="uploadAsset('icon_192')">
                 <p>Click to upload 192×192</p>
                 <div class="current-asset" id="icon_192-current"></div>
               </div>
@@ -72,7 +72,7 @@
             <div class="form-group">
               <label>Icon 512×512 (PNG)</label>
               <div class="file-upload" onclick="document.getElementById('icon_512-input').click()">
-                <input type="file" id="icon_512-input" accept="image/png" onchange="uploadAsset('icon_512')">
+                <input type="file" id="icon_512-input" class="settings-skip" accept="image/png" onchange="uploadAsset('icon_512')">
                 <p>Click to upload 512×512</p>
                 <div class="current-asset" id="icon_512-current"></div>
               </div>
@@ -83,7 +83,7 @@
           <div class="form-group">
             <label>Apple Touch Icon (180×180 PNG)</label>
             <div class="file-upload" onclick="document.getElementById('apple_touch_icon-input').click()">
-              <input type="file" id="apple_touch_icon-input" accept="image/png" onchange="uploadAsset('apple_touch_icon')">
+              <input type="file" id="apple_touch_icon-input" class="settings-skip" accept="image/png" onchange="uploadAsset('apple_touch_icon')">
               <p>Click to upload Apple touch icon</p>
               <div class="current-asset" id="apple_touch_icon-current"></div>
             </div>
@@ -133,7 +133,12 @@
             <label>Themes visitors can switch between</label>
             <div class="helper-text" style="margin-bottom:.6rem;">
               Tick the themes to offer in the public switcher. The default theme above is always
-              included automatically.
+              included automatically. Visitors see a palette button in the header that cycles
+              through this list; with fewer than two themes ticked, no button is shown.
+            </div>
+            <div class="helper-text" id="enabled-themes-off-note" style="display:none;margin-bottom:.6rem;">
+              <b>Switching is off</b> — this list has no effect until you tick the box above.
+              Your picks are kept.
             </div>
             <div id="enabled-themes-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:.5rem;"></div>
             <input type="hidden" id="enabled_themes" name="enabled_themes">
@@ -179,7 +184,7 @@
         </div>
 
         <div class="form-section">
-          <h3 class="section-title">Social Links & Footer</h3>
+          <h3 class="section-title" data-sec="Social &amp; footer">Social Links & Footer</h3>
           <div class="form-group">
             <label for="discord_link">Discord Invite URL</label>
             <input type="url" id="discord_link" name="discord_link" placeholder="https://discord.gg/...">

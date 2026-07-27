@@ -97,6 +97,12 @@ function migrateMinerAccounts() {
       prev_ip: 'TEXT DEFAULT NULL',
       last_pass_hash: 'TEXT DEFAULT NULL',
       prev_pass_hash: 'TEXT DEFAULT NULL',
+      // Why the LAST-SEEN stratum password was or wasn't usable as ownership proof:
+      // 'ok' | 'none' (rig sent nothing) | a passwordRejectReason() code. Diagnostic only —
+      // never gates anything, and holds no part of the password itself. Without it a refused
+      // password is completely silent: the rig mines fine and the miner only discovers there
+      // is no password proof on withdrawal day.
+      pass_proof_state: 'TEXT DEFAULT NULL',
       is_banned: 'INTEGER NOT NULL DEFAULT 0',
       ban_reason: 'TEXT DEFAULT NULL',
       banned_at: 'INTEGER DEFAULT NULL',
@@ -132,7 +138,12 @@ function migrateAds() {
     const additions = {
       impressions: 'INTEGER NOT NULL DEFAULT 0',
       clicks: 'INTEGER NOT NULL DEFAULT 0',
-      notes: 'TEXT DEFAULT NULL'
+      notes: 'TEXT DEFAULT NULL',
+      // Native text-ad type (ad_type='text'): a headline + one-line body + CTA button,
+      // composed from fields instead of a baked image or a raw HTML snippet.
+      headline: 'TEXT DEFAULT NULL',
+      body_text: 'TEXT DEFAULT NULL',
+      cta_label: 'TEXT DEFAULT NULL'
     };
     for (const [name, def] of Object.entries(additions)) {
       if (!have.has(name)) {
@@ -269,6 +280,7 @@ function createSchema() {
       prev_ip TEXT DEFAULT NULL,
       last_pass_hash TEXT DEFAULT NULL,
       prev_pass_hash TEXT DEFAULT NULL,
+      pass_proof_state TEXT DEFAULT NULL,
       is_banned INTEGER NOT NULL DEFAULT 0,
       ban_reason TEXT DEFAULT NULL,
       banned_at INTEGER DEFAULT NULL,
@@ -426,6 +438,45 @@ function createSchema() {
     )`,
 
     `CREATE INDEX IF NOT EXISTS idx_withdrawal_events ON withdrawal_events(withdrawal_id, created_at)`,
+
+    // ── Abandoned-balance disposition (lib/dormancy.js) ──────────────────────────
+    // When a miner's address has had NO activity (no share, no successful payout) for
+    // dormancy_months AND still holds a balance, the pool sweeps that balance into the
+    // community PRIZE POOL (the single prize_pool bucket), where it is later given away
+    // through the pool's published draws. Disposition is FINAL (disclosed in the ToS + the
+    // payout-page banner): the swept balance is an INTERNAL transfer (debit each source →
+    // ONE credit to prize_pool), never operator revenue. These two tables are the
+    // never-pruned audit trail behind the public "unclaimed balances" transparency section
+    // and the admin dormancy panel — raw balance_log rows prune at 60d, so historical
+    // disposition detail lives HERE.
+    //
+    // One batch row per run; one source row per swept address. The prize-pool inflow is a
+    // single balance_log row (grin_address='prize_pool', reference_type='dormant',
+    // reference_id=disposition batch id). remainder is always 0 and recipient_count always 1
+    // (the prize pool) — columns retained for schema/back-compat with pre-prize-pool batches.
+    `CREATE TABLE IF NOT EXISTS dormancy_dispositions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      total_swept REAL NOT NULL,
+      remainder REAL NOT NULL DEFAULT 0,
+      source_count INTEGER NOT NULL DEFAULT 0,
+      recipient_count INTEGER NOT NULL DEFAULT 0,
+      dormancy_months INTEGER NOT NULL,
+      active_window_days INTEGER NOT NULL,
+      triggered_by INTEGER DEFAULT NULL,
+      created_at INTEGER NOT NULL DEFAULT (unixepoch())
+    )`,
+
+    `CREATE TABLE IF NOT EXISTS dormancy_disposed_sources (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      disposition_id INTEGER NOT NULL REFERENCES dormancy_dispositions(id),
+      grin_address TEXT NOT NULL,
+      amount REAL NOT NULL,
+      last_activity_at INTEGER DEFAULT NULL,
+      created_at INTEGER NOT NULL DEFAULT (unixepoch())
+    )`,
+
+    `CREATE INDEX IF NOT EXISTS idx_dormancy_src_addr ON dormancy_disposed_sources(grin_address, created_at DESC)`,
+    `CREATE INDEX IF NOT EXISTS idx_dormancy_src_batch ON dormancy_disposed_sources(disposition_id)`,
 
     `CREATE TABLE IF NOT EXISTS users (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -646,8 +697,11 @@ function createSchema() {
     // ─── Network-map geo layers (COUNTRY-ONLY; feeds /api/pool/topology + /api/network/peers) ──
     // Privacy contract (lib/geoip.js): a miner's transient real IP is resolved to a COUNTRY
     // CODE at its first accepted share and ONLY the country is kept here — never the IP, never
-    // a city, never coordinates. Map dots are randomized within the country server-side. One
-    // row per address; upserted (throttled) so a miner's country stays current without history.
+    // a city, never coordinates. The map draws a miner country as the FILLED COUNTRY, with the
+    // marker on that country's exact centroid (geoip.countryCentroid) — positions are not
+    // scattered/randomized, because the country is published beside them and a jittered point
+    // could only land in the wrong one. One row per address; upserted (throttled) so a miner's
+    // country stays current without history.
     `CREATE TABLE IF NOT EXISTS miner_geo (
       grin_address TEXT PRIMARY KEY,
       country_code TEXT DEFAULT NULL,
@@ -658,9 +712,14 @@ function createSchema() {
     `CREATE INDEX IF NOT EXISTS idx_miner_geo_cc ON miner_geo(country_code)`,
 
     // Rolling 30-day view of Grin P2P peers seen by THIS pool's node, aggregated to country.
-    // peer_key is a truncated sha256(ip) — a stable dedup handle so the same peer isn't double
-    // counted across snapshots — the raw IP is NEVER stored. net = 'main' | 'test' (this node's
-    // network). Populated by the peer-snapshot collector in index.js; read by /api/network/peers.
+    // peer_key is a truncated UNSALTED sha256(net|ip) — a stable dedup handle so the same peer
+    // isn't double counted across snapshots. The raw IP is not stored, but be honest about what
+    // that buys: an unsalted digest of an IPv4 is reversible by brute force (2^32), so this is
+    // deduplication, NOT anonymisation. That is fine here — Grin P2P addresses are public by
+    // construction and these are peers our own node already connected to. Salting would break
+    // cross-snapshot dedup, which is the entire point of the column. See security audit §G2.
+    // net = 'main' | 'test' (this node's network).
+    // Populated by the peer-snapshot collector in index.js; read by /api/network/peers.
     `CREATE TABLE IF NOT EXISTS network_peers (
       peer_key     TEXT PRIMARY KEY,
       country_code TEXT DEFAULT NULL,
@@ -692,6 +751,9 @@ function createSchema() {
       impressions INTEGER NOT NULL DEFAULT 0,
       clicks INTEGER NOT NULL DEFAULT 0,
       notes TEXT DEFAULT NULL,
+      headline TEXT DEFAULT NULL,
+      body_text TEXT DEFAULT NULL,
+      cta_label TEXT DEFAULT NULL,
       created_at INTEGER NOT NULL DEFAULT (unixepoch()),
       updated_at INTEGER NOT NULL DEFAULT (unixepoch())
     )`,
@@ -851,6 +913,8 @@ function migratePagesFromConfig() {
 // migratePagesFromConfig), so it never re-seeds even after the operator deletes/edits
 // rows in admin → Regions. INSERT OR IGNORE keeps any operator row that already owns a
 // region tag. `stratumPort` is the configured public stratum port (default 3333).
+// Rows land INACTIVE — nothing public shows a region until the operator enables it (see the
+// is_active note at the insert below).
 //
 // `poolDomain` is the pool's own public hostname (config.subdomain). These are GRINIUM's
 // real regional endpoints, so they're seeded ONLY for the actual grinium.com deployment —
@@ -858,7 +922,14 @@ function migratePagesFromConfig() {
 // connect to the wrong pool). Forks get a clean slate and rely on ensureLocalRegion()
 // (their own domain as region 1) + admin → Regions to declare more. No marker is stamped
 // on the skip path, so once a grinium domain is configured the seed still runs on restart.
-function seedDefaultRegions(stratumPort, poolDomain) {
+// `localRegion` (config.region) is EXCLUDED from the seed. This box's own region is not a plan
+// — it is running, right here — and it is registered active by ensureLocalRegion() a moment
+// later, from the location the operator gave in 2) Configure. Without this exclusion a grinium
+// box whose region tag matches a seed tag (e.g. 'sgn') got an INACTIVE row created here first,
+// and ensureLocalRegion only backfills empty columns — it deliberately never re-activates a row,
+// so as not to override an operator who switched a region off — leaving the pool's own region
+// unpublished: no connect card, no gateway on the map.
+function seedDefaultRegions(stratumPort, poolDomain, localRegion) {
   try {
     const dom = String(poolDomain || '').toLowerCase();
     if (!(dom === 'grinium.com' || dom.endsWith('.grinium.com'))) return;
@@ -885,11 +956,18 @@ function seedDefaultRegions(stratumPort, poolDomain) {
       { v: 1, region: 'ams', label: 'Amsterdam',   country: 'Netherlands',    cc: 'NL', host: 'ams.grinium.com' },
       { v: 2, region: 'sgn', label: 'Saigon',      country: 'Vietnam',        cc: 'VN', host: 'sgn.grinium.com' }
     ];
-    const pending = REGIONS.filter(r => r.v > applied);
+    const local = String(localRegion || '').trim().toLowerCase();
+    const pending = REGIONS.filter(r => r.v > applied && r.region !== local);
+    // Seeded INACTIVE (is_active = 0), deliberately. A seed row is a PLAN, not a running
+    // gateway: the host may not exist yet when this fires. Active rows are published — the
+    // connect grid tells miners to point their rigs at that hostname, and the network map draws
+    // a marker for it — so seeding them active advertised boxes that were never built (and put
+    // 5 markers on the globe for a single-box pool). The operator flips each one on in
+    // admin → Regions once its gateway is actually deployed (scripts/lib/07_lib_gateway.sh).
     const insert = db.prepare(`
       INSERT OR IGNORE INTO pool_locations
         (region, label, country, country_code, stratum_url, is_active)
-      VALUES (?, ?, ?, ?, ?, 1)
+      VALUES (?, ?, ?, ?, ?, 0)
     `);
     const stamp = db.prepare(`
       INSERT INTO pool_config (section, key, value, value_type)
@@ -903,7 +981,8 @@ function seedDefaultRegions(stratumPort, poolDomain) {
       stamp.run(String(SEED_VERSION)); // seed + "done" marker committed atomically
     });
     tx();
-    console.warn(`[db] seeded ${pending.length} default regional endpoints (v${applied}→v${SEED_VERSION}, port ${port})`);
+    console.warn(`[db] seeded ${pending.length} default regional endpoints INACTIVE ` +
+      `(v${applied}→v${SEED_VERSION}, port ${port}) — enable each in admin → Regions once its gateway is live`);
   } catch (e) {
     console.error(`[db] seedDefaultRegions failed: ${e.message}`);
   }

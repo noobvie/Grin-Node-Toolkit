@@ -14,6 +14,7 @@ const BlockManager = require('./lib/blocks');
 const ShareValidator = require('./lib/shares');
 const MinerManager = require('./lib/miners');
 const BlockMonitor = require('./lib/block-monitor');
+const GrinNodeAPI = require('./lib/grin-node');
 const RewardDistributor = require('./lib/rewards');
 const IncentivesManager = require('./lib/incentives');
 const LotteryManager = require('./lib/lottery');
@@ -25,7 +26,7 @@ const Captcha = require('./lib/captcha');
 const { requireAuth, requireAdmin, requireFreshAuth } = require('./lib/auth-middleware');
 const HashrateTracker = require('./lib/hashrate-tracker');
 const { getHorizon: getLedgerRollupHorizon } = require('./lib/ledger-rollup');
-const { verifyOwnerProof, auditOwnerProof, normalizeIp, migrateOwnerProofHashes } = require('./lib/owner-proof');
+const { verifyOwnerProof, auditOwnerProof, normalizeIp, migrateOwnerProofHashes, migrateAuditLogIps } = require('./lib/owner-proof');
 const geoip = require('./lib/geoip');
 const PoolstatsReporter = require('./lib/poolstats-reporter');
 const RateLimiter = require('./lib/rate-limiter');
@@ -33,6 +34,7 @@ const IpFilter = require('./lib/ip-filter');
 const AlertMonitor = require('./lib/alert-monitor');
 const AlertDelivery = require('./lib/alert-delivery');
 const RetentionManager = require('./lib/retention');
+const DormancyManager = require('./lib/dormancy');
 const AdsManager = require('./lib/ads');
 const PagesManager = require('./lib/pages');
 const PostsManager = require('./lib/posts');
@@ -68,22 +70,23 @@ function gwctl(args) {
 // (works de-rooted, adds rx/tx), silent fallback to the direct root-only read
 // below so an old install (no helper/sudoers yet) or a gateway-only box
 // degrades to share-recency status exactly as before (§13.9 step 5).
+// Returns { available, regions } — `available` says whether we could READ WireGuard at all,
+// which is NOT the same as "there are peers". An empty `regions` used to be returned for both
+// "wg unreadable" and "wg readable, zero peers configured", so a pool with no gateway paired
+// yet judged every declared region live and painted the whole patch bay blue/idle. Keep the
+// two apart: available=true + no entry for a region means that region has NO tunnel.
 async function readGatewayStatus() {
   try {
     const st = await gwctl(['status']);
     const out = {};
     for (const g of st.gateways || []) {
-      // Include peers that have NEVER handshaked (handshake 0/absent). Skipping them made
-      // an all-gateways-down pool return {} — indistinguishable from "wg unavailable" — so
-      // /api/pool/stats/regions could never mark anything offline and every dead gateway
-      // showed as idle (blue) instead of red. A present-but-zero entry keeps the map
-      // non-empty ("wg data IS available") while regionStatus() treats the 0 handshake as
-      // stale → offline. The wg-less fallback below already behaves this way (`wg show
-      // latest-handshakes` prints 0 for never-handshaked peers).
+      // Include peers that have NEVER handshaked (handshake 0/absent). A present-but-zero
+      // entry means "peer declared, tunnel never came up" → regionStatus() treats the 0
+      // handshake as stale → offline. (`wg show latest-handshakes` prints 0 the same way.)
       if (!g.region) continue;
       out[g.region] = { handshake: g.handshake || 0, rx_bytes: g.rx_bytes, tx_bytes: g.tx_bytes };
     }
-    return out;
+    return { available: true, regions: out };
   } catch (e) {
     return readWgHandshakes();
   }
@@ -95,11 +98,12 @@ async function readGatewayStatus() {
 // per-network to match the bash installer (07 pool menu W): mainnet "wg-grinpool", testnet
 // "wg-grinpool-tn".
 // Legacy/fallback path — requires root (reads /etc/wireguard); readGatewayStatus() is the
-// primary. Returns { <region>: { handshake: <unix_ts> } }; {} on ANY failure (wg not
-// installed, not the central box, no permission, dev/Windows) so callers fall back to the
-// share-activity signal.
+// primary. Returns { available: true, regions: { <region>: { handshake: <unix_ts> } } };
+// available:false on ANY failure (wg not installed, not the central box, no permission,
+// dev/Windows) so callers fall back to the stratum probe / share-activity signals.
 function readWgHandshakes() {
   const out = {};
+  let available = false;
   try {
     const iface = (config && config.network === 'testnet') ? 'wg-grinpool-tn' : 'wg-grinpool';
     const conf = fs.readFileSync(`/etc/wireguard/${iface}.conf`, 'utf8');
@@ -112,26 +116,97 @@ function readWgHandshakes() {
       if (pm && curRegion) { pubToRegion[pm[1]] = curRegion; curRegion = null; }
     }
     const dump = execSync(`wg show ${iface} latest-handshakes`, { timeout: 2000 }).toString();
+    available = true;  // we READ wg — an empty peer list below is now real information
     for (const line of dump.split('\n')) {
       const [pub, ts] = line.trim().split(/\s+/);
       if (pub && ts && pubToRegion[pub]) out[pubToRegion[pub]] = { handshake: parseInt(ts, 10) || 0 };
     }
-  } catch (e) { /* wg unavailable — share-activity signal is used instead */ }
-  return out;
+  } catch (e) { /* wg unavailable — stratum probe / share activity are used instead */ }
+  return { available, regions: out };
 }
 
-// Cached wrapper for the public /api/pool/stats/regions path: that endpoint is unauthenticated
-// and polled every ~60s by every open dashboard, so calling readGatewayStatus() (which spawns
-// grin-gateway-ctl / `wg show`) on every hit is a needless per-request subprocess. A 15s TTL
-// collapses a burst of public hits to at most one handshake read every 15s while staying fresh
-// enough for a liveness pill. The admin endpoint keeps its own uncached read (low call volume).
-let _gwStatusCache = { ts: 0, data: {} };
-async function cachedGatewayStatus() {
-  const now = Date.now();
-  if (now - _gwStatusCache.ts < 15000) return _gwStatusCache.data;
-  const data = await readGatewayStatus();
-  _gwStatusCache = { ts: now, data };
-  return data;
+// Cached wrapper for the public /api/pool/stats/regions + /api/pool/topology paths: those
+// endpoints are unauthenticated and polled by every open dashboard, so calling
+// readGatewayStatus() (which spawns grin-gateway-ctl / `wg show`) on every hit is a needless
+// per-request subprocess. SYNCHRONOUS stale-while-revalidate: the caller always gets the
+// cached snapshot immediately and a stale one is refreshed in the background — a liveness
+// read must NEVER sit in front of the region list (gwctl carries a 10s exec timeout, which
+// on a cold cache used to stall the whole patch bay before it could paint). The admin
+// endpoint keeps its own uncached await (low call volume, wants ground truth).
+const GW_STATUS_TTL_MS = 15000;
+let _gwStatusCache = { ts: 0, running: false, data: { available: false, regions: {} } };
+function cachedGatewayStatus() {
+  if (!_gwStatusCache.running && Date.now() - _gwStatusCache.ts > GW_STATUS_TTL_MS) {
+    _gwStatusCache.running = true;
+    readGatewayStatus()
+      .then((d) => { _gwStatusCache.data = d; })
+      .catch(() => { /* keep the previous snapshot */ })
+      .then(() => { _gwStatusCache.ts = Date.now(); _gwStatusCache.running = false; });
+  }
+  return _gwStatusCache.data;
+}
+
+// Active wire check: TCP-dial a region's PUBLIC stratum host:port — the exact path a miner's
+// rig takes. Resolves ms-to-connect on success, null on refuse/timeout/DNS fail. Never rejects.
+// Connect-only (no stratum handshake): proves the region's HAProxy/listener is up and
+// reachable, which is all the edge can prove without a fake miner login.
+function probeStratumTcp(host, port, timeoutMs = 2500) {
+  return new Promise((resolve) => {
+    const t0 = Date.now();
+    let sock, settled = false;
+    const done = (ok) => {
+      if (settled) return;
+      settled = true;
+      try { sock.destroy(); } catch (e) { /* already gone */ }
+      resolve(ok ? Date.now() - t0 : null);
+    };
+    try { sock = net.connect({ host, port: +port }); } catch (e) { return resolve(null); }
+    sock.setTimeout(timeoutMs, () => done(false));
+    sock.once('connect', () => done(true));
+    sock.once('error', () => done(false));
+  });
+}
+
+// Public per-region reachability cache (feeds the patch bay + network map).
+// WireGuard alone cannot answer "can a miner mine here?" for a region that has no peer at
+// all — a seeded/declared endpoint with nothing behind it looked identical to a healthy quiet
+// one. This dials the advertised stratum_url instead, entirely OUT of the request path:
+// endpoints read the snapshot and kick a refresh only when it is stale, so a public hit never
+// waits on a dial. Two consecutive failures before calling a region down (a single dial can
+// lose to a momentary egress hiccup); a region with no verdict yet reports 'checking', never
+// a guess.
+const STRATUM_PROBE_TTL_MS = 60000;
+const STRATUM_PROBE_STRIKES = 2;
+let _stratumProbe = { ts: 0, running: false, byRegion: new Map() };
+function refreshStratumProbes(locations) {
+  if (_stratumProbe.running) return;
+  if (Date.now() - _stratumProbe.ts < STRATUM_PROBE_TTL_MS) return;
+  const targets = [];
+  for (const l of locations || []) {
+    const m = String(l.stratum_url || '').replace(/^\w+:\/\//, '').match(/^([^:/]+):(\d+)$/);
+    if (m) targets.push({ region: l.region, host: m[1], port: m[2] });
+  }
+  if (!targets.length) { _stratumProbe.ts = Date.now(); return; }
+  _stratumProbe.running = true;
+  Promise.all(targets.map(async (t) => {
+    const ms = await probeStratumTcp(t.host, t.port);
+    const prev = _stratumProbe.byRegion.get(t.region) || { fails: 0 };
+    _stratumProbe.byRegion.set(t.region, {
+      ok: ms !== null,
+      fails: ms !== null ? 0 : prev.fails + 1,
+      ms,
+      ts: Math.floor(Date.now() / 1000)
+    });
+  })).catch(() => { /* probeStratumTcp never rejects; belt and braces */ })
+    .then(() => { _stratumProbe.ts = Date.now(); _stratumProbe.running = false; });
+}
+// true = reachable · false = confirmed unreachable · null = no verdict yet (never probed,
+// or one lone failure that has not been confirmed).
+function stratumVerdict(region) {
+  const p = _stratumProbe.byRegion.get(region);
+  if (!p) return null;
+  if (p.ok) return true;
+  return p.fails >= STRATUM_PROBE_STRIKES ? false : null;
 }
 
 const app = express();
@@ -232,6 +307,7 @@ let alertDelivery = null;
 let poolSettings = null;
 let assetManager = null;
 let retentionManager = null;
+let dormancyManager = null;
 let adsManager = null;
 let pagesManager = null;
 let postsManager = null;
@@ -276,7 +352,9 @@ async function initializePool() {
     // (guarded by a persistent marker) — never clobbers operator edits in admin → Regions.
     // Gated to the real grinium.com deployment: a fork running its own domain must NOT
     // advertise grinium.com hosts (its miners would connect to the wrong pool).
-    seedDefaultRegions(config.stratum_port, config.subdomain);
+    // Third arg: this box's own region tag, which the seed must NOT create (it would create it
+    // inactive — see the note on seedDefaultRegions; ensureLocalRegion below owns that row).
+    seedDefaultRegions(config.stratum_port, config.subdomain, config.region);
 
     // Self-register this pool server's own region so it shows as a real connect card
     // and auto-joins the grid when a gateway for another zone forwards shares in. Only the
@@ -405,6 +483,10 @@ async function initializePool() {
     // (owner-proof.js v1$ format). Non-blocking; verify accepts both forms while it runs.
     migrateOwnerProofHashes(db);
 
+    // One-time in-place coarsening of historical miner audit IPs to network prefixes
+    // (/24, /48). Synchronous — truncation only, no KDF — and idempotent.
+    migrateAuditLogIps(db);
+
     authManager = new AuthManager(config);
     console.log(`[${new Date().toISOString()}] Authentication manager initialized`);
 
@@ -421,26 +503,60 @@ async function initializePool() {
     };
     hashrateTracker.start();
 
-    // Network-map peer snapshot (feeds /api/network/peers). Every 20 min, read the node's
-    // connected peers, geolocate each to a COUNTRY ONLY (lib/geoip), and upsert network_peers
-    // keyed by a hash of the IP — the raw address is never stored. Rows accumulate a rolling
-    // country picture; the endpoint windows them (default 30d). No-op when the node is
-    // unreachable or geoip-lite is not installed (available() false → lookups return null).
+    // Network-map peer snapshot (feeds /api/network/peers). Every 20 min, read each running
+    // Grin node's connected peers, geolocate each to a COUNTRY ONLY (lib/geoip), and upsert
+    // network_peers keyed by a hash of net+IP — the raw address is never stored. Rows
+    // accumulate a rolling country picture; the endpoint windows them (default 30d). No-op
+    // when geoip-lite is not installed (available() false → lookups return null).
+    //
+    // Dual-network: a Grin node only peers within its OWN network (mainnet 3414 / testnet
+    // 13414 are separate graphs), so besides this pool's own node we opportunistically read
+    // the OTHER network's node too — that is how the map shows mainnet (green) + testnet
+    // (pink) peers at once. The toolkit typically runs both nodes on the box; a network whose
+    // node isn't running simply contributes nothing (getConnectedPeers returns [] on error).
+    let otherNetNode = null;
+    try {
+      const ownIsMain = /^main/i.test(config.network || '');
+      const otherNet = ownIsMain ? 'testnet' : 'mainnet';
+      const otherUrl = ownIsMain ? 'http://127.0.0.1:13413' : 'http://127.0.0.1:3413';
+      // mainnet may run as an archive (full) node — prefer whichever dir actually holds a secret.
+      const dirs = otherNet === 'mainnet'
+        ? ['/opt/grin/node/mainnet-full', '/opt/grin/node/mainnet-prune']
+        : ['/opt/grin/node/testnet-prune'];
+      const otherDir = dirs.find((d) => { try { return fs.existsSync(path.join(d, '.api_secret')); } catch (_) { return false; } });
+      if (otherDir) {
+        otherNetNode = new GrinNodeAPI({ network: otherNet, node_api_url: otherUrl, node_dir: otherDir });
+        console.log(`[network-map] dual-network peer sensor: also reading ${otherNet} node at ${otherUrl}`);
+      }
+    } catch (e) {
+      console.error(`[network-map] other-net node init failed: ${e.message}`);
+    }
+
     const snapshotNetworkPeers = async () => {
       try {
-        if (!geoip.available() || !blockMonitor || !blockMonitor.grinNode) return;
-        const peers = await blockMonitor.grinNode.getConnectedPeers();
-        if (!peers.length) return;
-        const net = /^main/i.test(config.network || '') ? 'main' : 'test';
+        if (!geoip.available()) return;
         const now = Math.floor(Date.now() / 1000);
+        const sources = [];
+        if (blockMonitor && blockMonitor.grinNode) {
+          sources.push({ node: blockMonitor.grinNode, net: /^main/i.test(config.network || '') ? 'main' : 'test' });
+        }
+        if (otherNetNode) {
+          sources.push({ node: otherNetNode, net: /^main/i.test(otherNetNode.network || '') ? 'main' : 'test' });
+        }
         const rows = [];
-        for (const p of peers) {
-          const addr = String(p.addr || p.address || '');
-          const ip = addr.replace(/:\d+$/, '').replace(/^\[|\]$/g, '');  // strip :port / [v6]
-          const geo = geoip.lookupCountry(ip);
-          if (!geo) continue;
-          const key = crypto.createHash('sha256').update(ip).digest('hex').slice(0, 32);
-          rows.push({ key, cc: geo.cc, name: geo.name });
+        for (const src of sources) {
+          const peers = await src.node.getConnectedPeers();
+          if (!peers || !peers.length) continue;
+          for (const p of peers) {
+            const addr = String(p.addr || p.address || '');
+            const ip = addr.replace(/:\d+$/, '').replace(/^\[|\]$/g, '');  // strip :port / [v6]
+            const geo = geoip.lookupCountry(ip);
+            if (!geo) continue;
+            // Key includes net so the same IP running BOTH a mainnet and a testnet node yields
+            // two distinct rows instead of one flipping the other's colour on ON CONFLICT.
+            const key = crypto.createHash('sha256').update(src.net + '|' + ip).digest('hex').slice(0, 32);
+            rows.push({ key, cc: geo.cc, name: geo.name, net: src.net });
+          }
         }
         if (!rows.length) return;
         const upsert = db.prepare(`
@@ -449,7 +565,7 @@ async function initializePool() {
           ON CONFLICT(peer_key) DO UPDATE SET
             country_code = excluded.country_code, country = excluded.country,
             net = excluded.net, last_seen = excluded.last_seen`);
-        db.transaction((rs) => { for (const r of rs) upsert.run(r.key, r.cc, r.name, net, now, now); })(rows);
+        db.transaction((rs) => { for (const r of rs) upsert.run(r.key, r.cc, r.name, r.net, now, now); })(rows);
       } catch (e) {
         console.error(`[network-map] peer snapshot failed: ${e.message}`);
       }
@@ -504,6 +620,13 @@ async function initializePool() {
     // panel → Database / Cleanup. File space is reclaimed by the weekly VACUUM cron.
     retentionManager = new RetentionManager(config);
     retentionManager.start();
+
+    // Abandoned-balance disposition — sweeps balances of long-dormant addresses (default 24mo,
+    // OFF until enabled in admin → Payout) into the community prize pool. Freeze-aware,
+    // grandfathered, FINAL. No-op every pass while disabled. See lib/dormancy.js.
+    dormancyManager = new DormancyManager(config);
+    dormancyManager.start();
+    console.log(`[${new Date().toISOString()}] Dormancy manager started`);
 
     setupRoutes();
 
@@ -720,6 +843,7 @@ function setupRoutes() {
     'GET /api/pool/metrics/history/regions': 'Per-region miners/hashrate trend series (?range=day|week|month|year|all).',
     'GET /api/pool/payments/history': 'Durable payments & transparency series: payouts, reward split, giveaways, donations, fee + lifetime totals (?range=day|week|month|year|all).',
     'GET /api/pool/donors': 'Donor wall: per-address lifetime donations to the prize pool, first/last donation date, current donate-tag %.',
+    'GET /api/pool/prize-pool': 'Prize-pool transparency report: current balance + lifetime in/out totals by source (fee-cut, donations, top-ups, abandoned balances) + recent flows.',
     'GET /api/pool/status': 'Coarse service status strip.',
     'GET /api/account/:addr': 'Account summary: balance, paid, pending payout, effort.',
     'GET /api/account/:addr/workers': 'Per-worker (rig) hashrate + share quality.',
@@ -991,6 +1115,185 @@ function setupRoutes() {
         res.type('application/manifest+json').send(JSON.stringify(manifest, null, 2));
       } catch (err) {
         res.status(500).json({ error: 'Failed to build manifest' });
+      }
+    }
+  );
+
+  // ─── Blog + CMS permalinks with server-rendered <head> (nginx proxies these) ───
+  // post.html and page.html are JS shells: they fetch their content and set the title
+  // client-side. Google renders JS, but Twitter/Facebook/Discord/Telegram/Slack do NOT —
+  // so every shared post or About/Terms link unfurled as "Loading…" with no description
+  // and no image, and those URLs are all in sitemap.xml. These routes serve the SAME
+  // static shell with the head filled in first, so a crawler gets real metadata and a
+  // browser gets the identical page it did before (the client script then runs and
+  // rewrites the same values — idempotent, no flicker).
+
+  const HEAD_MARK = '</head>';
+  const shellCache = new Map(); // filename → contents (cleared by SIGHUP-free restart)
+
+  function readShell(name) {
+    if (shellCache.has(name)) return shellCache.get(name);
+    let html = null;
+    try {
+      // Resolve inside web_dir only — `name` is a hardcoded literal at every call
+      // site, never user input, but keep the join anchored anyway.
+      html = fs.readFileSync(path.join(config.web_dir, name), 'utf8');
+    } catch (e) {
+      console.warn(`[seo] cannot read ${name} from web_dir (${config.web_dir}): ${e.message}` +
+        ' — serving a minimal shell instead. Set "web_dir" in the pool config to fix.');
+    }
+    shellCache.set(name, html);
+    return html;
+  }
+
+  // Minimal stand-in used only if web_dir is wrong/unreadable, so a misconfigured box
+  // degrades to a working page rather than a 500. Loads the same assets as the real
+  // shells; the per-page client script is what fills it in.
+  function fallbackShell(bodyId) {
+    return '<!DOCTYPE html>\n<html lang="en">\n<head>\n<meta charset="UTF-8">\n' +
+      '<meta name="viewport" content="width=device-width, initial-scale=1.0">\n' +
+      '<link rel="icon" type="image/svg+xml" href="/images/favicon.svg">\n' +
+      '<link rel="stylesheet" href="/css/dashboard.css">\n' +
+      '<link rel="stylesheet" href="/css/themes.css">\n</head>\n<body>\n' +
+      '<main class="wrap" id="' + bodyId + '"></main>\n' +
+      '<script src="/js/public-shell.js"></script>\n' +
+      '<script src="/js/public-theme.js"></script>\n' +
+      '<script src="/js/branding.js"></script>\n</body>\n</html>\n';
+  }
+
+  const attrEsc = (s) => String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+
+  // Strip authored HTML to a plain-text description and cap it at a sane card length.
+  const ENTITIES = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", '#39': "'", nbsp: ' ' };
+  function toDescription(html, fallback) {
+    const text = String(html || '')
+      // Drop script/style bodies FIRST — tag-stripping alone keeps their contents, so a
+      // CMS page with an embedded <style> block put raw CSS in its social card.
+      .replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1>/gi, ' ')
+      .replace(/<[^>]*>/g, ' ')
+      // Decode after tag-stripping (so escaped "&lt;b&gt;" text can never become a tag).
+      // Without this, authored "&amp;" reached attrEsc() as literal text and came back
+      // double-escaped — the card rendered "Bob &amp; Alice".
+      .replace(/&(amp|lt|gt|quot|apos|nbsp|#39);/gi,
+        (m, e) => ENTITIES[e.toLowerCase()] || m)
+      .replace(/\s+/g, ' ')
+      .trim();
+    const out = text || String(fallback || '');
+    return out.length > 200 ? out.slice(0, 197).trimEnd() + '…' : out;
+  }
+
+  // Build the <head> block injected ahead of </head>. The shells declare no description,
+  // og:* or canonical, and sendShell() removes their static <title> before injecting this
+  // one — a document may hold only one title and every parser keeps the FIRST, so leaving
+  // it in place would have made this one dead markup.
+  //
+  // No <link rel="icon"> here: both shells already carry it, and a SECOND icon link would
+  // break branding.js's operator-favicon override (setLinkRel updates the first match
+  // while the browser honours the last). fallbackShell() carries its own.
+  function seoHead({ title, description, canonical, image, type, publishedAt }) {
+    const brand = poolSettings.getSection('branding');
+    const siteName = brand.pool_name || 'Grin Mining Pool';
+    const full = title ? `${title} — ${siteName}` : siteName;
+    let h = '\n<title>' + attrEsc(full) + '</title>\n';
+    // Marker read by branding.js: this page's metadata is per-item and server-rendered,
+    // so the generic site-wide title/description/og template must NOT overwrite it.
+    h += '<meta name="server-seo" content="1">\n';
+    h += '<link rel="manifest" href="/manifest.json">\n';
+    if (canonical) h += '<link rel="canonical" href="' + attrEsc(canonical) + '">\n';
+    if (description) h += '<meta name="description" content="' + attrEsc(description) + '">\n';
+    h += '<meta property="og:type" content="' + attrEsc(type || 'website') + '">\n';
+    h += '<meta property="og:site_name" content="' + attrEsc(siteName) + '">\n';
+    h += '<meta property="og:title" content="' + attrEsc(full) + '">\n';
+    if (description) h += '<meta property="og:description" content="' + attrEsc(description) + '">\n';
+    if (canonical) h += '<meta property="og:url" content="' + attrEsc(canonical) + '">\n';
+    if (image) h += '<meta property="og:image" content="' + attrEsc(image) + '">\n';
+    if (publishedAt) {
+      h += '<meta property="article:published_time" content="' +
+        attrEsc(new Date(publishedAt * 1000).toISOString()) + '">\n';
+    }
+    h += '<meta name="twitter:card" content="' + (image ? 'summary_large_image' : 'summary') + '">\n';
+    h += '<meta name="twitter:title" content="' + attrEsc(full) + '">\n';
+    if (description) h += '<meta name="twitter:description" content="' + attrEsc(description) + '">\n';
+    if (image) h += '<meta name="twitter:image" content="' + attrEsc(image) + '">\n';
+    return h;
+  }
+
+  function sendShell(res, shellName, fallbackId, head) {
+    const shell = readShell(shellName) || fallbackShell(fallbackId);
+    const idx = shell.indexOf(HEAD_MARK);
+    let html = shell;
+    if (idx !== -1) {
+      // Remove the shell's own <title> (head slice only) before injecting ours. HTML
+      // allows exactly one, and browsers/Google keep the first — so without this every
+      // post would still have shown the shell's generic "Blog — <pool>" in search.
+      const headHtml = shell.slice(0, idx).replace(/[ \t]*<title\b[^>]*>[\s\S]*?<\/title>\s*/i, '');
+      html = headHtml + head + shell.slice(idx);
+    }
+    res.setHeader('Cache-Control', 'no-cache');
+    res.type('html').send(html);
+  }
+
+  // Absolute URL for an image path that may already be absolute.
+  const absImage = (origin, src) =>
+    (!src ? '' : /^https?:\/\//i.test(src) ? src : origin + (src.startsWith('/') ? src : '/' + src));
+
+  // /blog/<slug> — the clean post permalink. Plain :slug, no inline regex: Express 4's
+  // path-to-regexp accepts `:slug([A-Za-z0-9_-]+)` but Express 5 THROWS on it at boot,
+  // which would take the whole pool down over a blog route. Nothing needs it — nginx
+  // already constrains the slug charset, getPublic() runs a parameterised query, and an
+  // unknown slug renders the 404 shell. "/blog/rss.xml" is registered earlier, and
+  // Express matches in registration order, so it still wins over this.
+  app.get('/blog/:slug',
+    rateLimiter.middleware('public'),
+    (req, res) => {
+      try {
+        const origin = siteOrigin(req);
+        const post = postsManager.getPublic(req.params.slug);
+        if (!post) {
+          // Still serve the shell (its client script renders a "post not found" state),
+          // but say 404 so crawlers don't index a missing post.
+          res.status(404);
+          return sendShell(res, 'post.html', 'post-body', seoHead({
+            title: 'Post not found', canonical: origin + '/blog/' + req.params.slug,
+          }));
+        }
+        sendShell(res, 'post.html', 'post-body', seoHead({
+          title: post.title,
+          description: post.excerpt || toDescription(post.body_html, ''),
+          canonical: origin + '/blog/' + post.slug,
+          image: absImage(origin, post.cover_image),
+          type: 'article',
+          publishedAt: post.published_at,
+        }));
+      } catch (err) {
+        res.status(500).type('text/plain').send('Error');
+      }
+    }
+  );
+
+  // /page.html?p=<key> — the CMS content pages (About / Terms / Privacy / FAQ …).
+  app.get('/page.html',
+    rateLimiter.middleware('public'),
+    (req, res) => {
+      try {
+        const origin = siteOrigin(req);
+        const key = String(req.query.p || '');
+        const page = key ? pagesManager.getPublic(key) : null;
+        if (!page) {
+          res.status(404);
+          return sendShell(res, 'page.html', 'page-body', seoHead({
+            title: 'Page not found', canonical: origin + '/page.html',
+          }));
+        }
+        sendShell(res, 'page.html', 'page-body', seoHead({
+          title: page.seo_title || page.title,
+          description: page.seo_desc || toDescription(page.html, ''),
+          canonical: origin + '/page.html?p=' + encodeURIComponent(page.key),
+        }));
+      } catch (err) {
+        res.status(500).type('text/plain').send('Error');
       }
     }
   );
@@ -1516,21 +1819,22 @@ function setupRoutes() {
   // Use /api/admin/withdrawals to view and manage withdrawal scheduler instead.
   // For testing: use withdrawal_scheduler.initiateWithdrawal() directly in backend tests.
 
+  // `limit` is honoured (1–500, default 100). The dashboard's "Recent Withdrawals" widget
+  // asks for 10 and was silently getting the full 100 back — every admin page load shipped
+  // and rendered 10× the rows it displays.
   app.get('/api/admin/withdrawals', secureAdmin, (req, res) => {
     try {
       const status = req.query.status || null;
+      const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 100, 1), 500);
 
-      let stmt;
       if (status) {
-        stmt = db.prepare(`
-          SELECT * FROM withdrawals WHERE status = ? ORDER BY created_at DESC LIMIT 100
-        `);
-        res.json(stmt.all(status));
+        res.json(db.prepare(`
+          SELECT * FROM withdrawals WHERE status = ? ORDER BY created_at DESC LIMIT ?
+        `).all(status, limit));
       } else {
-        stmt = db.prepare(`
-          SELECT * FROM withdrawals ORDER BY created_at DESC LIMIT 100
-        `);
-        res.json(stmt.all());
+        res.json(db.prepare(`
+          SELECT * FROM withdrawals ORDER BY created_at DESC LIMIT ?
+        `).all(limit));
       }
     } catch (err) {
       res.status(500).json({ error: err.message });
@@ -1699,6 +2003,127 @@ function setupRoutes() {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
+  // ─── ABANDONED-BALANCE DISPOSITION (Admin) ─────────────────────────
+  // Status + dry-run preview + the dormant list (UNMASKED for the operator) + disposition history.
+  // Reading is secureAdmin; the run and manual-payout mutate money → freshAdmin (step-up).
+  app.get('/api/admin/dormancy', secureAdmin, (req, res) => {
+    try {
+      if (!dormancyManager) return res.status(503).json({ error: 'dormancy manager not ready' });
+      res.json({
+        success: true,
+        status: dormancyManager.status(),
+        preview: dormancyManager.preview(),
+        dormant: dormancyManager.listDormant({ mask: false, limit: 500 }),
+        history: dormancyManager.history({ limit: 100 }),
+      });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  // Trigger a disposition pass now (respects the disabled/frozen/grandfather gates internally).
+  app.post('/api/admin/dormancy/run', freshAdmin, (req, res) => {
+    try {
+      if (!dormancyManager) return res.status(503).json({ error: 'dormancy manager not ready' });
+      const result = dormancyManager.runOnce({ triggeredBy: req.user.user_id });
+      db.prepare(`INSERT INTO admin_audit_log (admin_id, action, target_type, target_id, details, ip)
+                  VALUES (?, 'dormancy_run', 'dormancy', ?, ?, ?)`)
+        .run(req.user.user_id, String(result.disposition_id || 'none'), JSON.stringify(result), req.ip);
+      res.json({ success: true, result });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  // Was this address's ownership successfully verified by an admin in the last `windowSec`? Reads
+  // the audit trail auditOwnerProof() writes ('owner_proof:admin_verify:ok'). Gate for the money
+  // endpoints below (finding #4) so a payout can't be pushed without a recent ownership check —
+  // unless the operator explicitly acknowledges verifying by other means (verified_ack, for a
+  // no-proof-on-record account where verifyOwnerProof can never match).
+  const ownerRecentlyVerified = (addr, windowSec = 900) => {
+    try {
+      const row = db.prepare(
+        `SELECT created_at FROM admin_audit_log
+         WHERE action = 'owner_proof:admin_verify:ok' AND target_id = ?
+         ORDER BY created_at DESC LIMIT 1`
+      ).get(addr);
+      if (!row) return false;
+      return (Math.floor(Date.now() / 1000) - Number(row.created_at)) <= windowSec;
+    } catch (e) { return false; }
+  };
+
+  // Verify a miner's CLAIMED ownership proof (IP or stratum password) against what's on record —
+  // for the operator handling a sub-threshold "email support to withdraw" request. Returns a
+  // match/no-match ONLY (the stored proofs are salted-scrypt hashes; nothing is ever revealed).
+  app.post('/api/admin/dormancy/verify-owner', secureAdmin, async (req, res) => {
+    try {
+      const addr = String((req.body && req.body.address) || '').trim();
+      const submitted = String((req.body && req.body.proof) || '');
+      if (!addr) return res.status(400).json({ error: 'address required' });
+      const proof = await verifyOwnerProof(db, addr, submitted);
+      auditOwnerProof(db, { action: 'admin_verify', grinAddress: addr, ip: req.ip, ok: proof.ok, details: { by: req.user.username } });
+      res.json({ success: true, match: !!proof.ok, method: proof.method || null, reason: proof.reason });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  // Record an out-of-band manual payout (the admin already sent the coins by Tor/slatepack at the
+  // OS level after verifying the owner). Writes a confirmed withdrawals row + 'withdrawal' debit so
+  // coverage stays correct and the wallet-send audit matches it. Honours the payout freeze.
+  app.post('/api/admin/dormancy/manual-payout', freshAdmin, (req, res) => {
+    try {
+      if (!dormancyManager) return res.status(503).json({ error: 'dormancy manager not ready' });
+      if (getPayoutControl().frozen) {
+        return res.status(409).json({ error: 'payouts are frozen — resume payouts before recording a manual payout' });
+      }
+      const b = req.body || {};
+      const addr = String(b.address || '').trim();
+      if (!ownerRecentlyVerified(addr) && b.verified_ack !== true) {
+        return res.status(428).json({ error: 'verify the address owner first (no successful verification in the last 15 min)', reason: 'verify_required' });
+      }
+      const result = dormancyManager.manualPayout({
+        grinAddress: b.address,
+        amount: b.amount,
+        fee: b.fee || 0,
+        kernelExcess: b.kernel_excess || null,
+        slateId: b.slate_id || null,
+        note: b.note || null,
+        adminId: req.user.user_id,
+        allowAboveMin: b.allow_above_min === true,
+      });
+      if (!result.ok) return res.status(400).json({ error: result.reason, ...result });
+      db.prepare(`INSERT INTO admin_audit_log (admin_id, action, target_type, target_id, details, ip)
+                  VALUES (?, 'manual_payout', 'miner', ?, ?, ?)`)
+        .run(req.user.user_id, String(b.address || ''), JSON.stringify({ withdrawal_id: result.withdrawal_id, amount: result.balance_after, fee: b.fee || 0 }), req.ip);
+      res.json({ success: true, ...result });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  // Backend-INITIATED below-minimum payout (the convenient sub-threshold path). Instead of the
+  // operator sending coins out-of-band and recording it, the pool sends over Tor through the SAME
+  // locked withdrawal flow a miner uses — atomic lock, real fee/kernel captured by the scheduler,
+  // recorded automatically. adminOverride bypasses only the min floor + reversal cooldown; freeze
+  // and the one-pending-per-address cap (double-pay guard) still apply. Needs the miner's wallet
+  // listener reachable over Tor (the scheduler declines + reverses the lock if it isn't).
+  app.post('/api/admin/dormancy/send-payout', freshAdmin, (req, res) => {
+    try {
+      if (!withdrawalScheduler) return res.status(503).json({ error: 'withdrawal scheduler not ready' });
+      if (getPayoutControl().frozen) {
+        return res.status(409).json({ error: 'payouts are frozen — resume payouts before sending' });
+      }
+      const b = req.body || {};
+      const addr = String(b.address || '').trim();
+      if (!ownerRecentlyVerified(addr) && b.verified_ack !== true) {
+        return res.status(428).json({ error: 'verify the address owner first (no successful verification in the last 15 min)', reason: 'verify_required' });
+      }
+      let result;
+      try {
+        result = withdrawalScheduler.createWithdrawal(addr, b.amount, 'tor', { adminOverride: true });
+      } catch (e) {
+        return res.status(e.code && e.code >= 400 && e.code < 500 ? e.code : 500).json({ error: e.message });
+      }
+      db.prepare(`INSERT INTO admin_audit_log (admin_id, action, target_type, target_id, details, ip)
+                  VALUES (?, 'admin_send_payout', 'miner', ?, ?, ?)`)
+        .run(req.user.user_id, addr, JSON.stringify({ withdrawal_id: result.withdrawal_id, amount: result.amount, override: 'below_min' }), req.ip);
+      res.json({ success: true, ...result });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
   // Wallet-send audit — matches the wallet's OWN confirmed outbound sends against the pool's
   // withdrawals. Any unmatched send is an out-of-band `grin-wallet send` (invisible to the
   // ledger). Forces a fresh wallet scan (slow) → the Payments page polls on the 3-min cadence.
@@ -1749,7 +2174,11 @@ function setupRoutes() {
   // placement. secureAdmin (not freshAdmin) — ads are not money/destructive of funds.
   app.get('/api/admin/ads', secureAdmin, (req, res) => {
     try {
-      res.json({ ads: adsManager.list(req.query.placement), placements: AdsManager.PLACEMENTS, rotate_ms: adsManager.getRotateMs() });
+      res.json({
+        ads: adsManager.list(req.query.placement),
+        placements: AdsManager.PLACEMENTS,
+        config: adsManager.getConfig()
+      });
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
@@ -1775,10 +2204,11 @@ function setupRoutes() {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
-  // Rotation interval for the public renderer (stored in pool_config, clamped 2–60 s).
+  // Render settings for the public renderer — rotation interval, sidebar layout mode
+  // and rail peek timings (stored in pool_config, each clamped to a sane range).
   app.post('/api/admin/ads-config', secureAdmin, (req, res) => {
     try {
-      res.json({ rotate_ms: adsManager.setRotateMs((req.body || {}).rotate_ms) });
+      res.json({ config: adsManager.setConfig(req.body || {}) });
     } catch (err) { res.status(400).json({ error: err.message }); }
   });
 
@@ -1791,8 +2221,9 @@ function setupRoutes() {
     try {
       res.set('Cache-Control', 'public, max-age=60');
       const p = req.query.placement;
-      if (p) return res.json({ placement: p, ads: adsManager.publicByPlacement(p), rotate_ms: adsManager.getRotateMs() });
-      res.json({ ads: adsManager.publicAll(), rotate_ms: adsManager.getRotateMs() });
+      const cfg = adsManager.getConfig();
+      if (p) return res.json({ placement: p, ads: adsManager.publicByPlacement(p), ...cfg });
+      res.json({ ads: adsManager.publicAll(), ...cfg });
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
@@ -1904,9 +2335,13 @@ function setupRoutes() {
         tipHeight = (st && st.ok && st.height) || 0;
       } catch (e) { tipHeight = 0; }
 
-      const grinscanBase = config.network === 'testnet'
-        ? 'https://testnet.grinscan.org/block'
-        : 'https://grinscan.org/block';
+      // Must match the client-side builders in /js/branding.js + admin-panel/admin-shell.js:
+      // the two explorers do NOT share a path scheme. Mainnet → scan.grin.money (06d Tiny
+      // Explorer, /block/<h>); testnet → test.grinscan.org (06b sibling, /block.html?h=<h>).
+      // `testnet.grinscan.org` does not resolve — never use it.
+      const explorerBlockUrl = (height) => (config.network === 'testnet'
+        ? `https://test.grinscan.org/block.html?h=${encodeURIComponent(height)}`
+        : `https://scan.grin.money/block/${encodeURIComponent(height)}`);
 
       const blocks = rows.map((b) => {
         const confirmations = tipHeight ? Math.max(0, tipHeight - b.height) : 0;
@@ -1916,7 +2351,7 @@ function setupRoutes() {
           ...b,
           confirmations,
           blocks_to_maturity,
-          grinscan_url: `${grinscanBase}/${b.height}`,
+          grinscan_url: explorerBlockUrl(b.height),
         };
       });
 
@@ -2060,6 +2495,25 @@ function setupRoutes() {
     }
   });
 
+  // ─── Unclaimed / abandoned balances (public transparency) ───────────────────
+  // A lost-and-found with a public audit trail: masked addresses of long-dormant balances with a
+  // per-address disposal countdown (owner recognises their own → reclaims via the account page
+  // BEFORE disposition), plus the historical disposition ledger (final sweeps into the prize
+  // pool). Addresses are masked (grin1qxy…mn4p) so this is a reunification aid, not a targeting
+  // list; the ownership gate independently protects reclaim. Returns { dormant, dispositions }.
+  app.get('/api/pool/unclaimed', rateLimiter.middleware('public'), (req, res) => {
+    try {
+      if (!dormancyManager) return res.json({ dormant: { enabled: false, totals: { count: 0, amount: 0 }, list: [] }, dispositions: { totals: {}, batches: [] } });
+      const limit = Math.min(parseInt(req.query.limit || 100, 10) || 100, 200);
+      res.json({
+        dormant: dormancyManager.listDormant({ mask: true, limit }),
+        dispositions: dormancyManager.history({ limit: 50 }),
+      });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // ─── Account summary (address-as-identity; no auth) ─────────────────────────
   // One-stop public view for a miner address: balances + lifetime paid + pending
   // withdrawal + share/hashrate snapshot. 404 if the address has never mined here.
@@ -2068,7 +2522,7 @@ function setupRoutes() {
       const { addr } = req.params;
       const acct = db.prepare(
         `SELECT grin_address, balance, balance_locked, is_online, last_seen_at, created_at,
-                last_ip, prev_ip, last_pass_hash, prev_pass_hash,
+                last_ip, prev_ip, last_pass_hash, prev_pass_hash, pass_proof_state,
                 nostr_username, nostr_npub, nostr_registered_at
          FROM miner_accounts WHERE grin_address = ?`
       ).get(addr);
@@ -2131,8 +2585,22 @@ function setupRoutes() {
         min_withdrawal: config.min_withdrawal,
         // Boolean only — the freeze REASON stays admin-side (it can reveal wallet trouble).
         payouts_frozen: withdrawalScheduler.isFrozen(),
+        // Abandoned-balance countdown for THIS address (state: active|idle|counting|eligible|
+        // disposed|no_balance). Drives the account-page dormancy notice + reclaim CTA.
+        dormancy: dormancyManager ? dormancyManager.statusFor(acct.grin_address) : null,
         has_recorded_ip: !!(acct.last_ip || acct.prev_ip),
         has_recorded_pass: !!(acct.last_pass_hash || acct.prev_pass_hash),
+        // Password-proof diagnostics — why the gate will or won't accept a rig password.
+        //   state — the LAST-SEEN login's verdict ('ok' | 'none' | a reject code). Persisted.
+        //   live  — cross-rig consistency among CURRENTLY CONNECTED sessions (counts only).
+        // Both are deliberately public (the page is address-addressable with no login). A
+        // non-compliant password can never be accepted as proof, so telling a visitor it is
+        // short or a factory default reveals only that a door they can't open is shut — while
+        // hiding it would hide the warning from the one person who needs it.
+        password_proof: {
+          state: acct.pass_proof_state || null,
+          live: minerManager ? minerManager.getPasswordConsistency(acct.grin_address) : null
+        },
         // Goblin/Nostr payout rail (design §15). Destination npub is NOT exposed (it's the
         // pinned secret-ish anchor); only the display username + cooldown state, so the UI
         // can show "pending / active at <UTC>". active = past the security cooldown.
@@ -2275,6 +2743,25 @@ function setupRoutes() {
       };
       donors.forEach((r) => { r.total_donated = parseFloat(r.total_donated.toFixed(9)); });
       res.json({ donors, totals });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Public prize-pool transparency report: current balance + lifetime in/out totals broken down by
+  // source (fee-cut · donations · operator top-ups · ABANDONED BALANCES · orphan clawbacks in;
+  // prizes · jackpots · join bonuses · streaks out) + recent flows. Composite read over the
+  // ledger-rollup horizon, so totals stay exact after raw balance_log rows prune. Incentives-gated:
+  // when incentives are off the bucket still exists (abandoned sweeps can accumulate), so the report
+  // is always available — it's a trust surface. Recent rows carry no addresses (a prize-pool row's
+  // grin_address is always 'prize_pool'); the reference_type/amount are safe to show publicly.
+  app.get('/api/pool/prize-pool', rateLimiter.middleware('public'), (req, res) => {
+    try {
+      if (!incentivesManager) return res.json({ enabled: false, balance: 0, in: { total: 0, by: [] }, out: { total: 0, by: [] }, net: 0, recent: [] });
+      const st = incentivesManager.prizePoolStatement(15);
+      let enabled = false;
+      try { enabled = incentivesManager.enabled(); } catch (_) { /* default false */ }
+      res.json({ enabled, ...st });
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
@@ -2525,14 +3012,14 @@ function setupRoutes() {
   // and force-moving coins the owner didn't ask to move. Proof = a recent mining IP (v4/v6) OR
   // the rig's stratum password (lib/owner-proof.js; single `proof` field, legacy `ip_proof`
   // still accepted). Rate-limited; CAS balance lock + 1-pending-per-address cap in the scheduler.
-  app.post('/api/account/:addr/withdraw', rateLimiter.middleware('public'), async (req, res) => {
+  app.post('/api/account/:addr/withdraw', rateLimiter.middleware('withdraw'), async (req, res) => {
     try {
       const { addr } = req.params;
       const method = (req.body && req.body.method) || 'tor';
       const reqIp = normalizeIp(req.ip);
       const submitted = (req.body && (req.body.proof || req.body.ip_proof)) || '';
 
-      const proof = await verifyOwnerProof(db, addr, submitted);
+      const proof = await verifyOwnerProof(db, addr, submitted, reqIp);
       if (!proof.ok) {
         auditOwnerProof(db, { action: `withdraw_${method}`, grinAddress: addr, ip: reqIp, ok: false, details: { reason: proof.reason } });
         return res.status(403).json({ error: 'Ownership proof failed', reason: proof.reason });
@@ -2610,11 +3097,11 @@ function setupRoutes() {
 
   // Complete a slatepack withdrawal: the miner pastes back the RESPONSE slatepack their wallet
   // produced after `receive`. Ownership-gated like the trigger. The pool finalizes + broadcasts.
-  app.post('/api/account/:addr/withdraw/:id/finalize', rateLimiter.middleware('public'), async (req, res) => {
+  app.post('/api/account/:addr/withdraw/:id/finalize', rateLimiter.middleware('withdraw'), async (req, res) => {
     try {
       const { addr, id } = req.params;
       const reqIp = normalizeIp(req.ip);
-      const proof = await verifyOwnerProof(db, addr, (req.body && (req.body.proof || req.body.ip_proof)) || '');
+      const proof = await verifyOwnerProof(db, addr, (req.body && (req.body.proof || req.body.ip_proof)) || '', reqIp);
       if (!proof.ok) {
         auditOwnerProof(db, { action: 'slatepack_finalize', grinAddress: addr, ip: reqIp, ok: false, details: { reason: proof.reason, withdrawal_id: id } });
         return res.status(403).json({ error: 'Ownership proof failed', reason: proof.reason });
@@ -2636,13 +3123,13 @@ function setupRoutes() {
   // refused until now - registered_at >= nostr_destination_cooldown_hours, giving the real
   // owner (who watches their stats) the whole window to spot a hijack, re-register (which
   // resets the clock and evicts the attacker) and rotate their rig password.
-  app.post('/api/account/:addr/nostr-destination', rateLimiter.middleware('public'), async (req, res) => {
+  app.post('/api/account/:addr/nostr-destination', rateLimiter.middleware('withdraw'), async (req, res) => {
     try {
       const { addr } = req.params;
       const reqIp = normalizeIp(req.ip);
       if (!nostrBridge || !nostrBridge.isEnabled()) return res.status(503).json({ error: 'nostr payouts are not enabled on this pool' });
 
-      const proof = await verifyOwnerProof(db, addr, (req.body && (req.body.proof || req.body.ip_proof)) || '');
+      const proof = await verifyOwnerProof(db, addr, (req.body && (req.body.proof || req.body.ip_proof)) || '', reqIp);
       if (!proof.ok) {
         auditOwnerProof(db, { action: 'nostr_destination_register', grinAddress: addr, ip: reqIp, ok: false, details: { reason: proof.reason } });
         return res.status(403).json({ error: 'Ownership proof failed', reason: proof.reason });
@@ -2677,11 +3164,11 @@ function setupRoutes() {
   });
 
   // Remove the registered Goblin destination (ownership-gated). Clears the pin + cooldown.
-  app.delete('/api/account/:addr/nostr-destination', rateLimiter.middleware('public'), async (req, res) => {
+  app.delete('/api/account/:addr/nostr-destination', rateLimiter.middleware('withdraw'), async (req, res) => {
     try {
       const { addr } = req.params;
       const reqIp = normalizeIp(req.ip);
-      const proof = await verifyOwnerProof(db, addr, (req.body && (req.body.proof || req.body.ip_proof)) || '');
+      const proof = await verifyOwnerProof(db, addr, (req.body && (req.body.proof || req.body.ip_proof)) || '', reqIp);
       if (!proof.ok) {
         auditOwnerProof(db, { action: 'nostr_destination_remove', grinAddress: addr, ip: reqIp, ok: false, details: { reason: proof.reason } });
         return res.status(403).json({ error: 'Ownership proof failed', reason: proof.reason });
@@ -2718,6 +3205,45 @@ function setupRoutes() {
     }
   });
 
+  // ─── Network-map exposure gate (access.network_map_public, OFF by default) ──────────────
+  // Guards the two feeds behind /network-map.html. Neither has ever returned an IP — peer IPs
+  // never leave the DB and no coordinate is ever resolved: an aggregate marker sits on its
+  // country's exact centroid (geoip.countryCentroid) and the country itself is published beside
+  // it, so there is nothing for a scattered point to hide — but
+  // both publish a per-country breakdown of who mines here / who this node peers with, and on
+  // a small pool a country with one entry names one person. Disabled → 404 (not 403: a 403
+  // confirms the feature exists and is merely switched off). network-map.js already treats a
+  // failed fetch as "no data" and renders its illustrative fallback, so the page degrades.
+  const networkMapPublic = () => {
+    try {
+      const a = poolSettings.getSection('access');
+      return a.network_map_public === true || a.network_map_public === 'true';
+    } catch (e) {
+      return false; // settings unreadable → stay closed
+    }
+  };
+  // k-anonymity floor for the country breakdowns when the feed IS enabled. Countries under
+  // the threshold are merged into a single unnamed "Other" row rather than dropped, so the
+  // published totals still add up.
+  const minBucket = () => {
+    try {
+      return Math.max(1, parseInt(poolSettings.getSection('access').network_map_min_bucket, 10) || 3);
+    } catch (e) {
+      return 3;
+    }
+  };
+  // Operator-declared country of the central (hub) box, set in admin → Access. Most pools sit
+  // behind a CDN, so the box cannot geo-locate itself — nothing but the operator knows where it
+  // is. Blank falls through to the derivation chain in /api/pool/topology.
+  const hubCountryCode = () => {
+    try {
+      const cc = String(poolSettings.getSection('access').hub_country_code || '').toUpperCase();
+      return /^[A-Z]{2}$/.test(cc) ? cc : null;
+    } catch (e) {
+      return null;
+    }
+  };
+
   // ─── Network map: full pool topology (hub → gateways → miners-by-country) ───────────────
   // One call powers /network-map.html. Everything is aggregate + privacy-clean:
   //   · gateways — pool_locations + live share window + WireGuard liveness → status
@@ -2727,16 +3253,32 @@ function setupRoutes() {
   //     Each country is assigned to the gateway most of its miners route through. When
   //     geoip-lite isn't installed (miner_geo empty) we fall back to the GATEWAY's country so
   //     the map still renders; geo_source reports which path was taken.
-  //   · positions are RANDOMIZED within each country server-side (geoip.placeInCountry) — a dot
-  //     is never a real location or IP, and exact per-miner coordinates are never stored.
+  //   · positions are COUNTRY CENTROIDS (geoip.countryCentroid) — every marker here is an
+  //     aggregate whose country is published in this same payload, so scattering the point
+  //     would hide nothing and could only land the dot in the wrong country. The map draws
+  //     miner countries as a filled polygon; the centroid is just the label/hover anchor.
+  //     Exact per-miner coordinates are never resolved or stored — country is all we hold.
   app.get('/api/pool/topology', rateLimiter.middleware('public'), async (req, res) => {
     try {
+      if (!networkMapPublic()) return res.status(404).json({ error: 'not_found' });
       const WINDOW_S = 900, OFFLINE_S = 600, CYCLE = 42, SOL = 16384;
       const nowS = Math.floor(Date.now() / 1000), cutoff = nowS - WINDOW_S;
 
-      const locations = db.prepare(
-        `SELECT region, label, country, country_code, is_active FROM pool_locations`
+      // Two views of the same table, on purpose:
+      //   locationsAll — every row. Used ONLY to look up which country a region sits in, for
+      //     miners whose own country we can't resolve, and for the hub's location. Both are
+      //     facts about where a box IS, which don't stop being true when a row is unpublished.
+      //   locations    — is_active = 1 only, the same filter the public connect UI applies
+      //     (reactor-dashboard.js). A deactivated row (or one seeded ahead of the gateway
+      //     actually being built) is not a place this pool runs, so it must not put a marker on
+      //     the public globe: unfiltered it drew as a red "offline" gateway, which reads as a
+      //     broken pool rather than an unused row. Also what the stratum probe works from —
+      //     no point dialling an endpoint nobody is being sent to.
+      const locationsAll = db.prepare(
+        `SELECT region, label, country, country_code, stratum_url, is_active FROM pool_locations`
       ).all();
+      const locations = locationsAll.filter(l => l.is_active === 1 || l.is_active === true);
+      const locAllByRegion = new Map(locationsAll.map(l => [l.region, l]));
       const agg = db.prepare(
         `SELECT region, COUNT(DISTINCT grin_address) AS miners, COALESCE(SUM(difficulty),0) AS sumdiff,
                 MAX(created_at) AS last_share
@@ -2744,31 +3286,48 @@ function setupRoutes() {
       ).all(cutoff);
       const byRegion = new Map(agg.map(r => [r.region, r]));
 
-      const wgByRegion = await cachedGatewayStatus();
-      const wgAvailable = Object.keys(wgByRegion).length > 0;
+      const wgSnapshot = cachedGatewayStatus();
+      const wgByRegion = wgSnapshot.regions || {};
+      refreshStratumProbes(locations);
       const localRegion = (config && config.role === 'singlebox') ? config.region : null;
-      // Public gateway state (same liveness rules as /api/pool/stats/regions, mapped to the
-      // three network-map states): connected = up + miners, handshake = up + no miners, offline.
-      const statusOf = (region, hasMiners, shareAge) => {
+      // Public gateway state — the SAME signal precedence as /api/pool/stats/regions (shares →
+      // local box → WireGuard peer → stratum dial; see the comment there), mapped to the
+      // network-map states: connected = up + miners, handshake = up + no miners, offline,
+      // checking = no verdict yet.
+      const statusOf = (region, hasMiners, shareAge, hasTarget) => {
+        const sharesFresh = shareAge !== null && shareAge < OFFLINE_S;
+        const verdict = stratumVerdict(region);
         let up;
-        if (region === localRegion || !wgAvailable) up = true;
-        else {
+        if (sharesFresh) up = true;
+        else if (region === localRegion) up = true;
+        else if (wgSnapshot.available && wgByRegion[region]) {
           const wg = wgByRegion[region];
-          const hsFresh = !!(wg && wg.handshake && (nowS - wg.handshake) < OFFLINE_S);
-          const sharesFresh = shareAge !== null && shareAge < OFFLINE_S;
-          up = hsFresh || sharesFresh;
+          up = !!(wg.handshake && (nowS - wg.handshake) < OFFLINE_S) && verdict !== false;
+        } else if (verdict === null) {
+          if (!hasTarget) return hasMiners ? 'connected' : 'handshake';
+          return 'checking';
+        } else {
+          up = verdict;
         }
         if (!up) return 'offline';
         return hasMiners ? 'connected' : 'handshake';
       };
 
-      const gateways = [], gwByRegion = {};
+      // Markers sit on the country centroid. `perCountry` counts how many we've already
+      // placed in each country so the 2nd+ marker there (a second gateway, or the hub next
+      // to a gateway) gets a small de-stack nudge instead of landing on the same pixel.
+      // gwByRegion has a null prototype: region tags are operator-chosen strings, and on a plain
+      // {} a region named 'constructor'/'toString' would answer truthy to the lookups below
+      // without ever having been registered — the client would then be handed a gateway tag it
+      // can't resolve to a position.
+      const gateways = [], gwByRegion = Object.create(null), perCountry = {};
+      const nudgeFor = (cc) => (cc ? (perCountry[cc] = (perCountry[cc] || 0) + 1) - 1 : 0);
       for (const loc of locations) {
         const a = byRegion.get(loc.region) || { miners: 0, sumdiff: 0, last_share: 0 };
         const shareAge = a.last_share ? (nowS - a.last_share) : null;
-        const status = statusOf(loc.region, a.miners > 0, shareAge);
+        const status = statusOf(loc.region, a.miners > 0, shareAge, !!loc.stratum_url);
         const gps = (a.sumdiff * CYCLE) / (WINDOW_S * SOL);
-        const pos = geoip.placeInCountry(loc.country_code, 'gw:' + loc.region);
+        const pos = geoip.countryCentroid(loc.country_code, nudgeFor(loc.country_code));
         const g = {
           region: loc.region, label: loc.label || loc.region,
           country: loc.country || (loc.country_code ? geoip.countryName(loc.country_code) : null),
@@ -2799,30 +3358,88 @@ function setupRoutes() {
         let cc = null, name = null;
         const g = geoByAddr.get(addr);
         if (g && g.country_code) { cc = g.country_code; name = g.country || geoip.countryName(cc); geoHits++; }
-        else { const loc = gwByRegion[region]; if (loc && loc.country_code) { cc = loc.country_code; name = loc.country; } }
+        // Fallback from locationsAll, NOT from the published gateway list: a miner connected
+        // through a region the operator has since unpublished still mines from the country that
+        // region is in, and dropping them here would quietly shrink the miner total.
+        else {
+          const loc = locAllByRegion.get(region);
+          if (loc && loc.country_code) { cc = loc.country_code; name = loc.country || geoip.countryName(cc); }
+        }
         if (!cc) continue;
         let c = countries.get(cc);
         if (!c) { c = { cc, name: name || geoip.countryName(cc), miners: 0, votes: {} }; countries.set(cc, c); }
         c.miners++; c.votes[region] = (c.votes[region] || 0) + 1;
       }
-      const countryList = [...countries.values()].map(c => {
-        const gw = Object.entries(c.votes).sort((a, b) => b[1] - a[1])[0][0];
-        const pos = geoip.placeInCountry(c.cc, 'mn:' + c.cc);
+      // k-anonymity: countries below the floor are merged into one unnamed "Other" row (no
+      // country_code, no coordinates) so the miner total stays truthful without naming a
+      // country that holds a single miner.
+      const kMin = minBucket();
+      const named = [], thin = [];
+      for (const c of countries.values()) (c.miners >= kMin ? named : thin).push(c);
+      const countryList = named.map(c => {
+        const topRegion = Object.entries(c.votes).sort((a, b) => b[1] - a[1])[0][0];
+        // Only name the region if it is a PUBLISHED gateway — the client resolves this string
+        // against the gateways it was given, and an unresolvable one made it draw the arc to
+        // whichever gateway happened to be first. null = "we're not saying", and the client
+        // arcs to the hub instead of to an unrelated city.
+        const gw = gwByRegion[topRegion] ? topRegion : null;
+        // Nudged off the same counter the gateways used: a gateway's own country almost
+        // always has miners too, and an un-nudged marker would land on the exact pixel of
+        // that gateway — the hit-test keeps the first match, so the miner tooltip would be
+        // unreachable and the region→gateway arc would collapse to a zero-length spike.
+        // The index is stable per country (= how many gateways precede it there).
+        const pos = geoip.countryCentroid(c.cc, nudgeFor(c.cc));
         return {
           country_code: c.cc, country: c.name, miners: c.miners, gateway: gw,
           lat: pos ? pos.lat : null, lng: pos ? pos.lng : null
         };
       }).sort((a, b) => b.miners - a.miners);
+      if (thin.length) {
+        countryList.push({
+          country_code: null, country: 'Other', gateway: null, lat: null, lng: null,
+          miners: thin.reduce((s, c) => s + c.miners, 0), aggregated_countries: thin.length
+        });
+      }
 
-      // Hub = this settlement core; best-effort location (configured hub country → local
-      // region's country → busiest online gateway's country).
-      const hubCc = config.hub_country_code
+      // Hub = this settlement core. Nothing on the box can discover its own country (it is
+      // behind nginx, usually behind a CDN), so the location is operator-declared with a
+      // derivation chain behind it, most authoritative first:
+      //   1. access.hub_country_code   — admin → Access (the one field an operator can edit live)
+      //   2. config.hub_country_code   — pool.json escape hatch (no UI, honoured if hand-set)
+      //   3. config.region_country_code — Script 07 → 2) Configure ("where is THIS server?")
+      //   4. this box's own pool_locations row — keyed on config.region, NOT gated on
+      //      role === 'singlebox' like `localRegion` is: a 'hub' role still registers its own
+      //      region via ensureLocalRegion(), and gating it here left the hub unlocated on
+      //      every multi-region install.
+      //   5. busiest ONLINE gateway → 6. any gateway with a country → 7. busiest miner country.
+      // All seven can miss (fresh install, nothing configured, no miners). Then lat/lng go out
+      // as null and the map DRAWS NO HUB — never a placeholder position (network-map.js keeps
+      // no fallback coordinate: a wrong hub country is worse than an absent marker).
+      // locationsAll, not locations: "where is this box" stays true whether or not the operator
+      // publishes that region as a place to point a miner at.
+      const localRow = locationsAll.find(l => l.region === config.region) || null;
+      const rawHubCc = hubCountryCode()
+        || config.hub_country_code
+        || config.region_country_code
         || (localRegion && gwByRegion[localRegion] && gwByRegion[localRegion].country_code)
+        || (localRow && localRow.country_code)
         || (gateways.filter(g => g.online).sort((a, b) => b.miners - a.miners)[0] || {}).country_code
+        || (gateways.find(g => g.country_code) || {}).country_code
+        || (countryList.find(c => c.country_code) || {}).country_code
         || null;
-      const hubPos = geoip.placeInCountry(hubCc, 'hub');
+      // Normalise ONCE, at the end of the chain: only the admin field is validated on save, so
+      // a hand-edited pool.json ('vn', 'Vietnam') or an old DB row could otherwise reach
+      // countryCentroid() in a form it can't match and drop the marker without a word.
+      const hubCc = /^[A-Z]{2}$/.test(String(rawHubCc || '').toUpperCase())
+        ? String(rawHubCc).toUpperCase() : null;
+      const hubPos = hubCc ? geoip.countryCentroid(hubCc, nudgeFor(hubCc)) : null;
+      // Live pool name first: pool_info.pool_name is what the rest of the site renders, and it is
+      // editable in admin, whereas pool.json's `pool_name` is frozen at install time ("My Grin
+      // Pool") — reading that one labelled the hub marker with a name shown nowhere else.
+      let hubLabel = null;
+      try { hubLabel = poolSettings.getSection('pool_info').pool_name || null; } catch (_) {}
       const hub = {
-        label: config.pool_name || config.name || 'Pool Hub',
+        label: hubLabel || config.pool_name || config.name || 'Pool Hub',
         country_code: hubCc, country: hubCc ? geoip.countryName(hubCc) : null,
         lat: hubPos ? hubPos.lat : null, lng: hubPos ? hubPos.lng : null
       };
@@ -2830,10 +3447,17 @@ function setupRoutes() {
       res.json({
         hub, gateways, countries: countryList,
         totals: {
-          miners: countryList.reduce((s, c) => s + c.miners, 0),
+          // Distinct live miner addresses — the SAME set /api/pool/stats reports as
+          // active_miners (both come from minerManager's active sessions), so the map's
+          // placard can never disagree with the homepage. Deliberately not the sum of
+          // countries[]: a miner whose country resolves to nothing at all (no geoip and a
+          // region row with no country declared) is absent from that array but is still
+          // mining, and summing it under-reported the pool.
+          miners: addrRegion.size,
           gateways_up: gateways.filter(g => g.online).length,
           gateways_total: gateways.length,
-          countries: countryList.length
+          // True distinct-country count (thin ones are hidden by name, not by tally).
+          countries: named.length + thin.length
         },
         geo_source: (geoip.available() && geoHits > 0) ? 'geoip' : 'gateway',
         timestamp: new Date().toISOString()
@@ -2846,21 +3470,32 @@ function setupRoutes() {
   // ─── Network map: Grin P2P peers by country (rolling window) ────────────────────────────
   // Aggregates network_peers (populated by the peer-snapshot collector — COUNTRY ONLY, no IPs)
   // over the last ?window days (default 30, max 90). Returns per-country counts (+ main/test
-  // split) and a capped set of RANDOMIZED twinkle points for the globe. Empty when geoip-lite
+  // split) and a capped set of scattered-in-country twinkle points for the globe. Empty when geoip-lite
   // isn't installed or the node has no peers yet (page then shows its illustrative fallback).
   app.get('/api/network/peers', rateLimiter.middleware('public'), (req, res) => {
     try {
+      if (!networkMapPublic()) return res.status(404).json({ error: 'not_found' });
       const days = Math.min(Math.max(parseInt(req.query.window, 10) || 30, 1), 90);
       const cutoff = Math.floor(Date.now() / 1000) - days * 86400;
-      const rows = db.prepare(`
+      const allRows = db.prepare(`
         SELECT country_code, country, COUNT(*) AS peers,
                SUM(CASE WHEN net='main' THEN 1 ELSE 0 END) AS main,
                SUM(CASE WHEN net='test' THEN 1 ELSE 0 END) AS test
         FROM network_peers WHERE last_seen >= ? AND country_code IS NOT NULL
         GROUP BY country_code ORDER BY peers DESC`).all(cutoff);
 
+      // k-anonymity floor. Applied BEFORE the twinkle points are built, not just to the
+      // country list — a point is placed inside its own country, so emitting points for a
+      // thin country would re-expose exactly what the floor is hiding.
+      const kMin = minBucket();
+      const rows = allRows.filter(r => r.peers >= kMin);
+      const thinRows = allRows.filter(r => r.peers < kMin);
+
+      // Country rows are aggregates → centroid (the map uses them as label anchors). Only the
+      // twinkle points below are scattered, because there the spread IS the visual: many dots
+      // means many nodes. Scatter half-extents are per-country (geoip COUNTRIES[].s).
       const countries = rows.map(r => {
-        const pos = geoip.placeInCountry(r.country_code, 'peer:' + r.country_code);
+        const pos = geoip.countryCentroid(r.country_code);
         return {
           country_code: r.country_code, country: r.country || geoip.countryName(r.country_code),
           peers: r.peers, main: r.main, test: r.test,
@@ -2881,13 +3516,26 @@ function setupRoutes() {
         }
       }
 
+      // Thin countries survive as one unnamed bucket so the published totals stay truthful.
+      if (thinRows.length) {
+        countries.push({
+          country_code: null, country: 'Other', lat: null, lng: null,
+          peers: thinRows.reduce((s, r) => s + r.peers, 0),
+          main: thinRows.reduce((s, r) => s + r.main, 0),
+          test: thinRows.reduce((s, r) => s + r.test, 0),
+          aggregated_countries: thinRows.length
+        });
+      }
+
       res.json({
         window_days: days,
         countries, points,
+        // Totals span ALL peers (including the ones folded into "Other") — the floor hides
+        // which country a thin peer is in, not that it exists.
         totals: {
-          peers: totalPeers,
-          main: rows.reduce((s, r) => s + r.main, 0),
-          test: rows.reduce((s, r) => s + r.test, 0)
+          peers: allRows.reduce((s, r) => s + r.peers, 0),
+          main: allRows.reduce((s, r) => s + r.main, 0),
+          test: allRows.reduce((s, r) => s + r.test, 0)
         },
         timestamp: new Date().toISOString()
       });
@@ -2930,34 +3578,53 @@ function setupRoutes() {
       // Per-region tunnel liveness (Model C): WireGuard latest-handshake per gateway. Peers
       // carry PersistentKeepalive=25, so a healthy tunnel re-handshakes every ~25s regardless
       // of miner traffic — a handshake older than OFFLINE_S (or none at all) means the gateway
-      // is genuinely DOWN, not merely quiet. Returns {} when wg is unavailable (singlebox with
-      // no gateways, not the central box, dev/Windows): in that case we can't judge liveness,
-      // so we never mark anyone offline and degrade to the 2-state online/idle signal.
-      const wgByRegion = await cachedGatewayStatus();
-      const wgAvailable = Object.keys(wgByRegion).length > 0;
+      // is genuinely DOWN, not merely quiet. Cached snapshot, never awaited in the request path.
+      const wgSnapshot = cachedGatewayStatus();
+      const wgByRegion = wgSnapshot.regions || {};
+
+      // Active reachability: TCP-dial each declared stratum_url in the BACKGROUND. This is the
+      // only signal that covers a region with no WireGuard peer at all — a declared/seeded
+      // endpoint pointing at nothing (never paired, DNS not up, gateway not built) used to read
+      // as 'idle' blue, i.e. "ready, just quiet", when a miner pointing a rig there gets a
+      // refused connection. Kicked here, read from cache; the first hit after boot legitimately
+      // has no verdict and reports 'checking'.
+      refreshStratumProbes(locations);
 
       // The LOCAL/singlebox region has no WG peer (it IS the box); this API answering proves
-      // its own stratum is bound, so it is always "up" — never offline.
+      // the box is alive, so it is never marked offline (its public host may also be
+      // un-dialable from itself behind hairpin NAT, so the probe is not trusted to fail it).
       const localRegion = (config && config.role === 'singlebox') ? config.region : null;
 
-      // Three honest public states for a miner choosing where to point their rig:
-      //   online  — tunnel up AND ≥1 share in the window (miners active here right now)
-      //   idle    — tunnel up, no recent miners (perfectly fine to connect, just quiet)
-      //   offline — tunnel down / never handshaked (don't bother — you can't mine here)
-      // "up" = a fresh WireGuard handshake OR recent shares. Recent shares are independent
-      // proof-of-life: if miners are actively submitting through a region it IS reachable,
-      // even if the handshake read is momentarily stale/absent — otherwise a single-region
-      // handshake blip would flip an actively-mined region to red while its card still shows
-      // miners > 0. Matches the admin health endpoint, which takes min(shareAge, handshakeAge).
-      const regionStatus = (region, hasShares, shareAge) => {
+      // Four honest public states for a miner choosing where to point their rig:
+      //   online   — reachable AND ≥1 share in the window (miners active here right now)
+      //   idle     — reachable, no recent miners (perfectly fine to connect, just quiet)
+      //   offline  — tunnel down / nothing listening (don't bother — you can't mine here)
+      //   checking — no verdict yet (first poll after a restart); say so, never guess 'idle'
+      // Signal precedence, strongest first:
+      //   ① recent shares — financial-grade proof miners ARE mining through this region; wins
+      //      over everything, so a handshake/probe blip can never flip an actively-mined
+      //      region red while its own card still shows miners > 0.
+      //   ② the local box — see above.
+      //   ③ a declared WireGuard peer — for a Model C gateway the tunnel IS the path; a stale
+      //      handshake means down even if its public port still answers (HAProxy up, no route
+      //      home). A fresh handshake is still overruled by a CONFIRMED dead public port.
+      //   ④ otherwise the stratum dial — covers every region wg cannot speak for.
+      const regionStatus = (region, hasShares, shareAge, hasTarget) => {
+        const sharesFresh = shareAge !== null && shareAge < OFFLINE_S;
+        const verdict = stratumVerdict(region);
         let up;
-        if (region === localRegion || !wgAvailable) {
-          up = true; // local box, or liveness unknowable → assume up (never false-offline)
-        } else {
+        if (sharesFresh) up = true;
+        else if (region === localRegion) up = true;
+        else if (wgSnapshot.available && wgByRegion[region]) {
           const wg = wgByRegion[region];
-          const hsFresh = !!(wg && wg.handshake && (nowS - wg.handshake) < OFFLINE_S);
-          const sharesFresh = shareAge !== null && shareAge < OFFLINE_S;
-          up = hsFresh || sharesFresh;
+          up = !!(wg.handshake && (nowS - wg.handshake) < OFFLINE_S) && verdict !== false;
+        } else if (verdict === null) {
+          // Nothing to dial and no tunnel to read → liveness is genuinely unknowable; keep the
+          // old lenient behaviour rather than stranding the region on 'checking' forever.
+          if (!hasTarget) return hasShares ? 'online' : 'idle';
+          return 'checking';
+        } else {
+          up = verdict;
         }
         if (!up) return 'offline';
         return hasShares ? 'online' : 'idle';
@@ -2966,14 +3633,15 @@ function setupRoutes() {
       // Union of regions seen in shares and regions declared in pool_locations.
       const regions = new Set([...byRegion.keys(), ...locByRegion.keys()]);
       const out = [];
-      let totalGps = 0, totalMiners = 0, totalShares = 0;
+      let totalGps = 0, totalMiners = 0, totalShares = 0, checking = 0;
       for (const region of regions) {
         const a = byRegion.get(region) || { shares: 0, miners: 0, sumdiff: 0, last_share: 0 };
         const loc = locByRegion.get(region) || {};
         const gps = (a.sumdiff * CYCLE_LENGTH) / (WINDOW_S * SOLUTION_RATE);
         totalGps += gps; totalMiners += a.miners; totalShares += a.shares;
         const shareAge = a.last_share ? (nowS - a.last_share) : null;
-        const status = regionStatus(region, a.shares > 0, shareAge);
+        const status = regionStatus(region, a.shares > 0, shareAge, !!loc.stratum_url);
+        if (status === 'checking') checking++;
         out.push({
           region,
           label: loc.label || null,
@@ -2981,7 +3649,7 @@ function setupRoutes() {
           country_code: loc.country_code || null,
           stratum_url: loc.stratum_url || null,
           is_active: loc.is_active === undefined ? null : !!loc.is_active,
-          status,                       // 'online' | 'idle' | 'offline'
+          status,                       // 'online' | 'idle' | 'offline' | 'checking'
           online: status !== 'offline', // reachable? (up regardless of miner count)
           hashrate_gps: parseFloat(gps.toFixed(6)),
           miners: a.miners,
@@ -2993,6 +3661,9 @@ function setupRoutes() {
       res.json({
         window_seconds: WINDOW_S,
         region_count: out.length,
+        // > 0 means at least one region has no liveness verdict yet — the client should
+        // repaint shortly instead of waiting out its normal poll interval.
+        checking: checking,
         totals: {
           hashrate_gps: parseFloat(totalGps.toFixed(6)),
           miners: totalMiners,
@@ -3080,6 +3751,105 @@ function setupRoutes() {
       res.json({
         count: logs.length,
         logs
+      });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ─── Payout request audit (money actions only) ──────────────────────────────────────────
+  // The ownership-gated money surface, both ACCEPTED and DENIED, so the operator can see a
+  // brute-force / spam run against the payout button rather than inferring it from nginx logs.
+  // Sourced from the same admin_audit_log rows auditOwnerProof() writes (admin_id IS NULL).
+  //
+  // `ip` is the COARSENED network prefix (/24, /48) — see lib/owner-proof.js coarsenIp(). That
+  // is deliberate and is enough for this view's purpose: repeated attempts from one origin still
+  // group together. `geo` is the country resolved from the full IP at write time (details.geo).
+  //
+  // Bounded by BOTH the requested window and database.audit_log_keep_days — asking for 365 days
+  // when retention is 180 cannot surface rows that were already pruned, so the response reports
+  // the effective window and lets the UI say so instead of implying the gap means "no attempts".
+  app.get('/api/admin/payments/audit', secureAdmin, (req, res) => {
+    try {
+      const reqDays = Math.min(Math.max(parseInt(req.query.days, 10) || 30, 1), 3650);
+      const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 200, 1), 1000);
+      const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
+      const only = String(req.query.result || 'all').toLowerCase(); // all | deny | ok
+
+      let keepDays = 180;
+      try { keepDays = Math.max(30, parseInt(poolSettings.getSection('database').audit_log_keep_days, 10) || 180); }
+      catch (e) { /* fall back to the documented default */ }
+      const effDays = Math.min(reqDays, keepDays);
+      const cutoff = Math.floor(Date.now() / 1000) - effDays * 86400;
+
+      // Money actions only. A LIKE over the action prefix keeps this in step with owner-proof.js
+      // without duplicating its action list here.
+      const MONEY = "(a.action LIKE 'owner_proof:withdraw\\_%' ESCAPE '\\'" +
+                    " OR a.action LIKE 'owner_proof:slatepack\\_finalize%' ESCAPE '\\'" +
+                    " OR a.action LIKE 'owner_proof:nostr\\_destination\\_%' ESCAPE '\\')";
+      const resultClause = only === 'deny' ? " AND a.action LIKE '%:deny'"
+                         : only === 'ok'   ? " AND a.action LIKE '%:ok'" : '';
+
+      const rows = db.prepare(
+        `SELECT a.id, a.action, a.target_id AS grin_address, a.details, a.ip, a.created_at
+         FROM admin_audit_log a
+         WHERE a.admin_id IS NULL AND ${MONEY} AND a.created_at >= ?${resultClause}
+         ORDER BY a.id DESC LIMIT ? OFFSET ?`
+      ).all(cutoff, limit, offset);
+
+      const events = rows.map(r => {
+        let d = {};
+        try { d = r.details ? JSON.parse(r.details) : {}; } catch (_) { d = {}; }
+        // 'owner_proof:withdraw_tor:deny' → rail 'withdraw_tor', outcome 'deny'
+        const parts = String(r.action || '').split(':');
+        const outcome = parts[parts.length - 1] === 'ok' ? 'ok' : 'deny';
+        const { geo, ...rest } = d;
+        return {
+          id: r.id,
+          at: r.created_at,
+          action: parts.slice(1, -1).join(':') || r.action,
+          outcome,
+          grin_address: r.grin_address,
+          ip_prefix: r.ip || null,
+          country_code: geo || null,
+          country: geo ? geoip.countryName(geo) : null,
+          reason: rest.reason || null,
+          amount: typeof rest.amount === 'number' ? rest.amount : null,
+          withdrawal_id: rest.withdrawal_id || null,
+        };
+      });
+
+      // Denial concentration over the SAME window — the signal that separates "a miner mistyped
+      // their password twice" from "one origin is sweeping addresses". Computed in SQL over the
+      // whole window, not over the returned page, so paging can't hide a burst.
+      const topDenied = db.prepare(
+        `SELECT a.ip AS ip_prefix, COUNT(*) AS denials,
+                COUNT(DISTINCT a.target_id) AS addresses, MAX(a.created_at) AS last_at
+         FROM admin_audit_log a
+         WHERE a.admin_id IS NULL AND ${MONEY} AND a.created_at >= ?
+           AND a.action LIKE '%:deny' AND a.ip IS NOT NULL
+         GROUP BY a.ip HAVING denials > 1
+         ORDER BY denials DESC, addresses DESC LIMIT 10`
+      ).all(cutoff);
+
+      const totals = db.prepare(
+        `SELECT SUM(CASE WHEN a.action LIKE '%:ok' THEN 1 ELSE 0 END) AS ok,
+                SUM(CASE WHEN a.action LIKE '%:deny' THEN 1 ELSE 0 END) AS deny,
+                COUNT(DISTINCT a.ip) AS origins
+         FROM admin_audit_log a
+         WHERE a.admin_id IS NULL AND ${MONEY} AND a.created_at >= ?`
+      ).get(cutoff);
+
+      res.json({
+        requested_days: reqDays,
+        window_days: effDays,
+        retention_days: keepDays,
+        truncated_by_retention: reqDays > keepDays,
+        geo_available: geoip.available(),
+        totals: { ok: totals.ok || 0, deny: totals.deny || 0, origins: totals.origins || 0 },
+        top_denied_origins: topDenied,
+        count: events.length,
+        events,
       });
     } catch (err) {
       res.status(500).json({ error: err.message });
@@ -3231,7 +4001,10 @@ function setupRoutes() {
   // refresh tokens for the account; live access tokens still expire within their 1h TTL).
   app.get('/api/admin/security/login-history', secureAdmin, (req, res) => {
     try {
-      const limit = Math.min(parseInt(req.query.limit || 50, 10), 200);
+      // Clamped low as well as high: a negative LIMIT means "no limit" to SQLite, and a
+      // non-numeric one binds as NaN and throws — so ?limit=-1 quietly returned the whole
+      // audit table. Same idiom as /api/admin/withdrawals.
+      const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 50, 1), 200);
       const rows = db.prepare(`
         SELECT a.id, a.action, a.ip, a.created_at, u.username
         FROM admin_audit_log a LEFT JOIN users u ON u.id = a.admin_id
@@ -3827,24 +4600,11 @@ function setupRoutes() {
     }
   });
 
-  // Active wire check: TCP-dial a region's PUBLIC stratum host:port — the exact path a
-  // miner's rig takes. Resolves ms-to-connect on success, null on refuse/timeout/DNS fail.
-  // Never rejects. Connect-only (no stratum handshake): proves the gateway's HAProxy is
-  // up and reachable, which is all the edge can prove without a fake miner login.
-  function probeStratumTcp(host, port, timeoutMs = 2500) {
-    return new Promise((resolve) => {
-      const started = Date.now();
-      let sock;
-      const done = (ok) => {
-        if (sock) { sock.removeAllListeners(); sock.destroy(); }
-        resolve(ok ? Date.now() - started : null);
-      };
-      try { sock = net.connect({ host, port: +port }); } catch (e) { return resolve(null); }
-      sock.setTimeout(timeoutMs, () => done(false));
-      sock.once('connect', () => done(true));
-      sock.once('error', () => done(false));
-    });
-  }
+  // The TCP stratum dial lives at module scope (probeStratumTcp, next to the public
+  // reachability cache it also feeds) so the admin view and the public patch bay judge a
+  // region's public port with exactly the same probe. This endpoint dials live on every
+  // call — low volume, and an admin looking at gateway health wants ground truth, not a
+  // ≤60s-old cached verdict.
 
   // Per-region GATEWAY liveness (Model C). Gateways are dumb stratum forwarders that never
   // call the Central API, so liveness is derived from two honest signals:
@@ -3870,7 +4630,9 @@ function setupRoutes() {
     } catch (e) { /* table may be empty */ }
     const byRegion = new Map(shareRows.map(r => [r.region, r]));
 
-    const wgByRegion = await readGatewayStatus(); // {} on any failure (wg absent / not central box)
+    // { available, regions } — available:false on any failure (wg absent / not central box)
+    const wgSnapshot = await readGatewayStatus();
+    const wgByRegion = wgSnapshot.regions || {};
 
     // Public stratum URLs per region (for the active TCP probe below).
     const locByRegion = new Map();
@@ -4350,10 +5112,15 @@ function setupRoutes() {
 
   app.get('/api/admin/incentives/prize-pool', secureAdmin, (req, res) => {
     try {
+      // statement = lifetime in/out breakdown (fee-cut · donations · top-ups · abandoned balances
+      // in; prizes · jackpots · join bonuses · streaks out) + current balance + recent 25 rows.
+      // `balance`/`ledger` kept for backward-compat with the existing panel wiring.
+      const statement = incentivesManager.prizePoolStatement(25);
       res.json({
         success: true,
-        balance: incentivesManager.prizePoolBalance(),
-        ledger: incentivesManager.prizePoolLedger(25),
+        balance: statement.balance,
+        ledger: statement.recent,
+        statement,
       });
     } catch (err) {
       res.status(500).json({ error: 'Failed to load prize pool' });

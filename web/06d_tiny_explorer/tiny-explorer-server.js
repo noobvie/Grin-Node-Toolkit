@@ -143,6 +143,7 @@ const priceCache  = makeTtlCache(config.price_cache_ms || 120000);
 const peersCache  = makeTtlCache(config.peers_cache_ms || 3600000);
 const dailyHrCache = makeTtlCache(config.daily_hr_cache_ms || 300000);
 const syncCache    = makeTtlCache(config.sync_cache_ms || 60000);
+const poolCache    = makeTtlCache(config.pool_cache_ms || 30000);
 
 // Block LRU (ref → {block, at}); capped, TTL-checked on read.
 const BLOCK_CACHE_MAX = 300;
@@ -526,6 +527,18 @@ async function getPeersStat() {
   return { count: null, source: 'none', label: 'Node peers · 30d' };
 }
 
+// ── Mempool size (unconfirmed tx pool) ────────────────────────────────────────
+// get_pool_size lives on the Foreign API and returns the current transaction-pool
+// count (a plain number). Cheap; fails soft to keep the stats endpoint resilient.
+async function getPoolSize() {
+  const cached = ttlGet(poolCache);
+  if (cached != null) return cached;
+  try {
+    const n = await foreignApi('get_pool_size', []);
+    return ttlSet(poolCache, typeof n === 'number' ? n : null);
+  } catch { return cached != null ? cached : null; }
+}
+
 // ── Express app ────────────────────────────────────────────────────────────────
 
 const app = express();
@@ -566,12 +579,13 @@ app.get('/api/latest', async (req, res) => {
 
 app.get('/api/stats', async (_req, res) => {
   try {
-    const [tip, latest, price, peers, dailyHr] = await Promise.all([
+    const [tip, latest, price, peers, dailyHr, mempool] = await Promise.all([
       getTip(),
       getLatest(config.latest_count || 20).catch(() => []),
       getPrice().catch(() => null),
       getPeersStat().catch(() => ({ count: null, source: 'none', label: 'Node peers · 30d' })),
       getDailyAvgHashrate().catch(() => 0),
+      getPoolSize().catch(() => null),
     ]);
     const hashrate = computeHashrate(latest);
     const supply   = tip.height * 60;
@@ -601,6 +615,7 @@ app.get('/api/stats', async (_req, res) => {
       peers_label:   peers.label,
       peers_source:  peers.source,
       g1_per_day:    g1PerDay,
+      mempool:       mempool,
     });
   } catch (e) {
     res.status(502).json({ error: 'node unreachable' });
@@ -683,6 +698,15 @@ const _pageMeta = {
     title: `Output — ${domain}`,
     desc:  `Look up a Grin output by commitment on ${domain}: type, spent/unspent status, block height, timestamp, and confirmations on the MimbleWimble blockchain.`,
   },
+  slate: {
+    title: `Slate Inspector — ${domain}`,
+    desc:  `Paste or drop a Grin slatepack to read what is inside it: amount, fee, which transaction step it is on (S1/S2/S3 or I1/I2/I3), and whether it belongs to mainnet or testnet. Decoding runs entirely in your browser — nothing is uploaded.`,
+    theme: '#06070d',
+  },
+  emission: {
+    title: `Grin Emission & Supply — ${domain}`,
+    desc:  `How Grin's monetary policy works: a constant 1 ツ every second, forever — 60 ツ per block. Verify circulating supply yourself on ${domain}: it is simply block height × 60. No halvening, no premine, no founder reward.`,
+  },
   notfound: {
     title: `Not found — ${domain}`,
     desc:  `That block or page could not be found on ${domain}. Try a deeper Grin explorer.`,
@@ -693,9 +717,12 @@ function esc(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').
 
 function injectGlobals(html, pageKey) {
   const meta  = _pageMeta[pageKey] || _pageMeta.index;
-  // index gets a self-canonical; per-entity pages (block/kernel/output) are
-  // per-ref so they carry no canonical; anything else points at /404.html.
+  // index and /slate are single pages, so they get a self-canonical; per-entity
+  // pages (block/kernel/output) are per-ref so they carry no canonical; anything
+  // else points at /404.html.
   const canonPath = pageKey === 'index' ? '/'
+    : pageKey === 'slate' ? '/slate'
+    : pageKey === 'emission' ? '/emission'
     : (pageKey === 'block' || pageKey === 'kernel' || pageKey === 'output') ? ''
     : '/404.html';
   const canon = (baseUrl && canonPath) ? `\n<link rel="canonical" href="${baseUrl}${canonPath}">` : '';
@@ -707,7 +734,7 @@ function injectGlobals(html, pageKey) {
   const seoBlock = `<title>${esc(meta.title)}</title>
 <meta name="description" content="${esc(meta.desc)}">
 <meta name="robots" content="index, follow">
-<meta name="theme-color" content="#ff8c00">
+<meta name="theme-color" content="${esc(meta.theme || '#ff8c00')}">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="${esc(domain)}">
 <meta property="og:title" content="${esc(meta.title)}">
@@ -725,9 +752,13 @@ window.TINYEXP_SLOGAN=${JSON.stringify(SLOGAN)};
 window.TINYEXP_FALLBACKS=${JSON.stringify(config.fallback_explorers || [])};
 </script>`;
 
+  // Strip the shell's own title/description/theme-color so the injected block is
+  // the single source of truth — a duplicate theme-color would otherwise win by
+  // document order and repaint the dark Slate page in the explorer's orange.
   let out = html
     .replace(/<title>[^<]*<\/title>/i, '')
-    .replace(/<meta\s+name="description"[^>]*>/i, '');
+    .replace(/<meta\s+name="description"[^>]*>/i, '')
+    .replace(/<meta\s+name="theme-color"[^>]*>/i, '');
   return out.replace('<head>', '<head>\n' + seoBlock + '\n' + globals);
 }
 
@@ -758,6 +789,17 @@ function sendEntityPage(res, file, pageKey) {
 app.get('/block/:ref',  (_req, res) => sendEntityPage(res, 'block.html',  'block'));
 app.get('/kernel/:ref', (_req, res) => sendEntityPage(res, 'kernel.html', 'kernel'));
 app.get('/output/:ref', (_req, res) => sendEntityPage(res, 'output.html', 'output'));
+
+// Slate Inspector. Unlike every other page here this one makes NO node call —
+// a slatepack is a pre-broadcast artefact, so it is decoded entirely in the
+// visitor's browser and the pasted slate never reaches this server. The route
+// exists only to serve the shell with SEO injected (express.static would
+// otherwise only answer /slate.html).
+app.get('/slate', (_req, res) => sendEntityPage(res, 'slate.html', 'slate'));
+
+// Emission & Supply explainer — a static, node-light page (one /api/stats call
+// client-side for the live supply/inflation figures). Self-canonical /emission.
+app.get('/emission', (_req, res) => sendEntityPage(res, 'emission.html', 'emission'));
 
 // ── Static files ──────────────────────────────────────────────────────────────
 

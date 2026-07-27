@@ -152,11 +152,22 @@
       padding: 1.4rem 1.5rem;
     }
 
+    /* A settings card IS a section (the section rail in admin-shell.js indexes these),
+       so the heading carries the same accent tick as an <h2> on the data pages —
+       one visual language for "a new part of the page starts here". */
     .section-title {
-      font-size: 1.05rem;
+      font-size: 1.08rem;
       font-weight: 700;
       margin: 0 0 1.1rem;
+      padding-left: .7rem;
+      border-left: 3px solid var(--accent);
+      line-height: 1.3;
       color: var(--text);
+    }
+    /* The card, not the heading, is what should clear the sticky topbar + rail on a
+       jump — otherwise the card's own top padding hides above the fold. */
+    .form-section:has(> .section-title.is-section) {
+      scroll-margin-top: calc(var(--topbar-h) + 58px);
     }
 
     .helper-text {

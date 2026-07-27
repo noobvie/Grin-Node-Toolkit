@@ -1,5 +1,8 @@
 const { getDb } = require('./db');
 const PoolSettings = require('./pool-settings');
+const { getHorizon } = require('./ledger-rollup');
+
+const r9 = (v) => parseFloat((Number(v) || 0).toFixed(9));
 
 // Reserved pseudo-addresses. These are accounting buckets in miner_accounts, NOT real
 // miners — they must be filtered out of every miner-facing surface (leaderboards, stats,
@@ -79,6 +82,61 @@ class IncentivesManager {
       FROM balance_log WHERE grin_address = ?
       ORDER BY created_at DESC LIMIT ?
     `).all(PRIZE_POOL, limit);
+  }
+
+  // Full prize-pool "where it comes from / where it goes" statement — lifetime in/out totals
+  // broken down by source, current balance, and the recent ledger. Composite read over the
+  // ledger-rollup horizon (rollup for day < H + raw for created_at >= H) so totals stay exact
+  // forever after raw balance_log rows are pruned. Powers both the admin panel and the public
+  // /api/pool/prize-pool transparency report. `recentLimit` rows of raw detail (0 = none).
+  prizePoolStatement(recentLimit = 25) {
+    const H = getHorizon(this.db); // 0 = no rollup yet → whole ledger is raw
+    const rows = this.db.prepare(`
+      SELECT event_type, reference_type, SUM(amt) AS amount, SUM(cnt) AS count FROM (
+        SELECT event_type, reference_type, total_amount AS amt, event_count AS cnt
+        FROM balance_log_daily WHERE grin_address = ? AND day < ?
+        UNION ALL
+        SELECT event_type, reference_type, amount, 1
+        FROM balance_log WHERE grin_address = ? AND created_at >= ?
+      ) GROUP BY event_type, reference_type
+    `).all(PRIZE_POOL, H, PRIZE_POOL, H);
+
+    // Human labels for each reference_type. Inflows are credits, outflows are debits; a reversal
+    // that is NOT a withdrawal returns funds TO the bucket, so it counts as an inflow. This is a
+    // DISPLAY grouping only — reconciliation.js is the accounting authority. (A 'dormant' sweep is
+    // terminal by policy: it only ever appears as a credit inflow here, never a reversal.)
+    const IN_LABELS = {
+      fee_cut: 'Pool-fee cut', donation: 'Miner donations', topup: 'Operator top-ups',
+      dormant: 'Abandoned balances', jackpot_reversal: 'Orphaned-block clawbacks',
+    };
+    const OUT_LABELS = {
+      prize_award: 'Prizes & lottery', jackpot: 'Block-finder jackpots',
+      join_bonus: 'Join bonuses', streak: 'Loyalty streaks',
+    };
+    const inflow = {}; const outflow = {};
+    let inTotal = 0; let outTotal = 0;
+    for (const row of rows) {
+      const amt = Number(row.amount) || 0;
+      const isIn = row.event_type === 'credit' ||
+        (row.event_type === 'reversal' && row.reference_type !== 'withdrawal');
+      const bucket = isIn ? inflow : outflow;
+      const labels = isIn ? IN_LABELS : OUT_LABELS;
+      const key = row.reference_type;
+      const label = labels[key] || (key.charAt(0).toUpperCase() + key.slice(1).replace(/_/g, ' '));
+      bucket[key] = bucket[key] || { key, label, amount: 0, count: 0 };
+      bucket[key].amount = r9(bucket[key].amount + amt);
+      bucket[key].count += Number(row.count) || 0;
+      if (isIn) inTotal += amt; else outTotal += amt;
+    }
+    const bySorted = (obj) => Object.values(obj).sort((a, b) => b.amount - a.amount);
+
+    return {
+      balance: r9(this.prizePoolBalance()),
+      in: { total: r9(inTotal), by: bySorted(inflow) },
+      out: { total: r9(outTotal), by: bySorted(outflow) },
+      net: r9(inTotal - outTotal),
+      recent: recentLimit > 0 ? this.prizePoolLedger(recentLimit) : [],
+    };
   }
 
   // ─── Per-address incentive state ───────────────────────────────────────────

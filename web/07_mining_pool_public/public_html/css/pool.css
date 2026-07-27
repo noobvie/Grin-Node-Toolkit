@@ -169,20 +169,11 @@ section h2 {
 }
 
 /* ============== TESTNET BANNER ============== */
-
-.testnet-banner {
-  background: #7a5c00;
-  color: var(--grin-yellow);
-  text-align: center;
-  padding: .55rem 1rem;
-  font-weight: 700;
-  font-size: .92rem;
-  letter-spacing: .03em;
-  border-bottom: 2px solid var(--grin-yellow);
-  position: sticky;
-  top: 0;
-  z-index: 100;
-}
+/* Moved to css/dashboard.css. The banner is injected by public-shell.js on PUBLIC
+   pages only, and no public page loads this file — pool.css is the admin-panel
+   stylesheet — so the rules here never applied to the element they styled. The
+   admin panel actively strips .testnet-banner (admin-shell.js), so nothing on this
+   side needs them either. Do not re-add: dashboard.css is the single definition. */
 
 /* ── Header ───────────────────────────────────────────────────────────────── */
 header {

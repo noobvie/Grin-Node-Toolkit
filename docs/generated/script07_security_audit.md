@@ -422,3 +422,254 @@ Residual / to validate on the VPS: the live nostr-tools crypto (nip59 wrap/unwra
 delivery are exercised only by an E2E run — do a testnet / tiny-amount pilot before enabling on
 mainnet. The E.1 slate_id/`retrieve_txs` double-pay hardening applies here too (the failed-send
 reversal shares the exposure); the failed-payout cooldown is the current mitigation.
+
+## F. Payout-path throttle hardening — 2026-07-22 (add-ons, NOT VPS-tested)
+
+**Question raised:** should the payout button get a CAPTCHA / Cloudflare Turnstile to blunt
+proof brute-force + payout spam?
+
+**Decision: NO CAPTCHA (by default).** Rationale — do not re-litigate in a future pass:
+- Both payout rails are **theft-proof** (Tor dials the address's own onion; slatepack/Nostr are
+  encrypted to the address / pinned npub). A brute-forced ownership gate cannot *steal*; the
+  worst outcome is **griefing** (force a victim's own coins to their own wallet, burning one
+  pool-paid fee). Low damage ceiling → CAPTCHA is a heavy answer to a light threat.
+- Turnstile conflicts with the pool's **Tor-first, no-account** identity (Tor miners get
+  CF challenges on the one screen where they withdraw their own money) and forces a **strict-CSP
+  exception** (`challenges.cloudflare.com` script+frame), widening a surface §A/§B narrowed.
+
+Instead, the two *actual* holes on the money path were closed (implementation, not just design):
+
+### F1 — Money-write routes rode the loose `public` bucket (1200/min) — **FIXED**
+The 4 money-write endpoints (`POST /api/account/:addr/withdraw`, `POST …/withdraw/:id/finalize`,
+`POST` + `DELETE …/nostr-destination`) now use a **dedicated `withdraw` rate bucket**
+(`lib/rate-limiter.js`, default **20/min per-IP**, overridable via `config.rate_limits.withdraw`)
+instead of `public`. `tor-check` and every read/stats/admin route stay on their existing buckets —
+no other limit value changed. A real payout is ~2 requests (create → finalize), so 20/min leaves
+ample headroom for a small NAT'd farm while cutting automation. This bucket is the coarse DoS pad
+in front of the memory-hard scrypt verify.
+
+### F2 — Ownership-proof throttle was per-ADDRESS only → distributed sweep + scrypt CPU lever — **FIXED**
+`lib/owner-proof.js` `verifyOwnerProof` threw a per-address counter only (`FAIL_MAX=8`/10min),
+so an attacker walking the public leaderboard got a **fresh 8-guess budget per address**, and each
+guess forced a 16 MB scrypt (a CPU/mem-exhaustion lever). Added a **second, per-IP counter** in the
+same `_fails` Map (keyed `ip:<canonicalIp>`), `FAIL_MAX_IP=20`/10min, same 5-min lockout — it caps
+*total* failed guesses from one source across ALL addresses. Signature is now
+`verifyOwnerProof(db, addr, submitted, clientIp?)`; the 4th arg is **optional** (omitting it =
+old address-only behaviour, backward compatible) and all 4 index.js callsites pass `reqIp`.
+A single-address user hits the address lock (8) **before** the IP lock (20), so no new
+false-positive for normal use; only the distributed-sweep attacker trips the IP lock.
+
+**Verified:** `node --check` on index.js + both libs; a 5-case stub-DB test (distributed sweep
+locks at the 21st attempt, a different IP is unaffected, a solo user locks at the 9th, a correct
+password verifies, the no-IP path still works) — all pass. NOT yet VPS-tested.
+
+**Deferred (YAGNI, do NOT build unless a real need appears):** an *off-by-default* operator
+captcha toggle (reuse the existing login-captcha infra at `/api/auth/captcha`) or a hashcash PoW
+challenge before withdraw. Both were considered and intentionally not built — the F1/F2 throttles
+plus the theft-proof rails are the proportionate control.
+
+---
+
+## Abandoned-balance + sub-threshold payout review (add-ons, 2026-07-22)
+
+Post-build logic/security review of the dormancy disposition + manual/backend payout feature
+(lib/dormancy.js, withdrawal-scheduler.js override, index.js endpoints, admin/account frontends).
+5 findings; all resolved (node --check + temp-DB smoke tests pass; NOT yet VPS-tested).
+
+**Sound by construction (not findings):** single-threaded synchronous node:sqlite transactions make
+the disposition sweep and any live withdrawal non-interleaving (no double-spend); both dormancy paths
+read *spendable* `balance` (lock model `balance-=amt; balance_locked+=amt`) so locked funds are never
+touched; `dormant_sweep`(debit)+`dormant_payout`(credit) net to zero in reconciliation INV_CASES and
+stay out of external FLOW_CASES; disposition self-clears (balance>0 filter) so it can't double-sweep.
+
+| # | Sev | Finding | Fix |
+|---|-----|---------|-----|
+| 1 | MED | manualPayout had no double-submit guard → a resubmit wrote a 2nd confirmed withdrawal + debit (over-debit + wallet-audit drift) | dedup in manualPayout(): reject duplicate `kernel_excess`/`slate_id` (unique on-chain id) or identical (address, amount, method='manual') within 60s; frontend disables the button in-flight |
+| 2 | LOW | recorder accepted a ≥min amount with no guard → auto-payout scheduler could double-pay in the send↔record gap | manualPayout() rejects `amt >= min_withdrawal` with `above_min_needs_ack` unless `allowAboveMin`; frontend prompts once and retries; steers to the Tor path / freeze |
+| 3 | LOW | manualPayout() didn't self-check the freeze (only the endpoint did) | added `if (this.isFrozen()) return payouts_frozen` inside the lib method (defense-in-depth) |
+| 4 | LOW | no enforced link between verify-owner and record/send | both money endpoints now require a successful `owner_proof:admin_verify:ok` in admin_audit_log within 15 min, else 428 `verify_required`; explicit `verified_ack` bypass (frontend confirm) for no-proof-on-record accounts |
+| 5 | INFO | re-enabling dormancy after a long disable gave no fresh grandfather runway (clock ran through the off period) | pool-settings.updateSection re-arms on a false→true `dormancy_enabled` transition: resets `dormancy_policy_effective_at` to 0 so the next pass re-stamps to now (a full fresh window); true→true saves and disable do NOT reset |
+
+**New capability added in the same pass:** backend-initiated below-min Tor payout
+(`POST /api/admin/dormancy/send-payout`) reuses `createWithdrawal(...,{adminOverride:true})` —
+bypasses only the min floor + reversal cooldown; freeze, CAS lock, and one-pending-per-address cap
+(the double-pay guard) still apply. This is the convenient primary sub-threshold path; the recorder
+is the labeled fallback for genuine out-of-band (slatepack/CLI) sends.
+
+## Prize-pool reroute review (add-ons, 2026-07-23)
+
+Follow-up review after the destination change (redistribute-to-active-miners → single prize-pool
+credit, REVISION 2026-07-22b). Focus: double-claim / abuse in the reroute + anything the topic misses.
+All confirmed-safe items re-verified against live code (single-thread sqlite tx non-interleaving;
+spendable-only debit; `dormant_sweep`+`dormant` net zero in INV_CASES and absent from FLOW_CASES;
+custodial liability excludes `prize_pool`; reserved addresses excluded as sources; disposed-then-
+refunded falls through to a fresh countdown; admin money routes `freshAdmin`-gated). 4 findings, all
+fixed (node --check + 18-assertion temp-DB smoke test PASS; NOT VPS-tested).
+
+| # | Sev | Finding | Fix |
+|---|-----|---------|-----|
+| 1 | MED | The ToS reclaim promise ("request a payout to reclaim") was **not durable**: the countdown clock reset only on a *confirmed* payout / fresh share, so a reclaim payout that later **failed & auto-refunded** (or a **partial** withdrawal) left the balance sweepable with the original elapsed clock → next 6h sweep could take it | `dormancy.js` `_candidates()` + `statusFor()` now fold in `MAX(created_at)` of withdrawals of **any status** (`last_request`) into `last_activity`. A reclaim *attempt* durably resets the countdown regardless of the payout's outcome. (No `last_seen_at` write in the withdrawal path → zero side-effect on online tracking.) |
+| 2 | MED | Sweeps could run while the incentive **draws were OFF** → abandoned balances pile into a prize pool that never pays out (breaks the ToS "given away through published draws" promise; owner loses reclaim while nobody benefits) | new `_incentivesEnabled()` gate: `runOnce()` skips with `incentives_disabled`, `preview()` reports it as a `blocked` reason, `status()` exposes `incentives_enabled`, admin panel `BLOCK_LABEL` shows "enable prize draws first". No draws → no sweep |
+| 3 | LOW | batch `total_swept` was written from the **pre-tx snapshot**, not the in-tx exact sum (identical today, fragile if async ever creeps between candidate collection and the tx) | record `sweptExact` on the batch row inside the transaction (`updBatchTotal`) so the batch is authoritative for the real ledger movement |
+| 4 | LOW | `prizePoolStatement` reversal→inflow classification is display-only and could mislabel a hypothetical `reversal/dormant` row | comment clarifying it is a **display grouping only** (reconciliation.js is the accounting authority) and that a `dormant` sweep is terminal by policy — only ever a credit inflow |
+
+**Policy/ToS + wallet copy adapted to match (user directive "the ToS and policy should be adapt,
+user wallet or payout should update accordingly"):** ToS §4 (pool-settings.js default `terms`) now
+states requesting a payout resets the countdown even if it later fails, that sweeps only run while
+draws are active, and that a withdrawal *request* counts as activity; the payout-settings comment +
+admin helper text updated (incl. relabel "Active-Miner Window" → "Idle Threshold", dropping the stale
+"shared PPLNS-style among miners" text); account-page countdown copy ("counting"/"eligible"/"disposed")
+now says "request a payout … resets this countdown" and links the disposed note to the public Prize
+Pool ledger. Existing pools must re-seed the ToS page (pages are one-time CMS seeds).
+
+---
+
+## G. IP handling review — 2026-07-25 (add-ons, NOT VPS-tested)
+
+Full sweep of every path where a miner or node IP can land on disk, prompted by the question
+"do we hash miner IPs, and should we hash Grin node peer IPs too?". There are exactly **three**
+IP-bearing columns in `pool.db`.
+
+| Store | What it holds | Treatment | Verdict |
+|---|---|---|---|
+| `miner_accounts.last_ip` / `prev_ip` | miner mining source IP (proof window) | salted **scrypt** `v1$<salt>$<hash>`, 16 MB, per-record random salt | ✅ v4 **and** v6 (`canonicalizeIp` expands `::`, folds `::ffff:` v4-mapped, strips zone-id → one stable text form before hashing) |
+| `miner_geo.country_code` | miner country | country only, IP discarded at resolve time | ✅ |
+| `network_peers.peer_key` | Grin P2P peer | truncated **unsalted** `sha256(net\|ip)` (128-bit) | ⚠️ dedup handle, **not** a privacy control — see G2 |
+| `admin_audit_log.ip` | requester origin | **was full plaintext, retained forever** | ❌ → **FIXED, see G1** |
+
+Outside the DB: nginx `${POOL_SERVICE}-access.log` holds real IPs (unavoidable — fail2ban parses
+it; bounded by logrotate). `rate-limiter.js` / `ip-filter.js` keep IPs in in-memory `Map`s only,
+never persisted.
+
+### G1 — [Medium] Audit trail re-created the (address, IP, time) linkage that proof-hashing removed — **FIXED**
+
+`auditOwnerProof()` wrote `canonicalizeIp(req.ip)` **in full**, next to `target_id = <grin_address>`,
+on every withdrawal / slatepack / cancel / destination-register attempt — and `admin_audit_log` had
+**no retention policy at all**, so it accumulated indefinitely. This reconstructed exactly the linkage
+the 2026-07-17 scrypt hashing of `last_ip`/`prev_ip` was introduced to eliminate, defeating the
+"the DB holds no raw mining IPs" property in `owner-proof.js`.
+
+**Fix — coarsen, don't hash.** Hashing the audit IP would destroy the log's operational purpose
+(incident response needs "group these events by origin"; a per-row salted hash makes every row
+unlinkable, and a *shared* salt is just a reversible 2³² lookup for IPv4 — the same weakness as G2).
+So new `coarsenIp()` keeps the routing prefix and drops the host part:
+
+- **IPv4 → `/24`** (`203.0.113.47` → `203.0.113.0/24`)
+- **IPv6 → `/48`** (`2001:db8:1234:5678::1` → `2001:db8:1234::/48`) — the standard end-site
+  allocation; a `/64` is often one subscriber and identifies a household about as well as the
+  full address.
+
+Abuse patterns (a sweep from one block, a farm fumbling proofs) stay visible; pinning an event to a
+single subscriber line does not. Non-IP input returns `null` (stored NULL, never opaque junk).
+
+- **Admin rows are deliberately untouched** (`admin_id NOT NULL`) — the operator's own login origin
+  is operator data, and full precision is what makes it useful.
+- The one admin-initiated caller (`admin_verify`) *is* coarsened; its actor is already identified by
+  `details.by`, so no attribution is lost.
+- **The throttle is unaffected** — `verifyOwnerProof`'s per-IP lockout keys on the full in-memory IP,
+  so coarsening never widens a lockout to a whole `/24`.
+- `migrateAuditLogIps(db)` rewrites historical miner rows in place at startup (synchronous —
+  truncation, no KDF; idempotent, `ip NOT LIKE '%/%'`).
+
+**Retention:** new `database.audit_log_keep_days` (default **180**, runtime floor **30**) pruned by
+`retention.js` step 4, surfaced in `status().counts.admin_audit_log` and the settings-database panel.
+Floor of 30 so a mis-set value can never leave the money path untraceable.
+
+### G2 — [Info/accepted] `network_peers.peer_key` is an unsalted digest — deliberately
+
+`sha256(net + '|' + ip).slice(0,32)`. For IPv4 the entire 2³² space is enumerable in minutes on a
+GPU, so this is **reversible by anyone who wants to** — it is a stable dedup handle, not anonymisation.
+
+**Accepted, no change.** Grin P2P node addresses are public by construction: any node on the network
+learns its peers' addresses, and the pool only ever stores peers **its own node already connected
+to**. Hashing them protects nothing an attacker can't get by running a node for an hour. Salting
+would break the cross-snapshot dedup the column exists for (a per-row salt makes the same peer count
+N times); a single persistent pepper would restore dedup but only raises the bar to "attacker needs
+the pepper" while adding a key to manage and back up — real cost, no meaningful gain.
+
+**The one thing that would matter** is the `country_code` join going public at low peer counts: on a
+small testnet pool a country with a single peer is effectively a pointer to one node operator.
+`/api/network/peers` should keep aggregating to country with a **minimum bucket size** before that is
+exposed — tracked, not yet enforced.
+
+> The code comment on the table ("the raw IP is NEVER stored") is true but reads stronger than the
+> property actually is; amended in `db.js` to say dedup handle rather than implying anonymisation.
+
+### G3 — [Low] Network-map feeds published a country breakdown by default — **FIXED 2026-07-25**
+
+Follow-up to G2, raised by the operator: *"/api/network/peers should be disabled — I don't want peer
+IPs public."*
+
+**First, the factual correction:** neither network-map feed has ever returned an IP address.
+`/api/network/peers` returns `GROUP BY country_code` counts; `/api/pool/topology` returns gateway
+status plus miners-per-country. Every `lat`/`lng` in either response comes from
+`geoip.placeInCountry()`, which is a *seeded random point inside the country* — a dot is never a real
+location. `peer_key` and `miner_accounts.last_ip` never appear in any response. Confirmed by reading
+both handlers end to end.
+
+**What was genuinely exposed** is the aggregation itself: which countries mine at this pool and which
+countries the node peers with, unauthenticated and on by default. That is low-sensitivity at scale
+and progressively worse as the pool gets smaller — the G2 minimum-bucket problem, now reachable.
+
+**Fixed, two layers:**
+
+1. **`access.network_map_public`, default `'false'`** — both `/api/pool/topology` and
+   `/api/network/peers` return **404** when off. 404 rather than 403: a 403 confirms the feature
+   exists and is merely disabled. Gating only the peers feed would have been half a fix — topology
+   publishes the same class of data for miners. `networkMapPublic()` fails **closed** if settings are
+   unreadable. `network-map.js` already wraps both fetches in `try/catch` and renders its illustrative
+   sample globe on failure, so the page degrades instead of breaking.
+2. **`access.network_map_min_bucket`, default `3`** — when publishing *is* enabled, countries below
+   the floor are merged into one unnamed `Other` row (no `country_code`, `lat`/`lng` null) rather than
+   dropped, so totals stay truthful while thin countries go unnamed. Closes the G2 open item.
+
+The floor is applied to `network_peers` **before the twinkle `points` array is built**, not only to
+the country list — points are placed at their country's position, so emitting them for a thin country
+would re-expose precisely what the floor hides. Client-side this is already safe: `network-map.js`
+filters `c.lat != null` before rendering, and its country-highlight set matches on canonical
+Natural-Earth names, which `Other` never matches.
+
+**Related, NOT fixed here:** `/api/pool/miners` (§C1) still returns every miner's **full** Grin
+address and balance unauthenticated. No IP — but it is a bigger identity leak than the map ever was,
+and it contradicts the posture `/api/stratum/stats` already applies (that route truncates addresses
+to `xxxxxxxxx…xxxx` specifically so the session list can't be scraped into a miner census). C1 stays
+open pending an operator decision on public-leaderboard behaviour.
+
+### G4 — Payout request audit surfaced in the admin panel — **BUILT 2026-07-25**
+
+The G1 rows existed but had no reader: the only views over `admin_audit_log` were
+`/api/admin/audit-log` (undifferentiated firehose) and `login-history` (admin actions only), so
+answering *"is someone hammering the payout button?"* meant reading nginx logs. Added
+**`GET /api/admin/payments/audit`** (`secureAdmin`) plus a **Payout request audit** section on
+`admin-panel/payments.html`.
+
+Covers the ownership-gated money surface on **both** the accept and deny path — `withdraw_tor`,
+`withdraw_slatepack`, `withdraw_nostr`, `slatepack_finalize`, `nostr_destination_register|remove` —
+selected by a `LIKE` over the action prefix so it tracks `owner-proof.js` without duplicating its
+action list. Admin rows (`admin_id NOT NULL`) and non-money `owner_proof:admin_verify` rows are
+excluded. Params: `days` (1–3650), `result` (`all|deny|ok`), `limit`/`offset`.
+
+**Country capture.** `auditOwnerProof()` now resolves the origin country from the **full** IP —
+the one point where it still exists — and stores the ISO code in `details.geo`. It goes in the
+details JSON, **not a new column**: `db.js migrateAdminAuditLog()` DROPS the table whenever its
+columns don't match the canonical set, so adding a column would delete every existing audit row on
+the next deploy. Wrapped in its own try/catch (geo is a nice-to-have; it must never fail an audit
+write) and resolves to null on private/loopback addresses or when `geoip-lite` isn't installed —
+the response carries `geo_available` so the UI can say which case it is.
+
+**Retention interaction is reported, not hidden.** The window is clamped to
+`database.audit_log_keep_days`; the response returns `requested_days`, `window_days`,
+`retention_days` and `truncated_by_retention` so asking for 1 year under 180-day retention shows
+"showing 180d — retention keeps only 180d" instead of an empty stretch that reads as "nobody tried".
+
+**`top_denied_origins`** groups refusals by origin prefix over the whole window in SQL (not over the
+returned page, so paging can't hide a burst), reporting `denials` and **`addresses`** — distinct
+targets. That second number is the actual signal: many denials against *one* address is a miner
+mistyping their own password; many denials across *many* addresses from one prefix is an
+address-sweep. The banner escalates to error styling only on the latter.
+
+The panel notes explicitly that rate-limiter rejections (§F1/F2) are refused **before** the ownership
+check and leave no row, so a quiet table is not proof that nothing was attempted.
+
+> Origin stays the coarsened `/24`//`48` from G1 — sufficient here, since repeated attempts from one
+> origin still group. This view does not reintroduce host-level IP storage.

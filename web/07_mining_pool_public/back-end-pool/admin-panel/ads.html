@@ -41,6 +41,19 @@
     }
     .spec-box strong { color: var(--text, #cfd8d3); }
     .spec-size { font-family: var(--mono, monospace); color: var(--accent, #5dff73); }
+    /* Preview panel — sits below the Save row, separated by a rule so it reads as
+       "what this ad looks like" rather than another form field. */
+    .preview-panel {
+      margin-top: 1.2rem; padding-top: 1rem;
+      border-top: 1px dashed var(--border-soft, #1d3a26);
+    }
+    .preview-head {
+      margin: 0 0 .6rem; font-size: .8rem; letter-spacing: .08em; text-transform: uppercase;
+      color: var(--text-dim, #8a978f); font-weight: 600;
+    }
+    .preview-head .preview-sub {
+      text-transform: none; letter-spacing: 0; font-weight: 400; opacity: .8;
+    }
     .img-preview { display:none; margin:.2rem 0 1rem; }
     .img-preview .frame {
       display:inline-block; padding:10px; border:1px dashed var(--border, #2a3a30);
@@ -55,7 +68,8 @@
       border:1px solid var(--border-soft, #1d3a26); border-radius:8px; padding:.7rem;
       background: var(--bg, #07090c); display:flex; flex-direction:column; gap:.5rem;
     }
-    .starter-card img { width:100%; height:auto; border-radius:6px; background:#07090c; }
+    /* contain, not stretch — tall 160×600 rail creatives sit next to wide 728×90 strips */
+    .starter-card img { width:100%; height:auto; max-height:200px; object-fit:contain; border-radius:6px; background:#07090c; }
     .starter-card .s-name { font-size:.85rem; color: var(--text, #cfd8d3); }
     .starter-card .s-meta { font-size:.75rem; font-family: var(--mono, monospace); color: var(--text-dim, #8a978f); }
     .ad-thumb { max-width:120px; max-height:44px; height:auto; border-radius:4px; display:block; }
@@ -66,10 +80,22 @@
     .toolbar-controls { display:flex; gap:.45rem; align-items:center; font-size:.85rem; color: var(--text-dim, #8a978f); }
     .toolbar-controls select, .toolbar-controls input { padding:.3rem .45rem; }
     .toolbar-controls input[type="number"] { width:64px; }
+    /* Text-ad live preview — mirrors the public .ad-text-card look (admin doesn't load dashboard.css). */
+    .text-preview { margin:.2rem 0 1rem; }
+    .tp-card {
+      display:flex; align-items:center; justify-content:center; flex-wrap:wrap; gap:10px 20px;
+      padding:14px 20px; border:1px solid var(--border-soft, #1d3a26); border-radius:10px;
+      background: var(--bg, #0b0f14); text-align:left;
+    }
+    .tp-head { font:700 20px/1.15 var(--mono, ui-monospace, monospace); letter-spacing:.5px; color: var(--text, #e6efe9); }
+    .tp-body { font:400 13px/1.45 var(--mono, ui-monospace, monospace); color: var(--text-dim, #8a978f); flex:1 1 220px; min-width:170px; }
+    .tp-cta { font:700 13px var(--mono, ui-monospace, monospace); letter-spacing:.5px; white-space:nowrap; color:#07090c; background:linear-gradient(180deg,#6aff80,#3fd957); padding:9px 16px; border-radius:6px; }
+    .tp-cta:empty { display:none; }
     .badge-warn { color: var(--warn, #f5b942) !important; border-color: var(--warn, #f5b942); }
     .stats-cell { font-family: var(--mono, monospace); font-size:.8rem; white-space:nowrap; }
     .notes-flag { cursor:help; margin-left:.3rem; }
     td .btn-sm { margin:1px 0; }
+    /* the Actions column is icon buttons now (.row-actions/.btn-icon in styles.css) */
   </style>
 </head>
 <body>
@@ -78,7 +104,7 @@
   <div class="container">
     <div class="page-head">
       <h1>Ads</h1>
-      <p class="page-sub">Promotions shown on the public site — a self-hosted banner or an ad-network code snippet, bound to a placement. When a placement has several active ads they rotate automatically, one at a time (interval configurable below).</p>
+      <p class="page-sub">Promotions shown on the public site — a self-hosted <strong>banner</strong> image, a native <strong>text</strong> card (headline + button, no design needed), or an ad-network <strong>code</strong> snippet — each bound to a placement. When a placement has several active ads they rotate automatically, one at a time (interval configurable below).</p>
     </div>
 
     <!-- Existing ads -->
@@ -96,7 +122,24 @@
         </select>
         <label for="rotate-secs">Rotate every</label>
         <input type="number" id="rotate-secs" min="2" max="60" step="1" value="8"> s
-        <button class="btn btn-sm btn-outline" onclick="saveRotate()">Set</button>
+      </div>
+    </div>
+
+    <!-- Sidebar layout — the sidebar placement is a fixed edge rail by default -->
+    <div class="table-toolbar">
+      <p class="rotate-note" style="margin:0;"><strong>Sidebar layout.</strong> In <em>rail</em> mode the sidebar placement is a slim vertical strip fixed in the empty page margin (screens ≥&nbsp;1366&nbsp;px only) — it costs the page layout nothing, peeks out for a while, tucks itself away against the edge, then slides back with the next creative. Visitors can pull it out by its tab or dismiss it for the visit. Use tall creatives here (<span class="spec-size">160×600</span>). <strong>The sidebar placement is not shown at all below 1366&nbsp;px</strong> — with no gutter to park it in, a tall banner would drop into the page flow and become a screenful of scrolling on a phone. So keep your mobile inventory in the header, in-content and footer placements.</p>
+      <div class="toolbar-controls">
+        <label for="sidebar-mode">Sidebar</label>
+        <select id="sidebar-mode">
+          <option value="rail">Edge rail</option>
+          <option value="inline">Inline block</option>
+          <option value="off">Hidden</option>
+        </select>
+        <label for="rail-show-secs">Show</label>
+        <input type="number" id="rail-show-secs" min="3" max="120" step="1" value="12"> s
+        <label for="rail-hide-secs">Tuck</label>
+        <input type="number" id="rail-hide-secs" min="0" max="600" step="1" value="45"> s
+        <button class="btn btn-sm btn-outline" onclick="saveAdsConfig()">Save layout</button>
       </div>
     </div>
     <div class="card" style="padding:0;">
@@ -123,9 +166,11 @@
     </div>
 
     <!-- Create / edit form -->
-    <h2>New ad</h2>
+    <h2 data-sec="New ad">Create or edit an ad</h2>
     <div class="card" id="ad-form-card">
-      <h3 id="form-title" style="margin:0 0 1rem;">New ad</h3>
+      <!-- Not a section heading — it's the form's STATE ("New ad" / "Edit ad #7"),
+           so it stays quieter than the h2 above it. -->
+      <h3 class="sub-title" id="form-title">New ad</h3>
       <input type="hidden" id="ad-id">
 
       <div class="form-row cols-3">
@@ -146,6 +191,7 @@
           <label for="ad-type">Type</label>
           <select id="ad-type" onchange="syncType()">
             <option value="banner">Banner (image + link)</option>
+            <option value="text">Text (headline + button)</option>
             <option value="code">Code snippet (HTML)</option>
           </select>
         </div>
@@ -179,11 +225,30 @@
             <input type="text" id="ad-alt" placeholder="Describe the ad (accessibility + tooltip)">
           </div>
         </div>
-        <!-- live preview: rendered image + detected dimensions/file type vs the placement spec -->
-        <div class="img-preview" id="img-preview">
-          <div class="frame"><img id="preview-img" alt="Banner preview"></div>
-          <div class="meta" id="preview-meta"></div>
+      </div>
+
+      <!-- Text fields -->
+      <div id="text-fields" style="display:none;">
+        <div class="form-row cols-3">
+          <div class="form-group">
+            <label for="ad-headline">Headline</label>
+            <input type="text" id="ad-headline" maxlength="60" placeholder="e.g. WHY GRIN?" oninput="updateTextPreview()">
+          </div>
+          <div class="form-group">
+            <label for="ad-cta">Button label (optional)</label>
+            <input type="text" id="ad-cta" maxlength="40" placeholder="e.g. Learn why →" oninput="updateTextPreview()">
+          </div>
+          <div class="form-group">
+            <label for="ad-text-link">Button / card link</label>
+            <input type="url" id="ad-text-link" placeholder="/#info or https://…" oninput="updateTextPreview()">
+            <div class="helper-text">Site paths (starting <code>/</code>) open in the same tab; full URLs open a new tab.</div>
+          </div>
         </div>
+        <div class="form-group">
+          <label for="ad-body">Body line (optional)</label>
+          <input type="text" id="ad-body" maxlength="140" placeholder="e.g. No ICO · tail emission · private by default" oninput="updateTextPreview()">
+        </div>
+        <div class="helper-text" style="margin:-.4rem 0 .6rem;">No image or code needed — this renders as a styled card on the site and rotates with any banners in the same placement. Edit the copy here any time.</div>
       </div>
 
       <!-- Code fields -->
@@ -225,12 +290,33 @@
         <button class="btn btn-outline" onclick="resetForm()" id="cancel-btn" style="display:none;">Cancel edit</button>
         <span class="success-msg" id="ad-msg" style="display:none;"></span>
       </div>
+
+      <!-- Live preview — one panel below Save for every ad type, so editing an existing
+           ad always shows its creative in the same place instead of mid-form. -->
+      <div class="preview-panel" id="preview-panel">
+        <h4 class="preview-head">Preview <span class="preview-sub" id="preview-sub"></span></h4>
+        <!-- banner: rendered image + detected dimensions/file type vs the placement spec -->
+        <div class="img-preview" id="img-preview">
+          <div class="frame"><img id="preview-img" alt="Banner preview"></div>
+          <div class="meta" id="preview-meta"></div>
+        </div>
+        <!-- text: the composed card (headline + body + CTA) -->
+        <div class="text-preview" id="text-preview" style="display:none;">
+          <span class="ad-slot-label" style="display:block;font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--text-dim,#8a978f);opacity:.65;margin-bottom:4px;">Ad — preview</span>
+          <div class="tp-card" id="tp-card">
+            <span class="tp-head" id="tp-head"></span>
+            <span class="tp-body" id="tp-body"></span>
+            <span class="tp-cta" id="tp-cta"></span>
+          </div>
+        </div>
+        <div class="helper-text" id="preview-hint" style="display:none;"></div>
+      </div>
     </div>
 
     <!-- Shipped self-promo starter banners -->
     <h2>Starter banners</h2>
     <div class="card">
-      <p class="rotate-note" style="margin-top:0;">Self-promo SVG banners shipped with the pool (served from <code>/promo/</code>). A fresh install seeds all four as active ads automatically — use these cards to re-add one after deleting it, or as a size template for your own creatives.</p>
+      <p class="rotate-note" style="margin-top:0;">Self-promo SVG banners shipped with the pool (served from <code>/promo/</code>). A fresh install seeds them all as active ads automatically, each linking to <code>#</code> — they exist to demo the placements and the rotation, so point them somewhere real or delete them once you have your own creatives. Use these cards to re-add one after deleting it, or as a size template.</p>
       <div class="starter-grid" id="starter-grid"></div>
     </div>
   </div>
@@ -254,26 +340,46 @@ const PLACEMENT_LABEL = { header:'Header', sidebar:'Sidebar', 'in-content':'In-c
 // was built around; anything else still renders but is scaled to fit the slot.
 const PLACEMENT_SPEC = {
   header:       { w:728, h:90,  alt:'970×90 also fits',  note:'Top of every public page; scales down responsively on mobile.' },
-  sidebar:      { w:300, h:250, alt:'300×600 also fits', note:'Right rail on wide screens (max 320 px wide); flows inline on mobile.' },
+  sidebar:      { w:160, h:600, alt:'120×600 also fits', note:'Fixed edge rail in the page margin on screens ≥1366 px (renders 108–168 px wide, so use a tall vector). Not shown at all below 1366 px — put mobile inventory in the other placements.' },
   'in-content': { w:728, h:90,  alt:'468×60 also fits',  note:'Inside the homepage content flow.' },
   footer:       { w:728, h:90,  alt:'970×90 also fits',  note:'Bottom of every public page.' }
 };
 
 // Self-promo SVGs shipped in public_html/promo/ (auto-seeded once on a fresh pool).
+// They all link to '#' on purpose — they demo the placements and rotation; point them
+// somewhere real (or delete them) once you have your own creatives.
 const STARTERS = [
-  { file:'/promo/grinium-mine-728x90.svg',     size:'728×90',  placement:'header',
-    name:'GRINIUM promo — Mine GRIN (header 728×90)', link:'/',
+  { file:'/promo/grinium-mine-728x90.svg',        size:'728×90',  placement:'header',
+    name:'GRINIUM promo — Mine GRIN (header 728×90)',
     alt:'Mine GRIN on GRINIUM — no sign-up, PPLNS rewards, your address is your account' },
-  { file:'/promo/grinium-fortune-300x250.svg', size:'300×250', placement:'sidebar',
-    name:'GRINIUM promo — Fortune board (sidebar 300×250)', link:'/fortune-board.html',
+  { file:'/promo/grinium-why-grin-728x90.svg',    size:'728×90',  placement:'header',
+    name:'GRINIUM promo — Why GRIN? (header 728×90)',
+    alt:'Why GRIN? No ICO, no premine, tail emission, private by default' },
+  { file:'/promo/grinium-mine-160x600.svg',       size:'160×600', placement:'sidebar',
+    name:'GRINIUM rail — Mine here (160×600)',
+    alt:'Mine GRIN here — no sign-up, PPLNS rewards, anonymous Tor payouts' },
+  { file:'/promo/grinium-why-grin-160x600.svg',   size:'160×600', placement:'sidebar',
+    name:'GRINIUM rail — Why GRIN? (160×600)',
+    alt:'Why GRIN? Private by default, no addresses on chain, fair launch, no premine' },
+  { file:'/promo/grinium-buy-grin-160x600.svg',   size:'160×600', placement:'sidebar',
+    name:'GRINIUM rail — Buy GRIN (160×600)',
+    alt:'Buy GRIN — trade it on exchanges, or earn it by pointing a miner here' },
+  { file:'/promo/grinium-fortune-160x600.svg',    size:'160×600', placement:'sidebar',
+    name:'GRINIUM rail — Feeling lucky? (160×600)',
     alt:'Feeling lucky? Block jackpots, prize draws, streak rewards and a monthly lottery' },
-  { file:'/promo/grinium-privacy-300x250.svg', size:'300×250', placement:'sidebar',
-    name:'GRINIUM promo — Anonymous mining (sidebar 300×250)', link:'/payment-history.html',
+  { file:'/promo/grinium-privacy-160x600.svg',    size:'160×600', placement:'sidebar',
+    name:'GRINIUM rail — Anonymous (160×600)',
     alt:'Mine anonymously — no accounts, no emails, Tor payouts' },
-  { file:'/promo/grinium-donate-728x90.svg',   size:'728×90',  placement:'footer',
-    name:'GRINIUM promo — Donate (footer 728×90)', link:'/donate.html',
+  { file:'/promo/grinium-fortune-300x250.svg',    size:'300×250', placement:'in-content',
+    name:'GRINIUM promo — Fortune board (in-content 300×250)',
+    alt:'Feeling lucky? Block jackpots, prize draws, streak rewards and a monthly lottery' },
+  { file:'/promo/grinium-privacy-300x250.svg',    size:'300×250', placement:'in-content',
+    name:'GRINIUM promo — Anonymous mining (in-content 300×250)',
+    alt:'Mine anonymously — no accounts, no emails, Tor payouts' },
+  { file:'/promo/grinium-donate-728x90.svg',      size:'728×90',  placement:'footer',
+    name:'GRINIUM promo — Donate (footer 728×90)',
     alt:'Keep the reactor running — donate GRIN and join the donor wall' }
-];
+].map(s => ({ ...s, link: '#' }));
 
 function syncPlacement() {
   const spec = PLACEMENT_SPEC[document.getElementById('ad-placement').value] || PLACEMENT_SPEC.header;
@@ -291,7 +397,12 @@ function updatePreview() {
   const box = document.getElementById('img-preview');
   const img = document.getElementById('preview-img');
   const meta = document.getElementById('preview-meta');
-  if (!url) { box.style.display = 'none'; img.removeAttribute('src'); return; }
+  // syncPlacement() calls this on every placement change — a stale image URL left in
+  // the field must not surface a banner preview while a text/code type is selected.
+  if (document.getElementById('ad-type').value !== 'banner') {
+    box.style.display = 'none'; refreshPreviewPanel(); return;
+  }
+  if (!url) { box.style.display = 'none'; img.removeAttribute('src'); refreshPreviewPanel(); return; }
   const spec = PLACEMENT_SPEC[document.getElementById('ad-placement').value] || PLACEMENT_SPEC.header;
   const extMatch = url.split('?')[0].split('#')[0].match(/\.([a-z0-9]+)$/i);
   const ext = extMatch ? extMatch[1].toUpperCase() : '?';
@@ -306,6 +417,7 @@ function updatePreview() {
   meta.textContent = 'loading…';
   img.src = url;
   box.style.display = '';
+  refreshPreviewPanel();
 }
 
 // Upload a local file via the shared CMS media endpoint (multer-validated, stored in
@@ -380,7 +492,50 @@ function fmtWindow(a) {
 function syncType() {
   const t = document.getElementById('ad-type').value;
   document.getElementById('banner-fields').style.display = t === 'banner' ? '' : 'none';
+  document.getElementById('text-fields').style.display   = t === 'text' ? '' : 'none';
   document.getElementById('code-fields').style.display   = t === 'code' ? '' : 'none';
+  // The size/file-type spec box only makes sense for image banners.
+  document.getElementById('placement-spec').style.display = t === 'banner' ? '' : 'none';
+  // Refresh whichever preview belongs to the new type; the other one is hidden by
+  // its own updater / by refreshPreviewPanel.
+  if (t === 'banner') updatePreview();
+  else document.getElementById('img-preview').style.display = 'none';
+  if (t === 'text') updateTextPreview();
+  else document.getElementById('text-preview').style.display = 'none';
+  refreshPreviewPanel();
+}
+
+// Decide what the preview panel below Save shows: the banner image, the composed text
+// card, or a hint telling the operator what is still missing (code snippets can't be
+// previewed here — they're rendered by the ad network on the public page).
+function refreshPreviewPanel() {
+  const t = document.getElementById('ad-type').value;
+  const imgOn  = t === 'banner' && document.getElementById('img-preview').style.display !== 'none';
+  const textOn = t === 'text'   && document.getElementById('text-preview').style.display !== 'none';
+  const hint = document.getElementById('preview-hint');
+  const sub  = document.getElementById('preview-sub');
+  let msg = '';
+  if (t === 'banner' && !imgOn) msg = 'Add an image URL (or upload a file) to preview the banner.';
+  else if (t === 'text' && !textOn) msg = 'Type a headline, body line or button label to preview the card.';
+  else if (t === 'code') msg = 'Code snippets are rendered by the ad network and are not executed here — check the placement on the public page after saving.';
+  hint.textContent = msg;
+  hint.style.display = msg ? '' : 'none';
+  const place = PLACEMENT_LABEL[document.getElementById('ad-placement').value] || '';
+  sub.textContent = place ? `— ${place} placement, ${t} ad` : '';
+}
+
+// Live preview of the composed text card (headline + body + CTA).
+function updateTextPreview() {
+  const head = document.getElementById('ad-headline').value.trim();
+  const body = document.getElementById('ad-body').value.trim();
+  const cta  = document.getElementById('ad-cta').value.trim();
+  const box  = document.getElementById('text-preview');
+  if (!head && !body && !cta) { box.style.display = 'none'; refreshPreviewPanel(); return; }
+  document.getElementById('tp-head').textContent = head;
+  document.getElementById('tp-body').textContent = body;
+  document.getElementById('tp-cta').textContent  = cta;
+  box.style.display = '';
+  refreshPreviewPanel();
 }
 
 function flash(msg, isErr) {
@@ -400,6 +555,11 @@ function resetForm() {
   document.getElementById('ad-link').value = '';
   document.getElementById('ad-alt').value = '';
   document.getElementById('ad-code').value = '';
+  document.getElementById('ad-headline').value = '';
+  document.getElementById('ad-body').value = '';
+  document.getElementById('ad-cta').value = '';
+  document.getElementById('ad-text-link').value = '';
+  document.getElementById('text-preview').style.display = 'none';
   document.getElementById('ad-notes').value = '';
   document.getElementById('ad-weight').value = '0';
   document.getElementById('ad-start').value = '';
@@ -433,10 +593,7 @@ async function loadAds() {
     const d = await API.get('/api/admin/ads');
     if (!d || d.error) throw new Error(d && d.error ? d.error : 'Failed to load ads');
     _ads = d.ads || [];
-    if (d.rotate_ms > 0) {
-      document.getElementById('rotate-secs').value = Math.round(d.rotate_ms / 1000);
-      document.getElementById('rotate-now').textContent = Math.round(d.rotate_ms / 1000);
-    }
+    applyConfig(d.config);
     renderTable();
   } catch (err) {
     tbody.innerHTML = `<tr class="empty-row"><td colspan="9">Error: ${escHtml(err.message)}</td></tr>`;
@@ -457,6 +614,8 @@ function renderTable() {
       <tr>
         <td>${a.ad_type === 'banner' && a.image_url
               ? `<img class="ad-thumb" src="${escHtml(a.image_url)}" alt="" loading="lazy" onerror="this.outerHTML='<span class=&quot;ad-thumb-code&quot;>broken img</span>'">`
+              : a.ad_type === 'text'
+              ? `<span class="ad-thumb-code" title="${escHtml(a.headline || '')}">“${escHtml((a.headline || 'text ad').slice(0, 18))}”</span>`
               : '<span class="ad-thumb-code">&lt;/&gt; code</span>'}</td>
         <td>${escHtml(a.name)}${a.notes ? `<span class="notes-flag" title="${escHtml(a.notes)}">📝</span>` : ''}</td>
         <td>${escHtml(PLACEMENT_LABEL[a.placement] || a.placement)}</td>
@@ -466,10 +625,12 @@ function renderTable() {
         <td>${escHtml(fmtWindow(a))}</td>
         <td class="stats-cell">${escHtml(fmtStats(a))}</td>
         <td>
-          <button class="btn btn-sm btn-outline" onclick="editAd(${a.id})">Edit</button>
-          <button class="btn btn-sm btn-outline" onclick="duplicateAd(${a.id})">Copy</button>
-          <button class="btn btn-sm btn-outline" onclick="toggleAd(${a.id})">${a.is_active ? 'Turn off' : 'Turn on'}</button>
-          <button class="btn btn-sm" onclick="deleteAd(${a.id})">Delete</button>
+          <div class="row-actions">
+            <button class="btn-icon" onclick="editAd(${a.id})" data-tip="Edit this ad" aria-label="Edit this ad">✏️</button>
+            <button class="btn-icon" onclick="duplicateAd(${a.id})" data-tip="Duplicate as a new ad" aria-label="Duplicate as a new ad">📋</button>
+            <button class="btn-icon" onclick="toggleAd(${a.id})" data-tip="${a.is_active ? 'Turn off (stop showing it)' : 'Turn on (start showing it)'}" aria-label="${a.is_active ? 'Turn off' : 'Turn on'}">${a.is_active ? '⏸️' : '▶️'}</button>
+            <button class="btn-icon btn-icon-danger" onclick="deleteAd(${a.id})" data-tip="Delete this ad" aria-label="Delete this ad">🗑️</button>
+          </div>
         </td>
       </tr>`;
   }).join('');
@@ -497,8 +658,12 @@ function duplicateAd(id) {
   document.getElementById('ad-type').value = a.ad_type || 'banner';
   document.getElementById('ad-image').value = a.image_url || '';
   document.getElementById('ad-link').value = a.link_url || '';
+  document.getElementById('ad-text-link').value = a.link_url || '';
   document.getElementById('ad-alt').value = a.alt_text || '';
   document.getElementById('ad-code').value = a.html_code || '';
+  document.getElementById('ad-headline').value = a.headline || '';
+  document.getElementById('ad-body').value = a.body_text || '';
+  document.getElementById('ad-cta').value = a.cta_label || '';
   document.getElementById('ad-notes').value = a.notes || '';
   document.getElementById('ad-weight').value = a.weight != null ? a.weight : 0;
   document.getElementById('form-title').textContent = `New ad (copy of #${a.id})`;
@@ -507,14 +672,36 @@ function duplicateAd(id) {
   document.getElementById('ad-form-card').scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
-async function saveRotate() {
-  const s = parseInt(document.getElementById('rotate-secs').value, 10);
-  if (!Number.isInteger(s) || s < 2 || s > 60) { flash('Rotation interval must be 2–60 seconds.', true); return; }
+// Reflect the stored render settings into the toolbar controls.
+function applyConfig(c) {
+  if (!c) return;
+  if (c.rotate_ms > 0) {
+    document.getElementById('rotate-secs').value = Math.round(c.rotate_ms / 1000);
+    document.getElementById('rotate-now').textContent = Math.round(c.rotate_ms / 1000);
+  }
+  if (c.sidebar_mode) document.getElementById('sidebar-mode').value = c.sidebar_mode;
+  if (c.rail_show_ms > 0) document.getElementById('rail-show-secs').value = Math.round(c.rail_show_ms / 1000);
+  if (typeof c.rail_hide_ms === 'number') document.getElementById('rail-hide-secs').value = Math.round(c.rail_hide_ms / 1000);
+}
+
+// One save for every public render setting (rotation + sidebar rail layout).
+async function saveAdsConfig() {
+  const rotate = parseInt(document.getElementById('rotate-secs').value, 10);
+  const show   = parseInt(document.getElementById('rail-show-secs').value, 10);
+  const hide   = parseInt(document.getElementById('rail-hide-secs').value, 10);
+  if (!Number.isInteger(rotate) || rotate < 2 || rotate > 60) { flash('Rotation interval must be 2–60 seconds.', true); return; }
+  if (!Number.isInteger(show) || show < 3 || show > 120) { flash('Rail show time must be 3–120 seconds.', true); return; }
+  if (!Number.isInteger(hide) || hide < 0 || hide > 600) { flash('Rail tuck time must be 0–600 seconds (0 = never tuck).', true); return; }
   try {
-    const r = await API.post('/api/admin/ads-config', { rotate_ms: s * 1000 });
+    const r = await API.post('/api/admin/ads-config', {
+      rotate_ms: rotate * 1000,
+      sidebar_mode: document.getElementById('sidebar-mode').value,
+      rail_show_ms: show * 1000,
+      rail_hide_ms: hide * 1000
+    });
     if (!r || r.error) throw new Error(r && r.error ? r.error : 'Save failed');
-    document.getElementById('rotate-now').textContent = Math.round(r.rotate_ms / 1000);
-    flash(`Rotation set to ${Math.round(r.rotate_ms / 1000)} s (public pages pick it up within ~1 min).`, false);
+    applyConfig(r.config);
+    flash('Ad layout saved (public pages pick it up within ~1 min).', false);
   } catch (err) { flash(err.message, true); }
 }
 
@@ -527,8 +714,12 @@ function editAd(id) {
   document.getElementById('ad-type').value = a.ad_type || 'banner';
   document.getElementById('ad-image').value = a.image_url || '';
   document.getElementById('ad-link').value = a.link_url || '';
+  document.getElementById('ad-text-link').value = a.link_url || '';
   document.getElementById('ad-alt').value = a.alt_text || '';
   document.getElementById('ad-code').value = a.html_code || '';
+  document.getElementById('ad-headline').value = a.headline || '';
+  document.getElementById('ad-body').value = a.body_text || '';
+  document.getElementById('ad-cta').value = a.cta_label || '';
   document.getElementById('ad-notes').value = a.notes || '';
   document.getElementById('ad-weight').value = a.weight != null ? a.weight : 0;
   document.getElementById('ad-start').value = toLocalInput(a.start_at);
@@ -543,14 +734,23 @@ function editAd(id) {
 
 async function submitAd() {
   const id = document.getElementById('ad-id').value;
+  const type = document.getElementById('ad-type').value;
+  // The click-through comes from the banner Link field or the text-card Link field
+  // depending on the ad type.
+  const linkUrl = (type === 'text'
+    ? document.getElementById('ad-text-link').value
+    : document.getElementById('ad-link').value).trim();
   const body = {
     name: document.getElementById('ad-name').value.trim(),
     placement: document.getElementById('ad-placement').value,
-    ad_type: document.getElementById('ad-type').value,
+    ad_type: type,
     image_url: document.getElementById('ad-image').value.trim(),
-    link_url: document.getElementById('ad-link').value.trim(),
+    link_url: linkUrl,
     alt_text: document.getElementById('ad-alt').value.trim(),
     html_code: document.getElementById('ad-code').value,
+    headline: document.getElementById('ad-headline').value.trim(),
+    body_text: document.getElementById('ad-body').value.trim(),
+    cta_label: document.getElementById('ad-cta').value.trim(),
     notes: document.getElementById('ad-notes').value.trim(),
     weight: parseInt(document.getElementById('ad-weight').value, 10) || 0,
     start_at: fromLocalInput(document.getElementById('ad-start').value),

@@ -23,7 +23,9 @@
         <button class="btn btn-sm btn-outline" id="revoke-btn" onclick="revokeSessions()">Revoke all my sessions</button>
         <span class="success-msg" id="revoke-msg" style="display:none;margin-left:.6rem;"></span>
       </div>
-      <div class="card" style="padding:0;margin-bottom:1.6rem;">
+      <!-- No bottom margin on the card: AdminTable inserts the pager directly after it,
+           so the gap belongs below the pager (on the paragraph), not above it. -->
+      <div class="card" style="padding:0;">
         <div class="table-wrap">
           <table>
             <thead>
@@ -36,7 +38,7 @@
         </div>
       </div>
 
-      <p style="font-size:.82rem;color:var(--text-dim);margin:.4rem 0 0;">
+      <p style="font-size:.82rem;color:var(--text-dim);margin:1.6rem 0 0;">
         This pool uses address-as-identity — miners have no accounts. To manage a mining
         address (balance, ban/unban, balance injection on testnet) use the
         <a href="miners.html">Miners</a> page.
@@ -66,27 +68,38 @@ const LOGIN_LABEL = {
   ip_autoban:    ['badge-error', 'IP auto-banned'],
   logout:        ['badge-dim',   'Logout'],
 };
+// Searched/paged by AdminTable (admin-shell.js): 20 rows a page, filter across every
+// column, and the retention sentence is filled from Settings → Database at load.
+const loginTable = AdminTable.create({
+  tbody: 'login-tbody',
+  search: 'Filter by user, IP or event…',
+  empty: 'No login activity recorded.',
+  note: 'Part of the admin audit trail — kept {days} days, then pruned ' +
+        '(<a href="/admin/settings-database.html">change</a>). Newest 200 events shown.',
+  retentionKey: 'audit_log_keep_days',
+  retentionDefault: 180,
+  // Explicit search text: the row's badge label ("Failed login") is what an operator
+  // types, not the raw action key, so both are indexed.
+  text: r => [r.username, r.ip, r.action, (LOGIN_LABEL[r.action] || [])[1],
+              r.created_at ? new Date(r.created_at * 1000).toLocaleString() : ''].join(' '),
+  row: r => {
+    const [cls, label] = LOGIN_LABEL[r.action] || ['badge-dim', r.action];
+    const when = r.created_at ? new Date(r.created_at * 1000).toLocaleString() : '—';
+    return `<tr>
+      <td>${escHtml(when)}</td>
+      <td><span class="badge ${cls}">${escHtml(label)}</span></td>
+      <td>${escHtml(r.username || '—')}</td>
+      <td class="mono">${escHtml(r.ip || '—')}</td>
+    </tr>`;
+  }
+});
+
 async function loadLoginHistory() {
-  const tbody = document.getElementById('login-tbody');
   try {
-    const d = await API.get('/api/admin/security/login-history');
-    const rows = (d && d.history) || [];
-    if (!rows.length) {
-      tbody.innerHTML = '<tr class="empty-row"><td colspan="4">No login activity recorded.</td></tr>';
-      return;
-    }
-    tbody.innerHTML = rows.map(r => {
-      const [cls, label] = LOGIN_LABEL[r.action] || ['badge-dim', r.action];
-      const when = r.created_at ? new Date(r.created_at * 1000).toLocaleString() : '—';
-      return `<tr>
-        <td>${escHtml(when)}</td>
-        <td><span class="badge ${cls}">${escHtml(label)}</span></td>
-        <td>${escHtml(r.username || '—')}</td>
-        <td class="mono">${escHtml(r.ip || '—')}</td>
-      </tr>`;
-    }).join('');
+    const d = await API.get('/api/admin/security/login-history?limit=200');
+    loginTable.setRows((d && d.history) || []);
   } catch (err) {
-    tbody.innerHTML = `<tr class="empty-row"><td colspan="4">Error: ${escHtml(err.message)}</td></tr>`;
+    loginTable.setError(err.message);
   }
 }
 

@@ -80,15 +80,25 @@
     <link rel="icon" type="image/svg+xml" href="/images/favicon.svg">
     <link rel="apple-touch-icon" href="/images/apple-touch-icon.svg">
     <link rel="manifest" href="/manifest.json">
-    <link rel="alternate" type="application/rss+xml" href="/feed.xml">
+    <!-- The blog feed is served at /blog/rss.xml (index.js), and that is the only RSS
+         path nginx proxies to the backend. /feed.xml was never routed — it 404'd. -->
+    <link rel="alternate" type="application/rss+xml" title="Blog" href="/blog/rss.xml">
     <link rel="stylesheet" href="/css/dashboard.css">
     <link rel="stylesheet" href="/css/themes.css">
     <link rel="stylesheet" href="/css/reactor.css">
 </head>
 <body>
+  <noscript>
+    <div class="noscript-note">
+      <b>JavaScript is required.</b> This site builds its navigation and loads its live
+      figures in the browser, so with scripts blocked the page stays empty. Enable
+      JavaScript for this site to use it. The pool's data is also available as plain
+      JSON over its <a href="/api-docs.html">public API</a> if you would rather not.
+    </div>
+  </noscript>
     <!-- header injected by /js/public-shell.js (brand logo keeps its swing) -->
 
-    <div class="wrap">
+    <main class="wrap" id="main" tabindex="-1">
         <!-- Sidebar ad slot (filled by /js/ads.js; floats right on wide screens, hidden if empty) -->
         <div class="ad-slot ad-slot--sidebar" data-ad-slot="sidebar" style="display:none;"></div>
 
@@ -292,12 +302,17 @@
                                     <span><i class="l-online"></i> online — miners active</span>
                                     <span><i class="l-idle"></i> idle — ready, no miners yet</span>
                                     <span><i class="l-down"></i> offline — gateway unreachable</span>
+                                    <span><i class="l-checking"></i> checking — verifying now</span>
                                 </div>
                                 <p class="rgn-note">
                                     Connect to any <b class="c-ok">green</b> or <b class="c-info">blue</b>
                                     region — blue only means it is up and ready with no miners on it yet,
                                     not broken. A <b class="c-bad">red</b> region is temporarily unreachable,
-                                    so just pick another. Your rewards are identical on every region, so
+                                    so just pick another. A pulsing <b>grey</b> region is still being
+                                    checked and settles into its real colour within a few seconds.
+                                    Every colour is measured live — we dial each region&rsquo;s stratum
+                                    port ourselves, so blue really does mean a miner can connect.
+                                    Your rewards are identical on every region, so
                                     choose the one nearest you for the lowest stale-share rate.
                                 </p>
                             </details>
@@ -330,12 +345,23 @@
                  click in the way. The Pool 1 field still follows the patch-bay selection:
                  rx-guide-uri is written by id, so its DOM position is irrelevant. The mock
                  is a theme-native HTML render of an ASIC web panel (iPollo-style), NOT a
-                 screenshot, so the live host stays real and it follows every theme. -->
+                 screenshot, so the live host stays real and it follows every theme.
+                 Layout (2026-07-25): the numbered steps are a 1:1 index of the mock's three
+                 input rows and nothing else, so they sit beside it. Reaching the web panel
+                 and saving/backup pools are bookends, not fields — unnumbered .mguide-note
+                 lines running full width above and below. That also fills the ~200px dead
+                 band the 4-row mock used to leave beside a five-step column. -->
             <div class="deck-row">
                 <div class="panel"><span class="screws"></span>
                     <h2 class="panel-title"><span class="tag">P-05b</span> Miner setup — what to type into your ASIC</h2>
                     <div class="panel-body">
                         <div class="mguide-cols" id="rx-miner-guide">
+                            <!-- Unnumbered on purpose: this is how you reach the form, not one of its
+                                 fields. The numbers below count the rows of the mock, so nothing that is
+                                 not a row of the mock may take one. -->
+                            <p class="mguide-note mguide-span">Open your miner&rsquo;s web panel (its IP address
+                                in a browser) → <b>Miners → Pool Configuration</b> (iPollo shown; other vendors
+                                are similar), then fill in the three fields below.</p>
                             <div class="mform" aria-label="Example pool configuration form as shown in an ASIC miner web panel">
                                 <div class="mform-head">Pool Setting <span class="mform-crumb">Miners → Pool Configuration</span></div>
                                 <div class="mform-row"><span class="mform-k">Select Coin</span><span class="mform-val">GRIN</span></div>
@@ -343,25 +369,26 @@
                                 <div class="mform-row"><span class="mform-k">Pool1 worker</span><span class="mform-val">&lt;your_grin_address&gt;.rig1</span></div>
                                 <div class="mform-row"><span class="mform-k">Pool1 password</span><span class="mform-val">&lt;your_own_password&gt;</span></div>
                             </div>
+                            <!-- 1-2-3 = the three fields you actually type into, in mock order. -->
                             <ol class="mguide-steps">
-                                <li>Open your miner&rsquo;s web panel (type its IP address into a browser) and go to
-                                    <b>Miners → Pool Configuration</b> — iPollo shown; other vendors name the menu similarly.</li>
-                                <li><b>Pool 1</b> — the endpoint from the patch bay above; it updates as you pick a
-                                    region. If your firmware rejects a bare <code>host:port</code>, prefix it with
-                                    <code>stratum+tcp://</code>. Algorithm: <b>Cuckatoo32</b> (GRIN).</li>
-                                <li><b>Worker</b> — your Grin address; it <b>is</b> your login, no account or registration
-                                    needed. Add an optional <code>.rig1</code> to name this machine (lowercase
-                                    letters/digits/<code>-</code>/<code>_</code>, max 25 chars — longer names are
-                                    shortened automatically, never rejected).</li>
-                                <li><b>Password</b> — pick your own private password or random text (4+ characters;
-                                    not defaults like <code>x</code> or <code>123</code>) and use the same one on all
-                                    your rigs. It doubles as your <b>ownership proof</b> on the account page — payouts
-                                    can be verified with either it or a recent mining IP, so a real password here
-                                    means you can always withdraw even if your IP changes.</li>
-                                <li>Optionally set <b>Pool 2 / Pool 3</b> to other green or blue regions as automatic
-                                    backups, then save — the miner reconnects and accepted shares should appear within
-                                    a few minutes.</li>
+                                <li><b>Pool 1</b> — the endpoint from the patch bay above (updates as you pick a
+                                    region). Algorithm: <b>Cuckatoo32</b> (GRIN). If your firmware rejects a bare
+                                    <code>host:port</code>, prefix it with <code>stratum+tcp://</code>.</li>
+                                <li><b>Worker</b> — your Grin address; it <b>is</b> your login, no signup. Optionally
+                                    add <code>.rig1</code> to name the machine (lowercase letters/digits/<code>-</code>/<code>_</code>,
+                                    max 25 chars — longer names are trimmed, never rejected).</li>
+                                <li><b>Password</b> — <b>choose a strong, private password</b> (8+ chars; never
+                                    <code>x</code>, <code>xxxx</code>, <code>123</code> or firmware defaults —
+                                    one repeated character is rejected). This is your
+                                    <b>ownership proof</b> for withdrawals, so treat it like a key.
+                                    <b>Use the same password on every rig</b> under this address — any of them can
+                                    then prove ownership, and a real password means you can always withdraw even if
+                                    your IP changes.</li>
                             </ol>
+                            <!-- Also unnumbered: this happens after the form is filled in. -->
+                            <p class="mguide-note mguide-span">Optionally point <b>Pool 2 / Pool 3</b> at other green
+                                or blue regions as automatic backups, then save — accepted shares should appear
+                                within a few minutes.</p>
                         </div>
                     </div>
                 </div>
@@ -408,13 +435,19 @@
                         <!-- No "Website" row here: website_link points at this very site, so on the
                              homepage it renders a link back to the page you are already on. -->
                         <li style="display:none" data-brand="social-nostr"><a data-brand="social-nostr" href="#" rel="noopener" target="_blank">Nostr</a></li>
-                        <li id="info-no-contact">Contact channels are configured by the operator (admin → Branding → Social links)</li>
+                        <!-- No "no contact channels configured" row here. It used to read
+                             "Contact channels are configured by the operator (admin → Branding
+                             → Social links)" — an ADMIN instruction rendered to public visitors
+                             whenever the operator had set none, and (because loadInfoContact's
+                             catch deliberately keeps the note) also on any transient failure of
+                             /api/public/branding. A visitor can do nothing with that sentence, so
+                             the rows above simply stand alone when there is nothing to show. -->
                     </ul>
                 </div>
             </div>
 
         </div>
-    </div>
+    </main>
 
     <!-- footer injected by /js/public-shell.js -->
 

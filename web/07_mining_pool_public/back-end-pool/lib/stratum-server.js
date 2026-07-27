@@ -23,6 +23,7 @@ const {
 const ShareValidator = require('./shares');
 const MinerManager = require('./miners');
 const IncentivesManager = require('./incentives');
+const { PASS_MAX } = require('./owner-proof');
 
 // How many old job IDs remain valid for submit (avoids instant stale on slow networks)
 const JOB_WINDOW = 10;
@@ -423,10 +424,17 @@ class StratumServer {
     // Stratum password — kept in the in-memory session only, and hashed into the address's
     // ownership-proof window on the session's first ACCEPTED share (owner-proof.js decides
     // whether it is usable; factory defaults like "x" are never captured). Never logged.
-    const pass = params && typeof params === 'object'
+    //
+    // Retention cap: ASIC firmware password fields are often unbounded (a G1 Mini accepts 54k+
+    // chars), and MAX_LINE_BYTES lets ~16 KB of that through per login. Anything over PASS_MAX
+    // can never be usable proof, so holding it for the life of the session is pure waste. Slice
+    // to PASS_MAX + 1 — one char PAST the limit, so an over-long password is still correctly
+    // REJECTED as too long rather than silently truncated into something that validates.
+    const rawPass = params && typeof params === 'object'
       ? (typeof params.pass === 'string' ? params.pass
         : (Array.isArray(params) && typeof params[1] === 'string' ? params[1] : ''))
       : '';
+    const pass = rawPass.length > PASS_MAX ? rawPass.slice(0, PASS_MAX + 1) : rawPass;
 
     const parsed = validateUsername(login);
     if (!parsed) {

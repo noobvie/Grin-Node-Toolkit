@@ -5,31 +5,17 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta http-equiv="X-UA-Compatible" content="IE=edge">
-  <meta name="robots" content="index, follow, max-snippet:-1">
+  <!-- This is the OPERATOR's admin portal, not a public page. It used to carry
+       "index, follow" plus a canonical, an og:image and a Twitter card — i.e. it
+       actively invited search engines to list the pool's admin login and asked social
+       platforms to render a preview card for it. None of that serves a visitor, and an
+       indexed admin login is free reconnaissance. noindex/nofollow, no canonical, no
+       social cards; it is reached by typing the URL or via /admin. -->
+  <meta name="robots" content="noindex, nofollow">
   <meta name="language" content="English">
   <meta name="author" content="GRINIUM Mining Pool">
 
-  <!-- ===== DESCRIPTION & KEYWORDS ===== -->
-  <title>Admin Portal Login | GRINIUM Mining Pool Dashboard</title>
-  <meta name="description" content="Secure admin login portal for GRINIUM mining pool. Access your dashboard, manage account settings, monitor mining statistics, and view withdrawal history.">
-  <meta name="keywords" content="mining pool login, admin dashboard, account management, mining statistics, pool management">
-
-  <!-- ===== OPEN GRAPH ===== -->
-  <meta property="og:type" content="website">
-  <meta property="og:title" content="GRINIUM Mining Pool — Admin Login">
-  <meta property="og:description" content="Secure admin access to mining pool dashboard and account management">
-  <meta property="og:url" content="https://pool.grin.money/login.html">
-  <meta property="og:site_name" content="GRINIUM Mining Pool">
-  <meta property="og:image" content="https://pool.grin.money/images/og-login.svg">
-
-  <!-- ===== TWITTER CARD ===== -->
-  <meta name="twitter:card" content="summary">
-  <meta name="twitter:title" content="GRINIUM Admin Portal">
-  <meta name="twitter:description" content="Secure mining pool login and dashboard access">
-  <meta name="twitter:domain" content="pool.grin.money">
-
-  <!-- ===== CANONICAL ===== -->
-  <link rel="canonical" href="https://pool.grin.money/login.html">
+  <title>Admin Login | GRINIUM Mining Pool</title>
 
   <!-- ===== ADDITIONAL SEO ===== -->
   <meta name="theme-color" content="#080b07">
@@ -227,6 +213,40 @@
       text-decoration: underline;
     }
 
+    /* Link-looking BUTTON. Every in-page action here used to be an <a onclick> with no
+       href — which is not focusable, not reachable by Tab, and not activated by Enter,
+       so "Register here", both captcha refreshers and the TOTP back-link were dead to
+       anyone not using a mouse. They are <button type="button"> now; this class undoes
+       the full-width gradient of the bare `button` rule above so they still read as links.
+       type="button" is load-bearing: these sit inside <form>, and a typeless button
+       defaults to submit — clicking "Register here" would have submitted the login form. */
+    .linkbtn {
+      width: auto;
+      padding: 0;
+      margin: 0;
+      background: none;
+      border: none;
+      border-radius: 0;
+      font: inherit;
+      font-weight: 600;
+      color: var(--primary);
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+    .linkbtn:hover { opacity: 0.8; text-decoration: underline; }
+    .linkbtn:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; border-radius: 3px; }
+
+    /* Captcha question + its refresh control. The refresh used to live INSIDE the
+       <label for="captcha-answer">, which is invalid (a label may not wrap another
+       interactive control) and made a click on it also forward focus to the input.
+       Side by side in a flex row instead, so the label labels only its field. */
+    .label-row {
+      display: flex; align-items: baseline; justify-content: space-between; gap: .75rem;
+      margin-bottom: 0.5rem;
+    }
+    .label-row label { margin-bottom: 0; }
+    .label-row .linkbtn { font-weight: 400; white-space: nowrap; }
+
     .loading {
       display: inline-block;
       width: 16px;
@@ -277,16 +297,16 @@
           <input type="password" id="password" name="password" placeholder="Enter admin password" required>
         </div>
         <div class="form-group">
-          <label for="captcha-answer">
-            <span id="captcha-question">Loading verification…</span>
-            <a onclick="loadCaptcha('login')" style="float:right;font-weight:400;cursor:pointer;color:var(--primary);">↻ new</a>
-          </label>
+          <div class="label-row">
+            <label for="captcha-answer" id="captcha-question">Loading verification…</label>
+            <button type="button" class="linkbtn" onclick="loadCaptcha('login')">↻ new</button>
+          </div>
           <input type="text" id="captcha-answer" name="captcha-answer" inputmode="numeric" autocomplete="off" placeholder="Answer" required>
         </div>
         <button type="submit" id="login-btn">Login</button>
       </form>
       <div class="register-link">
-        New admin? <a onclick="toggleRegister(event)">Register here</a>
+        New admin? <button type="button" class="linkbtn" onclick="toggleRegister(event)">Register here</button>
       </div>
     </div>
 
@@ -305,16 +325,16 @@
           <input type="password" id="reg-password-confirm" name="password-confirm" placeholder="Re-enter password" required>
         </div>
         <div class="form-group">
-          <label for="reg-captcha-answer">
-            <span id="reg-captcha-question">Loading verification…</span>
-            <a onclick="loadCaptcha('register')" style="float:right;font-weight:400;cursor:pointer;color:var(--primary);">↻ new</a>
-          </label>
+          <div class="label-row">
+            <label for="reg-captcha-answer" id="reg-captcha-question">Loading verification…</label>
+            <button type="button" class="linkbtn" onclick="loadCaptcha('register')">↻ new</button>
+          </div>
           <input type="text" id="reg-captcha-answer" name="captcha-answer" inputmode="numeric" autocomplete="off" placeholder="Answer" required>
         </div>
         <button type="submit" id="register-btn">Create Admin Account</button>
       </form>
       <div class="register-link">
-        Already have account? <a onclick="toggleRegister(event)">Login</a>
+        Already have account? <button type="button" class="linkbtn" onclick="toggleRegister(event)">Login</button>
       </div>
     </div>
 
@@ -331,8 +351,14 @@
         <button type="submit" id="totp-btn">Verify</button>
       </form>
       <div class="register-link">
-        <a onclick="cancelTotp(event)">← Back to login</a>
+        <button type="button" class="linkbtn" onclick="cancelTotp(event)">← Back to login</button>
       </div>
+    </div>
+
+    <!-- This page ships no header/footer (it deliberately skips public-shell.js), so
+         without this there was no way back to the pool from here except editing the URL. -->
+    <div class="register-link">
+      <a href="/">← Back to the pool</a>
     </div>
   </div>
   </div>

@@ -26,8 +26,9 @@
     </div>
 
     <!-- Create / edit form -->
+    <h2 data-sec="Write a page">Write a page</h2>
     <div class="card">
-      <h3 id="form-title" style="margin:0 0 1rem;">New page</h3>
+      <h3 class="sub-title" id="form-title">New page</h3>
       <input type="hidden" id="page-id">
 
       <div class="form-row">
@@ -169,9 +170,11 @@ async function loadPages() {
         <td>${escHtml(NAV_LABEL[p.nav_location] || p.nav_location)}</td>
         <td>${p.is_published ? '<span class="badge badge-ok">Live</span>' : '<span class="badge badge-dim">Draft</span>'}</td>
         <td>
-          <a class="btn btn-sm btn-outline" href="/page.html?p=${encodeURIComponent(p.slug)}" target="_blank" rel="noopener">View</a>
-          <button class="btn btn-sm btn-outline" onclick="editPage(${p.id})">Edit</button>
-          <button class="btn btn-sm" onclick="deletePage(${p.id})">Delete</button>
+          <div class="row-actions">
+            <a class="btn-icon" href="/page.html?p=${encodeURIComponent(p.slug)}" target="_blank" rel="noopener" data-tip="View the live page" aria-label="View the live page">👁️</a>
+            <button class="btn-icon" onclick="editPage(${p.id})" data-tip="Edit this page" aria-label="Edit this page">✏️</button>
+            <button class="btn-icon btn-icon-danger" onclick="deletePage(${p.id})" data-tip="Delete this page" aria-label="Delete this page">🗑️</button>
+          </div>
         </td>
       </tr>`).join('');
   } catch (err) {

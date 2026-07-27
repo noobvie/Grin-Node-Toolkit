@@ -43,7 +43,10 @@
       { href: 'miners-stats.html',   label: 'Miners Stats',  icon: '📈' },
       { href: 'network-map.html',    label: 'Network Map',   icon: '🛰️' }
     ] },
-    { href: 'account-settings.html', label: 'My Stats',      icon: '👤' },
+    // "Account", not "My Stats": the page's <title> and <h1> both say Account, and it is
+    // where withdrawals happen — calling it "Stats" in the nav both misnamed the
+    // destination and undersold it. Every other item here is a plain noun too.
+    { href: 'account-settings.html', label: 'Account',       icon: '👤' },
     { href: 'blocks.html',           label: 'Blocks',        icon: '🧱' },
     { href: 'payment-history.html',  label: 'Payouts',       icon: '💸' },
     { href: 'fortune-board.html',    label: 'Fortune Board', icon: '🎁' }
@@ -243,8 +246,10 @@
   }
 
   // Sticky TESTNET banner so visitors never mistake test tGRIN for real coins. Idempotent;
-  // uses the existing .testnet-banner CSS (css/pool.css). Pushes the header down via the
-  // body.has-testnet-banner rule.
+  // styled by .testnet-banner in css/dashboard.css (NOT pool.css — that is the admin
+  // stylesheet and no public page loads it, which is why this banner rendered as bare
+  // unstyled text until 2026-07-26). Pushes the sticky header down by the banner height
+  // via the body.has-testnet-banner rule.
   function showTestnetBanner() {
     if (document.querySelector('.testnet-banner')) return;
     var b = document.createElement('div');
@@ -253,6 +258,15 @@
     b.textContent = '⚠ TESTNET — coins here are test tGRIN with no real value.';
     document.body.insertBefore(b, document.body.firstChild);
     document.body.classList.add('has-testnet-banner');
+    // Measure rather than trust the CSS default: this line wraps to two rows under about
+    // 480px, and a fixed 38px offset then let the sticky header ride up over the second
+    // row — hiding the warning on exactly the phones most likely to be a first visit.
+    var sync = function () {
+      document.documentElement.style.setProperty(
+        '--testnet-banner-h', b.offsetHeight + 'px');
+    };
+    sync();
+    window.addEventListener('resize', sync);
   }
 
   // Nav dropdown groups: desktop opens on :hover / :focus-within (pure CSS); touch and
@@ -288,11 +302,32 @@
     });
   }
 
+  // Skip-to-content link. It must be the FIRST focusable thing in the document, which is
+  // why it is injected here rather than per page: the nav below it is 6+ items on every
+  // page, and without this a keyboard or screen-reader user re-tabs the whole thing on
+  // every navigation. Visually hidden until focused (see .skip-link in dashboard.css).
+  // Target is #main — the <main> landmark each page now carries; it has tabindex="-1" so
+  // focus actually moves there rather than only the scroll position.
+  function skipLink() {
+    var a = document.createElement('a');
+    a.className = 'skip-link';
+    a.href = '#main';
+    a.textContent = 'Skip to content';
+    a.addEventListener('click', function () {
+      // Some browsers scroll to the anchor without focusing it; do it explicitly so the
+      // next Tab continues from the content, not from the top of the document.
+      var m = document.getElementById('main');
+      if (m) setTimeout(function () { m.focus(); }, 0);
+    });
+    return a;
+  }
+
   function mount() {
     // Remove any legacy hardcoded chrome a page might still carry (defensive —
     // converted pages ship none), then inject the canonical header/footer.
     document.querySelectorAll('body > header, body > footer').forEach(function (el) { el.remove(); });
     document.body.insertBefore(header, document.body.firstChild);
+    document.body.insertBefore(skipLink(), header);
     // Header ad slot directly after the header.
     header.insertAdjacentElement('afterend', adSlot('header'));
     // Footer ad slot directly before the footer.

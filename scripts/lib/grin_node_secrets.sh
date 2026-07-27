@@ -96,6 +96,307 @@ grin_node_secret_path() {
     [[ -f "$raw" ]] && printf '%s\n' "$raw" || printf '%s\n' "$default"
 }
 
+# ─── Persistent secret vault (/opt/grin/keys) ─────────────────────────────────
+# WHY: Script 01's generate_secrets() used to mint fresh secrets on EVERY build,
+# so a rebuild silently rotated the node's api/foreign secrets and broke every
+# consumer holding the VALUE (Script 04's nginx Basic-Auth header, GrinScan,
+# Tiny Explorer) until the timer below healed them. The vault makes the secrets
+# survive a rebuild: stored once, outside the node dir, restored into whatever
+# node dir the next build creates.
+#
+# Keyed by NETWORK, not by directory — a mainnet-prune → mainnet-full rebuild
+# MOVES the node dir, so keying by dir would hand out a new secret anyway and
+# defeat the whole point.
+#
+#   /opt/grin/keys/                  700 root:root
+#     mainnet/.api_secret            600 root:root
+#     mainnet/.foreign_api_secret
+#     testnet/…
+#
+# DIRECTION MATTERS. Restore (vault → node dir) happens ONLY at build time from
+# Script 01, while the node is down. It is deliberately NOT in the 5-min timer:
+# the node reads its secret at startup and holds it in memory, so rewriting the
+# file under a RUNNING node would leave file and node disagreeing and 401 every
+# consumer. The timer only ever CAPTURES (node dir → vault, see
+# grin_sync_vault_capture), which is always safe.
+GNS_VAULT_DIR="${GNS_VAULT_DIR:-/opt/grin/keys}"
+GNS_SECRET_FILES=(".api_secret" ".foreign_api_secret")
+
+# Counters set by grin_secret_vault_ensure so callers can report what happened.
+# They count FILES, not networks — the two secrets can take different paths, and
+# a caller that reports only the first outcome would hide a secret that actually
+# rotated. Always report a mixed result.
+GNS_VAULT_RESTORED=0   # value came from the vault (rebuild — secret preserved)
+GNS_VAULT_ADOPTED=0    # live secret existed, vault did not → vault seeded
+GNS_VAULT_CREATED=0    # nothing anywhere → fresh secret minted
+GNS_VAULT_WARNINGS=0   # vault writes that failed (node works; persistence lost)
+
+# 20-char alphanumeric secret — same alphabet/length Script 01 has always used.
+_gns_gen_secret() {
+    local s
+    s=$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 20 || true)
+    [[ ${#s} -eq 20 ]] || return 1
+    printf '%s' "$s"
+}
+
+_gns_vault_dir_for() {
+    case "${1:-}" in
+        mainnet|testnet) printf '%s/%s' "$GNS_VAULT_DIR" "$1" ;;
+        *) return 1 ;;
+    esac
+}
+
+# _gns_secret_sane <value> — reject values that cannot be a working secret.
+# This is a CORRUPTION filter, not a style rule: it catches a truncated-to-zero
+# file, binary garbage written over the secret, and a wrong file copied in
+# (e.g. a whole config). It deliberately does NOT require grin's own 20-char
+# alphanumeric shape — an operator may have set a custom secret, and rejecting
+# it here would make the adopt path REPLACE their working secret, which is far
+# worse than the corruption we are guarding against.
+# Note it cannot catch a partial write that still looks plausible (7 of 20
+# chars) — that is what the live-node probe below is for.
+_gns_secret_sane() {
+    local v="${1:-}"
+    [[ -n "$v" ]] || return 1
+    (( ${#v} >= 8 && ${#v} <= 128 )) || return 1
+    [[ "$v" =~ ^[[:print:]]+$ ]] || return 1
+    return 0
+}
+
+# Echo a secret's value, rc 1 when the file is missing, unreadable, blank or
+# fails the sanity filter. Every vault read goes through here, so garbage is
+# never restored, never adopted and never captured: a corrupt file simply falls
+# through to the next branch (adopt → generate) and gets replaced with a
+# working secret.
+_gns_read_secret() {
+    local f="${1:-}" v
+    [[ -f "$f" ]] || return 1
+    v=$(tr -d '[:space:]' < "$f" 2>/dev/null || true)
+    _gns_secret_sane "$v" || return 1
+    printf '%s' "$v"
+}
+
+# ─── Live-node verification ───────────────────────────────────────────────────
+# The node is the only authority on whether a secret is the RIGHT one: it read
+# the value at startup and holds it in memory, so a file that no longer matches
+# is rejected on the wire. This catches the corruption case _gns_secret_sane
+# cannot — a partial write that still looks like a plausible secret.
+_gns_node_api_port() {
+    case "${1:-}" in
+        mainnet) printf '3413'  ;;
+        testnet) printf '13413' ;;
+        *) return 1 ;;
+    esac
+}
+
+# <url> <method> <secret> → HTTP status on stdout ("000" = unreachable).
+_gns_api_call_code() {
+    local url="$1" method="$2" secret="$3" code
+    code=$(curl -s -o /dev/null -w '%{http_code}' --connect-timeout 2 --max-time 4 \
+           -u "grin:$secret" -H 'Content-Type: application/json' \
+           -d "{\"jsonrpc\":\"2.0\",\"method\":\"$method\",\"params\":[],\"id\":1}" \
+           "$url" 2>/dev/null || true)
+    [[ "$code" =~ ^[0-9]{3}$ ]] || code="000"
+    printf '%s' "$code"
+}
+
+# _gns_probe_secret <net> <owner|foreign> <secret>
+#   rc 0 = VERIFIED  — the node accepts it and demonstrably enforces auth
+#   rc 1 = REJECTED  — the node is up and refuses it (stale or corrupt file)
+#   rc 2 = UNKNOWN   — no curl, node down, or auth not enforced (see below)
+#
+# The control call is not optional. A node whose grin-server.toml has no
+# api_secret_path accepts ANY credential, so a 200 for the candidate proves
+# nothing on its own — verified in testing against a live node, where
+# `grin:bogus` returned a full get_status result. If a deliberately wrong
+# secret is NOT rejected, this probe cannot discriminate and must report
+# UNKNOWN rather than falsely confirming.
+_gns_probe_secret() {
+    local net="$1" which="$2" secret="$3" port url method code_ok code_ctl
+    command -v curl >/dev/null 2>&1 || return 2
+    port=$(_gns_node_api_port "$net") || return 2
+    if [[ "$which" == "owner" ]]; then
+        url="http://127.0.0.1:${port}/v2/owner";   method="get_status"
+    else
+        url="http://127.0.0.1:${port}/v2/foreign"; method="get_version"
+    fi
+
+    code_ok=$(_gns_api_call_code "$url" "$method" "$secret")
+    [[ "$code_ok" == "000" ]] && return 2
+    [[ "$code_ok" == "401" || "$code_ok" == "403" ]] && return 1
+    [[ "$code_ok" == "200" ]] || return 2
+
+    code_ctl=$(_gns_api_call_code "$url" "$method" "gnsCONTROLnotArealSecret")
+    [[ "$code_ctl" == "401" || "$code_ctl" == "403" ]] || return 2
+    return 0
+}
+
+# Write a secret into the VAULT (always root-owned 600).
+_gns_vault_put() {
+    local file="$1" val="$2"
+    mkdir -p "$(dirname "$file")" 2>/dev/null || return 1
+    printf '%s' "$val" > "$file" 2>/dev/null || return 1
+    chmod 600 "$file" 2>/dev/null || true
+    return 0
+}
+
+# Write a secret into a NODE DIR, rc 0 = changed, 1 = already correct.
+# An existing file is rewritten in place so its ownership and mode SURVIVE —
+# Script 04 sets the foreign secret to root:<web_user> 640 for the REST
+# collector, and the de-rooted pool sets root:grinsecret 640. A blind
+# chown/chmod here would silently 403 both. Only brand-new files get the
+# 600 grin:grin default.
+_gns_node_put() {
+    local file="$1" val="$2" existed=0 cur
+    [[ -f "$file" ]] && existed=1
+    if [[ "$existed" == 1 ]]; then
+        cur=$(tr -d '[:space:]' < "$file" 2>/dev/null || true)
+        [[ "$cur" == "$val" ]] && return 1
+    fi
+    printf '%s' "$val" > "$file" 2>/dev/null || return 1
+    if [[ "$existed" == 0 ]]; then
+        chmod 600 "$file" 2>/dev/null || true
+        id grin &>/dev/null && chown grin:grin "$file" 2>/dev/null || true
+    fi
+    return 0
+}
+
+# grin_secret_vault_ensure <mainnet|testnet> <node_dir>
+# The single entry point Script 01 calls in place of minting secrets. One
+# function serves first install AND every rebuild, because the vault lookup
+# comes first and "first install" is simply the case where it misses:
+#   1. vault has it      → restore into the node dir   (rebuild: secret preserved)
+#   2. node dir has it   → adopt into the vault        (pre-existing install)
+#   3. neither           → generate, write both        (first install)
+# Branch 2 is what makes this safe to ship to already-deployed servers: the
+# first run adopts the secret that is already in use, so nothing changes under
+# the running consumers.
+#
+# RETURN CONTRACT: rc 0 = the node dir ends up with BOTH secrets usable, which
+# is the only thing the build actually depends on. A vault write that fails is
+# degraded persistence (the secret won't survive the NEXT rebuild), not a broken
+# node — it bumps GNS_VAULT_WARNINGS and the build continues. Only "the node has
+# no usable secret" is fatal.
+grin_secret_vault_ensure() {
+    local net="${1:-}" node_dir="${2:-}" vdir name vfile lfile val
+    GNS_VAULT_RESTORED=0; GNS_VAULT_ADOPTED=0; GNS_VAULT_CREATED=0; GNS_VAULT_WARNINGS=0
+
+    vdir=$(_gns_vault_dir_for "$net") || return 1
+    [[ -n "$node_dir" && -d "$node_dir" ]] || return 1
+
+    mkdir -p "$vdir" 2>/dev/null || GNS_VAULT_WARNINGS=$(( GNS_VAULT_WARNINGS + 1 ))
+    chmod 700 "$GNS_VAULT_DIR" 2>/dev/null || true
+    chmod 700 "$vdir"          2>/dev/null || true
+
+    for name in "${GNS_SECRET_FILES[@]}"; do
+        vfile="$vdir/$name"; lfile="$node_dir/$name"
+        if val=$(_gns_read_secret "$vfile"); then
+            _gns_node_put "$lfile" "$val" || true
+            GNS_VAULT_RESTORED=$(( GNS_VAULT_RESTORED + 1 ))
+        elif val=$(_gns_read_secret "$lfile"); then
+            _gns_vault_put "$vfile" "$val" || GNS_VAULT_WARNINGS=$(( GNS_VAULT_WARNINGS + 1 ))
+            GNS_VAULT_ADOPTED=$(( GNS_VAULT_ADOPTED + 1 ))
+        else
+            val=$(_gns_gen_secret) || return 1
+            _gns_vault_put "$vfile" "$val" || GNS_VAULT_WARNINGS=$(( GNS_VAULT_WARNINGS + 1 ))
+            _gns_node_put  "$lfile" "$val" || true
+            GNS_VAULT_CREATED=$(( GNS_VAULT_CREATED + 1 ))
+        fi
+    done
+
+    # Verify the outcome that matters, rather than trusting the writes above:
+    # _gns_node_put's failure path is deliberately non-fatal per file, so this
+    # is what turns "the node has no usable secret" into a hard failure.
+    for name in "${GNS_SECRET_FILES[@]}"; do
+        _gns_read_secret "$node_dir/$name" >/dev/null || return 1
+    done
+    return 0
+}
+
+# Mirror the live node's secrets INTO the vault (never the reverse — see the
+# direction note above). Safe under the timer: it only ever reads from the node
+# dir. Keeps the vault seeded on boxes that have not been rebuilt yet, so the
+# very first rebuild after installing this already has something to restore.
+#
+# NEVER overwrites a good vault entry with an unproven value. Seeding an EMPTY
+# slot is unconditional (there is nothing to lose), but replacing an existing
+# entry means discarding the copy that protects this box, so it requires the
+# live node to confirm the new value. If the probe cannot prove anything
+# (node down, no curl, auth not enforced) the vault is left alone — the safe
+# default is to keep what we have.
+#
+# This is also the correct behaviour for a legitimate out-of-band rotation: the
+# file changes, the running node still enforces the old value, so capture holds
+# off until the node is restarted and the new secret verifies.
+grin_sync_vault_capture() {
+    local net dir vdir name val cur which rc
+    for net in mainnet testnet; do
+        dir=$(grin_live_node_dir "$net" 2>/dev/null || true)
+        [[ -n "$dir" && -d "$dir" ]] || continue
+        vdir=$(_gns_vault_dir_for "$net") || continue
+        for name in "${GNS_SECRET_FILES[@]}"; do
+            val=$(_gns_read_secret "$dir/$name") || continue     # corrupt/blank → skip
+            cur=$(_gns_read_secret "$vdir/$name" 2>/dev/null || true)
+            [[ "$cur" == "$val" ]] && continue                   # already mirrored
+
+            if [[ -z "$cur" ]]; then
+                _gns_vault_put "$vdir/$name" "$val" || true      # empty slot — seed it
+                continue
+            fi
+
+            case "$name" in
+                .api_secret)         which="owner"   ;;
+                .foreign_api_secret) which="foreign" ;;
+                *)                   which="foreign" ;;
+            esac
+            if _gns_probe_secret "$net" "$which" "$val"; then
+                _gns_vault_put "$vdir/$name" "$val" || true
+            else
+                rc=$?
+                if [[ "$rc" == 1 ]]; then
+                    echo "[grin-secret-sync] $net $name differs from the vault and the node REJECTS it" \
+                         "— vault left intact (file looks stale or corrupt)."
+                fi
+                # rc 2 (unverifiable) stays silent: the node is simply down or
+                # does not enforce auth, which is not news every 5 minutes.
+            fi
+        done
+        chmod 700 "$GNS_VAULT_DIR" 2>/dev/null || true
+        chmod 700 "$vdir"          2>/dev/null || true
+    done
+    return 0
+}
+
+# grin_secret_vault_rotate <mainnet|testnet> — deliberate rotation: mint NEW
+# secrets, update BOTH the vault and the live node dir, then re-sync every
+# consumer. The node must be RESTARTED afterwards: it read the old secret at
+# startup and still enforces it, so until then every consumer gets 401.
+grin_secret_vault_rotate() {
+    local net="${1:-}" dir vdir name val
+    vdir=$(_gns_vault_dir_for "$net") || {
+        echo "[grin-secret-sync] rotate: network must be 'mainnet' or 'testnet'." >&2
+        return 1
+    }
+    dir=$(grin_live_node_dir "$net" 2>/dev/null || true)
+    [[ -n "$dir" && -d "$dir" ]] || {
+        echo "[grin-secret-sync] rotate: no $net node directory found." >&2
+        return 1
+    }
+    mkdir -p "$vdir" 2>/dev/null || return 1
+    chmod 700 "$GNS_VAULT_DIR" 2>/dev/null || true
+    chmod 700 "$vdir"          2>/dev/null || true
+
+    for name in "${GNS_SECRET_FILES[@]}"; do
+        val=$(_gns_gen_secret) || { echo "[grin-secret-sync] rotate: /dev/urandom unavailable." >&2; return 1; }
+        _gns_vault_put "$vdir/$name" "$val" || return 1
+        _gns_node_put  "$dir/$name"  "$val" || true
+    done
+    echo "[grin-secret-sync] rotated $net secrets in $dir (vault: $vdir)."
+    grin_secrets_sync_all || true
+    echo "[grin-secret-sync] RESTART the $net node now — it still enforces the OLD secret."
+    return 0
+}
+
 # ─── Idempotent appliers (return 0 = changed, 1 = no change / skipped) ─────────
 # grin_env_set <file> <KEY> <value> — rewrite KEY=value in a shell env file.
 grin_env_set() {
@@ -312,7 +613,11 @@ grin_sync_node_api_nginx() {
 }
 
 # Re-apply live node secrets to every consumer installed on this box.
+# Capture runs FIRST so the vault mirrors what the node actually serves before
+# the consumers are pointed at it (capture is read-only w.r.t. the node dir —
+# it never writes a secret back into a running node; see the vault notes above).
 grin_secrets_sync_all() {
+    grin_sync_vault_capture   || true
     grin_sync_collector       || true
     grin_grinscan_sync        || true
     grin_sync_tiny_explorer   || true
@@ -337,8 +642,20 @@ grin_install_secret_sync() {
 # AUTO-GENERATED by grin_node_secrets.sh — re-applies the live Grin node's
 # api/foreign secrets to every installed toolkit consumer. Run by the
 # grin-secret-sync systemd timer and before each stats collector run.
+#
+# Usage:
+#   grin-secret-sync                    re-sync all consumers (default; the timer)
+#   grin-secret-sync --rotate <net>     mint NEW secrets for mainnet|testnet,
+#                                       update the /opt/grin/keys vault + node dir,
+#                                       re-sync consumers. REQUIRES a node restart.
 source "$GNS_LIB_INSTALL_PATH"
-grin_secrets_sync_all
+case "\${1:-}" in
+    --rotate) grin_secret_vault_rotate "\${2:-}" ;;
+    -h|--help)
+        sed -n '6,10p' "\$0"
+        ;;
+    *)        grin_secrets_sync_all ;;
+esac
 EOF
     chmod 755 "$GNS_SYNC_BIN" 2>/dev/null || true
 

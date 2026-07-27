@@ -119,6 +119,15 @@ function mergeEnvVars(config) {
     // Served by nginx at /custom/<file>; defaults under the app's working directory.
     assets_dir: config.assets_dir || process.env.POOL_ASSETS_DIR || './custom_assets',
 
+    // nginx docroot (the deployed copy of public_html). The backend normally never
+    // touches it — nginx serves it directly — but the blog/CMS permalink routes read
+    // post.html / page.html from here to inject per-post <title> and Open Graph tags
+    // server-side, because social crawlers do not run JavaScript. Matches POOL_WEB_DIR
+    // in 07_grin_mining_public_pool.sh; the per-network default keeps an older
+    // pool config (written before this key existed) working with no edit.
+    web_dir: config.web_dir || process.env.POOL_WEB_DIR ||
+      (isMain ? '/var/www/grin-pool' : '/var/www/grin-pool-testnet'),
+
     tor_enabled: config.tor_enabled !== undefined ? config.tor_enabled : true,
     tor_socks_port: config.tor_socks_port || 9050,
     tor_check_timeout_ms: config.tor_check_timeout_ms || 3000,

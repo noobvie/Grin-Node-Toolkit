@@ -158,11 +158,12 @@ curl -s -u "grin:$SECRET" -H 'Content-Type: application/json' \
 ```
 
 ### Secret self-heal — `scripts/lib/grin_node_secrets.sh` (shared, sourced)
-A node rebuild changes BOTH the node dir (mainnet-prune ↔ mainnet-full) AND regenerates the
-api/foreign secrets — silently breaking every consumer that froze a secret path at setup
-time (classic symptom: collector `get_tip` → HTTP 401). This lib is the single source of
-truth that re-resolves from the *live* node and re-applies to all consumers, so no per-product
-re-run is needed.
+A node rebuild moves the node dir (mainnet-prune ↔ mainnet-full), silently breaking every
+consumer that froze a secret path at setup time (classic symptom: collector `get_tip` →
+HTTP 401). This lib is the single source of truth that re-resolves from the *live* node and
+re-applies to all consumers, so no per-product re-run is needed.
+- **Secret VALUES no longer rotate on rebuild** (since 2026-07-25) — see the key vault below.
+  Only the secret *path* moves, which the appliers fix.
 - **Resolvers:** `grin_live_node_dir <mainnet|testnet>` (running-node-aware: tmux session →
   instances-conf → standard path; mainnet prefers full archive) and
   `grin_node_secret_path <net> <foreign|owner>`. Use these, don't re-derive node dirs/paths.
@@ -173,6 +174,32 @@ re-run is needed.
   from every product's setup that consumes node secrets. Manual one-shot: run `grin-secret-sync`.
 - **New consumer:** source the lib, add a `grin_sync_<x>` + call it in `grin_secrets_sync_all`,
   and call `grin_install_secret_sync` in that product's setup. Don't re-implement resolution.
+
+### Node API secret vault — `/opt/grin/keys/<net>/` (same lib)
+Script 01 no longer mints fresh api/foreign secrets on every build. `generate_secrets <net>`
+(Step 8b) delegates to `grin_secret_vault_ensure <net> <node_dir>`: **vault hit → restore;
+miss → adopt the dir's existing secret, else generate and seed the vault.** One function
+serves first install and every rebuild — there is no separate "first time" path.
+- **Keyed by NETWORK, not directory** — a prune↔full rebuild moves the node dir, so keying by
+  dir would rotate the secret anyway and defeat the point.
+- **Direction matters.** Restore (vault → node dir) happens ONLY at build time, node down.
+  The 5-min timer only *captures* (`grin_sync_vault_capture`, node dir → vault): the node reads
+  its secret at startup and holds it in memory, so rewriting the file under a running node
+  would make file and node disagree and 401 every consumer.
+- **Corruption guards.** Every read goes through `_gns_read_secret` → `_gns_secret_sane`
+  (non-blank, 8–128 chars, printable) so garbage is never restored/adopted/captured; it falls
+  through to the next branch and gets replaced. Capture **seeds an empty vault slot freely but
+  never overwrites an existing entry without proof** from `_gns_probe_secret` (rc 0 verified /
+  1 rejected / 2 unknown); unknown keeps the vault.
+- **A probe MUST include its control call.** A node with no `api_secret_path` accepts ANY
+  credential — verified against a live node, where `grin:bogus` returned a full `get_status`.
+  So `_gns_probe_secret` also calls with a deliberately wrong secret and reports UNKNOWN unless
+  that one is rejected. Never treat a bare HTTP 200 from the node API as proof of a credential.
+- **Never blanket-chown/chmod an existing secret file** — Script 04 sets the foreign secret to
+  `root:<web_user>` 640 for its REST collector and the de-rooted pool sets `root:grinsecret` 640.
+  `_gns_node_put` rewrites in place; only brand-new files get 600 grin:grin.
+- **Rotation is explicit:** `grin-secret-sync --rotate <net>` (updates vault + node dir, re-syncs
+  consumers, then **requires a node restart**). Vault rides along in 089 backups.
 
 ### grin-wallet secret files (`$WALLET_DIR/`, created by `grin-wallet init/recover`)
 `grin-wallet init -hr` recovers from seed + writes config/secrets in the same dir;

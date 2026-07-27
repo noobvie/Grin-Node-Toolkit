@@ -18,6 +18,8 @@
 #
 # What is backed up:
 #   · /opt/grin/conf/          — node configs, instances registry, API secrets
+#   · /opt/grin/keys/          — node API secret vault (keeps .api_secret and
+#                                .foreign_api_secret stable across a rebuild)
 #   · /opt/grin/wallet/        — wallet dirs (toml, seed, wallet_data) — optional, default Y
 #   · /opt/grin/drop-test/     — Grin Drop testnet (DB, config, secrets) — optional, default Y
 #   · /opt/grin/drop-main/     — Grin Drop mainnet (DB, config, secrets) — optional, default Y
@@ -59,6 +61,7 @@ source "$SCRIPT_DIR/lib/grin_backup_engine.sh"
 LOG_DIR="/opt/grin/logs"
 LOG_FILE="$LOG_DIR/grin_backup_restore_$(date +%Y%m%d_%H%M%S).log"
 CONF_DIR="/opt/grin/conf"
+KEYS_DIR="/opt/grin/keys"                 # node API secret vault (Script 01 Step 8b)
 BACKUP_DIR="$GBE_BACKUP_DIR"              # /opt/grin/backups — standard location
 LEGACY_BACKUP_DIR="/opt/grin/temp"        # pre-engine temp_dir_* archives live here
 mkdir -p "$LOG_DIR"
@@ -178,6 +181,18 @@ run_backup() {
         [[ "$auto" == false ]] && info "  ✓ $CONF_DIR"
     else
         [[ "$auto" == false ]] && warn "  — $CONF_DIR not found (skipping)"
+    fi
+
+    # /opt/grin/keys — the persistent node API-secret vault (Script 01 Step 8b).
+    # Small but load-bearing: it is what keeps .api_secret / .foreign_api_secret
+    # stable across a node rebuild. Without it in the archive, a restore onto a
+    # fresh box rebuilds the node with brand-new secrets.
+    if [[ -d "$KEYS_DIR" ]]; then
+        sources+=("$KEYS_DIR")
+        manifest_lines+=("node-api-secret-vault: $KEYS_DIR")
+        [[ "$auto" == false ]] && info "  ✓ $KEYS_DIR (node API secret vault)"
+    else
+        [[ "$auto" == false ]] && warn "  — $KEYS_DIR not found (skipping)"
     fi
 
     # nginx configs
@@ -822,6 +837,20 @@ run_restore() {
         cp -a "$extract_dir/opt/grin/conf/." "$CONF_DIR/"
         success "Restored: $CONF_DIR"
         log "[RESTORE] conf → $CONF_DIR"
+    fi
+
+    # keys/ — node API secret vault. Permissions are re-asserted rather than
+    # trusted from the archive (700 dirs / 600 files, root-owned): these are the
+    # node's api + foreign secrets, and a world-readable vault would hand the
+    # node's Owner API to any local user.
+    if [[ -d "$extract_dir/opt/grin/keys" ]]; then
+        mkdir -p "$KEYS_DIR"
+        cp -a "$extract_dir/opt/grin/keys/." "$KEYS_DIR/"
+        chown -R root:root "$KEYS_DIR" 2>/dev/null || true
+        find "$KEYS_DIR" -type d -exec chmod 700 {} + 2>/dev/null || true
+        find "$KEYS_DIR" -type f -exec chmod 600 {} + 2>/dev/null || true
+        success "Restored: $KEYS_DIR (node API secret vault)"
+        log "[RESTORE] keys → $KEYS_DIR"
     fi
 
     # nginx configs

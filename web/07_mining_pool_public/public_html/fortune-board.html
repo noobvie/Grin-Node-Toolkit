@@ -62,10 +62,18 @@
     </style>
 </head>
 <body>
+  <noscript>
+    <div class="noscript-note">
+      <b>JavaScript is required.</b> This site builds its navigation and loads its live
+      figures in the browser, so with scripts blocked the page stays empty. Enable
+      JavaScript for this site to use it. The pool's data is also available as plain
+      JSON over its <a href="/api-docs.html">public API</a> if you would rather not.
+    </div>
+  </noscript>
 
     <!-- header injected by /js/public-shell.js -->
 
-    <div class="wrap">
+    <main class="wrap" id="main" tabindex="-1">
         <!-- Sidebar ad slot (filled by /js/ads.js; hidden if empty) -->
         <div class="ad-slot ad-slot--sidebar" data-ad-slot="sidebar" style="display:none;"></div>
 
@@ -85,9 +93,11 @@
             <span><i>Unique winners</i><b id="fb-unique">—</b></span>
         </div>
 
-        <!-- ═══ Upcoming contests (branding.js hook; hidden until campaigns exist) ═══ -->
+        <!-- ═══ Upcoming contests (branding.js hook; hidden until campaigns exist) ═══
+             h2, not h3: this sits between the page h1 and the P-01… panel h2s below, so an
+             h3 here made the document jump h1 → h3 → h2. It is a peer of the panels. -->
         <div class="settings-section" data-brand-show="campaigns" style="display:none;margin-top:14px;">
-            <h3 style="margin-bottom:.5rem;">🏆 Upcoming Contests</h3>
+            <h2 style="margin-bottom:.5rem;">🏆 Upcoming Contests</h2>
             <div data-brand="upcoming-campaigns"></div>
         </div>
 
@@ -128,7 +138,10 @@
                     <span class="right">winner · amount · verifiable draw seed</span></h2>
                 <div class="panel-body">
                     <div class="fb-toolbar">
-                        <input id="fb-search" type="search" placeholder="🔍 Search winner address, event, or seed hash…" autocomplete="off">
+                        <!-- aria-label, not placeholder alone: a placeholder is not an
+                             accessible name and vanishes on focus. Its sibling select
+                             already had one. -->
+                        <input id="fb-search" type="search" aria-label="Search winners by address, event, or seed hash" placeholder="🔍 Search winner address, event, or seed hash…" autocomplete="off">
                         <select id="fb-pot" aria-label="Filter by pot type">
                             <option value="">All pots</option>
                             <option value="a">Share-weighted</option>
@@ -162,7 +175,7 @@
             </div>
 
         </div>
-    </div>
+    </main>
 
     <!-- footer injected by /js/public-shell.js -->
 

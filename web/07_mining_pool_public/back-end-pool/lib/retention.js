@@ -63,6 +63,7 @@ class RetentionManager {
       shares_deleted: 0,
       hashrate_deleted: 0,
       alerts_deleted: 0,
+      audit_log_deleted: 0,
       balance_log_deleted: 0,
       ledger_rollup_horizon: null,
       ledger_rollup_mismatch: null,
@@ -80,6 +81,9 @@ class RetentionManager {
     // Raw ledger window. Floor of 45 days: must stay above the longest raw-only window
     // reader (reconciliation 7d flows + 30d wallet-send audit, account 30d earnings) + slack.
     const ledgerKeepDays = Math.max(45, parseInt(s.balance_log_keep_days, 10) || 60);
+    // Audit trail window. Floor of 30 days so a mis-set value can never leave the money path
+    // untraceable — long enough to investigate a disputed payout after the miner reports it.
+    const auditKeepDays = Math.max(30, parseInt(s.audit_log_keep_days, 10) || 180);
     const now = Math.floor(Date.now() / 1000);
 
     const tx = this.db.transaction(() => {
@@ -102,10 +106,17 @@ class RetentionManager {
         "DELETE FROM alerts WHERE status IN ('resolved','acknowledged') AND created_at < ?"
       ).run(alCut);
       result.alerts_deleted = r3.changes;
+
+      // 4. Audit trail — miner-attributed rows pair a grin address with a coarsened origin
+      //    IP and previously accumulated forever. Pruned purely by age; no other table
+      //    references admin_audit_log, so nothing breaks when rows leave.
+      const auCut = now - auditKeepDays * 86400;
+      const r4 = this.db.prepare('DELETE FROM admin_audit_log WHERE created_at < ?').run(auCut);
+      result.audit_log_deleted = r4.changes;
     });
     tx();
 
-    // 4. balance_log — roll completed UTC days into balance_log_daily FIRST (the rollup
+    // 5. balance_log — roll completed UTC days into balance_log_daily FIRST (the rollup
     //    is what lifetime analytics read forever), then prune raw rows older than
     //    balance_log_keep_days, each day verified against its rollup before deletion.
     //    Runs outside the tx above: ledger-rollup manages its own per-day transactions.
@@ -123,7 +134,8 @@ class RetentionManager {
     this.lastResult = result;
     console.log(
       `[Retention] shares=${result.shares_deleted} hashrate=${result.hashrate_deleted} ` +
-      `alerts=${result.alerts_deleted} balance_log=${result.balance_log_deleted}` +
+      `alerts=${result.alerts_deleted} audit_log=${result.audit_log_deleted} ` +
+      `balance_log=${result.balance_log_deleted}` +
       (result.shares_cutoff_height ? ` (shares cutoff height ${result.shares_cutoff_height})` : '') +
       (result.ledger_rollup_mismatch ? ' [LEDGER ROLLUP MISMATCH — ledger prune halted]' : '')
     );
@@ -152,6 +164,7 @@ class RetentionManager {
         shares: count('shares'),
         hashrate_history: count('hashrate_history'),
         alerts: count('alerts'),
+        admin_audit_log: count('admin_audit_log'),
         balance_log: count('balance_log'),
         balance_log_daily: count('balance_log_daily'),
       },

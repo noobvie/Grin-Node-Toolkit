@@ -9,13 +9,21 @@
   <meta property="og:type" content="website">
   <meta property="og:title" content="API Reference — Grin Mining Pool">
   <meta property="og:description" content="Read-only public API: pool stats, account stats, blocks, regions, price.">
+  <meta property="og:url" content="https://pool.grin.money/api-docs.html">
+  <!-- api-docs.html is listed in sitemap.xml, and index.js requires each sitemap URL to
+       match that page's own canonical exactly — this page had none. branding.js rewrites
+       it to the operator's configured site_url at runtime. -->
+  <link rel="canonical" href="https://pool.grin.money/api-docs.html">
   <link rel="icon" type="image/svg+xml" href="/images/favicon.svg">
   <link rel="manifest" href="/manifest.json">
   <link rel="stylesheet" href="/css/dashboard.css">
   <link rel="stylesheet" href="/css/themes.css">
   <style>
     .api-group { margin: 22px 0; }
-    .api-group h3 { margin: 0 0 10px; font-size: 14px; letter-spacing: .04em; text-transform: uppercase; color: var(--text-mute); }
+    /* h2, not h3: the groups sit directly under the page h1, and h1→h3 is a skipped level
+       (screen-reader users navigate by heading and hear a missing tier). Sizing is set
+       here, so the level change is invisible. */
+    .api-group h2 { margin: 0 0 10px; font-size: 14px; letter-spacing: .04em; text-transform: uppercase; color: var(--text-mute); }
     .api-row {
       display: grid; grid-template-columns: 64px 1fr; gap: 12px; align-items: baseline;
       padding: 9px 0; border-bottom: 1px solid var(--border);
@@ -33,11 +41,21 @@
   </style>
 </head>
 <body>
+  <noscript>
+    <div class="noscript-note">
+      <b>JavaScript is required.</b> This site builds its navigation and loads its live
+      figures in the browser, so with scripts blocked the page stays empty. Enable
+      JavaScript for this site to use it. The pool's data is also available as plain
+      JSON over its <a href="/api-docs.html">public API</a> if you would rather not.
+    </div>
+  </noscript>
 
   <!-- header injected by /js/public-shell.js -->
 
-  <div class="container">
-    <h2 class="page-title">API Reference</h2>
+  <main class="container" id="main" tabindex="-1">
+    <!-- h1, like every other page. This was the one page in the site with no h1 at all
+         (it opened at h2), which leaves the document with no top-level heading. -->
+    <h1 class="page-title">API Reference</h1>
     <p class="api-note" style="margin-bottom:14px;">
       The pool exposes a small, read-only public HTTP API (JSON). These endpoints power the
       dashboard, per-account stats and the blocks explorer — you can use them to build your own
@@ -52,7 +70,7 @@
     <div id="api-list">
       <p class="dim" style="color:var(--text-mute);">Loading endpoints…</p>
     </div>
-  </div>
+  </main>
 
   <!-- footer injected by /js/public-shell.js -->
 
@@ -95,7 +113,7 @@
 
       var html = '';
       keys.forEach(function (g) {
-        html += '<div class="api-group"><h3>' + escHtml(GROUP_LABELS[g] || g) + '</h3>';
+        html += '<div class="api-group"><h2>' + escHtml(GROUP_LABELS[g] || g) + '</h2>';
         groups[g].forEach(function (e) {
           var m = (e.method || 'GET').toLowerCase();
           html += '<div class="api-row">' +

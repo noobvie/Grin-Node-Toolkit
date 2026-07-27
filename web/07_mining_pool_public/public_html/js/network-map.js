@@ -69,7 +69,10 @@
       { country: 'Taiwan', country_code: 'TW', miners: 2, gateway: 'apac', lat: 24, lng: 121 },
       { country: 'Chile', country_code: 'CL', miners: 1, gateway: 'sa', lat: -35, lng: -71 }
     ],
-    totals: { miners: 0, gateways_up: 7, gateways_total: 8, countries: 21 }, geo_source: 'sample'
+    // miners MUST equal the sum of countries[] above (343) — the placard reads totals.miners so
+    // that the k-anonymity "Other" bucket is counted on a live pool, which means a sample whose
+    // total disagreed with its own rows would render "0 miners" over a fully populated globe.
+    totals: { miners: 343, gateways_up: 7, gateways_total: 8, countries: 21 }, geo_source: 'sample'
   };
   const FALLBACK_PEERS = {
     window_days: 30, points: [],
@@ -132,6 +135,7 @@
 
   // ── state populated from the API (or fallback) ─────────────────────────────
   let HUB = null, GATEWAYS = [], gwByRegion = {}, REGIONS = [], PEERS = [], NODES = [], COUNTRIES = [], POLY_BY_NAME = {};
+  let TOTALS = {};
   let LAND = [], MERIDIANS = [], PARALLELS = [];
 
   function buildStaticGeometry() {
@@ -148,24 +152,42 @@
   }
 
   function ingest(topo, peers) {
+    TOTALS = topo.totals || {};
     const h = topo.hub || {};
-    HUB = { role: 'hub', name: h.label || 'Pool Hub', v: (h.lat != null) ? toVec(h.lat, h.lng) : toVec(20, 0) };
+    // An UNLOCATED hub (no country resolved server-side → lat null) is never drawn. It used to
+    // fall back to lat 20 / lng 0, which is the middle of the Sahara: a marker labelled with the
+    // pool name sitting on a country that has nothing to do with the pool, plus every gateway arc
+    // converging on it. `v` keeps a defined vector so the geometry helpers stay simple, but
+    // `located` gates the marker and every arc that targets the hub (see draw()).
+    const hubLocated = h.lat != null;
+    HUB = { role: 'hub', name: h.label || 'Pool Hub', located: hubLocated,
+            v: hubLocated ? toVec(h.lat, h.lng) : toVec(20, 0) };
     GATEWAYS = (topo.gateways || []).filter(g => g.lat != null).map(g => ({
       role: 'gw', region: g.region, name: g.label || g.region, status: g.status || 'connected',
       miners: g.miners || 0, _feed: g.miners || 0, v: toVec(g.lat, g.lng)
     }));
-    gwByRegion = {}; GATEWAYS.forEach(g => { gwByRegion[g.region] = g; });
+    // Null prototype: a region tag of 'constructor'/'toString' would otherwise resolve to an
+    // inherited function, and `gw.v` on it is undefined → the arc maths throws and takes the
+    // whole globe down. Region tags are operator-chosen strings, so treat them as data only.
+    gwByRegion = Object.create(null); GATEWAYS.forEach(g => { gwByRegion[g.region] = g; });
     // Miner countries. `poly` is the country's own outline when we ship one — then the FILLED
     // COUNTRY carries the miner count (drawCountries) and the centroid marker demotes to a
     // small label/hover anchor. Countries with no polygon on file keep the sized dot, which is
     // the only honest option there: a dot that says "this country", not "this spot".
     REGIONS = (topo.countries || []).filter(c => c.lat != null).map(c => {
-      const gw = gwByRegion[c.gateway] || GATEWAYS[0] || null;
+      // No `|| GATEWAYS[0]` fallback: an unknown/absent gateway tag means the payload is NOT
+      // telling us which region these miners come in through (the server sends null rather than
+      // naming an unpublished one), and picking whichever gateway happens to be first drew a
+      // confident arc to a city with nothing to do with them. Unknown → arc to the hub.
+      const gw = gwByRegion[c.gateway] || null;
       return { role: 'region', name: c.country, cc: c.country_code, n: c.miners, gw: c.gateway,
         poly: POLY_BY_NAME[c.country] || null,
-        v: toVec(c.lat, c.lng), gwv: gw ? gw.v : (HUB ? HUB.v : toVec(20,0)), gwStatus: gw ? gw.status : 'connected' };
+        // No gateway for this country's share vote → the arc lands on the hub, but only if the
+        // hub has a real position. gwv null = no arc drawn for this country (the country fill
+        // still carries its miner count).
+        v: toVec(c.lat, c.lng), gwv: gw ? gw.v : (HUB.located ? HUB.v : null), gwStatus: gw ? gw.status : 'connected' };
     });
-    NODES = [ HUB, ...GATEWAYS, ...REGIONS ];
+    NODES = [ ...(HUB.located ? [HUB] : []), ...GATEWAYS, ...REGIONS ];
 
     // Activity-driven country highlight: a country lights up ONLY when the live data shows
     // a miner, a Grin node peer, a gateway, or the hub there. Country names are the canonical
@@ -233,7 +255,12 @@
     document.getElementById("nm-zout").onclick = () => setZoom(zoom/1.25);
     document.querySelectorAll(".nm-toggle").forEach(el => el.addEventListener("click", () => { const k=el.dataset.t; opts[k]=!opts[k]; el.classList.toggle("on",opts[k]); if (k==="spin"&&opts[k]) spinVel=0; }));
   }
-  function totalMinersNow() { return REGIONS.reduce((s,r)=>s+r.n,0); }
+  // The payload's total, not the sum of what's drawn. Three kinds of miner legitimately have no
+  // marker on this globe: a country under the k-anonymity floor (folded into one unnamed "Other"
+  // row, no coordinates), a country the map holds no centroid for, and a miner whose country
+  // isn't resolvable at all. All three are still miners, so summing the globe under-reports the
+  // pool — the server sends the same distinct-address count the homepage shows.
+  function totalMinersNow() { return TOTALS.miners != null ? TOTALS.miners : REGIONS.reduce((s,r)=>s+r.n,0); }
 
   // ── render loop ─────────────────────────────────────────────────────────────
   let t0 = performance.now();
@@ -249,8 +276,8 @@
     drawLand(); drawGrat(MERIDIANS); drawGrat(PARALLELS); drawCountries();
     if (opts.nodes) drawPeers(now);
     if (opts.arcs) {
-      REGIONS.forEach((r,i) => drawAnimArc(r.v, r.gwv, "90,209,255", 1, 0.10, now, i*0.09, 2600, r.gwStatus==="connected"));
-      GATEWAYS.forEach((g,i) => { if (g.status==="offline") drawAnimArc(g.v, HUB.v, "255,90,82", 1.2, 0.16, now, 0, 2000, false); else if (g.status==="checking") drawAnimArc(g.v, HUB.v, "139,152,165", 1.2, 0.12, now, 0, 2600, false); else drawAnimArc(g.v, HUB.v, "255,182,61", 1.6, 0.17, now, i*0.18, g.status==="handshake"?3200:2000, true); });
+      REGIONS.forEach((r,i) => { if (r.gwv) drawAnimArc(r.v, r.gwv, "90,209,255", 1, 0.10, now, i*0.09, 2600, r.gwStatus==="connected"); });
+      if (HUB.located) GATEWAYS.forEach((g,i) => { if (g.status==="offline") drawAnimArc(g.v, HUB.v, "255,90,82", 1.2, 0.16, now, 0, 2000, false); else if (g.status==="checking") drawAnimArc(g.v, HUB.v, "139,152,165", 1.2, 0.12, now, 0, 2600, false); else drawAnimArc(g.v, HUB.v, "255,182,61", 1.6, 0.17, now, i*0.18, g.status==="handshake"?3200:2000, true); });
     }
     NODES.map(n => ({ n, p: project(n.v) })).sort((a,b)=>a.p.z-b.p.z).forEach(({n,p}) => { n._sx=p.x; n._sy=p.y; n._front=p.z>-0.05; if (p.z<=-0.05) return; drawNode(n,p,Math.max(0,Math.min(1,(p.z+0.1)/0.5)),now); });
   }
@@ -282,7 +309,7 @@
       const wash = c.miners > 0 ? 0.15 + 0.27 * c.share : 0;
       c._filled = Math.max(maxx-minx, maxy-miny) >= POLY_MIN_PX;
       ctx.save(); trace(); ctx.clip();
-      if (opts.flags && c.flag) { ctx.globalAlpha=0.5; c.flag(minx,miny,maxx-minx,maxy-miny); ctx.globalAlpha=1; }
+      if (opts.flags && c.flag) { ctx.globalAlpha=0.65; c.flag(minx,miny,maxx-minx,maxy-miny); ctx.globalAlpha=1; }
       else if (!wash) { ctx.fillStyle="rgba(90,209,255,0.14)"; ctx.fillRect(minx,miny,maxx-minx,maxy-miny); }
       if (wash) { ctx.fillStyle="rgba(90,209,255,"+wash.toFixed(3)+")"; ctx.fillRect(minx,miny,maxx-minx,maxy-miny); }
       ctx.restore();
@@ -354,7 +381,10 @@
     const t = topo.totals || {};
     set('nm-s-miners', String(totalMinersNow()));
     set('nm-s-gw', (t.gateways_up != null ? t.gateways_up : GATEWAYS.filter(g=>g.online!==false && g.status!=='offline').length) + '<small>/' + (t.gateways_total != null ? t.gateways_total : GATEWAYS.length) + '</small>');
-    set('nm-s-reg', String((topo.countries||[]).length));
+    // totals.countries is the TRUE distinct-country count; the countries[] array is the
+    // publishable subset, where every country under the k-anonymity floor has been folded into
+    // a single unnamed "Other" row. Counting rows would report "n named + 1" instead.
+    set('nm-s-reg', String(t.countries != null ? t.countries : (topo.countries||[]).length));
     set('nm-s-nodes', String((peers.totals && peers.totals.peers) || (peers.countries||[]).reduce((s,c)=>s+c.peers,0)));
   }
 

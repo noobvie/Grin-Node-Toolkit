@@ -74,7 +74,11 @@
     }
     .rangebar .rng-btn:hover { color: var(--text, #e6edf3); }
     .rangebar .rng-btn.active {
-      background: var(--accent, #7cb342); color: #07090c;
+      /* Ink on an accent fill is var(--bg), never a hardcoded near-black: the light
+         themes pair a DARK accent (#157f52, #0060df, #c1121f) with a light page bg,
+         so #07090c here dropped this control to ~1.7:1 contrast. Matches
+         reactor.css .chart-range button.active and dashboard.css .btn.primary. */
+      background: var(--accent, #7cb342); color: var(--bg, #07090c);
       border-color: var(--accent, #7cb342); font-weight: 600;
     }
     .rangebar .rng-btn:disabled { opacity: .35; cursor: not-allowed; }
@@ -110,7 +114,7 @@
     }
     /* single withdraw column (per-account threshold retired 2026-07-17) */
     .withdraw-col { max-width: 560px; }
-    .withdraw-col h4 {
+    .withdraw-col h3 {
       font-family: var(--mono); font-size: 11px; font-weight: 700; letter-spacing: .16em;
       text-transform: uppercase; color: var(--text-dim); margin: 0 0 12px;
       padding-bottom: 7px; border-bottom: 1px solid var(--border-soft);
@@ -236,10 +240,18 @@
   </style>
 </head>
 <body>
+  <noscript>
+    <div class="noscript-note">
+      <b>JavaScript is required.</b> This site builds its navigation and loads its live
+      figures in the browser, so with scripts blocked the page stays empty. Enable
+      JavaScript for this site to use it. The pool's data is also available as plain
+      JSON over its <a href="/api-docs.html">public API</a> if you would rather not.
+    </div>
+  </noscript>
 
     <!-- header injected by /js/public-shell.js -->
 
-    <div class="wrap">
+    <main class="wrap" id="main" tabindex="-1">
         <!-- ═══ Operator strip: heading + miner master lamp ═══ -->
         <div class="deck-head">
             <div>
@@ -405,7 +417,9 @@
                             </div>
 
                             <div class="withdraw-col">
-                                <h4>Withdraw</h4>
+                                <!-- h3, not h4: this is the first level under P-04's h2, and
+                                     jumping straight to h4 skips a level for screen readers. -->
+                                <h3>Withdraw</h3>
                                 <!-- Shown only when 0 < balance < pool minimum: the manual-payout escape hatch. -->
                                 <div id="acct-subthreshold" class="subthreshold-note" style="display:none" role="note">
                                     Your balance is below the <b><span id="acct-sub-min">—</span> ツ</b> withdrawal minimum. If you've stopped
@@ -607,7 +621,7 @@
 
             </div>
         </div>
-    </div>
+    </main>
 
     <!-- footer injected by /js/public-shell.js -->
 

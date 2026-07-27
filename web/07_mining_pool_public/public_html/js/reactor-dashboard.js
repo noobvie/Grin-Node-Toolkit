@@ -948,18 +948,17 @@
       var email = '';
       try { email = enc ? atob(enc) : ''; } catch (e) { email = ''; }
       var forum = (data.pool && data.pool.support_forum_url) || '';
-      var social = (data.branding && data.branding.social) || {};
+      // data.branding.social is not read here: branding.js owns the social rows.
       if (email) { var li = $('info-email'); if (li) li.style.display = ''; }
       if (forum) {
         var fli = $('info-forum'), fa = $('info-forum-link');
         if (fa) fa.setAttribute('href', forum);
         if (fli) fli.style.display = '';
       }
-      // Keys must match the P-08 rows in index.html — 'website' is deliberately not one of
-      // them (self-referential), so counting it here would hide the note with no row shown.
-      var any = email || forum || ['discord', 'telegram', 'twitter', 'nostr'].some(function (k) { return social[k]; });
-      if (any) { var note = $('info-no-contact'); if (note) note.style.display = 'none'; }
-    } catch (e) { /* keep the operator note */ }
+      // The "no contact channels configured" row is gone (it was an admin instruction on a
+      // public page), so there is nothing left to toggle off when contacts DO exist — each
+      // row above reveals itself, and P-08 simply carries no contact lines otherwise.
+    } catch (e) { /* leave every contact row hidden — better silent than half-filled */ }
   }
 
   // ── theme switch → re-render canvas instruments in the new palette ────────

@@ -80,15 +80,25 @@
     <link rel="icon" type="image/svg+xml" href="/images/favicon.svg">
     <link rel="apple-touch-icon" href="/images/apple-touch-icon.svg">
     <link rel="manifest" href="/manifest.json">
-    <link rel="alternate" type="application/rss+xml" href="/feed.xml">
+    <!-- The blog feed is served at /blog/rss.xml (index.js), and that is the only RSS
+         path nginx proxies to the backend. /feed.xml was never routed — it 404'd. -->
+    <link rel="alternate" type="application/rss+xml" title="Blog" href="/blog/rss.xml">
     <link rel="stylesheet" href="/css/dashboard.css">
     <link rel="stylesheet" href="/css/themes.css">
     <link rel="stylesheet" href="/css/reactor.css">
 </head>
 <body>
+  <noscript>
+    <div class="noscript-note">
+      <b>JavaScript is required.</b> This site builds its navigation and loads its live
+      figures in the browser, so with scripts blocked the page stays empty. Enable
+      JavaScript for this site to use it. The pool's data is also available as plain
+      JSON over its <a href="/api-docs.html">public API</a> if you would rather not.
+    </div>
+  </noscript>
     <!-- header injected by /js/public-shell.js (brand logo keeps its swing) -->
 
-    <div class="wrap">
+    <main class="wrap" id="main" tabindex="-1">
         <!-- Sidebar ad slot (filled by /js/ads.js; floats right on wide screens, hidden if empty) -->
         <div class="ad-slot ad-slot--sidebar" data-ad-slot="sidebar" style="display:none;"></div>
 
@@ -425,13 +435,19 @@
                         <!-- No "Website" row here: website_link points at this very site, so on the
                              homepage it renders a link back to the page you are already on. -->
                         <li style="display:none" data-brand="social-nostr"><a data-brand="social-nostr" href="#" rel="noopener" target="_blank">Nostr</a></li>
-                        <li id="info-no-contact">Contact channels are configured by the operator (admin → Branding → Social links)</li>
+                        <!-- No "no contact channels configured" row here. It used to read
+                             "Contact channels are configured by the operator (admin → Branding
+                             → Social links)" — an ADMIN instruction rendered to public visitors
+                             whenever the operator had set none, and (because loadInfoContact's
+                             catch deliberately keeps the note) also on any transient failure of
+                             /api/public/branding. A visitor can do nothing with that sentence, so
+                             the rows above simply stand alone when there is nothing to show. -->
                     </ul>
                 </div>
             </div>
 
         </div>
-    </div>
+    </main>
 
     <!-- footer injected by /js/public-shell.js -->
 

@@ -352,7 +352,9 @@ async function initializePool() {
     // (guarded by a persistent marker) — never clobbers operator edits in admin → Regions.
     // Gated to the real grinium.com deployment: a fork running its own domain must NOT
     // advertise grinium.com hosts (its miners would connect to the wrong pool).
-    seedDefaultRegions(config.stratum_port, config.subdomain);
+    // Third arg: this box's own region tag, which the seed must NOT create (it would create it
+    // inactive — see the note on seedDefaultRegions; ensureLocalRegion below owns that row).
+    seedDefaultRegions(config.stratum_port, config.subdomain, config.region);
 
     // Self-register this pool server's own region so it shows as a real connect card
     // and auto-joins the grid when a gateway for another zone forwards shares in. Only the
@@ -1113,6 +1115,185 @@ function setupRoutes() {
         res.type('application/manifest+json').send(JSON.stringify(manifest, null, 2));
       } catch (err) {
         res.status(500).json({ error: 'Failed to build manifest' });
+      }
+    }
+  );
+
+  // ─── Blog + CMS permalinks with server-rendered <head> (nginx proxies these) ───
+  // post.html and page.html are JS shells: they fetch their content and set the title
+  // client-side. Google renders JS, but Twitter/Facebook/Discord/Telegram/Slack do NOT —
+  // so every shared post or About/Terms link unfurled as "Loading…" with no description
+  // and no image, and those URLs are all in sitemap.xml. These routes serve the SAME
+  // static shell with the head filled in first, so a crawler gets real metadata and a
+  // browser gets the identical page it did before (the client script then runs and
+  // rewrites the same values — idempotent, no flicker).
+
+  const HEAD_MARK = '</head>';
+  const shellCache = new Map(); // filename → contents (cleared by SIGHUP-free restart)
+
+  function readShell(name) {
+    if (shellCache.has(name)) return shellCache.get(name);
+    let html = null;
+    try {
+      // Resolve inside web_dir only — `name` is a hardcoded literal at every call
+      // site, never user input, but keep the join anchored anyway.
+      html = fs.readFileSync(path.join(config.web_dir, name), 'utf8');
+    } catch (e) {
+      console.warn(`[seo] cannot read ${name} from web_dir (${config.web_dir}): ${e.message}` +
+        ' — serving a minimal shell instead. Set "web_dir" in the pool config to fix.');
+    }
+    shellCache.set(name, html);
+    return html;
+  }
+
+  // Minimal stand-in used only if web_dir is wrong/unreadable, so a misconfigured box
+  // degrades to a working page rather than a 500. Loads the same assets as the real
+  // shells; the per-page client script is what fills it in.
+  function fallbackShell(bodyId) {
+    return '<!DOCTYPE html>\n<html lang="en">\n<head>\n<meta charset="UTF-8">\n' +
+      '<meta name="viewport" content="width=device-width, initial-scale=1.0">\n' +
+      '<link rel="icon" type="image/svg+xml" href="/images/favicon.svg">\n' +
+      '<link rel="stylesheet" href="/css/dashboard.css">\n' +
+      '<link rel="stylesheet" href="/css/themes.css">\n</head>\n<body>\n' +
+      '<main class="wrap" id="' + bodyId + '"></main>\n' +
+      '<script src="/js/public-shell.js"></script>\n' +
+      '<script src="/js/public-theme.js"></script>\n' +
+      '<script src="/js/branding.js"></script>\n</body>\n</html>\n';
+  }
+
+  const attrEsc = (s) => String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+
+  // Strip authored HTML to a plain-text description and cap it at a sane card length.
+  const ENTITIES = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", '#39': "'", nbsp: ' ' };
+  function toDescription(html, fallback) {
+    const text = String(html || '')
+      // Drop script/style bodies FIRST — tag-stripping alone keeps their contents, so a
+      // CMS page with an embedded <style> block put raw CSS in its social card.
+      .replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1>/gi, ' ')
+      .replace(/<[^>]*>/g, ' ')
+      // Decode after tag-stripping (so escaped "&lt;b&gt;" text can never become a tag).
+      // Without this, authored "&amp;" reached attrEsc() as literal text and came back
+      // double-escaped — the card rendered "Bob &amp; Alice".
+      .replace(/&(amp|lt|gt|quot|apos|nbsp|#39);/gi,
+        (m, e) => ENTITIES[e.toLowerCase()] || m)
+      .replace(/\s+/g, ' ')
+      .trim();
+    const out = text || String(fallback || '');
+    return out.length > 200 ? out.slice(0, 197).trimEnd() + '…' : out;
+  }
+
+  // Build the <head> block injected ahead of </head>. The shells declare no description,
+  // og:* or canonical, and sendShell() removes their static <title> before injecting this
+  // one — a document may hold only one title and every parser keeps the FIRST, so leaving
+  // it in place would have made this one dead markup.
+  //
+  // No <link rel="icon"> here: both shells already carry it, and a SECOND icon link would
+  // break branding.js's operator-favicon override (setLinkRel updates the first match
+  // while the browser honours the last). fallbackShell() carries its own.
+  function seoHead({ title, description, canonical, image, type, publishedAt }) {
+    const brand = poolSettings.getSection('branding');
+    const siteName = brand.pool_name || 'Grin Mining Pool';
+    const full = title ? `${title} — ${siteName}` : siteName;
+    let h = '\n<title>' + attrEsc(full) + '</title>\n';
+    // Marker read by branding.js: this page's metadata is per-item and server-rendered,
+    // so the generic site-wide title/description/og template must NOT overwrite it.
+    h += '<meta name="server-seo" content="1">\n';
+    h += '<link rel="manifest" href="/manifest.json">\n';
+    if (canonical) h += '<link rel="canonical" href="' + attrEsc(canonical) + '">\n';
+    if (description) h += '<meta name="description" content="' + attrEsc(description) + '">\n';
+    h += '<meta property="og:type" content="' + attrEsc(type || 'website') + '">\n';
+    h += '<meta property="og:site_name" content="' + attrEsc(siteName) + '">\n';
+    h += '<meta property="og:title" content="' + attrEsc(full) + '">\n';
+    if (description) h += '<meta property="og:description" content="' + attrEsc(description) + '">\n';
+    if (canonical) h += '<meta property="og:url" content="' + attrEsc(canonical) + '">\n';
+    if (image) h += '<meta property="og:image" content="' + attrEsc(image) + '">\n';
+    if (publishedAt) {
+      h += '<meta property="article:published_time" content="' +
+        attrEsc(new Date(publishedAt * 1000).toISOString()) + '">\n';
+    }
+    h += '<meta name="twitter:card" content="' + (image ? 'summary_large_image' : 'summary') + '">\n';
+    h += '<meta name="twitter:title" content="' + attrEsc(full) + '">\n';
+    if (description) h += '<meta name="twitter:description" content="' + attrEsc(description) + '">\n';
+    if (image) h += '<meta name="twitter:image" content="' + attrEsc(image) + '">\n';
+    return h;
+  }
+
+  function sendShell(res, shellName, fallbackId, head) {
+    const shell = readShell(shellName) || fallbackShell(fallbackId);
+    const idx = shell.indexOf(HEAD_MARK);
+    let html = shell;
+    if (idx !== -1) {
+      // Remove the shell's own <title> (head slice only) before injecting ours. HTML
+      // allows exactly one, and browsers/Google keep the first — so without this every
+      // post would still have shown the shell's generic "Blog — <pool>" in search.
+      const headHtml = shell.slice(0, idx).replace(/[ \t]*<title\b[^>]*>[\s\S]*?<\/title>\s*/i, '');
+      html = headHtml + head + shell.slice(idx);
+    }
+    res.setHeader('Cache-Control', 'no-cache');
+    res.type('html').send(html);
+  }
+
+  // Absolute URL for an image path that may already be absolute.
+  const absImage = (origin, src) =>
+    (!src ? '' : /^https?:\/\//i.test(src) ? src : origin + (src.startsWith('/') ? src : '/' + src));
+
+  // /blog/<slug> — the clean post permalink. Plain :slug, no inline regex: Express 4's
+  // path-to-regexp accepts `:slug([A-Za-z0-9_-]+)` but Express 5 THROWS on it at boot,
+  // which would take the whole pool down over a blog route. Nothing needs it — nginx
+  // already constrains the slug charset, getPublic() runs a parameterised query, and an
+  // unknown slug renders the 404 shell. "/blog/rss.xml" is registered earlier, and
+  // Express matches in registration order, so it still wins over this.
+  app.get('/blog/:slug',
+    rateLimiter.middleware('public'),
+    (req, res) => {
+      try {
+        const origin = siteOrigin(req);
+        const post = postsManager.getPublic(req.params.slug);
+        if (!post) {
+          // Still serve the shell (its client script renders a "post not found" state),
+          // but say 404 so crawlers don't index a missing post.
+          res.status(404);
+          return sendShell(res, 'post.html', 'post-body', seoHead({
+            title: 'Post not found', canonical: origin + '/blog/' + req.params.slug,
+          }));
+        }
+        sendShell(res, 'post.html', 'post-body', seoHead({
+          title: post.title,
+          description: post.excerpt || toDescription(post.body_html, ''),
+          canonical: origin + '/blog/' + post.slug,
+          image: absImage(origin, post.cover_image),
+          type: 'article',
+          publishedAt: post.published_at,
+        }));
+      } catch (err) {
+        res.status(500).type('text/plain').send('Error');
+      }
+    }
+  );
+
+  // /page.html?p=<key> — the CMS content pages (About / Terms / Privacy / FAQ …).
+  app.get('/page.html',
+    rateLimiter.middleware('public'),
+    (req, res) => {
+      try {
+        const origin = siteOrigin(req);
+        const key = String(req.query.p || '');
+        const page = key ? pagesManager.getPublic(key) : null;
+        if (!page) {
+          res.status(404);
+          return sendShell(res, 'page.html', 'page-body', seoHead({
+            title: 'Page not found', canonical: origin + '/page.html',
+          }));
+        }
+        sendShell(res, 'page.html', 'page-body', seoHead({
+          title: page.seo_title || page.title,
+          description: page.seo_desc || toDescription(page.html, ''),
+          canonical: origin + '/page.html?p=' + encodeURIComponent(page.key),
+        }));
+      } catch (err) {
+        res.status(500).type('text/plain').send('Error');
       }
     }
   );
@@ -3025,8 +3206,10 @@ function setupRoutes() {
   });
 
   // ─── Network-map exposure gate (access.network_map_public, OFF by default) ──────────────
-  // Guards the two feeds behind /network-map.html. Neither has ever returned an IP — peer
-  // IPs never leave the DB and every globe coordinate is randomized within its country — but
+  // Guards the two feeds behind /network-map.html. Neither has ever returned an IP — peer IPs
+  // never leave the DB and no coordinate is ever resolved: an aggregate marker sits on its
+  // country's exact centroid (geoip.countryCentroid) and the country itself is published beside
+  // it, so there is nothing for a scattered point to hide — but
   // both publish a per-country breakdown of who mines here / who this node peers with, and on
   // a small pool a country with one entry names one person. Disabled → 404 (not 403: a 403
   // confirms the feature exists and is merely switched off). network-map.js already treats a
@@ -3047,6 +3230,17 @@ function setupRoutes() {
       return Math.max(1, parseInt(poolSettings.getSection('access').network_map_min_bucket, 10) || 3);
     } catch (e) {
       return 3;
+    }
+  };
+  // Operator-declared country of the central (hub) box, set in admin → Access. Most pools sit
+  // behind a CDN, so the box cannot geo-locate itself — nothing but the operator knows where it
+  // is. Blank falls through to the derivation chain in /api/pool/topology.
+  const hubCountryCode = () => {
+    try {
+      const cc = String(poolSettings.getSection('access').hub_country_code || '').toUpperCase();
+      return /^[A-Z]{2}$/.test(cc) ? cc : null;
+    } catch (e) {
+      return null;
     }
   };
 
@@ -3070,9 +3264,21 @@ function setupRoutes() {
       const WINDOW_S = 900, OFFLINE_S = 600, CYCLE = 42, SOL = 16384;
       const nowS = Math.floor(Date.now() / 1000), cutoff = nowS - WINDOW_S;
 
-      const locations = db.prepare(
+      // Two views of the same table, on purpose:
+      //   locationsAll — every row. Used ONLY to look up which country a region sits in, for
+      //     miners whose own country we can't resolve, and for the hub's location. Both are
+      //     facts about where a box IS, which don't stop being true when a row is unpublished.
+      //   locations    — is_active = 1 only, the same filter the public connect UI applies
+      //     (reactor-dashboard.js). A deactivated row (or one seeded ahead of the gateway
+      //     actually being built) is not a place this pool runs, so it must not put a marker on
+      //     the public globe: unfiltered it drew as a red "offline" gateway, which reads as a
+      //     broken pool rather than an unused row. Also what the stratum probe works from —
+      //     no point dialling an endpoint nobody is being sent to.
+      const locationsAll = db.prepare(
         `SELECT region, label, country, country_code, stratum_url, is_active FROM pool_locations`
       ).all();
+      const locations = locationsAll.filter(l => l.is_active === 1 || l.is_active === true);
+      const locAllByRegion = new Map(locationsAll.map(l => [l.region, l]));
       const agg = db.prepare(
         `SELECT region, COUNT(DISTINCT grin_address) AS miners, COALESCE(SUM(difficulty),0) AS sumdiff,
                 MAX(created_at) AS last_share
@@ -3110,7 +3316,11 @@ function setupRoutes() {
       // Markers sit on the country centroid. `perCountry` counts how many we've already
       // placed in each country so the 2nd+ marker there (a second gateway, or the hub next
       // to a gateway) gets a small de-stack nudge instead of landing on the same pixel.
-      const gateways = [], gwByRegion = {}, perCountry = {};
+      // gwByRegion has a null prototype: region tags are operator-chosen strings, and on a plain
+      // {} a region named 'constructor'/'toString' would answer truthy to the lookups below
+      // without ever having been registered — the client would then be handed a gateway tag it
+      // can't resolve to a position.
+      const gateways = [], gwByRegion = Object.create(null), perCountry = {};
       const nudgeFor = (cc) => (cc ? (perCountry[cc] = (perCountry[cc] || 0) + 1) - 1 : 0);
       for (const loc of locations) {
         const a = byRegion.get(loc.region) || { miners: 0, sumdiff: 0, last_share: 0 };
@@ -3148,7 +3358,13 @@ function setupRoutes() {
         let cc = null, name = null;
         const g = geoByAddr.get(addr);
         if (g && g.country_code) { cc = g.country_code; name = g.country || geoip.countryName(cc); geoHits++; }
-        else { const loc = gwByRegion[region]; if (loc && loc.country_code) { cc = loc.country_code; name = loc.country; } }
+        // Fallback from locationsAll, NOT from the published gateway list: a miner connected
+        // through a region the operator has since unpublished still mines from the country that
+        // region is in, and dropping them here would quietly shrink the miner total.
+        else {
+          const loc = locAllByRegion.get(region);
+          if (loc && loc.country_code) { cc = loc.country_code; name = loc.country || geoip.countryName(cc); }
+        }
         if (!cc) continue;
         let c = countries.get(cc);
         if (!c) { c = { cc, name: name || geoip.countryName(cc), miners: 0, votes: {} }; countries.set(cc, c); }
@@ -3161,7 +3377,12 @@ function setupRoutes() {
       const named = [], thin = [];
       for (const c of countries.values()) (c.miners >= kMin ? named : thin).push(c);
       const countryList = named.map(c => {
-        const gw = Object.entries(c.votes).sort((a, b) => b[1] - a[1])[0][0];
+        const topRegion = Object.entries(c.votes).sort((a, b) => b[1] - a[1])[0][0];
+        // Only name the region if it is a PUBLISHED gateway — the client resolves this string
+        // against the gateways it was given, and an unresolvable one made it draw the arc to
+        // whichever gateway happened to be first. null = "we're not saying", and the client
+        // arcs to the hub instead of to an unrelated city.
+        const gw = gwByRegion[topRegion] ? topRegion : null;
         // Nudged off the same counter the gateways used: a gateway's own country almost
         // always has miners too, and an un-nudged marker would land on the exact pixel of
         // that gateway — the hit-test keeps the first match, so the miner tooltip would be
@@ -3180,15 +3401,45 @@ function setupRoutes() {
         });
       }
 
-      // Hub = this settlement core; best-effort location (configured hub country → local
-      // region's country → busiest online gateway's country).
-      const hubCc = config.hub_country_code
+      // Hub = this settlement core. Nothing on the box can discover its own country (it is
+      // behind nginx, usually behind a CDN), so the location is operator-declared with a
+      // derivation chain behind it, most authoritative first:
+      //   1. access.hub_country_code   — admin → Access (the one field an operator can edit live)
+      //   2. config.hub_country_code   — pool.json escape hatch (no UI, honoured if hand-set)
+      //   3. config.region_country_code — Script 07 → 2) Configure ("where is THIS server?")
+      //   4. this box's own pool_locations row — keyed on config.region, NOT gated on
+      //      role === 'singlebox' like `localRegion` is: a 'hub' role still registers its own
+      //      region via ensureLocalRegion(), and gating it here left the hub unlocated on
+      //      every multi-region install.
+      //   5. busiest ONLINE gateway → 6. any gateway with a country → 7. busiest miner country.
+      // All seven can miss (fresh install, nothing configured, no miners). Then lat/lng go out
+      // as null and the map DRAWS NO HUB — never a placeholder position (network-map.js keeps
+      // no fallback coordinate: a wrong hub country is worse than an absent marker).
+      // locationsAll, not locations: "where is this box" stays true whether or not the operator
+      // publishes that region as a place to point a miner at.
+      const localRow = locationsAll.find(l => l.region === config.region) || null;
+      const rawHubCc = hubCountryCode()
+        || config.hub_country_code
+        || config.region_country_code
         || (localRegion && gwByRegion[localRegion] && gwByRegion[localRegion].country_code)
+        || (localRow && localRow.country_code)
         || (gateways.filter(g => g.online).sort((a, b) => b.miners - a.miners)[0] || {}).country_code
+        || (gateways.find(g => g.country_code) || {}).country_code
+        || (countryList.find(c => c.country_code) || {}).country_code
         || null;
-      const hubPos = geoip.countryCentroid(hubCc, nudgeFor(hubCc));
+      // Normalise ONCE, at the end of the chain: only the admin field is validated on save, so
+      // a hand-edited pool.json ('vn', 'Vietnam') or an old DB row could otherwise reach
+      // countryCentroid() in a form it can't match and drop the marker without a word.
+      const hubCc = /^[A-Z]{2}$/.test(String(rawHubCc || '').toUpperCase())
+        ? String(rawHubCc).toUpperCase() : null;
+      const hubPos = hubCc ? geoip.countryCentroid(hubCc, nudgeFor(hubCc)) : null;
+      // Live pool name first: pool_info.pool_name is what the rest of the site renders, and it is
+      // editable in admin, whereas pool.json's `pool_name` is frozen at install time ("My Grin
+      // Pool") — reading that one labelled the hub marker with a name shown nowhere else.
+      let hubLabel = null;
+      try { hubLabel = poolSettings.getSection('pool_info').pool_name || null; } catch (_) {}
       const hub = {
-        label: config.pool_name || config.name || 'Pool Hub',
+        label: hubLabel || config.pool_name || config.name || 'Pool Hub',
         country_code: hubCc, country: hubCc ? geoip.countryName(hubCc) : null,
         lat: hubPos ? hubPos.lat : null, lng: hubPos ? hubPos.lng : null
       };
@@ -3196,7 +3447,13 @@ function setupRoutes() {
       res.json({
         hub, gateways, countries: countryList,
         totals: {
-          miners: countryList.reduce((s, c) => s + c.miners, 0),
+          // Distinct live miner addresses — the SAME set /api/pool/stats reports as
+          // active_miners (both come from minerManager's active sessions), so the map's
+          // placard can never disagree with the homepage. Deliberately not the sum of
+          // countries[]: a miner whose country resolves to nothing at all (no geoip and a
+          // region row with no country declared) is absent from that array but is still
+          // mining, and summing it under-reported the pool.
+          miners: addrRegion.size,
           gateways_up: gateways.filter(g => g.online).length,
           gateways_total: gateways.length,
           // True distinct-country count (thin ones are hidden by name, not by tally).

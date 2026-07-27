@@ -697,8 +697,11 @@ function createSchema() {
     // ─── Network-map geo layers (COUNTRY-ONLY; feeds /api/pool/topology + /api/network/peers) ──
     // Privacy contract (lib/geoip.js): a miner's transient real IP is resolved to a COUNTRY
     // CODE at its first accepted share and ONLY the country is kept here — never the IP, never
-    // a city, never coordinates. Map dots are randomized within the country server-side. One
-    // row per address; upserted (throttled) so a miner's country stays current without history.
+    // a city, never coordinates. The map draws a miner country as the FILLED COUNTRY, with the
+    // marker on that country's exact centroid (geoip.countryCentroid) — positions are not
+    // scattered/randomized, because the country is published beside them and a jittered point
+    // could only land in the wrong one. One row per address; upserted (throttled) so a miner's
+    // country stays current without history.
     `CREATE TABLE IF NOT EXISTS miner_geo (
       grin_address TEXT PRIMARY KEY,
       country_code TEXT DEFAULT NULL,
@@ -910,6 +913,8 @@ function migratePagesFromConfig() {
 // migratePagesFromConfig), so it never re-seeds even after the operator deletes/edits
 // rows in admin → Regions. INSERT OR IGNORE keeps any operator row that already owns a
 // region tag. `stratumPort` is the configured public stratum port (default 3333).
+// Rows land INACTIVE — nothing public shows a region until the operator enables it (see the
+// is_active note at the insert below).
 //
 // `poolDomain` is the pool's own public hostname (config.subdomain). These are GRINIUM's
 // real regional endpoints, so they're seeded ONLY for the actual grinium.com deployment —
@@ -917,7 +922,14 @@ function migratePagesFromConfig() {
 // connect to the wrong pool). Forks get a clean slate and rely on ensureLocalRegion()
 // (their own domain as region 1) + admin → Regions to declare more. No marker is stamped
 // on the skip path, so once a grinium domain is configured the seed still runs on restart.
-function seedDefaultRegions(stratumPort, poolDomain) {
+// `localRegion` (config.region) is EXCLUDED from the seed. This box's own region is not a plan
+// — it is running, right here — and it is registered active by ensureLocalRegion() a moment
+// later, from the location the operator gave in 2) Configure. Without this exclusion a grinium
+// box whose region tag matches a seed tag (e.g. 'sgn') got an INACTIVE row created here first,
+// and ensureLocalRegion only backfills empty columns — it deliberately never re-activates a row,
+// so as not to override an operator who switched a region off — leaving the pool's own region
+// unpublished: no connect card, no gateway on the map.
+function seedDefaultRegions(stratumPort, poolDomain, localRegion) {
   try {
     const dom = String(poolDomain || '').toLowerCase();
     if (!(dom === 'grinium.com' || dom.endsWith('.grinium.com'))) return;
@@ -944,11 +956,18 @@ function seedDefaultRegions(stratumPort, poolDomain) {
       { v: 1, region: 'ams', label: 'Amsterdam',   country: 'Netherlands',    cc: 'NL', host: 'ams.grinium.com' },
       { v: 2, region: 'sgn', label: 'Saigon',      country: 'Vietnam',        cc: 'VN', host: 'sgn.grinium.com' }
     ];
-    const pending = REGIONS.filter(r => r.v > applied);
+    const local = String(localRegion || '').trim().toLowerCase();
+    const pending = REGIONS.filter(r => r.v > applied && r.region !== local);
+    // Seeded INACTIVE (is_active = 0), deliberately. A seed row is a PLAN, not a running
+    // gateway: the host may not exist yet when this fires. Active rows are published — the
+    // connect grid tells miners to point their rigs at that hostname, and the network map draws
+    // a marker for it — so seeding them active advertised boxes that were never built (and put
+    // 5 markers on the globe for a single-box pool). The operator flips each one on in
+    // admin → Regions once its gateway is actually deployed (scripts/lib/07_lib_gateway.sh).
     const insert = db.prepare(`
       INSERT OR IGNORE INTO pool_locations
         (region, label, country, country_code, stratum_url, is_active)
-      VALUES (?, ?, ?, ?, ?, 1)
+      VALUES (?, ?, ?, ?, ?, 0)
     `);
     const stamp = db.prepare(`
       INSERT INTO pool_config (section, key, value, value_type)
@@ -962,7 +981,8 @@ function seedDefaultRegions(stratumPort, poolDomain) {
       stamp.run(String(SEED_VERSION)); // seed + "done" marker committed atomically
     });
     tx();
-    console.warn(`[db] seeded ${pending.length} default regional endpoints (v${applied}→v${SEED_VERSION}, port ${port})`);
+    console.warn(`[db] seeded ${pending.length} default regional endpoints INACTIVE ` +
+      `(v${applied}→v${SEED_VERSION}, port ${port}) — enable each in admin → Regions once its gateway is live`);
   } catch (e) {
     console.error(`[db] seedDefaultRegions failed: ${e.message}`);
   }

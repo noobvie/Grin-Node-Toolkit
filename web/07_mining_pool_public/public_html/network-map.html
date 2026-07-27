@@ -113,9 +113,17 @@
   </style>
 </head>
 <body>
+  <noscript>
+    <div class="noscript-note">
+      <b>JavaScript is required.</b> This site builds its navigation and loads its live
+      figures in the browser, so with scripts blocked the page stays empty. Enable
+      JavaScript for this site to use it. The pool's data is also available as plain
+      JSON over its <a href="/api-docs.html">public API</a> if you would rather not.
+    </div>
+  </noscript>
   <!-- header injected by /js/public-shell.js -->
 
-  <div class="wrap">
+  <main class="wrap" id="main" tabindex="-1">
     <div class="nm-deck">
       <header class="nm-head">
         <div>
@@ -128,9 +136,14 @@
       <!-- globe -->
       <section class="panel">
         <span class="screws"></span>
-        <h2 class="panel-title">Global Routing <span class="tag">☢ ORTHO</span>
+        <h2 class="panel-title"><span class="tag">N-01</span> Global routing
           <span class="nm-info" tabindex="0">i<span class="tip"><b>Privacy.</b> Country is the finest location this map holds — <b>no coordinate, city or IP is ever resolved or stored</b>. Miners show as a <b>shaded country</b>, not a point, so nothing implies a spot inside it, and countries with too few miners to name are merged into an unlabelled bucket with no position at all. Gateway markers sit on the country centroid and show live edge status.</span></span>
-          <span class="right">drag · scroll to zoom</span>
+          <!-- The panel codes (N-01…N-04) were added 2026-07-26. Every other page uses
+               .tag for the panel's code — this page was using the same chip for flavour
+               ("☢ ORTHO") and for a timeframe ("30d"), so the one visual token meant three
+               different things across the site. Those two labels now sit in .right, which
+               is where every other panel puts its subtitle. -->
+          <span class="right">orthographic · drag · scroll to zoom</span>
         </h2>
         <div class="nm-controls">
           <span class="nm-toggle on" data-t="spin"><span class="sw"></span>Auto-rotate</span>
@@ -151,7 +164,7 @@
       <!-- legend -->
       <section class="panel">
         <span class="screws"></span>
-        <h2 class="panel-title">Legend <span class="right">5 layers</span></h2>
+        <h2 class="panel-title"><span class="tag">N-02</span> Legend <span class="right">5 layers</span></h2>
         <div class="panel-body">
           <div class="nm-legend">
             <div class="nm-lg"><div class="key"><span class="k khub"></span></div><div><div class="name">Hub</div><div class="desc">Central settlement + payout core.</div></div></div>
@@ -172,7 +185,7 @@
       <div class="nm-charts">
         <section class="panel">
           <span class="screws"></span>
-          <h2 class="panel-title">Miners by Country <span class="right">top 10 + others</span></h2>
+          <h2 class="panel-title"><span class="tag">N-03</span> Miners by country <span class="right">top 10 + others</span></h2>
           <div class="panel-body">
             <div class="nm-donut-wrap"><svg class="nm-donut" id="nm-donut-miners" viewBox="0 0 200 200" role="img" aria-label="Miner distribution by country"></svg><div class="nm-dlegend" id="nm-legend-miners"></div></div>
             <p class="nm-chart-note">Share of connected miners, grouped by country. Exact counts, country-level location only — <b>no individual is identifiable</b>.</p>
@@ -180,7 +193,7 @@
         </section>
         <section class="panel">
           <span class="screws"></span>
-          <h2 class="panel-title">Grin Nodes by Country <span class="tag">30d</span><span class="right">top 10 · <a class="tlink" href="https://world.grin.money/" target="_blank" rel="noopener">see details ↗</a></span></h2>
+          <h2 class="panel-title"><span class="tag">N-04</span> Grin nodes by country <span class="right">30d · top 10 · <a class="tlink" href="https://world.grin.money/" target="_blank" rel="noopener">see details ↗</a></span></h2>
           <div class="panel-body">
             <div class="nm-donut-wrap"><svg class="nm-donut" id="nm-donut-nodes" viewBox="0 0 200 200" role="img" aria-label="Grin node distribution by country"></svg><div class="nm-dlegend" id="nm-legend-nodes"></div></div>
             <p class="nm-chart-note">Distinct <b>Grin P2P peers</b> this pool's node has seen over the last 30 days, by country.</p>
@@ -196,7 +209,7 @@
         <span><i>Grin nodes · 30d</i><b id="nm-s-nodes">—</b></span>
       </div>
     </div>
-  </div>
+  </main>
 
   <!-- footer injected by /js/public-shell.js -->
   <script src="/js/network-map.js"></script>

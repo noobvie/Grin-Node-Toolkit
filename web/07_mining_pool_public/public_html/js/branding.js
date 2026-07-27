@@ -145,6 +145,15 @@
 
     var poolName = pool.name || '';
     var tagline = pool.tagline || '';
+
+    // Blog posts and CMS pages get their <title>/description/og:* rendered SERVER-side,
+    // per item (index.js "/blog/:slug" and "/page.html"). The generic template below is
+    // site-wide and would overwrite all of it in the rendered DOM: the per-post title
+    // would become "Post — <pool>", the description would revert to the site default,
+    // and — worst — the canonical is built from location.pathname alone, so every
+    // /page.html?p=<key> would claim the same canonical and Google would fold the whole
+    // CMS into one URL. Skip those fields when the server has already answered them.
+    var serverSeo = !!document.querySelector('meta[name="server-seo"]');
     var pageLabel = pageSeo.label || prettyPage(page);
     var isHome = (page === 'home' || page === 'index');
 
@@ -170,34 +179,46 @@
     if (!title && seo.title_template && poolName) {
       title = fillTokens(seo.title_template);
     }
-    if (title) document.title = title;
+    if (title && !serverSeo) document.title = title;
 
     var description = pageSeo.description || seo.meta_description;
-    setMetaByName('description', description);
+    if (!serverSeo) setMetaByName('description', description);
     setMetaByName('keywords', seo.meta_keywords);
     setMetaByName('theme-color', seo.theme_color);
     if (seo.robots_noindex) setMetaByName('robots', 'noindex, nofollow');
 
     var siteUrl = seo.site_url || '';
+    // location.pathname deliberately, NOT href: query strings and fragments are never part
+    // of a canonical here — except on /page.html?p=<key>, where the query IS the identity.
+    // That page is server-rendered, so serverSeo already holds the correct canonical and we
+    // leave it alone rather than special-casing the path.
     var canonical = siteUrl ? absUrl(siteUrl, location.pathname) : '';
-    if (canonical) setLinkRel('canonical', canonical);
+    if (canonical && !serverSeo) setLinkRel('canonical', canonical);
 
     // Open Graph
-    setMetaByProperty('og:type', 'website');
-    setMetaByProperty('og:title', seo.og_title || title || poolName);
-    setMetaByProperty('og:description', seo.og_description || description);
+    if (!serverSeo) {
+      setMetaByProperty('og:type', 'website');
+      setMetaByProperty('og:title', seo.og_title || title || poolName);
+      setMetaByProperty('og:description', seo.og_description || description);
+      if (canonical) setMetaByProperty('og:url', canonical);
+    }
     setMetaByProperty('og:site_name', poolName);
     setMetaByProperty('og:locale', seo.og_locale);
-    if (canonical) setMetaByProperty('og:url', canonical);
     var ogImage = absUrl(siteUrl, seo.og_image_url);
-    if (ogImage) setMetaByProperty('og:image', ogImage);
+    // A post with its own cover image already has og:image/twitter:image from the server;
+    // the site-wide default must not replace it.
+    if (ogImage && !(serverSeo && document.querySelector('meta[property="og:image"]'))) {
+      setMetaByProperty('og:image', ogImage);
+      setMetaByName('twitter:image', ogImage);
+    }
 
     // Twitter card
-    setMetaByName('twitter:card', seo.twitter_card_type || 'summary_large_image');
-    setMetaByName('twitter:title', seo.og_title || title || poolName);
-    setMetaByName('twitter:description', seo.og_description || description);
+    if (!serverSeo) {
+      setMetaByName('twitter:card', seo.twitter_card_type || 'summary_large_image');
+      setMetaByName('twitter:title', seo.og_title || title || poolName);
+      setMetaByName('twitter:description', seo.og_description || description);
+    }
     if (seo.twitter_handle) setMetaByName('twitter:site', normalizeHandle(seo.twitter_handle));
-    if (ogImage) setMetaByName('twitter:image', ogImage);
 
     // Favicon + PWA icons
     if (brand.favicon_url) setLinkRel('icon', brand.favicon_url);

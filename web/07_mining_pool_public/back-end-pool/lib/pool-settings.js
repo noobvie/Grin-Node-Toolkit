@@ -214,15 +214,22 @@ class PoolSettings {
       // Stored as a JSON array of lowercase strings.
       extra_banned_passwords: '[]',
       // Publish the network-map data feeds (/api/pool/topology + /api/network/peers)?
-      // OFF by default. Neither endpoint has ever returned an IP — globe positions are
-      // randomized within a country and peer IPs never leave the DB — but both publish a
-      // per-country breakdown of who connects to this pool, and on a small pool a country
-      // with a single entry is effectively a pointer at one operator. Opt in deliberately.
+      // OFF by default. Neither endpoint has ever returned an IP — no coordinate is resolved at
+      // all (an aggregate sits on its country's centroid, and that country is published beside
+      // it) and peer IPs never leave the DB — but both publish a per-country breakdown of who
+      // connects to this pool, and on a small pool a country with a single entry is effectively
+      // a pointer at one operator. Opt in deliberately.
       network_map_public: 'false',
       // k-anonymity floor applied when the above IS enabled: a country is omitted from the
       // public response unless it holds at least this many peers/miners. Rolled into an
       // "Other" bucket instead, so totals stay honest without naming the thin countries.
       network_map_min_bucket: 3,
+      // Country of the central (hub) box, as an ISO-3166-1 alpha-2 code — the top of the hub
+      // location chain in /api/pool/topology. The box cannot discover this itself (it sits
+      // behind nginx and usually a CDN), so it is declared here. Blank = derive it (pool.json
+      // region_country_code → this box's region row → busiest gateway → busiest miner country);
+      // if every step misses, the map simply draws no hub marker.
+      hub_country_code: '',
     },
     alerts: {
       alert_check_interval_secs: 60,
@@ -747,6 +754,18 @@ class PoolSettings {
         const n = parseInt(val, 10);
         if (isNaN(n) || n < 1 || n > 100) throw new Error('network_map_min_bucket must be 1-100');
         return n;
+      },
+      // Blank (= derive) or exactly two letters, stored uppercase — this catches the shape
+      // mistakes ('VNM', 'Vietnam', 'vn '), which is as far as the check can honestly go: the
+      // map's centroid table (lib/geoip.js COUNTRIES) is a curated ~54-country list, so
+      // validating membership here would reject a real ISO code just because we hold no
+      // position for that country yet. A well-formed code we can't place draws no hub marker
+      // (never a wrong one) — see the note in the admin helper text.
+      hub_country_code: (val) => {
+        const s = String(val == null ? '' : val).trim().toUpperCase();
+        if (s === '') return '';
+        if (!/^[A-Z]{2}$/.test(s)) throw new Error('hub_country_code must be a 2-letter ISO country code (e.g. VN) or blank');
+        return s;
       },
     },
     alerts: {

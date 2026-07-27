@@ -34,7 +34,11 @@
             <div class="helper-text">Manual key: <code id="twofa-secret" style="user-select:all;"></code></div>
             <div class="form-group" style="margin-top:.6rem;">
               <label for="twofa-confirm-code"><strong>2.</strong> Enter the current 6-digit code to confirm</label>
-              <input type="text" id="twofa-confirm-code" inputmode="numeric" autocomplete="off" placeholder="123456">
+              <!-- settings-skip on every helper input on this page: the save harvester sends each
+                   non-empty id inside .settings-form as a config key, and updateSection() REJECTS
+                   an id that isn't in the access schema — so a code still sitting in this box made
+                   "Save Changes" fail with `Unknown key 'twofa-confirm-code'`. -->
+              <input type="text" id="twofa-confirm-code" class="settings-skip" inputmode="numeric" autocomplete="off" placeholder="123456">
             </div>
             <button class="btn btn-primary" onclick="confirm2fa()">Confirm &amp; Enable</button>
             <button class="btn btn-secondary" onclick="cancel2faEnroll()">Cancel</button>
@@ -44,7 +48,7 @@
             <div class="helper-text" style="color:var(--success,#48bb78);font-weight:600;">✓ 2FA is enabled. <span id="twofa-recovery-remaining"></span></div>
             <div class="form-group" style="margin-top:.5rem;">
               <label for="twofa-action-code">Current 6-digit code (or a backup recovery code)</label>
-              <input type="text" id="twofa-action-code" inputmode="numeric" autocomplete="off" placeholder="123456 or XXXXX-XXXXX">
+              <input type="text" id="twofa-action-code" class="settings-skip" inputmode="numeric" autocomplete="off" placeholder="123456 or XXXXX-XXXXX">
             </div>
             <button class="btn btn-secondary" onclick="regen2faRecovery()">Regenerate recovery codes</button>
             <button class="btn btn-danger" onclick="disable2fa()">Disable 2FA</button>
@@ -77,11 +81,12 @@
           <div class="helper-text">
             Controls the two feeds behind <code>/network-map.html</code>
             (<code>/api/pool/topology</code> and <code>/api/network/peers</code>).
-            Neither ever returns an IP address — Grin peer IPs never leave the database and
-            every point on the globe is randomised inside its country — but together they
-            publish <strong>which countries mine here and which countries this node peers
-            with</strong>. Off by default. While off, both endpoints return 404 and the page
-            renders its illustrative sample globe.
+            Neither ever returns an IP address, and no coordinate is ever resolved: a miner or
+            gateway is located to its <strong>country only</strong>, drawn as the filled country
+            itself, with the marker on that country's exact centroid — so the shape states
+            exactly the precision we hold. Together they still publish <strong>which countries
+            mine here and which countries this node peers with</strong>. Off by default. While
+            off, both endpoints return 404 and the page renders its illustrative sample globe.
           </div>
           <div class="checkbox-group">
             <input type="checkbox" id="network_map_public" name="network_map_public">
@@ -95,6 +100,25 @@
               or peers is folded into an unnamed <em>Other</em> bucket instead of being named,
               so a country holding one participant never points at one person. Totals still
               include them. Raise it on a small pool; <code>1</code> disables the protection.
+            </div>
+          </div>
+          <div class="form-group">
+            <label for="hub_country_code">Hub country code</label>
+            <!-- settings-allow-empty: the helper text documents "blank = derive", so clearing the
+                 field must persist as empty instead of being dropped by the form harvester. -->
+            <input type="text" id="hub_country_code" name="hub_country_code" maxlength="2"
+                   class="settings-allow-empty"
+                   placeholder="e.g. VN — blank to derive" style="text-transform:uppercase">
+            <div class="helper-text">
+              Where this central pool server is, as a 2-letter ISO code (<code>VN</code>,
+              <code>DE</code>, <code>US</code>). The box cannot detect this itself — it sits
+              behind nginx and usually a CDN. Blank derives it from the region location set in
+              Script 07 → <em>2) Configure</em>, then this box's own card in
+              <a href="regions.html">Regions</a>, then the busiest gateway. If every source is
+              blank the globe <strong>draws no hub marker</strong> rather than guessing a spot —
+              and the same applies to a code the map holds no position for (it carries centroids
+              for the ~54 countries Grin mining and nodes actually appear in). Use
+              <code>GB</code>, not <code>UK</code>.
             </div>
           </div>
         </div>
@@ -133,7 +157,7 @@
           <h3 class="section-title">Admin IP Allowlist</h3>
           <div class="helper-text">When non-empty, ONLY these IPs/CIDRs can reach the admin panel. Add your own IP <em>first</em> or you will lock yourself out.</div>
           <div class="list-item-input">
-            <input type="text" id="admin-allowlist-input" placeholder="192.168.1.0/24 or 203.0.113.5">
+            <input type="text" id="admin-allowlist-input" class="settings-skip" placeholder="192.168.1.0/24 or 203.0.113.5">
             <button class="btn btn-secondary" onclick="addToAdminAllowlist()">Add</button>
           </div>
           <div class="list-manager" id="admin-allowlist"></div>
@@ -143,7 +167,7 @@
           <h3 class="section-title">Admin IP Blacklist</h3>
           <div class="helper-text">Block these IPs/CIDRs from accessing the admin panel</div>
           <div class="list-item-input">
-            <input type="text" id="admin-blacklist-input" placeholder="192.168.0.0/16">
+            <input type="text" id="admin-blacklist-input" class="settings-skip" placeholder="192.168.0.0/16">
             <button class="btn btn-secondary" onclick="addToAdminBlacklist()">Add</button>
           </div>
           <div class="list-manager" id="admin-blacklist"></div>

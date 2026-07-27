@@ -87,6 +87,87 @@ a:hover { text-decoration: underline; }
 .addr { font-family: var(--mono); color: var(--text-dim); }
 .lead { color: var(--text-dim); font-size: 1.05em; margin-bottom: 18px; }
 
+/* ── No-JavaScript notice ──────────────────────────────────────────────────
+   Every page here is a JS shell: public-shell.js injects the header and footer,
+   and each page fetches its own numbers. With scripts blocked you previously got
+   a chrome-less page of "—" placeholders with no navigation and no explanation.
+   The <noscript> block each page ships is styled here so it reads as a notice. */
+.noscript-note {
+    max-width: 720px;
+    margin: 24px auto;
+    padding: 16px 20px;
+    border: 1px solid var(--warn, #d29922);
+    border-left-width: 4px;
+    border-radius: var(--radius-sm);
+    background: var(--bg-elev, transparent);   /* fallback: color-mix is 2023+ */
+    background: color-mix(in srgb, var(--warn, #d29922) 8%, transparent);
+    color: var(--text);
+    font-size: 14px;
+    line-height: 1.6;
+}
+.noscript-note b { color: var(--warn, #d29922); }
+
+/* ── Skip to content ───────────────────────────────────────────────────────
+   Injected by public-shell.js as the first focusable element on every page.
+   Off-screen until focused, then pinned top-left — never clipped to 1px, which
+   hides it from some screen readers and makes it unusable when it IS shown. */
+.skip-link {
+    position: absolute; top: -100px; left: 8px; z-index: 200;
+    padding: 10px 16px; border-radius: 0 0 var(--radius-sm) var(--radius-sm);
+    background: var(--accent); color: var(--bg);
+    font-family: var(--sans); font-size: 14px; font-weight: 700;
+    text-decoration: none;
+    transition: top .15s ease;
+}
+.skip-link:focus { top: 0; text-decoration: none; }
+
+/* Programmatic focus on the <main> landmark (from the skip link) must not paint a
+   ring around the entire page — the scroll + focus move is the feedback. Keyboard
+   focus on real controls is untouched. */
+main[tabindex="-1"]:focus { outline: none; }
+
+/* Baseline keyboard focus ring. Without this the nav links, panel links and .btn
+   family fell back to the UA default, which is invisible against the dark themes.
+   :focus-visible only — mouse clicks stay ring-free. */
+a:focus-visible,
+button:focus-visible,
+summary:focus-visible,
+[tabindex]:not([tabindex="-1"]):focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+    border-radius: var(--radius-sm);
+}
+
+/* ── Testnet banner ────────────────────────────────────────────────────────
+   Injected by public-shell.js (showTestnetBanner) on every PUBLIC page when
+   /api/config/pool-info reports network=testnet. These rules USED to live only in
+   css/pool.css, which no public page loads (it is the admin-panel stylesheet) — so
+   the one warning telling a visitor the coins are worthless rendered as unstyled
+   body text. They belong here, in the public bundle, beside the header they offset.
+
+   --testnet-banner-h is the single source of truth for the height: the banner sets
+   its own box from it and the sticky header is pushed down by exactly that much, so
+   both stay visible when the page scrolls. The value here is only the pre-paint
+   default — showTestnetBanner() overwrites it with the measured height, because the
+   text wraps to two rows on a narrow phone. Amounts across the site are labelled
+   GRIN regardless of network, so this bar is doing real work — keep it loud. */
+:root { --testnet-banner-h: 38px; }
+.testnet-banner {
+    position: sticky; top: 0; z-index: 60;   /* above the header (z-index: 50) */
+    box-sizing: border-box;
+    min-height: var(--testnet-banner-h);
+    display: flex; align-items: center; justify-content: center;
+    padding: 8px 16px;
+    background: #7a5c00;
+    color: #ffe14d;
+    border-bottom: 2px solid #ffe14d;
+    font-family: var(--mono);
+    font-size: 13px; font-weight: 700; letter-spacing: .04em;
+    text-align: center;
+}
+/* Push the sticky header below the banner so the warning is never covered. */
+body.has-testnet-banner header { top: var(--testnet-banner-h); }
+
 /* ── Top nav ───────────────────────────────────────────────────────────── */
 header {
     position: sticky; top: 0; z-index: 50;

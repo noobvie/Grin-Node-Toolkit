@@ -91,7 +91,10 @@
     }
     .copy-btn {
       margin-top: .6rem; padding: .45rem 1rem; cursor: pointer;
-      background: var(--accent, #7cb342); color: #07090c;
+      /* Ink on an accent fill is var(--bg), never a hardcoded near-black — the light
+         themes use a DARK accent on a light page bg, which made this (the Slatepack
+         copy CTA, the primary action on the page) unreadable. */
+      background: var(--accent, #7cb342); color: var(--bg, #07090c);
       border: none; border-radius: 6px; font-weight: 700;
     }
 
@@ -156,10 +159,18 @@
   </style>
 </head>
 <body>
+  <noscript>
+    <div class="noscript-note">
+      <b>JavaScript is required.</b> This site builds its navigation and loads its live
+      figures in the browser, so with scripts blocked the page stays empty. Enable
+      JavaScript for this site to use it. The pool's data is also available as plain
+      JSON over its <a href="/api-docs.html">public API</a> if you would rather not.
+    </div>
+  </noscript>
 
     <!-- header injected by /js/public-shell.js -->
 
-    <div class="wrap">
+    <main class="wrap" id="main" tabindex="-1">
         <!-- Sidebar ad slot (filled by /js/ads.js; hidden if empty) -->
         <div class="ad-slot ad-slot--sidebar" data-ad-slot="sidebar" style="display:none;"></div>
 
@@ -268,7 +279,7 @@
             </div>
 
         </div>
-    </div>
+    </main>
 
     <!-- footer injected by /js/public-shell.js -->
 

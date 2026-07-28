@@ -8,7 +8,14 @@ class HashrateTracker {
     this.minerManager = minerManager;
     this.samplingInterval = 60000;
     this.isRunning = false;
+    // hours|maxPoints → { at, series }. See getPoolHistory().
+    this._poolHistoryCache = new Map();
   }
+
+  // One sampling interval: recordHashrates() writes at most once per minute, so a shorter TTL
+  // would re-run the query for byte-identical output.
+  static POOL_HISTORY_TTL_MS = 60000;
+  static POOL_HISTORY_CACHE_MAX = 64;
 
   start() {
     if (this.isRunning) return;
@@ -276,9 +283,23 @@ class HashrateTracker {
 
   // Pool-wide time-series — SUM across addresses per recorded_at bucket (the history table is
   // per-address, so the pool series is not pre-aggregated). Returns [{ t, gps }] oldest→newest.
+  //
+  // CACHED, unlike getAccountHistory: this is the ONE public read whose cost scales with total
+  // pool size rather than with one miner's rows, it is identical for every caller (no address in
+  // the key), and the underlying data only changes once per samplingInterval — so a re-query
+  // inside that window can only ever return the same bytes. Every dashboard visitor requesting
+  // the same series therefore costs one query per minute, not one per request. Combined with
+  // idx_hashrate_time (db.js) this closes the amplification path where a cheap public GET at the
+  // rate limit drove a full-table scan; because better-sqlite3 is synchronous and stratum shares
+  // this process, that scan stalled share submission, not just the HTTP response.
   getPoolHistory(hours = 24, maxPoints = 288) {
+    const key = `${hours}|${maxPoints}`;
+    const now = Date.now();
+    const hit = this._poolHistoryCache.get(key);
+    if (hit && now - hit.at < HashrateTracker.POOL_HISTORY_TTL_MS) return hit.series;
+
     try {
-      const cutoff = Math.floor(Date.now() / 1000) - hours * 3600;
+      const cutoff = Math.floor(now / 1000) - hours * 3600;
       const rows = this.db.prepare(`
         SELECT recorded_at AS t, COALESCE(SUM(hashrate_gps), 0) AS gps
         FROM hashrate_history
@@ -286,10 +307,19 @@ class HashrateTracker {
         GROUP BY recorded_at
         ORDER BY recorded_at ASC
       `).all(cutoff);
-      return HashrateTracker._thin(rows, maxPoints);
+      const series = HashrateTracker._thin(rows, maxPoints);
+      // `hours` is clamped 1–720 at the route, so the key space is bounded — but never trust a
+      // caller's clamp to bound server memory. Drop the oldest entry past the cap.
+      if (this._poolHistoryCache.size >= HashrateTracker.POOL_HISTORY_CACHE_MAX) {
+        this._poolHistoryCache.delete(this._poolHistoryCache.keys().next().value);
+      }
+      this._poolHistoryCache.set(key, { at: now, series });
+      return series;
     } catch (err) {
       console.error(`Error fetching pool history: ${err.message}`);
-      return [];
+      // Do NOT cache a failure — a transient DB error would otherwise pin an empty chart for a
+      // full TTL. Serve the last good series if we still hold one.
+      return hit ? hit.series : [];
     }
   }
 

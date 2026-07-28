@@ -1882,6 +1882,18 @@ pool_guided_setup() {
     echo ""
     echo -e "  ${BOLD}Public pool:${RESET}   https://$_domain"
     echo -e "  ${BOLD}Admin login:${RESET}   https://$_domain/login.html   (redirects to /admin/ after sign-in)"
+    echo -e "  ${BOLD}API docs:${RESET}      https://$_domain/api-docs.html"
+    echo ""
+    # Listing feed. Always live (a plain public route — nothing to enable), but MPS does not
+    # auto-discover: it stays unpolled until a human there is given the URL. Printing it here is
+    # the only place an operator would learn it exists.
+    echo -e "  ${BOLD}Get listed on miningpoolstats.stream/grin${RESET}"
+    echo -e "  Feed (already live):  ${GREEN}https://$_domain/api/pool/poolstats${RESET}"
+    echo -e "  ${DIM}They POLL that URL — nothing is pushed and no file is generated. Contact them${RESET}"
+    echo -e "  ${DIM}via miningpoolstats.stream and ask to list the pool, giving that URL. Refreshes${RESET}"
+    echo -e "  ${DIM}every 60s; 1–5 min is a sensible poll interval. Aggregates only (no addresses),${RESET}"
+    echo -e "  ${DIM}so it needs no auth. Check it looks right before you send it:${RESET}"
+    echo -e "    ${CYAN}curl -s https://$_domain/api/pool/poolstats | python3 -m json.tool${RESET}"
     echo ""
     if [[ -n "$_allow" ]]; then
         echo -e "  ${BOLD}${YELLOW}The admin panel is IP-restricted${RESET} — only the listed IPs can reach /admin/."

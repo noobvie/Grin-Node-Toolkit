@@ -340,15 +340,72 @@ curl -s http://$HUB/api/pool/locations       # operator-declared active regions
 curl -s http://$HUB/api/stratum/stats
 curl -s http://$HUB/api/stratum/hashrate
 curl -s http://$HUB/api/pool/blocks
-curl -s http://$HUB/api/pool/miners
+curl -s http://$HUB/api/pool/miners           # balance distribution — addresses MASKED since 2026-07-28
 curl -s http://$HUB/api/pool/payments
-curl -s http://$HUB/api/miners/top
+# REMOVED 2026-07-28: /api/miners/top (public rich-list, see security audit §C1) and
+# /api/account/$ADDR/balance (every field of it is already in /api/account/$ADDR).
+curl -s http://$HUB/api/pool/poolstats        # pool-directory listing feed (see 1c below)
 curl -s http://$HUB/api/public/branding
+curl -s http://$HUB/api/public/endpoints      # the live API reference api-docs.html renders
 curl -s http://$HUB/api/account/$ADDR        # summary (404 until the addr has shares)
-curl -s http://$HUB/api/account/$ADDR/balance
 curl -s http://$HUB/api/account/$ADDR/balance/log
 curl -s http://$HUB/api/account/$ADDR/shares
 curl -s http://$HUB/api/account/$ADDR/tor-check
+
+# ── 1c) Getting listed on miningpoolstats.stream/grin ───────────────────────────
+# The pool is listed by PULL, not push: they poll a URL, we publish one. Hand them
+#     https://<your-pool-domain>/api/pool/poolstats
+# and nothing else — no file to generate, no cron, no auth carve-out (it is aggregates only,
+# so it is safe unauthenticated). Listings are added by a human at MPS on request; there is no
+# auto-discovery, so publishing the URL alone gets you nothing until you contact them.
+#
+# WHY THE SHAPE LOOKS LIKE THE SOLO FEED: it is a field-for-field mirror of solo's
+# poolstats_<net>.json (scripts/lib/07_mining_block_collector.py build_poolstats). If MPS has
+# already imported the solo feed, they have a working parser and need no new adapter. Adding
+# fields is safe; renaming or dropping one breaks their importer. Two fields are additive-only
+# extras here: pool.url and pool.reward_model.
+#
+# REFRESH: recomputed at most once per 60s and served from an in-process cache in between, so
+# polling faster than 1/min returns byte-identical output. 1–5 min is the sensible poll range.
+# (Solo's file is regenerated every 5 min by cron, so the pool feed is the fresher of the two.)
+# The `ts` field is the generation time — if it stops advancing, the feed is stale.
+# On a backend error the last good body is served for up to 15 min, then the endpoint 500s
+# rather than serving a frozen feed forever: a listing that silently stops updating is worse
+# than one that visibly goes down, because nobody notices the first.
+#
+# NULL vs 0 — do not treat them the same: network.* is null when the node is unreachable, and
+# network.hashrate_gps_24h stays null until pool_metrics_hourly has an hour of samples (it does
+# not backfill). pool.last_block is null until the pool finds its first non-orphaned block.
+curl -s https://$DOMAIN/api/pool/poolstats | python3 -m json.tool
+# Sanity before sending the URL: net matches the network you think you deployed, pool.name is
+# not still the default, and pool.url is set (it comes from config.subdomain — blank if the
+# installer never recorded a domain, which makes the listing link nowhere).
+
+# ── 1b) API reference contract (api-docs.html) ──────────────────────────────────
+# The endpoint LIST is derived from the live Express route table, so it cannot drift: a new
+# route under PUBLIC_API_PREFIXES appears by itself, a deleted one disappears. The per-endpoint
+# NOTES are hand-maintained in API_DOC_META and CAN drift. When you add a public route, add its
+# meta entry in the same commit — desc + shape at minimum. `shape` is not decoration: this API
+# is NOT uniform (newer /api/public/* routes return { success, data }, most older ones return
+# the payload raw or as a bare array, and errors are ALWAYS { error } with no success flag), and
+# the page publishes the real shape per row rather than one blanket claim that is wrong for most
+# of them.
+#
+# Drift check — runs on the SOURCE, so it needs no server and works before you deploy. Fails if a
+# public route has no meta entry, or a meta entry names a route that no longer exists:
+node -e '
+const src=require("fs").readFileSync("index.js","utf8");
+const pf=src.slice(src.indexOf("const PUBLIC_API_PREFIXES = ["));
+const P=[...pf.slice(0,pf.indexOf("];")).matchAll(/.(\/api\/[^"'"'"']+)./g)].map(m=>m[1]);
+const R=[...src.matchAll(/app\.(get|post|put|delete|patch)\(\s*.([^"'"'"']+)./g)]
+  .map(m=>m[1].toUpperCase()+" "+m[2]).filter(k=>P.some(p=>k.split(" ")[1].startsWith(p)));
+const b=src.slice(src.indexOf("const API_DOC_META = {"));
+const M=new Set([...b.slice(0,b.indexOf("\n  };")).matchAll(/.((?:GET|POST|PUT|DELETE|PATCH) \/api\/[^"'"'"']+).:/g)].map(m=>m[1]));
+const miss=R.filter(k=>!M.has(k)), dead=[...M].filter(k=>!R.includes(k));
+console.log("routes",R.length,"meta",M.size,"| undocumented",miss.length,miss,"| dead",dead.length,dead);
+process.exit(miss.length||dead.length?1:0);'
+
+curl -s http://$HUB/api/public/endpoints | python3 -m json.tool | head -40
 
 # ── 2) ingestion auth (satellite → hub) ─────────────────────────────────────────
 # wrong secret → 401

@@ -342,6 +342,18 @@ function createSchema() {
     )`,
 
     `CREATE INDEX IF NOT EXISTS idx_hashrate_address ON hashrate_history(grin_address, recorded_at DESC)`,
+    // Time-leading COVERING index for the POOL-WIDE series (getPoolHistory: WHERE recorded_at > ?
+    // GROUP BY recorded_at). idx_hashrate_address cannot serve it — a range predicate on the
+    // SECOND column of a composite index can't seek, so that query planned as a full
+    // `SCAN hashrate_history` + `USE TEMP B-TREE FOR GROUP BY` over a table that grows by one row
+    // per active miner per minute for hashrate_keep_days (100). (Nothing here runs ANALYZE, so
+    // there are no stats; given stats SQLite would skip-scan idx_hashrate_address instead — still
+    // a whole-index traversal plus the temp b-tree, so not a fix.) With hashrate_gps carried in the
+    // index the plan becomes `SEARCH ... USING COVERING INDEX (recorded_at>?)` — no table reads and
+    // no temp b-tree (the index is already in GROUP BY order). This matters more than a slow page:
+    // better-sqlite3 is synchronous and the stratum server shares this process, so a multi-second
+    // scan blocks share submission for every connected miner.
+    `CREATE INDEX IF NOT EXISTS idx_hashrate_time ON hashrate_history(recorded_at, hashrate_gps)`,
 
     // Pool-wide hourly rollup — one row per hour, aggregated across ALL miners, so its size is
     // independent of miner count (~1 MB/year). NEVER pruned (kept out of lib/retention.js) so the

@@ -207,7 +207,7 @@ reversal on fail/expiry, slate-id binding on slatepack finalize. **Incentives** 
 
 New / still-open findings:
 
-### C1 — [Medium] `/api/pool/miners` and `/api/pool/payments` leak full raw data, unauthenticated *and* un-rate-limited
+### C1 — [Medium] `/api/pool/miners` and `/api/pool/payments` leak full raw data, unauthenticated *and* un-rate-limited — **FIXED 2026-07-28**
 - **Evidence:** [index.js:1767-1779](../../web/07_mining_pool_public/back-end-pool/index.js#L1767-L1779)
   returns `grin_address, balance, is_online` for the top-500 addresses by balance (full addresses
   + exact live balances). [index.js:1781-1793](../../web/07_mining_pool_public/back-end-pool/index.js#L1781-L1793)
@@ -216,11 +216,29 @@ New / still-open findings:
   (most other public routes do), so both are freely scrapeable.
 - **Impact:** On a privacy coin this is the worst public-leak class — anyone can enumerate every
   miner's payout address, exact balance, and full payment cadence, and correlate the two lists.
-  This is the audit's long-standing open item ("public payments/miners aggregated or gated —
-  *verify*"); **it is still unaddressed in the current code.**
-- **Fix:** Return aggregates/anonymized rows only — truncated addresses (`grin1abc…wxyz`), bucketed
-  or omitted balances, totals/counts. Replace `SELECT *` with an explicit safe column list. Add the
-  `public` rate-limiter. (Per-address pages already correctly show only that exact address's data.)
+- **Fixed 2026-07-28**, in the course of verifying `api-docs.html` against the live route table —
+  the auto-generated reference was about to *advertise* all three of these:
+  - `/api/pool/miners` — addresses now masked via the shared `maskAddr()` (`grin1qxy…mn4p`). The
+    balance distribution is legitimate pool-health data and survives masking; the address→balance
+    mapping, which is what made it a targeting list, does not. No front-end consumed it.
+  - `/api/pool/payments` — `SELECT *` replaced with an explicit column list. Dropped `slate_id`,
+    `tor_check_result`, `retry_count`, `next_retry_at`, `cancel_reason`, `cancelled_by`: pool
+    payout-machinery internals that read as a per-miner reliability record and are rendered by
+    nothing. `grin_address` stays FULL here on purpose — address-as-identity means the account page
+    is public and keyed by it, and both consumers link the row through to `/account-settings.html`.
+  - **`/api/miners/top` DELETED.** Not in the original finding, found during the same sweep and
+    strictly worse: full address + `balance` + `balance_locked` + share count + online flag +
+    account age, ordered by balance descending and *offset-paginated*, so a scraper could walk the
+    pool's whole custodial position miner by miner. No consumer anywhere in the repo; duplicated
+    `/api/pool/miners`. The legitimate leaderboards (`/api/stratum/top-miners`,
+    `/api/pool/top-block-finders`) rank on contribution, not on balance.
+  - `/api/pool/blocks` — `SELECT *` → explicit columns; dropped the winning `nonce` and internal
+    `id`/`created_at` (the block hash already anchors a find on any chain explorer).
+  - The rate-limiter half of the finding was **already stale**: both routes carry
+    `rateLimiter.middleware('public')` in current code.
+- **Still open (deliberate):** `/api/pool/top-block-finders` publishes full addresses. It is a
+  luck leaderboard, not a balance list, and both it and `/api/pool/payments` need the full address
+  for the account deep-link the pages render. Revisit only if the deep-link is dropped.
 
 ### C2 — [Low-Medium] Tor-rail withdrawal has no ownership gate → balance-lock griefing / forced payout — **FIXED 2026-07-17, see §E**
 - **Evidence:** `POST /api/account/:addr/withdraw` with `method:'tor'` (the default) takes **no**
@@ -629,11 +647,11 @@ would re-expose precisely what the floor hides. Client-side this is already safe
 filters `c.lat != null` before rendering, and its country-highlight set matches on canonical
 Natural-Earth names, which `Other` never matches.
 
-**Related, NOT fixed here:** `/api/pool/miners` (§C1) still returns every miner's **full** Grin
-address and balance unauthenticated. No IP — but it is a bigger identity leak than the map ever was,
-and it contradicts the posture `/api/stratum/stats` already applies (that route truncates addresses
-to `xxxxxxxxx…xxxx` specifically so the session list can't be scraped into a miner census). C1 stays
-open pending an operator decision on public-leaderboard behaviour.
+**Related, NOT fixed here — resolved later:** `/api/pool/miners` (§C1) returned every miner's
+**full** Grin address and balance unauthenticated. No IP — but a bigger identity leak than the map
+ever was, and it contradicted the posture `/api/stratum/stats` already applies (that route truncates
+addresses to `xxxxxxxxx…xxxx` specifically so the session list can't be scraped into a miner
+census). **Closed 2026-07-28** — that same truncation is now applied to `/api/pool/miners`; see §C1.
 
 ### G4 — Payout request audit surfaced in the admin panel — **BUILT 2026-07-25**
 

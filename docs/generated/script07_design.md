@@ -234,9 +234,11 @@ out of every miner-facing surface. Money flows through `balance_log` for audit.
 ```
 ✅ GET  /health  |  /api/health                         (alias; nginx proxies /api/*)
 ✅ GET  /api/pool/stats | /api/pool/stats/regions | /api/pool/blocks | /api/pool/payments
-✅ GET  /api/pool/miners (by balance) | /api/miners/top | /api/pool/locations
+✅ GET  /api/pool/miners (balance distribution, addresses MASKED) | /api/pool/locations
 ✅ GET  /api/stratum/stats | /api/stratum/hashrate | /api/config/pool-info
-✅ GET  /api/account/:addr | /:addr/balance | /:addr/balance/log | /:addr/shares | /:addr/tor-check
+✅ GET  /api/account/:addr | /:addr/balance/log | /:addr/shares | /:addr/tor-check
+❌ GET  /api/miners/top | /api/account/:addr/balance   REMOVED 2026-07-28 (rich-list / duplicate;
+        see script07_security_audit.md §C1). The live list is always /api/public/endpoints.
 ✅ GET  /api/account/:addr/workers | /:addr/hashrate/history
 ✅ POST /api/account/:addr/withdraw   { amount?, method?, ip_proof? }   (Tor auto; Slatepack IP-gated)   [IMPLEMENTED 2026-07]
 ✅ POST /api/account/:addr/withdraw/:id/finalize   { response_slatepack, ip_proof }   (Slatepack S2 finalize)   [IMPLEMENTED 2026-07]

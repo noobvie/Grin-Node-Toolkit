@@ -250,6 +250,42 @@ app.use((req, res, next) => {
   next();
 });
 
+// ─── CORS — read-only public API only ─────────────────────────────────────────
+// api-docs.html invites people to "build your own monitor or bot"; for a browser-based client
+// that means a cross-origin fetch, which without these headers fails while the identical curl
+// succeeds. Allowed on PUBLIC **GET**s only:
+//   · no Access-Control-Allow-Credentials — with `*` browsers reject the pair anyway, and
+//     inviting it would turn a logged-in operator's admin cookie into a cross-site read.
+//   · /api/admin/ and /api/auth/ are excluded, so the admin surface is untouched.
+//   · POST/DELETE are excluded, so the ownership-gated money actions stay same-origin: a
+//     preflight for them gets no CORS headers and the browser refuses the call.
+// Everything this opens is already world-readable to curl — it only removes a browser-only
+// restriction, it does not widen what is published.
+const CORS_PUBLIC_PREFIXES = [
+  '/api/public/', '/api/config/', '/api/pool/', '/api/account/', '/api/stratum/', '/api/network/',
+];
+app.use((req, res, next) => {
+  if ((req.method === 'GET' || req.method === 'OPTIONS') &&
+      CORS_PUBLIC_PREFIXES.some((p) => req.path.startsWith(p))) {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    res.setHeader('Access-Control-Max-Age', '86400');
+    res.setHeader('Vary', 'Origin');
+    if (req.method === 'OPTIONS') return res.status(204).end();
+  }
+  next();
+});
+
+// Public-surface address masking (grin1qxy…mn4p). The same truncation the front-end already
+// applies when rendering, moved server-side on the aggregate/list endpoints: the pages look
+// identical, but the raw API stops handing a scraper a full-address list in one call. NOT used
+// on /api/account/:addr responses — there the caller already knows the address (it's identity).
+function maskAddr(a) {
+  const s = String(a || '');
+  return s.length > 16 ? `${s.slice(0, 9)}…${s.slice(-4)}` : s;
+}
+
 // Validation constants
 const VALID_NETWORKS = ['mainnet', 'testnet'];
 
@@ -829,49 +865,106 @@ function setupRoutes() {
   );
 
   // ─── Public API reference — auto-generated from the live Express route table ───
-  // Always accurate (it reflects the routes actually mounted), self-documenting. Only
-  // public-safe prefixes are exposed; admin/auth routes are never listed. api-docs.html
-  // renders this. Descriptions are a best-effort lookup keyed by "METHOD path"; an
-  // unknown route still appears (with an empty description) so the list can't drift.
+  // Always accurate for WHICH routes exist (it reflects the routes actually mounted); only
+  // public-safe prefixes are exposed, so admin/auth routes are never listed. api-docs.html
+  // renders this. An unmapped route still appears (with an empty description) so the LIST can
+  // never drift — but the per-endpoint metadata below is hand-maintained and CAN drift, so
+  // treat it as documentation, not as introspection.
+  //
+  // `shape` matters more than it looks. This API is NOT uniform: the /api/public/* CMS-era
+  // routes return { success: true, data: … } while almost everything older returns the payload
+  // raw (often a bare array), and errors are ALWAYS { error: "…" } with no success flag on any
+  // of them. The page used to claim a single envelope for all of it, which is wrong for ~70% of
+  // the endpoints and breaks the first client anyone writes. Publishing the real shape per
+  // endpoint is cheaper and more honest than retrofitting one envelope onto 30 live routes that
+  // the pool's own front-end already consumes.
+  //   envelope = { success: true, data: … }   flat = { success: true, …fields }
+  //   raw      = payload at the top level     array = bare JSON array
+  //   none     = 204 No Content
+  // `params`  — query string, with the caps the handler actually enforces.
+  // `body`    — request body fields, for the POST/DELETE rails.
+  // `auth`    — ownership proof required (lib/owner-proof.js), otherwise public.
+  // `gated`   — an operator setting that makes the route 404 when off.
+  // `rate`    — which rate-limiter bucket applies (see this.limits in lib/rate-limiter.js).
   const PUBLIC_API_PREFIXES = [
     '/api/public/', '/api/account/', '/api/config/', '/api/pool/',
+    // Added 2026-07-28. These are public, rate-limited, and consumed by the pool's own pages
+    // (reactor-dashboard.js, miners-stats.html, network-map.js) — they were simply invisible to
+    // the reference because the prefix list predated them. An undocumented public endpoint is
+    // not a private one; it is a public one nobody can use correctly.
+    '/api/stratum/', '/api/network/',
   ];
-  const API_DOC_DESCRIPTIONS = {
-    'GET /api/public/branding': 'White-label config (name, theme, SEO, social, footer links).',
-    'GET /api/public/price': 'Cached GRIN price (USD + BTC).',
-    'GET /api/public/status': 'Coarse pool/node/wallet health (no balances).',
-    'GET /api/public/ads': 'Active operator ads by placement (+ rotation interval).',
-    'POST /api/public/ads/event': 'Ad impression/click beacon — aggregate counters only, no visitor data.',
-    'GET /api/public/lottery/winners': 'Fortune-board winner history (truncated addresses).',
-    'GET /api/public/lottery/stats': 'Fortune-board aggregates: total prizes/winners/draws, Pot A/B split, monthly series.',
-    'GET /api/public/endpoints': 'This API reference (machine-readable).',
-    'GET /api/config/pool-info': 'Network, pool fee %, minimum withdrawal.',
-    'GET /api/pool/stats': 'Live pool stats: hashrate, miners, blocks, share quality.',
-    'GET /api/pool/stats/regions': 'Per-region stratum endpoints + live status.',
-    'GET /api/pool/blocks': 'Pool-found blocks (paginated: limit, offset, status).',
-    'GET /api/pool/blocks/history': 'Durable block series: luck, per-period counts, status, reward (?range=week|month|year|all).',
-    'GET /api/pool/effort': 'Pool network share, recent luck, round effort, time since last block.',
-    'GET /api/pool/hashrate/history': 'Pool hashrate time-series (?hours=).',
-    'GET /api/pool/metrics/history': 'Durable pool trend series: hashrate, miners, earnings, payout, network hashrate (?range=day|week|month|year|all).',
-    'GET /api/pool/metrics/history/regions': 'Per-region miners/hashrate trend series (?range=day|week|month|year|all).',
-    'GET /api/pool/payments/history': 'Durable payments & transparency series: payouts, reward split, giveaways, donations, fee + lifetime totals (?range=day|week|month|year|all).',
-    'GET /api/pool/donors': 'Donor wall: per-address lifetime donations to the prize pool, first/last donation date, current donate-tag %.',
-    'GET /api/pool/prize-pool': 'Prize-pool transparency report: current balance + lifetime in/out totals by source (fee-cut, donations, top-ups, abandoned balances).',
-    'GET /api/pool/status': 'Coarse service status strip.',
-    'GET /api/account/:addr': 'Account summary: balance, paid, pending payout, effort.',
-    'GET /api/account/:addr/workers': 'Per-worker (rig) hashrate + share quality.',
-    'GET /api/account/:addr/hashrate/history': 'Account hashrate time-series (?hours=).',
-    'POST /api/account/:addr/withdraw': 'Request a payout (Tor, Slatepack, or Nostr/Goblin); ownership-gated (recent mining IP or stratum password).',
-    'POST /api/account/:addr/nostr-destination': 'Register/replace the Goblin username for Nostr payouts; ownership-gated; starts a security cooldown.',
-    'DELETE /api/account/:addr/nostr-destination': 'Remove the registered Goblin payout destination; ownership-gated.',
-    'GET /api/account/:addr/balance/log': 'Address ledger (?direction=in|out, ?days=, ?format=csv).',
-    'GET /api/account/:addr/earnings': 'Credited earnings per period (1h/24h/7d/30d) + 30d in/out totals.',
+  const OWNER_PROOF_BODY = 'proof (recent mining IP or the rig\'s stratum password; legacy alias ip_proof)';
+  const API_DOC_META = {
+    // ── Public ────────────────────────────────────────────────────────────────
+    'GET /api/public/branding': { desc: 'White-label config (name, theme, SEO, social, footer links).', shape: 'envelope' },
+    'GET /api/public/price': { desc: 'Cached GRIN price (USD + BTC) from CoinGecko. Serves the last good value on upstream failure; { available: false } if never fetched.', shape: 'envelope' },
+    'GET /api/public/endpoints': { desc: 'This API reference (machine-readable).', shape: 'envelope' },
+    'GET /api/public/ads': { desc: 'Active operator ads by placement (+ rotation interval). Cached 60s, so ad edits take up to a minute to appear.', shape: 'raw', params: 'placement (omit for every slot keyed by placement)' },
+    'POST /api/public/ads/event': { desc: 'Ad impression/click beacon — aggregate counters only, no visitor data. Always 204, even on a malformed body.', shape: 'none', body: 'impressions[], clicks[] (ad ids)' },
+    'GET /api/public/lottery/winners': { desc: 'Fortune-board winner history (truncated addresses). Empty when incentives are disabled.', shape: 'envelope', params: 'limit (≤100, default 25) · offset' },
+    'GET /api/public/lottery/stats': { desc: 'Fortune-board aggregates: total prizes/winners/draws, Pot A/B split, monthly series.', shape: 'envelope' },
+    'GET /api/public/pages': { desc: 'Published CMS pages (slug + title) for the header/footer link lists.', shape: 'envelope' },
+    'GET /api/public/page/:key': { desc: 'One published CMS page by slug (About / Terms / Privacy / FAQ …). 404 if the slug is unknown or unpublished.', shape: 'envelope' },
+    'GET /api/public/posts': { desc: 'Blog: paginated list of published posts (card view — excerpt, cover, date).', shape: 'envelope', params: 'limit · offset' },
+    'GET /api/public/post/:slug': { desc: 'Blog: one published post in full, by slug. 404 if unknown or unpublished.', shape: 'envelope' },
+
+    // ── Config ────────────────────────────────────────────────────────────────
+    'GET /api/config/pool-info': { desc: 'Pool terms: network, pool fee %, minimum withdrawal, the flat per-payout withdrawal fee (0 = the pool absorbs the network fee), address format and which listener a miner needs.', shape: 'raw' },
+
+    // ── Pool ──────────────────────────────────────────────────────────────────
+    'GET /api/pool/stats': { desc: 'Live pool stats: block totals, active miners, connections, and share quality (accepted/stale/rejected). Share quality is LIVE in-memory only — it is empty with no connected sessions and resets on disconnect.', shape: 'raw' },
+    'GET /api/pool/status': { desc: 'Coarse service health for the status strip: pool up, node reachable/synced/peers/height, wallet reachable. Never exposes balances or addresses.', shape: 'raw' },
+    'GET /api/pool/stats/regions': { desc: 'Per-region stratum endpoints + live status (online | idle | offline) and 15-minute regional hashrate.', shape: 'raw' },
+    'GET /api/pool/locations': { desc: 'Operator-declared stratum regions that are currently active — region key, label, and the stratum URL to point a rig at.', shape: 'raw' },
+    'GET /api/pool/blocks': { desc: 'Pool-found blocks, newest first. A short page (fewer rows than limit) means the last page.', shape: 'array', params: 'limit (≤500, default 50) · offset · status=immature|confirmed|orphaned' },
+    'GET /api/pool/blocks/history': { desc: 'Durable block series: luck, per-period counts, status split, cumulative reward. Blocks are never pruned, so any range is meaningful.', shape: 'raw', params: 'range=week|month|year|all (default month)' },
+    'GET /api/pool/effort': { desc: 'Pool network share, luck over the last 100 blocks, current round effort, and time since the last block. Network difficulty is cached ~60s.', shape: 'raw' },
+    'GET /api/pool/hashrate/history': { desc: 'Pool hashrate time-series, summed across addresses per bucket.', shape: 'raw', params: 'hours (1–720, default 24)' },
+    'GET /api/pool/poolstats': { desc: 'Listing feed for pool directories — this is the URL to hand to miningpoolstats.stream (they poll it; nothing is pushed). Pool + network aggregates in the same field layout as the toolkit\'s solo-mining poolstats_<net>.json, so an importer written for that needs no changes. Recomputed at most once every 60s and served from cache in between, so polling faster than 1/min returns identical bytes — 1–5 min is the sensible range. Every value is an aggregate already shown on the homepage; no address or per-miner row is included, so it needs no auth. The ts field is the generation time: if it stops advancing, the feed is stale. Fields are null (not 0) when the node is unreachable, and network.hashrate_gps_24h is null until the pool has an hour of history.', shape: 'raw' },
+    'GET /api/pool/metrics/history': { desc: 'Durable pool trend series: hashrate, miners, earnings, payout, network hashrate. Rolled up hourly and never pruned.', shape: 'raw', params: 'range=day|week|month|year|all (default day)' },
+    'GET /api/pool/metrics/history/regions': { desc: 'Per-region miners/hashrate trend series (the "miners by gateway" view).', shape: 'raw', params: 'range=day|week|month|year|all (default day)' },
+    'GET /api/pool/payments/history': { desc: 'Durable payments & transparency series: payouts, reward split, giveaways, donations, fee, plus lifetime totals.', shape: 'raw', params: 'range=day|week|month|year|all (default month)' },
+    'GET /api/pool/payments': { desc: 'Recent confirmed payouts: address, amount, flat fee charged, method, timestamps, and the on-chain kernel when known. Pool-internal payout machinery (slate id, Tor probe result, retry state, cancel reason) is deliberately not published.', shape: 'array', params: 'limit (≤500, default 100)' },
+    'GET /api/pool/miners': { desc: 'Balance distribution across accounts, richest first. Addresses are MASKED (grin1qxy…mn4p) — the distribution is public, the address→balance mapping is not.', shape: 'array', params: 'limit (≤500, default 50)' },
+    'GET /api/pool/top-block-finders': { desc: 'Lucky-miner leaderboard: blocks found and total reward per address over a recent window. Orphans do not count as a find.', shape: 'raw', params: 'days (≤3650, default 30) · limit (≤1000, default 500)' },
+    'GET /api/pool/unclaimed': { desc: 'Lost-and-found: masked addresses of long-dormant balances with a per-address disposal countdown, plus the historical disposition ledger (sweeps into the prize pool).', shape: 'raw', params: 'limit (≤200, default 100)' },
+    'GET /api/pool/donors': { desc: 'Donor wall: per-address lifetime donations to the prize pool, first/last donation date, current donate-tag %. Top 100.', shape: 'raw' },
+    'GET /api/pool/prize-pool': { desc: 'Prize-pool transparency report: current balance + LIFETIME in/out totals by source (fee-cut, donations, operator top-ups, abandoned balances, orphan clawbacks). Per-event rows are deliberately withheld — their timestamps would expose the cadence of discretionary operator top-ups.', shape: 'raw' },
+    'GET /api/pool/topology': { desc: 'Network map: hub → gateways → miners aggregated BY COUNTRY. Country-only geolocation; no per-miner coordinate is ever resolved or stored, and countries under the k-anonymity floor merge into one unnamed bucket.', shape: 'raw', gated: 'the operator publishes the network map (off by default → 404)' },
+
+    // ── Stratum (live session aggregates) ─────────────────────────────────────
+    'GET /api/stratum/stats': { desc: 'Live stratum server state: connection counts and per-session share tallies. Session addresses are truncated so the live list cannot be scraped to enumerate miners.', shape: 'raw' },
+    'GET /api/stratum/hashrate': { desc: 'Pool hashrate aggregates (1h/24h GPS) plus the fixed top-10 by hashrate — the gauge on the homepage.', shape: 'raw' },
+    'GET /api/stratum/top-miners': { desc: 'Top miners by hashrate over a recent window — the paginated contribution leaderboard.', shape: 'raw', params: 'window minutes (≤1440, default 1440) · limit (≤1000, default 500)' },
+    'GET /api/stratum/top-avg-hashrate': { desc: 'Top miners by AVERAGE hashrate over a multi-day window (sustained contribution). Backed by hashrate_history, so a 30-day window is meaningful.', shape: 'raw', params: 'days (≤90, default 30) · limit (≤1000, default 500)' },
+
+    // ── Network ───────────────────────────────────────────────────────────────
+    'GET /api/network/peers': { desc: 'Grin P2P peers this node has seen, aggregated by country over a rolling window (+ mainnet/testnet split). Country-only, no IPs; thin countries merge into one unnamed bucket.', shape: 'raw', params: 'window days (1–90, default 30)', gated: 'the operator publishes the network map (off by default → 404)' },
+
+    // ── Account (address-as-identity: the address IS the credential to READ) ──
+    'GET /api/account/:addr': { desc: 'Account summary: balance, locked, lifetime paid, pending payout, share/hashrate snapshot. 404 if the address has never mined here.', shape: 'raw' },
+    'GET /api/account/:addr/shares': { desc: 'Raw accepted shares for an address, newest first. Shares are pruned aggressively — use the hashrate history for anything older than ~a day.', shape: 'raw', params: 'limit (≤500, default 100) · offset' },
+    'GET /api/account/:addr/workers': { desc: 'Per-worker (rig) hashrate + share quality over a recent window.', shape: 'raw', params: 'window minutes (1–1440, default 10)' },
+    'GET /api/account/:addr/hashrate/history': { desc: 'Account hashrate time-series, downsampled for charting.', shape: 'raw', params: 'hours (1–720, default 24)' },
+    'GET /api/account/:addr/earnings': { desc: 'Credited earnings per period (1h/24h/7d/30d) + 30d in/out totals. Payout reversals count as money-in but never as earnings.', shape: 'raw' },
+    'GET /api/account/:addr/balance/log': { desc: 'Address ledger. Raw rows prune after ~60 days (the durable record is the withdrawal history below). format=csv streams the filtered window as a download on a tighter rate limit.', shape: 'raw · csv', params: 'direction=in|out · days (≤3650, default all) · limit (≤500, default 50) · offset · format=csv' },
+    'GET /api/account/:addr/withdrawals': { desc: 'Payout history for an address — kept forever, so this is the durable record for accounting. Payouts only: no donations or orphan clawbacks. format=csv streams all-time on a tighter rate limit.', shape: 'raw · csv', params: 'limit (≤200, default 20) · offset · format=csv' },
+    'GET /api/account/:addr/tor-check': { desc: 'Is this miner\'s wallet reachable over Tor right now? Read-only probe behind the payout UI hint. online is TRI-STATE: true/false when known, null = "decided at payout time".', shape: 'raw' },
+    'POST /api/account/:addr/withdraw': { desc: 'Request a payout on one of three rails. 403 = ownership proof failed; 409 (tor) = wallet unreachable, retry or switch to slatepack; 409 (nostr) = destination unregistered, still in cooldown, or its npub changed.', shape: 'flat', auth: 'ownership proof', rate: 'withdraw', body: `method=tor|slatepack|nostr (default tor) · amount · ${OWNER_PROOF_BODY}` },
+    'POST /api/account/:addr/withdraw/:id/finalize': { desc: 'Complete a slatepack payout by posting back the response slatepack your wallet produced with `receive`. The pool finalizes and broadcasts.', shape: 'raw', auth: 'ownership proof', rate: 'withdraw', body: `response_slatepack · ${OWNER_PROOF_BODY}` },
+    'POST /api/account/:addr/nostr-destination': { desc: 'Register/replace the Goblin username for Nostr payouts. Does NOT move funds — it pins the destination and (re)starts a security cooldown, during which the nostr rail refuses to pay. 503 when the rail is disabled.', shape: 'flat', auth: 'ownership proof', rate: 'withdraw', body: `username (Goblin/NIP-05) · ${OWNER_PROOF_BODY}` },
+    'DELETE /api/account/:addr/nostr-destination': { desc: 'Remove the registered Goblin payout destination, clearing the pin and cooldown.', shape: 'flat', auth: 'ownership proof', rate: 'withdraw', body: OWNER_PROOF_BODY },
   };
   app.get('/api/public/endpoints',
     rateLimiter.middleware('public'),
     (req, res) => {
       try {
-        const stack = (req.app._router && req.app._router.stack) || [];
+        // Express 4: the route table hangs off app._router. Express 5 renames it to app.router,
+        // so accept either — otherwise a major-version bump would silently empty this page
+        // rather than fail loudly (the catch below would never even fire).
+        const router = req.app._router || req.app.router;
+        const stack = (router && router.stack) || [];
         const seen = new Set();
         const out = [];
         for (const layer of stack) {
@@ -887,13 +980,39 @@ function setupRoutes() {
               const key = m + ' ' + p;
               if (seen.has(key)) continue;
               seen.add(key);
-              out.push({ method: m, path: p, description: API_DOC_DESCRIPTIONS[key] || '' });
+              const meta = API_DOC_META[key] || {};
+              out.push({
+                method: m,
+                path: p,
+                description: meta.desc || '',
+                shape: meta.shape || '',
+                params: meta.params || '',
+                body: meta.body || '',
+                auth: meta.auth || '',
+                gated: meta.gated || '',
+                rate_limit: meta.rate || 'public',
+              });
             }
           }
         }
         out.sort((a, b) => (a.path === b.path ? a.method.localeCompare(b.method) : a.path.localeCompare(b.path)));
         res.setHeader('Cache-Control', 'public, max-age=300');
-        res.json({ success: true, data: { count: out.length, endpoints: out } });
+        res.json({
+          success: true,
+          data: {
+            count: out.length,
+            endpoints: out,
+            // Cross-cutting facts the page states once instead of on every row.
+            notes: {
+              errors: 'Errors are always { "error": "…" } with an HTTP status — never { success: false }.',
+              cors: 'Public GETs send Access-Control-Allow-Origin: * (no credentials). POST/DELETE are same-origin only.',
+              rate_limits: rateLimiter && rateLimiter.limits
+                ? { public: rateLimiter.limits.public, withdraw: rateLimiter.limits.withdraw, export: rateLimiter.limits.export }
+                : null,
+              times: 'All timestamps are UNIX seconds (UTC).',
+            },
+          },
+        });
       } catch (err) {
         res.status(500).json({ error: 'Failed to build API reference' });
       }
@@ -1802,7 +1921,13 @@ function setupRoutes() {
       const offset = Math.max(parseInt(req.query.offset || 0, 10), 0);
       const status = req.query.status;
       const valid = ['immature', 'confirmed', 'orphaned'];
-      let sql = 'SELECT * FROM blocks';
+      // Explicit columns since 2026-07-28 (was `SELECT *`): `nonce` is the winning solution's
+      // nonce and `id`/`created_at` are internal row bookkeeping — none of the three is read by
+      // blocks.html or the reactor fuel-rods, and publishing the nonce serves no verifier (the
+      // block hash already anchors the find on any chain explorer). Everything the two consumers
+      // actually render is kept, including found_by and the luck pair.
+      let sql = `SELECT height, hash, reward, status, found_by, found_at, confirmed_at,
+                        network_difficulty, round_shares FROM blocks`;
       const params = [];
       if (status && valid.includes(status)) { sql += ' WHERE status = ?'; params.push(status); }
       sql += ' ORDER BY height DESC LIMIT ? OFFSET ?';
@@ -2465,30 +2590,17 @@ function setupRoutes() {
     }
   });
 
-  app.get('/api/account/:addr/balance', rateLimiter.middleware('public'), (req, res) => {
-    try {
-      const { addr } = req.params;
+  // REMOVED (2026-07-28): GET /api/account/:addr/balance — every field it returned
+  // (balance, balance_locked, their sum) is already in GET /api/account/:addr, which is what
+  // the account page actually calls. Nothing in public_html/ or the admin panel referenced it.
+  // A second, undocumented way to read the same number is one more surface to keep honest.
 
-      const stmt = db.prepare(`
-        SELECT balance, balance_locked FROM miner_accounts WHERE grin_address = ?
-      `);
-      const account = stmt.get(addr);
-
-      if (!account) {
-        return res.status(404).json({ error: 'Account not found' });
-      }
-
-      res.json({
-        grin_address: addr,
-        balance: account.balance,
-        balance_locked: account.balance_locked,
-        total: account.balance + account.balance_locked
-      });
-    } catch (err) {
-      res.status(500).json({ error: err.message });
-    }
-  });
-
+  // Balance distribution across accounts, richest first. Addresses are MASKED here (2026-07-28):
+  // unmasked this was a public rich-list — a full address paired with a balance, sorted so the
+  // largest balances come first, which is a targeting list, not transparency. The distribution
+  // itself is legitimate pool-health data, and it survives masking intact; the address→balance
+  // mapping does not, which is the point. No front-end consumes this endpoint (the leaderboards
+  // use /api/stratum/top-miners and /api/pool/top-block-finders — hashrate and luck, not money).
   app.get('/api/pool/miners', rateLimiter.middleware('public'), (req, res) => {
     try {
       const limit = Math.min(parseInt(req.query.limit || 50), 500);
@@ -2496,7 +2608,11 @@ function setupRoutes() {
         SELECT grin_address, balance, is_online FROM miner_accounts
         ORDER BY balance DESC LIMIT ?
       `);
-      const miners = stmt.all(limit);
+      const miners = stmt.all(limit).map((m) => ({
+        grin_address: maskAddr(m.grin_address),
+        balance: m.balance,
+        is_online: m.is_online,
+      }));
       res.json(miners);
     } catch (err) {
       res.status(500).json({ error: err.message });
@@ -2528,11 +2644,20 @@ function setupRoutes() {
     }
   });
 
+  // Recent confirmed payouts (public payout teletype + payment-history table). Explicit column
+  // list since 2026-07-28: `SELECT *` published the whole withdrawals row, which carries the
+  // pool's operational internals — slate_id, tor_check_result, retry_count, next_retry_at,
+  // cancel_reason, cancelled_by. Those describe how the pool's payout machinery and a miner's
+  // wallet behaved, are read by nothing public, and read as a per-miner reliability record.
+  // grin_address stays FULL: address-as-identity means the account page is public and keyed by
+  // it, and both consumers link the row through to /account-settings.html?addr=.
   app.get('/api/pool/payments', rateLimiter.middleware('public'), (req, res) => {
     try {
       const limit = Math.min(parseInt(req.query.limit || 100), 500);
       const stmt = db.prepare(`
-        SELECT * FROM withdrawals WHERE status = 'confirmed'
+        SELECT id, grin_address, amount, fee_charged, method, status,
+               created_at, confirmed_at, kernel_excess
+        FROM withdrawals WHERE status = 'confirmed'
         ORDER BY confirmed_at DESC LIMIT ?
       `);
       const payments = stmt.all(limit);
@@ -2892,6 +3017,122 @@ function setupRoutes() {
         luck_sample: luckRows.length
       });
     } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ── miningpoolstats.stream listing feed ────────────────────────────────────────────────────
+  // The PULL half of the MPS integration: they poll this, we push nothing. Shape is a
+  // field-for-field mirror of the SOLO feed (poolstats_<net>.json, built by
+  // lib/07_mining_block_collector.py build_poolstats) — deliberately, because MPS already has a
+  // working importer for that structure. A "better" shape would cost them a new adapter for a
+  // small coin, which is how a listing request gets declined. If the two ever have to diverge,
+  // add fields, never rename or drop one.
+  //
+  // Solo writes a static file on a 5-min cron because it has no backend; here the data is already
+  // live in-process, so a route needs no cron, no state dir and no auth carve-out. If MPS insists
+  // on a .json path, alias it in nginx rather than writing a file.
+  //
+  // Aggregates only — no address, no per-miner row, nothing that isn't already on the public
+  // homepage. Safe to serve unauthenticated.
+  app.get('/api/pool/poolstats', rateLimiter.middleware('public'), async (req, res) => {
+    try {
+      // 60s cache: MPS polls on a fixed interval and this is a public GET that touches the node
+      // and the DB, so an uncached version is a free amplification handle (same reasoning as
+      // getPoolHistory in lib/hashrate-tracker.js). Serve last-good on error rather than a
+      // half-empty feed — a delisting-grade blank is worse than a slightly stale number.
+      const cached = app.locals._poolstatsFeed;
+      if (cached && (Date.now() - cached.at) < 60000) return res.json(cached.body);
+
+      const now = Math.floor(Date.now() / 1000);
+      const blockStats = blockManager.getPoolStats() || {};
+      const sstats = stratumServer.getStats() || {};
+
+      // NOT blockManager.getLastBlock() — that returns the highest height REGARDLESS of status,
+      // so a freshly orphaned block would be published as "last block found". blocks_24h already
+      // excludes orphans (blocks.js getPoolStats), so using it here would also make the feed
+      // self-contradictory: "0 blocks in 24h" next to a last_block from ten minutes ago.
+      let last = null;
+      try {
+        last = db.prepare(
+          `SELECT height, found_at FROM blocks WHERE status != 'orphaned' ORDER BY height DESC LIMIT 1`
+        ).get() || null;
+      } catch (_) { /* leave null */ }
+
+      let poolGps = null;
+      try { poolGps = hashrateTracker.getHashrateStats().pool_hashrate_1h_gps || 0; } catch (_) { /* null */ }
+
+      // Node tip: height + CUMULATIVE total_difficulty (solo's `network.difficulty` is the
+      // cumulative field; `difficulty_per_block` below is the per-block one — don't swap them).
+      let height = null, totalDiff = null, peers = null;
+      try {
+        const status = await blockMonitor.grinNode.getStatus();
+        if (status && status.ok) {
+          height = status.header_height || 0;
+          totalDiff = status.total_difficulty != null ? status.total_difficulty : null;
+          peers = status.peer_count || 0;
+        }
+      } catch (_) { /* leave null — a node blip must not blank the pool half */ }
+
+      // Per-block difficulty reuses the /api/pool/effort 60s cache, so a poll costs no extra
+      // node round-trip. GPS = diff × 42 / 60 / 16384 (CLAUDE.md; 60s block target).
+      let netDiffPb = null;
+      if (app.locals._netDiffCache && (Date.now() - app.locals._netDiffCache.at) < 60000) {
+        netDiffPb = app.locals._netDiffCache.value;
+      } else {
+        try {
+          const tip = await blockMonitor.grinNode.getTip();
+          netDiffPb = await blockManager._fetchNetworkDifficulty(tip.height);
+          app.locals._netDiffCache = { at: Date.now(), value: netDiffPb };
+        } catch (_) { /* leave null */ }
+      }
+      const netGps = (netDiffPb && netDiffPb > 0) ? (netDiffPb * 42) / 60 / 16384 : null;
+
+      // Smooth 24h network figure from the durable hourly rollup (solo derives it from a
+      // get_header look-back; we already sample it every hour, so no extra node calls).
+      let netGps24h = null;
+      try {
+        const r = db.prepare(
+          `SELECT AVG(network_hashrate_gps) AS g FROM pool_metrics_hourly
+           WHERE bucket_start > ? AND network_hashrate_gps IS NOT NULL`
+        ).get(now - 86400);
+        if (r && r.g != null) netGps24h = parseFloat(r.g.toFixed(3));
+      } catch (_) { /* leave null */ }
+
+      const body = {
+        ts: new Date(now * 1000).toISOString(),
+        // Report the REAL network. A testnet pool must never be importable as a mainnet one.
+        net: config.network === 'testnet' ? 'testnet' : 'mainnet',
+        pool: {
+          name: config.pool_name || 'Grin Pool',
+          url: config.subdomain ? `https://${config.subdomain}` : '',
+          hashrate: poolGps != null ? parseFloat(poolGps.toFixed(3)) : 0,
+          hashrate_unit: 'gps',
+          workers: sstats.active_connections || 0,
+          miners: minerManager.getActiveMinersCount() || 0,
+          fee: config.pool_fee_percent || 0,
+          reward_model: config.reward_model || 'pplns',
+          blocks_24h: blockStats.blocks_24h || 0,
+          last_block: last ? { height: last.height, ts: new Date(last.found_at * 1000).toISOString() } : null,
+        },
+        network: {
+          height,
+          difficulty: totalDiff,
+          difficulty_per_block: netDiffPb,
+          hashrate_gps: netGps != null ? parseFloat(netGps.toFixed(3)) : null,
+          hashrate_gps_24h: netGps24h,
+          connections: peers,
+        },
+      };
+      app.locals._poolstatsFeed = { at: Date.now(), body };
+      res.json(body);
+    } catch (err) {
+      // Last-good, but BOUNDED. An unbounded fallback means a permanently broken backend keeps
+      // serving a plausible-looking feed forever, and a listing that silently freezes is worse
+      // than one that visibly errors — the operator never finds out. Past the grace window, fail
+      // loudly and let MPS show the pool as down, which is the truth.
+      const cached = app.locals._poolstatsFeed;
+      if (cached && (Date.now() - cached.at) < 15 * 60 * 1000) return res.json(cached.body);
       res.status(500).json({ error: err.message });
     }
   });
@@ -4320,44 +4561,13 @@ function setupRoutes() {
     }
   });
 
-  // Top Miners List - FIX #3: Use real data, not hardcoded values
-  app.get('/api/miners/top', rateLimiter.middleware('public'), (req, res) => {
-    try {
-      const limit = Math.min(parseInt(req.query.limit || 10), 100);
-      const offset = parseInt(req.query.offset || 0);
-
-      const stmt = db.prepare(`
-        SELECT
-          ma.grin_address,
-          ma.balance,
-          ma.balance_locked,
-          ma.is_online,
-          ma.created_at,
-          (SELECT COUNT(*) FROM shares WHERE grin_address = ma.grin_address) as shares_count,
-          (SELECT MAX(created_at) FROM shares WHERE grin_address = ma.grin_address) as last_share_timestamp
-        FROM miner_accounts ma
-        ORDER BY ma.balance DESC
-        LIMIT ? OFFSET ?
-      `);
-
-      const miners = stmt.all(limit, offset);
-
-      const formatted = miners.map(m => ({
-        grin_address: m.grin_address,
-        balance: m.balance,
-        balance_locked: m.balance_locked,
-        total_balance: m.balance + m.balance_locked,
-        shares_count: m.shares_count || 0,
-        is_online: m.is_online ? true : false,
-        last_share: m.last_share_timestamp || null,
-        created_at: m.created_at
-      }));
-
-      res.json(formatted);
-    } catch (err) {
-      res.status(500).json({ error: err.message });
-    }
-  });
+  // REMOVED (2026-07-28): GET /api/miners/top — a public, unauthenticated rich-list. It paired a
+  // full grin address with balance + balance_locked + share count + online flag + account age,
+  // ordered by balance descending and offset-paginated, so a scraper could walk the pool's entire
+  // custodial position miner by miner. Nothing in public_html/ or the admin panel called it, and
+  // it duplicated /api/pool/miners (now address-masked). The legitimate public leaderboards are
+  // /api/stratum/top-miners and /api/pool/top-block-finders, which rank on hashrate and blocks
+  // found — contribution, not how much money is sitting in someone's pool balance.
 
   // Combined health snapshot — the single call admin-panel/health.html makes for the
   // services grid + System Stats. The per-component routes below (/health/node, /wallet,

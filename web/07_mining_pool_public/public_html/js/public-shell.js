@@ -129,12 +129,12 @@
     if (l.children) { l.children.forEach(function (c) { poolLeaves.push(c); }); }
     else poolLeaves.push(l);
   });
-  // Excluded from the Pool column: Blog (Resources col) and Fortune Board (surfaced under
-  // Donate in the brand col). Home used to be skipped here too, because the Resources
-  // column's "Get Started" already returned to index.html — that link is gone (2026-07-28),
-  // and since the brand block is NOT a link on either the header or the footer, skipping
-  // Home would leave the footer with no way back to the homepage at all.
-  var POOL_COL_SKIP = { 'blog.html': 1, 'fortune-board.html': 1 };
+  // Excluded from the Pool column: Blog (Resources col), Fortune Board (surfaced under
+  // Donate in the brand col) and Home. Home briefly appeared here after the Resources
+  // column's "Get Started" was dropped, but a footer row reading just "Home" is a weak
+  // link — every page already carries the 🏠 Home item in the header nav, which is where
+  // people look for it. The footer is for destinations the header does NOT cover.
+  var POOL_COL_SKIP = { 'blog.html': 1, 'index.html': 1, 'fortune-board.html': 1 };
   var poolCol = poolLeaves.filter(function (l) { return !POOL_COL_SKIP[fileOf(l.href)]; })
     .map(function (l) {
       return '<a href="' + l.href + '">' + esc(l.label) + '</a>';

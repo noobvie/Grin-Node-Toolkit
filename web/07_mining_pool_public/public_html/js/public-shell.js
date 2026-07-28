@@ -129,17 +129,16 @@
     if (l.children) { l.children.forEach(function (c) { poolLeaves.push(c); }); }
     else poolLeaves.push(l);
   });
-  // Excluded from the Pool column: Blog (Resources col), Home (the Resources column's
-  // "Get Started" already returns to index.html) and Fortune Board (surfaced under Donate
-  // in the brand col). NB: the brand block is NOT a link on either the header or the
-  // footer — if that ever changes, revisit whether Home belongs back in this column.
-  var POOL_COL_SKIP = { 'blog.html': 1, 'index.html': 1, 'fortune-board.html': 1 };
+  // Excluded from the Pool column: Blog (Resources col) and Fortune Board (surfaced under
+  // Donate in the brand col). Home used to be skipped here too, because the Resources
+  // column's "Get Started" already returned to index.html — that link is gone (2026-07-28),
+  // and since the brand block is NOT a link on either the header or the footer, skipping
+  // Home would leave the footer with no way back to the homepage at all.
+  var POOL_COL_SKIP = { 'blog.html': 1, 'fortune-board.html': 1 };
   var poolCol = poolLeaves.filter(function (l) { return !POOL_COL_SKIP[fileOf(l.href)]; })
     .map(function (l) {
       return '<a href="' + l.href + '">' + esc(l.label) + '</a>';
     }).join('');
-
-  var GITHUB = 'https://github.com/noobvie/Grin-Node-Toolkit';
 
   var footer = document.createElement('footer');
   footer.innerHTML =
@@ -172,19 +171,24 @@
       '<div class="footer-col">' +
         '<h4>Pool</h4>' + poolCol +
       '</div>' +
-      // Resources
+      // Resources — Blog + API docs, plus the CMS's informational pages (Start Mining /
+      // About / FAQ …), which branding.js appends here rather than under Legal. Dropped
+      // 2026-07-28: "Get Started" (the CMS "Start Mining" page below is the real guide, and
+      // index.html#connect is one click from the Home link in the Pool column) and the
+      // "Grin Node Toolkit ↗" repo link (a link off-site to the software, not a pool
+      // resource — operators who want credit have the "Powered by" attribution setting).
       '<div class="footer-col">' +
         '<h4>Resources</h4>' +
-        '<a href="index.html#connect">Get Started</a>' +
         '<a href="blog.html">Blog</a>' +
         '<a href="api-docs.html">API Docs</a>' +
-        '<a href="' + GITHUB + '" target="_blank" rel="noopener noreferrer">Grin Node Toolkit ↗</a>' +
+        '<div data-brand="page-links-info"></div>' +
       '</div>' +
       // Legal + contact (page-links injected by branding.js from the CMS)
       '<div class="footer-col footer-legal">' +
         '<h4>Legal</h4>' +
-        // page-links (About / Terms / Privacy / FAQ …) are appended by branding.js; the CSS
-        // makes this container a flex column so each lands on its own line. Forum/Donate moved out.
+        // Legal-only page-links (Terms / Privacy / Impressum …) are appended by branding.js;
+        // the CSS makes this container a flex column so each lands on its own line. The
+        // informational CMS pages go to Resources above; Forum/Donate moved out earlier.
         '<div data-brand="page-links"></div>' +
         '<a class="footer-contact" data-brand="contact-link" href="#" style="display:none">Contact</a>' +
       '</div>' +

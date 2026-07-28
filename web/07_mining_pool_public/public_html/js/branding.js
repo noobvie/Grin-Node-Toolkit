@@ -433,19 +433,39 @@
       });
     }
 
-    // Content-page footer links (About / Terms / Privacy / FAQ / Impressum). Rendered as
-    // plain block links so the footer column CSS lays them out; no inline spacing.
+    // Content-page footer links, split across two columns. The CMS mixes genuinely legal
+    // pages (Terms / Privacy / Impressum) with informational ones (Start Mining / About /
+    // FAQ), and dumping all of them under "Legal" both mislabelled the info pages and made
+    // that one column twice the length of the others. Legal-looking slugs stay in the Legal
+    // column ([data-brand="page-links"]); everything else goes to Resources
+    // ([data-brand="page-links-info"]). Operators can name pages anything, so this is a
+    // prefix match on the slug — an unrecognised slug is treated as informational, which is
+    // the safe side (a stray page under Resources reads fine; under Legal it does not).
+    var LEGAL_SLUG = /^(terms|privacy|impressum|imprint|legal|cookie|disclaimer|aml|kyc|refund|risk)/i;
     var pages = cfg.pages || [];
-    document.querySelectorAll('[data-brand="page-links"]').forEach(function (container) {
-      if (!pages.length) return;
+    var infoBoxes = document.querySelectorAll('[data-brand="page-links-info"]');
+    var legalPages = pages.filter(function (p) { return LEGAL_SLUG.test(p.key || ''); });
+    var infoPages = pages.filter(function (p) { return !LEGAL_SLUG.test(p.key || ''); });
+    // No info container (a cached/older shell without the Resources slot) → keep the old
+    // single-column behaviour rather than silently dropping the informational pages.
+    if (!infoBoxes.length) { legalPages = pages; infoPages = []; }
+
+    // Rendered as plain block links so the footer column CSS lays them out; no inline spacing.
+    function fillPageLinks(container, list) {
       container.innerHTML = '';
-      pages.forEach(function (p) {
+      list.forEach(function (p) {
         var a = document.createElement('a');
         a.href = '/page.html?p=' + encodeURIComponent(p.key);
         a.textContent = p.title;
         container.appendChild(a);
       });
-    });
+    }
+    if (pages.length) {
+      document.querySelectorAll('[data-brand="page-links"]').forEach(function (container) {
+        fillPageLinks(container, legalPages);
+      });
+      infoBoxes.forEach(function (container) { fillPageLinks(container, infoPages); });
+    }
 
     // Footer copyright: "Since <founded>". Uses the founding year when set, otherwise
     // the current year. Pool name is intentionally omitted — it already appears in the
@@ -465,6 +485,16 @@
         el.style.display = '';
       });
     }
+
+    // A pool with no legal pages authored and no contact email would leave the Legal column
+    // as a lone heading over empty space — drop the whole column instead. Runs after the
+    // contact link above so its display state is already settled.
+    document.querySelectorAll('.footer-legal').forEach(function (col) {
+      var links = Array.prototype.filter.call(col.querySelectorAll('a'), function (a) {
+        return a.style.display !== 'none';
+      });
+      if (!links.length) col.style.display = 'none';
+    });
 
     // Footer "Community" alternative — an email-free public channel (e.g. Grin forum).
     if (pool.support_forum_url) {

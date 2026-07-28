@@ -350,6 +350,7 @@ PASS      any-password-you-choose</code>
   <li><strong>Private payouts.</strong> Rewards are delivered to your Grin address over Tor, or as an encrypted Slatepack you finalise yourself.</li>
   <li><strong>No account, no KYC.</strong> Your Grin address <em>is</em> your identity — there is nothing to sign up for.</li>
   <li><strong>Global regions.</strong> Connect to the nearest stratum endpoint for low latency and fewer stale shares.</li>
+  <li><strong>Open source.</strong> Every line of the pool is public and auditable — see below.</li>
 </ul>
 
 <h2>How it works</h2>
@@ -357,6 +358,10 @@ PASS      any-password-you-choose</code>
 
 <h2>Rewards &amp; extras</h2>
 <p>Beyond block rewards, GRINIUM can run optional community incentives — a community <a href="/donate.html">prize pool</a>, a block-finder jackpot, loyalty streaks, and periodic prize draws, with winners shown on the public <a href="/fortune-board.html">fortune board</a>. Each one is switched on or off by the pool operator; whichever are live are shown on those pages.</p>
+
+<h2>Open source</h2>
+<p>This pool is not a black box. It runs on the <a href="https://github.com/noobvie/Grin-Node-Toolkit" target="_blank" rel="noopener">Grin Node Toolkit</a>, an open-source project you are free to read, audit, clone, fork, and modify. The stratum server, the PPLNS share accounting, the fee calculation and the payout code are all public, so you can verify exactly how your shares become a balance rather than taking our word for it.</p>
+<p>If you would rather not trust any operator — including us — the same toolkit deploys a pool of your own, or a solo-mining setup with no pool at all. Found a bug or a fairness problem? Please open an issue or send a patch; it is the fastest way to get it fixed here and at every other pool running the same code.</p>
 
 <p>Ready to start? See the <a href="/">homepage</a> for connection details, or read the <a href="/page.html?p=faq">FAQ</a>.</p>`,
 

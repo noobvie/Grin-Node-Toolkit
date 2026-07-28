@@ -535,9 +535,13 @@ footer a:hover { color: var(--accent); }
     color: var(--text-mute); font-weight: 700;
 }
 .footer-col a { font-size: 13px; line-height: 1.5; }
-/* CMS page links (About / Terms / Privacy / FAQ) are appended as inline <a> inside this
-   container by branding.js — make it a flex column so each link gets its own line. */
-.footer-legal [data-brand="page-links"] { display: flex; flex-direction: column; gap: 8px; }
+/* CMS page links are appended as inline <a> inside these containers by branding.js — make
+   them flex columns so each link gets its own line. Two containers: the legal pages (Terms /
+   Privacy / Impressum) in the Legal column, the informational ones (Start Mining / About /
+   FAQ) in Resources. An empty container collapses on its own — `gap` adds no space to a
+   flex box with no children, so a pool with no CMS pages sees no stray blank row. */
+.footer-col [data-brand="page-links"],
+.footer-col [data-brand="page-links-info"] { display: flex; flex-direction: column; gap: 8px; }
 .footer-brand .brand { margin-bottom: 4px; }
 .footer-tagline { margin: 0; color: var(--text-mute); font-size: 12.5px; max-width: 32ch; }
 .footer-social { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 6px; }

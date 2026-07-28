@@ -360,8 +360,11 @@ class HashrateTracker {
       const earnStmt = this.db.prepare(`
         SELECT COALESCE(SUM(reward), 0) AS s FROM blocks
         WHERE confirmed_at >= ? AND confirmed_at < ? AND status != 'orphaned'`);
+      // NET of the flat withdrawal fee: `amount` is the gross the miner was debited, but only
+      // amount − fee_charged actually reached them. Legacy rows have fee_charged = 0, which is
+      // historically correct (they predate the fee), so this stays exact across the migration.
       const payStmt = this.db.prepare(`
-        SELECT COALESCE(SUM(amount), 0) AS s FROM withdrawals
+        SELECT COALESCE(SUM(amount - COALESCE(fee_charged, 0)), 0) AS s FROM withdrawals
         WHERE status = 'confirmed' AND confirmed_at >= ? AND confirmed_at < ?`);
 
       const factor = HashrateTracker.CYCLE_LENGTH / (H * HashrateTracker.SOLUTION_RATE);
@@ -559,7 +562,8 @@ class HashrateTracker {
       range, bucket_seconds: null, points: [], distribution: [],
       totals: {
         paid_all: 0, payout_count: 0, avg_payout: 0, last_payout_at: null,
-        fee_all: 0, donations_all: 0, giveaways_all: 0, to_miners_all: 0, fee_percent: 0
+        fee_all: 0, donations_all: 0, giveaways_all: 0, to_miners_all: 0, fee_percent: 0,
+        withdrawal_fees_all: 0
       }
     };
     try {
@@ -591,9 +595,10 @@ class HashrateTracker {
       }
 
       // Confirmed payouts per bucket (actual GRIN sent to miners), keyed by confirmed_at.
+      // Net of the flat withdrawal fee — see payStmt above.
       const payRows = this.db.prepare(`
         SELECT CAST(confirmed_at / ? AS INTEGER) * ? AS t,
-               COALESCE(SUM(amount), 0) AS payout
+               COALESCE(SUM(amount - COALESCE(fee_charged, 0)), 0) AS payout
         FROM withdrawals
         WHERE status = 'confirmed' AND confirmed_at >= ?
         GROUP BY t
@@ -667,7 +672,8 @@ class HashrateTracker {
       const labels = ['<1', '1–5', '5–10', '10–25', '25–50', '50–100', '≥100'];
       const counts = new Array(labels.length).fill(0);
       this.db.prepare(`
-        SELECT amount FROM withdrawals WHERE status = 'confirmed' AND confirmed_at >= ?
+        SELECT (amount - COALESCE(fee_charged, 0)) AS amount FROM withdrawals
+        WHERE status = 'confirmed' AND confirmed_at >= ?
       `).all(cutoff).forEach(w => {
         const a = Number(w.amount) || 0;
         let i = edges.findIndex(e => a < e);
@@ -678,7 +684,9 @@ class HashrateTracker {
 
       // Lifetime totals for the transparency tiles (range-independent).
       const pay = this.db.prepare(`
-        SELECT COALESCE(SUM(amount), 0) AS paid, COUNT(*) AS cnt, MAX(confirmed_at) AS last
+        SELECT COALESCE(SUM(amount - COALESCE(fee_charged, 0)), 0) AS paid,
+               COALESCE(SUM(fee_charged), 0) AS withdrawal_fees,
+               COUNT(*) AS cnt, MAX(confirmed_at) AS last
         FROM withdrawals WHERE status = 'confirmed'
       `).get();
       // Lifetime ledger sums = rollup(day < H) + raw(created_at >= H). Exact at every
@@ -717,7 +725,14 @@ class HashrateTracker {
         donations_all: round9(led.donations),
         giveaways_all: round9(led.giveaways),
         to_miners_all: round9(led.to_miners),
-        fee_percent: paidAll > 0 ? parseFloat(((led.fee / paidAll) * 100).toFixed(2)) : 0
+        // Block-reward split ONLY (fee ÷ gross reward). Deliberately excludes the flat
+        // withdrawal fee below: that is a per-transaction cost recovery, not a cut of mined
+        // rewards, and averaging the two would make this number depend on how OFTEN miners
+        // withdraw rather than on the advertised pool fee.
+        fee_percent: paidAll > 0 ? parseFloat(((led.fee / paidAll) * 100).toFixed(2)) : 0,
+        // Lifetime flat withdrawal fees collected, reported separately so the transparency
+        // page can show the full operator take without distorting fee_percent.
+        withdrawal_fees_all: round9(pay.withdrawal_fees)
       };
 
       return { range, bucket_seconds: bucket, points, distribution, totals };

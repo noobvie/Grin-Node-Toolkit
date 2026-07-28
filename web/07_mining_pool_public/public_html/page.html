@@ -3,11 +3,15 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <!-- The real <title> + description + og:* for a given ?p=<key> are injected SERVER-side
-       (index.js "/page.html" route, proxied by nginx) — a crawler never sees this default.
-       It only shows for the instant before the client script resolves, so it must still be
-       a real name and not "Loading…", which is what a browser tab and a bookmark used to
-       get. Favicon here rather than in the injected head: it never varies per page. -->
+  <!-- The real title, description and og tags for a given ?p=key are injected SERVER-side
+       (index.js "/page.html" route, proxied by nginx), and the server REPLACES the title
+       element below — a crawler never sees this default. It only shows for the instant
+       before the client script resolves, so it must still be a real name and not
+       "Loading…", which is what a browser tab and a bookmark used to get. Favicon here
+       rather than in the injected head: it never varies per page.
+       Keep tag syntax OUT of this comment: the server locates the title element by
+       pattern, and a literal one written here once made it delete this comment's opening,
+       which silently commented out every stylesheet link below. -->
   <title>GRINIUM Mining Pool</title>
   <link rel="icon" type="image/svg+xml" href="/images/favicon.svg">
   <link rel="stylesheet" href="/css/dashboard.css">

@@ -197,7 +197,11 @@ function migrateWithdrawals() {
       // On-chain kernel excess of the finalized payout tx (Grin's payment-proof primitive),
       // backfilled once mined by withdrawal-scheduler.backfillKernelProofs(). NULL until then
       // (or forever, for pre-feature rows / Tor-only deployments without the Owner-API wallet).
-      kernel_excess: 'TEXT DEFAULT NULL'
+      kernel_excess: 'TEXT DEFAULT NULL',
+      // Flat withdrawal fee charged to the miner, frozen at request time (see CREATE TABLE).
+      // Legacy rows default to 0 — those payouts predate the fee and sent the full amount, so
+      // 0 is the historically CORRECT value, not a placeholder.
+      fee_charged: 'REAL NOT NULL DEFAULT 0.0'
     };
     for (const [name, def] of Object.entries(additions)) {
       if (!have.has(name)) {
@@ -373,7 +377,15 @@ function createSchema() {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       grin_address TEXT NOT NULL REFERENCES miner_accounts(grin_address),
       amount REAL NOT NULL,
+      -- Two DIFFERENT fees, do not conflate:
+      --   fee         = the REAL on-chain network fee the pool wallet paid (backfilled after
+      --                 send; reconciliation reads it to explain the wallet-vs-ledger gap).
+      --   fee_charged = the FLAT withdrawal fee charged to the miner, frozen at request time
+      --                 from config.withdrawal_fee so a later settings change can't rewrite history.
+      -- The miner receives amount − fee_charged; the ledger debits the full amount and credits
+      -- fee_charged to the pool_fee pseudo-account on confirm.
       fee REAL NOT NULL DEFAULT 0.0,
+      fee_charged REAL NOT NULL DEFAULT 0.0,
       status TEXT NOT NULL DEFAULT 'tor_checking',
       method TEXT NOT NULL DEFAULT 'tor',
       slate_id TEXT DEFAULT NULL,

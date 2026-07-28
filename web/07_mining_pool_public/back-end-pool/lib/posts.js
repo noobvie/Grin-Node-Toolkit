@@ -180,6 +180,120 @@ class PostsManager {
       published_at: r.published_at || r.created_at,
     };
   }
+  // ── Starter post ─────────────────────────────────────────────────────────
+  // A fresh pool ships an empty /blog: the nav points at a blank page, and the whole
+  // blog pipeline (clean permalink, RSS, the server-rendered social card) has nothing
+  // to exercise. Seed exactly ONE real, publishable post.
+  //
+  // Marker-guarded like the ads self-promo seed, and the marker is written even when
+  // nothing is inserted — so an operator who edits or deletes this post never has it
+  // reappear on the next restart. Content is deliberately number-light: anything that
+  // moves (hashrate, difficulty, hardware prices) is pointed at the pool's own live
+  // pages instead of being baked into prose that silently goes stale.
+  seedStarterPost() {
+    const seeded = this.db.prepare(
+      "SELECT value FROM pool_config WHERE section = 'blog' AND key = 'starter_post_seeded'"
+    ).get();
+    if (seeded) return false;
+    const mark = () => {
+      this.db.prepare(`
+        INSERT INTO pool_config (section, key, value, value_type)
+        VALUES ('blog', 'starter_post_seeded', '1', 'boolean')
+        ON CONFLICT(section, key) DO UPDATE SET value = '1'
+      `).run();
+    };
+    // An existing blog is the operator's — never inject into it (covers pools upgraded
+    // from a build that predates this seed).
+    const have = this.db.prepare('SELECT COUNT(*) AS n FROM posts').get();
+    if (have && have.n > 0) { mark(); return false; }
+
+    const body = [
+      '<p>Grin is one of the few proof-of-work coins where a small miner can still',
+      'make a rational case for switching a machine on. Not because of a price story —',
+      'because of the arithmetic. Here is the honest version, including the parts that',
+      'argue against it.</p>',
+
+      '<h2>The network is small, and that cuts both ways</h2>',
+      '<p>Grin&rsquo;s total hashrate is modest next to the large proof-of-work chains.',
+      'For a miner that is the whole point: your share of the network — and so your share',
+      'of the emission — is far larger per unit of hardware than it would be on a crowded',
+      'chain. The same rig that is a rounding error elsewhere is a visible participant here.</p>',
+      '<p>The flip side is that a small network is a <em>volatile</em> one. A single large',
+      'farm arriving moves difficulty sharply, and your share falls just as fast as it rose.',
+      'Size the decision on what the network looks like today, not on a projection.',
+      'The <a href="/miners-stats.html">miners stats page</a> tracks both pool and network',
+      'hashrate over time, and <a href="/blocks.html">blocks</a> shows what the pool is',
+      'actually finding.</p>',
+
+      '<h2>The hardware is cheap and it sips power</h2>',
+      '<p>Grin uses <strong>Cuckatoo32 (C32)</strong>, a proof-of-work chosen to be',
+      'ASIC-friendly on purpose rather than fought over. That decision aged into an unusual',
+      'situation: purpose-built C32 miners exist, they are years old, and they turn up on the',
+      'secondhand market at a fraction of what new equipment costs for other coins.</p>',
+      '<p>They are also frugal. A typical secondhand C32 unit draws on the order of',
+      '<strong>~120&nbsp;W</strong> — closer to a games console than to a space heater. That',
+      'matters more than headline efficiency, because it changes where mining is viable at all:',
+      'a machine at this draw can run in a flat, on a domestic tariff, without a dedicated',
+      'circuit, without cooling you had to build, and without a noise complaint. Check the',
+      'current specification and condition of any unit before buying — figures vary by model',
+      'and by how hard a card has been run.</p>',
+
+      '<h2>The emission is simple, and it does not halve</h2>',
+      '<p>Grin issues <strong>1 GRIN per second, forever</strong>. There is no pre-mine, no',
+      'founder&rsquo;s reward, and no halving schedule to mine into. Your reward per block',
+      'does not step down on a calendar; the only thing that changes what you earn is how much',
+      'hashrate you are competing against. That makes the arithmetic unusually easy to reason',
+      'about — a rare property in this industry.</p>',
+
+      '<h2>Privacy is the default, not a setting</h2>',
+      '<p>Grin is built on Mimblewimble. There are no addresses or amounts recorded on the',
+      'chain, so the ledger does not accumulate a permanent public history of what you mined',
+      'and where you sent it. This pool follows the same principle: your Grin address',
+      '<em>is</em> your account, payouts go out over Tor, and there is nothing to register',
+      'and no email to hand over.</p>',
+
+      '<h2>The case against</h2>',
+      '<p>Any post like this that skips the risks is selling something, so:</p>',
+      '<ul>',
+      '<li><strong>Liquidity is thin.</strong> Grin trades on comparatively few venues, and',
+      'converting a meaningful amount can move the price against you.</li>',
+      '<li><strong>Difficulty is jumpy.</strong> On a small network, one new participant can',
+      'change your returns substantially and without warning.</li>',
+      '<li><strong>Secondhand hardware is secondhand.</strong> No warranty, ageing fans and',
+      'thermal paste, and no manufacturer support if a board dies.</li>',
+      '<li><strong>Electricity is still the deciding variable.</strong> A low draw widens the',
+      'range of tariffs that work; it does not make an expensive one work. Do the sum with',
+      'your own rate before buying anything.</li>',
+      '</ul>',
+      '<p>Mining is a business decision with real downside. Treat any coin you mine as a',
+      'speculative asset and do not spend money you need on hardware.</p>',
+
+      '<h2>Starting is a two-line change</h2>',
+      '<p>There is no sign-up. Point your miner at the pool, put your Grin address in the',
+      'username field, and you are mining — the address is what identifies you, so your stats',
+      'and balance exist from the first accepted share. The exact stratum host, port and a',
+      'copy-paste configuration are on the <a href="/#connect">connect section of the',
+      'homepage</a>, and payouts and thresholds are explained under',
+      '<a href="/account-settings.html">your account</a>.</p>',
+
+      '<hr>',
+      '<p><em>This is a starter post that shipped with the pool software so the blog is not',
+      'empty on day one. Edit it in the admin panel under Content &rarr; Blog to make it',
+      'yours, or delete it — it will not come back.</em></p>',
+    ].join('\n');
+
+    this.create({
+      title: 'Why Grin mining still adds up for a small miner',
+      slug: 'why-grin-mining-adds-up',
+      status: 'published',
+      tags: 'grin, mining, hardware, getting started',
+      excerpt: 'A small network, secondhand C32 ASICs at around 120 W, and an emission ' +
+        'that never halves — plus the risks that argument usually leaves out.',
+      body_html: body,
+    });
+    mark();
+    return true;
+  }
 }
 
 module.exports = PostsManager;

@@ -734,8 +734,39 @@ footer a:hover { color: var(--accent); }
   color: var(--btn-text, #07090c); background: var(--accent, #3fd957);
   padding: 9px 16px; border-radius: 6px;
 }
-a.ad-text-card:hover .ad-text-cta { filter: brightness(1.07); }
-a.ad-text-card:hover { border-color: color-mix(in srgb, var(--accent, #5dff73) 45%, transparent); }
+/* Same copy on a card with NO click target (ads.js adds the modifier): drop the fill and
+   the padding so it reads as a closing tagline, not a dead button. */
+.ad-text-cta--flat {
+  color: var(--accent, #3fd957); background: none; padding: 0;
+}
+/* Hover/focus emphasis. The global `a:hover { text-decoration: underline }` (top of this
+   file) outranks the card's own `text-decoration: none`, so a hovered text ad grew an
+   underline across the WHOLE card — headline, body and the CTA pill alike, which reads as
+   a broken link rather than a banner. Undo it here and emphasise instead: the headline
+   takes the accent, the body italicises, the card lifts. Italic on a mono face keeps the
+   same advance width, and the weights never change, so nothing reflows or rewraps on
+   hover — the emphasis is purely optical. */
+a.ad-text-card,
+.ad-text-head, .ad-text-body {
+  transition: border-color .15s, box-shadow .15s, color .15s;
+}
+a.ad-text-card:hover, a.ad-text-card:focus-visible {
+  text-decoration: none;
+  border-color: color-mix(in srgb, var(--accent, #5dff73) 45%, transparent);
+  box-shadow: 0 0 18px -6px var(--glow, transparent);
+}
+a.ad-text-card:hover .ad-text-head, a.ad-text-card:focus-visible .ad-text-head {
+  color: var(--accent, #3fd957);
+}
+a.ad-text-card:hover .ad-text-body, a.ad-text-card:focus-visible .ad-text-body {
+  font-style: italic; color: var(--text, #e6efe9);
+}
+a.ad-text-card:hover .ad-text-cta, a.ad-text-card:focus-visible .ad-text-cta {
+  filter: brightness(1.07);
+}
+@media (prefers-reduced-motion: reduce) {
+  a.ad-text-card, .ad-text-head, .ad-text-body { transition: none; }
+}
 @media (max-width: 560px) {
   .ad-text-card { justify-content: center; text-align: center; }
   .ad-text-body { flex-basis: 100%; }

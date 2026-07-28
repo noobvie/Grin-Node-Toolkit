@@ -9,6 +9,10 @@ const IncentivesManager = require('./incentives');
 // a Tor payout in parallel (found + fixed 2026-07-17).
 const PENDING_SQL = "status IN ('tor_checking','tor_sending','retry_scheduled','slatepack_pending')";
 
+// The pseudo-address the flat withdrawal fee is credited to — the SAME bucket the block-reward
+// pool fee lands in, so both show up as one fee-income line on the transparency page.
+const POOL_FEE_ADDRESS = IncentivesManager.POOL_FEE;
+
 class WithdrawalScheduler {
   constructor(config, wallet = null) {
     this.config = config;
@@ -99,6 +103,48 @@ class WithdrawalScheduler {
       e.code = 409;
       throw e;
     }
+  }
+
+  // ─── Flat withdrawal fee ────────────────────────────────────────────────────
+  // Grin charges the SENDER a network fee by transaction WEIGHT, not by amount, so a payout
+  // costs the pool the same ~0.023 GRIN whether it's 25 or 2500 GRIN. This flat fee recovers
+  // that cost from the miner who triggered it. Charged identically on all three rails.
+  //
+  // Accounting (design §8): the miner is locked and debited the FULL requested amount; only
+  // `amount − fee` goes on-chain, and the fee is credited to the pool_fee pseudo-account at
+  // CONFIRM time (never at request time — see _releaseLockAndDebit). Charging on confirm is
+  // what keeps every reversal path untouched: a payout that fails or expires returns the whole
+  // locked amount and no fee was ever taken, so there is nothing to un-charge.
+  _withdrawalFee() {
+    const f = Number(this.config.withdrawal_fee);
+    return Number.isFinite(f) && f > 0 ? parseFloat(f.toFixed(9)) : 0;
+  }
+
+  // Fee frozen at request time — callers store it in withdrawals.fee_charged so a later settings
+  // change can't rewrite the terms of an in-flight or historical payout.
+  //
+  // Deliberately NOT clamped to the amount. Clamping would let a payout smaller than the fee
+  // through as a dust send with the rest confiscated as "fee" (a 0.02 GRIN admin override would
+  // send 1 nanogrin and keep 0.019999999). A payout that cannot cover its own fee must be
+  // REJECTED — that is _netSend's job. min_withdrawal > withdrawal_fee makes this unreachable on the
+  // normal path; only an adminOverride can get here, and rejecting is the right answer there too.
+  _feeFor(_amount) {
+    return this._withdrawalFee();
+  }
+
+  // Amount that actually goes on-chain. Guarded so a sub-threshold admin override can never
+  // construct a zero/negative send (the min_withdrawal floor already covers normal requests).
+  _netSend(amount, feeCharged) {
+    const net = parseFloat((amount - feeCharged).toFixed(9));
+    if (!(net > 0)) {
+      const e = new Error(
+        `amount ${amount} GRIN does not cover the ${feeCharged} GRIN withdrawal fee ` +
+        `(which covers the Grin blockchain transaction fee)`
+      );
+      e.code = 400;
+      throw e;
+    }
+    return net;
   }
 
   // Cross-rail cooldown after a reversed payout (operator decision 2026-07-17, default 30 min).
@@ -262,14 +308,19 @@ class WithdrawalScheduler {
       `);
       eventStmt.run(withdrawalId, 'tor_checking', 'tor_sending');
 
+      // Send the NET amount — the flat fee stays behind in the pool wallet to cover the
+      // on-chain network fee. The row keeps `amount` as the gross the miner was debited, so
+      // the wallet-log lookups below must match on the net figure that actually went out.
+      const netSend = this._netSend(withdrawal.amount, withdrawal.fee_charged || 0);
+
       const sendResult = await this.walletTor.sendToTorAddress(
         withdrawal.grin_address,
-        withdrawal.amount
+        netSend
       );
 
       if (sendResult.success) {
-        await this.recordTorFee(withdrawalId, withdrawal.amount);
-        await this._captureTorSlateId(withdrawalId, withdrawal.amount); // best-effort proof metadata
+        await this.recordTorFee(withdrawalId, netSend);
+        await this._captureTorSlateId(withdrawalId, netSend); // best-effort proof metadata
         await this.markConfirmed(withdrawalId, sendResult.output);
       } else {
         console.error(`Send failed for withdrawal ${withdrawalId}: ${sendResult.error}`);
@@ -515,6 +566,11 @@ class WithdrawalScheduler {
     const minW = this.config.min_withdrawal || 25.0;
     if (!adminOverride && amt < minW) fail(`amount below minimum withdrawal (${minW} GRIN)`, 400);
 
+    // Freeze the fee now and prove the payout covers it BEFORE any balance is locked — an
+    // adminOverride bypasses the min floor, so this is the only guard on a tiny payout.
+    const feeCharged = this._feeFor(amt);
+    this._netSend(amt, feeCharged);
+
     const txn = this.db.transaction(() => {
       const totalPending = this.db.prepare(
         `SELECT COUNT(*) AS c FROM withdrawals WHERE ${PENDING_SQL}`
@@ -542,8 +598,9 @@ class WithdrawalScheduler {
       if (locked.changes !== 1) fail('insufficient balance', 409);
 
       const wid = this.db.prepare(
-        "INSERT INTO withdrawals (grin_address, amount, fee, status) VALUES (?, ?, 0, 'tor_checking')"
-      ).run(grinAddress, amt).lastInsertRowid;
+        `INSERT INTO withdrawals (grin_address, amount, fee, fee_charged, status)
+         VALUES (?, ?, 0, ?, 'tor_checking')`
+      ).run(grinAddress, amt, feeCharged).lastInsertRowid;
 
       this.db.prepare(`
         INSERT INTO balance_log
@@ -562,8 +619,11 @@ class WithdrawalScheduler {
     });
 
     const withdrawal_id = txn();
-    console.log(`[${new Date().toISOString()}] Withdrawal ${withdrawal_id} created for ${grinAddress} (${amt} GRIN, locked${adminOverride ? ', admin-override' : ''})`);
-    return { success: true, withdrawal_id, amount: amt };
+    console.log(`[${new Date().toISOString()}] Withdrawal ${withdrawal_id} created for ${grinAddress} (${amt} GRIN, fee ${feeCharged}, locked${adminOverride ? ', admin-override' : ''})`);
+    return {
+      success: true, withdrawal_id, amount: amt,
+      fee_charged: feeCharged, net_amount: this._netSend(amt, feeCharged)
+    };
   }
 
   // ─── Slatepack payout (interactive, encrypted, no-Tor) ──────────────────────
@@ -595,6 +655,10 @@ class WithdrawalScheduler {
     const minW = this.config.min_withdrawal || 25.0;
     if (amt < minW) fail(`amount below minimum withdrawal (${minW} GRIN)`, 400);
 
+    // Flat fee frozen at request time; the slate below is built for the NET amount.
+    const feeCharged = this._feeFor(amt);
+    const netSend = this._netSend(amt, feeCharged);
+
     // Lock the pool-side balance first (authoritative for accounting); the wallet-side output
     // lock happens during tx_lock_outputs below, and is released via cancelTx on failure.
     const txn = this.db.transaction(() => {
@@ -611,8 +675,9 @@ class WithdrawalScheduler {
       if (locked.changes !== 1) fail('insufficient balance', 409);
 
       const wid = this.db.prepare(
-        "INSERT INTO withdrawals (grin_address, amount, fee, status, method) VALUES (?, ?, 0, 'slatepack_pending', 'slatepack')"
-      ).run(grinAddress, amt).lastInsertRowid;
+        `INSERT INTO withdrawals (grin_address, amount, fee, fee_charged, status, method)
+         VALUES (?, ?, 0, ?, 'slatepack_pending', 'slatepack')`
+      ).run(grinAddress, amt, feeCharged).lastInsertRowid;
 
       this.db.prepare(`
         INSERT INTO balance_log
@@ -634,18 +699,22 @@ class WithdrawalScheduler {
     // pool balance lock so the miner's funds are never stranded.
     let slate = null;
     try {
-      slate = await this.wallet.initSendTx(amt);
+      slate = await this.wallet.initSendTx(netSend);
       await this.wallet.txLockOutputs(slate);
       const armored = await this.wallet.createSlatepackMessage(slate, [grinAddress]);
       const slateId = slate && slate.id ? slate.id : null;
-      // Record the real network fee (sender-pays in Grin: the wallet spends amount + fee while
-      // the ledger debits only amount). Reconciliation reads withdrawals.fee to explain the
-      // wallet-vs-ledger gap — a permanent fee = 0 makes coverage erode silently.
+      // Record the real network fee (sender-pays in Grin: the wallet spends netSend + fee while
+      // the ledger debits the full amount). Reconciliation reads withdrawals.fee to explain the
+      // wallet-vs-ledger gap — a permanent fee = 0 makes coverage erode silently. This is the
+      // REAL chain fee, not the flat fee_charged we bill the miner; the two are independent.
       const feeGrin = this._slateFeeGrin(slate);
       this.db.prepare('UPDATE withdrawals SET slate_id = ?, fee = COALESCE(?, fee) WHERE id = ?')
         .run(slateId, feeGrin, withdrawalId);
-      console.log(`[${new Date().toISOString()}] Slatepack withdrawal ${withdrawalId} created for ${grinAddress} (${amt} GRIN, slate ${slateId})`);
-      return { success: true, withdrawal_id: withdrawalId, amount: amt, slatepack: armored };
+      console.log(`[${new Date().toISOString()}] Slatepack withdrawal ${withdrawalId} created for ${grinAddress} (${amt} GRIN gross, ${netSend} net, slate ${slateId})`);
+      return {
+        success: true, withdrawal_id: withdrawalId, amount: amt,
+        fee_charged: feeCharged, net_amount: netSend, slatepack: armored
+      };
     } catch (err) {
       try { if (slate && slate.id) await this.wallet.cancelTx(slate.id); } catch (_) { /* best-effort */ }
       this._reverseLock(withdrawalId, 'slatepack_failed', 'slatepack_pending', `slate creation failed: ${err.message}`);
@@ -716,6 +785,10 @@ class WithdrawalScheduler {
     const minW = this.config.min_withdrawal || 25.0;
     if (amt < minW) fail(`amount below minimum withdrawal (${minW} GRIN)`, 400);
 
+    // Flat fee frozen at request time; the S1 slate below is built for the NET amount.
+    const feeCharged = this._feeFor(amt);
+    const netSend = this._netSend(amt, feeCharged);
+
     // Lock the pool-side balance first (authoritative). Same CAS + caps as the other rails.
     const txn = this.db.transaction(() => {
       const totalPending = this.db.prepare(`SELECT COUNT(*) AS c FROM withdrawals WHERE ${PENDING_SQL}`).get().c;
@@ -731,8 +804,9 @@ class WithdrawalScheduler {
       if (locked.changes !== 1) fail('insufficient balance', 409);
 
       const wid = this.db.prepare(
-        "INSERT INTO withdrawals (grin_address, amount, fee, status, method) VALUES (?, ?, 0, 'slatepack_pending', 'nostr')"
-      ).run(grinAddress, amt).lastInsertRowid;
+        `INSERT INTO withdrawals (grin_address, amount, fee, fee_charged, status, method)
+         VALUES (?, ?, 0, ?, 'slatepack_pending', 'nostr')`
+      ).run(grinAddress, amt, feeCharged).lastInsertRowid;
 
       this.db.prepare(`
         INSERT INTO balance_log
@@ -754,7 +828,7 @@ class WithdrawalScheduler {
     // failure (wallet OR no relay accepted) reverses the lock — nothing is stranded.
     let slate = null;
     try {
-      slate = await this.wallet.initSendTx(amt);
+      slate = await this.wallet.initSendTx(netSend);
       await this.wallet.txLockOutputs(slate);
       const armored = await this.wallet.createSlatepackMessage(slate, []); // recipients:[] → plain armor
       const slateId = slate && slate.id ? slate.id : null;
@@ -764,8 +838,11 @@ class WithdrawalScheduler {
 
       await this.nostrBridge.publishSlatepack(recipientPubHex, armored, note);
 
-      console.log(`[${new Date().toISOString()}] Nostr payout ${withdrawalId} sent for ${grinAddress} (${amt} GRIN, slate ${slateId})`);
-      return { success: true, withdrawal_id: withdrawalId, amount: amt, status: 'slatepack_pending' };
+      console.log(`[${new Date().toISOString()}] Nostr payout ${withdrawalId} sent for ${grinAddress} (${amt} GRIN gross, ${netSend} net, slate ${slateId})`);
+      return {
+        success: true, withdrawal_id: withdrawalId, amount: amt,
+        fee_charged: feeCharged, net_amount: netSend, status: 'slatepack_pending'
+      };
     } catch (err) {
       try { if (slate && slate.id) await this.wallet.cancelTx(slate.id); } catch (_) { /* best-effort */ }
       this._reverseLock(withdrawalId, 'nostr_failed', 'slatepack_pending', `nostr send failed: ${err.message}`);
@@ -936,6 +1013,16 @@ class WithdrawalScheduler {
   // precedes in normal flow), BOTH the release and the logged debit are clamped: releasing less
   // while logging the full amount would make the account total fall by less than the ledger
   // records → integrity_drift → an auto-freeze the alarm itself can't explain.
+  //
+  // The released amount is split across TWO debit rows that always sum to `released`:
+  //   'withdrawal' → what the miner actually received on-chain (amount − fee_charged)
+  //   'withdrawal_fee' → the flat withdrawal fee, matched by an equal credit to pool_fee
+  // Splitting matters for honesty, not just tidiness: reconciliation's flow statement and the
+  // public payments page both read debit/'withdrawal' as "paid to miners". Logging the gross
+  // there would overstate every payout by the fee. The paired pool_fee credit keeps the
+  // integrity invariant balanced (Σbalances still equals Σledger) and makes the fee visible as
+  // income rather than money that silently vanished. 'withdrawal_fee' is deliberately NOT counted
+  // as external money IN by reconciliation — it is an internal transfer, exactly like fee_cut.
   _releaseLockAndDebit(withdrawal) {
     const txn = this.db.transaction(() => {
       const acct = this.db.prepare(
@@ -952,12 +1039,44 @@ class WithdrawalScheduler {
       this.db.prepare(
         'UPDATE miner_accounts SET balance_locked = balance_locked - ?, updated_at = unixepoch() WHERE grin_address = ?'
       ).run(released, withdrawal.grin_address);
-      this.db.prepare(`
+
+      // Clamp the fee to what was actually released so the two rows can never sum to more than
+      // the release (the corruption path above can shrink it); net absorbs the remainder.
+      const feeCharged = Math.min(
+        Math.max(0, Number(withdrawal.fee_charged) || 0),
+        released
+      );
+      const netPaid = parseFloat((released - feeCharged).toFixed(9));
+
+      const logDebit = this.db.prepare(`
         INSERT INTO balance_log
         (grin_address, event_type, amount, balance_before, balance_after,
          locked_before, locked_after, reference_type, reference_id)
-        VALUES (?, 'debit', ?, 0, 0, ?, ?, 'withdrawal', ?)
-      `).run(withdrawal.grin_address, released, lockedBefore, lockedBefore - released, withdrawal.id);
+        VALUES (?, 'debit', ?, 0, 0, ?, ?, ?, ?)
+      `);
+      logDebit.run(withdrawal.grin_address, netPaid, lockedBefore,
+                   lockedBefore - released, 'withdrawal', withdrawal.id);
+
+      if (feeCharged > 0) {
+        logDebit.run(withdrawal.grin_address, feeCharged, lockedBefore - released,
+                     lockedBefore - released, 'withdrawal_fee', withdrawal.id);
+
+        // Matching credit to the pool_fee pseudo-account. INSERT OR IGNORE first: on a pool
+        // whose fee percent is 0 the account may not exist yet, and a missing row would drop
+        // the credit silently and break the invariant.
+        this.db.prepare(
+          'INSERT OR IGNORE INTO miner_accounts (grin_address, balance) VALUES (?, 0)'
+        ).run(POOL_FEE_ADDRESS);
+        this.db.prepare(
+          'UPDATE miner_accounts SET balance = balance + ?, updated_at = unixepoch() WHERE grin_address = ?'
+        ).run(feeCharged, POOL_FEE_ADDRESS);
+        this.db.prepare(`
+          INSERT INTO balance_log
+          (grin_address, event_type, amount, balance_before, balance_after,
+           locked_before, locked_after, reference_type, reference_id)
+          VALUES (?, 'credit', ?, 0, 0, 0, 0, 'withdrawal_fee', ?)
+        `).run(POOL_FEE_ADDRESS, feeCharged, withdrawal.id);
+      }
     });
     txn();
   }

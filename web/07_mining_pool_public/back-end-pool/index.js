@@ -414,6 +414,14 @@ async function initializePool() {
     } catch (e) { console.error(`[ads] self-promo seed failed: ${e.message}`); }
     pagesManager = new PagesManager(config);
     postsManager = new PostsManager(config);
+    // One starter post so /blog is not empty on a fresh pool (and so the permalink, RSS
+    // and social-card path have something to exercise). Marker-guarded: edited or deleted,
+    // it stays that way. Non-fatal — a blog seed must never stop the pool booting.
+    try {
+      if (postsManager.seedStarterPost()) {
+        console.log(`[${new Date().toISOString()}] [blog] seeded the starter post (/blog/why-grin-mining-adds-up)`);
+      }
+    } catch (e) { console.error(`[blog] starter post seed failed: ${e.message}`); }
 
     // Media uploads (cover images + in-body images from the admin CMS editor). Stored in a
     // persistent dir OUTSIDE public_html (which is rsynced/overwritten by the installer):
@@ -1220,16 +1228,27 @@ function setupRoutes() {
     return h;
   }
 
+  // Remove the shell's own <title> so ours is the only one (HTML allows exactly one, and
+  // browsers/Google keep the FIRST — leaving it makes the injected per-post title dead).
+  //
+  // Comments are MASKED first, and that is not paranoia: the shells carry an explanatory
+  // comment that mentions "<title>" in prose. A naive regex matched that occurrence, ran
+  // on to the real </title>, and deleted the comment's opening — leaving an unterminated
+  // "<!--" that swallowed every stylesheet link after it. The page rendered with NO CSS at
+  // all. Masking keeps offsets identical, so the match indices still address the original.
+  function stripShellTitle(headHtml) {
+    const masked = headHtml.replace(/<!--[\s\S]*?-->/g, (m) => '\u0000'.repeat(m.length));
+    const m = /[ \t]*<title\b[^>]*>[\s\S]*?<\/title>[ \t]*\r?\n?/i.exec(masked);
+    if (!m) return headHtml;
+    return headHtml.slice(0, m.index) + headHtml.slice(m.index + m[0].length);
+  }
+
   function sendShell(res, shellName, fallbackId, head) {
     const shell = readShell(shellName) || fallbackShell(fallbackId);
     const idx = shell.indexOf(HEAD_MARK);
     let html = shell;
     if (idx !== -1) {
-      // Remove the shell's own <title> (head slice only) before injecting ours. HTML
-      // allows exactly one, and browsers/Google keep the first — so without this every
-      // post would still have shown the shell's generic "Blog — <pool>" in search.
-      const headHtml = shell.slice(0, idx).replace(/[ \t]*<title\b[^>]*>[\s\S]*?<\/title>\s*/i, '');
-      html = headHtml + head + shell.slice(idx);
+      html = stripShellTitle(shell.slice(0, idx)) + head + shell.slice(idx);
     }
     res.setHeader('Cache-Control', 'no-cache');
     res.type('html').send(html);
@@ -1654,6 +1673,8 @@ function setupRoutes() {
       network: config.network,
       pool_fee_percent: config.pool_fee_percent,
       min_withdrawal: config.min_withdrawal,
+      // Flat fee deducted from every payout (0 = the pool absorbs the network fee).
+      withdrawal_fee: config.withdrawal_fee || 0,
       address_format: `grin1...`,
       wallet_required: config.tor_enabled ? 'Tor listener' : 'HTTP endpoint'
     });
@@ -2583,6 +2604,9 @@ function setupRoutes() {
         },
         hashrate_gps: parseFloat(((hr.avg_hashrate || 0)).toFixed(6)),
         min_withdrawal: config.min_withdrawal,
+        // Flat fee deducted from a payout — the account page shows the miner what they will
+        // actually receive BEFORE they submit, so the net amount is never a surprise.
+        withdrawal_fee: config.withdrawal_fee || 0,
         // Boolean only — the freeze REASON stays admin-side (it can reveal wallet trouble).
         payouts_frozen: withdrawalScheduler.isFrozen(),
         // Abandoned-balance countdown for THIS address (state: active|idle|counting|eligible|

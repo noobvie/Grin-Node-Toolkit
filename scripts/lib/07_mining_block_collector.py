@@ -200,14 +200,18 @@ DEFAULT_POOL_NAME = "Grin Solo (Node Toolkit)"
 # Fetched SERVER-SIDE (here) so the static page reads it same-origin from
 # data/price.json — the page's strict `connect-src 'self'` CSP needs no external
 # origin, and visitors never hit a rate limit or a CORS wall. CoinGecko returns
-# USD + BTC in one call; on failure we fall back to nonlogs (GRIN→BTC) × nonlogs
-# (BTC→USDT) for the USD. If every source fails the previous price.json is left
-# untouched (stale-but-shown) rather than overwritten with nulls. testnet is
-# tGRIN (no value) so no price is fetched for it.
+# USD + BTC in one call; on failure we fall back to Gate.io (GRIN/USDT for the USD,
+# ÷ BTC/USDT for the BTC). The fallback was nonlogs.io until its GRIN/BTC book went
+# offline in July 2026 (api.nonlogs.io is now NXDOMAIN) — Gate.io is the exchange
+# CoinGecko's GRIN figure mostly reflects anyway, and it's a genuinely independent
+# endpoint. If every source fails the previous price.json is left untouched
+# (stale-but-shown) rather than overwritten with nulls. testnet is tGRIN (no value)
+# so no price is fetched for it.
+# NOTE: CoinGecko 403s requests without a descriptive User-Agent — see _http_get_json.
 PRICE_COINGECKO = ("https://api.coingecko.com/api/v3/simple/price"
                    "?ids=grin&vs_currencies=usd,btc")          # {"grin":{"usd":..,"btc":..}}
-PRICE_NONLOGS_GRINBTC = "https://api.nonlogs.io/api/markets/GRIN-BTC"   # {"market":{"last_price":".."}}
-PRICE_NONLOGS_BTCUSD = "https://api.nonlogs.io/api/markets/BTC-USDT"    # {"market":{"last_price":".."}}
+PRICE_GATE_GRINUSDT = "https://api.gateio.ws/api/v4/spot/tickers?currency_pair=GRIN_USDT"  # [{"last":".."}]
+PRICE_GATE_BTCUSDT  = "https://api.gateio.ws/api/v4/spot/tickers?currency_pair=BTC_USDT"   # [{"last":".."}]
 PRICE_HTTP_TIMEOUT = 8           # seconds per external price call
 
 
@@ -766,7 +770,12 @@ def write_health_combined(out_dir, net, section):
 
 
 def _http_get_json(url):
-    """GET `url` → parsed JSON (dict), raising on any network/parse error."""
+    """GET `url` → parsed JSON, raising on any network/parse error.
+
+    Returns whatever the endpoint sends: CoinGecko replies with an object,
+    Gate.io with a single-element array — callers must check the shape.
+    The User-Agent is required, not cosmetic: CoinGecko 403s requests without one.
+    """
     req = urllib.request.Request(url, headers={"User-Agent": "grin-solo-collector"})
     with urllib.request.urlopen(req, timeout=PRICE_HTTP_TIMEOUT) as resp:
         return json.loads(resp.read().decode())
@@ -775,10 +784,10 @@ def _http_get_json(url):
 def fetch_grin_price():
     """GRIN price in USD + BTC for the mainnet dashboard, or None if all sources fail.
 
-    Primary: CoinGecko (one call → both). Fallback: nonlogs GRIN-BTC (BTC) ×
-    nonlogs BTC-USDT (USD). In the fallback the USD leg is best-effort — if the
-    BTC→USD call fails we still return the BTC figure with usd=None so the page
-    can show at least one conversion.
+    Primary: CoinGecko (one call → both). Fallback: Gate.io GRIN/USDT for the USD,
+    divided by Gate.io BTC/USDT for the BTC. In the fallback the BTC leg is
+    best-effort — if the BTC/USDT call fails we still return the USD figure with
+    btc=None so the page can show at least one conversion.
     """
     # 1) CoinGecko — {"grin":{"usd":..,"btc":..}}
     try:
@@ -789,18 +798,20 @@ def fetch_grin_price():
             return {"usd": usd, "btc": btc, "source": "coingecko"}
     except Exception:
         pass
-    # 2) nonlogs — GRIN→BTC, then BTC→USD for the USD leg
+    # 2) Gate.io — GRIN/USDT for USD, then ÷ BTC/USDT for the BTC leg
     try:
-        btc = float((_http_get_json(PRICE_NONLOGS_GRINBTC).get("market") or {}).get("last_price") or 0)
-        if btc > 0:
-            usd = None
+        rows = _http_get_json(PRICE_GATE_GRINUSDT)
+        usd = float(rows[0].get("last") or 0) if isinstance(rows, list) and rows else 0
+        if usd > 0:
+            btc = None
             try:
-                btc_usd = float((_http_get_json(PRICE_NONLOGS_BTCUSD).get("market") or {}).get("last_price") or 0)
+                brows   = _http_get_json(PRICE_GATE_BTCUSDT)
+                btc_usd = float(brows[0].get("last") or 0) if isinstance(brows, list) and brows else 0
                 if btc_usd > 0:
-                    usd = round(btc * btc_usd, 8)
+                    btc = round(usd / btc_usd, 12)
             except Exception:
-                usd = None
-            return {"usd": usd, "btc": btc, "source": "nonlogs"}
+                btc = None
+            return {"usd": usd, "btc": btc, "source": "gate.io"}
     except Exception:
         pass
     return None

@@ -160,6 +160,10 @@ class PoolSettings {
     },
     payout: {
       min_withdrawal: 25.0,
+      // Flat withdrawal fee (GRIN) deducted from every payout on every rail — recovers the
+      // sender-paid on-chain network fee (~0.023 GRIN typical, weight-based not amount-based).
+      // Must stay < min_withdrawal. 0 = the pool absorbs the network fee.
+      withdrawal_fee: 0.04,
       auto_payout: 'false',
       payout_frequency: 'manual',
       confirm_depth_mainnet: 1440,
@@ -417,7 +421,12 @@ class PoolSettings {
       streak_max_percent: 5.0,               // cap
       // Lottery
       lottery_enabled: 'false',
-      lottery_weekly_enabled: 'true',
+      // Recurring weekly draw. OFF by default: `lottery_enabled` is the master switch for
+      // contest campaigns too (runDueCampaigns), so an operator who turns the lottery on
+      // purely to run an occasion contest would otherwise also arm a weekly draw that pays
+      // out lottery_pot_fraction_percent (100 by default) of the whole prize pool. Turn this
+      // on deliberately if you want a recurring cadence rather than one-off contests.
+      lottery_weekly_enabled: 'false',
       lottery_pot_share_weighted_percent: 50,  // Pot A: tickets ∝ sustained work (hashrate_history)
       lottery_pot_equal_chance_percent: 50,    // Pot B: one entry per qualifying address
       lottery_min_shares: 10,                  // legacy gate (unused since eligibility moved to
@@ -645,6 +654,15 @@ class PoolSettings {
       min_withdrawal: (val) => {
         const n = parseFloat(val);
         if (isNaN(n) || n <= 0) throw new Error('min_withdrawal must be > 0');
+        return n;
+      },
+      // Upper bound is a sanity rail, not a policy: a fat-fingered 40 instead of 0.04 would
+      // silently swallow a whole payout. The hard invariant (fee < min_withdrawal) is enforced
+      // in validateConfig, which sees BOTH values — a per-field validator only sees its own.
+      withdrawal_fee: (val) => {
+        const n = parseFloat(val);
+        if (isNaN(n) || n < 0) throw new Error('withdrawal_fee must be >= 0');
+        if (n > 1) throw new Error('withdrawal_fee must be <= 1 GRIN (typical network fee is ~0.023)');
         return n;
       },
       payout_frequency: (val) => {
@@ -1210,6 +1228,20 @@ class PoolSettings {
     }
     if (payout.min_withdrawal !== undefined) {
       config.min_withdrawal = payout.min_withdrawal;
+    }
+    if (payout.withdrawal_fee !== undefined) {
+      config.withdrawal_fee = payout.withdrawal_fee;
+    }
+    // Cross-field guard, applied AFTER both are merged. The per-field validator can't see the
+    // other value, and lowering min_withdrawal on its own can strand an already-stored fee above
+    // the new floor. A fee >= the floor makes an at-minimum payout net <= 0, so fall back to
+    // absorbing it rather than letting the scheduler reject every threshold withdrawal.
+    if (!(config.withdrawal_fee >= 0) || config.withdrawal_fee >= config.min_withdrawal) {
+      console.warn(
+        `[settings] withdrawal_fee ${config.withdrawal_fee} is invalid against min_withdrawal ` +
+        `${config.min_withdrawal} — falling back to 0 (pool absorbs the network fee)`
+      );
+      config.withdrawal_fee = 0;
     }
     if (payout.max_pending_withdrawals !== undefined) {
       config.max_pending_withdrawals = payout.max_pending_withdrawals;

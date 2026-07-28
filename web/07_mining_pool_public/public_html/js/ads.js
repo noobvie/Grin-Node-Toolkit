@@ -34,9 +34,12 @@
       return '<div class="ad-unit ad-unit--code"' + idAttr + '>' + ad.html_code + '</div>';
     }
     if (ad.ad_type === 'text' && ad.headline) {
+      // No link → the CTA must not keep its button fill: a pill that looks pressable but
+      // does nothing is worse than no pill. The operator's copy is still shown, flat.
+      var ctaCls = 'ad-text-cta' + (hasLink(ad.link_url) ? '' : ' ad-text-cta--flat');
       var card = '<span class="ad-text-head">' + attr(ad.headline) + '</span>' +
         (ad.body_text ? '<span class="ad-text-body">' + attr(ad.body_text) + '</span>' : '') +
-        (ad.cta_label ? '<span class="ad-text-cta">' + attr(ad.cta_label) + '</span>' : '');
+        (ad.cta_label ? '<span class="' + ctaCls + '">' + attr(ad.cta_label) + '</span>' : '');
       var body = hasLink(ad.link_url)
         ? '<a class="ad-text-card" href="' + attr(ad.link_url) + '"' + linkOpen(ad.link_url) +
           (ad.headline ? ' title="' + attr(ad.headline) + '"' : '') + '>' + card + '</a>'

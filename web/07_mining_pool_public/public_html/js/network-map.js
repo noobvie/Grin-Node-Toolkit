@@ -264,7 +264,12 @@
 
   // ── render loop ─────────────────────────────────────────────────────────────
   let t0 = performance.now();
-  function frame(now) { const dt=Math.min(now-t0,50); t0=now; if (!dragging && !REDUCED){ if (opts.spin) rotY += AUTO*dt; else { rotY += spinVel; spinVel *= 0.94; if (Math.abs(spinVel)<1e-4) spinVel=0; } } draw(now); requestAnimationFrame(frame); }
+  // REDUCED belongs in the DEFAULT (boot clears opts.spin and unlights the chip), never in this
+  // gate. It used to be `!dragging && !REDUCED`, which made prefers-reduced-motion a hard lock:
+  // clicking Auto-rotate flipped opts.spin and lit the chip, but the globe still refused to
+  // turn — an explicit click is the user asking for motion and must beat the passive OS
+  // default. The same gate was also killing drag-flick inertia for those users.
+  function frame(now) { const dt=Math.min(now-t0,50); t0=now; if (!dragging){ if (opts.spin) rotY += AUTO*dt; else { rotY += spinVel; spinVel *= 0.94; if (Math.abs(spinVel)<1e-4) spinVel=0; } } draw(now); requestAnimationFrame(frame); }
 
   function draw(now) {
     R = baseR * zoom; ctx.clearRect(0,0,W,H);
@@ -287,6 +292,12 @@
   // Screen size below which a country outline is too small to read as a shape (Singapore,
   // the Netherlands at low zoom). Those keep the sized dot instead — see drawNode.
   const POLY_MIN_PX = 16;
+  // Opaque backdrop painted inside a country's clip BEFORE its flag. drawCountries runs after
+  // drawLand/drawGrat, so a translucent flag was compositing over the land dots and graticule
+  // lines as well as empty space — green speckle bleeding through every flag colour. The base
+  // blocks that show-through; FLAG_ALPHA is then a deliberate recede-behind-the-data veil
+  // rather than a colour crush (at 0.65 over raw space, China's #de2910 rendered ~#942411).
+  const FLAG_BASE = "#101821", FLAG_ALPHA = 0.85;
   function drawCountries() {
     for (const c of COUNTRIES) {
       c._filled = false;
@@ -309,7 +320,7 @@
       const wash = c.miners > 0 ? 0.15 + 0.27 * c.share : 0;
       c._filled = Math.max(maxx-minx, maxy-miny) >= POLY_MIN_PX;
       ctx.save(); trace(); ctx.clip();
-      if (opts.flags && c.flag) { ctx.globalAlpha=0.65; c.flag(minx,miny,maxx-minx,maxy-miny); ctx.globalAlpha=1; }
+      if (opts.flags && c.flag) { ctx.fillStyle=FLAG_BASE; ctx.fillRect(minx,miny,maxx-minx,maxy-miny); ctx.globalAlpha=FLAG_ALPHA; c.flag(minx,miny,maxx-minx,maxy-miny); ctx.globalAlpha=1; }
       else if (!wash) { ctx.fillStyle="rgba(90,209,255,0.14)"; ctx.fillRect(minx,miny,maxx-minx,maxy-miny); }
       if (wash) { ctx.fillStyle="rgba(90,209,255,"+wash.toFixed(3)+")"; ctx.fillRect(minx,miny,maxx-minx,maxy-miny); }
       ctx.restore();

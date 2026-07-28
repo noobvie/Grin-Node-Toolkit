@@ -27,6 +27,24 @@
               <div class="helper-text">Miners must accumulate at least this much to withdraw</div>
             </div>
             <div class="form-group">
+              <label for="withdrawal_fee">Withdrawal Fee (GRIN)</label>
+              <input type="number" id="withdrawal_fee" name="withdrawal_fee" min="0" max="1" step="0.001" value="0.04">
+              <div class="helper-text">
+                Flat fee deducted from every payout, on every rail. Recovers the Grin
+                <b>blockchain</b> transaction fee, which the <b>sender</b> pays and which is charged
+                by transaction size, not amount — so a payout costs the pool roughly the same
+                whether it's 25 or 2500 GRIN (typically ~0.023). Must be less than the minimum
+                withdrawal. Set <b>0</b> to have the pool absorb it. Miners see the fee and their
+                net amount before they submit.
+                <br><br>
+                Shown to miners as <b>&ldquo;withdrawal fee&rdquo;</b>, not &ldquo;blockchain
+                fee&rdquo;, on purpose: it is a flat rate, while the payments page publishes the
+                <i>real</i> chain fee paid on each payout. If you raise this well above the actual
+                chain cost, miners can see the gap — keep it close to ~0.023–0.04 unless you intend
+                it as a disclosed pool charge.
+              </div>
+            </div>
+            <div class="form-group">
               <label for="payout_frequency">Auto Payout Frequency</label>
               <select id="payout_frequency" name="payout_frequency">
                 <option value="manual">Manual (default)</option>

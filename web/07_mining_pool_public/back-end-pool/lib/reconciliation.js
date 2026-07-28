@@ -97,8 +97,13 @@ async function computeReconciliation(db, wallet, forceRefresh = true) {
     for (const k of Object.keys(raw)) out[k] = (raw[k] || 0) + (agg[k] || 0);
     return out;
   };
+  // 'pool_fee'   = the percentage cut of each block reward (rewards.js)
+  // 'withdrawal_fee' = the flat per-withdrawal fee (withdrawal-scheduler.js, on confirm)
+  // Both land in the same pseudo-account and are both fee income, so `collected` counts both.
+  // Neither is external money IN (see FLOW_CASES) — they are internal transfers of GRIN the
+  // pool already held, so they are intentionally absent from the flow statement's in/out.
   const FEE_CASES = (amt) => `
-    SELECT COALESCE(SUM(CASE WHEN event_type='credit' AND reference_type='pool_fee' THEN ${amt} END),0) AS collected,
+    SELECT COALESCE(SUM(CASE WHEN event_type='credit' AND reference_type IN ('pool_fee','withdrawal_fee') THEN ${amt} END),0) AS collected,
            COALESCE(SUM(CASE WHEN event_type='debit'  AND reference_type='fee_cut'  THEN ${amt} END),0) AS diverted`;
   const feeAgg = composite(
     `${FEE_CASES('amount')} FROM balance_log WHERE grin_address='pool_fee' AND created_at >= ?`,

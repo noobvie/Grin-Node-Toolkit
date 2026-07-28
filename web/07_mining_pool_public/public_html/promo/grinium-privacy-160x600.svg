@@ -74,10 +74,10 @@
       <text x="80" y="526" font-size="9.5" fill="#645b7a" letter-spacing=".8">PAID STRAIGHT TO YOU</text>
     </g>
 
-    <!-- CTA -->
+    <!-- Closing tagline, NOT a button — this creative ships with no click-through, so a
+         filled pill with an arrow would be a button that does nothing. -->
     <g transform="translate(20,542)">
-      <rect x="0" y="0" width="120" height="34" rx="7" fill="url(#cta)"/>
-      <text x="60" y="22" text-anchor="middle" font-family="ui-monospace,Menlo,Consolas,monospace" font-size="12" font-weight="bold" fill="#0d0918" letter-spacing=".8">MINE NOW →</text>
+      <text x="60" y="22" text-anchor="middle" font-family="ui-monospace,Menlo,Consolas,monospace" font-size="12" font-weight="bold" fill="#a78bfa" letter-spacing=".8">ANONYMOUS</text>
     </g>
   </g>
 </svg>

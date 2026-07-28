@@ -112,6 +112,15 @@
       font-family: var(--mono); font-size: 10.5px; font-weight: 700; letter-spacing: .18em;
       text-transform: uppercase; color: var(--info); margin-bottom: 10px;
     }
+    /* Net-amount preview under the withdraw amount field. Info-toned rather than warning-toned:
+       the fee is normal, disclosed pricing, not an error state. */
+    .net-preview {
+      margin: 8px 0 0; font-size: 12.5px; line-height: 1.5; color: var(--text-dim);
+      font-family: var(--mono);
+    }
+    .net-preview b { color: var(--text); font-weight: 700; }
+    .net-preview.is-short b { color: var(--danger, #f85149); }
+
     /* single withdraw column (per-account threshold retired 2026-07-17) */
     .withdraw-col { max-width: 560px; }
     .withdraw-col h3 {
@@ -431,6 +440,21 @@
                                         <a class="amt-chip" id="acct-amt-min" title="Fill the pool minimum">min <span id="acct-pool-min">—</span> ツ</a> &middot;
                                         <a class="amt-chip" id="acct-amt-max" title="Fill your full available balance">max <span id="acct-amt-max-val">—</span> ツ</a></label>
                                     <input type="text" id="acct-amount" inputmode="decimal" placeholder="tap min or max to autofill" autocomplete="off">
+                                    <!-- Live net-amount preview. Shown for every rail (the fee is
+                                         identical on all three) and only when a fee is configured;
+                                         a pool running withdrawal_fee = 0 never sees this line.
+                                         aria-live so screen-reader users hear the net update as
+                                         they type rather than discovering it after submitting. -->
+                                    <p class="net-preview" id="acct-net-preview" style="display:none" aria-live="polite">
+                                        <!-- Label stays "withdrawal fee", NOT "blockchain fee": this is a flat
+                                             rate that covers the chain fee, and the payments page publishes the
+                                             REAL per-payout chain fee. Naming it after the chain would read as a
+                                             contradiction the moment a miner compares the two. The title/note
+                                             carry the plain-language "blockchain" explanation instead. -->
+                                        <span title="A flat fee covering the Grin blockchain transaction fee">Withdrawal fee</span>
+                                        <b><span id="acct-fee-val">—</span> ツ</b>
+                                        &middot; you receive <b><span id="acct-net-val">—</span> ツ</b>
+                                    </p>
                                 </div>
                                 <div class="radio-row" role="radiogroup" aria-label="Payout method">
                                     <label><input type="radio" name="acct-pay-method" id="acct-pay-tor" value="tor" checked> Tor</label>
@@ -502,6 +526,14 @@
                             </div>
 
                             <p class="note" style="margin:16px 0 0;font-size:12.5px;color:var(--text-mute);">
+                                <span id="acct-fee-note" style="display:none">A flat withdrawal fee of
+                                <b><span id="acct-fee-note-val">—</span> ツ</b> is deducted from the amount you request,
+                                on every method. It covers the <b>Grin blockchain transaction fee</b>, which on Grin
+                                is paid by the sender and is charged by transaction size rather than by the amount
+                                sent — so it costs the same whether you withdraw 25 or 2500 ツ. Fewer, larger
+                                withdrawals therefore cost you less in total. It is a flat rate, not a pass-through
+                                of the exact chain fee: the real fee paid on every payout is published on the
+                                <a href="/payment-history.html">payments page</a>.</span>
                                 One payout at a time — while one is in flight it shows above with its status.
                                 Nothing gets stuck: a payout that can't be delivered returns to your balance
                                 automatically once its retry or expiry window passes. There's no manual cancel
@@ -526,6 +558,9 @@
                                 <li><span class="k">Pending withdrawal</span><span class="v" id="acct-pending">—</span></li>
                                 <li><span class="k">Payouts made</span><span class="v" id="acct-paid-count">—</span></li>
                                 <li><span class="k">Minimum payout (pool)</span><span class="v" id="acct-min">—</span></li>
+                                <!-- Row is removed entirely (not shown as 0) on a pool that
+                                     absorbs the network fee — see renderAccount. -->
+                                <li id="acct-fee-row"><span class="k" title="A flat fee covering the Grin blockchain transaction fee">Withdrawal fee</span><span class="v" id="acct-fee">—</span></li>
                             </ul>
 
                             <div class="fx-head">Earnings <span class="src" id="fx-src">est. &middot; spot price</span></div>
@@ -658,6 +693,7 @@
         let isDemo = false;
         let acctRange = 'day';
         let acctSummary = null;   // last /api/account summary (nostr send re-reads destination state)
+        let acctWithdrawalFee = 0;    // flat withdrawal fee (GRIN) from the summary; 0 = pool absorbs it
         const ledger = { in: { page: 0, total: 0 }, out: { page: 0, total: 0 } };
         const wd = { page: 0, total: 0 };   // withdrawal-history pager (P-08)
 
@@ -787,6 +823,13 @@
             $id('acct-pending').textContent = a.pending_withdrawals ? 'Yes — 1 in progress' : 'No';
             $id('acct-paid-count').textContent = Number(a.payouts_count || 0).toLocaleString('en-US');
             $id('acct-min').textContent = fmtGrin(a.min_withdrawal);
+            // Hide the row rather than print "0 ツ" — a pool that absorbs the network fee has no
+            // withdrawal fee to disclose, and a zero row invites "will this change?" questions.
+            const feeRow = $id('acct-fee-row');
+            if (feeRow) {
+                feeRow.style.display = Number(a.withdrawal_fee || 0) > 0 ? '' : 'none';
+                $id('acct-fee').textContent = fmtGrin(a.withdrawal_fee);
+            }
 
             const lamp = $id('acct-lamp');
             lamp.style.display = '';
@@ -794,6 +837,14 @@
             $id('acct-lamp-text').textContent = a.is_online ? 'Miner online' : 'Miner offline';
 
             $id('acct-pool-min').textContent = Number(a.min_withdrawal || 0).toFixed(1);
+            acctWithdrawalFee = Number(a.withdrawal_fee || 0);
+            const feeNote = $id('acct-fee-note');
+            if (feeNote) {
+                feeNote.style.display = acctWithdrawalFee > 0 ? '' : 'none';
+                $id('acct-fee-note-val').textContent =
+                    acctWithdrawalFee.toFixed(4).replace(/0+$/, '').replace(/\.$/, '');
+            }
+            renderNetPreview();
             // min/max autofill chips: min = pool minimum, max = current spendable balance
             $id('acct-amt-min').dataset.v = Number(a.min_withdrawal || 0).toFixed(1);
             $id('acct-amt-max').dataset.v = Number(a.balance || 0).toFixed(9).replace(/0+$/, '').replace(/\.$/, '');
@@ -1371,6 +1422,34 @@
             return json.error ? (json.error + (why ? ' — ' + why : (json.reason ? ' (' + json.reason + ')' : ''))) : fallback;
         }
 
+        // Live "what you'll actually receive" line under the amount field. The flat withdrawal
+        // fee is identical on all three rails, so this is rail-independent and needs no rerun
+        // when the method radio changes. Mirrors the server: net = amount − fee, and the server
+        // rejects anything that doesn't cover the fee, so an under-fee amount is flagged here
+        // rather than after a failed submit.
+        function renderNetPreview() {
+            const el = $id('acct-net-preview');
+            if (!el) return;
+            if (!(acctWithdrawalFee > 0)) { el.style.display = 'none'; return; }
+
+            const raw = ($id('acct-amount').value || '').trim();
+            const amt = Number(raw);
+            $id('acct-fee-val').textContent = acctWithdrawalFee.toFixed(4).replace(/0+$/, '').replace(/\.$/, '');
+
+            // Before anything is typed, show the fee alone — the miner sees the cost up front
+            // instead of only after committing to a number.
+            if (raw === '' || !isFinite(amt) || amt <= 0) {
+                el.classList.remove('is-short');
+                $id('acct-net-val').textContent = '—';
+                el.style.display = '';
+                return;
+            }
+            const net = amt - acctWithdrawalFee;
+            el.classList.toggle('is-short', !(net > 0));
+            $id('acct-net-val').textContent = net > 0 ? net.toFixed(4) : 'too small';
+            el.style.display = '';
+        }
+
         // An explicit amount is required (blank no longer means full balance — tap the
         // "max" chip instead). Returns a positive Number, or null after showing why.
         function amountValue(msgEl) {
@@ -1602,7 +1681,7 @@
                     pending_withdrawals: 0, pending_withdrawal: null,
                     is_online: true, last_seen_at: now - 40, created_at: now - 75 * 86400,
                     shares: { count: 184207, last_share_at: now - 40 }, blocks_found: 3,
-                    hashrate_gps: 4.82, min_withdrawal: 25.0, payouts_frozen: false,
+                    hashrate_gps: 4.82, min_withdrawal: 25.0, withdrawal_fee: 0.04, payouts_frozen: false,
                     has_recorded_ip: true, has_recorded_pass: true,
                     // Healthy case: both demo rigs online on one shared, compliant password.
                     password_proof: { state: 'ok', live: { sessions: 2, distinct: 1, unusable: 0 } },
@@ -1655,16 +1734,19 @@
             $id('acct-amount').addEventListener('input', function () {
                 const clean = this.value.replace(/[^0-9.]/g, '').replace(/(\..*)\./g, '$1');
                 if (clean !== this.value) this.value = clean;
+                renderNetPreview();
             });
             $id('acct-sp-create').addEventListener('click', slatepackCreate);
             $id('acct-sp-finalize').addEventListener('click', slatepackFinalize);
             $id('acct-amt-min').addEventListener('click', function (e) {
                 e.preventDefault();
                 if (this.dataset.v) $id('acct-amount').value = this.dataset.v;
+                renderNetPreview();
             });
             $id('acct-amt-max').addEventListener('click', function (e) {
                 e.preventDefault();
                 if (this.dataset.v) $id('acct-amount').value = this.dataset.v;
+                renderNetPreview();
             });
             $id('acct-pay-tor').addEventListener('change', syncPayMethod);
             $id('acct-pay-slatepack').addEventListener('change', syncPayMethod);

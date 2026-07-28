@@ -313,6 +313,15 @@ These remain **documented targets without backend routes**; tracked so the catal
 - **Fee routing:** `fee = gross − net`; credited to the `pool_fee` pseudo-address. Default
   `pool_fee_percent` is **1.0** (`config.js`, `pool-settings.js`, and the bash
   installers all agree); operator-editable via the admin panel.
+- **The pool fee is taken at BLOCK MATURITY, never at withdrawal** — and that is a correctness
+  choice, not a convenience one (revisited and re-affirmed 2026-07-27). Block reward is the only
+  correct fee base: (1) orphan reversal replays the exact `balance_log` credits *including* the
+  fee, so a fee already banked at withdrawal time would be unrecoverable once the miner had
+  withdrawn; (2) charging at the withdrawal door would tax the pool's own giveaways (join bonus,
+  streak, prize awards) on the way out while letting a dormant-swept balance escape fee-free;
+  (3) a later `pool_fee_percent` change would apply retroactively to GRIN mined under the old
+  rate; (4) displayed balances stay equal to what the miner receives, so `min_withdrawal` and
+  every account/ledger surface mean exactly what they say.
 - **Orphan reversal** reads the *actual* credited amounts from `balance_log` and reverses those
   exact values (PPLNS-weighted, including the fee credit); never pushes a balance below 0.
 - **Payout threshold:** default `min_withdrawal` = **25 GRIN** (raised from 5.0 on 2026-07-13; agrees
@@ -322,6 +331,45 @@ These remain **documented targets without backend routes**; tracked so the catal
   admin panel. Each miner may set a personal `min_payout` override (IP-gated
   `POST /api/account/:addr/min-payout`) that can only **raise** the floor — enforced at write time and
   re-checked in `withdrawal-scheduler.js`, so an override never drops a payout below the pool minimum.
+- **Flat withdrawal fee:** default `withdrawal_fee` = **0.04 GRIN** (added 2026-07-27; `config.js`,
+  `pool-settings.js`, admin `settings-payout.html`). Deducted from every payout on **all three
+  rails**; `0` makes the pool absorb the cost. Grin charges the **sender** a network fee by
+  transaction *weight* — `(inputs + 21×outputs + 3×kernels) × 0.0005` — so a payout costs the
+  pool ~0.023 GRIN whether it is 25 or 2500 GRIN. Left unrecovered that cost scales with payout
+  *count* and eats ~9% of fee income at a 25 GRIN floor (~23% at 10). 0.04 covers even a
+  ~10-input sweep (~0.0275). Invariants: `0 ≤ withdrawal_fee < min_withdrawal`, enforced in
+  `validateConfig` **and** re-checked in `PoolSettings.applyToConfig` (a per-field validator
+  can't see the other value, and lowering the floor alone can strand a stored fee above it —
+  that path falls back to 0 rather than making every at-minimum payout unpayable).
+  - **Accounting (why it's charged on CONFIRM, not on request):** the miner is locked and
+    debited the full gross `amount`; only `amount − fee_charged` goes on-chain. The fee is
+    credited to `pool_fee` inside `_releaseLockAndDebit`, which runs only on a confirmed payout.
+    Charging at request time would force every reversal path (Tor final failure, slatepack
+    expiry, Nostr send failure, admin cancel) to un-charge it — miss one and the pool banks a
+    fee for a payout that never happened *and* breaks the integrity invariant. On confirm,
+    **zero reversal paths change**.
+  - **Two columns, two different fees — do not conflate.** `withdrawals.fee` = the REAL on-chain
+    network fee (backfilled by `recordTorFee` / `_slateFeeGrin`), read by reconciliation to
+    explain the wallet-vs-ledger gap. `withdrawals.fee_charged` = the flat fee billed to the
+    miner, frozen at request time so a later settings change can't rewrite historical terms.
+    They are independent; the pool profits or loses the difference.
+  - **Ledger shape:** the release writes **two** debit rows summing to the released amount —
+    `reference_type='withdrawal'` (net, what the miner actually received) and
+    `'withdrawal_fee'` (the fee) — plus a matching `'withdrawal_fee'` **credit** to `pool_fee`. Splitting
+    keeps "paid to miners" honest: reconciliation's flow statement and the public payments page
+    both read `debit/'withdrawal'` as money paid out, so logging the gross there would overstate
+    every payout by the fee. `'withdrawal_fee'` is deliberately **not** counted as external money IN
+    by `FLOW_CASES` — like `fee_cut`, it is an internal transfer of GRIN the pool already held.
+    `reconciliation.js` `FEE_CASES.collected` counts `('pool_fee','withdrawal_fee')` together.
+  - **Reporting:** every "GRIN sent to miners" figure in `hashrate-tracker.js` (hourly rollup,
+    payments series, payout-size histogram, lifetime `paid_all`) reads
+    `amount − COALESCE(fee_charged,0)`. Legacy rows carry `fee_charged = 0`, which is the
+    historically *correct* value (they predate the fee), so the migration needs no backfill.
+    `totals.fee_percent` stays the **block-reward** split only — mixing the flat fee in would make
+    the advertised pool fee % depend on how often miners withdraw; the flat fees are reported
+    separately as `totals.withdrawal_fees_all`.
+  - **Open:** `payment-history.html` does not yet surface `withdrawal_fees_all` — the number is
+    served but not rendered, so the public page currently understates total operator take.
 
 ---
 

@@ -260,7 +260,7 @@ pool_ensure_defaults() {
         ["region_country_code"]=""
         ["pool_fee_percent"]="1.0"
         ["min_withdrawal"]="25.0"
-        ["withdrawal_fee"]="0.0"
+        ["withdrawal_fee"]="0.04"
         ["grin_wallet_dir"]="$POOL_WALLET_DIR"
         ["log_path"]="$POOL_LOG"
         ["service_port"]="$POOL_PORT"

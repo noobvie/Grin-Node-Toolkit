@@ -361,12 +361,17 @@ async function getDailyAvgHashrate() {
   } catch { return cached != null ? cached : 0; }
 }
 
-// ── Price (Gate.io USD + nonlogs.io BTC), on-demand, cached ────────────────────
+// ── Price (Gate.io USD + CoinGecko BTC), on-demand, cached ────────────────────
+
+// CoinGecko 403s any request without a descriptive User-Agent, and Node's https
+// sends none by default — so identify ourselves on every outbound call.
+const HTTP_UA = 'GrinTinyExplorer/1.0 (+https://github.com/Noobvie/Grin-Node-Toolkit)';
 
 function httpsGetJson(hostname, urlPath) {
   return new Promise((resolve, reject) => {
     const req = https.request(
-      { hostname, path: urlPath, method: 'GET', timeout: 8000 },
+      { hostname, path: urlPath, method: 'GET', timeout: 8000,
+        headers: { 'Accept': 'application/json', 'User-Agent': HTTP_UA } },
       res => {
         let d = '';
         res.on('data', c => { d += c; });
@@ -474,16 +479,18 @@ async function getPrice() {
     if (Array.isArray(btc) && btc[0]) btcUsd = parseFloat(btc[0].last) || 0;
     if (price_usd && btcUsd) { price_btc = price_usd / btcUsd; sources.push('gate.io'); }
   } catch {}
+  // CoinGecko refines the BTC price. Was nonlogs.io until its GRIN/BTC book went
+  // offline in July 2026 (api.nonlogs.io is now NXDOMAIN); with no native GRIN/BTC
+  // market left, CoinGecko's aggregate is the best available. On failure the
+  // Gate.io block above has already set price_btc by division, so this is additive.
   try {
-    const nlRaw = await httpsGetJson('api.nonlogs.io', '/api/markets/GRIN-BTC');
-    const nl = Array.isArray(nlRaw) ? nlRaw[0] : (nlRaw?.market || nlRaw);
-    if (nl) {
-      const nlBtc = parseFloat(nl.last || nl.last_price || nl.price) || 0;
-      if (nlBtc) {
-        price_btc = nlBtc;
-        if (!sources.includes('nonlogs.io')) sources.push('nonlogs.io');
-        if (!price_usd && btcUsd) price_usd = nlBtc * btcUsd;
-      }
+    const cgRaw = await httpsGetJson('api.coingecko.com',
+      '/api/v3/simple/price?ids=grin&vs_currencies=btc,usd');
+    const cgBtc = parseFloat(cgRaw?.grin?.btc) || 0;
+    if (cgBtc) {
+      price_btc = cgBtc;
+      if (!sources.includes('coingecko')) sources.push('coingecko');
+      if (!price_usd && btcUsd) price_usd = cgBtc * btcUsd;
     }
   } catch {}
 

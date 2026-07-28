@@ -751,7 +751,7 @@ function initApiPage() {
     { path: '/rest/difficulty.json', desc: 'Network difficulty + hashrate (GPS)',                                        cache: '30s',   link: true, cors: true },
     { path: '/rest/emission.json',   desc: 'Static emission schedule — yearly milestones, no halving',                  cache: '24h',   link: true, cors: true },
     { path: '/rest/node.json',       desc: 'Connected peers, version distribution (CORS-enabled)',                       cache: '30s',   link: true, cors: true },
-    { path: '/rest/price.json',      desc: 'Price data (gate.io + nonlogs.io) + 24h change + history (CORS-enabled)', cache: '2 min', link: true, cors: true },
+    { path: '/rest/price.json',      desc: 'Price data (gate.io + coingecko) + 24h change + history (CORS-enabled)', cache: '2 min', link: true, cors: true },
   ];
 
   // Only include price endpoints on mainnet

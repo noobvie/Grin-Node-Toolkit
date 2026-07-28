@@ -3,10 +3,14 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <!-- The real <title> + description + og:* for a given /blog/<slug> are injected
-       SERVER-side (index.js "/blog/:slug" route, proxied by nginx) — a crawler never sees
-       this default. It shows only for the instant before the client script resolves, so it
-       must be a real name, not "Loading…". Favicon here: it never varies per post. -->
+  <!-- The real title, description and og tags for a given /blog/slug are injected
+       SERVER-side (index.js "/blog/:slug" route, proxied by nginx), and the server REPLACES
+       the title element below — a crawler never sees this default. It shows only for the
+       instant before the client script resolves, so it must be a real name, not "Loading…".
+       Favicon here: it never varies per post.
+       Keep tag syntax OUT of this comment: the server locates the title element by pattern,
+       and a literal one written here once made it delete this comment's opening, which
+       silently commented out every stylesheet link below. -->
   <title>Blog — GRINIUM Mining Pool</title>
   <link rel="icon" type="image/svg+xml" href="/images/favicon.svg">
   <link rel="stylesheet" href="/css/dashboard.css">

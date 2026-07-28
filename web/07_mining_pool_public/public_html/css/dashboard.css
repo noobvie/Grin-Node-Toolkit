@@ -704,15 +704,70 @@ footer a:hover { color: var(--accent); }
   text-align: center;
   max-width: 970px;
 }
+/* ── Slot chrome: the "Ad" disclosure + the session dismiss × ─────────────────
+   Mobile-first, this is a single ~14px row above the creative (AD left, × right). At
+   ≥840px it becomes a vertical strip in the slot's left padding — see below. The label
+   is never dropped: it is the disclosure that marks the placement as paid, and the rail
+   reuses it as its pull-tab. */
+.ad-slot-chrome {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+}
 .ad-slot-label {
-  display: block;
   font-size: 10px;
   letter-spacing: .08em;
   text-transform: uppercase;
   color: var(--text-dim, #8a978f);
   opacity: .65;
-  margin-bottom: 4px;
 }
+/* Quiet until the slot is hovered/focused — present for anyone who wants it, not a
+   permanent piece of furniture competing with the creative. */
+.ad-slot-close {
+  flex: none;
+  position: relative;                /* anchors the ::before hit area below */
+  width: 18px; height: 18px; line-height: 16px;
+  padding: 0;
+  font-size: 13px;
+  text-align: center;
+  cursor: pointer;
+  color: var(--text-dim, #8a978f);
+  /* A bare <button> still picks up UA chrome (buttonface fill, inset border) on iOS
+     Safari even after background/border are set — appearance:none is what clears it. */
+  -webkit-appearance: none;
+  appearance: none;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 50%;
+  opacity: .5;
+  transition: opacity .2s ease, color .2s ease, border-color .2s ease;
+}
+/* Touch target. The drawn circle stays 18px — bigger reads as a UI button competing with
+   the creative — but WCAG 2.2 2.5.8 wants 24px, so an invisible centred ::before extends
+   the HIT area to 24px without touching layout (it is out of flow, so it moves nothing and
+   the 3px it overhangs stays inside the chrome's 4px margin / the strip's 10px gap).
+   Padding + negative margin would work too, but the border and border-radius are on the
+   button, so that route would inflate the visible ring as well. */
+.ad-slot-close::before {
+  content: '';
+  position: absolute;
+  top: 50%; left: 50%;
+  width: 24px; height: 24px;
+  transform: translate(-50%, -50%);
+}
+/* The rail is the one place the button sits ON a served creative (it hangs off the top
+   corner), and the rail only exists ≥1366px — a mouse-only width. Growing the hit area
+   there would trade a real ad click for a stray dismiss, so the rail keeps 20px exactly. */
+.ad-slot--rail .ad-slot-close::before { display: none; }
+.ad-slot:hover .ad-slot-close,
+.ad-slot-close:focus-visible { opacity: 1; }
+/* dashboard.css:133 gives every button:focus-visible a radius-sm outline, and at (0,1,1)
+   it outranks the 50% above — without this the × pops from circle to rounded square the
+   moment it takes keyboard focus. Same specificity, declared later, so this wins. */
+.ad-slot-close:focus-visible { border-radius: 50%; }
+.ad-slot-close:hover { color: var(--text, #cfd8d3); border-color: var(--border, #1d3a26); }
 .ad-unit { display: inline-block; max-width: 100%; }
 .ad-unit img { max-width: 100%; height: auto; display: block; border-radius: 8px; }
 /* Native text ad (ad_type='text'): a Reactor card built from headline + body + CTA, no
@@ -765,7 +820,7 @@ a.ad-text-card:hover .ad-text-cta, a.ad-text-card:focus-visible .ad-text-cta {
   filter: brightness(1.07);
 }
 @media (prefers-reduced-motion: reduce) {
-  a.ad-text-card, .ad-text-head, .ad-text-body { transition: none; }
+  a.ad-text-card, .ad-text-head, .ad-text-body, .ad-slot-close { transition: none; }
 }
 @media (max-width: 560px) {
   .ad-text-card { justify-content: center; text-align: center; }
@@ -790,6 +845,50 @@ a.ad-text-card:hover .ad-text-cta, a.ad-text-card:focus-visible .ad-text-cta {
 .ad-slot--in-content .ad-unit { margin: 6px 8px; vertical-align: top; }
 .ad-slot--sidebar { max-width: 320px; }
 
+/* ── ≥840px: the chrome turns from a row into a vertical strip ────────────────
+   The label rotates (the same writing-mode trick the rail already uses further down) and
+   the strip moves into the slot's left padding, so the chrome costs WIDTH instead of the
+   ~14px row of HEIGHT. Header/footer cap at 970px around a 728px leaderboard, so the
+   ~52px spent here comes out of slack that was doing nothing.
+
+   Two things make that safe:
+   · Padding is SYMMETRIC. The strip only occupies the left side, but reserving the same
+     width on the right keeps the creative on the page's true centre axis — the header slot
+     sits under a centred .wrap, where a 26px drift off-centre is visible.
+   · The space is RESERVED (padding, not a negative offset), so the absolutely-positioned
+     strip can never overlap the creative, at any viewport width.
+
+   Below 840px the creative is already scaling down to fit the viewport, so width is the
+   scarce axis there: stealing 52px of it costs a proportional height loss on a scaled
+   banner — more than the row it would save. The row therefore stays the mobile layout.
+
+   840 is the width at which the widest standard creative still fits inside the chrome.
+   header/footer are body-level (public-shell.js appends them outside .wrap), so at the
+   breakpoint they get 840 − 52 = 788px for a 728px leaderboard. The tightest case is
+   in-content, which IS inside the wrap: 760px cap − 52 = 708px, still clearing the
+   300+300 square pair with its 8px unit margins (632px). */
+@media (min-width: 840px) {
+  .ad-slot { padding-left: 26px; padding-right: 26px; }
+  .ad-slot-chrome {
+    position: absolute;
+    left: 0; top: 0; bottom: 0;
+    width: 26px;
+    margin: 0;
+    /* DOM order is label → close, which is the right reading order for assistive tech;
+       column-reverse puts the × back at the top corner where convention expects it.
+       justify-content still centres the pair as a group, so the two controls stay clear
+       of each other on a short creative as well as a tall one. */
+    flex-direction: column-reverse;
+    justify-content: center;
+    gap: 10px;
+  }
+  .ad-slot-chrome .ad-slot-label {
+    writing-mode: vertical-rl;
+    text-orientation: mixed;
+    letter-spacing: .18em;
+  }
+}
+
 /* ── Sidebar as a fixed edge rail (ads.js adds .ad-slot--rail) ────────────────
    The rail is taken out of flow entirely and parked in the empty margin beside the
    1180px .wrap, so it costs the layout nothing. Its width is derived from the gutter:
@@ -810,7 +909,9 @@ a.ad-text-card:hover .ad-text-cta, a.ad-text-card:focus-visible .ad-text-cta {
     width: var(--ad-rail-w);
     max-width: none;
     margin: 0;
-    padding-left: 18px;              /* room for the vertical "AD" pull-tab */
+    /* Longhand, not padding-left: the ≥840px strip block above also sets padding-RIGHT,
+       and with border-box that would eat 26px out of the rail's derived width. */
+    padding: 0 0 0 18px;             /* room for the vertical "AD" pull-tab */
     z-index: 40;                     /* under modals/toasts, over page chrome */
     transform: translateY(-50%);
     transition: transform .45s cubic-bezier(.22, .61, .36, 1);
@@ -820,6 +921,12 @@ a.ad-text-card:hover .ad-text-cta, a.ad-text-card:focus-visible .ad-text-cta {
     transform: translateY(-50%) translateX(calc(100% - 18px));
   }
   .ad-slot--rail.is-dismissed { display: none !important; }
+
+  /* The rail positions the label and the × against ITSELF, not inside the strip: the tab
+     must sit on the rail's outer edge and the × on its corner. display:contents dissolves
+     the wrapper box so both children lay out as direct children of the rail, exactly as
+     they did when ads.js appended the button by hand. */
+  .ad-slot--rail .ad-slot-chrome { display: contents; }
 
   /* The "Ad" label becomes the vertical pull-tab: the one part that stays reachable
      while tucked, and the click target that pulls the rail back out. */
@@ -844,26 +951,21 @@ a.ad-text-card:hover .ad-text-cta, a.ad-text-card:focus-visible .ad-text-cta {
   .ad-slot--rail .ad-slot-label::after { content: ' ‹'; }
   .ad-slot--rail.is-tucked .ad-slot-label::after { content: ' ›'; }
 
-  /* Dismiss for the rest of the session. */
-  .ad-rail-close {
+  /* Dismiss for the rest of the session. Same button as every other placement — the rail
+     just parks it on the corner and gives it a solid chip background so it reads against a
+     creative rather than against the page. */
+  .ad-slot--rail .ad-slot-close {
     position: absolute;
     top: -9px; right: -6px;
     width: 20px; height: 20px;
     line-height: 18px;
-    padding: 0;
-    font-size: 13px;
-    text-align: center;
-    cursor: pointer;
-    border-radius: 50%;
-    color: var(--text-dim, #8a978f);
     background: var(--bg-elev, #10141a);
-    border: 1px solid var(--border, #1d3a26);
+    border-color: var(--border, #1d3a26);
     opacity: 0;
-    transition: opacity .2s ease;
   }
-  .ad-slot--rail:hover .ad-rail-close,
-  .ad-rail-close:focus-visible { opacity: 1; }
-  .ad-rail-close:hover { color: var(--text, #cfd8d3); }
+  .ad-slot--rail:hover .ad-slot-close,
+  .ad-slot--rail .ad-slot-close:focus-visible { opacity: 1; }
+  .ad-slot--rail .ad-slot-close:hover { color: var(--text, #cfd8d3); }
 
   .ad-slot--rail .ad-unit { display: block; }
   .ad-slot--rail .ad-unit img { width: 100%; border-radius: 6px; }

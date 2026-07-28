@@ -421,6 +421,11 @@ async function initializePool() {
       if (postsManager.seedStarterPost()) {
         console.log(`[${new Date().toISOString()}] [blog] seeded the starter post (/blog/why-grin-mining-adds-up)`);
       }
+      // Give the starter post its shipped cover on pools that seeded it before the artwork
+      // existed — the seed above cannot, it never runs twice. Same non-fatal treatment.
+      if (postsManager.backfillStarterCover()) {
+        console.log(`[${new Date().toISOString()}] [blog] backfilled the starter post cover image`);
+      }
     } catch (e) { console.error(`[blog] starter post seed failed: ${e.message}`); }
 
     // Media uploads (cover images + in-body images from the admin CMS editor). Stored in a
@@ -851,7 +856,7 @@ function setupRoutes() {
     'GET /api/pool/metrics/history/regions': 'Per-region miners/hashrate trend series (?range=day|week|month|year|all).',
     'GET /api/pool/payments/history': 'Durable payments & transparency series: payouts, reward split, giveaways, donations, fee + lifetime totals (?range=day|week|month|year|all).',
     'GET /api/pool/donors': 'Donor wall: per-address lifetime donations to the prize pool, first/last donation date, current donate-tag %.',
-    'GET /api/pool/prize-pool': 'Prize-pool transparency report: current balance + lifetime in/out totals by source (fee-cut, donations, top-ups, abandoned balances) + recent flows.',
+    'GET /api/pool/prize-pool': 'Prize-pool transparency report: current balance + lifetime in/out totals by source (fee-cut, donations, top-ups, abandoned balances).',
     'GET /api/pool/status': 'Coarse service status strip.',
     'GET /api/account/:addr': 'Account summary: balance, paid, pending payout, effort.',
     'GET /api/account/:addr/workers': 'Per-worker (rig) hashrate + share quality.',
@@ -1254,6 +1259,15 @@ function setupRoutes() {
     res.type('html').send(html);
   }
 
+  // First <img src> in an authored HTML body, or '' when there is none. CMS pages have no
+  // cover_image column (only posts do), so this is how a page gets a social card picture.
+  // Accepts single, double or unquoted src values — the body is operator-authored, so it
+  // is not guaranteed to be normalised markup.
+  function firstBodyImage(html) {
+    const m = /<img\b[^>]*?\bsrc\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i.exec(String(html || ''));
+    return m ? (m[1] || m[2] || m[3] || '') : '';
+  }
+
   // Absolute URL for an image path that may already be absolute.
   const absImage = (origin, src) =>
     (!src ? '' : /^https?:\/\//i.test(src) ? src : origin + (src.startsWith('/') ? src : '/' + src));
@@ -1301,15 +1315,27 @@ function setupRoutes() {
         const key = String(req.query.p || '');
         const page = key ? pagesManager.getPublic(key) : null;
         if (!page) {
+          // Two ways in: an unknown/unpublished key, or the bare shell with no ?p= at all.
+          // Both 404 — /page.html on its own is a shell, not content, and is deliberately
+          // absent from sitemap.xml. The shell's client script then fills the body with the
+          // list of published pages so a visitor lands on an index, not a dead end. That
+          // body is real linked content, so pair the status with an explicit noindex
+          // (follow, so the listed pages are still discovered) and drop the canonical: a
+          // canonical pointing at a noindex URL just gives a crawler two contradictory
+          // signals about a page that should never be indexed in the first place.
           res.status(404);
-          return sendShell(res, 'page.html', 'page-body', seoHead({
-            title: 'Page not found', canonical: origin + '/page.html',
-          }));
+          return sendShell(res, 'page.html', 'page-body',
+            seoHead({ title: key ? 'Page not found' : 'Pages' }) +
+            '<meta name="robots" content="noindex, follow">\n');
         }
         sendShell(res, 'page.html', 'page-body', seoHead({
           title: page.seo_title || page.title,
           description: page.seo_desc || toDescription(page.html, ''),
           canonical: origin + '/page.html?p=' + encodeURIComponent(page.key),
+          // Pages carry no cover column, so the card picture is the first image in the
+          // authored body, falling back to the site-wide card. Before this, every CMS page
+          // unfurled on Twitter/Discord/Telegram as a bare text card with no image at all.
+          image: absImage(origin, firstBodyImage(page.html) || '/images/og-image.svg'),
         }));
       } catch (err) {
         res.status(500).type('text/plain').send('Error');
@@ -2774,15 +2800,24 @@ function setupRoutes() {
 
   // Public prize-pool transparency report: current balance + lifetime in/out totals broken down by
   // source (fee-cut · donations · operator top-ups · ABANDONED BALANCES · orphan clawbacks in;
-  // prizes · jackpots · join bonuses · streaks out) + recent flows. Composite read over the
+  // prizes · jackpots · join bonuses · streaks out). Composite read over the
   // ledger-rollup horizon, so totals stay exact after raw balance_log rows prune. Incentives-gated:
   // when incentives are off the bucket still exists (abandoned sweeps can accumulate), so the report
-  // is always available — it's a trust surface. Recent rows carry no addresses (a prize-pool row's
-  // grin_address is always 'prize_pool'); the reference_type/amount are safe to show publicly.
+  // is always available — it's a trust surface.
+  //
+  // LIFETIME TOTALS ONLY — `prizePoolStatement(0)` deliberately returns an EMPTY `recent[]`.
+  // Per-event rows are safe in content (a prize-pool row's grin_address is always 'prize_pool',
+  // never a miner's), but their timestamps expose the DATE AND SIZE OF EACH OPERATOR TOP-UP.
+  // Top-ups are discretionary promotion spend on no fixed schedule, so publishing a per-event
+  // cadence invites a "the pool stopped funding prizes" reading of what is just a quiet month.
+  // The lifetime total stays public — it is the point of the page. The admin endpoint
+  // (/api/admin/incentives/prize-pool) still requests the detail rows; only this public one drops
+  // them. Raise the argument above 0 only as a deliberate disclosure decision, and render what you
+  // expose — donate.html D-05 draws in.by/out.by only.
   app.get('/api/pool/prize-pool', rateLimiter.middleware('public'), (req, res) => {
     try {
       if (!incentivesManager) return res.json({ enabled: false, balance: 0, in: { total: 0, by: [] }, out: { total: 0, by: [] }, net: 0, recent: [] });
-      const st = incentivesManager.prizePoolStatement(15);
+      const st = incentivesManager.prizePoolStatement(0);
       let enabled = false;
       try { enabled = incentivesManager.enabled(); } catch (_) { /* default false */ }
       res.json({ enabled, ...st });

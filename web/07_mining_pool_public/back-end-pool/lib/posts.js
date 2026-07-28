@@ -273,7 +273,7 @@ class PostsManager {
       'username field, and you are mining — the address is what identifies you, so your stats',
       'and balance exist from the first accepted share. The exact stratum host, port and a',
       'copy-paste configuration are on the <a href="/#connect">connect section of the',
-      'homepage</a>, and payouts and thresholds are explained under',
+      'homepage</a>, and payout methods, minimums and fees are explained under',
       '<a href="/account-settings.html">your account</a>.</p>',
 
       '<hr>',
@@ -286,6 +286,9 @@ class PostsManager {
       title: 'Why Grin mining still adds up for a small miner',
       slug: 'why-grin-mining-adds-up',
       status: 'published',
+      // Ships with the frontend (public_html/images/blog/). 1200x630 so the same file
+      // serves the blog card, the post header and the social share card.
+      cover_image: '/images/blog/why-grin-mining-adds-up.svg',
       tags: 'grin, mining, hardware, getting started',
       excerpt: 'A small network, secondhand C32 ASICs at around 120 W, and an emission ' +
         'that never halves — plus the risks that argument usually leaves out.',
@@ -293,6 +296,37 @@ class PostsManager {
     });
     mark();
     return true;
+  }
+
+  // The starter post shipped with NO cover until 2026-07-27, and seedStarterPost() is
+  // one-shot (its marker, plus a bail-out if any post exists) — so on a pool that seeded
+  // before that date the post keeps cover_image = NULL and the blog card renders the 📝
+  // placeholder instead of the artwork. Adding the field to the seed above only helps
+  // brand-new installs, hence this one-time backfill.
+  //
+  // Deliberately narrow: it touches ONLY the seeded slug, ONLY while the cover is still
+  // empty, and never a post the operator wrote. Its own marker means a cover the operator
+  // later clears stays cleared.
+  backfillStarterCover() {
+    try {
+      const done = this.db.prepare(
+        "SELECT value FROM pool_config WHERE section = 'blog' AND key = 'starter_cover_backfilled'"
+      ).get();
+      if (done) return false;
+      const r = this.db.prepare(`
+        UPDATE posts SET cover_image = ?, updated_at = unixepoch()
+        WHERE slug = ? AND (cover_image IS NULL OR TRIM(cover_image) = '')
+      `).run('/images/blog/why-grin-mining-adds-up.svg', 'why-grin-mining-adds-up');
+      this.db.prepare(`
+        INSERT INTO pool_config (section, key, value, value_type)
+        VALUES ('blog', 'starter_cover_backfilled', '1', 'boolean')
+        ON CONFLICT(section, key) DO UPDATE SET value = '1'
+      `).run();
+      return r.changes > 0;
+    } catch (e) {
+      console.error(`[posts] backfillStarterCover failed: ${e.message}`);
+      return false;
+    }
   }
 }
 

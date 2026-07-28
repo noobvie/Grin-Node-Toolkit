@@ -28,6 +28,21 @@
     return isInternal(url) ? '' : ' target="_blank" rel="noopener nofollow sponsored"';
   }
 
+  // ── Slot chrome ──────────────────────────────────────────────────────────
+  // The "Ad" disclosure label plus the session-dismiss control, emitted once per slot.
+  // Both live in ONE strip so the chrome never straddles two opposite corners of the
+  // unit, and the strip always sits OUTSIDE the creative — several ad networks object
+  // to a control drawn over the unit they served. DOM order is label → close (that is
+  // the reading order for assistive tech); dashboard.css flips the VISUAL order in the
+  // vertical strip so the × still lands at the top corner.
+  function chromeHtml() {
+    return '<div class="ad-slot-chrome">' +
+      '<span class="ad-slot-label">Ad</span>' +
+      '<button type="button" class="ad-slot-close" title="Hide ads for this visit"' +
+      ' aria-label="Hide ads for this visit">×</button>' +
+      '</div>';
+  }
+
   function renderAd(ad) {
     var idAttr = ' data-ad-id="' + (parseInt(ad.id, 10) || 0) + '"';
     if (ad.ad_type === 'code' && ad.html_code) {
@@ -121,13 +136,33 @@
   // The rail only engages where there is real empty gutter beside the 1180px .wrap.
   // MUST match the @media breakpoint on .ad-slot--rail in dashboard.css.
   var RAIL_MQ = '(min-width: 1366px)';
-  var RAIL_DISMISS_KEY = 'grinium.adRail.dismissed';
 
-  function railDismissed() {
-    try { return sessionStorage.getItem(RAIL_DISMISS_KEY) === '1'; } catch (e) { return false; }
+  // ── Session dismiss (every placement, not just the rail) ─────────────────
+  // Scoped PER PLACEMENT, so closing the footer banner doesn't also silence the header.
+  // sessionStorage, deliberately: it survives a refresh and in-site navigation — an ad
+  // that springs back on every page click reads as a broken control — but a new tab or
+  // a new visit starts clean.
+  function dismissKey(placement) { return 'grinium.ads.dismissed.' + placement; }
+  function isDismissed(placement) {
+    try { return sessionStorage.getItem(dismissKey(placement)) === '1'; } catch (e) { return false; }
   }
-  function rememberDismiss() {
-    try { sessionStorage.setItem(RAIL_DISMISS_KEY, '1'); } catch (e) { /* private mode */ }
+  function rememberDismiss(placement) {
+    try { sessionStorage.setItem(dismissKey(placement), '1'); } catch (e) { /* private mode */ }
+  }
+
+  // Non-rail slots: the × drops the slot out of the page for the rest of the visit. The
+  // .is-dismissed class goes on as well as display:none so a running rotor can see it and
+  // stop advancing — otherwise it would keep queueing impressions for an invisible ad.
+  function wireClose(el, placement) {
+    var close = el.querySelector('.ad-slot-close');
+    if (!close) return;
+    close.addEventListener('click', function (ev) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      el.classList.add('is-dismissed');
+      el.style.display = 'none';
+      rememberDismiss(placement);
+    });
   }
 
   // When one placement holds several active ads, show ONE at a time and cycle through
@@ -157,9 +192,12 @@
     };
   }
 
-  function startAutoRotate(rotor) {
+  function startAutoRotate(rotor, el) {
     if (!rotor || rotor.count < 2) return;
-    setInterval(function () {
+    var timer = setInterval(function () {
+      // Dismissed mid-cycle: stop for good, or the rotor keeps counting impressions for
+      // creatives revealed inside a hidden slot.
+      if (el && el.classList.contains('is-dismissed')) { clearInterval(timer); return; }
       if (document.hidden) return; // background tabs: don't burn impressions unseen
       queueImpression(rotor.advance()); // first reveal of this ad counts once
     }, Math.max(2000, cfg.rotate_ms));
@@ -170,17 +208,13 @@
   // sitting there permanently it peeks out for rail_show_ms, tucks away for
   // rail_hide_ms, then slides back with the NEXT creative. Tucking is a transform, so
   // the page never reflows; a vertical tab stays reachable to pull it back by hand.
-  function startRail(el, rotor) {
+  function startRail(el, rotor, placement) {
     el.classList.add('ad-slot--rail', 'is-tucked');
-    if (railDismissed()) { el.classList.add('is-dismissed'); return; }
 
-    var close = document.createElement('button');
-    close.type = 'button';
-    close.className = 'ad-rail-close';
-    close.title = 'Hide ads for this visit';
-    close.setAttribute('aria-label', 'Hide ads for this visit');
-    close.textContent = '×';
-    el.appendChild(close);
+    // The × comes from chromeHtml() now, same as every other placement; the rail only
+    // re-positions it in CSS. (fill() has already returned early if this placement was
+    // dismissed earlier in the visit, so there is no dismissed-state check here.)
+    var close = el.querySelector('.ad-slot-close');
 
     var timer = null;
     var out = false; // is the rail currently peeked out?
@@ -225,13 +259,15 @@
       });
     }
 
-    close.addEventListener('click', function (ev) {
-      ev.preventDefault();
-      ev.stopPropagation();
-      clearTimeout(timer);
-      el.classList.add('is-dismissed');
-      rememberDismiss();
-    });
+    if (close) {
+      close.addEventListener('click', function (ev) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        clearTimeout(timer);
+        el.classList.add('is-dismissed'); // .ad-slot--rail.is-dismissed { display: none }
+        rememberDismiss(placement);
+      });
+    }
 
     // First peek shortly after load, so it reads as an arriving banner rather than
     // part of the page furniture. No advance: keep the random entry creative.
@@ -239,7 +275,7 @@
 
     // rail_hide_ms = 0 means "operator wants it always visible": there are no peeks to
     // advance on, so fall back to the normal timed cycle for multi-creative rails.
-    if (cfg.rail_hide_ms === 0) startAutoRotate(rotor);
+    if (cfg.rail_hide_ms === 0) startAutoRotate(rotor, el);
   }
 
   // ── The sidebar placement is the vertical-rail inventory (tall 160×600 creatives) ──
@@ -260,14 +296,18 @@
       var ads = (byPlacement && byPlacement[placement]) || [];
       var isSidebar = placement === 'sidebar';
       var isInContent = placement === 'in-content';
+      var usingRail = isSidebar && railOK;
       // Sidebar is off entirely when the operator disabled it, and always on narrow
       // screens (see the note above — don't even build the DOM/load the image).
-      if (!ads.length || (isSidebar && (cfg.sidebar_mode === 'off' || narrow))) { el.style.display = 'none'; return; }
+      // Dismissed earlier this visit is handled the same way: never build the DOM, so no
+      // impression is recorded and no network ad-tag is fetched for a slot nobody sees.
+      if (!ads.length || isDismissed(placement) ||
+          (isSidebar && (cfg.sidebar_mode === 'off' || narrow))) { el.style.display = 'none'; return; }
 
       function render(list) {
         var html = list.map(renderAd).filter(Boolean).join('');
         if (!html) { el.style.display = 'none'; return; }
-        el.innerHTML = '<span class="ad-slot-label">Ad</span>' + html;
+        el.innerHTML = chromeHtml() + html;
         activateScripts(el);
         el.style.display = '';
 
@@ -278,16 +318,18 @@
           el.querySelectorAll('.ad-unit').forEach(function (u) { queueImpression(u); });
         } else {
           var rotor = makeRotor(el);
-          if (isSidebar && railOK) {
-            startRail(el, rotor);          // rail drives its own cycling, one creative per peek
+          if (usingRail) {
+            startRail(el, rotor, placement); // rail drives its own cycling + its own × wiring
           } else {
-            startAutoRotate(rotor);
+            startAutoRotate(rotor, el);
             // count what's actually visible now (all units when static, the lead unit when cycling)
             el.querySelectorAll('.ad-unit').forEach(function (u) {
               if (!u.classList.contains('ad-unit--hidden')) queueImpression(u);
             });
           }
         }
+        // The rail wires its own × (it has to cancel the peek timer too).
+        if (!usingRail) wireClose(el, placement);
 
         // click beacon (delegated; sendBeacon survives the target="_blank" navigation)
         el.addEventListener('click', function (ev) {

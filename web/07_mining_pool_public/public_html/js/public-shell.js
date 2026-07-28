@@ -38,7 +38,11 @@
   // ({label,icon,children:[…leaf links…]}). A group has NO href of its own — it
   // only opens a dropdown of its children (Pool Stats → Miners Stats / Network Map).
   var NAV = [
-    { href: 'index.html',            label: 'Dashboard',     icon: '🏠' },
+    // "Home", not "Dashboard": two items along sits "Account", so "Dashboard" read as
+    // "my dashboard" when this is in fact the POOL-wide overview. The 🏠 icon already
+    // says home, and index.html's own <h1> still says "Pool Dashboard" — nav label and
+    // page identity, not the same job.
+    { href: 'index.html',            label: 'Home',          icon: '🏠' },
     { label: 'Pool Stats', icon: '📊', children: [
       { href: 'miners-stats.html',   label: 'Miners Stats',  icon: '📈' },
       { href: 'network-map.html',    label: 'Network Map',   icon: '🛰️' }
@@ -125,8 +129,10 @@
     if (l.children) { l.children.forEach(function (c) { poolLeaves.push(c); }); }
     else poolLeaves.push(l);
   });
-  // Excluded from the Pool column: Blog (Resources col), Dashboard (redundant — the
-  // brand logo links home) and Fortune Board (surfaced under Donate in the brand col).
+  // Excluded from the Pool column: Blog (Resources col), Home (the Resources column's
+  // "Get Started" already returns to index.html) and Fortune Board (surfaced under Donate
+  // in the brand col). NB: the brand block is NOT a link on either the header or the
+  // footer — if that ever changes, revisit whether Home belongs back in this column.
   var POOL_COL_SKIP = { 'blog.html': 1, 'index.html': 1, 'fortune-board.html': 1 };
   var poolCol = poolLeaves.filter(function (l) { return !POOL_COL_SKIP[fileOf(l.href)]; })
     .map(function (l) {

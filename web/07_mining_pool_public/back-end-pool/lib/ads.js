@@ -258,7 +258,8 @@ class AdsManager {
   //     and trains people to distrust our own ads. renderAd() draws those as a plain
   //     image/card (hasLink() rejects null and '#'), impressions still count.
   //   · internal PAGES ('/donate.html', '/fortune-board.html') keep their link.
-  //   · "Buy GRIN" → the Gate GRIN/USDT market; "Why GRIN?" → grin.money. Those answer the
+  //   · "Buy GRIN" → the Gate GRIN/USDT market; "Why GRIN?" → grin.money/#why-grin (the
+  //     section that answers the creative's question, not the site root). Those answer the
   //     question the creative asks, which no page of ours can. External seeds render with
   //     target=_blank + rel="noopener nofollow sponsored" (renderAd/linkOpen).
   //
@@ -306,8 +307,8 @@ class AdsManager {
       // a real page, so the artwork and the click agree instead of going nowhere.
       retarget.run('/payment-history.html', '/promo/grinium-privacy-300x250.svg', '/#connect');
       retarget.run('https://www.gate.com/trade/GRIN_USDT', '/promo/grinium-buy-grin-160x600.svg', '/#info');
-      retarget.run('https://grin.money', '/promo/grinium-why-grin-160x600.svg', '/#info');
-      retarget.run('https://grin.money', '/promo/grinium-why-grin-728x90.svg', '/#info');
+      retarget.run('https://grin.money/#why-grin', '/promo/grinium-why-grin-160x600.svg', '/#info');
+      retarget.run('https://grin.money/#why-grin', '/promo/grinium-why-grin-728x90.svg', '/#info');
       // The v3 text ad has no image — match it by the internal name the seed created it with.
       this.db.prepare(`
         UPDATE ads SET link_url = NULL, updated_at = unixepoch()
@@ -333,7 +334,8 @@ class AdsManager {
         image_url: '/promo/grinium-mine-160x600.svg', weight: 50, link_url: null,
         alt_text: 'Mine GRIN here — no sign-up, PPLNS rewards, anonymous Tor payouts' },
       { v: 2, name: 'GRINIUM rail — Why GRIN? (160×600)', placement: 'sidebar',
-        image_url: '/promo/grinium-why-grin-160x600.svg', weight: 40, link_url: 'https://grin.money',
+        image_url: '/promo/grinium-why-grin-160x600.svg', weight: 40,
+        link_url: 'https://grin.money/#why-grin',
         alt_text: 'Why GRIN? Private by default, no addresses on chain, fair launch, no premine' },
       { v: 2, name: 'GRINIUM rail — Buy GRIN (160×600)', placement: 'sidebar',
         image_url: '/promo/grinium-buy-grin-160x600.svg', weight: 30,
@@ -366,7 +368,8 @@ class AdsManager {
       // v3 — give the header a rotation: a second graphical strip + a native TEXT ad, so the
       // header cycles Mine → Why GRIN → Private-by-design and the text-ad type is demoed.
       { v: 3, name: 'GRINIUM promo — Why GRIN? (header 728×90)', placement: 'header',
-        image_url: '/promo/grinium-why-grin-728x90.svg', weight: 8, link_url: 'https://grin.money',
+        image_url: '/promo/grinium-why-grin-728x90.svg', weight: 8,
+        link_url: 'https://grin.money/#why-grin',
         alt_text: 'Why GRIN? No ICO, no premine, tail emission, private by default' },
       // No link: the CTA is an instruction, not a destination — everything it asks for is
       // already on this page (the connect panel is a scroll away).

@@ -421,13 +421,10 @@
       applyLogoVariant();
     }
 
-    // Homepage announcement banner.
-    if (pool.homepage_banner) {
-      document.querySelectorAll('[data-brand="banner"]').forEach(function (el) {
-        el.innerHTML = pool.homepage_banner; // operator-controlled content
-        el.style.display = '';
-      });
-    }
+    // A "homepage announcement banner" block sat here until 2026-07-27, writing
+    // pool.homepage_banner into [data-brand="banner"]. No page has ever carried that
+    // attribute, so the selector always matched nothing and the setting was unreachable.
+    // Site banners are rendered by renderBanners() below, from cfg.announcements.
 
     // "Powered by" attribution toggle.
     if (!brand.show_attribution) {

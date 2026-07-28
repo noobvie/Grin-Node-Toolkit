@@ -831,6 +831,7 @@ function createSchema() {
   migrateLocations();
   migrateAds();
   migratePagesFromConfig();
+  seedShippedPages();   // must follow the legacy migration: same table, own markers
   // The default grinium regional endpoints are seeded once (see seedDefaultRegions,
   // called from index.js with the configured stratum port). The pool server also
   // self-registers its own region via ensureLocalRegion(); extra zones come from
@@ -911,6 +912,62 @@ function migratePagesFromConfig() {
     tx();
   } catch (e) {
     console.error(`[db] migratePagesFromConfig failed: ${e.message}`);
+  }
+}
+
+// Pages shipped AFTER the legacy migration above. That function walks a fixed list of five
+// slugs and its marker stops it running twice, so a page added to the shipped defaults
+// later would never reach a pool that is already installed. Each addition therefore gets
+// its OWN generation marker here — the same versioned-seed pattern as the ad creatives in
+// lib/ads.js: seeded exactly once, so a page the operator deletes stays deleted and a page
+// they edit is never overwritten. To ship another page: add its default HTML to
+// pool-settings.js defaults.pages, then append one entry below with a NEW marker.
+function seedShippedPages() {
+  const ADDITIONS = [
+    {
+      marker: 'pages_seeded_start_mining',
+      slug: 'start-mining',
+      title: 'Start Mining',
+      // Ahead of About (sort_order 0) in the footer: it is the page a first-time visitor
+      // needs, and listEnabled() orders by sort_order before title.
+      sort_order: -1,
+      seo_title: 'Start Mining Grin — a step-by-step guide for beginners',
+      seo_desc: 'Point a Grin ASIC at the pool in about ten minutes: get a grin1 address, '
+        + 'set the three miner settings, and understand PPLNS, 1,440-block maturity and how '
+        + 'payouts arrive. No account, no KYC.',
+    },
+  ];
+  try {
+    const defaultPages = (require('./pool-settings').defaults || {}).pages || {};
+    const getMarker = db.prepare(
+      "SELECT value FROM pool_config WHERE section = '_migrations' AND key = ?"
+    );
+    const setMarker = db.prepare(`
+      INSERT INTO pool_config (section, key, value, value_type)
+      VALUES ('_migrations', ?, '1', 'string')
+      ON CONFLICT(section, key) DO NOTHING
+    `);
+    // INSERT OR IGNORE on the slug: if the operator already made a page with this slug,
+    // theirs wins and the marker still records that this generation is done.
+    const insert = db.prepare(`
+      INSERT OR IGNORE INTO pages
+        (slug, title, html, is_published, nav_location, sort_order, seo_title, seo_desc)
+      VALUES (?, ?, ?, 1, 'footer', ?, ?, ?)
+    `);
+    for (const p of ADDITIONS) {
+      if (getMarker.get(p.marker)) continue;
+      const html = String(defaultPages[p.slug] || '').trim();
+      // No shipped body = nothing worth seeding. Leave the marker UNSET so a later release
+      // that actually fills the default in still gets its chance.
+      if (!html) continue;
+      db.transaction(() => {
+        insert.run(p.slug, p.title, html, p.sort_order || 0,
+          p.seo_title || null, p.seo_desc || null);
+        setMarker.run(p.marker);
+      })();
+    }
+  } catch (e) {
+    console.error(`[db] seedShippedPages failed: ${e.message}`);
   }
 }
 

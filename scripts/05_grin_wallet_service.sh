@@ -3,7 +3,7 @@
 # 05_grin_wallet_service.sh — Grin Wallet Services Hub
 # =============================================================================
 #
-#  Central launcher for all Grin wallet service scripts (051–055).
+#  Central launcher for all Grin wallet service scripts (051–053).
 #  Each sub-script is fully self-contained — it manages its own wallet,
 #  binary, nginx config, and systemd services independently.
 #
@@ -15,10 +15,53 @@
 #   051  051_grin_private_web_wallet.sh   Personal browser wallet UI
 #   052  052_grin_drop.sh                 Giveaway + donation portal
 #   053  053_grin_woocommerce.sh          WooCommerce payment gateway
-#   054  054_grin_payment_pro.sh          Payment Pro (coming soon)
-#   055  055_grin_public_web_wallet.sh    Public WASM wallet (coming soon)
-#   056  056_grin_goblinpay.sh            GoblinPay receive-only merchant server (planned)
+#   05C  (built into this hub)            CMD wallet quick setup — CLI / testing
 #   (Grin Transporter moved to the Grin Connectivity Hub → scripts/092_grin_transporter.sh)
+#
+#  ─── Menu ordering rule ───────────────────────────────────────────────────
+#  The KEY is positional — assigned top-to-bottom as rows are rendered. The
+#  LABEL (051, 052, 05C …) is permanent identity and means nothing about
+#  position (same rule as the 07 and 09 hubs). Because the key is positional, no
+#  future product can put the keys out of order, whatever label it gets.
+#
+#  Digits and letters are TWO independent ascending sequences: digits key the
+#  numbered products, letters key hub-built utilities that have no script file of
+#  their own. Each sequence ascends down the screen. Key and label are separate —
+#  the CMD wallet is keyed 'A' but is still labelled 05C, because 05C is quoted in
+#  docs and in other scripts' port-collision messages ('C' stays a silent alias).
+#
+#  The label renders DIM so it never competes with the key. Do not delete it to
+#  reduce clutter: a port-collision error elsewhere says "Likely 05C cmdwallet,
+#  051 web wallet, or a 052 drop wallet" — the menu is where an operator resolves
+#  those labels back to a product. Dim contrast, not removal, is the fix.
+#
+#  Within a group, rows are ordered by readiness: ✅ ready, then 🔧 building,
+#  then planned. The first thing you see in a group is the thing that works.
+#
+#  ─── Planned — no number assigned yet ─────────────────────────────────────
+#  Planned products get a KEYLESS dim row inside the category they will belong
+#  to, so the menu shows where they are heading without reserving anything. They
+#  gain a key at that position on the day they are built. Never give a planned
+#  row a live key — a key that prints "coming soon" is the placeholder script we
+#  deleted, in miniature.
+#
+#  Numbers are assigned when a build STARTS — the next free integer, nothing
+#  more. Do NOT try to make the number encode the category: 051/052/053 are
+#  already one-per-category, so no contiguous per-category band can exist without
+#  renumbering, and a band scheme seals every group except the last one anyway.
+#  Pre-assigning numbers to ideas is what made this menu read 1,5,C,3,4,6,2.
+#
+#   Payment Pro        Grin payment processor for platforms other than WooCommerce
+#                      (Shopify, custom/headless APIs, subscription billing).
+#                      Planned: generic REST API bridge, Shopify payment app,
+#                      recurring GRIN payments, webhooks on confirmation,
+#                      multi-wallet routing. Bridge ports 3008 main / 3009 test.
+#                      Design starts after 053_grin_woocommerce.sh is complete.
+#   Public Web Wallet  Client-side WASM wallet, no server-held keys.
+#                      Design → docs/generated/script05_design.md (PART A)
+#   GoblinPay          Receive-only merchant till (Nostr + slatepack), deploying
+#                      github.com/2ro/GoblinPay the toolkit way.
+#                      Design → docs/generated/script09_design.md (PART C)
 #
 # =============================================================================
 
@@ -188,29 +231,29 @@ show_menu() {
     fi
 
     echo ""
-    echo -e "  ${DIM}✅ ready   🔧 building   🕒 planned${RESET}"
+    echo -e "  ${DIM}✅ ready   🔧 building   · keyless rows are planned, not built yet${RESET}"
     echo ""
     echo -e "${DIM}  ── Wallets ──────────── hold & spend your own GRIN${RESET}"
     echo ""
-    echo -e "  ${GREEN}1${RESET}) 051 · Private Web Wallet   🔧  ${DIM}browser UI, server-held keys${RESET}"
-    echo -e "  ${DIM}5) 055 · Public Web Wallet    🕒  client-side WASM, no server keys${RESET}"
-    echo -e "  ${GREEN}C${RESET}) CMD Wallet Quick Setup     ✅  ${DIM}download + init + listen (CLI / testing)${RESET}"
-    echo ""
-    echo -e "${DIM}  ── Accept Payments ──── receive GRIN from customers${RESET}"
-    echo ""
-    echo -e "  ${GREEN}3${RESET}) 053 · WooCommerce Gateway  🔧  ${DIM}WordPress/WooCommerce plugin${RESET}"
-    echo -e "  ${DIM}4) 054 · Payment Pro          🕒  Shopify / custom API${RESET}"
-    echo -e "  ${DIM}6) 056 · GoblinPay            🕒  receive-only merchant server (Nostr + slatepack)${RESET}"
+    echo -e "  ${GREEN}A${RESET})${DIM} 05C ·${RESET} CMD Wallet Quick Setup  ✅  ${DIM}download + init + listen (CLI/testing)${RESET}"
+    echo -e "  ${GREEN}1${RESET})${DIM} 051 ·${RESET} Private Web Wallet      🔧  ${DIM}browser UI, server-held keys${RESET}"
+    echo -e "     ${DIM}Public Web Wallet                 planned · client-side WASM, no custody${RESET}"
     echo ""
     echo -e "${DIM}  ── Giveaways & Donations ─ hand GRIN out${RESET}"
     echo ""
-    echo -e "  ${GREEN}2${RESET}) 052 · Grin Drop            ✅  ${DIM}giveaway faucet + donation portal${RESET}"
+    echo -e "  ${GREEN}2${RESET})${DIM} 052 ·${RESET} Grin Drop               ✅  ${DIM}giveaway faucet + donation portal${RESET}"
     echo ""
-    echo -e "${DIM}  Grin Transporter moved → main menu 09 (Grin Connectivity Hub)${RESET}"
+    echo -e "${DIM}  ── Accept Payments ──── receive GRIN from customers${RESET}"
+    echo ""
+    echo -e "  ${GREEN}3${RESET})${DIM} 053 ·${RESET} WooCommerce Gateway     🔧  ${DIM}WordPress/WooCommerce plugin${RESET}"
+    echo -e "     ${DIM}Payment Pro                       planned · Shopify / custom REST API${RESET}"
+    echo -e "     ${DIM}GoblinPay                         planned · receive-only merchant till${RESET}"
+    echo ""
+    echo -e "  ${DIM}Grin Transporter moved → main menu 09 (Grin Connectivity Hub)${RESET}"
     echo ""
     echo -e "  ${RED}0${RESET}) Back to main menu"
     echo ""
-    echo -ne "${BOLD}Select [1-6 / C / 0]: ${RESET}"
+    echo -ne "${BOLD}Select [A / 1-3 / 0]: ${RESET}"
 }
 
 run_sub() {
@@ -387,10 +430,15 @@ _cmd_wallet_setup_for_net() {
 
     local tmp_init="/tmp/grin_cmd_init_${net}_$$"
     mkdir -p "$wallet_dir"
+    # This capture file holds the SEED PHRASE. Pre-create it 600 before tee touches
+    # it — tee truncates but does not change the mode of an existing file, so creating
+    # it here is what keeps the mnemonic off a world-readable /tmp.
+    install -m 600 /dev/null "$tmp_init"
     # Security trade-off: -p exposes the passphrase in `ps aux` / /proc/<pid>/cmdline
     # for the duration of this call. grin-wallet has no stdin or env-var passphrase
     # input — -p is the only option. Exposure is brief (one-time during init).
-    cd "$wallet_dir" && "$wallet_bin" $net_flag -p "$wallet_pass" init -h \
+    # Subshell for the cd: a bare cd here would leak into the menu loop's cwd.
+    ( cd "$wallet_dir" && "$wallet_bin" $net_flag -p "$wallet_pass" init -h ) \
         2>&1 | tee "$tmp_init" || true
     echo ""
 
@@ -411,7 +459,9 @@ _cmd_wallet_setup_for_net() {
         rm -f "$tmp_init"; unset wallet_pass; return 1
     fi
     if [[ "${save_pass,,}" == "y" ]]; then
-        echo "$wallet_pass" > "$pass_file"
+        # umask before the redirect: chmod alone leaves a window where the file
+        # exists at the default mode with the secret already in it.
+        ( umask 077; echo "$wallet_pass" > "$pass_file" )
         chmod 600 "$pass_file"
         echo -e "  ${GREEN}[OK]${RESET}  Saved → $pass_file  ${DIM}(mode 600)${RESET}"
         _saved_pass="yes"
@@ -428,7 +478,7 @@ _cmd_wallet_setup_for_net() {
         rm -f "$tmp_init"; return 1
     fi
     if [[ "${save_seed,,}" == "y" ]]; then
-        tail -6 "$tmp_init" > "$seed_file"
+        ( umask 077; tail -6 "$tmp_init" > "$seed_file" )
         chmod 600 "$seed_file"
         echo -e "  ${GREEN}[OK]${RESET}  Saved → $seed_file  ${DIM}(mode 600)${RESET}"
         _saved_seed="yes"
@@ -558,7 +608,7 @@ _cmd_start_listener() {
     local launcher="/opt/grin/cmdwallet/.${net_label,,}_listener.sh"
     local pass_tmp="/opt/grin/cmdwallet/.${net_label,,}_pass_tmp_$$"
     mkdir -p /opt/grin/cmdwallet
-    echo "$pass_arg" > "$pass_tmp"
+    ( umask 077; echo "$pass_arg" > "$pass_tmp" )
     chmod 600 "$pass_tmp"
     unset pass_arg
     cat > "$launcher" << LAUNCHER_EOF
@@ -639,39 +689,17 @@ cmd_wallet_run() {
     done
 }
 
-# 056 — GoblinPay is designed but not yet implemented (no script file yet).
-# Show a planned notice instead of run_sub's "script not found" error.
-_goblinpay_planned() {
-    clear
-    echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo -e "${BOLD}${CYAN} 056) GOBLINPAY — RECEIVE-ONLY MERCHANT SERVER${RESET} ${YELLOW}(PLANNED)${RESET}"
-    echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo ""
-    echo -e "  ${DIM}Deploy github.com/2ro/GoblinPay the toolkit way — a receive-only Grin${RESET}"
-    echo -e "  ${DIM}merchant till: Nostr gift-wrapped slatepacks + direct-slatepack QR,${RESET}"
-    echo -e "  ${DIM}fiat rate-lock invoices, hosted checkout, HMAC webhooks, admin panel.${RESET}"
-    echo ""
-    echo -e "  ${DIM}Optional Nostr relay: bundled, or reuse a Grin Connectivity Hub (09)${RESET}"
-    echo -e "  ${DIM}Floonet relay if one is already installed.${RESET}"
-    echo ""
-    echo -e "  ${DIM}Design → docs/generated/script09_design.md (PART C). Not yet implemented.${RESET}"
-    echo ""
-    echo -ne "  ${DIM}Press Enter to return...${RESET}"
-    read -r || true
-}
-
 main() {
     while true; do
         show_menu
         read -r choice || true
         case "$choice" in
-            1) run_sub "051_grin_private_web_wallet.sh" ;;
-            2) run_sub "052_grin_drop.sh"               ;;
-            3) run_sub "053_grin_woocommerce.sh"        ;;
-            4) run_sub "054_grin_payment_pro.sh"        ;;
-            5) run_sub "055_grin_public_web_wallet.sh"  ;;
-            6) _goblinpay_planned || true               ;;
-            [Cc]) cmd_wallet_run || true                ;;
+            1) run_sub "051_grin_private_web_wallet.sh" || true ;;
+            2) run_sub "052_grin_drop.sh"               || true ;;
+            3) run_sub "053_grin_woocommerce.sh"        || true ;;
+            # 'C' kept as a silent alias: it was the key for a long time and is
+            # still the product's LABEL (05C) in docs and other scripts' messages.
+            [Aa]|[Cc]) cmd_wallet_run || true           ;;
             0) break ;;
             "") continue ;;
             *) echo -e "\n${RED}Invalid option.${RESET}"; sleep 1 ;;

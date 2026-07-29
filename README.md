@@ -130,14 +130,14 @@ Grin Node Toolkit
 │   │   └── 0) Back
 │   ├── 5) Grin Wallet Services          → 05_grin_wallet_service.sh (hub launcher)
 │   │   ├── Status overview              (shows installed / running services per network)
+│   │   ├── A) 05C · CMD Wallet Setup    → (built into the hub, no script file)
+│   │   │   └── download binary → init/recover → patch toml → listener → status
 │   │   ├── 1) Private Web Wallet        → 051_grin_private_web_wallet.sh
 │   │   │   └── Network → install deps → deploy → nginx → SSL → Basic Auth → firewall → status
 │   │   ├── 2) Grin Drop                 → 052_grin_drop.sh
 │   │   │   └── Network → wallet setup → listener → install → configure → nginx → start/stop → status
 │   │   ├── 3) WooCommerce Gateway       → 053_grin_woocommerce.sh
 │   │   │   └── install bridge → install WP plugin → configure → start/stop → status
-│   │   ├── 4) Payment Pro               → 054_grin_payment_pro.sh  (coming soon)
-│   │   ├── 5) Public Web Wallet         → 055_grin_public_web_wallet.sh  (coming soon)
 │   │   └── 0) Back to main menu
 │   ├── 6) Global Grin Health            → 06_global_grin_health.sh
 │   │   ├── N) Install Nginx + Certbot + Whois
@@ -224,14 +224,15 @@ Auto-detects node type/network, verifies sync, and shares snapshots over **nginx
 
 Exposes the node's `/v2/foreign` API (3413 / 13413) over an nginx HTTPS reverse proxy and blocks `/v2/owner` (returns 403) — lets light wallets, block explorers, and tools query your node.
 
-### 5. Grin Wallet Services — `05_grin_wallet_service.sh` (hub) + `051`–`055`
+### 5. Grin Wallet Services — `05_grin_wallet_service.sh` (hub) + `051`–`053`
 
 A **hub launcher** showing live status of each self-contained wallet service:
 - **051 Private Web Wallet** — personal browser UI (**Node.js**); one process serves many wallets across both networks; nginx + Basic Auth (owner-only), Tor + QR supported.
 - **052 Grin Drop** — GRIN giveaway + donation portal (**Node/Express + `node:sqlite`**); rate-limited 3-step slatepack claims and/or a donation address + QR, modes independently toggleable.
 - **053 WooCommerce Gateway** — WordPress/WooCommerce **PHP plugin** + Node bridge to the wallet Owner API; slatepack invoice flow (buyer pastes response → auto-confirmed).
-- **054 Payment Pro** — *coming soon* (Shopify / custom-API processor).
-- **055 Public Web Wallet** — *coming soon* (client-side **WASM**, keys never leave the browser).
+- **05C CMD Wallet Quick Setup** — built into the hub: downloads the `grin-wallet` binary, runs `init`/recover, patches the toml and starts a listener (CLI / testing).
+
+> *Planned, no script and no number yet* — a number is assigned when the build starts: **Payment Pro** (Shopify / custom-API processor), **Public Web Wallet** (client-side **WASM**, keys never leave the browser — design in [script05_design.md](docs/generated/script05_design.md)), **GoblinPay** (receive-only merchant till).
 
 > **Tip:** run each service on its own server to avoid port/config collisions; each server can run mainnet and testnet at once.
 
@@ -270,7 +271,7 @@ grin-node-toolkit/
 ├── extensions/
 │   └── grinmasternodes.json    # Community host registry (zone → site_key → hosts)
 ├── scripts/                    # One script per feature — 01–08 (+ 081, 08del),
-│   │                           #   05 wallet hub + 051–055, 09 hub + 091/092
+│   │                           #   05 wallet hub + 051–053, 09 hub + 091/092
 │   └── lib/                    # Sourced libs, Python collectors, shared nginx helpers
 └── web/                        # App code deployed to /opt/grin/* (Node / PHP / static)
     ├── 04_node_api/  051_wallet/  052_drop/  053_woocommerce/
@@ -278,7 +279,8 @@ grin-node-toolkit/
     └── 07_mining_pool_solo/  07_mining_pool_public/  092_transporter/
 ```
 
-> Scripts 054 (Payment Pro) and 055 (Public WASM Wallet) are placeholders — no web files yet.
+> Numbers `054+` are unallocated. A planned product gets its number when its build starts, not
+> when the idea is written down — so there are no placeholder scripts and no reserved numbers.
 
 **Runtime config created on first run** (stored outside the toolkit, under `/opt/grin/conf/`):
 

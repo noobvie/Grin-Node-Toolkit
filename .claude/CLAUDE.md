@@ -15,7 +15,7 @@ keep this file lean. (The full pre-2026-06 product detail is recoverable from gi
 
 ## Tech Stack
 - **Shell:** Bash (primary — all scripts must pass `bash -n` syntax check)
-- **Web backend:** Node.js/Express + SQLite (scripts 052–055, and the Script 07 public-pool backend)
+- **Web backend:** Node.js/Express + SQLite (scripts 052–053, and the Script 07 public-pool backend)
 - **Web server:** Nginx (vhost management, SSL via certbot)
 - **Process management:** systemd services + tmux sessions
 - **Grin tooling:** grin-wallet binary (Foreign API v2, Owner API v3 ECDH). **Note:** "Grim wallet" (GetGrin/grim) is a completely separate GUI wallet project — never conflate with grin-wallet (mimblewimble org).
@@ -29,12 +29,18 @@ scripts/
   02_  Nginx file server manager
   03_  Share chain data
   04_  Node foreign API + stats collector
-  05_  Wallet services hub (launches 051–055)
-  051_ Private web wallet
+  05_  Wallet services hub (launches 051–053; also hosts the 05C CMD-wallet quick setup)
+  051_ Private web wallet (051x_ = XP-themed variant, launched from inside 051)
   052_ Grin Drop (giveaway + donation portal)
   053_ WooCommerce payment gateway
-  054_ Payment Pro
-  055_ Public WASM wallet
+  054+ UNALLOCATED — assign a number when a build STARTS, not to an idea. Pick one
+       that keeps the 05 hub menu ascending (menu groups run wallets → giveaways →
+       payments, so a wallet product needs a low number). Planned products get a dim
+       footer line with no menu key. Pre-assigning numbers to unbuilt ideas is what
+       made that menu read 1,5,C,3,4,6,2. An unbuilt product has NO number, so its
+       design doc lives under its HUB's number, never a reserved one. Planned:
+       Payment Pro, Public WASM wallet (script05_design.md PART A), GoblinPay
+       (script09_design.md PART C).
   06_  Global health + price collector (06b = GrinScan explorer)
   07_  Mining services hub → 07_grin_mining_solo.sh (solo private, has a `lan` arg) and
        07_grin_mining_public_pool.sh (GRINIUM public pool; libs 07_lib_hub.sh /

@@ -109,7 +109,7 @@ _sw_read_new_pass() {
 }
 
 # ─── Port-collision guard ───────────────────────────────────────────────────
-# Owner 3420/13420 are grin-wallet defaults — a 052 drop, 051/055 web wallet or
+# Owner 3420/13420 are grin-wallet defaults — a 052 drop, 051 web wallet or
 # the public pool wallet may already hold them. NEVER auto-kill another
 # service's wallet. Returns 0 if free OR already held by OUR session; rc 1
 # (abort) if a foreign process holds it.
@@ -124,7 +124,7 @@ sw_port_collision_check() {
         return 0
     fi
     error "Port $port is in use by ANOTHER process (not '$tmux_name')."
-    error "  Likely 05C cmdwallet, 051/055 web wallet, or a manual listener."
+    error "  Likely 05C cmdwallet, 051 web wallet, or a manual listener."
     error "  Stop that service first, or run the solo wallet on a non-default port"
     error "  and update wallet_listener_url in grin-server.toml to match."
     return 1

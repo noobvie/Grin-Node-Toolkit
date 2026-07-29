@@ -89,6 +89,12 @@ curl -s "https://api.nonlogs.io/api/markets/GRIN-BTC" | python3 -m json.tool
 - Lib files (scripts/lib/) are sourced, not executed — no shebang needed
 - Function names: `snake_case`, prefixed with script prefix (e.g. `drop_`, `node_`)
 - Option numbers in menus: numeric for main actions, letters (B/R/D/L) for secondary
+- **Menu rows show NAMES, not script numbers.** The menu key is positional (assigned
+  top-to-bottom at render); a script's number (051, 05C …) is file/doc identity and is
+  printed only on that product's own screen banner (`05C) GRIN WALLET QUICK SETUP`) —
+  never duplicated onto the parent hub's row, where `A) 05C ·` reads as a broken
+  sequence. So never name a product to an operator by number alone: say "the CMD Wallet
+  quick setup (hub 05)", not "05C". Full rationale → `05_grin_wallet_service.sh` header.
 - Interactive SESSION logs use `_$(date +%Y%m%d_%H%M%S).log`; continuous fixed-name
   logs (watchdogs, daemons) are rotated via logrotate, not per-run dated.
 

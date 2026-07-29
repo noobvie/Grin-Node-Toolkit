@@ -124,7 +124,8 @@ sw_port_collision_check() {
         return 0
     fi
     error "Port $port is in use by ANOTHER process (not '$tmux_name')."
-    error "  Likely 05C cmdwallet, 051 web wallet, or a manual listener."
+    error "  Likely the CMD Wallet quick setup or Private Web Wallet (both in the"
+    error "  Wallet Services hub, main menu 05), or a manual listener."
     error "  Stop that service first, or run the solo wallet on a non-default port"
     error "  and update wallet_listener_url in grin-server.toml to match."
     return 1

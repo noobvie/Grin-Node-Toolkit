@@ -226,7 +226,8 @@ _pw_port_collision_check() {
         return 0
     fi
     error "Port $port is in use by ANOTHER process (not '$tmux_name')."
-    error "  Likely 05C cmdwallet, 051 web wallet, or a 052 drop wallet."
+    error "  Likely the CMD Wallet quick setup, Private Web Wallet, or a Grin Drop"
+    error "  wallet — all three live in the Wallet Services hub (main menu 05)."
     error "  Stop that service first, or move the pool wallet to a non-default"
     error "  port and update grin-wallet.toml + the backend config to match."
     return 1

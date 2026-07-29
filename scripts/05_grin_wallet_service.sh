@@ -19,21 +19,28 @@
 #   (Grin Transporter moved to the Grin Connectivity Hub → scripts/092_grin_transporter.sh)
 #
 #  ─── Menu ordering rule ───────────────────────────────────────────────────
-#  The KEY is positional — assigned top-to-bottom as rows are rendered. The
-#  LABEL (051, 052, 05C …) is permanent identity and means nothing about
-#  position (same rule as the 07 and 09 hubs). Because the key is positional, no
-#  future product can put the keys out of order, whatever label it gets.
+#  The KEY is positional — assigned top-to-bottom as rows are rendered. Because
+#  the key is positional, no future product can put the keys out of order,
+#  whatever number it is given (same rule as the 07 and 09 hubs).
 #
 #  Digits and letters are TWO independent ascending sequences: digits key the
 #  numbered products, letters key hub-built utilities that have no script file of
-#  their own. Each sequence ascends down the screen. Key and label are separate —
-#  the CMD wallet is keyed 'A' but is still labelled 05C, because 05C is quoted in
-#  docs and in other scripts' port-collision messages ('C' stays a silent alias).
+#  their own. Each sequence ascends down the screen.
 #
-#  The label renders DIM so it never competes with the key. Do not delete it to
-#  reduce clutter: a port-collision error elsewhere says "Likely 05C cmdwallet,
-#  051 web wallet, or a 052 drop wallet" — the menu is where an operator resolves
-#  those labels back to a product. Dim contrast, not removal, is the fix.
+#  ─── Numbers are internal — the menu shows NAMES only ─────────────────────
+#  051 / 052 / 053 / 05C are file and doc identity. They are NOT printed on the
+#  menu rows: an operator picking a wallet does not care which integer its script
+#  got, and two numbers per row ("A) 05C ·") read as a broken sequence.
+#
+#  The number IS printed on each product's own screen banner ("05C) GRIN WALLET
+#  QUICK SETUP"), which is the toolkit-wide convention (01, 052, 091 …). That is
+#  the one place it belongs — it tells you where you are after a clear — and it
+#  is why the menu row can drop it without the number becoming unfindable.
+#
+#  Consequence for anything that prints to an operator: never name a product by
+#  its number alone. Port-collision errors in the 07 libs say "the CMD Wallet
+#  quick setup (hub 05)", not "05C" — the number is a hint in brackets, the name
+#  is what the operator can actually find on a menu.
 #
 #  Within a group, rows are ordered by readiness: ✅ ready, then 🔧 building,
 #  then planned. The first thing you see in a group is the thing that works.
@@ -235,19 +242,19 @@ show_menu() {
     echo ""
     echo -e "${DIM}  ── Wallets ──────────── hold & spend your own GRIN${RESET}"
     echo ""
-    echo -e "  ${GREEN}A${RESET})${DIM} 05C ·${RESET} CMD Wallet Quick Setup  ✅  ${DIM}download + init + listen (CLI/testing)${RESET}"
-    echo -e "  ${GREEN}1${RESET})${DIM} 051 ·${RESET} Private Web Wallet      🔧  ${DIM}browser UI, server-held keys${RESET}"
-    echo -e "     ${DIM}Public Web Wallet                 planned · client-side WASM, no custody${RESET}"
+    echo -e "  ${GREEN}A${RESET}) CMD Wallet Quick Setup  ✅  ${DIM}download + init + listen (CLI/testing)${RESET}"
+    echo -e "  ${GREEN}1${RESET}) Private Web Wallet      🔧  ${DIM}browser UI, server-held keys${RESET}"
+    echo -e "     ${DIM}Public Web Wallet           planned · client-side WASM, no custody${RESET}"
     echo ""
     echo -e "${DIM}  ── Giveaways & Donations ─ hand GRIN out${RESET}"
     echo ""
-    echo -e "  ${GREEN}2${RESET})${DIM} 052 ·${RESET} Grin Drop               ✅  ${DIM}giveaway faucet + donation portal${RESET}"
+    echo -e "  ${GREEN}2${RESET}) Grin Drop               ✅  ${DIM}giveaway faucet + donation portal${RESET}"
     echo ""
     echo -e "${DIM}  ── Accept Payments ──── receive GRIN from customers${RESET}"
     echo ""
-    echo -e "  ${GREEN}3${RESET})${DIM} 053 ·${RESET} WooCommerce Gateway     🔧  ${DIM}WordPress/WooCommerce plugin${RESET}"
-    echo -e "     ${DIM}Payment Pro                       planned · Shopify / custom REST API${RESET}"
-    echo -e "     ${DIM}GoblinPay                         planned · receive-only merchant till${RESET}"
+    echo -e "  ${GREEN}3${RESET}) WooCommerce Gateway     🔧  ${DIM}WordPress/WooCommerce plugin${RESET}"
+    echo -e "     ${DIM}Payment Pro                 planned · Shopify / custom REST API${RESET}"
+    echo -e "     ${DIM}GoblinPay                   planned · receive-only merchant till${RESET}"
     echo ""
     echo -e "  ${DIM}Grin Transporter moved → main menu 09 (Grin Connectivity Hub)${RESET}"
     echo ""
@@ -697,8 +704,8 @@ main() {
             1) run_sub "051_grin_private_web_wallet.sh" || true ;;
             2) run_sub "052_grin_drop.sh"               || true ;;
             3) run_sub "053_grin_woocommerce.sh"        || true ;;
-            # 'C' kept as a silent alias: it was the key for a long time and is
-            # still the product's LABEL (05C) in docs and other scripts' messages.
+            # 'C' kept as a silent alias: it was the printed key for a long time,
+            # and 05C is still this product's identity in docs and filenames.
             [Aa]|[Cc]) cmd_wallet_run || true           ;;
             0) break ;;
             "") continue ;;

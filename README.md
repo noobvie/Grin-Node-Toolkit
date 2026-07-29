@@ -130,7 +130,7 @@ Grin Node Toolkit
 │   │   └── 0) Back
 │   ├── 5) Grin Wallet Services          → 05_grin_wallet_service.sh (hub launcher)
 │   │   ├── Status overview              (shows installed / running services per network)
-│   │   ├── A) 05C · CMD Wallet Setup    → (built into the hub, no script file)
+│   │   ├── A) CMD Wallet Setup          → (built into the hub, no script file)
 │   │   │   └── download binary → init/recover → patch toml → listener → status
 │   │   ├── 1) Private Web Wallet        → 051_grin_private_web_wallet.sh
 │   │   │   └── Network → install deps → deploy → nginx → SSL → Basic Auth → firewall → status

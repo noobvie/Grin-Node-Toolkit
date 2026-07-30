@@ -270,6 +270,24 @@ runtime. **Coinbase reception never depends on ②** (it's `build_coinbase`, loc
 Patch locations: solo `lib/07_solo_wallet.sh` step 4; pool `lib/07_lib_pool_wallet.sh`
 (~`node_api_secret_path`); drop `lib/052_lib_wallet.sh` `_drop_write_toml`.
 
+### Passphrase input — use STDIN, not `-p` (verified 2026-07-29)
+Several comments in this repo claim "grin-wallet has no stdin or env-var passphrase input —
+`-p` is the only option." **That is wrong.** grin-wallet 5.4.1 pins `rpassword = "4.0"`, whose
+`read_password()` reads **stdin** (`read_password_from_stdin(false)` — it does not open
+`/dev/tty`) and takes an explicit non-TTY branch: *"if we don't have a TTY, the input was
+piped so we bypass terminal hiding code"* → `stdin.read_line()`. What IS true: there is no
+env-var input (the clap `pass` arg declares no `env`), so stdin is the only argv-free channel.
+- **Feed the passphrase on stdin**: `exec grin-wallet … listen < "$pass_file"` (mode-600 file),
+  or `printf '%s\n' "$p" | grin-wallet … info` (printf is a bash *builtin* — no argv at all).
+  `init` asks twice; send two lines (a spare line is harmless if it ever asks once).
+- **Why it matters:** `-p` puts the passphrase in `ps aux` / `/proc/<pid>/cmdline` for the
+  entire life of the process. For a 24/7 listener that is a permanent leak to every local user,
+  not the "brief, one-time" exposure the old comments describe.
+- **Done in** `05_grin_wallet_service.sh` (CMD wallet). **Still on `-p`:** `lib/07_solo_wallet.sh`,
+  `lib/07_lib_pool_wallet.sh`, `lib/052_lib_wallet.sh` — convert when next touched.
+- **Exception — `init -hr` (recover):** leave stdin attached to the terminal so grin-wallet
+  prompts for the mnemonic itself; never route a recovery phrase through a toolkit script.
+
 ## tmux Sessions — Always Use Bash
 When generating `tmux new-session` commands (cron wrappers, watchdogs, any cron-run code),
 always prefix with `SHELL=/bin/bash`:

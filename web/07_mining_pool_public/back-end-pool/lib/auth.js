@@ -9,14 +9,80 @@ class AuthManager {
     this.config = config;
     this.db = getDb();
     this.jwtSecret = config.jwt_secret;
-    this.jwtExpiresIn = 3600;           // access token: 1h — the effective session length
-    this.refreshTokenExpiresIn = 86400 * 7;  // refresh token: 7d (server-side; UI doesn't auto-refresh)
-    // Account lockout (per-username): blunts online password guessing even when the
-    // attacker rotates source IPs (which defeats the per-IP rate limiter alone).
+    // Access-token lifetime = the IDLE timeout. The admin client silently refreshes while
+    // the operator is actually interacting (see AdminSession in admin-shell.js), so a token
+    // expiring means "nobody touched the panel for this long", not "you've been here an hour".
+    // This is the FALLBACK only: the live value comes from access.session_timeout_hours via
+    // sessionPolicyProvider below, so it stays correct if the setting is unreadable.
+    this.jwtExpiresIn = 3600;                // 1 h idle
+    this.refreshTokenExpiresIn = 86400 * 7;  // refresh token: 7d (outer bound; see sessionAbsoluteSeconds)
+    this.sessionAbsoluteSeconds = 12 * 3600; // fallback absolute cap (see _sessionPolicy)
+
+    // Set by index.js once PoolSettings exists: () => { idle_seconds, absolute_seconds }.
+    // A function, not a snapshot — the operator must be able to change the timeout without
+    // restarting the pool, exactly like require_admin_totp.
+    this.sessionPolicyProvider = null;
+    // Login lockout, keyed on (username, IP) — NOT on username alone.
+    //
+    // A username-only lock is a remote denial-of-service on the operator: the admin
+    // username is guessable ('admin'), so anyone could fail 5 logins every 15 min and keep
+    // the real operator permanently locked out of their own pool — including during an
+    // incident, when payouts and the freeze kill-switch are exactly what's needed. Keying
+    // the lock on the PAIR keeps the anti-guessing property (one source can't grind a
+    // username) while leaving every other source unaffected, so the operator always has a
+    // way in from their own address.
+    //
+    // In-memory and per-process, like ipFilter.tempBans and the rate limiter: a restart
+    // clears locks, which is an accepted trade for short cooldowns.
+    //
+    // Residual, deliberately not papered over: a large BOTNET defeats any per-source lock,
+    // because each new IP starts with a clean counter. What bounds that is the per-IP auth
+    // rate limit plus the fail2ban-style auto-ban in index.js — and, properly, mandatory
+    // TOTP (access.require_admin_totp), which is the only control here that a distributed
+    // password grind cannot out-scale. A global cross-IP lock is NOT the answer: it would
+    // hand the same operator-lockout DoS back to any attacker willing to trip it.
     this.maxFailedAttempts = config.max_failed_login_attempts || 5;
     this.lockoutDurationSeconds = config.lockout_duration_seconds || 900; // 15 min
+    this.lockoutWindowSeconds = config.lockout_window_seconds || 900;     // failure-count window
+    this.lockouts = new Map();   // `${username}\0${ip}` -> { attempts, firstAt, lockedUntil }
+    this.lockoutMaxEntries = 20000;  // flood guard: bound the Map (see _pruneLockouts)
     // bcrypt work factor (cost). ≥12 per the security audit.
     this.bcryptRounds = config.bcrypt_rounds || 12;
+  }
+
+  // Live session policy: { idle, abs } in seconds. Every value is clamped and every failure
+  // path falls back to the constructor defaults — a broken/missing setting must degrade to
+  // today's behaviour (1 h idle), never to "no expiry" and never to an unusably short one.
+  _sessionPolicy() {
+    let idle = this.jwtExpiresIn;
+    let abs = this.sessionAbsoluteSeconds;
+    try {
+      const p = this.sessionPolicyProvider && this.sessionPolicyProvider();
+      if (p) {
+        const i = Number(p.idle_seconds);
+        const a = Number(p.absolute_seconds);
+        // Floor of 5 min on idle: a typo'd 0 would otherwise expire the token before the
+        // client's first refresh and lock the operator into a login loop.
+        //
+        // CEILING OF 24 H, and it is a security bound, not a UX preference. Access tokens are
+        // NOT checked against users.token_version (only refresh tokens are — that asymmetry is
+        // what makes multi-tab rotation safe), so a live access token is UNREVOCABLE until it
+        // expires: neither /api/auth/logout nor the "revoke sessions" kill-switch nor a
+        // password change can kill it. The idle window IS the access-token TTL, so it is also
+        // the window in which those controls do nothing. 24 h is a defensible worst case for
+        // "operator clicked revoke after a laptop theft"; the 168 h the settings validator
+        // used to allow was a week of unrevocable admin access.
+        if (Number.isFinite(i) && i >= 300 && i <= 24 * 3600) idle = Math.floor(i);
+        // Ceiling of 168 h = the refresh token's own lifetime. Above that the refresh JWT
+        // expires first, so a "30 day" cap would silently behave as 7 days — the same
+        // silent-underdelivery trap as writing "10d" into a seconds-only fail2ban field.
+        if (Number.isFinite(a) && a >= 3600 && a <= 168 * 3600) abs = Math.floor(a);
+      }
+    } catch (e) { /* fall through to defaults */ }
+    // An absolute cap below the idle window is incoherent (the session would die mid-use
+    // with no way to renew). Validators can't catch it — they see one key at a time.
+    if (abs < idle) abs = idle;
+    return { idle, abs };
   }
 
   async registerAdmin(username, password) {
@@ -64,9 +130,102 @@ class AuthManager {
     }
   }
 
+  // ─── Login lockout, keyed on (username, IP) ─────────────────────────────────
+  // See the constructor for why the key is the pair and not the username alone.
+
+  _lockKey(username, ip) {
+    // \0 can't occur in either part, so the key is unambiguous even for odd usernames.
+    return `${String(username == null ? '' : username).toLowerCase()}\0${ip || 'unknown'}`;
+  }
+
+  // Drop expired entries; hard-cap the Map so a botnet spraying random usernames can't
+  // grow it without bound (oldest-inserted go first — Map preserves insertion order).
+  _pruneLockouts() {
+    const now = Math.floor(Date.now() / 1000);
+    for (const [k, v] of this.lockouts) {
+      const dead = (v.lockedUntil || 0) <= now &&
+                   (now - (v.firstAt || 0)) > this.lockoutWindowSeconds;
+      if (dead) this.lockouts.delete(k);
+    }
+    if (this.lockouts.size > this.lockoutMaxEntries) {
+      let excess = this.lockouts.size - this.lockoutMaxEntries;
+      for (const k of this.lockouts.keys()) {
+        this.lockouts.delete(k);
+        if (--excess <= 0) break;
+      }
+    }
+  }
+
+  // Is this (username, IP) pair currently locked? Seconds remaining, or 0 if not locked.
+  lockoutRemaining(username, ip) {
+    const e = this.lockouts.get(this._lockKey(username, ip));
+    if (!e || !e.lockedUntil) return 0;
+    const now = Math.floor(Date.now() / 1000);
+    return e.lockedUntil > now ? (e.lockedUntil - now) : 0;
+  }
+
+  // Count one failed attempt for the pair; lock it once the threshold is hit inside the
+  // window. Returns true if this failure caused (or extended) a lock.
+  _recordPairFailure(username, ip) {
+    this._pruneLockouts();
+    const now = Math.floor(Date.now() / 1000);
+    const key = this._lockKey(username, ip);
+    let e = this.lockouts.get(key);
+    // Start a fresh count if there's no entry or the previous window has elapsed.
+    if (!e || (now - (e.firstAt || 0)) > this.lockoutWindowSeconds) {
+      e = { attempts: 0, firstAt: now, lockedUntil: 0 };
+    }
+    e.attempts++;
+    if (e.attempts >= this.maxFailedAttempts) {
+      e.lockedUntil = now + this.lockoutDurationSeconds;
+      e.attempts = 0;          // restart counting after the cooldown
+      e.firstAt = now;
+    }
+    this.lockouts.set(key, e);
+    return !!e.lockedUntil && e.lockedUntil > now;
+  }
+
+  _clearPairFailures(username, ip) {
+    this.lockouts.delete(this._lockKey(username, ip));
+  }
+
+  // Active locks, for the admin Login Security panel. Username is reported because the
+  // operator needs to know WHICH account is being ground; the IP is the operator's own
+  // security data (see the audit-IP note in lib/owner-proof.js) and is reported in full so
+  // it can be blackholed.
+  getActiveLockouts() {
+    this._pruneLockouts();
+    const now = Math.floor(Date.now() / 1000);
+    const out = [];
+    for (const [k, v] of this.lockouts) {
+      if (!v.lockedUntil || v.lockedUntil <= now) continue;
+      const sep = k.indexOf('\0');
+      out.push({
+        username: k.slice(0, sep),
+        ip: k.slice(sep + 1),
+        locked_until: v.lockedUntil,
+        seconds_remaining: v.lockedUntil - now,
+      });
+    }
+    return out.sort((a, b) => b.locked_until - a.locked_until);
+  }
+
   async login(username, password, ip = null) {
     try {
       const now = Math.floor(Date.now() / 1000);
+
+      // Pair lockout is checked FIRST — before the user lookup — so a locked source costs
+      // no bcrypt work at all. It behaves identically for existing and non-existing
+      // usernames, so it adds no enumeration oracle.
+      const remaining = this.lockoutRemaining(username, ip);
+      if (remaining > 0) {
+        return {
+          success: false,
+          error: 'Too many failed attempts from this location. Try again later.',
+          locked: true,
+          retry_after_seconds: remaining
+        };
+      }
       const user = this.db.prepare(
         'SELECT * FROM users WHERE username = ?'
       ).get(username);
@@ -78,6 +237,9 @@ class AuthManager {
         // alone doesn't close this — the timing does). Run one throwaway compare against a
         // cached dummy hash at the same cost so both paths take ~the same wall-clock time.
         await this.comparePassword(password, await this._dummyHash());
+        // Count it: username guessing must be rate-limited the same way password guessing
+        // is, or the lock could be sidestepped by spraying names.
+        this._recordPairFailure(username, ip);
         return {
           success: false,
           error: 'Invalid username or password'
@@ -91,37 +253,27 @@ class AuthManager {
         };
       }
 
-      // Account lockout: reject while locked, without revealing whether the password
-      // was right (returns a generic locked message).
-      if (user.locked_until && user.locked_until > now) {
-        return {
-          success: false,
-          error: 'Account temporarily locked due to failed login attempts. Try again later.',
-          locked: true
-        };
-      }
-
       const passwordValid = await this.comparePassword(password, user.password_hash);
 
       if (!passwordValid) {
-        // Increment the failure counter; lock the account once the threshold is hit.
-        const attempts = (user.failed_login_attempts || 0) + 1;
-        if (attempts >= this.maxFailedAttempts) {
-          this.db.prepare(
-            'UPDATE users SET failed_login_attempts = ?, locked_until = ?, updated_at = ? WHERE id = ?'
-          ).run(attempts, now + this.lockoutDurationSeconds, now, user.id);
-        } else {
-          this.db.prepare(
-            'UPDATE users SET failed_login_attempts = ?, updated_at = ? WHERE id = ?'
-          ).run(attempts, now, user.id);
-        }
+        // Lock the (username, IP) pair, not the account — see the constructor note.
+        this._recordPairFailure(username, ip);
+        // users.failed_login_attempts is still maintained as a VISIBILITY signal ("this
+        // account is being ground, from somewhere"), surfaced in the admin Login Security
+        // panel. users.locked_until is deliberately no longer written or read: it was the
+        // remotely-triggerable operator lockout. Force it to 0 so a value left over from
+        // an older build can't keep an operator out after upgrading.
+        this.db.prepare(
+          'UPDATE users SET failed_login_attempts = ?, locked_until = 0, updated_at = ? WHERE id = ?'
+        ).run((user.failed_login_attempts || 0) + 1, now, user.id);
         return {
           success: false,
           error: 'Invalid username or password'
         };
       }
 
-      // Success: clear any failure state.
+      // Success: clear failure state for this pair and the account's visibility counter.
+      this._clearPairFailures(username, ip);
       if (user.failed_login_attempts || user.locked_until) {
         this.db.prepare(
           'UPDATE users SET failed_login_attempts = 0, locked_until = 0, updated_at = ? WHERE id = ?'
@@ -143,7 +295,7 @@ class AuthManager {
         is_admin: user.is_admin,
         access_token: tokens.accessToken,
         refresh_token: tokens.refreshToken,
-        expires_in: this.jwtExpiresIn
+        expires_in: this._sessionPolicy().idle
       };
     } catch (err) {
       return {
@@ -153,10 +305,23 @@ class AuthManager {
     }
   }
 
+  // Public read of the live policy — index.js needs it for cookie lifetimes and to tell the
+  // admin client its idle window (/api/admin/me).
+  sessionPolicy() {
+    return this._sessionPolicy();
+  }
+
   // pwa = password-verified-at (unix seconds). 0 = "not freshly password-verified"
   // (e.g. minted by a silent refresh). Step-up auth reads this, never iat.
-  generateTokens(userId, username, isAdmin, tokenVersion = 0, pwa = 0) {
+  //
+  // sst = session-started-at (unix seconds), the anchor for the ABSOLUTE cap. It must be
+  // carried unchanged through every silent refresh and every step-up — if any of those reset
+  // it, sliding refresh becomes an unbounded session and the cap is decorative. Omitted =
+  // this is a brand-new session (a real password login), so it starts at now.
+  generateTokens(userId, username, isAdmin, tokenVersion = 0, pwa = 0, sst = 0) {
     const now = Math.floor(Date.now() / 1000);
+    const sessionStart = sst > 0 ? sst : now;
+    const { idle } = this._sessionPolicy();
 
     const accessToken = jwt.sign(
       {
@@ -165,11 +330,12 @@ class AuthManager {
         is_admin: isAdmin ? 1 : 0,
         tv: tokenVersion,
         pwa: pwa,
+        sst: sessionStart,
         iat: now,
         type: 'access'
       },
       this.jwtSecret,
-      { expiresIn: this.jwtExpiresIn }
+      { expiresIn: idle }
     );
 
     // The refresh token carries the token_version it was minted against. On each
@@ -179,6 +345,7 @@ class AuthManager {
       {
         user_id: userId,
         tv: tokenVersion,
+        sst: sessionStart,
         type: 'refresh'
       },
       this.jwtSecret,
@@ -242,19 +409,36 @@ class AuthManager {
         throw new Error('Refresh token revoked');
       }
 
+      // Absolute cap: a sliding refresh can extend a session indefinitely while the operator
+      // keeps interacting, so the only thing bounding total session age is this check. The
+      // anchor is the ORIGINAL login (sst), carried through every rotation. Legacy tokens
+      // minted before sst existed fall back to iat — one cap-length grace, then normal rules.
+      const nowSec = Math.floor(Date.now() / 1000);
+      const policy = this._sessionPolicy();
+      const sessionStart = Number(decoded.sst) || Number(decoded.iat) || nowSec;
+      if ((nowSec - sessionStart) > policy.abs) {
+        // Distinct code so the client can say "please sign in again" rather than showing a
+        // generic failure and retrying forever.
+        return { success: false, error: 'Session expired — please sign in again', session_expired: true };
+      }
+
       // Rotate: bump the version so THIS refresh token can't be replayed.
       const nextVersion = currentVersion + 1;
       this.db.prepare(
         'UPDATE users SET token_version = ?, updated_at = ? WHERE id = ?'
-      ).run(nextVersion, Math.floor(Date.now() / 1000), user.id);
+      ).run(nextVersion, nowSec, user.id);
 
-      const tokens = this.generateTokens(user.id, user.username, user.is_admin, nextVersion);
+      // pwa stays 0: a silent refresh is NOT a password check and must never grant step-up
+      // freshness. sst is preserved so the cap above keeps counting from the real login.
+      const tokens = this.generateTokens(user.id, user.username, user.is_admin, nextVersion, 0, sessionStart);
 
       return {
         success: true,
         access_token: tokens.accessToken,
         refresh_token: tokens.refreshToken,
-        expires_in: this.jwtExpiresIn
+        expires_in: policy.idle,
+        session_started_at: sessionStart,
+        session_absolute_seconds: policy.abs
       };
     } catch (err) {
       return {
@@ -471,7 +655,9 @@ class AuthManager {
         INSERT INTO admin_audit_log (admin_id, action, target_type, target_id, ip)
         VALUES (?, ?, 'auth', 'login', ?)
       `);
-      stmt.run(userId, success ? 'login_success' : 'login_failure', ip);
+      // 'login_failed' is the canonical failure action — index.js's login route writes that
+      // spelling, and the Login Security reader filters on it. This branch must not disagree.
+      stmt.run(userId, success ? 'login_success' : 'login_failed', ip);
     } catch (err) {
       console.error(`Error logging login attempt: ${err.message}`);
     }
@@ -495,14 +681,17 @@ class AuthManager {
   // Re-authenticate an already-logged-in admin: verify the password and mint a NEW access
   // token stamped pwa=now (same token_version, so the existing refresh token stays valid).
   // Powers the step-up challenge on money/destructive endpoints.
-  async stepUp(userId, password) {
+  async stepUp(userId, password, sst = 0) {
     try {
       const user = this.db.prepare('SELECT * FROM users WHERE id = ?').get(userId);
       if (!user || !user.is_active) return { success: false, error: 'User not found' };
       const ok = await this.comparePassword(password, user.password_hash);
       if (!ok) return { success: false, error: 'Incorrect password' };
       const now = Math.floor(Date.now() / 1000);
-      const tokens = this.generateTokens(user.id, user.username, user.is_admin, user.token_version || 0, now);
+      // sst comes from the CALLER's existing token: a step-up re-verifies the password but
+      // does not start a new session, so it must not reset the absolute cap. (Without this,
+      // any admin could sit past the cap forever by stepping up.)
+      const tokens = this.generateTokens(user.id, user.username, user.is_admin, user.token_version || 0, now, sst);
       return { success: true, access_token: tokens.accessToken };
     } catch (err) {
       return { success: false, error: err.message };

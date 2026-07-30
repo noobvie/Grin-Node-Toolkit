@@ -379,6 +379,28 @@
       setTimeout(() => el.style.display = 'none', 5000);
     }
 
+    // Why the operator is looking at this page. AdminSession (admin-shell.js) appends
+    // ?reason= when it signs an idle or over-cap session out, so the panel explains itself
+    // instead of appearing to have logged them out at random. Note this message is chosen
+    // from the URL, so it is never treated as authoritative — it is a courtesy label, not a
+    // security signal, and it never says whether an account exists.
+    (function () {
+      var m = /[?&]reason=([a-z_]+)/.exec(location.search || '');
+      if (!m) return;
+      var TEXT = {
+        idle:    'Signed out after a period of inactivity. Please log in again.',
+        expired: 'Your session reached its maximum length. Please log in again.'
+      };
+      var msg = TEXT[m[1]];
+      if (!msg) return;
+      var el = document.getElementById('success-msg');   // neutral styling; not an error
+      if (!el) return;
+      el.textContent = msg;
+      el.style.display = 'block';
+      // No auto-hide: unlike a transient form error, this explains why the page is here at
+      // all, and the operator may be reading it after walking back to the desk.
+    })();
+
     // Short-lived token from the password step, used to complete 2FA.
     var twofaToken = null;
 

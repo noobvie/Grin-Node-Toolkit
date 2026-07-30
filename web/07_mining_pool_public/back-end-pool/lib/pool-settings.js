@@ -211,7 +211,18 @@ class PoolSettings {
     access: {
       admin_ip_allowlist: '[]',
       admin_ip_blacklist: '[]',
+      // Admin session lifetime, in hours. Two different clocks — don't conflate them:
+      //   session_timeout_hours  = IDLE. Reset by real user interaction (mouse/key/touch) in
+      //                            the admin panel, NOT by request traffic — several admin
+      //                            pages self-refresh on a timer, so a traffic-based window
+      //                            would never close while a tab sat open on the dashboard.
+      //                            Also the access-token TTL, so it holds even if the client
+      //                            is closed, stale or hostile.
+      //   session_absolute_hours = hard cap from the ORIGINAL login. Sliding refresh can
+      //                            otherwise extend a session forever; this is what bounds it.
+      // Both are enforced server-side (auth.js _sessionPolicy / refreshAccessToken).
       session_timeout_hours: 1,
+      session_absolute_hours: 12,
       invite_codes_enabled: 'false',
       invite_codes: '[]',
       // Extra stratum passwords banned from the ownership gate, ON TOP of the hardcoded
@@ -237,6 +248,20 @@ class PoolSettings {
       // region_country_code → this box's region row → busiest gateway → busiest miner country);
       // if every step misses, the map simply draws no hub marker.
       hub_country_code: '',
+      // Require TOTP 2FA on every admin account. OFF by default so an existing deploy isn't
+      // locked out by an upgrade.
+      //
+      // Enforcement is deliberately NOT "refuse the login": an admin who hasn't enrolled yet
+      // must still be able to reach the enrollment page, and a hard refusal would strand the
+      // operator the moment the toggle is flipped. Instead, an un-enrolled admin gets a normal
+      // session but every STEP-UP endpoint (money moves, destructive actions, access settings)
+      // is refused with `totp_enrollment_required` until they enroll. So the pool keeps running
+      // and the operator keeps read access, but nothing dangerous can be done without 2FA.
+      //
+      // Before turning this on, make sure the break-glass path exists on the box:
+      // `grin-pool-admin-reset-<net> --help` (installed by Script 07). Losing the authenticator
+      // AND the recovery codes with no CLI means no way back into the panel.
+      require_admin_totp: 'false',
     },
     alerts: {
       alert_check_interval_secs: 60,
@@ -867,9 +892,26 @@ PASS      any-password-you-choose</code>
       },
     },
     access: {
+      // Max 24 h, matching the ceiling auth.js _sessionPolicy() clamps to. This is a security
+      // bound: the idle window is also the access-token TTL, and access tokens are not checked
+      // against token_version, so nothing (logout, revoke-sessions, password change) can kill
+      // a live one before it expires. Allowing 168 h here meant a week of unrevocable admin
+      // access — and a value above 24 would silently be ignored by the clamp anyway, which is
+      // worse than refusing it.
       session_timeout_hours: (val) => {
         const n = parseInt(val, 10);
-        if (isNaN(n) || n < 1 || n > 168) throw new Error('session_timeout_hours must be 1-168');
+        if (isNaN(n) || n < 1 || n > 24) throw new Error('session_timeout_hours must be 1-24');
+        return n;
+      },
+      // Cap on total session age. Cannot be validated against session_timeout_hours here —
+      // updateSection validates one key at a time and either may arrive first — so auth.js
+      // raises the cap to the idle window if an operator sets them the wrong way round.
+      // Max 168 h (7 days) = the refresh token's own lifetime, which is the real outer bound.
+      // A larger value could never take effect: the refresh JWT would expire first and the
+      // session would end at 7 days while the panel claimed otherwise.
+      session_absolute_hours: (val) => {
+        const n = parseInt(val, 10);
+        if (isNaN(n) || n < 1 || n > 168) throw new Error('session_absolute_hours must be 1-168');
         return n;
       },
       // Accepts a JSON array or a comma/newline-separated list; normalises to a deduped

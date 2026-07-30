@@ -57,17 +57,56 @@
           <div id="twofa-recovery" style="display:none;margin-top:.75rem;">
             <div class="helper-text" style="color:var(--danger,#ff5a52);font-weight:600;">Save these one-time backup codes now — they are shown only once:</div>
             <pre id="twofa-recovery-list" style="white-space:pre-wrap;background:rgba(0,0,0,.05);padding:.75rem;border-radius:6px;user-select:all;"></pre>
-            <div class="helper-text">Lost your authenticator <em>and</em> these codes? Recover via root on the server (see docs: clear <code>totp_enabled/totp_secret</code> in the <code>users</code> table).</div>
+            <div class="helper-text">Lost your authenticator <em>and</em> these codes? Recover from a root shell on the pool server: <code>grin-pool-admin-reset-&lt;net&gt; --user &lt;you&gt; --clear-2fa</code> (Script 07 → <strong>A) Admin recovery</strong>). Don't hand-edit the database.</div>
             <button class="btn btn-secondary" onclick="document.getElementById('twofa-recovery').style.display='none'">Done — I saved them</button>
+          </div>
+
+          <!-- No settings-skip here: unlike the code boxes above, this IS a config key and
+               must be harvested. Its id matches PoolSettings.defaults.access exactly, which
+               is what binds it — the name attribute is decorative. -->
+          <div class="checkbox-group" style="margin-top:1rem;">
+            <input type="checkbox" id="require_admin_totp" name="require_admin_totp">
+            <label for="require_admin_totp">Require 2FA for all admin actions</label>
+          </div>
+          <div class="helper-text">
+            When on, an admin without 2FA can still sign in and read, but every money or
+            destructive action is refused until they enroll — so turning this on cannot strand
+            you outside the panel. You must have 2FA enabled on your <em>own</em> account
+            before this can be switched on.
+            <br><br>
+            <strong>Set up recovery first.</strong> With 2FA compulsory, an authenticator lost
+            together with the recovery codes means no way into the panel until someone runs
+            <code>grin-pool-admin-reset-&lt;net&gt;</code> as root on the server. Confirm that
+            command exists (Script 07 → <strong>A) Admin recovery</strong>) before enabling this.
           </div>
         </div>
 
         <div class="form-section">
-          <h3 class="section-title">Session & Security</h3>
+          <h3 class="section-title" data-sec="Session">Session &amp; Security</h3>
           <div class="form-group">
-            <label for="session_timeout_hours">Session Timeout (hours)</label>
-            <input type="number" id="session_timeout_hours" name="session_timeout_hours" min="1" max="168" value="1">
-            <div class="helper-text">How long before admin login expires</div>
+            <label for="session_timeout_hours">Idle timeout (hours)</label>
+            <input type="number" id="session_timeout_hours" name="session_timeout_hours" min="1" max="24" value="1">
+            <div class="helper-text">
+              Sign an admin out after this long with <strong>no activity</strong>. Activity means
+              real interaction with the panel — moving the pointer, typing, tapping. It is
+              deliberately <em>not</em> measured from network requests: several pages refresh
+              themselves on a timer, so a tab left open on the dashboard would keep a
+              request-based session alive forever. While you are working, the session renews
+              silently and you are not interrupted.
+              <br>Maximum 24 hours: this is also how long a signed-in browser stays valid
+              after you use <em>Revoke sessions</em> or change the password, so a long window
+              means a stolen laptop keeps admin access for that long.
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label for="session_absolute_hours">Maximum session length (hours)</label>
+            <input type="number" id="session_absolute_hours" name="session_absolute_hours" min="1" max="168" value="12">
+            <div class="helper-text">
+              Hard limit counted from when you logged in, regardless of activity — a session
+              that renews all day still ends here and needs the password again. Set below the
+              idle timeout and the idle timeout wins (the two would otherwise contradict).
+            </div>
           </div>
 
           <div class="checkbox-group">

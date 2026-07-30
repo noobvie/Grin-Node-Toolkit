@@ -297,8 +297,22 @@ function validateConfig(cfg) {
   if (!cfg.port || cfg.port < 1024 || cfg.port > 65535) {
     throw new Error(`Invalid port: ${cfg.port}`);
   }
-  if (!cfg.db_path || !cfg.db_path.includes('/opt/grin/') && !cfg.db_path.includes('./')) {
+  // db_path comes from the operator's own root-written pool.json, so this guards a TYPO
+  // (a stray path that would silently create a second, empty ledger somewhere unexpected),
+  // not an attacker. It was an `includes()` substring test, which is not the same question:
+  // `/tmp/x/./y` and `/opt/grin/../../tmp/y` both contained an accepted fragment and passed.
+  // Anchor it instead — installed pools write /opt/grin/pubpool/<net>/pool.db, the dev/manual
+  // fallback is a ./ relative path — and reject traversal outright.
+  if (!cfg.db_path || typeof cfg.db_path !== 'string') {
     throw new Error(`Invalid db_path: ${cfg.db_path}`);
+  }
+  if (cfg.db_path.split(/[\\/]/).includes('..')) {
+    throw new Error(`Invalid db_path (path traversal): ${cfg.db_path}`);
+  }
+  if (!cfg.db_path.startsWith('/opt/grin/') && !cfg.db_path.startsWith('./')) {
+    throw new Error(
+      `Invalid db_path: ${cfg.db_path} (must be under /opt/grin/ or a ./ relative dev path)`
+    );
   }
   if (!cfg.stratum_port || cfg.stratum_port < 1024 || cfg.stratum_port > 65535) {
     throw new Error(`Invalid stratum_port: ${cfg.stratum_port}`);
@@ -330,10 +344,30 @@ let authManager = null;
 const loginCaptcha = new Captcha();
 // Auto-ban (fail2ban-style): too many failed admin logins from one IP within the window
 // → temporary IP ban (cooldown). In-memory; pairs with ipFilter.tempBan().
+//
+// This ban stays SHORT on purpose and must not be lengthened. `ipFilter.tempBans` is an
+// in-process Map with no size cap and lazy pruning, so a long TTL is both unenforceable
+// (any deploy/restart clears it) and unbounded (a rotating scanner accumulates entries for
+// the whole TTL). The durable, operator-tunable ban is the fail2ban jail `grin-pool-login`
+// (Script 07 → fail2ban_bantime), which lives in the firewall and survives a pool restart.
+// Note the break-glass admin-reset CLI cannot lift a ban held here — it edits pool.db, this
+// is another process's memory. Recovery is: wait it out, come from another address, or
+// restart the service.
 const ADMIN_LOGIN_FAIL_THRESHOLD = 10;
-const ADMIN_LOGIN_FAIL_WINDOW_MS = 15 * 60 * 1000;
+const ADMIN_LOGIN_FAIL_WINDOW_MS = 15 * 60 * 1000;   // matches fail2ban findtime (900s)
 const ADMIN_LOGIN_BAN_MS = 60 * 60 * 1000;
 const adminLoginFailures = new Map(); // ip -> { count, firstAt }
+
+// Wrong TOTP/recovery codes are counted SEPARATELY from wrong passwords, with a higher
+// threshold. Reaching this step already required the correct password, so it is a weak
+// brute-force signal — while it is a strong FALSE-POSITIVE source for the real operator:
+// if the server's clock drifts, every code is rejected, and the human response is to try
+// several codes and then a mistyped recovery code. Mixing those into the password counter
+// let an honest operator earn an IP ban at exactly the moment they need access. The
+// threshold still has to exist: a 6-digit code is only 10^6 wide and the `auth` limiter
+// sits at a loose 200/min.
+const ADMIN_2FA_FAIL_THRESHOLD = 20;
+const admin2faFailures = new Map();   // ip -> { count, firstAt }
 let hashrateTracker = null;
 let poolstatsReporter = null;
 let rateLimiter = null;
@@ -537,6 +571,17 @@ async function initializePool() {
     migrateAuditLogIps(db);
 
     authManager = new AuthManager(config);
+    // Live session policy. A provider function (not a snapshot) so changing the timeout in
+    // Access Control takes effect on the next token issue, with no restart. Every read is
+    // clamped inside auth.js and falls back to 1 h idle / 12 h absolute if this throws —
+    // PoolSettings is constructed before AuthManager, but a DB hiccup must not brick login.
+    authManager.sessionPolicyProvider = () => {
+      const s = poolSettings.getSection('access');
+      return {
+        idle_seconds: Number(s.session_timeout_hours) * 3600,
+        absolute_seconds: Number(s.session_absolute_hours) * 3600
+      };
+    };
     console.log(`[${new Date().toISOString()}] Authentication manager initialized`);
 
     hashrateTracker = new HashrateTracker(config, minerManager);
@@ -717,6 +762,31 @@ function setupRoutes() {
     requireAdmin(authManager)
   ];
 
+  // Is TOTP 2FA mandatory for admins right now? Read live from the DB (not the startup-merged
+  // config) so flipping the toggle takes effect without a service restart.
+  const totpIsMandatory = () => {
+    try {
+      return String(poolSettings.getSection('access').require_admin_totp) === 'true';
+    } catch (e) {
+      // Fail OPEN on a settings read error. Failing closed here would brick every step-up
+      // endpoint — including the ones needed to fix the settings — on a transient DB error.
+      return false;
+    }
+  };
+
+  // Enforcement for access.require_admin_totp. Applied to the STEP-UP chain only, so an
+  // un-enrolled admin keeps a normal session (and can therefore reach 2FA enrollment) but
+  // cannot move money or run destructive actions until 2FA is on. See the setting's comment
+  // in lib/pool-settings.js for why this isn't a login refusal.
+  const requireTotpEnrolled = (req, res, next) => {
+    if (!totpIsMandatory()) return next();
+    if (authManager.isTotpEnabled(req.user.user_id)) return next();
+    return res.status(403).json({
+      error: 'This pool requires two-factor authentication for admin actions. Set up 2FA to continue.',
+      totp_enrollment_required: true
+    });
+  };
+
   // Step-up gate for money/destructive admin actions: same as secureAdmin but also requires
   // a PASSWORD re-verification within the last 5 min (requireFreshAuth → token.pwa). A live
   // (or stolen) session alone is not enough — the client must call /api/admin/reauth first.
@@ -724,27 +794,68 @@ function setupRoutes() {
   const freshAdmin = [
     rateLimiter.middleware('admin'),
     ipFilter.middleware('admin'),
+    requireFreshAuth(authManager, STEP_UP_MAX_AGE_S),
+    requireTotpEnrolled
+  ];
+
+  // Step-up WITHOUT the mandatory-2FA gate. Used only by the 2FA ENROLLMENT endpoints: on a
+  // pool with require_admin_totp on, an admin who hasn't enrolled must be able to reach the
+  // very endpoints that enroll them. Putting requireTotpEnrolled in front of enrollment would
+  // make the requirement unsatisfiable and hard-lock the panel — recoverable only via the
+  // break-glass CLI. Do NOT reuse this chain for anything else.
+  const freshAdminEnroll = [
+    rateLimiter.middleware('admin'),
+    ipFilter.middleware('admin'),
     requireFreshAuth(authManager, STEP_UP_MAX_AGE_S)
   ];
 
-  // Auto-ban bookkeeping shared by the password and 2FA login steps: count failures per IP
-  // within the window, temp-ban on threshold.
-  const recordAdminLoginFailure = (ip) => {
+  // Auto-ban bookkeeping for the two login steps: count failures per IP within the window,
+  // temp-ban on threshold. `kind` selects the counter — 'password' and '2fa' are tracked
+  // independently (see ADMIN_2FA_FAIL_THRESHOLD), so a run of rejected codes can never
+  // consume the password budget or vice versa.
+  const recordAdminLoginFailure = (ip, kind = 'password') => {
+    const isTwofa = kind === '2fa';
+    const store = isTwofa ? admin2faFailures : adminLoginFailures;
+    const threshold = isTwofa ? ADMIN_2FA_FAIL_THRESHOLD : ADMIN_LOGIN_FAIL_THRESHOLD;
     const now = Date.now();
-    let rec = adminLoginFailures.get(ip);
+    let rec = store.get(ip);
     if (!rec || now - rec.firstAt > ADMIN_LOGIN_FAIL_WINDOW_MS) rec = { count: 0, firstAt: now };
     rec.count++;
-    adminLoginFailures.set(ip, rec);
-    if (rec.count >= ADMIN_LOGIN_FAIL_THRESHOLD) {
+    store.set(ip, rec);
+    if (rec.count >= threshold) {
       ipFilter.tempBan(ip, ADMIN_LOGIN_BAN_MS);
-      adminLoginFailures.delete(ip);
+      store.delete(ip);
       try {
         db.prepare(`INSERT INTO admin_audit_log (admin_id, action, target_type, target_id, details, ip)
                     VALUES (NULL, 'ip_autoban', 'security', ?, ?, ?)`)
-          .run(ip, JSON.stringify({ reason: 'failed_admin_logins', threshold: ADMIN_LOGIN_FAIL_THRESHOLD, ban_minutes: ADMIN_LOGIN_BAN_MS / 60000 }), ip);
+          .run(ip, JSON.stringify({
+            reason: isTwofa ? 'failed_admin_2fa_codes' : 'failed_admin_logins',
+            threshold,
+            ban_minutes: ADMIN_LOGIN_BAN_MS / 60000
+          }), ip);
       } catch (e) { /* non-fatal */ }
     }
   };
+
+  // Cookie lifetimes must track the live session policy, not a hardcoded hour. A cookie that
+  // outlives its token is harmless (the request 401s and the client refreshes), but a cookie
+  // that dies FIRST silently logs the operator out mid-session with a valid token in hand —
+  // which is exactly the bug that made "session timeout" feel arbitrary.
+  const accessCookieOpts = () => ({
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'strict',
+    maxAge: authManager.sessionPolicy().idle * 1000
+  });
+  // The refresh cookie is capped at the ABSOLUTE session limit: past that, refreshAccessToken
+  // refuses anyway, so holding the cookie for the full 7 days would only invite pointless
+  // 401s. Whichever is shorter wins.
+  const refreshCookieOpts = () => ({
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'strict',
+    maxAge: Math.min(authManager.refreshTokenExpiresIn, authManager.sessionPolicy().abs) * 1000
+  });
 
   // ─── Public Health Check (rate-limited, no auth) ───────────────────────────
   // Registered on both /health and /api/health: nginx proxies /api/* to the backend,
@@ -1502,19 +1613,8 @@ function setupRoutes() {
           // set this password, so the first session starts step-up-fresh.
           const tokens = authManager.generateTokens(result.user_id, username, true, 0, Math.floor(Date.now() / 1000));
 
-          res.cookie('access_token', tokens.accessToken, {
-            httpOnly: true,
-            secure: process.env.NODE_ENV === 'production',
-            sameSite: 'strict',
-            maxAge: 3600000
-          });
-
-          res.cookie('refresh_token', tokens.refreshToken, {
-            httpOnly: true,
-            secure: process.env.NODE_ENV === 'production',
-            sameSite: 'strict',
-            maxAge: 604800000
-          });
+          res.cookie('access_token', tokens.accessToken, accessCookieOpts());
+          res.cookie('refresh_token', tokens.refreshToken, refreshCookieOpts());
 
           // Log registration event
           const auditStmt = db.prepare(`
@@ -1568,7 +1668,11 @@ function setupRoutes() {
         const result = await authManager.login(username, password, ip);
 
         if (result.success) {
-          // Password is correct → clear the auto-ban counter for this IP.
+          // Password is correct → clear the PASSWORD auto-ban counter for this IP.
+          // Deliberately does NOT clear admin2faFailures: an attacker holding a stolen
+          // password could otherwise reset the code counter by simply logging in again
+          // between guesses, making the 2FA threshold unreachable. Only completing 2FA
+          // clears it.
           adminLoginFailures.delete(ip);
 
           // 2FA gate: if this admin has TOTP enabled, DON'T issue a session yet. Return a
@@ -1579,19 +1683,10 @@ function setupRoutes() {
           }
 
           // FIX #4: Set httpOnly, Secure cookie instead of returning token
-          res.cookie('access_token', result.access_token, {
-            httpOnly: true,        // JS cannot access (prevents XSS theft)
-            secure: process.env.NODE_ENV === 'production',  // HTTPS only in production
-            sameSite: 'strict',    // CSRF protection
-            maxAge: 3600000        // 1 hour
-          });
-
-          res.cookie('refresh_token', result.refresh_token, {
-            httpOnly: true,
-            secure: process.env.NODE_ENV === 'production',
-            sameSite: 'strict',
-            maxAge: 604800000      // 7 days
-          });
+          // httpOnly (no JS access → no XSS theft), Secure in production, sameSite strict.
+          // Lifetime comes from the live session policy — see accessCookieOpts.
+          res.cookie('access_token', result.access_token, accessCookieOpts());
+          res.cookie('refresh_token', result.refresh_token, refreshCookieOpts());
 
           // Log successful login
           const auditStmt = db.prepare(`
@@ -1641,20 +1736,18 @@ function setupRoutes() {
           db.prepare(`INSERT INTO admin_audit_log (admin_id, action, target_type, target_id, details, ip)
                       VALUES (?, 'login_2fa_failed', 'auth', 'login', NULL, ?)`).run(userId, ip);
         } catch (e) { /* non-fatal */ }
-        recordAdminLoginFailure(ip);
+        recordAdminLoginFailure(ip, '2fa');
         return res.status(401).json({ success: false, error: 'Invalid 2FA code' });
       }
 
       const sess = authManager.issueSessionFor(userId);
       if (!sess.success) return res.status(401).json({ success: false, error: sess.error || 'Login failed' });
 
-      res.cookie('access_token', sess.access_token, {
-        httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'strict', maxAge: 3600000
-      });
-      res.cookie('refresh_token', sess.refresh_token, {
-        httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'strict', maxAge: 604800000
-      });
+      res.cookie('access_token', sess.access_token, accessCookieOpts());
+      res.cookie('refresh_token', sess.refresh_token, refreshCookieOpts());
+      // Full authentication completed — clear BOTH counters for this IP.
       adminLoginFailures.delete(ip);
+      admin2faFailures.delete(ip);
       try {
         db.prepare(`INSERT INTO admin_audit_log (admin_id, action, target_type, target_id, details, ip)
                     VALUES (?, 'login_success', 'auth', 'login', ?, ?)`).run(userId, JSON.stringify({ via: '2fa' }), ip);
@@ -1675,26 +1768,30 @@ function setupRoutes() {
     const result = authManager.refreshAccessToken(refreshToken);
     if (result.success) {
       // Set new access token in httpOnly cookie
-      res.cookie('access_token', result.access_token, {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: 'strict',
-        maxAge: 3600000
-      });
+      res.cookie('access_token', result.access_token, accessCookieOpts());
 
       // Set new refresh token if provided
       if (result.refresh_token) {
-        res.cookie('refresh_token', result.refresh_token, {
-          httpOnly: true,
-          secure: process.env.NODE_ENV === 'production',
-          sameSite: 'strict',
-          maxAge: 604800000
-        });
+        res.cookie('refresh_token', result.refresh_token, refreshCookieOpts());
       }
 
-      res.json({ success: true });
+      // expires_in lets the client schedule the next silent refresh; session_started_at is
+      // what it needs to count down the absolute cap without guessing from page-load time.
+      res.json({
+        success: true,
+        expires_in: result.expires_in,
+        session_started_at: result.session_started_at,
+        session_absolute_seconds: result.session_absolute_seconds
+      });
     } else {
-      res.status(401).json({ success: false, error: result.error });
+      // session_expired = the absolute cap was reached; a new access token will never be
+      // issued for this session, so the client must stop retrying and send the operator to
+      // the login page instead of looping.
+      res.status(401).json({
+        success: false,
+        error: result.error,
+        session_expired: !!result.session_expired
+      });
     }
   });
 
@@ -1706,7 +1803,9 @@ function setupRoutes() {
     try {
       const { password } = req.body || {};
       if (!password) return res.status(400).json({ error: 'Password required' });
-      const result = await authManager.stepUp(req.user.user_id, password);
+      // Pass the caller's session start through: a step-up re-verifies the password but does
+      // NOT start a new session, so it must not reset the absolute-cap clock.
+      const result = await authManager.stepUp(req.user.user_id, password, Number(req.user.sst) || 0);
       if (!result.success) {
         try {
           db.prepare(`INSERT INTO admin_audit_log (admin_id, action, target_type, target_id, details, ip)
@@ -1714,9 +1813,7 @@ function setupRoutes() {
         } catch (e) { /* non-fatal */ }
         return res.status(401).json({ error: result.error || 'Re-authentication failed' });
       }
-      res.cookie('access_token', result.access_token, {
-        httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'strict', maxAge: 3600000
-      });
+      res.cookie('access_token', result.access_token, accessCookieOpts());
       res.json({ success: true });
     } catch (err) {
       res.status(500).json({ error: 'Server error' });
@@ -1728,15 +1825,22 @@ function setupRoutes() {
   // (freshAdmin) so a hijacked live session can't silently turn 2FA off.
   app.get('/api/admin/2fa/status', secureAdmin, (req, res) => {
     try {
+      const enabled = authManager.isTotpEnabled(req.user.user_id);
+      const mandatory = totpIsMandatory();
       res.json({
         success: true,
-        enabled: authManager.isTotpEnabled(req.user.user_id),
+        enabled,
         recovery_codes_remaining: authManager.unusedRecoveryCount(req.user.user_id),
+        // Lets the panel show the real state instead of a generic 403 the first time a
+        // step-up action is refused: mandatory = the pool requires 2FA;
+        // must_enroll = required but this admin hasn't set it up, so step-up is blocked.
+        mandatory,
+        must_enroll: mandatory && !enabled,
       });
     } catch (err) { res.status(500).json({ error: 'Server error' }); }
   });
 
-  app.post('/api/admin/2fa/enroll/begin', freshAdmin, (req, res) => {
+  app.post('/api/admin/2fa/enroll/begin', freshAdminEnroll, (req, res) => {
     try {
       if (authManager.isTotpEnabled(req.user.user_id)) {
         return res.status(400).json({ error: '2FA is already enabled. Disable it first to re-enroll.' });
@@ -1749,7 +1853,7 @@ function setupRoutes() {
     } catch (err) { res.status(500).json({ error: 'Server error' }); }
   });
 
-  app.post('/api/admin/2fa/enroll/confirm', freshAdmin, async (req, res) => {
+  app.post('/api/admin/2fa/enroll/confirm', freshAdminEnroll, async (req, res) => {
     try {
       const r = await authManager.confirm2faEnrollment(req.user.user_id, (req.body || {}).code);
       if (!r.success) return res.status(400).json({ error: r.error });
@@ -4298,20 +4402,174 @@ function setupRoutes() {
   // Sessions are stateless JWTs (no server-side session table), so there is no per-device
   // list to enumerate. What the operator CAN see + control: recent login activity (from the
   // audit log) and a "revoke sessions" kill-switch (bumps token_version → invalidates all
-  // refresh tokens for the account; live access tokens still expire within their 1h TTL).
+  // refresh tokens for the account).
+  //
+  // KNOWN LIMIT, state it plainly: revoke does NOT kill live ACCESS tokens. Only refresh
+  // tokens carry a token_version check (that asymmetry is deliberate — it's what stops one
+  // tab's rotation from logging every other tab out), so an already-issued access token stays
+  // valid until its own expiry, i.e. for up to access.session_timeout_hours. That setting is
+  // therefore clamped to 24 h in auth.js/pool-settings.js: it is the true "time to revoke".
+  // Anything longer needs a token_version check on access tokens plus a non-rotating refresh
+  // scheme, which is a bigger change than this endpoint.
   app.get('/api/admin/security/login-history', secureAdmin, (req, res) => {
     try {
       // Clamped low as well as high: a negative LIMIT means "no limit" to SQLite, and a
       // non-numeric one binds as NaN and throws — so ?limit=-1 quietly returned the whole
       // audit table. Same idiom as /api/admin/withdrawals.
       const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 50, 1), 200);
+      // The action list MUST match what the writers actually emit. It previously asked for
+      // 'login_failure' while the login route writes 'login_failed' (and the 2FA step writes
+      // 'login_2fa_failed'), so this endpoint returned successes and auto-bans only — the
+      // panel's "Failed login" row could never appear and the operator had no way to see a
+      // brute-force attempt. 'login_failure' is kept for rows written by older builds.
+      //
+      // Username comes from the audit row's details when admin_id is NULL, which is the case
+      // for every failed attempt (a bad username has no user row to join to) — without this
+      // the User column would be '—' on exactly the rows that matter.
       const rows = db.prepare(`
-        SELECT a.id, a.action, a.ip, a.created_at, u.username
+        SELECT a.id, a.action, a.ip, a.created_at, a.details, u.username
         FROM admin_audit_log a LEFT JOIN users u ON u.id = a.admin_id
-        WHERE a.action IN ('login_success','login_failure','ip_autoban','logout')
+        WHERE a.action IN ('login_success','login_failed','login_failure','login_2fa_failed',
+                           'ip_autoban','logout','2fa_enabled','2fa_disabled','admin_cli_reset')
         ORDER BY a.id DESC LIMIT ?
       `).all(limit);
-      res.json({ success: true, count: rows.length, history: rows });
+      const history = rows.map((r) => {
+        let username = r.username;
+        if (!username && r.details) {
+          try { username = JSON.parse(r.details).username || null; } catch (e) { /* not JSON */ }
+        }
+        return { id: r.id, action: r.action, ip: r.ip, created_at: r.created_at, username: username || null };
+      });
+      res.json({ success: true, count: history.length, history });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ─── Login security summary (Admin) ────────────────────────────────────────
+  // Answers "is anyone attacking my login right now, and from where?" — the counts, the
+  // worst source addresses, and the locks/bans currently in force.
+  //
+  // Two honesty requirements, same as the payout-request audit panel:
+  //   * the window is CLAMPED to the audit retention, and the response says so, so a gap
+  //     caused by pruning is never displayed as "no attempts";
+  //   * requests refused by the rate limiter, the IP filter or the CAPTCHA gate are rejected
+  //     BEFORE the login route writes any row, so they are invisible here. The panel states
+  //     this — otherwise a quiet table would read as "no attack" during a live flood.
+  app.get('/api/admin/security/auth-activity', secureAdmin, (req, res) => {
+    try {
+      let retentionDays = 180;
+      try { retentionDays = parseInt(poolSettings.getSection('database').audit_log_keep_days, 10) || 180; } catch (e) {}
+
+      const askedHours = Math.min(Math.max(parseInt(req.query.hours, 10) || 24, 1), 24 * 365);
+      const maxHours = retentionDays * 24;
+      const hours = Math.min(askedHours, maxHours);
+      const since = Math.floor(Date.now() / 1000) - (hours * 3600);
+
+      const FAIL_ACTIONS = ['login_failed', 'login_failure', 'login_2fa_failed'];
+      const failPlaceholders = FAIL_ACTIONS.map(() => '?').join(',');
+
+      // Every query below pins target_type AND target_id so idx_audit_target
+      // (target_type, target_id, created_at DESC) is usable as a range seek. Without the
+      // target_id term the index can only match the first column and the created_at filter
+      // degrades to a scan of the whole audit table — and a full scan on this DB blocks
+      // SHARE writes, not just this page (see the hashrate-scan fix in db capacity notes).
+      const counts = {};
+      for (const r of db.prepare(
+        `SELECT action, COUNT(*) AS c FROM admin_audit_log
+          WHERE target_type = 'auth' AND target_id = 'login' AND created_at >= ?
+          GROUP BY action`
+      ).all(since)) counts[r.action] = r.c;
+
+      // ip_autoban is written with target_type 'security', so it is NOT in the set above.
+      const autobans = db.prepare(
+        `SELECT COUNT(*) AS c FROM admin_audit_log
+          WHERE target_type = 'security' AND action = 'ip_autoban' AND created_at >= ?`
+      ).get(since).c;
+
+      const failures = FAIL_ACTIONS.reduce((n, a) => n + (counts[a] || 0), 0);
+
+      // Worst source addresses for failed attempts. Pure aggregate, bounded output — no
+      // json_extract: JSON1 availability isn't verifiable from this repo (better-sqlite3 is a
+      // native module built on the target box), and a security panel is the wrong place to
+      // discover a missing SQLite extension via a 500.
+      const topOrigins = db.prepare(
+        `SELECT ip, COUNT(*) AS attempts, MAX(created_at) AS last_at
+           FROM admin_audit_log
+          WHERE target_type = 'auth' AND target_id = 'login' AND created_at >= ?
+            AND action IN (${failPlaceholders})
+            AND ip IS NOT NULL AND ip <> ''
+          GROUP BY ip ORDER BY attempts DESC, last_at DESC LIMIT 20`
+      ).all(since, ...FAIL_ACTIONS);
+
+      // Which usernames are being tried, across all sources. This is the sweep-vs-grind
+      // signal the raw failure count can't give: many usernames from one place is a scanner
+      // working a wordlist, repeated hits on one real username is someone targeting YOU.
+      // Grouped on the raw details string in SQL (bounded by distinct usernames tried, and
+      // capped at 10), then parsed in JS — so no JSON support is needed in SQLite.
+      const targeted = db.prepare(
+        `SELECT details, COUNT(*) AS attempts, MAX(created_at) AS last_at
+           FROM admin_audit_log
+          WHERE target_type = 'auth' AND target_id = 'login' AND created_at >= ?
+            AND action IN (${failPlaceholders}) AND details IS NOT NULL
+          GROUP BY details ORDER BY attempts DESC LIMIT 10`
+      ).all(since, ...FAIL_ACTIONS).map((r) => {
+        let username = null;
+        try { username = JSON.parse(r.details).username; } catch (e) { /* not JSON */ }
+        // Usernames are attacker-supplied free text. Cap the length here so one absurd
+        // 10 KB "username" can't bloat the response or wreck the table layout; the panel
+        // escapes it on render.
+        if (typeof username === 'string' && username.length > 64) username = username.slice(0, 64) + '…';
+        return { username: username || '(blank)', attempts: r.attempts, last_at: r.last_at };
+      });
+
+      // Per-account failure counters (visibility signal kept by AuthManager.login) — shows
+      // WHICH account is being ground even when the sources rotate.
+      const accounts = db.prepare(
+        `SELECT username, failed_login_attempts, totp_enabled, is_active
+           FROM users WHERE is_admin = 1 ORDER BY failed_login_attempts DESC, username ASC`
+      ).all();
+
+      res.json({
+        success: true,
+        window_hours: hours,
+        requested_hours: askedHours,
+        truncated_by_retention: hours < askedHours,
+        retention_days: retentionDays,
+        totals: {
+          success: counts.login_success || 0,
+          failed: failures,
+          failed_password: (counts.login_failed || 0) + (counts.login_failure || 0),
+          failed_2fa: counts.login_2fa_failed || 0,
+          autobans,
+        },
+        top_origins: topOrigins,
+        targeted_usernames: targeted,
+        // In-memory and process-local: both lists reset on a service restart, which the panel
+        // says out loud so an empty list after a deploy isn't read as "the attack stopped".
+        active_lockouts: authManager.getActiveLockouts(),
+        banned_ips: ipFilter ? ipFilter.getTempBans() : [],
+        accounts,
+        totp_mandatory: totpIsMandatory(),
+      });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Lift a temporary auto-ban early. Step-up gated: it re-opens login attempts from an
+  // address the pool decided to shut out, and the common legitimate use (the operator banned
+  // their own office IP by fumbling a password) is exactly when a hijacked session would
+  // most like to do the same.
+  app.post('/api/admin/security/temp-ban/clear', freshAdmin, (req, res) => {
+    try {
+      const ip = String((req.body || {}).ip || '').trim();
+      if (!ip) return res.status(400).json({ error: 'IP address required' });
+      const had = ipFilter.clearTempBan(ip);
+      db.prepare(`INSERT INTO admin_audit_log (admin_id, action, target_type, target_id, details, ip)
+                  VALUES (?, 'temp_ban_cleared', 'security', ?, ?, ?)`)
+        .run(req.user.user_id, ip, JSON.stringify({ was_banned: had }), req.ip);
+      res.json({ success: true, was_banned: had, banned_ips: ipFilter.getTempBans() });
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
@@ -4444,10 +4702,21 @@ function setupRoutes() {
   // in an infinite loop. Gated by secureAdmin: a 200 here is itself the "you're logged in"
   // signal; 401/403 means redirect to login.
   app.get('/api/admin/me', secureAdmin, (req, res) => {
+    // `session` drives AdminSession (admin-shell.js): the idle window it counts user
+    // interaction against, the absolute cap, and when THIS session actually began. The
+    // client can't derive any of it — the token is httpOnly and page-load time is not
+    // session start (a reload mid-session would otherwise reset the cap client-side).
+    const policy = authManager.sessionPolicy();
     res.json({
       username: req.user?.username || null,
       is_admin: !!req.user?.is_admin,
-      user_id: req.user?.user_id || null
+      user_id: req.user?.user_id || null,
+      session: {
+        idle_seconds: policy.idle,
+        absolute_seconds: policy.abs,
+        started_at: Number(req.user?.sst) || null,
+        now: Math.floor(Date.now() / 1000)   // lets the client correct for clock skew
+      }
     });
   });
 
@@ -5337,6 +5606,19 @@ function setupRoutes() {
       if (STEP_UP_SETTINGS_SECTIONS.has(req.params.section) &&
           !authManager.isTokenFresh(req.token, STEP_UP_MAX_AGE_S)) {
         return res.status(403).json({ error: 'Re-authentication required for this section', challenge_required: true });
+      }
+      // Refuse to switch mandatory 2FA ON unless the admin doing it is already enrolled.
+      // Otherwise the save succeeds (the gate read `false` when the middleware ran) and the
+      // operator's very next step-up action — including editing this section back — is
+      // refused, leaving enrollment or the break-glass CLI as the only ways out. Making the
+      // requirement satisfiable at the moment it's imposed avoids that entirely.
+      if (req.params.section === 'access' &&
+          String((req.body || {}).require_admin_totp) === 'true' &&
+          !authManager.isTotpEnabled(req.user.user_id)) {
+        return res.status(400).json({
+          error: 'Set up 2FA on your own account first — otherwise enabling this would immediately block your own admin actions.',
+          totp_enrollment_required: true
+        });
       }
       const updated = poolSettings.updateSection(req.params.section, req.body, req.user.user_id);
       res.json({ success: true, section: req.params.section, data: updated });

@@ -436,13 +436,22 @@ function auditOwnerProof(db, { action, grinAddress, ip, ok, details }) {
 // leave those on disk until they aged out of retention. Rewrite them in place.
 // Synchronous (no KDF — this is truncation, not hashing) and fast enough to run inline.
 // Idempotent: already-coarsened values contain '/' and are excluded by the WHERE clause.
-// Admin rows (admin_id NOT NULL) are deliberately untouched — the operator's own login
-// origin is operator data, and full precision is what makes it useful.
+//
+// Scoped by target_type = 'miner' — the rows auditOwnerProof writes — NOT by
+// `admin_id IS NULL`. That was the original test and it was wrong: a FAILED admin login also
+// has admin_id NULL (a bad username has no user row to attribute to), so the migration was
+// silently truncating exactly the auth rows an operator needs at full precision, one restart
+// after they were written. Two different reasons those rows must keep the host address:
+//   * there is no miner identity in an auth row, so there is no (address, IP) linkage to
+//     break — the whole point of coarsening miner rows;
+//   * the operator's response to a brute-force attempt is to blackhole the source, and you
+//     cannot ufw-deny a /24 you were handed instead of the address that attacked you.
+// Auth-row IPs are operator security data. Miner rows stay coarsened.
 function migrateAuditLogIps(db) {
   try {
     const rows = db.prepare(
       `SELECT id, ip FROM admin_audit_log
-       WHERE admin_id IS NULL AND ip IS NOT NULL AND ip <> '' AND ip NOT LIKE '%/%'`
+       WHERE target_type = 'miner' AND ip IS NOT NULL AND ip <> '' AND ip NOT LIKE '%/%'`
     ).all();
     if (rows.length === 0) return 0;
     const upd = db.prepare('UPDATE admin_audit_log SET ip = ? WHERE id = ?');

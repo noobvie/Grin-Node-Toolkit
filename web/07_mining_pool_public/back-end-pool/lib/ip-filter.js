@@ -128,6 +128,31 @@ class IpFilter {
   }
 
   /**
+   * Active temporary auto-bans, for the admin Login Security panel. Prunes expired entries
+   * as it goes so the panel never shows a ban that isBlocked() would already ignore.
+   */
+  getTempBans() {
+    const now = Date.now();
+    const out = [];
+    for (const [ip, exp] of this.tempBans) {
+      if (exp <= now) { this.tempBans.delete(ip); continue; }
+      out.push({ ip, expires_at: Math.floor(exp / 1000), seconds_remaining: Math.round((exp - now) / 1000) });
+    }
+    return out.sort((a, b) => b.expires_at - a.expires_at);
+  }
+
+  /**
+   * Lift a temporary auto-ban early (operator locked themselves out, or a false positive).
+   * Returns true if a ban was actually present.
+   */
+  clearTempBan(ipStr) {
+    const ip = String(ipStr).replace('::ffff:', '');
+    const had = this.tempBans.delete(ip);
+    if (had) this.log(`Temp-ban cleared for ${ip}`);
+    return had;
+  }
+
+  /**
    * Parse allowlist entries (IPs and CIDRs)
    */
   parseAllowlist(entries) {

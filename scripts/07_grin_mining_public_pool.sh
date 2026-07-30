@@ -103,6 +103,11 @@ else
     POOL_LOG="/opt/grin/logs/grin-pool.log"
 fi
 
+# Break-glass admin recovery CLI. Network-suffixed like grin-pool-backup-<net>, because the
+# two networks have separate DBs and a single unsuffixed name would silently act on whichever
+# config happened to be found.
+POOL_ADMIN_RESET_BIN="/usr/local/bin/grin-pool-admin-reset-${POOL_NET}"
+
 # Human-readable network label for menu titles / headers / generated-file comments.
 # The dirs/ports/config/service above are ALL network-keyed already — this is purely
 # the display string so a testnet run never mislabels itself "Mainnet".
@@ -272,9 +277,17 @@ pool_ensure_defaults() {
         # config.js falls back to the per-network default if this key is absent, so an
         # existing pool.json keeps working; setting it explicitly is the reliable path.
         ["web_dir"]="$POOL_WEB_DIR"
-        ["fail2ban_maxretry"]="5"
-        ["fail2ban_findtime"]="600"
-        ["fail2ban_bantime"]="3600"
+        # fail2ban jail thresholds. 10 failed admin logins within 15 min → 10-day firewall
+        # ban. Values are SECONDS, not fail2ban's "10d" shorthand: pool_setup_fail2ban
+        # validates them with ^[0-9]+$ and silently falls back to the safe defaults on
+        # anything else, so a suffixed value would quietly become 1 hour.
+        # maxretry/findtime deliberately MATCH the app-layer auto-ban (index.js
+        # ADMIN_LOGIN_FAIL_THRESHOLD / _WINDOW_MS) so the two layers state one rule instead
+        # of the firewall firing at 5 while the app claims 10. Only the DURATION differs:
+        # this ban persists in the firewall, the app's is a 1 h in-memory cooldown.
+        ["fail2ban_maxretry"]="10"
+        ["fail2ban_findtime"]="900"
+        ["fail2ban_bantime"]="864000"
         # Admin panel access control: comma/space-separated IPs/CIDRs allowed to reach
         # /admin and /api/admin at the nginx layer. Empty = OPEN to all (testing default —
         # app-layer JWT + captcha + lockout + auto-ban + TOTP still apply). Set IPs/CIDRs
@@ -841,6 +854,10 @@ pool_deploy_code() {
         warn "Service unit still runs as root — re-run 1) Install once to apply the hardened grinpool unit."
     fi
 
+    # Refresh the break-glass recovery wrapper — the rsync above may have replaced
+    # scripts/admin-reset.js, and this must never be the stale copy on the day it's needed.
+    pool_admin_reset_install || true
+
     # Make the new backend live. Only restart if it's already running; a stopped
     # service is left stopped (the operator starts it via 6) Service control).
     if systemctl is-active --quiet "$POOL_SERVICE" 2>/dev/null; then
@@ -1360,14 +1377,25 @@ pool_setup_fail2ban() {
 
     # Thresholds are operator-tunable in grin_pubpool.json (seeded by pool_ensure_defaults).
     # Read them here and guard against non-numeric / blank edits so a typo can't produce a
-    # broken jail file — fall back to the safe 5 / 10 min / 1 h defaults.
+    # broken jail file — falling back to the 10 / 15 min / 10 d defaults.
+    #
+    # ONE set of defaults, used for both "key absent from grin_pubpool.json" and "key present
+    # but not a plain integer". They previously differed (5 / 600 / 3600 vs 10 / 900 / 864000):
+    # pool_ensure_defaults only seeds keys from pool_install / pool_configure, so an operator
+    # who upgraded the toolkit and ran ONLY this menu step got the old 5-in-10-min policy while
+    # every comment and the settings screen claimed 10-in-15-min. Silent, and invisible on the
+    # written jail file unless you knew the intended numbers.
     local maxretry findtime bantime
-    maxretry=$(pool_read_conf "fail2ban_maxretry" "5")
-    findtime=$(pool_read_conf "fail2ban_findtime" "600")
-    bantime=$(pool_read_conf  "fail2ban_bantime"  "3600")
-    [[ "$maxretry" =~ ^[0-9]+$ ]] || maxretry=5
-    [[ "$findtime" =~ ^[0-9]+$ ]] || findtime=600
-    [[ "$bantime"  =~ ^[0-9]+$ ]] || bantime=3600
+    maxretry=$(pool_read_conf "fail2ban_maxretry" "10")
+    findtime=$(pool_read_conf "fail2ban_findtime" "900")
+    bantime=$(pool_read_conf  "fail2ban_bantime"  "864000")
+    [[ "$maxretry" =~ ^[0-9]+$ ]] && (( maxretry >= 1 )) || maxretry=10
+    [[ "$findtime" =~ ^[0-9]+$ ]] && (( findtime >= 60 )) || findtime=900
+    # Floor the ban at 60 s. `^[0-9]+$` accepts "0", and fail2ban reads bantime = 0 as a
+    # PERMANENT ban — which the dbpurgeage arithmetic below would then set to 2 days, quietly
+    # turning "forever" into 48 h. A permanent ban is not reachable through this conf anyway
+    # (fail2ban spells it -1, which the regex rejects), so treat 0 as the typo it is.
+    [[ "$bantime"  =~ ^[0-9]+$ ]] && (( bantime  >= 60 )) || bantime=864000
 
     # 1) Ensure fail2ban is present.
     if ! command -v fail2ban-client &>/dev/null; then
@@ -1396,7 +1424,7 @@ ignoreregex =
 EOF
     success "Filter written: $filter"
 
-    # 3) Jail — 5 failed logins within 10 min → 1 h ban. Lives under jail.d/ so it never
+    # 3) Jail — 10 failed logins within 15 min → 10-day ban (defaults). Lives under jail.d/ so it never
     #    clobbers an operator jail.local; banaction is inherited from the distro [DEFAULT]
     #    (iptables/nftables/firewalld) for portability. Loopback is never banned so the
     #    local nginx proxy hop and on-box health checks stay unaffected.
@@ -1413,6 +1441,24 @@ bantime  = $bantime
 ignoreip = 127.0.0.1/8 ::1
 EOF
     success "Jail written: $jail"
+
+    # 3b) Ban persistence. fail2ban forgets bans older than `dbpurgeage` (Debian default
+    #     1 day) whenever the fail2ban service restarts — so with a multi-day bantime the
+    #     ban silently evaporates on the next package upgrade or reboot. Raise it past the
+    #     bantime (+2 days of slack) so a long ban is actually served.
+    #     Written as a fail2ban.d/ drop-in, mirroring the jail.d/ pattern above: editing
+    #     fail2ban.conf gets clobbered by package upgrades, and appending to a shared
+    #     fail2ban.local risks landing the key in the wrong [section].
+    local purge_conf="/etc/fail2ban/fail2ban.d/grin-pool-dbpurgeage.conf"
+    local dbpurgeage=$(( bantime + 172800 ))
+    mkdir -p /etc/fail2ban/fail2ban.d
+    cat > "$purge_conf" << EOF
+# Auto-generated by Script 07. Keeps banned IPs in fail2ban's DB at least as long as the
+# grin-pool-login bantime ($bantime s), so bans survive a fail2ban restart.
+[Definition]
+dbpurgeage = $dbpurgeage
+EOF
+    success "Ban persistence: dbpurgeage = ${dbpurgeage}s ($purge_conf)"
 
     # 4) The log must exist or the jail won't start. nginx creates it on first request;
     #    pre-create it (root-owned, like nginx) so the jail starts cleanly right now.
@@ -1558,6 +1604,115 @@ let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{
             000|"") warn "No response — is the service running? Check 6) Service control and 8) Pool status." ;;
         esac
     fi
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# A) ADMIN RECOVERY — break-glass access restore (root, on-box only)
+# ═══════════════════════════════════════════════════════════════════════════════
+# Installs and drives back-end-pool/scripts/admin-reset.js. The web login can lock the
+# operator out of their OWN pool in ways the panel cannot fix from inside:
+#   * authenticator lost AND the 10 one-time recovery codes gone  → no 2FA path back
+#   * forgotten admin password                                    → no password path back
+# Before this existed the only route was hand-writing UPDATE statements against a live
+# pool.db during an outage, with no audit trail. It is also the prerequisite for turning on
+# access.require_admin_totp (mandatory 2FA): compulsory 2FA with no recovery path means one
+# lost phone can stop miner payouts indefinitely.
+#
+# NOT a backdoor, and must never become one: it needs a root shell on this box, and root can
+# already read pool.db / mint a token from jwt_secret. Never expose this over HTTP.
+
+pool_admin_reset_install() {
+    local src="$POOL_APP_DIR/scripts/admin-reset.js"
+    if [[ ! -f "$src" ]]; then
+        warn "admin-reset.js not found at $src — run 3) Deploy web files (or 9) Deploy new code) first."
+        return 1
+    fi
+
+    # Wrapper, not a symlink: it pins GRIN_POOL_CONF for this network and runs node from
+    # $POOL_APP_DIR so require() resolves node_modules (better-sqlite3 is a native module
+    # built in place — it cannot be loaded from an arbitrary cwd).
+    cat > "$POOL_ADMIN_RESET_BIN" <<EOF
+#!/bin/bash
+# grin-node-toolkit Script 07 — break-glass admin recovery for the ${POOL_NET} public pool.
+# Generated by pool_admin_reset_install(); edit the script, not this wrapper.
+set -euo pipefail
+export GRIN_POOL_CONF="$POOL_CONF"
+cd "$POOL_APP_DIR"
+exec node "$POOL_APP_DIR/scripts/admin-reset.js" "\$@"
+EOF
+    chmod 750 "$POOL_ADMIN_RESET_BIN"
+    chown root:root "$POOL_ADMIN_RESET_BIN" 2>/dev/null || true
+    success "Installed $POOL_ADMIN_RESET_BIN"
+    return 0
+}
+
+# Interactive front-end so the operator doesn't have to remember flag names during an
+# incident. Each option shells out to the CLI, which does the DB work and the audit row.
+pool_admin_recovery_menu() {
+    while true; do
+        clear
+        echo -e "\n${BOLD}Admin Recovery — ${POOL_NET_LABEL}${RESET}  ${DIM}(break-glass: root, on this box only)${RESET}\n"
+
+        if [[ -x "$POOL_ADMIN_RESET_BIN" ]]; then
+            echo -e "  CLI: ${GREEN}$POOL_ADMIN_RESET_BIN${RESET}"
+        else
+            echo -e "  CLI: ${YELLOW}not installed${RESET} ${DIM}(pick I to install)${RESET}"
+        fi
+        echo -e "  ${DIM}Use when the panel login can't be fixed from inside: lost authenticator with${RESET}"
+        echo -e "  ${DIM}the recovery codes gone, or a forgotten password. Every action is audited.${RESET}"
+        echo ""
+        echo -e "  ${GREEN}1${RESET}) List admin accounts   ${DIM}(2FA state, unused recovery codes, failed logins)${RESET}"
+        echo -e "  ${GREEN}2${RESET}) Clear 2FA             ${DIM}(lost authenticator AND codes → password-only login)${RESET}"
+        echo -e "  ${GREEN}3${RESET}) Set a new password    ${DIM}(prompted; never on the command line)${RESET}"
+        echo -e "  ${GREEN}4${RESET}) New recovery codes    ${DIM}(10 fresh one-time codes; replaces the old set)${RESET}"
+        echo -e "  ${GREEN}5${RESET}) Clear failed-login counter / re-enable an account"
+        echo ""
+        echo -e "  ${GREEN}I${RESET}) (Re)install the CLI   ${DIM}(after a code deploy)${RESET}"
+        echo -e "  ${DIM}0) Back${RESET}"
+        echo ""
+        echo -ne "${BOLD}Select: ${RESET}"
+        read -r ar_choice
+
+        # Every branch is ||-guarded: a non-zero return must come back to this menu,
+        # not kill the script under set -e.
+        case "${ar_choice,,}" in
+            "")  continue ;;
+            i)   pool_admin_reset_install || true ;;
+            1)   _pool_admin_reset_run --list || true ;;
+            2)   _pool_admin_reset_user_action --clear-2fa || true ;;
+            3)   _pool_admin_reset_user_action --set-password || true ;;
+            4)   _pool_admin_reset_user_action --new-recovery-codes || true ;;
+            5)   _pool_admin_reset_user_action --unlock || true ;;
+            0|q) break ;;
+            *)   warn "Invalid option." ; sleep 1 ; continue ;;
+        esac
+
+        echo ""; echo "Press Enter to continue..."; read -r
+    done
+}
+
+# Run the CLI, self-installing on first use so the operator isn't told "not installed"
+# at the exact moment they need it.
+_pool_admin_reset_run() {
+    if [[ ! -x "$POOL_ADMIN_RESET_BIN" ]]; then
+        info "Installing the recovery CLI first..."
+        pool_admin_reset_install || return 1
+    fi
+    echo ""
+    "$POOL_ADMIN_RESET_BIN" "$@"
+}
+
+# Prompt for the target username, then run a single-account action.
+_pool_admin_reset_user_action() {
+    local action="$1"
+    echo ""
+    echo -ne "Username (blank to cancel): "
+    read -r ar_user
+    if [[ -z "$ar_user" ]]; then
+        info "Cancelled."
+        return 0
+    fi
+    _pool_admin_reset_run --user "$ar_user" "$action"
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -2364,6 +2519,7 @@ show_menu() {
     echo -e "${DIM}  ─── Administration ───────────────────────────────${RESET}"
     echo -e "  ${GREEN}8${RESET}) Pool status           ${DIM}(service, port, DB, recent logs)${RESET}"
     echo -e "  ${GREEN}9${RESET}) Deploy new code       ${DIM}(refresh js/html/media from checkout + restart)${RESET}"
+    echo -e "  ${GREEN}A${RESET}) Admin recovery        ${DIM}(locked out: clear 2FA / reset password — break-glass)${RESET}"
     echo -e "  ${GREEN}W${RESET}) Multi-region          ${DIM}(WireGuard server + add regional gateways)${RESET}"
     echo -e "  ${GREEN}B${RESET}) Backup & Restore      ${DIM}(encrypted: DB + wallet + WG identity · offsite push)${RESET}"
     echo -e "  ${GREEN}C${RESET}) Cron tasks            ${DIM}(backup schedule, VACUUM)${RESET}"
@@ -2397,6 +2553,7 @@ pool_singlebox_loop() {
             7)     pool_setup_admin || true ;;
             8)     pool_show_status || true ;;
             9)     pool_deploy_code || true ;;
+            a)     pool_admin_recovery_menu || true ;;
             w)     pool_wireguard_menu || true ;;
             b)     pool_backup_menu || true ;;
             c)     pool_cron_schedules || true ;;
@@ -2413,7 +2570,7 @@ pool_singlebox_loop() {
         # 0) Back. Without this, picking 0 inside a submenu would trigger a second,
         # redundant "Press Enter" here even though nothing new was shown.
         case "${choice,,}" in
-            l|s|5|6|b|c|w) ;;
+            l|s|5|6|a|b|c|w) ;;
             *) echo ""; echo "Press Enter to continue..."; read -r ;;
         esac
     done
@@ -2466,6 +2623,7 @@ pool_cleanup() {
     local backup_dir="/opt/grin/backups/${POOL_SERVICE}"
     local f2b_filter="/etc/fail2ban/filter.d/grin-pool-login.conf"
     local f2b_jail="/etc/fail2ban/jail.d/grin-pool.conf"
+    local f2b_purge="/etc/fail2ban/fail2ban.d/grin-pool-dbpurgeage.conf"
 
     echo -e "${BOLD}${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
     echo -e "${BOLD}${RED}  Clean Up Public Mining Pool${RESET}  ${DIM}(rebuild from scratch quickly)${RESET}"
@@ -2595,7 +2753,7 @@ pool_cleanup() {
     echo -ne "${BOLD}5)${RESET} Remove cron + logrotate + wrapper + stop wallet listeners? [Y/n]: "
     read -r a || true
     if [[ "${a,,}" != "n" ]]; then
-        rm -f "$cron_backup" "$cron_vacuum" "$backup_wrapper" "$logrotate_conf"
+        rm -f "$cron_backup" "$cron_vacuum" "$backup_wrapper" "$logrotate_conf" "$POOL_ADMIN_RESET_BIN"
         # De-root artifacts (§13.9): scoped sudoers + pairing helper — but ONLY
         # when the other network's pool isn't still installed on this box (both
         # nets share the helper + sudoers). The grinpool user itself is kept.
@@ -2609,7 +2767,7 @@ pool_cleanup() {
         pw_autostart_disable 2>/dev/null || true
         success "Cron + logrotate + wrapper + gwctl helper/sudoers removed; wallet listeners stopped, watchdog + autostart removed."
         info "Wallet seed dir ($(pw_wallet_dir)) kept — it holds the coinbase funds."
-        log "Cleanup: removed $cron_backup, $cron_vacuum, $backup_wrapper, $logrotate_conf, gwctl helper/sudoers + wallet listeners/watchdog/autostart"
+        log "Cleanup: removed $cron_backup, $cron_vacuum, $backup_wrapper, $logrotate_conf, $POOL_ADMIN_RESET_BIN, gwctl helper/sudoers + wallet listeners/watchdog/autostart"
     fi
     echo ""
 
@@ -2638,18 +2796,21 @@ pool_cleanup() {
     #    pool does: step 7 deletes the watched access log, and a jail with a missing
     #    logpath stops fail2ban from starting — taking every other jail down with it.
     #    fail2ban itself stays installed (other services may have their own jails).
-    if [[ -f "$f2b_jail" || -f "$f2b_filter" ]]; then
+    if [[ -f "$f2b_jail" || -f "$f2b_filter" || -f "$f2b_purge" ]]; then
         echo -ne "${BOLD}8)${RESET} Remove fail2ban login-guard jail + filter? [Y/n]: "
         read -r a || true
         if [[ "${a,,}" != "n" ]]; then
-            rm -f "$f2b_jail" "$f2b_filter"
+            # Also drops the dbpurgeage override — it only exists to serve this jail's
+            # long bantime, and leaving it behind silently changes ban retention for
+            # every OTHER jail on the box.
+            rm -f "$f2b_jail" "$f2b_filter" "$f2b_purge"
             if systemctl is-active --quiet fail2ban 2>/dev/null; then
                 systemctl restart fail2ban 2>/dev/null \
                     && success "fail2ban restarted without the pool jail." \
                     || warn "fail2ban restart failed — inspect: journalctl -u fail2ban -n 30"
             fi
             success "Fail2ban jail + filter removed."
-            log "Cleanup: removed $f2b_jail + $f2b_filter"
+            log "Cleanup: removed $f2b_jail + $f2b_filter + $f2b_purge"
         fi
         echo ""
     fi

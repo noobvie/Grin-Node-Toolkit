@@ -122,8 +122,14 @@ async function computeReconciliation(db, wallet, forceRefresh = true) {
     `${PRIZE_CASES('total_amount')} FROM balance_log_daily WHERE grin_address='prize_pool' AND day < ?`,
     []
   );
-  const feeBalance = db.prepare(`SELECT COALESCE(balance,0) AS b FROM miner_accounts WHERE grin_address='pool_fee'`).get().b;
-  const prizeBalance = db.prepare(`SELECT COALESCE(balance,0) AS b FROM miner_accounts WHERE grin_address='prize_pool'`).get().b;
+  // SUM(), not a bare column: the operator pseudo-accounts are created lazily (first fee cut /
+  // first prize credit), so on a fresh pool the row does NOT exist yet and `.get()` returns
+  // undefined — COALESCE only covers a NULL column, never a missing ROW. Dereferencing that
+  // threw inside computeReconciliation, and AlertMonitor swallowed it as "Money reconciliation
+  // failed", so the invariant guarding the money silently never ran on a new install. An
+  // aggregate with no GROUP BY always yields exactly one row, matching `minerSpendable` above.
+  const feeBalance = db.prepare(`SELECT COALESCE(SUM(balance),0) AS b FROM miner_accounts WHERE grin_address='pool_fee'`).get().b;
+  const prizeBalance = db.prepare(`SELECT COALESCE(SUM(balance),0) AS b FROM miner_accounts WHERE grin_address='prize_pool'`).get().b;
 
   // Immature block rewards — found but not yet matured/distributed, so NOT in `owed` yet.
   const immatureBlocks = db.prepare(

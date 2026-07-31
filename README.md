@@ -409,4 +409,10 @@ If you find bugs or want to contribute, open an issue or pull request on GitHub.
 
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE). Free to use, modify and redistribute, including
+commercially. The software is provided **as is, without warranty of any kind**.
+
+Bundled third-party libraries keep their own licenses: Chart.js and qrcodejs
+(MIT), Quill (BSD-3-Clause), and the Twemoji country-flag webfont (font code
+MIT, flag artwork [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/) by
+Twitter, Inc. and other contributors).

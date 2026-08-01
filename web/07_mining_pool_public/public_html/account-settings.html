@@ -123,6 +123,13 @@
 
     /* single withdraw column (per-account threshold retired 2026-07-17) */
     .withdraw-col { max-width: 560px; }
+    /* h4 = one destination card inside the "Payout destinations" h3. Needs an explicit rule:
+       an unstyled h4 renders bolder and LARGER than the 11px dim-mono h3 above it, which
+       reads as the outer heading being the subordinate one. */
+    .withdraw-col h4 {
+      font-family: var(--mono); font-size: 12px; font-weight: 700; letter-spacing: .08em;
+      color: var(--text); margin: 0 0 8px;
+    }
     .withdraw-col h3 {
       font-family: var(--mono); font-size: 11px; font-weight: 700; letter-spacing: .16em;
       text-transform: uppercase; color: var(--text-dim); margin: 0 0 12px;
@@ -456,9 +463,12 @@
                                         &middot; you receive <b><span id="acct-net-val">—</span> ツ</b>
                                     </p>
                                 </div>
+                                <!-- Radio ⇄ pane visibility is driven by the rail registry (js/payout-methods.js),
+                                     not by hardcoded ids in this page. Each rail owns one label + one pane. -->
                                 <div class="radio-row" role="radiogroup" aria-label="Payout method">
-                                    <label><input type="radio" name="acct-pay-method" id="acct-pay-tor" value="tor" checked> Tor</label>
-                                    <label><input type="radio" name="acct-pay-method" id="acct-pay-slatepack" value="slatepack"> Slatepack (manual)</label>
+                                    <label id="acct-pay-tor-label"><input type="radio" name="acct-pay-method" id="acct-pay-tor" value="tor" checked> Tor</label>
+                                    <label id="acct-pay-slatepack-label"><input type="radio" name="acct-pay-method" id="acct-pay-slatepack" value="slatepack"> Slatepack (manual)</label>
+                                    <!-- GOBLIN RAIL (1/3) — remove with js/payout-goblin.js -->
                                     <label id="acct-pay-nostr-label" style="display:none;"><input type="radio" name="acct-pay-method" id="acct-pay-nostr" value="nostr"> Goblin (Nostr)</label>
                                 </div>
 
@@ -492,32 +502,21 @@
                                     </div>
                                 </div>
 
-                                <!-- Goblin / Nostr method (third-party rail — needs a registered, cooled-down destination) -->
+                                <!-- GOBLIN RAIL (2/3) — payout pane. The ACTION only; registering the
+                                     destination it pays lives in "Payout destinations" below, because a
+                                     destination is long-lived config with its own cooldown, not part of
+                                     requesting one payout. Remove with js/payout-goblin.js -->
                                 <div id="acct-pay-nostr-pane" style="display:none;">
                                     <p class="note" style="margin-bottom:12px">
-                                        Delivers the payout straight into your <b>Goblin wallet</b> over Nostr — no Tor listener, no copy/paste.
-                                        Because this rail pays a <b>username</b> (not this address's own wallet), you must register the destination
-                                        once and wait out a short security window before the first payout. This gives you time to notice and undo a
-                                        hijack: if someone who guessed your gate registers their own Goblin name, re-registering yours resets the clock
-                                        and evicts theirs.
+                                        Delivers the payout straight into your <b>Goblin wallet</b> over Nostr — no Tor listener,
+                                        no copy/paste. It pays the destination you registered under
+                                        <!-- The anchor can never dangle: this pane and #acct-destinations are shown and
+                                             hidden by the same rail-enabled flag, so if you can read this, it exists. -->
+                                        <a href="#acct-destinations">Payout destinations</a> below.
                                     </p>
-
                                     <div id="acct-nostr-state" class="note" style="margin-bottom:12px;font-family:var(--mono);">—</div>
-
-                                    <div class="form-group">
-                                        <label for="acct-nostr-username">Goblin username (<code>name@goblin.st</code> or an <code>npub…</code>)</label>
-                                        <input type="text" id="acct-nostr-username" placeholder="e.g. alice@goblin.st or npub1…" autocomplete="off" spellcheck="false">
-                                    </div>
-                                    <div class="btn-row" style="display:flex;gap:8px;flex-wrap:wrap;">
-                                        <button class="btn-save" id="acct-nostr-register">Register / Replace Destination</button>
-                                        <button class="btn-save" id="acct-nostr-remove" style="display:none;background:transparent;border:1px solid var(--line);">Remove</button>
-                                    </div>
-                                    <div class="acct-msg" id="acct-nostr-reg-msg"></div>
-
-                                    <div style="margin-top:14px;border-top:1px dashed var(--line);padding-top:14px;">
-                                        <button class="btn-save" id="acct-nostr-send" disabled>Send to my Goblin wallet</button>
-                                        <div class="acct-msg" id="acct-nostr-send-msg"></div>
-                                    </div>
+                                    <button class="btn-save" id="acct-nostr-send" disabled>Send to my Goblin wallet</button>
+                                    <div class="acct-msg" id="acct-nostr-send-msg"></div>
                                 </div>
                             </div>
 
@@ -540,6 +539,67 @@
                                 (a payout that looks failed can still land), and after one is returned a short
                                 cooldown applies before your next request on any method.
                             </p>
+
+                            <!-- ═══ PAYOUT DESTINATIONS ═══════════════════════════════════════════
+                                 Only rails that pay somewhere OTHER than this address's own wallet appear
+                                 here. Tor pays this address's wallet and a slatepack is encrypted to this
+                                 address — neither can send money elsewhere, so neither has anything to
+                                 register. The whole section stays hidden unless such a rail is enabled, so
+                                 a pool running only Tor + Slatepack never sees this heading.
+                                 Visibility is registry-driven (js/payout-methods.js applySummary). -->
+                            <div id="acct-destinations" style="display:none;margin-top:28px;border-top:1px solid var(--line);padding-top:20px;">
+                                <h3>Payout destinations</h3>
+                                <p class="note" style="margin:0 0 14px;font-size:12.5px;color:var(--text-mute);">
+                                    A destination is a wallet you register <b>once</b> and then pay to repeatedly.
+                                    Because registering one decides <b>where your money goes</b>, each new destination
+                                    sits in a security cooldown before its first payout — that window is your chance
+                                    to notice and undo an unwanted change. Your other payout methods keep working
+                                    normally throughout.
+                                </p>
+
+                                <!-- GOBLIN RAIL (3/3) — destination card. Remove with js/payout-goblin.js -->
+                                <div id="acct-dest-goblin" style="display:none;">
+                                    <h4>Goblin (Nostr)</h4>
+                                    <p class="note" style="margin:0 0 12px;">
+                                        Enter the Goblin username your wallet answers to. Re-registering replaces the
+                                        current destination and restarts the cooldown — so if someone who guessed your
+                                        ownership proof registered their own name, registering yours evicts theirs
+                                        before it can ever go active.
+                                    </p>
+                                    <p class="note" style="margin:0 0 12px;">
+                                        <b>This one action needs both proofs.</b> Tor and Slatepack can only ever pay
+                                        your own mining address, so proving ownership there moves nothing. A Goblin
+                                        username is a different address — so changing it asks for your mining IP
+                                        <em>and</em> your rig password, not either one.
+                                    </p>
+                                    <div class="form-group">
+                                        <label for="acct-nostr-username">Goblin username (<code>name@goblin.st</code> or an <code>npub…</code>)</label>
+                                        <input type="text" id="acct-nostr-username" placeholder="e.g. alice@goblin.st or npub1…" autocomplete="off" spellcheck="false">
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="acct-nostr-ip-proof">Proof 1 — a recent mining IP</label>
+                                        <input type="text" id="acct-nostr-ip-proof" placeholder="e.g. 203.0.113.42" autocomplete="off" spellcheck="false">
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="acct-nostr-pass-proof">Proof 2 — your rig's stratum password</label>
+                                        <input type="password" id="acct-nostr-pass-proof" placeholder="the password your miner logs in with" autocomplete="off">
+                                    </div>
+                                    <div class="btn-row" style="display:flex;gap:8px;flex-wrap:wrap;">
+                                        <button class="btn-save" id="acct-nostr-register">Register / Replace Destination</button>
+                                        <button class="btn-save" id="acct-nostr-remove" style="display:none;background:transparent;border:1px solid var(--line);">Remove</button>
+                                    </div>
+                                    <!-- Shown only when the server refuses an unconfirmed replacement (409). The
+                                         server holds the real gate; this panel just shows what is being replaced. -->
+                                    <div id="acct-nostr-confirm" style="display:none;margin-top:12px;padding:12px;border:1px solid var(--line);border-radius:6px;">
+                                        <div id="acct-nostr-confirm-text" style="margin-bottom:10px;"></div>
+                                        <div class="btn-row" style="display:flex;gap:8px;flex-wrap:wrap;">
+                                            <button class="btn-save" id="acct-nostr-confirm-yes">Yes, replace it</button>
+                                            <button class="btn-save" id="acct-nostr-confirm-no" style="background:transparent;border:1px solid var(--line);">Cancel</button>
+                                        </div>
+                                    </div>
+                                    <div class="acct-msg" id="acct-nostr-reg-msg"></div>
+                                </div>
+                            </div>
                         </div>
                     </div>
 
@@ -663,6 +723,12 @@
     <script src="/js/auth.js"></script>
     <script src="/js/vendor/chart.umd.min.js"></script>
     <script src="/js/charts-init.js"></script>
+    <!-- Payout-rail registry, then one file per self-contained rail. Load order matters:
+         a rail registers itself at parse time, so the registry must exist first, and both
+         must run before the page script below reads the registry. Deleting a rail's script
+         tag removes the rail — nothing in the page script names it. -->
+    <script src="/js/payout-methods.js"></script>
+    <script src="/js/payout-goblin.js"></script>
     <script>
         // Theme switching is handled site-wide by /js/public-theme.js.
         //
@@ -692,7 +758,6 @@
         let currentAddr = '';
         let isDemo = false;
         let acctRange = 'day';
-        let acctSummary = null;   // last /api/account summary (nostr send re-reads destination state)
         let acctWithdrawalFee = 0;    // flat withdrawal fee (GRIN) from the summary; 0 = pool absorbs it
         const ledger = { in: { page: 0, total: 0 }, out: { page: 0, total: 0 } };
         const wd = { page: 0, total: 0 };   // withdrawal-history pager (P-08)
@@ -883,8 +948,9 @@
 
             renderPasswordProof(a.password_proof);
 
-            acctSummary = a;
-            renderNostr(a, canWithdraw);
+            // Hands the summary to every registered rail: each one toggles its own radio +
+            // destination card and renders its own state. Adding a rail needs no edit here.
+            PayoutMethods.applySummary(a, { canWithdraw: canWithdraw });
             renderPending(a.pending_withdrawal);
             renderDormancy(a.dormancy);
         }
@@ -996,43 +1062,34 @@
             // active / idle (policy off) / no_balance → no notice.
         }
 
-        // ── Goblin/Nostr destination state (only when the pool enabled the rail) ──
-        function renderNostr(a, canWithdraw) {
-            const on = !!a.nostr_payouts_enabled;
-            $id('acct-pay-nostr-label').style.display = on ? '' : 'none';
-            if (!on) {
-                // Rail disabled — if it was the selected method, fall back to Tor.
-                if ($id('acct-pay-nostr').checked) { $id('acct-pay-tor').checked = true; syncPayMethod(); }
-                return;
-            }
-            const d = a.nostr_destination;
-            const stateEl = $id('acct-nostr-state');
-            const removeBtn = $id('acct-nostr-remove');
-            const sendBtn = $id('acct-nostr-send');
-            if (!d) {
-                stateEl.textContent = 'No Goblin destination registered yet.';
-                removeBtn.style.display = 'none';
-                sendBtn.disabled = true;
-                return;
-            }
-            removeBtn.style.display = '';
-            if (d.active) {
-                stateEl.innerHTML = '✅ Active destination: <b>' + escHtml(d.username) + '</b>';
-                sendBtn.disabled = !canWithdraw;
-            } else {
-                stateEl.innerHTML = '⏳ <b>' + escHtml(d.username) + '</b> — in security cooldown, active at '
-                    + fmtWhen(d.active_at) + '. You can still use Tor or Slatepack meanwhile.';
-                sendBtn.disabled = true;
-            }
-        }
+        // ── Built-in payout rails ─────────────────────────────────────────
+        // Tor and Slatepack ship with every pool and pay only this address's own wallet, so
+        // they carry no destination card and no enablement flag. Third-party rails live in
+        // their own file under js/ and register themselves the same way (see payout-goblin.js).
+        PayoutMethods.register({
+            key: 'tor',
+            label: 'Tor',
+            radio: 'acct-pay-tor',
+            radioLabel: 'acct-pay-tor-label',
+            pane: 'acct-pay-tor-pane',
+            // The default rail, and the one selected if the chosen rail becomes unavailable.
+            // Tor qualifies because it has no isEnabled — it ships with every pool and pays
+            // only this address's own wallet, so it can never be switched off underneath us.
+            fallback: true,
+            statuses: { tor_checking: 'sending (Tor)', tor_sending: 'sending (Tor)', tor_failed: 'failed' },
+            pendingStatuses: { tor_checking: 'sending over Tor now…', tor_sending: 'sending over Tor now…' }
+        });
+        PayoutMethods.register({
+            key: 'slatepack',
+            label: 'Slatepack',
+            radio: 'acct-pay-slatepack',
+            radioLabel: 'acct-pay-slatepack-label',
+            pane: 'acct-pay-slatepack-pane',
+            statuses: { slatepack_pending: 'awaiting response', slatepack_failed: 'failed' },
+            pendingStatuses: { slatepack_pending: 'awaiting your response slatepack' }
+        });
 
         // ── Pending payout strip (one-pending-per-address slot) ────────────
-        const PENDING_LABEL = {
-            tor_checking: 'sending over Tor now…',
-            tor_sending: 'sending over Tor now…',
-            retry_scheduled: 'wallet unreachable — parked for retry',
-            slatepack_pending: 'awaiting your response slatepack'
-        };
         function renderPending(p) {
             const strip = $id('acct-pending-strip');
             if (!p) {
@@ -1040,8 +1097,8 @@
                 $id('pl-pending').textContent = 'none';
                 return;
             }
-            let label = PENDING_LABEL[p.status] || p.status;
-            if (p.status === 'slatepack_pending' && p.method === 'nostr') label = 'sent to your Goblin wallet — awaiting auto-finalize';
+            // Rail-specific wording comes from the registry — this page holds no method names.
+            let label = PayoutMethods.pendingLabel(p);
             let text = 'Pending payout #' + p.id + ' · ' + fmtGrin(p.amount) + ' · ' + (p.method || 'tor')
                      + ' — ' + label;
             if (p.status === 'retry_scheduled' && p.next_retry_at) text += ' · next attempt ' + fmtWhen(p.next_retry_at);
@@ -1299,13 +1356,9 @@
         }
 
         // ── Withdrawal history (P-08) — payouts only, from the withdrawals table (kept forever) ──
-        const WD_METHOD = { tor: 'Tor', slatepack: 'Slatepack', nostr: 'Goblin (Nostr)' };
-        const WD_STATUS = {
-            confirmed: 'paid ✓', tor_checking: 'sending (Tor)', tor_sending: 'sending (Tor)',
-            retry_scheduled: 'retrying', slatepack_pending: 'awaiting response',
-            nostr_sending: 'sending (Nostr)', cancelled: 'cancelled',
-            tor_failed: 'failed', slatepack_failed: 'failed', nostr_failed: 'failed', expired: 'expired'
-        };
+        // Method and status wording both come from the rail registry. History rows are kept
+        // forever, so rows from a rail the pool has since removed still render — the registry
+        // falls back to the stored method/status string rather than showing "undefined".
         function renderWithdrawals(rows, total) {
             const tbody = $id('log-wd');
             wd.total = total || 0;
@@ -1320,8 +1373,8 @@
                 const tr = document.createElement('tr');
                 const cells = [
                     fmtShort(row.created_at),
-                    WD_METHOD[row.method] || row.method || '—',
-                    WD_STATUS[row.status] || row.status || '—',
+                    PayoutMethods.methodLabel(row.method),
+                    PayoutMethods.statusLabel(row),
                     '−' + Number(row.amount || 0).toFixed(4),
                     Number(row.fee || 0).toFixed(4),
                     row.confirmed_at ? fmtShort(row.confirmed_at) : '—'
@@ -1553,85 +1606,20 @@
             } catch (e) { setMsg(msg, 'Finalize failed: ' + e.message, false); }
         }
 
-        // ── Goblin/Nostr destination registration + send ──────────────────────
-        async function nostrRegister() {
-            if (!currentAddr) return;
-            const msg = $id('acct-nostr-reg-msg');
-            if (demoBlock(msg)) return;
-            const proof = getProof(msg);
-            if (!proof) return;
-            const username = $id('acct-nostr-username').value.trim();
-            if (!username) { setMsg(msg, 'Enter your Goblin username.', false); return; }
-            setMsg(msg, 'Resolving + registering…', true);
-            try {
-                const r = await fetch('/api/account/' + encodeURIComponent(currentAddr) + '/nostr-destination', {
-                    method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin',
-                    body: JSON.stringify({ username: username, proof: proof })
-                });
-                const json = await r.json().catch(() => null);
-                if (r.ok && json && json.success) {
-                    setMsg(msg, 'Registered ' + json.username + ' — active at ' + fmtWhen(json.active_at)
-                        + ' (a ' + json.cooldown_hours + 'h security cooldown). Payouts to it unlock then.', true);
-                    lookup();
-                } else {
-                    setMsg(msg, apiErr(json, 'Registration failed'), false);
-                }
-            } catch (e) { setMsg(msg, 'Registration failed: ' + e.message, false); }
-        }
-
-        async function nostrRemove() {
-            if (!currentAddr) return;
-            const msg = $id('acct-nostr-reg-msg');
-            if (demoBlock(msg)) return;
-            const proof = getProof(msg);
-            if (!proof) return;
-            setMsg(msg, 'Removing…', true);
-            try {
-                const r = await fetch('/api/account/' + encodeURIComponent(currentAddr) + '/nostr-destination', {
-                    method: 'DELETE', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin',
-                    body: JSON.stringify({ proof: proof })
-                });
-                const json = await r.json().catch(() => null);
-                if (r.ok && json && json.success) { setMsg(msg, 'Destination removed.', true); lookup(); }
-                else { setMsg(msg, apiErr(json, 'Remove failed'), false); }
-            } catch (e) { setMsg(msg, 'Remove failed: ' + e.message, false); }
-        }
-
-        async function nostrSend() {
-            if (!currentAddr) return;
-            const msg = $id('acct-nostr-send-msg');
-            if (demoBlock(msg)) return;
-            const proof = getProof(msg);
-            if (!proof) return;
-            const amount = amountValue(msg);
-            if (amount === null) return;
-            const btn = $id('acct-nostr-send');
-            btn.disabled = true;
-            setMsg(msg, 'Sending to your Goblin wallet over Nostr…', true);
-            try {
-                const r = await fetch('/api/account/' + encodeURIComponent(currentAddr) + '/withdraw', {
-                    method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin',
-                    body: JSON.stringify({ method: 'nostr', amount: amount, proof: proof })
-                });
-                const json = await r.json().catch(() => null);
-                if (r.ok && json && json.success) {
-                    setMsg(msg, 'Payout #' + json.withdrawal_id + ' sent — your Goblin wallet finalizes it automatically when it next comes online.', true);
-                    lookup();
-                } else {
-                    setMsg(msg, apiErr(json, 'Send failed'), false);
-                    btn.disabled = false;
-                }
-            } catch (e) { setMsg(msg, 'Send failed: ' + e.message, false); btn.disabled = false; }
-        }
-
-        // Only one payout method is shown at a time (radio-driven).
-        function syncPayMethod() {
-            const m = document.querySelector('input[name="acct-pay-method"]:checked');
-            const method = m ? m.value : 'tor';
-            $id('acct-pay-tor-pane').style.display = method === 'tor' ? '' : 'none';
-            $id('acct-pay-slatepack-pane').style.display = method === 'slatepack' ? '' : 'none';
-            $id('acct-pay-nostr-pane').style.display = method === 'nostr' ? '' : 'none';
-        }
+        // Payout-rail helpers handed to each registered rail module. This is the ENTIRE
+        // surface a rail file may use from this page — keeping it explicit is what makes a
+        // rail deletable without auditing the rest of the file for hidden coupling.
+        const PAYOUT_HOST = {
+            setMsg: setMsg,
+            escHtml: escHtml,
+            fmtWhen: fmtWhen,
+            getProof: getProof,
+            amountValue: amountValue,
+            demoBlock: demoBlock,
+            apiErr: apiErr,
+            addr: function () { return currentAddr; },
+            refresh: function () { lookup(); }
+        };
 
         // ── Demo dataset (address grin1demo…) — explore the page on any pool ──
         const DEMO = (function () {
@@ -1748,13 +1736,9 @@
                 if (this.dataset.v) $id('acct-amount').value = this.dataset.v;
                 renderNetPreview();
             });
-            $id('acct-pay-tor').addEventListener('change', syncPayMethod);
-            $id('acct-pay-slatepack').addEventListener('change', syncPayMethod);
-            $id('acct-pay-nostr').addEventListener('change', syncPayMethod);
-            $id('acct-nostr-register').addEventListener('click', nostrRegister);
-            $id('acct-nostr-remove').addEventListener('click', nostrRemove);
-            $id('acct-nostr-send').addEventListener('click', nostrSend);
-            syncPayMethod();
+            // Wires every registered rail's radio ⇄ pane and lets each rail attach its own
+            // listeners. Replaces the per-rail listener lines that used to live here.
+            PayoutMethods.init(PAYOUT_HOST);
 
             // Hashrate range toggle
             $id('acct-rangebar').addEventListener('click', function (e) {

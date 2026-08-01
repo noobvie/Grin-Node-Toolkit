@@ -3521,23 +3521,72 @@ function setupRoutes() {
   });
 
   // ─── Goblin/Nostr payout destination (design §15) ────────────────────────────
-  // Register/replace the Goblin username funds may be sent to over Nostr. Ownership-gated
-  // and rate-limited like every money action. This does NOT move funds — it stores the
-  // pinned destination and (re)starts the security cooldown. A payout on the nostr rail is
-  // refused until now - registered_at >= nostr_destination_cooldown_hours, giving the real
-  // owner (who watches their stats) the whole window to spot a hijack, re-register (which
-  // resets the clock and evicts the attacker) and rotate their rig password.
+  // Register/replace the Goblin username funds may be sent to over Nostr. This does NOT move
+  // funds — it stores the pinned destination and (re)starts the security cooldown.
+  //
+  // WHY THIS GATE IS STRICTER THAN A WITHDRAWAL. Tor pays the miner's OWN address and a
+  // slatepack is encrypted TO it, so passing the ownership gate on those rails buys an
+  // attacker nothing. Goblin pays a USERNAME — so this endpoint, not the withdraw endpoint,
+  // is where money can be redirected. It therefore demands BOTH proofs (mining IP AND rig
+  // password) where a withdrawal accepts either. The trade is deliberate: a miner with no
+  // usable rig password cannot use the Goblin rail until they set one and mine again.
+  //
+  // Three layers sit behind this, each doing a different job: the AND-gate raises the bar to
+  // get in; a DM to the PREVIOUS destination gives the real owner out-of-band detection; the
+  // cooldown gives them time to act on it (withdraw via Tor, which an attacker cannot touch).
+  const requireBothProofs = async (addr, body, reqIp, action) => {
+    const ipRaw = (body && (body.ip_proof || body.proof)) || '';
+    const passRaw = (body && body.password_proof) || '';
+    if (!ipRaw || !passRaw) {
+      return { ok: false, code: 400, error: 'Both your mining IP and your rig password are required to change a payout destination', reason: 'both_proofs_required' };
+    }
+    // Checked in order so a wrong IP costs one failed attempt, not two.
+    const ipProof = await verifyOwnerProof(db, addr, ipRaw, reqIp);
+    if (!ipProof.ok || ipProof.method !== 'ip') {
+      auditOwnerProof(db, { action, grinAddress: addr, ip: reqIp, ok: false, details: { reason: ipProof.reason || 'not_an_ip_match', leg: 'ip' } });
+      return { ok: false, code: 403, error: 'Mining IP proof failed', reason: ipProof.reason || 'ip_no_match' };
+    }
+    // method must be 'password' — submitting the password in BOTH fields must not pass.
+    const passProof = await verifyOwnerProof(db, addr, passRaw, reqIp);
+    if (!passProof.ok || passProof.method !== 'password') {
+      auditOwnerProof(db, { action, grinAddress: addr, ip: reqIp, ok: false, details: { reason: passProof.reason || 'not_a_password_match', leg: 'password' } });
+      return { ok: false, code: 403, error: 'Rig password proof failed', reason: passProof.reason || 'password_no_match' };
+    }
+    return { ok: true, method: 'ip+password' };
+  };
+
+  // Fire the change alert at the destination being REPLACED. Best-effort by contract
+  // (publishNotice never throws) — a relay outage must not block a legitimate change — but
+  // the outcome is always audited and returned, because an alert nobody received is not a
+  // control. Advice order matters: withdrawing via Tor moves the money beyond reach, whereas
+  // re-registering only evicts the attacker and leaves the balance sitting there.
+  const alertPreviousDestination = async (prevNpub, prevUsername, newUsername, addr, reqIp) => {
+    if (!prevNpub || !nostrBridge || !nostrBridge.isEnabled()) return null;
+    const text = newUsername
+      ? `Your Grin payout destination was CHANGED to "${newUsername}".\n\n`
+        + `If this was not you, act now:\n`
+        + `1. Withdraw your balance using Tor or Slatepack — those rails still work and can only pay your own mining address.\n`
+        + `2. Then re-register your Goblin destination to evict the change.\n\n`
+        + `Mining address: ${addr}`
+      : `Your Grin payout destination ("${prevUsername || 'previous'}") was REMOVED.\n\n`
+        + `If this was not you, withdraw your balance using Tor or Slatepack now — those rails `
+        + `still work and can only pay your own mining address.\n\nMining address: ${addr}`;
+    const sent = await nostrBridge.publishNotice(prevNpub, text, 'Grin pool: payout destination changed');
+    auditOwnerProof(db, {
+      action: 'nostr_destination_alert', grinAddress: addr, ip: reqIp, ok: !!sent.ok,
+      details: { prev_username: prevUsername || null, new_username: newUsername || null, error: sent.ok ? null : sent.error }
+    });
+    return sent;
+  };
+
   app.post('/api/account/:addr/nostr-destination', rateLimiter.middleware('withdraw'), async (req, res) => {
     try {
       const { addr } = req.params;
       const reqIp = normalizeIp(req.ip);
       if (!nostrBridge || !nostrBridge.isEnabled()) return res.status(503).json({ error: 'nostr payouts are not enabled on this pool' });
 
-      const proof = await verifyOwnerProof(db, addr, (req.body && (req.body.proof || req.body.ip_proof)) || '', reqIp);
-      if (!proof.ok) {
-        auditOwnerProof(db, { action: 'nostr_destination_register', grinAddress: addr, ip: reqIp, ok: false, details: { reason: proof.reason } });
-        return res.status(403).json({ error: 'Ownership proof failed', reason: proof.reason });
-      }
+      const proof = await requireBothProofs(addr, req.body, reqIp, 'nostr_destination_register');
+      if (!proof.ok) return res.status(proof.code).json({ error: proof.error, reason: proof.reason });
 
       const acct = db.prepare('SELECT grin_address FROM miner_accounts WHERE grin_address = ?').get(addr);
       if (!acct) return res.status(404).json({ error: 'Account not found' });
@@ -3546,14 +3595,48 @@ function setupRoutes() {
       try { resolved = await nostrBridge.resolveDestination((req.body && req.body.username) || ''); }
       catch (e) { return res.status(e.code && e.code < 600 ? e.code : 400).json({ error: e.message }); }
 
+      // Replacing an existing destination needs an explicit confirmation carrying the username
+      // being replaced. Enforced SERVER-side, not just in the UI: a client-side "are you sure"
+      // is skippable by anyone posting directly, and this step exists to catch a mistyped
+      // username sending real money to a stranger — irreversibly. Echoing `replacing` back
+      // means the confirmation the operator saw is the state the server actually holds.
+      const prev = db.prepare(
+        'SELECT nostr_username, nostr_npub, nostr_prev_username, nostr_prev_npub FROM miner_accounts WHERE grin_address = ?'
+      ).get(addr) || {};
+      if (prev.nostr_npub && prev.nostr_npub !== resolved.pubHex &&
+          String((req.body && req.body.confirm_replace) || '') !== String(prev.nostr_username)) {
+        return res.status(409).json({
+          error: `This replaces your current destination "${prev.nostr_username}" and restarts the security cooldown.`,
+          reason: 'confirm_replace_required',
+          replacing: prev.nostr_username,
+          replacing_with: resolved.username,
+        });
+      }
+
       const nowS = Math.floor(Date.now() / 1000);
+      // Carry the outgoing destination forward so a later REMOVE still has somewhere to send
+      // the alert. An unchanged re-registration (same npub, cooldown refresh) must not
+      // overwrite a genuine previous destination with itself.
+      const keepPrevUser = prev.nostr_npub && prev.nostr_npub !== resolved.pubHex
+        ? prev.nostr_username : (prev.nostr_prev_username || null);
+      const keepPrevNpub = prev.nostr_npub && prev.nostr_npub !== resolved.pubHex
+        ? prev.nostr_npub : (prev.nostr_prev_npub || null);
       db.prepare(
-        `UPDATE miner_accounts SET nostr_username = ?, nostr_npub = ?, nostr_registered_at = ?, updated_at = unixepoch()
+        `UPDATE miner_accounts SET nostr_username = ?, nostr_npub = ?, nostr_registered_at = ?,
+           nostr_prev_username = ?, nostr_prev_npub = ?, updated_at = unixepoch()
          WHERE grin_address = ?`
-      ).run(resolved.username, resolved.pubHex, nowS, addr);
+      ).run(resolved.username, resolved.pubHex, nowS, keepPrevUser, keepPrevNpub, addr);
 
       const cooldownH = config.nostr_destination_cooldown_hours !== undefined ? config.nostr_destination_cooldown_hours : 48;
-      auditOwnerProof(db, { action: 'nostr_destination_register', grinAddress: addr, ip: reqIp, ok: true, details: { username: resolved.username, proof_method: proof.method } });
+      auditOwnerProof(db, { action: 'nostr_destination_register', grinAddress: addr, ip: reqIp, ok: true, details: { username: resolved.username, replaced: prev.nostr_username || null, proof_method: proof.method } });
+
+      // Alert the destination we just displaced. Only when it actually changed — a cooldown
+      // refresh onto the same npub is not a security event and must not cry wolf.
+      let alert = null;
+      if (prev.nostr_npub && prev.nostr_npub !== resolved.pubHex) {
+        alert = await alertPreviousDestination(prev.nostr_npub, prev.nostr_username, resolved.username, addr, reqIp);
+      }
+
       res.json({
         success: true,
         username: resolved.username,
@@ -3561,6 +3644,9 @@ function setupRoutes() {
         registered_at: nowS,
         active_at: nowS + cooldownH * 3600,
         cooldown_hours: cooldownH,
+        replaced: prev.nostr_username || null,
+        // Surfaced so the miner learns the warning did not go out — never silently swallowed.
+        previous_notified: alert ? !!alert.ok : null,
       });
     } catch (err) {
       res.status(err.code && err.code >= 400 && err.code < 600 ? err.code : 500).json({ error: err.message });
@@ -3568,6 +3654,10 @@ function setupRoutes() {
   });
 
   // Remove the registered Goblin destination (ownership-gated). Clears the pin + cooldown.
+  // Single-proof (OR) on purpose: removal cannot redirect money, it only disables the rail.
+  // But it IS the bypass route for the change alert — remove, then register fresh, and there
+  // would be no previous destination left to warn. So removal alerts the destination it is
+  // clearing, and only clears nostr_prev_* once that alert has been attempted.
   app.delete('/api/account/:addr/nostr-destination', rateLimiter.middleware('withdraw'), async (req, res) => {
     try {
       const { addr } = req.params;
@@ -3577,12 +3667,18 @@ function setupRoutes() {
         auditOwnerProof(db, { action: 'nostr_destination_remove', grinAddress: addr, ip: reqIp, ok: false, details: { reason: proof.reason } });
         return res.status(403).json({ error: 'Ownership proof failed', reason: proof.reason });
       }
+      const prev = db.prepare(
+        'SELECT nostr_username, nostr_npub FROM miner_accounts WHERE grin_address = ?'
+      ).get(addr) || {};
       db.prepare(
-        `UPDATE miner_accounts SET nostr_username = NULL, nostr_npub = NULL, nostr_registered_at = NULL, updated_at = unixepoch()
+        `UPDATE miner_accounts SET nostr_username = NULL, nostr_npub = NULL, nostr_registered_at = NULL,
+           nostr_prev_username = NULL, nostr_prev_npub = NULL, updated_at = unixepoch()
          WHERE grin_address = ?`
       ).run(addr);
-      auditOwnerProof(db, { action: 'nostr_destination_remove', grinAddress: addr, ip: reqIp, ok: true, details: {} });
-      res.json({ success: true });
+      auditOwnerProof(db, { action: 'nostr_destination_remove', grinAddress: addr, ip: reqIp, ok: true, details: { removed: prev.nostr_username || null } });
+
+      const alert = await alertPreviousDestination(prev.nostr_npub, prev.nostr_username, null, addr, reqIp);
+      res.json({ success: true, removed: prev.nostr_username || null, previous_notified: alert ? !!alert.ok : null });
     } catch (err) {
       res.status(err.code && err.code >= 400 && err.code < 600 ? err.code : 500).json({ error: err.message });
     }
@@ -5598,14 +5694,73 @@ function setupRoutes() {
   });
 
   // Update one settings section
-  // High-risk settings sections (payout = fee/min-withdrawal/wallet; access = admin IP rules)
-  // require step-up auth; cosmetic sections (branding/seo/…) save with a normal admin session.
-  const STEP_UP_SETTINGS_SECTIONS = new Set(['payout', 'access']);
+  // High-risk sections require step-up auth; cosmetic ones (branding/seo/…) save with a normal
+  // admin session. A section is listed here when EVERY key in it is money- or access-critical:
+  //   payout      fees, min withdrawal, dormancy, the Goblin destination cooldown
+  //   access      admin IP rules, mandatory-2FA switch
+  //   incentives  every key sets an amount that auto-credits miner balances (jackpot, join
+  //               bonus, streak, lottery pots, the % of pool fee diverted to the prize pool)
+  //   database    retention windows that DELETE the money trail — balance_log_keep_days and
+  //               audit_log_keep_days prune the ledger and the admin audit log
+  const STEP_UP_SETTINGS_SECTIONS = new Set(['payout', 'access', 'incentives', 'database']);
+
+  // Individually critical keys that live in an otherwise cosmetic section. pool_info is mostly
+  // name/tagline/description, but it also carries the pool's cut and who may mine at all.
+  //
+  // Gate on a real VALUE CHANGE, not on the key being present: the settings form harvester
+  // posts EVERY field in the section on every save, so "the body mentions pool_fee_percent"
+  // is true even when the operator only edited the tagline — that would demand a TOTP code
+  // for cosmetic edits and train the operator to reflex-approve challenges.
+  const STEP_UP_SETTINGS_KEYS = new Set([
+    'pool_fee_percent',   // the pool's cut of every block
+    'address_whitelist',  // who is allowed to mine here
+    'max_miners',
+    'pool_visibility',
+  ]);
+
+  // Compare a submitted value against the stored one. Stored rows are TEXT while the form may
+  // send numbers, booleans or arrays, so compare by shape: numerically when both are numeric
+  // (1.0 vs '1.0'), canonical JSON when either side is a structure ([] vs '[]'), else trimmed
+  // strings. Ambiguity resolves to "changed" — a false positive costs one extra TOTP prompt,
+  // a false negative silently lets the fee move on a plain session.
+  const settingValueUnchanged = (submitted, stored) => {
+    if (submitted === undefined || stored === undefined) return submitted === stored;
+    const sa = typeof submitted === 'string' ? submitted.trim() : submitted;
+    const sb = typeof stored === 'string' ? stored.trim() : stored;
+    const structural = (v) => (v && typeof v === 'object') ||
+      (typeof v === 'string' && (v.startsWith('[') || v.startsWith('{')));
+    if (structural(sa) || structural(sb)) {
+      const canon = (v) => {
+        if (v && typeof v === 'object') return JSON.stringify(v);
+        try { return JSON.stringify(JSON.parse(v)); } catch (e) { return String(v); }
+      };
+      return canon(sa) === canon(sb);
+    }
+    const na = Number(sa), nb = Number(sb);
+    if (sa !== '' && sb !== '' && Number.isFinite(na) && Number.isFinite(nb)) return na === nb;
+    return String(sa) === String(sb);
+  };
+
+  const criticalSettingChanged = (section, body) => {
+    if (!body || typeof body !== 'object') return false;
+    let current;
+    // An unreadable section means we cannot prove nothing critical moved → demand step-up.
+    try { current = poolSettings.getSection(section); } catch (e) { return true; }
+    return Object.keys(body).some((key) =>
+      STEP_UP_SETTINGS_KEYS.has(key) && !settingValueUnchanged(body[key], current[key]));
+  };
+
   app.post('/api/admin/settings/:section', secureAdmin, (req, res) => {
     try {
-      if (STEP_UP_SETTINGS_SECTIONS.has(req.params.section) &&
+      const sectionGated = STEP_UP_SETTINGS_SECTIONS.has(req.params.section);
+      if ((sectionGated || criticalSettingChanged(req.params.section, req.body)) &&
           !authManager.isTokenFresh(req.token, STEP_UP_MAX_AGE_S)) {
-        return res.status(403).json({ error: 'Re-authentication required for this section', challenge_required: true });
+        return res.status(403).json({
+          error: sectionGated
+            ? 'Re-authentication required for this section'
+            : 'Re-authentication required to change a fee, whitelist or visibility setting',
+          challenge_required: true
+        });
       }
       // Refuse to switch mandatory 2FA ON unless the admin doing it is already enrolled.
       // Otherwise the save succeeds (the gate read `false` when the middleware ran) and the

@@ -227,6 +227,51 @@ class NostrPayoutBridge {
     return { ok: true, relays: targets.length, accepted };
   }
 
+  // ── Security notice (public: called when a payout destination changes) ─────
+  // Sends a PLAIN-TEXT NIP-17 DM — no slatepack, and deliberately WITHOUT
+  // PAYMENT_PREAMBLE, so a Goblin wallet never mistakes an alert for a payment to parse.
+  //
+  // This is the out-of-band channel that makes the destination cooldown mean something.
+  // Without it the cooldown only helps a miner who happens to open the account page; with
+  // it, a hijack reaches the real owner on a channel the attacker does not control, hours
+  // before any money can move.
+  //
+  // BEST-EFFORT BY CONTRACT: returns { ok:false, error } instead of throwing. A relay
+  // outage must not block a legitimate destination change — but the caller MUST record the
+  // failure (audit log + response), because an alert nobody received is not a control.
+  async publishNotice(recipientPubHex, text, subject) {
+    try {
+      this._requireStarted();
+      if (!/^[0-9a-f]{64}$/.test(String(recipientPubHex || ''))) {
+        return { ok: false, error: 'invalid recipient key' };
+      }
+      const body = String(text || '').slice(0, SLATEPACK_MAX);
+      if (!body) return { ok: false, error: 'empty notice' };
+
+      const rumor = {
+        kind: 14,
+        created_at: Math.floor(Date.now() / 1000),
+        tags: [['p', recipientPubHex], ['goblin', '1'],
+               ['subject', String(subject || 'Grin pool security notice').slice(0, NOTE_MAX)]],
+        content: body,
+        pubkey: this._pkHex,
+      };
+
+      let targets = this.relays.slice();
+      try {
+        const hint = await this._fetchDmRelays(recipientPubHex);
+        if (hint && hint.length) targets = [...new Set([...hint, ...targets])];
+      } catch (_) { /* fall back to our set */ }
+      if (!targets.includes(RELAY_FLOOR)) targets.push(RELAY_FLOOR);
+
+      const accepted = await this._publish(targets, this._wrap(rumor, recipientPubHex));
+      if (accepted < 1) return { ok: false, error: 'no relay accepted the notice' };
+      return { ok: true, relays: targets.length, accepted };
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+  }
+
   // ─────────────────────────── wire (nostr-tools) ─────────────────────────────
   // Everything below is the only code coupled to nostr-tools' API surface.
 

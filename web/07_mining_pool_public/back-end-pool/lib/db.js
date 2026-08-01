@@ -114,7 +114,13 @@ function migrateMinerAccounts() {
       // overwrites all three and resets the clock.
       nostr_username: 'TEXT DEFAULT NULL',
       nostr_npub: 'TEXT DEFAULT NULL',
-      nostr_registered_at: 'INTEGER DEFAULT NULL'
+      nostr_registered_at: 'INTEGER DEFAULT NULL',
+      // Previous destination, retained so a hijack cannot dodge the change alert. Replacing a
+      // destination DMs the old npub ("your payout destination changed — withdraw via Tor now");
+      // without this, an attacker would simply REMOVE first and register fresh, leaving nobody
+      // to notify. Cleared only after the alert is sent, so removal is announced too.
+      nostr_prev_username: 'TEXT DEFAULT NULL',
+      nostr_prev_npub: 'TEXT DEFAULT NULL'
     };
     for (const [name, def] of Object.entries(additions)) {
       if (!have.has(name)) {
@@ -291,6 +297,8 @@ function createSchema() {
       nostr_username TEXT DEFAULT NULL,
       nostr_npub TEXT DEFAULT NULL,
       nostr_registered_at INTEGER DEFAULT NULL,
+      nostr_prev_username TEXT DEFAULT NULL,
+      nostr_prev_npub TEXT DEFAULT NULL,
       created_at INTEGER NOT NULL DEFAULT (unixepoch()),
       updated_at INTEGER NOT NULL DEFAULT (unixepoch())
     )`,

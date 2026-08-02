@@ -84,7 +84,7 @@ async function computeReconciliation(db, wallet, forceRefresh = true) {
   ).get().s;
   const pending = db.prepare(
     `SELECT COALESCE(SUM(amount),0) AS amt, COUNT(*) AS cnt FROM withdrawals
-     WHERE status IN ('tor_checking','tor_sending','retry_scheduled','slatepack_pending')`
+     WHERE status IN ('tor_checking','tor_sending','retry_scheduled','slatepack_pending','finalizing')`
   ).get();
 
   // Bucket detail (donation + fee → contest budget). Lifetime per-address sums —
@@ -286,7 +286,7 @@ async function auditWalletSends(db, wallet, opts = {}) {
   // Candidate pool withdrawals: any row whose send was actually attempted, within the window.
   const rows = db.prepare(`
     SELECT id, amount, fee, slate_id, created_at, confirmed_at, status FROM withdrawals
-    WHERE status IN ('confirmed','tor_sending','tor_failed','cancelled','slatepack_pending')
+    WHERE status IN ('confirmed','tor_sending','tor_failed','cancelled','slatepack_pending','finalizing')
       AND (created_at >= ? OR COALESCE(confirmed_at,0) >= ?)
   `).all(cutoff, cutoff);
   const consumed = new Set();

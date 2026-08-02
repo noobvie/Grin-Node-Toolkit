@@ -223,7 +223,7 @@ class AlertMonitor {
         ).get(this.prevWalletCheckAt).s;
         const inFlight = this.db.prepare(
           `SELECT COALESCE(SUM(amount + COALESCE(fee,0)),0) AS s FROM withdrawals
-           WHERE status IN ('tor_sending','tor_checking','retry_scheduled','slatepack_pending')`
+           WHERE status IN ('tor_sending','tor_checking','retry_scheduled','slatepack_pending','finalizing')`
         ).get().s;
         const drop = this.prevWalletTotal - recon.wallet.total;
         const unexplained = drop - paid - inFlight;

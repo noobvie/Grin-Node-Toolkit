@@ -1061,7 +1061,7 @@ function setupRoutes() {
     'GET /api/account/:addr/earnings': { desc: 'Credited earnings per period (1h/24h/7d/30d) + 30d in/out totals. Payout reversals count as money-in but never as earnings.', shape: 'raw' },
     'GET /api/account/:addr/balance/log': { desc: 'Address ledger. Raw rows prune after ~60 days (the durable record is the withdrawal history below). format=csv streams the filtered window as a download on a tighter rate limit.', shape: 'raw · csv', params: 'direction=in|out · days (≤3650, default all) · limit (≤500, default 50) · offset · format=csv' },
     'GET /api/account/:addr/withdrawals': { desc: 'Payout history for an address — kept forever, so this is the durable record for accounting. Payouts only: no donations or orphan clawbacks. format=csv streams all-time on a tighter rate limit.', shape: 'raw · csv', params: 'limit (≤200, default 20) · offset · format=csv' },
-    'GET /api/account/:addr/tor-check': { desc: 'Is this miner\'s wallet reachable over Tor right now? Read-only probe behind the payout UI hint. online is TRI-STATE: true/false when known, null = "decided at payout time".', shape: 'raw' },
+    'GET /api/account/:addr/tor-check': { desc: 'Is this miner\'s wallet reachable over Tor right now? Read-only probe behind the payout UI hint. online is TRI-STATE: true/false when known, null = "decided at payout time". 404 if the address has never mined here — the probe is not offered for arbitrary Grin addresses. Answers are cached 60s per address; the payout gate always re-probes fresh.', shape: 'raw', rate: 'torcheck' },
     'POST /api/account/:addr/withdraw': { desc: 'Request a payout on one of three rails. 403 = ownership proof failed; 409 (tor) = wallet unreachable, retry or switch to slatepack; 409 (nostr) = destination unregistered, still in cooldown, or its npub changed.', shape: 'flat', auth: 'ownership proof', rate: 'withdraw', body: `method=tor|slatepack|nostr (default tor) · amount · ${OWNER_PROOF_BODY}` },
     'POST /api/account/:addr/withdraw/:id/finalize': { desc: 'Complete a slatepack payout by posting back the response slatepack your wallet produced with `receive`. The pool finalizes and broadcasts.', shape: 'raw', auth: 'ownership proof', rate: 'withdraw', body: `response_slatepack · ${OWNER_PROOF_BODY}` },
     'POST /api/account/:addr/nostr-destination': { desc: 'Register/replace the Goblin username for Nostr payouts. Does NOT move funds — it pins the destination and (re)starts a security cooldown, during which the nostr rail refuses to pay. 503 when the rail is disabled.', shape: 'flat', auth: 'ownership proof', rate: 'withdraw', body: `username (Goblin/NIP-05) · ${OWNER_PROOF_BODY}` },
@@ -2818,12 +2818,12 @@ function setupRoutes() {
       const pendingRow = db.prepare(
         `SELECT id, amount, method, status, retry_count, next_retry_at, created_at
          FROM withdrawals
-         WHERE grin_address = ? AND status IN ('tor_checking','tor_sending','retry_scheduled','slatepack_pending')
+         WHERE grin_address = ? AND status IN ('tor_checking','tor_sending','retry_scheduled','slatepack_pending','finalizing')
          ORDER BY created_at DESC LIMIT 1`
       ).get(addr);
       const pending = db.prepare(
         `SELECT COUNT(*) AS c FROM withdrawals
-         WHERE grin_address = ? AND status IN ('tor_checking','tor_sending','retry_scheduled','slatepack_pending')`
+         WHERE grin_address = ? AND status IN ('tor_checking','tor_sending','retry_scheduled','slatepack_pending','finalizing')`
       ).get(addr).c;
 
       const shareAgg = db.prepare(
@@ -3392,10 +3392,66 @@ function setupRoutes() {
 
   // Is this miner reachable over Tor right now? Drives the UI hint for whether an
   // auto (Tor) payout can succeed vs. needing a Slatepack claim. No state change.
-  app.get('/api/account/:addr/tor-check', rateLimiter.middleware('public'), async (req, res) => {
+  // ─── Tor reachability probe cache ───────────────────────────────────────────
+  // probeToronlineStatus builds a Tor circuit and SOCKS-connects (up to torCheckRetries attempts
+  // × tor_check_timeout_ms), so an uncached public endpoint turns one cheap HTTP request into
+  // seconds of outbound work. The answer barely changes minute to minute — a wallet listener is
+  // either up or it isn't — so a short cache costs the miner nothing and makes repeat clicks free.
+  //
+  // DELIBERATELY NOT used by the withdraw pre-flight gate. That one is a money decision (it can
+  // refuse a payout), so it always takes a fresh probe: a 60s-stale "offline" must never block a
+  // listener the miner just started. Caching a UI hint and caching a gate are different calls.
+  const TOR_PROBE_TTL_MS = 60000;
+  const TOR_PROBE_MAX = 500;                 // bound the map — this is a cache, not a registry
+  const torProbeCache = new Map();           // addr -> { at, result }
+  const torProbeInflight = new Map();        // addr -> Promise (collapses concurrent probes)
+
+  const torProbeCached = async (addr) => {
+    const hit = torProbeCache.get(addr);
+    if (hit && (Date.now() - hit.at) < TOR_PROBE_TTL_MS) return hit.result;
+
+    // Rapid repeat clicks are exactly what this endpoint sees, and they arrive before the first
+    // probe resolves — so dedup in-flight too, or the cache never gets the chance to help.
+    const inflight = torProbeInflight.get(addr);
+    if (inflight) return inflight;
+
+    const p = (async () => {
+      try {
+        const result = await walletTor.probeToronlineStatus(addr);
+        const now = Date.now();
+        if (torProbeCache.size >= TOR_PROBE_MAX) {
+          for (const [k, v] of torProbeCache) {
+            if ((now - v.at) >= TOR_PROBE_TTL_MS) torProbeCache.delete(k);
+          }
+          // Still full → everything is live; drop the oldest insert (Map keeps insertion order)
+          // so a sweep across distinct addresses can never grow this without bound.
+          if (torProbeCache.size >= TOR_PROBE_MAX) {
+            torProbeCache.delete(torProbeCache.keys().next().value);
+          }
+        }
+        torProbeCache.set(addr, { at: now, result });
+        return result;
+      } finally {
+        torProbeInflight.delete(addr);
+      }
+    })();
+    torProbeInflight.set(addr, p);
+    return p;
+  };
+
+  app.get('/api/account/:addr/tor-check', rateLimiter.middleware('torcheck'), async (req, res) => {
     try {
       const { addr } = req.params;
-      const result = await walletTor.probeToronlineStatus(addr);
+      // Must have actually mined here. Without this the endpoint was a public oracle: the onion
+      // is derived from the bech32 address by pure math, so it answered "is this wallet listener
+      // up right now?" for ANY Grin address — an activity side-channel on people who never opted
+      // into this pool at all. The 404 matches GET /api/account/:addr exactly, so it reveals
+      // nothing that endpoint doesn't already. For miners who ARE here the residual signal is
+      // small: the pool already publishes their hashrate, which tracks activity far more closely.
+      const known = db.prepare('SELECT 1 AS x FROM miner_accounts WHERE grin_address = ?').get(addr);
+      if (!known) return res.status(404).json({ error: 'no mining account for this address' });
+
+      const result = await torProbeCached(addr);
       res.json({
         grin_address: addr,
         // Tri-state: true/false when known, null = "determined at payout time" (grin-wallet
@@ -5528,7 +5584,7 @@ function setupRoutes() {
         `SELECT COALESCE(SUM(amount),0) AS t FROM withdrawals WHERE grin_address = ? AND status='confirmed'`
       ).get(addr).t;
       const pending = db.prepare(
-        `SELECT * FROM withdrawals WHERE grin_address = ? AND status IN ('tor_checking','tor_sending','retry_scheduled','slatepack_pending') ORDER BY created_at DESC`
+        `SELECT * FROM withdrawals WHERE grin_address = ? AND status IN ('tor_checking','tor_sending','retry_scheduled','slatepack_pending','finalizing') ORDER BY created_at DESC`
       ).all(addr);
       const shareAgg = db.prepare(
         `SELECT COUNT(*) AS count, MAX(created_at) AS last_share_at FROM shares WHERE grin_address = ?`

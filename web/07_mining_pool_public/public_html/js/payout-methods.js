@@ -39,14 +39,22 @@
   'use strict';
 
   // Rail-agnostic states: owned by the withdrawal scheduler, not by any one transport.
+  // 'finalizing' is the brief claim the scheduler holds while it broadcasts — seconds in the
+  // normal case. It is deliberately NOT presented as an error: the money is on its way out and
+  // the payout can no longer be cancelled, so "settling" is the honest word for it.
+  // Keys must be statuses the SCHEDULER actually writes. 'expired' was not one of them — the TTL
+  // sweep writes 'slatepack_expired' — so that entry never matched and those rows rendered the raw
+  // token. The label now also says what the miner most wants to know: the balance came back.
   var BASE_STATUS = {
     confirmed: 'paid ✓',
     retry_scheduled: 'retrying',
+    finalizing: 'settling',
     cancelled: 'cancelled',
-    expired: 'expired'
+    slatepack_expired: 'expired — balance returned'
   };
   var BASE_PENDING = {
-    retry_scheduled: 'wallet unreachable — parked for retry'
+    retry_scheduled: 'wallet unreachable — parked for retry',
+    finalizing: 'broadcasting to the Grin network — almost done'
   };
 
   var defs = [];

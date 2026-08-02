@@ -387,15 +387,25 @@ function shortAddr(a) {
   return a.length > 18 ? a.slice(0, 10) + '…' + a.slice(-6) : a;
 }
 
+// Every status the scheduler can write. The slatepack and Goblin rails were missing here, so
+// their rows fell through to ['badge-dim', <raw status>] — showing "slatepack_pending" in the
+// same grey the panel uses for CANCELLED, i.e. an in-flight payout reading as a dead one.
 const STATUS = {
-  tor_checking:    ['badge-warn',  'Checking (Tor)'],
-  tor_sending:     ['badge-warn',  'Sending'],
-  retry_scheduled: ['badge-warn',  'Retry scheduled'],
-  confirmed:       ['badge-ok',    'Paid'],
-  tor_failed:      ['badge-error', 'Failed'],
-  cancelled:       ['badge-dim',   'Cancelled'],
+  tor_checking:      ['badge-warn',  'Checking (Tor)'],
+  tor_sending:       ['badge-warn',  'Sending'],
+  retry_scheduled:   ['badge-warn',  'Retry scheduled'],
+  slatepack_pending: ['badge-warn',  'Awaiting slate'],
+  finalizing:        ['badge-warn',  'Settling'],
+  confirmed:         ['badge-ok',    'Paid'],
+  tor_failed:        ['badge-error', 'Failed (Tor)'],
+  slatepack_failed:  ['badge-error', 'Failed (slate)'],
+  nostr_failed:      ['badge-error', 'Failed (Goblin)'],
+  slatepack_expired: ['badge-dim',   'Expired'],
+  cancelled:         ['badge-dim',   'Cancelled'],
 };
-const ACTIVE = ['tor_checking', 'tor_sending', 'retry_scheduled'];
+// Drives the "active" filter chip. Must list every status whose coins are still committed —
+// otherwise filtering to active hides exactly the payouts an operator is looking for.
+const ACTIVE = ['tor_checking', 'tor_sending', 'retry_scheduled', 'slatepack_pending', 'finalizing'];
 
 function matchesFilter(w) {
   if (_filter === 'all') return true;
@@ -849,7 +859,7 @@ function wizRefreshState() {
   s1.textContent = _frozen ? 'frozen ✓' : 'not frozen';
   s1.className = 'badge ' + (_frozen ? 'badge-success' : 'badge-warning');
   document.getElementById('sw-freeze-btn').disabled = _frozen;
-  const inflightStatuses = ['tor_sending', 'tor_checking', 'retry_scheduled', 'slatepack_pending'];
+  const inflightStatuses = ['tor_sending', 'tor_checking', 'retry_scheduled', 'slatepack_pending', 'finalizing'];
   const n = (_withdrawals || []).filter(w => inflightStatuses.includes(w.status)).length;
   const el = document.getElementById('sw-inflight');
   el.innerHTML = n === 0

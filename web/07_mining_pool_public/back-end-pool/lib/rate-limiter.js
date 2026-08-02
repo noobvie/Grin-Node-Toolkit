@@ -46,6 +46,17 @@ class RateLimiter {
       // SEPARATE from `public` (1200/min) so a human's occasional export works but automated
       // download-spam of the all-time extract is cut off fast. Per-IP, per-minute.
       export: 10,
+      // Tor reachability probes (GET /api/account/:addr/tor-check). SEPARATE from `public`
+      // (1200/min) because this is the one read endpoint that does real OUTBOUND work per call —
+      // a Tor circuit build plus up to torCheckRetries SOCKS connects — so on the shared public
+      // budget one client could turn cheap HTTP into seconds of network work, 1200 times a minute.
+      // It could not be fixed by tightening `public`: every page read shares that counter.
+      //
+      // The 60s response cache in index.js already makes REPEAT probes of one address free, so
+      // this number is really about ENUMERATION — how many DISTINCT addresses one IP can probe
+      // per minute. At 1200 you could walk the whole leaderboard sampling every miner's wallet
+      // uptime in seconds; at 10 you cannot. Overridable via config.rate_limits.torcheck.
+      torcheck: 10,
       // Money-write actions (withdraw / slatepack finalize / nostr-destination register+remove).
       // SEPARATE from `public` (1200/min) so ownership-proof guessing and payout spam are cut off
       // per-IP long before they can exhaust the (memory-hard) scrypt verify, WITHOUT touching the

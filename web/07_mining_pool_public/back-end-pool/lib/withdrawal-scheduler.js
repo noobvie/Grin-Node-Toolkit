@@ -7,7 +7,18 @@ const IncentivesManager = require('./incentives');
 // rail, which parks in slatepack_pending). Both create paths MUST share this list: a
 // rail-specific subset re-opens the hole where a miner with a pending slatepack could start
 // a Tor payout in parallel (found + fixed 2026-07-17).
-const PENDING_SQL = "status IN ('tor_checking','tor_sending','retry_scheduled','slatepack_pending')";
+//
+// 'finalizing' is the short-lived claim a finalize holds while it talks to the wallet (see
+// _claimForFinalize). Its coins are mid-broadcast, so it is emphatically in-flight — every
+// other in-flight status list in the codebase must include it too: reconciliation's pending
+// sum, AlertMonitor's inFlight (a missing row there reads as an unexplained wallet drain),
+// the account-summary pending display and the admin payments view.
+const PENDING_SQL = "status IN ('tor_checking','tor_sending','retry_scheduled','slatepack_pending','finalizing')";
+
+// How long a 'finalizing' claim may stand before the sweeper reclaims it. Finalize is three
+// wallet calls — seconds in the normal case — so anything past this lost its owner (process
+// restart mid-finalize). Reclaim is NOT a blind revert: see reclaimStaleFinalizing.
+const FINALIZING_STALE_S = 600;
 
 // The pseudo-address the flat withdrawal fee is credited to — the SAME bucket the block-reward
 // pool fee lands in, so both show up as one fee-income line on the transparency page.
@@ -59,6 +70,11 @@ class WithdrawalScheduler {
   async schedulerLoop() {
     while (this.isRunning) {
       try {
+        // Recover abandoned finalize claims BEFORE expiry, so a row whose finalize died mid-flight
+        // is either confirmed or handed back to the pending pool rather than sitting invisible to
+        // both. Runs while frozen too: it only resolves rows to the truth already on-chain.
+        await this.reclaimStaleFinalizing();
+
         if (this.isFrozen()) {
           // Kill-switch engaged (auto by AlertMonitor on a critical money trip, or manual admin).
           // Skip every OUTBOUND send path; still run slatepack expiry (it only REFUNDS expired
@@ -296,10 +312,12 @@ class WithdrawalScheduler {
 
       if (!withdrawal) return;
 
-      const stmt = this.db.prepare(`
-        UPDATE withdrawals SET status = 'tor_sending' WHERE id = ?
-      `);
-      stmt.run(withdrawalId);
+      // Guarded claim, same reason as everywhere else: only a row still in tor_checking may be
+      // handed to the wallet, so two scheduler passes can never both spend for one payout.
+      const claimed = this.db.prepare(
+        "UPDATE withdrawals SET status = 'tor_sending' WHERE id = ? AND status = 'tor_checking'"
+      ).run(withdrawalId);
+      if (claimed.changes !== 1) return;
 
       const eventStmt = this.db.prepare(`
         INSERT INTO withdrawal_events
@@ -313,6 +331,29 @@ class WithdrawalScheduler {
       // the wallet-log lookups below must match on the net figure that actually went out.
       const netSend = this._netSend(withdrawal.amount, withdrawal.fee_charged || 0);
 
+      // ── Double-send guard (audit §E.1) ──────────────────────────────────────
+      // Never re-send a payout that may already be on the chain. See _priorSendLanded.
+      if (withdrawal.retry_count > 0 || withdrawal.slate_id) {
+        const prior = await this._priorSendLanded(withdrawal, netSend);
+        if (prior.tx) {
+          console.warn(
+            `⚠️  Withdrawal ${withdrawalId}: an earlier attempt DID post (slate ${prior.tx.tx_slate_id}) — ` +
+            `confirming instead of re-sending`
+          );
+          this.db.prepare('UPDATE withdrawals SET slate_id = COALESCE(slate_id, ?) WHERE id = ?')
+            .run(String(prior.tx.tx_slate_id), withdrawalId);
+          await this.recordTorFee(withdrawalId, netSend);
+          await this.markConfirmed(withdrawalId, 'recovered: earlier attempt found in the wallet tx log');
+          return;
+        }
+        if (!prior.checked) {
+          console.error(
+            `⚠️  Withdrawal ${withdrawalId}: retrying WITHOUT a double-send check — the wallet tx log ` +
+            `could not be read. If this payout later looks duplicated, this is where to look.`
+          );
+        }
+      }
+
       const sendResult = await this.walletTor.sendToTorAddress(
         withdrawal.grin_address,
         netSend
@@ -321,7 +362,10 @@ class WithdrawalScheduler {
       if (sendResult.success) {
         await this.recordTorFee(withdrawalId, netSend);
         await this._captureTorSlateId(withdrawalId, netSend); // best-effort proof metadata
-        await this.markConfirmed(withdrawalId, sendResult.output);
+        // Note only — the CLI's raw stdout used to be passed here and was silently discarded
+        // (the old markConfirmed ignored its second argument); it is not worth storing in an
+        // event row, and can be large.
+        await this.markConfirmed(withdrawalId, 'Successfully sent');
       } else {
         console.error(`Send failed for withdrawal ${withdrawalId}: ${sendResult.error}`);
         await this.scheduleRetry(withdrawalId);
@@ -330,6 +374,81 @@ class WithdrawalScheduler {
       console.error(`Error sending withdrawal ${withdrawalId}: ${err.message}`);
       await this.scheduleRetry(withdrawalId);
     }
+  }
+
+  // ─── Double-send guard (audit §E.1) ─────────────────────────────────────────
+  // A `grin-wallet send` that reports failure MAY still have posted. The CLI is SIGKILLed at
+  // wallet_send_timeout_ms (120 s default), and the Tor round-trip + finalize + broadcast can all
+  // have completed while the pipe was still open — the kill tells us the process died, not that
+  // the money stayed. Retrying blindly pays the miner twice while the ledger debits once, which
+  // is unrecoverable. So before every RE-attempt, ask the wallet whether this payout already went.
+  //
+  // The reversal cooldown does NOT cover this: it gates a miner starting a NEW withdrawal after a
+  // refund, and a retry is the same row re-entering sendWithdrawal without passing that check.
+  //
+  // Only runs on a re-attempt. A first attempt cannot have a predecessor, so the normal path pays
+  // no extra wallet round-trip and carries no false-positive risk.
+  //
+  // Matching is deliberately narrow, because a false POSITIVE marks a miner paid who was not:
+  //   · exact slate_id when one was captured — authoritative, no amount guessing;
+  //   · otherwise a TxSent whose net-to-recipient equals this payout's net, created no earlier
+  //     than the withdrawal row, and whose slate_id is not already claimed by a DIFFERENT
+  //     withdrawal (two miners withdrawing the same amount must never collide).
+  // 'TxSentCancelled' is excluded — a cancelled tx never reached the chain. Note this is stricter
+  // than _captureTorSlateId's /Sent/ regex, which matches the cancelled form too; that one only
+  // decorates a proof link, this one decides whether to spend.
+  //
+  // Returns { checked, tx }. checked=false means the wallet could not be consulted at all —
+  // the caller logs loudly and proceeds, because refusing to retry would strand live payouts on
+  // any pool whose Owner API is briefly down.
+  async _priorSendLanded(withdrawal, netSend) {
+    if (!this.wallet || typeof this.wallet.getTransactions !== 'function') {
+      return { checked: false, tx: null };
+    }
+    try {
+      // refresh=true: this decides whether to spend, so pay the node round-trip for accuracy.
+      const txs = await this.wallet.getTransactions(true);
+      if (!Array.isArray(txs)) return { checked: false, tx: null };
+
+      const sent = txs.filter((t) => t && t.tx_slate_id && String(t.tx_type) === 'TxSent');
+
+      if (withdrawal.slate_id) {
+        const hit = sent.find((t) => String(t.tx_slate_id) === String(withdrawal.slate_id));
+        return { checked: true, tx: hit || null };
+      }
+
+      const claimed = new Set(
+        this.db.prepare('SELECT slate_id FROM withdrawals WHERE slate_id IS NOT NULL AND id != ?')
+          .all(withdrawal.id).map((r) => String(r.slate_id))
+      );
+
+      const wantNano = Math.round(Number(netSend) * 1e9);
+      const createdAt = Number(withdrawal.created_at) || 0;
+      const hit = sent.find((t) => {
+        if (claimed.has(String(t.tx_slate_id))) return false;
+        const when = this._txCreatedAt(t);
+        if (when !== null && when < createdAt - 60) return false; // predates this payout by more than clock slack
+        const feeNano = (t.fee && typeof t.fee === 'object') ? Number(t.fee.fee || 0) : Number(t.fee || 0);
+        const recipientNano =
+          Number(t.amount_debited || 0) - Number(t.amount_credited || 0) - (Number.isFinite(feeNano) ? feeNano : 0);
+        return Math.abs(recipientNano - wantNano) <= 1000; // 1 µGRIN tolerance
+      });
+      return { checked: true, tx: hit || null };
+    } catch (e) {
+      console.warn(`[double-send guard] wallet tx log unreadable: ${e.message}`);
+      return { checked: false, tx: null };
+    }
+  }
+
+  // grin-wallet serialises TxLogEntry timestamps as RFC3339 strings; tolerate a numeric form
+  // (seconds or millis) in case a wallet build differs. null when unparseable, which the caller
+  // treats as "no opinion" rather than as a mismatch.
+  _txCreatedAt(t) {
+    const v = t && (t.creation_ts !== undefined ? t.creation_ts : t.creation_time);
+    if (v === undefined || v === null) return null;
+    if (typeof v === 'number') return v > 1e11 ? Math.floor(v / 1000) : Math.floor(v);
+    const ms = Date.parse(String(v));
+    return Number.isFinite(ms) ? Math.floor(ms / 1000) : null;
   }
 
   async scheduleRetry(withdrawalId) {
@@ -348,12 +467,18 @@ class WithdrawalScheduler {
       const nextRetryDelay = this.retryDelays[withdrawal.retry_count];
       const nextRetryAt = Math.floor(Date.now() / 1000) + nextRetryDelay;
 
+      // Guarded on the status we just read: a row that reached a settled state meanwhile (the
+      // double-send guard confirming it, an admin cancel) must not be dragged back onto the
+      // retry ladder for another send.
       const stmt = this.db.prepare(`
         UPDATE withdrawals
         SET status = 'retry_scheduled', retry_count = retry_count + 1, next_retry_at = ?
-        WHERE id = ?
+        WHERE id = ? AND status = ?
       `);
-      stmt.run(nextRetryAt, withdrawalId);
+      if (stmt.run(nextRetryAt, withdrawalId, withdrawal.status).changes !== 1) {
+        console.warn(`[retry] withdrawal ${withdrawalId} left ${withdrawal.status} before retry scheduling — skipped`);
+        return;
+      }
 
       const eventStmt = this.db.prepare(`
         INSERT INTO withdrawal_events
@@ -450,79 +575,30 @@ class WithdrawalScheduler {
     } catch (e) { /* best-effort proof metadata — never affects the payout */ }
   }
 
-  async markConfirmed(withdrawalId, txOutput = null) {
-    try {
-      const stmt = this.db.prepare(`
-        UPDATE withdrawals SET status = 'confirmed', confirmed_at = unixepoch() WHERE id = ?
-      `);
-      stmt.run(withdrawalId);
-
-      const eventStmt = this.db.prepare(`
-        INSERT INTO withdrawal_events
-        (withdrawal_id, from_status, to_status, triggered_by, note)
-        VALUES (?, ?, ?, 'scheduler', ?)
-      `);
-      eventStmt.run(withdrawalId, 'tor_sending', 'confirmed', 'Successfully sent');
-
-      const withdrawal = this.db.prepare(
-        'SELECT * FROM withdrawals WHERE id = ?'
-      ).get(withdrawalId);
-
-      this._releaseLockAndDebit(withdrawal);
-
-      console.log(
-        `[${new Date().toISOString()}] Withdrawal ${withdrawalId} confirmed (${withdrawal.amount} GRIN to ${withdrawal.grin_address})`
-      );
-
-      // First successful withdrawal qualifies the address for the one-time join bonus
-      // (anti-Sybil gate: spammers never reach a real payout). No-op unless enabled / funded.
-      try {
-        this.incentives.maybePayJoinBonus(withdrawal.grin_address);
-      } catch (e) {
-        console.error(`Error paying join bonus for ${withdrawal.grin_address}: ${e.message}`);
-      }
-    } catch (err) {
-      console.error(`Error marking withdrawal as confirmed: ${err.message}`);
-    }
+  // Settle a successful Tor send. Delegates to the shared guarded/transactional confirm so the
+  // Tor rail cannot double-settle either — the send path and a concurrent reversal both have to
+  // win the same claim, and only one can.
+  async markConfirmed(withdrawalId, note = null) {
+    return this._creditConfirm(withdrawalId, 'tor_sending', note || 'Successfully sent');
   }
 
+  // Terminal failure after the retry ladder is exhausted: reverse the lock and park the row.
+  // Uses the shared guarded/transactional reversal — critically, this means a row the double-send
+  // guard has already confirmed can never be reversed on top of it.
+  //
+  // The guard reads the row's CURRENT status rather than assuming one. In practice this is always
+  // 'tor_sending' (scheduleRetry is only ever reached from inside sendWithdrawal, after the claim),
+  // NOT the 'retry_scheduled' the old event row claimed — but reading it keeps the compare-and-swap
+  // honest for any future caller. Both statements are synchronous, so nothing can interleave
+  // between the read and the swap; a status that changed anyway loses the swap and is skipped.
   async markFailed(withdrawalId) {
-    try {
-      const stmt = this.db.prepare(`
-        UPDATE withdrawals SET status = 'tor_failed' WHERE id = ?
-      `);
-      stmt.run(withdrawalId);
-
-      const eventStmt = this.db.prepare(`
-        INSERT INTO withdrawal_events
-        (withdrawal_id, from_status, to_status, triggered_by, note)
-        VALUES (?, ?, ?, 'scheduler', ?)
-      `);
-      eventStmt.run(withdrawalId, 'retry_scheduled', 'tor_failed', 'Max retries exceeded');
-
-      const withdrawal = this.db.prepare(
-        'SELECT * FROM withdrawals WHERE id = ?'
-      ).get(withdrawalId);
-
-      const balanceStmt = this.db.prepare(`
-        UPDATE miner_accounts SET balance = balance + ?, balance_locked = balance_locked - ?
-        WHERE grin_address = ?
-      `);
-      balanceStmt.run(withdrawal.amount, withdrawal.amount, withdrawal.grin_address);
-
-      const logStmt = this.db.prepare(`
-        INSERT INTO balance_log
-        (grin_address, event_type, amount, balance_before, balance_after,
-         locked_before, locked_after, reference_type, reference_id)
-        VALUES (?, 'reversal', ?, 0, 0, 0, 0, 'withdrawal', ?)
-      `);
-      logStmt.run(withdrawal.grin_address, withdrawal.amount, withdrawalId);
-
+    const w = this.db.prepare('SELECT amount, status FROM withdrawals WHERE id = ?').get(withdrawalId);
+    if (!w) return;
+    const ok = this._reverseLock(withdrawalId, 'tor_failed', w.status, 'Max retries exceeded');
+    if (ok) {
       console.warn(
-        `⚠️  Withdrawal ${withdrawalId} failed after max retries (${withdrawal.amount} GRIN reversed to balance)`
+        `⚠️  Withdrawal ${withdrawalId} failed after max retries (${w.amount} GRIN reversed to balance)`
       );
-    } catch (err) {
-      console.error(`Error marking withdrawal as failed: ${err.message}`);
     }
   }
 
@@ -737,7 +813,15 @@ class WithdrawalScheduler {
     if (w.grin_address !== grinAddress) fail('withdrawal does not belong to this address', 403);
     if (w.status !== 'slatepack_pending') fail(`withdrawal is not awaiting a slatepack (status: ${w.status})`, 409);
 
+    // Take the row out of the pending pool BEFORE the first await. The status check above is a
+    // read; this is the decision. Between them nothing has yielded, so the claim is the point at
+    // which the expiry sweep and admin cancel can no longer touch this payout.
+    if (!this._claimForFinalize(withdrawalId)) {
+      fail('this payout is already being settled — refresh to see its final state', 409);
+    }
+
     let finalized;
+    let broadcastAttempted = false;
     try {
       const slate = await this.wallet.slateFromSlatepackMessage(responseSlatepack, [0]);
       // Bind the response to the slate we issued — rejects a pasted slate for a different tx.
@@ -745,13 +829,26 @@ class WithdrawalScheduler {
         fail('slatepack does not match this withdrawal', 400);
       }
       finalized = await this.wallet.finalizeTx(slate);
+      broadcastAttempted = true;   // set BEFORE postTx: a throw from postTx is ambiguous, not a failure
       await this.wallet.postTx(finalized, true);
     } catch (err) {
-      if (err.code) throw err; // our own 4xx (e.g. mismatch) — surface as-is, stay pending
+      if (!broadcastAttempted) {
+        // Failed before anything could reach the chain — safe to re-open for another attempt.
+        this._releaseFinalizeClaim(withdrawalId, `finalize failed: ${err.message}`);
+      } else {
+        // postTx threw. It may still have landed, so re-opening the row would risk a second
+        // broadcast. Leave the claim standing and let reclaimStaleFinalizing settle it against
+        // the wallet tx log — the one source that knows.
+        console.error(
+          `⚠️  Withdrawal ${withdrawalId}: postTx threw (${err.message}) — outcome UNKNOWN, ` +
+          `left claimed for the stale-finalize sweep to resolve`
+        );
+      }
+      if (err.code) throw err; // our own 4xx (e.g. mismatch) — surface as-is
       const e = new Error(`failed to finalize slatepack: ${err.message}`); e.code = 502; throw e;
     }
 
-    this._creditConfirm(withdrawalId, 'slatepack_pending', 'slatepack finalized + posted');
+    this._creditConfirm(withdrawalId, 'finalizing', 'slatepack finalized + posted');
     return { success: true, withdrawal_id: withdrawalId, status: 'confirmed' };
   }
 
@@ -872,14 +969,40 @@ class WithdrawalScheduler {
         return;
       }
 
-      const slate = await this.wallet.slateFromSlatepackMessage(responseSlatepack, [0]);
-      if (w.slate_id && slate && slate.id && slate.id !== w.slate_id) {
-        console.warn(`[nostr-payout] finalize ${withdrawalId} rejected — slate ${slate && slate.id} ≠ issued ${w.slate_id}`);
+      // Claim before the first await. This rail is the most exposed of the three: its TTL is 10
+      // minutes, not 24 hours, so a wallet that comes online late lands its response right on the
+      // sweep. Relays also redeliver, so two response events for one payout are ordinary traffic —
+      // the claim is what makes the second one a no-op instead of a second broadcast.
+      if (!this._claimForFinalize(withdrawalId)) {
+        console.warn(`[nostr-payout] finalize ${withdrawalId} skipped — already being settled`);
         return;
       }
-      const finalized = await this.wallet.finalizeTx(slate);
-      await this.wallet.postTx(finalized, true);
-      this._creditConfirm(withdrawalId, 'slatepack_pending', 'nostr response finalized + posted');
+
+      let broadcastAttempted = false;
+      try {
+        const slate = await this.wallet.slateFromSlatepackMessage(responseSlatepack, [0]);
+        if (w.slate_id && slate && slate.id && slate.id !== w.slate_id) {
+          console.warn(`[nostr-payout] finalize ${withdrawalId} rejected — slate ${slate && slate.id} ≠ issued ${w.slate_id}`);
+          this._releaseFinalizeClaim(withdrawalId, 'response slate did not match the issued slate');
+          return;
+        }
+        const finalized = await this.wallet.finalizeTx(slate);
+        broadcastAttempted = true;
+        await this.wallet.postTx(finalized, true);
+      } catch (err) {
+        if (!broadcastAttempted) {
+          this._releaseFinalizeClaim(withdrawalId, `nostr finalize failed: ${err.message}`);
+          console.warn(`[nostr-payout] finalize ${withdrawalId} failed before broadcast (back to pending): ${err.message}`);
+        } else {
+          console.error(
+            `⚠️  Nostr payout ${withdrawalId}: postTx threw (${err.message}) — outcome UNKNOWN, ` +
+            `left claimed for the stale-finalize sweep to resolve`
+          );
+        }
+        return;
+      }
+
+      this._creditConfirm(withdrawalId, 'finalizing', 'nostr response finalized + posted');
       console.log(`[${new Date().toISOString()}] Nostr payout ${withdrawalId} confirmed (${w.amount} GRIN to ${grinAddress})`);
     } catch (err) {
       console.warn(`[nostr-payout] finalize ${withdrawalId} error (left pending): ${err.message}`);
@@ -1083,46 +1206,209 @@ class WithdrawalScheduler {
 
   // Confirm a payout: mark confirmed, release the lock (locked −= amount = paid out), ledger debit,
   // join-bonus. Generic over fromStatus so both the Tor and slatepack rails reuse it.
+  //
+  // Guarded + transactional for the same reason as _reverseLock: the status claim and the ledger
+  // release must be one indivisible step, so a confirm and a reversal can never both land on one
+  // row. Returns false when another path already settled it.
   _creditConfirm(withdrawalId, fromStatus, note) {
     try {
-      this.db.prepare("UPDATE withdrawals SET status = 'confirmed', confirmed_at = unixepoch() WHERE id = ?").run(withdrawalId);
-      this.db.prepare(`
-        INSERT INTO withdrawal_events (withdrawal_id, from_status, to_status, triggered_by, note)
-        VALUES (?, ?, 'confirmed', 'scheduler', ?)
-      `).run(withdrawalId, fromStatus, note);
+      let w = null;
+      this.db.transaction(() => {
+        const claimed = this.db.prepare(
+          "UPDATE withdrawals SET status = 'confirmed', confirmed_at = unixepoch() WHERE id = ? AND status = ?"
+        ).run(withdrawalId, fromStatus);
+        if (claimed.changes !== 1) return;
 
-      const w = this.db.prepare('SELECT * FROM withdrawals WHERE id = ?').get(withdrawalId);
-      this._releaseLockAndDebit(w);
+        this.db.prepare(`
+          INSERT INTO withdrawal_events (withdrawal_id, from_status, to_status, triggered_by, note)
+          VALUES (?, ?, 'confirmed', 'scheduler', ?)
+        `).run(withdrawalId, fromStatus, note);
+
+        w = this.db.prepare('SELECT * FROM withdrawals WHERE id = ?').get(withdrawalId);
+        this._releaseLockAndDebit(w);
+      })();
+
+      if (!w) {
+        console.warn(`[confirm] withdrawal ${withdrawalId} was not in ${fromStatus} — confirm skipped (already settled elsewhere)`);
+        return false;
+      }
 
       console.log(`[${new Date().toISOString()}] Withdrawal ${withdrawalId} confirmed (${w.amount} GRIN to ${w.grin_address})`);
       try { this.incentives.maybePayJoinBonus(w.grin_address); }
       catch (e) { console.error(`Error paying join bonus for ${w.grin_address}: ${e.message}`); }
+      return true;
     } catch (err) {
       console.error(`Error confirming withdrawal ${withdrawalId}: ${err.message}`);
+      return false;
     }
   }
 
   // Reverse a locked balance back to spendable and park the withdrawal in a terminal state.
   // Generic over fromStatus/newStatus so the slatepack rail reuses the same accounting as markFailed.
+  //
+  // The status flip is a GUARDED claim in the SAME transaction as the balance move. Both halves
+  // matter: the guard means only one caller can reverse a given row, and sharing the transaction
+  // means nothing can interleave between "I won the claim" and "the balance is back". Without
+  // the guard, a finalize that had already posted on-chain could be reversed alongside it — the
+  // miner keeps the coins AND gets the balance back.
   _reverseLock(withdrawalId, newStatus, fromStatus, note) {
     try {
-      this.db.prepare('UPDATE withdrawals SET status = ? WHERE id = ?').run(newStatus, withdrawalId);
-      this.db.prepare(`
-        INSERT INTO withdrawal_events (withdrawal_id, from_status, to_status, triggered_by, note)
-        VALUES (?, ?, ?, 'scheduler', ?)
-      `).run(withdrawalId, fromStatus, newStatus, note);
+      let done = false;
+      this.db.transaction(() => {
+        const claimed = this.db.prepare(
+          'UPDATE withdrawals SET status = ? WHERE id = ? AND status = ?'
+        ).run(newStatus, withdrawalId, fromStatus);
+        if (claimed.changes !== 1) return; // someone else moved it first — do NOT touch balances
 
-      const w = this.db.prepare('SELECT * FROM withdrawals WHERE id = ?').get(withdrawalId);
-      this.db.prepare(
-        'UPDATE miner_accounts SET balance = balance + ?, balance_locked = balance_locked - ? WHERE grin_address = ?'
-      ).run(w.amount, w.amount, w.grin_address);
-      this.db.prepare(`
-        INSERT INTO balance_log
-        (grin_address, event_type, amount, balance_before, balance_after, locked_before, locked_after, reference_type, reference_id)
-        VALUES (?, 'reversal', ?, 0, 0, 0, 0, 'withdrawal', ?)
-      `).run(w.grin_address, w.amount, withdrawalId);
+        this.db.prepare(`
+          INSERT INTO withdrawal_events (withdrawal_id, from_status, to_status, triggered_by, note)
+          VALUES (?, ?, ?, 'scheduler', ?)
+        `).run(withdrawalId, fromStatus, newStatus, note);
+
+        const w = this.db.prepare('SELECT * FROM withdrawals WHERE id = ?').get(withdrawalId);
+        const before = this.db.prepare(
+          'SELECT balance, balance_locked FROM miner_accounts WHERE grin_address = ?'
+        ).get(w.grin_address) || { balance: 0, balance_locked: 0 };
+        this.db.prepare(
+          'UPDATE miner_accounts SET balance = balance + ?, balance_locked = balance_locked - ?, updated_at = unixepoch() WHERE grin_address = ?'
+        ).run(w.amount, w.amount, w.grin_address);
+        this.db.prepare(`
+          INSERT INTO balance_log
+          (grin_address, event_type, amount, balance_before, balance_after, locked_before, locked_after, reference_type, reference_id)
+          VALUES (?, 'reversal', ?, ?, ?, ?, ?, 'withdrawal', ?)
+        `).run(w.grin_address, w.amount, before.balance, before.balance + w.amount,
+               before.balance_locked, Math.max(0, before.balance_locked - w.amount), withdrawalId);
+        done = true;
+      })();
+      if (!done) {
+        console.warn(`[reverse] withdrawal ${withdrawalId} was not in ${fromStatus} — reversal skipped (already settled elsewhere)`);
+      }
+      return done;
     } catch (err) {
       console.error(`Error reversing withdrawal ${withdrawalId}: ${err.message}`);
+      return false;
+    }
+  }
+
+  // ─── Finalize claim (the guard against a double-settle) ─────────────────────
+  // finalizeSlatepackWithdrawal / finalizeNostrWithdrawal both read the row, then `await` three
+  // wallet calls before writing anything back. Node yields at every await, so the scheduler loop
+  // runs INSIDE that gap — and processSlatepackExpiry / cancelWithdrawal select on exactly the
+  // status the finalize just validated. The interleaving pays twice:
+  //
+  //   finalize reads row (pending, ok) → await yields → expiry reverses the lock (miner refunded)
+  //   → finalize resumes → postTx broadcasts (miner also paid on-chain).
+  //
+  // Re-checking the status after the awaits is not enough; the decision to broadcast is already
+  // made by then. So take the row out of the pending pool BEFORE any wallet call. 'finalizing'
+  // is inside PENDING_SQL (still holds the one-pending slot, still counted as in-flight) but is
+  // matched by neither the expiry sweep nor cancelWithdrawal's cancellable set.
+  // The event row is not decoration: its created_at is the ONLY record of when the claim was
+  // taken, and reclaimStaleFinalizing ages the claim from it. So the flip and the event are one
+  // transaction — a claim without its timestamp would look infinitely old to the sweeper.
+  _claimForFinalize(withdrawalId) {
+    let won = false;
+    this.db.transaction(() => {
+      const claimed = this.db.prepare(
+        "UPDATE withdrawals SET status = 'finalizing' WHERE id = ? AND status = 'slatepack_pending'"
+      ).run(withdrawalId);
+      if (claimed.changes !== 1) return;
+      this.db.prepare(`
+        INSERT INTO withdrawal_events (withdrawal_id, from_status, to_status, triggered_by, note)
+        VALUES (?, 'slatepack_pending', 'finalizing', 'scheduler', 'claimed for finalize')
+      `).run(withdrawalId);
+      won = true;
+    })();
+    return won;
+  }
+
+  // Hand the row back when the wallet refused BEFORE anything was broadcast, so the miner can
+  // re-submit and the TTL sweep can still refund. Only ever called on a path where postTx did
+  // not run — a failure after broadcast must stay 'finalizing' for reclaimStaleFinalizing to
+  // resolve from the chain, never be re-opened for a second send.
+  _releaseFinalizeClaim(withdrawalId, note) {
+    try {
+      const back = this.db.prepare(
+        "UPDATE withdrawals SET status = 'slatepack_pending' WHERE id = ? AND status = 'finalizing'"
+      ).run(withdrawalId);
+      if (back.changes === 1) {
+        this.db.prepare(`
+          INSERT INTO withdrawal_events (withdrawal_id, from_status, to_status, triggered_by, note)
+          VALUES (?, 'finalizing', 'slatepack_pending', 'scheduler', ?)
+        `).run(withdrawalId, note || 'finalize failed before broadcast — returned to pending');
+      }
+    } catch (e) {
+      console.error(`[finalize] could not release claim on ${withdrawalId}: ${e.message}`);
+    }
+  }
+
+  // A 'finalizing' row older than FINALIZING_STALE_S lost its owner — the process restarted
+  // between the claim and the settle. It must not sit there forever (expiry skips it, cancel
+  // refuses it), but it must not be blindly reverted either: if postTx already ran, reverting
+  // refunds a miner who was paid.
+  //
+  // So ask the wallet which it was. The row carries the slate_id we issued, so this is an exact
+  // lookup, not an amount heuristic:
+  //   · found as a live TxSent  → it posted   → confirm (release lock, debit, fee)
+  //   · absent from the tx log  → never sent  → back to slatepack_pending (TTL/miner resume)
+  //   · wallet unreachable      → unknown     → leave it and re-ask next tick
+  // "Unknown" deliberately parks rather than guessing: both guesses lose real money, and a
+  // stalled payout is recoverable while a double-pay is not.
+  async reclaimStaleFinalizing() {
+    try {
+      const cutoff = Math.floor(Date.now() / 1000) - FINALIZING_STALE_S;
+      // Age the CLAIM, not the row. withdrawals.created_at is when the payout was REQUESTED —
+      // for a slatepack row that is up to 24h before the miner responds, so ageing by it would
+      // make every fresh claim look instantly stale and let this sweep race a live finalize,
+      // re-opening the very double-pay the claim prevents. The claim's own timestamp is the
+      // created_at of the event _claimForFinalize writes (indexed by withdrawal_id, created_at).
+      // COALESCE to 0 means "claim event missing" is treated as stale — that cannot happen on a
+      // fresh claim (both writes are one transaction), so only a genuinely odd row lands there,
+      // and resolving it is safe: the wallet log decides, this sweep never guesses.
+      const stale = this.db.prepare(
+        `SELECT w.id, w.slate_id, w.grin_address, w.amount FROM withdrawals w
+          WHERE w.status = 'finalizing'
+            AND COALESCE((SELECT MAX(e.created_at) FROM withdrawal_events e
+                           WHERE e.withdrawal_id = w.id AND e.to_status = 'finalizing'), 0) <= ?
+          ORDER BY w.created_at ASC LIMIT 10`
+      ).all(cutoff);
+      if (!stale.length) return;
+
+      if (!this.wallet || typeof this.wallet.getTransactions !== 'function') {
+        console.error(
+          `⚠️  ${stale.length} withdrawal(s) stuck in 'finalizing' and no Owner-API wallet to check ` +
+          `them against — resolve manually before resuming payouts`
+        );
+        return;
+      }
+
+      let txs;
+      try { txs = await this.wallet.getTransactions(true); }
+      catch (e) {
+        console.warn(`[finalize] stale-claim sweep deferred — wallet tx log unreadable: ${e.message}`);
+        return;
+      }
+      if (!Array.isArray(txs)) return;
+      const live = new Set(
+        txs.filter((t) => t && t.tx_slate_id && String(t.tx_type) === 'TxSent')
+           .map((t) => String(t.tx_slate_id))
+      );
+
+      for (const w of stale) {
+        if (w.slate_id && live.has(String(w.slate_id))) {
+          console.warn(`[finalize] stale claim ${w.id}: slate ${w.slate_id} DID post — confirming`);
+          this._creditConfirm(w.id, 'finalizing', 'recovered: broadcast confirmed from wallet tx log');
+        } else if (w.slate_id) {
+          console.warn(`[finalize] stale claim ${w.id}: slate ${w.slate_id} never posted — returned to pending`);
+          this._releaseFinalizeClaim(w.id, 'recovered: no broadcast found, returned to pending');
+        } else {
+          // No slate_id means the claim died before initSendTx recorded one, so nothing can have
+          // been broadcast under it — safe to re-open.
+          this._releaseFinalizeClaim(w.id, 'recovered: no slate issued, returned to pending');
+        }
+      }
+    } catch (err) {
+      console.error(`Error reclaiming stale finalize claims: ${err.message}`);
     }
   }
 
@@ -1155,8 +1441,11 @@ class WithdrawalScheduler {
 
   getStatus() {
     try {
+      // Use PENDING_SQL, never a hand-written list. This one had drifted: it predated both the
+      // slatepack and Goblin rails, so the admin scheduler view's "pending" count silently
+      // excluded every payout parked in slatepack_pending — and would have excluded finalizing too.
       const pending = this.db.prepare(
-        "SELECT COUNT(*) as count FROM withdrawals WHERE status IN ('tor_checking', 'tor_sending', 'retry_scheduled')"
+        `SELECT COUNT(*) as count FROM withdrawals WHERE ${PENDING_SQL}`
       ).get();
 
       const confirmed = this.db.prepare(

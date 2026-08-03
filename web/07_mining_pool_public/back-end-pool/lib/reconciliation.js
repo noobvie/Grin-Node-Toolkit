@@ -84,7 +84,7 @@ async function computeReconciliation(db, wallet, forceRefresh = true) {
   ).get().s;
   const pending = db.prepare(
     `SELECT COALESCE(SUM(amount),0) AS amt, COUNT(*) AS cnt FROM withdrawals
-     WHERE status IN ('tor_checking','tor_sending','retry_scheduled','slatepack_pending')`
+     WHERE status IN ('tor_checking','tor_sending','retry_scheduled','slatepack_pending','finalizing')`
   ).get();
 
   // Bucket detail (donation + fee → contest budget). Lifetime per-address sums —
@@ -97,8 +97,13 @@ async function computeReconciliation(db, wallet, forceRefresh = true) {
     for (const k of Object.keys(raw)) out[k] = (raw[k] || 0) + (agg[k] || 0);
     return out;
   };
+  // 'pool_fee'   = the percentage cut of each block reward (rewards.js)
+  // 'withdrawal_fee' = the flat per-withdrawal fee (withdrawal-scheduler.js, on confirm)
+  // Both land in the same pseudo-account and are both fee income, so `collected` counts both.
+  // Neither is external money IN (see FLOW_CASES) — they are internal transfers of GRIN the
+  // pool already held, so they are intentionally absent from the flow statement's in/out.
   const FEE_CASES = (amt) => `
-    SELECT COALESCE(SUM(CASE WHEN event_type='credit' AND reference_type='pool_fee' THEN ${amt} END),0) AS collected,
+    SELECT COALESCE(SUM(CASE WHEN event_type='credit' AND reference_type IN ('pool_fee','withdrawal_fee') THEN ${amt} END),0) AS collected,
            COALESCE(SUM(CASE WHEN event_type='debit'  AND reference_type='fee_cut'  THEN ${amt} END),0) AS diverted`;
   const feeAgg = composite(
     `${FEE_CASES('amount')} FROM balance_log WHERE grin_address='pool_fee' AND created_at >= ?`,
@@ -117,8 +122,14 @@ async function computeReconciliation(db, wallet, forceRefresh = true) {
     `${PRIZE_CASES('total_amount')} FROM balance_log_daily WHERE grin_address='prize_pool' AND day < ?`,
     []
   );
-  const feeBalance = db.prepare(`SELECT COALESCE(balance,0) AS b FROM miner_accounts WHERE grin_address='pool_fee'`).get().b;
-  const prizeBalance = db.prepare(`SELECT COALESCE(balance,0) AS b FROM miner_accounts WHERE grin_address='prize_pool'`).get().b;
+  // SUM(), not a bare column: the operator pseudo-accounts are created lazily (first fee cut /
+  // first prize credit), so on a fresh pool the row does NOT exist yet and `.get()` returns
+  // undefined — COALESCE only covers a NULL column, never a missing ROW. Dereferencing that
+  // threw inside computeReconciliation, and AlertMonitor swallowed it as "Money reconciliation
+  // failed", so the invariant guarding the money silently never ran on a new install. An
+  // aggregate with no GROUP BY always yields exactly one row, matching `minerSpendable` above.
+  const feeBalance = db.prepare(`SELECT COALESCE(SUM(balance),0) AS b FROM miner_accounts WHERE grin_address='pool_fee'`).get().b;
+  const prizeBalance = db.prepare(`SELECT COALESCE(SUM(balance),0) AS b FROM miner_accounts WHERE grin_address='prize_pool'`).get().b;
 
   // Immature block rewards — found but not yet matured/distributed, so NOT in `owed` yet.
   const immatureBlocks = db.prepare(
@@ -275,7 +286,7 @@ async function auditWalletSends(db, wallet, opts = {}) {
   // Candidate pool withdrawals: any row whose send was actually attempted, within the window.
   const rows = db.prepare(`
     SELECT id, amount, fee, slate_id, created_at, confirmed_at, status FROM withdrawals
-    WHERE status IN ('confirmed','tor_sending','tor_failed','cancelled','slatepack_pending')
+    WHERE status IN ('confirmed','tor_sending','tor_failed','cancelled','slatepack_pending','finalizing')
       AND (created_at >= ? OR COALESCE(confirmed_at,0) >= ?)
   `).all(cutoff, cutoff);
   const consumed = new Set();

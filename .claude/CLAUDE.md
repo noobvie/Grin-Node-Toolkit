@@ -15,7 +15,7 @@ keep this file lean. (The full pre-2026-06 product detail is recoverable from gi
 
 ## Tech Stack
 - **Shell:** Bash (primary — all scripts must pass `bash -n` syntax check)
-- **Web backend:** Node.js/Express + SQLite (scripts 052–055, and the Script 07 public-pool backend)
+- **Web backend:** Node.js/Express + SQLite (scripts 052–053, and the Script 07 public-pool backend)
 - **Web server:** Nginx (vhost management, SSL via certbot)
 - **Process management:** systemd services + tmux sessions
 - **Grin tooling:** grin-wallet binary (Foreign API v2, Owner API v3 ECDH). **Note:** "Grim wallet" (GetGrin/grim) is a completely separate GUI wallet project — never conflate with grin-wallet (mimblewimble org).
@@ -29,12 +29,18 @@ scripts/
   02_  Nginx file server manager
   03_  Share chain data
   04_  Node foreign API + stats collector
-  05_  Wallet services hub (launches 051–055)
-  051_ Private web wallet
+  05_  Wallet services hub (launches 051–053; also hosts the 05C CMD-wallet quick setup)
+  051_ Private web wallet (051x_ = XP-themed variant, launched from inside 051)
   052_ Grin Drop (giveaway + donation portal)
   053_ WooCommerce payment gateway
-  054_ Payment Pro
-  055_ Public WASM wallet
+  054+ UNALLOCATED — assign a number when a build STARTS, not to an idea. Pick one
+       that keeps the 05 hub menu ascending (menu groups run wallets → giveaways →
+       payments, so a wallet product needs a low number). Planned products get a dim
+       footer line with no menu key. Pre-assigning numbers to unbuilt ideas is what
+       made that menu read 1,5,C,3,4,6,2. An unbuilt product has NO number, so its
+       design doc lives under its HUB's number, never a reserved one. Planned:
+       Payment Pro, Public WASM wallet (script05_design.md PART A), GoblinPay
+       (script09_design.md PART C).
   06_  Global health + price collector (06b = GrinScan explorer)
   07_  Mining services hub → 07_grin_mining_solo.sh (solo private, has a `lan` arg) and
        07_grin_mining_public_pool.sh (GRINIUM public pool; libs 07_lib_hub.sh /
@@ -83,6 +89,12 @@ curl -s "https://api.nonlogs.io/api/markets/GRIN-BTC" | python3 -m json.tool
 - Lib files (scripts/lib/) are sourced, not executed — no shebang needed
 - Function names: `snake_case`, prefixed with script prefix (e.g. `drop_`, `node_`)
 - Option numbers in menus: numeric for main actions, letters (B/R/D/L) for secondary
+- **Menu rows show NAMES, not script numbers.** The menu key is positional (assigned
+  top-to-bottom at render); a script's number (051, 05C …) is file/doc identity and is
+  printed only on that product's own screen banner (`05C) GRIN WALLET QUICK SETUP`) —
+  never duplicated onto the parent hub's row, where `A) 05C ·` reads as a broken
+  sequence. So never name a product to an operator by number alone: say "the CMD Wallet
+  quick setup (hub 05)", not "05C". Full rationale → `05_grin_wallet_service.sh` header.
 - Interactive SESSION logs use `_$(date +%Y%m%d_%H%M%S).log`; continuous fixed-name
   logs (watchdogs, daemons) are rotated via logrotate, not per-run dated.
 
@@ -258,6 +270,24 @@ runtime. **Coinbase reception never depends on ②** (it's `build_coinbase`, loc
 Patch locations: solo `lib/07_solo_wallet.sh` step 4; pool `lib/07_lib_pool_wallet.sh`
 (~`node_api_secret_path`); drop `lib/052_lib_wallet.sh` `_drop_write_toml`.
 
+### Passphrase input — use STDIN, not `-p` (verified 2026-07-29)
+Several comments in this repo claim "grin-wallet has no stdin or env-var passphrase input —
+`-p` is the only option." **That is wrong.** grin-wallet 5.4.1 pins `rpassword = "4.0"`, whose
+`read_password()` reads **stdin** (`read_password_from_stdin(false)` — it does not open
+`/dev/tty`) and takes an explicit non-TTY branch: *"if we don't have a TTY, the input was
+piped so we bypass terminal hiding code"* → `stdin.read_line()`. What IS true: there is no
+env-var input (the clap `pass` arg declares no `env`), so stdin is the only argv-free channel.
+- **Feed the passphrase on stdin**: `exec grin-wallet … listen < "$pass_file"` (mode-600 file),
+  or `printf '%s\n' "$p" | grin-wallet … info` (printf is a bash *builtin* — no argv at all).
+  `init` asks twice; send two lines (a spare line is harmless if it ever asks once).
+- **Why it matters:** `-p` puts the passphrase in `ps aux` / `/proc/<pid>/cmdline` for the
+  entire life of the process. For a 24/7 listener that is a permanent leak to every local user,
+  not the "brief, one-time" exposure the old comments describe.
+- **Done in** `05_grin_wallet_service.sh` (CMD wallet). **Still on `-p`:** `lib/07_solo_wallet.sh`,
+  `lib/07_lib_pool_wallet.sh`, `lib/052_lib_wallet.sh` — convert when next touched.
+- **Exception — `init -hr` (recover):** leave stdin attached to the terminal so grin-wallet
+  prompts for the mnemonic itself; never route a recovery phrase through a toolkit script.
+
 ## tmux Sessions — Always Use Bash
 When generating `tmux new-session` commands (cron wrappers, watchdogs, any cron-run code),
 always prefix with `SHELL=/bin/bash`:
@@ -353,6 +383,31 @@ ALL generated docs go to `docs/generated/` — never scatter into `web/` etc. Th
 
 Before creating any `.md`, check if it should merge into an existing `script##_[type].md`.
 
+## Local Test Processes — Kill Everything You Start
+The dev machine is the user's **single Windows workstation**, not a disposable CI box. Every
+process started locally to test/verify (python `http.server`, `node <server>.js`, jsdom
+harnesses, headless browsers, watchers) MUST be killed **in the same session that started it**.
+- **Prefer a process that exits on its own** — one-shot `curl`/`Invoke-WebRequest`, `bash -n`,
+  `node -e`, a jsdom script. Only start a server when nothing one-shot can do the job.
+- **If a server is unavoidable:** bind localhost explicitly (`python -m http.server PORT
+  --bind 127.0.0.1`), capture the PID, `Stop-Process -Force` it as soon as the check is done.
+- **Kill the whole tree.** Windows `python.exe` from `WindowsApps` is a launcher stub that
+  spawns a second real `pythoncore-*\python.exe`, and Bash-tool launches sit under 2–3
+  `bash.exe` wrappers — killing one PID leaves the listener alive.
+- **Background tasks count too** — a `run_in_background` command or a spawned agent left
+  running is the same problem.
+- **End-of-session sweep**, alongside the `git status --short` temp-file check:
+  ```powershell
+  Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -match 'Temp[\\/]claude[\\/]|claude[\\/]shell-snapshots|http\.server' }
+  ```
+  Never match or kill `msedge`/`chrome`/`Code` — those are the user's own apps.
+
+**Why it compounds:** an orphan squats its port, so the next run picks a *new* port instead of
+failing loudly. On 2026-07-26 a sweep found **35 orphans from 7/23–7/25 holding 11 ports**
+(8479, 8791–8799, 8801), two bound to `::` (all interfaces — LAN-reachable, not just
+localhost). Nothing had autostart persistence; they simply survived **10 days of uptime**
+because the box hadn't rebooted. A reboot clears them — that is luck, not a cleanup strategy.
+
 ## Per-Product Detail — pointers (not in this file)
 Deep implementation facts live in local memory + committed docs. When working on a product,
 recall the relevant memory and read its doc:
@@ -383,3 +438,5 @@ plausible-looking suspect is not a confirmed cause.
 - Never use `--floonet` — the correct testnet flag is `--testnet`
 - Never mix mainnet and testnet ports or directories
 - Don't add `#!/bin/bash` to lib files — they are sourced, not executed
+- Never leave a local test process running — kill every server/probe you start, in the same
+  session (see *Local Test Processes*); never bind a test server to `0.0.0.0`/`::`

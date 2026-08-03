@@ -207,7 +207,7 @@ reversal on fail/expiry, slate-id binding on slatepack finalize. **Incentives** 
 
 New / still-open findings:
 
-### C1 — [Medium] `/api/pool/miners` and `/api/pool/payments` leak full raw data, unauthenticated *and* un-rate-limited
+### C1 — [Medium] `/api/pool/miners` and `/api/pool/payments` leak full raw data, unauthenticated *and* un-rate-limited — **FIXED 2026-07-28**
 - **Evidence:** [index.js:1767-1779](../../web/07_mining_pool_public/back-end-pool/index.js#L1767-L1779)
   returns `grin_address, balance, is_online` for the top-500 addresses by balance (full addresses
   + exact live balances). [index.js:1781-1793](../../web/07_mining_pool_public/back-end-pool/index.js#L1781-L1793)
@@ -216,11 +216,29 @@ New / still-open findings:
   (most other public routes do), so both are freely scrapeable.
 - **Impact:** On a privacy coin this is the worst public-leak class — anyone can enumerate every
   miner's payout address, exact balance, and full payment cadence, and correlate the two lists.
-  This is the audit's long-standing open item ("public payments/miners aggregated or gated —
-  *verify*"); **it is still unaddressed in the current code.**
-- **Fix:** Return aggregates/anonymized rows only — truncated addresses (`grin1abc…wxyz`), bucketed
-  or omitted balances, totals/counts. Replace `SELECT *` with an explicit safe column list. Add the
-  `public` rate-limiter. (Per-address pages already correctly show only that exact address's data.)
+- **Fixed 2026-07-28**, in the course of verifying `api-docs.html` against the live route table —
+  the auto-generated reference was about to *advertise* all three of these:
+  - `/api/pool/miners` — addresses now masked via the shared `maskAddr()` (`grin1qxy…mn4p`). The
+    balance distribution is legitimate pool-health data and survives masking; the address→balance
+    mapping, which is what made it a targeting list, does not. No front-end consumed it.
+  - `/api/pool/payments` — `SELECT *` replaced with an explicit column list. Dropped `slate_id`,
+    `tor_check_result`, `retry_count`, `next_retry_at`, `cancel_reason`, `cancelled_by`: pool
+    payout-machinery internals that read as a per-miner reliability record and are rendered by
+    nothing. `grin_address` stays FULL here on purpose — address-as-identity means the account page
+    is public and keyed by it, and both consumers link the row through to `/account-settings.html`.
+  - **`/api/miners/top` DELETED.** Not in the original finding, found during the same sweep and
+    strictly worse: full address + `balance` + `balance_locked` + share count + online flag +
+    account age, ordered by balance descending and *offset-paginated*, so a scraper could walk the
+    pool's whole custodial position miner by miner. No consumer anywhere in the repo; duplicated
+    `/api/pool/miners`. The legitimate leaderboards (`/api/stratum/top-miners`,
+    `/api/pool/top-block-finders`) rank on contribution, not on balance.
+  - `/api/pool/blocks` — `SELECT *` → explicit columns; dropped the winning `nonce` and internal
+    `id`/`created_at` (the block hash already anchors a find on any chain explorer).
+  - The rate-limiter half of the finding was **already stale**: both routes carry
+    `rateLimiter.middleware('public')` in current code.
+- **Still open (deliberate):** `/api/pool/top-block-finders` publishes full addresses. It is a
+  luck leaderboard, not a balance list, and both it and `/api/pool/payments` need the full address
+  for the account deep-link the pages render. Revisit only if the deep-link is dropped.
 
 ### C2 — [Low-Medium] Tor-rail withdrawal has no ownership gate → balance-lock griefing / forced payout — **FIXED 2026-07-17, see §E**
 - **Evidence:** `POST /api/account/:addr/withdraw` with `method:'tor'` (the default) takes **no**
@@ -347,9 +365,11 @@ independently theft-proof (pay-to-self over Tor; slatepack age-encrypted to the 
   states self-recover (Tor auto-reversal after max retries; slatepack TTL refund), and in
   Grin a send that appears failed may still have posted — a late cancel reversing the lock
   is a **double-pay** vector even when ownership-gated (the legitimate owner could abuse it
-  deliberately). Admin cancel stays (step-up gated). OPEN follow-up: the automatic
+  deliberately). Admin cancel stays (step-up gated). ~~OPEN follow-up: the automatic
   retry/reversal paths carry the same theoretical double-pay exposure; fix = record slate_id
-  on Tor sends and check wallet tx state (`retrieve_txs`) before any retry or reversal.
+  on Tor sends and check wallet tx state (`retrieve_txs`) before any retry or reversal.~~
+  → **CLOSED 2026-08-01, see §H1.** The prescribed fix was half-built: `_captureTorSlateId()`
+  recorded the slate_id but nothing consulted it, so the retry ladder still re-sent blindly.
 - **Operator-extendable password blocklist, additions-only**: `access.extra_banned_passwords`
   (pool_config) merges on top of the hardcoded seed in owner-proof.js with a 60 s cache;
   the seed + structural rules are not admin-removable, so a bad edit can weaken nothing.
@@ -375,9 +395,12 @@ independently theft-proof (pay-to-self over Tor; slatepack age-encrypted to the 
   checks the address's latest `balance_log` row with `event_type='reversal'` +
   `reference_type='withdrawal'` (written by Tor `markFailed`, slatepack expiry/creation
   failure `_reverseLock`, and admin cancel) and 429s both create paths while inside the
-  window, before any lock is taken. Purpose: (1) safety margin over the OPEN
-  slate_id/`retrieve_txs` double-pay window in E.1 — a "failed" Tor send that actually posted
-  gets 30 min to surface before the miner can pull the same funds through another rail;
+  window, before any lock is taken. Purpose: (1) safety margin over the (then-open, now closed
+  in §H1) slate_id/`retrieve_txs` double-pay window in E.1 — a "failed" Tor send that actually
+  posted gets 30 min to surface before the miner can pull the same funds through another rail.
+  **Note this never covered the retry ladder itself** (same row re-entering `sendWithdrawal`,
+  which does not pass this check) — only a *new* withdrawal on another rail. §H1 is what closed
+  the ladder;
   (2) kills rapid-fire rail-hopping after failures. Orphan/jackpot clawback reversals use
   `reference_type≠'withdrawal'` and do NOT trigger the cooldown.
 
@@ -421,7 +444,9 @@ authorize an arbitrary-destination payout. Layered defenses (all implemented):
 Residual / to validate on the VPS: the live nostr-tools crypto (nip59 wrap/unwrap) and relay
 delivery are exercised only by an E2E run — do a testnet / tiny-amount pilot before enabling on
 mainnet. The E.1 slate_id/`retrieve_txs` double-pay hardening applies here too (the failed-send
-reversal shares the exposure); the failed-payout cooldown is the current mitigation.
+reversal shares the exposure) — **closed 2026-08-01 by §H1/§H2**; this rail is in fact the most
+exposed to the finalize race, since its 10-minute TTL is far tighter than slatepack's 24 h and
+relay redelivery makes duplicate response events routine rather than exceptional.
 
 ## F. Payout-path throttle hardening — 2026-07-22 (add-ons, NOT VPS-tested)
 
@@ -629,11 +654,11 @@ would re-expose precisely what the floor hides. Client-side this is already safe
 filters `c.lat != null` before rendering, and its country-highlight set matches on canonical
 Natural-Earth names, which `Other` never matches.
 
-**Related, NOT fixed here:** `/api/pool/miners` (§C1) still returns every miner's **full** Grin
-address and balance unauthenticated. No IP — but it is a bigger identity leak than the map ever was,
-and it contradicts the posture `/api/stratum/stats` already applies (that route truncates addresses
-to `xxxxxxxxx…xxxx` specifically so the session list can't be scraped into a miner census). C1 stays
-open pending an operator decision on public-leaderboard behaviour.
+**Related, NOT fixed here — resolved later:** `/api/pool/miners` (§C1) returned every miner's
+**full** Grin address and balance unauthenticated. No IP — but a bigger identity leak than the map
+ever was, and it contradicted the posture `/api/stratum/stats` already applies (that route truncates
+addresses to `xxxxxxxxx…xxxx` specifically so the session list can't be scraped into a miner
+census). **Closed 2026-07-28** — that same truncation is now applied to `/api/pool/miners`; see §C1.
 
 ### G4 — Payout request audit surfaced in the admin panel — **BUILT 2026-07-25**
 
@@ -673,3 +698,200 @@ check and leave no row, so a quiet table is not proof that nothing was attempted
 
 > Origin stays the coarsened `/24`//`48` from G1 — sufficient here, since repeated attempts from one
 > origin still group. This view does not reintroduce host-level IP storage.
+
+## H. Payout double-pay hardening + probe oracle — 2026-08-01 (add-ons, NOT VPS-tested)
+
+Pre-mainnet review of the three payout rails, run before topping up a real wallet. The spine —
+one balance-lock accounting path with three delivery adapters — was found sound and was NOT
+restructured. Two ways it could pay the same money twice were found and closed. Both were the
+same bug class: **a decision to spend money made from state read before an `await`, and
+re-checked nowhere.**
+
+### H1 — [Critical] Tor retry re-sent without checking whether the first send landed — **FIXED**
+
+`sendToTorAddress` shells out to `grin-wallet send` with a `wallet_send_timeout_ms` ceiling
+(120 s default) and then `SIGKILL`s it. A kill at 120 s does **not** mean the tx failed to post:
+the Tor round-trip, finalize and broadcast can all have completed while the CLI still held the
+pipe. The scheduler saw `success:false`, scheduled a retry, and hours later sent the same amount
+again. Both land; the miner is paid twice; the ledger debits once. Unrecoverable.
+
+The E.2 reversal cooldown never covered this — it gates a miner starting a *new* withdrawal after
+a refund, whereas a retry is the same row re-entering `sendWithdrawal` without passing that check.
+
+**Fix — `_priorSendLanded()`**, consulted at the top of `sendWithdrawal` but only on a re-attempt
+(`retry_count > 0` or a `slate_id` already captured), so the first attempt costs no extra wallet
+round-trip. A hit confirms the row instead of re-sending. Matching is deliberately narrow, because
+a false *positive* marks a miner paid who was not:
+
+- exact `slate_id` when one exists (authoritative — no amount heuristics);
+- otherwise a `TxSent` whose net-to-recipient equals this payout's net, created no earlier than
+  the withdrawal row, **and whose slate_id is not already claimed by a different withdrawal** —
+  so two miners withdrawing the same amount can never collide;
+- `TxSentCancelled` excluded (never reached the chain). Note this is stricter than
+  `_captureTorSlateId`'s `/Sent/` regex, which matches the cancelled form — that one only
+  decorates a proof link, this one decides whether to spend.
+
+When the wallet cannot be read at all it returns `checked:false` and the retry proceeds with a
+loud error naming itself. Fail-open is deliberate: refusing to retry would strand live payouts
+whenever the Owner API blips, a worse trade than a logged unknown.
+
+### H2 — [Critical] Finalize and the TTL sweep could both settle one row — **FIXED**
+
+`finalizeSlatepackWithdrawal` and `finalizeNostrWithdrawal` read the row, checked
+`status === 'slatepack_pending'`, then awaited three wallet calls before writing anything back.
+Nothing claimed the row in between, while `processSlatepackExpiry` selected on that same status
+and `cancelWithdrawal` could fire at any moment. Node yields at each await, so the scheduler
+loop runs inside the gap:
+
+> finalize reads row (pending, ok) → await yields → expiry reverses the lock (**miner refunded**)
+> → finalize resumes → `postTx` broadcasts (**miner also paid on-chain**).
+
+Only two of seven status writes in the scheduler were guarded with `AND status = ?`.
+`_creditConfirm`, `_reverseLock`, `markConfirmed` and `markFailed` all wrote `WHERE id = ?`
+unconditionally. The failure was also **quiet**: the clamp in `_releaseLockAndDebit` keeps the
+ledger internally consistent with the wrong outcome, so `integrity_drift` does not fire — only
+the coverage invariant catches it, after the coins are gone.
+
+Most likely trigger was **not** the TTL but an **admin cancel** — an operator cancelling a payout
+that looks stuck at exactly the moment the miner's wallet finally answers.
+
+**Fix — a `finalizing` claim, plus three things it needs to be safe:**
+
+1. `_claimForFinalize()` runs `SET status='finalizing' WHERE id=? AND status='slatepack_pending'`
+   before the first await; both finalize methods bail unless they win. `finalizing` is inside
+   `PENDING_SQL` (still holds the one-pending slot, still counted in-flight) but is matched by
+   neither the expiry sweep nor `cancelWithdrawal` — an admin cancel on a claimed row now 409s.
+2. **Every settlement write is now a CAS inside one transaction.** `_creditConfirm` and
+   `_reverseLock` guard on the expected `fromStatus` and run the status flip *and* the balance
+   move together, so confirm and reverse compete for the row and the loser moves no money.
+   `markConfirmed`/`markFailed` were rewritten to delegate rather than hand-roll the same three
+   statements again. (This also closed the separate finding that those paths were non-transactional
+   — it was a requirement of the guard, not an extra.)
+3. `reclaimStaleFinalizing()` resolves an abandoned claim (>10 min, i.e. a process restart
+   mid-finalize) **from the wallet tx log, never by guessing**: slate present → confirm; slate
+   absent → back to `slatepack_pending`; wallet unreachable → leave it and re-ask next tick. It
+   runs even while payouts are frozen, since it only records what the chain already decided. A
+   guard that can strand a balance is not an improvement.
+4. A throw from `postTx` is treated as **ambiguous, not failed** — the row stays claimed for the
+   sweep. Releasing the claim there would have rebuilt the same bug one layer down.
+
+> **Trap for future changes:** `markFailed` is reached with the row in `tor_sending`, not the
+> `retry_scheduled` its old event row claimed. A guard hard-coded to `retry_scheduled` silently
+> strands every exhausted-retry balance; it now reads the live status.
+
+> **Trap #2 — age the CLAIM, not the row** (caught in self-review, after the first implementation
+> shipped it wrong). `reclaimStaleFinalizing` originally aged rows by
+> `COALESCE(confirmed_at, created_at)`. For a claimed row `confirmed_at` is NULL, so it fell back
+> to `withdrawals.created_at` — **when the payout was requested**, which for a slatepack row is up
+> to 24 h before the miner responds. Every fresh claim therefore looked instantly stale, so the
+> sweep would race a live finalize, release its claim, and hand the row back to the expiry sweep:
+> the exact double-pay the claim exists to prevent, re-introduced by its own recovery path, worst
+> on the rail with the longest TTL. The claim's age now comes from the `to_status='finalizing'`
+> event `_claimForFinalize` writes (indexed by `withdrawal_id, created_at`), and that event is
+> written in the SAME transaction as the status flip — a claim without its timestamp would look
+> infinitely old. Regression test: a fresh claim on a 24 h-old withdrawal must not be reclaimed,
+> and the sweep must not even consult the wallet for it.
+
+> **`finalizing` had to be added to every other in-flight status list** or the fix causes its own
+> incident. The sharp one is AlertMonitor's `inFlight`: a row missing there reads as an
+> unexplained wallet drain and **auto-freezes the pool**. Also updated: reconciliation's pending
+> sum and payout-matching window, the account-summary pending display, the admin payments view,
+> and the account page's status label ("settling"). No migration — `status` is plain TEXT with no
+> CHECK constraint.
+
+### H3 — [Medium] `tor-check` was a public wallet-uptime oracle for any Grin address — **FIXED**
+
+`GET /api/account/:addr/tor-check` rode the loose `public` bucket (1200/min) with no ownership
+gate and **no check that the address had ever mined here**. `probeToronlineStatus` derives the
+onion from the bech32 address by pure math, so it answered *"is this wallet listener up right
+now?"* for **any** Grin address — an activity side-channel on people who never opted into this
+pool. Reachable without API knowledge: the account page probes whatever address is typed into it.
+Secondarily an amplification lever — one cheap HTTP request became a Tor circuit build plus up to
+`torCheckRetries` SOCKS connects.
+
+**Deliberately NOT fixed with an ownership proof.** The probe runs *before* the miner has typed
+anything and its job is to tell them which rail to pick, so gating it removes the hint exactly
+when it is useful — and a proof would not stop amplification anyway, since a miner holding a valid
+proof can still hammer it. Three changes instead:
+
+- **Account-existence check** → 404 for an address that never mined here. This is the one that
+  matters; it closes the arbitrary-address oracle at no UX cost. Same 404 shape as
+  `GET /api/account/:addr`, so it reveals nothing that endpoint doesn't. Residual signal for
+  miners who *are* here is small — the pool already publishes their hashrate, which tracks
+  activity far more closely than listener uptime.
+- **60 s per-address response cache + in-flight dedup.** The cache alone would not have fixed
+  click-spam: rapid clicks arrive *before* the first probe resolves, all miss an empty cache and
+  each builds its own circuit. The in-flight map collapses them onto one promise, cleaned in a
+  `finally` — without that, a probe that throws (tor daemon down) parks a rejected promise under
+  that address and every later request is handed the same failure forever. Bounded at 500 entries,
+  expired-first eviction, so an address sweep cannot grow it without limit.
+- **Dedicated `torcheck: 10/min` bucket** (not `public`, and deliberately not shared with
+  `export` — a miner's CSV download would otherwise eat their probe budget). With the cache
+  handling repeats, this number is really about **enumeration**: how many *distinct* addresses one
+  IP can probe per minute. At 1200 you could walk the leaderboard sampling every miner's wallet
+  uptime in seconds; at 10 you cannot.
+
+> The withdraw pre-flight gate still probes **fresh** — it is a money decision that can refuse a
+> payout, so a 60 s-stale "offline" must never block a listener the miner just started. Caching a
+> UI hint and caching a gate are different calls.
+
+> **Footgun:** `rateLimiter.middleware()` does `if (!limit) return next()` — an unrecognised bucket
+> name **silently disables rate limiting** rather than erroring. The name in the route and the key
+> in `this.limits` must match exactly.
+
+### H4 — [Low/UX] Status-list and status-label drift found while reviewing H1–H3 — **FIXED**
+
+Adding a status surfaced how many hand-written status lists had already drifted as the slatepack
+and Goblin rails landed. All pre-existing; all one-liners.
+
+- **`getStatus()`** counted pending as `('tor_checking','tor_sending','retry_scheduled')` — it
+  predates both newer rails, so the admin scheduler view's "pending" count had been silently
+  excluding **every** slatepack and Goblin payout in flight. Now uses `PENDING_SQL`, the constant
+  that exists precisely for this. (Note: a grep for lists *containing* `slatepack_pending` does
+  not find this one — it never had it. Search by `tor_checking` instead.)
+- **`payments.html` `STATUS` map** had no entry for any slatepack/Goblin state, so those rows fell
+  through to `['badge-dim', <raw status>]` — an in-flight payout showing "slatepack_pending" in
+  the same grey the panel uses for CANCELLED. All five now labelled with correct severity colours.
+- **`payments.html` `ACTIVE`** (the "active" filter chip) omitted `slatepack_pending`, so filtering
+  to active hid exactly the payouts an operator would be filtering for.
+- **`payout-methods.js` `BASE_STATUS`** had an `expired` key, but the TTL sweep writes
+  `slatepack_expired` — the key never matched anything and those rows rendered the raw token on
+  the public account page. Relabelled *"expired — balance returned"*, which is the part the miner
+  actually needs to know.
+
+`canInitiateWithdrawal()`'s two stale lists are deliberately left — it is dead code and listed
+under "still open" below; fixing its lists would make it look maintained.
+
+### Verification (unit-level; NOT VPS-tested)
+
+54 assertions against the **real** methods — the scheduler ones driven over a real SQLite, the
+cache lifted out of the real `index.js` — so they cannot drift from shipped code. The pool's
+`better-sqlite3` is a native module that exists only on the VPS, so the harness runs on Node's
+built-in `node:sqlite` with a shim for the one better-sqlite3-ism used (`db.transaction(fn)`).
+
+Covered: the H2 interleaving replayed end to end (claim → sweep runs → confirm: paid once, **not**
+refunded); second claim / second confirm / reversal-on-settled all refused and verified to move no
+money; admin cancel on a claimed row 409s; stale reclaim in all three directions; H1 exact-slate
+and amount+time matches plus every rejection path (cancelled tx, wrong amount, tx predating the
+row, no wallet, junk response); the false positive that would matter most (another payout's
+slate_id never borrowed at an identical amount); cache hit/miss, concurrent dedup, throwing-probe
+cleanup, 500-entry bound, TTL expiry; and that the withdraw pre-flight never reaches the cache.
+
+**Still to validate on the VPS:** `_priorSendLanded` matches against grin-wallet's `TxLogEntry`
+shape — confirm a real `retrieve_txs` response carries `creation_ts` and the
+`amount_debited`/`amount_credited`/`fee` fields where expected before leaning on it.
+
+### Still open after this pass (none can move money incorrectly)
+
+- **Dead `canInitiateWithdrawal()`** (zero callers) encodes a status list missing
+  `slatepack_pending` and `MAX_USER_PENDING = 10`, contradicting the one-pending-per-address rule
+  the live path enforces. Harmless until someone wires it up believing it is the cap check, which
+  would re-open the cross-rail hole §E.2 closed. Delete it or reduce it to a wrapper.
+- **Audit action string takes unvalidated input.** The withdraw route builds its audit action by
+  interpolating the request's `method` field before that value is validated (the check sits after
+  every early return), so a failed proof with an arbitrary `method` writes
+  `owner_proof:withdraw_<anything>:deny` into `admin_audit_log.action`. Not SQL injection
+  (parameterised), but the audit reader matches on `action LIKE` patterns, so rows can be planted
+  that mimic other event types and muddy an incident trail.
+- **Placeholder zeros in `_releaseLockAndDebit`** — its two debit rows still write `0` for balance
+  before/after (the locked columns are correct). Reversals were fixed in §H2.

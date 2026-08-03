@@ -34,10 +34,43 @@
     }
     .api-method.get { color: #2f855a; }
     .api-method.post { color: #c05621; }
+    .api-method.delete { color: #c53030; }
     .api-path { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; color: var(--text); word-break: break-all; }
     .api-desc { color: var(--text-mute); font-size: 12.5px; margin-top: 2px; }
     .api-note { color: var(--text-mute); font-size: 12.5px; max-width: 72ch; }
     .api-base code, .api-path code { background: var(--bg-card2, rgba(127,127,127,.12)); padding: 1px 6px; border-radius: 4px; }
+
+    /* Badges: outlined, never filled. A filled accent chip would need its ink flipped per
+       theme (light themes here have DARK accents), and there is nothing to gain from the
+       weight — these are secondary metadata, not calls to action. */
+    .api-tags { margin-top: 5px; display: flex; flex-wrap: wrap; gap: 5px; }
+    .api-tag {
+      font-size: 10.5px; line-height: 1.6; padding: 0 6px; border-radius: 4px;
+      border: 1px solid var(--border); color: var(--text-mute); white-space: nowrap;
+    }
+    .api-tag.shape { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    /* The two that change whether a call SUCCEEDS get the accent; shape/rate stay quiet. */
+    .api-tag.auth, .api-tag.gated { border-color: var(--accent); color: var(--accent); }
+    .api-meta {
+      margin-top: 4px; font-size: 11.5px; color: var(--text-mute);
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace; word-break: break-word;
+    }
+    .api-meta b { font-family: inherit; font-weight: 700; color: var(--text-dim); }
+    .api-curl {
+      margin-top: 5px; font-size: 11.5px; color: var(--text-dim); overflow-x: auto;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre;
+      background: var(--bg-card2, rgba(127,127,127,.10)); padding: 5px 8px; border-radius: 5px;
+    }
+    .api-legend { margin: 0 0 18px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 8px; }
+    .api-legend dl { margin: 0; display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; }
+    .api-legend dt { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; color: var(--text-dim); }
+    .api-legend dd { margin: 0; font-size: 12.5px; color: var(--text-mute); }
+    @media (max-width: 560px) {
+      .api-row { grid-template-columns: 1fr; gap: 4px; }
+      .api-method { justify-self: start; padding: 2px 10px; }
+      .api-legend dl { grid-template-columns: 1fr; }
+      .api-legend dd { margin-bottom: 6px; }
+    }
   </style>
 </head>
 <body>
@@ -57,15 +90,34 @@
          (it opened at h2), which leaves the document with no top-level heading. -->
     <h1 class="page-title">API Reference</h1>
     <p class="api-note" style="margin-bottom:14px;">
-      The pool exposes a small, read-only public HTTP API (JSON). These endpoints power the
-      dashboard, per-account stats and the blocks explorer — you can use them to build your own
-      monitor or bot. This page is <strong>auto-generated from the live route table</strong>, so it
-      always matches what the server actually serves. All responses are
-      <code>{ "success": true, "data": … }</code> unless noted; rate-limited per IP.
+      The pool exposes a public HTTP API (JSON). These endpoints power the dashboard, per-account
+      stats and the blocks explorer — you can use them to build your own monitor or bot. The
+      <strong>endpoint list is auto-generated from the live route table</strong>, so it always
+      matches what this server actually serves; the notes on each row are maintained by hand.
     </p>
-    <p class="api-base api-note" style="margin-bottom:8px;">
-      Base URL: <code id="api-base">…</code> &nbsp;·&nbsp; <code>:addr</code> = a Grin address.
+    <p class="api-note" style="margin-bottom:14px;">
+      <strong>Response shape is not uniform.</strong> Newer endpoints wrap their payload in
+      <code>{ "success": true, "data": … }</code>; most return the payload at the top level, and
+      some return a bare array. Every row below is labelled with its actual shape — check it
+      before writing a client.
     </p>
+    <p class="api-base api-note" style="margin-bottom:12px;">
+      Base URL: <code id="api-base">…</code>
+    </p>
+
+    <div class="api-legend">
+      <dl>
+        <dt>:addr</dt><dd>a Grin address (the miner's payout address — it is the account identity)</dd>
+        <dt>:key / :slug</dt><dd>a CMS page slug / blog post slug</dd>
+        <dt>:id</dt><dd>a withdrawal id, as returned when the payout was requested</dd>
+        <dt>envelope</dt><dd><code>{ "success": true, "data": … }</code></dd>
+        <dt>flat</dt><dd><code>{ "success": true, …fields }</code> — no <code>data</code> wrapper</dd>
+        <dt>raw</dt><dd>the payload at the top level</dd>
+        <dt>array</dt><dd>a bare JSON array</dd>
+        <dt>csv</dt><dd><code>?format=csv</code> returns <code>text/csv</code> as a download, not JSON</dd>
+      </dl>
+      <p class="api-note" id="api-notes" style="margin:10px 0 0;"></p>
+    </div>
 
     <div id="api-list">
       <p class="dim" style="color:var(--text-mute);">Loading endpoints…</p>
@@ -86,14 +138,44 @@
     }
 
     var GROUP_LABELS = {
-      pool: 'Pool', account: 'Account', public: 'Public', config: 'Config', stratum: 'Stratum',
+      pool: 'Pool', account: 'Account', public: 'Public', config: 'Config',
+      stratum: 'Stratum', network: 'Network',
     };
     function groupOf(path) {
       var seg = path.split('/').filter(Boolean); // ['api','pool',...]
       return (seg[1] || 'public');
     }
 
-    function render(endpoints) {
+    function tag(cls, text) {
+      return '<span class="api-tag ' + cls + '">' + escHtml(text) + '</span>';
+    }
+
+    // Badges, then params/body, then a runnable example. Only GETs get a curl line: a POST
+    // here needs an ownership proof, and printing a copy-paste command that will always 403
+    // teaches the wrong thing — those rows list their body fields instead.
+    function rowMeta(e) {
+      var out = '';
+      var tags = '';
+      if (e.shape) tags += tag('shape', e.shape);
+      if (e.auth) tags += tag('auth', '🔒 ' + e.auth);
+      if (e.gated) tags += tag('gated', 'off unless: ' + e.gated);
+      if (e.rate_limit && e.rate_limit !== 'public') tags += tag('rate', 'rate: ' + e.rate_limit);
+      if (tags) out += '<div class="api-tags">' + tags + '</div>';
+
+      if (e.params) out += '<div class="api-meta"><b>query</b> · ' + escHtml(e.params) + '</div>';
+      if (e.body) out += '<div class="api-meta"><b>body</b> · ' + escHtml(e.body) + '</div>';
+
+      if (e.method === 'GET') {
+        // Path params render as <addr>, not :addr — a copy-pasted `:addr` 404s, and a command
+        // that only fails once you run it is the same trap as the POST examples above. Angle
+        // brackets read as "fill this in" to anyone who has used a man page.
+        var shown = e.path.replace(/:(\w+)/g, '<$1>');
+        out += '<div class="api-curl">curl -s ' + escHtml(location.origin + shown) + '</div>';
+      }
+      return out;
+    }
+
+    function render(endpoints, notes) {
       var list = document.getElementById('api-list');
       if (!endpoints || !endpoints.length) {
         list.innerHTML = '<p style="color:var(--text-mute);">No public endpoints reported.</p>';
@@ -105,7 +187,7 @@
         (groups[g] = groups[g] || []).push(e);
       });
       // Stable, friendly ordering.
-      var order = ['pool', 'account', 'public', 'config', 'stratum'];
+      var order = ['pool', 'account', 'stratum', 'network', 'public', 'config'];
       var keys = Object.keys(groups).sort(function (a, b) {
         var ia = order.indexOf(a), ib = order.indexOf(b);
         return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
@@ -113,25 +195,45 @@
 
       var html = '';
       keys.forEach(function (g) {
-        html += '<div class="api-group"><h2>' + escHtml(GROUP_LABELS[g] || g) + '</h2>';
+        html += '<div class="api-group"><h2>' + escHtml(GROUP_LABELS[g] || g) +
+          ' <span style="text-transform:none;letter-spacing:0;">(' + groups[g].length + ')</span></h2>';
         groups[g].forEach(function (e) {
           var m = (e.method || 'GET').toLowerCase();
           html += '<div class="api-row">' +
             '<span class="api-method ' + escHtml(m) + '">' + escHtml(e.method) + '</span>' +
             '<div><div class="api-path">' + escHtml(e.path) + '</div>' +
             (e.description ? '<div class="api-desc">' + escHtml(e.description) + '</div>' : '') +
+            rowMeta(e) +
             '</div></div>';
         });
         html += '</div>';
       });
       list.innerHTML = html;
+
+      // Cross-cutting facts, stated once. Rate limits come from the server's live config, so an
+      // operator who raises them doesn't leave a wrong number published here.
+      var n = notes || {};
+      var bits = [];
+      if (n.errors) bits.push(escHtml(n.errors));
+      if (n.times) bits.push(escHtml(n.times));
+      if (n.rate_limits) {
+        bits.push('Rate limits per IP, per minute: ' +
+          escHtml(String(n.rate_limits.public)) + ' for reads, ' +
+          escHtml(String(n.rate_limits.withdraw)) + ' for payout actions, ' +
+          escHtml(String(n.rate_limits.export)) + ' for CSV exports. Over the limit returns 429.');
+      }
+      if (n.cors) bits.push(escHtml(n.cors));
+      document.getElementById('api-notes').innerHTML = bits.join(' ');
     }
 
     document.addEventListener('DOMContentLoaded', function () {
       document.getElementById('api-base').textContent = location.origin;
       fetch('/api/public/endpoints', { credentials: 'same-origin' })
         .then(function (r) { return r.ok ? r.json() : null; })
-        .then(function (j) { render(j && j.data && j.data.endpoints); })
+        .then(function (j) {
+          var d = (j && j.data) || {};
+          render(d.endpoints, d.notes);
+        })
         .catch(function () {
           document.getElementById('api-list').innerHTML =
             '<p style="color:var(--text-mute);">API reference is temporarily unavailable.</p>';

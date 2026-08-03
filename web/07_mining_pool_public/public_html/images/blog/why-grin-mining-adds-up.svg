@@ -1,0 +1,94 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" role="img" aria-label="Why Grin mining still adds up for a small miner — a constant 60 GRIN block reward plotted flat against a halving coin's decaying reward, alongside ~120 W secondhand C32 hardware">
+  <!--
+    Cover for the seeded starter post (lib/posts.js → 'why-grin-mining-adds-up').
+    1200x630 = the standard OG/social ratio, so one file serves the blog card, the post
+    header and the social share card.
+
+    STATIC on purpose: the blog list renders this next to other cards, where a looping
+    sweep (as used on the /promo/ ad creatives) reads as a distraction rather than as life.
+    Palette and mono type otherwise match those creatives.
+
+    SAFE ZONE x=200..1000. The blog card is a 280px column stretched to the card's height
+    with object-fit:cover, so the wider-than-tall artwork is cropped at the SIDES by an
+    amount that GROWS as the card gets taller. At the tallest card the excerpt clamp in
+    blog.html allows (~220px), only x=200..1000 is still on screen. Keep every glyph inside
+    that band — do not drift back out to the full 1200 just because it looks roomy here.
+  -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0b0f14"/>
+      <stop offset=".55" stop-color="#07090c"/>
+      <stop offset="1" stop-color="#0c1410"/>
+    </linearGradient>
+    <radialGradient id="coreGlow" cx=".5" cy=".5" r=".5">
+      <stop offset="0" stop-color="#5dff73" stop-opacity=".55"/>
+      <stop offset=".45" stop-color="#5dff73" stop-opacity=".16"/>
+      <stop offset="1" stop-color="#5dff73" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="lineGlow" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#5dff73" stop-opacity="0"/>
+      <stop offset=".5" stop-color="#5dff73" stop-opacity=".16"/>
+      <stop offset="1" stop-color="#5dff73" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1200" height="630" fill="url(#bg)"/>
+
+  <!-- instrument grid -->
+  <g stroke="#5dff73" stroke-opacity=".05" stroke-width="1">
+    <path d="M0 90 H1200 M0 210 H1200 M0 330 H1200 M0 450 H1200 M0 570 H1200"/>
+    <path d="M150 0 V630 M300 0 V630 M450 0 V630 M600 0 V630 M750 0 V630 M900 0 V630 M1050 0 V630"/>
+  </g>
+  <!-- reactor bloom behind the headline -->
+  <circle cx="320" cy="200" r="230" fill="url(#coreGlow)"/>
+
+  <g font-family="ui-monospace,Menlo,Consolas,monospace">
+    <!-- eyebrow -->
+    <circle cx="206" cy="96" r="4.5" fill="#5dff73"/>
+    <text x="222" y="101" font-size="15" fill="#5dff73" letter-spacing="3">GRINIUM · BLOG</text>
+
+    <!-- headline -->
+    <text x="200" y="180" font-size="52" font-weight="bold" fill="#e6efe9" letter-spacing="-.5">WHY GRIN MINING</text>
+    <text x="200" y="240" font-size="52" font-weight="bold" fill="#5dff73" letter-spacing="-.5">STILL ADDS UP</text>
+    <!-- y clears the last stat chip (bottom y=272); its tail runs under the chip column. -->
+    <text x="202" y="310" font-size="19" fill="#8a978f" letter-spacing="1.2">for a small miner — the honest arithmetic</text>
+
+    <!-- stat chips -->
+    <g>
+      <rect x="700" y="64" width="300" height="60" rx="8" fill="#0b1510" stroke="#1d3a26" stroke-width="1.5"/>
+      <text x="720" y="94" font-size="23" font-weight="bold" fill="#5dff73">~120 W</text>
+      <text x="720" y="113" font-size="12" fill="#8a978f" letter-spacing=".4">secondhand C32 ASIC draw</text>
+
+      <rect x="700" y="138" width="300" height="60" rx="8" fill="#0b1510" stroke="#1d3a26" stroke-width="1.5"/>
+      <text x="720" y="168" font-size="23" font-weight="bold" fill="#5dff73">NEVER HALVES</text>
+      <text x="720" y="187" font-size="12" fill="#8a978f" letter-spacing=".4">linear tail emission, no cliff</text>
+
+      <rect x="700" y="212" width="300" height="60" rx="8" fill="#0b1510" stroke="#1d3a26" stroke-width="1.5"/>
+      <text x="720" y="242" font-size="23" font-weight="bold" fill="#5dff73">NO SIGN-UP</text>
+      <text x="720" y="261" font-size="12" fill="#8a978f" letter-spacing=".4">your address is your account</text>
+    </g>
+
+    <!-- emission chart: a flat Grin reward against a halving coin's staircase -->
+    <g>
+      <path d="M200 520 H1000" stroke="#1d3a26" stroke-width="1.5"/>
+      <text x="200" y="546" font-size="12" fill="#4a5750" letter-spacing="2.5">TIME →</text>
+
+      <!-- halving coin: reward halves each era -->
+      <path d="M200 375 H360 V447 H520 V484 H680 V502 H840 V511 H1000"
+            fill="none" stroke="#4a5750" stroke-width="2.5" stroke-dasharray="7 6"
+            stroke-linejoin="round"/>
+      <text x="1000" y="545" text-anchor="end" font-size="14" fill="#6b7a72" letter-spacing="1">A HALVING COIN · REWARD DECAYS</text>
+
+      <!-- Grin: constant 60 per block -->
+      <rect x="200" y="418" width="800" height="28" fill="url(#lineGlow)"/>
+      <path d="M200 432 H1000" fill="none" stroke="#5dff73" stroke-width="4" stroke-linecap="round"/>
+      <circle cx="1000" cy="432" r="6" fill="#5dff73"/>
+      <text x="1000" y="410" text-anchor="end" font-size="15" font-weight="bold" fill="#5dff73" letter-spacing="1.2">GRIN · 60 PER BLOCK, FOREVER</text>
+    </g>
+
+    <!-- footer rule + tags -->
+    <path d="M200 586 H1000" stroke="#1d3a26" stroke-width="1"/>
+    <text x="200" y="612" font-size="13" fill="#6b7a72" letter-spacing="2">MINING · HARDWARE</text>
+    <text x="1000" y="612" text-anchor="end" font-size="13" fill="#6b7a72" letter-spacing="1.5">PPLNS · TOR PAYOUTS</text>
+  </g>
+</svg>

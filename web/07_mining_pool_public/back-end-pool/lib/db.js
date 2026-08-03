@@ -114,7 +114,13 @@ function migrateMinerAccounts() {
       // overwrites all three and resets the clock.
       nostr_username: 'TEXT DEFAULT NULL',
       nostr_npub: 'TEXT DEFAULT NULL',
-      nostr_registered_at: 'INTEGER DEFAULT NULL'
+      nostr_registered_at: 'INTEGER DEFAULT NULL',
+      // Previous destination, retained so a hijack cannot dodge the change alert. Replacing a
+      // destination DMs the old npub ("your payout destination changed — withdraw via Tor now");
+      // without this, an attacker would simply REMOVE first and register fresh, leaving nobody
+      // to notify. Cleared only after the alert is sent, so removal is announced too.
+      nostr_prev_username: 'TEXT DEFAULT NULL',
+      nostr_prev_npub: 'TEXT DEFAULT NULL'
     };
     for (const [name, def] of Object.entries(additions)) {
       if (!have.has(name)) {
@@ -197,7 +203,11 @@ function migrateWithdrawals() {
       // On-chain kernel excess of the finalized payout tx (Grin's payment-proof primitive),
       // backfilled once mined by withdrawal-scheduler.backfillKernelProofs(). NULL until then
       // (or forever, for pre-feature rows / Tor-only deployments without the Owner-API wallet).
-      kernel_excess: 'TEXT DEFAULT NULL'
+      kernel_excess: 'TEXT DEFAULT NULL',
+      // Flat withdrawal fee charged to the miner, frozen at request time (see CREATE TABLE).
+      // Legacy rows default to 0 — those payouts predate the fee and sent the full amount, so
+      // 0 is the historically CORRECT value, not a placeholder.
+      fee_charged: 'REAL NOT NULL DEFAULT 0.0'
     };
     for (const [name, def] of Object.entries(additions)) {
       if (!have.has(name)) {
@@ -287,6 +297,8 @@ function createSchema() {
       nostr_username TEXT DEFAULT NULL,
       nostr_npub TEXT DEFAULT NULL,
       nostr_registered_at INTEGER DEFAULT NULL,
+      nostr_prev_username TEXT DEFAULT NULL,
+      nostr_prev_npub TEXT DEFAULT NULL,
       created_at INTEGER NOT NULL DEFAULT (unixepoch()),
       updated_at INTEGER NOT NULL DEFAULT (unixepoch())
     )`,
@@ -338,6 +350,18 @@ function createSchema() {
     )`,
 
     `CREATE INDEX IF NOT EXISTS idx_hashrate_address ON hashrate_history(grin_address, recorded_at DESC)`,
+    // Time-leading COVERING index for the POOL-WIDE series (getPoolHistory: WHERE recorded_at > ?
+    // GROUP BY recorded_at). idx_hashrate_address cannot serve it — a range predicate on the
+    // SECOND column of a composite index can't seek, so that query planned as a full
+    // `SCAN hashrate_history` + `USE TEMP B-TREE FOR GROUP BY` over a table that grows by one row
+    // per active miner per minute for hashrate_keep_days (100). (Nothing here runs ANALYZE, so
+    // there are no stats; given stats SQLite would skip-scan idx_hashrate_address instead — still
+    // a whole-index traversal plus the temp b-tree, so not a fix.) With hashrate_gps carried in the
+    // index the plan becomes `SEARCH ... USING COVERING INDEX (recorded_at>?)` — no table reads and
+    // no temp b-tree (the index is already in GROUP BY order). This matters more than a slow page:
+    // better-sqlite3 is synchronous and the stratum server shares this process, so a multi-second
+    // scan blocks share submission for every connected miner.
+    `CREATE INDEX IF NOT EXISTS idx_hashrate_time ON hashrate_history(recorded_at, hashrate_gps)`,
 
     // Pool-wide hourly rollup — one row per hour, aggregated across ALL miners, so its size is
     // independent of miner count (~1 MB/year). NEVER pruned (kept out of lib/retention.js) so the
@@ -373,7 +397,15 @@ function createSchema() {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       grin_address TEXT NOT NULL REFERENCES miner_accounts(grin_address),
       amount REAL NOT NULL,
+      -- Two DIFFERENT fees, do not conflate:
+      --   fee         = the REAL on-chain network fee the pool wallet paid (backfilled after
+      --                 send; reconciliation reads it to explain the wallet-vs-ledger gap).
+      --   fee_charged = the FLAT withdrawal fee charged to the miner, frozen at request time
+      --                 from config.withdrawal_fee so a later settings change can't rewrite history.
+      -- The miner receives amount − fee_charged; the ledger debits the full amount and credits
+      -- fee_charged to the pool_fee pseudo-account on confirm.
       fee REAL NOT NULL DEFAULT 0.0,
+      fee_charged REAL NOT NULL DEFAULT 0.0,
       status TEXT NOT NULL DEFAULT 'tor_checking',
       method TEXT NOT NULL DEFAULT 'tor',
       slate_id TEXT DEFAULT NULL,
@@ -819,6 +851,7 @@ function createSchema() {
   migrateLocations();
   migrateAds();
   migratePagesFromConfig();
+  seedShippedPages();   // must follow the legacy migration: same table, own markers
   // The default grinium regional endpoints are seeded once (see seedDefaultRegions,
   // called from index.js with the configured stratum port). The pool server also
   // self-registers its own region via ensureLocalRegion(); extra zones come from
@@ -899,6 +932,62 @@ function migratePagesFromConfig() {
     tx();
   } catch (e) {
     console.error(`[db] migratePagesFromConfig failed: ${e.message}`);
+  }
+}
+
+// Pages shipped AFTER the legacy migration above. That function walks a fixed list of five
+// slugs and its marker stops it running twice, so a page added to the shipped defaults
+// later would never reach a pool that is already installed. Each addition therefore gets
+// its OWN generation marker here — the same versioned-seed pattern as the ad creatives in
+// lib/ads.js: seeded exactly once, so a page the operator deletes stays deleted and a page
+// they edit is never overwritten. To ship another page: add its default HTML to
+// pool-settings.js defaults.pages, then append one entry below with a NEW marker.
+function seedShippedPages() {
+  const ADDITIONS = [
+    {
+      marker: 'pages_seeded_start_mining',
+      slug: 'start-mining',
+      title: 'Start Mining',
+      // Ahead of About (sort_order 0) in the footer: it is the page a first-time visitor
+      // needs, and listEnabled() orders by sort_order before title.
+      sort_order: -1,
+      seo_title: 'Start Mining Grin — a step-by-step guide for beginners',
+      seo_desc: 'Point a Grin ASIC at the pool in about ten minutes: get a grin1 address, '
+        + 'set the three miner settings, and understand PPLNS, 1,440-block maturity and how '
+        + 'payouts arrive. No account, no KYC.',
+    },
+  ];
+  try {
+    const defaultPages = (require('./pool-settings').defaults || {}).pages || {};
+    const getMarker = db.prepare(
+      "SELECT value FROM pool_config WHERE section = '_migrations' AND key = ?"
+    );
+    const setMarker = db.prepare(`
+      INSERT INTO pool_config (section, key, value, value_type)
+      VALUES ('_migrations', ?, '1', 'string')
+      ON CONFLICT(section, key) DO NOTHING
+    `);
+    // INSERT OR IGNORE on the slug: if the operator already made a page with this slug,
+    // theirs wins and the marker still records that this generation is done.
+    const insert = db.prepare(`
+      INSERT OR IGNORE INTO pages
+        (slug, title, html, is_published, nav_location, sort_order, seo_title, seo_desc)
+      VALUES (?, ?, ?, 1, 'footer', ?, ?, ?)
+    `);
+    for (const p of ADDITIONS) {
+      if (getMarker.get(p.marker)) continue;
+      const html = String(defaultPages[p.slug] || '').trim();
+      // No shipped body = nothing worth seeding. Leave the marker UNSET so a later release
+      // that actually fills the default in still gets its chance.
+      if (!html) continue;
+      db.transaction(() => {
+        insert.run(p.slug, p.title, html, p.sort_order || 0,
+          p.seo_title || null, p.seo_desc || null);
+        setMarker.run(p.marker);
+      })();
+    }
+  } catch (e) {
+    console.error(`[db] seedShippedPages failed: ${e.message}`);
   }
 }
 

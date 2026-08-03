@@ -13,6 +13,125 @@
 <main>
   <div class="container">
     <section>
+      <h2>Login Security</h2>
+      <p style="font-size:.82rem;color:var(--text-dim);margin:-.4rem 0 .8rem;">
+        Failed admin logins, where they came from, and what is currently locked or banned.
+        Times are shown in your browser's local timezone.
+      </p>
+
+      <div style="display:flex;align-items:center;gap:.6rem;flex-wrap:wrap;margin-bottom:.9rem;">
+        <label for="sec-window" style="font-size:.82rem;color:var(--text-dim);">Window</label>
+        <select id="sec-window" onchange="loadAuthActivity(true)" style="max-width:12rem;">
+          <option value="6">Last 6 hours</option>
+          <option value="24" selected>Last 24 hours</option>
+          <option value="168">Last 7 days</option>
+          <option value="720">Last 30 days</option>
+        </select>
+        <button class="btn btn-sm btn-outline" id="sec-refresh" onclick="loadAuthActivity(true)">Refresh</button>
+        <span id="sec-window-note" style="font-size:.78rem;color:var(--text-muted);"></span>
+      </div>
+
+      <div class="kpi-grid" id="sec-kpi">
+        <div class="kpi-card">
+          <div class="kpi-ico">✅</div>
+          <div class="kpi-label">Successful logins</div>
+          <div class="kpi-value" id="sec-ok">—</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-ico">⛔</div>
+          <div class="kpi-label">Failed passwords</div>
+          <div class="kpi-value" id="sec-badpass">—</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-ico">🔐</div>
+          <div class="kpi-label">Failed 2FA codes</div>
+          <div class="kpi-value" id="sec-bad2fa">—</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-ico">🚫</div>
+          <div class="kpi-label">IP auto-bans</div>
+          <div class="kpi-value" id="sec-bans">—</div>
+        </div>
+      </div>
+
+      <!-- Stating what this page CANNOT see is part of the feature: a quiet table during a
+           live flood would otherwise read as "no attack". Requests killed by the rate
+           limiter, the IP filter or the CAPTCHA gate never reach the login route, so they
+           never produce an audit row. -->
+      <p style="font-size:.78rem;color:var(--text-muted);margin:.7rem 0 1.4rem;">
+        Counts come from the admin audit log. Attempts refused earlier in the chain — by the
+        rate limiter, an existing IP ban, or the CAPTCHA gate — are rejected before the login
+        route records anything, so they are <em>not</em> counted here. A low number during a
+        suspected flood means the outer defences are absorbing it, not that nothing is happening.
+      </p>
+
+      <!-- .warn-msg (pool.css) — NOT "warning-msg", which no stylesheet defines and would
+           have rendered as unstyled body text. -->
+      <div id="sec-totp-warn" class="warn-msg" style="display:none;margin-bottom:1.2rem;"></div>
+
+      <h3 style="font-size:.95rem;margin:0 0 .5rem;">Currently locked or banned</h3>
+      <p style="font-size:.78rem;color:var(--text-muted);margin:0 0 .6rem;">
+        Login lockouts apply to a (username, source address) pair — one attacker grinding your
+        username cannot lock you out from your own address. Both lists live in the running
+        service's memory, so a restart clears them; an empty list right after a deploy does not
+        mean the attempts stopped.
+      </p>
+      <div class="card" id="sec-locks-card" style="margin-bottom:1.4rem;">
+        <div id="sec-locks"><span class="spinner"></span>Loading…</div>
+      </div>
+
+      <h3 style="font-size:.95rem;margin:0 0 .5rem;">Admin accounts</h3>
+      <div class="card" style="padding:0;margin-bottom:1.4rem;">
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Username</th><th>2FA</th><th>Consecutive failures</th><th>State</th></tr>
+            </thead>
+            <tbody id="sec-accounts-tbody">
+              <tr class="loading-row"><td colspan="4"><span class="spinner"></span>Loading…</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <h3 style="font-size:.95rem;margin:0 0 .5rem;">Where failures came from</h3>
+      <div class="card" style="padding:0;">
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Source address</th><th>Failed attempts</th><th>Last attempt</th><th></th></tr>
+            </thead>
+            <tbody id="sec-origins-tbody">
+              <tr class="loading-row"><td colspan="4"><span class="spinner"></span>Loading…</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <h3 style="font-size:.95rem;margin:1.4rem 0 .5rem;">Usernames being tried</h3>
+      <p style="font-size:.78rem;color:var(--text-muted);margin:0 0 .6rem;">
+        Many different usernames means a scanner working a wordlist. Repeated attempts against
+        one <em>real</em> username means someone is targeting this pool specifically.
+      </p>
+      <div class="card" style="padding:0;">
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Username tried</th><th>Attempts</th><th>Last attempt</th></tr>
+            </thead>
+            <tbody id="sec-targets-tbody">
+              <tr class="loading-row"><td colspan="3"><span class="spinner"></span>Loading…</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <p style="font-size:.78rem;color:var(--text-muted);margin:.8rem 0 0;">
+        Locked out yourself? Recovery runs on the server, not here:
+        <code>grin-pool-admin-reset-&lt;net&gt; --help</code> (Script 07 → <strong>A) Admin recovery</strong>).
+      </p>
+    </section>
+
+    <section>
       <h2>Admin Sessions &amp; Login Activity</h2>
       <p style="font-size:.82rem;color:var(--text-dim);margin:-.4rem 0 .8rem;">
         Sessions are stateless tokens, so there is no per-device list. "Revoke sessions" invalidates
@@ -61,12 +180,186 @@ function escHtml(s) {
   return String(s || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 
+function fmtWhen(ts) {
+  return ts ? new Date(ts * 1000).toLocaleString() : '—';
+}
+
+// Compact "3m ago" / "2h ago" for the lock and ban countdowns.
+function fmtDur(secs) {
+  const s = Math.max(0, Math.round(secs || 0));
+  if (s < 60) return s + 's';
+  if (s < 3600) return Math.round(s / 60) + 'm';
+  return (s / 3600).toFixed(1) + 'h';
+}
+
+// ── Login security ───────────────────────────────────────────────────────────
+// Two AdminTable-managed lists (origins, targeted usernames) plus small hand-rendered
+// blocks for the lock/ban state and the admin-account roster, which are short by nature.
+const originsTable = AdminTable.create({
+  tbody: 'sec-origins-tbody',
+  search: 'Filter by address…',
+  empty: 'No failed logins in this window.',
+  text: r => [r.ip, r.attempts, fmtWhen(r.last_at)].join(' '),
+  row: r => `<tr>
+      <td class="mono">${escHtml(r.ip)}</td>
+      <td>${escHtml(String(r.attempts))}</td>
+      <td>${escHtml(fmtWhen(r.last_at))}</td>
+      <td style="text-align:right;">
+        <button class="btn btn-sm btn-outline" onclick="clearBan('${escHtml(r.ip)}')">Lift ban</button>
+      </td>
+    </tr>`
+});
+
+const targetsTable = AdminTable.create({
+  tbody: 'sec-targets-tbody',
+  search: 'Filter by username…',
+  empty: 'No failed logins in this window.',
+  text: r => [r.username, r.attempts, fmtWhen(r.last_at)].join(' '),
+  row: r => `<tr>
+      <td class="mono">${escHtml(r.username)}</td>
+      <td>${escHtml(String(r.attempts))}</td>
+      <td>${escHtml(fmtWhen(r.last_at))}</td>
+    </tr>`
+});
+
+function renderLocks(d) {
+  const locks = d.active_lockouts || [];
+  const bans = d.banned_ips || [];
+  const el = document.getElementById('sec-locks');
+  if (locks.length === 0 && bans.length === 0) {
+    el.innerHTML = '<span style="color:var(--text-dim);font-size:.85rem;">' +
+      'Nothing locked or banned right now.</span>';
+    return;
+  }
+  let html = '';
+  if (locks.length) {
+    html += '<div style="font-size:.8rem;color:var(--text-dim);margin-bottom:.35rem;">' +
+            'Locked login pairs</div><ul style="margin:0 0 .9rem;padding-left:1.1rem;font-size:.85rem;">';
+    for (const l of locks) {
+      html += `<li><span class="mono">${escHtml(l.username)}</span> from ` +
+              `<span class="mono">${escHtml(l.ip)}</span> — unlocks in ${escHtml(fmtDur(l.seconds_remaining))}</li>`;
+    }
+    html += '</ul>';
+  }
+  if (bans.length) {
+    html += '<div style="font-size:.8rem;color:var(--text-dim);margin-bottom:.35rem;">' +
+            'Auto-banned addresses</div><ul style="margin:0;padding-left:1.1rem;font-size:.85rem;">';
+    for (const b of bans) {
+      html += `<li><span class="mono">${escHtml(b.ip)}</span> — expires in ${escHtml(fmtDur(b.seconds_remaining))} ` +
+              `<button class="btn btn-sm btn-outline" style="margin-left:.4rem;" ` +
+              `onclick="clearBan('${escHtml(b.ip)}')">Lift</button></li>`;
+    }
+    html += '</ul>';
+  }
+  el.innerHTML = html;
+}
+
+function renderAccounts(d) {
+  const rows = d.accounts || [];
+  const tb = document.getElementById('sec-accounts-tbody');
+  if (rows.length === 0) {
+    tb.innerHTML = '<tr><td colspan="4" style="color:var(--text-dim);">No admin accounts found.</td></tr>';
+    return;
+  }
+  tb.innerHTML = rows.map(r => {
+    const twofa = r.totp_enabled
+      ? '<span class="badge badge-ok">On</span>'
+      : '<span class="badge badge-warn">Off</span>';
+    const state = r.is_active
+      ? '<span class="badge badge-dim">Active</span>'
+      : '<span class="badge badge-error">Disabled</span>';
+    // A non-zero counter is a signal, not a lock — say so, so nobody reads it as "locked".
+    const fails = r.failed_login_attempts || 0;
+    return `<tr>
+      <td class="mono">${escHtml(r.username)}</td>
+      <td>${twofa}</td>
+      <td${fails > 0 ? ' style="color:var(--warning);"' : ''}>${escHtml(String(fails))}</td>
+      <td>${state}</td>
+    </tr>`;
+  }).join('');
+
+  // Nag only when the pool actually requires 2FA and someone hasn't enrolled — that admin's
+  // money/destructive actions are being refused right now, which is worth naming explicitly.
+  const warn = document.getElementById('sec-totp-warn');
+  const missing = rows.filter(r => !r.totp_enabled).map(r => r.username);
+  if (d.totp_mandatory && missing.length) {
+    warn.innerHTML = 'This pool requires 2FA for admin actions, but 2FA is off for: ' +
+      '<strong>' + missing.map(escHtml).join(', ') + '</strong>. ' +
+      'Those accounts can sign in and read, but every money or destructive action is refused ' +
+      'until they enroll on the <a href="/admin/settings-access.html">Access settings</a> page.';
+    warn.style.display = '';
+  } else if (!d.totp_mandatory && rows.some(r => !r.totp_enabled)) {
+    warn.innerHTML = '2FA is optional on this pool and is off for at least one admin. ' +
+      'Enrolling it (and then enabling <em>Require 2FA</em> on the ' +
+      '<a href="/admin/settings-access.html">Access settings</a> page) is the single biggest ' +
+      'improvement you can make to admin login security.';
+    warn.style.display = '';
+  } else {
+    warn.style.display = 'none';
+  }
+}
+
+async function loadAuthActivity(reset) {
+  const hours = document.getElementById('sec-window').value;
+  if (reset) { originsTable.setLoading(); targetsTable.setLoading(); }
+  try {
+    const d = await API.get('/api/admin/security/auth-activity?hours=' + encodeURIComponent(hours));
+    document.getElementById('sec-ok').textContent      = (d.totals && d.totals.success) || 0;
+    document.getElementById('sec-badpass').textContent = (d.totals && d.totals.failed_password) || 0;
+    document.getElementById('sec-bad2fa').textContent  = (d.totals && d.totals.failed_2fa) || 0;
+    document.getElementById('sec-bans').textContent    = (d.totals && d.totals.autobans) || 0;
+
+    // Say it out loud when the requested window was clipped by audit retention, so a gap
+    // caused by pruning is never read as "there were no attempts".
+    const note = document.getElementById('sec-window-note');
+    note.textContent = d.truncated_by_retention
+      ? `Showing ${d.window_hours}h — the audit log only keeps ${d.retention_days} days.`
+      : '';
+
+    originsTable.setRows(d.top_origins || [], reset ? { reset: true } : undefined);
+    targetsTable.setRows(d.targeted_usernames || [], reset ? { reset: true } : undefined);
+    renderLocks(d);
+    renderAccounts(d);
+  } catch (err) {
+    originsTable.setError(err.message);
+    targetsTable.setError(err.message);
+    document.getElementById('sec-locks').textContent = 'Could not load: ' + err.message;
+  }
+}
+
+// Lifting a ban re-opens login attempts from that address, so it goes through step-up
+// (adminFetch), not a plain fetch.
+async function clearBan(ip) {
+  if (!confirm('Lift the temporary ban on ' + ip + '?\n\nLogin attempts from this address will be accepted again.')) return;
+  try {
+    const res = await adminFetch('/api/admin/security/temp-ban/clear', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ip })
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.error || ('HTTP ' + res.status));
+    if (!body.was_banned) alert('That address had no active ban (it may have already expired).');
+    loadAuthActivity();
+  } catch (err) {
+    alert(err.message);
+  }
+}
+
 // ── Sessions & login activity ────────────────────────────────────────────────
+// Keys MUST match the actions the writers emit. 'login_failed' is what index.js's login
+// route inserts; the panel previously only mapped 'login_failure', which nothing writes,
+// so failed logins rendered with the raw action key as their label.
 const LOGIN_LABEL = {
-  login_success: ['badge-ok',    'Login'],
-  login_failure: ['badge-error', 'Failed login'],
-  ip_autoban:    ['badge-error', 'IP auto-banned'],
-  logout:        ['badge-dim',   'Logout'],
+  login_success:    ['badge-ok',    'Login'],
+  login_failed:     ['badge-error', 'Failed login'],
+  login_failure:    ['badge-error', 'Failed login'],   // legacy rows from older builds
+  login_2fa_failed: ['badge-error', 'Failed 2FA code'],
+  ip_autoban:       ['badge-error', 'IP auto-banned'],
+  logout:           ['badge-dim',   'Logout'],
+  '2fa_enabled':    ['badge-ok',    '2FA enabled'],
+  '2fa_disabled':   ['badge-warn',  '2FA disabled'],
+  admin_cli_reset:  ['badge-warn',  'Recovery via server CLI'],
 };
 // Searched/paged by AdminTable (admin-shell.js): 20 rows a page, filter across every
 // column, and the retention sentence is filled from Settings → Database at load.
@@ -122,7 +415,10 @@ async function revokeSessions() {
   }
 }
 
-document.addEventListener('DOMContentLoaded', loadLoginHistory);
+document.addEventListener('DOMContentLoaded', () => {
+  loadLoginHistory();
+  loadAuthActivity(true);
+});
 </script>
 </body>
 </html>

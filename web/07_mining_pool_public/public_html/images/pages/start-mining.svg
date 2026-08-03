@@ -1,0 +1,83 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" role="img" aria-label="Start mining in three steps: get a Grin address, point your miner at the pool stratum server, then get paid over Tor or by encrypted Slatepack">
+  <!--
+    Cover for the seeded "Start Mining" CMS page (lib/pool-settings.js → defaults.pages,
+    slug 'start-mining'). 1200x630 = the standard OG/social ratio, so the same file is the
+    in-page banner AND the social card (index.js "/page.html" picks up the first <img> in
+    the page body as og:image).
+
+    NO SAFE ZONE NEEDED, unlike the blog cover: page.html renders content images with
+    `max-width:100%; height:auto` — the whole 1200 is always visible, never cropped. It is
+    scaled DOWN though (the .content column is ~772px wide, so roughly 0.64x), which is why
+    nothing here is smaller than 16px: below that it renders under ~10px and stops being
+    readable. Static on purpose, matching the other covers.
+  -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0b0f14"/>
+      <stop offset=".55" stop-color="#07090c"/>
+      <stop offset="1" stop-color="#0c1410"/>
+    </linearGradient>
+    <radialGradient id="coreGlow" cx=".5" cy=".5" r=".5">
+      <stop offset="0" stop-color="#5dff73" stop-opacity=".5"/>
+      <stop offset=".45" stop-color="#5dff73" stop-opacity=".14"/>
+      <stop offset="1" stop-color="#5dff73" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <rect width="1200" height="630" fill="url(#bg)"/>
+
+  <!-- instrument grid -->
+  <g stroke="#5dff73" stroke-opacity=".05" stroke-width="1">
+    <path d="M0 90 H1200 M0 210 H1200 M0 330 H1200 M0 450 H1200 M0 570 H1200"/>
+    <path d="M150 0 V630 M300 0 V630 M450 0 V630 M600 0 V630 M750 0 V630 M900 0 V630 M1050 0 V630"/>
+  </g>
+  <circle cx="250" cy="160" r="230" fill="url(#coreGlow)"/>
+
+  <g font-family="ui-monospace,Menlo,Consolas,monospace">
+    <!-- eyebrow -->
+    <circle cx="84" cy="76" r="5" fill="#5dff73"/>
+    <text x="102" y="82" font-size="17" fill="#5dff73" letter-spacing="3">GRINIUM · GUIDE</text>
+
+    <!-- headline -->
+    <text x="80" y="170" font-size="68" font-weight="bold" fill="#e6efe9" letter-spacing="-1">START MINING</text>
+    <text x="82" y="212" font-size="21" fill="#8a978f" letter-spacing="1">three steps · about ten minutes to your first share</text>
+
+    <!-- time-to-first-share chip -->
+    <rect x="880" y="104" width="240" height="86" rx="10" fill="#0b1510" stroke="#1d3a26" stroke-width="1.5"/>
+    <text x="902" y="146" font-size="30" font-weight="bold" fill="#5dff73">~10 MIN</text>
+    <text x="902" y="172" font-size="16" fill="#8a978f">zero to first share</text>
+
+    <!-- the two lines every miner config needs -->
+    <rect x="80" y="250" width="1040" height="110" rx="10" fill="#0b1510" stroke="#1d3a26" stroke-width="1.5"/>
+    <text x="110" y="296" font-size="20" fill="#6b7a72" letter-spacing="1">SERVER</text>
+    <text x="250" y="296" font-size="20" fill="#5dff73">stratum.your-pool.com:3333</text>
+    <text x="110" y="336" font-size="20" fill="#6b7a72" letter-spacing="1">USER</text>
+    <text x="250" y="336" font-size="20" fill="#5dff73">grin1youraddress.rigname</text>
+
+    <!-- three steps -->
+    <g>
+      <rect x="80" y="400" width="326" height="162" rx="10" fill="#0b1510" stroke="#1d3a26" stroke-width="1.5"/>
+      <text x="102" y="446" font-size="32" font-weight="bold" fill="#5dff73" fill-opacity=".45">01</text>
+      <text x="102" y="492" font-size="21" font-weight="bold" fill="#e6efe9">GET AN ADDRESS</text>
+      <text x="102" y="522" font-size="16" fill="#8a978f">Any Grin wallet works.</text>
+      <text x="102" y="544" font-size="16" fill="#8a978f">No sign-up, no KYC.</text>
+
+      <rect x="437" y="400" width="326" height="162" rx="10" fill="#0b1510" stroke="#1d3a26" stroke-width="1.5"/>
+      <text x="459" y="446" font-size="32" font-weight="bold" fill="#5dff73" fill-opacity=".45">02</text>
+      <text x="459" y="492" font-size="21" font-weight="bold" fill="#e6efe9">POINT YOUR MINER</text>
+      <text x="459" y="522" font-size="16" fill="#8a978f">Paste the two lines</text>
+      <text x="459" y="544" font-size="16" fill="#8a978f">above into its config.</text>
+
+      <rect x="794" y="400" width="326" height="162" rx="10" fill="#0b1510" stroke="#1d3a26" stroke-width="1.5"/>
+      <text x="816" y="446" font-size="32" font-weight="bold" fill="#5dff73" fill-opacity=".45">03</text>
+      <text x="816" y="492" font-size="21" font-weight="bold" fill="#e6efe9">GET YOUR PAYOUT</text>
+      <text x="816" y="522" font-size="16" fill="#8a978f">Over Tor, or as an</text>
+      <text x="816" y="544" font-size="16" fill="#8a978f">encrypted Slatepack.</text>
+    </g>
+
+    <!-- footer rule + tags -->
+    <path d="M80 590 H1120" stroke="#1d3a26" stroke-width="1"/>
+    <text x="80" y="616" font-size="15" fill="#6b7a72" letter-spacing="2">MINING · GETTING STARTED</text>
+    <text x="1120" y="616" text-anchor="end" font-size="15" fill="#6b7a72" letter-spacing="2">PPLNS · C32 · TOR PAYOUTS</text>
+  </g>
+</svg>

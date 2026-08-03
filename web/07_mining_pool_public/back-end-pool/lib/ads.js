@@ -238,8 +238,8 @@ class AdsManager {
 
   // Starter content: seed the shipped GRINIUM self-promo creatives (SVGs in
   // public_html/promo/, plus native text ads) so placements aren't empty on a fresh pool.
-  // Seeds point at real internal anchors, but they are still layout/rotation demos rather
-  // than campaigns — the operator repoints, edits or deletes them from the admin panel.
+  // Seeds are starter inventory, not campaigns — the operator repoints, edits or deletes
+  // them from the admin panel (their click targets follow the LINK POLICY below).
   //
   // Gated by a pool_config marker rather than "table is empty", so an operator who
   // deletes a seed does not get it back on the next restart. The marker is versioned and
@@ -249,6 +249,19 @@ class AdsManager {
   //   v3 — a second header strip + the first native text ad, so the header has a rotation.
   //   v4 — the in-content band defaults to one responsive text banner.
   //   v5 — the two 300×250 squares return as INACTIVE starter banners (see below).
+  //   v6 — link policy (below) + a "join the Grin team" header strip pointing at the forum.
+  //
+  // LINK POLICY (v6). A seed gets a click target only when the click takes the visitor
+  // SOMEWHERE — another page of this site, or a genuinely useful external destination:
+  //   · homepage/anchor-only targets ('/#connect', '/#info') → NO link at all. The visitor
+  //     is already on the site; a banner that reloads the page they are on wastes the click
+  //     and trains people to distrust our own ads. renderAd() draws those as a plain
+  //     image/card (hasLink() rejects null and '#'), impressions still count.
+  //   · internal PAGES ('/donate.html', '/fortune-board.html') keep their link.
+  //   · "Buy GRIN" → the Gate GRIN/USDT market; "Why GRIN?" → grin.money/#why-grin (the
+  //     section that answers the creative's question, not the site root). Those answer the
+  //     question the creative asks, which no page of ours can. External seeds render with
+  //     target=_blank + rel="noopener nofollow sponsored" (renderAd/linkOpen).
   //
   // A seed is active unless it sets `is_active: 0`; an inactive seed is a ready-made
   // creative parked in the admin panel, invisible publicly until the operator enables it.
@@ -258,7 +271,7 @@ class AdsManager {
     const cfgGet = (key) => this.db.prepare(
       "SELECT value FROM pool_config WHERE section = 'ads' AND key = ?"
     ).get(key);
-    if (cfgGet('selfpromo_seeded_v5')) return false;
+    if (cfgGet('selfpromo_seeded_v6')) return false;
     // Highest seed generation already applied to this pool (0 = brand-new). Each upgrade
     // inserts only creatives NEWER than what's been seeded, so a deleted seed stays deleted.
     let seededMax = 0;
@@ -266,6 +279,7 @@ class AdsManager {
     if (cfgGet('selfpromo_seeded_v2')) seededMax = 2;
     if (cfgGet('selfpromo_seeded_v3')) seededMax = 3;
     if (cfgGet('selfpromo_seeded_v4')) seededMax = 4;
+    if (cfgGet('selfpromo_seeded_v5')) seededMax = 5;
 
     // v1 → v2 boundary only: the sidebar became a narrow rail, so old square seeds move
     // in-content (skip if the pool was already at/after v2).
@@ -277,14 +291,39 @@ class AdsManager {
       `).run();
     }
 
+    // v5 → v6 boundary: retarget the already-seeded creatives to the link policy above.
+    // Each UPDATE matches the ORIGINAL seed link as well as the creative, so an operator
+    // who already repointed an ad keeps their own target — only untouched seeds move.
+    if (seededMax >= 1 && seededMax < 6) {
+      const retarget = this.db.prepare(
+        'UPDATE ads SET link_url = ?, updated_at = unixepoch() WHERE image_url = ? AND link_url = ?'
+      );
+      // Homepage-anchor seeds lose their link entirely (a click that goes nowhere).
+      for (const img of ['/promo/grinium-mine-728x90.svg', '/promo/grinium-mine-160x600.svg',
+                         '/promo/grinium-privacy-160x600.svg']) {
+        retarget.run(null, img, '/#connect');
+      }
+      // …except the privacy square, whose painted CTA reads "SEE POOL PAYOUTS →" — that is
+      // a real page, so the artwork and the click agree instead of going nowhere.
+      retarget.run('/payment-history.html', '/promo/grinium-privacy-300x250.svg', '/#connect');
+      retarget.run('https://www.gate.com/trade/GRIN_USDT', '/promo/grinium-buy-grin-160x600.svg', '/#info');
+      retarget.run('https://grin.money/#why-grin', '/promo/grinium-why-grin-160x600.svg', '/#info');
+      retarget.run('https://grin.money/#why-grin', '/promo/grinium-why-grin-728x90.svg', '/#info');
+      // The v3 text ad has no image — match it by the internal name the seed created it with.
+      this.db.prepare(`
+        UPDATE ads SET link_url = NULL, updated_at = unixepoch()
+        WHERE name = 'GRINIUM text — Private by design (header)' AND link_url = '/#connect'
+      `).run();
+    }
+
     // `v` = the seed generation a creative was introduced in; only seeds with v > seededMax
-    // are inserted on this run. Self-promo CTAs point at real internal anchors (same-tab —
-    // renderAd keeps site paths in-page); a fresh pool ships working buttons, and an operator
-    // who already tuned the older '#' seeds is left untouched.
+    // are inserted on this run. `link_url: null` = deliberately unclickable under the link
+    // policy above, NOT an unfinished seed. Internal page links stay same-tab (renderAd
+    // keeps site paths in-page); the two external seeds open in a new tab.
     const seeds = [
       // Wide strips — header/footer.
       { v: 1, name: 'GRINIUM promo — Mine GRIN (header 728×90)', placement: 'header',
-        image_url: '/promo/grinium-mine-728x90.svg', weight: 10, link_url: '/#connect',
+        image_url: '/promo/grinium-mine-728x90.svg', weight: 10, link_url: null,
         alt_text: 'Mine GRIN on GRINIUM — no sign-up, PPLNS rewards, your address is your account' },
       { v: 1, name: 'GRINIUM promo — Donate (footer 728×90)', placement: 'footer',
         image_url: '/promo/grinium-donate-728x90.svg', weight: 10, link_url: '/donate.html',
@@ -292,19 +331,21 @@ class AdsManager {
 
       // Vertical rail creatives — several on purpose, so the rail has a rotation to demo.
       { v: 2, name: 'GRINIUM rail — Mine here (160×600)', placement: 'sidebar',
-        image_url: '/promo/grinium-mine-160x600.svg', weight: 50, link_url: '/#connect',
+        image_url: '/promo/grinium-mine-160x600.svg', weight: 50, link_url: null,
         alt_text: 'Mine GRIN here — no sign-up, PPLNS rewards, anonymous Tor payouts' },
       { v: 2, name: 'GRINIUM rail — Why GRIN? (160×600)', placement: 'sidebar',
-        image_url: '/promo/grinium-why-grin-160x600.svg', weight: 40, link_url: '/#info',
+        image_url: '/promo/grinium-why-grin-160x600.svg', weight: 40,
+        link_url: 'https://grin.money/#why-grin',
         alt_text: 'Why GRIN? Private by default, no addresses on chain, fair launch, no premine' },
       { v: 2, name: 'GRINIUM rail — Buy GRIN (160×600)', placement: 'sidebar',
-        image_url: '/promo/grinium-buy-grin-160x600.svg', weight: 30, link_url: '/#info',
-        alt_text: 'Buy GRIN — trade it on exchanges, or earn it by pointing a miner here' },
+        image_url: '/promo/grinium-buy-grin-160x600.svg', weight: 30,
+        link_url: 'https://www.gate.com/trade/GRIN_USDT',
+        alt_text: 'Buy GRIN — trade the GRIN/USDT market, or earn it by pointing a miner here' },
       { v: 2, name: 'GRINIUM rail — Feeling lucky? (160×600)', placement: 'sidebar',
         image_url: '/promo/grinium-fortune-160x600.svg', weight: 20, link_url: '/fortune-board.html',
         alt_text: 'Feeling lucky? Block jackpots, prize draws, streak rewards and a monthly lottery' },
       { v: 2, name: 'GRINIUM rail — Anonymous (160×600)', placement: 'sidebar',
-        image_url: '/promo/grinium-privacy-160x600.svg', weight: 10, link_url: '/#connect',
+        image_url: '/promo/grinium-privacy-160x600.svg', weight: 10, link_url: null,
         alt_text: 'Mine anonymously — no accounts, no emails, Tor payouts' },
 
       // Squares — in-content, seeded INACTIVE (is_active: 0). The v4 text banner below is
@@ -319,17 +360,21 @@ class AdsManager {
         is_active: 0,
         alt_text: 'Feeling lucky? Block jackpots, prize draws, streak rewards and a monthly lottery' },
       { v: 5, name: 'GRINIUM promo — Anonymous mining (in-content 300×250)', placement: 'in-content',
-        image_url: '/promo/grinium-privacy-300x250.svg', weight: 5, link_url: '/#connect',
+        image_url: '/promo/grinium-privacy-300x250.svg', weight: 5,
+        link_url: '/payment-history.html',
         is_active: 0,
-        alt_text: 'Mine anonymously — no accounts, no emails, Tor payouts' },
+        alt_text: 'Mine anonymously — no accounts, no emails — see every pool payout' },
 
       // v3 — give the header a rotation: a second graphical strip + a native TEXT ad, so the
       // header cycles Mine → Why GRIN → Private-by-design and the text-ad type is demoed.
       { v: 3, name: 'GRINIUM promo — Why GRIN? (header 728×90)', placement: 'header',
-        image_url: '/promo/grinium-why-grin-728x90.svg', weight: 8, link_url: '/#info',
+        image_url: '/promo/grinium-why-grin-728x90.svg', weight: 8,
+        link_url: 'https://grin.money/#why-grin',
         alt_text: 'Why GRIN? No ICO, no premine, tail emission, private by default' },
+      // No link: the CTA is an instruction, not a destination — everything it asks for is
+      // already on this page (the connect panel is a scroll away).
       { v: 3, name: 'GRINIUM text — Private by design (header)', placement: 'header',
-        ad_type: 'text', weight: 6, link_url: '/#connect',
+        ad_type: 'text', weight: 6, link_url: null,
         headline: 'PRIVATE BY DESIGN',
         body_text: 'No accounts · no emails · Tor payouts · your address is your account',
         cta_label: 'Start anonymously →' },
@@ -342,7 +387,16 @@ class AdsManager {
         ad_type: 'text', weight: 10, link_url: '/fortune-board.html',
         headline: 'FEELING LUCKY?',
         body_text: 'Block jackpots · prize draws · streak rewards · a monthly lottery — every share is a ticket',
-        cta_label: 'Open the Fortune Board →' }
+        cta_label: 'Open the Fortune Board →' },
+
+      // v6 — recruit for the wider Grin project, not for the pool: the header strip sends
+      // devs / marketing / AI / mining / trading people to the community forum. It is the
+      // one header seed with a genuinely off-site destination, so it carries real weight in
+      // the rotation (10) alongside the Mine strip.
+      { v: 6, name: 'GRINIUM promo — Join the Grin team (header 728×90)', placement: 'header',
+        image_url: '/promo/grinium-join-team-728x90.svg', weight: 10,
+        link_url: 'https://forum.grin.mw',
+        alt_text: 'Join the Grin community — dev, marketing, AI, mining and trading talk on the Grin forum' }
     ];
 
     const seenImg = this.db.prepare('SELECT 1 FROM ads WHERE image_url = ? LIMIT 1');
@@ -359,7 +413,7 @@ class AdsManager {
     }
 
     for (const key of ['selfpromo_seeded', 'selfpromo_seeded_v2', 'selfpromo_seeded_v3',
-                       'selfpromo_seeded_v4', 'selfpromo_seeded_v5']) {
+                       'selfpromo_seeded_v4', 'selfpromo_seeded_v5', 'selfpromo_seeded_v6']) {
       this.db.prepare(`
         INSERT INTO pool_config (section, key, value, value_type) VALUES ('ads', ?, '1', 'boolean')
         ON CONFLICT(section, key) DO NOTHING

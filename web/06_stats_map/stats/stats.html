@@ -202,7 +202,7 @@
   .metric-strip .mini-value { font-size: 20px; font-weight: 700; margin-top: 3px; }
   .metric-strip .mini-sub   { font-size: 11px; color: var(--muted); margin-top: 1px; }
   /* Dual USD·BTC figures (price, volume): both values same size, distinct colors
-     (USD/Gate.io = grin, BTC/nonlogs = blue). */
+     (USD/Gate.io = grin, BTC/CoinGecko = blue). */
   .metric-strip .mini-value.dual-val  { font-size: 16px; display: flex; flex-wrap: wrap; align-items: baseline; gap: 5px; }
   .metric-strip .mini-value .grin     { color: var(--grin); }
   .metric-strip .mini-value .sat      { color: var(--blue); }
@@ -994,7 +994,7 @@
       <div class="mini-value dual-val">
         <span class="grin" id="m-vol">—</span><span class="dual-sep">·</span><span class="sat" id="m-vol-btc">—</span>
       </div>
-      <div class="mini-sub">Gate.io (USD) · nonlogs (BTC)</div>
+      <div class="mini-sub">Gate.io (USD) · CoinGecko (BTC)</div>
     </div>
     <div class="mini">
       <div class="mini-label">24h Change</div>
@@ -1046,7 +1046,7 @@
     <div class="card-header">
       <div class="card-title">
         <span class="dot" style="background:#ffd700;"></span><span class="chart-info-toggle" onclick="toggleChartInfo('price-btc-info')" id="price-btc-info-btn">Grin Price · BTC (sats)</span>
-        <span style="font-size:11px;font-weight:400;color:var(--muted);margin-left:8px;">nonlogs.io</span>
+        <span style="font-size:11px;font-weight:400;color:var(--muted);margin-left:8px;">CoinGecko</span>
       </div>
       <div class="range-btns" id="price-btc-range">
         <button class="range-btn" data-r="day">Day</button>
@@ -1062,7 +1062,8 @@
         GRIN price expressed in <b>satoshis</b> (1 sat = 0.00000001 BTC) — useful for measuring GRIN's value relative to Bitcoin independent of USD price movements.
         <hr class="chart-info-sep">
         <h4>Data source</h4>
-        <a href="https://nonlogs.io" target="_blank" rel="noopener">nonlogs.io</a> — GRIN/BTC rate fetched as live snapshots. History is built incrementally over time from the first run of the stats collector.
+        <a href="https://www.coingecko.com/en/coins/grin" target="_blank" rel="noopener">CoinGecko</a> — GRIN/BTC rate fetched as live snapshots. History is built incrementally over time from the first run of the stats collector.
+        <p style="margin:8px 0 0;">Earlier history came from <b>nonlogs.io</b>, which ran the last native GRIN/BTC order book until it went offline in July 2026. No GRIN/BTC market remains, so the rate is now an aggregate: CoinGecko converts the GRIN tickers it tracks (in practice almost entirely Gate.io GRIN/USDT) into BTC. Expect a small discontinuity at the changeover, and no bid/ask or 24h high/low for this pair.</p>
       </div>
     </div>
     <div id="price-btc-no-data" style="display:none;padding:32px;text-align:center;color:var(--muted);font-size:13px;">
@@ -2579,8 +2580,9 @@ async function loadAll() {
     if (usdt?.volume_24h != null && last != null) {
       $("m-vol").textContent = fmtUSD(usdt.volume_24h * last);
     }
-    // nonlogs GRIN/BTC market volume ≈ base GRIN volume × BTC price (self-sourced,
-    // no CoinGecko) — shown natively in BTC beside the Gate.io USD figure.
+    // GRIN/BTC volume = base GRIN volume × BTC price — shown natively in BTC beside
+    // the Gate.io USD figure. The collector stores CoinGecko's quote volume divided
+    // back into GRIN, so this multiply returns CoinGecko's BTC volume unchanged.
     if (btc?.volume_24h != null && btc?.last != null) {
       $("m-vol-btc").textContent = fmtNum(btc.volume_24h * btc.last, 3) + " BTC";
     }
@@ -2591,8 +2593,8 @@ async function loadAll() {
       el.textContent = (chg >= 0 ? "+" : "") + fmtNum(chg, 2) + "%";
       el.className   = "mini-value " + (chg >= 0 ? "chg-pos" : "chg-neg");
     }
-    // Secondary: GRIN vs BTC change (nonlogs). Thin market → noisier, so it sits in
-    // the sub-line rather than as the headline.
+    // Secondary: GRIN vs BTC change (CoinGecko). Thin market → noisier, so it sits
+    // in the sub-line rather than as the headline.
     if (btc?.change_pct != null) {
       const bchg = btc.change_pct;
       const bel  = $("m-change-btc");

@@ -250,6 +250,42 @@ app.use((req, res, next) => {
   next();
 });
 
+// ─── CORS — read-only public API only ─────────────────────────────────────────
+// api-docs.html invites people to "build your own monitor or bot"; for a browser-based client
+// that means a cross-origin fetch, which without these headers fails while the identical curl
+// succeeds. Allowed on PUBLIC **GET**s only:
+//   · no Access-Control-Allow-Credentials — with `*` browsers reject the pair anyway, and
+//     inviting it would turn a logged-in operator's admin cookie into a cross-site read.
+//   · /api/admin/ and /api/auth/ are excluded, so the admin surface is untouched.
+//   · POST/DELETE are excluded, so the ownership-gated money actions stay same-origin: a
+//     preflight for them gets no CORS headers and the browser refuses the call.
+// Everything this opens is already world-readable to curl — it only removes a browser-only
+// restriction, it does not widen what is published.
+const CORS_PUBLIC_PREFIXES = [
+  '/api/public/', '/api/config/', '/api/pool/', '/api/account/', '/api/stratum/', '/api/network/',
+];
+app.use((req, res, next) => {
+  if ((req.method === 'GET' || req.method === 'OPTIONS') &&
+      CORS_PUBLIC_PREFIXES.some((p) => req.path.startsWith(p))) {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    res.setHeader('Access-Control-Max-Age', '86400');
+    res.setHeader('Vary', 'Origin');
+    if (req.method === 'OPTIONS') return res.status(204).end();
+  }
+  next();
+});
+
+// Public-surface address masking (grin1qxy…mn4p). The same truncation the front-end already
+// applies when rendering, moved server-side on the aggregate/list endpoints: the pages look
+// identical, but the raw API stops handing a scraper a full-address list in one call. NOT used
+// on /api/account/:addr responses — there the caller already knows the address (it's identity).
+function maskAddr(a) {
+  const s = String(a || '');
+  return s.length > 16 ? `${s.slice(0, 9)}…${s.slice(-4)}` : s;
+}
+
 // Validation constants
 const VALID_NETWORKS = ['mainnet', 'testnet'];
 
@@ -261,8 +297,22 @@ function validateConfig(cfg) {
   if (!cfg.port || cfg.port < 1024 || cfg.port > 65535) {
     throw new Error(`Invalid port: ${cfg.port}`);
   }
-  if (!cfg.db_path || !cfg.db_path.includes('/opt/grin/') && !cfg.db_path.includes('./')) {
+  // db_path comes from the operator's own root-written pool.json, so this guards a TYPO
+  // (a stray path that would silently create a second, empty ledger somewhere unexpected),
+  // not an attacker. It was an `includes()` substring test, which is not the same question:
+  // `/tmp/x/./y` and `/opt/grin/../../tmp/y` both contained an accepted fragment and passed.
+  // Anchor it instead — installed pools write /opt/grin/pubpool/<net>/pool.db, the dev/manual
+  // fallback is a ./ relative path — and reject traversal outright.
+  if (!cfg.db_path || typeof cfg.db_path !== 'string') {
     throw new Error(`Invalid db_path: ${cfg.db_path}`);
+  }
+  if (cfg.db_path.split(/[\\/]/).includes('..')) {
+    throw new Error(`Invalid db_path (path traversal): ${cfg.db_path}`);
+  }
+  if (!cfg.db_path.startsWith('/opt/grin/') && !cfg.db_path.startsWith('./')) {
+    throw new Error(
+      `Invalid db_path: ${cfg.db_path} (must be under /opt/grin/ or a ./ relative dev path)`
+    );
   }
   if (!cfg.stratum_port || cfg.stratum_port < 1024 || cfg.stratum_port > 65535) {
     throw new Error(`Invalid stratum_port: ${cfg.stratum_port}`);
@@ -294,10 +344,30 @@ let authManager = null;
 const loginCaptcha = new Captcha();
 // Auto-ban (fail2ban-style): too many failed admin logins from one IP within the window
 // → temporary IP ban (cooldown). In-memory; pairs with ipFilter.tempBan().
+//
+// This ban stays SHORT on purpose and must not be lengthened. `ipFilter.tempBans` is an
+// in-process Map with no size cap and lazy pruning, so a long TTL is both unenforceable
+// (any deploy/restart clears it) and unbounded (a rotating scanner accumulates entries for
+// the whole TTL). The durable, operator-tunable ban is the fail2ban jail `grin-pool-login`
+// (Script 07 → fail2ban_bantime), which lives in the firewall and survives a pool restart.
+// Note the break-glass admin-reset CLI cannot lift a ban held here — it edits pool.db, this
+// is another process's memory. Recovery is: wait it out, come from another address, or
+// restart the service.
 const ADMIN_LOGIN_FAIL_THRESHOLD = 10;
-const ADMIN_LOGIN_FAIL_WINDOW_MS = 15 * 60 * 1000;
+const ADMIN_LOGIN_FAIL_WINDOW_MS = 15 * 60 * 1000;   // matches fail2ban findtime (900s)
 const ADMIN_LOGIN_BAN_MS = 60 * 60 * 1000;
 const adminLoginFailures = new Map(); // ip -> { count, firstAt }
+
+// Wrong TOTP/recovery codes are counted SEPARATELY from wrong passwords, with a higher
+// threshold. Reaching this step already required the correct password, so it is a weak
+// brute-force signal — while it is a strong FALSE-POSITIVE source for the real operator:
+// if the server's clock drifts, every code is rejected, and the human response is to try
+// several codes and then a mistyped recovery code. Mixing those into the password counter
+// let an honest operator earn an IP ban at exactly the moment they need access. The
+// threshold still has to exist: a 6-digit code is only 10^6 wide and the `auth` limiter
+// sits at a loose 200/min.
+const ADMIN_2FA_FAIL_THRESHOLD = 20;
+const admin2faFailures = new Map();   // ip -> { count, firstAt }
 let hashrateTracker = null;
 let poolstatsReporter = null;
 let rateLimiter = null;
@@ -414,6 +484,19 @@ async function initializePool() {
     } catch (e) { console.error(`[ads] self-promo seed failed: ${e.message}`); }
     pagesManager = new PagesManager(config);
     postsManager = new PostsManager(config);
+    // One starter post so /blog is not empty on a fresh pool (and so the permalink, RSS
+    // and social-card path have something to exercise). Marker-guarded: edited or deleted,
+    // it stays that way. Non-fatal — a blog seed must never stop the pool booting.
+    try {
+      if (postsManager.seedStarterPost()) {
+        console.log(`[${new Date().toISOString()}] [blog] seeded the starter post (/blog/why-grin-mining-adds-up)`);
+      }
+      // Give the starter post its shipped cover on pools that seeded it before the artwork
+      // existed — the seed above cannot, it never runs twice. Same non-fatal treatment.
+      if (postsManager.backfillStarterCover()) {
+        console.log(`[${new Date().toISOString()}] [blog] backfilled the starter post cover image`);
+      }
+    } catch (e) { console.error(`[blog] starter post seed failed: ${e.message}`); }
 
     // Media uploads (cover images + in-body images from the admin CMS editor). Stored in a
     // persistent dir OUTSIDE public_html (which is rsynced/overwritten by the installer):
@@ -488,6 +571,17 @@ async function initializePool() {
     migrateAuditLogIps(db);
 
     authManager = new AuthManager(config);
+    // Live session policy. A provider function (not a snapshot) so changing the timeout in
+    // Access Control takes effect on the next token issue, with no restart. Every read is
+    // clamped inside auth.js and falls back to 1 h idle / 12 h absolute if this throws —
+    // PoolSettings is constructed before AuthManager, but a DB hiccup must not brick login.
+    authManager.sessionPolicyProvider = () => {
+      const s = poolSettings.getSection('access');
+      return {
+        idle_seconds: Number(s.session_timeout_hours) * 3600,
+        absolute_seconds: Number(s.session_absolute_hours) * 3600
+      };
+    };
     console.log(`[${new Date().toISOString()}] Authentication manager initialized`);
 
     hashrateTracker = new HashrateTracker(config, minerManager);
@@ -668,6 +762,31 @@ function setupRoutes() {
     requireAdmin(authManager)
   ];
 
+  // Is TOTP 2FA mandatory for admins right now? Read live from the DB (not the startup-merged
+  // config) so flipping the toggle takes effect without a service restart.
+  const totpIsMandatory = () => {
+    try {
+      return String(poolSettings.getSection('access').require_admin_totp) === 'true';
+    } catch (e) {
+      // Fail OPEN on a settings read error. Failing closed here would brick every step-up
+      // endpoint — including the ones needed to fix the settings — on a transient DB error.
+      return false;
+    }
+  };
+
+  // Enforcement for access.require_admin_totp. Applied to the STEP-UP chain only, so an
+  // un-enrolled admin keeps a normal session (and can therefore reach 2FA enrollment) but
+  // cannot move money or run destructive actions until 2FA is on. See the setting's comment
+  // in lib/pool-settings.js for why this isn't a login refusal.
+  const requireTotpEnrolled = (req, res, next) => {
+    if (!totpIsMandatory()) return next();
+    if (authManager.isTotpEnabled(req.user.user_id)) return next();
+    return res.status(403).json({
+      error: 'This pool requires two-factor authentication for admin actions. Set up 2FA to continue.',
+      totp_enrollment_required: true
+    });
+  };
+
   // Step-up gate for money/destructive admin actions: same as secureAdmin but also requires
   // a PASSWORD re-verification within the last 5 min (requireFreshAuth → token.pwa). A live
   // (or stolen) session alone is not enough — the client must call /api/admin/reauth first.
@@ -675,27 +794,68 @@ function setupRoutes() {
   const freshAdmin = [
     rateLimiter.middleware('admin'),
     ipFilter.middleware('admin'),
+    requireFreshAuth(authManager, STEP_UP_MAX_AGE_S),
+    requireTotpEnrolled
+  ];
+
+  // Step-up WITHOUT the mandatory-2FA gate. Used only by the 2FA ENROLLMENT endpoints: on a
+  // pool with require_admin_totp on, an admin who hasn't enrolled must be able to reach the
+  // very endpoints that enroll them. Putting requireTotpEnrolled in front of enrollment would
+  // make the requirement unsatisfiable and hard-lock the panel — recoverable only via the
+  // break-glass CLI. Do NOT reuse this chain for anything else.
+  const freshAdminEnroll = [
+    rateLimiter.middleware('admin'),
+    ipFilter.middleware('admin'),
     requireFreshAuth(authManager, STEP_UP_MAX_AGE_S)
   ];
 
-  // Auto-ban bookkeeping shared by the password and 2FA login steps: count failures per IP
-  // within the window, temp-ban on threshold.
-  const recordAdminLoginFailure = (ip) => {
+  // Auto-ban bookkeeping for the two login steps: count failures per IP within the window,
+  // temp-ban on threshold. `kind` selects the counter — 'password' and '2fa' are tracked
+  // independently (see ADMIN_2FA_FAIL_THRESHOLD), so a run of rejected codes can never
+  // consume the password budget or vice versa.
+  const recordAdminLoginFailure = (ip, kind = 'password') => {
+    const isTwofa = kind === '2fa';
+    const store = isTwofa ? admin2faFailures : adminLoginFailures;
+    const threshold = isTwofa ? ADMIN_2FA_FAIL_THRESHOLD : ADMIN_LOGIN_FAIL_THRESHOLD;
     const now = Date.now();
-    let rec = adminLoginFailures.get(ip);
+    let rec = store.get(ip);
     if (!rec || now - rec.firstAt > ADMIN_LOGIN_FAIL_WINDOW_MS) rec = { count: 0, firstAt: now };
     rec.count++;
-    adminLoginFailures.set(ip, rec);
-    if (rec.count >= ADMIN_LOGIN_FAIL_THRESHOLD) {
+    store.set(ip, rec);
+    if (rec.count >= threshold) {
       ipFilter.tempBan(ip, ADMIN_LOGIN_BAN_MS);
-      adminLoginFailures.delete(ip);
+      store.delete(ip);
       try {
         db.prepare(`INSERT INTO admin_audit_log (admin_id, action, target_type, target_id, details, ip)
                     VALUES (NULL, 'ip_autoban', 'security', ?, ?, ?)`)
-          .run(ip, JSON.stringify({ reason: 'failed_admin_logins', threshold: ADMIN_LOGIN_FAIL_THRESHOLD, ban_minutes: ADMIN_LOGIN_BAN_MS / 60000 }), ip);
+          .run(ip, JSON.stringify({
+            reason: isTwofa ? 'failed_admin_2fa_codes' : 'failed_admin_logins',
+            threshold,
+            ban_minutes: ADMIN_LOGIN_BAN_MS / 60000
+          }), ip);
       } catch (e) { /* non-fatal */ }
     }
   };
+
+  // Cookie lifetimes must track the live session policy, not a hardcoded hour. A cookie that
+  // outlives its token is harmless (the request 401s and the client refreshes), but a cookie
+  // that dies FIRST silently logs the operator out mid-session with a valid token in hand —
+  // which is exactly the bug that made "session timeout" feel arbitrary.
+  const accessCookieOpts = () => ({
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'strict',
+    maxAge: authManager.sessionPolicy().idle * 1000
+  });
+  // The refresh cookie is capped at the ABSOLUTE session limit: past that, refreshAccessToken
+  // refuses anyway, so holding the cookie for the full 7 days would only invite pointless
+  // 401s. Whichever is shorter wins.
+  const refreshCookieOpts = () => ({
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'strict',
+    maxAge: Math.min(authManager.refreshTokenExpiresIn, authManager.sessionPolicy().abs) * 1000
+  });
 
   // ─── Public Health Check (rate-limited, no auth) ───────────────────────────
   // Registered on both /health and /api/health: nginx proxies /api/* to the backend,
@@ -816,49 +976,106 @@ function setupRoutes() {
   );
 
   // ─── Public API reference — auto-generated from the live Express route table ───
-  // Always accurate (it reflects the routes actually mounted), self-documenting. Only
-  // public-safe prefixes are exposed; admin/auth routes are never listed. api-docs.html
-  // renders this. Descriptions are a best-effort lookup keyed by "METHOD path"; an
-  // unknown route still appears (with an empty description) so the list can't drift.
+  // Always accurate for WHICH routes exist (it reflects the routes actually mounted); only
+  // public-safe prefixes are exposed, so admin/auth routes are never listed. api-docs.html
+  // renders this. An unmapped route still appears (with an empty description) so the LIST can
+  // never drift — but the per-endpoint metadata below is hand-maintained and CAN drift, so
+  // treat it as documentation, not as introspection.
+  //
+  // `shape` matters more than it looks. This API is NOT uniform: the /api/public/* CMS-era
+  // routes return { success: true, data: … } while almost everything older returns the payload
+  // raw (often a bare array), and errors are ALWAYS { error: "…" } with no success flag on any
+  // of them. The page used to claim a single envelope for all of it, which is wrong for ~70% of
+  // the endpoints and breaks the first client anyone writes. Publishing the real shape per
+  // endpoint is cheaper and more honest than retrofitting one envelope onto 30 live routes that
+  // the pool's own front-end already consumes.
+  //   envelope = { success: true, data: … }   flat = { success: true, …fields }
+  //   raw      = payload at the top level     array = bare JSON array
+  //   none     = 204 No Content
+  // `params`  — query string, with the caps the handler actually enforces.
+  // `body`    — request body fields, for the POST/DELETE rails.
+  // `auth`    — ownership proof required (lib/owner-proof.js), otherwise public.
+  // `gated`   — an operator setting that makes the route 404 when off.
+  // `rate`    — which rate-limiter bucket applies (see this.limits in lib/rate-limiter.js).
   const PUBLIC_API_PREFIXES = [
     '/api/public/', '/api/account/', '/api/config/', '/api/pool/',
+    // Added 2026-07-28. These are public, rate-limited, and consumed by the pool's own pages
+    // (reactor-dashboard.js, miners-stats.html, network-map.js) — they were simply invisible to
+    // the reference because the prefix list predated them. An undocumented public endpoint is
+    // not a private one; it is a public one nobody can use correctly.
+    '/api/stratum/', '/api/network/',
   ];
-  const API_DOC_DESCRIPTIONS = {
-    'GET /api/public/branding': 'White-label config (name, theme, SEO, social, footer links).',
-    'GET /api/public/price': 'Cached GRIN price (USD + BTC).',
-    'GET /api/public/status': 'Coarse pool/node/wallet health (no balances).',
-    'GET /api/public/ads': 'Active operator ads by placement (+ rotation interval).',
-    'POST /api/public/ads/event': 'Ad impression/click beacon — aggregate counters only, no visitor data.',
-    'GET /api/public/lottery/winners': 'Fortune-board winner history (truncated addresses).',
-    'GET /api/public/lottery/stats': 'Fortune-board aggregates: total prizes/winners/draws, Pot A/B split, monthly series.',
-    'GET /api/public/endpoints': 'This API reference (machine-readable).',
-    'GET /api/config/pool-info': 'Network, pool fee %, minimum withdrawal.',
-    'GET /api/pool/stats': 'Live pool stats: hashrate, miners, blocks, share quality.',
-    'GET /api/pool/stats/regions': 'Per-region stratum endpoints + live status.',
-    'GET /api/pool/blocks': 'Pool-found blocks (paginated: limit, offset, status).',
-    'GET /api/pool/blocks/history': 'Durable block series: luck, per-period counts, status, reward (?range=week|month|year|all).',
-    'GET /api/pool/effort': 'Pool network share, recent luck, round effort, time since last block.',
-    'GET /api/pool/hashrate/history': 'Pool hashrate time-series (?hours=).',
-    'GET /api/pool/metrics/history': 'Durable pool trend series: hashrate, miners, earnings, payout, network hashrate (?range=day|week|month|year|all).',
-    'GET /api/pool/metrics/history/regions': 'Per-region miners/hashrate trend series (?range=day|week|month|year|all).',
-    'GET /api/pool/payments/history': 'Durable payments & transparency series: payouts, reward split, giveaways, donations, fee + lifetime totals (?range=day|week|month|year|all).',
-    'GET /api/pool/donors': 'Donor wall: per-address lifetime donations to the prize pool, first/last donation date, current donate-tag %.',
-    'GET /api/pool/prize-pool': 'Prize-pool transparency report: current balance + lifetime in/out totals by source (fee-cut, donations, top-ups, abandoned balances) + recent flows.',
-    'GET /api/pool/status': 'Coarse service status strip.',
-    'GET /api/account/:addr': 'Account summary: balance, paid, pending payout, effort.',
-    'GET /api/account/:addr/workers': 'Per-worker (rig) hashrate + share quality.',
-    'GET /api/account/:addr/hashrate/history': 'Account hashrate time-series (?hours=).',
-    'POST /api/account/:addr/withdraw': 'Request a payout (Tor, Slatepack, or Nostr/Goblin); ownership-gated (recent mining IP or stratum password).',
-    'POST /api/account/:addr/nostr-destination': 'Register/replace the Goblin username for Nostr payouts; ownership-gated; starts a security cooldown.',
-    'DELETE /api/account/:addr/nostr-destination': 'Remove the registered Goblin payout destination; ownership-gated.',
-    'GET /api/account/:addr/balance/log': 'Address ledger (?direction=in|out, ?days=, ?format=csv).',
-    'GET /api/account/:addr/earnings': 'Credited earnings per period (1h/24h/7d/30d) + 30d in/out totals.',
+  const OWNER_PROOF_BODY = 'proof (recent mining IP or the rig\'s stratum password; legacy alias ip_proof)';
+  const API_DOC_META = {
+    // ── Public ────────────────────────────────────────────────────────────────
+    'GET /api/public/branding': { desc: 'White-label config (name, theme, SEO, social, footer links).', shape: 'envelope' },
+    'GET /api/public/price': { desc: 'Cached GRIN price (USD + BTC) from CoinGecko. Serves the last good value on upstream failure; { available: false } if never fetched.', shape: 'envelope' },
+    'GET /api/public/endpoints': { desc: 'This API reference (machine-readable).', shape: 'envelope' },
+    'GET /api/public/ads': { desc: 'Active operator ads by placement (+ rotation interval). Cached 60s, so ad edits take up to a minute to appear.', shape: 'raw', params: 'placement (omit for every slot keyed by placement)' },
+    'POST /api/public/ads/event': { desc: 'Ad impression/click beacon — aggregate counters only, no visitor data. Always 204, even on a malformed body.', shape: 'none', body: 'impressions[], clicks[] (ad ids)' },
+    'GET /api/public/lottery/winners': { desc: 'Fortune-board winner history (truncated addresses). Empty when incentives are disabled.', shape: 'envelope', params: 'limit (≤100, default 25) · offset' },
+    'GET /api/public/lottery/stats': { desc: 'Fortune-board aggregates: total prizes/winners/draws, Pot A/B split, monthly series.', shape: 'envelope' },
+    'GET /api/public/pages': { desc: 'Published CMS pages (slug + title) for the header/footer link lists.', shape: 'envelope' },
+    'GET /api/public/page/:key': { desc: 'One published CMS page by slug (About / Terms / Privacy / FAQ …). 404 if the slug is unknown or unpublished.', shape: 'envelope' },
+    'GET /api/public/posts': { desc: 'Blog: paginated list of published posts (card view — excerpt, cover, date).', shape: 'envelope', params: 'limit · offset' },
+    'GET /api/public/post/:slug': { desc: 'Blog: one published post in full, by slug. 404 if unknown or unpublished.', shape: 'envelope' },
+
+    // ── Config ────────────────────────────────────────────────────────────────
+    'GET /api/config/pool-info': { desc: 'Pool terms: network, pool fee %, minimum withdrawal, the flat per-payout withdrawal fee (0 = the pool absorbs the network fee), address format and which listener a miner needs.', shape: 'raw' },
+
+    // ── Pool ──────────────────────────────────────────────────────────────────
+    'GET /api/pool/stats': { desc: 'Live pool stats: block totals, active miners, connections, and share quality (accepted/stale/rejected). Share quality is LIVE in-memory only — it is empty with no connected sessions and resets on disconnect.', shape: 'raw' },
+    'GET /api/pool/status': { desc: 'Coarse service health for the status strip: pool up, node reachable/synced/peers/height, wallet reachable. Never exposes balances or addresses.', shape: 'raw' },
+    'GET /api/pool/stats/regions': { desc: 'Per-region stratum endpoints + live status (online | idle | offline) and 15-minute regional hashrate.', shape: 'raw' },
+    'GET /api/pool/locations': { desc: 'Operator-declared stratum regions that are currently active — region key, label, and the stratum URL to point a rig at.', shape: 'raw' },
+    'GET /api/pool/blocks': { desc: 'Pool-found blocks, newest first. A short page (fewer rows than limit) means the last page.', shape: 'array', params: 'limit (≤500, default 50) · offset · status=immature|confirmed|orphaned' },
+    'GET /api/pool/blocks/history': { desc: 'Durable block series: luck, per-period counts, status split, cumulative reward. Blocks are never pruned, so any range is meaningful.', shape: 'raw', params: 'range=week|month|year|all (default month)' },
+    'GET /api/pool/effort': { desc: 'Pool network share, luck over the last 100 blocks, current round effort, and time since the last block. Network difficulty is cached ~60s.', shape: 'raw' },
+    'GET /api/pool/hashrate/history': { desc: 'Pool hashrate time-series, summed across addresses per bucket.', shape: 'raw', params: 'hours (1–720, default 24)' },
+    'GET /api/pool/poolstats': { desc: 'Listing feed for pool directories — this is the URL to hand to miningpoolstats.stream (they poll it; nothing is pushed). Pool + network aggregates in the same field layout as the toolkit\'s solo-mining poolstats_<net>.json, so an importer written for that needs no changes. Recomputed at most once every 60s and served from cache in between, so polling faster than 1/min returns identical bytes — 1–5 min is the sensible range. Every value is an aggregate already shown on the homepage; no address or per-miner row is included, so it needs no auth. The ts field is the generation time: if it stops advancing, the feed is stale. Fields are null (not 0) when the node is unreachable, and network.hashrate_gps_24h is null until the pool has an hour of history.', shape: 'raw' },
+    'GET /api/pool/metrics/history': { desc: 'Durable pool trend series: hashrate, miners, earnings, payout, network hashrate. Rolled up hourly and never pruned.', shape: 'raw', params: 'range=day|week|month|year|all (default day)' },
+    'GET /api/pool/metrics/history/regions': { desc: 'Per-region miners/hashrate trend series (the "miners by gateway" view).', shape: 'raw', params: 'range=day|week|month|year|all (default day)' },
+    'GET /api/pool/payments/history': { desc: 'Durable payments & transparency series: payouts, reward split, giveaways, donations, fee, plus lifetime totals.', shape: 'raw', params: 'range=day|week|month|year|all (default month)' },
+    'GET /api/pool/payments': { desc: 'Recent confirmed payouts: address, amount, flat fee charged, method, timestamps, and the on-chain kernel when known. Pool-internal payout machinery (slate id, Tor probe result, retry state, cancel reason) is deliberately not published.', shape: 'array', params: 'limit (≤500, default 100)' },
+    'GET /api/pool/miners': { desc: 'Balance distribution across accounts, richest first. Addresses are MASKED (grin1qxy…mn4p) — the distribution is public, the address→balance mapping is not.', shape: 'array', params: 'limit (≤500, default 50)' },
+    'GET /api/pool/top-block-finders': { desc: 'Lucky-miner leaderboard: blocks found and total reward per address over a recent window. Orphans do not count as a find.', shape: 'raw', params: 'days (≤3650, default 30) · limit (≤1000, default 500)' },
+    'GET /api/pool/unclaimed': { desc: 'Lost-and-found: masked addresses of long-dormant balances with a per-address disposal countdown, plus the historical disposition ledger (sweeps into the prize pool).', shape: 'raw', params: 'limit (≤200, default 100)' },
+    'GET /api/pool/donors': { desc: 'Donor wall: per-address lifetime donations to the prize pool, first/last donation date, current donate-tag %. Top 100.', shape: 'raw' },
+    'GET /api/pool/prize-pool': { desc: 'Prize-pool transparency report: current balance + LIFETIME in/out totals by source (fee-cut, donations, operator top-ups, abandoned balances, orphan clawbacks). Per-event rows are deliberately withheld — their timestamps would expose the cadence of discretionary operator top-ups.', shape: 'raw' },
+    'GET /api/pool/topology': { desc: 'Network map: hub → gateways → miners aggregated BY COUNTRY. Country-only geolocation; no per-miner coordinate is ever resolved or stored, and countries under the k-anonymity floor merge into one unnamed bucket.', shape: 'raw', gated: 'the operator publishes the network map (off by default → 404)' },
+
+    // ── Stratum (live session aggregates) ─────────────────────────────────────
+    'GET /api/stratum/stats': { desc: 'Live stratum server state: connection counts and per-session share tallies. Session addresses are truncated so the live list cannot be scraped to enumerate miners.', shape: 'raw' },
+    'GET /api/stratum/hashrate': { desc: 'Pool hashrate aggregates (1h/24h GPS) plus the fixed top-10 by hashrate — the gauge on the homepage.', shape: 'raw' },
+    'GET /api/stratum/top-miners': { desc: 'Top miners by hashrate over a recent window — the paginated contribution leaderboard.', shape: 'raw', params: 'window minutes (≤1440, default 1440) · limit (≤1000, default 500)' },
+    'GET /api/stratum/top-avg-hashrate': { desc: 'Top miners by AVERAGE hashrate over a multi-day window (sustained contribution). Backed by hashrate_history, so a 30-day window is meaningful.', shape: 'raw', params: 'days (≤90, default 30) · limit (≤1000, default 500)' },
+
+    // ── Network ───────────────────────────────────────────────────────────────
+    'GET /api/network/peers': { desc: 'Grin P2P peers this node has seen, aggregated by country over a rolling window (+ mainnet/testnet split). Country-only, no IPs; thin countries merge into one unnamed bucket.', shape: 'raw', params: 'window days (1–90, default 30)', gated: 'the operator publishes the network map (off by default → 404)' },
+
+    // ── Account (address-as-identity: the address IS the credential to READ) ──
+    'GET /api/account/:addr': { desc: 'Account summary: balance, locked, lifetime paid, pending payout, share/hashrate snapshot. 404 if the address has never mined here.', shape: 'raw' },
+    'GET /api/account/:addr/shares': { desc: 'Raw accepted shares for an address, newest first. Shares are pruned aggressively — use the hashrate history for anything older than ~a day.', shape: 'raw', params: 'limit (≤500, default 100) · offset' },
+    'GET /api/account/:addr/workers': { desc: 'Per-worker (rig) hashrate + share quality over a recent window.', shape: 'raw', params: 'window minutes (1–1440, default 10)' },
+    'GET /api/account/:addr/hashrate/history': { desc: 'Account hashrate time-series, downsampled for charting.', shape: 'raw', params: 'hours (1–720, default 24)' },
+    'GET /api/account/:addr/earnings': { desc: 'Credited earnings per period (1h/24h/7d/30d) + 30d in/out totals. Payout reversals count as money-in but never as earnings.', shape: 'raw' },
+    'GET /api/account/:addr/balance/log': { desc: 'Address ledger. Raw rows prune after ~60 days (the durable record is the withdrawal history below). format=csv streams the filtered window as a download on a tighter rate limit.', shape: 'raw · csv', params: 'direction=in|out · days (≤3650, default all) · limit (≤500, default 50) · offset · format=csv' },
+    'GET /api/account/:addr/withdrawals': { desc: 'Payout history for an address — kept forever, so this is the durable record for accounting. Payouts only: no donations or orphan clawbacks. format=csv streams all-time on a tighter rate limit.', shape: 'raw · csv', params: 'limit (≤200, default 20) · offset · format=csv' },
+    'GET /api/account/:addr/tor-check': { desc: 'Is this miner\'s wallet reachable over Tor right now? Read-only probe behind the payout UI hint. online is TRI-STATE: true/false when known, null = "decided at payout time". 404 if the address has never mined here — the probe is not offered for arbitrary Grin addresses. Answers are cached 60s per address; the payout gate always re-probes fresh.', shape: 'raw', rate: 'torcheck' },
+    'POST /api/account/:addr/withdraw': { desc: 'Request a payout on one of three rails. 403 = ownership proof failed; 409 (tor) = wallet unreachable, retry or switch to slatepack; 409 (nostr) = destination unregistered, still in cooldown, or its npub changed.', shape: 'flat', auth: 'ownership proof', rate: 'withdraw', body: `method=tor|slatepack|nostr (default tor) · amount · ${OWNER_PROOF_BODY}` },
+    'POST /api/account/:addr/withdraw/:id/finalize': { desc: 'Complete a slatepack payout by posting back the response slatepack your wallet produced with `receive`. The pool finalizes and broadcasts.', shape: 'raw', auth: 'ownership proof', rate: 'withdraw', body: `response_slatepack · ${OWNER_PROOF_BODY}` },
+    'POST /api/account/:addr/nostr-destination': { desc: 'Register/replace the Goblin username for Nostr payouts. Does NOT move funds — it pins the destination and (re)starts a security cooldown, during which the nostr rail refuses to pay. 503 when the rail is disabled.', shape: 'flat', auth: 'ownership proof', rate: 'withdraw', body: `username (Goblin/NIP-05) · ${OWNER_PROOF_BODY}` },
+    'DELETE /api/account/:addr/nostr-destination': { desc: 'Remove the registered Goblin payout destination, clearing the pin and cooldown.', shape: 'flat', auth: 'ownership proof', rate: 'withdraw', body: OWNER_PROOF_BODY },
   };
   app.get('/api/public/endpoints',
     rateLimiter.middleware('public'),
     (req, res) => {
       try {
-        const stack = (req.app._router && req.app._router.stack) || [];
+        // Express 4: the route table hangs off app._router. Express 5 renames it to app.router,
+        // so accept either — otherwise a major-version bump would silently empty this page
+        // rather than fail loudly (the catch below would never even fire).
+        const router = req.app._router || req.app.router;
+        const stack = (router && router.stack) || [];
         const seen = new Set();
         const out = [];
         for (const layer of stack) {
@@ -874,13 +1091,39 @@ function setupRoutes() {
               const key = m + ' ' + p;
               if (seen.has(key)) continue;
               seen.add(key);
-              out.push({ method: m, path: p, description: API_DOC_DESCRIPTIONS[key] || '' });
+              const meta = API_DOC_META[key] || {};
+              out.push({
+                method: m,
+                path: p,
+                description: meta.desc || '',
+                shape: meta.shape || '',
+                params: meta.params || '',
+                body: meta.body || '',
+                auth: meta.auth || '',
+                gated: meta.gated || '',
+                rate_limit: meta.rate || 'public',
+              });
             }
           }
         }
         out.sort((a, b) => (a.path === b.path ? a.method.localeCompare(b.method) : a.path.localeCompare(b.path)));
         res.setHeader('Cache-Control', 'public, max-age=300');
-        res.json({ success: true, data: { count: out.length, endpoints: out } });
+        res.json({
+          success: true,
+          data: {
+            count: out.length,
+            endpoints: out,
+            // Cross-cutting facts the page states once instead of on every row.
+            notes: {
+              errors: 'Errors are always { "error": "…" } with an HTTP status — never { success: false }.',
+              cors: 'Public GETs send Access-Control-Allow-Origin: * (no credentials). POST/DELETE are same-origin only.',
+              rate_limits: rateLimiter && rateLimiter.limits
+                ? { public: rateLimiter.limits.public, withdraw: rateLimiter.limits.withdraw, export: rateLimiter.limits.export }
+                : null,
+              times: 'All timestamps are UNIX seconds (UTC).',
+            },
+          },
+        });
       } catch (err) {
         res.status(500).json({ error: 'Failed to build API reference' });
       }
@@ -1220,19 +1463,39 @@ function setupRoutes() {
     return h;
   }
 
+  // Remove the shell's own <title> so ours is the only one (HTML allows exactly one, and
+  // browsers/Google keep the FIRST — leaving it makes the injected per-post title dead).
+  //
+  // Comments are MASKED first, and that is not paranoia: the shells carry an explanatory
+  // comment that mentions "<title>" in prose. A naive regex matched that occurrence, ran
+  // on to the real </title>, and deleted the comment's opening — leaving an unterminated
+  // "<!--" that swallowed every stylesheet link after it. The page rendered with NO CSS at
+  // all. Masking keeps offsets identical, so the match indices still address the original.
+  function stripShellTitle(headHtml) {
+    const masked = headHtml.replace(/<!--[\s\S]*?-->/g, (m) => '\u0000'.repeat(m.length));
+    const m = /[ \t]*<title\b[^>]*>[\s\S]*?<\/title>[ \t]*\r?\n?/i.exec(masked);
+    if (!m) return headHtml;
+    return headHtml.slice(0, m.index) + headHtml.slice(m.index + m[0].length);
+  }
+
   function sendShell(res, shellName, fallbackId, head) {
     const shell = readShell(shellName) || fallbackShell(fallbackId);
     const idx = shell.indexOf(HEAD_MARK);
     let html = shell;
     if (idx !== -1) {
-      // Remove the shell's own <title> (head slice only) before injecting ours. HTML
-      // allows exactly one, and browsers/Google keep the first — so without this every
-      // post would still have shown the shell's generic "Blog — <pool>" in search.
-      const headHtml = shell.slice(0, idx).replace(/[ \t]*<title\b[^>]*>[\s\S]*?<\/title>\s*/i, '');
-      html = headHtml + head + shell.slice(idx);
+      html = stripShellTitle(shell.slice(0, idx)) + head + shell.slice(idx);
     }
     res.setHeader('Cache-Control', 'no-cache');
     res.type('html').send(html);
+  }
+
+  // First <img src> in an authored HTML body, or '' when there is none. CMS pages have no
+  // cover_image column (only posts do), so this is how a page gets a social card picture.
+  // Accepts single, double or unquoted src values — the body is operator-authored, so it
+  // is not guaranteed to be normalised markup.
+  function firstBodyImage(html) {
+    const m = /<img\b[^>]*?\bsrc\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i.exec(String(html || ''));
+    return m ? (m[1] || m[2] || m[3] || '') : '';
   }
 
   // Absolute URL for an image path that may already be absolute.
@@ -1282,15 +1545,27 @@ function setupRoutes() {
         const key = String(req.query.p || '');
         const page = key ? pagesManager.getPublic(key) : null;
         if (!page) {
+          // Two ways in: an unknown/unpublished key, or the bare shell with no ?p= at all.
+          // Both 404 — /page.html on its own is a shell, not content, and is deliberately
+          // absent from sitemap.xml. The shell's client script then fills the body with the
+          // list of published pages so a visitor lands on an index, not a dead end. That
+          // body is real linked content, so pair the status with an explicit noindex
+          // (follow, so the listed pages are still discovered) and drop the canonical: a
+          // canonical pointing at a noindex URL just gives a crawler two contradictory
+          // signals about a page that should never be indexed in the first place.
           res.status(404);
-          return sendShell(res, 'page.html', 'page-body', seoHead({
-            title: 'Page not found', canonical: origin + '/page.html',
-          }));
+          return sendShell(res, 'page.html', 'page-body',
+            seoHead({ title: key ? 'Page not found' : 'Pages' }) +
+            '<meta name="robots" content="noindex, follow">\n');
         }
         sendShell(res, 'page.html', 'page-body', seoHead({
           title: page.seo_title || page.title,
           description: page.seo_desc || toDescription(page.html, ''),
           canonical: origin + '/page.html?p=' + encodeURIComponent(page.key),
+          // Pages carry no cover column, so the card picture is the first image in the
+          // authored body, falling back to the site-wide card. Before this, every CMS page
+          // unfurled on Twitter/Discord/Telegram as a bare text card with no image at all.
+          image: absImage(origin, firstBodyImage(page.html) || '/images/og-image.svg'),
         }));
       } catch (err) {
         res.status(500).type('text/plain').send('Error');
@@ -1338,19 +1613,8 @@ function setupRoutes() {
           // set this password, so the first session starts step-up-fresh.
           const tokens = authManager.generateTokens(result.user_id, username, true, 0, Math.floor(Date.now() / 1000));
 
-          res.cookie('access_token', tokens.accessToken, {
-            httpOnly: true,
-            secure: process.env.NODE_ENV === 'production',
-            sameSite: 'strict',
-            maxAge: 3600000
-          });
-
-          res.cookie('refresh_token', tokens.refreshToken, {
-            httpOnly: true,
-            secure: process.env.NODE_ENV === 'production',
-            sameSite: 'strict',
-            maxAge: 604800000
-          });
+          res.cookie('access_token', tokens.accessToken, accessCookieOpts());
+          res.cookie('refresh_token', tokens.refreshToken, refreshCookieOpts());
 
           // Log registration event
           const auditStmt = db.prepare(`
@@ -1404,7 +1668,11 @@ function setupRoutes() {
         const result = await authManager.login(username, password, ip);
 
         if (result.success) {
-          // Password is correct → clear the auto-ban counter for this IP.
+          // Password is correct → clear the PASSWORD auto-ban counter for this IP.
+          // Deliberately does NOT clear admin2faFailures: an attacker holding a stolen
+          // password could otherwise reset the code counter by simply logging in again
+          // between guesses, making the 2FA threshold unreachable. Only completing 2FA
+          // clears it.
           adminLoginFailures.delete(ip);
 
           // 2FA gate: if this admin has TOTP enabled, DON'T issue a session yet. Return a
@@ -1415,19 +1683,10 @@ function setupRoutes() {
           }
 
           // FIX #4: Set httpOnly, Secure cookie instead of returning token
-          res.cookie('access_token', result.access_token, {
-            httpOnly: true,        // JS cannot access (prevents XSS theft)
-            secure: process.env.NODE_ENV === 'production',  // HTTPS only in production
-            sameSite: 'strict',    // CSRF protection
-            maxAge: 3600000        // 1 hour
-          });
-
-          res.cookie('refresh_token', result.refresh_token, {
-            httpOnly: true,
-            secure: process.env.NODE_ENV === 'production',
-            sameSite: 'strict',
-            maxAge: 604800000      // 7 days
-          });
+          // httpOnly (no JS access → no XSS theft), Secure in production, sameSite strict.
+          // Lifetime comes from the live session policy — see accessCookieOpts.
+          res.cookie('access_token', result.access_token, accessCookieOpts());
+          res.cookie('refresh_token', result.refresh_token, refreshCookieOpts());
 
           // Log successful login
           const auditStmt = db.prepare(`
@@ -1477,20 +1736,18 @@ function setupRoutes() {
           db.prepare(`INSERT INTO admin_audit_log (admin_id, action, target_type, target_id, details, ip)
                       VALUES (?, 'login_2fa_failed', 'auth', 'login', NULL, ?)`).run(userId, ip);
         } catch (e) { /* non-fatal */ }
-        recordAdminLoginFailure(ip);
+        recordAdminLoginFailure(ip, '2fa');
         return res.status(401).json({ success: false, error: 'Invalid 2FA code' });
       }
 
       const sess = authManager.issueSessionFor(userId);
       if (!sess.success) return res.status(401).json({ success: false, error: sess.error || 'Login failed' });
 
-      res.cookie('access_token', sess.access_token, {
-        httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'strict', maxAge: 3600000
-      });
-      res.cookie('refresh_token', sess.refresh_token, {
-        httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'strict', maxAge: 604800000
-      });
+      res.cookie('access_token', sess.access_token, accessCookieOpts());
+      res.cookie('refresh_token', sess.refresh_token, refreshCookieOpts());
+      // Full authentication completed — clear BOTH counters for this IP.
       adminLoginFailures.delete(ip);
+      admin2faFailures.delete(ip);
       try {
         db.prepare(`INSERT INTO admin_audit_log (admin_id, action, target_type, target_id, details, ip)
                     VALUES (?, 'login_success', 'auth', 'login', ?, ?)`).run(userId, JSON.stringify({ via: '2fa' }), ip);
@@ -1511,26 +1768,30 @@ function setupRoutes() {
     const result = authManager.refreshAccessToken(refreshToken);
     if (result.success) {
       // Set new access token in httpOnly cookie
-      res.cookie('access_token', result.access_token, {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: 'strict',
-        maxAge: 3600000
-      });
+      res.cookie('access_token', result.access_token, accessCookieOpts());
 
       // Set new refresh token if provided
       if (result.refresh_token) {
-        res.cookie('refresh_token', result.refresh_token, {
-          httpOnly: true,
-          secure: process.env.NODE_ENV === 'production',
-          sameSite: 'strict',
-          maxAge: 604800000
-        });
+        res.cookie('refresh_token', result.refresh_token, refreshCookieOpts());
       }
 
-      res.json({ success: true });
+      // expires_in lets the client schedule the next silent refresh; session_started_at is
+      // what it needs to count down the absolute cap without guessing from page-load time.
+      res.json({
+        success: true,
+        expires_in: result.expires_in,
+        session_started_at: result.session_started_at,
+        session_absolute_seconds: result.session_absolute_seconds
+      });
     } else {
-      res.status(401).json({ success: false, error: result.error });
+      // session_expired = the absolute cap was reached; a new access token will never be
+      // issued for this session, so the client must stop retrying and send the operator to
+      // the login page instead of looping.
+      res.status(401).json({
+        success: false,
+        error: result.error,
+        session_expired: !!result.session_expired
+      });
     }
   });
 
@@ -1542,7 +1803,9 @@ function setupRoutes() {
     try {
       const { password } = req.body || {};
       if (!password) return res.status(400).json({ error: 'Password required' });
-      const result = await authManager.stepUp(req.user.user_id, password);
+      // Pass the caller's session start through: a step-up re-verifies the password but does
+      // NOT start a new session, so it must not reset the absolute-cap clock.
+      const result = await authManager.stepUp(req.user.user_id, password, Number(req.user.sst) || 0);
       if (!result.success) {
         try {
           db.prepare(`INSERT INTO admin_audit_log (admin_id, action, target_type, target_id, details, ip)
@@ -1550,9 +1813,7 @@ function setupRoutes() {
         } catch (e) { /* non-fatal */ }
         return res.status(401).json({ error: result.error || 'Re-authentication failed' });
       }
-      res.cookie('access_token', result.access_token, {
-        httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'strict', maxAge: 3600000
-      });
+      res.cookie('access_token', result.access_token, accessCookieOpts());
       res.json({ success: true });
     } catch (err) {
       res.status(500).json({ error: 'Server error' });
@@ -1564,15 +1825,22 @@ function setupRoutes() {
   // (freshAdmin) so a hijacked live session can't silently turn 2FA off.
   app.get('/api/admin/2fa/status', secureAdmin, (req, res) => {
     try {
+      const enabled = authManager.isTotpEnabled(req.user.user_id);
+      const mandatory = totpIsMandatory();
       res.json({
         success: true,
-        enabled: authManager.isTotpEnabled(req.user.user_id),
+        enabled,
         recovery_codes_remaining: authManager.unusedRecoveryCount(req.user.user_id),
+        // Lets the panel show the real state instead of a generic 403 the first time a
+        // step-up action is refused: mandatory = the pool requires 2FA;
+        // must_enroll = required but this admin hasn't set it up, so step-up is blocked.
+        mandatory,
+        must_enroll: mandatory && !enabled,
       });
     } catch (err) { res.status(500).json({ error: 'Server error' }); }
   });
 
-  app.post('/api/admin/2fa/enroll/begin', freshAdmin, (req, res) => {
+  app.post('/api/admin/2fa/enroll/begin', freshAdminEnroll, (req, res) => {
     try {
       if (authManager.isTotpEnabled(req.user.user_id)) {
         return res.status(400).json({ error: '2FA is already enabled. Disable it first to re-enroll.' });
@@ -1585,7 +1853,7 @@ function setupRoutes() {
     } catch (err) { res.status(500).json({ error: 'Server error' }); }
   });
 
-  app.post('/api/admin/2fa/enroll/confirm', freshAdmin, async (req, res) => {
+  app.post('/api/admin/2fa/enroll/confirm', freshAdminEnroll, async (req, res) => {
     try {
       const r = await authManager.confirm2faEnrollment(req.user.user_id, (req.body || {}).code);
       if (!r.success) return res.status(400).json({ error: r.error });
@@ -1654,6 +1922,8 @@ function setupRoutes() {
       network: config.network,
       pool_fee_percent: config.pool_fee_percent,
       min_withdrawal: config.min_withdrawal,
+      // Flat fee deducted from every payout (0 = the pool absorbs the network fee).
+      withdrawal_fee: config.withdrawal_fee || 0,
       address_format: `grin1...`,
       wallet_required: config.tor_enabled ? 'Tor listener' : 'HTTP endpoint'
     });
@@ -1755,7 +2025,13 @@ function setupRoutes() {
       const offset = Math.max(parseInt(req.query.offset || 0, 10), 0);
       const status = req.query.status;
       const valid = ['immature', 'confirmed', 'orphaned'];
-      let sql = 'SELECT * FROM blocks';
+      // Explicit columns since 2026-07-28 (was `SELECT *`): `nonce` is the winning solution's
+      // nonce and `id`/`created_at` are internal row bookkeeping — none of the three is read by
+      // blocks.html or the reactor fuel-rods, and publishing the nonce serves no verifier (the
+      // block hash already anchors the find on any chain explorer). Everything the two consumers
+      // actually render is kept, including found_by and the luck pair.
+      let sql = `SELECT height, hash, reward, status, found_by, found_at, confirmed_at,
+                        network_difficulty, round_shares FROM blocks`;
       const params = [];
       if (status && valid.includes(status)) { sql += ' WHERE status = ?'; params.push(status); }
       sql += ' ORDER BY height DESC LIMIT ? OFFSET ?';
@@ -2418,30 +2694,17 @@ function setupRoutes() {
     }
   });
 
-  app.get('/api/account/:addr/balance', rateLimiter.middleware('public'), (req, res) => {
-    try {
-      const { addr } = req.params;
+  // REMOVED (2026-07-28): GET /api/account/:addr/balance — every field it returned
+  // (balance, balance_locked, their sum) is already in GET /api/account/:addr, which is what
+  // the account page actually calls. Nothing in public_html/ or the admin panel referenced it.
+  // A second, undocumented way to read the same number is one more surface to keep honest.
 
-      const stmt = db.prepare(`
-        SELECT balance, balance_locked FROM miner_accounts WHERE grin_address = ?
-      `);
-      const account = stmt.get(addr);
-
-      if (!account) {
-        return res.status(404).json({ error: 'Account not found' });
-      }
-
-      res.json({
-        grin_address: addr,
-        balance: account.balance,
-        balance_locked: account.balance_locked,
-        total: account.balance + account.balance_locked
-      });
-    } catch (err) {
-      res.status(500).json({ error: err.message });
-    }
-  });
-
+  // Balance distribution across accounts, richest first. Addresses are MASKED here (2026-07-28):
+  // unmasked this was a public rich-list — a full address paired with a balance, sorted so the
+  // largest balances come first, which is a targeting list, not transparency. The distribution
+  // itself is legitimate pool-health data, and it survives masking intact; the address→balance
+  // mapping does not, which is the point. No front-end consumes this endpoint (the leaderboards
+  // use /api/stratum/top-miners and /api/pool/top-block-finders — hashrate and luck, not money).
   app.get('/api/pool/miners', rateLimiter.middleware('public'), (req, res) => {
     try {
       const limit = Math.min(parseInt(req.query.limit || 50), 500);
@@ -2449,7 +2712,11 @@ function setupRoutes() {
         SELECT grin_address, balance, is_online FROM miner_accounts
         ORDER BY balance DESC LIMIT ?
       `);
-      const miners = stmt.all(limit);
+      const miners = stmt.all(limit).map((m) => ({
+        grin_address: maskAddr(m.grin_address),
+        balance: m.balance,
+        is_online: m.is_online,
+      }));
       res.json(miners);
     } catch (err) {
       res.status(500).json({ error: err.message });
@@ -2481,11 +2748,20 @@ function setupRoutes() {
     }
   });
 
+  // Recent confirmed payouts (public payout teletype + payment-history table). Explicit column
+  // list since 2026-07-28: `SELECT *` published the whole withdrawals row, which carries the
+  // pool's operational internals — slate_id, tor_check_result, retry_count, next_retry_at,
+  // cancel_reason, cancelled_by. Those describe how the pool's payout machinery and a miner's
+  // wallet behaved, are read by nothing public, and read as a per-miner reliability record.
+  // grin_address stays FULL: address-as-identity means the account page is public and keyed by
+  // it, and both consumers link the row through to /account-settings.html?addr=.
   app.get('/api/pool/payments', rateLimiter.middleware('public'), (req, res) => {
     try {
       const limit = Math.min(parseInt(req.query.limit || 100), 500);
       const stmt = db.prepare(`
-        SELECT * FROM withdrawals WHERE status = 'confirmed'
+        SELECT id, grin_address, amount, fee_charged, method, status,
+               created_at, confirmed_at, kernel_excess
+        FROM withdrawals WHERE status = 'confirmed'
         ORDER BY confirmed_at DESC LIMIT ?
       `);
       const payments = stmt.all(limit);
@@ -2542,12 +2818,12 @@ function setupRoutes() {
       const pendingRow = db.prepare(
         `SELECT id, amount, method, status, retry_count, next_retry_at, created_at
          FROM withdrawals
-         WHERE grin_address = ? AND status IN ('tor_checking','tor_sending','retry_scheduled','slatepack_pending')
+         WHERE grin_address = ? AND status IN ('tor_checking','tor_sending','retry_scheduled','slatepack_pending','finalizing')
          ORDER BY created_at DESC LIMIT 1`
       ).get(addr);
       const pending = db.prepare(
         `SELECT COUNT(*) AS c FROM withdrawals
-         WHERE grin_address = ? AND status IN ('tor_checking','tor_sending','retry_scheduled','slatepack_pending')`
+         WHERE grin_address = ? AND status IN ('tor_checking','tor_sending','retry_scheduled','slatepack_pending','finalizing')`
       ).get(addr).c;
 
       const shareAgg = db.prepare(
@@ -2583,6 +2859,9 @@ function setupRoutes() {
         },
         hashrate_gps: parseFloat(((hr.avg_hashrate || 0)).toFixed(6)),
         min_withdrawal: config.min_withdrawal,
+        // Flat fee deducted from a payout — the account page shows the miner what they will
+        // actually receive BEFORE they submit, so the net amount is never a surprise.
+        withdrawal_fee: config.withdrawal_fee || 0,
         // Boolean only — the freeze REASON stays admin-side (it can reveal wallet trouble).
         payouts_frozen: withdrawalScheduler.isFrozen(),
         // Abandoned-balance countdown for THIS address (state: active|idle|counting|eligible|
@@ -2750,15 +3029,24 @@ function setupRoutes() {
 
   // Public prize-pool transparency report: current balance + lifetime in/out totals broken down by
   // source (fee-cut · donations · operator top-ups · ABANDONED BALANCES · orphan clawbacks in;
-  // prizes · jackpots · join bonuses · streaks out) + recent flows. Composite read over the
+  // prizes · jackpots · join bonuses · streaks out). Composite read over the
   // ledger-rollup horizon, so totals stay exact after raw balance_log rows prune. Incentives-gated:
   // when incentives are off the bucket still exists (abandoned sweeps can accumulate), so the report
-  // is always available — it's a trust surface. Recent rows carry no addresses (a prize-pool row's
-  // grin_address is always 'prize_pool'); the reference_type/amount are safe to show publicly.
+  // is always available — it's a trust surface.
+  //
+  // LIFETIME TOTALS ONLY — `prizePoolStatement(0)` deliberately returns an EMPTY `recent[]`.
+  // Per-event rows are safe in content (a prize-pool row's grin_address is always 'prize_pool',
+  // never a miner's), but their timestamps expose the DATE AND SIZE OF EACH OPERATOR TOP-UP.
+  // Top-ups are discretionary promotion spend on no fixed schedule, so publishing a per-event
+  // cadence invites a "the pool stopped funding prizes" reading of what is just a quiet month.
+  // The lifetime total stays public — it is the point of the page. The admin endpoint
+  // (/api/admin/incentives/prize-pool) still requests the detail rows; only this public one drops
+  // them. Raise the argument above 0 only as a deliberate disclosure decision, and render what you
+  // expose — donate.html D-05 draws in.by/out.by only.
   app.get('/api/pool/prize-pool', rateLimiter.middleware('public'), (req, res) => {
     try {
       if (!incentivesManager) return res.json({ enabled: false, balance: 0, in: { total: 0, by: [] }, out: { total: 0, by: [] }, net: 0, recent: [] });
-      const st = incentivesManager.prizePoolStatement(15);
+      const st = incentivesManager.prizePoolStatement(0);
       let enabled = false;
       try { enabled = incentivesManager.enabled(); } catch (_) { /* default false */ }
       res.json({ enabled, ...st });
@@ -2833,6 +3121,122 @@ function setupRoutes() {
         luck_sample: luckRows.length
       });
     } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ── miningpoolstats.stream listing feed ────────────────────────────────────────────────────
+  // The PULL half of the MPS integration: they poll this, we push nothing. Shape is a
+  // field-for-field mirror of the SOLO feed (poolstats_<net>.json, built by
+  // lib/07_mining_block_collector.py build_poolstats) — deliberately, because MPS already has a
+  // working importer for that structure. A "better" shape would cost them a new adapter for a
+  // small coin, which is how a listing request gets declined. If the two ever have to diverge,
+  // add fields, never rename or drop one.
+  //
+  // Solo writes a static file on a 5-min cron because it has no backend; here the data is already
+  // live in-process, so a route needs no cron, no state dir and no auth carve-out. If MPS insists
+  // on a .json path, alias it in nginx rather than writing a file.
+  //
+  // Aggregates only — no address, no per-miner row, nothing that isn't already on the public
+  // homepage. Safe to serve unauthenticated.
+  app.get('/api/pool/poolstats', rateLimiter.middleware('public'), async (req, res) => {
+    try {
+      // 60s cache: MPS polls on a fixed interval and this is a public GET that touches the node
+      // and the DB, so an uncached version is a free amplification handle (same reasoning as
+      // getPoolHistory in lib/hashrate-tracker.js). Serve last-good on error rather than a
+      // half-empty feed — a delisting-grade blank is worse than a slightly stale number.
+      const cached = app.locals._poolstatsFeed;
+      if (cached && (Date.now() - cached.at) < 60000) return res.json(cached.body);
+
+      const now = Math.floor(Date.now() / 1000);
+      const blockStats = blockManager.getPoolStats() || {};
+      const sstats = stratumServer.getStats() || {};
+
+      // NOT blockManager.getLastBlock() — that returns the highest height REGARDLESS of status,
+      // so a freshly orphaned block would be published as "last block found". blocks_24h already
+      // excludes orphans (blocks.js getPoolStats), so using it here would also make the feed
+      // self-contradictory: "0 blocks in 24h" next to a last_block from ten minutes ago.
+      let last = null;
+      try {
+        last = db.prepare(
+          `SELECT height, found_at FROM blocks WHERE status != 'orphaned' ORDER BY height DESC LIMIT 1`
+        ).get() || null;
+      } catch (_) { /* leave null */ }
+
+      let poolGps = null;
+      try { poolGps = hashrateTracker.getHashrateStats().pool_hashrate_1h_gps || 0; } catch (_) { /* null */ }
+
+      // Node tip: height + CUMULATIVE total_difficulty (solo's `network.difficulty` is the
+      // cumulative field; `difficulty_per_block` below is the per-block one — don't swap them).
+      let height = null, totalDiff = null, peers = null;
+      try {
+        const status = await blockMonitor.grinNode.getStatus();
+        if (status && status.ok) {
+          height = status.header_height || 0;
+          totalDiff = status.total_difficulty != null ? status.total_difficulty : null;
+          peers = status.peer_count || 0;
+        }
+      } catch (_) { /* leave null — a node blip must not blank the pool half */ }
+
+      // Per-block difficulty reuses the /api/pool/effort 60s cache, so a poll costs no extra
+      // node round-trip. GPS = diff × 42 / 60 / 16384 (CLAUDE.md; 60s block target).
+      let netDiffPb = null;
+      if (app.locals._netDiffCache && (Date.now() - app.locals._netDiffCache.at) < 60000) {
+        netDiffPb = app.locals._netDiffCache.value;
+      } else {
+        try {
+          const tip = await blockMonitor.grinNode.getTip();
+          netDiffPb = await blockManager._fetchNetworkDifficulty(tip.height);
+          app.locals._netDiffCache = { at: Date.now(), value: netDiffPb };
+        } catch (_) { /* leave null */ }
+      }
+      const netGps = (netDiffPb && netDiffPb > 0) ? (netDiffPb * 42) / 60 / 16384 : null;
+
+      // Smooth 24h network figure from the durable hourly rollup (solo derives it from a
+      // get_header look-back; we already sample it every hour, so no extra node calls).
+      let netGps24h = null;
+      try {
+        const r = db.prepare(
+          `SELECT AVG(network_hashrate_gps) AS g FROM pool_metrics_hourly
+           WHERE bucket_start > ? AND network_hashrate_gps IS NOT NULL`
+        ).get(now - 86400);
+        if (r && r.g != null) netGps24h = parseFloat(r.g.toFixed(3));
+      } catch (_) { /* leave null */ }
+
+      const body = {
+        ts: new Date(now * 1000).toISOString(),
+        // Report the REAL network. A testnet pool must never be importable as a mainnet one.
+        net: config.network === 'testnet' ? 'testnet' : 'mainnet',
+        pool: {
+          name: config.pool_name || 'Grin Pool',
+          url: config.subdomain ? `https://${config.subdomain}` : '',
+          hashrate: poolGps != null ? parseFloat(poolGps.toFixed(3)) : 0,
+          hashrate_unit: 'gps',
+          workers: sstats.active_connections || 0,
+          miners: minerManager.getActiveMinersCount() || 0,
+          fee: config.pool_fee_percent || 0,
+          reward_model: config.reward_model || 'pplns',
+          blocks_24h: blockStats.blocks_24h || 0,
+          last_block: last ? { height: last.height, ts: new Date(last.found_at * 1000).toISOString() } : null,
+        },
+        network: {
+          height,
+          difficulty: totalDiff,
+          difficulty_per_block: netDiffPb,
+          hashrate_gps: netGps != null ? parseFloat(netGps.toFixed(3)) : null,
+          hashrate_gps_24h: netGps24h,
+          connections: peers,
+        },
+      };
+      app.locals._poolstatsFeed = { at: Date.now(), body };
+      res.json(body);
+    } catch (err) {
+      // Last-good, but BOUNDED. An unbounded fallback means a permanently broken backend keeps
+      // serving a plausible-looking feed forever, and a listing that silently freezes is worse
+      // than one that visibly errors — the operator never finds out. Past the grace window, fail
+      // loudly and let MPS show the pool as down, which is the truth.
+      const cached = app.locals._poolstatsFeed;
+      if (cached && (Date.now() - cached.at) < 15 * 60 * 1000) return res.json(cached.body);
       res.status(500).json({ error: err.message });
     }
   });
@@ -2988,10 +3392,66 @@ function setupRoutes() {
 
   // Is this miner reachable over Tor right now? Drives the UI hint for whether an
   // auto (Tor) payout can succeed vs. needing a Slatepack claim. No state change.
-  app.get('/api/account/:addr/tor-check', rateLimiter.middleware('public'), async (req, res) => {
+  // ─── Tor reachability probe cache ───────────────────────────────────────────
+  // probeToronlineStatus builds a Tor circuit and SOCKS-connects (up to torCheckRetries attempts
+  // × tor_check_timeout_ms), so an uncached public endpoint turns one cheap HTTP request into
+  // seconds of outbound work. The answer barely changes minute to minute — a wallet listener is
+  // either up or it isn't — so a short cache costs the miner nothing and makes repeat clicks free.
+  //
+  // DELIBERATELY NOT used by the withdraw pre-flight gate. That one is a money decision (it can
+  // refuse a payout), so it always takes a fresh probe: a 60s-stale "offline" must never block a
+  // listener the miner just started. Caching a UI hint and caching a gate are different calls.
+  const TOR_PROBE_TTL_MS = 60000;
+  const TOR_PROBE_MAX = 500;                 // bound the map — this is a cache, not a registry
+  const torProbeCache = new Map();           // addr -> { at, result }
+  const torProbeInflight = new Map();        // addr -> Promise (collapses concurrent probes)
+
+  const torProbeCached = async (addr) => {
+    const hit = torProbeCache.get(addr);
+    if (hit && (Date.now() - hit.at) < TOR_PROBE_TTL_MS) return hit.result;
+
+    // Rapid repeat clicks are exactly what this endpoint sees, and they arrive before the first
+    // probe resolves — so dedup in-flight too, or the cache never gets the chance to help.
+    const inflight = torProbeInflight.get(addr);
+    if (inflight) return inflight;
+
+    const p = (async () => {
+      try {
+        const result = await walletTor.probeToronlineStatus(addr);
+        const now = Date.now();
+        if (torProbeCache.size >= TOR_PROBE_MAX) {
+          for (const [k, v] of torProbeCache) {
+            if ((now - v.at) >= TOR_PROBE_TTL_MS) torProbeCache.delete(k);
+          }
+          // Still full → everything is live; drop the oldest insert (Map keeps insertion order)
+          // so a sweep across distinct addresses can never grow this without bound.
+          if (torProbeCache.size >= TOR_PROBE_MAX) {
+            torProbeCache.delete(torProbeCache.keys().next().value);
+          }
+        }
+        torProbeCache.set(addr, { at: now, result });
+        return result;
+      } finally {
+        torProbeInflight.delete(addr);
+      }
+    })();
+    torProbeInflight.set(addr, p);
+    return p;
+  };
+
+  app.get('/api/account/:addr/tor-check', rateLimiter.middleware('torcheck'), async (req, res) => {
     try {
       const { addr } = req.params;
-      const result = await walletTor.probeToronlineStatus(addr);
+      // Must have actually mined here. Without this the endpoint was a public oracle: the onion
+      // is derived from the bech32 address by pure math, so it answered "is this wallet listener
+      // up right now?" for ANY Grin address — an activity side-channel on people who never opted
+      // into this pool at all. The 404 matches GET /api/account/:addr exactly, so it reveals
+      // nothing that endpoint doesn't already. For miners who ARE here the residual signal is
+      // small: the pool already publishes their hashrate, which tracks activity far more closely.
+      const known = db.prepare('SELECT 1 AS x FROM miner_accounts WHERE grin_address = ?').get(addr);
+      if (!known) return res.status(404).json({ error: 'no mining account for this address' });
+
+      const result = await torProbeCached(addr);
       res.json({
         grin_address: addr,
         // Tri-state: true/false when known, null = "determined at payout time" (grin-wallet
@@ -3117,23 +3577,72 @@ function setupRoutes() {
   });
 
   // ─── Goblin/Nostr payout destination (design §15) ────────────────────────────
-  // Register/replace the Goblin username funds may be sent to over Nostr. Ownership-gated
-  // and rate-limited like every money action. This does NOT move funds — it stores the
-  // pinned destination and (re)starts the security cooldown. A payout on the nostr rail is
-  // refused until now - registered_at >= nostr_destination_cooldown_hours, giving the real
-  // owner (who watches their stats) the whole window to spot a hijack, re-register (which
-  // resets the clock and evicts the attacker) and rotate their rig password.
+  // Register/replace the Goblin username funds may be sent to over Nostr. This does NOT move
+  // funds — it stores the pinned destination and (re)starts the security cooldown.
+  //
+  // WHY THIS GATE IS STRICTER THAN A WITHDRAWAL. Tor pays the miner's OWN address and a
+  // slatepack is encrypted TO it, so passing the ownership gate on those rails buys an
+  // attacker nothing. Goblin pays a USERNAME — so this endpoint, not the withdraw endpoint,
+  // is where money can be redirected. It therefore demands BOTH proofs (mining IP AND rig
+  // password) where a withdrawal accepts either. The trade is deliberate: a miner with no
+  // usable rig password cannot use the Goblin rail until they set one and mine again.
+  //
+  // Three layers sit behind this, each doing a different job: the AND-gate raises the bar to
+  // get in; a DM to the PREVIOUS destination gives the real owner out-of-band detection; the
+  // cooldown gives them time to act on it (withdraw via Tor, which an attacker cannot touch).
+  const requireBothProofs = async (addr, body, reqIp, action) => {
+    const ipRaw = (body && (body.ip_proof || body.proof)) || '';
+    const passRaw = (body && body.password_proof) || '';
+    if (!ipRaw || !passRaw) {
+      return { ok: false, code: 400, error: 'Both your mining IP and your rig password are required to change a payout destination', reason: 'both_proofs_required' };
+    }
+    // Checked in order so a wrong IP costs one failed attempt, not two.
+    const ipProof = await verifyOwnerProof(db, addr, ipRaw, reqIp);
+    if (!ipProof.ok || ipProof.method !== 'ip') {
+      auditOwnerProof(db, { action, grinAddress: addr, ip: reqIp, ok: false, details: { reason: ipProof.reason || 'not_an_ip_match', leg: 'ip' } });
+      return { ok: false, code: 403, error: 'Mining IP proof failed', reason: ipProof.reason || 'ip_no_match' };
+    }
+    // method must be 'password' — submitting the password in BOTH fields must not pass.
+    const passProof = await verifyOwnerProof(db, addr, passRaw, reqIp);
+    if (!passProof.ok || passProof.method !== 'password') {
+      auditOwnerProof(db, { action, grinAddress: addr, ip: reqIp, ok: false, details: { reason: passProof.reason || 'not_a_password_match', leg: 'password' } });
+      return { ok: false, code: 403, error: 'Rig password proof failed', reason: passProof.reason || 'password_no_match' };
+    }
+    return { ok: true, method: 'ip+password' };
+  };
+
+  // Fire the change alert at the destination being REPLACED. Best-effort by contract
+  // (publishNotice never throws) — a relay outage must not block a legitimate change — but
+  // the outcome is always audited and returned, because an alert nobody received is not a
+  // control. Advice order matters: withdrawing via Tor moves the money beyond reach, whereas
+  // re-registering only evicts the attacker and leaves the balance sitting there.
+  const alertPreviousDestination = async (prevNpub, prevUsername, newUsername, addr, reqIp) => {
+    if (!prevNpub || !nostrBridge || !nostrBridge.isEnabled()) return null;
+    const text = newUsername
+      ? `Your Grin payout destination was CHANGED to "${newUsername}".\n\n`
+        + `If this was not you, act now:\n`
+        + `1. Withdraw your balance using Tor or Slatepack — those rails still work and can only pay your own mining address.\n`
+        + `2. Then re-register your Goblin destination to evict the change.\n\n`
+        + `Mining address: ${addr}`
+      : `Your Grin payout destination ("${prevUsername || 'previous'}") was REMOVED.\n\n`
+        + `If this was not you, withdraw your balance using Tor or Slatepack now — those rails `
+        + `still work and can only pay your own mining address.\n\nMining address: ${addr}`;
+    const sent = await nostrBridge.publishNotice(prevNpub, text, 'Grin pool: payout destination changed');
+    auditOwnerProof(db, {
+      action: 'nostr_destination_alert', grinAddress: addr, ip: reqIp, ok: !!sent.ok,
+      details: { prev_username: prevUsername || null, new_username: newUsername || null, error: sent.ok ? null : sent.error }
+    });
+    return sent;
+  };
+
   app.post('/api/account/:addr/nostr-destination', rateLimiter.middleware('withdraw'), async (req, res) => {
     try {
       const { addr } = req.params;
       const reqIp = normalizeIp(req.ip);
       if (!nostrBridge || !nostrBridge.isEnabled()) return res.status(503).json({ error: 'nostr payouts are not enabled on this pool' });
 
-      const proof = await verifyOwnerProof(db, addr, (req.body && (req.body.proof || req.body.ip_proof)) || '', reqIp);
-      if (!proof.ok) {
-        auditOwnerProof(db, { action: 'nostr_destination_register', grinAddress: addr, ip: reqIp, ok: false, details: { reason: proof.reason } });
-        return res.status(403).json({ error: 'Ownership proof failed', reason: proof.reason });
-      }
+      const proof = await requireBothProofs(addr, req.body, reqIp, 'nostr_destination_register');
+      if (!proof.ok) return res.status(proof.code).json({ error: proof.error, reason: proof.reason });
 
       const acct = db.prepare('SELECT grin_address FROM miner_accounts WHERE grin_address = ?').get(addr);
       if (!acct) return res.status(404).json({ error: 'Account not found' });
@@ -3142,14 +3651,48 @@ function setupRoutes() {
       try { resolved = await nostrBridge.resolveDestination((req.body && req.body.username) || ''); }
       catch (e) { return res.status(e.code && e.code < 600 ? e.code : 400).json({ error: e.message }); }
 
+      // Replacing an existing destination needs an explicit confirmation carrying the username
+      // being replaced. Enforced SERVER-side, not just in the UI: a client-side "are you sure"
+      // is skippable by anyone posting directly, and this step exists to catch a mistyped
+      // username sending real money to a stranger — irreversibly. Echoing `replacing` back
+      // means the confirmation the operator saw is the state the server actually holds.
+      const prev = db.prepare(
+        'SELECT nostr_username, nostr_npub, nostr_prev_username, nostr_prev_npub FROM miner_accounts WHERE grin_address = ?'
+      ).get(addr) || {};
+      if (prev.nostr_npub && prev.nostr_npub !== resolved.pubHex &&
+          String((req.body && req.body.confirm_replace) || '') !== String(prev.nostr_username)) {
+        return res.status(409).json({
+          error: `This replaces your current destination "${prev.nostr_username}" and restarts the security cooldown.`,
+          reason: 'confirm_replace_required',
+          replacing: prev.nostr_username,
+          replacing_with: resolved.username,
+        });
+      }
+
       const nowS = Math.floor(Date.now() / 1000);
+      // Carry the outgoing destination forward so a later REMOVE still has somewhere to send
+      // the alert. An unchanged re-registration (same npub, cooldown refresh) must not
+      // overwrite a genuine previous destination with itself.
+      const keepPrevUser = prev.nostr_npub && prev.nostr_npub !== resolved.pubHex
+        ? prev.nostr_username : (prev.nostr_prev_username || null);
+      const keepPrevNpub = prev.nostr_npub && prev.nostr_npub !== resolved.pubHex
+        ? prev.nostr_npub : (prev.nostr_prev_npub || null);
       db.prepare(
-        `UPDATE miner_accounts SET nostr_username = ?, nostr_npub = ?, nostr_registered_at = ?, updated_at = unixepoch()
+        `UPDATE miner_accounts SET nostr_username = ?, nostr_npub = ?, nostr_registered_at = ?,
+           nostr_prev_username = ?, nostr_prev_npub = ?, updated_at = unixepoch()
          WHERE grin_address = ?`
-      ).run(resolved.username, resolved.pubHex, nowS, addr);
+      ).run(resolved.username, resolved.pubHex, nowS, keepPrevUser, keepPrevNpub, addr);
 
       const cooldownH = config.nostr_destination_cooldown_hours !== undefined ? config.nostr_destination_cooldown_hours : 48;
-      auditOwnerProof(db, { action: 'nostr_destination_register', grinAddress: addr, ip: reqIp, ok: true, details: { username: resolved.username, proof_method: proof.method } });
+      auditOwnerProof(db, { action: 'nostr_destination_register', grinAddress: addr, ip: reqIp, ok: true, details: { username: resolved.username, replaced: prev.nostr_username || null, proof_method: proof.method } });
+
+      // Alert the destination we just displaced. Only when it actually changed — a cooldown
+      // refresh onto the same npub is not a security event and must not cry wolf.
+      let alert = null;
+      if (prev.nostr_npub && prev.nostr_npub !== resolved.pubHex) {
+        alert = await alertPreviousDestination(prev.nostr_npub, prev.nostr_username, resolved.username, addr, reqIp);
+      }
+
       res.json({
         success: true,
         username: resolved.username,
@@ -3157,6 +3700,9 @@ function setupRoutes() {
         registered_at: nowS,
         active_at: nowS + cooldownH * 3600,
         cooldown_hours: cooldownH,
+        replaced: prev.nostr_username || null,
+        // Surfaced so the miner learns the warning did not go out — never silently swallowed.
+        previous_notified: alert ? !!alert.ok : null,
       });
     } catch (err) {
       res.status(err.code && err.code >= 400 && err.code < 600 ? err.code : 500).json({ error: err.message });
@@ -3164,6 +3710,10 @@ function setupRoutes() {
   });
 
   // Remove the registered Goblin destination (ownership-gated). Clears the pin + cooldown.
+  // Single-proof (OR) on purpose: removal cannot redirect money, it only disables the rail.
+  // But it IS the bypass route for the change alert — remove, then register fresh, and there
+  // would be no previous destination left to warn. So removal alerts the destination it is
+  // clearing, and only clears nostr_prev_* once that alert has been attempted.
   app.delete('/api/account/:addr/nostr-destination', rateLimiter.middleware('withdraw'), async (req, res) => {
     try {
       const { addr } = req.params;
@@ -3173,12 +3723,18 @@ function setupRoutes() {
         auditOwnerProof(db, { action: 'nostr_destination_remove', grinAddress: addr, ip: reqIp, ok: false, details: { reason: proof.reason } });
         return res.status(403).json({ error: 'Ownership proof failed', reason: proof.reason });
       }
+      const prev = db.prepare(
+        'SELECT nostr_username, nostr_npub FROM miner_accounts WHERE grin_address = ?'
+      ).get(addr) || {};
       db.prepare(
-        `UPDATE miner_accounts SET nostr_username = NULL, nostr_npub = NULL, nostr_registered_at = NULL, updated_at = unixepoch()
+        `UPDATE miner_accounts SET nostr_username = NULL, nostr_npub = NULL, nostr_registered_at = NULL,
+           nostr_prev_username = NULL, nostr_prev_npub = NULL, updated_at = unixepoch()
          WHERE grin_address = ?`
       ).run(addr);
-      auditOwnerProof(db, { action: 'nostr_destination_remove', grinAddress: addr, ip: reqIp, ok: true, details: {} });
-      res.json({ success: true });
+      auditOwnerProof(db, { action: 'nostr_destination_remove', grinAddress: addr, ip: reqIp, ok: true, details: { removed: prev.nostr_username || null } });
+
+      const alert = await alertPreviousDestination(prev.nostr_npub, prev.nostr_username, null, addr, reqIp);
+      res.json({ success: true, removed: prev.nostr_username || null, previous_notified: alert ? !!alert.ok : null });
     } catch (err) {
       res.status(err.code && err.code >= 400 && err.code < 600 ? err.code : 500).json({ error: err.message });
     }
@@ -3998,20 +4554,174 @@ function setupRoutes() {
   // Sessions are stateless JWTs (no server-side session table), so there is no per-device
   // list to enumerate. What the operator CAN see + control: recent login activity (from the
   // audit log) and a "revoke sessions" kill-switch (bumps token_version → invalidates all
-  // refresh tokens for the account; live access tokens still expire within their 1h TTL).
+  // refresh tokens for the account).
+  //
+  // KNOWN LIMIT, state it plainly: revoke does NOT kill live ACCESS tokens. Only refresh
+  // tokens carry a token_version check (that asymmetry is deliberate — it's what stops one
+  // tab's rotation from logging every other tab out), so an already-issued access token stays
+  // valid until its own expiry, i.e. for up to access.session_timeout_hours. That setting is
+  // therefore clamped to 24 h in auth.js/pool-settings.js: it is the true "time to revoke".
+  // Anything longer needs a token_version check on access tokens plus a non-rotating refresh
+  // scheme, which is a bigger change than this endpoint.
   app.get('/api/admin/security/login-history', secureAdmin, (req, res) => {
     try {
       // Clamped low as well as high: a negative LIMIT means "no limit" to SQLite, and a
       // non-numeric one binds as NaN and throws — so ?limit=-1 quietly returned the whole
       // audit table. Same idiom as /api/admin/withdrawals.
       const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 50, 1), 200);
+      // The action list MUST match what the writers actually emit. It previously asked for
+      // 'login_failure' while the login route writes 'login_failed' (and the 2FA step writes
+      // 'login_2fa_failed'), so this endpoint returned successes and auto-bans only — the
+      // panel's "Failed login" row could never appear and the operator had no way to see a
+      // brute-force attempt. 'login_failure' is kept for rows written by older builds.
+      //
+      // Username comes from the audit row's details when admin_id is NULL, which is the case
+      // for every failed attempt (a bad username has no user row to join to) — without this
+      // the User column would be '—' on exactly the rows that matter.
       const rows = db.prepare(`
-        SELECT a.id, a.action, a.ip, a.created_at, u.username
+        SELECT a.id, a.action, a.ip, a.created_at, a.details, u.username
         FROM admin_audit_log a LEFT JOIN users u ON u.id = a.admin_id
-        WHERE a.action IN ('login_success','login_failure','ip_autoban','logout')
+        WHERE a.action IN ('login_success','login_failed','login_failure','login_2fa_failed',
+                           'ip_autoban','logout','2fa_enabled','2fa_disabled','admin_cli_reset')
         ORDER BY a.id DESC LIMIT ?
       `).all(limit);
-      res.json({ success: true, count: rows.length, history: rows });
+      const history = rows.map((r) => {
+        let username = r.username;
+        if (!username && r.details) {
+          try { username = JSON.parse(r.details).username || null; } catch (e) { /* not JSON */ }
+        }
+        return { id: r.id, action: r.action, ip: r.ip, created_at: r.created_at, username: username || null };
+      });
+      res.json({ success: true, count: history.length, history });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ─── Login security summary (Admin) ────────────────────────────────────────
+  // Answers "is anyone attacking my login right now, and from where?" — the counts, the
+  // worst source addresses, and the locks/bans currently in force.
+  //
+  // Two honesty requirements, same as the payout-request audit panel:
+  //   * the window is CLAMPED to the audit retention, and the response says so, so a gap
+  //     caused by pruning is never displayed as "no attempts";
+  //   * requests refused by the rate limiter, the IP filter or the CAPTCHA gate are rejected
+  //     BEFORE the login route writes any row, so they are invisible here. The panel states
+  //     this — otherwise a quiet table would read as "no attack" during a live flood.
+  app.get('/api/admin/security/auth-activity', secureAdmin, (req, res) => {
+    try {
+      let retentionDays = 180;
+      try { retentionDays = parseInt(poolSettings.getSection('database').audit_log_keep_days, 10) || 180; } catch (e) {}
+
+      const askedHours = Math.min(Math.max(parseInt(req.query.hours, 10) || 24, 1), 24 * 365);
+      const maxHours = retentionDays * 24;
+      const hours = Math.min(askedHours, maxHours);
+      const since = Math.floor(Date.now() / 1000) - (hours * 3600);
+
+      const FAIL_ACTIONS = ['login_failed', 'login_failure', 'login_2fa_failed'];
+      const failPlaceholders = FAIL_ACTIONS.map(() => '?').join(',');
+
+      // Every query below pins target_type AND target_id so idx_audit_target
+      // (target_type, target_id, created_at DESC) is usable as a range seek. Without the
+      // target_id term the index can only match the first column and the created_at filter
+      // degrades to a scan of the whole audit table — and a full scan on this DB blocks
+      // SHARE writes, not just this page (see the hashrate-scan fix in db capacity notes).
+      const counts = {};
+      for (const r of db.prepare(
+        `SELECT action, COUNT(*) AS c FROM admin_audit_log
+          WHERE target_type = 'auth' AND target_id = 'login' AND created_at >= ?
+          GROUP BY action`
+      ).all(since)) counts[r.action] = r.c;
+
+      // ip_autoban is written with target_type 'security', so it is NOT in the set above.
+      const autobans = db.prepare(
+        `SELECT COUNT(*) AS c FROM admin_audit_log
+          WHERE target_type = 'security' AND action = 'ip_autoban' AND created_at >= ?`
+      ).get(since).c;
+
+      const failures = FAIL_ACTIONS.reduce((n, a) => n + (counts[a] || 0), 0);
+
+      // Worst source addresses for failed attempts. Pure aggregate, bounded output — no
+      // json_extract: JSON1 availability isn't verifiable from this repo (better-sqlite3 is a
+      // native module built on the target box), and a security panel is the wrong place to
+      // discover a missing SQLite extension via a 500.
+      const topOrigins = db.prepare(
+        `SELECT ip, COUNT(*) AS attempts, MAX(created_at) AS last_at
+           FROM admin_audit_log
+          WHERE target_type = 'auth' AND target_id = 'login' AND created_at >= ?
+            AND action IN (${failPlaceholders})
+            AND ip IS NOT NULL AND ip <> ''
+          GROUP BY ip ORDER BY attempts DESC, last_at DESC LIMIT 20`
+      ).all(since, ...FAIL_ACTIONS);
+
+      // Which usernames are being tried, across all sources. This is the sweep-vs-grind
+      // signal the raw failure count can't give: many usernames from one place is a scanner
+      // working a wordlist, repeated hits on one real username is someone targeting YOU.
+      // Grouped on the raw details string in SQL (bounded by distinct usernames tried, and
+      // capped at 10), then parsed in JS — so no JSON support is needed in SQLite.
+      const targeted = db.prepare(
+        `SELECT details, COUNT(*) AS attempts, MAX(created_at) AS last_at
+           FROM admin_audit_log
+          WHERE target_type = 'auth' AND target_id = 'login' AND created_at >= ?
+            AND action IN (${failPlaceholders}) AND details IS NOT NULL
+          GROUP BY details ORDER BY attempts DESC LIMIT 10`
+      ).all(since, ...FAIL_ACTIONS).map((r) => {
+        let username = null;
+        try { username = JSON.parse(r.details).username; } catch (e) { /* not JSON */ }
+        // Usernames are attacker-supplied free text. Cap the length here so one absurd
+        // 10 KB "username" can't bloat the response or wreck the table layout; the panel
+        // escapes it on render.
+        if (typeof username === 'string' && username.length > 64) username = username.slice(0, 64) + '…';
+        return { username: username || '(blank)', attempts: r.attempts, last_at: r.last_at };
+      });
+
+      // Per-account failure counters (visibility signal kept by AuthManager.login) — shows
+      // WHICH account is being ground even when the sources rotate.
+      const accounts = db.prepare(
+        `SELECT username, failed_login_attempts, totp_enabled, is_active
+           FROM users WHERE is_admin = 1 ORDER BY failed_login_attempts DESC, username ASC`
+      ).all();
+
+      res.json({
+        success: true,
+        window_hours: hours,
+        requested_hours: askedHours,
+        truncated_by_retention: hours < askedHours,
+        retention_days: retentionDays,
+        totals: {
+          success: counts.login_success || 0,
+          failed: failures,
+          failed_password: (counts.login_failed || 0) + (counts.login_failure || 0),
+          failed_2fa: counts.login_2fa_failed || 0,
+          autobans,
+        },
+        top_origins: topOrigins,
+        targeted_usernames: targeted,
+        // In-memory and process-local: both lists reset on a service restart, which the panel
+        // says out loud so an empty list after a deploy isn't read as "the attack stopped".
+        active_lockouts: authManager.getActiveLockouts(),
+        banned_ips: ipFilter ? ipFilter.getTempBans() : [],
+        accounts,
+        totp_mandatory: totpIsMandatory(),
+      });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Lift a temporary auto-ban early. Step-up gated: it re-opens login attempts from an
+  // address the pool decided to shut out, and the common legitimate use (the operator banned
+  // their own office IP by fumbling a password) is exactly when a hijacked session would
+  // most like to do the same.
+  app.post('/api/admin/security/temp-ban/clear', freshAdmin, (req, res) => {
+    try {
+      const ip = String((req.body || {}).ip || '').trim();
+      if (!ip) return res.status(400).json({ error: 'IP address required' });
+      const had = ipFilter.clearTempBan(ip);
+      db.prepare(`INSERT INTO admin_audit_log (admin_id, action, target_type, target_id, details, ip)
+                  VALUES (?, 'temp_ban_cleared', 'security', ?, ?, ?)`)
+        .run(req.user.user_id, ip, JSON.stringify({ was_banned: had }), req.ip);
+      res.json({ success: true, was_banned: had, banned_ips: ipFilter.getTempBans() });
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
@@ -4144,10 +4854,21 @@ function setupRoutes() {
   // in an infinite loop. Gated by secureAdmin: a 200 here is itself the "you're logged in"
   // signal; 401/403 means redirect to login.
   app.get('/api/admin/me', secureAdmin, (req, res) => {
+    // `session` drives AdminSession (admin-shell.js): the idle window it counts user
+    // interaction against, the absolute cap, and when THIS session actually began. The
+    // client can't derive any of it — the token is httpOnly and page-load time is not
+    // session start (a reload mid-session would otherwise reset the cap client-side).
+    const policy = authManager.sessionPolicy();
     res.json({
       username: req.user?.username || null,
       is_admin: !!req.user?.is_admin,
-      user_id: req.user?.user_id || null
+      user_id: req.user?.user_id || null,
+      session: {
+        idle_seconds: policy.idle,
+        absolute_seconds: policy.abs,
+        started_at: Number(req.user?.sst) || null,
+        now: Math.floor(Date.now() / 1000)   // lets the client correct for clock skew
+      }
     });
   });
 
@@ -4261,44 +4982,13 @@ function setupRoutes() {
     }
   });
 
-  // Top Miners List - FIX #3: Use real data, not hardcoded values
-  app.get('/api/miners/top', rateLimiter.middleware('public'), (req, res) => {
-    try {
-      const limit = Math.min(parseInt(req.query.limit || 10), 100);
-      const offset = parseInt(req.query.offset || 0);
-
-      const stmt = db.prepare(`
-        SELECT
-          ma.grin_address,
-          ma.balance,
-          ma.balance_locked,
-          ma.is_online,
-          ma.created_at,
-          (SELECT COUNT(*) FROM shares WHERE grin_address = ma.grin_address) as shares_count,
-          (SELECT MAX(created_at) FROM shares WHERE grin_address = ma.grin_address) as last_share_timestamp
-        FROM miner_accounts ma
-        ORDER BY ma.balance DESC
-        LIMIT ? OFFSET ?
-      `);
-
-      const miners = stmt.all(limit, offset);
-
-      const formatted = miners.map(m => ({
-        grin_address: m.grin_address,
-        balance: m.balance,
-        balance_locked: m.balance_locked,
-        total_balance: m.balance + m.balance_locked,
-        shares_count: m.shares_count || 0,
-        is_online: m.is_online ? true : false,
-        last_share: m.last_share_timestamp || null,
-        created_at: m.created_at
-      }));
-
-      res.json(formatted);
-    } catch (err) {
-      res.status(500).json({ error: err.message });
-    }
-  });
+  // REMOVED (2026-07-28): GET /api/miners/top — a public, unauthenticated rich-list. It paired a
+  // full grin address with balance + balance_locked + share count + online flag + account age,
+  // ordered by balance descending and offset-paginated, so a scraper could walk the pool's entire
+  // custodial position miner by miner. Nothing in public_html/ or the admin panel called it, and
+  // it duplicated /api/pool/miners (now address-masked). The legitimate public leaderboards are
+  // /api/stratum/top-miners and /api/pool/top-block-finders, which rank on hashrate and blocks
+  // found — contribution, not how much money is sitting in someone's pool balance.
 
   // Combined health snapshot — the single call admin-panel/health.html makes for the
   // services grid + System Stats. The per-component routes below (/health/node, /wallet,
@@ -4894,7 +5584,7 @@ function setupRoutes() {
         `SELECT COALESCE(SUM(amount),0) AS t FROM withdrawals WHERE grin_address = ? AND status='confirmed'`
       ).get(addr).t;
       const pending = db.prepare(
-        `SELECT * FROM withdrawals WHERE grin_address = ? AND status IN ('tor_checking','tor_sending','retry_scheduled','slatepack_pending') ORDER BY created_at DESC`
+        `SELECT * FROM withdrawals WHERE grin_address = ? AND status IN ('tor_checking','tor_sending','retry_scheduled','slatepack_pending','finalizing') ORDER BY created_at DESC`
       ).all(addr);
       const shareAgg = db.prepare(
         `SELECT COUNT(*) AS count, MAX(created_at) AS last_share_at FROM shares WHERE grin_address = ?`
@@ -5060,14 +5750,86 @@ function setupRoutes() {
   });
 
   // Update one settings section
-  // High-risk settings sections (payout = fee/min-withdrawal/wallet; access = admin IP rules)
-  // require step-up auth; cosmetic sections (branding/seo/…) save with a normal admin session.
-  const STEP_UP_SETTINGS_SECTIONS = new Set(['payout', 'access']);
+  // High-risk sections require step-up auth; cosmetic ones (branding/seo/…) save with a normal
+  // admin session. A section is listed here when EVERY key in it is money- or access-critical:
+  //   payout      fees, min withdrawal, dormancy, the Goblin destination cooldown
+  //   access      admin IP rules, mandatory-2FA switch
+  //   incentives  every key sets an amount that auto-credits miner balances (jackpot, join
+  //               bonus, streak, lottery pots, the % of pool fee diverted to the prize pool)
+  //   database    retention windows that DELETE the money trail — balance_log_keep_days and
+  //               audit_log_keep_days prune the ledger and the admin audit log
+  const STEP_UP_SETTINGS_SECTIONS = new Set(['payout', 'access', 'incentives', 'database']);
+
+  // Individually critical keys that live in an otherwise cosmetic section. pool_info is mostly
+  // name/tagline/description, but it also carries the pool's cut and who may mine at all.
+  //
+  // Gate on a real VALUE CHANGE, not on the key being present: the settings form harvester
+  // posts EVERY field in the section on every save, so "the body mentions pool_fee_percent"
+  // is true even when the operator only edited the tagline — that would demand a TOTP code
+  // for cosmetic edits and train the operator to reflex-approve challenges.
+  const STEP_UP_SETTINGS_KEYS = new Set([
+    'pool_fee_percent',   // the pool's cut of every block
+    'address_whitelist',  // who is allowed to mine here
+    'max_miners',
+    'pool_visibility',
+  ]);
+
+  // Compare a submitted value against the stored one. Stored rows are TEXT while the form may
+  // send numbers, booleans or arrays, so compare by shape: numerically when both are numeric
+  // (1.0 vs '1.0'), canonical JSON when either side is a structure ([] vs '[]'), else trimmed
+  // strings. Ambiguity resolves to "changed" — a false positive costs one extra TOTP prompt,
+  // a false negative silently lets the fee move on a plain session.
+  const settingValueUnchanged = (submitted, stored) => {
+    if (submitted === undefined || stored === undefined) return submitted === stored;
+    const sa = typeof submitted === 'string' ? submitted.trim() : submitted;
+    const sb = typeof stored === 'string' ? stored.trim() : stored;
+    const structural = (v) => (v && typeof v === 'object') ||
+      (typeof v === 'string' && (v.startsWith('[') || v.startsWith('{')));
+    if (structural(sa) || structural(sb)) {
+      const canon = (v) => {
+        if (v && typeof v === 'object') return JSON.stringify(v);
+        try { return JSON.stringify(JSON.parse(v)); } catch (e) { return String(v); }
+      };
+      return canon(sa) === canon(sb);
+    }
+    const na = Number(sa), nb = Number(sb);
+    if (sa !== '' && sb !== '' && Number.isFinite(na) && Number.isFinite(nb)) return na === nb;
+    return String(sa) === String(sb);
+  };
+
+  const criticalSettingChanged = (section, body) => {
+    if (!body || typeof body !== 'object') return false;
+    let current;
+    // An unreadable section means we cannot prove nothing critical moved → demand step-up.
+    try { current = poolSettings.getSection(section); } catch (e) { return true; }
+    return Object.keys(body).some((key) =>
+      STEP_UP_SETTINGS_KEYS.has(key) && !settingValueUnchanged(body[key], current[key]));
+  };
+
   app.post('/api/admin/settings/:section', secureAdmin, (req, res) => {
     try {
-      if (STEP_UP_SETTINGS_SECTIONS.has(req.params.section) &&
+      const sectionGated = STEP_UP_SETTINGS_SECTIONS.has(req.params.section);
+      if ((sectionGated || criticalSettingChanged(req.params.section, req.body)) &&
           !authManager.isTokenFresh(req.token, STEP_UP_MAX_AGE_S)) {
-        return res.status(403).json({ error: 'Re-authentication required for this section', challenge_required: true });
+        return res.status(403).json({
+          error: sectionGated
+            ? 'Re-authentication required for this section'
+            : 'Re-authentication required to change a fee, whitelist or visibility setting',
+          challenge_required: true
+        });
+      }
+      // Refuse to switch mandatory 2FA ON unless the admin doing it is already enrolled.
+      // Otherwise the save succeeds (the gate read `false` when the middleware ran) and the
+      // operator's very next step-up action — including editing this section back — is
+      // refused, leaving enrollment or the break-glass CLI as the only ways out. Making the
+      // requirement satisfiable at the moment it's imposed avoids that entirely.
+      if (req.params.section === 'access' &&
+          String((req.body || {}).require_admin_totp) === 'true' &&
+          !authManager.isTotpEnabled(req.user.user_id)) {
+        return res.status(400).json({
+          error: 'Set up 2FA on your own account first — otherwise enabling this would immediately block your own admin actions.',
+          totp_enrollment_required: true
+        });
       }
       const updated = poolSettings.updateSection(req.params.section, req.body, req.user.user_id);
       res.json({ success: true, section: req.params.section, data: updated });

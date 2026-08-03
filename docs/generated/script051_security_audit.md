@@ -37,10 +37,11 @@ Auth credential + TLS are the whole game — there is no per-wallet authorizatio
 ### F2 — [Info] Wallet family security model & confirmations
 - **All auth via nginx** (above) — document that exposing `:7420` directly, or deploying without
   the htpasswd step, hands over all wallets. The installer's fail-closed nginx is the safeguard.
-- **055 public WASM wallet is not implemented** (`scripts/055_*.sh` is a design placeholder). Its
-  intended model — client-side WASM crypto, keys never leaving the browser, wallet data in
-  IndexedDB encrypted with AES-GCM/PBKDF2, server serves static files only
-  ([055_…sh:6-53](../../scripts/055_grin_public_web_wallet.sh#L6-L53)) — is the correct
+- **The public WASM wallet is not implemented** (the `scripts/055_*.sh` placeholder audited here
+  was deleted 2026-07-29; the product has no number until its build starts). Its intended model —
+  client-side WASM crypto, keys never leaving the browser, wallet data in IndexedDB encrypted with
+  AES-GCM/PBKDF2, server serves static files only
+  ([script05_design.md PART A](script05_design.md)) — is the correct
   non-custodial design. **When built, audit:** the WASM/JS supply chain (SRI/pinning), the
   PBKDF2 iteration count, and XSS on the static host (an XSS = seed theft in a browser wallet).
 - **051x XP client** stores no seed/key/passphrase in `localStorage`/`sessionStorage`/`IndexedDB`

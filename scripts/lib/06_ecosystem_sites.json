@@ -7,7 +7,7 @@
 
   {"category": "Exchange",    "name": "Gate.io",                    "url": "https://www.gate.com/trade/GRIN_USDT",                 "since": "Feb 2019"},
   {"category": "Exchange",    "name": "NoirTrade",                  "url": "https://noirtrade.com/trade?pair=GRIN_BTC",            "since": null},
-  {"category": "Exchange",    "name": "nonlogs.io",                 "url": "https://nonlogs.io/trade/GRIN-BTC",                   "since": null},
+  {"category": "Exchange",    "name": "nonlogs.io",                 "url": "https://nonlogs.io/",                                 "since": null},
 
   {"category": "Wallet",      "name": "GRIM",                       "url": "https://gri.mw/",                                     "since": null},
   {"category": "Wallet",      "name": "Grin++",                     "url": "https://grinplusplus.github.io/",                     "since": null},

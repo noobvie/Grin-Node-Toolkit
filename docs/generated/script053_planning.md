@@ -1197,15 +1197,29 @@ Out of scope for Phase 1:
 
 
 ────────────────────────────────────────────────────────────────────────────────
-16. GRINPAY ECOSYSTEM & SCRIPT 054 VISION
+16. GRINPAY ECOSYSTEM & GRINPAY SERVER VISION
 ────────────────────────────────────────────────────────────────────────────────
+
+  NOTE ON NUMBERING (2026-07-29)
+  ───────────────────────────────
+  This section used to call the GrinPay Server "script 054". That number is
+  withdrawn: an unbuilt product has NO number, and reserving one for an idea is
+  the habit that scrambled the 05 hub menu. GrinPay Server gets its number the
+  day its first file is created. The design below is unchanged and still valid.
+
+  UNRESOLVED — is this the same product as "Payment Pro"? The 05 hub header
+  describes Payment Pro as a Grin payment processor for non-WooCommerce platforms
+  (Shopify, custom/headless REST, subscription billing). That overlaps GrinPay
+  Server almost completely. Decide whether these are one product under two names
+  BEFORE either build starts — two names competing for one slot is how the ghost
+  number got here in the first place.
 
   OVERVIEW
   ────────
   GrinPay for WooCommerce (script 053) is designed from the start as a
   satellite client. Phase 1 ships with a lightweight self-hosted Node.js/Express bridge,
   but the plugin architecture anticipates connecting to a dedicated GrinPay
-  Server (script 054) — a production-grade Node.js payment processor that
+  Server — a production-grade Node.js payment processor that
   any GrinPay-compatible client can connect to.
 
   THE ECOSYSTEM MAP
@@ -1213,7 +1227,7 @@ Out of scope for Phase 1:
   ┌──────────────────────────────────────────────────────────────────────────┐
   │  GRINPAY ECOSYSTEM                                                       │
   │                                                                          │
-  │  Script 052 — Grin Drop          Script 054 — GrinPay Server            │
+  │  Script 052 — Grin Drop          GrinPay Server — planned                │
   │  (donation platform)             (payment processor — future)            │
   │   Node.js + Owner/Foreign API     Node.js + Owner/Foreign API            │
   │   SQLite, nginx, public page      REST API, webhooks, multi-merchant     │
@@ -1243,18 +1257,18 @@ Out of scope for Phase 1:
   ONE BACKEND — NODE.JS ACROSS ALL WALLET SERVICES
   ──────────────────────────────────────────────────
   The bridge is Node.js/Express — the same runtime used by script 052 (Grin
-  Drop) and planned for script 054 (GrinPay Server). This means:
+  Drop) and planned for the GrinPay Server. This means:
 
     052 Grin Drop        →  Node.js + Express + SQLite
     053 WooCommerce bridge → Node.js + Express (same wallet-api.js pattern)
-    054 GrinPay Server   →  Node.js + Express + SQLite (inherits both above)
+    GrinPay Server       →  Node.js + Express + SQLite (inherits both above)
 
   The PHP plugin calls the same REST endpoints regardless of whether the
-  bridge is self-hosted (local Node.js) or a remote GrinPay Server (script
-  054). Switching modes is a single URL change in settings.
+  bridge is self-hosted (local Node.js) or a remote GrinPay Server.
+  Switching modes is a single URL change in settings.
 
-  SHARED WALLET API LAYER (052 → 053 → 054)
-  ───────────────────────────────────────────
+  SHARED WALLET API LAYER (052 → 053 → GrinPay Server)
+  ──────────────────────────────────────────────────────
   Script 052 (Grin Drop) has proven the grin-wallet Owner API integration
   in Node.js: ECDH handshake, AES-256-GCM encrypted sessions, all wallet
   methods via JSON-RPC. Script 053's bridge/lib/wallet-api.js is a direct
@@ -1262,9 +1276,9 @@ Out of scope for Phase 1:
 
     052 web/052_grin_drop/lib/wallet-api.js   ← proven implementation
     053 web/053_woocommerce/bridge/lib/wallet-api.js  ← adapted from 052
-    054 (future) inherits from both
+    GrinPay Server (future) inherits from both
 
-  Neither 053 nor 054 re-solve the hard wallet API problems — they build
+  Neither 053 nor the GrinPay Server re-solve the hard wallet API problems — they build
   on the patterns already validated in production by script 052.
 
   SCRIPT 053 — TWO CONNECTION MODES (Phase 1 + Phase 2)
@@ -1275,7 +1289,7 @@ Out of scope for Phase 1:
     Bridge URL:      http://127.0.0.1:3007  (auto from network toggle)
     Requires:        Local grin node + Node.js Express bridge
 
-  Phase 2 (after script 054 exists):
+  Phase 2 (after the GrinPay Server exists):
     Connection Mode: GrinPay Server
     Server URL:      https://pay.yourserver.com  (user-configured)
     API Key:         ••••••••••••••••  (issued by GrinPay Server)
@@ -1292,9 +1306,9 @@ Out of scope for Phase 1:
   │  API Key     [ ••••••••••••••••••••••••• ]  [Test Connection]        │
   └──────────────────────────────────────────────────────────────────────┘
 
-  SCRIPT 054 — GRINPAY SERVER (future scope, not part of script 053)
-  ───────────────────────────────────────────────────────────────────
-  What script 054 would own:
+  GRINPAY SERVER (future scope, not part of script 053)
+  ───────────────────────────────────────────────────────
+  What the GrinPay Server would own:
     - Node.js Express server
     - grin-wallet daemon (Owner API + Foreign API — no CLI subprocess)
     - ECDH session management (inherited from 052)
@@ -1307,7 +1321,7 @@ Out of scope for Phase 1:
   NAMING CONSISTENCY ACROSS ECOSYSTEM
   ─────────────────────────────────────
     GrinPay for WooCommerce  →  script 053  (this plugin)
-    GrinPay Server           →  script 054  (payment processor backend)
+    GrinPay Server           →  no number   (unbuilt — gets one at build start)
     Grin Drop                →  script 052  (donation platform, separate brand)
 
     PHP prefix:    grinpay_
@@ -1337,12 +1351,12 @@ Out of scope for Phase 1:
       Fallback: Gate.io GRIN_USDT ticker
       15-minute in-memory cache; stale served if both sources fail
       currency_mode admin setting: 'direct' (GRIN) | 'auto' (convert at checkout)
-  - Add GrinPay Server connection mode (see §16) once script 054 exists
+  - Add GrinPay Server connection mode (see §16) once the GrinPay Server exists
   - Add refund capability via send -d <buyer_address>
   - Consider TOR-based automated transport for non-interactive flow
   - Block checkout inner block support (order summary, express payments)
 
-  ECOSYSTEM (script 054 — GrinPay Server):
+  ECOSYSTEM (GrinPay Server — unbuilt, no number yet):
   - Build GrinPay Server in Node.js inheriting wallet API layer from 052
   - Implement same REST API contract as Flask bridge (drop-in replacement)
   - Add webhook delivery system for async payment confirmation

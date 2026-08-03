@@ -2,7 +2,7 @@
 """
 06_price_collector.py — Grin Price Collector
 =============================================
-Collects GRIN/USDT (Gate.io) and GRIN/BTC (nonlogs.io) prices,
+Collects GRIN/USDT (Gate.io) and GRIN/BTC (CoinGecko) prices,
 stores in a local SQLite DB, and exports JSON for the stats page.
 
 📊 STORAGE ESTIMATES
@@ -58,7 +58,16 @@ DB_PATH  = os.environ.get("PRICE_DB_PATH",  "/opt/grin/grin-price/grin-price.db"
 
 GATE_TICKER_URL  = "https://api.gateio.ws/api/v4/spot/tickers?currency_pair=GRIN_USDT"
 GATE_CANDLES_URL = "https://api.gateio.ws/api/v4/spot/candlesticks"
-NONLOGS_URL      = "https://api.nonlogs.io/api/markets/GRIN-BTC"
+GATE_BTC_URL     = "https://api.gateio.ws/api/v4/spot/tickers?currency_pair=BTC_USDT"
+
+# GRIN/BTC source. nonlogs.io ran the last real GRIN/BTC order book; it went down
+# in 2026-07 and `api.nonlogs.io` no longer resolves (NXDOMAIN), so there is no
+# native GRIN/BTC market left to quote. CoinGecko aggregates the GRIN tickers
+# (in practice ~all Gate.io GRIN/USDT) and republishes them converted to BTC —
+# same figures grincoin.org shows. Verified 2026-07-27 against a live Gate.io
+# fetch: CG usd volume 4699.68 vs Gate quote volume 4704.17.
+COINGECKO_URL = ("https://api.coingecko.com/api/v3/simple/price?ids=grin"
+                 "&vs_currencies=btc,usd&include_24hr_vol=true&include_24hr_change=true")
 
 # Gate.io candlestick array layout:
 #   [0] ts (str)   [1] quote_vol  [2] close  [3] high  [4] low  [5] open  [6] base_vol  [7] is_complete
@@ -181,27 +190,74 @@ def fetch_gate_ticker():
         print(f"[WARN] Gate.io ticker: {exc}", file=sys.stderr)
         return None
 
-def fetch_nonlogs_ticker():
-    """Fetch current GRIN/BTC ticker from nonlogs.io. Returns dict or None."""
+def fetch_coingecko_btc_ticker():
+    """Fetch current GRIN/BTC from CoinGecko. Returns dict or None.
+
+    CoinGecko reports volume quote-denominated (`btc_24h_vol` = BTC actually
+    spent). The schema stores `base_volume` in GRIN, so divide it back out —
+    that keeps the stats page's `volume_24h * last` = BTC volume identity.
+    There is no order book behind an aggregate, so bid/ask/high/low are NULL.
+    """
     try:
-        data = _http_get(NONLOGS_URL)
-        if not data or "market" not in data:
+        data = _http_get(COINGECKO_URL)
+        g = (data or {}).get("grin") or {}
+        last = g.get("btc")
+        if not last:
             return None
-        m = data["market"]
+        last     = float(last)
+        vol_btc  = float(g.get("btc_24h_vol") or 0)
         return {
             "pair":         "GRIN_BTC",
-            "last_price":   float(m["last_price"]),
-            "high_24h":     float(m["high_24h"])       if m.get("high_24h")       else None,
-            "low_24h":      float(m["low_24h"])        if m.get("low_24h")        else None,
-            "base_volume":  float(m.get("base_volume",  0)),
-            "quote_volume": float(m.get("quote_volume", 0)),
-            "bid":          float(m["highest_bid"])    if m.get("highest_bid")    else None,
-            "ask":          float(m["lowest_ask"])     if m.get("lowest_ask")     else None,
-            "change_pct":   float(m.get("percent_change", 0)),
-            "source":       "nonlogs.io",
+            "last_price":   last,
+            "high_24h":     None,
+            "low_24h":      None,
+            "base_volume":  (vol_btc / last) if last else 0.0,
+            "quote_volume": vol_btc,
+            "bid":          None,
+            "ask":          None,
+            "change_pct":   float(g.get("btc_24h_change") or 0),
+            "source":       "coingecko",
         }
     except Exception as exc:
-        print(f"[WARN] nonlogs.io ticker ({NONLOGS_URL}): {exc}", file=sys.stderr)
+        print(f"[WARN] CoinGecko ticker ({COINGECKO_URL}): {exc}", file=sys.stderr)
+        return None
+
+def derive_btc_ticker_from_gate(usdt):
+    """Fallback GRIN/BTC = GRIN/USDT ÷ BTC/USDT, both from Gate.io.
+
+    Used when CoinGecko is unreachable or rate-limits us (429 from cloud IPs is
+    common). Gives a sound price; the 24h change is the ratio of the two moves,
+    and volume is Gate's real GRIN volume.
+    """
+    if not usdt:
+        return None
+    try:
+        data = _http_get(GATE_BTC_URL)
+        if not data or not isinstance(data, list):
+            return None
+        btc_usd = float(data[0]["last"])
+        if btc_usd <= 0:
+            return None
+        last = usdt["last_price"] / btc_usd
+        # Ratio of two 24h moves, not the difference: (1+g)/(1+b) - 1
+        g_chg = float(usdt.get("change_pct") or 0) / 100.0
+        b_chg = float(data[0].get("change_percentage") or 0) / 100.0
+        chg   = ((1 + g_chg) / (1 + b_chg) - 1) * 100.0 if b_chg != -1 else 0.0
+        base_vol = usdt.get("base_volume") or 0.0
+        return {
+            "pair":         "GRIN_BTC",
+            "last_price":   last,
+            "high_24h":     None,
+            "low_24h":      None,
+            "base_volume":  base_vol,
+            "quote_volume": base_vol * last,
+            "bid":          (usdt["bid"] / btc_usd) if usdt.get("bid") else None,
+            "ask":          (usdt["ask"] / btc_usd) if usdt.get("ask") else None,
+            "change_pct":   chg,
+            "source":       "gate.io (derived)",
+        }
+    except Exception as exc:
+        print(f"[WARN] Gate.io BTC_USDT ({GATE_BTC_URL}): {exc}", file=sys.stderr)
         return None
 
 # ── Fetch: Gate.io OHLCV candles ─────────────────────────────────────────────
@@ -265,8 +321,9 @@ def aggregate_snapshots(conn, pair, interval):
         pts    = sorted(buckets[bucket_ts])
         prices = [p for _, p, _ in pts]
         vols   = [v for _, _, v in pts]
-        # `vols` are rolling trailing-24h volume snapshots (nonlogs.io exposes no
-        # per-period volume and has no OHLCV history API). Summing them would count
+        # `vols` are rolling trailing-24h volume snapshots (no GRIN/BTC source
+        # exposes per-period volume or an OHLCV history API — this held for
+        # nonlogs.io and holds for CoinGecko). Summing them would count
         # the same 24h figure once per 5-min sample (up to 288×/day), inflating a
         # candle's volume ~N-fold — a 6h candle showed ~72× the real number. Instead
         # estimate the candle-period volume by scaling the average 24h volume down to
@@ -340,10 +397,13 @@ def export_price_json():
     ts_now = now_ts()
     out   = {"updated": ts_now}
 
-    for pair, source_label in (("GRIN_USDT", "gate.io"), ("GRIN_BTC", "nonlogs.io")):
+    # The label is read from the newest snapshot rather than hardcoded, so a
+    # source switch (nonlogs.io → coingecko, or the derived Gate.io fallback)
+    # shows up on the page by itself. The tuple value is only a cold-start default.
+    for pair, source_label in (("GRIN_USDT", "gate.io"), ("GRIN_BTC", "coingecko")):
         snap = conn.execute(
             """SELECT last_price, high_24h, low_24h, base_volume,
-                      bid, ask, change_pct
+                      bid, ask, change_pct, source
                FROM snapshots WHERE pair=? ORDER BY ts DESC LIMIT 1""",
             (pair,),
         ).fetchone()
@@ -360,7 +420,7 @@ def export_price_json():
         )
 
         entry = {
-            "source":     source_label,
+            "source":     (snap[7] if snap and snap[7] else source_label),
             "data_since": data_since,
             "last":       snap[0] if snap else None,
             "high_24h":   snap[1] if snap else None,
@@ -511,7 +571,7 @@ def cmd_update():
 
     # ── 1. Fetch current tickers ──────────────────────────────────────────────
     usdt = fetch_gate_ticker()
-    btc  = fetch_nonlogs_ticker()
+    btc  = fetch_coingecko_btc_ticker() or derive_btc_ticker_from_gate(usdt)
 
     if usdt:
         store_snapshot(conn, ts, usdt)
@@ -524,7 +584,8 @@ def cmd_update():
         store_snapshot(conn, ts, btc)
         sats = round(btc["last_price"] * 1e8)
         print(f"[INFO] GRIN/BTC   {sats} sat  "
-              f"vol={btc['base_volume']:.0f} GRIN  ({btc['change_pct']:+.2f}%)")
+              f"vol={btc['base_volume']:.0f} GRIN  ({btc['change_pct']:+.2f}%)  "
+              f"via {btc['source']}")
     else:
         print("[WARN] GRIN/BTC fetch failed", file=sys.stderr)
 

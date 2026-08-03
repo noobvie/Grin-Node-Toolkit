@@ -594,10 +594,15 @@ async function pollBlocks() {
 
 // ── Price poller ──────────────────────────────────────────────────────────────
 
+// CoinGecko 403s any request without a descriptive User-Agent, and Node's https
+// sends none by default — so identify ourselves on every outbound call.
+const HTTP_UA = 'GrinScan/1.0 (+https://github.com/Noobvie/Grin-Node-Toolkit)';
+
 function httpsGet(hostname, path) {
   return new Promise((resolve, reject) => {
     const req = https.request(
-      { hostname, path, method: 'GET', timeout: 8000 },
+      { hostname, path, method: 'GET', timeout: 8000,
+        headers: { 'Accept': 'application/json', 'User-Agent': HTTP_UA } },
       res => {
         let d = '';
         res.on('data', c => { d += c; });
@@ -632,23 +637,30 @@ async function pollPrice() {
     if (price_usd && btcUsd) { price_btc = price_usd / btcUsd; sources.push('gate.io'); }
   } catch {}
 
-  // nonlogs.io: GRIN-BTC — preferred for BTC price + BTC-pair volume
-  // base_volume = GRIN traded; quote_volume = BTC actually spent (the real BTC volume)
+  // CoinGecko: GRIN in BTC — preferred for BTC price + BTC-denominated volume.
+  // This used to be nonlogs.io, which ran the last native GRIN/BTC order book
+  // until it went offline in July 2026 (api.nonlogs.io is now NXDOMAIN). No
+  // GRIN/BTC market remains, so CoinGecko's aggregate is the best available:
+  // it converts the GRIN tickers it tracks (in practice ~all Gate.io GRIN/USDT)
+  // into BTC. `btc_24h_vol` is already BTC-denominated, like the old quote_volume.
+  // If this call fails, the Gate.io block above has already set price_btc by
+  // division — we just lose the BTC volume figure.
   try {
-    const nlRaw = await httpsGet('api.nonlogs.io', '/api/markets/GRIN-BTC');
-    // API may return object or single-element array
-    const nl = Array.isArray(nlRaw) ? nlRaw[0] : (nlRaw?.market || nlRaw);
-    if (nl) {
-      const nlBtc = parseFloat(nl.last || nl.last_price || nl.price) || 0;
-      if (nlBtc) {
-        price_btc = nlBtc;
-        if (!sources.includes('nonlogs.io')) sources.push('nonlogs.io');
-        if (!price_usd && btcUsd) price_usd = nlBtc * btcUsd;
+    const cgRaw = await httpsGet('api.coingecko.com',
+      '/api/v3/simple/price?ids=grin&vs_currencies=btc,usd&include_24hr_vol=true');
+    const cg = cgRaw?.grin;
+    if (cg) {
+      const cgBtc = parseFloat(cg.btc) || 0;
+      if (cgBtc) {
+        price_btc = cgBtc;
+        if (!sources.includes('coingecko')) sources.push('coingecko');
+        if (!price_usd && btcUsd) price_usd = cgBtc * btcUsd;
       }
-      // quote_volume is BTC spent on the GRIN/BTC market
-      const nlVolBtc = parseFloat(nl.quote_volume || nl.quoteVolume || nl.volume_quote) || 0;
-      if (nlVolBtc) volume_btc = nlVolBtc;
-      if (!nlVolBtc) log(`[DEBUG] nonlogs.io GRIN-BTC keys: ${Object.keys(nl).join(', ')} | quote_volume=${nl.quote_volume}`);
+      const cgVolBtc = parseFloat(cg.btc_24h_vol) || 0;
+      if (cgVolBtc) volume_btc = cgVolBtc;
+      else log(`[DEBUG] coingecko grin keys: ${Object.keys(cg).join(', ')}`);
+    } else if (cgRaw?.status?.error_message) {
+      log(`[DEBUG] coingecko: ${cgRaw.status.error_message}`);
     }
   } catch {}
 

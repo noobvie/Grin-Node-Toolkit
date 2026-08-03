@@ -219,6 +219,7 @@
           <div class="form-group">
             <label for="ad-link">Click-through URL</label>
             <input type="url" id="ad-link" placeholder="https://… (or a site path like /donate.html)">
+            <div class="helper-text">Leave blank for a display-only banner — it renders as a plain image with nothing to click (impressions are still counted).</div>
           </div>
           <div class="form-group">
             <label for="ad-alt">Alt / title text</label>
@@ -241,7 +242,7 @@
           <div class="form-group">
             <label for="ad-text-link">Button / card link</label>
             <input type="url" id="ad-text-link" placeholder="/#info or https://…" oninput="updateTextPreview()">
-            <div class="helper-text">Site paths (starting <code>/</code>) open in the same tab; full URLs open a new tab.</div>
+            <div class="helper-text">Site paths (starting <code>/</code>) open in the same tab; full URLs open a new tab. Leave blank and the card is display-only — nothing to click.</div>
           </div>
         </div>
         <div class="form-group">
@@ -346,40 +347,55 @@ const PLACEMENT_SPEC = {
 };
 
 // Self-promo SVGs shipped in public_html/promo/ (auto-seeded once on a fresh pool).
-// They all link to '#' on purpose — they demo the placements and rotation; point them
-// somewhere real (or delete them) once you have your own creatives.
+// `link` matches what the seeder writes, so picking a starter here reproduces the shipped
+// ad exactly — including the ones that deliberately have NO click-through. A creative
+// whose only possible target is the page the visitor is already on (the connect panel,
+// the info section) is left unlinked rather than reloading the homepage under them; the
+// rest point at another page of the site, or off-site where the creative's question is
+// actually answered. Fill the Link field in yourself to change any of that.
 const STARTERS = [
-  { file:'/promo/grinium-mine-728x90.svg',        size:'728×90',  placement:'header',
+  { file:'/promo/grinium-mine-728x90.svg',        size:'728×90',  placement:'header', link:'',
     name:'GRINIUM promo — Mine GRIN (header 728×90)',
     alt:'Mine GRIN on GRINIUM — no sign-up, PPLNS rewards, your address is your account' },
   { file:'/promo/grinium-why-grin-728x90.svg',    size:'728×90',  placement:'header',
+    link:'https://grin.money/#why-grin',
     name:'GRINIUM promo — Why GRIN? (header 728×90)',
     alt:'Why GRIN? No ICO, no premine, tail emission, private by default' },
-  { file:'/promo/grinium-mine-160x600.svg',       size:'160×600', placement:'sidebar',
+  { file:'/promo/grinium-join-team-728x90.svg',   size:'728×90',  placement:'header',
+    link:'https://forum.grin.mw',
+    name:'GRINIUM promo — Join the Grin team (header 728×90)',
+    alt:'Join the Grin community — dev, marketing, AI, mining and trading talk on the Grin forum' },
+  { file:'/promo/grinium-mine-160x600.svg',       size:'160×600', placement:'sidebar', link:'',
     name:'GRINIUM rail — Mine here (160×600)',
     alt:'Mine GRIN here — no sign-up, PPLNS rewards, anonymous Tor payouts' },
   { file:'/promo/grinium-why-grin-160x600.svg',   size:'160×600', placement:'sidebar',
+    link:'https://grin.money/#why-grin',
     name:'GRINIUM rail — Why GRIN? (160×600)',
     alt:'Why GRIN? Private by default, no addresses on chain, fair launch, no premine' },
   { file:'/promo/grinium-buy-grin-160x600.svg',   size:'160×600', placement:'sidebar',
+    link:'https://www.gate.com/trade/GRIN_USDT',
     name:'GRINIUM rail — Buy GRIN (160×600)',
-    alt:'Buy GRIN — trade it on exchanges, or earn it by pointing a miner here' },
+    alt:'Buy GRIN — trade the GRIN/USDT market, or earn it by pointing a miner here' },
   { file:'/promo/grinium-fortune-160x600.svg',    size:'160×600', placement:'sidebar',
+    link:'/fortune-board.html',
     name:'GRINIUM rail — Feeling lucky? (160×600)',
     alt:'Feeling lucky? Block jackpots, prize draws, streak rewards and a monthly lottery' },
-  { file:'/promo/grinium-privacy-160x600.svg',    size:'160×600', placement:'sidebar',
+  { file:'/promo/grinium-privacy-160x600.svg',    size:'160×600', placement:'sidebar', link:'',
     name:'GRINIUM rail — Anonymous (160×600)',
     alt:'Mine anonymously — no accounts, no emails, Tor payouts' },
   { file:'/promo/grinium-fortune-300x250.svg',    size:'300×250', placement:'in-content',
+    link:'/fortune-board.html',
     name:'GRINIUM promo — Fortune board (in-content 300×250)',
     alt:'Feeling lucky? Block jackpots, prize draws, streak rewards and a monthly lottery' },
   { file:'/promo/grinium-privacy-300x250.svg',    size:'300×250', placement:'in-content',
+    link:'/payment-history.html',
     name:'GRINIUM promo — Anonymous mining (in-content 300×250)',
-    alt:'Mine anonymously — no accounts, no emails, Tor payouts' },
+    alt:'Mine anonymously — no accounts, no emails — see every pool payout' },
   { file:'/promo/grinium-donate-728x90.svg',      size:'728×90',  placement:'footer',
+    link:'/donate.html',
     name:'GRINIUM promo — Donate (footer 728×90)',
     alt:'Keep the reactor running — donate GRIN and join the donor wall' }
-].map(s => ({ ...s, link: '#' }));
+];
 
 function syncPlacement() {
   const spec = PLACEMENT_SPEC[document.getElementById('ad-placement').value] || PLACEMENT_SPEC.header;

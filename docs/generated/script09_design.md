@@ -576,11 +576,12 @@ hub — 091 is an *optional shared relay*, not a gate.
 ## C.3 Why GoblinPay lives under 05, not 09
 
 Function-not-vendor (the toolkit numbers by function, never by author): GoblinPay is a **payment
-processor** → Script-05 (Wallet & Payments), alongside 053 (WooCommerce) / 054 (Payment Pro). Only
+processor** → Script-05 (Wallet & Payments), alongside 053 (WooCommerce) and the unbuilt Payment
+Pro / GrinPay Server (no number until its build starts). Only
 the *relay it may lean on* is connectivity (09). So GoblinPay is a 05 member that optionally
 consumes a 09 relay — the two hubs compose, they don't merge. (GoblinPay's WooCommerce connector
 is more complete than a from-scratch 053; treat GoblinPay as the adopt-don't-rebuild option and
-keep our own 053/054 only as the deliberate **no-Nostr, no-external-deps** alternative.)
+keep our own 053 + Payment Pro only as the deliberate **no-Nostr, no-external-deps** alternative.)
 
 ---
 

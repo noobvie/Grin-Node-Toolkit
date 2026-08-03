@@ -27,16 +27,38 @@
     .blog-head { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
     .blog-head h1 { margin: 0; }
     .post-grid { display: grid; gap: 1.25rem; margin-top: 1.5rem; }
-    .post-card { display: grid; grid-template-columns: 200px 1fr; gap: 1rem; background: var(--bg-elev);
-      border: 1px solid var(--border); border-radius: 10px; overflow: hidden; text-decoration: none; color: inherit; }
-    .post-card:hover { border-color: var(--accent); }
-    .post-card .cover { width: 200px; height: 130px; object-fit: cover; background: var(--bg-elev2); }
-    .post-card .no-cover { width: 200px; height: 130px; display: flex; align-items: center; justify-content: center;
+    .post-card { display: grid; grid-template-columns: 280px 1fr; gap: 1rem; background: var(--bg-elev);
+      border: 1px solid var(--border); border-radius: 10px; overflow: hidden; text-decoration: none; color: inherit;
+      transition: border-color .15s, box-shadow .15s; }
+    /* Hover emphasis. The global `a:hover { text-decoration: underline }` in dashboard.css
+       outranks the card's own `text-decoration: none` (the :hover adds specificity), so a
+       hovered card grew an underline across the title, the date, the excerpt AND the tags —
+       which reads as a broken link, not a card. Undo it here and emphasise the way the text
+       ads do instead: the title takes the accent and italicises, the card lifts. */
+    .post-card:hover, .post-card:focus-visible {
+      text-decoration: none; border-color: var(--accent);
+      box-shadow: 0 0 22px -8px var(--glow, transparent);
+    }
+    .post-card:hover h2, .post-card:focus-visible h2 { color: var(--accent); font-style: italic; }
+    /* Stretch the cover to the card's full height so there is no dead panel under it (the
+       body column is always taller than a 1200x630 cover scaled to this column's width).
+       That crop is why the column is 280px and why the excerpt is clamped below: covers are
+       authored wider than tall, object-fit:cover trims the SIDES, and the trim grows with
+       card height. At 280px wide and the clamped max height, x=200..1000 of a 1200-wide
+       cover survives — which is the safe zone the shipped cover is drawn inside. */
+    .post-card .cover { display: block; width: 280px; height: 100%; min-height: 150px;
+      object-fit: cover; background: var(--bg-elev2); }
+    .post-card .no-cover { width: 280px; height: 100%; min-height: 150px;
+      display: flex; align-items: center; justify-content: center;
       background: var(--bg-elev2); color: var(--accent); font-size: 2rem; }
     .post-card .body { padding: 1rem 1.1rem 1.1rem 0; }
-    .post-card h2 { margin: 0 0 .35rem; font-size: 1.25rem; }
+    .post-card h2 { margin: 0 0 .35rem; font-size: 1.25rem; transition: color .15s; }
     .post-card .meta { color: var(--text-dim); font-size: .85rem; margin-bottom: .5rem; }
-    .post-card .excerpt { color: var(--text); font-size: .95rem; line-height: 1.5; }
+    /* Bounded to 3 lines: keeps cards a consistent height in the list, and caps how far
+       object-fit:cover can crop into the cover above. Full text is on the post page. */
+    .post-card .excerpt { color: var(--text); font-size: .95rem; line-height: 1.5;
+      display: -webkit-box; -webkit-line-clamp: 3; line-clamp: 3;
+      -webkit-box-orient: vertical; overflow: hidden; }
     .tag { display: inline-block; font-size: .72rem; padding: .1rem .5rem; border-radius: 999px;
       background: var(--accent-soft); color: var(--accent); margin: .35rem .35rem 0 0; }
     .blog-pager { display: flex; justify-content: center; gap: .75rem; margin: 2rem 0 0; }
@@ -46,7 +68,11 @@
     .muted { color: var(--text-dim); }
     @media (max-width: 620px) {
       .post-card { grid-template-columns: 1fr; }
-      .post-card .cover, .post-card .no-cover { width: 100%; }
+      /* Stacked: the cover is a full-width banner, so let it keep the 1200x630 shape the
+         covers are authored at instead of being squashed into a 130px letterbox. */
+      .post-card .cover, .post-card .no-cover {
+        width: 100%; height: auto; min-height: 0; aspect-ratio: 1200 / 630;
+      }
       .post-card .body { padding: 0 1.1rem 1.1rem; }
     }
   </style>

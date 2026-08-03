@@ -770,6 +770,13 @@ flr_write_landing_page() {
   .wisp{width:8px;height:8px;border-radius:50%;background:var(--ghost);
     box-shadow:0 0 8px 1px var(--ghost); animation:breathe 3.2s ease-in-out infinite}
   @keyframes breathe{0%,100%{opacity:.45;transform:scale(.85)}50%{opacity:1;transform:scale(1.1)}}
+  /* Grin coin mark — ghost-lavender disc, grin face knocked out to the badge bg,
+     so it reads on-theme (orange stays reserved for actions). Sourced from the
+     toolkit's grin logo set; inlined because the page is self-contained. */
+  .grin-mark{width:16px;height:16px;flex:none;
+    filter:drop-shadow(0 0 5px rgba(195,179,255,.5))}
+  .grin-mark .coin{fill:var(--ghost)}
+  .grin-mark .face{fill:var(--void)}
 
   /* headline "torch reveal" — a light follows the cursor and SWAPS the visible
      title for the secret beneath it: the base title is masked OUT inside the
@@ -939,7 +946,7 @@ flr_write_landing_page() {
 <div class="hero">
   <canvas id="veil" aria-hidden="true"></canvas>
   <div class="wrap">
-    <span class="badge materialize d1"><span class="wisp"></span> Grin &middot; Nostr relay &middot; <span id="badge-net">@@NETLABEL@@</span></span>
+    <span class="badge materialize d1"><svg class="grin-mark" viewBox="0 0 244 244" aria-hidden="true"><g transform="matrix(1.03804,0,0,1.03804,-19.1739,-16.0598)"><circle class="coin" cx="136" cy="133" r="92"/></g><g transform="matrix(1.06897,0,0,1.06897,-29.7347,-25.25)"><circle class="coin" cx="141.75" cy="137.75" r="79.75"/></g><path class="face" fill-rule="nonzero" transform="matrix(1,0,0,1,0.208873,-2)" d="M162,92C159.966,87.434 158.071,78.413 152.855,76.407C146.14,73.825 141.989,90.729 141,95L140,95C138.307,87.682 136.035,77.31 128,75C124.28,90.624 131.886,107.479 139,121C146.596,117.37 150.297,106.002 151,98L152,98L160,122C166.436,120.15 168.675,113.781 170.999,108C175.988,95.592 180.174,80.332 177,67C167.395,69.72 164.473,83.455 162,92M66,124C74.595,119.896 78.685,106.906 80,98L81,98C82.017,102.293 84.736,113.368 90.1,114.079C96.934,114.983 100.517,99.819 101,95L102,95C104.179,102.529 106.475,112.32 114,116C116.776,104.34 113.452,91.905 109.188,81C108.092,78.196 105.841,70.636 101.975,70.636C95.641,70.636 92.08,87.332 91,92L90,92L82,68C67.928,74.72 60.284,110.453 66,124M51,136C61.443,181.551 109.612,207.374 153,188.138C168.791,181.137 181.317,168.663 188.539,153C190.405,148.953 194.07,141.628 191.933,136.318C189.805,131.029 169.166,139.671 164.009,141.928C163.285,142.25 162.774,142.918 162.655,143.702C162.486,144.811 162.786,145.941 163.485,146.82C164.183,147.699 165.216,148.247 166.335,148.333C170.116,148.624 175,149 175,149C159.313,179.365 116.899,192.791 87,168.532C80.308,163.103 74.338,156.652 70.32,149C68.377,145.3 66.575,140.568 63.272,138.029C60.099,135.589 55.285,134.753 51,136Z"/></svg> Grin &middot; Nostr relay &middot; <span id="badge-net">@@NETLABEL@@</span></span>
     <h1 class="materialize d2 reveal" id="reveal">
       <span class="layer base">Money that keeps<br><em>a secret.</em></span>
       <span class="layer secret">No amounts.<br><em>No addresses.</em></span>
@@ -1024,6 +1031,73 @@ flr_write_landing_page() {
         </figure>
       </div>
     </div>
+
+    <!--NAMEGUIDE-START-->
+    <div class="guide materialize d4">
+      <p class="guide-lead"><b>Optional &mdash; be paid by name.</b> Point goblin's <b>name authority</b> at
+      this relay and claim a username, so people can pay you as e.g. <b>@@NAMEEG@@</b> instead of a raw npub.
+      <b>grinmoney</b> is only an example &mdash; pick any name no one has claimed yet. The name lives in
+      <em>your</em> relay's registry &mdash; you host it, not goblin.st.</p>
+      <div class="shots">
+        <figure class="shot">
+          <div class="gob">
+            <aside class="gob-side">
+              <div class="gob-brand">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="#e9e9ec"><path d="M12 3c-3.3 0-6 2.7-6 6v7l2-1.5L10 16l2-1.5L14 16l2-1.5L18 16V9c0-3.3-2.7-6-6-6z"/><circle cx="9.5" cy="9.5" r="1.1" fill="#0d0d0e"/><circle cx="14.5" cy="9.5" r="1.1" fill="#0d0d0e"/></svg>
+                <span>goblin</span>
+              </div>
+              <div class="gob-nav"><i></i><span>Wallet</span></div>
+              <div class="gob-nav"><i></i><span>Pay</span></div>
+              <div class="gob-nav"><i></i><span>Activity</span></div>
+              <div class="gob-nav"><i></i><span>Receive</span></div>
+              <div class="gob-nav on"><i></i><span>Settings</span></div>
+            </aside>
+            <div class="gob-main">
+              <div class="gob-title">Settings</div>
+              <div class="gob-lbl">Identity</div>
+              <div class="gob-panel">
+                <div class="gob-row hot"><span>Username</span><span class="v">Not set &rsaquo;</span></div>
+                <div class="gob-row"><span>Copy npub (public)</span><span class="v">&#10697;</span></div>
+                <div class="gob-row"><span>Nostr Relays</span><span class="v">@@RELAYHOST@@/ &rsaquo;</span></div>
+                <div class="gob-row"><span>Trusted Sites</span><span class="v">0 &rsaquo;</span></div>
+              </div>
+            </div>
+          </div>
+          <figcaption>3 &middot; Open <b>Settings &rarr; Username</b></figcaption>
+        </figure>
+
+        <figure class="shot">
+          <div class="gob">
+            <aside class="gob-side">
+              <div class="gob-brand">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="#e9e9ec"><path d="M12 3c-3.3 0-6 2.7-6 6v7l2-1.5L10 16l2-1.5L14 16l2-1.5L18 16V9c0-3.3-2.7-6-6-6z"/><circle cx="9.5" cy="9.5" r="1.1" fill="#0d0d0e"/><circle cx="14.5" cy="9.5" r="1.1" fill="#0d0d0e"/></svg>
+                <span>goblin</span>
+              </div>
+              <div class="gob-nav"><i></i><span>Wallet</span></div>
+              <div class="gob-nav"><i></i><span>Pay</span></div>
+              <div class="gob-nav"><i></i><span>Activity</span></div>
+              <div class="gob-nav"><i></i><span>Receive</span></div>
+              <div class="gob-nav on"><i></i><span>Settings</span></div>
+            </aside>
+            <div class="gob-main">
+              <div class="gob-title"><span class="bk">&lsaquo;</span> Username</div>
+              <div class="gob-lbl">Name authority</div>
+              <div class="gob-panel">
+                <div class="gob-row"><span>goblin.st</span><span class="v">default</span></div>
+              </div>
+              <div class="gob-lbl">Custom authority</div>
+              <div class="gob-input"><span class="cur">https://@@RELAYHOST@@</span><span class="care">&#9611;</span></div>
+              <button class="gob-btn save">Save</button>
+              <div class="gob-lbl">Pick a username &mdash; any free one</div>
+              <div class="gob-input"><span class="cur">grinmoney</span><span class="care">&#9611;</span></div>
+              <button class="gob-btn save">Claim</button>
+            </div>
+          </div>
+          <figcaption>4 &middot; Set <b>Custom authority</b> to <b>https://@@RELAYHOST@@</b>, <b>Save</b>, then <b>Claim</b> any unclaimed name</figcaption>
+        </figure>
+      </div>
+    </div>
+    <!--NAMEGUIDE-END-->
   </div>
 </div>
 
@@ -1298,15 +1372,30 @@ FLR_LANDING_HTML
     # replacement. Bash ${var//old/new} is deliberately NOT used here — bash 5.2
     # treats & and \ in the replacement string specially (sed-like), which would
     # silently corrupt any value containing them; 5.1 does not. Python is immune.
+    # NIP-05 name-authority state gates the "claim a username" how-to: when it's
+    # disabled, claiming would 404, so the block is omitted from the page entirely.
+    local na_enabled
+    na_enabled=$(flr_toml_get name_authority enabled 2>/dev/null || echo false)
     if ! FLR_TMPL="$html" FLR_NIP11="$live_nip11" python3 - \
             "$name" "$desc" "$software" "$relay_url" "$relayhost" \
-            "$FLR_LANDING_NIPS" "$netlabel" "$version" "$started_epoch" \
+            "$FLR_LANDING_NIPS" "$netlabel" "$version" "$started_epoch" "$na_enabled" \
             > "$FLR_WWW/index.html" <<'PYEOF'
-import os, sys, json, time, html as H
+import os, sys, json, time, re, html as H
 tmpl = os.environ.get("FLR_TMPL", "")
-a = (sys.argv[1:10] + [""] * 9)[:9]
-name, desc, software, relay_url, relayhost, nips_csv, netlabel, version, started = a
+a = (sys.argv[1:11] + [""] * 10)[:10]
+name, desc, software, relay_url, relayhost, nips_csv, netlabel, version, started, na_enabled = a
 esc = lambda s: H.escape(str(s) if s is not None else "", quote=True)
+
+# Gate the "claim a username" how-to on NIP-05 name authority being enabled.
+# Enabled → drop just the two marker comments and keep the block; disabled →
+# strip the whole block so the page never tells users to claim an unregisterable
+# name. Done here (not in bash) because the block is full of & entities and bash
+# ${var//&/…} would corrupt them.
+if str(na_enabled).strip().lower() == "true":
+    tmpl = re.sub(r"[ \t]*<!--NAMEGUIDE-(?:START|END)-->[ \t]*\r?\n?", "", tmpl)
+else:
+    tmpl = re.sub(r"[ \t]*<!--NAMEGUIDE-START-->.*?<!--NAMEGUIDE-END-->[ \t]*\r?\n?",
+                  "", tmpl, flags=re.S)
 
 # Version fallback comes from `floonet-rs --version` ("floonet-rs x.y.z") — keep
 # just the version token so it doesn't duplicate the software row.
@@ -1355,6 +1444,7 @@ repl = {
     "@@NAME@@": esc(name), "@@DESC@@": esc(desc),
     "@@SOFTWARE@@": esc(software), "@@RELAYURL@@": esc(relay_url),
     "@@RELAYHOST@@": esc(relayhost), "@@NIPS@@": chips, "@@NETLABEL@@": esc(netlabel),
+    "@@NAMEEG@@": esc("grinmoney@" + relayhost),
     "@@VERSION@@": esc(version), "@@STARTED@@": esc(started or ""),
     "@@UPTIME_INIT@@": esc(fmt_uptime(started)),
 }

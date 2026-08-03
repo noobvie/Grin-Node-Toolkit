@@ -2,8 +2,9 @@
 
 **Scope:** the Node.js bridge (`web/053_woocommerce/bridge/`) and the WooCommerce PHP plugin
 (`web/053_woocommerce/plugin/`). Focus: merchant fund loss (0-conf / underpayment / replay),
-AJAX auth, injection. **054 Payment Pro is an unimplemented placeholder** (`scripts/054_*.sh`
-prints "COMING SOON") — nothing to audit there yet.
+AJAX auth, injection. **Payment Pro is unbuilt** — its `scripts/054_*.sh` "COMING SOON"
+placeholder was deleted 2026-07-28 and the product holds no number until its build starts, so
+there is nothing to audit there yet.
 
 **Date:** 2026-07-10 · **Auditor:** Claude · **Verdict:** The bridge is well-hardened and the
 invoice flow binds the paid amount cryptographically (no underpayment vector). One real

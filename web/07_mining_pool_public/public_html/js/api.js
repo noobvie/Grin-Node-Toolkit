@@ -99,6 +99,13 @@ const API = {
     }
     if (!me || !me.is_admin) { window.location.href = '/login.html'; return null; }
 
+    // Start the idle-session manager (admin-shell.js — admin pages only; absent on public
+    // pages and on the login page, hence the guard). It needs the policy from /me: the token
+    // is httpOnly, so the client cannot read the window or the session start itself.
+    if (window.AdminSession && me.session) {
+      try { window.AdminSession.start(me.session); } catch (e) { console.warn('AdminSession', e); }
+    }
+
     const nav = document.getElementById('nav-user');
     if (nav) {
       const safe = String(me.username || 'admin').replace(/[&<>"']/g,

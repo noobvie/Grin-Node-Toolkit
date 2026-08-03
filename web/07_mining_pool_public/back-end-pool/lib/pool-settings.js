@@ -63,13 +63,16 @@ class PoolSettings {
       pool_fee_percent: 1.0,
       max_miners: 0,
       contact_email: 'support@grinium.com',
-      homepage_banner: '',
+      // No `homepage_banner` here — removed 2026-07-27 as dead (see the note in
+      // admin-panel/settings-pool-info.html). Site notices are notices.banners, which
+      // actually render. A pool that saved a value still has the orphan pool_config row;
+      // nothing reads it, and it is no longer published in the public branding payload.
       // Public stratum host shown by the connect/config generator (defaults to the
       // request host at runtime when left blank). Port comes from pool.json.
       public_stratum_host: '',
-      // Footer "go-live" year for the copyright line (© <founded>–<current>). Blank
-      // collapses to just the current year. Stored as a 4-digit string.
-      founded_year: '',
+      // Footer "go-live" year for the copyright line. Blank collapses to just the
+      // current year. Stored as a 4-digit string.
+      founded_year: '2026',
       // Security / abuse contact surfaced in the footer (email). Falls back to nothing
       // when blank (the footer just omits the row). pgp_key_url is an optional link to a
       // published PGP public key for encrypted security reports.
@@ -160,6 +163,10 @@ class PoolSettings {
     },
     payout: {
       min_withdrawal: 25.0,
+      // Flat withdrawal fee (GRIN) deducted from every payout on every rail — recovers the
+      // sender-paid on-chain network fee (~0.023 GRIN typical, weight-based not amount-based).
+      // Must stay < min_withdrawal. 0 = the pool absorbs the network fee.
+      withdrawal_fee: 0.04,
       auto_payout: 'false',
       payout_frequency: 'manual',
       confirm_depth_mainnet: 1440,
@@ -204,7 +211,18 @@ class PoolSettings {
     access: {
       admin_ip_allowlist: '[]',
       admin_ip_blacklist: '[]',
+      // Admin session lifetime, in hours. Two different clocks — don't conflate them:
+      //   session_timeout_hours  = IDLE. Reset by real user interaction (mouse/key/touch) in
+      //                            the admin panel, NOT by request traffic — several admin
+      //                            pages self-refresh on a timer, so a traffic-based window
+      //                            would never close while a tab sat open on the dashboard.
+      //                            Also the access-token TTL, so it holds even if the client
+      //                            is closed, stale or hostile.
+      //   session_absolute_hours = hard cap from the ORIGINAL login. Sliding refresh can
+      //                            otherwise extend a session forever; this is what bounds it.
+      // Both are enforced server-side (auth.js _sessionPolicy / refreshAccessToken).
       session_timeout_hours: 1,
+      session_absolute_hours: 12,
       invite_codes_enabled: 'false',
       invite_codes: '[]',
       // Extra stratum passwords banned from the ownership gate, ON TOP of the hardcoded
@@ -230,6 +248,20 @@ class PoolSettings {
       // region_country_code → this box's region row → busiest gateway → busiest miner country);
       // if every step misses, the map simply draws no hub marker.
       hub_country_code: '',
+      // Require TOTP 2FA on every admin account. OFF by default so an existing deploy isn't
+      // locked out by an upgrade.
+      //
+      // Enforcement is deliberately NOT "refuse the login": an admin who hasn't enrolled yet
+      // must still be able to reach the enrollment page, and a hard refusal would strand the
+      // operator the moment the toggle is flipped. Instead, an un-enrolled admin gets a normal
+      // session but every STEP-UP endpoint (money moves, destructive actions, access settings)
+      // is refused with `totp_enrollment_required` until they enroll. So the pool keeps running
+      // and the operator keeps read access, but nothing dangerous can be done without 2FA.
+      //
+      // Before turning this on, make sure the break-glass path exists on the box:
+      // `grin-pool-admin-reset-<net> --help` (installed by Script 07). Losing the authenticator
+      // AND the recovery codes with no CLI means no way back into the panel.
+      require_admin_totp: 'false',
     },
     alerts: {
       alert_check_interval_secs: 60,
@@ -246,8 +278,91 @@ class PoolSettings {
     // about/terms/privacy/faq ship with editable GRINIUM defaults (seeded once into the
     // `pages` CMS table by db.js migratePagesFromConfig — operators edit them in admin →
     // Pages). impressum stays blank (German legal imprint = operator-specific).
+    //
+    // Pages added AFTER that legacy migration (start-mining) are seeded by
+    // db.js seedShippedPages() instead: migratePagesFromConfig only ever walks its own
+    // fixed five slugs, and its marker means it never runs twice, so a new default here
+    // would otherwise never reach an existing pool. Markup uses only classes that already
+    // exist in dashboard.css (.callout, .cmd, .data-table, .table-wrap, .muted) — page.html
+    // ships no CMS-specific CSS of its own.
     pages: {
-      about: `<p class="muted">Last updated: June 2026</p>
+      'start-mining': `<img src="/images/pages/start-mining.svg" alt="Start mining in three steps: get a Grin address, point your miner at the pool, then get paid.">
+
+<p class="muted">Last updated: July 2026</p>
+<p>New to Grin? This page takes you from nothing to a running miner in about ten minutes. There is <strong>no account to create</strong> — your Grin address is your identity here. Work through the four steps in order, then read <em>Your first 24 hours</em> at the bottom so you know what normal looks like before you start worrying.</p>
+
+<h2>What you need first</h2>
+<ul>
+  <li><strong>A Grin miner.</strong> Grin uses the <strong>Cuckatoo32 (C32)</strong> proof-of-work, which in practice means an ASIC. Older secondhand C32 units are cheap and draw very little power — often around 120 W — which is why small miners still find Grin worth doing. GPUs cannot compete on C32.</li>
+  <li><strong>A Grin wallet.</strong> Any wallet that gives you a Grin address starting with <code>grin1…</code> will do. This is where your earnings land.</li>
+  <li><strong>Nothing else.</strong> No registration, no email, no KYC, no minimum deposit.</li>
+</ul>
+
+<h2>Step 1 — Get your Grin address</h2>
+<p>Install a Grin wallet and copy your address. It is a long string beginning with <code>grin1</code>. Write down your wallet's recovery seed and store it somewhere safe and offline — if you lose the seed, you lose the coins, and nobody (including this pool) can recover them for you.</p>
+<p>The pool credits your earnings to whatever address it sees in your miner's config, so this address is the single most important thing you will type today.</p>
+<div class="callout"><span><strong>Copy and paste it. Never type it by hand.</strong> Grin addresses are not spell-checked by the pool — a typo produces a perfectly valid address belonging to nobody, and rewards paid to it are gone for good.</span></div>
+
+<h2>Step 2 — Point your miner at the pool</h2>
+<p>Every Grin miner needs the same three settings. The exact field names differ between models, but they always mean the same thing:</p>
+<code class="cmd">SERVER    stratum.your-pool.com:3333
+USER      grin1youraddress.rigname
+PASS      any-password-you-choose</code>
+<ul>
+  <li><strong>Server.</strong> Use the endpoint closest to you. The <a href="/#connect">connection panel on the homepage</a> lists every region and will generate the exact config lines for you — copy them from there rather than from this page, so you get the real hostname and port for this pool.</li>
+  <li><strong>User.</strong> Your Grin address, then a dot, then a short name for that machine — for example <code>grin1abc…xyz.rig1</code>. <strong>It must be all lower case</strong>, and the rig name may only contain letters, digits, <code>-</code> and <code>_</code>. <code>Rig1</code>, <code>my rig</code> or an e-mail address are refused at login, not silently ignored. The rig name is just a label so you can tell your machines apart in the stats — running several miners means the same address with a different rig name on each.</li>
+  <li><strong>Password.</strong> The pool never uses it to log you in. It is a <em>backup proof of ownership</em>, used to release a payout if your home IP address later changes. Make it <strong>at least 8 characters</strong> and not guessable, and write it down. Your miner works regardless of what you put here — a password that is too short or too common is simply not stored as proof, which quietly leaves you relying on your IP alone. If your miner uses this field to request a difficulty (a value like <code>d=1000</code>), the pool reads it as a setting, not a secret, and keeps no proof from it.</li>
+</ul>
+
+<h2>Step 3 — Confirm the pool can see you</h2>
+<p>Start the miner and watch its own log first. Within a minute or two it should report that it connected and that shares are being <strong>accepted</strong>. A share is a proof-of-work your machine found that was good enough to count, but not good enough to be a block — shares are how the pool measures your contribution.</p>
+<p>Once a few shares have landed, look yourself up on the <a href="/miners-stats.html">Miners</a> page using your Grin address. Your hashrate there is an estimate calculated from recent shares, so give it 10–15 minutes to settle before comparing it with what your miner reports. Some difference between the two numbers is normal and permanent; a number that stays at zero is not.</p>
+
+<h2>Step 4 — Get paid</h2>
+<p>This pool pays with <strong>PPLNS</strong> (Pay Per Last N Shares). When the pool finds a block, the reward is split across the shares submitted most recently, so you are paid for the work you actually contributed. It also means your earnings arrive in steps whenever the pool finds a block, not as a smooth trickle — this is normal and applies to every miner in the pool equally.</p>
+<ul>
+  <li><strong>Maturity.</strong> A freshly mined block cannot be spent for <strong>1,440 blocks</strong> — roughly 24 hours. This is a Grin network rule, not a pool policy. Your share of a block appears as <em>pending</em> until then, and only becomes spendable balance afterwards.</li>
+  <li><strong>Fees.</strong> The pool keeps a small percentage of each matured block reward, plus a flat fee per payout that covers the on-chain network fee. Both live figures are shown on the homepage and on your <a href="/account-settings.html">Account</a> page.</li>
+  <li><strong>Requesting a payout.</strong> Go to your <a href="/account-settings.html">Account</a> page, enter your address, and choose an amount above the pool's minimum. You will be asked to prove the address is yours — either by requesting from an IP you have recently mined from, or with the rig password from Step 2.</li>
+  <li><strong>How it arrives.</strong> By default the pool sends to your wallet over <strong>Tor</strong>, which needs your wallet to be online and listening. If it is not, choose the <strong>Slatepack</strong> option instead: the pool gives you an encrypted blob, you paste it into your wallet, and you paste the reply back. Nothing is lost either way — a payout that cannot be delivered is returned to your balance in full.</li>
+</ul>
+
+<h2>Your first 24 hours</h2>
+<p>Most "is it broken?" questions are really questions about timing. Here is the honest schedule:</p>
+<div class="table-wrap">
+<table class="data-table">
+  <thead><tr><th>When</th><th>What should happen</th></tr></thead>
+  <tbody>
+    <tr><td>First 2 minutes</td><td>Your miner connects and its log starts reporting accepted shares.</td></tr>
+    <tr><td>First 15 minutes</td><td>Your address appears on the Miners page and its hashrate estimate steadies.</td></tr>
+    <tr><td>Hours 1–24</td><td>Pending earnings accumulate every time the pool finds a block. A quiet stretch with no increase is normal — blocks arrive at random.</td></tr>
+    <tr><td>After ~24 hours</td><td>The first block you contributed to matures and moves from pending into your spendable balance.</td></tr>
+    <tr><td>When you reach the minimum</td><td>Request a payout from the Account page. Until then your balance simply keeps growing.</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h2>If something looks wrong</h2>
+<div class="table-wrap">
+<table class="data-table">
+  <thead><tr><th>What you see</th><th>Usual cause</th></tr></thead>
+  <tbody>
+    <tr><td>Miner cannot reach the pool at all</td><td>Wrong host or port, or a firewall blocking the outbound stratum port. Re-copy the server line from the homepage connection panel.</td></tr>
+    <tr><td><code>Invalid login</code>, or it connects then drops straight away</td><td>The <em>user</em> field. It must be your full <code>grin1…</code> address, optionally a dot and a lower-case rig name. Capitals, spaces, an e-mail address or a rig name on its own are all rejected at login — before a single share is sent.</td></tr>
+    <tr><td>Shares are accepted but many come back stale</td><td>Network latency to that endpoint. Switch to a closer region on the homepage connection panel.</td></tr>
+    <tr><td>Not listed on the Miners page</td><td>No accepted share has arrived yet. Get the login working first; the listing follows automatically.</td></tr>
+    <tr><td>Pool hashrate is lower than the miner's</td><td>Expected. The pool estimates from recent shares, and short-term variance is large. Compare averages over an hour, not instant readings.</td></tr>
+    <tr><td>Balance stuck as pending</td><td>Coinbase maturity — 1,440 blocks, about a day. Nothing is wrong and nothing needs doing.</td></tr>
+    <tr><td>Earnings dropped after a block</td><td>That block was orphaned by the network, so its credits were reversed for everyone who shared in it. Orphans are visible on the <a href="/blocks.html">Blocks</a> page.</td></tr>
+    <tr><td>Payout says it cannot verify you</td><td>Your IP has changed since you last mined. Use the rig password from Step 2 instead — provided it met the 8-character minimum, otherwise it was never stored and the operator has to verify you by hand.</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h2>Still stuck?</h2>
+<p>The <a href="/page.html?p=faq">FAQ</a> answers the longer questions — reward maths, orphans, privacy, and what happens to an abandoned balance. For anything else, the contact address and community link are in the footer of every page, and the wider Grin community is friendly to newcomers on the <a href="https://forum.grin.mw" rel="noopener" target="_blank">Grin forum</a>.</p>`,
+
+      about: `<p class="muted">Last updated: July 2026</p>
 <p><strong>GRINIUM</strong> is a community mining pool for <strong>Grin (GRIN)</strong>, the privacy-preserving, Mimblewimble-based cryptocurrency. We run the heavy infrastructure — full nodes, multi-region stratum servers, and payout wallets — so you can point a miner at us and start earning without operating any of it yourself.</p>
 
 <h2>What is Grin?</h2>
@@ -255,23 +370,27 @@ class PoolSettings {
 
 <h2>Why mine with GRINIUM?</h2>
 <ul>
-  <li><strong>Low fee.</strong> A flat 1% pool fee (the live value is shown on the homepage).</li>
+  <li><strong>Low fee.</strong> A 1% pool fee plus a small flat withdrawal fee that covers the on-chain network fee (the live values are shown on the homepage and on your <a href="/account-settings.html">Account</a> page).</li>
   <li><strong>PPLNS rewards.</strong> Pay-Per-Last-N-Shares spreads rewards fairly and resists pool-hopping.</li>
-  <li><strong>Private payouts.</strong> Rewards are delivered to your Grin address over Tor.</li>
+  <li><strong>Private payouts.</strong> Rewards are delivered to your Grin address over Tor, or as an encrypted Slatepack you finalise yourself.</li>
   <li><strong>No account, no KYC.</strong> Your Grin address <em>is</em> your identity — there is nothing to sign up for.</li>
   <li><strong>Global regions.</strong> Connect to the nearest stratum endpoint for low latency and fewer stale shares.</li>
+  <li><strong>Open source.</strong> Every line of the pool is public and auditable — see below.</li>
 </ul>
 
 <h2>How it works</h2>
-<p>You connect your miner using your Grin address as the username, in the form <code>grin1youraddress.workername</code>. The pool credits every valid share you submit. When the pool finds a block and it matures, your portion of the reward is added to your balance, ready to withdraw to your wallet.</p>
+<p>You connect your miner using your Grin address as the username, in the form <code>grin1youraddress.workername</code>. Set a password in your miner's pool config too — the pool never uses it to log you in, but it doubles as a backup proof of ownership when your IP address changes. The pool credits every valid share you submit. When the pool finds a block and it matures, your portion of the reward is added to your balance, ready to withdraw to your wallet.</p>
 
-<!-- TO BE UPDATED: confirm incentive details before publishing -->
 <h2>Rewards &amp; extras</h2>
-<p>Beyond block rewards, GRINIUM may run optional community incentives — for example a prize pool, a block-finder jackpot, loyalty streaks, and a periodic lottery, with winners shown on the public fortune board. <em>(To be updated.)</em></p>
+<p>Beyond block rewards, GRINIUM can run optional community incentives — a community <a href="/donate.html">prize pool</a>, a block-finder jackpot, loyalty streaks, and periodic prize draws, with winners shown on the public <a href="/fortune-board.html">fortune board</a>. Each one is switched on or off by the pool operator; whichever are live are shown on those pages.</p>
+
+<h2>Open source</h2>
+<p>This pool is not a black box. It runs on the <a href="https://github.com/noobvie/Grin-Node-Toolkit" target="_blank" rel="noopener">Grin Node Toolkit</a>, an open-source project you are free to read, audit, clone, fork, and modify. The stratum server, the PPLNS share accounting, the fee calculation and the payout code are all public, so you can verify exactly how your shares become a balance rather than taking our word for it.</p>
+<p>If you would rather not trust any operator — including us — the same toolkit deploys a pool of your own, or a solo-mining setup with no pool at all. Found a bug or a fairness problem? Please open an issue or send a patch; it is the fastest way to get it fixed here and at every other pool running the same code.</p>
 
 <p>Ready to start? See the <a href="/">homepage</a> for connection details, or read the <a href="/page.html?p=faq">FAQ</a>.</p>`,
 
-      terms: `<p class="muted">Last updated: June 2026</p>
+      terms: `<p class="muted">Last updated: July 2026</p>
 <p>These Terms of Service ("Terms") govern your use of the GRINIUM mining pool and its website (the "Service"). By connecting a miner or using the website you agree to these Terms. If you do not agree, do not use the Service.</p>
 
 <h2>1. The Service</h2>
@@ -279,16 +398,20 @@ class PoolSettings {
 
 <h2>2. Identity and accounts</h2>
 <p>The Service does not use registered miner accounts. Your Grin address is your identity: rewards earned by hashpower submitted under an address are credited to, and payable only to, that address. You are solely responsible for the security and correctness of the address you mine to. <strong>Rewards paid to an address you do not control cannot be recovered.</strong></p>
+<p>Because there is no login, self-service money actions (requesting a payout, creating or finalising a Slatepack, registering a payout destination) require a lightweight ownership check: either one of the last two source IP addresses your address has mined from, or the stratum password configured on your rig. Both are stored only as salted hashes. This is an anti-abuse gate, not authentication — it exists so that a stranger reading the public leaderboard cannot move coins you did not ask to move.</p>
 
 <h2>3. Fees and payouts</h2>
 <ul>
-  <li>The pool retains a fee from block rewards (default 1%; the current value is shown on the website).</li>
+  <li>The pool retains a percentage fee from block rewards (default 1%; the current value is shown on the website). It is applied once, when a block's reward matures, and is reversed with the rest of the credit if that block is later orphaned.</li>
+  <li>A flat withdrawal fee (default 0.04 GRIN) is deducted from each payout on every payout method. It covers the sender-paid Grin network transaction fee. It is charged only when a payout is confirmed — a payout that fails is returned to your balance in full. The real network fee actually paid on each payout is published on the <a href="/payment-history.html">Payments &amp; Transparency</a> page.</li>
   <li>Block rewards are credited only after the network coinbase maturity period (1,440 blocks on mainnet) to protect against chain reorganisations.</li>
-  <li>Payouts are subject to a minimum withdrawal threshold (default 5 GRIN), which you may raise for your own address.</li>
+  <li>Payouts are subject to a minimum withdrawal amount (default 25 GRIN; the live value is shown on your Account page). You choose the amount to withdraw, between that minimum and your available balance.</li>
+  <li>One payout request may be pending at a time per address, and a short cooling-off period (default 30 minutes) applies after a payout fails and is refunded.</li>
   <li>If a block is later orphaned by the network, the associated credits are reversed.</li>
 </ul>
 
 <h2>4. Abandoned and unclaimed balances</h2>
+<p><em>This section applies only while the abandoned-balance policy is switched on. It is off by default; whether it is active, the current window, and every balance approaching it are shown on the <a href="/payment-history.html">Payments &amp; Transparency</a> page. While it is off, no balance is ever swept.</em></p>
 <p>Because the pool is custodial between the time a reward is credited and the time it is paid out, an address may accumulate a balance and then stop mining without ever withdrawing it. To keep the pool solvent and its books clean, balances left <strong>completely inactive</strong> — no accepted share and no successful payout — for a prolonged period (by default <strong>24 months</strong>; the current window and a live list of affected balances are shown on the <a href="/payment-history.html">Payments &amp; Transparency</a> page) are treated as <strong>abandoned</strong>.</p>
 <ul>
   <li>An abandoned balance is <strong>swept into the community prize pool</strong>, where it is given away to miners through the pool's published prize draws. <strong>It is never taken by, or paid to, the pool operator.</strong> Sweeps only run while those draws are active, so an abandoned balance is only ever moved into a pool that pays back out to miners. The prize pool's full inflows and outflows are shown publicly on the <a href="/donate.html">Prize Pool</a> page.</li>
@@ -309,44 +432,45 @@ class PoolSettings {
 <h2>8. Changes</h2>
 <p>We may update these Terms or the pool's parameters (fees, thresholds, reward scheme) at any time. Continued use after a change constitutes acceptance.</p>
 
-<!-- TO BE UPDATED: confirm incentive details before publishing -->
 <h2>9. Promotions and incentives</h2>
-<p>Any prize pool, bonus, jackpot, streak reward, or lottery is optional, discretionary, and may be changed, suspended, or withdrawn at any time. Where a draw is offered, its method is intended to be publicly verifiable. <em>(To be updated.)</em></p>
+<p>Any prize pool, bonus, jackpot, streak reward, or draw is optional, discretionary, and may be changed, suspended, or withdrawn at any time. Prizes are paid from the community prize pool, whose inflows and outflows are published on the <a href="/donate.html">Prize Pool</a> page; draws are seeded from a Grin block height and hash so the result can be checked independently. Prizes have no cash value beyond the GRIN credited, and are void where prohibited by local law.</p>
 
 <h2>10. Contact</h2>
 <p>Questions about these Terms can be directed to the pool operator using the contact links in the website footer, or via the Grin forum (<a href="https://forum.grin.mw/u/hellogrin" target="_blank" rel="noopener">hellogrin on forum.grin.mw</a>).</p>`,
 
-      privacy: `<p class="muted">Last updated: June 2026</p>
+      privacy: `<p class="muted">Last updated: July 2026</p>
 <p>This Privacy Policy explains what information the GRINIUM mining pool processes when you mine with us or visit our website. Grin is a privacy-focused cryptocurrency, and we keep data collection to the minimum needed to run the pool.</p>
 
 <h2>What we collect</h2>
 <ul>
   <li><strong>Your Grin address.</strong> Submitted as your stratum username; it is your public mining identity and the destination for your payouts.</li>
-  <li><strong>Worker source IP address.</strong> We record the last one or two IP addresses an address mines from. This powers the ownership check that gates payout settings (so a stranger cannot change your threshold or trigger a withdrawal) and helps us detect abuse.</li>
+  <li><strong>Proof of ownership — stored hashed, never in the clear.</strong> So that only you can move your balance, we keep the last two source IP addresses and the last two stratum passwords your address has mined with. Both are stored as <strong>salted scrypt hashes</strong>: the database holds no readable mining IP and no readable password, and a value can only be checked against a hash you supply yourself. Trivial or factory-default passwords are never recorded.</li>
+  <li><strong>Country, not location.</strong> Where a connecting IP is geolocated at all it is resolved to a <strong>country only</strong> — no city, no coordinates. Country counts feed the public statistics and the network map; the map's data feeds are off unless the operator enables them, and even then a country is only named once enough peers share it.</li>
   <li><strong>Mining metrics.</strong> Shares, hashrate samples, worker names, and reject/stale counts — used to calculate rewards and display statistics.</li>
+  <li><strong>Administrative audit log.</strong> Security-relevant events (admin logins, payout approvals, ownership checks — both accepted and refused) are logged. Any IP recorded there is <strong>truncated to its network block</strong> (/24 for IPv4, /48 for IPv6) rather than stored in full.</li>
   <li><strong>Website analytics &amp; preferences.</strong> Aggregate analytics (e.g. page views) and a locally-stored theme preference.</li>
 </ul>
 
 <h2>What we do NOT collect</h2>
-<p>We do not ask for or store your name, email address, government ID, or any KYC information. There are no miner accounts and no passwords (the stratum "password" field is ignored). We never see or store your wallet's private keys or seed phrase.</p>
+<p>We do not ask for or store your name, email address, government ID, or any KYC information. There are no miner accounts and no login passwords — the stratum password field is not a credential and is never used to sign you in; it is only ever compared as a hash when you ask to move your own coins. We never see or store your wallet's private keys or seed phrase.</p>
 
 <h2>Cookies and analytics</h2>
 <p>The website may use cookies and a third-party analytics provider (such as Google Analytics) to understand aggregate traffic. Your theme choice is stored in your browser's local storage, not on our servers. You can block cookies in your browser without affecting mining.</p>
 
 <h2>Data retention</h2>
-<p>Raw share data is kept only for the duration of the reward (PPLNS) window and then pruned; hashrate history is downsampled over time. Financial records (balances and payouts) are retained for accounting and audit integrity.</p>
+<p>Raw share data is kept only for the duration of the reward (PPLNS) window and then pruned. Per-miner hashrate history is kept for around 100 days and downsampled into durable aggregates. Detailed ledger rows are rolled up into daily totals after about 60 days. The administrative audit log is kept for about 180 days. Financial records (balances and payouts) are retained for accounting and audit integrity. These windows are operator-configurable; the values above are the shipped defaults.</p>
 
 <h2>Third parties</h2>
-<p>Payouts are delivered over the <strong>Tor network</strong> to your address; routing is handled by Tor, not by us. Analytics data is processed by the analytics provider under their own privacy policy. We do not sell or rent your data.</p>
+<p>Payouts are delivered over the <strong>Tor network</strong> to your address; routing is handled by Tor, not by us. A Slatepack payout involves no third party at all. Analytics data is processed by the analytics provider under their own privacy policy. We do not sell or rent your data.</p>
+<p>A future payout route delivering to a <strong>Goblin wallet over Nostr</strong> is in development. It would relay your payout as an encrypted message through public Nostr relays — third parties operating under their own terms. It is not enabled, nothing is sent to any relay today, and this policy will be updated before it is.</p>
 
-<!-- TO BE UPDATED: confirm incentive details before publishing -->
 <h2>Incentives and the fortune board</h2>
-<p>If optional incentives are enabled, winning Grin addresses (often in shortened form) and prize amounts may be shown publicly on the fortune board. No other personal information is published. <em>(To be updated.)</em></p>
+<p>Where optional incentives are enabled, winning Grin addresses are published in shortened (masked) form alongside the prize amount on the public fortune board, and prize-pool inflows and outflows are published on the Prize Pool page. Where the abandoned-balance policy is enabled, balances approaching that deadline are listed in masked form on the Payments &amp; Transparency page so an owner can recognise their own. No other personal information is published.</p>
 
 <h2>Your control</h2>
 <p>Because mining is address-based and pseudonymous, you can stop participating at any time by disconnecting your miner. To ask about data tied to your address, contact the operator via the footer contact links or the Grin forum (<a href="https://forum.grin.mw/u/hellogrin" target="_blank" rel="noopener">hellogrin on forum.grin.mw</a>).</p>`,
 
-      faq: `<p class="muted">Last updated: June 2026</p>
+      faq: `<p class="muted">Last updated: July 2026</p>
 
 <h2>What is GRINIUM?</h2>
 <p>GRINIUM is a mining pool for Grin (GRIN). We combine many miners' hashpower to find blocks more steadily and share the rewards.</p>
@@ -358,36 +482,62 @@ class PoolSettings {
 <p>Point your miner at the nearest region's stratum endpoint (shown on the homepage), using:</p>
 <ul>
   <li><strong>Username:</strong> <code>your_grin_address.worker_name</code> (e.g. <code>grin1abc….rig1</code>)</li>
-  <li><strong>Password:</strong> anything — it is ignored.</li>
+  <li><strong>Password:</strong> a private string of <strong>at least 8 characters</strong> — use the <em>same</em> one on every rig. It is not a login, but it is one of the two ways you can later prove the address is yours, so don't leave it as <code>x</code> or <code>123</code>.</li>
   <li><strong>Port:</strong> the stratum port on the homepage (default 3333), the same across all regions.</li>
 </ul>
-<p>Grin-capable ASICs (the iPollo G1 and G1 mini) are configured in their own web interface; GPU miners need a Cuckatoo32-capable miner and a card with more than 8&nbsp;GB of VRAM.</p>
+<p>Grin-capable ASICs (the iPollo G1 and G1 mini) are configured in their own web interface; GPU miners need a Cuckatoo32-capable miner and a card with at least 11&nbsp;GB of VRAM.</p>
+
+<h2>Isn't the stratum password ignored?</h2>
+<p>It used to be. It is still never a login — you cannot use it to sign in anywhere, and no account exists — but the pool now records it (as a salted hash) alongside your recent mining IP addresses, and accepts either one as proof that you control the address when you ask to move your coins. That matters because IP addresses change: a router reboot, an ISP re-lease, switching to mobile data or moving the rig all give you a new one, and only your last two are kept. A password you chose survives all of that.</p>
+
+<h2>What makes a valid rig password?</h2>
+<p>Any private string of <strong>8 to 128 characters</strong>. A password that breaks these rules is <strong>silently not recorded</strong> — mining still works normally and you keep earning, but that address is left relying on IP proof alone, which you will only notice on the day you try to withdraw. Refused values:</p>
+<ul>
+  <li>Anything <strong>shorter than 8 characters</strong> — short enough to guess offline.</li>
+  <li>A <strong>single character repeated</strong>, of any length (<code>x</code>, <code>xxxx</code>, <code>1111111111</code>).</li>
+  <li><strong>Known factory defaults</strong> such as <code>123456</code> or <code>password</code>. Thousands of rigs ship with the same value, so accepting one would hand a single skeleton key to every address using it.</li>
+  <li>Anything starting with <code>d=</code> — some miners put a difficulty request like <code>d=32</code> in the password field. That is a mining instruction, not a secret, so it is never treated as one.</li>
+</ul>
+<p>Use the same password on every rig, and check the ownership section of your <a href="/account-settings.html">Account</a> page — it shows whether your current password was accepted and recorded. Changing it is safe: the last two are both accepted, so a rotation never locks you out.</p>
 
 <h2>What does it cost?</h2>
-<p>The pool fee is 1% by default (the live value is on the homepage). There are no hidden charges.</p>
+<p>Two charges, both published on the site and neither hidden:</p>
+<ul>
+  <li>A <strong>pool fee</strong>, 1% by default (the live value is on the homepage), taken from block rewards when they mature.</li>
+  <li>A <strong>flat withdrawal fee</strong>, 0.04&nbsp;GRIN by default, deducted from each payout on every method. It covers the Grin network transaction fee the pool pays to send your coins; the real per-payout chain fee is published on the <a href="/payment-history.html">Payments &amp; Transparency</a> page. Your Account page shows the exact net amount before you confirm, and the fee is charged only if the payout succeeds.</li>
+</ul>
 
 <h2>How are rewards calculated?</h2>
 <p>By default the pool uses <strong>PPLNS</strong> (Pay-Per-Last-N-Shares): when the pool finds a block, the reward is split across the most recent shares, so consistent miners earn their fair share and the scheme resists pool-hopping.</p>
 
 <h2>When and how do I get paid?</h2>
-<p>A found block must mature (1,440 blocks on mainnet) before its reward is credited — this protects against chain reorganisations. Once your balance reaches the minimum payout (5 GRIN by default), you request a withdrawal from the <a href="/account-settings.html">Account</a> page. Two payout methods are available, and both confirm you own the address by checking it against one of the last two IP addresses you have mined from:</p>
+<p>A found block must mature (1,440 blocks on mainnet) before its reward is credited — this protects against chain reorganisations. Once your balance reaches the minimum payout (25 GRIN by default; the live value is on your Account page), you request a withdrawal from the <a href="/account-settings.html">Account</a> page. Every method first confirms you own the address, using either a recent mining IP address or your rig's stratum password:</p>
 <ul>
-  <li><strong>Tor (automatic):</strong> the pool sends your payout to your address over the Tor network.</li>
-  <li><strong>Slatepack (interactive):</strong> the pool produces an encrypted Slatepack that only your wallet can receive and finalise.</li>
+  <li><strong>Tor (automatic):</strong> the pool sends your payout to your address over the Tor network. Your wallet listener has to be reachable — the pool checks before locking any funds and tells you if it cannot reach you.</li>
+  <li><strong>Slatepack (interactive):</strong> the pool produces an encrypted Slatepack that only your wallet can receive and finalise. No listener required.</li>
 </ul>
+<p class="muted">A third route — delivery straight into a <strong>Goblin wallet over Nostr</strong>, by username instead of by address — is <strong>in development</strong> and not yet available. It will appear as an extra option on the Account page if and when the operator switches it on.</p>
 
-<h2>Can I set my own minimum payout?</h2>
-<p>Yes. From the Account page you can raise your personal payout threshold above the pool minimum (it can be raised, not lowered). Changing payout settings requires a quick ownership check against an IP you have recently mined from.</p>
+<h2>Can I choose how much to withdraw?</h2>
+<p>Yes. You enter the amount on the Account page — anything from the pool minimum up to your available balance, with shortcut chips for both ends. (The old per-address payout threshold has been retired in favour of choosing an amount at the moment you withdraw.) You can have one payout pending at a time.</p>
+
+<h2>My payout failed. What now?</h2>
+<p>The full amount, including the withdrawal fee, returns to your balance automatically — there is nothing to claim back. A short cooling-off period (30 minutes by default) applies before your next request on any method, so a rig that is offline or unreachable does not burn repeated attempts. The usual cause is a Tor wallet listener that is not running; a Slatepack payout works without one.</p>
+
+<h2>My balance is below the minimum and I want to stop mining.</h2>
+<p>Contact the operator using the footer links or the Grin forum. After verifying you control the address, the operator can arrange a manual payout.</p>
 
 <h2>What happens if a block is orphaned?</h2>
 <p>If a block we found is later orphaned by the network, the credits from that block are reversed. This is normal and rare.</p>
 
 <h2>Is mining anonymous?</h2>
-<p>Grin is built on Mimblewimble, so on-chain data is private. We require no personal information, and payouts travel over Tor. See our <a href="/page.html?p=privacy">Privacy Policy</a> for details.</p>
+<p>Grin is built on Mimblewimble, so on-chain data is private. We require no personal information, there is no account to create, and the default payout route runs over Tor. What little we do keep to protect your balance — recent mining IPs and your rig password — is stored only as salted hashes. See our <a href="/page.html?p=privacy">Privacy Policy</a> for details.</p>
 
-<!-- TO BE UPDATED: confirm incentive details before publishing -->
 <h2>Are there prizes or bonuses?</h2>
-<p>GRINIUM may offer optional extras such as a prize pool, jackpots, loyalty streaks, and a lottery with a publicly verifiable draw. When these are enabled, results appear on the fortune board. <em>(To be updated.)</em></p>
+<p>Optionally, yes. The operator can enable a community <a href="/donate.html">prize pool</a>, a block-finder jackpot, loyalty streaks, and prize draws. Draws are seeded from a Grin block height and hash, so anyone can check the result was not chosen after the fact. Whatever is live shows up on the <a href="/fortune-board.html">fortune board</a>, with winning addresses shown in shortened form.</p>
+
+<h2>What if I stop mining and leave a balance behind?</h2>
+<p>If the operator has enabled the abandoned-balance policy, a balance with no mining, no payout and no withdrawal request for a long period (24 months by default) is swept into the community prize pool and given back out to miners through the draws — never to the operator, and the sweep is final. Requesting a payout at any point before then resets your clock. The policy is off by default; whether it is running, and every balance nearing the deadline, are listed on the <a href="/payment-history.html">Payments &amp; Transparency</a> page, and your Account page shows your own countdown.</p>
 
 <h2>I need help.</h2>
 <p>Check the connection details on the homepage, post on the Grin forum (<a href="https://forum.grin.mw/u/hellogrin" target="_blank" rel="noopener">hellogrin on forum.grin.mw</a>), or use the contact links in the footer.</p>`,
@@ -417,7 +567,12 @@ class PoolSettings {
       streak_max_percent: 5.0,               // cap
       // Lottery
       lottery_enabled: 'false',
-      lottery_weekly_enabled: 'true',
+      // Recurring weekly draw. OFF by default: `lottery_enabled` is the master switch for
+      // contest campaigns too (runDueCampaigns), so an operator who turns the lottery on
+      // purely to run an occasion contest would otherwise also arm a weekly draw that pays
+      // out lottery_pot_fraction_percent (100 by default) of the whole prize pool. Turn this
+      // on deliberately if you want a recurring cadence rather than one-off contests.
+      lottery_weekly_enabled: 'false',
       lottery_pot_share_weighted_percent: 50,  // Pot A: tickets ∝ sustained work (hashrate_history)
       lottery_pot_equal_chance_percent: 50,    // Pot B: one entry per qualifying address
       lottery_min_shares: 10,                  // legacy gate (unused since eligibility moved to
@@ -470,7 +625,10 @@ class PoolSettings {
     },
   };
 
-  // Fixed display titles for the content pages (keys match the `pages` section).
+  // Fixed display titles for the five LEGACY content pages only — it predates the CMS and
+  // nothing reads it any more (titles live in the `pages` table). Do NOT add newer shipped
+  // pages here expecting them to pick up a title: they carry their own in db.js
+  // seedShippedPages(), so this map no longer mirrors the `pages` defaults section.
   static pageTitles = {
     about: 'About',
     terms: 'Terms of Service',
@@ -647,6 +805,15 @@ class PoolSettings {
         if (isNaN(n) || n <= 0) throw new Error('min_withdrawal must be > 0');
         return n;
       },
+      // Upper bound is a sanity rail, not a policy: a fat-fingered 40 instead of 0.04 would
+      // silently swallow a whole payout. The hard invariant (fee < min_withdrawal) is enforced
+      // in validateConfig, which sees BOTH values — a per-field validator only sees its own.
+      withdrawal_fee: (val) => {
+        const n = parseFloat(val);
+        if (isNaN(n) || n < 0) throw new Error('withdrawal_fee must be >= 0');
+        if (n > 1) throw new Error('withdrawal_fee must be <= 1 GRIN (typical network fee is ~0.023)');
+        return n;
+      },
       payout_frequency: (val) => {
         if (!['manual', 'hourly', 'daily', 'weekly'].includes(val)) throw new Error('invalid payout_frequency');
         return val;
@@ -725,9 +892,26 @@ class PoolSettings {
       },
     },
     access: {
+      // Max 24 h, matching the ceiling auth.js _sessionPolicy() clamps to. This is a security
+      // bound: the idle window is also the access-token TTL, and access tokens are not checked
+      // against token_version, so nothing (logout, revoke-sessions, password change) can kill
+      // a live one before it expires. Allowing 168 h here meant a week of unrevocable admin
+      // access — and a value above 24 would silently be ignored by the clamp anyway, which is
+      // worse than refusing it.
       session_timeout_hours: (val) => {
         const n = parseInt(val, 10);
-        if (isNaN(n) || n < 1 || n > 168) throw new Error('session_timeout_hours must be 1-168');
+        if (isNaN(n) || n < 1 || n > 24) throw new Error('session_timeout_hours must be 1-24');
+        return n;
+      },
+      // Cap on total session age. Cannot be validated against session_timeout_hours here —
+      // updateSection validates one key at a time and either may arrive first — so auth.js
+      // raises the cap to the idle window if an operator sets them the wrong way round.
+      // Max 168 h (7 days) = the refresh token's own lifetime, which is the real outer bound.
+      // A larger value could never take effect: the refresh JWT would expire first and the
+      // session would end at 7 days while the panel claimed otherwise.
+      session_absolute_hours: (val) => {
+        const n = parseInt(val, 10);
+        if (isNaN(n) || n < 1 || n > 168) throw new Error('session_absolute_hours must be 1-168');
         return n;
       },
       // Accepts a JSON array or a comma/newline-separated list; normalises to a deduped
@@ -939,7 +1123,8 @@ class PoolSettings {
         // can't be grepped for an address by harvesters; the frontend decodes them and
         // assembles the mailto: only on user interaction. See branding.js decodeEmail().
         contact_email_enc: b64(pool.contact_email),
-        homepage_banner: pool.homepage_banner || '',
+        // `homepage_banner` was published here until 2026-07-27 and nothing ever rendered
+        // it. Banners come from `announcements` further down (getActiveBanners()).
         visibility: pool.pool_visibility || 'public',
         public_stratum_host: pool.public_stratum_host || '',
         founded_year: pool.founded_year || '',
@@ -1210,6 +1395,20 @@ class PoolSettings {
     }
     if (payout.min_withdrawal !== undefined) {
       config.min_withdrawal = payout.min_withdrawal;
+    }
+    if (payout.withdrawal_fee !== undefined) {
+      config.withdrawal_fee = payout.withdrawal_fee;
+    }
+    // Cross-field guard, applied AFTER both are merged. The per-field validator can't see the
+    // other value, and lowering min_withdrawal on its own can strand an already-stored fee above
+    // the new floor. A fee >= the floor makes an at-minimum payout net <= 0, so fall back to
+    // absorbing it rather than letting the scheduler reject every threshold withdrawal.
+    if (!(config.withdrawal_fee >= 0) || config.withdrawal_fee >= config.min_withdrawal) {
+      console.warn(
+        `[settings] withdrawal_fee ${config.withdrawal_fee} is invalid against min_withdrawal ` +
+        `${config.min_withdrawal} — falling back to 0 (pool absorbs the network fee)`
+      );
+      config.withdrawal_fee = 0;
     }
     if (payout.max_pending_withdrawals !== undefined) {
       config.max_pending_withdrawals = payout.max_pending_withdrawals;

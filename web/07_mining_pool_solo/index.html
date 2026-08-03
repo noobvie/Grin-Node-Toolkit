@@ -1346,9 +1346,9 @@
         fmtBtc(p.btc != null ? totalGrin * p.btc : null)
       ].filter(Boolean);
       if (fiat.length) {
-        var srcName = (p.source === 'nonlogs') ? 'nonlogs.io' : 'CoinGecko';
+        var srcName = (p.source === 'gate.io') ? 'Gate.io' : 'CoinGecko';
         var tip = 'Total mined = blocks × 60 GRIN. Price via ' + srcName
-                + ' — source: CoinGecko (primary), nonlogs.io (fallback).';
+                + ' — source: CoinGecko (primary), Gate.io (fallback).';
         sumHtml += ' <span class="fiat">≈ ' + fiat.join(' · ')
                  + '<span class="src-info" title="' + esc(tip) + '" tabindex="0" role="img" aria-label="' + esc(tip) + '">ⓘ</span></span>';
       }

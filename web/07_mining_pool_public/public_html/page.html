@@ -3,11 +3,15 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <!-- The real <title> + description + og:* for a given ?p=<key> are injected SERVER-side
-       (index.js "/page.html" route, proxied by nginx) — a crawler never sees this default.
-       It only shows for the instant before the client script resolves, so it must still be
-       a real name and not "Loading…", which is what a browser tab and a bookmark used to
-       get. Favicon here rather than in the injected head: it never varies per page. -->
+  <!-- The real title, description and og tags for a given ?p=key are injected SERVER-side
+       (index.js "/page.html" route, proxied by nginx), and the server REPLACES the title
+       element below — a crawler never sees this default. It only shows for the instant
+       before the client script resolves, so it must still be a real name and not
+       "Loading…", which is what a browser tab and a bookmark used to get. Favicon here
+       rather than in the injected head: it never varies per page.
+       Keep tag syntax OUT of this comment: the server locates the title element by
+       pattern, and a literal one written here once made it delete this comment's opening,
+       which silently commented out every stylesheet link below. -->
   <title>GRINIUM Mining Pool</title>
   <link rel="icon" type="image/svg+xml" href="/images/favicon.svg">
   <link rel="stylesheet" href="/css/dashboard.css">
@@ -20,6 +24,18 @@
     .content a { color: var(--accent); }
     .content img { max-width: 100%; height: auto; }
     .muted { color: var(--text-dim); }
+    /* Index shown when no ?p= key was given, or the key does not resolve. Without it the
+       page was a dead end: "This page is not available" and a single link home, with no
+       hint that About/Terms/Privacy/FAQ exist at all. */
+    .page-index { list-style: none; padding: 0; margin: 1.25rem 0 1.5rem; display: grid; gap: .6rem; }
+    /* The global `a:hover { text-decoration: underline }` in dashboard.css outranks a
+       plain `text-decoration: none` here (the :hover adds specificity), so undo it on
+       hover too — otherwise the whole row underlines and reads as broken. */
+    .page-index a { display: block; padding: .8rem 1rem; border: 1px solid var(--border);
+      border-radius: 8px; background: var(--bg-elev); text-decoration: none;
+      transition: border-color .15s, color .15s; }
+    .page-index a:hover, .page-index a:focus-visible {
+      text-decoration: none; border-color: var(--accent); color: var(--accent); }
   </style>
   <link rel="stylesheet" href="/css/themes.css">
 </head>
@@ -45,12 +61,14 @@
     (function () {
       var params = new URLSearchParams(location.search);
       var key = (params.get('p') || '').replace(/[^a-z0-9_-]/gi, '');
-      if (!key) { renderMissing(); return; }
+      // No ?p= at all: this is the bare shell, not a missing page. Say so, and list what
+      // is published rather than pretending the visitor asked for something that is gone.
+      if (!key) { renderMissing(false); return; }
 
       fetch('/api/public/page/' + encodeURIComponent(key))
         .then(function (r) { return r.ok ? r.json() : null; })
         .then(function (json) {
-          if (!json || !json.data) { renderMissing(); return; }
+          if (!json || !json.data) { renderMissing(true); return; }
           // Skip when the server rendered the head: its title is "<page> — <pool>" (and may
           // use the page's seo_title override), which the bare title here would undo.
           if (!document.querySelector('meta[name="server-seo"]')) document.title = json.data.title;
@@ -61,12 +79,51 @@
           // Set the page key so per-page SEO overrides can target it.
           document.documentElement.setAttribute('data-page', 'page-' + key);
         })
-        .catch(renderMissing);
+        .catch(function () { renderMissing(true); });
 
-      function renderMissing() {
-        document.title = 'Page not found';
-        document.getElementById('page-title').textContent = 'Page not found';
-        document.getElementById('page-body').innerHTML = '<p class="muted">This page is not available. <a href="/">Return home</a>.</p>';
+      // hadKey = the visitor asked for a specific page that did not resolve (renamed,
+      // unpublished, or mistyped). false = they hit /page.html with no key. Either way the
+      // body becomes an index of the published pages, fetched from the same list the
+      // footer links are built from, so this is never a dead end.
+      function renderMissing(hadKey) {
+        var title = hadKey ? 'Page not found' : 'Pages';
+        // Mirrors the success path: the server already rendered a matching title when it
+        // handled this request, so only set it on the legacy/no-server-head route.
+        if (!document.querySelector('meta[name="server-seo"]')) document.title = title;
+        var t = document.getElementById('page-title');
+        t.textContent = title;
+        t.classList.remove('muted');
+        var body = document.getElementById('page-body');
+        var intro = document.createElement('p');
+        intro.className = 'muted';
+        intro.textContent = hadKey
+          ? 'That page is not available — it may have been renamed or unpublished.'
+          : 'These are the pages published on this site.';
+        body.innerHTML = '';
+        body.appendChild(intro);
+
+        var home = document.createElement('p');
+        home.innerHTML = '<a href="/">Return home</a>';
+
+        fetch('/api/public/pages')
+          .then(function (r) { return r.ok ? r.json() : null; })
+          .then(function (json) {
+            var list = (json && json.data) || [];
+            if (!list.length) { body.appendChild(home); return; }
+            var ul = document.createElement('ul');
+            ul.className = 'page-index';
+            list.forEach(function (p) {
+              var li = document.createElement('li');
+              var a = document.createElement('a');
+              a.href = '/page.html?p=' + encodeURIComponent(p.key);
+              a.textContent = p.title;
+              li.appendChild(a);
+              ul.appendChild(li);
+            });
+            body.appendChild(ul);
+            body.appendChild(home);
+          })
+          .catch(function () { body.appendChild(home); });
       }
     })();
   </script>

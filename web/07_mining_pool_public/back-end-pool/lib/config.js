@@ -52,6 +52,14 @@ function mergeEnvVars(config) {
     jwt_secret: config.jwt_secret || process.env.JWT_SECRET || '',
     pool_fee_percent: config.pool_fee_percent !== undefined ? config.pool_fee_percent : 1.0,
     min_withdrawal: config.min_withdrawal !== undefined ? config.min_withdrawal : 25.0,
+    // Flat withdrawal fee (GRIN) deducted from every payout, on every rail. Recovers the
+    // on-chain network fee, which Grin charges the SENDER (the pool) by transaction WEIGHT,
+    // not by amount — roughly `(inputs + 21*outputs + 3*kernels) * 0.0005`, so ~0.023 GRIN for
+    // a typical 1-in/2-out/1-kernel payout regardless of size. Without this the cost lands
+    // entirely on the pool and scales with payout COUNT, so it eats a bigger share of the 1%
+    // pool fee the lower min_withdrawal goes (~9% of fee income at 25 GRIN, ~23% at 10).
+    // 0.04 leaves headroom for a multi-input sweep (10 inputs ≈ 0.0275). Set 0 to absorb it.
+    withdrawal_fee: config.withdrawal_fee !== undefined ? config.withdrawal_fee : 0.04,
     // Cross-rail wait after a reversed payout before the miner can request another (0 disables).
     withdrawal_cooldown_minutes: config.withdrawal_cooldown_minutes !== undefined ? config.withdrawal_cooldown_minutes : 30,
 
@@ -214,6 +222,14 @@ function validateConfig(config) {
 
   if (config.min_withdrawal <= 0) {
     throw new Error(`Invalid min_withdrawal: ${config.min_withdrawal}`);
+  }
+
+  // Must be non-negative and strictly below the floor — a fee >= min_withdrawal would make an
+  // at-minimum payout net zero or negative, i.e. every miner at the threshold is unpayable.
+  if (!(config.withdrawal_fee >= 0) || config.withdrawal_fee >= config.min_withdrawal) {
+    throw new Error(
+      `Invalid withdrawal_fee: ${config.withdrawal_fee} (must be >= 0 and < min_withdrawal ${config.min_withdrawal})`
+    );
   }
 }
 

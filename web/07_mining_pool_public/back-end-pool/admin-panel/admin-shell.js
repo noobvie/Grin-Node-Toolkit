@@ -823,6 +823,178 @@
   window.addEventListener('scroll', tipHide, true);
   window.addEventListener('resize', tipHide);
 
+  // ── Idle session manager (window.AdminSession) ──────────────────────────
+  // Started by API.guardAdminPage once /api/admin/me confirms the session, with the policy
+  // that endpoint returns. Two jobs:
+  //   1. Keep an ACTIVE operator signed in — silently refresh the token while they work, so
+  //      the hour stops being "an hour since you logged in" and becomes "an hour idle".
+  //   2. Sign out an INACTIVE one, on the client, with an explicit reason.
+  //
+  // "Activity" is real user interaction (pointer/key/touch/wheel), NEVER request traffic.
+  // Several admin pages poll on a timer (health.html every 30 s, AdminTable refreshes), so a
+  // traffic-driven window would never close while a tab sat open on the dashboard — the
+  // timeout would exist on paper only. The server enforces the same window independently as
+  // the access-token TTL, so a closed, stale or hostile client changes nothing.
+  var AS = {
+    idleMs: 3600000,
+    absMs: 43200000,
+    startedAt: 0,        // ms epoch of the real login (from the token's sst), skew-corrected
+    skewMs: 0,           // clientClock - serverClock; see startSession, reused by refreshToken
+    lastAct: 0,
+    lastRefresh: 0,
+    timer: null,
+    started: false,
+    // Cross-tab activity. Without this, working in tab A while tab B sits idle lets B hit its
+    // timeout and call /api/auth/logout — which revokes the tokens tab A is actively using,
+    // logging the operator out of the tab they're typing in.
+    ACT_KEY: 'grinpool_admin_last_act',
+    REF_KEY: 'grinpool_admin_last_refresh'
+  };
+
+  function nowMs() { return Date.now(); }
+
+  function lsGet(k) {
+    try { return parseInt(window.localStorage.getItem(k) || '0', 10) || 0; } catch (e) { return 0; }
+  }
+  function lsSet(k, v) {
+    try { window.localStorage.setItem(k, String(v)); } catch (e) { /* private mode / quota */ }
+  }
+
+  // Most recent interaction in ANY admin tab.
+  function lastActivity() {
+    return Math.max(AS.lastAct, lsGet(AS.ACT_KEY));
+  }
+  function lastRefreshAt() {
+    return Math.max(AS.lastRefresh, lsGet(AS.REF_KEY));
+  }
+
+  function noteActivity() {
+    var t = nowMs();
+    // Throttle: pointermove fires continuously. One localStorage write per 5 s is plenty for
+    // cross-tab purposes and keeps this off the hot path.
+    if (t - AS.lastAct < 5000) { AS.lastAct = t; return; }
+    AS.lastAct = t;
+    lsSet(AS.ACT_KEY, t);
+  }
+
+  function signOut(reason) {
+    if (AS.timer) { window.clearInterval(AS.timer); AS.timer = null; }
+    AS.started = false;
+    var go = function () { window.location.href = '/login.html?reason=' + encodeURIComponent(reason); };
+    // Revoke server-side, then leave. Navigate even if the call fails — a client that can't
+    // reach the server must still stop showing the panel.
+    try {
+      window.fetch('/api/auth/logout', { method: 'POST', credentials: 'include' })
+        .then(go, go);
+    } catch (e) { go(); }
+  }
+
+  function refreshToken() {
+    var t = nowMs();
+    AS.lastRefresh = t;
+    lsSet(AS.REF_KEY, t);
+    window.fetch('/api/auth/refresh', { method: 'POST', credentials: 'include' })
+      .then(function (res) {
+        if (res.status === 401) {
+          // Two very different cases. session_expired = the absolute cap is reached and no
+          // token will ever be issued again, so stop and say why. Anything else is most
+          // likely a lost multi-tab rotation race (the sibling tab rotated token_version
+          // first and installed a good cookie we now share) — ignore it and let the next
+          // real request decide, rather than logging the operator out over a race.
+          return res.json().then(function (b) {
+            if (b && b.session_expired) signOut('expired');
+          }, function () { /* non-JSON 401 → ignore, see above */ });
+        }
+        if (!res.ok) return;   // transient (429/5xx) — try again next tick
+        return res.json().then(function (b) {
+          // Same skew correction as startSession — this value is in the server's clock.
+          if (b && b.session_started_at) AS.startedAt = b.session_started_at * 1000 + AS.skewMs;
+          if (b && b.session_absolute_seconds) AS.absMs = b.session_absolute_seconds * 1000;
+        }, function () { /* body optional */ });
+      }, function () { /* offline — next tick */ });
+  }
+
+  function tick() {
+    if (!AS.started) return;
+    var t = nowMs();
+    var idleFor = t - lastActivity();
+
+    if (idleFor >= AS.idleMs) { signOut('idle'); return; }
+    if (AS.startedAt && (t - AS.startedAt) >= AS.absMs) { signOut('expired'); return; }
+
+    // Refresh only while genuinely in use: there must have been interaction since the last
+    // refresh, and we space them out. An idle tab therefore issues no traffic at all and its
+    // token is allowed to die — which is the whole point.
+    var since = lastRefreshAt();
+    var spacing = Math.max(60000, Math.floor(AS.idleMs / 6));
+    if (lastActivity() > since && (t - since) >= spacing) refreshToken();
+  }
+
+  function startSession(policy) {
+    if (AS.started) return;
+    policy = policy || {};
+    var idle = Number(policy.idle_seconds);
+    var abs = Number(policy.absolute_seconds);
+    if (isFinite(idle) && idle >= 60) AS.idleMs = idle * 1000;
+    if (isFinite(abs) && abs >= 60) AS.absMs = abs * 1000;
+    // started_at comes from the token, not from page load: reloading a page mid-session must
+    // not reset the absolute cap. Correct for clock skew using the server's own `now`.
+    // Keep the skew: the refresh response also reports session_started_at in SERVER seconds,
+    // and applying it raw there would throw this correction away. A workstation clock hours
+    // off would then compute a bogus session age and force an "expired" sign-out mid-shift.
+    AS.skewMs = policy.now ? (nowMs() - policy.now * 1000) : 0;
+    if (policy.started_at) AS.startedAt = policy.started_at * 1000 + AS.skewMs;
+    AS.started = true;
+    // Landing on an admin page IS activity: the operator navigated here, and reaching this
+    // point means the SERVER already accepted the token (guardAdminPage would have bounced to
+    // /login.html otherwise). So a stale shared stamp is not evidence of an expired session —
+    // the server is the boundary, and it can't be: this code isn't running while tabs are shut.
+    AS.lastAct = nowMs();
+    lsSet(AS.ACT_KEY, AS.lastAct);
+    // Seed the refresh clock from the shared stamp. Without this, lastRefreshAt() is 0 on
+    // every page load, so the first tick 30 s later always burns a token rotation — six pages
+    // of normal navigation would mean six pointless rotations (and six chances to lose a
+    // multi-tab race). Absent stamp = this session was just minted, so `now` is correct; a
+    // stale stamp (came back after a while) correctly triggers a refresh on the first tick.
+    if (!lastRefreshAt()) lsSet(AS.REF_KEY, AS.lastAct);
+
+    ['pointerdown', 'keydown', 'touchstart', 'wheel', 'pointermove'].forEach(function (ev) {
+      window.addEventListener(ev, noteActivity, { passive: true, capture: true });
+    });
+    // Becoming visible again is NOT interaction — it only means "evaluate now".
+    //
+    // This handler used to stamp AS.lastAct before calling tick(), which defeated the whole
+    // feature: an idle admin panel is normally a BACKGROUNDED tab, so the sequence
+    // hide → 3 h → show reset the idle clock to zero, tick() then saw idleFor = 0, and the
+    // "there was interaction since the last refresh" test passed on the stamp it had just
+    // written — so returning to the tab silently RENEWED the session instead of ending it.
+    // Verified: 5 h of nothing but switching away and back produced 10 refreshes and no
+    // sign-out, and it also renewed the server's access token, so the server-side TTL
+    // backstop was defeated too.
+    //
+    // A genuinely returning operator credits themselves within moments (moving the pointer
+    // onto the page fires pointermove), so nothing is lost by not guessing on their behalf.
+    document.addEventListener('visibilitychange', function () {
+      if (!document.hidden) tick();
+    });
+
+    AS.timer = window.setInterval(tick, 30000);
+  }
+
+  window.AdminSession = {
+    start: startSession,
+    // Exposed for the session banner on users.html and for debugging.
+    state: function () {
+      return {
+        started: AS.started,
+        idle_seconds: Math.round(AS.idleMs / 1000),
+        absolute_seconds: Math.round(AS.absMs / 1000),
+        idle_for_seconds: Math.round((nowMs() - lastActivity()) / 1000),
+        session_age_seconds: AS.startedAt ? Math.round((nowMs() - AS.startedAt) / 1000) : null
+      };
+    }
+  };
+
   // Body already parsed up to this script (end of <body>), so mount now.
   if (document.querySelector('main')) {
     mount();

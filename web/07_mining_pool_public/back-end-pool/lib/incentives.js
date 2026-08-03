@@ -360,5 +360,8 @@ class IncentivesManager {
 
 IncentivesManager.RESERVED_ADDRESSES = RESERVED_ADDRESSES;
 IncentivesManager.PRIZE_POOL = PRIZE_POOL;
+// Exported so the withdrawal scheduler can credit the flat payout fee to the same
+// pseudo-address the block-reward fee uses, without re-declaring the literal.
+IncentivesManager.POOL_FEE = POOL_FEE;
 
 module.exports = IncentivesManager;

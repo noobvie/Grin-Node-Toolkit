@@ -15,7 +15,7 @@
 #  NOT email/SMTP — it is a small HTTP(S) service (Node + Express + SQLite)
 #  behind nginx, holding encrypted slates keyed by slatepack address. The
 #  server is WALLETLESS (pure ciphertext queue); the poll AGENT runs next to
-#  a grin-wallet (combined owner_api listener, the 052/07 model) and does all
+#  a grin-wallet (combined owner_api listener, the 059/07 model) and does all
 #  crypto at the edge.
 #
 #  Phase 1 scope (standalone — no Drop/pool wiring, per 2026-07-11 decision):

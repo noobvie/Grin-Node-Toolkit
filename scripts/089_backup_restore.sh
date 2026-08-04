@@ -45,7 +45,7 @@
 #   · /opt/grin/node/*/chain_data/     (re-sync via script 01)
 #   · /opt/grin/bin/grin               (re-download via script 01)
 #   · /var/www/                        (re-deployed by nginx setup scripts)
-#   · server/, public_html/, grin-wallet binary  (re-deployed by 052)
+#   · server/, public_html/, grin-wallet binary  (re-deployed by 059)
 # =============================================================================
 
 set -euo pipefail
@@ -506,7 +506,7 @@ run_backup() {
         echo "  /opt/grin/node/*/chain_data/  (re-sync via script 01)"
         echo "  /opt/grin/bin/grin            (re-download via script 01)"
         echo "  /var/www/                     (re-deployed by toolkit scripts)"
-        echo "  server/, public_html/         (re-deployed by script 052)"
+        echo "  server/, public_html/         (re-deployed by script 059)"
     } > "$manifest_file"
 
     # Write crontabs to staging area
@@ -1144,7 +1144,7 @@ run_restore() {
     echo -e "  · Chain data will re-sync automatically, or use ${BOLD}Script 03${RESET} to stream it"
     echo -e "  · If stats.db was restored, resume the stats cron — no re-crawl needed"
     echo -e "  · If GrinScan / solo-mining DBs were restored, (re)start those services to pick them up"
-    echo -e "  · If Grin Drop was restored, restart services via ${BOLD}Script 052 → menu${RESET}"
+    echo -e "  · If Grin Drop was restored, restart services via ${BOLD}Script 059 → menu${RESET}"
     if [[ "$_floonet_restored" == true ]]; then
         echo -e "  · Re-run ${BOLD}Script 091${RESET} to (re)install the relay binary/service — your restored"
         echo -e "    config + NIP-05 usernames are preserved; repoint the domain's DNS + re-issue SSL"

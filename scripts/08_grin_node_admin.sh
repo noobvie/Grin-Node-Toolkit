@@ -512,7 +512,7 @@ _install_toolkit_logrotate() {
 /opt/grin/logs/cron_clean_txhashset.log
 /opt/grin/logs/cron_nginx.log
 /opt/grin/logs/cron_ssh.log
-# Backup engines (Script 052 / solo / offsite push)
+# Backup engines (Script 059 / solo / offsite push)
 /opt/grin/logs/solo-backup.log
 /opt/grin/logs/drop-backup.log
 /opt/grin/logs/backup-push.log

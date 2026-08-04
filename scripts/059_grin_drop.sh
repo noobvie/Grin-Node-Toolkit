@@ -1,6 +1,6 @@
 #!/bin/bash
 # =============================================================================
-# 052_grin_drop.sh — Grin Drop
+# 059_grin_drop.sh — Grin Drop
 # =============================================================================
 #
 #  A configurable GRIN portal with two independently toggleable modes:
@@ -28,7 +28,7 @@
 #   2) Wallet listening    (two tmux sessions: Foreign API + Owner API)
 #   3) Install             (Node.js/npm + systemd service)
 #   4) Configure           (modes, claim amount, wallet API ports/secrets)
-#   5) Deploy web files    (web/052_drop/ → /opt/grin/<net>/public_html/)
+#   5) Deploy web files    (web/059_drop/ → /opt/grin/<net>/public_html/)
 #   6) Start / Stop        (systemd service)
 #   7) Drop status         (health, balance, claims)
 #   8) Wallet address      (show + update)
@@ -96,12 +96,12 @@ DROP_SHARED_CONF="/opt/grin/conf/drop_shared.conf"
 mkdir -p "/opt/grin/conf"
 
 # Source dirs (single copy, both networks)
-DROP_APP_SRC="$TOOLKIT_ROOT/web/052_drop/server"
-DROP_WEB_SRC="$TOOLKIT_ROOT/web/052_drop/public_html"
+DROP_APP_SRC="$TOOLKIT_ROOT/web/059_drop/server"
+DROP_WEB_SRC="$TOOLKIT_ROOT/web/059_drop/public_html"
 
 # ─── Source lib files ─────────────────────────────────────────────────────────
-# Shared nginx helpers — sourced FIRST so 052_lib_nginx.sh can use them.
-# Required: 052_lib_nginx.sh calls nginx_ensure_rate_limit_zones to write the
+# Shared nginx helpers — sourced FIRST so 059_lib_nginx.sh can use them.
+# Required: 059_lib_nginx.sh calls nginx_ensure_rate_limit_zones to write the
 # drop_home/drop_api/drop_test/drop_main zones. Without it, the vhost references
 # undefined zones and nginx fails with "zero size shared memory zone".
 # shellcheck source=lib/nginx_shared_helpers.sh
@@ -110,17 +110,17 @@ source "$SCRIPT_DIR/lib/nginx_shared_helpers.sh"
 # node_api_secret_path in sync with the live node after a node rebuild).
 # shellcheck source=lib/grin_node_secrets.sh
 source "$SCRIPT_DIR/lib/grin_node_secrets.sh"
-# shellcheck source=lib/052_lib_wallet.sh
-source "$SCRIPT_DIR/lib/052_lib_wallet.sh"
-# shellcheck source=lib/052_lib_app.sh
-source "$SCRIPT_DIR/lib/052_lib_app.sh"
-# shellcheck source=lib/052_lib_nginx.sh
-source "$SCRIPT_DIR/lib/052_lib_nginx.sh"
-# shellcheck source=lib/052_lib_admin.sh
-source "$SCRIPT_DIR/lib/052_lib_admin.sh"
+# shellcheck source=lib/059_lib_wallet.sh
+source "$SCRIPT_DIR/lib/059_lib_wallet.sh"
+# shellcheck source=lib/059_lib_app.sh
+source "$SCRIPT_DIR/lib/059_lib_app.sh"
+# shellcheck source=lib/059_lib_nginx.sh
+source "$SCRIPT_DIR/lib/059_lib_nginx.sh"
+# shellcheck source=lib/059_lib_admin.sh
+source "$SCRIPT_DIR/lib/059_lib_admin.sh"
 # Encrypted backup / restore / schedule (ported from the solo-mining approach).
-# shellcheck source=lib/052_lib_backup.sh
-source "$SCRIPT_DIR/lib/052_lib_backup.sh"
+# shellcheck source=lib/059_lib_backup.sh
+source "$SCRIPT_DIR/lib/059_lib_backup.sh"
 
 # =============================================================================
 # NETWORK SELECTION
@@ -129,7 +129,7 @@ source "$SCRIPT_DIR/lib/052_lib_backup.sh"
 select_network() {
     clear
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo -e "${BOLD}${CYAN} 052) GRIN DROP${RESET}"
+    echo -e "${BOLD}${CYAN} 059) GRIN DROP${RESET}"
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
     echo ""
 
@@ -241,7 +241,7 @@ _set_network() {
 _unified_homepage_menu() {
     clear
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo -e "${BOLD}${CYAN} 052) GRIN DROP — Unified Homepage${RESET}"
+    echo -e "${BOLD}${CYAN} 059) GRIN DROP — Unified Homepage${RESET}"
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
     echo ""
     local _dom; _dom=$(_shared_read "subdomain" "")
@@ -261,7 +261,7 @@ _unified_homepage_menu() {
 drop_ga4_menu() {
     clear
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo -e "${BOLD}${CYAN} 052) GRIN DROP — Google Analytics (GA4)${RESET}"
+    echo -e "${BOLD}${CYAN} 059) GRIN DROP — Google Analytics (GA4)${RESET}"
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
     echo ""
 
@@ -308,7 +308,7 @@ drop_ga4_menu() {
 drop_turnstile_menu() {
     clear
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo -e "${BOLD}${CYAN} 052) GRIN DROP — Cloudflare Turnstile${RESET}"
+    echo -e "${BOLD}${CYAN} 059) GRIN DROP — Cloudflare Turnstile${RESET}"
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
     echo ""
 
@@ -657,11 +657,11 @@ drop_menu() {
         clear
         if [[ "$DROP_NETWORK" == "mainnet" ]]; then
             echo -e "${BOLD}${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-            echo -e "${BOLD}${RED} 052) GRIN DROP  [MAINNET — REAL GRIN]${RESET}"
+            echo -e "${BOLD}${RED} 059) GRIN DROP  [MAINNET — REAL GRIN]${RESET}"
             echo -e "${BOLD}${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
         else
             echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-            echo -e "${BOLD}${CYAN} 052) GRIN DROP  [TESTNET]${RESET}"
+            echo -e "${BOLD}${CYAN} 059) GRIN DROP  [TESTNET]${RESET}"
             echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
         fi
         drop_menu_status
@@ -709,7 +709,7 @@ drop_menu() {
 drop_nuke() {
     clear
     echo -e "${BOLD}${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo -e "${BOLD}${RED} 052) GRIN DROP — D) Delete Everything${RESET}"
+    echo -e "${BOLD}${RED} 059) GRIN DROP — D) Delete Everything${RESET}"
     echo -e "${BOLD}${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
     echo ""
     echo -e "  ${RED}This will permanently remove:${RESET}"
@@ -729,9 +729,10 @@ drop_nuke() {
     # ── Cron entries ──
     echo -e "  ${DIM}● Cron entries (reboot auto-start + watchdog)${RESET}"
     local _cron_test _cron_main
-    crontab -l 2>/dev/null | grep -q "grin-drop-test-reboot\|052_watchdog_test" \
+    # 052_watchdog_* is the pre-renumber tag — an old box still carries it.
+    crontab -l 2>/dev/null | grep -q "grin-drop-test-reboot\|059_watchdog_test\|052_watchdog_test" \
         && _cron_test="${GREEN}set${RESET}" || _cron_test="${DIM}none${RESET}"
-    crontab -l 2>/dev/null | grep -q "grin-drop-main-reboot\|052_watchdog_main" \
+    crontab -l 2>/dev/null | grep -q "grin-drop-main-reboot\|059_watchdog_main\|052_watchdog_main" \
         && _cron_main="${GREEN}set${RESET}" || _cron_main="${DIM}none${RESET}"
     echo -e "    testnet: $_cron_test   mainnet: $_cron_main"
 
@@ -801,6 +802,8 @@ drop_nuke() {
         new_cron=$(echo "$cur_cron" \
             | grep -v "# grin-drop-test-reboot" \
             | grep -v "# grin-drop-main-reboot" \
+            | grep -v "059_watchdog_test" \
+            | grep -v "059_watchdog_main" \
             | grep -v "052_watchdog_test" \
             | grep -v "052_watchdog_main" \
             || true)

@@ -690,28 +690,33 @@ q('exportWalletBtn')?.addEventListener('click', async () => {
     const r = await showModal({
         title: 'Export encrypted backup',
         body:  '<p>Bundles wallet config, secrets, seed file, and address book into an AES-256-GCM encrypted <code>.gws</code> file.</p>'
-             + '<p>Choose a strong <strong>backup passphrase</strong> (not your wallet passphrase). You\'ll need it to decrypt the backup.</p>'
+             + '<p>This file contains your <strong>seed</strong>, so the wallet passphrase is required to create one.</p>'
+             + '<div class="field mt-8"><input type="password" id="exportWalletPass" class="input" placeholder="Wallet passphrase" autocomplete="current-password"></div>'
+             + '<p class="mt-8">Then choose a strong <strong>backup passphrase</strong> (not your wallet passphrase). You\'ll need it to decrypt the backup.</p>'
              + '<div class="field mt-8"><input type="password" id="exportPass" class="input" placeholder="Backup passphrase (min 8 chars)" autocomplete="new-password"></div>'
              + '<div class="field mt-8"><input type="password" id="exportPass2" class="input" placeholder="Confirm passphrase" autocomplete="new-password"></div>'
              + '<div id="exportErr" class="error-inline mt-8" style="display:none"></div>',
         actions: [
             { label: 'Export', kind: 'primary', onClick: () => {
+                // The server re-checks all of this; these are for a fast, in-place error.
+                const wp = document.getElementById('exportWalletPass')?.value || '';
                 const p1 = document.getElementById('exportPass')?.value || '';
                 const p2 = document.getElementById('exportPass2')?.value || '';
                 const err = document.getElementById('exportErr');
+                if (!wp)           { err.style.display=''; err.textContent='Wallet passphrase required — this backup contains your seed.'; throw new Error('nowalletpass'); }
                 if (p1.length < 8) { err.style.display=''; err.textContent='Passphrase must be at least 8 characters.'; throw new Error('short'); }
                 if (p1 !== p2)     { err.style.display=''; err.textContent='Passphrases do not match.'; throw new Error('mismatch'); }
-                return p1;
+                return { backupPass: p1, walletPass: wp };
             }},
             { label: 'Cancel', kind: 'outline', value: null },
         ],
     });
-    if (!r || typeof r !== 'string') return;
+    if (!r || typeof r !== 'object') return;
     try {
-        const resp = await fetch('/api/wallet/' + curWallet + '/export', {
+        const resp = await fetch('/api/wallet/' + encodeURIComponent(curWallet) + '/export', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ passphrase: r }),
+            body: JSON.stringify({ passphrase: r.backupPass, walletPassphrase: r.walletPass }),
         });
         if (!resp.ok) {
             const d = await resp.json().catch(() => ({}));
@@ -732,14 +737,51 @@ q('deleteWalletBtn').addEventListener('click', async () => {
     if (!curWallet) return;
     if (!confirm('Remove wallet "' + curWallet + '" from the list?')) return;
     const delFiles = confirm('Also DELETE all wallet files from disk?\n\nOK = delete files  |  Cancel = keep files');
+
+    // Deleting the files destroys the seed, so the server demands the wallet passphrase for
+    // that branch (unregistering leaves the directory intact and needs no proof). Collect it
+    // here rather than letting the request come back 401.
+    let walletPass = null;
+    if (delFiles) {
+        const r = await showModal({
+            title: 'Delete wallet files',
+            body:  '<p>This permanently deletes <strong>' + esc(curWallet) + '</strong> from disk, including its seed. '
+                 + 'If you have no backup, any funds in it are unrecoverable.</p>'
+                 + '<p>Enter the <strong>wallet passphrase</strong> to confirm.</p>'
+                 + '<div class="field mt-8"><input type="password" id="delWalletPass" class="input" placeholder="Wallet passphrase" autocomplete="current-password"></div>'
+                 + '<div id="delErr" class="error-inline mt-8" style="display:none"></div>',
+            actions: [
+                { label: 'Delete files', kind: 'primary', onClick: () => {
+                    const p = document.getElementById('delWalletPass')?.value || '';
+                    if (!p) {
+                        const err = document.getElementById('delErr');
+                        err.style.display = ''; err.textContent = 'Wallet passphrase required.';
+                        throw new Error('nopass');
+                    }
+                    return p;
+                }},
+                { label: 'Cancel', kind: 'outline', value: null },
+            ],
+        });
+        if (typeof r !== 'string') return;
+        walletPass = r;
+    }
+
     try {
-        await fetch('/api/wallet/' + encodeURIComponent(curWallet) + '?files=' + (delFiles ? '1' : '0'),
-                    { method: 'DELETE' });
+        const resp = await fetch('/api/wallet/' + encodeURIComponent(curWallet) + '?files=' + (delFiles ? '1' : '0'), {
+            method:  'DELETE',
+            headers: { 'Content-Type': 'application/json' },
+            body:    JSON.stringify(delFiles ? { walletPassphrase: walletPass } : {}),
+        });
+        if (!resp.ok) {
+            const d = await resp.json().catch(() => ({}));
+            throw new Error(d.error || 'HTTP ' + resp.status);
+        }
         curWallet = null;
         await refreshWallets();
         hideEl('dashboardPanel');
         showEl('noSelectionPanel');
-    } catch (e) { alert(e.message); }
+    } catch (e) { alert('Delete failed: ' + e.message); }
 });
 
 // ── Services ──────────────────────────────────────────────────────────────────

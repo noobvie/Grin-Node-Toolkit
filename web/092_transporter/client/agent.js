@@ -72,7 +72,7 @@ function ts()          { return new Date().toISOString().replace('T', ' ').repla
 function log(msg)      { console.log(`[${ts()}] ${msg}`); }
 function die(msg)      { console.error(`[${ts()}] ERROR: ${msg}`); process.exit(1); }
 
-// ── Wallet Owner API v3 — ECDH session (same shape as 052 server/wallet.js) ───
+// ── Wallet Owner API v3 — ECDH session (same shape as 059 server/wallet.js) ───
 
 function _basicAuth(secretPath) {
   if (!secretPath) return {};
@@ -262,7 +262,7 @@ async function cmdSend(cfg) {
       target_slate_version:            null,
       // No payment proof: a proof embeds our address inside the slate content
       // and newer wallets then auto-dial our Foreign API on receive, corrupting
-      // the context (KernelSumMismatch — see 052 app.js for the war story).
+      // the context (KernelSumMismatch — see 059 app.js for the war story).
       payment_proof_recipient_address: null,
       ttl_blocks:                      null,
       send_args:                       null,

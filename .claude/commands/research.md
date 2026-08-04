@@ -4,8 +4,8 @@ Do NOT write any code — research and summarise only.
 ## 1. Existing patterns in this codebase
 
 - Search `scripts/lib/` for functions that already do something similar
-- Check if a config key for this already exists in `web/052_drop/server/config.js` DEFAULTS
-- Check `scripts/052_grin_drop.sh` and the relevant lib file for prior art
+- Check if a config key for this already exists in `web/059_drop/server/config.js` DEFAULTS
+- Check `scripts/059_grin_drop.sh` and the relevant lib file for prior art
 - `git log --oneline -20` for recent context
 - `git log --all --oneline -- <relevant-file>` for history of a specific file
 

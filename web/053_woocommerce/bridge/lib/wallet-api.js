@@ -17,7 +17,7 @@
  *   GRINPAY_WALLET_PASS      wallet password (default: empty string)
  *   GRINPAY_TIMEOUT          request timeout in seconds (default: 30)
  *
- * Adapted from web/052_drop/server/wallet.js (proven ECDH pattern).
+ * Adapted from web/059_drop/server/wallet.js (proven ECDH pattern).
  */
 
 const crypto = require('crypto');

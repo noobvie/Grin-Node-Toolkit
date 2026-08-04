@@ -8,7 +8,7 @@
 # alive across reboots and crashes. grin-server.toml's wallet_listener_url must
 # point at the Owner port (base URL, no /v2/foreign — the node appends it).
 # This lib holds the shared listener/cron/watchdog logic so the USER never
-# leaves Script 07 but the code is not a paste of Script 05/052.
+# leaves Script 07 but the code is not a paste of Script 05/059.
 #
 #   sw_setup <network>              download + init|recover + save pass + patch
 #                                   toml + start listener
@@ -109,7 +109,7 @@ _sw_read_new_pass() {
 }
 
 # ─── Port-collision guard ───────────────────────────────────────────────────
-# Owner 3420/13420 are grin-wallet defaults — a 052 drop, 051 web wallet or
+# Owner 3420/13420 are grin-wallet defaults — a 059 drop, 051 web wallet or
 # the public pool wallet may already hold them. NEVER auto-kill another
 # service's wallet. Returns 0 if free OR already held by OUR session; rc 1
 # (abort) if a foreign process holds it.
@@ -124,7 +124,7 @@ sw_port_collision_check() {
         return 0
     fi
     error "Port $port is in use by ANOTHER process (not '$tmux_name')."
-    error "  Likely the CMD Wallet quick setup or Private Web Wallet (both in the"
+    error "  Likely the CMD Wallet quick setup or Fidelius, the personal web wallet (both in the"
     error "  Wallet Services hub, main menu 05), or a manual listener."
     error "  Stop that service first, or run the solo wallet on a non-default port"
     error "  and update wallet_listener_url in grin-server.toml to match."

@@ -37,7 +37,7 @@ _trp_conf_set() {
     fi
 }
 
-# ─── Node.js (v24+ needed for node:sqlite DatabaseSync — same bar as 052) ─────
+# ─── Node.js (v24+ needed for node:sqlite DatabaseSync — same bar as 059) ─────
 _trp_ensure_node() {
     if command -v node &>/dev/null; then
         local major

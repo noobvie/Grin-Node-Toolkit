@@ -1,5 +1,5 @@
-# 052_lib_app.sh — Grin Drop install (Node.js) + configure
-# Sourced by 052_grin_drop.sh — inherits all color/log/network variables.
+# 059_lib_app.sh — Grin Drop install (Node.js) + configure
+# Sourced by 059_grin_drop.sh — inherits all color/log/network variables.
 # =============================================================================
 #
 #  Functions exported:
@@ -212,7 +212,7 @@ drop_configure() {
     echo -e "\n${BOLD}${CYAN}── Grin Drop [$DROP_NET_LABEL] — 4) Configure ──${RESET}\n"
     echo -e "  ${DIM}Press Enter to keep the current value shown in [brackets].${RESET}"
     echo -e "  ${DIM}Type ${BOLD}0${DIM} at any prompt to cancel and return to the menu.${RESET}"
-    echo -e "  ${DIM}Domain is configured from the main 052 menu (option 1).${RESET}\n"
+    echo -e "  ${DIM}Domain is configured from the main 059 menu (option 1).${RESET}\n"
 
     drop_ensure_defaults
 
@@ -222,7 +222,7 @@ drop_configure() {
     local _dom; _dom=$(python3 -c \
         "import json,sys; d=json.load(open(sys.argv[1])); print(d.get('subdomain','not set'))" \
         "$DROP_SHARED_CONF" 2>/dev/null || echo "not set")
-    echo -e "  ${DIM}Domain: ${BOLD}$_dom${RESET}  ${DIM}(manage via 052 main menu → option 1)${RESET}"
+    echo -e "  ${DIM}Domain: ${BOLD}$_dom${RESET}  ${DIM}(manage via 059 main menu → option 1)${RESET}"
     echo ""
 
     # ── Mode toggles ──────────────────────────────────────────────────────────

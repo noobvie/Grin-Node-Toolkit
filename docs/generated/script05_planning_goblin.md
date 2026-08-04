@@ -1,4 +1,4 @@
-# Script 05 — Goblin interop planning: Grin Drop (052) ↔ Goblin usernames
+# Script 05 — Goblin interop planning: Grin Drop (059) ↔ Goblin usernames
 
 **Status:** Research complete (2026-07-09), no code yet. Feature: a Drop visitor enters a
 Goblin username (`bob` / `bob@goblin.st` / npub) and (a) **claims** the giveaway straight into
@@ -16,7 +16,7 @@ module ("Goblin bridge") inside Drop's existing Node backend.
 
 ## 1. What already exists in the toolkit (reuse map)
 
-Drop's `web/052_drop/server/` already implements **every wallet-side step** of both flows:
+Drop's `web/059_drop/server/` already implements **every wallet-side step** of both flows:
 
 | Piece | Where | Notes |
 |---|---|---|
@@ -27,7 +27,7 @@ Drop's `web/052_drop/server/` already implements **every wallet-side step** of b
 | Donate receive: `slate_from_slatepack_message` → Foreign `receive_tx` → `create_slatepack_message` (S2) | `app.js` `/api/donate/receive` (~line 634) | the S1-consumption path the bridge will call internally |
 | Claim/donation state machine + expiry | `db.js` (SQLite), `slatepack_expire_min`, `wallet_cleanup_hours` auto-`cancel_tx` | needs a **separate, longer window** for Nostr claims (§5.3) |
 | Config plumbing | `config.js` DEFAULTS + admin panel `writeConfigKey` | add `goblin_*` keys; no goblin/nostr keys exist today |
-| nginx vhost per net | `052_lib_nginx.sh` | serves Drop's own NIP-05 `/.well-known/nostr.json` as a static file (§4.3) |
+| nginx vhost per net | `059_lib_nginx.sh` | serves Drop's own NIP-05 `/.well-known/nostr.json` as a static file (§4.3) |
 
 **What does NOT exist anywhere in the repo:** any Nostr client code (grep for `nostr|nip44|1059`
 comes up empty outside docs). The bridge is genuinely new — but it is transport only.
@@ -258,7 +258,7 @@ Drop finalizes). Works protocol-wise; ship after the two core flows.
 ### 4.3 Drop's own username (donations)
 
 Serve NIP-05 from the Drop vhost — a **static `/.well-known/nostr.json`** written by
-`052_lib_nginx.sh` (one heredoc + CORS `Access-Control-Allow-Origin: *`): maps e.g.
+`059_lib_nginx.sh` (one heredoc + CORS `Access-Control-Allow-Origin: *`): maps e.g.
 `drop@<dropdomain>` → the bridge pubkey. Donors then literally type `drop@grin.money`-style
 names into Goblin. (Registering a name on goblin.st instead/additionally is possible but
 involves their paid-registration flow — self-hosting the NIP-05 file is free, instant, and
@@ -326,14 +326,14 @@ goblin_home_domain        "goblin.st"  default domain for bare usernames
    `relay.floonet.dev`: publish 10050s, exchange a v2 gift-wrapped kind-14 carrying a testnet
    slatepack string, confirm unwrap + armor extraction both ways. Proves the transport with
    zero Drop changes.
-2. **Phase 1 — bridge module + claim flow (testnet):** `web/052_drop/server/goblin.js` +
+2. **Phase 1 — bridge module + claim flow (testnet):** `web/059_drop/server/goblin.js` +
    nostr meta table + config keys + claim-page username field; fake-Goblin responder script
    for E2E; fix the cleanup-sweep conflict (§5.1).
-3. **Phase 2 — donations:** our NIP-05 well-known via `052_lib_nginx.sh`, donate-page "pay
+3. **Phase 2 — donations:** our NIP-05 well-known via `059_lib_nginx.sh`, donate-page "pay
    from Goblin" (shows `drop@domain` + nprofile QR via existing `qrcode` dep), S1-ingest path.
 4. **Phase 3 — mainnet pilot** with a real Goblin phone wallet, tiny amounts; then optional
    extras: invoice-over-Nostr donations, void control messages, 091 composition.
-5. **Where it lives:** all inside 052 (it's a Drop feature). If the bridge later proves useful
+5. **Where it lives:** all inside 059 (it's a Drop feature). If the bridge later proves useful
    to the pool (payouts to Goblin miners) — extract it into a shared lib under the Script 09
    umbrella then, not before. Update `project_comms_hub_09` A.9 #6 at that point: for
    **Goblin** recipients, relay receive-support is now CONFIRMED (this doc) — the open question
@@ -343,4 +343,4 @@ goblin_home_domain        "goblin.st"  default domain for bare usernames
 
 *Sources: `2ro/goblin` src/nostr/{protocol,wrapv3,ingest,client,relays,pool,nip05}.rs +
 src/wallet/wallet.rs (master, 2026-07-08); docs.floonet.dev; docs.goblin.st/features/payment-flow;
-nbd-wtf/nostr-tools README; toolkit `web/052_drop/server/*` on branch add-ons.*
+nbd-wtf/nostr-tools README; toolkit `web/059_drop/server/*` on branch add-ons.*

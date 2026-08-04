@@ -788,10 +788,10 @@ Gateway IP changes need nothing on the hub (gateway dials out) — only the mine
 
 **c) Hub disaster recovery — NEW `07_lib_pool_backup.sh` on the shared engine.**
 The pool hub is the ONLY money-holding product without backup today (solo has
-`07_solo_backup.sh`, drop has `052_lib_backup.sh`, both on the shared `grin_backup_engine.sh`
+`07_solo_backup.sh`, drop has `059_lib_backup.sh`, both on the shared `grin_backup_engine.sh`
 gbe_*/gbp_* + offsite push). Same model (personal key, `grin_pubpool_backup_DDMMYYYY`,
 daily cron, scp push). Backup set — everything a fresh `07` install can't regenerate:
-`pool.db` (balances/shares/audit — snapshot via SQLite `.backup` or two-phase tar like 052,
+`pool.db` (balances/shares/audit — snapshot via SQLite `.backup` or two-phase tar like 059,
 never a live copy of a WAL db), `$POOL_CONF` (incl. `region_ports`), wallet dir (seed +
 `.wallet_pass` + tor keys), WG identity (`$WG_DIR_CONF/server_*.key` + `/etc/wireguard/wg-grinpool*.conf`
 — restoring these means **gateways reconnect with zero re-pairing**), nginx vhost + cert
@@ -1065,7 +1065,7 @@ security_audit §E.3; build notes → implementation §10.2.
           (SOLO_NET_MODE = "public" default | "lan"; only the stats page differs —
            every mining mechanic is identical in both modes.)
 
- MENU MODEL — network-as-parent (mirrors 052 Grin Drop)
+ MENU MODEL — network-as-parent (mirrors 059 Grin Drop)
    The top screen picks a network ONCE (1/2); inside that branch SOLO_NETWORK is
    set and inherited, so per-action network prompts are gone. Cross-network tools
    (both-net status, the unified stats page, global watchdogs, maintenance,

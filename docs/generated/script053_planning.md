@@ -12,7 +12,7 @@ Goal:
   Accept Grin (GRIN / tGRIN) payments on a WooCommerce store using a locally
   running grin-wallet. The system uses a local Node.js/Express bridge as the
   middleware layer between the PHP WooCommerce plugin and the grin-wallet
-  owner_api. The bridge shares the same Node.js tech stack as script 052
+  owner_api. The bridge shares the same Node.js tech stack as script 059
   (Grin Drop) — one backend language across all wallet services.
 
 Approach:
@@ -103,7 +103,7 @@ Out of scope for Phase 1:
   │   - ECDH handshake + session token (in-memory, never on disk)            │
   │   - No subprocess spawning, no password file                             │
   │   - Uses Node.js built-in crypto (secp256k1 ECDH + AES-256-GCM)        │
-  │   - Shares wallet API patterns from script 052 (Grin Drop)              │
+  │   - Shares wallet API patterns from script 059 (Grin Drop)              │
   └───────────────────────────────────────────────────────────────────────────┘
                      │  HTTP JSON-RPC  (127.0.0.1 only)
                      ▼
@@ -270,7 +270,7 @@ Out of scope for Phase 1:
       ├── server.js                   ← Express app (API endpoints)
       ├── lib/
       │   └── wallet-api.js           ← ECDH session + owner_api calls
-      │                                 (shared pattern from script 052)
+      │                                 (shared pattern from script 059)
       └── package.json                ← express (only runtime dependency)
 
   Custom WooCommerce Order Status:
@@ -1227,7 +1227,7 @@ Out of scope for Phase 1:
   ┌──────────────────────────────────────────────────────────────────────────┐
   │  GRINPAY ECOSYSTEM                                                       │
   │                                                                          │
-  │  Script 052 — Grin Drop          GrinPay Server — planned                │
+  │  Script 059 — Grin Drop          GrinPay Server — planned                │
   │  (donation platform)             (payment processor — future)            │
   │   Node.js + Owner/Foreign API     Node.js + Owner/Foreign API            │
   │   SQLite, nginx, public page      REST API, webhooks, multi-merchant     │
@@ -1256,10 +1256,10 @@ Out of scope for Phase 1:
 
   ONE BACKEND — NODE.JS ACROSS ALL WALLET SERVICES
   ──────────────────────────────────────────────────
-  The bridge is Node.js/Express — the same runtime used by script 052 (Grin
+  The bridge is Node.js/Express — the same runtime used by script 059 (Grin
   Drop) and planned for the GrinPay Server. This means:
 
-    052 Grin Drop        →  Node.js + Express + SQLite
+    059 Grin Drop        →  Node.js + Express + SQLite
     053 WooCommerce bridge → Node.js + Express (same wallet-api.js pattern)
     GrinPay Server       →  Node.js + Express + SQLite (inherits both above)
 
@@ -1267,19 +1267,19 @@ Out of scope for Phase 1:
   bridge is self-hosted (local Node.js) or a remote GrinPay Server.
   Switching modes is a single URL change in settings.
 
-  SHARED WALLET API LAYER (052 → 053 → GrinPay Server)
+  SHARED WALLET API LAYER (059 → 053 → GrinPay Server)
   ──────────────────────────────────────────────────────
-  Script 052 (Grin Drop) has proven the grin-wallet Owner API integration
+  Script 059 (Grin Drop) has proven the grin-wallet Owner API integration
   in Node.js: ECDH handshake, AES-256-GCM encrypted sessions, all wallet
   methods via JSON-RPC. Script 053's bridge/lib/wallet-api.js is a direct
   adaptation of that same layer:
 
-    052 web/052_grin_drop/lib/wallet-api.js   ← proven implementation
-    053 web/053_woocommerce/bridge/lib/wallet-api.js  ← adapted from 052
+    059 web/059_drop/server/wallet.js         ← proven implementation
+    053 web/053_woocommerce/bridge/lib/wallet-api.js  ← adapted from 059
     GrinPay Server (future) inherits from both
 
   Neither 053 nor the GrinPay Server re-solve the hard wallet API problems — they build
-  on the patterns already validated in production by script 052.
+  on the patterns already validated in production by script 059.
 
   SCRIPT 053 — TWO CONNECTION MODES (Phase 1 + Phase 2)
   ───────────────────────────────────────────────────────
@@ -1311,7 +1311,7 @@ Out of scope for Phase 1:
   What the GrinPay Server would own:
     - Node.js Express server
     - grin-wallet daemon (Owner API + Foreign API — no CLI subprocess)
-    - ECDH session management (inherited from 052)
+    - ECDH session management (inherited from 059)
     - SQLite: orders, webhooks, API keys, merchants
     - REST API matching the Flask bridge contract exactly
     - Webhook delivery to merchant sites on payment confirmation
@@ -1322,7 +1322,7 @@ Out of scope for Phase 1:
   ─────────────────────────────────────
     GrinPay for WooCommerce  →  script 053  (this plugin)
     GrinPay Server           →  no number   (unbuilt — gets one at build start)
-    Grin Drop                →  script 052  (donation platform, separate brand)
+    Grin Drop                →  script 059  (donation platform, separate brand)
 
     PHP prefix:    grinpay_
     Plugin slug:   grinpay-woocommerce
@@ -1357,7 +1357,7 @@ Out of scope for Phase 1:
   - Block checkout inner block support (order summary, express payments)
 
   ECOSYSTEM (GrinPay Server — unbuilt, no number yet):
-  - Build GrinPay Server in Node.js inheriting wallet API layer from 052
+  - Build GrinPay Server in Node.js inheriting wallet API layer from 059
   - Implement same REST API contract as Flask bridge (drop-in replacement)
   - Add webhook delivery system for async payment confirmation
   - Add API key management for multiple plugin instances

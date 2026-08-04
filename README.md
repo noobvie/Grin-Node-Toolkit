@@ -134,13 +134,22 @@ Grin Node Toolkit
 │   │   ├── Status overview              (shows installed / running services per network)
 │   │   ├── A) CMD Wallet Setup          → (built into the hub, no script file)
 │   │   │   └── download binary → init/recover → patch toml → listener → status
-│   │   ├── 1) Private Web Wallet        → 051_grin_private_web_wallet.sh
+│   │   ├── ── Wallets ── (keys 1-4, slot 4 spare)
+│   │   ├── 1) Fidelius                  → 051_grin_fidelius.sh
 │   │   │   └── Network → install deps → deploy → nginx → SSL → Basic Auth → firewall → status
-│   │   ├── 2) Grin Drop                 → 052_grin_drop.sh
-│   │   │   └── Network → wallet setup → listener → install → configure → nginx → start/stop → status
-│   │   ├── 3) WooCommerce Gateway       → 053_grin_woocommerce.sh
+│   │   ├── 2) Accio                     → planned (public web wallet, client-side keys)
+│   │   ├── 3) Grin XP                   → 051x_grin_xp_wallet.sh  (mainnet only)
+│   │   ├── ── Accept Payments ── (keys 5-8, slot 8 spare)
+│   │   ├── 5) WooCommerce Gateway       → 053_grin_woocommerce.sh
 │   │   │   └── install bridge → install WP plugin → configure → start/stop → status
+│   │   ├── 6) Payment Pro               → planned (Shopify / custom REST API)
+│   │   ├── 7) GoblinPay                 → planned (receive-only merchant till)
+│   │   ├── ── Giveaways & Donations ──
+│   │   ├── 9) Grin Drop                 → 059_grin_drop.sh
+│   │   │   └── Network → wallet setup → listener → install → configure → nginx → start/stop → status
 │   │   └── 0) Back to main menu
+│   │   (keys are FIXED SLOTS — a planned/spare key prints what the slot is for and
+│   │    installs nothing; the key is NOT the script number)
 │   ├── 6) Global Grin Health            → 06_global_grin_health.sh
 │   │   ├── N) Install Nginx + Certbot + Whois
 │   │   ├── A) Network Stats + Peer Map   (stats.yourdomain.com — Python collector → Chart.js + Leaflet)
@@ -226,15 +235,16 @@ Auto-detects node type/network, verifies sync, and shares snapshots over **nginx
 
 Exposes the node's `/v2/foreign` API (3413 / 13413) over an nginx HTTPS reverse proxy and blocks `/v2/owner` (returns 403) — lets light wallets, block explorers, and tools query your node.
 
-### 5. Grin Wallet Services — `05_grin_wallet_service.sh` (hub) + `051`–`053`
+### 5. Grin Wallet Services — `05_grin_wallet_service.sh` (hub) + `051`–`059`
 
 A **hub launcher** showing live status of each self-contained wallet service:
-- **051 Private Web Wallet** — personal browser UI (**Node.js**); one process serves many wallets across both networks; nginx + Basic Auth (owner-only), Tor + QR supported.
-- **052 Grin Drop** — GRIN giveaway + donation portal (**Node/Express + `node:sqlite`**); rate-limited 3-step slatepack claims and/or a donation address + QR, modes independently toggleable.
+- **051 Fidelius** — the personal web wallet: browser UI (**Node.js**); one process serves many wallets across both networks; nginx + Basic Auth (owner-only), Tor + QR supported.
+- **051x Grin XP** — the same Fidelius wallet in an XP-themed shell; **mainnet only**, its own nginx vhost (`web-wallet-xp`). Reachable from hub key `3` or from inside 051.
 - **053 WooCommerce Gateway** — WordPress/WooCommerce **PHP plugin** + Node bridge to the wallet Owner API; slatepack invoice flow (buyer pastes response → auto-confirmed).
+- **059 Grin Drop** — GRIN giveaway + donation portal (**Node/Express + `node:sqlite`**); rate-limited 3-step slatepack claims and/or a donation address + QR, modes independently toggleable.
 - **05C CMD Wallet Quick Setup** — built into the hub: downloads the `grin-wallet` binary, runs `init`/recover, patches the toml and starts a listener (CLI / testing).
 
-> *Planned, no script and no number yet* — a number is assigned when the build starts: **Payment Pro** (Shopify / custom-API processor), **Public Web Wallet** (client-side **WASM**, keys never leave the browser — design in [script05_design.md](docs/generated/script05_design.md)), **GoblinPay** (receive-only merchant till).
+> *Planned — each owns a menu key (which prints what the slot is for and installs nothing), but no script file yet.* **052 Accio** is the one product holding a **reserved number**: the public web wallet, client-side **WASM**, keys never leave the browser — freeing 052 for a wallet next to 051 is what the Grin Drop `052 → 059` migration bought, so nothing else may take it (design in [script05_design.md](docs/generated/script05_design.md)). **Payment Pro** (Shopify / custom-API processor) and **GoblinPay** (receive-only merchant till) have **no number** — they get the next free one from `054–058` on the day their build starts.
 
 > **Tip:** run each service on its own server to avoid port/config collisions; each server can run mainnet and testnet at once.
 
@@ -273,10 +283,10 @@ grin-node-toolkit/
 ├── extensions/
 │   └── grinmasternodes.json    # Community host registry (zone → site_key → hosts)
 ├── scripts/                    # One script per feature — 01–08 (+ 081, 08del),
-│   │                           #   05 wallet hub + 051–053, 09 hub + 091/092
+│   │                           #   05 wallet hub + 051–059, 09 hub + 091/092
 │   └── lib/                    # Sourced libs, Python collectors, shared nginx helpers
 └── web/                        # App code deployed to /opt/grin/* (Node / PHP / static)
-    ├── 04_node_api/  051_wallet/  052_drop/  053_woocommerce/
+    ├── 04_node_api/  051_fidelius/  053_woocommerce/  059_drop/
     ├── 06_stats_map/  06b_grinscan/  06d_tiny_explorer/
     └── 07_mining_pool_solo/  07_mining_pool_public/  092_transporter/
 ```
@@ -295,8 +305,8 @@ grin-node-toolkit/
 | `/opt/grin/conf/host_monitor_last_state.conf` | Last-known port state for change detection (`081`) |
 | `/opt/grin/conf/mass_deploy.conf` | Fleet server list for mass deployment (`081`) |
 | `/opt/grin/conf/github_repo.conf` | GitHub repo slug override for self-update (optional) |
-| `/opt/grin/webwallet/config.conf` + `wallets_info.json` | Private web wallet settings + wallet registry (`051`) |
-| `/opt/grin/drop-{main,test}/grin_drop.conf` | Grin Drop config — domain, modes, claim amount (written/read by `052`) |
+| `/opt/grin/webwallet/config.conf` + `wallets_info.json` | Fidelius settings + wallet registry (`051`) |
+| `/opt/grin/drop-{main,test}/grin_drop.conf` | Grin Drop config — domain, modes, claim amount (written/read by `059`) |
 
 **Runtime paths created by option 6 install:**
 
@@ -344,7 +354,7 @@ grin-node-toolkit/
 | 3007  | HTTP     | WooCommerce bridge — testnet (Node.js, localhost only)      |
 | 3010  | HTTP     | GrinScan explorer — testnet (Node.js, proxied by nginx)     |
 | 3011  | HTTP     | GrinScan explorer — mainnet (Node.js, proxied by nginx)     |
-| 7420  | HTTP     | Private Web Wallet — Node.js (localhost, proxied by nginx)  |
+| 7420  | HTTP     | Fidelius — Node.js (localhost, proxied by nginx)            |
 | 8471  | HTTP     | Tiny Explorer (06d, mainnet, localhost, proxied by nginx)   |
 
 **Connectivity Hub (Script 09)**
@@ -391,11 +401,11 @@ Each wallet service sub-script manages its own wallet in an isolated directory:
 
 | Script | Network | Wallet directory                        |
 |--------|---------|-----------------------------------------|
-| 051 — Private Web Wallet | Both    | `/opt/grin/webwallet/wallet_<net>_<name>/` (per-wallet) |
-| 052 — Grin Drop          | Mainnet | `/opt/grin/drop-main/wallet/`  |
-| 052 — Grin Drop          | Testnet | `/opt/grin/drop-test/wallet/`  |
+| 051 — Fidelius           | Both    | `/opt/grin/webwallet/wallet_<net>_<name>/` (per-wallet) |
 | 053 — WooCommerce bridge | Mainnet | uses existing node wallet Owner API (port 3420)  |
 | 053 — WooCommerce bridge | Testnet | uses existing node wallet Owner API (port 13420) |
+| 059 — Grin Drop          | Mainnet | `/opt/grin/drop-main/wallet/`  |
+| 059 — Grin Drop          | Testnet | `/opt/grin/drop-test/wallet/`  |
 
 ---
 

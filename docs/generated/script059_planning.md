@@ -1,5 +1,5 @@
 ╔══════════════════════════════════════════════════════════════════════════════╗
-║         052_grin_drop.sh  —  IMPLEMENTATION PLAN  (Node.js + HTTP API)      ║
+║         059_grin_drop.sh  —  IMPLEMENTATION PLAN  (Node.js + HTTP API)      ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
 
   Version:  planning v12
@@ -332,7 +332,7 @@
   7. FILE STRUCTURE
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-  web/052_drop/
+  web/059_drop/
   ├── server/                      Node.js/Express
   │   ├── app.js                   Express app — all routes, CSRF, maintenance,
   │   │                            invoice expiry setInterval, rate limiting
@@ -371,7 +371,7 @@
     ExecStart=/usr/bin/node /opt/grin/drop-main/server/app.js
     WorkingDirectory=/opt/grin/drop-main/server
 
-  Script changes (052_grin_drop.sh / lib files):
+  Script changes (059_grin_drop.sh / lib files):
     - Step 3 Install: node + npm
     - Step 4 Configure: add wallet API port + secret path inputs
     - Step 5 Deploy: copy server/ dir, npm install --omit=dev
@@ -529,28 +529,28 @@
   variable substitution — no separate scripts needed.
 
   scripts/
-    052_grin_drop.sh              entry point — menu routing only (~200 lines)
+    059_grin_drop.sh              entry point — menu routing only (~200 lines)
     lib/
-      052_lib_wallet.sh           step 1 setup wallet + step 2 listening
+      059_lib_wallet.sh           step 1 setup wallet + step 2 listening
                                   (download, init, recover, toml, node select,
                                    tmux sessions, cron, watchdog)      ~800 lines
-      052_lib_app.sh              step 3 install + step 4 configure
+      059_lib_app.sh              step 3 install + step 4 configure
                                   (Node.js/Express, npm, systemd service,
                                    all config prompts)                  ~600 lines
-      052_lib_nginx.sh            step 6 nginx + unified homepage setup
+      059_lib_nginx.sh            step 6 nginx + unified homepage setup
                                   (vhost generation, SSL, path routing)  ~600 lines
-      052_lib_admin.sh            backup, restore, status, logs, wallet addr
+      059_lib_admin.sh            backup, restore, status, logs, wallet addr
                                   (B/R menu, openssl encrypt/decrypt,
                                    step 5 deploy web files)             ~500 lines
 
-  052_grin_drop.sh sources all lib files at startup:
-    source "$SCRIPT_DIR/lib/052_lib_wallet.sh"
-    source "$SCRIPT_DIR/lib/052_lib_app.sh"
-    source "$SCRIPT_DIR/lib/052_lib_nginx.sh"
-    source "$SCRIPT_DIR/lib/052_lib_admin.sh"
+  059_grin_drop.sh sources all lib files at startup:
+    source "$SCRIPT_DIR/lib/059_lib_wallet.sh"
+    source "$SCRIPT_DIR/lib/059_lib_app.sh"
+    source "$SCRIPT_DIR/lib/059_lib_nginx.sh"
+    source "$SCRIPT_DIR/lib/059_lib_admin.sh"
 
   Shared constants (colors, log helpers, _set_network, conf helpers) stay
-  in 052_grin_drop.sh so all lib files inherit them after sourcing.
+  in 059_grin_drop.sh so all lib files inherit them after sourcing.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   11. IMPLEMENTATION ORDER
@@ -589,9 +589,9 @@
         public_html/js/faucet.js donation tab JS
         public_html/admin/       static admin HTML pages
 
-  7     web/052_drop/home/       unified homepage HTML + CSS
+  7     web/059_drop/home/       unified homepage HTML + CSS
 
-  8     052_grin_drop.sh         Expand: option 2 Wallet Listening →
+  8     059_grin_drop.sh         Expand: option 2 Wallet Listening →
                                    two tmux sessions (listen + owner_api)
                                    network-aware session names
                                    per-session start/stop/attach
@@ -625,7 +625,7 @@
 
   ┌─────────────────────────────────────────────────────────────────────────┐
   │  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━                        │
-  │   052) GRIN DROP                                                        │
+  │   059) GRIN DROP                                                        │
   │  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━                        │
   │                                                                         │
   │    1) Testnet  (tGRIN — no monetary value)  drop: [running|not running] │
@@ -648,7 +648,7 @@
 
   ┌─────────────────────────────────────────────────────────────────────────┐
   │  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━                        │
-  │   052) GRIN DROP  [MAINNET — REAL GRIN]                                 │
+  │   059) GRIN DROP  [MAINNET — REAL GRIN]                                 │
   │  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━                        │
   │                                                                         │
   │  Mode: giveaway ● ON  |  donation ● ON                                  │
@@ -789,7 +789,7 @@
     └───────────────────────────────────────────────────────────────────┘
 
     Key differences from Office Tools deploy_grinwallet.sh:
-      - No Step 5 ".env update" — 052 uses grin_drop_<net>.conf instead
+      - No Step 5 ".env update" — 059 uses grin_drop_<net>.conf instead
       - Passphrase file named .wallet_pass_main / .wallet_pass_test
       - Seed file named seed-drop.txt (in app dir, not wallet dir)
       - Testnet: --testnet flag on all grin-wallet commands
@@ -980,7 +980,7 @@
 
   ┌─────────────────────────────────────────────────────────────────────────┐
   │  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━                        │
-  │   052) GRIN DROP  [UNIFIED HOMEPAGE]                                    │
+  │   059) GRIN DROP  [UNIFIED HOMEPAGE]                                    │
   │  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━                        │
   │                                                                         │
   │  Testnet portal : ● running   (http://127.0.0.1:3004)                  │
@@ -1022,7 +1022,7 @@
        Writes: /opt/grin/drop-home/grin_drop_home.conf  (chmod 600)
 
   3) Deploy web files
-       - Copies web/052_drop/home/ → /var/www/grin-drop-home/
+       - Copies web/059_drop/home/ → /var/www/grin-drop-home/
        - Injects configured domain + title + network toggles into HTML
        - Sets ownership: www-data:www-data
        - Purely static files served by nginx
@@ -1177,7 +1177,7 @@
 
 
 ╔══════════════════════════════════════════════════════════════════════════════╗
-║    052_grin_drop — REFACTOR PLAN: Single Source of Truth for Claim Caps     ║
+║    059_grin_drop — REFACTOR PLAN: Single Source of Truth for Claim Caps     ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
 
   Version:  planning v13
@@ -1272,7 +1272,7 @@
   IMPLEMENTATION — FILE BY FILE
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-  ── FILE 1: web/052_drop/server/config.js ────────────────────────────────────
+  ── FILE 1: web/059_drop/server/config.js ────────────────────────────────────
 
   Change: Add anon_claim_grin_per_tx to the DEFAULTS object (after
   claim_grin_per_tx, line 33).
@@ -1293,7 +1293,7 @@
   After:
     'claim_grin_per_tx', 'anon_claim_grin_per_tx', 'claim_cooldown_minutes', ...
 
-  ── FILE 2: web/052_drop/server/app.js ────────────────────────────────────────
+  ── FILE 2: web/059_drop/server/app.js ────────────────────────────────────────
 
   Change A — Remove module-level ANON_CLAIM_GRIN constant (line 79):
 
@@ -1337,7 +1337,7 @@
   After:
     // Amount is capped to cfg.anon_claim_grin_per_tx (0.009 mainnet / 2.0 testnet); min 0.0001.
 
-  ── FILE 3: web/052_drop/public_html/js/faucet.js ─────────────────────────────
+  ── FILE 3: web/059_drop/public_html/js/faucet.js ─────────────────────────────
 
   Change A — Convert server-driven caps from const to let (lines 91–92):
 
@@ -1389,7 +1389,7 @@
   with whatever is live in the config — including any admin panel changes
   made without restarting the server.
 
-  ── FILE 4: web/052_drop/public_html/index.html ───────────────────────────────
+  ── FILE 4: web/059_drop/public_html/index.html ───────────────────────────────
 
   The max= attributes (lines 156, 186) serve as initial fallback values
   before the first refreshStatus() response arrives. JS already overrides
@@ -1401,7 +1401,7 @@
 
   No further changes needed in index.html.
 
-  ── FILE 5: scripts/052_grin_drop.sh ──────────────────────────────────────────
+  ── FILE 5: scripts/059_grin_drop.sh ──────────────────────────────────────────
 
   Change: Add anon_claim_grin_default to the Configure step defaults
   (around line 459, alongside claim_grin_default).
@@ -1420,7 +1420,7 @@
     anon_claim_grin_default="0.009"   # max anon claim amount on mainnet
 
   Add the new key to the defaults array written to the conf file
-  (in drop_ensure_defaults or equivalent function in 052_lib_app.sh):
+  (in drop_ensure_defaults or equivalent function in 059_lib_app.sh):
     "anon_claim_grin_per_tx:$anon_claim_grin_default"
 
   Also add a prompt in the Configure step (step 4) so the operator can
@@ -1443,8 +1443,8 @@
   public_html/js/faucet.js          3× const→let     ~86, ~91, ~92
                                     +1 status block  ~232–245 (insert)
   public_html/index.html            No change needed (already updated)
-  scripts/052_grin_drop.sh          +1 default var   ~452, ~459
-  scripts/lib/052_lib_app.sh        +1 defaults[]    configure step
+  scripts/059_grin_drop.sh          +1 default var   ~452, ~459
+  scripts/lib/059_lib_app.sh        +1 defaults[]    configure step
                                     +1 prompt        configure step
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -1464,8 +1464,8 @@
                                  Update comment
   3     public_html/js/faucet.js const → let for 3 cap variables
                                  Insert cap-sync block in refreshStatus()
-  4     scripts/052_grin_drop.sh Add anon_claim_grin_default to both
-        scripts/lib/052_lib_app.sh  network branches + defaults array
+  4     scripts/059_grin_drop.sh Add anon_claim_grin_default to both
+        scripts/lib/059_lib_app.sh  network branches + defaults array
                                  Add prompt in Configure step
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -1493,8 +1493,8 @@
   VERIFICATION
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-  1. bash -n scripts/052_grin_drop.sh              syntax check passes
-  2. bash -n scripts/lib/052_lib_app.sh            syntax check passes
+  1. bash -n scripts/059_grin_drop.sh              syntax check passes
+  2. bash -n scripts/lib/059_lib_app.sh            syntax check passes
   3. curl http://127.0.0.1:3004/api/status | jq .  testnet: both fields present
        → claim_grin_per_tx:       3.0
        → anon_claim_grin_per_tx:  2.0

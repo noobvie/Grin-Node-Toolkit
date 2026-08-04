@@ -9,12 +9,12 @@ ordering rule" block in `scripts/05_grin_wallet_service.sh`), and its design mov
 
 Contents:
 
-- **PART A — Public Web Wallet** (below)
+- **PART A — Accio, the public web wallet** (below)
 - PART B — Payment Pro: not designed yet; the feature sketch is in the hub script header.
 
 ---
 
-# PART A — Grin Public Web Wallet (design)
+# PART A — Accio, the Grin public web wallet (design)
 
 **Status: PLANNED — not implemented, no script file.** This preserves the design that lived in
 the header of `scripts/055_grin_public_web_wallet.sh`, a placeholder "coming soon" screen

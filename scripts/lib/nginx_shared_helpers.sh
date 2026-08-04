@@ -9,7 +9,7 @@
 #     · Script 04 — Grin Node Foreign API
 #     · Script 06 — Global Grin Health
 #     · Script 07 — Mining Services / Pool
-#     · Script 052 — Grin Drop
+#     · Script 059 — Grin Drop
 #
 #   Lib files are sourced, not executed — no shebang. Functions are prefixed
 #   `nginx_` to avoid collisions with script-specific helpers. The historical

@@ -49,7 +49,7 @@ RestartSec=5s
 LimitNOFILE=65535
 ```
 A **watchdog cron** (every 5 min) restarts the service if `systemctl is-active` fails (same
-pattern as `052_lib_wallet.sh`). The backend handles SIGTERM/SIGINT → stop scheduler →
+pattern as `059_lib_wallet.sh`). The backend handles SIGTERM/SIGINT → stop scheduler →
 `server.close` → `db.close()` so the SQLite WAL flushes cleanly on `systemctl stop`.
 
 ### nginx

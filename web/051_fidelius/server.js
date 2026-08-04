@@ -258,7 +258,14 @@ function applyWalletTomlPatches(wallet) {
 
 // ── ECDH Owner API session ─────────────────────────────────────────────────────
 
-async function ownerApiSession(wallet) {
+// `passwordOverride` lets a caller PROVE a passphrase instead of spending the one already
+// held in the session. open_wallet decrypts the seed, so a returned token is proof the
+// passphrase is correct — that is what /export uses as its authorisation check. Callers that
+// omit it keep the normal behaviour: use whatever the browser session unlocked with.
+// An empty string is a legitimate override (grin-wallet permits a blank passphrase), so the
+// test is `typeof`, never truthiness — `||` here would silently fall back to the session and
+// turn a wrong-passphrase export into a successful one.
+async function ownerApiSession(wallet, passwordOverride) {
     const ownerUrl = 'http://127.0.0.1:' + wallet.ownerPort + '/v3/owner';
     const authHdr  = 'Basic ' + Buffer.from('grin:' + readOwnerSecret(wallet.dir)).toString('base64');
     const headers  = { 'Content-Type': 'application/json', Authorization: authHdr };
@@ -283,8 +290,11 @@ async function ownerApiSession(wallet) {
     if (initJson.error) throw new Error('init_secure_api: ' + (initJson.error.message || JSON.stringify(initJson.error)));
     const sharedKey = ecdh.computeSecret(Buffer.from(initJson.result.Ok || initJson.result, 'hex'));
 
+    const password = (typeof passwordOverride === 'string')
+        ? passwordOverride
+        : getPassphrase(wallet.name);
     const token = await encryptedOwnerCall(headers, sharedKey, ownerUrl, 'open_wallet',
-        { name: null, password: getPassphrase(wallet.name) });
+        { name: null, password });
     return { headers, sharedKey, ownerUrl, token };
 }
 
@@ -323,7 +333,37 @@ async function encryptedOwnerCall(headers, sharedKey, ownerUrl, method, params) 
 
 const app = express();
 app.set('trust proxy', 'loopback');     // nginx on the same host
-app.use(express.json({ limit: '32kb' }));
+
+// BODY SIZE — one small global cap, one deliberate exception.
+// Every endpoint here takes short JSON except /api/wallet/import, which carries an entire
+// .gws backup as base64 (~4/3 of the file size). A single permissive global limit would hand
+// every other route a cheap memory-amplification vector, so the exception is mounted per-route.
+//
+// The global parser must SKIP the import path rather than being raised: whichever parser runs
+// first consumes the stream, so a 32kb global would 413 a restore before the route was ever
+// reached. That mismatch is exactly the bug this replaces — the client happily accepted files
+// up to 5 MB that the server could never receive.
+const JSON_LIMIT_DEFAULT = '32kb';
+const JSON_LIMIT_IMPORT  = '8mb';        // 5 MB client cap × ~1.34 base64 overhead, rounded up
+const IMPORT_PATH        = '/api/wallet/import';
+const jsonDefault = express.json({ limit: JSON_LIMIT_DEFAULT });
+const jsonImport  = express.json({ limit: JSON_LIMIT_IMPORT });
+app.use((req, res, next) =>
+    (req.method === 'POST' && req.path === IMPORT_PATH)
+        ? jsonImport(req, res, next)
+        : jsonDefault(req, res, next));
+
+// Body-parser errors surface here, before any route runs. Without this, an oversize body gets
+// Express's default HTML error page, which the client's `resp.json()` cannot read — the user
+// would see a bare "HTTP 413" with no hint about what to do.
+app.use((err, req, res, next) => {
+    if (err && err.type === 'entity.too.large') {
+        const cap = (req.path === IMPORT_PATH) ? JSON_LIMIT_IMPORT : JSON_LIMIT_DEFAULT;
+        return apiErr(res, 'Request body too large (limit ' + cap + ')', 413);
+    }
+    if (err && err.type === 'entity.parse.failed') return apiErr(res, 'Malformed JSON body', 400);
+    return next(err);
+});
 
 function apiErr(res, msg, code = 400) { return res.status(code).json({ error: msg }); }
 function log(lv, msg) { process.stdout.write('[' + new Date().toISOString().slice(0,19) + '] [' + lv + '] ' + msg + '\n'); }
@@ -1424,11 +1464,52 @@ app.post('/api/wallet/:name/post-tx', async (req, res) => {
 const GWS_MAGIC = Buffer.from('GWS1');
 const GWS_PBKDF2_ITER = 200_000;
 
-app.post('/api/wallet/:name/export', (req, res) => {
+// AUTHORISATION — read this before touching the handler.
+// This endpoint hands out `wallet_data/wallet.seed`. That file is the wallet: whoever holds it
+// needs only the wallet passphrase to spend, and they can attack that passphrase OFFLINE where
+// neither nginx's Basic Auth nor the 5/min limiter below can see them.
+//
+// Every OTHER sensitive endpoint is gated by accident of design — they all route through
+// ownerApiSession(), which pulls the passphrase from the in-memory session, gets '' when nobody
+// is connected, and dies at open_wallet. This handler is pure filesystem I/O, so it never
+// touched that path and was reachable by anyone past Basic Auth with NO wallet passphrase at
+// all. The `passphrase` field does not help: it is the backup's own encryption key, chosen by
+// the caller. So the seed left the building encrypted under the ATTACKER's key.
+//
+// The gate is therefore modelled on /show-seed, the other endpoint that releases seed material:
+// demand the real wallet passphrase, prove it against the wallet, rate-limit, log. Do not
+// weaken this to a session check — connect() stores an UNVERIFIED passphrase whenever the
+// owner API is down (see the early return there), so `connected` does not mean "correct".
+app.post('/api/wallet/:name/export', async (req, res) => {
     const wallet = findWallet(req.params.name);
     if (!wallet) return apiErr(res, 'Wallet not found', 404);
-    const { passphrase } = req.body || {};
+    const { passphrase, walletPassphrase } = req.body || {};
     if (typeof passphrase !== 'string' || passphrase.length < 8) return apiErr(res, 'Backup passphrase required (min 8 chars)');
+    if (typeof walletPassphrase !== 'string') return apiErr(res, 'Wallet passphrase required — this backup contains your seed', 401);
+
+    // Shares the /connect + /show-seed counter (same ip|wallet key) on purpose: 5 attempts per
+    // minute TOTAL across all three, so an attacker cannot farm a fresh allowance per endpoint.
+    const ip   = req.ip || req.socket?.remoteAddress || 'unknown';
+    const rate = checkConnectRate(ip, wallet.name);
+    if (rate.blocked) {
+        log('WARN', 'EXPORT_RATE_LIMIT wallet=' + wallet.name + ' ip=' + ip);
+        return apiErr(res, 'Too many attempts. Retry after ' + rate.retryAfter + 's.', 429);
+    }
+
+    try {
+        await ownerApiSession(wallet, walletPassphrase);
+    } catch (e) {
+        const msg       = e.message || String(e);
+        const isConnErr = /ECONNREFUSED|not running/i.test(msg);
+        log('WARN', 'EXPORT_DENIED wallet=' + wallet.name + ' ip=' + ip
+                  + ' reason=' + (isConnErr ? 'owner_api_down' : 'bad_passphrase'));
+        // Fail CLOSED when the wallet cannot be asked. A backup you can't take is recoverable
+        // (start the owner API); a seed released without proof is not.
+        return apiErr(res, isConnErr
+            ? 'Owner API not running — start it before exporting a backup.'
+            : 'Wrong wallet passphrase', isConnErr ? 503 : 401);
+    }
+    clearConnectRate(ip, wallet.name);
 
     const manifest = {
         version:    1,
@@ -1455,7 +1536,8 @@ app.post('/api/wallet/:name/export', (req, res) => {
         const tag    = cipher.getAuthTag();
         const out    = Buffer.concat([GWS_MAGIC, salt, iv, tag, ct]);
 
-        log('INFO', 'WALLET_EXPORT wallet=' + wallet.name + ' bytes=' + out.length);
+        // Log the IP like SEED_DISPLAY does — this line is the audit trail for "the seed left".
+        log('INFO', 'WALLET_EXPORT wallet=' + wallet.name + ' ip=' + ip + ' bytes=' + out.length);
         res.setHeader('Content-Type', 'application/octet-stream');
         res.setHeader('Content-Disposition', 'attachment; filename="' + wallet.name + '-' + wallet.network + '-' + new Date().toISOString().slice(0, 10) + '.gws"');
         res.send(out);
@@ -1554,10 +1636,50 @@ app.post('/api/wallet/import', (req, res) => {
 
 // ── Wallet delete ─────────────────────────────────────────────────────────────
 
-app.delete('/api/wallet/:name', (req, res) => {
+// AUTHORISATION — two very different actions share this route, so they get different gates.
+//   files=0  unregister only. The directory stays on disk untouched, so this is reversible by
+//            re-registering it. Left open deliberately: it is the everyday "remove from list"
+//            action, and it cannot escalate — once unregistered, findWallet() 404s, so the
+//            destructive branch below becomes UNREACHABLE for that wallet. Free unregister
+//            protects the files rather than exposing them.
+//   files=1  rmSync -r on the wallet directory. Irreversible, and it destroys the seed. Same
+//            blast radius as /export (loss instead of theft) and it was reachable by anyone
+//            past nginx Basic Auth with no wallet passphrase at all — the browser confirm()
+//            was the only obstacle, and an attacker calling the API never runs it.
+// So the destructive branch is proven exactly like /export: real wallet passphrase, verified
+// against the wallet, rate-limited, logged, fail-closed.
+app.delete('/api/wallet/:name', async (req, res) => {
     const wallet = findWallet(req.params.name);
     if (!wallet) return apiErr(res, 'Wallet not found', 404);
     const deleteFiles = req.query.files === '1';
+    const ip          = req.ip || req.socket?.remoteAddress || 'unknown';
+
+    if (deleteFiles) {
+        const { walletPassphrase } = req.body || {};
+        if (typeof walletPassphrase !== 'string')
+            return apiErr(res, 'Wallet passphrase required to delete wallet files', 401);
+
+        const rate = checkConnectRate(ip, wallet.name);
+        if (rate.blocked) {
+            log('WARN', 'DELETE_RATE_LIMIT wallet=' + wallet.name + ' ip=' + ip);
+            return apiErr(res, 'Too many attempts. Retry after ' + rate.retryAfter + 's.', 429);
+        }
+        try {
+            await ownerApiSession(wallet, walletPassphrase);
+        } catch (e) {
+            const msg       = e.message || String(e);
+            const isConnErr = /ECONNREFUSED|not running/i.test(msg);
+            log('WARN', 'DELETE_DENIED wallet=' + wallet.name + ' ip=' + ip
+                      + ' reason=' + (isConnErr ? 'owner_api_down' : 'bad_passphrase'));
+            // Fail closed. If the owner API is down we cannot prove anything, and an
+            // unprovable request must never be the one that erases a seed. The operator can
+            // still unregister (files=0) and delete the directory from a shell.
+            return apiErr(res, isConnErr
+                ? 'Owner API not running — start it before deleting wallet files.'
+                : 'Wrong wallet passphrase', isConnErr ? 503 : 401);
+        }
+        clearConnectRate(ip, wallet.name);
+    }
 
     const s = sessions.get(wallet.name);
     if (s) {
@@ -1574,7 +1696,7 @@ app.delete('/api/wallet/:name', (req, res) => {
         catch (e) { log('WARN', 'DELETE_FILES_FAIL ' + e.message); }
     }
 
-    log('INFO', 'WALLET_DELETED wallet=' + wallet.name + ' files=' + deleteFiles);
+    log('INFO', 'WALLET_DELETED wallet=' + wallet.name + ' ip=' + ip + ' files=' + deleteFiles);
     res.json({ ok: true });
 });
 

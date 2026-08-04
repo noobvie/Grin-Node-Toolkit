@@ -1,11 +1,11 @@
 ╔══════════════════════════════════════════════════════════════════════════════╗
-║         052_grin_drop.sh  —  REALIZATION  (As Built)                        ║
+║         059_grin_drop.sh  —  REALIZATION  (As Built)                        ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
 
   Date:     2026-05-04
   Scope:    Documents the architecture and flow of the code actually shipped
-            in scripts/052_grin_drop.sh + scripts/lib/052_lib_*.sh
-            Compare with: docs/generated/script052_planning.md (planning v12)
+            in scripts/059_grin_drop.sh + scripts/lib/059_lib_*.sh
+            Compare with: docs/generated/script059_planning.md (planning v12)
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   1. ARCHITECTURE OVERVIEW
@@ -93,7 +93,7 @@
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
   scripts/
-    052_grin_drop.sh              entry point (~840 lines)
+    059_grin_drop.sh              entry point (~840 lines)
                                     select_network()     — top-level menu
                                     _set_network()       — env var switch
                                     drop_menu()          — per-network submenu
@@ -108,7 +108,7 @@
                                     _patch_toml_in_section() — section-aware
                                     drop_menu_status()   — status header block
     lib/
-      052_lib_wallet.sh           wallet setup + listener
+      059_lib_wallet.sh           wallet setup + listener
                                     drop_setup_wallet()     — step 1 (submenu)
                                     drop_wallet_listener()  — step 2 (submenu)
                                     _drop_wallet_install_new()
@@ -128,10 +128,10 @@
                                     _drop_kill_wallet_processes()
                                     _drop_fix_ownership()
                                     _drop_save_pass/seed()
-      052_lib_app.sh              install + configure
+      059_lib_app.sh              install + configure
                                     drop_install()    — step 3
                                     drop_configure()  — step 4
-      052_lib_nginx.sh            nginx + domain management
+      059_lib_nginx.sh            nginx + domain management
                                     drop_create_domain()      — top-level opt 1
                                     drop_remove_domain()      — top-level opt 5
                                     _drop_set_domain()
@@ -143,7 +143,7 @@
                                     _drop_nginx_cloudflare()
                                     _drop_nginx_logrotate()
                                     _drop_evict_apache2()
-      052_lib_admin.sh            deploy + service + status + backup
+      059_lib_admin.sh            deploy + service + status + backup
                                     drop_deploy_web()     — step 5
                                     drop_service_control()— step 6
                                     drop_status_screen()  — step 7
@@ -152,7 +152,7 @@
                                     drop_backup()         — B)
                                     drop_restore()        — R)
 
-  web/052_drop/
+  web/059_drop/
     server/                       Node.js/Express (single copy, both networks)
       app.js                      Express app
       wallet.js                   Foreign + Owner API helpers (ECDH)
@@ -230,7 +230,7 @@
   ── Top-level menu ──────────────────────────────────────────────────────────
 
   ┌─────────────────────────────────────────────────────────────────────────┐
-  │   052) GRIN DROP                                                        │
+  │   059) GRIN DROP                                                        │
   │                                                                         │
   │   Domain: <domain>  |  GA4: <id or not configured>                      │
   │                                                                         │
@@ -258,7 +258,7 @@
   ── Network submenu (testnet/mainnet — identical layout) ────────────────────
 
   ┌─────────────────────────────────────────────────────────────────────────┐
-  │   052) GRIN DROP  [MAINNET — REAL GRIN]   (or [TESTNET])               │
+  │   059) GRIN DROP  [MAINNET — REAL GRIN]   (or [TESTNET])               │
   │                                                                         │
   │   Domain: <domain>  (https://<domain>/mainnet/)                         │
   │   Mode: giveaway ● ON  |  donation ● ON                                 │
@@ -339,7 +339,7 @@
   ── Option 1 (domain) submenu ───────────────────────────────────────────────
 
   ┌─────────────────────────────────────────────────────────────────────────┐
-  │   052) GRIN DROP — 1) Domain & nginx                                    │
+  │   059) GRIN DROP — 1) Domain & nginx                                    │
   │                                                                         │
   │   Current status:                                                       │
   │   Site name  : Grin Drop                                                │
@@ -611,7 +611,7 @@
             submenu (step 3 in that submenu).
   Reality:  The unified homepage is deployed automatically by _drop_write_unified_conf()
             (called by nginx setup). No separate homepage deploy step needed.
-            The homepage files are copied from web/052_drop/home/ → /var/www/grin-drop-home/
+            The homepage files are copied from web/059_drop/home/ → /var/www/grin-drop-home/
             every time nginx config is (re-)applied.
 
   ── Q. UNIFIED HOMEPAGE SUBMENU SIMPLIFIED ────────────────────────────────────
@@ -658,7 +658,7 @@
   10. WHAT MATCHED THE PLAN (key decisions confirmed)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-  ✓  Four lib files: 052_lib_wallet / _app / _nginx / _admin
+  ✓  Four lib files: 059_lib_wallet / _app / _nginx / _admin
   ✓  Two tmux sessions per network (TOR + ownerapi), named drop-<net>-tor
      and drop-<net>-ownerapi — no collision between testnet and mainnet
   ✓  Passphrase read from file in wrapper script (never literal in cron ps)

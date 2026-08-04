@@ -29,7 +29,7 @@ trp_agent_install() {
     clear
     echo -e "\n${BOLD}${CYAN}── Grin Transporter [$TRP_NET_LABEL] — 7) Install poll agent ──${RESET}\n"
     echo -e "  ${DIM}Wires a local grin-wallet to a Transporter queue. The wallet must run${RESET}"
-    echo -e "  ${DIM}a combined owner_api listener (the 052/07 model, port $TRP_OWNER_PORT).${RESET}\n"
+    echo -e "  ${DIM}a combined owner_api listener (the 059/07 model, port $TRP_OWNER_PORT).${RESET}\n"
 
     _trp_ensure_node || { pause; return; }
 

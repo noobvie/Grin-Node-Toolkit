@@ -1,5 +1,5 @@
-# 052_lib_admin.sh — Grin Drop admin operations
-# Sourced by 052_grin_drop.sh — inherits all color/log/network variables.
+# 059_lib_admin.sh — Grin Drop admin operations
+# Sourced by 059_grin_drop.sh — inherits all color/log/network variables.
 # =============================================================================
 #
 #  Functions exported:
@@ -9,7 +9,7 @@
 #    drop_wallet_address   — step 8: show + update wallet address
 #    drop_view_logs        — L) tail activity log
 #
-#  Backup / restore / schedule now live in lib/052_lib_backup.sh
+#  Backup / restore / schedule now live in lib/059_lib_backup.sh
 #  (drop_backup_menu, dbk_backup_now, dbk_restore, dbk_schedule, dbk_settings).
 #
 

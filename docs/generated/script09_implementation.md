@@ -146,7 +146,7 @@ checksum on that path by design, HTTPS+GitHub trust only).
 ## 092 — Grin Transporter Phase 1 (implemented 2026-07-11)
 
 **Standalone only** (user decision 2026-07-11): server + auth + CLI agent. NO
-product wiring — Grin Drop 052 stays untouched and the pool's
+product wiring — Grin Drop 059 stays untouched and the pool's
 `incentives.transporter_enabled` stays `false`, both gated on design B.9 #6
 (no mainstream wallet can receive from a relay; a Drop claimant / pool miner
 would need to run our agent). Phase-1 value: operator-to-operator sends and
@@ -161,7 +161,7 @@ scripts/092_grin_transporter.sh        wizard: net select → server/agent menus
 scripts/lib/092_lib_server.sh          trp_* — node24 install, app deploy, systemd, nginx+certbot, tor, status, uninstall
 scripts/lib/092_lib_client.sh          trp_agent_* — agent install (Drop auto-detect), cron poll toggle, actions submenu
 web/092_transporter/server.js          Express + node:sqlite queue (NO wallet, ciphertext only)
-web/092_transporter/package.json       express only (SQLite via node:sqlite builtin — 052 model, not better-sqlite3)
+web/092_transporter/package.json       express only (SQLite via node:sqlite builtin — 059 model, not better-sqlite3)
 web/092_transporter/client/agent.js    zero-dep CLI: address/status/send/poll/cancel (Owner v3 ECDH + Foreign v2)
 ```
 
@@ -198,7 +198,7 @@ addresses are rejected at the door).
   agent needs the sender address from `decode_slatepack_message` to route S2
   back; S1 with no sender is skipped (left to expire).
 - `payment_proof_recipient_address: null` kept — same KernelSumMismatch war
-  story as 052.
+  story as 059.
 - Poll ordering: `receive_tx` → build reply → PUT reply → only then DELETE
   original; a crash-dupe re-poll hits grin-wallet's "already received" and is
   then consumed. If the reply PUT fails the armored S2 is logged for manual
@@ -216,5 +216,5 @@ addresses are rejected at the door).
 3. Foreign `receive_tx` over the combined owner_api port with empty foreign
    secret (memory says no auth needed on 13420 — verified for pool, reconfirm
    from the agent).
-4. node:sqlite emits an ExperimentalWarning on Node 24 — cosmetic (052 lives
+4. node:sqlite emits an ExperimentalWarning on Node 24 — cosmetic (059 lives
    with the same).

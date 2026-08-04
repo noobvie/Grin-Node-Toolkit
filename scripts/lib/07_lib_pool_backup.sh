@@ -100,7 +100,7 @@ _pbk_sources() {
 }
 
 # ─── Two-phase tar (live pass excludes *.db*; pool.db appended from a snapshot) ─
-# $1 = output .tar.gz. Same pattern as 052: a global *.db exclude on the live
+# $1 = output .tar.gz. Same pattern as 059: a global *.db exclude on the live
 # pass cannot strip the staged snapshot because it is appended in a second call.
 _pbk_make_tar() {
     local outgz="$1"

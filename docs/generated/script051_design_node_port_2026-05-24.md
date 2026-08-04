@@ -2,7 +2,7 @@
 
 **Date:** 2026-05-24
 **Source:** `noobvie/GrinSuite@origin/main:web/03_web_wallet/` (Node + Express)
-**Target:** `Grin-Node-Toolkit/web/051_wallet/` + `scripts/051_grin_private_web_wallet.sh`
+**Target:** `Grin-Node-Toolkit/web/051_fidelius/` + `scripts/051_grin_fidelius.sh`
 
 ## Goal
 
@@ -100,19 +100,19 @@ This matches GrinSuite's existing model and our PHP 051 model.
 ## What changes — file-by-file
 
 ### Add
-- `web/051_wallet/server.js` — ported from GrinSuite (Linux-only, NSSM stripped)
-- `web/051_wallet/package.json` — `express ^4.21.2`
-- `web/051_wallet/client/{index.html, app.js, style.css, qrcode.min.js, favicon.svg, grin_darkblue_white.svg, grin_red.svg}` — copy from `d:/tmp/grinsuite-wallet/client/`
-- `web/051_wallet/README.md` — short note that this is the ported wallet (kept brief)
+- `web/051_fidelius/server.js` — ported from GrinSuite (Linux-only, NSSM stripped)
+- `web/051_fidelius/package.json` — `express ^4.21.2`
+- `web/051_fidelius/client/{index.html, app.js, style.css, qrcode.min.js, favicon.svg, grin_darkblue_white.svg, grin_red.svg}` — copy from `d:/tmp/grinsuite-wallet/client/`
+- `web/051_fidelius/README.md` — short note that this is the ported wallet (kept brief)
 
 ### Delete (PHP stack)
-- `web/051_wallet/public_html/` — entire dir (replaced by `client/`)
-- `web/051_wallet/nginx.conf.template` — replaced by bash heredoc
-- `web/051_wallet/.api/csrf.php`, `login.php`, `proxy.php`, `qr.php`
-- `web/051_wallet/.js/grin-wallet-client.js`, `slate-handler.js`
-- `web/051_wallet/css/wallet.css`
+- `web/051_fidelius/public_html/` — entire dir (replaced by `client/`)
+- `web/051_fidelius/nginx.conf.template` — replaced by bash heredoc
+- `web/051_fidelius/.api/csrf.php`, `login.php`, `proxy.php`, `qr.php`
+- `web/051_fidelius/.js/grin-wallet-client.js`, `slate-handler.js`
+- `web/051_fidelius/css/wallet.css`
 
-### Rewrite — `scripts/051_grin_private_web_wallet.sh`
+### Rewrite — `scripts/051_grin_fidelius.sh`
 
 Keep the script's outer shape (menu, network refs in titles, log helpers,
 SSL/auth/firewall steps) but rewrite the deploy + service sections.
@@ -121,7 +121,7 @@ SSL/auth/firewall steps) but rewrite the deploy + service sections.
 |---|---|
 | 1. Install wallet binary | **Install grin-wallet binary** to `/opt/grin/webwallet/grin-wallet` (was per-network — now shared) |
 | 2. Install dependencies | **Install nodejs + nginx + certbot + htpasswd + tor** (drop php / php-fpm / php-curl / php-json) |
-| 3. Deploy files | **Copy `web/051_wallet/` to `/opt/grin/webwallet/app/`**, run `npm install --omit=dev` |
+| 3. Deploy files | **Copy `web/051_fidelius/` to `/opt/grin/webwallet/app/`**, run `npm install --omit=dev` |
 | (new) 3b | **Write systemd unit** `grin-web-wallet.service` with `WW_PUBLIC_HOST` / `WW_PUBLIC_ORIGIN` env |
 | 4. Configure nginx | **Reverse proxy** `/` → `http://127.0.0.1:7420` (no PHP-FPM blocks; keep `auth_basic`) |
 | 5. Setup SSL | **Unchanged** — Let's Encrypt or Cloudflare Origin Cert |
@@ -292,8 +292,8 @@ New for the Linux port:
 
 Order matters — earlier steps are prerequisites for later.
 
-1. `bash -n scripts/051_grin_private_web_wallet.sh` — no syntax errors
-2. `node -e "require('./web/051_wallet/server.js')"` (smoke parse — should fail
+1. `bash -n scripts/051_grin_fidelius.sh` — no syntax errors
+2. `node -e "require('./web/051_fidelius/server.js')"` (smoke parse — should fail
    gracefully on missing wallets_info.json, not crash on syntax)
 3. On a VPS: run script 051 → menu 1 (install grin-wallet binary)
 4. → menu 2 (install nodejs + nginx + certbot + tor)

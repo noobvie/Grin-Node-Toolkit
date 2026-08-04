@@ -15,7 +15,7 @@
 # restore) and the backup key file itself (must never travel inside an archive).
 #
 # Archive: /opt/grin/backups/grin_solo_backup_<DDMMYYYY>.tar.gz.enc  (mode 600)
-#   · dir + crypto mirror 052 Grin Drop for repo consistency
+#   · dir + crypto mirror 059 Grin Drop for repo consistency
 #   · AES-256-CBC, PBKDF2 600k iters; password NEVER on the process list (fd:3)
 #
 # Password model (standard across ALL products — see lib/grin_backup_engine.sh):
@@ -44,7 +44,7 @@ _GRIN_SOLO_BACKUP_SH_LOADED=1
 source "$(dirname "${BASH_SOURCE[0]}")/grin_backup_engine.sh"
 
 # ─── Paths / constants (env-overridable for testing) ────────────────────────
-SB_BACKUP_DIR="${SB_BACKUP_DIR:-/opt/grin/backups}"          # matches 052 Grin Drop
+SB_BACKUP_DIR="${SB_BACKUP_DIR:-/opt/grin/backups}"          # matches 059 Grin Drop
 SB_CONF="${SB_CONF:-/opt/grin/conf/grin_solo_backup.conf}"   # key + schedule (mode 600)
 SB_WRAPPER="${SB_WRAPPER:-/usr/local/bin/grin-solo-backup}"
 SB_CRON="${SB_CRON:-/etc/cron.d/grin-solo-backup}"

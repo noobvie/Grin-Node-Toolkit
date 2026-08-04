@@ -21,8 +21,9 @@ to match the 05/07 hub family). Menu label shows **09**; underlying files keep 0
 > products (05) and the mining pool (07) — so it cannot live *inside* either one (a mining
 > script reaching into a wallet-hub subscript for payouts is a cross-dependency smell). And a
 > Nostr relay deployer (Floonet) is not a wallet at all, so filing it under "Wallet Services"
-> is a category error. The toolkit already grows by **appending the next free number** (052–055,
-> 06b were all appended, nothing renumbered), so 09 is the convention-consistent slot. It mirrors
+> is a category error. The toolkit already grows by **appending the next free number** (051–053
+> and 06b were all appended; the sole renumber came later — Grin Drop 052 → 059 on 2026-08-04, to
+> group the 05 band by category), so 09 is the convention-consistent slot. It mirrors
 > the existing hub pattern: one menu entry that launches several sub-services.
 
 ---
@@ -79,7 +80,7 @@ So the hub does two complementary things (priority order as of 2026-07-10):
    useful to the existing Goblin/Floonet user base.**
 2. **092 Transporter** *(deferred)* — our own operator-scoped transport for *our* products'
    flows. Explicitly single-operator; must never drift into a public utility (that would just be
-   a worse Floonet and would fragment the ecosystem). It generalises what **Grin Drop (052)
+   a worse Floonet and would fragment the ecosystem). It generalises what **Grin Drop (059)
    already does** — a web-based slate exchange — into one reusable transport the payment
    products and pool share. Deferred until the receive-support question (B.9 #6) is answered
    and a concrete internal consumer (pool payouts) is ready to wire in.
@@ -234,7 +235,7 @@ No `web/091_*` — Floonet ships its own relay + optional name-authority; we don
 # PART B — 092 Grin Transporter (store-and-forward slate relay)
 
 > **Status: Phase 1 IMPLEMENTED 2026-07-11 — STANDALONE ONLY** (user decision same day:
-> build server + auth + CLI agent; keep Grin Drop 052 completely untouched). Built shape →
+> build server + auth + CLI agent; keep Grin Drop 059 completely untouched). Built shape →
 > `script09_implementation.md` §092. **Phase 2 (product wiring — pool payout rail #3, Drop
 > claims) stays DEFERRED**, gated on B.9 #6: no mainstream wallet (grin-wallet / Grim /
 > GrinPlusPlus / Ironbelly) can receive from a relay, so a Drop claimant or pool miner would
@@ -246,7 +247,7 @@ No `web/091_*` — Floonet ships its own relay + optional name-authority; we don
 > the agent (CLAUDE.md `get_tip` rule) — not a blocker.
 
 > **Naming.** This is **not email.** No SMTP, no port 25, no Postfix/Dovecot, no MX, no
-> `user@host`. It is a small **HTTP(S) service** (Node + Express + SQLite, same stack as 051/052)
+> `user@host`. It is a small **HTTP(S) service** (Node + Express + SQLite, same stack as 051/059)
 > holding encrypted Grin slates keyed by **slatepack address**, served over the web port via
 > nginx — "a queue you PUT to and GET from," not "an inbox." Do not reintroduce "mailbox"/"inbox"
 > terms. **"grinbox" is a historical citation only** (`vault713/grinbox`, the legacy transport
@@ -269,7 +270,7 @@ by recipient slatepack address.
 | Use case | Today | With Transporter |
 |---|---|---|
 | **Pool payouts (Script 07 design)** | Tor-only auto-pay; on failure, queue + retry every 6h up to 7 days — fails whenever the miner isn't running a listener at pay time | Pool drops payout slate into the miner's queue; miner's wallet finishes it on next poll. No 7-day retry gamble. |
-| **Grin Drop (052)** | Recipient pastes a slatepack back, or must be online for Tor | Fire-and-forget: claim slate waits in the recipient's queue |
+| **Grin Drop (059)** | Recipient pastes a slatepack back, or must be online for Tor | Fire-and-forget: claim slate waits in the recipient's queue |
 | **Person ↔ person, different timezones** | Trade slatepacks by hand | Async, no copy-paste |
 
 > Script 07 today is *solo mining* and only **calculates** payout splits for manual settling —
@@ -386,7 +387,7 @@ B) Transporter client/agent  — polls + does encrypt/decrypt/receive/finalize v
 ```
 
 The server only ever moves opaque ciphertext over HTTP(S). All wallet crypto happens at the
-edges through the **Owner API ECDH session** the toolkit already uses (051 `server.js`, 052).
+edges through the **Owner API ECDH session** the toolkit already uses (051 `server.js`, 059).
 
 ### Data flow — one payout, both parties offline-tolerant
 
@@ -463,12 +464,12 @@ nginx_ensure_rate_limit_zone "transporter_${net}" "60r/m" "10m" "script09-transp
 | Need | Reuse from | New work |
 |---|---|---|
 | Install grin-wallet binary | `grin_wallet_install.sh` / `_drop_download_wallet` | none |
-| Wallet init/recover/seed | `052_lib_wallet.sh` | none |
+| Wallet init/recover/seed | `059_lib_wallet.sh` | none |
 | `listen` + `owner_api` tmux | `_drop_start_session`, launcher-from-file pass handling | none |
 | `grin` user + HOME contract + ownership | CLAUDE.md launch contract, `_drop_fix_ownership` | none |
 | Owner API ECDH in Node | 051 `server.js` (`ownerApiSession`) | adapt for slatepack calls |
-| Node+Express+SQLite service | 052 Drop app (better-sqlite3) | **relay server.js + schema** |
-| systemd / nginx SSL / rate limit | 051/052 heredocs, `nginx_shared_helpers.sh` | new unit + `script09-` zone |
+| Node+Express+SQLite service | 059 Drop app (better-sqlite3) | **relay server.js + schema** |
+| systemd / nginx SSL / rate limit | 051/059 heredocs, `nginx_shared_helpers.sh` | new unit + `script09-` zone |
 | @reboot autostart + watchdog cron | `_drop_toggle_reboot_cron`, `_drop_toggle_watchdog_cron` | new tags |
 | Hub integration | 05/07 hub `run_sub` + status detectors | 09 hub menu + `_092_installed/_092_status` |
 | Tor (.onion front) | `systemctl tor@default`, 051 Tor-status pattern | hidden-service block |
@@ -599,5 +600,5 @@ keep our own 053 + Payment Pro only as the deliberate **no-Nostr, no-external-de
    grinbox/MQS fork. Local verification done (crypto interop + HTTP E2E); the **testnet round
    trip between two wallets never online simultaneously** is the remaining live-VPS proof.
 4. **092 Transporter Phase 2 — DEFERRED, gated.** Wire into payouts (Script 07 enqueues via 092
-   instead of Tor-direct + 7-day retry) and 052 Drop "send to my Transporter" claims — *gated on
+   instead of Tor-direct + 7-day retry) and 059 Drop "send to my Transporter" claims — *gated on
    B.9 #6 receive-support*.

@@ -11,7 +11,7 @@
 Name:         GrinScan
 Tagline:      "Even a noob can scan the chain."
 Purpose:      Lightweight, visually impressive Grin block explorer.
-              Built with Node.js/Express — consistent with scripts 052–055.
+              Built with Node.js/Express — consistent with scripts 051–059.
               Works with a pruned node (recent blocks only).
               Supports both Testnet and Mainnet.
 
@@ -174,7 +174,7 @@ Out of scope for Phase 1:
 
   Service       Testnet   Mainnet   Notes
   ────────────  ───────   ───────   ──────────────────────────────────────────
-  Grin Drop     3004      3005      Script 052
+  Grin Drop     3004      3005      Script 059
   WooCommerce   3007      3006      Script 053
   GrinScan      3010      3011      Script 06B (this)
 
@@ -450,7 +450,7 @@ Out of scope for Phase 1:
 13. THEME SYSTEM
 ────────────────────────────────────────────────────────────────────────────────
 
-  Pattern: mirrors 052_drop theme system exactly.
+  Pattern: mirrors 059_drop theme system exactly.
   - Base CSS variables in grinscan.css :root {}
   - Theme CSS files override only the variables they change
   - Theme stored in localStorage key: "grinscan-theme-{testnet|mainnet}"

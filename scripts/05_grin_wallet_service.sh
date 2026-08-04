@@ -3,7 +3,7 @@
 # 05_grin_wallet_service.sh — Grin Wallet Services Hub
 # =============================================================================
 #
-#  Central launcher for all Grin wallet service scripts (051–053).
+#  Central launcher for all Grin wallet service scripts (051–059).
 #  Each sub-script is fully self-contained — it manages its own wallet,
 #  binary, nginx config, and systemd services independently.
 #
@@ -12,28 +12,87 @@
 #  conflicts and security mixing between services.
 #
 #  ─── Sub-scripts ──────────────────────────────────────────────────────────
-#   051  051_grin_private_web_wallet.sh   Personal browser wallet UI
-#   052  052_grin_drop.sh                 Giveaway + donation portal
+#   051  051_grin_fidelius.sh             Fidelius — personal browser wallet UI
+#   051x 051x_grin_xp_wallet.sh           Grin XP — XP-themed variant, mainnet only
 #   053  053_grin_woocommerce.sh          WooCommerce payment gateway
+#   059  059_grin_drop.sh                 Giveaway + donation portal
 #   05C  (built into this hub)            CMD wallet quick setup — CLI / testing
 #   (Grin Transporter moved to the Grin Connectivity Hub → scripts/092_grin_transporter.sh)
 #
-#  ─── Menu ordering rule ───────────────────────────────────────────────────
-#  The KEY is positional — assigned top-to-bottom as rows are rendered. Because
-#  the key is positional, no future product can put the keys out of order,
-#  whatever number it is given (same rule as the 07 and 09 hubs).
+#  ─── Menu ordering rule — FIXED SLOTS (changed 2026-08-04) ────────────────
+#  The keys 1-9 are FIXED SLOTS, not positions. Every row in a category owns a
+#  key permanently — including rows that are planned or still empty — and a key
+#  is never re-pointed at a different product. A category's slots are contiguous
+#  and each category ends with a spare, so a new product fills the spare rather
+#  than shifting anything below it.
 #
-#  Digits and letters are TWO independent ascending sequences: digits key the
-#  numbered products, letters key hub-built utilities that have no script file of
-#  their own. Each sequence ascends down the screen.
+#     Wallets           1  2  3  4(spare)
+#     Accept Payments   5  6  7  8(spare)
+#     Giveaways         9
+#
+#  This REPLACES the previous positional rule, where the key was assigned
+#  top-to-bottom at render and planned rows were keyless. Positional keys stayed
+#  ascending for free, but every insertion silently re-pointed every key below
+#  it, which is how '2' came to mean Drop and then WooCommerce.
+#
+#  What the change costs: the spare in each category is finite. When Wallets
+#  outgrows slot 4, the next wallet CANNOT take 5 (that is WooCommerce) — the
+#  categories below have to shift, one deliberate migration, done the way the
+#  052 → 059 Drop move was done. That is the trade: rare, explicit renumbering
+#  instead of constant, invisible key drift.
+#
+#  ─── Retired key vs reassigned key ────────────────────────────────────────
+#  Under fixed slots a key should never change hands again, so this rule now
+#  applies mainly to history and to the letter keys.
+#
+#  A RETIRED key — one that nothing else took — may stay as a silent alias, so
+#  muscle memory still lands somewhere sane ('C' still reaches the CMD wallet;
+#  see the `case` in main()).
+#
+#  A REASSIGNED key never may. A second `2)` arm would be dead code — bash takes
+#  the FIRST matching arm and never reaches it — and if it were reachable it
+#  would open the wrong product with no error. When a key changes hands the old
+#  meaning dies with it; the per-product banner ("059) GRIN DROP") is what tells
+#  a mis-keyed operator where they landed.
+#
+#  The move to fixed slots re-pointed 2 (WooCommerce → Accio), 3 (Drop → Grin XP)
+#  and 5/9 one final time. Those old meanings are gone and get no alias. This is
+#  the last such churn by design — that is the whole point of fixing the slots.
+#
+#  ─── The 05x number allocation — settled, do not reopen ───────────────────
+#    05_  Wallet Services Hub (this file)
+#    05C  CMD Wallet Quick Setup          hub-built, no script file
+#    051  Fidelius — personal web wallet
+#    052  RESERVED for Accio — public web wallet (freed by the Drop move)
+#    053  WooCommerce Gateway
+#    054–058  FREE. Payment Pro then GoblinPay are expected to take 054/055 as
+#             they are built, but neither is ASSIGNED — an unbuilt product has no
+#             number (see "Planned — no number assigned yet" below, which also
+#             says why 052 is the one reservation this table allows).
+#             A 2nd giveaway product takes 058; that band grows downward.
+#    059  Grin Drop — giveaway + donation portal   (moved from 052, 2026-08-04)
+#
+#  WHY Drop sits at 059 rather than 054, which is the part that stops this being
+#  reopened: Giveaways is a one-member category, so parking it at the END of the
+#  band leaves a contiguous run for the two categories that actually grow —
+#  wallets and payments. It also cost ONE migration instead of two: at 054,
+#  WooCommerce would have had to move to 055 to keep Payments contiguous. The
+#  "no headroom at the boundary" objection does not bite, because the number
+#  encodes nothing about order WITHIN a band — the menu key does that, and the
+#  key is a fixed slot independent of the number (see above: key 9 is Drop/059
+#  by coincidence, key 5 is WooCommerce/053). A 2nd giveaway would take 058 and
+#  the band would grow downward with no menu consequence at all.
+#  Keeping 052 was the alternative, and it would have left Wallets
+#  permanently split around a faucet with every future wallet landing further
+#  from 051. Full reasoning → docs/generated/script05_implementation.md
 #
 #  ─── Numbers are internal — the menu shows NAMES only ─────────────────────
-#  051 / 052 / 053 / 05C are file and doc identity. They are NOT printed on the
+#  051 / 053 / 059 / 05C are file and doc identity. They are NOT printed on the
 #  menu rows: an operator picking a wallet does not care which integer its script
 #  got, and two numbers per row ("A) 05C ·") read as a broken sequence.
 #
 #  The number IS printed on each product's own screen banner ("05C) GRIN WALLET
-#  QUICK SETUP"), which is the toolkit-wide convention (01, 052, 091 …). That is
+#  QUICK SETUP"), which is the toolkit-wide convention (01, 059, 091 …). That is
 #  the one place it belongs — it tells you where you are after a clear — and it
 #  is why the menu row can drop it without the number becoming unfindable.
 #
@@ -42,21 +101,32 @@
 #  quick setup (hub 05)", not "05C" — the number is a hint in brackets, the name
 #  is what the operator can actually find on a menu.
 #
-#  Within a group, rows are ordered by readiness: ✅ ready, then 🔧 building,
-#  then planned. The first thing you see in a group is the thing that works.
+#  Rows are NOT re-sorted by readiness. Under fixed slots a row cannot move, so
+#  the old "✅ then 🔧 then planned within a group" rule is retired — sorting by
+#  readiness would move a key the day a product ships, which is exactly what
+#  fixed slots exist to prevent. The ✅/🔧/⏳ marker carries readiness instead.
 #
-#  ─── Planned — no number assigned yet ─────────────────────────────────────
-#  Planned products get a KEYLESS dim row inside the category they will belong
-#  to, so the menu shows where they are heading without reserving anything. They
-#  gain a key at that position on the day they are built. Never give a planned
-#  row a live key — a key that prints "coming soon" is the placeholder script we
-#  deleted, in miniature.
+#  ─── Planned and spare rows have LIVE keys ────────────────────────────────
+#  A planned or spare row owns its slot from the start, so its key is live and
+#  dispatches to _slot_notice(): a banner saying what the slot is for, a design-doc
+#  pointer, "Nothing was installed or changed", Enter to return.
+#
+#  This is NOT the "coming soon" placeholder script we deleted. That was a fake
+#  product — a sub-menu with options that did nothing, which an operator could
+#  wander into and mistake for a broken install. _slot_notice is one screen with
+#  no choices; it cannot be confused for a product. The alternative (a dead key
+#  that silently redraws, or falls through to "Invalid option") reads as a broken
+#  menu, because under fixed slots the number IS printed and IS in the range hint.
 #
 #  Numbers are assigned when a build STARTS — the next free integer, nothing
-#  more. Do NOT try to make the number encode the category: 051/052/053 are
-#  already one-per-category, so no contiguous per-category band can exist without
-#  renumbering, and a band scheme seals every group except the last one anyway.
+#  more. Do NOT try to make the number encode the category: 051/053/059 were
+#  already one-per-category, so no contiguous per-category band could exist
+#  without renumbering — which is exactly what moving Drop 052 → 059 cost.
 #  Pre-assigning numbers to ideas is what made this menu read 1,5,C,3,4,6,2.
+#  The single exception is 052, held for Accio. Accio is unbuilt like the others,
+#  so the exception needs a reason: the whole point of moving Drop off 052 was to
+#  free a WALLET slot next to 051. Letting anything else take it would mean paying
+#  for that migration and throwing away the only thing it bought.
 #
 #   Payment Pro        Grin payment processor for platforms other than WooCommerce
 #                      (Shopify, custom/headless APIs, subscription billing).
@@ -64,7 +134,9 @@
 #                      recurring GRIN payments, webhooks on confirmation,
 #                      multi-wallet routing. Bridge ports 3008 main / 3009 test.
 #                      Design starts after 053_grin_woocommerce.sh is complete.
-#   Public Web Wallet  Client-side WASM wallet, no server-held keys.
+#   Accio (052)        Public web wallet — client-side WASM, no server-held keys.
+#                      The one planned product that DOES carry a number, reserved
+#                      not pre-assigned — see the exception above.
 #                      Design → docs/generated/script05_design.md (PART A)
 #   GoblinPay          Receive-only merchant till (Nostr + slatepack), deploying
 #                      github.com/2ro/GoblinPay the toolkit way.
@@ -127,13 +199,13 @@ _051_status() {
     fi
 }
 
-# 052 — installed if app dir exists for either network
-_052_installed() {
+# 059 — installed if app dir exists for either network
+_059_installed() {
     [[ -d /opt/grin/drop-main ]] || [[ -d /opt/grin/drop-test ]]
 }
 
-# 052 — running networks (systemd active)
-_052_status() {
+# 059 — running networks (systemd active)
+_059_status() {
     local mn="" tn=""
     systemctl is-active --quiet grin-drop-main 2>/dev/null && mn="mainnet"
     systemctl is-active --quiet grin-drop-test 2>/dev/null && tn="testnet"
@@ -160,6 +232,17 @@ _053_status() {
     elif [[ -n "$tn" ]];           then echo "testnet"
     else echo ""
     fi
+}
+
+# 051x — installed if the XP config written by the script exists (mainnet only)
+_051x_installed() {
+    [[ -f /opt/grin/webwallet/xp-mainnet/config.conf ]]
+}
+
+# 051x — running if its nginx sites-enabled symlink exists. Mainnet only by
+# design, so this returns the label or nothing — never a network pair.
+_051x_status() {
+    if [[ -L /etc/nginx/sites-enabled/web-wallet-xp ]]; then echo "mainnet"; else echo ""; fi
 }
 
 # cmd wallet — installed if grin-wallet.toml exists
@@ -199,33 +282,46 @@ show_menu() {
     # ── running / installed status ────────────────────────────────────────────
     local any_shown=0
 
-    local s051_run; s051_run=$(_051_status)
-    local s052_run; s052_run=$(_052_status)
-    local s053_run; s053_run=$(_053_status)
+    local s051_run;  s051_run=$(_051_status)
+    local s051x_run; s051x_run=$(_051x_status)
+    local s059_run;  s059_run=$(_059_status)
+    local s053_run;  s053_run=$(_053_status)
     local s_cmd_run; s_cmd_run=$(_cmd_status)
 
-    local s051_inst=0 s052_inst=0 s053_inst=0 s_cmd_inst=0
-    _051_installed && s051_inst=1 || true
-    _052_installed && s052_inst=1 || true
-    _053_installed && s053_inst=1 || true
-    _cmd_installed && s_cmd_inst=1 || true
+    local s051_inst=0 s051x_inst=0 s059_inst=0 s053_inst=0 s_cmd_inst=0
+    _051_installed  && s051_inst=1  || true
+    _051x_installed && s051x_inst=1 || true
+    _059_installed  && s059_inst=1  || true
+    _053_installed  && s053_inst=1  || true
+    _cmd_installed  && s_cmd_inst=1 || true
 
-    # Show only running or installed services — hide untouched ones
-    if [[ -n "$s051_run" || $s051_inst -eq 1 ]]; then
+    # Show only running or installed services — hide untouched ones.
+    # Order here mirrors the menu below (Wallets → Accept Payments → Giveaways);
+    # keep the two in step whenever a row moves.
+    if [[ -n "$s_cmd_run" || $s_cmd_inst -eq 1 ]]; then
         any_shown=1
-        if [[ -n "$s051_run" ]]; then
-            echo -e "  ${GREEN}●${RESET} ${BOLD}Private Web Wallet${RESET}  ${GREEN}running${RESET}  ${DIM}($s051_run)${RESET}"
+        if [[ -n "$s_cmd_run" ]]; then
+            echo -e "  ${GREEN}●${RESET} ${BOLD}CMD Wallet${RESET}          ${GREEN}listening${RESET}  ${DIM}($s_cmd_run)${RESET}"
         else
-            echo -e "  ${DIM}○ Private Web Wallet  installed · not running${RESET}"
+            echo -e "  ${DIM}○ CMD Wallet          installed · not listening${RESET}"
         fi
     fi
 
-    if [[ -n "$s052_run" || $s052_inst -eq 1 ]]; then
+    if [[ -n "$s051_run" || $s051_inst -eq 1 ]]; then
         any_shown=1
-        if [[ -n "$s052_run" ]]; then
-            echo -e "  ${GREEN}●${RESET} ${BOLD}Grin Drop${RESET}           ${GREEN}running${RESET}  ${DIM}($s052_run)${RESET}"
+        if [[ -n "$s051_run" ]]; then
+            echo -e "  ${GREEN}●${RESET} ${BOLD}Fidelius${RESET}            ${GREEN}running${RESET}  ${DIM}($s051_run)${RESET}"
         else
-            echo -e "  ${DIM}○ Grin Drop           installed · not running${RESET}"
+            echo -e "  ${DIM}○ Fidelius            installed · not running${RESET}"
+        fi
+    fi
+
+    if [[ -n "$s051x_run" || $s051x_inst -eq 1 ]]; then
+        any_shown=1
+        if [[ -n "$s051x_run" ]]; then
+            echo -e "  ${GREEN}●${RESET} ${BOLD}Grin XP${RESET}             ${GREEN}running${RESET}  ${DIM}($s051x_run)${RESET}"
+        else
+            echo -e "  ${DIM}○ Grin XP             installed · not running${RESET}"
         fi
     fi
 
@@ -238,12 +334,12 @@ show_menu() {
         fi
     fi
 
-    if [[ -n "$s_cmd_run" || $s_cmd_inst -eq 1 ]]; then
+    if [[ -n "$s059_run" || $s059_inst -eq 1 ]]; then
         any_shown=1
-        if [[ -n "$s_cmd_run" ]]; then
-            echo -e "  ${GREEN}●${RESET} ${BOLD}CMD Wallet${RESET}          ${GREEN}listening${RESET}  ${DIM}($s_cmd_run)${RESET}"
+        if [[ -n "$s059_run" ]]; then
+            echo -e "  ${GREEN}●${RESET} ${BOLD}Grin Drop${RESET}           ${GREEN}running${RESET}  ${DIM}($s059_run)${RESET}"
         else
-            echo -e "  ${DIM}○ CMD Wallet          installed · not listening${RESET}"
+            echo -e "  ${DIM}○ Grin Drop           installed · not running${RESET}"
         fi
     fi
 
@@ -252,29 +348,56 @@ show_menu() {
     fi
 
     echo ""
-    echo -e "  ${DIM}✅ ready   🔧 building   · keyless rows are planned, not built yet${RESET}"
+    echo -e "  ${DIM}✅ ready   🔧 building   ⏳ planned — a planned key explains the slot, installs nothing${RESET}"
     echo ""
     echo -e "${DIM}  ── Wallets ──────────── hold & spend your own GRIN${RESET}"
     echo ""
     echo -e "  ${GREEN}A${RESET}) CMD Wallet Quick Setup  ✅  ${DIM}download · init/recover · listen (CLI/testing)${RESET}"
-    echo -e "  ${GREEN}1${RESET}) Private Web Wallet      🔧  ${DIM}browser UI, server-held keys${RESET}"
-    echo -e "     ${DIM}Public Web Wallet           planned · client-side WASM, no custody${RESET}"
-    echo ""
-    echo -e "${DIM}  ── Giveaways & Donations ─ hand GRIN out${RESET}"
-    echo ""
-    echo -e "  ${GREEN}2${RESET}) Grin Drop               ✅  ${DIM}giveaway faucet + donation portal${RESET}"
+    echo -e "  ${GREEN}1${RESET}) Fidelius                🔧  ${DIM}personal web wallet · server-held keys${RESET}"
+    echo -e "  ${GREEN}2${RESET}) Accio                   ⏳  ${DIM}public web wallet · client-side keys${RESET}"
+    echo -e "  ${GREEN}3${RESET}) Grin XP                 🔧  ${DIM}Fidelius, XP-themed · mainnet only${RESET}"
+    echo -e "  ${DIM}4) Spare slot                  unassigned · next wallet lands here${RESET}"
     echo ""
     echo -e "${DIM}  ── Accept Payments ──── receive GRIN from customers${RESET}"
     echo ""
-    echo -e "  ${GREEN}3${RESET}) WooCommerce Gateway     🔧  ${DIM}WordPress/WooCommerce plugin${RESET}"
-    echo -e "     ${DIM}Payment Pro                 planned · Shopify / custom REST API${RESET}"
-    echo -e "     ${DIM}GoblinPay                   planned · receive-only merchant till${RESET}"
+    echo -e "  ${GREEN}5${RESET}) WooCommerce Gateway     🔧  ${DIM}WordPress/WooCommerce plugin${RESET}"
+    echo -e "  ${GREEN}6${RESET}) Payment Pro             ⏳  ${DIM}Shopify / custom REST API${RESET}"
+    echo -e "  ${GREEN}7${RESET}) GoblinPay               ⏳  ${DIM}receive-only merchant till${RESET}"
+    echo -e "  ${DIM}8) Spare slot                  unassigned · next payment rail lands here${RESET}"
+    echo ""
+    echo -e "${DIM}  ── Giveaways & Donations ─ hand GRIN out${RESET}"
+    echo ""
+    echo -e "  ${GREEN}9${RESET}) Grin Drop               ✅  ${DIM}giveaway faucet + donation portal${RESET}"
     echo ""
     echo -e "  ${DIM}Grin Transporter moved → main menu 09 (Grin Connectivity Hub)${RESET}"
     echo ""
     echo -e "  ${RED}0${RESET}) Back to main menu"
     echo ""
-    echo -ne "${BOLD}Select [A / 1-3 / 0]: ${RESET}"
+    echo -ne "${BOLD}Select [A / 1-9 / 0]: ${RESET}"
+}
+
+# ─── Rows that are not products yet ──────────────────────────────────────────
+# A planned/spare key is LIVE but installs nothing: it prints what the slot is
+# for and returns. This is deliberately NOT the "coming soon" placeholder script
+# we deleted — there is no sub-menu, no prompt, no half-built path to wander
+# into. It exists so a fixed key never reads as a broken menu.
+_slot_notice() {
+    local title="$1" body="$2" doc="${3:-}"
+    clear
+    echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+    echo -e "${BOLD}${CYAN} ${title}${RESET}"
+    echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+    echo ""
+    echo -e "  ${body}"
+    echo ""
+    if [[ -n "$doc" ]]; then
+        echo -e "  ${DIM}Design → ${doc}${RESET}"
+        echo ""
+    fi
+    echo -e "  ${DIM}Nothing was installed or changed.${RESET}"
+    echo ""
+    echo -e "${DIM}Press Enter to return...${RESET}"
+    read -r || true
 }
 
 run_sub() {
@@ -793,7 +916,7 @@ _cmd_wallet_setup_for_net() {
     fi
 
     # Pin the Foreign listen port. grin-wallet init writes mainnet defaults into
-    # the toml regardless of --testnet (052_lib_wallet.sh:709 records the same
+    # the toml regardless of --testnet (059_lib_wallet.sh:709 records the same
     # for owner_api_listen_port, and the pool pins api_listen_port for exactly
     # this reason). This is the only product that actually runs `listen`, so an
     # unpinned 3415 in the testnet toml would make menu option 3 "Both" put two
@@ -1073,12 +1196,32 @@ main() {
         show_menu
         read -r choice || true
         case "$choice" in
-            1) run_sub "051_grin_private_web_wallet.sh" || true ;;
-            2) run_sub "052_grin_drop.sh"               || true ;;
-            3) run_sub "053_grin_woocommerce.sh"        || true ;;
+            1) run_sub "051_grin_fidelius.sh"     || true ;;
+            2) _slot_notice "052) ACCIO — NOT BUILT YET" \
+                   "Public web wallet with client-side WASM keys — the server never
+  holds a seed. Being refactored from MWC-Wallet-Standalone rather than
+  built fresh. 052 is reserved for it and nothing else may take it." \
+                   "docs/generated/script05_design.md (PART A)" || true ;;
+            3) run_sub "051x_grin_xp_wallet.sh"   || true ;;
+            4) _slot_notice "SLOT 4 — UNASSIGNED" \
+                   "Reserved for the next WALLET product. It gets a script number
+  (054-058) on the day its build starts, not before." || true ;;
+            5) run_sub "053_grin_woocommerce.sh"  || true ;;
+            6) _slot_notice "PAYMENT PRO — NOT BUILT YET" \
+                   "Grin payment processor for platforms other than WooCommerce:
+  Shopify, custom/headless REST APIs, recurring billing, webhooks.
+  Design starts after the WooCommerce gateway (053) is complete." || true ;;
+            7) _slot_notice "GOBLINPAY — NOT BUILT YET" \
+                   "Receive-only merchant till (Nostr + slatepack), deploying
+  github.com/2ro/GoblinPay the toolkit way." \
+                   "docs/generated/script09_design.md (PART C)" || true ;;
+            8) _slot_notice "SLOT 8 — UNASSIGNED" \
+                   "Reserved for the next PAYMENT rail. It gets a script number
+  (054-058) on the day its build starts, not before." || true ;;
+            9) run_sub "059_grin_drop.sh"         || true ;;
             # 'C' kept as a silent alias: it was the printed key for a long time,
             # and 05C is still this product's identity in docs and filenames.
-            [Aa]|[Cc]) cmd_wallet_run || true           ;;
+            [Aa]|[Cc]) cmd_wallet_run || true             ;;
             0) break ;;
             "") continue ;;
             *) echo -e "\n${RED}Invalid option.${RESET}"; sleep 1 ;;

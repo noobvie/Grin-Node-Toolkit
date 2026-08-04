@@ -1,7 +1,7 @@
 # Script 051 / 055 — Web Wallets — Security Audit
 
-**Scope:** the private single-user web wallet (`web/051_wallet/server.js` +
-`scripts/051_grin_private_web_wallet.sh`), the XP-themed client variant (`web/051_xp_wallet/`),
+**Scope:** the private single-user web wallet (`web/051_fidelius/server.js` +
+`scripts/051_grin_fidelius.sh`), the XP-themed client variant (`web/051_xp_wallet/`),
 and the public WASM wallet (055). Focus: key/passphrase handling, auth boundary, SSRF, slate
 processing.
 
@@ -15,8 +15,8 @@ design; the 051x client stores no keys in the browser.
 
 ## Trust model (051)
 The Node process binds `127.0.0.1:7420` and has **no in-process authentication** — the entire
-auth boundary is nginx Basic Auth ([051_…sh:679-680](../../scripts/051_grin_private_web_wallet.sh#L679-L680)),
-which fail-closes (nginx errors without the htpasswd file, [:758](../../scripts/051_grin_private_web_wallet.sh#L758)).
+auth boundary is nginx Basic Auth ([051_…sh:679-680](../../scripts/051_grin_fidelius.sh#L679-L680)),
+which fail-closes (nginx errors without the htpasswd file, [:758](../../scripts/051_grin_fidelius.sh#L758)).
 Anyone who passes Basic Auth controls **every** registered wallet (connect/unlock, send, view
 seed on init). This is acceptable for a single-operator private wallet, but it means the Basic
 Auth credential + TLS are the whole game — there is no per-wallet authorization tier.
@@ -24,7 +24,7 @@ Auth credential + TLS are the whole game — there is no per-wallet authorizatio
 ## Findings
 
 ### F1 — [Low] Authenticated SSRF via `/api/node/ping`
-- **Evidence:** [server.js:951-969](../../web/051_wallet/server.js#L951-L969) takes `req.query.url`,
+- **Evidence:** [server.js:951-969](../../web/051_fidelius/server.js#L951-L969) takes `req.query.url`,
   validates only `^https?://`, then `fetch(url + '/v2/foreign', …)`. A `GET`, so the Origin guard
   (POST/PUT/DELETE/PATCH only) doesn't cover it — just the Host check + nginx Basic Auth.
 - **Impact:** An authenticated user can make the server issue POST requests to arbitrary
@@ -52,15 +52,15 @@ Auth credential + TLS are the whole game — there is no per-wallet authorizatio
 ## Controls that are correct (no action)
 - **Passphrase hygiene:** kept in memory only (no `.wallet_pass` on disk); passed to
   `grin-wallet` via **stdin, never argv** — so it can't leak through `ps`
-  ([server.js:640-643](../../web/051_wallet/server.js#L640-L643), 668-669); cleared on failed connect.
+  ([server.js:640-643](../../web/051_fidelius/server.js#L640-L643), 668-669); cleared on failed connect.
 - **DNS-rebinding + CSRF guard:** strict Host allowlist on every request and Origin/Referer check
-  on all state-changing methods ([server.js:353-371](../../web/051_wallet/server.js#L353-L371)).
+  on all state-changing methods ([server.js:353-371](../../web/051_fidelius/server.js#L353-L371)).
 - **Path traversal:** every client-supplied `dir` is asserted inside `WEBWALLET_ROOT`
-  (`_isInsideRoot`, [server.js:441-446](../../web/051_wallet/server.js#L441-L446)); wallet names
+  (`_isInsideRoot`, [server.js:441-446](../../web/051_fidelius/server.js#L441-L446)); wallet names
   are `^[a-zA-Z0-9\-_]+$`.
 - **Send safety:** amount validated `> 0`; destination validated against the bech32 address regex
   **and** network-matched (rejects sending a mainnet wallet to a `tgrin1…` and vice-versa)
-  ([server.js:1132-1173](../../web/051_wallet/server.js#L1132-L1173)); slatepack input capped at
+  ([server.js:1132-1173](../../web/051_fidelius/server.js#L1132-L1173)); slatepack input capped at
   16 KB with format check.
 - **Owner API v3 ECDH/AES-256-GCM** implemented correctly (random 12-byte nonce, GCM tag verified).
 - **Transport & limits:** `trust proxy` loopback, `express.json` 32 KB, registry `0600`, wallet

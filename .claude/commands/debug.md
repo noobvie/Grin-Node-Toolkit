@@ -88,7 +88,7 @@ ls -la <secret files>
 systemctl show <service> --property=User
 ```
 
-Expected ownership pattern for 052 Grin Drop (testnet):
+Expected ownership pattern for 059 Grin Drop (testnet):
 ```
 grin:grin 600  /opt/grin/drop-test/grin_drop_test.conf
 grin:grin 600  /opt/grin/drop-test/.owner_api_secret

@@ -36,7 +36,7 @@ verify **when they are built**, so the audit isn't skipped at implementation tim
 
 ## Security checklist to enforce when 092 is implemented
 Distilled from the store-and-forward design and the money-handling patterns already validated in
-052/07. Treat as the pre-merge gate.
+059/07. Treat as the pre-merge gate.
 
 1. **Ciphertext-only at rest.** The relay stores encrypted slates it cannot decrypt (armored
    slatepack / age-encrypted to the recipient address). The DB must never hold plaintext slates or
@@ -46,14 +46,14 @@ Distilled from the store-and-forward design and the money-handling patterns alre
    a guessable id. Do **not** reuse the pool's low-entropy IP-proof for this; a relay collection is
    a stronger action than min-payout. Throttle proof attempts (lockout), audit-log each.
 3. **Enqueue abuse / DoS bounds.** Cap slate size, per-address queue depth, total queue size, and
-   TTL-expire uncollected slates (mirror 052's invoice-expiry sweep). Rate-limit enqueue at nginx
+   TTL-expire uncollected slates (mirror 059's invoice-expiry sweep). Rate-limit enqueue at nginx
    **and** in-app; the relay must not be a free spam/amplification store.
 4. **No SSRF / no auto-finalize.** If the relay ever calls a wallet/node, target only configured
    localhost endpoints. Don't embed the server's Tor address in slates it forwards (the "ghost
-   TxReceived" trap seen in 052/053) — keep it a dumb ciphertext store.
+   TxReceived" trap seen in 059/053) — keep it a dumb ciphertext store.
 5. **Transport & exposure.** Bind `127.0.0.1`; nginx TLS (or Tor onion) only; `trust proxy`
    loopback + `req.ip`; strict body-size limit; parameterized SQLite (prepared statements).
-6. **Pool/Drop rail caution.** Before wiring 092 as a payout rail for Script 07 or 052 (a stated
+6. **Pool/Drop rail caution.** Before wiring 092 as a payout rail for Script 07 or 059 (a stated
    goal), confirm the wallet actually supports relay-receive — the design doc flags this as
    unconfirmed (B.9 #6, the reason 092 is deferred). A payout rail that silently drops slates =
    stuck funds.

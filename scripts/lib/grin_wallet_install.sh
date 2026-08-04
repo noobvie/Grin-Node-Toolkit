@@ -2,7 +2,7 @@
 # lib/grin_wallet_install.sh — grin-wallet binary download + verify (shared)
 # =============================================================================
 # Factored from Script 05's CMD-wallet download step so Script 07's central
-# wallet (and later 05/051/052) share ONE download/verify implementation.
+# wallet (and later 05/051/059) share ONE download/verify implementation.
 #
 #   gwi_install_grin_wallet <dest_dir> [force]
 #       Download the latest grin-wallet linux-x86_64 release, verify its

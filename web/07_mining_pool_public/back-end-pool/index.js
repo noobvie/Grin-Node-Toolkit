@@ -215,7 +215,7 @@ const app = express();
 // raw XFF UNspoofable: a direct hit on :8080 (not via the local proxy) gets its real socket
 // IP, not a forged header. Without this the rate-limiter and admin IP allowlist all compare
 // against the wrong/forgeable address.
-// 'loopback' matches the toolkit convention (see web/051_wallet/server.js); app-scoped, so
+// 'loopback' matches the toolkit convention (see web/051_fidelius/server.js); app-scoped, so
 // no collision with other toolkit Express products.
 app.set('trust proxy', 'loopback');
 app.use(express.json());

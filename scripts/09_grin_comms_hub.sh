@@ -161,7 +161,7 @@ show_menu() {
     echo -e "  ${DIM}How Grin participants reach each other — transport, relays, messaging.${RESET}"
     echo ""
     echo -e "  ${GREEN}1${RESET}) Floonet Relay           ✅  $(_badge _091_installed _091_status)"
-    echo -e "     ${DIM}Deploy floonet-rs — join the P2P privacy relay network${RESET}"
+    echo -e "     ${DIM}floonet-rs — Nostr relay carrying slatepacks for Goblin-style wallets${RESET}"
     echo ""
     echo -e "  ${GREEN}2${RESET}) CoinSwap Mixer          ⏳  ${DIM}reserved — not built yet${RESET}"
     echo -e "     ${DIM}mwixnet hop — breaks the on-chain link between coins (ledger privacy)${RESET}"

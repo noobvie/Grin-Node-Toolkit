@@ -7,18 +7,38 @@ mwixnet CoinSwap mixer** — an unbuilt member with its own audit requirements, 
 [script09_design.md](script09_design.md) PART D. Nothing in this audit's findings changes; only
 the file names moved.)*
 
-**Date:** 2026-07-10 · **Auditor:** Claude · **Verdict:** **Nothing to audit yet — both are
-unimplemented placeholders.** `scripts/091_*.sh` and `scripts/093_*.sh` print "COMING SOON — not
-yet implemented" and no `web/09*` backend exists. This doc records the security requirements to
-verify **when they are built**, so the audit isn't skipped at implementation time.
+**Date:** 2026-07-10 · **Auditor:** Claude · **Verdict (2026-07-10):** *Nothing to audit yet — both
+are unimplemented placeholders.* This doc records the security requirements to verify **when they
+are built**, so the audit isn't skipped at implementation time.
+
+> ## ⚠ THIS VERDICT IS STALE — corrected 2026-08-04
+>
+> **Both products have since been implemented, and no audit has been run against the code.**
+> - **091** is now **~3 000 lines** (`091_grin_floonet_relay.sh` 414 + `091_lib_floonet.sh` 2 562),
+>   contains no "COMING SOON" text, and has been **deployed to a VPS at least once** (the design
+>   doc records a first-deploy port-8080 collision incident). It is a finished product.
+> - **093** has **Phase 1 built** (2026-07-11), standalone, not yet VPS-deployed.
+>
+> **Do not read the 2026-07-10 verdict as "there is nothing to check."** The checklists below were
+> written as *requirements to verify later*; that verification **has not happened**. Until someone
+> audits the actual code, every checklist item's status is **UNKNOWN, not passed.**
+>
+> Next step when this is picked up: audit 091's real implementation against the §091 checklist and
+> replace this file's contents with findings, per the closing instruction at the bottom.
 
 ---
 
-## Status
-- **091 Floonet relay** — placeholder ([091_…sh](../../scripts/091_grin_floonet_relay.sh)).
+## Status *(updated 2026-08-04)*
+- **091 Floonet relay** — ✅ **IMPLEMENTED, UNAUDITED**
+  ([091_…sh](../../scripts/091_grin_floonet_relay.sh) + [091_lib_floonet.sh](../../scripts/lib/091_lib_floonet.sh)).
   It *deploys* 2ro's floonet-rs (nginx/certbot/wss + firewall) — we deploy, we don't fork.
-- **093 Transporter** — placeholder ([093_…sh](../../scripts/093_grin_transporter.sh)), DEFERRED.
-  Planned: Node + Express + SQLite behind nginx on `127.0.0.1:7456/7466`, encrypted slate queue
+  *(Was described here as a placeholder; that was true on 2026-07-10 and is no longer.)*
+- **092 CoinSwap mixer** — ⏳ **RESERVED, NOT BUILT.** No code exists. Its security requirements
+  are drafted in [script09_design.md](script09_design.md) **PART D.7** and are not repeated here;
+  fold them in when the build starts.
+- **093 Transporter** — 🔧 **PHASE 1 IMPLEMENTED, UNAUDITED**
+  ([093_…sh](../../scripts/093_grin_transporter.sh)), Phase 2 deferred.
+  Node + Express + SQLite behind nginx on `127.0.0.1:7456/7466`, encrypted slate queue
   keyed by slatepack address. Design: [script09_design.md](script09_design.md).
 
 ---

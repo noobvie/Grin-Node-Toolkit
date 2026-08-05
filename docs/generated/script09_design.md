@@ -1215,6 +1215,29 @@ echo -e "  ${GREEN}2${RESET}) CoinSwap Mixer          $(_badge _092_installed _0
 Adding it shifts the Transporter's positional key 2 → 3. Safe: 093 has never been VPS-deployed, so
 no operator has muscle memory for that key, and the per-product banner is the mis-key safety net.
 
+**✅ The row is LIVE as of 2026-08-04 — but as a reservation, not the wiring above.** The key shift
+already happened; only the dispatch differs until the build lands.
+
+*Why it was added before the product exists:* the operator pulled the reserved-number commit to a
+VPS and reported the mixer "missing from the menu." **A reserved number that is invisible in the UI
+reads as a missing feature** — a documentation-only reservation is invisible to the person actually
+using the tool. That is the same failure mode CLAUDE.md records for dead keys, arriving from the
+other direction.
+
+```bash
+# interim (now): key 2 is live, dispatches to a one-screen notice, installs nothing
+echo -e "  ${GREEN}2${RESET}) CoinSwap Mixer          ${YELLOW}⏳ reserved — not built yet${RESET}"
+2) _slot_notice "092) GRIN COINSWAP MIXER — NOT BUILT YET" "…" \
+       "docs/generated/script09_design.md (PART D)" || true ;;
+```
+`_slot_notice()` was **ported from hub 05** into 09 (identical body). Hub 09 keeps **positional**
+keys — this is not a move to fixed slots; only the notice helper crossed over.
+
+**At build time, swap the interim arm for the badge wiring above** — replace it, never add a second
+`2)` arm. Two arms for one key is dead code (bash takes the first match) and would silently keep
+opening the notice after the product shipped. The menu legend line
+(`⏳ = the slot is reserved…`) comes out with it, if 092 is the last reserved row.
+
 ### D.10.7 Explicitly out of scope for 092
 
 - **No nginx, no certbot, no vhost, no rate-limit zone** — the public surface is the Arti onion

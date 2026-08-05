@@ -57,11 +57,19 @@ scripts/
   08_  Node admin centre (monitoring, nginx, firewall, backup, disk cleanup)
   08del_ Full cleanup (destructive)
   09_  Grin Connectivity Hub → 091_ Floonet relay deployer (deploys 2ro's floonet-rs via
-       nginx/certbot — we deploy, don't fork) and 092_ Grin Transporter (store-and-forward
-       slate queue, was "Script 056"; Node+SQLite+Tor; Phase 1 built 2026-07-11 STANDALONE —
-       wiring into 059/07 stays deferred on wallet relay-receive support, design B.9 #6).
-       Numbers swapped 2026-07-10 (Floonet first — serves existing users). Design →
-       docs/generated/script09_design.md, memory project_comms_hub_09. Menu grouping is
+       nginx/certbot — we deploy, don't fork), 092_ RESERVED for the mwixnet CoinSwap mixer
+       (NOT BUILT — run one hop of a Grin CoinSwap route; ledger-level unlinkability, the one
+       thing Tor cannot give. Design → script09_design.md PART D), and 093_ Grin Transporter
+       (store-and-forward slate queue, was "Script 056"; Node+SQLite+Tor; Phase 1 built
+       2026-07-11 STANDALONE — wiring into 059/07 stays deferred on wallet relay-receive
+       support, design B.9 #6). 094+ free. Numbers swapped 2026-07-10 (Floonet first — serves
+       existing users); Transporter moved 092→093 on 2026-08-04 to free 092 for the mixer.
+       ⚠ That renumber is the band's ONE sanctioned exception to "assign a number when a build
+       STARTS": 092 is held for an unbuilt product. It was affordable only because 093 has never
+       been VPS-deployed AND its runtime identifiers are name-keyed, not number-keyed
+       (grin-transporter-*, /opt/grin/transporter-*, grin_transporter.conf, ports 7456/7466) —
+       so there was no Drop-style matched-key migration. Do not renumber a deployed product.
+       Design → docs/generated/script09_design.md, memory project_comms_hub_09. Menu grouping is
        display-only; the number stays the label.
   lib/ Sourced libraries — always prefixed with parent script number
        e.g. 059_lib_wallet.sh, 059_lib_nginx.sh

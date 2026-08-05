@@ -17,7 +17,7 @@
 #   053  053_grin_woocommerce.sh          WooCommerce payment gateway
 #   059  059_grin_drop.sh                 Giveaway + donation portal
 #   05C  (built into this hub)            CMD wallet quick setup — CLI / testing
-#   (Grin Transporter moved to the Grin Connectivity Hub → scripts/092_grin_transporter.sh)
+#   (Grin Transporter moved to the Grin Connectivity Hub → scripts/093_grin_transporter.sh)
 #
 #  ─── Menu ordering rule — FIXED SLOTS (changed 2026-08-04) ────────────────
 #  The keys 1-9 are FIXED SLOTS, not positions. Every row in a category owns a

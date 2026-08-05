@@ -9,11 +9,21 @@
 #
 #  ─── Members ───────────────────────────────────────────────────────────────
 #   091  091_grin_floonet_relay.sh    Floonet (floonet-rs) relay deployer
-#   092  092_grin_transporter.sh      Store-and-forward slate relay (Phase 1 built 2026-07-11)
-#   093+ (reserved)                   NIP-05 identity, notifications, …
+#   092  (reserved)                   mwixnet CoinSwap mixer node — NOT BUILT YET
+#   093  093_grin_transporter.sh      Store-and-forward slate relay (Phase 1 built 2026-07-11)
+#   094+ (reserved)                   NIP-05 identity, notifications, …
 #
 #  (Numbers swapped 2026-07-10: Floonet relay ships first — it serves the
 #   existing Goblin/Floonet user base; the Transporter is an internal rail.)
+#
+#  (Renumbered 2026-08-04 by operator decision: the Transporter moved 092 → 093
+#   and 092 was reserved for the mwixnet CoinSwap MIXER — the mixer is the more
+#   actionable build (upstream is community-tested on testnet and a live route
+#   operator can add us), while the Transporter's Phase 2 stays gated on wallet
+#   relay-receive support. NOTE this breaks the toolkit's usual "assign a number
+#   when a build STARTS" rule: 092 is a deliberate reservation for an UNBUILT
+#   product, and this is the second renumber the Transporter has taken
+#   (056 → 091 → 092 → 093). Rationale + mixer design → script09_design.md PART D.)
 #
 #  Design: docs/generated/script09_design.md
 #  Memory: project_comms_hub_09
@@ -49,13 +59,13 @@ _091_status() {
     if systemctl is-active --quiet floonet-rs 2>/dev/null; then echo "active"; else echo ""; fi
 }
 
-# 092 — installed if a Transporter instance dir exists for either network
-_092_installed() {
+# 093 — installed if a Transporter instance dir exists for either network
+_093_installed() {
     [[ -d /opt/grin/transporter-main ]] || [[ -d /opt/grin/transporter-test ]]
 }
 
-# 092 — running status from systemd
-_092_status() {
+# 093 — running status from systemd
+_093_status() {
     local mn="" tn=""
     systemctl is-active --quiet grin-transporter-main 2>/dev/null && mn="mainnet"
     systemctl is-active --quiet grin-transporter-test 2>/dev/null && tn="testnet"
@@ -102,7 +112,7 @@ show_menu() {
     echo -e "  ${GREEN}1${RESET}) Floonet Relay           $(_badge _091_installed _091_status)"
     echo -e "     ${DIM}Deploy floonet-rs — join the P2P privacy relay network${RESET}"
     echo ""
-    echo -e "  ${GREEN}2${RESET}) Grin Transporter        $(_badge _092_installed _092_status)"
+    echo -e "  ${GREEN}2${RESET}) Grin Transporter        $(_badge _093_installed _093_status)"
     echo -e "     ${DIM}Store-and-forward slate relay — offline auto-payouts (HTTP, not SMTP)${RESET}"
     echo ""
     echo -e "  ${RED}0${RESET}) Back to main menu"
@@ -116,7 +126,7 @@ main() {
         read -r choice || true
         case "$choice" in
             1) run_sub "091_grin_floonet_relay.sh"  || true ;;
-            2) run_sub "092_grin_transporter.sh"    || true ;;
+            2) run_sub "093_grin_transporter.sh"    || true ;;
             0) break ;;
             "") continue ;;
             *) echo -e "\n${RED}Invalid option.${RESET}"; sleep 1 ;;

@@ -1,10 +1,10 @@
 #!/bin/bash
 # =============================================================================
-# 092_grin_transporter.sh — Grin Transporter (store-and-forward slate relay)
+# 093_grin_transporter.sh — Grin Transporter (store-and-forward slate relay)
 # =============================================================================
 #
 #  Member of the Grin Connectivity Hub (Script 09). Renumbered from the earlier
-#  "Script 056" plan on 2026-07-04; swapped 091→092 with the Floonet relay on
+#  "Script 056" plan on 2026-07-04; swapped 091→093 with the Floonet relay on
 #  2026-07-10 (Floonet shipped first). Phase 1 implemented 2026-07-11.
 #
 #  Self-hosted store-and-forward relay for Grin transaction slates.
@@ -23,7 +23,7 @@
 #    nginx/certbot + optional Tor front + cron poll. Product integration
 #    (pool payout rail #3, Drop claims) stays gated on design doc B.9 #6.
 #
-#  Design: docs/generated/script09_design.md  (PART B — 092)
+#  Design: docs/generated/script09_design.md  (PART B — 093)
 #
 #  ─── Network submenu ────────────────────────────────────────────────────────
 #   1) Install server       (Node.js v24 + app + systemd)
@@ -68,8 +68,8 @@ error()   { echo -e "${RED}[ERROR]${RESET} $*"; log "[ERROR] $*"; }
 pause()   { echo ""; echo -e "${DIM}Press Enter to continue...${RESET}"; read -r || true; }
 
 # ─── Source paths (single copy, both networks) ────────────────────────────────
-TRP_APP_SRC="$TOOLKIT_ROOT/web/092_transporter"
-TRP_AGENT_SRC="$TOOLKIT_ROOT/web/092_transporter/client/agent.js"
+TRP_APP_SRC="$TOOLKIT_ROOT/web/093_transporter"
+TRP_AGENT_SRC="$TOOLKIT_ROOT/web/093_transporter/client/agent.js"
 
 # ─── Network-specific variables (set by trp_set_network) ──────────────────────
 TRP_NETWORK=""      # testnet | mainnet
@@ -112,10 +112,10 @@ trp_set_network() {
 # ─── Source lib files ─────────────────────────────────────────────────────────
 # shellcheck source=lib/nginx_shared_helpers.sh
 source "$SCRIPT_DIR/lib/nginx_shared_helpers.sh"
-# shellcheck source=lib/092_lib_server.sh
-source "$SCRIPT_DIR/lib/092_lib_server.sh"
-# shellcheck source=lib/092_lib_client.sh
-source "$SCRIPT_DIR/lib/092_lib_client.sh"
+# shellcheck source=lib/093_lib_server.sh
+source "$SCRIPT_DIR/lib/093_lib_server.sh"
+# shellcheck source=lib/093_lib_client.sh
+source "$SCRIPT_DIR/lib/093_lib_client.sh"
 
 # =============================================================================
 # MENUS
@@ -136,7 +136,7 @@ network_menu() {
     while true; do
         clear
         echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-        echo -e "${BOLD}${CYAN} 092) GRIN TRANSPORTER — [$TRP_NET_LABEL]${RESET}"
+        echo -e "${BOLD}${CYAN} 093) GRIN TRANSPORTER — [$TRP_NET_LABEL]${RESET}"
         echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
         echo ""
         echo -e "  ${DIM}Store-and-forward slate queue — automated + offline-tolerant sends.${RESET}"
@@ -182,7 +182,7 @@ select_network() {
     while true; do
         clear
         echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-        echo -e "${BOLD}${CYAN} 092) GRIN TRANSPORTER${RESET}"
+        echo -e "${BOLD}${CYAN} 093) GRIN TRANSPORTER${RESET}"
         echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
         echo ""
         echo -e "  ${DIM}Self-hosted encrypted slate queue (HTTP, not email/SMTP).${RESET}"

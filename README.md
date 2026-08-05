@@ -203,7 +203,7 @@ Grin Node Toolkit
 │       │   ├── 10) GoblinPay  ·  11) Edit config.toml
 │       │   ├── B) Backup & restore  ·  U) Update  ·  M) Nym mixnet exit  ·  D) Uninstall
 │       │   └── 0) Back                 (relay binds 127.0.0.1:8181 → nginx wss)
-│       └── 2) Grin Transporter         → 092_grin_transporter.sh
+│       └── 2) Grin Transporter         → 093_grin_transporter.sh
 │           ├── Network select          (1) Testnet  ·  2) Mainnet)
 │           ├── Server  1) Install · 2) Configure · 3) Domain & SSL · 4) Tor hidden service
 │           │           5) Start/Stop · 6) Status
@@ -269,7 +269,8 @@ Operations toolbox: **remote node monitor** (registry + custom hosts, emails on 
 
 Deploys the privacy / transport layer shared by wallets and the pool:
 - **091 Floonet Relay** — deploys the community Grin-native Nostr relay (`floonet-rs` by [github.com/2ro](https://github.com/2ro)) the toolkit way: hardened systemd + nginx/certbot over `wss` + firewall + encrypted backups. Optional NIP-05 usernames, NIP-42 access control, GoblinPay monetisation, and a Nym mixnet exit. We deploy upstream's software (not a fork).
-- **092 Grin Transporter** — self-hosted **store-and-forward slate queue** (Node + SQLite): the sender enqueues an encrypted slate and the receiver polls later, so the two are never online together — the only transport that's automated *and* offline-tolerant. Optional Tor `.onion` front. Standalone (Phase 1); wallet wiring pending.
+- **092 mwixnet CoinSwap Mixer** *(reserved — not built yet)* — run one **mixer hop** in a Grin CoinSwap route ([`mimblewimble/mwixnet`](https://github.com/mimblewimble/mwixnet)). Tor hides *who sent* a transaction while it is in flight; a CoinSwap breaks the **permanent on-chain link** between the coin you spent and the coin that comes out — the one privacy gap Tor cannot close. Non-custodial: a mixer never holds anyone's funds. Only meaningful as an *independent* hop in someone else's route. Design → `docs/generated/script09_design.md` PART D.
+- **093 Grin Transporter** — self-hosted **store-and-forward slate queue** (Node + SQLite): the sender enqueues an encrypted slate and the receiver polls later, so the two are never online together — the only transport that's automated *and* offline-tolerant. Optional Tor `.onion` front. Standalone (Phase 1); wallet wiring pending. *(Was 092 until 2026-08-04.)*
 
 ---
 
@@ -283,12 +284,12 @@ grin-node-toolkit/
 ├── extensions/
 │   └── grinmasternodes.json    # Community host registry (zone → site_key → hosts)
 ├── scripts/                    # One script per feature — 01–08 (+ 081, 08del),
-│   │                           #   05 wallet hub + 051–059, 09 hub + 091/092
+│   │                           #   05 wallet hub + 051–059, 09 hub + 091/093
 │   └── lib/                    # Sourced libs, Python collectors, shared nginx helpers
 └── web/                        # App code deployed to /opt/grin/* (Node / PHP / static)
     ├── 04_node_api/  051_fidelius/  053_woocommerce/  059_drop/
     ├── 06_stats_map/  06b_grinscan/  06d_tiny_explorer/
-    └── 07_mining_pool_solo/  07_mining_pool_public/  092_transporter/
+    └── 07_mining_pool_solo/  07_mining_pool_public/  093_transporter/
 ```
 
 > Numbers `054+` are unallocated. A planned product gets its number when its build starts, not
@@ -362,8 +363,8 @@ grin-node-toolkit/
 | Port  | Protocol | Purpose                                                     |
 |-------|----------|-------------------------------------------------------------|
 | 8181  | HTTP     | Floonet relay (091) — localhost, nginx `wss` front-end; configurable |
-| 7456  | HTTP     | Grin Transporter (092) — mainnet (localhost, proxied by nginx) |
-| 7466  | HTTP     | Grin Transporter (092) — testnet (localhost, proxied by nginx) |
+| 7456  | HTTP     | Grin Transporter (093) — mainnet (localhost, proxied by nginx) |
+| 7466  | HTTP     | Grin Transporter (093) — testnet (localhost, proxied by nginx) |
 
 **Public mining pool (GRINIUM)**
 

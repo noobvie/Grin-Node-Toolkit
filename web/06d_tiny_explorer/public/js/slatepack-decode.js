@@ -89,7 +89,7 @@
     return out;
   }
 
-  // → { hrp, words } or null. Mirrors web/092_transporter/server.js bech32Decode.
+  // → { hrp, words } or null. Mirrors web/093_transporter/server.js bech32Decode.
   function bech32Decode(str) {
     if (typeof str !== 'string') return null;
     if (str.length < 8 || str.length > 120) return null;

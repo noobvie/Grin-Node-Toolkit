@@ -139,11 +139,11 @@ checksum on that path by design, HTTPS+GitHub trust only).
 ### Not built / future
 
 - GoblinPay-side composition (05 member consuming this relay) — PART C.2.
-- ~~092 Transporter remains deferred~~ → Phase 1 built 2026-07-11, see below.
+- ~~093 Transporter remains deferred~~ → Phase 1 built 2026-07-11, see below.
 
 ---
 
-## 092 — Grin Transporter Phase 1 (implemented 2026-07-11)
+## 093 — Grin Transporter Phase 1 (implemented 2026-07-11)
 
 **Standalone only** (user decision 2026-07-11): server + auth + CLI agent. NO
 product wiring — Grin Drop 059 stays untouched and the pool's
@@ -157,12 +157,12 @@ locally against the real code).
 ### Files
 
 ```
-scripts/092_grin_transporter.sh        wizard: net select → server/agent menus (trp_set_network vars)
-scripts/lib/092_lib_server.sh          trp_* — node24 install, app deploy, systemd, nginx+certbot, tor, status, uninstall
-scripts/lib/092_lib_client.sh          trp_agent_* — agent install (Drop auto-detect), cron poll toggle, actions submenu
-web/092_transporter/server.js          Express + node:sqlite queue (NO wallet, ciphertext only)
-web/092_transporter/package.json       express only (SQLite via node:sqlite builtin — 059 model, not better-sqlite3)
-web/092_transporter/client/agent.js    zero-dep CLI: address/status/send/poll/cancel (Owner v3 ECDH + Foreign v2)
+scripts/093_grin_transporter.sh        wizard: net select → server/agent menus (trp_set_network vars)
+scripts/lib/093_lib_server.sh          trp_* — node24 install, app deploy, systemd, nginx+certbot, tor, status, uninstall
+scripts/lib/093_lib_client.sh          trp_agent_* — agent install (Drop auto-detect), cron poll toggle, actions submenu
+web/093_transporter/server.js          Express + node:sqlite queue (NO wallet, ciphertext only)
+web/093_transporter/package.json       express only (SQLite via node:sqlite builtin — 059 model, not better-sqlite3)
+web/093_transporter/client/agent.js    zero-dep CLI: address/status/send/poll/cancel (Owner v3 ECDH + Foreign v2)
 ```
 
 ### Layout / ports (per net, independent)

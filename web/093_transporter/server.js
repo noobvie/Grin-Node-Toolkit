@@ -1,6 +1,6 @@
 'use strict';
 /**
- * server.js — Grin Transporter (Script 092): store-and-forward slate queue.
+ * server.js — Grin Transporter (Script 093): store-and-forward slate queue.
  *
  * A dumb, encrypted blob queue keyed by Slatepack address. The server never
  * sees plaintext, keys, or amounts — deposits are armored slatepacks the

@@ -278,7 +278,7 @@ five `lib/052_lib_*.sh`, three `docs/generated/script052_*.md` (9 named files), 
 
 Reference sweep reached **outside** the 05 family — the four easily missed:
 `scripts/089_backup_restore.sh`, `scripts/lib/grin_backup_push.sh`,
-`web/092_transporter/client/agent.js`, `web/07_mining_pool_public/back-end-pool/lib/wallet.js`.
+`web/093_transporter/client/agent.js`, `web/07_mining_pool_public/back-end-pool/lib/wallet.js`.
 Local memory was updated too (`project_drop_backup_052.md` → `_059.md`, plus stale
 `052_lib_*.sh` pointers in five other memory files).
 

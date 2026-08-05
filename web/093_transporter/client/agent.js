@@ -1,6 +1,6 @@
 'use strict';
 /**
- * agent.js — Grin Transporter client agent (Script 092).
+ * agent.js — Grin Transporter client agent (Script 093).
  *
  * Runs NEXT TO a grin-wallet (same box), talking to its Owner API v3 (ECDH)
  * and Foreign API v2 — the same session model as Grin Drop's server.js. The

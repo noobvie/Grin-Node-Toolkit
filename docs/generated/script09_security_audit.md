@@ -1,11 +1,14 @@
-# Script 09 — Connectivity Hub (091 Floonet relay / 092 Transporter) — Security Audit
+# Script 09 — Connectivity Hub (091 Floonet relay / 093 Transporter) — Security Audit
 
-**Scope:** 091 Floonet relay deployer and 092 Grin Transporter (store-and-forward slate relay).
-*(Numbers swapped 2026-07-10: Floonet relay is now 091 / build priority; Transporter is 092 /
-deferred.)*
+**Scope:** 091 Floonet relay deployer and 093 Grin Transporter (store-and-forward slate relay).
+*(Numbers swapped 2026-07-10: Floonet relay is now 091 / build priority; Transporter was 092 /
+deferred. Renumbered 2026-08-04: **Transporter 092 → 093**, and **092 is reserved for the
+mwixnet CoinSwap mixer** — an unbuilt member with its own audit requirements, see
+[script09_design.md](script09_design.md) PART D. Nothing in this audit's findings changes; only
+the file names moved.)*
 
 **Date:** 2026-07-10 · **Auditor:** Claude · **Verdict:** **Nothing to audit yet — both are
-unimplemented placeholders.** `scripts/091_*.sh` and `scripts/092_*.sh` print "COMING SOON — not
+unimplemented placeholders.** `scripts/091_*.sh` and `scripts/093_*.sh` print "COMING SOON — not
 yet implemented" and no `web/09*` backend exists. This doc records the security requirements to
 verify **when they are built**, so the audit isn't skipped at implementation time.
 
@@ -14,7 +17,7 @@ verify **when they are built**, so the audit isn't skipped at implementation tim
 ## Status
 - **091 Floonet relay** — placeholder ([091_…sh](../../scripts/091_grin_floonet_relay.sh)).
   It *deploys* 2ro's floonet-rs (nginx/certbot/wss + firewall) — we deploy, we don't fork.
-- **092 Transporter** — placeholder ([092_…sh](../../scripts/092_grin_transporter.sh)), DEFERRED.
+- **093 Transporter** — placeholder ([093_…sh](../../scripts/093_grin_transporter.sh)), DEFERRED.
   Planned: Node + Express + SQLite behind nginx on `127.0.0.1:7456/7466`, encrypted slate queue
   keyed by slatepack address. Design: [script09_design.md](script09_design.md).
 
@@ -34,7 +37,7 @@ verify **when they are built**, so the audit isn't skipped at implementation tim
 5. **Secrets handling** — `goblinpay.api_token` belongs in a 0600 `EnvironmentFile`
    (`FLOONET_GOBLINPAY_TOKEN`), never on argv or in a world-readable config.
 
-## Security checklist to enforce when 092 is implemented
+## Security checklist to enforce when 093 is implemented
 Distilled from the store-and-forward design and the money-handling patterns already validated in
 059/07. Treat as the pre-merge gate.
 
@@ -53,9 +56,9 @@ Distilled from the store-and-forward design and the money-handling patterns alre
    TxReceived" trap seen in 059/053) — keep it a dumb ciphertext store.
 5. **Transport & exposure.** Bind `127.0.0.1`; nginx TLS (or Tor onion) only; `trust proxy`
    loopback + `req.ip`; strict body-size limit; parameterized SQLite (prepared statements).
-6. **Pool/Drop rail caution.** Before wiring 092 as a payout rail for Script 07 or 059 (a stated
+6. **Pool/Drop rail caution.** Before wiring 093 as a payout rail for Script 07 or 059 (a stated
    goal), confirm the wallet actually supports relay-receive — the design doc flags this as
-   unconfirmed (B.9 #6, the reason 092 is deferred). A payout rail that silently drops slates =
+   unconfirmed (B.9 #6, the reason 093 is deferred). A payout rail that silently drops slates =
    stuck funds.
 
 ---

@@ -4,7 +4,7 @@
  *
  * Lifted from GrinSuite (noobvie/GrinSuite:web/03_web_wallet/server.js,
  * upstream version 2.0.0) and adapted for:
- *   - Linux paths (/opt/grin/webwallet/...) — no D:\Grin\... drive scan
+ *   - Linux paths (/opt/grin/fidelius/...) — no D:\Grin\... drive scan
  *   - systemd / apt-managed Tor (no NSSM, no sc.exe, no Tor service install)
  *   - Reverse proxy via nginx (Host/Origin guard reads WW_PUBLIC_HOST env)
  *   - grin-wallet `linux-x86_64.tar.gz` GitHub asset (not `win-x86_64.zip`)
@@ -22,9 +22,10 @@ const os                  = require('os');
 const net                 = require('net');
 const { spawn, execSync } = require('child_process');
 const express             = require('express');
+const transporter         = require('./transporter');
 
 // ── Paths (toolkit-relative, no drive scanning) ───────────────────────────────
-const WEBWALLET_ROOT = process.env.WW_ROOT || '/opt/grin/webwallet';
+const WEBWALLET_ROOT = process.env.WW_ROOT || '/opt/grin/fidelius';
 const WALLETS_JSON   = path.join(WEBWALLET_ROOT, 'wallets_info.json');
 const CLIENT_DIR     = path.join(__dirname, 'client');
 const PORT           = parseInt(process.env.GRIN_WEB_PORT || '7420', 10);
@@ -39,15 +40,24 @@ const NODE_DIR_FALLBACKS = {
     testnet: ['/opt/grin/node/testnet-prune'],
 };
 
-const MAINNET_NODES = ['api.grin.money','api.grinily.com','api.grinnode.org','main.gri.mw','grincoin.org'];
-const TESTNET_NODES = ['testapi.grin.money','testapi.grinily.com','testnet.grincoin.org','test.gri.mw'];
+// Curated public nodes. MUST stay in sync with PUBLIC_NODES in client/app.js —
+// this list is also the allowlist for /api/node/ping (see nodePingAllowed), so a
+// host the client offers but the server doesn't know would ping as unreachable.
+const MAINNET_NODES = ['api.grin.money','api.grinily.com','api.onlygrins.com',
+                       'api.grinnode.org','main.gri.mw','grincoin.org'];
+const TESTNET_NODES = ['testapi.grin.money','testapi.grinily.com','testapi.onlygrins.com',
+                       'testnet.grincoin.org','test.gri.mw'];
 
 // ── Session management ────────────────────────────────────────────────────────
 // Map<walletName, { passphrase:string, listenerProc:ChildProcess|null, ownerProc:ChildProcess|null }>
 const sessions = new Map();
 function getSession(n) { return sessions.get(n) || null; }
 function ensureSession(n) {
-    if (!sessions.has(n)) sessions.set(n, { passphrase: '', listenerProc: null, ownerProc: null });
+    if (!sessions.has(n)) sessions.set(n, { passphrase: '', listenerProc: null, ownerProc: null, lastSeen: 0 });
+    // Unlocking IS activity, and the idle middleware runs before this session
+    // exists on a first connect — so stamp it here or the backstop would expire
+    // a freshly-unlocked wallet.
+    sessions.get(n).lastSeen = Date.now();
     return sessions.get(n);
 }
 function isAlive(proc) { return !!(proc && proc.exitCode === null && !proc.killed); }
@@ -81,6 +91,24 @@ function saveRegistry(r) {
 }
 function loadWallets() { const r = loadRegistry(); return Array.isArray(r.wallets) ? r.wallets : []; }
 function findWallet(n) { return loadWallets().find(w => w.name === n) || null; }
+
+// Every /api/wallet/:name route — including DELETE ?files=1, which destroys a
+// seed — resolves by NAME ALONE, and `sessions` is keyed by name too. So a name
+// must be unique across BOTH networks, not just within one: with a mainnet and a
+// testnet wallet both called "savings", findWallet() silently returns whichever
+// is first in the registry, the second is unreachable from the UI, and deleting
+// the row you can see destroys the wallet you can't. Registration goes through
+// this helper so write-config and import can't drift apart.
+function nameTaken(name) { return loadWallets().some(w => w.name === name); }
+
+// A registry written before the rule above can already hold a collision. Refuse
+// to route those rather than guess: flag them loudly at startup and let
+// /api/wallets mark them so the UI can tell the operator to rename one.
+function duplicateWalletNames() {
+    const seen = new Map();
+    for (const w of loadWallets()) seen.set(w.name, (seen.get(w.name) || 0) + 1);
+    return [...seen.entries()].filter(([, n]) => n > 1).map(([n]) => n);
+}
 function getBinaryPath() { return BINARY_PATH; }
 
 // Probe the toolkit's per-network node directories for a secret file.
@@ -124,7 +152,13 @@ function loadAddressBook(walletDir) {
 function saveAddressBook(walletDir, book) {
     fs.writeFileSync(addressBookPath(walletDir), JSON.stringify(book, null, 2), 'utf8');
 }
-function recordAddressSend(walletDir, dest, amount) {
+// `proven` = this send completed end-to-end and the address demonstrably works.
+// It gates the "first send to this address" warning, so only a rail that gets an
+// answer may set it. A Tor send is proven (it broadcast); a Transporter send is
+// NOT — it was merely queued, and an address that is wrong, abandoned, or never
+// polled looks exactly the same at this point. Marking it proven would retire
+// the large-amount warning on the strength of a payment nobody has collected.
+function recordAddressSend(walletDir, dest, amount, proven = true) {
     if (!ADDR_RE.test(dest)) return;
     const book = loadAddressBook(walletDir);
     const now  = new Date().toISOString();
@@ -132,8 +166,21 @@ function recordAddressSend(walletDir, dest, amount) {
     cur.lastUsed   = now;
     cur.sendCount  = (Number(cur.sendCount) || 0) + 1;
     cur.totalSent  = (Number(cur.totalSent || 0) + Number(amount || 0)).toString();
-    cur.testPassed = true;
+    if (proven) cur.testPassed = true;
     book[dest] = cur;
+    try { saveAddressBook(walletDir, book); }
+    catch (e) { log('ERROR', 'ADDR_BOOK_SAVE_FAIL ' + e.message); }
+}
+
+// The other half of `proven`. An address we sent to via the Transporter earns
+// its proof later, when THEIR reply comes back and finalizes — that is the first
+// moment we know a real wallet is behind it. Deliberately does not touch
+// sendCount/totalSent: the send was already counted when it was queued.
+function markAddressProven(walletDir, dest) {
+    if (!ADDR_RE.test(dest)) return;
+    const book = loadAddressBook(walletDir);
+    if (!book[dest] || book[dest].testPassed) return;
+    book[dest].testPassed = true;
     try { saveAddressBook(walletDir, book); }
     catch (e) { log('ERROR', 'ADDR_BOOK_SAVE_FAIL ' + e.message); }
 }
@@ -423,6 +470,56 @@ function checkConnectRate(ip, wallet) {
 }
 function clearConnectRate(ip, wallet) { connectAttempts.delete(ip + '|' + wallet); }
 
+// ── Server-side idle backstop ────────────────────────────────────────────────
+// app.js already auto-locks on real user input (mousemove/keydown/…) — that is
+// the primary control and the right signal. But it only runs while a TAB IS
+// OPEN: close the browser, or lose it to a crash, and nothing ever fires, so the
+// passphrase sits in this process's memory until systemd restarts it. This is
+// the backstop for that case, deliberately longer than the client's window so
+// the client normally wins.
+//
+// Idle is measured on DELIBERATE ACTIONS, never on request traffic: the UI polls
+// /api/wallets, /api/wallet/:name/status, /api/node/* and /api/price on timers,
+// so counting those would mean a forgotten open tab renews the session forever —
+// which is the whole failure this is meant to catch.
+//
+// Expiry zeroes the passphrase ONLY. Listener/owner children keep running, so
+// inbound receiving survives an auto-lock; spending needs a re-unlock.
+const IDLE_LOCK_MIN = (() => {
+    const v = parseInt(process.env.WW_IDLE_LOCK_MINUTES || '', 10);
+    return Number.isFinite(v) && v >= 0 ? v : 60;
+})();
+const IDLE_GET_ACTIONS = /^\/api\/wallet\/[^/]+\/(txs|outputs|locked-outputs|accounts|payment-proof)/;
+
+function touchSession(name) {
+    const s = sessions.get(name);
+    if (s) s.lastSeen = Date.now();
+}
+
+app.use((req, res, next) => {
+    if (IDLE_LOCK_MIN > 0 && req.path.startsWith('/api/wallet/')) {
+        const m = req.method.toUpperCase();
+        const isAction = m !== 'GET' || IDLE_GET_ACTIONS.test(req.path);
+        if (isAction) {
+            const name = decodeURIComponent(req.path.split('/')[3] || '');
+            if (name) touchSession(name);
+        }
+    }
+    next();
+});
+
+if (IDLE_LOCK_MIN > 0) {
+    setInterval(() => {
+        const cutoff = Date.now() - IDLE_LOCK_MIN * 60_000;
+        for (const [name, s] of sessions) {
+            if (!s.passphrase) continue;
+            if ((s.lastSeen || 0) > cutoff) continue;
+            s.passphrase = '';
+            log('INFO', 'IDLE_LOCK wallet=' + name + ' after=' + IDLE_LOCK_MIN + 'min');
+        }
+    }, 60_000).unref();
+}
+
 app.use(express.static(CLIENT_DIR));
 
 // ── Setup: grin-wallet binary ─────────────────────────────────────────────────
@@ -551,8 +648,9 @@ app.post('/api/setup/write-config', (req, res) => {
     if (!_isInsideRoot(dir)) return apiErr(res, 'dir must be inside ' + _RESOLVED_ROOT);
     if (typeof nodeUrl !== 'string' || !NODE_URL_RE.test(nodeUrl)) return apiErr(res, 'Invalid nodeUrl');
     if (network !== 'mainnet' && network !== 'testnet') return apiErr(res, 'network must be mainnet or testnet');
-    if (loadWallets().find(w => w.name === name && w.network === network))
-        return apiErr(res, 'A ' + network + ' wallet named "' + name + '" already exists');
+    if (nameTaken(name))
+        return apiErr(res, 'A wallet named "' + name + '" already exists. Names must be unique across '
+                         + 'both networks — try "' + name + '-' + (network === 'testnet' ? 'test' : 'main') + '".');
 
     const reg     = loadRegistry();
     const wallets = Array.isArray(reg.wallets) ? reg.wallets : [];
@@ -601,10 +699,12 @@ app.get('/api/setup/tor-status', async (_req, res) => {
 // ── Session endpoints ─────────────────────────────────────────────────────────
 
 app.get('/api/wallets', (_req, res) => {
+    const dupes = duplicateWalletNames();
     const wallets = loadWallets().map(w => {
         const s = sessions.get(w.name);
         return {
             name: w.name, network: w.network,
+            duplicateName: dupes.includes(w.name),
             ownerPort: w.ownerPort, foreignPort: w.foreignPort,
             connected:       !!(s && s.passphrase),
             listenerRunning: isAlive(s?.listenerProc),
@@ -988,9 +1088,33 @@ app.get('/api/portfolio', async (_req, res) => {
 
 // ── Node ping proxy ───────────────────────────────────────────────────────────
 
+// Audit F1 — this used to accept ANY http(s) URL and POST to it, giving an
+// authenticated caller an outbound-request primitive (internal services, cloud
+// metadata at 169.254.169.254, port scanning by latency). It's a GET, so the
+// Origin/CSRF guard above never covered it. The target is now restricted to
+// hosts we already trust: the curated public lists, loopback, and whatever node
+// the operator has actually configured for a wallet (already validated by
+// NODE_URL_RE at write-config time). Anything else is refused before the fetch.
+function nodePingAllowed(url) {
+    let u;
+    try { u = new URL(url); } catch { return false; }
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return false;
+    const host = u.hostname.toLowerCase().replace(/^\[|\]$/g, '');
+    if (host === '127.0.0.1' || host === 'localhost' || host === '::1') return true;
+    if (MAINNET_NODES.includes(host) || TESTNET_NODES.includes(host)) return true;
+    return loadWallets().some(w => {
+        try { return new URL(w.nodeUrl || '').hostname.toLowerCase() === host; }
+        catch { return false; }
+    });
+}
+
 app.get('/api/node/ping', async (req, res) => {
     const url = req.query.url;
     if (!url || !/^https?:\/\//i.test(url)) return apiErr(res, 'valid url required');
+    if (!nodePingAllowed(url)) {
+        log('WARN', 'PING_REJECTED url=' + String(url).slice(0, 120));
+        return apiErr(res, 'Node not in the allowed list. Assign it to a wallet first.', 403);
+    }
     const t = Date.now();
     try {
         const r = await fetch(url + '/v2/foreign', {
@@ -1272,6 +1396,308 @@ app.post('/api/wallet/:name/finalize', async (req, res) => {
     } catch (e) { apiErr(res, e.message, 503); }
 });
 
+// ══ Grin Transporter (Script 093) ════════════════════════════════════════════
+//
+// A third delivery rail next to Tor (both parties online) and copy-paste
+// slatepacks (a human moves the blob). The Transporter is a dumb store-and-
+// forward queue: we PUT an encrypted slatepack addressed to the payee, and the
+// payee's wallet collects it whenever it next comes online.
+//
+// TRUST MODEL — worth being precise, because "a server in the middle" sounds
+// worse than it is. Slates are encrypted to the recipient's slatepack key, so a
+// hostile Transporter cannot read them, and finalizing requires our key, so it
+// cannot spend. What it CAN do is (a) refuse to deliver and (b) learn which
+// address talks to which. So the endpoint is an availability and metadata
+// dependency, not a custody one — that is why a wrong URL is annoying, and why
+// a wrong NETWORK is dangerous enough to be a hard error at config time.
+//
+// Config lives in the registry file (0600, alongside the wallet list) rather
+// than in a new file, so it inherits the same permissions and backup coverage.
+
+const TSP_POLL_TICK_MS  = 15_000;   // scheduler granularity; per-network interval is config
+const TSP_POLL_MIN_SEC  = 30;
+const TSP_POLL_MAX_SEC  = 3600;
+
+function tspDefaultNet() { return { url: '', enabled: false }; }
+
+function loadTspConfig() {
+    const r = loadRegistry();
+    const t = (r && typeof r.transporter === 'object' && r.transporter) ? r.transporter : {};
+    const norm = (n) => {
+        const v = t[n];
+        if (!v || typeof v !== 'object') return tspDefaultNet();
+        return {
+            url:     typeof v.url === 'string' ? v.url.trim().replace(/\/+$/, '') : '',
+            enabled: !!v.enabled,
+        };
+    };
+    let ps = parseInt(t.poll_seconds, 10);
+    if (!Number.isFinite(ps)) ps = 60;
+    ps = Math.min(TSP_POLL_MAX_SEC, Math.max(TSP_POLL_MIN_SEC, ps));
+    return { mainnet: norm('mainnet'), testnet: norm('testnet'), poll_seconds: ps };
+}
+
+function saveTspConfig(cfg) {
+    const r = loadRegistry();
+    r.transporter = cfg;
+    if (!Array.isArray(r.wallets)) r.wallets = [];
+    saveRegistry(r);
+}
+
+// Node's fetch (undici) has no SOCKS support, so an .onion host cannot be
+// reached from this process however the operator configures it. Rejecting it
+// with the reason beats a config that saves cleanly and then times out forever.
+function validateTspUrl(raw) {
+    const s = String(raw || '').trim();
+    if (!s) return { ok: true, url: '' };            // empty = not configured
+    let u;
+    try { u = new URL(s); } catch { return { ok: false, msg: 'Not a valid URL' }; }
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return { ok: false, msg: 'URL must be http:// or https://' };
+    if (u.username || u.password) return { ok: false, msg: 'Credentials in the URL are not supported' };
+    if (/\.onion$/i.test(u.hostname))
+        return { ok: false, msg: 'This process cannot reach .onion hosts directly (no SOCKS support in Node fetch). '
+                               + 'Use the Transporter\'s HTTPS front, or forward it to a local port first.' };
+    return { ok: true, url: u.origin + u.pathname.replace(/\/+$/, '') };
+}
+
+// One client per base URL so the bearer-token cache actually survives between
+// polls (it is keyed by address inside, so wallets sharing a URL share this).
+const tspClients = new Map();
+function tspClientFor(url) {
+    if (!tspClients.has(url)) tspClients.set(url, transporter.makeClient(url));
+    return tspClients.get(url);
+}
+
+// Per-wallet runtime state. Deliberately NOT in `sessions`: this must survive a
+// lock/unlock so the UI can still explain why nothing is arriving.
+const tspState = new Map();
+function tspGetState(name) {
+    if (!tspState.has(name))
+        tspState.set(name, { lastPoll: 0, lastError: null, lastResult: null, depth: 0, running: false });
+    return tspState.get(name);
+}
+
+// Bind an open ECDH session into the plain (method, params) shape transporter.js
+// expects, folding in the token so the module never handles one.
+function boundOwnerCall(session) {
+    return (method, params) => encryptedOwnerCall(session.headers, session.sharedKey, session.ownerUrl,
+                                                  method, Object.assign({ token: session.token }, params || {}));
+}
+
+// Wallet Foreign API v2. The inline copy in /receive is left alone on purpose —
+// it is the working copy-paste path and this is a new caller, not a refactor.
+async function walletForeignCall(wallet, method, params = []) {
+    const auth = 'Basic ' + Buffer.from('grin:' + readForeignSecret(wallet.dir)).toString('base64');
+    let res;
+    try {
+        res = await fetch('http://127.0.0.1:' + wallet.foreignPort + '/v2/foreign', {
+            method:  'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: auth },
+            body:    JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
+            signal:  AbortSignal.timeout(30000),
+        });
+    } catch (e) {
+        if (e.cause?.code === 'ECONNREFUSED' || e.code === 'ECONNREFUSED')
+            throw new Error('Listener not running on port ' + wallet.foreignPort + ' — start it from the Wallet tab');
+        throw e;
+    }
+    const json = await res.json();
+    if (json.error) throw new Error(method + ': ' + (json.error.message || JSON.stringify(json.error)));
+    if (json.result && json.result.Err) throw new Error(method + ': ' + JSON.stringify(json.result.Err));
+    return json.result && json.result.Ok !== undefined ? json.result.Ok : json.result;
+}
+
+// Resolve the endpoint for a wallet, or explain precisely what is missing.
+function tspEndpointFor(wallet) {
+    const cfg = loadTspConfig();
+    const net = cfg[wallet.network];
+    if (!net || !net.url) throw new Error('No Transporter configured for ' + wallet.network + ' — set one in Setup');
+    return { url: net.url, enabled: net.enabled, pollSeconds: cfg.poll_seconds };
+}
+
+async function tspRunPoll(wallet, url) {
+    const session = await ownerApiSession(wallet);
+    const call    = boundOwnerCall(session);
+    const client  = tspClientFor(url);
+    const myAddr  = await transporter.ownAddress(call);
+    return transporter.poll({
+        call,
+        foreign: (m, p) => walletForeignCall(wallet, m, p),
+        client,
+        myAddr,
+        onLog:    (m) => log('INFO', 'TSP wallet=' + wallet.name + ' ' + m.split('\n')[0]),
+        onProven: (addr) => markAddressProven(wallet.dir, addr),
+    });
+}
+
+// ── Config endpoints ─────────────────────────────────────────────────────────
+
+app.get('/api/transporter/config', (_req, res) => res.json(loadTspConfig()));
+
+app.post('/api/transporter/config', (req, res) => {
+    const body = req.body || {};
+    const out  = { mainnet: tspDefaultNet(), testnet: tspDefaultNet(), poll_seconds: 60 };
+    for (const net of ['mainnet', 'testnet']) {
+        const v = body[net] || {};
+        const chk = validateTspUrl(v.url);
+        if (!chk.ok) return apiErr(res, net + ': ' + chk.msg);
+        out[net] = { url: chk.url, enabled: !!v.enabled && !!chk.url };
+    }
+    let ps = parseInt(body.poll_seconds, 10);
+    if (!Number.isFinite(ps)) ps = 60;
+    out.poll_seconds = Math.min(TSP_POLL_MAX_SEC, Math.max(TSP_POLL_MIN_SEC, ps));
+    try {
+        saveTspConfig(out);
+        log('INFO', 'TSP_CONFIG mainnet=' + (out.mainnet.url || '-') + ' testnet=' + (out.testnet.url || '-')
+                  + ' poll=' + out.poll_seconds + 's');
+        res.json(Object.assign({ ok: true }, out));
+    } catch (e) { apiErr(res, e.message); }
+});
+
+// Probe an endpoint WITHOUT saving it. Reports the network mismatch as an error
+// so the operator finds out here rather than by losing a payment into a queue
+// on the wrong chain.
+app.post('/api/transporter/test', async (req, res) => {
+    const { url, network } = req.body || {};
+    if (network !== 'mainnet' && network !== 'testnet') return apiErr(res, 'network must be mainnet or testnet');
+    const chk = validateTspUrl(url);
+    if (!chk.ok)  return apiErr(res, chk.msg);
+    if (!chk.url) return apiErr(res, 'URL required');
+    try {
+        const health = await transporter.checkEndpoint(transporter.makeClient(chk.url), network);
+        res.json({ ok: true, url: chk.url, health });
+    } catch (e) { apiErr(res, e.message, 502); }
+});
+
+// ── Per-wallet endpoints ─────────────────────────────────────────────────────
+
+app.get('/api/wallet/:name/transporter/status', (req, res) => {
+    const wallet = findWallet(req.params.name);
+    if (!wallet) return apiErr(res, 'Wallet not found', 404);
+    const cfg = loadTspConfig();
+    const net = cfg[wallet.network] || tspDefaultNet();
+    const st  = tspGetState(wallet.name);
+    const s   = getSession(wallet.name);
+    res.json({
+        network:        wallet.network,
+        url:            net.url,
+        configured:     !!net.url,
+        autoPoll:       !!net.enabled,
+        pollSeconds:    cfg.poll_seconds,
+        unlocked:       !!getPassphrase(wallet.name),
+        listenerRunning: isAlive(s && s.listenerProc),
+        ownerRunning:    isAlive(s && s.ownerProc),
+        lastPoll:       st.lastPoll || null,
+        lastError:      st.lastError,
+        lastResult:     st.lastResult,
+        depth:          st.depth,
+        polling:        st.running,
+    });
+});
+
+app.post('/api/wallet/:name/transporter/send', async (req, res) => {
+    const wallet = findWallet(req.params.name);
+    if (!wallet) return apiErr(res, 'Wallet not found', 404);
+    if (!getPassphrase(wallet.name)) return apiErr(res, 'Wallet is locked — unlock it first', 401);
+
+    let ep;
+    try { ep = tspEndpointFor(wallet); } catch (e) { return apiErr(res, e.message, 409); }
+
+    try {
+        const session = await ownerApiSession(wallet);
+        const result  = await transporter.send({
+            call:    boundOwnerCall(session),
+            client:  tspClientFor(ep.url),
+            network: wallet.network,
+            dest:    req.body.dest,
+            amount:  req.body.amount,
+            minConfirmations: 10,
+        });
+        // proven=false: queued is not delivered — see recordAddressSend.
+        recordAddressSend(wallet.dir, result.dest, parseFloat(result.amount), false);
+        log('INFO', 'TSP_SEND wallet=' + wallet.name + ' amount=' + result.amount
+                  + ' dest=' + result.dest.slice(0, 12) + '… tx=' + result.txSlateId);
+        res.json(Object.assign({ ok: true }, result));
+    } catch (e) {
+        // A locked-but-undelivered send is a distinct, recoverable state — the
+        // client needs the tx id to offer Cancel, so pass it through.
+        const payload = { error: e.message };
+        if (e.locked) { payload.locked = true; payload.txSlateId = e.txSlateId; }
+        const code = /NETWORK_MISMATCH|Invalid recipient|Invalid amount|greater than zero/.test(e.message) ? 400 : 502;
+        res.status(code).json(payload);
+    }
+});
+
+app.post('/api/wallet/:name/transporter/poll', async (req, res) => {
+    const wallet = findWallet(req.params.name);
+    if (!wallet) return apiErr(res, 'Wallet not found', 404);
+    if (!getPassphrase(wallet.name)) return apiErr(res, 'Wallet is locked — unlock it first', 401);
+
+    let ep;
+    try { ep = tspEndpointFor(wallet); } catch (e) { return apiErr(res, e.message, 409); }
+
+    const st = tspGetState(wallet.name);
+    if (st.running) return apiErr(res, 'A check is already in progress', 409);
+    st.running = true;
+    try {
+        const r = await tspRunPoll(wallet, ep.url);
+        st.lastError  = null;
+        st.lastResult = r;
+        st.depth      = r.depth;
+        res.json(Object.assign({ ok: true }, r));
+    } catch (e) {
+        st.lastError = e.message;
+        apiErr(res, e.message, 502);
+    } finally {
+        st.running  = false;
+        st.lastPoll = Date.now();
+    }
+});
+
+// ── Background poller ────────────────────────────────────────────────────────
+//
+// Scoped to UNLOCKED wallets only, and that is not a limitation to work around:
+// collecting a slate means decrypting it with the wallet key, so a locked wallet
+// could not act on the queue even if it fetched it. Tying the poller to the
+// unlock state also means the operator has exactly one control for "is my wallet
+// working for me right now", and nothing runs after an idle auto-lock.
+//
+// This path NEVER calls touchSession(): the idle backstop deliberately measures
+// deliberate actions, not background traffic, and a self-renewing poller would
+// keep a forgotten wallet unlocked forever — the exact failure it exists to stop.
+async function tspAutoPollOnce() {
+    const cfg = loadTspConfig();
+    const now = Date.now();
+    for (const w of loadWallets()) {
+        const net = cfg[w.network];
+        if (!net || !net.enabled || !net.url) continue;
+        if (!getPassphrase(w.name)) continue;
+        const st = tspGetState(w.name);
+        if (st.running) continue;
+        if (now - (st.lastPoll || 0) < cfg.poll_seconds * 1000) continue;
+
+        st.running = true;
+        try {
+            const r = await tspRunPoll(w, net.url);
+            st.lastError  = null;
+            st.lastResult = r;
+            st.depth      = r.depth;
+            if (r.processed || r.removed)
+                log('INFO', 'TSP_AUTO wallet=' + w.name + ' processed=' + r.processed + ' removed=' + r.removed);
+        } catch (e) {
+            // Log once per transition, not every tick — a stopped owner API
+            // would otherwise fill the journal at the poll interval.
+            if (st.lastError !== e.message) log('WARN', 'TSP_AUTO wallet=' + w.name + ' ' + e.message);
+            st.lastError = e.message;
+        } finally {
+            st.running  = false;
+            st.lastPoll = Date.now();   // a failure backs off by the same interval
+        }
+    }
+}
+setInterval(() => { tspAutoPollOnce().catch((e) => log('ERROR', 'TSP_AUTO_TICK ' + e.message)); },
+            TSP_POLL_TICK_MS).unref();
+
 // ── Payment proofs ────────────────────────────────────────────────────────────
 app.get('/api/wallet/:name/payment-proof/:tx_slate_id', async (req, res) => {
     const wallet = findWallet(req.params.name);
@@ -1431,7 +1857,12 @@ app.post('/api/wallet/:name/show-seed', async (req, res) => {
         'Too many attempts. Retry after ' + rate.retryAfter + 's.', 429);
 
     try {
-        const { headers, sharedKey, ownerUrl } = await ownerApiSession(wallet);
+        // Pass the typed passphrase as the open_wallet override rather than relying on the
+        // in-memory session, so an idle-locked wallet can still reveal its seed — the caller
+        // has just proved the passphrase anyway. This still needs the wallet's owner-API
+        // child to be RUNNING; after a reboot (nothing unlocked yet) it 503s, which is the
+        // same "connect first" state every other wallet route is in.
+        const { headers, sharedKey, ownerUrl } = await ownerApiSession(wallet, passphrase);
         const mnemonic = await encryptedOwnerCall(headers, sharedKey, ownerUrl, 'get_mnemonic',
             { name: null, password: passphrase });
         clearConnectRate(ip, wallet.name);
@@ -1578,9 +2009,10 @@ app.post('/api/wallet/import', (req, res) => {
     const name    = (typeof walletName === 'string' && walletName.trim()) || manifest.walletName || ('imported-' + Date.now().toString(36));
     if (!/^[a-zA-Z0-9\-_]+$/.test(name)) return apiErr(res, 'Invalid wallet name');
 
-    const reg     = loadRegistry();
-    if ((reg.wallets || []).some(w => w.name === name && w.network === network)) {
-        return apiErr(res, 'A ' + network + ' wallet named "' + name + '" already exists. Choose a different name.');
+    const reg = loadRegistry();
+    if (nameTaken(name)) {
+        return apiErr(res, 'A wallet named "' + name + '" already exists. Names must be unique across '
+                         + 'both networks — pass a different "Wallet name on this machine".');
     }
 
     const destDir = (typeof dir === 'string' && dir.trim()) || path.join(WEBWALLET_ROOT, 'wallet_' + network + '_' + name);
@@ -1719,6 +2151,13 @@ app.listen(PORT, '127.0.0.1', () => {
     log('INFO', 'Grin Web Wallet (toolkit 051) listening on http://127.0.0.1:' + PORT);
     log('INFO', 'Wallets registered: ' + loadWallets().length);
     log('INFO', 'WW_ROOT=' + WEBWALLET_ROOT);
+    log('INFO', 'Idle backstop: ' + (IDLE_LOCK_MIN > 0 ? IDLE_LOCK_MIN + ' min' : 'disabled'));
+    const _dupes = duplicateWalletNames();
+    if (_dupes.length) {
+        log('ERROR', 'DUPLICATE_WALLET_NAMES ' + _dupes.join(', ') + ' — routes resolve by name '
+            + 'alone, so only the FIRST registry entry for each of these is reachable. Rename one '
+            + 'side in ' + WALLETS_JSON + ' (and its dir) before using them.');
+    }
     if (process.env.WW_PUBLIC_HOST)   log('INFO', 'WW_PUBLIC_HOST=' + process.env.WW_PUBLIC_HOST);
     if (process.env.WW_PUBLIC_ORIGIN) log('INFO', 'WW_PUBLIC_ORIGIN=' + process.env.WW_PUBLIC_ORIGIN);
 });

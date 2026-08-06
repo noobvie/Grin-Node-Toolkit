@@ -13,12 +13,23 @@
 #
 
 # Run the agent as the grin user when it exists (wallet secrets are grin-owned).
+#
+# `su -c` takes a STRING that the target shell re-parses, so every argument must
+# be quoted for that second parse — `${cmd[*]}` flattens the array and hands the
+# shell raw operator input. A pasted address with a stray space silently became
+# two arguments, and an amount typed as `1; reboot` would have been executed.
+# printf %q produces shell-safe tokens; the non-su branch never had the problem
+# because it passes a real argv.
 _trp_agent_run() {
-    local cmd=("$@")
     if id grin &>/dev/null; then
-        su -s /bin/bash grin -c "TRANSPORTER_AGENT_CONF='$TRP_AGENT_CONF' $(command -v node) '$TRP_AGENT_DIR/agent.js' ${cmd[*]}"
+        local quoted="" a
+        for a in "$@"; do quoted+=" $(printf '%q' "$a")"; done
+        su -s /bin/bash grin -c \
+            "TRANSPORTER_AGENT_CONF=$(printf '%q' "$TRP_AGENT_CONF") \
+             $(printf '%q' "$(command -v node)") \
+             $(printf '%q' "$TRP_AGENT_DIR/agent.js")$quoted"
     else
-        TRANSPORTER_AGENT_CONF="$TRP_AGENT_CONF" node "$TRP_AGENT_DIR/agent.js" "${cmd[@]}"
+        TRANSPORTER_AGENT_CONF="$TRP_AGENT_CONF" node "$TRP_AGENT_DIR/agent.js" "$@"
     fi
 }
 
@@ -47,6 +58,24 @@ trp_agent_install() {
     echo -ne "  Transporter URL [$def_url]: "
     read -r url || true
     url="${url:-$def_url}"
+    url="${url%/}"
+    if ! [[ "$url" =~ ^https?://[^[:space:]\"]+$ ]]; then
+        error "'$url' is not a valid http(s) URL — aborting so agent.json stays parseable."
+        pause; return
+    fi
+    # Cleartext to a REMOTE host exposes the 15-minute bearer token that grants
+    # read+delete on this wallet's queue. Loopback and .onion are fine (the onion
+    # is end-to-end encrypted by Tor); anything else on http:// is not.
+    if [[ "$url" == http://* ]] \
+       && ! [[ "$url" =~ ^http://(127\.0\.0\.1|localhost|\[::1\])(:|/|$) ]] \
+       && ! [[ "$url" =~ ^http://[a-z2-7]{56}\.onion(:|/|$) ]]; then
+        warn "This URL is plain HTTP to a remote host."
+        warn "The queue bearer token would cross the network in cleartext — anyone"
+        warn "on the path could read and delete your slates. Use https:// or .onion."
+        echo -ne "  Continue anyway? [y/N]: "
+        local insecure; read -r insecure || true
+        if [[ "${insecure,,}" != "y" ]]; then info "Cancelled."; pause; return; fi
+    fi
 
     # ── Wallet wiring — auto-detect an existing Grin Drop wallet first ─────────
     local drop_conf="/opt/grin/drop-${TRP_NET_SHORT}/grin_drop_${TRP_NET_SHORT}.conf"
@@ -72,6 +101,10 @@ trp_agent_install() {
         echo -ne "  Owner API port [$TRP_OWNER_PORT]: "
         read -r owner_port || true
         owner_port="${owner_port:-$TRP_OWNER_PORT}"
+        if ! [[ "$owner_port" =~ ^[0-9]+$ ]] || (( owner_port < 1 || owner_port > 65535 )); then
+            warn "'$owner_port' is not a port number — using $TRP_OWNER_PORT."
+            owner_port="$TRP_OWNER_PORT"
+        fi
         owner_secret="$wdir/.owner_api_secret"
         echo -ne "  Wallet passphrase file [$wdir/.wallet_pass]: "
         read -r pass_file || true
@@ -90,18 +123,25 @@ trp_agent_install() {
 
     # Foreign API rides the combined owner_api port (owner_api_include_foreign);
     # foreign on that port needs no auth, so wallet_foreign_secret stays empty.
-    cat > "$TRP_AGENT_CONF" << AGENTCONF
-{
-  "network": "$TRP_NETWORK",
-  "transporter_url": "$url",
-  "wallet_owner_url": "http://127.0.0.1:$owner_port/v3/owner",
-  "wallet_foreign_url": "http://127.0.0.1:$owner_port/v2/foreign",
-  "wallet_owner_secret": "$owner_secret",
-  "wallet_foreign_secret": "",
-  "wallet_pass_file": "$pass_file",
-  "min_confirmations": 10
-}
-AGENTCONF
+    #
+    # Built by node rather than a heredoc: a wallet path containing a quote or
+    # backslash would produce a file the agent cannot parse, and the failure
+    # ("Cannot read config") points nowhere near the real cause.
+    node -e '
+        const fs = require("fs");
+        const [out, network, url, port, ownerSecret, passFile] = process.argv.slice(1);
+        fs.writeFileSync(out, JSON.stringify({
+            network,
+            transporter_url:       url,
+            wallet_owner_url:      `http://127.0.0.1:${port}/v3/owner`,
+            wallet_foreign_url:    `http://127.0.0.1:${port}/v2/foreign`,
+            wallet_owner_secret:   ownerSecret,
+            wallet_foreign_secret: "",
+            wallet_pass_file:      passFile,
+            min_confirmations:     10,
+        }, null, 2) + "\n");
+    ' "$TRP_AGENT_CONF" "$TRP_NETWORK" "$url" "$owner_port" "$owner_secret" "$pass_file" \
+        || { error "Could not write $TRP_AGENT_CONF"; pause; return; }
     if id grin &>/dev/null; then
         chown -R grin:grin "$TRP_AGENT_DIR" 2>/dev/null || true
     fi

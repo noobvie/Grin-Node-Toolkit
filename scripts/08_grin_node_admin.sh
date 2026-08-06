@@ -3,17 +3,23 @@
 # 08_grin_node_admin.sh - Grin Node Administration Centre
 # =============================================================================
 # Menu:
-#   8.1  Remote Node Manager        — port monitor, mass deployment & remote node control
-#   8.2  Service & Port Dashboard  — local PIDs, ports, tmux, binary versions
-#   8.3  Chain Sync Status         — query local node API for current tip
-#   8.4  Nginx Extended Features   — audit · reverse proxy · security · log rotation
+#   8.1  Remote Node Manager       — 081_host_monitor_port.sh (mass deploy, remote control)
+#   8.2  Provider Access Watch     — 082_provider_access_watch.sh (host-tamper detect)
+#   8.3  Node Status & Sync        — local PIDs, ports, tmux, binary versions + chain tip
+#   8.4  Nginx Extended Features   — 084_nginx_extended_features.sh (audit · proxy · security)
 #   8.5  SSH Key Hardening         — 085_ssh_hardening.sh (key-only root login)
 #   8.6  Top 20 Bandwidth Consumers— parse nginx logs, block/limit from menu
-#   8.7  Provider Access Watch     — 082_provider_access_watch.sh (host-tamper detect)
-#   8.8  Disk Cleanup              — tar archives + OS temp/logs + nginx web dirs + swap manager
-#   8.9  Self-Update               — download latest from GitHub
-#   8.10 Backup & Restore          — 089_backup_restore.sh
+#   8.7  Disk Cleanup              — tar archives + OS temp/logs + nginx web dirs + swap manager
+#   8.8  Self-Update               — download latest from GitHub
+#   8.9  Backup & Restore          — 089_backup_restore.sh
 #   DEL  Full Grin Cleanup         — 08del_clean_all_grin_things.sh
+#
+# Key = sub-script number. Every numbered sub-script sits on its own digit
+# (081→1, 082→2, 084→4, 085→5, 089→9); un-numbered inline features fill the
+# rest (3, 6, 7, 8). Re-sorted 2026-08-05 — Provider Access Watch was on key 7
+# and Backup on key 10, so neither key matched its script. Keeping that mapping
+# is why Service & Port Dashboard and Chain Sync Status were merged into one
+# "Node Status & Sync" screen: 10 rows do not fit 9 digits.
 # =============================================================================
 
 set -euo pipefail
@@ -46,12 +52,12 @@ success() { echo -e "${GREEN}[OK]${RESET}    $*"; log "[OK]    $*"; }
 warn()    { echo -e "${YELLOW}[WARN]${RESET}  $*"; log "[WARN]  $*"; }
 error()   { echo -e "${RED}[ERROR]${RESET} $*"; log "[ERROR] $*"; }
 
-# ─── Cleanup paths (used by 8.8 / 8.9) ───────────────────────────────────────
+# ─── Cleanup paths (used by 8.7 / 8.8) ───────────────────────────────────────
 CHAIN_SHARE_DIR="${GRIN_SHARE_DIR:-/var/www/html/grin}"
 GRIN_DATA_DIR="${GRIN_DATA_PATH:-$HOME/.grin}"
 GRIN_LOG_DIR="${GRIN_LOG_PATH:-$HOME/.grin/main/log}"
 
-# ─── Automatic disk cleanup (8.8) ─────────────────────────────────────────────
+# ─── Automatic disk cleanup (8.7) ─────────────────────────────────────────────
 AUTO_CLEANUP_SCRIPT="/opt/grin/auto_cleanup.sh"
 AUTO_CLEANUP_CRON="/etc/cron.d/grin-auto-cleanup"
 AUTO_CLEANUP_RETENTION_DEFAULT=7
@@ -102,7 +108,7 @@ menu_ssh_hardening() {
 }
 
 # =============================================================================
-# 8.7  Provider Access Watch  (082_provider_access_watch.sh)
+# 8.2  Provider Access Watch  (082_provider_access_watch.sh)
 # =============================================================================
 menu_access_watch() {
     local aw_script="$SCRIPT_DIR/082_provider_access_watch.sh"
@@ -114,15 +120,32 @@ menu_access_watch() {
 }
 
 # =============================================================================
-# 8.2  Service & Port Dashboard
+# 8.3  Node Status & Sync
 # =============================================================================
-show_service_dashboard() {
+# One read-only screen for "is my node alive, and is it caught up": the service
+# /port dashboard (ports, tmux, processes, binary versions) followed by the
+# chain tip of each net. Merged from the former 8.2 + 8.3 on 2026-08-05 so the
+# numbered sub-scripts could each keep their own menu digit.
+show_node_status_sync() {
     clear
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo -e "${BOLD}${CYAN}  2  Service & Port Dashboard${RESET}"
+    echo -e "${BOLD}${CYAN}  3  Node Status & Sync${RESET}"
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo ""
 
+    # ||-guarded per the set -e menu rule: these are display-only, and a
+    # non-zero return from either would otherwise kill the whole admin script
+    # instead of drawing the rest of the screen and returning to the menu.
+    _ns_service_dashboard || true
+    _ns_chain_sync || true
+
+    echo ""
+    echo -e "  ${DIM}Log: $LOG_FILE${RESET}"
+    pause
+}
+
+# ── Ports · tmux · processes · binary versions ───────────────────────────────
+# No clear/banner/pause — show_node_status_sync() owns the screen.
+_ns_service_dashboard() {
     # ── Ports ─────────────────────────────────────────────────────────────────
     echo ""
     echo -e "${BOLD}Port Status:${RESET}"
@@ -211,25 +234,18 @@ show_service_dashboard() {
     else
         echo -e "  ${DIM}No Grin processes detected.${RESET}"
     fi
-
-    echo ""
-    echo -e "  ${DIM}Log: $LOG_FILE${RESET}"
-    pause
 }
 
-# =============================================================================
-# 8.3  Chain Sync Status
-# =============================================================================
-show_chain_sync() {
-    clear
-    echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo -e "${BOLD}${CYAN}  3  Chain Sync Status${RESET}"
-    echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+# ── Chain tip per network ────────────────────────────────────────────────────
+# No clear/banner/pause — show_node_status_sync() owns the screen.
+_ns_chain_sync() {
+    echo ""
+    echo -e "${BOLD}${CYAN}── Chain Sync ──────────────────────────────────${RESET}"
     echo ""
 
     if ! command -v curl &>/dev/null; then
-        error "curl is required for this feature. Install with: apt install curl"
-        pause; return
+        error "curl is required for the chain tip. Install with: apt install curl"
+        return
     fi
 
     _query_node_tip() {
@@ -272,7 +288,6 @@ show_chain_sync() {
 
     echo -e "  ${DIM}Note: Compare height against a public explorer to estimate sync progress.${RESET}"
     echo -e "  ${DIM}  Mainnet: grin.blockscan.com  |  Testnet: testnet.grin.blockscan.com${RESET}"
-    pause
 }
 
 # =============================================================================
@@ -425,7 +440,7 @@ show_bandwidth_consumers() {
 }
 
 # =============================================================================
-# 8.8  Disk Cleanup — merged single screen
+# 8.7  Disk Cleanup — merged single screen
 # =============================================================================
 _find_tar_files() {
     find "$1" -maxdepth 3 \
@@ -489,8 +504,9 @@ _install_toolkit_logrotate() {
     cat > "$TOOLKIT_LOGROTATE" << 'LREOF'
 # Grin Node Toolkit — rotation for the toolkit's continuous (fixed-name) logs.
 # Installed by 08_grin_node_admin.sh (Automatic Disk Cleanup). Service logs that
-# carry their own /etc/logrotate.d/grin-* config (grin-pool.log via USR2, the
-# nginx access/error logs, GrinScan, tiny-explorer, grin-node-<net>) are excluded
+# carry their own /etc/logrotate.d/grin-* config (grin-pool.log via USR2,
+# grin-fidelius.log via copytruncate, the nginx access/error logs, GrinScan,
+# tiny-explorer, grin-node-<net>) are excluded
 # to avoid logrotate "duplicate log entry" errors — do NOT glob /opt/grin/logs/*.log.
 # When adding a new fixed-name (non-dated) log under /opt/grin/logs, list it here.
 #
@@ -647,7 +663,7 @@ manage_auto_cleanup() {
 }
 
 # =============================================================================
-# Swap Manager — sub-item of 8.8 Disk Cleanup
+# Swap Manager — sub-item of 8.7 Disk Cleanup
 # =============================================================================
 # Swapfiles are just files on disk, so swap sizing lives under Disk Cleanup.
 # We manage a STACK of swapfiles under $SWAP_DIR (swap-001, swap-002, …):
@@ -1105,7 +1121,7 @@ clean_maintenance() {
 }
 
 # =============================================================================
-# 8.9  Self-Update — download latest from GitHub
+# 8.8  Self-Update — download latest from GitHub
 # =============================================================================
 self_update() {
     clear
@@ -1215,7 +1231,7 @@ self_update() {
     echo ""
     success "Update complete — branch '${branch}' installed."
     success "Restart the toolkit to apply changes."
-    log "[8.9] Installed from $tarball_url"
+    log "[8.8] Installed from $tarball_url"
 
     echo ""
     echo -e "  ${DIM}Press Enter to exit the script completely${RESET}"
@@ -1231,7 +1247,7 @@ self_update() {
 }
 
 # =============================================================================
-# 8.10  Backup & Restore — delegate to 089_backup_restore.sh
+# 8.9  Backup & Restore — delegate to 089_backup_restore.sh
 # =============================================================================
 backup() {
     local _br_script="$SCRIPT_DIR/089_backup_restore.sh"
@@ -1264,19 +1280,18 @@ show_menu() {
     echo ""
     echo -e "${BOLD}  Monitoring${RESET}"
     echo -e "  ${GREEN}1${RESET})   Remote Node Manager       ${DIM}monitor · mass deploy · remote control${RESET}"
-    echo -e "  ${GREEN}2${RESET})   Service & Port Dashboard  ${DIM}local PIDs, ports, tmux sessions${RESET}"
-    echo -e "  ${GREEN}3${RESET})   Chain Sync Status         ${DIM}query local node API for current tip${RESET}"
+    echo -e "  ${GREEN}2${RESET})   Provider Access Watch     ${DIM}host-tamper detection + off-box alerts${RESET}"
+    echo -e "  ${GREEN}3${RESET})   Node Status & Sync        ${DIM}ports, tmux, versions + chain tip${RESET}"
     echo ""
     echo -e "${BOLD}  Security & Network${RESET}"
     echo -e "  ${CYAN}4${RESET})   Nginx Extended Features   ${DIM}audit · reverse proxy · security · logs${RESET}"
     echo -e "  ${CYAN}5${RESET})   SSH Key Hardening         ${DIM}key-only root login · disable passwords${RESET}"
     echo -e "  ${CYAN}6${RESET})   Top 20 Bandwidth Consumers${DIM} parse nginx logs, block/limit IP${RESET}"
-    echo -e "  ${CYAN}7${RESET})   Provider Access Watch     ${DIM}host-tamper detection + off-box alerts${RESET}"
     echo ""
     echo -e "${BOLD}  Maintenance${RESET}"
-    echo -e "  ${YELLOW}8${RESET})   Disk Cleanup              ${DIM}tar archives + OS temp/logs + nginx dirs${RESET}"
-    echo -e "  ${YELLOW}9${RESET})   Self-Update               ${DIM}pull latest changes from GitHub${RESET}"
-    echo -e "  ${YELLOW}10${RESET})  Backup & Restore          ${DIM}backup conf, nginx, SSL, crontabs · restore${RESET}"
+    echo -e "  ${YELLOW}7${RESET})   Disk Cleanup              ${DIM}tar archives + OS temp/logs + nginx dirs${RESET}"
+    echo -e "  ${YELLOW}8${RESET})   Self-Update               ${DIM}pull latest changes from GitHub${RESET}"
+    echo -e "  ${YELLOW}9${RESET})   Backup & Restore          ${DIM}backup conf, nginx, SSL, crontabs · restore${RESET}"
     echo ""
     echo -e "${BOLD}  Danger Zone${RESET}"
     echo -e "  ${RED}DEL${RESET}) Full Grin Cleanup         ${DIM}remove EVERYTHING about Grin now!${RESET}"
@@ -1284,7 +1299,7 @@ show_menu() {
     echo -e "  ${DIM}0${RESET})   Return to main menu"
     echo ""
     echo -e "${DIM}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo -ne "${BOLD}Select [0-10, DEL]: ${RESET}"
+    echo -ne "${BOLD}Select [0-9, DEL]: ${RESET}"
 }
 
 main() {
@@ -1293,17 +1308,22 @@ main() {
         read -r choice
 
         case "${choice,,}" in
-            "1")   menu_node_monitor        ;;
-            "2")   show_service_dashboard   ;;
-            "3")   show_chain_sync          ;;
-            "4")   menu_nginx_extended         ;;
-            "5")   menu_ssh_hardening       ;;
-            "6")   show_bandwidth_consumers ;;
-            "7")   menu_access_watch        ;;
-            "8")   clean_maintenance        ;;
-            "9")   self_update              ;;
-            "10")  backup                   ;;
-            "del") menu_full_cleanup        ;;
+            # Every arm is ||-guarded: under `set -e` an unguarded non-zero
+            # return from a menu function kills the whole admin script instead
+            # of returning here. `0)` is exempt — break must not be guarded.
+            "1")   menu_node_monitor        || true ;;
+            "2")   menu_access_watch        || true ;;
+            "3")   show_node_status_sync    || true ;;
+            "4")   menu_nginx_extended      || true ;;
+            "5")   menu_ssh_hardening       || true ;;
+            "6")   show_bandwidth_consumers || true ;;
+            "7")   clean_maintenance        || true ;;
+            "8")   self_update              || true ;;
+            "9")   backup                   || true ;;
+            # Retired key: Backup & Restore sat on 10 until 2026-08-05 and
+            # nothing else took 10, so it stays a silent alias for muscle memory.
+            "10")  backup                   || true ;;
+            "del") menu_full_cleanup        || true ;;
             "0")   break                    ;;
             *)     warn "Invalid option." ; sleep 1 ;;
         esac

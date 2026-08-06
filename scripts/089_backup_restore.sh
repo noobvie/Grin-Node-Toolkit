@@ -36,6 +36,12 @@
 #                              — Tor HiddenService Ed25519 keys (.onion identity) — optional, default Y
 #   · /etc/floonet-rs/         — Floonet relay config.toml + env (GoblinPay token) — optional, default Y
 #   · /var/lib/floonet-rs/*.db — Floonet relay NIP-05 usernames + stored events (online snapshot)
+#   · /opt/grin/fidelius/     — Fidelius (051) wallet SEEDS + wallets_info.json registry
+#                                — optional, default Y. Detected live (glob of
+#                                wallet_<net>_*), NOT via grin_wallets_location.conf:
+#                                Fidelius creates wallets from its web UI and never
+#                                writes that conf, which is why its seeds were missing
+#                                from every archive before 2026-08-05.
 #   · /etc/nginx/sites-available/*  (Grin-related configs only)
 #   · /etc/letsencrypt/live/ + renewal/  — SSL certs
 #   · root + www-data crontabs  — collector schedules
@@ -46,6 +52,7 @@
 #   · /opt/grin/bin/grin               (re-download via script 01)
 #   · /var/www/                        (re-deployed by nginx setup scripts)
 #   · server/, public_html/, grin-wallet binary  (re-deployed by 059)
+#   · /opt/grin/fidelius/app/ + node_modules/   (re-deployed by 051 step 3)
 # =============================================================================
 
 set -euo pipefail
@@ -457,6 +464,63 @@ run_backup() {
         fi
     fi
 
+    # ── Step 5d: Fidelius web wallet (051) ───────────────────────────────────
+    # Fidelius holds SEEDS and was invisible to this script until 2026-08-05: it
+    # registers wallets in its own /opt/grin/fidelius/wallets_info.json and never
+    # writes grin_wallets_location.conf, which is the only thing Step 3 reads. So
+    # detect it directly. Its wallets are created from the WEB UI at any time, so
+    # the dirs are globbed live at backup time rather than read from a config that
+    # would go stale the moment the operator adds a wallet.
+    # Deliberately NOT included: app/ + node_modules/ (re-deployed by 051 step 3)
+    # and the grin-wallet binary (re-downloaded by 051 step 1).
+    local -a _fid_dirs=()
+    if [[ -d /opt/grin/fidelius ]]; then
+        local _fd
+        for _fd in /opt/grin/fidelius/wallet_mainnet_* /opt/grin/fidelius/wallet_testnet_*; do
+            [[ -d "$_fd" ]] || continue          # unmatched glob stays literal → skipped
+            _fid_dirs+=("$_fd")
+        done
+    fi
+    if [[ ${#_fid_dirs[@]} -gt 0 || -f /opt/grin/fidelius/wallets_info.json ]]; then
+        local include_fid=true
+        if [[ "$auto" == false ]]; then
+            section "Step 5d: Fidelius web wallet (051)"
+            echo -e "  ${YELLOW}These directories contain wallet SEEDS — loss = unrecoverable.${RESET}"
+            echo ""
+            if [[ ${#_fid_dirs[@]} -gt 0 ]]; then
+                for _f in "${_fid_dirs[@]}"; do echo -e "  ${DIM}$_f${RESET}"; done
+            else
+                echo -e "  ${DIM}(registry present, no wallets created yet)${RESET}"
+            fi
+            echo ""
+            echo -ne "${BOLD}Include Fidelius wallets (seeds + registry)? [Y/n]: ${RESET}"
+            read -r _fid_choice
+            [[ "${_fid_choice,,}" == "n" ]] && include_fid=false
+        fi
+        if [[ "$include_fid" == true ]]; then
+            # Registry + env first: the registry carries each wallet's network,
+            # node URL and port assignment. Restoring seeds without it leaves
+            # wallets on disk that the UI cannot see.
+            local _ff
+            for _ff in /opt/grin/fidelius/wallets_info.json \
+                       /opt/grin/fidelius/config.conf \
+                       /opt/grin/fidelius/wallet.env
+            do
+                [[ -f "$_ff" ]] || continue
+                sources+=("$_ff")
+                manifest_lines+=("fidelius: $(basename "$_ff")")
+                [[ "$auto" == false ]] && info "  ✓ $_ff"
+            done
+            for _f in "${_fid_dirs[@]}"; do
+                sources+=("$_f")
+                manifest_lines+=("fidelius-wallet: $_f (seed)")
+                [[ "$auto" == false ]] && info "  ✓ $_f"
+            done
+        else
+            [[ "$auto" == false ]] && warn "  — Fidelius excluded. Its seeds will NOT be in this archive."
+        fi
+    fi
+
     # ── Step 6: Optional logs ────────────────────────────────────────────────
     if [[ "$auto" == false ]]; then
         section "Step 6: Optional — include logs"
@@ -507,6 +571,7 @@ run_backup() {
         echo "  /opt/grin/bin/grin            (re-download via script 01)"
         echo "  /var/www/                     (re-deployed by toolkit scripts)"
         echo "  server/, public_html/         (re-deployed by script 059)"
+        echo "  /opt/grin/fidelius/app/      (re-deployed by script 051 step 3)"
     } > "$manifest_file"
 
     # Write crontabs to staging area
@@ -1007,6 +1072,52 @@ run_restore() {
         fi
         success "Restored: /opt/grin/wallet"
         log "[RESTORE] wallet"
+    fi
+
+    # Fidelius web wallet (051) — seeds + registry. The service is stopped first
+    # so it can't rewrite wallets_info.json from its in-memory cache while we're
+    # replacing it, and started again only if it was running.
+    # Perms are re-asserted, not trusted from the archive: 700 on wallet dirs,
+    # 600 on the registry and the two API secrets. server.js runs as root
+    # (design D6), so ownership stays root — do NOT chown to grin here, unlike
+    # /opt/grin/wallet, or the Node process loses its own wallets.
+    if [[ -d "$extract_dir/opt/grin/fidelius" ]]; then
+        local _ww_was_running=0
+        if systemctl is-active --quiet grin-fidelius 2>/dev/null; then
+            _ww_was_running=1
+            systemctl stop grin-fidelius 2>/dev/null || true
+        fi
+
+        mkdir -p /opt/grin/fidelius
+        cp -a "$extract_dir/opt/grin/fidelius/." /opt/grin/fidelius/ 2>/dev/null || true
+
+        local _wwf
+        for _wwf in wallets_info.json config.conf wallet.env; do
+            [[ -f "/opt/grin/fidelius/$_wwf" ]] && chmod 600 "/opt/grin/fidelius/$_wwf" 2>/dev/null || true
+        done
+
+        shopt -s nullglob
+        local _wwd
+        for _wwd in /opt/grin/fidelius/wallet_mainnet_* /opt/grin/fidelius/wallet_testnet_*; do
+            [[ -d "$_wwd" ]] || continue
+            chmod 700 "$_wwd" 2>/dev/null || true
+            [[ -d "$_wwd/wallet_data" ]] && chmod 700 "$_wwd/wallet_data" 2>/dev/null || true
+            local _wws
+            for _wws in "$_wwd/.foreign_api_secret" "$_wwd/.owner_api_secret"; do
+                [[ -f "$_wws" ]] && chmod 600 "$_wws" 2>/dev/null || true
+            done
+            success "Restored: $_wwd"
+        done
+        shopt -u nullglob
+        chown -R root:root /opt/grin/fidelius 2>/dev/null || true
+
+        if [[ $_ww_was_running -eq 1 ]]; then
+            systemctl start grin-fidelius 2>/dev/null || true
+        fi
+        success "Restored: Fidelius web wallet (/opt/grin/fidelius)"
+        log "[RESTORE] fidelius"
+        echo -e "  ${YELLOW}Note:${RESET} re-run Script 051 steps 1 + 3 to reinstall the grin-wallet"
+        echo -e "        binary and app/ — those are deliberately not in the archive."
     fi
 
     # Grin Drop dirs (individual files extracted from absolute paths)

@@ -181,21 +181,23 @@ source "$SCRIPT_DIR/lib/grin_node_control.sh"
 # INSTALLATION DETECTION
 # =============================================================================
 
-# 051 — installed if config.conf written by the script exists for either network
+# 051 — installed if the config written by 051 step 4 exists.
+# Fidelius is ONE deploy serving both networks (design D1), so there are no
+# per-network config files and no per-network nginx symlinks to probe. The old
+# /opt/grin/webwallet/{mainnet,testnet}/config.conf + web-wallet-{main,test}
+# symlinks are PHP-era paths that nothing has written since the Node port —
+# which meant this row read "not installed" on every current deploy.
 _051_installed() {
-    [[ -f /opt/grin/webwallet/mainnet/config.conf ]] \
-        || [[ -f /opt/grin/webwallet/testnet/config.conf ]]
+    [[ -f /opt/grin/fidelius/config.conf ]]
 }
 
-# 051 — running if nginx sites-enabled symlink exists for either network
+# 051 — running if the single systemd unit is active. One unit, both networks,
+# so this reports the listener rather than a network pair like the other rows.
 _051_status() {
-    local mn="" tn=""
-    [[ -L /etc/nginx/sites-enabled/web-wallet-main ]] && mn="mainnet"
-    [[ -L /etc/nginx/sites-enabled/web-wallet-test ]] && tn="testnet"
-    if [[ -n "$mn" && -n "$tn" ]]; then echo "mainnet + testnet"
-    elif [[ -n "$mn" ]];           then echo "mainnet"
-    elif [[ -n "$tn" ]];           then echo "testnet"
-    else echo ""
+    if systemctl is-active --quiet grin-fidelius 2>/dev/null; then
+        echo "127.0.0.1:7420"
+    else
+        echo ""
     fi
 }
 

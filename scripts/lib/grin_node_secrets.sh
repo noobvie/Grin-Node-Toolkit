@@ -402,7 +402,10 @@ grin_secret_vault_rotate() {
 grin_env_set() {
     local file="$1" key="$2" val="$3" cur
     [[ -f "$file" && -n "$val" ]] || return 1
-    cur=$(grep -E "^${key}=" "$file" 2>/dev/null | head -1 | cut -d= -f2-)
+    # `|| true`: callers run under `set -o pipefail`, where a no-match grep fails the
+    # whole pipeline and the assignment with it — which aborts this function on the
+    # very first key that isn't in the file yet, i.e. exactly the case it exists for.
+    cur=$(grep -E "^${key}=" "$file" 2>/dev/null | head -1 | cut -d= -f2- || true)
     [[ "$cur" == "$val" ]] && return 1
     if grep -qE "^${key}=" "$file"; then
         sed -i "s#^${key}=.*#${key}=${val}#" "$file"
@@ -495,11 +498,37 @@ grin_sync_wallets() {
     local toml net secret addr
     while IFS= read -r toml; do
         [[ -f "$toml" ]] || continue
-        # Skip wallets that talk to a remote node — we must not hand them a local secret.
-        addr=$(grep -E '^[[:space:]]*node_api_http_addr[[:space:]]*=' "$toml" 2>/dev/null | head -1)
-        [[ -n "$addr" && "$addr" != *127.0.0.1* && "$addr" != *localhost* ]] && continue
+        # Skip wallets that talk to a remote node — we must not hand them a local
+        # secret. grin-wallet.toml spells this key **check_**node_api_http_addr;
+        # matching only the bare name made this guard dead code, so every wallet
+        # looked local and a remote-node wallet (Fidelius defaults to a curated
+        # PUBLIC node) had the local node's foreign secret stamped in — which
+        # grin-wallet then sends as Basic Auth to that third-party host. Both
+        # spellings are matched so an older/hand-written toml still resolves.
+        # `-m1 … || true`, not `| head -1`: under `set -o pipefail` a no-match grep
+        # fails the pipeline, the assignment inherits that, and errexit then kills
+        # the whole loop at the FIRST wallet — which is what used to happen on every
+        # call from an errexit caller (01/04/05/06), since the old pattern matched
+        # nothing anywhere. From the timer (no errexit) it fell through instead, with
+        # an empty addr, and patched every wallet including the remote ones.
+        addr=$(grep -m1 -E '^[[:space:]]*(check_)?node_api_http_addr[[:space:]]*=' "$toml" 2>/dev/null || true)
+        # No address key at all → we cannot prove the node is local. Skip rather
+        # than guess: the failure mode of guessing is leaking a secret off-box.
+        [[ -n "$addr" ]] || continue
+        if [[ "$addr" != *127.0.0.1* && "$addr" != *localhost* ]]; then
+            # Remote node. Report — don't silently repair — a secret path an
+            # earlier (broken-guard) run may already have stamped in: clearing it
+            # would be a config change the operator never asked for, and the
+            # journal is where the timer's findings belong.
+            if grep -qE '^[[:space:]]*node_api_secret_path[[:space:]]*=[[:space:]]*"/' "$toml" 2>/dev/null; then
+                echo "WARN: $toml points at a REMOTE node but still carries a local" \
+                     "node_api_secret_path — grin-wallet will send that secret off-box." \
+                     "Blank it (node_api_secret_path = \"\") unless that remote node is yours."
+            fi
+            continue
+        fi
         # Network: chain_type is authoritative; the testnet node port (1341x) in
-        # node_api_http_addr is a secondary testnet signal. Default mainnet.
+        # the address is a secondary testnet signal. Default mainnet.
         if grep -qiE '^[[:space:]]*chain_type[[:space:]]*=[[:space:]]*"?Testnet' "$toml" \
            || [[ "$addr" == *:1341* ]]; then
             net=testnet

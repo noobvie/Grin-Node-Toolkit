@@ -283,12 +283,14 @@ step_remove_nginx_configs() {
         return
     fi
 
-    # Known proxy config names (from script 04)
+    # Known config names that the *grin* scan below would MISS because the
+    # toolkit does not put "grin" in every filename it writes.
     local -a known_proxy=(
         "grin-node-api"
         "grin-node-api-testnet"
         "grin-wallet"
         "grin-wallet-testnet"
+        "floonet-relay"          # script 091 — upstream naming, no "grin"
     )
 
     local -a found_confs=()
@@ -307,11 +309,24 @@ step_remove_nginx_configs() {
         [[ -f "$path" && "$seen" != *"|$path|"* ]] && found_confs+=("$path") && seen+="|$path|"
     done
 
-    # Check conf.d for bandwidth map files
+    # Check conf.d for bandwidth maps AND the rate-limit zone files.
+    #
+    # Zone confs are named by CONVENTION as script<NN>-<thing>.conf (CLAUDE.md),
+    # e.g. script09-transporter-testnet.conf — none of them contain "grin", so
+    # the *grin* glob alone left every zone file behind. An orphaned
+    # limit_req_zone is not harmless: nginx loads every conf.d file into the http
+    # context, so a leftover zone can collide with a later reinstall.
     local -a confds=()
-    while IFS= read -r f; do
-        confds+=("$f")
-    done < <(find /etc/nginx/conf.d -name '*grin*' -type f 2>/dev/null || true)
+    local cseen=""
+    local pat
+    for pat in '*grin*' 'script[0-9][0-9]-*.conf'; do
+        while IFS= read -r f; do
+            [[ -n "$f" ]] || continue
+            [[ "$cseen" == *"|$f|"* ]] && continue
+            cseen+="|$f|"
+            confds+=("$f")
+        done < <(find /etc/nginx/conf.d -maxdepth 1 -name "$pat" -type f 2>/dev/null || true)
+    done
 
     if [[ ${#found_confs[@]} -eq 0 && ${#confds[@]} -eq 0 ]]; then
         info "No Grin nginx configs found. Skipping."
@@ -363,6 +378,76 @@ step_remove_nginx_configs() {
 # =============================================================================
 # STEP 4 — Remove Grin binary / install directories
 # =============================================================================
+# =============================================================================
+# STEP 3b — Remove systemd units the toolkit installs
+# =============================================================================
+# Without this, a full cleanup deletes /opt/grin while leaving ~15 enabled units
+# behind. Most of them carry Restart=always, so each one respawns every 15 s
+# against a binary that no longer exists — a permanent journal flood plus a boot
+# that is slower and noisier than before the "cleanup". Units must go BEFORE the
+# install dirs (step 4), or the services fight the deletion as it happens.
+#
+# Matching is by NAME, deliberately: rate-limit confs and units introduced later
+# do not all contain "grin" (floonet-rs is the standing example), so a bare
+# *grin* glob silently misses whole products.
+step_remove_systemd_services() {
+    section "STEP 3b: Remove Grin systemd Services"
+
+    [[ -d /etc/systemd/system ]] || { info "No systemd unit dir. Skipping."; return; }
+
+    local -a patterns=(
+        'grin-*.service'          # transporter, fidelius, secret-sync, access-watch, wallet-bridge
+        'grinscan-*.service'      # 06b explorer
+        'floonet-rs.service'      # 091 — no "grin" in the name
+        'grin-*.timer'            # grin-secret-sync.timer
+    )
+
+    local -a found=()
+    local seen="" p f
+    for p in "${patterns[@]}"; do
+        while IFS= read -r f; do
+            [[ -n "$f" ]] || continue
+            [[ "$seen" == *"|$f|"* ]] && continue
+            seen+="|$f|"
+            found+=("$f")
+        done < <(find /etc/systemd/system -maxdepth 1 -name "$p" 2>/dev/null || true)
+    done
+
+    if [[ ${#found[@]} -eq 0 ]]; then
+        info "No Grin systemd units found. Skipping."
+        log "[STEP 3b] No systemd units found."
+        return
+    fi
+
+    info "Found Grin systemd units:"
+    for f in "${found[@]}"; do
+        local name state
+        name="$(basename "$f")"
+        state=$(systemctl is-active "$name" 2>/dev/null || echo "inactive")
+        echo -e "  ${YELLOW}→${RESET} $name  ${DIM}($state)${RESET}"
+    done
+
+    if confirm_step "Stop, disable and remove these systemd units?"; then
+        for f in "${found[@]}"; do
+            local name; name="$(basename "$f")"
+            systemctl stop "$name" 2>/dev/null || true
+            systemctl disable "$name" 2>/dev/null || true
+            rm -f "$f"
+            # Drop-ins live beside the unit and survive its removal.
+            rm -rf "/etc/systemd/system/${name}.d"
+            success "Removed unit: $name"
+            log "[STEP 3b] DELETED unit: $f"
+        done
+        systemctl daemon-reload 2>/dev/null || true
+        systemctl reset-failed 2>/dev/null || true
+        success "systemd reloaded."
+        log "[STEP 3b] daemon-reload done."
+    else
+        info "Skipped — systemd units kept."
+        log "[STEP 3b] SKIPPED by user."
+    fi
+}
+
 step_remove_install_dirs() {
     section "STEP 4: Remove Grin Binary and Install Directories"
 
@@ -385,7 +470,12 @@ step_remove_install_dirs() {
         "/usr/local/bin/grin-wallet"
         "/opt/grin"
         "/opt/grin-wallet"
-
+        # Script 091 (Floonet relay) follows UPSTREAM's layout, which has no
+        # "grin" anywhere in it — the /opt scan below would never see these.
+        "/usr/local/bin/floonet-rs"
+        "/usr/local/bin/floonet-mixexit"
+        "/etc/floonet-rs"
+        "/var/lib/floonet-rs"
     )
 
     local -a found=()
@@ -623,19 +713,23 @@ step_remove_tor_hidden_services() {
             fi
         done
     fi
-    for net in mainnet testnet; do
-        if [[ -d "/var/lib/tor/grin-${net}" ]]; then
-            # Only flag if not already collected above
-            local already=0
-            for n in "${found_networks[@]+"${found_networks[@]}"}"; do
-                [[ "$n" == "$net" ]] && already=1
-            done
-            if [[ $already -eq 0 ]]; then
-                found=1
-                found_networks+=("$net")
-            fi
+    # Any /var/lib/tor/grin-* directory, not just grin-{mainnet,testnet}: other
+    # products name their own hidden services (script 093 uses
+    # grin-transporter-<net>), and those were previously left running with a
+    # live .onion pointing at a deleted service.
+    local hs
+    while IFS= read -r hs; do
+        [[ -n "$hs" ]] || continue
+        local suffix="${hs#/var/lib/tor/grin-}"
+        local already=0 n
+        for n in "${found_networks[@]+"${found_networks[@]}"}"; do
+            [[ "$n" == "$suffix" ]] && already=1
+        done
+        if [[ $already -eq 0 ]]; then
+            found=1
+            found_networks+=("$suffix")
         fi
-    done
+    done < <(find /var/lib/tor -maxdepth 1 -type d -name 'grin-*' 2>/dev/null || true)
 
     if [[ $found -eq 0 ]]; then
         info "No Tor HiddenService entries found. Skipping."
@@ -667,6 +761,26 @@ step_remove_tor_hidden_services() {
                 ' "$torrc" > "$tmp" && mv "$tmp" "$torrc"
                 success "Stripped torrc block for ${net}."
                 log "[STEP 8] torrc block removed: ${net}"
+            fi
+
+            # Script 093 writes a single-marker block instead of a bounded pair:
+            #   # grin-transporter-<net> (script 093)
+            #   HiddenServiceDir …
+            #   HiddenServicePort …
+            # found_networks holds it as "transporter-<net>" (the grin- prefix is
+            # already stripped), so rebuild the marker from that.
+            if [[ "$net" == transporter-* ]]; then
+                local tmarker="# grin-${net} (script 093)"
+                if grep -qF "$tmarker" "$torrc"; then
+                    local tmp2="${torrc}.toolkit.tmp"
+                    awk -v m="$tmarker" '
+                        $0 == m  { skip = 2; next }
+                        skip > 0 { skip--; next }
+                        { print }
+                    ' "$torrc" > "$tmp2" && mv "$tmp2" "$torrc"
+                    success "Stripped Transporter torrc block for ${net}."
+                    log "[STEP 8] torrc block removed: grin-${net}"
+                fi
             fi
         done
     fi
@@ -714,7 +828,8 @@ main() {
     echo -e "${BOLD}${RED}║                                                                      ║${RESET}"
     echo -e "${BOLD}${RED}║    1.  All running Grin node / wallet processes                      ║${RESET}"
     echo -e "${BOLD}${RED}║    2.  Grin directories in /var/www/ and /var/lib/                  ║${RESET}"
-    echo -e "${BOLD}${RED}║    3.  All Grin nginx configuration files                           ║${RESET}"
+    echo -e "${BOLD}${RED}║    3.  All Grin nginx configs + rate-limit zone files               ║${RESET}"
+    echo -e "${BOLD}${RED}║   3b.  Grin systemd units (transporter, floonet, grinscan, …)       ║${RESET}"
     echo -e "${BOLD}${RED}║    4.  Grin binary and install directories (/grin*, /opt/grin*)     ║${RESET}"
     echo -e "${BOLD}${RED}║    5.  Chain data and wallet files  (\$HOME/.grin/)                  ║${RESET}"
     echo -e "${BOLD}${RED}║    6.  Grin toolkit log files                                       ║${RESET}"
@@ -741,6 +856,7 @@ main() {
     step_stop_processes
     step_remove_web_dirs
     step_remove_nginx_configs
+    step_remove_systemd_services
     step_remove_install_dirs
     step_remove_home_grin
     step_remove_logs

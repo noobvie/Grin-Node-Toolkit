@@ -21,9 +21,9 @@ before the code is reviewed.
 The GrinSuite Node wallet is registry-driven (`wallets_info.json`) and serves
 mainnet + testnet wallets simultaneously from one process. We **keep that**:
 
-- One systemd unit: `grin-web-wallet.service`
+- One systemd unit: `grin-fidelius.service`
 - One Node process bound to `127.0.0.1:7420`
-- Wallets registered in `/opt/grin/webwallet/wallets_info.json`
+- Wallets registered in `/opt/grin/fidelius/wallets_info.json`
 - One nginx vhost, one Basic Auth file, one SSL cert, one domain
 
 **Replaces** the previous 051 model of two separate deploys (`web-wallet-main` +
@@ -37,7 +37,7 @@ child processes per-wallet (passphrase piped via stdin, never on argv). Bash
 must **not** also run grin-wallet in tmux — that would race on ports.
 
 The bash's old "Step 1: install + init + start listener" becomes:
-- Install the **grin-wallet binary** to a known path (`/opt/grin/webwallet/grin-wallet`)
+- Install the **grin-wallet binary** to a known path (`/opt/grin/fidelius/grin-wallet`)
 - That's it. Wallet init / recover / start / stop is done by the user via the web UI.
 
 ### D3. Setup tab — kept, but trimmed to what makes sense on Linux
@@ -119,10 +119,10 @@ SSL/auth/firewall steps) but rewrite the deploy + service sections.
 
 | Old step | New step |
 |---|---|
-| 1. Install wallet binary | **Install grin-wallet binary** to `/opt/grin/webwallet/grin-wallet` (was per-network — now shared) |
+| 1. Install wallet binary | **Install grin-wallet binary** to `/opt/grin/fidelius/grin-wallet` (was per-network — now shared) |
 | 2. Install dependencies | **Install nodejs + nginx + certbot + htpasswd + tor** (drop php / php-fpm / php-curl / php-json) |
-| 3. Deploy files | **Copy `web/051_fidelius/` to `/opt/grin/webwallet/app/`**, run `npm install --omit=dev` |
-| (new) 3b | **Write systemd unit** `grin-web-wallet.service` with `WW_PUBLIC_HOST` / `WW_PUBLIC_ORIGIN` env |
+| 3. Deploy files | **Copy `web/051_fidelius/` to `/opt/grin/fidelius/app/`**, run `npm install --omit=dev` |
+| (new) 3b | **Write systemd unit** `grin-fidelius.service` with `WW_PUBLIC_HOST` / `WW_PUBLIC_ORIGIN` env |
 | 4. Configure nginx | **Reverse proxy** `/` → `http://127.0.0.1:7420` (no PHP-FPM blocks; keep `auth_basic`) |
 | 5. Setup SSL | **Unchanged** — Let's Encrypt or Cloudflare Origin Cert |
 | 6. Setup Basic Auth | **Unchanged** — htpasswd |
@@ -179,7 +179,7 @@ These are kept verbatim from GrinSuite except for path adaptation:
 **Setup** (trimmed):
 - `GET  /api/setup/binary-status`
 - `POST /api/setup/install-binary` — SSE progress
-- `GET  /api/setup/default-dir?network=&name=` — proposes `/opt/grin/webwallet/wallet_<net>_<name>`
+- `GET  /api/setup/default-dir?network=&name=` — proposes `/opt/grin/fidelius/wallet_<net>_<name>`
 - `POST /api/setup/check-dir`
 - `POST /api/setup/rename-dir`
 - `GET  /api/setup/nodes?network=` — SSE ping of public + local nodes
@@ -205,7 +205,7 @@ These are kept verbatim from GrinSuite except for path adaptation:
 ## Deploy layout (target VPS)
 
 ```
-/opt/grin/webwallet/
+/opt/grin/fidelius/
   grin-wallet                        single binary, shared by all wallets
   wallets_info.json                  registry (root:root 600)
   config.env                         systemd env file with WW_PUBLIC_HOST etc
@@ -224,11 +224,11 @@ These are kept verbatim from GrinSuite except for path adaptation:
       wallet.seed
   wallet_testnet_<name>/
 
-/etc/systemd/system/grin-web-wallet.service
-/etc/nginx/sites-available/grin-web-wallet
-/etc/nginx/sites-enabled/grin-web-wallet
-/etc/nginx/grin-web-wallet.htpasswd
-/etc/nginx/conf.d/grin-web-wallet-ratelimit.conf
+/etc/systemd/system/grin-fidelius.service
+/etc/nginx/sites-available/grin-fidelius
+/etc/nginx/sites-enabled/grin-fidelius
+/etc/nginx/grin-fidelius.htpasswd
+/etc/nginx/conf.d/grin-fidelius-ratelimit.conf
 ```
 
 ## Per-wallet port allocation
@@ -266,7 +266,7 @@ weakened** during port:
 New for the Linux port:
 - **systemd** drops privileges via `User=root` (no change yet — see D6) but uses
   `ProtectSystem=full`, `ProtectHome=true`, `PrivateTmp=true`,
-  `NoNewPrivileges=true`, and `ReadWritePaths=/opt/grin/webwallet` to limit
+  `NoNewPrivileges=true`, and `ReadWritePaths=/opt/grin/fidelius` to limit
   blast radius if Node is compromised.
 - **nginx Basic Auth** in front (carried from PHP 051).
 - **nginx rate limit** retained for `/api/wallet/*/send` (3r/m) and other
@@ -277,16 +277,55 @@ New for the Linux port:
 
 ## Open questions / follow-ups (post-merge)
 
-- **fail2ban** — current 051 README mentions it as TODO. Same applies post-port:
-  watch nginx 401s, ban after 5 fails in 10 min.
-- **expose_php = Off** — N/A now, no PHP.
-- **CSP nonce** — current UI is `script-src 'self'` (no inline). Re-verify after
-  copy; the GrinSuite UI may have a small inline theme-bootstrap script
-  (`<script>(function(){var t=localStorage…})();</script>` in `<head>`). If so,
-  either move it to a separate `.js` file or add `script-src 'self' 'unsafe-inline'`
-  in CSP (less safe). Decision deferred until after copy.
-- **Backup/restore in admin centre** — Script 08 admin centre may want to
-  surface `/opt/grin/webwallet/` for backups. Out of scope for this port.
+**All four resolved 2026-08-05.** Detail in
+[script051_security_audit.md](script051_security_audit.md); kept here so the
+decisions aren't lost.
+
+- **fail2ban** — ✅ **DONE.** Step 7 writes `/etc/fail2ban/jail.d/grin-fidelius.conf`
+  with the stock `nginx-http-auth` (5 fails / 10 min → 1 h) and `nginx-limit-req`
+  filters, pointed at Fidelius's own error log. Own jail file + own logpath so it
+  never collides with Script 02's `nginx-grin.conf`. The log files are `touch`ed
+  first — fail2ban refuses to start on a missing logpath, and nginx only creates
+  them on the first request.
+- **expose_php = Off** — N/A, no PHP.
+- **CSP nonce** — ✅ **RESOLVED, and the other way than "add 'unsafe-inline'".**
+  The inline theme-bootstrap did exist. It moved to `client/theme-boot.js`
+  (loaded WITHOUT defer, above the stylesheet, or the light-mode flash returns),
+  and the two `onclick="…"` copy buttons became `wireCopyButton()`. CSP now ships
+  `script-src 'self'` with no keyword. No nonce needed — a nonce would have meant
+  templating `index.html` per-request, which is a lot of machinery to keep one
+  12-line script inline. `style-src` keeps `'unsafe-inline'` for `style=""`
+  attributes; CSS injection can't execute script.
+- **Backup/restore** — ✅ **DONE, and it was worse than "nice to have":**
+  `/opt/grin/fidelius/` was in **no** backup path at all. 089 discovers wallets
+  from `grin_wallets_location.conf`, which Fidelius never writes, so every archive
+  silently excluded every Fidelius seed. Fixed in 089 itself (Step 5d + a matching
+  restore block) rather than in Script 08, because 089 is where the operator is
+  already told "wallet dirs contain seed files".
+  **Detection is a live glob of `/opt/grin/fidelius/wallet_<net>_*`, not a config
+  file** — Fidelius creates wallets from its web UI at any time, so a conf written
+  at install time goes stale on the next wallet the operator adds. That is the
+  same trap that caused the original bug; don't reintroduce it by "registering"
+  Fidelius dirs into `grin_wallets_location.conf`.
+
+## Follow-ups still open
+
+- **Reboot leaves wallets locked and listeners dead.** Passphrases are
+  memory-only by design (D2 + no `.wallet_pass`), so after `systemctl restart`
+  inbound receiving stops until a human unlocks each wallet. Nothing tells the
+  operator. Wanted: a banner when a registered wallet has no live listener.
+- **Client auto-lock calls `/disconnect`**, killing the listener — so it also
+  stops receiving. The server-side backstop added 2026-08-05 only zeroes the
+  passphrase and leaves the children running. The client should match.
+- **Transaction notes live in `localStorage`** while the address book is a
+  server-side sidecar. Notes vanish on a new device and are in no backup.
+- **No Nostr / Transporter transport.** Fidelius is a better *first* client for
+  both than the planned browser wallet: it's server-side, can hold a key and poll
+  continuously, and has no CORS problem. `nostr-payout.js` in the pool is already
+  a source-verified NIP-17 bridge whose only Node-specific line is `require('ws')`,
+  and 093 Transporter was built standalone waiting for a client that can poll
+  outward. Doing it here would de-risk Accio (055) before the WASM work starts.
+  Separate design pass — not started.
 
 ## Testing checklist (when the user runs it)
 
@@ -310,5 +349,5 @@ Order matters — earlier steps are prerequisites for later.
     behind Tor) — verify network mismatch block by feeding it a `grin1…` address
 15. **Show seed** — wrong passphrase 5× → 429 rate limit kicks in
 16. **Export `.gws`** → wipe wallet dir → **Import `.gws`** → verify balance
-17. **systemctl restart grin-web-wallet** → UI reloads cleanly, in-memory
+17. **systemctl restart grin-fidelius** → UI reloads cleanly, in-memory
     passphrases lost (expected — re-unlock required per wallet)

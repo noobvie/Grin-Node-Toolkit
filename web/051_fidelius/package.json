@@ -1,5 +1,5 @@
 {
-  "name": "grin-web-wallet",
+  "name": "grin-fidelius",
   "version": "2.0.0-linux.1",
   "private": true,
   "description": "Grin Node Toolkit — Script 051 private web wallet (Linux port of GrinSuite Node wallet)",

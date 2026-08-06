@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <script>(function(){var t=localStorage.getItem('grin-theme');if(t==='light')document.documentElement.setAttribute('data-theme','light');}());</script>
+  <script src="theme-boot.js"></script>
   <meta name="description" content="Grin Web Wallet — local wallet manager for the Grin cryptocurrency. Manage wallets, send and receive via Slatepack, monitor node status.">
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
   <title>Grin Web Wallet</title>
@@ -174,6 +174,9 @@
             </div>
             <div style="margin-top:10px;display:flex;gap:10px">
               <button id="exportWalletBtn" class="btn btn-outline" style="flex:1">Export Backup</button>
+              <button id="revealSeedBtn"   class="btn btn-outline" style="flex:1">Reveal Seed</button>
+            </div>
+            <div style="margin-top:10px;display:flex;gap:10px">
               <button id="deleteWalletBtn" class="btn btn-outline" style="flex:1;color:var(--error);border-color:rgba(244,63,94,0.35)">Delete</button>
             </div>
 
@@ -229,6 +232,30 @@
             <div id="sendTorResult" class="result-box" style="display:none"></div>
           </div>
 
+          <!-- Transporter send (async, recipient may be offline) -->
+          <div id="sendTspPanel" class="send-method-panel send-method-disabled" title="Transporter not configured">
+            <div class="send-method-header">
+              <span class="send-method-title">Send via Transporter <span id="sendTspNet" class="send-method-net"></span></span>
+              <span id="sendTspStatus" class="send-method-status">Checking&hellip;</span>
+            </div>
+            <p class="field-hint mb-8">Leaves the payment in a relay queue. The recipient's wallet collects it whenever it next comes online &mdash; neither of you has to be online at the same time, and nothing is copied by hand.</p>
+            <form id="sendTspForm" autocomplete="off">
+              <div class="field">
+                <label for="sendTspAmount">Amount (&#8745;)</label>
+                <input type="number" id="sendTspAmount" class="input" placeholder="0.000000000" min="0" step="0.0001" required>
+              </div>
+              <div class="field">
+                <label for="sendTspDest">Recipient Address</label>
+                <input type="text" id="sendTspDest" class="input" placeholder="grin1&hellip;" autocomplete="off" required>
+                <div id="sendTspRecent" class="recent-list" style="display:none"></div>
+                <span class="field-hint">The recipient must also be using a Transporter on this network.</span>
+              </div>
+              <button id="sendTspBtn" type="submit" class="btn btn-primary btn-full mt-8">Queue Payment</button>
+            </form>
+            <div id="sendTspResult" class="result-box" style="display:none"></div>
+            <p class="field-hint mt-8">Your coins are reserved the moment you queue a payment, and stay reserved until the recipient replies. If they never do, release them with <strong>Recover</strong> on the Wallet tab.</p>
+          </div>
+
           <!-- Batch send (CSV) -->
           <details class="send-method-panel advanced-section" id="batchSendPanel">
             <summary>
@@ -275,6 +302,16 @@
               <p class="field-hint mt-8">Anyone scanning this gets your Slatepack address — share at your own discretion.</p>
             </div>
           </div>
+          <div class="receive-block" id="tspInboxBlock">
+            <div class="block-label">Transporter Inbox <span id="tspInboxNet" class="field-hint" style="margin-left:8px"></span></div>
+            <div id="tspInboxInfo" class="info-box mt-8">Checking&hellip;</div>
+            <div class="action-row mt-8">
+              <button id="tspCheckBtn" class="btn btn-outline btn-sm">Check Now</button>
+              <span id="tspLastPoll" class="field-hint"></span>
+            </div>
+            <div id="tspInboxResult" class="result-box" style="display:none"></div>
+          </div>
+
           <div class="receive-block">
             <div class="block-label">Process Incoming Slatepack</div>
             <textarea id="receiveSlateInput" class="slate-input" placeholder="BEGINSLATEPACK. ... ENDSLATEPACK."></textarea>
@@ -391,6 +428,47 @@
             <div class="block-label">Tor Service</div>
             <div id="torPanelInfo" class="info-box mt-8">Checking&hellip;</div>
             <p class="field-hint mt-8">Tor runs as a host systemd service. To install/start: <code>sudo apt install tor &amp;&amp; sudo systemctl enable --now tor</code></p>
+          </div>
+
+          <!-- Section A2b: Grin Transporter (Script 093) relay -->
+          <div class="setup-section" id="transporterSection">
+            <div class="block-label">Grin Transporter</div>
+            <p class="field-hint mt-8">A store-and-forward relay for payments. Queue a payment for someone who is offline, and collect payments sent to you while <em>you</em> were offline. The relay never sees your keys and cannot read the payments it carries &mdash; but it does learn which addresses talk to each other, so use one you trust or run your own (toolkit script 093).</p>
+
+            <div class="field mt-8">
+              <label for="tspUrlMainnet">Mainnet relay URL</label>
+              <div class="input-with-action">
+                <input type="text" id="tspUrlMainnet" class="input" placeholder="https://transporter.example.com" autocomplete="off">
+                <button id="tspTestMainnet" type="button" class="btn btn-sm btn-outline">Test</button>
+              </div>
+              <label class="checkbox-row mt-8"><input type="checkbox" id="tspAutoMainnet"> Check for incoming payments automatically</label>
+              <div id="tspTestMainnetMsg" class="field-hint"></div>
+            </div>
+
+            <div class="field mt-8">
+              <label for="tspUrlTestnet">Testnet relay URL</label>
+              <div class="input-with-action">
+                <input type="text" id="tspUrlTestnet" class="input" placeholder="https://testtransporter.example.com" autocomplete="off">
+                <button id="tspTestTestnet" type="button" class="btn btn-sm btn-outline">Test</button>
+              </div>
+              <label class="checkbox-row mt-8"><input type="checkbox" id="tspAutoTestnet"> Check for incoming payments automatically</label>
+              <div id="tspTestTestnetMsg" class="field-hint"></div>
+            </div>
+
+            <div class="field mt-8">
+              <label for="tspPollSeconds">Check every</label>
+              <select id="tspPollSeconds" class="input">
+                <option value="30">30 seconds</option>
+                <option value="60" selected>1 minute</option>
+                <option value="300">5 minutes</option>
+                <option value="900">15 minutes</option>
+                <option value="3600">1 hour</option>
+              </select>
+              <span class="field-hint">Automatic checks only run for wallets that are currently unlocked &mdash; a locked wallet cannot decrypt an incoming payment. They also never count as activity, so they will not keep a forgotten wallet unlocked.</span>
+            </div>
+
+            <button id="tspSaveBtn" class="btn btn-outline btn-full mt-8">Save Transporter Settings</button>
+            <div id="tspSaveMsg" class="field-hint mt-8"></div>
           </div>
 
           <!-- Section A3: Address Book (per wallet) -->

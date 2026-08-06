@@ -34,9 +34,10 @@
 #   6) Status
 #   7) Install poll agent   (wire a local wallet to a Transporter)
 #   8) Agent actions        (address / status / send / poll / cancel / cron)
-#   L) Logs   D) Delete instance   0) Back
+#   B) Backup & restore   L) Logs   D) Delete instance   0) Back
 #
 #  Ports (127.0.0.1, nginx-fronted only):  mainnet 7456 / testnet 7466
+#  Onion front (separate port, only when Tor is enabled): 7556 / 7566
 #  Dirs:  /opt/grin/transporter-{main,test}/  (app/, config.json, transporter.db)
 #         /opt/grin/transporter-agent-{mainnet,testnet}/  (agent.js, agent.json)
 #
@@ -76,7 +77,8 @@ TRP_NETWORK=""      # testnet | mainnet
 TRP_NET_SHORT=""    # test | main       (matches drop-test / drop-main dirs)
 TRP_NET_LABEL=""
 TRP_ADDR_HRP=""     # tgrin | grin
-TRP_PORT=""         # 7466 | 7456       (127.0.0.1, nginx-fronted)
+TRP_PORT=""         # 7466 | 7456       (127.0.0.1, nginx front)
+TRP_TOR_PORT=""     # 7566 | 7556       (127.0.0.1, onion front — see below)
 TRP_OWNER_PORT=""   # 13420 | 3420      (combined owner_api listener default)
 TRP_DIR=""
 TRP_APP_DIR=""
@@ -86,17 +88,25 @@ TRP_SERVICE=""
 TRP_AGENT_DIR=""
 TRP_AGENT_CONF=""
 
+# Why the onion gets its OWN local port: nginx and Tor both arrive on 127.0.0.1,
+# so the app cannot tell them apart by peer address — yet a Tor client controls
+# its own HTTP headers and could forge X-Forwarded-For to mint a fresh identity
+# per request, voiding every per-client rate limit. Separate ports let server.js
+# classify by req.socket.localPort and honour forwarding headers on the nginx
+# port only. Do not point the hidden service at TRP_PORT.
 trp_set_network() {
     case "$1" in
         mainnet)
             TRP_NETWORK="mainnet";  TRP_NET_SHORT="main"
             TRP_NET_LABEL="MAINNET"; TRP_ADDR_HRP="grin"
             TRP_PORT="7456";        TRP_OWNER_PORT="3420"
+            TRP_TOR_PORT="7556"
             ;;
         testnet)
             TRP_NETWORK="testnet";  TRP_NET_SHORT="test"
             TRP_NET_LABEL="TESTNET"; TRP_ADDR_HRP="tgrin"
             TRP_PORT="7466";        TRP_OWNER_PORT="13420"
+            TRP_TOR_PORT="7566"
             ;;
         *) error "trp_set_network: unknown network '$1'"; return 1 ;;
     esac
@@ -109,13 +119,30 @@ trp_set_network() {
     TRP_AGENT_CONF="$TRP_AGENT_DIR/agent.json"
 }
 
+# ─── Backup settings (shared engine — product "transporter") ──────────────────
+TRP_BAK_KEEP=7
+TRP_BAK_HOUR=4
+TRP_BAK_MIN=25
+TRP_BAK_CRON="/etc/cron.d/grin-transporter-backup"
+TRP_BAK_WRAPPER="/usr/local/bin/grin-transporter-backup"
+TRP_BAK_LOG="/opt/grin/logs/transporter_backup.log"
+
 # ─── Source lib files ─────────────────────────────────────────────────────────
 # shellcheck source=lib/nginx_shared_helpers.sh
 source "$SCRIPT_DIR/lib/nginx_shared_helpers.sh"
+# shellcheck source=lib/grin_backup_engine.sh
+source "$SCRIPT_DIR/lib/grin_backup_engine.sh"
 # shellcheck source=lib/093_lib_server.sh
 source "$SCRIPT_DIR/lib/093_lib_server.sh"
 # shellcheck source=lib/093_lib_client.sh
 source "$SCRIPT_DIR/lib/093_lib_client.sh"
+# shellcheck source=lib/093_lib_backup.sh
+source "$SCRIPT_DIR/lib/093_lib_backup.sh"
+
+# Retention persists in the deployer conf (_trp_conf_get lives in 093_lib_server.sh,
+# so this must run after the sources above).
+TRP_BAK_KEEP=$(_trp_conf_get "backup_keep" "7")
+[[ "$TRP_BAK_KEEP" =~ ^[0-9]+$ && "$TRP_BAK_KEEP" -ge 1 ]] || TRP_BAK_KEEP=7
 
 # =============================================================================
 # MENUS
@@ -154,11 +181,12 @@ network_menu() {
         echo -e "  ${GREEN}7${RESET}) Install poll agent    ${DIM}(wire a local wallet)${RESET}"
         echo -e "  ${GREEN}8${RESET}) Agent actions         ${DIM}(address / send / poll / cron)${RESET}"
         echo ""
+        echo -e "  ${GREEN}B${RESET}) Backup & restore    ${DIM}(config + queue snapshot, encrypted)${RESET}"
         echo -e "  ${YELLOW}L${RESET}) Logs"
         echo -e "  ${RED}D${RESET}) Delete instance"
         echo -e "  ${RED}0${RESET}) Back"
         echo ""
-        echo -ne "${BOLD}Select [1-8 / L / D / 0]: ${RESET}"
+        echo -ne "${BOLD}Select [1-8 / B / L / D / 0]: ${RESET}"
         local choice; read -r choice || true
         case "$choice" in
             1) trp_install_server   || true ;;
@@ -169,6 +197,7 @@ network_menu() {
             6) trp_status           || true ;;
             7) trp_agent_install    || true ;;
             8) trp_agent_menu       || true ;;
+            [bB]) trp_backup_menu   || true ;;
             [lL]) trp_logs          || true ;;
             [dD]) trp_uninstall     || true ;;
             0) break ;;

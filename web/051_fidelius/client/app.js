@@ -96,6 +96,21 @@ function clipMsg(id, msg = 'COPIED!') {
     setTimeout(() => { el.textContent = ''; el.className = 'clip-msg'; }, 2000);
 }
 
+// Copy buttons inside innerHTML-built result boxes used to carry an inline
+// onclick="…" attribute. That forced the nginx CSP to allow script-src
+// 'unsafe-inline' for the whole app — on a wallet UI, the one keyword that turns
+// any HTML-injection bug into seed theft. Wire them up after render instead.
+function wireCopyButton(btnId, srcId, msgId) {
+    const btn = q(btnId);
+    if (!btn) return;
+    btn.addEventListener('click', async () => {
+        const src = q(srcId);
+        if (!src) return;
+        try { await navigator.clipboard.writeText(src.value); clipMsg(msgId); }
+        catch { src.select(); clipMsg(msgId, 'PRESS CTRL+C'); }
+    });
+}
+
 // ── API helpers ───────────────────────────────────────────────────────────────
 async function apiGet(url) {
     const r = await fetch(url);
@@ -247,6 +262,9 @@ function switchTab(name) {
     // Dashboard sync/peers polling — only on Wallet tab when a wallet is selected
     if (name === 'wallet' && curWallet) startDashboardPolling();
     else                                 stopDashboardPolling();
+    // Transporter inbox status — only while the Receive tab is actually visible.
+    if (name === 'receive' && curWallet) startTspInboxPolling();
+    else                                 stopTspInboxPolling();
 }
 
 // ── Sidebar ───────────────────────────────────────────────────────────────────
@@ -270,9 +288,17 @@ function renderSidebar(wallets) {
             const active = w.name === curWallet ? ' active' : '';
             const tagIdx = getWalletTag(w.name);
             const tagCls = tagIdx ? ' tag-' + tagIdx : '';
+            // duplicateName: this name exists on BOTH networks. Every route resolves
+            // by name alone, so only the first registry entry is reachable and Delete
+            // would hit that one — mark the row rather than let it look normal.
+            const dup = w.duplicateName
+                ? '<span class="wallet-dup" title="Duplicate name — this name exists on both '
+                  + 'networks. Only one is reachable, and Delete may hit the wrong wallet. '
+                  + 'Rename one side in wallets_info.json.">⚠</span>'
+                : '';
             html += '<div class="wallet-item' + active + tagCls + '" data-wname="' + esc(w.name) + '" data-network="' + esc(w.network) + '">'
                   + '<span class="wallet-dot ' + dot + '"></span>'
-                  + '<span class="wallet-name">' + esc(w.name) + '</span>'
+                  + '<span class="wallet-name">' + esc(w.name) + dup + '</span>'
                   + '<span class="wallet-bal">' + esc(bal) + '</span>'
                   + '</div>';
         }
@@ -314,10 +340,14 @@ async function selectWallet(name) {
     // G1: stamp the network onto the Send-tab panels so the user never confuses
     // which wallet they're sending from
     const netLbl = w.network === 'testnet' ? 'TESTNET' : 'MAINNET';
-    ['sendTorNet', 'sendSlateNet'].forEach(id => {
+    ['sendTorNet', 'sendSlateNet', 'sendTspNet'].forEach(id => {
         const e = q(id);
         if (e) { e.textContent = netLbl; e.className = 'send-method-net ' + w.network; }
     });
+    // The relay is per-network, so switching wallets can change availability
+    // even though nothing about the relay itself moved.
+    refreshSendTspAvailability();
+    refreshTspInbox();
 
     showEl('appShell');
     hideEl('loadingPanel');
@@ -733,6 +763,100 @@ q('exportWalletBtn')?.addEventListener('click', async () => {
     } catch (e) { alert('Backup failed: ' + e.message); }
 });
 
+// ── Reveal seed phrase ────────────────────────────────────────────────────────
+// The seed is otherwise only ever shown once, during the create wizard. An
+// operator who skipped writing it down, or wants to move the wallet to a phone,
+// had no way to get it back short of `grin-wallet recover` on the box.
+//
+// It is shown on a countdown and wiped from the DOM on close, because the real
+// risk here is a shoulder-surfer or a screen left unattended — not the network
+// (nginx already gives us TLS + Basic Auth). The server side is passphrase-gated
+// and shares the 5/min connect limiter, so guessing is not the way in either.
+const SEED_REVEAL_SECONDS = 60;
+
+function showSeedTimed(mnemonic) {
+    const words = String(mnemonic).trim().split(/\s+/);
+    const grid  = words.map((w, i) =>
+        '<span class="seed-word"><span class="seed-num">' + (i + 1) + '</span>' + esc(w) + '</span>'
+    ).join('');
+
+    const p = showModal({
+        title: 'Seed phrase — ' + curWallet,
+        body:  '<div class="seed-title">ANYONE WITH THESE WORDS OWNS THIS WALLET</div>'
+             + '<div class="seed-warning">Write them on paper. Do not photograph them, and do not '
+             + 'paste them into anything that syncs to a cloud.</div>'
+             + '<div class="seed-words seed-words-grid" id="revealSeedWords">' + grid + '</div>'
+             + '<div class="action-row mt-12">'
+             + '<button id="revealSeedCopy" class="btn btn-sm btn-outline">Copy</button>'
+             + '<span id="revealSeedClip" class="clip-msg"></span>'
+             + '</div>'
+             + '<p class="field-hint mt-8" id="revealSeedCountdown"></p>',
+        actions: [{ label: 'Hide now', kind: 'primary' }],
+    });
+
+    // showModal paints synchronously, so the nodes exist before the promise settles.
+    document.getElementById('revealSeedCopy')?.addEventListener('click', async () => {
+        try {
+            await navigator.clipboard.writeText(words.join(' '));
+            clipMsg('revealSeedClip', 'COPIED — CLEAR YOUR CLIPBOARD AFTER');
+        } catch { clipMsg('revealSeedClip', 'COPY FAILED — SELECT THE WORDS'); }
+    });
+
+    const hideBtn = document.querySelector('#modalActions button');
+    let left = SEED_REVEAL_SECONDS;
+    // Declared before tick() runs: the first tick is synchronous, and at a
+    // reveal window of 0 it would reach clearInterval before the assignment.
+    let timer = null;
+    const tick = () => {
+        const el = document.getElementById('revealSeedCountdown');
+        if (el) el.textContent = 'Hides automatically in ' + left + 's.';
+        if (hideBtn) hideBtn.textContent = 'Hide now (' + left + 's)';
+        if (left-- <= 0) { clearInterval(timer); hideBtn?.click(); }
+    };
+    tick();
+    timer = setInterval(tick, 1000);
+
+    return p.then(() => {
+        clearInterval(timer);
+        // Don't leave the words sitting in the DOM for the next person to open devtools on.
+        const body = q('modalBody');
+        if (body) body.innerHTML = '';
+    });
+}
+
+q('revealSeedBtn')?.addEventListener('click', async () => {
+    if (!curWallet) return;
+    const r = await showModal({
+        title: 'Reveal seed phrase',
+        body:  '<p>Shows the 24 words that control <strong>' + esc(curWallet) + '</strong>. '
+             + 'Make sure nobody can see your screen.</p>'
+             + '<div class="field mt-8"><input type="password" id="revealSeedPass" class="input" '
+             + 'placeholder="Wallet passphrase" autocomplete="current-password"></div>'
+             + '<div id="revealSeedErr" class="error-inline mt-8" style="display:none"></div>',
+        actions: [
+            { label: 'Reveal', kind: 'primary', onClick: () => {
+                const p = document.getElementById('revealSeedPass')?.value || '';
+                if (!p) {
+                    const err = document.getElementById('revealSeedErr');
+                    err.style.display = ''; err.textContent = 'Wallet passphrase required.';
+                    throw new Error('nopass');
+                }
+                return { pass: p };
+            }},
+            { label: 'Cancel', kind: 'outline', value: null },
+        ],
+    });
+    if (!r || typeof r !== 'object' || !r.pass) return;
+
+    try {
+        const d = await apiPost('/api/wallet/' + encodeURIComponent(curWallet) + '/show-seed', { passphrase: r.pass });
+        if (!d || !d.mnemonic) throw new Error('Wallet returned no seed phrase.');
+        await showSeedTimed(d.mnemonic);
+    } catch (e) {
+        alert('Could not reveal seed: ' + e.message);
+    }
+});
+
 q('deleteWalletBtn').addEventListener('click', async () => {
     if (!curWallet) return;
     if (!confirm('Remove wallet "' + curWallet + '" from the list?')) return;
@@ -932,8 +1056,15 @@ function showModal({ title = 'Confirm', body = '', actions = [] }) {
             if (a.kind === 'danger') btn.style.color = 'var(--error)';
             btn.textContent = a.label;
             btn.addEventListener('click', async () => {
+                // Every onClick here validates its inputs by writing an inline error
+                // into the body and THROWING. Closing on a throw made that message
+                // flash and vanish, and resolved with an object the caller then read
+                // fields off — so "Reveal" with an empty passphrase did nothing at
+                // all, silently. A throw now KEEPS the modal open so the message the
+                // handler just wrote is the visible result. Cancel / backdrop still
+                // resolve null, so there is always a way out.
                 try { const r = a.onClick ? await a.onClick() : a.value; close(r); }
-                catch (e) { close({ error: e.message }); }
+                catch (e) { console.warn('modal action rejected:', e.message); }
             });
             actEl.appendChild(btn);
         });
@@ -957,8 +1088,11 @@ function findAddrEntry(walletName, address) {
     return (addrBookCache[walletName] || []).find(e => e.address === address) || null;
 }
 
-function renderRecentRecipients() {
-    const el = q('sendTorRecent');
+// Fills one recent-recipients picker. Parameterised because the Transporter
+// panel needs the same list feeding a different destination field — a second
+// copy would drift the moment the address-book shape changes.
+function renderRecentInto(listId, destId) {
+    const el = q(listId);
     if (!el || !curWallet) return;
     const entries = (addrBookCache[curWallet] || []).slice(0, 5);
     if (!entries.length) { el.style.display = 'none'; return; }
@@ -971,10 +1105,16 @@ function renderRecentRecipients() {
     ).join('');
     el.querySelectorAll('.recent-list-item').forEach(item =>
         item.addEventListener('click', () => {
-            q('sendTorDest').value = item.dataset.addr;
+            const dest = q(destId);
+            if (dest) dest.value = item.dataset.addr;
             el.style.display = 'none';
         })
     );
+}
+
+function renderRecentRecipients() {
+    renderRecentInto('sendTorRecent', 'sendTorDest');
+    renderRecentInto('sendTspRecent', 'sendTspDest');
 }
 
 function renderAddrBook() {
@@ -1051,7 +1191,11 @@ async function recoverLockedOutputs() {
     const confirmed = await showModal({
         title: 'Recover Locked Outputs',
         body:  '<p>The following pending sends will be cancelled and their outputs unlocked:</p><ul style="margin:10px 0 0 18px;font-size:13px">' + lines + '</ul>'
-            + '<p class="field-hint" style="margin-top:12px">This only affects txs that were never broadcast. Confirmed sends are unaffected.</p>',
+            + '<p class="field-hint" style="margin-top:12px">This only affects txs that were never broadcast. Confirmed sends are unaffected.</p>'
+            // A queued Transporter payment is a pending send that is waiting
+            // NORMALLY — possibly for days. This button cancels every one of
+            // them at once, so it must no longer read as "clear out the junk".
+            + '<p class="field-hint" style="margin-top:8px"><strong>This cancels all of them.</strong> A payment you queued via the Transporter also appears here while it waits for the recipient to collect it &mdash; that can legitimately take hours or days. Cancelling one un-queues a payment that may still be delivered.</p>',
         actions: [
             { label: 'Cancel & Unlock', kind: 'primary', value: true },
             { label: 'Keep Pending',     kind: 'outline', value: false },
@@ -1285,8 +1429,9 @@ q('sendForm').addEventListener('submit', async e => {
         const d = await apiPost('/api/wallet/' + curWallet + '/send', { amount: parseFloat(amount) });
         resultBox(el, 'success', '<p><strong>SLATEPACK — share with recipient:</strong></p>'
             + '<textarea readonly class="slate-textarea" id="sendSlateText">' + esc(d.slatepack) + '</textarea>'
-            + '<button onclick="navigator.clipboard.writeText(document.getElementById(\'sendSlateText\').value).then(()=>clipMsg(\'sendClipMsg\'))" class="btn btn-sm mt-8">[ COPY ]</button>'
+            + '<button id="sendSlateCopy" class="btn btn-sm mt-8">[ COPY ]</button>'
             + '<span id="sendClipMsg" class="clip-msg"></span>');
+        wireCopyButton('sendSlateCopy', 'sendSlateText', 'sendClipMsg');
         q('sendForm').reset(); setText('feeEstimate', '');
     } catch (err) { resultBox(el, 'error', '<strong>ERROR:</strong> ' + esc(err.message)); }
 });
@@ -1310,8 +1455,9 @@ q('processSlateBtn').addEventListener('click', async () => {
         const d = await apiPost('/api/wallet/' + curWallet + '/receive', { slatepack: text });
         resultBox(el, 'success', '<p><strong>PROCESSED — send back to sender:</strong></p>'
             + '<textarea readonly class="slate-textarea" id="rcvRespText">' + esc(d.response_slatepack) + '</textarea>'
-            + '<button onclick="navigator.clipboard.writeText(document.getElementById(\'rcvRespText\').value).then(()=>clipMsg(\'rcvClip\'))" class="btn btn-sm mt-8">[ COPY ]</button>'
+            + '<button id="rcvRespCopy" class="btn btn-sm mt-8">[ COPY ]</button>'
             + '<span id="rcvClip" class="clip-msg"></span>');
+        wireCopyButton('rcvRespCopy', 'rcvRespText', 'rcvClip');
     } catch (e) { resultBox(el, 'error', '<strong>ERROR:</strong> ' + esc(e.message)); }
 });
 
@@ -1757,6 +1903,7 @@ function initSetupTab() {
     initAutolockSection();
     initBinaryPanel();
     initTorPanel();
+    initTransporterSection();
     renderSetupWalletList();
     hideEl('setupWizard');
     showEl('setupAddWalletBtn');
@@ -2056,6 +2203,287 @@ async function init() {
     }
 }
 
+// ═══ Grin Transporter (Script 093) ═══════════════════════════════════════════
+//
+// Three surfaces, one idea: Send gets a third delivery method, Receive gets an
+// inbox instead of a paste box, Setup gets the relay URL.
+//
+// The recurring UX hazard here is that a Transporter payment has FOUR ways to
+// look "stuck" that are not the same problem — relay not configured, wallet
+// locked, listener not running, or simply nobody has replied yet. Every panel
+// below states which one it is, because "nothing is happening" with money
+// reserved is the worst possible thing to leave a user guessing about.
+
+let tspCfgCache   = null;
+let tspInboxTimer = null;
+
+async function tspLoadConfig(force) {
+    if (tspCfgCache && !force) return tspCfgCache;
+    try { tspCfgCache = await apiGet('/api/transporter/config'); }
+    catch { tspCfgCache = { mainnet: { url: '', enabled: false }, testnet: { url: '', enabled: false }, poll_seconds: 60 }; }
+    return tspCfgCache;
+}
+
+function tspAgo(ts) {
+    if (!ts) return 'never';
+    const s = Math.max(0, Math.round((Date.now() - ts) / 1000));
+    if (s < 60)   return s + 's ago';
+    if (s < 3600) return Math.round(s / 60) + 'm ago';
+    return Math.round(s / 3600) + 'h ago';
+}
+
+// ── Send tab ─────────────────────────────────────────────────────────────────
+
+async function refreshSendTspAvailability() {
+    const panel  = q('sendTspPanel');
+    const statEl = q('sendTspStatus');
+    const netEl  = q('sendTspNet');
+    if (!panel || !statEl) return;
+
+    const w = allWallets.find(x => x.name === curWallet);
+    if (netEl) netEl.textContent = w ? w.network : '';
+
+    let ready = false, msg, cls;
+    if (!w) {
+        msg = 'Select a wallet first'; cls = 'warn';
+    } else {
+        const cfg = await tspLoadConfig();
+        const net = cfg[w.network] || { url: '' };
+        if (!net.url) { msg = 'No ' + w.network + ' relay configured — add one in Setup'; cls = 'warn'; }
+        else          { msg = 'Ready'; cls = 'ok'; ready = true; }
+    }
+    statEl.textContent = msg;
+    statEl.className   = 'send-method-status ' + cls;
+    panel.title        = ready ? '' : msg;
+    panel.classList.toggle('send-method-disabled', !ready);
+}
+
+q('sendTspForm')?.addEventListener('submit', async e => {
+    e.preventDefault();
+    if (!curWallet) return;
+    const el     = q('sendTspResult');
+    const btn    = q('sendTspBtn');
+    const amount = q('sendTspAmount').value.trim();
+    const dest   = q('sendTspDest').value.trim().toLowerCase();
+
+    if (!(parseFloat(amount) > 0))  { resultBox(el, 'error', '<strong>ERROR:</strong> Invalid amount'); return; }
+    if (!ADDR_RE.test(dest))        { resultBox(el, 'error', '<strong>ERROR:</strong> Invalid recipient (expected grin1… for mainnet, tgrin1… for testnet)'); return; }
+
+    // Same hard block as the Tor path — cross-network sends burn the funds and
+    // there is no recovery, so there is no "send anyway" option.
+    const w = allWallets.find(x => x.name === curWallet);
+    const destNet = addressNetwork(dest);
+    if (w && destNet && destNet !== w.network) {
+        await showModal({
+            title: '⛔ Network mismatch',
+            body:  '<p>This wallet is <strong>' + w.network.toUpperCase() + '</strong> but the recipient address is <strong>' + destNet.toUpperCase() + '</strong>.</p>'
+                 + '<p class="error-inline" style="display:block;margin-top:8px">Sending across networks <strong>burns the funds permanently</strong>.</p>',
+            actions: [{ label: 'Cancel', kind: 'primary', value: null }],
+        });
+        resultBox(el, 'error', '<strong>BLOCKED:</strong> Network mismatch — this send was prevented to protect your funds.');
+        return;
+    }
+
+    // Confirm the part people do not expect: the coins are reserved NOW, and
+    // stay reserved until the other side answers. That is the real cost of an
+    // async send and it deserves an explicit yes.
+    const go = await showModal({
+        title: 'Queue this payment?',
+        body:  '<p>Queue <strong>' + esc(amount) + ' ∩</strong> for <code>' + esc(dest.slice(0, 16)) + '…</code>.</p>'
+             + '<p class="field-hint mt-8">The coins are reserved as soon as you confirm, and the payment only completes when the recipient\'s wallet collects it and replies. Until then the amount will not be spendable. If they never reply, release it with <strong>Recover</strong> on the Wallet tab.</p>',
+        actions: [
+            { label: 'Queue payment', kind: 'primary', value: 'go' },
+            { label: 'Cancel',        kind: 'outline', value: null },
+        ],
+    });
+    if (!go) return;
+
+    btn.disabled = true;
+    resultBox(el, '', '<p class="loading">RESERVING COINS &amp; QUEUEING&hellip;</p>');
+    try {
+        const d = await apiPost('/api/wallet/' + curWallet + '/transporter/send', { amount, dest });
+        resultBox(el, 'success',
+            '<p class="ok-text"><strong>QUEUED FOR DELIVERY</strong></p>'
+            + '<p><strong>' + esc(d.amount) + ' ∩</strong> is waiting for <code>' + esc(dest.slice(0, 16)) + '…</code> to collect it.</p>'
+            + '<p><strong>TX ID:</strong> <code>' + esc(d.txSlateId) + '</code></p>'
+            + (d.expiresAt ? '<p class="field-hint">The relay holds it until ' + esc(String(d.expiresAt)) + '.</p>' : '')
+            + (d.duplicate ? '<p class="field-hint">This exact payment was already in their queue — nothing was duplicated.</p>' : '')
+            + '<p class="field-hint mt-8">Nothing has moved on-chain yet. Your balance shows the amount as locked until they reply.</p>');
+        q('sendTspAmount').value = '';
+        if (curWallet) { await loadAddrBook(curWallet); renderRecentRecipients(); renderAddrBook(); refreshBalance(curWallet); }
+    } catch (err) {
+        // The server marks the one state that needs an action from the user:
+        // coins reserved but the payment never left.
+        const locked = /outputs are locked, cancel tx/i.test(err.message);
+        resultBox(el, 'error', '<strong>ERROR:</strong> ' + esc(err.message)
+            + (locked ? '<p class="field-hint mt-8">Your coins are reserved for a payment that was never delivered. Get them back with <strong>Recover</strong> on the Wallet tab.</p>'
+                      : '<p class="field-hint mt-8">No coins were reserved.</p>'));
+    } finally { btn.disabled = false; }
+});
+
+// ── Receive tab: inbox ───────────────────────────────────────────────────────
+
+async function refreshTspInbox() {
+    const info = q('tspInboxInfo');
+    const netEl = q('tspInboxNet');
+    const btn  = q('tspCheckBtn');
+    if (!info) return;
+    const w = allWallets.find(x => x.name === curWallet);
+    if (netEl) netEl.textContent = w ? w.network : '';
+    if (!w) {
+        info.className = 'info-box mt-8';
+        info.textContent = 'Select a wallet to see its inbox.';
+        if (btn) btn.disabled = true;
+        return;
+    }
+    let d;
+    try { d = await apiGet('/api/wallet/' + curWallet + '/transporter/status'); }
+    catch (e) {
+        info.className = 'info-box error mt-8';
+        info.textContent = 'Status unavailable: ' + e.message;
+        return;
+    }
+
+    setText('tspLastPoll', d.lastPoll ? 'Last checked ' + tspAgo(d.lastPoll) : 'Not checked yet');
+
+    // Order matters: report the FIRST thing that actually blocks receiving, so
+    // the user fixes one thing at a time instead of reading four warnings.
+    if (!d.configured) {
+        info.className = 'info-box warn mt-8';
+        info.innerHTML = '<strong>No ' + esc(d.network) + ' relay configured.</strong> Add one under Setup → Grin Transporter to receive payments while you are offline.';
+        if (btn) btn.disabled = true;
+        return;
+    }
+    if (btn) btn.disabled = false;
+
+    if (!d.unlocked) {
+        info.className = 'info-box warn mt-8';
+        info.innerHTML = '<strong>Wallet is locked.</strong> Incoming payments stay safely in the queue &mdash; unlock this wallet to collect them.';
+        return;
+    }
+    if (!d.ownerRunning) {
+        info.className = 'info-box warn mt-8';
+        info.innerHTML = '<strong>Owner API is not running.</strong> Start it from the Wallet tab &mdash; it is needed to read anything from the relay.';
+        return;
+    }
+    if (!d.listenerRunning) {
+        // The single most confusing failure: polling works, decoding works, and
+        // then every incoming payment fails at the last step.
+        info.className = 'info-box warn mt-8';
+        info.innerHTML = '<strong>Listener is not running.</strong> Payments can be fetched but not accepted &mdash; start the listener from the Wallet tab.';
+        return;
+    }
+
+    const r = d.lastResult;
+    const bits = [];
+    bits.push(d.autoPoll
+        ? 'Checking automatically every ' + (d.pollSeconds >= 60 ? Math.round(d.pollSeconds / 60) + ' min' : d.pollSeconds + 's') + '.'
+        : 'Automatic checks are off &mdash; use Check Now, or enable them in Setup.');
+    if (d.lastError) {
+        info.className = 'info-box error mt-8';
+        info.innerHTML = '<strong>Last check failed:</strong> ' + esc(d.lastError);
+        return;
+    }
+    if (r && (r.processed || r.failed || r.skipped || r.removed)) {
+        bits.push('Last check: ' + r.processed + ' processed'
+                + (r.skipped ? ', ' + r.skipped + ' waiting' : '')
+                + (r.failed  ? ', ' + r.failed  + ' failed'  : '')
+                + (r.removed ? ', ' + r.removed + ' discarded' : '') + '.');
+    } else if (r) {
+        bits.push('Nothing waiting at the last check.');
+    }
+    info.className = 'info-box success mt-8';
+    info.innerHTML = '<strong>Ready.</strong> ' + bits.join(' ');
+}
+
+q('tspCheckBtn')?.addEventListener('click', async () => {
+    if (!curWallet) return;
+    const btn = q('tspCheckBtn');
+    const el  = q('tspInboxResult');
+    btn.disabled = true;
+    resultBox(el, '', '<p class="loading">CHECKING THE RELAY&hellip;</p>');
+    try {
+        const d = await apiPost('/api/wallet/' + curWallet + '/transporter/poll', {});
+        const lines = (d.lines || []).map(l => esc(l)).join('<br>');
+        const head = d.depth
+            ? '<p class="ok-text"><strong>' + d.processed + ' of ' + d.depth + ' handled</strong></p>'
+            : '<p class="ok-text"><strong>NOTHING WAITING</strong></p>';
+        resultBox(el, d.failed ? 'error' : 'success',
+            head + (lines ? '<p class="field-hint" style="white-space:pre-wrap">' + lines + '</p>' : ''));
+        if (d.processed) refreshBalance(curWallet);
+    } catch (err) {
+        resultBox(el, 'error', '<strong>ERROR:</strong> ' + esc(err.message));
+    } finally {
+        btn.disabled = false;
+        refreshTspInbox();
+    }
+});
+
+function startTspInboxPolling() {
+    stopTspInboxPolling();
+    refreshTspInbox();
+    tspInboxTimer = setInterval(refreshTspInbox, 10000);
+}
+function stopTspInboxPolling() {
+    if (tspInboxTimer) { clearInterval(tspInboxTimer); tspInboxTimer = null; }
+}
+
+// ── Setup tab: relay configuration ───────────────────────────────────────────
+
+async function initTransporterSection() {
+    const cfg = await tspLoadConfig(true);
+    for (const net of ['mainnet', 'testnet']) {
+        const cap = net[0].toUpperCase() + net.slice(1);
+        const urlEl  = q('tspUrl'  + cap);
+        const autoEl = q('tspAuto' + cap);
+        if (urlEl)  urlEl.value      = cfg[net].url || '';
+        if (autoEl) autoEl.checked   = !!cfg[net].enabled;
+    }
+    const sel = q('tspPollSeconds');
+    if (sel) sel.value = String(cfg.poll_seconds || 60);
+}
+
+async function tspTestEndpoint(net) {
+    const cap  = net[0].toUpperCase() + net.slice(1);
+    const msg  = q('tspTest' + cap + 'Msg');
+    const url  = q('tspUrl' + cap)?.value.trim();
+    if (!msg) return;
+    if (!url) { msg.textContent = 'Enter a URL first.'; msg.className = 'field-hint'; return; }
+    msg.textContent = 'Testing…';
+    msg.className = 'field-hint';
+    try {
+        const d = await apiPost('/api/transporter/test', { url, network: net });
+        msg.textContent = 'OK — ' + net + ' relay v' + (d.health.version || '?')
+                        + ', ' + (d.health.queued != null ? d.health.queued + ' slate(s) queued in total' : 'reachable') + '.';
+        msg.className = 'field-hint ok-text';
+    } catch (e) {
+        msg.textContent = e.message;
+        msg.className = 'field-hint error-inline';
+    }
+}
+
+q('tspTestMainnet')?.addEventListener('click', () => tspTestEndpoint('mainnet'));
+q('tspTestTestnet')?.addEventListener('click', () => tspTestEndpoint('testnet'));
+
+q('tspSaveBtn')?.addEventListener('click', async () => {
+    const msg = q('tspSaveMsg');
+    const body = {
+        mainnet:      { url: q('tspUrlMainnet')?.value.trim() || '', enabled: !!q('tspAutoMainnet')?.checked },
+        testnet:      { url: q('tspUrlTestnet')?.value.trim() || '', enabled: !!q('tspAutoTestnet')?.checked },
+        poll_seconds: parseInt(q('tspPollSeconds')?.value, 10) || 60,
+    };
+    try {
+        await apiPost('/api/transporter/config', body);
+        tspCfgCache = null;
+        await tspLoadConfig(true);
+        await initTransporterSection();      // reflect what the server normalised
+        if (msg) { msg.textContent = 'Saved.'; msg.className = 'field-hint ok-text'; }
+        refreshSendTspAvailability();
+    } catch (e) {
+        if (msg) { msg.textContent = e.message; msg.className = 'field-hint error-inline'; }
+    }
+});
+
 // ── Wire up events on DOMContentLoaded ───────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
     document.querySelectorAll('[data-tab]').forEach(btn =>
@@ -2066,6 +2494,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (tab === 'setup') initSetupTab();
             if (tab === 'send') {
                 refreshSendTorAvailability();
+                refreshSendTspAvailability();
                 if (curWallet) loadAddrBook(curWallet).then(renderRecentRecipients);
             }
         })

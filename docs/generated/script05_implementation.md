@@ -111,7 +111,7 @@ Each row's "installed / running" state is probed independently — nothing reads
 | Product | Installed — file probe | Running — liveness probe |
 |---------|------------------------|--------------------------|
 | CMD Wallet | `/opt/grin/cmdwallet/{mainnet,testnet}/grin-wallet.toml` | `tmux has-session grin_{mainnet,testnet}_cmd_wallet` |
-| Fidelius (051) | `/opt/grin/webwallet/{mainnet,testnet}/config.conf` | nginx symlink `sites-enabled/web-wallet-{main,test}` |
+| Fidelius (051) | `/opt/grin/fidelius/config.conf` | `systemctl is-active grin-fidelius` |
 | Grin XP (051x) | `/opt/grin/webwallet/xp-mainnet/config.conf` | nginx symlink `sites-enabled/web-wallet-xp` |
 | WooCommerce (053) | unit file `/etc/systemd/system/grin-wallet-bridge-{main,test}.service` | `systemctl is-active grin-wallet-bridge-{main,test}` |
 | Grin Drop (059) | dir `/opt/grin/drop-{main,test}` | `systemctl is-active grin-drop-{main,test}` |
@@ -155,8 +155,47 @@ the renumber.
 > The `@reboot` tag `# grin-drop-<net>-reboot` carries no number and was left alone.
 
 Nothing else migrated: `/opt/grin/` paths, systemd units and the Drop database carry no number.
-`051` had no deployed number-dependency at all (its unit is `grin-web-wallet.service`), so its
-rename was purely files.
+`051` had no deployed number-dependency at all, so its rename was purely files.
+
+### Fidelius service + path rename — 2026-08-05
+
+`grin-web-wallet` → **`grin-fidelius`**, and `/opt/grin/webwallet/` → **`/opt/grin/fidelius/`**.
+Done deliberately **before the first VPS deploy**, when it is a pure find-and-replace: once
+installed it becomes a matched-key migration (stop/disable/rm the old unit before writing the
+new one, rm the old vhost before the new one, move the htpasswd or make operators re-enter
+credentials) — the same cost the Drop `052→059` move paid. `grin-web-wallet` was a *category*,
+not a product, and the 05 band holds three web wallets.
+
+`/opt/grin/webwallet/` was **not** Fidelius-only, which is why the move is partial: `051x` keeps
+its config at `/opt/grin/webwallet/xp-mainnet/`. Moving a possibly-deployed product's config is
+a migration in its own right and was deliberately not folded into this one, so the generic
+directory now belongs to Grin XP alone.
+
+The two `_051_*` detectors above were also **wrong before this** — they probed
+`/opt/grin/webwallet/{mainnet,testnet}/config.conf` and the `web-wallet-{main,test}` symlinks,
+both PHP-era paths that nothing has written since the Node port made Fidelius one instance
+serving both networks (design D1). The hub row therefore read "not installed" on every current
+deploy. Fixed alongside the rename, not by it.
+
+### Fidelius service log — location + rotation
+
+The log moved `/var/log/grin-fidelius.log` → **`/opt/grin/logs/grin-fidelius.log`**, joining every
+other toolkit daemon log. Beyond consistency (one directory to back up, clean and look in), it lets
+the unit drop `/var/log` from `ReadWritePaths` — a root-run Node process no longer has write access
+to the system log directory.
+
+Three things that are easy to get wrong here:
+
+| | |
+|---|---|
+| **`mkdir -p /opt/grin/logs` before start** | systemd's `append:` creates the *file* but never the *directory*. A missing dir fails the unit at start with an opaque exit code. |
+| **Rotation must be `copytruncate`** | `append:` holds an open fd. A rename-and-create rotation would leave the daemon writing to the rotated inode forever and the fresh log permanently empty. Script 07 solves the same problem with a `USR2` reopen signal; `server.js` has no such handler. |
+| **051 ships its OWN `/etc/logrotate.d/grin-fidelius`** | It does *not* join Script 08's toolkit list — 08's list is opt-in (Automatic Disk Cleanup), and the same path in two logrotate files errors with "duplicate log entry". 08's exclusion comment names `grin-fidelius.log` for the same reason. |
+
+Rotation is `weekly`, `rotate 4`, `size 10M`, compressed. One consequence worth knowing when
+debugging: **`journalctl -u grin-fidelius` never shows app output** — `append:` redirects stdout
+away from the journal, so the journal carries only systemd's own start/stop/crash lines. The setup
+screen prints both destinations.
 
 ---
 

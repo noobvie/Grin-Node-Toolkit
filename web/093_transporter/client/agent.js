@@ -218,6 +218,19 @@ function grinToNano(s) {
 
 const ADDR_RE = /^(grin1|tgrin1)[ac-hj-np-z02-9]{58}$/;
 
+// Deliveries after which a slate we have never been able to act on is retired.
+// Anyone may deposit into an open queue, so some entries are simply junk; left
+// alone they sit until the TTL and are re-decoded on every poll forever. The
+// server reports `picked_up` = deliveries BEFORE this one, so this fires on the
+// 6th sighting.
+//
+// Reaping is only ever safe when the WALLET is demonstrably healthy — otherwise
+// a wallet that is down for six poll cycles would delete real, payable slates.
+// A raw error from the poll loop cannot tell the two apart, so `reapable()`
+// re-probes the wallet after a failure: probe OK ⇒ the wallet answered and the
+// blob is the problem; probe fails ⇒ our side is broken, keep the slate.
+const REAP_AFTER_PICKUPS = 5;
+
 // ── Commands ──────────────────────────────────────────────────────────────────
 
 async function getOwnAddress(session) {
@@ -308,10 +321,18 @@ async function cmdPoll(cfg) {
   if (!slates.length) { log(`POLL ${myAddr} — queue empty`); return; }
   log(`POLL ${myAddr} — ${slates.length} slate(s)`);
 
-  let done = 0, skipped = 0, failed = 0;
+  let done = 0, skipped = 0, failed = 0, reaped = 0;
   for (const item of slates) {
     const del = () => tspFetch(`${cfg.transporter_url}/queue/${encodeURIComponent(myAddr)}/${item.id}`,
                                { method: 'DELETE', headers: authHdr });
+    // Has this blob been handed to us enough times, AND is the wallet actually
+    // healthy right now? Both must hold before we delete something we could not
+    // read — the probe is what stops a wallet outage eating real slates.
+    const reapable = async () => {
+      if ((item.picked_up || 0) < REAP_AFTER_PICKUPS) return false;
+      try { await getOwnAddress(session); return true; }
+      catch { return false; }
+    };
     try {
       const meta = await encryptedOwnerCall(headers, sharedKey, ownerUrl, 'decode_slatepack_message',
                                             { token, message: item.slatepack, secret_indices: [0] });
@@ -323,8 +344,16 @@ async function cmdPoll(cfg) {
         // Incoming payment. Need the sender's address to route the reply.
         const sender = typeof meta.sender === 'string' && ADDR_RE.test(meta.sender) ? meta.sender : null;
         if (!sender) {
-          log(`  #${item.id} S1 has no sender address — cannot route reply, skipping (will expire by TTL)`);
-          skipped++;
+          // Decode SUCCEEDED, so the wallet is fine and this will never become
+          // routable — no probe needed, it is unusable by construction.
+          if ((item.picked_up || 0) >= REAP_AFTER_PICKUPS) {
+            log(`  #${item.id} S1 still has no sender address after ${item.picked_up} deliveries — removing`);
+            await del();
+            reaped++;
+          } else {
+            log(`  #${item.id} S1 has no sender address — cannot route reply, skipping`);
+            skipped++;
+          }
           continue;
         }
         let reply;
@@ -377,15 +406,31 @@ async function cmdPoll(cfg) {
         done++;
 
       } else {
-        log(`  #${item.id} unsupported slate state "${state}" — leaving in queue`);
-        skipped++;
+        // Decode succeeded; the state is simply not one we act on. It will never
+        // become one, so retire it once it has had its chances.
+        if ((item.picked_up || 0) >= REAP_AFTER_PICKUPS) {
+          log(`  #${item.id} slate state "${state}" still unsupported after ${item.picked_up} deliveries — removing`);
+          await del();
+          reaped++;
+        } else {
+          log(`  #${item.id} unsupported slate state "${state}" — leaving in queue`);
+          skipped++;
+        }
       }
     } catch (e) {
-      log(`  #${item.id} FAILED: ${e.message} — leaving in queue for retry`);
-      failed++;
+      if (await reapable()) {
+        // The wallet answered our probe, so it is not the problem: after this
+        // many attempts the blob is junk (anyone may deposit) or corrupt.
+        log(`  #${item.id} unreadable after ${item.picked_up} deliveries (${e.message}) — wallet healthy, removing`);
+        try { await del(); reaped++; }
+        catch (de) { log(`  #${item.id} could not remove: ${de.message}`); failed++; }
+      } else {
+        log(`  #${item.id} FAILED: ${e.message} — leaving in queue for retry`);
+        failed++;
+      }
     }
   }
-  log(`POLL done — processed=${done} skipped=${skipped} failed=${failed}`);
+  log(`POLL done — processed=${done} skipped=${skipped} failed=${failed} removed=${reaped}`);
   if (failed) process.exitCode = 1;
 }
 

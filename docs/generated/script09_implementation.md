@@ -160,6 +160,7 @@ locally against the real code).
 scripts/093_grin_transporter.sh        wizard: net select → server/agent menus (trp_set_network vars)
 scripts/lib/093_lib_server.sh          trp_* — node24 install, app deploy, systemd, nginx+certbot, tor, status, uninstall
 scripts/lib/093_lib_client.sh          trp_agent_* — agent install (Drop auto-detect), cron poll toggle, actions submenu
+scripts/lib/093_lib_backup.sh          trp_backup_* — shared engine, product "transporter" (added 2026-08-05)
 web/093_transporter/server.js          Express + node:sqlite queue (NO wallet, ciphertext only)
 web/093_transporter/package.json       express only (SQLite via node:sqlite builtin — 059 model, not better-sqlite3)
 web/093_transporter/client/agent.js    zero-dep CLI: address/status/send/poll/cancel (Owner v3 ECDH + Foreign v2)
@@ -206,6 +207,81 @@ addresses are rejected at the door).
 - `get_slatepack_secret_key` result: first 32 bytes used (64- or 128-hex
   tolerated); PKCS8-wrapped for node:crypto signing; key never leaves the agent.
 
+### Hardening + toolkit-citizenship pass (2026-08-05, server v0.2.0)
+
+Full security audit against the real code → [script09_security_audit.md](script09_security_audit.md)
+(11 findings for 093, all fixed same day; 3 open for 091). The shape changes worth knowing here:
+
+- **Deposit abuse is now bounded in five layers**, not one. The old single
+  `max_queue_per_addr` cap was a **DoS weapon against the recipient** — a slatepack address is
+  public and the body check only looks for the armor markers, so a stranger could fill a victim's
+  queue with 100 junk blobs and bounce every real payout for 14 days. The fix that actually
+  matters is **fair share** (`max_per_depositor_per_addr`, default 5): one depositor may hold only
+  a few slots of any one queue, so burying an address now needs ~20 distinct sources. Around it:
+  a global `max_queue_total`, `(recipient, body_hash)` dedupe (which also makes agent retries
+  idempotent — a re-PUT returns the original id, 200 not 201), and a per-source hourly quota.
+- **The onion front moved to its OWN local port** (7556 main / 7566 test). This is a security
+  control, not tidiness: nginx and Tor both land on 127.0.0.1, and a Tor client controls its own
+  headers, so with one shared port a forged `X-Forwarded-For` minted a fresh identity per request
+  and voided every per-client limit. Classification is now by `req.socket.localPort`; forwarding
+  headers are honoured on the nginx port only. **Residual and accepted:** onion callers share one
+  identity, so the fair-share cap applies to the onion front *as a whole* — no onion flood can bury
+  a queue, but all onion senders together hold at most `max_per_depositor_per_addr` slates for any
+  one recipient. A front-wide onion deposit ceiling bounds request cost, since nginx's `limit_req`
+  does not cover that path. Both the code header and the menu 4 screen say so.
+- **Ownership proofs are throttled and audited.** Lockout is keyed on **`(address, client)`**,
+  never the address alone — an address-keyed lockout is a remote DoS, the same trap the pool hit
+  (`project_pool_admin_login_security`). On the onion front the lockout is skipped (its key would
+  be `(addr,"tor")` for everyone) in favour of a front-wide attempt ceiling. New `auth_events`
+  table stores a **salted hash** of the client, never a raw IP; `trp_status` shows a 24 h count.
+- **Backup exists** (`B` on the network menu) — shared engine, product `transporter`, **ONE
+  archive covering BOTH networks** since the deployer conf and the schedule are per-server.
+  Contents: deployer conf + per-net `config.json` + SQLite snapshot + `agent.json` + **the .onion
+  secret key**. The queue is ciphertext the server cannot read, so this archive is about
+  **identity and continuity**, not confidentiality: lose the onion key and every agent pointed at
+  this Transporter silently stops finding it.
+- **Uninstall no longer lies.** It strips our marked torrc block (verified not to touch a second
+  unrelated hidden service), keeps the HS *keys* with a note, and only removes the backup schedule
+  when the other network's instance is gone too.
+- Agent deployer fixes: `su -c` args are `printf %q`-quoted (was a command-injection sink taking
+  raw prompt input), `agent.json` is written by `JSON.stringify` rather than a heredoc, the
+  Transporter URL is validated, and pointing an agent at a **remote cleartext `http://`** now
+  requires typed consent — that URL carries a bearer token granting read+delete on the queue.
+
+**DB migration is automatic and tested**: a 0.1.0 database gains `body_hash` / `depositor` /
+`meta` / `auth_events`, back-fills hashes, collapses pre-existing duplicates, then builds the
+unique index. 10/10 assertions, no slate content lost.
+
+### Re-review of that pass (2026-08-06, server v0.2.1)
+
+The 2026-08-05 fixes were themselves audited, and two more defects surfaced — one a **complete
+bypass of the headline fix**. Both were reproduced against the running server first.
+
+- **Bounding deposits does not bound denial (T-12).** All five layers cap what an attacker can
+  *put in* a queue. None of them govern what the owner gets *out*. `GET` returned
+  `ORDER BY id LIMIT 20` and the agent deletes only what it can process, so junk arriving first
+  pinned the delivery window and hid real slates until the 14-day TTL. Reproduced with 25 junk
+  deposits from **5 sources — entirely within the new caps**: the real payment never appeared.
+  Fix is **ordering, not another cap**: `ORDER BY picked_up ASC, id ASC` (covering index) demotes
+  anything already delivered, so a fresh slate reaches the front within `ceil(depth/20)+1` polls.
+  `picked_up` now ships in the `GET` response and the agent retires a blob after 5 deliveries —
+  **but only when the wallet is demonstrably healthy** (decode succeeded and the slate is simply
+  unusable, or decode failed *and* a follow-up Owner-API probe succeeded). Without that probe a
+  wallet outage lasting six polls would have deleted payable slates.
+- **An ALL-CAPS address created a queue nobody could read (T-13).** `app.use('/queue/:addr', …)`
+  lowercased `req.params.addr`, but **Express rebuilds `req.params` for every layer**, so the
+  normalisation never reached the handler. Bech32 is case-insensitive, so the uppercase form
+  validated and was stored verbatim while `/auth` always issued a lowercase token: `PUT` → 201,
+  owner `GET` → 0 slates, uppercase `GET` → 401. Pre-existing, but it silently undermined the
+  dedupe and fair-share layers, which key on `recipient`. All handlers now go through a `qAddr()`
+  helper.
+
+Harness is at **33/33**; migration harness still 10/10.
+
+> **Transferable lesson:** a hardening pass needs its own audit. The T-1 verification ("flooding is
+> bounded") was *true* — it just was not the property that mattered, because a queue can be denied
+> by being blocked as well as by being filled.
+
 ### ⚠ VPS-test watchlist (first live run)
 
 1. The one remaining design `⚠VERIFY`: `get_slatepack_secret_key(token, 0)`
@@ -218,3 +294,13 @@ addresses are rejected at the door).
    from the agent).
 4. node:sqlite emits an ExperimentalWarning on Node 24 — cosmetic (059 lives
    with the same).
+5. **Confirm the loopback bind** (`ss -tlnp`) for BOTH listeners — the nginx
+   port and, when Tor is on, the onion port. The whole trust split of the
+   2026-08-05 pass rests on neither being world-reachable.
+6. **Re-run menu 4 on any box that enabled Tor before 2026-08-05** — the onion
+   moved to its own port, and a torrc block written by the older code still
+   points at the nginx port (which would re-open the header-forgery hole).
+7. **Watch the agent's `removed=` count** in the poll log. It should be 0 on a
+   healthy queue; a non-zero count means either genuine junk was retired or the
+   wallet-health probe is mis-firing. If real slates ever disappear, suspect
+   `reapable()` first — raise `REAP_AFTER_PICKUPS` and re-check the probe call.

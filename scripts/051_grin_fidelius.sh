@@ -12,16 +12,16 @@
 #
 #  ─── Architecture ────────────────────────────────────────────────────────────
 #   ONE Node.js process serves MANY wallets across BOTH networks:
-#     systemd : grin-web-wallet.service     bound 127.0.0.1:7420
+#     systemd : grin-fidelius.service     bound 127.0.0.1:7420
 #     nginx   : reverse proxy → 127.0.0.1:7420 + Basic Auth + SSL
-#     wallets : /opt/grin/webwallet/wallet_<net>_<name>/  per-wallet dirs
-#     binary  : /opt/grin/webwallet/grin-wallet           single shared binary
-#     registry: /opt/grin/webwallet/wallets_info.json     wallet list
+#     wallets : /opt/grin/fidelius/wallet_<net>_<name>/  per-wallet dirs
+#     binary  : /opt/grin/fidelius/grin-wallet           single shared binary
+#     registry: /opt/grin/fidelius/wallets_info.json     wallet list
 #
 #  ─── Menu ────────────────────────────────────────────────────────────────────
 #   1) Install grin-wallet binary
 #   2) Install dependencies        (nodejs, nginx, certbot, htpasswd, tor, qrencode)
-#   3) Deploy files + systemd      (web/051_fidelius/ → /opt/grin/webwallet/app/)
+#   3) Deploy files + systemd      (web/051_fidelius/ → /opt/grin/fidelius/app/)
 #   4) Configure nginx             (HTTP vhost — step 5 adds HTTPS)
 #   5) Setup SSL                   (Let's Encrypt or Cloudflare Origin Cert)
 #   6) Setup Basic Auth            (htpasswd)
@@ -33,9 +33,10 @@
 #
 #  ─── Security ────────────────────────────────────────────────────────────────
 #   nginx : auth_basic, server_tokens off, client_max_body_size 1m
-#           HSTS, CSP (script-src 'self' 'unsafe-inline' for inline theme boot),
-#           X-Content-Type-Options, X-Frame-Options, Referrer-Policy,
-#           Permissions-Policy, X-XSS-Protection: 0
+#           HSTS, CSP (script-src 'self' — NO 'unsafe-inline'; the client has no
+#           inline script or on*= handler left), X-Content-Type-Options,
+#           X-Frame-Options, Referrer-Policy, Permissions-Policy, X-XSS-Protection: 0
+#   nginx : fail2ban jail on 401s (step 7) — Basic Auth is the whole auth boundary
 #   nginx : rate-limit zones _send(3r/m) _api(10r/m) _http(20r/m)
 #   nginx : proxy_set_header Host $http_host → matches Node's WW_PUBLIC_HOST guard
 #   Node  : ECDH Owner API v3, AES-256-GCM, passphrase via stdin (not argv)
@@ -43,7 +44,7 @@
 #   Node  : NETWORK_MISMATCH hard-block on Tor send (mainnet↔testnet)
 #   Node  : show-seed passphrase-gated + rate-limited
 #   systemd: ProtectSystem=full, ProtectHome=true, PrivateTmp=true,
-#            NoNewPrivileges=true, ReadWritePaths=/opt/grin/webwallet
+#            NoNewPrivileges=true, ReadWritePaths=/opt/grin/fidelius
 #
 # =============================================================================
 
@@ -66,7 +67,7 @@ _WW_GITHUB_API="https://api.github.com/repos/mimblewimble/grin-wallet/releases/l
 
 # ─── Logging ──────────────────────────────────────────────────────────────────
 LOG_DIR="/opt/grin/logs"
-LOG_FILE="$LOG_DIR/grin_web_wallet_$(date +%Y%m%d_%H%M%S).log"
+LOG_FILE="$LOG_DIR/grin_fidelius_$(date +%Y%m%d_%H%M%S).log"
 mkdir -p "$LOG_DIR" 2>/dev/null || true
 log()     { echo -e "[$(date -u '+%Y-%m-%d %H:%M:%S UTC')] $*" >> "$LOG_FILE" 2>/dev/null || true; }
 info()    { echo -e "${CYAN}[INFO]${RESET}  $*"; log "[INFO] $*"; }
@@ -83,8 +84,26 @@ if [[ -f "$_NGINX_LIB" ]]; then
     source "$_NGINX_LIB"
 fi
 
+# ─── Node secret self-heal (guarded) ──────────────────────────────────────────
+# Fidelius wallets each carry node_api_secret_path in their grin-wallet.toml. A
+# node rebuild (prune ↔ full) MOVES the node dir, so that path goes stale and the
+# wallet gets a 403 from the node — surfacing as "Cannot parse response" on
+# balance refresh and every send. grin_sync_wallets finds our tomls
+# (/opt/grin/fidelius/wallet_*/grin-wallet.toml is within its maxdepth 4), but
+# only if the 5-min timer is installed — which is what Step 3 does below.
+#
+# Scope: this repairs wallets pointed at a LOCAL node only. A Fidelius wallet on
+# one of the curated PUBLIC nodes is deliberately skipped — handing it a local
+# secret would make grin-wallet send that secret to a third-party host — so for
+# those wallets a node rebuild is a no-op anyway.
+_SECRETS_LIB="$SCRIPT_DIR/lib/grin_node_secrets.sh"
+if [[ -f "$_SECRETS_LIB" ]]; then
+    # shellcheck source=lib/grin_node_secrets.sh
+    source "$_SECRETS_LIB"
+fi
+
 # ─── Global constants (single deploy serves both networks) ────────────────────
-WW_ROOT="/opt/grin/webwallet"
+WW_ROOT="/opt/grin/fidelius"
 WW_APP_DIR="$WW_ROOT/app"
 WW_BIN="$WW_ROOT/grin-wallet"
 WW_REGISTRY="$WW_ROOT/wallets_info.json"
@@ -92,12 +111,23 @@ WW_CONF_FILE="$WW_ROOT/config.conf"
 WW_ENV_FILE="$WW_ROOT/wallet.env"
 WW_SRC_DIR="$TOOLKIT_ROOT/web/051_fidelius"
 WW_NODE_PORT=7420
-WW_SYSTEMD_UNIT="/etc/systemd/system/grin-web-wallet.service"
-WW_NGINX_CONF="/etc/nginx/sites-available/grin-web-wallet"
-WW_NGINX_LINK="/etc/nginx/sites-enabled/grin-web-wallet"
-WW_HTPASSWD="/etc/nginx/grin-web-wallet.htpasswd"
-WW_RATELIMIT_CONF="/etc/nginx/conf.d/grin-web-wallet-ratelimit.conf"
-WW_RATELIMIT_ZONE="grin_ww"
+WW_SYSTEMD_UNIT="/etc/systemd/system/grin-fidelius.service"
+WW_NGINX_CONF="/etc/nginx/sites-available/grin-fidelius"
+WW_NGINX_LINK="/etc/nginx/sites-enabled/grin-fidelius"
+WW_HTPASSWD="/etc/nginx/grin-fidelius.htpasswd"
+WW_RATELIMIT_CONF="/etc/nginx/conf.d/grin-fidelius-ratelimit.conf"
+WW_RATELIMIT_ZONE="grin_fidelius"
+# Service log lives with every other toolkit daemon log, NOT in /var/log — that
+# keeps one directory to back up, to clean and to look in, and lets the unit drop
+# write access to /var/log entirely. Rotated by our OWN logrotate config (below),
+# not by Script 08's toolkit list: 08 is opt-in (Automatic Disk Cleanup) and
+# listing the same path in both files makes logrotate error "duplicate log entry".
+WW_LOG_DIR="/opt/grin/logs"
+WW_LOG="$WW_LOG_DIR/grin-fidelius.log"
+WW_LOGROTATE_CONF="/etc/logrotate.d/grin-fidelius"
+# Own jail file + own logpath, so it never collides with Script 02's
+# /etc/fail2ban/jail.d/nginx-grin.conf (which globs /var/log/nginx/*error.log).
+WW_F2B_JAIL="/etc/fail2ban/jail.d/grin-fidelius.conf"
 
 # ─── Per-instance settings (loaded from WW_CONF_FILE) ─────────────────────────
 WW_DOMAIN=""
@@ -195,11 +225,17 @@ WW_ROOT=$WW_ROOT
 GRIN_WEB_PORT=$WW_NODE_PORT
 WW_PUBLIC_HOST=$host
 WW_PUBLIC_ORIGIN=$origin
+# Server-side idle backstop, in minutes (0 disables). The browser UI already
+# auto-locks on real mouse/keyboard idle — this only catches the case where the
+# tab was CLOSED, which leaves the passphrase in server.js memory with nothing
+# left to expire it. Zeroes the passphrase only; listeners keep running so
+# inbound receiving survives. Keep it longer than the in-app setting.
+WW_IDLE_LOCK_MINUTES=${WW_IDLE_LOCK_MINUTES:-60}
 ENV
     chmod 600 "$WW_ENV_FILE"
     # Reload systemd if the unit is already installed — picks up the new env.
-    if [[ -f "$WW_SYSTEMD_UNIT" ]] && systemctl is-active --quiet grin-web-wallet 2>/dev/null; then
-        systemctl restart grin-web-wallet 2>/dev/null && info "grin-web-wallet restarted to apply env changes." || true
+    if [[ -f "$WW_SYSTEMD_UNIT" ]] && systemctl is-active --quiet grin-fidelius 2>/dev/null; then
+        systemctl restart grin-fidelius 2>/dev/null && info "grin-fidelius restarted to apply env changes." || true
     fi
 }
 
@@ -230,10 +266,10 @@ ww_menu_status() {
 
     # 3) App deploy + systemd
     if [[ -f "$WW_APP_DIR/server.js" && -d "$WW_APP_DIR/node_modules" && -f "$WW_SYSTEMD_UNIT" ]]; then
-        if systemctl is-active --quiet grin-web-wallet 2>/dev/null; then
+        if systemctl is-active --quiet grin-fidelius 2>/dev/null; then
             echo -e "  ${BOLD}3 App + systemd${RESET}      : ${GREEN}deployed, running${RESET}  ${DIM}(127.0.0.1:$WW_NODE_PORT)${RESET}"
         else
-            echo -e "  ${BOLD}3 App + systemd${RESET}      : ${YELLOW}deployed, stopped${RESET}  ${DIM}(systemctl start grin-web-wallet)${RESET}"
+            echo -e "  ${BOLD}3 App + systemd${RESET}      : ${YELLOW}deployed, stopped${RESET}  ${DIM}(systemctl start grin-fidelius)${RESET}"
         fi
     elif [[ -f "$WW_APP_DIR/server.js" ]]; then
         echo -e "  ${BOLD}3 App + systemd${RESET}      : ${YELLOW}files deployed, no systemd${RESET}  ${DIM}→ step 3${RESET}"
@@ -322,8 +358,8 @@ ww_install_binary() {
         fi
 
         mkdir -p "$WW_ROOT"
-        local tmp_tar="/tmp/grin_wwallet_$$.tar.gz"
-        local tmp_dir="/tmp/grin_wwallet_extract_$$"
+        local tmp_tar="/tmp/grin_fidelius_$$.tar.gz"
+        local tmp_dir="/tmp/grin_fidelius_extract_$$"
         mkdir -p "$tmp_dir"
 
         info "Version : $version"
@@ -481,7 +517,8 @@ ww_deploy_app() {
     echo -e "    2. Run npm install --omit=dev (in $WW_APP_DIR)"
     echo -e "    3. Write wallet.env (port, public host)"
     echo -e "    4. Write systemd unit $WW_SYSTEMD_UNIT"
-    echo -e "    5. systemctl enable --now grin-web-wallet"
+    echo -e "    5. systemctl enable --now grin-fidelius"
+    echo -e "    6. Install the node-secret self-heal timer (grin-secret-sync)"
     echo ""
     echo -ne "${BOLD}Proceed? [Y/n/0]: ${RESET}"
     read -r confirm || true
@@ -491,7 +528,12 @@ ww_deploy_app() {
     # ── 1. Copy source ────────────────────────────────────────────────────────
     info "Copying source files..."
     mkdir -p "$WW_APP_DIR"
-    cp -r "$WW_SRC_DIR/server.js" "$WW_SRC_DIR/package.json" "$WW_SRC_DIR/client" "$WW_APP_DIR/"
+    # Glob every top-level .js rather than naming server.js — the app is no
+    # longer a single file (transporter.js), and an enumerated list silently
+    # ships a broken deploy: the missing require only fails at service start,
+    # on the VPS, as a bare MODULE_NOT_FOUND. The glob still excludes client/
+    # and any node_modules, which are handled separately.
+    cp -r "$WW_SRC_DIR"/*.js "$WW_SRC_DIR/package.json" "$WW_SRC_DIR/client" "$WW_APP_DIR/"
     success "Source copied → $WW_APP_DIR"
 
     # ── 2. npm install ────────────────────────────────────────────────────────
@@ -507,10 +549,13 @@ ww_deploy_app() {
     info "wallet.env written → $WW_ENV_FILE"
 
     # ── 4. Write systemd unit ─────────────────────────────────────────────────
+    # systemd's append: creates the FILE but never the directory — a missing
+    # /opt/grin/logs makes the unit fail to start with a bare exit 238.
+    mkdir -p "$WW_LOG_DIR"
     info "Writing systemd unit → $WW_SYSTEMD_UNIT ..."
     cat > "$WW_SYSTEMD_UNIT" << UNIT
 [Unit]
-Description=Grin Web Wallet (toolkit 051 — Node.js)
+Description=Grin Fidelius web wallet (toolkit 051 — Node.js)
 Documentation=https://github.com/Noobvie/Grin-Node-Toolkit
 After=network-online.target
 Wants=network-online.target
@@ -524,15 +569,15 @@ EnvironmentFile=$WW_ENV_FILE
 ExecStart=/usr/bin/env node $WW_APP_DIR/server.js
 Restart=on-failure
 RestartSec=5s
-StandardOutput=append:/var/log/grin-web-wallet.log
-StandardError=append:/var/log/grin-web-wallet.log
+StandardOutput=append:$WW_LOG
+StandardError=append:$WW_LOG
 
 # Hardening
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
 ProtectHome=true
-ReadWritePaths=$WW_ROOT /var/log
+ReadWritePaths=$WW_ROOT $WW_LOG_DIR
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true
@@ -550,26 +595,67 @@ UNIT
     chmod 644 "$WW_SYSTEMD_UNIT"
     success "systemd unit written."
 
+    # ── 4b. Log rotation ──────────────────────────────────────────────────────
+    # copytruncate is mandatory here, not a preference: StandardOutput=append:
+    # means systemd holds an open fd on the file, so a rename-and-create rotation
+    # would leave the daemon writing to the rotated inode forever and the fresh
+    # log permanently empty. The pool solves the same problem with a USR2 reopen
+    # signal; server.js has no such handler, so truncate-in-place it is.
+    if [[ -d /etc/logrotate.d ]]; then
+        cat > "$WW_LOGROTATE_CONF" << LROT
+$WW_LOG {
+    weekly
+    rotate 4
+    size 10M
+    missingok
+    notifempty
+    compress
+    delaycompress
+    copytruncate
+}
+LROT
+        chmod 644 "$WW_LOGROTATE_CONF"
+        success "Log rotation configured → $WW_LOGROTATE_CONF"
+    else
+        warn "logrotate not present — $WW_LOG will grow unbounded."
+    fi
+
     # ── 5. Enable + start ─────────────────────────────────────────────────────
-    info "Reloading systemd + starting grin-web-wallet ..."
+    info "Reloading systemd + starting grin-fidelius ..."
     systemctl daemon-reload
-    if systemctl enable --now grin-web-wallet 2>&1 | tail -5; then
+    if systemctl enable --now grin-fidelius 2>&1 | tail -5; then
         sleep 2
-        if systemctl is-active --quiet grin-web-wallet; then
-            success "grin-web-wallet is RUNNING on 127.0.0.1:$WW_NODE_PORT"
+        if systemctl is-active --quiet grin-fidelius; then
+            success "grin-fidelius is RUNNING on 127.0.0.1:$WW_NODE_PORT"
         else
-            warn "grin-web-wallet enabled but not active — check: journalctl -u grin-web-wallet -n 50"
+            warn "grin-fidelius enabled but not active — a Node crash lands in $WW_LOG (tail -n 50), a unit-level failure in: journalctl -u grin-fidelius -n 50"
         fi
     else
-        warn "systemctl enable/start reported issues — check: journalctl -u grin-web-wallet"
+        warn "systemctl enable/start reported issues — check: journalctl -u grin-fidelius (and $WW_LOG)"
+    fi
+
+    # ── 6. Node secret self-heal ──────────────────────────────────────────────
+    # Installs /opt/grin/lib/grin_node_secrets.sh + the grin-secret-sync CLI and
+    # its 5-min timer. Without this a node rebuild silently breaks every Fidelius
+    # wallet's node link (403 → "Cannot parse response" on refresh and send) and
+    # nothing repairs it. Idempotent, and a no-op for products that aren't here.
+    if declare -F grin_install_secret_sync >/dev/null 2>&1; then
+        info "Installing node-secret self-heal timer ..."
+        grin_install_secret_sync || warn "Could not install grin-secret-sync timer (non-fatal)."
+    else
+        warn "lib/grin_node_secrets.sh not found — wallets will NOT self-heal after a node rebuild."
     fi
 
     echo ""
-    echo -e "  ${BOLD}Status${RESET}    : systemctl status grin-web-wallet"
-    echo -e "  ${BOLD}Logs${RESET}      : journalctl -u grin-web-wallet -f"
+    echo -e "  ${BOLD}Status${RESET}    : systemctl status grin-fidelius"
+    # App output goes to the file, NOT the journal — StandardOutput=append:
+    # redirects it away, so journalctl only ever shows systemd's own start/stop
+    # and crash lines. Both are worth knowing about; print both.
+    echo -e "  ${BOLD}App log${RESET}   : tail -f $WW_LOG"
+    echo -e "  ${BOLD}Unit log${RESET}  : journalctl -u grin-fidelius -f  ${DIM}(start/stop/crash only)${RESET}"
     echo -e "  ${BOLD}Local${RESET}     : curl -i http://127.0.0.1:$WW_NODE_PORT/api/wallets"
     echo ""
-    log "[ww_deploy_app] deployed=$WW_APP_DIR active=$(systemctl is-active grin-web-wallet 2>/dev/null || echo unknown)"
+    log "[ww_deploy_app] deployed=$WW_APP_DIR active=$(systemctl is-active grin-fidelius 2>/dev/null || echo unknown)"
     pause
 }
 
@@ -608,7 +694,7 @@ ww_configure_nginx() {
 
     # ── Rate-limit zones ──────────────────────────────────────────────────────
     if declare -F nginx_ensure_rate_limit_zones &>/dev/null; then
-        nginx_ensure_rate_limit_zones "grin-web-wallet-ratelimit" \
+        nginx_ensure_rate_limit_zones "grin-fidelius-ratelimit" \
             "${WW_RATELIMIT_ZONE}_send:3r/m"   \
             "${WW_RATELIMIT_ZONE}_api:10r/m"   \
             "${WW_RATELIMIT_ZONE}_http:20r/m"
@@ -683,14 +769,19 @@ $extra
     add_header X-Content-Type-Options    "nosniff"     always;
     add_header X-Frame-Options           "DENY"        always;
     add_header Referrer-Policy           "no-referrer" always;
-    # 'unsafe-inline' permits the small <head> theme-bootstrap script in index.html.
-    # If that script is ever moved to a .js file, tighten back to 'self' only.
-    add_header Content-Security-Policy   "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self';" always;
+    # script-src is 'self' ONLY — no 'unsafe-inline'. On a wallet UI that keyword is
+    # what would turn any HTML-injection bug into seed theft, so the client has no
+    # inline <script> and no on*= attributes left: the theme bootstrap lives in
+    # client/theme-boot.js and the slatepack copy buttons use wireCopyButton().
+    # Do NOT re-add it — check client/ for inline handlers instead.
+    # style-src keeps 'unsafe-inline' (the UI uses style="" attributes); a CSS
+    # injection cannot execute script, so the risk is not comparable.
+    add_header Content-Security-Policy   "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self';" always;
     add_header Permissions-Policy        "geolocation=(), microphone=(), camera=()" always;
     add_header X-XSS-Protection          "0" always;
 
-    access_log /var/log/nginx/grin-web-wallet-access.log;
-    error_log  /var/log/nginx/grin-web-wallet-error.log;
+    access_log /var/log/nginx/grin-fidelius-access.log;
+    error_log  /var/log/nginx/grin-fidelius-error.log;
 
     # ── Reverse proxy to Node ─────────────────────────────────────────────────
     # Wallet send endpoint — tight rate limit (also enforced server-side).
@@ -953,8 +1044,83 @@ ww_configure_firewall() {
     else
         warn "No firewall tool found (ufw / iptables). Open ports 80 and 443 manually."
     fi
+
+    ww_setup_fail2ban || true
+
     log "[ww_configure_firewall]"
     pause
+}
+
+# ─── fail2ban jail — Basic Auth brute force ──────────────────────────────────
+# nginx Basic Auth is the ENTIRE auth boundary for Fidelius: whoever passes it
+# controls every registered wallet. nginx itself never rate-limits 401s, so
+# without this the credential is unlimited-guess from the internet.
+#
+# Own jail file + own logpath so this never collides with Script 02's
+# /etc/fail2ban/jail.d/nginx-grin.conf, which globs /var/log/nginx/*error.log —
+# both jails may match the same lines, which is harmless (two bans, same IP).
+# Filters are fail2ban stock: nginx-http-auth matches the "user ... password
+# mismatch" / "was not found in" lines auth_basic writes to the ERROR log.
+ww_setup_fail2ban() {
+    echo ""
+    echo -ne "${BOLD}Install a fail2ban jail for Basic Auth brute force? [Y/n]: ${RESET}"
+    read -r _f2b || true
+    [[ "${_f2b,,}" == "n" ]] && { info "Skipped fail2ban."; return 0; }
+
+    if ! command -v fail2ban-server &>/dev/null; then
+        info "Installing fail2ban ..."
+        if command -v apt-get &>/dev/null; then
+            DEBIAN_FRONTEND=noninteractive apt-get install -y fail2ban >/dev/null 2>&1 \
+                || { warn "fail2ban install failed — skipping jail."; return 0; }
+        elif command -v dnf &>/dev/null; then
+            dnf install -y fail2ban >/dev/null 2>&1 \
+                || { warn "fail2ban install failed — skipping jail."; return 0; }
+        else
+            warn "No apt-get/dnf — install fail2ban manually, then re-run this step."
+            return 0
+        fi
+    fi
+
+    mkdir -p /etc/fail2ban/jail.d
+    cat > "$WW_F2B_JAIL" <<F2B
+# Generated by 051_grin_fidelius.sh — Fidelius web wallet.
+# Basic Auth is the whole auth boundary here; these jails make guessing it costly.
+# Paths match the access_log/error_log in $WW_NGINX_CONF.
+
+[grin-fidelius-auth]
+enabled  = true
+port     = http,https
+filter   = nginx-http-auth
+logpath  = /var/log/nginx/grin-fidelius-error.log
+maxretry = 5
+findtime = 600
+bantime  = 3600
+
+[grin-fidelius-limit-req]
+enabled  = true
+port     = http,https
+filter   = nginx-limit-req
+logpath  = /var/log/nginx/grin-fidelius-error.log
+maxretry = 10
+findtime = 600
+bantime  = 600
+F2B
+    chmod 644 "$WW_F2B_JAIL"
+
+    # fail2ban refuses to start if a jail's logpath does not exist yet — nginx
+    # only creates these on the first request. Touch them so a fresh install
+    # doesn't leave the service dead.
+    touch /var/log/nginx/grin-fidelius-error.log /var/log/nginx/grin-fidelius-access.log 2>/dev/null || true
+
+    systemctl enable fail2ban >/dev/null 2>&1 || true
+    if systemctl restart fail2ban 2>/dev/null; then
+        success "fail2ban jail installed: $WW_F2B_JAIL"
+        echo -e "  ${DIM}Status : fail2ban-client status grin-fidelius-auth${RESET}"
+        echo -e "  ${DIM}Unban  : fail2ban-client set grin-fidelius-auth unbanip <IP>${RESET}"
+    else
+        warn "fail2ban restart failed — check: journalctl -u fail2ban -n 30"
+    fi
+    return 0
 }
 
 # =============================================================================
@@ -992,10 +1158,10 @@ ww_show_info() {
     fi
 
     if [[ -f "$WW_SYSTEMD_UNIT" ]]; then
-        if systemctl is-active --quiet grin-web-wallet 2>/dev/null; then
+        if systemctl is-active --quiet grin-fidelius 2>/dev/null; then
             echo -e "  ${BOLD}systemd${RESET}       : ${GREEN}running${RESET}  ${DIM}(127.0.0.1:$WW_NODE_PORT)${RESET}"
         else
-            echo -e "  ${BOLD}systemd${RESET}       : ${YELLOW}stopped${RESET}  ${DIM}(systemctl start grin-web-wallet)${RESET}"
+            echo -e "  ${BOLD}systemd${RESET}       : ${YELLOW}stopped${RESET}  ${DIM}(systemctl start grin-fidelius)${RESET}"
         fi
     else
         echo -e "  ${BOLD}systemd${RESET}       : ${RED}not installed${RESET}  ${DIM}(step 3)${RESET}"
@@ -1038,12 +1204,43 @@ ww_show_info() {
         echo -e "  ${BOLD}Tor${RESET}           : ${YELLOW}not running${RESET}  ${DIM}(Tor sends will fail)${RESET}"
     fi
 
+    # fail2ban jail (step 7) — Basic Auth is the whole auth boundary
+    if [[ -f "$WW_F2B_JAIL" ]] && systemctl is-active --quiet fail2ban 2>/dev/null; then
+        local _banned=""
+        _banned=$(fail2ban-client status grin-fidelius-auth 2>/dev/null \
+                  | grep -oP 'Currently banned:\s*\K[0-9]+' || true)
+        echo -e "  ${BOLD}fail2ban${RESET}      : ${GREEN}active${RESET}  ${DIM}(grin-fidelius-auth, currently banned: ${_banned:-0})${RESET}"
+    elif [[ -f "$WW_F2B_JAIL" ]]; then
+        echo -e "  ${BOLD}fail2ban${RESET}      : ${YELLOW}jail written, service not running${RESET}  ${DIM}(systemctl start fail2ban)${RESET}"
+    else
+        echo -e "  ${BOLD}fail2ban${RESET}      : ${YELLOW}no jail${RESET}  ${DIM}(step 7 — Basic Auth is unlimited-guess without it)${RESET}"
+    fi
+
+    # Node-secret self-heal (step 3) — without it a node rebuild breaks every wallet
+    if systemctl is-active --quiet grin-secret-sync.timer 2>/dev/null; then
+        echo -e "  ${BOLD}Secret sync${RESET}   : ${GREEN}timer active${RESET}  ${DIM}(wallets self-heal after a node rebuild)${RESET}"
+    else
+        echo -e "  ${BOLD}Secret sync${RESET}   : ${YELLOW}not installed${RESET}  ${DIM}(re-run step 3)${RESET}"
+    fi
+
     # Wallets registered
     if [[ -f "$WW_REGISTRY" ]] && command -v jq &>/dev/null; then
         echo ""
         echo -e "  ${BOLD}Wallets registered${RESET}:"
         jq -r '.wallets[]? | "    \(.network)  \(.name)  → owner :\(.ownerPort)  foreign :\(.foreignPort)"' "$WW_REGISTRY" 2>/dev/null \
             || echo "    (none)"
+        # Names must be unique across BOTH networks — every route resolves by name
+        # alone, so a duplicate means only the first entry is reachable and Delete
+        # can destroy the wrong seed. Registration now blocks this; an older
+        # registry may already carry one.
+        local _dupes=""
+        _dupes=$(jq -r '.wallets[]?.name' "$WW_REGISTRY" 2>/dev/null | sort | uniq -d | tr '\n' ' ' || true)
+        if [[ -n "${_dupes// /}" ]]; then
+            echo ""
+            warn "DUPLICATE wallet names: ${_dupes}"
+            warn "Only the FIRST entry for each is reachable, and Delete may hit the wrong wallet."
+            warn "Rename one side in $WW_REGISTRY and its directory before using them."
+        fi
     fi
 
     echo ""
@@ -1088,7 +1285,7 @@ ww_edit_settings() {
     ww_save_config
     ww_save_env
     success "Settings saved → $WW_CONF_FILE  + env → $WW_ENV_FILE"
-    info "If grin-web-wallet is running it was restarted to pick up env changes."
+    info "If grin-fidelius is running it was restarted to pick up env changes."
     pause
 }
 

@@ -128,14 +128,34 @@ trp_install_server() {
 {
   "network": "$TRP_NETWORK",
   "port": $TRP_PORT,
+  "tor_port": 0,
   "ttl_hours": 336,
   "max_slate_bytes": 16384,
-  "max_queue_per_addr": 100
+  "max_queue_per_addr": 100,
+  "max_queue_total": 10000,
+  "max_deposits_per_ip_hour": 60,
+  "max_per_depositor_per_addr": 5,
+  "auth_fail_limit": 5,
+  "auth_lock_minutes": 15,
+  "auth_log_days": 30
 }
 CONF
         success "Default config written: $TRP_CONF_JSON"
     else
+        # An upgrade from 0.1.0: seed only keys that are missing, never clobber
+        # values the operator tuned. server.js also defaults them, so this is
+        # about making the file self-documenting, not about correctness.
         info "Keeping existing config: $TRP_CONF_JSON"
+        local k
+        for k in "tor_port:0" "max_queue_total:10000" "max_deposits_per_ip_hour:60" \
+                 "max_per_depositor_per_addr:5" "auth_fail_limit:5" \
+                 "auth_lock_minutes:15" "auth_log_days:30"; do
+            local key="${k%%:*}" def="${k##*:}"
+            if [[ "$(_trp_json_get "$TRP_CONF_JSON" "$key" "__missing__")" == "__missing__" ]]; then
+                _trp_json_set "$TRP_CONF_JSON" "$key" "$def" 1
+                info "  added new setting: $key = $def"
+            fi
+        done
     fi
 
     # ── Ownership: run as grin when the user exists (launch-contract spirit) ──
@@ -205,11 +225,18 @@ trp_configure() {
         pause; return
     fi
 
-    local cur_ttl cur_size cur_depth v
+    local cur_ttl cur_size cur_depth cur_total cur_iph cur_dep cur_fail cur_lock v
     cur_ttl=$(_trp_json_get   "$TRP_CONF_JSON" ttl_hours 336)
     cur_size=$(_trp_json_get  "$TRP_CONF_JSON" max_slate_bytes 16384)
     cur_depth=$(_trp_json_get "$TRP_CONF_JSON" max_queue_per_addr 100)
+    cur_total=$(_trp_json_get "$TRP_CONF_JSON" max_queue_total 10000)
+    cur_iph=$(_trp_json_get   "$TRP_CONF_JSON" max_deposits_per_ip_hour 60)
+    cur_dep=$(_trp_json_get   "$TRP_CONF_JSON" max_per_depositor_per_addr 5)
+    cur_fail=$(_trp_json_get  "$TRP_CONF_JSON" auth_fail_limit 5)
+    cur_lock=$(_trp_json_get  "$TRP_CONF_JSON" auth_lock_minutes 15)
 
+    echo -e "  ${DIM}Press Enter to keep any current value.${RESET}\n"
+    echo -e "  ${BOLD}Storage${RESET}"
     echo -ne "  Slate TTL in hours [current: $cur_ttl]: "
     read -r v || true
     if [[ "$v" =~ ^[0-9]+$ && "$v" -ge 1 ]]; then _trp_json_set "$TRP_CONF_JSON" ttl_hours "$v" 1; fi
@@ -218,9 +245,35 @@ trp_configure() {
     read -r v || true
     if [[ "$v" =~ ^[0-9]+$ && "$v" -ge 1024 ]]; then _trp_json_set "$TRP_CONF_JSON" max_slate_bytes "$v" 1; fi
 
+    echo ""
+    echo -e "  ${BOLD}Abuse bounds${RESET}  ${DIM}(deposits are open by design — these keep them honest)${RESET}"
     echo -ne "  Max queued slates per recipient [current: $cur_depth]: "
     read -r v || true
     if [[ "$v" =~ ^[0-9]+$ && "$v" -ge 1 ]]; then _trp_json_set "$TRP_CONF_JSON" max_queue_per_addr "$v" 1; fi
+
+    echo -ne "  Max slates stored in total [current: $cur_total, min 100]: "
+    read -r v || true
+    if [[ "$v" =~ ^[0-9]+$ && "$v" -ge 100 ]]; then _trp_json_set "$TRP_CONF_JSON" max_queue_total "$v" 1; fi
+
+    echo -e "  ${DIM}Fair share: how many of ONE recipient's slots a single depositor may hold.${RESET}"
+    echo -e "  ${DIM}This is what stops a stranger burying a known address in junk — keep it low.${RESET}"
+    echo -ne "  Max pending per depositor per recipient [current: $cur_dep]: "
+    read -r v || true
+    if [[ "$v" =~ ^[0-9]+$ && "$v" -ge 1 ]]; then _trp_json_set "$TRP_CONF_JSON" max_per_depositor_per_addr "$v" 1; fi
+
+    echo -ne "  Max deposits per source IP per hour [current: $cur_iph]: "
+    read -r v || true
+    if [[ "$v" =~ ^[0-9]+$ && "$v" -ge 1 ]]; then _trp_json_set "$TRP_CONF_JSON" max_deposits_per_ip_hour "$v" 1; fi
+
+    echo ""
+    echo -e "  ${BOLD}Ownership-proof throttle${RESET}"
+    echo -ne "  Failed proofs before lockout [current: $cur_fail]: "
+    read -r v || true
+    if [[ "$v" =~ ^[0-9]+$ && "$v" -ge 1 ]]; then _trp_json_set "$TRP_CONF_JSON" auth_fail_limit "$v" 1; fi
+
+    echo -ne "  Lockout minutes [current: $cur_lock]: "
+    read -r v || true
+    if [[ "$v" =~ ^[0-9]+$ && "$v" -ge 1 ]]; then _trp_json_set "$TRP_CONF_JSON" auth_lock_minutes "$v" 1; fi
 
     success "Config saved: $TRP_CONF_JSON"
     if systemctl is-active --quiet "$TRP_SERVICE" 2>/dev/null; then
@@ -343,9 +396,37 @@ NGINX
 # =============================================================================
 # 4) TOR HIDDEN SERVICE (optional front)
 # =============================================================================
+# Remove our marked torrc block (marker line + the 2 directives under it).
+# Used both to REWRITE the block (port changes) and to clean up on uninstall —
+# a stale HiddenServicePort silently points the onion at the wrong port.
+_trp_torrc_strip_block() {
+    local marker="$1"
+    [[ -f /etc/tor/torrc ]] || return 0
+    grep -qF "$marker" /etc/tor/torrc 2>/dev/null || return 0
+    local tmp; tmp=$(mktemp /tmp/trp_torrc_XXXXXX) || return 1
+    awk -v m="$marker" '
+        $0 == m   { skip = 2; next }   # drop the marker …
+        skip > 0  { skip--; next }     # … and HiddenServiceDir + HiddenServicePort
+        { print }
+    ' /etc/tor/torrc > "$tmp" && cat "$tmp" > /etc/tor/torrc
+    rm -f "$tmp"
+}
+
 trp_setup_tor() {
     clear
     echo -e "\n${BOLD}${CYAN}── Grin Transporter [$TRP_NET_LABEL] — 4) Tor hidden service ──${RESET}\n"
+    echo -e "  ${DIM}The onion front listens on its OWN local port ($TRP_TOR_PORT), separate from${RESET}"
+    echo -e "  ${DIM}the nginx port ($TRP_PORT). That split is a security control, not tidiness:${RESET}"
+    echo -e "  ${DIM}both fronts arrive on 127.0.0.1, and a Tor client can forge forwarding${RESET}"
+    echo -e "  ${DIM}headers. Separate ports let the app ignore those headers on the onion path.${RESET}\n"
+    echo -e "  ${YELLOW}Note:${RESET} onion callers share one identity, so per-source deposit quotas"
+    echo -e "  cannot apply there. The global cap and the per-depositor fair-share cap still"
+    echo -e "  do — no single queue can be buried, but a public onion is floodable overall.\n"
+
+    if [[ ! -f "$TRP_CONF_JSON" ]]; then
+        error "Not installed yet — run option 1 first."
+        pause; return
+    fi
 
     if ! command -v tor &>/dev/null; then
         echo -ne "  tor is not installed — install now? [Y/n]: "
@@ -360,16 +441,24 @@ trp_setup_tor() {
 
     local hs_dir="/var/lib/tor/grin-transporter-${TRP_NETWORK}"
     local marker="# grin-transporter-${TRP_NETWORK} (script 093)"
-    if ! grep -qF "$marker" /etc/tor/torrc 2>/dev/null; then
-        cat >> /etc/tor/torrc << TORRC
+
+    # Always rewrite: an existing block from before the port split still points
+    # at TRP_PORT, which would leave header forgery wide open.
+    _trp_torrc_strip_block "$marker"
+    cat >> /etc/tor/torrc << TORRC
 
 $marker
 HiddenServiceDir $hs_dir/
-HiddenServicePort 80 127.0.0.1:$TRP_PORT
+HiddenServicePort 80 127.0.0.1:$TRP_TOR_PORT
 TORRC
-        success "Hidden service block added to /etc/tor/torrc"
+    success "Hidden service block written to /etc/tor/torrc (→ 127.0.0.1:$TRP_TOR_PORT)"
+
+    # The app only opens the onion listener when tor_port is set.
+    _trp_json_set "$TRP_CONF_JSON" tor_port "$TRP_TOR_PORT" 1
+    if systemctl is-active --quiet "$TRP_SERVICE" 2>/dev/null; then
+        systemctl restart "$TRP_SERVICE" && success "Transporter restarted with the onion front enabled."
     else
-        info "Hidden service block already present in torrc."
+        warn "Transporter is not running — start it (menu 5) so the onion front opens."
     fi
 
     systemctl restart tor@default 2>/dev/null || systemctl restart tor \
@@ -431,12 +520,38 @@ trp_status() {
         fi
     fi
 
-    local domain onion
+    local domain onion tor_port
     domain=$(_trp_conf_get "domain_${TRP_NETWORK}" "")
     onion=$(_trp_conf_get "onion_${TRP_NETWORK}" "")
+    tor_port=$(_trp_json_get "$TRP_CONF_JSON" tor_port 0 2>/dev/null || echo 0)
     echo -e "  Domain       : ${domain:-${DIM}not configured${RESET}}"
-    echo -e "  Onion        : ${onion:-${DIM}not configured${RESET}}"
+    if [[ "${tor_port:-0}" != "0" ]]; then
+        echo -e "  Onion        : ${onion:-${DIM}pending${RESET}}  ${DIM}(front on 127.0.0.1:$tor_port)${RESET}"
+    else
+        echo -e "  Onion        : ${DIM}not configured${RESET}"
+    fi
     [[ -f "$TRP_DB" ]] && echo -e "  DB           : $TRP_DB ($(du -h "$TRP_DB" 2>/dev/null | cut -f1))"
+
+    # ── Abuse bounds + proof-failure activity (nothing here is a secret) ──────
+    if [[ -f "$TRP_CONF_JSON" ]]; then
+        echo ""
+        echo -e "  ${BOLD}Limits${RESET}  ${DIM}(menu 2 to change)${RESET}"
+        echo -e "    per recipient : $(_trp_json_get "$TRP_CONF_JSON" max_queue_per_addr 100) queued" \
+                "· per depositor $(_trp_json_get "$TRP_CONF_JSON" max_per_depositor_per_addr 5)" \
+                "· total $(_trp_json_get "$TRP_CONF_JSON" max_queue_total 10000)"
+        echo -e "    deposits/IP/h : $(_trp_json_get "$TRP_CONF_JSON" max_deposits_per_ip_hour 60)" \
+                "· TTL $(_trp_json_get "$TRP_CONF_JSON" ttl_hours 336)h" \
+                "· lockout after $(_trp_json_get "$TRP_CONF_JSON" auth_fail_limit 5) failed proofs"
+    fi
+    if [[ -f "$TRP_DB" ]] && command -v sqlite3 &>/dev/null; then
+        local ok_n bad_n
+        ok_n=$(sqlite3 "file:$TRP_DB?mode=ro" \
+            "SELECT COUNT(*) FROM auth_events WHERE result='ok' AND ts > (strftime('%s','now')-86400)*1000;" 2>/dev/null || echo "?")
+        bad_n=$(sqlite3 "file:$TRP_DB?mode=ro" \
+            "SELECT COUNT(*) FROM auth_events WHERE result<>'ok' AND ts > (strftime('%s','now')-86400)*1000;" 2>/dev/null || echo "?")
+        echo -e "  Proofs (24h) : ${GREEN}${ok_n} ok${RESET} · $( [[ "${bad_n:-0}" =~ ^[0-9]+$ && "${bad_n:-0}" -gt 0 ]] \
+            && echo -e "${YELLOW}${bad_n} failed${RESET}" || echo -e "${DIM}0 failed${RESET}" )"
+    fi
 
     if [[ -f "$TRP_AGENT_CONF" ]]; then
         echo -e "  Poll agent   : ${GREEN}installed${RESET} ($TRP_AGENT_DIR)"
@@ -493,6 +608,28 @@ trp_uninstall() {
     rm -rf "$TRP_APP_DIR" "$TRP_AGENT_DIR"
     success "App + agent files removed."
 
+    # Backup schedule is per-server, not per-network: only pull it when the
+    # OTHER network's instance is gone too, or a surviving instance loses its
+    # nightly archive silently.
+    local other_short="main"; [[ "$TRP_NET_SHORT" == "main" ]] && other_short="test"
+    if [[ ! -d "/opt/grin/transporter-${other_short}" ]]; then
+        rm -f "${TRP_BAK_CRON:-/etc/cron.d/grin-transporter-backup}" \
+              "${TRP_BAK_WRAPPER:-/usr/local/bin/grin-transporter-backup}"
+        info "Backup schedule removed (no Transporter instance left)."
+    else
+        info "Backup schedule kept — the ${other_short}net instance still uses it."
+    fi
+
+    # Tor: drop OUR marked block so a dead onion doesn't linger, then reload.
+    local marker="# grin-transporter-${TRP_NETWORK} (script 093)"
+    if grep -qF "$marker" /etc/tor/torrc 2>/dev/null; then
+        _trp_torrc_strip_block "$marker"
+        systemctl restart tor@default 2>/dev/null || systemctl restart tor 2>/dev/null || true
+        success "Tor hidden-service block removed from /etc/tor/torrc."
+        echo -e "  ${DIM}The key material in /var/lib/tor/grin-transporter-${TRP_NETWORK}/ was kept —${RESET}"
+        echo -e "  ${DIM}delete it only if you never want that .onion address back.${RESET}"
+    fi
+
     if [[ -f "$TRP_DB" ]]; then
         echo -ne "  Also delete the queue DB ($TRP_DB)? [y/N]: "
         read -r c || true
@@ -505,6 +642,5 @@ trp_uninstall() {
     else
         rmdir "$TRP_DIR" 2>/dev/null || true
     fi
-    warn "Tor hidden-service block (if configured) was left in /etc/tor/torrc — remove manually."
     pause
 }

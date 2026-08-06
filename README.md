@@ -186,13 +186,14 @@ Grin Node Toolkit
 │       │   ├── 2) Reconfigure host list
 │       │   ├── 3) Show crontab / email setup
 │       │   └── 0) Back
-│       ├── 2) Service & Port Dashboard
-│       ├── 3) Chain Sync Status
-│       ├── 4) nginx Config & SSL Audit
-│       ├── 5) Firewall Rules Audit
+│       ├── 2) Provider Access Watch     (082_provider_access_watch.sh — host-tamper detect)
+│       ├── 3) Node Status & Sync        (ports, tmux, binary versions + chain tip)
+│       ├── 4) Nginx Extended Features   (084_nginx_extended_features.sh)
+│       ├── 5) SSH Key Hardening         (085_ssh_hardening.sh)
 │       ├── 6) Top 20 Bandwidth Consumers
 │       ├── 7) Disk Cleanup
-│       ├── 8) Self-Update               (git pull from GitHub)
+│       ├── 8) Self-Update               (download latest from GitHub)
+│       ├── 9) Backup & Restore          (089_backup_restore.sh)
 │       ├── DEL) Full Grin Cleanup       (08del_clean_all_grin_things.sh)
 │       └── 0) Back
 │   └── 9) Grin Connectivity Hub        → 09_grin_comms_hub.sh   (IN DEVELOPMENT)
@@ -263,7 +264,9 @@ A hub that deploys **one** mining setup per server — solo private *or* a publi
 
 ### 8. Admin & Maintenance — `08_grin_node_admin.sh`
 
-Operations toolbox: **remote node monitor** (registry + custom hosts, emails on state change, cron-ready), **service/port dashboard**, **chain-sync status**, **nginx/SSL audit** (cert expiry), **firewall audit** (flags exposed wallet ports), **top bandwidth consumers**, **disk cleanup**, and **git self-update** with a branch selector. **DEL** runs the full nuclear cleanup (`08del_…`, requires typing `DESTROY`).
+Operations toolbox: **remote node monitor** (registry + custom hosts, emails on state change, cron-ready), **provider access watch** (host-tamper detection + off-box alerts), **node status & sync** (ports, tmux, binary versions + chain tip on one screen), **nginx extended features** (SSL/cert audit, reverse proxy, security, log rotation), **SSH key hardening**, **top bandwidth consumers**, **disk cleanup**, **self-update** with a branch selector, and **backup & restore**. **DEL** runs the full nuclear cleanup (`08del_…`, requires typing `DESTROY`).
+
+Menu keys mirror the sub-script numbers — 081→`1`, 082→`2`, 084→`4`, 085→`5`, 089→`9` — and the un-numbered inline features fill `3`, `6`, `7`, `8`.
 
 ### 9. Grin Connectivity Hub — `09_grin_comms_hub.sh` *(in development)*
 
@@ -306,7 +309,7 @@ grin-node-toolkit/
 | `/opt/grin/conf/host_monitor_last_state.conf` | Last-known port state for change detection (`081`) |
 | `/opt/grin/conf/mass_deploy.conf` | Fleet server list for mass deployment (`081`) |
 | `/opt/grin/conf/github_repo.conf` | GitHub repo slug override for self-update (optional) |
-| `/opt/grin/webwallet/config.conf` + `wallets_info.json` | Fidelius settings + wallet registry (`051`) |
+| `/opt/grin/fidelius/config.conf` + `wallets_info.json` | Fidelius settings + wallet registry (`051`) |
 | `/opt/grin/drop-{main,test}/grin_drop.conf` | Grin Drop config — domain, modes, claim amount (written/read by `059`) |
 
 **Runtime paths created by option 6 install:**
@@ -402,7 +405,7 @@ Each wallet service sub-script manages its own wallet in an isolated directory:
 
 | Script | Network | Wallet directory                        |
 |--------|---------|-----------------------------------------|
-| 051 — Fidelius           | Both    | `/opt/grin/webwallet/wallet_<net>_<name>/` (per-wallet) |
+| 051 — Fidelius           | Both    | `/opt/grin/fidelius/wallet_<net>_<name>/` (per-wallet) |
 | 053 — WooCommerce bridge | Mainnet | uses existing node wallet Owner API (port 3420)  |
 | 053 — WooCommerce bridge | Testnet | uses existing node wallet Owner API (port 13420) |
 | 059 — Grin Drop          | Mainnet | `/opt/grin/drop-main/wallet/`  |

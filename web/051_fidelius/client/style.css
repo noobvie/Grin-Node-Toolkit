@@ -237,6 +237,9 @@ html[data-theme="light"] .logo-breathe {
 .dot-off { background: var(--text-dim); }
 .wallet-name { font-size: 13px; font-weight: 500; color: var(--text); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wallet-bal  { font-size: 11px; color: var(--grin-dim); white-space: nowrap; font-family: var(--font-mono); }
+/* Duplicate wallet name across networks — only the first entry is routable and
+   Delete may hit the wrong seed, so the row has to look wrong. */
+.wallet-dup  { color: var(--error); margin-left: 5px; cursor: help; }
 
 .btn-add-wallet {
     background: transparent; border: 1px dashed rgba(0,200,150,0.25);
@@ -481,6 +484,18 @@ html[data-theme="light"] .logo-breathe {
 .field-hint { font-size: 11px; color: var(--text-dim); }
 .radio-row  { display: flex; gap: 16px; flex-wrap: wrap; }
 .radio-label { font-size: 13px; cursor: pointer; display: flex; align-items: center; gap: 8px; color: var(--text); }
+
+/* Checkbox rows live inside .field, whose `label` rule uppercases and letter-
+   spaces everything — fine for a short field caption, shouty for a sentence.
+   Qualify with .field so this out-specifies that rule instead of relying on
+   source order. */
+.checkbox-row,
+.field label.checkbox-row {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 12px; font-weight: 400; letter-spacing: 0; text-transform: none;
+    color: var(--text-dim); cursor: pointer;
+}
+.checkbox-row input[type="checkbox"] { accent-color: var(--grin); width: 14px; height: 14px; cursor: pointer; }
 
 /* ── Slatepack textarea ──────────────────────────────────────────────────── */
 .slate-input {

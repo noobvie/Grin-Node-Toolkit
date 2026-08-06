@@ -1,7 +1,7 @@
 # Script 051 — Fidelius: Grin Transporter integration
 
 **Status:** built 2026-08-06, **NOT VPS-tested.** Verified locally against a live
-Transporter (74 assertions, all passing) with a stubbed wallet.
+Transporter (121 assertions, all passing) with a stubbed wallet.
 **Depends on:** Script 093 Grin Transporter ≥ v0.2.1.
 
 ---
@@ -111,13 +111,29 @@ our key, so a hostile relay cannot read or spend. It can (a) refuse to deliver a
 dependency, not a custody one — which is why a wrong URL is an annoyance and a
 wrong *network* is a hard error.
 
-**`testPassed` is not granted by a queued send.** The address book's `testPassed`
-flag gates the "first send to this address" large-amount warning. A Tor send earns
-it by broadcasting; a Transporter send has merely been queued, and a wrong,
-abandoned or unpolled address looks identical at that moment. So the send records
-the address with `proven=false`, and `markAddressProven()` sets the flag later —
-when *their* reply comes back and finalizes, the first hard evidence a real wallet
-is behind it.
+**The first-send test warning applies here too — and matters more.**
+The Tor panel offers a 0.1 ∩ test send before any larger first payment to an
+unknown address. The Transporter panel now runs the same gate, because the
+failure it guards against is *worse* on this rail: a wrong-but-well-formed
+address over Tor fails loudly (nothing answers at the other end), while over a
+relay the deposit **succeeds** — it lands in a queue nobody owns, no error is
+ever raised, and the only symptom is coins that stay reserved forever. The
+wording differs from Tor's because the test send is not instant: it says to wait
+for the test to *complete* before sending the rest.
+
+Exactly one modal ever fires. The plain "coins are reserved" confirmation is the
+`else` branch of the first-send gate, and the gate's own modal carries the same
+reserve note, so the two can never stack.
+
+**`testPassed` is not granted by a queued send.** That flag is what the gate
+above reads. A Tor send earns it by broadcasting; a Transporter send has merely
+been queued, and a wrong, abandoned or unpolled address looks identical at that
+moment. So the send records the address with `proven=false`, and
+`markAddressProven()` sets the flag later — when *their* reply comes back and
+finalizes, the first hard evidence a real wallet is behind it. `findAddrEntry()`
+was made case-insensitive at the same time: the Tor form submits the address as
+typed while this one lowercases first, so one rail could otherwise report an
+address as unknown that the other had already proven.
 
 ---
 
@@ -165,7 +181,10 @@ which also covers the next module. The glob still excludes `client/` and any
    networks. Unlock both, and on each start **Owner API** *and* **Listener**.
 4. On **B**: Receive tab → copy its slatepack address.
 5. On **A**: Send tab → *Send via Transporter* → amount + B's address → confirm.
-   A's balance shows the amount as locked. Nothing is on-chain yet.
+   Above 0.1 ∩ to an address A has never completed a payment to, the first-send
+   modal appears — take the **0.1 ∩ test** the first time; it exercises the whole
+   round trip for a trivial amount. A's balance shows the amount as locked.
+   Nothing is on-chain yet.
 6. On **B**: Receive tab → **Check Now** (or wait for the interval). B credits the
    payment and queues the reply.
 7. On **A**: Receive tab → **Check Now**. A finalizes and broadcasts.
@@ -194,8 +213,45 @@ Local only; no VPS, no real grin-wallet.
   credentials / `.onion`), interval clamping, persistence into the registry
   without clobbering the wallet list, endpoint probing, 404s, CSRF-guard
   inheritance on the new routes, and a silent poller with zero wallets.
-- `bash -n` across 52 shell files; `node --check` on all Fidelius + 093 JS; HTML
-  tag balance and duplicate-id check; element-id and route cross-check.
+- `ui_check.js` — **47 assertions.** Static audit of the browser surfaces, added
+  during the post-build review: HTML tag balance and duplicate ids, every element
+  id the new JS touches, every `q()` lookup resolving to a real (or runtime-built)
+  id, every CSS class the new markup uses, `.checkbox-row` actually out-specifying
+  `.field label`, the pure helpers (`fmtUtc`, `tspAgo`, `findAddrEntry`), the
+  first-send gate's wiring and its never-two-modals structure, the inbox's
+  escalating single-condition order, no inline handlers, and every browser call
+  being a relative `/api/` path (the `connect-src 'self'` contract).
+- `bash -n` across 52 shell files; `node --check` on all Fidelius + 093 JS.
+
+## Review pass (same day, post-build)
+
+A full re-read of the delivered code found four defects. All are fixed above; they
+are recorded because each is a class of mistake, not a one-off.
+
+1. **The first-send safety net was built but never connected.** `testPassed` and
+   `markAddressProven()` were written specifically to feed the Tor panel's
+   test-send warning, and then the Transporter form was shipped without that
+   warning — so the flag had no consumer on the rail it was added for. Building
+   half of a guard is worse than building none: the design doc claimed a
+   protection the UI did not have.
+2. **The network badge disagreed with the other two Send panels.**
+   `refreshSendTspAvailability()` overwrote the `send-method-net` badge that
+   `selectWallet()` paints, replacing `TESTNET` with an unstyled lowercase
+   `testnet` and dropping the colour class. Three panels on one screen must not
+   disagree about which chain is about to be spent from.
+3. **`findAddrEntry()` was case-sensitive** while the two Send forms normalise
+   the address differently (Tor sends it as typed, Transporter lowercases). The
+   same address could read as proven on one rail and unknown on the other.
+4. **The relay's TTL was printed as a raw ISO instant.** A misread expiry is a
+   user re-sending a payment that had not actually expired, so it is now trimmed
+   to minutes and explicitly labelled UTC.
+
+Confirmed *not* problems, having been checked: the idle backstop's
+`IDLE_GET_ACTIONS` regex does not match `…/transporter/status`, so the 10-second
+inbox poll cannot renew a session (the manual **Check Now**, a POST, correctly
+does); `showModal` assigns button labels with `textContent`, so the unescaped
+amount in a label is not an injection point; the nginx CSP (`connect-src 'self'`,
+`script-src 'self'`) needs no change and no inline handler was added.
 
 ## Open / not done
 
@@ -215,4 +271,11 @@ Local only; no VPS, no real grin-wallet.
    will fire on the credit, but there is no Transporter-specific notification.
 4. **Sequential polling.** The auto-poller iterates wallets with `await`, so a
    hung wallet delays the others by up to its timeout. Fine at two wallets.
-5. **091/092 unaffected.** This touches 093 only.
+5. **`POST /api/transporter/test` will fetch any http(s) URL the operator
+   types**, and surfaces up to 200 characters of the response on failure — a
+   server-side request forgery primitive, deliberately left as-is. Anyone who can
+   reach this route can already spend the wallet, so it grants no privilege they
+   lack; constraining it would mean an allowlist that defeats the point of a
+   user-supplied relay. Worth revisiting only if Fidelius ever gains a lower-
+   privileged role.
+6. **091/092 unaffected.** This touches 093 only.

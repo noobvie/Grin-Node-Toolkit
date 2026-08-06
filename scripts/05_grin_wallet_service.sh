@@ -430,12 +430,29 @@ run_sub() {
 # only argv-free channel; `--pass` is NOT the only option, despite the comments
 # elsewhere in this repo.
 #
-# ─── Listener mode differs from solo/pool ON PURPOSE ─────────────────────────
-# This wallet runs `grin-wallet listen` — the Foreign API on 3415/13415 — because
-# it exists to RECEIVE slates. Solo mining (lib/07_solo_wallet.sh) and the public
-# pool run `owner_api` with owner_api_include_foreign=true on 3420/13420 instead,
-# because the node's stratum calls build_coinbase into them. Nothing calls
-# build_coinbase here, so the combined-listener keys are deliberately not set.
+# ─── TWO listener modes — the operator picks one per network ─────────────────
+# Stored in `<dir>/.listen_mode`; default `listen`, unchanged from pre-2026-08-06.
+#
+#   listen      grin-wallet listen      Foreign API only, 3415/13415.
+#               RECEIVE-ONLY, and grin-wallet starts Tor for it automatically
+#               (tor.use_tor_listener), so the wallet gets an .onion for free.
+#               No Owner API — nothing can drive a SEND through this wallet.
+#
+#   owner_api   grin-wallet owner_api   Owner API v3 + Foreign API on ONE port,
+#               3420/13420, via owner_api_include_foreign = true. This is the
+#               059/07 model. Required by anything that drives the wallet over
+#               HTTP — notably the Script 093 Transporter poll agent, whose send
+#               path calls init_send_tx / tx_lock_outputs / finalize_tx and so
+#               cannot work against `listen` at all.
+#
+# The trade is REAL and stated at the prompt: owner_api gains programmatic send
+# and loses the automatic Tor onion listener that `listen` sets up. It is a
+# choice, never a silent upgrade — an operator who only wants to receive slates
+# by hand is strictly better off on `listen`.
+#
+# Solo mining (lib/07_solo_wallet.sh) and the public pool are permanently on the
+# combined listener for a different reason: the node's stratum calls
+# build_coinbase into them. Nothing calls build_coinbase here.
 # =============================================================================
 
 # ─── Per-network resolvers ──────────────────────────────────────────────────
@@ -450,6 +467,36 @@ _cmd_toml()         { echo "$(_cmd_dir "$1")/grin-wallet.toml"; }
 _cmd_pass_file()    { echo "$(_cmd_dir "$1")/${1:-mainnet}_pass_wallet.txt"; }
 _cmd_seed_file()    { echo "$(_cmd_dir "$1")/${1:-mainnet}_seed.txt"; }
 _cmd_launcher()     { echo "$(_cmd_dir "$1")/listen.sh"; }
+_cmd_owner_port()   { [[ "${1:-}" == "testnet" ]] && echo 13420 || echo 3420; }
+_cmd_mode_file()    { echo "$(_cmd_dir "$1")/.listen_mode"; }
+
+# ─── Listener mode resolvers ────────────────────────────────────────────────
+# Anything that is not exactly "owner_api" reads as "listen": an empty, missing
+# or hand-corrupted mode file must fall back to the receive-only default, never
+# to the mode that opens an Owner API. Fail-closed on the more capable mode.
+_cmd_mode() {
+    local m; m=$(cat "$(_cmd_mode_file "${1:-mainnet}")" 2>/dev/null || true)
+    if [[ "${m//[[:space:]]/}" == "owner_api" ]]; then echo "owner_api"; else echo "listen"; fi
+}
+_cmd_set_mode() {
+    local dir; dir=$(_cmd_dir "$1")
+    mkdir -p "$dir" || return 1
+    printf '%s\n' "$2" > "$(_cmd_mode_file "$1")"
+}
+# The port the ACTIVE mode listens on — every port guard, wait and status line
+# must use this, not _cmd_foreign_port. An owner_api wallet never binds 3415, so
+# guarding that port would check something nothing is using and let a real 3420
+# collision through.
+_cmd_mode_port() {
+    if [[ "$(_cmd_mode "$1")" == "owner_api" ]]; then _cmd_owner_port "$1"; else _cmd_foreign_port "$1"; fi
+}
+_cmd_mode_label() {
+    if [[ "$(_cmd_mode "$1")" == "owner_api" ]]; then
+        echo "owner_api — Owner v3 + Foreign on $(_cmd_owner_port "$1")"
+    else
+        echo "listen — Foreign API $(_cmd_foreign_port "$1")"
+    fi
+}
 
 # ─── grin-wallet.toml key setters ───────────────────────────────────────────
 # Replace the key in place (commented or not); when absent, insert right after
@@ -558,13 +605,14 @@ _cmd_extract_seed() {
 # ─── Listener port guard ────────────────────────────────────────────────────
 # NEVER auto-kill the holder — it may be another wallet with real funds.
 _cmd_port_collision_check() {
-    local net="$1" port tmux_name
-    port=$(_cmd_foreign_port "$net"); tmux_name=$(_cmd_tmux_name "$net")
+    local net="$1" port tmux_name key
+    port=$(_cmd_mode_port "$net"); tmux_name=$(_cmd_tmux_name "$net")
+    if [[ "$(_cmd_mode "$net")" == "owner_api" ]]; then key="owner_api_listen_port"; else key="api_listen_port"; fi
     gnc_get_pid_on_port "$port" >/dev/null 2>&1 || return 0   # free
     tmux has-session -t "$tmux_name" 2>/dev/null && return 0  # already ours
     error "Port $port is held by ANOTHER process (not '$tmux_name')."
     error "  Not touched automatically — it may be a wallet holding real funds."
-    error "  Stop that listener first, or change api_listen_port in"
+    error "  Stop that listener first, or change $key in"
     error "  $(_cmd_toml "$net") and re-run."
     return 1
 }
@@ -582,22 +630,28 @@ _cmd_port_collision_check() {
 # then grin-wallet execs with stdin on fd 3 — the secret leaves the filesystem
 # before grin-wallet even starts and cannot outlive the process.
 _cmd_write_launcher() {
-    local net="$1" src="$2" unlink="${3:-0}" dir bin flag launcher
+    local net="$1" src="$2" unlink="${3:-0}" dir bin flag launcher mode subcmd
     dir=$(_cmd_dir "$net"); bin=$(_cmd_wallet_bin "$net")
     flag=$(_cmd_net_flag "$net"); launcher=$(_cmd_launcher "$net")
+    mode=$(_cmd_mode "$net"); subcmd="listen"
+    [[ "$mode" == "owner_api" ]] && subcmd="owner_api"
     mkdir -p "$dir"
     {
         echo '#!/bin/bash'
-        echo "# GENERATED by 05_grin_wallet_service.sh — CMD wallet listener ($net)."
+        echo "# GENERATED by 05_grin_wallet_service.sh — CMD wallet listener ($net, mode: $mode)."
         echo "# The passphrase arrives on STDIN, never in argv (no -p): grin-wallet's"
         echo "# rpassword prompt reads stdin when stdin is not a TTY."
+        if [[ "$mode" == "owner_api" ]]; then
+            echo "# owner_api may start LOCKED and not prompt at all; the stdin redirect is"
+            echo "# then simply never read, so feeding it is harmless either way."
+        fi
         echo "cd \"$dir\" || exit 1"
         if [[ "$unlink" == "1" ]]; then
             echo "exec 3< \"$src\" || exit 1"
             echo "rm -f \"$src\""
-            echo "exec \"$bin\" $flag listen <&3"
+            echo "exec \"$bin\" $flag $subcmd <&3"
         else
-            echo "exec \"$bin\" $flag listen < \"$src\""
+            echo "exec \"$bin\" $flag $subcmd < \"$src\""
         fi
     } > "$launcher"
     chmod 700 "$launcher"
@@ -658,7 +712,9 @@ _cmd_wallet_setup_for_net() {
     echo ""
     echo -e "  Network      : ${BOLD}$net_label${RESET}"
     echo -e "  Node port    : ${DIM}$_node_port${RESET}"
-    echo -e "  Listener     : ${DIM}grin-wallet listen — Foreign API $_listen_port${RESET}"
+    # Current mode, not the target — the mode prompt is Step 4b, further down.
+    # Labelling it "target" here would contradict whatever the operator picks.
+    echo -e "  Listener now : ${DIM}grin-wallet $(_cmd_mode_label "$net")  ${BOLD}(re-asked below)${RESET}"
     echo -e "  Wallet dir   : ${DIM}$wallet_dir${RESET}"
     echo -e "  Binary       : ${DIM}$wallet_bin${RESET}"
     echo -e "  Pass file    : ${DIM}$pass_file${RESET}"
@@ -903,6 +959,41 @@ _cmd_wallet_setup_for_net() {
         echo ""
     fi
 
+    # ── Step 4b: Listener mode ────────────────────────────────────────────────
+    # Asked BEFORE the toml patch, because the mode decides which port keys get
+    # pinned — and before the listener starts, because it decides the subcommand.
+    local _mode_before _mode
+    _mode_before=$(_cmd_mode "$net"); _mode="$_mode_before"
+    echo -e "  ${DIM}─── Listener mode ────────────────────────────────────${RESET}"
+    echo ""
+    echo -e "  ${GREEN}1${RESET}) ${BOLD}listen${RESET}     ${DIM}Foreign API $_listen_port · receive-only${RESET}"
+    echo -e "     ${DIM}grin-wallet starts Tor for you, so this wallet gets an .onion${RESET}"
+    echo -e "     ${DIM}address and can be paid directly. No Owner API.${RESET}"
+    echo -e "  ${GREEN}2${RESET}) ${BOLD}owner_api${RESET}  ${DIM}Owner v3 + Foreign on $(_cmd_owner_port "$net") · send + receive${RESET}"
+    echo -e "     ${DIM}Needed to drive this wallet over HTTP — the Script 093${RESET}"
+    echo -e "     ${DIM}Transporter agent cannot send through 'listen' at all.${RESET}"
+    echo -e "     ${YELLOW}Trade-off: no automatic Tor onion listener in this mode.${RESET}"
+    echo ""
+    echo -e "  ${DIM}Current: ${BOLD}$_mode_before${RESET}"
+    echo -ne "  Select [1/2, Enter = keep $_mode_before]: "
+    local _msel; read -r _msel || true
+    case "$_msel" in
+        1) _mode="listen" ;;
+        2) _mode="owner_api" ;;
+        *) ;;   # Enter or anything else keeps the current mode
+    esac
+    if [[ "$_mode" != "$_mode_before" ]]; then
+        # A live listener is bound to the OLD mode's port and holds the LMDB lock.
+        # Say so here rather than letting the restart look like a random failure.
+        if _cmd_wallet_busy "$net"; then
+            warn "The '$tmux_name' listener is running in '$_mode_before' mode."
+            warn "  It will be restarted on the new port at Step 7."
+        fi
+        _cmd_set_mode "$net" "$_mode" || warn "Could not record the mode — keeping '$_mode_before'."
+        success "Listener mode → ${BOLD}$_mode${RESET}"
+    fi
+    echo ""
+
     # ── Step 5: Patch grin-wallet.toml (silent — result shown in summary) ─────
     # Node dir/secret come from the SHARED resolvers (CLAUDE.md: "use these,
     # don't re-derive"). The old hand-rolled block sourced the instances conf
@@ -917,14 +1008,29 @@ _cmd_wallet_setup_for_net() {
         _did_patch="$node_secret"
     fi
 
-    # Pin the Foreign listen port. grin-wallet init writes mainnet defaults into
-    # the toml regardless of --testnet (059_lib_wallet.sh:709 records the same
-    # for owner_api_listen_port, and the pool pins api_listen_port for exactly
-    # this reason). This is the only product that actually runs `listen`, so an
-    # unpinned 3415 in the testnet toml would make menu option 3 "Both" put two
-    # listeners on one port.
+    # Pin BOTH listen ports, regardless of the active mode. grin-wallet init
+    # writes MAINNET defaults into the toml regardless of --testnet — for
+    # api_listen_port and owner_api_listen_port alike (059_lib_wallet.sh:709
+    # records the same; the pool pins api_listen_port for exactly this reason).
+    # Unpinned, menu option 3 ("Both") would put the two networks' listeners on
+    # one port — 3415 for two `listen` wallets, 3420 for two `owner_api` ones.
+    # Pinning the inactive mode's port too costs nothing and means switching
+    # modes later never needs a second toml pass.
+    local _owner_port _p_ok=""; _owner_port=$(_cmd_owner_port "$net")
     if _cmd_set_toml_key "$toml_file" "api_listen_port" "$_listen_port"; then
-        _did_ports="$_listen_port"
+        _p_ok="$_listen_port"
+    fi
+    if _cmd_set_toml_key "$toml_file" "owner_api_listen_port" "$_owner_port"; then
+        # Report only the keys that actually took. Appending unconditionally
+        # printed "no/3420" when the first pin failed and the second succeeded.
+        if [[ -n "$_p_ok" ]]; then _p_ok="$_p_ok/$_owner_port"; else _p_ok="$_owner_port"; fi
+    fi
+    if [[ -n "$_p_ok" ]]; then _did_ports="$_p_ok"; fi
+    # Only owner_api mode needs the Foreign API mounted on the Owner port. The key
+    # is inert while `listen` is the active mode, so it is set rather than toggled
+    # back — switching modes never has to undo a toml edit.
+    if [[ "$_mode" == "owner_api" ]]; then
+        _cmd_set_toml_key "$toml_file" "owner_api_include_foreign" "true" || true
     fi
     # 24/7 listener: grin-wallet's default of 32 rotated logs is more depth than
     # this ever needs. Replace-only — log_max_files lives under [logging].
@@ -1013,10 +1119,14 @@ _cmd_wallet_setup_for_net() {
     else
         echo -e "  ${YELLOW}!${RESET}  5. Node secret           ${YELLOW}not found (node dir: ${_patch_node_dir:-unresolved}) — edit $toml_file${RESET}"
     fi
+    echo -e "  $_tick  5b. Listener mode       ${DIM}$(_cmd_mode_label "$net")${RESET}"
+    if [[ "$_mode" == "owner_api" ]]; then
+        echo -e "      ${DIM}Transporter-capable. No automatic Tor onion in this mode.${RESET}"
+    fi
     if [[ "$_did_ports" != "no" ]]; then
         local _logs_note="log_max_files = 5"
         [[ "$_did_logs" == "yes" ]] || _logs_note="log_max_files unchanged"
-        echo -e "  $_tick  6. Ports pinned         ${DIM}api_listen_port = $_did_ports, $_logs_note${RESET}"
+        echo -e "  $_tick  6. Ports pinned         ${DIM}api/owner_api_listen_port = $_did_ports, $_logs_note${RESET}"
     else
         echo -e "  ${YELLOW}!${RESET}  6. Ports                 ${YELLOW}could not patch $toml_file${RESET}"
     fi
@@ -1063,7 +1173,7 @@ _cmd_start_listener() {
     local net="$1" dir bin tmux_name pass_file port launcher
     dir=$(_cmd_dir "$net");            bin=$(_cmd_wallet_bin "$net")
     tmux_name=$(_cmd_tmux_name "$net"); pass_file=$(_cmd_pass_file "$net")
-    port=$(_cmd_foreign_port "$net");   launcher=$(_cmd_launcher "$net")
+    port=$(_cmd_mode_port "$net");      launcher=$(_cmd_launcher "$net")
 
     [[ -x "$bin" ]] || { error "No grin-wallet binary for $net — run setup first."; return 0; }
 
@@ -1105,14 +1215,29 @@ _cmd_start_listener() {
             # including the address, for someone who only declined a restart.
             [[ $one_shot -eq 1 ]] && rm -f "$src"
             info "Listener left running as-is."
+            # Declining the restart right after a mode switch leaves the OLD
+            # listener up while .listen_mode already names the new one. Say it
+            # here, at the moment it happens, rather than letting the agent fail
+            # later with connection-refused on a port nothing bound.
+            if ! gnc_get_pid_on_port "$port" >/dev/null 2>&1; then
+                warn "Nothing is bound on $port — the running listener is in a different mode."
+                warn "  Restart it to apply '$(_cmd_mode "$net")'."
+            fi
             return 0
         fi
         # Only "y" reaches here.
         tmux kill-session -t "$tmux_name" 2>/dev/null || true
         # Wait for the old listener to actually release the port, else the new
         # one binds nothing and exits.
+        #
+        # The SESSION check is not redundant with the port check: after a mode
+        # switch the old listener holds the OLD port (3415) while $port is the new
+        # one (3420), so the port loop sees "free" instantly and we would race the
+        # still-dying process for the wallet's LMDB lock — which fails with a lock
+        # error that says nothing about a mode change.
         local _w=0
-        while gnc_get_pid_on_port "$port" >/dev/null 2>&1 && [[ $_w -lt 10 ]]; do
+        while { gnc_get_pid_on_port "$port" >/dev/null 2>&1 \
+                || tmux has-session -t "$tmux_name" 2>/dev/null; } && [[ $_w -lt 10 ]]; do
             sleep 1; _w=$((_w + 1))
         done
     fi
@@ -1121,7 +1246,7 @@ _cmd_start_listener() {
     tmux new-session -d -s "$tmux_name" "$launcher"
 
     if gnc_wait_for_port "$port" 15 1; then
-        success "Listener up on $port  ${DIM}(tmux: $tmux_name)${RESET}"
+        success "Listener up on $port  ${DIM}($(_cmd_mode "$net") · tmux: $tmux_name)${RESET}"
         echo -e "         ${DIM}Attach: tmux attach -t $tmux_name${RESET}"
     elif tmux has-session -t "$tmux_name" 2>/dev/null; then
         warn "Session '$tmux_name' is alive but port $port is not listening yet."
@@ -1142,9 +1267,12 @@ cmd_wallet_run() {
         echo -e "${BOLD}${CYAN} 05C) GRIN WALLET QUICK SETUP${RESET}"
         echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
         echo ""
-        echo -e "  ${DIM}Download, init or recover, then start the Foreign listener (3415/13415)${RESET}"
-        echo -e "  ${DIM}— for direct CLI use or testing. The passphrase is fed on stdin, never${RESET}"
-        echo -e "  ${DIM}via -p, so it never appears in ps/cmdline.${RESET}"
+        echo -e "  ${DIM}Download, init or recover, then start a listener — for direct CLI use,${RESET}"
+        echo -e "  ${DIM}testing, or as the wallet behind the Script 093 Transporter agent.${RESET}"
+        echo -e "  ${DIM}Setup asks which mode: 'listen' (Foreign 3415/13415, receive-only, Tor${RESET}"
+        echo -e "  ${DIM}onion automatic) or 'owner_api' (Owner v3 + Foreign on 3420/13420, can${RESET}"
+        echo -e "  ${DIM}also SEND, no automatic Tor). The passphrase is fed on stdin, never via${RESET}"
+        echo -e "  ${DIM}-p, so it never appears in ps/cmdline.${RESET}"
         echo -e "  ${DIM}Stored in /opt/grin/cmdwallet/<net>/ — independent of other services.${RESET}"
         echo ""
 
@@ -1155,10 +1283,25 @@ cmd_wallet_run() {
             local _tmux="grin_${_net}_cmd_wallet"
             if [[ -f "$_dir/grin-wallet.toml" ]]; then
                 _any=1
+                # Show the MODE, not just up/down: "listening" alone cannot tell an
+                # operator whether the Transporter agent can drive this wallet.
+                local _m _mp
+                _m=$(_cmd_mode "$_net"); _mp=$(_cmd_mode_port "$_net")
                 if tmux has-session -t "$_tmux" 2>/dev/null; then
-                    echo -e "  ${GREEN}●${RESET} ${BOLD}${_net}${RESET}  ${GREEN}listening${RESET}  ${DIM}(tmux: $_tmux)${RESET}"
+                    # A session alone does NOT prove the recorded mode is the one
+                    # running. Switching mode writes .listen_mode immediately (the
+                    # launcher reads it), but the restart prompt can be declined —
+                    # leaving a `listen` process up while this line claims
+                    # owner_api, and the agent then hits connection-refused on a
+                    # port nothing ever bound. Verifying the port catches that, and
+                    # equally a listener that died inside a surviving tmux session.
+                    if gnc_get_pid_on_port "$_mp" >/dev/null 2>&1; then
+                        echo -e "  ${GREEN}●${RESET} ${BOLD}${_net}${RESET}  ${GREEN}listening${RESET}  ${DIM}${_m} :${_mp} · tmux: $_tmux${RESET}"
+                    else
+                        echo -e "  ${YELLOW}▲${RESET} ${BOLD}${_net}${RESET}  ${YELLOW}session up, port ${_mp} not bound${RESET}  ${DIM}mode ${_m} — restart it${RESET}"
+                    fi
                 else
-                    echo -e "  ${DIM}○ ${_net}  installed · not listening${RESET}"
+                    echo -e "  ${DIM}○ ${_net}  installed · not listening · mode ${_m}${RESET}"
                 fi
             fi
         done

@@ -12,6 +12,104 @@
 #    trp_agent_menu         — address / status / send / poll now / cron
 #
 
+# =============================================================================
+# WALLET DISCOVERY
+# =============================================================================
+# The agent's send path calls init_send_tx / tx_lock_outputs / finalize_tx — all
+# Owner API v3 — and its receive path calls receive_tx on the Foreign API. So a
+# wallet is usable here ONLY if it runs the COMBINED listener: `grin-wallet
+# owner_api` with owner_api_include_foreign = true. A wallet running plain
+# `grin-wallet listen` exposes no Owner API at all and can never send.
+#
+# This scans for that property by reading each wallet's OWN grin-wallet.toml
+# rather than re-deriving four products' directory conventions — those move
+# (Drop 052→059, Fidelius rename), and a hardcoded path list silently reports
+# "no wallet" the day one of them does.
+
+# Read a scalar key out of a grin-wallet.toml. Strips quotes and whitespace.
+# `grep | head -1` needs the `|| true`: under `set -o pipefail` a no-match grep
+# (rc 1) or a SIGPIPE'd grep (rc 141, when head closes early) fails the whole
+# assignment, which is how a dead guard elsewhere in this toolkit went unnoticed.
+_trp_toml_get() {
+    local file="$1" key="$2" v
+    [[ -f "$file" ]] || return 1
+    v=$(grep -aE "^[[:space:]]*${key}[[:space:]]*=" "$file" 2>/dev/null | head -1 || true)
+    [[ -n "$v" ]] || return 1
+    v="${v#*=}"; v="${v%%#*}"; v="${v//\"/}"; v="${v//\'/}"; v="${v//[[:space:]]/}"
+    [[ -n "$v" ]] || return 1
+    printf '%s\n' "$v"
+}
+
+# First existing pass file among the names the toolkit's products actually use.
+# Each product picked its own: Drop/pool use `.wallet_pass`, the CMD wallet uses
+# `<net>_pass_wallet.txt`. Guessing one name is why option 7's old default
+# pointed at a Drop path that did not exist on a Transporter-only box.
+_trp_find_pass_file() {
+    local dir="$1" n
+    for n in ".wallet_pass" "${TRP_NETWORK}_pass_wallet.txt" "wallet_pass.txt" ".pass"; do
+        [[ -f "$dir/$n" ]] && { printf '%s\n' "$dir/$n"; return 0; }
+    done
+    return 1
+}
+
+_trp_wallet_label() {
+    case "$1" in
+        */drop-*)     echo "Grin Drop wallet" ;;
+        */cmdwallet/*) echo "CMD wallet (hub 05)" ;;
+        */pubpool/*)  echo "Public pool wallet" ;;
+        */solo*)      echo "Solo mining wallet" ;;
+        */fidelius/*) echo "Fidelius wallet" ;;
+        *)            echo "grin-wallet" ;;
+    esac
+}
+
+# Populates the global TRP_WALLETS array with "dir|port|owner_secret|pass_file|label".
+# A global, not stdout: the caller iterates it to build a numbered pick-list, and
+# reading a function's output through a pipe would run that loop in a subshell
+# where the operator's choice could not escape.
+TRP_WALLETS=()
+_trp_scan_wallets() {
+    TRP_WALLETS=()
+    local want_port other_net toml dir port inc secret pass
+    want_port="$TRP_OWNER_PORT"
+    [[ "$TRP_NETWORK" == "mainnet" ]] && other_net="test" || other_net="main"
+
+    # Depth 1 and 2 under /opt/grin cover every layout the toolkit ships
+    # (/opt/grin/drop-main, /opt/grin/cmdwallet/mainnet, /opt/grin/pubpool/mainnet).
+    # Root is a variable ONLY so the scan can be exercised against a fixture tree
+    # off-box; on a real VPS it is always /opt/grin.
+    local root="${TRP_WALLET_SCAN_ROOT:-/opt/grin}"
+    shopt -s nullglob
+    local -a tomls=( "$root"/*/grin-wallet.toml "$root"/*/*/grin-wallet.toml )
+    shopt -u nullglob
+    # Expanding an empty array is an unbound-variable error under `set -u` on
+    # bash < 4.4 — cheap to guard, and this lib runs on whatever the VPS ships.
+    (( ${#tomls[@]} > 0 )) || return 0
+
+    for toml in "${tomls[@]}"; do
+        dir="${toml%/grin-wallet.toml}"
+
+        # A wallet dir whose path names the OTHER network is skipped even if the
+        # port matches. grin-wallet init writes the MAINNET default 3420 into a
+        # testnet wallet's toml, so an unpinned testnet wallet looks like a
+        # mainnet one on port alone — and wiring a mainnet agent to it would send
+        # real GRIN through a testnet queue. The cost is that such a wallet is
+        # INVISIBLE to its own network's scan too (its port reads as the other
+        # net's); manual entry covers that. Invisible is the safe failure here.
+        [[ "$dir" == *"$other_net"* ]] && continue
+
+        inc=$(_trp_toml_get "$toml" "owner_api_include_foreign" || echo "false")
+        [[ "${inc,,}" == "true" ]] || continue
+        port=$(_trp_toml_get "$toml" "owner_api_listen_port" || echo "")
+        [[ "$port" == "$want_port" ]] || continue
+        secret="$dir/.owner_api_secret"
+        [[ -f "$secret" ]] || continue
+        pass=$(_trp_find_pass_file "$dir" || echo "")
+
+        TRP_WALLETS+=( "$dir|$port|$secret|$pass|$(_trp_wallet_label "$dir")" )
+    done
+}
+
 # Run the agent as the grin user when it exists (wallet secrets are grin-owned).
 #
 # `su -c` takes a STRING that the target shell re-parses, so every argument must
@@ -77,27 +175,65 @@ trp_agent_install() {
         if [[ "${insecure,,}" != "y" ]]; then info "Cancelled."; pause; return; fi
     fi
 
-    # ── Wallet wiring — auto-detect an existing Grin Drop wallet first ─────────
-    local drop_conf="/opt/grin/drop-${TRP_NET_SHORT}/grin_drop_${TRP_NET_SHORT}.conf"
-    local owner_secret="" pass_file="" owner_port="$TRP_OWNER_PORT"
-    if [[ -f "$drop_conf" ]]; then
+    # ── Wallet wiring ─────────────────────────────────────────────────────────
+    local owner_secret="" pass_file="" owner_port="$TRP_OWNER_PORT" pick="" _wdir=""
+    # 093 never defines a Foreign port of its own (the agent only ever talks to the
+    # combined Owner port) — derive it here purely to name the mode we CANNOT use.
+    local _foreign_port=3415
+    [[ "$TRP_NETWORK" == "testnet" ]] && _foreign_port=13415
+    _trp_scan_wallets
+
+    echo ""
+    if (( ${#TRP_WALLETS[@]} > 0 )); then
+        echo -e "  ${DIM}─── Combined-listener wallets found on this box ──────${RESET}"
         echo ""
-        info "Found Grin Drop config: $drop_conf"
-        echo -ne "  Use the Drop wallet for this agent? [Y/n]: "
-        local use_drop; read -r use_drop || true
-        if [[ "${use_drop,,}" != "n" ]]; then
-            owner_secret=$(_trp_json_get "$drop_conf" "wallet_owner_secret" "")
-            pass_file=$(_trp_json_get    "$drop_conf" "wallet_pass_file" "")
-            owner_port=$(_trp_json_get   "$drop_conf" "wallet_owner_api_port" "$TRP_OWNER_PORT")
-        fi
+        local i=1 row _d _p _s _pf _lbl
+        for row in "${TRP_WALLETS[@]}"; do
+            IFS='|' read -r _d _p _s _pf _lbl <<< "$row"
+            echo -e "  ${GREEN}$i${RESET}) ${BOLD}$_lbl${RESET}  ${DIM}$_d  (owner port $_p)${RESET}"
+            if [[ -z "$_pf" ]]; then
+                echo -e "     ${YELLOW}no passphrase file found in that dir — you will be asked for it${RESET}"
+            fi
+            i=$((i + 1))
+        done
+        echo -e "  ${GREEN}M${RESET}) Enter paths manually"
+        echo ""
+        echo -ne "  Select [1-$(( i - 1 ))/M]: "
+        read -r pick || true
+    else
+        # The old code defaulted to /opt/grin/drop-<net> whether or not Drop was
+        # installed, so a Transporter-only box got a config pointing at nothing
+        # and only found out at the first send. Say what is missing instead.
+        warn "No wallet on this box runs the combined listener the agent needs."
+        echo ""
+        echo -e "  ${DIM}The agent drives a wallet over HTTP: Owner API v3 for sending${RESET}"
+        echo -e "  ${DIM}(init_send_tx / tx_lock_outputs / finalize_tx) and the Foreign API${RESET}"
+        echo -e "  ${DIM}for receiving. That needs ONE listener serving both:${RESET}"
+        echo ""
+        echo -e "    ${BOLD}grin-wallet owner_api${RESET}  ${DIM}with owner_api_include_foreign = true${RESET}"
+        echo -e "    ${DIM}on port $TRP_OWNER_PORT, plus a .owner_api_secret in the wallet dir.${RESET}"
+        echo ""
+        echo -e "  ${DIM}A wallet running plain \`grin-wallet listen\` (Foreign $_foreign_port only)${RESET}"
+        echo -e "  ${DIM}cannot be used — it exposes no Owner API, so it can never send.${RESET}"
+        echo ""
+        echo -e "  ${BOLD}To create one:${RESET} hub ${BOLD}05${RESET} → CMD Wallet Quick Setup → pick your"
+        echo -e "  network → at ${BOLD}Listener mode${RESET} choose ${BOLD}owner_api${RESET}. Then re-run this option."
+        echo -e "  ${DIM}A Grin Drop, public-pool or solo-mining wallet also qualifies.${RESET}"
+        echo ""
+        echo -ne "  Enter paths manually anyway? [y/N]: "
+        local go; read -r go || true
+        if [[ "${go,,}" != "y" ]]; then info "Nothing was installed or changed."; pause; return; fi
+        pick="M"
     fi
-    if [[ -z "$owner_secret" ]]; then
+
+    if [[ "${pick^^}" == "M" ]]; then
         echo ""
         echo -e "  ${DIM}Manual wallet wiring (paths on THIS box):${RESET}"
         local wdir
-        echo -ne "  Wallet dir [/opt/grin/drop-${TRP_NET_SHORT}]: "
+        echo -ne "  Wallet dir: "
         read -r wdir || true
-        wdir="${wdir:-/opt/grin/drop-${TRP_NET_SHORT}}"
+        wdir="${wdir%/}"
+        if [[ -z "$wdir" ]]; then error "A wallet dir is required."; pause; return; fi
         echo -ne "  Owner API port [$TRP_OWNER_PORT]: "
         read -r owner_port || true
         owner_port="${owner_port:-$TRP_OWNER_PORT}"
@@ -106,15 +242,39 @@ trp_agent_install() {
             owner_port="$TRP_OWNER_PORT"
         fi
         owner_secret="$wdir/.owner_api_secret"
-        echo -ne "  Wallet passphrase file [$wdir/.wallet_pass]: "
-        read -r pass_file || true
-        pass_file="${pass_file:-$wdir/.wallet_pass}"
+        pass_file=$(_trp_find_pass_file "$wdir" || echo "")
+        echo -ne "  Wallet passphrase file [${pass_file:-none found}]: "
+        local pf_in; read -r pf_in || true
+        pass_file="${pf_in:-$pass_file}"
+    else
+        if ! [[ "$pick" =~ ^[0-9]+$ ]] || (( pick < 1 || pick > ${#TRP_WALLETS[@]} )); then
+            error "'$pick' is not one of the listed wallets."
+            pause; return
+        fi
+        local _lbl2
+        IFS='|' read -r _wdir owner_port owner_secret pass_file _lbl2 <<< "${TRP_WALLETS[$(( pick - 1 ))]}"
+        info "Using: $_lbl2 — $_wdir"
+        # Drop records its pass file in its own conf, which may point OUTSIDE the
+        # wallet dir — so the in-dir name scan legitimately finds nothing there.
+        if [[ -z "$pass_file" ]]; then
+            local drop_conf="/opt/grin/drop-${TRP_NET_SHORT}/grin_drop_${TRP_NET_SHORT}.conf"
+            if [[ "$_wdir" == *"/drop-${TRP_NET_SHORT}" && -f "$drop_conf" ]]; then
+                pass_file=$(_trp_json_get "$drop_conf" "wallet_pass_file" "")
+                [[ -n "$pass_file" ]] && info "Passphrase file from the Drop config: $pass_file"
+            fi
+        fi
+        if [[ -z "$pass_file" ]]; then
+            echo -ne "  Wallet passphrase file: "
+            read -r pass_file || true
+        fi
     fi
+
     if [[ ! -f "$owner_secret" ]]; then
         warn "Owner secret not found at $owner_secret — the agent will fail until it exists."
     fi
-    if [[ ! -f "$pass_file" ]]; then
-        warn "Pass file not found at $pass_file — the agent will fail until it exists."
+    if [[ -z "$pass_file" || ! -f "$pass_file" ]]; then
+        warn "Pass file not found at ${pass_file:-<empty>} — the agent will fail until it exists."
+        warn "  The agent needs it to call open_wallet; it never prompts."
     fi
 
     # ── Deploy agent ───────────────────────────────────────────────────────────

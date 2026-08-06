@@ -207,6 +207,34 @@ addresses are rejected at the door).
 - `get_slatepack_secret_key` result: first 32 bytes used (64- or 128-hex
   tolerated); PKCS8-wrapped for node:crypto signing; key never leaves the agent.
 
+### Wallet discovery in option 7 (2026-08-06)
+
+Option 7 used to auto-detect only a Grin Drop wallet and otherwise default the
+prompt to `/opt/grin/drop-<net>` **whether or not Drop was installed** — so a
+Transporter-only box got an `agent.json` pointing at a path that did not exist,
+two `warn` lines, and a failure at the first send. Replaced by
+`_trp_scan_wallets` (`093_lib_client.sh`), which builds a numbered pick-list.
+
+- **The test is the wallet's own toml, not a path list.** A dir qualifies iff
+  `owner_api_include_foreign = true`, `owner_api_listen_port` equals the
+  network's owner port, and `.owner_api_secret` exists. Product dirs move (Drop
+  052→059, Fidelius rename); a hardcoded path list would silently report "no
+  wallet" the day one does. Scans `/opt/grin/*/` and `/opt/grin/*/*/`.
+- **A path naming the other network is skipped even when the port matches** —
+  `grin-wallet init` writes the mainnet default 3420 into a testnet wallet's
+  toml, so an unpinned testnet wallet reads as mainnet on port alone, and
+  wiring a mainnet agent to it would push real GRIN through a testnet queue.
+  Side effect: such a wallet is invisible to *its own* network's scan too;
+  manual entry covers it. Invisible is the safe failure.
+- **Pass-file name is discovered, not assumed** — Drop/pool use `.wallet_pass`,
+  the CMD wallet uses `<net>_pass_wallet.txt`. Drop's conf may point outside the
+  wallet dir, so `grin_drop_<net>.conf` is still consulted for that one case.
+- **Zero matches prints what is missing**, names the exact requirement, states
+  that a `grin-wallet listen` wallet can never qualify (no Owner API ⇒ no send),
+  and points at hub 05 → CMD Wallet Quick Setup → Listener mode `owner_api`.
+- Scan root is `TRP_WALLET_SCAN_ROOT` (default `/opt/grin`) purely so the
+  matcher can be exercised against a fixture tree off-box.
+
 ### Hardening + toolkit-citizenship pass (2026-08-05, server v0.2.0)
 
 Full security audit against the real code → [script09_security_audit.md](script09_security_audit.md)

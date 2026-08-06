@@ -1084,8 +1084,14 @@ async function loadAddrBook(walletName) {
     return addrBookCache[walletName];
 }
 
+// Case-insensitive: bech32 is lowercase by spec, but the Tor form sends what was
+// typed while the Transporter form lowercases first, so the same address could
+// otherwise be "unknown" on one rail and known on the other — and this lookup
+// gates the first-send warning, where a false "unknown" is merely noisy but a
+// false "known" silently drops the safety net.
 function findAddrEntry(walletName, address) {
-    return (addrBookCache[walletName] || []).find(e => e.address === address) || null;
+    const a = String(address || '').toLowerCase();
+    return (addrBookCache[walletName] || []).find(e => String(e.address).toLowerCase() === a) || null;
 }
 
 // Fills one recent-recipients picker. Parameterised because the Transporter
@@ -2224,6 +2230,15 @@ async function tspLoadConfig(force) {
     return tspCfgCache;
 }
 
+// The relay returns an ISO instant. Showing it raw ("2026-08-13T09:14:22.123Z")
+// reads as a machine string; trim to minutes and name the zone, because a TTL
+// the user misreads by a timezone is a payment they think expired and re-send.
+function fmtUtc(iso) {
+    const d = new Date(iso);
+    if (isNaN(d)) return String(iso);
+    return d.toISOString().slice(0, 16).replace('T', ' ') + ' UTC';
+}
+
 function tspAgo(ts) {
     if (!ts) return 'never';
     const s = Math.max(0, Math.round((Date.now() - ts) / 1000));
@@ -2241,7 +2256,14 @@ async function refreshSendTspAvailability() {
     if (!panel || !statEl) return;
 
     const w = allWallets.find(x => x.name === curWallet);
-    if (netEl) netEl.textContent = w ? w.network : '';
+    // Match the badge selectWallet() paints on the Tor/Slatepack panels exactly.
+    // Writing the bare lowercase network here overwrote it with unstyled text, so
+    // the three Send panels disagreed about which network you were spending from
+    // — the one label on this screen that must never look uncertain.
+    if (netEl) {
+        netEl.textContent = w ? (w.network === 'testnet' ? 'TESTNET' : 'MAINNET') : '';
+        netEl.className   = 'send-method-net' + (w ? ' ' + w.network : '');
+    }
 
     let ready = false, msg, cls;
     if (!w) {
@@ -2258,11 +2280,48 @@ async function refreshSendTspAvailability() {
     panel.classList.toggle('send-method-disabled', !ready);
 }
 
+// Reserving coins for a payment that may sit unanswered for days is the one
+// thing people do not expect from a "send". It is stated in whichever modal the
+// user actually sees, never in two modals back to back.
+const TSP_RESERVE_NOTE =
+      '<p class="field-hint mt-8">The coins are reserved as soon as you confirm, and the payment only completes '
+    + 'when the recipient\'s wallet collects it and replies. Until then the amount will not be spendable. '
+    + 'If they never reply, release it with <strong>Recover</strong> on the Wallet tab.</p>';
+
+// `amount` stays a STRING all the way to the server: the input can carry 9
+// decimals and a parseFloat round-trip loses the last of them.
+async function executeTspSend(amount, dest) {
+    const el  = q('sendTspResult');
+    const btn = q('sendTspBtn');
+    btn.disabled = true;
+    resultBox(el, '', '<p class="loading">RESERVING COINS &amp; QUEUEING&hellip;</p>');
+    try {
+        const d = await apiPost('/api/wallet/' + curWallet + '/transporter/send', { amount, dest });
+        resultBox(el, 'success',
+            '<p class="ok-text"><strong>QUEUED FOR DELIVERY</strong></p>'
+            + '<p><strong>' + esc(d.amount) + ' ∩</strong> is waiting for <code>' + esc(dest.slice(0, 16)) + '…</code> to collect it.</p>'
+            + '<p><strong>TX ID:</strong> <code>' + esc(d.txSlateId) + '</code></p>'
+            + (d.expiresAt ? '<p class="field-hint">The relay holds it until ' + esc(fmtUtc(d.expiresAt)) + '.</p>' : '')
+            + (d.duplicate ? '<p class="field-hint">This exact payment was already in their queue — nothing was duplicated.</p>' : '')
+            + '<p class="field-hint mt-8">Nothing has moved on-chain yet. Your balance shows the amount as locked until they reply.</p>');
+        q('sendTspAmount').value = '';
+        if (curWallet) { await loadAddrBook(curWallet); renderRecentRecipients(); renderAddrBook(); refreshBalance(curWallet); }
+        return true;
+    } catch (err) {
+        // The server marks the one state that needs an action from the user:
+        // coins reserved but the payment never left.
+        const locked = /outputs are locked, cancel tx/i.test(err.message);
+        resultBox(el, 'error', '<strong>ERROR:</strong> ' + esc(err.message)
+            + (locked ? '<p class="field-hint mt-8">Your coins are reserved for a payment that was never delivered. Get them back with <strong>Recover</strong> on the Wallet tab.</p>'
+                      : '<p class="field-hint mt-8">No coins were reserved.</p>'));
+        return false;
+    } finally { btn.disabled = false; }
+}
+
 q('sendTspForm')?.addEventListener('submit', async e => {
     e.preventDefault();
     if (!curWallet) return;
     const el     = q('sendTspResult');
-    const btn    = q('sendTspBtn');
     const amount = q('sendTspAmount').value.trim();
     const dest   = q('sendTspDest').value.trim().toLowerCase();
 
@@ -2284,41 +2343,62 @@ q('sendTspForm')?.addEventListener('submit', async e => {
         return;
     }
 
-    // Confirm the part people do not expect: the coins are reserved NOW, and
-    // stay reserved until the other side answers. That is the real cost of an
-    // async send and it deserves an explicit yes.
-    const go = await showModal({
-        title: 'Queue this payment?',
-        body:  '<p>Queue <strong>' + esc(amount) + ' ∩</strong> for <code>' + esc(dest.slice(0, 16)) + '…</code>.</p>'
-             + '<p class="field-hint mt-8">The coins are reserved as soon as you confirm, and the payment only completes when the recipient\'s wallet collects it and replies. Until then the amount will not be spendable. If they never reply, release it with <strong>Recover</strong> on the Wallet tab.</p>',
-        actions: [
-            { label: 'Queue payment', kind: 'primary', value: 'go' },
-            { label: 'Cancel',        kind: 'outline', value: null },
-        ],
-    });
-    if (!go) return;
+    // First-send gate — the SAME rule as the Tor panel, and it matters more here.
+    // A wrong-but-valid address over Tor fails loudly: there is nothing at the
+    // other end to connect to. Over a relay it SUCCEEDS — the deposit lands in a
+    // queue nobody owns, no error is ever raised, and the only symptom is coins
+    // that stay reserved forever. So an unproven address gets the test-send offer
+    // before any large amount goes out.
+    const known     = findAddrEntry(curWallet, dest);
+    const isUnknown = !known || !known.testPassed;
+    let toSend = amount;
 
-    btn.disabled = true;
-    resultBox(el, '', '<p class="loading">RESERVING COINS &amp; QUEUEING&hellip;</p>');
-    try {
-        const d = await apiPost('/api/wallet/' + curWallet + '/transporter/send', { amount, dest });
-        resultBox(el, 'success',
-            '<p class="ok-text"><strong>QUEUED FOR DELIVERY</strong></p>'
-            + '<p><strong>' + esc(d.amount) + ' ∩</strong> is waiting for <code>' + esc(dest.slice(0, 16)) + '…</code> to collect it.</p>'
-            + '<p><strong>TX ID:</strong> <code>' + esc(d.txSlateId) + '</code></p>'
-            + (d.expiresAt ? '<p class="field-hint">The relay holds it until ' + esc(String(d.expiresAt)) + '.</p>' : '')
-            + (d.duplicate ? '<p class="field-hint">This exact payment was already in their queue — nothing was duplicated.</p>' : '')
-            + '<p class="field-hint mt-8">Nothing has moved on-chain yet. Your balance shows the amount as locked until they reply.</p>');
-        q('sendTspAmount').value = '';
-        if (curWallet) { await loadAddrBook(curWallet); renderRecentRecipients(); renderAddrBook(); refreshBalance(curWallet); }
-    } catch (err) {
-        // The server marks the one state that needs an action from the user:
-        // coins reserved but the payment never left.
-        const locked = /outputs are locked, cancel tx/i.test(err.message);
-        resultBox(el, 'error', '<strong>ERROR:</strong> ' + esc(err.message)
-            + (locked ? '<p class="field-hint mt-8">Your coins are reserved for a payment that was never delivered. Get them back with <strong>Recover</strong> on the Wallet tab.</p>'
-                      : '<p class="field-hint mt-8">No coins were reserved.</p>'));
-    } finally { btn.disabled = false; }
+    if (isUnknown && parseFloat(amount) > TEST_AMOUNT) {
+        const short = esc(dest.slice(0, 18)) + '…' + esc(dest.slice(-8));
+        // "Known but not testPassed" also covers every earlier Transporter send
+        // to this address that has not been answered yet — which is exactly the
+        // state we must not treat as proof.
+        const seenBefore = known && !known.testPassed;
+        const choice = await showModal({
+            title: seenBefore ? 'No completed payments yet' : 'First payment to this address',
+            body:  (seenBefore
+                     ? '<p>You have queued to <code>' + short + '</code> before, but no payment to it has ever completed.</p>'
+                     : '<p>You haven\'t sent to <code>' + short + '</code> before.</p>')
+                 + '<p>On this rail a wrong address does not fail — the payment just sits in a queue nobody collects, '
+                 + 'and your coins stay reserved until you cancel it. Queue a small <strong>0.1 ∩</strong> test first and '
+                 + 'wait for it to complete.</p>'
+                 + TSP_RESERVE_NOTE,
+            actions: [
+                { label: 'Queue 0.1 ∩ test first',        kind: 'primary', value: 'test' },
+                { label: 'Queue ' + amount + ' ∩ anyway', kind: 'outline', value: 'full' },
+                { label: 'Cancel',                        kind: 'outline', value: null },
+            ],
+        });
+        if (!choice) return;
+        if (choice === 'test') {
+            const ok = await executeTspSend(String(TEST_AMOUNT), dest);
+            // Reload the original amount so a second click sends the real one
+            // once the test has come back.
+            if (ok) { q('sendTspAmount').value = amount; q('sendTspDest').value = dest; }
+            return;
+        }
+        toSend = amount;   // 'full' — the modal above already carried the reserve note
+    } else {
+        // No first-send modal fired, so this is where the reservation gets its
+        // explicit yes. Exactly one confirmation, never two in a row.
+        const go = await showModal({
+            title: 'Queue this payment?',
+            body:  '<p>Queue <strong>' + esc(amount) + ' ∩</strong> for <code>' + esc(dest.slice(0, 16)) + '…</code>.</p>'
+                 + TSP_RESERVE_NOTE,
+            actions: [
+                { label: 'Queue payment', kind: 'primary', value: 'go' },
+                { label: 'Cancel',        kind: 'outline', value: null },
+            ],
+        });
+        if (!go) return;
+    }
+
+    await executeTspSend(toSend, dest);
 });
 
 // ── Receive tab: inbox ───────────────────────────────────────────────────────

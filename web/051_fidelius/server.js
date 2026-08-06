@@ -1603,14 +1603,15 @@ app.post('/api/wallet/:name/transporter/send', async (req, res) => {
     let ep;
     try { ep = tspEndpointFor(wallet); } catch (e) { return apiErr(res, e.message, 409); }
 
+    const body = req.body || {};
     try {
         const session = await ownerApiSession(wallet);
         const result  = await transporter.send({
             call:    boundOwnerCall(session),
             client:  tspClientFor(ep.url),
             network: wallet.network,
-            dest:    req.body.dest,
-            amount:  req.body.amount,
+            dest:    body.dest,
+            amount:  body.amount,
             minConfirmations: 10,
         });
         // proven=false: queued is not delivered — see recordAddressSend.

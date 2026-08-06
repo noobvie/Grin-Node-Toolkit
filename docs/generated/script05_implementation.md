@@ -197,6 +197,37 @@ debugging: **`journalctl -u grin-fidelius` never shows app output** — `append:
 away from the journal, so the journal carries only systemd's own start/stop/crash lines. The setup
 screen prints both destinations.
 
+### CMD wallet (05C) — two listener modes, 2026-08-06
+
+The CMD wallet ran `grin-wallet listen` only. Setup now asks which mode, stored in
+`<dir>/.listen_mode`; `listen` stays the default and pre-existing wallets keep it.
+
+| Mode | Command | Port | What it gives / costs |
+|---|---|---|---|
+| `listen` | `grin-wallet listen` | 3415/13415 | Foreign API only — receive-only. grin-wallet starts **Tor** for it, so the wallet gets an `.onion` for free. **No Owner API.** |
+| `owner_api` | `grin-wallet owner_api` | 3420/13420 | Owner v3 **+** Foreign on one port (`owner_api_include_foreign`). Can be driven over HTTP. **No automatic Tor onion.** |
+
+**Why it was added:** the Script 093 Transporter agent's send path is
+`init_send_tx` → `tx_lock_outputs` → `finalize_tx` — all Owner API. Against a
+`listen` wallet there is nothing to call, so the answer to "no wallet exists, run
+the CMD wallet" was simply false until this landed. The alternative was a fifth
+wallet-init implementation inside 093, which would also have meant a fifth seed
+outside `grin_wallets_location.conf` — the exact hole that left Fidelius's seeds
+out of every 089 archive.
+
+Details that bite:
+
+| | |
+|---|---|
+| **Mode parsing fails closed** | Anything that is not exactly `owner_api` reads as `listen`. An empty, missing or hand-edited mode file must never resolve to the mode that opens an Owner API. |
+| **Every port guard uses `_cmd_mode_port`** | An `owner_api` wallet never binds 3415, so the old `_cmd_foreign_port` guard would have checked an unused port and let a real 3420 collision through. |
+| **Both port keys are pinned, always** | `grin-wallet init` writes the mainnet default into `owner_api_listen_port` too, so an unpinned testnet wallet would try to bind 3420 the moment menu option 3 ("Both") puts an `owner_api` wallet on each network. |
+| **`owner_api_include_foreign` is set, never unset** | It is inert while `listen` is active, so switching modes never has to undo a toml edit. |
+| **Restart waits on the tmux session, not just the port** | After a mode switch the old listener holds the *old* port while the wait loop watches the *new* one — it reads "free" instantly and races the dying process for the wallet's LMDB lock, failing with a lock error that says nothing about a mode change. |
+
+The trade is printed at the prompt and repeated in the summary. An operator who
+only wants to receive slates by hand is strictly better off on `listen`.
+
 ---
 
 # PART 2 — DECISIONS (final)

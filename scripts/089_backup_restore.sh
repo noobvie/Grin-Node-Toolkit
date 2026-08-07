@@ -49,7 +49,12 @@
 #
 # What is NOT backed up (reproducible via toolkit scripts):
 #   · /opt/grin/node/*/chain_data/     (re-sync via script 01)
-#   · /opt/grin/bin/grin               (re-download via script 01)
+#   · /opt/grin/bin/                   — node binaries + their .info sidecars.
+#                                Release binaries re-download via script 01, but a
+#                                SOURCE BUILD (script 01 menu key G) cannot be
+#                                re-downloaded — reproducing one means recompiling
+#                                the ref. Archive that directory by hand if you are
+#                                running an unreleased node binary.
 #   · /var/www/                        (re-deployed by nginx setup scripts)
 #   · server/, public_html/, grin-wallet binary  (re-deployed by 059)
 #   · /opt/grin/fidelius/app/ + node_modules/   (re-deployed by 051 step 3)
@@ -568,7 +573,8 @@ run_backup() {
         echo ""
         echo "Excluded (not backed up):"
         echo "  /opt/grin/node/*/chain_data/  (re-sync via script 01)"
-        echo "  /opt/grin/bin/grin            (re-download via script 01)"
+        echo "  /opt/grin/bin/                (release binaries re-download via script 01;"
+        echo "                                 SOURCE BUILDS would need a full recompile)"
         echo "  /var/www/                     (re-deployed by toolkit scripts)"
         echo "  server/, public_html/         (re-deployed by script 059)"
         echo "  /opt/grin/fidelius/app/      (re-deployed by script 051 step 3)"

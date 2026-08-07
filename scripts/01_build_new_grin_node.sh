@@ -74,6 +74,8 @@
 #              the node directory. When building both networks, the binary is
 #              downloaded from GitHub once and copied into each node directory
 #              separately — no second download needed.
+#              A binary compiled from source (Step-1 menu key G, option 3) is
+#              reused here instead of the release download.
 #
 #   Step  7 — Generate grin-server.toml
 #              Mainnet: './grin server config'
@@ -200,6 +202,10 @@ source "$SCRIPT_DIR/lib/grin_node_keepalive.sh"
 # rebuild keeps the node's api/foreign secrets instead of rotating them and
 # silently 401-ing every consumer. Source-guarded, no side effects.
 source "$SCRIPT_DIR/lib/grin_node_secrets.sh"
+# Source-build path (Step-1 menu key G): compile the node binary from a git
+# branch/tag when upstream has a fix on 'staging' but no release tarball yet.
+# Provides gsb_menu. Source-guarded, no side effects.
+source "$SCRIPT_DIR/lib/01_lib_source_build.sh"
 
 # --- Session state (reset per node) ---
 NETWORK_TYPE=""
@@ -207,7 +213,10 @@ ARCHIVE_MODE=""
 GRIN_DIR=""
 TAR_FILE=""
 SHA_FILE=""
-GRIN_BIN_TMP=""        # cache binary between mainnet+testnet setups
+# Cache binary between mainnet+testnet setups. Pre-seeded from GRIN_PREBUILT_BIN
+# so a source-built binary chosen before a `exec "$0"` re-exec survives it — a
+# plain shell variable would not (see lib/01_lib_source_build.sh).
+GRIN_BIN_TMP="${GRIN_PREBUILT_BIN:-}"
 RESTRICTED_NETWORK=""  # set by check_grin_running if one slot is already occupied
 STREAM_MODE=false      # true = on-the-fly pipe extraction (no local .tar.gz saved)
 SLOW_SYNC_MODE=false   # true = no archive; start node and sync from network peers (grin default)
@@ -414,6 +423,11 @@ stop_grin_one() {
 # Reads all instance dirs from INSTANCES_CONF, downloads the latest Grin binary
 # from GitHub once, stops all running nodes, replaces each binary, and restarts
 # each node in its existing tmux session.  Chain data is never touched.
+#
+# The replaced binary is kept twice, exactly as the source-build install does:
+# <node_dir>/grin.prev (fast rollback, menu G option 4) and an archived copy in
+# /opt/grin/bin (survives a node-dir wipe). See gsb_archive_replaced in
+# lib/01_lib_source_build.sh for why those are two different jobs.
 # =============================================================================
 update_binary_only() {
     step_header "Binary Update: All Grin Instances"
@@ -421,6 +435,12 @@ update_binary_only() {
     [[ ! -f "$INSTANCES_CONF" ]] && \
         die "No instances found in $INSTANCES_CONF. Run node setup first."
 
+    # Sourcing leaves these set as ordinary shell variables. A mainnet
+    # prune→full rebuild DELETES the sibling key from the conf, so a value left
+    # over from an earlier source in this same process (the key-G menu also reads
+    # this file) would still resolve and add a second mainnet dir — two nodes
+    # fighting over port 3414. Clear them so only what the conf declares now wins.
+    unset PRUNEMAIN_GRIN_DIR FULLMAIN_GRIN_DIR PRUNETEST_GRIN_DIR
     # shellcheck source=/dev/null
     source "$INSTANCES_CONF" 2>/dev/null || true
 
@@ -476,6 +496,20 @@ update_binary_only() {
     for i in "${!inst_dirs[@]}"; do
         local dir="${inst_dirs[$i]}"
         local net="${inst_nets[$i]}"
+
+        # Same backup contract as the source-build install (menu key G), so a bad
+        # release can be rolled back too — and so a node that WAS running a source
+        # build stops advertising itself as one. Without the .grin_binary_info
+        # removal the G menu would keep labelling this node "(source build: …)"
+        # while it now runs the official release, and its grin.prev would point
+        # two steps back instead of at the binary this update just replaced.
+        if [[ -x "$dir/grin" ]]; then
+            gsb_archive_replaced "$dir"
+            cp -a "$dir/grin" "$dir/grin.prev" \
+                || warn "Could not write $dir/grin.prev — update continues without a rollback copy."
+        fi
+        rm -f "$dir/.grin_binary_info"
+
         info "Installing $version to $dir/grin ..."
         install -m 755 "$grin_bin" "$dir/grin"
         success "Binary updated: $dir/grin"
@@ -488,6 +522,8 @@ update_binary_only() {
     rm -rf "$tmp_dir"
     echo ""
     success "All instances updated to Grin $version."
+    info    "Previous binary kept as <node_dir>/grin.prev — roll back from the"
+    info    "Step-1 menu with G) compile binary from source → option 4."
     log "[BINARY UPDATE] version=$version instances=${#inst_dirs[@]}"
     info "Press Enter to return to main menu."
     read -r || true
@@ -500,6 +536,13 @@ update_binary_only() {
 # P2P ports 3414 (mainnet) and 13414 (testnet) are the authoritative indicators
 # of a running node. One server can host at most two Grin instances — one per
 # network. Archive mode on testnet is NOT supported.
+#
+# Every Step-1 menu also offers:
+#   G = compile the node binary from a git branch/tag (lib/01_lib_source_build.sh)
+#       — the escape hatch for "the fix is on staging but no release tarball
+#       exists yet". Builds into /opt/grin/bin, installs on request (keeping
+#       <node_dir>/grin.prev for rollback), or arms the built binary for the node
+#       build about to run. Never touches chain data.
 #
 # Scenarios:
 #   Both 3414 + 13414 occupied → B = binary-only update (all instances, no rebuild)
@@ -1008,12 +1051,13 @@ check_grin_running() {
         while true; do
             echo -e "  ${GREEN}A${RESET} — 🚀 Super Auto  ${DIM}⚠ WIPE ALL & rebuild both (pruned) + autostart/watchdog/logrotate${RESET}"
             echo -e "  ${CYAN}B${RESET} — update binary only  (no chain data rebuild)"
+            echo -e "  ${CYAN}G${RESET} — compile binary from source  ${DIM}(staging / any branch or tag)${RESET}"
             echo -e "  ${YELLOW}M${RESET} — kill mainnet  & rebuild mainnet"
             echo -e "  ${YELLOW}T${RESET} — kill testnet  & rebuild testnet"
             echo -e "  ${RED}K${RESET} — kill all Grin processes & rebuild both networks"
             echo -e "  ${GREEN}0${RESET} — return to master script"
             echo ""
-            echo -ne "${DIM}[A/B/M/T/K/0]: ${RESET}"
+            echo -ne "${DIM}[A/B/G/M/T/K/0]: ${RESET}"
             read -r _both_choice || true
             case "${_both_choice:-}" in
                 [Aa])
@@ -1021,6 +1065,9 @@ check_grin_running() {
                     ;;
                 [Bb])
                     update_binary_only
+                    ;;
+                [Gg])
+                    gsb_menu || true
                     ;;
                 [Mm])
                     stop_grin_one 3414
@@ -1042,7 +1089,7 @@ check_grin_running() {
                     exit 0
                     ;;
                 *)
-                    warn "Invalid input — choose A, B, M, T, K, or 0."
+                    warn "Invalid input — choose A, B, G, M, T, K, or 0."
                     echo ""
                     ;;
             esac
@@ -1068,6 +1115,7 @@ check_grin_running() {
         while true; do
             echo -e "  ${GREEN}A${RESET} — 🚀 Super Auto  ${DIM}⚠ WIPE ALL & rebuild both (pruned) + autostart/watchdog/logrotate${RESET}"
             echo -e "  ${CYAN}B${RESET} — update binary only  (no rebuild)"
+            echo -e "  ${CYAN}G${RESET} — compile binary from source  ${DIM}(staging / any branch or tag)${RESET}"
             echo -e "  ${RED}M${RESET} — kill mainnet  & rebuild mainnet"
             if $_testnet_installed; then
                 echo -e "  ${CYAN}S${RESET} — start installed testnet node  (no rebuild)  ${DIM}(default)${RESET}"
@@ -1078,8 +1126,8 @@ check_grin_running() {
             echo -e "  ${DIM}0${RESET} — return to master script"
             echo ""
             $_testnet_installed \
-                && echo -ne "${DIM}[A/B/M/S/0, Enter = S]: ${RESET}" \
-                || echo -ne "${DIM}[A/B/M/1/0, Enter = 1]: ${RESET}"
+                && echo -ne "${DIM}[A/B/G/M/S/0, Enter = S]: ${RESET}" \
+                || echo -ne "${DIM}[A/B/G/M/1/0, Enter = 1]: ${RESET}"
             read -r _main_choice || true
             [[ -z "$_main_choice" ]] && { $_testnet_installed && _main_choice="s" || _main_choice="1"; }
             case "${_main_choice,,}" in
@@ -1088,6 +1136,9 @@ check_grin_running() {
                     ;;
                 b)
                     update_binary_only
+                    ;;
+                g)
+                    gsb_menu || true
                     ;;
                 m)
                     stop_grin_one 3414
@@ -1118,8 +1169,8 @@ check_grin_running() {
                     ;;
                 *)
                     $_testnet_installed \
-                        && warn "Invalid input — choose A, B, M, S, or 0." \
-                        || warn "Invalid input — choose A, B, M, 1, or 0."
+                        && warn "Invalid input — choose A, B, G, M, S, or 0." \
+                        || warn "Invalid input — choose A, B, G, M, 1, or 0."
                     echo ""
                     ;;
             esac
@@ -1145,6 +1196,7 @@ check_grin_running() {
         while true; do
             echo -e "  ${GREEN}A${RESET} — 🚀 Super Auto  ${DIM}⚠ WIPE ALL & rebuild both (pruned) + autostart/watchdog/logrotate${RESET}"
             echo -e "  ${CYAN}B${RESET} — update binary only  (no rebuild)"
+            echo -e "  ${CYAN}G${RESET} — compile binary from source  ${DIM}(staging / any branch or tag)${RESET}"
             echo -e "  ${RED}T${RESET} — kill testnet  & rebuild testnet"
             if $_mainnet_installed; then
                 local _maindir=""
@@ -1158,8 +1210,8 @@ check_grin_running() {
             echo -e "  ${DIM}0${RESET} — return to master script"
             echo ""
             $_mainnet_installed \
-                && echo -ne "${DIM}[A/B/T/S/0, Enter = S]: ${RESET}" \
-                || echo -ne "${DIM}[A/B/T/1/0, Enter = 1]: ${RESET}"
+                && echo -ne "${DIM}[A/B/G/T/S/0, Enter = S]: ${RESET}" \
+                || echo -ne "${DIM}[A/B/G/T/1/0, Enter = 1]: ${RESET}"
             read -r _test_choice || true
             [[ -z "$_test_choice" ]] && { $_mainnet_installed && _test_choice="s" || _test_choice="1"; }
             case "${_test_choice,,}" in
@@ -1168,6 +1220,9 @@ check_grin_running() {
                     ;;
                 b)
                     update_binary_only
+                    ;;
+                g)
+                    gsb_menu || true
                     ;;
                 t)
                     stop_grin_one 13414
@@ -1198,8 +1253,8 @@ check_grin_running() {
                     ;;
                 *)
                     $_mainnet_installed \
-                        && warn "Invalid input — choose A, B, T, S, or 0." \
-                        || warn "Invalid input — choose A, B, T, 1, or 0."
+                        && warn "Invalid input — choose A, B, G, T, S, or 0." \
+                        || warn "Invalid input — choose A, B, G, T, 1, or 0."
                     echo ""
                     ;;
             esac
@@ -1258,12 +1313,13 @@ check_grin_running() {
             else
                 echo -e "  ${CYAN}S${RESET}) Start installed node (no rebuild)"
             fi
+            echo -e "  ${CYAN}G${RESET}) Compile binary from source  ${DIM}(staging / any branch or tag)${RESET}"
             echo -e "  ${RED}N${RESET}) Abort  (resolve manually)"
             echo -e "  ${DIM}0${RESET}) Return to main menu"
             echo -e "  ${DIM}Enter${RESET}) Recheck"
             echo ""
-            local _prompt_keys="A/K/C/S/N/0"
-            $_inst_detected && _prompt_keys="A/K/C/S/R/N/0"
+            local _prompt_keys="A/K/C/S/G/N/0"
+            $_inst_detected && _prompt_keys="A/K/C/S/R/G/N/0"
             echo -ne "${BOLD}${RED}Choose [${_prompt_keys}]: ${RESET}"
             read -r confirm || true
             case "${confirm,,}" in
@@ -1317,6 +1373,7 @@ check_grin_running() {
                        continue
                    fi
                    ;;
+                g) gsb_menu || true; continue ;;
                 0) exit 0 ;;
                 "") continue ;;
                 *) die "Aborted. Resolve the conflicts manually and re-run." ;;
@@ -1326,13 +1383,16 @@ check_grin_running() {
             echo ""
             echo -e "  ${GREEN}A${RESET}) 🚀 Super Auto — install both nodes (mainnet + testnet, pruned) + autostart/watchdog/logrotate"
             echo -e "  ${GREEN}1${RESET}) Custom wizard — pick network / mode / source yourself  ${DIM}(default)${RESET}"
+            echo -e "  ${CYAN}G${RESET}) Compile binary from source first  ${DIM}(staging / any branch or tag)${RESET}"
             echo -e "  ${DIM}0${RESET}) Return to main menu"
             echo ""
-            echo -ne "${BOLD}Choice [A/1/0, Enter = 1]: ${RESET}"
+            echo -ne "${BOLD}Choice [A/1/G/0, Enter = 1]: ${RESET}"
             local _fresh_choice; read -r _fresh_choice || true
             case "${_fresh_choice,,}" in
                 a) if run_super_auto; then exit 0; fi
                    ;;   # cancelled → fall through to the custom wizard
+                g) gsb_menu || true
+                   continue ;;   # re-print this menu; option 3 armed GRIN_BIN_TMP
                 0) exit 0 ;;
             esac
             break
@@ -1865,9 +1925,15 @@ create_node_dir() {
 download_grin_binary() {
     step_header "Step 6: Download Grin Binary"
 
-    # Reuse already-downloaded binary when setting up both networks
+    # Reuse a binary already obtained in this session: either downloaded for the
+    # first network of a "both" build, or compiled from source via menu key G.
     if [[ -n "$GRIN_BIN_TMP" && -f "$GRIN_BIN_TMP" ]]; then
-        info "Reusing binary downloaded earlier in this session."
+        if [[ -n "${GRIN_PREBUILT_BIN:-}" && "$GRIN_BIN_TMP" == "${GRIN_PREBUILT_BIN:-}" ]]; then
+            warn "Using the SOURCE-BUILT binary: $(basename "$GRIN_BIN_TMP")"
+            warn "This is an unreleased build — not the latest official release."
+        else
+            info "Reusing binary downloaded earlier in this session."
+        fi
         install -m 755 "$GRIN_BIN_TMP" "$GRIN_DIR/grin"
         success "Binary copied to $GRIN_DIR/grin"
         return

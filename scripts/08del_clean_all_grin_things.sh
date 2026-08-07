@@ -473,6 +473,9 @@ step_remove_install_dirs() {
         # Script 091 (Floonet relay) follows UPSTREAM's layout, which has no
         # "grin" anywhere in it — the /opt scan below would never see these.
         "/usr/local/bin/floonet-rs"
+        # 091 stopped offering the Nym mixnet exit on 2026-08-07 (upstream
+        # archived it), but a box set up before then still has the binary —
+        # keep removing it or full cleanup would leave it behind forever.
         "/usr/local/bin/floonet-mixexit"
         "/etc/floonet-rs"
         "/var/lib/floonet-rs"

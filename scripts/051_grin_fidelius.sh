@@ -28,8 +28,34 @@
 #   7) Configure firewall          (ports 80 + 443)
 #   8) Status & info
 #   9) Edit saved settings         (domain, email, auth user)
+#   V) Private access              (WireGuard tunnel + DNS-01 cert — optional)
 #   x) Launch XP Wallet            (mainnet only — separate experience)
 #   0) Back to main menu
+#
+#  ─── Optional: private access (menu V) ───────────────────────────────────────
+#   Moves the wallet off the public internet WITHOUT giving up a real Let's
+#   Encrypt certificate for the same domain:
+#
+#     phone ══ udp/51820 ══▶ wg0 (10.9.0.1) ══▶ nginx 10.9.0.1:443 ══▶ :7420
+#
+#   The cert stays valid because DNS-01 proves domain control with a TXT record
+#   and never connects to this host — so the host needs no public port, at issue
+#   time or at renewal. `A wallet.example → 10.9.0.1` is a public record holding
+#   a private address; only tunnelled devices can route to it.
+#
+#   Binding to the WireGuard address (rather than an `allow/deny` ACL) is the
+#   point: an ACL still lets strangers complete TLS and reach nginx's HTTP layer
+#   before refusal, so pre-auth bugs stay reachable. An address nginx never
+#   listens on cannot be probed at all.
+#
+#   Two hard gates guard against self-lockout — the switch refuses to run until
+#   a device has actually handshaked, and refuses an HTTP-01 certificate, whose
+#   renewal would silently fail ~60 days after public port 80 goes away.
+#
+#   Implementation: scripts/lib/grin_wg_access.sh (shared — the pool admin panel
+#   has the same shape of problem; Fidelius is only its first caller).
+#   Note WireGuard changes WHO can reach the app, not what happens once they do:
+#   server.js still runs as root, and a stolen device is a full bypass.
 #
 #  ─── Security ────────────────────────────────────────────────────────────────
 #   nginx : auth_basic, server_tokens off, client_max_body_size 1m
@@ -114,6 +140,18 @@ _SECRETS_LIB="$SCRIPT_DIR/lib/grin_node_secrets.sh"
 if [[ -f "$_SECRETS_LIB" ]]; then
     # shellcheck source=lib/grin_node_secrets.sh
     source "$_SECRETS_LIB"
+fi
+
+# ─── Private access (WireGuard + DNS-01) ──────────────────────────────────────
+# Optional hardening path, menu key V. Moves the wallet off the public internet
+# onto a WireGuard address while KEEPING a real Let's Encrypt certificate for the
+# same domain — DNS-01 proves control by TXT record, so it needs no inbound
+# reachability at all. Shared lib rather than inline because the pool admin panel
+# has the same shape of problem; Fidelius is just its first caller.
+_WG_LIB="$SCRIPT_DIR/lib/grin_wg_access.sh"
+if [[ -f "$_WG_LIB" ]]; then
+    # shellcheck source=lib/grin_wg_access.sh
+    source "$_WG_LIB"
 fi
 
 # ─── Global constants (single deploy serves both networks) ────────────────────
@@ -218,6 +256,11 @@ ww_load_config() {
     WW_EMAIL=""
     WW_AUTH_USER="grin"
     WW_IDLE_LOCK_MINUTES="60"
+    # Empty = listen on every interface (the public default). Set to the
+    # WireGuard address by menu V, and persisted here on purpose: without it a
+    # later re-run of step 5 would rewrite the vhost with a public listener and
+    # silently put the wallet back on the internet.
+    WW_BIND_ADDR=""
     if [[ -f "$WW_CONF_FILE" ]]; then
         # shellcheck disable=SC1090
         source "$WW_CONF_FILE" 2>/dev/null || true
@@ -231,6 +274,7 @@ WW_DOMAIN="${WW_DOMAIN:-}"
 WW_EMAIL="${WW_EMAIL:-}"
 WW_AUTH_USER="${WW_AUTH_USER:-grin}"
 WW_IDLE_LOCK_MINUTES="${WW_IDLE_LOCK_MINUTES:-60}"
+WW_BIND_ADDR="${WW_BIND_ADDR:-}"
 CONF
     chmod 600 "$WW_CONF_FILE"
 }
@@ -322,9 +366,19 @@ ww_menu_status() {
         && echo -e "  ${BOLD}6 Basic Auth${RESET}         : ${GREEN}configured${RESET}  ${DIM}(user: ${WW_AUTH_USER:-grin})${RESET}" \
         || echo -e "  ${BOLD}6 Basic Auth${RESET}         : ${DIM}not configured${RESET}  ${DIM}→ step 6${RESET}"
 
+    # V) Private access — only shown once WireGuard exists, so the normal
+    #    public setup keeps a five-line status screen.
+    if declare -F gwa_installed &>/dev/null && gwa_installed; then
+        echo -e "  ${BOLD}V Private access${RESET}     : ${GREEN}$(gwa_status_lines)${RESET}"
+    fi
+
     # Live URL
     if [[ -L "$WW_NGINX_LINK" ]]; then
-        echo -e "  ${BOLD}Web UI${RESET}               : ${GREEN}LIVE${RESET}  ${DIM}→ https://${WW_DOMAIN:-<domain>}${RESET}"
+        if [[ -n "${WW_BIND_ADDR:-}" ]]; then
+            echo -e "  ${BOLD}Web UI${RESET}               : ${GREEN}LIVE${RESET} ${YELLOW}(VPN only)${RESET}  ${DIM}→ https://${WW_DOMAIN:-<domain>}${RESET}"
+        else
+            echo -e "  ${BOLD}Web UI${RESET}               : ${GREEN}LIVE${RESET}  ${DIM}→ https://${WW_DOMAIN:-<domain>}${RESET}"
+        fi
     else
         echo -e "  ${BOLD}Web UI${RESET}               : ${DIM}not live${RESET}"
     fi
@@ -724,6 +778,26 @@ ww_configure_nginx() {
         die "App not deployed yet — run step 3 first."; pause; return
     fi
 
+    # ── Private-mode guard ───────────────────────────────────────────────────
+    # This step rewrites the vhost as HTTP-only, which throws away the whole
+    # HTTPS server block. Under menu V that is not just "redo step 5": until
+    # HTTPS is rebuilt the wallet is unreachable, and the status screen would
+    # still read PRIVATE because the bind lives in config.conf, not the vhost.
+    # The bind IS carried through below, so the two can't disagree — but the
+    # operator has to know HTTPS is going away first.
+    if [[ -n "${WW_BIND_ADDR:-}" ]]; then
+        warn "The wallet is currently PRIVATE (bound to $WW_BIND_ADDR)."
+        warn "This step rewrites the vhost as HTTP-only and removes HTTPS until"
+        warn "you re-issue it. In private mode that means menu V option 4"
+        warn "(DNS-01) — step 5 uses HTTP-01, which needs the public port 80"
+        warn "this bind removes."
+        echo ""
+        echo -ne "${BOLD}Continue anyway? [y/N]: ${RESET}"
+        local _pv; read -r _pv || true
+        [[ "${_pv,,}" == "y" ]] || { info "Cancelled — vhost left untouched."; pause; return; }
+        echo ""
+    fi
+
     while true; do
         echo -ne "Domain (e.g. wallet.mynode.example.com) [${WW_DOMAIN:-}]: "
         read -r input || true
@@ -764,13 +838,19 @@ limit_req_zone \$binary_remote_addr zone=${WW_RATELIMIT_ZONE}_http:10m  rate=20r
 RATELIMIT
     fi
 
-    # HTTP-only vhost — certbot --nginx (step 5) adds HTTPS automatically
+    # HTTP-only vhost — certbot --nginx (step 5) adds HTTPS automatically.
+    # Carries WW_BIND_ADDR so a re-run under menu V cannot silently drop the
+    # wallet back onto a public listener; see the private-mode guard above.
+    local _http_listen="listen 80;
+    listen [::]:80;"
+    if [[ -n "${WW_BIND_ADDR:-}" ]]; then
+        _http_listen="listen ${WW_BIND_ADDR}:80;"   # no [::] — the WG subnet is IPv4-only
+    fi
     info "Writing HTTP vhost → $WW_NGINX_CONF ..."
     cat > "$WW_NGINX_CONF" << NGINX_HTTP
 # Grin Web Wallet — generated by 051_grin_fidelius.sh (HTTP only — step 5 adds HTTPS)
 server {
-    listen 80;
-    listen [::]:80;
+    $_http_listen
     server_name $WW_DOMAIN;
     location / { return 301 https://\$host\$request_uri; }
 }
@@ -798,11 +878,28 @@ _ww_write_https_vhost() {
     # $4 = extra ssl block lines (e.g. include /etc/letsencrypt/options-ssl-nginx.conf;)
     local kind="$1" cert="$2" key="$3" extra="${4:-}"
 
+    # ── Bind address ─────────────────────────────────────────────────────────
+    # WW_BIND_ADDR empty  → every interface (public). The normal setup.
+    # WW_BIND_ADDR set    → that address only (the WireGuard IP, menu V).
+    #
+    # Binding beats an `allow/deny` ACL here. An ACL still lets a stranger
+    # complete the TLS handshake and reach nginx's HTTP layer before being
+    # refused — so any pre-auth bug is still reachable, and the wallet's
+    # existence is still confirmable. An address nginx never listens on has no
+    # pre-auth surface to have a bug in.
+    local bind_pfx="" v6_ok=1 kind_note=""
+    if [[ -n "${WW_BIND_ADDR:-}" ]]; then
+        bind_pfx="${WW_BIND_ADDR}:"
+        v6_ok=0     # the WG subnet is IPv4-only; a [::] listener would be public
+        kind_note=" — PRIVATE, bound to ${WW_BIND_ADDR}"
+    fi
+
     # `listen ... ssl http2` is deprecated from nginx 1.25.1 (warns on every
     # reload) and `http2 on;` does not exist before it (hard config error). So
     # pick the form this host's nginx actually understands rather than emitting
     # one that is wrong on half the fleet.
-    local listen_443="listen 443 ssl http2;
+    local listen_443="listen ${bind_pfx}443 ssl http2;"
+    (( v6_ok )) && listen_443+="
     listen [::]:443 ssl http2;"
     local nginx_ver
     nginx_ver=$(nginx -v 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)
@@ -810,17 +907,22 @@ _ww_write_https_vhost() {
         local _maj _min _pat
         IFS=. read -r _maj _min _pat <<< "$nginx_ver"
         if (( _maj > 1 || (_maj == 1 && _min > 25) || (_maj == 1 && _min == 25 && _pat >= 1) )); then
-            listen_443="listen 443 ssl;
-    listen [::]:443 ssl;
+            listen_443="listen ${bind_pfx}443 ssl;"
+            (( v6_ok )) && listen_443+="
+    listen [::]:443 ssl;"
+            listen_443+="
     http2 on;"
         fi
     fi
 
+    local listen_80="listen ${bind_pfx}80;"
+    (( v6_ok )) && listen_80+="
+    listen [::]:80;"
+
     cat > "$WW_NGINX_CONF" << NGINX_HTTPS
-# Fidelius Grin wallet — generated by 051_grin_fidelius.sh ($kind)
+# Fidelius Grin wallet — generated by 051_grin_fidelius.sh ($kind$kind_note)
 server {
-    listen 80;
-    listen [::]:80;
+    $listen_80
     server_name $WW_DOMAIN;
     location / { return 301 https://\$host\$request_uri; }
 }
@@ -974,11 +1076,13 @@ ww_setup_ssl() {
         fi
         success "SSL certificate issued for $WW_DOMAIN"
 
+        # Includes are existence-guarded: certbot writes options-ssl-nginx.conf
+        # and ssl-dhparams.pem from its NGINX plugin, and a DNS-01 issue never
+        # loads that plugin. An include of a missing file fails `nginx -t`.
         _ww_write_https_vhost "Let's Encrypt" \
             "/etc/letsencrypt/live/$WW_DOMAIN/fullchain.pem" \
             "/etc/letsencrypt/live/$WW_DOMAIN/privkey.pem" \
-            "    include /etc/letsencrypt/options-ssl-nginx.conf;
-    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;"
+            "$(_ww_le_ssl_extra)"
 
     else
         # ── Cloudflare Origin Certificate ─────────────────────────────────────
@@ -1026,11 +1130,7 @@ ww_setup_ssl() {
         _ww_write_https_vhost "Cloudflare Origin Cert" \
             "$cf_dir/$WW_DOMAIN.pem" \
             "$cf_dir/$WW_DOMAIN.key" \
-            "    ssl_protocols       TLSv1.2 TLSv1.3;
-    ssl_ciphers         ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384;
-    ssl_prefer_server_ciphers off;
-    ssl_session_cache   shared:SSL:10m;
-    ssl_session_timeout 1d;"
+            "$(_ww_cf_ssl_extra)"
     fi
 
     ln -sf "$WW_NGINX_CONF" "$WW_NGINX_LINK" 2>/dev/null || true
@@ -1144,7 +1244,15 @@ ww_setup_fail2ban() {
     echo -ne "${BOLD}Install a fail2ban jail for Basic Auth brute force? [Y/n]: ${RESET}"
     read -r _f2b || true
     [[ "${_f2b,,}" == "n" ]] && { info "Skipped fail2ban."; return 0; }
+    _ww_write_f2b_jail
+}
 
+# The non-interactive half. Split out because the private-access switch has to
+# rewrite the jails (to add the WireGuard subnet to ignoreip) with no operator
+# present: calling the prompting wrapper there — even with output redirected to
+# /dev/null — leaves `read` blocking on a prompt nobody can see, so the script
+# just appears to freeze after announcing success.
+_ww_write_f2b_jail() {
     if ! command -v fail2ban-server &>/dev/null; then
         info "Installing fail2ban ..."
         if command -v apt-get &>/dev/null; then
@@ -1157,6 +1265,18 @@ ww_setup_fail2ban() {
             warn "No apt-get/dnf — install fail2ban manually, then re-run this step."
             return 0
         fi
+    fi
+
+    # ── ignoreip ─────────────────────────────────────────────────────────────
+    # Once the wallet is behind WireGuard, $remote_addr in the nginx log is the
+    # operator's own tunnel address. Five fat-fingered passwords from the phone
+    # would ban the ONLY address that can still reach the wallet, and the unban
+    # requires the SSH session this design exists to avoid needing. Exempting
+    # the subnet costs nothing: entering it already required a private key, which
+    # is a stronger gate than the password fail2ban is guarding.
+    local _f2b_ignore="127.0.0.1/8 ::1"
+    if declare -F gwa_installed &>/dev/null && gwa_installed; then
+        _f2b_ignore+=" ${GWA_SUBNET}"
     fi
 
     mkdir -p /etc/fail2ban/jail.d
@@ -1173,6 +1293,7 @@ logpath  = /var/log/nginx/grin-fidelius-error.log
 maxretry = 5
 findtime = 600
 bantime  = 3600
+ignoreip = $_f2b_ignore
 
 [grin-fidelius-limit-req]
 enabled  = true
@@ -1182,6 +1303,7 @@ logpath  = /var/log/nginx/grin-fidelius-error.log
 maxretry = 10
 findtime = 600
 bantime  = 600
+ignoreip = $_f2b_ignore
 F2B
     chmod 644 "$WW_F2B_JAIL"
 
@@ -1199,6 +1321,622 @@ F2B
         warn "fail2ban restart failed — check: journalctl -u fail2ban -n 30"
     fi
     return 0
+}
+
+# =============================================================================
+# STEP V — Private access (WireGuard + DNS-01)
+# =============================================================================
+#
+#  Optional. Moves the wallet off the public internet without giving up a real,
+#  publicly-trusted certificate for its normal domain name.
+#
+#    phone ══ udp/51820 ══▶ wg0 (10.9.0.1) ══▶ nginx 10.9.0.1:443 ══▶ :7420
+#
+#  The cert stays valid because DNS-01 proves domain control by writing a TXT
+#  record — it never connects to this host, so the host needs no public port.
+#  The browser sees the same green padlock on the same name; only the route
+#  changed.
+#
+#  What this does NOT fix: server.js still runs as root, and a stolen phone or
+#  leaked WireGuard key is a full bypass. WireGuard changes WHO can reach the
+#  app, not what happens once they do.
+#
+# =============================================================================
+
+# Which certificate is currently installed, if any.
+_ww_cert_kind() {
+    if   [[ -n "$WW_DOMAIN" && -f "/etc/letsencrypt/live/$WW_DOMAIN/fullchain.pem" ]]; then echo "le"
+    elif [[ -n "$WW_DOMAIN" && -f "/etc/ssl/cloudflare-origin/$WW_DOMAIN.pem" ]];    then echo "cf"
+    else echo ""
+    fi
+}
+
+# The optional Let's Encrypt ssl_* includes, guarded by existence.
+#
+# These files are created by certbot's NGINX INSTALLER plugin, not by certonly.
+# A cert issued with `certonly --dns-cloudflare` never loads that plugin, so
+# ssl-dhparams.pem in particular may not exist — and an nginx include pointing
+# at a missing file is a hard `nginx -t` failure, i.e. nginx will not start.
+_ww_le_ssl_extra() {
+    local out=""
+    [[ -f /etc/letsencrypt/options-ssl-nginx.conf ]] \
+        && out+="    include /etc/letsencrypt/options-ssl-nginx.conf;"$'\n'
+    [[ -f /etc/letsencrypt/ssl-dhparams.pem ]] \
+        && out+="    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;"$'\n'
+    if [[ -z "$out" ]]; then
+        out="    ssl_protocols       TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers off;
+    ssl_session_cache   shared:SSL:10m;
+    ssl_session_timeout 1d;"
+    fi
+    printf '%s' "$out"
+}
+
+_ww_cf_ssl_extra() {
+    printf '%s' "    ssl_protocols       TLSv1.2 TLSv1.3;
+    ssl_ciphers         ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384;
+    ssl_prefer_server_ciphers off;
+    ssl_session_cache   shared:SSL:10m;
+    ssl_session_timeout 1d;"
+}
+
+# Re-emit the vhost with whatever cert is already installed, honouring the
+# current WW_BIND_ADDR. Used by both the switch and the revert.
+_ww_rewrite_vhost_keep_cert() {
+    case "$(_ww_cert_kind)" in
+        le) _ww_write_https_vhost "Let's Encrypt" \
+                "/etc/letsencrypt/live/$WW_DOMAIN/fullchain.pem" \
+                "/etc/letsencrypt/live/$WW_DOMAIN/privkey.pem" \
+                "$(_ww_le_ssl_extra)" ;;
+        cf) _ww_write_https_vhost "Cloudflare Origin Cert" \
+                "/etc/ssl/cloudflare-origin/$WW_DOMAIN.pem" \
+                "/etc/ssl/cloudflare-origin/$WW_DOMAIN.key" \
+                "$(_ww_cf_ssl_extra)" ;;
+        *)  return 1 ;;
+    esac
+}
+
+_ww_pa_header() {
+    clear
+    echo -e "\n${BOLD}${CYAN}── Fidelius — V) Private access (WireGuard + DNS-01) ──${RESET}\n"
+}
+
+_ww_pa_status() {
+    ww_load_config
+    local exposure wgline certline
+
+    if [[ -n "${WW_BIND_ADDR:-}" ]]; then
+        exposure="${GREEN}PRIVATE${RESET}  ${DIM}(nginx listens on ${WW_BIND_ADDR} only)${RESET}"
+    elif [[ -f "$WW_NGINX_CONF" ]]; then
+        exposure="${YELLOW}PUBLIC${RESET}   ${DIM}(reachable from the internet)${RESET}"
+    else
+        exposure="${DIM}no vhost yet${RESET}"
+    fi
+
+    if declare -F gwa_status_lines &>/dev/null; then
+        wgline=$(gwa_status_lines)
+    else
+        wgline="lib missing"
+    fi
+
+    local kind; kind=$(_ww_cert_kind)
+    case "$kind" in
+        le) local exp auth
+            exp=$(gwa_dns01_cert_expiry "$WW_DOMAIN" 2>/dev/null || echo "")
+            if gwa_dns01_renewal_uses_dns "$WW_DOMAIN" 2>/dev/null; then
+                auth="${GREEN}DNS-01${RESET}"
+            else
+                auth="${YELLOW}HTTP-01${RESET}"
+            fi
+            certline="Let's Encrypt via $auth  ${DIM}${exp:+(expires $exp)}${RESET}" ;;
+        cf) certline="Cloudflare Origin  ${DIM}(no ACME renewal needed)${RESET}" ;;
+        *)  certline="${DIM}none${RESET}" ;;
+    esac
+
+    echo -e "  ${BOLD}Wallet exposure${RESET} : $exposure"
+    echo -e "  ${BOLD}WireGuard${RESET}       : $wgline"
+    echo -e "  ${BOLD}Certificate${RESET}     : $certline"
+    echo -e "  ${BOLD}Domain${RESET}          : ${WW_DOMAIN:-${DIM}not set${RESET}}"
+    echo ""
+}
+
+# ── V1) Install WireGuard ────────────────────────────────────────────────────
+_ww_pa_install() {
+    _ww_pa_header
+    declare -F gwa_install_deps &>/dev/null || { die "lib/grin_wg_access.sh not found."; pause; return; }
+
+    if gwa_installed; then
+        info "WireGuard is already configured ($GWA_WG_CONF)."
+        info "Re-running would invalidate every provisioned device, so it is skipped."
+        pause; return
+    fi
+
+    echo -e "  ${DIM}Creates a WireGuard interface on ${GWA_SERVER_IP} listening on udp/${GWA_PORT}.${RESET}"
+    echo -e "  ${DIM}Split tunnel: devices reach ONLY ${GWA_SUBNET}, not the wider internet.${RESET}"
+    echo -e "  ${DIM}IP forwarding stays off — this is host access, not a VPN gateway.${RESET}"
+    echo ""
+
+    gwa_install_deps || { pause; return; }
+
+    local detected endpoint
+    detected=$(gwa_detect_public_ip)
+    echo ""
+    if [[ -n "$detected" ]]; then
+        echo -ne "Public address devices will dial [${detected}]: "
+    else
+        warn "Could not detect a public IP (this host may be behind NAT)."
+        echo -ne "Public address or hostname devices will dial: "
+    fi
+    read -r endpoint || true
+    [[ -z "$endpoint" ]] && endpoint="$detected"
+    if [[ -z "$endpoint" ]]; then
+        die "An endpoint is required."; pause; return
+    fi
+    # A hostname is fine here, but it must not be the wallet domain: that name
+    # points at the WireGuard IP, so a client would try to dial the tunnel
+    # through itself.
+    if [[ -n "$WW_DOMAIN" && "$endpoint" == "$WW_DOMAIN" ]]; then
+        die "The endpoint cannot be $WW_DOMAIN — that name resolves inside the tunnel."
+        pause; return
+    fi
+
+    echo ""
+    gwa_server_init "$endpoint" || { pause; return; }
+    gwa_firewall_open
+    gwa_enable_nonlocal_bind
+
+    echo ""
+    success "WireGuard is up. Next: add a device (option 2), then scan its QR."
+    pause
+}
+
+# ── V2) Add a device ─────────────────────────────────────────────────────────
+_ww_pa_add_device() {
+    _ww_pa_header
+    gwa_installed || { die "Run option 1 first."; pause; return; }
+
+    echo -ne "Device name (e.g. phone, laptop): "
+    local name; read -r name || true
+    gwa_valid_peer_name "$name" || { warn "Invalid name."; pause; return; }
+
+    gwa_peer_add "$name" || { pause; return; }
+
+    echo ""
+    echo -e "  ${BOLD}Scan this with the WireGuard app${RESET} ${DIM}(Android / iOS → + → Scan from QR code)${RESET}"
+    gwa_peer_qr "$name" || true
+    echo -e "  ${DIM}Also saved at $(gwa_client_conf_path "$name") (mode 600).${RESET}"
+    echo ""
+    echo -e "  ${YELLOW}Now turn the tunnel ON on that device${RESET} — option 5 will refuse to"
+    echo -e "  ${YELLOW}switch the wallet over until it sees a real handshake.${RESET}"
+    echo ""
+    echo -ne "  Delete the stored copy of this device's private key? [y/N]: "
+    local _del; read -r _del || true
+    if [[ "${_del,,}" == "y" ]]; then
+        gwa_peer_forget_conf "$name"
+        warn "The QR cannot be shown again — revoke and re-add if the device is lost."
+    fi
+    pause
+}
+
+# ── V3) Devices ──────────────────────────────────────────────────────────────
+_ww_pa_devices() {
+    while true; do
+        _ww_pa_header
+        gwa_installed || { die "Run option 1 first."; pause; return; }
+
+        echo -e "  ${BOLD}Devices${RESET}\n"
+        local rows; rows=$(gwa_peer_list)
+        if [[ -z "$rows" ]]; then
+            echo -e "  ${DIM}(none yet)${RESET}"
+        else
+            printf "  %-20s %-14s %s\n" "NAME" "ADDRESS" "LAST HANDSHAKE"
+            while IFS=$'\t' read -r n i a; do
+                printf "  %-20s %-14s %s\n" "$n" "$i" "$a"
+            done <<< "$rows"
+        fi
+        echo ""
+        echo -e "  ${GREEN}q${RESET}) Re-show a QR code"
+        echo -e "  ${RED}r${RESET}) Revoke a device"
+        echo -e "  ${RED}0${RESET}) Back"
+        echo ""
+        echo -ne "${BOLD}Select [q/r/0]: ${RESET}"
+        local c; read -r c || true
+        case "$c" in
+            q|Q) echo -ne "  Device name: "; local qn; read -r qn || true
+                 gwa_peer_qr "$qn" || true; pause ;;
+            r|R) echo -ne "  Device name to REVOKE: "; local rn; read -r rn || true
+                 gwa_peer_exists "$rn" || { warn "No such device."; pause; continue; }
+                 echo -ne "  ${YELLOW}Revoke '$rn'? It loses access immediately. [y/N]: ${RESET}"
+                 local rc; read -r rc || true
+                 # if-form, not `[[ ]] && cmd`: a false test would make this arm
+                 # return 1, which under set -e kills the menu loop (CLAUDE.md).
+                 if [[ "${rc,,}" == "y" ]]; then
+                     gwa_peer_remove "$rn" || true
+                 else
+                     info "Not revoked."
+                 fi
+                 pause ;;
+            0|"") return ;;
+            *)   warn "Invalid option."; sleep 1 ;;
+        esac
+    done
+}
+
+# ── V4) DNS-01 certificate ───────────────────────────────────────────────────
+_ww_pa_dns01() {
+    _ww_pa_header
+    ww_load_config
+
+    command -v certbot &>/dev/null || { die "certbot not installed — run step 2 first."; pause; return; }
+    [[ -n "$WW_DOMAIN" ]] || { die "Domain not set — run step 4 first."; pause; return; }
+    [[ -f "$WW_HTPASSWD" ]] || { die "Set up Basic Auth (step 6) before issuing a certificate."; pause; return; }
+
+    echo -e "  ${DIM}DNS-01 proves you control $WW_DOMAIN by writing a TXT record.${RESET}"
+    echo -e "  ${DIM}It never connects to this server, so the wallet needs no public port.${RESET}"
+    echo -e "  ${DIM}Renewal is unattended on certbot's own timer and also needs no port.${RESET}"
+    echo ""
+    echo -e "  ${YELLOW}This puts a DNS API token on this machine.${RESET} Scope it to the one zone."
+    echo ""
+    echo -e "  ${BOLD}DNS provider:${RESET}"
+    echo -e "  ${GREEN}1${RESET}) Cloudflare"
+    echo -e "  ${GREEN}2${RESET}) DigitalOcean"
+    echo -ne "  Choice [1/2/0 to cancel]: "
+    local pc; read -r pc || true
+    local provider
+    case "$pc" in
+        1) provider="cloudflare" ;;
+        2) provider="digitalocean" ;;
+        *) return ;;
+    esac
+
+    echo ""
+    gwa_dns01_token_help "$provider"
+    echo ""
+
+    local credfile; credfile=$(gwa_dns01_credfile "$provider")
+    if [[ -f "$credfile" ]]; then
+        echo -ne "  Reuse the token already stored in $credfile? [Y/n]: "
+        local reuse; read -r reuse || true
+        if [[ "${reuse,,}" == "n" ]]; then
+            echo -ne "  Paste API token (hidden): "
+            local tok; read -rs tok || true; echo ""
+            [[ -z "$tok" ]] && { warn "Empty token."; pause; return; }
+            gwa_dns01_write_credentials "$provider" "$tok"
+        fi
+    else
+        echo -ne "  Paste API token (hidden): "
+        local tok; read -rs tok || true; echo ""
+        [[ -z "$tok" ]] && { warn "Empty token."; pause; return; }
+        gwa_dns01_write_credentials "$provider" "$tok"
+    fi
+
+    while true; do
+        echo -ne "  Let's Encrypt email [${WW_EMAIL:-}]: "
+        local input; read -r input || true
+        [[ -n "$input" ]] && WW_EMAIL="$input"
+        _ww_validate_email "$WW_EMAIL" || { WW_EMAIL=""; continue; }
+        break
+    done
+
+    echo ""
+    gwa_dns01_install_plugin "$provider" || { pause; return; }
+
+    echo ""
+    gwa_dns01_issue "$provider" "$WW_DOMAIN" "$WW_EMAIL" 30 || { pause; return; }
+
+    # Re-emit the vhost against the new cert, keeping the current bind address.
+    if _ww_rewrite_vhost_keep_cert; then
+        ln -sf "$WW_NGINX_CONF" "$WW_NGINX_LINK" 2>/dev/null || true
+        if nginx -t >/dev/null 2>&1 && systemctl reload nginx; then
+            success "nginx reloaded with the DNS-01 certificate."
+        else
+            warn "nginx -t failed:"; nginx -t 2>&1 | tail -5
+        fi
+    fi
+
+    ww_save_config
+    ww_save_env
+    log "[ww_private_access] dns01 provider=$provider domain=$WW_DOMAIN"
+    echo ""
+    success "Renewal is now unattended and portless. Verify with:"
+    echo -e "  ${DIM}certbot renew --dry-run${RESET}"
+    pause
+}
+
+# ── V5) Switch to VPN-only ───────────────────────────────────────────────────
+_ww_pa_switch() {
+    _ww_pa_header
+    ww_load_config
+
+    gwa_installed || { die "Run option 1 first."; pause; return; }
+    [[ -f "$WW_NGINX_CONF" ]] || { die "No nginx vhost — run step 4 first."; pause; return; }
+
+    local kind; kind=$(_ww_cert_kind)
+    [[ -n "$kind" ]] || { die "No certificate installed — run step 5 or option 4 first."; pause; return; }
+
+    if [[ -n "${WW_BIND_ADDR:-}" ]]; then
+        info "Already private (bound to ${WW_BIND_ADDR})."
+        pause; return
+    fi
+
+    # ── Gate 1: the tunnel must be proven, not merely configured ─────────────
+    # This is the difference between a hardening step and locking yourself out
+    # of your own wallet. A config file is not evidence; a handshake is.
+    if ! gwa_handshake_seen; then
+        error "No WireGuard device has completed a handshake yet."
+        echo ""
+        warn "Switching now would leave the wallet unreachable from everywhere."
+        warn "Add a device (option 2), turn the tunnel ON, load any page, then retry."
+        pause; return
+    fi
+
+    # ── Gate 2: renewal must not depend on the port we are about to abandon ──
+    # An HTTP-01 cert renews by answering on public port 80. After this switch
+    # that answer never arrives — and the failure surfaces ~60 days later as an
+    # expired certificate, with nothing in the moment to connect it to.
+    if [[ "$kind" == "le" ]] && ! gwa_dns01_renewal_uses_dns "$WW_DOMAIN"; then
+        error "The certificate for $WW_DOMAIN renews via HTTP-01."
+        echo ""
+        warn "HTTP-01 needs public port 80, which private mode removes. The cert"
+        warn "would renew fine today and then silently fail in ~60 days."
+        warn "Run option 4 (DNS-01) first — it replaces the renewal method."
+        pause; return
+    fi
+
+    echo -e "  ${BOLD}After this switch:${RESET}"
+    echo -e "    • https://$WW_DOMAIN works ${GREEN}only${RESET} with the tunnel ON"
+    echo -e "    • with the tunnel off the browser just times out — no error page"
+    echo -e "    • the certificate and the padlock are unchanged"
+    echo -e "    • SSH is untouched, and option 6 reverts this"
+    echo ""
+    echo -e "  ${YELLOW}You must also point DNS at the tunnel:${RESET}"
+    echo -e "    ${BOLD}A   $WW_DOMAIN   →   ${GWA_SERVER_IP}${RESET}"
+    echo -e "    ${DIM}On Cloudflare this record MUST be \"DNS only\" (grey cloud). A${RESET}"
+    echo -e "    ${DIM}proxied record sends browsers to Cloudflare's edge, which has no${RESET}"
+    echo -e "    ${DIM}route to a private address.${RESET}"
+    echo ""
+    echo -ne "${BOLD}Switch the wallet to VPN-only? [y/N]: ${RESET}"
+    local c; read -r c || true
+    [[ "${c,,}" != "y" ]] && { info "Cancelled."; pause; return; }
+
+    gwa_enable_nonlocal_bind
+
+    local previous="${WW_BIND_ADDR:-}"
+    WW_BIND_ADDR="$GWA_SERVER_IP"
+    _ww_rewrite_vhost_keep_cert || { die "Could not rewrite the vhost."; WW_BIND_ADDR="$previous"; pause; return; }
+
+    # Automatic rollback: a vhost that fails nginx -t must never be left on
+    # disk, because the next unrelated `systemctl reload nginx` — from any other
+    # toolkit script — would fail on it and take the whole web stack down.
+    if ! nginx -t >/dev/null 2>&1; then
+        error "nginx -t failed — rolling back to the public listener."
+        nginx -t 2>&1 | tail -5
+        WW_BIND_ADDR="$previous"
+        _ww_rewrite_vhost_keep_cert || true
+        nginx -t >/dev/null 2>&1 && systemctl reload nginx 2>/dev/null || true
+        ww_save_config
+        pause; return
+    fi
+
+    systemctl reload nginx || true
+    ww_save_config
+    ww_save_env
+
+    # Rewrite the jails so the WG subnet lands in ignoreip — but only if jails
+    # already exist. Installing fail2ban here uninvited would be a surprising
+    # side effect of a listener change, and _ww_write_f2b_jail would go off and
+    # apt-get it with no prompt.
+    if [[ -f "$WW_F2B_JAIL" ]]; then
+        _ww_write_f2b_jail >/dev/null 2>&1 || true
+        info "fail2ban jails rewritten — ${GWA_SUBNET} is now in ignoreip."
+    fi
+
+    # ── Verify, don't assume ─────────────────────────────────────────────────
+    # `nginx -t` only parses; it never binds. A reload whose new listen socket
+    # fails to bind leaves the master running on the OLD sockets and still
+    # returns 0, so nginx would go on serving the wallet publicly while this
+    # screen claimed it was private. Ask the kernel instead.
+    local bound=1
+    if command -v ss &>/dev/null; then
+        ss -ltn 2>/dev/null | awk -v a="${GWA_SERVER_IP}:443" \
+            '$4 == a { f = 1 } END { exit !f }' || bound=0
+    fi
+    if (( bound )); then
+        success "Wallet is now private: nginx listens on ${GWA_SERVER_IP}:443 only."
+    else
+        error "nginx did NOT bind ${GWA_SERVER_IP}:443 — the wallet may still be public."
+        warn "The config was written and accepted, but the socket did not move."
+        warn "Check: journalctl -u nginx -n 20   and   option 7 (Diagnose)."
+        warn "If ip_nonlocal_bind could not be set (common in LXC), bring wg0 up first."
+    fi
+    log "[ww_private_access] switched to bind=$WW_BIND_ADDR bound=$bound"
+    echo ""
+    echo -e "  ${DIM}Verify from a tunnelled device: https://$WW_DOMAIN${RESET}"
+    echo -e "  ${DIM}Verify from here             : option 7 (Diagnose)${RESET}"
+    pause
+}
+
+# ── V6) Revert to public ─────────────────────────────────────────────────────
+_ww_pa_revert() {
+    _ww_pa_header
+    ww_load_config
+
+    if [[ -z "${WW_BIND_ADDR:-}" ]]; then
+        info "The wallet is already on the public listener."
+        pause; return
+    fi
+
+    warn "This puts the Fidelius login back on the public internet."
+    warn "Basic Auth + fail2ban become the entire perimeter again."
+    echo ""
+    echo -e "  ${DIM}Remember to point $WW_DOMAIN back at this server's public IP.${RESET}"
+    echo -e "  ${DIM}A DNS-01 certificate keeps renewing either way — no cert change needed.${RESET}"
+    echo ""
+    echo -ne "${BOLD}Revert to public HTTPS? [y/N]: ${RESET}"
+    local c; read -r c || true
+    [[ "${c,,}" != "y" ]] && { info "Cancelled."; pause; return; }
+
+    WW_BIND_ADDR=""
+    _ww_rewrite_vhost_keep_cert || { die "Could not rewrite the vhost."; pause; return; }
+    if nginx -t >/dev/null 2>&1 && systemctl reload nginx; then
+        ww_save_config
+        ww_save_env
+        success "Public HTTPS restored."
+        log "[ww_private_access] reverted to public listener"
+    else
+        warn "nginx -t failed:"; nginx -t 2>&1 | tail -5
+    fi
+    pause
+}
+
+# ── V7) Diagnose ─────────────────────────────────────────────────────────────
+_ww_pa_diagnose() {
+    _ww_pa_header
+    ww_load_config
+    echo -e "  ${BOLD}Access diagnosis${RESET}\n"
+
+    # 1. Tunnel
+    if ! gwa_installed; then
+        echo -e "  ${DIM}WireGuard${RESET}      : not configured"
+    else
+        local st="down"; gwa_active && st="up"
+        local en="disabled at boot"; gwa_enabled && en="enabled at boot"
+        echo -e "  ${DIM}WireGuard${RESET}      : $st, $en"
+        if gwa_handshake_seen; then
+            echo -e "  ${DIM}Handshake${RESET}      : ${GREEN}seen${RESET}"
+        else
+            echo -e "  ${DIM}Handshake${RESET}      : ${YELLOW}never${RESET}  (no device has connected)"
+        fi
+        [[ "$en" == "disabled at boot" ]] && \
+            warn "wg-quick@${GWA_IFACE} is not enabled — a reboot would cut off access."
+    fi
+
+    # 2. Listener
+    #
+    # In private mode match the EXACT address. Accepting a wildcard listener as
+    # proof would be a false pass: another vhost on this box may well hold *:443,
+    # and that tells us nothing about whether the wallet is bound where it thinks.
+    # Matched with awk on ss's Local Address:Port column, exactly. A regex built
+    # from the address would need its dots escaped, and `${v//./\.}` does NOT
+    # escape in bash — it silently yields `10.9.0.1` with dots as wildcards.
+    if command -v ss &>/dev/null; then
+        local want listening=1
+        if [[ -n "${WW_BIND_ADDR:-}" ]]; then
+            want="$WW_BIND_ADDR"
+            ss -ltn 2>/dev/null | awk -v a="${WW_BIND_ADDR}:443" \
+                '$4 == a { f = 1 } END { exit !f }' || listening=0
+        else
+            want="all interfaces"
+            ss -ltn 2>/dev/null | awk \
+                '$4 == "*:443" || $4 == "0.0.0.0:443" || $4 == "[::]:443" { f = 1 } END { exit !f }' || listening=0
+        fi
+        if (( listening )); then
+            echo -e "  ${DIM}nginx :443${RESET}     : listening on $want"
+        else
+            echo -e "  ${DIM}nginx :443${RESET}     : ${YELLOW}not listening on $want${RESET}"
+        fi
+    fi
+    echo -e "  ${DIM}nonlocal_bind${RESET}  : $(cat /proc/sys/net/ipv4/ip_nonlocal_bind 2>/dev/null || echo '?')"
+
+    # 3. DNS
+    if [[ -n "$WW_DOMAIN" ]]; then
+        local got; got=$(gwa_resolve "$WW_DOMAIN")
+        if [[ -z "$got" ]]; then
+            echo -e "  ${DIM}DNS${RESET}            : ${YELLOW}no A record resolved${RESET}"
+            warn "If the record exists and points at ${GWA_SERVER_IP}, the resolver is"
+            warn "stripping it — DNS rebinding protection drops private answers on some"
+            warn "routers and ISPs. Workaround: set DNS = ${GWA_SERVER_IP} in the client"
+            warn "config and run a resolver on wg0, or use a resolver that passes them."
+        else
+            echo -e "  ${DIM}DNS${RESET}            : $WW_DOMAIN → $got"
+            if [[ -n "${WW_BIND_ADDR:-}" && "$got" != *"$WW_BIND_ADDR"* ]]; then
+                warn "Expected $WW_BIND_ADDR. Tunnelled devices will not reach the wallet."
+            fi
+        fi
+    fi
+
+    # 4. Certificate
+    local kind; kind=$(_ww_cert_kind)
+    case "$kind" in
+        le) local exp; exp=$(gwa_dns01_cert_expiry "$WW_DOMAIN")
+            if gwa_dns01_renewal_uses_dns "$WW_DOMAIN"; then
+                echo -e "  ${DIM}Certificate${RESET}    : Let's Encrypt, DNS-01, expires ${exp:-?}"
+            else
+                echo -e "  ${DIM}Certificate${RESET}    : Let's Encrypt, ${YELLOW}HTTP-01${RESET}, expires ${exp:-?}"
+                [[ -n "${WW_BIND_ADDR:-}" ]] && \
+                    error "HTTP-01 cannot renew in private mode — run option 4."
+            fi ;;
+        cf) echo -e "  ${DIM}Certificate${RESET}    : Cloudflare Origin (long-lived)" ;;
+        *)  echo -e "  ${DIM}Certificate${RESET}    : ${YELLOW}none${RESET}" ;;
+    esac
+
+    # 5. End-to-end. A 401 is the healthy answer: it means TLS terminated and
+    # Basic Auth challenged, i.e. the whole path works and is still guarded.
+    if [[ -n "$WW_DOMAIN" && -n "$kind" ]] && command -v curl &>/dev/null; then
+        local target="${WW_BIND_ADDR:-127.0.0.1}" code
+        # A Cloudflare Origin cert is signed by Cloudflare's private origin CA,
+        # which is deliberately NOT in any trust store — only CF's edge accepts
+        # it. Verifying here would fail on a perfectly healthy setup and report
+        # it as "no response". This probe tests reachability and auth, not trust.
+        local -a _tls=()
+        [[ "$kind" == "cf" ]] && _tls=( --insecure )
+        code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 "${_tls[@]}" \
+               --resolve "${WW_DOMAIN}:443:${target}" "https://${WW_DOMAIN}/" 2>/dev/null || echo "000")
+        case "$code" in
+            401) echo -e "  ${DIM}End-to-end${RESET}     : ${GREEN}401${RESET} — TLS + Basic Auth are working" ;;
+            000) echo -e "  ${DIM}End-to-end${RESET}     : ${RED}no response${RESET} from ${target}:443" ;;
+            *)   echo -e "  ${DIM}End-to-end${RESET}     : HTTP $code from ${target}:443" ;;
+        esac
+    fi
+
+    # 6. App
+    if systemctl is-active --quiet grin-fidelius 2>/dev/null; then
+        echo -e "  ${DIM}grin-fidelius${RESET}  : running on 127.0.0.1:$WW_NODE_PORT"
+    else
+        echo -e "  ${DIM}grin-fidelius${RESET}  : ${YELLOW}not running${RESET}"
+    fi
+
+    echo ""
+    pause
+}
+
+ww_private_access() {
+    if ! declare -F gwa_installed &>/dev/null; then
+        _ww_pa_header
+        die "scripts/lib/grin_wg_access.sh is missing — re-deploy the toolkit."
+        pause; return
+    fi
+    while true; do
+        _ww_pa_header
+        _ww_pa_status
+        echo -e "${DIM}  ─── Setup (in order) ────────────────────────────${RESET}"
+        echo -e "  ${GREEN}1${RESET}) Install WireGuard        ${DIM}(interface ${GWA_SERVER_IP}, udp/${GWA_PORT})${RESET}"
+        echo -e "  ${GREEN}2${RESET}) Add a device             ${DIM}(prints a QR code to scan)${RESET}"
+        echo -e "  ${GREEN}3${RESET}) Devices                  ${DIM}(list / revoke / re-show QR)${RESET}"
+        echo -e "  ${GREEN}4${RESET}) Certificate via DNS-01   ${DIM}(portless issue + renewal)${RESET}"
+        echo -e "  ${GREEN}5${RESET}) Switch wallet to VPN-only${DIM}  (needs a proven handshake)${RESET}"
+        echo ""
+        echo -e "${DIM}  ─── Maintenance ─────────────────────────────────${RESET}"
+        echo -e "  ${CYAN}6${RESET}) Revert to public HTTPS"
+        echo -e "  ${CYAN}7${RESET}) Diagnose access"
+        echo ""
+        echo -e "  ${RED}0${RESET}) Back"
+        echo ""
+        echo -ne "${BOLD}Select [1-7 / 0]: ${RESET}"
+        local choice; read -r choice || true
+        case "$choice" in
+            1)  _ww_pa_install    || true ;;
+            2)  _ww_pa_add_device || true ;;
+            3)  _ww_pa_devices    || true ;;
+            4)  _ww_pa_dns01      || true ;;
+            5)  _ww_pa_switch     || true ;;
+            6)  _ww_pa_revert     || true ;;
+            7)  _ww_pa_diagnose   || true ;;
+            0)  break ;;
+            "") continue ;;
+            *)  warn "Invalid option."; sleep 1 ;;
+        esac
+    done
 }
 
 # =============================================================================
@@ -1419,12 +2157,15 @@ wallet_menu() {
         echo -e "  ${CYAN}8${RESET}) Status & info"
         echo -e "  ${CYAN}9${RESET}) Edit saved settings       ${DIM}(domain, email, auth user)${RESET}"
         echo ""
+        echo -e "${DIM}  ─── Optional hardening ──────────────────────────${RESET}"
+        echo -e "  ${BOLD}${YELLOW}V${RESET}) Private access            ${DIM}(WireGuard tunnel + DNS-01 cert)${RESET}"
+        echo ""
         echo -e "  ${BOLD}${YELLOW}xp${RESET}${DIM}) Launch XP Wallet (separate script — mainnet only, real GRIN)${RESET}"
         echo ""
         echo -e "  ${DIM}↩  Press Enter to refresh${RESET}"
         echo -e "  ${RED}0${RESET}) Back to main menu"
         echo ""
-        echo -ne "${BOLD}Select [1-9 / xp / 0]: ${RESET}"
+        echo -ne "${BOLD}Select [1-9 / V / xp / 0]: ${RESET}"
         read -r choice || true
 
         case "$choice" in
@@ -1437,6 +2178,7 @@ wallet_menu() {
             7)     ww_configure_firewall|| true ;;
             8)     ww_show_info         || true ;;
             9)     ww_edit_settings     || true ;;
+            v|V)   ww_private_access    || true ;;
             xp|XP) _launch_xp_wallet    || true ;;
             0)     break ;;
             "")    continue ;;

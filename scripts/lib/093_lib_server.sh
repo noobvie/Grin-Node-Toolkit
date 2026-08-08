@@ -114,7 +114,17 @@ trp_install_server() {
 
     info "Copying $TRP_APP_SRC → $TRP_APP_DIR ..."
     mkdir -p "$TRP_APP_DIR"
-    cp "$TRP_APP_SRC/server.js" "$TRP_APP_SRC/package.json" "$TRP_APP_DIR/"
+    # Glob every top-level .js, never an enumerated list: a new server-side
+    # module added to the repo would otherwise be missing on the VPS and die as
+    # a bare MODULE_NOT_FOUND at startup. client/ is deliberately excluded —
+    # agent.js is deployed to the AGENT dir by option 7, not next to the server.
+    cp "$TRP_APP_SRC"/*.js "$TRP_APP_SRC/package.json" "$TRP_APP_DIR/"
+    # Landing page assets: replaced wholesale so a file deleted upstream does
+    # not linger and get served.
+    rm -rf "$TRP_APP_DIR/public"
+    if [[ -d "$TRP_APP_SRC/public" ]]; then
+        cp -r "$TRP_APP_SRC/public" "$TRP_APP_DIR/"
+    fi
     success "Server files copied."
 
     info "Running npm install --omit=dev ..."
@@ -293,7 +303,9 @@ trp_setup_domain() {
     clear
     echo -e "\n${BOLD}${CYAN}── Grin Transporter [$TRP_NET_LABEL] — 3) Domain & SSL ──${RESET}\n"
     echo -e "  ${DIM}Public HTTPS front for the queue (agents on other boxes need this;${RESET}"
-    echo -e "  ${DIM}a same-box round trip can use http://127.0.0.1:$TRP_PORT directly).${RESET}\n"
+    echo -e "  ${DIM}a same-box round trip can use http://127.0.0.1:$TRP_PORT directly).${RESET}"
+    echo -e "  ${DIM}The domain root also serves the landing page: what the depot is, this${RESET}"
+    echo -e "  ${DIM}station's URL and caps, and which wallets can talk to it.${RESET}\n"
 
     local cur_domain domain
     cur_domain=$(_trp_conf_get "domain_${TRP_NETWORK}" "")
@@ -301,6 +313,23 @@ trp_setup_domain() {
     read -r domain || true
     domain="${domain:-$cur_domain}"
     if ! nginx_validate_domain "$domain"; then pause; return; fi
+
+    # Indexing covers the landing page and ONLY the landing page. Everything else
+    # on this vhost is machine-facing (and /queue/<address> would put user
+    # addresses in a search index), so the server-level noindex stays regardless
+    # of this answer. Default yes: a depot senders cannot find is a depot nobody
+    # deposits into. Answer n for a private or testnet station.
+    local cur_idx idx idx_val
+    cur_idx=$(_trp_conf_get "index_${TRP_NETWORK}" "yes")
+    echo ""
+    echo -e "  ${DIM}A public depot is only useful if senders can find it; a private one${RESET}"
+    echo -e "  ${DIM}should stay unlisted. Only the landing page is ever affected —${RESET}"
+    echo -e "  ${DIM}queue, deposit and health URLs stay noindex either way.${RESET}"
+    echo -ne "  Let search engines index the landing page? [Y/n${cur_idx:+, current: $cur_idx}]: "
+    read -r idx || true
+    idx="${idx:-$cur_idx}"
+    if [[ "${idx,,}" == "y" || "${idx,,}" == "yes" ]]; then idx_val="yes"; else idx_val="no"; fi
+    _trp_conf_set "index_${TRP_NETWORK}" "$idx_val"
 
     nginx_install_with_certbot || { pause; return; }
 
@@ -337,6 +366,30 @@ HTTP_CONF
     fi
     success "SSL certificate issued."
 
+    # An indexable landing page needs its OWN exact-match location, because
+    # nginx's add_header replaces the inherited set for a location rather than
+    # adding to it — so the security headers are repeated here, and only the
+    # X-Robots-Tag differs. `location = /` beats the prefix `location /`.
+    local root_block=""
+    if [[ "$idx_val" == "yes" ]]; then
+        root_block=$(cat << ROOTLOC
+    location = / {
+        add_header Strict-Transport-Security "max-age=63072000" always;
+        add_header X-Content-Type-Options    "nosniff" always;
+        add_header X-Robots-Tag              "index, follow" always;
+
+        limit_req zone=transporter_${TRP_NETWORK} burst=20 nodelay;
+        proxy_pass         http://127.0.0.1:${TRP_PORT};
+        proxy_set_header   Host \$host;
+        proxy_set_header   X-Real-IP \$remote_addr;
+        proxy_set_header   X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header   X-Forwarded-Proto \$scheme;
+        proxy_read_timeout 30s;
+    }
+ROOTLOC
+)
+    fi
+
     # Full vhost — cert exists now; include LE snippets only when present.
     local ssl_extra=""
     [[ -f /etc/letsencrypt/options-ssl-nginx.conf ]] && ssl_extra="    include /etc/letsencrypt/options-ssl-nginx.conf;"
@@ -372,12 +425,16 @@ $ssl_extra
     access_log /var/log/nginx/grin-transporter-${TRP_NETWORK}-access.log;
     error_log  /var/log/nginx/grin-transporter-${TRP_NETWORK}-error.log;
 
+$root_block
     location / {
         limit_req zone=transporter_${TRP_NETWORK} burst=20 nodelay;
         proxy_pass         http://127.0.0.1:${TRP_PORT};
         proxy_set_header   Host \$host;
         proxy_set_header   X-Real-IP \$remote_addr;
         proxy_set_header   X-Forwarded-For \$proxy_add_x_forwarded_for;
+        # The landing page prints the URL to paste into a wallet; without this
+        # it cannot tell an HTTPS visitor from a plain-HTTP one.
+        proxy_set_header   X-Forwarded-Proto \$scheme;
         proxy_read_timeout 30s;
     }
 }
@@ -387,6 +444,7 @@ NGINX
         systemctl reload nginx
         _trp_conf_set "domain_${TRP_NETWORK}" "$domain"
         success "Transporter live at https://$domain  (health: https://$domain/health)"
+        info "Landing page: https://$domain/  — search indexing: $idx_val"
     else
         error "nginx test failed on SSL vhost — inspect $nginx_conf"
     fi

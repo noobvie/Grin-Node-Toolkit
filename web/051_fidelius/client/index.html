@@ -4,12 +4,16 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <script src="theme-boot.js"></script>
-  <meta name="description" content="Grin Web Wallet — local wallet manager for the Grin cryptocurrency. Manage wallets, send and receive via Slatepack, monitor node status.">
+  <meta name="description" content="Fidelius — personal Grin wallet manager. Manage wallets, send and receive via Slatepack, Tor and Transporter, monitor node status.">
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
-  <title>Grin Web Wallet</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;700&display=swap">
+  <title>Fidelius — Grin Wallet</title>
+  <!-- NO webfont CDN here on purpose. Fetching Inter / JetBrains Mono from
+       Google told a third party the exact moment the operator opened their
+       wallet, on every single load — on a privacy coin's wallet UI that is a
+       poor trade for two typefaces. --font-ui / --font-mono in style.css already
+       fall back to the platform UI and mono stacks, so nothing looks broken; it
+       also lets the nginx CSP drop its fonts.googleapis / fonts.gstatic
+       allowances entirely. -->
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -30,7 +34,7 @@
       <button id="hamburgerBtn" class="hamburger" aria-label="Menu">&#9776;</button>
       <img src="favicon.svg"              class="header-logo logo-dark logo-breathe"  alt="Grin">
       <img src="grin_darkblue_white.svg"  class="header-logo logo-light logo-breathe" alt="Grin">
-      <span class="header-title">Grin<span class="header-accent"> Web Wallet</span></span>
+      <span class="header-title">Fidelius<span class="header-accent"> Grin Wallet</span></span>
     </div>
     <div class="header-right">
       <span id="portfolioChip" class="portfolio-chip" title="Total mainnet portfolio" style="display:none">&Sigma; <span id="portfolioUsd">—</span></span>
@@ -182,7 +186,7 @@
 
             <div class="panel-footer">
               Keys stay on your machine &mdash;
-              <a href="https://github.com/noobvie/GrinSuite" target="_blank" rel="noopener">GrinSuite</a>
+              <a href="https://github.com/Noobvie/Grin-Node-Toolkit" target="_blank" rel="noopener">Grin Node Toolkit</a>
               &bull; <a href="https://grin.mw" target="_blank" rel="noopener">grin.mw</a>
             </div>
           </div>
@@ -207,7 +211,7 @@
             <form id="sendTorForm" autocomplete="off">
               <div class="field">
                 <label for="sendTorAmount">Amount (∩)</label>
-                <input type="number" id="sendTorAmount" class="input" placeholder="0.000000000" min="0" step="0.0001" required>
+                <input type="number" id="sendTorAmount" class="input" placeholder="0.000000000" min="0.000000001" step="any" required>
               </div>
               <div class="field">
                 <label for="sendTorDest">Recipient Address</label>
@@ -242,7 +246,7 @@
             <form id="sendTspForm" autocomplete="off">
               <div class="field">
                 <label for="sendTspAmount">Amount (&#8745;)</label>
-                <input type="number" id="sendTspAmount" class="input" placeholder="0.000000000" min="0" step="0.0001" required>
+                <input type="number" id="sendTspAmount" class="input" placeholder="0.000000000" min="0.000000001" step="any" required>
               </div>
               <div class="field">
                 <label for="sendTspDest">Recipient Address</label>
@@ -277,7 +281,7 @@
             <form id="sendForm" autocomplete="off">
               <div class="field">
                 <label for="sendAmount">Amount (∩)</label>
-                <input type="number" id="sendAmount" class="input" placeholder="0.000000000" min="0" step="0.0001" required>
+                <input type="number" id="sendAmount" class="input" placeholder="0.000000000" min="0.000000001" step="any" required>
                 <span id="feeEstimate" class="field-hint"></span>
               </div>
               <button type="submit" class="btn btn-primary btn-full mt-8">Generate Slatepack</button>
@@ -542,6 +546,11 @@
                 <div id="initPassField" class="field">
                   <label>Passphrase</label>
                   <input type="password" id="initPass" class="input" placeholder="Leave empty for no encryption" autocomplete="new-password">
+                  <span class="field-hint">An empty passphrase means anyone with access to this server can spend from this wallet.</span>
+                </div>
+                <div id="initPass2Field" class="field">
+                  <label>Confirm Passphrase</label>
+                  <input type="password" id="initPass2" class="input" placeholder="Re-type the passphrase" autocomplete="new-password">
                 </div>
                 <div id="recoverSeedField" class="field" style="display:none">
                   <label>Seed Phrase (24 words, space-separated)</label>

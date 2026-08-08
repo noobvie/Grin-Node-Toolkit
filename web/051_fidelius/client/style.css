@@ -744,10 +744,14 @@ html[data-theme="light"] .logo-breathe {
 .send-method-status.ok      { color: var(--success); }
 .send-method-status.warn    { color: var(--warning); }
 .send-method-status.error   { color: var(--error); }
+/* Greying only. The controls inside are disabled in JS (setPanelEnabled), NOT
+   by pointer-events here: pointer-events:none also kills :hover, which is why
+   this used to carry a `:hover { pointer-events: auto }` escape hatch — and that
+   handed the whole form, Send button included, back to the user. Do not
+   reintroduce pointer-events on this class. */
 .send-method-disabled {
     opacity: 0.55;
     filter: grayscale(35%);
-    pointer-events: none;
     user-select: none;
     position: relative;
 }
@@ -766,7 +770,6 @@ html[data-theme="light"] .logo-breathe {
     opacity: 0;
     transition: opacity 0.15s ease;
 }
-.send-method-disabled:hover { pointer-events: auto; }
 .send-method-disabled:hover::after { opacity: 1; }
 
 /* ── Recent recipients dropdown ──────────────────────────────────────────── */

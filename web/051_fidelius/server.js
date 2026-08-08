@@ -303,6 +303,62 @@ function applyWalletTomlPatches(wallet) {
     log('INFO', 'TOML_PATCHED dir=' + wallet.dir);
 }
 
+// ── Interactive child processes on a pty (recover only) ──────────────────────
+//
+// Everything else in this file feeds grin-wallet on plain STDIN, and that is
+// correct: `init -h`, `listen` and `owner_api` only ever ask for a password, and
+// grin-wallet asks via rpassword 4.x, which reads stdin and takes an explicit
+// non-TTY branch when the input is piped.
+//
+// `init -hr` (recover) is the one exception, and it breaks BOTH of the
+// assumptions the stdin path makes:
+//   1. ORDER — grin-wallet's parse_init_args calls prompt_recovery_phrase()
+//      BEFORE prompt_password_confirm(). The sequence is phrase → pass → pass,
+//      never pass → pass → phrase.
+//   2. CHANNEL — prompt_recovery_phrase uses linefeed's `Interface`, which opens
+//      /dev/tty, not stdin. A plain spawn() under systemd has no controlling
+//      terminal, so that call fails and the command dies before reading a byte.
+// So recover — and only recover — runs under `script`, which allocates a pty.
+// Do not "simplify" this back to a stdin pipe: it cannot work.
+
+function _shQuote(s) { return "'" + String(s).replace(/'/g, "'\\''") + "'"; }
+
+// `script -qfec CMD /dev/null`: -q quiet, -f flush after every write (so the
+// prompt driver below sees prompts as they appear instead of in one lump at
+// exit), -e return the child's exit code, -c the command. CMD is built only from
+// our own constants — the phrase never touches the shell, it goes over stdin.
+function spawnOnPty(bin, args, cwd) {
+    const cmd = [bin, ...args].map(_shQuote).join(' ');
+    return spawn('script', ['-qfec', cmd, '/dev/null'], { cwd, stdio: ['pipe', 'pipe', 'pipe'] });
+}
+
+// Write each `send` once its `expect` pattern shows up in the child's output.
+// A pty ECHOES what we write, so the buffer is cleared after every step —
+// otherwise one prompt's echo could satisfy the next step's pattern.
+// `abort` fails fast on a known-bad state instead of waiting out the timeout.
+function drivePrompts(proc, steps, { timeoutMs = 60000, abort = null } = {}) {
+    return new Promise((resolve, reject) => {
+        let buf = '', i = 0, settled = false;
+        const done = (fn, v) => { if (!settled) { settled = true; clearTimeout(timer); fn(v); } };
+        const timer = setTimeout(() => done(reject,
+            new Error('grin-wallet did not reach the expected prompt in time')), timeoutMs);
+        const onData = (d) => {
+            buf += d.toString();
+            if (abort && abort.test(buf)) return done(reject, new Error('That recovery phrase was rejected by grin-wallet.'));
+            while (i < steps.length && steps[i].expect.test(buf)) {
+                try { proc.stdin.write(steps[i].send); } catch {}
+                buf = '';
+                i++;
+            }
+            if (i >= steps.length) done(resolve, null);
+        };
+        proc.stdout?.on('data', onData);
+        proc.stderr?.on('data', onData);
+        proc.once('error', e => done(reject, e));
+        proc.once('close', () => done(resolve, null));   // exited before every prompt — the close handler reports why
+    });
+}
+
 // ── ECDH Owner API session ─────────────────────────────────────────────────────
 
 // `passwordOverride` lets a caller PROVE a passphrase instead of spending the one already
@@ -468,6 +524,15 @@ function checkConnectRate(ip, wallet) {
     connectAttempts.set(key, arr);
     return { blocked: false };
 }
+// Entries were only ever removed on a SUCCESSFUL attempt, so a run of failures
+// left a key per (ip, wallet) forever. Sweep the expired ones — every timestamp
+// is already useless to checkConnectRate after 60s.
+setInterval(() => {
+    const cutoff = Date.now() - 60_000;
+    for (const [k, arr] of connectAttempts) {
+        if (!arr.some(t => t > cutoff)) connectAttempts.delete(k);
+    }
+}, 300_000).unref();
 function clearConnectRate(ip, wallet) { connectAttempts.delete(ip + '|' + wallet); }
 
 // ── Server-side idle backstop ────────────────────────────────────────────────
@@ -534,14 +599,38 @@ app.get('/api/setup/binary-status', (_req, res) => {
     res.json({ installed, version, binaryPath: BINARY_PATH });
 });
 
+// PINNED, not "latest" — and the pin is load-bearing, not caution.
+//
+// Every passphrase in this product goes to grin-wallet over stdin, which works
+// only because 5.4.x pins rpassword 4.x (reads stdin, explicit non-TTY branch).
+// rpassword 7 reads /dev/tty instead. A release that takes that bump breaks
+// `init`, `listen` and `owner_api` at once — every wallet in the deployment
+// stops unlocking, with no local change to blame it on. Chasing `latest` meant
+// an upstream tag could do that unattended.
+//
+// v5.4.1 (2026-06-12) is also the current latest, so this changes nothing today;
+// it just stops a FUTURE release from landing without a human. To move the pin:
+// check that grin-wallet's Cargo.toml still has rpassword 4.x, bump this, test
+// an unlock, then commit.
+const GRIN_WALLET_PIN = 'v5.4.1';
+
 app.post('/api/setup/install-binary', async (req, res) => {
     const send = sseHeaders(res);
+    const useLatest = req.body && req.body.latest === true;
     try {
-        send({ stage: 'checking', msg: 'Querying GitHub for latest release...' });
-        const gh    = JSON.parse(await httpsGet('https://api.github.com/repos/mimblewimble/grin-wallet/releases/latest'));
+        const relUrl = useLatest
+            ? 'https://api.github.com/repos/mimblewimble/grin-wallet/releases/latest'
+            : 'https://api.github.com/repos/mimblewimble/grin-wallet/releases/tags/' + GRIN_WALLET_PIN;
+        send({ stage: 'checking', msg: useLatest
+            ? 'Querying GitHub for the latest release...'
+            : 'Fetching pinned release ' + GRIN_WALLET_PIN + '...' });
+        const gh    = JSON.parse(await httpsGet(relUrl));
         const asset = (gh.assets || []).find(a => /linux-x86_64.*\.tar\.gz$/i.test(a.name));
-        if (!asset) throw new Error('No linux-x86_64 tar.gz in latest release');
+        if (!asset) throw new Error('No linux-x86_64 tar.gz in release ' + (gh.tag_name || relUrl));
         const version = gh.tag_name || 'unknown';
+        if (useLatest && version !== GRIN_WALLET_PIN)
+            send({ stage: 'warn', msg: 'Installing ' + version + ', which is NOT the tested pin (' + GRIN_WALLET_PIN
+                                     + '). If unlocking stops working, reinstall the pinned build.' });
 
         fs.mkdirSync(WEBWALLET_ROOT, { recursive: true });
         const tempTar = path.join(os.tmpdir(), 'grin-wallet-' + Date.now() + '.tar.gz');
@@ -856,17 +945,35 @@ app.post('/api/wallet/:name/init', (req, res) => {
         }
         const sess = ensureSession(wallet.name);
         sess.passphrase = passphrase;
+        seed = seed.trim();
+        // The seed is scraped out of grin-wallet's stdout, so a wording change
+        // upstream can silently produce nothing. That must NOT read as success:
+        // the wallet is real and fundable, and the operator would never learn
+        // they hold no backup. Say so explicitly and let the UI hard-stop.
+        const wordCount = seed ? seed.split(/\s+/).length : 0;
+        const seedOk = wordCount >= 12;
+        if (!seedOk) log('ERROR', 'SEED_PARSE_FAIL wallet=' + wallet.name + ' words=' + wordCount
+                                + ' — operator must use Reveal Seed before funding this wallet');
         log('INFO', 'WALLET_INIT wallet=' + wallet.name);
-        res.json({ ok: true, seed: seed.trim() });
+        res.json({ ok: true, seed: seedOk ? seed : '', seedUnavailable: !seedOk });
     });
     proc.on('error', e => apiErr(res, e.message));
 });
 
-app.post('/api/wallet/:name/recover', (req, res) => {
+app.post('/api/wallet/:name/recover', async (req, res) => {
     const wallet = findWallet(req.params.name);
     if (!wallet) return apiErr(res, 'Wallet not found', 404);
-    const { passphrase = '', seedPhrase } = req.body;
-    if (!seedPhrase) return apiErr(res, 'seedPhrase required');
+    const { passphrase = '' } = req.body;
+    const phrase = String(req.body.seedPhrase || '').trim().toLowerCase().replace(/\s+/g, ' ');
+    if (!phrase) return apiErr(res, 'seedPhrase required');
+
+    // Validate here rather than letting grin-wallet reject it on the pty: a bad
+    // phrase there is a re-prompt loop we would only escape by timing out, and
+    // "12/24 lowercase words" is a cheap, exact check.
+    const words = phrase.split(' ');
+    if (![12, 15, 18, 21, 24].includes(words.length) || !words.every(w => /^[a-z]{3,8}$/.test(w)))
+        return apiErr(res, 'Recovery phrase must be 12, 15, 18, 21 or 24 lowercase words.');
+
     const bin = getBinaryPath();
     if (!fs.existsSync(bin)) return apiErr(res, 'Binary not installed', 503);
 
@@ -874,21 +981,66 @@ app.post('/api/wallet/:name/recover', (req, res) => {
     if (fs.existsSync(tomlPath)) fs.renameSync(tomlPath, tomlPath + '.bak.' + Date.now());
 
     const args = [...(wallet.network === 'testnet' ? ['--testnet'] : []), 'init', '-hr'];
-    const proc = spawn(bin, args, { cwd: wallet.dir, stdio: ['pipe', 'pipe', 'pipe'] });
+    let proc;
+    try {
+        proc = spawnOnPty(bin, args, wallet.dir);
+    } catch (e) {
+        return apiErr(res, 'Could not start the recovery helper: ' + e.message, 500);
+    }
+
     let out = '';
     proc.stdout?.on('data', d => { out += d; });
     proc.stderr?.on('data', d => { out += d; });
-    try { proc.stdin.write(passphrase + '\n' + passphrase + '\n' + seedPhrase + '\n'); proc.stdin.end(); } catch {}
-    proc.on('close', code => {
-        if (code !== 0) return apiErr(res, 'recover failed (code ' + code + '): ' + out.slice(0, 400));
-        try { applyWalletTomlPatches(wallet); } catch (pe) { log('WARN', 'TOML_PATCH_FAIL ' + pe.message); }
-        const sess = ensureSession(wallet.name);
-        sess.passphrase = passphrase;
-        log('INFO', 'WALLET_RECOVER wallet=' + wallet.name);
-        res.json({ ok: true });
+
+    const exited = new Promise(resolve => {
+        proc.once('close', code => resolve(code));
+        // ENOENT here means util-linux `script` is missing — say so, don't leak
+        // "spawn script ENOENT" to an operator who has never heard of it.
+        proc.once('error', e => resolve(e.code === 'ENOENT' ? 'NOSCRIPT' : -1));
     });
-    proc.on('error', e => apiErr(res, e.message));
+
+    // phrase FIRST, then the new password twice. "Please provide a new password
+    // for the recovered wallet" has no colon, so it cannot satisfy step 2.
+    try {
+        await drivePrompts(proc, [
+            { expect: /phrase>|recovery phrase/i, send: phrase + '\n' },
+            { expect: /password\s*:/i,            send: passphrase + '\n' },
+            { expect: /confirm/i,                 send: passphrase + '\n' },
+        ], { abort: /invalid|not a valid/i });
+    } catch (e) {
+        try { proc.kill(); } catch {}
+        await exited;
+        return apiErr(res, e.message + (out ? ' — ' + _cleanOut(out).slice(0, 300) : ''));
+    }
+
+    const code = await exited;
+    if (code === 'NOSCRIPT')
+        return apiErr(res, 'Recovery needs the `script` command (util-linux), which is not installed on this host. '
+                         + 'Install it (apt install bsdutils / dnf install util-linux) and try again.', 503);
+    if (code !== 0)
+        return apiErr(res, 'recover failed (code ' + code + '): ' + _cleanOut(out).slice(0, 400));
+    if (!fs.existsSync(path.join(wallet.dir, 'wallet_data', 'wallet.seed')))
+        return apiErr(res, 'grin-wallet exited cleanly but wrote no seed file: ' + _cleanOut(out).slice(0, 400));
+
+    try { applyWalletTomlPatches(wallet); } catch (pe) { log('WARN', 'TOML_PATCH_FAIL ' + pe.message); }
+    const sess = ensureSession(wallet.name);
+    sess.passphrase = passphrase;
+    log('INFO', 'WALLET_RECOVER wallet=' + wallet.name);
+    res.json({ ok: true });
 });
+
+// A pty echoes input and grin-wallet colours its output, so raw capture contains
+// the recovery phrase and ANSI escapes. Strip both before anything is returned to
+// a browser or written to the log.
+function _cleanOut(s) {
+    return String(s)
+        .replace(/\x1b\[[0-9;]*[A-Za-z]/g, '')
+        .split(/\r?\n/)
+        .filter(l => !/^(phrase>|[a-z]{3,8}( [a-z]{3,8}){5,})/i.test(l.trim()))
+        .join(' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
 
 // ── Node status ───────────────────────────────────────────────────────────────
 
@@ -1337,10 +1489,22 @@ app.post('/api/wallet/:name/send', async (req, res) => {
             return res.json({ ok: true, method: 'tor', txId, amount, dest });
         }
 
+        // Lock the inputs NOW, exactly as `grin-wallet send` does. Deferring the
+        // lock to /finalize left the send with no tx-log entry at all until the
+        // recipient answered: it was invisible in History, could not be
+        // cancelled, and — the real damage — its inputs stayed selectable, so a
+        // second send picked the same coins and produced two slatepacks that
+        // conflict on chain. Whoever finalizes second loses.
+        // The cost is that an unanswered slatepack reserves funds until it is
+        // cancelled; that is what the Recover button on the Wallet tab is for,
+        // and it is the same trade the Transporter path already makes.
+        await encryptedOwnerCall(headers, sharedKey, ownerUrl, 'tx_lock_outputs',
+            { token, slate, participant_id: 0 });
+
         const slatepack = await encryptedOwnerCall(headers, sharedKey, ownerUrl, 'create_slatepack_message',
             { token, sender_index: null, recipients: [], slate });
-        log('INFO', 'SEND_INIT wallet=' + wallet.name + ' amount=' + amount);
-        res.json({ slatepack });
+        log('INFO', 'SEND_INIT wallet=' + wallet.name + ' amount=' + amount + ' tx=' + (slate?.id || '?'));
+        res.json({ slatepack, txSlateId: slate?.id || null, locked: true });
     } catch (e) {
         const msg = e.message || String(e);
         const code = /tor|socks|connection refused/i.test(msg) ? 502 : 503;
@@ -1387,12 +1551,33 @@ app.post('/api/wallet/:name/finalize', async (req, res) => {
         const { headers, sharedKey, ownerUrl, token } = await ownerApiSession(wallet);
         const slate = await encryptedOwnerCall(headers, sharedKey, ownerUrl, 'slate_from_slatepack_message',
             { token, secret_indices: [0], message: slatepack });
-        await encryptedOwnerCall(headers, sharedKey, ownerUrl, 'tx_lock_outputs', { token, slate, participant_id: 0 });
+        // /send now locks at send time, so this is normally a no-op. Kept, and
+        // tolerant, for slates created before that change and for a crash
+        // between init_send_tx and the lock.
+        try { await encryptedOwnerCall(headers, sharedKey, ownerUrl, 'tx_lock_outputs', { token, slate, participant_id: 0 }); }
+        catch (le) { log('INFO', 'FINALIZE_LOCK_SKIPPED ' + le.message); }
+
         const finalSlate = await encryptedOwnerCall(headers, sharedKey, ownerUrl, 'finalize_tx', { token, slate });
-        try { await encryptedOwnerCall(headers, sharedKey, ownerUrl, 'post_tx', { token, slate: finalSlate, fluff: true }); }
-        catch (pe) { log('WARN', 'BROADCAST_FAIL ' + pe.message); }
-        log('INFO', 'FINALIZE_OK wallet=' + wallet.name);
-        res.json({ ok: true, tx_id: finalSlate?.id || null });
+
+        // A failed broadcast used to be logged and then reported as a plain
+        // success, so the UI said "FINALIZED AND BROADCAST" for a transaction
+        // that never reached the network and would never confirm. The signing
+        // did succeed, so this is recoverable — hand back the armored final
+        // slate and let the client retry through /post-tx.
+        let broadcast = true, broadcastError = null, finalSlatepack = null;
+        try {
+            await encryptedOwnerCall(headers, sharedKey, ownerUrl, 'post_tx', { token, slate: finalSlate, fluff: true });
+        } catch (pe) {
+            broadcast = false;
+            broadcastError = pe.message;
+            log('WARN', 'BROADCAST_FAIL wallet=' + wallet.name + ' ' + pe.message);
+            try {
+                finalSlatepack = await encryptedOwnerCall(headers, sharedKey, ownerUrl, 'create_slatepack_message',
+                    { token, sender_index: null, recipients: [], slate: finalSlate });
+            } catch (se) { log('WARN', 'FINALIZE_REARMOR_FAIL ' + se.message); }
+        }
+        log('INFO', 'FINALIZE_OK wallet=' + wallet.name + ' broadcast=' + broadcast);
+        res.json({ ok: true, tx_id: finalSlate?.id || null, broadcast, broadcastError, finalSlatepack });
     } catch (e) { apiErr(res, e.message, 503); }
 });
 
@@ -2047,19 +2232,36 @@ app.post('/api/wallet/import', (req, res) => {
         let fp = baseFp; while (usedFp.includes(fp)) fp++;
         let op = baseOp; while (usedOp.includes(op)) op++;
 
-        const tomlPath = path.join(destDir, 'grin-wallet.toml');
-        if (fs.existsSync(tomlPath)) {
-            let c = fs.readFileSync(tomlPath, 'utf8');
-            c = patchTomlKey(c, 'api_listen_port',      String(fp));
-            c = patchTomlKey(c, 'owner_api_listen_port', String(op));
-            fs.writeFileSync(tomlPath, c, 'utf8');
+        // The toml in a backup describes the machine it came FROM: its node URL,
+        // and a node_api_secret_path that almost certainly does not exist here.
+        // Patching only the ports left the wallet talking to a stranger's node
+        // (or 403-ing on a missing secret) while /api/wallets cheerfully
+        // reported the local default — the UI and the wallet disagreed about
+        // something that decides where funds are broadcast. Re-point the whole
+        // node block at this host and record it in the registry so both agree.
+        const nodeUrl = network === 'testnet' ? 'http://127.0.0.1:13413' : 'http://127.0.0.1:3413';
+        const imported = { name, dir: destDir, network, foreignPort: fp, ownerPort: op, nodeUrl };
+        if (fs.existsSync(path.join(destDir, 'grin-wallet.toml'))) {
+            try { applyWalletTomlPatches(imported); }
+            catch (pe) { log('WARN', 'IMPORT_TOML_PATCH_FAIL ' + pe.message); }
         }
 
-        reg.wallets = wallets.concat([{ name, dir: destDir, network, foreignPort: fp, ownerPort: op }]);
+        // The backup carries the seed and the API secrets, never the wallet_data
+        // database — those files are derived and are rebuilt by a scan. Restore
+        // the private ones at 600 regardless of the umask the writes above used.
+        for (const f of ['.foreign_api_secret', '.owner_api_secret']) {
+            try { fs.chmodSync(path.join(destDir, f), 0o600); } catch {}
+        }
+        try { fs.chmodSync(path.join(destDir, 'wallet_data', 'wallet.seed'), 0o600); } catch {}
+
+        reg.wallets = wallets.concat([imported]);
         saveRegistry(reg);
 
         log('INFO', 'WALLET_IMPORTED name=' + name + ' net=' + network + ' dir=' + destDir + ' fp=' + fp + ' op=' + op);
-        res.json({ ok: true, name, network, dir: destDir, foreignPort: fp, ownerPort: op });
+        // needsScan: a restored wallet has a seed but no output database, so it
+        // reports a zero balance until it is scanned. Without saying so, a
+        // correct restore looks exactly like a lost one.
+        res.json({ ok: true, name, network, dir: destDir, foreignPort: fp, ownerPort: op, nodeUrl, needsScan: true });
     } catch (e) {
         try { fs.rmSync(destDir, { recursive: true, force: true }); } catch {}
         log('ERROR', 'WALLET_IMPORT_FAIL ' + e.message);

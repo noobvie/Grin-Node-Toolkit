@@ -62,8 +62,22 @@ BOLD='\033[1m'
 DIM='\033[2m'
 RESET='\033[0m'
 
-# GitHub API for grin-wallet releases
-_WW_GITHUB_API="https://api.github.com/repos/mimblewimble/grin-wallet/releases/latest"
+# GitHub API for grin-wallet releases.
+#
+# PINNED, and the pin is load-bearing. Every passphrase in this product reaches
+# grin-wallet over stdin, which works only because 5.4.x pins rpassword 4.x
+# (reads stdin, with an explicit non-TTY branch). rpassword 7 reads /dev/tty
+# instead — a release taking that bump breaks init, listen and owner_api at once,
+# so every wallet stops unlocking with no local change to blame. Following
+# `latest` let an upstream tag do that unattended.
+#
+# v5.4.1 is ALSO the current latest, so this changes nothing today; it just stops
+# a future release landing without a human. Keep in sync with GRIN_WALLET_PIN in
+# web/051_fidelius/server.js. To move it: confirm grin-wallet's Cargo.toml still
+# has rpassword 4.x, bump both, test an unlock, commit.
+_WW_PIN_TAG="v5.4.1"
+_WW_GITHUB_API="https://api.github.com/repos/mimblewimble/grin-wallet/releases/tags/${_WW_PIN_TAG}"
+_WW_GITHUB_API_LATEST="https://api.github.com/repos/mimblewimble/grin-wallet/releases/latest"
 
 # ─── Logging ──────────────────────────────────────────────────────────────────
 LOG_DIR="/opt/grin/logs"
@@ -115,7 +129,15 @@ WW_SYSTEMD_UNIT="/etc/systemd/system/grin-fidelius.service"
 WW_NGINX_CONF="/etc/nginx/sites-available/grin-fidelius"
 WW_NGINX_LINK="/etc/nginx/sites-enabled/grin-fidelius"
 WW_HTPASSWD="/etc/nginx/grin-fidelius.htpasswd"
-WW_RATELIMIT_CONF="/etc/nginx/conf.d/grin-fidelius-ratelimit.conf"
+# CLAUDE.md convention: script-specific rate-limit conf files carry a script##-
+# prefix. Safe to rename now only because Fidelius has never been VPS-deployed —
+# renaming a live one would leave the OLD file defining the same zones, and two
+# limit_req_zone lines with one name in the http context is a fatal nginx error.
+# _WW_RATELIMIT_CONF_OLD is deleted before the new one is written for exactly
+# that reason; drop it once no install predates this change.
+WW_RATELIMIT_BASENAME="script051-fidelius-ratelimit"
+WW_RATELIMIT_CONF="/etc/nginx/conf.d/${WW_RATELIMIT_BASENAME}.conf"
+_WW_RATELIMIT_CONF_OLD="/etc/nginx/conf.d/grin-fidelius-ratelimit.conf"
 WW_RATELIMIT_ZONE="grin_fidelius"
 # Service log lives with every other toolkit daemon log, NOT in /var/log — that
 # keeps one directory to back up, to clean and to look in, and lets the unit drop
@@ -195,6 +217,7 @@ ww_load_config() {
     WW_DOMAIN=""
     WW_EMAIL=""
     WW_AUTH_USER="grin"
+    WW_IDLE_LOCK_MINUTES="60"
     if [[ -f "$WW_CONF_FILE" ]]; then
         # shellcheck disable=SC1090
         source "$WW_CONF_FILE" 2>/dev/null || true
@@ -207,6 +230,7 @@ ww_save_config() {
 WW_DOMAIN="${WW_DOMAIN:-}"
 WW_EMAIL="${WW_EMAIL:-}"
 WW_AUTH_USER="${WW_AUTH_USER:-grin}"
+WW_IDLE_LOCK_MINUTES="${WW_IDLE_LOCK_MINUTES:-60}"
 CONF
     chmod 600 "$WW_CONF_FILE"
 }
@@ -230,6 +254,8 @@ WW_PUBLIC_ORIGIN=$origin
 # tab was CLOSED, which leaves the passphrase in server.js memory with nothing
 # left to expire it. Zeroes the passphrase only; listeners keep running so
 # inbound receiving survives. Keep it longer than the in-app setting.
+# Edit it via menu option 9, NOT here: this file is regenerated from
+# config.conf by steps 4, 5 and 9, so a hand-edit here is silently reverted.
 WW_IDLE_LOCK_MINUTES=${WW_IDLE_LOCK_MINUTES:-60}
 ENV
     chmod 600 "$WW_ENV_FILE"
@@ -341,10 +367,20 @@ ww_install_binary() {
             warn "jq not installed — run step 2 first (or 'apt install jq')."
             pause; return
         fi
-        info "Fetching latest release from GitHub..."
+        info "Fetching pinned release $_WW_PIN_TAG from GitHub..."
         local release_json
         release_json=$(curl -fsSL --max-time 30 "$_WW_GITHUB_API") \
             || { error "Failed to reach GitHub API."; pause; return; }
+
+        # Tell the operator when upstream has moved on, without moving for them.
+        local latest_tag=""
+        latest_tag=$(curl -fsSL --max-time 15 "$_WW_GITHUB_API_LATEST" 2>/dev/null \
+                     | jq -r '.tag_name // empty' 2>/dev/null || true)
+        if [[ -n "$latest_tag" && "$latest_tag" != "$_WW_PIN_TAG" ]]; then
+            warn "Upstream latest is $latest_tag; installing the pinned $_WW_PIN_TAG."
+            warn "Fidelius feeds passphrases on stdin — verify a newer grin-wallet still"
+            warn "uses rpassword 4.x before moving the pin, or every unlock will break."
+        fi
 
         local version download_url
         version=$(echo "$release_json" | jq -r '.tag_name')
@@ -487,6 +523,19 @@ ww_install_deps() {
         local cmd="${pkg_cmd%%:*}"
         command -v "$cmd" &>/dev/null && success "$cmd  OK" || warn "$cmd  MISSING — install manually"
     done
+
+    # `script` (util-linux) is what gives "Recover from seed" a pty. grin-wallet
+    # asks for a recovery phrase through linefeed, which opens /dev/tty rather
+    # than reading stdin, so without a pty that flow cannot run at all. It ships
+    # in an essential package on every supported distro (bsdutils on Debian and
+    # Ubuntu, util-linux on Rocky and Alma), so this is a check, not an install —
+    # if it is genuinely absent, something is unusual about the host.
+    if command -v script &>/dev/null; then
+        success "script  OK  (needed for wallet recovery)"
+    else
+        warn "script  MISSING — 'Recover from seed' will not work."
+        warn "  Debian/Ubuntu: apt install bsdutils   ·   Rocky/Alma: dnf install util-linux"
+    fi
     log "[ww_install_deps]"
     pause
 }
@@ -693,8 +742,15 @@ ww_configure_nginx() {
     [[ "${confirm,,}" == "n" ]] && info "Cancelled." && return
 
     # ── Rate-limit zones ──────────────────────────────────────────────────────
+    # Remove the pre-rename file FIRST. The helper skips writing if any of these
+    # zones is already defined anywhere under /etc/nginx, so leaving the old file
+    # would silently pin the config to the old path forever.
+    if [[ -f "$_WW_RATELIMIT_CONF_OLD" ]]; then
+        rm -f "$_WW_RATELIMIT_CONF_OLD"
+        info "Removed superseded $_WW_RATELIMIT_CONF_OLD (renamed to $WW_RATELIMIT_BASENAME.conf)."
+    fi
     if declare -F nginx_ensure_rate_limit_zones &>/dev/null; then
-        nginx_ensure_rate_limit_zones "grin-fidelius-ratelimit" \
+        nginx_ensure_rate_limit_zones "$WW_RATELIMIT_BASENAME" \
             "${WW_RATELIMIT_ZONE}_send:3r/m"   \
             "${WW_RATELIMIT_ZONE}_api:10r/m"   \
             "${WW_RATELIMIT_ZONE}_http:20r/m"
@@ -741,8 +797,27 @@ _ww_write_https_vhost() {
     # $3 = key path
     # $4 = extra ssl block lines (e.g. include /etc/letsencrypt/options-ssl-nginx.conf;)
     local kind="$1" cert="$2" key="$3" extra="${4:-}"
+
+    # `listen ... ssl http2` is deprecated from nginx 1.25.1 (warns on every
+    # reload) and `http2 on;` does not exist before it (hard config error). So
+    # pick the form this host's nginx actually understands rather than emitting
+    # one that is wrong on half the fleet.
+    local listen_443="listen 443 ssl http2;
+    listen [::]:443 ssl http2;"
+    local nginx_ver
+    nginx_ver=$(nginx -v 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)
+    if [[ -n "$nginx_ver" ]]; then
+        local _maj _min _pat
+        IFS=. read -r _maj _min _pat <<< "$nginx_ver"
+        if (( _maj > 1 || (_maj == 1 && _min > 25) || (_maj == 1 && _min == 25 && _pat >= 1) )); then
+            listen_443="listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;"
+        fi
+    fi
+
     cat > "$WW_NGINX_CONF" << NGINX_HTTPS
-# Grin Web Wallet — generated by 051_grin_fidelius.sh ($kind)
+# Fidelius Grin wallet — generated by 051_grin_fidelius.sh ($kind)
 server {
     listen 80;
     listen [::]:80;
@@ -751,8 +826,7 @@ server {
 }
 
 server {
-    listen 443 ssl http2;
-    listen [::]:443 ssl http2;
+    $listen_443
     server_name $WW_DOMAIN;
 
     ssl_certificate     $cert;
@@ -776,7 +850,11 @@ $extra
     # Do NOT re-add it — check client/ for inline handlers instead.
     # style-src keeps 'unsafe-inline' (the UI uses style="" attributes); a CSS
     # injection cannot execute script, so the risk is not comparable.
-    add_header Content-Security-Policy   "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self';" always;
+    # No fonts.googleapis / fonts.gstatic allowance: the client no longer loads a
+    # webfont CDN (it leaked "operator opened their wallet" to a third party on
+    # every load), so this policy is now entirely first-party. If you re-add a
+    # CDN font you must widen style-src AND font-src again — don't, self-host it.
+    add_header Content-Security-Policy   "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; connect-src 'self';" always;
     add_header Permissions-Policy        "geolocation=(), microphone=(), camera=()" always;
     add_header X-XSS-Protection          "0" always;
 
@@ -1280,6 +1358,19 @@ ww_edit_settings() {
     read -r v || true
     if [[ -n "$v" ]]; then
         _ww_validate_email "$v" && WW_EMAIL="$v" || info "Email unchanged."
+    fi
+
+    echo ""
+    echo -e "  ${DIM}Server-side idle backstop: zeroes an unlocked wallet's passphrase in${RESET}"
+    echo -e "  ${DIM}server.js memory after N minutes with no deliberate action. 0 disables.${RESET}"
+    echo -ne "Idle lock (minutes) [${WW_IDLE_LOCK_MINUTES:-60}]: "
+    read -r v || true
+    if [[ -n "$v" ]]; then
+        if [[ "$v" =~ ^[0-9]+$ ]] && (( v <= 10080 )); then
+            WW_IDLE_LOCK_MINUTES="$v"
+        else
+            info "Idle lock unchanged (whole minutes, 0-10080)."
+        fi
     fi
 
     ww_save_config

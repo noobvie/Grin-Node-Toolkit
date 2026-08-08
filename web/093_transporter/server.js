@@ -8,6 +8,7 @@
  * an HTTP service (NOT email/SMTP): "a queue you PUT to and GET from."
  *
  * Endpoints:
+ *   GET    /                        public — landing page (public/index.html)
  *   GET    /health                  public — redacted counters only
  *   GET    /auth/challenge?addr=    public — one-time nonce for the address
  *   POST   /auth                    {addr, nonce, signature} → bearer token
@@ -96,7 +97,7 @@ const path    = require('path');
 const express = require('express');
 const { DatabaseSync: Database } = require('node:sqlite');
 
-const VERSION = '0.2.1';
+const VERSION = '0.3.0';   // 0.3.0 adds the public landing page at GET /
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
@@ -411,6 +412,105 @@ function validSlatepackBody(body) {
 
 function truncAddr(addr) { return addr.slice(0, 12) + '…' + addr.slice(-4); }
 
+// ── Landing page ──────────────────────────────────────────────────────────────
+//
+// A depot with a bare 404 on `/` is indistinguishable from a broken one, and the
+// station URL is something a human has to read off a screen and paste into a
+// wallet. So `/` serves one static page, rendered from public/index.html with
+// this instance's live settings substituted in.
+//
+// Deliberately NOT express.static: exactly one file is public, it needs
+// substitution, and a static root is one misplaced file away from serving
+// config.json. The page ships with no JavaScript and no external requests, so
+// the CSP below can be `default-src 'none'`.
+
+const PAGE_PATH = path.join(__dirname, 'public', 'index.html');
+let pageTemplate = null;
+try {
+  pageTemplate = fs.readFileSync(PAGE_PATH, 'utf8');
+} catch (e) {
+  // Not fatal — an upgrade from 0.2.x has no public/ dir until the deployer
+  // re-copies the app. The queue API is what matters; `/` just stays a 404.
+  logLine('WARN', `No landing page at ${PAGE_PATH}: ${e.message}`);
+}
+
+const HTML_ESC = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+function esc(s) { return String(s).replace(/[&<>"']/g, c => HTML_ESC[c]); }
+
+/** "16 KB" / "1 MB" / "900 B" — the cap as an operator wrote it, not raw bytes. */
+function fmtBytes(n) {
+  if (n >= 1048576 && n % 1048576 === 0) return `${n / 1048576} MB`;
+  if (n >= 1024 && n % 1024 === 0)       return `${n / 1024} KB`;
+  return `${n} B`;
+}
+
+/** TTL in the unit a human thinks in: whole days when it divides, else hours. */
+function fmtTtl(hours) {
+  if (hours % 24 === 0) {
+    const d = hours / 24;
+    return `${d} ${d === 1 ? 'day' : 'days'}`;
+  }
+  return `${hours} ${hours === 1 ? 'hour' : 'hours'}`;
+}
+
+/**
+ * The URL a visitor should paste into a wallet — derived from how THEY reached
+ * us, so the onion front advertises the onion and the nginx front the domain.
+ *
+ * Host is attacker-controlled, so it is validated against a strict hostname
+ * grammar and HTML-escaped before it goes anywhere near the page. A request
+ * that fails validation gets the loopback URL: wrong-but-harmless beats
+ * reflecting junk that someone might paste into a wallet.
+ *
+ * X-Forwarded-Proto is honoured on the nginx front ONLY, for the same reason
+ * X-Forwarded-For is (see clientKey) — an onion client writes its own headers.
+ */
+const HOST_RE = /^[a-z0-9.-]{1,250}(:\d{1,5})?$/i;
+function stationUrl(req) {
+  const host = String(req.get('host') || '').trim();
+  if (!HOST_RE.test(host)) return `http://127.0.0.1:${cfg.port}`;
+  let scheme;
+  if (!isTorFront(req) && req.get('x-forwarded-proto')) {
+    scheme = req.get('x-forwarded-proto').split(',')[0].trim() === 'http' ? 'http' : 'https';
+  } else {
+    const name = host.split(':')[0].toLowerCase();
+    // An onion is reached over HTTP inside the tunnel; so is a loopback test.
+    scheme = (name.endsWith('.onion') || name === 'localhost' || /^127\./.test(name)) ? 'http' : 'https';
+  }
+  return `${scheme}://${host}`;
+}
+
+// COUNT(*) is cheap but `/` is the one unauthenticated page a crawler will hit
+// in a loop — memoise it so a page view is not a DB read.
+let pageCount = { n: 0, until: 0 };
+function queuedNow() {
+  if (Date.now() >= pageCount.until) {
+    pageCount = { n: db.prepare('SELECT COUNT(*) AS n FROM slates').get().n, until: Date.now() + 30000 };
+  }
+  return pageCount.n;
+}
+
+/** Render the landing page for this request (helpers above; route below). */
+function renderPage(req) {
+  const full = queuedNow() >= cfg.max_queue_total;
+  const vals = {
+    STATION_URL:   esc(stationUrl(req)),
+    NETWORK:       cfg.network === 'mainnet' ? 'Mainnet' : 'Testnet',
+    NETWORK_LOWER: cfg.network,
+    HRP:           HRP,
+    COIN:          cfg.network === 'mainnet' ? 'Grin' : 'test Grin',
+    STATUS_TEXT:   full ? 'Store at capacity' : 'Accepting deposits',
+    STATUS_CLASS:  full ? 'full' : '',
+    TTL_HOURS:     String(cfg.ttl_hours),
+    TTL_DAYS:      fmtTtl(cfg.ttl_hours),
+    MAX_SLATE:     fmtBytes(cfg.max_slate_bytes),
+    QUEUE_DEPTH:   String(cfg.max_queue_per_addr),
+    VERSION:       VERSION,
+  };
+  return pageTemplate.replace(/\{\{([A-Z_]+)\}\}/g,
+    (m, k) => (Object.prototype.hasOwnProperty.call(vals, k) ? vals[k] : m));
+}
+
 // ── Express app ───────────────────────────────────────────────────────────────
 
 const app = express();
@@ -481,6 +581,21 @@ function auditAuth(addr, client, result) {
   db.prepare('INSERT INTO auth_events (ts, addr, client, result) VALUES (?, ?, ?, ?)')
     .run(Date.now(), addr, clientHash(client), result);
 }
+
+// GET / — the landing page (see the block above the Express app) ──────────────
+app.get('/', (req, res) => {
+  if (!pageTemplate) return err(res, 'Not found', 404);
+  res.set({
+    'Content-Type':            'text/html; charset=utf-8',
+    'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; img-src data:; " +
+                               "base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+    'Referrer-Policy':         'no-referrer',
+    // Overrides the no-store default: the page is public and identical for
+    // everyone on a given host, and a censored client re-fetching it is waste.
+    'Cache-Control':           'public, max-age=300',
+  });
+  res.send(renderPage(req));
+});
 
 // GET /health ──────────────────────────────────────────────────────────────────
 app.get('/health', (_req, res) => {

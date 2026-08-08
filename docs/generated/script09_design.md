@@ -473,6 +473,27 @@ fetch; `DELETE /queue/:addr/:id` (token); `GET /health` (none, redacted counts).
 intentionally open — anyone may *deposit* an encrypted slate; confidentiality is the encryption,
 abuse bounded by size cap + rate limit + TTL. Only **retrieval/deletion** prove ownership.
 
+`GET /` (none) serves the landing page — `web/093_transporter/public/index.html`, rendered with
+this instance's live settings (station URL, network, TTL, size cap, queue depth, capacity state).
+Deliberately **not** `express.static`: one file is public, it needs substitution, and a static
+root is one misplaced file away from serving `config.json`. The page ships with zero JavaScript
+and no external requests, so it carries `default-src 'none'`. The station URL is derived from the
+request — `Host` validated against a strict hostname grammar and HTML-escaped (junk falls back to
+the loopback URL), `X-Forwarded-Proto` honoured on the nginx front only, same rule as
+`X-Forwarded-For`. So the onion front advertises the onion and the nginx front the domain.
+Search indexing is per instance (option 3 prompt, **default yes** — a depot senders cannot find
+is a depot nobody deposits into; answer `n` for a private or testnet station) and applies to `/`
+alone, via an exact-match `location = /` carrying `X-Robots-Tag: index, follow`. The server-level
+`noindex, nofollow` stays put either way, so `/queue/<address>` — a user's Grin address — can
+never reach a search index. Because that location replaces the inherited header set rather than
+adding to it, HSTS and `nosniff` are repeated inside it; only the robots tag differs. The head
+carries Open Graph tags but **deliberately no `rel=canonical` and no `og:url`** — both would have
+to be built from the request `Host`, and this vhost answers for any Host that reaches it, so a
+reflected canonical is an SEO-poisoning primitive. The request-derived station URL is fine where
+it is: escaped body text a human reads, not a hint a crawler obeys. It states
+plainly that **Fidelius (051) is the only wallet with built-in depot support**; everything else
+needs `agent.js` against a local grin-wallet, and both payer and payee need one of the two.
+
 nginx zone (never inline `limit_req_zone` — CLAUDE.md): script-specific, `script09-` prefixed:
 ```bash
 nginx_ensure_rate_limit_zone "transporter_${net}" "60r/m" "10m" "script09-transporter-${net}"

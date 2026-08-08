@@ -321,14 +321,29 @@ async function poll({ call, foreign, client, myAddr, onLog, onProven }) {
     log(slates.length + ' slate(s) waiting');
     let processed = 0, skipped = 0, failed = 0, removed = 0;
 
+    // Health probe for the reaper. BOTH halves of the wallet must answer.
+    //
+    // Probing only the Owner API was a money bug: an S1 fails at foreign
+    // receive_tx, which needs the FOREIGN LISTENER, but the probe asked the
+    // OWNER API — which is necessarily up, because the poll itself got this far
+    // through it. Owner up + listener down is the ordinary state of an unlocked
+    // wallet whose listener was never started (the UI has a dedicated warning
+    // for it), so every real incoming payment was reaped after 5 deliveries —
+    // about six minutes at the default interval. Never narrow this back to one
+    // call: the probe has to cover whatever the failing step actually used.
+    const walletHealthy = async () => {
+        try { await ownAddress(call); } catch { return false; }
+        try { await foreign('check_version', []); } catch { return false; }
+        return true;
+    };
+
     for (const item of slates) {
         const del = () => client.remove(call, myAddr, item.id);
         // Both must hold before deleting something we could not read: enough
-        // deliveries AND a wallet that answers right now. The probe is what
-        // stops a wallet outage from eating real slates.
+        // deliveries AND a wallet that answers right now.
         const reapable = async () => {
             if ((item.picked_up || 0) < REAP_AFTER_PICKUPS) return false;
-            try { await ownAddress(call); return true; } catch { return false; }
+            return walletHealthy();
         };
 
         try {

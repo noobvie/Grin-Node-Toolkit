@@ -674,9 +674,18 @@ q('setupImportFile')?.addEventListener('change', async (e) => {
     if (!/\.gws$/i.test(file.name) && file.type !== 'application/octet-stream') {
         if (!confirm('File doesn\'t have a .gws extension. Try anyway?')) return;
     }
-    // Read file as base64
-    const buf = await file.arrayBuffer();
-    const fileBase64 = btoa(String.fromCharCode(...new Uint8Array(buf)));
+    // Read file as base64.
+    // Chunked on purpose: String.fromCharCode(...bytes) spreads every byte into
+    // an argument list and blows the engine's argument limit somewhere around
+    // 100 KB — two orders of magnitude below the 5 MB this handler advertises.
+    // Real .gws backups are a couple of KB, so the ceiling was invisible until
+    // someone hit it, and then it failed as a bare RangeError.
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    let bin = '';
+    for (let i = 0; i < bytes.length; i += 0x8000) {
+        bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+    }
+    const fileBase64 = btoa(bin);
 
     const r = await showModal({
         title: 'Import encrypted backup',
@@ -707,7 +716,17 @@ q('setupImportFile')?.addEventListener('change', async (e) => {
             title: 'Backup imported',
             body:  '<p>Wallet <strong>' + esc(resp.name) + '</strong> (' + esc(resp.network) + ') restored to:</p>'
                  + '<p><code>' + esc(resp.dir) + '</code></p>'
-                 + '<p class="field-hint mt-8">Click the wallet in the sidebar to unlock with its original passphrase.</p>',
+                 + '<p class="field-hint mt-8">Click the wallet in the sidebar to unlock with its original passphrase.</p>'
+                 // A backup carries the seed, never the output database — so a
+                 // perfectly good restore shows a zero balance until it is
+                 // scanned. Say it here, or a correct restore looks like a lost one.
+                 + (resp.needsScan
+                     ? '<p class="field-hint mt-8"><strong>Balance will read zero until this wallet is scanned.</strong> '
+                     + 'A backup contains your seed, not your transaction database. Unlock the wallet, start the Owner API, '
+                     + 'then run a scan to rebuild it from the chain.</p>' : '')
+                 + (resp.nodeUrl
+                     ? '<p class="field-hint mt-8">Its node was re-pointed to this machine (<code>' + esc(resp.nodeUrl)
+                     + '</code>). Change it on the Node tab if you use a public node.</p>' : ''),
             actions: [{ label: 'OK', kind: 'primary' }],
         });
     } catch (err) {
@@ -1219,6 +1238,22 @@ async function recoverLockedOutputs() {
 
 q('recoverLockedBtn')?.addEventListener('click', recoverLockedOutputs);
 
+// Grey out AND actually disable a send panel.
+//
+// The greying used to be pure CSS (`pointer-events: none`), which meant the
+// panel could not receive :hover either — so a `:hover { pointer-events: auto }`
+// rule was added to get the explanatory tooltip back, and that handed every
+// control in the panel straight back to the user. A "disabled" Send button you
+// can click is worse than no greying at all: the server refuses it (503/409), so
+// nothing is lost, but the UI has told the user something untrue.
+// Disabling the controls is what actually holds, and it leaves hover alone.
+function setPanelEnabled(panel, enabled) {
+    if (!panel) return;
+    panel.classList.toggle('send-method-disabled', !enabled);
+    panel.querySelectorAll('input, button, select, textarea')
+         .forEach(el => { el.disabled = !enabled; });
+}
+
 // ── Send: Tor availability + Tor send form ───────────────────────────────────
 async function refreshSendTorAvailability() {
     const panel  = q('sendTorPanel');
@@ -1236,7 +1271,7 @@ async function refreshSendTorAvailability() {
     statEl.textContent = msg;
     statEl.className = 'send-method-status ' + cls;
     panel.title = running ? '' : msg;
-    panel.classList.toggle('send-method-disabled', !running);
+    setPanelEnabled(panel, running);
 }
 
 const TEST_AMOUNT = 0.1;  // ∩ — hardcoded test-send threshold
@@ -1436,9 +1471,17 @@ q('sendForm').addEventListener('submit', async e => {
         resultBox(el, 'success', '<p><strong>SLATEPACK — share with recipient:</strong></p>'
             + '<textarea readonly class="slate-textarea" id="sendSlateText">' + esc(d.slatepack) + '</textarea>'
             + '<button id="sendSlateCopy" class="btn btn-sm mt-8">[ COPY ]</button>'
-            + '<span id="sendClipMsg" class="clip-msg"></span>');
+            + '<span id="sendClipMsg" class="clip-msg"></span>'
+            // The coins are reserved from this moment, not from finalize. Say so
+            // here — an unanswered slatepack otherwise looks like it cost nothing,
+            // and the user has no idea why their spendable balance dropped.
+            + '<p class="field-hint mt-8">These coins are now <strong>reserved</strong> and will not be spendable '
+            + 'until the recipient returns their reply and you finalize it. If they never do, release them with '
+            + '<strong>Recover</strong> on the Wallet tab.'
+            + (d.txSlateId ? ' Transaction <code>' + esc(d.txSlateId) + '</code>.' : '') + '</p>');
         wireCopyButton('sendSlateCopy', 'sendSlateText', 'sendClipMsg');
         q('sendForm').reset(); setText('feeEstimate', '');
+        refreshBalance(curWallet);
     } catch (err) { resultBox(el, 'error', '<strong>ERROR:</strong> ' + esc(err.message)); }
 });
 
@@ -1473,7 +1516,38 @@ q('finalizeBtn').addEventListener('click', async () => {
     if (!text || !/BEGINSLATEPACK/i.test(text)) { resultBox(el, 'error', 'Paste the response Slatepack.'); return; }
     resultBox(el, '', '<p class="loading">FINALIZING AND BROADCASTING...</p>');
     try {
-        await apiPost('/api/wallet/' + curWallet + '/finalize', { slatepack: text });
+        const d = await apiPost('/api/wallet/' + curWallet + '/finalize', { slatepack: text });
+
+        // Signing and broadcasting are two different outcomes. Reporting both as
+        // "FINALIZED AND BROADCAST" meant a transaction that never reached the
+        // network — and would never confirm — looked exactly like one that did.
+        if (d.broadcast === false) {
+            resultBox(el, 'error',
+                '<p><strong>SIGNED, BUT NOT BROADCAST.</strong></p>'
+                + '<p class="field-hint">' + esc(d.broadcastError || 'The node did not accept the transaction.')
+                + '</p><p class="field-hint mt-8">The transaction is fully signed — it just has not reached the '
+                + 'network. Check the node on the Node tab, then retry.</p>'
+                + (d.finalSlatepack
+                    ? '<button id="retryPostBtn" class="btn btn-primary btn-full mt-8">Retry broadcast</button>'
+                    : '<p class="field-hint mt-8">Re-post it from History once the node is reachable.</p>'));
+            if (d.finalSlatepack) {
+                q('retryPostBtn').addEventListener('click', async () => {
+                    const btn = q('retryPostBtn');
+                    btn.disabled = true; btn.textContent = 'Broadcasting…';
+                    try {
+                        await apiPost('/api/wallet/' + curWallet + '/post-tx', { slatepack: d.finalSlatepack });
+                        resultBox(el, 'success', '<p><strong>BROADCAST.</strong></p><p class="info">Confirmed after ~10 blocks.</p>');
+                        q('finalizeSlateInput').value = '';
+                        setTimeout(() => refreshBalance(curWallet), 3000);
+                    } catch (pe) {
+                        btn.disabled = false; btn.textContent = 'Retry broadcast';
+                        alert('Still could not broadcast: ' + pe.message);
+                    }
+                });
+            }
+            return;
+        }
+
         resultBox(el, 'success', '<p><strong>FINALIZED AND BROADCAST.</strong></p><p class="info">Confirmed after ~10 blocks.</p>');
         q('finalizeSlateInput').value = '';
         setTimeout(() => refreshBalance(curWallet), 3000);
@@ -2030,16 +2104,48 @@ q('wNext3').addEventListener('click', async () => {
 });
 
 // Step 4: Init / Recover
+// The mode radios are bound ONCE. This function runs every time the wizard is
+// opened, so binding here stacked a fresh listener per "Add Another Wallet".
+let _initModeBound = false;
+function applyInitMode(mode) {
+    q('initPassField').style.display     = mode === 'skip' ? 'none' : '';
+    q('initPass2Field').style.display    = mode === 'new'  ? '' : 'none';
+    q('recoverSeedField').style.display  = mode === 'recover' ? '' : 'none';
+    q('runInitBtn').style.display        = mode === 'skip' ? 'none' : '';
+    q('wNext4').disabled = (mode !== 'skip');
+}
 function wizardStep4Init() {
-    const modeRadios = document.querySelectorAll('[name="initMode"]');
-    modeRadios.forEach(r => r.addEventListener('change', () => {
-        const mode = r.value;
-        q('initPassField').style.display   = mode === 'skip' ? 'none' : '';
-        q('recoverSeedField').style.display = mode === 'recover' ? '' : 'none';
-        q('runInitBtn').style.display       = mode === 'skip' ? 'none' : '';
-        q('wNext4').disabled = (mode !== 'skip');
-    }));
-    hideEl('seedDisplay'); hideEl('initError'); q('wNext4').disabled = true;
+    if (!_initModeBound) {
+        document.querySelectorAll('[name="initMode"]').forEach(r =>
+            r.addEventListener('change', () => applyInitMode(r.value)));
+        _initModeBound = true;
+    }
+    applyInitMode(document.querySelector('[name="initMode"]:checked')?.value || 'new');
+    hideEl('seedDisplay'); hideEl('initError');
+    q('initPass').value = ''; q('initPass2').value = ''; q('seedInput').value = '';
+    q('wNext4').disabled = true;
+}
+
+// Shown when grin-wallet initialised the wallet but we could not read the seed
+// back out of its output. The wallet is real and spendable, so refusing to let
+// the wizard finish would just strand the operator — but it must not look like a
+// normal completion either. Explicit acknowledgement, and the exact next step.
+function renderSeedUnavailable() {
+    const display = q('seedDisplay');
+    if (!display) return;
+    showEl('seedDisplay');
+    q('wNext4').disabled = true;
+    display.innerHTML =
+        '<div class="seed-title">COULD NOT READ YOUR SEED PHRASE</div>'
+        + '<div class="seed-warning">The wallet was created, but this app could not capture the 24 words. '
+        + '<strong>You currently have no backup.</strong> If this machine dies before you write them down, '
+        + 'the funds are gone.</div>'
+        + '<p class="field-hint mt-8">Finish this wizard, open the wallet, and use '
+        + '<strong>Reveal Seed</strong> on the Wallet tab to get the words. '
+        + '<strong>Do not send funds to this wallet until you have written them down.</strong></p>'
+        + '<button id="seedUnavailableAck" class="btn btn-outline btn-full mt-12">'
+        + 'I understand — I will use Reveal Seed before funding it</button>';
+    q('seedUnavailableAck').addEventListener('click', () => { q('wNext4').disabled = false; });
 }
 
 // Seed phrase backup + verification quiz
@@ -2119,27 +2225,32 @@ function renderSeedQuiz(words) {
 }
 
 q('runInitBtn').addEventListener('click', async () => {
-    const mode = document.querySelector('[name="initMode"]:checked')?.value || 'new';
-    const pass = q('initPass').value;
-    const seed = q('seedInput').value.trim();
+    const mode  = document.querySelector('[name="initMode"]:checked')?.value || 'new';
+    const pass  = q('initPass').value;
+    const pass2 = q('initPass2').value;
+    const seed  = q('seedInput').value.trim();
+    const fail  = (m) => { showEl('initError'); setText('initError', m); };
     hideEl('initError');
     q('runInitBtn').disabled = true;
+    // `finally`, not a trailing assignment: an early `return` from a validation
+    // branch skipped the re-enable, and the only way back from a permanently
+    // greyed Initialize button was a page reload.
     try {
         if (mode === 'recover') {
-            if (!seed) { showEl('initError'); setText('initError', 'Enter your 24-word seed phrase.'); return; }
+            if (!seed) return fail('Enter your recovery phrase.');
             await apiPost('/api/wallet/' + wizard.name + '/recover', { passphrase: pass, seedPhrase: seed });
             q('wNext4').disabled = false;
         } else {
+            // A mistyped passphrase on a NEW wallet is only recoverable through
+            // the seed — which the user has not been shown yet at this point.
+            if (pass !== pass2) return fail('Passphrases do not match.');
             const d = await apiPost('/api/wallet/' + wizard.name + '/init', { passphrase: pass });
-            if (d.seed) {
-                showEl('seedDisplay');
-                renderSeedBackup(d.seed);
-            } else {
-                q('wNext4').disabled = false;
-            }
+            if (d.seed)              { showEl('seedDisplay'); renderSeedBackup(d.seed); }
+            else if (d.seedUnavailable) renderSeedUnavailable();
+            else                        q('wNext4').disabled = false;
         }
-    } catch (e) { showEl('initError'); setText('initError', e.message); }
-    q('runInitBtn').disabled = false;
+    } catch (e) { fail(e.message); }
+    finally { q('runInitBtn').disabled = false; }
 });
 
 q('wNext4').addEventListener('click', () => { showWizardStep(4); wizardStep5Init(); });
@@ -2277,7 +2388,7 @@ async function refreshSendTspAvailability() {
     statEl.textContent = msg;
     statEl.className   = 'send-method-status ' + cls;
     panel.title        = ready ? '' : msg;
-    panel.classList.toggle('send-method-disabled', !ready);
+    setPanelEnabled(panel, ready);
 }
 
 // Reserving coins for a payment that may sit unanswered for days is the one

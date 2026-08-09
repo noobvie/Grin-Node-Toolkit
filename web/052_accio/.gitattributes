@@ -1,0 +1,14 @@
+# Accio (052) — the vendored upstream tree must round-trip BYTE-IDENTICAL.
+#
+# The repo root .gitattributes sets `* text=auto eol=lf`. Any normalisation
+# applied to vendor/ would break two things at once:
+#   1. `vendor/SHA256SUMS` (the pin) stops verifying after a fresh clone;
+#   2. `git log <PINNED_SHA>..upstream/master` diffs become unreadable.
+# The whole point of S0 is that these bytes are provably the ones upstream
+# published, so conversion is disabled here. `-text` = never convert.
+#
+# NOTE: cloning upstream on Windows with core.autocrlf=true rewrites every
+# text file to CRLF on checkout, and `git archive` honours that setting too.
+# Re-vendor with `git -c core.autocrlf=false -c core.eol=lf archive`.
+vendor/** -text
+docs/upstream-nginx.conf.reference -text

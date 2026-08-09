@@ -26,9 +26,15 @@ Stock nginx, no modules, no apt-hold.
   controls its own headers, so it could forge `X-Forwarded-For` and mint a fresh identity per
   request, voiding every per-client limit. Classify by `socket.localPort` and honour
   forwarding headers on the nginx port only.
-- `docs/upstream-nginx.conf.reference` is the behavioural spec for the routes being replaced
-  (the `/tor/` regex, the header allowlists, upstream's gateway on `:9000`). Read it; do not
-  deploy it.
+- `../docs/upstream-nginx.conf.reference` is the behavioural spec for the routes being
+  replaced (the `/tor/` regex, the header allowlists, upstream's gateway on `:9000`). Read it;
+  do not deploy it — and note it uses a **fourth** nginx module upstream's README omits
+  (`headers-more`, 29 calls, carrying CSP/HSTS/COOP/COEP). Stock `add_header … always`
+  replaces it; see `../PROVENANCE.md` for the child-block trap.
+- **Rate-limit zone names must be `accio_*`.** Upstream's conf declares bare `tor`, `listen`,
+  `wallet` and `donate` zones. Zone names are global to nginx across every product on the box,
+  so copying those verbatim would collide; go through `nginx_ensure_rate_limit_zone` from
+  `scripts/lib/nginx_shared_helpers.sh`, never an inline `limit_req_zone`.
 
 S8 audits this service specifically: the `/tor/` forwarder as an SSRF surface (we own this
 guard outright now — more auditable, but no longer a battle-tested filter, so test it hard),

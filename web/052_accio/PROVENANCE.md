@@ -7,9 +7,14 @@ licence. It is a self-custodial browser wallet — keys live in the tab, never o
 and **Grin is already a first-class wallet type in it**, so this toolkit ports no
 cryptography and compiles no WASM.
 
-The exact pin, the reproduction command and the measured checksums are in
-[`PINNED_SHA`](PINNED_SHA); the per-file manifest is [`vendor/SHA256SUMS`](vendor/SHA256SUMS)
-(270 files, `sha256sum -c` clean at vendor time).
+A **second, much smaller** upstream is vendored beside it:
+[`NicolasFlamel1/MWC-Wallet-Standalone`](https://github.com/NicolasFlamel1/MWC-Wallet-Standalone)
+at `043c2ddc` (MIT, 4 files) in `vendor/upstream-standalone-build/`. It is not part of the
+wallet — it is the *build script*, and it is the behavioural spec for two later packets.
+
+The exact pins, the reproduction command and the measured checksums are in
+[`PINNED_SHA`](PINNED_SHA); the per-file manifest is [`vendor/SHA256SUMS`](vendor/SHA256SUMS),
+which covers **both** trees (274 files, `sha256sum -c` clean at vendor time).
 
 ## ⛔ Never edit anything under `vendor/`
 
@@ -22,7 +27,8 @@ never `sed` into the vendored tree. Two things depend on that:
 
 ## Why we vendor instead of fetching
 
-Upstream's `build.sh` line 4 `wget`s `master.zip` and line 316 deletes the tree: **unpinned**
+Upstream's `build.sh` (now vendored at `vendor/upstream-standalone-build/build.sh`) line 4
+`wget`s `master.zip` and line 316 deletes the tree: **unpinned**
 (two runs a week apart build different wallets) and **non-durable** (it dies if the repo is
 deleted, renamed or force-pushed). Every third-party library is *already committed as a file*
 upstream — `third-party libraries instructions.txt` documents how they were produced, it is
@@ -42,14 +48,38 @@ it cannot add independence, because S0 already made it total.
 | `SOCKS-Proxy` | nginx module — browser→Tor outbound | 70 KB | MIT | ♻️ replaced by our Node gateway (S3) |
 | `Block-Access` | nginx module — SSRF guard on `/tor/` | 40 KB | MIT | ♻️ replaced by our allowlist (S3) |
 | `Allow-Headers` | nginx module — response-header allowlist | 6 KB | MIT | ♻️ replaced by our forwarder (S3) |
+| `headers-more-nginx-module` | nginx module — **the whole security-header stack** | — | BSD | ♻️ replaced by stock `add_header … always` (S2) |
 | `WebSocket-Listener` | C++ daemon — the **receive** rail | 338 KB | ⛔ **NONE** | ✍️ reimplemented (S4a/S4b) — cannot be vendored |
-| `MWC-Wallet-Standalone` | build script only | — | MIT | ❌ not needed — we write our own (S1) |
+| `MWC-Wallet-Standalone` | build script only (4 files) | 75 KB | MIT | ✅ **vendored** at `043c2ddc` — spec for S1 + S7 |
 
-The three nginx modules are deliberately **not** vendored. They build as `.so` against the
-exact installed nginx, so an `apt upgrade nginx` makes `load_module` fail and nginx then
-refuses to start **at all** — taking down every other vhost on the box (Fidelius, GrinScan,
-the pool, Drop, the node API). All three collapse into the one Node service we must write
-anyway. Result: stock nginx, no modules, no apt-hold.
+The four nginx modules are deliberately **not** vendored. The first three build as `.so`
+against the exact installed nginx, so an `apt upgrade nginx` makes `load_module` fail and
+nginx then refuses to start **at all** — taking down every other vhost on the box (Fidelius,
+GrinScan, the pool, Drop, the node API). They collapse into the one Node service we must
+write anyway. Result: stock nginx, no modules, no apt-hold.
+
+**⚠ There are FOUR modules, not three** (corrected 2026-08-09, during the S0 review).
+Upstream's README lists only three; it omits `headers-more`, which `nginx.conf` nonetheless
+uses **29 times** (`more_set_headers`, `more_clear_headers`) and which delivers the site's
+entire header posture: `Content-Security-Policy`, `Strict-Transport-Security`,
+`Cross-Origin-Opener-Policy`, `Cross-Origin-Embedder-Policy`, `Permissions-Policy`,
+`Referrer-Policy`, `Onion-Location`, `Set-Cookie` and the `Link` preload header. This one is
+replaceable with **stock** `add_header`, so the no-modules conclusion survives — but S2 must
+handle three differences:
+
+- `add_header` in a child block **discards every `add_header` inherited from its parent**.
+  Re-declare the full set in each `location` that adds even one header, or the CSP silently
+  disappears from exactly the routes that matter.
+- `more_set_headers -s 200` is status-filtered; plain `add_header` covers only a fixed status
+  list. Use `add_header … always`.
+- `more_clear_headers Server` has **no stock equivalent** — `server_tokens off` shortens the
+  value to `nginx` but cannot remove the header. Accept it, or strip it in the Node gateway
+  for the gateway's own responses.
+
+COOP/COEP are *not* load-bearing: `scripts/common.js:16` uses `SharedArrayBuffer` only when
+`crossOriginIsolated`, and `:1994` defines a `false` fallback, so losing cross-origin isolation
+degrades the wallet rather than breaking it. CSP and HSTS are a different matter — those are
+security posture, and dropping them silently is the failure mode to guard against.
 
 `WebSocket-Listener` carries no `LICENSE`/`COPYING` and no licence mention in its README
 (verified 2026-08-08) — all rights reserved, so it may not be vendored, redistributed or
@@ -67,12 +97,41 @@ shipped in a deploy script. Its wire protocol is readable from the MIT *client*
 `vendor/` is otherwise unrenamed and unmodified, including upstream's own `.gitignore`
 (single line `private`; no such path exists in the tree, so it excludes nothing).
 
+## `vendor/upstream-standalone-build/` — why a build script is pinned too
+
+Added 2026-08-09 during the S0 review. All four of its files are vendored verbatim; nothing
+was removed. Its `LICENSE` is **byte-identical** to the wallet's (same MIT text, same
+`Copyright (c) 2022-2026 Nicolas Flamel`, same `bbc8b96c…`).
+
+It is here because two later packets are specified to reimplement it, and pointing them at an
+unpinned `master` on a second repo would reintroduce exactly the durability problem this whole
+directory exists to solve:
+
+- **S1** inherits its *contract*, not its code: the env vars its PHP templates expect
+  (`SERVER_NAME`, `HTTPS`, `HTTPS_SERVER_ADDRESS`, `TOR_SERVER_ADDRESS`, `NO_FILE_VERSIONS`,
+  `NO_FILE_CHECKSUMS`, `NO_MINIFIED_FILES`), and the proof that `php` runs at build time —
+  the whole reason no `php-fpm` reaches the VPS.
+- **S7** reimplements its inlining phase as a loop.
+
+**We never run it.** It `wget`s an unpinned `master.zip` (line 4), `chmod 777 -R`s the tree
+(line 7) and `rm -rf`s its own working files (line 316). A toolkit action must be idempotent
+and must leave a live box intact. Read it as a specification; `052_lib_build.sh` is ours.
+
+Measured, not inherited: `build.sh` is **316 lines**. Lines 1–37 copy and PHP-render the tree
+into `./temp/` — *that intermediate tree is exactly what we want to serve*. Lines 39–311 are
+the inlining phase (**273 lines, of which 253 are `sed -i`**) that folds every image, font,
+WASM blob and script into one `index.html`; that phase is only needed for the S7 standalone
+artefact. It is machine-generated — one near-identical command per file, each repeating the
+same 250-character env prefix. Do not transcribe it. Ours is a loop.
+
 ## Measurements, verified against this tree on 2026-08-09
 
 | Measure | Value |
 |---|---|
-| Files vendored | 270 (upstream ships 273) |
-| Total size | 7,443,197 bytes (7.10 MiB) |
+| Wallet files vendored | 270 (upstream ships 273) |
+| Wallet size | 7,443,197 bytes (7.10 MiB) |
+| Standalone-build files | 4 — 74,763 bytes |
+| **Manifest total** | **274 files / 7,517,960 bytes** |
 | `public_html/scripts` | 5,765,081 bytes across 105 JS files |
 | PHP files | 11 — **build-time only**, see below |
 | WASM blobs | 5, all prebuilt and committed upstream |
@@ -98,7 +157,10 @@ shipped in a deploy script. Its wire protocol is readable from the MIT *client*
 Upstream's blobs are **LF**. Cloning on Windows with `core.autocrlf=true` rewrites every text
 file to CRLF on checkout, **and `git archive` honours that setting too** — the first attempt
 at this vendoring produced a tree whose `LICENSE` hashed `eb2c5d88…` instead of upstream's
-`bbc8b96c…`. Always re-vendor with `git -c core.autocrlf=false -c core.eol=lf archive`, and
+`bbc8b96c…`. **It bit a second time on the same day**, vendoring the standalone-build repo:
+a default clone of it produced that identical wrong hash for the identical MIT text. Treat
+the trap as certain, not likely. Always re-vendor with
+`git -c core.autocrlf=false -c core.eol=lf archive`, and
 note that `web/052_accio/.gitattributes` marks `vendor/**` as `-text` so this repo's own
 `* text=auto eol=lf` rule can never renormalise the pinned bytes.
 
@@ -126,8 +188,11 @@ licence type) already rendering a credits list. S5 adds one entry for the upstre
 ## Update policy — watched, never depended on
 
 Never *depend* on upstream to build; always retain the *option* to take a fix. S6 adds a
-**Check upstream** action to `scripts/lib/052_lib_vendor.sh` that fetches upstream and reports
-`git log adef11da..master` for review. Taking a fix is a deliberate re-vendor + re-pin, with
-the commands in `PINNED_SHA`.
+**Check upstream** action to `scripts/lib/052_lib_vendor.sh` that verifies both trees against
+`vendor/SHA256SUMS` and reports `git log adef11da..master` (wallet) and
+`git log 043c2ddc..master` (standalone build) for review. Taking a fix is a deliberate
+re-vendor + re-pin, with the commands in `PINNED_SHA`. The wallet is the one that matters —
+it is self-custodial and ships security fixes; the build script is a frozen spec and needs
+watching only if we ever revisit S7.
 
 Design → `docs/generated/script052_design.md`. Session log → `docs/generated/script052_implementation.md`.

@@ -40,6 +40,12 @@
 #       we may not ship). Result: STOCK nginx, no custom modules, no apt-hold —
 #       a module ABI break makes nginx refuse to start AT ALL, which would take
 #       every other vhost on the box down with it.
+#       ⚠ Upstream uses a FOURTH module its own README omits: headers-more
+#       (more_set_headers x29) carries the entire security-header stack — CSP,
+#       HSTS, COOP/COEP, Permissions-Policy, Onion-Location. Stock `add_header
+#       ... always` replaces it, but `add_header` in a child block DISCARDS
+#       every header inherited from its parent, which is how a CSP goes missing
+#       from exactly the routes that matter. See PROVENANCE.md.
 #    3. the DEPLOY (052_lib_nginx.sh)  — stock nginx vhost, certbot, onion.
 #
 #  ─── Build packets (docs/generated/script052_design.md §"Build plan") ───────
@@ -102,6 +108,9 @@ pause()   { echo ""; echo -e "${DIM}Press Enter to continue...${RESET}"; read -r
 # in place breaks both.
 ACC_PRODUCT_SRC="$TOOLKIT_ROOT/web/052_accio"
 ACC_VENDOR_SRC="$ACC_PRODUCT_SRC/vendor/upstream-wallet"
+# Upstream's own build script, pinned separately. It is a SPEC, never executed:
+# it wgets an unpinned master.zip, chmod 777 -R's the tree and rm -rf's itself.
+ACC_STANDALONE_SRC="$ACC_PRODUCT_SRC/vendor/upstream-standalone-build"
 ACC_PATCHES_SRC="$ACC_PRODUCT_SRC/patches"
 ACC_GATEWAY_SRC="$ACC_PRODUCT_SRC/gateway"
 ACC_PINNED_SHA="$ACC_PRODUCT_SRC/PINNED_SHA"
@@ -229,11 +238,12 @@ acc_check_upstream() {
     fi
     _acc_stub "S6" "CHECK UPSTREAM" \
         "052_lib_vendor.sh — two jobs:" \
-        "  1. verify vendor/ against vendor/SHA256SUMS (270 files) and fail" \
-        "     the build on one changed byte;" \
+        "  1. verify vendor/ against vendor/SHA256SUMS (274 files across the" \
+        "     two pinned trees) and fail the build on one changed byte;" \
         "  2. report \`git log <PINNED_SHA>..upstream/master\` for review." \
         "" \
-        "Pinned at: ${sha:-unknown}  (v${ver:-unknown})" \
+        "Wallet pinned at: ${sha:-unknown}  (v${ver:-unknown})" \
+        "Build-script spec pinned separately — see PINNED_SHA." \
         "We never DEPEND on upstream to build — we retain the OPTION to take" \
         "a security fix. Taking one is a deliberate re-vendor + re-pin."
 }
@@ -241,8 +251,9 @@ acc_check_upstream() {
 acc_standalone() {
     _acc_stub "S7" "BUILD STANDALONE HTML" \
         "The offline/airgapped artefact: one self-contained index.html with" \
-        "every image, font, WASM blob and script inlined (upstream build.sh" \
-        "lines 39-311, as a loop rather than 273 transcribed commands)." \
+        "every image, font, WASM blob and script inlined. The spec is the" \
+        "vendored upstream build.sh (316 lines) lines 39-311 — 273 lines, of" \
+        "which 253 are machine-generated \`sed -i\`. Ours is a loop." \
         "" \
         "⚠ It can SEND but CANNOT RECEIVE — the inbound rail is the gateway," \
         "  so a standalone user must run their own."

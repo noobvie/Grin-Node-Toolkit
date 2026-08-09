@@ -32,9 +32,14 @@ scripts/
   05_  Wallet services hub (launches 051–059; also hosts the 05C CMD-wallet quick setup)
   051_ Fidelius — personal web wallet (051x_ = XP-themed variant; has its OWN hub key
        since 2026-08-04, and is still reachable from inside 051)
-  052_ RESERVED for Accio — public web wallet (script05_design.md PART A). The ONLY
-       reserved number in the 05 band: freeing it for a wallet next to 051 is what
-       the Drop migration bought, so nothing else may take it.
+  052_ Accio — public web wallet. IN BUILD since 2026-08-09 (packet S0), so it is
+       no longer "reserved" — the number is ASSIGNED and the script file exists.
+       Skeleton only: every action is a stub, nothing has ever run on a VPS, and
+       hub 05 key `2` still dispatches _slot_notice until packet S7. Self-custodial
+       (keys in the browser tab) — the exact opposite of 051, which holds keys
+       server-side. Vendored, not written: web/052_accio/vendor/ pins two MIT
+       upstreams. Design → docs/generated/script052_design.md; the build handoff
+       is script052_implementation.md's session log, never the chat.
   053_ WooCommerce payment gateway
   054–058 FREE — assign a number when a build STARTS, not to an idea. Pick one that
        keeps the 05 hub menu ascending (menu groups run wallets → payments →

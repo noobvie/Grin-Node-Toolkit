@@ -153,11 +153,14 @@ Found while reviewing the F-series fixes, in the shared lib 051 was newly wired 
 ### F2 — [Info] Wallet family security model & confirmations
 - **All auth via nginx** (above) — never expose `:7420` directly, and never deploy without the
   htpasswd step. The installer's fail-closed nginx is the safeguard.
-- **The public WASM wallet is not implemented.** Its intended model — client-side WASM crypto,
-  keys never leaving the browser, wallet data in IndexedDB under AES-GCM/PBKDF2, server serves
-  static files only ([script05_design.md PART A](script05_design.md)) — is the correct
-  non-custodial design. **When built, audit:** the WASM/JS supply chain (SRI/pinning), the
-  PBKDF2 iteration count, and XSS on the static host (an XSS = seed theft in a browser wallet).
+- **The public web wallet (052 Accio) is not deployed.** Its model — client-side crypto, keys
+  never leaving the browser, wallet data in IndexedDB, server serving static files plus a
+  keyless gateway ([script052_design.md](script052_design.md)) — is the correct non-custodial
+  design. Build started 2026-08-09; the wallet is **vendored, not written**, so the supply
+  chain to audit is a pinned upstream (`vendor/SHA256SUMS`) rather than an npm tree.
+  **When deployed, audit:** the pin-verification path, XSS on the static host (an XSS = seed
+  theft in a browser wallet), and the gateway's `/tor/` SSRF guard. Accio's own audit is its
+  packet S8 → `script052_security_audit.md`.
 - **051x XP client** stores no seed/key/passphrase in `localStorage`/`sessionStorage`/`IndexedDB`
   (grep-verified) — it drives the 051 backend rather than holding keys.
 

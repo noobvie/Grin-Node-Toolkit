@@ -63,12 +63,14 @@
 #    05_  Wallet Services Hub (this file)
 #    05C  CMD Wallet Quick Setup          hub-built, no script file
 #    051  Fidelius — personal web wallet
-#    052  RESERVED for Accio — public web wallet (freed by the Drop move)
+#    052  Accio — public web wallet (IN BUILD since 2026-08-09; skeleton only,
+#         key 2 still shows _slot_notice until packet S7)
 #    053  WooCommerce Gateway
 #    054–058  FREE. Payment Pro then GoblinPay are expected to take 054/055 as
 #             they are built, but neither is ASSIGNED — an unbuilt product has no
-#             number (see "Planned — no number assigned yet" below, which also
-#             says why 052 is the one reservation this table allows).
+#             number (see "Planned — no number assigned yet" below). This table
+#             now holds NO reservations: 052 was the only one, and it ended when
+#             Accio's build started on 2026-08-09.
 #             A 2nd giveaway product takes 058; that band grows downward.
 #    059  Grin Drop — giveaway + donation portal   (moved from 052, 2026-08-04)
 #
@@ -123,10 +125,12 @@
 #  already one-per-category, so no contiguous per-category band could exist
 #  without renumbering — which is exactly what moving Drop 052 → 059 cost.
 #  Pre-assigning numbers to ideas is what made this menu read 1,5,C,3,4,6,2.
-#  The single exception is 052, held for Accio. Accio is unbuilt like the others,
-#  so the exception needs a reason: the whole point of moving Drop off 052 was to
-#  free a WALLET slot next to 051. Letting anything else take it would mean paying
-#  for that migration and throwing away the only thing it bought.
+#  052 was the single exception — held for Accio while it was still unbuilt,
+#  because the whole point of moving Drop off 052 was to free a WALLET slot next
+#  to 051, and letting anything else take it would have thrown away the only
+#  thing that migration bought. That exception ENDED on 2026-08-09: Accio's
+#  build started (packet S0) and scripts/052_grin_accio.sh now exists, so 052 is
+#  assigned in the ordinary way and nothing here is reserved any more.
 #
 #   Payment Pro        Grin payment processor for platforms other than WooCommerce
 #                      (Shopify, custom/headless APIs, subscription billing).
@@ -134,10 +138,17 @@
 #                      recurring GRIN payments, webhooks on confirmation,
 #                      multi-wallet routing. Bridge ports 3008 main / 3009 test.
 #                      Design starts after 053_grin_woocommerce.sh is complete.
-#   Accio (052)        Public web wallet — client-side WASM, no server-held keys.
-#                      The one planned product that DOES carry a number, reserved
-#                      not pre-assigned — see the exception above.
-#                      Design → docs/generated/script05_design.md (PART A)
+#   Accio (052)        Public web wallet — self-custodial, keys live in the
+#                      visitor's browser tab, this box holds no seed. NO LONGER
+#                      PLANNED: build started 2026-08-09 and
+#                      scripts/052_grin_accio.sh exists, but it is a SKELETON —
+#                      every action is a stub and nothing has run on a VPS, so
+#                      key 2 still dispatches _slot_notice. It switches to
+#                      run_sub "052_grin_accio.sh" in packet S7, once there is a
+#                      working deploy behind it; wiring a menu of stubs earlier
+#                      would advertise a product that cannot do anything.
+#                      Design → docs/generated/script052_design.md
+#                      Log    → docs/generated/script052_implementation.md
 #   GoblinPay          Receive-only merchant till (Nostr + slatepack), deploying
 #                      github.com/2ro/GoblinPay the toolkit way.
 #                      Design → docs/generated/script09_design.md (PART C)
@@ -356,7 +367,7 @@ show_menu() {
     echo ""
     echo -e "  ${GREEN}A${RESET}) CMD Wallet Quick Setup  ✅  ${DIM}download · init/recover · listen (CLI/testing)${RESET}"
     echo -e "  ${GREEN}1${RESET}) Fidelius                🔧  ${DIM}personal web wallet · server-held keys${RESET}"
-    echo -e "  ${GREEN}2${RESET}) Accio                   ⏳  ${DIM}public web wallet · client-side keys${RESET}"
+    echo -e "  ${GREEN}2${RESET}) Accio                   🔧  ${DIM}public web wallet · client-side keys${RESET}"
     echo -e "  ${GREEN}3${RESET}) Grin XP                 🔧  ${DIM}Fidelius, XP-themed · mainnet only${RESET}"
     echo -e "  ${DIM}4) Spare slot                  unassigned · next wallet lands here${RESET}"
     echo ""
@@ -1342,11 +1353,16 @@ main() {
         read -r choice || true
         case "$choice" in
             1) run_sub "051_grin_fidelius.sh"     || true ;;
-            2) _slot_notice "052) ACCIO — NOT BUILT YET" \
-                   "Public web wallet with client-side WASM keys — the server never
-  holds a seed. Being refactored from MWC-Wallet-Standalone rather than
-  built fresh. 052 is reserved for it and nothing else may take it." \
-                   "docs/generated/script05_design.md (PART A)" || true ;;
+            2) _slot_notice "052) ACCIO — IN BUILD, NOT DEPLOYABLE YET" \
+                   "Public web wallet: the seed is generated and kept in the visitor's
+  browser tab, so this server never holds a key. The opposite of
+  Fidelius (key 1), which runs grin-wallet server-side.
+
+  Build started 2026-08-09. scripts/052_grin_accio.sh exists but is a
+  SKELETON — every action is a stub, and nothing has been deployed to
+  a server yet. This key starts it once there is a working deploy
+  behind it (packet S7)." \
+                   "docs/generated/script052_design.md" || true ;;
             3) run_sub "051x_grin_xp_wallet.sh"   || true ;;
             4) _slot_notice "SLOT 4 — UNASSIGNED" \
                    "Reserved for the next WALLET product. It gets a script number

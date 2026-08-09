@@ -62,14 +62,20 @@ that rots.
 
 | Upstream | Role | Size | License | Disposition |
 |---|---|---|---|---|
-| `mwcwallet.com` | the wallet itself (JS/PHP/CSS/WASM) | 4.7 MB | **MIT** | ✅ **vendor**, pinned to a commit SHA |
+| `mwcwallet.com` | the wallet itself (JS/PHP/CSS/WASM) | 7.10 MiB measured | **MIT** | ✅ **vendored** at `adef11da` |
 | `SOCKS-Proxy` | nginx module — browser→Tor outbound | 70 KB | MIT | ♻️ **replace** — see "Stack simplification" |
 | `Block-Access` | nginx module — SSRF guard on `/tor/` | 40 KB | MIT | ♻️ **replace** |
 | `Allow-Headers` | nginx module — response-header allowlist | 6 KB | MIT | ♻️ **replace** |
+| `headers-more-nginx-module` | nginx module — **CSP/HSTS/COOP/COEP and the rest** | — | BSD | ♻️ **replace** with stock `add_header … always` (S2) |
 | `WebSocket-Listener` | C++ daemon — the **receive** rail | 338 KB | ⛔ **NONE** | ✍️ **reimplement** (cannot vendor) |
-| `MWC-Wallet-Standalone` | build script only | — | MIT | ❌ not needed — we write our own |
+| `MWC-Wallet-Standalone` | build script only (4 files) | 75 KB | MIT | ✅ **vendored** at `043c2ddc` — spec for S1 + S7 |
 
-**Net result: we vendor exactly one upstream repo and write one service of our own.**
+**Net result: we vendor two upstream repos — the wallet and a 4-file build script we never
+run — and write one service of our own.** (S0 vendored the wallet; the build script was added
+in the S0 review, because S1 and S7 are both specified to reimplement it and an unpinned
+`master` on a second repo is the same durability hole this section exists to close. Size
+correction from the same review: 4.7 MB was GitHub's *packed* repo size; the working tree is
+7,443,197 bytes.)
 
 ### ⛔ The one hard blocker: `WebSocket-Listener` is unlicensed
 
@@ -98,7 +104,7 @@ theirs becomes a valid alternative, but the plan must not *depend* on that answe
 Upstream's server stack carries two liabilities we should not inherit. Both are removable,
 and removing them is what makes the deployment genuinely ours.
 
-### Liability 1 — the three nginx C modules (the real operational hazard)
+### Liability 1 — the nginx C modules (the real operational hazard)
 
 They build as `.so` files against the **exact** installed nginx version (the build patches
 copies of `ngx_http_proxy_module.c` / `ngx_http_upstream.c` inside the module tree; the stock
@@ -121,6 +127,41 @@ Because `WebSocket-Listener` is unlicensed and must be reimplemented anyway (bel
 **one** Node service, not two. nginx then does nothing but serve static files and
 `proxy_pass` — **stock nginx from apt, no modules, no version hold, no ABI hazard, and no
 coupling of the other products to Accio.**
+
+#### ⚠ There is a FOURTH module, and upstream's README does not list it
+
+Found in the S0 review (2026-08-09), by reading the conf rather than the README. Upstream's
+`nginx.conf` calls `more_set_headers` / `more_clear_headers` **29 times** — that is
+`headers-more-nginx-module`, and it carries the site's **entire** security-header posture:
+
+`Content-Security-Policy` · `Strict-Transport-Security` · `Cross-Origin-Opener-Policy` ·
+`Cross-Origin-Embedder-Policy` · `Permissions-Policy` · `Referrer-Policy` · `Onion-Location` ·
+`X-Frame-Options` · `X-Content-Type-Options` · `Set-Cookie` · `Link` (preload) · `Vary` ·
+`Cache-Control`
+
+This does **not** overturn the no-modules conclusion — stock `add_header` covers it — but S2
+must handle three differences, and the first one fails *silently*:
+
+1. **`add_header` in a child block discards every `add_header` inherited from its parent.**
+   Declaring one header inside a `location` drops the whole inherited set. Either declare the
+   full set in every block that adds any header, or keep all of them in `server` scope and add
+   none in any `location`. This is how a CSP disappears from exactly the routes that matter.
+2. `more_set_headers -s 200` is status-filtered; plain `add_header` applies only to a fixed
+   status list (200, 201, 204, 206, 301, 302, 303, 304, 307, 308). Use `add_header … always`.
+3. `more_clear_headers Server` has **no stock equivalent.** `server_tokens off` shortens the
+   value to `nginx` but cannot remove the header. Accept that, or strip it in the Node gateway
+   for the gateway's own responses.
+
+**COOP/COEP are not load-bearing** — `public_html/scripts/common.js:16` uses
+`SharedArrayBuffer` only when `crossOriginIsolated`, and `:1994` defines a `false` fallback,
+so losing cross-origin isolation degrades the wallet instead of breaking it. CSP and HSTS are
+a different matter: those are security posture on a self-custodial wallet, and trap #1 above
+drops them without any error.
+
+**Rate-limit zones, same file, same packet:** upstream declares bare `tor`, `listen`, `wallet`
+and `donate` zones. Zone names are global to nginx across every product on the box, so ours
+must be `accio_*`, written through `nginx_ensure_rate_limit_zone` from
+`scripts/lib/nginx_shared_helpers.sh` — never an inline `limit_req_zone` (CLAUDE.md rule 1).
 
 ### Liability 2 — PHP at runtime
 
@@ -397,6 +438,25 @@ The only packet whose output is legally significant: after it, Accio is permanen
 > now marks `vendor/**` as `-text` so this repo's `* text=auto eol=lf` can never renormalise the pin.
 > Two files were added beyond the plan: `vendor/SHA256SUMS` (the per-file pin S6 verifies against —
 > vendor time is the honest moment to certify it) and that `.gitattributes`.
+>
+> **Review pass, same day** — three further corrections, all applied:
+> **(d)** a **second upstream is now vendored**: `MWC-Wallet-Standalone` at `043c2ddc` (MIT, 4
+> files, 75 KB) in `vendor/upstream-standalone-build/`. S1 and S7 are both specified to
+> reimplement its `build.sh`, and leaving it unpinned on a second repo reproduced the exact
+> durability hole this packet exists to close. `vendor/SHA256SUMS` now covers **both** trees —
+> **274 files / 7,517,960 bytes**, manifest sha256 `0c7c1b8d…`. It is a spec; we never run it.
+> The CRLF trap in (c) reoccurred while vendoring it, on the byte-identical `LICENSE`.
+> **(e)** there are **four** custom nginx modules, not three — upstream's README omits
+> `headers-more`, which its conf calls 29 times and which carries CSP/HSTS/COOP/COEP and the
+> rest. Stock `add_header … always` replaces it; see §"Liability 1" for the child-block trap
+> that drops inherited headers silently. **(f)** the inlining phase is 273 lines of which
+> **253** are `sed -i` — the earlier "270" was wrong, and both numbers collided confusingly
+> with the file counts.
+>
+> **Not done here, deliberately:** hub 05 key `2` still dispatches `_slot_notice`. Wiring is S7.
+> Its notice text and the stale `script05_design.md PART A` pointers across CLAUDE.md, README,
+> `script05_implementation.md` and `script051_security_audit.md` were corrected in the review —
+> a doc move that leaves dangling referrers is an unfinished move.
 
 **Read first:** this document, §"Correction of premise" → §"Naming policy".
 
@@ -439,12 +499,14 @@ after commit; recorded file count and total size match what upstream's archive c
 
 ### S1 — Own the build *(no VPS to author; first real run happens in S2)*
 
-**Read first:** §"Liability 2 — PHP at runtime"; `vendor/upstream-wallet/` top-level layout.
+**Read first:** §"Liability 2 — PHP at runtime"; `vendor/upstream-wallet/` top-level layout;
+`vendor/upstream-standalone-build/build.sh` (pinned at `043c2ddc` — it is **vendored**, so read
+it locally; do not fetch it, and never run it).
 
 Two key facts about upstream's `build.sh`, both of which shrink this packet:
 
 - It is **machine-generated** — 316 lines, one near-identical command per file, each repeating the
-  same env prefix. Do not transcribe it. Ours is a loop.
+  same 250-character env prefix. Do not transcribe it. Ours is a loop.
 - **It does two jobs, and only the first belongs here.** Lines 1–37 copy the tree and PHP-render
   it into `./temp/` — *that intermediate tree is exactly what we want to serve*. Lines 39–311 then
   inline every image, font, WASM blob and script into a single `index.html`, which is only needed
@@ -595,8 +657,9 @@ certbot vhost for mainnet, a Tor hidden service for Accio itself, mainnet node d
 05 key `2` switched from `_slot_notice` to the real dispatch (`|| true`-guarded, per CLAUDE.md).
 
 The **standalone single-HTML artefact** goes here too — this is where build.sh's inlining phase
-(its lines 39–311) finally becomes relevant. Reimplement it as a loop over the asset list, not as
-270 transcribed `sed -i` substitutions against markup: base64 each image/font/WASM/shader/model
+(its lines 39–311, vendored at `vendor/upstream-standalone-build/build.sh`) finally becomes
+relevant. That range is 273 lines, **253 of them `sed -i`**. Reimplement it as a loop over the
+asset list, not as 253 transcribed substitutions against markup: base64 each image/font/WASM/shader/model
 and fold each script into the page. Ship it with an explicit note in the UI that it **cannot
 receive** without a gateway.
 

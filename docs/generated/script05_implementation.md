@@ -8,7 +8,8 @@ This is the authoritative record for the 05 hub's numbering and menu behaviour. 
 header comment in `scripts/05_grin_wallet_service.sh` carries the short form; this file carries
 the reasoning and the open questions.
 
-Companion docs: `script05_design.md` (PART A = Accio) · `script05_planning_goblin.md` ·
+Companion docs: `script052_design.md` + `script052_implementation.md` (Accio — moved out of
+`script05_design.md` PART A on 2026-08-09 when its build started) · `script05_planning_goblin.md` ·
 `script059_*.md` (Grin Drop — renamed from `script052_*`) · `script053_planning.md`
 (WooCommerce — did **not** move).
 
@@ -318,7 +319,7 @@ still `1`, not `B`.
 | # | Item | Blocking | Notes |
 |---|------|----------|-------|
 | 1 | **Is "Payment Pro" the same product as "GrinPay Server"?** | Decide before *either* build starts | The 05 hub header describes Payment Pro as Shopify + custom REST + subscriptions; `script053_planning.md` §16 describes GrinPay Server as REST + webhooks + multi-merchant. These may be one product under two names. Whichever survives takes the next free number. |
-| 2 | **Accio is unbuilt** and holds `052` | — | Design → `script05_design.md` PART A. Being refactored from MWC-Wallet-Standalone, **not** a fresh `wasm-pack` build — the design doc still says otherwise and needs correcting. |
+| 2 | ~~**Accio is unbuilt** and holds `052`~~ **RESOLVED 2026-08-09** | — | Build started (packet S0): `scripts/052_grin_accio.sh` exists, design moved to `script052_design.md`, log in `script052_implementation.md`. The old note here was wrong twice over and is kept only as a record: the upstream is **`mwcwallet.com`**, not `MWC-Wallet-Standalone` (that repo is just a build script), and it is **vendored**, not refactored — there is no `wasm-pack` build because all five WASM blobs ship prebuilt. Hub key `2` stays on `_slot_notice` until S7. |
 | 3 | **051/051x "running" = nginx symlink**, not a live backend | — | See §1.5. Tighten if a "running but broken" report appears. |
 | 4 | **Drop wallet passphrase still passed via `-p`** | — | `059_lib_wallet.sh` reboot-cron + watchdog wrappers build `-p "$(cat …)"`, putting the passphrase in `ps aux` for the listener's whole life. CLAUDE.md flags this file as "still on `-p`, convert when next touched". The renumber touched adjacent lines without converting — a behaviour change out of scope for a rename, but the trigger has arguably fired. |
 | 5 | **Dual cron-tag handling is a one-release measure** | — | The `052_watchdog_*` legacy greps in `059_grin_drop.sh` and `059_lib_wallet.sh` should be removed once no box carries the old tag. |

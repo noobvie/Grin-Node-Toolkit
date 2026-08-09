@@ -150,7 +150,9 @@ A **hub launcher** showing live status of each self-contained wallet service:
 - **059 Grin Drop** — GRIN giveaway + donation portal (**Node/Express + `node:sqlite`**); rate-limited 3-step slatepack claims and/or a donation address + QR, modes independently toggleable.
 - **05C CMD Wallet Quick Setup** — built into the hub: downloads the `grin-wallet` binary, runs `init`/recover, patches the toml and starts a listener (CLI / testing).
 
-> *Planned — each owns a menu key (which prints what the slot is for and installs nothing), but no script file yet.* **052 Accio** is the one product holding a **reserved number**: the public web wallet, client-side **WASM**, keys never leave the browser — freeing 052 for a wallet next to 051 is what the Grin Drop `052 → 059` migration bought, so nothing else may take it (design in [script05_design.md](docs/generated/script05_design.md)). **Payment Pro** (Shopify / custom-API processor) and **GoblinPay** (receive-only merchant till) have **no number** — they get the next free one from `054–058` on the day their build starts.
+- **052 Accio** — the public web wallet: **self-custodial**, keys generated and kept in the visitor's **browser tab**, so the server holds no seed (the opposite of 051). **In build since 2026-08-09 and not yet deployable** — `scripts/052_grin_accio.sh` exists but every action is a stub, so hub key `2` still just explains the slot. Design in [script052_design.md](docs/generated/script052_design.md).
+
+> *Planned — each owns a menu key (which prints what the slot is for and installs nothing), and has no script file yet.* **Payment Pro** (Shopify / custom-API processor) and **GoblinPay** (receive-only merchant till) have **no number** — they get the next free one from `054–058` on the day their build starts. Freeing 052 for a wallet next to 051 is what the Grin Drop `052 → 059` migration bought; Accio took it when its build started, which is the numbering rule working as designed.
 
 > **Tip:** run each service on its own server to avoid port/config collisions; each server can run mainnet and testnet at once.
 

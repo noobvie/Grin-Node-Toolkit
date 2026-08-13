@@ -120,6 +120,54 @@ function findNodeSecret(network, fileName /* '.api_secret' | '.foreign_api_secre
     return null;
 }
 
+// One call path for every node Owner-API request.
+//
+// The node's v1 REST API (`GET /v1/status`) was REMOVED in grin 5.x: it answers
+// 404 on a perfectly healthy node. Three probes here still used it, so the node
+// page reported "Local Node: not running" against a synced node with 46 peers
+// (verified on a live 5.5 mainnet node, 2026-08-09). Never add a /v1/ call.
+//
+// The node serialises Rust `Result<T,E>` as {"Ok":T} / {"Err":E} INSIDE the
+// JSON-RPC result, so the unwrap below is mandatory — see CLAUDE.md.
+// Which endpoint a probe targets is NOT a style choice:
+//   Owner   (/v2/owner)   — get_status, get_connected_peers. Localhost only; a
+//                           public node proxies /v2/foreign and 403s owner.
+//   Foreign (/v2/foreign) — get_tip. The only status a remote node will answer.
+async function nodeRpc(nodeUrl, apiPath, secret, method, params = [], timeoutMs = 5000) {
+    const hdrs = { 'Content-Type': 'application/json' };
+    if (secret) hdrs.Authorization = 'Basic ' + Buffer.from('grin:' + secret).toString('base64');
+    const r = await fetch(nodeUrl + apiPath, {
+        method: 'POST', headers: hdrs,
+        body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
+        signal: AbortSignal.timeout(timeoutMs),
+    });
+    // An HTTP 200 from some other web server on that host is not a live node —
+    // only a parsed, unwrapped result proves it. Everything below is the proof.
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const j = await r.json();
+    if (j.error) throw new Error(j.error.message || JSON.stringify(j.error));
+    if (j.result?.Err) throw new Error(JSON.stringify(j.result.Err));
+    const d = j.result?.Ok !== undefined ? j.result.Ok : j.result;
+    if (d === undefined || d === null) throw new Error('empty result');
+    return d;
+}
+function nodeOwnerRpc(nodeUrl, secret, method, params = [], timeoutMs = 5000) {
+    return nodeRpc(nodeUrl, '/v2/owner', secret, method, params, timeoutMs);
+}
+function nodeForeignRpc(nodeUrl, secret, method, params = [], timeoutMs = 5000) {
+    return nodeRpc(nodeUrl, '/v2/foreign', secret, method, params, timeoutMs);
+}
+
+// Node URL → which network's secret files apply. Port is the only signal we have
+// for a bare URL, and the toolkit fixes those ports per network.
+function netForNodeUrl(nodeUrl) {
+    return /:1341[35]\b/.test(nodeUrl) ? 'testnet' : 'mainnet';
+}
+function localNodeSecret(net, which = '.api_secret') {
+    const sp = findNodeSecret(net, which);
+    return sp ? readFileOrEmpty(sp) : '';
+}
+
 // ── File helpers ──────────────────────────────────────────────────────────────
 
 function readFileOrEmpty(p) { try { return fs.readFileSync(p, 'utf8').trim(); } catch { return ''; } }
@@ -708,18 +756,30 @@ app.get('/api/setup/nodes', async (req, res) => {
     const checks = [
         ...hosts.map(async h => {
             const t = Date.now();
+            // `r.status !== 0` was true for ANY answer — a 404, a parked domain,
+            // a CDN error page all read "online". Only a tip proves a Grin node.
             try {
-                const r = await fetch('https://' + h + '/v2/foreign', { signal: AbortSignal.timeout(8000) });
-                send({ host: h, url: 'https://' + h, online: r.status !== 0, latencyMs: Date.now() - t });
+                const tip = await nodeForeignRpc('https://' + h, '', 'get_tip', [], 8000);
+                send({ host: h, url: 'https://' + h, online: true,
+                       height: tip?.height ?? null, latencyMs: Date.now() - t });
             } catch { send({ host: h, url: 'https://' + h, online: false, latencyMs: Date.now() - t }); }
         }),
         (async () => {
             const localUrl = 'http://127.0.0.1:' + localPort;
+            const net     = net_ === 'testnet' ? 'testnet' : 'mainnet';
+            const sp      = findNodeSecret(net, '.api_secret');
             const t = Date.now();
+            let online = false;
             try {
-                const r = await fetch(localUrl + '/v1/status', { signal: AbortSignal.timeout(3000) });
-                send({ host: '127.0.0.1:' + localPort, url: localUrl, online: r.ok || r.status === 401, latencyMs: Date.now() - t, isLocal: true });
-            } catch { send({ host: '127.0.0.1:' + localPort, url: localUrl, online: false, latencyMs: 0, isLocal: true }); }
+                await nodeOwnerRpc(localUrl, sp ? readFileOrEmpty(sp) : '', 'get_status', [], 3000);
+                online = true;
+            } catch (e) {
+                // A 401 still proves a node is listening on that port — only the
+                // credential is wrong, which is a different problem from "is it
+                // running". Anything else (refused, timeout) means down.
+                online = /HTTP 401/.test(e.message || '');
+            }
+            send({ host: '127.0.0.1:' + localPort, url: localUrl, online, latencyMs: Date.now() - t, isLocal: true });
         })(),
     ];
     await Promise.allSettled(checks);
@@ -1061,18 +1121,8 @@ async function nodeOwnerApiCall(method, params = []) {
         const sp = findNodeSecret(wallet.network, '.api_secret');
         if (sp) secret = readFileOrEmpty(sp);
     }
-    const hdrs = { 'Content-Type': 'application/json' };
-    if (secret) hdrs.Authorization = 'Basic ' + Buffer.from('grin:' + secret).toString('base64');
-    const r = await fetch(nodeUrl + '/v2/owner', {
-        method: 'POST', headers: hdrs,
-        body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
-        signal: AbortSignal.timeout(5000),
-    });
-    if (!r.ok) throw new Error('HTTP ' + r.status);
-    const j = await r.json();
-    if (j.error) throw new Error(j.error.message || JSON.stringify(j.error));
-    if (j.result?.Err) throw new Error(JSON.stringify(j.result.Err));
-    return { data: j.result?.Ok !== undefined ? j.result.Ok : j.result, nodeUrl, isLocal };
+    const data = await nodeOwnerRpc(nodeUrl, secret, method, params, 5000);
+    return { data, nodeUrl, isLocal };
 }
 
 app.get('/api/node/status', async (_req, res) => {
@@ -1088,20 +1138,26 @@ app.get('/api/node/status', async (_req, res) => {
         if (uM) nodeUrl = uM[1];
     } catch {}
     const isLocal = /127\.0\.0\.1|localhost/.test(nodeUrl);
-    if (isLocal) {
-        const sp = findNodeSecret(wallet.network, '.api_secret');
-        if (sp) secret = readFileOrEmpty(sp);
-    }
+    if (isLocal) secret = localNodeSecret(wallet.network, '.api_secret');
+    const node_type = isLocal ? 'local' : 'external';
     try {
-        const hdrs = secret ? { Authorization: 'Basic ' + Buffer.from('grin:' + secret).toString('base64') } : {};
-        const r = await fetch(nodeUrl + '/v1/status', { headers: hdrs, signal: AbortSignal.timeout(5000) });
-        if (!r.ok) throw new Error('HTTP ' + r.status);
-        const d = await r.json();
-        res.json({ reachable: true, node_type: isLocal ? 'local' : 'external', node_url: nodeUrl,
-                   height: d.tip?.height ?? 0, connections: d.connections ?? 0,
-                   sync_status: d.sync_status ?? 'unknown', user_agent: d.user_agent ?? '' });
+        if (isLocal) {
+            const d = await nodeOwnerRpc(nodeUrl, secret, 'get_status', [], 5000);
+            res.json({ reachable: true, node_type, node_url: nodeUrl,
+                       height: d.tip?.height ?? 0, connections: d.connections ?? 0,
+                       sync_status: d.sync_status ?? 'unknown', user_agent: d.user_agent ?? '' });
+        } else {
+            // A public node exposes only /v2/foreign (Script 04 403s owner), so
+            // height is all it can tell us — peers and sync state are unknowable
+            // from outside, and must not be reported as 0 / "unknown" as if the
+            // node were idle. null means "not available", not "none".
+            const tip = await nodeForeignRpc(nodeUrl, '', 'get_tip', [], 5000);
+            res.json({ reachable: true, node_type, node_url: nodeUrl,
+                       height: tip?.height ?? 0, connections: null,
+                       sync_status: null, user_agent: '' });
+        }
     } catch (e) {
-        res.json({ reachable: false, node_type: isLocal ? 'local' : 'external', node_url: nodeUrl, error: e.message });
+        res.json({ reachable: false, node_type, node_url: nodeUrl, error: e.message });
     }
 });
 
@@ -1268,19 +1324,15 @@ app.get('/api/node/ping', async (req, res) => {
         return apiErr(res, 'Node not in the allowed list. Assign it to a wallet first.', 403);
     }
     const t = Date.now();
+    // A local node's Foreign API needs the secret; a public one is open. Without
+    // this, pinging your own node answered 401 and looked unreachable.
+    const isLocal = /^https?:\/\/(127\.0\.0\.1|localhost|\[?::1\]?)(:|\/|$)/i.test(url);
+    const secret  = isLocal ? localNodeSecret(netForNodeUrl(url), '.foreign_api_secret') : '';
     try {
-        const r = await fetch(url + '/v2/foreign', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'get_tip', params: [] }),
-            signal: AbortSignal.timeout(6000),
-        });
-        const latency_ms = Date.now() - t;
-        const d = await r.json().catch(() => null);
-        const tip = d?.result?.Ok ?? d?.result;
-        res.json({ reachable: true, latency_ms, height: tip?.height ?? null });
-    } catch {
-        res.json({ reachable: false, latency_ms: Date.now() - t });
+        const tip = await nodeForeignRpc(url, secret, 'get_tip', [], 6000);
+        res.json({ reachable: true, latency_ms: Date.now() - t, height: tip?.height ?? null });
+    } catch (e) {
+        res.json({ reachable: false, latency_ms: Date.now() - t, error: e.message });
     }
 });
 
@@ -1295,15 +1347,13 @@ app.get('/api/node/local/:network', async (req, res) => {
     if (sp) secret = readFileOrEmpty(sp);
     const t = Date.now();
     try {
-        const hdrs = secret ? { Authorization: 'Basic ' + Buffer.from('grin:' + secret).toString('base64') } : {};
-        const r = await fetch(nodeUrl + '/v1/status', { headers: hdrs, signal: AbortSignal.timeout(3000) });
-        const latency_ms = Date.now() - t;
-        if (!r.ok) throw new Error('HTTP ' + r.status);
-        const d = await r.json();
-        res.json({ reachable: true, latency_ms, height: d.tip?.height ?? 0,
+        const d = await nodeOwnerRpc(nodeUrl, secret, 'get_status', [], 3000);
+        res.json({ reachable: true, latency_ms: Date.now() - t, height: d.tip?.height ?? 0,
                    connections: d.connections ?? 0, sync_status: d.sync_status ?? 'unknown' });
-    } catch {
-        res.json({ reachable: false, latency_ms: Date.now() - t });
+    } catch (e) {
+        // Carry the reason — "not running" and "wrong secret" look identical in
+        // the UI otherwise, and the second is the one an operator can fix.
+        res.json({ reachable: false, latency_ms: Date.now() - t, error: e.message });
     }
 });
 

@@ -48,7 +48,7 @@ permanently. Planned and spare rows own theirs from the start.
 | `A` | CMD Wallet Quick Setup | `cmd_wallet_run` (hub-built) |
 | `C` | *(not printed)* | `cmd_wallet_run` — **retired-key alias**, see 1.4 |
 | `1` | Fidelius | `run_sub 051_grin_fidelius.sh` |
-| `2` | Accio | `_slot_notice` — not built |
+| `2` | Accio | `run_sub 052_grin_accio.sh` — since 2026-08-10 (packet S7); the `_slot_notice` arm is deleted, not aliased |
 | `3` | Grin XP | `run_sub 051x_grin_xp_wallet.sh` |
 | `4` | *Spare slot* | `_slot_notice` — unassigned |
 | `5` | WooCommerce Gateway | `run_sub 053_grin_woocommerce.sh` |
@@ -319,7 +319,7 @@ still `1`, not `B`.
 | # | Item | Blocking | Notes |
 |---|------|----------|-------|
 | 1 | **Is "Payment Pro" the same product as "GrinPay Server"?** | Decide before *either* build starts | The 05 hub header describes Payment Pro as Shopify + custom REST + subscriptions; `script053_planning.md` §16 describes GrinPay Server as REST + webhooks + multi-merchant. These may be one product under two names. Whichever survives takes the next free number. |
-| 2 | ~~**Accio is unbuilt** and holds `052`~~ **RESOLVED 2026-08-09** | — | Build started (packet S0): `scripts/052_grin_accio.sh` exists, design moved to `script052_design.md`, log in `script052_implementation.md`. The old note here was wrong twice over and is kept only as a record: the upstream is **`mwcwallet.com`**, not `MWC-Wallet-Standalone` (that repo is just a build script), and it is **vendored**, not refactored — there is no `wasm-pack` build because all five WASM blobs ship prebuilt. Hub key `2` stays on `_slot_notice` until S7. |
+| 2 | ~~**Accio is unbuilt** and holds `052`~~ **RESOLVED 2026-08-09** | — | Build started (packet S0): `scripts/052_grin_accio.sh` exists, design moved to `script052_design.md`, log in `script052_implementation.md`. The old note here was wrong twice over and is kept only as a record: the upstream is **`mwcwallet.com`**, not `MWC-Wallet-Standalone` (that repo is just a build script), and it is **vendored**, not refactored — there is no `wasm-pack` build because all five WASM blobs ship prebuilt. Hub key `2` stayed on `_slot_notice` until **S7 (2026-08-10)**, which retired the last stub and wired it to `run_sub 052_grin_accio.sh`. |
 | 3 | **051/051x "running" = nginx symlink**, not a live backend | — | See §1.5. Tighten if a "running but broken" report appears. |
 | 4 | **Drop wallet passphrase still passed via `-p`** | — | `059_lib_wallet.sh` reboot-cron + watchdog wrappers build `-p "$(cat …)"`, putting the passphrase in `ps aux` for the listener's whole life. CLAUDE.md flags this file as "still on `-p`, convert when next touched". The renumber touched adjacent lines without converting — a behaviour change out of scope for a rename, but the trigger has arguably fired. |
 | 5 | **Dual cron-tag handling is a one-release measure** | — | The `052_watchdog_*` legacy greps in `059_grin_drop.sh` and `059_lib_wallet.sh` should be removed once no box carries the old tag. |

@@ -962,12 +962,17 @@ async function refreshNodeStatus() {
             txt.textContent = (d.node_type === 'local' ? 'LOCAL NODE' : d.node_url) + '  OFFLINE';
             return;
         }
-        const synced = d.sync_status === 'no_sync';
+        // A public node answers only get_tip, so peers and sync state come back
+        // null — "not available", not "zero". Rendering them would claim an idle
+        // node, and d.sync_status.toUpperCase() on null throws into the catch
+        // below, which paints a perfectly healthy node as UNREACHABLE.
+        const known  = d.sync_status != null;
+        const synced = known ? d.sync_status === 'no_sync' : true;
         bar.className = 'node-bar ' + (synced ? 'online' : 'syncing');
         const label = d.node_type === 'local' ? 'LOCAL NODE' : (new URL(d.node_url).hostname || d.node_url);
         const parts = [label, 'HEIGHT ' + Number(d.height).toLocaleString(),
                        d.connections > 0 ? d.connections + ' PEERS' : '',
-                       synced ? 'SYNCED' : d.sync_status.toUpperCase().replace(/_/g,' ')].filter(Boolean);
+                       !known ? '' : (synced ? 'SYNCED' : d.sync_status.toUpperCase().replace(/_/g,' '))].filter(Boolean);
         txt.textContent = parts.join('  \xb7  ');
     } catch { bar.className = 'node-bar offline'; txt.textContent = 'NODE UNREACHABLE'; }
 }

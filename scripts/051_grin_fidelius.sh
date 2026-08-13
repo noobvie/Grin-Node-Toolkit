@@ -29,8 +29,11 @@
 #   8) Status & info
 #   9) Edit saved settings         (domain, email, auth user)
 #   V) Private access              (WireGuard tunnel + DNS-01 cert — optional)
-#   x) Launch XP Wallet            (mainnet only — separate experience)
 #   0) Back to main menu
+#
+#   Grin XP (051x) has its own row on hub 05 since 2026-08-04, so its row was
+#   removed here (2026-08-08) rather than shown twice. `xp` stays a SILENT alias
+#   — a retired key nothing else took, per CLAUDE.md.
 #
 #  ─── Optional: private access (menu V) ───────────────────────────────────────
 #   Moves the wallet off the public internet WITHOUT giving up a real Let's
@@ -2119,7 +2122,7 @@ ww_edit_settings() {
 }
 
 # =============================================================================
-# XP WALLET LAUNCHER (optional — separate fun/nostalgia variant)
+# XP WALLET LAUNCHER (hidden — reached only via the retired `xp` alias)
 # =============================================================================
 
 _launch_xp_wallet() {
@@ -2160,12 +2163,10 @@ wallet_menu() {
         echo -e "${DIM}  ─── Optional hardening ──────────────────────────${RESET}"
         echo -e "  ${BOLD}${YELLOW}V${RESET}) Private access            ${DIM}(WireGuard tunnel + DNS-01 cert)${RESET}"
         echo ""
-        echo -e "  ${BOLD}${YELLOW}xp${RESET}${DIM}) Launch XP Wallet (separate script — mainnet only, real GRIN)${RESET}"
-        echo ""
         echo -e "  ${DIM}↩  Press Enter to refresh${RESET}"
         echo -e "  ${RED}0${RESET}) Back to main menu"
         echo ""
-        echo -ne "${BOLD}Select [1-9 / V / xp / 0]: ${RESET}"
+        echo -ne "${BOLD}Select [1-9 / V / 0]: ${RESET}"
         read -r choice || true
 
         case "$choice" in
@@ -2179,6 +2180,8 @@ wallet_menu() {
             8)     ww_show_info         || true ;;
             9)     ww_edit_settings     || true ;;
             v|V)   ww_private_access    || true ;;
+            # Silent alias — the row was removed (Grin XP has its own hub-05 row);
+            # the key still works for anyone with the muscle memory.
             xp|XP) _launch_xp_wallet    || true ;;
             0)     break ;;
             "")    continue ;;

@@ -1,0 +1,34 @@
+This privacy policy describes how Accio uses, shares, and stores personal information about its users. Accio is a self-custodial Grin wallet that runs in your web browser. Please note that this privacy policy doesn't apply to information collected through third-party websites and services that you may interact with through the use of Accio, including Grin nodes and the .onion addresses you send payments to.
+
+What Is Collected:
+Accio doesn't actively collect any personal information about its users. There is no account, no registration, and no email address.
+
+What Is Automatically Collected:
+Accio may automatically record certain information about how its users use its services in log files on its servers. This may include a user's IP address, device type, web browser type, operating system, the pages and features which they accessed, and the time which they accessed those pages and features. Accio may use this information to maintain the functionality of its services.
+
+Where Your Keys Are:
+Your wallet's seed and private keys are generated in your browser and never leave it. They are not transmitted to Accio's servers, and Accio's operators cannot recover them, freeze your funds, or spend on your behalf. If you lose your passphrase and your recovery phrase, nobody can help you.
+
+What Is Shared:
+Accio doesn't share any personal information about its users.
+
+What Passes Through Accio's Servers:
+Two features relay traffic on your browser's behalf, because a web page cannot open a Tor connection or accept an inbound connection by itself.
+
+  Sending to a .onion address routes the request through Accio's server to the Tor network. That server therefore sees the destination address and the request, and its web server access log records the destination as part of the request line. The relay itself does not store the request or the response.
+
+  Receiving a payment assigns your wallet an inbound URL on Accio's server and relays what arrives there down to your open browser tab. Grin payment data is carried as encrypted slatepacks that only your wallet can read, and the relay holds them only until your tab is done with them.
+
+Neither feature has access to your keys, and neither is required to hold Grin — only to move it over those two paths.
+
+What Your Receiving Address Reveals:
+An inbound URL answers differently depending on whether your wallet is connected, because someone paying you has to be told the difference between "no such address" and "try again shortly". Anyone holding one of your receiving addresses can therefore tell whether your wallet is open at that moment, and can keep asking. This is inherent to receiving payments over the web and is not something Accio can hide; give a receiving address only to people you are willing to have know that.
+
+How Data Is Stored:
+Accio uses local storage and similar technologies to store personal information locally on a user's machine. Some of this stored information is encrypted using a password provided by the user.
+
+What Cookies Are Used:
+Accio only uses cookies that are essential to its functionality. These cookies are used to optimize resource loading, set preferences, and maintain a session with Accio's services.
+
+Who Runs This:
+Accio is deployed from the Grin Node Toolkit at https://github.com/noobvie/Grin-Node-Toolkit and is a fork of MWC Wallet by Nicolas Flamel, used under the MIT License. Anyone can run their own instance; the operator of the instance you are reading this on is the party who holds the logs described above.

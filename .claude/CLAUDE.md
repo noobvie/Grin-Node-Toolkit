@@ -34,12 +34,61 @@ scripts/
        since 2026-08-04, and is still reachable from inside 051)
   052_ Accio — public web wallet. IN BUILD since 2026-08-09 (packet S0), so it is
        no longer "reserved" — the number is ASSIGNED and the script file exists.
-       Skeleton only: every action is a stub, nothing has ever run on a VPS, and
-       hub 05 key `2` still dispatches _slot_notice until packet S7. Self-custodial
-       (keys in the browser tab) — the exact opposite of 051, which holds keys
-       server-side. Vendored, not written: web/052_accio/vendor/ pins two MIT
-       upstreams. Design → docs/generated/script052_design.md; the build handoff
-       is script052_implementation.md's session log, never the chat.
+       **EVERY packet through S8 is written and EVERY menu key is live** (the last
+       stub went 2026-08-10), and hub 05 key `2` now dispatches to the real script.
+       S9's optional deletion passes started 2026-08-11 (pass 1 = MQS).
+       ⚠ **Nothing has ever run on a VPS** — not one build, deploy, send or receive.
+       S2 is no longer a build packet at all: it is the ACCEPTANCE session and owes
+       every packet's runs at once, testnet before mainnet. A menu with no stubs is
+       not a tested one. Self-custodial (keys in the browser
+       tab) — the exact opposite of 051, which holds keys server-side. Vendored, not
+       written: web/052_accio/vendor/ pins two MIT upstreams; the gateway
+       (web/052_accio/gateway/, 9 modules, ZERO npm deps) is ours and carries both
+       rails — /tor/ out, /listen + /wallet/<suffix> in. Four libs: build (site +
+       the offline standalone HTML), gateway, nginx (vhost/certbot/onion), vendor.
+       ⚠ nginx security headers live in TWO snippets (shared, and TLS-only for the
+       headers the onion front must NOT emit) that every block adding any header of
+       its own must include — `add_header` in a child block DISCARDS the parent's
+       set, which is how a CSP goes missing from exactly the routes that matter, and
+       a header repeated as a literal in three blocks is how the next one goes
+       missing. And minting the onion is not enough: TOR_SERVER_ADDRESS is baked in
+       at BUILD time, so an un-rebuilt site hands out a clearnet host to whoever
+       picked "Onion Service". ⚠ The onion path is THREE listeners and so needs
+       THREE ports — tor → ACC_TOR_FRONT_PORT (nginx block) → ACC_TOR_PORT
+       (gateway), beside ACC_PORT (gateway ← :443). Collapsing two roles onto one
+       port is a bind collision, not a saving, and NOTHING on this box reports one:
+       `nginx -t` parses and never binds, `systemctl reload` returns 0 before the
+       master binds, and a status line that greps `ss` for a port two roles share
+       goes green whichever won. Verify the listener after the reload. ⚠ Its
+       /opt/grin/accio-<net>/gateway-state/ is DURABLE STATE, not a cache: losing it
+       changes the receiving address of every wallet that ever connected.
+       De-branding lives in web/052_accio/patches/ (S5, 16 files; S9 pass 1 added a
+       17th) — NEVER edit vendor/, and never rename MWC_WALLET_TYPE (it is a chain
+       discriminator, not branding; S9+ deletes those paths). ⚠ An S9 pass is a
+       REDUCTION, not an `rm`, whenever the subsystem is referenced from a file we
+       don't patch: pass 1 kept Mqs's 5-symbol external surface because
+       `Slate.compactProofAddress` switches on `Mqs.ADDRESS_LENGTH` on the slatepack
+       ENCODE path, un-gated — deleting the file would ReferenceError on every send
+       with a payment proof. A removal must never change how a slate is READ.
+       Every patch is marked `ACCIO PATCH`;
+       grep for that rather than diffing — ⚠ which makes an UNMARKED patch invisible
+       to the only review method there is. R8 found one (check_for_updates.js, six
+       rewritten URLs, no marker, unread through S5/S6/S8 and four review packets;
+       it was beaconing to api.github.com from the "offline" standalone). The rule
+       and a table of all 17 files — including the five whose format cannot hold an
+       inline marker — now live in patches/README.md, which is where a patch author
+       actually looks. ⚠ Branding is a phrase map duplicated in backend/language.php
+       and scripts/language.js: the maps being IDENTICAL is necessary and proves
+       nothing, because a phrase map keyed on English word order misses every
+       translator who reordered it — Dutch/Greek/Chinese shipped 27 unbranded
+       strings, the page title and the CURRENCY LABEL among them. Check a new
+       language against the map programmatically before shipping it.
+       ⚠ Since S6 the build is GATED on
+       052_lib_vendor.sh verifying vendor/ against vendor/SHA256SUMS (no bypass) —
+       an edited or added byte there stops the build; the fix is a re-vendor in this
+       repo, NEVER regenerating the manifest on the VPS.
+       Design → docs/generated/script052_design.md;
+       the build handoff is script052_implementation.md's session log, never the chat.
   053_ WooCommerce payment gateway
   054–058 FREE — assign a number when a build STARTS, not to an idea. Pick one that
        keeps the 05 hub menu ascending (menu groups run wallets → payments →
@@ -104,6 +153,17 @@ curl -s "https://api.nonlogs.io/api/markets/GRIN-BTC" | python3 -m json.tool
   (`fn || true`) — an unguarded non-zero return kills the whole script instead of
   returning to the menu. Same trap: never end a function with `[[ ... ]] && cmd`
   (a false test makes the function return 1); use the `if`-form instead.
+- **⚠ The corollary: a function called as `fn || …` or `if fn; then` runs with
+  errexit DISABLED for its whole body**, and re-issuing `set -e` inside it does not
+  undo that (POSIX ignores it there). Since that `||`-guard is mandatory above, it
+  is the NORMAL case for every sourced lib — `set -euo pipefail` in the entry script
+  protects almost nothing inside one. So in `lib/`, guard every command that creates,
+  copies, moves or deletes with its own `|| { error "..."; return 1; }`, and never
+  write a header comment claiming the caller's `set -e` covers you. A bare `cp`/`mv`
+  in a lib is a silent failure that ships: 052's build wrote a *valid* SRI for an
+  un-overlaid patch, and `mv "$new" "$outdir"` does not fail when `$outdir` still
+  exists — it nests inside it while `success` prints. Full rationale → memory
+  `project_lib_errexit_suppression`.
 - Colors/logging defined once in the main script and inherited via source
 - Config written to `/opt/grin/<service>/` on the target server
 - Wallet secrets stored in `/opt/grin/<net>/.api_secret` (never hardcode)
@@ -178,9 +238,21 @@ via the nginx HTTPS vhost, IP-allowlist + shared-secret). Solo mining keeps lega
   `get_connected_peers`, `validate_chain`, `compact_chain` — management/status, trusted
   internal callers only. **Prefer `get_status` over `get_tip`** (`get_tip` returns "Method
   not found" in practice).
-- **Foreign API** (`/v2/foreign`, `.foreign_api_secret`): `get_block`, `get_header`,
+- **Foreign API** (`/v2/foreign`, `.foreign_api_secret`): `get_tip`, `get_block`, `get_header`,
   `get_outputs`, `get_unspent_outputs`, `get_pool_size`, `push_transaction` — public chain
   data, used by wallets connecting to a public node.
+- **There is NO v1 REST API.** `GET /v1/status` (and the rest of `/v1/`) was removed in
+  grin 5.x and returns **404 on a healthy node** — verified live 2026-08-09 against a synced
+  5.5 mainnet node (`/v1/status` → 404 while `/v2/owner get_status` → height 3,967,196,
+  46 peers). It fails as "node down", not as "bad endpoint", so it reads like an outage:
+  Fidelius showed *Local Node — not running* for exactly this reason. Never write a `/v1/` call.
+- **Probing a REMOTE node is a different question from probing the local one.** Script 04
+  publishes only `/v2/foreign` and 403s `/v2/owner`, so a public node can answer `get_tip`
+  (height) and nothing else — peer count and sync state are unknowable from outside and must
+  be reported as *unavailable*, never as `0`/`unknown` (that renders a healthy node as idle).
+- **Reachability needs a parsed result, not an HTTP 200.** Any web server, CDN error page or
+  parked domain answers 200; only an unwrapped `{"Ok":…}` proves a Grin node is there. A bare
+  `GET` on `/v2/foreign` proves nothing — it's a POST-only JSON-RPC endpoint.
 
 ### Pruned vs archive node — the `get_block` horizon (don't conflate headers with blocks)
 A **pruned** node (`mainnet-prune`, `archive_mode=false`) keeps the full **header** chain +

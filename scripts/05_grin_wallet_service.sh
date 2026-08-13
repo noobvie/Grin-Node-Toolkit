@@ -63,8 +63,8 @@
 #    05_  Wallet Services Hub (this file)
 #    05C  CMD Wallet Quick Setup          hub-built, no script file
 #    051  Fidelius — personal web wallet
-#    052  Accio — public web wallet (IN BUILD since 2026-08-09; skeleton only,
-#         key 2 still shows _slot_notice until packet S7)
+#    052  Accio — public web wallet (build started 2026-08-09; key 2 dispatches
+#         to the real script since 2026-08-10, packet S7)
 #    053  WooCommerce Gateway
 #    054–058  FREE. Payment Pro then GoblinPay are expected to take 054/055 as
 #             they are built, but neither is ASSIGNED — an unbuilt product has no
@@ -139,14 +139,15 @@
 #                      multi-wallet routing. Bridge ports 3008 main / 3009 test.
 #                      Design starts after 053_grin_woocommerce.sh is complete.
 #   Accio (052)        Public web wallet — self-custodial, keys live in the
-#                      visitor's browser tab, this box holds no seed. NO LONGER
-#                      PLANNED: build started 2026-08-09 and
-#                      scripts/052_grin_accio.sh exists, but it is a SKELETON —
-#                      every action is a stub and nothing has run on a VPS, so
-#                      key 2 still dispatches _slot_notice. It switches to
-#                      run_sub "052_grin_accio.sh" in packet S7, once there is a
-#                      working deploy behind it; wiring a menu of stubs earlier
-#                      would advertise a product that cannot do anything.
+#                      visitor's browser tab, this box holds no seed. NOT
+#                      PLANNED ANY MORE — BUILT. Key 2 dispatched _slot_notice
+#                      from 2026-08-09 to 2026-08-10 precisely because wiring a
+#                      menu of stubs would advertise a product that could not do
+#                      anything; packet S7 retired the last stub and the key now
+#                      runs scripts/052_grin_accio.sh.
+#                      ⚠ Built is not tested: no part of Accio has run on a VPS.
+#                      Its own banner says so, and its acceptance runs (testnet
+#                      build → deploy → send → receive) are still owed.
 #                      Design → docs/generated/script052_design.md
 #                      Log    → docs/generated/script052_implementation.md
 #   GoblinPay          Receive-only merchant till (Nostr + slatepack), deploying
@@ -209,6 +210,26 @@ _051_status() {
         echo "127.0.0.1:7420"
     else
         echo ""
+    fi
+}
+
+# 052 — installed if either network has a config. Deliberately NOT keyed on the
+# gateway unit: the site can be deployed and serving with the gateway not yet
+# installed, and a row that called that "not installed" would hide the one thing
+# an operator is looking for.
+_052_installed() {
+    [[ -f /opt/grin/accio-main/grin_accio.conf ]] || [[ -f /opt/grin/accio-test/grin_accio.conf ]]
+}
+
+# 052 — one gateway unit per network, like Drop and unlike Fidelius.
+_052_status() {
+    local mn="" tn=""
+    systemctl is-active --quiet grin-accio-main 2>/dev/null && mn="mainnet"
+    systemctl is-active --quiet grin-accio-test 2>/dev/null && tn="testnet"
+    if [[ -n "$mn" && -n "$tn" ]]; then echo "mainnet + testnet"
+    elif [[ -n "$mn" ]];           then echo "mainnet"
+    elif [[ -n "$tn" ]];           then echo "testnet"
+    else echo ""
     fi
 }
 
@@ -297,13 +318,15 @@ show_menu() {
 
     local s051_run;  s051_run=$(_051_status)
     local s051x_run; s051x_run=$(_051x_status)
+    local s052_run;  s052_run=$(_052_status)
     local s059_run;  s059_run=$(_059_status)
     local s053_run;  s053_run=$(_053_status)
     local s_cmd_run; s_cmd_run=$(_cmd_status)
 
-    local s051_inst=0 s051x_inst=0 s059_inst=0 s053_inst=0 s_cmd_inst=0
+    local s051_inst=0 s051x_inst=0 s052_inst=0 s059_inst=0 s053_inst=0 s_cmd_inst=0
     _051_installed  && s051_inst=1  || true
     _051x_installed && s051x_inst=1 || true
+    _052_installed  && s052_inst=1  || true
     _059_installed  && s059_inst=1  || true
     _053_installed  && s053_inst=1  || true
     _cmd_installed  && s_cmd_inst=1 || true
@@ -326,6 +349,15 @@ show_menu() {
             echo -e "  ${GREEN}●${RESET} ${BOLD}Fidelius${RESET}            ${GREEN}running${RESET}  ${DIM}($s051_run)${RESET}"
         else
             echo -e "  ${DIM}○ Fidelius            installed · not running${RESET}"
+        fi
+    fi
+
+    if [[ -n "$s052_run" || $s052_inst -eq 1 ]]; then
+        any_shown=1
+        if [[ -n "$s052_run" ]]; then
+            echo -e "  ${GREEN}●${RESET} ${BOLD}Accio${RESET}               ${GREEN}gateway up${RESET}  ${DIM}($s052_run)${RESET}"
+        else
+            echo -e "  ${DIM}○ Accio               installed · gateway not running${RESET}"
         fi
     fi
 
@@ -1353,16 +1385,7 @@ main() {
         read -r choice || true
         case "$choice" in
             1) run_sub "051_grin_fidelius.sh"     || true ;;
-            2) _slot_notice "052) ACCIO — IN BUILD, NOT DEPLOYABLE YET" \
-                   "Public web wallet: the seed is generated and kept in the visitor's
-  browser tab, so this server never holds a key. The opposite of
-  Fidelius (key 1), which runs grin-wallet server-side.
-
-  Build started 2026-08-09. scripts/052_grin_accio.sh exists but is a
-  SKELETON — every action is a stub, and nothing has been deployed to
-  a server yet. This key starts it once there is a working deploy
-  behind it (packet S7)." \
-                   "docs/generated/script052_design.md" || true ;;
+            2) run_sub "052_grin_accio.sh"        || true ;;
             3) run_sub "051x_grin_xp_wallet.sh"   || true ;;
             4) _slot_notice "SLOT 4 — UNASSIGNED" \
                    "Reserved for the next WALLET product. It gets a script number

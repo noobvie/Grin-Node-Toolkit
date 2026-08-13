@@ -13,6 +13,43 @@ patches/public_html/index.html            replaces vendor/…/public_html/index.
 patches/public_html/scripts/node.js       replaces vendor/…/public_html/scripts/node.js
 ```
 
+## Every deviation carries an `ACCIO PATCH` marker
+
+A patched file is a whole-file copy, so the change itself is invisible — the only way to see
+it is to diff 13 k lines against `vendor/`, and that is not a review anyone repeats. So **every
+place a patched file departs from upstream is marked with the literal string `ACCIO PATCH`,
+followed by what it does and why.** `grep -rn 'ACCIO PATCH' patches/` is the index of this
+overlay, and `script052_implementation.md` §"Review plan" tells reviewers to work from that
+grep rather than from a diff.
+
+⚠ **A patch with no marker is invisible to the documented review method.** The R8 review found
+exactly that: `scripts/check_for_updates.js` had six rewritten URLs and not one marker, so it
+had never been read by anyone but its author.
+
+Some formats have no comment syntax that stays out of the rendered output — plain `.txt`, and
+SVG where a comment would ride along in every cached copy. **Those are recorded in the table
+below instead**, which is therefore part of the marker convention and not a courtesy index.
+
+| File | Marked inline | Why it is here |
+|---|---|---|
+| `backend/language.php` | ✅ | brand phrase map + branding of the translation table |
+| `backend/resources.php` | ✅ | SVG-only icon lists, the licence file entry, the upstream credit |
+| `index.html` | ✅ | dead MWC/Epic fonts, Grin-only wallet-type select, Donate removed |
+| `scripts/about_section.js` | ✅ | our source-code and contact links |
+| `scripts/check_for_updates.js` | ✅ | our repository; the standalone no longer checks |
+| `scripts/consensus.js` | ✅ | Grin forced as the wallet type, before any override |
+| `scripts/language.js` | ✅ | client twin of the brand map |
+| `scripts/logo.js` | ✅ | the 3D MWC mark never initialises |
+| `scripts/mqs.js` | ✅ | S9 pass 1 — the MQS transport reduced to its external surface |
+| `scripts/node.js` | ✅ | our node first in both failover lists |
+| `site.webmanifest` | ✅ | SVG icon, Grin-only protocol handlers |
+| `privacy_policy.txt` | ❌ *(plain text — a marker would be user-visible)* | rewritten end to end for Accio: self-custody, and what the `/tor/` and `/listen` rails relay |
+| `images/logo_big.svg` | ❌ *(SVG)* | Grin wordmark replacing the MWC one |
+| `images/logo_small.svg` | ❌ *(SVG)* | as above |
+| `images/app_icons/app_icon.svg` | ❌ *(SVG)* | favicon / PWA icon |
+| `images/mask_images/mask_image.svg` | ❌ *(SVG)* | Safari pinned-tab mask |
+| `MWC Wallet license.txt` | ❌ *(licence text — must stay verbatim)* | **added, not replaced.** Byte-identical to `vendor/upstream-wallet/LICENSE`; it is what the upstream credit in `ATTRIBUTIONS` links to, and MIT requires it be retained |
+
 ## Why an overlay and not surgery
 
 - `vendor/SHA256SUMS` pins 270 files. One edited byte there fails the integrity check (S6).

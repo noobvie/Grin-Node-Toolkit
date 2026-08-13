@@ -39,3 +39,25 @@ Stock nginx, no modules, no apt-hold.
 S8 audits this service specifically: the `/tor/` forwarder as an SSRF surface (we own this
 guard outright now — more auditable, but no longer a battle-tested filter, so test it hard),
 per-wallet URL authorisation, and response-header leakage from hostile onions.
+
+## Tests
+
+```bash
+cd web/052_accio/gateway && node --test        # or: npm test
+```
+
+`node:test`, no dependencies, no sockets, no listeners — it exits on its own. The suite drives
+the **real** modules; nothing in `test/` re-implements a rule, and that is the rule. R6 added
+it because the S8 and S9 assertions were written in throwaway scratchpad harnesses and never
+committed, so `guard.js` — the SSRF boundary, and the file whose own header calls itself the
+one worth testing exhaustively — had nothing runnable behind it and every later edit to it was
+unprotected.
+
+Two habits worth keeping:
+
+- **Mutation-check a new assertion.** Break the fix on a copy and confirm the test goes red.
+  A green suite here already hid a test that asserted a branch it never constructed (S9), so
+  "it passes" is evidence of nothing until you have seen it fail for the right reason.
+- **`test/` is not deployed.** The installer copies `"$ACC_GATEWAY_SRC"/*.js` — top level only
+  — so the suite stays in the repo and off the VPS, and the "N modules" count it prints stays
+  right.

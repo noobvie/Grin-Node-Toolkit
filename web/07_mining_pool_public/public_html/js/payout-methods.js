@@ -1,8 +1,8 @@
 // payout-methods.js — payout-rail registry for the account page.
 //
 // WHY THIS EXISTS
-// Every payout rail (Tor, Slatepack, Goblin/Nostr, and Transporter when it ships) used to
-// leak into the account page through the same four scattered places: a hardcoded line in
+// Every payout rail (Tor, Slatepack, Goblin/Nostr) used to leak into the account
+// page through the same four scattered places: a hardcoded line in
 // syncPayMethod(), an entry in WD_METHOD, two or three entries in WD_STATUS, and a
 // special-case inside the pending-strip label. Adding or removing a rail meant hunting all
 // four down in a 1,800-line file, and missing one produced a silent wrong label rather than

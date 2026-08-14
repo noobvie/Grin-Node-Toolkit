@@ -5,7 +5,7 @@
 # every product that produces encrypted backup archives:
 #   · Script 08 ▸ 9  toolkit backup   (089_backup_restore.sh, temp_dir_*.enc)
 #   · Script 07 solo Maintenance      (lib/07_solo_backup.sh, grin_solo_backup_*)
-#   · Script 052 Grin Drop            (lib/052_lib_backup.sh, grin_drop_backup_*)
+#   · Script 059 Grin Drop            (lib/059_lib_backup.sh, grin_drop_backup_*)
 #
 # Right after an archive is written, the product calls gbp_push_file (the
 # interactive path) or the self-contained CLI /usr/local/bin/grin-backup-push
@@ -457,7 +457,7 @@ gbp_setup() {
         echo -e "  Log           : ${DIM}$GBP_LOG${RESET}"
         [[ -f "$GBP_LOG" ]] && echo -e "  Last activity : ${DIM}$(tail -1 "$GBP_LOG" 2>/dev/null)${RESET}"
         echo ""
-        echo -e "  ${DIM}Every finished backup archive (toolkit 08▸9, solo 07, Grin Drop 052)${RESET}"
+        echo -e "  ${DIM}Every finished backup archive (toolkit 08▸9, solo 07, Grin Drop 059)${RESET}"
         echo -e "  ${DIM}is scp'd to this ONE target right after creation. Push failures never${RESET}"
         echo -e "  ${DIM}break the backup — the local archive always stays.${RESET}"
         echo ""

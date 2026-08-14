@@ -1040,7 +1040,7 @@ pool_setup_nginx() {
         fi
     fi
 
-    # ── Certbot bootstrap (same pattern as 052_lib_nginx) ─────────────────────
+    # ── Certbot bootstrap (same pattern as 059_lib_nginx) ─────────────────────
     # The HTTPS vhost references the Let's Encrypt cert files, so writing it
     # before the cert exists makes `nginx -t` fail and blocks this whole step.
     # On a fresh box: HTTP-only vhost first → certbot → full SSL vhost below.

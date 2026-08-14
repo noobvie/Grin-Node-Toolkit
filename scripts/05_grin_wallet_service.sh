@@ -3,7 +3,7 @@
 # 05_grin_wallet_service.sh — Grin Wallet Services Hub
 # =============================================================================
 #
-#  Central launcher for all Grin wallet service scripts (051–053).
+#  Central launcher for all Grin wallet service scripts (051–059).
 #  Each sub-script is fully self-contained — it manages its own wallet,
 #  binary, nginx config, and systemd services independently.
 #
@@ -12,28 +12,89 @@
 #  conflicts and security mixing between services.
 #
 #  ─── Sub-scripts ──────────────────────────────────────────────────────────
-#   051  051_grin_private_web_wallet.sh   Personal browser wallet UI
-#   052  052_grin_drop.sh                 Giveaway + donation portal
+#   051  051_grin_fidelius.sh             Fidelius — personal browser wallet UI
+#   051x 051x_grin_xp_wallet.sh           Grin XP — XP-themed variant, mainnet only
 #   053  053_grin_woocommerce.sh          WooCommerce payment gateway
+#   059  059_grin_drop.sh                 Giveaway + donation portal
 #   05C  (built into this hub)            CMD wallet quick setup — CLI / testing
-#   (Grin Transporter moved to the Grin Connectivity Hub → scripts/092_grin_transporter.sh)
+#   (Grin Transporter moved to the Grin Connectivity Hub → scripts/093_grin_transporter.sh)
 #
-#  ─── Menu ordering rule ───────────────────────────────────────────────────
-#  The KEY is positional — assigned top-to-bottom as rows are rendered. Because
-#  the key is positional, no future product can put the keys out of order,
-#  whatever number it is given (same rule as the 07 and 09 hubs).
+#  ─── Menu ordering rule — FIXED SLOTS (changed 2026-08-04) ────────────────
+#  The keys 1-9 are FIXED SLOTS, not positions. Every row in a category owns a
+#  key permanently — including rows that are planned or still empty — and a key
+#  is never re-pointed at a different product. A category's slots are contiguous
+#  and each category ends with a spare, so a new product fills the spare rather
+#  than shifting anything below it.
 #
-#  Digits and letters are TWO independent ascending sequences: digits key the
-#  numbered products, letters key hub-built utilities that have no script file of
-#  their own. Each sequence ascends down the screen.
+#     Wallets           1  2  3  4(spare)
+#     Accept Payments   5  6  7  8(spare)
+#     Giveaways         9
+#
+#  This REPLACES the previous positional rule, where the key was assigned
+#  top-to-bottom at render and planned rows were keyless. Positional keys stayed
+#  ascending for free, but every insertion silently re-pointed every key below
+#  it, which is how '2' came to mean Drop and then WooCommerce.
+#
+#  What the change costs: the spare in each category is finite. When Wallets
+#  outgrows slot 4, the next wallet CANNOT take 5 (that is WooCommerce) — the
+#  categories below have to shift, one deliberate migration, done the way the
+#  052 → 059 Drop move was done. That is the trade: rare, explicit renumbering
+#  instead of constant, invisible key drift.
+#
+#  ─── Retired key vs reassigned key ────────────────────────────────────────
+#  Under fixed slots a key should never change hands again, so this rule now
+#  applies mainly to history and to the letter keys.
+#
+#  A RETIRED key — one that nothing else took — may stay as a silent alias, so
+#  muscle memory still lands somewhere sane ('C' still reaches the CMD wallet;
+#  see the `case` in main()).
+#
+#  A REASSIGNED key never may. A second `2)` arm would be dead code — bash takes
+#  the FIRST matching arm and never reaches it — and if it were reachable it
+#  would open the wrong product with no error. When a key changes hands the old
+#  meaning dies with it; the per-product banner ("059) GRIN DROP") is what tells
+#  a mis-keyed operator where they landed.
+#
+#  The move to fixed slots re-pointed 2 (WooCommerce → Accio), 3 (Drop → Grin XP)
+#  and 5/9 one final time. Those old meanings are gone and get no alias. This is
+#  the last such churn by design — that is the whole point of fixing the slots.
+#
+#  ─── The 05x number allocation — settled, do not reopen ───────────────────
+#    05_  Wallet Services Hub (this file)
+#    05C  CMD Wallet Quick Setup          hub-built, no script file
+#    051  Fidelius — personal web wallet
+#    052  Accio — public web wallet (build started 2026-08-09; key 2 dispatches
+#         to the real script since 2026-08-10, packet S7)
+#    053  WooCommerce Gateway
+#    054–058  FREE. Payment Pro then GoblinPay are expected to take 054/055 as
+#             they are built, but neither is ASSIGNED — an unbuilt product has no
+#             number (see "Planned — no number assigned yet" below). This table
+#             now holds NO reservations: 052 was the only one, and it ended when
+#             Accio's build started on 2026-08-09.
+#             A 2nd giveaway product takes 058; that band grows downward.
+#    059  Grin Drop — giveaway + donation portal   (moved from 052, 2026-08-04)
+#
+#  WHY Drop sits at 059 rather than 054, which is the part that stops this being
+#  reopened: Giveaways is a one-member category, so parking it at the END of the
+#  band leaves a contiguous run for the two categories that actually grow —
+#  wallets and payments. It also cost ONE migration instead of two: at 054,
+#  WooCommerce would have had to move to 055 to keep Payments contiguous. The
+#  "no headroom at the boundary" objection does not bite, because the number
+#  encodes nothing about order WITHIN a band — the menu key does that, and the
+#  key is a fixed slot independent of the number (see above: key 9 is Drop/059
+#  by coincidence, key 5 is WooCommerce/053). A 2nd giveaway would take 058 and
+#  the band would grow downward with no menu consequence at all.
+#  Keeping 052 was the alternative, and it would have left Wallets
+#  permanently split around a faucet with every future wallet landing further
+#  from 051. Full reasoning → docs/generated/script05_implementation.md
 #
 #  ─── Numbers are internal — the menu shows NAMES only ─────────────────────
-#  051 / 052 / 053 / 05C are file and doc identity. They are NOT printed on the
+#  051 / 053 / 059 / 05C are file and doc identity. They are NOT printed on the
 #  menu rows: an operator picking a wallet does not care which integer its script
 #  got, and two numbers per row ("A) 05C ·") read as a broken sequence.
 #
 #  The number IS printed on each product's own screen banner ("05C) GRIN WALLET
-#  QUICK SETUP"), which is the toolkit-wide convention (01, 052, 091 …). That is
+#  QUICK SETUP"), which is the toolkit-wide convention (01, 059, 091 …). That is
 #  the one place it belongs — it tells you where you are after a clear — and it
 #  is why the menu row can drop it without the number becoming unfindable.
 #
@@ -42,21 +103,34 @@
 #  quick setup (hub 05)", not "05C" — the number is a hint in brackets, the name
 #  is what the operator can actually find on a menu.
 #
-#  Within a group, rows are ordered by readiness: ✅ ready, then 🔧 building,
-#  then planned. The first thing you see in a group is the thing that works.
+#  Rows are NOT re-sorted by readiness. Under fixed slots a row cannot move, so
+#  the old "✅ then 🔧 then planned within a group" rule is retired — sorting by
+#  readiness would move a key the day a product ships, which is exactly what
+#  fixed slots exist to prevent. The ✅/🔧/⏳ marker carries readiness instead.
 #
-#  ─── Planned — no number assigned yet ─────────────────────────────────────
-#  Planned products get a KEYLESS dim row inside the category they will belong
-#  to, so the menu shows where they are heading without reserving anything. They
-#  gain a key at that position on the day they are built. Never give a planned
-#  row a live key — a key that prints "coming soon" is the placeholder script we
-#  deleted, in miniature.
+#  ─── Planned and spare rows have LIVE keys ────────────────────────────────
+#  A planned or spare row owns its slot from the start, so its key is live and
+#  dispatches to _slot_notice(): a banner saying what the slot is for, a design-doc
+#  pointer, "Nothing was installed or changed", Enter to return.
+#
+#  This is NOT the "coming soon" placeholder script we deleted. That was a fake
+#  product — a sub-menu with options that did nothing, which an operator could
+#  wander into and mistake for a broken install. _slot_notice is one screen with
+#  no choices; it cannot be confused for a product. The alternative (a dead key
+#  that silently redraws, or falls through to "Invalid option") reads as a broken
+#  menu, because under fixed slots the number IS printed and IS in the range hint.
 #
 #  Numbers are assigned when a build STARTS — the next free integer, nothing
-#  more. Do NOT try to make the number encode the category: 051/052/053 are
-#  already one-per-category, so no contiguous per-category band can exist without
-#  renumbering, and a band scheme seals every group except the last one anyway.
+#  more. Do NOT try to make the number encode the category: 051/053/059 were
+#  already one-per-category, so no contiguous per-category band could exist
+#  without renumbering — which is exactly what moving Drop 052 → 059 cost.
 #  Pre-assigning numbers to ideas is what made this menu read 1,5,C,3,4,6,2.
+#  052 was the single exception — held for Accio while it was still unbuilt,
+#  because the whole point of moving Drop off 052 was to free a WALLET slot next
+#  to 051, and letting anything else take it would have thrown away the only
+#  thing that migration bought. That exception ENDED on 2026-08-09: Accio's
+#  build started (packet S0) and scripts/052_grin_accio.sh now exists, so 052 is
+#  assigned in the ordinary way and nothing here is reserved any more.
 #
 #   Payment Pro        Grin payment processor for platforms other than WooCommerce
 #                      (Shopify, custom/headless APIs, subscription billing).
@@ -64,8 +138,18 @@
 #                      recurring GRIN payments, webhooks on confirmation,
 #                      multi-wallet routing. Bridge ports 3008 main / 3009 test.
 #                      Design starts after 053_grin_woocommerce.sh is complete.
-#   Public Web Wallet  Client-side WASM wallet, no server-held keys.
-#                      Design → docs/generated/script05_design.md (PART A)
+#   Accio (052)        Public web wallet — self-custodial, keys live in the
+#                      visitor's browser tab, this box holds no seed. NOT
+#                      PLANNED ANY MORE — BUILT. Key 2 dispatched _slot_notice
+#                      from 2026-08-09 to 2026-08-10 precisely because wiring a
+#                      menu of stubs would advertise a product that could not do
+#                      anything; packet S7 retired the last stub and the key now
+#                      runs scripts/052_grin_accio.sh.
+#                      ⚠ Built is not tested: no part of Accio has run on a VPS.
+#                      Its own banner says so, and its acceptance runs (testnet
+#                      build → deploy → send → receive) are still owed.
+#                      Design → docs/generated/script052_design.md
+#                      Log    → docs/generated/script052_implementation.md
 #   GoblinPay          Receive-only merchant till (Nostr + slatepack), deploying
 #                      github.com/2ro/GoblinPay the toolkit way.
 #                      Design → docs/generated/script09_design.md (PART C)
@@ -109,17 +193,39 @@ source "$SCRIPT_DIR/lib/grin_node_control.sh"
 # INSTALLATION DETECTION
 # =============================================================================
 
-# 051 — installed if config.conf written by the script exists for either network
+# 051 — installed if the config written by 051 step 4 exists.
+# Fidelius is ONE deploy serving both networks (design D1), so there are no
+# per-network config files and no per-network nginx symlinks to probe. The old
+# /opt/grin/webwallet/{mainnet,testnet}/config.conf + web-wallet-{main,test}
+# symlinks are PHP-era paths that nothing has written since the Node port —
+# which meant this row read "not installed" on every current deploy.
 _051_installed() {
-    [[ -f /opt/grin/webwallet/mainnet/config.conf ]] \
-        || [[ -f /opt/grin/webwallet/testnet/config.conf ]]
+    [[ -f /opt/grin/fidelius/config.conf ]]
 }
 
-# 051 — running if nginx sites-enabled symlink exists for either network
+# 051 — running if the single systemd unit is active. One unit, both networks,
+# so this reports the listener rather than a network pair like the other rows.
 _051_status() {
+    if systemctl is-active --quiet grin-fidelius 2>/dev/null; then
+        echo "127.0.0.1:7420"
+    else
+        echo ""
+    fi
+}
+
+# 052 — installed if either network has a config. Deliberately NOT keyed on the
+# gateway unit: the site can be deployed and serving with the gateway not yet
+# installed, and a row that called that "not installed" would hide the one thing
+# an operator is looking for.
+_052_installed() {
+    [[ -f /opt/grin/accio-main/grin_accio.conf ]] || [[ -f /opt/grin/accio-test/grin_accio.conf ]]
+}
+
+# 052 — one gateway unit per network, like Drop and unlike Fidelius.
+_052_status() {
     local mn="" tn=""
-    [[ -L /etc/nginx/sites-enabled/web-wallet-main ]] && mn="mainnet"
-    [[ -L /etc/nginx/sites-enabled/web-wallet-test ]] && tn="testnet"
+    systemctl is-active --quiet grin-accio-main 2>/dev/null && mn="mainnet"
+    systemctl is-active --quiet grin-accio-test 2>/dev/null && tn="testnet"
     if [[ -n "$mn" && -n "$tn" ]]; then echo "mainnet + testnet"
     elif [[ -n "$mn" ]];           then echo "mainnet"
     elif [[ -n "$tn" ]];           then echo "testnet"
@@ -127,13 +233,13 @@ _051_status() {
     fi
 }
 
-# 052 — installed if app dir exists for either network
-_052_installed() {
+# 059 — installed if app dir exists for either network
+_059_installed() {
     [[ -d /opt/grin/drop-main ]] || [[ -d /opt/grin/drop-test ]]
 }
 
-# 052 — running networks (systemd active)
-_052_status() {
+# 059 — running networks (systemd active)
+_059_status() {
     local mn="" tn=""
     systemctl is-active --quiet grin-drop-main 2>/dev/null && mn="mainnet"
     systemctl is-active --quiet grin-drop-test 2>/dev/null && tn="testnet"
@@ -160,6 +266,17 @@ _053_status() {
     elif [[ -n "$tn" ]];           then echo "testnet"
     else echo ""
     fi
+}
+
+# 051x — installed if the XP config written by the script exists (mainnet only)
+_051x_installed() {
+    [[ -f /opt/grin/webwallet/xp-mainnet/config.conf ]]
+}
+
+# 051x — running if its nginx sites-enabled symlink exists. Mainnet only by
+# design, so this returns the label or nothing — never a network pair.
+_051x_status() {
+    if [[ -L /etc/nginx/sites-enabled/web-wallet-xp ]]; then echo "mainnet"; else echo ""; fi
 }
 
 # cmd wallet — installed if grin-wallet.toml exists
@@ -199,33 +316,57 @@ show_menu() {
     # ── running / installed status ────────────────────────────────────────────
     local any_shown=0
 
-    local s051_run; s051_run=$(_051_status)
-    local s052_run; s052_run=$(_052_status)
-    local s053_run; s053_run=$(_053_status)
+    local s051_run;  s051_run=$(_051_status)
+    local s051x_run; s051x_run=$(_051x_status)
+    local s052_run;  s052_run=$(_052_status)
+    local s059_run;  s059_run=$(_059_status)
+    local s053_run;  s053_run=$(_053_status)
     local s_cmd_run; s_cmd_run=$(_cmd_status)
 
-    local s051_inst=0 s052_inst=0 s053_inst=0 s_cmd_inst=0
-    _051_installed && s051_inst=1 || true
-    _052_installed && s052_inst=1 || true
-    _053_installed && s053_inst=1 || true
-    _cmd_installed && s_cmd_inst=1 || true
+    local s051_inst=0 s051x_inst=0 s052_inst=0 s059_inst=0 s053_inst=0 s_cmd_inst=0
+    _051_installed  && s051_inst=1  || true
+    _051x_installed && s051x_inst=1 || true
+    _052_installed  && s052_inst=1  || true
+    _059_installed  && s059_inst=1  || true
+    _053_installed  && s053_inst=1  || true
+    _cmd_installed  && s_cmd_inst=1 || true
 
-    # Show only running or installed services — hide untouched ones
+    # Show only running or installed services — hide untouched ones.
+    # Order here mirrors the menu below (Wallets → Accept Payments → Giveaways);
+    # keep the two in step whenever a row moves.
+    if [[ -n "$s_cmd_run" || $s_cmd_inst -eq 1 ]]; then
+        any_shown=1
+        if [[ -n "$s_cmd_run" ]]; then
+            echo -e "  ${GREEN}●${RESET} ${BOLD}CMD Wallet${RESET}          ${GREEN}listening${RESET}  ${DIM}($s_cmd_run)${RESET}"
+        else
+            echo -e "  ${DIM}○ CMD Wallet          installed · not listening${RESET}"
+        fi
+    fi
+
     if [[ -n "$s051_run" || $s051_inst -eq 1 ]]; then
         any_shown=1
         if [[ -n "$s051_run" ]]; then
-            echo -e "  ${GREEN}●${RESET} ${BOLD}Private Web Wallet${RESET}  ${GREEN}running${RESET}  ${DIM}($s051_run)${RESET}"
+            echo -e "  ${GREEN}●${RESET} ${BOLD}Fidelius${RESET}            ${GREEN}running${RESET}  ${DIM}($s051_run)${RESET}"
         else
-            echo -e "  ${DIM}○ Private Web Wallet  installed · not running${RESET}"
+            echo -e "  ${DIM}○ Fidelius            installed · not running${RESET}"
         fi
     fi
 
     if [[ -n "$s052_run" || $s052_inst -eq 1 ]]; then
         any_shown=1
         if [[ -n "$s052_run" ]]; then
-            echo -e "  ${GREEN}●${RESET} ${BOLD}Grin Drop${RESET}           ${GREEN}running${RESET}  ${DIM}($s052_run)${RESET}"
+            echo -e "  ${GREEN}●${RESET} ${BOLD}Accio${RESET}               ${GREEN}gateway up${RESET}  ${DIM}($s052_run)${RESET}"
         else
-            echo -e "  ${DIM}○ Grin Drop           installed · not running${RESET}"
+            echo -e "  ${DIM}○ Accio               installed · gateway not running${RESET}"
+        fi
+    fi
+
+    if [[ -n "$s051x_run" || $s051x_inst -eq 1 ]]; then
+        any_shown=1
+        if [[ -n "$s051x_run" ]]; then
+            echo -e "  ${GREEN}●${RESET} ${BOLD}Grin XP${RESET}             ${GREEN}running${RESET}  ${DIM}($s051x_run)${RESET}"
+        else
+            echo -e "  ${DIM}○ Grin XP             installed · not running${RESET}"
         fi
     fi
 
@@ -238,12 +379,12 @@ show_menu() {
         fi
     fi
 
-    if [[ -n "$s_cmd_run" || $s_cmd_inst -eq 1 ]]; then
+    if [[ -n "$s059_run" || $s059_inst -eq 1 ]]; then
         any_shown=1
-        if [[ -n "$s_cmd_run" ]]; then
-            echo -e "  ${GREEN}●${RESET} ${BOLD}CMD Wallet${RESET}          ${GREEN}listening${RESET}  ${DIM}($s_cmd_run)${RESET}"
+        if [[ -n "$s059_run" ]]; then
+            echo -e "  ${GREEN}●${RESET} ${BOLD}Grin Drop${RESET}           ${GREEN}running${RESET}  ${DIM}($s059_run)${RESET}"
         else
-            echo -e "  ${DIM}○ CMD Wallet          installed · not listening${RESET}"
+            echo -e "  ${DIM}○ Grin Drop           installed · not running${RESET}"
         fi
     fi
 
@@ -252,29 +393,56 @@ show_menu() {
     fi
 
     echo ""
-    echo -e "  ${DIM}✅ ready   🔧 building   · keyless rows are planned, not built yet${RESET}"
+    echo -e "  ${DIM}✅ ready   🔧 building   ⏳ planned — a planned key explains the slot, installs nothing${RESET}"
     echo ""
     echo -e "${DIM}  ── Wallets ──────────── hold & spend your own GRIN${RESET}"
     echo ""
     echo -e "  ${GREEN}A${RESET}) CMD Wallet Quick Setup  ✅  ${DIM}download · init/recover · listen (CLI/testing)${RESET}"
-    echo -e "  ${GREEN}1${RESET}) Private Web Wallet      🔧  ${DIM}browser UI, server-held keys${RESET}"
-    echo -e "     ${DIM}Public Web Wallet           planned · client-side WASM, no custody${RESET}"
-    echo ""
-    echo -e "${DIM}  ── Giveaways & Donations ─ hand GRIN out${RESET}"
-    echo ""
-    echo -e "  ${GREEN}2${RESET}) Grin Drop               ✅  ${DIM}giveaway faucet + donation portal${RESET}"
+    echo -e "  ${GREEN}1${RESET}) Fidelius                🔧  ${DIM}personal web wallet · server-held keys${RESET}"
+    echo -e "  ${GREEN}2${RESET}) Accio                   🔧  ${DIM}public web wallet · client-side keys${RESET}"
+    echo -e "  ${GREEN}3${RESET}) Grin XP                 🔧  ${DIM}Fidelius, XP-themed · mainnet only${RESET}"
+    echo -e "  ${DIM}4) Spare slot                  unassigned · next wallet lands here${RESET}"
     echo ""
     echo -e "${DIM}  ── Accept Payments ──── receive GRIN from customers${RESET}"
     echo ""
-    echo -e "  ${GREEN}3${RESET}) WooCommerce Gateway     🔧  ${DIM}WordPress/WooCommerce plugin${RESET}"
-    echo -e "     ${DIM}Payment Pro                 planned · Shopify / custom REST API${RESET}"
-    echo -e "     ${DIM}GoblinPay                   planned · receive-only merchant till${RESET}"
+    echo -e "  ${GREEN}5${RESET}) WooCommerce Gateway     🔧  ${DIM}WordPress/WooCommerce plugin${RESET}"
+    echo -e "  ${GREEN}6${RESET}) Payment Pro             ⏳  ${DIM}Shopify / custom REST API${RESET}"
+    echo -e "  ${GREEN}7${RESET}) GoblinPay               ⏳  ${DIM}receive-only merchant till${RESET}"
+    echo -e "  ${DIM}8) Spare slot                  unassigned · next payment rail lands here${RESET}"
+    echo ""
+    echo -e "${DIM}  ── Giveaways & Donations ─ hand GRIN out${RESET}"
+    echo ""
+    echo -e "  ${GREEN}9${RESET}) Grin Drop               ✅  ${DIM}giveaway faucet + donation portal${RESET}"
     echo ""
     echo -e "  ${DIM}Grin Transporter moved → main menu 09 (Grin Connectivity Hub)${RESET}"
     echo ""
     echo -e "  ${RED}0${RESET}) Back to main menu"
     echo ""
-    echo -ne "${BOLD}Select [A / 1-3 / 0]: ${RESET}"
+    echo -ne "${BOLD}Select [A / 1-9 / 0]: ${RESET}"
+}
+
+# ─── Rows that are not products yet ──────────────────────────────────────────
+# A planned/spare key is LIVE but installs nothing: it prints what the slot is
+# for and returns. This is deliberately NOT the "coming soon" placeholder script
+# we deleted — there is no sub-menu, no prompt, no half-built path to wander
+# into. It exists so a fixed key never reads as a broken menu.
+_slot_notice() {
+    local title="$1" body="$2" doc="${3:-}"
+    clear
+    echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+    echo -e "${BOLD}${CYAN} ${title}${RESET}"
+    echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+    echo ""
+    echo -e "  ${body}"
+    echo ""
+    if [[ -n "$doc" ]]; then
+        echo -e "  ${DIM}Design → ${doc}${RESET}"
+        echo ""
+    fi
+    echo -e "  ${DIM}Nothing was installed or changed.${RESET}"
+    echo ""
+    echo -e "${DIM}Press Enter to return...${RESET}"
+    read -r || true
 }
 
 run_sub() {
@@ -305,12 +473,29 @@ run_sub() {
 # only argv-free channel; `--pass` is NOT the only option, despite the comments
 # elsewhere in this repo.
 #
-# ─── Listener mode differs from solo/pool ON PURPOSE ─────────────────────────
-# This wallet runs `grin-wallet listen` — the Foreign API on 3415/13415 — because
-# it exists to RECEIVE slates. Solo mining (lib/07_solo_wallet.sh) and the public
-# pool run `owner_api` with owner_api_include_foreign=true on 3420/13420 instead,
-# because the node's stratum calls build_coinbase into them. Nothing calls
-# build_coinbase here, so the combined-listener keys are deliberately not set.
+# ─── TWO listener modes — the operator picks one per network ─────────────────
+# Stored in `<dir>/.listen_mode`; default `listen`, unchanged from pre-2026-08-06.
+#
+#   listen      grin-wallet listen      Foreign API only, 3415/13415.
+#               RECEIVE-ONLY, and grin-wallet starts Tor for it automatically
+#               (tor.use_tor_listener), so the wallet gets an .onion for free.
+#               No Owner API — nothing can drive a SEND through this wallet.
+#
+#   owner_api   grin-wallet owner_api   Owner API v3 + Foreign API on ONE port,
+#               3420/13420, via owner_api_include_foreign = true. This is the
+#               059/07 model. Required by anything that drives the wallet over
+#               HTTP — notably the Script 093 Transporter poll agent, whose send
+#               path calls init_send_tx / tx_lock_outputs / finalize_tx and so
+#               cannot work against `listen` at all.
+#
+# The trade is REAL and stated at the prompt: owner_api gains programmatic send
+# and loses the automatic Tor onion listener that `listen` sets up. It is a
+# choice, never a silent upgrade — an operator who only wants to receive slates
+# by hand is strictly better off on `listen`.
+#
+# Solo mining (lib/07_solo_wallet.sh) and the public pool are permanently on the
+# combined listener for a different reason: the node's stratum calls
+# build_coinbase into them. Nothing calls build_coinbase here.
 # =============================================================================
 
 # ─── Per-network resolvers ──────────────────────────────────────────────────
@@ -325,6 +510,36 @@ _cmd_toml()         { echo "$(_cmd_dir "$1")/grin-wallet.toml"; }
 _cmd_pass_file()    { echo "$(_cmd_dir "$1")/${1:-mainnet}_pass_wallet.txt"; }
 _cmd_seed_file()    { echo "$(_cmd_dir "$1")/${1:-mainnet}_seed.txt"; }
 _cmd_launcher()     { echo "$(_cmd_dir "$1")/listen.sh"; }
+_cmd_owner_port()   { [[ "${1:-}" == "testnet" ]] && echo 13420 || echo 3420; }
+_cmd_mode_file()    { echo "$(_cmd_dir "$1")/.listen_mode"; }
+
+# ─── Listener mode resolvers ────────────────────────────────────────────────
+# Anything that is not exactly "owner_api" reads as "listen": an empty, missing
+# or hand-corrupted mode file must fall back to the receive-only default, never
+# to the mode that opens an Owner API. Fail-closed on the more capable mode.
+_cmd_mode() {
+    local m; m=$(cat "$(_cmd_mode_file "${1:-mainnet}")" 2>/dev/null || true)
+    if [[ "${m//[[:space:]]/}" == "owner_api" ]]; then echo "owner_api"; else echo "listen"; fi
+}
+_cmd_set_mode() {
+    local dir; dir=$(_cmd_dir "$1")
+    mkdir -p "$dir" || return 1
+    printf '%s\n' "$2" > "$(_cmd_mode_file "$1")"
+}
+# The port the ACTIVE mode listens on — every port guard, wait and status line
+# must use this, not _cmd_foreign_port. An owner_api wallet never binds 3415, so
+# guarding that port would check something nothing is using and let a real 3420
+# collision through.
+_cmd_mode_port() {
+    if [[ "$(_cmd_mode "$1")" == "owner_api" ]]; then _cmd_owner_port "$1"; else _cmd_foreign_port "$1"; fi
+}
+_cmd_mode_label() {
+    if [[ "$(_cmd_mode "$1")" == "owner_api" ]]; then
+        echo "owner_api — Owner v3 + Foreign on $(_cmd_owner_port "$1")"
+    else
+        echo "listen — Foreign API $(_cmd_foreign_port "$1")"
+    fi
+}
 
 # ─── grin-wallet.toml key setters ───────────────────────────────────────────
 # Replace the key in place (commented or not); when absent, insert right after
@@ -433,13 +648,14 @@ _cmd_extract_seed() {
 # ─── Listener port guard ────────────────────────────────────────────────────
 # NEVER auto-kill the holder — it may be another wallet with real funds.
 _cmd_port_collision_check() {
-    local net="$1" port tmux_name
-    port=$(_cmd_foreign_port "$net"); tmux_name=$(_cmd_tmux_name "$net")
+    local net="$1" port tmux_name key
+    port=$(_cmd_mode_port "$net"); tmux_name=$(_cmd_tmux_name "$net")
+    if [[ "$(_cmd_mode "$net")" == "owner_api" ]]; then key="owner_api_listen_port"; else key="api_listen_port"; fi
     gnc_get_pid_on_port "$port" >/dev/null 2>&1 || return 0   # free
     tmux has-session -t "$tmux_name" 2>/dev/null && return 0  # already ours
     error "Port $port is held by ANOTHER process (not '$tmux_name')."
     error "  Not touched automatically — it may be a wallet holding real funds."
-    error "  Stop that listener first, or change api_listen_port in"
+    error "  Stop that listener first, or change $key in"
     error "  $(_cmd_toml "$net") and re-run."
     return 1
 }
@@ -457,22 +673,28 @@ _cmd_port_collision_check() {
 # then grin-wallet execs with stdin on fd 3 — the secret leaves the filesystem
 # before grin-wallet even starts and cannot outlive the process.
 _cmd_write_launcher() {
-    local net="$1" src="$2" unlink="${3:-0}" dir bin flag launcher
+    local net="$1" src="$2" unlink="${3:-0}" dir bin flag launcher mode subcmd
     dir=$(_cmd_dir "$net"); bin=$(_cmd_wallet_bin "$net")
     flag=$(_cmd_net_flag "$net"); launcher=$(_cmd_launcher "$net")
+    mode=$(_cmd_mode "$net"); subcmd="listen"
+    [[ "$mode" == "owner_api" ]] && subcmd="owner_api"
     mkdir -p "$dir"
     {
         echo '#!/bin/bash'
-        echo "# GENERATED by 05_grin_wallet_service.sh — CMD wallet listener ($net)."
+        echo "# GENERATED by 05_grin_wallet_service.sh — CMD wallet listener ($net, mode: $mode)."
         echo "# The passphrase arrives on STDIN, never in argv (no -p): grin-wallet's"
         echo "# rpassword prompt reads stdin when stdin is not a TTY."
+        if [[ "$mode" == "owner_api" ]]; then
+            echo "# owner_api may start LOCKED and not prompt at all; the stdin redirect is"
+            echo "# then simply never read, so feeding it is harmless either way."
+        fi
         echo "cd \"$dir\" || exit 1"
         if [[ "$unlink" == "1" ]]; then
             echo "exec 3< \"$src\" || exit 1"
             echo "rm -f \"$src\""
-            echo "exec \"$bin\" $flag listen <&3"
+            echo "exec \"$bin\" $flag $subcmd <&3"
         else
-            echo "exec \"$bin\" $flag listen < \"$src\""
+            echo "exec \"$bin\" $flag $subcmd < \"$src\""
         fi
     } > "$launcher"
     chmod 700 "$launcher"
@@ -533,7 +755,9 @@ _cmd_wallet_setup_for_net() {
     echo ""
     echo -e "  Network      : ${BOLD}$net_label${RESET}"
     echo -e "  Node port    : ${DIM}$_node_port${RESET}"
-    echo -e "  Listener     : ${DIM}grin-wallet listen — Foreign API $_listen_port${RESET}"
+    # Current mode, not the target — the mode prompt is Step 4b, further down.
+    # Labelling it "target" here would contradict whatever the operator picks.
+    echo -e "  Listener now : ${DIM}grin-wallet $(_cmd_mode_label "$net")  ${BOLD}(re-asked below)${RESET}"
     echo -e "  Wallet dir   : ${DIM}$wallet_dir${RESET}"
     echo -e "  Binary       : ${DIM}$wallet_bin${RESET}"
     echo -e "  Pass file    : ${DIM}$pass_file${RESET}"
@@ -778,6 +1002,41 @@ _cmd_wallet_setup_for_net() {
         echo ""
     fi
 
+    # ── Step 4b: Listener mode ────────────────────────────────────────────────
+    # Asked BEFORE the toml patch, because the mode decides which port keys get
+    # pinned — and before the listener starts, because it decides the subcommand.
+    local _mode_before _mode
+    _mode_before=$(_cmd_mode "$net"); _mode="$_mode_before"
+    echo -e "  ${DIM}─── Listener mode ────────────────────────────────────${RESET}"
+    echo ""
+    echo -e "  ${GREEN}1${RESET}) ${BOLD}listen${RESET}     ${DIM}Foreign API $_listen_port · receive-only${RESET}"
+    echo -e "     ${DIM}grin-wallet starts Tor for you, so this wallet gets an .onion${RESET}"
+    echo -e "     ${DIM}address and can be paid directly. No Owner API.${RESET}"
+    echo -e "  ${GREEN}2${RESET}) ${BOLD}owner_api${RESET}  ${DIM}Owner v3 + Foreign on $(_cmd_owner_port "$net") · send + receive${RESET}"
+    echo -e "     ${DIM}Needed to drive this wallet over HTTP — the Script 093${RESET}"
+    echo -e "     ${DIM}Transporter agent cannot send through 'listen' at all.${RESET}"
+    echo -e "     ${YELLOW}Trade-off: no automatic Tor onion listener in this mode.${RESET}"
+    echo ""
+    echo -e "  ${DIM}Current: ${BOLD}$_mode_before${RESET}"
+    echo -ne "  Select [1/2, Enter = keep $_mode_before]: "
+    local _msel; read -r _msel || true
+    case "$_msel" in
+        1) _mode="listen" ;;
+        2) _mode="owner_api" ;;
+        *) ;;   # Enter or anything else keeps the current mode
+    esac
+    if [[ "$_mode" != "$_mode_before" ]]; then
+        # A live listener is bound to the OLD mode's port and holds the LMDB lock.
+        # Say so here rather than letting the restart look like a random failure.
+        if _cmd_wallet_busy "$net"; then
+            warn "The '$tmux_name' listener is running in '$_mode_before' mode."
+            warn "  It will be restarted on the new port at Step 7."
+        fi
+        _cmd_set_mode "$net" "$_mode" || warn "Could not record the mode — keeping '$_mode_before'."
+        success "Listener mode → ${BOLD}$_mode${RESET}"
+    fi
+    echo ""
+
     # ── Step 5: Patch grin-wallet.toml (silent — result shown in summary) ─────
     # Node dir/secret come from the SHARED resolvers (CLAUDE.md: "use these,
     # don't re-derive"). The old hand-rolled block sourced the instances conf
@@ -792,14 +1051,29 @@ _cmd_wallet_setup_for_net() {
         _did_patch="$node_secret"
     fi
 
-    # Pin the Foreign listen port. grin-wallet init writes mainnet defaults into
-    # the toml regardless of --testnet (052_lib_wallet.sh:709 records the same
-    # for owner_api_listen_port, and the pool pins api_listen_port for exactly
-    # this reason). This is the only product that actually runs `listen`, so an
-    # unpinned 3415 in the testnet toml would make menu option 3 "Both" put two
-    # listeners on one port.
+    # Pin BOTH listen ports, regardless of the active mode. grin-wallet init
+    # writes MAINNET defaults into the toml regardless of --testnet — for
+    # api_listen_port and owner_api_listen_port alike (059_lib_wallet.sh:709
+    # records the same; the pool pins api_listen_port for exactly this reason).
+    # Unpinned, menu option 3 ("Both") would put the two networks' listeners on
+    # one port — 3415 for two `listen` wallets, 3420 for two `owner_api` ones.
+    # Pinning the inactive mode's port too costs nothing and means switching
+    # modes later never needs a second toml pass.
+    local _owner_port _p_ok=""; _owner_port=$(_cmd_owner_port "$net")
     if _cmd_set_toml_key "$toml_file" "api_listen_port" "$_listen_port"; then
-        _did_ports="$_listen_port"
+        _p_ok="$_listen_port"
+    fi
+    if _cmd_set_toml_key "$toml_file" "owner_api_listen_port" "$_owner_port"; then
+        # Report only the keys that actually took. Appending unconditionally
+        # printed "no/3420" when the first pin failed and the second succeeded.
+        if [[ -n "$_p_ok" ]]; then _p_ok="$_p_ok/$_owner_port"; else _p_ok="$_owner_port"; fi
+    fi
+    if [[ -n "$_p_ok" ]]; then _did_ports="$_p_ok"; fi
+    # Only owner_api mode needs the Foreign API mounted on the Owner port. The key
+    # is inert while `listen` is the active mode, so it is set rather than toggled
+    # back — switching modes never has to undo a toml edit.
+    if [[ "$_mode" == "owner_api" ]]; then
+        _cmd_set_toml_key "$toml_file" "owner_api_include_foreign" "true" || true
     fi
     # 24/7 listener: grin-wallet's default of 32 rotated logs is more depth than
     # this ever needs. Replace-only — log_max_files lives under [logging].
@@ -888,10 +1162,14 @@ _cmd_wallet_setup_for_net() {
     else
         echo -e "  ${YELLOW}!${RESET}  5. Node secret           ${YELLOW}not found (node dir: ${_patch_node_dir:-unresolved}) — edit $toml_file${RESET}"
     fi
+    echo -e "  $_tick  5b. Listener mode       ${DIM}$(_cmd_mode_label "$net")${RESET}"
+    if [[ "$_mode" == "owner_api" ]]; then
+        echo -e "      ${DIM}Transporter-capable. No automatic Tor onion in this mode.${RESET}"
+    fi
     if [[ "$_did_ports" != "no" ]]; then
         local _logs_note="log_max_files = 5"
         [[ "$_did_logs" == "yes" ]] || _logs_note="log_max_files unchanged"
-        echo -e "  $_tick  6. Ports pinned         ${DIM}api_listen_port = $_did_ports, $_logs_note${RESET}"
+        echo -e "  $_tick  6. Ports pinned         ${DIM}api/owner_api_listen_port = $_did_ports, $_logs_note${RESET}"
     else
         echo -e "  ${YELLOW}!${RESET}  6. Ports                 ${YELLOW}could not patch $toml_file${RESET}"
     fi
@@ -938,7 +1216,7 @@ _cmd_start_listener() {
     local net="$1" dir bin tmux_name pass_file port launcher
     dir=$(_cmd_dir "$net");            bin=$(_cmd_wallet_bin "$net")
     tmux_name=$(_cmd_tmux_name "$net"); pass_file=$(_cmd_pass_file "$net")
-    port=$(_cmd_foreign_port "$net");   launcher=$(_cmd_launcher "$net")
+    port=$(_cmd_mode_port "$net");      launcher=$(_cmd_launcher "$net")
 
     [[ -x "$bin" ]] || { error "No grin-wallet binary for $net — run setup first."; return 0; }
 
@@ -980,14 +1258,29 @@ _cmd_start_listener() {
             # including the address, for someone who only declined a restart.
             [[ $one_shot -eq 1 ]] && rm -f "$src"
             info "Listener left running as-is."
+            # Declining the restart right after a mode switch leaves the OLD
+            # listener up while .listen_mode already names the new one. Say it
+            # here, at the moment it happens, rather than letting the agent fail
+            # later with connection-refused on a port nothing bound.
+            if ! gnc_get_pid_on_port "$port" >/dev/null 2>&1; then
+                warn "Nothing is bound on $port — the running listener is in a different mode."
+                warn "  Restart it to apply '$(_cmd_mode "$net")'."
+            fi
             return 0
         fi
         # Only "y" reaches here.
         tmux kill-session -t "$tmux_name" 2>/dev/null || true
         # Wait for the old listener to actually release the port, else the new
         # one binds nothing and exits.
+        #
+        # The SESSION check is not redundant with the port check: after a mode
+        # switch the old listener holds the OLD port (3415) while $port is the new
+        # one (3420), so the port loop sees "free" instantly and we would race the
+        # still-dying process for the wallet's LMDB lock — which fails with a lock
+        # error that says nothing about a mode change.
         local _w=0
-        while gnc_get_pid_on_port "$port" >/dev/null 2>&1 && [[ $_w -lt 10 ]]; do
+        while { gnc_get_pid_on_port "$port" >/dev/null 2>&1 \
+                || tmux has-session -t "$tmux_name" 2>/dev/null; } && [[ $_w -lt 10 ]]; do
             sleep 1; _w=$((_w + 1))
         done
     fi
@@ -996,7 +1289,7 @@ _cmd_start_listener() {
     tmux new-session -d -s "$tmux_name" "$launcher"
 
     if gnc_wait_for_port "$port" 15 1; then
-        success "Listener up on $port  ${DIM}(tmux: $tmux_name)${RESET}"
+        success "Listener up on $port  ${DIM}($(_cmd_mode "$net") · tmux: $tmux_name)${RESET}"
         echo -e "         ${DIM}Attach: tmux attach -t $tmux_name${RESET}"
     elif tmux has-session -t "$tmux_name" 2>/dev/null; then
         warn "Session '$tmux_name' is alive but port $port is not listening yet."
@@ -1017,9 +1310,12 @@ cmd_wallet_run() {
         echo -e "${BOLD}${CYAN} 05C) GRIN WALLET QUICK SETUP${RESET}"
         echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
         echo ""
-        echo -e "  ${DIM}Download, init or recover, then start the Foreign listener (3415/13415)${RESET}"
-        echo -e "  ${DIM}— for direct CLI use or testing. The passphrase is fed on stdin, never${RESET}"
-        echo -e "  ${DIM}via -p, so it never appears in ps/cmdline.${RESET}"
+        echo -e "  ${DIM}Download, init or recover, then start a listener — for direct CLI use,${RESET}"
+        echo -e "  ${DIM}testing, or as the wallet behind the Script 093 Transporter agent.${RESET}"
+        echo -e "  ${DIM}Setup asks which mode: 'listen' (Foreign 3415/13415, receive-only, Tor${RESET}"
+        echo -e "  ${DIM}onion automatic) or 'owner_api' (Owner v3 + Foreign on 3420/13420, can${RESET}"
+        echo -e "  ${DIM}also SEND, no automatic Tor). The passphrase is fed on stdin, never via${RESET}"
+        echo -e "  ${DIM}-p, so it never appears in ps/cmdline.${RESET}"
         echo -e "  ${DIM}Stored in /opt/grin/cmdwallet/<net>/ — independent of other services.${RESET}"
         echo ""
 
@@ -1030,10 +1326,25 @@ cmd_wallet_run() {
             local _tmux="grin_${_net}_cmd_wallet"
             if [[ -f "$_dir/grin-wallet.toml" ]]; then
                 _any=1
+                # Show the MODE, not just up/down: "listening" alone cannot tell an
+                # operator whether the Transporter agent can drive this wallet.
+                local _m _mp
+                _m=$(_cmd_mode "$_net"); _mp=$(_cmd_mode_port "$_net")
                 if tmux has-session -t "$_tmux" 2>/dev/null; then
-                    echo -e "  ${GREEN}●${RESET} ${BOLD}${_net}${RESET}  ${GREEN}listening${RESET}  ${DIM}(tmux: $_tmux)${RESET}"
+                    # A session alone does NOT prove the recorded mode is the one
+                    # running. Switching mode writes .listen_mode immediately (the
+                    # launcher reads it), but the restart prompt can be declined —
+                    # leaving a `listen` process up while this line claims
+                    # owner_api, and the agent then hits connection-refused on a
+                    # port nothing ever bound. Verifying the port catches that, and
+                    # equally a listener that died inside a surviving tmux session.
+                    if gnc_get_pid_on_port "$_mp" >/dev/null 2>&1; then
+                        echo -e "  ${GREEN}●${RESET} ${BOLD}${_net}${RESET}  ${GREEN}listening${RESET}  ${DIM}${_m} :${_mp} · tmux: $_tmux${RESET}"
+                    else
+                        echo -e "  ${YELLOW}▲${RESET} ${BOLD}${_net}${RESET}  ${YELLOW}session up, port ${_mp} not bound${RESET}  ${DIM}mode ${_m} — restart it${RESET}"
+                    fi
                 else
-                    echo -e "  ${DIM}○ ${_net}  installed · not listening${RESET}"
+                    echo -e "  ${DIM}○ ${_net}  installed · not listening · mode ${_m}${RESET}"
                 fi
             fi
         done
@@ -1073,12 +1384,28 @@ main() {
         show_menu
         read -r choice || true
         case "$choice" in
-            1) run_sub "051_grin_private_web_wallet.sh" || true ;;
-            2) run_sub "052_grin_drop.sh"               || true ;;
-            3) run_sub "053_grin_woocommerce.sh"        || true ;;
+            1) run_sub "051_grin_fidelius.sh"     || true ;;
+            2) run_sub "052_grin_accio.sh"        || true ;;
+            3) run_sub "051x_grin_xp_wallet.sh"   || true ;;
+            4) _slot_notice "SLOT 4 — UNASSIGNED" \
+                   "Reserved for the next WALLET product. It gets a script number
+  (054-058) on the day its build starts, not before." || true ;;
+            5) run_sub "053_grin_woocommerce.sh"  || true ;;
+            6) _slot_notice "PAYMENT PRO — NOT BUILT YET" \
+                   "Grin payment processor for platforms other than WooCommerce:
+  Shopify, custom/headless REST APIs, recurring billing, webhooks.
+  Design starts after the WooCommerce gateway (053) is complete." || true ;;
+            7) _slot_notice "GOBLINPAY — NOT BUILT YET" \
+                   "Receive-only merchant till (Nostr + slatepack), deploying
+  github.com/2ro/GoblinPay the toolkit way." \
+                   "docs/generated/script09_design.md (PART C)" || true ;;
+            8) _slot_notice "SLOT 8 — UNASSIGNED" \
+                   "Reserved for the next PAYMENT rail. It gets a script number
+  (054-058) on the day its build starts, not before." || true ;;
+            9) run_sub "059_grin_drop.sh"         || true ;;
             # 'C' kept as a silent alias: it was the printed key for a long time,
             # and 05C is still this product's identity in docs and filenames.
-            [Aa]|[Cc]) cmd_wallet_run || true           ;;
+            [Aa]|[Cc]) cmd_wallet_run || true             ;;
             0) break ;;
             "") continue ;;
             *) echo -e "\n${RED}Invalid option.${RESET}"; sleep 1 ;;

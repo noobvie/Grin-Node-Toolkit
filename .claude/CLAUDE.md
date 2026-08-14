@@ -15,7 +15,7 @@ keep this file lean. (The full pre-2026-06 product detail is recoverable from gi
 
 ## Tech Stack
 - **Shell:** Bash (primary — all scripts must pass `bash -n` syntax check)
-- **Web backend:** Node.js/Express + SQLite (scripts 052–053, and the Script 07 public-pool backend)
+- **Web backend:** Node.js/Express + SQLite (scripts 053+059, and the Script 07 public-pool backend)
 - **Web server:** Nginx (vhost management, SSL via certbot)
 - **Process management:** systemd services + tmux sessions
 - **Grin tooling:** grin-wallet binary (Foreign API v2, Owner API v3 ECDH). **Note:** "Grim wallet" (GetGrin/grim) is a completely separate GUI wallet project — never conflate with grin-wallet (mimblewimble org).
@@ -29,18 +29,81 @@ scripts/
   02_  Nginx file server manager
   03_  Share chain data
   04_  Node foreign API + stats collector
-  05_  Wallet services hub (launches 051–053; also hosts the 05C CMD-wallet quick setup)
-  051_ Private web wallet (051x_ = XP-themed variant, launched from inside 051)
-  052_ Grin Drop (giveaway + donation portal)
+  05_  Wallet services hub (launches 051–059; also hosts the 05C CMD-wallet quick setup)
+  051_ Fidelius — personal web wallet (051x_ = XP-themed variant; has its OWN hub key
+       since 2026-08-04, and is still reachable from inside 051)
+  052_ Accio — public web wallet. IN BUILD since 2026-08-09 (packet S0), so it is
+       no longer "reserved" — the number is ASSIGNED and the script file exists.
+       **EVERY packet through S8 is written and EVERY menu key is live** (the last
+       stub went 2026-08-10), and hub 05 key `2` now dispatches to the real script.
+       S9's optional deletion passes started 2026-08-11 (pass 1 = MQS).
+       ⚠ **Nothing has ever run on a VPS** — not one build, deploy, send or receive.
+       S2 is no longer a build packet at all: it is the ACCEPTANCE session and owes
+       every packet's runs at once, testnet before mainnet. A menu with no stubs is
+       not a tested one. Self-custodial (keys in the browser
+       tab) — the exact opposite of 051, which holds keys server-side. Vendored, not
+       written: web/052_accio/vendor/ pins two MIT upstreams; the gateway
+       (web/052_accio/gateway/, 9 modules, ZERO npm deps) is ours and carries both
+       rails — /tor/ out, /listen + /wallet/<suffix> in. Four libs: build (site +
+       the offline standalone HTML), gateway, nginx (vhost/certbot/onion), vendor.
+       ⚠ nginx security headers live in TWO snippets (shared, and TLS-only for the
+       headers the onion front must NOT emit) that every block adding any header of
+       its own must include — `add_header` in a child block DISCARDS the parent's
+       set, which is how a CSP goes missing from exactly the routes that matter, and
+       a header repeated as a literal in three blocks is how the next one goes
+       missing. And minting the onion is not enough: TOR_SERVER_ADDRESS is baked in
+       at BUILD time, so an un-rebuilt site hands out a clearnet host to whoever
+       picked "Onion Service". ⚠ The onion path is THREE listeners and so needs
+       THREE ports — tor → ACC_TOR_FRONT_PORT (nginx block) → ACC_TOR_PORT
+       (gateway), beside ACC_PORT (gateway ← :443). Collapsing two roles onto one
+       port is a bind collision, not a saving, and NOTHING on this box reports one:
+       `nginx -t` parses and never binds, `systemctl reload` returns 0 before the
+       master binds, and a status line that greps `ss` for a port two roles share
+       goes green whichever won. Verify the listener after the reload. ⚠ Its
+       /opt/grin/accio-<net>/gateway-state/ is DURABLE STATE, not a cache: losing it
+       changes the receiving address of every wallet that ever connected.
+       De-branding lives in web/052_accio/patches/ (S5, 16 files; S9 pass 1 added a
+       17th) — NEVER edit vendor/, and never rename MWC_WALLET_TYPE (it is a chain
+       discriminator, not branding; S9+ deletes those paths). ⚠ An S9 pass is a
+       REDUCTION, not an `rm`, whenever the subsystem is referenced from a file we
+       don't patch: pass 1 kept Mqs's 5-symbol external surface because
+       `Slate.compactProofAddress` switches on `Mqs.ADDRESS_LENGTH` on the slatepack
+       ENCODE path, un-gated — deleting the file would ReferenceError on every send
+       with a payment proof. A removal must never change how a slate is READ.
+       Every patch is marked `ACCIO PATCH`;
+       grep for that rather than diffing — ⚠ which makes an UNMARKED patch invisible
+       to the only review method there is. R8 found one (check_for_updates.js, six
+       rewritten URLs, no marker, unread through S5/S6/S8 and four review packets;
+       it was beaconing to api.github.com from the "offline" standalone). The rule
+       and a table of all 17 files — including the five whose format cannot hold an
+       inline marker — now live in patches/README.md, which is where a patch author
+       actually looks. ⚠ Branding is a phrase map duplicated in backend/language.php
+       and scripts/language.js: the maps being IDENTICAL is necessary and proves
+       nothing, because a phrase map keyed on English word order misses every
+       translator who reordered it — Dutch/Greek/Chinese shipped 27 unbranded
+       strings, the page title and the CURRENCY LABEL among them. Check a new
+       language against the map programmatically before shipping it.
+       ⚠ Since S6 the build is GATED on
+       052_lib_vendor.sh verifying vendor/ against vendor/SHA256SUMS (no bypass) —
+       an edited or added byte there stops the build; the fix is a re-vendor in this
+       repo, NEVER regenerating the manifest on the VPS.
+       Design → docs/generated/script052_design.md;
+       the build handoff is script052_implementation.md's session log, never the chat.
   053_ WooCommerce payment gateway
-  054+ UNALLOCATED — assign a number when a build STARTS, not to an idea. Pick one
-       that keeps the 05 hub menu ascending (menu groups run wallets → giveaways →
-       payments, so a wallet product needs a low number). Planned products get a dim
-       footer line with no menu key. Pre-assigning numbers to unbuilt ideas is what
+  054–058 FREE — assign a number when a build STARTS, not to an idea. Pick one that
+       keeps the 05 hub menu ascending (menu groups run wallets → payments →
+       giveaways, so a wallet product needs a low number); a 2nd giveaway takes 058
+       and that band grows downward. Pre-assigning numbers to unbuilt ideas is what
        made that menu read 1,5,C,3,4,6,2. An unbuilt product has NO number, so its
        design doc lives under its HUB's number, never a reserved one. Planned:
-       Payment Pro, Public WASM wallet (script05_design.md PART A), GoblinPay
-       (script09_design.md PART C).
+       Payment Pro, GoblinPay (script09_design.md PART C). Note the script number is
+       still unassigned even though the 05 hub now gives these a menu KEY — the two
+       are independent (see the fixed-slot rule below).
+  059_ Grin Drop (giveaway + donation portal) — moved from 052 on 2026-08-04 so the
+       single-member Giveaways category parks at the end of the band and leaves a
+       contiguous run for the two categories that grow (wallets, payments). At 054
+       it would have cost a second migration (WooCommerce → 055). Full reasoning is
+       in the 05_grin_wallet_service.sh header + docs/generated/script05_implementation.md.
   06_  Global health + price collector (06b = GrinScan explorer)
   07_  Mining services hub → 07_grin_mining_solo.sh (solo private, has a `lan` arg) and
        07_grin_mining_public_pool.sh (GRINIUM public pool; libs 07_lib_hub.sh /
@@ -48,20 +111,28 @@ scripts/
   08_  Node admin centre (monitoring, nginx, firewall, backup, disk cleanup)
   08del_ Full cleanup (destructive)
   09_  Grin Connectivity Hub → 091_ Floonet relay deployer (deploys 2ro's floonet-rs via
-       nginx/certbot — we deploy, don't fork) and 092_ Grin Transporter (store-and-forward
-       slate queue, was "Script 056"; Node+SQLite+Tor; Phase 1 built 2026-07-11 STANDALONE —
-       wiring into 052/07 stays deferred on wallet relay-receive support, design B.9 #6).
-       Numbers swapped 2026-07-10 (Floonet first — serves existing users). Design →
-       docs/generated/script09_design.md, memory project_comms_hub_09. Menu grouping is
+       nginx/certbot — we deploy, don't fork), 092_ RESERVED for the mwixnet CoinSwap mixer
+       (NOT BUILT — run one hop of a Grin CoinSwap route; ledger-level unlinkability, the one
+       thing Tor cannot give. Design → script09_design.md PART D), and 093_ Grin Transporter
+       (store-and-forward slate queue, was "Script 056"; Node+SQLite+Tor; Phase 1 built
+       2026-07-11 STANDALONE — wiring into 059/07 stays deferred on wallet relay-receive
+       support, design B.9 #6). 094+ free. Numbers swapped 2026-07-10 (Floonet first — serves
+       existing users); Transporter moved 092→093 on 2026-08-04 to free 092 for the mixer.
+       ⚠ That renumber is the band's ONE sanctioned exception to "assign a number when a build
+       STARTS": 092 is held for an unbuilt product. It was affordable only because 093 has never
+       been VPS-deployed AND its runtime identifiers are name-keyed, not number-keyed
+       (grin-transporter-*, /opt/grin/transporter-*, grin_transporter.conf, ports 7456/7466) —
+       so there was no Drop-style matched-key migration. Do not renumber a deployed product.
+       Design → docs/generated/script09_design.md, memory project_comms_hub_09. Menu grouping is
        display-only; the number stays the label.
   lib/ Sourced libraries — always prefixed with parent script number
-       e.g. 052_lib_wallet.sh, 052_lib_nginx.sh
+       e.g. 059_lib_wallet.sh, 059_lib_nginx.sh
 ```
 
 ## Common Commands
 ```bash
 # Syntax check a single script
-bash -n scripts/052_grin_drop.sh
+bash -n scripts/059_grin_drop.sh
 
 # Syntax check all scripts at once
 for f in scripts/**/*.sh scripts/*.sh; do bash -n "$f" && echo "OK: $f"; done
@@ -82,6 +153,17 @@ curl -s "https://api.nonlogs.io/api/markets/GRIN-BTC" | python3 -m json.tool
   (`fn || true`) — an unguarded non-zero return kills the whole script instead of
   returning to the menu. Same trap: never end a function with `[[ ... ]] && cmd`
   (a false test makes the function return 1); use the `if`-form instead.
+- **⚠ The corollary: a function called as `fn || …` or `if fn; then` runs with
+  errexit DISABLED for its whole body**, and re-issuing `set -e` inside it does not
+  undo that (POSIX ignores it there). Since that `||`-guard is mandatory above, it
+  is the NORMAL case for every sourced lib — `set -euo pipefail` in the entry script
+  protects almost nothing inside one. So in `lib/`, guard every command that creates,
+  copies, moves or deletes with its own `|| { error "..."; return 1; }`, and never
+  write a header comment claiming the caller's `set -e` covers you. A bare `cp`/`mv`
+  in a lib is a silent failure that ships: 052's build wrote a *valid* SRI for an
+  un-overlaid patch, and `mv "$new" "$outdir"` does not fail when `$outdir` still
+  exists — it nests inside it while `success` prints. Full rationale → memory
+  `project_lib_errexit_suppression`.
 - Colors/logging defined once in the main script and inherited via source
 - Config written to `/opt/grin/<service>/` on the target server
 - Wallet secrets stored in `/opt/grin/<net>/.api_secret` (never hardcode)
@@ -89,12 +171,38 @@ curl -s "https://api.nonlogs.io/api/markets/GRIN-BTC" | python3 -m json.tool
 - Lib files (scripts/lib/) are sourced, not executed — no shebang needed
 - Function names: `snake_case`, prefixed with script prefix (e.g. `drop_`, `node_`)
 - Option numbers in menus: numeric for main actions, letters (B/R/D/L) for secondary
-- **Menu rows show NAMES, not script numbers.** The menu key is positional (assigned
-  top-to-bottom at render); a script's number (051, 05C …) is file/doc identity and is
-  printed only on that product's own screen banner (`05C) GRIN WALLET QUICK SETUP`) —
-  never duplicated onto the parent hub's row, where `A) 05C ·` reads as a broken
+- **Menu rows show NAMES, not script numbers.** A script's number (051, 05C …) is file/doc
+  identity and is printed only on that product's own screen banner (`05C) GRIN WALLET QUICK
+  SETUP`) — never duplicated onto the parent hub's row, where `A) 05C ·` reads as a broken
   sequence. So never name a product to an operator by number alone: say "the CMD Wallet
   quick setup (hub 05)", not "05C". Full rationale → `05_grin_wallet_service.sh` header.
+- **Menu keys: FIXED SLOTS in hub 05, NUMBER-MATCHED in hub 08, positional elsewhere.**
+  Hub 05 assigns every category a contiguous block of keys ending in a spare (wallets
+  1-4, payments 5-8, giveaways 9); a row owns its key permanently, and planned/spare rows
+  own theirs from the start. Hub 08 instead keys each row that HAS a sub-script to that
+  script's last digit — 081→`1`, 082→`2`, 084→`4`, 085→`5`, 089→`9` — and fills the gaps
+  (`3`,`6`,`7`,`8`) with its un-numbered inline features. Other hubs (07, 09) still assign
+  the key positionally at render. **Outside hub 08 the key is NOT the script number** — in
+  05, key 5 is WooCommerce (053) and key 9 is Drop (059); they coincide only by accident.
+  - Hub 08's rule (adopted 2026-08-05, when Provider Access Watch sat on key 7 and Backup
+    089 on key 10) works only because 08's rows *are* mostly numbered scripts — and it still
+    cost one merge: Service & Port Dashboard + Chain Sync Status became `3) Node Status &
+    Sync`, because 10 rows don't fit 9 digits. It does NOT generalise — in hub 05, 051 and
+    05C would both want the same key. One rule per hub; never mix two in one menu.
+  - Fixed slots exist because positional keys silently re-point every key below an
+    insertion — that is how `2` came to mean Drop and then WooCommerce. The cost is that
+    a category's spare is finite: when wallets outgrow slot 4 the next wallet cannot take
+    5, so the blocks below shift in one deliberate migration.
+  - A planned/spare key is LIVE and dispatches to `_slot_notice()` — one banner screen
+    saying what the slot is for, "Nothing was installed or changed", Enter to return. It
+    has no sub-menu and no prompts, so it can't be mistaken for the "coming soon"
+    placeholder script that was deleted. A dead key would read as a broken menu, since
+    fixed slots print the number and put it in the `Select [A / 1-9 / 0]` hint.
+- **Retired menu key vs reassigned menu key.** A key nothing else took may live on as a
+  silent alias (05 hub's `C` → CMD wallet). A key that changed hands never may — a second
+  `case` arm for it is dead code (bash takes the first match) and, if reached, would open
+  the wrong product with no error. The per-product banner is the mis-key safety net.
+  Fixed slots are meant to end key churn, so this should now be history, not a live risk.
 - Interactive SESSION logs use `_$(date +%Y%m%d_%H%M%S).log`; continuous fixed-name
   logs (watchdogs, daemons) are rotated via logrotate, not per-run dated.
 
@@ -130,9 +238,21 @@ via the nginx HTTPS vhost, IP-allowlist + shared-secret). Solo mining keeps lega
   `get_connected_peers`, `validate_chain`, `compact_chain` — management/status, trusted
   internal callers only. **Prefer `get_status` over `get_tip`** (`get_tip` returns "Method
   not found" in practice).
-- **Foreign API** (`/v2/foreign`, `.foreign_api_secret`): `get_block`, `get_header`,
+- **Foreign API** (`/v2/foreign`, `.foreign_api_secret`): `get_tip`, `get_block`, `get_header`,
   `get_outputs`, `get_unspent_outputs`, `get_pool_size`, `push_transaction` — public chain
   data, used by wallets connecting to a public node.
+- **There is NO v1 REST API.** `GET /v1/status` (and the rest of `/v1/`) was removed in
+  grin 5.x and returns **404 on a healthy node** — verified live 2026-08-09 against a synced
+  5.5 mainnet node (`/v1/status` → 404 while `/v2/owner get_status` → height 3,967,196,
+  46 peers). It fails as "node down", not as "bad endpoint", so it reads like an outage:
+  Fidelius showed *Local Node — not running* for exactly this reason. Never write a `/v1/` call.
+- **Probing a REMOTE node is a different question from probing the local one.** Script 04
+  publishes only `/v2/foreign` and 403s `/v2/owner`, so a public node can answer `get_tip`
+  (height) and nothing else — peer count and sync state are unknowable from outside and must
+  be reported as *unavailable*, never as `0`/`unknown` (that renders a healthy node as idle).
+- **Reachability needs a parsed result, not an HTTP 200.** Any web server, CDN error page or
+  parked domain answers 200; only an unwrapped `{"Ok":…}` proves a Grin node is there. A bare
+  `GET` on `/v2/foreign` proves nothing — it's a POST-only JSON-RPC endpoint.
 
 ### Pruned vs archive node — the `get_block` horizon (don't conflate headers with blocks)
 A **pruned** node (`mainnet-prune`, `archive_mode=false`) keeps the full **header** chain +
@@ -259,7 +379,7 @@ Two separate node↔wallet links, on different ports, doing different jobs:
   (broadcast/spend/payout). Wrong/missing secret → node 403 → "Cannot parse response".
 
 **The `get_version: Cannot parse response` error at `grin-wallet init` is HARMLESS** (recurs
-in drop 052, pool 07, solo 07): init runs *before* the toml is patched, so the version probe
+in drop 059, pool 07, solo 07): init runs *before* the toml is patched, so the version probe
 fails but init still writes the seed; the `node_api_secret_path` patch right after init fixes
 runtime. **Coinbase reception never depends on ②** (it's `build_coinbase`, local) — so
 "coinbase arrived" does NOT prove ② works. Only `grin-wallet info` (balance refresh) and
@@ -268,7 +388,7 @@ runtime. **Coinbase reception never depends on ②** (it's `build_coinbase`, loc
 **Tor** is neither 3413 nor 3415 — it's the wallet **Owner API (3420)** sending payouts
 *outbound* to a miner's `.onion`. Node↔wallet on the same box is always plain localhost HTTP.
 Patch locations: solo `lib/07_solo_wallet.sh` step 4; pool `lib/07_lib_pool_wallet.sh`
-(~`node_api_secret_path`); drop `lib/052_lib_wallet.sh` `_drop_write_toml`.
+(~`node_api_secret_path`); drop `lib/059_lib_wallet.sh` `_drop_write_toml`.
 
 ### Passphrase input — use STDIN, not `-p` (verified 2026-07-29)
 Several comments in this repo claim "grin-wallet has no stdin or env-var passphrase input —
@@ -284,7 +404,7 @@ env-var input (the clap `pass` arg declares no `env`), so stdin is the only argv
   entire life of the process. For a 24/7 listener that is a permanent leak to every local user,
   not the "brief, one-time" exposure the old comments describe.
 - **Done in** `05_grin_wallet_service.sh` (CMD wallet). **Still on `-p`:** `lib/07_solo_wallet.sh`,
-  `lib/07_lib_pool_wallet.sh`, `lib/052_lib_wallet.sh` — convert when next touched.
+  `lib/07_lib_pool_wallet.sh`, `lib/059_lib_wallet.sh` — convert when next touched.
 - **Exception — `init -hr` (recover):** leave stdin attached to the terminal so grin-wallet
   prompts for the mnemonic itself; never route a recovery phrase through a toolkit script.
 

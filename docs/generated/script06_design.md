@@ -124,7 +124,7 @@ Two facts that shape the whole design:
   body fails (→ "partially readable" render).
 - Fee is masked as grin `FeeFields` (low 40 bits = fee, bits 40–43 = fee_shift). Safe for
   the older plain-u64 form too, since real fees are far below 2^40.
-- bech32 validation is a port of `web/092_transporter/server.js` (`bech32Decode`), which is
+- bech32 validation is a port of `web/093_transporter/server.js` (`bech32Decode`), which is
   the repo's existing proven implementation. Passes all 13 official BIP-173 vectors.
 - **`WebCrypto` needs a secure context.** On plain HTTP `crypto.subtle` is absent → the
   checksum is reported "not verified" rather than failing the decode.

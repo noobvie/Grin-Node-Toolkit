@@ -36,7 +36,7 @@ class WalletAPI {
   // LMDB write-lock) — use it for liveness/dashboard polls. refresh=true forces a full
   // wallet→node output scan (slow; can exceed the 10s node-fetch timeout on a fresh/busy
   // wallet → false "Down") — reserve it for the custodial reconciliation check.
-  // (Mirrors the Grin Drop pattern in 052_drop/server/app.js.)
+  // (Mirrors the Grin Drop pattern in 059_drop/server/app.js.)
   async getBalance(refresh = false) {
     try {
       // retrieve_summary_info params: [keychain_mask, refresh_from_node, min_confirmations]
@@ -87,7 +87,7 @@ class WalletAPI {
   //
   // Param order matches grin-wallet Owner API v3 (docs.rs grin_wallet_api::Owner / owner_rpc).
   // Every method's first param is the keychain-mask token from open_wallet; call sites leave
-  // it null and _call() substitutes the live session token (same as 052 Drop's ownerApiSession —
+  // it null and _call() substitutes the live session token (same as 059 Drop's ownerApiSession —
   // passing an actual null gets "Supplied keychain mask is invalid" from the LMDB backend).
 
   // 1a. Build an unconfirmed send slate. amountGrin → nanoGRIN (u64; pool payouts stay well
@@ -174,7 +174,7 @@ class WalletAPI {
     //    already returns exactly that X-coordinate. An earlier sha256() over it corrupted
     //    the key, so the wallet rejected every encrypted call with "EncryptedBody:
     //    decryption failed" (balance + payouts never worked). Matches the known-good
-    //    051_wallet/server.js ownerApiSession() implementation.
+    //    051_fidelius/server.js ownerApiSession() implementation.
     this.aesKey = ecdh.computeSecret(Buffer.from(serverPubkey, 'hex'));
 
     // 4. open_wallet — first encrypted call; unlocks the wallet for this session.

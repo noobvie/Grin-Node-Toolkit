@@ -361,8 +361,7 @@ show_menu() {
     echo ""
     echo -e "  ${BOLD}Maintenance${RESET}"
     echo -e "  ${GREEN}R${RESET}) Event retention ${DIM}(prune old traffic — upstream never expires anything)${RESET}"
-    echo -e "  ${GREEN}B${RESET}) Backup & restore    ${GREEN}U${RESET}) Update floonet-rs"
-    echo -e "  ${GREEN}M${RESET}) Nym mixnet exit ${DIM}(optional add-on)${RESET}     ${RED}D${RESET}) Uninstall"
+    echo -e "  ${GREEN}B${RESET}) Backup & restore    ${GREEN}U${RESET}) Update floonet-rs    ${RED}D${RESET}) Uninstall"
     echo ""
     echo -e "  ${RED}0${RESET}) Back"
     echo ""
@@ -402,7 +401,10 @@ main() {
             [rR]) _flr_need_install && flr_menu_retention || true ;;
             [bB]) flr_backup_menu      || true ;;
             [uU]) _flr_need_install && flr_update   || true ;;
-            [mM]) _flr_need_install && flr_mixexit  || true ;;
+            # M) Nym mixnet exit was removed 2026-08-07: upstream ARCHIVED
+            # 2ro/floonet-mixexit and the Goblin stack moved off Nym to Tor/arti,
+            # so the option could only ever build a dead add-on. No alias is kept
+            # — a retired key that still dispatched would install nothing useful.
             [dD]) _flr_need_install && flr_uninstall || true ;;
             0) break ;;
             "") continue ;;

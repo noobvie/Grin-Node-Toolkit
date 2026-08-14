@@ -1,0 +1,63 @@
+# Accio (script 052) — vendored upstream pins
+# One record per upstream. Read by scripts/lib/052_lib_vendor.sh (S6).
+# Format: KEY=VALUE, shell-sourceable, no spaces around '='.
+
+# ─── Upstream 1 of 2: the wallet itself ──────────────────────────────────────
+UPSTREAM_NAME="mwcwallet.com"
+UPSTREAM_URL="https://github.com/NicolasFlamel1/mwcwallet.com"
+UPSTREAM_SHA="adef11daadf04e4ec259d6febcc720da3daaa6c7"
+UPSTREAM_SHA8="adef11da"
+UPSTREAM_COMMIT_DATE="2026-07-30T19:59:06-07:00"
+UPSTREAM_COMMIT_SUBJECT="Removed AscendEX compatibility from README"
+UPSTREAM_VERSION="2.8.2"
+UPSTREAM_VERSION_RELEASE_DATE="16 Jun 2026 16:02:00 UTC"
+UPSTREAM_LICENSE="MIT"
+UPSTREAM_LICENSE_SHA256="bbc8b96cd3c66cd7d69ec75aaeae3b0d5d81d955771fadf7bc0cdc953728e32f"
+UPSTREAM_PATH="web/052_accio/vendor/upstream-wallet"
+UPSTREAM_FILE_COUNT="270"
+UPSTREAM_BYTES="7443197"
+
+# ─── Upstream 2 of 2: the standalone build script ────────────────────────────
+# Added 2026-08-09 (S0 review). It is a SEPARATE repo, and it is the behavioural
+# spec for two later packets: S1 inherits its env-var contract, S7 reimplements
+# its inlining phase. Leaving it unvendored would have left both packets pointed
+# at an unpinned `master` that can be force-pushed — the exact durability
+# argument that made us vendor the wallet. Four files, 75 KB; the cost is nil.
+# We do not RUN it (it wgets an unpinned master.zip and rm -rf's its own tree).
+STANDALONE_NAME="MWC-Wallet-Standalone"
+STANDALONE_URL="https://github.com/NicolasFlamel1/MWC-Wallet-Standalone"
+STANDALONE_SHA="043c2ddc8105721a0b75ece3f614d44b66c79150"
+STANDALONE_SHA8="043c2ddc"
+STANDALONE_COMMIT_DATE="2026-06-16T09:06:46-07:00"
+STANDALONE_COMMIT_SUBJECT="Fixes building"
+STANDALONE_LICENSE="MIT"
+STANDALONE_LICENSE_SHA256="bbc8b96cd3c66cd7d69ec75aaeae3b0d5d81d955771fadf7bc0cdc953728e32f"
+STANDALONE_BUILD_SH_SHA256="ef5ce87616dfd2f00e963ae4fa7950134e6273dadc093b7139c811404ff975be"
+STANDALONE_BUILD_SH_LINES="316"
+STANDALONE_PATH="web/052_accio/vendor/upstream-standalone-build"
+STANDALONE_FILE_COUNT="4"
+STANDALONE_BYTES="74763"
+
+# ─── The combined manifest (covers BOTH trees) ───────────────────────────────
+VENDORED_DATE="2026-08-09"
+VENDORED_MANIFEST="web/052_accio/vendor/SHA256SUMS"
+VENDORED_MANIFEST_SHA256="0c7c1b8dd7a0acdf85a07df29eebcc738702c09d945fa28986f70b6c18a15a48"
+VENDORED_FILE_COUNT="274"
+VENDORED_BYTES="7517960"
+
+# Removed from the vendored wallet tree at S0 (see PROVENANCE.md):
+#   fullchain.pem, privkey.pem  -> deleted (upstream's own dev certs; never ship someone's keys)
+#   nginx.conf                  -> moved to web/052_accio/docs/upstream-nginx.conf.reference
+# Upstream ships 273 files; 270 are vendored. Nothing was removed from the
+# standalone-build repo — all 4 of its files are vendored verbatim.
+
+# How these pins were produced (reproduce exactly, from any machine):
+#   git clone --depth 1 "$UPSTREAM_URL" upstream-wallet
+#   cd upstream-wallet && git rev-parse HEAD          # must equal UPSTREAM_SHA
+#   git -c core.autocrlf=false -c core.eol=lf archive --format=tar HEAD | tar -x -C <dest>
+#   # then remove the three files listed above; repeat for STANDALONE_URL
+# core.autocrlf MUST be disabled: on Windows a plain checkout — and `git archive`
+# itself — rewrites every text file to CRLF, which changes every checksum here.
+# This is not theoretical. It bit twice: once vendoring the wallet, and again on
+# 2026-08-09 vendoring this standalone repo, whose LICENSE (byte-identical to the
+# wallet's) came out of a default clone as eb2c5d88… instead of bbc8b96c….

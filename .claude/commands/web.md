@@ -3,18 +3,23 @@ Check the file(s) or service directory specified as $ARGUMENTS, or all of web/ i
 
 ## 1. Security (highest priority — these pages proxy to live wallet APIs)
 
-**PHP (web/051_wallet/, web/051_xp_wallet/)**
+**PHP (web/051_xp_wallet/)** — the only PHP service in the repo
 - Every state-changing endpoint must verify the CSRF token from csrf.php before acting.
 - Output must be escaped before rendering — no raw `echo $_POST[...]` or `echo $var` into HTML.
 - `proxy.php` must whitelist allowed wallet API methods — it must not forward arbitrary caller-supplied method names.
 - Secrets (API passwords, secrets) must never appear in PHP source — read from file paths only.
 
-**JavaScript**
+**JavaScript (browser)**
 - No sensitive data (wallet secrets, API tokens) stored in `localStorage` or `sessionStorage`.
-- All `fetch()` calls to the wallet API must go through the PHP proxy, never directly to the wallet port.
+- All `fetch()` calls to the wallet API must go through the server-side proxy (PHP in
+  051_xp_wallet, Express in the rest) — never directly to the wallet port from the browser.
 - User-supplied input rendered into the DOM must use `textContent`, not `innerHTML`.
 
-**Python (web/052_drop/app/, web/07_pool/pool-manager/)**
+**Express wallet proxy (web/051_fidelius/)** — Node, no database
+- Must whitelist allowed wallet API methods — never forward a caller-supplied method name.
+- Secrets (API passwords, wallet passphrase) must never appear in source — read from file paths only.
+
+**Node/Express + SQLite backends (web/059_drop/server/, web/07_mining_pool_public/back-end-pool/)**
 - SQL queries must use parameterised statements — no string concatenation into queries.
 - All routes that modify state must require authentication and validate the session.
 - Rate limiting must be enforced on claim/withdrawal endpoints.
@@ -109,7 +114,7 @@ Only report failures, not passing pairs.
 ## 8. Consistency Across Services
 
 - Favicon usage consistent across all `public_html/` directories.
-- Theme switcher pattern (css/themes/ + theme.js) is used in 052 and 07 — check it works the same way in both.
+- Theme switcher pattern (css/themes/ + theme.js) is used in 059 and 07 — check it works the same way in both.
 - Error message tone consistent: user-facing errors should not expose internal paths or stack traces.
 
 ## 9. Mobile & Responsive (Phone Display)

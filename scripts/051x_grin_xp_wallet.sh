@@ -3,7 +3,7 @@
 # 051x_grin_xp_wallet.sh — Grin XP Wallet  (Experimental / Fun)
 # =============================================================================
 #
-#  Deploys the private web wallet inside a Windows XP desktop simulator.
+#  Deploys Fidelius (the personal web wallet) inside a Windows XP desktop simulator.
 #  MAINNET ONLY. The WinXP chrome is purely cosmetic.
 #
 #  ─── Deploy layout ───────────────────────────────────────────────────────────

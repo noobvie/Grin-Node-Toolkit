@@ -7,7 +7,7 @@
 # and publishes the port so miners can connect directly.
 #
 # ─── Menu ─────────────────────────────────────────────────────────────────────
-# Network-as-parent (mirrors 052 Grin Drop): the top screen picks a network ONCE,
+# Network-as-parent (mirrors 059 Grin Drop): the top screen picks a network ONCE,
 # then every per-action prompt inside that branch is gone — SOLO_NETWORK is set
 # and inherited. Cross-network tools (both-net status, the unified stats page,
 # global watchdogs) live on the network-select screen, not inside a branch.
@@ -2615,7 +2615,7 @@ solo_cleanup() {
 # The top menu picks a network ONCE; inside that branch SOLO_NETWORK is set and
 # every per-action call to _solo_pick_net returns it silently (no repeat prompt).
 # Cleared on the way back to the network-select screen so the global Watchdogs
-# menu still prompts for which net to act on. Mirrors 052 Grin Drop's _set_network.
+# menu still prompts for which net to act on. Mirrors 059 Grin Drop's _set_network.
 SOLO_NETWORK=""
 SOLO_API_PORT=""
 SOLO_STRATUM_PORT=""

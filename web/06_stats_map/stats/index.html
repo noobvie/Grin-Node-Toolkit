@@ -342,7 +342,12 @@
   .pi-ua  {
     color: var(--blue);
     flex-shrink: 0;
-    max-width: 90px;
+    /* Cap, not a reservation: a short agent still takes only its natural width
+       and leaves the rest to .pi-loc. The old fixed 90px held ~13 chars, so it cut
+       the version itself; the longest string shortUA() can now emit is 21 chars
+       ("MW/Grin 5.5.1-alpha.0"), which fits in 60% of the 272px panel and scales
+       with the much wider mobile panel. */
+    max-width: 60%;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -875,6 +880,20 @@ function displayCity(city) {
   return CITY_RELABEL[city] || city;
 }
 
+// Peer-row user agent — drop the trailing git commit hash, keep everything else.
+// Real agents (verified against live peers.json, 50 distinct strings) look like
+// "MW/Grim 5.4.0.3a37d24" and "MW/Grin 5.5.1-alpha.0.e4c4a38" — NOT the
+// "MW/Grin X.Y.Z/os" shape the old planning doc describes. The hash is the only
+// part with no display value, and removing it is what lets the version itself
+// stop being ellipsised ("MW/Grin 5.5.…"). Everything else is preserved verbatim:
+// the prerelease tag (5.5.1-alpha.0 is a different version from 5.5.1), the "+"
+// dirty-build marker, and any non-Grin client name (Grin++, G++ Wiesche). A
+// string with no trailing hash is returned untouched. Title keeps the raw value.
+function shortUA(ua) {
+  if (!ua) return "?";
+  return ua.replace(/\.[0-9a-f]{7,}$/i, "");
+}
+
 function esc(s) {
   return String(s)
     .replace(/&/g, "&amp;").replace(/</g, "&lt;")
@@ -975,7 +994,7 @@ function buildMarkers(peers) {
     marker.on("mouseover", e => showTooltip(peer, e.originalEvent));
     marker.on("mousemove", e => positionTooltip(e.originalEvent));
     marker.on("mouseout",  () => hideTooltip());
-    marker.on("click",     () => leafletMap.flyTo([peer.lat, peer.lng], 6));
+    marker.on("click",     () => leafletMap.flyTo([peer.lat, peer.lng], leafletMap.getMaxZoom()));
     markersLayer.addLayer(marker);
   });
 }
@@ -1112,19 +1131,22 @@ function renderPeerList() {
       </div>
       <div class="pi-row2">
         <span class="pi-loc">${flag} ${esc(loc)}</span>
-        <span class="pi-ua" title="${esc(p.user_agent || "")}">${esc(p.user_agent || "?")}</span>
+        <span class="pi-ua" title="${esc(p.user_agent || "")}">${esc(shortUA(p.user_agent))}</span>
       </div>
     </div>`;
   }).join("");
 }
 
-// Click a row — fly map to that peer
+// Click a row — fly map to that peer, all the way in. getMaxZoom() (not a
+// literal) so this tracks the map's configured ceiling; that ceiling is 10
+// because GeoIP is city-centroid accurate — zooming past it would only imply
+// street-level precision the data does not have.
 $("peer-list").addEventListener("click", e => {
   const item = e.target.closest(".peer-item");
   if (!item) return;
   const p = window._filteredPeers[+item.dataset.i];
   if (!p || !p.lat || !p.lng) return;
-  if (leafletMap) leafletMap.flyTo([p.lat, p.lng], 6);
+  if (leafletMap) leafletMap.flyTo([p.lat, p.lng], leafletMap.getMaxZoom());
 });
 
 $("f-ip").addEventListener("input",          renderPeerList);

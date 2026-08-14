@@ -41,7 +41,6 @@ source "$(dirname "${BASH_SOURCE[0]}")/grin_backup_engine.sh"
 
 # ─── Paths / constants ───────────────────────────────────────────────────────
 FLR_REPO_URL="${FLR_REPO_URL:-https://github.com/2ro/floonet-rs}"
-FLR_MIXEXIT_REPO_URL="${FLR_MIXEXIT_REPO_URL:-https://github.com/2ro/floonet-mixexit}"
 FLR_SRC="/opt/grin/floonet/src"
 FLR_BIN="/usr/local/bin/floonet-rs"
 FLR_ETC="/etc/floonet-rs"
@@ -2206,58 +2205,16 @@ EOF
     done
 }
 
-flr_mixexit() {
-    clear
-    echo -e "${BOLD}${CYAN}── Nym mixnet exit (optional add-on) ──${RESET}\n"
-    echo -e "  ${DIM}The mixnet exit is a SEPARATE optional binary (floonet-mixexit) that${RESET}"
-    echo -e "  ${DIM}upstream's installer co-installs when it sits next to the relay binary.${RESET}"
-    echo -e "  ${DIM}It routes relay traffic through the Nym mixnet for stronger privacy.${RESET}\n"
-    # 1) Already in the relay source tree (workspace member)?
-    local mix_dir=""
-    mix_dir=$(find "$FLR_SRC" -maxdepth 2 -type d -iname '*mixexit*' 2>/dev/null | head -n1 || true)
-    local mix_src=""
-    if [[ -n "$mix_dir" ]]; then
-        mix_src="$FLR_SRC"
-    elif git ls-remote --exit-code "$FLR_MIXEXIT_REPO_URL" >/dev/null 2>&1; then
-        echo -ne "  Found upstream repo ${FLR_MIXEXIT_REPO_URL} — clone and build it? [y/N]: "
-        local c; read -r c || true
-        [[ "${c,,}" == "y" ]] || { info "Cancelled."; pause; return 0; }
-        mix_src="/opt/grin/floonet/mixexit-src"
-        if [[ -d "$mix_src/.git" ]]; then
-            git -C "$mix_src" pull --quiet 2>/dev/null || true
-        else
-            git clone --depth 1 "$FLR_MIXEXIT_REPO_URL" "$mix_src" \
-                || { error "Clone failed."; pause; return 0; }
-        fi
-    else
-        warn "floonet-mixexit source not found (not in the relay tree, no separate repo reachable)."
-        echo -e "  ${DIM}Check https://docs.floonet.dev for current mixnet-exit instructions.${RESET}"
-        pause; return 0
-    fi
-    flr_ensure_rust || { pause; return 0; }
-    _flr_ensure_build_memory
-    info "Building floonet-mixexit… (a failed named-bin attempt falls back to a full build)"
-    if ! (cd "$mix_src" && cargo build --release --bin floonet-mixexit) \
-        && ! (cd "$mix_src" && cargo build --release); then
-        _flr_release_build_memory
-        error "mixexit build failed."; pause; return 0
-    fi
-    _flr_release_build_memory
-    local built
-    built=$(find "$mix_src/target/release" -maxdepth 1 -type f -name '*mixexit*' -perm -u+x 2>/dev/null | head -n1 || true)
-    [[ -n "$built" ]] || { error "Build finished but no mixexit binary found."; pause; return 0; }
-    # Place it where upstream install.sh co-installs from, then re-run it.
-    cp "$built" "$FLR_SRC/$(basename "$built")"
-    if [[ -f "$FLR_SRC/deploy/install.sh" ]]; then
-        (cd "$FLR_SRC" && bash deploy/install.sh) \
-            && success "Upstream installer co-installed the mixnet exit." \
-            || warn "install.sh failed — binary left at $FLR_SRC/$(basename "$built")."
-    else
-        install -m 755 "$built" "/usr/local/bin/$(basename "$built")"
-        success "Installed → /usr/local/bin/$(basename "$built") (configure per docs.floonet.dev)."
-    fi
-    pause
-}
+# flr_mixexit (Nym mixnet exit add-on) was REMOVED on 2026-08-07.
+#
+# Upstream archived 2ro/floonet-mixexit and the Goblin stack moved its privacy
+# transport from the Nym mixnet to Tor/arti, so the builder could only ever
+# produce a dead binary — and its fallback branch cloned a repo that no longer
+# receives commits. Do not re-add it against the archived repo; if a mixnet exit
+# comes back it will be a different project with a different build.
+#
+# 08del_clean_all_grin_things.sh still removes /usr/local/bin/floonet-mixexit on
+# purpose: a box that installed it before this date must still be cleanable.
 
 flr_uninstall() {
     clear

@@ -195,7 +195,7 @@ _pw_pid_is_ours() {
 }
 
 # ─── Port-collision guard ───────────────────────────────────────────────────
-# 3420 is a grin-wallet default — another wallet service (05C, 051, a 052
+# 3420 is a grin-wallet default — another wallet service (05C, 051, a 059
 # drop) may already hold it. NEVER auto-kill ANOTHER service's wallet. But the
 # de-rooted listener (exec su grinpool) survives its tmux session dying, so on a
 # redeploy the port is held by an ORPHAN of OUR OWN wallet with no session — that
@@ -226,7 +226,7 @@ _pw_port_collision_check() {
         return 0
     fi
     error "Port $port is in use by ANOTHER process (not '$tmux_name')."
-    error "  Likely the CMD Wallet quick setup, Private Web Wallet, or a Grin Drop"
+    error "  Likely the CMD Wallet quick setup, Fidelius (personal web wallet), or a Grin Drop"
     error "  wallet — all three live in the Wallet Services hub (main menu 05)."
     error "  Stop that service first, or move the pool wallet to a non-default"
     error "  port and update grin-wallet.toml + the backend config to match."

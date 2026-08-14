@@ -1,8 +1,9 @@
 # Script 082 — Provider / Host-Access Tamper Watch
 
 **Status:** BUILT 2026-07-25 (add-ons branch), NOT VPS-tested.
-**Entry:** Admin Centre (08) → Security & Network → `7) Provider Access Watch`
-(added as a numeric main-action per convention; Maintenance shifted to 8/9/10).
+**Entry:** Admin Centre (08) → Monitoring → `2) Provider Access Watch`
+(key = sub-script number since the 2026-08-05 re-sort: 082 → key 2. It first
+landed on key 7, which is what put Backup 089 on key 10.)
 **Files:** `scripts/082_provider_access_watch.sh` (menu front-end) →
 installs worker `/opt/grin/access-watch.sh` + `grin-access-watch.service`/`.timer`.
 

@@ -1,0 +1,974 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Grin Transporter — left luggage for slates ({{NETWORK}})</title>
+<meta name="description" content="A store-and-forward depot for Grin slatepacks. The sender leaves a sealed package in your locker; you collect it whenever you come back online. Neither wallet has to be awake at the same moment.">
+<!-- Link previews for a URL that gets pasted into forums and chats. Deliberately
+     NO og:url and NO rel=canonical: both would have to be built from the request
+     Host, and a reflected Host in a canonical tag is an SEO-poisoning primitive
+     (this vhost answers for any Host that reaches it). The visible station URL on
+     the page is request-derived on purpose — that one is escaped body text a human
+     reads, not a hint a crawler obeys. -->
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Grin Transporter">
+<meta property="og:title" content="Grin Transporter — left luggage for slates ({{NETWORK}})">
+<meta property="og:description" content="A store-and-forward depot for Grin slatepacks. The sender leaves a sealed package in your locker; you collect it whenever you come back online.">
+<meta name="twitter:card" content="summary">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%230D1116'/%3E%3Crect x='7' y='4.5' width='18' height='23' fill='none' stroke='%23F0A93C' stroke-width='2'/%3E%3Crect x='11' y='9' width='10' height='2' fill='%23F0A93C'/%3E%3Ccircle cx='21' cy='17' r='1.7' fill='%23F0A93C'/%3E%3C/svg%3E">
+
+<style>
+/* ============================================================================
+   THE NIGHT DEPOT — Grin Transporter (093) landing page
+   Tokens first. Components style through tokens only, never inside a media
+   query, so a viewer's OS theme resolves cleanly in both directions.
+   Shipped with NO JavaScript: prefers-color-scheme drives the theme on its own.
+   ========================================================================== */
+
+:root {
+  /* Light — "day shift": painted enamel steel, printed manifest sheet.
+     Neutrals biased grey-green (enamel signage), never flat grey.          */
+  --bg:        #E4E7E3;
+  --bg-elev:   #F3F5F2;
+  --sheet:     #FBFCFA;
+  --steel-1:   #CBD1CB;
+  --steel-2:   #B6BEB8;
+  --cavity:    #6E7873;
+  --parcel:    #B08E5C;
+  --parcel-lo: #8E7047;
+  --edge:      #98A29B;
+  --ink:       #151A1D;
+  --muted:     #5A6870;
+  --lamp:      #A2650C;
+  /* --lamp is sized for borders, rules and display type. Small amber TEXT on a
+     pale ground needs to be darker to clear 4.5:1, so it gets its own token. */
+  --lamp-ink:  #7C4E08;
+  --glow:      transparent;
+  --signal:    #A3322A;
+  --stamp-bg:  rgba(163, 50, 42, .06);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    /* Dark — "after hours": sodium lamp over a shut locker hall.
+       Neutrals biased blue-steel.                                          */
+    --bg:        #0D1116;
+    --bg-elev:   #141B22;
+    --sheet:     #172029;
+    --steel-1:   #1C242C;
+    --steel-2:   #121820;
+    --cavity:    #070A0D;
+    --parcel:    #7A6134;
+    --parcel-lo: #574526;
+    --edge:      #2E3B46;
+    --ink:       #D6DEE5;
+    --muted:     #808F9C;
+    --lamp:      #F0A93C;
+    --lamp-ink:  #F0A93C;   /* on the dark ground the lamp already reads 9.4:1 */
+    --glow:      rgba(240, 169, 60, .16);
+    --signal:    #E0685C;
+    --stamp-bg:  rgba(224, 104, 92, .07);
+  }
+}
+
+/* ── Type roles ──────────────────────────────────────────────────────────────
+   The pairing encodes the page's two audiences:
+   MONO  = the machine — consignment numbers, endpoints, caps, commands
+   SERIF = the human   — the plain-language explanation
+   No webfonts: a depot must render on a censored network with no CDN reachable,
+   and a silent fallback would wreck the stencil tracking. These stacks are
+   chosen, not defaulted.                                                    */
+:root {
+  --mono:  ui-monospace, "SF Mono", "Cascadia Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  --serif: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
+  --measure: 64ch;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--serif);
+  font-size: 17px;
+  line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+}
+
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background-image: repeating-linear-gradient(90deg,
+      transparent 0 119px, color-mix(in srgb, var(--edge) 45%, transparent) 119px 120px);
+  opacity: .26;
+  z-index: 0;
+}
+
+.wrap {
+  position: relative;
+  z-index: 1;
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: 0 28px;
+}
+
+.stencil {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .22em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* ── Masthead ─────────────────────────────────────────────────────────────── */
+.masthead {
+  display: flex; flex-wrap: wrap; align-items: center;
+  gap: 14px 22px;
+  padding: 20px 0 18px;
+  border-bottom: 1px solid var(--edge);
+}
+.mark {
+  display: flex; align-items: baseline; gap: 10px;
+  font-family: var(--mono); font-weight: 700;
+  letter-spacing: .16em; text-transform: uppercase; font-size: 14px;
+}
+.mark .no { color: var(--lamp); font-size: 12px; letter-spacing: .1em; }
+.spacer { flex: 1 1 auto; }
+
+.chip {
+  display: inline-flex; align-items: center; gap: 8px;
+  font-family: var(--mono); font-size: 11px;
+  letter-spacing: .12em; text-transform: uppercase;
+  color: var(--muted); border: 1px solid var(--edge); padding: 5px 10px;
+}
+.chip .dot { width: 7px; height: 7px; background: var(--lamp); box-shadow: 0 0 0 3px var(--glow); }
+.chip.full { color: var(--signal); border-color: var(--signal); }
+.chip.full .dot { background: var(--signal); box-shadow: none; }
+
+/* ── Hero ─────────────────────────────────────────────────────────────────── */
+.hero { display: grid; grid-template-columns: minmax(0,1fr); gap: 44px; padding: 62px 0 54px; }
+@media (min-width: 900px) {
+  .hero { grid-template-columns: minmax(0,1.02fr) minmax(0,.98fr); align-items: center; gap: 56px; }
+}
+
+h1 {
+  font-family: var(--serif); font-weight: 400;
+  font-size: clamp(2.3rem, 5.4vw, 3.65rem);
+  line-height: 1.06; letter-spacing: -.015em;
+  margin: 14px 0 0; text-wrap: balance;
+}
+h1 em { font-style: italic; color: var(--lamp); }
+
+.lede { max-width: var(--measure); margin: 22px 0 0; font-size: 1.12rem; color: var(--muted); }
+.lede strong { color: var(--ink); font-weight: 600; }
+
+/* ── The locker wall — CSS only, no JavaScript ────────────────────────────── */
+.wall {
+  display: grid; grid-template-columns: repeat(4, 1fr); gap: 7px;
+  padding: 14px; background: var(--bg-elev); border: 1px solid var(--edge);
+}
+
+.door {
+  position: relative;
+  aspect-ratio: 4 / 3;
+  perspective: 460px;
+  opacity: 0;
+  animation: door-in .5s ease-out forwards;
+}
+
+/* The cavity behind the door: dark, empty, and lined. */
+.door .cavity {
+  position: absolute; inset: 0;
+  background: linear-gradient(178deg,
+      color-mix(in srgb, var(--cavity) 82%, black) 0%, var(--cavity) 100%);
+  border: 1px solid var(--edge);
+  overflow: hidden;
+}
+.door .cavity::after {           /* back-wall shadow line */
+  content: ""; position: absolute;
+  left: 8%; right: 8%; top: 26%; height: 1px;
+  background: rgba(0,0,0,.35);
+}
+
+/* A sealed package, only ever in the lit locker. */
+.parcel {
+  position: absolute;
+  left: 22%; right: 22%; bottom: 16%; height: 42%;
+  background: linear-gradient(160deg, var(--parcel) 0%, var(--parcel-lo) 100%);
+  border: 1px solid rgba(0,0,0,.3);
+  box-shadow: 0 4px 10px -3px rgba(0,0,0,.55);
+}
+.parcel::before {                /* tape, cross-wise */
+  content: ""; position: absolute;
+  left: 50%; top: -1px; bottom: -1px; width: 5px;
+  transform: translateX(-50%);
+  background: color-mix(in srgb, var(--lamp) 55%, transparent);
+}
+.parcel::after {                 /* consignment label */
+  content: ""; position: absolute;
+  left: 12%; top: 20%; width: 30%; height: 26%;
+  background: color-mix(in srgb, var(--sheet) 88%, transparent);
+}
+
+/* The steel door face, hinged on its left edge. */
+.door .face {
+  position: absolute; inset: 0;
+  background: linear-gradient(158deg, var(--steel-1) 0%, var(--steel-2) 100%);
+  border: 1px solid var(--edge);
+  transform-origin: left center;
+  transition: transform .55s cubic-bezier(.32,.72,.3,1), box-shadow .55s;
+  display: flex; align-items: flex-start; padding: 7px 8px;
+}
+.door .face::before {            /* hinge seam */
+  content: ""; position: absolute;
+  left: 0; top: 12%; bottom: 12%; width: 2px;
+  background: color-mix(in srgb, var(--edge) 80%, transparent);
+}
+.door .face::after {             /* handle */
+  content: ""; position: absolute;
+  right: 7px; top: 50%; width: 11px; height: 3px;
+  transform: translateY(-50%);
+  background: var(--edge); border-radius: 1px;
+}
+.door .face span {
+  font-family: var(--mono); font-size: 10px; font-weight: 600;
+  letter-spacing: .1em; color: var(--muted); font-variant-numeric: tabular-nums;
+}
+
+.door:hover .face { transform: rotateY(-104deg); box-shadow: -14px 0 26px -14px rgba(0,0,0,.6); }
+
+/* The one locker that is yours. Boldness is spent here and nowhere else.
+   It stays SHUT until opened — a closed door you have to try is the whole
+   point of a locker, and it gives the visitor something to do. It is a real
+   <button> so a tap on mobile and a keyboard Tab both work; the eleven
+   neighbours are decorative and hover-only. No JS: the button does nothing on
+   click by design, the opening is pure :hover / :focus-visible CSS. */
+button.door {
+  padding: 0; background: none; border: 0; font: inherit; color: inherit;
+  cursor: pointer; text-align: left; -webkit-tap-highlight-color: transparent;
+}
+button.door:focus-visible { outline: 2px solid var(--lamp); outline-offset: 4px; }
+
+.door.yours .cavity {
+  border-color: var(--lamp);
+  box-shadow: inset 0 0 26px -4px color-mix(in srgb, var(--lamp) 40%, transparent),
+              0 0 0 1px var(--lamp), 0 14px 38px -16px var(--lamp);
+}
+.door.yours .face { border-color: var(--lamp); }
+.door.yours .face span { color: var(--lamp); }
+/* :focus, not only :focus-visible — a tap on a phone gives a button :focus but
+   NOT :focus-visible, and iOS/Android "sticky hover" is too unreliable to be the
+   only way in. Without this the aria-label promises an opening that never comes
+   on the devices most likely to read it. The visible ring stays on
+   :focus-visible alone, so a mouse click still doesn't draw one. */
+.door.yours:hover .face,
+.door.yours:focus .face,
+.door.yours:focus-visible .face {
+  transform: rotateY(-104deg);
+  box-shadow: -14px 0 26px -14px rgba(0,0,0,.6);
+}
+
+.door.yours .tag {
+  position: absolute; left: 50%; top: 7px; transform: translateX(-50%);
+  z-index: 2;
+  font-family: var(--mono); font-size: 8.5px;
+  letter-spacing: .16em; text-transform: uppercase;
+  color: var(--bg); background: var(--lamp); padding: 2px 6px; white-space: nowrap;
+}
+
+.wall-caption { display: flex; justify-content: space-between; gap: 16px; margin-top: 12px; }
+
+@keyframes door-in { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) {
+  .door { animation: none; opacity: 1; }
+  .door .face { transition: none; }
+  .door:hover .face { transform: rotateY(-104deg); }
+}
+
+/* ── Tamper-evident tape: the section divider ─────────────────────────────── */
+.tape {
+  height: 13px;
+  border-top: 1px solid var(--edge); border-bottom: 1px solid var(--edge);
+  background: repeating-linear-gradient(-45deg,
+      color-mix(in srgb, var(--lamp) 34%, transparent) 0 8px, transparent 8px 17px);
+}
+
+/* ── Sections ─────────────────────────────────────────────────────────────── */
+section { padding: 58px 0; }
+
+h2 {
+  font-family: var(--serif); font-weight: 400;
+  font-size: clamp(1.6rem, 3.1vw, 2.15rem);
+  line-height: 1.18; letter-spacing: -.01em;
+  margin: 12px 0 0; text-wrap: balance;
+}
+
+.prose { max-width: var(--measure); margin-top: 20px; }
+.prose p { margin: 0 0 1.05em; }
+.prose p:last-child { margin-bottom: 0; }
+.prose code, .prose strong code {
+  font-family: var(--mono); font-size: .84em; color: var(--ink);
+}
+
+/* ── Honesty stamp ────────────────────────────────────────────────────────── */
+.stamp {
+  margin: 44px 0 0; max-width: 640px;
+  border: 2px solid var(--signal); color: var(--signal);
+  padding: 22px 26px; transform: rotate(-.9deg); background: var(--stamp-bg);
+}
+.stamp .stencil { color: var(--signal); }
+.stamp p { font-family: var(--serif); font-size: 1.22rem; line-height: 1.42; margin: 10px 0 0; text-wrap: balance; }
+.stamp .fine {
+  font-family: var(--mono); font-size: 12px; line-height: 1.6;
+  color: var(--muted); margin-top: 14px; text-transform: none;
+}
+
+/* ── Figure ───────────────────────────────────────────────────────────────── */
+figure { margin: 32px 0 0; }
+figure svg { display: block; width: 100%; max-width: 100%; height: auto; }
+.figscroll { overflow-x: auto; }
+.figscroll > svg { min-width: 620px; }
+figcaption {
+  font-family: var(--mono); font-size: 12px; line-height: 1.6;
+  color: var(--muted); margin-top: 14px; max-width: 70ch;
+}
+
+/* The sequence diagram themes through the same tokens as everything else. The
+   presentation attributes in the markup stay as a mid-tone fallback, but CSS
+   wins: a single hardcoded amber sat at ~2.6:1 on the light palette, which is
+   unreadable for 11.5px labels. Decorative bands keep --lamp; anything that has
+   to be READ uses --lamp-ink. */
+.seq .lampf { fill: var(--lamp); }
+.seq .lamps { stroke: var(--lamp); }
+.seq .inkf  { fill: var(--lamp-ink); }
+.seq .inks  { stroke: var(--lamp-ink); }
+
+/* ── Case cards ───────────────────────────────────────────────────────────── */
+.cases { display: grid; grid-template-columns: repeat(auto-fit, minmax(248px, 1fr)); gap: 8px; margin-top: 38px; }
+.case {
+  background: var(--sheet); border: 1px solid var(--edge);
+  border-top: 2px solid var(--lamp); padding: 20px 21px 22px;
+}
+.case h3 {
+  font-family: var(--serif); font-weight: 400; font-size: 1.24rem;
+  line-height: 1.25; margin: 9px 0 0; text-wrap: balance;
+}
+.case p { margin: 11px 0 0; font-size: .97rem; color: var(--muted); }
+.case p strong { color: var(--ink); font-weight: 600; }
+.case .caveat {
+  font-family: var(--mono); font-size: 11.5px; line-height: 1.65;
+  color: var(--signal); margin-top: 14px;
+  border-top: 1px solid color-mix(in srgb, var(--signal) 34%, transparent); padding-top: 11px;
+}
+
+/* ── Key-holder manifest: which wallets can open a locker ─────────────────────
+   A list, not cards: the reader is scanning for one answer ("can MY wallet do
+   this?"), and a list puts every verdict in the same right-hand column where a
+   card grid would scatter them. The supported row is the only one that gets the
+   lamp; the rest stay muted steel, which is the honest visual hierarchy here. */
+.manifest { margin-top: 34px; border-top: 1px solid var(--edge); }
+.holder {
+  display: grid; grid-template-columns: minmax(0,1fr); gap: 6px 26px;
+  padding: 22px 0; border-bottom: 1px solid var(--edge);
+}
+@media (min-width: 760px) { .holder { grid-template-columns: minmax(0,1fr) 190px; } }
+.holder .who {
+  font-family: var(--serif); font-size: 1.24rem; line-height: 1.3;
+  margin: 0; text-wrap: balance;
+}
+.holder .who .num { font-family: var(--mono); font-size: .62em; color: var(--muted); letter-spacing: .12em; }
+.holder .detail { margin: 9px 0 0; font-size: .97rem; color: var(--muted); max-width: 62ch; }
+.holder .detail strong { color: var(--ink); font-weight: 600; }
+.holder .detail code { font-family: var(--mono); font-size: .84em; color: var(--ink); }
+.holder .verdict {
+  font-family: var(--mono); font-size: 10.5px; font-weight: 600;
+  letter-spacing: .16em; text-transform: uppercase;
+  color: var(--muted); padding-top: 7px; align-self: start;
+}
+@media (min-width: 760px) { .holder .verdict { text-align: right; } }
+.holder.fits { border-left: 2px solid var(--lamp); padding-left: 20px; }
+.holder.fits .who { color: var(--ink); }
+.holder.fits .verdict { color: var(--lamp); }
+.holder.none .verdict { color: var(--signal); }
+
+/* ── Command block ────────────────────────────────────────────────────────── */
+.terminal {
+  margin-top: 26px; background: var(--sheet);
+  border: 1px solid var(--edge); border-left: 3px solid var(--lamp);
+  padding: 20px 22px; overflow-x: auto;
+}
+.terminal pre { margin: 0; font-family: var(--mono); font-size: 13px; line-height: 1.95; }
+.terminal .c { color: var(--muted); }
+.terminal .p { color: var(--lamp); user-select: none; }
+
+/* ── Split-flap spec board ────────────────────────────────────────────────── */
+.specs {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(166px, 1fr));
+  gap: 8px; margin-top: 26px;
+}
+.spec {
+  position: relative; background: linear-gradient(180deg, var(--steel-1) 0 50%, var(--steel-2) 50% 100%);
+  border: 1px solid var(--edge); padding: 15px 17px;
+}
+.spec::after {                    /* the split-flap seam */
+  content: ""; position: absolute; left: 0; right: 0; top: 50%;
+  height: 1px; background: rgba(0,0,0,.32);
+}
+.spec dt {
+  font-family: var(--mono); font-size: 10.5px;
+  letter-spacing: .16em; text-transform: uppercase; color: var(--muted);
+}
+.spec dd {
+  margin: 6px 0 0; font-family: var(--mono); font-size: 1.3rem; font-weight: 700;
+  font-variant-numeric: tabular-nums; color: var(--ink);
+}
+.spec dd small { display: block; font-size: 11px; font-weight: 400; color: var(--muted); margin-top: 3px; }
+
+/* ── Luggage tag — the depot address ──────────────────────────────────────── */
+.tagcard {
+  position: relative; margin-top: 30px; max-width: 620px;
+  background: var(--sheet); border: 1px solid var(--edge);
+  padding: 22px 26px 22px 52px;
+  clip-path: polygon(0 0, calc(100% - 18px) 0, 100% 18px, 100% 100%, 0 100%);
+}
+.tagcard::before {                /* punched hole */
+  content: ""; position: absolute; left: 21px; top: 50%;
+  width: 13px; height: 13px; margin-top: -6px;
+  border: 1px solid var(--edge); border-radius: 50%; background: var(--bg);
+}
+.tagcard .addr {
+  font-family: var(--mono); font-size: 14.5px; line-height: 1.6;
+  word-break: break-all; margin-top: 8px; color: var(--ink); user-select: all;
+}
+.tagcard .sub { font-family: var(--mono); font-size: 11.5px; color: var(--muted); margin-top: 10px; }
+.tagcard .warn {
+  font-family: var(--mono); font-size: 11.5px; line-height: 1.65;
+  color: var(--signal); margin-top: 14px; padding-top: 12px;
+  border-top: 1px solid color-mix(in srgb, var(--signal) 34%, transparent);
+}
+
+/* ── Endpoint table ───────────────────────────────────────────────────────── */
+.scroll { overflow-x: auto; margin-top: 26px; }
+table { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: 13px; min-width: 540px; }
+th, td { text-align: left; padding: 11px 14px 11px 0; border-bottom: 1px solid var(--edge); vertical-align: top; }
+th { font-size: 10.5px; letter-spacing: .16em; text-transform: uppercase; color: var(--muted); font-weight: 600; border-bottom-color: var(--ink); }
+td.verb { color: var(--lamp); font-weight: 700; white-space: nowrap; }
+td.path { white-space: nowrap; }
+td.note { font-family: var(--serif); font-size: 15px; color: var(--muted); padding-right: 0; }
+
+/* ── History ledger ───────────────────────────────────────────────────────── */
+.ledger { margin-top: 30px; border-top: 1px solid var(--edge); }
+.entry {
+  display: grid; grid-template-columns: minmax(0,1fr); gap: 6px 26px;
+  padding: 20px 0; border-bottom: 1px solid var(--edge);
+}
+@media (min-width: 720px) { .entry { grid-template-columns: 130px minmax(0,1fr); } }
+.entry .when {
+  font-family: var(--mono); font-size: 11px; font-weight: 600;
+  letter-spacing: .14em; text-transform: uppercase; color: var(--lamp); padding-top: 5px;
+}
+.entry .what { max-width: 62ch; }
+.entry .what p { margin: 0; }
+.entry .what code { font-family: var(--mono); font-size: .84em; color: var(--ink); }
+.entry.now .when { color: var(--signal); }
+
+/* ── Footer ───────────────────────────────────────────────────────────────── */
+footer {
+  border-top: 1px solid var(--edge); padding: 26px 0 54px;
+  display: flex; flex-wrap: wrap; gap: 10px 26px; align-items: baseline;
+}
+footer a {
+  color: var(--lamp); text-decoration: none;
+  border-bottom: 1px solid color-mix(in srgb, var(--lamp) 40%, transparent);
+}
+footer a:hover { border-bottom-color: var(--lamp); }
+footer a:focus-visible { outline: 2px solid var(--lamp); outline-offset: 3px; }
+footer .stencil { color: var(--muted); }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+
+  <header class="masthead">
+    <div class="mark"><span class="no">093</span> Grin Transporter</div>
+    <div class="spacer"></div>
+    <span class="chip {{STATUS_CLASS}}"><span class="dot"></span> {{STATUS_TEXT}}</span>
+    <span class="chip">{{NETWORK}}</span>
+  </header>
+
+  <div class="hero">
+    <div>
+      <div class="stencil">Left luggage, for Grin transactions</div>
+      <h1>Someone is sending you {{COIN}}.<br>It's <em>waiting in a locker</em>.</h1>
+      <p class="lede">
+        A Grin payment takes two turns — the sender starts it, you finish it. That normally means
+        both of you online at the same moment. This depot removes that. The sender drops a sealed
+        package in your locker and leaves. <strong>You collect it whenever you turn up.</strong>
+      </p>
+    </div>
+
+    <div>
+      <div class="wall">
+        <div class="door" aria-hidden="true" style="animation-delay:.02s"><div class="cavity"></div><div class="face"><span>01</span></div></div>
+        <div class="door" aria-hidden="true" style="animation-delay:.05s"><div class="cavity"></div><div class="face"><span>02</span></div></div>
+        <div class="door" aria-hidden="true" style="animation-delay:.08s"><div class="cavity"></div><div class="face"><span>03</span></div></div>
+        <div class="door" aria-hidden="true" style="animation-delay:.11s"><div class="cavity"></div><div class="face"><span>04</span></div></div>
+        <div class="door" aria-hidden="true" style="animation-delay:.14s"><div class="cavity"></div><div class="face"><span>05</span></div></div>
+        <button type="button" class="door yours" style="animation-delay:.34s"
+                aria-label="Locker 06 is yours. Open it to see the sealed package waiting inside.">
+          <span class="cavity"><span class="parcel"></span></span>
+          <span class="tag">Yours</span>
+          <span class="face"><span>06</span></span>
+        </button>
+        <div class="door" aria-hidden="true" style="animation-delay:.17s"><div class="cavity"></div><div class="face"><span>07</span></div></div>
+        <div class="door" aria-hidden="true" style="animation-delay:.20s"><div class="cavity"></div><div class="face"><span>08</span></div></div>
+        <div class="door" aria-hidden="true" style="animation-delay:.23s"><div class="cavity"></div><div class="face"><span>09</span></div></div>
+        <div class="door" aria-hidden="true" style="animation-delay:.26s"><div class="cavity"></div><div class="face"><span>10</span></div></div>
+        <div class="door" aria-hidden="true" style="animation-delay:.29s"><div class="cavity"></div><div class="face"><span>11</span></div></div>
+        <div class="door" aria-hidden="true" style="animation-delay:.32s"><div class="cavity"></div><div class="face"><span>12</span></div></div>
+      </div>
+      <div class="wall-caption">
+        <span class="stencil">One locker per address</span>
+        <span class="stencil">Open yours &rarr;</span>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<div class="tape"></div>
+
+<div class="wrap">
+  <section>
+    <div class="stencil">What this place is</div>
+    <h2>A left-luggage office that cannot open the bags</h2>
+    <div class="prose">
+      <p>
+        Every locker here belongs to one Grin address. Anyone can post something into yours —
+        that is how you get paid. Nobody but you can open it, because the door is unlocked by the
+        same key that owns the address, and that key never leaves your wallet.
+      </p>
+      <p>
+        What arrives is already sealed before it gets here. This depot stores a package it has no
+        way to open, hands it over to whoever proves they own the locker, and destroys the wrapper
+        afterwards.
+      </p>
+      <p>
+        <strong>The depot has no wallet and no Grin address of its own.</strong> It cannot
+        receive, hold, or forward a single coin, and nobody ever pays <em>it</em>. A payment is
+        addressed to the recipient's own address, exactly as it would be if it went straight over
+        Tor — the only difference is that the sealed message waits here instead of arriving the
+        instant it is sent.
+      </p>
+      <p>
+        If nobody collects, the package is destroyed after <strong>{{TTL_DAYS}}</strong> and the
+        sender gets their funds back untouched.
+      </p>
+    </div>
+
+    <div class="stamp">
+      <div class="stencil">Read this bit twice</div>
+      <p>We cannot read your package. We <em>do</em> know that one moved.</p>
+      <div class="fine">
+        This depot records which address posted to which, and when — it has to, to deliver.
+        It never sees amounts, names or contents. If that metadata matters to you, hand the
+        slatepack over yourself, or run your own depot. The software to run one is the same
+        software running this page.
+      </div>
+    </div>
+  </section>
+</div>
+
+<div class="tape"></div>
+
+<div class="wrap">
+  <section>
+    <div class="stencil">The round trip</div>
+    <h2>Four moves, and neither of you has to be awake for the other</h2>
+
+    <figure>
+      <div class="figscroll">
+        <svg class="seq" viewBox="0 0 760 496" role="img"
+             aria-label="Sequence diagram: the sender deposits a sealed slate into the depot and leaves; later the payee collects it, adds their half and deposits a reply, then leaves; later still the sender collects the reply and broadcasts. The two waiting periods are what the depot exists to allow.">
+          <defs>
+            <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5"
+                    markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor"></path>
+            </marker>
+            <marker id="ar-lamp" viewBox="0 0 10 10" refX="9" refY="5"
+                    markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path class="inkf" d="M 0 0 L 10 5 L 0 10 z" fill="#C8811A"></path>
+            </marker>
+          </defs>
+
+          <!-- Lane headers -->
+          <g font-family="ui-monospace, Menlo, Consolas, monospace" font-size="12"
+             font-weight="700" letter-spacing="1.6" text-anchor="middle" fill="currentColor">
+            <text x="110" y="26">SENDER</text>
+            <text x="380" y="26">THE DEPOT</text>
+            <text x="650" y="26">YOU</text>
+          </g>
+          <g font-family="ui-monospace, Menlo, Consolas, monospace" font-size="10.5"
+             text-anchor="middle" fill="currentColor" opacity=".55">
+            <text x="110" y="43">their wallet</text>
+            <text x="380" y="43">this server</text>
+            <text x="650" y="43">your wallet</text>
+          </g>
+
+          <!-- Lifelines -->
+          <g stroke="currentColor" stroke-width="1" opacity=".3" stroke-dasharray="3 5">
+            <line x1="110" y1="56" x2="110" y2="404"></line>
+            <line x1="380" y1="56" x2="380" y2="404"></line>
+            <line x1="650" y1="56" x2="650" y2="404"></line>
+          </g>
+
+          <!-- Waiting band 1 -->
+          <rect class="lampf" x="46" y="104" width="668" height="52" fill="#C8811A" opacity=".10"></rect>
+          <g class="lamps" stroke="#C8811A" stroke-width="1" opacity=".5" stroke-dasharray="2 4">
+            <line x1="46" y1="104" x2="714" y2="104"></line>
+            <line x1="46" y1="156" x2="714" y2="156"></line>
+          </g>
+          <text class="inkf" x="380" y="135" font-family="ui-monospace, Menlo, Consolas, monospace"
+                font-size="11.5" letter-spacing="1.2" text-anchor="middle" fill="#C8811A">
+            SENDER IS GONE · hours or days
+          </text>
+
+          <!-- Waiting band 2 -->
+          <rect class="lampf" x="46" y="270" width="668" height="52" fill="#C8811A" opacity=".10"></rect>
+          <g class="lamps" stroke="#C8811A" stroke-width="1" opacity=".5" stroke-dasharray="2 4">
+            <line x1="46" y1="270" x2="714" y2="270"></line>
+            <line x1="46" y1="322" x2="714" y2="322"></line>
+          </g>
+          <text class="inkf" x="380" y="301" font-family="ui-monospace, Menlo, Consolas, monospace"
+                font-size="11.5" letter-spacing="1.2" text-anchor="middle" fill="#C8811A">
+            YOU ARE GONE · hours or days
+          </text>
+
+          <!-- Step 1 -->
+          <g stroke="currentColor" stroke-width="1.6" fill="none" color="currentColor">
+            <line x1="110" y1="82" x2="366" y2="82" marker-end="url(#ar)"></line>
+          </g>
+          <text x="238" y="74" font-family="ui-monospace, Menlo, Consolas, monospace"
+                font-size="11.5" text-anchor="middle" fill="currentColor">seals slate to your address · deposits</text>
+
+          <!-- Step 2 -->
+          <g stroke="currentColor" stroke-width="1.6" fill="none">
+            <line x1="650" y1="182" x2="394" y2="182" marker-end="url(#ar)"></line>
+          </g>
+          <text x="522" y="174" font-family="ui-monospace, Menlo, Consolas, monospace"
+                font-size="11.5" text-anchor="middle" fill="currentColor">proves it owns the locker</text>
+
+          <g stroke="currentColor" stroke-width="1.6" fill="none">
+            <line x1="380" y1="214" x2="636" y2="214" marker-end="url(#ar)"></line>
+          </g>
+          <text x="522" y="206" font-family="ui-monospace, Menlo, Consolas, monospace"
+                font-size="11.5" text-anchor="middle" fill="currentColor">hands over the sealed package</text>
+
+          <!-- Step 3 -->
+          <g stroke="currentColor" stroke-width="1.6" fill="none">
+            <line x1="650" y1="248" x2="394" y2="248" marker-end="url(#ar)"></line>
+          </g>
+          <text x="522" y="240" font-family="ui-monospace, Menlo, Consolas, monospace"
+                font-size="11.5" text-anchor="middle" fill="currentColor">adds your half · deposits the reply</text>
+
+          <!-- Step 4 -->
+          <g stroke="currentColor" stroke-width="1.6" fill="none">
+            <line x1="380" y1="348" x2="124" y2="348" marker-end="url(#ar)"></line>
+          </g>
+          <text x="252" y="340" font-family="ui-monospace, Menlo, Consolas, monospace"
+                font-size="11.5" text-anchor="middle" fill="currentColor">collects the reply · both packages deleted</text>
+
+          <!-- Chain -->
+          <rect x="46" y="424" width="668" height="46" fill="none"
+                stroke="currentColor" stroke-width="1" opacity=".45"></rect>
+          <text x="380" y="452" font-family="ui-monospace, Menlo, Consolas, monospace"
+                font-size="12" letter-spacing="1.4" text-anchor="middle" fill="currentColor">
+            THE GRIN NETWORK — an ordinary transaction, indistinguishable from any other
+          </text>
+          <g class="inks" stroke="#C8811A" stroke-width="1.6" fill="none">
+            <line x1="110" y1="366" x2="110" y2="416" marker-end="url(#ar-lamp)"></line>
+          </g>
+          <text class="inkf" x="126" y="396" font-family="ui-monospace, Menlo, Consolas, monospace"
+                font-size="11.5" text-anchor="start" fill="#C8811A">finalises · broadcasts</text>
+        </svg>
+      </div>
+      <figcaption>
+        The two shaded bands are the entire product. Tor can do everything else on this diagram —
+        it just cannot do those. Remove the depot and both bands have to shrink to zero, which
+        means both wallets must be online at the same instant.
+      </figcaption>
+    </figure>
+
+    <div class="stencil" style="margin-top:52px">When that actually matters</div>
+
+    <div class="cases">
+      <div class="case">
+        <div class="stencil">Case one</div>
+        <h3>Payday lands while your rig is switched off</h3>
+        <p>
+          A pool pays out on its own schedule. If your wallet is not listening at that exact
+          minute, a direct payment simply fails and you go into a retry queue — for days,
+          sometimes for nothing. <strong>A locker does not care when you show up.</strong>
+        </p>
+      </div>
+
+      <div class="case">
+        <div class="stencil">Case two</div>
+        <h3>Tor cannot get out of the country you are in</h3>
+        <p>
+          Where Tor is blocked outright and even bridges — obfs4, Snowflake — will not hold a
+          circuit, a direct payment has nowhere to go. Collecting from a depot is
+          <strong>an ordinary HTTPS request to an ordinary web server</strong>, so it travels
+          wherever normal web traffic travels.
+        </p>
+        <div class="caveat">
+          The trade is real: reached over plain HTTPS, the depot sees your IP address. Use its
+          .onion where you can reach one — or run the depot yourself, and it is your own server
+          doing the seeing.
+        </div>
+      </div>
+
+      <div class="case">
+        <div class="stencil">Case three</div>
+        <h3>You are twelve hours apart and never both awake</h3>
+        <p>
+          Two people, no shared chat window, opposite timezones. The alternative is emailing
+          blocks of slatepack text back and forth and hoping neither of you pastes the wrong
+          one. <strong>Each of you does your half whenever it suits.</strong>
+        </p>
+      </div>
+    </div>
+
+    <div class="prose" style="margin-top:34px">
+      <p>
+        Worth being clear about what this is <em>not</em>: it is not a way around Tor being down
+        on your own machine, and it is not a privacy upgrade. Case two works because the depot
+        speaks plain HTTPS — the same reason it can be blocked, logged, or watched like any other
+        website. If both wallets are online and Tor is working, send directly; it is simpler and
+        it leaves nothing behind on anyone's server.
+      </p>
+    </div>
+  </section>
+</div>
+
+<div class="tape"></div>
+
+<div class="wrap">
+  <section>
+    <div class="stencil">Key holders</div>
+    <h2>Which wallets can open a locker</h2>
+    <div class="prose">
+      <p>
+        Being honest about this up front saves you an afternoon: <strong>most Grin wallets cannot
+        use a depot at all.</strong> grin-wallet, Grim and Goblin speak Tor, an HTTP listener and
+        hand-carried slatepacks — none of them has a relay client. There is nothing to configure
+        in them, and nothing you can paste into them that will work.
+      </p>
+      <p>
+        One wallet has it built in: <strong>Fidelius</strong>, the Grin Node Toolkit's own
+        self-hosted web wallet. Everything else needs the toolkit's command-line poll agent
+        bolted onto a local grin-wallet.
+      </p>
+    </div>
+
+    <div class="manifest">
+      <div class="holder fits">
+        <div>
+          <p class="who">Fidelius <span class="num">· toolkit script 051</span></p>
+          <p class="detail">
+            The only wallet with depot support built in — no CLI, no cron, nothing to bolt on.
+            Paste this station's URL once under <strong>Settings → Grin Transporter</strong>
+            (one slot per network), and a <strong>Send via Transporter</strong> method appears
+            beside Tor and Slatepack, with a <strong>Transporter Inbox</strong> that collects,
+            finishes and replies to what is waiting. It drives the wallet's Owner API in-process,
+            so the passphrase never touches disk.
+          </p>
+        </div>
+        <div class="verdict">Fits the lock</div>
+      </div>
+
+      <div class="holder">
+        <div>
+          <p class="who">grin-wallet <span class="num">· plus the 093 poll agent</span></p>
+          <p class="detail">
+            The reference wallet has no relay client of its own, but the toolkit ships
+            <code>agent.js</code>, which drives its Owner API from outside. A plain Node script —
+            no daemon, a cron entry is enough. This is the route for a wallet you already run
+            headless next to a node.
+          </p>
+        </div>
+        <div class="verdict">With the agent</div>
+      </div>
+
+      <div class="holder none">
+        <div>
+          <p class="who">grin-wallet on its own, Grim, Goblin, everything else</p>
+          <p class="detail">
+            Tor, an HTTP listener and manual slatepacks only. A depot is not a listener and not a
+            slatepack you can paste — it is a queue that has to be polled and authenticated
+            against, so support has to be written into the wallet. None of these has it.
+          </p>
+        </div>
+        <div class="verdict">No relay client</div>
+      </div>
+    </div>
+
+    <div class="prose" style="margin-top:30px">
+      <p>
+        <strong>Both ends need one.</strong> A depot is not something you can pay <em>into</em>
+        from an unaware wallet: the sender deposits and the recipient collects, so payer and payee
+        both need Fidelius or the agent, and both need to be pointed at a depot on
+        {{NETWORK_LOWER}}. If your counterparty runs neither, send over Tor instead.
+      </p>
+    </div>
+
+    <div class="terminal">
+      <pre><span class="c"># the address to hand out — this is your locker</span>
+<span class="p">$</span> agent.js address
+
+<span class="c"># collect anything waiting, add your half, post the reply back</span>
+<span class="p">$</span> agent.js poll
+
+<span class="c"># deposit a payment into someone else's locker</span>
+<span class="p">$</span> agent.js send &lt;recipient_address&gt; &lt;amount_grin&gt;
+
+<span class="c"># what's in flight, and what the depot is holding for you</span>
+<span class="p">$</span> agent.js status
+
+<span class="c"># abandon a transaction you started</span>
+<span class="p">$</span> agent.js cancel &lt;tx_slate_id&gt;</pre>
+    </div>
+
+    <div class="prose" style="margin-top:26px">
+      <p>
+        Install either side with <code>093_grin_transporter.sh</code> in the Grin Node Toolkit —
+        option 7 wires the agent to a local wallet, option 8 runs it and installs the cron
+        schedule that polls for you; Fidelius
+        is installed separately by <code>051_grin_fidelius.sh</code> and just needs the URL.
+        If you would rather not trust someone else's depot with your delivery metadata, the same
+        script installs the server side. Running your own is the intended configuration, not the
+        advanced one.
+      </p>
+    </div>
+  </section>
+</div>
+
+<div class="tape"></div>
+
+<div class="wrap">
+  <section>
+    <div class="stencil">This station</div>
+    <h2>Point a wallet here</h2>
+
+    <div class="tagcard">
+      <div class="stencil">Station URL — paste this into Fidelius or an agent config</div>
+      <div class="addr">{{STATION_URL}}</div>
+      <div class="sub">{{NETWORK}} · serves {{HRP}}1… lockers · deposits open to anyone</div>
+      <div class="warn">
+        This is a web address, not a Grin address. Never send funds here — nothing can receive
+        them. Payments are always addressed to the recipient's own {{HRP}}1… address; this URL only
+        tells your wallet which depot to leave the sealed message at.
+      </div>
+    </div>
+
+    <dl class="specs">
+      <div class="spec"><dt>Network</dt><dd>{{NETWORK}}<small>{{HRP}}1… addresses</small></dd></div>
+      <div class="spec"><dt>Package limit</dt><dd>{{MAX_SLATE}}<small>per slatepack</small></dd></div>
+      <div class="spec"><dt>Held for</dt><dd>{{TTL_HOURS}} h<small>{{TTL_DAYS}}, then destroyed</small></dd></div>
+      <div class="spec"><dt>Locker depth</dt><dd>{{QUEUE_DEPTH}}<small>packages per address</small></dd></div>
+    </dl>
+
+    <div class="scroll">
+      <table>
+        <thead>
+          <tr><th>Method</th><th>Endpoint</th><th>Who may call it</th></tr>
+        </thead>
+        <tbody>
+          <tr><td class="verb">GET</td><td class="path">/health</td><td class="note">Anyone. Liveness only.</td></tr>
+          <tr><td class="verb">GET</td><td class="path">/auth/challenge</td><td class="note">Anyone. Returns a nonce to sign.</td></tr>
+          <tr><td class="verb">POST</td><td class="path">/auth</td><td class="note">A signature over that nonce, checked against the public key inside your address.</td></tr>
+          <tr><td class="verb">PUT</td><td class="path">/queue/&lt;address&gt;</td><td class="note">Anyone — depositing is open, that is how you get paid. POST is accepted as an alias.</td></tr>
+          <tr><td class="verb">GET</td><td class="path">/queue/&lt;address&gt;</td><td class="note">The owner of that address, and nobody else.</td></tr>
+          <tr><td class="verb">DELETE</td><td class="path">/queue/&lt;address&gt;/&lt;id&gt;</td><td class="note">Owner only. Called automatically once a package is collected.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+</div>
+
+<div class="tape"></div>
+
+<div class="wrap">
+  <section>
+    <div class="stencil">Where the idea came from</div>
+    <h2>An old idea, rebuilt on modern keys</h2>
+    <div class="prose">
+      <p>
+        This is not a new invention and does not pretend to be. Grin had a relay once; it was
+        removed, and the gap it left is the gap this fills.
+      </p>
+    </div>
+
+    <div class="ledger">
+      <div class="entry">
+        <div class="when">2018 — 2019</div>
+        <div class="what"><p>
+          <strong>grinbox</strong> (vault713) gave Grin its first relay: your address <em>was</em>
+          your mailbox, encrypted messages waited in a queue, and you proved ownership to collect.
+          <code>wallet713</code> was the wallet that spoke it.
+        </p></div>
+      </div>
+      <div class="entry">
+        <div class="when">Then</div>
+        <div class="what"><p>
+          Grin core never adopted it. grinbox addressing was dropped from the wallet, and the
+          relay went with it. MWC kept the concept alive in <code>mwcmqs</code>, which still runs
+          today as a public federated service.
+        </p></div>
+      </div>
+      <div class="entry">
+        <div class="when">Borrowed</div>
+        <div class="what"><p>
+          The <strong>shape</strong>: a queue keyed by address, challenge-response instead of
+          accounts, plain HTTP rather than email. That design was right in 2018 and it is still
+          right.
+        </p></div>
+      </div>
+      <div class="entry now">
+        <div class="when">Not borrowed</div>
+        <div class="what"><p>
+          The <strong>cryptography</strong>. grinbox and MQS use the old secp256k1 addressing.
+          This depot never touches any of that — it carries the ed25519 Slatepack your wallet
+          already produces, and implements <strong>no cryptography of its own</strong>. Every
+          seal is made and broken inside a wallet, never here. It is a fresh build that studied
+          the old one, not a fork of it.
+        </p></div>
+      </div>
+      <div class="entry">
+        <div class="when">And</div>
+        <div class="what"><p>
+          Those relays were central and public by default. This one is meant to be
+          <strong>yours</strong> — one operator, one depot, run wherever you already run a node.
+        </p></div>
+      </div>
+    </div>
+  </section>
+</div>
+
+<div class="wrap">
+  <footer>
+    <span class="stencil">Grin Node Toolkit · Script 093 · v{{VERSION}}</span>
+    <div class="spacer"></div>
+    <a href="https://github.com/noobvie/Grin-Node-Toolkit">Run your own depot</a>
+    <a href="/health">Check status</a>
+  </footer>
+</div>
+
+</body>
+</html>

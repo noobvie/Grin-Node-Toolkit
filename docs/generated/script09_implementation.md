@@ -146,8 +146,9 @@ checksum on that path by design, HTTPS+GitHub trust only).
 ## 093 — Grin Transporter Phase 1 (implemented 2026-07-11)
 
 **Standalone only** (user decision 2026-07-11): server + auth + CLI agent. NO
-product wiring — Grin Drop 059 stays untouched and the pool's
-`incentives.transporter_enabled` stays `false`, both gated on design B.9 #6
+product wiring — Grin Drop 059 stays untouched, and the pool **dropped its reserved
+`incentives.transporter_enabled` key entirely on 2026-08-13** rather than keep a
+placeholder (script07_implementation.md D4); both gated on design B.9 #6
 (no mainstream wallet can receive from a relay; a Drop claimant / pool miner
 would need to run our agent). Phase-1 value: operator-to-operator sends and
 the testnet round-trip proof. Not yet exercised on a live VPS (`bash -n` +

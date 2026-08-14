@@ -561,10 +561,15 @@ coding. `⚠VERIFY`: exact mwc713 path; whether MQS auth is signed-challenge vs 
    speaks Tor + HTTP listener + manual slatepack — to our knowledge **no built-in relay/MQS
    client** (that was an MWC addition Grin upstream never took). If receiving via Transporter
    needs non-standard tooling, adoption is ~zero. **Confirm receive-support across grin-wallet /
-   Grim / GrinPlusPlus / Ironbelly first.** Until then the pool keeps Tor (rail #1) + manual
-   slatepack claim (rail #2), and the pool's `incentives.transporter_enabled` stays `false`.
+   Grim / GrinPlusPlus / Ironbelly first.** The pool keeps Tor (rail #1) + manual slatepack
+   claim (rail #2) and **that is now its final rail set**: since 2026-08-13 the pool no longer
+   carries a reserved placeholder at all — `incentives.transporter_enabled` and its disabled
+   admin checkbox were deleted (script07_implementation.md D4). **Do not look for that key; it
+   does not exist.** The reasoning: this gate is not ours to open, so a "coming soon" checkbox
+   promised a date the pool could not set. Removing it changed no behaviour — the key was forced
+   false and read by nothing.
    There is **no pool-side Transporter code** — the `lib/wallet-transporter.js` stub was deleted
-   2026-08-06 (nothing imported it). When the rail ships it must mirror the `WalletTor` interface
+   2026-08-06 (nothing imported it). If the rail is ever revisited it must mirror the `WalletTor` interface
    used by `withdrawal-scheduler.js` — `probeReachable(grinAddress)` → `{online, reason}` and
    `send(grinAddress, amount)` — so it can slot in as a third option alongside Tor and manual.
 

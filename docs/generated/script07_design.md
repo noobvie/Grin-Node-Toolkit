@@ -385,7 +385,14 @@ same slate round-trip, so there is **one** withdrawal state machine with a `meth
 |---|---|---|---|
 | **Tor** | nothing (listener auto-signs) | no | `init_send_tx` → post over Tor → `finalize_tx` |
 | **Slatepack** | copy-paste S1 → sign → paste S2 | yes | `init_send_tx` (lazy) → miner returns S2 → `finalize_tx` |
-| *Relay (future)* | nothing (relay delivers async) | yes | Grin Transporter / [093 Transporter](script09_design.md) |
+
+**Tor is primary, Slatepack is the fallback, and that is the whole set the pool ships.** A store-and-forward
+relay rail (093 Transporter) was carried here as a reserved, forced-off placeholder until 2026-08-13 and
+has been **removed**: pool payouts over the Transporter are blocked on wallet *relay-receive* support that
+does not exist upstream, so the placeholder advertised a delivery date the pool could not set. Nothing was
+wired — no scheduler branch, no `method='transporter'` — so removal is a deletion of the promise, not of a
+feature. `public_html/js/payout-methods.js` makes rails self-registering, so re-adding one later costs a
+file plus a `<script>` tag.
 
 **Auto-payout** (6h scheduler, no human) can only attempt the zero-interaction method (Tor); on Tor
 failure to an offline miner the withdrawal becomes **Slatepack-claimable** instead of reversing.
@@ -453,8 +460,7 @@ miner `donateN` worker tags + manual top-ups / published Slatepack donation addr
   **verifiable** (winner derived from the node tip block hash captured at draw time).
 
 Public pages: `donate.html` (channels + live prize-pool size), `fortune-board.html` (winner history
-+ draw seed for audit). **Grin Transporter** payout rail (#3) is a reserved, forced-off placeholder
-([093 Transporter](script09_design.md)).
++ draw seed for audit).
 
 > Known register-free trade-off: pot B + per-address bonuses are partly Sybil-farmable; share-weighting
 > + min-shares bar + the Sybil-*proof* features (jackpot, streak, fee-cut) carry the fairness load.
@@ -1045,6 +1051,53 @@ table created by the bridge), `lib/config.js` + `lib/pool-settings.js` (4 config
 `admin-panel/settings-payout.html` + `settings-common.js` (admin fields),
 `public_html/account-settings.html` (P-04 Goblin option + registration UI). Security detail →
 security_audit §E.3; build notes → implementation §10.2.
+
+### 15.6 OFF-BY-DEFAULT IS A GUARANTEE, NOT A DEFAULT VALUE (verified 2026-08-13)
+
+Goblin is a third-party rail depending on relays we don't run and wallet software the miner
+installs separately, so a pool that has not deliberately switched it on must show **no trace of
+it to an end user**. Four independent layers enforce that; all four were re-verified 2026-08-13.
+
+1. **Default** — `payout.nostr_payouts_enabled: 'false'` in `lib/pool-settings.js`, with a
+   validator that accepts only `true`/`false` and normalises an empty or absent value to
+   `'false'`, never to truthy. The admin checkbox in `settings-payout.html` ships unchecked.
+2. **The account summary reports RUNTIME truth, not the setting.** `index.js` sends
+   `nostr_payouts_enabled: !!(nostrBridge && nostrBridge.isEnabled())`. So a pool where the
+   operator ticked the box but `npm install` never ran — the bridge constructor throws and is
+   caught, leaving `nostrBridge = null` — reports **false** and the UI stays hidden. A flag that
+   is on while the feature cannot work must never render a payout option.
+3. **Markup fails closed.** All three Goblin blocks in `account-settings.html` (radio `<label>`
+   :472, payout pane :509, destination card :561) ship `style="display:none;"`, so nothing appears
+   before the summary lands and there is no flash of an unavailable rail. `PayoutMethods.applySummary`
+   reveals the label and the destination card only when `isEnabled(summary)` passes, unchecks the
+   radio if the rail is switched off while it was selected, re-checks the `fallback` rail (Tor),
+   and hides the whole `#acct-destinations` heading when no destination card is visible. The
+   **pane** is not driven by `isEnabled` at all — `sync()` shows whichever pane matches the
+   *checked* radio, and a disabled rail's radio can never be the checked one. Worth knowing before
+   adding a rail: a pane with no radio would never be hidden by this machinery.
+4. **The server refuses regardless of what the page shows** — `503` on
+   `POST /api/account/:addr/withdraw` with `method:'nostr'` (index.js :3520) and on
+   `POST /api/account/:addr/nostr-destination` (:3642). Hiding a control is presentation; this is
+   the actual gate, and it holds against a hand-crafted request. **`DELETE /nostr-destination` is
+   deliberately NOT gated** — de-registration cannot redirect money, and a miner must still be able
+   to clear a pinned destination after the operator switches the rail off, or the pin is stranded
+   in `miner_accounts` with no route to remove it.
+
+**One leak existed and was fixed 2026-08-13:** `public_html/index.html` carried a static line
+—"Nostr / Goblin transport planned"— rendered to every visitor irrespective of the flag, and stale
+besides (the rail shipped 2026-07-18). Removed. The homepage now describes only the two rails
+every pool always has. **Rule: no public page may name an optional rail in static copy.** The
+account page is the only surface allowed to mention Goblin, because it is the only one that
+gates on the summary.
+
+Not a leak, and deliberately kept: a *withdrawal history* row whose `method` is `nostr` keeps
+rendering "Goblin (Nostr)" after the rail is switched off. That is the miner's own past payment,
+and `payout-methods.js` falls back to the raw method string for a rail that no longer registers,
+so history never renders `undefined`.
+
+> Unrelated near-miss when grepping: `data-brand="social-nostr"` in `index.html` /
+> `public-shell.js` is the pool's optional **Nostr social link** in the footer (`branding.nostr_link`,
+> also hidden by default). It has nothing to do with the payout rail — do not wire the two together.
 
 ---
 

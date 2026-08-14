@@ -211,7 +211,7 @@ harness.
 | 3 | Enqueue abuse bounds | ✅ **now** — size, per-addr, per-depositor, global, TTL, nginx + in-app rate limits, **plus delivery ordering (T-12): bounding the enqueue is not enough on its own** |
 | 4 | No SSRF / no auto-finalize | ✅ the server makes **no outbound requests at all** — it is walletless |
 | 5 | Transport & exposure | ✅ binds 127.0.0.1 only; prepared statements throughout; body-size limit; `clientKey()` supersedes `req.ip` |
-| 6 | Pool/Drop rail caution | ✅ still unwired — `transporter_enabled` false, stub throws |
+| 6 | Pool/Drop rail caution | ✅ unwired, and now **un-advertised** — the pool's reserved `transporter_enabled` key + disabled checkbox were removed 2026-08-13 (the stub had already gone 2026-08-06). Drop 059 remains untouched |
 
 ## Open / accepted for 093
 

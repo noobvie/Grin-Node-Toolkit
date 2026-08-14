@@ -21,7 +21,10 @@
 #  Phase 1 scope (standalone — no Drop/pool wiring, per 2026-07-11 decision):
 #    server (queue + R8 challenge auth) + CLI agent (send/poll/finalize) +
 #    nginx/certbot + optional Tor front + cron poll. Product integration
-#    (pool payout rail #3, Drop claims) stays gated on design doc B.9 #6.
+#    (Drop claims) stays gated on design doc B.9 #6. The public pool is NO
+#    longer a pending consumer: Script 07 removed its reserved Transporter
+#    placeholder on 2026-08-13 and ships Tor + Slatepack only, so 093 is a
+#    standalone product, not a half-wired rail waiting on the pool.
 #
 #  Design: docs/generated/script09_design.md  (PART B — 093)
 #

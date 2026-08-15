@@ -199,6 +199,37 @@
     font-size: 10px !important;
   }
   .leaflet-control-attribution a { color: var(--muted) !important; }
+
+  /* ── Location group dot (2+ nodes sharing one GeoIP point) ───────────────── */
+  /* A DOM divIcon, not a canvas circleMarker, for two reasons: a canvas circle
+     cannot carry the count label, and the "mixed networks" ring has to follow the
+     theme — CSS vars do that for free, a hex baked into a marker option does not
+     (markers are built once at boot and never rebuilt on a theme switch). */
+  .grp-marker { background: none; border: none; }   /* strip divIcon defaults */
+  .grp-dot {
+    width: 100%; height: 100%;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    line-height: 1;
+    /* Dark ink is theme-independent here: the dot's own fill is the background,
+       and all three network colours are light enough to carry it. */
+    color: #0d1117;
+    border: 1px solid rgba(13,17,23,0.5);
+    box-shadow: 0 0 0 1px rgba(0,0,0,0.2);
+    cursor: pointer;
+  }
+  /* More than one network on this point. Ring it rather than let the dominant
+     network's colour silently stand in for the others. Gapped with the page
+     background so it reads as a RING in all four themes — a bare 2px var(--text)
+     border is only a slightly thicker hairline in the light theme (the plain dot
+     already has a dark 1px edge) and is low-contrast khaki-on-orange in "hp". */
+  .grp-dot.grp-mixed {
+    border: 2px solid var(--bg);
+    box-shadow: 0 0 0 2px var(--text);
+  }
   /* ── Custom horizontal zoom control ─────────────────────────────────────── */
   /* Positioned bottom-left, just to the right of the left panel (16+272+16=304px) */
   #zoom-ctrl {
@@ -327,6 +358,16 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    /* Take the leftover width so the node id and "seen" stay pinned right and a
+       long masked IPv6 ellipsises instead of pushing them off the row. */
+    flex: 1;
+    min-width: 0;
+  }
+  .pi-id {
+    font-family: 'Courier New', monospace;
+    font-size: 10px;
+    color: var(--muted);
+    flex-shrink: 0;
   }
   .pi-seen { font-size: 11px; color: var(--muted); flex-shrink: 0; }
   .pi-row2 {
@@ -339,6 +380,33 @@
     gap: 4px;
   }
   .pi-loc { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+  /* ── Location filter chip (set by clicking a grouped map dot) ────────────── */
+  #lp-loc-chip {
+    display: none;
+    align-items: center;
+    gap: 6px;
+    margin: 0 10px 8px;
+    padding: 5px 8px;
+    background: rgba(255,153,0,0.10);
+    border: 1px solid rgba(255,153,0,0.35);
+    border-radius: 4px;
+    font-size: 11px;
+    color: var(--text);
+    flex-shrink: 0;
+  }
+  #lp-loc-chip.on { display: flex; }
+  #lp-loc-text { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #lp-loc-clear {
+    background: none;
+    border: none;
+    color: var(--muted);
+    cursor: pointer;
+    font-size: 12px;
+    line-height: 1;
+    padding: 0 2px;
+    flex-shrink: 0;
+  }
+  #lp-loc-clear:hover { color: var(--grin); }
   .pi-ua  {
     color: var(--blue);
     flex-shrink: 0;
@@ -415,6 +483,26 @@
     font-size: 12px;
   }
   .leg-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+  /* Miniatures of the two group-dot states — must stay after .leg-dot to win */
+  .leg-dot-grp {
+    width: 16px; height: 16px;
+    background: #ff9900;
+    color: #0d1117;
+    font-size: 9px;
+    font-weight: 700;
+    line-height: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid rgba(13,17,23,0.5);
+  }
+  /* Same treatment as .grp-mixed above, or the legend wouldn't match the map. */
+  .leg-dot-mixed {
+    width: 14px; height: 14px;
+    background: #ff9900;
+    border: 2px solid var(--bg);
+    box-shadow: 0 0 0 2px var(--text);
+  }
   .leg-name { flex: 1; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .leg-pct  { color: var(--grin); font-weight: 600; min-width: 36px; text-align: right; }
   .filter-note {
@@ -597,7 +685,7 @@
       <button class="lp-close" id="lp-close" title="Close">✕</button>
     </div>
     <div class="lp-filters">
-      <input id="f-ip" type="text" placeholder="Search IP address…" autocomplete="off" spellcheck="false">
+      <input id="f-ip" type="text" placeholder="Search IP or node id…" autocomplete="off" spellcheck="false">
       <select id="f-country"><option value="">All Countries</option></select>
       <select id="f-version"><option value="">All Versions</option></select>
       <select id="f-direction">
@@ -616,6 +704,10 @@
         <option value="6">IPv6</option>
       </select>
     </div>
+    <div id="lp-loc-chip">
+      <span id="lp-loc-text"></span>
+      <button id="lp-loc-clear" title="Show all locations again" aria-label="Clear location filter">✕</button>
+    </div>
     <div id="lp-count">Loading…</div>
     <div id="peer-list"></div>
   </div>
@@ -623,7 +715,9 @@
   <div id="panel">
     <h2>Network Snapshot</h2>
     <p class="filter-note">Active peers — last 30 days</p>
-    <div class="stat-row"><span class="lbl">Total peers</span><span class="val" id="p-total">—</span></div>
+    <div class="stat-row" title="Peer records. A node reachable on both networks is counted twice here — see Nodes on map.">
+      <span class="lbl">Total peers</span><span class="val" id="p-total">—</span>
+    </div>
     <div class="stat-row">
       <span class="lbl"><span style="color:#ff9900">●</span> Mainnet</span>
       <span class="val" id="p-mainnet">—</span>
@@ -637,6 +731,15 @@
       <span class="val" id="p-both">—</span>
     </div>
     <div class="stat-row"><span class="lbl">Countries</span><span class="val" id="p-countries">—</span></div>
+    <div class="stat-row" title="Unique hosts drawn on the map. A dual-network IP is one node, and peers with no GeoIP data are not plotted.">
+      <span class="lbl">Nodes on map</span><span class="val" id="p-nodes">—</span>
+    </div>
+    <div class="stat-row" title="Distinct map points. GeoIP places every peer on its city's coordinates, so one dot can hold several nodes.">
+      <span class="lbl">Map locations</span><span class="val" id="p-locations">—</span>
+    </div>
+    <div class="stat-row" id="row-nogeo" style="display:none" title="No GeoIP data for these peers — they appear in the list but cannot be plotted.">
+      <span class="lbl">No location data</span><span class="val" id="p-nogeo">—</span>
+    </div>
     <div class="stat-row"><span class="lbl">Outbound</span><span class="val" id="p-out">—</span></div>
     <div class="stat-row"><span class="lbl">Inbound</span><span class="val" id="p-in">—</span></div>
     <div class="stat-row"><span class="lbl">IPv4</span><span class="val" id="p-ipv4">—</span></div>
@@ -647,6 +750,8 @@
     <div class="leg-row"><span class="leg-dot" style="background:#ff9900"></span><span class="leg-name">Mainnet peer</span></div>
     <div class="leg-row"><span class="leg-dot" style="background:#00bcd4"></span><span class="leg-name">Testnet peer</span></div>
     <div class="leg-row"><span class="leg-dot" style="background:#c850ff"></span><span class="leg-name">Both (same IP)</span></div>
+    <div class="leg-row"><span class="leg-dot leg-dot-grp">3</span><span class="leg-name">Several nodes here — click to list</span></div>
+    <div class="leg-row"><span class="leg-dot leg-dot-mixed"></span><span class="leg-name">Ring: more than one network</span></div>
 
     <div class="legend-title">Version Distribution</div>
     <div class="ver-tabs">
@@ -818,6 +923,14 @@ function indexDualIps(peers) {
 }
 const isDual = p => HAS_DUAL_FLAG ? p.dual === true : (!!p.ip && DUAL_FALLBACK.has(p.ip));
 
+// Short stable per-node label emitted by the collector (salted hash of the REAL
+// IP, 4 hex). It exists because the published IP is masked to a /24: two separate
+// hosts in one /24 both render as "95.216.1.x" and, since almost everyone runs the
+// standard port, their rows would otherwise be identical strings. Older peers.json
+// have no such field — same forward-compat pattern as `dual` above: use it when
+// present, degrade silently when absent.
+let HAS_NODE_ID = false;
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 const $ = id => document.getElementById(id);
 const fmtNum = (n, d=0) => {
@@ -944,13 +1057,18 @@ function initMap() {
     bounds:      [[-90, -180], [90, 180]],
   }).addTo(leafletMap);
 
-  markersLayer = L.layerGroup().addTo(leafletMap);
+  // featureGroup, not layerGroup: applyTheme() calls markersLayer.bringToFront()
+  // after swapping tiles, and bringToFront lives on FeatureGroup — on a plain
+  // layerGroup that call is a TypeError (console-only today, since nothing runs
+  // after it, but it would silently swallow anything added there later).
+  markersLayer = L.featureGroup().addTo(leafletMap);
 }
 
 // ── Tooltip ───────────────────────────────────────────────────────────────────
 function showTooltip(peer, ev) {
   const port = peer.port ? `:${peer.port}` : "";
-  $("tt-ip").textContent  = peer.ip + port;
+  const nid  = peer.node_id ? ` · #${peer.node_id}` : "";
+  $("tt-ip").textContent  = peer.ip + port + nid;
   $("tt-loc").textContent = [displayCity(peer.city), peer.country].filter(Boolean).join(", ") || "Unknown location";
   $("tt-ua").textContent  = peer.user_agent || "Unknown";
   $("tt-dir").textContent = (peer.direction || "") +
@@ -970,46 +1088,180 @@ function positionTooltip(ev) {
 
 function hideTooltip() { $("tooltip").style.display = "none"; }
 
-// ── Build markers ─────────────────────────────────────────────────────────────
-function buildMarkers(peers) {
-  markersLayer.clearLayers();
-  const drawnDual = new Set();   // collapse the two records of a dual IP to one marker
+// Hovering a grouped dot — the peer identities are in the list, so the tooltip's
+// job here is the composition of the group plus what a click will do.
+function showGroupTooltip(g, ev) {
+  const mix = [];
+  if (g.mainnet) mix.push(`${g.mainnet} mainnet`);
+  if (g.testnet) mix.push(`${g.testnet} testnet`);
+  if (g.dual)    mix.push(`${g.dual} both`);
+  $("tt-ip").textContent  = `${g.nodes.length} nodes here`;
+  $("tt-loc").textContent = groupLabel(g);
+  $("tt-ua").textContent  = mix.join(" · ");
+  $("tt-dir").textContent = `${g.v4} IPv4 · ${g.v6} IPv6 — click to list them`;
+  $("tooltip").style.display = "block";
+  positionTooltip(ev);
+}
+
+// ── Location grouping ─────────────────────────────────────────────────────────
+// GeoIP is city-centroid accurate: ip-api.com returns the CITY's coordinates, not
+// the host's, so every peer in one city gets byte-identical lat/lng. One dot per
+// record therefore stacks them perfectly — only the last one drawn is hoverable and
+// the nodes underneath are unreachable at ANY zoom (the ceiling is 10 on purpose,
+// see the peer-list click handler). Since Grin peers concentrate on a handful of
+// hosting providers, the densest locations were the ones being hidden. So: one dot
+// per point, sized by how many nodes sit on it, click to list them.
+//
+// Keyed on the rounded coordinate, not the city name — `city` can be blank, and two
+// providers sometimes label one centroid differently, while 2 dp (~1.1 km) never
+// merges two genuinely distinct cities. Zoom-stable by construction, unlike
+// pixel-distance clustering (which would fuse Frankfurt with Amsterdam at zoom 2).
+const COORD_DP = 2;
+const coordKey = p => `${(+p.lat).toFixed(COORD_DP)},${(+p.lng).toFixed(COORD_DP)}`;
+
+function groupLabel(g) {
+  return [displayCity(g.city), g.country].filter(Boolean).join(", ") || "Unknown location";
+}
+
+// One entry per (location, node). A dual-net IP is ONE node — the same collapse the
+// peer list does, so a group's count equals the rows the list shows for it.
+// Only DUAL records are deduped by IP: `dual` is computed by the collector on the
+// real IP, whereas two unrelated hosts in one /24 share the masked string and must
+// both be counted.
+function groupPeersByLocation(peers) {
+  const groups = new Map();
   peers.forEach(peer => {
     if (!peer.lat || !peer.lng) return;
-    let color;
-    if (isDual(peer)) {
-      if (drawnDual.has(peer.ip)) return;   // already plotted this IP
-      drawnDual.add(peer.ip);
-      color = DUAL_COLOR;
-    } else {
-      color = NET_COLOR[peer.network] || NET_COLOR.mainnet;
+    const key = coordKey(peer);
+    let g = groups.get(key);
+    if (!g) {
+      g = { key, lat: peer.lat, lng: peer.lng, nodes: [], dualIps: new Set(),
+            mainnet: 0, testnet: 0, dual: 0, v4: 0, v6: 0, city: "", country: "" };
+      groups.set(key, g);
     }
-    const marker = L.circleMarker([peer.lat, peer.lng], {
-      radius:      5,
-      color:       color,
-      fillColor:   color,
-      fillOpacity: 0.75,
-      weight:      1,
-    });
-    marker.on("mouseover", e => showTooltip(peer, e.originalEvent));
-    marker.on("mousemove", e => positionTooltip(e.originalEvent));
-    marker.on("mouseout",  () => hideTooltip());
-    marker.on("click",     () => leafletMap.flyTo([peer.lat, peer.lng], leafletMap.getMaxZoom()));
-    markersLayer.addLayer(marker);
+    if (isDual(peer)) {
+      if (g.dualIps.has(peer.ip)) return;   // same IP on the other network
+      g.dualIps.add(peer.ip);
+      g.dual++;
+    } else if (peer.network === "testnet") {
+      g.testnet++;
+    } else {
+      g.mainnet++;
+    }
+    g.nodes.push(peer);
+    if (isIPv6(peer.ip)) g.v6++; else g.v4++;
+    if (!g.city    && peer.city)    g.city    = peer.city;
+    if (!g.country && peer.country) g.country = peer.country;
   });
+  return [...groups.values()];
+}
+
+// Area-proportional, like the pool's network map: scaling the radius linearly would
+// quadruple the ink for twice the nodes and read as 4x. Capped so a hosting hub
+// can't swallow its neighbours.
+const groupRadius = n => Math.min(16, 5 + 3 * Math.sqrt(n - 1));
+
+// Fill = the largest kind present (ties keep mainnet, Array.sort being stable);
+// a group holding more than one kind also gets the .grp-mixed ring so the fill
+// isn't read as the whole story. The exact split is in the tooltip.
+function groupFill(g) {
+  const kinds = [
+    [g.mainnet, NET_COLOR.mainnet],
+    [g.testnet, NET_COLOR.testnet],
+    [g.dual,    DUAL_COLOR],
+  ];
+  kinds.sort((a, b) => b[0] - a[0]);
+  return kinds[0][1];
+}
+const isMixedGroup = g => [g.mainnet, g.testnet, g.dual].filter(n => n > 0).length > 1;
+
+// ── Build markers ─────────────────────────────────────────────────────────────
+function singleMarker(peer) {
+  const color = isDual(peer) ? DUAL_COLOR : (NET_COLOR[peer.network] || NET_COLOR.mainnet);
+  const marker = L.circleMarker([peer.lat, peer.lng], {
+    radius:      5,
+    color:       color,
+    fillColor:   color,
+    fillOpacity: 0.75,
+    weight:      1,
+  });
+  marker.on("mouseover", e => showTooltip(peer, e.originalEvent));
+  marker.on("mousemove", e => positionTooltip(e.originalEvent));
+  marker.on("mouseout",  () => hideTooltip());
+  marker.on("click",     () => leafletMap.flyTo([peer.lat, peer.lng], leafletMap.getMaxZoom()));
+  return marker;
+}
+
+function groupMarker(g) {
+  const n    = g.nodes.length;
+  const d    = Math.round(groupRadius(n) * 2);
+  const cls  = "grp-dot" + (isMixedGroup(g) ? " grp-mixed" : "");
+  const fs   = n >= 100 ? 8 : (n >= 10 ? 9 : 10);
+  // Only our own colour constants and a number reach the markup here.
+  const icon = L.divIcon({
+    className:  "grp-marker",
+    html:       `<div class="${cls}" style="background:${groupFill(g)};font-size:${fs}px">${n}</div>`,
+    iconSize:   [d, d],
+    iconAnchor: [d / 2, d / 2],
+  });
+  // Leaflet stacks DivIcon markers by `pos.y + zIndexOffset`, so a negative offset
+  // scaled to the dot's own size puts the BIGGER dot underneath wherever two groups
+  // overlap — the small one is the easy one to lose. Offsetting by the diameter also
+  // reorders pairs that don't overlap at all, which is invisible either way.
+  const marker = L.marker([g.lat, g.lng], { icon, keyboard: false, zIndexOffset: -d });
+  marker.on("mouseover", e => showGroupTooltip(g, e.originalEvent));
+  marker.on("mousemove", e => positionTooltip(e.originalEvent));
+  marker.on("mouseout",  () => hideTooltip());
+  // No flyTo: the nodes share one coordinate, so zooming can never separate them.
+  // Listing them is the action.
+  marker.on("click",     () => { hideTooltip(); showLocation(g); });
+  return marker;
+}
+
+function buildMarkers(groups) {
+  markersLayer.clearLayers();
+  // Insertion order is NOT the stacking order here: single dots are canvas circles in
+  // the overlayPane (z 400) and group dots are DOM markers in the markerPane (z 600),
+  // so a group dot always paints over a single one, and group-vs-group is decided by
+  // latitude + zIndexOffset (see groupMarker). Residual, and accepted: a lone dot
+  // within ~a dot's width of a big group is covered at low zoom. Unlike the stacking
+  // this replaces, zooming in does separate them — they are ≥1.1 km apart by
+  // construction, and anything overlapping at zoom 2 is tens of km apart.
+  groups.forEach(g => markersLayer.addLayer(
+    g.nodes.length === 1 ? singleMarker(g.nodes[0]) : groupMarker(g)
+  ));
 }
 
 // ── Right side panel ──────────────────────────────────────────────────────────
-function updatePanel(peers, updatedTs) {
+function updatePanel(peers, groups, updatedTs) {
   const countries = new Set(peers.map(p => p.country).filter(Boolean));
   const outbound  = peers.filter(p => p.direction === "Outbound").length;
   const mainnetPeers = peers.filter(p => p.network !== "testnet");
+
+  // Derived from the groups actually drawn, so these can't drift from the map.
+  // "Nodes on map" is dual-collapsed, so it reconciles with Total peers as
+  // total − Both − No location data.
+  const plotted = groups.reduce((n, g) => n + g.nodes.length, 0);
+  const noGeoIps = new Set();
+  let   noGeo    = 0;
+  peers.forEach(p => {
+    if (p.lat && p.lng) return;
+    if (isDual(p)) {                       // count a dual IP once, as above
+      if (noGeoIps.has(p.ip)) return;
+      noGeoIps.add(p.ip);
+    }
+    noGeo++;
+  });
 
   $("p-total").textContent     = fmt(peers.length);
   $("p-mainnet").textContent   = fmt(mainnetPeers.length);
   $("p-testnet").textContent   = fmt(peers.filter(p => p.network === "testnet").length);
   $("p-both").textContent      = fmt(new Set(peers.filter(isDual).map(p => p.ip)).size);
   $("p-countries").textContent = fmt(countries.size);
+  $("p-nodes").textContent     = fmt(plotted);
+  $("p-locations").textContent = fmt(groups.length);
+  $("p-nogeo").textContent     = fmt(noGeo);
+  $("row-nogeo").style.display = noGeo ? "" : "none";
   $("p-out").textContent       = fmt(outbound);
   $("p-in").textContent        = fmt(peers.length - outbound);
   $("p-ipv4").textContent      = fmt(peers.filter(p => !isIPv6(p.ip)).length);
@@ -1062,7 +1314,26 @@ async function loadGrinPrice() {
 }
 
 // ── Left panel — filterable peer list ────────────────────────────────────────
-let ALL_PEERS = [];
+let ALL_PEERS  = [];
+// Set by clicking a grouped map dot. Kept out of .lp-filters on purpose: it isn't a
+// dropdown the user can discover and set, it's a drill-down that arrives from the
+// map, so it gets its own dismissable chip. It composes with the other filters —
+// if the result is empty the chip and the "Showing 0 of N" line say why.
+let LOC_FILTER = null;   // { key, label }
+
+function showLocation(g) {
+  LOC_FILTER = { key: g.key, label: groupLabel(g) };
+  $("lp-loc-text").textContent = `📍 ${LOC_FILTER.label} · ${g.nodes.length} nodes`;
+  $("lp-loc-chip").classList.add("on");
+  openPeerPanel();
+  renderPeerList();
+}
+
+function clearLocation() {
+  LOC_FILTER = null;
+  $("lp-loc-chip").classList.remove("on");
+  renderPeerList();
+}
 
 function buildPeerList(peers) {
   ALL_PEERS = peers;
@@ -1091,7 +1362,16 @@ function renderPeerList() {
   const ipver     = $("f-ipver").value;
 
   let list = ALL_PEERS;
-  if (ipQuery)      list = list.filter(p => p.ip && p.ip.toLowerCase().includes(ipQuery));
+  if (ipQuery) {
+    // "#a3f9" and "a3f9" both work. A lone "#" leaves nothing to match on — guard it,
+    // or every id `includes("")` and typing "#" would silently show the whole list.
+    const idQuery = ipQuery.replace(/^#/, "");
+    list = list.filter(p =>
+      (p.ip && p.ip.toLowerCase().includes(ipQuery)) ||
+      (idQuery && p.node_id && p.node_id.toLowerCase().includes(idQuery))
+    );
+  }
+  if (LOC_FILTER)   list = list.filter(p => p.lat && p.lng && coordKey(p) === LOC_FILTER.key);
   if (country)      list = list.filter(p => p.country === country);
   if (version)      list = list.filter(p => p.user_agent === version);
   if (direction)    list = list.filter(p => p.direction === direction);
@@ -1124,9 +1404,14 @@ function renderPeerList() {
     const dot  = `<span style="color:${dotColor}">●</span>`;
     // dual row spans two ports — show the IP without a single (misleading) port
     const ipLabel = `${esc(p.ip)}${(!dual && p.port) ? ":" + esc(p.port) : ""}`;
+    // The node id is what tells two hosts in the same masked /24 apart.
+    const nid = p.node_id
+      ? `<span class="pi-id" title="Node id — the IP above is masked to a /24, so this is what distinguishes two nodes sharing it">#${esc(p.node_id)}</span>`
+      : "";
     return `<div class="peer-item" data-i="${i}">
       <div class="pi-row1">
         <span class="pi-ip">${dot} ${ipLabel}</span>
+        ${nid}
         <span class="pi-seen">${seen}</span>
       </div>
       <div class="pi-row2">
@@ -1163,6 +1448,19 @@ function toggleLeftPanel(show) {
 }
 $("lp-close").addEventListener("click",  () => toggleLeftPanel(false));
 $("lp-toggle").addEventListener("click", () => toggleLeftPanel(true));
+$("lp-loc-clear").addEventListener("click", clearLocation);
+
+// Open the peer list from the map. On mobile the two panels are exclusive and the
+// bottom bar tracks which one is up, so a drill-down has to set that state too —
+// otherwise the bar shows nothing active while the list is open.
+function openPeerPanel() {
+  toggleLeftPanel(true);
+  if (window.matchMedia("(max-width: 720px)").matches) {
+    $("panel").style.display = "none";
+    $("mb-peers").classList.add("mb-active");
+    $("mb-network").classList.remove("mb-active");
+  }
+}
 
 // ── Mobile panel toggles ──────────────────────────────────────────────────────
 function mobilePeers() {
@@ -1262,10 +1560,17 @@ async function boot() {
     );
 
     indexDualIps(peers);
+    HAS_NODE_ID = peers.some(p => p.node_id);
+    // Don't advertise a search the data can't answer (pre-node_id peers.json).
+    if (!HAS_NODE_ID) $("f-ip").placeholder = "Search IP address…";
+
+    // Group once and hand the same groups to both consumers, so the panel's
+    // "Nodes on map" / "Map locations" always describe what is actually drawn.
+    const groups = groupPeersByLocation(peers);
 
     if (!leafletMap) initMap();
-    buildMarkers(peers);
-    updatePanel(peers, data.updated);
+    buildMarkers(groups);
+    updatePanel(peers, groups, data.updated);
     buildPeerList(peers);
   } catch (e) {
     console.error(e);

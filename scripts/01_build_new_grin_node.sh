@@ -897,7 +897,7 @@ _start_installed_node() {
         return 1  # no installed nodes found — caller will fall through to build wizard
     fi
 
-    # start each node; mainnet first, 60-second gap before testnet
+    # start each node; mainnet first, GRIN_STAGGER_SECS gap before testnet
     local started=0
     for i in "${!found_dirs[@]}"; do
         GRIN_DIR="${found_dirs[$i]}"
@@ -913,8 +913,9 @@ _start_installed_node() {
         start_grin_tmux
         started=$(( started + 1 ))
         if [[ $(( i + 1 )) -lt ${#found_dirs[@]} ]]; then
-            info "Waiting 60 seconds before starting next instance..."
-            sleep 60
+            local _next_net="${found_nets[$(( i + 1 ))]}"
+            _stagger_watchdog_note "$_next_net"
+            _stagger_node_wait "$GRIN_STAGGER_SECS" "the $_next_net node"
         fi
     done
     success "$started node(s) started."

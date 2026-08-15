@@ -52,18 +52,36 @@ Grin Nostr Relay (Floonet) for Goblin wallet: https://relay.grin.money/
 
 ## Requirements
 
-- **Linux — supported distributions:**
-  - Ubuntu **22.04 / 24.04 / 26.04 LTS** — **tested and recommended**
-  - Other Debian-based distros (Debian, Mint, Pop!\_OS, Kali, etc.) — best effort, **not fully tested**
+- **Linux with glibc 2.38 or newer** — this is a hard floor, not a preference. The official
+  pre-built Grin binaries the toolkit downloads are compiled against glibc 2.38+, so on an
+  older system the node exits immediately with
+  `./grin: /lib/x86_64-linux-gnu/libc.so.6: version 'GLIBC_2.38' not found`.
+  Check yours with `ldd --version`.
+- **Supported distributions:**
+  - Ubuntu **24.04 / 26.04 LTS** — **tested and recommended**
+  - Ubuntu **22.04 LTS — NOT supported** (glibc 2.35, too old). It is still an LTS release
+    and many VPS providers still default to it, so check before you deploy.
+  - Debian **13 (trixie) or newer** — best effort, **not fully tested**. Debian 12 (bookworm)
+    has glibc 2.36 and is **too old**.
+  - Other Debian-based distros (Mint, Pop!\_OS, Kali, etc.) — best effort, **not fully tested**;
+    they must still meet the glibc 2.38 floor
   - Rocky Linux / AlmaLinux 10+ (RHEL clones) — runs, but **not fully tested** (use at your own risk)
-  - Rocky Linux / AlmaLinux 9 or older — **not supported** (glibc too old); upgrade instructions shown at startup
+  - Rocky Linux / AlmaLinux 9 or older — **not supported** (glibc 2.34); upgrade instructions shown at startup
   - Other systems (Fedora, Arch, etc.) — **not supported, script will exit**
 - `bash` 4.0+
 - `curl`, `wget`, `jq`, `tar`, `tmux` (installed automatically where possible)
 - Root / `sudo` access for system-level operations
 - **Free disk space: 10 GB minimum** (pruned mode) — more for full archive or hosting snapshots
 
-> **Ubuntu (22.04–26.04) is the primary tested platform.** The main script checks your OS at startup: unsupported distros exit with a clear message, and older Rocky/Alma versions get upgrade instructions instead of a hard stop. Rocky/AlmaLinux 10+ run but are not fully tested.
+> **Ubuntu 24.04 LTS is the primary tested platform.** The main script checks your OS at startup: unsupported distros exit with a clear message, and older Rocky/Alma versions get upgrade instructions instead of a hard stop. Rocky/AlmaLinux 10+ run but are not fully tested.
+>
+> **On Ubuntu 22.04 (or any glibc < 2.38) there is no fix to apply — do not try to upgrade glibc.**
+> `libc.so.6` is the core C library that every binary on the machine links against; installing a
+> newer `libc6` from another release's repository will break the system, usually beyond SSH.
+> Either reinstall the VPS on Ubuntu 24.04+, or compile the node yourself with
+> **Script 01 → Step 1 → key `G` (build from source)**, which links against whatever glibc you have.
+> Note that the wallet products (Scripts 05 / 051 / 059 / 07) download the same kind of pre-built
+> binary and will hit the same wall, so a source build is only a partial escape.
 
 ---
 

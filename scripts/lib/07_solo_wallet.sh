@@ -217,6 +217,20 @@ sw_show_address() {
     ( cd "$dir" && "$bin" $flag -p "$(cat "$pf")" address 2>/dev/null ) || warn "Could not read address."
 }
 
+# ─── Binary: install / update / roll back (shared screen) ───────────────────
+# Solo had NO update path at all — once gwi_install_grin_wallet had put a binary
+# in place, `force=0` meant it was never touched again, and the only way to move
+# versions was a destructive re-setup. This opens the shared screen instead, so
+# solo gets the same pinned update and one-keypress rollback as every other
+# product. Per-network, because each net has its own wallet dir and listener.
+sw_binary_menu() {
+    local net="${1:-mainnet}" dir
+    dir=$(sw_dir "$net")
+    mkdir -p "$dir" || { error "Could not create $dir."; return 1; }
+    gwi_update_screen "$dir" "07 Solo · ${net}" \
+        "sw_listener_stop $net" "sw_listener_start $net"
+}
+
 # ─── Setup: download + init|recover + save pass + patch toml + start ────────
 sw_setup() {
     local net="${1:-mainnet}" dir flag bin toml pass_file

@@ -1740,6 +1740,7 @@ pool_wallet_menu() {
         echo -e "  ${GREEN}6${RESET}) Auto-restart on boot ${DIM}(enable / disable)${RESET}"
         echo -e "  ${GREEN}7${RESET}) Watchdog */5        ${DIM}(install / remove)${RESET}"
         echo -e "  ${GREEN}8${RESET}) Replace pool wallet  ${DIM}(compromise/corruption runbook — balances live in pool.db)${RESET}"
+        echo -e "  ${GREEN}9${RESET}) grin-wallet binary   ${DIM}(update · roll back · verify — seed and pool.db untouched)${RESET}"
         echo -e "  ${DIM}0) Back${RESET}"
         echo -ne "${BOLD}Select: ${RESET}"
         local c; read -r c
@@ -1762,6 +1763,7 @@ pool_wallet_menu() {
                    *) warn "Cancelled." ;;
                esac ;;
             8) pw_replace_wallet || true ;;
+            9) pw_binary_menu || true ;;
             0|"") return 0 ;;
             *) warn "Invalid option." ;;
         esac

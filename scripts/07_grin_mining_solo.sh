@@ -2683,9 +2683,11 @@ wallet_menu() {
         echo -e "  ${RED}6${RESET}) Disable boot autostart  ${DIM}(per net)${RESET}"
         echo -e "  ${GREEN}7${RESET}) Install listener watchdog ${DIM}(*/5)${RESET}"
         echo -e "  ${RED}8${RESET}) Remove listener watchdog"
+        echo -e "  ${DIM}  ── Binary ────────────────────────────────${RESET}"
+        echo -e "  ${GREEN}9${RESET}) grin-wallet binary      ${DIM}(update · roll back · verify)${RESET}"
         echo -e "  ${RED}0${RESET}) Back"
         echo ""
-        echo -ne "${BOLD}Select [1-8/0]: ${RESET}"
+        echo -ne "${BOLD}Select [1-9/0]: ${RESET}"
         read -r choice || choice=0          # EOF (Ctrl+D) → 0 → Back
         case "$choice" in
             "") continue ;;                 # Enter → refresh
@@ -2697,6 +2699,7 @@ wallet_menu() {
             6) net=$(_solo_pick_net "boot autostart") && { sw_autostart_disable "$net" || true; }; _solo_pause ;;
             7) sw_watchdog_install || true; _solo_pause ;;
             8) sw_watchdog_remove  || true; _solo_pause ;;
+            9) net=$(_solo_pick_net "grin-wallet binary") && { sw_binary_menu "$net" || true; } ;;
             0) return ;;
             *) warn "Invalid option."; sleep 1 ;;
         esac

@@ -370,6 +370,20 @@ pw_coinbase_probe() {
     return 2
 }
 
+# ─── Binary: install / update / roll back (shared screen) ───────────────────
+# The pool had no update path either: `Replace pool wallet` archives the whole
+# wallet (seed and all) to fix a compromise, which is not what "run a different
+# grin-wallet version" should cost. This screen changes ONLY the binary — the
+# seed, the toml and pool.db are untouched — and keeps the outgoing version in
+# the shared store so a bad update is one keypress from being undone.
+pw_binary_menu() {
+    local dir; dir=$(pw_wallet_dir)
+    [[ -n "$dir" ]] || { error "Could not resolve the pool wallet dir."; return 1; }
+    mkdir -p "$dir" || { error "Could not create $dir."; return 1; }
+    gwi_update_screen "$dir" "07 Pool wallet — ${POOL_NET_LABEL:-$_PW_NET}" \
+        "pw_listener_stop" "pw_listener_start"
+}
+
 # ─── Listener start / stop / status ─────────────────────────────────────────
 pw_listener_start() {
     [[ -f "$(pw_pass_file)" ]] || { error "No saved wallet password ($(pw_pass_file)) — run Setup wallet first."; return 1; }

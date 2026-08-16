@@ -104,9 +104,11 @@ RESET='\033[0m'
 # a future release landing without a human. Keep in sync with GRIN_WALLET_PIN in
 # web/051_fidelius/server.js. To move it: confirm grin-wallet's Cargo.toml still
 # has rpassword 4.x, bump both, test an unlock, commit.
+#
+# The release URLs that used to sit beside this pin are gone: fetching, checksum
+# verification and the upstream-moved check all live in lib/grin_wallet_install.sh
+# now, which this script hands the pin to via GWI_PIN_TAG.
 _WW_PIN_TAG="v5.4.1"
-_WW_GITHUB_API="https://api.github.com/repos/mimblewimble/grin-wallet/releases/tags/${_WW_PIN_TAG}"
-_WW_GITHUB_API_LATEST="https://api.github.com/repos/mimblewimble/grin-wallet/releases/latest"
 
 # ─── Logging ──────────────────────────────────────────────────────────────────
 LOG_DIR="/opt/grin/logs"
@@ -143,6 +145,20 @@ _SECRETS_LIB="$SCRIPT_DIR/lib/grin_node_secrets.sh"
 if [[ -f "$_SECRETS_LIB" ]]; then
     # shellcheck source=lib/grin_node_secrets.sh
     source "$_SECRETS_LIB"
+fi
+
+# ─── grin-wallet binary: install / update / rollback (shared) ─────────────────
+# Fidelius used to carry its own downloader. It now shares the toolkit-wide
+# version store, which is what makes the pin below survivable: if a pin move
+# turns out to break unlocking, the previous binary is already on disk and
+# verified, so the undo is one keypress instead of a hand-fetched tarball on a
+# live box. GWI_PIN_TAG is how this product tells the shared lib which version
+# it wants — _WW_PIN_TAG stays the single place the pin is written.
+_GWI_LIB="$SCRIPT_DIR/lib/grin_wallet_install.sh"
+if [[ -f "$_GWI_LIB" ]]; then
+    # shellcheck source=lib/grin_wallet_install.sh
+    source "$_GWI_LIB"
+    GWI_PIN_TAG="$_WW_PIN_TAG"
 fi
 
 # ─── Private access (WireGuard + DNS-01) ──────────────────────────────────────
@@ -399,86 +415,29 @@ ww_menu_status() {
 # STEP 1 — Install grin-wallet binary
 # =============================================================================
 
+# Install / update / roll back the grin-wallet binary.
+#
+# This is the shared screen from lib/grin_wallet_install.sh — the same one Drop,
+# solo and the pool open — with Fidelius's pin (_WW_PIN_TAG, mirrored as
+# GWI_PIN_TAG at source time) as its default. The pin warning that used to be
+# printed here now lives in the shared screen, on the path that actually leaves
+# the pin.
+#
+# Restart hooks: the wallets are grin-wallet processes SPAWNED BY the Fidelius
+# node app, so a binary swap is only picked up when that service restarts.
 ww_install_binary() {
-    clear
-    echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo -e "${BOLD}${CYAN} 051) Web Wallet — 1) Install grin-wallet Binary${RESET}"
-    echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo ""
-    echo -e "  Target  : ${DIM}$WW_BIN${RESET}"
-    echo -e "  Source  : ${DIM}$_WW_GITHUB_API${RESET}"
-    echo ""
-
-    local needs_download=1
-    if [[ -x "$WW_BIN" ]]; then
-        local ver; ver=$("$WW_BIN" --version 2>/dev/null | head -1 || echo "?")
-        success "Binary already installed  ${DIM}($ver)${RESET}"
-        echo -ne "  Re-download latest? [y/N/0 cancel]: "
-        local redown; read -r redown || true
-        [[ "$redown" == "0" ]] && return
-        [[ "${redown,,}" == "y" ]] || needs_download=0
+    if ! declare -F gwi_update_screen >/dev/null 2>&1; then
+        clear
+        error "lib/grin_wallet_install.sh is missing — cannot manage the binary."
+        error "Expected at: $_GWI_LIB"
+        pause; return
     fi
 
-    if [[ $needs_download -eq 1 ]]; then
-        if ! command -v jq &>/dev/null; then
-            warn "jq not installed — run step 2 first (or 'apt install jq')."
-            pause; return
-        fi
-        info "Fetching pinned release $_WW_PIN_TAG from GitHub..."
-        local release_json
-        release_json=$(curl -fsSL --max-time 30 "$_WW_GITHUB_API") \
-            || { error "Failed to reach GitHub API."; pause; return; }
+    mkdir -p "$WW_ROOT" 2>/dev/null || { error "Could not create $WW_ROOT."; pause; return; }
 
-        # Tell the operator when upstream has moved on, without moving for them.
-        local latest_tag=""
-        latest_tag=$(curl -fsSL --max-time 15 "$_WW_GITHUB_API_LATEST" 2>/dev/null \
-                     | jq -r '.tag_name // empty' 2>/dev/null || true)
-        if [[ -n "$latest_tag" && "$latest_tag" != "$_WW_PIN_TAG" ]]; then
-            warn "Upstream latest is $latest_tag; installing the pinned $_WW_PIN_TAG."
-            warn "Fidelius feeds passphrases on stdin — verify a newer grin-wallet still"
-            warn "uses rpassword 4.x before moving the pin, or every unlock will break."
-        fi
-
-        local version download_url
-        version=$(echo "$release_json" | jq -r '.tag_name')
-        download_url=$(echo "$release_json" \
-            | jq -r '.assets[] | select(.name | test("linux-x86_64\\.tar\\.gz$"; "i")) | .browser_download_url' \
-            | head -1)
-
-        if [[ -z "$download_url" || "$download_url" == "null" ]]; then
-            error "No linux-x86_64 asset found for $version."
-            pause; return
-        fi
-
-        mkdir -p "$WW_ROOT"
-        local tmp_tar="/tmp/grin_fidelius_$$.tar.gz"
-        local tmp_dir="/tmp/grin_fidelius_extract_$$"
-        mkdir -p "$tmp_dir"
-
-        info "Version : $version"
-        info "Target  : $WW_BIN"
-        echo ""
-        wget -c --progress=bar:force -O "$tmp_tar" "$download_url" \
-            || { error "Download failed."; rm -rf "$tmp_tar" "$tmp_dir"; pause; return; }
-
-        tar -xzf "$tmp_tar" -C "$tmp_dir" \
-            || { error "Extraction failed."; rm -rf "$tmp_tar" "$tmp_dir"; pause; return; }
-        rm -f "$tmp_tar"
-
-        local bin_src
-        bin_src=$(find "$tmp_dir" -type f -name "grin-wallet" | head -1)
-        if [[ -z "$bin_src" ]]; then
-            error "grin-wallet binary not found in archive."
-            rm -rf "$tmp_dir"; pause; return
-        fi
-
-        install -m 755 "$bin_src" "$WW_BIN"
-        rm -rf "$tmp_dir"
-        success "grin-wallet $version installed → $WW_BIN"
-    fi
-
-    echo ""
-    pause
+    gwi_update_screen "$WW_ROOT" "051 Fidelius" \
+        "systemctl stop grin-fidelius" \
+        "systemctl start grin-fidelius"
 }
 
 # =============================================================================
@@ -2148,7 +2107,7 @@ wallet_menu() {
         ww_menu_status
 
         echo -e "${DIM}  ─── First-time setup (run in order) ─────────────${RESET}"
-        echo -e "  ${GREEN}1${RESET}) Install grin-wallet binary"
+        echo -e "  ${GREEN}1${RESET}) grin-wallet binary        ${DIM}(install · update · roll back · pin ${_WW_PIN_TAG})${RESET}"
         echo -e "  ${GREEN}2${RESET}) Install dependencies      ${DIM}(nodejs, nginx, certbot, htpasswd, tor, qrencode, jq)${RESET}"
         echo -e "  ${GREEN}3${RESET}) Deploy app + systemd      ${DIM}(web/051_fidelius/ → $WW_APP_DIR)${RESET}"
         echo -e "  ${GREEN}4${RESET}) Configure nginx           ${DIM}(reverse proxy → 127.0.0.1:$WW_NODE_PORT)${RESET}"

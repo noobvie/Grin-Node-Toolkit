@@ -2870,7 +2870,15 @@
 	--><link rel="stylesheet" type="text/css" href="<?= encodeString(getResource("./styles/cookie_acceptance.css")); ?>" integrity="<?= encodeString(getChecksum("./styles/cookie_acceptance.css")); ?>" onerror="processLoadingError(this, true);" onload="processLoadingError(this);"><!--
 	--><link rel="stylesheet" type="text/css" href="<?= encodeString(getResource("./styles/maintenance_notification.css")); ?>" integrity="<?= encodeString(getChecksum("./styles/maintenance_notification.css")); ?>" onerror="processLoadingError(this, true);" onload="processLoadingError(this);"><!--
 	--><link rel="stylesheet" type="text/css" href="<?= encodeString(getResource("./styles/language.css")); ?>" integrity="<?= encodeString(getChecksum("./styles/language.css")); ?>" onerror="processLoadingError(this, true);" onload="processLoadingError(this);"><!--
-	
+	--><?php /* ACCIO PATCH — "Orbital Dawn", the Accio theme, added as the LAST
+	          stylesheet on the page. Order is the whole mechanism: it repeats
+	          upstream selectors verbatim and wins on source order, so nothing
+	          in styles/ is edited and `git log <PINNED_SHA>..upstream/master`
+	          stays readable. It MUST stay last — moved above any of the links
+	          over it and the theme silently half-applies. See
+	          styles/accio.css and patches/README.md. */ ?><!--
+	--><link rel="stylesheet" type="text/css" href="<?= encodeString(getResource("./styles/accio.css")); ?>" integrity="<?= encodeString(getChecksum("./styles/accio.css")); ?>" onerror="processLoadingError(this, true);" onload="processLoadingError(this);"><!--
+
 	--><script>
 	
 		// Use strict

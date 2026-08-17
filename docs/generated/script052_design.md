@@ -779,8 +779,8 @@ type, our node list first, Accio branding/title/icons. Add the upstream-wallet e
 credit and the vendored `LICENSE`; re-run the S2 send and the S4b receive.
 
 > **Outcome:** 16 files / 562 KB in `patches/public_html/`, every deviation marked `ACCIO PATCH`.
-> *(S5's figure, kept as the record of this packet. The overlay is **17 files / 572 kB** as of
-> R8, 2026-08-12 — S9 pass 1 added `scripts/mqs.js`, R8 added markers. Current numbers live in
+> *(S5's figure, kept as the record of this packet. The overlay is **19 files / 656 kB** as of
+> S10, 2026-08-16 — S9 pass 1 added `scripts/mqs.js`, R8 added markers, S10 added the theme. Current numbers live in
 > `script052_implementation.md` §"Current state", never here.)*
 > Taken out of order for the same reason S3 and S4b were — the overlay is authored against the
 > vendored tree, not against a running box. Full record in `script052_implementation.md`.

@@ -18,13 +18,14 @@ this is a VPS product.
 
 | | |
 |---|---|
-| Packets done | **S0** (+ a review pass) · **S1** · **S3 (code, + a review pass)** — all 2026-08-09 · **S4a** · **S4b (code)** · **S5 (code)** · **S6 (code)** · **S7 (code)** — 2026-08-10 · **S8 (security audit)** · **S9 pass 1 — MQS (code)** — 2026-08-11 |
+| Packets done | **S0** (+ a review pass) · **S1** · **S3 (code, + a review pass)** — all 2026-08-09 · **S4a** · **S4b (code)** · **S5 (code)** · **S6 (code)** · **S7 (code)** — 2026-08-10 · **S8 (security audit)** · **S9 pass 1 — MQS (code)** — 2026-08-11 · **S10 — theme "Orbital Dawn" (code)** — 2026-08-16 |
 | Audit | **[script052_security_audit.md](script052_security_audit.md)** — S8, 2026-08-11, amended by R1, R7 and R8. **16 findings fixed, 6 open.** The one that mattered: inbound payments were routed by SESSION, so a cookie could redirect a stranger's payment into another wallet (A-1, and A-18 when it turned out A-1's accepted residual gave the whole of A-1 back) |
 | Review arc | **COMPLETE — R1…R8, all eight done, 2026-08-11 → 2026-08-12.** One session each; see §"Review plan" below for what each packet covered. The arc read the whole authored surface before S2 spends VPS time on it. **R2 has no session entry below** — 8 fixes, verified present in `052_lib_vendor.sh`, write-up in memory `project_web_wallet_051_vs_055`. Every other packet's entry is in the session log |
 | Next packet | **S2** — no longer a build packet at all, it is **the acceptance session**. First VPS work, carrying S1's, S3's, S4b's, S5's, S6's, S7's, S8's *and* S9 pass 1's acceptance runs. Everything that can be authored has been. |
 | Deployed anywhere? | **No.** Nothing has ever run on a VPS. Not one build, deploy, send or receive. |
 | Script 052 menu | **every key is LIVE** as of S7 — there is no stub left in this product. That is not the same as tested |
-| Overlay | `patches/public_html/` — **17 files / 572 kB** (16 replace a vendored file, 1 adds one; 572,280 bytes measured 2026-08-12), **39 `ACCIO PATCH` markers, 28 of them in the published file set**. Search for that string, not for a diff — and see `patches/README.md` for the five files whose format cannot carry an inline marker, which the table there covers instead |
+| Overlay | `patches/public_html/` — **19 files / 656 kB** (17 replace a vendored file, 2 add one; 671,637 bytes measured 2026-08-16 after the S10 review pass), **49 `ACCIO PATCH` markers, 34 of them in the published file set** (`backend/` and `errors/template.php` are build-time only, never served). Search for that string, not for a diff — and see `patches/README.md` for the five files whose format cannot carry an inline marker, which the table there covers instead |
+| Theme | **"Orbital Dawn"** — `styles/accio.css`, loaded **last** so it beats upstream's colours on source order. Upstream's 22 stylesheets are not overlaid; the three hooks are the `<link>` in `index.html`, the same `<link>` in `errors/template.php`, and the `$files` entry + `THEME_COLOR`/`BACKGROUND_COLOR` in `backend/resources.php`. Retuning is a `:root` token edit. **Never seen in a browser** — see S10 |
 | Pin enforcement | `accio_build` refuses to stage anything unless `acv_verify_vendor` passes — manifest-vs-`PINNED_SHA`, then `sha256sum -c`, then the file set both ways. **No bypass.** Never "fix" a failure by regenerating `SHA256SUMS` on the VPS |
 | Branding | Two files (`backend/language.php`, `scripts/language.js`) carry a phrase map that rebrands the whole app in all six languages. **The two maps must stay identical** — 12 entries each since R8. A new language must be checked against the map before it ships: three of the six translators did not keep the English word order, which left 27 strings unbranded until 2026-08-12 |
 | Hub 05 key `2` | `run_sub "052_grin_accio.sh" \|\| true` since **S7** (2026-08-10). The `_slot_notice` arm is deleted, not aliased |
@@ -3452,3 +3453,218 @@ nothing has ever looked at them afterwards.
   reached through an `<a href>`, which is upstream's own pattern but has never been loaded.
 
 As ever: **nothing here has run on a VPS.**
+
+---
+
+### S10 — Theme: "Orbital Dawn" — 2026-08-16 ✅ *(code; never seen in a browser)*
+
+Accio inherited the vendored wallet's look along with its crypto. This packet gives it its own,
+without touching a byte of `vendor/styles/`.
+
+Three directions were rendered on the real Accio screen and **Orbital Dawn** was chosen: the
+wallet on the night side of a planet, sunrise on the limb below the frame, one warm accent and
+nothing else lit.
+
+#### The mechanism — one file, loaded last
+
+`patches/public_html/styles/accio.css` is **added**, not a replacement. It repeats upstream
+selectors verbatim and wins on **source order**; where upstream's selector is more specific it
+repeats that one too. Upstream's 22 stylesheets stay untouched, so
+`git log <PINNED_SHA>..upstream/master` — the only way we review upstream security fixes on a
+self-custodial wallet — stays readable.
+
+The alternative was overlaying the 14 colour-bearing stylesheets (4,800 lines) with tokenised
+copies. Rejected: it puts our bytes in the way of that diff forever and turns every upstream
+colour touch into a manual merge. **The cost of the choice we made is that an upstream selector
+rename silently stops matching — but that failure is visible on screen as a violet control**,
+which is the loudest failure mode available here and the opposite of the "sed that exits 0"
+class this product keeps getting bitten by.
+
+Three hooks, each marked:
+
+| Hook | Why |
+|---|---|
+| `index.html` — one `<link>`, **last** | order is the whole mechanism; above any link it overrides and the theme half-applies |
+| `errors/template.php` — the same `<link>` | the eight error pages carry their **own** copy of the ground, the spinner and the entire message dialog in an inline `<style>`. nginx serves 404 from here, and 503 during maintenance |
+| `backend/resources.php` — `$files` entry + `THEME_COLOR` / `BACKGROUND_COLOR` | see below |
+
+#### It is a light-to-dark flip, not a hue swap
+
+Worth stating because it sizes the work. Upstream is a violet gradient ground and violet chrome
+with **near-white content panels and near-black text**. Orbital Dawn is dark throughout, so every
+`color: rgb(12, 12, 13)` upstream sets on a panel had to be restated — miss one and it is black
+text on a navy panel. Coverage was checked mechanically, not by eye: every colour-bearing rule in
+the 14 vendored stylesheets was extracted with its selector and its at-rule context and matched
+against this sheet. **6 upstream rules are deliberately not restated** — all of them
+`color: white` / `stroke: white` on a surface that is still dark or still coloured.
+
+Two things that only that sweep would have found:
+
+- **The row separator** (`section.css`, inside `@media (max-width: 400px)`) is `black` at 0.2
+  alpha. A grey hairline on white; invisible on navy. Restated as a real line.
+- **The dangerous-confirm fill** carries upstream's `color: white` label. `--acc-danger` (#E4574F)
+  is only 3.6:1 under white, so fills that carry white text use a separate `--acc-danger-fill`
+  (#C0392F, 5.0:1). Semantic colours are kept off the accent entirely, so "warm" never has to mean
+  both *primary action* and *something is wrong* on one screen.
+
+#### `THEME_COLOR` and `BACKGROUND_COLOR` are not decoration
+
+`BACKGROUND_COLOR` is read by more than the manifest: the PWA splash, the Windows tile, the
+Safari pinned-tab mask tint, and `scripts/startup_images_creator.js`, which **fills the generated
+iOS launch images with it** before drawing the white mark. Left violet, the installed app opens
+with a violet flash into a navy wallet every single time. `THEME_COLOR` was upstream's `#FFFFFF`,
+i.e. a white browser bar above a near-black page on every mobile browser.
+
+#### The `$files` entry earns its place
+
+Without one, `getChecksum()` returns the empty string and the theme ships un-SRI'd — but that is
+the smaller half. `$files` is also what `scripts/service_worker.js` precaches (`Cache => TRUE`)
+and what it hashes to derive its **cache version**, so an unlisted stylesheet is a theme that
+never reaches a returning PWA user. `_acb_apply_patches` rewrites the Checksum from the staged
+bytes and bumps the Version on every build, so the value in the repo is a starting point, not
+something maintained by hand.
+
+#### No operator switch, deliberately
+
+A `theme=` config key was considered and rejected. It would double the acceptance surface of a
+build nobody watches run, and it would have to be agreed by the standalone build, the nginx layer
+and both status screens. **A-11 and A-12 are still open** — `patches/` sits outside the pin, and
+the deployed site is never re-verified — and a per-deploy visual variant makes both worse. The
+tuning surface is the `:root` token block; a theme change is a token edit plus a rebuild.
+
+#### Hardware wallets are NOT obsolete — checked, because it was asked
+
+The `Hardware` button beside Create and Recover is a real, wired Grin feature, not MWC residue:
+
+- `hardware_wallet.js:8339` returns the Ledger application name **"Grin" / "Grin Testnet"** for
+  `GRIN_WALLET_TYPE`, next to MWC's and Epic's.
+- `hardware_wallet.js:5973` uses `SLATEPACK_ADDRESS_TYPE` for Grin when finishing a transaction —
+  Grin-specific, not a fallthrough.
+- The wallets rail renders **`.ledger` / `.trezor` watermarks** on hardware rows
+  (`unlocked.css`), and the message dialog has a PIN-matrix widget for them.
+- `HardwareWallet.isSupported()` gates on WebUSB/WebBluetooth, so a browser without either gets a
+  clear error rather than a dead button.
+
+This confirms `script052_design.md` line 373 by a second route. **What the repo cannot tell us** is
+whether that Ledger app is installable from Ledger Live's catalogue today — that is a live check,
+listed below. Do not delete this surface on a guess; deleting it removes a working feature.
+
+#### Verification
+
+- The build's own table rewriter run for real: `_acb_set_resource_entry` sourced from
+  `052_lib_build.sh` and pointed at the patched `resources.php` with the new key → **exit 0**,
+  `Version` 1 to 2, `Checksum` replaced. That is the "checksum refreshed" path, and it proves the
+  entry's tab formatting matches what the awk expects.
+- Stylesheet: braces balanced (173/173), **every `var(--acc-*)` used is defined and every token
+  defined is used**, zero upstream violet literals left, **zero `url()`** (the standalone inliner
+  only rewrites the double-quoted form, so a bare or single-quoted one would ship as a dead
+  reference in the offline artefact).
+- Coverage sweep as described above: 6 rules deliberately unrestated, each read and named.
+- The standalone fold was traced, not assumed: phase G discovers stylesheets by scanning
+  `<link … href="./….css">` in `index.html`, and the standalone env sets `NO_FILE_VERSIONS`, so
+  the `?N` that a hosted build appends is absent and the new link folds like the others.
+- `vendor/` verified untouched (`git status --short -- web/052_accio/vendor/` is empty).
+- **No PHP locally**, so the two edited `.php` files are not lint-verified. Both edits are an
+  added array entry and an added `<?php /* … */ ?>` comment between two existing tags; a real
+  `php -l` is owed, and the build runs `php`, so a syntax error stops S2's first build loudly.
+- Every count in this entry was measured with a command, not recalled.
+- Every local process was one-shot (`python3`, `openssl`, `bash`); nothing was left listening.
+
+#### Owed to S2 by this pass
+
+**Nothing in this packet has been seen in a browser.** It is CSS against a DOM read from source.
+
+- **Look at the unlocked screen.** The whole flip depends on `main > div.unlocked > div > div > div`
+  being the one rule that paints both content panels. Read from source; never rendered.
+- **Tab through it.** `:focus { outline: none !important }` is upstream's, in the inline `<style>`,
+  so every focus ring here is a `box-shadow`. If one group was missed, that control has no visible
+  focus state at all.
+- **Open a message dialog** (send confirmation, or a seed phrase). Its container, its `h2` and its
+  `p` are styled in `index.html`'s inline `<style>`, not in `message.css` — a different override
+  path from everything else, and the screen where a seed is read.
+- **Force a 404 and a 503.** That is the only way to confirm the `errors/template.php` link
+  resolves; the leading-dot idiom is upstream's, but ours is the first line to use it for a file
+  upstream never had.
+- **Install the PWA** and watch the splash. That is `BACKGROUND_COLOR` and
+  `startup_images_creator.js`, and nothing else exercises it.
+- **Narrow the window below 400px** for the separator rule, and check the "Remind me later"
+  variants in the notification bars — both live only in `max-width` media queries.
+- **Plug in a Ledger** and see whether a `Grin` app is installable and connects. If it is not
+  available to ordinary users, the honest move is a note beside the button — not deleting a
+  working code path.
+
+As ever: **nothing here has run on a VPS.**
+
+#### S10 review pass — 2026-08-16 ✅ *(five defects found in this repo's own theme, all fixed)*
+
+Re-read of everything S10 wrote, against `vendor/`, not against memory. The sweeps that
+produced the S10 entry were re-run and **agreed** — 199 colour-bearing vendor selectors, 6
+unrestated, all `color/stroke: white` on grounds that are still dark. The defects were in
+what those sweeps could not see.
+
+- **The dawn never rendered. `body` was flat `--acc-space`.** All three gradients — both
+  `body` layers and the `::before` terminator — were entirely transparent inside the
+  viewport. "Centred below the viewport" was the whole check, and it is not sufficient:
+  colour reaches only `last-stop × ry` back from the centre, so with `cy 152% / ry 62% /
+  last 68%` the colour stopped at `y = 110%`, i.e. below the frame. Every pixel of the
+  viewport sat past the last stop. Recomputed to `y = 61%` (glow fills the bottom 39%);
+  the six numbers now carry the arithmetic in a comment, because the failure mode is
+  **silent** — a flat dark background reads as a deliberate design, not as a bug.
+  ⚠ **The published mockup has the identical values, so it had the identical bug**: what
+  was approved as "Orbital Dawn" was flat navy plus the warm accent. Making the gradient
+  render is a *visible change from what was signed off*, and is flagged to the operator as
+  such rather than presented as a repair.
+- **The top menu was near-invisible: `#2A1405` ink on `#0F1226`, 1.2:1.** Upstream's base is
+  `background: #6000D5; color: white`, and every QUIET button (the menu rail, the language
+  picker) overrides *only* the background at a higher specificity — white was legible on
+  violet and on the rail alike. Our base ink is deliberately dark because it sits on a light
+  accent fill, so every quiet button that did not restate `color` inherited near-black onto
+  a near-black rail. The primary navigation was unreadable until hovered. `box-shadow`
+  leaked the same way and haloed transparent buttons.
+  **This class of defect is invisible to a colour-coverage sweep**, which only looks at
+  selectors upstream *sets* a colour on; here the bug is upstream setting *none* and relying
+  on a global default we changed. It was found by resolving `color` / `background` /
+  `box-shadow` per-property, per-button, across all 31 button contexts. That per-property
+  resolution is now the check to repeat after any upstream bump.
+- **The message dialog overflowed its parent by 2px.** `aside.message > div > div` is sized
+  `width: calc(100% - …)` under `box-sizing: content-box` (upstream sets `content-box`
+  explicitly), so the 1px hairline added to it added 2px to the computed width — on the one
+  screen that shows seed phrases and send confirmations. Replaced with an `inset` box-shadow
+  ring, which costs no layout; the same swap was made on the four notification bars (safe
+  there, since `left:0; right:0` gives them an auto width, but uniform is cheaper to review).
+- **The "verify you are on the right site" banner was below AA, and worse than upstream.**
+  `--acc-ok-deep` `#3E9C84` under `--acc-ink` is 3.4:1 (upstream's `#179D2E` is 3.6:1 under
+  white). Added `--acc-ok-fill` `#2A7159` — 5.0:1 under our ink, 5.8:1 under the pure white
+  that upstream's un-restated `> a` rule still sets. Same defect class as the `--acc-danger-fill`
+  split S10 already made: **a semantic colour that is a dot on a dark ground cannot also be a
+  fill under light text.** Every fill that carries text is now a separate token.
+- **A stray accent glow on transparent controls** — the section back/forward arrows, the
+  transaction nav arrows, the language picker, and the wallets-rail new/order buttons all
+  inherited `--acc-glow` from the base rule. Set to `none` explicitly.
+
+Checked and found correct, so they are not defects: the `<link>` is genuinely last in both
+`index.html` and `errors/template.php`; the `$files` entry matches all 21 sibling stylesheets
+(`Cache TRUE`, `Minified FALSE`); `_acb_apply_patches` pass 1 uses `find … -type f`, so an
+**added** file is overlaid and pass 2 refreshes its SRI (an added file was the one case worth
+confirming); the committed checksum matches the file byte-for-byte; the CSP is
+`style-src 'self' 'unsafe-inline'`, so a same-origin sheet needs no policy change; the theme
+contains no `url()`, `@import` or absolute URL; the hover idiom is `any-hover: hover`, matching
+upstream's 22 uses exactly — a `hover: hover` mismatch would have left upstream's violet hover
+colours live on hybrid touch devices; upstream's base `button` already carries
+`border: 0.15em solid`, so restating it as `transparent` changes no geometry; and
+`:focus { outline: none !important }` is real (`index.html:782`), which is why every focus
+state here is a `box-shadow` and not an outline.
+
+Two knowingly accepted: `--acc-faint` on a panel is 3.6:1, used only for placeholders and
+disabled controls (WCAG exempts disabled, placeholders are advisory); and the toggle switch
+inherits the dark ink, which is inert because it carries no text — verified, it has no
+`content` and its knob is a `> span`.
+
+**Contrast is now computed, not eyeballed** — 13 ground/ink pairs, all ≥ 4.7:1 except the two
+noted above. The suite (braces, every token defined *and* used, zero upstream colour literals,
+zero `url()`, per-property button resolution, coverage sweep, contrast table) is re-runnable
+and was re-run after the edits.
+
+**None of this changes the standing position: the theme has still never been seen in a
+browser.** Four of the five defects would have been obvious in one screenshot; that is the
+argument for S2, not against the review.

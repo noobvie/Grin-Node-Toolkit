@@ -78,9 +78,10 @@
 #           Lose it and every wallet's RECEIVING ADDRESS changes. Self-test is
 #           now 16 probes; the real receive still needs a VPS and a browser.
 #    S5  Grin-default overlay, branding, About credit ...... DONE 2026-08-10
-#        └─ web/052_accio/patches/public_html/, 16 files here — 17 today, S9
-#           pass 1 added mqs.js. Every deviation is marked `ACCIO PATCH` —
-#           grep for that, do not diff against vendor/.
+#        └─ web/052_accio/patches/public_html/, 16 files here — 19 today: S9
+#           pass 1 added mqs.js, S10 added styles/accio.css and
+#           errors/template.php for the "Orbital Dawn" theme. Every deviation
+#           is marked `ACCIO PATCH` — grep for that, do not diff vendor/.
 #    S6  052_lib_vendor.sh (integrity + update check) ...... DONE 2026-08-10
 #        └─ Verify is OFFLINE and now GATES the build: one changed byte under
 #           vendor/, or one file added there that the manifest never listed,

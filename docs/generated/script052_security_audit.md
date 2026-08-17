@@ -41,7 +41,7 @@ counted two of the four files and is corrected here; report what the runner prin
 | **systemd unit** | written, never started | 🔍 audited — 1 hardening finding, fixed |
 | **Pin chain** (`vendor/` → build → deploy) | complete up to the build | 🔍 audited — **2 gaps, both open** (A-11, A-12), both new work not bug fixes; **R8 specified the mechanism for each**, neither is written |
 | **Entry script** `052_grin_accio.sh` | written, never run | 🔍 audited by **R1**, 2026-08-11 — 2 findings (A-16, A-17), both fixed |
-| **Overlay** `patches/**` (17 files) | applied at build, never deployed | 🔍 audited by **R8**, 2026-08-12 — **1 MEDIUM (A-23), fixed**; the overlay was outside S8's scope entirely |
+| **Overlay** `patches/**` (19 files) | applied at build, never deployed | 🔍 audited by **R8**, 2026-08-12 — **1 MEDIUM (A-23), fixed**; the overlay was outside S8's scope entirely |
 | **Regression suite** `gateway/test/` | 4 files, **78 tests**, `node --test`, runs offline | ✅ added by R6 + R7 — every finding in this file that lives in the gateway is now pinned by a test. Re-run by R8: **78 pass, 0 fail** |
 | **Vendored wallet** (`vendor/`, ~6 MB) | pinned at `adef11da` | ⛔ **not audited** — see the closing section |
 
@@ -629,8 +629,8 @@ of it to tune. **Recorded, not fixed.**
 
 S6's gate is genuinely strong for what it covers: manifest-vs-`PINNED_SHA` first, then
 `sha256sum -c`, then the file set both ways, no bypass. It covers `vendor/`. It does **not**
-cover `patches/public_html/` — **17 files, 572 kB** (16 at audit time; `scripts/mqs.js` arrived
-with S9 pass 1), applied by whole-file replacement immediately afterwards, including
+cover `patches/public_html/` — **19 files, 656 kB** (16 at audit time; `scripts/mqs.js` arrived
+with S9 pass 1, and S10's theme added `styles/accio.css` + `errors/template.php`), applied by whole-file replacement immediately afterwards, including
 `scripts/node.js` and `index.html`. A tamperer with write access to the
 toolkit checkout on the VPS edits a patch file and the build proceeds, verified and clean.
 

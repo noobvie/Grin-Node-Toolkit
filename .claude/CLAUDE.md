@@ -63,8 +63,26 @@ scripts/
        /opt/grin/accio-<net>/gateway-state/ is DURABLE STATE, not a cache: losing it
        changes the receiving address of every wallet that ever connected.
        De-branding lives in web/052_accio/patches/ (S5, 16 files; S9 pass 1 added a
-       17th) — NEVER edit vendor/, and never rename MWC_WALLET_TYPE (it is a chain
-       discriminator, not branding; S9+ deletes those paths). ⚠ An S9 pass is a
+       17th; S10's theme added a 18th + 19th) — NEVER edit vendor/, and never rename
+       MWC_WALLET_TYPE (it is a chain discriminator, not branding; S9+ deletes those
+       paths). ⚠ The theme ("Orbital Dawn", S10) is ONE added stylesheet loaded LAST
+       — styles/accio.css — plus three hooks; upstream's 22 stylesheets are NOT
+       overlaid, so `git log PINNED_SHA..upstream/master` stays readable. It must
+       stay last, retuning is a :root token edit, and it carries no url() because
+       the standalone inliner only rewrites the double-quoted form. It is a
+       light→dark FLIP (upstream's content panels are near-white with near-black
+       text), so a missed rule is black text on a navy panel — check coverage
+       mechanically, never by eye. ⚠ But a coverage sweep only sees selectors upstream
+       SETS a colour on, and the flip's worst bug is the opposite: a quiet button
+       (menu rail, language picker) that overrides only `background` and inherits our
+       DARK base ink — the main nav shipped at 1.2:1. Resolve colour/background/
+       box-shadow PER PROPERTY, PER BUTTON. Two more from the same review: a ground
+       gradient needs its arithmetic done (colour reaches only `last-stop × ry` back
+       from the centre — ours landed at y=110%, so the whole "dawn" rendered as
+       nothing and looked deliberate), and a hairline on a sized box is an `inset`
+       box-shadow, never a `border` (upstream is `content-box`, so a border pushed the
+       seed-phrase dialog 2px past its parent).
+       There is deliberately NO operator theme switch. ⚠ An S9 pass is a
        REDUCTION, not an `rm`, whenever the subsystem is referenced from a file we
        don't patch: pass 1 kept Mqs's 5-symbol external surface because
        `Slate.compactProofAddress` switches on `Mqs.ADDRESS_LENGTH` on the slatepack
@@ -75,7 +93,7 @@ scripts/
        to the only review method there is. R8 found one (check_for_updates.js, six
        rewritten URLs, no marker, unread through S5/S6/S8 and four review packets;
        it was beaconing to api.github.com from the "offline" standalone). The rule
-       and a table of all 17 files — including the five whose format cannot hold an
+       and a table of all 19 files — including the five whose format cannot hold an
        inline marker — now live in patches/README.md, which is where a patch author
        actually looks. ⚠ Branding is a phrase map duplicated in backend/language.php
        and scripts/language.js: the maps being IDENTICAL is necessary and proves

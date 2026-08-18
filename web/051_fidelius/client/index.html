@@ -106,10 +106,17 @@
               <div id="syncBannerDetail" class="sync-banner-detail"></div>
             </div>
 
+            <!-- Node identity strip — which node THIS wallet is talking to.
+                 Type chip first: "is my money going through my own node or a
+                 stranger's?" is the question, and a hostname alone never answered it. -->
             <div id="nodeStatus" class="node-bar">
               <span class="node-dot"></span>
+              <span id="nodeBarType" class="node-bar-type" style="display:none"></span>
               <span id="nodeBarText" class="node-bar-text">Checking node&hellip;</span>
+              <button id="nodeBarChangeBtn" class="btn btn-sm btn-outline node-bar-change"
+                      title="Choose a different node for this wallet">Change</button>
             </div>
+            <div id="nodeDriftWarn" class="locked-chip node-drift-warn" style="display:none"></div>
 
             <div class="balance-grid">
               <div class="balance-card">
@@ -358,10 +365,13 @@
                 <span class="node-col-net mainnet">Mainnet</span>
               </div>
               <div class="node-local-card">
-                <div class="node-local-label">Local Node</div>
+                <div class="node-local-label">Local Node
+                  <span id="nodeLocalMainnetUse" class="node-inuse-badge" style="display:none"></span>
+                </div>
                 <div class="node-local-status">
                   <span class="node-dot" id="nodeLocalMainnetDot"></span>
                   <span id="nodeLocalMainnetText">─</span>
+                  <button id="nodeLocalMainnetUseBtn" class="btn btn-sm use-node-btn" style="margin-left:auto">[ USE ]</button>
                 </div>
               </div>
               <div class="node-col-section-label">Public Nodes</div>
@@ -374,10 +384,13 @@
                 <span class="node-col-net testnet">Testnet</span>
               </div>
               <div class="node-local-card">
-                <div class="node-local-label">Local Node</div>
+                <div class="node-local-label">Local Node
+                  <span id="nodeLocalTestnetUse" class="node-inuse-badge" style="display:none"></span>
+                </div>
                 <div class="node-local-status">
                   <span class="node-dot" id="nodeLocalTestnetDot"></span>
                   <span id="nodeLocalTestnetText">─</span>
+                  <button id="nodeLocalTestnetUseBtn" class="btn btn-sm use-node-btn" style="margin-left:auto">[ USE ]</button>
                 </div>
               </div>
               <div class="node-col-section-label">Public Nodes</div>

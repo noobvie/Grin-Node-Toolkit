@@ -46,11 +46,39 @@ below instead**, which is therefore part of the marker convention and not a cour
 | `scripts/node.js` | ✅ | our node first in both failover lists |
 | `site.webmanifest` | ✅ | SVG icon, Grin-only protocol handlers |
 | `privacy_policy.txt` | ❌ *(plain text — a marker would be user-visible)* | rewritten end to end for Accio: self-custody, and what the `/tor/` and `/listen` rails relay |
-| `images/logo_big.svg` | ❌ *(SVG)* | Grin wordmark replacing the MWC one |
-| `images/logo_small.svg` | ❌ *(SVG)* | as above |
-| `images/app_icons/app_icon.svg` | ❌ *(SVG)* | favicon / PWA icon |
-| `images/mask_images/mask_image.svg` | ❌ *(SVG)* | Safari pinned-tab mask |
+| `images/logo_big.svg` | ❌ *(SVG)* | **Duo** wordmark: the face pair + evenly-spaced `ACCIO` lettering, replacing the MWC one |
+| `images/logo_small.svg` | ❌ *(SVG)* | **Duo** pair, white on transparent |
+| `images/app_icons/app_icon.svg` | ❌ *(SVG)* | **Duo** favicon / PWA icon — two ringed discs, see below |
+| `images/mask_images/mask_image.svg` | ❌ *(SVG)* | Safari pinned-tab mask — **Duo** pair, alpha only |
 | `MWC Wallet license.txt` | ❌ *(licence text — must stay verbatim)* | **added, not replaced.** Byte-identical to `vendor/upstream-wallet/LICENSE`; it is what the upstream credit in `ATTRIBUTIONS` links to, and MIT requires it be retained |
+
+## The mark is a pair ("Duo"), and the pairing is a security property
+
+All four SVGs draw the **same Grin glyph twice**. This is not decoration. Accio's icon used to be
+`0z0_media/logo_favi/grin_violet.svg` and Fidelius's is the *same path data* in green — so at 16 px
+both were one coloured disc, and hue is the first signal to fail on dark chrome or for a
+colour-blind viewer. The two wallets have **opposite custody models** (051 holds keys server-side,
+052's live in the tab), so a mis-click means typing a passphrase into the wrong trust domain.
+
+⚠ **What must survive any redraw is the SILHOUETTE, not the faces.** Two faces inside one disc — the
+obvious way to draw "duo" — restores the exact circle Fidelius has and throws the distinction away.
+`app_icon.svg` therefore uses **two discs**, and its geometry is load-bearing:
+
+- `r_black 56.16`, `r_violet 49.14`, centres **105.62** apart. The front black ring lands **0.32**
+  clear of the back violet edge, so the discs kiss without biting. **Any closer and the front disc
+  eats the back glyph's smile** — the glyph fills 86% of its disc, so there is no room to overlap.
+- Content reaches radius **108.97** of the 122 half-canvas — fills the square, clear of an
+  adaptive-icon crop. The manifest declares `purpose: "any"`, *not* `maskable`.
+- Below ~24 px the monogram is mud in any two-face mark. That is accepted: the double-lobe
+  silhouette is what does the work there. Judge a redraw at 16 px, not at 128.
+
+`mask_image.svg` is `<link rel="mask-icon">` — Safari renders **alpha only**, one flat tint. It
+carries no `fill` attributes and no discs (a disc would flatten to a solid blob and hide the faces),
+and the pair sits **side by side, never overlapping** — merged ink is one shape, not two.
+
+Regenerate with `scratchpad/gen_duo_marks.sh`-style extraction rather than retyping: the glyph `d`
+is 1206 chars and is lifted verbatim from the house mark. **Rebuild, never copy onto the VPS** —
+each of these shifts an SRI hash that `_acb_apply_patches` recomputes.
 
 ## The theme is one file
 

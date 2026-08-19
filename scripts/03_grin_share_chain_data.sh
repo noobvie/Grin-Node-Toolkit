@@ -94,6 +94,41 @@ GRIN_STOP_TIMEOUT=120
 FORCE_KILL_IF_STUCK=true
 DETECTED_NODE_TYPES=""   # populated by run_nginx_setup, e.g. "mainnet:pruned testnet:pruned"
 
+# Compression level, per artefact. Level and parallelism are INDEPENDENT knobs:
+# pigz gives the multi-core speedup at any level, so the level should follow what
+# the artefact costs, not what compressor is in use.
+#
+#   full   — an archive node's bytes are dominated by rangeproofs (Bulletproofs),
+#            Pedersen commitments and kernel signatures. That is cryptographic
+#            output and very nearly incompressible, so a high level burns CPU for
+#            almost nothing. Few downloads, so the slightly larger file is cheap.
+#   pruned — downloaded far more often, where a larger file costs real egress on
+#            every single transfer. Keep the ratio, take the parallel speedup.
+#
+# PROVISIONAL: 1 is chosen on the reasoning above, not on measurement. Confirm
+# with the ratio test in docs/generated/script03_design.md section 4 (0a) and
+# raise this if the gap between levels 1 and 6 turns out to be material.
+# Both are env-overridable so a host can be tuned without editing this file.
+COMPRESS_LEVEL_FULL="${COMPRESS_LEVEL_FULL:-1}"
+COMPRESS_LEVEL_PRUNED="${COMPRESS_LEVEL_PRUNED:-6}"
+
+# Estimated compressed size as a FRACTION of the on-disk chain_data size. Used
+# only by the pre-flight space check, and deliberately pessimistic: guessing too
+# high costs a skipped run that logs loudly and leaves the previous archive
+# serving, while guessing too low fills the disk mid-compress on a box that is
+# also running nginx, a wallet listener and possibly a mining pool. The two
+# errors are nowhere near equal, so the estimate leans hard one way.
+COMPRESS_RATIO_FULL="${COMPRESS_RATIO_FULL:-0.95}"
+COMPRESS_RATIO_PRUNED="${COMPRESS_RATIO_PRUNED:-0.90}"
+# Free space that must remain AFTER the archive is written, in MiB.
+DISK_HEADROOM_MB="${DISK_HEADROOM_MB:-512}"
+
+# Compression threads. Empty means "every core". Set this to leave cores for the
+# services that keep running while the node is stopped — nginx, the wallet
+# listener, a mining pool. Level and thread count are independent: dropping
+# threads lowers the load without changing the output at all.
+COMPRESS_THREADS="${COMPRESS_THREADS:-}"
+
 # ============================================================================
 # DEFAULT SSH CONFIG  (per node type — each can point to a different remote host)
 # ============================================================================
@@ -130,6 +165,8 @@ NETWORK_TYPE=""
 ARCHIVE_NODE=""
 NODE_TYPE=""
 ARCHIVE_BASE=""     # basename of the archive produced this run (no extension)
+RETAIN_PREVIOUS=false   # set by preflight_disk_space; read by clean_output_directory
+_SHARE_RC=0             # per-instance publish result; reset by reset_detection_vars
 GRIN_BINARY=""
 GRIN_DIR=""
 GRIN_DATA_DIR=""
@@ -768,6 +805,7 @@ setup_derived_variables() {
 
 reset_detection_vars() {
     GRIN_PORT="" NETWORK_TYPE="" ARCHIVE_NODE="" NODE_TYPE="" ARCHIVE_BASE=""
+    RETAIN_PREVIOUS=false; _SHARE_RC=0
     GRIN_BINARY="" GRIN_DIR="" GRIN_DATA_DIR="" GRIN_CONFIG_FILE=""
     LOG_FILE="" OUTPUT_DIR="" STATUS_FILE="" FINAL_DEST="" TMUX_SESSION=""
 }
@@ -989,23 +1027,121 @@ validate_nginx_config() {
 # pipeline publishes are removed — anything else the operator put there is kept.
 # In particular index.html (the Script 02 landing page) must survive, otherwise
 # every sync would silently revert the site to the bare autoindex.
+# Step 0a: decide whether this run can finish BEFORE anything is destroyed.
+#
+# Why this exists, and why it runs first. The publish sequence deletes the live
+# archive (step 0) long before its replacement exists (step 5), so a run that
+# cannot finish takes the mirror down with it. That was survivable while fullmain
+# published twice a week — the next run healed it within four days. Since the
+# cadence moved to the 1st and 15th, the same failure leaves a mirror dead for up
+# to 17 days, which is what makes "fail before deleting anything" worth real code.
+#
+# Three outcomes, measured on OUTPUT_DIR's filesystem — the only one that has to
+# hold the archive, since chain_data may well sit on another disk:
+#   room for both            -> RETAIN_PREVIOUS=true, the published set keeps
+#                               serving for the whole build and is swapped out at
+#                               the end of step 5
+#   room only after deleting -> RETAIN_PREVIOUS=false, the historical behaviour
+#   room for neither         -> abort, having touched nothing
+preflight_disk_space() {
+    log "Step 0a: Checking disk space before publishing..."
+    mkdir -p "$OUTPUT_DIR"
+
+    # Size the payload as it will actually be tarred: step 2 deletes the node's
+    # own state-sync zips, which on an archive node run to several GB. Counting
+    # them here would inflate the estimate into a false abort.
+    local src_kb
+    src_kb=$(du -sk --exclude='txhashset_snapshot*.zip' --exclude='txhashset_zip*' \
+                 "$GRIN_DATA_DIR" 2>/dev/null | awk '{print $1; exit}')
+    case "$src_kb" in
+        ''|*[!0-9]*)
+            log "WARNING: could not size $GRIN_DATA_DIR — proceeding without the space check"
+            RETAIN_PREVIOUS=false; return 0 ;;
+    esac
+
+    # POSIX df: -P forces one line per filesystem, -k gives KiB blocks.
+    local df_line avail_kb mount_pt
+    df_line=$(df -Pk "$OUTPUT_DIR" 2>/dev/null | awk 'NR==2')
+    avail_kb=$(printf '%s\n' "$df_line" | awk '{print $4}')
+    mount_pt=$(printf '%s\n' "$df_line" | awk '{print $6}')
+    case "$avail_kb" in
+        ''|*[!0-9]*)
+            log "WARNING: could not read free space on $OUTPUT_DIR — proceeding without the space check"
+            RETAIN_PREVIOUS=false; return 0 ;;
+    esac
+
+    # What step 0 would hand back if it deleted the published archive.
+    local reclaim_kb
+    reclaim_kb=$(find "$OUTPUT_DIR" -maxdepth 1 -type f -name '*.tar.gz' -printf '%k\n' 2>/dev/null \
+                 | awk '{s+=$1} END {print s+0}')
+    case "$reclaim_kb" in ''|*[!0-9]*) reclaim_kb=0 ;; esac
+
+    local ratio="$COMPRESS_RATIO_PRUNED"
+    [ "$NODE_TYPE" = "full" ] && ratio="$COMPRESS_RATIO_FULL"
+
+    local need_kb
+    need_kb=$(awk -v s="$src_kb" -v r="$ratio" -v h="$DISK_HEADROOM_MB" \
+              'BEGIN { printf "%d", (s * r) + (h * 1024) }')
+
+    log "  chain_data to archive : $((src_kb/1024)) MiB"
+    log "  estimated need        : $((need_kb/1024)) MiB (ratio $ratio + ${DISK_HEADROOM_MB} MiB headroom)"
+    log "  free on ${mount_pt:-?} : $((avail_kb/1024)) MiB (+ $((reclaim_kb/1024)) MiB reclaimable)"
+
+    if [ "$reclaim_kb" -gt 0 ] && [ "$avail_kb" -ge "$need_kb" ]; then
+        RETAIN_PREVIOUS=true
+        log "  Room for both — the published archive stays online for this build"
+    elif [ $((avail_kb + reclaim_kb)) -ge "$need_kb" ]; then
+        RETAIN_PREVIOUS=false
+        log "  Room only after reclaiming — the published archive is removed first"
+    else
+        RETAIN_PREVIOUS=false
+        log "ERROR: not enough space on ${mount_pt:-$OUTPUT_DIR}, even after reclaiming"
+        log "  need $((need_kb/1024)) MiB, would have $(((avail_kb + reclaim_kb)/1024)) MiB"
+        log "  Nothing was deleted and the node was NOT stopped — whatever is published stays served."
+        log "ERROR: skipping this instance (free space, or lower the COMPRESS_RATIO_* estimate if it is too pessimistic for this data)"
+        # return, NOT error_exit. error_exit is `exit 1`, and run_cron_nginx runs
+        # mainnet then testnet in one process — so aborting here would take a
+        # perfectly healthy testnet publish down with a mainnet disk problem.
+        # Nothing has been stopped or deleted at this point, so returning is
+        # clean: the caller simply moves on to the next instance.
+        return 1
+    fi
+}
+
 clean_output_directory() {
     log "Step 0: Cleaning output directory: $OUTPUT_DIR"
     mkdir -p "$OUTPUT_DIR"
     cd "$OUTPUT_DIR" || error_exit "Cannot access $OUTPUT_DIR"
 
-    local removed=0 f
-    # chaindata.json goes first on purpose: its presence is the "archive is
-    # complete and downloadable" signal, so it must never outlive the archive.
-    #
-    # The trailing entries are debris rather than published artefacts: interrupted
-    # transfers and abandoned manifest temp files. The old blanket
-    # "find . -type f -delete" swept these; now that the sweep is name-scoped to
-    # protect index.html, they have to be named or they accumulate forever.
-    for f in chaindata.json *.tar.gz *.sha256 README.txt check_status_before_download.txt \
-             *.tar.gz.part *.tar.gz.tmp *.tar.gz.[0-9] wget-log wget-log.* .chaindata.json.*; do
-        [ -f "$f" ] || continue          # unmatched glob stays literal — skip it
-        rm -f "$f" && removed=$((removed+1))
+    # Debris in every case: interrupted transfers and abandoned temp files. The
+    # old blanket "find . -type f -delete" swept these; now that the sweep is
+    # name-scoped to protect index.html, they have to be named or they accumulate
+    # forever. The leading-dot patterns are spelled out because a bare * never
+    # matches them — and that now includes step 5's own hidden work files.
+    local -a targets=( '*.tar.gz.part' '*.tar.gz.tmp' '*.tar.gz.[0-9]'
+                       'wget-log' 'wget-log.*' '.chaindata.json.*'
+                       '.*.tar.gz.tmp' '.*.sha256.tmp' )
+
+    if [ "${RETAIN_PREVIOUS:-false}" = true ]; then
+        # Step 0a found room for both, so the published set is left exactly as it
+        # is — archive, checksum, README and manifest all still agree with each
+        # other, and the mirror keeps serving something complete and verifiable
+        # for the whole build. Step 5 replaces the set in one short swap instead
+        # of this step emptying the directory up front.
+        log "Retaining the published archive for this build (step 0a found room for both)"
+    else
+        # chaindata.json goes first on purpose: its presence is the "archive is
+        # complete and downloadable" signal, so it must never outlive the archive.
+        targets=( chaindata.json '*.tar.gz' '*.sha256' README.txt
+                  check_status_before_download.txt "${targets[@]}" )
+    fi
+
+    local removed=0 pat f
+    for pat in "${targets[@]}"; do
+        for f in $pat; do                # unquoted on purpose — glob expands here
+            [ -f "$f" ] || continue      # unmatched glob stays literal — skip it
+            rm -f "$f" && removed=$((removed+1))
+        done
     done
 
     # Anything still here is the operator's (index.html, robots.txt, assets).
@@ -1072,25 +1208,230 @@ remove_peer_directory() {
 create_status_in_progress() {
     log "Step 4: Setting status: in progress..."
     mkdir -p "$OUTPUT_DIR"
-    echo "Sync is in progress. DO NOT download. Check back in 30 minutes. Last updated $(get_utc_timestamp)" \
-        > "$STATUS_FILE"
+    if [ "${RETAIN_PREVIOUS:-false}" = true ]; then
+        # "DO NOT download" would simply be false here: the published set is
+        # intact and verifiable right up to the swap at the end of step 5.
+        #
+        # It MUST still open with the literal "Sync completed." — that exact
+        # string is the readiness gate in three separate consumers, one of which
+        # is out of our control:
+        #   01_build_new_grin_node.sh  grep -q "Sync completed." -> else SKIP HOST
+        #   081_host_monitor_port.sh   same grep -> reports "sync in progress"
+        #   lib/02_lib_landing.sh      classify() regex -> badge state
+        # Script 01 runs on strangers' VPSes at whatever version they downloaded,
+        # so a client that predates this line will never learn a new vocabulary.
+        # Word it any other way and every such client skips a mirror that is
+        # serving a complete, checksummed archive — which is exactly the outcome
+        # retaining it was meant to prevent.
+        #
+        # The wording is also just accurate: this file describes what is
+        # PUBLISHED, not what the box happens to be doing. Keep the suffix free
+        # of "in progress" — the landing page tests that phrase first and would
+        # grey the mirror out.
+        echo "Sync completed. You may download the ${NODE_TYPE} ${NETWORK_TYPE} archive. Verify the checksum first. Last updated: $(get_utc_timestamp) (A newer archive is being prepared; the one published here stays valid until it is replaced.)" \
+            > "$STATUS_FILE"
+    else
+        echo "Sync is in progress. DO NOT download. Check back in 30 minutes. Last updated $(get_utc_timestamp)" \
+            > "$STATUS_FILE"
+    fi
 }
 
 # Step 5: tar.gz chain_data + sha256 checksum
+#
+# Compression runs through pigz (parallel gzip) when it is available. pigz emits
+# a STANDARD gzip stream under the same .tar.gz name, so every downstream
+# assumption in Script 01 still holds unchanged — the manifest's
+# ^[A-Za-z0-9._-]+\.tar\.gz$ regex, the autoindex href grep, and `tar -xzf`
+# extraction in both transfer modes. This change is invisible to downloaders,
+# which is exactly why pigz was chosen over zstd (a .tar.zst breaks all three).
+# Falls back to plain gzip on hosts where pigz cannot be installed.
+#
+# WARNING: this script does NOT set `set -euo pipefail` (only Script 01 does), and
+# in a pipeline `$?` reports the LAST command — pigz — not tar. Without the
+# PIPESTATUS check below, a tar that died halfway (disk full, IO error, a file
+# vanishing mid-read) would publish a TRUNCATED archive alongside a perfectly
+# valid .sha256 and a perfectly valid manifest. Every integrity and freshness
+# check downstream would accept it, because each one is self-consistent with the
+# corrupt file. The old `tar -czf` was a single command, so its `$?` test was
+# sound; converting to a pipeline is what makes this check load-bearing.
+# Which IO scheduler backs a path. `ionice` is honoured by the CFQ and BFQ
+# schedulers ONLY; on mq-deadline or none — which is what modern kernels pick for
+# virtio-blk and NVMe, i.e. essentially every VPS — the priority is accepted and
+# then silently ignored. Worth knowing rather than assuming, so the log can say
+# whether the IO throttle is real instead of implying one that is not there.
+_io_scheduler() {
+    local dev sched
+    dev=$(df -P "$1" 2>/dev/null | awk 'NR==2 {print $1}')
+    dev=${dev##*/}
+    case "$dev" in
+        nvme*|mmcblk*) dev=${dev%p[0-9]*} ;;              # nvme0n1p1 -> nvme0n1
+        *)             dev=${dev%%[0-9]*} ;;              # vda1 -> vda
+    esac
+    [ -r "/sys/block/$dev/queue/scheduler" ] || return 1
+    sched=$(tr ' ' '\n' < "/sys/block/$dev/queue/scheduler" 2>/dev/null \
+            | grep -o '^\[.*\]$' | tr -d '[]')
+    [ -n "$sched" ] || return 1
+    printf '%s\n' "$sched"
+}
+
+# Clamp an operator-supplied compression level to something the chosen compressor
+# actually accepts. pigz takes 0 (store, near-zero CPU) but GNU gzip REJECTS -0
+# outright — and because the level is env-overridable, an unguarded 0 would build
+# fine on a box with pigz and hard-fail on the fallback box beside it, at step 5,
+# with the node already stopped. Non-numeric input would otherwise reach the
+# compressor as a flag.
+_clamp_level() {
+    local v="$1" lo="$2"
+    case "$v" in ''|*[!0-9]*) echo 6; return 0 ;; esac
+    if [ "$v" -lt "$lo" ]; then echo "$lo"
+    elif [ "$v" -gt 9 ]; then echo 9
+    else echo "$v"; fi
+}
+
 compress_chain_data() {
     log "Step 5: Compressing chain_data..."
-    cd "$GRIN_DATA_DIR/.." || error_exit "Cannot access parent of chain_data"
+    # Every failure path below RETURNS rather than calling error_exit. error_exit
+    # is `exit 1`, and by this point step 1 has already stopped the grin node, so
+    # exiting here would skip step 9 and leave the node down indefinitely — on a
+    # mirror box, until a human noticed. Returning lets the caller restart it.
+    cd "$GRIN_DATA_DIR/.." || { log "ERROR: cannot access parent of chain_data"; return 1; }
     local dir_name; dir_name=$(basename "$GRIN_DATA_DIR")
     local base="grin_${NODE_TYPE}_${NETWORK_TYPE}_$(date +%Y%m%d)"
     local out="$OUTPUT_DIR/${base}.tar.gz"
 
-    tar -czf "$out" \
+    # Build under a HIDDEN temp name and swap at the very end. Two reasons:
+    #   - nginx autoindex does not list dotfiles, and Script 01's fallback
+    #     discovery greps that listing for hrefs, so with a hidden temp a client
+    #     can never see the partial file. A visible temp name would be offered
+    #     for download the moment tar created it.
+    #   - when step 0a retained the previous archive, that archive keeps serving
+    #     until the instant its replacement is complete AND checksummed.
+    # A same-day re-run produces an identical $base, which the swap handles: the
+    # old file is removed and the temp renamed into its place.
+    local tmp="$OUTPUT_DIR/.${base}.tar.gz.tmp"
+    local tmpsum="$OUTPUT_DIR/.${base}.sha256.tmp"
+    rm -f "$tmp" "$tmpsum"
+    # Create both mode 600 BEFORE anything writes to them. nginx autoindex omits
+    # dotfiles from the listing, but it still SERVES one that is requested by
+    # exact name — and the name is fully predictable from the date. Without this
+    # a downloader could pull a half-written archive off the mirror. The
+    # redirections below truncate these files without changing their mode; the
+    # swap re-opens them to 644 once the content is real.
+    ( umask 077; : > "$tmp"; : > "$tmpsum" ) \
+        || { log "ERROR: cannot create work files in $OUTPUT_DIR"; return 1; }
+
+    local level="$COMPRESS_LEVEL_PRUNED"
+    [ "$NODE_TYPE" = "full" ] && level="$COMPRESS_LEVEL_FULL"
+
+    # Deprioritise CPU *and* IO. The grin node is stopped, but nginx, the wallet
+    # listener and the mining pool are all still serving from this box.
+    local -a pre=()
+    command -v nice   &>/dev/null && pre+=(nice -n 19)
+    if command -v ionice &>/dev/null; then
+        pre+=(ionice -c 3)
+        local sched; sched=$(_io_scheduler "$OUTPUT_DIR") || sched=""
+        case "$sched" in
+            bfq|cfq) log "IO priority: idle class, honoured (scheduler: $sched)" ;;
+            "")      log "IO priority: idle class requested (scheduler unknown)" ;;
+            *)       log "IO priority: idle class requested but the '$sched' scheduler ignores it — expect full-speed IO" ;;
+        esac
+    fi
+
+    # Keep the archive read out of the page cache. This is the cost that does not
+    # show up in `top`: streaming ~20 GB through tar evicts essentially everything
+    # else the box had cached, so nginx, the wallet and the pool all fall back to
+    # cold disk for a long while after the run finishes. nocache marks the pages
+    # dropped as it goes (posix_fadvise DONTNEED) and costs nothing when absent.
+    # It wraps TAR, not the compressor: tar is the side doing the bulk reading,
+    # and the compressor's output goes to a shell redirect it never opens itself,
+    # so an LD_PRELOAD shim could not see that fd anyway.
+    local -a rdr=("${pre[@]}")
+    ensure_package nocache nocache || true
+    if command -v nocache &>/dev/null; then
+        rdr+=(nocache)
+        log "Page cache: nocache active on the read side"
+    else
+        log "Page cache: nocache unavailable — the read will evict other services' cached pages"
+    fi
+
+    local cores; cores=$(nproc 2>/dev/null || echo 1)
+    case "$cores" in ''|*[!0-9]*) cores=1 ;; esac
+    [ "$cores" -lt 1 ] && cores=1
+    # COMPRESS_THREADS caps it; anything unusable falls back to every core.
+    case "$COMPRESS_THREADS" in
+        ''|*[!0-9]*) : ;;
+        *) if [ "$COMPRESS_THREADS" -ge 1 ] && [ "$COMPRESS_THREADS" -lt "$cores" ]; then
+               cores="$COMPRESS_THREADS"
+           fi ;;
+    esac
+    ensure_package pigz pigz || true
+    local -a comp
+    if command -v pigz &>/dev/null; then
+        level=$(_clamp_level "$level" 0)
+        comp=("${pre[@]}" pigz "-$level" -p "$cores")
+        log "Compressor: pigz -$level across $cores core(s)"
+    else
+        level=$(_clamp_level "$level" 1)
+        comp=("${pre[@]}" gzip "-$level")
+        log "Compressor: gzip -$level (pigz unavailable — single-threaded)"
+    fi
+
+    # "${rdr[@]}" carries nice/ionice/nocache. Until now these were applied to the
+    # COMPRESSOR only, which had it backwards: tar is the process that reads the
+    # whole ~20 GB off disk, so it is the one whose IO needed deprioritising.
+    # Still exactly two pipeline elements — the PIPESTATUS check below indexes 0
+    # and 1, so adding a third stage here would silently stop checking one of them.
+    "${rdr[@]}" tar -cf - \
         --exclude="${dir_name}/lmdb/lock.mdb" \
         --exclude="${dir_name}/peer/lock.mdb" \
-        "$dir_name"
-    [ $? -ne 0 ] && error_exit "Compression failed"
-    cd "$OUTPUT_DIR" && sha256sum "${base}.tar.gz" > "${base}.sha256"
-    log "Archive size: $(du -h "$out" | cut -f1)"
+        "$dir_name" | "${comp[@]}" > "$tmp"
+    local st=("${PIPESTATUS[@]}")
+    if [ "${st[0]}" -ne 0 ] || [ "${st[1]}" -ne 0 ]; then
+        rm -f "$tmp" "$tmpsum"
+        log "ERROR: compression failed (tar=${st[0]} compressor=${st[1]}) — partial archive removed, published archive untouched"
+        return 1
+    fi
+
+    # Hash the temp file but write the FINAL name into the checksum line. Taking
+    # sha256sum's own output would record ".grin_….tar.gz.tmp", and Script 01
+    # runs `sha256sum -c` against the downloaded file, so the name field has to
+    # be the name the client actually has on disk.
+    local hash
+    hash=$(sha256sum "$tmp" 2>/dev/null | awk '{print $1; exit}')
+    if [ ${#hash} -ne 64 ]; then
+        rm -f "$tmp" "$tmpsum"
+        log "ERROR: checksum generation failed for ${base}.tar.gz — archive discarded"
+        return 1
+    fi
+    # Two spaces: that is sha256sum's own binary-mode separator, and `-c` will
+    # not parse the line with one.
+    printf '%s  %s\n' "$hash" "${base}.tar.gz" > "$tmpsum" \
+        || { rm -f "$tmp" "$tmpsum"; log "ERROR: cannot write ${base}.sha256"; return 1; }
+
+    local newsize; newsize=$(du -h "$tmp" | cut -f1)
+
+    # ---- swap ----------------------------------------------------------------
+    # Order is load-bearing. The manifest is the "ready" signal, so it is removed
+    # BEFORE the file it names: its absence reads as "not ready" and clients fall
+    # back to the file listing, whereas a manifest still naming an archive that
+    # has just been deleted reads as READY and hands the client a 404 it reports
+    # as a broken mirror. Everything after it is a rename within one directory,
+    # so the window where nothing is published is a few milliseconds — not the
+    # length of a compress, which is what step 0 used to cost.
+    rm -f "$OUTPUT_DIR/chaindata.json"
+    local old
+    for old in "$OUTPUT_DIR"/*.tar.gz "$OUTPUT_DIR"/*.sha256; do
+        [ -f "$old" ] && rm -f "$old"
+    done
+    mv -f "$tmp" "$out" \
+        || { log "ERROR: could not publish ${base}.tar.gz (built archive left at $tmp)"; return 1; }
+    mv -f "$tmpsum" "$OUTPUT_DIR/${base}.sha256" \
+        || { log "ERROR: could not publish ${base}.sha256"; return 1; }
+    # Explicit 644: these are created under root's umask and mv preserves the
+    # temp file's mode, so a tightened umask (077) would publish an archive nginx
+    # cannot read — a 403 on the payload itself. Same reasoning as the manifest.
+    chmod 644 "$out" "$OUTPUT_DIR/${base}.sha256" 2>/dev/null || true
+    log "Archive size: $newsize"
 
     ARCHIVE_BASE="$base"   # consumed by write_chaindata_manifest at step 7
     create_readme "$base"
@@ -1341,16 +1682,33 @@ run_nginx_share_for_port() {
 
     display_configuration
     validate_nginx_config
+    preflight_disk_space || return 1
     clean_output_directory
     stop_grin_node
     remove_old_txhashset
     remove_peer_directory
     create_status_in_progress
-    compress_chain_data
-    update_status_completed
-    change_file_ownership
+    # Steps 5-8 are bracketed so that step 9 runs on BOTH paths. The node is
+    # stopped from step 1 onward; a compress that dies here used to exit the
+    # script outright and leave it stopped until someone noticed. Publishing is
+    # skipped on failure — with RETAIN_PREVIOUS the previous archive is still
+    # sitting there intact, so the mirror carries on serving it.
+    if compress_chain_data; then
+        update_status_completed
+        change_file_ownership
+    else
+        log "Publish skipped for this run — restarting the node and leaving the published set as it was"
+        _SHARE_RC=1
+    fi
     restart_grin_node
 
+    if [ "${_SHARE_RC:-0}" -ne 0 ]; then
+        log "=========================================="
+        log "Nginx share FAILED: $NETWORK_TYPE / $NODE_TYPE (node restarted, previous archive left in place)"
+        log "=========================================="
+        _SHARE_RC=0
+        return 1
+    fi
     log "=========================================="
     log "Nginx share complete: $NETWORK_TYPE / $NODE_TYPE  →  $FINAL_DEST"
     log "=========================================="
@@ -1711,7 +2069,7 @@ show_current_schedule() {
 }
 
 list_presets() {
-    local default_expr="$1" default_label="$2"
+    local default_expr="$1" default_label="$2" ntype="${3:-pruned}"
     local now_h now_m
     now_h=$(date +%-H)
     now_m=$(date +%-M)
@@ -1739,31 +2097,82 @@ list_presets() {
     local -a _DN=("Sun" "Mon" "Tue" "Wed" "Thu" "Fri" "Sat")
     local _HM; printf -v _HM '%02d:%02d' "$_R_HOUR" "$_R_MIN"
 
-    _PRESET2="$_R_MIN $_R_HOUR * * $a,$b,$c"
-    _PRESET3="$_R_MIN $_R_HOUR * * *"
-    _PRESET4="$_R_MIN $_R_HOUR * * $p,$q"
-
     echo -e "${BOLD}Schedule presets (UTC):${RESET}"
     echo ""
     echo -e "  ${GREEN}1${RESET}) ${default_label}  ${DIM}(${default_expr})${RESET}  [Default — fixed]"
-    echo -e "  ${GREEN}2${RESET}) 3x/week — ${_DN[$a]}, ${_DN[$b]}, ${_DN[$c]} at ${_HM}  ${DIM}(${_PRESET2})${RESET}  ${DIM}[random]${RESET}"
-    echo -e "  ${GREEN}3${RESET}) Daily at ${_HM}  ${DIM}(${_PRESET3})${RESET}  ${DIM}[random]${RESET}"
-    echo -e "  ${GREEN}4${RESET}) 2x/week — ${_DN[$p]}, ${_DN[$q]} at ${_HM}  ${DIM}(${_PRESET4})${RESET}  ${DIM}[random]${RESET}"
+
+    if [ "$ntype" = "full" ]; then
+        # A full archive is ~20 GB and costs a 20-40 min stop-the-node compress,
+        # for an audience of a few archive-node operators who tolerate a stale
+        # snapshot (an archive node syncs forward from whatever head it has).
+        # So every preset here is biweekly or rarer. 2x/week stays reachable as
+        # an escape hatch, marked heavy — it is not offered as a middle option.
+        #
+        # Biweekly is expressed as day-of-month 1,15 rather than a step: cron's
+        # `*/14` restarts the count each month (1,15,29 then 1 again — a 3-day
+        # gap at the boundary), which is not fortnightly at all.
+        #
+        # Max normal gap: 17 days (15th -> 1st across a 31-day month); 31 with one
+        # missed run. The monthly preset is the binding case at 62 days missed
+        # (Jul 1 -> Sep 1), which is why Script 01's _max_age_for_site_key allows
+        # 70 for fullmain — sized to the RAREST option offered here, so nothing
+        # an operator can pick silently ages a mirror out of client tolerance.
+        # Adding a rarer preset below means re-checking that constant first.
+        _PRESET2="$_R_MIN $_R_HOUR 1,15 * *"
+        _PRESET3="$_R_MIN $_R_HOUR 1 * *"
+        _PRESET4="$_R_MIN $_R_HOUR * * $p,$q"
+        echo -e "  ${GREEN}2${RESET}) Biweekly — 1st & 15th at ${_HM}  ${DIM}(${_PRESET2})${RESET}  ${DIM}[random time]${RESET}"
+        echo -e "  ${GREEN}3${RESET}) Monthly — 1st at ${_HM}  ${DIM}(${_PRESET3})${RESET}  ${DIM}[random time]${RESET}"
+        echo -e "  ${YELLOW}4${RESET}) 2x/week — ${_DN[$p]}, ${_DN[$q]} at ${_HM}  ${DIM}(${_PRESET4})${RESET}  ${YELLOW}[heavy]${RESET}"
+    else
+        # Pruned snapshots stay frequent. Beyond the cut-through horizon (~1 week)
+        # a pruned node falls back to txhashset state sync and discards the
+        # snapshot it just downloaded, so staleness here wastes the whole
+        # transfer rather than merely aging it. Script 01 holds these to 5 days.
+        _PRESET2="$_R_MIN $_R_HOUR * * $a,$b,$c"
+        _PRESET3="$_R_MIN $_R_HOUR * * *"
+        _PRESET4="$_R_MIN $_R_HOUR * * $p,$q"
+        echo -e "  ${GREEN}2${RESET}) 3x/week — ${_DN[$a]}, ${_DN[$b]}, ${_DN[$c]} at ${_HM}  ${DIM}(${_PRESET2})${RESET}  ${DIM}[random]${RESET}"
+        echo -e "  ${GREEN}3${RESET}) Daily at ${_HM}  ${DIM}(${_PRESET3})${RESET}  ${DIM}[random]${RESET}"
+        echo -e "  ${GREEN}4${RESET}) 2x/week — ${_DN[$p]}, ${_DN[$q]} at ${_HM}  ${DIM}(${_PRESET4})${RESET}  ${DIM}[random]${RESET}"
+    fi
     echo ""
 }
 
-# get_cron_expression <network>
+# _node_type_for_network <network>  ->  full | pruned
+#   Reads DETECTED_NODE_TYPES from the saved nginx config ("mainnet:pruned
+#   testnet:pruned"). The share pipeline is keyed by PORT, so a given box's
+#   mainnet port hosts either a full node or a pruned one, never both — which is
+#   what makes a per-artefact cadence possible from a per-network schedule loop.
+#   Defaults to pruned: the frequent, tighter schedule is the safe guess when the
+#   config predates this field.
+_node_type_for_network() {
+    local net="$1" combo
+    for combo in $DETECTED_NODE_TYPES; do
+        [ "${combo%%:*}" = "$net" ] && { echo "${combo##*:}"; return 0; }
+    done
+    echo "pruned"
+}
+
+# get_cron_expression <network> [node_type]
 #   Sets CRON_EXPR. Presets 2-4 are re-randomised on every call, so scheduling
 #   each network in turn naturally staggers their times. Preset 1 (fixed default)
 #   is network-specific so mainnet/testnet don't collide even on the default.
+#
+#   The preset SET now also depends on node type: a full archive costs ~20 GB and
+#   a long stop-the-node compress, so it is offered biweekly-or-rarer while
+#   pruned keeps its frequent schedule. See list_presets for the full reasoning.
 get_cron_expression() {
-    local net="${1:-mainnet}" default_expr default_label
-    if [ "$net" = "testnet" ]; then
+    local net="${1:-mainnet}" ntype="${2:-pruned}" default_expr default_label
+    if [ "$ntype" = "full" ]; then
+        # Biweekly, matching Script 01's 60-day fullmain freshness tolerance.
+        default_expr="0 0 1,15 * *"; default_label="1st & 15th at 00:00"
+    elif [ "$net" = "testnet" ]; then
         default_expr="0 6 * * 2,5"; default_label="Tue & Fri at 06:00"
     else
         default_expr="0 0 * * 1,4"; default_label="Mon & Thu at 00:00"
     fi
-    list_presets "$default_expr" "$default_label"
+    list_presets "$default_expr" "$default_label" "$ntype"
     echo -e "  ${DIM}0) Cancel / skip this network${RESET}"
     echo -ne "${BOLD}Select [0-4, default=1]: ${RESET}"
     read -r preset
@@ -1824,8 +2233,9 @@ add_nginx_schedule() {
             flag="--cron-nginx-main"; marker="$CRON_COMMENT_NGINX_MAIN"; label="MAINNET"
         fi
 
-        echo -e "${BOLD}${CYAN}── Schedule for ${label} ──${RESET}"
-        if ! get_cron_expression "$net"; then
+        local ntype; ntype=$(_node_type_for_network "$net")
+        echo -e "${BOLD}${CYAN}── Schedule for ${label}${ntype:+ (${ntype})} ──${RESET}"
+        if ! get_cron_expression "$net" "$ntype"; then
             sched_info "${label}: skipped — existing schedule (if any) left unchanged."
             echo ""
             continue

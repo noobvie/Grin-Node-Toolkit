@@ -2446,6 +2446,38 @@ _get_site_key() {
     echo "${mode_short}${net_short}"
 }
 
+# Freshness tolerance, per artefact. The archive and the pruned snapshots differ
+# in BOTH publish cadence and in what staleness actually costs, so one constant
+# cannot serve both.
+#
+#   prunemain / prunetest — Script 03 publishes 2x/week (max normal gap 4 days,
+#       Thu->Mon) and 5 = that gap plus one day of grace. Kept TIGHT on purpose:
+#       a pruned node more than the cut-through horizon (~1 week) behind tip is
+#       expected to abandon block sync, fall back to txhashset state sync, and
+#       DISCARD the snapshot it just downloaded — so a stale pruned archive wastes
+#       the entire transfer rather than merely aging.
+#
+#   fullmain — Script 03 publishes biweekly (1st & 15th; max normal gap 17 days,
+#       15th -> 1st across a 31-day month). The limit is sized to the RAREST
+#       schedule 03's preset menu offers, not to the default, so that no option
+#       an operator can pick silently ages a mirror out of client tolerance:
+#         biweekly + one missed run ....... 31 days
+#         monthly  + one missed run ....... 62 days  (Jul 1 -> Sep 1)
+#       70 = that worst case plus 8 days of grace. Kept LOOSE because an archive
+#       node syncs forward from whatever head it has: a stale archive costs extra
+#       catch-up time, it is never discarded.
+#
+# WARNING: raising a limit here must ship AND PROPAGATE to clients before Script
+# 03's cadence is relaxed to match. Clients enforce whatever version of this
+# script they downloaded, so a server-side cron change that outruns this one
+# makes every mirror read as stale and takes bootstrap down completely.
+_max_age_for_site_key() {
+    case "$1" in
+        fullmain) echo 70 ;;
+        *)        echo  5 ;;
+    esac
+}
+
 # Read host list for a given zone+sitekey from grinmasternodes.json.
 # Returns space-separated hostnames, or empty string if none found.
 # Args: zone sitekey registry_path
@@ -2807,11 +2839,13 @@ download_chain_data() {
     local hosts=()
     mapfile -t hosts < <(tr ' ' '\n' <<< "$_resolved_hosts" | grep -v '^$' | sort -u | shuf)
 
-    info "Checking zone hosts (sync status + file age ≤ 7 days)..."
+    # Tolerance depends on the artefact — see _max_age_for_site_key.
+    local _MAX_AGE_DAYS; _MAX_AGE_DAYS=$(_max_age_for_site_key "$site_key")
+
+    info "Checking zone hosts (sync status + file age ≤ ${_MAX_AGE_DAYS} days)..."
     local h; for h in "${hosts[@]}"; do info "  → $h"; done
 
     # Combined check: sync-status + directory listing + file age per host
-    local _MAX_AGE_DAYS=5
     local _HOST_TAR_NAME="" _HOST_SHA_NAME="" _HOST_SHA256=""
     READY_SOURCES=()
     for host in "${hosts[@]}"; do

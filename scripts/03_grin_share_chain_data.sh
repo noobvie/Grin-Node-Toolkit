@@ -1076,16 +1076,80 @@ preflight_disk_space() {
                  | awk '{s+=$1} END {print s+0}')
     case "$reclaim_kb" in ''|*[!0-9]*) reclaim_kb=0 ;; esac
 
-    local ratio="$COMPRESS_RATIO_PRUNED"
+    # Kept apart from reclaim_kb, which grows below: this is the published
+    # archive alone, and it doubles as the compression measurement further down.
+    local prev_archive_kb="$reclaim_kb" archive_count
+    archive_count=$(find "$OUTPUT_DIR" -maxdepth 1 -type f -name '*.tar.gz' 2>/dev/null | wc -l)
+
+    # Step 2 (remove_old_txhashset) deletes the node's own state-sync zips before
+    # the tar runs — which is exactly why src_kb excludes them above. Those bytes
+    # go back to the filesystem too, and on an archive node they run to several
+    # GB, so they are reclaimable in precisely the same sense as the published
+    # archive. Counting them on one side of the sum and not the other is what
+    # turns a run that would have fit into a false abort.
+    #
+    # Only credited when chain_data sits on the SAME filesystem as OUTPUT_DIR:
+    # freeing space on another disk does nothing for the one being written to.
+    # Top-level globs deliberately — a nested zip is undercounted, and undercounting
+    # reclaimable space is the safe direction for this check.
+    local snap_kb=0 chain_mount
+    chain_mount=$(df -Pk "$GRIN_DATA_DIR" 2>/dev/null | awk 'NR==2 {print $6}')
+    if [ -n "$mount_pt" ] && [ "$chain_mount" = "$mount_pt" ]; then
+        local zip_kb=0 dir_kb=0
+        zip_kb=$(du -sck "$GRIN_DATA_DIR"/txhashset_snapshot*.zip 2>/dev/null | awk 'END {print $1+0}')
+        dir_kb=$(du -sck "$GRIN_DATA_DIR"/txhashset_zip*         2>/dev/null | awk 'END {print $1+0}')
+        snap_kb=$((zip_kb + dir_kb))
+        case "$snap_kb" in ''|*[!0-9]*) snap_kb=0 ;; esac
+        [ "$snap_kb" -gt 0 ] && reclaim_kb=$((reclaim_kb + snap_kb))
+    fi
+
+    local ratio="$COMPRESS_RATIO_PRUNED" ratio_src="estimate"
     [ "$NODE_TYPE" = "full" ] && ratio="$COMPRESS_RATIO_FULL"
+
+    # Self-calibration. COMPRESS_RATIO_* is a guess about how compressible this
+    # chain is; the archive already sitting in OUTPUT_DIR is the answer, measured
+    # on this box, this chain and this compressor at this level. Prefer the
+    # measurement and the constants become what they should always have been —
+    # a seed for the first run, before there is anything to measure.
+    #
+    # This is what a 0.95 guess costs when the truth is 0.87: on an 18 GiB
+    # archive node the phantom 8 points are ~1.5 GiB of need that does not
+    # exist, which is enough to abort a run that has completed fine for months.
+    #
+    # Direction of the drift, stated carefully because it goes the UNSAFE way.
+    # The denominator is TODAY's chain_data while the published archive came from
+    # a smaller one, so the derived ratio reads slightly LOW. need then works out
+    # to almost exactly the previous archive's size, while the new one will be
+    # bigger by one cadence of chain growth (~7 MiB/day of chain_data, so ~85 MiB
+    # of archive over a fortnight). That undershoot is what DISK_HEADROOM_MB is
+    # there to absorb — 512 MiB covers roughly six cadences — but it means the
+    # headroom is load-bearing here, not decorative. Do not cut it to zero on the
+    # reasoning that the ratio is now measured rather than guessed.
+    #
+    # Guards. Exactly one archive, or the sum is two generations added together
+    # and meaningless. A sane band, because a truncated or half-written archive
+    # would otherwise talk this check into greenlighting a run that cannot
+    # finish — the one outcome the whole function exists to prevent. Outside the
+    # band the constant stands and the anomaly is logged rather than swallowed.
+    if [ "$archive_count" -eq 1 ] && [ "$prev_archive_kb" -gt 0 ] && [ "$src_kb" -gt 0 ]; then
+        local measured
+        measured=$(awk -v a="$prev_archive_kb" -v s="$src_kb" 'BEGIN { printf "%.3f", a/s }')
+        if awk -v m="$measured" 'BEGIN { exit !(m >= 0.30 && m <= 1.10) }'; then
+            ratio="$measured"; ratio_src="measured from the published archive"
+        else
+            log "  WARNING: published archive implies ratio $measured — outside 0.30-1.10, ignoring it"
+            log "           (a truncated or foreign .tar.gz in $OUTPUT_DIR would look like this)"
+        fi
+    fi
 
     local need_kb
     need_kb=$(awk -v s="$src_kb" -v r="$ratio" -v h="$DISK_HEADROOM_MB" \
               'BEGIN { printf "%d", (s * r) + (h * 1024) }')
 
     log "  chain_data to archive : $((src_kb/1024)) MiB"
-    log "  estimated need        : $((need_kb/1024)) MiB (ratio $ratio + ${DISK_HEADROOM_MB} MiB headroom)"
+    log "  estimated need        : $((need_kb/1024)) MiB (ratio $ratio, $ratio_src + ${DISK_HEADROOM_MB} MiB headroom)"
     log "  free on ${mount_pt:-?} : $((avail_kb/1024)) MiB (+ $((reclaim_kb/1024)) MiB reclaimable)"
+    [ "$snap_kb" -gt 0 ] && log "    of which txhashset snapshots freed by step 2: $((snap_kb/1024)) MiB"
 
     if [ "$reclaim_kb" -gt 0 ] && [ "$avail_kb" -ge "$need_kb" ]; then
         RETAIN_PREVIOUS=true
@@ -1665,7 +1729,15 @@ run_nginx_share_for_port() {
         setup_derived_variables
         save_instance_detection          # keep conf fresh after live run
     elif ! load_instance_from_conf "$port"; then
-        return 0                         # no process, no conf entry — skip silently
+        # Nothing listening on the port AND no usable entry in the instances conf.
+        # This used to return silently, which is how an entire network disappears
+        # from a run that otherwise reports "jobs finished" — the operator sees a
+        # fresh testnet archive, no error anywhere, and no clue mainnet was
+        # dropped. Say which network went and why.
+        local _skip_net="mainnet"
+        [ "$port" = "$GRIN_PORT_TESTNET" ] && _skip_net="testnet"
+        echo "[$(date '+%Y-%m-%d %H:%M:%S UTC' -u)] SKIPPED $_skip_net: nothing listening on port $port and no usable entry in $INSTANCES_CONF (chain_data path missing or stale) — nothing was published for this network"
+        return 0
     else
         setup_derived_variables          # conf loaded — still need OUTPUT_DIR etc.
     fi
@@ -2663,14 +2735,47 @@ menu_share_nginx() {
     fi
     load_nginx_config
 
+    # Which networks MAY run is decided by option A (SYNC_CHOICE); which of them
+    # runs THIS time is the operator's call. run_cron_nginx has always taken a
+    # per-network filter — the --cron-nginx-main / --cron-nginx-test jobs pass
+    # one — but the menu never offered it, so B silently meant "everything A
+    # allows". That is the wrong default interactively: a mainnet archive is a
+    # ~20 GB build that keeps the node stopped throughout, and there was no way
+    # to ask for testnet alone short of editing the config by hand.
+    local only_net="" only_label="mainnet + testnet"
+    case "$SYNC_CHOICE" in
+        mainnet) only_net="mainnet"; only_label="mainnet" ;;
+        testnet) only_net="testnet"; only_label="testnet" ;;
+        *)
+            echo ""
+            echo -e "${BOLD}Which network do you want to share now?${RESET}"
+            echo ""
+            echo -e "  ${GREEN}1${RESET}) Mainnet only"
+            echo -e "  ${GREEN}2${RESET}) Testnet only"
+            echo -e "  ${GREEN}3${RESET}) Both  ${DIM}(mainnet first, then testnet)${RESET}"
+            echo -e "  ${RED}0${RESET}) Cancel"
+            echo ""
+            echo -ne "${BOLD}Select [1-3 / 0]: ${RESET}"
+            local netsel; read -r netsel
+            case "$netsel" in
+                1) only_net="mainnet"; only_label="mainnet" ;;
+                2) only_net="testnet"; only_label="testnet" ;;
+                3) only_net="";        only_label="mainnet + testnet" ;;
+                0|"") echo -e "${DIM}Cancelled.${RESET}"; return ;;
+                *)    sched_warn "Invalid option."; sleep 1; return ;;
+            esac
+            ;;
+    esac
+
     echo -e "\n${YELLOW}[WARN]${RESET}  Grin will be stopped, chain_data compressed, then restarted."
+    echo -e "  ${DIM}Selected: ${only_label}${RESET}"
     echo -ne "Continue? [Y/n/0]: "
     read -r confirm
     [[ "$confirm" == "0" ]] && echo -e "${DIM}Cancelled.${RESET}" && return
     [[ "${confirm,,}" == "n" ]] && echo -e "${DIM}Cancelled.${RESET}" && return
 
     echo ""
-    ( run_cron_nginx )
+    ( run_cron_nginx "$only_net" )
     local rc=$?
     [ $rc -ne 0 ] && sched_error "Nginx share pipeline failed (exit $rc). Check logs in: $LOG_DIR"
     echo ""

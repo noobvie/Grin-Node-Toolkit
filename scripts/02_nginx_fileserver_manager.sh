@@ -36,6 +36,8 @@
 #   8) Install fail2ban   — Install & configure fail2ban for nginx.
 #   9) Fail2ban Mgmt      — Status, unban IPs, list bans.
 #  10) IP Filtering       — Block / Unblock IPs via ufw or iptables.
+#  11) Landing Page      — Styled download page instead of the bare autoindex
+#                          list (lib/02_lib_landing.sh).
 #
 # GRIN SUBDOMAIN CONVENTIONS
 #   fullmain.*   — Mainnet full archive node  (archive_mode = true,  ~25 GiB)
@@ -60,10 +62,11 @@
 #   Set ACTION and the variables below before running to skip the interactive
 #   menu. Valid ACTION values:
 #     grin_mainnet | grin_testnet | custom | remove | list |
-#     limit_rate | lift_rate | enhance_security | fail2ban_management | ip_filtering
+#     limit_rate | lift_rate | enhance_security | fail2ban_management |
+#     ip_filtering | landing_page
 #
 # LOG FILE
-#   <toolkit_root>/log/02_nginx_<action>_YYYYMMDD_HHMMSS.log
+#   /opt/grin/logs/02_nginx_<action>_YYYYMMDD_HHMMSS.log
 #
 ################################################################################
 
@@ -72,7 +75,8 @@ set -e  # Exit on any error
 # ── Non-interactive configuration ────────────────────────────────────────────
 # Set ACTION here, or leave empty for interactive menu
 # Options: "grin_mainnet" | "grin_testnet" | "custom" | "remove" | "list" |
-#          "limit_rate" | "lift_rate" | "enhance_security" | "fail2ban_management" | "ip_filtering"
+#          "limit_rate" | "lift_rate" | "enhance_security" |
+#          "fail2ban_management" | "ip_filtering" | "landing_page"
 ACTION=""
 
 # Domain configuration (for setup/add operations)
@@ -94,7 +98,7 @@ DELETE_FILES=""              # "yes" to delete files, "no" to keep
 # System Variables - DO NOT EDIT
 #############################################################################
 
-# Script location (used for relative log path)
+# Script location — used to source lib/ (nginx_shared_helpers, 02_lib_landing).
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOG_DIR="/opt/grin/logs"
 LOG_FILE=""   # Set dynamically in main() once the action is known
@@ -269,7 +273,7 @@ ensure_geo_conf() {
         mkdir -p "$(dirname "$IP_LIMITS_CONF")"
         cat > "$IP_LIMITS_CONF" << 'EOF'
 # Grin File Server - Per-IP rate limits (bytes/s, 0 = unlimited)
-# Managed by 02_nginx-fileserver-manager.sh
+# Managed by 02_nginx_fileserver_manager.sh
 geo $remote_addr $grin_rate_limit {
     default 0;
 }
@@ -2379,7 +2383,7 @@ _limit_rate_enable_for_domain() {
     fi
 }
 
-# 25.5 - Limit rate/bandwidth submenu (menu item 5)
+# 25.5 - Limit rate/bandwidth submenu (menu item 6)
 run_limit_rate() {
     while true; do
         clear
@@ -2407,7 +2411,7 @@ run_limit_rate() {
     done
 }
 
-# 26.0 - Lift rate/bandwidth limit for specific IPs (menu item 6)
+# 26.0 - Lift rate/bandwidth limit for specific IPs (menu item 7)
 run_lift_rate() {
     print_section "Lift Rate / Bandwidth"
 
@@ -2504,7 +2508,7 @@ run_lift_rate() {
             if [[ ! "${all_choice,,}" =~ ^n ]]; then
                 cat > "$IP_LIMITS_CONF" << 'EOF'
 # Grin File Server - Per-IP rate limits (bytes/s, 0 = unlimited)
-# Managed by 02_nginx-fileserver-manager.sh
+# Managed by 02_nginx_fileserver_manager.sh
 geo $remote_addr $grin_rate_limit {
     default 0;
 }
@@ -2533,7 +2537,7 @@ EOF
     read -r
 }
 
-# 27.0 - Enhance security with fail2ban and nginx rate limiting (menu item 7)
+# 27.0 - Enhance security with fail2ban and nginx rate limiting (menu item 8)
 run_enhance_security() {
     print_section "Enhance security by fail2ban"
 
@@ -2581,7 +2585,7 @@ run_enhance_security() {
     if [[ ! -f "$req_zone_conf" ]]; then
         cat > "$req_zone_conf" << 'EOF'
 # Grin File Server - Request rate limiting zone
-# Managed by 02_nginx-fileserver-manager.sh
+# Managed by 02_nginx_fileserver_manager.sh
 limit_req_zone $binary_remote_addr zone=grin_req:10m rate=20r/s;
 EOF
         print_info "Created request rate limit zone: $req_zone_conf"
@@ -2619,7 +2623,7 @@ EOF
     mkdir -p "$(dirname "$FAIL2BAN_JAIL_CONF")"
     cat > "$FAIL2BAN_JAIL_CONF" << 'EOF'
 # Grin File Server - fail2ban nginx jails
-# Managed by 02_nginx-fileserver-manager.sh
+# Managed by 02_nginx_fileserver_manager.sh
 
 [DEFAULT]
 bantime  = 3600
@@ -2793,7 +2797,7 @@ _ip_list() {
     echo ""
 }
 
-# 28.0 - IP Filtering workflow (menu item 8)
+# 28.0 - IP Filtering workflow (menu item 10)
 run_fail2ban_management() {
     print_section "Fail2ban Management"
 

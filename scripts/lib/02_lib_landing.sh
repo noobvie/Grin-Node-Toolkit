@@ -20,7 +20,11 @@
 #
 # Nginx shape after install:
 #     location /__listing/ { alias <root>/; autoindex on; autoindex_format json; }
-#     location /          { autoindex on; ...; index index.html; }
+#     location = /         { Accept: text/html → rewrite to /index.html,
+#                            everything else → the plain html autoindex }
+# ⚠ "/" is CONTENT-NEGOTIATED, never `index index.html;` — Script 01 discovers
+# mirrors with GET / (greps href="*.tar.gz") and HEAD / (Last-Modified), and the
+# landing page satisfies neither. See the long note beside the awk that emits it.
 
 LANDING_MARKER="__listing"                       # "vhost already patched" token
 LANDING_CONF="/etc/grin-toolkit/landing.conf"    # remembers the GA4 id

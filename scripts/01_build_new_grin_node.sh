@@ -26,11 +26,11 @@
 #   Archives  : Pruned (default, smaller)  |  Full (mainnet only, full UTXO history)
 #   Note: Full archive mode is NOT available for testnet.
 #
-# NODE DIRECTORIES  (default paths — user may choose a custom location at Step 5)
-#   /opt/grin/node/mainnet-prune  — pruned,       mainnet  (default)
-#   /opt/grin/node/mainnet-full   — full archive, mainnet  (default)
-#   /opt/grin/node/testnet-prune  — pruned,       testnet  (default)
-#   The chosen path (default or custom) is saved to:
+# NODE DIRECTORIES  (standardised — there is no custom-path prompt)
+#   /opt/grin/node/mainnet-prune  — pruned,       mainnet
+#   /opt/grin/node/mainnet-full   — full archive, mainnet
+#   /opt/grin/node/testnet-prune  — pruned,       testnet
+#   The resolved path is saved to:
 #     /opt/grin/conf/grin_instances_location.conf  (used by other toolkit scripts)
 #
 # SETUP PIPELINE  (up to 14 steps; Steps 10–12 replaced by a single stream step
@@ -58,15 +58,15 @@
 #   Step  4 — Archive Mode Selection  (once per network)
 #              User chooses: 1) Pruned  2) Full archive (mainnet only)
 #
-#   Step  5 — Create Node Directory
-#              User enters a path (default or custom). After each entry, shows
-#              disk space for the chosen location and, if the directory already
-#              exists, lists its contents (up to 20 items). A bold red warning
-#              is shown when files are present: all will be permanently removed
-#              before downloading begins. User must confirm [Y/n/0] before the
-#              path is accepted. On confirmation, all existing files are wiped
-#              immediately so the directory is clean for the binary and chain
-#              data that follow.
+#   Step  5 — Prepare Node Directory
+#              No path prompt: GRIN_DIR is the standardised location for the
+#              chosen network+mode (see NODE DIRECTORIES above). Switching
+#              mainnet full↔pruned removes the other variant's directory so no
+#              orphan is left behind. A disk-space check runs on a fresh install
+#              and is skipped on the M/T/K rebuild paths (GRIN_SKIP_DISK_CHECK=1,
+#              which already wiped the directory). Any existing files in GRIN_DIR
+#              are then cleared automatically — no confirmation prompt — so the
+#              directory is clean for the binary and chain data that follow.
 #
 #   Step  6 — Download Grin Binary
 #              Queries the GitHub API for the latest release and downloads the
@@ -129,10 +129,12 @@
 #                   source is fresh/reachable. Slowest (hours to days).
 #              For modes 1 & 2 only: user then selects a download zone
 #              (America / Asia / Europe / Africa). Host list is loaded from
-#              extensions/grinmasternodes.json. Each host is checked in order:
-#                1) sync-status via check_status_before_download.txt
-#                2) directory listing fetched to discover tar/sha filenames
-#                3) Last-Modified header checked — files older than 5 days skipped
+#              extensions/grinmasternodes.json. Each host is checked by
+#              _check_and_add_host — chaindata.json manifest first, else the
+#              legacy probes (directory freshness, sync-status file, listing,
+#              tar type, tar Last-Modified). The age limit is per artefact,
+#              not one constant: 5 days for a pruned snapshot, 70 for the full
+#              archive (see _max_age_for_site_key).
 #              Hosts passing all checks are added as fallback sources.
 #              If selected zone has no fresh hosts, auto-falls back to America.
 #              If America also fails, prompts for a custom base URL or 0 to return.
@@ -175,8 +177,9 @@
 #
 # LOG FILE
 #   Each run creates a timestamped log file:
-#     <toolkit_root>/log/01_build_new_grin_node_YYYYMMDD_HHMMSS.log
-#   (one file per run; timestamps are UTC throughout)
+#     /opt/grin/logs/01_build_new_grin_node_YYYYMMDD_HHMMSS.log
+#   (one file per run; log-line timestamps are UTC — the filename uses the
+#    server's local time)
 #
 ################################################################################
 
@@ -288,7 +291,10 @@ step_header() { echo ""; echo -e "${BOLD}${DIM}━━━ $* ━━━━━━�
 #             shutdown; a short kill window truncates that and forces the slow
 #             work to re-run on the next boot — so we wait generously.)
 #   Step 2 — SIGKILL any process that did not exit within the timeout.
-#   Step 3 — Kill every tmux session whose name starts with 'grin_'.
+#   Step 3 — Kill every tmux session whose name starts with 'grin_', on BOTH
+#            tmux servers (root's socket and the grin user's gtmux socket).
+#   Step 4 — OS-wide sweep for surviving `grin server run` processes — one of
+#            those holds the LMDB lock and breaks the next start.
 # =============================================================================
 stop_grin_gracefully() {
     local stop_timeout=300
@@ -875,7 +881,8 @@ _describe_installed_node() {
 
 # -----------------------------------------------------------------------------
 # _start_installed_node — start already-installed Grin nodes from standard paths.
-# Starts mainnet first, then waits 30 s before starting testnet (if both present).
+# Starts mainnet first, then waits GRIN_STAGGER_SECS (default 1000 s) before
+# starting testnet, if both are present.
 # Returns 0 on success (caller should exit 0 after).
 # Returns 1 if no installed nodes found (caller should fall through to build wizard).
 # -----------------------------------------------------------------------------
@@ -1580,8 +1587,9 @@ check_legacy_grin_dir() {
 # Runs apt-get update && upgrade (or dnf update) to ensure the system is
 # current, then installs any missing required packages:
 # apt-get: tar, openssl, libncurses5 (or libncurses6 on Ubuntu 24.04+),
-#          tmux, jq, tor, curl, wget.
-# dnf (Rocky/Alma 10+): epel-release (auto), tar, openssl, ncurses-compat-libs, tmux, jq, tor, curl, wget.
+#          tmux, jq, tor, curl, wget, sqlite3, rsync, cron.
+# dnf (Rocky/Alma 10+): epel-release (auto), tar, openssl, ncurses-compat-libs,
+#          tmux, jq, tor, curl, wget, sqlite, rsync, cronie.
 # OS version check is handled upstream by the master script.
 # =============================================================================
 check_os_and_deps() {
@@ -2428,10 +2436,12 @@ ensure_grin_user() {
 #   fullmain  — full archive, mainnet
 #   prunemain — pruned,       mainnet
 #   prunetest — pruned,       testnet
-# Each host is checked via check_status_before_download.txt — only used if it
-# contains "Sync completed.".
-# If all 3 known hosts fail, the user is prompted to enter a custom base URL
-# (e.g. https://myserver.com) or press 0 to return to the master script.
+# Each host is checked by _check_and_add_host: the chaindata.json manifest when
+# the mirror publishes one, else the legacy probes (the status file must contain
+# "Sync completed.").
+# If no host in the chosen zone — nor in the America fallback — passes, the user
+# is prompted to enter a custom base URL (e.g. https://myserver.com) or press 0
+# to return to the master script.
 # Custom sources are accepted if they contain a .tar.gz in their directory
 # listing (status file check is skipped for custom URLs).
 # Parses the directory index to find .tar.gz and .sha256 filenames dynamically.
@@ -2501,14 +2511,6 @@ PYEOF
     echo "${result}" | xargs
 }
 
-# Check one host in optimised order (fail fast, fewest bytes first):
-#   1. HEAD /          → directory Last-Modified  (1 cheap request, skip stale early)
-#   2. GET  status txt → "Sync completed."        (small file, confirm node is ready)
-#   3. GET  /          → directory listing        (parse tar/sha filenames)
-#   4. HEAD /$tar      → precise .tar.gz age      (exact file timestamp)
-# On pass: appends "https://$host" to READY_SOURCES; sets _HOST_TAR_NAME/_HOST_SHA_NAME
-# from the first passing host. Returns 0=pass, 1=skip.
-# Args: host  max_age_days
 # Manifest fast path — chaindata.json (schema 1), published by Script 03 step 7.
 #
 # Answers in ONE request what the four legacy probes below answer in four, and
@@ -2604,6 +2606,18 @@ _try_chaindata_manifest() {
     return 0
 }
 
+# Check one host in optimised order (fail fast, fewest bytes first):
+#   0. chaindata.json  → manifest fast path; answers 1-4 in one request, and a
+#                        host without one falls through to the legacy probes
+#   1. HEAD /          → directory Last-Modified  (1 cheap request, skip stale early)
+#   2. GET  status txt → "Sync completed."        (small file, confirm node is ready)
+#   3. GET  /          → directory listing        (parse tar/sha filenames)
+#   3b. tar filename must match the site_key type (a fullmain client must never
+#       accept a pruned tar, and vice versa)
+#   4. HEAD /$tar      → precise .tar.gz age      (exact file timestamp)
+# On pass: appends "https://$host" to READY_SOURCES; sets _HOST_TAR_NAME/_HOST_SHA_NAME
+# from the first passing host. Returns 0=pass, 1=skip.
+# Args: host  max_age_days  [site_key]
 _check_and_add_host() {
     local host="$1" max_age="$2" site_key="${3:-}"
     local base="https://$host"
@@ -3180,7 +3194,9 @@ _grin_proc_for_dir() {
 # If a session with that name already exists, it is killed first.
 # Runs './grin server run' inside the session so the node starts in TUI mode.
 # The session stays open after grin exits so the user can read any output.
-# Attach with: tmux attach -t <session>   |   Detach: Ctrl+B then D
+# The node runs grin-owned on the grin user's tmux socket, so a plain root
+# `tmux attach` will NOT find it (lib/grin_node_control.sh, launch contract).
+# Attach with: gtmux attach -t <session>   |   Detach: Ctrl+B then D
 # =============================================================================
 start_grin_tmux() {
     step_header "Step 13: Start Grin Node (tmux)"
@@ -3243,7 +3259,7 @@ start_grin_tmux() {
 # -----------------------------------------------------------------------------
 # Prints a summary of the completed setup: network, mode, directory, tmux
 # session name, total time taken, and log file path.
-# Full log is written to: log/01_build_new_grin_node.log (relative to toolkit).
+# Full log is written to: /opt/grin/logs/01_build_new_grin_node_<timestamp>.log
 # =============================================================================
 show_summary() {
     local network="$1"

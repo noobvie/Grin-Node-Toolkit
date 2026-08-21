@@ -4,12 +4,17 @@
 # =============================================================================
 #
 # PURPOSE
-#   Central nginx helpers used by scripts that manage nginx vhosts/sites:
-#     · Script 02 — Nginx File Server Manager
-#     · Script 04 — Grin Node Foreign API
-#     · Script 06 — Global Grin Health
-#     · Script 07 — Mining Services / Pool
+#   Central nginx helpers used by every script that manages nginx vhosts/sites:
+#     · Script 02  — Nginx File Server Manager
+#     · Script 04  — Grin Node Foreign API
+#     · Script 06  — Global Grin Health
+#     · Script 07  — Mining Services (solo + public pool)
+#     · Script 051 / 051x — Fidelius + XP wallet
+#     · Script 052 — Accio (also lib/052_lib_gateway.sh, lib/052_lib_nginx.sh)
 #     · Script 059 — Grin Drop
+#     · Script 084 — Nginx Extended Features
+#     · Script 093 — Transporter (also lib/093_lib_server.sh)
+#     · lib/nostr_relay_deploy.sh (Script 091 Floonet relay)
 #
 #   Lib files are sourced, not executed — no shebang. Functions are prefixed
 #   `nginx_` to avoid collisions with script-specific helpers. The historical

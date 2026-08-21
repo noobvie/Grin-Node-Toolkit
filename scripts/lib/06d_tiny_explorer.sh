@@ -5,6 +5,12 @@
 #
 # Model: web/06d_tiny_explorer/ (Node.js/Express, no DB). Single mainnet service
 # grin-tiny-explorer. Secrets resolved live via grin_node_secrets.sh.
+#
+# Sourced lib → no shebang, no `set -e` of its own. Every tinyx_* entry point is
+# dispatched from the 06 menu as `tinyx_x || true`, which disables errexit for the
+# whole call tree below it (CLAUDE.md, project_lib_errexit_suppression) — so 06's
+# `set -euo pipefail` protects nothing in here. The bare `cp -r` deploy steps in
+# tinyx_install / tinyx_update are exactly the shape that fails silently.
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 

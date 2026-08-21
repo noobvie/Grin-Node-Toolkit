@@ -12,7 +12,7 @@
 # │  TWO MODES — PICK ONE, NOT BOTH                                      │
 # │  Activating both modes will cause port conflicts.                    │
 # │                                                                       │
-# │  MODE A — Raw TCP Direct Access  (menu options 1/2)                  │
+# │  MODE A — Raw TCP Direct Access  (menu options 1/2/3)                │
 # │    Opens port 3413 directly on the firewall. No SSL.                 │
 # │    Simplest setup — for nodes that serve external wallets directly.  │
 # │    External wallets connect via plain HTTP:                          │
@@ -20,7 +20,7 @@
 # │    Port 3413 bypasses nginx entirely — script 02 HTTP→HTTPS          │
 # │    redirect does NOT interfere (it only applies to ports 80/443).    │
 # │                                                                       │
-# │  MODE B — nginx HTTPS Proxy  (menu options 3/4)                      │
+# │  MODE B — nginx HTTPS Proxy  (menu options 4-9, T/U/V)               │
 # │    Exposes /v2/foreign behind HTTPS (Let's Encrypt). Rate limited.   │
 # │    Includes optional live status page, REST API, and Tor onion.      │
 # │    Best for public-facing community nodes:                           │
@@ -28,18 +28,18 @@
 # └──────────────────────────────────────────────────────────────────────┘
 #
 # SERVICES
-#   1/2)  Raw TCP Direct Access  (MODE A)
+#   1/2/3)  Raw TCP Direct Access  (MODE A)
 #           · Patches grin-server.toml to bind Foreign API on 0.0.0.0:3413
 #           · Opens ufw firewall rule for port 3413
 #           · Restarts the Grin node in its tmux session to apply changes
 #
-#   3/5)  nginx HTTPS reverse proxy  (/v2/foreign, JSON-RPC)  (MODE B)
+#   4/5)  nginx HTTPS reverse proxy  (/v2/foreign, JSON-RPC)  (MODE B)
 #           · Exposes the read-only Foreign API — Owner API stays private
 #           · CORS enabled so any website can query from a browser
 #           · Rate-limited (300 r/m, burst 200) and connection-limited (20 conn/IP)
 #           · Returns HTTP 429 on excess; active from proxy setup, no status page required
 #
-#   5/7)  Live status page  (https://domain/)
+#   6/7)  Live status page  (https://domain/)
 #           · HTML dashboard: height, difficulty, supply, hash, versions
 #           · Auto-refreshes every 60 s; dark/light theme; mobile-friendly
 #           · Static files — zero extra server load per visitor
@@ -48,14 +48,14 @@
 #             is enabled, the .onion URL is injected into config.js from
 #             /var/lib/tor/grin-<network>-nginx/hostname — Script 04's own service)
 #
-#   7/9)  REST API  (https://domain/rest/)
+#   8/9)  REST API  (https://domain/rest/)
 #           · Simple GET endpoints returning clean JSON
 #           · Ideal for: CoinGecko, Google Sheets, no-code tools, widgets
 #           · Static JSON refreshed every 60 s by cron (www-data)
 #           · Endpoints: /rest/stats.json  /rest/supply.json  /rest/height.json
 #                        /rest/difficulty.json  /rest/emission.json
 #           · CORS enabled; Cache-Control: public, max-age=60
-#           · Requires status page deployed (option 6/7) first
+#           · Requires status page deployed (option 6) first
 #
 #   T/U/V) Tor onion  (MODE B add-on)
 #           · Publishes /v2/foreign as a .onion hidden service via nginx
@@ -76,7 +76,7 @@
 #   · MODE B only: DNS A record pointing to this server; ports 80 and 443 open
 #
 # LOG FILE
-#   <toolkit_root>/log/grin_node_services_YYYYMMDD_HHMMSS.log
+#   /opt/grin/logs/grin_node_services_YYYYMMDD_HHMMSS.log
 #
 # =============================================================================
 
@@ -1574,8 +1574,10 @@ _nginx_proxy_active() {
     [[ -L "/etc/nginx/sites-enabled/$symlink" ]]
 }
 
-# Returns the tmux session name for a given grin node directory
-# Mirrors the naming convention in Script 01.
+# Returns the tmux session name for a given grin node directory.
+# NOTE: a byte-identical copy of _grin_session_name from
+# lib/grin_node_control.sh, which this script already sources — the canonical
+# one should be called instead of maintaining a second copy here.
 _grin_session_name_local() {
     case "$(basename "${1:-}")" in
         mainnet-full)  echo "grin_full_mainnet"   ;;
@@ -1641,7 +1643,7 @@ _offer_node_restart() {
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# MODE A — Raw TCP Direct Access (options 1/2)
+# MODE A — Raw TCP Direct Access (options 1/2/3)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 _enable_raw_tcp() {

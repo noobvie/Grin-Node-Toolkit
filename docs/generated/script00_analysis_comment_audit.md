@@ -85,7 +85,7 @@ Tick `Done` and add the commit hash when a session finishes. `~C` = comment line
 | A8 | Accio gateway + nginx (shell) | `lib/052_lib_gateway.sh`, `lib/052_lib_nginx.sh` | 967 | ☑ |
 | A9 | Drop + WooCommerce | `scripts/059_grin_drop.sh`, `lib/059_lib_{wallet,backup,nginx,admin,app}.sh`, `scripts/053_grin_woocommerce.sh` | 629 | ☑ |
 | A10 | Admin band 08x + backup | `scripts/08_grin_node_admin.sh`, `081`, `082`, `084`, `085`, `089`, `08del`, `lib/grin_backup_engine.sh`, `lib/grin_backup_push.sh` | 1159 | ☑ |
-| A11 | Connectivity 09 + shared | `scripts/09_grin_comms_hub.sh`, `091`, `lib/091_lib_floonet.sh`, `093`, `lib/093_lib_{server,client,backup}.sh`, `lib/nostr_relay_deploy.sh`, `lib/grin_node_secrets.sh`, `lib/grin_alerts.sh`, `grin-node-toolkit.sh` | 1072 | ☐ |
+| A11 | Connectivity 09 + shared | `scripts/09_grin_comms_hub.sh`, `091`, `lib/091_lib_floonet.sh`, `093`, `lib/093_lib_{server,client,backup}.sh`, `lib/nostr_relay_deploy.sh`, `lib/grin_node_secrets.sh`, `lib/grin_alerts.sh`, `grin-node-toolkit.sh` | 1072 | ☑ |
 
 ### Tier 2 — public pool web app (largest JS surface)
 
@@ -95,11 +95,11 @@ Tick `Done` and add the commit hash when a session finishes. `~C` = comment line
 | B2 | Pool money & wallet libs | `lib/withdrawal-scheduler.js`, `wallet.js`, `wallet-tor.js`, `nostr-payout.js`, `rewards.js`, `reconciliation.js`, `dormancy.js`, `blocks.js` | ~3900 | ☑ |
 | B3 | Pool infra libs | `lib/db.js`, `pool-settings.js`, `config.js`, `auth.js`, `rate-limiter.js`, `ip-filter.js`, `owner-proof.js`, `retention.js`, `miners.js` | ~4900 | ☑ |
 | B4 | Pool stratum & stats libs | `lib/stratum-server.js`, `node-stratum-client.js`, `hashrate-tracker.js`, `grin-node.js`, `poolstats-reporter.js`, `alert-monitor.js`, `alert-delivery.js` | ~3300 | ☑ |
-| B5 | Pool content & incentives libs | `lib/posts.js`, `ads.js`, `lottery.js`, `incentives.js`, `back-end-pool/scripts/*.js` | ~2000 | ☐ |
-| B6 | Admin panel JS/CSS | `admin-panel/settings-common.js`, `admin-shell.js`, `styles.css`, `settings.css` | ~3400 | ☐ |
-| B7 | Admin panel HTML | `admin-panel/*.html` (~15 files) | ~5000 | ☐ |
-| B8 | Public site JS | `public_html/js/*.js` (skip `js/vendor/`) | ~4400 | ☐ |
-| B9 | Public site HTML + CSS | `public_html/*.html`, `public_html/css/*.css` | ~9700 | ☐ |
+| B5 | Pool content & incentives libs | `lib/posts.js`, `ads.js`, `lottery.js`, `incentives.js`, `back-end-pool/scripts/*.js` | ~2000 | ☑ |
+| B6 | Admin panel JS/CSS | `admin-panel/settings-common.js`, `admin-shell.js`, `styles.css`, `settings.css` | ~3400 | ☑ |
+| B7 | Admin panel HTML | `admin-panel/*.html` (~15 files) | ~5000 | ☑ |
+| B8 | Public site JS | `public_html/js/*.js` (skip `js/vendor/`) | ~4400 | ☑ |
+| B9 | Public site HTML + CSS | `public_html/*.html`, `public_html/css/*.css` | ~9700 | ☑ |
 
 ### Tier 3 — other web products
 
@@ -163,7 +163,13 @@ Append one line per finished batch:
 `B2 — 2026-08-21 — working tree — 8 edits, 0 unverified, 3 code bugs`
 `B3 — 2026-08-21 — working tree — 15 edits, 0 unverified, 2 code bugs`
 `B4 — 2026-08-21 — working tree — 15 edits, 0 unverified, 3 code bugs`
+`B5 — 2026-08-21 — working tree — 3 edits, 0 unverified, 1 code bug`
+`B6 — 2026-08-21 — working tree — 1 edit, 0 unverified, 0 code bugs`
+`B7 — 2026-08-21 — working tree — 9 edits (stray split-artifact TAB markers), 0 unverified, 0 code bugs`
+`B8 — 2026-08-21 — working tree — 10 edits, 0 unverified, 1 dead file (js/theme.js)`
+`B9 — 2026-08-21 — working tree — 2 edits, 0 unverified, 1 doc/UX conflict (luck definition)`
 `A7 — 2026-08-21 — see commit — 0 edits, 0 unverified, 0 code bugs (counts re-derived, all correct)`
 `A8 — 2026-08-21 — see commit — 1 edit, 0 unverified, 0 code bugs`
 `A9 — 2026-08-21 — see commit — 3 edits, 0 unverified, 0 code bugs`
 `A10 — 2026-08-21 — see commit — 3 edits, 0 unverified, 2 code bugs`
+`A11 — 2026-08-21 — see commit — 3 edits, 0 unverified, 0 code bugs`

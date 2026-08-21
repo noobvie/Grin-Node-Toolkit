@@ -12,7 +12,9 @@
 #   092  (reserved)                ⏳ mwixnet CoinSwap mixer node — NOT BUILT YET
 #   093  093_grin_transporter.sh   🔧 Store-and-forward slate relay (Phase 1 built 2026-07-11;
 #                                     Phase 2 gated on wallet relay-receive support)
-#   094+ (reserved)                   NIP-05 identity, notifications, …
+#   094+ FREE — not reserved. 092 is this band's ONE sanctioned reservation (see
+#        below); anything else gets its number the day its build starts. Ideas
+#        parked here so far: NIP-05 identity, notifications, …
 #
 #  ─── Two different signals in each menu row ────────────────────────────────
 #  READINESS marker (✅/🔧/⏳, hub 05's vocabulary) = maturity of the PRODUCT.

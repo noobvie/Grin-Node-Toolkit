@@ -25,7 +25,8 @@
 #
 #  ─── Network submenu (testnet/mainnet) ───────────────────────────────────────
 #   1) Setup wallet        (download binary + 5-step init flow)
-#   2) Wallet listening    (two tmux sessions: Foreign API + Owner API)
+#   2) Wallet listening    (ONE combined Owner+Foreign listener on 3420/13420 —
+#                           the standalone `listen` on 3415/13415 is retired)
 #   3) Install             (Node.js/npm + systemd service)
 #   4) Configure           (modes, claim amount, wallet API ports/secrets)
 #   5) Deploy web files    (web/059_drop/ → /opt/grin/<net>/public_html/)

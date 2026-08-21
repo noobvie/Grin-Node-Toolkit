@@ -582,8 +582,16 @@ _drop_init_wallet() {
     # Run directly — no pipe, full TTY for grin-wallet's seed/passphrase prompts.
     # Security trade-off: -p exposes the passphrase in the process argument list
     # (visible via `ps aux` / /proc/<pid>/cmdline) for the duration of this call.
-    # grin-wallet has no stdin or env-var passphrase input — -p is the only option.
-    # Exposure is brief (one-time during init) and limited to users with root/ps access.
+    # Exposure is brief (one-time during init) and limited to users with root/ps
+    # access.
+    # ⚠ "-p is the only option" is NOT true, despite what this comment used to
+    #   say: grin-wallet reads the passphrase on STDIN whenever stdin is not a
+    #   TTY (rpassword takes an explicit non-TTY branch), which is how Script
+    #   05's CMD wallet feeds it. There is no ENV-var input — that part was
+    #   right. Here stdin is deliberately left on the terminal so the RECOVER
+    #   path can prompt for the mnemonic itself (CLAUDE.md: never route a
+    #   recovery phrase through a toolkit script), so -p is a real constraint on
+    #   this call — but only on this one.
     # shellcheck disable=SC2086
     cd "$DROP_WALLET_DIR" && "$DROP_WALLET_BIN" \
         $DROP_NET_FLAG --top_level_dir "$DROP_WALLET_DIR" \
@@ -858,11 +866,16 @@ _drop_start_session() {
     local wallet_pass
     wallet_pass=$(_drop_read_saved_pass)
 
-    # Security trade-off: -p embeds the passphrase as a literal string in the tmux
-    # command and exposes it in `ps aux` / /proc/<pid>/cmdline for the full lifetime
-    # of the owner_api process. Same exposure as the retired `-p listen`; on a
-    # single box you own it is a non-issue. grin-wallet has no stdin/env passphrase
-    # input — -p is the only option.
+    # ⚠ -p embeds the passphrase as a literal string in the tmux command and
+    # exposes it in `ps aux` / /proc/<pid>/cmdline for the FULL LIFETIME of the
+    # owner_api process — a permanent leak to every local user, not the brief
+    # one-time exposure of the init call above.
+    # It is also avoidable, and "-p is the only option" (what this comment used
+    # to claim) is wrong: grin-wallet reads the passphrase on STDIN when stdin
+    # is not a TTY, so the launcher can redirect from a mode-600 file the way
+    # Script 05's CMD wallet does. Only the ENV-var half was right. Convert when
+    # this launcher is next touched — CLAUDE.md, "Passphrase input — use STDIN,
+    # not -p".
     local pass_arg=""
     [[ -n "$wallet_pass" ]] && pass_arg="-p '$wallet_pass'"
     local base_cmd="'$DROP_WALLET_BIN' $DROP_NET_FLAG --top_level_dir '$DROP_WALLET_DIR' $pass_arg"

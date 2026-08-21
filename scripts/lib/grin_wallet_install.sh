@@ -53,11 +53,17 @@
 #     `project_lib_errexit_suppression`.
 #
 # ── The pin ──────────────────────────────────────────────────────────────────
-# GWI_DEFAULT_TAG pins the version every product installs. It is a pin and not
-# `latest` because grin-wallet 5.4.1 pins rpassword 4.x, whose read_password()
-# reads STDIN; rpassword 7 reads /dev/tty instead, which would break every
-# listener this toolkit feeds a passphrase on stdin. Moving the pin is a
-# deliberate edit here, not something an upstream release does for us.
+# GWI_DEFAULT_TAG pins the version every product installs, so moving versions is
+# a deliberate edit here rather than something an upstream release does for us.
+# The pin's original reason was that grin-wallet 5.4.1 pins rpassword 4.x, whose
+# read_password() reads STDIN, and rpassword 7's read_password() reads the TTY —
+# a naive port would have broken every listener this toolkit feeds a passphrase
+# on stdin. That did NOT happen: v5.5.0 (2026-08-12) pins rpassword 7.5.4 but
+# branches on `stdin.is_terminal()`, so the non-TTY path still works. Treat the
+# hazard as defused, not pending — but keep smoke-testing
+# `printf 'x
+' | grin-wallet address` before swapping a pin, because that branch
+# is upstream's choice and not a guarantee.
 # A product may override with GWI_PIN_TAG (set it to "latest" to track head).
 #
 # Convention: sourced lib → NO shebang / NO `set -e`.

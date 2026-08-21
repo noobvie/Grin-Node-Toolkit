@@ -14,6 +14,7 @@
 #  ─── Sub-scripts ──────────────────────────────────────────────────────────
 #   051  051_grin_fidelius.sh             Fidelius — personal browser wallet UI
 #   051x 051x_grin_xp_wallet.sh           Grin XP — XP-themed variant, mainnet only
+#   052  052_grin_accio.sh                Accio — public self-custodial web wallet
 #   053  053_grin_woocommerce.sh          WooCommerce payment gateway
 #   059  059_grin_drop.sh                 Giveaway + donation portal
 #   05C  (built into this hub)            CMD wallet quick setup — CLI / testing
@@ -466,10 +467,10 @@ run_sub() {
 # input was piped so we bypass terminal hiding code" — falling back to
 # stdin.read_line(). So every grin-wallet call here supplies the passphrase by
 # redirecting stdin from a mode-600 file or a `printf` builtin pipe, and NOTHING
-# ever lands in argv. `-p` (the old behaviour, and what the other wallet libs
-# still do) exposes the passphrase in `ps aux` / /proc/<pid>/cmdline for the
-# whole life of the process — for a 24/7 listener that is a permanent leak to
-# every local user. grin-wallet has no env-var passphrase input, so stdin is the
+# ever lands in argv. `-p` (the old behaviour, still used by the solo-mining and
+# Drop wallet libs — the public pool boots locked and unlocks over ECDH instead)
+# exposes the passphrase in `ps aux` / /proc/<pid>/cmdline for the whole life of
+# the process — for a 24/7 listener that is a permanent leak to every local user. grin-wallet has no env-var passphrase input, so stdin is the
 # only argv-free channel; `--pass` is NOT the only option, despite the comments
 # elsewhere in this repo.
 #

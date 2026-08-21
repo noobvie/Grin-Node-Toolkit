@@ -19,8 +19,9 @@
 #     registry: /opt/grin/fidelius/wallets_info.json     wallet list
 #
 #  ─── Menu ────────────────────────────────────────────────────────────────────
-#   1) Install grin-wallet binary
-#   2) Install dependencies        (nodejs, nginx, certbot, htpasswd, tor, qrencode)
+#   1) grin-wallet binary          (install · update · roll back · pinned tag)
+#   2) Install dependencies        (nodejs, nginx, certbot, htpasswd, tor,
+#                                   qrencode, jq)
 #   3) Deploy files + systemd      (web/051_fidelius/ → /opt/grin/fidelius/app/)
 #   4) Configure nginx             (HTTP vhost — step 5 adds HTTPS)
 #   5) Setup SSL                   (Let's Encrypt or Cloudflare Origin Cert)
@@ -94,16 +95,18 @@ RESET='\033[0m'
 # GitHub API for grin-wallet releases.
 #
 # PINNED, and the pin is load-bearing. Every passphrase in this product reaches
-# grin-wallet over stdin, which works only because 5.4.x pins rpassword 4.x
-# (reads stdin, with an explicit non-TTY branch). rpassword 7 reads /dev/tty
-# instead — a release taking that bump breaks init, listen and owner_api at once,
-# so every wallet stops unlocking with no local change to blame. Following
-# `latest` let an upstream tag do that unattended.
+# grin-wallet over stdin, which works because 5.4.x pins rpassword 4.x (reads
+# stdin, with an explicit non-TTY branch). The feared failure was a release
+# taking rpassword 7, whose read_password() reads the TTY — that would break
+# init, listen and owner_api at once, with no local change to blame. Following
+# `latest` would have let an upstream tag do that unattended.
 #
-# v5.4.1 is ALSO the current latest, so this changes nothing today; it just stops
-# a future release landing without a human. Keep in sync with GRIN_WALLET_PIN in
-# web/051_fidelius/server.js. To move it: confirm grin-wallet's Cargo.toml still
-# has rpassword 4.x, bump both, test an unlock, commit.
+# That bump has since LANDED and did not break stdin: grin-wallet v5.5.0
+# (2026-08-12) pins rpassword 7.5.4 but branches on `stdin.is_terminal()`, taking
+# a non-TTY path that still reads the pipe. So v5.4.1 is no longer the latest and
+# the pin is now a deliberate "verify before moving", not a barricade. Keep it in
+# sync with GRIN_WALLET_PIN in web/051_fidelius/server.js. To move it: smoke-test
+# an unlock on the new binary (the shared store does this), bump both, commit.
 #
 # The release URLs that used to sit beside this pin are gone: fetching, checksum
 # verification and the upstream-moved check all live in lib/grin_wallet_install.sh

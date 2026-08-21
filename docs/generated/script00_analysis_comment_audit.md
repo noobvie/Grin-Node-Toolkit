@@ -78,7 +78,7 @@ Tick `Done` and add the commit hash when a session finishes. `~C` = comment line
 | A1 | Node build | `scripts/01_build_new_grin_node.sh`, `lib/01_lib_source_build.sh`, `lib/grin_node_control.sh`, `lib/grin_node_keepalive.sh` | 1473 | ☑ |
 | A2 | Chain data + file server | `scripts/03_grin_share_chain_data.sh`, `lib/03_lib_remote.sh`, `scripts/02_nginx_fileserver_manager.sh`, `lib/02_lib_landing.sh` | 1319 | ☑ |
 | A3 | Node API + health + explorers | `scripts/04_grin_node_foreign_api.sh`, `scripts/06_global_grin_health.sh`, `lib/06b_grinscan.sh`, `lib/06d_tiny_explorer.sh`, `lib/nginx_shared_helpers.sh` | 1038 | ☑ |
-| A4 | Solo mining | `scripts/07_grin_mining_solo.sh`, `lib/07_solo_wallet.sh`, `lib/07_solo_backup.sh`, `lib/07_solo_quiet.sh`, `scripts/07_grin_mining_hub_services.sh`, `lib/07_lib_hub.sh` | 1011 | ☐ |
+| A4 | Solo mining | `scripts/07_grin_mining_solo.sh`, `lib/07_solo_wallet.sh`, `lib/07_solo_backup.sh`, `lib/07_solo_quiet.sh`, `scripts/07_grin_mining_hub_services.sh`, `lib/07_lib_hub.sh` | 1011 | ☑ |
 | A5 | Public pool (shell) | `scripts/07_grin_mining_public_pool.sh`, `lib/07_lib_pool_wallet.sh`, `lib/07_lib_pool_backup.sh`, `lib/07_lib_gateway.sh`, `lib/07_lib_gwctl.sh` | 1102 | ☐ |
 | A6 | Wallet hub + Fidelius | `scripts/05_grin_wallet_service.sh`, `scripts/051_grin_fidelius.sh`, `scripts/051x_grin_xp_wallet.sh`, `lib/grin_wallet_install.sh`, `lib/grin_wg_access.sh` | 1346 | ☐ |
 | A7 | Accio build + vendor (shell) | `scripts/052_grin_accio.sh`, `lib/052_lib_build.sh`, `lib/052_lib_vendor.sh` | 1242 | ☐ |
@@ -156,3 +156,4 @@ Append one line per finished batch:
 `A1 — 2026-08-21 — 77cdbe1.. — 13 edits, 0 unverified, 0 code bugs`
 `A2 — 2026-08-21 — 02 + landing committed; the 03 / 03_lib_remote comment edits sit in the working tree with the operator's in-progress 03 redesign — 13 edits, 0 unverified, 0 code bugs`
 `A3 — 2026-08-21 — see commit — 16 edits, 0 unverified, 2 code bugs`
+`A4 — 2026-08-21 — see commit — 4 edits, 0 unverified, 0 code bugs`

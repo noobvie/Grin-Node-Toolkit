@@ -32,6 +32,13 @@
 # backend / no Node dependency. The passphrase is in the listener's argv
 # (`ps aux` / /proc/<pid>/cmdline) — same exposure as the prior `-p listen`.
 #
+# ⚠ That exposure is NOT unavoidable, and for a 24/7 listener it is permanent,
+# not brief: grin-wallet reads the passphrase on STDIN when stdin is not a TTY
+# (rpassword takes an explicit non-TTY branch), so `exec grin-wallet … owner_api
+# < "$pass_file"` keeps it out of argv entirely. Script 05's CMD wallet already
+# does this. Convert when this launcher is next touched — see CLAUDE.md
+# "Passphrase input — use STDIN, not -p".
+#
 # Convention: sourced lib → NO shebang / NO `set -e`.
 # =============================================================================
 

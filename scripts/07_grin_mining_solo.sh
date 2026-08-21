@@ -14,6 +14,7 @@
 # All-numeric keys; letters are reserved for destructive/admin actions.
 #
 #   Network-select screen
+#     A) Start here — node check       (is your node running & synced?)
 #     1) Configure solo private pool Mainnet ┐ enter the per-net branch below
 #     2) Configure solo private pool Testnet ┘
 #     3) Deploy stats web page          (both networks; public domain+SSL, or plain
@@ -3224,7 +3225,7 @@ main() {
         # must drop back to the menu, never hard-exit the script under `set -e`.
         # 1/2 enter a per-net branch: SOLO_NETWORK is set for its duration and
         # cleared on return, so the global Watchdogs menu (5) still prompts for
-        # which net to act on. 3-7 and C are cross-network and run at the top level.
+        # which net to act on. A, 3-8 and C are cross-network and run at the top level.
         case "${choice,,}" in
             "")  continue ;;                # Enter → refresh status
             a)   solo_node_precheck || true ;;
@@ -3242,7 +3243,8 @@ main() {
             *)   warn "Invalid option."; sleep 1 ;;
         esac
         # Branches/submenus run their own loops + pauses; one-shot actions pause
-        # via _solo_pause (3, C) or inline (status view 4).
+        # via _solo_pause (3, C) or inline (status view 4). A pauses inside
+        # solo_node_precheck itself.
     done
 }
 

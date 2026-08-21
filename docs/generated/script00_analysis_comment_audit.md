@@ -149,6 +149,33 @@ Paste this into a fresh chat, filling in the batch id and file list from the tab
 
 ---
 
+## Tier 1 complete — carry-forward for D1 / D2
+
+Tier 1 (A1–A11) finished 2026-08-21. Findings that are NOT comment fixes, parked
+for the batches that own them.
+
+### Code bugs found while auditing comments (comment correct, code wrong)
+| Where | Bug |
+|---|---|
+| `scripts/02_nginx_fileserver_manager.sh` (enhance-security step 2) | writes `limit_req_zone ... zone=grin_req` inline into `/etc/nginx/conf.d/grin_limit_req.conf` instead of calling `nginx_ensure_rate_limit_zone`. Violates CLAUDE.md nginx rule 1. |
+| `scripts/06_global_grin_health.sh` (two operator hints) | prints "Configure (B→2)" for the Rocket explorer; it has been menu **C** since GrinScan took B. |
+| `scripts/081_host_monitor_port.sh` (`max_age=5`) | flat 5-day staleness threshold for every site_key. Script 01 allows **70** for `fullmain` because the archive publishes biweekly, so a healthy full-archive mirror reads STALE on all but the first five days after a publish. |
+| Accio (`web/052_accio` + `scripts/089_backup_restore.sh`) | `/opt/grin/accio-<net>/gateway-state/` is in **no backup at all**. 052's own comments call it durable state whose loss changes the receiving address of every wallet that ever connected; 089 does not collect it and 052 ships no product backup. Only product in that position. |
+
+### Doc drift for D2 (fix the doc, not the code)
+- **CLAUDE.md** says the shared `grin_api` zone is `30r/m`. It is **`300r/m`** — `nginx_ensure_grin_api_zone` in `lib/nginx_shared_helpers.sh`, used by 04 and 06.
+- **CLAUDE.md** lists `lib/07_lib_pool_wallet.sh` under "Still on `-p`". The pool listener has **no passphrase in argv**: it boots locked and unlocks over ECDH. `-p` survives only in a one-shot `address` probe. The remaining `-p` users are `lib/07_solo_wallet.sh` and `lib/059_lib_wallet.sh`.
+- **CLAUDE.md / memory** framed rpassword 7 as a pending time bomb for stdin-fed passphrases. It landed and did **not** break: grin-wallet v5.5.0 pins rpassword 7.5.4 but branches on `stdin.is_terminal()`. Comments in `grin_wallet_install.sh` and `051` were corrected; the pin (`v5.4.1`) is unchanged.
+- `docs/generated/script051_design_node_port_2026-05-24.md` breaks the naming rule in this file's own conventions (should be `script051_design.md`; the date suffix is only for multiple versions).
+
+### Note on A2
+The 02 half of A2 is committed. The comment edits to `scripts/03_grin_share_chain_data.sh`
+and `scripts/lib/03_lib_remote.sh` were made but deliberately **left uncommitted**: both
+files carry the operator's in-progress Script-03 redesign, and staging them would have
+swept unfinished work into a `docs(comments)` commit. They ride along with that work.
+
+---
+
 ## Session log
 
 Append one line per finished batch:

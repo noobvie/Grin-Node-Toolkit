@@ -226,9 +226,11 @@ acg_install_gateway() {
     info "Copying $ACC_GATEWAY_SRC → $app_dir ..."
     mkdir -p "$app_dir" || { error "Could not create $app_dir"; pause; return 0; }
     cp "$ACC_GATEWAY_SRC"/*.js "$app_dir/" || { error "Copy failed."; pause; return 0; }
-    # `if`, never `[[ ... ]] && cmd`: the parent runs under `set -e`, and a
-    # false test makes the whole list return 1, which kills the script instead
-    # of skipping the copy (CLAUDE.md, menu-loop trap).
+    # `if`, never `[[ ... ]] && cmd`: a false test makes the whole list return 1.
+    # Harmless while this function is dispatched `acg_install_gateway || true`
+    # (errexit is off for its whole extent), but it would be the last command of
+    # a future caller's function and silently make IT return 1. Write the guard
+    # that is right regardless of the caller (CLAUDE.md, menu-loop trap).
     if [[ -f "$ACC_GATEWAY_SRC/package.json" ]]; then
         cp "$ACC_GATEWAY_SRC/package.json" "$app_dir/" || warn "package.json was not copied."
     fi

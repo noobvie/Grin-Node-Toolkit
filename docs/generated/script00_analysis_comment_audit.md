@@ -81,8 +81,8 @@ Tick `Done` and add the commit hash when a session finishes. `~C` = comment line
 | A4 | Solo mining | `scripts/07_grin_mining_solo.sh`, `lib/07_solo_wallet.sh`, `lib/07_solo_backup.sh`, `lib/07_solo_quiet.sh`, `scripts/07_grin_mining_hub_services.sh`, `lib/07_lib_hub.sh` | 1011 | ☑ |
 | A5 | Public pool (shell) | `scripts/07_grin_mining_public_pool.sh`, `lib/07_lib_pool_wallet.sh`, `lib/07_lib_pool_backup.sh`, `lib/07_lib_gateway.sh`, `lib/07_lib_gwctl.sh` | 1102 | ☑ |
 | A6 | Wallet hub + Fidelius | `scripts/05_grin_wallet_service.sh`, `scripts/051_grin_fidelius.sh`, `scripts/051x_grin_xp_wallet.sh`, `lib/grin_wallet_install.sh`, `lib/grin_wg_access.sh` | 1346 | ☑ |
-| A7 | Accio build + vendor (shell) | `scripts/052_grin_accio.sh`, `lib/052_lib_build.sh`, `lib/052_lib_vendor.sh` | 1242 | ☐ |
-| A8 | Accio gateway + nginx (shell) | `lib/052_lib_gateway.sh`, `lib/052_lib_nginx.sh` | 967 | ☐ |
+| A7 | Accio build + vendor (shell) | `scripts/052_grin_accio.sh`, `lib/052_lib_build.sh`, `lib/052_lib_vendor.sh` | 1242 | ☑ |
+| A8 | Accio gateway + nginx (shell) | `lib/052_lib_gateway.sh`, `lib/052_lib_nginx.sh` | 967 | ☑ |
 | A9 | Drop + WooCommerce | `scripts/059_grin_drop.sh`, `lib/059_lib_{wallet,backup,nginx,admin,app}.sh`, `scripts/053_grin_woocommerce.sh` | 629 | ☐ |
 | A10 | Admin band 08x + backup | `scripts/08_grin_node_admin.sh`, `081`, `082`, `084`, `085`, `089`, `08del`, `lib/grin_backup_engine.sh`, `lib/grin_backup_push.sh` | 1159 | ☐ |
 | A11 | Connectivity 09 + shared | `scripts/09_grin_comms_hub.sh`, `091`, `lib/091_lib_floonet.sh`, `093`, `lib/093_lib_{server,client,backup}.sh`, `lib/nostr_relay_deploy.sh`, `lib/grin_node_secrets.sh`, `lib/grin_alerts.sh`, `grin-node-toolkit.sh` | 1072 | ☐ |
@@ -91,10 +91,10 @@ Tick `Done` and add the commit hash when a session finishes. `~C` = comment line
 
 | # | Batch | Files | ~L | Done |
 |---|---|---|---|---|
-| B1 | Pool router monolith | `back-end-pool/index.js` | 6062 | ☐ |
-| B2 | Pool money & wallet libs | `lib/withdrawal-scheduler.js`, `wallet.js`, `wallet-tor.js`, `nostr-payout.js`, `rewards.js`, `reconciliation.js`, `dormancy.js`, `blocks.js` | ~3900 | ☐ |
-| B3 | Pool infra libs | `lib/db.js`, `pool-settings.js`, `config.js`, `auth.js`, `rate-limiter.js`, `ip-filter.js`, `owner-proof.js`, `retention.js`, `miners.js` | ~4900 | ☐ |
-| B4 | Pool stratum & stats libs | `lib/stratum-server.js`, `node-stratum-client.js`, `hashrate-tracker.js`, `grin-node.js`, `poolstats-reporter.js`, `alert-monitor.js`, `alert-delivery.js` | ~3300 | ☐ |
+| B1 | Pool router monolith | `back-end-pool/index.js` | 6062 | ☑ |
+| B2 | Pool money & wallet libs | `lib/withdrawal-scheduler.js`, `wallet.js`, `wallet-tor.js`, `nostr-payout.js`, `rewards.js`, `reconciliation.js`, `dormancy.js`, `blocks.js` | ~3900 | ☑ |
+| B3 | Pool infra libs | `lib/db.js`, `pool-settings.js`, `config.js`, `auth.js`, `rate-limiter.js`, `ip-filter.js`, `owner-proof.js`, `retention.js`, `miners.js` | ~4900 | ☑ |
+| B4 | Pool stratum & stats libs | `lib/stratum-server.js`, `node-stratum-client.js`, `hashrate-tracker.js`, `grin-node.js`, `poolstats-reporter.js`, `alert-monitor.js`, `alert-delivery.js` | ~3300 | ☑ |
 | B5 | Pool content & incentives libs | `lib/posts.js`, `ads.js`, `lottery.js`, `incentives.js`, `back-end-pool/scripts/*.js` | ~2000 | ☐ |
 | B6 | Admin panel JS/CSS | `admin-panel/settings-common.js`, `admin-shell.js`, `styles.css`, `settings.css` | ~3400 | ☐ |
 | B7 | Admin panel HTML | `admin-panel/*.html` (~15 files) | ~5000 | ☐ |
@@ -159,3 +159,9 @@ Append one line per finished batch:
 `A4 — 2026-08-21 — see commit — 4 edits, 0 unverified, 0 code bugs`
 `A5 — 2026-08-21 — see commit — 5 edits, 0 unverified, 0 code bugs`
 `A6 — 2026-08-21 — see commit — 6 edits, 0 unverified, 0 code bugs`
+`B1 — 2026-08-21 — working tree (operator has concurrent feature edits in index.js) — 27 edits, 0 unverified, 0 code bugs`
+`B2 — 2026-08-21 — working tree — 8 edits, 0 unverified, 3 code bugs`
+`B3 — 2026-08-21 — working tree — 15 edits, 0 unverified, 2 code bugs`
+`B4 — 2026-08-21 — working tree — 15 edits, 0 unverified, 3 code bugs`
+`A7 — 2026-08-21 — see commit — 0 edits, 0 unverified, 0 code bugs (counts re-derived, all correct)`
+`A8 — 2026-08-21 — see commit — 1 edit, 0 unverified, 0 code bugs`

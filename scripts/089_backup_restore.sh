@@ -346,10 +346,14 @@ run_backup() {
     fi
 
     # ── Step 5: Databases (ALL products) ─────────────────────────────────────
-    # One-stop recovery archive: capture EVERY product SQLite DB — global health
-    # (stats + price), GrinScan explorer (test+main), solo mining, and Grin Drop
-    # (the drop .db was already queued in Step 4). Included by default; the user
-    # hosts services on separate boxes, so duplication here is deliberate.
+    # One-stop recovery archive for the products that have NO backup of their
+    # own: global health (stats + price), GrinScan explorer (test+main), solo
+    # mining, and Grin Drop (the drop .db was already queued in Step 4).
+    # Included by default; the user hosts services on separate boxes, so
+    # duplication with a product's own backup is deliberate.
+    # NOT "every product DB": the public pool (pool.db) and the Transporter each
+    # ship their own encrypted archive through the same engine, and are covered
+    # there rather than here.
     # Each DB is captured via an online snapshot at archive time (sqlite3
     # ".backup", see Step 7) — consistent even while a 5-min collector writes.
     if [[ "$auto" == false ]]; then

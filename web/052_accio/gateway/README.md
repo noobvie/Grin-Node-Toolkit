@@ -1,4 +1,4 @@
-# `grin-accio-gateway` — our Node service (empty until S3)
+# `grin-accio-gateway` — our Node service
 
 One service, four jobs. It exists because a browser tab can neither open a listening socket
 nor answer a CORS preflight, so **both directions of a browser wallet need a server**.
@@ -18,8 +18,11 @@ Stock nginx, no modules, no apt-hold.
 **Ground rules for whoever writes this**
 
 - It never touches a key. The seed is in the tab; this service moves ciphertext and bytes.
-- Node + Express + SQLite, per the toolkit stack. **093 Transporter is the same shape** — a
-  store-and-forward slate queue — so reuse its lib patterns rather than inventing new ones.
+- Plain Node, **zero npm dependencies** — no Express, no SQLite. The design named the toolkit
+  stack and 093 Transporter's lib patterns; what survived of that is 093's two lessons (capacity
+  partitioned per writer, the wallet id normalised at the route), not its dependencies. SOCKS5,
+  the WebSocket framing and the state file are hand-written here — `socks5.js`, `ws.js` and
+  `store.js` each open with why.
 - Bind `127.0.0.1` only; nginx and Tor front it.
 - **The onion gets its own local port** (7580/7590, vs 7480/7490 for nginx). nginx and Tor
   both arrive on `127.0.0.1`, so peer address cannot distinguish them — and a Tor client

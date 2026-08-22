@@ -467,8 +467,8 @@ class ListenHub {
 	// ─── Inbound admission (S8) ──────────────────────────────────────────────
 	// max_inbound_in_flight used to be checked in deliver(), i.e. AFTER
 	// wallet_route had buffered the whole body. It therefore capped relays and
-	// not memory: N senders could each hold inbound_body_bytes (1 MB) in this
-	// process before anything counted them. These two make the budget cover the
+	// not memory: N senders could each hold inbound_body_bytes (1 MB at the time;
+	// R7 clamped it to 128 KB) in this process before anything counted them. These two make the budget cover the
 	// read as well, so the cap is a memory cap again.
 	beginRead() {
 		if (this.reading + this.inFlight >= this.cfg.max_inbound_in_flight) return false;

@@ -738,11 +738,11 @@
 	<?php /* ACCIO PATCH — the MWC glyph font is not preloaded.
 
 	     fonts/mwc/ holds the MimbleWimble Coin currency symbol, and the only
-	     thing that renders it is scripts/language.js line ~815, inside
-	     `case Consensus.MWC_WALLET_TYPE`. getWalletType() can no longer return
-	     that value, so the font is unreachable and this preload was two
-	     round trips on every single visit for a glyph nothing can produce.
-	     The Grin symbol comes from fonts/grin/, still preloaded below.
+	     thing that renders it is the `case Consensus.MWC_WALLET_TYPE` arm of
+	     the currency-symbol switch in scripts/language.js. getWalletType()
+	     can no longer return that value, so the font is unreachable and this
+	     preload was two round trips on every visit for a glyph nothing can
+	     produce. The Grin symbol comes from fonts/grin/, still preloaded below.
 
 	     Deleting the font FILES (and the .mwc rule in styles/common.css) is
 	     S9's third deletion pass; this only stops fetching them. */ ?>
@@ -751,14 +751,14 @@
 
 	     Added by the R8 review, which found the argument above had been
 	     applied to one of two identical cases. `class="epic"` is emitted at
-	     exactly one place, scripts/language.js ~827, inside
+	     exactly one place in scripts/language.js, inside
 	     `case Consensus.EPIC_WALLET_TYPE` — the third arm of the same switch
 	     whose MWC arm the note above retires, and just as unreachable now
 	     getWalletType() answers Grin unconditionally.
 
 	     The BTC and ETH fonts below STAY, and the difference is the switch
 	     they hang off: those two are `case Prices.BITCOIN_CURRENCY_NAME` /
-	     `ETHEREUM_CURRENCY_NAME` (language.js ~834-843), which is the fiat
+	     `ETHEREUM_CURRENCY_NAME`, the arms just below it, which is the fiat
 	     price display and has nothing to do with the wallet type. Both are
 	     live. */ ?>
 	<link rel="preload" as="font" href="<?= encodeString(getResource("./fonts/btc/btc.woff2")); ?>" onerror="processLoadingError(this, true);" type="font/woff2" fetchpriority="high" crossorigin="anonymous">

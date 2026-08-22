@@ -105,12 +105,12 @@ Tick `Done` and add the commit hash when a session finishes. `~C` = comment line
 
 | # | Batch | Files | ~L | Done |
 |---|---|---|---|---|
-| C1 | Accio gateway (ours, 0 deps) | `web/052_accio/gateway/**` | 5233 | ☐ |
-| C2 | Accio patches overlay — **special rules below** | `web/052_accio/patches/**` | 19268 | ☐ |
-| C3 | Fidelius + XP wallet | `web/051_fidelius/**`, `web/051_xp_wallet/**` | 9245 | ☐ |
-| C4 | Stats map + GrinScan + Tiny Explorer | `web/06_stats_map/**`, `web/06b_grinscan/**`, `web/06d_tiny_explorer/**` | 15554 | ☐ |
-| C5 | Drop + WooCommerce web | `web/059_drop/**`, `web/053_woocommerce/**` | 9386 | ☐ |
-| C6 | Transporter + node API + solo pool web | `web/093_transporter/**`, `web/04_node_api/**`, `web/07_mining_pool_solo/**` | 7104 | ☐ |
+| C1 | Accio gateway (ours, 0 deps) | `web/052_accio/gateway/**` | 5233 | ☑ |
+| C2 | Accio patches overlay — **special rules below** | `web/052_accio/patches/**` | 19268 | ☑ |
+| C3 | Fidelius + XP wallet | `web/051_fidelius/**`, `web/051_xp_wallet/**` | 9245 | ☑ |
+| C4 | Stats map + GrinScan + Tiny Explorer | `web/06_stats_map/**`, `web/06b_grinscan/**`, `web/06d_tiny_explorer/**` | 15554 | ☑ |
+| C5 | Drop + WooCommerce web | `web/059_drop/**`, `web/053_woocommerce/**` | 9386 | ☑ |
+| C6 | Transporter + node API + solo pool web | `web/093_transporter/**`, `web/04_node_api/**`, `web/07_mining_pool_solo/**` | 7104 | ☑ |
 
 ### Tier 4 — final sweep (run LAST, after every batch above)
 
@@ -176,6 +176,45 @@ swept unfinished work into a `docs(comments)` commit. They ride along with that 
 
 ---
 
+## Tier 3 complete — carry-forward for D1 / D2
+
+Tier 3 (C1–C6) finished 2026-08-21. Same rule as Tier 1: what is not a comment fix
+is parked for the batch that owns it.
+
+### Code bugs found while auditing comments (comment correct, code wrong)
+| Where | Bug |
+|---|---|
+| `web/059_drop/server/app.js` (`GET /api/nodes`) | Node reachability is decided by a bare `GET https://<node>/v2/foreign` and any 2xx/3xx/404/405 counts as **online**. `/v2/foreign` is POST-only JSON-RPC, so a parked domain, a CDN error page or an unrelated web server on that host all report the node as up. CLAUDE.md's rule is explicit: only a parsed, unwrapped `{"Ok":…}` proves a Grin node. The comment above the code describes the technique accurately — the technique is the bug. (GrinScan and Fidelius both do this correctly; Fidelius's own comment records the same fix being made there.) |
+| `web/059_drop/server/app.js` + `public_html/js/faucet.js` | `GRIN_ADDR_RE` accepts `prefix + 40` chars (min 45/46) and the client mirrors it, but the server's rejection message says "52+ chars" and a real slatepack address is 63/64. Cosmetic today — the wallet rejects a short address later — but the message and the check disagree. |
+
+### Doc drift for D2 (fix the doc, not the code)
+- **CLAUDE.md** and `patches/README.md` said "upstream's **22** stylesheets are NOT overlaid".
+  `vendor/upstream-wallet/public_html/styles/` holds **21** `.css` files plus a licence text
+  file, and upstream's `index.html` links exactly 21. `patches/README.md` is fixed; CLAUDE.md
+  still says 22.
+- `web/052_accio/patches/README.md` header still describes the overlay as if S5 had not run
+  ("empty until S5"); fixed here, but the same "(empty until …)" phrasing pattern was also on
+  `gateway/README.md` and may exist in other per-product READMEs not in this audit's scope.
+
+### Things verified rather than changed (so a later batch does not re-derive them)
+- **No unmarked patch remains in `patches/`.** Every diff hunk against `vendor/` in all 12
+  text-format patched files sits within reach of an `ACCIO PATCH` marker (checked
+  mechanically, `diff -U0` hunk ranges vs marker line numbers). The 19-file table in
+  `patches/README.md` matches the 19 files on disk exactly, and every ✅/❌ matches whether
+  that file actually carries a marker.
+- **The two brand maps are identical** — 12 pairs each in `backend/language.php` and
+  `scripts/language.js`, extracted and compared programmatically (this is the R8 check).
+- **`mqs.js`'s reduction note is exact**: 5 external symbols in 36 references across
+  api.js / slate.js / wallet.js / hardware_wallet.js / send_payment_section.js. Re-counted.
+- **`site.webmanifest`'s "twelve handlers"** — 4 mwc + 4 grin + 4 epic upstream, 8 removed. ✓
+- `resources.php`'s icon note says "8 touch-icon PNGs"; the list it empties holds 9 raster
+  entries (8 sized + `apple-touch-icon.png`). Its "33 PNGs" total is right only if that ninth
+  one is counted. Left alone under the C2 report-don't-edit rule.
+- **Accio gateway test suite passes** (`node --test` in `web/052_accio/gateway/`, 78/78) after
+  the comment edits; nothing there is deployed to a VPS (`test/` is not copied by the installer).
+
+---
+
 ## Session log
 
 Append one line per finished batch:
@@ -195,8 +234,15 @@ Append one line per finished batch:
 `B7 — 2026-08-21 — working tree — 9 edits (stray split-artifact TAB markers), 0 unverified, 0 code bugs`
 `B8 — 2026-08-21 — working tree — 10 edits, 0 unverified, 1 dead file (js/theme.js)`
 `B9 — 2026-08-21 — working tree — 2 edits, 0 unverified, 1 doc/UX conflict (luck definition)`
+`B1–B9 self-review — 2026-08-21 — working tree — re-verified all 12 asserted-fact comments against source (all held); found the tag sweep had keyed on <!-- --> only, so // comments inside <script> blocks were missed: +7 edits in admin-panel/payments.html, public_html/login.html, scripts/test-stratum-guards.js. Pool is now tag-free except the one documented `review finding #1` in dormancy.js.`
 `A7 — 2026-08-21 — see commit — 0 edits, 0 unverified, 0 code bugs (counts re-derived, all correct)`
 `A8 — 2026-08-21 — see commit — 1 edit, 0 unverified, 0 code bugs`
 `A9 — 2026-08-21 — see commit — 3 edits, 0 unverified, 0 code bugs`
 `A10 — 2026-08-21 — see commit — 3 edits, 0 unverified, 2 code bugs`
 `A11 — 2026-08-21 — see commit — 3 edits, 0 unverified, 0 code bugs`
+`C1 — 2026-08-21 — see commit — 6 edits, 0 unverified, 0 code bugs (suite re-run 78/78)`
+`C2 — 2026-08-21 — see commit — 4 edits (3 in patches/README.md, 3 stale line-number citations in index.html markers), 0 unverified, 0 code bugs; no unmarked patch found`
+`C3 — 2026-08-21 — see commit — 3 edits, 0 unverified, 0 code bugs`
+`C4 — 2026-08-21 — see commit — 0 edits, 0 unverified, 0 code bugs (claims re-derived: banner TTL, PUBLIC_NODES parity, peer-map dedup, slatepack wire format)`
+`C5 — 2026-08-21 — see commit — 1 edit, 0 unverified, 2 code bugs`
+`C6 — 2026-08-21 — see commit — 4 edits, 0 unverified, 0 code bugs`

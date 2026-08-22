@@ -674,16 +674,18 @@ app.get('/api/setup/binary-status', (_req, res) => {
 // PINNED, not "latest" — and the pin is load-bearing, not caution.
 //
 // Every passphrase in this product goes to grin-wallet over stdin, which works
-// only because 5.4.x pins rpassword 4.x (reads stdin, explicit non-TTY branch).
-// rpassword 7 reads /dev/tty instead. A release that takes that bump breaks
-// `init`, `listen` and `owner_api` at once — every wallet in the deployment
-// stops unlocking, with no local change to blame it on. Chasing `latest` meant
-// an upstream tag could do that unattended.
+// because 5.4.x pins rpassword 4.x (reads stdin, explicit non-TTY branch). The
+// feared failure was a release taking rpassword 7, whose read_password() reads
+// the TTY: that would break `init`, `listen` and `owner_api` at once — every
+// wallet in the deployment stops unlocking, with no local change to blame it on.
+// Chasing `latest` meant an upstream tag could do that unattended.
 //
-// v5.4.1 (2026-06-12) is also the current latest, so this changes nothing today;
-// it just stops a FUTURE release from landing without a human. To move the pin:
-// check that grin-wallet's Cargo.toml still has rpassword 4.x, bump this, test
-// an unlock, then commit.
+// That bump has since LANDED and did not break stdin: grin-wallet v5.5.0
+// (2026-08-12) pins rpassword 7.5.4 but branches on `stdin.is_terminal()` and
+// still reads the pipe. So v5.4.1 is no longer the latest, and the pin is now a
+// deliberate "verify before moving" rather than a barricade. Keep it in sync
+// with _WW_PIN_TAG in scripts/051_grin_fidelius.sh. To move it: smoke-test an
+// unlock on the new binary, bump both, then commit.
 const GRIN_WALLET_PIN = 'v5.4.1';
 
 app.post('/api/setup/install-binary', async (req, res) => {

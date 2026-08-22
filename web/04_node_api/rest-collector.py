@@ -6,11 +6,12 @@ Queries the Grin node foreign API (locally; Basic Auth injected automatically
 if .foreign_api_secret is present) and writes
 static JSON files that nginx serves as a lightweight REST API.
 
-Installed by script 04 (option 9 / 11) to:
-    /usr/local/lib/grin-node-toolkit/rest-collector.py
+Installed by script 04 (option 8, "Enable REST API") to:
+    /opt/grin/grin-api-collector/rest-collector.py
 
-Called every 60 s by a cron job running as www-data:
-    * * * * * www-data python3 <this file> <port> <rest_dir> [foreign_secret_path]
+Called every 60 s by a cron job running as the web user (www-data, or nginx on
+RPM systems — script 04 detects which):
+    * * * * * <web_user> python3 <this file> <port> <rest_dir> [foreign_secret_path]
 
 Output files (written atomically via tmp + rename):
     {rest_dir}/stats.json       — full snapshot: height, supply, difficulty, hash, versions

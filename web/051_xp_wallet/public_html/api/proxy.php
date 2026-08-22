@@ -2,7 +2,12 @@
 /**
  * Grin Wallet REST API Proxy — XP Edition
  *
- * Identical to 051 proxy.php except:
+ * The XP wallet's own Owner-API proxy, and the only one in the repo: 051
+ * Fidelius has no proxy.php to be "identical to" — it is the Node app in
+ * web/051_fidelius/ and calls the Owner API from its own process. The two
+ * products share a lineage and no code (see the header of
+ * scripts/051x_grin_xp_wallet.sh), so a fix here never lands there.
+ *
  *   - Config path: /opt/grin/webwallet/xp-mainnet/grin_web_wallet_api.json
  *   - Deployed under /wallet/api/ (called by the wallet iframe)
  */

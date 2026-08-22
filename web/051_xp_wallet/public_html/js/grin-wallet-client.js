@@ -1,8 +1,10 @@
 /**
  * Grin Wallet Client — XP Edition
  *
- * Identical to the standard wallet client except API paths use /wallet/api/
- * because this app is deployed as an iframe at /wallet/ under the XP shell.
+ * The XP wallet's own client. It shares a lineage with 051 Fidelius's
+ * client/app.js and no code — that one talks to the Fidelius Node server, this
+ * one to api/proxy.php. API paths are /wallet/api/ because this app is deployed
+ * as an iframe at /wallet/ under the XP shell.
  */
 
 class GrinWallet {

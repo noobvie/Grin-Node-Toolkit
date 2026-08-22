@@ -1,4 +1,4 @@
-# `patches/` — the build overlay (empty until S5)
+# `patches/` — the build overlay
 
 Every change we make to the vendored wallet lives here, **never inside `vendor/`**.
 
@@ -16,7 +16,7 @@ patches/public_html/scripts/node.js       replaces vendor/…/public_html/script
 ## Every deviation carries an `ACCIO PATCH` marker
 
 A patched file is a whole-file copy, so the change itself is invisible — the only way to see
-it is to diff 13 k lines against `vendor/`, and that is not a review anyone repeats. So **every
+it is to diff 19 k lines against `vendor/`, and that is not a review anyone repeats. So **every
 place a patched file departs from upstream is marked with the literal string `ACCIO PATCH`,
 followed by what it does and why.** `grep -rn 'ACCIO PATCH' patches/` is the index of this
 overlay, and `script052_implementation.md` §"Review plan" tells reviewers to work from that
@@ -84,7 +84,7 @@ each of these shifts an SRI hash that `_acb_apply_patches` recomputes.
 
 "Orbital Dawn" is `styles/accio.css` plus three one-line hooks: the `<link>` in `index.html`,
 the same `<link>` in `errors/template.php`, and the `$files` entry in `backend/resources.php`.
-Upstream's 22 stylesheets are **not** overlaid. The sheet repeats upstream selectors verbatim
+Upstream's 21 stylesheets are **not** overlaid. The sheet repeats upstream selectors verbatim
 and wins on source order, so upstream CSS keeps flowing through the pin untouched and
 `git log <PINNED_SHA>..upstream/master` stays readable.
 

@@ -114,11 +114,12 @@ REST_COLLECTOR_DEST="/opt/grin/grin-api-collector/rest-collector.py"
 REST_CRON_MAINNET="/etc/cron.d/grin-node-api-rest"
 REST_CRON_TESTNET="/etc/cron.d/grin-node-api-rest-testnet"
 
-# node-collector.py runs as the grin OS user to access privileged data:
+# node-collector.py runs as ROOT (see the cron written below) to access privileged data:
 #   · owner API (.api_secret) for connected peer count
 #   · du on chain_data/ for chain size
 #   · grin-server.toml for archive_mode
-# Writes node.json to the REST dir (grin user has group-write via www-data group).
+# Writes node.json to the REST dir, chmod 0644 in the collector so nginx can serve it.
+# It does NOT run as the grin user: the data-dir owner is detected for display only.
 NODE_COLLECTOR_SRC="$(cd "$SCRIPT_DIR/.." && pwd)/web/04_node_api/node-collector.py"
 NODE_COLLECTOR_DEST="/opt/grin/grin-api-collector/node-collector.py"
 NODE_CRON_MAINNET="/etc/cron.d/grin-node-api-node"
@@ -1866,10 +1867,12 @@ _enable_rest_api() {
     chmod 755 "$REST_COLLECTOR_DEST"
     info "Collector installed: $REST_COLLECTOR_DEST"
 
-    # 2. Detect the OS user who owns the grin data directory for the node-collector cron.
+    # 2. Detect the OS user who owns the grin data directory. DISPLAY ONLY — it is
+    #    reported to the operator and never applied: the node-collector cron below runs
+    #    as root, and nothing here chowns to this user.
     local grin_user
     grin_user=$(stat -c '%U' "$grin_data_dir" 2>/dev/null || echo "grin")
-    info "Grin data dir owner (node-collector will run as): $grin_user"
+    info "Grin data dir owner (informational; the collector cron runs as root): $grin_user"
 
     # Detect the nginx web user (www-data on Debian/Ubuntu, nginx on RHEL/Rocky/Alma
     # or the nginx.org repo). The REST dir, secret group, and collector cron all use
@@ -1880,8 +1883,9 @@ _enable_rest_api() {
     web_owner=$(nginx_web_owner)
     info "Nginx web user (REST collector will run as): $web_user"
 
-    # 3. Create the REST directory — the web user owns it (nginx reads), grin_user gets
-    #    group-write via the web-user group so node-collector can write node.json.
+    # 3. Create the REST directory — the web user owns it (nginx reads) and 775 leaves
+    #    group-write for the web-user group, which is what the rest-collector cron (running
+    #    as the web user) needs. The node-collector writes here as root regardless.
     mkdir -p "$rest_dir"
     chown "$web_owner" "$rest_dir"
     chmod 775 "$rest_dir"

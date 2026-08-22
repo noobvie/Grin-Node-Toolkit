@@ -224,9 +224,11 @@ grin-node-toolkit/
 ```
 
 > A planned product gets its number when its build **starts**, not when the idea is written
-> down — so there are no placeholder scripts. Two numbers are deliberately **reserved**:
-> `052` for Accio (freeing it is what the Grin Drop `052 → 059` move bought) and `092` for the
-> mwixnet CoinSwap mixer. `054–058` and `094+` are unallocated.
+> down — so there are no placeholder scripts. **`092`** (mwixnet CoinSwap mixer) is the one
+> number deliberately **reserved** for an unbuilt product. `052` is no longer a reservation:
+> Accio claimed it when its build started on 2026-08-09 — which is exactly what the Grin Drop
+> `052 → 059` move had freed it for, and the numbering rule working as designed.
+> `054–058` and `094+` are unallocated.
 
 **Runtime config created on first run** (stored outside the toolkit, under `/opt/grin/conf/`):
 
@@ -304,9 +306,11 @@ grin-node-toolkit/
 | Port  | Protocol | Purpose                                                     |
 |-------|----------|-------------------------------------------------------------|
 | 3333  | TCP      | Public pool stratum — miners connect here *(public)*        |
-| 3334  | TCP      | Public pool node built-in stratum upstream — mainnet (localhost) |
-| 13334 | TCP      | Public pool node built-in stratum upstream — testnet (localhost) |
-| 8080  | HTTP     | Public pool central API (localhost, nginx-proxied)          |
+| 13333 | TCP      | Public pool stratum — testnet install *(public)*            |
+| 3416  | TCP      | Public pool node built-in stratum upstream — mainnet (localhost) |
+| 13416 | TCP      | Public pool node built-in stratum upstream — testnet (localhost) |
+| 8080  | HTTP     | Public pool central API — mainnet (localhost, nginx-proxied) |
+| 8090  | HTTP     | Public pool central API — testnet (localhost, nginx-proxied) |
 | 51820 | UDP      | Public pool WireGuard — hub ↔ gateway federation            |
 | 51821 | UDP      | Public pool WireGuard — secondary tunnel                    |
 

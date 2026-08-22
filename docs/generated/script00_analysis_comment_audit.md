@@ -116,8 +116,8 @@ Tick `Done` and add the commit hash when a session finishes. `~C` = comment line
 
 | # | Batch | What | Done |
 |---|---|---|---|
-| D1 | Cross-file duplication | Find explanations repeated across files (node launch contract, hashrate formula, secret paths, menu-key rules) and collapse to one authoritative site + pointers | ☐ |
-| D2 | Doc ↔ code drift | Check `CLAUDE.md`, `README.md` and `docs/generated/script##_*.md` claims against what the audited comments now say; fix the docs, not the code | ☐ |
+| D1 | Cross-file duplication | Find explanations repeated across files (node launch contract, hashrate formula, secret paths, menu-key rules) and collapse to one authoritative site + pointers | ☑ |
+| D2 | Doc ↔ code drift | Check `CLAUDE.md`, `README.md` and `docs/generated/script##_*.md` claims against what the audited comments now say; fix the docs, not the code | ☑ |
 
 **C2 special rules:** `patches/` holds de-branded copies of pinned upstream files. Treat every
 comment there as read-only *unless* it is an `ACCIO PATCH` marker whose description no longer
@@ -166,7 +166,7 @@ for the batches that own them.
 - **CLAUDE.md** says the shared `grin_api` zone is `30r/m`. It is **`300r/m`** — `nginx_ensure_grin_api_zone` in `lib/nginx_shared_helpers.sh`, used by 04 and 06.
 - **CLAUDE.md** lists `lib/07_lib_pool_wallet.sh` under "Still on `-p`". The pool listener has **no passphrase in argv**: it boots locked and unlocks over ECDH. `-p` survives only in a one-shot `address` probe. The remaining `-p` users are `lib/07_solo_wallet.sh` and `lib/059_lib_wallet.sh`.
 - **CLAUDE.md / memory** framed rpassword 7 as a pending time bomb for stdin-fed passphrases. It landed and did **not** break: grin-wallet v5.5.0 pins rpassword 7.5.4 but branches on `stdin.is_terminal()`. Comments in `grin_wallet_install.sh` and `051` were corrected; the pin (`v5.4.1`) is unchanged.
-- `docs/generated/script051_design_node_port_2026-05-24.md` breaks the naming rule in this file's own conventions (should be `script051_design.md`; the date suffix is only for multiple versions).
+- ~~`docs/generated/script051_design_node_port_2026-05-24.md` breaks the naming rule in this file's own conventions (should be `script051_design.md`; the date suffix is only for multiple versions).~~ **Fixed in D2** — `git mv`d to `script051_design.md`; the one pointer to it (`scripts/051_grin_fidelius.sh:10`) was updated.
 
 ### Note on A2
 The 02 half of A2 is committed. The comment edits to `scripts/03_grin_share_chain_data.sh`
@@ -192,6 +192,12 @@ is parked for the batch that owns it.
   `vendor/upstream-wallet/public_html/styles/` holds **21** `.css` files plus a licence text
   file, and upstream's `index.html` links exactly 21. `patches/README.md` is fixed; CLAUDE.md
   still says 22.
+- **`scripts/04_grin_node_foreign_api.sh:1872`** prints `info "Grin data dir owner
+  (node-collector will run as): $grin_user"`, but the cron it then writes runs the
+  node-collector **as root** (`* * * * * root python3 …`) — `$grin_user` is only ever a
+  displayed value. Found during the C1–C6 self-review while verifying the collector
+  docstrings; it is a user-visible string in a shell script, so it belongs to the A batches
+  and was left for D2 rather than edited here.
 - `web/052_accio/patches/README.md` header still describes the overlay as if S5 had not run
   ("empty until S5"); fixed here, but the same "(empty until …)" phrasing pattern was also on
   `gateway/README.md` and may exist in other per-product READMEs not in this audit's scope.
@@ -212,6 +218,128 @@ is parked for the batch that owns it.
   one is counted. Left alone under the C2 report-don't-edit rule.
 - **Accio gateway test suite passes** (`node --test` in `web/052_accio/gateway/`, 78/78) after
   the comment edits; nothing there is deployed to a VPS (`test/` is not copied by the installer).
+
+---
+
+## Tier 4 — D1 / D2 (final sweep)
+
+Run 2026-08-22, after every A/B/C batch. D1 first, then D2.
+
+### D1 — cross-file duplication: **nothing to collapse**
+
+This was checked mechanically, not by eye, over the **270 owned files** (`scripts/**` +
+`web/**`, minus `web/052_accio/vendor/`, `web/052_accio/patches/` and `js/vendor/`):
+
+1. **Every comment line ≥45 chars, normalised, counted by distinct file.** 19,665 distinct
+   comment lines; **41** appear in 3+ files.
+2. **Every run of 3 consecutive comment lines**, same normalisation. Across all 270 files
+   exactly **one** such block repeats in 3+ files — and it is a `source` annotation plus a
+   `shellcheck source=` directive in `02` / `04` / `06`, i.e. the pointer pattern D1 wants.
+
+All 41 single-line hits are one of five benign classes, none of them a repeated *explanation*:
+section dividers (`─── Logging ───`, 17 files), per-script boilerplate headers, `shellcheck
+source=` directives, **comments inside heredocs** (these are generated-file *content* written
+onto the VPS — editing them is a logic change, not a comment fix), and 1–2 line
+"what this `source` line is for" notes.
+
+The four clusters D1 named were then read in full rather than grepped, and each is already
+one authoritative site plus per-site pointers:
+
+| Cluster | Authoritative site | Verdict |
+|---|---|---|
+| Node launch contract | `lib/grin_node_control.sh` header (two-tmux-server rationale) | Call sites in `01`, `03`, `04`, `07` describe only their *local* step and two of them name the launch contract explicitly. No copy of the rationale. |
+| Hashrate formula | `.claude/CLAUDE.md` + `lib/06_collector.py:483` docstring | The other sites are one-liners that already say "see CLAUDE.md" / "matches 06_collector.py". The three blocks in `06_collector.py` compute, invert, and window it — different jobs, not copies. `06b_grinscan/server.js` restates the constants inline; left alone deliberately, because the arithmetic is on the next line and a pointer-only comment would send the reader out of the file to check what they are looking at. |
+| Secret paths | `lib/grin_node_secrets.sh` | The repeats are 2-line annotations above the `source` line / above `grin_install_secret_sync`. Checked for **contradiction** rather than repetition: node `.api_secret`=Owner, `.foreign_api_secret`=Foreign, wallet `.owner_api_secret`/`.foreign_api_secret` — consistent everywhere. |
+| Menu-key rules | `05_grin_wallet_service.sh` header (fixed slots), `08_grin_node_admin.sh:17` (key = last digit), `09_grin_comms_hub.sh:38` (positional) | One rule stated once per hub, each naming the others' rule to say it is *not* using it. Renumber history (Drop `052→059`, Transporter `092→093`) is told in full once each, in the owning hub header; the other sites are one-line legacy-tag notes at the code that handles the old tag. |
+
+Two further cross-file checks for **contradiction between copies** (the actual risk of
+duplication, which a "collapse" pass would not catch) also came back clean: the `3415`
+retirement (Drop/solo say retired, hub 05 correctly still documents `listen`-mode binding it —
+a different mode, not a contradiction), and the `/v1/` warning (stated once, in
+`web/051_fidelius/server.js`, where the bug happened; the two `/api/v1/` hits in the floonet
+libs are the *relay's* own API and unrelated).
+
+**One thing D1 did surface** is not duplication but the opposite — the errexit fact is stated
+at two fidelity levels: the full "the caller's `set -e` does NOT reach in here, guard your own
+commands" version in 6 libs, and a bare `Convention: sourced lib → NO shebang / NO set -e.` in
+10 others. Nothing is *wrong* (no lib claims the caller's `set -e` covers it — that was the
+drift the A batches fixed), and each long copy adds something local, so nothing was edited.
+Recorded here so a later reader does not re-derive it.
+
+### D2 — doc ↔ code drift: 19 fixes
+
+Every carried-forward item from Tier 1 and Tier 3 was re-verified against the code before
+editing, and the sweep found more.
+
+**The big one — the pool's node stratum upstream port is `3416`, not `3334`.** This was wrong
+in **all three** doc surfaces simultaneously (`CLAUDE.md`, `README.md`, `script07_design.md`,
+`script07_implementation.md`, `script09_design.md` — 11 sites). The code is unambiguous and
+self-consistent at three independent sites: `pool_ensure_defaults` in
+`07_grin_mining_public_pool.sh` (`d_node_strat=3416/13416`), `node_stratum_port` in
+`back-end-pool/lib/config.js`, and `grin_sync_pool_stratum` in `lib/grin_node_secrets.sh`,
+which re-patches `stratum_server_addr` to that port after a node rebuild. All three carry the
+same reason: Script 01 deliberately does not touch `stratum_server_addr`, so the pool must dial
+grin's own default. `3334` was a 2026-06 plan that was never implemented —
+`script07_implementation.md` even ticked it off as "bash + backend in sync". The docs now say
+`3416`, and each fixed site records that `3334` was planned and dropped, so this does not get
+"corrected" back.
+
+| # | Doc | Claim | Now |
+|---|---|---|---|
+| 1 | CLAUDE.md | node stratum upstream `127.0.0.1:3334` / `13334` | `3416` / `13416`, + the three code sites that must stay agreed |
+| 2 | CLAUDE.md | Central API `8080` | `8080`, testnet `8090` |
+| 3 | CLAUDE.md | upstream's **22** stylesheets | **21** (21 `.css` + 1 licence text = 22 dir entries — the miscount's origin) |
+| 4 | CLAUDE.md | `grin_api` zone `30r/m` | **`300r/m`** (`nginx_ensure_grin_api_zone`) |
+| 5 | CLAUDE.md | `nginx_ensure_rate_limit_zone <zone> <rate> [size] [conf]` | + the undocumented 5th `force` arg, which is how a rate edit in the lib actually reaches an installed box — and which `nginx_ensure_grin_api_zone` passes |
+| 6 | CLAUDE.md | "Still on `-p`" includes `lib/07_lib_pool_wallet.sh` | Removed: the pool listener starts `owner_api` with **no passphrase in argv** (`07_lib_pool_wallet.sh:262/264`) and unlocks over ECDH. `-p` survives there only in `init` and a one-shot `address` probe — bounded, not a 24/7 leak. `07_solo_wallet.sh:156` and `059_lib_wallet.sh` are the real ones. |
+| 7 | CLAUDE.md | rpassword 7 framed as a pending risk | Records that it landed and did **not** break stdin (v5.5.0 pins 7.5.4, branches on `is_terminal()`); pin unchanged at v5.4.1 |
+| 8 | README.md | "Two numbers are deliberately **reserved**: `052` … and `092`" | `092` only. 052 stopped being a reservation when Accio's build started — and README line 171 already said it was built, so the file contradicted itself |
+| 9 | README.md | pool port table: `3334`/`13334`; no testnet rows | `3416`/`13416`, + the missing `13333` public stratum and `8090` central API rows |
+| 10 | script07_design.md | 3334 × 4, testnet public stratum `3333`, testnet Central API `8080` | `3416`/`13416`, `13333`, `8090`; the "migrated to 3333/3334/8080" note now records that the upstream was never moved |
+| 11 | script07_implementation.md | 3334 × 5, incl. the "✅ ports reconciled … bash + backend in sync" row and an ASCII diagram | all `3416`/`13416`; testnet paragraph gained `8090` + `13333` |
+| 12 | script09_design.md | taken-ports list included `3334` | `3416` |
+| 13 | script05_implementation.md | `052` = "**RESERVED, unbuilt** — the only reservation" (×3 incl. the Phase-4 resolution note) | built 2026-08-09/10 (never VPS-run); the 05 band now holds no reservation, `092` is the toolkit's only one |
+| 14 | `script051_design_node_port_2026-05-24.md` | filename breaks this file's own naming rule | `git mv` → `script051_design.md`; pointer in `051_grin_fidelius.sh:10` updated |
+
+**Three code edits**, both carried forward to D2 by earlier batches (a user-visible string and
+two comments in a shell script — no logic changed, `bash -n` clean):
+
+| Where | Was | Now |
+|---|---|---|
+| `04_grin_node_foreign_api.sh:117` | header: "node-collector.py runs as the grin OS user" | runs as **root** (that is what the cron it writes says) |
+| `04_grin_node_foreign_api.sh:1872` | `info "Grin data dir owner (node-collector will run as): $grin_user"` | "(informational; the collector cron runs as root)" — `grin_user` is **display-only**: grepped all 5 uses, it is never passed to a chown, chmod or cron user field |
+| `04_grin_node_foreign_api.sh:1883` | "grin_user gets group-write via the web-user group so node-collector can write node.json" | describes what 775 + web-user ownership actually does; the node-collector writes as root regardless |
+
+### Verified, not changed (so a later reader does not re-derive)
+- **Hub 08's key mapping holds exactly** as CLAUDE.md describes it: `1`→081, `2`→082,
+  `4`→084, `5`→085, `9`→089, gaps `3`/`6`/`7`/`8` filled by inline features, and `10`
+  surviving as the documented silent alias for Backup.
+- Accio counts all re-derived and correct: **19** patched files (20 in `patches/` minus its
+  README), **9** gateway modules, `"dependencies": {}`, **4** `052_lib_*.sh` libs, 2 vendored
+  upstreams.
+- Node/wallet port table, reboot autostart delays (mainnet 5 s / testnet 1000 s), the 5-min
+  `grin-secret-sync` timer, and the `Result` unwrapping rule all match the code.
+- `flowcharts/` still appears in two `script07_*.md` headings, but as **provenance**
+  ("merged from flowcharts/… 2026-07-09"), not as a live path. Correct as history; left.
+
+### Open findings from D2 (reported, not fixed)
+1. **CLAUDE.md's generated-doc naming rule does not match `docs/generated/` itself.** The rule
+   allows `design`/`implementation`/`security_audit`/`analysis`/`reference`/`report`; the
+   directory also uses `flow_chart` (×4), `planning` (×3), `realization` (×2), `gotchas`,
+   `ipv6_extension`, `to_be_done`, and one `script01-03_` multi-script prefix — 12 files. Only
+   the one file already carried forward was renamed: the rest are cross-referenced from code
+   comments, and a mass rename is a scope decision for the operator, not a comment audit. Either
+   widen the rule's type list or plan one rename pass.
+2. **Tier 2 (B1–9) never got a carry-forward section.** Tier 1 and Tier 3 each parked their
+   code bugs here; the B batches recorded counts in the session log only (**9 code bugs +
+   1 dead file + 1 doc/UX conflict** across B2–B9, per those lines) but not what they were.
+   Those findings are not recoverable from this file and are not in D1/D2's scope to
+   re-derive. If they matter, the pool web app needs a bug-only re-read.
+3. Everything still open from the Tier 1 and Tier 3 tables above (the `02` inline
+   `limit_req_zone`, `06`'s `B→2` hint, `081`'s flat `max_age=5`, Accio's unbacked-up
+   `gateway-state/`, Drop's `GET /v2/foreign` reachability probe and its `GRIN_ADDR_RE`
+   message) is a **code** bug and was deliberately left for the operator — D1/D2 change docs
+   and comments only.
 
 ---
 
@@ -241,8 +369,11 @@ Append one line per finished batch:
 `A10 — 2026-08-21 — see commit — 3 edits, 0 unverified, 2 code bugs`
 `A11 — 2026-08-21 — see commit — 3 edits, 0 unverified, 0 code bugs`
 `C1 — 2026-08-21 — see commit — 6 edits, 0 unverified, 0 code bugs (suite re-run 78/78)`
-`C2 — 2026-08-21 — see commit — 4 edits (3 in patches/README.md, 3 stale line-number citations in index.html markers), 0 unverified, 0 code bugs; no unmarked patch found`
+`C2 — 2026-08-21 — see commit — 6 edits (3 in patches/README.md, 3 stale line-number citations in index.html markers), 0 unverified, 0 code bugs; no unmarked patch found`
 `C3 — 2026-08-21 — see commit — 3 edits, 0 unverified, 0 code bugs`
 `C4 — 2026-08-21 — see commit — 0 edits, 0 unverified, 0 code bugs (claims re-derived: banner TTL, PUBLIC_NODES parity, peer-map dedup, slatepack wire format)`
 `C5 — 2026-08-21 — see commit — 1 edit, 0 unverified, 2 code bugs`
 `C6 — 2026-08-21 — see commit — 4 edits, 0 unverified, 0 code bugs`
+`C1–C6 self-review — 2026-08-22 — working tree — re-read every edit made in Tier 3. Four defects in my OWN edits, all fixed: two comment blocks left an over-long line where the reflow broke the ~80-col wrap (listen_route.js, server.js); the R7 parenthetical said "clamped it to 128 KB" when R7 dropped the DEFAULT to 128 KB and separately added a load-time clamp to inbound_max_forwardable (~192 KB at the default frame size) — reworded in listen_route.js and tor_route.js; socks5.js claimed ws.js is "hand-written for the one frame type this rail sends", but ws.js implements masking, all three length encodings, continuation frames, control frames and the close handshake, and the server itself sends pings — now points at ws.js's own header instead. Suite re-run 78/78. Every other Tier 3 claim re-verified against source and held (option 8, /opt/grin/grin-api-collector/, the 051x header pointer, Drop's wallet_foreign_api_port, 21 stylesheets, 19 k patched lines).`
+`D1 — 2026-08-22 — see commit — 0 edits (nothing to collapse; 270 files scanned mechanically, 4 named clusters read in full), 0 unverified, 0 code bugs`
+`D2 — 2026-08-22 — see commit — 19 edits across 7 docs + 1 shell file (11 of them one wrong port), 0 unverified, 3 open findings`

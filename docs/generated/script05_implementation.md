@@ -25,14 +25,16 @@ Companion docs: `script052_design.md` + `script052_implementation.md` (Accio —
 | `05C` | CMD Wallet Quick Setup | Wallets | built — hub-built, **no script file** |
 | `051` | **Fidelius** — personal web wallet | Wallets | building |
 | `051x` | **Grin XP** — Fidelius in a WinXP shell | Wallets | building — variant, not a separate number |
-| `052` | **Accio** — public web wallet | Wallets | **RESERVED, unbuilt** — the only reservation |
+| `052` | **Accio** — public web wallet | Wallets | built 2026-08-09/10 (never VPS-run). Was the one reservation; claimed when its build started, so the band now holds none |
 | `053` | WooCommerce Gateway | Payments | building |
 | `054`–`058` | — | — | **FREE.** No product may claim one before its build starts |
 | `059` | **Grin Drop** — giveaway + donation portal | Giveaways | built (moved from `052`) |
 
 **An unbuilt product has no number.** Payment Pro and GoblinPay are *expected* to land at
 `054`/`055` as they are built, but neither is assigned — their design content lives under the
-hub's number (`script05_*.md`), never under a reserved one.
+hub's number (`script05_*.md`), never under a reserved one. Accio is the worked example: it
+held `052` as a reservation until its build began on 2026-08-09, which is when the number became
+an assignment and `script052_design.md` became a legitimate filename.
 
 **`052` is the single exception**, and it needs a reason to survive that rule: freeing a wallet
 slot next to `051` is the *only* thing the Drop migration bought. Letting anything else take it
@@ -369,7 +371,8 @@ One conflict surfaced and was **resolved rather than copied**: the decision tabl
 `054 Payment Pro` / `055 GoblinPay`, but the rule six lines below said an unbuilt product has no
 number. The header now records `054–058 FREE`, names both as *expected* at 054/055 without
 assigning them, and states that `052` is the only reservation — with the reason it survives the
-rule.
+rule. *(Superseded 2026-08-09: Accio's build started, so `052` is an assignment and the 05 band
+carries no reservation at all. The one live reservation in the toolkit is `092` in the 09 band.)*
 
 ### Phase 5 — Fidelius filename
 

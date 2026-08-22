@@ -22,7 +22,7 @@ federation, database, API, reward pipeline, payments, white-label, and UI/UX.
 > This file absorbs the former `script07_multi_region_design.md` and the imported
 > `script07_public_pool/` GRINIUM doc set (deleted 2026-06-08). Where those described the
 > standalone **Grinium** repo (`web/back-end-pool/`, ports `3002/3416`), this doc uses the
-> **toolkit** layout (`web/07_mining_pool_public/`, ports `3333/3334/8080`).
+> **toolkit** layout (`web/07_mining_pool_public/`, ports `3333/3416/8080`).
 
 ---
 
@@ -179,7 +179,8 @@ Miners ──stratum──▶ Stratum Proxy ──stratum (client)──▶ node
 ```
 
 The proxy binds the **public** stratum port (`3333`); the node's built-in stratum binds **localhost
-only** (`3334` / testnet `13334`). It sees every `login`/`submit` as structured JSON → reliable
+only** (`3416` / testnet `13416` — grin's own `stratum_server_addr` default, which the
+toolkit never moves). It sees every `login`/`submit` as structured JSON → reliable
 `address.worker` identity + difficulty + nonce + timestamp, per-miner **vardiff**, dedup by
 `(nonce, height)`, rate-limits, and abuse bans. Log-tailing was **rejected** (brittle format, one
 global difficulty, no guaranteed per-share identity).
@@ -490,17 +491,23 @@ interpolation sink; worker-name regex enforced at the stratum layer.
 
 | Service | Mainnet | Testnet | Access |
 |---|---|---|---|
-| Public stratum (miners) | 3333 | 3333 | Public |
-| Node built-in stratum (proxy upstream) | 127.0.0.1:3334 | 127.0.0.1:13334 | localhost only |
-| Central API / Pool HTTP API | 8080 | 8080 | Public web; ingestion satellites-only (allowlist+secret) |
+| Public stratum (miners) | 3333 | 13333 | Public |
+| Node built-in stratum (proxy upstream) | 127.0.0.1:3416 | 127.0.0.1:13416 | localhost only |
+| Central API / Pool HTTP API | 8080 | 8090 | Public web; ingestion satellites-only (allowlist+secret) |
 | Web dashboard | 443 | 443 | Public |
 | Node API (Owner/Foreign) | 3413 | 13413 | localhost |
 | Wallet Foreign / Owner | 3415 / 3420 | 13415 / 13420 | localhost |
 | P2P | 3414 | 13414 | Public |
 
-> The single-box installer was migrated off the legacy `3416/3417/3002` to `3333/3334/8080` in
-> 2026-06 (bash + backend in sync — see `config.js`). The **solo** product (`07_grin_mining_solo.sh`)
-> keeps `3416`.
+> The single-box installer was migrated off the legacy `3417/3002` to `3333/8080` in 2026-06
+> (bash + backend in sync — see `config.js`). The **node upstream** was NOT moved with them:
+> the `3334` this doc once planned was never implemented, because Script 01 leaves the node's
+> `stratum_server_addr` at grin's default, so the pool must dial `3416`/`13416` out of the box.
+> Three sites carry that number and must stay agreed — `pool_ensure_defaults`
+> (`07_grin_mining_public_pool.sh`), `node_stratum_port` (`back-end-pool/lib/config.js`), and
+> `grin_sync_pool_stratum` (`lib/grin_node_secrets.sh`), which re-patches the toml after a node
+> rebuild. It is operator-overridable via `node_stratum_port` in the pool config. The **solo**
+> product (`07_grin_mining_solo.sh`) dials the same `3416`/`13416`.
 
 ---
 
@@ -774,7 +781,7 @@ Five real-life scenarios, scoped honestly: two need **new code**, three are **ru
 re-applied to the pool wallet's `node_api_secret_path` without operator action
 (`grin_sync_wallets` sweeps `/opt/grin/**/grin-wallet.toml`). **The uncovered half:** a
 rebuild wipes the node's own `grin-server.toml`, losing the pool's stratum wiring
-(`enable_stratum_server`, `stratum_server_addr` :3334/:13334, `wallet_listener_url` → :3420).
+(`enable_stratum_server`, `stratum_server_addr` :3416/:13416, `wallet_listener_url` → :3420).
 → **New code:** add a pool consumer to the self-heal chain per the CLAUDE.md "new consumer"
 pattern — `grin_sync_pool_stratum` re-applies `pw_patch_node_toml`-equivalent keys when the
 live node's toml has drifted (guarded: only when a pool install exists; node restart is NOT

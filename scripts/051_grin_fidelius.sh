@@ -7,7 +7,7 @@
 #  Protected by Basic Auth — intended for the server owner only, not public.
 #
 #  Ports the GrinSuite Node.js wallet (noobvie/GrinSuite:web/03_web_wallet)
-#  onto the toolkit. See docs/generated/script051_design_node_port_2026-05-24.md
+#  onto the toolkit. See docs/generated/script051_design.md
 #  for the full architecture and decisions.
 #
 #  ─── Architecture ────────────────────────────────────────────────────────────

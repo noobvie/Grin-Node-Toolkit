@@ -375,8 +375,12 @@ function _clamp4dec(el) {
 }
 
 // ── Address prefix validation ─────────────────────────────────────────────────
-// Minimum full address length = prefix (5-6) + 40 alphanumeric chars = 45-46
-const ADDR_MIN_LEN = ADDR_PFX.length + 40;
+// A slatepack address is a bech32-encoded 32-byte key, so the length is EXACT,
+// not a minimum: prefix (grin1 = 5 / tgrin1 = 6) + 58 data-and-checksum chars,
+// i.e. 63 on mainnet and 64 on testnet. Must stay in step with GRIN_ADDR_RE in
+// server/app.js — this check only spares the user a round trip, the server's is
+// the one that counts.
+const ADDR_LEN = ADDR_PFX.length + 58;
 
 function _validateAddrPrefix(addr, errorId) {
   if (!addr) return true;
@@ -385,8 +389,9 @@ function _validateAddrPrefix(addr, errorId) {
     showError(errorId, `Invalid address — ${net} addresses start with ${ADDR_PFX}`);
     return false;
   }
-  if (addr.length < ADDR_MIN_LEN) {
-    showError(errorId, `Address too short — ${net} addresses are at least ${ADDR_MIN_LEN} characters`);
+  if (addr.length !== ADDR_LEN) {
+    const how = addr.length < ADDR_LEN ? 'too short' : 'too long';
+    showError(errorId, `Address ${how} — ${net} addresses are exactly ${ADDR_LEN} characters`);
     return false;
   }
   clearError(errorId);
@@ -715,7 +720,7 @@ function _initInvAmountButtons() {
 
 function _updateInvBtn() {
   const addr  = ($("donate-invoice-address")?.value || "").trim();
-  const valid = _invAmount != null && _invAmount >= 1 && addr.length >= ADDR_MIN_LEN && addr.startsWith(ADDR_PFX);
+  const valid = _invAmount != null && _invAmount >= 1 && addr.length === ADDR_LEN && addr.startsWith(ADDR_PFX);
   const btn   = $("donate-invoice-btn");
   if (btn) btn.disabled = !valid;
 }
@@ -940,11 +945,11 @@ document.addEventListener("DOMContentLoaded", () => {
   if (grimNetEl) grimNetEl.textContent = isMainnet ? 'Mainnet' : 'Testnet';
 
   const addrInput = $("claim-address");
-  if (addrInput) addrInput.placeholder = ADDR_PFX + "1...";
+  if (addrInput) addrInput.placeholder = ADDR_PFX + '...';
   const addrLabel = $("claim-address-label");
-  if (addrLabel) addrLabel.textContent = `Your ${COIN} Address (${ADDR_PFX}1...)`;
+  if (addrLabel) addrLabel.textContent = `Your ${COIN} Address (${ADDR_PFX}...)`;
   const invAddrInput = $("donate-invoice-address");
-  if (invAddrInput) invAddrInput.placeholder = ADDR_PFX + "1...";
+  if (invAddrInput) invAddrInput.placeholder = ADDR_PFX + '...';
 
   // Apply network-specific claim amounts to the claim grid buttons
   [...document.querySelectorAll('#claim-amount-grid .amount-btn[data-amount]')]

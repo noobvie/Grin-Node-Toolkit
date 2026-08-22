@@ -13,6 +13,15 @@ function loadConfig(configPath = './pool.json') {
 
   validateConfig(config);
 
+  // Where this config came from, so a component that legitimately writes a value BACK
+  // (currently only PoolstatsReporter rotating its API key) does not have to re-derive the
+  // path and get it wrong — the default './pool.json' is not the installed pool's file.
+  // Non-enumerable so it never lands in a JSON.stringify of the config, which is exactly
+  // how a runtime-only field ends up baked into pool.json as if the operator had set it.
+  Object.defineProperty(config, '__config_path', {
+    value: path.resolve(configPath), enumerable: false, writable: false, configurable: true
+  });
+
   return config;
 }
 

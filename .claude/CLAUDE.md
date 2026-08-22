@@ -528,10 +528,21 @@ ALL generated docs go to `docs/generated/` — never scatter into `web/` etc. Th
 `flowcharts/` dir was merged into `docs/generated/` (2026-07-09); don't recreate it.
 
 **Naming:** `script<XX>_<type>_<optional_service>_<optional_date>.md`
-- `script<XX>` — REQUIRED prefix; `type` — `design`/`implementation`/`security_audit`/`analysis`/`reference`/`report`; `date` — `YYYY-MM-DD` only when multiple versions exist.
-- **Max 3 files per script:** `script##_design.md` / `script##_implementation.md` / `script##_security_audit.md`.
+- `script<XX>` — REQUIRED prefix, ONE script per file (never `script01-03_`); `type` — one of
+  `design` / `implementation` / `security_audit` / `analysis` / `reference` / `report` and
+  nothing else; `date` — `YYYY-MM-DD` only when multiple versions exist.
+- **Three CORE files per script**, each unqualified: `script##_design.md` /
+  `script##_implementation.md` / `script##_security_audit.md`. A new doc goes in one of those
+  unless it genuinely is not one of them.
+- Anything beyond the core three MUST carry a `<service>` qualifier so it can never be mistaken
+  for a core file — `script05_design_goblin.md`, `script01_reference_flowchart.md`. A qualifier
+  is not a licence to add files: check first whether it belongs in the core doc.
+- A doc about work that spans scripts, or about the repo rather than a script, takes the
+  `script00_` prefix — `script00_report_deferred_work.md`.
 
-✅ `script07_security_pool_audit_2026-05-15.md`  ❌ `SECURITY_FIXES.md` (missing prefix)
+✅ `script07_security_audit_pool_2026-05-15.md`  ❌ `SECURITY_FIXES.md` (missing prefix)
+❌ `script059_planning.md` (`planning` is not a type — it is `design`)
+❌ `script06b_gotchas.md` (`gotchas` is not a type — as-built notes are `implementation`)
 
 Before creating any `.md`, check if it should merge into an existing `script##_[type].md`.
 

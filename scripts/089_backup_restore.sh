@@ -42,6 +42,12 @@
 #                                Fidelius creates wallets from its web UI and never
 #                                writes that conf, which is why its seeds were missing
 #                                from every archive before 2026-08-05.
+#   · /opt/grin/accio-{main,test}/gateway-state/  — Accio (052) suffix ↔ session
+#                                table + gateway.json — optional, default Y. NOT a cache:
+#                                the browser client mints a NEW address for any suffix the
+#                                gateway stops recognising, so losing this table changes the
+#                                RECEIVING ADDRESS of every wallet that ever connected. Accio
+#                                ships no product backup of its own, so this is the only copy.
 #   · /etc/nginx/sites-available/*  (Grin-related configs only)
 #   · /etc/letsencrypt/live/ + renewal/  — SSL certs
 #   · root + www-data crontabs  — collector schedules
@@ -58,6 +64,8 @@
 #   · /var/www/                        (re-deployed by nginx setup scripts)
 #   · server/, public_html/, grin-wallet binary  (re-deployed by 059)
 #   · /opt/grin/fidelius/app/ + node_modules/   (re-deployed by 051 step 3)
+#   · /opt/grin/accio-*/site/ + gateway/  (re-deployed by 052; only gateway-state
+#                                and gateway.json are irreplaceable)
 # =============================================================================
 
 set -euo pipefail
@@ -527,6 +535,47 @@ run_backup() {
             done
         else
             [[ "$auto" == false ]] && warn "  — Fidelius excluded. Its seeds will NOT be in this archive."
+        fi
+    fi
+
+    # ── Step 5e: Accio public web wallet (052) — gateway state ───────────────
+    # Accio is self-custodial: the seeds live in the visitor's browser tab and are
+    # not ours to back up. What IS ours, and irreplaceable, is the gateway's
+    # suffix ↔ session table. The client discards any address the gateway no longer
+    # recognises and mints a fresh one, so losing gateway-state/ silently changes
+    # the RECEIVING ADDRESS of every wallet that has ever connected — money sent to
+    # an old address afterwards has nowhere to land. 052 ships no backup of its own
+    # and nothing else on the box collects this, so this archive is the only copy.
+    # gateway.json rides along: it carries state_dir, the ports and the onion host,
+    # and a restored table pointed at the wrong state_dir is the same loss.
+    # site/ and gateway/ are deliberately excluded — 052 re-deploys both.
+    local -a _acc_items=()
+    local _acc
+    for _acc in /opt/grin/accio-main /opt/grin/accio-test; do
+        [[ -d "$_acc/gateway-state" ]] && _acc_items+=("$_acc/gateway-state")
+        [[ -f "$_acc/gateway.json"  ]] && _acc_items+=("$_acc/gateway.json")
+    done
+    if [[ ${#_acc_items[@]} -gt 0 ]]; then
+        local include_acc=true
+        if [[ "$auto" == false ]]; then
+            section "Step 5e: Accio public web wallet (052)"
+            echo -e "  ${YELLOW}The gateway address table — losing it changes the receiving${RESET}"
+            echo -e "  ${YELLOW}address of every wallet that has ever connected.${RESET}"
+            echo ""
+            for _acc in "${_acc_items[@]}"; do echo -e "  ${DIM}$_acc${RESET}"; done
+            echo ""
+            echo -ne "${BOLD}Include Accio gateway state? [Y/n]: ${RESET}"
+            read -r _acc_choice
+            [[ "${_acc_choice,,}" == "n" ]] && include_acc=false
+        fi
+        if [[ "$include_acc" == true ]]; then
+            for _acc in "${_acc_items[@]}"; do
+                sources+=("$_acc")
+                manifest_lines+=("accio: $_acc")
+                [[ "$auto" == false ]] && info "  ✓ $_acc"
+            done
+        else
+            [[ "$auto" == false ]] && warn "  — Accio excluded. Its address table will NOT be in this archive."
         fi
     fi
 
@@ -1132,6 +1181,46 @@ run_restore() {
         echo -e "  ${YELLOW}Note:${RESET} re-run Script 051 steps 1 + 3 to reinstall the grin-wallet"
         echo -e "        binary and app/ — those are deliberately not in the archive."
     fi
+
+    # Accio gateway state (052). Stop the gateway first: it holds the address table
+    # in memory and rewrites the file, so a restore under a live service is
+    # overwritten by the process seconds later. Perms are re-asserted rather than
+    # trusted from the archive — 700 on the state dir, 640 on gateway.json, owned by
+    # grinaccio, which is a dedicated account and deliberately NOT `grin`.
+    local _acc_dir
+    for _acc_dir in /opt/grin/accio-main /opt/grin/accio-test; do
+        local _acc_src="$extract_dir$_acc_dir"
+        [[ -d "$_acc_src/gateway-state" || -f "$_acc_src/gateway.json" ]] || continue
+        local _acc_net; _acc_net="${_acc_dir##*-}"
+        local _acc_unit="grin-accio-${_acc_net}"
+        local _acc_was_running=0
+        if systemctl is-active --quiet "$_acc_unit" 2>/dev/null; then
+            _acc_was_running=1
+            systemctl stop "$_acc_unit" 2>/dev/null || true
+        fi
+
+        mkdir -p "$_acc_dir"
+        [[ -d "$_acc_src/gateway-state" ]] && cp -a "$_acc_src/gateway-state" "$_acc_dir/" 2>/dev/null || true
+        [[ -f "$_acc_src/gateway.json"  ]] && cp -a "$_acc_src/gateway.json"  "$_acc_dir/" 2>/dev/null || true
+
+        # grinaccio may not exist yet if 052 has not been run on this box — fall
+        # back to root rather than failing the restore; 052 re-chowns on install.
+        local _acc_own="root:root"
+        id -u grinaccio &>/dev/null && _acc_own="grinaccio:grinaccio"
+        if [[ -d "$_acc_dir/gateway-state" ]]; then
+            chown -R "$_acc_own" "$_acc_dir/gateway-state" 2>/dev/null || true
+            chmod 700 "$_acc_dir/gateway-state" 2>/dev/null || true
+            [[ -f "$_acc_dir/gateway-state/listen-state.json" ]]                 && chmod 600 "$_acc_dir/gateway-state/listen-state.json" 2>/dev/null || true
+        fi
+        if [[ -f "$_acc_dir/gateway.json" ]]; then
+            chown "root:${_acc_own#*:}" "$_acc_dir/gateway.json" 2>/dev/null || true
+            chmod 640 "$_acc_dir/gateway.json" 2>/dev/null || true
+        fi
+
+        [[ $_acc_was_running -eq 1 ]] && systemctl start "$_acc_unit" 2>/dev/null || true
+        success "Restored: Accio gateway state ($_acc_dir)"
+        log "[RESTORE] accio $_acc_dir"
+    done
 
     # Grin Drop dirs (individual files extracted from absolute paths)
     for _net in test main; do

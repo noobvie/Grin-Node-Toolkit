@@ -937,7 +937,7 @@ Decision 2026-07-17: **design first, build later** (after the current batch is V
 ### 15.1 Why it's feasible (verified groundwork)
 
 The slatepack-over-Nostr wire format was SOURCE-VERIFIED 2026-07-09 against goblin
-`src/nostr/*.rs` (full detail → `script05_planning_goblin.md`, memory
+`src/nostr/*.rs` (full detail → `script05_design_goblin.md`, memory
 `reference_goblin_ecosystem`). Facts that matter here:
 
 - **Payload**: NIP-17 private DM — kind-14 rumor, content = `"[Goblin] GRIN payment message …"`

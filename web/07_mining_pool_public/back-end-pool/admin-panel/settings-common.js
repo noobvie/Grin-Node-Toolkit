@@ -93,8 +93,9 @@
           } else if (el.tagName === 'SELECT') {
             let v = value || '';
             // default_theme accepts more keys than this select offers: THEME_KEYS in
-            // lib/pool-settings.js also holds the ADMIN-ONLY palettes (cyber, gradient,
-            // matrix, naruto, japan, custom) and the retired 'dark'. A stored value the
+            // lib/pool-settings.js also holds 'custom', the retired 'dark', and the
+            // accept-only legacy keys (cyber, gradient, matrix, naruto, japan) that have
+            // had no stylesheet anywhere since js/theme.js was deleted. A stored value the
             // <select> has no <option> for leaves it blank, and a blank select is dropped
             // by the save harvester — so the operator sees an empty control they cannot
             // correct, while the public site quietly falls back to Reactor (public-theme.js

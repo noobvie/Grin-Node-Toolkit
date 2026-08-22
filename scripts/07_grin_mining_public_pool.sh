@@ -2689,6 +2689,13 @@ pool_cleanup() {
     local backup_wrapper="/usr/local/bin/grin-pool-backup-${POOL_NET}"
     local logrotate_conf="/etc/logrotate.d/${POOL_SERVICE}"
     local zones_conf="/etc/nginx/conf.d/script07-${POOL_SERVICE}.conf"
+    # Security-header snippets written by pool_setup_nginx (audit §I1/§I2). They live in
+    # /etc/nginx/snippets/, which nothing else on the box sweeps — 08del only walks
+    # sites-available/sites-enabled — so cleanup has to name them explicitly or they outlive
+    # the pool. Removed in the same rm as the vhost that includes them, never before it:
+    # a snippet deleted while a live vhost still has "include" for it fails nginx -t.
+    local hdr_common="/etc/nginx/snippets/script07-${POOL_SERVICE}-headers.conf"
+    local hdr_page="/etc/nginx/snippets/script07-${POOL_SERVICE}-page-headers.conf"
     local backup_dir="/opt/grin/backups/${POOL_SERVICE}"
     local f2b_filter="/etc/fail2ban/filter.d/grin-pool-login.conf"
     local f2b_jail="/etc/fail2ban/jail.d/grin-pool.conf"
@@ -2710,6 +2717,7 @@ pool_cleanup() {
     echo -e "    Gateway app + wg tunnel     $(_pool_cleanup_mark "$GW_DIR")"
     echo -e "    Legacy satellite app dir    $(_pool_cleanup_mark "$SAT_APP_DIR")"
     echo -e "    Web root + nginx vhost      $(_pool_cleanup_mark "$POOL_NGINX_CONF")"
+    echo -e "    Nginx header snippets       $(_pool_cleanup_mark "$hdr_common")"
     echo -e "    Cron / logrotate / wrapper  $(_pool_cleanup_mark "$cron_backup")"
     echo -e "    Pool config (JSON)          $(_pool_cleanup_mark "$POOL_CONF")"
     echo -e "    Gateway config (JSON)       $(_pool_cleanup_mark "$GW_CONF")"
@@ -2802,17 +2810,17 @@ pool_cleanup() {
         if command -v nginx &>/dev/null && [[ -e "/etc/nginx/sites-enabled/$conf_name" || -f "$POOL_NGINX_CONF" ]]; then
             nginx_disable_site "$conf_name" || true
             [[ -n "$legacy_name" ]] && nginx_disable_site "$legacy_name" || true
-            rm -f "$POOL_NGINX_CONF" "$POOL_NGINX_CONF_LEGACY" "$zones_conf"
+            rm -f "$POOL_NGINX_CONF" "$POOL_NGINX_CONF_LEGACY" "$zones_conf" "$hdr_common" "$hdr_page"
             nginx_test_reload "after removing $conf_name vhost" || true
         else
             # nginx absent (or only a dangling symlink left) — remove files directly
-            rm -f "/etc/nginx/sites-enabled/$conf_name" "$POOL_NGINX_CONF" "$zones_conf"
+            rm -f "/etc/nginx/sites-enabled/$conf_name" "$POOL_NGINX_CONF" "$zones_conf" "$hdr_common" "$hdr_page"
             [[ -n "$legacy_name" ]] && rm -f "/etc/nginx/sites-enabled/$legacy_name" "$POOL_NGINX_CONF_LEGACY" || true
         fi
         rm -rf "${POOL_WEB_DIR:?}"
-        success "Web files + vhost + rate-limit zones removed."
+        success "Web files + vhost + rate-limit zones + header snippets removed."
         info "Any TLS cert under /etc/letsencrypt is left in place (harmless) — 'certbot delete' to drop it."
-        log "Cleanup: removed $POOL_WEB_DIR, $POOL_NGINX_CONF, $zones_conf"
+        log "Cleanup: removed $POOL_WEB_DIR, $POOL_NGINX_CONF, $zones_conf, $hdr_common, $hdr_page"
     fi
     echo ""
 

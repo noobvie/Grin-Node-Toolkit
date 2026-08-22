@@ -3090,8 +3090,15 @@ function setupRoutes() {
   // Network share / luck / round effort / time-since-last-block — pool-trust signals.
   //  · network_share_pct = pool 1h GPS / live network GPS × 100 (how often this pool wins)
   //  · round_effort_pct  = Σ(share diff since last block) / current per-block network diff × 100
-  //  · luck_100_pct      = mean over last 100 blocks of (network_difficulty / round_shares) × 100
-  //    (>100% = luckier than expected; uses captured per-block columns, NULL rows skipped)
+  //  · luck_100_pct      = mean over last 100 blocks of (round_shares / network_difficulty) × 100
+  //    (UNDER 100% = luckier than expected; uses captured per-block columns, NULL rows skipped)
+  //
+  //    This ratio used to be the other way up here, which made "luck" mean the OPPOSITE of
+  //    what it means everywhere else on the same site: BlockManager.getBlocksHistory and both
+  //    blocks tables compute shares ÷ difficulty (the 2miners convention, and the one the
+  //    public blocks page spells out in prose), so one page rendered "luck 87%" as a good
+  //    round while the dashboard rendered "luck 87%" as a bad one. One convention, and it is
+  //    the documented one.
   // Current network difficulty is cached ~60s to avoid hammering the node.
   app.get('/api/pool/effort', rateLimiter.middleware('public'), async (req, res) => {
     try {
@@ -3137,7 +3144,7 @@ function setupRoutes() {
       ).all();
       let luckPct = null;
       if (luckRows.length > 0) {
-        const mean = luckRows.reduce((a, r) => a + (r.nd / r.rs), 0) / luckRows.length;
+        const mean = luckRows.reduce((a, r) => a + (r.rs / r.nd), 0) / luckRows.length;
         luckPct = parseFloat((mean * 100).toFixed(1));
       }
 

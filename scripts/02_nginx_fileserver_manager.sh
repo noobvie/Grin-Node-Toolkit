@@ -2581,28 +2581,35 @@ run_enhance_security() {
 
     # ----- Step 2: Nginx request rate limiting (limit_req_zone) -----
     print_section "Step 2: Nginx Request Rate Limiting"
-    local req_zone_conf="/etc/nginx/conf.d/grin_limit_req.conf"
-    if [[ ! -f "$req_zone_conf" ]]; then
-        cat > "$req_zone_conf" << 'EOF'
-# Grin File Server - Request rate limiting zone
-# Managed by 02_nginx_fileserver_manager.sh
-limit_req_zone $binary_remote_addr zone=grin_req:10m rate=20r/s;
-EOF
-        print_info "Created request rate limit zone: $req_zone_conf"
+    # The zone goes through nginx_ensure_rate_limit_zone, never an inline heredoc
+    # (CLAUDE.md nginx rule 1). nginx loads every conf.d/*.conf into ONE http context,
+    # so two scripts defining zone=grin_req with different rates is a fatal config
+    # error at reload — the helper is the only thing that grep-guards against that.
+    local legacy_zone_conf="/etc/nginx/conf.d/grin_limit_req.conf"
+    # Migration on boxes that still carry the pre-helper file: strip limit_req_status,
+    # which belongs at the location level, not http. Leave the file itself in place —
+    # it still defines grin_req, and the helper below sees that and stays a no-op, so
+    # nothing ends up defining the zone twice. Renaming it here would be the bug.
+    if [[ -f "$legacy_zone_conf" ]] && grep -q "limit_req_status" "$legacy_zone_conf" 2>/dev/null; then
+        sed -i '/limit_req_status/d' "$legacy_zone_conf"
+        print_info "Removed limit_req_status from legacy zone file (moved to location blocks)"
+    fi
+    local zone_ok=true
+    if nginx_ensure_rate_limit_zone "grin_req" "20r/s" "10m" "script02-fileserver"; then
+        print_info "Request rate limit zone ensured: grin_req (20r/s)"
     else
-        # Migration: remove limit_req_status from the zone file if present —
-        # it belongs at the location level, not the http level, to avoid
-        # conflicts when other configs also define it in the http context.
-        if grep -q "limit_req_status" "$req_zone_conf" 2>/dev/null; then
-            sed -i '/limit_req_status/d' "$req_zone_conf"
-            print_info "Removed limit_req_status from zone file (moved to location blocks)"
-        fi
-        print_info "Request rate limit zone already exists: $req_zone_conf"
+        zone_ok=false
+        # Skip ONLY the injection, and carry on with the remaining security steps. A vhost
+        # carrying `limit_req zone=grin_req` with no matching zone in the http context is a
+        # FATAL nginx config error — the box fails to reload and every site on it goes down.
+        # Better to leave rate limiting off than to take nginx with it.
+        print_error "Could not ensure the grin_req rate-limit zone — skipping limit_req injection."
     fi
 
     # Inject limit_req into site location blocks that don't have it yet
     local injected_req=0
     for conf_file in "$NGINX_AVAILABLE"/*; do
+        [[ "$zone_ok" == true ]] || break
         [[ -f "$conf_file" ]] || continue
         local domain
         domain="$(basename "$conf_file")"

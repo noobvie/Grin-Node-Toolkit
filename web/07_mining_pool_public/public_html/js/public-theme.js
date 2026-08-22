@@ -5,8 +5,10 @@
 //   · everything else → body.<name>-theme + body.themed  (styled in /css/themes.css)
 // The legacy key 'dark' (the retired cyan default) is normalised to 'atomic' so
 // old localStorage picks and stored operator configs keep working. The old
-// dark/atomic/light looks live on in the ADMIN panel registry (js/theme.js) as
-// Cyber Classic / Atomic Classic / Gradient Light.
+// dark/atomic/light looks were kept for a while as admin palettes in js/theme.js
+// (Cyber Classic / Atomic Classic / Gradient Light), but nothing loaded that file
+// after the 2026-06 admin rebuild and it was deleted in 2026-08 — those palettes
+// now exist only in git history.
 //
 // WHAT VISITORS SEE IS OPERATOR-CONTROLLED. The admin panel exposes:
 //   · default_theme        — the look applied first

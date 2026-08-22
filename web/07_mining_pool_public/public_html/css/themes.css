@@ -23,9 +23,11 @@
  * both toggle these classes, so the two entry points share one stylesheet.
  *
  * The old built-in looks (cyan "dark" default, black-bg "atomic", gradient
- * "light") were retired from the public pages in 2026-06 and live on as
- * admin-panel palettes in js/theme.js (Cyber Classic / Atomic Classic /
- * Gradient Light). The legacy public key 'dark' now maps to the default.
+ * "light") were retired from the public pages in 2026-06. They survived for a
+ * while as admin-panel palettes in js/theme.js (Cyber Classic / Atomic Classic /
+ * Gradient Light), but nothing ever loaded that file after the 2026-06 admin
+ * rebuild and it was deleted in 2026-08 — git history is where those palettes
+ * live now. The legacy public key 'dark' maps to the default.
  *
  * 2026-07: the default (key 'atomic', no body class) became the "Reactor"
  * control-room skin (phosphor green / magenta / amber, defined in dashboard.css;

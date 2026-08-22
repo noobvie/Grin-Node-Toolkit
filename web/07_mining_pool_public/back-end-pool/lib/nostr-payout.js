@@ -10,7 +10,7 @@
 // (c) delivers an incoming response slatepack back to the scheduler to finalize.
 //
 // Wire format is SOURCE-VERIFIED against goblin src/nostr/*.rs — see
-// docs/generated/script05_planning_goblin.md and design §15. Key facts encoded here:
+// docs/generated/script05_design_goblin.md and design §15. Key facts encoded here:
 //   • kind-14 rumor, content = preamble + blank line + PLAIN-armor slatepack,
 //     tags [["p",recipient],["goblin","1"],["subject",note]]
 //   • standard NIP-44 v2 + NIP-59 gift wrap (goblin "v3" is an opt-in extension we

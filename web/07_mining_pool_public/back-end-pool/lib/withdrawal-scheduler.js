@@ -57,11 +57,14 @@ class WithdrawalScheduler {
     // path's transaction. MAX_USER_PENDING is NOT the per-address rule — that is the hard
     // one-pending-per-address check next to it; this constant is only read by the unused
     // canInitiateWithdrawal() below.
-    // ⚠ Both are HARDCODED here. payout.max_pending_withdrawals / payout.max_user_pending
-    // exist in pool-settings.js and are merged into config by applyToConfig(), but nothing
-    // reads them — editing those two fields in admin → Payout changes nothing.
-    this.MAX_PENDING_WITHDRAWALS = 100;
-    this.MAX_USER_PENDING = 10;
+    //
+    // Read from config, which PoolSettings.applyToConfig() populates from
+    // payout.max_pending_withdrawals / payout.max_user_pending. These were hardcoded until
+    // 2026-08-22, so the two fields in admin → Payout wrote to the DB and changed nothing.
+    // Coerced and floored at 1: a 0 or a non-numeric string reaching the cap would make the
+    // guard reject every withdrawal, which looks exactly like a stuck payout queue.
+    this.MAX_PENDING_WITHDRAWALS = Math.max(1, parseInt(config.max_pending_withdrawals, 10) || 100);
+    this.MAX_USER_PENDING        = Math.max(1, parseInt(config.max_user_pending, 10) || 10);
   }
 
   start() {

@@ -299,22 +299,14 @@
 
     // Named default theme. Runtimes, in the order tried:
     //   · public pages  → GriniumTheme (public-theme.js) owns the body class + switcher
-    //   · ThemeSwitcher (theme.js) — VESTIGIAL: no page loads theme.js any more, and this
-    //     script only runs on public pages, so this branch is unreachable today
     //   · neither loaded → fall back to adding the body class directly
-    // The localStorage write below is vestigial for the same reason: 'admin-theme' is the key
-    // ThemeSwitcher read. admin-shell.js deliberately uses a DIFFERENT key precisely because
-    // this line would otherwise overwrite the operator's admin Dark/Light choice.
+    // The ThemeSwitcher branch that sat between these two went with js/theme.js when that
+    // file was deleted in 2026-08: no page had loaded it since the 2026-06 admin rebuild,
+    // and this script only ever runs on public pages, so the branch could not be reached.
     if (brand.default_theme) {
-      try { localStorage.setItem('admin-theme', brand.default_theme); } catch (e) {}
       if (window.GriniumTheme && typeof window.GriniumTheme.applyDefault === 'function') {
         window.GriniumTheme.applyDefault(
           brand.default_theme, !!brand.allow_theme_switch, brand.enabled_themes);
-      } else if (window.ThemeSwitcher && typeof window.ThemeSwitcher.applyTheme === 'function') {
-        // Don't override a visitor's saved choice when switching is allowed.
-        if (!brand.allow_theme_switch || !localStorage.getItem('user-theme')) {
-          window.ThemeSwitcher.applyTheme(brand.default_theme);
-        }
       } else {
         document.body && document.body.classList.add(brand.default_theme + '-theme');
       }

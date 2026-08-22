@@ -155,6 +155,9 @@ Tier 1 (A1–A11) finished 2026-08-21. Findings that are NOT comment fixes, park
 for the batches that own them.
 
 ### Code bugs found while auditing comments (comment correct, code wrong)
+
+**All FIXED 2026-08-22 in E1 below** — listed as found, not as outstanding.
+
 | Where | Bug |
 |---|---|
 | `scripts/02_nginx_fileserver_manager.sh` (enhance-security step 2) | writes `limit_req_zone ... zone=grin_req` inline into `/etc/nginx/conf.d/grin_limit_req.conf` instead of calling `nginx_ensure_rate_limit_zone`. Violates CLAUDE.md nginx rule 1. |
@@ -182,6 +185,9 @@ Tier 3 (C1–C6) finished 2026-08-21. Same rule as Tier 1: what is not a comment
 is parked for the batch that owns it.
 
 ### Code bugs found while auditing comments (comment correct, code wrong)
+
+**Both FIXED 2026-08-22 in E1 below** — listed as found, not as outstanding.
+
 | Where | Bug |
 |---|---|
 | `web/059_drop/server/app.js` (`GET /api/nodes`) | Node reachability is decided by a bare `GET https://<node>/v2/foreign` and any 2xx/3xx/404/405 counts as **online**. `/v2/foreign` is POST-only JSON-RPC, so a parked domain, a CDN error page or an unrelated web server on that host all report the node as up. CLAUDE.md's rule is explicit: only a parsed, unwrapped `{"Ok":…}` proves a Grin node. The comment above the code describes the technique accurately — the technique is the bug. (GrinScan and Fidelius both do this correctly; Fidelius's own comment records the same fix being made there.) |
@@ -322,24 +328,16 @@ two comments in a shell script — no logic changed, `bash -n` clean):
 - `flowcharts/` still appears in two `script07_*.md` headings, but as **provenance**
   ("merged from flowcharts/… 2026-07-09"), not as a live path. Correct as history; left.
 
-### Open findings from D2 (reported, not fixed)
-1. **CLAUDE.md's generated-doc naming rule does not match `docs/generated/` itself.** The rule
-   allows `design`/`implementation`/`security_audit`/`analysis`/`reference`/`report`; the
-   directory also uses `flow_chart` (×4), `planning` (×3), `realization` (×2), `gotchas`,
-   `ipv6_extension`, `to_be_done`, and one `script01-03_` multi-script prefix — 12 files. Only
-   the one file already carried forward was renamed: the rest are cross-referenced from code
-   comments, and a mass rename is a scope decision for the operator, not a comment audit. Either
-   widen the rule's type list or plan one rename pass.
-2. **Tier 2 (B1–9) never got a carry-forward section.** Tier 1 and Tier 3 each parked their
-   code bugs here; the B batches recorded counts in the session log only (**9 code bugs +
-   1 dead file + 1 doc/UX conflict** across B2–B9, per those lines) but not what they were.
-   Those findings are not recoverable from this file and are not in D1/D2's scope to
-   re-derive. If they matter, the pool web app needs a bug-only re-read.
-3. Everything still open from the Tier 1 and Tier 3 tables above (the `02` inline
-   `limit_req_zone`, `06`'s `B→2` hint, `081`'s flat `max_age=5`, Accio's unbacked-up
-   `gateway-state/`, Drop's `GET /v2/foreign` reachability probe and its `GRIN_ADDR_RE`
-   message) is a **code** bug and was deliberately left for the operator — D1/D2 change docs
-   and comments only.
+### Open findings from D2 — ALL CLOSED 2026-08-22 (see the E section below)
+1. ~~**CLAUDE.md's generated-doc naming rule does not match `docs/generated/` itself.**~~ The
+   rule allowed `design`/`implementation`/`security_audit`/`analysis`/`reference`/`report`; the
+   directory also used `flow_chart` (×4), `planning` (×3), `realization` (×2), `gotchas`,
+   `ipv6_extension`, `to_be_done`, and one `script01-03_` multi-script prefix — 12 files.
+   **CLOSED in E3:** all 12 renamed, rule rewritten.
+2. ~~**Tier 2 (B1–9) never got a carry-forward section.**~~ **CLOSED in E2:** reconstructed
+   and fixed — see the table there for how each count was traced back to a finding.
+3. ~~Everything still open from the Tier 1 and Tier 3 tables above.~~ **CLOSED in E1:** all six
+   fixed.
 
 ### D2 review pass (2026-08-22, same day) — 4 self-corrections
 
@@ -357,6 +355,142 @@ D2's own output was re-read against the code rather than re-trusted. Four things
 by reading the section it landed in, not just the line.
 
 ---
+
+## Tier 5 — E: closing the carried-forward CODE findings (2026-08-22)
+
+A1–D2 were comments-and-docs only by rule (ground rule 2: *if the comment is right and the
+code is wrong, report it, don't fix it*). That rule is what made the audit safe to run across
+28 sessions, and it is also why it finished holding a list of unfixed code bugs. This section
+spends them. **These edits change behaviour** — they are not part of the `docs(comments)`
+commit range and must not be described as comment-only.
+
+### E1 — the six Tier 1 / Tier 3 code bugs
+
+| # | Where | Fix |
+|---|---|---|
+| 1 | `02_nginx_fileserver_manager.sh` | inline `limit_req_zone` heredoc replaced by `nginx_ensure_rate_limit_zone "grin_req" "20r/s" "10m" "script02-fileserver"` (CLAUDE.md nginx rule 1). The pre-helper `/etc/nginx/conf.d/grin_limit_req.conf` is deliberately **left in place** on upgraded boxes — it still defines `grin_req`, the helper's duplicate guard sees it and no-ops, so nothing defines the zone twice. Renaming it would have been the bug. |
+| 2 | `06_global_grin_health.sh` | `Configure (B→2)` → `(C→2)` in both operator hints; the Rocket explorer's eight `── B-n:` section markers re-keyed to their real menu-C keys (`C-1/2/3/5/6/7/Z/X`). GrinScan has owned `B` since it was added. |
+| 3 | `081_host_monitor_port.sh` | flat `max_age=5` replaced by `_mn_max_age_for_site_key`, mirroring `_max_age_for_site_key` in Script 01 (`fullmain` 70, others 5). A monitor that disagrees with the downloader is worse than none: it cried STALE about full-archive mirrors Script 01 was happily using. Threshold now printed per site key. |
+| 4 | `089_backup_restore.sh` | new **Step 5e** collects `/opt/grin/accio-{main,test}/gateway-state/` + `gateway.json`, and a matching restore block (stops the unit first, re-asserts 700/640 `grinaccio`). Accio ships no backup of its own, so this was the only product whose loss of durable state was unrecoverable. |
+| 5 | `web/059_drop/server/app.js` + `lib/059_lib_wallet.sh` | node reachability now POSTs `get_tip` and requires an unwrapped `{"Ok":…}` with a numeric height. The old `GET /v2/foreign` + 2xx/3xx/404/405 test reported a parked domain, a CDN error page or any unrelated web server as a healthy Grin node. Both the JS and the shell copy fixed. |
+| 6 | `web/059_drop/server/app.js` + `public_html/js/faucet.js` | `GRIN_ADDR_RE` was `(grin1\|tgrin1)[a-z0-9]{40,}` while its own error said "52+ chars". A slatepack address is a bech32 32-byte key, so the length is **exact** — verified by encoding one: `grin1…` = 63, `tgrin1…` = 64. Regex is now `^(grin\|tgrin)1[<bech32>]{58}$`, the message matches, and the client's `ADDR_MIN_LEN` became `ADDR_LEN`. |
+
+Found while fixing #6: `faucet.js` rendered the address placeholder and label as
+`ADDR_PFX + "1..."`, but `ADDR_PFX` already ends in `1` — every network showed `tgrin11...`.
+Fixed at all three sites.
+
+### E2 — Tier 2's missing carry-forward, reconstructed
+
+The B-batch session-log counts were the only record. Each was traced back to a finding by
+matching the batch's file list against findings recorded elsewhere:
+
+| Batch | Count | What they were |
+|---|---|---|
+| B2 | 3 code bugs | `rewards.js` — the same three later written up as security-audit **§I4** (non-atomic `confirmed→paid`), **§I5** (placeholder zeros in credit ledger rows), **§I6** (no account-existence guard). Also in B2's file list: `withdrawal-scheduler.js`'s hardcoded caps (see below). |
+| B3 | 2 code bugs | **§I9** (`retention.js` floor ignores `confirmed`) and the `ip-filter.js` `trust proxy` comment drift. |
+| B4 | 3 code bugs | `poolstats-reporter.js` ×2 + `alert-delivery.js` ×1 — **not** previously written up anywhere. Recovered by re-reading B4's seven files. |
+| B5 | 1 code bug | **§I8** (`lottery.js` grindable seed). |
+| B8 | 1 dead file | `public_html/js/theme.js`. |
+| B9 | 1 doc/UX conflict | the luck definition. |
+
+Everything attributed to §I was already fixed in the 2026-08-21 resolution pass; the §I
+headings now carry the `— **FIXED**` marker the older sections use, so the section reads as
+closed at a glance instead of looking like ten open findings.
+
+**Fixed here (the ones no §I entry covered):**
+
+- **`poolstats-reporter.js` reported `network: 'mainnet'` unconditionally.** A testnet pool
+  would have listed itself as a mainnet pool the moment the pusher was enabled. Now derived
+  from config, the same way the pull feed in `index.js` already did it.
+- **`poolstats-reporter.js`'s `updateApiKey()` was in-memory only.** The admin panel reported
+  a successful rotation and the old key came back on the next restart — the worst possible
+  shape for a credential rotation. Now writes through to `pool.json`: re-reads the file and
+  replaces one key rather than serialising `this.config` (which carries DB-merged settings
+  that do **not** belong in the file), writes a mode-600 temp file and renames. Deliberately
+  does not throw on a write failure — the new key is already live in memory, so refusing the
+  rotation would strand the operator on the old one; it logs loudly instead. `loadConfig()`
+  now stamps a **non-enumerable** `__config_path` so the writer knows the real file (the
+  `'./pool.json'` default is not the installed pool's).
+- **`alert-delivery.js`'s `formatAlertType` map predated the money detectors.** Seven alert
+  types — `coverage_shortfall`, `ledger_integrity_drift`, `wallet_drain`,
+  `unrecorded_wallet_send`, `large_withdrawal`, `payout_surge`, `wallet_identity_changed` —
+  had no display name, so the only alerts that can **freeze payouts** arrived as raw
+  snake_case in the email subject line while cosmetic ones read "Difficulty Spike". All seven
+  named, plus a Title-Case fallback so the next detector degrades gracefully.
+- **`alert-delivery.js` had a bare `JSON.parse(alert.data)` inside a template literal.** A
+  malformed `data` column threw out of `formatEmailBody` → `sendEmail` → the `.catch()` in
+  `send()`, dropping the alert entirely. Now `formatAlertData()`, which falls back to the raw
+  string.
+- **`withdrawal-scheduler.js` hardcoded `MAX_PENDING_WITHDRAWALS`/`MAX_USER_PENDING`.**
+  `payout.max_pending_withdrawals` / `max_user_pending` existed in `pool-settings.js` and were
+  merged into config by `applyToConfig()`, but nothing read them — editing those two fields in
+  admin → Payout changed nothing. Now read from config, coerced and floored at 1 (a `0`
+  reaching the cap would reject every withdrawal, which looks exactly like a stuck queue).
+- **Dead file `public_html/js/theme.js` deleted** (321 lines, loaded by no page since the
+  2026-06 admin rebuild; its own header said so). The unreachable `ThemeSwitcher` branch in
+  `branding.js` went with it — including a `localStorage.setItem('admin-theme', …)` write that
+  `admin-shell.js` had had to route around with a separate key. The three comments that
+  pointed at the file (`themes.css`, `dashboard.css`, `admin-shell.js`) now say where those
+  palettes went and why the separate key stays. A review pass found three more that still
+  named the file as a live source — `pool-settings.js` (its `THEME_KEYS` note),
+  `public-theme.js` and `settings-common.js` — and corrected them: `cyber`, `gradient`,
+  `matrix`, `naruto` and `japan` are **accept-only legacy keys with no stylesheet anywhere**,
+  kept in the validator so an old stored config still boots. Six comments in total.
+- **The luck conflict.** `blocks.js` and both blocks tables compute `round_shares ÷
+  network_difficulty` (2miners convention, **under** 100% = lucky) and the public blocks page
+  spells that out in prose — but `/api/pool/effort`'s `luck_100_pct` used the **reciprocal**.
+  One visitor-facing number therefore meant "lucky" on one page and "unlucky" on another at
+  the same value. `luck_100_pct` flipped to match the documented convention, and the reactor
+  dashboard chip now says `(lucky)`/`(unlucky)` rather than a bare percentage.
+
+Pool suite re-run after every edit: **30/30 pass** (`npm test`).
+
+### E3 — `docs/generated/` standardised
+
+12 files renamed, 1 deleted, all pointers updated, and the rule in CLAUDE.md rewritten to
+match. `script06b_realization.md` was **0 bytes** and is gone.
+
+| Was | Now |
+|---|---|
+| `script01_flow_chart.md` … `script04_flow_chart.md` (×4) | `script0N_reference_flowchart.md` |
+| `script01_ipv6_extension.md` | `script01_design_ipv6.md` |
+| `script01-03_to_be_done.md` | `script00_report_deferred_work.md` |
+| `script053_planning.md` | `script053_design.md` |
+| `script059_planning.md` | `script059_design.md` |
+| `script059_realization.md` | `script059_implementation.md` |
+| `script05_planning_goblin.md` | `script05_design_goblin.md` |
+| `script06b_planning.md` | `script06b_design.md` |
+| `script06b_gotchas.md` | `script06b_implementation.md` |
+| `script06b_realization.md` | *deleted (empty)* |
+
+The rule itself had three problems, all fixed: it said "max 3 files per script" while listing
+six types (the extra three had nowhere to live); it gave no guidance for a cross-script doc,
+which is how `script01-03_` happened; and its own OK example —
+`script07_security_pool_audit_2026-05-15.md` — did not match its own type list. The rule now
+names three CORE unqualified files, requires a `<service>` qualifier on anything beyond them,
+reserves `script00_` for cross-script/repo docs, and carries the two real filenames that were
+wrong as counter-examples. All 33 files now match the pattern mechanically.
+
+### E4 — repository note carried forward
+
+Commit `1cafea0 "docs(comments): audit batch A5 — public pool (shell)"` says *"Comment-only
+pass. No logic changed."* It contains the §I1/§I2 nginx work — 19 non-comment lines that
+create two `/etc/nginx/snippets/` files, add HSTS, and thread five `include` lines through
+the vhost. The change is correct; the message is
+not, and `git log --grep='docs(comments)'` is no longer a safe "nothing behaves differently"
+set because of it. **Amend the message or split the commit before this history is relied on.**
+
+Note also that `nginx -t` cannot catch a `location` block that lost its `include` — it parses
+and never checks header inheritance. The only real verification is `curl -I` against a
+deployed box, confirming `/`, `/admin/`, `/uploads/` and `/custom/` each return the CSP.
+A mechanical check of the generated vhost was run instead: **14 blocks, 0 with an `add_header`
+and no `include`** — every one of the four that resets inheritance re-includes a snippet.
+
+Verified, not changed: the optional `www` `:443` block (emitted only when the cert covers
+`www`) is a bare `return 301` to the apex and carries **no HSTS**, so `www.<domain>` is not an
+HSTS host and each first visit there takes one plaintext `:80` hop before the redirect. That
+follows from the deliberate no-`includeSubDomains` decision documented in the snippet itself,
+not from an oversight — recorded here so it is not re-derived as a finding.
 
 ## Session log
 
@@ -392,3 +526,5 @@ Append one line per finished batch:
 `C1–C6 self-review — 2026-08-22 — working tree — re-read every edit made in Tier 3. Four defects in my OWN edits, all fixed: two comment blocks left an over-long line where the reflow broke the ~80-col wrap (listen_route.js, server.js); the R7 parenthetical said "clamped it to 128 KB" when R7 dropped the DEFAULT to 128 KB and separately added a load-time clamp to inbound_max_forwardable (~192 KB at the default frame size) — reworded in listen_route.js and tor_route.js; socks5.js claimed ws.js is "hand-written for the one frame type this rail sends", but ws.js implements masking, all three length encodings, continuation frames, control frames and the close handshake, and the server itself sends pings — now points at ws.js's own header instead. Suite re-run 78/78. Every other Tier 3 claim re-verified against source and held (option 8, /opt/grin/grin-api-collector/, the 051x header pointer, Drop's wallet_foreign_api_port, 21 stylesheets, 19 k patched lines).`
 `D1 — 2026-08-22 — see commit — 0 edits (nothing to collapse; 270 files scanned mechanically, 4 named clusters read in full), 0 unverified, 0 code bugs`
 `D2 — 2026-08-22 — see commit — 19 edits across 7 docs + 1 shell file (11 of them one wrong port), 0 unverified, 3 open findings`
+
+`E1–E4 — 2026-08-22 — working tree — closed every carried-forward CODE finding the comments-only rule had parked: the six Tier 1/Tier 3 bugs, Tier 2's never-written carry-forward (reconstructed from the B-batch counts; B4's three were unrecorded anywhere and needed a re-read of its seven files), the dead theme.js, and the inverted luck definition. §I1–I10 headings marked FIXED after verifying each fix is present in code. docs/generated standardised: 12 renames, 1 empty file deleted, all pointers updated, CLAUDE.md's naming rule rewritten (it had contradicted itself and its own example was wrong). bash -n 60/60, node --check clean, pool suite 30/30. NOT comment-only — behaviour changed; must not ride in a docs(comments) commit.`

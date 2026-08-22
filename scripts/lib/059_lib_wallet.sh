@@ -484,9 +484,18 @@ _drop_select_node() {
     echo -e "\n  ${BOLD}Available Grin nodes:${RESET}" >&2
     local i=1 first_online=0
     for node in "${nodes[@]}"; do
-        local status http_code
-        http_code=$(curl -o /dev/null -s -w "%{http_code}" --max-time 5 "https://$node/v2/foreign" 2>/dev/null || echo "000")
-        if [[ "$http_code" =~ ^(2|3)[0-9]{2}$ ]] || [[ "$http_code" == "405" ]] || [[ "$http_code" == "404" ]]; then
+        # Reachability needs a PARSED result, not an HTTP status. /v2/foreign is
+        # POST-only JSON-RPC, so a bare GET returns 404/405 from a real node and
+        # from any parked domain, CDN error page or unrelated web server on that
+        # hostname alike — the old 2xx/3xx/404/405 test called all of them online.
+        # Only an unwrapped {"Ok":{...}} from get_tip proves a Grin node is there.
+        # No Basic Auth: these are public nodes behind Script 04's nginx, which
+        # publishes /v2/foreign open, and the secret is not ours to send anyway.
+        local status body
+        body=$(curl -s --max-time 5 -H 'Content-Type: application/json' \
+                 -d '{"jsonrpc":"2.0","method":"get_tip","params":[],"id":1}' \
+                 "https://$node/v2/foreign" 2>/dev/null) || body=""
+        if [[ "$body" == *'"Ok"'* ]] && [[ "$body" == *'"height"'* ]]; then
             status="${GREEN}● online${RESET}"
             [[ $first_online -eq 0 ]] && first_online=$i
         else

@@ -5,7 +5,7 @@
   Date:     2026-05-04
   Scope:    Documents the architecture and flow of the code actually shipped
             in scripts/059_grin_drop.sh + scripts/lib/059_lib_*.sh
-            Compare with: docs/generated/script059_planning.md (planning v12)
+            Compare with: docs/generated/script059_design.md (planning v12)
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   1. ARCHITECTURE OVERVIEW

@@ -918,7 +918,7 @@ transaction, `_claimForFinalize` before the first `await` on all three rails); t
 `sqlite-compat` transaction shim (real BEGIN/COMMIT/ROLLBACK + savepoint nesting, and no
 `transaction(async …)` anywhere); first-admin-only registration.
 
-### I1 — [High] The generated nginx vhost drops **every** security header on the two locations that serve HTML
+### I1 — [High] The generated nginx vhost drops **every** security header on the two locations that serve HTML — **FIXED 2026-08-21 (see §I resolution pass)**
 
 `add_header` in nginx is not additive across levels: these directives are inherited from
 the previous configuration level **if and only if** there are no `add_header` directives
@@ -948,14 +948,14 @@ This is the exact trap already documented for Script 052 in CLAUDE.md, live in 0
 a header of its own (`/admin/`, `/`), or drop the `Cache-Control` `add_header` in favour
 of `expires -1;` / a `map`-driven variable that does not reset inheritance.
 
-### I2 — [Medium] No HSTS anywhere in the nginx vhost
+### I2 — [Medium] No HSTS anywhere in the nginx vhost — **FIXED 2026-08-21 (see §I resolution pass)**
 
 `grep add_header` over the generated config returns no `Strict-Transport-Security`. The
 Express app sets it, but only on responses it generates (`/api/…`, `/blog/<slug>`) — the
 HTML page load itself never carries it, so a first-visit downgrade is not protected even
 though `:80` redirects. Add it to the shared snippet from I1.
 
-### I3 — [Medium] The block-reward "verify against the chain before crediting" control is dead code
+### I3 — [Medium] The block-reward "verify against the chain before crediting" control is dead code — **FIXED 2026-08-21 (see §I resolution pass)**
 
 [rewards.js:26-47](../../web/07_mining_pool_public/back-end-pool/lib/rewards.js#L26-L47)
 guards its blockchain re-verification with `if (this.grinNode)` and comments it
@@ -980,7 +980,7 @@ why, and it is not a node connectivity problem.
 **Fix:** `BlockMonitor` already owns a `GrinNodeAPI` ([block-monitor.js:9](../../web/07_mining_pool_public/back-end-pool/lib/block-monitor.js#L9)).
 Pass it in — `new RewardDistributor(config, blockMonitor.grinNode)` — and store it.
 
-### I4 — [Medium-High] Reward distribution is not atomic with the `confirmed → paid` flip → double-credit on a crash
+### I4 — [Medium-High] Reward distribution is not atomic with the `confirmed → paid` flip → double-credit on a crash — **FIXED 2026-08-21 (see §I resolution pass)**
 
 [rewards.js:80-82](../../web/07_mining_pool_public/back-end-pool/lib/rewards.js#L80-L82):
 
@@ -1012,7 +1012,7 @@ It is idempotent only if the process never dies at the wrong instant.
 **Fix:** one transaction covering miner credits + pool fee + incentives + the status flip,
 with the flip as a guarded CAS that must report `changes === 1`.
 
-### I5 — [Low-Medium] `creditBalances` writes placeholder zeros into every credit ledger row
+### I5 — [Low-Medium] `creditBalances` writes placeholder zeros into every credit ledger row — **FIXED 2026-08-21 (see §I resolution pass)**
 
 Both the miner credit ([:146-151](../../web/07_mining_pool_public/back-end-pool/lib/rewards.js#L146-L151))
 and the pool-fee credit ([:174-181](../../web/07_mining_pool_public/back-end-pool/lib/rewards.js#L174-L181))
@@ -1025,7 +1025,7 @@ cannot reconstruct a balance history or independently corroborate a disputed pay
 ([withdrawal-scheduler.js:686-691](../../web/07_mining_pool_public/back-end-pool/lib/withdrawal-scheduler.js#L686-L691))
 already reads `before` and writes real values — mirror that.
 
-### I6 — [Low] Miner credit has no account-existence guard, unlike the pool-fee credit
+### I6 — [Info] Miner credit has no account-existence guard, unlike the pool-fee credit — **NOT REACHABLE (schema-blocked); guard added anyway 2026-08-21**
 
 The pool-fee path does `INSERT OR IGNORE INTO miner_accounts` before crediting
 ([:165-169](../../web/07_mining_pool_public/back-end-pool/lib/rewards.js#L165-L169)); the
@@ -1037,7 +1037,7 @@ back, `distributeRewards` returns `success:false`, and the block stays `'confirm
 **retried every 30 seconds indefinitely**. Nothing currently deletes `miner_accounts` rows,
 so this is latent rather than live, but it is a hard stall with no alert if it ever fires.
 
-### I7 — [Medium] `POST /api/admin/settings/:section` re-implements step-up and loses the mandatory-2FA gate
+### I7 — [Medium] `POST /api/admin/settings/:section` re-implements step-up and loses the mandatory-2FA gate — **FIXED 2026-08-21 (see §I resolution pass)**
 
 [index.js:5809-5820](../../web/07_mining_pool_public/back-end-pool/index.js#L5809-L5820)
 runs under `secureAdmin` and then checks freshness inline with
@@ -1062,7 +1062,7 @@ by needing a valid admin password + live session, which is why this is Medium an
 **Fix:** call `requireTotpEnrolled` explicitly on both, or refactor the inline check into a
 `conditionalFreshAdmin` helper that carries both halves.
 
-### I8 — [Medium] The lottery seed is chosen *after* the entry set is known, so a "provably fair" draw is grindable
+### I8 — [Medium] The lottery seed is chosen *after* the entry set is known, so a "provably fair" draw is grindable — **FIXED 2026-08-21 (see §I resolution pass)**
 
 [lottery.js:133-140](../../web/07_mining_pool_public/back-end-pool/lib/lottery.js#L133-L140)
 takes the seed from `grinNode.getTip()` **at draw time**, and the winner is
@@ -1089,7 +1089,7 @@ The operator already controls the prize pool outright (`/api/admin/incentives/aw
 this is not an escalation — it is an integrity-of-claims issue. It matters as soon as any
 public page says the draws are provably fair.
 
-### I9 — [Low] Share retention's safety floor ignores blocks stuck in `confirmed`
+### I9 — [Low] Share retention's safety floor ignores blocks stuck in `confirmed` — **FIXED 2026-08-21 (see §I resolution pass)**
 
 `_sharesCutoffHeight` ([retention.js:36-54](../../web/07_mining_pool_public/back-end-pool/lib/retention.js#L36-L54))
 lowers the prune floor for the oldest **`status='immature'`** block, but not for a block in
@@ -1102,7 +1102,7 @@ it. `getSharesForDistribution` then returns empty, and the `no_shares_found` bra
 ([rewards.js:50-62](../../web/07_mining_pool_public/back-end-pool/lib/rewards.js#L50-L62)).
 Cheap fix: `WHERE status IN ('immature','confirmed')` in the floor query.
 
-### I10 — [Low] Operator-supplied region labels reach `innerHTML` unescaped on the network map
+### I10 — [Low] Operator-supplied region labels reach `innerHTML` unescaped on the network map — **FIXED 2026-08-21 (see §I resolution pass)**
 
 [network-map.js:249](../../web/07_mining_pool_public/public_html/js/network-map.js#L249)
 interpolates `best.name` — `h.label` / `g.label || g.region` from `pool_locations`, written

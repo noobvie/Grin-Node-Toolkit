@@ -1294,7 +1294,7 @@ configure_analytics() {
 EXPLORER_REPO="https://github.com/aglkm/grin-explorer.git"
 EXPLORER_SESSION="grin-explorer"
 
-# ── B-1: Install & Build ──────────────────────────────────────────────────────
+# ── C-1: Install & Build ──────────────────────────────────────────────────────
 install_explorer() {
     require_root
     clear
@@ -1372,7 +1372,7 @@ install_explorer() {
     pause
 }
 
-# ── B-2: Configure ────────────────────────────────────────────────────────────
+# ── C-2: Configure ────────────────────────────────────────────────────────────
 configure_explorer() {
     [[ ! -f "$EXPLORER_BIN" ]] && { die "Not installed. Run Install (1) first."; return; }
     clear
@@ -1503,7 +1503,7 @@ configure_explorer() {
     pause
 }
 
-# ── B-3: Start ────────────────────────────────────────────────────────────────
+# ── C-3: Start ────────────────────────────────────────────────────────────────
 start_explorer() {
     [[ ! -f "$EXPLORER_BIN" ]] && { die "Not installed. Run Install (1) first."; return; }
     clear
@@ -1518,7 +1518,7 @@ start_explorer() {
             warn "chain_data not found at: ${grin_dir_val}/chain_data"
             echo -e "  ${DIM}The explorer reads block data directly from chain_data on disk.${RESET}"
             echo -e "  ${DIM}Toolkit default for full archive: /opt/grin/node/mainnet-full/chain_data${RESET}"
-            echo -e "  ${DIM}Run Configure (B→2) to update grin_dir to the correct path.${RESET}"
+            echo -e "  ${DIM}Run Configure (C→2) to update grin_dir to the correct path.${RESET}"
             echo ""
             echo -ne "Continue anyway? [Y/n/0]: "
             read -r cont_anyway
@@ -1550,17 +1550,17 @@ start_explorer() {
     else
         warn "Explorer may still be starting — check port 8000 in a moment."
         echo -e "  ${DIM}Attach: tmux attach -t ${EXPLORER_SESSION}${RESET}"
-        echo -e "  ${DIM}If it exits immediately, run Configure (B→2) to fix grin_dir / chain_data path.${RESET}"
+        echo -e "  ${DIM}If it exits immediately, run Configure (C→2) to fix grin_dir / chain_data path.${RESET}"
     fi
     log "Explorer session started: $EXPLORER_SESSION"
     pause
 }
 
-# ── B-7: Schedule Explorer auto-start (@reboot via cron) ──────────────────────
+# ── C-6: Schedule Explorer auto-start (@reboot via cron) ──────────────────────
 schedule_explorer_autostart() {
     [[ ! -f "$EXPLORER_BIN" ]] && { die "Not installed. Run Install (1) first."; return; }
     clear
-    echo -e "\n${BOLD}${CYAN}── B-7) Auto-Start Explorer on Boot ──${RESET}\n"
+    echo -e "\n${BOLD}${CYAN}── C-6) Auto-Start Explorer on Boot ──${RESET}\n"
     echo -e "  Adds a ${BOLD}@reboot${RESET} cron entry that sleeps N minutes, then launches"
     echo -e "  grin-explorer in a tmux session (mirrors option 3 — Start)."
     echo ""
@@ -1621,7 +1621,7 @@ schedule_explorer_autostart() {
     pause
 }
 
-# ── B-4: Stop ─────────────────────────────────────────────────────────────────
+# ── C-Z: Stop ─────────────────────────────────────────────────────────────────
 stop_explorer() {
     clear
     echo -e "\n${BOLD}${CYAN}── Stop Grin Explorer ──${RESET}\n"
@@ -1635,7 +1635,7 @@ stop_explorer() {
     pause
 }
 
-# ── B-X: Nuke — remove service, nginx, crontab, data dir ──────────────────────
+# ── C-X: Nuke — remove service, nginx, crontab, data dir ──────────────────────
 nuke_explorer() {
     require_root
     clear
@@ -1685,7 +1685,7 @@ nuke_explorer() {
     pause
 }
 
-# ── B-5: Setup Nginx ──────────────────────────────────────────────────────────
+# ── C-5: Setup Nginx ──────────────────────────────────────────────────────────
 setup_nginx_explorer() {
     require_root
     clear
@@ -1745,7 +1745,7 @@ NGINX
     pause
 }
 
-# ── B-6: Status ───────────────────────────────────────────────────────────────
+# ── C-7: Status ───────────────────────────────────────────────────────────────
 status_explorer() {
     clear
     echo -e "\n${BOLD}${CYAN}── Grin Explorer Status ──${RESET}\n"

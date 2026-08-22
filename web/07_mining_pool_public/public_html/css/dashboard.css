@@ -55,8 +55,10 @@ body {
     --ok: var(--neon-cyan);
     --glow: color-mix(in srgb, var(--neon-cyan) 55%, transparent);
     --shadow: 0 1px 3px rgba(0, 0, 0, .5), 0 8px 24px rgba(0, 0, 0, .35);
-    /* admin-template aliases — pages written against the theme.js var family
-       (connect, page, login) resolve to the same palette */
+    /* admin-template aliases — pages written against the older --bg-body/--bg-card
+       var family (connect, page, login) resolve to the same palette. That family
+       came from the deleted js/theme.js; the aliases are what keep those pages
+       working without a rewrite. */
     --bg-body: var(--dark-bg);
     --bg-card: var(--dark-card);
     --bg-card2: var(--bg-elev2);

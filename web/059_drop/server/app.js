@@ -120,7 +120,13 @@ function truncAddr(addr) {
   return addr.length > 12 ? addr.slice(0, 6) + '...' + addr.slice(-4) : addr;
 }
 
-const GRIN_ADDR_RE    = /^(grin1|tgrin1)[a-z0-9]{40,}$/;
+// A Grin slatepack address is a bech32-encoded 32-byte ed25519 public key: hrp
+// ("grin" | "tgrin") + "1" + 52 data chars + 6 checksum chars. That is EXACTLY 63
+// chars on mainnet and 64 on testnet — not "40 or more", which the old
+// [a-z0-9]{40,} accepted while the rejection message next to it said "52+".
+// The charset is bech32's, which deliberately omits 1/b/i/o, so a typo'd address
+// containing one of those is caught here rather than by the wallet much later.
+const GRIN_ADDR_RE    = /^(grin|tgrin)1[qpzry9x8gf2tvdw0s3jn54khce6mua7l]{58}$/;
 const ANON_CLAIM_GRIN = loadConfig().network === 'mainnet' ? 0.009 : 2.0;
 
 // IP helpers — nginx must set: proxy_set_header X-Real-IP $remote_addr;
@@ -304,9 +310,35 @@ app.get('/api/public-stats', (_req, res) => {
 
 // GET /api/nodes ───────────────────────────────────────────────────────────────
 // Returns online/offline status for all known public Grin nodes.
-// Technique: GET https://<node>/v2/foreign — 2xx/3xx/404/405 = online.
+//
+// Technique: POST get_tip to /v2/foreign and require a parsed, unwrapped
+// {"Ok": {...}} with a numeric height. An HTTP status code proves nothing here —
+// /v2/foreign is POST-only JSON-RPC, so a plain GET returns 404/405 from a node
+// AND from any unrelated web server, CDN error page or parked domain on that
+// hostname. The previous version treated 2xx/3xx/404/405 as online and so
+// reported every one of those as a healthy Grin node.
+//
+// No Basic Auth: these are public nodes fronted by Script 04's nginx, which
+// publishes /v2/foreign open and 403s /v2/owner. A secret is neither needed nor
+// ours to send to somebody else's host.
 const NODES_MAINNET = ['api.grin.money', 'api.grinily.com', 'api.grinnode.org', 'main.gri.mw', 'grincoin.org'];
 const NODES_TESTNET = ['testapi.grin.money', 'testapi.grinily.com', 'testnet.grincoin.org', 'test.gri.mw'];
+
+// The node serialises Rust Result<T,E> as {"Ok":T} / {"Err":E} INSIDE the
+// JSON-RPC result field, so `result` alone is not the answer — an {"Err":…} is a
+// well-formed reply from a node that could not serve the call.
+async function probeForeignTip(node, timeoutMs = 5000) {
+  const r = await fetch(`https://${node}/v2/foreign`, {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify({ jsonrpc: '2.0', method: 'get_tip', params: [], id: 1 }),
+    signal:  AbortSignal.timeout(timeoutMs),
+  });
+  if (!r.ok) return null;
+  const j = await r.json();          // throws on an HTML error page — caller catches
+  const ok = j && j.result && j.result.Ok;
+  return (ok && Number.isFinite(Number(ok.height))) ? Number(ok.height) : null;
+}
 
 app.get('/api/nodes', async (_req, res) => {
   const cfg  = loadConfig();
@@ -315,12 +347,9 @@ app.get('/api/nodes', async (_req, res) => {
   const results = await Promise.all(list.map(async (node) => {
     const t0 = Date.now();
     try {
-      const r = await fetch(`https://${node}/v2/foreign`, {
-        method: 'GET',
-        signal: AbortSignal.timeout(5000),
-      });
-      const online = (r.status >= 200 && r.status < 400) || r.status === 404 || r.status === 405;
-      return { url: `https://${node}`, online, ms: Date.now() - t0 };
+      const height = await probeForeignTip(node);
+      if (height === null) return { url: `https://${node}`, online: false, ms: null };
+      return { url: `https://${node}`, online: true, ms: Date.now() - t0, height };
     } catch {
       return { url: `https://${node}`, online: false, ms: null };
     }
@@ -357,7 +386,7 @@ app.post('/api/claim', async (req, res) => {
   const address = (body.grin_address || '').trim();
 
   if (!address) return err(res, 'grin_address is required');
-  if (!GRIN_ADDR_RE.test(address)) return err(res, 'Invalid grin address — expected grin1... or tgrin1... (52+ chars)');
+  if (!GRIN_ADDR_RE.test(address)) return err(res, 'Invalid grin address — expected grin1… (63 chars) or tgrin1… (64 chars)');
 
   const ownAddress = cfg.wallet_address || '';
   if (ownAddress && address === ownAddress) {

@@ -772,8 +772,10 @@ owner secrets, or write outside its own dirs.
 
 ### 13.10 Operational scenarios & disaster recovery (added 2026-07-13)
 
-Five real-life scenarios, scoped honestly: two need **new code**, three are **runbooks**
+Five real-life scenarios, scoped honestly: two needed **new code**, three are **runbooks**
 (documentation + small menu affordances). All belong to this work package.
+*(Status 2026-08-22: both new-code items — (a) and (b) — are BUILT. The per-scenario
+"New code" lines below are kept as the original scoping, each annotated with what shipped.)*
 
 **a) Grin node rebuild (new api/foreign secrets) — mostly already automatic.**
 `07_lib_pool_wallet.sh:577` already installs the shared secret self-heal
@@ -782,15 +784,18 @@ re-applied to the pool wallet's `node_api_secret_path` without operator action
 (`grin_sync_wallets` sweeps `/opt/grin/**/grin-wallet.toml`). **The uncovered half:** a
 rebuild wipes the node's own `grin-server.toml`, losing the pool's stratum wiring
 (`enable_stratum_server`, `stratum_server_addr` :3416/:13416, `wallet_listener_url` → :3420).
-→ **New code:** add a pool consumer to the self-heal chain per the CLAUDE.md "new consumer"
-pattern — `grin_sync_pool_stratum` re-applies `pw_patch_node_toml`-equivalent keys when the
-live node's toml has drifted (guarded: only when a pool install exists; node restart is NOT
-automatic — the sync prints/flags it, the watchdog or operator restarts). Runbook line:
-after any node rebuild, `grin-secret-sync` once + restart node + check admin health page.
+→ **New code — ✅ BUILT.** `grin_sync_pool_stratum` (`lib/grin_node_secrets.sh:576`) is in the
+`grin_secrets_sync_all` chain and ships exactly as scoped: guarded on the pool conf existing,
+re-applies `enable_stratum_server`, `stratum_server_addr` (from the conf's `node_stratum_port`,
+defaulting to `3416`/`13416`) and `wallet_listener_url` → `:3420`/`:13420`, and does NOT restart
+the node — it prints "RESTART the <net> node to take effect". It also re-applies the de-rooted
+`root:grinsecret 640` mode a rebuild would reset to `600 root:root`. Runbook line: after any node
+rebuild, `grin-secret-sync` once + restart node + check admin health page.
 
 **b) Provider/IP change of the HUB — make endpoints DNS-based (small helper feature).**
 Today `add-peer` bakes the ipify-resolved raw IP into every pairing string; an IP change
-strands every gateway (each needs `wg_hub_endpoint` edited by hand). → **New code (cheap):**
+strands every gateway (each needs `wg_hub_endpoint` edited by hand). → **New code (cheap) — ✅ BUILT** (`pool_wg_endpoint_host`, menu `W → 5`; read by
+`07_lib_gwctl.sh`):
 optional `wg_endpoint_host` in pool.json (set once in helper/panel, e.g. `hub.grinium.net`);
 when set, pairing strings carry `host:port` instead of the raw IP. WireGuard resolves the
 name at `wg-quick up` — so a provider IP change becomes: update DNS A record → each gateway

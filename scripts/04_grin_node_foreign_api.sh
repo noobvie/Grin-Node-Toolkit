@@ -1883,9 +1883,10 @@ _enable_rest_api() {
     web_owner=$(nginx_web_owner)
     info "Nginx web user (REST collector will run as): $web_user"
 
-    # 3. Create the REST directory — the web user owns it (nginx reads) and 775 leaves
-    #    group-write for the web-user group, which is what the rest-collector cron (running
-    #    as the web user) needs. The node-collector writes here as root regardless.
+    # 3. Create the REST directory — owned by the web user, which is how BOTH writers
+    #    reach it: the rest-collector cron runs as that user (owner-write) and the
+    #    node-collector cron runs as root (ignores the mode). 775's group-write bit is
+    #    vestigial: nothing here puts a second user in the web group.
     mkdir -p "$rest_dir"
     chown "$web_owner" "$rest_dir"
     chmod 775 "$rest_dir"

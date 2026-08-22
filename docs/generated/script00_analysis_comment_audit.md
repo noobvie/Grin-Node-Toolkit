@@ -301,14 +301,14 @@ grin's own default. `3334` was a 2026-06 plan that was never implemented —
 | 13 | script05_implementation.md | `052` = "**RESERVED, unbuilt** — the only reservation" (×3 incl. the Phase-4 resolution note) | built 2026-08-09/10 (never VPS-run); the 05 band now holds no reservation, `092` is the toolkit's only one |
 | 14 | `script051_design_node_port_2026-05-24.md` | filename breaks this file's own naming rule | `git mv` → `script051_design.md`; pointer in `051_grin_fidelius.sh:10` updated |
 
-**Three code edits**, both carried forward to D2 by earlier batches (a user-visible string and
+**Three code edits**, all carried forward to D2 by earlier batches (a user-visible string and
 two comments in a shell script — no logic changed, `bash -n` clean):
 
 | Where | Was | Now |
 |---|---|---|
 | `04_grin_node_foreign_api.sh:117` | header: "node-collector.py runs as the grin OS user" | runs as **root** (that is what the cron it writes says) |
-| `04_grin_node_foreign_api.sh:1872` | `info "Grin data dir owner (node-collector will run as): $grin_user"` | "(informational; the collector cron runs as root)" — `grin_user` is **display-only**: grepped all 5 uses, it is never passed to a chown, chmod or cron user field |
-| `04_grin_node_foreign_api.sh:1883` | "grin_user gets group-write via the web-user group so node-collector can write node.json" | describes what 775 + web-user ownership actually does; the node-collector writes as root regardless |
+| `04_grin_node_foreign_api.sh:1872` | `info "Grin data dir owner (node-collector will run as): $grin_user"` | "(informational; the collector cron runs as root)" — `grin_user` is **display-only**: all 5 matches read (4 code lines + 1 comment), it is never passed to a chown, chmod or cron user field |
+| `04_grin_node_foreign_api.sh:1883` | "grin_user gets group-write via the web-user group so node-collector can write node.json" | both writers reach the dir through **web-user ownership** (rest-collector = owner-write, node-collector = root); 775's group bit is **vestigial** — nothing in the script puts a second user in the web group |
 
 ### Verified, not changed (so a later reader does not re-derive)
 - **Hub 08's key mapping holds exactly** as CLAUDE.md describes it: `1`→081, `2`→082,
@@ -340,6 +340,21 @@ two comments in a shell script — no logic changed, `bash -n` clean):
    `gateway-state/`, Drop's `GET /v2/foreign` reachability probe and its `GRIN_ADDR_RE`
    message) is a **code** bug and was deliberately left for the operator — D1/D2 change docs
    and comments only.
+
+### D2 review pass (2026-08-22, same day) — 4 self-corrections
+
+D2's own output was re-read against the code rather than re-trusted. Four things did not hold:
+
+| # | Where | Problem | Fix |
+|---|---|---|---|
+| 1 | `04_grin_node_foreign_api.sh:1886` | D2's *replacement* comment was itself wrong: it said 775's group-write "is what the rest-collector cron needs". It is not — the dir is `chown $web_user:$web_user` and the rest-collector cron runs **as** `$web_user`, so it writes as **owner**. Nothing in the script does a `usermod`/`gpasswd`, so no second user is ever in that group. | Rewritten: both writers reach the dir via web-user ownership (owner-write) or root; the group bit is vestigial |
+| 2 | `script05_implementation.md:39` | D2 fixed three "052 is RESERVED" claims in this file and **left the loudest one standing** two lines below its own edit — "**`052` is the single exception**" — so the file still contradicted itself and the README fix | Rewritten in the past tense, recording that the reservation was spent on exactly what it was held for; `092` named as the only live one |
+| 3 | `script07_design.md` §13.10a | Says "→ **New code:** add a pool consumer … `grin_sync_pool_stratum`" — but that function **exists** (`grin_node_secrets.sh:576`) and is wired into `grin_secrets_sync_all:661`. D2 cited it as a live code site three paragraphs earlier in the same file and still missed the contradiction | Marked ✅ BUILT with what actually shipped (all three toml keys, conf-driven port, prints a restart notice rather than restarting, re-applies `root:grinsecret 640`) |
+| 4 | `script07_design.md` §13.10b + intro | Same shape: `wg_endpoint_host` is built (`pool_wg_endpoint_host`, menu `W → 5`, read by `07_lib_gwctl.sh`), so "two need **new code**" was stale | Both marked ✅ BUILT; intro moved to past tense with a dated status line |
+
+**The pattern worth keeping:** #2/#3/#4 are all the same failure — a fix applied to the
+*matched string* without re-reading the paragraph around it. A grep-driven doc fix should end
+by reading the section it landed in, not just the line.
 
 ---
 

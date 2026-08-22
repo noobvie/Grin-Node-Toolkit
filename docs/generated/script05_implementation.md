@@ -36,9 +36,12 @@ hub's number (`script05_*.md`), never under a reserved one. Accio is the worked 
 held `052` as a reservation until its build began on 2026-08-09, which is when the number became
 an assignment and `script052_design.md` became a legitimate filename.
 
-**`052` is the single exception**, and it needs a reason to survive that rule: freeing a wallet
+**`052` WAS the single exception**, and it needed a reason to survive that rule: freeing a wallet
 slot next to `051` is the *only* thing the Drop migration bought. Letting anything else take it
-would mean paying for the migration and discarding what it was for.
+would have meant paying for the migration and discarding what it was for. Accio's build start on
+2026-08-09 spent the reservation on exactly what it was held for, so the 05 band now carries no
+exception at all — `054`–`058` are plain unallocated numbers, and the toolkit's only live
+reservation is `092` (mwixnet mixer) in the 09 band.
 
 ## 1.2 Menu keys — FIXED SLOTS
 

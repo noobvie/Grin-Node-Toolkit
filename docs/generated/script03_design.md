@@ -622,3 +622,662 @@ never opens itself, so an `LD_PRELOAD` shim cannot see that fd. And the pipeline
 `nice`, but `nice -n 19` already yields whenever anything else wants the CPU, and the node
 — the box's real CPU consumer — is stopped for the duration anyway. Not worth the
 dependency on systemd being the init in every deployment target.
+
+---
+
+## 14. Plan — remaining fixes, and the rsync proposal
+
+### 14.1 The open items, smallest first
+
+| # | item | size | blocks anything? |
+|---|---|---|---|
+| **A** | **VPS acceptance run of phases 1-4.** Nothing built since 2026-08-17 has executed on a real server. Run `--cron-nginx` on testnet first, watch step 0a's numbers against reality, confirm the swap, confirm `chmod 644` (untestable locally — Git-bash fakes POSIX modes), confirm the node restarts after a *deliberately* failed compress. | 1 session | **yes — everything** |
+| **B** | Measurement **0a**: `pigz -1` vs `pigz -6` vs `pigz -0` ratio on real `chain_data`. Decides `COMPRESS_LEVEL_FULL`, now a pure env-var change. | 20 min | no |
+| **C** | Measurement: `du -sk --apparent-size` vs `du -sk` on `chain_data`. Decides whether `tar --sparse` is worth pursuing at all. | 1 min | no |
+| **D** | `pigz --rsyncable` for the SSH-share path (see 14.3). Verify with `pigz --help \| grep -i rsyncable` before relying on it. | small | no |
+| **E** | `ensure_package` re-attempts an install every run when a package is absent from the distro's repos, costing an `apt-get update` per run. Pre-existing; applies to pigz/nocache/tmux/rsync. | small | no |
+
+**A gates everything.** Nothing else should ship before phases 1-4 have run once on a real
+box, because every failure mode they address is a *runtime* one.
+
+### 14.2 Why remote rsync is a different question from the staging I rejected
+
+Phase 4's original plan died because **rsync disables delta-transfer when both paths are
+local** — `--whole-file` is the default there — so same-box staging degenerates into a plain
+full copy: +20 GB disk and ~+40 GB IO on the box that already has the problem.
+
+**None of that applies to a remote destination.** Over SSH the delta algorithm is on by
+default, and — this is the part that matters — the 20 GB of *disk* the copy needs lands on
+the mirror, not on the node box. The rejection was about where the cost lands, not about
+rsync.
+
+### 14.3 The cheap version — keep today's architecture, add one flag
+
+Today `run_ssh_share_for_combo` already rsyncs the **finished archive** to remote mirrors,
+which is already a "1 producer, N thin mirrors" model. Its weakness: **gzip output is
+chaotic**, so a one-block change to the input changes the whole rest of the stream and rsync
+can find no delta at all. Every biweekly run therefore pushes the full ~17 GB to every
+mirror.
+
+`pigz --rsyncable` (`-R`) resets the compressor at content-defined boundaries, so an input
+change perturbs only its own neighbourhood of the output. The result is still a standard
+gzip stream — `tar -xzf` and every client contract are untouched — at roughly a 1% size
+penalty. Upload per mirror per run drops from 17 GB to the size of the actual chain delta.
+
+**This is the highest value-per-risk item on the page.** It is one flag, it is
+client-invisible, and it does not change the architecture at all.
+
+### 14.4 The real proposal — move compression off the node box
+
+The node box currently does all four expensive things: read 20 GB, compress, write 17 GB,
+serve. Split them:
+
+```
+  NODE BOX (runs grin, has the problem)        MIRROR BOX (thin, no grin node)
+  ──────────────────────────────────────       ────────────────────────────────
+  pass 1: rsync chain_data --> mirror          receives raw chain_data
+          (node RUNNING, zero downtime)
+  stop node
+  pass 2: rsync delta                          receives the delta
+  start node          <-- downtime is only pass 2
+                                               compress at leisure, nice'd
+                                               publish .tar.gz + .sha256 + manifest
+                                               serve over HTTPS exactly as today
+```
+
+What the node box pays afterwards: **one 20 GB read, no compression, no archive on disk,
+and downtime measured in a couple of minutes instead of half an hour.** The original
+complaint — IO, CPU, and disk for the big `.gz` — is answered on all three, and
+**Script 01 never learns anything changed**, because the mirror still publishes the same
+`.tar.gz`, the same `.sha256`, the same `chaindata.json` and the same status note.
+
+That last property is what makes this worth doing rather than the object-storage route:
+it is entirely a producer-side change, so it sits in the *client-invisible* class from
+section 2 and can ship without waiting for anything to propagate.
+
+### 14.5 Sharp edges
+
+1. **Pass 2 must not trust mtime.** rsync's quick check is size + mtime. `lmdb/data.mdb` is
+   written **in place through an mmap**, so a page can change without the size changing, and
+   mmap mtime updates are not prompt in the way an ordinary `write()` is. Worse, grin
+   *compacts* the MMR, which can rewrite a `pmmr_*.bin` to the same size. A missed byte here
+   does not fail loudly — it produces a chain_data that opens and is subtly wrong.
+   **Pass 2 runs with `--ignore-times` over the whole tree.** That costs a full 20 GB read
+   on each side during downtime — call it ~2 minutes on ordinary disks — and is still an
+   order of magnitude better than compressing. Correctness first; the win is large enough
+   that it does not need shaving.
+
+2. **The acceptance test is "a node starts from it", not "rsync exited 0".** The only proof
+   a copied chain_data is intact is a fresh node opening it and syncing to tip. That test is
+   mandatory before this replaces the current path for real, and it must be run on testnet.
+
+3. **`--delete` pointed at raw chain_data is a loaded gun.** The destination must be a
+   dedicated directory that no grin node ever runs from. Getting this wrong deletes a node's
+   chain data rather than a stale archive.
+
+4. **Where does the permanently-alive nginx mirror live?** If it stays on the node box, that
+   box still has to compress and still has to hold 17 GB — and this whole change buys
+   nothing. **Recommendation: make the permanent mirror one of the thin boxes.** The node box
+   then serves nothing and keeps no archive. This is the one decision the plan actually needs.
+
+5. **Two products must not both drive the node.** Step 0a, retention and the swap all live in
+   the nginx pipeline. An rsync-of-chain_data path needs its own stop/start bracket with the
+   same guarantee F4 just added — **the node gets restarted on every exit path** — or it
+   reintroduces the exact bug that was just fixed.
+
+### 14.6 Suggested order
+
+1. **A** — VPS acceptance of phases 1-4. Blocks the rest.
+2. **B, C, D** — three measurements and one flag. Cheap, independent, informs everything.
+3. **14.4 on testnet only**, behind a new config switch, with the existing nginx path left
+   completely intact as the fallback. Prove edge 2 (a node starts from the copied data)
+   before mainnet is discussed.
+4. Mainnet cutover only once testnet has completed a full biweekly cycle unattended.
+
+Steps 1-2 are worth doing regardless of whether 14.4 ever happens. Step 3 is the one that
+needs a real decision (edge 4) before any code is written.
+
+---
+
+## 15. Spec — remote copy (option C) rework
+
+Requirements from the operator, plus what review turned up around them. Nothing here is
+implemented yet.
+
+### 15.1 Gate the copy on the archive being complete — but not on the status *text*
+
+**Requirement:** read `check_status_before_download.txt` before copying, so a corrupt or
+half-built archive is never pushed.
+
+Right, and the current code is weaker than that: `run_ssh_share_for_combo` only checks that
+*some* `*.tar.gz` exists in the source dir. It would happily upload a half-written one.
+
+But the status note is the **weakest** of the three signals available locally, because it is
+a human-facing string — "Sync completed." proves a line was written, not that the tarball is
+whole. Gate on all three, cheapest first:
+
+| # | gate | proves |
+|---|---|---|
+| 1 | `chaindata.json` exists | the publish reached step 7 |
+| 2 | status note contains `Sync completed.` | same signal, second source |
+| 3 | manifest's `archive` / `sha256` match the files on disk | names agree |
+| 4 | **`sha256sum -c` the local archive** | **the bytes are actually intact** |
+
+Only #4 answers "is it corrupted". It costs a ~17 GB read (a couple of minutes), which is
+cheap next to uploading 17 GB of garbage — and cheaper than the alternative, which is
+discovering the corruption on the mirror after it has replaced a good archive.
+
+**Also needed: a lock.** Nothing today stops the SSH job firing while the nginx pipeline is
+mid-swap. A shared lock file (`flock` on `/opt/grin/.share-<site_key>.lock`) held by both
+pipelines is the fix. The same lock stops two SSH pushes overlapping, which a slow uplink
+makes likely at 17 GB.
+
+### 15.2 Target identity — the `<type><net>` key must match
+
+**Requirement:** the target location must carry the same `<type><net>` key so the wrong
+network cannot be overwritten.
+
+This is the most important item on the page, because the failure is **destructive**: rsync
+runs with `--delete`, so one wrong path in the config does not merely misfile an archive —
+**it deletes another network's mirror.** Script 01 would eventually reject the mismatched
+host (its step 3b checks the tar name against the expected `site_key`), but only after the
+good archive is already gone.
+
+Three parts:
+
+1. **One shared `_site_key_for <ntype> <net>` helper.** The `full_mainnet -> fullmain`
+   mapping is currently written out at least twice (`write_chaindata_manifest`, and again in
+   the nginx setup around line 441). A third copy for the SSH path is how they drift.
+
+2. **Fix the default.** Line 629 falls back to `/var/www/${ntype}${net:0:4}`, which yields
+   `prunedmain` and `pruned` + `test` = **`prunedtest`** — neither is a real site_key
+   (`prunemain`, `prunetest`). It is currently **unreachable**, because the defaults block
+   sets every `REMOTE_WEB_DIR_*` correctly before the config loads, so `${!var_rdir:-…}`
+   never falls through. Latent, not live — but it is wrong code sitting exactly where
+   someone will one day rely on it. It should be `/var/www/$(_site_key_for …)`.
+
+3. **Verify identity on the remote, every run, before transferring.** Write a marker on
+   first successful upload and check it thereafter:
+
+   ```
+   <remote web dir>/.grin-mirror.conf     site_key=prunetest
+                                          source_host=<producer>
+                                          first_seen=<utc>
+   ```
+
+   A dotfile on purpose: nginx autoindex hides it, and the existing `--exclude='.*'` already
+   shields it from `--delete`, so it survives every publish cycle. Logic:
+
+   - marker present and `site_key` matches → proceed
+   - marker present and **mismatched** → **refuse, loudly**, transfer nothing
+   - no marker, remote has a `chaindata.json` → compare its `site_key` instead
+   - no marker, remote has `*.tar.gz` → compare the filename the way Script 01's step 3b does
+   - no marker, remote dir empty → genuine first use; write the marker. In interactive setup,
+     confirm explicitly; in cron, proceed (an empty dir cannot be someone else's mirror)
+
+### 15.3 Scheduling — offset is the right UX, state is the right gate
+
+**Requirement:** schedule the copy 2-3 hours after the archive was built.
+
+Good as a default, dangerous as the only mechanism: if a build runs long, is skipped, or
+fails, a fixed clock fires anyway. With retention now in place the failure is quiet rather
+than loud — the previous archive is still sitting there complete, so the copy would succeed
+and burn a full 17 GB upload re-sending an archive the mirror already has.
+
+Two changes make the offset safe:
+
+1. **Derive the offset from the nginx cron, do not ask for a second clock.** The script
+   already knows that network's schedule, so the menu should offer *"3 hours after the build
+   (auto: 1st & 15th at 03:00)"* rather than a bare cron prompt. Change the build time later
+   and the copy follows.
+
+2. **Record what was last uploaded, and no-op when it has not changed.** Keep the manifest's
+   `generated_utc` (and sha) per target in a state file. On each run, compare; identical →
+   exit 0 having done nothing. That makes the job **idempotent**, so it can safely run hourly,
+   self-heals a late or failed build, and makes the exact offset stop mattering. Belt and
+   braces: the offset for humans, the state check for correctness.
+
+### 15.4 Key management
+
+Today the setup asks for a key **path** per combo and tests it with `BatchMode=yes`. Missing:
+
+- **Generate** if absent — `ssh-keygen -t ed25519 -N "" -f /root/.ssh/grin_share_ed25519`
+  (ed25519, not the `id_rsa` default the prompts currently suggest)
+- **Install** — `ssh-copy-id`, the one and only time a password is typed. Must run against a
+  real TTY; never route the password through the script
+- **Test** as a standalone menu action, not only as a side effect of setup
+- **Key is a property of the host, not of the combo.** Three combos to one mirror currently
+  store three copies of the same path. Group connection settings per host and let each combo
+  reference one
+
+Restrict what the key can do on the mirror: a dedicated user, and ideally a
+`command=`-restricted `authorized_keys` entry (rrsync) so a stolen producer key cannot become
+a shell on every mirror.
+
+### 15.5 Transfer flags — four real problems in the current rsync
+
+```bash
+rsync -az --progress --delete --exclude=… -e "ssh -i $key -p $port" "$src/" "$host:$rdir/"
+```
+
+| problem | fix |
+|---|---|
+| **`--delete` defaults to `--delete-during`** — stale files are removed *as the transfer runs*, so a failure partway can leave the mirror with neither the old archive nor the new one. The same failure this repo just fixed locally, still live on the remote | **`--delete-after`** |
+| **No resume.** An interrupted 17 GB upload restarts from zero, which on a flaky link may never converge | **`--partial-dir=.rsync-partial`** — a dotdir, so partials stay out of the autoindex and out of `--delete`'s way |
+| **No bandwidth cap.** The upload can saturate the producer's uplink and starve the node's P2P and the pool's stratum | **`--bwlimit`**, operator-set |
+| **No timeouts.** A stalled transfer hangs forever and the next cron fires on top of it | `--timeout`, `ssh -o ConnectTimeout= -o ServerAliveInterval=` — plus the 15.1 lock |
+
+Two smaller ones: `-z` compresses an already-gzipped payload (modern rsync auto-skips `.gz`
+via its default `--skip-compress` list, so this is wasted CPU only on older rsync — worth
+setting explicitly); and `--progress` in a cron job writes a progress line per file into the
+log, where `--info=progress2` or nothing is wanted.
+
+### 15.6 Verify after the copy, and keep a status the operator can read
+
+**Requirement:** be able to check whether the last copy completed properly.
+
+- **Verify remotely:** `ssh host "cd <rdir> && sha256sum -c <base>.sha256"`. rsync verifies
+  its own stream, but only this proves what actually landed on the mirror's disk. Run it
+  *before* publishing the remote `chaindata.json`, so a bad copy never gets advertised.
+- **Per-target state file** — `/opt/grin/state/share_ssh_<site_key>.json`: last attempt,
+  last success, archive name, sha, bytes, duration, exit status, error text.
+- **Menu shows a table** built from those files: target, site_key, last success, age, result.
+  That is the "did last night's copy work" answer, at a glance, without reading logs.
+- Keep the dated per-run logs; the state file is the summary, not a replacement.
+
+### 15.7 Proposed menu
+
+```
+  Remote Copy (SSH)
+  1) Targets            add / edit / remove   [table: host, site_key, last OK, age]
+  2) Keys               generate / install / test
+  3) Schedule           offset after build, per target
+  4) Copy now           one target or all
+  5) Status & logs      last result per target, tail a run log
+  6) Verify remote      re-check the mirror's checksum without copying
+```
+
+Per the hub conventions: rows show names, keys are positional here (03 is not hub 05 or 08),
+and every dispatch is `||`-guarded.
+
+### 15.8 Things not in the original list
+
+1. **A mirror should be able to state its own identity** — the `.grin-mirror.conf` marker in
+   15.2 also lets 081's monitor and a human answer "what is this box supposed to be serving?"
+2. **`--delete` needs an allow-list of what it may remove**, not just the current exclude
+   list. The excludes protect `index.html`, `robots.txt`, `sitemap.xml`, `grin-logo.svg`,
+   `mirrors.json` — anything a mirror gains later is unprotected by default.
+3. **Fan-out is not supported.** `REMOTE_HOST_<NET>_<TYPE>` is singular; the "1 producer, N
+   mirrors" model needs a list. That is a config schema change — decide before building the UI
+   around the singular form.
+4. **Failure notification.** A copy that silently fails for six weeks is indistinguishable
+   from one that works, at biweekly cadence. 082 already has off-box alerting to reuse.
+5. **Remote free space pre-flight**, mirroring step 0a: `ssh host df -Pk <rdir>` before
+   transferring. Same reasoning, and `--delete-after` makes it necessary — the space is not
+   reclaimed until the end.
+6. **Clock skew.** The state check compares the manifest's `generated_utc` against a recorded
+   value, so it is immune. But the *offset* schedule is not; `check_timezone_utc` already
+   guards the producer, and the mirror's clock does not matter as long as nothing derives
+   freshness from it.
+
+### 15.9 Open decisions
+
+- **Fan-out now or later?** It changes the config schema, so it is cheaper to decide before
+  the UI is written than after.
+- **Does the copy stay a separate cron, or become step 10 of the nginx pipeline?** Chaining
+  removes the scheduling question entirely and inherits the lock for free, at the cost of
+  making a slow upload part of the build window. The state check makes the separate cron safe,
+  so this is a preference, not a correctness call.
+
+---
+
+## 16. Review of the §15 implementation (2026-08-21)
+
+A read-through of the shipped code, then a re-test against reality rather than
+against my own assumptions. Nine findings, all fixed. The interesting part is
+why the first test pass missed the worst of them.
+
+### 16.1 The blocker, and why the tests said it was fine
+
+`_rc_derive_schedule` **never matched anything**, so menu option 5 failed every
+time with *"Could not derive a schedule from the build cron"* and then advised
+setting a build schedule that already existed.
+
+The nginx installer writes a cron entry as **one line with the marker appended
+at the end**:
+
+```
+0 0 1,15 * * bash …/03_….sh --cron-nginx-main >> …log 2>&1 # grin-node-toolkit: grin_share_nginx_main
+```
+
+The implementation looked for the marker on a line *of its own* and then took
+the line after it (`grep -A1 -x -F`) — a layout this script has never written.
+
+The first harness constructed its fixture crontab in that same imagined
+two-line format, so it exercised the code against the assumption instead of
+against the code that produces the input. Ten green tests, zero coverage. The
+rule this breaks is already in CLAUDE.md: *a test that can't observe the thing
+you're checking is not evidence.*
+
+The replacement harness lifts the format out of the source — it greps the
+installer's own `cron_line="…"` assignment and `eval`s it to build fixtures —
+so the test now fails if either side changes independently.
+
+The legacy-prefix hazard that motivated the original `-x` is real
+(`…grin_share_nginx` is a prefix of both per-network markers, so a plain `-F`
+returns the testnet line when asked about mainnet). The correct fix is the
+end-of-line anchor the installer *already* uses when it retires that line:
+`grep -E 'grin_share_nginx[[:space:]]*$'`.
+
+### 16.2 The producer never took the lock
+
+The lib documented mutual exclusion with the nginx pipeline. `grep -n flock
+scripts/03_*.sh` returned nothing: only copy-vs-copy was serialised. The window
+is real — preflight verifies archive N, a build starts, and the swap deletes the
+manifest and the archive while rsync is still reading them.
+
+Fixed as an asymmetric lock, which is better than the symmetric one the comment
+had claimed:
+
+- the **copy** holds it for its whole run — it is the reader;
+- the **build** takes it only around the publish swap (`rm`+`mv`, seconds), not
+  around the ~30 min compression, which writes to `.tmp` files no reader looks
+  at. Serialising the compression would delay builds behind uploads for nothing.
+- the build waits a bounded 30 min and then swaps anyway rather than stall
+  behind a stuck upload. `rc_push_target` re-reads `generated_utc` after its
+  transfer and aborts rather than publish a set spanning two builds, which is
+  what makes proceeding safe.
+
+### 16.3 A failed copy took a healthy mirror out of rotation
+
+The remote manifest was removed and a *"DO NOT download"* note written **before**
+rsync, and never restored on failure. The mirror still held a complete previous
+archive — `--delete-after` had not run — but Script 01's discovery greps for
+`Sync completed.`, so it skipped that mirror entirely. At the fullmain cadence,
+one network blip = **up to 14 days** of a working mirror unused.
+
+That is the same regression `RETAIN_PREVIOUS` exists to prevent locally, and the
+mirror now gets the same rule: the manifest is stashed to `.chaindata.json.prev`
+(a dotfile, so `--exclude='.*'` shields it from `--delete`), and every failure
+path restores it along with a status note that still says `Sync completed.` and
+explains it is the previous build.
+
+### 16.4 Smaller ones
+
+| | Was | Now |
+|---|---|---|
+| `RC_SCHED_WARN` | set inside `$(…)` — a subshell — so the reason for a refusal was always discarded | function returns via `RC_SCHED_EXPR`/`RC_SCHED_WARN` globals, called directly |
+| "Copy now" | `rc_should_push` trusted our own state file; a wiped mirror was skipped as "current" | confirms `generated_utc` **on the mirror**, plus an explicit force prompt |
+| `rc_target_valid` | accepted `/var/www`, `/srv`, `/usr/share/nginx/html` — which `--delete` would erase | remote dir must end in `/<site_key>` |
+| metacharacters | `/var/www/x';id;'` and host `-oProxyCommand=…` both accepted | rejected, along with whitespace and a leading `-` |
+| `enabled` | unvalidated; `yes` silently meant *disabled* | must be `true`/`false`; ssh key path must be non-empty |
+| enable/disable | remove-then-add — a write failure between them deleted the mirror | `rc_target_set_enabled` rewrites in place |
+| corrupt marker | refusal read *"is a 'marker' mirror"* — named no file, suggested no fix | names the file and says to delete it |
+| copy schedule | no way to remove one; `remove_nginx_schedule` greps `grin_share_nginx`, which by design misses `grin_share_remote` | menu option 7, per-site_key or all |
+| remote chown | hardcoded `www-data:www-data`, absent on RHEL mirrors, failed into `2>/dev/null` | dropped; `rsync -a` preserves the producer's 644, which is what nginx needs |
+
+### 16.5 Checksum gates — off by default (operator decision)
+
+`RC_VERIFY_LOCAL` and `RC_VERIFY_REMOTE` now default to **false**. Reading a
+17–20 GB archive twice locally is exactly the IO this redesign exists to remove,
+and the wire is already covered: rsync checksums every file it transfers and
+exits non-zero if the reconstruction does not match, so a corrupt *transfer*
+fails the run on its own.
+
+What is given up, stated plainly: a source archive that was already corrupt on
+disk will be fanned out to every mirror, and nothing proves what is sitting on a
+mirror afterwards. The `.sha256` ships with the archive, so downloaders verify
+for themselves. Either knob flips back to `true` without other changes.
+
+### 16.6 Verification status
+
+52 local tests pass — 28 covering schedule derivation, target validation,
+in-place enable/disable and the unschedule patterns; 24 covering the transfer
+lifecycle with `ssh` executing its command locally against a simulated mirror
+directory, so the success path, the restore-on-failure path and the
+rebuilt-mid-transfer abort are all exercised end to end.
+
+**Not covered locally:** Git-bash has no `flock`, so the lock itself only runs
+its degrade-to-no-op branch here. Real transfers, key auth and the remote
+identity probe need the VPS. Both remain part of the acceptance session.
+
+---
+
+## 17. Closing the open items (2026-08-21)
+
+Everything left in §14.1 and §15 that does not require the VPS is now built.
+
+### 17.1 Failure notification — `lib/grin_alerts.sh`
+
+An unattended fortnightly job that fails leaves a mirror stale for a fortnight,
+and the only evidence is a log nobody opens.
+
+The obvious implementation is to call into Script 082, which already knows how
+to reach the operator. **That is the wrong move**: 082 deliberately compiles a
+*self-contained* worker to `/opt/grin/access-watch.sh` so a tamper alert never
+depends on the rest of the toolkit still being intact. Making it source a lib
+would undo the one property it is built for.
+
+So the new lib duplicates the delivery code and shares **the thing that actually
+matters — the same `alert.conf`**. Channels are configured once, in 082's menu,
+and any product that sources the lib can reach them. The cost is stated in the
+lib header: a channel added to 082 will not appear here on its own.
+
+Behaviour worth knowing:
+
+- **Driven off the per-target state files**, not off this run's results — so a
+  mirror that failed two runs ago and was skipped this time is still counted.
+  A run-scoped summary would quietly omit it.
+- **Standing failures do not re-alert.** The failure set is hashed; a new or
+  changed failure speaks, an unchanged one stays quiet. Same rule 082 uses.
+- **Recovery gets exactly one message**, and only to someone who was told about
+  the failure.
+- **An undeliverable alert does not record the hash** — otherwise the first
+  failed delivery would silence every repeat of that failure.
+- `last_result=running` is reported as a failure: it means a run died without
+  reaching either branch (kill, reboot, OOM), which is a failure that never got
+  to say so.
+- The menu path sets `RC_NOTIFY=false`. Alerting an operator about something
+  they just watched fail on screen trains them to ignore the channel.
+
+A test that loaded two different confs in one shell caught a real bug here:
+`set -a; . conf` **exports** every key, so a channel removed from the conf kept
+resolving from the previous load — CLAUDE.md's documented `source` trap. The
+keys are now unset before each load.
+
+### 17.2 `--delete` allow-list
+
+`--exclude` protects the files we thought to name and nothing else. rsync filter
+rules are first-match-wins, and `R` (risk) marks a file deletable while `P`
+(protect) exempts it, so:
+
+```
+--filter='R *.tar.gz' --filter='R *.sha256' --filter='P *'
+```
+
+inverts the default: `--delete` can remove a superseded archive and its
+checksum, and **literally nothing else**. Together with the path rule from
+§16.4, a wrong `remote_dir` is now a misfiling rather than an erasure.
+
+### 17.3 `pigz --rsyncable` (§14.1 D)
+
+Enabled when present, on both pigz and gzip. It resets the compressor at
+content-defined boundaries, so one changed block near the start of the stream
+does not shift every byte after it — without it rsync ships all ~18 GB again on
+every build.
+
+This matters *because the copy goes over ssh*: rsync's delta transfer is on by
+default there, and only local→local implies `--whole-file`. chain_data grows
+mostly by append, so most of the archive genuinely is unchanged between builds.
+Costs a few % ratio, which at level 1 is noise.
+
+**Probed, never assumed.** It is a build-time option missing from some distro
+pigz builds, and an unknown flag makes pigz exit non-zero — which would fail the
+whole pipeline rather than degrade.
+
+### 17.4 `ensure_package` no longer retries for ever (§14.1 E)
+
+When a package genuinely is not available — `nocache` is in no RHEL base repo —
+the old version ran a full `apt-get update` plus a failing install on **every
+cron run, for ever**: minutes of network and disk on a box this redesign exists
+to keep quiet, to reach last run's answer.
+
+A failure now writes a marker and is not retried for `PKG_RETRY_HOURS` (24).
+Only *failure* is cached, and only for a while, so a package that appears in a
+repo later is still picked up. An installer that exits 0 without producing the
+command counts as a failure — what the caller needs is the binary.
+
+### 17.5 Compression benchmark — menu key `J` (§14.1 B and C)
+
+`COMPRESS_LEVEL_FULL=1` was chosen from how Bulletproof rangeproofs behave in
+general, not from a measurement. Settling it properly means compressing the same
+bytes at several levels, and a full run is ~30 min with the node stopped — so
+nobody does it twice and the question stays open.
+
+Key `J` samples instead: it takes the largest files in chain_data (the PMMR data
+files, which dominate both the size and the ratio), compresses a few hundred MB
+of them at 0/1/3/6/9, and prints ratio, seconds, MB/s and a projected archive
+size. **The node keeps running** — this only reads. A warm-up pass runs first,
+or the first level would pay for the disk read and every later one would read
+from page cache, making level 0 look slowest.
+
+It also prints `du` vs `du --apparent-size`, which answers §14.1 C directly:
+apparent > allocated means the files are sparse and `tar --sparse` has something
+to save; equal means it has nothing to save, so its Windows-bsdtar
+incompatibility buys us nothing and the question is closed.
+
+Finally it times `--rsyncable` at the shipped level, so the mirror discount has
+a measured price rather than an assumed one.
+
+**§14.1 B was already half-closed** and this was missed in the earlier summary:
+`preflight_disk_space` self-calibrates, preferring a ratio measured from the
+published archive over the `COMPRESS_RATIO_*` constant. What was actually open
+was the *level* choice, which is what `J` answers.
+
+### 17.6 Verification
+
+**75 local tests pass** — 38 for schedule derivation, target validation,
+in-place enable/disable and the transfer lifecycle; 37 for alert dispatch,
+notification dedupe/recovery, the `ensure_package` cache and the filter argv.
+
+Still needs the VPS, and only the VPS:
+
+| | why |
+|---|---|
+| `flock` | not in Git-bash, so the lock only runs its degrade-to-no-op branch here |
+| rsync filter semantics | no rsync locally — the `R`/`P` ordering is documented behaviour, not observed |
+| real transfers, key auth, identity probe | need two hosts |
+| the benchmark's actual numbers | needs real chain_data |
+| the phases 1-4 acceptance run | §14.1 A, unchanged |
+
+---
+
+## 18. Pre-test review — logic, flow, syntax, UI (2026-08-21)
+
+A read-through of §15–§17 before the first VPS run. Nine defects, all found by
+reading the code against the file it lives in rather than against my memory of
+it. Three would have been visible immediately on the VPS; four were silent.
+
+### 18.1 Silent — would have shipped unnoticed
+
+**Rescheduling the copy stacked a second cron entry.** `menu_remote_schedule`
+de-duplicated by removing the *exact line* it was about to write. Changing the
+offset from 3h to 5h produced a line that no longer matched, so the old one
+survived: the copy then ran twice a night, on two schedules, for ever. The tag
+line *was* removed, so the survivor was untagged and did not appear in the
+"installed copy schedules" list. Now filtered on `--cron-remote <site_key>`,
+the same predicate `menu_remote_unschedule` already used.
+
+**`rc_target_remove` reported success for a mirror that did not exist.** It
+returned 0 unconditionally, so the menu printed "Removed." after a mistyped
+name — an operator retiring a mirror could walk away believing it was gone
+while it was still enabled and still receiving every upload. `rc_target_set_enabled`
+already refused an unknown alias; the two now agree. An empty site_key is also
+refused: `rc_target_exists` treats empty as "any", so it matched on the alias
+alone and then deleted nothing, reported as success.
+
+**The compression benchmark's pick-list could never populate.** It called
+`load_nginx_config` and read `${k}_CHAIN_DATA`, but those live in
+`$INSTANCES_CONF`; the nginx conf holds `LOCAL_WEB_DIR_*`, which are the *output*
+directories. Every run fell through to "type a path", which reads as a design
+choice rather than the bug it was. It now sources `$INSTANCES_CONF` as well.
+
+**`menu_remote_schedule` was the only cron writer in the file that piped
+`crontab -l` straight into `crontab -`.** Every sibling captures into a variable
+first. Real `crontab -` consumes stdin before writing, so this was probably
+survivable — but reading and writing one store in a single pipeline is the exact
+shape that truncates if the writing end ever opens its target first, and there
+was no reason for this one to differ from the other eight.
+
+### 18.2 Visible — would have shown up on the first run
+
+**The "Copy to mirrors now" screen promised checksum verification that no
+longer happens.** It still said each archive is verified locally before upload
+and again on the mirror. Both gates were turned off by default in §16 (they read
+a 17–20 GB file twice more, which is the IO this redesign exists to avoid). A
+screen claiming a gate nobody is running is worse than no screen. It now states
+what is actually true: rsync verifies what it transfers, and the `.sha256` ships
+for the downloader.
+
+**The sparseness report could emit a raw bash error mid-table.** The guard tested
+`"${real_kb}${app_kb}"` as one string, so one `du` failing left the surviving
+digits looking numeric and the comparison printed
+`[: : integer expression expected` into the middle of a formatted report. Tested
+separately now.
+
+**The `--rsyncable` row was timed at the wrong level.** It read `$NODE_TYPE`,
+which detection has not set when the menu is reached, so it silently used the
+pruned level even when benchmarking the archive node. It now uses the instance
+the operator actually picked, and says which.
+
+### 18.3 UI consistency
+
+**Remove and enable/disable were the only prompts asking for typed input.**
+Everything else in the remote menu is a numbered choice; those two asked the
+operator to type a `site_key` — internal jargon appearing in no other prompt —
+and an alias, from memory. Replaced with `_rc_pick_target`, a numbered list that
+shows site_key, name, host and `(disabled)`, and returns the fields directly.
+This is also what removed the class of bug in §18.1: with no free text there is
+no typo to mis-handle.
+
+### 18.4 Two flow changes
+
+**The copy now waits 60s for the share lock instead of giving up instantly.**
+The two holders are not alike: a build holds it only for the publish swap (a few
+seconds of rm+mv), so failing immediately turned a routine overlap into a
+reported failure and a fortnight of staleness. A running copy holds it for
+hours, which 60s cannot outlast — so that case still gives up fast, as it should.
+
+**`_rc_restore_remote` is gated on whether a stash was actually taken.** The
+first failure path is "ssh connection failed", and restoring over a dead
+connection cost a second full `ConnectTimeout` per unreachable mirror.
+
+### 18.5 One security tightening
+
+`_galert_load` sourced `alert.conf` under `set -a`, copying 082. 082 needs the
+export because it hands the values to a compiled worker; here they are only read
+in-process, so the export put the Telegram bot token and the nostr secret key
+into the environment of every child the run spawns afterwards — tar, pigz, ssh,
+rsync — for no gain. Dropped.
+
+### 18.6 Verification
+
+110 tests across three harnesses (38 + 37 + 35), full `bash -n` sweep clean. The
+new harness lifts `menu_remote_schedule`, `_rc_derive_schedule` and
+`_rc_pick_target` out of the script with `awk` and drives the real code, rather
+than restating what it is believed to do — the methodology fix from §16, where a
+hand-written fixture validated an assumption instead of the code.
+
+The two picker tests failed on first run because the harness piped stdin into
+`_rc_pick_target`, which put it in a subshell and discarded the globals it sets.
+That was the test's fault, not the code's — the menu calls it directly. Noted
+because the same shape is a real trap anywhere the pattern is reused.
+
+### 18.7 Known limit, not fixed
+
+If the *build* never runs, `rc_preflight_local` refuses and no per-target state
+is written, so `rc_notify_summary` stays silent — a month of failed builds
+leaves every mirror stale with no alert from the copy side. That is arguably
+correct division of labour (the build cron owns its own failure surface) and
+fixing it here would mean the copy alerting about something it does not run.
+Flagged rather than built.

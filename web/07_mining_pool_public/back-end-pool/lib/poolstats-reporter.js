@@ -1,8 +1,12 @@
 /**
- * Poolstats Reporter — Push pool stats to miningpoolstats.stream
+ * Poolstats Reporter — optional PUSH of pool stats to an external monitor.
  *
- * Periodically collects pool metrics and submits them to external monitoring.
- * Uses HTTPS only, secure API key storage, and never logs sensitive data.
+ * NOT the live miningpoolstats.stream integration: that one is a PULL feed they poll,
+ * GET /api/pool/poolstats in index.js. This pusher is OFF unless pool.json sets
+ * poolstats_enabled: true (the Script 07 installer never writes that key), and its
+ * endpoint default is a guess at an MPS submit API.
+ *
+ * Uses HTTPS only, keeps the API key in the Authorization header, never logs it.
  */
 
 const https = require('https');
@@ -100,6 +104,9 @@ class PoolstatsReporter {
     return {
       pool_name: this.config.pool_name || 'Grin Pool',
       url: this.config.subdomain ? `https://${this.config.subdomain}` : '',
+      // ⚠ HARDCODED — a testnet pool reports itself as mainnet here. The pull feed does this
+      // correctly (index.js: `config.network === 'testnet' ? 'testnet' : 'mainnet'`); fix this
+      // the same way before ever enabling the pusher.
       network: 'mainnet',
       pool_fee: this.config.pool_fee_percent || 0,
       miners: minerCount,
@@ -200,8 +207,10 @@ class PoolstatsReporter {
   }
 
   /**
-   * Rotate API key (for admin panel security)
-   * Called when user changes key via settings
+   * Rotate API key (for admin panel security). Called by POST /api/admin/poolstats/update-key.
+   * ⚠ IN-MEMORY ONLY — nothing writes the new key back to pool.json, so it is lost on the next
+   * service restart. Persist it in pool.json (or move the key into pool_config) before relying
+   * on this from the panel.
    */
   updateApiKey(newKey) {
     if (!newKey || newKey.trim().length === 0) {

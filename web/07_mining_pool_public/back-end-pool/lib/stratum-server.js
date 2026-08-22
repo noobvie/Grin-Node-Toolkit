@@ -108,7 +108,7 @@ class StratumServer {
   constructor(config) {
     this.config = config;
     this.port = config.stratum_port || 3333;
-    // Connection-flood caps (finding 3). Global ceiling bounds total sockets; the per-IP cap
+    // Connection-flood caps. Global ceiling bounds total sockets; the per-IP cap
     // applies ONLY to the public listener keyed on the real direct IP — region listeners are
     // trusted WireGuard tunnels where one peer IP fronts a whole region, so they are exempt.
     // Defaults sized with 5× headroom over a ~1000-miner target (miners run several rigs, so
@@ -218,8 +218,8 @@ class StratumServer {
     };
     // Remember which node job this pool job wraps AND its pre_pow. The pre_pow is the identity
     // of the actual work: the node re-issues many job_ids for one identical pre_pow (~every 15s),
-    // so the share dedup key is derived from pre_pow, not the pool job_id (finding 2 — otherwise
-    // the same solved (nonce,pow) could be credited once per wrapping job_id). Drop entries older
+    // so the share dedup key is derived from pre_pow, not the pool job_id (otherwise the same
+    // solved (nonce,pow) could be credited once per wrapping job_id). Drop entries older
     // than the submit window (keys ascend in insertion order, so stop at the first keeper).
     this.jobIdMap.set(this.jobCounter, { node: job.node_job_id, pre_pow: job.pre_pow });
     for (const k of this.jobIdMap.keys()) {
@@ -247,14 +247,14 @@ class StratumServer {
     // `ip` may be overwritten below by the PROXY-v2 header (real miner IP behind a gateway).
     let ip = socket.remoteAddress || 'unknown';
 
-    // Finding 3 — global socket ceiling: refuse once the process is at capacity so a
+    // Global socket ceiling: refuse once the process is at capacity so a
     // connection flood can't exhaust file descriptors / memory.
     if (this.sockets.size >= this.maxConnTotal) {
       socket.destroy();
       return;
     }
 
-    // Finding 3 — per-IP connection cap (public listener only; region tunnels are trusted and
+    // Per-IP connection cap (public listener only; region tunnels are trusted and
     // one peer IP fronts a whole region). Keyed on the real direct IP known at accept time.
     let ipCounted = false;
     if (isPublic) {
@@ -276,7 +276,7 @@ class StratumServer {
     let proxyDone = false;
     let preBuf = Buffer.alloc(0);
 
-    // Finding 3/4 — per-connection message token bucket (throttles submit / login / pre-login
+    // Per-connection message token bucket (throttles submit / login / pre-login
     // floods; each is refilled at MSG_RATE_PER_SEC, capped at MSG_BURST). A legitimate miner
     // never approaches this rate; a flooder is disconnected.
     let msgTokens = MSG_BURST;
@@ -307,7 +307,7 @@ class StratumServer {
       const lines = lineBuffer.split('\n');
       lineBuffer = lines.pop(); // last element may be partial — keep buffered
 
-      // Finding 1 — a partial line that grows past MAX_LINE_BYTES has no newline in sight:
+      // A partial line that grows past MAX_LINE_BYTES has no newline in sight:
       // treat it as a malicious oversized frame and drop the connection before it can OOM us.
       // (This also bounds any complete line, since the partial is checked on every data event
       // before its terminating newline can arrive.)
@@ -320,7 +320,7 @@ class StratumServer {
       for (const line of lines) {
         if (!line.trim()) continue;
 
-        // Finding 3/4 — refill and spend one message token; disconnect a flooder. Legit miners
+        // Refill and spend one message token; disconnect a flooder. Legit miners
         // send a login then a few submits/sec, nowhere near MSG_RATE_PER_SEC.
         const now = Date.now();
         const bucket = tokenBucketStep(msgTokens, msgRefill, now, MSG_RATE_PER_SEC, MSG_BURST);
@@ -535,7 +535,7 @@ class StratumServer {
 
     // Dedup key is bound to the ACTUAL WORK (pre_pow), not the pool's incrementing job_id.
     // The node re-issues many job_ids for one identical pre_pow, so keying on job_id would let
-    // the same solved (nonce,pow) be credited once per wrapping job (finding 2). pre_pow collapses
+    // the same solved (nonce,pow) be credited once per wrapping job. pre_pow collapses
     // every re-version of one template to a single dedup identity. Fall back to currentJob's
     // pre_pow (then job_id) only if the window entry is somehow gone — isValidJob already gated it.
     const workId = (jobEntry && jobEntry.pre_pow)

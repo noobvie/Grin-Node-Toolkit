@@ -274,6 +274,13 @@
       background: var(--error-color);
     }
 
+    /* Neither success nor failure — e.g. a lottery draw that found no eligible entries.
+       Dark ink: --warn-color is a mid amber, and the base .toast sets color:white. */
+    .toast.warn {
+      background: var(--warn-color);
+      color: #1a1205;
+    }
+
     @keyframes slideIn {
       from {
         transform: translateX(400px);

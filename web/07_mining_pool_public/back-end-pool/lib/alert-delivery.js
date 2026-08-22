@@ -1,7 +1,8 @@
 /**
- * Alert Delivery — Send alerts via email, Discord, Slack
+ * Alert Delivery — Send alerts via email (SMTP), Discord, Slack and Telegram.
  *
- * Handles formatting and delivery of alerts to configured channels.
+ * Handles formatting and delivery of alerts to whichever channels are configured
+ * (see configuredChannels() — a channel with no config is silently skipped).
  */
 
 const https = require('https');

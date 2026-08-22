@@ -50,17 +50,26 @@ class IncentivesManager {
     return row ? row.balance : 0;
   }
 
-  // Low-level balance move + audit row. Mirrors the 0-snapshot convention used by
-  // rewards.js / orphan-detector.js. refId must be an integer (block height, draw id, or 0).
+  // Low-level balance move + audit row. Writes REAL before/after snapshots — this used to
+  // write 0 placeholders "mirroring rewards.js", but rewards.js and orphan-detector.js now
+  // both record the true values, so this was the last source of unauditable ledger rows
+  // (audit §I5). Every prize-pool, donation, streak and lottery movement flows through here.
+  // refId must be an integer (block height, draw id, or 0).
   _move(address, delta, eventType, refType, refId = 0) {
     this.ensureAccount(address);
-    this.db.prepare('UPDATE miner_accounts SET balance = balance + ? WHERE grin_address = ?').run(delta, address);
+    const before = this.db.prepare(
+      'SELECT balance, balance_locked FROM miner_accounts WHERE grin_address = ?'
+    ).get(address);
+    this.db.prepare(
+      'UPDATE miner_accounts SET balance = balance + ?, updated_at = unixepoch() WHERE grin_address = ?'
+    ).run(delta, address);
     this.db.prepare(`
       INSERT INTO balance_log
         (grin_address, event_type, amount, balance_before, balance_after,
          locked_before, locked_after, reference_type, reference_id)
-      VALUES (?, ?, ?, 0, 0, 0, 0, ?, ?)
-    `).run(address, eventType, Math.abs(delta), refType, refId);
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(address, eventType, Math.abs(delta), before.balance, before.balance + delta,
+           before.balance_locked, before.balance_locked, refType, refId);
   }
 
   creditPrizePool(amount, refType, refId = 0) {

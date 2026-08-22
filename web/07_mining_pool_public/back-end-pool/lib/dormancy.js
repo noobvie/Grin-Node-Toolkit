@@ -421,11 +421,11 @@ class DormancyManager {
     if (!(amt > 0)) return { ok: false, reason: 'amount_must_be_positive' };
     if (netFee < 0) return { ok: false, reason: 'fee_negative' };
 
-    // Self-check the freeze (finding #3): the endpoint already gates on it, but guarding here too
+    // Self-check the freeze: the endpoint already gates on it, but guarding here too
     // means any caller inherits it — recording a payout while payouts are frozen is never right.
     if (this.isFrozen()) return { ok: false, reason: 'payouts_frozen' };
 
-    // At/above-minimum guard (finding #2). The recorder is for a send you ALREADY made out-of-band;
+    // At/above-minimum guard. The recorder is for a send you ALREADY made out-of-band;
     // if the amount is ≥ the pool minimum and payouts aren't frozen, the auto-payout scheduler could
     // ALSO pay this balance in the gap → double-pay. Force an explicit ack (the caller re-submits
     // with allowAboveMin) so an at-threshold record is a conscious choice, and steer to the Tor path.
@@ -443,7 +443,8 @@ class DormancyManager {
 
     const now = Math.floor(Date.now() / 1000);
 
-    // Double-submit / double-record guard (finding #1). A resubmit (double-click, slow-response
+    // Double-submit / double-record guard (review finding #1, docs/generated/script07_design.md).
+    // A resubmit (double-click, slow-response
     // retry) would otherwise write a second confirmed withdrawal + debit for one real send —
     // over-debiting the miner AND making the wallet-send audit see an unmatched payout. A given
     // kernel/slate is a real on-chain identifier and can only be recorded once; and an identical

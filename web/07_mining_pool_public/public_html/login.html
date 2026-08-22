@@ -498,14 +498,14 @@
             captcha_id: captchaIds.login,
             captcha_answer: document.getElementById('captcha-answer').value
           }),
-          credentials: 'include'  // FIX #4: Include httpOnly cookies
+          credentials: 'include'  // send the httpOnly session cookies
         });
 
         const data = await res.json();
 
         if (data.success) {
-          // FIX #4: Token is now in httpOnly cookie, not in response body
-          // No need to store anything in localStorage
+          // The token is in an httpOnly cookie, not in the response body —
+          // there is nothing to store in localStorage.
           window.location.href = '/admin/';
         } else if (data.totp_required) {
           // Password OK, but this admin has 2FA on → show the code step (no new captcha needed).
@@ -562,7 +562,7 @@
             captcha_id: captchaIds.register,
             captcha_answer: document.getElementById('reg-captcha-answer').value
           }),
-          credentials: 'include'  // FIX #4: Include httpOnly cookies
+          credentials: 'include'  // send the httpOnly session cookies
         });
 
         const data = await res.json();
@@ -584,7 +584,7 @@
       }
     }
 
-    // FIX #4: Check if already logged in by testing API access (token in httpOnly cookie).
+    // Check if already logged in by testing API access (the token is in an httpOnly cookie).
     // Must hit an AUTH-GATED endpoint — /api/health is public and 200 for everyone, which
     // would redirect every visitor to the dashboard (and loop). /api/admin/dashboard returns
     // 200 only with a valid admin cookie, so a logged-out visitor stays on this page.

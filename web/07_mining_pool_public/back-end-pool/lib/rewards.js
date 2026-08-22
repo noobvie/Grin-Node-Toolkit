@@ -2,9 +2,14 @@ const { getDb } = require('./db');
 const IncentivesManager = require('./incentives');
 
 class RewardDistributor {
-  constructor(config) {
+  // grinNode: a GrinNodeAPI. REQUIRED for the pre-credit chain re-verification below — it was
+  // omitted at the only construction site for a long time, which silently turned that check
+  // into dead code (audit §I3). Left optional so a unit test can construct without a node,
+  // but index.js must pass BlockMonitor's instance.
+  constructor(config, grinNode = null) {
     this.config = config;
     this.db = getDb();
+    this.grinNode = grinNode;
     this.pplnsWindow = 60;
     // Incentive system (prize pool, donations, streak top-ups). No-op unless enabled in admin.
     this.incentives = new IncentivesManager(config);
@@ -22,19 +27,54 @@ class RewardDistributor {
         throw new Error(`Block ${blockId} is not confirmed (status: ${block.status})`);
       }
 
-      // FIX #1, #5: CRITICAL - Verify block actually exists on blockchain
-      // Prevents fake blocks from being credited if block_monitor is compromised
+      // CRITICAL — re-verify against the chain immediately before crediting. This is the
+      // second, independent check: OrphanDetector already verified by NONCE when it moved the
+      // block to 'confirmed', but that ran up to hours earlier, so a reorg (or a compromised
+      // block_monitor) in between must not turn into credited balances.
+      //
+      // get_HEADER, not get_block: a pruned node keeps the full header chain at every height
+      // but serves block BODIES only inside the pruning horizon, so get_block is the call that
+      // breaks on the standard mainnet-prune deployment. get_header also returns `hash` at the
+      // top level — get_block nests it under `.header`, which is why the previous (unreachable)
+      // version of this check would have thrown a false "hash mismatch" on every block had it
+      // ever run. See audit §I3.
       if (this.grinNode) {
         try {
-          const nodeBlock = await this.grinNode.getBlock(block.height);
+          const nodeHeader = await this.grinNode.getHeader(block.height);
 
-          // Double-check: block must exist AND hash must match
-          if (!nodeBlock) {
+          if (!nodeHeader) {
             throw new Error(`[SECURITY ALERT] Block ${block.height} marked confirmed in DB but NOT FOUND on blockchain!`);
           }
 
-          if (nodeBlock.hash !== block.hash) {
-            throw new Error(`[SECURITY ALERT] Block ${block.height} hash mismatch! DB: ${block.hash}, Node: ${nodeBlock.hash}`);
+          // NONCE is the authoritative comparison — it is exactly what OrphanDetector
+          // .verifyBlockOnChain() uses to promote a block to 'confirmed', so it is known to
+          // line up with what we store. Both sides are coerced to String: the node returns a
+          // u64 that may arrive as a number or a string depending on magnitude.
+          if (String(nodeHeader.nonce) !== String(block.nonce)) {
+            throw new Error(
+              `[SECURITY ALERT] Block ${block.height} nonce mismatch! DB: ${block.nonce}, Node: ${nodeHeader.nonce}`
+            );
+          }
+
+          // HASH is the stronger check, but blocks.hash is parsed out of the node stratum's
+          // "blockfound - <hash>" reply rather than read from the Foreign API, so its exact
+          // formatting is not verified against a live node here. Compare it only when it has
+          // the shape of a real block hash; anything else means the stored value is not a hash
+          // and must be reported loudly, NOT silently treated as a mismatch that freezes every
+          // payout. The nonce check above already carries the security property meanwhile.
+          const HASH_RE = /^[0-9a-f]{64}$/i;
+          if (HASH_RE.test(String(block.hash || '')) && HASH_RE.test(String(nodeHeader.hash || ''))) {
+            if (String(nodeHeader.hash).toLowerCase() !== String(block.hash).toLowerCase()) {
+              throw new Error(
+                `[SECURITY ALERT] Block ${block.height} hash mismatch! DB: ${block.hash}, Node: ${nodeHeader.hash}`
+              );
+            }
+          } else {
+            console.warn(
+              `[WARNING] Block ${block.height}: stored hash ${JSON.stringify(block.hash)} or node hash ` +
+              `${JSON.stringify(nodeHeader.hash)} is not a 64-hex block hash — verified by nonce only. ` +
+              `Report this: the hash comparison is meant to be the primary check (audit §I3).`
+            );
           }
 
           console.log(`[VERIFIED] Block ${block.height} confirmed on blockchain before distribution`);
@@ -43,7 +83,10 @@ class RewardDistributor {
           throw new Error(`Blockchain verification failed: ${err.message}`);
         }
       } else {
-        console.warn(`[WARNING] Grin node not available - skipping blockchain verification`);
+        // No node = we cannot prove the block we are about to pay for is on-chain. Refuse
+        // rather than credit: the block stays 'confirmed' and the next tick retries, which is
+        // the safe direction (a delayed payout, never an unverified one).
+        throw new Error('Grin node unavailable — refusing to distribute without chain verification');
       }
 
       const shares = this.getSharesForDistribution(block.height);
@@ -52,7 +95,13 @@ class RewardDistributor {
         console.warn(`No shares found for block ${block.height}`);
         // Mark terminal so the monitor doesn't reprocess it every tick. The block
         // matured with no attributable shares — its reward stays in the pool wallet.
-        this.db.prepare("UPDATE blocks SET status = 'paid' WHERE id = ?").run(blockId);
+        // CAS like the paid path below: only a row still in 'confirmed' may be closed out.
+        const closed = this.db.prepare(
+          "UPDATE blocks SET status = 'paid' WHERE id = ? AND status = 'confirmed'"
+        ).run(blockId);
+        if (closed.changes !== 1) {
+          return { block_id: blockId, success: false, reason: 'already_settled', shares_count: 0 };
+        }
         return {
           block_id: blockId,
           success: false,
@@ -78,11 +127,35 @@ class RewardDistributor {
         });
       }
 
-      const distributionResult = this.creditBalances(block.height, distribution, minerReward, poolFee);
+      // ONE transaction covering the CAS status flip, the miner credits, the pool fee and the
+      // incentive rebalance. Previously these were four separate write units with the flip
+      // last, so a crash after the credits committed left the block in 'confirmed' — and the
+      // monitor's next 30s tick re-credited every miner. See audit §I4.
+      //
+      // The flip goes FIRST inside the transaction: it is the claim. A replay (or a second
+      // caller) finds 0 changed rows and throws, rolling the whole thing back before a single
+      // balance moves. Ordering it last would leave the same window the bug came from.
+      let distributionResult;
+      const settle = this.db.transaction(() => {
+        const claimed = this.db.prepare(
+          "UPDATE blocks SET status = 'paid' WHERE id = ? AND status = 'confirmed'"
+        ).run(blockId);
+        if (claimed.changes !== 1) {
+          const e = new Error(`block ${blockId} is no longer 'confirmed' — already settled`);
+          e.alreadySettled = true;
+          throw e;
+        }
+        distributionResult = this.creditBalances(block.height, distribution, minerReward, poolFee);
+      });
 
-      // Mark the block paid so it's distributed exactly once (the monitor only
-      // distributes status='confirmed' blocks; distributeRewards refuses any other).
-      this.db.prepare("UPDATE blocks SET status = 'paid' WHERE id = ?").run(blockId);
+      try {
+        settle();
+      } catch (err) {
+        if (err.alreadySettled) {
+          return { block_id: blockId, success: false, reason: 'already_settled', shares_count: shares.length };
+        }
+        throw err;
+      }
 
       return {
         block_id: blockId,
@@ -136,29 +209,44 @@ class RewardDistributor {
 
       const results = [];
 
-      const transaction = this.db.transaction(() => {
-        for (const [grinAddress, amount] of minerMap) {
-          const stmt = this.db.prepare(`
-            UPDATE miner_accounts SET balance = balance + ? WHERE grin_address = ?
-          `);
-          stmt.run(amount, grinAddress);
+      // NOTE: no transaction() here — distributeRewards wraps this whole call (plus the
+      // confirmed→paid CAS) in one. Opening a nested one would only create a savepoint and
+      // obscure that the caller owns atomicity. Never call this outside that transaction.
+      for (const [grinAddress, amount] of minerMap) {
+        // Mirror the pool-fee path's INSERT OR IGNORE. balance_log.grin_address is a FK and
+        // foreign_keys is ON, so a missing account row would otherwise abort the whole
+        // distribution and leave the block retrying every 30s forever. See audit §I6.
+        this.db.prepare(
+          'INSERT OR IGNORE INTO miner_accounts (grin_address, balance) VALUES (?, 0)'
+        ).run(grinAddress);
 
-          const logStmt = this.db.prepare(`
-            INSERT INTO balance_log
-            (grin_address, event_type, amount, balance_before, balance_after,
-             locked_before, locked_after, reference_type, reference_id)
-            VALUES (?, 'credit', ?, 0, 0, 0, 0, 'block', ?)
-          `);
-          logStmt.run(grinAddress, amount, blockHeight);
+        // Real before/after snapshots, not the 0 placeholders this used to write. balance_log
+        // is the ledger the miner sees at /api/account/:addr/balance/log and the one a
+        // disputed payout is reconstructed from; zeros made it unauditable. See audit §I5.
+        const before = this.db.prepare(
+          'SELECT balance, balance_locked FROM miner_accounts WHERE grin_address = ?'
+        ).get(grinAddress);
 
-          results.push({
-            grin_address: grinAddress,
-            credited: amount
-          });
+        const credited = this.db.prepare(
+          'UPDATE miner_accounts SET balance = balance + ?, updated_at = unixepoch() WHERE grin_address = ?'
+        ).run(amount, grinAddress);
+        if (credited.changes !== 1) {
+          throw new Error(`credit failed for ${grinAddress} — account row missing after ensure`);
         }
-      });
 
-      transaction();
+        this.db.prepare(`
+          INSERT INTO balance_log
+          (grin_address, event_type, amount, balance_before, balance_after,
+           locked_before, locked_after, reference_type, reference_id)
+          VALUES (?, 'credit', ?, ?, ?, ?, ?, 'block', ?)
+        `).run(grinAddress, amount, before.balance, before.balance + amount,
+               before.balance_locked, before.balance_locked, blockHeight);
+
+        results.push({
+          grin_address: grinAddress,
+          credited: amount
+        });
+      }
 
       if (this.config.pool_fee_percent > 0) {
         const feeAddress = this.config.pool_fee_address || 'pool_fee';
@@ -168,27 +256,28 @@ class RewardDistributor {
         `);
         stmt.run(feeAddress);
 
-        const updateStmt = this.db.prepare(`
-          UPDATE miner_accounts SET balance = balance + ? WHERE grin_address = ?
-        `);
-        updateStmt.run(poolFee, feeAddress);
+        const feeBefore = this.db.prepare(
+          'SELECT balance, balance_locked FROM miner_accounts WHERE grin_address = ?'
+        ).get(feeAddress);
 
-        const logStmt = this.db.prepare(`
+        this.db.prepare(
+          'UPDATE miner_accounts SET balance = balance + ?, updated_at = unixepoch() WHERE grin_address = ?'
+        ).run(poolFee, feeAddress);
+
+        this.db.prepare(`
           INSERT INTO balance_log
           (grin_address, event_type, amount, balance_before, balance_after,
            locked_before, locked_after, reference_type, reference_id)
-          VALUES (?, 'credit', ?, 0, 0, 0, 0, 'pool_fee', ?)
-        `);
-        logStmt.run(feeAddress, poolFee, blockHeight);
+          VALUES (?, 'credit', ?, ?, ?, ?, ?, 'pool_fee', ?)
+        `).run(feeAddress, poolFee, feeBefore.balance, feeBefore.balance + poolFee,
+               feeBefore.balance_locked, feeBefore.balance_locked, blockHeight);
       }
 
       // Incentive rebalancing: divert fee-cut + donations into the prize pool and pay streak
-      // top-ups, all atomically. minerMap is address → gross PPLNS payout for this block.
+      // top-ups. Called directly — the caller's transaction already covers it, and wrapping it
+      // again would only open a savepoint (see the note at the top of this method).
       if (this.incentives && this.incentives.enabled()) {
-        const incentiveTx = this.db.transaction(() => {
-          this.incentives.applyToDistribution(blockHeight, minerMap, poolFee);
-        });
-        incentiveTx();
+        this.incentives.applyToDistribution(blockHeight, minerMap, poolFee);
       }
 
       return results;

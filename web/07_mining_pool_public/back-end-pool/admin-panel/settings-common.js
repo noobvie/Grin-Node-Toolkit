@@ -1,9 +1,14 @@
 /* settings-common.js — shared logic for the split settings pages (2026-06).
    Extracted verbatim from the old settings.html <script>; init is driven by
    window.SETTINGS_SECTION (set inline on each page). Builder calls are guarded so
-   a section absent from the current page never throws. */
-    // Tab switching is hash-driven so the sidebar's Settings sub-links (e.g. /admin/settings.html#access)
-    // deep-link straight to a tab, and in-page tab clicks update the URL (back/forward + sidebar sync).
+   a section absent from the current page never throws.
+
+   LEGACY TAB MACHINERY. The sidebar now links to real per-section PAGES, and no page
+   carries a [data-tab] button any more, so the click handler below binds to nothing and
+   the hashchange path only fires for a hand-typed #hash. What is still LIVE is the single
+   switchTab(window.SETTINGS_SECTION) call on DOMContentLoaded, which reveals this page's
+   one .settings-content and runs its section loader. Old #hash deep-links are handled a
+   step earlier, by settings.html's redirect stub. */
     document.querySelectorAll('.tab-btn').forEach(btn => {
       btn.addEventListener('click', () => {
         location.hash = btn.getAttribute('data-tab');
@@ -1200,7 +1205,13 @@
     }
 
     async function drawLotteryNow(type) {
-      if (!confirm('Run a lottery draw now? This pays real prize-pool GRIN to winners.')) return;
+      // Draws are commit-reveal: this freezes the entry set and commits to a seed block that
+      // has not been mined yet. Winners are picked (and paid) when the chain reaches it, on a
+      // later scheduler tick — so the button no longer produces an immediate result, and the
+      // confirm must not promise one.
+      if (!confirm('Commit a lottery draw now?\n\nThe entry list and pot are frozen immediately and locked to a future block. '
+                 + 'Winners are drawn from that block once it is mined (~10 min) and real prize-pool GRIN is paid then. '
+                 + 'This cannot be undone.')) return;
       try {
         const r = await adminFetch('/api/admin/incentives/lottery/draw-now', {
           method: 'POST', credentials: 'include',
@@ -1209,7 +1220,13 @@
         });
         const d = await r.json();
         if (!r.ok) throw new Error(d.error || 'Draw failed');
-        showToast('Draw complete: ' + (d.result.winners || []).length + ' winner(s)', 'success');
+        const res = d.result || {};
+        if (res.eligible === 0) {
+          showToast('No eligible entries for this period — nothing was drawn.', 'warn');
+        } else {
+          showToast('Draw #' + res.draw_id + ' committed: ' + res.eligible
+                  + ' entries, seed = block ' + res.seed_height + '. Winners paid once it is mined.', 'success');
+        }
         loadIncentiveData();
       } catch (e) { showToast(e.message, 'error'); }
     }

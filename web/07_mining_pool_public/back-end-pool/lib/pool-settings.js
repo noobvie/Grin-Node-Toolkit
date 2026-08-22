@@ -1240,8 +1240,9 @@ PASS      any-password-you-choose</code>
 
   // Linked content pages (the dynamic `pages` CMS table is the source of truth since
   // 2026-06) as [{key, title}] for footer navigation. Excludes nav_location='none'
-  // (those are reachable by direct URL only). The sitemap uses PagesManager.listEnabled()
-  // directly for the full set; this footer list intentionally honours the link choice.
+  // (those are reachable by direct URL only, and stay out of the sitemap as well).
+  // The sitemap calls PagesManager.listEnabled(), which applies the SAME three filters —
+  // it differs only in also returning nav_location. Keep the two WHERE clauses in step.
   listEnabledPages() {
     try {
       return this.db.prepare(`
@@ -1284,7 +1285,7 @@ PASS      any-password-you-choose</code>
         updated_at = unixepoch()
     `);
 
-    // Grandfather re-arm (finding #5): remember whether dormancy was enabled BEFORE this write, so a
+    // Grandfather re-arm: remember whether dormancy was enabled BEFORE this write, so a
     // false→true (re)enable can reset the effective anchor and hand every address a fresh full window
     // — otherwise the clock kept running through a long disabled stretch and addresses could be
     // eligible the instant it's turned back on.

@@ -29,7 +29,7 @@ function getDb() {
 
 // Drop admin_audit_log if its columns don't match the canonical shape.
 // The pool isn't in production; auditing a fresh table is preferable to
-// silently swallowing INSERT errors against a stale schema (BUG-18).
+// silently swallowing INSERT errors against a stale schema.
 function migrateAdminAuditLog() {
   try {
     const cols = db.prepare("PRAGMA table_info(admin_audit_log)").all();
@@ -118,7 +118,8 @@ function migrateMinerAccounts() {
       // Previous destination, retained so a hijack cannot dodge the change alert. Replacing a
       // destination DMs the old npub ("your payout destination changed — withdraw via Tor now");
       // without this, an attacker would simply REMOVE first and register fresh, leaving nobody
-      // to notify. Cleared only after the alert is sent, so removal is announced too.
+      // to notify. Removal blanks these in the same UPDATE that blanks nostr_*, but index.js
+      // READS the row into `prev` first, so the alert still goes out (see the DELETE route).
       nostr_prev_username: 'TEXT DEFAULT NULL',
       nostr_prev_npub: 'TEXT DEFAULT NULL'
     };
@@ -271,9 +272,8 @@ function migrateShares() {
   }
 }
 
-// Additive, non-destructive: add moderation columns to an existing miner_accounts table
-// (older DBs predate them). is_banned blocks new stratum logins for an abusive address;
-// the balance is untouched so the operator can still pay out what's owed before/after a ban.
+// Create every table + index if absent (idempotent, one transaction), then run the additive
+// column migrations and the one-time content seeds. Safe to call on every boot.
 function createSchema() {
   migrateAdminAuditLog();
 
@@ -676,17 +676,39 @@ function createSchema() {
     `CREATE INDEX IF NOT EXISTS idx_lottery_winners_draw ON lottery_winners(draw_id)`,
     `CREATE INDEX IF NOT EXISTS idx_lottery_winners_address ON lottery_winners(grin_address, created_at DESC)`,
 
+    // Frozen entry set for a committed draw — written at COMMIT time, before the seed block
+    // exists. Two jobs, both required for the draw to be verifiable (audit §I8):
+    //   1. the ticket allocation can no longer move between commit and reveal, so nobody can
+    //      influence the outcome once the seed is pending;
+    //   2. it is the publishable input — a winner is recomputable from (seed_hash, draw_id,
+    //      these rows in grin_address ASC order) by anyone, which the live hashrate_history
+    //      never allowed (it is per-address work and is deliberately not published).
+    // Ordering is by grin_address ASC everywhere it is read; pickWeighted walks the array in
+    // order, so a different order would give a different winner from identical inputs.
+    `CREATE TABLE IF NOT EXISTS lottery_entries (
+      draw_id INTEGER NOT NULL REFERENCES lottery_draws(id),
+      grin_address TEXT NOT NULL,
+      tickets_a INTEGER NOT NULL DEFAULT 0,
+      tickets_b INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (draw_id, grin_address)
+    )`,
+
+
     // Contest campaigns — operator-defined draws with an explicit date-range window and optional
     // per-campaign rule overrides (pot split, min active days, whale cap). A campaign runs one
     // lottery draw at/after ends_at (via the scheduler or a manual "run now"); the resulting
     // lottery_draws row is linked back via draw_id. NULL override columns inherit the global
-    // lottery_* settings. Eligibility/scoring uses hashrate_history (persistent ~30d), so a
-    // multi-day/week window counts real sustained activity — see lib/lottery.js.
+    // lottery_* settings. Eligibility/scoring uses hashrate_history (retained
+    // database.hashrate_keep_days, default 100d), so a multi-day/week window counts real
+    // sustained activity — see lib/lottery.js.
     `CREATE TABLE IF NOT EXISTS campaigns (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL,
       description TEXT DEFAULT NULL,
-      status TEXT NOT NULL DEFAULT 'scheduled',   -- scheduled | drawn | paid | empty | cancelled
+      -- scheduled | drawing | drawn | paid | empty | cancelled
+      -- 'drawing' = the draw is COMMITTED to a future seed block but not yet revealed; the
+      -- final status + seed_hash land when LotteryManager.resolveDraw() reaches that height.
+      status TEXT NOT NULL DEFAULT 'scheduled',
       starts_at INTEGER NOT NULL,
       ends_at INTEGER NOT NULL,                    -- draw fires at/after this time
       recurring TEXT NOT NULL DEFAULT 'none',      -- none | weekly | yearly
@@ -991,11 +1013,6 @@ function seedShippedPages() {
   }
 }
 
-// Self-register the pool server's own region (role=singlebox) so the central box
-// shows as a real region and auto-joins the connect grid the moment a gateway for
-// another zone forwards shares in. Creates ONE row for `region` (skipping the generic
-// 'default'), backfills stratum_url once the public hostname is known, and never
-// clobbers an operator's label/active/url edits made in admin → Regions.
 // One-time seed of the default grinium regional endpoints, grouped by country so the
 // public connect grid can show "Point your miner at your nearest region" cards under
 // country headings. Runs exactly once, guarded by a persistent marker (like

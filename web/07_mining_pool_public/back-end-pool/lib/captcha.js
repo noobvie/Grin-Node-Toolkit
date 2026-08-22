@@ -4,7 +4,8 @@ const crypto = require('crypto');
 //
 // No external service (no Google reCAPTCHA / hCaptcha) — keeps the pool privacy- and
 // Tor-friendly and dependency-free. It exists purely to raise the per-attempt cost of
-// scripted brute force, on top of the auth rate limiter (3/min) and per-account lockout.
+// scripted brute force, on top of the auth rate limiter (this.limits.auth, 200/min since
+// the 2026-06 x20 bump) and the per-(username,IP) lockout in auth.js.
 //
 // Single-use + short TTL + in-memory: the Central API is a single process (single DB
 // writer per the hub design), so an in-process Map is sufficient. A challenge is consumed
@@ -37,7 +38,7 @@ class Captcha {
     this._prune();
     const a = 1 + Math.floor(Math.random() * 9);
     const b = 1 + Math.floor(Math.random() * 9);
-    const variants = [['+', a + b], ['×', a * b]]; // ×
+    const variants = [['+', a + b], ['×', a * b]];
     const pick = variants[Math.floor(Math.random() * variants.length)];
     const id = crypto.randomBytes(16).toString('hex');
     this.store.set(id, { answer: String(pick[1]), expires: Date.now() + this.ttlMs });

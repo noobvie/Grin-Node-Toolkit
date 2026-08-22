@@ -1,6 +1,8 @@
 /* reactor.css — "Reactor Control" homepage components (v4 control-room skin).
  *
- * Loaded ONLY by index.html, AFTER dashboard.css + themes.css. Every color is
+ * Loaded by every REACTOR-SKINNED public page — index, blocks, miners-stats,
+ * payment-history, fortune-board, donate, network-map and account-settings — always
+ * AFTER dashboard.css + themes.css (it started life as index-only). Every color is
  * derived from the theme token bridge dashboard.css sets on <body>
  * (--bg/--bg-elev/--border/--text/--accent/--gold/--warn/--danger/--info/--glow),
  * so the public theme switcher re-skins the whole panel deck for free. Canvas

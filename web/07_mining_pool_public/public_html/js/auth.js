@@ -1,11 +1,11 @@
-// Authentication helper module
-// FIX #4: Updated to use httpOnly cookies instead of localStorage
-// Tokens are now automatically sent with each request via cookies
+// Authentication helper module.
+// Session tokens live in httpOnly cookies (not localStorage), so JS never sees them and
+// every request just carries them via credentials:'include'.
 
 const Auth = {
 
-  // FIX #4: Tokens are in httpOnly cookies (not accessible to JS)
-  // Just check if we can access protected endpoints
+  // Tokens are in httpOnly cookies (not accessible to JS), so there is nothing to return:
+  // the only way to answer "am I authenticated?" is to ask a protected endpoint.
   async getToken() {
     // Make a test request to check if authenticated
     try {
@@ -16,7 +16,7 @@ const Auth = {
     }
   },
 
-  // FIX #4: No longer needed - tokens are in httpOnly cookies set by server
+  // Deprecated no-op — the server sets httpOnly cookies on login; nothing to store here.
   setToken(access_token, refresh_token) {
     // Deprecated: Server sets httpOnly cookies on login
     console.log('[Auth] Tokens set as httpOnly cookies by server');
@@ -35,7 +35,7 @@ const Auth = {
     window.location.href = '/login.html';
   },
 
-  // FIX #4: Fetch wrapper - credentials:'include' sends httpOnly cookies automatically
+  // Fetch wrapper — credentials:'include' sends the httpOnly session cookies automatically.
   async fetch(url, options = {}) {
     const headers = {
       'Content-Type': 'application/json',
@@ -46,7 +46,7 @@ const Auth = {
       const response = await fetch(url, {
         ...options,
         headers,
-        credentials: 'include'  // FIX #4: Send cookies with every request
+        credentials: 'include'  // send the session cookies with every request
       });
 
       if (response.status === 401) {
@@ -86,7 +86,7 @@ const Auth = {
       });
 
       if (data && data.success) {
-        // FIX #4: Token is in httpOnly cookie, not in response
+        // The token is in an httpOnly cookie, not in the response body.
         console.log('Login successful - token in httpOnly cookie');
         return true;
       } else {

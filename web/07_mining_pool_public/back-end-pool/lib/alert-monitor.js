@@ -642,8 +642,9 @@ class AlertMonitor {
   async deliverAlert(alertId, alertType, details) {
     if (!this.alertDelivery || typeof this.alertDelivery.send !== 'function') return;
     try {
-      // Hand the alert to AlertDelivery, which fans out to the configured channels
-      // (Discord/Slack over HTTPS; email is a documented stub pending an SMTP transport).
+      // Hand the alert to AlertDelivery, which fans out to every configured channel
+      // (Discord/Slack/Telegram webhooks over HTTPS; email over SMTP via an optional
+      // nodemailer dependency — skipped with a log line when it isn't installed).
       // It expects data as a JSON string (formatEmailBody re-parses it).
       await this.alertDelivery.send({
         type: alertType,

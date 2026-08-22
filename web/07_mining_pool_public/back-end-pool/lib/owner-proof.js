@@ -7,9 +7,11 @@ const geoip = require('./geoip');
 // Address-as-identity ownership gate (v2 — IP or password, hashed at rest).
 //
 // The pool has no miner accounts — the grin address IS the identity. For self-service money
-// actions (Tor payout, slatepack create/finalize, cancel) we need a cheap proof that the
+// actions we need a cheap proof that the
 // requester actually controls the rig mining under that address, WITHOUT introducing
-// registration. Proof = EITHER of:
+// registration. It gates every self-service money action — Tor payout, slatepack create and
+// finalize, and the Goblin/Nostr destination register/remove (which demands BOTH proofs, see
+// index.js requireBothProofs). Proof = EITHER of:
 //   · one of the address's last-2 distinct mining source IPs (IPv4 or IPv6), or
 //   · the rig's stratum password (as typed into the miner's Pool1 config).
 //

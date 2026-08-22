@@ -276,10 +276,14 @@ class IpFilter {
 
   /**
    * Extract client IP from request.
-   * Uses Express's req.ip, which — with `app.set('trust proxy', 1)` in index.js —
+   * Uses Express's req.ip, which — with `app.set('trust proxy', 'loopback')` in index.js —
    * resolves to the real client IP from X-Forwarded-For while IGNORING client-supplied
    * XFF beyond the one trusted nginx hop. Reading the raw x-forwarded-for header here
    * (as before) let any client spoof an allowlisted IP and bypass this filter.
+   *
+   * 'loopback', not the `1` this comment used to name: only a connection arriving from
+   * 127.0.0.1/::1 (i.e. our own nginx) may contribute a trusted XFF hop, so a direct hit on
+   * :8080 gets its real socket IP rather than a forged header.
    */
   getClientIp(req) {
     const ip = (req && (req.ip || (req.socket && req.socket.remoteAddress))) || 'unknown';

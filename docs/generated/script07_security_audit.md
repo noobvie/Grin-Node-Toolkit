@@ -895,3 +895,359 @@ shape — confirm a real `retrieve_txs` response carries `creation_ts` and the
   that mimic other event types and muddy an incident trail.
 - **Placeholder zeros in `_releaseLockAndDebit`** — its two debit rows still write `0` for balance
   before/after (the locked columns are correct). Reversals were fixed in §H2.
+
+## I. Re-audit 2026-08-21 (pre-retest pass — backend, frontend, payment path)
+
+Full fresh pass ahead of a GRINIUM re-test. Scope: every Express route + its authz chain,
+`lib/auth*`, the whole payout path (all three rails), PPLNS/block-reward accounting,
+share retention, the lottery draw, the generated nginx vhost, and the public + admin
+front-ends. Still **NOT VPS-tested** — every finding below is code-level.
+
+**Re-verified clean this pass** (no change needed): JWT handling (jsonwebtoken 9.0.3,
+type-discriminated access/refresh, `sst` absolute cap, `pwa` step-up freshness); cookie
+flags (`httpOnly` + `sameSite:strict` + `secure` under the unit's `NODE_ENV=production`,
+so CSRF on the cookie-auth surface is closed); `trust proxy: 'loopback'` making XFF
+unspoofable; SQL — every dynamic `SET` clause is built from a hardcoded `_clean()` key
+whitelist, so `ads`/`pages`/`posts`/`pool_locations` are not injectable; stratum
+`validateUsername` (bech32 + `[a-z0-9_-]` worker names) means no miner-controlled string
+ever reaches a renderer; asset upload/delete (magic-byte sniff, server-controlled
+filename, DB-lookup-then-`basename` unlink, sandbox CSP on `/uploads/` + `/custom/`);
+NIP-05 resolution (domain allowlist + hostname-shape guard, no IP literals) — no SSRF;
+withdrawal balance locking (CAS `WHERE balance >= ?`, one-pending-per-address inside the
+transaction, `_claimForFinalize` before the first `await` on all three rails); the
+`sqlite-compat` transaction shim (real BEGIN/COMMIT/ROLLBACK + savepoint nesting, and no
+`transaction(async …)` anywhere); first-admin-only registration.
+
+### I1 — [High] The generated nginx vhost drops **every** security header on the two locations that serve HTML
+
+`add_header` in nginx is not additive across levels: these directives are inherited from
+the previous configuration level **if and only if** there are no `add_header` directives
+defined on the current level. The vhost sets four headers at server level
+([07_grin_mining_public_pool.sh:1153-1160](../../scripts/07_grin_mining_public_pool.sh#L1153-L1160)) —
+`X-Frame-Options: DENY`, `X-Content-Type-Options`, `Referrer-Policy`, and the full CSP.
+
+Two locations then declare an `add_header` of their own, purely for cache control, and in
+doing so discard all four:
+
+| Location | Own `add_header` | Serves | Result |
+|---|---|---|---|
+| [`location /admin/`:1186](../../scripts/07_grin_mining_public_pool.sh#L1186) | `Cache-Control "no-cache"` | the whole admin panel (HTML/JS/CSS, `try_files` from disk) | **no CSP, no XFO, no nosniff, no Referrer-Policy** |
+| [`location /`:1331](../../scripts/07_grin_mining_public_pool.sh#L1331) | `Cache-Control "no-cache"` | every public page — index, login, account-settings, miners-stats, blocks, donate, payment-history — and all CSS/JS | **same** |
+
+The locations that *do* keep the headers are the proxied `/api/…` ones, i.e. the JSON
+endpoints where a CSP does the least. The two surfaces a browser actually renders have
+none. Concretely: the admin panel is framable (clickjacking against `secureAdmin` actions —
+ads, pages, posts, settings reads), and the CSP that is supposed to contain any XSS on the
+account/payout pages is absent. Express's own header middleware
+([index.js:243-250](../../web/07_mining_pool_public/back-end-pool/index.js#L243-L250))
+does not cover this — those files are served by nginx off disk, never proxied.
+
+This is the exact trap already documented for Script 052 in CLAUDE.md, live in 07.
+
+**Fix:** move the four headers into a snippet and `include` it in *every* block that adds
+a header of its own (`/admin/`, `/`), or drop the `Cache-Control` `add_header` in favour
+of `expires -1;` / a `map`-driven variable that does not reset inheritance.
+
+### I2 — [Medium] No HSTS anywhere in the nginx vhost
+
+`grep add_header` over the generated config returns no `Strict-Transport-Security`. The
+Express app sets it, but only on responses it generates (`/api/…`, `/blog/<slug>`) — the
+HTML page load itself never carries it, so a first-visit downgrade is not protected even
+though `:80` redirects. Add it to the shared snippet from I1.
+
+### I3 — [Medium] The block-reward "verify against the chain before crediting" control is dead code
+
+[rewards.js:26-47](../../web/07_mining_pool_public/back-end-pool/lib/rewards.js#L26-L47)
+guards its blockchain re-verification with `if (this.grinNode)` and comments it
+`FIX #1, #5: CRITICAL — Prevents fake blocks from being credited if block_monitor is
+compromised`. But `RewardDistributor`'s constructor
+([rewards.js:5-11](../../web/07_mining_pool_public/back-end-pool/lib/rewards.js#L5-L11))
+never assigns `this.grinNode`, and the only construction site passes one argument:
+`new RewardDistributor(config)` ([index.js:473](../../web/07_mining_pool_public/back-end-pool/index.js#L473)).
+
+`this.grinNode` is therefore permanently `undefined`. Every distribution takes the `else`
+branch and logs `[WARNING] Grin node not available - skipping blockchain verification`.
+The height+hash re-check has never run.
+
+**Impact is bounded, not zero.** Blocks only reach `status='confirmed'` through
+`OrphanDetector.verifyBlockOnChain()`, which does check the chain — by **nonce**, not hash
+([orphan-detector.js:12-36](../../web/07_mining_pool_public/back-end-pool/lib/orphan-detector.js#L12-L36)).
+So the primary gate exists; what is missing is the independent second check at the moment
+money is credited, plus the stronger hash comparison. The operational tell is that the
+`[WARNING]` line will print on **every** payout during the re-test — if you see it, this is
+why, and it is not a node connectivity problem.
+
+**Fix:** `BlockMonitor` already owns a `GrinNodeAPI` ([block-monitor.js:9](../../web/07_mining_pool_public/back-end-pool/lib/block-monitor.js#L9)).
+Pass it in — `new RewardDistributor(config, blockMonitor.grinNode)` — and store it.
+
+### I4 — [Medium-High] Reward distribution is not atomic with the `confirmed → paid` flip → double-credit on a crash
+
+[rewards.js:80-82](../../web/07_mining_pool_public/back-end-pool/lib/rewards.js#L80-L82):
+
+```js
+const distributionResult = this.creditBalances(...);   // commits its own transaction(s)
+this.db.prepare("UPDATE blocks SET status = 'paid' WHERE id = ?").run(blockId);
+```
+
+`creditBalances` runs **three** separate units of work — the miner-credit `transaction()`
+([:139-160](../../web/07_mining_pool_public/back-end-pool/lib/rewards.js#L139-L160)), then
+the pool-fee credit **outside any transaction**
+([:162-182](../../web/07_mining_pool_public/back-end-pool/lib/rewards.js#L162-L182)), then
+`incentiveTx()` — and the status flip is a fourth, in the caller.
+
+If the process dies (or the box reboots, or systemd restarts the unit) after the miner
+credits commit but before the status flip, the block is still `status='confirmed'`.
+`BlockMonitor.distributeConfirmedBlocks()` re-selects exactly that row on the next 30 s tick
+and **credits every miner a second time**. Nothing prevents it: the flip has no CAS
+(`WHERE id = ? AND status = 'confirmed'`), and `balance_log` has no uniqueness constraint
+on `(reference_type, reference_id, grin_address)`
+([db.js:425-440](../../web/07_mining_pool_public/back-end-pool/lib/db.js#L425-L440)) to
+make the replay fail. A partial run also leaves miners credited with the pool fee or the
+incentive rebalance never applied.
+
+The header comment on `distributeConfirmedBlocks` claims the sweep "is naturally
+idempotent" ([block-monitor.js:133-137](../../web/07_mining_pool_public/back-end-pool/lib/block-monitor.js#L133-L137)).
+It is idempotent only if the process never dies at the wrong instant.
+
+**Fix:** one transaction covering miner credits + pool fee + incentives + the status flip,
+with the flip as a guarded CAS that must report `changes === 1`.
+
+### I5 — [Low-Medium] `creditBalances` writes placeholder zeros into every credit ledger row
+
+Both the miner credit ([:146-151](../../web/07_mining_pool_public/back-end-pool/lib/rewards.js#L146-L151))
+and the pool-fee credit ([:174-181](../../web/07_mining_pool_public/back-end-pool/lib/rewards.js#L174-L181))
+insert `balance_before, balance_after, locked_before, locked_after` as literal
+`0, 0, 0, 0`. Same class as the `_releaseLockAndDebit` item still open from §H, but on the
+**credit** path — the primary money-in event, and the one surfaced to miners at
+`/api/account/:addr/balance/log` and on the transparency page. With zeros there, the ledger
+cannot reconstruct a balance history or independently corroborate a disputed payout; the
+`amount` column is the only real data in the row. The withdrawal path
+([withdrawal-scheduler.js:686-691](../../web/07_mining_pool_public/back-end-pool/lib/withdrawal-scheduler.js#L686-L691))
+already reads `before` and writes real values — mirror that.
+
+### I6 — [Low] Miner credit has no account-existence guard, unlike the pool-fee credit
+
+The pool-fee path does `INSERT OR IGNORE INTO miner_accounts` before crediting
+([:165-169](../../web/07_mining_pool_public/back-end-pool/lib/rewards.js#L165-L169)); the
+miner loop does a bare `UPDATE … WHERE grin_address = ?` with no such guard and no
+`changes` check. Because `balance_log.grin_address` is a FK and `PRAGMA foreign_keys = ON`
+([db.js:17](../../web/07_mining_pool_public/back-end-pool/lib/db.js#L17)), a missing account
+row does not silently swallow the credit — the ledger insert throws, the transaction rolls
+back, `distributeRewards` returns `success:false`, and the block stays `'confirmed'` and is
+**retried every 30 seconds indefinitely**. Nothing currently deletes `miner_accounts` rows,
+so this is latent rather than live, but it is a hard stall with no alert if it ever fires.
+
+### I7 — [Medium] `POST /api/admin/settings/:section` re-implements step-up and loses the mandatory-2FA gate
+
+[index.js:5809-5820](../../web/07_mining_pool_public/back-end-pool/index.js#L5809-L5820)
+runs under `secureAdmin` and then checks freshness inline with
+`authManager.isTokenFresh(req.token, STEP_UP_MAX_AGE_S)`. That reproduces
+`requireFreshAuth` but **not** `requireTotpEnrolled`, which is the second element of the
+`freshAdmin` chain ([index.js:794-799](../../web/07_mining_pool_public/back-end-pool/index.js#L794-L799))
+and the only thing that enforces `access.require_admin_totp`.
+
+Consequence: on a pool with mandatory 2FA turned on, an admin who has **not** enrolled is
+correctly refused by every `freshAdmin` route — but can still write the `payout` section
+(`withdrawal_fee`, `min_withdrawal`, `withdrawal_cooldown_minutes`, `tor_preflight_gate`,
+`dormancy_enabled`, `nostr_nip05_domains`, `nostr_relays`) with a password-only re-auth,
+since `/api/admin/reauth` verifies the password and nothing else
+([index.js:1802-1821](../../web/07_mining_pool_public/back-end-pool/index.js#L1802-L1821)).
+`nostr_nip05_domains` is the SSRF/typo-squat allowlist, so this is not a cosmetic section.
+
+Blast radius is limited by the per-field validators (`withdrawal_fee` caps at 1 GRIN) and
+by needing a valid admin password + live session, which is why this is Medium and not High.
+[index.js:5428](../../web/07_mining_pool_public/back-end-pool/index.js#L5428) (`POST
+/api/admin/locations` with a WireGuard pubkey) has the identical shape.
+
+**Fix:** call `requireTotpEnrolled` explicitly on both, or refactor the inline check into a
+`conditionalFreshAdmin` helper that carries both halves.
+
+### I8 — [Medium] The lottery seed is chosen *after* the entry set is known, so a "provably fair" draw is grindable
+
+[lottery.js:133-140](../../web/07_mining_pool_public/back-end-pool/lib/lottery.js#L133-L140)
+takes the seed from `grinNode.getTip()` **at draw time**, and the winner is
+`sha256(seed_hash + ":" + salt) mod totalTickets` with `salt = eventName || type`. Both
+inputs are under the drawer's control at the moment of drawing:
+
+- the **seed** is whatever the current tip happens to be, and `POST
+  /api/admin/incentives/lottery/draw-now` lets the operator pick *when* that is;
+- the **salt** is `eventName`, a free-text field on the same request.
+
+Entries come from `hashrate_history`, which the operator can read. So the winner for the
+current tip is computable offline before clicking draw — wait for a favourable tip (or vary
+`eventName`) and the "deterministic" draw picks whoever you like. A verifiable lottery needs
+**commit-then-reveal**: publish "the winner will be derived from the hash of block N" for a
+*future* N, then draw at N.
+
+Second, weaker point: the module header claims "anyone can recompute the result from the
+seed + the public share data" ([lottery.js:9-12](../../web/07_mining_pool_public/back-end-pool/lib/lottery.js#L9-L12)),
+but the entry set is per-address `hashrate_history` work, which is **not** published (and by
+the IP/address-privacy design deliberately is not). A third party cannot recompute the draw
+today, so the fairness claim is not currently checkable regardless of the seed.
+
+The operator already controls the prize pool outright (`/api/admin/incentives/award`), so
+this is not an escalation — it is an integrity-of-claims issue. It matters as soon as any
+public page says the draws are provably fair.
+
+### I9 — [Low] Share retention's safety floor ignores blocks stuck in `confirmed`
+
+`_sharesCutoffHeight` ([retention.js:36-54](../../web/07_mining_pool_public/back-end-pool/lib/retention.js#L36-L54))
+lowers the prune floor for the oldest **`status='immature'`** block, but not for a block in
+`'confirmed'` (matured, awaiting distribution). Normally harmless — distribution runs every
+30 s, and the general `currentHeight − (confirmDepth + PPLNS + margin)` cutoff already
+covers a promptly-paid block. But combined with I6 (a block that stalls in `'confirmed'`
+retrying forever) or a long node outage, the shares that block needs can age out from under
+it. `getSharesForDistribution` then returns empty, and the `no_shares_found` branch marks it
+`'paid'` with **the reward retained by the pool and the miners never credited**
+([rewards.js:50-62](../../web/07_mining_pool_public/back-end-pool/lib/rewards.js#L50-L62)).
+Cheap fix: `WHERE status IN ('immature','confirmed')` in the floor query.
+
+### I10 — [Low] Operator-supplied region labels reach `innerHTML` unescaped on the network map
+
+[network-map.js:249](../../web/07_mining_pool_public/public_html/js/network-map.js#L249)
+interpolates `best.name` — `h.label` / `g.label || g.region` from `pool_locations`, written
+via `POST /api/admin/locations` — straight into `tip.innerHTML`, and
+[:381](../../web/07_mining_pool_public/public_html/js/network-map.js#L381) does the same for
+donut legend names (those are geoip country names, i.e. server-controlled, so only the
+label path is reachable). Admin-authored, so it is self-XSS in the same class as the CMS
+`pages.html` and ad `html_code` fields — but unlike those it is not a deliberate
+HTML-authoring field, and with I1 open there is no CSP to contain it. Use `escapeText()`
+(already present at [branding.js:936](../../web/07_mining_pool_public/public_html/js/branding.js#L936))
+or `textContent`.
+
+### Carried forward from §H (re-confirmed still open)
+
+- **Unvalidated `method` in the withdraw audit action** ([index.js:3477-3485](../../web/07_mining_pool_public/back-end-pool/index.js#L3477-L3485)).
+  Re-checked the render side this pass: `payments.html:772` escapes with `escHtml()`, so
+  this is **not** stored XSS — it remains an audit-trail-pollution issue only, as §H states.
+- **Dead `canInitiateWithdrawal()`** — still zero callers, still encodes the wrong cap.
+- **Placeholder zeros in `_releaseLockAndDebit`** — see I5, now known to be the same bug on
+  both the credit and debit sides.
+- **C3 access token unrevocable until expiry** — unchanged; the 24 h idle ceiling still
+  bounds it.
+
+### Stale comment worth correcting
+
+[ip-filter.js:279-283](../../web/07_mining_pool_public/back-end-pool/lib/ip-filter.js#L279-L283)
+documents `app.set('trust proxy', 1)`. The live setting is `'loopback'`
+([index.js:219](../../web/07_mining_pool_public/back-end-pool/index.js#L219)), which is
+stricter and correct — the comment just predates the change.
+
+### Re-test sequencing note (not a code finding)
+
+`/api/auth/register` is first-admin-only, but the check is a `SELECT COUNT(*)` immediately
+before `registerAdmin()`. Whoever reaches it first owns the pool. During the re-test,
+register the admin account **before** the vhost is publicly resolvable, or keep
+`admin_allowlist` set until it is done — the nginx network gate ships open by default.
+
+### I — resolution pass, 2026-08-21 (same day, add-ons, NOT VPS-tested)
+
+All ten findings fixed. Unit-verified by `scripts/test-money-path.js` (new, wired into
+`npm test` — 30 assertions, all passing); the nginx and front-end changes are code-level only
+and still need the VPS re-test to confirm.
+
+| # | Fix | Where |
+|---|---|---|
+| I1 | Security headers moved into two generated snippets under `/etc/nginx/snippets/`; **every** block that declares an `add_header` of its own now re-`include`s one (`/admin/`, `/`, `/uploads/`, `/custom/`) | `07_grin_mining_public_pool.sh` |
+| I2 | `Strict-Transport-Security` added to the common snippet — included only from the `:443` server, never the `:80` redirect | same |
+| I3 | `new RewardDistributor(config, blockMonitor.grinNode)`; check rewritten to `getHeader` and made fail-closed | `index.js`, `lib/rewards.js` |
+| I4 | Credits + pool fee + incentives + the `confirmed→paid` CAS flip collapsed into ONE transaction, flip first | `lib/rewards.js` |
+| I5 | Real `balance_before/after` + `locked_before/after` on every credit row, and in the shared `_move` | `lib/rewards.js`, `lib/incentives.js` |
+| I6 | `INSERT OR IGNORE` + a `changes !== 1` assertion on the miner credit | `lib/rewards.js` |
+| I7 | New `stepUpRefused()` carries **both** halves of the step-up contract; both inline call sites use it | `index.js` |
+| I8 | Draws are now commit-reveal against a future block, with a frozen published entry set | `lib/lottery.js`, `lib/db.js` |
+| I9 | Retention floor covers `status IN ('immature','confirmed')` | `lib/retention.js` |
+| I10 | `esc()` added and applied to both `innerHTML` interpolations | `public_html/js/network-map.js` |
+
+**Two corrections to the findings above, both learned while fixing them:**
+
+- **I3 was worse than reported, and the naive fix would have broken every payout.** The dead
+  branch called `getBlock(height)` and compared `nodeBlock.hash`, but `GrinNodeAPI.getBlock`
+  returns `{ header: { hash, … }, inputs, outputs }` — there is no top-level `.hash`. So
+  simply passing `grinNode` in would have made `undefined !== block.hash` true on every block
+  and hard-failed all distribution. The check now uses `getHeader`, which additionally is the
+  only correct call here: a pruned node (`mainnet-prune`, the standard deployment) keeps the
+  full header chain at every height but serves block *bodies* only inside the pruning horizon.
+  Comparison is on **nonce** (authoritative — it is what `OrphanDetector.verifyBlockOnChain`
+  already uses in production) plus **hash** when both sides are 64-hex; a non-hex stored hash
+  logs loudly and falls back to nonce rather than freezing payouts on a format assumption that
+  has not been checked against a live node. **Confirm on the VPS** that `blocks.hash` — parsed
+  out of the node stratum's `blockfound - <hash>` reply — matches `get_header(h).hash`, and if
+  the warning appears, tighten this to hash-mandatory.
+
+- **I6 is not reachable, and its severity should read Info, not Low.** `shares.grin_address`
+  is itself `REFERENCES miner_accounts(grin_address)`, so a share cannot exist for an address
+  with no account row — the "block stalls in `confirmed` forever" failure needs a state the
+  schema forbids. Verified by trying to construct it in the test harness: the insert fails
+  with `FOREIGN KEY constraint failed`. The `INSERT OR IGNORE` is kept as consistency with the
+  pool-fee path, not as a bug fix. §I9's fix stands on its own regardless (a node outage, not
+  I6, is the realistic way a block lingers in `confirmed`).
+
+**Behaviour changes an operator will notice:**
+
+1. **Distribution now refuses rather than proceeding when the node is unreachable.** The old
+   `else` branch logged `[WARNING] Grin node not available - skipping blockchain verification`
+   and credited anyway. A block now stays `confirmed` and retries next tick. Expect delayed —
+   never unverified — payouts during a node outage.
+2. **The lottery no longer pays out when the button is pressed.** `draw-now` COMMITS: it
+   freezes the entry set and pot and locks the draw to block `tip + 10`. Winners are picked
+   and paid on a later hourly tick, once that block is mined (~10 min). The admin confirm
+   dialog and toast were rewritten to say so, and a new `.toast.warn` style was added for the
+   "no eligible entries" case. Campaigns gain a `drawing` status for the same interval.
+3. **Draws committed before a shutdown survive it** — `resolveCommittedDraws()` runs first on
+   every scheduler tick, so an unrevealed draw resolves whenever the process comes back.
+
+**Residual on I8:** a reorg deeper than `SEED_DELAY_BLOCKS` (10) at exactly the committed
+height would change the seed. Grin reorgs are shallow and the entry set + pot are already
+frozen, so the exposure is a re-rolled winner, not a manipulable one — but the reveal reads
+whatever header is canonical at read time, so a draw is only as final as the block it names.
+
+**Still open (unchanged, carried from §H):** the unvalidated `method` in the withdraw audit
+action, dead `canInitiateWithdrawal()`, placeholder zeros in `_releaseLockAndDebit` (the
+credit-side instances were fixed under I5; the debit side was left alone this pass because it
+sits inside the payout state machine and deserves its own review), and C3.
+
+### §I — self-review pass (2026-08-21)
+
+A second read of the §I fixes themselves, looking for defects introduced by the fixes. Three
+were found and corrected; a fourth is a repository-history problem, not a code one.
+
+1. **I1 introduced an over-broad HSTS.** The new shared header snippet shipped
+   `Strict-Transport-Security "max-age=31536000; includeSubDomains"`. There was no HSTS before
+   this pass, so the directive is entirely new — and `includeSubDomains` is the wrong default
+   here. `subdomain` in `pool.json` is routinely the operator's **apex** domain (the vhost
+   derives `www.<subdomain>` from it and treats the bare domain as canonical), so the header
+   would pin every sibling host on that domain — `api.`, `testapi.`, anything else the
+   operator runs — to HTTPS for a year. Browsers cache the directive for the full `max-age`,
+   so removing the header afterwards does not undo it: an http-only or bad-cert sibling stays
+   unreachable until it expires. The protection gained covers only hosts this script never
+   deploys. **Fixed:** `max-age=31536000`, no `includeSubDomains`, no `preload`, with the
+   reasoning written into the snippet so it is not "helpfully" re-added.
+2. **I8's reveal could not be diagnosed.** `resolveDraw()` caught every `getHeader` failure and
+   returned `null`, so "the seed block is not mined yet" (normal, every tick until reveal) and
+   "the node has been unreachable for a week" produced the same silent no-op. A draw stuck in
+   `committed` forever would emit no log line at all. **Fixed:** the tip is read first; below
+   `seed_height` is silent and normal, at-or-above it a `getHeader` failure is an anomaly and
+   is logged with both heights.
+3. **I8 added a redundant index.** `idx_lottery_entries_draw ON lottery_entries(draw_id,
+   grin_address)` duplicates the implicit index SQLite already creates for
+   `PRIMARY KEY (draw_id, grin_address)` — same columns, same order — costing a second write
+   per entry row for nothing. **Fixed:** removed.
+
+**Confirmed correct on re-read** (checked, not assumed): `blockMonitor.grinNode` and
+`getHeader()` both exist with the shapes I3 relies on; `dueDraws()` keys off `created_at`,
+which is stamped at COMMIT, so a draw awaiting reveal does not re-trigger; `runDueCampaigns`
+filters `status='scheduled'`, which excludes the new `drawing`; `_scheduleNextOccurrence`
+INSERTs a fresh row rather than mutating the one the reveal later stamps; `lottery_draws`
+has no CHECK on `status` and both `seed_hash`/`drawn_at` are nullable, so the commit INSERT is
+valid on an existing DB with no migration; the public `recent_winners` payload and the fortune
+board both read through `lottery_winners`, so a `committed` draw cannot render as a null seed;
+the settings route's duplicated freshness check is reached only when fresh and cannot
+double-send; `stepUpRefused` emits a byte-identical refusal to `requireTotpEnrolled`; and
+`network-map.js` has no third unescaped `innerHTML` sink.
+
+**Repository note (not a defect in the code):** the I1/I2 nginx work was swept into commit
+`1cafea0 "docs(comments): audit batch A5 — public pool (shell)"` by a concurrent
+comment-audit session. The fix is present and correct, but its commit message describes it as
+comment-only, so a later reader auditing when HSTS/CSP inheritance was fixed will not find it
+there. Worth a note in the changelog.

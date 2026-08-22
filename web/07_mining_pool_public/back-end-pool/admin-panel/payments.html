@@ -1026,8 +1026,8 @@ async function verifyOwner() {
 }
 
 // A payout POST that transparently handles the backend's "needs acknowledgment" gates: a 428
-// verify_required (finding #4 — no ownership verification in the last 15 min) and a 400
-// above_min_needs_ack (finding #2 — at/above the pool minimum, auto-payout could double-pay). Each
+// verify_required (no ownership verification in the last 15 min) and a 400
+// above_min_needs_ack (at/above the pool minimum, auto-payout could double-pay). Each
 // prompts once and retries with the matching flag set. Returns the parsed body on success; throws
 // otherwise. `extra` carries the acks across retries so each is asked at most once.
 async function postPayoutWithAcks(url, base, extra) {
@@ -1083,7 +1083,8 @@ async function recordManualPayout() {
   const btn = document.getElementById('mp-record-btn');
   if (!address || !(amount > 0)) { out.textContent = 'address + positive amount required'; out.style.color = 'var(--warn)'; return; }
   if (!confirm(`Record a MANUAL payout of ${amount} ツ to\n${address}?\n\nOnly do this AFTER you have actually sent the coins on the server. This debits the miner's balance.`)) return;
-  btn.disabled = true;   // in-flight guard: a resubmit would double-debit the miner (finding #1)
+  btn.disabled = true;   // in-flight guard: a resubmit would double-debit the miner
+  // (the server dedups too — see recordManualPayout in lib/dormancy.js)
   try {
     const body = await postPayoutWithAcks('/api/admin/dormancy/manual-payout', {
       address, amount, fee,

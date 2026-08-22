@@ -15,16 +15,19 @@
 #   Nginx — detect node → verify sync → stop node → compress chain_data →
 #           write to nginx web dir → generate SHA256 → restart node.
 #           Produces a .tar.gz + .sha256 pair consumed by Script 01.
-#   SSH   — rsync the finished archive from the local nginx web dir to one or
-#           more remote servers. Does not stop the node; runs independently
-#           after the Nginx pipeline has produced the archive.
+#   Remote — (menu C/D, lib/03_lib_remote.sh) rsync the FINISHED archive from
+#           the local nginx web dir to one or more mirrors. Never touches
+#           chain_data and never stops the node; runs independently after the
+#           Nginx pipeline has produced the archive. Config lives in
+#           grin_share_targets.conf; --cron-ssh is the legacy flag alias.
 #
 # USAGE
 #   Interactive : bash 03_grin_share_chain_data.sh
 #   Cron        : bash 03_grin_share_chain_data.sh --cron-nginx       (both nets)
 #                 bash 03_grin_share_chain_data.sh --cron-nginx-main  (mainnet only)
 #                 bash 03_grin_share_chain_data.sh --cron-nginx-test  (testnet only)
-#                 bash 03_grin_share_chain_data.sh --cron-ssh
+#                 bash 03_grin_share_chain_data.sh --cron-remote [site_key]
+#                 bash 03_grin_share_chain_data.sh --cron-ssh   (legacy alias)
 #                 bash 03_grin_share_chain_data.sh --cron-clean
 #
 # NODE TYPES & WEB DIRECTORIES
@@ -36,7 +39,9 @@
 #   · Must be run as root
 #   · A synced Grin node built by Script 01
 #   · Script 02 nginx file server set up on the domain (for Nginx pipeline)
-#   · Required packages: tar, openssl, rsync (SSH mode), tmux
+#   · Required packages: tar, openssl, rsync (remote copy), tmux
+#   · Optional: pigz (parallel gzip), nocache — installed on demand, and a
+#     failed install is remembered for PKG_RETRY_HOURS rather than retried
 #
 # BECOME A MASTER NODE
 #   If you have a spare VPS and domain, point subdomains to this server and
@@ -44,7 +49,7 @@
 #   helping new Grin users sync in minutes instead of days.
 #
 # LOG FILE
-#   <toolkit_root>/log/03_grin_share_YYYYMMDD_HHMMSS.log
+#   /opt/grin/logs/03_grin_share_YYYYMMDD_HHMMSS.log
 #
 ################################################################################
 # ============================================================================
@@ -55,6 +60,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Shared node primitives (canonical _grin_session_name, etc.). Source-guarded,
 # no side effects; defines info/warn/error fallbacks only if absent.
 source "$SCRIPT_DIR/lib/grin_node_control.sh"
+source "$SCRIPT_DIR/lib/grin_alerts.sh"
+source "$SCRIPT_DIR/lib/03_lib_remote.sh"
 CONF_DIR="/opt/grin/conf"
 CONF_NGINX="$CONF_DIR/grin_share_nginx.conf"
 CONF_SSH="$CONF_DIR/grin_share_ssh.conf"
@@ -67,6 +74,7 @@ CRON_COMMENT_NGINX_TEST="# grin-node-toolkit: grin_share_nginx_test"  # per-netw
 CRON_COMMENT_AUTOSTART_MAIN="# grin-node-toolkit: grin_autostart_mainnet"
 CRON_COMMENT_AUTOSTART_TEST="# grin-node-toolkit: grin_autostart_testnet"
 CRON_COMMENT_CLEAN="# grin-node-toolkit: grin_clean_txhashset"
+CRON_COMMENT_REMOTE="# grin-node-toolkit: grin_share_remote"
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 CYAN='\033[0;36m'; BOLD='\033[1m'; DIM='\033[2m'; RESET='\033[0m'
@@ -166,6 +174,7 @@ ARCHIVE_NODE=""
 NODE_TYPE=""
 ARCHIVE_BASE=""     # basename of the archive produced this run (no extension)
 RETAIN_PREVIOUS=false   # set by preflight_disk_space; read by clean_output_directory
+_SWAP_LOCKED=false      # true while compress_chain_data holds the publish-swap lock
 _SHARE_RC=0             # per-instance publish result; reset by reset_detection_vars
 GRIN_BINARY=""
 GRIN_DIR=""
@@ -231,15 +240,57 @@ show_error_pause() {
 
 # Install a package if the given command is missing.
 # Usage: ensure_package <command> <package>
+# Optional helpers (pigz, nocache, rsync) go through this, and the callers are
+# on a cron schedule. When a package genuinely is not available - nocache is in
+# no RHEL base repo, for instance - the old version ran a full `apt-get update`
+# plus a failing install on EVERY run, for ever: minutes of network and disk on
+# a box the whole redesign exists to keep quiet, to reach the same answer as
+# last time. A failure is remembered and not retried for PKG_RETRY_HOURS.
+#
+# Only FAILURE is cached, and only for a while. A package that appears in a repo
+# later still gets picked up; the operator just waits out the window instead of
+# paying for the attempt on every single run.
+PKG_FAIL_DIR="${PKG_FAIL_DIR:-/opt/grin/state/pkgfail}"
+PKG_RETRY_HOURS="${PKG_RETRY_HOURS:-24}"
+
 ensure_package() {
-    local cmd="$1" pkg="$2"
+    local cmd="$1" pkg="$2" marker rc
     command -v "$cmd" &>/dev/null && return 0
+
+    marker="$PKG_FAIL_DIR/$(printf '%s' "$pkg" | tr -c 'a-zA-Z0-9._-' '_')"
+    if [ -f "$marker" ]; then
+        local age_h
+        age_h=$(( ( $(date +%s) - $(stat -c %Y "$marker" 2>/dev/null || echo 0) ) / 3600 ))
+        if [ "$age_h" -lt "$PKG_RETRY_HOURS" ]; then
+            log_or_echo "Skipping $pkg: install failed ${age_h}h ago, retrying after ${PKG_RETRY_HOURS}h"
+            return 1
+        fi
+        rm -f "$marker" 2>/dev/null || true
+    fi
+
     echo "Installing missing package: $pkg..."
     if command -v dnf &>/dev/null; then
-        dnf install -y -q "$pkg"
+        dnf install -y -q "$pkg"; rc=$?
     else
-        apt-get update -qq && apt-get install -y -qq "$pkg"
+        apt-get update -qq && apt-get install -y -qq "$pkg"; rc=$?
     fi
+
+    # An installer that exits 0 without producing the command is still a failure
+    # for our purposes - what the caller needs is the binary, not the exit code.
+    if [ $rc -eq 0 ] && command -v "$cmd" &>/dev/null; then
+        rm -f "$marker" 2>/dev/null || true
+        return 0
+    fi
+    mkdir -p "$PKG_FAIL_DIR" 2>/dev/null || true
+    : > "$marker" 2>/dev/null || true
+    log_or_echo "Could not install $pkg - not retrying for ${PKG_RETRY_HOURS}h"
+    return 1
+}
+
+# ensure_package runs both before and after the logger has a log file, so it
+# cannot assume either one.
+log_or_echo() {
+    if declare -F log >/dev/null 2>&1 && [ -n "${LOG_FILE:-}" ]; then log "$*"; else echo "$*"; fi
 }
 
 # Ensure the crontab command exists and the cron daemon runs. RHEL-family
@@ -292,40 +343,6 @@ load_ssh_config() {
     [[ -f "$CONF_SSH" ]] && source "$CONF_SSH"
 }
 
-# Write current SSH config variables to CONF_SSH
-save_ssh_config() {
-    mkdir -p "$CONF_DIR"
-    cat > "$CONF_SSH" << __EOF__
-# Grin Share — SSH Config
-# Generated: $(date -u '+%Y-%m-%d %H:%M:%S UTC')
-# Each node type can target a different remote host.
-# SSH upload reads from the local nginx web dir — run nginx share first.
-
-FILE_OWNER_SSH="$FILE_OWNER_SSH"
-
-SSH_ENABLE_MAINNET_FULL=$SSH_ENABLE_MAINNET_FULL
-SSH_SOURCE_DIR_MAINNET_FULL="$SSH_SOURCE_DIR_MAINNET_FULL"
-REMOTE_HOST_MAINNET_FULL="$REMOTE_HOST_MAINNET_FULL"
-REMOTE_PORT_MAINNET_FULL="$REMOTE_PORT_MAINNET_FULL"
-REMOTE_SSH_KEY_MAINNET_FULL="$REMOTE_SSH_KEY_MAINNET_FULL"
-REMOTE_WEB_DIR_MAINNET_FULL="$REMOTE_WEB_DIR_MAINNET_FULL"
-
-SSH_ENABLE_MAINNET_PRUNED=$SSH_ENABLE_MAINNET_PRUNED
-SSH_SOURCE_DIR_MAINNET_PRUNED="$SSH_SOURCE_DIR_MAINNET_PRUNED"
-REMOTE_HOST_MAINNET_PRUNED="$REMOTE_HOST_MAINNET_PRUNED"
-REMOTE_PORT_MAINNET_PRUNED="$REMOTE_PORT_MAINNET_PRUNED"
-REMOTE_SSH_KEY_MAINNET_PRUNED="$REMOTE_SSH_KEY_MAINNET_PRUNED"
-REMOTE_WEB_DIR_MAINNET_PRUNED="$REMOTE_WEB_DIR_MAINNET_PRUNED"
-
-SSH_ENABLE_TESTNET_PRUNED=$SSH_ENABLE_TESTNET_PRUNED
-SSH_SOURCE_DIR_TESTNET_PRUNED="$SSH_SOURCE_DIR_TESTNET_PRUNED"
-REMOTE_HOST_TESTNET_PRUNED="$REMOTE_HOST_TESTNET_PRUNED"
-REMOTE_PORT_TESTNET_PRUNED="$REMOTE_PORT_TESTNET_PRUNED"
-REMOTE_SSH_KEY_TESTNET_PRUNED="$REMOTE_SSH_KEY_TESTNET_PRUNED"
-REMOTE_WEB_DIR_TESTNET_PRUNED="$REMOTE_WEB_DIR_TESTNET_PRUNED"
-__EOF__
-    chmod 600 "$CONF_SSH"
-}
 
 ################################################################################
 # Setup Wizard A — Nginx config
@@ -562,142 +579,6 @@ run_nginx_setup() {
     read -rp "  Press Enter to return to main menu: " _
 }
 
-################################################################################
-# Setup Wizard C — SSH config  (reads node types from nginx conf)
-################################################################################
-
-run_ssh_setup() {
-    clear
-    echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo -e "${BOLD}${CYAN}  Grin Share — SSH Configuration Setup${RESET}"
-    echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo ""
-
-    if [[ ! -f "$CONF_NGINX" ]]; then
-        show_error_pause "Nginx config not found." "Run option A (Create Nginx config) first."
-        return
-    fi
-
-    load_nginx_config
-    load_ssh_config
-
-    if [[ -z "$DETECTED_NODE_TYPES" ]]; then
-        show_error_pause "No node types detected in nginx config." "Re-run option A to update the nginx config."
-        return
-    fi
-
-    echo -e "  Answers saved to: ${DIM}$CONF_SSH${RESET}"
-    echo -e "  ${DIM}SSH upload reads from local nginx web dirs — no Grin node interaction.${RESET}"
-    echo ""
-
-    # ── Global defaults ───────────────────────────────────────────────────────
-    echo -e "${BOLD}Global SSH defaults (applied as starting point for each node type):${RESET}"
-    local default_port="22" default_key="/root/.ssh/id_rsa" tmp
-
-    echo -ne "  SSH port [${default_port}] or 0 to cancel: "
-    read -r tmp; [[ "$tmp" == "0" ]] && return
-    default_port="${tmp:-$default_port}"
-    echo -ne "  SSH key  [${default_key}] or 0 to cancel: "
-    read -r tmp; [[ "$tmp" == "0" ]] && return
-    default_key="${tmp:-$default_key}"
-    echo ""
-
-    # ── Per node type ─────────────────────────────────────────────────────────
-    local combo net ntype var_enable var_source var_host var_port var_key var_rdir
-    local nginx_source cur_enable cur_host cur_port cur_key cur_rdir answer
-
-    for combo in $DETECTED_NODE_TYPES; do
-        net="${combo%%:*}"
-        ntype="${combo##*:}"
-        var_enable="SSH_ENABLE_${net^^}_${ntype^^}"
-        var_source="SSH_SOURCE_DIR_${net^^}_${ntype^^}"
-        var_host="REMOTE_HOST_${net^^}_${ntype^^}"
-        var_port="REMOTE_PORT_${net^^}_${ntype^^}"
-        var_key="REMOTE_SSH_KEY_${net^^}_${ntype^^}"
-        var_rdir="REMOTE_WEB_DIR_${net^^}_${ntype^^}"
-
-        echo -e "${BOLD}── ${net^} / ${ntype^} ──${RESET}"
-
-        # Pre-fill source from nginx conf
-        nginx_source_var="LOCAL_WEB_DIR_${net^^}_${ntype^^}"
-        nginx_source="${!nginx_source_var}"
-
-        cur_enable="${!var_enable:-false}"
-        cur_host="${!var_host:-user@your-server}"
-        cur_port="${!var_port:-$default_port}"
-        cur_key="${!var_key:-$default_key}"
-        cur_rdir="${!var_rdir:-/var/www/${ntype}${net:0:4}}"
-
-        echo -ne "  Enable SSH upload for this node type? [Y/n/0]: "
-        read -r answer
-        [[ "$answer" == "0" ]] && return
-        if [[ "${answer,,}" == "n" ]]; then
-            printf -v "$var_enable" '%s' "false"
-            echo -e "  ${DIM}Skipped.${RESET}"
-            echo ""
-            continue
-        fi
-        printf -v "$var_enable" '%s' "true"
-
-        echo -ne "  Source dir (local nginx web dir) [${nginx_source}] or 0 to cancel: "
-        read -r tmp; [[ "$tmp" == "0" ]] && return; printf -v "$var_source" '%s' "${tmp:-$nginx_source}"
-
-        echo -ne "  Remote host (user@ip)            [${cur_host}] or 0 to cancel: "
-        read -r tmp; [[ "$tmp" == "0" ]] && return; printf -v "$var_host" '%s' "${tmp:-$cur_host}"
-
-        echo -ne "  Remote SSH port                  [${cur_port}] or 0 to cancel: "
-        read -r tmp; [[ "$tmp" == "0" ]] && return; printf -v "$var_port" '%s' "${tmp:-$cur_port}"
-
-        echo -ne "  SSH key path                     [${cur_key}] or 0 to cancel: "
-        read -r tmp; [[ "$tmp" == "0" ]] && return; printf -v "$var_key" '%s' "${tmp:-$cur_key}"
-
-        echo -ne "  Remote web dir                   [${cur_rdir}] or 0 to cancel: "
-        read -r tmp; [[ "$tmp" == "0" ]] && return; printf -v "$var_rdir" '%s' "${tmp:-$cur_rdir}"
-
-        # Test SSH connection
-        local h="${!var_host}" p="${!var_port}" k="${!var_key}"
-        echo -e "  ${DIM}Testing SSH connection to ${h}...${RESET}"
-        if ssh -i "$k" -p "$p" -o BatchMode=yes -o ConnectTimeout=8 "$h" "exit" 2>/dev/null; then
-            echo -e "  ${GREEN}✓${RESET} SSH connection OK"
-        else
-            echo -e "  ${YELLOW}⚠${RESET} SSH connection failed."
-            echo -e "  ${DIM}If the key is new, copy it manually:${RESET}"
-            echo -e "  ${DIM}  ssh-copy-id -i ${k}.pub -p ${p} ${h}${RESET}"
-            echo -e "  ${DIM}Config saved — fix SSH access before running option D.${RESET}"
-        fi
-        echo ""
-    done
-
-    # ── File ownership ────────────────────────────────────────────────────────
-    echo -e "${BOLD}Remote file ownership after upload (chown):${RESET}"
-    echo -ne "  owner:group [${FILE_OWNER_SSH}] or 0 to cancel: "
-    read -r tmp; [[ "$tmp" == "0" ]] && return
-    FILE_OWNER_SSH="${tmp:-$FILE_OWNER_SSH}"
-    echo ""
-
-    # ── Cron timing advisory ──────────────────────────────────────────────────
-    local nginx_cron_entry
-    nginx_cron_entry=$(crontab -l 2>/dev/null | grep "grin_share_nginx" | head -1)
-    if [ -n "$nginx_cron_entry" ]; then
-        echo -e "${YELLOW}[NOTICE]${RESET} Nginx is currently scheduled:"
-        echo -e "  ${DIM}$nginx_cron_entry${RESET}"
-        echo -e "  Schedule your SSH cron job at least 1-2 hours after nginx finishes."
-        echo -e "  Add manually to crontab:"
-        echo -e "  ${DIM}bash $(realpath "${BASH_SOURCE[0]}") --cron-ssh >> $LOG_DIR/cron_ssh.log 2>&1${RESET}"
-        echo ""
-    else
-        echo -e "${DIM}SSH cron is managed manually. Once nginx is scheduled, add:${RESET}"
-        echo -e "  ${DIM}bash $(realpath "${BASH_SOURCE[0]}") --cron-ssh >> $LOG_DIR/cron_ssh.log 2>&1${RESET}"
-        echo ""
-    fi
-
-    save_ssh_config
-    sched_success "SSH config saved to: ${CYAN}$CONF_SSH${RESET}"
-    sched_log "SSH config updated"
-    echo ""
-    echo "Press Enter to continue..."
-    read -r
-}
 
 ################################################################################
 # Port / process detection
@@ -805,7 +686,7 @@ setup_derived_variables() {
 
 reset_detection_vars() {
     GRIN_PORT="" NETWORK_TYPE="" ARCHIVE_NODE="" NODE_TYPE="" ARCHIVE_BASE=""
-    RETAIN_PREVIOUS=false; _SHARE_RC=0
+    RETAIN_PREVIOUS=false; _SHARE_RC=0; _SWAP_LOCKED=false
     GRIN_BINARY="" GRIN_DIR="" GRIN_DATA_DIR="" GRIN_CONFIG_FILE=""
     LOG_FILE="" OUTPUT_DIR="" STATUS_FILE="" FINAL_DEST="" TMUX_SESSION=""
 }
@@ -1021,12 +902,6 @@ validate_nginx_config() {
 # Nginx pipeline steps
 ################################################################################
 
-# Step 0: clear previously published artefacts from the output dir
-#
-# OUTPUT_DIR is a live nginx web root, not a scratch dir. Only the files THIS
-# pipeline publishes are removed — anything else the operator put there is kept.
-# In particular index.html (the Script 02 landing page) must survive, otherwise
-# every sync would silently revert the site to the bare autoindex.
 # Step 0a: decide whether this run can finish BEFORE anything is destroyed.
 #
 # Why this exists, and why it runs first. The publish sequence deletes the live
@@ -1172,6 +1047,12 @@ preflight_disk_space() {
     fi
 }
 
+# Step 0: clear previously published artefacts from the output dir
+#
+# OUTPUT_DIR is a live nginx web root, not a scratch dir. Only the files THIS
+# pipeline publishes are removed — anything else the operator put there is kept.
+# In particular index.html (the Script 02 landing page) must survive, otherwise
+# every sync would silently revert the site to the bare autoindex.
 clean_output_directory() {
     log "Step 0: Cleaning output directory: $OUTPUT_DIR"
     mkdir -p "$OUTPUT_DIR"
@@ -1300,24 +1181,6 @@ create_status_in_progress() {
     fi
 }
 
-# Step 5: tar.gz chain_data + sha256 checksum
-#
-# Compression runs through pigz (parallel gzip) when it is available. pigz emits
-# a STANDARD gzip stream under the same .tar.gz name, so every downstream
-# assumption in Script 01 still holds unchanged — the manifest's
-# ^[A-Za-z0-9._-]+\.tar\.gz$ regex, the autoindex href grep, and `tar -xzf`
-# extraction in both transfer modes. This change is invisible to downloaders,
-# which is exactly why pigz was chosen over zstd (a .tar.zst breaks all three).
-# Falls back to plain gzip on hosts where pigz cannot be installed.
-#
-# WARNING: this script does NOT set `set -euo pipefail` (only Script 01 does), and
-# in a pipeline `$?` reports the LAST command — pigz — not tar. Without the
-# PIPESTATUS check below, a tar that died halfway (disk full, IO error, a file
-# vanishing mid-read) would publish a TRUNCATED archive alongside a perfectly
-# valid .sha256 and a perfectly valid manifest. Every integrity and freshness
-# check downstream would accept it, because each one is self-consistent with the
-# corrupt file. The old `tar -czf` was a single command, so its `$?` test was
-# sound; converting to a pipeline is what makes this check load-bearing.
 # Which IO scheduler backs a path. `ionice` is honoured by the CFQ and BFQ
 # schedulers ONLY; on mq-deadline or none — which is what modern kernels pick for
 # virtio-blk and NVMe, i.e. essentially every VPS — the priority is accepted and
@@ -1352,6 +1215,25 @@ _clamp_level() {
     else echo "$v"; fi
 }
 
+# Step 5: tar.gz chain_data + sha256 checksum
+#
+# Compression runs through pigz (parallel gzip) when it is available. pigz emits
+# a STANDARD gzip stream under the same .tar.gz name, so every downstream
+# assumption in Script 01 still holds unchanged — the manifest's
+# ^[A-Za-z0-9._-]+\.tar\.gz$ regex, the autoindex href grep, and `tar -xzf`
+# extraction in both transfer modes. This change is invisible to downloaders,
+# which is exactly why pigz was chosen over zstd (a .tar.zst breaks all three).
+# Falls back to plain gzip on hosts where pigz cannot be installed.
+#
+# WARNING: this script does NOT set `set -euo pipefail` (nearly every other
+# top-level script in scripts/ does — 03 is the exception, not 01 the outlier), and
+# in a pipeline `$?` reports the LAST command — pigz — not tar. Without the
+# PIPESTATUS check below, a tar that died halfway (disk full, IO error, a file
+# vanishing mid-read) would publish a TRUNCATED archive alongside a perfectly
+# valid .sha256 and a perfectly valid manifest. Every integrity and freshness
+# check downstream would accept it, because each one is self-consistent with the
+# corrupt file. The old `tar -czf` was a single command, so its `$?` test was
+# sound; converting to a pipeline is what makes this check load-bearing.
 compress_chain_data() {
     log "Step 5: Compressing chain_data..."
     # Every failure path below RETURNS rather than calling error_exit. error_exit
@@ -1433,11 +1315,37 @@ compress_chain_data() {
     if command -v pigz &>/dev/null; then
         level=$(_clamp_level "$level" 0)
         comp=("${pre[@]}" pigz "-$level" -p "$cores")
-        log "Compressor: pigz -$level across $cores core(s)"
+        # --rsyncable resets the compressor at content-defined boundaries, so an
+        # edit early in the stream does not shift every byte after it. Without
+        # it, one changed block near the start makes the whole .gz differ and
+        # rsync ships all ~18 GB again; with it, rsync's delta transfer finds
+        # the unchanged runs. chain_data grows mostly by APPEND between builds,
+        # so most of the archive genuinely is unchanged - which is the case this
+        # flag is for, and the case a mirror hits every fortnight.
+        #
+        # It matters here and not for a browser download because rsync over ssh
+        # uses delta transfer by default (only local->local implies
+        # --whole-file). Costs a few % ratio, which at level 1 is noise.
+        #
+        # Probed, never assumed: it is a build-time option, absent from some
+        # distro pigz builds, and an unknown flag makes pigz exit non-zero -
+        # which would fail the whole pipeline rather than degrade.
+        if pigz --help 2>&1 | grep -qi -- '--rsyncable'; then
+            comp+=(--rsyncable)
+            log "Compressor: pigz -$level across $cores core(s), --rsyncable (mirrors resync cheaply)"
+        else
+            log "Compressor: pigz -$level across $cores core(s) (no --rsyncable in this build)"
+        fi
     else
         level=$(_clamp_level "$level" 1)
         comp=("${pre[@]}" gzip "-$level")
-        log "Compressor: gzip -$level (pigz unavailable — single-threaded)"
+        # Debian patches --rsyncable into gzip; upstream and RHEL do not have it.
+        if gzip --help 2>&1 | grep -qi -- '--rsyncable'; then
+            comp+=(--rsyncable)
+            log "Compressor: gzip -$level --rsyncable (pigz unavailable — single-threaded)"
+        else
+            log "Compressor: gzip -$level (pigz unavailable — single-threaded)"
+        fi
     fi
 
     # "${rdr[@]}" carries nice/ionice/nocache. Until now these were applied to the
@@ -1482,6 +1390,29 @@ compress_chain_data() {
     # as a broken mirror. Everything after it is a rename within one directory,
     # so the window where nothing is published is a few milliseconds — not the
     # length of a compress, which is what step 0 used to cost.
+    #
+    # Take the site_key lock for the swap ONLY. A remote copy holds this same
+    # lock for its whole run, so a swap can never pull files out from under an
+    # upload that is mid-transfer. The lock is taken here rather than around the
+    # whole function on purpose: everything above wrote to .tmp files that no
+    # reader looks at, so serialising the ~30 min compression would delay builds
+    # behind uploads for no benefit at all.
+    #
+    # Released by the caller, after update_status_completed has written the
+    # manifest — the swap is not complete until the "ready" signal is back.
+    _SWAP_LOCKED=false
+    if rc_lock_acquire "$(rc_site_key_for "$NODE_TYPE" "$NETWORK_TYPE")" 1800; then
+        _SWAP_LOCKED=true
+    else
+        # 30 minutes is long enough that a copy is stuck, not merely slow. Block
+        # the build indefinitely and a hung upload stops the archive being
+        # rebuilt at all, which is worse; so swap anyway. The copy re-reads
+        # generated_utc after its transfer and aborts rather than publish a set
+        # that spans two builds, which is what makes proceeding here safe.
+        log "WARNING: a remote copy has held the share lock for 30 min — swapping anyway."
+        log "         That copy will detect the change and abort rather than publish a mixed set."
+    fi
+
     rm -f "$OUTPUT_DIR/chaindata.json"
     local old
     for old in "$OUTPUT_DIR"/*.tar.gz "$OUTPUT_DIR"/*.sha256; do
@@ -1767,8 +1698,15 @@ run_nginx_share_for_port() {
     # sitting there intact, so the mirror carries on serving it.
     if compress_chain_data; then
         update_status_completed
+        # The swap lock is taken inside compress_chain_data, immediately before
+        # the rm+mv, and released here rather than there: the manifest that
+        # update_status_completed writes is the "ready" signal, so the swap is
+        # not finished until it exists. Releasing earlier would let a copy start
+        # during the gap and find no manifest.
+        [ "${_SWAP_LOCKED:-false}" = true ] && { rc_lock_release; _SWAP_LOCKED=false; }
         change_file_ownership
     else
+        [ "${_SWAP_LOCKED:-false}" = true ] && { rc_lock_release; _SWAP_LOCKED=false; }
         log "Publish skipped for this run — restarting the node and leaving the published set as it was"
         _SHARE_RC=1
     fi
@@ -1788,7 +1726,8 @@ run_nginx_share_for_port() {
 
 # Try to start Grin from known directories when not found on expected port.
 # Priority: (1) conf file entry, (2) toolkit default directories.
-# Session name uses script 01 convention: grin_<basename of dir>
+# Session name comes from _grin_session_name (lib/grin_node_control.sh):
+# grin_<nodetype>_<networktype>, e.g. grin_pruned_mainnet.
 try_start_from_known_dir() {
     local network=$1   # mainnet or testnet
     local port=$2
@@ -1919,173 +1858,7 @@ run_cron_nginx() {
     echo "=========================================="
 }
 
-################################################################################
-# SSH pipeline
-################################################################################
 
-# Rsync one node type from local nginx web dir to remote server
-run_ssh_share_for_combo() {
-    local net=$1 ntype=$2
-
-    local var_en="SSH_ENABLE_${net^^}_${ntype^^}"
-    local var_src="SSH_SOURCE_DIR_${net^^}_${ntype^^}"
-    local var_host="REMOTE_HOST_${net^^}_${ntype^^}"
-    local var_port="REMOTE_PORT_${net^^}_${ntype^^}"
-    local var_key="REMOTE_SSH_KEY_${net^^}_${ntype^^}"
-    local var_rdir="REMOTE_WEB_DIR_${net^^}_${ntype^^}"
-
-    [ "${!var_en}" != "true" ] && return 0   # disabled — skip silently
-
-    local src="${!var_src}" host="${!var_host}" port="${!var_port}"
-    local key="${!var_key}" rdir="${!var_rdir}"
-
-    local ssh_log="$LOG_DIR/share_ssh_${net}_${ntype}_$(date -u '+%Y%m%d_%H%M%S').log"
-    mkdir -p "$LOG_DIR"; touch "$ssh_log"
-    local lf="$ssh_log"   # shorthand so we can use the log() helper below
-
-    # Temporarily redirect log() to the ssh log file
-    LOG_FILE="$lf"
-
-    log "=========================================="
-    log "SSH share: $net / $ntype"
-    log "=========================================="
-    log "  Source : $src"
-    log "  Target : $host:$rdir"
-
-    # Validate source dir
-    if [ ! -d "$src" ]; then
-        log "ERROR: Source dir not found: $src"
-        log "Run option B (Share via Nginx) first to produce the archive."
-        return 1
-    fi
-
-    # Check source has archive files
-    local archive_count; archive_count=$(find "$src" -maxdepth 1 -name "*.tar.gz*" 2>/dev/null | wc -l)
-    if [ "$archive_count" -eq 0 ]; then
-        log "ERROR: No .tar.gz files found in $src"
-        log "Run option B (Share via Nginx) first to produce the archive."
-        return 1
-    fi
-    log "  Found $archive_count archive file(s) in source"
-
-    # Test SSH connection
-    if ! ssh -i "$key" -p "$port" -o BatchMode=yes -o ConnectTimeout=10 "$host" "exit" 2>/dev/null; then
-        log "ERROR: SSH connection failed to $host:$port"
-        log "Check your SSH key: $key"
-        log "Copy key if needed: ssh-copy-id -i ${key}.pub -p $port $host"
-        return 1
-    fi
-    log "✓ SSH connection OK"
-
-    # Ensure remote dir exists
-    ssh -i "$key" -p "$port" "$host" "mkdir -p '$rdir'" 2>/dev/null \
-        || { log "ERROR: Cannot create remote dir $rdir"; return 1; }
-
-    # Write in-progress status to remote
-    local msg_in="SSH upload in progress. DO NOT download. Check back in 1 hour. $(get_utc_timestamp)"
-    ssh -i "$key" -p "$port" "$host" "echo '$msg_in' > '$rdir/check_status_before_download.txt'" 2>/dev/null \
-        && log "Remote status: upload in progress" \
-        || log "WARNING: Could not write remote status file"
-
-    # Rsync source → remote (rsync is not preinstalled on RHEL/newer Debian minimal)
-    ensure_package rsync rsync \
-        || { log "ERROR: rsync not available and install failed — install it manually"; return 1; }
-    log "Uploading via rsync..."
-    # --delete prunes stale archives on the remote. The Script 02 landing-page
-    # assets are excluded on purpose: index.html, robots.txt and sitemap.xml all
-    # have the SOURCE domain baked into them, so the remote must keep the set
-    # Script 02 generated for itself rather than inheriting ours — and --delete
-    # must not strip them either.
-    #
-    # chaindata.json is excluded for a DIFFERENT reason: it describes the archive,
-    # so unlike index.html it does belong on the remote — but only once the archive
-    # it describes has fully arrived. Sent inside this rsync it could land first and
-    # advertise a tarball still in flight. It is pushed explicitly after success
-    # below. Deleting it up front means the remote never advertises a stale archive
-    # while a new one uploads.
-    ssh -i "$key" -p "$port" "$host" "rm -f '$rdir/chaindata.json'" 2>/dev/null || true
-
-    rsync -az --progress --delete \
-        --exclude='.*' \
-        --exclude='index.html' \
-        --exclude='robots.txt' \
-        --exclude='sitemap.xml' \
-        --exclude='grin-logo.svg' \
-        --exclude='mirrors.json' \
-        --exclude='chaindata.json' \
-        -e "ssh -i $key -p $port" \
-        "$src/" "$host:$rdir/"
-
-    local rc=$?
-    if [ $rc -eq 0 ]; then
-        log "✓ Upload complete"
-        # Manifest last: it is the "archive is complete" signal, so it may only
-        # appear now that the payload has fully landed. scp to a temp name then
-        # mv, so a poller never sees it half-written.
-        if [ -f "$src/chaindata.json" ]; then
-            # Temp name is per-run ($$): a fixed name collides when two combos
-            # share one remote dir, and because it is a dotfile rsync's
-            # --exclude='.*' shields it from --delete, so a failed scp would
-            # otherwise leave it behind permanently. Cleaned up on both paths.
-            local rtmp="$rdir/.chaindata.json.$$"
-            if scp -q -i "$key" -P "$port" "$src/chaindata.json" \
-                    "$host:$rtmp" 2>/dev/null \
-               && ssh -i "$key" -p "$port" "$host" \
-                    "chmod 644 '$rtmp' && mv -f '$rtmp' '$rdir/chaindata.json'" 2>/dev/null; then
-                log "✓ Remote manifest published"
-            else
-                log "WARNING: could not publish remote chaindata.json (consumers fall back to the file listing)"
-                ssh -i "$key" -p "$port" "$host" "rm -f '$rtmp'" 2>/dev/null || true
-            fi
-        fi
-        # Write completed status
-        local msg_ok="Sync completed. Download the ${ntype} ${net} archive and verify the checksum. $(get_utc_timestamp)"
-        ssh -i "$key" -p "$port" "$host" "echo '$msg_ok' > '$rdir/check_status_before_download.txt'" 2>/dev/null
-        # Set remote ownership
-        [ -n "$FILE_OWNER_SSH" ] && \
-            ssh -i "$key" -p "$port" "$host" "chown -R $FILE_OWNER_SSH '$rdir'" 2>/dev/null \
-            && log "✓ Remote ownership set to $FILE_OWNER_SSH" \
-            || log "WARNING: Could not set remote ownership"
-        log "SSH share done: $net / $ntype → $host:$rdir"
-    else
-        log "ERROR: rsync failed (exit $rc)"
-        return 1
-    fi
-}
-
-# Entry point for --cron-ssh  (loads ssh conf, iterates all enabled combos)
-run_cron_ssh() {
-    if [[ ! -f "$CONF_SSH" ]]; then
-        echo "ERROR: SSH config not found: $CONF_SSH"
-        echo "Run the script interactively and select option C first."
-        exit 1
-    fi
-    load_ssh_config
-
-    echo "=========================================="
-    echo " Grin Share — SSH pipeline"
-    echo "=========================================="
-    echo ""
-
-    local any=false
-    for combo in mainnet:full mainnet:pruned testnet:pruned; do
-        local net="${combo%%:*}" ntype="${combo##*:}"
-        local var_en="SSH_ENABLE_${net^^}_${ntype^^}"
-        if [ "${!var_en}" = "true" ]; then
-            any=true
-            echo "  ▶ Uploading $net / $ntype..."
-            run_ssh_share_for_combo "$net" "$ntype" || \
-                echo "  ${RED}[ERROR]${RESET} SSH share failed for $net/$ntype — check log in $LOG_DIR"
-        fi
-    done
-
-    [ "$any" = false ] && echo "  No SSH targets enabled. Run option C to configure." && exit 1
-
-    echo ""
-    echo "=========================================="
-    echo " SSH share jobs finished"
-    echo "=========================================="
-}
 
 ################################################################################
 # I) Auto-delete txhashset snapshot zips
@@ -2126,7 +1899,9 @@ run_txhashset_cleanup() {
 }
 
 ################################################################################
-# Schedule management  (nginx cron only — SSH cron is managed manually)
+# Schedule management for the NGINX share cron (menu E/F). The remote-copy cron
+# has its own tagged entries (CRON_COMMENT_REMOTE, one per site_key) written from
+# the option-C setup further down — it is not managed here.
 ################################################################################
 
 show_current_schedule() {
@@ -2237,7 +2012,7 @@ _node_type_for_network() {
 get_cron_expression() {
     local net="${1:-mainnet}" ntype="${2:-pruned}" default_expr default_label
     if [ "$ntype" = "full" ]; then
-        # Biweekly, matching Script 01's 60-day fullmain freshness tolerance.
+        # Biweekly, inside Script 01's 70-day fullmain freshness tolerance.
         default_expr="0 0 1,15 * *"; default_label="1st & 15th at 00:00"
     elif [ "$net" = "testnet" ]; then
         default_expr="0 6 * * 2,5"; default_label="Tue & Fri at 06:00"
@@ -2330,12 +2105,14 @@ add_nginx_schedule() {
 
     echo "$existing" | grep -v '^$' | crontab -
 
-    # Show SSH cron advisory
+    # Remote copy advisory
     echo ""
-    echo -e "${DIM}── SSH cron advisory ────────────────────────────────────────────────${RESET}"
-    echo -e "${DIM}SSH upload is managed manually. Schedule it at least 1-2 hours after${RESET}"
-    echo -e "${DIM}the nginx job so compression finishes before the upload starts.${RESET}"
-    echo -e "${DIM}Add to crontab:  bash $this_script --cron-ssh >> $LOG_DIR/cron_ssh.log 2>&1${RESET}"
+    echo -e "${DIM}────────────────────────────────────────────────────────────────────${RESET}"
+    echo -e "${DIM}Mirroring this archive to other servers? Schedule the copy from option C,${RESET}"
+    echo -e "${DIM}not by hand. It derives the time from the schedule you just set, tags the${RESET}"
+    echo -e "${DIM}cron entry so it can be changed or removed later, and skips any mirror${RESET}"
+    echo -e "${DIM}that already holds the build. A --cron-ssh line added by hand still runs,${RESET}"
+    echo -e "${DIM}but produces an untagged job that option C cannot manage.${RESET}"
     echo -e "${DIM}────────────────────────────────────────────────────────────────────${RESET}"
     echo ""
     echo "Press Enter to continue..."
@@ -2694,6 +2471,617 @@ get_nginx_conf_badge() {
     esac
 }
 
+################################################################################
+# Remote copy (option C/D) — see docs/generated/script03_design.md section 15
+################################################################################
+
+# site_key -> the local nginx web dir the archive was published into. Lives here
+# rather than in the lib because it reads the nginx config's variables.
+_rc_src_for_site_key() {
+    case "$1" in
+        fullmain)  printf '%s' "${LOCAL_WEB_DIR_MAINNET_FULL:-}"   ;;
+        prunemain) printf '%s' "${LOCAL_WEB_DIR_MAINNET_PRUNED:-}" ;;
+        prunetest) printf '%s' "${LOCAL_WEB_DIR_TESTNET_PRUNED:-}" ;;
+    esac
+}
+
+# Entry point for --cron-remote (and for the legacy --cron-ssh flag).
+#   $1 (optional) = a single site_key to copy. Empty = every configured one.
+#   Each site_key gets its own cron entry, because their BUILD cadences differ
+#   (fullmain biweekly, the pruned pair more often) and the copy offset is
+#   derived from the build. Without the argument every entry would carry an
+#   identical command line, and installing the second would delete the first.
+run_cron_remote() {
+    local only_key="${1:-}"
+    if [[ ! -f "$CONF_NGINX" ]]; then
+        echo "ERROR: Nginx config not found: $CONF_NGINX"
+        echo "Run the script interactively and select option A first."
+        exit 1
+    fi
+    load_nginx_config
+    [ -f "$CONF_SSH" ] && load_ssh_config
+    rc_migrate_legacy || true
+
+    echo "=========================================="
+    echo " Grin Share — Remote copy"
+    echo "=========================================="
+
+    local sk src rc=0 any=false
+    mkdir -p "$LOG_DIR"
+    for sk in fullmain prunemain prunetest; do
+        [ -n "$only_key" ] && [ "$sk" != "$only_key" ] && continue
+        [ -n "$(rc_targets_list "$sk")" ] || continue
+        any=true
+        src="$(_rc_src_for_site_key "$sk")"
+        if [ -z "$src" ]; then
+            echo "  $sk: no local web dir in the nginx config — skipping"
+            continue
+        fi
+        LOG_FILE="$LOG_DIR/remote_${sk}_$(date -u '+%Y%m%d_%H%M%S').log"
+        touch "$LOG_FILE" 2>/dev/null || true
+        rc_run_site_key "$sk" "$src" || rc=1
+    done
+    [ "$any" = false ] && echo "  No mirrors configured. Use option C to add one."
+
+    # Off-box report. Reads the per-target state files rather than this run's
+    # results, so a mirror that failed two runs ago and was skipped this time is
+    # still counted as failing. Silent when nothing changed since the last run.
+    if [ "$any" = true ]; then
+        if [ "$RC_NOTIFY" = true ] && ! galert_available; then
+            echo "  (no alert channel configured — set one up in Script 082 to be told when a copy fails)"
+        fi
+        rc_notify_summary || true
+    fi
+
+    echo "=========================================="
+    echo " Remote copy finished"
+    echo "=========================================="
+    return $rc
+}
+
+# Derive the copy schedule from the BUILD schedule rather than asking for a
+# second clock. The operator thinks "a few hours after the build", not in cron
+# fields, and tying the two together means changing the build time does not
+# silently leave the copy firing before there is anything new to copy.
+#
+# The result comes back in RC_SCHED_EXPR and the reason for a refusal in
+# RC_SCHED_WARN. Both are globals because the caller used to read this through
+# $( ), which runs the function in a SUBSHELL — so every variable it set was
+# discarded, and the operator got a bare "could not derive a schedule" while the
+# sentence explaining why was thrown away.
+_rc_derive_schedule() {
+    local site_key="$1" offset="$2" tag line m h rest nh
+    RC_SCHED_EXPR=""; RC_SCHED_WARN=""
+    case "$site_key" in
+        prunetest) tag="$CRON_COMMENT_NGINX_TEST" ;;
+        *)         tag="$CRON_COMMENT_NGINX_MAIN" ;;
+    esac
+    # The build cron is ONE line with its marker appended at the END:
+    #   0 0 1,15 * * bash .../03_...sh --cron-nginx-main >> ...log 2>&1 # ...grin_share_nginx_main
+    # (see cron_line= in the installer). So the marker is matched as a substring
+    # of that line. An earlier version looked for the marker on a line of its own
+    # and took the line after it — a layout this script has never written, which
+    # made the whole function return empty every single time.
+    line=$(crontab -l 2>/dev/null | grep -F "$tag" | tail -1)
+    # Legacy combined schedule, only when there is no per-network one. Anchored
+    # to end-of-line because "...grin_share_nginx" is a PREFIX of both
+    # per-network markers, so a plain -F would return the TESTNET line when asked
+    # about mainnet and the copy would run on the wrong network's timetable.
+    # Same anchor the installer uses when it retires that line.
+    [ -z "$line" ] && line=$(crontab -l 2>/dev/null | grep -E 'grin_share_nginx[[:space:]]*$' | tail -1)
+    if [ -z "$line" ]; then
+        RC_SCHED_WARN="no build schedule found for ${site_key} yet - set one with option E first"
+        return 1
+    fi
+    m=$(awk '{print $1}' <<< "$line"); h=$(awk '{print $2}' <<< "$line")
+    rest=$(awk '{print $3" "$4" "$5}' <<< "$line")
+    case "$m" in ''|*[!0-9]*) RC_SCHED_WARN="the build cron's minute field ('$m') is not a plain number"; return 1 ;; esac
+    case "$h" in ''|*[!0-9]*) RC_SCHED_WARN="the build cron's hour field ('$h') is not a plain number"; return 1 ;; esac
+    # A wrap means the copy lands on the day AFTER the build while the
+    # day-of-month field still says the build's day - so it would fire a day
+    # early, before the archive exists. Refuse rather than emit a wrong schedule.
+    if [ $(( h + offset )) -ge 24 ]; then
+        RC_SCHED_WARN="an offset of ${offset}h from ${h}:00 crosses midnight, which the day-of-month field ('$rest') cannot follow - use a smaller offset, or move the build earlier"
+        return 1
+    fi
+    nh=$(( (h + offset) % 24 ))
+    RC_SCHED_EXPR="$m $nh $rest"
+    return 0
+}
+
+_rc_prompt() { local __v="$1" __p="$2" __d="$3" __t; echo -ne "  $__p [$__d]: "; read -r __t; printf -v "$__v" '%s' "${__t:-$__d}"; }
+
+menu_remote_add() {
+    local sk al host port key rdir bw
+    echo ""
+    echo -e "  ${BOLD}Which archive does this mirror serve?${RESET}"
+    echo -e "    1) fullmain    2) prunemain    3) prunetest"
+    echo -ne "  Select [1-3]: "; read -r sk
+    case "$sk" in 1) sk=fullmain ;; 2) sk=prunemain ;; 3) sk=prunetest ;; *) sched_warn "Cancelled."; return 0 ;; esac
+
+    _rc_prompt al   "Short name for this mirror" "m$(date +%s | tail -c 4)"
+    _rc_prompt host "SSH host (user@ip)"         "root@"
+    _rc_prompt port "SSH port"                   "22"
+    _rc_prompt key  "SSH key path"               "/root/.ssh/grin_share_ed25519"
+    # Defaulted from the site_key, never computed from the node type + network:
+    # that arithmetic is what produced 'prunedtest' in the legacy config.
+    _rc_prompt rdir "Remote web dir"             "/var/www/$sk"
+    _rc_prompt bw   "Bandwidth cap KB/s (0 = uncapped)" "0"
+
+    local line="${sk}|${al}|${host}|${port}|${key}|${rdir}|${bw}|true"
+    if rc_target_add "$line"; then
+        sched_success "Mirror '$al' added for $sk."
+        echo ""
+        echo -e "  ${DIM}Testing the connection...${RESET}"
+        rc_target_test "$line" || sched_warn "Add succeeded, but the mirror is not reachable yet."
+    else
+        sched_error "Could not add the mirror."
+    fi
+    echo ""; echo "Press Enter to continue..."; read -r
+}
+
+menu_remote_schedule() {
+    local sk offset expr
+    echo ""
+    echo -e "  ${BOLD}Which archive's copy schedule?${RESET}"
+    echo -e "    1) fullmain    2) prunemain    3) prunetest"
+    echo -ne "  Select [1-3]: "; read -r sk
+    case "$sk" in 1) sk=fullmain ;; 2) sk=prunemain ;; 3) sk=prunetest ;; *) return 0 ;; esac
+
+    _rc_prompt offset "Hours after the build" "3"
+    case "$offset" in ''|*[!0-9]*) sched_error "Not a number."; sleep 1; return 0 ;; esac
+
+    # Called directly, NOT through $( ) - see the note on _rc_derive_schedule.
+    if ! _rc_derive_schedule "$sk" "$offset"; then
+        sched_error "Could not derive a copy schedule."
+        [ -n "${RC_SCHED_WARN:-}" ] && echo -e "  ${DIM}${RC_SCHED_WARN}${RESET}"
+        echo ""; echo "Press Enter to continue..."; read -r; return 0
+    fi
+    expr="$RC_SCHED_EXPR"
+
+    local this_script; this_script=$(realpath "${BASH_SOURCE[0]}")
+    local tag="$CRON_COMMENT_REMOTE $sk"
+    local cmd="bash $this_script --cron-remote $sk >> $LOG_DIR/cron_remote.log 2>&1"
+    # Drop any EXISTING entry for this site_key by what it DOES, not by whether
+    # it is byte-identical to the one about to be written. Matching the exact
+    # line only removed a reschedule that changed nothing: raising the offset
+    # from 3h to 5h left the old line in place, because it no longer matched, and
+    # the copy then ran twice a night on two schedules for ever. The tag line was
+    # removed either way, so the survivor was untagged and invisible in the
+    # "installed schedules" list. Same pattern menu_remote_unschedule uses.
+    # Read the crontab FULLY into a variable before writing it back, the way
+    # every other cron writer in this file does. Piping `crontab -l` straight
+    # into `crontab -` has both ends of the same store open at once, and this
+    # was the only place doing it — reading and writing the crontab in one
+    # pipeline is exactly the shape that turns into a truncated crontab if the
+    # writing end ever opens its target before the reading end is done.
+    local existing
+    existing=$(crontab -l 2>/dev/null | grep -v -x -F "$tag" \
+        | grep -v -E -- "--cron-remote[[:space:]]+${sk}([[:space:]]|\$)")
+    if ! ( printf '%s\n' "$existing"; echo "$tag"; echo "$expr $cmd" ) \
+            | grep -v '^$' | crontab -; then
+        sched_error "Could not install the cron entry."; sleep 2; return 0
+    fi
+    sched_success "Copy scheduled: $expr  (${offset}h after the $sk build)"
+    echo -e "  ${DIM}The job is idempotent — it exits doing nothing if the archive has not changed,${RESET}"
+    echo -e "  ${DIM}so a build that runs late or fails cannot make it ship a stale set.${RESET}"
+    echo ""; echo "Press Enter to continue..."; read -r
+}
+
+menu_remote_keys() {
+    local kp="/root/.ssh/grin_share_ed25519"
+    echo ""
+    if [ -f "$kp" ]; then
+        echo -e "  Key already exists: ${DIM}$kp${RESET}"
+    else
+        echo -ne "  Generate ${BOLD}$kp${RESET}? [Y/n]: "; read -r a
+        if [[ "${a,,}" != "n" ]]; then
+            mkdir -p /root/.ssh && chmod 700 /root/.ssh
+            if ssh-keygen -t ed25519 -N "" -f "$kp" -C "grin-share@$(hostname)" >/dev/null 2>&1; then
+                sched_success "Created $kp"
+            else
+                sched_error "ssh-keygen failed."
+            fi
+        fi
+    fi
+    if [ -f "${kp}.pub" ]; then
+        echo ""
+        echo -e "  ${BOLD}Install it on each mirror (asks for that host's password, once):${RESET}"
+        local line h p
+        while IFS= read -r line; do
+            h="$(rc_target_field "$line" 3)"; p="$(rc_target_field "$line" 4)"
+            echo -e "    ${DIM}ssh-copy-id -i ${kp}.pub -p $p $h${RESET}"
+        done < <(rc_targets_list)
+        echo ""
+        echo -e "  ${DIM}Run those from a terminal — the password must never go through this script.${RESET}"
+        echo ""
+        echo -e "  ${BOLD}${YELLOW}Worth doing on each mirror:${RESET}"
+        echo -e "  ${DIM}This key has no passphrase, because cron cannot type one. So whoever${RESET}"
+        echo -e "  ${DIM}holds it holds whatever account it opens — and if you pointed the${RESET}"
+        echo -e "  ${DIM}mirror at root@, that is root on every mirror you have. Two changes${RESET}"
+        echo -e "  ${DIM}on the mirror side cost nothing and cap the blast radius:${RESET}"
+        echo ""
+        echo -e "    ${DIM}1. give the mirror a dedicated user that owns only its web dir:${RESET}"
+        echo -e "       ${DIM}useradd -m -s /bin/bash grinmirror${RESET}"
+        echo -e "       ${DIM}chown -R grinmirror: /var/www/<site_key>${RESET}"
+        echo -e "       ${DIM}...then set this mirror's host to grinmirror@<ip>${RESET}"
+        echo ""
+        echo -e "    ${DIM}2. restrict the key in that user's ~/.ssh/authorized_keys, so a${RESET}"
+        echo -e "       ${DIM}stolen copy cannot open a shell or forward a port:${RESET}"
+        echo -e "       ${DIM}restrict,no-agent-forwarding,no-port-forwarding ssh-ed25519 AAAA...${RESET}"
+        echo ""
+        echo -e "  ${DIM}The copy needs mkdir, rsync, sed and mv inside that one directory and${RESET}"
+        echo -e "  ${DIM}nothing else, so it keeps working under both.${RESET}"
+    fi
+    echo ""; echo "Press Enter to continue..."; read -r
+}
+
+# Pick an existing mirror from a numbered list. Every other prompt in this menu
+# is a numbered choice; remove and enable/disable were the two that asked the
+# operator to TYPE a site_key and an alias from memory. That is the worst place
+# for free text: "site_key" is internal jargon that appears in no other prompt,
+# and a typo in the remove path used to report success.
+# Answers in RC_PICK_SK / RC_PICK_AL / RC_PICK_EN. Returns 1 if cancelled.
+RC_PICK_SK=""; RC_PICK_AL=""; RC_PICK_EN=""
+_rc_pick_target() {
+    local prompt="$1" line n=0 sel
+    local -a lines=()
+    RC_PICK_SK=""; RC_PICK_AL=""; RC_PICK_EN=""
+    while IFS= read -r line; do lines+=("$line"); done < <(rc_targets_list)
+    if [ ${#lines[@]} -eq 0 ]; then
+        sched_warn "No mirrors are configured yet."; sleep 1; return 1
+    fi
+    echo ""
+    echo -e "  ${BOLD}${prompt}${RESET}"
+    for n in "${!lines[@]}"; do
+        printf "    %d) %-10s %-12s %s%s\n" "$((n+1))" \
+            "$(rc_target_field "${lines[$n]}" 1)" \
+            "$(rc_target_field "${lines[$n]}" 2)" \
+            "$(rc_target_field "${lines[$n]}" 3)" \
+            "$([ "$(rc_target_field "${lines[$n]}" 8)" = "true" ] || printf '  (disabled)')"
+    done
+    echo -ne "  Select [1-${#lines[@]}, 0 = cancel]: "; read -r sel
+    case "$sel" in
+        ''|*[!0-9]*) return 1 ;;
+        0) return 1 ;;
+    esac
+    [ "$sel" -ge 1 ] && [ "$sel" -le ${#lines[@]} ] || return 1
+    line="${lines[$((sel-1))]}"
+    RC_PICK_SK="$(rc_target_field "$line" 1)"
+    RC_PICK_AL="$(rc_target_field "$line" 2)"
+    RC_PICK_EN="$(rc_target_field "$line" 8)"
+    return 0
+}
+
+menu_remote_setup() {
+    load_nginx_config
+    [ -f "$CONF_SSH" ] && load_ssh_config
+    rc_migrate_legacy || true
+    local choice line sk al
+    while true; do
+        clear
+        echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+        echo -e "${BOLD}${CYAN}  Remote Copy — mirrors for the published archive${RESET}"
+        echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+        echo -e "  ${DIM}Copies the finished .tar.gz to other servers. The Grin node keeps${RESET}"
+        echo -e "  ${DIM}running throughout — this never touches chain_data.${RESET}"
+        echo ""
+        rc_status_table
+        echo ""
+        echo -e "  ${GREEN}1${RESET}) Add a mirror"
+        echo -e "  ${GREEN}2${RESET}) Remove a mirror"
+        echo -e "  ${GREEN}3${RESET}) Enable / disable a mirror"
+        echo -e "  ${CYAN}4${RESET}) Test connection & identity"
+        echo -e "  ${CYAN}5${RESET}) Schedule the copy ${DIM}(N hours after the build)${RESET}"
+        echo -e "  ${CYAN}6${RESET}) SSH key — generate / install"
+        echo -e "  ${CYAN}7${RESET}) Remove a copy schedule"
+        echo ""
+        echo -e "  ${RED}0${RESET}) Back"
+        echo ""
+        echo -ne "${BOLD}Select [1-7 / 0]: ${RESET}"
+        read -r choice
+        case "$choice" in
+            1) menu_remote_add || true ;;
+            2) if _rc_pick_target "Remove which mirror?"; then
+                   rc_target_remove "$RC_PICK_SK" "$RC_PICK_AL" \
+                       && sched_success "Removed $RC_PICK_AL." || sched_error "Not removed."
+                   sleep 1
+               fi ;;
+            3) if _rc_pick_target "Enable / disable which mirror?"; then
+                   if [ "$RC_PICK_EN" = "true" ]; then
+                       rc_target_set_enabled "$RC_PICK_SK" "$RC_PICK_AL" false \
+                           && sched_success "Disabled $RC_PICK_AL." || sched_error "Failed."
+                   else
+                       rc_target_set_enabled "$RC_PICK_SK" "$RC_PICK_AL" true \
+                           && sched_success "Enabled $RC_PICK_AL."  || sched_error "Failed."
+                   fi
+                   sleep 1
+               fi ;;
+            4) echo ""
+               while IFS= read -r line; do rc_target_test "$line" || true; done < <(rc_targets_list)
+               echo ""; echo "Press Enter to continue..."; read -r ;;
+            5) menu_remote_schedule || true ;;
+            6) menu_remote_keys || true ;;
+            7) menu_remote_unschedule || true ;;
+            0) break ;;
+            "") ;;
+            *) sched_warn "Invalid option."; sleep 1 ;;
+        esac
+    done
+}
+
+# Remove a copy schedule. Nothing else does: remove_nginx_schedule greps for
+# "grin_share_nginx", which deliberately does not match "grin_share_remote", so
+# without this an operator who deletes every mirror still has a cron entry
+# firing for them for ever.
+menu_remote_unschedule() {
+    local sk cur out tag
+    cur=$(crontab -l 2>/dev/null | grep -F "$CRON_COMMENT_REMOTE" | sed 's/^/    /')
+    echo ""
+    if [ -z "$cur" ]; then
+        sched_info "No copy schedules are installed."
+        echo ""; echo "Press Enter to continue..."; read -r; return 0
+    fi
+    echo -e "  ${BOLD}Installed copy schedules:${RESET}"
+    echo -e "${DIM}${cur}${RESET}"
+    echo ""
+    echo -e "  ${BOLD}Remove which?${RESET}"
+    echo -e "    1) fullmain    2) prunemain    3) prunetest    4) all"
+    echo -ne "  Select [1-4, 0 = cancel]: "; read -r sk
+    case "$sk" in 1) sk=fullmain ;; 2) sk=prunemain ;; 3) sk=prunetest ;; 4) sk=all ;; *) return 0 ;; esac
+
+    # Two lines go per schedule: the tag, and the command it introduces. The
+    # command is matched on its own "--cron-remote <site_key>" rather than on
+    # being adjacent to the tag, so a hand-edited crontab still cleans up.
+    if [ "$sk" = all ]; then
+        out=$(crontab -l 2>/dev/null               | grep -v -F "$CRON_COMMENT_REMOTE"               | grep -v -E -- "--cron-(remote|ssh)([[:space:]]|$)" || true)
+    else
+        tag="$CRON_COMMENT_REMOTE $sk"
+        out=$(crontab -l 2>/dev/null               | grep -v -x -F "$tag"               | grep -v -E -- "--cron-remote[[:space:]]+${sk}([[:space:]]|$)" || true)
+    fi
+    if printf '%s
+' "$out" | grep -v '^$' | crontab -; then
+        sched_success "Copy schedule removed ($sk)."
+        sched_log "Removed remote copy cron: $sk"
+    else
+        sched_error "Could not update the crontab."
+    fi
+    echo ""; echo "Press Enter to continue..."; read -r
+}
+
+menu_remote_copy_now() {
+    if [[ ! -f "$CONF_NGINX" ]]; then
+        show_error_pause "Nginx config not found." "Run option A first — the copy ships what the nginx build produced."
+        return
+    fi
+    echo -e "\n${CYAN}[INFO]${RESET}  Copying the published archive to every enabled mirror."
+    # Says what the code does NOW. This used to promise a local and a remote
+    # sha256 pass; both were turned off by default (they read a 17-20 GB file an
+    # extra two times, which is the IO this redesign exists to avoid), and a
+    # screen that still claims a gate nobody is running is worse than no screen.
+    echo -e "  ${DIM}rsync verifies every file it transfers, so a corrupt copy fails the run.${RESET}"
+    echo -e "  ${DIM}The .sha256 ships alongside the archive for downloaders to check.${RESET}"
+    echo -e "  ${DIM}Mirrors already holding this build are skipped.${RESET}"
+    echo ""
+    # rc_should_push now confirms against the mirror itself rather than trusting
+    # our own state file, so a wiped mirror is picked up automatically and this
+    # is rarely needed - but "copy now" has to be able to mean it.
+    echo -ne "  Force re-upload to mirrors that already hold this build? [y/N]: "
+    read -r _rc_force
+    if [[ "${_rc_force,,}" == "y" ]]; then RC_FORCE=true; else RC_FORCE=false; fi
+    echo ""
+
+    # No off-box alert from the menu: the operator is reading the result on the
+    # screen, and a notification about something they just watched fail trains
+    # them to ignore the channel. Cron runs still alert.
+    ( RC_NOTIFY=false; run_cron_remote )
+    local rc=$?
+    RC_FORCE=false
+    [ $rc -ne 0 ] && sched_error "One or more mirrors failed. See $LOG_DIR/remote_*.log"
+    echo ""; echo "Press Enter to continue..."; read -r
+}
+
+# ---------------------------------------------------------------------------
+# Compression benchmark — answers "which level, and is --sparse worth it?"
+# ---------------------------------------------------------------------------
+# COMPRESS_LEVEL_FULL=1 was chosen from how Bulletproof rangeproofs and Pedersen
+# commitments behave in general, not from a measurement on this box. The honest
+# way to settle it is to compress the same bytes at several levels and read the
+# numbers - but a full run is ~30 min with the node stopped, so nobody does it
+# twice and the question stays open.
+#
+# This samples instead: the largest files in chain_data are the PMMR data files,
+# which dominate both the size and the ratio, so a few hundred MB of them
+# predicts the whole archive closely enough to choose a level. The node keeps
+# running - this only reads.
+#
+# It also prints du vs du --apparent-size, which is the other open question:
+# apparent > allocated means the files are sparse, and only then is tar --sparse
+# worth its compatibility risk (GNU sparse entries are not readable by the
+# bsdtar that ships with Windows, so it would break exactly the clients this
+# archive exists for).
+menu_compress_benchmark() {
+    local dir choice i
+    load_nginx_config 2>/dev/null || true
+    # The chain_data paths live in the INSTANCES conf, not the nginx one. The
+    # nginx conf holds LOCAL_WEB_DIR_* — the OUTPUT directories — so sourcing
+    # only that left every ${k}_CHAIN_DATA unset and the pick-list permanently
+    # empty; the menu silently fell through to "type a path" every time, which
+    # looks like a design choice rather than the bug it was.
+    [ -f "$INSTANCES_CONF" ] && source "$INSTANCES_CONF" 2>/dev/null
+
+    local -a dirs=() labels=()
+    local k v
+    for k in FULLMAIN PRUNEMAIN PRUNETEST; do
+        v="${k}_CHAIN_DATA"; v="${!v:-}"
+        if [ -n "$v" ] && [ -d "$v" ]; then dirs+=("$v"); labels+=("$k"); fi
+    done
+
+    echo ""
+    echo -e "${BOLD}${CYAN}-- Compression benchmark --${RESET}"
+    echo -e "  ${DIM}Reads a sample of chain_data and compresses it at several levels.${RESET}"
+    echo -e "  ${DIM}The node keeps running; nothing is written to the web directory.${RESET}"
+    echo ""
+    # Which instance was picked, so the --rsyncable row below is timed at the
+    # level THIS node type actually ships at. Reading $NODE_TYPE instead would
+    # be wrong from the menu: detection has not run, so it is usually empty and
+    # every benchmark silently reported the pruned level.
+    local picked=""
+    if [ ${#dirs[@]} -eq 0 ]; then
+        echo -ne "  chain_data path: "; read -r dir
+    else
+        for i in "${!dirs[@]}"; do
+            echo -e "    $((i+1))) ${labels[$i]}  ${DIM}${dirs[$i]}${RESET}"
+        done
+        echo -e "    m) type a path"
+        echo -ne "  Select: "; read -r choice
+        case "$choice" in
+            m|M) echo -ne "  chain_data path: "; read -r dir ;;
+            ''|*[!0-9]*) return 0 ;;
+            *) if [ "$choice" -ge 1 ] && [ "$choice" -le ${#dirs[@]} ]; then
+                   dir="${dirs[$((choice-1))]}"; picked="${labels[$((choice-1))]}"
+               else
+                   return 0
+               fi ;;
+        esac
+    fi
+    [ -d "$dir" ] || { sched_error "Not a directory: $dir"; sleep 2; return 0; }
+
+    local sample_mb=400
+    echo -ne "  Sample size in MB [${sample_mb}]: "; read -r i
+    case "$i" in
+        ''|*[!0-9]*) : ;;
+        *) [ "$i" -ge 50 ] && sample_mb="$i" ;;
+    esac
+
+    echo ""
+    echo -e "  ${BOLD}Sparseness${RESET} ${DIM}(has tar --sparse anything to save?)${RESET}"
+    local real_kb app_kb
+    real_kb=$(du -sk --exclude='txhashset_snapshot*.zip' --exclude='txhashset_zip*' "$dir" 2>/dev/null | awk '{print $1; exit}')
+    app_kb=$(du -sk --apparent-size --exclude='txhashset_snapshot*.zip' --exclude='txhashset_zip*' "$dir" 2>/dev/null | awk '{print $1; exit}')
+    # Tested SEPARATELY. Concatenating them hid the case that actually happens —
+    # one du succeeding and the other not — because the surviving digits made
+    # the pair look numeric, and the comparison below then printed a raw
+    # "[: : integer expression expected" into the middle of the report.
+    local _sparse_ok=true
+    case "$real_kb" in ''|*[!0-9]*) _sparse_ok=false ;; esac
+    case "$app_kb"  in ''|*[!0-9]*) _sparse_ok=false ;; esac
+    case "$_sparse_ok" in
+        false)
+            echo -e "    ${DIM}could not measure${RESET}"; real_kb=0 ;;
+        *)
+            echo -e "    blocks allocated : $((real_kb/1024)) MiB"
+            echo -e "    apparent size    : $((app_kb/1024)) MiB"
+            if [ "$app_kb" -gt "$((real_kb + real_kb/100))" ]; then
+                echo -e "    ${YELLOW}sparse by $(( (app_kb-real_kb)/1024 )) MiB${RESET} - tar --sparse could save that,"
+                echo -e "    ${DIM}but only for clients whose tar understands GNU sparse entries.${RESET}"
+            else
+                echo -e "    ${GREEN}not sparse${RESET} - tar --sparse would save nothing here, so its"
+                echo -e "    ${DIM}Windows-bsdtar incompatibility buys us nothing. Question closed.${RESET}"
+            fi ;;
+    esac
+
+    # Biggest files first: on a Grin node these are the PMMR data/hash files, and
+    # they are both the bulk of the archive and the least compressible part of it.
+    local -a files=()
+    while IFS= read -r i; do files+=("$i"); done < <(
+        find "$dir" -type f ! -name 'txhashset_snapshot*.zip' -printf '%s %p\n' 2>/dev/null \
+        | sort -rn | head -10 | cut -d' ' -f2- )
+    if [ ${#files[@]} -eq 0 ]; then
+        sched_error "No files found under $dir"; sleep 2; return 0
+    fi
+
+    local bytes=$((sample_mb * 1024 * 1024))
+    local -a pre=()
+    command -v nice   &>/dev/null && pre+=(nice -n 19)
+    command -v ionice &>/dev/null && pre+=(ionice -c 3)
+
+    local cores; cores=$(nproc 2>/dev/null || echo 1)
+    case "$cores" in ''|*[!0-9]*) cores=1 ;; esac
+    case "$COMPRESS_THREADS" in
+        ''|*[!0-9]*) : ;;
+        *) if [ "$COMPRESS_THREADS" -ge 1 ] && [ "$COMPRESS_THREADS" -lt "$cores" ]; then
+               cores="$COMPRESS_THREADS"
+           fi ;;
+    esac
+
+    local have_pigz=false
+    command -v pigz &>/dev/null && have_pigz=true
+    echo ""
+    if [ "$have_pigz" = true ]; then
+        echo -e "  ${BOLD}Levels${RESET} ${DIM}(pigz, ${cores} core(s), ${sample_mb} MB sample)${RESET}"
+    else
+        echo -e "  ${BOLD}Levels${RESET} ${DIM}(gzip, single-threaded - install pigz for the real numbers)${RESET}"
+    fi
+
+    # Warm-up pass. Without it the first level pays for the disk read and every
+    # later one reads from page cache, which would show level 0 as the slowest.
+    echo -e "    ${DIM}warming the cache...${RESET}"
+    cat "${files[@]}" 2>/dev/null | head -c "$bytes" > /dev/null 2>&1
+
+    local bench_in
+    bench_in=$( cat "${files[@]}" 2>/dev/null | head -c "$bytes" | wc -c )
+    case "$bench_in" in
+        ''|0|*[!0-9]*) sched_error "Could not read a sample."; sleep 2; return 0 ;;
+    esac
+
+    printf "    %-16s %8s %9s %9s   %s\n" "LEVEL" "RATIO" "SECONDS" "MB/s" "PROJECTED"
+    printf "    %-16s %8s %9s %9s   %s\n" "-----" "-----" "-------" "----" "---------"
+
+    local lvl
+    local -a levels
+    if [ "$have_pigz" = true ]; then levels=(0 1 3 6 9); else levels=(1 3 6 9); fi
+
+    _bench_one() {
+        local label="$1"; shift
+        local out t0 t1 secs
+        t0=$(date +%s%N 2>/dev/null || echo 0)
+        out=$( cat "${files[@]}" 2>/dev/null | head -c "$bytes" | "${pre[@]}" "$@" | wc -c )
+        t1=$(date +%s%N 2>/dev/null || echo 0)
+        secs=$(awk -v a="$t0" -v b="$t1" 'BEGIN { d=(b-a)/1000000000; if (d<0.001) d=0.001; printf "%.1f", d }')
+        awk -v l="$label" -v i="$bench_in" -v o="$out" -v s="$secs" -v tot="$real_kb" \
+            'BEGIN {
+                 r = o/i;
+                 mbps = (s > 0) ? (i/1048576)/s : 0;
+                 if (tot > 0)
+                     printf "    %-16s %8.3f %9s %9.1f   %.1f GiB\n", l, r, s, mbps, (tot*r)/1048576;
+                 else
+                     printf "    %-16s %8.3f %9s %9.1f   %s\n", l, r, s, mbps, "-";
+             }'
+    }
+
+    for lvl in "${levels[@]}"; do
+        if [ "$have_pigz" = true ]; then
+            _bench_one "-$lvl" pigz "-$lvl" -p "$cores"
+        else
+            _bench_one "-$lvl" gzip "-$lvl"
+        fi
+    done
+
+    # What --rsyncable costs, at the level actually shipped for this node type.
+    local shiplvl="$COMPRESS_LEVEL_PRUNED" shipwhy="pruned"
+    if [ "$picked" = "FULLMAIN" ] || { [ -z "$picked" ] && [ "$NODE_TYPE" = "full" ]; }; then
+        shiplvl="$COMPRESS_LEVEL_FULL"; shipwhy="full"
+    fi
+    case "$shiplvl" in ''|*[!0-9]*) shiplvl=1 ;; esac
+    if [ "$have_pigz" = true ] && pigz --help 2>&1 | grep -qi -- '--rsyncable'; then
+        _bench_one "-${shiplvl} rsyncable" pigz "-$shiplvl" -p "$cores" --rsyncable
+        echo -e "    ${DIM}(that row uses the ${shipwhy} level, ${shiplvl} — what this node ships at)${RESET}"
+    fi
+
+    unset -f _bench_one
+    echo ""
+    echo -e "  ${DIM}Ratio is compressed/original - lower is better. PROJECTED scales the sample${RESET}"
+    echo -e "  ${DIM}ratio by the whole chain_data size, so it is an estimate, not a promise.${RESET}"
+    echo -e "  ${DIM}If two levels are within a few points, take the faster one: the node is${RESET}"
+    echo -e "  ${DIM}stopped for the whole compression, so seconds here are downtime there.${RESET}"
+    echo -e "  ${DIM}The 'rsyncable' row is what mirrors pay for cheap incremental copies.${RESET}"
+    echo ""
+    echo -e "  ${DIM}Set the winner in COMPRESS_LEVEL_FULL / COMPRESS_LEVEL_PRUNED.${RESET}"
+    echo ""
+    echo "Press Enter to continue..."; read -r
+}
+
 show_main_menu() {
     clear
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
@@ -2708,8 +3096,8 @@ show_main_menu() {
     echo -e "  ${GREEN}A${RESET}) Create Nginx config        $(get_nginx_conf_badge)"
     echo -e "  ${GREEN}B${RESET}) Share chain data now! ${DIM}[depends on A]${RESET}"
     echo ""
-    echo -e "  ${CYAN}C${RESET}) Create SSH config          $(get_conf_status "$CONF_SSH")  ${DIM}(optional)${RESET}"
-    echo -e "  ${CYAN}D${RESET}) Share chain data via SSH   ${DIM}[depends on A + C]${RESET}  ${DIM}(optional)${RESET}"
+    echo -e "  ${CYAN}C${RESET}) Remote copy setup          $(get_conf_status "$RC_TARGETS_CONF")  ${DIM}(mirrors, keys, schedule)${RESET}"
+    echo -e "  ${CYAN}D${RESET}) Copy to mirrors now        ${DIM}[depends on A + C]${RESET}  ${DIM}(node keeps running)${RESET}"
     echo ""
     echo -e "  ${DIM}E${RESET}) Schedule to share chain data"
     echo -e "  ${DIM}F${RESET}) Disable to share chain data"
@@ -2718,13 +3106,14 @@ show_main_menu() {
     echo -e "  ${DIM}H${RESET}) Disable auto startup Grin node"
     echo ""
     echo -e "  ${DIM}I${RESET}) Auto-delete txhashset snapshots  ${DIM}(schedule cleanup cron)${RESET}"
+    echo -e "  ${DIM}J${RESET}) Compression benchmark            ${DIM}(picks the level; node keeps running)${RESET}"
     echo ""
     echo -e "  ${DIM}→ Want to become Grin Master Node? Contribute your sub.domain to the registry:${RESET}"
     echo -e "  ${DIM}  extensions/grinmasternodes.json  (see README.md for details)${RESET}"
     echo ""
     echo -e "  ${RED}0${RESET}) Back to master script"
     echo ""
-    echo -ne "${BOLD}Select [A-I / 0]: ${RESET}"
+    echo -ne "${BOLD}Select [A-J / 0]: ${RESET}"
 }
 
 # Menu action for B — interactive nginx share
@@ -2783,31 +3172,6 @@ menu_share_nginx() {
     read -r
 }
 
-# Menu action for D — interactive SSH share
-menu_share_ssh() {
-    if [[ ! -f "$CONF_NGINX" ]]; then
-        show_error_pause "Nginx config not found." "Run option A first — SSH reads from local nginx web dirs."
-        return
-    fi
-    if [[ ! -f "$CONF_SSH" ]]; then
-        show_error_pause "SSH config not found." "Run option C first."
-        return
-    fi
-
-    load_nginx_config
-    load_ssh_config
-
-    echo -e "\n${CYAN}[INFO]${RESET}  SSH share reads from local nginx web dirs and rsyncs to remote."
-    echo -e "  ${DIM}Ensure nginx share (B) has run recently before uploading.${RESET}"
-    echo ""
-
-    ( run_cron_ssh )
-    local rc=$?
-    [ $rc -ne 0 ] && sched_error "SSH share pipeline failed (exit $rc). Check logs in: $LOG_DIR"
-    echo ""
-    echo "Press Enter to continue..."
-    read -r
-}
 
 run_interactive() {
     while true; do
@@ -2817,13 +3181,14 @@ run_interactive() {
         case "${choice^^}" in
             A) run_nginx_setup ;;
             B) menu_share_nginx ;;
-            C) run_ssh_setup ;;
-            D) menu_share_ssh ;;
+            C) menu_remote_setup || true ;;
+            D) menu_remote_copy_now || true ;;
             E) add_nginx_schedule ;;
             F) remove_nginx_schedule ;;
             G) add_grin_autostart ;;
             H) remove_grin_autostart ;;
             I) add_clean_schedule ;;
+            J) menu_compress_benchmark || true ;;
             0) break ;;
             "") ;;  # Enter with no input — refresh menu
             *) sched_warn "Invalid option." ; sleep 1 ;;
@@ -2840,7 +3205,8 @@ main() {
         --cron-nginx)       run_cron_nginx            ;;
         --cron-nginx-main)  run_cron_nginx mainnet    ;;
         --cron-nginx-test)  run_cron_nginx testnet    ;;
-        --cron-ssh)         run_cron_ssh              ;;
+        --cron-remote)      run_cron_remote "${2:-}"  ;;
+        --cron-ssh)         run_cron_remote           ;;   # legacy flag: installed crontabs still use it (no filter = all)
         --cron-clean)       run_txhashset_cleanup     ;;
         *)                  run_interactive           ;;
     esac

@@ -1,4 +1,13 @@
-/* Grin Mining Pool — Modern Clean Design */
+/* pool.css — shared component styles for the ADMIN PANEL.
+ *
+ * Despite living under public_html/css/, NO public page loads this file: every
+ * admin-panel/*.html links it, and admin-panel/styles.css @imports it. The public pages
+ * use dashboard.css + themes.css (+ reactor.css). So an edit here changes the admin panel
+ * only — and every edit here DOES change the admin panel, which is easy to forget from
+ * this directory. Admin-only chrome (sidebar, topbar, section rail) lives in styles.css;
+ * this file holds the shared components both of them skin (.card .badge .kpi-grid table
+ * .btn .spinner .warn-msg …). styles.css redefines the CSS variables below per admin theme.
+ */
 :root {
   --primary: #667eea;
   --primary-dark: #5a67d8;

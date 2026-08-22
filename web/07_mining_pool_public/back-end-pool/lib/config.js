@@ -233,6 +233,9 @@ function validateConfig(config) {
   }
 }
 
+// UNUSED (exported, no caller). Note before wiring it up: it calls loadConfig() with the
+// DEFAULT './pool.json', ignoring GRIN_POOL_CONF — on an installed pool that is the wrong
+// file. Read config.confirm_depth_<net> from the already-loaded config instead.
 function getConfirmDepth(network) {
   const config = loadConfig();
   return network === 'mainnet'

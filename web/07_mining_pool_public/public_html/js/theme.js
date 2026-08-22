@@ -5,7 +5,11 @@
 // site and the admin panel. Cyber/Atomic/Gradient "Classic" are the retired
 // pre-mockup public looks (old cyan default, old black-bg atomic, old gradient
 // light), moved here in 2026-06 — admin-panel only, not public keys.
-// All admin-panel/*.html pages reference <script src="/js/theme.js">.
+// ⚠ NOT LOADED BY ANY PAGE. The admin panel was rebuilt in 2026-06 around admin-shell.js,
+// which defines both admin themes in admin-panel/styles.css and toggles them with its own
+// storage key — it deliberately does NOT use this registry (see its Theme section). The
+// public pages use public-theme.js. This file is kept only as the source of the classic
+// palettes; nothing runs it, so editing it changes nothing on either surface.
 
 const ThemeSwitcher = {
   STORAGE_KEY: 'admin-theme',

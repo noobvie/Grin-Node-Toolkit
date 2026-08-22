@@ -1158,10 +1158,19 @@ EOF
 # Common security headers. Include this from EVERY block that declares an add_header of its
 # own, otherwise that block silently drops the whole inherited set. HSTS is safe here because
 # this file is only ever included from the :443 server — never from the :80 redirect vhost.
+#
+# HSTS carries NO includeSubDomains and NO preload, deliberately. `subdomain` in pool.json is
+# frequently the operator's APEX domain (the vhost derives www.<subdomain> from it and treats
+# the bare domain as canonical), so includeSubDomains would pin EVERY sibling host on that
+# domain — an api./testapi./status. box the pool does not own — to HTTPS for a year. Browsers
+# cache that directive for the full max-age, so removing the header later does not undo it:
+# an http-only or bad-cert sibling stays unreachable until max-age expires. The protection
+# gained applies only to hosts this script never deploys; the blast radius is the operator's
+# whole domain. Add it by hand only on a host you know is a dedicated subdomain.
 add_header X-Frame-Options "DENY" always;
 add_header X-Content-Type-Options "nosniff" always;
 add_header Referrer-Policy "strict-origin-when-cross-origin" always;
-add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+add_header Strict-Transport-Security "max-age=31536000" always;
 HDREOF
 
     cat > "$hdr_page" << HDREOF || { error "could not write $hdr_page"; return 1; }

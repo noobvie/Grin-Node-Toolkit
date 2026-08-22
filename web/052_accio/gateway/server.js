@@ -432,8 +432,9 @@ function listen(port, handler, onUpgrade, log, cfg, label) {
 function health(res, cfg, front, store) {
 	// Deliberately thin, and deliberately reachable only on the loopback port —
 	// the nginx snippet routes /tor/, /listen and /wallet/ and nothing else, so
-	// this is a `curl` on the box for the Status action, not a public endpoint. It still reports no
-	// address, no origin and no destination, so exposing it later stays cheap.
+	// this is a `curl` on the box for the Status action, not a public endpoint.
+	// It still reports no address, no origin and no destination, so exposing it
+	// later stays cheap.
 	const body = JSON.stringify({
 		service: 'grin-accio-gateway',
 		packet: 'S4b',

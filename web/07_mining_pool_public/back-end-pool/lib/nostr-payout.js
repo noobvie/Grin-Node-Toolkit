@@ -140,8 +140,9 @@ class NostrPayoutBridge {
   }
 
   // ── Username resolution (public: called by the registration route) ──────────
-  // Accepts "name" (→ name@<home_domain>), "name@domain", or a bech32 npub. Returns
-  // { username, pubHex, npub } or throws a coded Error. Enforces the domain allowlist.
+  // Accepts "name@domain" or a bech32 npub — a BARE "name" is rejected on purpose (see the
+  // comment at the check below). Returns { username, pubHex, npub } or throws a coded Error.
+  // Enforces the domain allowlist.
   async resolveDestination(input) {
     this._requireStarted();
     const raw = String(input || '').trim();

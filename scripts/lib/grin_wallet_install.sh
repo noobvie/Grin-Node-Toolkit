@@ -61,9 +61,8 @@
 # on stdin. That did NOT happen: v5.5.0 (2026-08-12) pins rpassword 7.5.4 but
 # branches on `stdin.is_terminal()`, so the non-TTY path still works. Treat the
 # hazard as defused, not pending — but keep smoke-testing
-# `printf 'x
-' | grin-wallet address` before swapping a pin, because that branch
-# is upstream's choice and not a guarantee.
+# `printf 'x\n' | grin-wallet address` before swapping a pin, because that
+# branch is upstream's choice and not a guarantee.
 # A product may override with GWI_PIN_TAG (set it to "latest" to track head).
 #
 # Convention: sourced lib → NO shebang / NO `set -e`.

@@ -53,11 +53,15 @@ const { execSync, execFile } = require('child_process');
 // (pool_deroot); `sudo -n` never blocks on a password prompt. argv array only —
 // never a shell string — and the helper re-validates every input itself.
 const GWCTL = '/usr/local/bin/grin-gateway-ctl';
-function gwctl(args) {
+// timeoutMs defaults to the 10s that suits every peer/list/status call. Only
+// init-server needs more — it may install wireguard-tools inside the request —
+// and it passes its own; do NOT raise the default, because the cached liveness
+// read sits behind it and a slow helper there stalls the public patch bay.
+function gwctl(args, timeoutMs) {
   return new Promise((resolve, reject) => {
     const net = (config && config.network === 'testnet') ? 'testnet' : 'mainnet';
     execFile('sudo', ['-n', GWCTL, ...args, '--net', net],
-      { timeout: 10000, maxBuffer: 1024 * 1024 }, (err, stdout) => {
+      { timeout: timeoutMs || 10000, maxBuffer: 1024 * 1024 }, (err, stdout) => {
         let out = null;
         try { out = JSON.parse(String(stdout || '').trim()); } catch (e) { /* not JSON */ }
         if (out && out.ok) return resolve(out);
@@ -5467,6 +5471,24 @@ function setupRoutes() {
       // region edits don't prompt. Same challenge contract as requireFreshAuth, so the
       // admin client's adminFetch() step-up flow handles it transparently.
       if (wgPubkey && stepUpRefused(req, res)) return;
+
+      // Pre-flight the hub tunnel BEFORE writing anything (read-only `list`).
+      // The upsert used to run first, so a pool that had never raised its
+      // WireGuard server ended up holding a saved region card AND a 502 that
+      // named an SSH menu — the worst possible moment to discover a prerequisite.
+      // Refuse the whole request instead, and point at the button that fixes it.
+      if (wgPubkey) {
+        try {
+          await gwctl(['list']);
+        } catch (e) {
+          return res.status(409).json({
+            error: 'Multi-region is not enabled on this pool yet, so the gateway key cannot be paired. Turn it on with "Enable multi-region" at the top of this page, then save this region again.',
+            wg_server_missing: true,
+            wg_error: e.message
+          });
+        }
+      }
+
       const cc = country_code ? String(country_code).trim().toUpperCase().slice(0, 2) : null;
 
       db.prepare(`
@@ -5523,13 +5545,98 @@ function setupRoutes() {
         region_port: pair.region_port, existing: !!pair.existing, replaced: !!pair.replaced
       }), req.ip);
 
+      // `synced:false` = the peer is in the CONFIG but `wg syncconf` did not load it
+      // into the running interface, so the gateway will hand-shake only after a
+      // tunnel bounce. The CLI has always warned about this; the panel used to
+      // report plain success and leave the operator debugging the gateway box.
       res.json({
         success: true, location: row,
         pairing: pair.pairing, peer_ip: pair.peer_ip, region_port: pair.region_port,
-        existing: !!pair.existing, replaced: !!pair.replaced
+        existing: !!pair.existing, replaced: !!pair.replaced,
+        synced: pair.synced !== false,
+        sync_warning: pair.synced === false
+          ? 'The peer was written to the WireGuard config, but it could not be loaded into the running tunnel. '
+            + 'This gateway will not hand-shake until the tunnel is brought back up on this box.'
+          : undefined
       });
     } catch (err) {
       res.status(400).json({ error: err.message });
+    }
+  });
+
+  // ─── MULTI-REGION SERVER (Admin only) ──────────────────────────────
+  // The hub's OWN WireGuard tunnel — the thing every gateway peers with. Until
+  // these two routes existed it could only be raised from the CLI (menu W → 1),
+  // which made "pair a gateway from the panel, no SSH needed" false for every
+  // pool that had never gone multi-region. GET is the page's pre-flight; POST is
+  // the button that fixes it in place.
+  app.get('/api/admin/gateways/server', secureAdmin, async (req, res) => {
+    try {
+      const list = await gwctl(['list']);
+      // Two independent facts. `ready` = the hub was set up at all (conf + keypair);
+      // `interface_up` = the tunnel is running RIGHT NOW. A conf outlives a
+      // `wg-quick down` and a boot where the unit failed, so collapsing them into
+      // one light is how a dead tunnel renders green while every gateway is dark.
+      res.json({
+        success: true, ready: true,
+        interface_up: list.interface_up !== false,
+        hub_pubkey: list.hub_pubkey || null,
+        hub_endpoint: list.hub_endpoint || null,
+        hub_tunnel_ip: list.hub_tunnel_ip || null,
+        peers: (list.gateways || []).length
+      });
+    } catch (e) {
+      // NOT an error: "no tunnel yet" is the normal state of a single-box pool,
+      // and the page renders a banner for it rather than a failure.
+      res.json({ success: true, ready: false, interface_up: false, reason: e.message });
+    }
+  });
+
+  // Raising a tunnel and opening a UDP port is at least as sensitive as pairing a
+  // peer, so it takes the same step-up gate peer REMOVAL takes. The long timeout
+  // is deliberate: on a box without wireguard-tools the helper installs the
+  // package inside this request rather than failing with homework for the operator.
+  app.post('/api/admin/gateways/server', freshAdmin, async (req, res) => {
+    try {
+      const r = await gwctl(['init-server'], 180000);
+      // Mirror region_listen_host into the live config so a pairing done in this
+      // same process binds its listener on the tunnel IP without a restart.
+      if (r.hub_tunnel_ip) config.region_listen_host = r.hub_tunnel_ip;
+      db.prepare(`
+        INSERT INTO admin_audit_log (admin_id, action, target_type, target_id, details, ip)
+        VALUES (?, 'gateway_server_init', 'wg_server', ?, ?, ?)
+      `).run(req.user.user_id, r.hub_tunnel_ip || 'wg', JSON.stringify({
+        config: r.config, keypair: r.keypair, interface: r.interface,
+        firewall: r.firewall, listen_port: r.listen_port, boot_enabled: r.boot_enabled
+      }), req.ip);
+      // Two steps can legitimately fail while the tunnel itself came up, and BOTH
+      // are invisible until something else breaks much later, so they are reported
+      // as caveats rather than folded into success:
+      //   · boot_enabled=false — /etc/systemd/system is not writable in this
+      //     service's namespace, so the tunnel is up now and gone after a reboot.
+      //   · firewall='ufw-failed' — same reason for /etc/ufw; the UDP port stays
+      //     shut and every gateway times out with no local symptom at all.
+      // The CLI (root, no namespace) does both, which is why W → 1 is the fallback.
+      const caveats = [];
+      if (r.boot_enabled === false) {
+        caveats.push('The tunnel could not be enabled at boot from here, so a reboot of this box would '
+          + 'take it down. Run "systemctl enable wg-quick@<interface>" over SSH once, or use pool menu W → 1.');
+      }
+      if (r.firewall === 'ufw-failed') {
+        caveats.push('ufw is active but the WireGuard UDP port could not be opened from here. Until you run '
+          + `"ufw allow ${r.listen_port}/udp" over SSH, gateways will not be able to hand-shake.`);
+      }
+      res.json({
+        success: true,
+        already_configured: !!r.already_configured,
+        hub_pubkey: r.hub_pubkey, hub_endpoint: r.hub_endpoint,
+        hub_tunnel_ip: r.hub_tunnel_ip, listen_port: r.listen_port,
+        firewall: r.firewall, interface: r.interface,
+        boot_enabled: r.boot_enabled !== false,
+        caveats: caveats.length ? caveats : undefined
+      });
+    } catch (e) {
+      res.status(502).json({ error: 'Could not enable multi-region: ' + e.message });
     }
   });
 

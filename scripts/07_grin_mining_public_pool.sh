@@ -230,6 +230,44 @@ fs.chmodSync(path, 0o600);
 " "$POOL_CONF" "$key" "$val"
 }
 
+# ─── WireGuard prerequisites for the multi-region path (§13.12p) ──────────────
+# Two things that MUST exist before the hardened unit starts, both because of the
+# service's mount namespace (ProtectSystem=strict):
+#   · wireguard-tools — apt cannot run inside the namespace at all (/usr, /var are
+#     read-only there), so the package can never be installed from the panel. It is
+#     installed here instead, once, at pool install time.
+#   · /etc/wireguard — ReadWritePaths is bound when the service STARTS. A directory
+#     created afterwards is not writable inside the running service's namespace, so
+#     creating it lazily in init-server would work from the CLI and fail from the
+#     panel until the next restart.
+# Both are cheap no-ops on a box that already has them, and harmless on a
+# single-box pool that never goes multi-region (a few hundred KB and an empty dir).
+pool_ensure_wg_prereqs() {
+    mkdir -p /etc/wireguard 2>/dev/null || warn "Could not create /etc/wireguard — panel gateway pairing will fail."
+    chmod 700 /etc/wireguard 2>/dev/null || true
+    if command -v wg &>/dev/null && command -v wg-quick &>/dev/null; then
+        return 0
+    fi
+    info "Installing wireguard-tools (needed before the panel can set up multi-region)..."
+    if command -v apt-get &>/dev/null; then
+        DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=60 install -y wireguard-tools >/dev/null 2>&1 || true
+        if ! command -v wg &>/dev/null; then
+            apt-get -o DPkg::Lock::Timeout=60 update >/dev/null 2>&1 || true
+            DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=60 install -y wireguard-tools >/dev/null 2>&1 || true
+        fi
+    elif command -v dnf &>/dev/null; then
+        dnf install -y wireguard-tools >/dev/null 2>&1 || true
+    fi
+    if command -v wg &>/dev/null; then
+        success "wireguard-tools installed."
+    else
+        # Not fatal: a single-box pool never needs it, and the CLI can install it
+        # later. Only the PANEL's Enable button is lost, so say exactly that.
+        warn "Could not install wireguard-tools. Multi-region setup from the admin panel"
+        echo -e "  ${DIM}will not work until it is installed; the pool menu W → 1 still can.${RESET}"
+    fi
+}
+
 pool_ensure_defaults() {
     # Per-network node + stratum defaults. Testnet uses the 13xxx ports (node API 13413,
     # built-in stratum 13416) and a distinct public stratum port (13333) so a testnet pool
@@ -527,7 +565,20 @@ pool_install() {
     mkdir -p "$POOL_APP_DIR"
     chmod 700 "$POOL_APP_DIR"
     info "Copying pool manager to $POOL_APP_DIR..."
-    rsync -a --delete "$POOL_APP_SRC/" "$POOL_APP_DIR/" \
+    # ⚠ SAME --delete EXCLUDES AS pool_deploy_code, and for a stronger reason.
+    # Install is not a first-run-only step: an operator re-runs it to pick up a
+    # changed systemd unit (that is the documented fix for the /etc/wireguard
+    # ReadWritePaths change, §13.12p). On a first install POOL_APP_DIR is empty
+    # and every exclude is a no-op; on a re-run, a bare --delete mirrors the
+    # checkout and so DELETES the runtime state the app owns — pool.db (every
+    # miner's balance), .wallet_pass, custom_assets and uploads. node_modules is
+    # excluded too: the npm step below would rebuild it, but only after a slow
+    # full reinstall. A re-runnable step must never destroy data.
+    rsync -a --delete \
+        --exclude='pool.db' --exclude='pool.db-wal' --exclude='pool.db-shm' \
+        --exclude='.wallet_pass' --exclude='node_modules' \
+        --exclude='custom_assets' --exclude='uploads' \
+        "$POOL_APP_SRC/" "$POOL_APP_DIR/" \
         2>/dev/null || cp -r "$POOL_APP_SRC/"* "$POOL_APP_DIR/"
 
     local npm_cmd="install"
@@ -555,6 +606,7 @@ pool_install() {
     # hardened unit below can reference an existing user. Also installs the
     # grin-gateway-ctl helper the panel/CLI pairing path depends on (§13.2/§13.9).
     pool_gwctl_install || true
+    pool_ensure_wg_prereqs
     pool_deroot || return 1
 
     local node_bin; node_bin=$(command -v node 2>/dev/null || echo /usr/bin/node)
@@ -565,6 +617,17 @@ pool_install() {
     # ReadWritePaths entries are '-'-prefixed (ignore-if-missing) because the wallet
     # dir may not exist until step 5. Do NOT add NoNewPrivileges — it breaks the
     # scoped `sudo grin-gateway-ctl` the panel pairing path uses.
+    #
+    # ⚠ /etc/wireguard is in ReadWritePaths for the SAME reason, and it is not
+    # optional. ProtectSystem=strict builds a MOUNT NAMESPACE, and a namespace is
+    # inherited by every child — including one that becomes root through setuid
+    # sudo. Gaining root does not get you out of it. Without this entry the helper
+    # runs as root and still cannot append a [Peer], so `add-peer`, `remove-peer`
+    # and `init-server` all fail from the panel while `list`/`status` (reads) keep
+    # working — the page looks healthy right up to the moment you save (§13.12p).
+    # pool_ensure_wg_prereqs() above creates the directory BEFORE this unit starts,
+    # because ReadWritePaths is bound at service start: a directory created later
+    # is not writable inside the already-running service's namespace.
     cat > "/etc/systemd/system/$POOL_SERVICE.service" << EOF
 [Unit]
 Description=Grin Pool Manager (GRINIUM — ${POOL_NET_LABEL})
@@ -587,7 +650,7 @@ ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
 RestrictSUIDSGID=yes
-ReadWritePaths=-$POOL_APP_DIR -$(dirname "$POOL_CONF") -$wallet_rw -$LOG_DIR
+ReadWritePaths=-$POOL_APP_DIR -$(dirname "$POOL_CONF") -$wallet_rw -$LOG_DIR -/etc/wireguard
 
 [Install]
 WantedBy=multi-user.target
@@ -798,11 +861,17 @@ EOF
 # 1) Install (heavy: re-runs npm/apt/fail2ban AND does not restart the service).
 #
 # The backend rsync uses --delete to mirror the checkout (so a file deleted from
-# source is removed on the server too) but EXCLUDES the four runtime artefacts the
-# app owns, never the repo: the SQLite DB (pool.db + WAL/SHM sidecars), the wallet
+# source is removed on the server too) but EXCLUDES the runtime artefacts the app
+# owns, never the repo: the SQLite DB (pool.db + WAL/SHM sidecars), the wallet
 # password file, node_modules (deps — refreshed only when package.json changes),
-# and custom_assets (operator-uploaded white-label media). rsync protects excluded
-# paths from --delete, so miner balances / secrets / deps survive untouched.
+# custom_assets (operator-uploaded white-label media) and uploads (CMS media from
+# the admin editor). rsync protects excluded paths from --delete, so miner
+# balances / secrets / deps / media survive untouched.
+#
+# ⚠ Add an exclude here for EVERY new runtime dir the app writes under
+# POOL_APP_DIR. Living outside public_html protects a dir from the DOCROOT rsync
+# in pool_deploy_web, not from this one — this --delete targets POOL_APP_DIR
+# itself. `uploads` was missing that exclude and was pruned on every deploy.
 pool_deploy_code() {
     echo ""
     echo -e "  ${BOLD}Deploy new code — ${POOL_NET_LABEL}${RESET} — refresh backend + frontend from the checkout, then restart."
@@ -829,7 +898,8 @@ pool_deploy_code() {
     info "Refreshing backend code → $POOL_APP_DIR ..."
     rsync -a --delete \
         --exclude='pool.db' --exclude='pool.db-wal' --exclude='pool.db-shm' \
-        --exclude='.wallet_pass' --exclude='node_modules' --exclude='custom_assets' \
+        --exclude='.wallet_pass' --exclude='node_modules' \
+        --exclude='custom_assets' --exclude='uploads' \
         "$POOL_APP_SRC/" "$POOL_APP_DIR/" \
         || { error "Backend rsync failed — server code unchanged."; return 1; }
     success "Backend code refreshed."
@@ -853,9 +923,23 @@ pool_deploy_code() {
     # regenerate the pairing helper — idempotent no-ops on an already-migrated box.
     # A pre-de-root install also needs 1) Install re-run once for the hardened unit.
     pool_gwctl_install || true
+    pool_ensure_wg_prereqs
     pool_deroot || warn "De-root sweep failed — the service may not start as grinpool."
     if grep -q '^User=root' "/etc/systemd/system/$POOL_SERVICE.service" 2>/dev/null; then
         warn "Service unit still runs as root — re-run 1) Install once to apply the hardened grinpool unit."
+    fi
+    # An update does NOT rewrite the unit, so a box installed before §13.12p keeps a
+    # ReadWritePaths without /etc/wireguard. Under ProtectSystem=strict that makes
+    # every panel-side WireGuard WRITE fail while the reads keep working — the page
+    # looks healthy and only the save breaks. Cheap to detect, expensive to debug.
+    local _unit="/etc/systemd/system/$POOL_SERVICE.service"
+    if [[ -f "$_unit" ]] && grep -q '^ProtectSystem=strict' "$_unit" 2>/dev/null &&
+       ! grep -q '^ReadWritePaths=.*/etc/wireguard' "$_unit" 2>/dev/null; then
+        warn "This box's service unit cannot write /etc/wireguard."
+        echo -e "  ${DIM}Gateway pairing and multi-region setup FROM THE ADMIN PANEL will fail${RESET}"
+        echo -e "  ${DIM}(the page's status columns will still look fine — only writes break).${RESET}"
+        echo -e "  ${DIM}Fix: re-run 1) Install once to apply the updated unit. The pool menu${RESET}"
+        echo -e "  ${DIM}W) Multi-region works either way — it runs as root outside the service.${RESET}"
     fi
 
     # Refresh the break-glass recovery wrapper — the rsync above may have replaced
@@ -1335,8 +1419,11 @@ $admin_rules
     }
 
     # CMS media (cover images + in-body images uploaded via the admin editor). Stored in a
-    # persistent dir OUTSIDE public_html so a code redeploy (rsync --delete of the docroot)
-    # never wipes them. Same SVG hardening as /custom/: nosniff + sandbox CSP neutralises any
+    # persistent dir OUTSIDE public_html so the DOCROOT redeploy (rsync --delete in
+    # pool_deploy_web) never wipes them. That placement does NOT protect it from the
+    # BACKEND rsync, which --deletes POOL_APP_DIR itself — it is safe only because
+    # pool_deploy_code / pool_install exclude it by name.
+    # Same SVG hardening as /custom/: nosniff + sandbox CSP neutralises any
     # script in a directly-opened SVG; correct image MIME types are kept for <img> rendering.
     location /uploads/ {
         alias $POOL_APP_DIR/uploads/;
@@ -2206,71 +2293,76 @@ console.log(d.pairing || "");
 ' "$1" 2>/dev/null || echo "ERR helper output was not JSON"
 }
 
+# Thin caller over grin-gateway-ctl init-server (§13.5/§13.12) — package, keypair,
+# /etc/wireguard conf, firewall, iface up+enabled and region_listen_host ALL live in
+# the helper, so this menu option and the admin panel's "Enable multi-region" button
+# do byte-identical work. It used to be a second implementation here, which is
+# exactly how the hub key, tunnel net or listen port drift between the two paths.
 pool_wg_setup_server() {
     info "Setting up the central WireGuard server..."
-    if command -v apt-get &>/dev/null; then
-        apt-get install -y wireguard-tools 2>&1 | tail -5
-    elif command -v dnf &>/dev/null; then
-        dnf install -y wireguard-tools 2>&1 | tail -5
-    fi
-    command -v wg &>/dev/null || { error "wireguard-tools (wg) not installed."; return 1; }
+    # Regenerate the helper FIRST: a box installed before init-server existed has
+    # an older copy on disk that would reject the subcommand.
+    pool_gwctl_install || { error "Could not install $GWCTL_BIN."; return 1; }
 
-    mkdir -p "$WG_DIR_CONF"; chmod 700 "$WG_DIR_CONF"
-    if [[ ! -f "$WG_DIR_CONF/server_private.key" ]]; then
-        ( umask 077; wg genkey > "$WG_DIR_CONF/server_private.key" )
-        wg pubkey < "$WG_DIR_CONF/server_private.key" > "$WG_DIR_CONF/server_public.key"
+    local out parsed
+    out=$("$GWCTL_BIN" init-server --net "$POOL_NET" 2>&1 || true)
+    parsed=$(node -e '
+let d = {};
+try { d = JSON.parse(process.argv[1]); } catch (e) { console.log("ERR helper output was not JSON"); process.exit(0); }
+if (!d.ok) { console.log("ERR " + (d.error || "unknown helper error")); process.exit(0); }
+console.log(["OK", d.config, d.keypair, d.interface, d.firewall, d.boot_enabled ? "boot" : "noboot"].join(" "));
+console.log(d.hub_pubkey || "");
+console.log(d.hub_endpoint || "");
+console.log(d.hub_tunnel_ip || "");
+' "$out" 2>/dev/null || echo "ERR helper output was not JSON")
+
+    local head; head=$(sed -n 1p <<< "$parsed")
+    if [[ "$head" == ERR* ]]; then error "${head#ERR }"; return 1; fi
+    local _ conf_act key_act iface_act fw boot_act
+    read -r _ conf_act key_act iface_act fw boot_act <<< "$head"
+    local hub_pub hub_ep hub_ip
+    hub_pub=$(sed -n 2p <<< "$parsed")
+    hub_ep=$(sed -n 3p <<< "$parsed")
+    hub_ip=$(sed -n 4p <<< "$parsed")
+
+    if [[ "$key_act" == "generated" ]]; then
         success "Generated central WireGuard keypair."
+    elif [[ "$key_act" == "repaired" ]]; then
+        warn "The hub public key file was missing — re-derived it from the private key."
     fi
-
-    if [[ ! -f "$WG_CONF" ]]; then
-        local priv; priv=$(cat "$WG_DIR_CONF/server_private.key")
-        mkdir -p "$(dirname "$WG_CONF")"
-        ( umask 077; cat > "$WG_CONF" << EOF
-# Grin pool central WireGuard server — auto-generated. Add gateways via the pool menu (W).
-[Interface]
-Address = ${WG_TUNNEL_NET}.1/24
-ListenPort = ${WG_LISTEN_PORT}
-PrivateKey = ${priv}
-EOF
-        )
-        chmod 600 "$WG_CONF"
-        success "Wrote $WG_CONF (${WG_TUNNEL_NET}.1/24, UDP ${WG_LISTEN_PORT})."
+    if [[ "$conf_act" == "created" ]]; then
+        success "Wrote $WG_CONF (${hub_ip}/24, UDP ${WG_LISTEN_PORT})."
     else
-        info "$WG_CONF already exists — keeping it (add peers with option 2)."
+        info "$WG_CONF already exists — kept it (add peers with option 2)."
     fi
-
-    # Open the WireGuard UDP port. Region listener ports are NOT opened — they bind the
-    # tunnel interface only, so only authenticated wg peers can reach them.
-    if command -v ufw &>/dev/null && ufw status 2>/dev/null | grep -q active; then
-        ufw allow "${WG_LISTEN_PORT}/udp" >/dev/null 2>&1 || true; info "ufw: opened ${WG_LISTEN_PORT}/udp."
-    elif command -v firewall-cmd &>/dev/null && firewall-cmd --state &>/dev/null; then
-        firewall-cmd --permanent --add-port="${WG_LISTEN_PORT}/udp" >/dev/null 2>&1 || true
-        firewall-cmd --reload >/dev/null 2>&1 || true; info "firewalld: opened ${WG_LISTEN_PORT}/udp."
-    fi
-
-    wg-quick down "$WG_IFACE" 2>/dev/null || true
-    if wg-quick up "$WG_IFACE"; then
-        systemctl enable "wg-quick@${WG_IFACE}" 2>/dev/null || true
-        # Bind the central per-region stratum listeners to the tunnel IP (never public).
-        pool_write_conf_key "region_listen_host" "${WG_TUNNEL_NET}.1"
-        # The single WG mutation path — the CLI below and the admin panel both pair
-        # gateways through it, so the peer list and region_ports can never drift.
-        pool_gwctl_install || true
-        success "Central tunnel up (${WG_TUNNEL_NET}.1)."
-        echo ""
-        echo -e "  ${BOLD}Give each gateway operator these:${RESET}"
-        echo -e "    central wg public key : ${GREEN}$(cat "$WG_DIR_CONF/server_public.key")${RESET}"
-        echo -e "    central wg endpoint   : ${GREEN}$(_pool_wg_endpoint)${RESET}"
-        echo -e "    central tunnel IP     : ${GREEN}${WG_TUNNEL_NET}.1${RESET}"
-        echo ""
-        echo -e "  ${DIM}Gateways can now also be paired from the admin panel (Regions & Gateways —${RESET}"
-        echo -e "  ${DIM}paste the gateway's wg public key into the region form; no SSH needed).${RESET}"
-        echo -e "  ${DIM}Tip: set a DNS name for this hub (option 5) so a future provider/IP change${RESET}"
-        echo -e "  ${DIM}never strands your gateways.${RESET}"
+    case "$fw" in
+        ufw)        info "ufw: opened ${WG_LISTEN_PORT}/udp." ;;
+        firewalld)  info "firewalld: opened ${WG_LISTEN_PORT}/udp." ;;
+        ufw-failed) warn "ufw is active but the ${WG_LISTEN_PORT}/udp rule failed — add it by hand." ;;
+    esac
+    if [[ "$iface_act" == "up" ]]; then
+        success "Central tunnel up (${hub_ip})."
     else
-        error "wg-quick up failed — check $WG_CONF."
-        return 1
+        info "Tunnel ${WG_IFACE} was already up — config re-applied without dropping peers."
     fi
+    # Only reachable when the helper ran somewhere that cannot write
+    # /etc/systemd/system. From this menu it runs as root with no namespace, so
+    # a failure here is a genuinely broken systemd, not the expected panel case.
+    if [[ "$boot_act" == "noboot" ]]; then
+        warn "Could not enable wg-quick@${WG_IFACE} at boot — the tunnel is up NOW but a reboot loses it."
+        echo -e "  ${DIM}fix: systemctl enable wg-quick@${WG_IFACE}${RESET}"
+    fi
+
+    echo ""
+    echo -e "  ${BOLD}Give each gateway operator these:${RESET}"
+    echo -e "    central wg public key : ${GREEN}${hub_pub}${RESET}"
+    echo -e "    central wg endpoint   : ${GREEN}${hub_ep}${RESET}"
+    echo -e "    central tunnel IP     : ${GREEN}${hub_ip}${RESET}"
+    echo ""
+    echo -e "  ${DIM}Gateways can now also be paired from the admin panel (Regions & Gateways —${RESET}"
+    echo -e "  ${DIM}paste the gateway's wg public key into the region form; no SSH needed).${RESET}"
+    echo -e "  ${DIM}Tip: set a DNS name for this hub (option 5) so a future provider/IP change${RESET}"
+    echo -e "  ${DIM}never strands your gateways.${RESET}"
 }
 
 # Thin caller over grin-gateway-ctl (§13.5) — ALL WireGuard/region_ports mutation
@@ -2309,10 +2401,66 @@ pool_wg_add_peer() {
         success "Replaced the gateway key for region '${reg}' — tunnel IP + port kept."
     else
         success "Added gateway peer for region '${reg}'."
-        # New region → the running pool must bind its tunnel listener. (Panel-side
-        # pairing hot-binds inside the process; the CLI runs outside it → restart.)
+
+        # Create the admin → Regions card here too, so add and remove are symmetric:
+        # remove-peer already DELETEs this row, and an add that only printed "remember
+        # to declare it" is how a region ends up wired but invisible in the panel.
+        # is_active = 0 on purpose — we have no stratum hostname to publish yet, and a
+        # visible card with a NULL host would render a dead entry on the public connect
+        # grid. The operator fills the host in the panel, which flips it visible.
+        local _carded=""
+        if [[ -f "$POOL_APP_DIR/pool.db" ]]; then
+        _carded=$(node -e '
+try {
+  const { DatabaseSync } = require("node:sqlite");
+  const db = new DatabaseSync(process.argv[1]);
+  const r = db.prepare(
+    "INSERT INTO pool_locations (region, is_active, updated_at) VALUES (?, 0, unixepoch()) " +
+    "ON CONFLICT(region) DO NOTHING"
+  ).run(process.argv[2]);
+  process.stdout.write(String(r.changes));
+} catch (e) {}
+' "$POOL_APP_DIR/pool.db" "$reg" 2>/dev/null) || true
+            # This runs as ROOT against a DB the de-rooted service owns. In WAL mode
+            # SQLite creates pool.db-wal / -shm beside it; if the service happened to
+            # be stopped, those are created root-owned and an unclean exit leaves them
+            # behind — after which grinpool cannot open its own database. Hand them
+            # back unconditionally (no-op when the service's connection already owns
+            # them, and the -f guard above means the DB itself is never created here).
+            if id grinpool >/dev/null 2>&1; then
+                chown grinpool:grinpool "$POOL_APP_DIR"/pool.db "$POOL_APP_DIR"/pool.db-wal "$POOL_APP_DIR"/pool.db-shm 2>/dev/null || true
+            fi
+        fi
+        if [[ "$_carded" == "1" ]]; then
+            info "Created a HIDDEN '${reg}' card in admin → Regions."
+            echo -e "    ${DIM}Open it there, fill in the stratum hostname, tick ${BOLD}Active${RESET}${DIM} and Save${RESET}"
+            echo -e "    ${DIM}to publish it on the connect grid.${RESET}"
+        elif [[ -n "${_carded:-}" ]]; then
+            info "Region '${reg}' already has a card in admin → Regions — left as is."
+        fi
+
+        # New region → the running pool must bind its tunnel listener. The panel's
+        # pairing hot-binds inside the process; the CLI runs OUTSIDE it, so the only
+        # lever here is a restart — which drops every miner on every region, not just
+        # this one. Say so and let the operator choose the moment.
         if systemctl is-active --quiet "$POOL_SERVICE" 2>/dev/null; then
-            systemctl restart "$POOL_SERVICE" && info "Restarted $POOL_SERVICE (new region listener binding)."
+            echo ""
+            warn "The pool must rebind its listeners to serve region '${reg}'."
+            echo -e "  ${YELLOW}Restarting $POOL_SERVICE disconnects EVERY miner on EVERY region${RESET}"
+            echo -e "  ${YELLOW}for a few seconds (they reconnect on their own; shares in flight are lost).${RESET}"
+            echo -e "  ${DIM}Pairing from admin → Regions & Gateways binds the new listener in-process${RESET}"
+            echo -e "  ${DIM}with no restart at all — prefer that page for the next one.${RESET}"
+            echo -ne "Restart now? [y/N] (n = the region starts working at your next restart): "
+            local _rs; read -r _rs
+            if [[ "${_rs,,}" == "y" ]]; then
+                if systemctl restart "$POOL_SERVICE"; then
+                    info "Restarted $POOL_SERVICE (new region listener bound)."
+                else
+                    error "Restart failed — region '${reg}' is paired but not yet listening."
+                fi
+            else
+                warn "Not restarted. Region '${reg}' will not accept miners until $POOL_SERVICE restarts."
+            fi
         fi
     fi
 
@@ -2325,8 +2473,22 @@ pool_wg_add_peer() {
     echo -e "  ${DIM}tunnel field at once; re-printable via 3) List gateways or the admin panel):${RESET}"
     echo -e "    ${GREEN}${pairing}${RESET}"
     echo ""
-    echo -e "  ${DIM}Also declare region '${reg}' in admin → Regions & Gateways so it shows on the${RESET}"
-    echo -e "  ${DIM}connect grid — or pair from that page next time (it does both in one step).${RESET}"
+    if [[ "$rep" == "1" ]]; then
+        # Replacement: everything below is already done for this region — the only
+        # remaining action is on the new gateway box.
+        echo -e "  ${BOLD}One thing left:${RESET} on the NEW gateway box run 2) Configure (paste the"
+        echo -e "  line above) → 3) Bring up tunnel → 4) Start. DNS and the region card are"
+        echo -e "  unchanged, so nothing else moves."
+        return 0
+    fi
+    echo -e "  ${BOLD}Two things left before miners can use region '${reg}':${RESET}"
+    echo -e "    ${GREEN}1.${RESET} On the GATEWAY box: 2) Configure (paste the line above) → 3) Bring up"
+    echo -e "       tunnel → 4) Start. Make sure its public stratum port is open there."
+    echo -e "    ${GREEN}2.${RESET} DNS: point the hostname miners will dial (e.g. ${reg}.example.com) at the"
+    echo -e "       ${BOLD}GATEWAY box's public IP${RESET} — not this box — then put that hostname in"
+    echo -e "       admin → Regions & Gateways so the card goes visible on the connect grid."
+    echo -e "  ${DIM}Until DNS resolves, the panel's Port check shows ✗ unreachable even when the${RESET}"
+    echo -e "  ${DIM}tunnel is healthy — that is the DNS step, not a broken gateway.${RESET}"
 }
 
 pool_wg_list() {
@@ -2536,9 +2698,11 @@ pool_wireguard_menu() {
         echo -e "  ${DIM}Your pool already serves all your miners on :$(pool_read_conf stratum_port 3333) as region \"main\".${RESET}"
         echo -e "  ${DIM}Use this ONLY when you add a regional gateway server in ANOTHER zone/${RESET}"
         echo -e "  ${DIM}continent (a separate box near distant miners, to cut their latency).${RESET}"
-        echo -e "  ${DIM}One server = skip this menu entirely. After 1) here, gateways are usually${RESET}"
-        echo -e "  ${DIM}paired from the ADMIN PANEL (Regions & Gateways) — options 2–4 are the${RESET}"
-        echo -e "  ${DIM}SSH/offline fallback; both paths share the same grin-gateway-ctl helper.${RESET}"
+        echo -e "  ${DIM}One server = skip this menu entirely. This whole menu is now an SSH/offline${RESET}"
+        echo -e "  ${DIM}FALLBACK: the ADMIN PANEL (Regions & Gateways) does 1) with its 'Enable${RESET}"
+        echo -e "  ${DIM}multi-region' button and 2)/3)/4) from the region rows — and pairing there${RESET}"
+        echo -e "  ${DIM}binds the new listener WITHOUT the service restart option 2 needs here.${RESET}"
+        echo -e "  ${DIM}Both paths run the same grin-gateway-ctl helper, so they cannot drift.${RESET}"
         echo ""
         echo -e "${DIM}  Central accepts thin regional gateways over a wg tunnel.${RESET}"
         echo ""

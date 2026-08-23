@@ -846,6 +846,154 @@ public `POST /api/gateway/enroll` and receives the pairing payload (zero human k
 Bolts onto this design (same helper, same response shape); revisit only if third-party
 operators run gateways at scale.
 
+### 13.12 Panel-side multi-region bootstrap + onboarding fixes — IMPLEMENTED 2026-08-22 (NOT VPS-tested)
+
+§13.1 promised "pair a gateway without an SSH session on the hub". That was **false for
+every pool that had never gone multi-region**: `add-peer` requires `/etc/wireguard/wg-grinpool*.conf`,
+which only `pool_wg_setup_server` (menu `W → 1`) created. Worse, the panel's region save
+upserted `pool_locations` **before** calling the helper — so the first attempt left a saved
+region card *and* a 502 naming an SSH menu the how-to never mentioned. A flow-trace of both
+routes (bash + panel) found seven more onboarding defects around it; all are fixed here.
+
+**a) `grin-gateway-ctl init-server` — the hub tunnel becomes a helper subcommand.**
+Package (install, retrying once behind `apt-get update`), keypair, `/etc/wireguard` conf,
+firewall UDP rule, `wg-quick up` + enable, `region_listen_host` in pool.json. Idempotent by
+construction: an existing conf is **kept** (regenerating rotates the hub key and strands every
+paired gateway) and a live interface is **synced, never bounced**. Also re-derives a missing
+`server_public.key` from the private key — otherwise an interrupted first run makes every
+later pairing string carry an empty hub key. Emits the usual single JSON object.
+
+**b) `pool_wg_setup_server` is now a thin caller over (a).** It was a second implementation of
+the same steps; the tunnel net, listen port and conf layout had to be kept in sync by hand
+across two files. Same posture as `add-peer`/`remove-peer`/`list` since §13.5.
+
+**c) Panel: `GET`/`POST /api/admin/gateways/server`.** GET is the page's pre-flight (`ready`
+true/false, never an error — "no tunnel" is the normal state of a single-box pool); POST runs
+init-server behind `freshAdmin` step-up (raising a tunnel is at least as sensitive as pairing a
+peer, which is already step-up gated) with a 180s exec timeout, audits `gateway_server_init`,
+and mirrors `region_listen_host` into the live config. `regions.html` renders either an
+**Enable multi-region** banner or the hub's coordinates.
+
+**d) The half-write is gone.** `POST /api/admin/locations` now pre-flights with a read-only
+`list` **before** the upsert when a `wg_pubkey` is present, returning **409 `wg_server_missing`**
+and writing nothing. The client checks that flag *before* the existing `wg_error` branch, which
+would otherwise report "region saved" about a request that saved nothing.
+
+**e) CLI `add-peer` parity with `remove-peer`.** Remove already `DELETE`s the `pool_locations`
+row; add only printed "remember to declare it", which is how a region ends up wired but invisible
+on the connect grid. Add now inserts the card with `is_active = 0` — visible in admin, not on the
+public grid, because there is no stratum hostname to publish yet.
+
+**f) The CLI restart is now a choice, not a surprise.** Panel pairing hot-binds; the CLI runs
+outside the process and can only restart `grin-pool-manager`, which drops every miner on **every**
+region. It now says so and asks, and names the panel as the no-restart path.
+
+**g) Gateway box: firewall + honest next-step.** `gw_install` never opened the public stratum
+port (the hub opens its own wg port), so a box with active ufw finished pairing green and refused
+every miner. New `gw_open_firewall` runs from Install and Configure; `gw_status` reports the ufw
+rule beside the listener. Install's tail said "Next: 2) Configure" — the one thing the operator
+must *not* do, since the pairing string does not exist yet; it now stops and points at the hub.
+
+**h) DNS is a step.** The A-record (pointing at the **gateway** box, not the hub) was a
+parenthetical; it gates the Port-check column, so its absence read as a broken gateway. It is now
+its own numbered step in the panel how-to and is printed by both `gw_configure` and CLI add-peer.
+
+**i) `gw_configure` silent no-op.** The region-port prompt composes `hub_endpoint` from two
+answers and dropped the port when the hub tunnel IP was still blank, with no message. It now says
+what was not saved and why.
+
+**Second pass (same day) — six defects found reviewing (a)–(i):**
+
+**j) A readable conf is not a running tunnel.** `list` reported only that `$WG_CONF` exists, so
+the panel's readiness light went green on a hub whose interface was down — the state in which
+*every* gateway is dark. `list` now carries `interface_up` (`wg show`), the GET forwards it, and
+the banner has a third state: **set up, but the tunnel is DOWN**, whose button is the same
+idempotent `init-server` (keeps the keypair, so nothing needs re-pairing).
+
+**k) `Auth.fetch` resolves `null` on failure — it never throws.** `loadServerState`'s `try/catch`
+was therefore dead code, and a failed/rate-limited request fell through to `!d.ready` and nagged a
+healthy pool to enable a tunnel it already runs. It now moves state only on `d.success === true`;
+`_mrReady` is tri-state (`null` = never answered, and `null` is not evidence of anything).
+
+**l) `_mrReady` was written and never read.** It now short-circuits a save that carries a
+`wg_pubkey` while the hub is known-not-ready — otherwise `adminFetch` prompts for the step-up
+password on the way to a guaranteed 409.
+
+**m) `synced:false` was invisible in the panel.** `add-peer` reports when `wg syncconf` did not
+load the new peer into the running interface; the CLI has always warned, the route dropped the
+field and reported plain success. The symptom then appears on the *gateway* box and reads as a
+pairing fault. Now returned as `sync_warning` and shown on the pairing card.
+
+**n) The CLI's `pool_locations` insert could create a root-owned `pool.db`.** `node:sqlite` opens
+create-if-missing, so (e) would have created the database — and, in WAL mode, `pool.db-wal`/`-shm` —
+owned by root, after which the de-rooted `grinpool` service cannot open its own database. Guarded
+on the file already existing, and the WAL sidecars are chowned back unconditionally.
+
+**o) `apt-get` did not wait for the dpkg lock.** A fresh VPS is usually mid-`unattended-upgrades`;
+without `-o DPkg::Lock::Timeout=60` both install attempts fail instantly and the operator is told
+wireguard-tools "could not be installed" by a box that was merely busy for 20 seconds.
+
+Also corrected in the same pass: the new-region tail ("two things left", DNS, region card) was
+printing on the **box-replacement** path too, where all of it is already done; add-peer's
+prerequisite error named only the SSH menu; and the CLI's "publish it" hint omitted that the
+region card's **Active** checkbox is what actually publishes it.
+
+**p) THE BLOCKER: `ProtectSystem=strict` made every panel-side WireGuard write fail.** Found
+answering "is this ready to test?", before any of it ran. The hardened unit (§13.9) builds a
+**mount namespace**, and a namespace is inherited by every child — *including one that becomes
+root through setuid `sudo`*. Gaining root does not get you out of it. `/etc/wireguard` was not in
+`ReadWritePaths`, so `sudo grin-gateway-ctl add-peer` ran as root and still could not append a
+`[Peer]`. This was never an `init-server` bug: it broke **`add-peer` and `remove-peer` too**,
+i.e. the whole §13.1 promise of "pair a gateway without an SSH session", for every de-rooted box.
+`list` and `status` are reads, so the pre-flight, the readiness banner and the health column all
+kept working — the page looked healthy right up to the moment you saved. `NoNewPrivileges` was
+already deliberately absent with a comment about this very sudo path; the mount namespace simply
+was not the part that got considered.
+
+Fixed by opening exactly one path and moving the rest off the request:
+- `ReadWritePaths` gains `-/etc/wireguard`. DAC still applies inside the namespace, so `grinpool`
+  cannot write those root-owned files itself — only the scoped helper can.
+- New `pool_ensure_wg_prereqs()` installs `wireguard-tools` **and creates `/etc/wireguard`** at
+  pool-install time. Both must happen before the unit starts: `apt` can never run inside the
+  namespace (`/usr`, `/var` read-only), and `ReadWritePaths` is bound at service **start**, so a
+  directory created later is not writable in the already-running service's namespace.
+- The update path does not rewrite the unit, so `pool_deploy_code` now detects a pre-§13.12p unit
+  (`ProtectSystem=strict` without `/etc/wireguard`) and says which operations will fail.
+- Steps that remain outside the namespace are reported instead of swallowed: `systemctl enable`
+  (writes `/etc/systemd/system`) returns `boot_enabled`, and `ufw allow` already returned
+  `ufw-failed`. Both surface as persistent **caveats** on the page — the tunnel is up, but a
+  reboot loses it / the UDP port is still shut, and neither has a local symptom.
+- Error strings now name the namespace and the fix, rather than saying "install it manually".
+
+`/etc/systemd/system` and `/etc/ufw` stay closed, deliberately: those two steps are worth one SSH
+command, and widening the unit for them would trade the whole point of de-rooting for convenience.
+
+Accepted risk, not fixed: `init-server` may still install a package inside an HTTP request when
+run on a box where the installer's `pool_ensure_wg_prereqs` did not succeed, so an `execFile`
+timeout can interrupt `apt`. The 180s budget makes that unlikely, and the common path no longer
+touches apt at all.
+
+Unchanged and deliberately so: the shared-helper architecture, the GRINGW1 string, the dup-key
+and same-region guards, and the §13.11 token enrollment (still deferred — these fixes reduce the
+manual hops but do not remove the two hand-carried payloads).
+
+**q) `1) Install` was not safe to re-run — and (p) makes re-running it the documented fix.**
+Prescribing "re-run Install once to pick up the new unit" turned a first-run-only assumption into
+a data-loss bug. `pool_install`'s rsync was `rsync -a --delete "$POOL_APP_SRC/" "$POOL_APP_DIR/"`
+with **no excludes**, so on an already-installed box it mirrored the checkout and deleted every
+runtime artefact the app owns: `pool.db` (every miner's balance), `.wallet_pass`, `custom_assets`,
+`uploads`, `node_modules`. On a first install `POOL_APP_DIR` is empty and each exclude is a no-op,
+which is exactly why the gap survived — the bug is invisible until the step is run a second time.
+`pool_install` now carries the same exclude list as `pool_deploy_code`.
+
+The same audit found `uploads/` (CMS media from the admin editor) missing from `pool_deploy_code`'s
+excludes, so **every code deploy silently pruned it** — independent of (p), and older. The comment
+on the nginx `/uploads/` block asserted the opposite, and its reasoning is the trap worth naming:
+living *outside* `public_html` protects a dir from the **docroot** rsync in `pool_deploy_web`, and
+not at all from the **backend** rsync, which `--delete`s `POOL_APP_DIR` itself. Both comments are
+corrected, and the rule is now stated where the next author will be adding a runtime dir: every new
+dir the app writes under `POOL_APP_DIR` needs an exclude in **both** rsyncs.
+
 ---
 
 ## 14. Data retention & ledger rollup — IMPLEMENTED 2026-07-16 (branch `add-ons`; NOT VPS-tested)

@@ -497,9 +497,70 @@ def migrate_legacy_json(conn, state_json, ledger_json, is_mainnet):
         _meta_set(conn, "legacy_imported", "1")
 
 
+# ── node directory / secret resolution (never hardcode "<net>-prune") ──────────
+# A mainnet node lives in EITHER /opt/grin/node/mainnet-prune (pruned) or
+# /opt/grin/node/mainnet-full (archive). Hardcoding "-prune" here made EVERY node
+# call in this collector fail the same silent way on an archive box: open() raised
+# OSError, the function returned None, and the stats page rendered "no data"
+# forever with nothing in the log to point at. Fixing only the bash side would
+# have left exactly that symptom, because this collector is what fills the page.
+#
+# Mirrors grin_live_node_dir() in scripts/lib/grin_node_secrets.sh, minus its
+# tmux-session probe (a cron collector should not shell out): instances-conf
+# registry first, then directory existence, with mainnet preferring the archive.
+INSTANCES_CONF = "/opt/grin/conf/grin_instances_location.conf"
+
+
+def _conf_var(name):
+    """One KEY=VALUE from the shell-style instances conf, or "" — never sourced."""
+    try:
+        with open(INSTANCES_CONF) as fh:
+            for line in fh:
+                s = line.strip()
+                if s.startswith(name + "="):
+                    return s.split("=", 1)[1].strip().strip('"').strip("'")
+    except OSError:
+        pass
+    return ""
+
+
+def node_dir(net):
+    """Directory of the node actually serving `net`. A candidate counts only if it
+    holds a grin-server.toml, so a leftover empty dir can't shadow the live node.
+    Always returns a path (historic pruned default last) so callers keep their
+    existing open()/OSError guard and nothing new can raise."""
+    if net == "testnet":
+        cands = [_conf_var("PRUNETEST_GRIN_DIR"), "/opt/grin/node/testnet-prune"]
+    else:
+        cands = [_conf_var("FULLMAIN_GRIN_DIR"), _conf_var("PRUNEMAIN_GRIN_DIR"),
+                 "/opt/grin/node/mainnet-full", "/opt/grin/node/mainnet-prune"]
+    for d in cands:
+        if d and os.path.isfile(os.path.join(d, "grin-server.toml")):
+            return d
+    return "/opt/grin/node/%s-prune" % net
+
+
+def node_secret_path(net, which):
+    """Absolute owner|foreign secret path for `net`, honouring a custom
+    api_secret_path / foreign_api_secret_path in the node's toml ("~" -> /opt/grin,
+    the same expansion grin itself does). Falls back to the in-dir default."""
+    d = node_dir(net)
+    if which == "owner":
+        field, default = "api_secret_path", os.path.join(d, ".api_secret")
+    else:
+        field, default = "foreign_api_secret_path", os.path.join(d, ".foreign_api_secret")
+    raw = _read_toml_scalar(os.path.join(d, "grin-server.toml"), field)
+    if raw:
+        if raw.startswith("~"):
+            raw = "/opt/grin" + raw[1:]
+        if os.path.isfile(raw):
+            return raw
+    return default
+
+
 def query_node_status(net):
     """Return get_status 'Ok' dict (height, total_difficulty, connections) or None."""
-    secret_path = f"/opt/grin/node/{net}-prune/.api_secret"
+    secret_path = node_secret_path(net, "owner")
     try:
         with open(secret_path) as fh:
             secret = fh.read().strip()
@@ -527,7 +588,7 @@ def query_node_block(net, height):
     was unreachable (retry later); a result whose header.hash differs from the
     one we logged means our solution was orphaned (exclude from payouts).
     """
-    secret_path = f"/opt/grin/node/{net}-prune/.foreign_api_secret"
+    secret_path = node_secret_path(net, "foreign")
     try:
         with open(secret_path) as fh:
             secret = fh.read().strip()
@@ -554,7 +615,7 @@ def query_node_header(net, height):
     pruned node (the header+kernel chain is complete), so it's the safe call for a
     24h-deep look-back that could otherwise fall below the block-body pruning horizon.
     """
-    secret_path = f"/opt/grin/node/{net}-prune/.foreign_api_secret"
+    secret_path = node_secret_path(net, "foreign")
     try:
         with open(secret_path) as fh:
             secret = fh.read().strip()
@@ -639,7 +700,7 @@ def network_figures_lookback(net, height):
 
 # ── health probe (sanitized liveness for external monitors) ─────────────────────
 def _node_toml_path(net):
-    return f"/opt/grin/node/{net}-prune/grin-server.toml"
+    return os.path.join(node_dir(net), "grin-server.toml")
 
 
 def _read_toml_scalar(path, key):

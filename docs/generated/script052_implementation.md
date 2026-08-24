@@ -24,7 +24,7 @@ this is a VPS product.
 | Next packet | **S2** — no longer a build packet at all, it is **the acceptance session**. First VPS work, carrying S1's, S3's, S4b's, S5's, S6's, S7's, S8's *and* S9 pass 1's acceptance runs. Everything that can be authored has been. |
 | Deployed anywhere? | **No.** Nothing has ever run on a VPS. Not one build, deploy, send or receive. |
 | Script 052 menu | **every key is LIVE** as of S7 — there is no stub left in this product. That is not the same as tested |
-| Overlay | `patches/public_html/` — **19 files / 656 kB** (17 replace a vendored file, 2 add one; 671,637 bytes measured 2026-08-16 after the S10 review pass), **49 `ACCIO PATCH` markers, 34 of them in the published file set** (`backend/` and `errors/template.php` are build-time only, never served). Search for that string, not for a diff — and see `patches/README.md` for the five files whose format cannot carry an inline marker, which the table there covers instead |
+| Overlay | `patches/public_html/` — **19 files / 656 kB** (17 replace a vendored file, 2 add one; 678,170 bytes measured 2026-08-24, after the Duo marks of 2026-08-17 — it was 671,637 on 2026-08-16, and only the four SVGs changed between), **49 `ACCIO PATCH` markers, 34 of them in the published file set** (`backend/` and `errors/template.php` are build-time only, never served). Search for that string, not for a diff — and see `patches/README.md` for the five files whose format cannot carry an inline marker, which the table there covers instead |
 | Theme | **"Orbital Dawn"** — `styles/accio.css`, loaded **last** so it beats upstream's colours on source order. Upstream's 22 stylesheets are not overlaid; the three hooks are the `<link>` in `index.html`, the same `<link>` in `errors/template.php`, and the `$files` entry + `THEME_COLOR`/`BACKGROUND_COLOR` in `backend/resources.php`. Retuning is a `:root` token edit. **Never seen in a browser** — see S10 |
 | Pin enforcement | `accio_build` refuses to stage anything unless `acv_verify_vendor` passes — manifest-vs-`PINNED_SHA`, then `sha256sum -c`, then the file set both ways. **No bypass.** Never "fix" a failure by regenerating `SHA256SUMS` on the VPS |
 | Branding | Two files (`backend/language.php`, `scripts/language.js`) carry a phrase map that rebrands the whole app in all six languages. **The two maps must stay identical** — 12 entries each since R8. A new language must be checked against the map before it ships: three of the six translators did not keep the English word order, which left 27 strings unbranded until 2026-08-12 |
@@ -3668,3 +3668,47 @@ and was re-run after the edits.
 **None of this changes the standing position: the theme has still never been seen in a
 browser.** Four of the five defects would have been obvious in one screenshot; that is the
 argument for S2, not against the review.
+
+---
+
+### Post-S10 maintenance — 2026-08-17 → 2026-08-22 ✅ *(logged retrospectively 2026-08-24)*
+
+Three commits touched Accio after the S10 review and **none of them wrote an entry here**, which
+is the handoff rule this file opens with. Recorded now so S2 opens on a doc that matches the
+tree. Nothing below changes behaviour; the entry exists so the next session does not have to
+re-derive that from `git log`.
+
+| Commit | Date | What |
+|---|---|---|
+| `0ad5564` | 08-17 | the four **"Duo"** mark SVGs + `patches/README.md` |
+| `7a37cd1` | 08-21 | comment audit batch A7/A8 — build, vendor, gateway, nginx |
+| `b69d3c2`, `6451408` | 08-21/22 | comment audit tail; four gateway files rewrapped |
+
+**The Duo mark (`0ad5564`) is fully documented — in `patches/README.md`, not here**, and that is
+the right place by R8's own rule: a patch author looks at the patch tree, not at a 3,700-line
+session log. The README gained a section explaining why the mark is a **pair of discs** and why
+that is a security property rather than decoration (Accio and Fidelius have opposite custody
+models, their old marks were the same path in two hues, and hue is the first signal to fail at
+16 px or for a colour-blind viewer). The load-bearing geometry — `r_black 56.16`, `r_violet
+49.14`, centres `105.62` apart, front ring `0.32` clear of the back edge — is recorded there
+too, along with the trap: **two faces in one disc restores the exact Fidelius circle and throws
+the distinction away.** Judge a redraw at 16 px, not at 128.
+
+The stale `Checksum` those four SVGs left in `backend/resources.php` is **not a defect and needs
+no action** — `_acb_apply_patches` pass 2 recomputes SRI for every overlaid file from the staged
+bytes, SVGs included, so the committed value is a starting point exactly as it is for the theme.
+Confirmed by reading the loop, which is driven by `patched[]`, not by a fixed list.
+
+**The comment-audit commits were diffed file by file: comment-only, zero behaviour change.**
+`listen_route.js`, `server.js`, `socks5.js` and `tor_route.js` were rewrapped and two of them had
+a stale parenthetical corrected ("R7 clamped it to 128 KB" → "R7 dropped the *default* to 128
+KB", which is what R7 actually did). No executable line moved.
+
+**Verified 2026-08-24, on the tree as it now stands:** `bash -n` 5/5 · `node --check` 9/9 ·
+`node --test` **78 pass / 0 fail** · `sha256sum -c vendor/SHA256SUMS` 274/274, zero mismatches ·
+`git status --short -- web/052_accio/vendor/` empty · the two brand phrase maps parsed out of
+`backend/language.php` and `scripts/language.js` and compared as ordered pairs — **12 entries
+each, identical, same order** · no `TODO`/`FIXME`/stub anywhere in the product · working tree
+clean.
+
+**The standing position is unchanged: nothing has ever run on a VPS.**

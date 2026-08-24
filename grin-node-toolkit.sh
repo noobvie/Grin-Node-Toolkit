@@ -19,6 +19,19 @@ BOLD='\033[1m'
 DIM='\033[2m'
 RESET='\033[0m'
 
+# ─── Root guard ───────────────────────────────────────────────────────────────
+# Every script in this toolkit writes under /opt/grin, /etc/nginx, /etc/cron.d or
+# /etc/systemd — all root-only. Catching it here means one clear message at the
+# front door instead of each script failing its own way further in (Script 07
+# used to die on a bare `mkdir: Permission denied` with no other output).
+if [[ $EUID -ne 0 ]]; then
+    echo -e "${RED}${BOLD}[ERROR]${RESET} The Grin Node Toolkit must be run as root."
+    echo -e "  Re-run with sudo:  ${BOLD}sudo $0${RESET}"
+    echo -e "  ${DIM}Every script here writes to /opt/grin, /etc/nginx or /etc/cron.d.${RESET}"
+    echo -e "  ${DIM}Nothing was changed.${RESET}"
+    exit 1
+fi
+
 # Shared handler for Rocky Linux and AlmaLinux older than version 10.
 # $1 = os_id (rocky|almalinux)  $2 = os_name (pretty name)
 upgrade_rhel_clone_elevate() {
@@ -260,7 +273,7 @@ show_header() {
     echo " ╚██████╔╝██║  ██║██║██║ ╚████║"
     echo "  ╚═════╝ ╚═╝  ╚═╝╚═╝╚═╝  ╚═══╝"
     echo -e "${RESET}"
-    echo -e "${BOLD} Grin Node Toolkit v2026.08.23${RESET}"
+    echo -e "${BOLD} Grin Node Toolkit v2026.08.30${RESET}"
     echo -e "${YELLOW} Keeping Grin shining bright...${RESET}"
     echo ""
     echo -e "${DIM}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"

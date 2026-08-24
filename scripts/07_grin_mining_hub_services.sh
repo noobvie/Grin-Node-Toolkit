@@ -49,6 +49,18 @@ BOLD='\033[1m'
 DIM='\033[2m'
 RESET='\033[0m'
 
+# ─── Root guard ───────────────────────────────────────────────────────────────
+# The hub itself reads root-only paths (/etc/nginx, /opt/grin/conf) for its
+# solo-vs-pool detection, and both children need root outright. Fail here rather
+# than letting the detection silently come back "none yet" and then dying inside
+# the child. Each child keeps its own guard for a direct launch.
+if [[ $EUID -ne 0 ]]; then
+    echo -e "${RED}${BOLD}[ERROR]${RESET} The Grin mining hub must be run as root."
+    echo -e "  Re-run with sudo:  ${BOLD}sudo $0${RESET}"
+    echo -e "  ${DIM}Nothing was changed.${RESET}"
+    exit 1
+fi
+
 SOLO_SCRIPT="$SCRIPT_DIR/07_grin_mining_solo.sh"
 PUBLIC_SCRIPT="$SCRIPT_DIR/07_grin_mining_public_pool.sh"
 
@@ -274,7 +286,7 @@ hub_status_line() {
 show_menu() {
     clear
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo -e "${BOLD}${CYAN}  Grin Mining Services${RESET} ${YELLOW}(IN DEVELOPMENT)${RESET}"
+    echo -e "${BOLD}${CYAN}  Grin Mining Services${RESET}"
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
     echo ""
     hub_status_line

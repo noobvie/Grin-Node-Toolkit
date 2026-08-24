@@ -2594,6 +2594,17 @@ _rc_prompt() { local __v="$1" __p="$2" __d="$3" __t; echo -ne "  $__p [$__d]: ";
 menu_remote_add() {
     local sk al host port key rdir bw
     echo ""
+    # Say it before the eight prompts, not after the connection test at the end.
+    # Adding a mirror whose key is not installed yet is allowed — the config is
+    # just text and the copy is not running now — but it ends in a failed test,
+    # and a failed test with no explanation is what sends an operator looking for
+    # a bug that is not there.
+    if ! _rc_key_present "$RC_KEY_DEFAULT"; then
+        sched_warn "No SSH key on this server yet — set one up with menu item 1 first."
+        echo -e "  ${DIM}You can still add the mirror now, but its connection test will fail${RESET}"
+        echo -e "  ${DIM}until the key exists here and is installed on that host.${RESET}"
+        echo ""
+    fi
     echo -e "  ${BOLD}Which archive does this mirror serve?${RESET}"
     echo -e "    1) fullmain    2) prunemain    3) prunetest"
     echo -ne "  Select [1-3]: "; read -r sk
@@ -2602,7 +2613,7 @@ menu_remote_add() {
     _rc_prompt al   "Short name for this mirror" "m$(date +%s | tail -c 4)"
     _rc_prompt host "SSH host (user@ip)"         "root@"
     _rc_prompt port "SSH port"                   "22"
-    _rc_prompt key  "SSH key path"               "/root/.ssh/grin_share_ed25519"
+    _rc_prompt key  "SSH key path"               "$RC_KEY_DEFAULT"
     # Defaulted from the site_key, never computed from the node type + network:
     # that arithmetic is what produced 'prunedtest' in the legacy config.
     _rc_prompt rdir "Remote web dir"             "/var/www/$sk"
@@ -2613,7 +2624,11 @@ menu_remote_add() {
         sched_success "Mirror '$al' added for $sk."
         echo ""
         echo -e "  ${DIM}Testing the connection...${RESET}"
-        rc_target_test "$line" || sched_warn "Add succeeded, but the mirror is not reachable yet."
+        if ! rc_target_test "$line"; then
+            sched_warn "Added, but the mirror is not reachable yet."
+            echo -e "  ${DIM}Nothing is broken — the entry is saved. Go to menu item 1 (SSH${RESET}"
+            echo -e "  ${DIM}access) and run steps 2 and 3 for ${host}, then re-test with item 3.${RESET}"
+        fi
     else
         sched_error "Could not add the mirror."
     fi
@@ -2668,52 +2683,334 @@ menu_remote_schedule() {
     echo ""; echo "Press Enter to continue..."; read -r
 }
 
-menu_remote_keys() {
-    local kp="/root/.ssh/grin_share_ed25519"
+# ---------------------------------------------------------------------------
+# SSH access — the FIRST thing an operator does in this menu
+# ---------------------------------------------------------------------------
+# The order used to be wrong, and it cost every new operator the same hour.
+# "Add a mirror" was option 1 and "SSH key" was option 6, so the path the menu
+# invited was: add a mirror -> watch its automatic connection test fail -> go
+# looking for what was missing. Worse, the key screen built its ssh-copy-id
+# lines by reading the CONFIGURED mirrors, so on a fresh box — the only box
+# where it is actually needed — it printed a key and no instructions at all.
+#
+# Access is now step 1 and stands on its own: it asks for the host itself
+# instead of requiring one to already be in the config, and it names the machine
+# each command belongs on. The most common newbie failure here is running a step
+# on the wrong box (generating a second key on the mirror, or pasting the
+# PRIVATE half into authorized_keys), so every line says THIS SERVER or THE
+# MIRROR rather than leaving it to be inferred.
+#
+# The password rule is unchanged and load-bearing: this script NEVER reads the
+# mirror's password. ssh-copy-id is run on the operator's terminal and does its
+# own prompting, so the secret goes from the keyboard to ssh and never through a
+# shell variable, the session log or `ps`.
+RC_KEY_DEFAULT="/root/.ssh/grin_share_ed25519"
+
+# Both halves, because either one alone is useless: the private half without the
+# .pub cannot be installed anywhere, and the .pub without the private half
+# cannot log in. ssh-keygen writes them together, but a half-copied /root/.ssh
+# from an old box arrives with only one of them.
+_rc_key_present() { [ -f "$1" ] && [ -f "${1}.pub" ]; }
+
+# Step 1 — on THIS SERVER. Idempotent by refusal, not by overwrite: an existing
+# key is never regenerated, because a new one would silently orphan every mirror
+# that already trusts the old public half, and that failure would only surface at
+# the next unattended copy.
+_rc_key_create() {
+    local kp="$1" a
     echo ""
-    if [ -f "$kp" ]; then
-        echo -e "  Key already exists: ${DIM}$kp${RESET}"
-    else
-        echo -ne "  Generate ${BOLD}$kp${RESET}? [Y/n]: "; read -r a
-        if [[ "${a,,}" != "n" ]]; then
-            mkdir -p /root/.ssh && chmod 700 /root/.ssh
-            if ssh-keygen -t ed25519 -N "" -f "$kp" -C "grin-share@$(hostname)" >/dev/null 2>&1; then
-                sched_success "Created $kp"
-            else
-                sched_error "ssh-keygen failed."
-            fi
+    echo -e "  ${BOLD}Step 1 · on THIS SERVER — create the key${RESET}"
+    echo ""
+    if _rc_key_present "$kp"; then
+        sched_info "The key already exists — nothing to do."
+        echo -e "  ${DIM}private half: ${kp}${RESET}"
+        echo -e "  ${DIM}public half:  ${kp}.pub   (this is the one that goes on a mirror)${RESET}"
+        echo ""
+        echo -e "  ${DIM}It is deliberately NOT regenerated. A new key would leave every mirror${RESET}"
+        echo -e "  ${DIM}that already trusts this one locked out, and you would only find out${RESET}"
+        echo -e "  ${DIM}at the next scheduled copy.${RESET}"
+        return 0
+    fi
+    if [ -f "$kp" ] || [ -f "${kp}.pub" ]; then
+        sched_warn "Only half of the key pair is present at $kp"
+        echo -e "  ${DIM}Move both files aside and run this step again — ssh-keygen will not${RESET}"
+        echo -e "  ${DIM}write over an existing file, and half a pair can never log in.${RESET}"
+        return 1
+    fi
+    echo -e "  This creates ${BOLD}${kp}${RESET} on this machine."
+    echo -e "  ${DIM}No passphrase: cron has no keyboard to type one into. That is why the${RESET}"
+    echo -e "  ${DIM}mirror-side hardening on menu item 5 matters.${RESET}"
+    echo ""
+    echo -ne "  Create it now? [Y/n]: "; read -r a
+    if [[ "${a,,}" == "n" ]]; then
+        sched_info "Skipped."
+        return 1
+    fi
+    mkdir -p "$(dirname "$kp")" && chmod 700 "$(dirname "$kp")" \
+        || { sched_error "Could not create $(dirname "$kp")."; return 1; }
+    if ssh-keygen -t ed25519 -N "" -f "$kp" -C "grin-share@$(hostname)" >/dev/null 2>&1; then
+        sched_success "Created $kp and ${kp}.pub"
+        return 0
+    fi
+    sched_error "ssh-keygen failed."
+    return 1
+}
+
+# Ask which mirror a step applies to. Offers the configured ones as a numbered
+# list AND accepts a typed host, because the whole point of moving this above
+# "Add a mirror" is that it has to work when nothing is configured yet.
+# Answers in RC_KH_HOST / RC_KH_PORT. Returns 1 if cancelled.
+RC_KH_HOST=""; RC_KH_PORT=""
+_rc_ask_mirror_host() {
+    local line n sel
+    local -a lines=()
+    RC_KH_HOST=""; RC_KH_PORT=""
+    while IFS= read -r line; do lines+=("$line"); done < <(rc_targets_list)
+    echo ""
+    if [ ${#lines[@]} -gt 0 ]; then
+        echo -e "  ${BOLD}Which mirror?${RESET}"
+        for n in "${!lines[@]}"; do
+            printf "    %d) %-12s %s   port %s\n" "$((n+1))" \
+                "$(rc_target_field "${lines[$n]}" 2)" \
+                "$(rc_target_field "${lines[$n]}" 3)" \
+                "$(rc_target_field "${lines[$n]}" 4)"
+        done
+        printf "    %d) %s\n" "$(( ${#lines[@]} + 1 ))" "a host that is not in the list yet"
+        echo -ne "  Select [1-$(( ${#lines[@]} + 1 )), 0 = cancel]: "; read -r sel
+        case "$sel" in
+            ''|*[!0-9]*|0) return 1 ;;
+        esac
+        if [ "$sel" -ge 1 ] && [ "$sel" -le ${#lines[@]} ]; then
+            RC_KH_HOST="$(rc_target_field "${lines[$((sel-1))]}" 3)"
+            RC_KH_PORT="$(rc_target_field "${lines[$((sel-1))]}" 4)"
+            return 0
         fi
+        [ "$sel" -eq $(( ${#lines[@]} + 1 )) ] || return 1
     fi
-    if [ -f "${kp}.pub" ]; then
-        echo ""
-        echo -e "  ${BOLD}Install it on each mirror (asks for that host's password, once):${RESET}"
-        local line h p
-        while IFS= read -r line; do
-            h="$(rc_target_field "$line" 3)"; p="$(rc_target_field "$line" 4)"
-            echo -e "    ${DIM}ssh-copy-id -i ${kp}.pub -p $p $h${RESET}"
-        done < <(rc_targets_list)
-        echo ""
-        echo -e "  ${DIM}Run those from a terminal — the password must never go through this script.${RESET}"
-        echo ""
-        echo -e "  ${BOLD}${YELLOW}Worth doing on each mirror:${RESET}"
-        echo -e "  ${DIM}This key has no passphrase, because cron cannot type one. So whoever${RESET}"
-        echo -e "  ${DIM}holds it holds whatever account it opens — and if you pointed the${RESET}"
-        echo -e "  ${DIM}mirror at root@, that is root on every mirror you have. Two changes${RESET}"
-        echo -e "  ${DIM}on the mirror side cost nothing and cap the blast radius:${RESET}"
-        echo ""
-        echo -e "    ${DIM}1. give the mirror a dedicated user that owns only its web dir:${RESET}"
-        echo -e "       ${DIM}useradd -m -s /bin/bash grinmirror${RESET}"
-        echo -e "       ${DIM}chown -R grinmirror: /var/www/<site_key>${RESET}"
-        echo -e "       ${DIM}...then set this mirror's host to grinmirror@<ip>${RESET}"
-        echo ""
-        echo -e "    ${DIM}2. restrict the key in that user's ~/.ssh/authorized_keys, so a${RESET}"
-        echo -e "       ${DIM}stolen copy cannot open a shell or forward a port:${RESET}"
-        echo -e "       ${DIM}restrict,no-agent-forwarding,no-port-forwarding ssh-ed25519 AAAA...${RESET}"
-        echo ""
-        echo -e "  ${DIM}The copy needs mkdir, rsync, sed and mv inside that one directory and${RESET}"
-        echo -e "  ${DIM}nothing else, so it keeps working under both.${RESET}"
+    _rc_prompt RC_KH_HOST "Mirror SSH host (user@ip)" "root@"
+    _rc_prompt RC_KH_PORT "Mirror SSH port"           "22"
+    # "root@" is the prompt's own default and is not a host. Catching it here is
+    # the difference between a clear refusal and ssh spending 15s resolving "".
+    case "$RC_KH_HOST" in
+        ''|*@) sched_error "No host given."; return 1 ;;
+    esac
+    case "$RC_KH_PORT" in
+        ''|*[!0-9]*) sched_error "Port must be a number."; return 1 ;;
+    esac
+    return 0
+}
+
+# Step 2 — run on THIS SERVER, but it is the one step that changes THE MIRROR.
+# Two routes, because ssh-copy-id only works where the mirror still accepts
+# password logins; a hardened VPS image with PasswordAuthentication off needs the
+# manual paste, and an operator who is not told that reads the failure as "the
+# key is broken" and regenerates it, which breaks the mirrors that did work.
+_rc_key_install() {
+    local kp="$1" host port a
+    echo ""
+    echo -e "  ${BOLD}Step 2 · install the public half on a mirror${RESET}"
+    if ! _rc_key_present "$kp"; then
+        sched_error "No key yet — do step 1 first."
+        return 1
     fi
-    echo ""; echo "Press Enter to continue..."; read -r
+    _rc_ask_mirror_host || return 1
+    host="$RC_KH_HOST"; port="$RC_KH_PORT"
+    echo ""
+    echo -e "  ${BOLD}How should it get onto ${host}?${RESET}"
+    echo -e "    ${GREEN}1${RESET}) Automatically, from here ${DIM}(asks for the mirror's password once)${RESET}"
+    echo -e "    ${GREEN}2${RESET}) Manually — show me what to run ${BOLD}on the mirror${RESET}"
+    echo -ne "  Select [1-2, 0 = cancel]: "; read -r a
+    case "$a" in
+        1) ;;
+        2) _rc_key_show_manual "$kp" "$host" "$port"; return 0 ;;
+        *) return 1 ;;
+    esac
+
+    if ! command -v ssh-copy-id >/dev/null 2>&1; then
+        sched_warn "ssh-copy-id is not installed on this server."
+        echo -e "  ${DIM}apt install openssh-client   /   dnf install openssh-clients${RESET}"
+        _rc_key_show_manual "$kp" "$host" "$port"
+        return 1
+    fi
+    echo ""
+    echo -e "  ${DIM}ssh-copy-id asks for ${host}'s password itself — this script never sees${RESET}"
+    echo -e "  ${DIM}it, stores it or logs it. If it refuses immediately, that mirror has${RESET}"
+    echo -e "  ${DIM}password logins disabled: use the manual route instead.${RESET}"
+    echo ""
+    echo -e "  ${DIM}\$ ssh-copy-id -i ${kp}.pub -p ${port} ${host}${RESET}"
+    echo ""
+    # No BatchMode here, deliberately: this is the one call in the whole remote
+    # path that has to be able to prompt.
+    if ssh-copy-id -o ConnectTimeout=15 -i "${kp}.pub" -p "$port" "$host"; then
+        sched_success "Public key installed on $host."
+        # The single most-asked question after this step, answered before it gets
+        # asked. A plain `ssh <host>` offers only the DEFAULT identity names —
+        # ~/.ssh/id_rsa, id_ecdsa, id_ed25519 — and this key is deliberately not
+        # one of them, so ssh never offers it and drops straight to a password
+        # prompt. That looks exactly like "ssh-copy-id did not work", and the
+        # usual reaction is to regenerate the key, which breaks the mirrors that
+        # WERE working. The key is fine; the test command was missing -i.
+        echo ""
+        echo -e "  ${BOLD}Testing it by hand? You must pass -i, or it will still ask for a password:${RESET}"
+        echo -e "    ${DIM}ssh -i ${kp} -p ${port} ${host}${RESET}"
+        echo ""
+        echo -e "  ${DIM}Plain 'ssh ${host}' only tries the default key names (id_rsa, id_ed25519).${RESET}"
+        echo -e "  ${DIM}This key is not one of those, so ssh never offers it and falls back to${RESET}"
+        echo -e "  ${DIM}the password — that is not a failed install. The copy always passes -i.${RESET}"
+        echo ""
+        echo -e "  ${DIM}Now run step 3 — installed and working are different claims.${RESET}"
+        return 0
+    fi
+    sched_error "ssh-copy-id did not complete."
+    echo -e "  ${DIM}Usual causes: wrong password, wrong port, the mirror refuses password${RESET}"
+    echo -e "  ${DIM}logins, or a firewall in between. The manual route below covers all of${RESET}"
+    echo -e "  ${DIM}those except the firewall.${RESET}"
+    _rc_key_show_manual "$kp" "$host" "$port"
+    return 1
+}
+
+# The manual route. Printed as a block to run ON THE MIRROR, with the public key
+# inline so there is nothing to look up — and with the private half named as the
+# thing that must never leave this server, because pasting the wrong file into
+# authorized_keys is the classic first mistake and it gives the key away.
+_rc_key_show_manual() {
+    local kp="$1" host="${2:-<mirror>}" port="${3:-22}" pub
+    pub="$(cat "${kp}.pub" 2>/dev/null)"
+    if [ -z "$pub" ]; then
+        sched_error "Cannot read ${kp}.pub — run step 1 first."
+        return 1
+    fi
+    echo ""
+    echo -e "  ${BOLD}Run this ${YELLOW}ON THE MIRROR${RESET}${BOLD} (${host}), as the user the copy will log in as:${RESET}"
+    echo ""
+    echo -e "${DIM}    mkdir -p ~/.ssh && chmod 700 ~/.ssh${RESET}"
+    # echo, not printf '%s\n': this line is itself printed through `echo -e`, so a
+    # backslash escape inside it has to survive TWO expansions to reach the
+    # operator's screen intact. It did not — the escape was consumed here and the
+    # command printed with a real line break through the middle of it, which
+    # pastes as two broken commands. echo supplies the newline on the mirror side
+    # and leaves nothing here to escape.
+    echo -e "${DIM}    echo '${pub}' >> ~/.ssh/authorized_keys${RESET}"
+    echo -e "${DIM}    chmod 600 ~/.ssh/authorized_keys${RESET}"
+    echo ""
+    echo -e "  ${YELLOW}That is the PUBLIC half (${kp}.pub) — safe to paste anywhere.${RESET}"
+    echo -e "  ${YELLOW}${kp} (no .pub) is the private half: it never leaves this server.${RESET}"
+    echo ""
+    echo -e "  ${DIM}Then come back to step 3 and verify — do not assume it worked.${RESET}"
+    return 0
+}
+
+# Step 3 — on THIS SERVER. The only thing that proves the setup: a key that
+# exists and a key that logs in are different claims.
+#
+# The probe itself lives in lib/03_lib_remote.sh (rc_ssh_login_probe), NOT here,
+# because "Test every configured mirror" has to run the identical command. When
+# each had its own copy they drifted — this one pinned unknown host keys and the
+# other could not, so the same mirror passed here and failed there with a
+# misleading message. Read the comment on rc_ssh_login_probe for why -i and
+# BatchMode=yes are both load-bearing.
+_rc_key_verify() {
+    local kp="$1" host port
+    echo ""
+    echo -e "  ${BOLD}Step 3 · on THIS SERVER — verify the login works${RESET}"
+    if ! _rc_key_present "$kp"; then
+        sched_error "No key yet — do step 1 first."
+        return 1
+    fi
+    _rc_ask_mirror_host || return 1
+    host="$RC_KH_HOST"; port="$RC_KH_PORT"
+    echo ""
+    echo -e "  ${DIM}\$ ssh -i ${kp} -p ${port} ${host}${RESET}"
+    echo -e "  ${DIM}Key only, no password fallback — so a pass here is a pass for cron too.${RESET}"
+    if rc_ssh_login_probe "$kp" "$port" "$host"; then
+        echo ""
+        sched_success "Key login works."
+        echo -e "  ${DIM}remote user: $(printf '%s\n' "$RC_SSH_PROBE_OUT" | sed -n 2p)${RESET}"
+        echo -e "  ${DIM}remote host: $(printf '%s\n' "$RC_SSH_PROBE_OUT" | sed -n 3p)${RESET}"
+        echo ""
+        echo -e "  ${DIM}That is everything the copy needs from SSH. Next: add the mirror${RESET}"
+        echo -e "  ${DIM}(item 2 on the previous screen) if it is not in the list yet.${RESET}"
+        echo ""
+        echo -e "  ${DIM}Keep the -i when you test by hand later: plain 'ssh ${host}' tries only${RESET}"
+        echo -e "  ${DIM}the default key names and will still ask for a password.${RESET}"
+        return 0
+    fi
+    echo ""
+    sched_error "Key login failed."
+    echo ""
+    printf '%s\n' "$RC_SSH_PROBE_OUT" | sed 's/^/    /'
+    echo ""
+    rc_ssh_explain_failure "$host" "$port" "$kp"
+    return 1
+}
+
+_rc_key_hardening_notes() {
+    echo ""
+    echo -e "  ${BOLD}${YELLOW}Worth doing on each mirror${RESET}"
+    echo ""
+    echo -e "  ${DIM}This key has no passphrase, because cron cannot type one. So whoever${RESET}"
+    echo -e "  ${DIM}holds it holds whatever account it opens — and if you pointed the${RESET}"
+    echo -e "  ${DIM}mirror at root@, that is root on every mirror you have. Two changes${RESET}"
+    echo -e "  ${DIM}on the mirror side cost nothing and cap the blast radius:${RESET}"
+    echo ""
+    echo -e "    ${DIM}1. give the mirror a dedicated user that owns only its web dir:${RESET}"
+    echo -e "       ${DIM}useradd -m -s /bin/bash grinmirror${RESET}"
+    echo -e "       ${DIM}chown -R grinmirror: /var/www/<site_key>${RESET}"
+    echo -e "       ${DIM}...then set this mirror's host to grinmirror@<ip>${RESET}"
+    echo ""
+    echo -e "    ${DIM}2. restrict the key in that user's ~/.ssh/authorized_keys, so a${RESET}"
+    echo -e "       ${DIM}stolen copy cannot open a shell or forward a port:${RESET}"
+    echo -e "       ${DIM}restrict,no-agent-forwarding,no-port-forwarding ssh-ed25519 AAAA...${RESET}"
+    echo ""
+    echo -e "  ${DIM}The copy needs mkdir, rsync, sed and mv inside that one directory and${RESET}"
+    echo -e "  ${DIM}nothing else, so it keeps working under both.${RESET}"
+    echo ""
+    echo "Press Enter to continue..."; read -r
+}
+
+menu_remote_keys() {
+    local kp="$RC_KEY_DEFAULT" choice s1
+    while true; do
+        clear
+        if _rc_key_present "$kp"; then s1="${GREEN}created${RESET}"; else s1="${YELLOW}not created yet${RESET}"; fi
+        echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+        echo -e "${BOLD}${CYAN}  SSH access — one-time setup, once per mirror${RESET}"
+        echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+        echo -e "  ${DIM}Two machines are involved:${RESET}"
+        echo -e "    ${BOLD}THIS SERVER${RESET}  the producer — builds the archive and sends the copy"
+        echo -e "    ${BOLD}THE MIRROR${RESET}   the target   — receives it and serves the download"
+        echo ""
+        echo -e "  ${DIM}You type every command below on ${RESET}${BOLD}THIS SERVER${RESET}${DIM}. Step 2 is the only one${RESET}"
+        echo -e "  ${DIM}that changes the mirror, and it can also just print what to paste there.${RESET}"
+        echo ""
+        echo -e "  Key on this server: ${DIM}${kp}${RESET}   [${s1}]"
+        echo ""
+        echo -e "  ${GREEN}1${RESET}) Step 1 — create the key here"
+        echo -e "  ${GREEN}2${RESET}) Step 2 — install the public half on a mirror"
+        echo -e "  ${GREEN}3${RESET}) Step 3 — verify the login works ${DIM}(key only, no password)${RESET}"
+        echo ""
+        echo -e "  ${CYAN}4${RESET}) Show the public key ${DIM}(to paste on a mirror by hand)${RESET}"
+        echo -e "  ${CYAN}5${RESET}) Recommended hardening on the mirror side"
+        echo ""
+        echo -e "  ${RED}0${RESET}) Back"
+        echo ""
+        echo -ne "${BOLD}Select [1-5 / 0]: ${RESET}"
+        read -r choice
+        case "$choice" in
+            1) _rc_key_create "$kp" || true
+               echo ""; echo "Press Enter to continue..."; read -r ;;
+            2) _rc_key_install "$kp" || true
+               echo ""; echo "Press Enter to continue..."; read -r ;;
+            3) _rc_key_verify "$kp" || true
+               echo ""; echo "Press Enter to continue..."; read -r ;;
+            4) _rc_key_show_manual "$kp" || true
+               echo ""; echo "Press Enter to continue..."; read -r ;;
+            5) _rc_key_hardening_notes || true ;;
+            0) break ;;
+            "") ;;
+            *) sched_warn "Invalid option."; sleep 1 ;;
+        esac
+    done
 }
 
 # Pick an existing mirror from a numbered list. Every other prompt in this menu
@@ -2753,11 +3050,19 @@ _rc_pick_target() {
     return 0
 }
 
+# The rows are listed in the order the work is actually done, which is not the
+# order they used to be in. SSH access is first because nothing below it can
+# succeed without it, and "Add a mirror" ends with an automatic connection test —
+# so under the old layout the very first thing a new operator did was watch a
+# test fail for a reason the menu had not mentioned yet, with the fix parked at
+# item 6. Keys are positional in this script (03 is not hub 05 or 08), so
+# reordering rows is allowed; what is not optional is the `|| true` on every
+# dispatch — this loop runs under `set -e`.
 menu_remote_setup() {
     load_nginx_config
     [ -f "$CONF_SSH" ] && load_ssh_config
     rc_migrate_legacy || true
-    local choice line sk al
+    local choice line
     while true; do
         clear
         echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
@@ -2768,12 +3073,15 @@ menu_remote_setup() {
         echo ""
         rc_status_table
         echo ""
-        echo -e "  ${GREEN}1${RESET}) Add a mirror"
-        echo -e "  ${GREEN}2${RESET}) Remove a mirror"
-        echo -e "  ${GREEN}3${RESET}) Enable / disable a mirror"
-        echo -e "  ${CYAN}4${RESET}) Test connection & identity"
-        echo -e "  ${CYAN}5${RESET}) Schedule the copy ${DIM}(N hours after the build)${RESET}"
-        echo -e "  ${CYAN}6${RESET}) SSH key — generate / install"
+        echo -e "  ${BOLD}Set up a mirror${RESET} ${DIM}— in this order${RESET}"
+        echo -e "  ${GREEN}1${RESET}) SSH access ${DIM}— create a key, install it on the mirror, verify${RESET}"
+        echo -e "  ${GREEN}2${RESET}) Add a mirror ${DIM}— do 1 for that host first${RESET}"
+        echo -e "  ${GREEN}3${RESET}) Test every configured mirror ${DIM}(connection + identity)${RESET}"
+        echo ""
+        echo -e "  ${BOLD}Manage${RESET}"
+        echo -e "  ${CYAN}4${RESET}) Enable / disable a mirror"
+        echo -e "  ${CYAN}5${RESET}) Remove a mirror"
+        echo -e "  ${CYAN}6${RESET}) Schedule the copy ${DIM}(N hours after the build)${RESET}"
         echo -e "  ${CYAN}7${RESET}) Remove a copy schedule"
         echo ""
         echo -e "  ${RED}0${RESET}) Back"
@@ -2781,13 +3089,16 @@ menu_remote_setup() {
         echo -ne "${BOLD}Select [1-7 / 0]: ${RESET}"
         read -r choice
         case "$choice" in
-            1) menu_remote_add || true ;;
-            2) if _rc_pick_target "Remove which mirror?"; then
-                   rc_target_remove "$RC_PICK_SK" "$RC_PICK_AL" \
-                       && sched_success "Removed $RC_PICK_AL." || sched_error "Not removed."
-                   sleep 1
-               fi ;;
-            3) if _rc_pick_target "Enable / disable which mirror?"; then
+            1) menu_remote_keys || true ;;
+            2) menu_remote_add || true ;;
+            3) echo ""
+               if [ -z "$(rc_targets_list)" ]; then
+                   sched_warn "No mirrors are configured yet — add one with item 2."
+               else
+                   while IFS= read -r line; do rc_target_test "$line" || true; done < <(rc_targets_list)
+               fi
+               echo ""; echo "Press Enter to continue..."; read -r ;;
+            4) if _rc_pick_target "Enable / disable which mirror?"; then
                    if [ "$RC_PICK_EN" = "true" ]; then
                        rc_target_set_enabled "$RC_PICK_SK" "$RC_PICK_AL" false \
                            && sched_success "Disabled $RC_PICK_AL." || sched_error "Failed."
@@ -2797,11 +3108,12 @@ menu_remote_setup() {
                    fi
                    sleep 1
                fi ;;
-            4) echo ""
-               while IFS= read -r line; do rc_target_test "$line" || true; done < <(rc_targets_list)
-               echo ""; echo "Press Enter to continue..."; read -r ;;
-            5) menu_remote_schedule || true ;;
-            6) menu_remote_keys || true ;;
+            5) if _rc_pick_target "Remove which mirror?"; then
+                   rc_target_remove "$RC_PICK_SK" "$RC_PICK_AL" \
+                       && sched_success "Removed $RC_PICK_AL." || sched_error "Not removed."
+                   sleep 1
+               fi ;;
+            6) menu_remote_schedule || true ;;
             7) menu_remote_unschedule || true ;;
             0) break ;;
             "") ;;

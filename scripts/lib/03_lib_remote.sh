@@ -686,18 +686,102 @@ rc_run_site_key() {
     return $rc
 }
 
+# ---------------------------------------------------------------------------
+# One SSH login test, shared by every interactive test path
+# ---------------------------------------------------------------------------
+# There used to be two, and they disagreed. Step 3 of the SSH-access screen ran
+# `ssh -i <key> -p <port> <host>` with StrictHostKeyChecking=accept-new; the
+# rc_target_test below ran the same command WITHOUT it, under BatchMode=yes —
+# and BatchMode cannot answer the "unknown host key" prompt. So testing a mirror
+# this box had never connected to failed on the HOST KEY, discarded ssh's own
+# explanation with 2>/dev/null, and printed "install the key once with
+# ssh-copy-id": a wrong diagnosis for a key that was already installed, pointing
+# the operator at the one step that was not the problem. One probe now serves
+# both paths, so the two cannot drift apart again.
+#
+# accept-new is for the INTERACTIVE test only. The copy itself keeps plain
+# RC_SSH_OPTS: pinning a first-contact host key is a decision a human takes here
+# in front of the result, not something an unattended job does at 03:00. Neither
+# path ever accepts a CHANGED key — accept-new still stops on that.
+RC_SSH_TEST_OPTS="${RC_SSH_TEST_OPTS:-$RC_SSH_OPTS -o StrictHostKeyChecking=accept-new}"
+
+# rc_ssh_login_probe <key> <port> <host>  -> RC_SSH_PROBE_OUT, rc 0/1
+#
+# The exact command the copy will use, and the exact one an operator should type
+# by hand. Two parts of it are load-bearing:
+#   -i <key>       ssh offers only the DEFAULT identity names (id_rsa, id_ecdsa,
+#                  id_ed25519) when this is missing. grin_share_ed25519 is none
+#                  of them, so a bare `ssh <host>` never offers the key at all
+#                  and falls through to a password prompt — which reads as a
+#                  failed install and invites regenerating the key, breaking
+#                  every mirror that was working.
+#   BatchMode=yes  removes the password fallback, so a pass here is a pass for
+#                  cron. Without it, ssh would prompt and a mirror holding NO
+#                  usable key could still "succeed".
+RC_SSH_PROBE_OUT=""
+rc_ssh_login_probe() {
+    local key="$1" port="$2" host="$3" rc=0
+    RC_SSH_PROBE_OUT=""
+    if [ ! -f "$key" ]; then
+        RC_SSH_PROBE_OUT="local key file not found: $key"
+        return 1
+    fi
+    # 2>&1, not 2>/dev/null: ssh's own wording is the only evidence there is
+    # about which of six unrelated things went wrong.
+    RC_SSH_PROBE_OUT=$(ssh $RC_SSH_TEST_OPTS -i "$key" -p "$port" "$host" \
+        'echo RC_SSH_OK; id -un; uname -n' 2>&1) || rc=$?
+    if [ "$rc" -eq 0 ] && printf '%s' "$RC_SSH_PROBE_OUT" | grep -q RC_SSH_OK; then
+        return 0
+    fi
+    return 1
+}
+
+# rc_ssh_explain_failure <host> <port> <key>
+#
+# Map ssh's wording onto the step that is actually missing. Printed with echo,
+# not rc_log: this is guidance for whoever is standing at the menu, and the
+# headline failure has already been logged by the caller. The colour vars are
+# defaulted so this still reads correctly if the lib is ever sourced without the
+# parent script's palette.
+rc_ssh_explain_failure() {
+    local host="$1" port="$2" key="$3" out="$RC_SSH_PROBE_OUT"
+    case "$out" in
+        *"local key file not found"*)
+            echo -e "    ${YELLOW:-}No key on THIS server${RESET:-} — SSH access screen, step 1." ;;
+        *"Host key verification failed"*|*"REMOTE HOST IDENTIFICATION HAS CHANGED"*)
+            echo -e "    ${YELLOW:-}The mirror's host key is unknown or has CHANGED.${RESET:-}"
+            echo -e "    ${DIM:-}Run step 3 on the SSH access screen to pin it, or if the change${RESET:-}"
+            echo -e "    ${DIM:-}was expected:  ssh-keygen -R '[${host#*@}]:${port}'${RESET:-}" ;;
+        *"Permission denied"*)
+            echo -e "    ${YELLOW:-}The mirror answered but rejected the key.${RESET:-} In order of likelihood:"
+            echo -e "    ${DIM:-}1. it is not installed for ${host%%@*} (a different user was used)${RESET:-}"
+            echo -e "    ${DIM:-}2. mirror-side perms — sshd ignores authorized_keys silently unless${RESET:-}"
+            echo -e "    ${DIM:-}   ~ is not group-writable, ~/.ssh is 700 and authorized_keys 600${RESET:-}"
+            echo -e "    ${DIM:-}3. PubkeyAuthentication no, or AuthorizedKeysFile moved, in sshd_config${RESET:-}"
+            echo -e "    ${DIM:-}install:  ssh-copy-id -i ${key}.pub -p ${port} ${host}${RESET:-}"
+            echo -e "    ${DIM:-}diagnose: ssh -v -i ${key} -p ${port} ${host}${RESET:-}" ;;
+        *"Connection refused"*)
+            echo -e "    ${YELLOW:-}Nothing is listening on port ${port}${RESET:-} — wrong port, or sshd is down." ;;
+        *"timed out"*|*"Timeout"*)
+            echo -e "    ${YELLOW:-}No answer at all${RESET:-} — a firewall in between, or the wrong IP."
+            echo -e "    ${DIM:-}Ask the mirror's provider about inbound port ${port}.${RESET:-}" ;;
+        *"Could not resolve"*|*"Name or service not known"*)
+            echo -e "    ${YELLOW:-}The hostname does not resolve${RESET:-} — check the spelling." ;;
+        *)
+            echo -e "    ${DIM:-}ssh said: $(printf '%s' "$out" | tr '\n' ' ' | cut -c1-160)${RESET:-}" ;;
+    esac
+    return 0
+}
+
 rc_target_test() {
     local line="$1" sk al host port key rdir bw en
     IFS='|' read -r sk al host port key rdir bw en <<< "$line"
-    if [ ! -f "$key" ]; then
-        rc_err "$al: key not found at $key"; return 1
-    fi
-    if ! ssh $RC_SSH_OPTS -i "$key" -p "$port" "$host" exit 2>/dev/null; then
-        rc_err "$al: cannot connect to $host:$port with $key"
-        rc_log "    install the key once with:  ssh-copy-id -i ${key}.pub -p $port $host"
+    if ! rc_ssh_login_probe "$key" "$port" "$host"; then
+        rc_err "$al: cannot log in to $host:$port with $key"
+        rc_ssh_explain_failure "$host" "$port" "$key"
         return 1
     fi
-    rc_log "$al: connection OK"
+    rc_log "$al: connection OK (remote user $(printf '%s\n' "$RC_SSH_PROBE_OUT" | sed -n 2p))"
     rc_remote_identity "$line" || return 1
     return 0
 }

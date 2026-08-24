@@ -1,6 +1,6 @@
 // =============================================================================
 // Grin Node Status Page — node-status.js
-// web/04/public_html/js/node-status.js
+// web/04_node_api/public_html/js/node-status.js
 //
 // Calls two Grin foreign API (v2) methods — both read-only, auth handled transparently by nginx:
 //   get_tip     → height, total_difficulty, latest block hash

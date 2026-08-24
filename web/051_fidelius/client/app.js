@@ -163,14 +163,21 @@ async function refreshDashboardSync() {
     const info   = q('nodeSvcInfo');
     if (!banner) return;
     try {
-        const d = await apiGet('/api/node/sync-detail');
-        if (dot)  dot.className = 'svc-dot ' + (d.reachable && d.synced ? 'dot-on' : (d.reachable ? 'dot-warn' : 'dot-off'));
-        if (info) info.textContent = !d.reachable
-            ? 'offline'
-            : (d.synced
-                ? 'h ' + (d.height ?? '?') + ' · ' + (d.peers ?? 0) + ' peers'
-                : (d.sync_label || d.sync_status));
-        if (!d.reachable || d.synced) { banner.style.display = 'none'; return; }
+        const d = await apiGet(nodeQ('/api/node/sync-detail'));
+        // synced is null on a public node — the state is not visible from
+        // outside, which is not the same as "not synced". Treating null as false
+        // put a green-dot node behind a permanent amber warning and raised the
+        // "Node syncing" banner on every wallet using a public node.
+        const ok = d.reachable;
+        if (dot)  dot.className = 'svc-dot ' + (!ok ? 'dot-off' : (d.synced === false ? 'dot-warn' : 'dot-on'));
+        if (info) info.textContent = !ok
+            ? (d.node_url ? 'offline · ' + nodeShortLabel(d) : 'offline')
+            : (d.sync_visible === false
+                ? 'public · h ' + (d.height ?? '?')
+                : (d.synced
+                    ? 'h ' + (d.height ?? '?') + ' · ' + (d.peers ?? 0) + ' peers'
+                    : (d.sync_label || d.sync_status)));
+        if (!ok || d.synced !== false) { banner.style.display = 'none'; return; }
         banner.style.display = '';
         const label = q('syncBannerLabel');
         const fill  = q('syncBannerFill');
@@ -186,7 +193,14 @@ async function refreshDashboardSync() {
             if (fill) fill.style.width = '0%';
             if (det)  det.textContent = (d.peers ?? 0) + ' peers · waiting for sync progress';
         }
-    } catch { banner.style.display = 'none'; }
+    } catch {
+        // Our own server is unreachable, so the last-known dot is now a claim we
+        // cannot support. Drop it to off rather than leave a stale green light
+        // on the services row.
+        banner.style.display = 'none';
+        if (dot)  dot.className = 'svc-dot dot-off';
+        if (info) info.textContent = 'unavailable';
+    }
 }
 
 async function refreshDashboardPeers() {
@@ -195,7 +209,18 @@ async function refreshDashboardPeers() {
     const list = q('peerList');
     if (!list) return;
     try {
-        const d = await apiGet('/api/node/peers');
+        const d = await apiGet(nodeQ('/api/node/peers'));
+        // get_connected_peers is Owner-only, so a wallet on a public node cannot
+        // have a peer list. That used to render as "Error: HTTP 403" — a healthy
+        // node described to the operator as broken.
+        if (d.available === false) {
+            // reason = "not visible from here" (a fact about a public node).
+            // error  = the local node genuinely failed to answer, which IS
+            // actionable — don't swallow it into the same neutral sentence.
+            const why = d.reason || (d.error ? 'Peer list unavailable — ' + d.error : 'Peer list unavailable');
+            list.innerHTML = '<div class="peer-list-empty">' + esc(why) + '.</div>';
+            return;
+        }
         if (!d.peers || !d.peers.length) {
             list.innerHTML = '<div class="peer-list-empty">No connected peers.</div>';
             return;
@@ -952,30 +977,107 @@ q('ownerBtn').addEventListener('click', async () => {
     } catch (e) { alert(e.message); }
 });
 
-// ── Node status bar (wallet dashboard) ───────────────────────────────────────
-async function refreshNodeStatus() {
-    const bar = q('nodeStatus'), txt = q('nodeBarText');
+// ── Node identity strip (wallet dashboard) ───────────────────────────────────
+// Every node endpoint is scoped to the OPEN wallet — see resolveWalletNode() in
+// server.js. Without the ?wallet= argument the server answers for the first
+// wallet ever registered, which is how this bar came to describe a node the open
+// wallet never talks to.
+function nodeQ(pathname) {
+    return pathname + (curWallet ? (pathname.includes('?') ? '&' : '?') + 'wallet=' + encodeURIComponent(curWallet) : '');
+}
+
+// Two node URLs naming the same node, compared without tripping over a trailing
+// slash or a capitalised host. The server normalises what it resolves; the
+// PUBLIC_NODES literals below are ours, but a hand-edited toml is not.
+function sameNodeUrl(a, b) {
+    if (!a || !b) return false;
+    const n = s => String(s).trim().replace(/\/+$/, '').toLowerCase();
+    return n(a) === n(b);
+}
+
+// The URL a node is reached at, short enough for a status line. Host alone for a
+// public node; a local one keeps its port, since every local node shares the same
+// host and the port is what distinguishes mainnet from testnet.
+function nodeShortLabel(d) {
+    if (!d || !d.node_url) return '—';
+    // u.host is hostname:port and drops the port when it is the scheme default —
+    // exactly the label wanted, and it reports the host actually configured
+    // rather than rewriting "localhost" to 127.0.0.1 as if we had checked.
     try {
-        const d = await apiGet('/api/node/status');
+        const u = new URL(d.node_url);
+        return d.node_type === 'local' ? (u.host || d.node_url) : (u.hostname || d.node_url);
+    } catch { return d.node_url; }
+}
+
+function renderNodeDrift(d) {
+    const el = q('nodeDriftWarn');
+    if (!el) return;
+    if (!d || !d.drift) { el.style.display = 'none'; return; }
+    // The wallet binary reads the toml; this UI wrote the registry. When they
+    // disagree the wallet is scanning a node the operator did not pick, so say
+    // which one is actually in force rather than quietly showing one of them.
+    el.style.display = '';
+    el.innerHTML = '<span class="locked-chip-text"><strong>Node setting mismatch.</strong> '
+        + 'grin-wallet.toml points at <code>' + esc(d.drift.toml) + '</code> and is what this wallet uses; '
+        + 'this app has <code>' + esc(d.drift.registry) + '</code> on record. '
+        + 'Pick a node on the Node tab to set both.</span>';
+}
+
+async function refreshNodeStatus() {
+    const bar = q('nodeStatus'), txt = q('nodeBarText'), chip = q('nodeBarType');
+    if (!bar || !txt) return;
+    try {
+        const d = await apiGet(nodeQ('/api/node/status'));
+        renderNodeDrift(d);
+        if (chip) {
+            if (d.node_type) {
+                chip.style.display = '';
+                chip.className   = 'node-bar-type ' + (d.node_type === 'local' ? 'local' : 'public');
+                chip.textContent = d.node_type === 'local' ? 'Local' : 'Public';
+            } else { chip.style.display = 'none'; }
+        }
         if (!d.reachable) {
             bar.className = 'node-bar offline';
-            txt.textContent = (d.node_type === 'local' ? 'LOCAL NODE' : d.node_url) + '  OFFLINE';
+            txt.textContent = [nodeShortLabel(d), 'UNREACHABLE'].join('  \xb7  ');
             return;
         }
         // A public node answers only get_tip, so peers and sync state come back
         // null — "not available", not "zero". Rendering them would claim an idle
         // node, and d.sync_status.toUpperCase() on null throws into the catch
         // below, which paints a perfectly healthy node as UNREACHABLE.
-        const known  = d.sync_status != null;
+        const known  = d.sync_visible && d.sync_status != null;
         const synced = known ? d.sync_status === 'no_sync' : true;
         bar.className = 'node-bar ' + (synced ? 'online' : 'syncing');
-        const label = d.node_type === 'local' ? 'LOCAL NODE' : (new URL(d.node_url).hostname || d.node_url);
-        const parts = [label, 'HEIGHT ' + Number(d.height).toLocaleString(),
-                       d.connections > 0 ? d.connections + ' PEERS' : '',
-                       !known ? '' : (synced ? 'SYNCED' : d.sync_status.toUpperCase().replace(/_/g,' '))].filter(Boolean);
+        const parts = [nodeShortLabel(d),
+                       d.height > 0 ? 'HEIGHT ' + Number(d.height).toLocaleString() : '',
+                       // 0 peers is the single most useful thing this bar can say
+                       // about a local node — it cannot sync and it cannot
+                       // broadcast — so print it rather than treat 0 as "nothing
+                       // to report". null is different: a public node never tells
+                       // us, and printing "0 PEERS" there would invent an outage.
+                       d.connections == null ? '' : d.connections + ' PEERS',
+                       known ? (synced ? 'SYNCED' : d.sync_status.toUpperCase().replace(/_/g,' '))
+                             : 'SYNC STATE NOT VISIBLE'].filter(Boolean);
         txt.textContent = parts.join('  \xb7  ');
-    } catch { bar.className = 'node-bar offline'; txt.textContent = 'NODE UNREACHABLE'; }
+    } catch {
+        // This is OUR server failing, not the node — so nothing on the strip is
+        // known any more. Clearing the chip and the drift notice matters: both
+        // describe a specific wallet's node, and leaving them up while the answer
+        // is unavailable is how a stale "Local" badge outlives the wallet that
+        // earned it (the whole class of bug this strip was rebuilt to end).
+        bar.className = 'node-bar offline';
+        txt.textContent = 'NODE UNREACHABLE';
+        if (chip) chip.style.display = 'none';
+        renderNodeDrift(null);
+    }
 }
+
+// "Change" goes where the node choice actually lives, rather than leaving the
+// operator to discover that the Node tab is the place.
+document.addEventListener('DOMContentLoaded', () => {
+    const btn = q('nodeBarChangeBtn');
+    if (btn) btn.addEventListener('click', () => switchTab('node'));
+});
 
 // ── Address copy ──────────────────────────────────────────────────────────────
 function copyAddr(addrId, msgId) {
@@ -1732,8 +1834,59 @@ const PUBLIC_NODES = {
               'https://testapi.onlygrins.com','https://testnet.grincoin.org','https://test.gri.mw'],
 };
 
+// The node the OPEN wallet actually uses, as the server resolves it. The page
+// used to mark "selected" from the registry's nodeUrl, which grin-wallet does
+// not read — so a wallet whose toml said otherwise had the wrong row lit.
+let nodeTabInUse = null;
+
+const LOCAL_NODE_URL = { mainnet: 'http://127.0.0.1:3413', testnet: 'http://127.0.0.1:13413' };
+
+// Resolve which node the open wallet uses, then repaint the parts that depend on
+// it. Kept separate from the card probes so neither waits on the other: a node
+// that is down costs the status call its full 5s timeout, and this runs on a 30s
+// timer — awaiting it first left the whole tab blank for five of every thirty
+// seconds, on exactly the screen an operator opens BECAUSE the node is down.
+async function refreshNodeTabInUse() {
+    if (!curWallet) { nodeTabInUse = null; return; }
+    try { nodeTabInUse = await apiGet(nodeQ('/api/node/status')); } catch { nodeTabInUse = null; }
+}
+
+// "Local Node ● SYNCED" says nothing about whether the open wallet is USING it —
+// a wallet on a public node sat under a green local card and read as connected
+// to it. Repainted on its own so a slow status call never blocks the cards.
+function renderLocalInUse(net) {
+    const cap   = net === 'mainnet' ? 'Mainnet' : 'Testnet';
+    const useEl = q('nodeLocal' + cap + 'Use');
+    const useBtn = q('nodeLocal' + cap + 'UseBtn');
+    if (useEl) {
+        const inUse = !!nodeTabInUse && nodeTabInUse.node_type === 'local' && nodeTabInUse.network === net;
+        useEl.style.display = curWallet ? '' : 'none';
+        useEl.className     = 'node-inuse-badge' + (inUse ? ' on' : '');
+        useEl.textContent   = inUse ? 'in use by ' + curWallet : 'not used by ' + (curWallet || 'this wallet');
+        // The badge truncates a long wallet name, so the tooltip carries it in
+        // full — always, not only in the "not used" case.
+        useEl.title         = useEl.textContent
+            + (inUse ? '' : ' — press [ USE ] to point it at the local ' + net + ' node');
+    }
+    if (useBtn) {
+        // No wallet open means nothing to point at a node — useNode() would only
+        // raise an alert, so don't offer the button at all.
+        useBtn.style.display = curWallet ? '' : 'none';
+        if (!useBtn.dataset.bound) {
+            useBtn.dataset.bound = '1';
+            useBtn.addEventListener('click', () => useNode(LOCAL_NODE_URL[net], net));
+        }
+    }
+}
+
 async function initNodeTab() {
-    await Promise.all([loadLocalNode('mainnet'), loadLocalNode('testnet')]);
+    renderLocalInUse('mainnet'); renderLocalInUse('testnet');
+    await Promise.all([
+        loadLocalNode('mainnet'),
+        loadLocalNode('testnet'),
+        refreshNodeTabInUse(),
+    ]);
+    renderLocalInUse('mainnet'); renderLocalInUse('testnet');
     pingPublicNodes('mainnet');
     pingPublicNodes('testnet');
 }
@@ -1771,11 +1924,13 @@ function pingPublicNodes(net) {
     if (!listEl) return;
     const curW     = allWallets.find(x => x.name === curWallet);
     const curNet   = curW?.network;
-    const curUrl   = curW?.nodeUrl || null;
+    // Authoritative resolved URL (toml first), not the registry copy — those two
+    // drift, and the wallet obeys the toml.
+    const curUrl   = nodeTabInUse?.node_url || curW?.nodeUrl || null;
 
     listEl.innerHTML = PUBLIC_NODES[net].map(url => {
         const host       = new URL(url).hostname;
-        const isSelected = curNet === net && url === curUrl;
+        const isSelected = curNet === net && sameNodeUrl(url, curUrl);
         return '<div class="node-tab-row' + (isSelected ? ' selected' : '') + '" data-url="' + esc(url) + '" data-net="' + net + '">'
             + '<span class="node-select-dot ' + (isSelected ? 'on' : 'off') + '">' + (isSelected ? '●' : '○') + '</span>'
             + '<span class="node-tab-host">' + esc(host) + '</span>'
@@ -1825,6 +1980,10 @@ async function useNode(url, net) {
         await apiPost('/api/wallet/node', { walletName: curWallet, nodeUrl: url });
         await refreshWallets();
         refreshNodeStatus();
+        // Re-resolve rather than assume the write landed where we think — this
+        // is the same registry/toml pair that drifts.
+        await refreshNodeTabInUse();
+        renderLocalInUse('mainnet'); renderLocalInUse('testnet');
         pingPublicNodes('mainnet');
         pingPublicNodes('testnet');
     } catch (e) { alert('Failed: ' + e.message); }

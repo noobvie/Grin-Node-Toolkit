@@ -166,7 +166,8 @@ class RateLimiter {
 
   /**
    * Build the per-(type,IP) bucket key. limitType comes from a fixed internal set
-   * (public/auth/api/admin) with no '|', so this never collides across IPs.
+   * (the keys of this.limits: public/auth/api/admin/export/torcheck/withdraw), none of
+   * which contains '|', so this never collides across IPs.
    */
   bucketKey(limitType, ip) {
     return `${limitType}|${ip}`;
@@ -335,10 +336,11 @@ class RateLimiter {
 
   /**
    * Extract client IP from request.
-   * Uses Express's req.ip, which — with `app.set('trust proxy', 1)` in index.js —
-   * resolves to the real client IP from X-Forwarded-For while IGNORING client-supplied
-   * XFF beyond the one trusted nginx hop. Reading the raw x-forwarded-for header here
-   * (as before) let a client rotate forged IPs and evade per-IP throttling/lockout.
+   * Uses Express's req.ip, which — with `app.set('trust proxy', 'loopback')` in index.js —
+   * resolves to the real client IP from X-Forwarded-For for requests proxied by the local
+   * nginx, while a direct off-box hit keeps its real socket IP. Reading the raw
+   * x-forwarded-for header here (as before) let a client rotate forged IPs and evade
+   * per-IP throttling/lockout.
    */
   getClientIp(req) {
     const ip = (req && (req.ip || (req.socket && req.socket.remoteAddress))) || 'unknown';

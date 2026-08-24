@@ -1,11 +1,16 @@
 /**
- * Poolstats Reporter — Push pool stats to miningpoolstats.stream
+ * Poolstats Reporter — optional PUSH of pool stats to an external monitor.
  *
- * Periodically collects pool metrics and submits them to external monitoring.
- * Uses HTTPS only, secure API key storage, and never logs sensitive data.
+ * NOT the live miningpoolstats.stream integration: that one is a PULL feed they poll,
+ * GET /api/pool/poolstats in index.js. This pusher is OFF unless pool.json sets
+ * poolstats_enabled: true (the Script 07 installer never writes that key), and its
+ * endpoint default is a guess at an MPS submit API.
+ *
+ * Uses HTTPS only, keeps the API key in the Authorization header, never logs it.
  */
 
 const https = require('https');
+const fs = require('fs');
 const { URL } = require('url');
 
 class PoolstatsReporter {
@@ -100,7 +105,10 @@ class PoolstatsReporter {
     return {
       pool_name: this.config.pool_name || 'Grin Pool',
       url: this.config.subdomain ? `https://${this.config.subdomain}` : '',
-      network: 'mainnet',
+      // Same derivation as the pull feed in index.js. This was hardcoded to 'mainnet' until
+      // 2026-08-22, so a testnet pool would have listed itself as a mainnet pool the moment
+      // the pusher was enabled.
+      network: this.config.network === 'testnet' ? 'testnet' : 'mainnet',
       pool_fee: this.config.pool_fee_percent || 0,
       miners: minerCount,
       hashrate_gps: hashrateStats.pool_hashrate_1h_gps || 0,
@@ -200,17 +208,54 @@ class PoolstatsReporter {
   }
 
   /**
-   * Rotate API key (for admin panel security)
-   * Called when user changes key via settings
+   * Rotate API key (for admin panel security). Called by POST /api/admin/poolstats/update-key.
+   *
+   * Writes through to pool.json as well as memory. It was in-memory only until 2026-08-22,
+   * which meant a rotation silently reverted to the old key on the next service restart —
+   * the worst shape for a credential rotation, because the panel reported success.
+   *
+   * The file write is best-effort and deliberately does NOT throw: the in-memory key is
+   * already live and rejecting the rotation would leave the operator with the old key
+   * everywhere. A failure is logged loudly instead, so it can be persisted by hand.
    */
   updateApiKey(newKey) {
     if (!newKey || newKey.trim().length === 0) {
       throw new Error('API key cannot be empty');
     }
-    this.apiKey = newKey;
+    this.apiKey = newKey.trim();
     this.failureCount = 0;
     this.lastError = null;
+    this.config.poolstats_api_key = this.apiKey;
+    this._persistApiKey();
     this.log('API key updated (never logged)');
+  }
+
+  /**
+   * Re-read pool.json, replace only poolstats_api_key, write it back atomically.
+   *
+   * Re-read rather than serialising `this.config`: config carries values merged in at
+   * runtime by PoolSettings.applyToConfig() that belong in the settings DB, not the file.
+   * Dumping the in-memory object would bake all of them into pool.json as if the operator
+   * had set them there. Mode 600 is re-asserted on the temp file — pool.json holds
+   * credentials and a default-umask temp file would widen them for the rename's duration.
+   */
+  _persistApiKey() {
+    const confPath = this.config.__config_path || process.env.GRIN_POOL_CONF;
+    if (!confPath) {
+      this.error('API key rotated in memory only — no pool.json path known, it will revert on restart');
+      return;
+    }
+    try {
+      const raw = fs.readFileSync(confPath, 'utf8');
+      const obj = JSON.parse(raw);
+      obj.poolstats_api_key = this.apiKey;
+      const tmp = `${confPath}.tmp-${process.pid}`;
+      fs.writeFileSync(tmp, JSON.stringify(obj, null, 2), { mode: 0o600 });
+      fs.renameSync(tmp, confPath);
+      this.log('API key persisted to pool.json');
+    } catch (err) {
+      this.error(`API key rotated in memory but NOT persisted (${err.message}) — it will revert on restart`);
+    }
   }
 
   /**

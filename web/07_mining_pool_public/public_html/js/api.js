@@ -1,6 +1,6 @@
-// Missing API helper module — restores compatibility for admin-panel pages
-// All admin-panel/*.html pages reference <script src="/js/api.js"> but it didn't exist
-// This module wraps Auth.fetch() and provides the expected API interface
+// api.js — the API helper every admin-panel page loads (<script src="/js/api.js">).
+// Thin wrapper over Auth.fetch() (js/auth.js) giving the pages a get/post/put/delete
+// surface plus guardAdminPage(), the server-side login check the admin pages boot with.
 
 const API = {
   // Check if user is logged in

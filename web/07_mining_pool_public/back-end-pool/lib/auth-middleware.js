@@ -1,6 +1,6 @@
 function requireAuth(authManager) {
   return (req, res, next) => {
-    // FIX #4: Read token from httpOnly cookie first, then Authorization header as fallback
+    // Read the token from the httpOnly cookie first, then the Authorization header.
     let token = req.cookies?.access_token;
 
     if (!token) {
@@ -28,7 +28,7 @@ function requireAuth(authManager) {
 
 function requireAdmin(authManager) {
   return (req, res, next) => {
-    // FIX #4: Read token from httpOnly cookie first, then Authorization header as fallback
+    // Read the token from the httpOnly cookie first, then the Authorization header.
     let token = req.cookies?.access_token;
 
     if (!token) {
@@ -60,7 +60,7 @@ function requireAdmin(authManager) {
 
 function requireFreshAuth(authManager, maxAgeSeconds = 300) {
   return (req, res, next) => {
-    // FIX #4: Read token from httpOnly cookie first, then Authorization header as fallback
+    // Read the token from the httpOnly cookie first, then the Authorization header.
     let token = req.cookies?.access_token;
 
     if (!token) {

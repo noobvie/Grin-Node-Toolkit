@@ -917,7 +917,7 @@ Recorded because both were stated before the source was read, and both change th
 5. **Bind loopback.** `addr` / `--bind_addr` is what Arti forwards onion traffic to; there is no
    reason for it to be world-reachable. Default it to `127.0.0.1:<port>` and pick a port that
    avoids the toolkit's known collision points (8080 is the worst — see the 091 first-deploy
-   incident; 3413/3420/13413/13420/7456/7466/3333/3334/8471 are taken).
+   incident; 3413/3420/13413/13420/7456/7466/3333/13333/3416/13416/8090/8471 are taken).
 6. **Build cost on a small VPS.** A full `grin_*` + Arti cargo build is heavier than floonet-rs.
    Reuse 091's pattern: prebuilt probe first (none exist today), rustup minimal profile only when
    cargo is absent, and the temporary 2 GB swap offer for boxes under ~3.5 GB RAM.

@@ -41,9 +41,15 @@ class RetentionManager {
     const required = this._confirmDepth() + PPLNS_WINDOW_BLOCKS;
     let cutoff = currentHeight - (required + marginBlocks);
 
-    // Never prune at/above the oldest still-immature block's PPLNS window.
+    // Never prune at/above the oldest UNSETTLED block's PPLNS window. 'confirmed' counts as
+    // unsettled: it has matured but not yet been distributed, and it still reads shares in
+    // [height - PPLNS, height]. Only 'immature' used to be considered here, which was fine
+    // while distribution kept up — but a block that stalls in 'confirmed' (node outage, a
+    // failing credit) could have its shares aged out from under it, and getSharesForDistribution
+    // returning empty makes rewards.js mark it 'paid' with the reward retained and the miners
+    // never credited. See audit §I9.
     const imm = this.db.prepare(
-      "SELECT MIN(height) AS h FROM blocks WHERE status = 'immature'"
+      "SELECT MIN(height) AS h FROM blocks WHERE status IN ('immature', 'confirmed')"
     ).get();
     if (imm && imm.h !== null && imm.h !== undefined) {
       const immFloor = imm.h - PPLNS_WINDOW_BLOCKS - marginBlocks;

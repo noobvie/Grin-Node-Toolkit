@@ -9,7 +9,7 @@
     "dev": "NODE_ENV=development node index.js",
     "nuke": "node scripts/nuke.js",
     "test": "npm run check-syntax && npm run test:unit",
-    "test:unit": "node scripts/test-proxy-v2.js && node scripts/test-stratum-guards.js",
+    "test:unit": "node scripts/test-proxy-v2.js && node scripts/test-stratum-guards.js && node scripts/test-money-path.js",
     "check-syntax": "node scripts/check-syntax.js"
   },
   "keywords": [

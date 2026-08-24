@@ -5,8 +5,9 @@ node-collector.py — Grin Node Toolkit · Node stats updater
 Runs as root to access the Grin owner API:
   · Owner API via .api_secret  → connected peer count
 
-Installed by script 04 (option 5) to:
-    /usr/local/lib/grin-node-toolkit/node-collector.py
+Installed by script 04 (option 8, "Enable REST API" — it installs both
+collectors) to:
+    /opt/grin/grin-api-collector/node-collector.py
 
 Called every 60 s by a cron job running as root:
     * * * * * root python3 <this file> <port> <rest_dir> <grin_data_dir>

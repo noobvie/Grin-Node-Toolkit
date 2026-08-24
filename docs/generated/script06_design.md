@@ -204,3 +204,79 @@ Inline SVG trend lines inside the Hashrate + Difficulty cards. **Zero new endpoi
 history** — `renderSparklines()` derives per-block Δdifficulty and hashrate
 (`Δtd×42/Δt/16384`) from the `/api/latest` series already fetched for the block table, and paints
 a normalised `<polyline>` (colour from CSS). Needs ≥3 blocks; degrades to empty otherwise.
+
+---
+
+## Peer map — location grouping + node id (`web/06_stats_map/stats/index.html`, 2026-08-15)
+
+### The problem
+Geo comes from ip-api.com at **city level** (`06_collector.py` `GEO_URL`), which returns the
+**city centroid**, not the host. So every peer in one city carries **byte-identical** lat/lng.
+Drawing one `circleMarker` per record stacked them exactly: only the last one drawn was
+hoverable, the nodes underneath were unreachable, and the panel's peer total silently
+disagreed with the number of visible dots. `flyTo` could never separate them — `maxZoom` is 10
+on purpose (GeoIP is city-accurate; zooming further would imply precision the data lacks).
+Grin peers concentrate on a few hosting providers, so the densest locations were the hidden
+ones, and **every dual-stack host was a guaranteed 2-stack** (its v4 and v6 records are
+different IPs at the same centroid, so the existing `dual` collapse never applied).
+
+### The fix — one dot per point
+- **Group key = rounded coordinate** (`COORD_DP = 2`, ~1.1 km), not the city name: `city` can
+  be blank and two providers sometimes label one centroid differently. Zoom-stable by
+  construction, unlike pixel-distance clustering (leaflet.markercluster would fuse Frankfurt
+  with Amsterdam at zoom 2 — hiding a real distinction instead of revealing a hidden one).
+- **Dedup inside a group is DUAL-ONLY.** `dual` is computed by the collector on the *real* IP;
+  two unrelated hosts in one /24 share the masked string and must both be counted. Deduping on
+  the published IP would delete real nodes from the map.
+- **Radius `min(16, 5 + 3·√(n−1))`** — area-proportional, same as the pool's network map.
+  `n = 1` keeps the original canvas `circleMarker` (unchanged look, unchanged `flyTo` click).
+- **`n ≥ 2` is a DOM `divIcon`**, not a canvas circle: a canvas circle can't carry the count
+  label, and the "mixed networks" ring must follow the theme — CSS vars do that, a hex baked
+  into a marker option does not (markers are built once at boot, never rebuilt on theme change).
+- **Fill = largest kind present** (ties keep mainnet via stable sort); a group holding more than
+  one kind also gets the `.grp-mixed` ring, so the fill is never read as the whole story. The
+  split is in the hover tooltip.
+- **Stacking is not insertion order.** Leaflet puts canvas circles in the `overlayPane` (z 400)
+  and DivIcon markers in the `markerPane` (z 600), and stacks DivIcons by `pos.y +
+  zIndexOffset` — verified in the leaflet 1.9.4 source/CSS the script pulls. So adding markers
+  "largest first" would achieve nothing: group-vs-group ordering has to be a
+  `zIndexOffset: -d`, which puts the bigger dot underneath wherever two overlap (the small one
+  is the easy one to lose). **Residual, and accepted:** a lone dot within about a dot's width of
+  a big group is covered at low zoom, because the pane order can't be beaten from marker
+  options. Unlike the stacking this replaces, zooming in separates them — group members share
+  one coordinate, whereas two *groups* are ≥1.1 km apart by construction and anything
+  overlapping at zoom 2 is tens of km apart.
+- **Click = drill-down, not zoom.** It sets a `LOC_FILTER` (keyed on the same coordinate string)
+  and opens the existing left panel, reusing its rows, filters and click-to-fly rather than
+  duplicating the list inside a popup. It arrives from the map, so it gets a dismissable chip
+  instead of a `.lp-filters` dropdown, and it composes with the other filters.
+- Panel gains **Nodes on map / Map locations / No location data**, all derived from the groups
+  actually drawn, so they cannot drift from the map. Invariant:
+  `Total peers − Both (same IP) − No location data = Nodes on map`. That is exact only because
+  `known_peers` is `PRIMARY KEY (ip, network)` — a dual IP is *exactly* two rows, so the count of
+  distinct dual IPs equals the number of rows the dedup drops. A schema that let one IP hold two
+  rows on the same network (e.g. a port change) would break the reconciliation, not the map.
+
+### `node_id` — why a masked IP needs one
+peers.json publishes `_mask_ip()` output (`95.216.1.x`), so two hosts in one /24 render as the
+same string and, since nearly everyone runs the standard port, their rows were byte-identical —
+which made "click the dot to see the IPs" undeliverable exactly where it mattered. The collector
+now emits `node_id`: `sha256(salt|real_ip)[:4]`.
+- **Salted, and the salt never leaves the box** (`meta.node_id_salt`, 128-bit, minted on first
+  use). Unsalted, the id would hand back the octet `_mask_ip()` just removed — the /24 is
+  public, so there are only 256 candidates to hash.
+- **4 hex** — enough to separate the handful of nodes that ever share a /24, deliberately too
+  few to enumerate or correlate across installs.
+- Same real IP → same id on both networks, so a dual node's two records are recognisable as one
+  host. The IP search box matches the id too (`#a1b2` or `a1b2`).
+- **Forward/backward compatible**, same pattern as `dual`: `HAS_NODE_ID` is probed from the data;
+  an older peers.json renders no id and the search placeholder downgrades to "Search IP
+  address…" rather than promising a search the data can't answer.
+
+### Adjacent fix
+`markersLayer` is now `L.featureGroup()`. `applyTheme()` calls `markersLayer.bringToFront()`
+after swapping tiles, and `bringToFront` is defined on **FeatureGroup, not LayerGroup**
+(verified in leaflet 1.9.4 source) — on the old `L.layerGroup()` that call was a TypeError.
+Harmless today because nothing runs after it, but it would silently swallow whatever got added
+there next. `FeatureGroup.bringToFront()` delegates via `invoke()`, which skips layers lacking
+the method, so the mixed canvas/DOM marker set is safe.

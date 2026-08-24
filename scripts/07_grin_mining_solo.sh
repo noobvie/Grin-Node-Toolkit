@@ -14,6 +14,7 @@
 # All-numeric keys; letters are reserved for destructive/admin actions.
 #
 #   Network-select screen
+#     A) Start here — node check       (is your node running & synced?)
 #     1) Configure solo private pool Mainnet ┐ enter the per-net branch below
 #     2) Configure solo private pool Testnet ┘
 #     3) Deploy stats web page          (both networks; public domain+SSL, or plain
@@ -2683,9 +2684,11 @@ wallet_menu() {
         echo -e "  ${RED}6${RESET}) Disable boot autostart  ${DIM}(per net)${RESET}"
         echo -e "  ${GREEN}7${RESET}) Install listener watchdog ${DIM}(*/5)${RESET}"
         echo -e "  ${RED}8${RESET}) Remove listener watchdog"
+        echo -e "  ${DIM}  ── Binary ────────────────────────────────${RESET}"
+        echo -e "  ${GREEN}9${RESET}) grin-wallet binary      ${DIM}(update · roll back · verify)${RESET}"
         echo -e "  ${RED}0${RESET}) Back"
         echo ""
-        echo -ne "${BOLD}Select [1-8/0]: ${RESET}"
+        echo -ne "${BOLD}Select [1-9/0]: ${RESET}"
         read -r choice || choice=0          # EOF (Ctrl+D) → 0 → Back
         case "$choice" in
             "") continue ;;                 # Enter → refresh
@@ -2697,6 +2700,7 @@ wallet_menu() {
             6) net=$(_solo_pick_net "boot autostart") && { sw_autostart_disable "$net" || true; }; _solo_pause ;;
             7) sw_watchdog_install || true; _solo_pause ;;
             8) sw_watchdog_remove  || true; _solo_pause ;;
+            9) net=$(_solo_pick_net "grin-wallet binary") && { sw_binary_menu "$net" || true; } ;;
             0) return ;;
             *) warn "Invalid option."; sleep 1 ;;
         esac
@@ -3221,7 +3225,7 @@ main() {
         # must drop back to the menu, never hard-exit the script under `set -e`.
         # 1/2 enter a per-net branch: SOLO_NETWORK is set for its duration and
         # cleared on return, so the global Watchdogs menu (5) still prompts for
-        # which net to act on. 3-7 and C are cross-network and run at the top level.
+        # which net to act on. A, 3-8 and C are cross-network and run at the top level.
         case "${choice,,}" in
             "")  continue ;;                # Enter → refresh status
             a)   solo_node_precheck || true ;;
@@ -3239,7 +3243,8 @@ main() {
             *)   warn "Invalid option."; sleep 1 ;;
         esac
         # Branches/submenus run their own loops + pauses; one-shot actions pause
-        # via _solo_pause (3, C) or inline (status view 4).
+        # via _solo_pause (3, C) or inline (status view 4). A pauses inside
+        # solo_node_precheck itself.
     done
 }
 

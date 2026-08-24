@@ -52,7 +52,7 @@ drop_setup_wallet() {
         echo -e "  ${GREEN}1${RESET}) Install new wallet      ${DIM}(first-time setup)${RESET}"
         echo -e "  ${GREEN}2${RESET}) Re-install wallet       ${DIM}(clean + full reinstall)${RESET}"
         echo -e "  ${GREEN}3${RESET}) Scan wallet             ${DIM}(recover wallet from seed · balance wrong · after node switch)${RESET}"
-        echo -e "  ${GREEN}4${RESET}) Update binary           ${DIM}(download latest grin-wallet, keep wallet data)${RESET}"
+        echo -e "  ${GREEN}4${RESET}) Update / roll back binary ${DIM}(change grin-wallet version, keep wallet data)${RESET}"
         echo -e "  ${GREEN}5${RESET}) Switch Grin node        ${DIM}(change node without reinstalling)${RESET}"
         echo -e "  ${GREEN}6${RESET}) View / recover seed     ${DIM}(display seed phrase, optionally save)${RESET}"
         echo -e "  ${DIM}0) Back${RESET}"
@@ -335,44 +335,29 @@ _drop_wallet_reinstall() {
     pause
 }
 
+# Update / roll back the binary — the shared screen from grin_wallet_install.sh.
+#
+# The listener no longer has to be stopped BEFORE the swap: the shared applier
+# stages the new binary next to the old one and finishes with a rename, so it
+# never writes over a file a running listener is executing (that is the ETXTBSY
+# trap). A running listener keeps the old inode until it restarts, which is what
+# the screen's restart prompt is for.
 _drop_wallet_update_bin() {
-    clear
-    echo -e "\n${BOLD}${CYAN}── Update Binary [$DROP_NET_LABEL] ──${RESET}\n"
-
     # Guard: wallet should be initialized
     if [[ ! -f "$DROP_WALLET_DIR/grin-wallet.toml" ]]; then
+        clear
+        echo -e "\n${BOLD}${CYAN}── Update Binary [$DROP_NET_LABEL] ──${RESET}\n"
         warn "Wallet not initialized — run Install first."; pause; return
     fi
 
-    # Warn if sessions are running — kill them so binary can be replaced
-    local wallet_ports=("$DROP_TOR_PORT" "$DROP_OWNER_PORT")
-    local sessions_running=false
-    for port in "${wallet_ports[@]}"; do
-        ss -tlnp 2>/dev/null | grep -q ":${port} " && sessions_running=true && break
-    done
-    if $sessions_running; then
-        warn "Wallet sessions are currently running."
-        echo -e "  ${YELLOW}They will be stopped before the binary is replaced.${RESET}"
-        echo -ne "  Continue? [y/N]: "
-        local ok
-        read -r ok || true
-        [[ "${ok,,}" != "y" ]] && { info "Cancelled."; pause; return; }
-        tmux kill-session -t "$DROP_TMUX_TOR"   2>/dev/null || true
-        tmux kill-session -t "$DROP_TMUX_OWNER" 2>/dev/null || true
-        _drop_kill_wallet_processes
-    fi
+    gwi_update_screen "$DROP_WALLET_DIR" "Grin Drop [$DROP_NET_LABEL]" \
+        "_drop_stop_session" "_drop_start_session"
 
-    echo -e "  ${BOLD}— Download latest binary${RESET}"
-    _drop_download_wallet || { pause; return; }
-    echo ""
-
-    # Fix binary ownership only
+    # Ownership can only have been preserved if there WAS a binary to preserve
+    # it from; re-assert it cheaply rather than reasoning about which path ran.
     chown grin:grin "$DROP_WALLET_BIN" 2>/dev/null || true
-    chmod 755 "$DROP_WALLET_BIN"
-    success "Binary updated. Wallet data and config untouched."
-    echo -e "  ${DIM}Restart listener sessions from option 2) Wallet Listening.${RESET}"
+    chmod 755 "$DROP_WALLET_BIN" 2>/dev/null || true
     log "[drop_wallet_update_bin] network=$DROP_NETWORK"
-    pause
 }
 
 _drop_wallet_switch_node() {
@@ -463,51 +448,28 @@ _drop_wallet_view_seed() {
     pause
 }
 
+# Install the pinned grin-wallet into the Drop wallet dir.
+#
+# This used to be a private downloader that parsed the release JSON with python3
+# and verified NO checksum. It now goes through lib/grin_wallet_install.sh, so
+# Drop gets the sha256 check, the shared version store and — the reason for the
+# move — a rollback target for every future update.
 _drop_download_wallet() {
-    info "Querying GitHub for latest grin-wallet release..."
-    local release_json
-    release_json=$(curl -fsSL --max-time 30 "$GRIN_WALLET_GITHUB_API") \
-        || { die "Failed to reach GitHub API."; return 1; }
+    mkdir -p "$DROP_WALLET_DIR" \
+        || { die "Could not create $DROP_WALLET_DIR."; return 1; }
 
-    local version download_url
-    version=$(echo "$release_json" | python3 -c "import json,sys; print(json.load(sys.stdin)['tag_name'])" 2>/dev/null \
-        || echo "$release_json" | grep '"tag_name"' | head -1 | sed 's/.*"tag_name": *"\([^"]*\)".*/\1/')
-    download_url=$(echo "$release_json" | python3 -c "
-import json,sys,re
-d=json.load(sys.stdin)
-for a in d.get('assets',[]):
-    if re.search(r'linux-x86_64\.tar\.gz$', a['name'], re.I):
-        print(a['browser_download_url']); break
-" 2>/dev/null)
+    # force=0: an existing binary is left alone here. Changing the version is
+    # the job of option 4 (Update binary), which is the only screen that also
+    # offers the rollback.
+    gwi_install_grin_wallet "$DROP_WALLET_DIR" 0 \
+        || { die "grin-wallet install failed."; return 1; }
 
-    if [[ -z "$download_url" || "$download_url" == "null" ]]; then
-        die "No linux-x86_64 tar.gz asset found in release '$version'."; return 1
-    fi
-
-    info "Version : $version"
-    info "Target  : $DROP_WALLET_BIN"
-
-    local tmp_tar="/tmp/grin_drop_wallet_$$.tar.gz"
-    local tmp_dir="/tmp/grin_drop_wallet_extract_$$"
-    mkdir -p "$tmp_dir" "$DROP_WALLET_DIR"
-
-    info "Downloading..."
-    wget -c --progress=bar:force -O "$tmp_tar" "$download_url" \
-        || { die "Download failed."; rm -rf "$tmp_tar" "$tmp_dir"; return 1; }
-
-    info "Extracting..."
-    tar -xzf "$tmp_tar" -C "$tmp_dir" \
-        || { die "Failed to extract."; rm -rf "$tmp_tar" "$tmp_dir"; return 1; }
-    rm -f "$tmp_tar"
-
-    local wallet_bin_src
-    wallet_bin_src=$(find "$tmp_dir" -type f -name "grin-wallet" | head -1)
-    if [[ -z "$wallet_bin_src" ]]; then
-        die "Could not locate 'grin-wallet' binary in archive."; rm -rf "$tmp_dir"; return 1
-    fi
-    install -m 755 "$wallet_bin_src" "$DROP_WALLET_BIN"
-    rm -rf "$tmp_dir"
-    success "grin-wallet $version installed to $DROP_WALLET_BIN"
+    # Drop runs the wallet as the `grin` user. gwi_apply_version preserves the
+    # ownership of a binary it replaces, but a FIRST install has nothing to
+    # preserve, so set it here.
+    chown grin:grin "$DROP_WALLET_BIN" 2>/dev/null || true
+    chmod 755 "$DROP_WALLET_BIN" 2>/dev/null || true
+    return 0
 }
 
 _drop_select_node() {
@@ -522,9 +484,18 @@ _drop_select_node() {
     echo -e "\n  ${BOLD}Available Grin nodes:${RESET}" >&2
     local i=1 first_online=0
     for node in "${nodes[@]}"; do
-        local status http_code
-        http_code=$(curl -o /dev/null -s -w "%{http_code}" --max-time 5 "https://$node/v2/foreign" 2>/dev/null || echo "000")
-        if [[ "$http_code" =~ ^(2|3)[0-9]{2}$ ]] || [[ "$http_code" == "405" ]] || [[ "$http_code" == "404" ]]; then
+        # Reachability needs a PARSED result, not an HTTP status. /v2/foreign is
+        # POST-only JSON-RPC, so a bare GET returns 404/405 from a real node and
+        # from any parked domain, CDN error page or unrelated web server on that
+        # hostname alike — the old 2xx/3xx/404/405 test called all of them online.
+        # Only an unwrapped {"Ok":{...}} from get_tip proves a Grin node is there.
+        # No Basic Auth: these are public nodes behind Script 04's nginx, which
+        # publishes /v2/foreign open, and the secret is not ours to send anyway.
+        local status body
+        body=$(curl -s --max-time 5 -H 'Content-Type: application/json' \
+                 -d '{"jsonrpc":"2.0","method":"get_tip","params":[],"id":1}' \
+                 "https://$node/v2/foreign" 2>/dev/null) || body=""
+        if [[ "$body" == *'"Ok"'* ]] && [[ "$body" == *'"height"'* ]]; then
             status="${GREEN}● online${RESET}"
             [[ $first_online -eq 0 ]] && first_online=$i
         else
@@ -620,8 +591,16 @@ _drop_init_wallet() {
     # Run directly — no pipe, full TTY for grin-wallet's seed/passphrase prompts.
     # Security trade-off: -p exposes the passphrase in the process argument list
     # (visible via `ps aux` / /proc/<pid>/cmdline) for the duration of this call.
-    # grin-wallet has no stdin or env-var passphrase input — -p is the only option.
-    # Exposure is brief (one-time during init) and limited to users with root/ps access.
+    # Exposure is brief (one-time during init) and limited to users with root/ps
+    # access.
+    # ⚠ "-p is the only option" is NOT true, despite what this comment used to
+    #   say: grin-wallet reads the passphrase on STDIN whenever stdin is not a
+    #   TTY (rpassword takes an explicit non-TTY branch), which is how Script
+    #   05's CMD wallet feeds it. There is no ENV-var input — that part was
+    #   right. Here stdin is deliberately left on the terminal so the RECOVER
+    #   path can prompt for the mnemonic itself (CLAUDE.md: never route a
+    #   recovery phrase through a toolkit script), so -p is a real constraint on
+    #   this call — but only on this one.
     # shellcheck disable=SC2086
     cd "$DROP_WALLET_DIR" && "$DROP_WALLET_BIN" \
         $DROP_NET_FLAG --top_level_dir "$DROP_WALLET_DIR" \
@@ -896,11 +875,16 @@ _drop_start_session() {
     local wallet_pass
     wallet_pass=$(_drop_read_saved_pass)
 
-    # Security trade-off: -p embeds the passphrase as a literal string in the tmux
-    # command and exposes it in `ps aux` / /proc/<pid>/cmdline for the full lifetime
-    # of the owner_api process. Same exposure as the retired `-p listen`; on a
-    # single box you own it is a non-issue. grin-wallet has no stdin/env passphrase
-    # input — -p is the only option.
+    # ⚠ -p embeds the passphrase as a literal string in the tmux command and
+    # exposes it in `ps aux` / /proc/<pid>/cmdline for the FULL LIFETIME of the
+    # owner_api process — a permanent leak to every local user, not the brief
+    # one-time exposure of the init call above.
+    # It is also avoidable, and "-p is the only option" (what this comment used
+    # to claim) is wrong: grin-wallet reads the passphrase on STDIN when stdin
+    # is not a TTY, so the launcher can redirect from a mode-600 file the way
+    # Script 05's CMD wallet does. Only the ENV-var half was right. Convert when
+    # this launcher is next touched — CLAUDE.md, "Passphrase input — use STDIN,
+    # not -p".
     local pass_arg=""
     [[ -n "$wallet_pass" ]] && pass_arg="-p '$wallet_pass'"
     local base_cmd="'$DROP_WALLET_BIN' $DROP_NET_FLAG --top_level_dir '$DROP_WALLET_DIR' $pass_arg"

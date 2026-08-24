@@ -428,7 +428,12 @@
       var effort = e.round_effort_pct != null ? e.round_effort_pct : 0;
       setText('g-share-v', e.round_effort_pct != null ? Math.round(effort) + '%' : '—');
       setText('g-share-luck',
-        (e.luck_100_pct != null ? 'luck ' + e.luck_100_pct.toFixed(0) + '%' : 'luck —') +
+        // Shares ÷ network difficulty, so UNDER 100% is a lucky pool — the same
+        // convention as the blocks page. Bare "luck 87%" reads as bad news to
+        // anyone assuming higher-is-better, hence the suffix.
+        (e.luck_100_pct != null
+          ? 'luck ' + e.luck_100_pct.toFixed(0) + '% ' + (e.luck_100_pct <= 100 ? '(lucky)' : '(unlucky)')
+          : 'luck —') +
         ' · ' + (share != null ? 'share ' + fmtShare(share) : 'share —'));
       if (gaugeShare) {
         // Stable 0–200% dial (bumps if a very unlucky round runs past it). Zones:

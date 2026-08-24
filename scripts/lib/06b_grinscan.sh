@@ -1,6 +1,11 @@
 # 06b_grinscan.sh — GrinScan lightweight block explorer (Node.js / Express)
 # Sourced by 06_global_grin_health.sh — inherits colors, log(), info(), success(),
 # warn(), error(), die(), pause(), require_root(), detect_node(), check_dns_record().
+#
+# Sourced lib → no shebang, no `set -e` of its own. Every grinscan_* entry point is
+# dispatched from the 06 menu as `grinscan_x || true`, which disables errexit for
+# the whole call tree below it (CLAUDE.md, project_lib_errexit_suppression) — so
+# 06's `set -euo pipefail` protects nothing in here. Guard fallible commands.
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 

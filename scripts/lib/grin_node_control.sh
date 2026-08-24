@@ -1,7 +1,8 @@
 # =============================================================================
 # lib/grin_node_control.sh — shared Grin node primitives
 # =============================================================================
-# Sourced by 01 / 03 / 07 (and the node-sync watchdog in grin_node_keepalive.sh).
+# Sourced by 01 / 03 / 04 / 05 / 06 / 07 / 08, by lib/grin_node_secrets.sh and the
+# 07 wallet libs, and by the node-sync watchdog in grin_node_keepalive.sh.
 # Provides the small set of node-control primitives that were previously copied
 # across scripts:
 #
@@ -64,7 +65,7 @@ if ! declare -F success >/dev/null 2>&1; then success() { echo "[OK]    $*"; }; 
 # tmux session name convention: grin_<nodetype>_<networktype>.
 # Canonical copy (previously duplicated in 01/03/07). Uses UNDERSCORES so the
 # name matches the `grep '^grin_'` session sweeps (a dashed name would escape
-# them). All scripts (01/03/04/07/081) now derive names from this function.
+# them). All scripts (01/03/04/07/08) now derive names from this function.
 # -----------------------------------------------------------------------------
 _grin_session_name() {
     case "$(basename "${1:-}")" in
@@ -235,7 +236,8 @@ gnc_kill_grin_procs() {
         fi
         pids+=("$pid")
     done < <(pgrep -f 'grin server run' 2>/dev/null || true)
-    # if-form throughout: this runs under callers' `set -e` (see CLAUDE.md).
+    # if-form throughout: a false `[[ ... ]] && cmd` returns 1, which aborts the
+    # caller whenever errexit IS live in this frame (see CLAUDE.md).
     if [[ ${#pids[@]} -eq 0 ]]; then return 0; fi
 
     info "Stopping leftover grin process(es): ${pids[*]} (SIGTERM, up to ${grace}s)..."

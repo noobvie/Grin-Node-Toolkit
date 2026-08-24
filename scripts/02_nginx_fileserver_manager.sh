@@ -36,6 +36,8 @@
 #   8) Install fail2ban   — Install & configure fail2ban for nginx.
 #   9) Fail2ban Mgmt      — Status, unban IPs, list bans.
 #  10) IP Filtering       — Block / Unblock IPs via ufw or iptables.
+#  11) Landing Page      — Styled download page instead of the bare autoindex
+#                          list (lib/02_lib_landing.sh).
 #
 # GRIN SUBDOMAIN CONVENTIONS
 #   fullmain.*   — Mainnet full archive node  (archive_mode = true,  ~25 GiB)
@@ -60,10 +62,11 @@
 #   Set ACTION and the variables below before running to skip the interactive
 #   menu. Valid ACTION values:
 #     grin_mainnet | grin_testnet | custom | remove | list |
-#     limit_rate | lift_rate | enhance_security | fail2ban_management | ip_filtering
+#     limit_rate | lift_rate | enhance_security | fail2ban_management |
+#     ip_filtering | landing_page
 #
 # LOG FILE
-#   <toolkit_root>/log/02_nginx_<action>_YYYYMMDD_HHMMSS.log
+#   /opt/grin/logs/02_nginx_<action>_YYYYMMDD_HHMMSS.log
 #
 ################################################################################
 
@@ -72,7 +75,8 @@ set -e  # Exit on any error
 # ── Non-interactive configuration ────────────────────────────────────────────
 # Set ACTION here, or leave empty for interactive menu
 # Options: "grin_mainnet" | "grin_testnet" | "custom" | "remove" | "list" |
-#          "limit_rate" | "lift_rate" | "enhance_security" | "fail2ban_management" | "ip_filtering"
+#          "limit_rate" | "lift_rate" | "enhance_security" |
+#          "fail2ban_management" | "ip_filtering" | "landing_page"
 ACTION=""
 
 # Domain configuration (for setup/add operations)
@@ -94,7 +98,7 @@ DELETE_FILES=""              # "yes" to delete files, "no" to keep
 # System Variables - DO NOT EDIT
 #############################################################################
 
-# Script location (used for relative log path)
+# Script location — used to source lib/ (nginx_shared_helpers, 02_lib_landing).
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOG_DIR="/opt/grin/logs"
 LOG_FILE=""   # Set dynamically in main() once the action is known
@@ -269,7 +273,7 @@ ensure_geo_conf() {
         mkdir -p "$(dirname "$IP_LIMITS_CONF")"
         cat > "$IP_LIMITS_CONF" << 'EOF'
 # Grin File Server - Per-IP rate limits (bytes/s, 0 = unlimited)
-# Managed by 02_nginx-fileserver-manager.sh
+# Managed by 02_nginx_fileserver_manager.sh
 geo $remote_addr $grin_rate_limit {
     default 0;
 }
@@ -2379,7 +2383,7 @@ _limit_rate_enable_for_domain() {
     fi
 }
 
-# 25.5 - Limit rate/bandwidth submenu (menu item 5)
+# 25.5 - Limit rate/bandwidth submenu (menu item 6)
 run_limit_rate() {
     while true; do
         clear
@@ -2407,7 +2411,7 @@ run_limit_rate() {
     done
 }
 
-# 26.0 - Lift rate/bandwidth limit for specific IPs (menu item 6)
+# 26.0 - Lift rate/bandwidth limit for specific IPs (menu item 7)
 run_lift_rate() {
     print_section "Lift Rate / Bandwidth"
 
@@ -2504,7 +2508,7 @@ run_lift_rate() {
             if [[ ! "${all_choice,,}" =~ ^n ]]; then
                 cat > "$IP_LIMITS_CONF" << 'EOF'
 # Grin File Server - Per-IP rate limits (bytes/s, 0 = unlimited)
-# Managed by 02_nginx-fileserver-manager.sh
+# Managed by 02_nginx_fileserver_manager.sh
 geo $remote_addr $grin_rate_limit {
     default 0;
 }
@@ -2533,7 +2537,7 @@ EOF
     read -r
 }
 
-# 27.0 - Enhance security with fail2ban and nginx rate limiting (menu item 7)
+# 27.0 - Enhance security with fail2ban and nginx rate limiting (menu item 8)
 run_enhance_security() {
     print_section "Enhance security by fail2ban"
 
@@ -2577,28 +2581,35 @@ run_enhance_security() {
 
     # ----- Step 2: Nginx request rate limiting (limit_req_zone) -----
     print_section "Step 2: Nginx Request Rate Limiting"
-    local req_zone_conf="/etc/nginx/conf.d/grin_limit_req.conf"
-    if [[ ! -f "$req_zone_conf" ]]; then
-        cat > "$req_zone_conf" << 'EOF'
-# Grin File Server - Request rate limiting zone
-# Managed by 02_nginx-fileserver-manager.sh
-limit_req_zone $binary_remote_addr zone=grin_req:10m rate=20r/s;
-EOF
-        print_info "Created request rate limit zone: $req_zone_conf"
+    # The zone goes through nginx_ensure_rate_limit_zone, never an inline heredoc
+    # (CLAUDE.md nginx rule 1). nginx loads every conf.d/*.conf into ONE http context,
+    # so two scripts defining zone=grin_req with different rates is a fatal config
+    # error at reload — the helper is the only thing that grep-guards against that.
+    local legacy_zone_conf="/etc/nginx/conf.d/grin_limit_req.conf"
+    # Migration on boxes that still carry the pre-helper file: strip limit_req_status,
+    # which belongs at the location level, not http. Leave the file itself in place —
+    # it still defines grin_req, and the helper below sees that and stays a no-op, so
+    # nothing ends up defining the zone twice. Renaming it here would be the bug.
+    if [[ -f "$legacy_zone_conf" ]] && grep -q "limit_req_status" "$legacy_zone_conf" 2>/dev/null; then
+        sed -i '/limit_req_status/d' "$legacy_zone_conf"
+        print_info "Removed limit_req_status from legacy zone file (moved to location blocks)"
+    fi
+    local zone_ok=true
+    if nginx_ensure_rate_limit_zone "grin_req" "20r/s" "10m" "script02-fileserver"; then
+        print_info "Request rate limit zone ensured: grin_req (20r/s)"
     else
-        # Migration: remove limit_req_status from the zone file if present —
-        # it belongs at the location level, not the http level, to avoid
-        # conflicts when other configs also define it in the http context.
-        if grep -q "limit_req_status" "$req_zone_conf" 2>/dev/null; then
-            sed -i '/limit_req_status/d' "$req_zone_conf"
-            print_info "Removed limit_req_status from zone file (moved to location blocks)"
-        fi
-        print_info "Request rate limit zone already exists: $req_zone_conf"
+        zone_ok=false
+        # Skip ONLY the injection, and carry on with the remaining security steps. A vhost
+        # carrying `limit_req zone=grin_req` with no matching zone in the http context is a
+        # FATAL nginx config error — the box fails to reload and every site on it goes down.
+        # Better to leave rate limiting off than to take nginx with it.
+        print_error "Could not ensure the grin_req rate-limit zone — skipping limit_req injection."
     fi
 
     # Inject limit_req into site location blocks that don't have it yet
     local injected_req=0
     for conf_file in "$NGINX_AVAILABLE"/*; do
+        [[ "$zone_ok" == true ]] || break
         [[ -f "$conf_file" ]] || continue
         local domain
         domain="$(basename "$conf_file")"
@@ -2619,7 +2630,7 @@ EOF
     mkdir -p "$(dirname "$FAIL2BAN_JAIL_CONF")"
     cat > "$FAIL2BAN_JAIL_CONF" << 'EOF'
 # Grin File Server - fail2ban nginx jails
-# Managed by 02_nginx-fileserver-manager.sh
+# Managed by 02_nginx_fileserver_manager.sh
 
 [DEFAULT]
 bantime  = 3600
@@ -2793,7 +2804,7 @@ _ip_list() {
     echo ""
 }
 
-# 28.0 - IP Filtering workflow (menu item 8)
+# 28.0 - IP Filtering workflow (menu item 10)
 run_fail2ban_management() {
     print_section "Fail2ban Management"
 

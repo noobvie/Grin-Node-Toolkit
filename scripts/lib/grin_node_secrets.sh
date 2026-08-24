@@ -19,9 +19,15 @@
 # systemd timer so the re-sync happens automatically after any future rebuild —
 # no per-product setup re-run required.
 #
-# Guarding note: callers run under `set -euo pipefail`. The "apply" helpers
-# return 1 to signal "no change", so callers MUST guard bare invocations with
-# `|| true`. The sync wrappers below already do this internally.
+# Guarding note: the "apply" helpers return 1 to signal "no change", so callers
+# MUST guard bare invocations with `|| true`. The sync wrappers below already do
+# this internally.
+# ⚠ And do not read that the other way round: every real call site here is
+# already `grin_secrets_sync_all || true` / `if declare -F …`, which DISABLES
+# errexit for this lib's whole call tree — and Script 03, one of the callers,
+# sets no errexit at all. So nothing in this file is protected by the caller's
+# `set -e`; every command that writes a secret, a conf or a toml carries its own
+# guard (CLAUDE.md, project_lib_errexit_suppression).
 
 GNS_INSTANCES_CONF="${GNS_INSTANCES_CONF:-/opt/grin/conf/grin_instances_location.conf}"
 GNS_LIB_INSTALL_PATH="${GNS_LIB_INSTALL_PATH:-/opt/grin/lib/grin_node_secrets.sh}"

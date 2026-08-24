@@ -163,6 +163,28 @@ function nodeForeignRpc(nodeUrl, secret, method, params = [], timeoutMs = 5000) 
 function netForNodeUrl(nodeUrl) {
     return /:1341[35]\b/.test(nodeUrl) ? 'testnet' : 'mainnet';
 }
+
+// A toml written by hand (or by an older toolkit) can carry a scheme-less
+// "127.0.0.1:3413" or a trailing slash. fetch() rejects the first outright and
+// the second turns every URL comparison into a false mismatch, so normalise once
+// on the way in rather than at each of the four places that consume the value.
+function normalizeNodeUrl(u) {
+    let s = String(u || '').trim();
+    if (!s) return '';
+    if (!/^[a-z][a-z0-9+.\-]*:\/\//i.test(s)) s = 'http://' + s;
+    return s.replace(/\/+$/, '');
+}
+
+// Is this node OURS? The answer decides whether grin-wallet — and this server —
+// attach the local node's API secret to the request, so it is a security test,
+// not a display hint.
+//
+// It must be ANCHORED. The substring form this replaces (/127\.0\.0\.1|localhost/)
+// classified https://localhost.example.com and https://not-127.0.0.1.evil.com as
+// local, and every caller then handed that host our secret as Basic Auth.
+function isLocalNodeUrl(nodeUrl) {
+    return /^https?:\/\/(127\.0\.0\.1|localhost|\[?::1\]?)(:|\/|$)/i.test(normalizeNodeUrl(nodeUrl));
+}
 function localNodeSecret(net, which = '.api_secret') {
     const sp = findNodeSecret(net, which);
     return sp ? readFileOrEmpty(sp) : '';
@@ -343,7 +365,9 @@ function applyWalletTomlPatches(wallet) {
     c = patchTomlKey(c, 'owner_api_listen_port',  String(wallet.ownerPort));
     const nodeUrl = wallet.nodeUrl || (wallet.network === 'testnet' ? 'http://127.0.0.1:13413' : 'http://127.0.0.1:3413');
     c = patchTomlKey(c, 'check_node_api_http_addr', '"' + nodeUrl + '"');
-    if (/127\.0\.0\.1|localhost/.test(nodeUrl)) {
+    // Anchored (see isLocalNodeUrl) — the substring test this replaces stamped the
+    // local node's secret into any wallet whose node merely CONTAINED "localhost".
+    if (isLocalNodeUrl(nodeUrl)) {
         const sp = findNodeSecret(wallet.network, '.foreign_api_secret');
         if (sp) c = patchTomlKey(c, 'node_api_secret_path', '"' + sp + '"');
     }
@@ -650,16 +674,18 @@ app.get('/api/setup/binary-status', (_req, res) => {
 // PINNED, not "latest" — and the pin is load-bearing, not caution.
 //
 // Every passphrase in this product goes to grin-wallet over stdin, which works
-// only because 5.4.x pins rpassword 4.x (reads stdin, explicit non-TTY branch).
-// rpassword 7 reads /dev/tty instead. A release that takes that bump breaks
-// `init`, `listen` and `owner_api` at once — every wallet in the deployment
-// stops unlocking, with no local change to blame it on. Chasing `latest` meant
-// an upstream tag could do that unattended.
+// because 5.4.x pins rpassword 4.x (reads stdin, explicit non-TTY branch). The
+// feared failure was a release taking rpassword 7, whose read_password() reads
+// the TTY: that would break `init`, `listen` and `owner_api` at once — every
+// wallet in the deployment stops unlocking, with no local change to blame it on.
+// Chasing `latest` meant an upstream tag could do that unattended.
 //
-// v5.4.1 (2026-06-12) is also the current latest, so this changes nothing today;
-// it just stops a FUTURE release from landing without a human. To move the pin:
-// check that grin-wallet's Cargo.toml still has rpassword 4.x, bump this, test
-// an unlock, then commit.
+// That bump has since LANDED and did not break stdin: grin-wallet v5.5.0
+// (2026-08-12) pins rpassword 7.5.4 but branches on `stdin.is_terminal()` and
+// still reads the pipe. So v5.4.1 is no longer the latest, and the pin is now a
+// deliberate "verify before moving" rather than a barricade. Keep it in sync
+// with _WW_PIN_TAG in scripts/051_grin_fidelius.sh. To move it: smoke-test an
+// unlock on the new binary, bump both, then commit.
 const GRIN_WALLET_PIN = 'v5.4.1';
 
 app.post('/api/setup/install-binary', async (req, res) => {
@@ -1104,67 +1130,113 @@ function _cleanOut(s) {
 
 // ── Node status ───────────────────────────────────────────────────────────────
 
-async function nodeOwnerApiCall(method, params = []) {
-    const wallets = loadWallets();
-    if (!wallets.length) throw new Error('No wallets registered');
-    const wallet = wallets[0];
-    const isTestnet = wallet.network === 'testnet';
-    let nodeUrl = 'http://127.0.0.1:' + (isTestnet ? 13413 : 3413);
+// Which node does THIS wallet talk to?
+//
+// Every node-status endpoint below used to answer for loadWallets()[0] — the
+// first wallet ever registered — regardless of which wallet the operator had
+// open. With a mainnet-on-local wallet registered first, opening a testnet
+// wallet pointed at a public node still painted "LOCAL NODE · SYNCED" on the
+// dashboard, listed the mainnet node's peers, and tracked the wrong chain in the
+// sync banner. The wallet is an ARGUMENT now, and this is the one place that
+// resolves it.
+//
+// Two sources of truth exist and they drift: the registry's nodeUrl (what this
+// UI wrote) and grin-wallet.toml's check_node_api_http_addr (what the wallet
+// binary actually dials). A Script 01 rebuild, a hand-edited toml, or a wallet
+// created with "Skip" — which has no toml at all — separates them. The toml
+// wins because it is what grin-wallet obeys, but a disagreement is REPORTED
+// rather than silently resolved: a wallet scanning a different node than the
+// page displays is precisely the bug this function exists to end.
+function resolveWalletNode(wallet) {
+    const net    = wallet?.network === 'testnet' ? 'testnet' : 'mainnet';
+    const defUrl = 'http://127.0.0.1:' + (net === 'testnet' ? 13413 : 3413);
+    const regUrl = (typeof wallet?.nodeUrl === 'string' && wallet.nodeUrl) ? wallet.nodeUrl : '';
+    let tomlUrl  = '';
     try {
         const toml = fs.readFileSync(path.join(wallet.dir, 'grin-wallet.toml'), 'utf8');
-        const m = toml.match(/check_node_api_http_addr\s*=\s*"([^"]+)"/);
-        if (m) nodeUrl = m[1];
+        const m    = toml.match(/check_node_api_http_addr\s*=\s*"([^"]+)"/);
+        if (m) tomlUrl = m[1];
     } catch {}
-    const isLocal = /127\.0\.0\.1|localhost/.test(nodeUrl);
-    let secret = '';
-    if (isLocal) {
-        const sp = findNodeSecret(wallet.network, '.api_secret');
-        if (sp) secret = readFileOrEmpty(sp);
-    }
-    const data = await nodeOwnerRpc(nodeUrl, secret, method, params, 5000);
-    return { data, nodeUrl, isLocal };
+    const url     = normalizeNodeUrl(tomlUrl || regUrl || defUrl);
+    const isLocal = isLocalNodeUrl(url);
+    // Compare normalised, or a trailing slash on one side reports a drift that
+    // is only punctuation and sends the operator chasing a mismatch that isn't.
+    const drifted = tomlUrl && regUrl && normalizeNodeUrl(tomlUrl) !== normalizeNodeUrl(regUrl);
+    return {
+        url, net, isLocal,
+        node_type: isLocal ? 'local' : 'external',
+        source: tomlUrl ? 'toml' : (regUrl ? 'registry' : 'default'),
+        // Only a local node accepts our secret; a public one is open and 403s owner.
+        ownerSecret: isLocal ? localNodeSecret(net, '.api_secret') : '',
+        drift: drifted ? { registry: regUrl, toml: tomlUrl } : null,
+    };
 }
 
-app.get('/api/node/status', async (_req, res) => {
-    const wallets = loadWallets();
-    if (!wallets.length) return res.json({ reachable: false, error: 'No wallets registered' });
-    const wallet = wallets[0];
-    const isTestnet = wallet.network === 'testnet';
-    const defPort   = isTestnet ? 13413 : 3413;
-    let nodeUrl = 'http://127.0.0.1:' + defPort, secret = '';
-    try {
-        const toml = fs.readFileSync(path.join(wallet.dir, 'grin-wallet.toml'), 'utf8');
-        const uM   = toml.match(/check_node_api_http_addr\s*=\s*"([^"]+)"/);
-        if (uM) nodeUrl = uM[1];
-    } catch {}
-    const isLocal = /127\.0\.0\.1|localhost/.test(nodeUrl);
-    if (isLocal) secret = localNodeSecret(wallet.network, '.api_secret');
-    const node_type = isLocal ? 'local' : 'external';
-    try {
-        if (isLocal) {
-            const d = await nodeOwnerRpc(nodeUrl, secret, 'get_status', [], 5000);
-            res.json({ reachable: true, node_type, node_url: nodeUrl,
-                       height: d.tip?.height ?? 0, connections: d.connections ?? 0,
-                       sync_status: d.sync_status ?? 'unknown', user_agent: d.user_agent ?? '' });
-        } else {
-            // A public node exposes only /v2/foreign (Script 04 403s owner), so
-            // height is all it can tell us — peers and sync state are unknowable
-            // from outside, and must not be reported as 0 / "unknown" as if the
-            // node were idle. null means "not available", not "none".
-            const tip = await nodeForeignRpc(nodeUrl, '', 'get_tip', [], 5000);
-            res.json({ reachable: true, node_type, node_url: nodeUrl,
-                       height: tip?.height ?? 0, connections: null,
-                       sync_status: null, user_agent: '' });
-        }
-    } catch (e) {
-        res.json({ reachable: false, node_type, node_url: nodeUrl, error: e.message });
+// ?wallet=<name> is how the client names the wallet it has open. Falling back to
+// the first registered wallet keeps an un-named caller working, but it is now a
+// fallback rather than the silent default it used to be for every caller.
+//
+// A NAMED wallet that cannot be found must never fall back to the first one —
+// that is the original bug wearing a different hat. It returns an error the
+// caller can distinguish instead, because "you asked about a wallet I don't
+// have" and "there are no wallets" are different faults with different fixes.
+function walletForNodeQuery(req) {
+    const name = typeof req.query?.wallet === 'string' ? req.query.wallet.trim() : '';
+    if (name) {
+        const w = findWallet(name);
+        return w ? { wallet: w } : { error: 'Wallet "' + name + '" is not registered' };
     }
+    const first = loadWallets()[0];
+    return first ? { wallet: first } : { error: 'No wallets registered' };
+}
+
+// Node identity + reachability for one wallet. A public node exposes only
+// /v2/foreign (Script 04 403s owner), so height is all it can tell us — peers
+// and sync state are UNKNOWABLE from outside and come back null, meaning "not
+// available", never 0/"unknown" (which renders a healthy node as idle).
+async function walletNodeStatus(wallet) {
+    const n = resolveWalletNode(wallet);
+    const base = {
+        wallet: wallet.name, network: n.net, node_type: n.node_type,
+        node_url: n.url, node_source: n.source, drift: n.drift,
+    };
+    try {
+        if (n.isLocal) {
+            const d = await nodeOwnerRpc(n.url, n.ownerSecret, 'get_status', [], 5000);
+            return { ...base, reachable: true, sync_visible: true,
+                     height: d.tip?.height ?? 0, connections: d.connections ?? 0,
+                     sync_status: d.sync_status ?? 'unknown', sync_info: d.sync_info || null,
+                     user_agent: d.user_agent ?? '' };
+        }
+        const tip = await nodeForeignRpc(n.url, '', 'get_tip', [], 5000);
+        return { ...base, reachable: true, sync_visible: false,
+                 height: tip?.height ?? 0, connections: null,
+                 sync_status: null, sync_info: null, user_agent: '' };
+    } catch (e) {
+        return { ...base, reachable: false, sync_visible: n.isLocal, error: e.message };
+    }
+}
+
+app.get('/api/node/status', async (req, res) => {
+    const { wallet, error } = walletForNodeQuery(req);
+    if (!wallet) return res.json({ reachable: false, error });
+    res.json(await walletNodeStatus(wallet));
 });
 
-app.get('/api/node/peers', async (_req, res) => {
+app.get('/api/node/peers', async (req, res) => {
+    const { wallet, error } = walletForNodeQuery(req);
+    if (!wallet) return res.json({ peers: [], count: null, available: false, reason: error });
+    const n = resolveWalletNode(wallet);
+    // get_connected_peers is Owner-only. Asking a public node for it earns a 403
+    // that used to surface as "Error: HTTP 403" in the peer list — a healthy node
+    // reported as broken. It is not an error, it is not visible from outside.
+    if (!n.isLocal) {
+        return res.json({ peers: [], count: null, available: false, node_type: 'external', node_url: n.url,
+                          reason: 'Peer list is only visible on a local node' });
+    }
     try {
-        const r = await nodeOwnerApiCall('get_connected_peers');
-        const peers = (Array.isArray(r.data) ? r.data : []).map(p => ({
+        const data = await nodeOwnerRpc(n.url, n.ownerSecret, 'get_connected_peers', [], 5000);
+        const peers = (Array.isArray(data) ? data : []).map(p => ({
             addr:       p.addr,
             direction:  p.direction,
             user_agent: p.user_agent,
@@ -1173,18 +1245,37 @@ app.get('/api/node/peers', async (_req, res) => {
             total_difficulty: p.total_difficulty ?? null,
             capabilities: p.capabilities?.bits ?? p.capabilities ?? null,
         }));
-        res.json({ peers, count: peers.length });
+        res.json({ peers, count: peers.length, available: true, node_type: 'local', node_url: n.url });
     } catch (e) {
-        res.json({ peers: [], count: 0, error: e.message });
+        res.json({ peers: [], count: null, available: false, node_type: 'local', node_url: n.url, error: e.message });
     }
 });
 
-app.get('/api/node/sync-detail', async (_req, res) => {
-    try {
-        const r = await nodeOwnerApiCall('get_status');
-        const d = r.data || {};
-        const status = d.sync_status || 'unknown';
-        const info   = d.sync_info || {};
+app.get('/api/node/sync-detail', async (req, res) => {
+    const { wallet, error } = walletForNodeQuery(req);
+    if (!wallet) return res.json({ reachable: false, synced: null, sync_visible: false, error });
+    const s = await walletNodeStatus(wallet);
+    if (!s.reachable) {
+        return res.json({ reachable: false, synced: null, sync_visible: s.sync_visible,
+                          node_url: s.node_url, node_type: s.node_type, is_local: s.node_type === 'local',
+                          wallet: s.wallet, network: s.network, drift: s.drift, error: s.error });
+    }
+    // A public node answers get_tip and nothing else. Reporting synced:false for
+    // it would fire the "Node syncing" banner on every wallet using one; synced
+    // is null — unknown — and the client renders that as "not visible from
+    // outside", not as a fault.
+    if (!s.sync_visible) {
+        return res.json({
+            reachable: true, synced: null, sync_visible: false,
+            sync_status: null, sync_label: 'Sync state not visible on a public node',
+            progress: null, height: s.height ?? null, peers: null,
+            user_agent: '', node_url: s.node_url, node_type: s.node_type, is_local: false,
+            wallet: s.wallet, network: s.network, drift: s.drift,
+        });
+    }
+    {
+        const status = s.sync_status || 'unknown';
+        const info   = s.sync_info || {};
         let progress = null;
         if (info.current_height != null && info.highest_height != null && info.highest_height > 0) {
             progress = {
@@ -1201,21 +1292,23 @@ app.get('/api/node/sync-detail', async (_req, res) => {
                 unit:    'bytes',
             };
         }
-        const fullySynced = status === 'no_sync';
         res.json({
             reachable:  true,
-            synced:     fullySynced,
+            synced:     status === 'no_sync',
+            sync_visible: true,
             sync_status: status,
             sync_label: humanSyncLabel(status),
             progress,
-            height:     d.tip?.height ?? null,
-            peers:      d.connections ?? 0,
-            user_agent: d.user_agent ?? '',
-            node_url:   r.nodeUrl,
-            is_local:   r.isLocal,
+            height:     s.height ?? null,
+            peers:      s.connections ?? 0,
+            user_agent: s.user_agent ?? '',
+            node_url:   s.node_url,
+            node_type:  s.node_type,
+            is_local:   true,
+            wallet:     s.wallet,
+            network:    s.network,
+            drift:      s.drift,
         });
-    } catch (e) {
-        res.json({ reachable: false, synced: false, error: e.message });
     }
 });
 
@@ -1374,6 +1467,24 @@ app.post('/api/wallet/node', (req, res) => {
         if (fs.existsSync(tomlPath)) {
             let c = fs.readFileSync(tomlPath, 'utf8');
             c = patchTomlKey(c, 'check_node_api_http_addr', '"' + nodeUrl + '"');
+            // node_api_secret_path MUST move with the address. Changing only the
+            // address left a wallet that used to be local still carrying the local
+            // node's .foreign_api_secret — and grin-wallet sends that as Basic Auth
+            // to whatever host it now dials, i.e. straight to a third party. The
+            // 5-min secret-sync timer will not undo it either: grin_sync_wallets
+            // deliberately skips remote-node wallets and only WARNS in the journal
+            // (see 051_grin_fidelius.sh), because a background timer must not
+            // rewrite config. This request IS the operator asking, so it is the
+            // one place allowed to clear it.
+            if (isLocalNodeUrl(nodeUrl)) {
+                const sp = findNodeSecret(wallet.network, '.foreign_api_secret');
+                if (sp) c = patchTomlKey(c, 'node_api_secret_path', '"' + sp + '"');
+            } else if (/^[#\s]*node_api_secret_path\s*=/m.test(c)) {
+                // Blank, not delete — the empty string is the form grin_sync_wallets
+                // recommends, and patchTomlKey would otherwise append a re-added key
+                // to the end of the file, landing it in the wrong TOML section.
+                c = patchTomlKey(c, 'node_api_secret_path', '""');
+            }
             fs.writeFileSync(tomlPath, c, 'utf8');
         }
         log('INFO', 'WALLET_NODE_UPDATED wallet=' + walletName + ' url=' + nodeUrl);

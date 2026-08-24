@@ -119,9 +119,13 @@
   window.Explorer = { url: explorerUrl, link: explorerLink, network: explorerNetwork };
 
   // ── Theme (Dark default, Light) ─────────────────────────────────────────
-  // Own key — must NOT be 'admin-theme': branding.js writes the operator's public
-  // default_theme (e.g. "atomic") to that key on every public page, which would
-  // clobber this Dark/Light toggle and silently reset it to Dark.
+  // Own key, and deliberately not 'admin-theme'. branding.js used to write the
+  // operator's public default_theme (e.g. "atomic") to that key on every public
+  // page, which would have clobbered this Dark/Light toggle and reset it to Dark.
+  // That write went away in 2026-08 with js/theme.js, so the collision is gone —
+  // but the separate key stays: this toggle is admin UI chrome and has nothing to
+  // do with the operator's public palette, so sharing a key would be wrong again
+  // the moment anything writes the public one back.
   var THEME_KEY = 'admin-ui-mode';
   function getTheme() {
     var t = null;

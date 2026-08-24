@@ -52,18 +52,36 @@ Grin Nostr Relay (Floonet) for Goblin wallet: https://relay.grin.money/
 
 ## Requirements
 
-- **Linux — supported distributions:**
-  - Ubuntu **22.04 / 24.04 / 26.04 LTS** — **tested and recommended**
-  - Other Debian-based distros (Debian, Mint, Pop!\_OS, Kali, etc.) — best effort, **not fully tested**
+- **Linux with glibc 2.38 or newer** — this is a hard floor, not a preference. The official
+  pre-built Grin binaries the toolkit downloads are compiled against glibc 2.38+, so on an
+  older system the node exits immediately with
+  `./grin: /lib/x86_64-linux-gnu/libc.so.6: version 'GLIBC_2.38' not found`.
+  Check yours with `ldd --version`.
+- **Supported distributions:**
+  - Ubuntu **24.04 / 26.04 LTS** — **tested and recommended**
+  - Ubuntu **22.04 LTS — NOT supported** (glibc 2.35, too old). It is still an LTS release
+    and many VPS providers still default to it, so check before you deploy.
+  - Debian **13 (trixie) or newer** — best effort, **not fully tested**. Debian 12 (bookworm)
+    has glibc 2.36 and is **too old**.
+  - Other Debian-based distros (Mint, Pop!\_OS, Kali, etc.) — best effort, **not fully tested**;
+    they must still meet the glibc 2.38 floor
   - Rocky Linux / AlmaLinux 10+ (RHEL clones) — runs, but **not fully tested** (use at your own risk)
-  - Rocky Linux / AlmaLinux 9 or older — **not supported** (glibc too old); upgrade instructions shown at startup
+  - Rocky Linux / AlmaLinux 9 or older — **not supported** (glibc 2.34); upgrade instructions shown at startup
   - Other systems (Fedora, Arch, etc.) — **not supported, script will exit**
 - `bash` 4.0+
 - `curl`, `wget`, `jq`, `tar`, `tmux` (installed automatically where possible)
 - Root / `sudo` access for system-level operations
 - **Free disk space: 10 GB minimum** (pruned mode) — more for full archive or hosting snapshots
 
-> **Ubuntu (22.04–26.04) is the primary tested platform.** The main script checks your OS at startup: unsupported distros exit with a clear message, and older Rocky/Alma versions get upgrade instructions instead of a hard stop. Rocky/AlmaLinux 10+ run but are not fully tested.
+> **Ubuntu 24.04 LTS is the primary tested platform.** The main script checks your OS at startup: unsupported distros exit with a clear message, and older Rocky/Alma versions get upgrade instructions instead of a hard stop. Rocky/AlmaLinux 10+ run but are not fully tested.
+>
+> **On Ubuntu 22.04 (or any glibc < 2.38) there is no fix to apply — do not try to upgrade glibc.**
+> `libc.so.6` is the core C library that every binary on the machine links against; installing a
+> newer `libc6` from another release's repository will break the system, usually beyond SSH.
+> Either reinstall the VPS on Ubuntu 24.04+, or compile the node yourself with
+> **Script 01 → Step 1 → key `G` (build from source)**, which links against whatever glibc you have.
+> Note that the wallet products (Scripts 05 / 051 / 059 / 07) download the same kind of pre-built
+> binary and will hit the same wall, so a source build is only a partial escape.
 
 ---
 
@@ -206,9 +224,11 @@ grin-node-toolkit/
 ```
 
 > A planned product gets its number when its build **starts**, not when the idea is written
-> down — so there are no placeholder scripts. Two numbers are deliberately **reserved**:
-> `052` for Accio (freeing it is what the Grin Drop `052 → 059` move bought) and `092` for the
-> mwixnet CoinSwap mixer. `054–058` and `094+` are unallocated.
+> down — so there are no placeholder scripts. **`092`** (mwixnet CoinSwap mixer) is the one
+> number deliberately **reserved** for an unbuilt product. `052` is no longer a reservation:
+> Accio claimed it when its build started on 2026-08-09 — which is exactly what the Grin Drop
+> `052 → 059` move had freed it for, and the numbering rule working as designed.
+> `054–058` and `094+` are unallocated.
 
 **Runtime config created on first run** (stored outside the toolkit, under `/opt/grin/conf/`):
 
@@ -286,9 +306,11 @@ grin-node-toolkit/
 | Port  | Protocol | Purpose                                                     |
 |-------|----------|-------------------------------------------------------------|
 | 3333  | TCP      | Public pool stratum — miners connect here *(public)*        |
-| 3334  | TCP      | Public pool node built-in stratum upstream — mainnet (localhost) |
-| 13334 | TCP      | Public pool node built-in stratum upstream — testnet (localhost) |
-| 8080  | HTTP     | Public pool central API (localhost, nginx-proxied)          |
+| 13333 | TCP      | Public pool stratum — testnet install *(public)*            |
+| 3416  | TCP      | Public pool node built-in stratum upstream — mainnet (localhost) |
+| 13416 | TCP      | Public pool node built-in stratum upstream — testnet (localhost) |
+| 8080  | HTTP     | Public pool central API — mainnet (localhost, nginx-proxied) |
+| 8090  | HTTP     | Public pool central API — testnet (localhost, nginx-proxied) |
 | 51820 | UDP      | Public pool WireGuard — hub ↔ gateway federation            |
 | 51821 | UDP      | Public pool WireGuard — secondary tunnel                    |
 

@@ -1,0 +1,1032 @@
+@charset "UTF-8";
+
+/* ===========================================================================
+ * ACCIO PATCH — "Orbital Dawn", the Accio theme.
+ *
+ * This file is ADDED, not replaced: upstream has no counterpart. It is the
+ * LAST stylesheet index.html links (see the ACCIO PATCH note beside that link),
+ * so it wins on source order wherever it repeats an upstream selector at equal
+ * specificity, and repeats the upstream selector VERBATIM wherever it needs to
+ * beat a specific one. Nothing in vendor/styles/ is edited.
+ *
+ * Why a single override sheet and not 14 patched stylesheets:
+ *   `git log <PINNED_SHA>..upstream/master` is how we review upstream security
+ *   fixes on a self-custodial wallet. Overlaying the vendored CSS would put
+ *   4,800 lines of ours in the way of that diff forever, and every upstream
+ *   touch to a colour would become a manual merge. Here, upstream CSS keeps
+ *   flowing through untouched; only a SELECTOR RENAME upstream can break us,
+ *   and that failure is loud — a violet control appears on screen.
+ *
+ * What upstream looks like, so the size of the change is on the record:
+ *   a violet gradient ground, violet chrome, and NEAR-WHITE content panels with
+ *   near-black text. Orbital Dawn is a dark theme, so this sheet does not just
+ *   swap hues — it flips the content panels dark, which is why every
+ *   `color: rgb(12, 12, 13)` upstream sets on a panel is restated below. Miss
+ *   one and it is black text on a navy panel.
+ *
+ * ⚠ RETUNING: edit the token block. Do not edit the rules under it — they are
+ *   plumbing that maps upstream's 62 hardcoded colours onto ~20 tokens. A theme
+ *   change is a token edit plus a rebuild; the build recomputes this file's SRI
+ *   and bumps its cache version on its own (052_lib_build.sh, _acb_apply_patches).
+ *
+ * ⚠ NO url() IN THIS FILE. The standalone artefact inlines stylesheet assets by
+ *   scanning for the double-quoted url("…") form only; a bare or single-quoted
+ *   url() would silently ship as a dead reference in the offline build. Every
+ *   surface here is a colour or a gradient, so the question does not arise —
+ *   keep it that way.
+ * ======================================================================== */
+
+
+/* ── Tokens ──────────────────────────────────────────────────────────────
+ *
+ * Orbital Dawn: the wallet sits on the night side of a planet, the sun coming
+ * up over the limb below the frame. Everything is deep navy except the light,
+ * and the light is the only accent — it marks what you can act on and what you
+ * own, nothing else. Semantic colours (ok / warning / danger) are deliberately
+ * NOT the accent, so "warm" never has to mean both "primary action" and
+ * "something is wrong" on the same screen.
+ */
+:root {
+
+	/* Grounds — navy-biased, never neutral grey */
+	--acc-space:      #080A16;  /* the page itself, behind everything */
+	--acc-panel:      #0B0E1E;  /* content panels (upstream: white) */
+	--acc-panel-2:    #0D1122;  /* the wallets rail, one step up */
+	--acc-chrome:     #0F1226;  /* menu + status rails (upstream: #6F00D6) */
+	--acc-surface:    #141833;  /* rows, fields, quiet buttons */
+	--acc-surface-2:  #1B2040;  /* their hover / focus */
+	--acc-line:       #232845;  /* hairlines and field borders */
+
+	/* Ink */
+	--acc-ink:        #F2EEE8;  /* warm white — primary text */
+	--acc-dim:        #A7A1B6;  /* labels, secondary */
+	--acc-faint:      #6E6884;  /* placeholders, disabled */
+
+	/* The light */
+	--acc-accent:     #FF9A5C;
+	--acc-accent-hi:  #FFC46B;
+	--acc-accent-dim: #C9713F;
+	--acc-btn:        linear-gradient(100deg, #FF8F4D, #FFC46B);
+	--acc-btn-hi:     linear-gradient(100deg, #FFA262, #FFD188);
+	--acc-btn-ink:    #2A1405;  /* ink ON the accent fill — never white */
+	--acc-glow:       0 0 22px -6px rgba(255, 154, 92, 0.85);
+	--acc-ring:       0 0 0 2px var(--acc-space), 0 0 0 4px var(--acc-accent);
+
+	/* Semantic — separate from the accent on purpose */
+	--acc-ok:         #7FD8C0;
+	--acc-ok-deep:    #3E9C84;
+	--acc-ok-fill:    #2A7159;  /* fills that carry LIGHT text; --acc-ok-deep is
+	                             * only 3.4:1 under --acc-ink, this is 5.0:1 */
+	--acc-warn:       #FFC94D;
+	--acc-danger:     #E4574F;  /* dots, icons, borders — always on a dark ground */
+	--acc-danger-fill:#C0392F;  /* fills that carry WHITE text; #E4574F is only
+	                             * 3.6:1 under white, this is 5.0:1 */
+	--acc-danger-deep:#8E2B26;
+
+	--acc-pill:       999px;
+}
+
+
+/* ── The ground ──────────────────────────────────────────────────────────
+ * Upstream sets this in index.html's inline <style>, which is earlier in the
+ * document than any <link>, so a plain `body` rule here beats it.
+ *
+ * The dawn is two radial gradients centred BELOW the viewport: the limb is off
+ * screen, only its atmosphere is in frame. Percentages resolve against body,
+ * which upstream fixes at 100%/100%, so this holds at every size.
+ *
+ * ⚠ DO THE ARITHMETIC BEFORE CHANGING ANY OF THESE SIX NUMBERS. "Centred below
+ *   the viewport" is not enough: colour reaches only `last-stop × ry` back from
+ *   the centre, so the glow is visible only above y = cy − last×ry, and if that
+ *   is ≥ 100% NOTHING renders and the theme silently degrades to flat navy.
+ *   The first draft did exactly that (cy 152%, ry 62%, last stop 68% → colour
+ *   stopped at y = 110%, i.e. entirely below the frame) and it read as a
+ *   deliberate flat background, so nothing looked broken. Values below:
+ *     g1  y = 124 − 70×0.90 =  61%  → glow fills the bottom 39%
+ *     g2  y = 118 − 62×0.80 =  68%
+ *     arc band 44–48% of ry → y ≈ 72–76%
+ */
+body {
+	background: var(--acc-space);
+	background:
+		radial-gradient(120% 90% at 50% 124%, rgba(255, 148, 74, 0.85) 0%, rgba(255, 110, 60, 0.42) 26%, rgba(120, 48, 110, 0.26) 46%, transparent 70%),
+		radial-gradient(95% 80% at 50% 118%, rgba(40, 32, 70, 0.90) 0%, transparent 62%),
+		var(--acc-space);
+}
+
+/* The terminator: one hairline arc where the atmosphere meets the dark side.
+ * Positioned, pointer-transparent, and FIRST in body's paint order, so every
+ * child of body (all position: relative, z-index auto) paints over it. */
+body::before {
+	content: "";
+	position: absolute;
+	top: 0;
+	left: 0;
+	right: 0;
+	bottom: 0;
+	pointer-events: none;
+	background: radial-gradient(112% 105% at 50% 122%, transparent 44%, rgba(8, 10, 22, 0.45) 46%, transparent 48%);
+}
+
+::selection {
+	background: rgba(255, 154, 92, 0.30);
+	color: var(--acc-ink);
+}
+
+/* The splash spinner, before any stylesheet-driven screen exists. */
+div.loading > div.spinner > div {
+	border-bottom: 0.7em solid var(--acc-accent);
+	border-right: 0.7em solid var(--acc-accent);
+}
+
+
+/* ── common.css — the base control ───────────────────────────────────────
+ * Everything that is not restyled further down is a primary action: the
+ * lock-screen Unlock, Create / Recover / Hardware, the section CTAs. Those get
+ * the light. Row-shaped buttons (wallet list, transaction list, menu, nav
+ * arrows) all declare their own radius and border at higher specificity, so
+ * the pill here cannot leak into them — but their BACKGROUND comes from this
+ * rule, which is why each is given one explicitly further down.
+ */
+button {
+	background: var(--acc-btn);
+	color: var(--acc-btn-ink);
+	border: 0.15em solid transparent;
+	border-radius: var(--acc-pill);
+	box-shadow: var(--acc-glow);
+}
+
+@media only screen and (any-hover: hover) {
+
+	button:hover {
+		background: var(--acc-btn-hi);
+	}
+}
+
+button:focus {
+	background: var(--acc-btn-hi);
+	color: var(--acc-btn-ink);
+	box-shadow: var(--acc-ring);
+}
+
+button:active {
+	background: var(--acc-accent-dim);
+	color: var(--acc-btn-ink);
+	box-shadow: none;
+}
+
+button:disabled {
+	background: var(--acc-surface);
+	color: var(--acc-faint);
+	box-shadow: none;
+}
+
+button:disabled.loading {
+	background: var(--acc-surface-2);
+	color: var(--acc-ink);
+	border: 0.15em solid var(--acc-line);
+}
+
+a {
+	color: var(--acc-accent);
+}
+
+/* ── Quiet buttons — the trap this flip creates ──────────────────────────
+ * Upstream's base is `background: #6000D5; color: white`, and every QUIET
+ * button (transparent, or on the chrome rail) overrides ONLY the background at
+ * a higher specificity, because white ink was legible on violet AND on the
+ * rail. Our base ink is deliberately DARK (it sits on the light accent fill),
+ * so any quiet button that does not restate `color` renders near-black on a
+ * near-black rail — 1.2:1, invisible until hovered. `box-shadow` leaks the
+ * same way and haloes a transparent button.
+ *
+ * There is no selector that catches these generically: they are defined by
+ * what upstream overrode, not by any shared class. They are listed. To find
+ * them again after an upstream bump, look for a rule ending in `button` that
+ * sets `background` but not `color`.
+ */
+main > div.unlocked > div > div.menu > div > button {
+	color: var(--acc-dim);
+}
+
+main > div.language > div button {
+	color: var(--acc-dim);
+	box-shadow: none;
+}
+
+main > div.unlocked > div > div > div.sections > div > div > div > div.navigation > button,
+main > div.unlocked > div > div > div.sections > div > div.wallet > div > div.transactionsNavigation > button,
+main > div.unlocked > div > div > div.wallets > div > div.new > button,
+main > div.unlocked > div > div > div.wallets > div > div.order > button {
+	box-shadow: none;
+}
+
+a:focus {
+	background: rgba(255, 154, 92, 0.18);
+}
+
+
+/* ── application.css — the lock screen ───────────────────────────────────
+ * This sits directly on the dawn, so its fields are translucent night rather
+ * than a solid panel: the gradient reads through them.
+ */
+main > div > div > form > div > input {
+	background: rgba(12, 16, 38, 0.72);
+	color: var(--acc-ink);
+	border: 0.15em solid var(--acc-line);
+}
+
+@media only screen and (any-hover: hover) {
+
+	main > div > div > form > div > input:hover, main > div > div > form > div > span.show:hover + input {
+		background: rgba(20, 24, 51, 0.86);
+	}
+}
+
+/* !important, because upstream's is. */
+main > div > div > form > div > input:disabled {
+	background: rgba(12, 16, 38, 0.45) !important;
+	color: var(--acc-faint);
+}
+
+main > div > div > form > div > input:focus {
+	border: 0.15em solid var(--acc-accent);
+	box-shadow: var(--acc-glow);
+}
+
+main > div > div > form > div > input::placeholder {
+	color: var(--acc-faint);
+}
+
+main > div > div > form > div > input::selection {
+	background: rgba(255, 154, 92, 0.30);
+}
+
+main > div > div > form > div > span.show, main > div > div > form > div > span.capsLock {
+	color: var(--acc-dim);
+}
+
+main > div > div > form > div > span.show[tabindex="-1"] {
+	color: var(--acc-faint);
+}
+
+main > div > div > form > div > span.show:focus, main > div > div > form > div > span.show:active {
+	color: var(--acc-accent);
+}
+
+@media only screen and (any-hover: hover) {
+
+	main > div > div > form > div > span.show:hover {
+		color: var(--acc-accent);
+	}
+}
+
+main > div > div > form > div > span.capsLock {
+	color: var(--acc-warn);
+}
+
+main > div > div > form > button.clicked, main > div > div > div.deleteAllWallets > button.clicked {
+	background: var(--acc-accent-dim);
+}
+
+/* The "verify you are on the right site" banner. Green because it is a safety
+ * statement, not a call to action — it must not read as the accent. */
+main > div > div > form > p.verifySource {
+	background-color: var(--acc-ok-fill);
+	color: var(--acc-ink);
+}
+
+/* Lock-screen node / listener dots. Semantic, and the only red on the page. */
+main > div > div.unlock > form > div.status > p::before {
+	background: var(--acc-danger);
+	border: 0.13em solid rgba(255, 255, 255, 0.65);
+}
+
+main > div > div.unlock > form > div.status > p.warning::before {
+	background: var(--acc-warn);
+}
+
+main > div > div.unlock > form > div.status > p.success::before {
+	background: var(--acc-ok);
+}
+
+
+/* ── unlocked.css — app chrome ───────────────────────────────────────────── */
+
+main > div.unlocked > div > div.menu {
+	background: var(--acc-chrome);
+	box-shadow: 0 1px 0 0 var(--acc-line);
+}
+
+main > div.unlocked > div > div.menu > div,
+main > div.unlocked > div > div.menu > div > button,
+main > div.unlocked > div > div.menu > div > button:disabled {
+	background: var(--acc-chrome);
+	box-shadow: none;
+}
+
+@media only screen and (any-hover: hover) {
+
+	main > div.unlocked > div > div.menu > div > button:hover {
+		background: var(--acc-surface);
+		color: var(--acc-accent);
+	}
+}
+
+main > div.unlocked > div > div.menu > div > button:focus,
+main > div.unlocked > div > div.menu > div > button:active {
+	background: var(--acc-surface);
+	color: var(--acc-accent);
+	box-shadow: inset 0 -2px 0 0 var(--acc-accent);
+}
+
+main > div.unlocked > div > div.menu > div > button.clicked {
+	background: var(--acc-surface-2);
+	color: var(--acc-accent);
+}
+
+/* The two content panels — upstream paints both `white` in one rule. */
+main > div.unlocked > div > div > div {
+	background: var(--acc-panel);
+}
+
+main > div.unlocked > div > div > div.wallets {
+	box-shadow: 1px 0 0 0 var(--acc-line);
+}
+
+main > div.unlocked > div > div > div.wallets > div {
+	background: var(--acc-panel-2);
+}
+
+main > div.unlocked > div > div > div.wallets > div > h2 {
+	color: var(--acc-ink);
+}
+
+/* The Wallets rail toggle, and the two dark strips upstream already had. */
+main > div.unlocked > div > div > div.wallets > button.expand,
+main > div.unlocked > div > div > div.wallets > button.expand:focus,
+main > div.unlocked > div > div > div.wallets > button.expand:active,
+main > div.unlocked > div > div > div.wallets > button.expand:disabled,
+main > div.unlocked > div > div > div.wallets > button.expand.clicked {
+	background: var(--acc-chrome);
+	color: var(--acc-dim);
+	box-shadow: none;
+}
+
+@media only screen and (any-hover: hover) {
+
+	main > div.unlocked > div > div > div.wallets > button.expand:hover {
+		background: var(--acc-surface);
+		color: var(--acc-accent);
+	}
+}
+
+main > div.unlocked > div > div > div.wallets > div > div.new,
+main > div.unlocked > div > div > div.wallets > div > div.order {
+	background: var(--acc-chrome);
+}
+
+main > div.unlocked > div > div > div.wallets > div > div.new > button.clicked,
+main > div.unlocked > div > div > div.wallets > div > div.order > button.clicked {
+	background: var(--acc-accent-dim);
+}
+
+main > div.unlocked > div > div > div.wallets > div > div.order > button.disabled {
+	background: var(--acc-surface);
+	color: var(--acc-faint);
+	box-shadow: none;
+}
+
+/* Wallet rows. These are <button>s, but they are a LIST, not five primary
+ * actions — so they take the quiet surface and leave the light to the CTAs. */
+main > div.unlocked > div > div > div.wallets > div > div.list > button {
+	background: var(--acc-surface);
+	color: var(--acc-ink);
+	box-shadow: none;
+}
+
+@media only screen and (any-hover: hover) {
+
+	main > div.unlocked > div > div > div.wallets > div > div.list > button:hover {
+		background: var(--acc-surface-2);
+	}
+}
+
+main > div.unlocked > div > div > div.wallets > div > div.list > button:focus {
+	background: var(--acc-surface-2);
+	color: var(--acc-ink);
+	box-shadow: inset 0 0 0 1px var(--acc-accent);
+}
+
+main > div.unlocked > div > div > div.wallets > div > div.list > button:active {
+	color: var(--acc-ink);
+}
+
+main > div.unlocked > div > div > div.wallets > div > div.list > button:disabled {
+	background: var(--acc-surface);
+	color: var(--acc-faint);
+}
+
+main > div.unlocked > div > div > div.wallets > div > div.list > button > span.address {
+	background: rgba(0, 0, 0, 0.28);
+	border-top: 1px solid var(--acc-line);
+	color: var(--acc-dim);
+}
+
+main > div.unlocked > div > div > div.wallets > div > div.list > button > span.name > span.selected::before {
+	color: var(--acc-accent);
+}
+
+main > div.unlocked > div > div > div.wallets > div > div.list > button > span.totals > span.synced::before {
+	color: var(--acc-ok);
+}
+
+main > div.unlocked > div > div > div.wallets > div > div.list > button > span.totals > span.error::before {
+	color: var(--acc-danger);
+}
+
+/* Amounts line up in a column; give them figures that do too. */
+main > div.unlocked > div > div > div.wallets > div > div.list > button > span.totals,
+main > div.unlocked > div > div > div.sections > div > div.wallet > div > div.transactions > button > span.totals,
+main > div.unlocked > div > div > div.sections > div > div.wallet > div > div.balance {
+	font-variant-numeric: tabular-nums;
+}
+
+main > div.unlocked > div > div > div.wallets > div > div.loading > div.overlay {
+	background: var(--acc-panel-2);
+}
+
+main > div.unlocked > div > div > div.wallets > div > div.loading > div.spinner {
+	border: 0.7em solid var(--acc-accent);
+}
+
+/* The bottom status rail. */
+main > div.unlocked > div > div.status {
+	background: var(--acc-chrome);
+	box-shadow: 0 -1px 0 0 var(--acc-line);
+}
+
+main > div.unlocked > div > div.status > p::before {
+	background: var(--acc-danger);
+	border: 0.11em solid rgba(255, 255, 255, 0.65);
+}
+
+main > div.unlocked > div > div.status > p.warning::before {
+	background: var(--acc-warn);
+}
+
+main > div.unlocked > div > div.status > p.success::before {
+	background: var(--acc-ok);
+}
+
+
+/* ── section.css — panel content ─────────────────────────────────────────
+ * Every rule here exists because the panel behind it went from white to navy.
+ */
+main > div.unlocked > div > div > div.sections > div > div > div > div.navigation > button,
+main > div.unlocked > div > div > div.sections > div > div > div > div.navigation > h2,
+main > div.unlocked > div > div > div.sections > div > div > div > h3,
+main > div.unlocked > div > div > div.sections > div > div > div > div > p {
+	color: var(--acc-ink);
+}
+
+main > div.unlocked.minimal > div > div > div.sections > div > div > div > div.navigation {
+	border-bottom: 2px solid var(--acc-line);
+}
+
+main > div.unlocked > div > div > div.sections > div > div > div > h3 {
+	border-bottom: 2px solid var(--acc-line);
+}
+
+/* Back / forward arrows: quiet until touched. */
+main > div.unlocked > div > div > div.sections > div > div > div > div.navigation > button:focus {
+	color: var(--acc-accent);
+	background: transparent;
+	box-shadow: none;
+}
+
+@media only screen and (any-hover: hover) {
+
+	main > div.unlocked > div > div > div.sections > div > div > div > div.navigation > button:hover::before {
+		color: var(--acc-accent);
+	}
+}
+
+/* The row separator upstream draws only on narrow screens, as black at 0.2
+ * alpha. That was a grey hairline on a white panel; on navy it is invisible. */
+@media only screen and (max-width: 400px) {
+
+	main > div.unlocked > div > div > div.sections > div > div > div > div::after {
+		background: var(--acc-line);
+		opacity: 1;
+	}
+}
+
+/* Section CTAs keep the base pill; only the pressed state is restated. */
+main > div.unlocked > div > div > div.sections > div > div > div > div:not(.navigation) > button.clicked {
+	background: var(--acc-accent-dim);
+}
+
+/* On/off toggles. Semantic red/green — deliberately not the accent. */
+main > div.unlocked > div > div > div.sections > div > div > div > div > div.value > button {
+	background: var(--acc-danger);
+	border: 1px solid var(--acc-line);
+	box-shadow: 0px 2px 5px var(--acc-danger-deep) inset;
+}
+
+main > div.unlocked > div > div > div.sections > div > div > div > div > div.value > button.enabled {
+	background: var(--acc-ok);
+	box-shadow: 0px 2px 5px var(--acc-ok-deep) inset;
+}
+
+main > div.unlocked > div > div > div.sections > div > div > div > div > div.value > button > span {
+	background: var(--acc-ink);
+	border: 1px solid var(--acc-space);
+	box-shadow: 0 0 2px var(--acc-space) inset;
+}
+
+main > div.unlocked > div > div > div.sections > div > div > div > div > div.value > button:focus > span::after, main > div.unlocked > div > div > div.sections > div > div > div > div > div.value > button.clicked > span::after {
+	border: 2px solid var(--acc-accent);
+}
+
+/* Fields and selects. */
+main > div.unlocked > div > div > div.sections > div > div > div > div > div.value > input, main > div.unlocked > div > div > div.sections > div > div > div > div > div.value > select {
+	background: var(--acc-surface);
+	color: var(--acc-ink);
+}
+
+/* !important, because upstream's is. */
+main > div.unlocked > div > div > div.sections > div > div > div > div > div.value > select:focus-visible {
+	color: var(--acc-ink) !important;
+}
+
+main > div.unlocked > div > div > div.sections > div > div > div > div > div.value > select > option {
+	background: var(--acc-surface);
+	color: var(--acc-ink);
+}
+
+@media only screen and (any-hover: hover) {
+
+	main > div.unlocked > div > div > div.sections > div > div > div > div > div.value > select > option:hover {
+		background-color: var(--acc-surface-2);
+		color: var(--acc-ink);
+	}
+}
+
+main > div.unlocked > div > div > div.sections > div > div > div > div > div.value > select > option:checked {
+	color: var(--acc-accent);
+}
+
+main > div.unlocked > div > div > div.sections > div > div > div > div > div.value > input:focus::selection {
+	background: rgba(255, 154, 92, 0.30);
+}
+
+main > div.unlocked > div > div > div.sections > div > div > div > div > div.value > input + span, main > div.unlocked > div > div > div.sections > div > div > div > div > div.value > select + span {
+	border: 1px solid var(--acc-line);
+	box-shadow: none;
+}
+
+main > div.unlocked > div > div > div.sections > div > div > div > div.disabled > div.value > input + span, main > div.unlocked > div > div > div.sections > div > div > div > div.disabled > div.value > select + span {
+	border: 1px solid var(--acc-line);
+	box-shadow: none;
+}
+
+main > div.unlocked > div > div > div.sections > div > div > div > div.error > div.value > input + span {
+	border: 1px solid var(--acc-danger);
+	box-shadow: 0px 2px 3px rgba(228, 87, 79, 0.35) inset;
+}
+
+main > div.unlocked > div > div > div.sections > div > div > div > div > div.value > input:focus + span::after, main > div.unlocked > div > div > div.sections > div > div > div > div > div.value > select:focus + span::after, main > div.unlocked > div > div > div.sections > div > div > div > div > div.value > input.clicked + span::after, main > div.unlocked > div > div > div.sections > div > div > div > div > div.value > select.clicked + span::after {
+	border: 2px solid var(--acc-accent);
+}
+
+main > div.unlocked > div > div > div.sections > div > div > div > div.disabled > div.value > input:focus + span::after, main > div.unlocked > div > div > div.sections > div > div > div > div.disabled > div.value > select:focus + span::after, main > div.unlocked > div > div > div.sections > div > div > div > div.disabled > div.value > input.clicked + span::after, main > div.unlocked > div > div > div.sections > div > div > div > div.disabled > div.value > select.clicked + span::after {
+	border: 2px solid var(--acc-line);
+}
+
+main > div.unlocked > div > div > div.sections > div > div > div > div.error > div.value > input:focus + span::after, main > div.unlocked > div > div > div.sections > div > div > div > div.error > div.value > input.clicked + span::after {
+	border: 2px solid var(--acc-danger);
+}
+
+main > div.unlocked > div > div > div.sections > div > div > div > div > div.value > span.show, main > div.unlocked > div > div > div.sections > div > div > div > div > div.value > span.capsLock {
+	color: var(--acc-dim);
+}
+
+main > div.unlocked > div > div > div.sections > div > div > div > div > div.value > span.show:focus, main > div.unlocked > div > div > div.sections > div > div > div > div > div.value > span.show:active {
+	color: var(--acc-accent);
+}
+
+@media only screen and (any-hover: hover) {
+
+	main > div.unlocked > div > div > div.sections > div > div > div > div > div.value > span.show:hover {
+		color: var(--acc-accent);
+	}
+}
+
+main > div.unlocked > div > div > div.sections > div > div > div > div > div.value > span.show[tabindex="-1"] {
+	color: var(--acc-faint);
+}
+
+main > div.unlocked > div > div > div.sections > div > div > div > div > div.value > span.capsLock {
+	color: var(--acc-warn);
+}
+
+
+/* ── wallet_section.css ──────────────────────────────────────────────────── */
+
+main > div.unlocked > div > div > div.sections > div > div.wallet > div > div.address > div.loading {
+	background: var(--acc-panel);
+}
+
+main > div.unlocked > div > div > div.sections > div > div.wallet > div > div.address > div.loading > div {
+	border: 0.7em solid var(--acc-accent);
+}
+
+main > div.unlocked > div > div > div.sections > div > div.wallet > div > div.balance > div.syncStatus {
+	background: var(--acc-panel);
+}
+
+main > div.unlocked > div > div > div.sections > div > div.wallet > div > div.balance > div.syncStatus > svg > circle {
+	stroke: var(--acc-accent);
+}
+
+main > div.unlocked > div > div > div.sections > div > div.wallet > div > div.balance > div.syncStatus > svg > circle.background {
+	stroke: var(--acc-line);
+}
+
+main > div.unlocked > div > div > div.sections > div > div.wallet > div > div.balance > div.syncStatus > p,
+main > div.unlocked > div > div > div.sections > div > div.wallet > div > div.balance > div.syncStatus > span {
+	color: var(--acc-ink);
+}
+
+/* Transaction rows — a list, like the wallets rail. */
+main > div.unlocked > div > div > div.sections > div > div.wallet > div > div.transactions > button {
+	background-color: var(--acc-surface);
+	color: var(--acc-ink);
+	box-shadow: none;
+}
+
+@media only screen and (any-hover: hover) {
+
+	main > div.unlocked > div > div > div.sections > div > div.wallet > div > div.transactions > button:hover {
+		background-color: var(--acc-surface-2);
+	}
+}
+
+main > div.unlocked > div > div > div.sections > div > div.wallet > div > div.transactions > button:focus {
+	background-color: var(--acc-surface-2);
+	color: var(--acc-ink);
+	box-shadow: inset 0 0 0 1px var(--acc-accent);
+}
+
+main > div.unlocked > div > div > div.sections > div > div.wallet > div > div.transactions > button:active {
+	color: var(--acc-ink);
+}
+
+main > div.unlocked > div > div > div.sections > div > div.wallet > div > div.transactions > button > span.id {
+	background: rgba(0, 0, 0, 0.28);
+	border-top: 1px solid var(--acc-line);
+	color: var(--acc-dim);
+}
+
+/* The fades that hide the scroll edges — they must match the panel, not white. */
+main > div.unlocked > div > div > div.sections > div > div.wallet > div > div.transactions::before,
+main > div.unlocked > div > div > div.sections > div > div.wallet > div > div.transactionsNavigation::before {
+	background-color: var(--acc-panel);
+}
+
+main > div.unlocked > div > div > div.sections > div > div.wallet > div > div.transactionsNavigation > button {
+	color: var(--acc-ink);
+}
+
+main > div.unlocked > div > div > div.sections > div > div.wallet > div > div.transactionsNavigation > button:focus {
+	color: var(--acc-accent);
+	background: transparent;
+	box-shadow: none;
+}
+
+
+/* ── log_section.css / about_section.css ─────────────────────────────────── */
+
+main > div.unlocked > div > div > div.sections > div > div.log > div > div.navigation {
+	border-bottom: 2px solid var(--acc-line);
+}
+
+main > div.unlocked > div > div > div.sections > div > div.log > div > div.messages > p {
+	color: var(--acc-ink);
+}
+
+main > div.unlocked > div > div > div.sections > div > div.log > div > div.messages > p > span.timestamp {
+	color: var(--acc-faint);
+	font-variant-numeric: tabular-nums;
+}
+
+main > div.unlocked > div > div > div.sections > div > div.about > div > div > ul {
+	color: var(--acc-ink);
+}
+
+
+/* ── message.css — the modal ─────────────────────────────────────────────
+ * Upstream's dialog is white with deep-violet text and violet controls. It is
+ * where seed phrases, passphrase prompts and send confirmations appear, so it
+ * has to be legible before it is pretty.
+ */
+/* The hairline is an INSET box-shadow, not a border. Upstream sizes this box
+ * `width: calc(100% - …)` under `box-sizing: content-box`, so a 1px border
+ * would add 2px to the computed width and push the dialog past its own parent
+ * — on the one screen that shows seed phrases and send confirmations. An inset
+ * shadow costs no layout. (The shadow also restates upstream's outer drop, or
+ * setting box-shadow here would delete it.) */
+aside.message > div > div {
+	background: var(--acc-panel);
+	color: var(--acc-ink);
+	box-shadow: 0 0 10px 3px rgba(0, 0, 0, 0.55), inset 0 0 0 1px var(--acc-line);
+}
+
+aside.message > div > div > h2,
+aside.message > div > div > p,
+aside.message > div > div > p > span.text {
+	color: var(--acc-ink);
+}
+
+aside.message > div > div.separate > p {
+	border-top: 0.15em solid var(--acc-line);
+	border-bottom: 0.15em solid var(--acc-line);
+}
+
+/* The "there is more text below" arrows. */
+aside.message > div > div > span.upArrow, aside.message > div > div > span.downArrow {
+	color: var(--acc-dim);
+}
+
+/* The modal's own button base — declared in index.html's inline <style>, not in
+ * message.css, so it is white-on-white here unless it is restated. */
+aside.message > div > div > div > button {
+	background: var(--acc-btn);
+	color: var(--acc-btn-ink);
+	border: 0.15em solid transparent;
+}
+
+aside.message > div > div > p > span.text a,
+aside.message > div > div > p > span.text a[tabindex="-1"] {
+	color: var(--acc-accent);
+}
+
+aside.message > div > div > p > span.text a:focus {
+	color: var(--acc-accent-hi);
+}
+
+aside.message > div > div > p > span.text span.input > span.show, aside.message > div > div > p > span.text span.input > span.capsLock {
+	color: var(--acc-dim);
+}
+
+aside.message > div > div > p > span.text span.input > span.show:focus, aside.message > div > div > p > span.text span.input > span.show:active {
+	color: var(--acc-accent);
+}
+
+@media only screen and (any-hover: hover) {
+
+	aside.message > div > div > p > span.text span.input > span.show:hover {
+		color: var(--acc-accent);
+	}
+}
+
+aside.message > div > div > p > span.text span.input > span.show[tabindex="-1"] {
+	color: var(--acc-faint);
+}
+
+aside.message > div > div > p > span.text span.input > span.capsLock {
+	color: var(--acc-warn);
+}
+
+aside.message > div > div > p > span.text span.input > input {
+	background: var(--acc-surface);
+	border: 0.15em solid var(--acc-line);
+	color: var(--acc-ink);
+}
+
+@media only screen and (any-hover: hover) {
+
+	aside.message > div > div > p > span.text span.input > input:hover, aside.message > div > div > p > span.text span.input > span.show:hover + input {
+		border: 0.15em solid var(--acc-accent-dim);
+	}
+
+	aside.message > div > div > p > span.text span.input > span.show:hover + input:focus {
+		border: 0.15em solid var(--acc-accent);
+	}
+}
+
+aside.message > div > div > p > span.text span.input > input:focus {
+	border: 0.15em solid var(--acc-accent);
+}
+
+aside.message > div > div > p > span.text span.input > input::placeholder {
+	color: var(--acc-faint);
+}
+
+aside.message > div > div > p > span.text span.radio input[type="radio"] {
+	border: 2px solid var(--acc-line);
+}
+
+aside.message > div > div > p > span.text span.radio input[type="radio"]::before {
+	background-color: var(--acc-accent);
+}
+
+aside.message > div > div > p > span.text span.radio input[type="radio"]:focus::before {
+	background-color: var(--acc-accent-hi);
+}
+
+/* Hardware-wallet PIN matrix. */
+aside.message > div > div > p > span.text span.pinMatrix {
+	background-color: var(--acc-line);
+	border: 1px solid var(--acc-line);
+}
+
+aside.message > div > div > p > span.text span.pinMatrix > span {
+	background-color: var(--acc-surface);
+}
+
+aside.message > div > div > p > span.text span.result > svg > circle {
+	stroke: var(--acc-line);
+}
+
+aside.message > div > div > p > span.text span.result.success > svg > circle.background {
+	stroke: var(--acc-ok);
+}
+
+aside.message > div > div > p > span.text span.result.failure > svg > circle.background {
+	stroke: var(--acc-danger);
+}
+
+aside.message > div > div > p > span.text span.copy.failed {
+	color: var(--acc-danger);
+}
+
+aside.message > div > div > p > span.text *::selection {
+	background: rgba(255, 154, 92, 0.30);
+}
+
+@media only screen and (any-hover: hover) {
+
+	aside.message > div > div > div > button:hover {
+		background: var(--acc-btn-hi);
+	}
+}
+
+aside.message > div > div > div > button:focus, aside.message > div > div > div > button.focus {
+	background: var(--acc-btn-hi);
+	border: 0.15em solid transparent;
+	box-shadow: var(--acc-ring);
+}
+
+aside.message > div > div > div > button:active {
+	background: var(--acc-accent-dim);
+	border: 0.15em solid transparent;
+}
+
+aside.message > div > div > div > button:disabled {
+	background: var(--acc-surface);
+	color: var(--acc-faint);
+}
+
+aside.message > div > div > div > button:disabled.loading {
+	background: var(--acc-surface-2);
+	border: 0.15em solid var(--acc-line);
+	color: var(--acc-ink);
+}
+
+/* Destructive confirm — delete wallet, delete all wallets. The fill carries
+ * upstream's `color: white` label, which is why it is the deeper red. */
+aside.message > div > div > div > button.dangerous::before {
+	background: var(--acc-danger-fill);
+}
+
+
+/* ── The four notification bars ──────────────────────────────────────────
+ * cookie acceptance, install app, check for updates, maintenance. Identical
+ * rulesets upstream, so identical here: white bar, black text -> chrome rail.
+ */
+section.cookieAcceptance,
+section.installApp,
+section.checkForUpdates,
+section.maintenanceNotification {
+	background: var(--acc-chrome);
+	box-shadow: 0 0 5px 0 rgba(0, 0, 0, 0.5), inset 0 0 0 1px var(--acc-line);
+}
+
+section.cookieAcceptance > div > p,
+section.installApp > div > p,
+section.checkForUpdates > div > p,
+section.maintenanceNotification > div > p {
+	color: var(--acc-ink);
+}
+
+section.cookieAcceptance > div > span::after,
+section.checkForUpdates > div > span::after,
+section.maintenanceNotification > div > span::after {
+	color: var(--acc-dim);
+}
+
+section.cookieAcceptance > div > button,
+section.installApp > div > button,
+section.checkForUpdates > div > button,
+section.maintenanceNotification > div > button {
+	background: var(--acc-surface);
+	color: var(--acc-ink);
+	box-shadow: none;
+}
+
+@media only screen and (any-hover: hover) {
+
+	section.cookieAcceptance > div > button:hover,
+	section.installApp > div > button:hover,
+	section.checkForUpdates > div > button:hover,
+	section.maintenanceNotification > div > button:hover {
+		background: var(--acc-surface-2);
+		color: var(--acc-accent);
+	}
+}
+
+section.cookieAcceptance > div > button:focus,
+section.installApp > div > button:focus,
+section.checkForUpdates > div > button:focus,
+section.maintenanceNotification > div > button:focus {
+	background: var(--acc-surface-2);
+	color: var(--acc-accent);
+	box-shadow: var(--acc-ring);
+}
+
+section.cookieAcceptance > div > button:active,
+section.installApp > div > button:active,
+section.checkForUpdates > div > button:active,
+section.maintenanceNotification > div > button:active {
+	background: var(--acc-line);
+	color: var(--acc-ink);
+}
+
+/* "Remind me later" goes text-only on narrow screens; upstream fades it with
+ * black alphas that vanish on a dark rail. */
+@media only screen and (max-width: 700px) {
+
+	section.checkForUpdates > div > button.remindMeLater,
+	section.installApp > div > button.remindMeLater {
+		color: var(--acc-faint);
+	}
+
+	section.checkForUpdates > div > button.remindMeLater:focus,
+	section.installApp > div > button.remindMeLater:focus {
+		color: var(--acc-dim);
+	}
+
+	section.checkForUpdates > div > button.remindMeLater:active,
+	section.installApp > div > button.remindMeLater:active {
+		color: var(--acc-ink);
+	}
+}
+
+@media only screen and (max-width: 700px) and (any-hover: hover) {
+
+	section.checkForUpdates > div > button.remindMeLater:hover,
+	section.installApp > div > button.remindMeLater:hover {
+		color: var(--acc-dim);
+	}
+}
+
+
+/* ── language.css — the language picker ──────────────────────────────────
+ * Upstream's only grey surface. Retinted so it belongs to the same night.
+ */
+main > div.language > div.shadow {
+	background: var(--acc-chrome);
+	box-shadow: 0 0 5px 0 rgba(0, 0, 0, 0.5);
+}
+
+main > div.language > div > select > option {
+	background: var(--acc-chrome);
+	color: var(--acc-ink);
+}
+
+@media only screen and (any-hover: hover) {
+
+	main > div.language > div > select > option:hover {
+		background-color: var(--acc-surface);
+	}
+
+	main > div.language > div > select:hover + button, main > div.language > div button:hover {
+		background: var(--acc-surface);
+		color: var(--acc-accent);
+	}
+}
+
+main > div.language > div > select > option:checked {
+	color: var(--acc-accent);
+}
+
+main > div.language > div button:focus,
+main > div.language > div button:active,
+main > div.language > div button.clicked,
+main > div.language > div > button.clicked {
+	background: var(--acc-surface);
+	color: var(--acc-accent);
+	box-shadow: none;
+}

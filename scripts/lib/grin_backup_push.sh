@@ -3,9 +3,13 @@
 # =============================================================================
 # ONE remote target + ONE dedicated ssh key + ONE cron-safe CLI, shared by
 # every product that produces encrypted backup archives:
-#   · Script 08 ▸ 9  toolkit backup   (089_backup_restore.sh, temp_dir_*.enc)
+#   · Script 08 ▸ 9  toolkit backup   (089_backup_restore.sh, grin_toolkit_backup_*)
 #   · Script 07 solo Maintenance      (lib/07_solo_backup.sh, grin_solo_backup_*)
+#   · Script 07 public pool hub       (lib/07_lib_pool_backup.sh, grin_pubpool_backup_*
+#                                       and grin_pubpooltestnet_backup_*)
 #   · Script 059 Grin Drop            (lib/059_lib_backup.sh, grin_drop_backup_*)
+# Anything that goes through gbe_finalize_archive is pushed — the list above is
+# the set of products that do, not a set this file knows about.
 #
 # Right after an archive is written, the product calls gbp_push_file (the
 # interactive path) or the self-contained CLI /usr/local/bin/grin-backup-push

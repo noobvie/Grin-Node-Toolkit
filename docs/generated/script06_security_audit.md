@@ -5,7 +5,8 @@
 (`web/06d_tiny_explorer/tiny-explorer-server.js`), plus the peer/topology data both expose
 (the "peer map"). Focus: injection, node-proxy DoS/amplification, info leak. The 06 stats
 collector (`06_collector.py`, world.grin.money) is out of scope for this pass beyond the peer
-exposure principle it shares.
+exposure principle it shares — except **F4**, added 2026-08-15 to record one deliberate new
+public field in the collector's own `peers.json`.
 
 **Date:** 2026-07-10 · **Auditor:** Claude · **Verdict:** Both explorers are **injection-safe**
 (prepared statements, strict ref/commit regexes, localhost bind, no user-reflected HTML). The
@@ -63,6 +64,27 @@ drive the archive node into the documented page-cache thrash. Plus a topology in
   echoed; `/rest/` CORS `*` is intentional for a read-only public API.
 - **Outbound calls** (price feeds, sync-reference nodes) target operator-configured or hardcoded
   hosts — no user-controlled URL, so no SSRF from visitors.
+
+### F4 — [Info] `node_id` on the public peer map (added 2026-08-15, by design)
+- **Context:** `data/peers.json` (world.grin.money) is fetched by the browser, so every field in
+  it is public. It now carries `node_id` per peer so the map's location drill-down can tell two
+  hosts apart inside one masked /24 — see `script06_design.md` for why the list is unusable
+  without it.
+- **Why it is not a deanonymisation step:** `node_id = sha256(salt|real_ip)[:4]` where `salt` is a
+  128-bit value minted per install and kept in `meta.node_id_salt` — **never exported**
+  ([06_collector.py `_node_id_salt`](../../scripts/lib/06_collector.py)). Unsalted this would be a
+  disclosure, not a hash: the /24 is published alongside it, leaving 256 candidates to brute-force
+  in microseconds. With the salt secret there is no offline attack, and 4 hex chars are too few to
+  serve as a tracking identifier or to correlate one node across two installs (different salts).
+- **What it does grant, deliberately:** a stable label for one host across collector runs *on this
+  install*, which the published `ip` + `port` + `user_agent` triple already effectively provided.
+  It adds no new location, version or topology detail.
+- **If the salt leaks:** it is the only secret here. Anyone holding it can map a published
+  `node_id` back to the exact IP within a /24. It lives in the stats DB, so it rides along in the
+  same backups — treat `stats.db` as holding one small secret, and rotate by deleting the
+  `node_id_salt` row (all ids change on the next run; nothing else breaks).
+- **Not applicable to F2's concern:** this is the 06 collector's own peer *registry*, not
+  GrinScan's live `get_connected_peers` set.
 
 ---
 

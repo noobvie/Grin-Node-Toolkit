@@ -15,10 +15,13 @@
  * Foreign API is plain JSON-RPC — no encryption.
  * One session opened per request — no session caching.
  *
- * Wallet API ports:
- *   Network   Foreign   Owner
- *   Mainnet   3415      3420
- *   Testnet   13415     13420
+ * Wallet API ports — BOTH APIs ride the OWNER port here. Drop runs one
+ * `grin-wallet owner_api` with owner_api_include_foreign, so the standalone
+ * `listen` port (3415/13415) is retired; the Foreign path stays /v2/foreign.
+ * See config.js wallet_foreign_api_port.
+ *   Network   Foreign + Owner
+ *   Mainnet   3420
+ *   Testnet   13420
  *
  * Auth: HTTP Basic  user="grin"  password=<api_secret file contents>
  */

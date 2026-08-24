@@ -297,20 +297,16 @@
       });
     }
 
-    // Named default theme. Three possible runtimes:
+    // Named default theme. Runtimes, in the order tried:
     //   · public pages  → GriniumTheme (public-theme.js) owns the body class + switcher
-    //   · admin panel   → ThemeSwitcher (theme.js) applies CSS variables
     //   · neither loaded → fall back to adding the body class directly
+    // The ThemeSwitcher branch that sat between these two went with js/theme.js when that
+    // file was deleted in 2026-08: no page had loaded it since the 2026-06 admin rebuild,
+    // and this script only ever runs on public pages, so the branch could not be reached.
     if (brand.default_theme) {
-      try { localStorage.setItem('admin-theme', brand.default_theme); } catch (e) {}
       if (window.GriniumTheme && typeof window.GriniumTheme.applyDefault === 'function') {
         window.GriniumTheme.applyDefault(
           brand.default_theme, !!brand.allow_theme_switch, brand.enabled_themes);
-      } else if (window.ThemeSwitcher && typeof window.ThemeSwitcher.applyTheme === 'function') {
-        // Don't override a visitor's saved choice when switching is allowed.
-        if (!brand.allow_theme_switch || !localStorage.getItem('user-theme')) {
-          window.ThemeSwitcher.applyTheme(brand.default_theme);
-        }
       } else {
         document.body && document.body.classList.add(brand.default_theme + '-theme');
       }

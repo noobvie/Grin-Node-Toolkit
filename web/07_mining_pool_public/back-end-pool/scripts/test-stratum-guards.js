@@ -1,9 +1,9 @@
 'use strict';
 
 // Unit tests for the P2 stratum attack-surface guards (2026-07-17 hardening):
-//   · Finding 2 — share dedup keyed on the job's pre_pow (the actual work), NOT the pool's
+//   · share dedup keyed on the job's pre_pow (the actual work), NOT the pool's
 //     incrementing job_id, so one solved (nonce,pow) can't be credited once per wrapping job.
-//   · Finding 3/4 — per-connection message token bucket that throttles submit / login /
+//   · per-connection message token bucket that throttles submit / login /
 //     pre-login floods without disconnecting a legitimate miner.
 // Run: node scripts/test-stratum-guards.js   (no DB / network needed — pure logic tests)
 
@@ -27,7 +27,7 @@ function check(name, cond) {
 const shareHash = (addr, workId, worker, nonce) =>
   ShareValidator.prototype.generateShareHash.call(null, addr, workId, worker, nonce);
 
-// ── Finding 2: dedup key is the pre_pow (actual work), not the pool job_id ──────────────
+// ── Dedup key is the pre_pow (actual work), not the pool job_id ─────────────────────────
 {
   const addr   = 'grin1abc';
   const worker = 'rig01';
@@ -60,7 +60,7 @@ const shareHash = (addr, workId, worker, nonce) =>
   check('hash is deterministic', h === shareHash(addr, prePow, worker, nonce));
 }
 
-// ── Finding 3/4: per-connection message token bucket ────────────────────────────────────
+// ── Per-connection message token bucket ─────────────────────────────────────────────────
 {
   // Fresh bucket (full) allows the first message.
   const first = tokenBucketStep(MSG_BURST, 0, 0, MSG_RATE_PER_SEC, MSG_BURST);

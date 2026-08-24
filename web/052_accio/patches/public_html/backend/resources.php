@@ -107,11 +107,19 @@
 	// Mask images
 	const MASK_IMAGE = "./images/mask_images/mask_image.svg";
 
-	// Theme color
-	const THEME_COLOR = "#FFFFFF";
-	
-	// Background color
-	const BACKGROUND_COLOR = "#7A00D9";
+	// Theme color — ACCIO PATCH: the "Orbital Dawn" chrome rail, matching
+	// --acc-chrome in styles/accio.css. This is <meta name="theme-color">, i.e.
+	// the browser's own UI tint around the page; upstream's #FFFFFF would put a
+	// white bar above a near-black wallet on every mobile browser.
+	const THEME_COLOR = "#0F1226";
+
+	// Background color — ACCIO PATCH: the "Orbital Dawn" ground, matching
+	// --acc-space. Read by more than the manifest: the PWA splash, the Windows
+	// tile, the Safari pinned-tab mask tint, and scripts/
+	// startup_images_creator.js, which fills the generated iOS launch images
+	// with it before drawing the white mark. Leaving it violet is a violet
+	// flash every time the installed app opens.
+	const BACKGROUND_COLOR = "#080A16";
 	
 	// Files
 	$files = [
@@ -1461,6 +1469,18 @@
 			"Cache" => TRUE,
 			"Minified" => FALSE,
 			"Checksum" => "he11vx/asU+kvHkYSNNVP3Ydb1qa7CE5hTB/o8gF33cJK0oT6pQfRnCWZbSr+hyDBwpsosfiSw8drEpypaBbLA=="
+		],
+		// ACCIO PATCH — "Orbital Dawn", added; upstream has no such file. The
+		// entry exists so the file is versioned and SRI'd like every other
+		// stylesheet: _acb_apply_patches rewrites the Checksum from the staged
+		// bytes and bumps the Version on every build, so the value below is a
+		// starting point, not something to maintain by hand. Without an entry
+		// here getChecksum() returns "" and the theme would ship un-SRI'd.
+		"./styles/accio.css" => [
+			"Version" => 1,
+			"Cache" => TRUE,
+			"Minified" => FALSE,
+			"Checksum" => "BmBYxLscQJPtYpz0Y5KK88Gk9HhojCInXA/T5jwnmeYKnz5eaea86r/18Hg5XzqP5MpW1MZ6Qz92P6tUX5YL3w=="
 		],
 		"./shaders/logo.frag" => [
 			"Version" => 3,

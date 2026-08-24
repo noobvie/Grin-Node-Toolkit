@@ -2,25 +2,37 @@
 # =============================================================================
 # 06_global_grin_health.sh — Global Grin Health
 # =============================================================================
+#   N) Install Nginx + Certbot + Whois
+#
 #   A) Network Stats + Peer Map   (Python collector → Chart.js + Leaflet)
 #      stats.yourdomain.com       nginx serves /var/www/grin-stats/ (static)
 #
-#   B) Grin Explorer              (aglkm/grin-explorer — Rust + Rocket)
+#   B) GrinScan                   (lib/06b_grinscan.sh — Node + SQLite)
+#      mainnet + testnet, mobile friendly, works against a PRUNED node
+#
+#   C) Grin Explorer              (aglkm/grin-explorer — Rust + Rocket)
 #      explorer.yourdomain.com    nginx proxy → 127.0.0.1:8000
+#      Archive node required.
+#
+#   D) Tiny Explorer              (lib/06d_tiny_explorer.sh)
+#      Stateless single-block/kernel/output explorer for pool deep-links.
+#      Mainnet, archive node (local or remote, e.g. scan.grin.money).
 # =============================================================================
 #
 # PREREQUISITES — Complete these steps before using this script:
 #
 #   1. Grin Node  (Script 01)
 #      ● Mainnet node is required — testnet peer data is very limited
-#      ● Pruned node (/opt/grin/node/mainnet-prune)  → sufficient for option A (Stats + Map)
-#      ● Full archive (/opt/grin/node/mainnet-full)  → required for option B (Explorer)
-#        The explorer can also use a remote archival node instead (B→2)
+#      ● Pruned node (/opt/grin/node/mainnet-prune)  → enough for A (Stats + Map)
+#                                                     and for B (GrinScan)
+#      ● Full archive (/opt/grin/node/mainnet-full)  → required for C (Grin Explorer)
+#                                                     and D (Tiny Explorer)
+#        C and D can each point at a remote archival node instead (C→2 / D setup)
 #      ● Node must be running and listening on port 3413 (mainnet)
 #
 #   2. Nginx + Certbot
 #      ● Use option N) in this script's main menu to install nginx + certbot + whois
-#      ● This script creates its own nginx site configs (option A→5 and B→5)
+#      ● This script creates its own nginx site configs (option A→5 and C→5)
 #
 #   3. DNS records  (external — must be done BEFORE running nginx setup)
 #      ● Create an A-record: stats.yourdomain.com    → this server's public IP
@@ -32,7 +44,7 @@
 #   [Script 06]  N) Install Nginx + Certbot + Whois
 #   [DNS panel]  Point your subdomains to this server's IP address
 #   [Script 06]  A: 1 Install → 2 Import History → 3 Start Updates → 5 Nginx
-#                B: 1 Install & Build → 2 Configure → 3 Start → 5 Nginx
+#                C: 1 Install & Build → 2 Configure → 3 Start → 5 Nginx
 # =============================================================================
 
 set -euo pipefail
@@ -59,8 +71,9 @@ WWW_DIR="/var/www/grin-stats"
 COLLECTOR_BIN="/usr/local/bin/grin-stats-collector"
 # Self-heal: the shared lib (grin_node_secrets.sh) re-resolves the live node's
 # api/foreign secret paths into config.env before every collector run and via a
-# systemd timer, so a node rebuild (prune↔main changes both the node dir AND the
-# secrets) doesn't break the collector with HTTP 401. $GNS_SYNC_BIN is the CLI it
+# systemd timer, so a node rebuild doesn't break the collector with HTTP 401.
+# Since the /opt/grin/keys/<net> vault landed it is the secret PATH that moves on
+# a prune↔full rebuild, not the secret VALUE. $GNS_SYNC_BIN is the CLI it
 # installs (default /usr/local/bin/grin-secret-sync).
 DB_PATH="$DATA_DIR/stats.db"
 PRICE_COLLECTOR_BIN="/usr/local/bin/grin-price-collector"
@@ -184,9 +197,10 @@ _resolve_secret_from_toml() {
 
 # ─── Self-heal: re-resolve the live node's secrets before a collector run ─────
 # Delegates to the shared lib (grin_node_secrets.sh, sourced above) so a node
-# rebuild — which changes both the node dir (mainnet-prune ↔ mainnet-full) and
-# regenerates the secrets — no longer breaks the collector with HTTP 401 until
-# someone remembers to re-run Install. Best-effort: never fails the caller.
+# rebuild — which moves the node dir (mainnet-prune ↔ mainnet-full) and with it
+# the secret PATH — no longer breaks the collector with HTTP 401 until someone
+# remembers to re-run Install. The secret VALUES are held stable by the
+# /opt/grin/keys/<net> vault. Best-effort: never fails the caller.
 # (The installed $GNS_SYNC_BIN CLI + systemd timer do the same box-wide on a
 # schedule; this is the belt-and-braces call right before the interactive run.)
 _resync_collector_secrets() {
@@ -993,7 +1007,7 @@ server {
     # ── Public JSON API — whitelisted endpoints only ───────────────────────────
     # Only the files below are intentionally public.
     # /data/ stays blocked; these exact locations are the only way in from outside.
-    # Rate limiting (30 req/min/IP, burst 10) is applied via the shared snippet.
+    # Rate limiting (grin_api = 300 r/m per IP, burst 10) via the shared snippet.
     # See /etc/nginx/snippets/grin-api.conf and /etc/nginx/conf.d/grin-rate-limit.conf
     #
     # Endpoints:
@@ -1274,13 +1288,13 @@ configure_analytics() {
 }
 
 ################################################################################
-# OPTION B — Grin Explorer (aglkm/grin-explorer)
+# OPTION C — Grin Explorer (aglkm/grin-explorer)
 ################################################################################
 
 EXPLORER_REPO="https://github.com/aglkm/grin-explorer.git"
 EXPLORER_SESSION="grin-explorer"
 
-# ── B-1: Install & Build ──────────────────────────────────────────────────────
+# ── C-1: Install & Build ──────────────────────────────────────────────────────
 install_explorer() {
     require_root
     clear
@@ -1358,7 +1372,7 @@ install_explorer() {
     pause
 }
 
-# ── B-2: Configure ────────────────────────────────────────────────────────────
+# ── C-2: Configure ────────────────────────────────────────────────────────────
 configure_explorer() {
     [[ ! -f "$EXPLORER_BIN" ]] && { die "Not installed. Run Install (1) first."; return; }
     clear
@@ -1489,7 +1503,7 @@ configure_explorer() {
     pause
 }
 
-# ── B-3: Start ────────────────────────────────────────────────────────────────
+# ── C-3: Start ────────────────────────────────────────────────────────────────
 start_explorer() {
     [[ ! -f "$EXPLORER_BIN" ]] && { die "Not installed. Run Install (1) first."; return; }
     clear
@@ -1504,7 +1518,7 @@ start_explorer() {
             warn "chain_data not found at: ${grin_dir_val}/chain_data"
             echo -e "  ${DIM}The explorer reads block data directly from chain_data on disk.${RESET}"
             echo -e "  ${DIM}Toolkit default for full archive: /opt/grin/node/mainnet-full/chain_data${RESET}"
-            echo -e "  ${DIM}Run Configure (B→2) to update grin_dir to the correct path.${RESET}"
+            echo -e "  ${DIM}Run Configure (C→2) to update grin_dir to the correct path.${RESET}"
             echo ""
             echo -ne "Continue anyway? [Y/n/0]: "
             read -r cont_anyway
@@ -1536,17 +1550,17 @@ start_explorer() {
     else
         warn "Explorer may still be starting — check port 8000 in a moment."
         echo -e "  ${DIM}Attach: tmux attach -t ${EXPLORER_SESSION}${RESET}"
-        echo -e "  ${DIM}If it exits immediately, run Configure (B→2) to fix grin_dir / chain_data path.${RESET}"
+        echo -e "  ${DIM}If it exits immediately, run Configure (C→2) to fix grin_dir / chain_data path.${RESET}"
     fi
     log "Explorer session started: $EXPLORER_SESSION"
     pause
 }
 
-# ── B-7: Schedule Explorer auto-start (@reboot via cron) ──────────────────────
+# ── C-6: Schedule Explorer auto-start (@reboot via cron) ──────────────────────
 schedule_explorer_autostart() {
     [[ ! -f "$EXPLORER_BIN" ]] && { die "Not installed. Run Install (1) first."; return; }
     clear
-    echo -e "\n${BOLD}${CYAN}── B-7) Auto-Start Explorer on Boot ──${RESET}\n"
+    echo -e "\n${BOLD}${CYAN}── C-6) Auto-Start Explorer on Boot ──${RESET}\n"
     echo -e "  Adds a ${BOLD}@reboot${RESET} cron entry that sleeps N minutes, then launches"
     echo -e "  grin-explorer in a tmux session (mirrors option 3 — Start)."
     echo ""
@@ -1607,7 +1621,7 @@ schedule_explorer_autostart() {
     pause
 }
 
-# ── B-4: Stop ─────────────────────────────────────────────────────────────────
+# ── C-Z: Stop ─────────────────────────────────────────────────────────────────
 stop_explorer() {
     clear
     echo -e "\n${BOLD}${CYAN}── Stop Grin Explorer ──${RESET}\n"
@@ -1621,7 +1635,7 @@ stop_explorer() {
     pause
 }
 
-# ── B-X: Nuke — remove service, nginx, crontab, data dir ──────────────────────
+# ── C-X: Nuke — remove service, nginx, crontab, data dir ──────────────────────
 nuke_explorer() {
     require_root
     clear
@@ -1671,7 +1685,7 @@ nuke_explorer() {
     pause
 }
 
-# ── B-5: Setup Nginx ──────────────────────────────────────────────────────────
+# ── C-5: Setup Nginx ──────────────────────────────────────────────────────────
 setup_nginx_explorer() {
     require_root
     clear
@@ -1731,7 +1745,7 @@ NGINX
     pause
 }
 
-# ── B-6: Status ───────────────────────────────────────────────────────────────
+# ── C-7: Status ───────────────────────────────────────────────────────────────
 status_explorer() {
     clear
     echo -e "\n${BOLD}${CYAN}── Grin Explorer Status ──${RESET}\n"

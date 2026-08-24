@@ -328,7 +328,25 @@ step_remove_nginx_configs() {
         done < <(find /etc/nginx/conf.d -maxdepth 1 -name "$pat" -type f 2>/dev/null || true)
     done
 
-    if [[ ${#found_confs[@]} -eq 0 && ${#confds[@]} -eq 0 ]]; then
+    # And /etc/nginx/snippets/ — the third place the toolkit writes nginx files, and the
+    # one nothing else swept. Snippets are only ever reached via "include", so a leftover
+    # is inert rather than a boot failure (unlike a conf.d zone) — but it is still a stale
+    # CSP/HSTS the next install silently inherits if the filename happens to match.
+    # Three naming families are in play and none is covered by the *grin* glob alone:
+    # script07-<svc>-headers.conf / -page-headers.conf (pool), accio-<net>-*.conf (052),
+    # and grin-api.conf (06). Swept LAST so the vhosts that include them are already gone.
+    local -a snippets=()
+    local sseen=""
+    for pat in '*grin*' 'script[0-9][0-9]-*.conf' 'accio-*.conf'; do
+        while IFS= read -r f; do
+            [[ -n "$f" ]] || continue
+            [[ "$sseen" == *"|$f|"* ]] && continue
+            sseen+="|$f|"
+            snippets+=("$f")
+        done < <(find /etc/nginx/snippets -maxdepth 1 -name "$pat" -type f 2>/dev/null || true)
+    done
+
+    if [[ ${#found_confs[@]} -eq 0 && ${#confds[@]} -eq 0 && ${#snippets[@]} -eq 0 ]]; then
         info "No Grin nginx configs found. Skipping."
         log "[STEP 3] No nginx configs found. Skipped."
         return
@@ -344,6 +362,9 @@ step_remove_nginx_configs() {
     for c in "${confds[@]}"; do
         echo -e "  ${YELLOW}→${RESET} $c  ${DIM}(conf.d)${RESET}"
     done
+    for c in "${snippets[@]}"; do
+        echo -e "  ${YELLOW}→${RESET} $c  ${DIM}(snippets)${RESET}"
+    done
 
     if confirm_step "Remove all Grin nginx configs and reload nginx?"; then
         for c in "${found_confs[@]}"; do
@@ -358,6 +379,11 @@ step_remove_nginx_configs() {
             rm -f "$c"
             info "Removed conf.d file: $(basename "$c")"
             log "[STEP 3] DELETED conf.d: $c"
+        done
+        for c in "${snippets[@]}"; do
+            rm -f "$c"
+            info "Removed snippet: $(basename "$c")"
+            log "[STEP 3] DELETED snippet: $c"
         done
 
         if nginx -t 2>/dev/null; then

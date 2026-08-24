@@ -145,11 +145,49 @@ EOF
     systemctl enable "$GW_SERVICE" 2>/dev/null || true
     success "Systemd service $GW_SERVICE installed."
 
+    # Open the public stratum port. Without this a box with an active firewall
+    # completes the whole pairing — green tunnel, green status here — and still
+    # refuses every miner, which reads as a pairing fault rather than a firewall
+    # one. The hub opens its own wg port in init-server; this is the edge's half.
+    gw_open_firewall
+
     echo ""
     echo -e "  ${BOLD}This gateway's WireGuard public key${RESET} (give it to the pool operator):"
     echo -e "    ${GREEN}$(cat "$GW_DIR/wg_public.key" 2>/dev/null)${RESET}"
     echo ""
-    echo -e "  Next: ${BOLD}2) Configure${RESET} → ${BOLD}3) Bring up tunnel${RESET} → ${BOLD}4) Service control${RESET}"
+    # Do NOT advertise 2) Configure as the next keypress: the pairing string it wants
+    # does not exist yet, so an operator who goes straight there meets a form they
+    # cannot fill and starts inventing values. The next action is on the OTHER box.
+    echo -e "  ${BOLD}${YELLOW}STOP HERE — the next step is not on this box.${RESET}"
+    echo -e "  Copy the key above to the pool operator. On the POOL box they either:"
+    echo -e "    · admin panel → ${BOLD}Regions & Gateways${RESET} → New region, paste the key, Save"
+    echo -e "    · or SSH → Script 07 → ${BOLD}W) Multi-region${RESET} → 2) Add a gateway peer"
+    echo -e "  Both hand back one ${BOLD}GRINGW1|…${RESET} line."
+    echo ""
+    echo -e "  ${DIM}Come back here with that line and run 2) Configure → 3) Bring up tunnel${RESET}"
+    echo -e "  ${DIM}→ 4) Service control. Nothing here works until you have it.${RESET}"
+}
+
+# ─── Firewall — the public stratum port ─────────────────────────────────────────
+# Idempotent; safe to call from both Install and Configure (the port can change).
+# No-op when no managed firewall is active, which is the common fresh-VPS case.
+gw_open_firewall() {
+    local port; port=$(gw_read_conf public_stratum_port "3333")
+    [[ "$port" =~ ^[0-9]+$ ]] || return 0
+    if command -v ufw &>/dev/null && ufw status 2>/dev/null | grep -q active; then
+        if ufw allow "${port}/tcp" >/dev/null 2>&1; then
+            info "ufw: opened ${port}/tcp (miner stratum)."
+        else
+            warn "ufw is active but opening ${port}/tcp failed — miners will be refused until you add it."
+        fi
+    elif command -v firewall-cmd &>/dev/null && firewall-cmd --state &>/dev/null; then
+        firewall-cmd --permanent --add-port="${port}/tcp" >/dev/null 2>&1 || true
+        firewall-cmd --reload >/dev/null 2>&1 || true
+        info "firewalld: opened ${port}/tcp (miner stratum)."
+    else
+        info "No active ufw/firewalld detected — nothing to open for :${port}."
+        echo -e "    ${DIM}If your provider has its own network firewall, allow TCP ${port} there.${RESET}"
+    fi
 }
 
 # ─── 2) Configure ───────────────────────────────────────────────────────────────
@@ -241,13 +279,23 @@ gw_configure() {
         local hub_ip; hub_ip=$(gw_read_conf wg_hub_ip "")
         echo -ne "Central region port (e.g. 3391) [$(gw_read_conf hub_endpoint "" | sed 's/.*://')]: "
         read -r val
+        # hub_endpoint is composed from TWO answers. Silently dropping the port when
+        # the hub IP is still blank leaves Configure looking successful while the
+        # forwarder has nowhere to send miners — say what happened instead.
         if [[ -n "$val" && -n "$hub_ip" ]]; then
             gw_write_conf_key "hub_endpoint" "${hub_ip}:${val}"
+        elif [[ -n "$val" && -z "$hub_ip" ]]; then
+            warn "Region port ${val} NOT saved — it needs the central tunnel IP, which is still blank."
+            echo -e "  ${DIM}Answer 'Central tunnel IP' above first, then re-run 2) Configure and${RESET}"
+            echo -e "  ${DIM}enter the port again. Easier: paste the GRINGW1 line and skip both.${RESET}"
         fi
     fi
 
     gw_render_forwarder
     gw_render_wireguard
+    # The stratum port may have just changed — re-assert the firewall rule for the
+    # current value (idempotent; the old rule is harmless but is not cleaned up).
+    gw_open_firewall
 
     if systemctl is-active --quiet "$GW_SERVICE" 2>/dev/null; then
         info "Reloading $GW_SERVICE to apply config..."
@@ -255,6 +303,12 @@ gw_configure() {
     fi
     success "Gateway configured ($GW_CONF)."
     echo -e "  ${DIM}Run 3) Bring up tunnel, then 4) Service control → Start.${RESET}"
+    echo ""
+    echo -e "  ${BOLD}Don't forget DNS.${RESET} Miners dial a hostname, not this box's IP:"
+    echo -e "    point the region's A record (e.g. $(gw_read_conf region 'nyc').example.com) at"
+    echo -e "    ${BOLD}this gateway's public IP${RESET} — not the pool box's."
+    echo -e "  ${DIM}The pool operator then sets that hostname on the region card. Until the${RESET}"
+    echo -e "  ${DIM}record resolves their Port check reads ✗ unreachable even with a healthy tunnel.${RESET}"
 }
 
 # ─── Render the HAProxy forwarder config ────────────────────────────────────────
@@ -391,6 +445,17 @@ gw_status() {
     local sp; sp=$(gw_read_conf public_stratum_port "3333")
     if ss -tlnp 2>/dev/null | grep -q ":$sp "; then
         echo -e "  ${BOLD}Stratum${RESET}   : ${GREEN}:$sp listening${RESET}"
+        # Listening is not the same as reachable. A firewall DROP in front of this
+        # port looks identical from here AND looks identical to a pairing fault on
+        # the pool's Port-check column, so report the rule state right beside it.
+        if command -v ufw &>/dev/null && ufw status 2>/dev/null | grep -q active; then
+            if ufw status 2>/dev/null | grep -qE "^${sp}(/tcp)?[[:space:]]+ALLOW"; then
+                echo -e "              ${DIM}ufw: :$sp allowed${RESET}"
+            else
+                echo -e "              ${YELLOW}ufw is ACTIVE but :$sp is not allowed — miners will be refused${RESET}"
+                echo -e "              ${DIM}fix: ufw allow ${sp}/tcp   (or re-run 2) Configure)${RESET}"
+            fi
+        fi
     else
         echo -e "  ${BOLD}Stratum${RESET}   : ${DIM}:$sp not listening${RESET}"
     fi

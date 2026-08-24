@@ -1,4 +1,16 @@
 #!/usr/bin/env node
+/**
+ * nuke.js — DESTRUCTIVE local dev reset. Never run this on a live pool.
+ *
+ * Two things to know before running it:
+ *   1. It deletes `<back-end-pool>/pool.sqlite` — the DEV fallback DB path only. An
+ *      INSTALLED pool keeps its ledger at config.db_path (/opt/grin/pubpool/<net>/pool.db),
+ *      which this does not touch, so on a real box it reports success having deleted nothing.
+ *   2. It runs `pkill -f "node.*pool"`, which DOES match the installed grin-pool-manager
+ *      service — so on a real box it stops the pool while leaving the database intact.
+ *
+ * The wallet directory is deliberately left alone (the seed is the one irreplaceable thing).
+ */
 
 const fs = require('fs');
 const path = require('path');

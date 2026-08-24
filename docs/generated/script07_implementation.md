@@ -81,7 +81,7 @@ pattern as `059_lib_wallet.sh`). The backend handles SIGTERM/SIGINT → stop sch
 
 | Area | Status | Notes |
 |---|---|---|
-| Ports reconciled `3333/3334/8080` | ✅ | `config.js` (stratum 3333, node upstream 3334/13334, HTTP 8080) — bash + backend in sync |
+| Ports reconciled `3333/3416/8080` | ✅ | `config.js` (stratum 3333/13333, node upstream 3416/13416, HTTP 8080/8090) — bash + backend in sync. The node upstream is grin's own `stratum_server_addr` default: Script 01 never moves it, so the `3334` an earlier plan named was never implemented. |
 | Mode split singlebox/hub/satellite | ✅ | `config.js` `role`; `07_lib_hub.sh` / `07_lib_satellite.sh` |
 | Stratum proxy | ✅ | `stratum-server.js` (public) + `node-stratum-client.js` (upstream) |
 | Relay agent + satellite entrypoint | ✅ | `lib/share-relay.js` + `satellite.js` — batched shares + immediate blocks, local SQLite failover + at-least-once replay |
@@ -203,7 +203,8 @@ corruption. That is the one legitimate future reason to consider Postgres.
 
 Backend is config-driven; testnet = a different config file + isolated instance
 (`/opt/grin/pubpool/testnet/`, service `grin-pool-manager-testnet`, node API `13413`, node stratum
-upstream `13334`, wallet `13415/13420`). Currency label `tGRIN`; `--testnet` (never `--floonet`);
+upstream `13416`, Central API `8090`, public stratum `13333`, wallet `13415/13420`).
+Currency label `tGRIN`; `--testnet` (never `--floonet`);
 `confirm_depth` defaults to 100; admin balance-inject endpoint is testnet-only (guarded). Testnet
 deploy is stratum-capable; mainnet adds the full web dashboard.
 
@@ -216,7 +217,7 @@ point the miner at `:3333` — see the in-repo `grin_mining_testnet_instruction.
 
 | Symptom | Likely cause / check |
 |---|---|
-| Miners connect but get no work | `NodeStratumClient` needs `pool_address` set, or it can't log in to the node's built-in stratum → no jobs. Verify `config.pool_address` and that the node stratum is up on `127.0.0.1:3334`/`13334`. |
+| Miners connect but get no work | `NodeStratumClient` needs `pool_address` set, or it can't log in to the node's built-in stratum → no jobs. Verify `config.pool_address` and that the node stratum is up on `127.0.0.1:3416`/`13416`. |
 | Pool hashrate reads ~0 / meaningless | Hashrate must come from summed accepted-share difficulty over the window (`GPS = sumDiff × 42 / window_s / 16384`), not the assigned session target. |
 | `/api/pool/stats` disagrees with `/api/stratum/stats` | Two `MinerManager` instances — construct one in `index.js` and inject it into the stratum server. |
 | Block rewards go to the wrong wallet (multi-region) | Satellite `grin-server.toml` `wallet_listener_url` not pointed at the hub's pool wallet (§2 operator note). |
@@ -257,7 +258,7 @@ satellite to prove federation. Don't debug federation and the core pipeline at t
 
 **Satellite** (mode 3, on the regional box):
 1. `1) Install` → `2) Configure` (region, **hub URL**, **shared secret**, **pool Grin address**, ports).
-2. `3) Enable node stratum` → patches `grin-server.toml` (`enable_stratum_server`, `stratum_server_addr = 127.0.0.1:3334`). **Set `wallet_listener_url` to the hub's pool wallet** — see §2 operator note; this is the #1 multi-region mistake.
+2. `3) Enable node stratum` → patches `grin-server.toml` (`enable_stratum_server`, `stratum_server_addr = 127.0.0.1:3416`). **Set `wallet_listener_url` to the hub's pool wallet** — see §2 operator note; this is the #1 multi-region mistake.
 3. Restart the Grin node (for the toml change), then `4) Service control` → start the satellite.
 4. `5) Status` → confirm `:3333` listening, region/hub set, **backlog shares=0 blocks=0** (a growing backlog = the satellite can't reach the hub → check secret/allowlist/URL/TLS).
 
@@ -269,7 +270,7 @@ satellite to prove federation. Don't debug federation and the core pipeline at t
 - Services exist & enabled: `grin-pool-manager[-testnet]` (hub), `grin-satellite` (sat).
 - Configs written 0600: `/opt/grin/conf/grin_pubpool.json`, `/opt/grin/conf/grin_satellite.json`.
 - `jwt_secret` present in `grin_pubpool.json` and **stable across a restart** (not regenerated at boot).
-- Ports listening per §11; node built-in stratum is **localhost-only** (`127.0.0.1:3334`, not `0.0.0.0`).
+- Ports listening per §11; node built-in stratum is **localhost-only** (`127.0.0.1:3416`, not `0.0.0.0`).
 - `bash -n` clean on all `07_*`; `node --check` clean on backend JS; `nginx -t` OK.
 
 **Layer 2 — backend / money (single-box first)**
@@ -328,7 +329,7 @@ ADDR=tgrin1exampleaddressxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 ADMIN_USER=admin; ADMIN_PASS='your-admin-password'
 
 # ── ports listening (hub: 8080; singlebox/sat also 3333; node upstream localhost) ─
-ss -tlnp | grep -E ':(3333|3334|13334|8080|443)\b'
+ss -tlnp | grep -E ':(3333|13333|3416|13416|8080|8090|443)\b'
 
 # ── 1) health + public reads (no auth) ─────────────────────────────────────────
 curl -s http://$HUB/health                  # /health and /api/health both work now
@@ -801,9 +802,9 @@ cross-rail, cooldown default/custom/disabled, validator bounds) all pass.
  ║   │   + accounting + DB │   PPLNS, admin, payouts                    ║
  ║   └─────────┬───────────┘                                            ║
  ║             │ stratum CLIENT  (localhost)                            ║
- ║             ▼ 127.0.0.1:3334                                         ║
+ ║             ▼ 127.0.0.1:3416                                         ║
  ║   ┌─────────────────────┐  builds block template + coinbase         ║
- ║   │   Grin Node :3334   │                                           ║
+ ║   │   Grin Node :3416   │                                           ║
  ║   └─────────┬───────────┘                                            ║
  ║             │ build_coinbase (localhost, automatic) → POOL wallet    ║
  ║             ▼ wallet_listener_url = http://127.0.0.1:3420            ║

@@ -25,7 +25,8 @@
 #
 #  ─── Network submenu (testnet/mainnet) ───────────────────────────────────────
 #   1) Setup wallet        (download binary + 5-step init flow)
-#   2) Wallet listening    (two tmux sessions: Foreign API + Owner API)
+#   2) Wallet listening    (ONE combined Owner+Foreign listener on 3420/13420 —
+#                           the standalone `listen` on 3415/13415 is retired)
 #   3) Install             (Node.js/npm + systemd service)
 #   4) Configure           (modes, claim amount, wallet API ports/secrets)
 #   5) Deploy web files    (web/059_drop/ → /opt/grin/<net>/public_html/)
@@ -44,8 +45,6 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TOOLKIT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-
-GRIN_WALLET_GITHUB_API="https://api.github.com/repos/mimblewimble/grin-wallet/releases/latest"
 
 # ─── Colors ───────────────────────────────────────────────────────────────────
 RED='\033[0;31m'
@@ -110,6 +109,13 @@ source "$SCRIPT_DIR/lib/nginx_shared_helpers.sh"
 # node_api_secret_path in sync with the live node after a node rebuild).
 # shellcheck source=lib/grin_node_secrets.sh
 source "$SCRIPT_DIR/lib/grin_node_secrets.sh"
+# Shared grin-wallet binary install / update / rollback (version store + pin).
+# Sourced BEFORE 059_lib_wallet.sh, which calls gwi_install_grin_wallet and
+# gwi_update_screen. It also owns the GitHub release URL — Drop used to carry
+# its own copy of that constant and its own downloader, which verified no
+# checksum at all.
+# shellcheck source=lib/grin_wallet_install.sh
+source "$SCRIPT_DIR/lib/grin_wallet_install.sh"
 # shellcheck source=lib/059_lib_wallet.sh
 source "$SCRIPT_DIR/lib/059_lib_wallet.sh"
 # shellcheck source=lib/059_lib_app.sh

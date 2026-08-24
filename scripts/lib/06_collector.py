@@ -45,8 +45,10 @@ Config (env vars or /opt/grin/grin-stats/config.env):
 
 import argparse
 import base64
+import hashlib
 import json
 import os
+import secrets
 import sqlite3
 import sys
 import time
@@ -962,6 +964,30 @@ def _mask_ip(ip):
     return ip
 
 
+def _node_id_salt(conn):
+    """Per-install random salt for the published node id, persisted in `meta`.
+
+    Persisted so an id stays the same node across runs; random per install because
+    an UNSALTED hash would hand back the octet _mask_ip() just removed — the /24 is
+    published, so there are only 256 candidates to hash. 128 bits, never exported."""
+    salt = get_meta(conn, "node_id_salt")
+    if not salt:
+        salt = secrets.token_hex(16)
+        set_meta(conn, "node_id_salt", salt)   # set_meta commits
+    return salt
+
+
+def _node_id(ip, salt):
+    """Short stable public label for a node whose IP is masked to a /24.
+
+    Two unrelated hosts in one /24 both publish as "95.216.1.x", and since nearly
+    every node runs the standard port their rows are otherwise identical strings —
+    this is what tells them apart on the map's location list. 4 hex chars: enough to
+    separate the handful of nodes that ever share a /24, deliberately far too few to
+    be an identifier anyone can enumerate or correlate across installs."""
+    return hashlib.sha256(f"{salt}|{ip}".encode()).hexdigest()[:4]
+
+
 def _is_public_ip(ip):
     """Return True if ip is a routable public address (not loopback/RFC-1918/IPv6 private)."""
     if not ip:
@@ -1378,6 +1404,8 @@ def _update_peers():
         (ts - 730 * 86400,),  # keep 2 years
     )
     conn.commit()
+    # Read the salt before closing — the export below runs on `rows`, not the DB.
+    id_salt = _node_id_salt(conn)
     conn.close()
 
     # IPs running on BOTH mainnet and testnet — computed on the REAL (unmasked)
@@ -1392,6 +1420,9 @@ def _update_peers():
     output_peers = [
         {
             "ip":           _mask_ip(r[0]),
+            # Same real IP → same node_id on both networks, so the two records of a
+            # dual node are recognisable as one host even though the IP is masked.
+            "node_id":      _node_id(r[0], id_salt),
             "network":      r[1],
             "dual":         r[0] in _dual_ips,
             "port":         r[2],

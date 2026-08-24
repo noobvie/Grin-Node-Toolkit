@@ -382,7 +382,11 @@ html[data-theme="light"] .logo-breathe {
 
 /* ── Node status bar ─────────────────────────────────────────────────────── */
 .node-bar {
-    display: flex; align-items: center; gap: 10px;
+    /* wrap: the strip now carries a chip, a status line that can read
+       "127.0.0.1:3413 · HEIGHT 3,967,196 · 46 PEERS · SYNCED", and a button that
+       is 44px tall under the mobile tap-target rule. On one nowrap row those
+       push the button off the edge on a phone. */
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
     background: var(--glass); border: 1px solid var(--border);
     border-radius: var(--radius-sm); border-left: 3px solid var(--text-dim);
     padding: 11px 16px; font-size: 12px; margin-bottom: 14px;
@@ -400,6 +404,20 @@ html[data-theme="light"] .logo-breathe {
 .node-bar.online  .node-bar-text { color: var(--grin); }
 .node-bar.syncing .node-bar-text { color: var(--warning); }
 .node-bar.offline .node-bar-text { color: var(--error); }
+/* Type chip — LOCAL vs PUBLIC is a trust statement, so it reads as a label in
+   its own right rather than as the first word of the status line. */
+.node-bar-type {
+    font-size: 10px; font-weight: 700; letter-spacing: 1.2px; text-transform: uppercase;
+    padding: 2px 7px; border-radius: 3px; flex-shrink: 0;
+    border: 1px solid var(--border); color: var(--text-dim);
+}
+.node-bar-type.local  { color: var(--grin); border-color: rgba(0,200,150,0.35); background: rgba(0,200,150,0.08); }
+.node-bar-type.public { color: var(--warning); border-color: rgba(245,158,11,0.35); background: rgba(245,158,11,0.08); }
+.node-bar-change { margin-left: auto; flex-shrink: 0; }
+/* Registry-vs-toml mismatch notice. Sits between the strip and .balance-grid,
+   neither of which carries a top margin, so it owns the gap below itself. */
+.node-drift-warn { margin-bottom: 14px; }
+.node-drift-warn code { word-break: break-all; }
 
 /* ── Services panel ──────────────────────────────────────────────────────── */
 .services-panel {
@@ -687,7 +705,22 @@ html[data-theme="light"] .logo-breathe {
     border-radius: var(--radius-sm); padding: 12px 14px; margin-bottom: 12px;
 }
 .node-local-label { font-size: 11px; font-weight: 700; letter-spacing: 2px; text-transform: uppercase; color: var(--text-dim); margin-bottom: 8px; }
-.node-local-status { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text); }
+/* Whether the OPEN wallet uses this node — a running local node and a wallet
+   pointed at it are two different facts, and the card only ever showed the first. */
+.node-inuse-badge {
+    font-size: 9px; font-weight: 600; letter-spacing: 0.6px; text-transform: none;
+    margin-left: 8px; padding: 2px 6px; border-radius: 3px;
+    border: 1px solid var(--border); color: var(--text-dim); vertical-align: middle;
+    /* It carries a wallet NAME, which the operator chose and can be long. The
+       card sits in a half-width column, so cap it rather than let one long name
+       wrap the "Local Node" label onto two lines. The full text is in title=. */
+    display: inline-block; max-width: 100%; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap;
+}
+.node-inuse-badge.on { color: var(--grin); border-color: rgba(0,200,150,0.35); background: rgba(0,200,150,0.08); }
+/* wrap: the row gained a [ USE ] button that is 44px tall on mobile, next to a
+   status line that already reads "H 3,967,196  46 peers  SYNCED  12ms". */
+.node-local-status { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12px; color: var(--text); }
 .node-col-section-label { font-size: 11px; font-weight: 700; letter-spacing: 2px; text-transform: uppercase; color: var(--text-dim); margin: 8px 0 6px; }
 .node-row-list { display: flex; flex-direction: column; gap: 6px; }
 .node-tab-row {

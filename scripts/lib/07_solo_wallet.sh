@@ -32,6 +32,13 @@
 # backend / no Node dependency. The passphrase is in the listener's argv
 # (`ps aux` / /proc/<pid>/cmdline) — same exposure as the prior `-p listen`.
 #
+# ⚠ That exposure is NOT unavoidable, and for a 24/7 listener it is permanent,
+# not brief: grin-wallet reads the passphrase on STDIN when stdin is not a TTY
+# (rpassword takes an explicit non-TTY branch), so `exec grin-wallet … owner_api
+# < "$pass_file"` keeps it out of argv entirely. Script 05's CMD wallet already
+# does this. Convert when this launcher is next touched — see CLAUDE.md
+# "Passphrase input — use STDIN, not -p".
+#
 # Convention: sourced lib → NO shebang / NO `set -e`.
 # =============================================================================
 
@@ -215,6 +222,20 @@ sw_show_address() {
     dir=$(sw_dir "$net"); bin=$(sw_wallet_bin "$net"); flag=$(sw_net_flag "$net"); pf=$(sw_pass_file "$net")
     [[ -x "$bin" && -f "$pf" ]] || { error "Wallet/pass for $net not set up."; return 1; }
     ( cd "$dir" && "$bin" $flag -p "$(cat "$pf")" address 2>/dev/null ) || warn "Could not read address."
+}
+
+# ─── Binary: install / update / roll back (shared screen) ───────────────────
+# Solo had NO update path at all — once gwi_install_grin_wallet had put a binary
+# in place, `force=0` meant it was never touched again, and the only way to move
+# versions was a destructive re-setup. This opens the shared screen instead, so
+# solo gets the same pinned update and one-keypress rollback as every other
+# product. Per-network, because each net has its own wallet dir and listener.
+sw_binary_menu() {
+    local net="${1:-mainnet}" dir
+    dir=$(sw_dir "$net")
+    mkdir -p "$dir" || { error "Could not create $dir."; return 1; }
+    gwi_update_screen "$dir" "07 Solo · ${net}" \
+        "sw_listener_stop $net" "sw_listener_start $net"
 }
 
 # ─── Setup: download + init|recover + save pass + patch toml + start ────────

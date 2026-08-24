@@ -9,8 +9,8 @@ header comment in `scripts/05_grin_wallet_service.sh` carries the short form; th
 the reasoning and the open questions.
 
 Companion docs: `script052_design.md` + `script052_implementation.md` (Accio — moved out of
-`script05_design.md` PART A on 2026-08-09 when its build started) · `script05_planning_goblin.md` ·
-`script059_*.md` (Grin Drop — renamed from `script052_*`) · `script053_planning.md`
+`script05_design.md` PART A on 2026-08-09 when its build started) · `script05_design_goblin.md` ·
+`script059_*.md` (Grin Drop — renamed from `script052_*`) · `script053_design.md`
 (WooCommerce — did **not** move).
 
 ---
@@ -25,18 +25,23 @@ Companion docs: `script052_design.md` + `script052_implementation.md` (Accio —
 | `05C` | CMD Wallet Quick Setup | Wallets | built — hub-built, **no script file** |
 | `051` | **Fidelius** — personal web wallet | Wallets | building |
 | `051x` | **Grin XP** — Fidelius in a WinXP shell | Wallets | building — variant, not a separate number |
-| `052` | **Accio** — public web wallet | Wallets | **RESERVED, unbuilt** — the only reservation |
+| `052` | **Accio** — public web wallet | Wallets | built 2026-08-09/10 (never VPS-run). Was the one reservation; claimed when its build started, so the band now holds none |
 | `053` | WooCommerce Gateway | Payments | building |
 | `054`–`058` | — | — | **FREE.** No product may claim one before its build starts |
 | `059` | **Grin Drop** — giveaway + donation portal | Giveaways | built (moved from `052`) |
 
 **An unbuilt product has no number.** Payment Pro and GoblinPay are *expected* to land at
 `054`/`055` as they are built, but neither is assigned — their design content lives under the
-hub's number (`script05_*.md`), never under a reserved one.
+hub's number (`script05_*.md`), never under a reserved one. Accio is the worked example: it
+held `052` as a reservation until its build began on 2026-08-09, which is when the number became
+an assignment and `script052_design.md` became a legitimate filename.
 
-**`052` is the single exception**, and it needs a reason to survive that rule: freeing a wallet
+**`052` WAS the single exception**, and it needed a reason to survive that rule: freeing a wallet
 slot next to `051` is the *only* thing the Drop migration bought. Letting anything else take it
-would mean paying for the migration and discarding what it was for.
+would have meant paying for the migration and discarding what it was for. Accio's build start on
+2026-08-09 spent the reservation on exactly what it was held for, so the 05 band now carries no
+exception at all — `054`–`058` are plain unallocated numbers, and the toolkit's only live
+reservation is `092` (mwixnet mixer) in the 09 band.
 
 ## 1.2 Menu keys — FIXED SLOTS
 
@@ -318,7 +323,7 @@ still `1`, not `B`.
 
 | # | Item | Blocking | Notes |
 |---|------|----------|-------|
-| 1 | **Is "Payment Pro" the same product as "GrinPay Server"?** | Decide before *either* build starts | The 05 hub header describes Payment Pro as Shopify + custom REST + subscriptions; `script053_planning.md` §16 describes GrinPay Server as REST + webhooks + multi-merchant. These may be one product under two names. Whichever survives takes the next free number. |
+| 1 | **Is "Payment Pro" the same product as "GrinPay Server"?** | Decide before *either* build starts | The 05 hub header describes Payment Pro as Shopify + custom REST + subscriptions; `script053_design.md` §16 describes GrinPay Server as REST + webhooks + multi-merchant. These may be one product under two names. Whichever survives takes the next free number. |
 | 2 | ~~**Accio is unbuilt** and holds `052`~~ **RESOLVED 2026-08-09** | — | Build started (packet S0): `scripts/052_grin_accio.sh` exists, design moved to `script052_design.md`, log in `script052_implementation.md`. The old note here was wrong twice over and is kept only as a record: the upstream is **`mwcwallet.com`**, not `MWC-Wallet-Standalone` (that repo is just a build script), and it is **vendored**, not refactored — there is no `wasm-pack` build because all five WASM blobs ship prebuilt. Hub key `2` stayed on `_slot_notice` until **S7 (2026-08-10)**, which retired the last stub and wired it to `run_sub 052_grin_accio.sh`. |
 | 3 | **051/051x "running" = nginx symlink**, not a live backend | — | See §1.5. Tighten if a "running but broken" report appears. |
 | 4 | **Drop wallet passphrase still passed via `-p`** | — | `059_lib_wallet.sh` reboot-cron + watchdog wrappers build `-p "$(cat …)"`, putting the passphrase in `ps aux` for the listener's whole life. CLAUDE.md flags this file as "still on `-p`, convert when next touched". The renumber touched adjacent lines without converting — a behaviour change out of scope for a rename, but the trigger has arguably fired. |
@@ -369,7 +374,8 @@ One conflict surfaced and was **resolved rather than copied**: the decision tabl
 `054 Payment Pro` / `055 GoblinPay`, but the rule six lines below said an unbuilt product has no
 number. The header now records `054–058 FREE`, names both as *expected* at 054/055 without
 assigning them, and states that `052` is the only reservation — with the reason it survives the
-rule.
+rule. *(Superseded 2026-08-09: Accio's build started, so `052` is an assignment and the 05 band
+carries no reservation at all. The one live reservation in the toolkit is `092` in the 09 band.)*
 
 ### Phase 5 — Fidelius filename
 

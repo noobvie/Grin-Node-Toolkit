@@ -3,8 +3,14 @@
 # 051x_grin_xp_wallet.sh — Grin XP Wallet  (Experimental / Fun)
 # =============================================================================
 #
-#  Deploys Fidelius (the personal web wallet) inside a Windows XP desktop simulator.
-#  MAINNET ONLY. The WinXP chrome is purely cosmetic.
+#  A personal web wallet dressed as a Windows XP desktop. MAINNET ONLY; the WinXP
+#  chrome is purely cosmetic.
+#
+#  ⚠ This is NOT Fidelius. Fidelius (051) is the Node.js app in web/051_fidelius/
+#  served by grin-fidelius.service; this deploys the separate PHP app in
+#  web/051_xp_wallet/public_html/ (api/proxy.php → the wallet Owner API) behind
+#  php-fpm. The two share a lineage and nothing else — separate code, separate
+#  config, separate vhost — so a fix to one never lands in the other.
 #
 #  ─── Deploy layout ───────────────────────────────────────────────────────────
 #   /var/www/web-wallet-xp/index.html     ← WinXP desktop shell

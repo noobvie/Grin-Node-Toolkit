@@ -14,6 +14,7 @@
 #  ─── Sub-scripts ──────────────────────────────────────────────────────────
 #   051  051_grin_fidelius.sh             Fidelius — personal browser wallet UI
 #   051x 051x_grin_xp_wallet.sh           Grin XP — XP-themed variant, mainnet only
+#   052  052_grin_accio.sh                Accio — public self-custodial web wallet
 #   053  053_grin_woocommerce.sh          WooCommerce payment gateway
 #   059  059_grin_drop.sh                 Giveaway + donation portal
 #   05C  (built into this hub)            CMD wallet quick setup — CLI / testing
@@ -466,10 +467,10 @@ run_sub() {
 # input was piped so we bypass terminal hiding code" — falling back to
 # stdin.read_line(). So every grin-wallet call here supplies the passphrase by
 # redirecting stdin from a mode-600 file or a `printf` builtin pipe, and NOTHING
-# ever lands in argv. `-p` (the old behaviour, and what the other wallet libs
-# still do) exposes the passphrase in `ps aux` / /proc/<pid>/cmdline for the
-# whole life of the process — for a 24/7 listener that is a permanent leak to
-# every local user. grin-wallet has no env-var passphrase input, so stdin is the
+# ever lands in argv. `-p` (the old behaviour, still used by the solo-mining and
+# Drop wallet libs — the public pool boots locked and unlocks over ECDH instead)
+# exposes the passphrase in `ps aux` / /proc/<pid>/cmdline for the whole life of
+# the process — for a 24/7 listener that is a permanent leak to every local user. grin-wallet has no env-var passphrase input, so stdin is the
 # only argv-free channel; `--pass` is NOT the only option, despite the comments
 # elsewhere in this repo.
 #
@@ -766,12 +767,16 @@ _cmd_wallet_setup_for_net() {
     echo ""
 
     # ── Step 1: Download (shared lib — verifies the sha256 when published) ────
+    # NB: this re-installs the PINNED version, not whatever upstream calls
+    # latest. Moving between versions (and undoing such a move) is the job of
+    # the B) grin-wallet binary screen, which is the only one that records a
+    # rollback target.
     local had_bin=0 force_dl=0
     if [[ -x "$wallet_bin" ]]; then
         had_bin=1
         local ver; ver=$("$wallet_bin" --version 2>/dev/null | head -1 || echo "?")
         success "Binary already installed  ${DIM}($ver)${RESET}"
-        echo -ne "  Re-download latest? [y/N/0 cancel]: "
+        echo -ne "  Re-install the pinned ${GWI_DEFAULT_TAG}? [y/N/0 cancel]: "
         local redown; read -r redown || true
         [[ "$redown" == "0" ]] && return 1
         if [[ "${redown,,}" == "y" ]]; then force_dl=1; fi
@@ -1210,6 +1215,19 @@ _cmd_wallet_setup_for_net() {
     return 0
 }
 
+# Install / update / roll back the binary for one network — the shared screen.
+# Separate from setup because changing the grin-wallet version must never imply
+# touching the wallet data, and because rollback has to be reachable when setup
+# is the last thing you want to run.
+_cmd_binary_menu() {
+    local net="${1:-mainnet}" dir tmux_name
+    dir=$(_cmd_dir "$net"); tmux_name=$(_cmd_tmux_name "$net")
+    mkdir -p "$dir" || { error "Could not create $dir."; return 1; }
+    gwi_update_screen "$dir" "05C CMD wallet · $(_cmd_net_label "$net")" \
+        "tmux kill-session -t $tmux_name 2>/dev/null || true" \
+        "_cmd_start_listener $net"
+}
+
 # Start the Foreign listener for one network. Always rc 0 — declining a start or
 # a restart is a normal outcome, not a cancel, so the summary below still prints.
 _cmd_start_listener() {
@@ -1355,14 +1373,25 @@ cmd_wallet_run() {
         echo -e "  ${GREEN}2${RESET}) Testnet  ${DIM}(tGRIN — no monetary value)${RESET}"
         echo -e "  ${GREEN}3${RESET}) Both"
         echo ""
+        echo -e "  ${GREEN}B${RESET}) grin-wallet binary  ${DIM}(update · roll back · verify)${RESET}"
         echo -e "  ${RED}0${RESET}) Back"
         echo ""
-        echo -ne "${BOLD}Select [1/2/3/0]: ${RESET}"
+        echo -ne "${BOLD}Select [1/2/3/B/0]: ${RESET}"
 
         local sel; read -r sel || true
         case "$sel" in
             1) _cmd_wallet_setup_for_net "mainnet" || true ;;
             2) _cmd_wallet_setup_for_net "testnet" || true ;;
+            b|B)
+                echo ""
+                echo -ne "  Which network? [1 mainnet / 2 testnet / 0 cancel]: "
+                local _bnet; read -r _bnet || true
+                case "$_bnet" in
+                    1) _cmd_binary_menu "mainnet" || true ;;
+                    2) _cmd_binary_menu "testnet" || true ;;
+                    *) : ;;
+                esac
+                ;;
             3)
                 local _ok=0
                 _cmd_wallet_setup_for_net "mainnet" && _ok=1 || true

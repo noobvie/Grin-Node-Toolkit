@@ -136,9 +136,12 @@ class WalletTor {
   // stream — i.e. the wallet is up right now. Tri-state:
   //   online:true  — reachable (connect succeeded)
   //   online:false — CONFIDENT offline: tor is up but the HS didn't answer across all retries
-  //   online:null  — INDETERMINATE: couldn't run the probe (bad address / no socks lib / tor
-  //                  daemon unreachable). Callers must fail OPEN on null so a misconfigured pool
-  //                  box never blocks every payout — grin-wallet stays the authority at send.
+  //   online:null  — INDETERMINATE: couldn't run the probe (onion derivation failed / no socks
+  //                  lib / tor daemon unreachable). Callers must fail OPEN on null so a
+  //                  misconfigured pool box never blocks every payout — grin-wallet stays the
+  //                  authority at send.
+  // An address that isn't a payout address at all returns FALSE, not null: nothing can ever be
+  // sent to it, so that is a decision, not a missing observation.
   // Retries across fresh circuits so one flaky circuit doesn't wrongly flag a healthy listener.
   async probeToronlineStatus(address) {
     if (!this.isPayoutAddress(address)) {

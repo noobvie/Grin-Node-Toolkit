@@ -635,12 +635,19 @@ PASS      any-password-you-choose</code>
     impressum: 'Impressum',
   };
 
-  // Every valid theme key (public_html/css/themes.css + js/theme.js + js/public-theme.js).
+  // Every theme key this validator ACCEPTS — which is a wider set than the ones that
+  // are actually styled. Styled keys live in public_html/css/themes.css (+ the no-class
+  // 'atomic' default in dashboard.css), and public-theme.js is what applies them.
   // 'dark' is the retired pre-mockup public default — still accepted for stored
   // configs; the public pages normalise it to 'atomic' (since 2026-07 that default is
-  // the Reactor control-room skin). 'nexus' is public+admin; 'uranium' is BOTH the
-  // public "Uranium Classic" theme (the pre-2026-07 uranium-lime default) and an
-  // admin-panel palette; 'cyber'/'gradient' and matrix/naruto/japan are admin-only.
+  // the Reactor control-room skin). 'uranium' is the "Uranium Classic" theme (the
+  // pre-2026-07 uranium-lime default).
+  //
+  // 'cyber', 'gradient', 'matrix', 'naruto' and 'japan' are LEGACY ACCEPT-ONLY keys with
+  // no stylesheet anywhere. They were admin-panel palettes in js/theme.js, which nothing
+  // loaded after the 2026-06 admin rebuild and which was deleted in 2026-08. They stay in
+  // this list so an old stored config still validates instead of throwing at boot;
+  // settings-common.js snaps such a value to a real theme in the picker. Do not add more.
   static THEME_KEYS = [
     'atomic', 'nexus', 'light', 'dark', 'custom',
     'matrix', 'naruto', 'japan', 'cyber', 'uranium', 'gradient',
@@ -1240,8 +1247,9 @@ PASS      any-password-you-choose</code>
 
   // Linked content pages (the dynamic `pages` CMS table is the source of truth since
   // 2026-06) as [{key, title}] for footer navigation. Excludes nav_location='none'
-  // (those are reachable by direct URL only). The sitemap uses PagesManager.listEnabled()
-  // directly for the full set; this footer list intentionally honours the link choice.
+  // (those are reachable by direct URL only, and stay out of the sitemap as well).
+  // The sitemap calls PagesManager.listEnabled(), which applies the SAME three filters —
+  // it differs only in also returning nav_location. Keep the two WHERE clauses in step.
   listEnabledPages() {
     try {
       return this.db.prepare(`
@@ -1284,7 +1292,7 @@ PASS      any-password-you-choose</code>
         updated_at = unixepoch()
     `);
 
-    // Grandfather re-arm (finding #5): remember whether dormancy was enabled BEFORE this write, so a
+    // Grandfather re-arm: remember whether dormancy was enabled BEFORE this write, so a
     // false→true (re)enable can reset the effective anchor and hand every address a fresh full window
     // — otherwise the clock kept running through a long disabled stretch and addresses could be
     // eligible the instant it's turned back on.

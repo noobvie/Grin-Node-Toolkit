@@ -6,6 +6,12 @@ const flag = (v) => v === true || v === 'true';
 const SECONDS_PER_DAY = 86400;
 const WEEK_SECONDS = 7 * SECONDS_PER_DAY;
 
+// How far ahead of the current tip a draw commits its seed block. Must be > 0 or the seed is
+// knowable at commit time and the whole commit-reveal property collapses (audit §I8). ~10 min
+// at Grin's 60s target — long enough that the committing party cannot influence which block
+// lands there, short enough that the hourly scheduler reveals on its next tick.
+const SEED_DELAY_BLOCKS = 10;
+
 // Weekly + special-occasion lottery. Draws are publicly verifiable: the winner is selected
 // deterministically from a node block hash (seed_hash) captured at draw time, so anyone can
 // recompute the result from the seed + the public share data. Prizes are paid out of the
@@ -43,7 +49,8 @@ class LotteryManager {
   }
 
   // Eligible entries for a draw over [start, end], from the PERSISTENT hashrate_history samples
-  // (retained ~30d) — NOT the shares table (pruned after ~1 day), so a multi-day/week window
+  // (retained database.hashrate_keep_days, default 100) — NOT the shares table (pruned after
+  // ~1 day on mainnet), so a multi-day/week window
   // counts real sustained activity instead of only the last day. Per address:
   //   work        = SUM(hashrate_gps × window_seconds)  → the weighted-pot (Pot A) ticket weight
   //   active_days = COUNT(DISTINCT day-bucket)           → the small-miner / anti-sybil gate
@@ -112,7 +119,20 @@ class LotteryManager {
     return due;
   }
 
-  // Run a single draw. Fetches a verifiable seed (async) BEFORE the synchronous DB transaction.
+  // COMMIT phase of a draw. Freezes the entry set and the pot, and commits to a seed block
+  // that DOES NOT EXIST YET. No winner is picked and no money moves here — that is
+  // resolveCommittedDraws(), once the chain reaches seed_height.
+  //
+  // Why two phases (audit §I8): this used to seed from `getTip()` at draw time and salt with
+  // the caller's own `eventName`. Both are known to the drawer at the moment of drawing, and
+  // the entry set is readable from the DB, so the winner for the current tip was computable
+  // offline — wait for a favourable tip, then press the button. Committing to a FUTURE height
+  // removes the lever entirely: at commit nobody can know the hash, and by reveal the entries,
+  // the pot and the salt are already fixed and public.
+  //
+  // The salt is the draw_id (assigned by the INSERT, before the seed exists), not eventName —
+  // a free-text field on the request was a second grinding input.
+  //
   // opts (all optional; NULL/undefined overrides inherit the global lottery_* settings):
   //   eventName, potGrinOverride, periodStart, periodEnd, campaignId,
   //   weightedPercent, equalChancePercent, potFractionPercent, minActiveDays, maxTicketSharePercent
@@ -130,14 +150,16 @@ class LotteryManager {
     const periodEnd = opts.periodEnd || nowSec;
     const periodStart = opts.periodStart || (nowSec - WEEK_SECONDS);
 
-    // Verifiable seed = current node tip hash. Without a node we cannot prove fairness → abort.
-    let seed;
+    // Commit to a seed block that does not exist yet: tip + SEED_DELAY_BLOCKS. Without a node
+    // we cannot commit to anything verifiable → abort before touching the DB.
+    let tip;
     try {
-      seed = await this.grinNode.getTip();
+      tip = await this.grinNode.getTip();
     } catch (err) {
       return { success: false, reason: 'no_seed', error: err.message };
     }
-    if (!seed || !seed.hash) return { success: false, reason: 'no_seed' };
+    if (!tip || !Number.isFinite(Number(tip.height))) return { success: false, reason: 'no_seed' };
+    const seedHeight = Math.floor(Number(tip.height)) + SEED_DELAY_BLOCKS;
 
     // Determine the total pot (fixed override, else a fraction of the prize bucket).
     const bucket = this.incentives.prizePoolBalance();
@@ -157,15 +179,12 @@ class LotteryManager {
     const minActiveDays = pick(opts.minActiveDays, pick(s.lottery_min_active_days, 1));
     const maxCap = pick(opts.maxTicketSharePercent, s.lottery_max_ticket_share_percent) || 0;
 
-    const entries = this.eligibleEntries(periodStart, periodEnd, minActiveDays);
-
-    // Pot A: weighted by sustained work (with the whale cap). Pot B: one entry per address (uniform).
-    const winnerA = LotteryManager.pickWeighted(
-      seed.hash, `${eventName || type}:A`, LotteryManager.buildWeightedTickets(entries, maxCap)
-    );
-    const winnerB = LotteryManager.pickWeighted(
-      seed.hash, `${eventName || type}:B`, entries.map((e) => ({ address: e.address, tickets: 1 }))
-    );
+    // Snapshot the entry set NOW, in a fixed, publishable order. Everything the reveal needs
+    // is frozen here; resolveDraw never re-reads hashrate_history.
+    const entries = this.eligibleEntries(periodStart, periodEnd, minActiveDays)
+      .sort((x, y) => (x.address < y.address ? -1 : x.address > y.address ? 1 : 0));
+    const ticketsA = LotteryManager.buildWeightedTickets(entries, maxCap);
+    const ticketsAByAddr = new Map(ticketsA.map((t) => [t.address, t.tickets]));
 
     const campaignId = opts.campaignId || null;
     const tx = this.db.transaction(() => {
@@ -173,45 +192,171 @@ class LotteryManager {
         INSERT INTO lottery_draws
           (draw_type, event_name, period_start, period_end, seed_height, seed_hash,
            pot_a_amount, pot_b_amount, status, campaign_id, drawn_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, unixepoch())
-      `).run(type, eventName, periodStart, periodEnd, seed.height, seed.hash,
-             potA, potB, entries.length ? 'drawn' : 'pending', campaignId);
+        VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, NULL)
+      `).run(type, eventName, periodStart, periodEnd, seedHeight,
+             potA, potB, entries.length ? 'committed' : 'pending', campaignId);
       const drawId = info.lastInsertRowid;
-      const winners = [];
 
-      const award = (winner, pot, amount) => {
-        if (!winner || amount <= 0) return;
-        if (!this.incentives.debitPrizePool(amount, 'lottery', drawId)) return; // insufficient bucket
-        this.incentives._move(winner.address, amount, 'credit', 'lottery', drawId);
-        this.db.prepare(`
-          INSERT INTO lottery_winners (draw_id, grin_address, pot, ticket_count, amount)
-          VALUES (?, ?, ?, ?, ?)
-        `).run(drawId, winner.address, pot, winner.tickets || 0, amount);
-        winners.push({ address: winner.address, pot, amount });
-      };
-
-      award(winnerA, 'a', potA);
-      award(winnerB, 'b', potB);
-
-      if (winners.length) {
-        this.db.prepare("UPDATE lottery_draws SET status = 'paid' WHERE id = ?").run(drawId);
+      const ins = this.db.prepare(
+        'INSERT INTO lottery_entries (draw_id, grin_address, tickets_a, tickets_b) VALUES (?, ?, ?, ?)'
+      );
+      for (const e of entries) {
+        // Pot B is one ticket per address (uniform); Pot A is work-weighted with the whale cap.
+        ins.run(drawId, e.address, ticketsAByAddr.get(e.address) || 0, 1);
       }
-      return { drawId, winners };
+      return drawId;
     });
 
-    const result = tx();
+    const drawId = tx();
+    console.log(
+      `[${new Date().toISOString()}] Lottery draw ${drawId} COMMITTED (${type}` +
+      `${eventName ? ` "${eventName}"` : ''}): ${entries.length} entries, pot ${potA} + ${potB} GRIN, ` +
+      `seed = block ${seedHeight} (tip ${tip.height})`
+    );
+
     return {
       success: true,
-      draw_id: result.drawId,
+      committed: true,
+      draw_id: drawId,
       type,
       event_name: eventName,
-      seed_height: seed.height,
-      seed_hash: seed.hash,
+      seed_height: seedHeight,
+      seed_hash: null,
       eligible: entries.length,
       pot_a: potA,
       pot_b: potB,
-      winners: result.winners,
+      winners: [],
     };
+  }
+
+  // REVEAL phase. Reads the header at the committed height, derives both winners from the
+  // FROZEN entry snapshot, and pays. Returns null when the chain has not reached seed_height
+  // yet (or the node is unreachable) — the draw simply stays 'committed' and the next
+  // scheduler tick retries, so a node outage delays a draw but never mis-resolves one.
+  async resolveDraw(draw) {
+    if (!draw || draw.status !== 'committed') return null;
+
+    // Ask for the tip FIRST so a getHeader failure can be classified. Without this, "the seed
+    // block is not mined yet" and "the node has been unreachable for a week" are the same
+    // silent `return null`, and a draw stuck in 'committed' forever produces no log line at
+    // all — the operator's only symptom is a lottery that quietly stopped paying.
+    let tip;
+    try {
+      tip = await this.grinNode.getTip();
+    } catch (err) {
+      console.warn(`[Lottery] draw ${draw.id}: node unreachable, cannot reveal yet (${err.message})`);
+      return null;
+    }
+    if (!tip || Number(tip.height) < draw.seed_height) return null; // seed block not mined yet — normal
+
+    let header;
+    try {
+      header = await this.grinNode.getHeader(draw.seed_height);
+    } catch (err) {
+      // The chain IS past seed_height, so this is an anomaly, not patience: a pruned node that
+      // cannot serve the header, a bad secret, a reorg mid-call. Retry next tick, but say so.
+      console.error(
+        `[Lottery] draw ${draw.id}: seed block ${draw.seed_height} is below tip ${tip.height} ` +
+        `but get_header failed — ${err.message}`
+      );
+      return null;
+    }
+    if (!header || !header.hash) return null;
+
+    // Read the snapshot back in the committed order — pickWeighted walks the array in order,
+    // so this ORDER BY is part of the algorithm, not a cosmetic detail.
+    const rows = this.db.prepare(
+      'SELECT grin_address, tickets_a, tickets_b FROM lottery_entries WHERE draw_id = ? ORDER BY grin_address ASC'
+    ).all(draw.id);
+
+    const entriesA = rows.map((r) => ({ address: r.grin_address, tickets: r.tickets_a }));
+    const entriesB = rows.map((r) => ({ address: r.grin_address, tickets: r.tickets_b }));
+
+    // Salt = draw_id, fixed at commit time before the seed existed.
+    const winnerA = LotteryManager.pickWeighted(header.hash, `${draw.id}:A`, entriesA);
+    const winnerB = LotteryManager.pickWeighted(header.hash, `${draw.id}:B`, entriesB);
+
+    const tx = this.db.transaction(() => {
+      // Claim the draw first: a second resolver (or a replayed tick) finds 0 changed rows and
+      // rolls back before any prize is paid. Same CAS discipline as the payout paths.
+      const claimed = this.db.prepare(
+        "UPDATE lottery_draws SET seed_hash = ?, drawn_at = unixepoch(), status = 'drawn' WHERE id = ? AND status = 'committed'"
+      ).run(header.hash, draw.id);
+      if (claimed.changes !== 1) throw Object.assign(new Error('already resolved'), { alreadyResolved: true });
+
+      const winners = [];
+      const award = (winner, pot, amount) => {
+        if (!winner || amount <= 0) return;
+        // Clamp to what the bucket can actually cover: the pot was fixed at commit, and the
+        // prize pool may legitimately have shrunk since. Paying what is there beats the old
+        // all-or-nothing behaviour, where a shortfall silently paid the winner nothing.
+        const payable = Math.min(amount, this.incentives.prizePoolBalance());
+        if (!(payable > 0)) return;
+        if (!this.incentives.debitPrizePool(payable, 'lottery', draw.id)) return;
+        this.incentives._move(winner.address, payable, 'credit', 'lottery', draw.id);
+        this.db.prepare(`
+          INSERT INTO lottery_winners (draw_id, grin_address, pot, ticket_count, amount)
+          VALUES (?, ?, ?, ?, ?)
+        `).run(draw.id, winner.address, pot, winner.tickets || 0, payable);
+        winners.push({ address: winner.address, pot, amount: payable });
+      };
+
+      award(winnerA, 'a', draw.pot_a_amount);
+      award(winnerB, 'b', draw.pot_b_amount);
+
+      if (winners.length) {
+        this.db.prepare("UPDATE lottery_draws SET status = 'paid' WHERE id = ?").run(draw.id);
+      }
+      return winners;
+    });
+
+    let winners;
+    try {
+      winners = tx();
+    } catch (err) {
+      if (err.alreadyResolved) return null;
+      throw err;
+    }
+
+    // A campaign draw stamps its parent row only now — at commit there was no seed to record.
+    if (draw.campaign_id) {
+      const status = winners.length ? 'paid' : 'drawn';
+      this.db.prepare(`
+        UPDATE campaigns SET status = ?, seed_hash = ?, drawn_at = unixepoch(), updated_at = unixepoch()
+        WHERE id = ?
+      `).run(status, header.hash, draw.campaign_id);
+    }
+
+    console.log(
+      `[${new Date().toISOString()}] Lottery draw ${draw.id} RESOLVED from block ${draw.seed_height} ` +
+      `(${header.hash}): ${winners.length} winner(s)`
+    );
+
+    return {
+      success: true,
+      draw_id: draw.id,
+      seed_height: draw.seed_height,
+      seed_hash: header.hash,
+      winners,
+    };
+  }
+
+  // Resolve every committed draw whose seed block has been mined. Called from the same
+  // scheduler tick as runDueDraws/runDueCampaigns.
+  async resolveCommittedDraws() {
+    const pending = this.db.prepare(
+      "SELECT * FROM lottery_draws WHERE status = 'committed' ORDER BY seed_height ASC LIMIT 20"
+    ).all();
+    const out = [];
+    for (const d of pending) {
+      try {
+        const r = await this.resolveDraw(d);
+        if (r) out.push(r);
+      } catch (err) {
+        console.error(`[Lottery] resolve of draw ${d.id} failed: ${err.message}`);
+      }
+    }
+    return out;
   }
 
   // Run every due weekly/special draw — called by the hourly scheduler job in index.js.
@@ -243,11 +388,16 @@ class LotteryManager {
       maxTicketSharePercent: c.max_ticket_share_percent,
     });
     if (res && res.success) {
-      const status = (res.winners && res.winners.length) ? 'paid' : (res.eligible ? 'drawn' : 'empty');
+      // Commit-reveal (audit §I8): at this point the draw is COMMITTED, not drawn — there is
+      // no seed hash and no winner yet. Park the campaign in 'drawing' and record the height
+      // it is committed to; resolveDraw() stamps the final status + seed_hash when the chain
+      // reaches it. An entry-less draw has nothing to reveal, so it closes out as 'empty' now.
+      const status = res.eligible ? 'drawing' : 'empty';
       this.db.prepare(`
-        UPDATE campaigns SET status = ?, draw_id = ?, seed_height = ?, seed_hash = ?,
-               drawn_at = unixepoch(), updated_at = unixepoch() WHERE id = ?
-      `).run(status, res.draw_id || null, res.seed_height || null, res.seed_hash || null, c.id);
+        UPDATE campaigns SET status = ?, draw_id = ?, seed_height = ?, seed_hash = NULL,
+               updated_at = unixepoch() WHERE id = ?
+      `).run(status, res.draw_id || null, res.seed_height || null, c.id);
+      // Scheduling the next occurrence is purely time-based, so it does not wait for the reveal.
       if (c.recurring && c.recurring !== 'none') this._scheduleNextOccurrence(c);
     }
     return { ...res, campaign_id: c.id };

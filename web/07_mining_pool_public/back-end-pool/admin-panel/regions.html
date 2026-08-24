@@ -63,9 +63,36 @@
       <p class="page-sub">The regional connect endpoints shown on the public dashboard — and the live health of each region's gateway. Pairing a gateway's WireGuard key happens right here in the region form (no SSH session on this box). A card lights up green while miners are mining that region (or its WireGuard tunnel is freshly handshaking).</p>
     </div>
 
+    <!-- Multi-region readiness banner. Hidden until the pre-flight answers, so a
+         single-box pool that never opens this page's gateway features sees nothing,
+         and a pool that DOES sees the prerequisite before it bites mid-form. -->
+    <div class="card" id="mr-banner" style="display:none;margin-top:1rem;border-left:3px solid var(--warning-color,#e0b040);">
+      <h3 class="sub-title" style="margin-top:0;" id="mr-title">Multi-region is not enabled yet</h3>
+      <p class="helper-text" style="margin:.3rem 0 .8rem;" id="mr-body">
+        Pairing a gateway needs this pool's own WireGuard tunnel running first — it's what every gateway
+        connects to. One click sets it up here: keypair, tunnel config, firewall rule for the WireGuard
+        UDP port, and the interface enabled at boot. It changes nothing about how your current miners connect.
+      </p>
+      <p class="helper-text dim" style="margin:0 0 .8rem;" id="mr-reason"></p>
+      <button class="btn btn-sm" id="mr-enable" onclick="enableMultiRegion()">Enable multi-region</button>
+      <span class="helper-text dim" style="margin-left:.6rem;" id="mr-enable-note">Takes up to a minute if WireGuard isn't installed yet.</span>
+    </div>
+
+    <!-- Same card, other state: tunnel up. Keeps the hub's own coordinates visible
+         (they're what an operator reads out when a gateway can't handshake). -->
+    <div class="card" id="mr-ready" style="display:none;margin-top:1rem;">
+      <h3 class="sub-title" style="margin-top:0;">🔒 Multi-region tunnel is up</h3>
+      <p class="helper-text mono" style="margin:.3rem 0 0;" id="mr-ready-detail"></p>
+    </div>
+
+    <!-- Steps the panel could not perform itself (boot persistence, firewall).
+         Persistent, not a toast: both are silent until a reboot or a gateway that
+         never hand-shakes, so they have to stay on screen until acted on. -->
+    <ul class="helper-text" id="mr-caveats" style="display:none;margin:.6rem 0 0;padding-left:1.2rem;"></ul>
+
     <!-- How regions work — the order of operations, so the admin isn't guessing -->
     <details class="card howto" id="howto">
-      <summary><strong>How regions work — add a gateway in 2 hops (Model C)</strong></summary>
+      <summary><strong>How regions work — adding a gateway, start to finish (Model C)</strong></summary>
       <p class="howto-intro">
         A <strong>gateway</strong> is a small extra server in another location. It runs <em>only</em> HAProxy + WireGuard —
         no grin node, no wallet, no database. Miners in that location connect to the gateway, and it forwards their
@@ -74,26 +101,38 @@
       </p>
       <p class="howto-intro">
         Every region needs one <strong>region key</strong> — a short airport-style code like <code>nyc</code>,
-        <code>sgn</code>, <code>ams</code>. Two hops between the two boxes:
+        <code>sgn</code>, <code>ams</code>. Five steps, and only two of them are on this page:
       </p>
       <ol class="howto-steps">
-        <li><strong>STEP 1 — Install on the gateway box (SSH there, not here).</strong><br>
+        <li><strong>STEP 1 — Enable multi-region (once per pool, on this page).</strong><br>
+            Your pool needs its own WireGuard tunnel before any gateway can peer with it. If the banner at the
+            top of this page offers <strong>Enable multi-region</strong>, click it now.<br>
+            <span class="dim">Already done for you if the banner says the tunnel is up. Skipping this is the
+            single most common way the pairing below fails.</span></li>
+        <li><strong>STEP 2 — Install on the gateway box (SSH there, not here).</strong><br>
             On the gateway server, run <code>07_grin_mining_public_pool.sh</code> → <strong>2) Regional gateway</strong> →
-            <em>1) Install</em>. It prints that box's <strong>WireGuard public key</strong> — copy it.<br>
+            <em>1) Install</em>. It prints that box's <strong>WireGuard public key</strong> — copy it and stop there;
+            the next step is back here.<br>
             <span class="dim">Result: one 44-character key ending in <code>=</code>.</span></li>
-        <li><strong>STEP 2 — Create the region + pair the key (on this page).</strong><br>
+        <li><strong>STEP 3 — Create the region + pair the key (on this page).</strong><br>
             Click ➕ New region: fill region key, city, country, the stratum hostname miners will use
-            (e.g. <code>sgn.grinium.com</code> — point its DNS A-record at the <em>gateway box's</em> IP),
-            and paste the gateway's public key into the <strong>Gateway WireGuard public key</strong> field. Save.<br>
+            (e.g. <code>sgn.grinium.com</code>), and paste the gateway's public key into the
+            <strong>Gateway WireGuard public key</strong> field. Save.<br>
             <span class="dim">Result: the page shows a one-line <code>GRINGW1|…</code> pairing string with a copy button.
             The tunnel listener is live immediately — no service restart.</span></li>
-        <li><strong>STEP 3 — Paste the string on the gateway box.</strong><br>
+        <li><strong>STEP 4 — Paste the string on the gateway box, and point DNS at it.</strong><br>
             Back on the gateway: <em>2) Configure</em> → paste the <code>GRINGW1|…</code> line (fills every field) →
             <em>3) Bring up tunnel</em> → <em>4) Start</em>.<br>
-            <span class="dim">Result: done on that box.</span></li>
-        <li><strong>STEP 4 — Watch the Tunnel chip go green (this page).</strong><br>
-            Within ~30s the region's row shows 🔒 with a fresh handshake age. The status flips to ● Active once
-            miners start mining through it.</li>
+            Then create the DNS <strong>A-record</strong> for the hostname you typed in step 3, pointing at the
+            <strong>gateway box's public IP</strong> — not this pool box's.<br>
+            <span class="dim">Both halves matter: the tunnel carries the shares, the A-record is how a rig finds
+            the gateway at all.</span></li>
+        <li><strong>STEP 5 — Watch the row (this page).</strong><br>
+            The <strong>Tunnel</strong> chip goes 🔒 green within ~30s of step 4. The <strong>Port check</strong>
+            column only goes ✓ once DNS resolves and the gateway's stratum port is open there. <strong>Mining
+            activity</strong> flips to ● Active once a rig actually connects.<br>
+            <span class="dim">Green tunnel + ✗ port is almost always DNS still propagating, or a firewall on the
+            gateway box — not a pairing fault.</span></li>
       </ol>
       <p class="howto-note">
         <strong>Single-box pool?</strong> You don't need gateways — the pool auto-registers its own region and miners just use that one host.
@@ -365,6 +404,106 @@ function fmtBytes(b) {
   return (b / 1073741824).toFixed(2) + ' GB';
 }
 
+// ── Multi-region readiness (the STEP 1 prerequisite) ─────────────────────────
+// The hub's own WireGuard tunnel has to exist before ANY gateway can peer with it.
+// It used to be reachable only over SSH (Script 07 → W → 1), so the first time an
+// operator learned about it was a 502 halfway through saving a region. Read the
+// state up front and either offer the button or confirm the tunnel is up.
+// _mrReady: null = unknown (never answered), true/false = the last known state.
+// Only `false` is actionable — `null` must never be treated as "not enabled".
+let _mrReady = null;
+async function loadServerState() {
+  const banner = document.getElementById('mr-banner');
+  const ready  = document.getElementById('mr-ready');
+  // API.get → Auth.fetch, which RESOLVES null on any failure (network, non-JSON,
+  // rate-limit) instead of throwing. A try/catch here would never fire, and
+  // `!d.ready` on a null would nag a perfectly healthy pool to "enable" a tunnel
+  // it already runs. Only a well-formed answer is allowed to move the state.
+  const d = await API.get('/api/admin/gateways/server');
+  if (!d || d.success !== true) {
+    _mrReady = null;
+    banner.style.display = 'none';
+    ready.style.display = 'none';
+    return;
+  }
+  _mrReady = !!d.ready;
+  const detail = 'hub ' + (d.hub_tunnel_ip || '?') + '  ·  endpoint ' + (d.hub_endpoint || '?') +
+    '  ·  ' + (d.peers || 0) + ' gateway peer' + (d.peers === 1 ? '' : 's') + ' paired';
+  if (_mrReady && d.interface_up !== false) {
+    banner.style.display = 'none';
+    ready.style.display = '';
+    document.getElementById('mr-ready-detail').textContent = detail;
+    return;
+  }
+  ready.style.display = 'none';
+  banner.style.display = '';
+  if (_mrReady) {
+    // Third state: set up, but the interface is DOWN. Same button fixes it —
+    // init-server is idempotent and keeps the existing keypair/config, so it
+    // raises the tunnel without re-keying and stranding paired gateways.
+    document.getElementById('mr-title').textContent = 'Multi-region is set up, but the tunnel is DOWN';
+    document.getElementById('mr-body').textContent =
+      'The hub keypair and tunnel config are in place, but the WireGuard interface is not running, ' +
+      'so no gateway can hand-shake and every region behind one is dark. Bringing it back up keeps ' +
+      'the existing keys — already-paired gateways reconnect on their own.';
+    document.getElementById('mr-reason').textContent = detail;
+    document.getElementById('mr-enable').textContent = 'Bring the tunnel back up';
+    document.getElementById('mr-enable-note').textContent = 'Keeps the current keys — nothing needs re-pairing.';
+  } else {
+    document.getElementById('mr-title').textContent = 'Multi-region is not enabled yet';
+    document.getElementById('mr-body').textContent =
+      "Pairing a gateway needs this pool's own WireGuard tunnel running first — it's what every gateway " +
+      'connects to. One click sets it up here: keypair, tunnel config, firewall rule for the WireGuard ' +
+      'UDP port, and the interface enabled at boot. It changes nothing about how your current miners connect.';
+    document.getElementById('mr-enable').textContent = 'Enable multi-region';
+    document.getElementById('mr-enable-note').textContent = "Takes up to a minute if WireGuard isn't installed yet.";
+    document.getElementById('mr-reason').textContent = d.reason ? ('Reported: ' + d.reason) : '';
+  }
+}
+
+async function enableMultiRegion() {
+  const btn = document.getElementById('mr-enable');
+  const original = btn.textContent;
+  if (!confirm("Set up this pool's WireGuard tunnel?\n\nThis generates the hub keypair (or keeps the existing one), writes its tunnel config, opens the WireGuard UDP port in the firewall, and brings the interface up. Existing miners are not affected, and gateways that are already paired stay paired.")) return;
+  btn.disabled = true;
+  btn.textContent = 'Working…';
+  try {
+    // freshAdmin server-side → adminFetch carries the step-up challenge/retry.
+    // It always resolves to a Response (never null), so res.ok is safe to read.
+    const res = await adminFetch('/api/admin/gateways/server', { method: 'POST' });
+    const r = await res.json().catch(() => null);
+    if (!res.ok || !r || r.error) throw new Error(r && r.error ? r.error : 'Enable failed (' + res.status + ')');
+    // A caveat means the tunnel IS up but a step this process cannot perform was
+    // skipped (boot persistence, firewall). Both are silent until much later — a
+    // reboot, or a gateway that never hand-shakes — so they must not be flashed as
+    // plain success and must not disappear with the next toast.
+    if (r.caveats && r.caveats.length) {
+      flash('Multi-region enabled, but ' + r.caveats.length + ' step needs an SSH session — see below.', true);
+      const box = document.getElementById('mr-caveats');
+      box.innerHTML = '';
+      for (const c of r.caveats) {
+        const li = document.createElement('li');
+        li.textContent = c;            // textContent, never innerHTML: this text
+        box.appendChild(li);           // originates in a shell helper's output
+      }
+      box.style.display = '';
+    } else {
+      document.getElementById('mr-caveats').style.display = 'none';
+      flash(r.already_configured
+        ? 'Multi-region was already set up — tunnel re-checked and left running.'
+        : 'Multi-region enabled — the tunnel is up. You can pair a gateway now.', false);
+    }
+    // Awaited: loadServerState owns this button's label from here (it may hide the
+    // whole card), so restoring a pre-click snapshot afterwards would contradict it.
+    await loadServerState();
+  } catch (err) {
+    flash(err.message, true);
+    btn.textContent = original;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 // ── Pairing card (GRINGW1 string + copy) ─────────────────────────────────────
 let _lastPairing = '';
 function showPairingCard(region, pairing, warnMsg) {
@@ -570,6 +709,16 @@ async function submitRegion() {
     is_active: document.getElementById('r-active').checked
   };
   if (wgKey) body.wg_pubkey = wgKey;
+  // Known-not-ready + a key to pair = a guaranteed 409, and adminFetch would
+  // prompt for the step-up password on the way to it. Stop here instead.
+  // Strictly `=== false`: null means "never answered", which is not evidence.
+  if (body.wg_pubkey && _mrReady === false) {
+    flash('Multi-region is not enabled on this pool yet, so the gateway key cannot be paired. '
+      + 'Turn it on at the top of this page, then save this region again.', true);
+    document.getElementById('mr-banner').scrollIntoView({ behavior: 'smooth', block: 'center' });
+    return;
+  }
+
   try {
     // adminFetch (not API.post): pairing a gateway key is step-up gated server-side, so the
     // save must go through the challenge_required → reauth → retry flow (same as delete).
@@ -580,6 +729,15 @@ async function submitRegion() {
     });
     const r = res ? await res.json().catch(() => null) : null;
     if (!r || r.error) {
+      // 409 wg_server_missing = NOTHING was written (the pre-flight refused before
+      // the upsert). Must be checked BEFORE the wg_error branch below, which also
+      // matches this body but claims the card was saved — the opposite of the truth.
+      if (r && r.wg_server_missing) {
+        flash(r.error, true);
+        loadServerState();
+        document.getElementById('mr-banner').scrollIntoView({ behavior: 'smooth', block: 'center' });
+        return;
+      }
       // 502 with wg_error = the region card IS saved; only the pairing failed.
       if (r && r.wg_error) {
         flash('Region saved, but gateway pairing FAILED: ' + r.wg_error, true);
@@ -593,7 +751,13 @@ async function submitRegion() {
       let warn = '';
       if (r.existing) warn = '⚠ This key was already paired — the existing tunnel IP and region port were kept, nothing changed.';
       else if (r.replaced) warn = 'ℹ Gateway key replaced for this region — tunnel IP and port kept, paste the new string on the NEW box.';
-      flash('Region saved and gateway paired — listener live, no restart needed.', false);
+      // The peer can be in the config yet absent from the running interface. That
+      // gateway will never hand-shake, and the symptom shows up on the OTHER box,
+      // so it has to be said here rather than left to look like a pairing fault.
+      if (r.sync_warning) warn = (warn ? warn + ' ' : '') + '⚠ ' + r.sync_warning;
+      flash(r.sync_warning
+        ? 'Region saved and peer written — but the running tunnel did not pick it up (see below).'
+        : 'Region saved and gateway paired — listener live, no restart needed.', !!r.sync_warning);
       closeForm();
       showPairingCard(region, r.pairing, warn);
     } else {
@@ -652,7 +816,7 @@ async function deleteRegion(id) {
   }
 }
 
-document.addEventListener('DOMContentLoaded', () => { syncFlag(); loadPort(); loadRegions(); });
+document.addEventListener('DOMContentLoaded', () => { syncFlag(); loadPort(); loadServerState(); loadRegions(); });
 // Keep live status fresh (heartbeats update ~60s). Silent = no spinner flash, form untouched.
 // Skip while the tab is hidden — background polling burns the shared per-IP rate budget
 // that user actions (e.g. Delete) draw from.

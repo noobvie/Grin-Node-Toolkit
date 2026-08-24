@@ -14,6 +14,13 @@
 #
 # Subcommands (stdout is ALWAYS one JSON object; non-zero exit + {ok:false,error}
 # on any failure so execFile callers get one parse path):
+#   init-server --net N                         → first-run of the HUB tunnel itself:
+#               package, keypair, /etc/wireguard conf, firewall, iface up+enabled,
+#               region_listen_host. Idempotent — re-running keeps an existing conf
+#               and syncs instead of bouncing live peers. This is what makes the
+#               panel self-sufficient: before it existed, EVERY pool had to run the
+#               CLI's `W → 1` over SSH once or the panel's first pairing 502'd
+#               *after* the region card was already written (§13.12).
 #   add-peer    --net N --region R --pubkey K   → assign /32 + region port, append
 #               [Peer], wg syncconf, persist region_ports. Dup pubkey → no write,
 #               existing:true (preserves the 2026-07-05 cryptokey-routing lesson).
@@ -66,7 +73,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 # ── Validation (§13.2) — reject before touching anything ──────────────────────
-case "$CMD" in add-peer|remove-peer|list|status) ;; *) jerr "unknown subcommand (add-peer|remove-peer|list|status)" ;; esac
+case "$CMD" in init-server|add-peer|remove-peer|list|status) ;; *) jerr "unknown subcommand (init-server|add-peer|remove-peer|list|status)" ;; esac
 [[ "$NET" == "mainnet" || "$NET" == "testnet" ]] || jerr "--net must be mainnet or testnet"
 if [[ "$CMD" == "add-peer" || "$CMD" == "remove-peer" ]]; then
     [[ "$REGION" =~ ^[a-z0-9-]{2,12}$ ]] || jerr "--region must match ^[a-z0-9-]{2,12}\$"
@@ -107,6 +114,145 @@ hub_endpoint() {
 }
 
 wg_sync() { wg syncconf "$WG_IFACE" <(wg-quick strip "$WG_IFACE") 2>/dev/null; }
+
+# ── init-server (§13.12) ─────────────────────────────────────────────────────
+# Everything the hub needs before ANY gateway can be paired. Idempotent by design:
+# every step is a "make it so", never a "do it again" — an existing conf is kept
+# (regenerating it would rotate the hub key and strand every paired gateway) and a
+# live interface is synced rather than bounced, so re-running while miners are on
+# a tunnel costs them nothing.
+if [[ "$CMD" == "init-server" ]]; then
+    PKG_ACTION="present"
+    if ! command -v wg >/dev/null 2>&1; then
+        # Try the cheap install first; only refresh the index if that didn't land.
+        # (apt-get update is 10–30s on a small VPS and this runs inside an HTTP
+        # request from the panel — pay for it only when the fast path fails.)
+        # -o DPkg::Lock::Timeout=60: a fresh VPS is very often mid-unattended-upgrade,
+        # and without this apt does not wait for the lock — it fails instantly, both
+        # attempts below fail the same way, and the operator is told wireguard-tools
+        # "could not be installed" by a box that was simply busy for 20 seconds.
+        APT_OPTS=(-o DPkg::Lock::Timeout=60)
+        if command -v apt-get >/dev/null 2>&1; then
+            DEBIAN_FRONTEND=noninteractive apt-get "${APT_OPTS[@]}" install -y wireguard-tools >/dev/null 2>&1 || true
+            if ! command -v wg >/dev/null 2>&1; then
+                apt-get "${APT_OPTS[@]}" update >/dev/null 2>&1 || true
+                DEBIAN_FRONTEND=noninteractive apt-get "${APT_OPTS[@]}" install -y wireguard-tools >/dev/null 2>&1 || true
+            fi
+        elif command -v dnf >/dev/null 2>&1; then
+            dnf install -y wireguard-tools >/dev/null 2>&1 || true
+        fi
+        PKG_ACTION="installed"
+    fi
+    # When this runs from the panel it is inside the service mount namespace, where
+    # /usr and /var are read-only — apt CANNOT succeed there whatever its exit code.
+    # Script 07's installer puts the package on the box up front for exactly this
+    # reason; if it is still missing the panel cannot fix it and the operator needs
+    # one root shell. Say that, rather than "install it manually".
+    command -v wg       >/dev/null 2>&1 || jerr "wireguard-tools is not installed on this box, and it cannot be installed from the admin panel. Run: apt-get install -y wireguard-tools (or pool menu W → 1), then retry"
+    command -v wg-quick >/dev/null 2>&1 || jerr "wg-quick is missing — install wireguard-tools on this box (apt-get install -y wireguard-tools), then retry"
+
+    mkdir -p "$WG_DIR_CONF" 2>/dev/null || jerr "could not create $WG_DIR_CONF"
+    chmod 700 "$WG_DIR_CONF" 2>/dev/null || true
+
+    # The hub keypair is the pool's identity to every gateway it will ever pair.
+    # -s (non-empty), not -f: a truncated key file would otherwise be "present"
+    # and every later pairing string would carry an empty hub pubkey.
+    KEY_ACTION="kept"
+    if [[ ! -s "$WG_DIR_CONF/server_private.key" ]]; then
+        ( umask 077; wg genkey > "$WG_DIR_CONF/server_private.key" ) || jerr "wg genkey failed"
+        wg pubkey < "$WG_DIR_CONF/server_private.key" > "$WG_DIR_CONF/server_public.key" \
+            || jerr "wg pubkey failed (private key unreadable?)"
+        chmod 600 "$WG_DIR_CONF/server_private.key" 2>/dev/null || true
+        KEY_ACTION="generated"
+    fi
+    # Re-derive the PUBLIC half whenever it is missing, even on the "kept" path: an
+    # interrupted first run (or a restore that only brought back the private key)
+    # otherwise leaves it blank forever, and every pairing string then ships an
+    # empty hub key that no gateway can ever handshake against.
+    if [[ ! -s "$WG_DIR_CONF/server_public.key" ]]; then
+        wg pubkey < "$WG_DIR_CONF/server_private.key" > "$WG_DIR_CONF/server_public.key" \
+            || jerr "could not derive the hub public key from $WG_DIR_CONF/server_private.key"
+        KEY_ACTION="repaired"
+    fi
+
+    CONF_ACTION="kept"
+    if [[ ! -f "$WG_CONF" ]]; then
+        PRIV=$(cat "$WG_DIR_CONF/server_private.key" 2>/dev/null || true)
+        [[ -n "$PRIV" ]] || jerr "hub private key is unreadable ($WG_DIR_CONF/server_private.key)"
+        mkdir -p /etc/wireguard 2>/dev/null || jerr "could not create /etc/wireguard"
+        ( umask 077; cat > "$WG_CONF" <<CONF
+# Grin pool central WireGuard server — auto-generated by grin-gateway-ctl init-server.
+# Peers are appended by add-peer (admin → Regions & Gateways, or pool menu W → 2).
+# Do not hand-edit: the peer list and pool.json region_ports are kept in step here.
+[Interface]
+Address = ${WG_TUNNEL_NET}.1/24
+ListenPort = ${WG_LISTEN_PORT}
+PrivateKey = ${PRIV}
+CONF
+        ) || jerr "could not write $WG_CONF — from the admin panel this means the service unit lacks /etc/wireguard in ReadWritePaths; re-run pool menu 1) Install once. Pool menu W → 1 works either way"
+        chmod 600 "$WG_CONF" 2>/dev/null || true
+        CONF_ACTION="created"
+    fi
+
+    # Only the wg UDP port is opened. Region listener ports stay unopened on
+    # purpose — they bind the tunnel IP, so only an authenticated peer reaches them.
+    FIREWALL="not-managed"
+    if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q active; then
+        ufw allow "${WG_LISTEN_PORT}/udp" >/dev/null 2>&1 && FIREWALL="ufw" || FIREWALL="ufw-failed"
+    elif command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; then
+        firewall-cmd --permanent --add-port="${WG_LISTEN_PORT}/udp" >/dev/null 2>&1 || true
+        firewall-cmd --reload >/dev/null 2>&1 || true
+        FIREWALL="firewalld"
+    fi
+
+    # Already up → syncconf (applies on-disk changes without dropping handshakes).
+    # Never `wg-quick down/up` here: that is a re-key for every connected gateway.
+    IFACE_ACTION="synced"
+    if wg show "$WG_IFACE" >/dev/null 2>&1; then
+        wg_sync || true
+    else
+        wg-quick up "$WG_IFACE" >/dev/null 2>&1 \
+            || jerr "wg-quick up ${WG_IFACE} failed — is UDP ${WG_LISTEN_PORT} already in use, or the kernel module missing?"
+        IFACE_ACTION="up"
+    fi
+    # Boot persistence writes a symlink under /etc/systemd/system, which the pool
+    # service namespace deliberately does NOT make writable. So this can fail from
+    # the panel while every other step succeeded: the tunnel is up now and would be
+    # gone after a reboot. Report it instead of swallowing it — the CLI path (root,
+    # no namespace) always succeeds, so this is the one thing the panel cannot do.
+    BOOT_ENABLED=true
+    systemctl enable "wg-quick@${WG_IFACE}" >/dev/null 2>&1 || BOOT_ENABLED=false
+
+    # region_listen_host tells the pool backend which IP to bind region listeners
+    # on. A pool.json that does not exist yet is created here, so it must land
+    # owned by the de-rooted service user or the backend cannot read its own config.
+    NEEDCHOWN=0
+    [[ -f "$POOL_CONF" ]] || NEEDCHOWN=1
+    mkdir -p "$(dirname "$POOL_CONF")" 2>/dev/null || jerr "could not create $(dirname "$POOL_CONF")"
+    node -e '
+const fs = require("fs");
+const [p, host] = process.argv.slice(1);
+let d = {}; try { d = JSON.parse(fs.readFileSync(p, "utf8")); } catch (e) {}
+d.region_listen_host = host;
+fs.writeFileSync(p, JSON.stringify(d, null, 2)); fs.chmodSync(p, 0o600);
+' "$POOL_CONF" "$HUB_IP" || jerr "tunnel is up but the pool config write failed ($POOL_CONF)"
+    if [[ $NEEDCHOWN -eq 1 ]] && id grinpool >/dev/null 2>&1; then
+        chown grinpool:grinpool "$POOL_CONF" 2>/dev/null || true
+    fi
+
+    HUB_PUB=$(cat "$WG_DIR_CONF/server_public.key" 2>/dev/null || true)
+    [[ -n "$HUB_PUB" ]] || jerr "tunnel is up but the hub public key is empty — pairing strings would be unusable"
+    node -e '
+const [pkg, key, conf, iface, fw, pub, ep, ip, port, boot] = process.argv.slice(1);
+console.log(JSON.stringify({
+  ok: true, package: pkg, keypair: key, config: conf, interface: iface, firewall: fw,
+  already_configured: conf === "kept" && key === "kept",
+  boot_enabled: boot === "true",
+  hub_pubkey: pub, hub_endpoint: ep, hub_tunnel_ip: ip, listen_port: parseInt(port, 10) || null
+}));' "$PKG_ACTION" "$KEY_ACTION" "$CONF_ACTION" "$IFACE_ACTION" "$FIREWALL" \
+     "$HUB_PUB" "$(hub_endpoint)" "$HUB_IP" "$WG_LISTEN_PORT" "$BOOT_ENABLED"
+    exit 0
+fi
 
 # ── status ────────────────────────────────────────────────────────────────────
 if [[ "$CMD" == "status" ]]; then
@@ -149,9 +295,14 @@ fi
 if [[ "$CMD" == "list" ]]; then
     [[ -f "$WG_CONF" ]] || jerr "wireguard server not set up ($WG_CONF missing)"
     HUB_PUB=$(cat "$WG_DIR_CONF/server_public.key" 2>/dev/null || true)
+    # A readable conf proves the hub was SET UP; it says nothing about whether the
+    # interface is currently up. Callers that render a readiness light need both, or
+    # a dead tunnel shows green (the conf outlives `wg-quick down` and every reboot
+    # where the unit failed to start).
+    IFACE_UP=false; wg show "$WG_IFACE" >/dev/null 2>&1 && IFACE_UP=true
     node -e '
 const fs = require("fs");
-const [wgConf, poolConf, hubPub, hubEp, hubIp] = process.argv.slice(1);
+const [wgConf, poolConf, hubPub, hubEp, hubIp, ifaceUp] = process.argv.slice(1);
 const txt = fs.readFileSync(wgConf, "utf8");
 let d = {}; try { d = JSON.parse(fs.readFileSync(poolConf, "utf8")); } catch (e) {}
 const ports = d.region_ports || {};
@@ -166,8 +317,9 @@ while ((m = re.exec(txt))) {
     pairing: "GRINGW1|" + region + "|" + hubPub + "|" + hubEp + "|" + hubIp + "|" + ip + "|" + (port || "?")
   });
 }
-console.log(JSON.stringify({ ok: true, hub_pubkey: hubPub, hub_endpoint: hubEp, hub_tunnel_ip: hubIp, gateways }));
-' "$WG_CONF" "$POOL_CONF" "$HUB_PUB" "$(hub_endpoint)" "$HUB_IP" || jerr "could not parse $WG_CONF"
+console.log(JSON.stringify({ ok: true, hub_pubkey: hubPub, hub_endpoint: hubEp, hub_tunnel_ip: hubIp,
+  interface_up: ifaceUp === "true", gateways }));
+' "$WG_CONF" "$POOL_CONF" "$HUB_PUB" "$(hub_endpoint)" "$HUB_IP" "$IFACE_UP" || jerr "could not parse $WG_CONF"
     exit 0
 fi
 
@@ -197,7 +349,7 @@ fs.writeFileSync(p, JSON.stringify(d, null, 2)); fs.chmodSync(p, 0o600);
 fi
 
 # ── add-peer ──────────────────────────────────────────────────────────────────
-[[ -f "$WG_CONF" ]] || jerr "wireguard server not set up — run pool menu W → 1 first"
+[[ -f "$WG_CONF" ]] || jerr "multi-region is not enabled on this pool — use admin → Regions & Gateways → Enable multi-region, or pool menu W → 1"
 HUB_PUB=$(cat "$WG_DIR_CONF/server_public.key" 2>/dev/null || true)
 [[ -n "$HUB_PUB" ]] || jerr "hub wg public key missing ($WG_DIR_CONF/server_public.key)"
 HUB_EP=$(hub_endpoint)

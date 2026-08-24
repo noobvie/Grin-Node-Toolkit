@@ -19,8 +19,9 @@
  *     package's generality is surface we do not use.
  *
  * The gateway therefore has NO npm dependencies at all, and its install step
- * makes no network request. If a later packet genuinely needs a package (S4b
- * may want `ws`), that is a decision to take then, on its own merits.
+ * makes no network request. S4b faced the same question for `ws` and answered
+ * it the same way — ws.js is hand-written too; its header records which parts of
+ * RFC 6455 it implements in full and which the browser client never uses.
  *
  * ─── Why ATYP 0x03 (domain name) and never an IP ─────────────────────────────
  * Passing the hostname to Tor and letting Tor resolve it is what makes .onion

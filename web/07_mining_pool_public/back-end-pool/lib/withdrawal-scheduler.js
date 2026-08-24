@@ -53,9 +53,18 @@ class WithdrawalScheduler {
       24 * 3600,
       48 * 3600
     ];
-    // FIX #7: Limit concurrent withdrawals to prevent DoS
-    this.MAX_PENDING_WITHDRAWALS = 100;
-    this.MAX_USER_PENDING = 10;
+    // Pool-wide cap on concurrent withdrawals (DoS bound), enforced inside every create*
+    // path's transaction. MAX_USER_PENDING is NOT the per-address rule — that is the hard
+    // one-pending-per-address check next to it; this constant is only read by the unused
+    // canInitiateWithdrawal() below.
+    //
+    // Read from config, which PoolSettings.applyToConfig() populates from
+    // payout.max_pending_withdrawals / payout.max_user_pending. These were hardcoded until
+    // 2026-08-22, so the two fields in admin → Payout wrote to the DB and changed nothing.
+    // Coerced and floored at 1: a 0 or a non-numeric string reaching the cap would make the
+    // guard reject every withdrawal, which looks exactly like a stuck payout queue.
+    this.MAX_PENDING_WITHDRAWALS = Math.max(1, parseInt(config.max_pending_withdrawals, 10) || 100);
+    this.MAX_USER_PENDING        = Math.max(1, parseInt(config.max_user_pending, 10) || 10);
   }
 
   start() {
@@ -1011,10 +1020,13 @@ class WithdrawalScheduler {
 
   // Miner-initiated cancel: frees the one-pending-per-address slot and returns the locked
   // amount to spendable balance. NOTE: the public cancel route was removed 2026-07-17 (parked
-  // states self-recover; a late cancel after a send that actually posted would double-pay) —
-  // this method is kept for admin/support tooling only. Only PARKED states are cancellable — retry_scheduled (Tor
-  // payout waiting hours for its next attempt) and slatepack_pending (miner never returned
-  // the slate). tor_checking/tor_sending are actively being sent and must settle first.
+  // states self-recover; a late cancel after a send that actually posted would double-pay), and
+  // NOTHING CALLS THIS TODAY — the admin cancel (/api/admin/withdrawals/:id/cancel) carries its
+  // own inline implementation in index.js. Kept as the reference implementation of a safe
+  // cancel; if a support route ever needs one, call this rather than writing a third copy.
+  // Only PARKED states are cancellable — retry_scheduled (Tor payout waiting hours for its next
+  // attempt) and slatepack_pending (miner never returned the slate). tor_checking/tor_sending
+  // are actively being sent and must settle first.
   // The status transition is a guarded UPDATE inside a transaction, so it can never race the
   // scheduler (whose pickup is likewise guarded in initiateWithdrawal) into a double-reverse.
   async cancelWithdrawal(grinAddress, withdrawalId) {
@@ -1412,7 +1424,10 @@ class WithdrawalScheduler {
     }
   }
 
-  // FIX #7: Check withdrawal rate limits to prevent DoS
+  // UNUSED — no caller, and deliberately not wired up: its status list predates the slatepack
+  // and Goblin rails (it misses slatepack_pending and finalizing), and its 10-per-address budget
+  // contradicts the one-pending-per-address rule the create* paths actually enforce inside their
+  // transaction. The live caps are PENDING_SQL + the userPending >= 1 check; use those.
   async canInitiateWithdrawal(grinAddress) {
     try {
       // Check total pending withdrawals

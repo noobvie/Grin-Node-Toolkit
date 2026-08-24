@@ -117,11 +117,28 @@ show_local_grin_instances() {
 # Registry Master Nodes — Freshness, Availability & Sync Check
 # Reads extensions/grinmasternodes.json. For every registered host checks:
 #   1. HTTP 200 reachability
-#   2. .tar.gz file age via Last-Modified (> 5 days = stale)
+#   2. .tar.gz file age via Last-Modified, against a PER-SITE-KEY threshold
+#      (see _mn_max_age_for_site_key — fullmain gets 70 days, everything else 5)
 #   3. Sync status via check_status_before_download.txt
 # Stale / down hosts show the owner contact from _contacts (keyed by base domain).
 # Results are written to MASTER_LOG_FILE.
 # =============================================================================
+# Staleness threshold, per site_key. Must stay in step with _max_age_for_site_key
+# in 01_build_new_grin_node.sh — that is the function that decides whether a mirror
+# is fresh enough to DOWNLOAD from, and a monitor that disagrees with it is worse
+# than no monitor: it either cries stale about hosts Script 01 happily uses, or
+# stays quiet about hosts Script 01 has already started skipping.
+#
+# fullmain (the full archive) is published roughly biweekly, so 5 days flags a
+# perfectly healthy archive mirror on all but the first few days after a publish.
+# The pruned snapshots are regenerated far more often, so 5 days is right there.
+_mn_max_age_for_site_key() {
+    case "$1" in
+        fullmain) echo 70 ;;
+        *)        echo  5 ;;
+    esac
+}
+
 check_master_nodes() {
     echo ""
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
@@ -138,10 +155,9 @@ check_master_nodes() {
         return 0
     fi
 
-    local max_age=5
     local now; now=$(date +%s)
     mlog "=== Registry Master Nodes Check ==="
-    mlog "Registry: $REGISTRY  |  Threshold: ${max_age} days"
+    mlog "Registry: $REGISTRY  |  Threshold: per site_key (fullmain 70d, others 5d)"
 
     local zones; zones=$(jq -r 'keys[] | select(startswith("_") | not)' "$REGISTRY" 2>/dev/null) || true
     local total=0 ok=0 stale=0 unsynced=0 down=0
@@ -157,7 +173,8 @@ check_master_nodes() {
                 echo -e "  ${BOLD}Zone: ${zone^}${RESET}"
                 zone_printed=true
             fi
-            echo -e "    ${DIM}${sk}${RESET}"
+            local max_age; max_age=$(_mn_max_age_for_site_key "$sk")
+            echo -e "    ${DIM}${sk}${RESET} ${DIM}(stale after ${max_age}d)${RESET}"
             while IFS= read -r host; do
                 total=$((total + 1))
                 local base="https://$host"
@@ -241,7 +258,7 @@ check_master_nodes() {
         [[ "$zone_printed" == true ]] && echo ""
     done
 
-    echo -e "  ${DIM}Threshold: > ${max_age} days flagged stale${RESET}"
+    echo -e "  ${DIM}Threshold: fullmain > 70 days, other site keys > 5 days${RESET}"
     echo -e "  ${DIM}Summary: ${GREEN}${ok} OK${RESET}  ${RED}${stale} stale  ${down} down${RESET}  ${YELLOW}${unsynced} syncing${RESET}  (total: ${total})${RESET}"
     echo -e "  ${DIM}Log: $MASTER_LOG_FILE${RESET}"
     echo ""

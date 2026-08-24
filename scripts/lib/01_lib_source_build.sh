@@ -41,8 +41,10 @@
 #     the restore command is printed after every install and written into
 #     .grin_binary_info next to the binary itself. (Submenu option 4.)
 #
-#   Conventions: sourced lib → NO shebang, NO `set -e` of its own. It runs under
-#   the caller's `set -euo pipefail`, so every fallible command is guarded.
+#   Conventions: sourced lib → NO shebang, NO `set -e` of its own — and the
+#   caller's `set -euo pipefail` does NOT reach in here: gsb_menu is dispatched as
+#   `gsb_menu || true`, which disables errexit for the whole call tree below it
+#   (see CLAUDE.md). Every fallible command must therefore carry its own guard.
 #   Borrowed from Script 01 at call time (never at source time): info/warn/error/
 #   success/die/log/step_header, stop_grin_gracefully, start_grin_tmux,
 #   ensure_swap_and_tuning, $INSTANCES_CONF, colour vars.

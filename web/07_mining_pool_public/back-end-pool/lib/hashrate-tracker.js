@@ -149,8 +149,8 @@ class HashrateTracker {
   }
 
   // Top miners by AVERAGE hashrate over a multi-day window, from the persistent hashrate_history
-  // samples (retained ~30 days) — unlike getTopMiners (a short live snapshot off the shares table,
-  // pruned after ~1 day). Each sample covers window_seconds of mining at hashrate_gps, so
+  // samples (retained database.hashrate_keep_days, default 100) — unlike getTopMiners (a short live
+  // snapshot off the shares table, pruned after ~1 day on mainnet). Each sample covers window_seconds of mining at hashrate_gps, so
   // SUM(gps × window_seconds) / totalWindowSeconds is the time-weighted average GPS across the
   // whole window (gaps count as zero), rewarding sustained mining rather than a peak burst.
   getTopAvgHashrate(days = 30, limit = 500) {

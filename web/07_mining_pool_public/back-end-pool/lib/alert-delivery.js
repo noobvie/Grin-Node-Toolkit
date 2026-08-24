@@ -1,7 +1,8 @@
 /**
- * Alert Delivery — Send alerts via email, Discord, Slack
+ * Alert Delivery — Send alerts via email (SMTP), Discord, Slack and Telegram.
  *
- * Handles formatting and delivery of alerts to configured channels.
+ * Handles formatting and delivery of alerts to whichever channels are configured
+ * (see configuredChannels() — a channel with no config is silently skipped).
  */
 
 const https = require('https');
@@ -245,9 +246,22 @@ class AlertDelivery {
       'high_error_rate': 'High Error Rate',
       'tor_unreachable': 'Tor Unreachable',
       'difficulty_spike': 'Difficulty Spike',
-      'connection_surge': 'Connection Surge'
+      'connection_surge': 'Connection Surge',
+      // Money-integrity detectors (AlertMonitor). Added here 2026-08-22: this map was
+      // written before they existed, so the seven alerts that can FREEZE PAYOUTS were the
+      // only ones arriving as raw snake_case — "coverage_shortfall" in the email subject
+      // line, next to properly named cosmetic ones like "Difficulty Spike".
+      'coverage_shortfall': 'Coverage Shortfall',
+      'ledger_integrity_drift': 'Ledger Integrity Drift',
+      'wallet_drain': 'Wallet Drain',
+      'unrecorded_wallet_send': 'Unrecorded Wallet Send',
+      'large_withdrawal': 'Large Withdrawal',
+      'payout_surge': 'Payout Surge',
+      'wallet_identity_changed': 'Wallet Identity Changed'
     };
-    return names[type] || type;
+    // Fall back to Title Case rather than the raw key, so the next detector added without
+    // touching this map degrades to "New Detector" instead of "new_detector".
+    return names[type] || String(type).replace(/_/g, ' ').replace(/(^| )\w/g, c => c.toUpperCase());
   }
 
   /**
@@ -264,11 +278,29 @@ Triggered: ${new Date(alert.triggered_at).toISOString()}
 Occurrences: ${alert.occurrence_count}
 
 Details:
-${alert.data ? JSON.stringify(JSON.parse(alert.data), null, 2) : 'No additional data'}
+${this.formatAlertData(alert.data)}
 
 ---
 Grin Pool Alert Monitor
     `.trim();
+  }
+
+  /**
+   * Pretty-print alert.data, which is a JSON string written by AlertMonitor.
+   *
+   * Guarded: this used to be a bare JSON.parse inside the template literal, so a row whose
+   * data was truncated or non-JSON threw from formatEmailBody → sendEmail → the .catch() in
+   * send(), and the alert was dropped with only a delivery-failure line to show for it.
+   * Losing a critical money alert to a formatting error is the wrong trade — show the raw
+   * string instead.
+   */
+  formatAlertData(data) {
+    if (!data) return 'No additional data';
+    try {
+      return JSON.stringify(JSON.parse(data), null, 2);
+    } catch (e) {
+      return String(data);
+    }
   }
 
   log(msg) {

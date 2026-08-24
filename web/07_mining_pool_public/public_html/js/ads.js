@@ -2,8 +2,9 @@
    ads.js — render operator-managed ads into public placement slots  [2026-06]
    ----------------------------------------------------------------------------
    Fetches GET /api/public/ads (active, in-window ads grouped by placement) and
-   fills every [data-ad-slot="<placement>"] element on the page. Two ad kinds:
+   fills every [data-ad-slot="<placement>"] element on the page. Three ad kinds:
      · banner — <img> (optionally wrapped in a sponsored link)
+     · text   — a native card composed from headline + body_text + cta_label, no image
      · code   — operator-trusted HTML/JS snippet (ad-network zone). innerHTML does
                 NOT run <script> tags, so we re-create them so network tags execute.
    Placements: header, sidebar, in-content, footer. Header/footer slots are

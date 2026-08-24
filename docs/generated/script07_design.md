@@ -22,7 +22,7 @@ federation, database, API, reward pipeline, payments, white-label, and UI/UX.
 > This file absorbs the former `script07_multi_region_design.md` and the imported
 > `script07_public_pool/` GRINIUM doc set (deleted 2026-06-08). Where those described the
 > standalone **Grinium** repo (`web/back-end-pool/`, ports `3002/3416`), this doc uses the
-> **toolkit** layout (`web/07_mining_pool_public/`, ports `3333/3334/8080`).
+> **toolkit** layout (`web/07_mining_pool_public/`, ports `3333/3416/8080`).
 
 ---
 
@@ -179,7 +179,8 @@ Miners ──stratum──▶ Stratum Proxy ──stratum (client)──▶ node
 ```
 
 The proxy binds the **public** stratum port (`3333`); the node's built-in stratum binds **localhost
-only** (`3334` / testnet `13334`). It sees every `login`/`submit` as structured JSON → reliable
+only** (`3416` / testnet `13416` — grin's own `stratum_server_addr` default, which the
+toolkit never moves). It sees every `login`/`submit` as structured JSON → reliable
 `address.worker` identity + difficulty + nonce + timestamp, per-miner **vardiff**, dedup by
 `(nonce, height)`, rate-limits, and abuse bans. Log-tailing was **rejected** (brittle format, one
 global difficulty, no guaranteed per-share identity).
@@ -490,17 +491,23 @@ interpolation sink; worker-name regex enforced at the stratum layer.
 
 | Service | Mainnet | Testnet | Access |
 |---|---|---|---|
-| Public stratum (miners) | 3333 | 3333 | Public |
-| Node built-in stratum (proxy upstream) | 127.0.0.1:3334 | 127.0.0.1:13334 | localhost only |
-| Central API / Pool HTTP API | 8080 | 8080 | Public web; ingestion satellites-only (allowlist+secret) |
+| Public stratum (miners) | 3333 | 13333 | Public |
+| Node built-in stratum (proxy upstream) | 127.0.0.1:3416 | 127.0.0.1:13416 | localhost only |
+| Central API / Pool HTTP API | 8080 | 8090 | Public web; ingestion satellites-only (allowlist+secret) |
 | Web dashboard | 443 | 443 | Public |
 | Node API (Owner/Foreign) | 3413 | 13413 | localhost |
 | Wallet Foreign / Owner | 3415 / 3420 | 13415 / 13420 | localhost |
 | P2P | 3414 | 13414 | Public |
 
-> The single-box installer was migrated off the legacy `3416/3417/3002` to `3333/3334/8080` in
-> 2026-06 (bash + backend in sync — see `config.js`). The **solo** product (`07_grin_mining_solo.sh`)
-> keeps `3416`.
+> The single-box installer was migrated off the legacy `3417/3002` to `3333/8080` in 2026-06
+> (bash + backend in sync — see `config.js`). The **node upstream** was NOT moved with them:
+> the `3334` this doc once planned was never implemented, because Script 01 leaves the node's
+> `stratum_server_addr` at grin's default, so the pool must dial `3416`/`13416` out of the box.
+> Three sites carry that number and must stay agreed — `pool_ensure_defaults`
+> (`07_grin_mining_public_pool.sh`), `node_stratum_port` (`back-end-pool/lib/config.js`), and
+> `grin_sync_pool_stratum` (`lib/grin_node_secrets.sh`), which re-patches the toml after a node
+> rebuild. It is operator-overridable via `node_stratum_port` in the pool config. The **solo**
+> product (`07_grin_mining_solo.sh`) dials the same `3416`/`13416`.
 
 ---
 
@@ -765,8 +772,10 @@ owner secrets, or write outside its own dirs.
 
 ### 13.10 Operational scenarios & disaster recovery (added 2026-07-13)
 
-Five real-life scenarios, scoped honestly: two need **new code**, three are **runbooks**
+Five real-life scenarios, scoped honestly: two needed **new code**, three are **runbooks**
 (documentation + small menu affordances). All belong to this work package.
+*(Status 2026-08-22: both new-code items — (a) and (b) — are BUILT. The per-scenario
+"New code" lines below are kept as the original scoping, each annotated with what shipped.)*
 
 **a) Grin node rebuild (new api/foreign secrets) — mostly already automatic.**
 `07_lib_pool_wallet.sh:577` already installs the shared secret self-heal
@@ -774,16 +783,19 @@ Five real-life scenarios, scoped honestly: two need **new code**, three are **ru
 re-applied to the pool wallet's `node_api_secret_path` without operator action
 (`grin_sync_wallets` sweeps `/opt/grin/**/grin-wallet.toml`). **The uncovered half:** a
 rebuild wipes the node's own `grin-server.toml`, losing the pool's stratum wiring
-(`enable_stratum_server`, `stratum_server_addr` :3334/:13334, `wallet_listener_url` → :3420).
-→ **New code:** add a pool consumer to the self-heal chain per the CLAUDE.md "new consumer"
-pattern — `grin_sync_pool_stratum` re-applies `pw_patch_node_toml`-equivalent keys when the
-live node's toml has drifted (guarded: only when a pool install exists; node restart is NOT
-automatic — the sync prints/flags it, the watchdog or operator restarts). Runbook line:
-after any node rebuild, `grin-secret-sync` once + restart node + check admin health page.
+(`enable_stratum_server`, `stratum_server_addr` :3416/:13416, `wallet_listener_url` → :3420).
+→ **New code — ✅ BUILT.** `grin_sync_pool_stratum` (`lib/grin_node_secrets.sh:576`) is in the
+`grin_secrets_sync_all` chain and ships exactly as scoped: guarded on the pool conf existing,
+re-applies `enable_stratum_server`, `stratum_server_addr` (from the conf's `node_stratum_port`,
+defaulting to `3416`/`13416`) and `wallet_listener_url` → `:3420`/`:13420`, and does NOT restart
+the node — it prints "RESTART the <net> node to take effect". It also re-applies the de-rooted
+`root:grinsecret 640` mode a rebuild would reset to `600 root:root`. Runbook line: after any node
+rebuild, `grin-secret-sync` once + restart node + check admin health page.
 
 **b) Provider/IP change of the HUB — make endpoints DNS-based (small helper feature).**
 Today `add-peer` bakes the ipify-resolved raw IP into every pairing string; an IP change
-strands every gateway (each needs `wg_hub_endpoint` edited by hand). → **New code (cheap):**
+strands every gateway (each needs `wg_hub_endpoint` edited by hand). → **New code (cheap) — ✅ BUILT** (`pool_wg_endpoint_host`, menu `W → 5`; read by
+`07_lib_gwctl.sh`):
 optional `wg_endpoint_host` in pool.json (set once in helper/panel, e.g. `hub.grinium.net`);
 when set, pairing strings carry `host:port` instead of the raw IP. WireGuard resolves the
 name at `wg-quick up` — so a provider IP change becomes: update DNS A record → each gateway
@@ -833,6 +845,154 @@ keep the old dir until balance is zero.
 public `POST /api/gateway/enroll` and receives the pairing payload (zero human key-carrying).
 Bolts onto this design (same helper, same response shape); revisit only if third-party
 operators run gateways at scale.
+
+### 13.12 Panel-side multi-region bootstrap + onboarding fixes — IMPLEMENTED 2026-08-22 (NOT VPS-tested)
+
+§13.1 promised "pair a gateway without an SSH session on the hub". That was **false for
+every pool that had never gone multi-region**: `add-peer` requires `/etc/wireguard/wg-grinpool*.conf`,
+which only `pool_wg_setup_server` (menu `W → 1`) created. Worse, the panel's region save
+upserted `pool_locations` **before** calling the helper — so the first attempt left a saved
+region card *and* a 502 naming an SSH menu the how-to never mentioned. A flow-trace of both
+routes (bash + panel) found seven more onboarding defects around it; all are fixed here.
+
+**a) `grin-gateway-ctl init-server` — the hub tunnel becomes a helper subcommand.**
+Package (install, retrying once behind `apt-get update`), keypair, `/etc/wireguard` conf,
+firewall UDP rule, `wg-quick up` + enable, `region_listen_host` in pool.json. Idempotent by
+construction: an existing conf is **kept** (regenerating rotates the hub key and strands every
+paired gateway) and a live interface is **synced, never bounced**. Also re-derives a missing
+`server_public.key` from the private key — otherwise an interrupted first run makes every
+later pairing string carry an empty hub key. Emits the usual single JSON object.
+
+**b) `pool_wg_setup_server` is now a thin caller over (a).** It was a second implementation of
+the same steps; the tunnel net, listen port and conf layout had to be kept in sync by hand
+across two files. Same posture as `add-peer`/`remove-peer`/`list` since §13.5.
+
+**c) Panel: `GET`/`POST /api/admin/gateways/server`.** GET is the page's pre-flight (`ready`
+true/false, never an error — "no tunnel" is the normal state of a single-box pool); POST runs
+init-server behind `freshAdmin` step-up (raising a tunnel is at least as sensitive as pairing a
+peer, which is already step-up gated) with a 180s exec timeout, audits `gateway_server_init`,
+and mirrors `region_listen_host` into the live config. `regions.html` renders either an
+**Enable multi-region** banner or the hub's coordinates.
+
+**d) The half-write is gone.** `POST /api/admin/locations` now pre-flights with a read-only
+`list` **before** the upsert when a `wg_pubkey` is present, returning **409 `wg_server_missing`**
+and writing nothing. The client checks that flag *before* the existing `wg_error` branch, which
+would otherwise report "region saved" about a request that saved nothing.
+
+**e) CLI `add-peer` parity with `remove-peer`.** Remove already `DELETE`s the `pool_locations`
+row; add only printed "remember to declare it", which is how a region ends up wired but invisible
+on the connect grid. Add now inserts the card with `is_active = 0` — visible in admin, not on the
+public grid, because there is no stratum hostname to publish yet.
+
+**f) The CLI restart is now a choice, not a surprise.** Panel pairing hot-binds; the CLI runs
+outside the process and can only restart `grin-pool-manager`, which drops every miner on **every**
+region. It now says so and asks, and names the panel as the no-restart path.
+
+**g) Gateway box: firewall + honest next-step.** `gw_install` never opened the public stratum
+port (the hub opens its own wg port), so a box with active ufw finished pairing green and refused
+every miner. New `gw_open_firewall` runs from Install and Configure; `gw_status` reports the ufw
+rule beside the listener. Install's tail said "Next: 2) Configure" — the one thing the operator
+must *not* do, since the pairing string does not exist yet; it now stops and points at the hub.
+
+**h) DNS is a step.** The A-record (pointing at the **gateway** box, not the hub) was a
+parenthetical; it gates the Port-check column, so its absence read as a broken gateway. It is now
+its own numbered step in the panel how-to and is printed by both `gw_configure` and CLI add-peer.
+
+**i) `gw_configure` silent no-op.** The region-port prompt composes `hub_endpoint` from two
+answers and dropped the port when the hub tunnel IP was still blank, with no message. It now says
+what was not saved and why.
+
+**Second pass (same day) — six defects found reviewing (a)–(i):**
+
+**j) A readable conf is not a running tunnel.** `list` reported only that `$WG_CONF` exists, so
+the panel's readiness light went green on a hub whose interface was down — the state in which
+*every* gateway is dark. `list` now carries `interface_up` (`wg show`), the GET forwards it, and
+the banner has a third state: **set up, but the tunnel is DOWN**, whose button is the same
+idempotent `init-server` (keeps the keypair, so nothing needs re-pairing).
+
+**k) `Auth.fetch` resolves `null` on failure — it never throws.** `loadServerState`'s `try/catch`
+was therefore dead code, and a failed/rate-limited request fell through to `!d.ready` and nagged a
+healthy pool to enable a tunnel it already runs. It now moves state only on `d.success === true`;
+`_mrReady` is tri-state (`null` = never answered, and `null` is not evidence of anything).
+
+**l) `_mrReady` was written and never read.** It now short-circuits a save that carries a
+`wg_pubkey` while the hub is known-not-ready — otherwise `adminFetch` prompts for the step-up
+password on the way to a guaranteed 409.
+
+**m) `synced:false` was invisible in the panel.** `add-peer` reports when `wg syncconf` did not
+load the new peer into the running interface; the CLI has always warned, the route dropped the
+field and reported plain success. The symptom then appears on the *gateway* box and reads as a
+pairing fault. Now returned as `sync_warning` and shown on the pairing card.
+
+**n) The CLI's `pool_locations` insert could create a root-owned `pool.db`.** `node:sqlite` opens
+create-if-missing, so (e) would have created the database — and, in WAL mode, `pool.db-wal`/`-shm` —
+owned by root, after which the de-rooted `grinpool` service cannot open its own database. Guarded
+on the file already existing, and the WAL sidecars are chowned back unconditionally.
+
+**o) `apt-get` did not wait for the dpkg lock.** A fresh VPS is usually mid-`unattended-upgrades`;
+without `-o DPkg::Lock::Timeout=60` both install attempts fail instantly and the operator is told
+wireguard-tools "could not be installed" by a box that was merely busy for 20 seconds.
+
+Also corrected in the same pass: the new-region tail ("two things left", DNS, region card) was
+printing on the **box-replacement** path too, where all of it is already done; add-peer's
+prerequisite error named only the SSH menu; and the CLI's "publish it" hint omitted that the
+region card's **Active** checkbox is what actually publishes it.
+
+**p) THE BLOCKER: `ProtectSystem=strict` made every panel-side WireGuard write fail.** Found
+answering "is this ready to test?", before any of it ran. The hardened unit (§13.9) builds a
+**mount namespace**, and a namespace is inherited by every child — *including one that becomes
+root through setuid `sudo`*. Gaining root does not get you out of it. `/etc/wireguard` was not in
+`ReadWritePaths`, so `sudo grin-gateway-ctl add-peer` ran as root and still could not append a
+`[Peer]`. This was never an `init-server` bug: it broke **`add-peer` and `remove-peer` too**,
+i.e. the whole §13.1 promise of "pair a gateway without an SSH session", for every de-rooted box.
+`list` and `status` are reads, so the pre-flight, the readiness banner and the health column all
+kept working — the page looked healthy right up to the moment you saved. `NoNewPrivileges` was
+already deliberately absent with a comment about this very sudo path; the mount namespace simply
+was not the part that got considered.
+
+Fixed by opening exactly one path and moving the rest off the request:
+- `ReadWritePaths` gains `-/etc/wireguard`. DAC still applies inside the namespace, so `grinpool`
+  cannot write those root-owned files itself — only the scoped helper can.
+- New `pool_ensure_wg_prereqs()` installs `wireguard-tools` **and creates `/etc/wireguard`** at
+  pool-install time. Both must happen before the unit starts: `apt` can never run inside the
+  namespace (`/usr`, `/var` read-only), and `ReadWritePaths` is bound at service **start**, so a
+  directory created later is not writable in the already-running service's namespace.
+- The update path does not rewrite the unit, so `pool_deploy_code` now detects a pre-§13.12p unit
+  (`ProtectSystem=strict` without `/etc/wireguard`) and says which operations will fail.
+- Steps that remain outside the namespace are reported instead of swallowed: `systemctl enable`
+  (writes `/etc/systemd/system`) returns `boot_enabled`, and `ufw allow` already returned
+  `ufw-failed`. Both surface as persistent **caveats** on the page — the tunnel is up, but a
+  reboot loses it / the UDP port is still shut, and neither has a local symptom.
+- Error strings now name the namespace and the fix, rather than saying "install it manually".
+
+`/etc/systemd/system` and `/etc/ufw` stay closed, deliberately: those two steps are worth one SSH
+command, and widening the unit for them would trade the whole point of de-rooting for convenience.
+
+Accepted risk, not fixed: `init-server` may still install a package inside an HTTP request when
+run on a box where the installer's `pool_ensure_wg_prereqs` did not succeed, so an `execFile`
+timeout can interrupt `apt`. The 180s budget makes that unlikely, and the common path no longer
+touches apt at all.
+
+Unchanged and deliberately so: the shared-helper architecture, the GRINGW1 string, the dup-key
+and same-region guards, and the §13.11 token enrollment (still deferred — these fixes reduce the
+manual hops but do not remove the two hand-carried payloads).
+
+**q) `1) Install` was not safe to re-run — and (p) makes re-running it the documented fix.**
+Prescribing "re-run Install once to pick up the new unit" turned a first-run-only assumption into
+a data-loss bug. `pool_install`'s rsync was `rsync -a --delete "$POOL_APP_SRC/" "$POOL_APP_DIR/"`
+with **no excludes**, so on an already-installed box it mirrored the checkout and deleted every
+runtime artefact the app owns: `pool.db` (every miner's balance), `.wallet_pass`, `custom_assets`,
+`uploads`, `node_modules`. On a first install `POOL_APP_DIR` is empty and each exclude is a no-op,
+which is exactly why the gap survived — the bug is invisible until the step is run a second time.
+`pool_install` now carries the same exclude list as `pool_deploy_code`.
+
+The same audit found `uploads/` (CMS media from the admin editor) missing from `pool_deploy_code`'s
+excludes, so **every code deploy silently pruned it** — independent of (p), and older. The comment
+on the nginx `/uploads/` block asserted the opposite, and its reasoning is the trap worth naming:
+living *outside* `public_html` protects a dir from the **docroot** rsync in `pool_deploy_web`, and
+not at all from the **backend** rsync, which `--delete`s `POOL_APP_DIR` itself. Both comments are
+corrected, and the rule is now stated where the next author will be adding a runtime dir: every new
+dir the app writes under `POOL_APP_DIR` needs an exclude in **both** rsyncs.
 
 ---
 
@@ -925,7 +1085,7 @@ Decision 2026-07-17: **design first, build later** (after the current batch is V
 ### 15.1 Why it's feasible (verified groundwork)
 
 The slatepack-over-Nostr wire format was SOURCE-VERIFIED 2026-07-09 against goblin
-`src/nostr/*.rs` (full detail → `script05_planning_goblin.md`, memory
+`src/nostr/*.rs` (full detail → `script05_design_goblin.md`, memory
 `reference_goblin_ecosystem`). Facts that matter here:
 
 - **Payload**: NIP-17 private DM — kind-14 rumor, content = `"[Goblin] GRIN payment message …"`

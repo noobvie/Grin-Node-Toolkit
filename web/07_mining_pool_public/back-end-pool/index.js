@@ -53,11 +53,15 @@ const { execSync, execFile } = require('child_process');
 // (pool_deroot); `sudo -n` never blocks on a password prompt. argv array only —
 // never a shell string — and the helper re-validates every input itself.
 const GWCTL = '/usr/local/bin/grin-gateway-ctl';
-function gwctl(args) {
+// timeoutMs defaults to the 10s that suits every peer/list/status call. Only
+// init-server needs more — it may install wireguard-tools inside the request —
+// and it passes its own; do NOT raise the default, because the cached liveness
+// read sits behind it and a slow helper there stalls the public patch bay.
+function gwctl(args, timeoutMs) {
   return new Promise((resolve, reject) => {
     const net = (config && config.network === 'testnet') ? 'testnet' : 'mainnet';
     execFile('sudo', ['-n', GWCTL, ...args, '--net', net],
-      { timeout: 10000, maxBuffer: 1024 * 1024 }, (err, stdout) => {
+      { timeout: timeoutMs || 10000, maxBuffer: 1024 * 1024 }, (err, stdout) => {
         let out = null;
         try { out = JSON.parse(String(stdout || '').trim()); } catch (e) { /* not JSON */ }
         if (out && out.ok) return resolve(out);
@@ -219,7 +223,7 @@ const app = express();
 // no collision with other toolkit Express products.
 app.set('trust proxy', 'loopback');
 app.use(express.json());
-app.use(cookieParser());  // FIX #4: Parse httpOnly cookies
+app.use(cookieParser());
 
 // True when a request arrived DIRECTLY on loopback (the trusted operator on the box —
 // e.g. Script 07's guided installer hitting 127.0.0.1:8080), NOT proxied in from nginx.
@@ -232,7 +236,7 @@ function isLocalRequest(req) {
   return ip === '127.0.0.1' || ip === '::1';
 }
 
-// FIX #8: Compute config integrity hash
+// Config integrity hash — compared against .config.sha256 on every startup.
 function hashConfig(cfg) {
   return crypto
     .createHash('sha256')
@@ -317,7 +321,7 @@ function validateConfig(cfg) {
   if (!cfg.stratum_port || cfg.stratum_port < 1024 || cfg.stratum_port > 65535) {
     throw new Error(`Invalid stratum_port: ${cfg.stratum_port}`);
   }
-  // FIX #7: Validate pool fee is between 0 and 50% (prevent fee theft)
+  // Pool fee must be 0-50% (prevent fee theft).
   if (cfg.pool_fee_percent !== undefined && (cfg.pool_fee_percent < 0 || cfg.pool_fee_percent > 50)) {
     throw new Error(`Invalid pool_fee_percent: ${cfg.pool_fee_percent} (must be 0-50)`);
   }
@@ -392,10 +396,9 @@ async function initializePool() {
     config = loadConfig(process.env.GRIN_POOL_CONF || './pool.json');
     console.log(`[${new Date().toISOString()}] Loading pool configuration...`);
 
-    // Validate config (CRITICAL: issue #12)
     config = validateConfig(config);
 
-    // FIX #8: Check config integrity - warn if modified since last startup
+    // Config integrity — warn if the file changed since the last startup.
     const configHash = hashConfig(config);
     const hashFile = '.config.sha256';
     if (fs.existsSync(hashFile)) {
@@ -470,7 +473,9 @@ async function initializePool() {
     // the block monitor's node client. Optional — creditBlock leaves it NULL if unavailable.
     if (blockMonitor.grinNode) blockManager.setNodeApi(blockMonitor.grinNode);
 
-    rewardDistributor = new RewardDistributor(config);
+    // Pass BlockMonitor's node client: RewardDistributor re-verifies each block against the
+    // chain immediately before crediting, and that check is a no-op without it (audit §I3).
+    rewardDistributor = new RewardDistributor(config, blockMonitor.grinNode);
     blockMonitor.setRewardDistributor(rewardDistributor);
     console.log(`[${new Date().toISOString()}] Reward distributor initialized (PPLNS window: 60 blocks)`);
 
@@ -532,8 +537,15 @@ async function initializePool() {
       catch (e) { console.error(`[Incentives] streak update failed: ${e.message}`); }
     }, 24 * 3600 * 1000);
     setInterval(() => {
-      lotteryManager.runDueDraws().catch((e) => console.error(`[Lottery] scheduler tick failed: ${e.message}`));
-      lotteryManager.runDueCampaigns().catch((e) => console.error(`[Campaigns] scheduler tick failed: ${e.message}`));
+      // Reveal first, then commit: a draw commits to a seed block ~10 blocks ahead of the tip
+      // and is only resolved once the chain reaches it (audit §I8), so every tick settles what
+      // the previous one committed before opening anything new.
+      lotteryManager.resolveCommittedDraws()
+        .catch((e) => console.error(`[Lottery] reveal tick failed: ${e.message}`))
+        .then(() => {
+          lotteryManager.runDueDraws().catch((e) => console.error(`[Lottery] scheduler tick failed: ${e.message}`));
+          lotteryManager.runDueCampaigns().catch((e) => console.error(`[Campaigns] scheduler tick failed: ${e.message}`));
+        });
     }, 3600 * 1000);
 
     walletTor = new WalletTor(config);
@@ -808,6 +820,30 @@ function setupRoutes() {
     ipFilter.middleware('admin'),
     requireFreshAuth(authManager, STEP_UP_MAX_AGE_S)
   ];
+
+  // Step-up applied CONDITIONALLY, from inside a `secureAdmin` handler, for routes where only
+  // some requests are sensitive (a settings section that carries fee/whitelist keys; a region
+  // save that carries a wg pubkey). Returns true when it has already answered the request.
+  //
+  // It exists because those two handlers previously inlined a bare `isTokenFresh()` call, which
+  // reproduced requireFreshAuth but silently dropped requireTotpEnrolled — so on a pool with
+  // access.require_admin_totp ON, an un-enrolled admin was refused by every freshAdmin route
+  // yet could still write the `payout` section with a password-only re-auth (audit §I7).
+  // Both halves of the step-up contract live here now; do not re-inline either one.
+  const stepUpRefused = (req, res) => {
+    if (!authManager.isTokenFresh(req.token, STEP_UP_MAX_AGE_S)) {
+      res.status(403).json({ error: 'Session expired', challenge_required: true });
+      return true;
+    }
+    if (totpIsMandatory() && !authManager.isTotpEnabled(req.user.user_id)) {
+      res.status(403).json({
+        error: 'This pool requires two-factor authentication for admin actions. Set up 2FA to continue.',
+        totp_enrollment_required: true
+      });
+      return true;
+    }
+    return false;
+  };
 
   // Auto-ban bookkeeping for the two login steps: count failures per IP within the window,
   // temp-ban on threshold. `kind` selects the counter — 'password' and '2fa' are tracked
@@ -1288,7 +1324,8 @@ function setupRoutes() {
   );
 
   // Public pages included in the sitemap. Each URL MUST match that page's own
-  // <link rel="canonical"> exactly (all use the .html form) — a sitemap URL that
+  // <link rel="canonical"> exactly (the .html form, except the dashboard, whose canonical
+  // is the bare origin + '/') — a sitemap URL that
   // differs from the page's canonical makes Google crawl a non-canonical variant.
   // pool-info + connect were merged into the dashboard (index) 2026-06; the dashboard
   // carries the #connect + #info anchors, so only / is listed for that content.
@@ -1372,7 +1409,7 @@ function setupRoutes() {
   // rewrites the same values — idempotent, no flicker).
 
   const HEAD_MARK = '</head>';
-  const shellCache = new Map(); // filename → contents (cleared by SIGHUP-free restart)
+  const shellCache = new Map(); // filename → contents; only a restart clears it (no reload signal)
 
   function readShell(name) {
     if (shellCache.has(name)) return shellCache.get(name);
@@ -1573,13 +1610,14 @@ function setupRoutes() {
     }
   );
 
-  // Issue a self-hosted CAPTCHA challenge for the login/register forms. Public-rate-limited
-  // (60/min) so the form can fetch one without spending the strict auth budget (10/min).
+  // Issue a self-hosted CAPTCHA challenge for the login/register forms. On the `public`
+  // bucket (1200/min) so the form can fetch one without spending the stricter `auth` budget
+  // (200/min) — both are the ×20 "loosen now" values; see this.limits in lib/rate-limiter.js.
   app.get('/api/auth/captcha', rateLimiter.middleware('public'), (req, res) => {
     res.json(loginCaptcha.issue());
   });
 
-  // FIX #7, #6, #4: Add rate limiting + first-admin gating + httpOnly cookies
+  // Rate limiting + first-admin gating + httpOnly cookies.
   app.post('/api/auth/register',
     async (req, res) => {
       try {
@@ -1609,7 +1647,7 @@ function setupRoutes() {
         const { username, password } = req.body;
         const result = await authManager.registerAdmin(username, password);
         if (result.success) {
-          // FIX #4: Generate tokens and set as httpOnly cookies. pwa=now — the admin just
+          // Generate tokens and set them as httpOnly cookies. pwa=now — the admin just
           // set this password, so the first session starts step-up-fresh.
           const tokens = authManager.generateTokens(result.user_id, username, true, 0, Math.floor(Date.now() / 1000));
 
@@ -1638,7 +1676,7 @@ function setupRoutes() {
     }
   );
 
-  // FIX #7, #15, #4: Add rate limiting + audit logging + httpOnly cookies
+  // Rate limiting + audit logging + httpOnly cookies.
   app.post('/api/auth/login',
     async (req, res) => {
       try {
@@ -1682,7 +1720,6 @@ function setupRoutes() {
             return res.json({ success: false, totp_required: true, twofa_token: authManager.generate2faToken(result.user_id) });
           }
 
-          // FIX #4: Set httpOnly, Secure cookie instead of returning token
           // httpOnly (no JS access → no XSS theft), Secure in production, sameSite strict.
           // Lifetime comes from the live session policy — see accessCookieOpts.
           res.cookie('access_token', result.access_token, accessCookieOpts());
@@ -1759,7 +1796,7 @@ function setupRoutes() {
   });
 
   app.post('/api/auth/refresh', rateLimiter.middleware('auth'), (req, res) => {
-    // FIX #4: Get refresh token from cookie instead of body
+    // Refresh token comes from the cookie; the body form is the legacy fallback.
     const refreshToken = req.cookies.refresh_token || req.body.refresh_token;
     if (!refreshToken) {
       return res.status(401).json({ error: 'No refresh token' });
@@ -1888,7 +1925,6 @@ function setupRoutes() {
     } catch (err) { res.status(500).json({ error: 'Server error' }); }
   });
 
-  // FIX: Add logout endpoint
   app.post('/api/auth/logout', rateLimiter.middleware('auth'), (req, res) => {
     // Server-side revoke: bump the user's token_version so the issued refresh token
     // can't be replayed after logout (clearing the cookie alone only affects this browser).
@@ -1908,7 +1944,7 @@ function setupRoutes() {
         if (result.success) {
           res.json(result);
         } else {
-          // FIX #6: Don't expose detailed error messages
+          // Don't expose detailed error messages
           res.status(400).json({ success: false, error: 'Password change failed' });
         }
       })
@@ -1929,7 +1965,7 @@ function setupRoutes() {
     });
   });
 
-  // FIX #10: Test endpoints removed for production security
+  // Test endpoints removed for production security
   // REMOVED: /api/test/add-miner, /api/test/miners, /api/test/blocks, /api/test/tables
   // These endpoints are unprotected and allow arbitrary data manipulation.
   // For testing in development, use curl with direct database queries.
@@ -2070,7 +2106,7 @@ function setupRoutes() {
     }
   });
 
-  // FIX #10: Test endpoint removed - manual block crediting disabled for security
+  // Test endpoint removed - manual block crediting disabled for security
 
   app.get('/api/admin/node-status', secureAdmin, (req, res) => {
     blockMonitor.grinNode.getStatus()
@@ -2082,7 +2118,7 @@ function setupRoutes() {
     res.json(blockMonitor.getStatus());
   });
 
-  // FIX #10: Test endpoint removed - manual reward distribution disabled for security
+  // Test endpoint removed - manual reward distribution disabled for security
 
   app.get('/api/admin/reward-stats', secureAdmin, (req, res) => {
     rewardDistributor.rewardStats()
@@ -2309,7 +2345,7 @@ function setupRoutes() {
 
   // Was this address's ownership successfully verified by an admin in the last `windowSec`? Reads
   // the audit trail auditOwnerProof() writes ('owner_proof:admin_verify:ok'). Gate for the money
-  // endpoints below (finding #4) so a payout can't be pushed without a recent ownership check —
+  // endpoints below so a payout can't be pushed without a recent ownership check —
   // unless the operator explicitly acknowledges verifying by other means (verified_ack, for a
   // no-proof-on-record account where verifyOwnerProof can never match).
   const ownerRecentlyVerified = (addr, windowSec = 900) => {
@@ -3058,8 +3094,15 @@ function setupRoutes() {
   // Network share / luck / round effort / time-since-last-block — pool-trust signals.
   //  · network_share_pct = pool 1h GPS / live network GPS × 100 (how often this pool wins)
   //  · round_effort_pct  = Σ(share diff since last block) / current per-block network diff × 100
-  //  · luck_100_pct      = mean over last 100 blocks of (network_difficulty / round_shares) × 100
-  //    (>100% = luckier than expected; uses captured per-block columns, NULL rows skipped)
+  //  · luck_100_pct      = mean over last 100 blocks of (round_shares / network_difficulty) × 100
+  //    (UNDER 100% = luckier than expected; uses captured per-block columns, NULL rows skipped)
+  //
+  //    This ratio used to be the other way up here, which made "luck" mean the OPPOSITE of
+  //    what it means everywhere else on the same site: BlockManager.getBlocksHistory and both
+  //    blocks tables compute shares ÷ difficulty (the 2miners convention, and the one the
+  //    public blocks page spells out in prose), so one page rendered "luck 87%" as a good
+  //    round while the dashboard rendered "luck 87%" as a bad one. One convention, and it is
+  //    the documented one.
   // Current network difficulty is cached ~60s to avoid hammering the node.
   app.get('/api/pool/effort', rateLimiter.middleware('public'), async (req, res) => {
     try {
@@ -3105,7 +3148,7 @@ function setupRoutes() {
       ).all();
       let luckPct = null;
       if (luckRows.length > 0) {
-        const mean = luckRows.reduce((a, r) => a + (r.nd / r.rs), 0) / luckRows.length;
+        const mean = luckRows.reduce((a, r) => a + (r.rs / r.nd), 0) / luckRows.length;
         luckPct = parseFloat((mean * 100).toFixed(1));
       }
 
@@ -3359,8 +3402,10 @@ function setupRoutes() {
   });
 
   // Credited earnings summed per period (block rewards + bonuses/giveaways), plus the 30-day
-  // outflow total — drives the account page's earnings table and the ledger Σ titles. All
-  // periods work regardless of retention: balance_log is never pruned.
+  // outflow total — drives the account page's earnings table and the ledger Σ titles. Reads RAW
+  // balance_log, which retention DOES prune (database.balance_log_keep_days, default 60 with a
+  // hard 45-day floor) — that floor is why the longest period here is 30 days. A longer one
+  // would have to read the balance_log_daily rollup too, the way /api/pool/donors does.
   app.get('/api/account/:addr/earnings', rateLimiter.middleware('public'), (req, res) => {
     try {
       const { addr } = req.params;
@@ -3713,7 +3758,8 @@ function setupRoutes() {
   // Single-proof (OR) on purpose: removal cannot redirect money, it only disables the rail.
   // But it IS the bypass route for the change alert — remove, then register fresh, and there
   // would be no previous destination left to warn. So removal alerts the destination it is
-  // clearing, and only clears nostr_prev_* once that alert has been attempted.
+  // clearing: the row is READ into `prev` before the UPDATE blanks nostr_* / nostr_prev_*, so
+  // the alert still has somewhere to go. Never move that SELECT below the UPDATE.
   app.delete('/api/account/:addr/nostr-destination', rateLimiter.middleware('withdraw'), async (req, res) => {
     try {
       const { addr } = req.params;
@@ -3963,12 +4009,13 @@ function setupRoutes() {
       //   1. access.hub_country_code   — admin → Access (the one field an operator can edit live)
       //   2. config.hub_country_code   — pool.json escape hatch (no UI, honoured if hand-set)
       //   3. config.region_country_code — Script 07 → 2) Configure ("where is THIS server?")
-      //   4. this box's own pool_locations row — keyed on config.region, NOT gated on
+      //   4. this box's own PUBLISHED gateway card — singlebox role only (`localRegion`).
+      //   5. this box's own pool_locations row — keyed on config.region, NOT gated on
       //      role === 'singlebox' like `localRegion` is: a 'hub' role still registers its own
       //      region via ensureLocalRegion(), and gating it here left the hub unlocated on
       //      every multi-region install.
-      //   5. busiest ONLINE gateway → 6. any gateway with a country → 7. busiest miner country.
-      // All seven can miss (fresh install, nothing configured, no miners). Then lat/lng go out
+      //   6. busiest ONLINE gateway → 7. any gateway with a country → 8. busiest miner country.
+      // All eight can miss (fresh install, nothing configured, no miners). Then lat/lng go out
       // as null and the map DRAWS NO HUB — never a placeholder position (network-map.js keeps
       // no fallback coordinate: a wrong hub country is worse than an absent marker).
       // locationsAll, not locations: "where is this box" stays true whether or not the operator
@@ -4260,8 +4307,9 @@ function setupRoutes() {
   });
 
   // Top miners by AVERAGE hashrate over a multi-day window (default 30 days) — the "sustained
-  // contribution" leaderboard on miners-stats.html. Backed by hashrate_history (retained ~30d),
-  // not the shares table (pruned ~1d), so a 30-day window is meaningful.
+  // contribution" leaderboard on miners-stats.html. Backed by hashrate_history (retained
+  // database.hashrate_keep_days, default 100d), not the shares table (pruned ~1d on mainnet:
+  // confirm_depth + PPLNS window), so the 90-day cap below stays inside real data.
   app.get('/api/stratum/top-avg-hashrate', rateLimiter.middleware('public'), (req, res) => {
     try {
       const limit = Math.min(parseInt(req.query.limit || 500, 10) || 500, 1000);
@@ -4549,7 +4597,6 @@ function setupRoutes() {
     }
   });
 
-  // ─── Alert System (Real-time monitoring & notifications) ──────────────────────
   // ─── ADMIN SESSIONS / LOGIN ACTIVITY (Admin) ───────────────────────
   // Sessions are stateless JWTs (no server-side session table), so there is no per-device
   // list to enumerate. What the operator CAN see + control: recent login activity (from the
@@ -4845,8 +4892,6 @@ function setupRoutes() {
     }
   });
 
-  // ─── Phase 2: New Endpoints ──────────────────────────────────────────────
-
   // Identity of the currently-authenticated admin. The session token is an httpOnly cookie,
   // so the browser CANNOT decode it (that's the point of httpOnly). Admin pages therefore
   // can't read the username/is_admin client-side — they must ask the server. Without this,
@@ -5106,7 +5151,7 @@ function setupRoutes() {
     res.json(payload);
   });
 
-  // Node Health Status - FIX #2, #14: Use async/await and remove hardcoded data
+  // Node Health Status — every field is read live from the node, none is hardcoded.
   app.get('/api/admin/health/node', secureAdmin, async (req, res) => {
     try {
       // Time the actual round-trip: start the clock BEFORE the call, read it after.
@@ -5156,7 +5201,7 @@ function setupRoutes() {
     }
   });
 
-  // Wallet Health Status - FIX #14: Query actual wallet status instead of hardcoded data
+  // Wallet Health Status — queried from the live wallet, not hardcoded.
   app.get('/api/admin/health/wallet', secureAdmin, async (req, res) => {
     try {
       let walletStatus = 'unknown';
@@ -5425,9 +5470,25 @@ function setupRoutes() {
       // freshAdmin. Metadata-only saves (no wg_pubkey) stay plain secureAdmin so routine
       // region edits don't prompt. Same challenge contract as requireFreshAuth, so the
       // admin client's adminFetch() step-up flow handles it transparently.
-      if (wgPubkey && !authManager.isTokenFresh(req.token, STEP_UP_MAX_AGE_S)) {
-        return res.status(403).json({ error: 'Session expired', challenge_required: true });
+      if (wgPubkey && stepUpRefused(req, res)) return;
+
+      // Pre-flight the hub tunnel BEFORE writing anything (read-only `list`).
+      // The upsert used to run first, so a pool that had never raised its
+      // WireGuard server ended up holding a saved region card AND a 502 that
+      // named an SSH menu — the worst possible moment to discover a prerequisite.
+      // Refuse the whole request instead, and point at the button that fixes it.
+      if (wgPubkey) {
+        try {
+          await gwctl(['list']);
+        } catch (e) {
+          return res.status(409).json({
+            error: 'Multi-region is not enabled on this pool yet, so the gateway key cannot be paired. Turn it on with "Enable multi-region" at the top of this page, then save this region again.',
+            wg_server_missing: true,
+            wg_error: e.message
+          });
+        }
       }
+
       const cc = country_code ? String(country_code).trim().toUpperCase().slice(0, 2) : null;
 
       db.prepare(`
@@ -5484,13 +5545,98 @@ function setupRoutes() {
         region_port: pair.region_port, existing: !!pair.existing, replaced: !!pair.replaced
       }), req.ip);
 
+      // `synced:false` = the peer is in the CONFIG but `wg syncconf` did not load it
+      // into the running interface, so the gateway will hand-shake only after a
+      // tunnel bounce. The CLI has always warned about this; the panel used to
+      // report plain success and leave the operator debugging the gateway box.
       res.json({
         success: true, location: row,
         pairing: pair.pairing, peer_ip: pair.peer_ip, region_port: pair.region_port,
-        existing: !!pair.existing, replaced: !!pair.replaced
+        existing: !!pair.existing, replaced: !!pair.replaced,
+        synced: pair.synced !== false,
+        sync_warning: pair.synced === false
+          ? 'The peer was written to the WireGuard config, but it could not be loaded into the running tunnel. '
+            + 'This gateway will not hand-shake until the tunnel is brought back up on this box.'
+          : undefined
       });
     } catch (err) {
       res.status(400).json({ error: err.message });
+    }
+  });
+
+  // ─── MULTI-REGION SERVER (Admin only) ──────────────────────────────
+  // The hub's OWN WireGuard tunnel — the thing every gateway peers with. Until
+  // these two routes existed it could only be raised from the CLI (menu W → 1),
+  // which made "pair a gateway from the panel, no SSH needed" false for every
+  // pool that had never gone multi-region. GET is the page's pre-flight; POST is
+  // the button that fixes it in place.
+  app.get('/api/admin/gateways/server', secureAdmin, async (req, res) => {
+    try {
+      const list = await gwctl(['list']);
+      // Two independent facts. `ready` = the hub was set up at all (conf + keypair);
+      // `interface_up` = the tunnel is running RIGHT NOW. A conf outlives a
+      // `wg-quick down` and a boot where the unit failed, so collapsing them into
+      // one light is how a dead tunnel renders green while every gateway is dark.
+      res.json({
+        success: true, ready: true,
+        interface_up: list.interface_up !== false,
+        hub_pubkey: list.hub_pubkey || null,
+        hub_endpoint: list.hub_endpoint || null,
+        hub_tunnel_ip: list.hub_tunnel_ip || null,
+        peers: (list.gateways || []).length
+      });
+    } catch (e) {
+      // NOT an error: "no tunnel yet" is the normal state of a single-box pool,
+      // and the page renders a banner for it rather than a failure.
+      res.json({ success: true, ready: false, interface_up: false, reason: e.message });
+    }
+  });
+
+  // Raising a tunnel and opening a UDP port is at least as sensitive as pairing a
+  // peer, so it takes the same step-up gate peer REMOVAL takes. The long timeout
+  // is deliberate: on a box without wireguard-tools the helper installs the
+  // package inside this request rather than failing with homework for the operator.
+  app.post('/api/admin/gateways/server', freshAdmin, async (req, res) => {
+    try {
+      const r = await gwctl(['init-server'], 180000);
+      // Mirror region_listen_host into the live config so a pairing done in this
+      // same process binds its listener on the tunnel IP without a restart.
+      if (r.hub_tunnel_ip) config.region_listen_host = r.hub_tunnel_ip;
+      db.prepare(`
+        INSERT INTO admin_audit_log (admin_id, action, target_type, target_id, details, ip)
+        VALUES (?, 'gateway_server_init', 'wg_server', ?, ?, ?)
+      `).run(req.user.user_id, r.hub_tunnel_ip || 'wg', JSON.stringify({
+        config: r.config, keypair: r.keypair, interface: r.interface,
+        firewall: r.firewall, listen_port: r.listen_port, boot_enabled: r.boot_enabled
+      }), req.ip);
+      // Two steps can legitimately fail while the tunnel itself came up, and BOTH
+      // are invisible until something else breaks much later, so they are reported
+      // as caveats rather than folded into success:
+      //   · boot_enabled=false — /etc/systemd/system is not writable in this
+      //     service's namespace, so the tunnel is up now and gone after a reboot.
+      //   · firewall='ufw-failed' — same reason for /etc/ufw; the UDP port stays
+      //     shut and every gateway times out with no local symptom at all.
+      // The CLI (root, no namespace) does both, which is why W → 1 is the fallback.
+      const caveats = [];
+      if (r.boot_enabled === false) {
+        caveats.push('The tunnel could not be enabled at boot from here, so a reboot of this box would '
+          + 'take it down. Run "systemctl enable wg-quick@<interface>" over SSH once, or use pool menu W → 1.');
+      }
+      if (r.firewall === 'ufw-failed') {
+        caveats.push('ufw is active but the WireGuard UDP port could not be opened from here. Until you run '
+          + `"ufw allow ${r.listen_port}/udp" over SSH, gateways will not be able to hand-shake.`);
+      }
+      res.json({
+        success: true,
+        already_configured: !!r.already_configured,
+        hub_pubkey: r.hub_pubkey, hub_endpoint: r.hub_endpoint,
+        hub_tunnel_ip: r.hub_tunnel_ip, listen_port: r.listen_port,
+        firewall: r.firewall, interface: r.interface,
+        boot_enabled: r.boot_enabled !== false,
+        caveats: caveats.length ? caveats : undefined
+      });
+    } catch (e) {
+      res.status(502).json({ error: 'Could not enable multi-region: ' + e.message });
     }
   });
 
@@ -5809,14 +5955,19 @@ function setupRoutes() {
   app.post('/api/admin/settings/:section', secureAdmin, (req, res) => {
     try {
       const sectionGated = STEP_UP_SETTINGS_SECTIONS.has(req.params.section);
-      if ((sectionGated || criticalSettingChanged(req.params.section, req.body)) &&
-          !authManager.isTokenFresh(req.token, STEP_UP_MAX_AGE_S)) {
-        return res.status(403).json({
-          error: sectionGated
-            ? 'Re-authentication required for this section'
-            : 'Re-authentication required to change a fee, whitelist or visibility setting',
-          challenge_required: true
-        });
+      if (sectionGated || criticalSettingChanged(req.params.section, req.body)) {
+        // Freshness + mandatory-2FA, both halves (audit §I7). Keep the section-specific
+        // wording on the freshness refusal — the operator needs to know WHY they are being
+        // challenged for what may look like a cosmetic save.
+        if (!authManager.isTokenFresh(req.token, STEP_UP_MAX_AGE_S)) {
+          return res.status(403).json({
+            error: sectionGated
+              ? 'Re-authentication required for this section'
+              : 'Re-authentication required to change a fee, whitelist or visibility setting',
+            challenge_required: true
+          });
+        }
+        if (stepUpRefused(req, res)) return;
       }
       // Refuse to switch mandatory 2FA ON unless the admin doing it is already enrolled.
       // Otherwise the save succeeds (the gate read `false` when the middleware ran) and the

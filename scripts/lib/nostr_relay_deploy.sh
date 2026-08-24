@@ -4,7 +4,7 @@
 #
 # PURPOSE (design: docs/generated/script09_design.md PART C.1)
 #   ONE primitive for the only genuinely fiddly piece both the Floonet relay
-#   (091) and GoblinPay's bundled relay (05x) need:
+#   (091) and GoblinPay's bundled relay need:
 #
 #     deploy a nostr-rs-relay publicly reachable over wss://, TLS-terminated,
 #     with the Upgrade/Connection headers a WebSocket vhost needs, following
@@ -21,7 +21,9 @@
 #
 # CONSUMERS
 #   · Script 091 — Floonet relay deployer (first consumer)
-#   · Script 05x — GoblinPay bundled relay mode (planned)
+#   · GoblinPay bundled relay mode (planned). NO script number yet — an unbuilt
+#     product gets one the day its build starts, so its design lives under its
+#     hub's number (script09_design.md PART C), not a reserved one.
 #
 # CONVENTIONS
 #   Sourced lib → NO shebang, NO set -e. Caller provides colors + logging

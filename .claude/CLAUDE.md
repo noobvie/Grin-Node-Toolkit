@@ -63,8 +63,26 @@ scripts/
        /opt/grin/accio-<net>/gateway-state/ is DURABLE STATE, not a cache: losing it
        changes the receiving address of every wallet that ever connected.
        De-branding lives in web/052_accio/patches/ (S5, 16 files; S9 pass 1 added a
-       17th) — NEVER edit vendor/, and never rename MWC_WALLET_TYPE (it is a chain
-       discriminator, not branding; S9+ deletes those paths). ⚠ An S9 pass is a
+       17th; S10's theme added a 18th + 19th) — NEVER edit vendor/, and never rename
+       MWC_WALLET_TYPE (it is a chain discriminator, not branding; S9+ deletes those
+       paths). ⚠ The theme ("Orbital Dawn", S10) is ONE added stylesheet loaded LAST
+       — styles/accio.css — plus three hooks; upstream's 21 stylesheets are NOT
+       overlaid, so `git log PINNED_SHA..upstream/master` stays readable. It must
+       stay last, retuning is a :root token edit, and it carries no url() because
+       the standalone inliner only rewrites the double-quoted form. It is a
+       light→dark FLIP (upstream's content panels are near-white with near-black
+       text), so a missed rule is black text on a navy panel — check coverage
+       mechanically, never by eye. ⚠ But a coverage sweep only sees selectors upstream
+       SETS a colour on, and the flip's worst bug is the opposite: a quiet button
+       (menu rail, language picker) that overrides only `background` and inherits our
+       DARK base ink — the main nav shipped at 1.2:1. Resolve colour/background/
+       box-shadow PER PROPERTY, PER BUTTON. Two more from the same review: a ground
+       gradient needs its arithmetic done (colour reaches only `last-stop × ry` back
+       from the centre — ours landed at y=110%, so the whole "dawn" rendered as
+       nothing and looked deliberate), and a hairline on a sized box is an `inset`
+       box-shadow, never a `border` (upstream is `content-box`, so a border pushed the
+       seed-phrase dialog 2px past its parent).
+       There is deliberately NO operator theme switch. ⚠ An S9 pass is a
        REDUCTION, not an `rm`, whenever the subsystem is referenced from a file we
        don't patch: pass 1 kept Mqs's 5-symbol external surface because
        `Slate.compactProofAddress` switches on `Mqs.ADDRESS_LENGTH` on the slatepack
@@ -75,7 +93,7 @@ scripts/
        to the only review method there is. R8 found one (check_for_updates.js, six
        rewritten URLs, no marker, unread through S5/S6/S8 and four review packets;
        it was beaconing to api.github.com from the "offline" standalone). The rule
-       and a table of all 17 files — including the five whose format cannot hold an
+       and a table of all 19 files — including the five whose format cannot hold an
        inline marker — now live in patches/README.md, which is where a patch author
        actually looks. ⚠ Branding is a phrase map duplicated in backend/language.php
        and scripts/language.js: the maps being IDENTICAL is necessary and proves
@@ -229,9 +247,14 @@ curl -s "https://api.nonlogs.io/api/markets/GRIN-BTC" | python3 -m json.tool
 | Wallet Owner API | 3420 | 13420 |
 
 Script 07 (mining pool) adds operator-configurable ports: **public stratum** `3333`,
-**node built-in stratum upstream** `127.0.0.1:3334` (testnet `13334`; set the node's
-`stratum_server_addr` here), **Central API** `8080` (localhost-bound; satellites reach it
-via the nginx HTTPS vhost, IP-allowlist + shared-secret). Solo mining keeps legacy `3416`.
+**node built-in stratum upstream** `127.0.0.1:3416` (testnet `13416`), **Central API**
+`8080` (testnet `8090`; localhost-bound; satellites reach it via the nginx HTTPS vhost,
+IP-allowlist + shared-secret). Solo mining uses the same node stratum `3416`/`13416`.
+⚠ The upstream port is **grin's own `stratum_server_addr` default and the toolkit does not
+move it** — Script 01 leaves the addr alone, so the pool dials 3416 rather than the `3334`
+an older plan called for. Three sites agree and must stay agreed: `pool_ensure_defaults`
+in `07_grin_mining_public_pool.sh`, `node_stratum_port` in the pool backend's `lib/config.js`,
+and `grin_sync_pool_stratum` in `lib/grin_node_secrets.sh` (which re-patches the toml).
 
 ### Node API method split — which endpoint a new call targets
 - **Owner API** (`/v2/owner`, `.api_secret`): `get_status` (tip height + connections),
@@ -397,14 +420,21 @@ Several comments in this repo claim "grin-wallet has no stdin or env-var passphr
 `/dev/tty`) and takes an explicit non-TTY branch: *"if we don't have a TTY, the input was
 piped so we bypass terminal hiding code"* → `stdin.read_line()`. What IS true: there is no
 env-var input (the clap `pass` arg declares no `env`), so stdin is the only argv-free channel.
+The rpassword 7 bump did **not** break this: grin-wallet v5.5.0 pins `rpassword 7.5.4`, which
+branches on `stdin.is_terminal()` and still reads a piped passphrase. The toolkit pin is
+unchanged at v5.4.1, so stdin feeding is safe on both — see memory
+`project_grinwallet_stdin_rpassword`.
 - **Feed the passphrase on stdin**: `exec grin-wallet … listen < "$pass_file"` (mode-600 file),
   or `printf '%s\n' "$p" | grin-wallet … info` (printf is a bash *builtin* — no argv at all).
   `init` asks twice; send two lines (a spare line is harmless if it ever asks once).
 - **Why it matters:** `-p` puts the passphrase in `ps aux` / `/proc/<pid>/cmdline` for the
   entire life of the process. For a 24/7 listener that is a permanent leak to every local user,
   not the "brief, one-time" exposure the old comments describe.
-- **Done in** `05_grin_wallet_service.sh` (CMD wallet). **Still on `-p`:** `lib/07_solo_wallet.sh`,
-  `lib/07_lib_pool_wallet.sh`, `lib/059_lib_wallet.sh` — convert when next touched.
+- **Done in** `05_grin_wallet_service.sh` (CMD wallet). **Still on `-p` for the long-running
+  listener:** `lib/07_solo_wallet.sh` and `lib/059_lib_wallet.sh` — convert when next touched.
+  `lib/07_lib_pool_wallet.sh` is NOT one of them: its listener starts `owner_api` with no
+  passphrase in argv and is unlocked over ECDH, so `-p` survives there only in `init` and a
+  one-shot `address` probe (bounded exposure, not a 24/7 leak).
 - **Exception — `init -hr` (recover):** leave stdin attached to the terminal so grin-wallet
   prompts for the mnemonic itself; never route a recovery phrase through a toolkit script.
 
@@ -465,14 +495,16 @@ Nginx loads ALL `/etc/nginx/conf.d/*.conf` into the http context — two scripts
 same `limit_req_zone` differently → nginx error. All rate-limit zone creation goes through one
 primitive in `scripts/lib/nginx_shared_helpers.sh`:
 ```bash
-nginx_ensure_rate_limit_zone <zone_name> <rate> [size=10m] [conf_basename]
+nginx_ensure_rate_limit_zone <zone_name> <rate> [size=10m] [conf_basename] [force]
 ```
 It grep-guards existing definitions and writes `/etc/nginx/conf.d/<conf_basename>.conf` if
-missing (no-op if the file exists — delete the file to regenerate).
+missing (no-op if the file exists — delete the file to regenerate). A non-empty 5th arg
+(`force`) re-asserts the rate from the toolkit source on every run instead, so editing the
+value in the lib actually reaches an installed box; `nginx_ensure_grin_api_zone` passes it.
 
 - **SHARED zones** (multiple scripts) → add a named wrapper in the lib so every caller passes
   identical args → byte-identical output → last-write-wins is safe. Current: `grin_api`
-  (`nginx_ensure_grin_api_zone`, `30r/m`, used by Scripts 04 + 06).
+  (`nginx_ensure_grin_api_zone`, `300r/m`, used by Scripts 04 + 06).
 - **SCRIPT-SPECIFIC zones** → call the primitive (or `nginx_ensure_rate_limit_zones
   <conf_basename> <zone:rate[:size]> ...`) with the script's own params. Name conf files with a
   `script##-` prefix (`script04-…`, `script07-…`). The owning script's detail stays in memory.
@@ -496,10 +528,21 @@ ALL generated docs go to `docs/generated/` — never scatter into `web/` etc. Th
 `flowcharts/` dir was merged into `docs/generated/` (2026-07-09); don't recreate it.
 
 **Naming:** `script<XX>_<type>_<optional_service>_<optional_date>.md`
-- `script<XX>` — REQUIRED prefix; `type` — `design`/`implementation`/`security_audit`/`analysis`/`reference`/`report`; `date` — `YYYY-MM-DD` only when multiple versions exist.
-- **Max 3 files per script:** `script##_design.md` / `script##_implementation.md` / `script##_security_audit.md`.
+- `script<XX>` — REQUIRED prefix, ONE script per file (never `script01-03_`); `type` — one of
+  `design` / `implementation` / `security_audit` / `analysis` / `reference` / `report` and
+  nothing else; `date` — `YYYY-MM-DD` only when multiple versions exist.
+- **Three CORE files per script**, each unqualified: `script##_design.md` /
+  `script##_implementation.md` / `script##_security_audit.md`. A new doc goes in one of those
+  unless it genuinely is not one of them.
+- Anything beyond the core three MUST carry a `<service>` qualifier so it can never be mistaken
+  for a core file — `script05_design_goblin.md`, `script01_reference_flowchart.md`. A qualifier
+  is not a licence to add files: check first whether it belongs in the core doc.
+- A doc about work that spans scripts, or about the repo rather than a script, takes the
+  `script00_` prefix — `script00_report_deferred_work.md`.
 
-✅ `script07_security_pool_audit_2026-05-15.md`  ❌ `SECURITY_FIXES.md` (missing prefix)
+✅ `script07_security_audit_pool_2026-05-15.md`  ❌ `SECURITY_FIXES.md` (missing prefix)
+❌ `script059_planning.md` (`planning` is not a type — it is `design`)
+❌ `script06b_gotchas.md` (`gotchas` is not a type — as-built notes are `implementation`)
 
 Before creating any `.md`, check if it should merge into an existing `script##_[type].md`.
 

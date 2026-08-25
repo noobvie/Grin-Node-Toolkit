@@ -44,6 +44,10 @@ source "$SCRIPT_DIR/lib/grin_node_control.sh"
 # grin_node_secret_path). Sourced so the status screen never hand-rolls a
 # secret path again — see _query_node_tip().
 source "$SCRIPT_DIR/lib/grin_node_secrets.sh"
+# ui_ask()/ui_ask_num() — value prompts that can be cancelled with `q` instead
+# of Ctrl+C. See the lib header: several prompts here used to treat a bare Enter
+# as "proceed with the default", so backing out USED to confirm the action.
+source "$SCRIPT_DIR/lib/ui_shared_helpers.sh"
 
 # ─── GitHub self-update ───────────────────────────────────────────────────────
 # Official public repository. A fork slug saved in /opt/grin/conf/github_repo.conf
@@ -498,11 +502,10 @@ show_bandwidth_consumers() {
 
     if [[ "$choice" == "1" ]]; then
         echo ""
-        echo -ne "Enter IP address to act on: "
-        read -r target_ip
-
-        if [[ -z "$target_ip" ]]; then
-            warn "No IP entered."; pause; return
+        local target_ip
+        if ! ui_ask target_ip "Enter IP address to act on"; then
+            info "Cancelled — nothing was blocked or rate-limited."
+            pause; return
         fi
 
         echo ""
@@ -585,13 +588,15 @@ _scan_nginx_web_dirs() {
 _clean_tmp()          { info "Cleaning /tmp (files >1 day)..."; find /tmp -mindepth 1 -mtime +1 -delete 2>/dev/null || true; success "/tmp cleaned."; log "CLEANED /tmp"; }
 _clean_grin_logs()    {
     if [[ ! -d "$GRIN_LOG_DIR" ]]; then warn "Grin log dir not found: $GRIN_LOG_DIR"; return; fi
-    echo -ne "Keep logs from last N days [default 7]: "; read -r kd; kd="${kd:-7}"
+    local kd
+    ui_ask_num kd "Keep logs from last N days" 7 0 || { info "Skipped Grin logs."; return; }
     find "$GRIN_LOG_DIR" -type f -name "*.log" -mtime +"$kd" -delete 2>/dev/null || true
     success "Grin logs older than $kd days removed."; log "CLEANED grin logs >$kd days"; }
 _clean_syslog()       {
     info "Cleaning system journal..."
     if command -v journalctl &>/dev/null; then
-        echo -ne "Vacuum journal to last N days [default 7]: "; read -r vd; vd="${vd:-7}"
+        local vd
+        ui_ask_num vd "Vacuum journal to last N days" 7 0 || { info "Skipped journald."; return; }
         journalctl --vacuum-time="${vd}d"; success "journald vacuumed to last $vd days."; log "CLEANED journald --vacuum-time=${vd}d"
     else
         find /var/log -name "*.gz" -mtime +7 -delete 2>/dev/null || true
@@ -759,9 +764,10 @@ manage_auto_cleanup() {
         local c; read -r c
         case "$c" in
             1)
-                echo -ne "Keep /opt/grin/logs from last N days [default $AUTO_CLEANUP_RETENTION_DEFAULT]: "
-                local days; read -r days; days="${days:-$AUTO_CLEANUP_RETENTION_DEFAULT}"
-                if ! [[ "$days" =~ ^[0-9]+$ ]]; then warn "Not a number — using $AUTO_CLEANUP_RETENTION_DEFAULT."; days="$AUTO_CLEANUP_RETENTION_DEFAULT"; fi
+                local days
+                ui_ask_num days "Keep /opt/grin/logs from last N days" \
+                    "$AUTO_CLEANUP_RETENTION_DEFAULT" 0 \
+                    || { info "Cancelled — auto-cleanup not enabled."; sleep 1; continue; }
                 _install_auto_cleanup "$days"
                 success "Auto-cleanup enabled (runs daily 04:30, log retention ${days}d)."
                 sleep 2 ;;
@@ -904,13 +910,14 @@ _swap_remove_file() {
     log "SWAP removed ($f)"
 }
 
-# Validate a positive-integer GB amount; echoes the value or empty on failure.
+# Validate a positive-integer GB amount; echoes the value, or returns 1 when the
+# operator cancels (`q` / bare Enter). No default: there is no safe size to
+# assume for "add swap", so Enter must mean cancel here, not proceed.
 _swap_read_gb() {
     local prompt="$1" gb
-    echo -ne "$prompt" >&2
-    read -r gb
-    [[ "$gb" =~ ^[0-9]+$ ]] && (( gb > 0 )) && { echo "$gb"; return 0; }
-    return 1
+    ui_ask_num gb "$prompt" "" 1 || return 1
+    echo "$gb"
+    return 0
 }
 
 manage_swap() {
@@ -969,8 +976,10 @@ manage_swap() {
         local c; read -r c
         case "$c" in
             1)
-                local gb; gb="$(_swap_read_gb "GB to ADD [integer]: ")" \
-                    || { warn "Enter a positive whole number of GB."; sleep 1; continue; }
+                # ui_ask_num re-prompts on a bad number itself, so a non-zero
+                # return here means the operator cancelled, not that they typo'd.
+                local gb; gb="$(_swap_read_gb "GB to ADD")" \
+                    || { info "Cancelled — no swapfile created."; sleep 1; continue; }
                 echo -ne "${YELLOW}Create a new ${gb} GB swapfile and enable it? [y/N]: ${RESET}"
                 read -r confirm
                 [[ "${confirm,,}" == "y" ]] && { _swap_add "$gb" || true; } || info "Cancelled."
@@ -978,15 +987,14 @@ manage_swap() {
                 ;;
             2)
                 if (( ${#files[@]} == 0 )); then warn "No managed swapfiles to remove."; sleep 1; continue; fi
-                echo -ne "Number of swapfile to remove [1-${#files[@]}, 0 cancel]: "
-                read -r n
-                if [[ "$n" =~ ^[0-9]+$ ]] && (( n >= 1 && n <= ${#files[@]} )); then
+                local n
+                if ui_ask_num n "Number of swapfile to remove" "" 1 "${#files[@]}"; then
                     local target="${files[$((n-1))]}"
                     echo -ne "${RED}Disable and delete $target? [y/N]: ${RESET}"
                     read -r confirm
                     [[ "${confirm,,}" == "y" ]] && { _swap_remove_file "$target" || true; } || info "Cancelled."
                 else
-                    [[ "$n" != "0" ]] && warn "Invalid selection."
+                    info "Cancelled — no swapfile removed."
                 fi
                 sleep 2
                 ;;
@@ -1140,7 +1148,9 @@ clean_maintenance() {
                 ;;
             2)
                 if [[ $tar_count -eq 0 ]]; then warn "No tar archives found."; sleep 1; continue; fi
-                echo -ne "Keep newest N archives [default 2]: "; read -r keep_n; keep_n="${keep_n:-2}"
+                local keep_n
+                ui_ask_num keep_n "Keep newest N archives" 2 0 \
+                    || { info "Cancelled — no archives deleted."; sleep 1; continue; }
                 local delete_list
                 delete_list="$(_find_tar_files "$tar_dir" | head -n -"$keep_n" || true)"
                 if [[ -z "$delete_list" ]]; then
@@ -1157,7 +1167,9 @@ clean_maintenance() {
                 ;;
             3)
                 if [[ $tar_count -eq 0 ]]; then warn "No tar archives found."; sleep 1; continue; fi
-                echo -ne "Delete archives older than N days [default 14]: "; read -r days; days="${days:-14}"
+                local days
+                ui_ask_num days "Delete archives older than N days" 14 0 \
+                    || { info "Cancelled — no archives deleted."; sleep 1; continue; }
                 local del_count=0
                 while IFS= read -r f; do
                     if find "$f" -mtime +"$days" -print 2>/dev/null | grep -q .; then
@@ -1169,7 +1181,10 @@ clean_maintenance() {
                 sleep 2
                 ;;
             4)
-                echo -ne "Letters to clean (e.g. A B D): "; read -r items; items="${items^^}"
+                local items
+                ui_ask items "Letters to clean (e.g. A B D)" \
+                    || { info "Cancelled — nothing was cleaned."; sleep 1; continue; }
+                items="${items^^}"
                 [[ "$items" == *"A"* ]] && _clean_tmp
                 [[ "$items" == *"B"* ]] && _clean_txhashset "$txhashset_files"
                 [[ "$items" == *"C"* ]] && _clean_grin_logs
@@ -1288,12 +1303,19 @@ self_update() {
         3) branch="corefeatures" ;;
         4) branch="publicpool" ;;
         5)
-            echo -ne "  Branch name: "
-            read -r branch
+            # Cancel returns to the menu — it must NOT fall through to `main`.
+            # This prompt used to answer a bare Enter with "Defaulting to
+            # 'main'", so the instinctive way to back out of a mistyped choice
+            # silently armed a self-update from a branch the operator never
+            # picked. Backing out has to mean backing out.
+            if ! ui_ask branch "  Branch name"; then
+                info "Update cancelled — nothing was downloaded."
+                pause; return
+            fi
             branch=$(echo "$branch" | tr -d '[:space:]')
             if [[ -z "$branch" ]]; then
-                warn "No branch entered. Defaulting to 'main'."
-                branch="main"
+                info "Update cancelled — nothing was downloaded."
+                pause; return
             fi
             ;;
         *) branch="main" ;;

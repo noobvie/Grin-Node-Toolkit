@@ -190,7 +190,43 @@ thing to scroll away unread; `_wrap` reads `tput cols` because `COLUMNS` is unse
 non-interactive child; the `chmod +x` before dispatching to 085 is gone, as a tool that
 advertises "changes nothing" should not be chmod'ing files.
 
-## 8. Open / next
+## 8. Screen-exit and prompt-cancel conventions
+
+Two operator-reported gaps, fixed 2026-08-25 in `scripts/lib/ui_shared_helpers.sh`
+(unnumbered because it is cross-script, following the `nginx_shared_helpers.sh` precedent).
+
+**Every long read-only screen ends with an explicit `[END]` marker** (`ui_end`), carrying the
+finding counts and *"nothing was changed"*. A report that simply stops leaves the operator
+unsure whether it was truncated or is still running. The exit prompt is now stated rather
+than implied, and it names the right key: `_page` measures the content against `tput lines`
+instead of leaving that to `less -F`, sets `UI_PAGED`, and `_end_pause` mentions `q` **only**
+when the screen actually went through the pager.
+
+**Value prompts can be cancelled with `q` instead of Ctrl+C.** `ui_ask` / `ui_ask_num`
+return non-zero when the operator backs out; the caller must return without acting. This is
+a safety fix, not a convenience one — Ctrl+C kills the whole menu script rather than the
+prompt, and several hub-08 prompts treated a bare Enter as *"take the default and proceed"*,
+so the instinctive way to back out **confirmed** the action. The worst was the self-update
+custom-branch prompt: an empty Enter answered *"Defaulting to 'main'"* and armed an update
+from a branch the operator never chose. Ten prompts in hub 08 were converted; `[y/N]`
+confirmations were left alone, since Enter already means "no" there.
+
+Cancel is `q`, not `0` or Enter, because `0` is already both a legal value ("0 archives")
+and "back" in sub-menus, and Enter already means "accept the default" — one key cannot mean
+both *proceed with the default* and *do nothing*.
+
+Two traps in the helper itself, both caught by testing rather than review:
+
+- `printf -v "$name"` writes to whatever `$name` says, and bash's dynamic scoping puts the
+  callee's locals in scope — so a caller asking `ui_ask` to fill `_uia_ans` silently
+  overwrites `ui_ask`'s own working variable and gets rc 0 with an empty value. Long
+  unlikely names make that improbable, not impossible; `_ui_name_ok` asserts it.
+- That guard must take the reserved prefix as a **parameter**. A blanket "reject anything
+  starting `_ui`" also refuses the lib's own internal call (`ui_ask_num` legitimately asks
+  `ui_ask` to fill `_uin_val`) — which made *every* `ui_ask_num` in the toolkit return
+  "cancelled" while looking perfectly correct on the page.
+
+## 9. Open / next
 
 1. **Run it on a real VPS.** Nothing here is validated against a live node.
 2. Per-item apply paths with recorded before-values, once (1) confirms the advice.

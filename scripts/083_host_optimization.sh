@@ -61,6 +61,8 @@ fi
 source "$SCRIPT_DIR/lib/grin_node_secrets.sh"
 source "$SCRIPT_DIR/lib/083_lib_profile.sh"
 source "$SCRIPT_DIR/lib/083_lib_advice.sh"
+# ui_end() — closing marker for the long read-only report screens.
+source "$SCRIPT_DIR/lib/ui_shared_helpers.sh"
 
 # =============================================================================
 # Rendering
@@ -151,15 +153,38 @@ _banner() {
 
 # The full report runs to ~100 lines — longer than a terminal — and the CRIT
 # findings sort to the top, so they are the first thing to scroll away unread.
-# Page it, using the same `less -FRX` the rest of the toolkit uses: -F prints
-# and exits when it already fits, -R keeps the colour, -X leaves the text in the
-# terminal's own scrollback instead of wiping it on quit.
+# Page it with the same `less -FRX` the rest of the toolkit uses: -R keeps the
+# colour, -X leaves the text in the terminal's own scrollback instead of wiping
+# it on quit, -F exits immediately when it already fits.
+#
+# The line count is measured here rather than left to `less -F` so the screen
+# can tell the operator the RIGHT exit key: paged output leaves them inside
+# less (needs `q`), un-paged output does not. Sets UI_PAGED for that purpose.
+UI_PAGED=0
 _page() {
-    if [[ -t 1 ]] && command -v less >/dev/null 2>&1; then
-        less -FRX
+    local content rows lines
+    content=$(cat)
+    lines=$(printf '%s\n' "$content" | wc -l)
+    rows=$(tput lines 2>/dev/null || true)
+    [[ "$rows" =~ ^[0-9]+$ ]] || rows=24
+
+    if [[ -t 1 ]] && command -v less >/dev/null 2>&1 && (( lines > rows - 2 )); then
+        UI_PAGED=1
+        printf '%s\n' "$content" | less -FRX
     else
-        cat
+        UI_PAGED=0
+        printf '%s\n' "$content"
     fi
+}
+
+# Exit prompt that matches how the screen was actually displayed.
+_end_pause() {
+    echo ""
+    if (( UI_PAGED == 1 )); then
+        echo -e "  ${DIM}You were in the pager — press ${RESET}${BOLD}q${RESET}${DIM} to leave it if you have not already.${RESET}"
+    fi
+    echo -e "  ${BOLD}Press Enter${RESET} to return to the Host Optimization menu..."
+    read -r
 }
 
 show_full_report() {
@@ -169,16 +194,21 @@ show_full_report() {
     info "Gathering system facts..."
     adv_run_all
     _banner
-    {
+    # Built into a variable and fed to _page by HERE-STRING, not through a pipe:
+    # the right-hand side of a pipeline runs in a subshell, so the UI_PAGED flag
+    # _page sets there would never reach _end_pause.
+    local report area
+    report=$(
         echo -e "  ${DIM}Host: $(hostname 2>/dev/null || echo unknown)   ·   virt: $(hp_virt)   ·   $(date -u '+%Y-%m-%d %H:%M UTC')${RESET}"
-        local area
         for area in CPU Memory Kernel Disk Node Time Logs Security SSH; do
             _render_area "$area"
         done
         _render_summary
         echo -e "  ${DIM}Log: $LOG_FILE${RESET}"
-    } | _page
-    pause
+        ui_end "$(adv_count_sev CRIT) critical · $(adv_count_sev WARN) warning · ${#ADV_SEV[@]} findings · nothing was changed"
+    )
+    _page <<< "$report"
+    _end_pause
 }
 
 # Plain-text copy of the same report, for pasting into an issue or keeping
@@ -230,13 +260,15 @@ show_single_area() {
     info "Checking: ${areas[*]}"
     adv_run_all
     _banner
-    {
+    local report
+    report=$(
         for area in "${areas[@]}"; do
             _render_area "$area"
         done
-        echo -e "  ${DIM}Nothing was changed.${RESET}"
-    } | _page
-    pause
+        ui_end "${areas[*]} · nothing was changed"
+    )
+    _page <<< "$report"
+    _end_pause
 }
 
 # Hands off to 085 — the only place SSH is ever modified.
@@ -276,6 +308,8 @@ show_menu() {
     echo ""
     echo -e "  ${DIM}0${RESET})   Return to admin centre"
     echo ""
+    echo -e "  ${DIM}Long screens are paged: ${RESET}${BOLD}q${RESET}${DIM} leaves the pager, and every report${RESET}"
+    echo -e "  ${DIM}ends with an explicit ${RESET}${BOLD}[END]${RESET}${DIM} marker.${RESET}"
     echo -e "${DIM}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
     echo -ne "${BOLD}Select [0-8]: ${RESET}"
 }

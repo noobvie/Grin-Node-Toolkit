@@ -100,9 +100,14 @@ const minersTable = AdminTable.create({
       : '<span class="badge badge-dim">Offline</span>';
     const bannedBadge = m.is_banned
       ? ` <span class="badge badge-error" title="${escHtml(m.ban_reason || '')}">Banned</span>` : '';
+    // data-addr + this.dataset, NOT a value spliced into a JS string literal. escHtml() is an
+    // HTML escaper: inside onclick="…" the parser decodes its &#39; back to a real ' BEFORE the
+    // JS is parsed, so an apostrophe in the value closes the string and the rest executes. The
+    // bech32 address charset is what stops that today (§J6-6) — a validator on another route, in
+    // another file, is not the escaping this needs. Audit §J14.
     const action = m.is_banned
-      ? `<button class="btn-icon" onclick="unbanMiner('${escHtml(m.grin_address)}')" data-tip="Unban this miner" aria-label="Unban this miner">✅</button>`
-      : `<button class="btn-icon btn-icon-danger" onclick="banMiner('${escHtml(m.grin_address)}')" data-tip="Ban this miner" aria-label="Ban this miner">🚫</button>`;
+      ? `<button class="btn-icon" data-addr="${escHtml(m.grin_address)}" onclick="unbanMiner(this.dataset.addr)" data-tip="Unban this miner" aria-label="Unban this miner">✅</button>`
+      : `<button class="btn-icon btn-icon-danger" data-addr="${escHtml(m.grin_address)}" onclick="banMiner(this.dataset.addr)" data-tip="Ban this miner" aria-label="Ban this miner">🚫</button>`;
     return `<tr>
       <td><span class="mono" title="${escHtml(m.grin_address)}">${escHtml(shortAddr(m.grin_address))}</span>${bannedBadge}</td>
       <td>${onlineBadge}</td>

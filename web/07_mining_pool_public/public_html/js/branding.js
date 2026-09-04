@@ -29,6 +29,26 @@
     return last.replace(/\.html$/, '');
   }
 
+  // Pages where a credential is TYPED. On these, the operator-authored raw-HTML/CSS/analytics
+  // sinks are skipped — see the guards in applyTheme() and apply() (audit §J1-1).
+  //
+  // Why: custom_head_html is not inert. applyAnalytics() re-creates <script> nodes out of it
+  // via cloneScript() specifically so they execute, so anyone who can write that setting gets
+  // arbitrary JS on this page — and this page has the admin password and 2FA code fields.
+  // Those settings live in the `analytics`/`branding` sections, which are written by
+  // POST /api/admin/settings/:section. That route is now step-up gated for exactly these keys,
+  // but a step-up gate is a lock on the door, not a reason to keep the explosives in the hall:
+  // an operator-HTML sink on a credential-entry form is wrong regardless of who can reach it.
+  //
+  // Both checks matter. The attribute lets a page opt out explicitly; the page-key list means a
+  // new credential page cannot silently opt back IN by forgetting the attribute. Add to BOTH
+  // when adding a login-like page.
+  var CREDENTIAL_PAGES = ['login'];
+  function isCredentialPage() {
+    if (document.documentElement.getAttribute('data-untrusted-html') === 'exempt') return true;
+    return CREDENTIAL_PAGES.indexOf(currentPageKey()) !== -1;
+  }
+
   // ── small DOM helpers ──────────────────────────────────────────────────────
   function head() { return document.head || document.getElementsByTagName('head')[0]; }
 
@@ -58,6 +78,28 @@
     if (/^https?:\/\//i.test(maybeRelative)) return maybeRelative;
     if (!base) return maybeRelative;
     return base.replace(/\/+$/, '') + (maybeRelative.charAt(0) === '/' ? '' : '/') + maybeRelative;
+  }
+
+  // Every operator-authored URL that becomes an href goes through this (audit §J1-9).
+  //
+  // The values below are written by POST /api/admin/settings/:section at plain secureAdmin,
+  // and an href accepts `javascript:` — so without a scheme check each one is a one-click
+  // script sink on the pool's own origin. Announcement banners are the sharp case: they
+  // render on EVERY page via renderBanners(), login.html included, so the §J1-1 fix that
+  // stripped the raw-HTML sinks off the credential page would have left this one behind.
+  // Escaping is not the same guard: encodeURI() stops an attribute breakout (it escapes the
+  // quote) but leaves the scheme untouched, so "javascript:..." survives it verbatim.
+  //
+  // Parse and read .protocol rather than pattern-matching the string. A blacklist regex has
+  // to anticipate "JaVaScRiPt:", "java<TAB>script:" and the entity-encoded spellings a browser
+  // still honours; the URL parser has already normalised all of them by the time we look.
+  // Relative links keep working — they resolve against the document and come back http(s).
+  function safeHref(u) {
+    if (!u) return '';
+    try {
+      var parsed = new URL(String(u), location.href);
+      return (parsed.protocol === 'http:' || parsed.protocol === 'https:') ? parsed.href : '';
+    } catch (e) { return ''; }
   }
 
   // ── Chain explorer deep-links (window.Explorer) ─────────────────────────────
@@ -187,7 +229,13 @@
     setMetaByName('theme-color', seo.theme_color);
     if (seo.robots_noindex) setMetaByName('robots', 'noindex, nofollow');
 
-    var siteUrl = seo.site_url || '';
+    // Effective site URL. Falls back to this page's own origin (audit §J15-3): since §J10-4
+    // blanked the shipped `seo.site_url` default, an operator who never fills it in got NO
+    // runtime rewrite at all — and the ten static pages hardcode the toolkit author's domain
+    // in 56 canonical/og/twitter/hreflang tags, so leaving it empty meant every one of them
+    // stood. The origin is always the right self-reference: the vhost 301s www → apex, so a
+    // rendering client is on the canonical host by the time this runs.
+    var siteUrl = seo.site_url || location.origin;
     // location.pathname deliberately, NOT href: query strings and fragments are never part
     // of a canonical here — except on /page.html?p=<key>, where the query IS the identity.
     // That page is server-rendered, so serverSeo already holds the correct canonical and we
@@ -224,7 +272,52 @@
     if (brand.favicon_url) setLinkRel('icon', brand.favicon_url);
     if (brand.apple_touch_url) setLinkRel('apple-touch-icon', brand.apple_touch_url);
 
+    // Any SEO tag still naming a host this deployment does not claim is rewritten onto the
+    // effective site URL. Runs last so it also catches anything set above (audit §J15-3).
+    try { reclaimSeoHost(siteUrl, serverSeo); } catch (e) { /* non-fatal */ }
+
     if (seo.structured_data_enabled && poolName) injectStructuredData(cfg, canonical, ogImage);
+  }
+
+  // ── §J15-3 — no SEO tag may name a host this deployment does not claim ──────
+  // The ten static public pages ship absolute canonical / og:url / og:image / twitter:image /
+  // hreflang tags pointing at pool.grin.money — the toolkit author's own pool. applySeo()
+  // rewrites canonical and og:url; it never touched the other three, and before the
+  // location.origin fallback above it rewrote nothing at all on a pool that left site_url
+  // blank. This pass fixes every one of them by ORIGIN rather than by listing tags to set,
+  // so a page that adds another absolute tag is covered without a second edit here.
+  //
+  // ⚠ This is the JS-client half only. A crawler that does not run scripts, and any unfurler
+  // that reads the raw HTML, still sees the hardcoded domain — that half needs the 56 static
+  // tags themselves edited and is a product decision, recorded as OPEN in audit §J15-3.
+  function reclaimSeoHost(siteUrl, serverSeo) {
+    var base;
+    try { base = new URL(siteUrl || location.href); } catch (e) { return; }
+    var mine = base.origin;
+    var claimed = { };
+    claimed[mine] = 1; claimed[location.origin] = 1;
+
+    // canonical/og:url are the server's when it rendered the head; the rest are never its.
+    var sels = ['link[rel="alternate"][hreflang]', 'meta[property="og:image"]',
+                'meta[name="twitter:image"]'];
+    if (!serverSeo) sels = sels.concat(['link[rel="canonical"]', 'meta[property="og:url"]']);
+    sels.forEach(function (q) {
+      document.querySelectorAll(q).forEach(function (el) {
+        var attr = (el.tagName === 'LINK') ? 'href' : 'content';
+        var v = el.getAttribute(attr);
+        if (!v) return;
+        var u;
+        try { u = new URL(v, location.href); } catch (e) { return; }
+        if (u.protocol !== 'http:' && u.protocol !== 'https:') return;
+        if (claimed[u.origin]) return;
+        el.setAttribute(attr, mine + u.pathname + u.search);
+      });
+    });
+
+    // twitter:domain is a bare host, not a URL, so the loop above cannot see it.
+    document.querySelectorAll('meta[name="twitter:domain"]').forEach(function (el) {
+      if (el.getAttribute('content') !== base.host) el.setAttribute('content', base.host);
+    });
   }
 
   function prettyPage(key) {
@@ -280,12 +373,9 @@
       if (document.body) document.body.style.setProperty(name, value);
     }
 
-    var custom = brand.custom_theme || {};
-    Object.keys(custom).forEach(function (k) {
-      if (!custom[k]) return;
-      var name = k.charAt(0) === '-' ? k : '--' + k;
-      setVar(name, custom[k]);
-    });
+    // NB custom_theme is applied further down, INSIDE the isCredentialPage() guard — see the
+    // note there (audit §J15-5). It used to run here, above the guard, which is how the one
+    // operator-authored CSS sink §J1-1 missed kept reaching login.html (audit §J9-3).
 
     // Accent colour drives the most common variables. Deliberately NOT --neon-cyan (the
     // bridge's accent input): the bridge also derives --ok from it, so branding the site
@@ -312,27 +402,53 @@
       }
     }
 
-    // Web font.
-    if (brand.font_url) {
-      setLinkRel('preconnect', 'https://fonts.googleapis.com');
-      var l = document.createElement('link');
-      l.rel = 'stylesheet';
-      l.href = brand.font_url;
-      head().appendChild(l);
-    }
-    if (brand.font_family) {
-      root.style.setProperty('--brand-font', brand.font_family);
-      var fs = document.createElement('style');
-      fs.textContent = 'body{font-family:' + brand.font_family + ',var(--brand-font-fallback,sans-serif);}';
-      head().appendChild(fs);
-    }
+    // Operator-authored CSS sinks — skipped on credential pages (§J1-1). The theme, accent
+    // colour, logo and pool name above all still apply, so a white-labelled pool still looks
+    // like itself here; what is withheld is the raw escape hatch. CSS cannot capture a
+    // keystroke, but it can hide the 2FA prompt or overlay a misleading form, and font_url
+    // pulls a stylesheet from an operator-chosen origin — which on the admin login page also
+    // reports every visit to that origin. The login page is seen by the operator, not by
+    // miners, so the branding value withheld here is close to nil.
+    if (!isCredentialPage()) {
+      // Theme-builder map: CSS custom properties, written onto BOTH <html> and <body>.
+      // Gated here rather than above with accent_color, because unlike accent_color (a
+      // /^#[0-9a-f]{6}$/ colour and nothing else) this is 200 operator-chosen token streams
+      // of up to 200 chars each. pool-settings.js bounds what a value may CONTAIN, but not
+      // what it MEANS: whichever declaration consumes it via var() decides that, so setting
+      // --bg to the value of --text is enough to make the 2FA prompt unreadable, and that is
+      // the same class of harm as custom_css — which has been gated here since §J1-1.
+      // A white-labelled login page keeps its accent colour, logo, pool name and named theme.
+      var custom = brand.custom_theme || {};
+      Object.keys(custom).forEach(function (k) {
+        if (!custom[k]) return;
+        var name = k.charAt(0) === '-' ? k : '--' + k;
+        setVar(name, custom[k]);
+      });
 
-    // Operator custom CSS (last so it can override everything above).
-    if (brand.custom_css) {
-      var st = document.createElement('style');
-      st.setAttribute('data-brand-css', '1');
-      st.textContent = brand.custom_css;
-      head().appendChild(st);
+      // Web font.
+      if (brand.font_url) {
+        setLinkRel('preconnect', 'https://fonts.googleapis.com');
+        var l = document.createElement('link');
+        l.rel = 'stylesheet';
+        l.href = brand.font_url;
+        head().appendChild(l);
+      }
+      if (brand.font_family) {
+        root.style.setProperty('--brand-font', brand.font_family);
+        var fs = document.createElement('style');
+        // NB string concatenation: font_family breaks out of this declaration, so it is a
+        // <style> injection sink, not a font name. Gated in STEP_UP_SETTINGS_KEYS too.
+        fs.textContent = 'body{font-family:' + brand.font_family + ',var(--brand-font-fallback,sans-serif);}';
+        head().appendChild(fs);
+      }
+
+      // Operator custom CSS (last so it can override everything above).
+      if (brand.custom_css) {
+        var st = document.createElement('style');
+        st.setAttribute('data-brand-css', '1');
+        st.textContent = brand.custom_css;
+        head().appendChild(st);
+      }
     }
   }
 
@@ -390,18 +506,20 @@
     }
 
     // CTA button: set text + link if a hook exists.
+    var ctaHref = safeHref(brand.cta_link);
     document.querySelectorAll('[data-brand="cta"]').forEach(function (el) {
       if (brand.cta_text) el.textContent = brand.cta_text;
-      if (brand.cta_link && el.tagName === 'A') el.setAttribute('href', brand.cta_link);
+      if (ctaHref && el.tagName === 'A') el.setAttribute('href', ctaHref);
       if (brand.cta_text || brand.cta_link) el.style.display = '';
     });
 
     // Social links: show/hide + set href on hooks like data-brand="social-discord".
     Object.keys(social).forEach(function (net) {
       var url = social[net];
+      var socialHref = safeHref(url);
       document.querySelectorAll('[data-brand="social-' + net + '"]').forEach(function (el) {
-        if (url) {
-          if (el.tagName === 'A') el.setAttribute('href', url);
+        if (socialHref) {
+          if (el.tagName === 'A') el.setAttribute('href', socialHref);
           el.style.display = '';
         } else {
           el.style.display = 'none';
@@ -493,9 +611,10 @@
     });
 
     // Footer "Community" alternative — an email-free public channel (e.g. Grin forum).
-    if (pool.support_forum_url) {
+    var forumHref = safeHref(pool.support_forum_url);
+    if (forumHref) {
       document.querySelectorAll('[data-brand="forum-link"]').forEach(function (el) {
-        el.setAttribute('href', pool.support_forum_url);
+        el.setAttribute('href', forumHref);
         el.style.display = '';
       });
     }
@@ -506,9 +625,10 @@
       document.querySelectorAll('[data-brand="security-link"]').forEach(function (el) {
         wireMailto(el, secEmail, secEmail);
       });
-      if (pool.pgp_key_url) {
+      var pgpHref = safeHref(pool.pgp_key_url);
+      if (pgpHref) {
         document.querySelectorAll('[data-brand="pgp-link"]').forEach(function (el) {
-          el.setAttribute('href', pool.pgp_key_url);
+          el.setAttribute('href', pgpHref);
           el.style.display = '';
         });
       }
@@ -715,14 +835,32 @@
   // GA4's default page_view sends page_location = the full URL — which would log the
   // address into the operator's analytics. We drop only `addr` and keep everything else
   // (utm_* campaign tags etc. stay intact for attribution). Returns origin+path+scrubbed-query.
-  function scrubbedLocation() {
+  function scrubAddr(href) {
     try {
-      var u = new URL(window.location.href);
+      var u = new URL(href);
       u.searchParams.delete('addr');
       return u.origin + u.pathname + (u.search ? u.search : '');
     } catch (e) {
-      return window.location.origin + window.location.pathname;
+      return '';
     }
+  }
+
+  function scrubbedLocation() {
+    return scrubAddr(window.location.href) ||
+      (window.location.origin + window.location.pathname);
+  }
+
+  // The same scrub, applied to where the visitor CAME FROM (audit §J11-4). Pinning
+  // page_location alone was one-sided: GA4 defaults `page_referrer` to document.referrer, and
+  // the site shell's nav is on every page — so clicking any nav item from
+  // account-settings.html?addr=grin1… shipped that address to GA4 as the NEXT page view's
+  // referrer, which is exactly what scrubbedLocation() exists to prevent. Empty string when
+  // there is no referrer (a direct hit); gtag treats '' as "no referrer", which is the truth.
+  function scrubbedReferrer() {
+    var r = '';
+    try { r = document.referrer || ''; } catch (e) { return ''; }
+    if (!r) return '';
+    return scrubAddr(r);
   }
 
   function loadGa4(id) {
@@ -732,12 +870,14 @@
     s.src = 'https://www.googletagmanager.com/gtag/js?id=' + encodeURIComponent(id);
     head().appendChild(s);
     var init = document.createElement('script');
-    // page_location pinned to the scrubbed URL so the initial page_view (and every event
-    // that inherits the config default) never carries a miner's address to GA4.
+    // page_location AND page_referrer pinned to scrubbed URLs so the initial page_view (and
+    // every event that inherits the config default) never carries a miner's address to GA4 —
+    // neither as the page you are on nor as the page you came from.
     init.textContent =
       'window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments);}' +
       "gtag('js',new Date());gtag('config','" + id.replace(/'/g, '') +
-      "',{page_location:" + JSON.stringify(scrubbedLocation()) + "});";
+      "',{page_location:" + JSON.stringify(scrubbedLocation()) +
+      ",page_referrer:" + JSON.stringify(scrubbedReferrer()) + "});";
     head().appendChild(init);
   }
 
@@ -843,7 +983,16 @@
     try { enhanceHeader(cfg); } catch (e) {}
     try { applyIncentives(cfg.incentives || {}); } catch (e) {}
     try { renderBanners(cfg.announcements || []); } catch (e) {}
-    try { applyAnalytics(cfg); } catch (e) {}
+
+    // Analytics carries custom_head_html / custom_body_html, which applyAnalytics deliberately
+    // re-creates as executing <script> nodes, plus the third-party provider script origins.
+    // Never on a page where a credential is typed (§J1-1) — that is what turned a settings
+    // write into a route to the admin password and a live TOTP code. Analytics on the admin
+    // login page has no product value anyway: miners never log in, so the only visitor whose
+    // page-view would be shipped to Google/Plausible/Matomo is the operator themselves.
+    if (!isCredentialPage()) {
+      try { applyAnalytics(cfg); } catch (e) {}
+    }
   }
 
   // ── Incentives: prize pool + recent fortune-board winners ───────────────────
@@ -923,8 +1072,17 @@
       inner += '<h2 style="margin:0 0 1.5rem;color:var(--accent,#667eea);">' + escapeText(pool.name) + '</h2>';
     }
     inner += '<h1 style="font-size:2rem;margin:0 0 1rem;">🛠 ' + escapeText(maint.title || 'Under Maintenance') + '</h1>';
+    // ESCAPED, like the title on the line above (audit §J15-1). This is the `notices` section's
+    // maintenance_message, which reaches this innerHTML on all eleven public pages that are not
+    // data-maintenance="exempt". It is NOT one of the deliberate HTML-authoring fields: it has
+    // no validator, it is not in STEP_UP_SETTINGS_KEYS, and `notices` is not a step-up SECTION —
+    // so it was the one operator-authored raw-HTML sink still sitting at plain secureAdmin,
+    // below every sink §J1-1 promoted. An <img onerror> in it runs even though a bare <script>
+    // would not, on the origin that also serves the withdrawal form. It is a status notice;
+    // if an operator ever needs a link in one, add it as a separate link/link_text pair through
+    // safeHref() the way renderBanners() does — never by widening this back to raw HTML.
     inner += '<div style="max-width:600px;color:var(--text-dim,#a0aec0);line-height:1.6;">' +
-      (maint.message || '') + '</div>'; // operator-controlled message
+      escapeText(maint.message || '') + '</div>';
     overlay.innerHTML = inner;
     document.body.appendChild(overlay);
   }
@@ -957,13 +1115,25 @@
       bar.style.cssText = 'display:flex;align-items:center;gap:.6rem;justify-content:center;' +
         'padding:.6rem 2.5rem .6rem 1rem;background:' + c.bg + ';color:' + c.fg + ';' +
         'font-size:.92rem;position:relative;';
-      var msg = '<span aria-hidden="true">' + c.icon + '</span><span>' + escapeText(b.message) + '</span>';
-      if (b.link) {
-        msg += ' <a href="' + encodeURI(b.link) + '" style="color:' + c.fg +
-          ';text-decoration:underline;font-weight:600;">' +
-          escapeText(b.link_text || 'Learn more') + '</a>';
+      bar.innerHTML = '<span aria-hidden="true">' + c.icon + '</span><span>' +
+        escapeText(b.message) + '</span>';
+
+      // The link is built as a real node, not concatenated into the HTML above (audit §J1-9).
+      // Two separate reasons: safeHref() rejects a `javascript:` banner link, which would
+      // otherwise be an operator-authored script sink on every page including login.html; and
+      // building the node means link_text lands as textContent, so it needs no escaping at all
+      // — escapeText() handles < > & but NOT the quote, which is exactly what an href="..."
+      // built by concatenation would need.
+      var bHref = safeHref(b.link);
+      if (bHref) {
+        var a = document.createElement('a');
+        a.setAttribute('href', bHref);
+        a.setAttribute('rel', 'noopener');
+        a.textContent = b.link_text || 'Learn more';
+        a.style.cssText = 'color:' + c.fg + ';text-decoration:underline;font-weight:600;';
+        bar.appendChild(document.createTextNode(' '));
+        bar.appendChild(a);
       }
-      bar.innerHTML = msg;
       if (b.dismissible) {
         var x = document.createElement('button');
         x.textContent = '✕';

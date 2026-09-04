@@ -17,6 +17,14 @@ const SNIFFERS = [
       (b[4] === 0x37 || b[4] === 0x39) && b[5] === 0x61 },
 ];
 
+// WebP is accepted by the CMS media endpoint (POST /api/admin/media) but NOT by the branding
+// asset endpoint, whose declared-MIME gate (allowedMimeTypes) has never listed it. Kept out of
+// SNIFFERS and passed in explicitly by that one caller, so adding detection here cannot widen
+// what a logo/favicon upload accepts. Signature: 'RIFF' ....  'WEBP' (bytes 0-3 and 8-11).
+const WEBP_SNIFFER = { ext: 'webp', mime: 'image/webp', test: (b) => b.length > 11 &&
+  b[0] === 0x52 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x46 &&
+  b[8] === 0x57 && b[9] === 0x45 && b[10] === 0x42 && b[11] === 0x50 };
+
 // SVG is text/XML, not a binary signature. Accept only if the head clearly parses as SVG.
 function looksLikeSvg(buffer) {
   const head = buffer.slice(0, 1024).toString('utf8').replace(/^﻿/, '').trimStart().toLowerCase();
@@ -25,9 +33,11 @@ function looksLikeSvg(buffer) {
 }
 
 // Returns { ext, mime } from the real bytes, or null if it's not an allowed image.
-function detectImage(buffer) {
+// `extra` widens the binary signature set for one caller only (see WEBP_SNIFFER); the SVG
+// branch is always last so a text/XML file cannot shadow a binary signature.
+function detectImage(buffer, extra = []) {
   if (!buffer || buffer.length < 4) return null;
-  for (const s of SNIFFERS) {
+  for (const s of SNIFFERS.concat(extra)) {
     if (s.test(buffer)) return { ext: s.ext, mime: s.mime };
   }
   if (looksLikeSvg(buffer)) return { ext: 'svg', mime: 'image/svg+xml' };
@@ -188,3 +198,7 @@ class AssetManager {
 }
 
 module.exports = AssetManager;
+// Shared with index.js's CMS media upload (POST /api/admin/media), which had no content check
+// at all and derived the stored extension from the client-declared MIME — audit §J10-1.
+module.exports.detectImage = detectImage;
+module.exports.WEBP_SNIFFER = WEBP_SNIFFER;

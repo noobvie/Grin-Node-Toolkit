@@ -175,6 +175,16 @@ accumulated coinbase to cold storage on a schedule.
   `req.get('host')` when `site_url` is unset). Low severity; set `site_url` to pin it.
 - **Slatepack is not inherently address-bound** — mitigated by the one-time claim token + mandatory
   payment proof (design §8). Without payment proof, a leaked slate could be completed by an attacker.
+- **A reorg deeper than `confirm_depth` (1440 blocks, ~24 h) is not handled** (audit §J5-11a).
+  Orphan detection only examines blocks still in `'immature'`; once a block has been confirmed,
+  distributed and flipped to `'paid'`, nothing re-examines it, so a reorg that unwinds a matured
+  block leaves its credits standing. **This is accepted, not covered.** Grin reorgs are shallow
+  and 1440 blocks is Grin's own coinbase-maturity rule, so the pool is exposed only to a
+  chain-halting event. Building the handler would also require closing the second half of
+  §J5-11 — a post-distribution reversal has to reach balances that are locked in, or already
+  out of, an in-flight payout, which is the scheduler's state machine, not the block monitor's.
+  The `distribution_stalled` and `coverage_shortfall` alerts would both fire in that scenario;
+  recovery would be manual.
 
 ---
 
@@ -1251,3 +1261,13216 @@ double-send; `stepUpRefused` emits a byte-identical refusal to `requireTotpEnrol
 comment-audit session. The fix is present and correct, but its commit message describes it as
 comment-only, so a later reader auditing when HSTS/CSP inheritance was fixed will not find it
 there. Worth a note in the changelog.
+
+---
+
+## §J1 — Route & guard matrix (2026-08-25, add-ons, NOT VPS-TESTED)
+
+First session of the pre-mainnet §J pass (plan:
+[`script07_reference_audit_session_plan.md`](script07_reference_audit_session_plan.md) §J1).
+Scope: every Express route registered in
+[`index.js`](../../web/07_mining_pool_public/back-end-pool/index.js) and the chain definitions
+in [`lib/auth-middleware.js`](../../web/07_mining_pool_public/back-end-pool/lib/auth-middleware.js).
+Question asked: not *"is there a guard"* (there is, on all 102 `/api/admin` routes) but
+*"is it the right tier"*.
+
+**Measured route table.** 163 route registrations + 7 `app.use` layers = the 170 `app.*` calls
+in the file. (The plan's "~180 routes" was an estimate; 163 is the count.) Extracted
+mechanically, not by reading — reproducible with:
+
+```bash
+grep -nE "app\.(get|post|put|patch|delete|use|all)\(" index.js
+```
+
+| Guard chain | Routes | Composition |
+|---|---|---|
+| `secureAdmin` | 68 | `rateLimiter('admin')` → `ipFilter('admin')` → `requireAdmin` |
+| `freshAdmin` | 31 | + `requireFreshAuth(300s)` → `requireTotpEnrolled` |
+| `freshAdminEnroll` | 2 | as `freshAdmin` minus `requireTotpEnrolled` (2FA enrollment only) |
+| `requireAdmin` bare | 1 | `/api/admin/_authcheck` (nginx `auth_request` shim) |
+| `rateLimiter` first | 59 | `public` 50 · `auth` 4 · `withdraw` 4 · `torcheck` 1 |
+| no middleware | 2 | `/api/auth/register`, `/api/auth/login` — both gate inline (`rateLimiter.peek` → captcha → `consume`) |
+
+`/api/admin` totals: **102 routes — 47 GET (46 `secureAdmin` + `_authcheck`), 55 mutating.**
+No admin route carries a non-admin guard; no admin route is unguarded.
+
+### Verified correct (checked against the plan's intuition list, not assumed)
+
+All thirteen of the routes the plan named are on the tier it expected: withdrawals
+retry/cancel, payouts freeze/resume, dormancy run/manual-payout/send-payout, wallet
+adopt-identity, miner ban/inject, incentives award, prize-pool topup, lottery draw-now,
+campaign run, database cleanup, revoke-sessions, ip-allowlist mutations, settings restore —
+**all `freshAdmin`**. §C4's "consider promoting `inject` to `freshAdmin`" is done.
+
+Other things confirmed by reading rather than by memory:
+
+- **Only two inline `isTokenFresh(` call sites survive** ([index.js:834](../../web/07_mining_pool_public/back-end-pool/index.js#L834)
+  inside `stepUpRefused` itself, and [:5996](../../web/07_mining_pool_public/back-end-pool/index.js#L5996)).
+  The second is the section-specific freshness wording and is immediately followed by
+  `stepUpRefused()` at [:6004](../../web/07_mining_pool_public/back-end-pool/index.js#L6004),
+  so both halves of the §I7 contract are carried. `stepUpRefused` is called from exactly two
+  places ([:5507](../../web/07_mining_pool_public/back-end-pool/index.js#L5507),
+  [:6004](../../web/07_mining_pool_public/back-end-pool/index.js#L6004)) and there is no third
+  hand-rolled copy. **§I7 is closed and stays closed.**
+- **`/api/admin/_authcheck` is genuinely side-effect-free.** It returns 204 with no body, and
+  `verifyAccessToken` ([auth.js](../../web/07_mining_pool_public/back-end-pool/lib/auth.js))
+  is pure `jwt.verify` + a `type === 'access'` check — no DB read, no audit write, no counter.
+  Its `rateLimiter`/`ipFilter` bypass is covered at the network layer: the vhost's
+  `location = /admin/_authcheck` is `internal`
+  ([07_grin_mining_public_pool.sh:1337](../../scripts/07_grin_mining_public_pool.sh#L1337)) and
+  `location /api/admin/` carries `$admin_rules` ([:1348](../../scripts/07_grin_mining_public_pool.sh#L1348)).
+- **The 404 fallthrough leaks nothing structural** — flat `{"error":"Not found"}`,
+  [index.js:6237](../../web/07_mining_pool_public/back-end-pool/index.js#L6237). (See J1-8 for
+  the 401-vs-404 side channel, which is a different thing.)
+- **Every rate-limit bucket name used actually exists.** `middleware()` does
+  `if (!limit) return next()` ([rate-limiter.js](../../web/07_mining_pool_public/back-end-pool/lib/rate-limiter.js)),
+  so a typo'd bucket name means *no limit at all*. All six names used (`public`, `auth`,
+  `admin`, `export`, `withdraw`, `torcheck`) are defined. Clean.
+- **There is no satellite HTTP ingestion surface to mis-tier.** Model C gateways forward raw
+  stratum over WireGuard; the comment at [index.js:911](../../web/07_mining_pool_public/back-end-pool/index.js#L911)
+  is accurate and there is no `requireSatellite` chain anywhere. "Satellite gateway" drops out
+  of the threat-actor list for the HTTP surface.
+- **All four miner money actions are ownership-gated**, and `POST …/nostr-destination` — the
+  one that changes *where money goes* — demands `requireBothProofs` (mining IP **and** rig
+  password), strictly stronger than `withdraw`. The plan's J3 question is answered yes at the
+  route level; J3 still owns the canonicalisation and constant-time questions inside
+  `owner-proof.js`.
+- **`GET /api/admin/gateways/:region/pairing` looks like it should be `freshAdmin` but isn't a
+  credential.** The `GRINGW1|…` string is region · hub **public** key · endpoint · tunnel IPs ·
+  port ([07_lib_gwctl.sh:317](../../scripts/lib/07_lib_gwctl.sh#L317)) — no private key, no
+  PSK. WireGuard only accepts a peer whose public key the hub already registered, so this is
+  reconnaissance (the WG endpoint), not access. `secureAdmin` is correct.
+
+### Why the tier matters more than it looks
+
+Two facts from earlier passes combine, and every finding below sits on them:
+
+1. **§C3 — an access token cannot be revoked.** `verifyAccessToken` never checks `tv`
+   against the DB, so neither logout, nor a password change, nor the *Revoke sessions*
+   kill-switch kills a live one (memory `project_pool_admin_session_idle`: "idle ==
+   time-to-revoke", capped ≤24 h for exactly this reason).
+2. **`freshAdmin` is the only control that a stolen token does not carry**, because `pwa`
+   expires 300 s after the last password re-verification and a silent refresh mints `pwa=0`.
+
+So `secureAdmin` vs `freshAdmin` *is* the boundary between "an attacker holding a stolen
+session cookie can do this for up to 24 h" and "they cannot do it without the password".
+Anything on the wrong side of that line is not a paperwork problem.
+
+---
+
+### Findings
+
+### J1-1 — [High] The routes that inject executable script into every public page sit at `secureAdmin`, one tier below `withdrawals/:id/retry` — and one of those pages is the admin login form — **FIXED 2026-08-25 (see resolution pass)**
+
+**Threat actor:** an attacker holding a live admin access token (§C3: unrevocable for the
+idle window, ≤24 h, surviving logout, password change and *Revoke sessions*). Secondarily:
+a logged-in admin who has **not** enrolled 2FA on a pool with `access.require_admin_totp`
+on — the §I7 shape, reached through a different section.
+
+`POST /api/admin/settings/:section` is `secureAdmin` and applies step-up only when
+`STEP_UP_SETTINGS_SECTIONS.has(section)` or a `STEP_UP_SETTINGS_KEYS` value actually changed
+([index.js:5941-5956](../../web/07_mining_pool_public/back-end-pool/index.js#L5941-L5956),
+[:5989-6004](../../web/07_mining_pool_public/back-end-pool/index.js#L5989-L6004)). The gated
+set is `payout`, `access`, `incentives`, `database` plus four `pool_info` keys. **`analytics`
+and `branding` are in neither**, and they carry:
+
+| Key | Section | Effect |
+|---|---|---|
+| `custom_head_html` | analytics | raw HTML into `<head>` of every public page |
+| `custom_body_html` | analytics | raw HTML before `</body>` |
+| `plausible_src` / `umami_src` / `matomo_url` | analytics | third-party script origins |
+| `custom_css`, `font_url`, `cta_link` | branding | CSS injection + a fetched font origin |
+
+It is not innerHTML-inert. [branding.js:717-745](../../web/07_mining_pool_public/public_html/js/branding.js#L717-L745)
+parses the value into a detached `<div>` and then **deliberately re-creates every `<script>`
+node through `cloneScript()`** ([:751-762](../../web/07_mining_pool_public/public_html/js/branding.js#L751-L762))
+"so they run". This happens before the cookie-consent branch, so it is unconditional.
+
+The escalation is the page list. Thirteen public pages load `branding.js`, and two of them
+matter:
+
+- **`account-settings.html`** — the withdrawal form. Injected JS can rewrite the destination
+  or the amount inside the money UI itself.
+- **`login.html`** — [`<script src="/js/branding.js">` at :606](../../web/07_mining_pool_public/public_html/login.html#L606),
+  with `#password` at [:297](../../web/07_mining_pool_public/public_html/login.html#L297) and
+  `#totp-code` at [:345](../../web/07_mining_pool_public/public_html/login.html#L345).
+
+So an attacker who holds only a stolen session — precisely the actor `freshAdmin` exists to
+stop — can write a keylogger onto the admin login form, wait for the operator to sign in, and
+harvest **the admin password and a live TOTP code**. That is `secureAdmin` → `freshAdmin`
+escalation, and it defeats the step-up gate on all 31 `freshAdmin` routes rather than
+bypassing one of them. There is no CSP containment: the app CSP at
+[index.js:252](../../web/07_mining_pool_public/back-end-pool/index.js#L252) allows
+`script-src 'self' 'unsafe-inline'`, and the pages are served from disk by nginx anyway.
+The `/admin/` panel does **not** execute these fields (it has no `branding.js`), which bounds
+the blast radius to the public origin — but the login form is on the public origin.
+
+The same tier applies to the deliberate HTML-authoring routes, which are the same class one
+step less sharp: `POST /api/admin/ads` (`html_code` → [ads.js:50](../../web/07_mining_pool_public/public_html/js/ads.js#L50)
+string-concatenated into markup, so `<img onerror>` runs even though a bare `<script>` would
+not), `POST /api/admin/pages`, `POST /api/admin/posts` — all `secureAdmin`, all destructive
+on their `DELETE` twin.
+
+**This is not a re-litigation of the §B accepted risk.** §B accepts that
+`custom_head_html`/`custom_body_html`/`custom_css` *are* stored site-wide XSS by design, and
+states the mitigation as "an attacker must already control the admin account". The finding
+here is that (a) the codebase's own definition of "control the admin account" for dangerous
+actions is `freshAdmin`, not `secureAdmin`, and these routes are below it; and (b) because
+`login.html` is in the injection surface, the capability is not merely equal to admin control
+— it *acquires* the password that a stolen session lacks.
+
+**Fix (small, local):** add `'analytics'` and `'branding'` to `STEP_UP_SETTINGS_SECTIONS`
+(they are cosmetic sections that happen to carry two script sinks, so the cheaper alternative
+is adding `custom_head_html`, `custom_body_html`, `custom_css`, `font_url`, `plausible_src`,
+`umami_src`, `matomo_url` to `STEP_UP_SETTINGS_KEYS` — that keeps a tagline edit prompt-free,
+which is the reason the key-level gate exists at all). Promote `ads`/`pages`/`posts` writes
+to `freshAdmin` in the same change, or accept them explicitly with the reasoning written down.
+**Separately, and independent of the tier:** `login.html` has no business loading `branding.js`
+— an operator-HTML sink on the credential-entry page is wrong at any tier. Handoff to **J15**.
+
+---
+
+### J1-2 — [Medium] 25 of 55 mutating admin routes write no `admin_audit_log` row — including every write to the security settings and both IP-filter surfaces — **SETTINGS WRITE FIXED 2026-08-25; 24 routes still OPEN** (see resolution pass)
+
+**Threat actor:** a logged-in admin, or an attacker on a stolen session, covering their
+tracks. Also the operator, post-incident, trying to reconstruct what happened.
+
+§B's checklist requires "**No admin mutation succeeds without an audit row** (enforced at the
+handler)", and the pre-launch gate still marks it `[~] not line-audited per handler`. This
+session did that line audit mechanically across all 55 mutating admin routes. **26 have no
+`admin_audit_log` INSERT in the handler body, and exactly one of those 26 is covered in the
+lib layer** (`/settings/:section/restore` → `resetSection`). The other 25 write no audit row
+anywhere: `ads.js`, `pages.js`, `posts.js`, `asset-manager.js`, `retention.js`,
+`alert-monitor.js`, `ip-filter.js` and `poolstats-reporter.js` contain no `admin_audit_log`
+INSERT at all — the only lib writers in the whole backend are `auth.js`, `dormancy.js`,
+`owner-proof.js` and `pool-settings.js`.
+
+The ones that matter:
+
+| Route | Tier | What is lost |
+|---|---|---|
+| `POST /api/admin/settings/:section` | secureAdmin (+cond. step-up) | **every settings change** — `pool_fee_percent`, `min_withdrawal`, `withdrawal_fee`, `require_admin_totp`, `session_timeout_hours`, `tor_preflight_gate`, `nostr_nip05_domains`, retention windows |
+| `POST /api/admin/security/ip-allowlist/add` · `/remove` | freshAdmin | who opened or closed the admin perimeter |
+| `POST /api/admin/security/ip-blacklist/add` · `/remove` | freshAdmin | who un-blocked an attacking IP |
+| `POST /api/admin/security/rate-limit-reset` | secureAdmin | who cleared a brute-force lockout, and for which IP |
+| `POST /api/admin/poolstats/update-key` · `/test` | freshAdmin / secureAdmin | outbound credential rotation |
+| `POST /api/admin/ads` · `/pages` · `/posts` (+ `:id`, `DELETE`) | secureAdmin | who authored the HTML in J1-1 |
+| `POST /api/admin/assets/upload` · `DELETE /api/admin/assets/:filename` | secureAdmin | upload/delete provenance |
+| `POST /api/admin/2fa/enroll/begin` | freshAdminEnroll | pending-secret issuance (`confirm` *is* audited — [index.js:1897](../../web/07_mining_pool_public/back-end-pool/index.js#L1897)) |
+| `POST /api/admin/database/cleanup` | freshAdmin | who triggered a manual prune of the money trail |
+| `POST /api/admin/alerts/:alertId/acknowledge` · `/snooze` | secureAdmin | who silenced a money alert |
+
+The settings row is the sharp one, and it is sharp because of an asymmetry:
+`PoolSettings.resetSection()` **does** audit
+([pool-settings.js:1373-1378](../../web/07_mining_pool_public/back-end-pool/lib/pool-settings.js#L1373-L1378))
+while `PoolSettings.updateSection()` does not — it records only `updated_by` on the
+`pool_config` row, which is last-writer-wins with no history and no timestamped action. So
+restoring a section to defaults leaves a trail and *changing* it does not. Turning
+`require_admin_totp` off, or widening `nostr_nip05_domains`, is invisible.
+
+Mitigating: `access` and `database` are step-up-gated, and `audit_log_keep_days` has a
+30-day floor ([pool-settings.js:1053-1057](../../web/07_mining_pool_public/back-end-pool/lib/pool-settings.js#L1053-L1057)),
+so the existing trail cannot be shredded on demand. This is a hole in the trail, not a
+shredder for it — hence Medium.
+
+**Fix:** one `admin_audit_log` INSERT in `updateSection` recording `(section, changed keys,
+before → after)`, mirroring `resetSection` — that single change covers the highest-value gap.
+Then one line each in the four IP-filter routes, `rate-limit-reset`, `database/cleanup` and the
+two alert routes. Individually trivial, but 25 call sites, so it is written up rather than
+applied blind in this session.
+
+---
+
+### J1-3 — [Medium] `POST /api/admin/locations` can retarget every miner's rig at `secureAdmin`, while removing the same region is `freshAdmin` — **FIXED 2026-08-25 (see resolution pass)**
+
+**Threat actor:** attacker on a stolen admin session.
+
+[index.js:5487](../../web/07_mining_pool_public/back-end-pool/index.js#L5487) is `secureAdmin`,
+with the step-up correctly applied to the WireGuard-pairing branch only
+([:5507](../../web/07_mining_pool_public/back-end-pool/index.js#L5507)) — the §D.3 / §I7 fix,
+still intact. The comment justifies the split as "metadata-only saves stay plain
+`secureAdmin` so routine region edits don't prompt".
+
+But `stratum_url` is not metadata. It is upserted straight into `pool_locations`
+([:5528-5540](../../web/07_mining_pool_public/back-end-pool/index.js#L5528-L5540)), published
+by `GET /api/pool/locations`, and rendered on the public dashboard as the connection string
+miners copy into their rigs
+([reactor-dashboard.js:715](../../web/07_mining_pool_public/public_html/js/reactor-dashboard.js#L715),
+[:830](../../web/07_mining_pool_public/public_html/js/reactor-dashboard.js#L830)). Editing it
+points the pool's own "how to connect" panel at an attacker's stratum server. `api_url` has
+the same property for anything reading the regional API.
+
+The tier is inconsistent with its own neighbours: `DELETE /api/admin/locations/:id` (removes
+one region card) and `POST /api/admin/miners/:addr/ban` (stops one miner earning) are both
+`freshAdmin`. Redirecting the whole pool's advertised hashrate is not.
+
+Damage is not instant — miners must re-point manually, and existing rigs keep hashing to the
+real stratum — which is why this is Medium and not High. It is a hashrate/reputation attack,
+not a balance theft.
+
+**Fix:** gate the branch, not the route — `if ((stratum_url !== row.stratum_url ||
+api_url !== row.api_url) && stepUpRefused(req, res)) return;` alongside the existing
+`wgPubkey` check. Same pattern already in the file, one line.
+
+---
+
+### J1-4 — [Low] `POST /api/admin/security/rate-limit-reset` lifts a throttle at a lower tier than its two siblings — **OPEN**
+
+**Threat actor:** attacker on a stolen admin session, or a logged-in admin.
+
+[index.js:4516](../../web/07_mining_pool_public/back-end-pool/index.js#L4516) is
+`secureAdmin`. `rateLimiter.resetIp(ip)` deletes **every** bucket and violation entry whose
+key ends in `|<ip>` ([rate-limiter.js:303-313](../../web/07_mining_pool_public/back-end-pool/lib/rate-limiter.js#L303-L313)) —
+including the `auth` bucket, i.e. the brute-force lockout for an arbitrary IP. Its two
+functional siblings, `POST /api/admin/security/temp-ban/clear`
+([:4763](../../web/07_mining_pool_public/back-end-pool/index.js#L4763)) and
+`POST /api/admin/security/ip-blacklist/remove` ([:4587](../../web/07_mining_pool_public/back-end-pool/index.js#L4587)),
+are both `freshAdmin`. Three routes that all mean "stop throttling this IP", two behind
+step-up and one not.
+
+Low because the attacker already holds an admin session, so clearing a login throttle buys
+little on its own — it matters as a step in a chain (clear the lockout, then grind the
+password to reach `freshAdmin`), which is the same objective J1-1 reaches more directly.
+Combine the fix with J1-2's audit line for this route.
+
+---
+
+### J1-5 — [Low] `access.admin_ip_allowlist` / `admin_ip_blacklist` are dead settings keys — writable, readable back, and connected to nothing — **OPEN**
+
+**Threat actor:** none directly; this is an operator-deception failure of the same class as
+the `session_timeout_hours` dead setting (memory `project_pool_admin_session_idle`).
+
+The live `IpFilter` is constructed once from **`pool.json`**
+([index.js:701-704](../../web/07_mining_pool_public/back-end-pool/index.js#L701-L704):
+`allowlist: config.admin_ip_allowlist || []`). `PoolSettings.applyToConfig()` maps only
+`pool_info` and `payout` keys into `config` — it never touches `access`. Grepping the whole
+repo, the only references to `admin_ip_allowlist` are that construction site, the
+`PoolSettings.defaults` entry ([pool-settings.js:212-213](../../web/07_mining_pool_public/back-end-pool/lib/pool-settings.js#L212-L213)),
+and one line of help text on `settings-access.html`. **Nothing reads them.**
+
+They are still writable: `POST /api/admin/settings/access` accepts them (the section passes
+the `key in defaults` check), persists them to `pool_config`, and
+`GET /api/admin/settings/access` echoes them back — so the round-trip looks like it worked.
+The Access Control page does not expose an input for them (its list widgets post to the live
+`/api/admin/security/ip-*` routes and carry `settings-skip`), so the panel is honest; a
+curl-driven operator or a future form field would not be.
+
+The *runtime* list is correct and correctly documented: `settings-access.html:186-189` states
+plainly that live rules "are **not** saved… They reset on a service restart (a built-in
+break-glass escape from a bad allowlist)". That is deliberate design, not a bug, and is not
+being reported. The bug is only the two orphan keys that shadow it.
+
+**Fix:** delete both keys from `PoolSettings.defaults.access`, or wire them through
+`applyToConfig` + a restart note. Deleting is cleaner — the nginx `admin_allowlist` in
+`pool.json` and the runtime list already cover both durability modes. Handoff to **J9** if it
+prefers to take the whole `applyToConfig` coverage question at once.
+
+---
+
+### J1-6 — [Low] `:section` resolves through `Object.prototype`, so `POST /api/admin/settings/constructor` is accepted — **OPEN**
+
+**Threat actor:** logged-in admin (so: robustness, not privilege).
+
+Both `updateSection` and `getSection` gate on `if (!PoolSettings.defaults[section]) throw`,
+and the per-key gate is `if (!(key in PoolSettings.defaults[section]))`
+([pool-settings.js](../../web/07_mining_pool_public/back-end-pool/lib/pool-settings.js)).
+`PoolSettings.defaults` is a plain object literal, so both lookups walk the prototype chain.
+Demonstrated locally with `node -e`:
+
+```
+constructor    section-check passes: true  | typeof function
+    key in section: name true · length true · call true
+toString       section-check passes: true  | typeof function
+__proto__      section-check passes: true  | typeof object
+valueOf        section-check passes: true  | typeof function
+```
+
+So `POST /api/admin/settings/constructor {"name":"x"}` passes both gates and INSERTs a
+`pool_config` row with `section='constructor'`. Impact is confined to junk rows — real
+sections `SELECT … WHERE section = ?` on their own name, so nothing is shadowed, and
+`criticalSettingChanged` still demands step-up for any `STEP_UP_SETTINGS_KEYS` key because the
+bogus section reads back empty. Low.
+
+This is the exact shape memory `project_config_loader_type_traps` records as fixed in Script
+052 and **"same shape unaudited in 059"** — it is present here too. **Fix:**
+`Object.prototype.hasOwnProperty.call(PoolSettings.defaults, section)` in both functions, and
+the same for the key check. Handoff to **J9**, which owns `pool-settings.js`.
+
+---
+
+### J1-7 — [Low] The §I self-review's HSTS fix landed in the nginx snippet only; Express still emits `includeSubDomains` — **RE-OPENED with demonstration**
+
+**Threat actor:** none active; this is a self-inflicted availability risk on the operator's
+sibling hosts.
+
+The §I self-review (2026-08-21, item 1) removed `includeSubDomains` from the generated nginx
+snippet, reasoning that `subdomain` in `pool.json` is routinely the operator's **apex** domain
+and the directive would pin `api.`, `testapi.` and every other sibling to HTTPS for a year,
+uncacheable-away. That fix is present and correct:
+
+```
+scripts/07_grin_mining_public_pool.sh:1257
+    add_header Strict-Transport-Security "max-age=31536000" always;
+```
+
+But the Express middleware was not changed:
+
+```
+web/07_mining_pool_public/back-end-pool/index.js:253
+    res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+```
+
+nginx does not strip upstream headers, so every proxied `/api/…` and `/blog/<slug>` response
+carries **both** — the upstream one first. RFC 6797 §8.1 says a UA that receives more than one
+`Strict-Transport-Security` header field MUST process only the first, which is Express's. The
+directive the self-review deliberately removed is therefore still what a browser applies, on
+every API response, with the identical consequence the self-review wrote up. Re-opened under
+plan rule 2 (concrete demonstration that the fix is incomplete), not re-litigated.
+
+**Fix:** drop `; includeSubDomains` at [index.js:253](../../web/07_mining_pool_public/back-end-pool/index.js#L253),
+and carry the snippet's "do not helpfully re-add this" comment across so the two sites stay
+agreed. Cross-ref **J16** for the vhost half.
+
+---
+
+### J1-8 — [Info] 401 vs 404 enumerates the admin route table
+
+**Threat actor:** anonymous internet, only while `admin_allowlist` is empty (the shipped
+default — [07_grin_mining_public_pool.sh:1108-1111](../../scripts/07_grin_mining_public_pool.sh#L1108-L1111)
+warns about this at install time).
+
+An unauthenticated `GET /api/admin/dashboard` runs the `secureAdmin` chain and stops at
+`requireAdmin` with **401**; `GET /api/admin/nosuchthing` falls through to the catch-all with
+**404** ([index.js:6237](../../web/07_mining_pool_public/back-end-pool/index.js#L6237)). The
+difference is a clean existence oracle for all 102 admin paths. `GET /api/public/endpoints`
+correctly filters to `PUBLIC_API_PREFIXES` and does not publish them
+([index.js:1123](../../web/07_mining_pool_public/back-end-pool/index.js#L1123)), so the oracle
+is the only in-band source.
+
+Info, not Low: the toolkit is open source, so the admin route table is already public
+knowledge to anyone who reads this repository. Recording it so a later session does not spend
+time "discovering" it. If the operator sets `admin_allowlist` — which the install warning
+tells them to — the oracle closes at nginx.
+
+---
+
+### J1-9 — [Medium] Every operator-authored URL reaches an `href` unchecked, and announcement banners carry one onto `login.html` — FIXED 2026-08-26
+
+**Threat actor:** an attacker holding a live admin access token (§C3), or a logged-in admin —
+the same actor as J1-1, at the same `secureAdmin` tier. One victim click required.
+
+Found while fixing J1-1b, by reading the whole of `branding.js` rather than only the sinks the
+finding named. J1-1b removed the *zero-click* sinks from the credential page; this is the
+one it would have left behind.
+
+Announcement banners come from the `notices.banners` settings key
+([pool-settings.js:1215](../../web/07_mining_pool_public/back-end-pool/lib/pool-settings.js#L1215)),
+written by `POST /api/admin/settings/notices` at plain `secureAdmin`. `renderBanners()`
+appends straight to `<body>` and needs no page hook, so a banner renders on **every** page —
+`login.html` included, and correctly so: a maintenance notice is exactly the thing an operator
+wants on the login page. That page cannot be exempted the way J1-1b exempted the HTML sinks.
+
+The link was built by string concatenation into an `href`, guarded by `encodeURI(b.link)`.
+That is the wrong guard, and the reason is worth stating because it looks right: `encodeURI`
+escapes the quote (so the attribute cannot be broken out of) but it **does not touch the
+scheme**. Verified: `encodeURI('javascript:fetch(1)//"x')` → `javascript:fetch(1)//%22x`. A
+`javascript:` banner link therefore survives verbatim and executes on the pool's own origin
+when the admin clicks it — on the page carrying `#password` and `#totp-code`.
+
+Four more instances of the same shape, on other pages: `brand.cta_link`
+([:446](../../web/07_mining_pool_public/public_html/js/branding.js#L446)), the social links
+([:456](../../web/07_mining_pool_public/public_html/js/branding.js#L456)),
+`pool.support_forum_url` ([:551](../../web/07_mining_pool_public/public_html/js/branding.js#L551))
+and `pool.pgp_key_url` ([:565](../../web/07_mining_pool_public/public_html/js/branding.js#L565)).
+`cta_link` was already gated by J1-1a, which is why the write-up named it — but a step-up gate
+is not a scheme check, and the other three were gated by nothing at all.
+
+**Fix (all five, one helper).** `safeHref()`
+([branding.js:97](../../web/07_mining_pool_public/public_html/js/branding.js#L97)) parses the
+value with the WHATWG `URL` parser and returns it only if `.protocol` is `http:` or `https:`;
+everything else becomes `''`. Relative links keep working — they resolve against the document
+and come back `https:`.
+
+**What an operator would notice:** nothing, unless they had put a non-`http(s)` URL in one of
+these fields. Then the CTA and the PGP/forum links keep their static `href` instead of being
+repointed, and a social link *hides* rather than rendering — that branch already hid the link
+when the field was empty, and a rejected URL now takes the same path. All five degrade to the
+page's own default rather than to a broken link.
+
+Parsed, not pattern-matched, deliberately. A blacklist regex has to anticipate `JaVaScRiPt:`,
+a tab-split `java\tscript:` and the entity-encoded spellings a browser still honours; the URL
+parser has already normalised all of them before we look. The banner link is additionally now
+built as a **DOM node** rather than concatenated HTML, which removes the attribute-quoting
+question entirely and lets `link_text` land as `textContent` — note that `escapeText()`
+([:998](../../web/07_mining_pool_public/public_html/js/branding.js#L998)) handles `< > &` but
+**not** the quote, so it was never sufficient for an attribute context.
+
+**Not fixed here:** a banner can still display misleading *text* on the login page. That is
+content integrity, not script execution, and it is the same question as the deferred
+`ads`/`pages`/`posts` tier decision below — not a bug to patch in isolation.
+
+---
+
+### J1-10 — [Info] A NUL byte in `pool-settings.js` made the file invisible to `grep`
+
+**Threat actor:** none — this is a review-tooling hazard, recorded because it defeats the
+method this entire audit runs on.
+
+Self-inflicted, in this session's own J1-2 fix: the "key absent" sentinel was written as a
+raw `\x00` byte in the source rather than an escape. Node parsed the file fine and `git diff`
+rendered it as text, so nothing failed. But `grep` applies a binary heuristic, and a single
+NUL is enough — it stops printing matches and says `Binary file ... matches` instead.
+
+That silently removes a 1,500-line file from every `grep -rn` over the backend. It very nearly
+cost a real check in this pass: a `grep` for caching in `PoolSettings` returned nothing, which
+read as "no cache" when in fact the file was never searched. Had `getSection()` been cached,
+`afterState` would always have equalled `beforeState` and the J1-2 audit row would **never**
+have been written — a fix that passes review and does nothing.
+
+**Fix:** sentinel replaced with the bare word `'<undef>'`, which `JSON.stringify` can never
+emit (its string output is always quoted), so it needs no unprintable character at all
+([pool-settings.js:1393](../../web/07_mining_pool_public/back-end-pool/lib/pool-settings.js#L1393)).
+All eight files touched in this session were then scanned for NUL bytes; this was the only one.
+
+**Worth a standing check — and the obvious command is a trap.** Grepping for a NUL *pattern*
+looks like the test and is useless: bash cannot put a NUL in an argument, so the pattern
+arrives empty, matches every line, and reports a large number for a perfectly clean file. It
+did exactly that here before a byte count settled it — and the same escape, typed into this
+very paragraph, put two fresh NULs into this document before the check caught them. What
+works is a byte scan: read the file in Python `'rb'` mode and `bytes.count` the NUL — or
+simply noticing that a source-tree `grep` said `Binary file … matches` for a `.js` file.
+The second is free, and it is the one to build the habit around: in a review that runs on
+`grep`, that line means *a file just dropped out of your search*, not *this file is odd*.
+
+---
+
+### Handoffs
+
+- **J2** — `/api/auth/refresh` re-mints on the `auth` bucket; confirm it cannot reset `pwa`.
+  `/api/auth/register`'s `SELECT COUNT(*)` TOCTOU is unchanged and still held by launch
+  procedure, per §I's re-test sequencing note. ~~`requireAuth` in `auth-middleware.js` is
+  exported with zero callers — dead code, worth deleting.~~ **Wrong, and §J2 caught it: it has
+  exactly one caller** — [index.js:1940](../../web/07_mining_pool_public/back-end-pool/index.js#L1940),
+  where it is the *only* authentication on `POST /api/auth/change-password`. Acting on the
+  handoff as written would have deleted the guard off a credential-mutating route. §J2's
+  reading is the correct one: promote that route to `secureAdmin`/`freshAdmin` first, after
+  which `requireAuth` genuinely does become dead. Re-verified here independently —
+  `grep -rn requireAuth` over the backend returns the import, the definition, the export and
+  that single call site.
+
+  **Why the miss, since it bears on the matrix below.** The guard-chain column is machine-read,
+  and it recognised the *named* chains (`secureAdmin`, `freshAdmin`, …) but not a guard applied
+  as an inline factory call — `requireAuth(authManager)`. Two routes in the file are written
+  that way; the other, `/api/admin/_authcheck`
+  ([index.js:4944](../../web/07_mining_pool_public/back-end-pool/index.js#L4944)), was caught
+  because it was read by hand. So the blind spot cost exactly one row, and it is now enumerated
+  rather than assumed — grepping the route registrations for an inline `require*(` guard returns
+  those two and nothing else. A later session extending the matrix must re-run that grep rather
+  than trust the extractor.
+- **J3** — the route-level ownership gate is present on all four money POSTs and
+  `nostr-destination` register demands both proofs; the canonicalisation of `:addr` across the
+  gate / balance read / withdrawal write / audit row is J3's, not verified here.
+- **J9** — `applyToConfig` covers only `pool_info` + `payout`; J1-5 is one symptom and the
+  full coverage question belongs there. Also J1-6, and: `rate_limits` is merged from config
+  and `middleware()` treats a falsy limit as *no limit*, so an operator writing
+  `"rate_limits": {"public": 0}` silently disables that bucket.
+- **J12** — the `admin` bucket is 2400/min per IP (40 req/s) and it is the first middleware on
+  99 routes, so it is the only thing in front of every admin handler for an unauthenticated
+  caller while `admin_allowlist` is empty.
+- **J13** — `POST /api/admin/poolstats/test` and `POST /api/admin/alerts/test` trigger outbound
+  requests on demand at `secureAdmin`; the destinations are operator-set
+  (`discord_webhook_url`, `slack_webhook_url`, poolstats endpoint).
+- **J15** — ~~`login.html` loading `branding.js` (J1-1)~~ **closed in this session’s
+  resolution pass**, not deferred: `branding.js` now skips the operator HTML/CSS/analytics
+  sinks on a credential page. J15 should still review the *other* twelve pages that load
+  `branding.js` — `account-settings.html` in particular, where the sinks still apply by
+  design (§B accepted risk) on the page that renders the withdrawal form.
+- **J16** — J1-7's nginx half; and the two-allowlist split (nginx `$admin_rules` from
+  `pool.json:admin_allowlist` vs the app's runtime `IpFilter`) is a deployment-shaped question.
+
+### Verification
+
+Findings above were written **before** any code was touched. Three were then fixed in the same
+session under plan rule 3 — see the resolution pass below for what was applied, what was
+deliberately left, and why. The matrix at the end was generated mechanically from `index.js`
+and hand-annotated: the guard column is machine-read, the `$`/Destr/Verdict columns are the
+judgement of this pass. Its Verdict column reflects the state **as found**, so a row still
+naming J1-1/J1-2/J1-3 is the finding, not the post-fix state.
+
+---
+
+---
+
+### §J1 — resolution pass, 2026-08-25 (same day, add-ons, NOT VPS-TESTED)
+
+Four of the ten findings fixed — J1-1, J1-3, J1-9 and J1-10 fully, J1-2 at its highest-value call
+site. The rest are written up and left for a decision (see *Deliberately not fixed* below).
+Unit-verified by two new harnesses wired into `npm test` — `scripts/test-admin-guards.js`
+(26 assertions, the backend gate) and `scripts/test-branding-sinks.js` (18, the front-end
+sink). The full suite is 104 assertions across five harnesses, all passing.
+
+Reading `branding.js` in full to write the J1-1b fix — rather than only the sinks J1-1 had
+named — turned up **J1-9**: five more operator-URL sinks of the same class, one of which
+(the announcement banner) J1-1b alone would have left standing on the credential page. Fixed
+here too. **J1-10** is a defect in this
+session's own J1-2 fix, caught on self-review, recorded because of what it does to `grep`.
+
+| # | Fix | Where |
+|---|---|---|
+| J1-1a | Nine analytics/branding script + CSS sinks added to `STEP_UP_SETTINGS_KEYS`, so changing one demands the password step-up + mandatory-2FA gate | [index.js:5950](../../web/07_mining_pool_public/back-end-pool/index.js#L5950) |
+| J1-1b | `branding.js` no longer applies the operator HTML/CSS/analytics sinks on a credential page, so the escalation route is removed rather than only gated | [branding.js:32](../../web/07_mining_pool_public/public_html/js/branding.js#L32), [login.html:2](../../web/07_mining_pool_public/public_html/login.html#L2) |
+| J1-2 | `updateSection` writes an `update_settings` audit row naming the changed keys, inside the transaction | [lib/pool-settings.js:1313-1404](../../web/07_mining_pool_public/back-end-pool/lib/pool-settings.js#L1313) |
+| J1-3 | `POST /api/admin/locations` gates the endpoint branch with `stepUpRefused()` when `stratum_url`/`api_url` actually changes | [index.js:5509](../../web/07_mining_pool_public/back-end-pool/index.js#L5509) |
+| J1-9 | One `safeHref()` scheme check in front of all five operator-URL → `href` sinks; the banner link is built as a DOM node instead of concatenated HTML | [branding.js:97](../../web/07_mining_pool_public/public_html/js/branding.js#L97) |
+| J1-10 | The J1-2 sentinel's raw NUL byte replaced with `'<undef>'`, so `grep` reads the file as text again | [lib/pool-settings.js:1393](../../web/07_mining_pool_public/back-end-pool/lib/pool-settings.js#L1393) |
+
+**Two things the fixes themselves turned up:**
+
+- **J1-1 was under-counted in the finding: there are nine sinks, not seven.** Reading the
+  render side before editing the gate list added two the write-up missed.
+  [branding.js:378](../../web/07_mining_pool_public/public_html/js/branding.js#L378) builds a
+  CSS rule by **string concatenation** — `'body{font-family:' + brand.font_family + ',…}'` —
+  so `font_family` breaks out of the declaration and is a `<style>` injection, not a font
+  name. And [branding.js:447](../../web/07_mining_pool_public/public_html/js/branding.js#L447)
+  did `el.setAttribute('href', brand.cta_link)` on an `<a>`, so a `javascript:` URI executed
+  on click — the line now reads `safeHref(…)` because **J1-9** closed that half separately, so
+  follow the link expecting the fixed form. Both keys are now gated. This is why the finding says *read the sink, don't classify by
+  the field's name* — "font family" and "call-to-action link" both read as copy.
+- **J1-2's audit row must record key NAMES and never values**, which is not the obvious design.
+  The `alerts` section holds `telegram_bot_token`, `discord_webhook_url` and
+  `slack_webhook_url` ([pool-settings.js:269-271](../../web/07_mining_pool_public/back-end-pool/lib/pool-settings.js#L269-L271)),
+  and `admin_audit_log` is readable through `GET /api/admin/audit-log` **and its CSV export**.
+  A `before → after` row — the natural thing to write, and what §B's column shape hints at —
+  would have copied live credentials out of `pool_config` into a wider-read table and then out
+  of the box in a CSV. Two assertions in the new harness pin this: the token and webhook values
+  must not appear in any audit row.
+
+- **J1-1's second half was deferred on a mis-framing, and the deferral was wrong.** The
+  write-up said the fix was "remove `branding.js` from `login.html`", called that structural
+  because the page would lose its theming, and handed it to J15. Reading `branding.js` before
+  editing it shows that is not the shape of the fix at all: `apply()`
+  ([branding.js:869](../../web/07_mining_pool_public/public_html/js/branding.js#L869)) is a flat
+  orchestrator, and the theme, logo, accent colour and pool name come from `applyTheme()` /
+  `applyContent()` — entirely separate calls from the three sink sites. The page keeps all of
+  its branding. What is withheld is only the raw escape hatch.
+  The codebase also already had the idiom: `data-maintenance="exempt"`, commented *"Pages that
+  must stay reachable (login, admin, account) opt out"*, and `login.html` already declared
+  `data-page="login"`. So the fix is two guards using machinery that was already there. It is
+  now `isCredentialPage()`, checked in `applyTheme()` (the CSS sinks) and around the
+  `applyAnalytics()` call (the script sinks).
+  Keeping the escalation alive behind a lock, when removing it cost two `if`s, was the wrong
+  call — a step-up gate is a lock on the door, not a reason to keep the explosives in the hall.
+- **Analytics on the admin login page had negative value anyway.** Miners never authenticate
+  (address-as-identity), so the only visitor whose page-view was being shipped to
+  Google/Plausible/Matomo from `login.html` was the operator themselves.
+
+**Behaviour changes an operator will notice:**
+
+1. **Editing Analytics or the branding CSS/font fields now prompts for the password once.**
+   `stepUpRefused` emits the same `403 {challenge_required:true}` contract as
+   `requireFreshAuth`, and `adminFetch` ([stepup.js:29-42](../../web/07_mining_pool_public/public_html/js/stepup.js#L29-L42))
+   already handles it transparently — prompt → `POST /api/admin/reauth` → retry once. No
+   front-end change was needed. Verified the gate is *change*-triggered, not presence-triggered:
+   the settings harvester re-posts every field in the section on every save, so a tagline or
+   hero-heading edit still saves with no prompt. The GA-mirror write at
+   [settings-common.js:217](../../web/07_mining_pool_public/back-end-pool/admin-panel/settings-common.js#L217)
+   re-posts the section's *current* values with only `ga_tracking_id` changed, so it does not
+   trip the gate either — which matters, because it is wrapped in a silent `catch`.
+2. **Changing a region's stratum/API URL now prompts; renaming or re-flagging a region does
+   not.** A brand-new region that carries a URL is treated as a change (there is no stored row
+   to compare against), so adding an attacker-controlled "region" is gated too.
+3. **The settings audit row is skipped when nothing moved.** Because the harvester posts the
+   whole section every time, logging presence rather than change would have written a row every
+   time an operator opened a settings page and pressed Save — and that noise would age real
+   events out under `audit_log_keep_days`.
+
+4. **The admin login page no longer runs operator HTML, custom CSS or analytics.** It keeps
+   its theme, accent colour, logo and pool name — those come from `applyTheme()`/
+   `applyContent()`, which are untouched. An operator who had put a chat widget or a
+   verification pixel in `custom_head_html` will no longer see it on `/login.html`; that is
+   the point. `account-settings.html` and the other eleven public pages are unchanged.
+
+**One deliberate property, stated so it is not "fixed" later:** the J1-2 INSERT sits *inside*
+the transaction, so a failed audit write rolls the settings write back. That is fail-closed,
+and it is what §B asks for ("no admin mutation succeeds without an audit row"). The only way
+the INSERT can fail is the `admin_id` → `users(id)` foreign key, and nothing in the backend
+deletes a user row (accounts deactivate via `is_active`), so a live admin cannot reach it.
+`userId = null` — `dormancy.js`'s policy-anchor re-arm — is fine because NULL never violates a
+FK, and it produces an honestly unattributed row rather than none. `resetSection` has carried
+the identical INSERT and the same FK all along, so this is not a new failure mode.
+
+**Verification (unit-level; NOT VPS-tested).** `scripts/test-admin-guards.js` covers: an
+audit row is written with the right admin/section/changed-key list; a no-op save writes none;
+a whole-section save names only the edited key; credential values never appear in any row; a
+rejected cross-field update rolls the audit row back with it; a `userId=null` system write is
+recorded; all nine sinks plus the four original keys are in `STEP_UP_SETTINGS_KEYS`; every
+gated key exists in a real section (a typo’d key makes the gate decorative); and ordinary
+cosmetic keys stay ungated.
+
+`scripts/test-branding-sinks.js` covers J1-1b by running `branding.js` itself — driven through
+its real `load()` → fetch → `apply()` path, not a hook added for the test — against a minimal
+DOM shim, asserting that a hostile `custom_head_html` / `custom_body_html` / `custom_css` /
+`font_url` / `font_family` reaches the page on `home` and reaches **none** of head or body on
+`login`. There is no jsdom in this project and adding one was not worth it, so **every
+negative assertion is paired with a positive control on a non-credential page**: if the shim
+were too thin the sinks would fail to inject there too, and the negatives would pass for the
+wrong reason — so a failing control is a test FAILURE, not a skip. That control earned its
+keep immediately: it caught the harness reading `href` only from `setAttribute` while the
+font `<link>` assigns the `.href` property, which had made the `font_url` case a false pass.
+
+The same harness covers J1-9 on **both** `home` and `login` — banners are deliberately not
+exempted on the credential page, so the scheme check is the only guard and has to hold
+everywhere. Hostile spellings asserted: plain `javascript:`, mixed-case `JaVaScRiPt:`, and a
+tab-split `java<TAB>script:`. Each is paired with a legitimate `https:` banner on the same
+page that MUST still render as an anchor — without that control a `safeHref()` that rejected
+*everything* would score a clean pass, and one very nearly did: `URL` is a Node global, not an
+ECMAScript intrinsic, so in a bare `vm` context every link was rejected by the catch until the
+sandbox was given the constructor explicitly. The traversal is recursive, because the banner
+anchor sits at `body > stack > bar > a` and a top-level scan would have made every J1-9
+assertion vacuous.
+
+J1-3’s comparison logic was verified the same way in a one-shot harness (label-only and
+whitespace-only edits pass; either URL changing, or a new region carrying a URL, gates) —
+**but that harness re-implements the comparison rather than driving the route, so what is
+proven is the logic, not the wiring.** The route-level assertion needs J17’s live run.
+
+**Deliberately not fixed — left for a decision:**
+
+- **The other 24 unaudited mutating routes (J1-2).** The `updateSection` row closes the
+  highest-value gap; ads/pages/posts/assets/alerts/`rate-limit-reset`/`database-cleanup` and the
+  four IP-filter routes still write nothing. Each is one line, but it is 24 call sites across
+  eight libs and belongs in one deliberate sweep, not tacked onto this pass.
+- **Promoting `ads`/`pages`/`posts` writes to `freshAdmin` (J1-1).** A real change to the
+  operator's content workflow — every CMS save would demand a password — not a bug fix.
+- **J1-4 through J1-8.** J1-4 folds naturally into the audit sweep above; J1-5 and J1-6 are
+  handed to **J9**; J1-7's Express half is a one-token edit but pairs with the vhost review in
+  **J16**; J1-8 is Info.
+
+**Status after this pass:** J1-1 **FIXED 2026-08-25** (gated *and* the sink removed from
+the credential page) · J1-2 **partially fixed** (the settings write is audited; 24 routes
+remain) · J1-3 **FIXED 2026-08-25** · J1-4 – J1-8 **OPEN** · J1-9 **FIXED 2026-08-26**
+· J1-10 **FIXED 2026-08-26**.
+
+Four of the ten closed; J1-2 partial; five open and assigned. Every fix is unit-verified and
+**none of it has run on a VPS** — J17 remains the gate.
+
+### The matrix
+
+Guard chain column is machine-read from the route registration. `$` = moves GRIN, changes a payout destination, or sets an amount that will be credited. Destr = irreversible without a backup.
+
+**Admin — mutating** — 55 routes
+
+| Method | Path | Line | Guard chain | $ | Destr | Verdict |
+|---|---|---|---|---|---|---|
+| POST | `/api/admin/reauth` | [1839](../../web/07_mining_pool_public/back-end-pool/index.js#L1839) | secureAdmin | — | — | OK — it *is* the step-up |
+| POST | `/api/admin/2fa/enroll/begin` | [1880](../../web/07_mining_pool_public/back-end-pool/index.js#L1880) | freshAdminEnroll | — | — | OK — deliberate `requireTotpEnrolled` bypass |
+| POST | `/api/admin/2fa/enroll/confirm` | [1893](../../web/07_mining_pool_public/back-end-pool/index.js#L1893) | freshAdminEnroll | — | — | OK — same |
+| POST | `/api/admin/2fa/disable` | [1903](../../web/07_mining_pool_public/back-end-pool/index.js#L1903) | freshAdmin | — | Y | OK |
+| POST | `/api/admin/2fa/recovery/regenerate` | [1913](../../web/07_mining_pool_public/back-end-pool/index.js#L1913) | freshAdmin | — | Y | OK |
+| POST | `/api/admin/withdrawals/:id/retry` | [2170](../../web/07_mining_pool_public/back-end-pool/index.js#L2170) | freshAdmin | Y | Y | OK |
+| POST | `/api/admin/withdrawals/:id/cancel` | [2219](../../web/07_mining_pool_public/back-end-pool/index.js#L2219) | freshAdmin | Y | Y | OK |
+| POST | `/api/admin/payouts/freeze` | [2297](../../web/07_mining_pool_public/back-end-pool/index.js#L2297) | freshAdmin | Y | — | OK |
+| POST | `/api/admin/payouts/resume` | [2308](../../web/07_mining_pool_public/back-end-pool/index.js#L2308) | freshAdmin | Y | — | OK |
+| POST | `/api/admin/dormancy/run` | [2335](../../web/07_mining_pool_public/back-end-pool/index.js#L2335) | freshAdmin | Y | Y | OK |
+| POST | `/api/admin/dormancy/verify-owner` | [2366](../../web/07_mining_pool_public/back-end-pool/index.js#L2366) | secureAdmin | — | — | OK — read-only match/no-match; the money action it unlocks is freshAdmin |
+| POST | `/api/admin/dormancy/manual-payout` | [2380](../../web/07_mining_pool_public/back-end-pool/index.js#L2380) | freshAdmin | Y | Y | OK |
+| POST | `/api/admin/dormancy/send-payout` | [2415](../../web/07_mining_pool_public/back-end-pool/index.js#L2415) | freshAdmin | Y | Y | OK |
+| POST | `/api/admin/wallet/adopt-identity` | [2468](../../web/07_mining_pool_public/back-end-pool/index.js#L2468) | freshAdmin | Y | Y | OK |
+| POST | `/api/admin/ads` | [2497](../../web/07_mining_pool_public/back-end-pool/index.js#L2497) | secureAdmin | — | Y | **J1-1** `html_code` executable sink |
+| POST | `/api/admin/ads/:id` | [2503](../../web/07_mining_pool_public/back-end-pool/index.js#L2503) | secureAdmin | — | Y | **J1-1** |
+| DELETE | `/api/admin/ads/:id` | [2511](../../web/07_mining_pool_public/back-end-pool/index.js#L2511) | secureAdmin | — | Y | **J1-1** |
+| POST | `/api/admin/ads-config` | [2521](../../web/07_mining_pool_public/back-end-pool/index.js#L2521) | secureAdmin | — | — | OK |
+| POST | `/api/admin/media` | [2554](../../web/07_mining_pool_public/back-end-pool/index.js#L2554) | secureAdmin | — | — | OK |
+| POST | `/api/admin/pages` | [2570](../../web/07_mining_pool_public/back-end-pool/index.js#L2570) | secureAdmin | — | Y | **J1-1** CMS body HTML |
+| POST | `/api/admin/pages/:id` | [2576](../../web/07_mining_pool_public/back-end-pool/index.js#L2576) | secureAdmin | — | Y | **J1-1** |
+| DELETE | `/api/admin/pages/:id` | [2584](../../web/07_mining_pool_public/back-end-pool/index.js#L2584) | secureAdmin | — | Y | **J1-1** |
+| POST | `/api/admin/posts` | [2600](../../web/07_mining_pool_public/back-end-pool/index.js#L2600) | secureAdmin | — | Y | **J1-1** |
+| POST | `/api/admin/posts/:id` | [2606](../../web/07_mining_pool_public/back-end-pool/index.js#L2606) | secureAdmin | — | Y | **J1-1** |
+| DELETE | `/api/admin/posts/:id` | [2614](../../web/07_mining_pool_public/back-end-pool/index.js#L2614) | secureAdmin | — | Y | **J1-1** |
+| POST | `/api/admin/poolstats/update-key` | [4473](../../web/07_mining_pool_public/back-end-pool/index.js#L4473) | freshAdmin | — | — | OK |
+| POST | `/api/admin/poolstats/test` | [4490](../../web/07_mining_pool_public/back-end-pool/index.js#L4490) | secureAdmin | — | — | Outbound push on demand → J13 |
+| POST | `/api/admin/security/rate-limit-reset` | [4516](../../web/07_mining_pool_public/back-end-pool/index.js#L4516) | secureAdmin | — | Y | **J1-4** lower tier than its two siblings; unaudited |
+| POST | `/api/admin/security/ip-allowlist/add` | [4540](../../web/07_mining_pool_public/back-end-pool/index.js#L4540) | freshAdmin | — | Y | **J1-2** unaudited |
+| POST | `/api/admin/security/ip-allowlist/remove` | [4557](../../web/07_mining_pool_public/back-end-pool/index.js#L4557) | freshAdmin | — | Y | **J1-2** unaudited |
+| POST | `/api/admin/security/ip-blacklist/add` | [4570](../../web/07_mining_pool_public/back-end-pool/index.js#L4570) | freshAdmin | — | — | **J1-2** unaudited |
+| POST | `/api/admin/security/ip-blacklist/remove` | [4587](../../web/07_mining_pool_public/back-end-pool/index.js#L4587) | freshAdmin | — | Y | **J1-2** unaudited |
+| POST | `/api/admin/security/temp-ban/clear` | [4763](../../web/07_mining_pool_public/back-end-pool/index.js#L4763) | freshAdmin | — | Y | OK |
+| POST | `/api/admin/security/revoke-sessions` | [4777](../../web/07_mining_pool_public/back-end-pool/index.js#L4777) | freshAdmin | — | Y | OK |
+| POST | `/api/admin/alerts/test` | [4797](../../web/07_mining_pool_public/back-end-pool/index.js#L4797) | secureAdmin | — | — | Outbound send on demand → J13 |
+| POST | `/api/admin/alerts/:alertId/acknowledge` | [4844](../../web/07_mining_pool_public/back-end-pool/index.js#L4844) | secureAdmin | — | — | OK |
+| POST | `/api/admin/alerts/:alertId/snooze` | [4858](../../web/07_mining_pool_public/back-end-pool/index.js#L4858) | secureAdmin | — | — | OK |
+| POST | `/api/admin/locations` | [5487](../../web/07_mining_pool_public/back-end-pool/index.js#L5487) | secureAdmin | — | — | **J1-3** `stratum_url` retargets miners at secureAdmin; wg branch correctly `stepUpRefused()` |
+| POST | `/api/admin/gateways/server` | [5633](../../web/07_mining_pool_public/back-end-pool/index.js#L5633) | freshAdmin | — | Y | OK |
+| DELETE | `/api/admin/locations/:id` | [5695](../../web/07_mining_pool_public/back-end-pool/index.js#L5695) | freshAdmin | — | Y | OK |
+| POST | `/api/admin/miners/:addr/inject` | [5801](../../web/07_mining_pool_public/back-end-pool/index.js#L5801) | freshAdmin | Y | — | OK — §C4 promotion done |
+| POST | `/api/admin/miners/:addr/ban` | [5839](../../web/07_mining_pool_public/back-end-pool/index.js#L5839) | freshAdmin | Y | Y | OK |
+| POST | `/api/admin/miners/:addr/unban` | [5855](../../web/07_mining_pool_public/back-end-pool/index.js#L5855) | freshAdmin | — | — | OK |
+| POST | `/api/admin/incentives/award` | [5874](../../web/07_mining_pool_public/back-end-pool/index.js#L5874) | freshAdmin | Y | — | OK |
+| POST | `/api/admin/settings/:section` | [5989](../../web/07_mining_pool_public/back-end-pool/index.js#L5989) | secureAdmin | Y | Y | **J1-1 / J1-2** — `analytics`+`branding` ungated; write unaudited |
+| POST | `/api/admin/settings/:section/restore` | [6027](../../web/07_mining_pool_public/back-end-pool/index.js#L6027) | freshAdmin | Y | Y | OK |
+| POST | `/api/admin/database/cleanup` | [6047](../../web/07_mining_pool_public/back-end-pool/index.js#L6047) | freshAdmin | — | Y | OK |
+| POST | `/api/admin/incentives/prize-pool/topup` | [6079](../../web/07_mining_pool_public/back-end-pool/index.js#L6079) | freshAdmin | Y | — | OK |
+| POST | `/api/admin/incentives/lottery/draw-now` | [6105](../../web/07_mining_pool_public/back-end-pool/index.js#L6105) | freshAdmin | Y | — | OK |
+| POST | `/api/admin/incentives/campaigns` | [6134](../../web/07_mining_pool_public/back-end-pool/index.js#L6134) | freshAdmin | Y | — | OK |
+| PUT | `/api/admin/incentives/campaigns/:id` | [6147](../../web/07_mining_pool_public/back-end-pool/index.js#L6147) | freshAdmin | Y | — | OK |
+| POST | `/api/admin/incentives/campaigns/:id/cancel` | [6160](../../web/07_mining_pool_public/back-end-pool/index.js#L6160) | freshAdmin | Y | Y | OK |
+| POST | `/api/admin/incentives/campaigns/:id/run` | [6174](../../web/07_mining_pool_public/back-end-pool/index.js#L6174) | freshAdmin | Y | — | OK |
+| POST | `/api/admin/assets/upload` | [6193](../../web/07_mining_pool_public/back-end-pool/index.js#L6193) | secureAdmin | — | — | OK — §A hardening holds |
+| DELETE | `/api/admin/assets/:filename` | [6228](../../web/07_mining_pool_public/back-end-pool/index.js#L6228) | secureAdmin | — | Y | Destructive at lower tier; DB-row-then-basename unlink (§A). Low |
+
+**Miner money actions (ownership-gated, no admin session)** — 4 routes
+
+| Method | Path | Line | Guard chain | $ | Destr | Verdict |
+|---|---|---|---|---|---|---|
+| POST | `/api/account/:addr/withdraw` | [3520](../../web/07_mining_pool_public/back-end-pool/index.js#L3520) | rateLimiter:withdraw | Y | — | OK — `verifyOwnerProof` + `withdraw` bucket |
+| POST | `/api/account/:addr/withdraw/:id/finalize` | [3605](../../web/07_mining_pool_public/back-end-pool/index.js#L3605) | rateLimiter:withdraw | Y | — | OK |
+| POST | `/api/account/:addr/nostr-destination` | [3683](../../web/07_mining_pool_public/back-end-pool/index.js#L3683) | rateLimiter:withdraw | Y | Y | OK — `requireBothProofs`, stricter than withdraw |
+| DELETE | `/api/account/:addr/nostr-destination` | [3763](../../web/07_mining_pool_public/back-end-pool/index.js#L3763) | rateLimiter:withdraw | Y | Y | OK — `requireBothProofs`, stricter than withdraw |
+
+**Auth** — 7 routes
+
+| Method | Path | Line | Guard chain | $ | Destr | Verdict |
+|---|---|---|---|---|---|---|
+| GET | `/api/auth/captcha` | [1616](../../web/07_mining_pool_public/back-end-pool/index.js#L1616) | rateLimiter:public | — | — | OK |
+| POST | `/api/auth/register` | [1621](../../web/07_mining_pool_public/back-end-pool/index.js#L1621) | PUBLIC/none | — | — | First-admin-only; TOCTOU held by launch procedure (§I) → J2 |
+| POST | `/api/auth/login` | [1680](../../web/07_mining_pool_public/back-end-pool/index.js#L1680) | PUBLIC/none | — | — | OK — captcha before credential work, peek-then-consume |
+| POST | `/api/auth/login/totp` | [1760](../../web/07_mining_pool_public/back-end-pool/index.js#L1760) | rateLimiter:auth | — | — | OK |
+| POST | `/api/auth/refresh` | [1798](../../web/07_mining_pool_public/back-end-pool/index.js#L1798) | rateLimiter:auth | — | — | `pwa` re-mint → J2 |
+| POST | `/api/auth/logout` | [1928](../../web/07_mining_pool_public/back-end-pool/index.js#L1928) | rateLimiter:auth | — | — | OK |
+| POST | `/api/auth/change-password` | [1940](../../web/07_mining_pool_public/back-end-pool/index.js#L1940) | rateLimiter:auth → `requireAuth` | — | — | **Corrected 2026-08-26** — the chain read `rateLimiter:auth` alone and was graded OK; the extractor missed the inline `requireAuth(authManager)`. Authenticated, but on the non-admin guard with no `ipFilter` and no step-up on a password-changing route — owned by **J2** |
+
+**Admin — read-only** — 47 routes
+
+| Method | Path | Line | Guard chain | $ | Destr | Verdict |
+|---|---|---|---|---|---|---|
+| GET | `/api/admin/2fa/status` | [1863](../../web/07_mining_pool_public/back-end-pool/index.js#L1863) | secureAdmin | — | — | OK |
+| GET | `/api/admin/node-status` | [2111](../../web/07_mining_pool_public/back-end-pool/index.js#L2111) | secureAdmin | — | — | OK |
+| GET | `/api/admin/block-monitor` | [2117](../../web/07_mining_pool_public/back-end-pool/index.js#L2117) | secureAdmin | — | — | OK |
+| GET | `/api/admin/reward-stats` | [2123](../../web/07_mining_pool_public/back-end-pool/index.js#L2123) | secureAdmin | — | — | OK |
+| GET | `/api/admin/withdrawals` | [2137](../../web/07_mining_pool_public/back-end-pool/index.js#L2137) | secureAdmin | — | — | OK |
+| GET | `/api/admin/withdrawal-scheduler` | [2156](../../web/07_mining_pool_public/back-end-pool/index.js#L2156) | secureAdmin | — | — | OK |
+| GET | `/api/admin/reconciliation` | [2279](../../web/07_mining_pool_public/back-end-pool/index.js#L2279) | secureAdmin | — | — | OK |
+| GET | `/api/admin/payouts/control` | [2292](../../web/07_mining_pool_public/back-end-pool/index.js#L2292) | secureAdmin | — | — | OK |
+| GET | `/api/admin/dormancy` | [2321](../../web/07_mining_pool_public/back-end-pool/index.js#L2321) | secureAdmin | — | — | OK |
+| GET | `/api/admin/payouts/wallet-audit` | [2442](../../web/07_mining_pool_public/back-end-pool/index.js#L2442) | secureAdmin | — | — | OK |
+| GET | `/api/admin/wallet/identity` | [2456](../../web/07_mining_pool_public/back-end-pool/index.js#L2456) | secureAdmin | — | — | OK |
+| GET | `/api/admin/ads` | [2487](../../web/07_mining_pool_public/back-end-pool/index.js#L2487) | secureAdmin | — | Y | **J1-1** `html_code` executable sink |
+| GET | `/api/admin/pages` | [2564](../../web/07_mining_pool_public/back-end-pool/index.js#L2564) | secureAdmin | — | Y | **J1-1** CMS body HTML |
+| GET | `/api/admin/posts` | [2594](../../web/07_mining_pool_public/back-end-pool/index.js#L2594) | secureAdmin | — | Y | **J1-1** |
+| GET | `/api/admin/blocks` | [2626](../../web/07_mining_pool_public/back-end-pool/index.js#L2626) | secureAdmin | — | — | OK |
+| GET | `/api/admin/export/payouts.csv` | [2700](../../web/07_mining_pool_public/back-end-pool/index.js#L2700) | secureAdmin | — | — | OK |
+| GET | `/api/admin/export/fee-revenue.csv` | [2717](../../web/07_mining_pool_public/back-end-pool/index.js#L2717) | secureAdmin | — | — | OK |
+| GET | `/api/admin/metrics` | [4324](../../web/07_mining_pool_public/back-end-pool/index.js#L4324) | secureAdmin | — | — | OK |
+| GET | `/api/admin/audit-log` | [4343](../../web/07_mining_pool_public/back-end-pool/index.js#L4343) | secureAdmin | — | — | OK |
+| GET | `/api/admin/payments/audit` | [4376](../../web/07_mining_pool_public/back-end-pool/index.js#L4376) | secureAdmin | — | — | OK |
+| GET | `/api/admin/poolstats` | [4464](../../web/07_mining_pool_public/back-end-pool/index.js#L4464) | secureAdmin | — | — | OK |
+| GET | `/api/admin/security/rate-limit-status` | [4505](../../web/07_mining_pool_public/back-end-pool/index.js#L4505) | secureAdmin | — | — | OK |
+| GET | `/api/admin/security/ip-filter-status` | [4529](../../web/07_mining_pool_public/back-end-pool/index.js#L4529) | secureAdmin | — | — | OK |
+| GET | `/api/admin/security/login-history` | [4613](../../web/07_mining_pool_public/back-end-pool/index.js#L4613) | secureAdmin | — | — | OK |
+| GET | `/api/admin/security/auth-activity` | [4658](../../web/07_mining_pool_public/back-end-pool/index.js#L4658) | secureAdmin | — | — | OK |
+| GET | `/api/admin/alerts` | [4823](../../web/07_mining_pool_public/back-end-pool/index.js#L4823) | secureAdmin | — | — | OK |
+| GET | `/api/admin/alerts/config` | [4878](../../web/07_mining_pool_public/back-end-pool/index.js#L4878) | secureAdmin | — | — | OK |
+| GET | `/api/admin/me` | [4901](../../web/07_mining_pool_public/back-end-pool/index.js#L4901) | secureAdmin | — | — | OK |
+| GET | `/api/admin/_authcheck` | [4932](../../web/07_mining_pool_public/back-end-pool/index.js#L4932) | requireAdmin(bare) | — | — | OK — verified side-effect-free (204, no DB, no audit write) |
+| GET | `/api/admin/dashboard` | [4937](../../web/07_mining_pool_public/back-end-pool/index.js#L4937) | secureAdmin | — | — | OK |
+| GET | `/api/admin/health` | [5048](../../web/07_mining_pool_public/back-end-pool/index.js#L5048) | secureAdmin | — | — | OK |
+| GET | `/api/admin/health/node` | [5167](../../web/07_mining_pool_public/back-end-pool/index.js#L5167) | secureAdmin | — | — | OK |
+| GET | `/api/admin/health/wallet` | [5239](../../web/07_mining_pool_public/back-end-pool/index.js#L5239) | secureAdmin | — | — | OK |
+| GET | `/api/admin/health/system` | [5307](../../web/07_mining_pool_public/back-end-pool/index.js#L5307) | secureAdmin | — | — | OK |
+| GET | `/api/admin/health/gateways` | [5388](../../web/07_mining_pool_public/back-end-pool/index.js#L5388) | secureAdmin | — | — | OK |
+| GET | `/api/admin/locations` | [5473](../../web/07_mining_pool_public/back-end-pool/index.js#L5473) | secureAdmin | — | — | **J1-3** `stratum_url` retargets miners at secureAdmin; wg branch correctly `stepUpRefused()` |
+| GET | `/api/admin/gateways/server` | [5607](../../web/07_mining_pool_public/back-end-pool/index.js#L5607) | secureAdmin | — | Y | OK |
+| GET | `/api/admin/gateways/:region/pairing` | [5679](../../web/07_mining_pool_public/back-end-pool/index.js#L5679) | secureAdmin | — | — | OK — pairing string is hub **public** key + endpoint; no credential |
+| GET | `/api/admin/miners` | [5732](../../web/07_mining_pool_public/back-end-pool/index.js#L5732) | secureAdmin | — | — | OK |
+| GET | `/api/admin/miners/:addr` | [5757](../../web/07_mining_pool_public/back-end-pool/index.js#L5757) | secureAdmin | — | — | OK |
+| GET | `/api/admin/settings` | [5913](../../web/07_mining_pool_public/back-end-pool/index.js#L5913) | secureAdmin | — | — | OK |
+| GET | `/api/admin/settings/:section` | [5923](../../web/07_mining_pool_public/back-end-pool/index.js#L5923) | secureAdmin | Y | Y | **J1-1 / J1-2** — `analytics`+`branding` ungated; write unaudited |
+| GET | `/api/admin/database/status` | [6039](../../web/07_mining_pool_public/back-end-pool/index.js#L6039) | secureAdmin | — | — | OK |
+| GET | `/api/admin/incentives/prize-pool` | [6060](../../web/07_mining_pool_public/back-end-pool/index.js#L6060) | secureAdmin | — | — | OK |
+| GET | `/api/admin/incentives/lottery/draws` | [6092](../../web/07_mining_pool_public/back-end-pool/index.js#L6092) | secureAdmin | — | — | OK |
+| GET | `/api/admin/incentives/campaigns` | [6126](../../web/07_mining_pool_public/back-end-pool/index.js#L6126) | secureAdmin | Y | — | OK |
+| GET | `/api/admin/assets` | [6218](../../web/07_mining_pool_public/back-end-pool/index.js#L6218) | secureAdmin | — | — | OK |
+
+**Public / miner read surface** — 50 routes
+
+| Method | Path | Line | Guard chain | $ | Destr | Verdict |
+|---|---|---|---|---|---|---|
+| GET | `/api/public/branding` | [922](../../web/07_mining_pool_public/back-end-pool/index.js#L922) | rateLimiter:public | — | — | OK |
+| GET | `/api/public/price` | [979](../../web/07_mining_pool_public/back-end-pool/index.js#L979) | rateLimiter:public | — | — | OK |
+| GET | `/api/public/endpoints` | [1106](../../web/07_mining_pool_public/back-end-pool/index.js#L1106) | rateLimiter:public | — | — | OK |
+| GET | `/api/public/lottery/winners` | [1171](../../web/07_mining_pool_public/back-end-pool/index.js#L1171) | rateLimiter:public | — | — | OK |
+| GET | `/api/public/lottery/stats` | [1190](../../web/07_mining_pool_public/back-end-pool/index.js#L1190) | rateLimiter:public | — | — | OK |
+| GET | `/api/public/page/:key` | [1210](../../web/07_mining_pool_public/back-end-pool/index.js#L1210) | rateLimiter:public | — | — | OK |
+| GET | `/api/public/pages` | [1225](../../web/07_mining_pool_public/back-end-pool/index.js#L1225) | rateLimiter:public | — | — | OK |
+| GET | `/api/public/posts` | [1238](../../web/07_mining_pool_public/back-end-pool/index.js#L1238) | rateLimiter:public | — | — | OK |
+| GET | `/api/public/post/:slug` | [1252](../../web/07_mining_pool_public/back-end-pool/index.js#L1252) | rateLimiter:public | — | — | OK |
+| GET | `/blog/rss.xml` | [1267](../../web/07_mining_pool_public/back-end-pool/index.js#L1267) | rateLimiter:public | — | — | OK |
+| GET | `/robots.txt` | [1309](../../web/07_mining_pool_public/back-end-pool/index.js#L1309) | rateLimiter:public | — | — | OK |
+| GET | `/sitemap.xml` | [1334](../../web/07_mining_pool_public/back-end-pool/index.js#L1334) | rateLimiter:public | — | — | OK |
+| GET | `/manifest.json` | [1366](../../web/07_mining_pool_public/back-end-pool/index.js#L1366) | rateLimiter:public | — | — | OK |
+| GET | `/blog/:slug` | [1548](../../web/07_mining_pool_public/back-end-pool/index.js#L1548) | rateLimiter:public | — | — | OK |
+| GET | `/page.html` | [1577](../../web/07_mining_pool_public/back-end-pool/index.js#L1577) | rateLimiter:public | — | — | OK |
+| GET | `/api/config/pool-info` | [1956](../../web/07_mining_pool_public/back-end-pool/index.js#L1956) | rateLimiter:public | — | — | OK |
+| GET | `/api/stratum/stats` | [1973](../../web/07_mining_pool_public/back-end-pool/index.js#L1973) | rateLimiter:public | — | — | OK |
+| GET | `/api/pool/stats` | [1995](../../web/07_mining_pool_public/back-end-pool/index.js#L1995) | rateLimiter:public | — | — | OK |
+| GET | `/api/pool/status` | [2024](../../web/07_mining_pool_public/back-end-pool/index.js#L2024) | rateLimiter:public | — | — | OK |
+| GET | `/api/pool/blocks` | [2058](../../web/07_mining_pool_public/back-end-pool/index.js#L2058) | rateLimiter:public | — | — | OK |
+| GET | `/api/pool/blocks/history` | [2085](../../web/07_mining_pool_public/back-end-pool/index.js#L2085) | rateLimiter:public | — | — | OK |
+| GET | `/api/account/:addr/shares` | [2096](../../web/07_mining_pool_public/back-end-pool/index.js#L2096) | rateLimiter:public | — | — | OK |
+| GET | `/api/public/ads` | [2532](../../web/07_mining_pool_public/back-end-pool/index.js#L2532) | rateLimiter:public | — | — | OK |
+| POST | `/api/public/ads/event` | [2545](../../web/07_mining_pool_public/back-end-pool/index.js#L2545) | rateLimiter:public | — | — | OK |
+| GET | `/api/pool/miners` | [2744](../../web/07_mining_pool_public/back-end-pool/index.js#L2744) | rateLimiter:public | — | — | OK |
+| GET | `/api/pool/top-block-finders` | [2765](../../web/07_mining_pool_public/back-end-pool/index.js#L2765) | rateLimiter:public | — | — | OK |
+| GET | `/api/pool/payments` | [2794](../../web/07_mining_pool_public/back-end-pool/index.js#L2794) | rateLimiter:public | — | — | OK |
+| GET | `/api/pool/unclaimed` | [2816](../../web/07_mining_pool_public/back-end-pool/index.js#L2816) | rateLimiter:public | — | — | OK — addresses masked |
+| GET | `/api/account/:addr` | [2832](../../web/07_mining_pool_public/back-end-pool/index.js#L2832) | rateLimiter:public | — | — | OK |
+| GET | `/api/account/:addr/workers` | [2942](../../web/07_mining_pool_public/back-end-pool/index.js#L2942) | rateLimiter:public | — | — | OK |
+| GET | `/api/account/:addr/hashrate/history` | [2954](../../web/07_mining_pool_public/back-end-pool/index.js#L2954) | rateLimiter:public | — | — | OK |
+| GET | `/api/pool/hashrate/history` | [2971](../../web/07_mining_pool_public/back-end-pool/index.js#L2971) | rateLimiter:public | — | — | OK |
+| GET | `/api/pool/metrics/history` | [2983](../../web/07_mining_pool_public/back-end-pool/index.js#L2983) | rateLimiter:public | — | — | OK |
+| GET | `/api/pool/metrics/history/regions` | [2995](../../web/07_mining_pool_public/back-end-pool/index.js#L2995) | rateLimiter:public | — | — | OK |
+| GET | `/api/pool/payments/history` | [3008](../../web/07_mining_pool_public/back-end-pool/index.js#L3008) | rateLimiter:public | — | — | OK |
+| GET | `/api/pool/donors` | [3024](../../web/07_mining_pool_public/back-end-pool/index.js#L3024) | rateLimiter:public | — | — | OK |
+| GET | `/api/pool/prize-pool` | [3082](../../web/07_mining_pool_public/back-end-pool/index.js#L3082) | rateLimiter:public | — | — | OK |
+| GET | `/api/pool/effort` | [3107](../../web/07_mining_pool_public/back-end-pool/index.js#L3107) | rateLimiter:public | — | — | OK |
+| GET | `/api/pool/poolstats` | [3185](../../web/07_mining_pool_public/back-end-pool/index.js#L3185) | rateLimiter:public | — | — | OK |
+| GET | `/api/account/:addr/balance/log` | [3298](../../web/07_mining_pool_public/back-end-pool/index.js#L3298) | rateLimiter:public | — | — | OK |
+| GET | `/api/account/:addr/withdrawals` | [3355](../../web/07_mining_pool_public/back-end-pool/index.js#L3355) | rateLimiter:public | — | — | OK |
+| GET | `/api/account/:addr/earnings` | [3409](../../web/07_mining_pool_public/back-end-pool/index.js#L3409) | rateLimiter:public | — | — | OK |
+| GET | `/api/account/:addr/tor-check` | [3487](../../web/07_mining_pool_public/back-end-pool/index.js#L3487) | rateLimiter:torcheck | — | — | OK — §H3 fix in place; timing → J3 |
+| GET | `/api/pool/locations` | [3798](../../web/07_mining_pool_public/back-end-pool/index.js#L3798) | rateLimiter:public | — | — | OK |
+| GET | `/api/pool/topology` | [3863](../../web/07_mining_pool_public/back-end-pool/index.js#L3863) | rateLimiter:public | — | — | OK |
+| GET | `/api/network/peers` | [4078](../../web/07_mining_pool_public/back-end-pool/index.js#L4078) | rateLimiter:public | — | — | OK |
+| GET | `/api/pool/stats/regions` | [4156](../../web/07_mining_pool_public/back-end-pool/index.js#L4156) | rateLimiter:public | — | — | OK |
+| GET | `/api/stratum/hashrate` | [4283](../../web/07_mining_pool_public/back-end-pool/index.js#L4283) | rateLimiter:public | — | — | OK |
+| GET | `/api/stratum/top-miners` | [4295](../../web/07_mining_pool_public/back-end-pool/index.js#L4295) | rateLimiter:public | — | — | OK |
+| GET | `/api/stratum/top-avg-hashrate` | [4313](../../web/07_mining_pool_public/back-end-pool/index.js#L4313) | rateLimiter:public | — | — | OK |
+
+---
+
+## §J2 — Auth, session & 2FA (2026-08-25, add-ons, NOT VPS-TESTED)
+
+Second session of the pre-mainnet §J pass (plan:
+[`script07_reference_audit_session_plan.md`](script07_reference_audit_session_plan.md) §J2).
+Scope: [`lib/auth.js`](../../web/07_mining_pool_public/back-end-pool/lib/auth.js) (702),
+[`lib/totp.js`](../../web/07_mining_pool_public/back-end-pool/lib/totp.js) (87),
+[`lib/captcha.js`](../../web/07_mining_pool_public/back-end-pool/lib/captcha.js) (59),
+[`scripts/admin-reset.js`](../../web/07_mining_pool_public/back-end-pool/scripts/admin-reset.js) (382),
+the seven `/api/auth/*` routes, the five `/api/admin/2fa/*` routes and `/api/admin/reauth`.
+Question asked: **can anyone get an admin session they shouldn't have, or keep one after they
+should have lost it?**
+
+Findings were reached by reading, then **confirmed by execution** — a one-shot harness bound the
+real `AuthManager` to an in-memory `node:sqlite` DB carrying the production `users` /
+`admin_recovery_codes` schema and exercised eight behaviours. Its output is quoted per finding.
+No server was started and no VPS was touched (plan rule 5); the harness lived in the scratchpad
+and its probe list is in *Verification* below.
+
+### Threat actors used in this section
+
+| Label | Means |
+|---|---|
+| **Anonymous** | Internet, no credentials, reaches nginx → `/api/auth/*` |
+| **Session thief** | Holds a live `access_token` cookie (XSS on a same-origin page, an unlocked workstation, a lifted cookie jar) but does **not** know the password |
+| **Password holder** | Knows the admin password (phished, reused, leaked) but has no TOTP device |
+| **On-box root** | Shell on the pool server — Info only, per plan rule 7 |
+
+---
+
+### J2-1 — [High] `/api/admin/reauth` counts no failed attempts, so the step-up password can be ground at 2400/min — and step-up never asks for a second factor even on a mandatory-2FA pool — **FIXED 2026-08-26 (see §J2 resolution pass)**
+
+**Threat actor: session thief.**
+
+Step-up exists for exactly one attacker. The code says so:
+
+> *"A live (or stolen) session alone is not enough — the client must call `/api/admin/reauth` first."*
+> — [index.js:804](../../web/07_mining_pool_public/back-end-pool/index.js#L804)
+
+Every money and destructive route (the 31 `freshAdmin` routes counted in §J1 — withdrawal
+retry/cancel, payout freeze, dormancy send-payout, prize-pool topup, wallet adopt-identity) is
+reachable the moment `/api/admin/reauth` returns a `pwa=now` token. So the strength of that
+whole tier is the strength of the password check on this one route.
+
+That check has **no attempt counter of any kind**:
+
+- [index.js:1839](../../web/07_mining_pool_public/back-end-pool/index.js#L1839) —
+  `app.post('/api/admin/reauth', secureAdmin, …)`. `secureAdmin` is
+  `rateLimiter('admin')` → `ipFilter('admin')` → `requireAdmin`
+  ([index.js:771](../../web/07_mining_pool_public/back-end-pool/index.js#L771)).
+- `rateLimiter.limits.admin = 2400` per minute, per IP
+  ([lib/rate-limiter.js:44](../../web/07_mining_pool_public/back-end-pool/lib/rate-limiter.js#L44),
+  keyed on `getClientIp` at [:87](../../web/07_mining_pool_public/back-end-pool/lib/rate-limiter.js#L87)).
+- On failure the handler writes a `reauth_failed` audit row and returns 401
+  ([index.js:1846–1852](../../web/07_mining_pool_public/back-end-pool/index.js#L1846)). It does
+  **not** call `recordAdminLoginFailure()` — the fail2ban-style per-IP auto-ban
+  ([index.js:852](../../web/07_mining_pool_public/back-end-pool/index.js#L852)) — which is wired
+  to only two of the codebase's credential checks: `/api/auth/login`
+  ([:1748](../../web/07_mining_pool_public/back-end-pool/index.js#L1748)) and
+  `/api/auth/login/totp` ([:1776](../../web/07_mining_pool_public/back-end-pool/index.js#L1776)).
+- `AuthManager.stepUp()`
+  ([lib/auth.js:684](../../web/07_mining_pool_public/back-end-pool/lib/auth.js#L684)) does a bare
+  `comparePassword` and returns. Unlike `login()`
+  ([lib/auth.js:260](../../web/07_mining_pool_public/back-end-pool/lib/auth.js#L260)) it never
+  calls `_recordPairFailure`, so the `(username, IP)` lockout is not armed either.
+
+Harness — ten consecutive wrong-password `stepUp()` calls, versus one wrong-password `login()`:
+
+```
+[6] lockout entries after 10 failed stepUp(): 0 | lockoutRemaining: 0
+[6] login() for comparison -> lockout entries: 1
+```
+
+**Nor does the second factor help.** `freshAdmin`'s `requireTotpEnrolled`
+([index.js:793](../../web/07_mining_pool_public/back-end-pool/index.js#L793)) checks
+`isTotpEnabled(user_id)` — whether the account *has* 2FA — and never asks for a code. On a pool
+with `access.require_admin_totp` on, the step-up challenge is still **password only**. This route
+is not one factor of two; it is the whole gate.
+
+**Failure scenario.** A session thief lifts the `access_token` cookie. Today they can read the
+panel but not move money. They POST `/api/admin/reauth` in a loop from one IP: 2400 guesses/min
+= 3.46 M/day, no lockout, no auto-ban, no captcha, no escalating delay, nothing beyond one audit
+row per attempt. `registerAdmin` enforces `password.length >= 8` and nothing else
+([lib/auth.js:98](../../web/07_mining_pool_public/back-end-pool/lib/auth.js#L98)) — no complexity
+rule, no dictionary check — so an operator-chosen 8-character password is well inside that
+budget. On success every `freshAdmin` route opens, including `payouts/freeze` and
+`withdrawals/:id/retry`.
+
+**Second, quieter call site.** `/api/auth/change-password`
+([index.js:1940](../../web/07_mining_pool_public/back-end-pool/index.js#L1940)) verifies
+`old_password` ([lib/auth.js:486](../../web/07_mining_pool_public/back-end-pool/lib/auth.js#L486))
+behind `rateLimiter('auth')` (200/min) and `requireAuth` — again with no lockout, no auto-ban and
+**no** `ipFilter`. Same actor, 288 k guesses/day, and this one writes no audit row at all.
+
+**The DoS side of the same fact.** `bcryptjs` is pure JavaScript running on the single event loop
+that also validates stratum shares. Measured on this workstation at the configured cost 12:
+
+```
+bcryptjs cost-12 compare avg ms: 304
+```
+
+2400 × 0.304 s = **730 CPU-seconds demanded per 60 s of wall clock**. The process cannot keep up;
+a session thief who never guesses the password still stalls share intake and every API route.
+Same shape as the "a long job on the shared loop stalls SHARES, not just the page" trap recorded
+in memory `project_pool_db_capacity`.
+
+**Fix (not applied — changes money-gate behaviour, needs an operator decision).**
+1. Call `_recordPairFailure(req.user.username, req.ip)` + `recordAdminLoginFailure(req.ip)` on a
+   failed `stepUp`, and refuse while `lockoutRemaining() > 0` — the same three-layer policy the
+   login route already has (memory `project_pool_admin_login_security`). Because the key is
+   `(username, IP)`, this cannot be turned into an operator lockout by a third party.
+2. Give `reauth` and `change-password` their own tight bucket (`stepup: 10/min`), not
+   `admin`/`auth`.
+3. When `totpIsMandatory()`, make `stepUp` require a TOTP code as well — otherwise "mandatory
+   2FA" is not enforced on the one path that unlocks money.
+4. Raise the minimum admin password length; 8 with no complexity rule is not a credible floor for
+   a single-account, root-equivalent panel.
+
+Note that (1) alone does not close the CPU lever — the bcrypt runs before any counter can see the
+result. (2) is what bounds the CPU.
+
+---
+
+### J2-2 — [Medium] First-admin registration TOCTOU is real and remotely winnable — two concurrent registrations both become admins — **FIXED 2026-08-26 (see §J2 resolution pass)**
+
+**Threat actor: anonymous.**
+
+Carried into this session by §J1's handoff and §I's re-test sequencing note, both of which leave
+it "held by launch procedure". This pass demonstrates it rather than describing it, because the
+demonstration changes what that procedure has to guarantee.
+
+[index.js:1629](../../web/07_mining_pool_public/back-end-pool/index.js#L1629) reads the admin
+count synchronously and then `await`s:
+
+```js
+const adminCount = db.prepare('SELECT COUNT(*) as cnt FROM users WHERE is_admin=1').get();
+if (adminCount.cnt > 0) return res.status(403).json({ error: 'Admin registration closed.' });
+…
+const result = await authManager.registerAdmin(username, password);   // :1648
+```
+
+`registerAdmin` ([lib/auth.js:88](../../web/07_mining_pool_public/back-end-pool/lib/auth.js#L88))
+awaits `hashPassword` — a cost-12 bcrypt, ~300 ms — **between** its own existence check and the
+`INSERT`. That await yields the event loop for roughly a third of a second, which is an enormous
+window for an HTTP race. `users.username` is `NOT NULL UNIQUE`
+([lib/db.js:515](../../web/07_mining_pool_public/back-end-pool/lib/db.js#L515)), so the guard that
+does exist only stops *duplicate-named* winners — two different names both land.
+
+Harness — two concurrent registrations against an empty `users` table, replaying the exact
+statements from :1629 and :1648:
+
+```
+[1] concurrent register results: {"success":true,"user_id":1,"username":"operator","is_admin":true} {"success":true,"user_id":2,"username":"attacker","is_admin":true}
+[1] admins now in DB: ["operator","attacker"] -> RACE OPEN = true
+```
+
+**Failure scenario.** The window opens when the service first starts and closes when the operator
+registers. An attacker who reaches the panel in that window — a scanner watching a new subdomain,
+or anyone who knows the pool is being stood up — POSTs `/api/auth/register` concurrently with the
+operator's own registration and receives a second, fully-privileged admin account with its own
+password, its own 2FA and its own sessions. Nothing later revokes it: the panel has no
+user-management surface, and the `register` audit row is the only trace (`--list` in the
+break-glass CLI would show the account, if anyone looked). The captcha is not a barrier — it is a
+plain-text arithmetic question, deliberately so (memory `project_pool_admin_login_security`), and
+the attacker only needs to solve two.
+
+The mitigations that exist are procedural, not code: the app binds `127.0.0.1`
+([index.js:743](../../web/07_mining_pool_public/back-end-pool/index.js#L743)), so the window is
+only reachable once the nginx vhost is live, and Script 07's guided installer registers over
+loopback. Neither is guaranteed by anything in this file.
+
+**Fix (not applied — the plan asks for a decision, and both options have an operator cost).**
+Either (a) do the count check *and* the insert inside one `db.transaction()`, with the bcrypt hash
+computed **before** the transaction opens — three lines, closes it outright; or (b) keep the
+procedure but make it enforceable by refusing `/api/auth/register` unless `isLocalRequest(req)`,
+so first-admin creation is on-box only and the remote window never exists. (b) is stronger and
+matches how the installer already works; it costs an operator who wanted to register from a
+browser on another machine.
+
+---
+
+### J2-3 — [Medium] The 2FA login budget is per-IP only and the `twofa_token` is unlimited-use, so a distributed attacker holding the password is not bounded — **FIXED 2026-08-26 (see §J2 resolution pass)**
+
+**Threat actor: password holder (distributed).**
+
+Memory `project_pool_admin_login_security` names mandatory TOTP as the backstop a botnet cannot
+out-scale, and the code repeats it:
+
+> *"a large BOTNET defeats any per-source lock, because each new IP starts with a clean counter.
+> What bounds that is the per-IP auth rate limit plus the fail2ban-style auto-ban — and,
+> properly, mandatory TOTP."*
+> — [lib/auth.js:38–43](../../web/07_mining_pool_public/back-end-pool/lib/auth.js#L38)
+
+The TOTP step's own budget has the same per-source shape, so it inherits the same weakness:
+
+- `ADMIN_2FA_FAIL_THRESHOLD = 20` per IP per 15 min
+  ([index.js:373](../../web/07_mining_pool_public/back-end-pool/index.js#L373)), counted by
+  `recordAdminLoginFailure(ip, '2fa')` — **keyed on IP, never on the account or the token**.
+- The `twofa_token` minted at
+  [index.js:1720](../../web/07_mining_pool_public/back-end-pool/index.js#L1720) is a plain
+  300-second JWT `{user_id, type:'2fa'}`
+  ([lib/auth.js:604](../../web/07_mining_pool_public/back-end-pool/lib/auth.js#L604)).
+  `verify2faToken` ([:608](../../web/07_mining_pool_public/back-end-pool/lib/auth.js#L608))
+  decodes and returns — it consumes nothing, records nothing, and binds to nothing.
+
+Harness:
+
+```
+[8] verify2faToken #1: 1 #2: 1 #3: 1
+```
+
+So one token is a **bearer credential replayable from any number of source addresses** for five
+minutes. The 20-guess ceiling is per IP, not per token and not per account, and the fail2ban jail
+`grin-pool-login` does not cover this route at all — its failregex matches `POST /api/auth/login`
+while step two posts to `/api/auth/login/totp` (that correction is already recorded in memory
+`project_pool_admin_login_security`).
+
+**Failure scenario.** A password holder solves one captcha, logs in, and gets a `twofa_token`.
+They fan it out to N hosts. Each host may spend 20 guesses before its own IP is banned; the token
+itself is never invalidated and the account is never locked. With `window = 1` three codes are
+live at any instant out of 10⁶, so p ≈ 3 × 10⁻⁶ per guess and 20 N guesses per token window. A few
+thousand hosts across repeated windows — and windows are free, because a fresh `twofa_token` costs
+one captcha and one correct password — reduces "mandatory 2FA" to a matter of patience. Nothing in
+the design makes the attacker pay per *account*, which is the axis that actually matters.
+
+**The two 2FA management routes have no counter at all.** `POST /api/admin/2fa/disable`
+([index.js:1903](../../web/07_mining_pool_public/back-end-pool/index.js#L1903)) and
+`POST /api/admin/2fa/recovery/regenerate`
+([:1913](../../web/07_mining_pool_public/back-end-pool/index.js#L1913)) both call
+`verifyTotpOrRecovery` ([lib/auth.js:559](../../web/07_mining_pool_public/back-end-pool/lib/auth.js#L559))
+with only the `admin` bucket (2400/min) in front and no call to `recordAdminLoginFailure` — about
+139 minutes of sustained requests from one IP for one expected code hit. It is **not an escalation
+path today**: both are `freshAdmin`, so reaching them already requires a full session plus the
+password, i.e. the attacker has already beaten 2FA. It matters because the code-guessing counter
+is wired to one of the three routes that verify a code, which is the kind of asymmetry that
+becomes a hole the next time a tier moves. The recovery branch also runs up to 10 cost-12 bcrypt
+compares per submission
+([lib/auth.js:569–576](../../web/07_mining_pool_public/back-end-pool/lib/auth.js#L569)) — roughly
+3 s of shared-event-loop CPU per request, which is the J2-1 lever again.
+
+**Fix (not applied).** Make the budget follow the *account*, not the source: give the
+`twofa_token` a `jti`, hold it in a Map with an attempt counter, and invalidate it after 5
+failures or 1 success. A distributed attacker then gains nothing from extra IPs, while an honest
+operator fumbling codes on one device is unaffected — which is exactly the false-positive worry
+that set `ADMIN_2FA_FAIL_THRESHOLD` to 20 in the first place. Separately, route `disable` and
+`recovery/regenerate` failures through `recordAdminLoginFailure(ip, '2fa')` so all three code
+checks share one counter.
+
+---
+
+### J2-4 — [Medium] Any anonymous client can evict every pending CAPTCHA challenge and lock the operator out of the admin panel — **FIXED 2026-08-26 (see §J2 resolution pass)**
+
+**Threat actor: anonymous.**
+
+`lib/captcha.js` keeps one **global, un-keyed** store capped at 5000 entries, and `_prune()` evicts
+**oldest-inserted first** to get back under the cap:
+
+```js
+constructor({ ttlMs = 300000, max = 5000 } = {}) { … this.store = new Map(); }   // :103
+_prune() {
+  …
+  if (this.store.size > this.max) {
+    let excess = this.store.size - this.max;
+    for (const id of this.store.keys()) { this.store.delete(id); if (--excess <= 0) break; }
+  }
+}                                                                                 // :109
+issue() { this._prune(); … this.store.set(id, { answer, expires }); }             // :124
+```
+— [lib/captcha.js:103–133](../../web/07_mining_pool_public/back-end-pool/lib/captcha.js#L103)
+
+Issuing is free and unauthenticated: `GET /api/auth/captcha` sits on the `public` bucket, 1200/min
+per IP ([index.js:1616](../../web/07_mining_pool_public/back-end-pool/index.js#L1616)), explicitly
+so the form "can fetch one without spending the stricter `auth` budget". Every call inserts a row.
+Insertion order in a JS `Map` is fixed at first insert, so the operator's challenge sits at a fixed
+position and is deleted once 5000 newer ones arrive.
+
+**Failure scenario.** The operator opens `/login.html`, the page fetches a challenge, they type
+their password. Meanwhile an attacker holds ~250 `GET /api/auth/captcha` per second (≈13 source
+IPs at the published per-IP limit, fewer if the operator is slow to type). By the time the operator
+submits, their `captcha_id` has been evicted; `verify()` returns `false` on the missing entry
+([:138](../../web/07_mining_pool_public/back-end-pool/lib/captcha.js#L138)) and the login route
+answers **"Captcha incorrect or expired. Try again."**
+([index.js:1698](../../web/07_mining_pool_public/back-end-pool/index.js#L1698)). Reloading gets a
+fresh challenge that is evicted the same way. The operator cannot log in, and the error blames
+them — it reads as a typo, not an attack. There is no log line, no alert and no counter that would
+say otherwise; `_prune()` is silent.
+
+This matters because it is precisely the failure mode the lockout design refuses to permit. The
+key was moved to `(username, IP)` specifically so that
+
+> *"anyone could fail 5 logins every 15 min and keep the real operator permanently locked out of
+> their own pool — including during an incident, when payouts and the freeze kill-switch are
+> exactly what's needed"*
+> — [lib/auth.js:27–33](../../web/07_mining_pool_public/back-end-pool/lib/auth.js#L27)
+
+The captcha store hands that same denial back through a different door, at lower cost to the
+attacker (no failed logins, so no auto-ban, no fail2ban hit, nothing in the audit log), and against
+**every** admin at once rather than one `(username, IP)` pair. Recovery options are thin: `register`
+is closed; `login` has no `isLocalRequest` bypass (only `register` does,
+[index.js:1639](../../web/07_mining_pool_public/back-end-pool/index.js#L1639)); restarting the pool
+service clears the store but the flood resumes in seconds; and the break-glass CLI resets passwords,
+not captchas.
+
+**Fix (not applied — small, but it is a live availability control and deserves the operator's
+sign-off rather than a same-session edit).** Key the store per client IP with a small per-IP cap
+(say 20 outstanding) and evict *that IP's own* oldest first, so flooding is self-inflicted:
+
+```js
+issue(ip) { … this.store.set(id, { answer, expires, ip }); this._pruneIp(ip); }
+```
+
+The global 5000 cap then stays only as a memory backstop. A stateless HMAC challenge
+(`id = HMAC(secret, answer‖expiry‖nonce)`) removes the store entirely but loses single-use, which
+is a property worth keeping — the per-IP cap is the better trade.
+
+**Not a finding, checked and cleared:** the same oldest-first eviction exists on
+`AuthManager.lockouts` (`lockoutMaxEntries = 20000`,
+[lib/auth.js:150](../../web/07_mining_pool_public/back-end-pool/lib/auth.js#L150)) and would, in
+principle, let an attacker evict their own lock. It is not reachable: entries are created only from
+inside `login()`, and 10 failures from one IP earn a 1 h auto-ban
+([index.js:360](../../web/07_mining_pool_public/back-end-pool/index.js#L360)), so filling 20 000
+slots would need ~2000 fresh IPs per hour — an attacker with that already ignores per-source locks
+by definition.
+
+---
+
+### J2-5 — [Medium] TOTP codes are replayable — no used-counter, so one observed code works repeatedly across its 90-second window — **FIXED 2026-08-26 (see §J2 resolution pass)**
+
+**Threat actor: password holder who has seen one code** (shoulder-surf, a screenshot in a support
+thread, a phishing page that harvests password + code, malware reading the notification shade).
+
+`totp.verify` ([lib/totp.js:63](../../web/07_mining_pool_public/back-end-pool/lib/totp.js#L63))
+compares against counters `-1 … +1` and returns. Nothing records that a counter was consumed —
+`users` has `totp_secret`, `totp_enabled`, `totp_pending_secret` and no last-used column
+([lib/db.js:522–524](../../web/07_mining_pool_public/back-end-pool/lib/db.js#L522)), and
+`verifyTotpOrRecovery` ([lib/auth.js:559](../../web/07_mining_pool_public/back-end-pool/lib/auth.js#L559))
+writes only on the *recovery-code* branch. Recovery codes are correctly single-use
+([:572](../../web/07_mining_pool_public/back-end-pool/lib/auth.js#L572)); TOTP codes are not.
+
+Harness — one code, three submissions, plus the neighbouring steps:
+
+```
+[4] totp code 425411 use#1: true use#2: true use#3: true
+[5] prev-step code accepted: true | next-step code accepted: true
+```
+
+RFC 6238 §5.2 is explicit that a verifier must not accept a second use of the same OTP, precisely
+because the protocol's only defence against an observed code is that it is spent. `window = 1`
+widens the exposure to three 30-second steps, so an observed code is live for up to 90 s and can be
+used any number of times inside it — on `/api/auth/login/totp`, on `/api/admin/2fa/disable`, or on
+`/api/admin/2fa/recovery/regenerate`, in any combination.
+
+**Failure scenario.** A phishing page collects username, password and one code. Today the attacker
+replays all three at `/api/auth/login/totp` and gets a session. With the code spent, that replay
+fails and the attacker must hold a live channel to the victim for every subsequent action — the
+difference between a credential-harvesting page and a real-time relay, and the whole reason
+single-use exists.
+
+**Fix (not applied — needs a schema column, so it is not a same-session edit).** Add
+`users.totp_last_counter INTEGER NOT NULL DEFAULT 0`; have `verify` return the matched counter and
+reject any counter `<= totp_last_counter`, storing it on success. Roughly ten lines across
+`totp.js`, `auth.js` and the `db.js` migration. Keep `window = 1` — clock drift is the
+false-positive risk the operator actually meets, and single-use is orthogonal to it.
+
+---
+
+### J2-6 — [Low] The break-glass CLI and the *Revoke sessions* kill-switch both told the operator that sessions were revoked, when neither can evict a live access token — **FIXED 2026-08-25 (text only; the mechanism is §C3 and stays open)**
+
+**Threat actor: none — this is an incident-response correctness bug.** Filed as a new §J finding
+rather than an edit to §C3 (plan rule 2) because the *mechanism* is the known open item while the
+*consequence* is new: two controls whose entire job is compromise recovery were reporting a
+guarantee they do not provide.
+
+The mechanism, re-confirmed by execution rather than assumed:
+
+```
+[2] access token valid before revoke: true | fresh(step-up): true
+[2] access token valid AFTER  revoke: true | fresh(step-up): true
+[2] refresh token after revoke: "Refresh token revoked"
+[3] access token still valid after password change: true
+```
+
+`revokeUserTokens` bumps `users.token_version`
+([lib/auth.js:464](../../web/07_mining_pool_public/back-end-pool/lib/auth.js#L464)); only
+`refreshAccessToken` compares it
+([:408](../../web/07_mining_pool_public/back-end-pool/lib/auth.js#L408)). `requireAdmin` /
+`requireFreshAuth`
+([lib/auth-middleware.js:191](../../web/07_mining_pool_public/back-end-pool/lib/auth-middleware.js#L191),
+[:223](../../web/07_mining_pool_public/back-end-pool/lib/auth-middleware.js#L223)) verify the
+signature and read `is_admin` straight off the payload — no `tv` check, and no `is_active` re-read
+either. The bound is the idle window, `access.session_timeout_hours`, validated 1–24 h
+([lib/pool-settings.js:906](../../web/07_mining_pool_public/back-end-pool/lib/pool-settings.js#L906))
+and re-clamped identically in `_sessionPolicy`
+([lib/auth.js:75](../../web/07_mining_pool_public/back-end-pool/lib/auth.js#L75)). All correct, and
+all already documented in memory `project_pool_admin_session_idle`.
+
+What was wrong is what the operator is *told* at the moment they act on it:
+
+| Where | Said | Actually |
+|---|---|---|
+| `POST /api/admin/security/revoke-sessions` response | *"Other devices lose access within the **1-hour** session window"* | 1 h is the fallback constant; the live value is operator-set up to **24 h** — understated by up to 24× |
+| `admin-reset --help` | *"also REVOKES that account's existing sessions, **so a stolen cookie can't outlive the recovery**"* | a stolen cookie outlives it by up to 24 h |
+| `--clear-2fa` output | *"Sessions revoked."* | refresh tokens revoked |
+| `--set-password` output | *"Existing sessions revoked."* | refresh tokens revoked |
+
+An operator who has just had a laptop stolen reads the first line, believes the intruder is out,
+and does not take the one action that would work.
+
+**Fixed this session** (plan rule 3 — pure text, no behaviour change):
+
+- [index.js:4777](../../web/07_mining_pool_public/back-end-pool/index.js#L4777) — the response now
+  reports the **live** `sessionPolicy().idle` in hours, adds `idle_window_hours` to the JSON, states
+  plainly that access tokens cannot be revoked, and names the only faster control: rotate
+  `jwt_secret` in `pool.json` and restart, which invalidates every token at once.
+- [scripts/admin-reset.js:213](../../web/07_mining_pool_public/back-end-pool/scripts/admin-reset.js#L213)
+  — `revokeSessions()`'s comment now says it stops renewal and does not evict a live session; the
+  `--help` paragraph and both action outputs say "Refresh tokens revoked" and print the `jwt_secret`
+  rotation advice for an active compromise.
+
+Verified: `node --check` on both files; `node scripts/admin-reset.js --help` renders the new
+paragraph; `node scripts/check-syntax.js` → 51 files OK; `node scripts/test-admin-guards.js` →
+26/26 pass.
+
+The underlying revocability gap stays **OPEN** and is unchanged from §C3 and §H's carry-forward
+list. Note for whoever closes it: `jwt_secret` rotation is currently the *only* immediate
+kill-switch, and nothing in the panel or the CLI performs it.
+
+---
+
+### J2-7 — [Low] A disabled admin account is distinguishable from a non-existent one, skips the bcrypt timing equaliser, and is exempt from the lockout counter — **FIXED 2026-08-26 (see §J2 resolution pass)**
+
+**Threat actor: anonymous.**
+
+`login()` orders its branches so the `is_active` check sits between the user lookup and the password
+compare ([lib/auth.js:249](../../web/07_mining_pool_public/back-end-pool/lib/auth.js#L249)):
+
+```js
+if (!user) { await this.comparePassword(password, await this._dummyHash());   // :239 equaliser
+             this._recordPairFailure(username, ip); return {…'Invalid username or password'}; }
+if (!user.is_active) { return { success:false, error:'Account is disabled' }; }   // :249
+```
+
+Harness:
+
+```
+[7] disabled -> "Account is disabled" | unknown -> "Invalid username or password"
+[7] lockout entries after 1 disabled + 1 unknown attempt: 1 (expect 2 if both counted)
+```
+
+Three small divergences from the surrounding design, which is otherwise careful about exactly this:
+a distinct error string, no `_dummyHash` compare (so the response also returns measurably faster —
+the timing oracle the equaliser at :234–239 was written to close), and no `_recordPairFailure`, so
+guesses against a disabled account never arm the `(username, IP)` lock.
+
+Impact is genuinely small: a pool normally has one admin, `is_active = 0` is only reachable via a
+direct DB edit, and the per-IP auto-ban still fires from
+[index.js:1748](../../web/07_mining_pool_public/back-end-pool/index.js#L1748) because
+`result.success` is false. It is Low because it confirms a username to an anonymous prober and
+because it is a hole in a defence the same function goes to some trouble to build.
+
+**Fix (not applied).** Move the `is_active` test to after the password compare, return the generic
+string, and record the pair failure — i.e. treat a disabled account exactly like a wrong password.
+
+---
+
+### J2-8 — [Info] Verified clean
+
+Recorded so a later session does not re-derive them. Each was read and, where it could be, executed.
+
+| Question (plan §J2) | Result |
+|---|---|
+| **JWT secret provenance / entropy / persistence** | `crypto.randomBytes(32).toString('hex')` (64 chars), `openssl rand -hex 32` fallback, written **once** to `pool.json` at install ([07_grin_mining_public_pool.sh:595–600](../../scripts/07_grin_mining_public_pool.sh#L595)). `validateConfig` hard-fails on missing / `<32` chars ([lib/config.js:209](../../web/07_mining_pool_public/back-end-pool/lib/config.js#L209)) rather than minting at boot. Both generators failing writes an empty value → FATAL, so it fails closed. |
+| **`algorithm` pinned on verify (alg-confusion / `none`)** | `jwt.verify` passes no `algorithms` ([lib/auth.js:360](../../web/07_mining_pool_public/back-end-pool/lib/auth.js#L360)), but jsonwebtoken 9 defaults to `['HS256','HS384','HS512']` for a non-PEM secret. Executed against the installed 9.0.3: a forged `alg:none` token → `jwt signature is required`. **Not exploitable.** Pinning `{ algorithms: ['HS256'] }` is still worth adding as defence-in-depth against a future major bump. |
+| **`expiresIn` set; `iss`/`aud` checked** | `expiresIn` set on all three token types (access = live idle, refresh 7 d, 2fa 300 s). No `iss`/`aud` — one issuer, one secret, and every consumer checks the `type` claim, so there is no confusable audience. |
+| **`/api/auth/refresh` re-mints `pwa`?** (§J1 handoff) | **No.** `refreshAccessToken` passes `pwa = 0` explicitly ([lib/auth.js:433](../../web/07_mining_pool_public/back-end-pool/lib/auth.js#L433)) and `isTokenFresh` rejects `pwa = 0` outright ([:675](../../web/07_mining_pool_public/back-end-pool/lib/auth.js#L675)). A silent refresh cannot grant step-up freshness. |
+| **Refresh rotated / single-use / session-bound** | Rotated via `token_version + 1` on every refresh; replay rejected at [:408](../../web/07_mining_pool_public/back-end-pool/lib/auth.js#L408) — harness: `"Refresh token revoked"`. `sst` is carried unchanged through refresh **and** step-up ([:433](../../web/07_mining_pool_public/back-end-pool/lib/auth.js#L433), [:694](../../web/07_mining_pool_public/back-end-pool/lib/auth.js#L694)), so the absolute cap is anchored to the original login and is not decorative. |
+| **Login lockout key / timing / audit action** | Pair key `${username.toLowerCase()}\0${ip}` checked **before** the user lookup ([:220](../../web/07_mining_pool_public/back-end-pool/lib/auth.js#L220)); unknown usernames counted ([:242](../../web/07_mining_pool_public/back-end-pool/lib/auth.js#L242)); `_dummyHash` equalises timing ([:239](../../web/07_mining_pool_public/back-end-pool/lib/auth.js#L239)) — **except** on the disabled branch, which is J2-7. Failure action is `login_failed` at both writers ([index.js:1745](../../web/07_mining_pool_public/back-end-pool/index.js#L1745), [lib/auth.js:660](../../web/07_mining_pool_public/back-end-pool/lib/auth.js#L660)), matching memory `project_pool_admin_login_security`. |
+| **TOTP secret at rest / enrollment binding / recovery codes** | Secret is 20 random bytes base32 ([lib/totp.js:43](../../web/07_mining_pool_public/back-end-pool/lib/totp.js#L43)), stored plaintext in `users.totp_secret` — unavoidable for TOTP and equivalent to the wallet password already accepted in *Residual risks*. `confirm2faEnrollment` reads `totp_pending_secret` for the **confirming** `user_id` ([lib/auth.js:538](../../web/07_mining_pool_public/back-end-pool/lib/auth.js#L538)), so a secret cannot be bound to another account. Recovery codes: 7 random bytes → 10 base32 chars, bcrypt-hashed, single-use via `used_at` ([:582](../../web/07_mining_pool_public/back-end-pool/lib/auth.js#L582), [:572](../../web/07_mining_pool_public/back-end-pool/lib/auth.js#L572)). Digit compare is `crypto.timingSafeEqual` ([lib/totp.js:71](../../web/07_mining_pool_public/back-end-pool/lib/totp.js#L71)). `disable` is `freshAdmin` **and** demands a code. |
+| **CAPTCHA replay / offline solve / bypass** | Single-use — deleted on the first `verify()` whether right or wrong ([lib/captcha.js:140](../../web/07_mining_pool_public/back-end-pool/lib/captcha.js#L140)), so a solved token cannot be spread across password guesses. Machine-solvable by design, deliberately left at two operands (memory `project_pool_admin_login_security`) — **not** re-reported. `isLocalRequest()` is the **only** bypass and applies to `register` only; `login` has none. |
+| **`isLocalRequest` forgeability** | Safe as deployed. `trust proxy = 'loopback'` ([index.js:224](../../web/07_mining_pool_public/back-end-pool/index.js#L224)) and every pool `/api` location sets `X-Forwarded-For $proxy_add_x_forwarded_for`, which **appends** the real client on the right. Executed against `proxy-addr` with the compiled `loopback` trust list: attacker-sent `XFF: 127.0.0.1` + nginx append → `req.ip = 9.9.9.9`. It only breaks if a vhost stops setting XFF (then `req.ip` resolves to `127.0.0.1`) — **handoff to J16: do not remove that line.** |
+| **Cookie flags** | `httpOnly`, `sameSite:'strict'`, `secure` when `NODE_ENV==='production'` — and the systemd unit sets it ([07_grin_mining_public_pool.sh:642](../../scripts/07_grin_mining_public_pool.sh#L642)). `sameSite:'strict'` is the only CSRF control on the admin mutations, and it holds: `/api/admin/` and `/api/auth/` are excluded from the CORS allowlist ([index.js:268](../../web/07_mining_pool_public/back-end-pool/index.js#L268)) and the `Authorization` header fallback is unreachable cross-origin. |
+| **Session-policy clamps agree** | Validator 1–24 h idle / 1–168 h absolute ([lib/pool-settings.js:906–920](../../web/07_mining_pool_public/back-end-pool/lib/pool-settings.js#L906)) matches `_sessionPolicy`'s runtime clamp exactly ([lib/auth.js:75–79](../../web/07_mining_pool_public/back-end-pool/lib/auth.js#L75)), and `abs < idle` is repaired at [:84](../../web/07_mining_pool_public/back-end-pool/lib/auth.js#L84). No silently-ignored saved value. |
+| **`revoke-sessions` actually revokes** | Yes — a real server-side `token_version` bump, not a cookie clear (it clears no cookies at all). Scope is `req.user.user_id` only; with more than one admin account it does **not** revoke the others. Worth knowing if J2-2 ever produces a second admin. |
+| **Break-glass CLI** | Root-checked ([scripts/admin-reset.js:353](../../web/07_mining_pool_public/back-end-pool/scripts/admin-reset.js#L353)), no HTTP surface, never calls `initDb()` (which would drop `admin_audit_log`), writes an `admin_cli_reset` audit row per action, never accepts a password in argv. Confirmed as described in memory `project_pool_admin_login_security`. `--unlock` also sets `is_active = 1`, so it can re-enable a deliberately disabled account — root-only, Info. |
+
+---
+
+### Correction to a §J1 handoff — **closed 2026-08-26**
+
+*§J1 has since struck this line from its own handoff, and the resolution pass below acted on the
+recommendation, so both halves are now settled. Kept for the record because the near-miss is the
+useful part: a machine-read guard column and a hand-written handoff disagreed, and the handoff was
+the one that would have removed a guard.*
+
+§J1's handoff to this session says `requireAuth` in `lib/auth-middleware.js` is *"exported with zero
+callers — dead code, worth deleting"*. **It has one caller:**
+
+```
+index.js:1940:  app.post('/api/auth/change-password', rateLimiter.middleware('auth'), requireAuth(authManager), …)
+```
+
+Deleting it would remove the only authentication check on the password-change endpoint. The
+observation behind the handoff is still worth acting on, but the correct action is the opposite one:
+`/api/auth/change-password` is a password-verifying, credential-mutating route that today runs on
+the *non-admin* guard with no `ipFilter` and no step-up. Promote it to `freshAdmin` (or at minimum
+`secureAdmin`) — and then `requireAuth` really does become dead and can go.
+
+**Done 2026-08-26.** The route now runs `rateLimiter('stepup')` → `ipFilter('admin')` →
+`requireAdmin`, and `requireAuth` is no longer imported by `index.js`. It is deliberately left
+*exported* from `auth-middleware.js` rather than deleted: `requireAdmin` and `requireFreshAuth` are
+built on it, so removing it is a refactor of the module, not a cleanup of a dead export.
+`secureAdmin` and not `freshAdmin` — see the rationale at the route.
+
+### Handoffs
+
+- **J12** — three CPU-exhaustion levers found here are bucket-shaped, not auth-shaped, and the fix
+  is a new bucket rather than a change to `auth.js`: `/api/admin/reauth` (2400/min × ~304 ms
+  bcrypt), `/api/auth/change-password` (200/min × bcrypt), and `/api/auth/login/totp`'s recovery
+  branch (up to 10 bcrypt compares per submission). All three run on the event loop that validates
+  stratum shares.
+- **J9** — `access.require_admin_totp` is read live and **fails open** on a settings read error
+  ([index.js:783](../../web/07_mining_pool_public/back-end-pool/index.js#L783)). That is the right
+  call for availability, but it means a DB read failure silently downgrades mandatory 2FA to
+  optional with no log line. Whether a settings-read failure should be *loud* is J9's question.
+- **J16** — the `isLocalRequest` register-captcha bypass is safe only because every pool `/api`
+  location sets `X-Forwarded-For $proxy_add_x_forwarded_for`. Treat that line as security-relevant
+  in the vhost review, not boilerplate.
+- **J17** — J2-2 is the launch-sequence item. If the decision is "hold it by procedure", the
+  procedure must state that the vhost is not enabled until the first admin exists; a note that the
+  installer "registers over loopback" is not sufficient, because the race is winnable by anyone who
+  can reach the port at all.
+
+### Verification
+
+All eight findings were written from reading first; the harness was then run to confirm or refute
+each one, and nothing here rests on inference alone. The harness bound the real `AuthManager`,
+`lib/totp.js` and `lib/sqlite-compat.js` to an in-memory database carrying the production `users` /
+`admin_recovery_codes` / `admin_audit_log` schema, with `lib/db`'s `getDb` stubbed through
+`require.cache`. It ran as a single `node` process that exits on its own — no server, no listener,
+nothing left running (CLAUDE.md *Local Test Processes*). Probes, in order:
+
+1. two concurrent `/api/auth/register` bodies replaying :1629 + :1648 → **both became admins** (J2-2)
+2. access-token validity across `revokeUserTokens()` → **still valid, still step-up-fresh** (J2-6)
+3. access-token validity across `changePassword()` → **still valid** (J2-6)
+4. one TOTP code submitted three times → **accepted three times** (J2-5)
+5. previous- and next-step codes → **both accepted** (`window = 1`) (J2-5)
+6. ten failed `stepUp()` vs one failed `login()` → **0 lockout entries vs 1** (J2-1)
+7. disabled vs unknown username → **different error strings, one lockout entry not two** (J2-7)
+8. one `twofa_token` verified three times → **valid three times** (J2-3)
+
+Plus two independent one-shots: `jwt.verify` against a forged `alg:none` token on the installed
+jsonwebtoken 9.0.3, and `proxy-addr` with the compiled `loopback` trust list against three
+`X-Forwarded-For` shapes. `bcryptjs` cost-12 compare timing was measured over five runs (304 ms
+average) on this workstation, not on the VPS — the ratio to the 2400/min bucket is the point, not
+the absolute number.
+
+Findings above were written **before** any code was touched, and only J2-6's text was changed on
+the day (plan rule 3). The operator authorised the rest on **2026-08-26** — see the resolution pass
+below for what was applied, what was deliberately left, and what an operator will notice.
+
+---
+
+### §J2 — resolution pass, 2026-08-26 (add-ons, NOT VPS-TESTED)
+
+Six of the eight findings are now fixed in code (J2-6's text half landed on the 25th). The
+findings above are left worded **as found** — a heading that says FIXED points here; the body
+still describes the bug, which is what makes the fix legible a year from now.
+
+Everything below is covered by a new regression suite,
+[`scripts/test-auth-hardening.js`](../../web/07_mining_pool_public/back-end-pool/scripts/test-auth-hardening.js)
+— **42 assertions, all passing**, against a throwaway SQLite file in the OS temp dir. It exists
+for the same reason `test-money-path.js` does: each case is a demonstrated bug on the path to the
+money routes, and a comment does not fail a build. `check-syntax` 53 files OK;
+`test-admin-guards` 26/26, `test-money-path` 30/30, `test-branding-sinks` 18/18 all still pass.
+
+#### What was applied
+
+**J2-1 — the step-up gate.** Three separate things were missing, and each is now in place.
+
+- **A bucket of its own.** `POST /api/admin/reauth` and `POST /api/auth/change-password` moved
+  off `admin` (2400/min) and `auth` (200/min) onto a new `stepup` bucket at **10/min per IP**
+  ([lib/rate-limiter.js](../../web/07_mining_pool_public/back-end-pool/lib/rate-limiter.js)).
+  This is the half that matters most, and not only for guessing: the bcrypt runs *before* any
+  counter can see its result, so a lockout alone would never have stopped a session thief from
+  burning 730 CPU-seconds per 60 s on the event loop that validates stratum shares. 2400/min →
+  10/min takes the daily guess budget from 3.46 M to 14 400, a factor of 240.
+- **The three-layer login policy.** `AuthManager.stepUp()` now takes `opts.ip`, checks
+  `lockoutRemaining()` **before** the bcrypt (a locked source costs no CPU), records
+  `_recordPairFailure()` on a wrong password, and clears the pair on success. The route adds
+  `recordAdminLoginFailure()` for the per-IP auto-ban and answers **429** with
+  `retry_after_seconds` when locked. An already-locked source deliberately does *not* spend
+  auto-ban budget — it is being refused before the password is read, so counting it would let a
+  lock ratchet itself into a longer ban on no new information. `changePassword()` takes `ip` and
+  arms the same lock, and both its outcomes now write an audit row (`password_changed` /
+  `password_change_failed`), where before it wrote none at all.
+- **A second factor when the pool mandates one.** When `access.require_admin_totp` is on *and*
+  the admin is enrolled, `stepUp` requires a TOTP or recovery code, verified through
+  `verifyTotpOrRecovery` so the code is consumed and cannot be replayed. The code is asked for
+  only where it is genuinely needed: demanding one from an *un-enrolled* admin would make
+  step-up unsatisfiable and hard-lock the panel, which is the trap `freshAdminEnroll` exists to
+  avoid. A password-only attempt is answered 401 `{ totp_code_required: true }` and — this
+  matters — is **not** counted as a failed attempt, because a correct-password client that
+  simply doesn't know the pool's policy yet must not be able to lock itself out.
+  `public_html/js/stepup.js` handles the flow: password → if challenged, prompt for the code →
+  re-post both. It also now *surfaces* failures, including the lockout and its countdown; it
+  previously returned a silent `false`, which would have left an operator retyping a correct
+  password into a window that had stopped accepting it.
+
+**J2-2 — first-admin registration.** `registerAdmin(username, password, { firstAdminOnly: true })`
+computes the bcrypt hash **first**, then does the admin-count check, the username check and the
+`INSERT` inside one `db.transaction()`. The fix is the *ordering*, not the transaction: the race
+existed only because a ~300 ms `await` sat between the check and the insert and yielded the event
+loop, so with no await between them the decision completes in one tick of a single-threaded
+process. The transaction is the belt to that braces, and keeps it true if a future caller adds an
+await. index.js keeps its cheap pre-check so a closed pool answers without doing captcha or bcrypt
+work — that line is now an optimisation, and is commented as *not* being the gate.
+
+Option (b) from the finding — refusing `/api/auth/register` unless `isLocalRequest(req)` — was
+**not** applied. (a) closes the hole outright and costs the operator nothing; (b) is an additional
+deployment policy that also forbids registering from another machine, and that is the operator's
+call to make, not a side effect of a security fix. It remains available and is noted at the
+function.
+
+**J2-3 — the 2FA budget follows the account.** `generate2faToken` now mints a `jti` and holds
+`{ userId, fails, expires }` server-side. `verify2faToken` returns `{ userId, jti }` and refuses
+any token whose `jti` is unknown, expired or burned — **including a validly-signed JWT that never
+had server state**, which is what stops the old token shape being replayed. `record2faFailure`
+destroys the token after 5 wrong codes (`twofa_max_attempts`); success calls `consume2faToken`, so
+a token cannot be re-presented to mint a second session or buy a fresh budget. A password holder
+who fans one token out to a thousand hosts now gets five guesses in total instead of twenty per
+host, while an operator fumbling codes on one device is untouched — which was the false-positive
+worry that set the per-IP threshold at 20 in the first place. Separately, `/api/admin/2fa/disable`
+and `/api/admin/2fa/recovery/regenerate` now call `recordAdminLoginFailure(ip, '2fa')`, so all
+three routes that verify a code feed one counter.
+
+**J2-4 — captcha eviction.** `lib/captcha.js` keeps a `byIp` index and caps outstanding challenges
+at **20 per source** (`maxPerIp`), evicting that source's own oldest first, so a flood is
+self-inflicted. `GET /api/auth/captcha` passes `req.ip`. The global `max` survives as what it
+should always have been — a memory backstop, not the brute-force control it was being asked to be.
+`verify()` deliberately does **not** check the IP: a solved challenge must stay redeemable if the
+client's address changes between the two requests (mobile handover, a Tor circuit rotating), which
+would otherwise read to the operator as a captcha that is simply wrong. The stateless-HMAC
+alternative was not taken — it removes the store entirely but loses single-use, and single-use is
+the property worth keeping.
+
+**J2-5 — TOTP replay.** New column `users.totp_last_counter` (added to the schema *and* to
+`migrateUsers`, so existing installs pick it up on next start; `0` backfills safely because every
+real counter is ~5.8 × 10⁷ and rising). `totp.verifyCounter()` returns the matched step instead of
+a boolean, and `verifyTotpOrRecovery` refuses any counter `<= totp_last_counter`, stamping it on
+success. `confirm2faEnrollment` stamps it too — the code typed to confirm enrollment is live for
+another ~90 s and was just echoed through a form, so enrollment is where the guard has to start.
+`window` stays ±1: clock drift is the false positive an operator actually meets, and single-use is
+orthogonal to it, since the rule is "strictly newer", not "exactly now".
+
+**J2-7 — disabled accounts.** `login()` now runs the password compare first and treats
+`!passwordValid || !user.is_active` identically: same generic string, same bcrypt cost, same
+`_recordPairFailure`. The cost is that an admin who disabled their own account gets no hint why —
+deliberate, since the recovery path is the break-glass CLI (`admin-reset.js --unlock`, which also
+sets `is_active = 1`) and not an error string that doubles as an account oracle for everyone else.
+
+**§J1 handoff.** `/api/auth/change-password` is promoted to `requireAdmin` and `requireAuth` is no
+longer imported by `index.js` — see the correction above for why it stays exported.
+
+#### Deliberately not applied
+
+- **J2-1 item 4 — raising the minimum admin password length above 8.** This is a policy knob the
+  operator owns, and on a live pool it would be close to decorative: the only account that exists
+  is the one already registered, and a length floor never re-checks a stored password. The number
+  that actually moved is the budget — 14 400 guesses/day against an 8-character password is a
+  different proposition from 3.46 M. If an operator wants a floor, it belongs in
+  `registerAdmin`/`changePassword` as an explicit choice, with the knowledge that it cannot help
+  an install that is already running.
+- **§C3 — access tokens are unrevocable until they expire.** Unchanged and still open; it is a
+  §C item, and J2-6 fixed only the two places that *described* it wrongly. Nothing in this pass
+  narrows it: a stolen access token still survives logout, a password change and *Revoke
+  sessions*. `jwt_secret` rotation plus a service restart remains the only immediate kill-switch,
+  and both the panel and the break-glass CLI now say so.
+
+#### Behaviour changes an operator will notice
+
+1. **Step-up is 10/min per IP.** An operator clicking through a long payout run will not hit it
+   (a step-up lasts 5 minutes), but an automated client that re-authenticates per request will.
+2. **On a mandatory-2FA pool, step-up now asks for a code.** The bundled panel handles it. Any
+   custom client or script that POSTs `/api/admin/reauth` must send `code` alongside `password`
+   when the server answers `totp_code_required`.
+3. **A TOTP code works once.** Typing the same code at two prompts inside one 30-second step now
+   fails the second time — correct per RFC 6238 §5.2, and worth knowing before it is reported as
+   a bug. Wait for the next code.
+4. **`/api/auth/change-password` now requires an admin token and passes the admin IP filter.**
+   No caller in the repo is affected (nothing in `public_html/` calls it, and every account in
+   `users` is an admin), but a pool with an `admin_allowlist` set will now enforce it here too.
+5. **Failed step-ups and password changes appear in the audit log** (`reauth_failed` gains a
+   `details` payload; `password_changed` / `password_change_failed` are new actions) and count
+   toward the per-IP auto-ban, so an operator fumbling their password several times can now
+   temp-ban their own address for an hour. That is the same exposure the login route has always
+   had, and the pair key means it never locks out anyone else.
+
+#### Self-review of this pass, same day — three things the fixes did to each other
+
+Written after the code was in, because a pass that audits its own fixes with tests it also wrote
+is self-confirming by construction. Re-reading the diff against the *clients* rather than the
+tests turned up three interactions, two of which are the fixes colliding with one another.
+
+1. **J2-1 × J2-5 — the double-code sequence.** On a mandatory-2FA pool, `disable2fa()` /
+   `regen2faRecovery()` in `admin-panel/settings-common.js` put a code in the request body; the
+   route is `freshAdmin`, so `adminFetch` gets a 403, and step-up now asks for a code too. The
+   operator reads the *same* code off their authenticator — it is still on screen. Step-up
+   consumes it (J2-5), and the retry replays it, so a code that worked one second earlier comes
+   back as *"Incorrect 2FA / recovery code"* on, of all screens, **disable 2FA**. It
+   self-corrects on the next attempt, but "incorrect code" for a correct code is how an operator
+   concludes 2FA is broken and reaches for the break-glass CLI. Fixed by making the rejection
+   honest rather than the guard weaker: `verifyTotpOrRecovery` takes an optional `detail`
+   out-param that reports `replay: true` for a genuine-but-spent code, and the three routes that
+   are already past the gate say *"That code has already been used. Wait for your authenticator
+   to show the next one."* The client clears the code box on that flag so the natural next action
+   is a fresh code. **Deliberately not surfaced at `/api/auth/login/totp`** — distinguishing
+   "spent" from "wrong" there would confirm to a phisher that a harvested code was genuine, which
+   is the exact attacker J2-5 exists for. The out-param shape matters: returning an object
+   instead of a boolean would have made every existing `if (!ok)` truthy and silently opened the
+   gate.
+2. **J2-2 × the installer.** The atomic gate throws `Admin registration closed.` from inside
+   `registerAdmin`, and the route was answering **400**. Script 07's installer branches on the
+   status code — 403 prints *"an admin already exists"*, 400 prints *"username ≥ 3, password ≥
+   8"* — so a race-loser would have been told to fix a password that was never the problem. The
+   route now maps that error back to 403, matching the pre-check it sits behind.
+3. **J2-3 × clock drift, accepted not fixed.** A wrong *server* clock rejects every code, and the
+   token budget now ends that run after 5 instead of 20 — so the operator re-enters password and
+   captcha three more times before reaching the same per-IP ban. More friction, but the
+   "please log in again" message is a clearer signal that something is wrong than twenty silent
+   rejections, and the per-IP threshold of 20 is untouched. Noted because memory
+   `project_pool_admin_login_security` names clock drift as the main false-positive source.
+
+Also checked and clear: `public_html/js/stepup.js` is the single copy the admin panel loads
+(`/js/stepup.js`, no second file to drift); `/api/auth/change-password` has no client anywhere,
+so promoting its guard breaks nothing; `sqlite-compat`'s `transaction()` rolls back **and**
+rethrows, which is what `registerAdmin`'s error path depends on.
+
+#### Handoffs unchanged by this pass
+
+J12 still owns the remaining bcrypt CPU lever on `/api/auth/login/totp`'s recovery branch (up to
+10 cost-12 compares per submission, on the `auth` bucket at 200/min — the `stepup` bucket does not
+cover it). J9, J16 and J17 are as written above; J17's launch-sequence item is now closed in code
+rather than by procedure, so the procedure no longer has to carry it.
+
+---
+
+## §J3 — Ownership gate & account API (2026-08-26, add-ons, NOT VPS-TESTED)
+
+Third session of the pre-mainnet §J pass (plan:
+[`script07_reference_audit_session_plan.md`](script07_reference_audit_session_plan.md) §J3).
+Scope: [`lib/owner-proof.js`](../../web/07_mining_pool_public/back-end-pool/lib/owner-proof.js) (486)
+and the `/api/account/:addr/*` block in
+[`index.js`](../../web/07_mining_pool_public/back-end-pool/index.js) (2832–3798 — thirteen routes,
+four of which move money). Question asked: **can miner A act on miner B's balance, and can an
+address be spelled two ways?**
+
+Read first, then confirmed by execution: a one-shot harness bound the real `owner-proof.js` to an
+in-memory `node:sqlite` DB carrying the production `miner_accounts` / `pool_config` columns and
+replayed the capture-and-verify cycle. Its output is quoted per finding. No server started, no
+VPS touched (plan rule 5); the harness lived in the scratchpad and its probe list is in
+*Verification* below.
+
+**Headline.** The second question has a clean answer — there is exactly one spelling, and it holds
+at every call site (see *Verified correct*). The first does not. The gate's own threat model says
+it exists so that *"a stranger reading the public leaderboard cannot trigger payouts for other
+people's addresses"* ([owner-proof.js:20–22](../../web/07_mining_pool_public/back-end-pool/lib/owner-proof.js#L20)).
+Five separate findings below let a stranger do exactly that, or worse. Nothing found here takes
+funds from a **default-configured** pool — the one theft path (J3-1) needs the Goblin rail
+switched on, which is off by default (`nostr_payouts_enabled: 'false'`,
+[lib/pool-settings.js:186](../../web/07_mining_pool_public/back-end-pool/lib/pool-settings.js#L186)) —
+so no Critical is recorded. But J3-3 and J3-5 both work out of the box.
+
+### Threat actors used in this section
+
+| Label | Means |
+|---|---|
+| **Anonymous** | Internet, no credentials, no hardware. Reaches nginx → `/api/account/*`, and the public stratum port at `:3333` |
+| **Rig holder** | Anonymous, *plus* any Grin miner able to produce one share at the node's `minimum_share_difficulty` — i.e. every current customer of every Grin pool, and anyone who rents a rig for a minute |
+| **Registered miner** | A rig holder who already mines here, attacking another miner |
+| **On-box root** | Shell on the pool server — Info only, per plan rule 7 |
+
+The distinction that matters is **Anonymous vs Rig holder**, and it is much narrower than it
+looks. The pool's entire user population is rig holders; the gate is meant to protect them *from
+each other*, so "requires a miner" is not a meaningful barrier here the way "requires an admin
+session" is in §J1/§J2.
+
+---
+
+### J3-1 — [High] One accepted share writes BOTH ownership-proof legs, so the AND-gate protecting the payout *destination* is one factor, not two — **FIXED 2026-08-26 (see §J3 resolution pass)**
+
+**Threat actor: rig holder.**
+
+`POST /api/account/:addr/nostr-destination` is the only miner-reachable route that can point a
+payout somewhere other than the miner's own wallet, and the code says so plainly:
+
+> *"Goblin pays a USERNAME — so this endpoint, not the withdraw endpoint, is where money can be
+> redirected. It therefore demands BOTH proofs (mining IP AND rig password) where a withdrawal
+> accepts either."*
+> — [index.js:3765–3768](../../web/07_mining_pool_public/back-end-pool/index.js#L3765)
+
+`requireBothProofs` ([index.js:3769–3788](../../web/07_mining_pool_public/back-end-pool/index.js#L3769))
+implements that honestly: two `verifyOwnerProof` calls, the first pinned to `method === 'ip'`, the
+second to `method === 'password'`, so submitting the password in both fields cannot pass.
+
+The problem is upstream. Both legs are captured **from the same event, by the same call**:
+
+```js
+if (!session.ipRecorded) {
+  session.ipRecorded = true;
+  this.minerManager.recordOwnerEvidence(session.grinAddress, session.ip, session.pass);
+```
+— [lib/stratum-server.js:599–601](../../web/07_mining_pool_public/back-end-pool/lib/stratum-server.js#L599)
+
+`recordOwnerEvidence` then writes the IP window
+([owner-proof.js:276–282](../../web/07_mining_pool_public/back-end-pool/lib/owner-proof.js#L276))
+and the password window
+([:295–299](../../web/07_mining_pool_public/back-end-pool/lib/owner-proof.js#L295)) in one
+statement. Nothing checks who is connected — stratum login is unauthenticated by design (the
+address *is* the username,
+[stratum-protocol.js:61–66](../../web/07_mining_pool_public/back-end-pool/lib/stratum-protocol.js#L61)),
+and any address may be mined by anyone. So one accepted share submitted under a victim's address,
+with an attacker-chosen rig password, hands the attacker **both** halves of the AND-gate: the
+password they chose, and their own IP.
+
+Harness (steps 1–2 — the victim mines first, then one attacker session):
+
+```
+victim proof: IP leg              {"ok":true,"reason":"match","method":"ip"}
+victim proof: password leg        {"ok":true,"reason":"match","method":"password"}
+
+== 2. ATTACKER submits ONE accepted share under the victim address ==
+attacker IP leg   (needs method=ip)          {"ok":true,"reason":"match","method":"ip"}
+attacker pass leg (needs method=password)    {"ok":true,"reason":"match","method":"password"}
+=> requireBothProofs (nostr-destination) WOULD PASS        true
+```
+
+**Failure scenario.** The Goblin rail is enabled. An attacker reads the public leaderboard
+(`/api/pool/top-block-finders`) or the account API for a miner with a large balance, points any
+rig at that address with `pass = "chosen-secret-99"` for a few seconds, and stops. They now
+register their own goblin.st username as the victim's payout destination, wait out the 48 h
+cooldown, and withdraw the balance to themselves.
+
+**What still stands, and what does not.** §E.3's other four layers are real and each does its job:
+the destination is stored, never taken from the withdraw body (layer 1); the 48 h cooldown holds
+(layer 2); TOFU re-pin (3) and the NIP-05 allowlist (4) are untouched. The one that fails is the
+premise underneath layer 2 — *"Registration is visible on the miner's own account page, so the
+real owner … has the whole window to spot a hijack."* That assumes the owner looks. Worse, the
+change-alert DM
+([index.js:3794–3812](../../web/07_mining_pool_public/back-end-pool/index.js#L3794)) fires only at
+a **previous** destination, so a victim who has never used the Goblin rail — the common case —
+gets no alert at all, and their account page shows a destination they would have to already be
+watching for.
+
+**Fix (not applied — structural, plan rule 3).** The AND-gate needs two factors that cannot be
+written by one event. Options, cheapest first:
+
+1. **Refuse to accept a proof captured after the account had a balance.** Stamp
+   `last_pass_set_at` / `last_ip_set_at` at capture and make `requireBothProofs` reject a leg
+   younger than the destination cooldown. An attacker's freshly-injected proof is then unusable
+   for 48 h, during which the victim's own mining re-captures and evicts it.
+2. **Do not let a *new* proof value silently displace an existing one on an account that already
+   has one.** Capture into a pending slot; promote it only after N sessions or a fixed age.
+3. **Require the Goblin registration to be confirmed from the previous destination or by a Tor
+   payout to the mining address** — i.e. make the confirmation use a rail that cannot be forged.
+
+Option 1 is the smallest change and closes the scenario above without touching the stratum path.
+Whichever is chosen, the fix belongs in `owner-proof.js` + the `nostr-destination` route, not in
+`stratum-server.js`, because the capture itself is legitimate — it is *trusting* it that is not.
+
+---
+
+### J3-2 — [High] `password_proof.live.distinct` on the public account summary is an unthrottled online oracle for the rig-password leg — **FIXED 2026-08-26 (see §J3 resolution pass)**
+
+**Threat actor: anonymous.**
+
+`GET /api/account/:addr` publishes live cross-rig password diagnostics:
+
+```js
+password_proof: {
+  state: acct.pass_proof_state || null,
+  live: minerManager ? minerManager.getPasswordConsistency(acct.grin_address) : null
+}
+```
+— [index.js:3046–3049](../../web/07_mining_pool_public/back-end-pool/index.js#L3046)
+
+The comment defends this as safe because it is counts-only, and it is:
+
+> *"A non-compliant password can never be accepted as proof, so telling a visitor it is short or a
+> factory default reveals only that a door they can't open is shut."*
+> — [index.js:3041–3043](../../web/07_mining_pool_public/back-end-pool/index.js#L3041)
+
+That reasoning covers `state`. It does not cover `live`. `getPasswordConsistency` builds a **Set of
+the raw password strings across every currently-connected session for that address** and returns
+its size:
+
+```js
+for (const [, s] of this.activeSessions) {
+  if (s.grinAddress !== grinAddress) continue;
+  sessions++;
+  const p = typeof s.pass === 'string' ? s.pass.trim() : '';
+  if (p && isUsablePassword(p, this.db)) usable.add(p);
+  else unusable++;
+}
+return { sessions, distinct: usable.size, unusable };
+```
+— [lib/miners.js:201–218](../../web/07_mining_pool_public/back-end-pool/lib/miners.js#L201)
+
+A stratum session is created at **login**, before any share
+([stratum-server.js:477](../../web/07_mining_pool_public/back-end-pool/lib/stratum-server.js#L477)),
+and login is unauthenticated. So:
+
+1. Attacker opens a stratum connection, logs in as `<victim-address>.probe` with candidate
+   password **X**.
+2. Attacker fetches `GET /api/account/<victim-address>`.
+3. If `distinct` is unchanged, **X is byte-identical to a password one of the victim's live rigs
+   is using**. If it went up by one, X is wrong.
+
+This is a direct equality oracle on the password leg of the gate, and it **bypasses every control
+built to protect that leg**: `FAIL_MAX = 8` per address per 10 minutes
+([owner-proof.js:230](../../web/07_mining_pool_public/back-end-pool/lib/owner-proof.js#L230)), the
+per-IP counter added by §F2, the 16 MB scrypt that makes each guess expensive
+([:179](../../web/07_mining_pool_public/back-end-pool/lib/owner-proof.js#L179)), and
+`auditOwnerProof`'s deny row ([:415](../../web/07_mining_pool_public/back-end-pool/lib/owner-proof.js#L415)).
+No guess reaches `verifyOwnerProof` at all, so nothing is counted, nothing is slowed and nothing
+is logged.
+
+**Failure scenario, with the rate that actually applies.** `max_connections_per_ip` defaults to
+**320** ([stratum-server.js:120](../../web/07_mining_pool_public/back-end-pool/lib/stratum-server.js#L120)),
+and the account summary rides the loose `public` bucket at 1200/min
+([index.js:2963](../../web/07_mining_pool_public/back-end-pool/index.js#L2963)). The attacker does
+not have to test one candidate per request: open 320 sessions carrying 320 *distinct* candidates,
+read `distinct` once, and the count tells them how many of the 320 were hits; a binary search over
+the batch (≈9 further reads, closing sockets to bisect) isolates which. That is ~320 candidates
+per ~10 HTTP requests, i.e. of order 10⁴ candidates per minute from a single IP — against a gate
+whose designed budget is 8 per 10 minutes. Rig passwords are typed once into ASIC firmware and are
+overwhelmingly dictionary-grade; `PASS_MIN = 8`
+([owner-proof.js:153](../../web/07_mining_pool_public/back-end-pool/lib/owner-proof.js#L153)) is
+the only entropy floor.
+
+**Note this is not the same hole as J3-1** — it needs no mining hardware and no PoW at all, and it
+recovers the *victim's real* password rather than injecting a new one, which means it also survives
+any fix that makes injected proofs untrusted.
+
+**Fix (not applied).** `live` exists to answer one operator-facing question — *"are my rigs
+configured consistently?"* — and that question is not the public's. Either:
+
+- drop `distinct` from the public payload and keep `sessions` / `unusable` (which carry no
+  password material), moving the full breakdown to `GET /api/admin/miners/:addr`; or
+- keep the shape but make it non-differential: report `distinct` only when
+  `sessions >= 3`, or coarsen to a boolean `consistent: distinct <= 1`. A boolean still flips on a
+  correct guess, so this is the weaker option — **prefer removal.**
+
+The `state` field can stay: it is derived from the account row, not from live sessions, and the
+comment's reasoning about it holds.
+
+---
+
+### J3-3 — [High] The per-address failed-proof lockout is a weapon: ~9 requests per 10 minutes from one IP permanently denies a miner access to their own balance — **FIXED 2026-08-26 (see §J3 resolution pass)**
+
+**Threat actor: anonymous.**
+
+`verifyOwnerProof` locks per **address**, and the lock is applied regardless of *who* failed:
+
+```js
+if (isLockedOut(grinAddress) || (ipKey && isLockedOut(ipKey))) {
+  return { ok: false, reason: 'too_many_attempts' };
+}
+```
+— [owner-proof.js:326–328](../../web/07_mining_pool_public/back-end-pool/lib/owner-proof.js#L326)
+
+with `FAIL_MAX = 8` per 10-minute window and a 5-minute lockout
+([:229–232](../../web/07_mining_pool_public/back-end-pool/lib/owner-proof.js#L229)). §F2 reasoned
+about this counter only from the attacker's side — *"an attacker walking the public leaderboard
+gets a fresh 8-guess budget per address"* — and added the per-IP counter to cap the sweep. Neither
+counter considers the **victim's** side: the address lock has no notion of an origin, so the eight
+guesses that trip it need not come from the person being locked out.
+
+Harness (step 5 — eight wrong guesses, each from a different source IP so the per-IP counter never
+fires, then the real owner tries their real password):
+
+```
+after 8 wrong guesses from 8 distinct IPs   {"ok":false,"reason":"too_many_attempts"}
+owner locked out of their own address?      true
+```
+
+**Failure scenario.** `_throttleState` resets a key only when its window has aged past
+`FAIL_WINDOW_MS` ([:238](../../web/07_mining_pool_public/back-end-pool/lib/owner-proof.js#L238)),
+and `_registerFail` re-arms `lockedUntil` on *every* call once `count >= max`
+([:250–254](../../web/07_mining_pool_public/back-end-pool/lib/owner-proof.js#L250)). So sustaining
+a lock costs 8 requests to arm it and 1 request per window thereafter — call it **9 requests per
+10 minutes, ≈54 per hour**, which sits comfortably under both the `withdraw` bucket (20/min per
+IP, §F1) *and* the per-IP proof counter (20 per 10 min), so **one IP is enough** and no throttle
+anywhere ever fires. Targets are read straight off the public leaderboard. The victim's every
+attempt returns `too_many_attempts` — they cannot withdraw by Tor, by slatepack, or by Goblin, and
+there is no miner-facing appeal path: the public cancel was removed in §E.1 and every admin
+remedy needs the operator.
+
+Left running, this ends at the §Abandoned-balance policy: 24 months dormant, swept to the prize
+pool. The griefing the gate was built to prevent — *"each one burns a pool-paid network fee"* — is
+one fee. This is the whole balance.
+
+**Fix (not applied).** Separate "this address is under attack" from "this requester is failing".
+The per-IP counter (§F2) is the one that should refuse service; the per-address counter should
+raise the *cost* without ever hard-refusing an origin that has not itself failed. Concretely:
+
+- key the lockout on the **pair** `(address, requester-IP)`, keeping a much looser per-address
+  counter for alerting/audit only; and/or
+- once an address is under a lock, still accept a proof from an origin with a clean per-IP record,
+  after a delay (a fixed 2–5 s sleep costs an attacker nothing they aren't already paying and
+  costs the real owner one page-load).
+
+`admin_audit_log` already records every `owner_proof:*:deny`
+([owner-proof.js:422–430](../../web/07_mining_pool_public/back-end-pool/lib/owner-proof.js#L422)),
+so the operator-visible signal for a targeted lockout campaign already exists — nothing surfaces
+it yet. Worth an AlertMonitor rule alongside the fix.
+
+---
+
+### J3-4 — [Medium] Two accepted shares evict both slots of a victim's last-2 proof window, and a miner who has stopped mining can never restore it — **FIXED 2026-08-26 (see §J3 resolution pass)**
+
+**Threat actor: rig holder.**
+
+The last-2 window exists so that *"an ISP re-lease or a rig-side password change never locks the
+owner out"* ([owner-proof.js:34–35](../../web/07_mining_pool_public/back-end-pool/lib/owner-proof.js#L34)).
+It is also only two slots deep, and — per J3-1 — a stranger can write to it. `recordOwnerEvidence`
+rotates `last → prev` on every changed value
+([:278–281](../../web/07_mining_pool_public/back-end-pool/lib/owner-proof.js#L278),
+[:296–299](../../web/07_mining_pool_public/back-end-pool/lib/owner-proof.js#L296)), so two attacker
+sessions with different IPs and different passwords fill both slots and the owner's evidence is
+gone.
+
+Harness (steps 3–4 — one attacker session leaves the victim working; the second does not):
+
+```
+== 3. victim still works after ONE attacker session (last-2 window) ==
+victim IP still verifies                     true
+
+== 4. a SECOND attacker session evicts the victim entirely ==
+victim IP after 2 attacker sessions          {"ok":false,"reason":"no_match"}
+victim password after 2 attacker sessions    {"ok":false,"reason":"no_match"}
+```
+
+**Failure scenario.** A miner leaves the pool — sells the rig, switches pools, or simply finishes a
+run — with a balance below `min_withdrawal` that later matures over the line, or with a balance
+they intend to withdraw next month. Two shares from any rig, at any point afterwards, permanently
+remove their ability to prove ownership: they cannot re-capture without mining again, which is
+exactly the thing they have stopped doing. `verifyOwnerProof` returns `no_match` rather than
+`no_recorded_proof`, so nothing on the account page tells them what happened — it looks like they
+mistyped.
+
+Severity is Medium rather than High only because an **active** miner self-heals on their next
+accepted share. That is also why it is a separate finding from J3-1 and not a note under it: a fix
+that stops a *fresh* proof being trusted (J3-1 option 1) does not stop it being *written*, and so
+does not stop the eviction.
+
+**Fix (not applied).** Do not let a new value displace a stored one when the account has a balance
+and the new value's session has not sustained mining — the same pending-slot mechanism as J3-1
+option 2 closes both. A cheaper partial: keep the owner's *oldest* proof pinned in a third slot
+that only a successful verify from that same value can refresh.
+
+---
+
+### J3-5 — [High] `donate100` on an unauthenticated stratum login diverts up to 100% of another miner's future earnings, and the account API never shows it — **FIXED 2026-08-26 (see §J3 resolution pass)**
+
+**Threat actor: anonymous.**
+
+`handleLogin` writes a persistent, money-affecting per-address setting **before any proof of work
+and before a session even exists**:
+
+```js
+if (parsed.donation_percent !== null && parsed.donation_percent !== undefined) {
+  try {
+    this.incentives.setDonation(parsed.grin_address, parsed.donation_percent);
+```
+— [lib/stratum-server.js:470–472](../../web/07_mining_pool_public/back-end-pool/lib/stratum-server.js#L470)
+
+Ten lines below it, the file states the rule this breaks:
+
+> *"the miner's source IP / password are deliberately NOT recorded here. Stratum login is
+> unauthenticated (the address IS the username), so recording at login let anyone with a TCP socket
+> log in under a victim's address and poison its ownership-proof windows … Both are recorded on
+> the session's first ACCEPTED share instead — evidence requires actual PoW."*
+> — [lib/stratum-server.js:462–466](../../web/07_mining_pool_public/back-end-pool/lib/stratum-server.js#L462)
+
+The donation write sits *above* that comment and did not get the same treatment. `setDonation`
+([lib/incentives.js:164–177](../../web/07_mining_pool_public/back-end-pool/lib/incentives.js#L164))
+clamps to 0–100 and refuses the two reserved addresses, then upserts. `applyToDistribution` spends
+it at every block:
+
+```js
+const pct = this.donationPercent(address);
+if (pct > 0) {
+  const donated = gross * (pct / 100);
+  ...
+  this._move(address, -donated, 'debit', 'donation', blockHeight);
+  this.creditPrizePool(donated, 'donation', blockHeight);
+```
+— [lib/incentives.js:211–221](../../web/07_mining_pool_public/back-end-pool/lib/incentives.js#L211)
+
+**This one is live on a default pool.** `incentives_enabled: 'true'` and
+`allow_miner_donations: 'true'` are both defaults
+([lib/pool-settings.js:550, :554](../../web/07_mining_pool_public/back-end-pool/lib/pool-settings.js#L550)),
+unlike the Goblin rail in J3-1.
+
+**Failure scenario.** One TCP connect and one `login` frame — `{"login":"<victim>.x-donate100"}`,
+no share, no password, immediately disconnect — and 100% of that address's every future PPLNS
+credit is redirected to the prize pool. It is **persistent and not self-healing**: the victim's own
+logins call `setDonation` only when their worker name carries a `donateN` tag
+([stratum-server.js:470](../../web/07_mining_pool_public/back-end-pool/lib/stratum-server.js#L470)),
+which for a normal rig it never does, so a normal login does not clear it. It is also
+**irreversible** — the prize pool drains through lotteries, streak top-ups and join bonuses to
+other people; there is no clawback path back to the victim.
+
+**And the account API — this session's scope — is where the victim should have found out.**
+`GET /api/account/:addr` returns 25 fields including `dormancy`, `payouts_frozen` and
+`password_proof` diagnostics ([index.js:3011–3062](../../web/07_mining_pool_public/back-end-pool/index.js#L3011))
+and **does not return `donation_percent`**. The only public surface carrying it is
+`GET /api/pool/donors`, which is a **Top-100 wall**
+([index.js:3155–3161](../../web/07_mining_pool_public/back-end-pool/index.js#L3155)) — a victim
+appears there only once enough of their money has already been taken to rank. So the pool debits a
+miner's earnings on the basis of a setting the miner has no way to read and did not make.
+
+**Scope note.** The write lives in `stratum-server.js` (§J6) and `incentives.js`, outside this
+session's file list. It is reported here in full rather than as a handoff because it is the exact
+question §J3 was given — *can miner A act on miner B's balance?* — and because the corrective half
+that **is** in scope (the account summary must expose `donation_percent`) would otherwise be
+written up with no cause attached. §J6 owns the stratum-side fix.
+
+**Fix (not applied).** Three parts, in order of value:
+
+1. **Move the `setDonation` call to the first accepted share**, beside `recordOwnerEvidence`
+   ([stratum-server.js:599](../../web/07_mining_pool_public/back-end-pool/lib/stratum-server.js#L599)),
+   and gate it on `session.ipRecorded` the same way. This makes the comment at :462–466 true of the
+   whole login handler instead of two-thirds of it. It does **not** fully close the hole (a rig
+   holder can still set it, per J3-1) but it removes the anonymous no-hardware path.
+2. **Add `donation_percent` to `GET /api/account/:addr`** so the account page can show it. In
+   scope for this session; smallest change here.
+3. Consider requiring `donateN` to be *confirmed* — an ownership-gated `POST /api/account/:addr/donation`
+   — with the worker-name tag kept only as a convenience that arms a pending value. That is a
+   design decision, not an audit call.
+
+---
+
+### J3-6 — [Low] The failed-proof throttle Map has no expiry sweeper and no size cap — **FIXED 2026-08-26 (see §J3 resolution pass)**
+
+**Threat actor: anonymous.**
+
+`_fails` grows one entry per failing address and one per failing source IP
+([owner-proof.js:233](../../web/07_mining_pool_public/back-end-pool/lib/owner-proof.js#L233)).
+Entries are created in `_throttleState` and removed **only** by `_clearFails` on a successful
+verify ([:256–258](../../web/07_mining_pool_public/back-end-pool/lib/owner-proof.js#L256)). There
+is no periodic sweep, no `TOR_PROBE_MAX`-style ceiling, and no eviction: `_throttleState` merely
+*resets* a stale entry when that same key is touched again
+([:238–241](../../web/07_mining_pool_public/back-end-pool/lib/owner-proof.js#L238)), which never
+happens for a key the attacker abandons. Compare the tor-probe cache one file over, which was
+explicitly bounded for this reason in §H3 — *"this is a cache, not a registry"*
+([index.js:3581](../../web/07_mining_pool_public/back-end-pool/index.js#L3581)).
+
+Growth is genuinely slow, and the reason is worth recording so nobody re-rates this: the per-IP
+lockout returns at :326 **before** `failBoth()` runs, so once an origin is locked it stops
+creating new address keys. One source IP therefore adds roughly 20 keys per 10-minute window —
+order of 10³ keys and a few hundred KB per day. It needs a large distributed effort to matter, and
+a restart clears it.
+
+**Fix (not applied).** A single `setInterval` sweep dropping entries whose `first` is older than
+`FAIL_WINDOW_MS` and whose `lockedUntil` has passed, plus a hard size ceiling with
+oldest-first eviction — the shape already used at
+[index.js:3596–3606](../../web/07_mining_pool_public/back-end-pool/index.js#L3596). Never evict an
+entry that is *currently* locked out, or eviction becomes the throttle bypass.
+
+---
+
+### J3-7 — [Low] `?direction=` resolves through `Object.prototype`, splicing a native function's source into the ledger `WHERE` clause — **FIXED 2026-08-26 (see §J3 resolution pass)**
+
+**Threat actor: anonymous.**
+
+```js
+const direction = LEDGER_DIRECTION_SQL[req.query.direction] ? req.query.direction : null;
+...
+const where = `grin_address = ? AND created_at >= ?` +
+  (direction ? ` AND ${LEDGER_DIRECTION_SQL[direction]}` : '');
+```
+— [index.js:3432–3436](../../web/07_mining_pool_public/back-end-pool/index.js#L3432)
+
+`LEDGER_DIRECTION_SQL` is an object literal
+([:3425](../../web/07_mining_pool_public/back-end-pool/index.js#L3425)), so the membership test
+walks the prototype chain. Harness (step 7, replaying the two-key map against the same expression):
+
+```
+  ?direction=in                -> AND (event_type='credit')
+  ?direction=constructor       -> AND function Object() { [native code] }
+  ?direction=toString          -> AND function toString() { [native code] }
+  ?direction=hasOwnProperty    -> AND function hasOwnProperty() { [native code] }
+  ?direction=nope              -> (ignored)
+```
+
+**This is not injection today** and should not be written up as one: the interpolated text is a
+built-in function's source, which the attacker cannot influence, and SQLite rejects it — the route
+returns `500 {"error":"near \"function\": syntax error"}` from
+[:3475](../../web/07_mining_pool_public/back-end-pool/index.js#L3475). What it is: a free 500 that
+leaks a fragment of the query text, on a route reachable by anyone, and a **dynamic SQL fragment
+selected by an unguarded object index** — one prototype-polluting path elsewhere in the process
+away from being the real thing. It is the same shape as J1-6 (`POST /api/admin/settings/constructor`)
+and it is worth fixing as a pair.
+
+The correct pattern is already in this file, 1,200 lines earlier:
+
+```js
+const allowed = ['week', 'month', 'year', 'all'];
+const range = allowed.includes(req.query.range) ? req.query.range : 'month';
+```
+— [index.js:3218–3219](../../web/07_mining_pool_public/back-end-pool/index.js#L3218)
+
+**Fix (not applied, one line):** `Object.hasOwn(LEDGER_DIRECTION_SQL, req.query.direction)`, or
+build the map with `Object.create(null)`. Note `LEDGER_DIRECTION_SQL.out` is also read directly at
+[:3561](../../web/07_mining_pool_public/back-end-pool/index.js#L3561) by `/earnings` — that call
+site is a literal property access and is unaffected.
+
+---
+
+### J3-8 — [Low] The two CSV routes put an unvalidated `:addr` into a response header and skip the account-existence check their siblings have — **FIXED 2026-08-26 (see §J3 resolution pass)**
+
+**Threat actor: anonymous.**
+
+```js
+res.setHeader('Content-Disposition',
+  `attachment; filename="pool-ledger-${tag}-${addr.slice(0, 12)}-${...}.csv"`);
+```
+— [index.js:3461–3462](../../web/07_mining_pool_public/back-end-pool/index.js#L3461), and the same
+shape at [:3514–3515](../../web/07_mining_pool_public/back-end-pool/index.js#L3514).
+
+`addr` is `req.params.addr` with no shape validation anywhere on either route, and — unlike
+`GET /api/account/:addr` ([:2972](../../web/07_mining_pool_public/back-end-pool/index.js#L2972)) and
+`tor-check` ([:3626](../../web/07_mining_pool_public/back-end-pool/index.js#L3626), the §H3 fix) —
+neither route checks that the address exists before doing work.
+
+Verified bounds with a one-shot against Node 24's own header validator:
+
+```
+CRLF  : THROWS ERR_INVALID_CHAR
+quote : ACCEPTED -> attachment; filename="a";x="-all.csv"
+```
+
+So header/response splitting is **not** possible (Node rejects CR/LF, and the route would 500),
+but a `"` inside the first 12 characters does break out of the quoted `filename` and append a
+parameter. Twelve characters is too few to fit a competing `filename=`, the `Content-Type` stays
+`text/csv`, and the victim would have to follow the attacker's own link — so the practical ceiling
+is close to zero. It is reported because it is unvalidated request data reaching a response header
+in a money-adjacent route, which is a property worth not having, and because the missing existence
+check is a §H3 lesson that did not propagate to the two siblings.
+
+**Fix (not applied):** validate `:addr` against `/^t?grin1[ac-hj-np-z02-9]{58}$/` once, in a
+shared handler for the whole `/api/account/:addr` family — the regex already exists at
+[index.js:6039](../../web/07_mining_pool_public/back-end-pool/index.js#L6039) for the admin award
+route. That single change also removes the sanitising burden from every current and future route
+in the block.
+
+---
+
+### J3-9 — [Info] §H3's `tor-check` fix re-verified: no exploitable timing oracle remains
+
+**Threat actor: anonymous.** The plan asked specifically whether the §H3 fix left a timing oracle.
+Re-read in full:
+
+- The account-existence check runs **before** the probe and returns the same 404 shape as
+  `GET /api/account/:addr` ([index.js:3626–3627](../../web/07_mining_pool_public/back-end-pool/index.js#L3626)) —
+  so the arbitrary-address oracle is genuinely closed, not merely rate-limited.
+- The cache is bounded at 500 with expired-first eviction then oldest-insert eviction
+  ([:3596–3606](../../web/07_mining_pool_public/back-end-pool/index.js#L3596)), and the in-flight
+  map is cleaned in a `finally` ([:3610–3612](../../web/07_mining_pool_public/back-end-pool/index.js#L3610)),
+  so the "parked rejected promise" failure the §H3 note warned about cannot occur.
+- The cache key is `req.params.addr`, and because only one spelling of an address can exist as a
+  row (see *Verified correct*), the key is canonical — there is no second spelling that would miss
+  the cache and re-amplify.
+
+**Residual, stated so the question is closed rather than left open:** a cache **hit** answers in
+microseconds and a miss takes a Tor circuit build, so an attacker on the `torcheck` bucket
+(10/min) can learn whether a given address was probed in the last 60 s — in practice, whether that
+miner just opened the payout page. It is a low-rate presence signal about an imminent withdrawal,
+not a wallet-uptime oracle, and removing it would mean removing the cache that §H3 added. **No
+action recommended.**
+
+---
+
+### Verified correct (checked with evidence, not assumed)
+
+- **One spelling, and it holds everywhere — the session's second question is clean.** Stratum
+  login is the only path that creates a mining account, and its regex is lowercase-only with no
+  `i` flag and an exact 58-symbol bech32 body
+  ([stratum-protocol.js:63–65](../../web/07_mining_pool_public/back-end-pool/lib/stratum-protocol.js#L63)).
+  `miner_accounts.grin_address` is `TEXT NOT NULL UNIQUE` with SQLite's default **BINARY**
+  collation ([db.js:286–288](../../web/07_mining_pool_public/back-end-pool/lib/db.js#L286)), and
+  `grep -n "grin_address LIKE"` over `index.js` + `lib/` returns exactly one hit — the admin miner
+  search at [index.js:5896](../../web/07_mining_pool_public/back-end-pool/index.js#L5896) — so no
+  money path uses case-insensitive matching. Consequence: an alternative spelling (uppercase
+  bech32, `%67rin1…`, a trailing space) cannot match any row, and therefore 404s rather than
+  forking an identity. The gate ([owner-proof.js:334](../../web/07_mining_pool_public/back-end-pool/lib/owner-proof.js#L334)),
+  the balance read ([index.js:2966](../../web/07_mining_pool_public/back-end-pool/index.js#L2966)),
+  the withdrawal write
+  ([withdrawal-scheduler.js:637](../../web/07_mining_pool_public/back-end-pool/lib/withdrawal-scheduler.js#L637))
+  and the audit row ([owner-proof.js:424](../../web/07_mining_pool_public/back-end-pool/lib/owner-proof.js#L424))
+  all bind the *same* `req.params.addr` string. The other account-creating call sites are
+  unreachable with attacker-chosen casing: `awardPrize` validates lowercase-only
+  ([index.js:6039](../../web/07_mining_pool_public/back-end-pool/index.js#L6039)), and
+  `prize_pool` / `pool_fee` ([incentives.js:13–15](../../web/07_mining_pool_public/back-end-pool/lib/incentives.js#L13))
+  are not bech32-shaped, so no one can mine to them, capture a proof on them, or withdraw them
+  (`verifyOwnerProof` → `no_recorded_proof`).
+- **The one-pending rule and the reversal cooldown cannot be raced.** All three create paths run
+  `_assertNoRecentReversal` and then the pending count + CAS balance lock with **no `await`
+  between them**, inside one synchronous `db.transaction` — Tor
+  ([:635 → :659–705](../../web/07_mining_pool_public/back-end-pool/lib/withdrawal-scheduler.js#L635)),
+  slatepack ([:728 → :749–779](../../web/07_mining_pool_public/back-end-pool/lib/withdrawal-scheduler.js#L728)),
+  nostr ([:883 → :899–931](../../web/07_mining_pool_public/back-end-pool/lib/withdrawal-scheduler.js#L883)).
+  Node's run-to-completion plus better-sqlite3's synchronous API means two concurrent HTTP requests
+  cannot interleave inside that region. Both `await`s that do exist on the nostr route
+  (`resolveDestination`, [index.js:3714](../../web/07_mining_pool_public/back-end-pool/index.js#L3714))
+  sit *before* the transaction, so a doubled request is caught by the `userPending >= 1` check.
+  The shared `PENDING_SQL` constant ([:16](../../web/07_mining_pool_public/back-end-pool/lib/withdrawal-scheduler.js#L16))
+  is used by every one of them — the §E.2 drift cannot recur by copy-paste.
+- **The gate is on every money route, and the tiers are ordered correctly.** The four money-writes
+  under `/api/account/` are `withdraw` ([:3651](../../web/07_mining_pool_public/back-end-pool/index.js#L3651)),
+  `withdraw/:id/finalize` ([:3736](../../web/07_mining_pool_public/back-end-pool/index.js#L3736)),
+  and `nostr-destination` POST ([:3814](../../web/07_mining_pool_public/back-end-pool/index.js#L3814))
+  / DELETE ([:3894](../../web/07_mining_pool_public/back-end-pool/index.js#L3894)); all four call
+  `verifyOwnerProof` (or `requireBothProofs`) as the **first** thing after reading `req.ip`, all
+  four ride the dedicated `withdraw` bucket, and every failure is audited. Register is
+  AND-gated and remove is OR-gated, which is the right way round (removal cannot redirect money).
+  The J1 handoff's claim is confirmed independently.
+- **Ordering on the Tor rail is right.** The pre-flight probe — the expensive, amplifiable part —
+  runs *after* the proof, not before
+  ([index.js:3656 vs :3670](../../web/07_mining_pool_public/back-end-pool/index.js#L3656)).
+- **Finalize cannot be aimed at another address.** `finalizeSlatepackWithdrawal` re-reads the row
+  and rejects a mismatch with 403 before any wallet call
+  ([withdrawal-scheduler.js:823](../../web/07_mining_pool_public/back-end-pool/lib/withdrawal-scheduler.js#L823)),
+  so a valid proof for address A cannot finalize B's payout even with B's withdrawal id.
+- **The password compare is constant-time**, on the scrypt output rather than the input —
+  `crypto.timingSafeEqual(dk, expected)` with a length pre-check
+  ([owner-proof.js:202–205](../../web/07_mining_pool_public/back-end-pool/lib/owner-proof.js#L202)).
+  The IP compare goes through the same function for hashed values
+  ([:212–216](../../web/07_mining_pool_public/back-end-pool/lib/owner-proof.js#L212)).
+- **Enumeration is a non-issue on this block.** `POST …/withdraw` on an unknown address returns
+  `403 {reason:"account_not_found"}` and a known one returns `no_match` — a real distinction, but
+  it reveals nothing `GET /api/account/:addr` does not already answer to anyone, by design
+  (address-as-identity, the account page has no login). No finding.
+- **The free-reject path is correctly free.** A submitted value that is neither an IP nor a usable
+  password returns its reason **without** counting toward the lockout
+  ([:360–366](../../web/07_mining_pool_public/back-end-pool/lib/owner-proof.js#L360)); the harness
+  confirmed 50 such probes leave the address unlocked. Given J3-3, this is the *right* call and
+  should not be "hardened" — counting them would hand an attacker a cheaper lockout lever than the
+  one they already have.
+- **`getPasswordConsistency` returns no password material** — counts only, `usable.size` never the
+  set ([miners.js:217](../../web/07_mining_pool_public/back-end-pool/lib/miners.js#L217)). The leak
+  in J3-2 is differential, not direct; the fix must not be mistaken for redaction.
+
+---
+
+### Handoffs
+
+- **§J4** — `_assertNoRecentReversal` computes `cooldown = mins * 60` and then `if (!cooldown) return;`
+  ([withdrawal-scheduler.js:184–187](../../web/07_mining_pool_public/back-end-pool/lib/withdrawal-scheduler.js#L184)).
+  `0` disabling it is documented and intended; **`NaN` disabling it silently is not** — any
+  non-numeric `payout.withdrawal_cooldown_minutes` reaching `config` turns the cross-rail cooldown
+  off with no log line. Same family as memory `project_config_loader_type_traps`. Whether the
+  validator can ever emit a non-number is §J9's; the consumer is §J4's file.
+- **§J6** — owns the stratum-side halves of **J3-1** (evidence capture trusts an unauthenticated
+  address), **J3-4** (two writes evict the last-2 window) and **J3-5** (`setDonation` at login,
+  above the comment that forbids exactly that). J3-5 part 1 is the smallest and highest-value of
+  the three.
+- **§J9** — `access.extra_banned_passwords` is cached for 60 s in-process
+  ([owner-proof.js:130–148](../../web/07_mining_pool_public/back-end-pool/lib/owner-proof.js#L130))
+  and fails open to the hardcoded seed on a corrupt/missing row. Both are documented and both look
+  right; the settings-side question — can a write leave that key in a shape that parses as an
+  empty array — is J9's.
+- **§J11** — `GET /api/account/:addr` publishes `password_proof.state`, `has_recorded_ip`,
+  `has_recorded_pass` and `password_proof.live` unauthenticated. J3-2 covers the `live.distinct`
+  oracle; the broader privacy question — that the account page is address-addressable with no
+  login, so anyone with a leaderboard entry can read another person's balance, pending payout and
+  rig count — is J11's to rate against memory `project_pool_ip_privacy`.
+- **§J12** — two levers found here are bucket-shaped, not gate-shaped. (1) The Tor pre-flight probe
+  runs before the pending/cooldown checks, so a miner holding one valid proof can force 20 fresh
+  Tor circuit builds per minute
+  ([index.js:3670](../../web/07_mining_pool_public/back-end-pool/index.js#L3670)) even while every
+  withdrawal they request would 429. (2) Every failed proof writes an `admin_audit_log` row
+  ([owner-proof.js:422](../../web/07_mining_pool_public/back-end-pool/lib/owner-proof.js#L422))
+  *including* the ones rejected by the lockout at :326 — so a locked-out attacker still grows the
+  table at the bucket rate for the full 180-day retention.
+- **§J15** — the account page is the only surface a miner has for J3-5's `donation_percent` and for
+  a "your proof was evicted" (J3-4) explanation. Once part 2 of the J3-5 fix lands, the field needs
+  somewhere to render.
+
+---
+
+### Verification
+
+All nine findings were written from reading first; the harness was then run to confirm or refute
+each one, and nothing above rests on inference alone. The harness bound the **real**
+`lib/owner-proof.js` to an in-memory `node:sqlite` database carrying the production
+`miner_accounts` columns (`last_ip`, `prev_ip`, `last_pass_hash`, `prev_pass_hash`,
+`pass_proof_state`) plus `pool_config`, and drove `recordOwnerEvidence` / `verifyOwnerProof` with
+the same arguments `stratum-server.js:601` and the four money routes pass. It ran as a single
+`node` process that exits on its own — no server, no listener, nothing left running (CLAUDE.md
+*Local Test Processes*). Probes, in order:
+
+1. victim capture → both legs verify (`method:'ip'`, `method:'password'`) — baseline
+2. one attacker `recordOwnerEvidence` under the victim's address → **both legs verify for the
+   attacker**, so `requireBothProofs` would pass (J3-1)
+3. victim still verifies after one attacker session — confirms the last-2 window (J3-4 bound)
+4. second attacker session → **victim's IP and password both return `no_match`** (J3-4)
+5. eight wrong guesses from eight distinct source IPs → **the owner's correct password returns
+   `too_many_attempts`**, `isLockedOut(addr) === true` (J3-3)
+6. fifty unusable-shaped guesses → address **not** locked, confirming the free-reject path
+7. the two-key direction map indexed by `constructor` / `toString` / `hasOwnProperty` → each
+   returns a native function whose source is spliced into the `WHERE` clause (J3-7)
+
+Plus one independent one-shot against Node 24's `ServerResponse.setHeader`: CRLF in a
+`Content-Disposition` value throws `ERR_INVALID_CHAR`, a `"` is accepted and breaks the quoting
+(J3-8). Rate figures quoted in J3-2 and J3-3 are derived from the configured limits
+(`max_connections_per_ip = 320`, `public = 1200/min`, `withdraw = 20/min`, `FAIL_MAX = 8`,
+`FAIL_MAX_IP = 20`), not measured against a running pool.
+
+**No code was changed in this session.** Every fix above is written up and left for a decision:
+J3-1, J3-4 and J3-5 are structural and cross into §J6's files, J3-2 and J3-3 change behaviour an
+operator would notice, and J3-6/7/8 are small but belong with the pass that applies the rest.
+
+---
+
+### §J3 — resolution pass, 2026-08-26 (same day, add-ons, NOT VPS-TESTED)
+
+The operator authorised fixing **all eight** open findings (J3-9 was Info / no action). Everything
+below is applied on `add-ons` and covered by a new suite,
+[`scripts/test-owner-gate.js`](../../web/07_mining_pool_public/back-end-pool/scripts/test-owner-gate.js)
+(19 checks), wired into `npm run test:unit`. The full suite runs **123 checks across six files
+(12 + 18 + 30 + 26 + 18 + 19), all passing**. Still NOT VPS-tested.
+
+Findings J3-1, J3-3 and J3-4 shared one root cause, so they got one mechanism rather than three
+patches. Stating it once, because the individual diffs do not show it:
+
+> **Proof of work is a cost, not an identity.** Anyone may mine to anyone's address. The design
+> already knew capture must cost PoW — that is why §D.2 moved it off `handleLogin` — but it then
+> treated "arrived with a share" as "is the owner". Every §J3 money finding is that one
+> substitution. What actually separates the owner from a stranger who mined here for ten seconds
+> is **age**: the owner's evidence has been on record since they started. So the gate now reports
+> *which slot matched and how old it is*, and each caller decides what it needs.
+
+#### What was applied
+
+**J3-1 — the destination AND-gate is now an AND + AGE gate.**
+`verifyOwnerProof` returns `slot` (`last` | `prev` | `anchor`) and `age_seconds` alongside
+`method`; four new columns (`last_ip_at`, `prev_ip_at`, `last_pass_at`, `prev_pass_at`) carry a
+capture time that **travels with the value on rotation**, so `prev`'s timestamp always describes
+what is actually in `prev`. `requireBothProofs`
+([index.js:3769+](../../web/07_mining_pool_public/back-end-pool/index.js#L3769)) now refuses any
+leg younger than `nostr_destination_cooldown_hours` (409 `proof_too_recent`) and any leg that
+matched the anchor (409 `anchor_not_accepted_here`), with error copy that explains the refusal
+rather than reading as a failed password.
+
+The reason this does not lock out honest miners is the last-2 window doing the job it was built
+for: a miner whose IP changed yesterday still has their **previous** IP on record with its own
+older timestamp, and submitting that one passes. Verified in the suite — after an attacker's
+injection rotates the owner to `prev`, the owner's aged proof still clears the gate.
+
+An unknown age (`age_seconds === null`, a row written before these columns existed) is treated as
+**old, not fresh**. Failing those closed would have locked every pre-upgrade miner out of the
+Goblin rail to defend against an attack that had to be mounted *after* the upgrade.
+
+**J3-4 — a write-once anchor, plus a work cost on displacement.**
+Three more columns (`anchor_ip`, `anchor_pass_hash`, `anchor_set_at`) hold the address's
+first-ever proof of each kind. It is never rotated, so the reported failure scenario — a miner who
+stopped mining, whose two window slots were then evicted, permanently unable to reach their own
+balance — is closed outright. The anchor is accepted by `verifyOwnerProof` (withdraw to your own
+wallet) and refused by `requireBothProofs` (change where money goes). That asymmetry is the whole
+point: an unrevocable credential is the right thing to hold a recovery path open and the wrong
+thing to authorise a redirection.
+
+Pre-existing accounts are seeded by `backfillProofAnchors(db)`, called at
+[index.js:589](../../web/07_mining_pool_public/back-end-pool/index.js#L589). It is **synchronous
+and ahead of the stratum listener on purpose**: an account that reached its first post-upgrade
+capture anchorless would have anchored to whoever mined that share, which is the attacker in the
+scenario being fixed. `anchor_set_at` is backdated to the slot's own capture time (or
+`created_at`), so a backfilled anchor is never mistaken for freshly written.
+
+Separately, displacement now costs sustained work. `recordOwnerEvidence` takes
+`{ mayDisplace }`; `stratum-server.js` passes `false` on the session's first accepted share and
+`true` only at `PROOF_MIN_SHARES` (4). **It gates rotation only, never first capture** — gating
+first capture would strand a rig that reconnects too often to ever reach the threshold, which
+would be a new lockout bug in the fix for a lockout bug.
+
+**J3-3 — denial is keyed to the (address, origin) pair.**
+The lockout key is now `` `${addr}|${ip}` ``; the bare-address counter is kept but **can no longer
+refuse anything** (`_registerFail(addr, 0)` — a max of 0 means "count, never lock"). Over
+`ADDR_ALERT_MAX` it puts the address into "under attack" mode, which costs every attempt a 2 s
+delay and is exposed as `underAttack()` for an AlertMonitor rule.
+
+**The trade is real and is recorded in the code**, not just here: an attacker with N source IPs
+now gets 8 guesses per IP against one address instead of 8 in total. The per-IP cap of 20 per 10
+min still bounds each origin, so a dictionary run needs roughly one fresh IP per 20 guesses — a
+genuine botnet — and with J3-1 applied what it buys is griefing, not theft. Certain harm to every
+miner (54 requests/hour freezing anyone's balance indefinitely) was the worse side of that trade.
+The delay is capped at 64 concurrent waits and **fails open to "no delay"** rather than to a
+refusal, because a refusal is exactly the behaviour being removed.
+
+**J3-2 — the password oracle needs PoW.**
+Rather than dropping `distinct` (which the account page genuinely uses to tell a miner their rigs
+disagree), `getPasswordConsistency` now counts **only sessions with `shareCount > 0`**
+([lib/miners.js:201+](../../web/07_mining_pool_public/back-end-pool/lib/miners.js#L201)). A bare
+login no longer perturbs the count, so the free path — connect with a candidate, read the number
+back — is gone, and the diagnostic is unchanged for real rigs. Residual: an attacker willing to
+mine an accepted share *per guess* still has an oracle. That is no longer worth doing, because at
+that cost they would inject their own password instead (J3-1), and J3-1 now stops an injected
+proof from redirecting anything.
+
+**J3-5 — the donation tag now costs PoW, and the miner can see it.**
+`setDonation` moved out of `handleLogin` and onto the first accepted share; the parsed percentage
+is parked on the session (`session.donationPercent`) in between. `GET /api/account/:addr` returns
+`donation_percent`, and `account-settings.html` shows a **"Donating to prize pool"** row (hidden at
+0%) whose tooltip says how to stop it. A number the pool acts on to reduce someone's earnings has
+to be readable by that someone.
+
+**J3-6 — `_fails` is swept and bounded.** `_sweepFails()` runs opportunistically on write (at most
+once a minute, or immediately over the ceiling) and drops entries that are both out-of-window and
+unlocked; over `FAILS_MAX_KEYS` (20 000) it evicts oldest-first but **never an entry that is
+currently locked out**, since that would make eviction the throttle bypass. Deliberately not a
+`setInterval`: this module is required by one-shot scripts and test harnesses, and a module-level
+timer would keep those processes alive.
+
+**J3-7 — `Object.hasOwn`.** One line at
+[index.js:3432](../../web/07_mining_pool_public/back-end-pool/index.js#L3432).
+
+**J3-8 — one shape check for the whole family.** A single mounted middleware at the top of
+`setupRoutes` validates the first path segment under `/api/account` against
+`/^t?grin1[ac-hj-np-z02-9]{58}$/` and 404s anything else — the same 404 an unknown-but-well-formed
+address already returns, so it adds no new signal. Two deliberate choices: it is mounted on the
+**path**, not declared with `app.param('addr', …)`, because the admin panel uses `:addr` too and
+legitimately addresses the non-bech32 `prize_pool` / `pool_fee` pseudo-accounts; and it reads the
+segment from `req.path` and decodes it itself rather than trusting `req.params`, because Express
+rebuilds params per layer and a check written against `req.params` in a mounted middleware can
+inspect something other than what the handler later receives (memory `project_comms_hub_09`).
+
+#### Also updated
+
+- `API_DOC_META` rows for `GET /api/account/:addr` and `POST …/nostr-destination` — per memory
+  `project_pool_api_docs`, the per-row notes are hand-kept and must ship with the route change.
+  The new 409 reasons are named there.
+- `account-settings.html`: the donation row, an **"Evidence changed"** warning in the
+  password-proof diagnostics when the recorded IP/password changed within 7 days (with different
+  advice depending on whether the anchor survived), and the demo dataset extended so the preview
+  still renders.
+
+#### Deliberately not applied
+
+- **No change to what a passed gate can do on the Tor and slatepack rails.** Those remain
+  theft-proof by construction, so the gate stays anti-griefing there and an injected proof can
+  still force a payout **to the address's own wallet**. That was the accepted residual in §E and
+  it is still the right call.
+- **The anchor is never rotated, even by a successful verify.** Advancing it on a verify would let
+  an attacker holding an injected proof re-anchor to their own value — destroying the very
+  recovery path the anchor exists to provide. The cost is that a leaked first-ever rig password
+  stays a valid *withdrawal* proof forever; that is bounded by pay-to-self, and it is why the
+  anchor is refused by the destination gate.
+- **No CAPTCHA.** §F's decision stands and was not revisited.
+
+#### Behaviour changes an operator will notice
+
+1. A miner who has mined here for less than `nostr_destination_cooldown_hours` (default 48) cannot
+   register a Goblin payout destination yet. The 409 explains why.
+2. A miner whose rig IP or password changed within that window must use their **previous** one to
+   change a destination — withdrawals are unaffected.
+3. Malformed addresses under `/api/account/` now 404 instead of returning empty data or a CSV.
+4. `password_proof.live` counts only rigs that have submitted an accepted share, so a rig that has
+   just connected no longer appears in the consistency hint until it mines.
+5. A donation set by a `donateN` tag is now visible on the account page.
+6. `POST /api/admin/dormancy/verify-owner` passes no client IP, so it is no longer covered by
+   any lockout (it previously inherited the address one) and its failures no longer feed the
+   under-attack signal. Deliberate: it is `secureAdmin`-gated, and an operator checking a proof
+   from a support e-mail must not be able to slow down the miner they are helping.
+7. Repeated failed proofs against one address no longer lock its owner out; they slow every
+   attempt on that address by 2 s while the burst lasts.
+
+#### Verification
+
+`npm test` — `check-syntax` plus six unit files, **123 checks, 0 failures**. The new
+`test-owner-gate.js` asserts each finding's fix *and* its non-regression counterpart, so a future
+change that re-opens one fails a named test:
+
+```
+ok  J3-1 owner with month-old evidence passes the destination gate
+ok  J3-1 freshly injected proof is REFUSED by the destination gate
+ok  J3-1 rotation carries the timestamp, so the owner is not collaterally blocked
+ok  J3-4 first capture writes the write-once anchor
+ok  J3-4 both window slots evicted, anchor still proves ownership
+ok  J3-4 anchor is refused by the destination gate (unrevocable != authoritative)
+ok  J3-4 mayDisplace=false leaves an established window untouched
+ok  J3-4 first capture on an empty window is not gated
+ok  J3-3 strangers failing on an address no longer deny the owner
+ok  J3-3 brute force is still bounded, per (address, origin) pair
+ok  J3-6 sweep runs, keeps in-window entries and never evicts a live lock
+ok  J3-7 prototype keys are rejected by the direction guard
+ok  J3-8 only one address spelling reaches the account routes
+ok  J3-5 donation tag is applied only after node-accepted PoW
+```
+
+The suite replicates the age gate from `requireBothProofs` locally rather than standing up
+Express — **that replica must be kept in step with the real function**, and the test says so at
+the definition. The J3-5 check is a source assertion (`setDonation` must not appear in
+`handleLogin`, must appear in `handleSubmit`) because instantiating a stratum server is not a
+one-shot; it is a genuine regression guard for the specific mistake, not a proof of the runtime
+path. `account-settings.html`'s inline script was extracted and `node --check`ed.
+
+**Not tested on a VPS, and two things need it.** The `PROOF_MIN_SHARES = 4` threshold is a guess
+about how quickly a real rig produces accepted shares at the node's `minimum_share_difficulty` —
+if a small miner takes minutes to reach it, a legitimate IP change takes minutes to register (the
+old proof keeps working throughout, so nothing breaks, but it should be measured). And
+`backfillProofAnchors` has only been exercised against an empty and a small in-memory table;
+on a populated pool DB it should be confirmed to run once, log its count, and be a no-op on the
+next boot.
+
+#### Self-review of this resolution pass (same day)
+
+The fixes were re-read after they were written and the suite was green. That found **three
+defects in the fixes themselves**, two of which made a control look effective while doing
+nothing. All three are corrected above and now have their own tests; recorded here because the
+first two are the kind of thing a passing test suite actively conceals.
+
+**1 - [High] Both work-cost guards read an address-wide counter, so an attacker was credited
+with the victim's mining.** `MinerManager.recordShare()` increments `shareCount` on **every live
+session sharing the address**, not the one that submitted:
+
+```js
+recordShare(grinAddress, difficulty) {
+  for (const [, session] of this.activeSessions) {
+    if (session.grinAddress === grinAddress) { session.shareCount++; ... }
+```
+- [lib/miners.js:164](../../web/07_mining_pool_public/back-end-pool/lib/miners.js#L164)
+
+J3-2's "only count sessions that have mined" and J3-4's `PROOF_MIN_SHARES` both keyed on that
+field. So an attacker who merely opened a session under the victim's address and *waited* had
+`shareCount` climb on the victim's own shares - reaching the J3-2 threshold instantly and the
+J3-4 threshold within seconds. **Both fixes were inert against the exact attacker they were
+written for**, and every test still passed, because the tests drove `recordOwnerEvidence` and
+`getPasswordConsistency` directly and never exercised the counter that feeds them.
+
+Fixed with `session.acceptedShares`, incremented only by the submit handler that owns the socket
+([lib/stratum-server.js:605](../../web/07_mining_pool_public/back-end-pool/lib/stratum-server.js#L605)).
+`shareCount` keeps its fan-out semantics for the per-address stats that rely on it. Both fields
+now carry comments saying which question each answers, since the difference is invisible at the
+call site - which is how this happened.
+
+**2 - [Medium] Setting `nostr_destination_cooldown_hours` to 0 switched the J3-1 age gate off.**
+The age requirement borrowed the cooldown's number, and `0` is a legitimate value for that dial
+("don't make me wait after registering") - so an operator turning the cooldown down would have
+silently restored the hole, with no indication the two were connected. The age gate now has its
+own floor (`MIN_PROOF_AGE_SEC = 3600`) that the operator dial can raise but not remove. One hour
+breaks "mine for ten seconds, then redirect" while staying invisible to anyone who has actually
+been mining here.
+
+**3 - [Low] The new `donation_percent` field could 500 the account page, and could cry wolf.**
+It reads `pool_config`, and the account summary is the miner's money UI - a settings hiccup must
+degrade one advisory row, not the page; it is now individually try/caught. It also reported a
+stored percentage on pools where donations are switched off, where nothing is actually being
+taken; it is now gated on `donationsActive()`, which mirrors the two flags `applyToDistribution`
+checks.
+
+**Also added under review:** an Express test that actually starts the app, hits the mounted
+`/api/account` shape check and confirms both that it rejects malformed input **and** that valid
+addresses still reach their handlers - the mount could have silently 404'd every account route
+or silently not run, and neither is visible by reading. The listener is closed in a `finally`.
+Plus a test that `backfillProofAnchors` seeds a pre-upgrade row from the proof it already holds,
+backdates `anchor_set_at` to `created_at`, and no-ops on a second run.
+
+#### Handoffs unchanged by this pass
+
+§J4 (`NaN` cooldown), §J9, §J11 and §J12 as written above. **§J6 changes**: the stratum-side halves
+of J3-1, J3-4 and J3-5 are applied here, so J6 no longer inherits them — but it should re-read
+`handleLogin` for any *other* write that happens before proof of work, since the donation tag was
+found sitting ten lines above a comment forbidding exactly that. §J15 should confirm the two new
+account-page surfaces read well alongside the rest of the gate block.
+
+---
+
+---
+
+## §J4 — Payout execution (2026-08-26, add-ons, NOT VPS-TESTED)
+
+Fourth session of the pre-mainnet §J pass (plan:
+[`script07_reference_audit_session_plan.md`](script07_reference_audit_session_plan.md) §J4).
+Scope: [`lib/withdrawal-scheduler.js`](../../web/07_mining_pool_public/back-end-pool/lib/withdrawal-scheduler.js)
+(1512), [`lib/wallet.js`](../../web/07_mining_pool_public/back-end-pool/lib/wallet.js) (290),
+[`lib/wallet-tor.js`](../../web/07_mining_pool_public/back-end-pool/lib/wallet-tor.js) (287),
+[`lib/nostr-payout.js`](../../web/07_mining_pool_public/back-end-pool/lib/nostr-payout.js) (509),
+[`lib/dormancy.js`](../../web/07_mining_pool_public/back-end-pool/lib/dormancy.js) (551), plus the
+payout routes in [`index.js`](../../web/07_mining_pool_public/back-end-pool/index.js) the plan
+names explicitly (admin retry/cancel, freeze/resume, dormancy manual/send-payout, the miner
+withdraw + finalize routes). Question asked: **can one balance be paid twice, or a lock leak, or a
+send land without being recorded?**
+
+Read first, then confirmed by execution: a one-shot harness bound the **real**
+`WithdrawalScheduler` to an in-memory `node:sqlite` DB carrying the production `withdrawals` /
+`miner_accounts` / `balance_log` / `withdrawal_events` / `payout_control` columns, with only
+`db`, `incentives` and `wallet-tor` stubbed in the require cache. Nineteen assertions, quoted per
+finding. No server started, no VPS touched (plan rule 5); the harness lived in the scratchpad.
+
+**Headline — the answer to the third clause is yes, and it is worse than the first.** §H closed two
+ways to pay a miner twice. This session found the mirror image: **three ways to record a payout the
+chain never carried**, all of them reachable without an attacker. The sharpest, J4-1, is not a rare
+crash path — it is the *designed* handling of a `post_tx` failure, and it silently confiscates the
+miner's whole payout. Two of the three land specifically on the recovery machinery §H2 added, which
+was verified against a stub wallet and so validated its branch logic without ever testing its
+premise about what grin-wallet's tx log means.
+
+**The premise, stated once because two findings turn on it.** `TxLogEntry.tx_type === 'TxSent'`
+does **not** mean a transaction was broadcast. grin-wallet writes that entry at `tx_lock_outputs`,
+i.e. when the outputs are reserved — long before `finalize_tx`, and whether or not `post_tx` ever
+runs. Three independent confirmations, all inside this repo:
+
+1. The pool itself calls `initSendTx` then `txLockOutputs` at payout **creation**, before the miner
+   has seen the slate ([withdrawal-scheduler.js:802–788](../../web/07_mining_pool_public/back-end-pool/lib/withdrawal-scheduler.js#L802),
+   [:952–954](../../web/07_mining_pool_public/back-end-pool/lib/withdrawal-scheduler.js#L952)).
+2. `processSlatepackExpiry` calls `wallet.cancelTx(w.slate_id)` on rows that were **never**
+   finalized ([:1110](../../web/07_mining_pool_public/back-end-pool/lib/withdrawal-scheduler.js#L1110)).
+   You can only cancel a tx the wallet already holds — so the log entry demonstrably exists
+   pre-broadcast, by the code's own admission.
+3. The pool's other reader of the same log already knows it:
+   [`reconciliation.js:278`](../../web/07_mining_pool_public/back-end-pool/lib/reconciliation.js#L278)
+   filters `if (!e || e.tx_type !== 'TxSent' || !e.confirmed) continue;` — **`.confirmed` is the
+   discriminator**, and the two payout-critical readers drop it.
+4. Two *other* products in this repo already encode the same meaning, independently. Fidelius's
+   stuck-transaction endpoint selects exactly `TxSent && !confirmed && !confirmation_ts &&
+   !kernel_excess && !kernel_lookup_min_height` and calls the result **unfinalized**
+   ([051_fidelius/server.js:1524–1526](../../web/051_fidelius/server.js#L1524)); Grin Drop's
+   sweeper cancels `TxSent && !confirmed` rows as **"abandoned unfinalized wallet txs"** to free
+   their locked inputs ([059_drop/server/app.js:901–905](../../web/059_drop/server/app.js#L901)).
+   Both would be nonsense if `TxSent` meant broadcast. The pool's payout path is the only reader
+   in the repo that reads it that way.
+
+### Threat actors used in this section
+
+| Label | Means |
+|---|---|
+| **The system** | No attacker. A process restart, an OOM kill, a node outage, a 120 s CLI timeout. This is the dominant actor in this session — five of nine findings need nobody at all |
+| **Registered miner** | A miner attacking their own payout, or another's |
+| **Anonymous** | Internet, no credentials — reaches the Nostr relays the bridge subscribes to |
+| **Logged-in admin** | A `freshAdmin` session. Includes the *honest* operator pressing a button that does the wrong thing |
+| **On-box root** | Shell on the pool server — Info only, per plan rule 7 |
+
+---
+
+### J4-1 — [Critical] `reclaimStaleFinalizing` treats an output lock as proof of broadcast, so every stale claim confirms — a node outage during `post_tx` silently confiscates the miner's payout — **FIXED 2026-08-27 (see §J4 resolution pass)**
+
+**Threat actor: the system.** No attacker, no miner action, no admin.
+
+§H2 added `finalizing` as a claim held across the three wallet calls of a finalize, and
+`reclaimStaleFinalizing` to resolve a claim whose owner died. Its doctrine is explicit and correct:
+
+> *"it must not be blindly reverted either: if postTx already ran, reverting refunds a miner who was
+> paid. So ask the wallet which it was… found as a live TxSent → it posted → confirm"*
+> ([withdrawal-scheduler.js:1372–1385](../../web/07_mining_pool_public/back-end-pool/lib/withdrawal-scheduler.js#L1372))
+
+The test it actually performs is:
+
+```js
+const live = new Set(
+  txs.filter((t) => t && t.tx_slate_id && String(t.tx_type) === 'TxSent')
+     .map((t) => String(t.tx_slate_id)));            // :1418–1421
+...
+if (w.slate_id && live.has(String(w.slate_id))) {    // :1425
+  this._creditConfirm(w.id, 'finalizing', 'recovered: broadcast confirmed from wallet tx log');
+```
+
+By the premise above, that set contains **every slate this pool has ever issued and not cancelled**,
+from the moment `createSlatepackWithdrawal` locked its outputs. So `live.has(slate_id)` is true for
+every stale row that has a `slate_id` — which is every row that got past creation. The
+`else if (w.slate_id)` branch that returns a row to `slatepack_pending` is **unreachable in
+production**; the sweep does not resolve an ambiguity, it always answers "paid".
+
+`_creditConfirm` then flips the row to `confirmed`, releases `balance_locked`, writes the
+`withdrawal` debit and credits the flat fee to `pool_fee`. The miner's money is gone from the
+ledger and no transaction exists.
+
+**Why this is not a rare crash case.** The pool *routes* the ambiguous outcome here on purpose.
+When `post_tx` throws — node down, tx rejected, mempool refusal — both finalize paths deliberately
+leave the row claimed:
+
+> *"postTx threw … outcome UNKNOWN, left claimed for the stale-finalize sweep to resolve"*
+> ([:866–869](../../web/07_mining_pool_public/back-end-pool/lib/withdrawal-scheduler.js#L866),
+> [:1021–1024](../../web/07_mining_pool_public/back-end-pool/lib/withdrawal-scheduler.js#L1021))
+
+Ten minutes later the sweep resolves it as *paid*. A node restart during payouts is enough. It also
+runs **while payouts are frozen** ([:82–87](../../web/07_mining_pool_public/back-end-pool/lib/withdrawal-scheduler.js#L82)) —
+justified as "only resolves rows to the truth already on-chain", which is exactly the claim that
+does not hold — so an operator who hit the emergency stop is still losing miners' balances.
+
+**Why nothing catches it.** Reconciliation's coverage goes *up* (the wallet holds coins the ledger
+no longer owes), and only a shortfall alarms. `auditWalletSends` looks the other way — wallet sends
+with no pool row — so it sees nothing. The single visible symptom is a payout that is `confirmed`
+but whose `kernel_excess` never arrives, because `backfillKernelProofs` can only match a tx that
+mined ([:537](../../web/07_mining_pool_public/back-end-pool/lib/withdrawal-scheduler.js#L537)).
+That is a blank column on the account page's Proof link.
+
+**Harness — T1, real `reclaimStaleFinalizing`, stale claim, `TxSent`/`confirmed:false`:**
+
+```
+[finalize] stale claim 1: slate S1 DID post — confirming
+  PASS  row is CONFIRMED even though nothing was broadcast          status=confirmed
+  PASS  lock released + miner debited (ledger says paid)            balance=0 locked=0
+  PASS  a 'withdrawal' debit row was written
+  PASS  control: a cancelled tx DOES re-open the row                status=slatepack_pending
+```
+
+The control matters: the `TxSentCancelled` case still works, so the branch is live and the test is
+not rigged — it is only the discriminator that is wrong.
+
+**Recommended fix (structural — left for a decision, plan rule 3).** Make the sweep three-state, as
+its own doctrine already demands:
+
+- `TxSent && e.confirmed` (or `kernel_excess` present) → confirm. Unambiguous.
+- `TxSentCancelled`, or slate absent from the log → release the claim. Unambiguous.
+- `TxSent && !e.confirmed` → **UNKNOWN**: leave the claim standing and re-ask next tick, the same
+  branch already used for "wallet unreachable". A genuinely broadcast tx becomes `confirmed` within
+  minutes; one that was never posted stays claimed.
+
+That third case needs an operator surface, which is why it is not a one-liner: a row can now sit in
+`finalizing` indefinitely, so it needs an age escalation (an alert + a Payments-page action) rather
+than an automatic decision. That is the correct trade — the module's own words, *"a stalled payout
+is recoverable while a double-pay is not"* ([:1383](../../web/07_mining_pool_public/back-end-pool/lib/withdrawal-scheduler.js#L1383)) —
+and it applies just as forcefully to a wrongly-debited one.
+
+---
+
+### J4-2 — [High] The admin *Retry* button zeroes `retry_count`, which is the only trigger for the §H1 double-send guard — so it re-sends, unguarded, exactly the payouts most likely to have already landed — **FIXED 2026-08-27 (see §J4 resolution pass)**
+
+**Threat actor: the system, via an honest logged-in admin.**
+
+§H1's guard is armed by one condition:
+
+```js
+if (withdrawal.retry_count > 0 || withdrawal.slate_id) {   // :360
+  const prior = await this._priorSendLanded(withdrawal, netSend);
+```
+
+`POST /api/admin/withdrawals/:id/retry` on a `tor_failed` row re-locks the balance and writes:
+
+```js
+db.prepare('UPDATE withdrawals SET status = ?, retry_count = 0, next_retry_at = NULL WHERE id = ?')
+  .run('tor_checking', id);                                 // index.js:2373
+```
+
+A `tor_failed` row is one that exhausted the whole ladder — four Tor sends, each `SIGKILL`ed at
+`wallet_send_timeout_ms` if it hung. That is the precise population §H1 was written for: *"a kill at
+120 s does not mean the tx failed to post."* And a Tor row that never reported success never had a
+`slate_id` captured — `_captureTorSlateId` runs only after `sendResult.success`
+([:386–388](../../web/07_mining_pool_public/back-end-pool/lib/withdrawal-scheduler.js#L386)). So
+after the admin retry, **both** arms of the guard condition are false, and the scheduler sends
+again without ever asking the wallet.
+
+The reset is not gratuitous — it is there to give the row a fresh retry ladder. It just happens to
+erase the one field the double-send guard reads.
+
+**Harness — T2, two rows identical but for `retry_count`, same wallet log containing a `TxSent`
+whose net matches this payout:**
+
+```
+  PASS  wallet tx log never consulted before the send                getTransactions calls before send = 0
+  PASS  a second Tor send WAS issued for an amount already paid      sends=99.96
+⚠️  Withdrawal 1: an earlier attempt DID post (slate S9) — confirming instead of re-sending
+  PASS  control: identical row with retry_count=1 — the guard runs and blocks the re-send
+```
+
+**Recommended fix (small, but on the money path — left with J4-1 for one decision).** Arm the guard
+on the payout's history rather than on a mutable counter: `sendWithdrawal` should call
+`_priorSendLanded` whenever the row has **any** prior `to_status='tor_sending'` event, which no
+admin action erases. Keep the ladder reset if the operator wants it; just stop it from doubling as
+a guard switch. (`retry_count = 0` should also carry a comment saying what it disarms, or the next
+person re-adds it.)
+
+---
+
+### J4-3 — [High] A crash while a Tor payout is `tor_sending` strands the row forever: the lock is never released, and that address can never withdraw again — **OPEN**
+
+**Threat actor: the system.** A `systemctl restart`, a deploy, an OOM kill.
+
+The Tor send window is wide — up to `wallet_send_timeout_ms` (120 s default) inside
+`sendToTorAddress`, plus two further wallet round-trips (`recordTorFee`, `_captureTorSlateId`)
+before `markConfirmed` writes anything. Die anywhere in there and the row stays `tor_sending`.
+
+Nothing gets it out. Enumerated exhaustively over the backend — `tor_sending` appears in exactly
+these places, and none of them is a transition **out**:
+
+| Path | Selects | Verdict |
+|---|---|---|
+| `processRetryQueue` ([:246](../../web/07_mining_pool_public/back-end-pool/lib/withdrawal-scheduler.js#L246)) | `status='retry_scheduled'` | never sees it |
+| `processTorChecks` ([:267](../../web/07_mining_pool_public/back-end-pool/lib/withdrawal-scheduler.js#L267)) | `status='tor_checking'` | never sees it |
+| `processSlatepackExpiry` ([:1101](../../web/07_mining_pool_public/back-end-pool/lib/withdrawal-scheduler.js#L1101)) | `status='slatepack_pending'` | never sees it |
+| `reclaimStaleFinalizing` ([:1395](../../web/07_mining_pool_public/back-end-pool/lib/withdrawal-scheduler.js#L1395)) | `status='finalizing'` | never sees it |
+| `POST /admin/withdrawals/:id/cancel` ([index.js:2403](../../web/07_mining_pool_public/back-end-pool/index.js#L2403)) | — | **explicitly 409s** `tor_sending` |
+| `POST /admin/withdrawals/:id/retry` ([index.js:2356](../../web/07_mining_pool_public/back-end-pool/index.js#L2356)) | `retry_scheduled`/`tor_failed` only | 409s |
+
+Consequences compound. `tor_sending` is inside `PENDING_SQL`
+([:16](../../web/07_mining_pool_public/back-end-pool/lib/withdrawal-scheduler.js#L16)), so the row
+holds the address's **one-pending-per-address slot permanently** — every future withdrawal that
+miner requests, on any rail, returns 429 *"you already have a pending withdrawal"*. The
+`balance_locked` is never released, so the money is neither spendable nor payable. AlertMonitor and
+reconciliation both count it as in-flight forever. There is no admin UI action of any kind.
+
+This is the same crash window §H2 solved for the slatepack rail with `reclaimStaleFinalizing`. The
+Tor rail's equivalent window is wider and got nothing.
+
+**Harness — T3:**
+
+```
+  PASS  every scheduler recovery pass leaves it in tor_sending      status=tor_sending
+  PASS  the balance stays locked forever                            locked=100
+  PASS  it permanently occupies the one-pending-per-address slot    pending=1
+  PASS  so the miner can never withdraw again
+```
+
+**Recommended fix.** A `reclaimStaleTorSending()` beside the existing sweep, resolving a
+`tor_sending` row older than a bound (send timeout + slack) from the wallet tx log via
+`_priorSendLanded` — which is already exactly the right tool, since it matches on net amount and
+creation time and refuses another withdrawal's slate. **Blocked on J4-1 and J4-4:** built on today's
+matcher it would inherit the same "an output lock counts as a send" mistake, in a place where a
+false positive again means a confiscated balance. Fix the discriminator first, then reuse it here.
+A short-term operator escape hatch — letting the admin cancel route accept `tor_sending` past an
+age threshold, with a loud warning — restores the money but re-opens §H1's double-pay, so it is not
+a substitute.
+
+---
+
+### J4-4 — [Medium] `_priorSendLanded` skips its time filter when the tx log carries no parseable `creation_ts`, so any historical same-amount send is accepted as this payout — **FIXED 2026-08-27 (see §J4 resolution pass)**
+
+**Threat actor: the system.**
+
+The non-`slate_id` branch of the double-send guard matches on amount, bounded by time:
+
+```js
+const when = this._txCreatedAt(t);
+if (when !== null && when < createdAt - 60) return false;   // :454
+```
+
+`_txCreatedAt` returns `null` when `creation_ts` is absent or unparseable
+([:470–476](../../web/07_mining_pool_public/back-end-pool/lib/withdrawal-scheduler.js#L470)), and
+the comment calls that *"no opinion"*. But the guard's own header states the failure that matters:
+*"Matching is deliberately narrow, because a false POSITIVE marks a miner paid who was not."*
+Treating "no opinion" as "no objection" removes the only bound on age, so **every** `TxSent` in the
+wallet's whole history whose net matches becomes a candidate — and a pool paying round amounts or
+full balances will have those. §H already flagged this shape as unverified: *"confirm a real
+`retrieve_txs` response carries `creation_ts`… before leaning on it."* Until that is checked on a
+VPS, the fallback is fail-**unsafe**.
+
+**Harness — T2b, the same year-old transaction with and without its timestamp:**
+
+```
+  PASS  control: a dated old tx is correctly rejected as a match     sends=1
+⚠️  Withdrawal 1: an earlier attempt DID post (slate OLD) — confirming instead of re-sending
+  PASS  the SAME old tx with no timestamp is accepted as this payout — miner marked paid, never sent
+        sends=0 status=confirmed slate=OLD
+```
+
+**Recommended fix.** An unparseable timestamp is a *missing observation*, so it belongs in the
+branch the method already has for one: return `{ checked: false, tx: null }` with the loud log at
+[:373–377](../../web/07_mining_pool_public/back-end-pool/lib/withdrawal-scheduler.js#L373) rather
+than silently confirming. Fold this in with J4-1's `.confirmed` change — same method family, same
+VPS check (`retrieve_txs`'s real `TxLogEntry` shape) closes both.
+
+---
+
+### J4-5 — [Medium] The payout freeze is only read once per scheduler tick, so up to 15 more payouts go out after an emergency stop — **OPEN**
+
+**Threat actor: the system / the operator in an incident.**
+
+The plan asks whether `payouts/freeze` stops the scheduler loop or only the API. Answer: it stops
+the loop **at the top of the next iteration**, and that boundary can be half an hour away.
+
+`schedulerLoop` reads `isFrozen()` once
+([:87](../../web/07_mining_pool_public/back-end-pool/lib/withdrawal-scheduler.js#L87)) and then
+runs `processRetryQueue` (`LIMIT 10`) and `processTorChecks` (`LIMIT 5`) to completion. Each row is
+awaited serially through `sendToTorAddress`, which can take the full 120 s timeout. `sendWithdrawal`
+and `initiateWithdrawal` contain **no** freeze check — `_assertNotFrozen` guards only the four
+create/finalize entry points ([:649](../../web/07_mining_pool_public/back-end-pool/lib/withdrawal-scheduler.js#L649),
+[:742](../../web/07_mining_pool_public/back-end-pool/lib/withdrawal-scheduler.js#L742),
+[:832](../../web/07_mining_pool_public/back-end-pool/lib/withdrawal-scheduler.js#L832),
+[:897](../../web/07_mining_pool_public/back-end-pool/lib/withdrawal-scheduler.js#L897)). So 15
+outbound sends, worst case ~30 minutes of them, continue after the switch is thrown.
+
+This matters because of *who* throws it: AlertMonitor freezes automatically on a critical money trip
+— coverage shortfall, integrity drift, **wallet drain**, wallet-identity mismatch. Those are exactly
+the conditions under which the next fifteen sends should not happen. The kill-switch comment already
+argues this case for the synchronous rails (*"the scheduler loop skipping sends is NOT enough"*,
+[:118–122](../../web/07_mining_pool_public/back-end-pool/lib/withdrawal-scheduler.js#L118)) and then
+does not apply it to the loop itself.
+
+**Harness — T5:**
+
+```
+  PASS  isFrozen() reports frozen
+  PASS  sendWithdrawal sends anyway — no freeze check on the send path    sends=1
+```
+
+**Recommended fix.** `this._assertNotFrozen()` (or a quiet `if (this.isFrozen()) return;`) at the
+top of `sendWithdrawal`, after the row read and **before** the `tor_checking → tor_sending` claim,
+so a frozen pool leaves the row where the next resume will pick it up. Cheap: one indexed read of a
+single-row table per payout. Consider also re-checking between iterations of both batch loops.
+
+---
+
+### J4-6 — [Low] A non-numeric `withdrawal_cooldown_minutes` silently switched the cross-rail reversal cooldown off — **FIXED 2026-08-26**
+
+**Threat actor: the operator (misconfiguration).** Carried over as a handoff from §J3.
+
+```js
+const cooldown = (mins === undefined || mins === null ? 30 : mins) * 60;
+if (!cooldown) return;
+```
+
+`0` disabling the cooldown is documented and intended. `NaN` disabling it was not: `'thirty' * 60`
+is `NaN`, `!NaN` is `true`, and the method returned before reading `balance_log` — with no log line.
+Same family as memory `project_config_loader_type_traps`.
+
+Reachability is narrow and that is why it is Low: the settings validator rejects a non-number
+([pool-settings.js:826–829](../../web/07_mining_pool_public/back-end-pool/lib/pool-settings.js#L826))
+and `applyToConfig` passes the validated value straight through
+([:1473](../../web/07_mining_pool_public/back-end-pool/lib/pool-settings.js#L1473)), so the admin
+panel cannot produce it. A hand-edited `pool.json` can — `config.js:73` reads the raw key with no
+coercion. That is an on-box operator, not an attacker; the finding is that a money guard turned
+itself off without saying so.
+
+**Fixed** at [withdrawal-scheduler.js:183–201](../../web/07_mining_pool_public/back-end-pool/lib/withdrawal-scheduler.js#L183):
+a non-finite or negative value falls back to the 30 min default and logs once, naming the offending
+value and pointing at `0` as the supported way to disable. `Number('')` is `0`, so an empty string
+keeps its old meaning — the change is confined to values that were never a number.
+
+**Harness — T4, post-fix:**
+
+```
+  PASS  control: a numeric 30 blocks the request                                    code=429
+[payout] withdrawal_cooldown_minutes is not a number ("thirty") — using the 30 min default…
+  PASS  POST-FIX: a non-numeric value falls back to 30 and warns                    code=429
+  PASS  POST-FIX: an explicit 0 still disables the cooldown                         code=null
+  PASS  POST-FIX: an absent key still defaults to 30                                code=429
+```
+
+---
+
+### J4-7 — [Low] The Tor pre-flight gate fails **silent**, not merely open — an operator who switched it on cannot tell it has been inert — **FIXED 2026-08-26**
+
+**Threat actor: the operator (undetected misconfiguration).**
+
+Fail-open on `online: null` is correct and must stay (memory `project_pool_tor_preflight_gate`: *"a
+pool box without a working probe NEVER bricks Tor"*). The problem was that nothing said so.
+`probeToronlineStatus` returns `{ online: null, reason: 'socks_unavailable' | 'tor_unavailable' |
+'derivation_failed' }` without logging
+([wallet-tor.js:150–170](../../web/07_mining_pool_public/back-end-pool/lib/wallet-tor.js#L150)), and
+the withdraw route swallowed even a thrown probe:
+
+```js
+try { reach = await walletTor.probeToronlineStatus(addr); } catch (_) { reach = { online: null }; }
+```
+
+A dead tor daemon, or the optional `socks` dependency never installed, therefore disables the gate
+permanently and invisibly — the admin checkbox stays ticked, the miner sees no message, the log says
+nothing. The operator learns from the retry/refund cycles the gate exists to prevent.
+
+**Fixed** at [index.js:3750–3763](../../web/07_mining_pool_public/back-end-pool/index.js#L3750): the
+`catch` now keeps the error text as the reason, and any `online === null` outcome emits one warn
+line naming the reason and stating that the send is being allowed. Behaviour is unchanged — still
+fail-open, still no block, still `grin-wallet` as the authority at send.
+
+---
+
+### J4-8 — [Low] `nostr_seen_events` grows without bound, and a row is written before the wrap is decrypted — **OPEN**
+
+**Threat actor: anonymous internet.** Only when the Goblin rail is switched on (off by default).
+
+The bridge's replay dedup table is created by the bridge itself
+([nostr-payout.js:454–460](../../web/07_mining_pool_public/back-end-pool/lib/nostr-payout.js#L454))
+and appears nowhere in `lib/retention.js` or any prune path — grepping the backend for
+`nostr_seen_events` returns the `CREATE TABLE` and the one `INSERT`, nothing else. It is never
+pruned.
+
+The write also happens *before* any authentication of the event:
+
+```js
+if (ev.content && ev.content.length > WRAP_CONTENT_MAX) return;   // size cap: good
+if (!this._markSeen(ev.id)) return;                               // :391 — row written here
+let rumor; try { rumor = this._unwrap(ev); } catch (_) { return; } // decrypt happens after
+```
+
+Anyone can publish kind-1059 events `#p`-tagged to the pool's public key on the configured relays;
+each undecryptable one costs a permanent row. The size cap bounds one event, not the count. This is
+disk growth on the same SQLite file that serves share intake, which memory
+`project_pool_db_capacity` records as the thing that stalls **shares**, not just a page.
+
+The ordering is defensible on its own terms — dedup before an expensive `nip44` decrypt — so the
+fix is retention, not reordering: prune `nostr_seen_events` on the existing retention pass at a
+window comfortably past `nostr_pending_ttl_minutes` and the relay `LOOKBACK_SECS` (24 h is ample),
+and add an index on `seen_at`.
+
+---
+
+### J4-9 — [Info] `manualPayout` accepts a payout record with no on-chain referent
+
+**Threat actor: logged-in admin** — Info per plan rule 7, and inside the trust model.
+
+`POST /api/admin/dormancy/manual-payout` is the recorder for an out-of-band send. `kernelExcess`
+and `slateId` are both optional
+([dormancy.js:415](../../web/07_mining_pool_public/back-end-pool/lib/dormancy.js#L415)), so it can
+write a `confirmed` withdrawal and a `withdrawal` debit with nothing tying it to a transaction. The
+guards that exist are good — freeze self-check, `≥ min` requires an explicit ack, balance ceiling,
+and a dedup on kernel/slate/(address, amount, 60 s) — but the dedup can only fire when one of those
+identifiers is supplied, so the safest input is the optional one. Reconciliation will not notice:
+an unbacked debit reduces liability, which shows as coverage *surplus*, and `auditWalletSends` only
+looks for the opposite mismatch.
+
+Worth requiring one of `kernel_excess` / `slate_id` (a real out-of-band send always has one, and it
+is what makes `auditWalletSends` match the operator's own send rather than flag it). Not a
+vulnerability — an operator who wants to zero a balance has better tools — but it removes the one
+money route whose record cannot be checked against the chain.
+
+---
+
+### Verified correct (read with evidence, not assumed)
+
+- **No double-pay from concurrency in any create path.** `createWithdrawal`, `createSlatepackWithdrawal`
+  and `createNostrWithdrawal` each run the pool-wide cap, the `userPending >= 1` check and the CAS
+  balance lock inside one `db.transaction`, with **no `await` anywhere before `txn()`** — checked
+  statement by statement. On single-threaded Node with synchronous better-sqlite3, two concurrent
+  requests cannot interleave into a double lock. The plan's "can the one-pending rule be raced"
+  question is a clean no.
+- **The finalize claim holds.** `_claimForFinalize` is a CAS inside a transaction that writes the
+  status flip and its timestamp event together, taken before the first `await` in both finalize
+  paths ([:843](../../web/07_mining_pool_public/back-end-pool/lib/withdrawal-scheduler.js#L843),
+  [:1000](../../web/07_mining_pool_public/back-end-pool/lib/withdrawal-scheduler.js#L1000)). A second
+  finalize, a relay redelivering an S2, and an admin cancel all lose. §H2's *"age the CLAIM, not the
+  row"* trap is still correctly implemented — the sweep ages from the `to_status='finalizing'`
+  event, not `withdrawals.created_at`. **The claim mechanism is sound; J4-1 is about what the
+  recovery path concludes, not about the claim.**
+- **Every settlement write is a guarded CAS in the same transaction as the balance move.**
+  `_creditConfirm` ([:1240](../../web/07_mining_pool_public/back-end-pool/lib/withdrawal-scheduler.js#L1240))
+  and `_reverseLock` ([:1281](../../web/07_mining_pool_public/back-end-pool/lib/withdrawal-scheduler.js#L1281))
+  both refuse to move money when they lose the status claim, and `markConfirmed`/`markFailed`
+  delegate rather than hand-rolling. Confirm and reverse cannot both land. No transition writes the
+  ledger and the status in two separate statements.
+- **The fee model matches memory `project_pool_fee_model` exactly.** `_feeFor` is un-clamped
+  ([:156](../../web/07_mining_pool_public/back-end-pool/lib/withdrawal-scheduler.js#L156)) and
+  `_netSend` rejects a payout that cannot cover its fee (400) rather than sending dust; the fee is
+  frozen into `fee_charged` at request time but only *charged* inside `_releaseLockAndDebit` at
+  confirm, so **no reversal path un-charges anything** — verified by reading all four reversal
+  callers. The debit splits into `withdrawal` + `withdrawal_fee` summing to the release, with a
+  matching `pool_fee` credit, so the integrity invariant nets zero.
+- **Dormancy's destination cannot be aimed anywhere.** `PRIZE_POOL` is a module constant
+  ([dormancy.js:5](../../web/07_mining_pool_public/back-end-pool/lib/dormancy.js#L5)) with no
+  settings key, no request parameter and no config read — `runOnce` writes exactly one credit, to
+  it ([:376](../../web/07_mining_pool_public/back-end-pool/lib/dormancy.js#L376)). `send-payout`
+  goes through `createWithdrawal(..., 'tor', {adminOverride})`, and the Tor rail can only pay the
+  address's own wallet; `adminOverride` bypasses the min floor and the reversal cooldown and
+  nothing else — freeze, CAS lock and the one-pending cap all still run
+  ([:649–650](../../web/07_mining_pool_public/back-end-pool/lib/withdrawal-scheduler.js#L649)).
+  Marked FINAL in memory `project_pool_dormant_balances`, and the code matches.
+- **The Goblin rail's response routing cannot be pointed at another miner.** The bridge selects the
+  pending row by the *sender's* npub and hands back that row's own address
+  ([nostr-payout.js:409–414](../../web/07_mining_pool_public/back-end-pool/lib/nostr-payout.js#L409));
+  `finalizeNostrWithdrawal` then re-checks method, status, address and the registered npub before
+  claiming ([:987–994](../../web/07_mining_pool_public/back-end-pool/lib/withdrawal-scheduler.js#L987)),
+  and binds `slate.id` to the issued slate. A late or replayed S2 is a no-op.
+- **`_priorSendLanded`'s cross-miner false positive is genuinely closed.** The `claimed` set excludes
+  any slate already recorded against a *different* withdrawal
+  ([:444](../../web/07_mining_pool_public/back-end-pool/lib/withdrawal-scheduler.js#L444)), so two
+  miners withdrawing the same amount cannot collide. J4-4 is about the time bound, not this.
+- **`tor_sending` is the only orphan state.** `tor_checking` is re-selected every tick,
+  `retry_scheduled` by the retry queue, `slatepack_pending` by the TTL sweep, `finalizing` by the
+  stale-claim sweep. Enumerated against `PENDING_SQL`, not assumed.
+- **`finalizing` reached every in-flight list §H2 required.** Confirmed present in
+  `alert-monitor.js:226`, `reconciliation.js:87` and `:289`, `index.js:3036`/`3041`/`6054`,
+  `admin-panel/payments.html` (label, `ACTIVE`, `inflightStatuses`) and
+  `public_html/js/payout-methods.js`. No list has drifted since.
+- **The wallet Owner-API client is sound where it matters here.** ECDH key is the raw shared
+  X-coordinate (the documented trap), AES-256-GCM with a random 12-byte nonce per call, the auth tag
+  is verified on decrypt, and `_call` re-opens the session only on the three specific auth/session
+  error strings — it does not retry arbitrary failures, so a `postTx` error cannot become a second
+  broadcast attempt inside the client.
+- **§H3's `tor-check` account-existence check is still in place**
+  ([index.js:3706](../../web/07_mining_pool_public/back-end-pool/index.js#L3706)), and the withdraw
+  pre-flight still probes **fresh** rather than through the 60 s cache — a money decision must not
+  read a stale "offline".
+
+### Re-confirmed still open (not re-reported)
+
+- **§H's placeholder zeros** in `_releaseLockAndDebit`'s two debit rows (`balance_before`/`after`
+  written as `0`) are unchanged — the locked columns are correct, and reversals were fixed in §H2.
+- **Dead `canInitiateWithdrawal()`** ([:1446](../../web/07_mining_pool_public/back-end-pool/lib/withdrawal-scheduler.js#L1446))
+  still carries a status list missing `slatepack_pending`/`finalizing` and a `MAX_USER_PENDING`
+  budget of 10 that contradicts the live one-pending rule. Still zero callers; still a trap for
+  whoever wires it up believing it is the cap check. Delete it.
+- **§C3** (access tokens unrevocable until expiry) bounds how long a stolen admin session can press
+  the buttons in J4-2 and J4-5.
+
+---
+
+### Handoffs
+
+- **§J5** — J4-1's premise is the same class as memory `project_pool_node_error_classification`
+  (*classify by origin, never by a message string*): here a *log entry's existence* is being read as
+  a chain event. §J5 owns `grin-node.js`, which is where the node's own view of a broadcast lives —
+  if a `get_kernel`-style lookup is available there, it is a better discriminator for J4-1's UNKNOWN
+  case than waiting for the wallet's `confirmed` flag.
+- **§J9** — `withdrawal_cooldown_minutes` is now defensive at the consumer (J4-6), but the same
+  raw-`pool.json` path feeds `max_pending_withdrawals`, `max_user_pending`, `slatepack_ttl_hours`,
+  `nostr_pending_ttl_minutes` and `wallet_send_timeout_ms` with no coercion at
+  [config.js:73](../../web/07_mining_pool_public/back-end-pool/lib/config.js#L73). The two pending
+  caps are already `Math.max(1, parseInt(...) || N)`-guarded; the three timeouts are not — a
+  non-numeric `slatepack_ttl_hours` makes the expiry cutoff `NaN`, and `created_at <= NaN` matches
+  nothing, so the TTL refund silently stops. Whether the validators can emit a non-number is J9's.
+- **§J12** — the scheduler loop is strictly serial and one unreachable Tor recipient costs the full
+  `wallet_send_timeout_ms`. With `MAX_PENDING_WITHDRAWALS` at 100 and `processTorChecks` at `LIMIT
+  5`, a queue of slow payouts delays the TTL refund sweep and the stale-claim sweep by tens of
+  minutes per tick. Not exploitable by one actor (one pending per address), but it is a queueing
+  bound worth stating alongside the bucket limits.
+- **§J13** — `nostr_relays` and `nostr_nip05_domains` are operator-set outbound destinations reached
+  from the payout path; the NIP-05 fetch is domain-allowlisted
+  ([nostr-payout.js:360–372](../../web/07_mining_pool_public/back-end-pool/lib/nostr-payout.js#L360))
+  but the relay list is not. Also `wallet-tor.js` shells out to `grin-wallet` via `spawn` with an
+  argv array (no shell) and feeds the passphrase on **stdin**, not `-p` — which is the pattern
+  CLAUDE.md asks for and which `lib/07_solo_wallet.sh` / `lib/059_lib_wallet.sh` still owe.
+- **§J15** — if J4-1's fix introduces a long-lived `finalizing` state, the account page's
+  *"broadcasting to the Grin network — almost done"* label
+  (`public_html/js/payout-methods.js:57`) becomes a lie for a stuck row and needs a second string.
+- **§J16** — `wallet-tor.js`'s `isPayoutAddress` accepts `grin1…` **and** `tgrin1…` regardless of
+  `config.network`, and does so case-insensitively; `wallet.js:validateGrinAddress` (unused on this
+  path) does check the network prefix. Whether a mainnet pool can end up holding a testnet address
+  as a mining identity is J3's canonicalisation question, but the *deployment* half — that the two
+  validators disagree and the payout path uses the looser one — belongs with the install scripts.
+- **§J17** — three things must be checked on a real box before mainnet, and J4-1/J4-3/J4-4 all hang
+  off the first: (1) dump `retrieve_txs` for a slatepack payout **between creation and finalize**
+  and record whether it is `TxSent`, what `confirmed` says, and whether `creation_ts` is present —
+  this single observation confirms or refutes J4-1's premise directly; (2) do the same for a Tor
+  send that times out, to learn whether the CLI locks outputs before or after the round trip;
+  (3) kill the backend mid-`tor_sending` and confirm the stranded row (J4-3).
+
+---
+
+### Verification
+
+All nine findings were written from reading first, then confirmed by execution — nothing above
+rests on inference alone. The harness (`scratchpad/j4harness.js`, one-shot, deleted with the
+scratchpad) bound the **real** `WithdrawalScheduler` — `require`d from
+`lib/withdrawal-scheduler.js`, not copied — to a `node:sqlite` in-memory DB with the production
+column set, stubbing only `./db` (a `transaction()` shim using savepoints, since better-sqlite3 is a
+native module that exists only on the VPS), `./incentives` and `./wallet-tor`. The wallet's tx log
+is the one thing supplied per-test, because it is the input every finding turns on.
+
+**19 assertions, all passing**, across five groups: T1 the stale-finalize sweep against an
+unconfirmed `TxSent` (plus the `TxSentCancelled` control proving the branch is live); T2 the H1
+guard with `retry_count` 0 vs 1 on otherwise identical rows; T2b the same historical transaction
+with and without `creation_ts`; T3 all four recovery passes plus the one-pending consequence for a
+`tor_sending` row; T4 the cooldown fallback before and after the fix, including that `0` still
+disables and an absent key still defaults; T5 a send issued while `payout_control.frozen = 1`.
+
+Every control assertion is there on purpose: a test that only shows the bug cannot distinguish a
+real defect from a broken fixture.
+
+**Two fixes applied in the finding pass** (plan rule 3 — small and local, neither touches the state
+machine): J4-6 in `lib/withdrawal-scheduler.js` and J4-7 in `index.js`. `node --check` passes on
+both files.
+
+**The other seven were written up OPEN**, on the reasoning that J4-1, J4-2, J4-3 and J4-4 are one
+connected decision — they rest on what the wallet tx log means, three share a matcher, and J4-3's
+fix is blocked on J4-1's. That framing was half right: the *connectedness* held, but treating J4-1
+as undecidable did not, since its discriminator can only fail safe. **J4-1, J4-2 and J4-4 were
+fixed the next day — see the §J4 resolution pass below**, which also records why the original
+stopping point was too conservative and adds J4-10 and J4-11, both found while implementing. J4-3,
+J4-5, J4-8 and J4-9 remain open as written.
+
+**Mainnet gate.** J4-1 alone should hold the launch: it needs no attacker, it triggers on an
+ordinary node outage, it takes the miner's whole payout, and nothing in the alerting notices.
+*(Fixed 2026-08-27; the gate now rests on J4-3 and J4-10, and on the §J17 wallet observation that
+confirms the premise all three turn on.)*
+
+---
+
+### §J4 — resolution pass, 2026-08-27 (add-ons, NOT VPS-TESTED)
+
+Scope chosen by the operator after the findings landed: **fix the matchers and the guard arming;
+add no new machinery.** So J4-1, J4-2 and J4-4 are closed here, and J4-3 (the `tor_sending`
+sweeper) plus the operator surfaces are deliberately not built — see *Deliberately not applied*.
+
+**Why these were fixed now rather than held.** The session first filed J4-1 as "structural, left
+for a decision" while simultaneously recommending it hold the mainnet launch, and those two do not
+sit together. The policy tail *is* structural — what happens to a payout that stays UNKNOWN
+forever, on a status §H2 deliberately made un-cancellable — but the discriminator is not, and the
+discriminator is the part that loses money. The argument for waiting was that the premise about
+grin-wallet's tx log is inferred from reading rather than from a live wallet; that argument does
+not survive being followed through, because **requiring `confirmed` can only make the sweep more
+conservative.** If the premise is right, this stops silent confiscation. If it is wrong, the worst
+case is a payout that stalls instead of settling — recoverable, visible, and the trade the module's
+own comment already picks. The asymmetry runs one way, so an unverified premise is a reason to
+verify on the VPS (§J17 still owes that), not a reason to keep the wrong test.
+
+#### What was applied
+
+**J4-1 — `reclaimStaleFinalizing` is now three-state**
+([withdrawal-scheduler.js:1422–1510](../../web/07_mining_pool_public/back-end-pool/lib/withdrawal-scheduler.js#L1422)).
+The single `TxSent` set is replaced by two structures built in one pass: `onChain` (`tx_type ===
+'TxSent' && t.confirmed`) and `known` (slate_id → tx_type, for everything the wallet still holds).
+Per stale row:
+
+| Wallet says | Verdict | Action |
+|---|---|---|
+| `TxSent` **and** `confirmed` | on chain | confirm — release lock, debit, fee (unchanged) |
+| `TxSentCancelled`, or slate absent entirely | never posted | release the claim → `slatepack_pending` |
+| `TxSent`, **not** confirmed | **UNKNOWN** | leave it claimed, warn, re-ask next tick |
+| no `slate_id` at all | nothing could have been sent | release the claim (unchanged) |
+| wallet unreachable | UNKNOWN | leave it (unchanged) |
+
+The UNKNOWN warn line names the address and the amount still locked, so the row is greppable while
+no operator surface exists for it.
+
+**`kernel_excess` is deliberately NOT used as a second on-chain signal**, and the code says so. It
+may be populated at `finalize_tx` — i.e. *before* `post_tx` — which is exactly the window this
+sweep exists to judge, so adding it would rebuild the same bug one field over. `confirmed` is the
+only field whose meaning is unambiguous and already relied on elsewhere
+([reconciliation.js:278](../../web/07_mining_pool_public/back-end-pool/lib/reconciliation.js#L278)).
+Cost of the narrower test: a payout broadcast seconds before the sweep runs is not confirmed on
+this tick. It confirms on the next one, 60 s later.
+
+The method's header comment was rewritten too — it documented the two-state model as correct, which
+is how the mistake would have been re-introduced by the next reader.
+
+**J4-2 — the double-send guard is armed off the event log**
+([withdrawal-scheduler.js:339–348](../../web/07_mining_pool_public/back-end-pool/lib/withdrawal-scheduler.js#L339),
+[:370–374](../../web/07_mining_pool_public/back-end-pool/lib/withdrawal-scheduler.js#L370)).
+`sendWithdrawal` now counts prior `to_status='tor_sending'` events **before** writing its own, and
+arms on `priorAttempts > 0 || retry_count > 0 || slate_id`. `withdrawal_events` is append-only and
+no admin action rewrites it, so the admin *Retry* button can keep resetting the ladder without
+disarming the guard. `retry_count` and `slate_id` stay in the condition as belt and braces rather
+than as the mechanism. A genuine first attempt still matches none of the three and still pays no
+extra wallet round-trip — verified, not assumed (R2 below).
+
+**J4-4 — an unparseable timestamp is a missing observation**
+([withdrawal-scheduler.js:465–486](../../web/07_mining_pool_public/back-end-pool/lib/withdrawal-scheduler.js#L465)).
+Two changes in `_priorSendLanded`'s amount branch: a per-entry `if (when === null) return false;`
+so one undated entry cannot slip past the age bound, and a systemic check — if **no** candidate
+carries a parseable `creation_ts`, the method returns `{ checked: false }` with a warn rather than
+matching on amount alone. That routes the case into the fail-open path §H1 already defined (retry
+proceeds, loudly logged) instead of silently marking a miner paid.
+
+#### Deliberately not applied
+
+- **J4-3 (`tor_sending` orphan) stays OPEN.** It needs a sweeper that does not exist, and that
+  sweeper would settle payouts autonomously — new money-moving machinery, pre-mainnet, out of the
+  chosen scope. It is now *unblocked*, though: it can be built on the corrected matcher rather than
+  inheriting the bug. Verified still reproducing after this pass (R4).
+- **No operator surface for an UNKNOWN row.** A parked `finalizing` row still has no age alert and
+  no admin action — `POST /api/admin/withdrawals/:id/cancel` refuses `finalizing` by §H2's design.
+  So the fix converts a silent wrong settlement into a **visible stall that only a human can end**,
+  and today the human has only the log line. That is the correct direction and an incomplete
+  destination; it is the other half of the J4-3 decision, not a separate one.
+- **J4-5, J4-8, J4-9** unchanged, as scoped.
+
+#### A regression this pass introduced, caught in self-review — **FIXED same pass**
+
+Parking an UNKNOWN row means it is re-selected on **every** subsequent tick, and
+`reclaimStaleFinalizing` selected `ORDER BY w.created_at ASC LIMIT 10`. That bound was safe only
+while every selected row resolved on the tick it was selected — which was true before this change
+and is not true after it. Ten parked rows would permanently fill the batch and **starve every newer
+stale claim behind them, including ones that are resolvable**, turning one node outage into a
+spreading stall. The fix for a silent wrong settlement would have created a queue that quietly
+stopped settling anything.
+
+The limit costs almost nothing to raise, which is what makes this cheap: the expensive part is the
+single `getTransactions()` call, which serves the whole batch however large, and the per-row work
+is a synchronous DB transaction. It is now `Math.max(50, MAX_PENDING_WITHDRAWALS)` bound as a
+statement parameter ([withdrawal-scheduler.js:1433–1449](../../web/07_mining_pool_public/back-end-pool/lib/withdrawal-scheduler.js#L1433)),
+so it cannot be smaller than the number of rows that can be in flight.
+
+Demonstrated both ways: twelve stale claims, eleven UNKNOWN and the twelfth genuinely on chain and
+**newest**, so it sat behind the wall. `SELECT id … ORDER BY created_at ASC LIMIT 10` returns
+`1..10` and excludes it; with the new bound the sweep confirms row 12 while leaving the other
+eleven claimed, on **one** wallet scan.
+
+**Related cost, recorded not fixed:** while any row is parked, the sweep now calls
+`getTransactions(true)` — a node-refreshing scan — every 60 s indefinitely, where previously it ran
+only until the stuck rows resolved. That is roughly 3× the cadence of the two existing periodic
+scans (`backfillKernelProofs` and reconciliation, both ~3 min) and only during an incident. Left
+alone deliberately: throttling it would delay a legitimate confirm, and the right answer is the
+J4-3 operator surface that stops rows parking indefinitely in the first place.
+
+#### Two findings surfaced while implementing
+
+### J4-10 — [High] `_priorSendLanded` shares J4-1's premise, but its fix flips the risk direction — **OPEN**
+
+**Threat actor: the system.**
+
+The retry guard still tests `String(t.tx_type) === 'TxSent'`
+([withdrawal-scheduler.js:451](../../web/07_mining_pool_public/back-end-pool/lib/withdrawal-scheduler.js#L451))
+with no `confirmed` check, on both its branches — the authoritative `slate_id` lookup and the
+amount match. By the same premise as J4-1, an entry that only ever reached `tx_lock_outputs` is
+accepted as "this payout landed", and the row is confirmed without a send.
+
+It was **not** folded into this pass because the correction is not the same one. In
+`reclaimStaleFinalizing`, requiring `confirmed` is strictly safer. Here it is not: a payout that
+was genuinely broadcast but not yet mined would stop matching, the retry would proceed, and that is
+§H1's double-pay. The honest fix is the same three-state shape — confirmed → confirm;
+cancelled/absent → re-send; unconfirmed `TxSent` → **defer** (leave the row on the retry ladder and
+re-ask later) — which means a new outcome in `sendWithdrawal`'s flow, i.e. the machinery this pass
+was scoped to avoid.
+
+Mitigating, and the reason it is High rather than Critical: retries are ≥6 h apart
+(`withdrawal_retry_delays` starts at `6 * 3600`), and a Grin transaction that was actually
+broadcast mines long before that — so an unconfirmed `TxSent` at retry time is *usually* one that
+was never posted, and the current code's guess is *usually* right. "Usually" is doing real work in
+that sentence, which is why it stays open rather than accepted.
+
+### J4-11 — [Low] `_captureTorSlateId` can attach another transaction's slate as a payout's on-chain proof — **OPEN**
+
+**Threat actor: the system.**
+
+Observed directly while testing J4-4 (R3 below): after a re-send, the row's `slate_id` was set to
+`OLD` — a year-old unrelated transaction — because `_captureTorSlateId`
+([:616–632](../../web/07_mining_pool_public/back-end-pool/lib/withdrawal-scheduler.js#L616)) matches
+far more loosely than the guard beside it: `/Sent/` (which also matches `TxSentCancelled`, as its
+own comment admits), `>= wantNano` rather than equality, no time bound, and "newest by `id`" as the
+tie-break. It is documented as best-effort proof metadata that never affects the payout, and that
+holds for the payout itself. But the value it writes is not inert:
+
+- it becomes the account page's kernel deep-link, so a miner can be shown a stranger's transaction
+  as proof of their own payment;
+- `_priorSendLanded` builds its `claimed` set from `withdrawals.slate_id`
+  ([:458](../../web/07_mining_pool_public/back-end-pool/lib/withdrawal-scheduler.js#L458)), so a
+  wrong value there can shield a genuine match belonging to a *different* withdrawal;
+- `backfillKernelProofs` will happily attach the wrong kernel to the row.
+
+In practice sends are serialised through the scheduler, so "newest sent tx" is normally ours — this
+needs an unusual wallet log to bite. Fix is to reuse the guard's matching rules (exact net amount,
+`TxSent` only, created no earlier than the row) instead of a second looser copy.
+
+#### Verification
+
+Sixteen assertions against the **real** methods, same harness construction as the finding pass
+(`require`d scheduler, `node:sqlite`, only `db`/`incentives`/`wallet-tor` stubbed; wallet tx log
+supplied per test). One-shot; scratchpad; `node --check` clean.
+
+- **R1 — all five `reclaimStaleFinalizing` branches**, each asserting on *money*, not just status:
+  UNKNOWN leaves the row `finalizing` with 100 GRIN still locked and **no debit row written**;
+  confirmed still settles and still credits `pool_fee` 0.04; cancelled and absent both return the
+  row to `slatepack_pending` with the lock retained for the TTL sweep; a row with no slate is
+  re-opened. Plus the **§H2 regression that had to survive**: a fresh claim on a 24 h-old
+  withdrawal is not reclaimed, and the wallet is not even consulted for it.
+- **R2 — the guard arming.** A row shaped exactly as the admin retry route leaves it (`tor_failed`
+  → re-locked, `retry_count = 0`, prior `tor_sending` event in the log) now runs the guard and
+  blocks the re-send. A genuine first attempt still skips it: one send, zero pre-send wallet calls.
+- **R3 — the timestamp fallback.** An undated same-amount transaction no longer confirms the
+  payout; the send proceeds with the loud log. Control: a properly dated match still confirms
+  instead of re-sending. This test is also where J4-11 was observed.
+- **R4 — untouched behaviour.** J4-6's cooldown still blocks, the slatepack TTL still refunds, and
+  J4-3 still reproduces exactly as reported.
+
+Every branch has a control assertion. A test that only shows the new behaviour cannot tell a real
+fix from a broken fixture — R1's confirmed-path assertions exist to prove the sweep did not simply
+stop working.
+
+**R5 — self-review of this pass**, run after the fixes were written and the write-up was drafted,
+which is where the batch-starvation regression above was caught. Three further assertions: eleven
+parked rows stay claimed, a resolvable row behind them is still reached and confirmed, and one
+wallet scan serves the whole batch. Two claims made in the new code comments were also checked
+rather than assumed: `withdrawal_events` is **not** touched by `lib/retention.js` (it prunes
+`shares`, `hashrate_history`, `alerts`, `admin_audit_log` and raw `balance_log` only), so J4-2's
+arming signal is genuinely durable; and no path other than `sendWithdrawal` writes a
+`to_status='tor_sending'` event, so the count cannot be inflated.
+
+#### Behaviour an operator will notice
+
+- A stale `finalizing` row whose transaction is not yet mined **no longer settles by itself**. It
+  stays as *Settling* on the Payments page and emits a `⚠️ [finalize] stale claim … outcome
+  UNKNOWN` line each minute, naming the address and the locked amount. Previously it settled
+  silently and wrongly. **There is no button to resolve it** — that is J4-3's other half.
+- The admin *Retry* button now costs one wallet round-trip before re-sending, and will sometimes
+  refuse to re-send and confirm the payout instead. That is the guard doing its job.
+- A wallet whose tx log lacks `creation_ts` now logs `[double-send guard] … treating the log as
+  unread` on every retry and re-sends rather than confirming. If that line appears on a real box it
+  is the §J17 observation arriving the hard way — capture a `retrieve_txs` dump before doing
+  anything else.
+
+#### Handoffs changed by this pass
+
+- **§J17** — the VPS observation is now more valuable, not less: it validates a fix that is already
+  shipped. Dump `retrieve_txs` for a slatepack payout **between creation and finalize** and record
+  `tx_type`, `confirmed`, `kernel_excess` and `creation_ts`. `kernel_excess` is the one to watch —
+  if it turns out to be populated at finalize, the comment forbidding its use as an on-chain signal
+  is right and should stay; if it is only set once mined, it becomes a legitimate second signal.
+- **§J5** — unchanged, and now load-bearing: if `grin-node.js` can ask the node directly whether a
+  kernel is in the mempool or on chain, that is a better answer for the UNKNOWN state than waiting
+  for the wallet's `confirmed` flag, and it would let J4-10 be fixed without a "defer" outcome.
+- Everything else in §J4's handoff list stands as written.
+
+---
+
+## §J5 — Reward & orphan ledger (2026-08-27, add-ons, NOT VPS-TESTED)
+
+Fifth session of the pre-mainnet §J pass (plan:
+[`script07_reference_audit_session_plan.md`](script07_reference_audit_session_plan.md) §J5).
+Scope: [`lib/rewards.js`](../../web/07_mining_pool_public/back-end-pool/lib/rewards.js) (335),
+[`lib/blocks.js`](../../web/07_mining_pool_public/back-end-pool/lib/blocks.js) (330),
+[`lib/block-monitor.js`](../../web/07_mining_pool_public/back-end-pool/lib/block-monitor.js) (192),
+[`lib/orphan-detector.js`](../../web/07_mining_pool_public/back-end-pool/lib/orphan-detector.js) (232),
+[`lib/reconciliation.js`](../../web/07_mining_pool_public/back-end-pool/lib/reconciliation.js) (490),
+[`lib/ledger-rollup.js`](../../web/07_mining_pool_public/back-end-pool/lib/ledger-rollup.js) (118),
+plus the uncommitted [`lib/grin-node.js`](../../web/07_mining_pool_public/back-end-pool/lib/grin-node.js)
+and the block routes in [`index.js`](../../web/07_mining_pool_public/back-end-pool/index.js).
+Question asked: **can GRIN be credited that the chain never paid, or an orphan reversal
+double-charge?**
+
+**Revision read:** the **working tree** at commit `fd6879f` + uncommitted changes, as the plan
+requires. Since the plan was written (2026-08-25) the tree has moved: 18 files are now modified,
+not four, because §J2/§J3/§J4 landed their resolution passes in between. The three §J5-relevant
+uncommitted diffs — `block-monitor.js` (+15/−4), `grin-node.js` (+144/−…), `orphan-detector.js`
+(+26/−10) — are the node-error-classification work from memory
+`project_pool_node_error_classification`, and they are the version reviewed below.
+
+Read first, then confirmed by execution. Three one-shot harnesses, all in the scratchpad, no
+server and no VPS (plan rule 5): a `node:sqlite` schema replica for the storage behaviour, a
+require-cache stub of `node-fetch` bound to the **real** `GrinNodeAPI` + `OrphanDetector` for the
+classification cases, and the repo's own `RewardDistributor` against a throwaway DB file. The
+durable half of that work is now committed as
+[`scripts/test-block-ledger.js`](../../web/07_mining_pool_public/back-end-pool/scripts/test-block-ledger.js)
+(20 assertions), wired into `npm test`.
+
+**Headline — the answer to the first clause is "no, and it cannot credit anything at all".** The
+money-in path is not leaky; it is *inert*. `blocks.nonce` is declared `INTEGER`, a Grin nonce is a
+full-width `u64`, and the pool's SQLite binding **throws** rather than rounding when it reads one
+back. One found block with a nonce in `[2^53, 2^63)` — an even-money coin flip per block —
+permanently stops the maturity sweep, distribution, orphan detection and the admin blocks page,
+for that block and every block after it. Nothing alerts, because the failure produces a wallet
+*surplus* and every money detector the pool has is aimed at a shortfall.
+
+The second clause is a "yes, but not the way §I3/§I4 expected": the reversal path cannot
+double-charge a *distributed* block because it can never see one (J5-11) — but the classification
+that decides whether to reverse **still had a way to condemn a live block on a misconfiguration**
+(J5-2), which is the exact bug class the uncommitted diff was written to close.
+
+### Threat actors used in this section
+
+| Label | Means |
+|---|---|
+| **The system** | No attacker. A found block, a node restart, a transient DB fault. The dominant actor here — six of eleven findings need nobody at all |
+| **Block-finding miner** | A miner who solves a block, and therefore chooses the `nonce` the pool stores. Not a privileged position: every miner is one, eventually |
+| **Operator (honest)** | The pool's own admin, setting a value or pointing a URL. Includes the operator who reads a number the pool reports and believes it |
+| **On-box root** | Shell on the pool server — Info only, per plan rule 7 |
+
+---
+
+### J5-1 — [Critical] `blocks.nonce` is an `INTEGER` column and a Grin nonce is a full-width `u64`, so reading back a found block throws — one block in two permanently stops all maturity, distribution and orphan detection — **FIXED 2026-08-27 (see §J5 resolution pass)**
+
+**Threat actor: the system** (and, if anyone wants it sooner, the block-finding miner, who picks
+the value).
+
+The nonce is carried through the pool **as a decimal string**, deliberately.
+[stratum-protocol.js:13–20](../../web/07_mining_pool_public/back-end-pool/lib/stratum-protocol.js#L13)
+re-extracts the literal digits out of the raw JSON with a regex, with a comment explaining exactly
+why: `JSON.parse` rounds integers past 2^53 and the node then rejects the share. That string
+reaches [`creditBlock`](../../web/07_mining_pool_public/back-end-pool/lib/blocks.js#L47) unchanged
+([stratum-server.js:659](../../web/07_mining_pool_public/back-end-pool/lib/stratum-server.js#L659))
+and is bound into a column declared
+[`nonce INTEGER NOT NULL`](../../web/07_mining_pool_public/back-end-pool/lib/db.js#L345).
+
+SQLite applies INTEGER affinity to the string. What that does depends on magnitude, and there are
+three outcomes, none of them "stores the nonce":
+
+```
+$ node -e "…INSERT the string into an INTEGER column, then read typeof(nonce)…"
+{ id: 1, ty: 'integer', astext: '4611686018427387904'  }   # 2^62      → INTEGER, exact
+{ id: 2, ty: 'real',    astext: '9.22337203685478e+18' }   # 2^63      → REAL, precision GONE
+{ id: 3, ty: 'integer', astext: '1234567'              }   # small     → INTEGER, exact
+```
+
+The pool does not use better-sqlite3. `package.json` lists no such dependency and
+[`lib/sqlite-compat.js:24`](../../web/07_mining_pool_public/back-end-pool/lib/sqlite-compat.js#L24)
+wraps Node's built-in `node:sqlite` `DatabaseSync` ("migrated off better-sqlite3", `engines.node
+>= 24`). `node:sqlite` does **not** silently round an out-of-range INTEGER on read the way
+better-sqlite3 does — it throws:
+
+```
+$ node -e "…SELECT * FROM blocks WHERE status='immature'…"
+SWEEP THROWS -> ERR_OUT_OF_RANGE Value is too large to be represented as a JavaScript number: 4611686018427387904
+```
+
+`readBigInts` is not set anywhere in the codebase (`grep` over `lib/` + `index.js` returns only an
+unrelated `BigInt` in `lottery.js`), so every read of that column goes through the throwing path.
+
+**What that takes down.** Every one of these does `SELECT *` (or names `nonce`) on `blocks`, so
+each throws for the whole result set — one poisoned row kills the query, not just its own row:
+
+| Call site | Effect |
+|---|---|
+| [block-monitor.js:78](../../web/07_mining_pool_public/back-end-pool/lib/block-monitor.js#L78) `checkImmatureBlocks` | caught at `:119` → `maturity sweep aborted` **every 30 s, forever**. No block ever reaches `confirmed` |
+| [orphan-detector.js:60](../../web/07_mining_pool_public/back-end-pool/lib/orphan-detector.js#L60) `detectOrphans` | returns `aborted:true` on every 6 h pass |
+| [rewards.js:20](../../web/07_mining_pool_public/back-end-pool/lib/rewards.js#L20) `distributeRewards` | `success:false` for any block it is asked to settle |
+| [blocks.js:83, 93, 104, 142, 154, 166, 318](../../web/07_mining_pool_public/back-end-pool/lib/blocks.js#L83) | `getBlock`, `getBlockByHeight`, `getRecentBlocks`, `getImmatureBlocks`, `getBlocksByStatus`, `getBlocksMintedByMiner`, `getLastBlock` — all swallow it and return `null`/`[]` |
+| [index.js:2815](../../web/07_mining_pool_public/back-end-pool/index.js#L2815) `GET /api/admin/blocks` | selects `nonce` explicitly → **HTTP 500**, so the operator's blocks page goes blank at the same moment |
+| [blocks.js:50](../../web/07_mining_pool_public/back-end-pool/lib/blocks.js#L50) `creditBlock` → `getLastBlock()` | swallowed → `round_shares` silently mis-captured for every subsequent block, so the luck chart is wrong too |
+
+**The odds, from source in this workspace.** grin-miner draws a fresh full-width random nonce per
+attempt — `grin-miner`'s `cuckoo-miner/src/miner/util.rs:40` (read from the sibling checkout in this workspace):
+`let nonce: u64 = rand::OsRng::new().unwrap().gen();`. For a uniform `u64`:
+
+- `< 2^53` → INTEGER, exact, harmless: **p = 2⁻¹¹ ≈ 0.049 %**
+- `[2^53, 2^63)` → INTEGER, **read throws**: **p ≈ 49.95 %**
+- `≥ 2^63` → REAL, read succeeds but the stored value is a rounded double: **p = 50 %**
+
+So the expected number of blocks the pool survives is **two**. The 50 % REAL branch is not a
+reprieve either — it only *appears* to work, and for a bad reason (see J5-3).
+
+**Why no test caught it.** [`scripts/test-money-path.js:63`](../../web/07_mining_pool_public/back-end-pool/scripts/test-money-path.js#L63)
+uses `const NONCE = 12345`. Every §I regression test, and the whole 30-assertion money-path suite,
+runs on a five-digit nonce — a value in the 0.049 % band that is the only one this schema can hold.
+The suite is green on a schema that cannot store a real Grin nonce.
+
+**Fix (not applied — structural, and it forces the J5-3 decision with it).** Three coupled pieces,
+and the order matters:
+
+1. `blocks.nonce` becomes `TEXT NOT NULL` and `creditBlock` binds `String(nonce)`. There is no
+   production DB to migrate — the pool has never run on a VPS — so this is a schema edit plus a
+   `DROP`/recreate note for any testnet DB, not a migration.
+2. **Before** step 1 ships, fix the comparators (J5-3). Storing the nonce *correctly* is exactly
+   what makes both existing comparisons fail, and the failure direction is `orphan + reverse`.
+3. Add a real u64 to the money-path fixtures. `scripts/test-block-ledger.js` §[2] already pins the
+   current broken behaviour with a `KNOWN OPEN` assertion — when the schema is fixed that
+   assertion fails, which is the intended signal to update it.
+
+**Mainnet must not start before this is closed.** It is not a degradation; the pool mines, credits
+nobody, and reports itself healthy.
+
+---
+
+### J5-2 — [High] A JSON-RPC *envelope* error is classified as a statement about the chain, so `Method not found` orphans a live block and reverses its payouts — **FIXED 2026-08-27**
+
+**Threat actor: operator (honest) — a misconfigured or version-skewed node URL.** Not remotely
+triggerable, but the consequence is money moving backwards.
+
+Memory `project_pool_node_error_classification` states the rule this session was asked to check
+against: *classify by ORIGIN, never by a message string*. The uncommitted diff implements it
+properly for the transport layer — `transportFailure()` vs `nodeReplyFailure()`, and
+[orphan-detector.js:40](../../web/07_mining_pool_public/back-end-pool/lib/orphan-detector.js#L40)
+now gates on `err.nodeReplied === true && err.notFound === true` instead of
+`err.message.includes('height')`. That part is correct and re-verified.
+
+But `_rpcCall` has **two** node-answered branches, and both were funnelled into the same
+constructor:
+
+- [grin-node.js:322](../../web/07_mining_pool_public/back-end-pool/lib/grin-node.js#L322) —
+  `data.error`, the JSON-RPC **envelope** error. `-32601 Method not found`, `-32602 Invalid params`,
+  a parse error. This describes the *call*, not the chain.
+- `data.result.Err` — the Grin handler's own `Result::Err`. This one genuinely is a statement about
+  the chain.
+
+`notFound` was derived by substring-matching the payload in both cases. `{"code":-32601,"message":
+"Method not found"}` contains `not found`. Demonstrated against the real `GrinNodeAPI` +
+`OrphanDetector` with a stubbed `node-fetch`:
+
+```
+node Err NotFound (a real chain statement)
+   -> nodeReplied=true notFound=true   ==> verifyBlockOnChain: ORPHAN + REVERSE PAYOUTS
+JSON-RPC envelope: Method not found (-32601)
+   -> nodeReplied=true notFound=true   ==> verifyBlockOnChain: ORPHAN + REVERSE PAYOUTS   ← wrong
+JSON-RPC envelope: Invalid params
+   -> nodeReplied=true notFound=false  ==> rethrow (block stays immature)
+```
+
+This is not hypothetical: CLAUDE.md already records that a grin node answers **`Method not
+found`** for a method the endpoint does not carry (`get_tip` on the Owner API). `get_header` is a
+**Foreign** method. Any deployment where `node_api_url` resolves `/v2/foreign` to something other
+than the Foreign handler — an nginx rewrite, a satellite gateway misroute, a future grin that moves
+the method — makes *every* `getHeader` return `-32601`, and the maturity sweep then orphans every
+block past confirm depth and calls `reverseBlockPayouts` on each. The same shape as the original
+bug, one layer up: the previous version matched our own wrapper message, this one matched the
+envelope's.
+
+**Fixed.** `nodeReplyFailure()` takes an explicit `chainStatement` flag
+([grin-node.js:37](../../web/07_mining_pool_public/back-end-pool/lib/grin-node.js#L37)). Only
+`result.Err` passes `true`; an envelope error sets `notFound = false` unconditionally and carries
+`chainStatement:false` so a future caller cannot re-derive it. Regression-tested in
+`test-block-ledger.js` §[1], with a CONTROL asserting a genuine `Err: NotFound` still *does*
+orphan — an over-broad fix here would be as bad as the bug, since it would stop the pool ever
+recognising a real orphan.
+
+---
+
+### J5-3 — [High] The nonce cannot be an exact chain comparator at all — `JSON.parse` has already rounded it — so fixing J5-1 turns both existing checks into a mass-orphan bug — **FIXED 2026-08-27 (see §J5 resolution pass)**
+
+**Threat actor: the system.** This is a fix-ordering hazard, filed as a finding because the obvious
+repair for J5-1 detonates it.
+
+Two places compare the pool's stored nonce against the node's, and they disagree with each other:
+
+- [orphan-detector.js:16](../../web/07_mining_pool_public/back-end-pool/lib/orphan-detector.js#L16)
+  — `if (header.nonce === blockNonce)`. Strict, no coercion. The `else` branch is
+  `orphan + reverseBlockPayouts`.
+- [rewards.js:53](../../web/07_mining_pool_public/back-end-pool/lib/rewards.js#L53) —
+  `if (String(nodeHeader.nonce) !== String(block.nonce))`, with a comment noting the node's u64
+  "may arrive as a number or a string depending on magnitude". Fails closed (refuses to credit).
+
+Neither survives an exactly-stored nonce, because the loss happens on the **node** side before
+either runs. `grin-node.js` reads the reply with `response.json()`, i.e. `JSON.parse`:
+
+```
+exact u64 nonce         : 4611686018427387904
+after JSON.parse(number): 4611686018427388000   lossless? false
+after JSON.parse(string): 4611686018427387904   lossless? true
+
+--- if blocks.nonce were stored EXACTLY (TEXT column) ---
+orphan-detector  header.nonce === block.nonce : false   (number vs string)  → ORPHAN
+rewards.js       String(a) !== String(b)      : true    (mismatch)          → refuse to credit
+```
+
+Both comparisons fail, and the destructive one fails destructively. Note the second row: if grin
+serialises the nonce as a JSON **string**, `===` against a stored number is false too. There is no
+magnitude at which both sites are simultaneously correct.
+
+Today this is masked by J5-1 and by luck: the `≥ 2^63` half stores a rounded REAL and the node
+delivers *the same rounded double*, so the comparison passes on two values that are both wrong —
+
+```
+fromDb   = 18446744073709552000  (number)
+fromNode = 18446744073709552000  (number)
+equal? true    either equals the true nonce 18446744073709551615? false
+```
+
+— and the `[2^53, 2^63)` half never reaches a comparison because the read throws first.
+
+**Recommended fix (a decision, not a patch).** Make **`hash` the mandatory comparator and drop the
+nonce as a verifier.** The hash is a 64-hex string end to end: grin's stratum answers
+`blockfound - <hash>` and the pool takes the tail verbatim
+([node-stratum-client.js:148](../../web/07_mining_pool_public/back-end-pool/lib/node-stratum-client.js#L148)),
+`blocks.hash` is `TEXT NOT NULL UNIQUE`, and `get_header(h).hash` is the same hex — nothing in that
+path passes through a JS number. §I3's resolution deliberately left the hash comparison *optional*
+(nonce-only fallback with a warning) because the stratum reply format had never been checked
+against a live node; §J17 owes that observation, and it is now the gating item for this finding
+rather than a nice-to-have. If the nonce is kept at all, it must be compared as
+`Number(a) === Number(b)` — deliberately normalising **both** sides through the same lossy double —
+and that must be written down as intentional, because it looks like the bug it is preventing.
+
+**Do not fix J5-1 without fixing this in the same change.**
+
+---
+
+### J5-4 — [Medium] `'paid'` is missing from every block-status count, so the pool publicly reports 0 confirmed blocks and 0 confirmed reward in steady state — **FIXED 2026-08-27**
+
+**Threat actor: none — a correctness defect, read by anonymous internet.**
+
+`rewards.js` flips `confirmed → paid` the instant it distributes
+([rewards.js:141](../../web/07_mining_pool_public/back-end-pool/lib/rewards.js#L141)), so `'paid'`
+is the terminal success state and `'confirmed'` is a ~30-second transient. `getPoolStats` counted
+only `'confirmed'`:
+
+```sql
+SELECT COUNT(*)                FROM blocks WHERE status = 'confirmed'   -- confirmed_blocks
+SELECT COALESCE(SUM(reward),0) FROM blocks WHERE status = 'confirmed'   -- confirmed_reward
+```
+```js
+immature_blocks: totalBlocks.count - confirmedBlocks.count
+```
+
+In steady state `confirmed_blocks` and `confirmed_reward` are **0**, and `immature_blocks` is every
+block the pool has ever found — including the orphaned ones, which the subtraction also folds in.
+`getPoolStats` feeds five routes plus
+[`poolstats-reporter.js:95`](../../web/07_mining_pool_public/back-end-pool/lib/poolstats-reporter.js#L95),
+the external pool-listing publisher — so the pool advertises "0 blocks confirmed, 0 GRIN confirmed"
+to third-party listing sites while paying miners normally. The blocks-page doughnut had the same
+root: [blocks.js:305](../../web/07_mining_pool_public/back-end-pool/lib/blocks.js#L305) sent every
+unrecognised status, `'paid'` included, to the *maturing* bucket.
+
+For a pool asking miners to trust it with custody, "we have confirmed zero blocks" is the worst
+possible number to get wrong.
+
+**Fixed.** Both aggregates read `status IN ('confirmed','paid')`; `immature_blocks` is counted
+directly rather than by subtraction, so orphans no longer land in it; the doughnut puts `'paid'`
+under confirmed. Regression-tested in `test-block-ledger.js` §[4] against a fixture holding one
+block of each status.
+
+---
+
+### J5-5 — [Medium] A failed share query is indistinguishable from "no shares", and that branch permanently confiscates the block reward — **FIXED 2026-08-27**
+
+**Threat actor: the system** — a transient DB fault is enough.
+
+`getSharesForDistribution` swallowed every exception and returned `[]`:
+
+```js
+} catch (err) {
+  console.error(`Error fetching shares for distribution: ${err.message}`);
+  return [];          // ← indistinguishable from an empty window
+}
+```
+
+The caller reads `[]` as a settled fact
+([rewards.js:94–111](../../web/07_mining_pool_public/back-end-pool/lib/rewards.js#L94)): it
+CAS-flips the block to `'paid'`, credits nobody, and returns `reason:'no_shares_found'`. The block
+is now terminal — `distributeConfirmedBlocks` only selects `'confirmed'`, so **nothing ever retries
+it** and the whole 60 GRIN stays in the pool wallet with no ledger entry against it.
+
+The trigger does not need an attacker. `SQLITE_BUSY`, `SQLITE_FULL` (a full disk on a VPS, with the
+`ORDER BY created_at` spilling to a temp b-tree), `SQLITE_IOERR`, or a corrupt index all arrive as
+a throw from `.all()`. §I9 fixed the *retention* route to this same outcome (shares aged out from
+under a stalled block); this is the same terminal branch reached by a transient fault instead, and
+the direction is identical — reward retained, miners never credited.
+
+Note the DB has no `busy_timeout` pragma
+([db.js:16–17](../../web/07_mining_pool_public/back-end-pool/lib/db.js#L16) sets `journal_mode` and
+`foreign_keys` only), so SQLite's default of 0 means any contention surfaces immediately as
+`SQLITE_BUSY` rather than waiting. That is J7's to rule on (handoff below).
+
+**Fixed.** The catch rethrows. The throw lands in `distributeRewards`' outer catch, which returns
+`success:false` and leaves the row `'confirmed'` for the next 30 s tick — delayed, never wrong, the
+same principle §I3's resolution adopted for an unreachable node. Regression-tested in
+`test-block-ledger.js` §[5], including a **CONTROL** proving a genuinely empty share window still
+settles the block as before.
+
+---
+
+### J5-6 — [Medium] The block status flip is not a claim: a swallowed `UPDATE` leaves the row replayable, and the reversal has no idempotency guard its own sibling has — **FIXED 2026-08-27**
+
+**Threat actor: the system.**
+
+`confirmBlock` and `orphanBlock` were bare `UPDATE … WHERE id = ?` with no status predicate, no
+`changes` check, and a `catch` that logged and returned nothing. Both callers then moved money
+regardless of whether the flip landed:
+
+```js
+this.orphanDetector.confirmBlock(block.id);
+this.orphanDetector.incentives.payBlockFinderJackpot(block);   // ← runs either way
+…
+this.orphanDetector.orphanBlock(block.id, verification.reason);
+this.orphanDetector.reverseBlockPayouts(block.id);             // ← runs either way
+```
+
+If the `UPDATE` fails the row is still `'immature'`, so the next 30 s tick re-selects it and runs
+the same branch again. The jackpot is protected by its own `reference_id` check
+([incentives.js:308–312](../../web/07_mining_pool_public/back-end-pool/lib/incentives.js#L308)) —
+but `reverseBlockPayouts` had **no** such guard, and a reversal row does not cancel out the credit
+rows it re-reads, so a second call debits the same amount again, clamping down through the miner's
+balance across a couple of ticks. `incentives.reverseJackpot()`, twenty lines away, does exactly
+this check; the block reversal simply never got one.
+
+§I4 established the right pattern for this in `rewards.js` — *"The flip goes FIRST inside the
+transaction: it is the claim"* — and these two transitions were the ones that never adopted it.
+
+**Fixed.** Both are now CAS on `status = 'immature'`, return a boolean, and both call sites
+`continue` when the claim fails ([orphan-detector.js:118–154](../../web/07_mining_pool_public/back-end-pool/lib/orphan-detector.js#L118),
+[block-monitor.js:96–112](../../web/07_mining_pool_public/back-end-pool/lib/block-monitor.js#L96)).
+`reverseBlockPayouts` gained the same `event_type='reversal' AND reference_id=?` guard as
+`reverseJackpot`. Regression-tested in `test-block-ledger.js` §[3]: re-claim refused, second
+reversal a no-op.
+
+---
+
+### J5-7 — [Low] A falsy `Ok` fell through both unwrap branches and returned the `{"Ok":…}` wrapper as a result — **FIXED 2026-08-27**
+
+**Threat actor: none — latent.**
+
+The node serialises Rust `Result<T,E>` as `{"Ok":T}` / `{"Err":E}` and the unwrap was a truthiness
+test: `if (data && data.result && data.result.Ok) return data.result.Ok;`. A legitimate falsy `T` —
+`validate_chain` and `push_transaction` both answer `{"Ok":null}` — matched neither branch and fell
+through to `return data.result`, handing the caller the **wrapper object** as a successful result.
+Only `validateChain()` is currently exposed to it, so nothing is broken today; it is the kind of
+latent unwrap bug CLAUDE.md's "never read `data.result` directly" note exists to prevent.
+
+**Fixed.** `hasOwnProperty` on `'Ok'` / `'Err'` after a `typeof === 'object'` guard
+([grin-node.js:328–340](../../web/07_mining_pool_public/back-end-pool/lib/grin-node.js#L328)).
+Asserted in `test-block-ledger.js` §[1].
+
+---
+
+### J5-8 — [Medium] Every money detector is aimed at a shortfall, so a totally stalled distribution pipeline — the outcome of J5-1, J5-2 and a long node outage alike — raises nothing — **FIXED 2026-08-27 (see §J5 resolution pass)**
+
+**Threat actor: none — a detection gap**, and the reason J5-1 would have reached mainnet.
+
+The plan asks whether the reconciliation invariants would *detect* the failures in this session,
+not merely report a total. Working through them:
+
+| Failure | `integrity_drift` | `coverage_full_gap` | Alerts? |
+|---|---|---|---|
+| Double credit (§I4's old bug) | 0 — ledger and log both doubled | **negative** | yes, `coverage_shortfall` |
+| Credit for a block the chain never carried | 0 | **negative** | yes |
+| Under-reversal (clamped clawback, J5-11) | 0 — the row logs the clamped amount | **negative** | yes |
+| **Nothing is distributed at all** (J5-1, J5-2, node outage) | 0 | **positive — a surplus** | **no** |
+
+The invariant is ledger-vs-log, so it is blind to all four; coverage carries every one of them —
+except the last, where the sign flips. The wallet fills with block rewards while `total_owed` stays
+flat, and [alert-monitor.js:182–190](../../web/07_mining_pool_public/back-end-pool/lib/alert-monitor.js#L182)
+only fires when `coverage_full_ok === false`. A surplus is the *shape* of a healthy pool, so
+nothing anywhere is looking at it.
+
+Nor is anything watching the blocks table for staleness.
+[`checkOrphanedBlocks`](../../web/07_mining_pool_public/back-end-pool/lib/alert-monitor.js#L548) is
+the **only** blocks query in AlertMonitor and it fires on `status='orphaned'` alone. A block sitting
+in `'immature'` at 5,000 confirmations, or parked in `'confirmed'` for a week, is silent. So is
+`reconciliation.js`: `immature_blocks` counts `status='immature'` only
+([reconciliation.js:136](../../web/07_mining_pool_public/back-end-pool/lib/reconciliation.js#L136)),
+which means a block stuck in `'confirmed'` appears in *neither* `immature_blocks` nor `total_owed`
+— it vanishes from the statement entirely.
+
+The operational tell for all of these is a `console.error` line and nothing else. §I3's resolution
+already accepted "delayed, never unverified" payouts during a node outage as correct behaviour —
+which it is — but that decision quietly created a state the pool cannot distinguish from health.
+
+**Recommended (not applied — this is new detector surface, not a local fix).** A `distribution_stalled`
+check on the money cadence: alert (warning, no freeze) when any block has been `'immature'` for more
+than `confirm_depth × 2` blocks below tip, or `'confirmed'` for more than N minutes; and a
+`coverage_surplus` informational threshold so an unexplained wallet excess past the same bounds
+`wallet_drain` uses is at least visible. Both belong beside the existing money checks in
+`alert-monitor.js`. Flagging to **§J17** as a launch-gate item: on the testnet run, the operator
+must be able to tell "no blocks found yet" from "blocks found, none credited" **without reading the
+log**.
+
+---
+
+### J5-9 — [Low] `confirm_depth_mainnet` / `confirm_depth_testnet` are dead settings keys — the operator can edit the maturity depth, see it persist, and change nothing — **FIXED 2026-08-27 (see §J5 resolution pass)**
+
+**Threat actor: operator (honest).**
+
+[`admin-panel/settings-payout.html:82–88`](../../web/07_mining_pool_public/back-end-pool/admin-panel/settings-payout.html#L82)
+renders *Mainnet Confirm Depth* and *Testnet Confirm Depth* as editable number inputs. They are
+declared in the `payout` defaults
+([pool-settings.js:172–173](../../web/07_mining_pool_public/back-end-pool/lib/pool-settings.js#L172)),
+so `updateSection` accepts them, writes them to `pool_config`, and `getSection` reads them back —
+the value sticks in the form and the operator has every reason to think it took effect.
+
+`applyToConfig` never copies them
+([pool-settings.js:1444–1500](../../web/07_mining_pool_public/back-end-pool/lib/pool-settings.js#L1444)
+maps `pool_fee_percent`, `min_withdrawal`, `withdrawal_fee`, the two pending caps, the cooldown,
+the Tor gate and the five Nostr keys — and nothing else). Every consumer therefore keeps reading
+`config.confirm_depth_*` from `pool.json`
+([block-monitor.js:83](../../web/07_mining_pool_public/back-end-pool/lib/block-monitor.js#L83),
+[orphan-detector.js:55](../../web/07_mining_pool_public/back-end-pool/lib/orphan-detector.js#L55),
+[retention.js:23](../../web/07_mining_pool_public/back-end-pool/lib/retention.js#L23),
+[index.js:2819](../../web/07_mining_pool_public/back-end-pool/index.js#L2819)) — and the installer
+never writes those keys into `pool.json` at all (`grep confirm_depth scripts/` → no match), so
+`lib/config.js:95–96`'s fallback of **1440 / 100** is the value, permanently.
+
+Same class as **J1-5** (`admin_ip_allowlist`), but on the control that decides when GRIN becomes
+spendable. Two things make it worth writing up rather than shrugging at:
+
+1. The current direction is safe — stuck at Grin's real `COINBASE_MATURITY` of 1440 — **because**
+   the key is dead. The moment someone wires it up, the safety goes with it.
+2. The key has **no validator** (`PoolSettings.validators.payout` has no entry for it), so the
+   stored value can be `0`, `-1` or `"soon"`. A `confirm_depth` of 0 credits and pays out a
+   coinbase that cannot be spent for another day, which coverage would then report as a liquid
+   shortfall and auto-freeze on.
+
+**Fix:** decide one way. Either delete both keys and the two form rows, or add them to
+`applyToConfig` **with** a validator clamping mainnet to `>= 1440` (never below consensus) and
+testnet to a sane floor — and note that the value is read at startup, so it needs a restart.
+
+---
+
+### J5-10 — [Low] The block reward is the hardcoded constant `60`, so the pool silently keeps every transaction fee in the blocks it finds, and that surplus biases the coverage check — **FIXED 2026-08-27 (see §J5 resolution pass)**
+
+**Threat actor: none — an undisclosed accounting choice.**
+
+[stratum-server.js:64](../../web/07_mining_pool_public/back-end-pool/lib/stratum-server.js#L64):
+`const GRIN_BLOCK_REWARD = 60;`, passed straight into `creditBlock` at `:659` and stored as
+`blocks.reward`. Nothing ever reads the actual coinbase. In Grin the coinbase output is
+`REWARD + Σ(kernel fees in the block)` — 60 GRIN is the *emission*, not the payment. PPLNS
+therefore distributes exactly 60 minus the pool fee, regardless of what the block actually paid,
+and the fee remainder accrues to the pool on top of the advertised `pool_fee_percent`.
+
+The amounts are small (Grin blocks are usually near-empty; a tx kernel fee is ~0.023 GRIN) and the
+direction is safe — the wallet holds *more* than the ledger owes. But it is the same class of
+distortion §H/§I already corrected in the other direction with `withdrawals.fee`: an unrecorded
+sender-paid cost was dragging `coverage_full_gap` negative, so it was measured and added back
+([reconciliation.js:181](../../web/07_mining_pool_public/back-end-pool/lib/reconciliation.js#L181)).
+This one drags the same gap **positive** by an unrecorded amount, which masks a real shortfall of
+the same size — precisely the failure mode that correction exists to prevent.
+
+It is also derivable rather than unknowable: `get_block(height)` returns the block's kernels with
+their `fee`, and it is called at block-found time, well inside a pruned node's horizon, so
+`reward = 60 + Σ fees` is a single extra call. Whether to credit it to miners or keep it is the
+operator's call — but the pool should *record* which it is doing, and the transparency page should
+say so. Right now neither the code nor the public copy mentions that fees exist.
+
+---
+
+### J5-11 — [Info] Nothing can reverse a block orphaned *after* distribution, and the reversal that exists silently under-claws a miner with a pending withdrawal — **CLAMP FIXED 2026-08-27; the post-distribution reorg gap is an ACCEPTED RISK (see §J5 resolution pass)**
+
+**Threat actor: the system** (a reorg deeper than maturity).
+
+Two halves of the same structural point, filed as Info because neither is reachable in normal
+operation and the safe direction is unchanged.
+
+**(a) The reversal path cannot see a distributed block.** `detectOrphans` selects
+`WHERE status = 'immature'`
+([orphan-detector.js:61](../../web/07_mining_pool_public/back-end-pool/lib/orphan-detector.js#L61)),
+and `checkImmatureBlocks` likewise. A block that has been confirmed, distributed and flipped to
+`'paid'` is never re-examined by anything, ever. So the plan's question — *can a reversal debit a
+balance that was already withdrawn?* — has the answer "it cannot get the chance", and
+`reverseBlockPayouts`' own comment says as much: *"in normal operation there are zero credit rows
+here"*. The corollary is the real content: **there is no mechanism at all for a reorg deeper than
+`confirm_depth`.** At 1440 blocks (~24 h) on Grin that is a defensible risk to accept — but it is
+an accepted risk, not a covered one, and it is not written down anywhere yet. It belongs in the
+*Residual / accepted risks* section.
+
+**(b) The clamp ignores locked balance.**
+[orphan-detector.js:205](../../web/07_mining_pool_public/back-end-pool/lib/orphan-detector.js#L205):
+`const clawback = Math.min(c.amount, before.balance);` reads `balance` only, not `balance_locked`.
+If the reversal path ever *did* run against a distributed block whose miner had a pending
+withdrawal, the credited GRIN would be sitting in `balance_locked`, `balance` would be near zero,
+and the clawback would be near zero — the orphaned reward is then paid out. The comment says the
+shortfall is "implicit in the ledger trail", and it is: the reversal row records the *clamped*
+amount, so `integrity_drift` stays at 0 by construction (J5-8's table). Only `coverage_full_gap`
+notices, aggregated across the whole pool, with nothing naming the block.
+
+If (a) is ever closed — a post-distribution reorg handler — (b) must be closed with it, and the
+right answer is to reverse against `balance + balance_locked` and cancel the pending withdrawal,
+not to clamp.
+
+---
+
+### Verified correct (read with evidence, not assumed)
+
+Checked because the plan named them or because a neighbouring finding made them suspect. None
+needed a change.
+
+- **§I3 (chain re-verification is live) holds in the working tree.**
+  `new RewardDistributor(config, blockMonitor.grinNode)` is the live construction, `this.grinNode`
+  is assigned at [rewards.js:12](../../web/07_mining_pool_public/back-end-pool/lib/rewards.js#L12),
+  and the no-node branch **throws** rather than crediting
+  ([:89](../../web/07_mining_pool_public/back-end-pool/lib/rewards.js#L89)) — asserted by
+  `test-money-path.js` and re-asserted here. The `getHeader`-not-`getBlock` choice is right for a
+  pruned node.
+- **§I4 (atomic settlement) holds.** The `confirmed → paid` CAS is the **first** statement inside
+  the single `db.transaction()` and throws `alreadySettled` on `changes !== 1`
+  ([rewards.js:139–158](../../web/07_mining_pool_public/back-end-pool/lib/rewards.js#L139)); miner
+  credits, the pool fee and `incentives.applyToDistribution` all run inside it, and
+  `sqlite-compat.transaction()` opens a SAVEPOINT rather than a second BEGIN when nested, so
+  incentives participates instead of committing separately.
+- **§I5 (real ledger snapshots) holds** on both credit paths
+  ([rewards.js:232–249](../../web/07_mining_pool_public/back-end-pool/lib/rewards.js#L232),
+  [:265–279](../../web/07_mining_pool_public/back-end-pool/lib/rewards.js#L265)). §I6's
+  `INSERT OR IGNORE` + `changes !== 1` assertion is present.
+- **§I9 (retention floor) holds:** `WHERE status IN ('immature','confirmed')`
+  ([retention.js:52](../../web/07_mining_pool_public/back-end-pool/lib/retention.js#L52)), and
+  `PPLNS_WINDOW_BLOCKS = 60` matches `RewardDistributor.pplnsWindow = 60`. Duplicated constants,
+  but they agree and the comment says why.
+- **PPLNS weight is not miner-forgeable.** `shares.difficulty` is written from
+  `session.difficulty`, which is server-set to a constant `1.0` at
+  [miners.js:26](../../web/07_mining_pool_public/back-end-pool/lib/miners.js#L26) and never
+  assigned again anywhere — a miner cannot influence their own weight. `block_height` is the
+  miner's value but must equal `currentJob.height`
+  ([stratum-server.js:539](../../web/07_mining_pool_public/back-end-pool/lib/stratum-server.js#L539)),
+  so shares cannot be stuffed into another block's window; and nothing is persisted until the
+  **node** has accepted the PoW ([:568–583](../../web/07_mining_pool_public/back-end-pool/lib/stratum-server.js#L568)).
+  Because every difficulty is 1.0, `totalDifficulty` equals the share count and can never be 0
+  while `shares.length > 0`, so the `sharePercent` division cannot produce `NaN`.
+- **Maturity cannot be short-circuited.** `confirm_depth_mainnet` is 1440 and unreachable from the
+  admin panel (J5-9 — dead in the safe direction). `checkImmatureBlocks` requires
+  `tip.height - block.height >= confirmDepth` before it will even ask the node, and a resyncing
+  node has a *lower* tip, so the gate is conservative during a rebuild rather than permissive. Grin
+  syncs the full header chain before the tip advances, so `get_header` at a matured height is
+  always available by the time the gate opens.
+- **Orphan detection fails safe on an unreachable node.** `checkNewBlocks` returns early on
+  `!status.ok` and so never reaches the sweep; `verifyBlockOnChain` rethrows anything that is not
+  an explicit node `NotFound`; `detectOrphans` reports `aborted:true` with partial counts instead
+  of a reassuring "0 checked". The uncommitted diff is a genuine improvement and its two callers
+  now log the abort loudly.
+- **`ledger-rollup.js` is sound.** `rollupCompletedDays` is a whole-day recompute with
+  `ON CONFLICT … DO UPDATE`, the horizon marker advances inside the same transaction as the insert
+  (so it can never lead the data), and `verifyAndPruneRaw` verifies count **and** sum per day
+  against the rollup before deleting and halts on any mismatch. `balance_log.created_at` is never
+  written explicitly anywhere in the codebase — every insert takes the `DEFAULT unixepoch()` — so
+  the "a completed UTC day is immutable" premise the composite readers depend on actually holds.
+- **`reconciliation.js` composite reads are correctly split.** Lifetime = `rollup(day < H) +
+  raw(created_at >= H)` with no overlap and no gap; short windows read raw only and sit inside the
+  45-day raw floor. The `SUM()`-not-bare-column treatment of the lazily-created `pool_fee` /
+  `prize_pool` rows is correct and the comment explaining it is accurate.
+- **Fee model matches memory `project_pool_fee_model`.** The percentage fee is taken at maturity,
+  before the PPLNS split ([rewards.js:114–115](../../web/07_mining_pool_public/back-end-pool/lib/rewards.js#L114)),
+  and no fee of any kind is applied on the distribution path — so an orphan reversal replaying the
+  credit rows cannot replay a withdrawal fee.
+- **The `no_shares_found` branch CAS-flips** rather than blind-updating
+  ([rewards.js:99–104](../../web/07_mining_pool_public/back-end-pool/lib/rewards.js#L99)), so even
+  that terminal path cannot double-settle.
+
+---
+
+### Handoffs
+
+- **§J17 (launch gate) — two items, both now blocking rather than nice-to-have.**
+  1. Confirm the stratum block-found reply format on a live node: capture the raw
+     `blockfound - <hash>` string and check the parsed `blocks.hash` equals `get_header(h).hash`.
+     J5-3's recommended fix (hash as the mandatory comparator) depends on this, and §I3's
+     resolution already flagged it as unverified.
+  2. Also capture `get_header(h).nonce` **as raw bytes off the wire** — number or string, and its
+     magnitude. It settles which half of J5-3's demonstration applies in practice, though the fix
+     is the same either way.
+  3. The launch checklist needs a step the operator can run to distinguish *no blocks found yet*
+     from *blocks found, none credited* without reading the log (J5-8).
+- **§J7 (DB layer) — three things this session found in its files but does not own.**
+  1. `initDb` sets `journal_mode=WAL` and `foreign_keys=ON` and **no `busy_timeout`**
+     ([db.js:16–17](../../web/07_mining_pool_public/back-end-pool/lib/db.js#L16)), so SQLite's
+     default of 0 makes any contention an immediate `SQLITE_BUSY`. J5-5's fix stops that
+     confiscating a block reward, but the underlying timeout question is J7's.
+  2. `blocks.nonce INTEGER` (J5-1) is one instance of a general question: **which other columns
+     hold a value outside ±2^53 under `node:sqlite`, which throws on read where better-sqlite3
+     rounded?** `total_difficulty` from the node is the obvious next candidate. A mechanical sweep
+     of INTEGER columns fed from chain data belongs in J7.
+  3. Money amounts are JS floats end to end on the credit path (`block.reward * pct`,
+     `minerReward * share/total`), so `Σ` credits is not exactly `minerReward`. Ledger and log take
+     the *same* float so the integrity invariant is unaffected; it is the nanogrin-arithmetic
+     question J7 already owns.
+- **§J6 (stratum) — `session.difficulty` is a hardcoded `1.0` with no vardiff**
+  ([miners.js:26](../../web/07_mining_pool_public/back-end-pool/lib/miners.js#L26)). Good for J5
+  (unforgeable PPLNS weight) but it means share volume scales linearly with pool hashrate, which is
+  the `shares`-table growth bound memory `project_pool_db_capacity` lists as open.
+- **§J9 (settings) — `confirm_depth_mainnet` / `confirm_depth_testnet` (J5-9)** are a *third*
+  variant beyond J1-5's dead keys and J4-6's uncoerced values: keys that are validated by nobody
+  **and** applied by nobody, yet round-trip through the UI convincingly. Worth a mechanical check
+  in J9: every key in `PoolSettings.defaults` that is neither in `applyToConfig` nor read directly
+  from `pool_config` by a consumer.
+- **§J4's handoff to §J5 is answered: no.** `grin-node.js` exposes `getStatus`, `getTip`,
+  `getHeader`, `getBlock`, `getOutputs`, `validateChain`, `getConnectedPeers` — there is **no
+  kernel lookup and no mempool query**, so the node cannot currently be asked "did this payout's
+  kernel land?". Adding one is possible (`get_kernel(excess, min_height, max_height)` is a Foreign
+  API method) but it is new outbound surface with an SSRF-adjacent parameter, and it needs
+  `withdrawals.kernel_excess` to be populated first — which §J4-10 established is exactly what is
+  not known. **J4-10 and J4-11 stay open on their own terms; §J5 cannot close them.**
+
+---
+
+### Verification
+
+- `npm test` — full suite green: `12 + 18 + 30 + 20 + 26 + 18` assertions plus 19 ownership-gate
+  checks, 0 failed. The 20 are the new `scripts/test-block-ledger.js`, added this session and wired
+  into `test:unit`.
+- Three scratchpad harnesses, all one-shot, all exited on their own; no server was started and
+  nothing was left running (CLAUDE.md local-process rule). The reproductions quoted above are
+  reproducible from the snippets as written.
+- Nothing was run against a VPS. All eleven findings are **add-ons, NOT VPS-TESTED**.
+
+### Changed this session
+
+| File | Change |
+|---|---|
+| `lib/grin-node.js` | J5-2 `chainStatement` flag — only `result.Err` may set `notFound`; J5-7 `hasOwnProperty` unwrap |
+| `lib/rewards.js` | J5-5 `getSharesForDistribution` rethrows instead of returning `[]` |
+| `lib/orphan-detector.js` | J5-6 CAS + boolean return on `confirmBlock`/`orphanBlock`; reversal idempotency guard |
+| `lib/block-monitor.js` | J5-6 both money moves gated on the CAS result |
+| `lib/blocks.js` | J5-4 `'paid'` counted as confirmed in `getPoolStats` + `getBlocksHistory`; `immature_blocks` counted directly |
+| `scripts/test-block-ledger.js` | new — 20 assertions covering J5-1 (pinned as KNOWN OPEN), J5-2, J5-4, J5-5, J5-6, J5-7 |
+| `package.json` | new test wired into `test:unit` |
+
+**Left open at the end of the review session:** J5-1 and J5-3 as one coupled
+schema-plus-comparator decision; J5-8 as new detector surface; J5-9 as a keep-or-delete call;
+J5-10 as an operator policy decision; J5-11 as an accepted risk to write down. **All five were
+closed the same day — see the §J5 resolution pass below**, which records the decision taken in
+each case. Nothing from §J5 remains open.
+
+---
+
+## §J6 — Stratum & share intake (2026-08-27, add-ons, NOT VPS-TESTED)
+
+Sixth session of the pre-mainnet §J pass (plan:
+[`script07_reference_audit_session_plan.md`](script07_reference_audit_session_plan.md) §J6).
+Scope: [`lib/stratum-server.js`](../../web/07_mining_pool_public/back-end-pool/lib/stratum-server.js)
+(759), [`lib/stratum-protocol.js`](../../web/07_mining_pool_public/back-end-pool/lib/stratum-protocol.js)
+(174), [`lib/node-stratum-client.js`](../../web/07_mining_pool_public/back-end-pool/lib/node-stratum-client.js)
+(217), [`lib/shares.js`](../../web/07_mining_pool_public/back-end-pool/lib/shares.js) (103),
+[`lib/hashrate-tracker.js`](../../web/07_mining_pool_public/back-end-pool/lib/hashrate-tracker.js)
+(835), plus [`lib/miners.js`](../../web/07_mining_pool_public/back-end-pool/lib/miners.js) (285) —
+which is not on the plan's list but holds the session object every guard in this subsystem reads,
+so it could not be understood from outside. Questions asked: **can a miner forge share weight, and
+can one connection exhaust the box?**
+
+Read first, then confirmed by execution. Three one-shot harnesses bound the **real**
+`StratumServer` / `MinerManager` / `ShareValidator` / `HashrateTracker` / `IncentivesManager` to an
+in-memory `node:sqlite` DB carrying the production `miner_accounts`, `shares`, `miner_incentives`,
+`miner_geo`, `pool_config` and `admin_audit_log` columns, with only `lib/db.js` and the upstream
+`NodeStratumClient` replaced. Connections were driven through `handleNewConnection` with a socket
+stand-in exposing exactly the surface that function uses, so the PROXY-v2 phase, the line splitter,
+the token bucket, `handleLogin` and `handleSubmit` all ran unmodified. **34 assertions, all
+confirmed.** No listener was opened, no VPS touched (plan rule 5); the harnesses lived in the
+scratchpad and exited on their own.
+
+**Headline — both answers are yes, and the second one needs no attacker at all.**
+
+*Share weight is forgeable.* The pool's only anti-replay control is the `shares.share_hash` UNIQUE
+constraint, and the value hashed into it includes **the worker name the miner types at login**
+(J6-1). The 2026-07-17 hardening moved that key off the pool's `job_id` and onto the job's `pre_pow`
+precisely because one solved `(nonce, pow)` must be credited once — but it left a second
+miner-chosen field in the key, so the same solution re-submitted under a different rig label is a
+new share. This is the *same* bug the earlier fix closed, re-entered through a different field.
+
+*And the pool stops mining ten minutes after each rig connects.* `session.lastSeenAt` is written
+once, at `createSession`, and **nothing anywhere in the codebase ever updates it** — `updateSession`
+has zero call sites. The 60-second sweeper deletes every session older than ten minutes, including
+one whose socket is open and actively submitting. After that the socket is still up, the rig is
+still hashing, and every `submit` on it is answered *Session not found* and **never forwarded to the
+node** — so a block solved on that connection is silently discarded (J6-2). Under the plan's tiering
+this is the P0 item that must not reach mainnet, and it is not an attack; it is what the pool does
+to itself on a quiet afternoon.
+
+Both findings are one-line changes and were left for a decision at the time (plan rule 3). That
+decision was taken the same week: **every finding in this section is now fixed** — see the
+resolution pass appended after §J6-13.
+
+### Threat actors used in this section
+
+| Label | Means |
+|---|---|
+| **Anonymous** | Anyone who can open a TCP socket to `:3333`. Stratum login is unauthenticated by design — the address *is* the username — so "anonymous" and "registered miner" are separated here only by whether the attacker has done any proof of work |
+| **Mining miner** | Anonymous, plus at least one share the node accepted. The bar every §J3 fix raised the evidence path to |
+| **The system** | No attacker. A clock reaching ten minutes |
+| **Logged-in admin** | A `freshAdmin` session hot-adding a region listener |
+
+---
+
+### J6-1 — [Critical] The share dedup key contains the miner's own worker name, so one solved share is credited once per label — PPLNS weight is forgeable at ≥11× with no assumptions about the node — **FIXED 2026-09-01**
+
+**Threat actor: mining miner.** Any rig that can find one legitimate share.
+
+The dedup identity is built at
+[stratum-server.js:557](../../web/07_mining_pool_public/back-end-pool/lib/stratum-server.js#L557):
+
+```js
+const shareHash = this.shareValidator.generateShareHash(
+  session.grinAddress, workId, session.workerName, nonce);
+```
+
+and [shares.js:83–86](../../web/07_mining_pool_public/back-end-pool/lib/shares.js#L83) hashes
+`` `${grinAddress}-${workId}-${workerName}-${nonce}` ``. `workId` is the job's `pre_pow` — that part
+is the 2026-07-17 fix and it is correct. `session.workerName` is not: it comes from
+`validateUsername`'s `.worker_name` suffix
+([stratum-protocol.js:61–92](../../web/07_mining_pool_public/back-end-pool/lib/stratum-protocol.js#L61)),
+i.e. **whatever the miner typed after the dot**, up to 25 characters of `[a-z0-9_-]`. Change the
+label, change the hash, and the same `(pre_pow, nonce, pow)` inserts again.
+
+Measured end to end through the real handlers — one socket, one solved share, eight labels:
+
+```
+CONFIRMED  the SAME address + SAME pre_pow + SAME nonce hashes differently per worker name
+CONFIRMED  ONE solution re-submitted under 8 worker names is credited 8 times
+CONFIRMED  ...multiplying this address's PPLNS weight 8x for one unit of real work
+CONFIRMED  every copy passed the share_hash UNIQUE constraint
+CONFIRMED  all done from ONE TCP socket, inside the 25 msg/s token bucket
+CONFIRMED  control — same worker name, 5 resubmits of one solution → 1 credited share
+```
+
+The control line matters: dedup works perfectly for the case it was tested against, which is why
+`scripts/test-stratum-guards.js` passes. Its six assertions all hold the worker name constant.
+
+**The comment defending the field is wrong, which is why nobody caught it.**
+[shares.js:80–82](../../web/07_mining_pool_public/back-end-pool/lib/shares.js#L80) says the worker
+name is in the key so "two different miners that share a worker name (e.g. the default) can never
+collide on (work, worker, nonce) and have one's valid share rejected as the other's duplicate."
+But `grinAddress` is already the first component of the key and two different miners are two
+different addresses — cross-miner isolation was already total without it. Confirmed:
+
+```
+CONFIRMED  the address alone already separates two miners sharing a worker name
+```
+
+So the field buys nothing and costs the whole control.
+
+**No assumption about grin's stratum is required for the first ~11×.** Memory
+`project_pool_stratum_node_jobid` records, from live testing, that the node re-issues *many* job_ids
+for one **identical** `pre_pow` (a new block version roughly every 15 s at the same height), and
+memory `project_pool_stratum_hardening` records that this is exactly what made the previous
+job_id-keyed dedup credit one solution "once per wrapping job (up to JOB_WINDOW×)". `JOB_WINDOW` is
+10 ([stratum-server.js:29](../../web/07_mining_pool_public/back-end-pool/lib/stratum-server.js#L29))
+and `jobIdMap` holds ~11 live entries. So the attacker pairs worker label *w<sub>k</sub>* with
+wrapping pool job *j<sub>k</sub>*: every submit carries a **node job_id the node has never seen this
+nonce against**, and the header is byte-identical so the PoW verifies every time. The pool's key
+differs only in the label. Whether grin's stratum keeps any per-`(version, nonce)` cache is
+irrelevant to that first factor of ~11 — and if it keeps none, the multiplier is bounded only by
+the 25 msg/s token bucket and the 320-connections-per-IP cap.
+
+**Cost to the attacker: nothing.** They mine honestly at whatever rate their hardware allows and
+multiply the recorded weight afterwards. PPLNS pays `your shares ÷ total shares`, so an 11× forgery
+takes ~11× the payout — drawn directly from every honest miner in the pool. It is invisible in every
+pool-side readout, because a forged share is indistinguishable from a real one in the `shares` table;
+the only tell is a per-address hashrate on the leaderboard that exceeds what the rig can physically
+do, and nothing compares those.
+
+**Fix — one line.** Drop `workerName` from `generateShareHash`'s input at
+[shares.js:84](../../web/07_mining_pool_public/back-end-pool/lib/shares.js#L84) (keep the parameter
+so call sites and the `test-stratum-guards.js` signature don't move, or drop it at both ends). The
+key becomes `address + pre_pow + nonce`, which is the complete identity of "this miner solved this
+template with this nonce" and cannot be re-spelled. `shares.worker_name` stays as the attribution
+column it already is — the label still reaches the DB and the account page, it just stops being part
+of the uniqueness decision. Worth adding to `test-stratum-guards.js` as an assertion that *denies*:
+two worker names, one solution, one credited share.
+
+---
+
+### J6-2 — [Critical] `lastSeenAt` is never refreshed, so every stratum session is deleted ten minutes after login while its socket keeps mining — after which the pool forwards nothing to the node and a found block is lost — **FIXED 2026-09-01**
+
+**Threat actor: the system.** No attacker. No misconfiguration. A wall clock.
+
+[`miners.js:44`](../../web/07_mining_pool_public/back-end-pool/lib/miners.js#L44) sets
+`lastSeenAt: Date.now()` when the session is created.
+[`miners.js:265–275`](../../web/07_mining_pool_public/back-end-pool/lib/miners.js#L265) deletes
+every session where `now - session.lastSeenAt > timeoutMs`, default **600000**, and
+[stratum-server.js:183](../../web/07_mining_pool_public/back-end-pool/lib/stratum-server.js#L183)
+runs that sweep every 60 seconds with no argument. The only writer that could keep a session alive
+is `updateSession` ([miners.js:57–63](../../web/07_mining_pool_public/back-end-pool/lib/miners.js#L57)),
+and it has **no call sites anywhere in the repo**:
+
+```
+$ grep -rn "updateSession" --include=*.js .            # (node_modules excluded)
+lib/miners.js:57:  updateSession(sessionId, updates) {
+```
+
+The submit path does not touch it either — `recordShare` writes `shareCount` and `lastShareAt`
+([miners.js:174–183](../../web/07_mining_pool_public/back-end-pool/lib/miners.js#L174)), neither of
+which the sweeper reads.
+
+Driven through the real handlers:
+
+```
+CONFIRMED  recordShare() leaves lastSeenAt untouched
+CONFIRMED  pruneInactiveSessions() deletes the still-connected session
+CONFIRMED  a submit on that live socket answers "Session not found"
+CONFIRMED  ...and the solution is NEVER forwarded to the node (a block would be lost)
+CONFIRMED  ...and the socket is left open, so the rig never reconnects
+CONFIRMED  miner_accounts.is_online flipped to 0 while the rig is mining
+```
+
+**Two timers of the same length, keyed on different things.** `socket.setTimeout(600000)`
+([stratum-server.js:295](../../web/07_mining_pool_public/back-end-pool/lib/stratum-server.js#L295))
+is Node's *inactivity* timer and resets on every byte received, so a working rig's socket never
+expires. The session timer never resets at all. The result is that the two are guaranteed to
+disagree for exactly the connections that matter: the busy ones.
+
+**What the operator would see.** `Pruned N inactive sessions` in the log every minute, all miners
+showing offline on the dashboard while the stratum port carries traffic, a pool hashrate that decays
+to zero over the first ten minutes and stays there, and — the expensive part — `handleSubmit`
+returning at
+[stratum-server.js:513–516](../../web/07_mining_pool_public/back-end-pool/lib/stratum-server.js#L513)
+*before* `forwardSubmit`, so a solution that solves a block is never handed to the node and the
+block is simply never claimed. Recovery depends entirely on whether a given rig's firmware
+re-logs-in after N consecutive rejects; grin-miner does not, and the pool must not depend on
+firmware behaviour it doesn't control.
+
+This is the failure mode memory `project_pool_stratum_node_jobid` warns about in its own words — *an
+availability bug that looks like an attack*. It would present as "shares stop counting", which is
+the same symptom as the job_id and nonce bugs, and would be misdiagnosed the same way.
+
+**Fix.** Refresh the session on activity. The correct spot is the message loop rather than the
+submit handler, so a `status`/`getjobtemplate` keepalive counts: touch the session where
+`handleMessage` is dispatched
+([stratum-server.js:354–358](../../web/07_mining_pool_public/back-end-pool/lib/stratum-server.js#L354)),
+or make `_stat`/`recordShare` set `lastSeenAt` and accept that a purely-idle-but-connected rig is
+pruned. **Coupled to J6-4** — refreshing `lastSeenAt` without also closing the previous session on
+re-login turns that finding's leak from a 10-minute-lifetime leak into a permanent one. The two must
+land together, which is why this is written up rather than patched here.
+
+---
+
+### J6-3 — [High] PROXY-protocol v2 is honoured on the public `:3333` listener, so any anonymous client picks the IP the pool records — and the per-IP connection counter leaks, permanently locking a shared NAT out of the pool — **FIXED 2026-09-01**
+
+**Threat actor: anonymous.**
+
+`handleNewConnection` runs the PROXY-v2 phase unconditionally
+([stratum-server.js:363–378](../../web/07_mining_pool_public/back-end-pool/lib/stratum-server.js#L363)).
+`isPublic` gates the per-IP *cap* but not the header parse. The header is only ever meant to arrive
+on a region listener: `_listen(this.port, '0.0.0.0', …, true)` is the public port
+([:161](../../web/07_mining_pool_public/back-end-pool/lib/stratum-server.js#L161)), region listeners
+bind `region_listen_host` ([:172–181](../../web/07_mining_pool_public/back-end-pool/lib/stratum-server.js#L172)),
+and the gateway forwards to the **region** port over WireGuard, never to `:3333` —
+[`07_lib_gateway.sh:351–353`](../../scripts/lib/07_lib_gateway.sh#L351) writes
+`server central ${hub_ep} send-proxy-v2` where `hub_ep` is documented at
+[`:74`](../../scripts/lib/07_lib_gateway.sh#L74) as "central wg IP:port for THIS region, e.g.
+`10.66.66.1:3391`". So there is no deployment in which a public-listener PROXY header is legitimate.
+
+Two consequences, both confirmed against the real handler with a hand-built 28-byte v2 TCP4 header
+claiming `10.0.0.9` from a socket whose `remoteAddress` was `198.51.100.77`:
+
+```
+CONFIRMED  per-IP counter incremented against the real address
+CONFIRMED  an anonymous client on :3333 sets the IP the pool records
+CONFIRMED  cleanup decrements the SPOOFED key, so the real IP stays counted forever
+```
+
+**(a) The recorded IP is attacker-chosen.** `ip` is reassigned at
+[:374](../../web/07_mining_pool_public/back-end-pool/lib/stratum-server.js#L374) and then flows into
+`createSession(…, ip, …)` ([:477](../../web/07_mining_pool_public/back-end-pool/lib/stratum-server.js#L477)),
+which is what `recordOwnerEvidence` hashes into the ownership gate's IP leg
+([:643–649](../../web/07_mining_pool_public/back-end-pool/lib/stratum-server.js#L643)) and what
+`recordMinerCountry` geolocates for the public network map
+([:620](../../web/07_mining_pool_public/back-end-pool/lib/stratum-server.js#L620)). The §J3 fixes
+correctly put both writes behind an accepted share — but they assumed the value being written was
+observed, not asserted. It decouples *the IP that did the work* from *the IP on record*, which is
+the exact binding the gate's IP leg exists to make. It also poisons the country attribution on the
+network map with no proof of work beyond one share.
+
+**(b) The per-IP cap leaks, and the leak is a weapon against other people.** The counter is
+incremented at accept time against `socket.remoteAddress`
+([:268–277](../../web/07_mining_pool_public/back-end-pool/lib/stratum-server.js#L268)) but
+`cleanup` decrements `this.connectionsByIp.get(ip)`
+([:302–304](../../web/07_mining_pool_public/back-end-pool/lib/stratum-server.js#L302)) — the
+*reassigned* `ip`. With a spoofed header the decrement lands on a key that holds nothing (`(undefined
+|| 1) - 1 === 0` → `delete`, a no-op) and the real address stays counted for the life of the
+process. `max_connections_per_ip` defaults to 320, so **320 connect-header-disconnect cycles
+permanently exhaust one source address's budget**. That is self-inflicted for a lone attacker — and
+a denial-of-service against everyone else when the address is shared: one host behind a CGNAT or a
+mining-farm NAT can lock out every legitimate miner sharing that egress IP, until the pool process
+is restarted. The comment at
+[:126–129](../../web/07_mining_pool_public/back-end-pool/lib/stratum-server.js#L126) says the cap is
+"deliberately generous so shared-NAT / CGNAT / farm miners aren't collateral-blocked", which is
+precisely the population this turns into collateral. `connectionsByIp` also never shrinks back, so
+it grows one permanent entry per attacking address.
+
+**Fix.** Two independent changes, both small: (1) skip the PROXY phase entirely when `isPublic` —
+set `proxyDone = true` before the first `data` event on the public listener, so `:3333` is always
+raw stratum; (2) capture the accept-time address into its own `const cappedIp` and have `cleanup`
+decrement *that*, never the mutable `ip`. Do (2) regardless of (1) — it is the invariant, and it
+keeps holding if a future deployment ever does front `:3333` with a local proxy.
+
+---
+
+### J6-4 — [Medium] A repeated `login` on one socket creates a new session and abandons the old one, so one connection can allocate sessions at the message rate — and every abandoned one inflates the public counters — **FIXED 2026-09-01**
+
+**Threat actor: anonymous.**
+
+`handleLogin` has no guard against being called twice on the same connection. Each call runs
+`ensureMinerExists` + `createSession` ([:469–478](../../web/07_mining_pool_public/back-end-pool/lib/stratum-server.js#L469))
+and hands the new id to the `setSession` closure
+([:354–358](../../web/07_mining_pool_public/back-end-pool/lib/stratum-server.js#L354)), which
+overwrites the socket's `sessionId` local. The previous session is never passed to `closeSession`.
+`cleanup` ([:299–310](../../web/07_mining_pool_public/back-end-pool/lib/stratum-server.js#L299))
+can only reclaim the one the closure still points at.
+
+```
+CONFIRMED  50 logins on ONE socket -> 50 live sessions in activeSessions
+CONFIRMED  closing the socket reclaims only the LAST one (49 leak until the 10-min prune)
+```
+
+Each abandoned session holds the address, region, worker name and the stratum password as typed
+(sliced to `PASS_MAX + 1`, [:446](../../web/07_mining_pool_public/back-end-pool/lib/stratum-server.js#L446)).
+The token bucket allows 25 messages/second sustained per connection and the per-IP connection cap is
+320, so one source address can allocate ~8,000 sessions/second. They survive until the ten-minute
+sweep, so the steady-state resident set is ~4.8M session objects per attacking IP — and the sweep
+that eventually clears them calls `closeSession` → `updateMinerOnline` per entry
+([miners.js:66–72](../../web/07_mining_pool_public/back-end-pool/lib/miners.js#L66)), i.e. millions
+of synchronous SQLite `UPDATE`s inside one loop on the event loop the share path shares. That is the
+stall shape memory `project_pool_db_capacity` describes, reached without a single HTTP request.
+
+Second-order, and cheaper to reach: `activeSessions` is iterated in full by `getActiveMinersCount`,
+`getSessionsByMiner`, `getPasswordConsistency` and `getStats`, and `getStats()` is served on the
+public `/api/stratum/stats` and `/api/pool/stats`
+([index.js:2153](../../web/07_mining_pool_public/back-end-pool/index.js#L2153),
+[:2177](../../web/07_mining_pool_public/back-end-pool/index.js#L2177)). So the leak turns two
+anonymous GETs at the `public` bucket rate into an O(sessions) scan each, and inflates
+`active_connections` / `active_miners` on the public dashboard with sessions that do not exist.
+
+**Fix.** In `handleLogin`, before `createSession`, close the session the connection already holds —
+the handler needs a `getSession` accessor alongside the `setSession` it is already given. Optionally
+also refuse a second `login` on an authenticated socket outright; the Grin stratum spec has no
+re-login flow, so nothing legitimate does it.
+
+---
+
+### J6-5 — [Medium] Nothing penalises a session that produces only rejects, so `:3333` is an unauthenticated 8,000/s amplifier onto the node's PoW verifier and onto the journal — **FIXED 2026-09-01**
+
+**Threat actor: anonymous.**
+
+A submit reaches `forwardSubmit` if it has the five required keys, a `job_id` inside the window and a
+`height` equal to the current job's
+([stratum-server.js:519–545](../../web/07_mining_pool_public/back-end-pool/lib/stratum-server.js#L519)).
+`pow` need only be a non-empty array — its contents are never inspected pool-side, deliberately, so
+that the node stays the authority ([:559–567](../../web/07_mining_pool_public/back-end-pool/lib/stratum-server.js#L559)).
+Every such submit therefore costs the Grin node a full Cuckatoo verification, and the pool learns
+nothing it can act on: `_stat(sessionId, 'rejected')` increments a counter
+([:578](../../web/07_mining_pool_public/back-end-pool/lib/stratum-server.js#L578)) that is only ever
+*displayed* — `session.rejected` is read by `getStats`, `getWorkersForAccount` and `alert-monitor`,
+and by nothing that disconnects, throttles or bans. `banMiner` has exactly one caller, the admin
+route at [index.js:6142](../../web/07_mining_pool_public/back-end-pool/index.js#L6142).
+
+```
+CONFIRMED  120 garbage submits were all relayed to the node for PoW verification
+CONFIRMED  the session is still alive after 100 consecutive node rejections
+CONFIRMED  every rejection wrote its own log line (121 lines for 120 submits)
+CONFIRMED  nothing reads session.rejected — no auto-ban, no per-session reject ceiling
+```
+
+The 120 were sent inside the documented budget — 99 against the burst, then a one-second pause for
+the 25/s refill — so this is the *sustained allowance*, not a burst the guard is meant to cut.
+
+At 25 messages/s × 320 connections, **one source address can force ~8,000 PoW verifications per
+second** on the node that also has to stay synced and build templates; the pool's own caps put the
+whole-box ceiling at 25,000 sockets. Every rejection also writes its own `console.warn`
+([:532](../../web/07_mining_pool_public/back-end-pool/lib/stratum-server.js#L532),
+[:579](../../web/07_mining_pool_public/back-end-pool/lib/stratum-server.js#L579)) at ~120 bytes, so
+8,000/s is ≈1 MB/s of journal — ~80 GB/day from one IP, on the disk the SQLite DB lives on.
+
+Note the interaction with the `maxPending` backpressure at
+[node-stratum-client.js:164–167](../../web/07_mining_pool_public/back-end-pool/lib/node-stratum-client.js#L164):
+it correctly stops the pool OOMing when the node stalls, but the way it stops is by returning
+`accepted: false` — so once an attacker has driven node latency high enough to fill the backlog,
+**every honest miner's share is refused too**. The guard converts a memory exhaustion into a
+pool-wide share outage, which is the right trade only if something upstream is stopping the
+attacker, and nothing is.
+
+**Fix.** A per-session consecutive-reject ceiling is the cheap 90%: disconnect after N node
+rejections with no intervening accept (a real rig's reject rate is ~1%, so N=50 never fires
+legitimately). Rate-limit the two warn lines to one per session per interval with a count. Both are
+local to `handleSubmit`. A per-address reject ratio feeding `banMiner` is the fuller answer and is an
+operator-policy decision.
+
+---
+
+### J6-6 — [Medium] Any charset-valid string is accepted as a Grin address and gets a `miner_accounts` row at login — the bech32 checksum is never verified — **FIXED 2026-09-01**
+
+**Threat actor: anonymous.**
+
+`validateUsername` checks the human-readable prefix, the bech32 *charset* and the length —
+`^(grin1|tgrin1)([ac-hj-np-z02-9]{58})(\.…)?$`
+([stratum-protocol.js:63–66](../../web/07_mining_pool_public/back-end-pool/lib/stratum-protocol.js#L63)) —
+and never verifies the 6-symbol bech32 checksum those last characters *are*. `handleLogin` then calls
+`ensureMinerExists` ([stratum-server.js:469](../../web/07_mining_pool_public/back-end-pool/lib/stratum-server.js#L469)
+→ [miners.js:87–97](../../web/07_mining_pool_public/back-end-pool/lib/miners.js#L87)), which
+`INSERT OR IGNORE`s the row before any proof of anything.
+
+```
+CONFIRMED  24 junk (checksum-invalid) logins on one socket created 24 new miner_accounts rows
+```
+
+Each login is three synchronous statements on the shared DB — `isBanned` SELECT, `ensureMinerExists`
+INSERT, `updateMinerOnline` UPDATE — so at the sustained 25/s × 320 connections the write path is
+~24,000 statements/s against the database the share INSERT and every public API read also use. The
+row count grows without bound and without an owner; nothing prunes `miner_accounts`, because a row
+there is an account that might hold a balance.
+
+Two smaller consequences worth naming. A miner who fat-fingers one character of their address gets a
+*working* login and a balance that accrues to an address nobody holds the key to — the checksum
+exists to catch precisely that, and the pool discards it. And the addresses that reach
+[`ensureMinerExists`](../../web/07_mining_pool_public/back-end-pool/lib/miners.js#L87) are the same
+strings that later reach the payout path as destinations.
+
+**Fix.** Verify the bech32 checksum in `validateUsername` — it is ~25 lines of polymod with no
+dependency, and it is the difference between "looks like an address" and "is one". Second, do not
+create the account row at login: `submitShare` is where an address first earns the right to exist,
+and `ensureMinerExists` can move there (the `shares` FK to `miner_accounts` means it must run before
+the first INSERT, not before the first login).
+
+---
+
+### J6-7 — [Medium] One accepted share still permanently rewrites a stranger's `donation_percent`, and it is cheaper than rotating that address's ownership proof — **FIXED 2026-09-01**
+
+**Threat actor: mining miner.** Re-opened per plan rule 2, with a demonstration — §J3-5's fix is
+correct as far as it goes and is not being re-litigated.
+
+§J3-5 moved the `donateN` write out of `handleLogin`, where it needed no work at all, and parked it
+on the session until the first node-accepted share
+([stratum-server.js:616–631](../../web/07_mining_pool_public/back-end-pool/lib/stratum-server.js#L616)).
+That closed the zero-cost version. What remains is that the write is still **unconditional,
+un-throttled, permanent, and gated on `acceptedShares === 1`** — while the far less valuable act of
+*rotating* an ownership proof this address already has costs `PROOF_MIN_SHARES = 4`
+([:38](../../web/07_mining_pool_public/back-end-pool/lib/stratum-server.js#L38),
+[:643–648](../../web/07_mining_pool_public/back-end-pool/lib/stratum-server.js#L643)). The cheaper
+action is the one that redirects money.
+
+```
+CONFIRMED  ONE accepted share diverts 100% of a stranger address future PPLNS credit
+CONFIRMED  ...and it is written even with incentives_enabled = false
+```
+
+`setDonation` ([incentives.js:173–186](../../web/07_mining_pool_public/back-end-pool/lib/incentives.js#L173))
+upserts `miner_incentives.donation_percent` with no history and no audit row. The share the attacker
+must produce is credited **to the victim**, so the entire cost of the attack is one share at the
+node's minimum share difficulty. The proceeds go to the prize pool, which pays out to other people —
+memory `project_pool_dormant_balances` records that direction as final — so the diversion is
+irreversible even after it is noticed.
+
+The second line is a separate defect in the same call: `setDonation` checks only
+`allow_miner_donations` and not `incentives_enabled`, whereas `donationsActive()` at
+[incentives.js:162–164](../../web/07_mining_pool_public/back-end-pool/lib/incentives.js#L162)
+requires both. So an operator who has switched incentives off still accumulates donation percentages
+that take effect the moment they switch them back on.
+
+**Mitigations that are real, and their limits.** The value is visible — `donation_percent` is on the
+public account summary ([index.js:3105–3108](../../web/07_mining_pool_public/back-end-pool/index.js#L3105)),
+which is §J3-5 part 2 having landed. And it is recoverable: the victim can log in once with
+`.donate0`, which `validateUsername` treats as an explicit opt-out
+([stratum-protocol.js:74–81](../../web/07_mining_pool_public/back-end-pool/lib/stratum-protocol.js#L74)).
+But there is no HTTP route that sets or clears it — stratum is the only writer — so the remedy
+requires the miner to notice a number on a page and know what to type, and the attacker can re-set
+it for the price of another share, indefinitely. That asymmetry is what keeps this open rather than
+closed by §J3-5.
+
+**Fix.** Gate the donation write on `PROOF_MIN_SHARES` like the proof rotation beside it — the tag is
+a preference, and a preference that moves money should cost at least what rotating an identity costs.
+Better still, only honour it when the address has **no** stored `donation_percent`, or when the
+session also satisfies the ownership evidence already on record. Add `incentives_enabled` to
+`setDonation`'s guard.
+
+---
+
+### J6-8 — [Low] Blank frames are free — `continue` sits above the token-bucket spend, and the socket deadline resets on any byte — **FIXED 2026-09-01**
+
+**Threat actor: anonymous.**
+
+[stratum-server.js:330](../../web/07_mining_pool_public/back-end-pool/lib/stratum-server.js#L330) is
+`if (!line.trim()) continue;`, and the bucket is spent at
+[:332–343](../../web/07_mining_pool_public/back-end-pool/lib/stratum-server.js#L332) — *after* it.
+A frame containing only whitespace costs a `split`, a `trim` and nothing else.
+
+```
+CONFIRMED  200,000 blank frames spend zero tokens and do not disconnect
+CONFIRMED  ...whitespace-only frames behave the same
+```
+
+On its own this is CPU-cheap and bandwidth-bound. It matters because it is also the keepalive: the
+only thing that closes an unauthenticated socket is `socket.setTimeout(600000)`
+([:295](../../web/07_mining_pool_public/back-end-pool/lib/stratum-server.js#L295)), which is Node's
+*inactivity* timer and restarts on every byte received. One newline every nine minutes holds a slot
+in the 25,000-socket global ceiling
+([:261–264](../../web/07_mining_pool_public/back-end-pool/lib/stratum-server.js#L261)) forever, for
+one byte of traffic, with no login and no proof of anything — and the global cap refuses *real*
+miners once it is reached. There is no separate deadline by which a connection must have logged in.
+
+**Fix.** Move the blank-line skip below the bucket spend (or count blank frames at a reduced weight),
+and add a pre-login deadline — a connection that has not authenticated within ~60 s of accept is
+destroyed. The second is the one that matters; it is a `setTimeout` cleared in `handleLogin`.
+
+---
+
+### J6-9 — [Low] A login with no work behind it is published as an online worker on someone else's account page — **FIXED 2026-09-01**
+
+**Threat actor: anonymous.**
+
+`getWorkersForAccount` merges live sessions into the per-worker breakdown
+([hashrate-tracker.js:205–216](../../web/07_mining_pool_public/back-end-pool/lib/hashrate-tracker.js#L205))
+and, at [:241–256](../../web/07_mining_pool_public/back-end-pool/lib/hashrate-tracker.js#L241),
+appends every live worker that has no shares in the window as an entry with `online: true`. There is
+no `acceptedShares` filter.
+
+```
+CONFIRMED  a login with zero accepted shares appears as an ONLINE worker on another address
+CONFIRMED  ...carrying an attacker-chosen label into the account page
+```
+
+This is the sibling of §J3-2, which added exactly that filter to `getPasswordConsistency`
+([miners.js:233](../../web/07_mining_pool_public/back-end-pool/lib/miners.js#L233) — `if
+(!(s.acceptedShares > 0)) continue;`) for the same reason: a stratum session exists from *login*,
+and login is unauthenticated. `getWorkersForAccount` was not given the same treatment.
+
+Impact is bounded — the label is `[a-z0-9_-]{1,25}`, so nothing escapes into markup, and no money
+moves. What it costs is the diagnostic: a miner reading their own workers list sees rigs they do not
+own, and the injected rows carry `accepted`/`rejected`/`stale` counters that skew the `reject_pct`
+the page exists to show. The same sessions also surface on the public `/api/stratum/stats`
+([index.js:2151–2170](../../web/07_mining_pool_public/back-end-pool/index.js#L2151)), where the
+address is truncated but the attacker-chosen worker name is not.
+
+**Fix.** One line, matching §J3-2: skip sessions with `acceptedShares === 0` in the live-merge loops.
+
+---
+
+### J6-10 — [Low] `isValidJob` has no upper bound and accepts non-integers, so an out-of-range `job_id` silently falls back instead of being rejected — **FIXED 2026-09-01**
+
+**Threat actor: mining miner.**
+
+[stratum-server.js:707–711](../../web/07_mining_pool_public/back-end-pool/lib/stratum-server.js#L707):
+
+```js
+return this.jobCounter > 0 && jobId > 0 && jobId >= Math.max(1, this.jobCounter - JOB_WINDOW);
+```
+
+There is no `jobId <= this.jobCounter`, no integer check, and no consultation of `jobIdMap` — which
+is the structure that actually knows which jobs exist.
+
+```
+CONFIRMED  isValidJob accepts a job_id far ABOVE jobCounter (no upper bound)
+CONFIRMED  isValidJob accepts a non-integer job_id
+```
+
+Nothing is credited: the lookup at
+[:547](../../web/07_mining_pool_public/back-end-pool/lib/stratum-server.js#L547) misses,
+`nodeJobId` is `undefined`, and `forwardSubmit` is handed the miner's raw `job_id`
+([:574–576](../../web/07_mining_pool_public/back-end-pool/lib/stratum-server.js#L574)) which the node
+stales. The finding is that the two fallbacks at
+[:554–556](../../web/07_mining_pool_public/back-end-pool/lib/stratum-server.js#L554) — `workId`
+degrading to `currentJob.pre_pow` and then to `String(job_id)` — are described in the comment as
+reachable only "if the window entry is somehow gone — isValidJob already gated it", and that is not
+true. The `String(job_id)` branch in particular would make the dedup key the *miner's own integer*,
+which is the state the 2026-07-17 fix existed to remove; today it is unreachable only because
+`currentJob` is always set once a job has arrived.
+
+**Fix.** Make `isValidJob` ask `this.jobIdMap.has(job_id)` — that is the authoritative window and it
+is already pruned to `JOB_WINDOW` at
+[:234–237](../../web/07_mining_pool_public/back-end-pool/lib/stratum-server.js#L234). Then `jobEntry`
+can never be missing and both fallbacks can go, along with the comment defending them.
+
+---
+
+### J6-11 — [Low] The nonce is un-quoted on the node wire by a first-match regex over the whole payload, and `forwardSubmit` passes the miner's `params` through verbatim — so a miner-chosen key decides what the node parses — **FIXED 2026-09-01**
+
+**Threat actor: mining miner.**
+
+Two halves that were written to solve the u64 precision bug and are correct for well-formed input.
+Parse side ([stratum-protocol.js:18–21](../../web/07_mining_pool_public/back-end-pool/lib/stratum-protocol.js#L18))
+re-extracts the literal digits with `/"nonce"\s*:\s*(\d+)/` and carries the nonce as a string. Send
+side ([node-stratum-client.js:192](../../web/07_mining_pool_public/back-end-pool/lib/node-stratum-client.js#L192))
+strips the quotes again with `.replace(/"nonce":"(\d+)"/, '"nonce":$1')` — **non-global, first match,
+over the entire serialised message**. And `handleSubmit` forwards `{ ...params, job_id }`
+([stratum-server.js:574–576](../../web/07_mining_pool_public/back-end-pool/lib/stratum-server.js#L574)),
+so every extra key the miner invented is serialised too, in the miner's own insertion order.
+
+A nested object whose key is `nonce` and whose value is a *quoted* number satisfies the send-side
+pattern while being invisible to the parse-side one:
+
+```
+CONFIRMED  parse side extracts the real u64 nonce as a string
+CONFIRMED  send side unquotes the DECOY and leaves the real nonce quoted on the node wire
+CONFIRMED  ...so a miner-chosen params key decides what the node parses
+```
+
+Today this is self-harm — the miner's own nonce reaches grin's serde as a quoted string, `u64`
+deserialisation fails, and their share is lost. It is rated Low for that reason. The reason it is
+worth writing down is what sits behind it: **all shares from all miners funnel through one upstream
+socket** ([node-stratum-client.js:42–50](../../web/07_mining_pool_public/back-end-pool/lib/node-stratum-client.js#L42)),
+and if grin's stratum ever tears a connection down on a malformed frame rather than answering with an
+error, one miner's crafted submit becomes a pool-wide outage: `socket.on('close')` resolves every
+in-flight submit as `accepted: false`
+([:96–100](../../web/07_mining_pool_public/back-end-pool/lib/node-stratum-client.js#L96)) and
+reconnects after 5 s, repeatable at 25/s. **That node-side behaviour is not verified here** and
+cannot be without a node; it is listed for J17 below.
+
+**Fix.** Build the wire payload from known fields instead of regexing the serialised blob:
+whitelist `{ id, jsonrpc, method, params: { edge_bits, height, job_id, nonce, pow } }` in
+`forwardSubmit`, and place the nonce with a targeted replacement on a payload that can contain only
+one `"nonce"`. That also closes the pass-through of arbitrary miner keys to the node in one move.
+
+---
+
+### J6-12 — [Low] `bindRegionListener`'s idempotency check reads `server.address()`, which is `null` until the listen completes, and a failed bind is reported as success — **FIXED 2026-09-01**
+
+**Threat actor: logged-in admin** (the honest operator pairing a gateway).
+
+[stratum-server.js:192–202](../../web/07_mining_pool_public/back-end-pool/lib/stratum-server.js#L192)
+guards against double-binding a port by scanning `this.servers` for one whose `address().port`
+matches. `net.Server#address()` returns `null` until the asynchronous `listen` has completed, and
+`_listen` pushes the server object into the array *before* that
+([:207–216](../../web/07_mining_pool_public/back-end-pool/lib/stratum-server.js#L207)). So a
+re-pair issued before the previous bind settled sees `a` as `null`, skips the match and binds again.
+`_listen` has no way to report failure — the `error` handler only logs
+([:212–214](../../web/07_mining_pool_public/back-end-pool/lib/stratum-server.js#L212)) — and
+`bindRegionListener` returns `true` unconditionally, which the caller discards anyway
+([index.js:5867](../../web/07_mining_pool_public/back-end-pool/index.js#L5867)). The admin panel
+therefore reports a successful pairing for a listener that is not listening, and the dead server
+object stays in `this.servers` where the next idempotency scan will also read `null` from it.
+
+This is the exact shape CLAUDE.md warns about for the Accio onion path — *nothing on this box reports
+a bind collision*, and a status line that greps for a port goes green whichever role won.
+
+**Fix.** Track bound ports in a `Set` updated inside the `listen` callback and consulted
+synchronously, and give `_listen` a callback so `bindRegionListener` can return the real outcome to
+the pairing route (which should surface it, not discard it).
+
+---
+
+### J6-13 — [Info] Verified correct, with evidence
+
+Checked and found sound — recorded so a later pass does not re-derive them.
+
+- **The `pre_pow` dedup half is right.** `setNewJob` stores `{ node, pre_pow }` per pool job and
+  prunes to `JOB_WINDOW` by ascending key with an early `break`
+  ([stratum-server.js:220–238](../../web/07_mining_pool_public/back-end-pool/lib/stratum-server.js#L220)),
+  so `jobIdMap` is bounded at ~11 entries and every re-version of one template collapses to one
+  dedup identity. The control probe confirms five resubmits of one solution under one label credit
+  once. J6-1 is a *second* field in the same key, not a regression in this one.
+- **The u64 nonce carriage works.** A 2^64-scale nonce survives parse as a string and is re-emitted
+  bare on the node wire; verified against `17293822569102704642`. J6-11 is about the *mechanism*, not
+  about this case failing.
+- **PoW is validated before anything is persisted.** `forwardSubmit` is awaited and a non-accept
+  returns before `submitShare`
+  ([stratum-server.js:568–585](../../web/07_mining_pool_public/back-end-pool/lib/stratum-server.js#L568)).
+  The comment's history — that an earlier version recorded first — is worth keeping.
+- **Share difficulty is not client-supplied.** `session.difficulty` is a hardcoded `1.0`
+  ([miners.js:26](../../web/07_mining_pool_public/back-end-pool/lib/miners.js#L26)), `submitShare`
+  refuses `<= 0` ([shares.js:21–23](../../web/07_mining_pool_public/back-end-pool/lib/shares.js#L21)),
+  and `setSessionDifficulty` has no callers — so nothing in a submit influences the recorded weight.
+  **This answers §J5's handoff:** PPLNS weight per *share* is unforgeable; it is the *number of
+  shares* that J6-1 forges, which is a different lever than the one J5 asked about.
+- **The line cap does bound complete lines.** `MAX_LINE_BYTES` is tested on the partial remainder
+  after the split ([stratum-server.js:317–327](../../web/07_mining_pool_public/back-end-pool/lib/stratum-server.js#L317)),
+  and since the remainder is re-checked on every `data` event before its terminating newline can
+  arrive, a complete line can never exceed it. The comment's reasoning is correct. (`.length` counts
+  UTF-16 units, not bytes, so the true byte ceiling is up to 3× higher — harmless at this cap.)
+- **Both connection caps are enforced before allocation.** The global ceiling and the per-IP cap both
+  `socket.destroy()` and `return` before any session or buffer exists
+  ([:259–278](../../web/07_mining_pool_public/back-end-pool/lib/stratum-server.js#L259)). J6-3(b) is
+  about the *decrement*, not the check.
+- **`maxPending` backpressure is correct as memory management** — `forwardSubmit` refuses at the
+  ceiling rather than growing the map
+  ([node-stratum-client.js:164–167](../../web/07_mining_pool_public/back-end-pool/lib/node-stratum-client.js#L164)),
+  and `close` resolves every pending entry so no caller hangs
+  ([:96–100](../../web/07_mining_pool_public/back-end-pool/lib/node-stratum-client.js#L96)). Its
+  *availability* consequence is written up in J6-5.
+- **`banMiner` is enforced at login, before a session exists**
+  ([stratum-server.js:460–468](../../web/07_mining_pool_public/back-end-pool/lib/stratum-server.js#L460)),
+  and leaves the balance row intact so anything owed can still be paid.
+- **The §J3 fixes are present and in the right order.** IP/password evidence and the country lookup
+  are behind `session.acceptedShares`, not login
+  ([:611–650](../../web/07_mining_pool_public/back-end-pool/lib/stratum-server.js#L611)); `mayDisplace`
+  is gated on `PROOF_MIN_SHARES` while first capture is not; the deliberate no-record comment at
+  [:471–475](../../web/07_mining_pool_public/back-end-pool/lib/stratum-server.js#L471) matches what
+  the code does. The handoff asked J6 to re-read `handleLogin` for any *other* pre-PoW write: the
+  three that remain are `ensureMinerExists` (J6-6), `createSession` (J6-4) and `updateMinerOnline`,
+  all reported above; there are no others.
+- **Injection surface is clean at the source.** The address is charset- and length-anchored and the
+  worker label is `[a-z0-9_-]{1,25}` after truncation
+  ([stratum-protocol.js:59–86](../../web/07_mining_pool_public/back-end-pool/lib/stratum-protocol.js#L59)),
+  so neither can carry markup, quotes, control characters or a newline into a log line, a DB column
+  or a JSON body. Every statement in `shares.js` and `hashrate-tracker.js` is parameterised; the only
+  template interpolations in the latter's SQL are the two frozen literal tuples at
+  [hashrate-tracker.js:589–590](../../web/07_mining_pool_public/back-end-pool/lib/hashrate-tracker.js#L589).
+  The `donateN` and worker-label regexes are bounded (`{1,3}`, input ≤ 40 chars) — no ReDoS.
+- **`getPoolHistory`'s cache is the right shape** — keyed on `hours|maxPoints` with a 64-entry
+  ceiling and a TTL equal to the sampling interval
+  ([hashrate-tracker.js:11–18](../../web/07_mining_pool_public/back-end-pool/lib/hashrate-tracker.js#L11)),
+  so the one public read whose cost scales with pool size cannot be used to stall the share path.
+
+---
+
+### Handoffs
+
+- **§J7 (DB layer)** — every write on the stratum path is parameterised, so there is nothing SQL-shaped
+  here. What J7 owns is the *volume*: J6-4 and J6-6 both put unbounded synchronous writes on the
+  shared `DatabaseSync` from an unauthenticated port, and `db.js` still has no `busy_timeout` (J5's
+  handoff). The `shares` INSERT is also the only write in the hot path with no transaction around it
+  ([shares.js:31–36](../../web/07_mining_pool_public/back-end-pool/lib/shares.js#L31)) — fine as a
+  single statement, worth confirming against WAL contention.
+- **§J11 (public API leakage)** — `/api/stratum/stats` truncates the address
+  ([index.js:2158–2168](../../web/07_mining_pool_public/back-end-pool/index.js#L2158)) but publishes
+  every live session's **worker name, difficulty, per-session accepted/rejected/stale and online
+  seconds**, unauthenticated. Two questions for J11: does a worker label leak rig identity a
+  truncated address was meant to hide, and is a live session list a mining-farm's operational
+  intelligence? J6-9 is the injection half of the same endpoint.
+- **§J12 (rate limiting)** — the levers found here are bucket-shaped and belong in J12's ledger.
+  (1) The 25 msg/s × 320 conns budget is not a *pool* limit, it is a limit on how fast one address can
+  drive the **node's PoW verifier and the journal** (J6-5). (2) There is no pre-login deadline, so the
+  25,000-socket global ceiling is exhaustible with one byte per socket per nine minutes (J6-8).
+  (3) Leaked sessions (J6-4) make two anonymous public GETs O(n) in the leak.
+- **§J14 / §J15 (front ends)** — the render half of the worker-name trace. The label is safe at the
+  source (charset-limited, 25 chars) and reaches the browser via `/api/account/:addr` workers and
+  `/api/stratum/stats`; both surfaces can carry an attacker-chosen label for an address the attacker
+  does not own (J6-9), so the question for J14/J15 is whether either page presents a worker row as
+  something the account holder configured.
+- **§J16 (deployment)** — three things from this session's files that the shell side owns. (1) The
+  public listener binds `0.0.0.0` unconditionally
+  ([stratum-server.js:167](../../web/07_mining_pool_public/back-end-pool/lib/stratum-server.js#L167))
+  while region listeners bind `region_listen_host` — confirm the firewall is what separates them.
+  (2) J6-3's fix does not remove the need for the edge to be the only thing that can reach the region
+  ports. (3) Re-pairing a gateway updates `config.region_listen_host`
+  ([index.js:5865](../../web/07_mining_pool_public/back-end-pool/index.js#L5865)) but already-bound
+  listeners keep the old host, so a tunnel-IP change silently leaves listeners on the old address —
+  same family as J6-12.
+- **§J17 (operational gate)** — four things only a testnet run can settle. (1) **J6-2 is the first
+  thing to look for**: connect a rig, wait fifteen minutes, confirm shares still count. It will be
+  obvious and it will look like a network fault. (2) J6-1's multiplier beyond ~11× depends on whether
+  grin's stratum keeps a per-`(block version, nonce)` cache; the ≥11× floor does not, but the true
+  ceiling should be measured. (3) J6-11's tail risk — send grin's stratum a submit with a
+  type-invalid field and observe whether it answers with an error or drops the connection. (4) The
+  1000-miner load test memory `project_pool_stratum_hardening` already flags as outstanding: the
+  single upstream socket, not the connection caps, is the bottleneck.
+
+---
+
+### Verification
+
+Every finding was written from reading first and then confirmed or refuted by execution; nothing
+above rests on inference alone, and the four hypotheses that came back **refuted** on the first run
+were corrected rather than reported (two were flaws in the harness — an incomplete `pool_config`
+schema and an off-by-one in a distinct-address count; one was a burst budget the token bucket
+correctly cut off, which is the guard working; one was a `job_id` value that genuinely does fail the
+window test).
+
+Three harnesses, all one-shot `node` processes that exited on their own — no server, no listener,
+nothing left running (CLAUDE.md *Local Test Processes*), all under the session scratchpad and outside
+the repo. They bound the **real** `lib/stratum-server.js`, `lib/miners.js`, `lib/shares.js`,
+`lib/stratum-protocol.js`, `lib/hashrate-tracker.js` and `lib/incentives.js` to an in-memory
+`node:sqlite` DB by replacing only `lib/db.js` in the require cache, and drove them through
+`handleNewConnection` with a socket stand-in exposing `remoteAddress`, `setKeepAlive`, `setTimeout`,
+`write`, `destroy`, `destroyed` and the `data`/`close` events — so the PROXY-v2 phase, the line
+splitter, the token bucket, `handleLogin` and `handleSubmit` all ran unmodified.
+
+- **Probe 1 — 18/18** confirmed: the session-prune chain end to end (J6-2, six assertions), repeated
+  login (J6-4), PROXY-v2 spoofing and the counter leak (J6-3), checksum-free account creation (J6-6),
+  blank-frame bucket bypass (J6-8), the `donate100` write (J6-7), `isValidJob` bounds (J6-10).
+- **Probe 2 — 9/9** confirmed: 120 garbage submits relayed with a log line each and no penalty (J6-5),
+  zero-work worker injection (J6-9), the first-match nonce regex (J6-11).
+- **Probe 3 — 7/7** confirmed: the worker-name dedup multiplier with its same-label control (J6-1).
+
+Static evidence used where execution cannot reach: `updateSession` has zero call sites
+(repo-wide `grep`, `node_modules` excluded) — that is what makes J6-2 unconditional rather than
+timing-dependent. The gateway's PROXY destination is read from
+[`07_lib_gateway.sh:74`](../../scripts/lib/07_lib_gateway.sh#L74) and
+[`:351–353`](../../scripts/lib/07_lib_gateway.sh#L351), which is what establishes that no legitimate
+PROXY header ever arrives on `:3333`. Rate figures (8,000 submits/s, ~4.8M leaked sessions, ~1 MB/s
+of journal) are derived from the configured limits — `MSG_RATE_PER_SEC = 25`,
+`max_connections_per_ip = 320`, `max_stratum_connections = 25000`, the 600 s prune — and are **not**
+measured against a running pool.
+
+**No code was changed in the REVIEW session.** J6-1 and J6-2 are each a one-line edit but both change
+live mining behaviour on the money path, and J6-2 is coupled to J6-4 (refreshing `lastSeenAt` without
+closing the abandoned session converts a bounded leak into a permanent one), so the two had to land
+together. J6-3, J6-5, J6-8 and J6-9 are small and independent; J6-6 needed a bech32 implementation and
+a decision about where the account row is created; J6-7 needed an operator call on what a donate tag
+should cost; J6-11 and J6-12 are refactors of a mechanism, not patches to it. **All twelve were
+applied in the resolution pass below**, which follows this section.
+
+---
+
+### §J6 — resolution pass, 2026-09-01 (add-ons, NOT VPS-TESTED)
+
+All twelve findings closed, and the two Critical ones landed together as the finding required.
+`npm test` is green at **206 assertions** — `scripts/test-stratum-guards.js` grew from 12 to 47 —
+plus **34 more** from two one-shot behavioural harnesses that drove the real handlers (28 through
+`handleNewConnection`, 6 through `bindRegionListener`) and then exited. No VPS, nothing left
+listening.
+
+#### What was applied
+
+| # | Fix | Where |
+|---|---|---|
+| J6-1 | `workerName` **removed from the dedup key**; it stays a parameter and stays in `shares.worker_name` as attribution | `lib/shares.js` |
+| J6-2 | New `touchSession()`, called from the stratum message loop on every accepted frame | `lib/miners.js`, `lib/stratum-server.js` |
+| J6-3 | PROXY-v2 phase **skipped on the public listener**; the per-IP counter keyed on a frozen `cappedIp` | `lib/stratum-server.js` |
+| J6-4 | `handleLogin` closes the session the socket already holds before creating the next one | `lib/stratum-server.js` |
+| J6-5 | `MAX_CONSECUTIVE_REJECTS = 50` disconnect + a per-session, per-key warn throttle | `lib/stratum-server.js` |
+| J6-6 | **bech32 checksum verified** (BIP-173 polymod, ~30 lines, no dependency) | `lib/stratum-protocol.js` |
+| J6-7 | Donate tag costs `PROOF_MIN_SHARES` and can only be **lowered** on a non-empty slot; `setDonation` checks `incentives_enabled` too | `lib/stratum-server.js`, `lib/incentives.js` |
+| J6-8 | Blank frames spend a token; a 60 s **pre-login deadline** | `lib/stratum-server.js` |
+| J6-9 | `acceptedShares > 0` filter on the live-session merge, matching §J3-2 | `lib/hashrate-tracker.js` |
+| J6-10 | `isValidJob` asks `jobIdMap` — bounded both ways, integers only; both dedup fallbacks deleted | `lib/stratum-server.js` |
+| J6-11 | Node payload built from **five whitelisted, type-checked fields**; nonce placed via an injected placeholder | `lib/stratum-server.js`, `lib/node-stratum-client.js` |
+| J6-12 | Synchronous `boundPorts` claim + a real `_listen` callback; the panel stops claiming "listener live" | `lib/stratum-server.js`, `index.js`, `admin-panel/regions.html` |
+
+#### J6-1 — the one-line fix, and the test that was missing
+
+`generateShareHash` now hashes `address-pre_pow-nonce`. The parameter stays so call sites and the
+existing test signature do not move, with a comment saying it is deliberately unhashed.
+
+The more important half is what went into `test-stratum-guards.js`. Its original six dedup
+assertions all **held the worker name constant**, so they passed throughout the vulnerable period —
+a suite can only catch what it varies. Every new assertion in this pass **asserts a denial**: two
+labels produce one hash, seven labels produce one hash, and the address still separates two miners
+sharing a label (which is what the worker name was wrongly credited with doing). End to end through
+the real handlers, one solution submitted under eight rig labels is now credited **once**, with a
+control proving a genuinely different nonce is still credited.
+
+#### J6-2 + J6-4 — landed together, as the finding said they had to
+
+`touchSession()` sits in `processLines`, **after** the token bucket and **after** the blank-line
+skip. Three properties that the placement, not the function, provides:
+
+1. **A keepalive counts.** `status` and `getjobtemplate` refresh the session, so a rig between
+   shares is not reaped. Putting it in `handleSubmit` would have left a slow rig dying quietly.
+2. **A flood cannot buy immortality.** Below the bucket, so refused messages do not extend a
+   session; below the blank-line skip, so a lone newline does not either (which is J6-8's fix
+   doing double duty).
+3. **The sweeper still works.** Verified with a control: a genuinely idle session is still pruned.
+   The fix must not turn a leak-bounding mechanism off, and J6-4 is exactly why — without the
+   re-login close, refreshing `lastSeenAt` would have converted the abandoned-session leak from
+   ten-minute-lifetime into permanent. `handleLogin` now takes the `getSession` accessor
+   `handleMessage` already had and closes the prior session first: 50 logins on one socket leave
+   **one** live session, and closing the socket reclaims it.
+
+#### J6-6 — the risky change, and how it was de-risked
+
+Adding a checksum check to the login path is the one edit here that could refuse **every** miner if
+the algorithm were wrong. A Grin Slatepack address is `bech32::encode(hrp, pubkey.to_base32())`
+using the **classic** bech32 constant (grin-wallet pins the `bech32` 0.7 crate, which predates the
+bech32m split), which is also what the 58-character data part implies: 52 symbols + 6 checksum.
+
+Three independent checks, all in the committed suite:
+
+- the six **BIP-173 official valid vectors** verify, including the `?` and 83-character hrp cases;
+- the three **BIP-173 invalid-checksum vectors** are refused;
+- a bech32 encoder written from the spec **inside the test** generates real-shape `grin1`/`tgrin1`
+  addresses, which are accepted with their worker and `donateN` suffixes intact, while a
+  single-character corruption of the same address is refused.
+
+One caveat is deliberately left open for §J17: no *real* grin-wallet address was available on this
+machine to check against. The vectors and the independent encoder make that a formality rather than
+a risk, but the testnet run should log in with an address a real wallet printed before mainnet.
+
+`ensureMinerExists` was **not** moved out of `handleLogin`, which the finding offered as a second
+option. With the checksum verified, an attacker can no longer mint distinct addresses at will — they
+would have to compute valid checksums, which is trivial, so the row-creation cost is reduced but not
+removed. Moving it to the share path is the fuller fix and is a schema-ordering question
+(`shares` has an FK to `miner_accounts`); it is handed to §J7 rather than done here.
+
+#### J6-7 — the rule chosen, and why it is not "require ownership proof"
+
+Two conditions now guard the donate tag: `PROOF_MIN_SHARES` (the same bar as rotating an ownership
+proof, which the finding pointed out was the *more* expensive of the two), and **a stored non-zero
+value may only be LOWERED**. So:
+
+- an address setting its first donation still works with no ceremony;
+- a stranger can only ever *reduce* someone's donation, which costs the victim nothing;
+- the victim can always clear a tag with `.donate0`, which is the only remedy that exists (there is
+  no HTTP route that writes this field — stratum is the sole writer).
+
+Calling `verifyOwnerProof` from the share path was considered and rejected: it registers failures
+against the (address, IP) lockout counters that the HTTP gate shares, so a rig re-presenting its own
+tag could have thrown the real owner into a lockout. A guard that can lock out the person it
+protects is worse than the thing it guards.
+
+`setDonation` also now checks `incentives_enabled`, matching `donationsActive()`. An operator who
+has switched incentives off no longer silently banks percentages that all activate at once when
+they switch them back on.
+
+#### J6-11 — the whitelist is the fix; the placeholder is the belt
+
+`handleSubmit` builds `{ edge_bits, height, job_id, nonce, pow }` and type-checks every one of them
+(numbers, finite, `pow` an array of finite numbers) before anything crosses to the node. The pool
+still does **not** judge the solution — the node stays the authority on the PoW — but every value
+here is re-serialised onto the single upstream socket **all** miners share, so shape is the pool's
+business even when validity is not.
+
+`_serialize` then substitutes a placeholder this module injected rather than pattern-matching miner
+data, so the old first-match regex cannot be steered by a decoy `nonce` key. Both halves are tested,
+including the decoy, and a `pow` element containing the placeholder literal is refused before it
+reaches the node.
+
+#### J6-12 — a claim the operator can act on
+
+`boundPorts` is claimed **synchronously** at `_listen` entry and released on error, so the
+idempotency check can no longer race a bind in flight — verified by issuing a second
+`bindRegionListener` for the same port *before* the first settles. `_listen` takes a `done` callback
+that fires exactly once, `bindRegionListener` returns a Promise carrying the real outcome, the route
+awaits it, and `admin-panel/regions.html` now says the listener did not bind instead of
+**"Region saved and gateway paired — listener live, no restart needed."** That sentence was the
+finding: it was printed unconditionally, for an asynchronous bind nobody waited on.
+
+#### Self-review of this pass — what the fixes did to each other
+
+1. **J6-8 nearly broke J6-2.** Moving the blank-line skip below the token bucket also moved it
+   relative to where `touchSession` wanted to sit. Placed above the skip, a single newline every
+   nine minutes would have kept a session alive forever — reintroducing the J6-8 slot-squat *inside*
+   the J6-2 fix, on a session object rather than a socket. The touch is below both.
+2. **J6-10 changed what "stale" means for a string `job_id`.** `isValidJob` now requires an integer,
+   and the old arithmetic form accepted `'5'` by coercion. That path was already broken — the map
+   lookup missed, so the submit was forwarded with the *miner's* untranslated id and the node staled
+   it — but it failed silently rather than loudly. `handleSubmit` now coerces a string `job_id` to a
+   number once, before validation, so an unusual client is translated correctly instead of getting a
+   different flavour of stale.
+3. **J6-5's ceiling had to exclude `stale`.** Counting stale submits toward a disconnect would fire
+   on every rig each time a new job landed mid-flight — an availability bug wearing a security fix's
+   clothes. Only `rejected` counts, an accepted share resets the run, and there is an assertion for
+   each.
+4. **`stop()` had to release `boundPorts`.** Without it a restart in the same process is refused by
+   its own idempotency check — caught by the bind harness, not by reasoning.
+
+#### Behaviour an operator will notice
+
+1. **Shares keep counting past ten minutes.** This is the whole of J6-2 and it needs no attacker to
+   observe: before the fix the pool went quiet ten minutes after each rig connected and discarded any
+   block found after that.
+2. **A mistyped address is now refused at login** with the existing "Invalid login" message rather
+   than silently mining to an unspendable key. A miner who has been mining to a typo'd address will
+   suddenly be unable to connect — which is the correct outcome, and worth saying in release notes.
+3. **A rig submitting only rejects is disconnected** after 50 in a row, and the log stops repeating
+   itself: one line per minute per session with a `[+N suppressed]` count.
+4. **A connection that never logs in is dropped after 60 s.**
+5. **`donateN` takes four accepted shares to apply**, not one, and cannot raise a donation already on
+   record. Lowering — including `donate0` — still applies immediately at that same threshold.
+6. **Region pairing reports a failed listener bind** instead of claiming success.
+
+#### Handoffs changed by this pass
+
+- **§J7** — `ensureMinerExists` is still on the login path (see J6-6 above); moving it to the share
+  path is J7's call, together with the missing `busy_timeout` and the write-volume question J6-4 and
+  J6-6 raised. The volume itself is much lower now: re-login no longer allocates, and junk addresses
+  no longer INSERT.
+- **§J11** — unchanged and still owed: `/api/stratum/stats` publishes every live session's worker
+  name and counters unauthenticated. J6-9 removed the *injection* half (a zero-work session no longer
+  appears), but the leakage question about real sessions stands.
+- **§J12** — two of the three levers are closed here (the reject amplifier, the pre-login squat).
+  What remains for J12 is whether 25 msg/s × 320 connections is the right budget at all.
+- **§J17** — three additions, all cheap and all on the first testnet run: **(1)** log in with an
+  address a real grin-wallet printed, to confirm the checksum check accepts production addresses;
+  **(2)** connect a rig and wait fifteen minutes, confirming shares still count — the J6-2 regression
+  test that only a real run can do; **(3)** confirm no legitimate rig ever hits 50 consecutive
+  rejects during a job change storm. J6-1's multiplier ceiling and J6-11's node-side behaviour
+  remain as previously listed.
+
+---
+
+### §J5 — resolution pass, 2026-08-27 (same day, add-ons, NOT VPS-TESTED)
+
+All eleven findings closed. Six were fixed during the review session itself (J5-2, J5-4, J5-5,
+J5-6, J5-7, and the reporting half of J5-1); this pass closes the five that were deliberately
+left open as decisions rather than patches. `npm test` is green at **178 assertions** —
+`scripts/test-block-ledger.js` grew from 20 to 52.
+
+#### What was applied
+
+| # | Fix | Where |
+|---|---|---|
+| J5-1 | `blocks.nonce` is now **TEXT**, bound as `String(nonce)`; a pure-SQL migration rebuilds a legacy INTEGER column | `lib/db.js`, `lib/blocks.js` |
+| J5-3 | **One shared comparator**, hash-first, in a new `lib/block-identity.js`; both readers call it and neither compares inline any more | `lib/block-identity.js` (new), `lib/rewards.js`, `lib/orphan-detector.js`, `lib/block-monitor.js` |
+| J5-8 | New `distribution_stalled` detector on the fast loop — the first alert that watches for money *not* moving | `lib/alert-monitor.js` |
+| J5-9 | `confirm_depth_*` wired into `applyToConfig` **with** validators; mainnet floored at 1440 | `lib/pool-settings.js`, `admin-panel/settings-payout.html` |
+| J5-10 | The real coinbase (60 emission **+ block fees**) is captured at found-time into `blocks.reward`, with the split kept in a new `blocks.fees` column | `lib/blocks.js`, `lib/db.js`, `lib/stratum-server.js`, `index.js`, `lib/pool-settings.js` |
+| J5-11 | The orphan reversal reaches **locked** balance, records real locked snapshots, and raises `orphan_clawback_locked` | `lib/orphan-detector.js` |
+
+#### J5-1 — the migration is the risky half, so it is pure SQL
+
+The schema change is trivial (`INTEGER` → `TEXT`, plus `String(nonce)` at the one bind site).
+The migration is not, and it has one non-obvious constraint: **the rows that need migrating are
+exactly the rows that cannot be read.** A read-modify-write loop would throw
+`ERR_OUT_OF_RANGE` on the first poisoned row and migrate nothing. `migrateBlocksNonceToText`
+([db.js](../../web/07_mining_pool_public/back-end-pool/lib/db.js)) therefore does the whole copy
+inside SQLite — `INSERT INTO … SELECT CAST(nonce AS TEXT) …` — and never materialises a JS
+number. `PRAGMA foreign_keys` is toggled outside the transaction (it is a no-op inside one), and
+the toggle was verified to actually work through `sqlite-compat`'s `pragma()` wrapper rather than
+being assumed.
+
+The three storage classes get three different treatments, and the middle one is the good news:
+
+| stored as | why | migrated to |
+|---|---|---|
+| `integer` (`< 2^63`) | the digits were always there, only unreadable | **exact** digits — nothing was ever lost |
+| `real` (`>= 2^63`) | destroyed at INSERT: a u64 that large does not fit a signed 64-bit int, so SQLite stored a double | `''` |
+| `text` | already migrated | unchanged |
+
+Writing the rounded rendering back for the REAL rows would have been worse than blanking them:
+`'9.22337203685478e+18'` parses to a *different* double than the node's own rounding of the same
+nonce, so it would compare unequal and orphan a live block. `''` reads as `unknown` to the
+comparator — never a mismatch — and those rows still verify by hash, which survived intact.
+Tested end-to-end against a table rebuilt in its pre-§J5 shape, including a CONTROL asserting
+that table really does throw before the migration runs.
+
+#### J5-3 — the decision taken: hash is authoritative, the nonce is a fallback
+
+The finding left this as a call to make. It is made: `lib/block-identity.js` compares by **hash
+whenever both sides can supply a 64-hex value**, and consults the nonce only when they cannot.
+Three properties, each of which was a bug before:
+
+1. **One function, two callers.** `rewards.js` and `orphan-detector.js` had drifted into
+   different comparisons and only one of them was destructive. They now share this and neither
+   compares inline. `verifyBlockOnChain` takes the whole block row rather than a bare nonce,
+   which is what let the hash into the orphan path at all.
+2. **The nonce fallback normalises BOTH sides through the same rounding** (`Number(a) ===
+   Number(b)`). This looks exactly like the precision bug it prevents, so it carries a comment
+   saying so. It also accepts a `'12345.0'` tail, because `node:sqlite` binds every JS number as
+   a double and any caller passing a number rather than `String(nonce)` lands that in a TEXT
+   column — rejecting it would fail closed on a perfectly good block.
+3. **A third verdict: `unknown`.** Previously every comparison was binary, so "we cannot tell"
+   collapsed into "mismatch" — the same root error as §J5-2 and the original message-matching
+   bug. `unknown` now has its own branch: `rewards.js` refuses to credit (fail closed) and
+   `orphan-detector.js` throws rather than orphaning.
+
+**Behaviour change worth knowing:** a matching hash is now authoritative and a differing nonce
+does **not** veto it. That is correct — the nonce is an input to the hash, so "same hash,
+different nonce" cannot occur on a real chain — but it retires a `test-money-path.js` assertion
+that had been asserting the impossible. It was replaced with three cases that test what the
+fallback is actually for: the nonce leg still rejects a mismatch when the hash is not comparable,
+and a block comparable by neither is refused rather than credited.
+
+#### J5-10 — fees are read from the block's kernels, at found-time
+
+`_fetchBlockFees` sums the `fee` field across the block's kernels (coinbase kernels carry 0, so a
+bare sum is right) and `creditBlock` stores `60 + fees` as the reward, keeping the fee portion in
+the new `blocks.fees` column so the split stays visible. Two deliberate choices:
+
+- **Found-time, not maturity-time.** `get_block` returns the block *body*, which a pruned node —
+  the standard deployment — serves only inside its pruning horizon. At maturity, 1440 blocks
+  later, it may be gone; a block submitted seconds ago is certainly there.
+- **Hash-gated and best-effort.** A race at the tip can hand back a competitor's block at the
+  same height, so the fees are trusted only when the node's header hash is *our* hash. Anything
+  else logs and falls back to the flat 60 — the pre-existing behaviour — so this can never block
+  a block from being credited.
+
+The public terms copy now states that a block's reward is emission **plus** that block's
+transaction fees and that both are split by the same PPLNS shares. Previously neither the code
+nor the copy admitted fees existed.
+
+#### J5-8 — the first detector that watches for money *not* moving
+
+`checkDistributionStalled` fires on two distinct shapes: a block still `'immature'` more than
+**twice** `confirm_depth` below the pool's own view of the tip (the maturity sweep is not
+completing), and a block `'confirmed'` but undistributed for over 30 minutes — ~60 missed
+distribution ticks (distribution is failing). It reports the uncredited GRIN total and points at
+the log line to look for.
+
+Three design notes:
+
+- **Warning-level escalation, never a freeze.** Freezing payouts would punish miners for a fault
+  that is already withholding their money, and the condition is legitimately transient during a
+  node outage — hence the full extra `confirm_depth` of slack on the immature side.
+- **The tip comes from `MAX(shares.block_height)`, not from the node.** This check must keep
+  working while the node is unreachable, which is one of the states it exists to report.
+- **It rides the fast loop, not the money cadence.** Two indexed counts, no wallet call.
+
+#### J5-9 — wired up rather than deleted, with consensus as a hard floor
+
+Both keys now reach `config` through `applyToConfig`, and both have validators — mainnet refuses
+anything below **1440**, because that is Grin's `COINBASE_MATURITY` and not a pool preference;
+testnet is deliberately allowed lower so a test run can exercise the payout pipeline without
+waiting a day per block. `applyToConfig` also coerces defensively and keeps the existing value
+with a warning if a below-floor number is somehow already stored, since it runs against values
+written before the validator existed. The two form rows now say which of the two they are and
+that the value applies on backend restart.
+
+#### J5-11 — the reversal reaches locked funds, and says so loudly
+
+`reverseBlockPayouts` now takes from spendable first and from `balance_locked` for the remainder,
+writes the real `locked_before`/`locked_after` snapshots, and raises a **critical**
+`orphan_clawback_locked` alert naming the address and amount whenever it has to touch locked
+funds — because that means a payout is in flight for money that has just been reversed, and
+`locked_owed` has diverged from the pending-withdrawal total. A residual shortfall (the GRIN has
+already left the pool) gets its own critical log line rather than being absorbed silently. The
+clamp against driving a balance negative stays.
+
+The scheduler still owns the withdrawal state machine, so this deliberately does **not** cancel
+the in-flight row — it alerts and leaves that to the operator. Part (a) of the finding, that
+nothing can reverse a block orphaned *after* distribution, remains an accepted risk and is now
+written into *Residual / accepted risks* rather than left implicit.
+
+#### Self-review of this pass, same day — three things the fixes did to each other
+
+1. **J5-3's `unknown` re-created §J5-1's stall in a new costume.** Throwing on an unverifiable
+   block aborted the *entire* sweep, so one legacy row whose nonce the old column had destroyed
+   would have held up maturity for every other block indefinitely — the same "one poisoned row
+   kills the query" shape the whole finding was about, one layer up. **Fixed:** the error carries
+   `err.unverifiable = true`, and both callers skip that block and keep sweeping, while
+   node-level failures still abort as they must. `detectOrphans` reports an `unverifiable` count
+   so the skip is visible rather than silent. Tested both ways, with a CONTROL asserting a
+   node-level failure still aborts.
+2. **J5-10 put a third serial RPC on the block-found path**, which is awaited *before* the
+   miner's submit ack is written — up to 20 s of dead air on an unreachable node instead of 10.
+   **Fixed:** the difficulty and fee fetches now run in one `Promise.all`, which leaves the worst
+   case at 10 s — better than the pre-§J5-10 code managed with the difficulty fetch alone.
+3. **The first attempt at J5-9's validators added a second `payout:` key to the same object
+   literal.** The existing one would have silently won and the new validators would never have
+   run — a duplicate key is not a syntax error. Caught before it shipped; merged into the real
+   block instead. Worth stating because the same object has three `payout:` sections across
+   defaults/validators/help and the next author will meet the same trap.
+
+**Also corrected while testing:** `test-money-path.js` bound its fixture nonce as a JS *number*,
+which `node:sqlite` renders into a TEXT column as `'12345.0'` — not the shape production writes.
+Fixtures now bind `String(nonce)`, and the comparator tolerates the `.0` tail regardless.
+
+#### Behaviour an operator will notice
+
+1. **A found block now logs its real reward**: `reward=60.023 GRIN (60 emission + 0.023 fees)`,
+   or `(60 emission, fees unread)` when the node could not be reached. Miner credits are
+   correspondingly slightly larger than the flat 60 they used to be.
+2. **A new critical alert, `distribution_stalled`**, appears if blocks stop being credited — with
+   the uncredited GRIN total and the log line to grep for. It resolves itself once the blocks
+   settle. This is the alert whose absence let §J5-1 look like a healthy pool.
+3. **Saving the payout settings with a mainnet confirm depth below 1440 is now refused** with a
+   message naming `COINBASE_MATURITY`. The value also takes effect for the first time, on
+   restart — previously it was accepted, stored, read back and ignored.
+4. **On first start against an existing testnet DB**, the log carries a one-time
+   `[db] blocks.nonce is INTEGER; rebuilding as TEXT` line, and — if any block was stored with a
+   nonce at or above 2^63 — an error line saying those nonces are unrecoverable and will verify
+   by hash. Both are expected once and never again.
+5. `GET /api/admin/blocks` now returns `fees` alongside `reward`.
+
+#### Handoffs changed by this pass
+
+- **§J17** — the hash/nonce observation is now *more* load-bearing, because the hash is the
+  primary comparator rather than an optional extra. Confirm on the testnet run that
+  `blocks.hash` (parsed from the stratum `blockfound - <hash>` reply) equals
+  `get_header(h).hash`. If it does not, every block will log the "verified by NONCE only"
+  warning — which is the designed fallback, but it means the pool is running on the weaker
+  check. Also capture one `get_block(h).kernels` payload to confirm the `fee` field shape J5-10
+  sums.
+- **§J7** — the "which other INTEGER columns hold chain data" sweep still stands and is now the
+  only unaddressed part of J5-1's class. `blocks.nonce` is fixed; `total_difficulty` from the
+  node is the obvious next candidate. The missing `busy_timeout` also still stands.
+- **§J6, §J9** — unchanged from the §J5 handoff list.
+
+---
+
+## §J7 — DB layer, SQL & amount arithmetic (2026-09-01, add-ons, NOT VPS-TESTED)
+
+Seventh session of the pre-mainnet §J pass (plan:
+[`script07_reference_audit_session_plan.md`](script07_reference_audit_session_plan.md) §J7).
+Scope: [`lib/db.js`](../../web/07_mining_pool_public/back-end-pool/lib/db.js) (1273),
+[`lib/sqlite-compat.js`](../../web/07_mining_pool_public/back-end-pool/lib/sqlite-compat.js) (80),
+**and every call site** — which for this session meant a mechanical sweep of all 39
+`db.transaction(` sites, every `prepare(` carrying a template literal, every `LIMIT ?` / `OFFSET ?`
+binding, every `parseInt` / `parseFloat` applied to request input, and every statement that moves a
+balance. Questions asked: **any unparameterised SQL, dynamic `ORDER BY`, or float arithmetic on
+nanogrin?**
+
+Read first, then confirmed by execution. Five one-shot `node:sqlite` harnesses ran in the
+scratchpad and exited on their own — a two-connection lock test against a real file DB, a
+`LIMIT`/`OFFSET` binding matrix, a replay of `getSection()`'s row loop, an `Infinity`-through-a-REAL-column
+test, and `EXPLAIN QUERY PLAN` against the verbatim `shares` DDL with **no `ANALYZE`** (memory
+`project_pool_db_capacity`: production has no `sqlite_stat1`, so a locally-analysed plan is a plan
+the pool never sees). No server was started, no VPS touched (plan rule 5).
+
+**Headline — the SQL is clean; the arithmetic and the locking are not.**
+
+*The SQL surface is genuinely clean.* Eleven interpolated SQL fragments exist and **every one is a
+code-controlled literal** — column names from a `_clean()` allowlist, a `PENDING_SQL` constant,
+generated `?` placeholder lists, a fixed table name. Nothing a request can reach is concatenated
+into a statement, and there is **no dynamic `ORDER BY` anywhere in the backend** (`AdminTable`
+sorts and pages client-side — memory `project_pool_admin_table`). The single dynamic fragment ever
+chosen by a request value, `?direction=`, was already found and hardened as §J3-7.
+
+*But there is no `busy_timeout`, and there is a cron that takes an exclusive lock on the live
+database.* `initDb` sets `journal_mode=WAL` and `foreign_keys=ON` and stops there, so SQLite's
+default of **0 ms** applies: contention is an instant `SQLITE_BUSY`, never a wait. Script 07's own
+hub screen steers the operator into a weekly `sqlite3 pool.db "VACUUM;"` cron, which holds the
+write lock for its whole run. Every money write in that window fails immediately — and the
+block-found write **throws its own failure away** and is never retried, so the pool can mine a
+block, receive the reward in the wallet, credit nobody, and report itself healthy to every
+dashboard and alert it has. That is J7-1, and it is the P0 item from this session.
+
+*And money is an un-quantised IEEE double from credit to withdrawal.* Balances are `REAL` GRIN,
+credited as `minerReward × (share/total)` with no rounding onto the nanogrin grid, so a stored
+balance routinely carries ~14 decimal places. The account page's **"max" chip** sends
+`balance.toFixed(9)`, which rounds to *nearest* — and across 399 simulated realistic balances it
+lands **above** the stored value 188 times (47%). The payout CAS is `WHERE balance >= ?`, so those
+188 attempts are refused with *"insufficient balance"* while the page is displaying exactly that
+balance. The overshoot is under one nanogrin: the pool refuses a payout over an amount Grin cannot
+express (J7-3).
+
+Eight findings. **Four were fixed in this session** (J7-2, J7-4, J7-5, J7-6 — all small and local,
+plan rule 3). Four are left open as decisions: J7-1 because the complete fix spans the shell
+installer (§J16), J7-3 because the sound repair is a money-guard change rather than a patch, J7-7
+because it is a query redesign that needs its own money-path test pass, and J7-8 because
+`pool-settings.js` belongs to §J9, which already holds the matching handoff from §J1-6.
+
+### Threat actors used in this section
+
+| Label | Means |
+|---|---|
+| **Anonymous** | Any client that can reach a public `/api/pool/*`, `/api/public/*` or `/api/account/*` GET. No proof of work, no session |
+| **Logged-in admin** | A `secureAdmin` or `freshAdmin` session. Already able to move money, so findings here are integrity/robustness, never escalation |
+| **The system** | No attacker. A cron job, a full disk, a restart, a rounding mode |
+
+---
+
+### J7-1 — [High] `initDb` sets no `busy_timeout`, the toolkit steers the operator into a weekly `VACUUM` cron that locks the live DB, and the block-found write discards its own failure — a block found in that window is lost, with no alert anywhere — **OPEN**
+
+**Threat actor: the system.** No attacker is involved; this is a self-inflicted fund-loss path.
+
+Three facts, each individually defensible, that together lose a block.
+
+**(1) The pool opens its connection with `busy_timeout = 0`.**
+[db.js:15–17](../../web/07_mining_pool_public/back-end-pool/lib/db.js#L15) is the entire pragma
+block:
+
+```js
+db = new Database(dbPath);
+db.pragma('journal_mode = WAL');
+db.pragma('foreign_keys = ON');
+```
+
+Verified through the real shim on a real file DB: `journal_mode=wal`, `foreign_keys=1`
+(and FK constraints do fire), `synchronous=2`, **`busy_timeout=0`**. Then, with a second
+connection holding the write lock:
+
+```
+as lib/db.js opens it today (no busy_timeout):
+  share INSERT while a second writer holds the lock: THREW ERR_SQLITE_ERROR database is locked   (waited 0 ms)
+with PRAGMA busy_timeout = 5000:
+  share INSERT while a second writer holds the lock: THREW ERR_SQLITE_ERROR database is locked   (waited 5507 ms)
+```
+
+The first line is today's behaviour: **no wait at all.** WAL removes reader/writer contention, not
+writer/writer contention.
+
+**(2) A second writer is a documented, operator-facing feature.**
+[`07_grin_mining_public_pool.sh:2038–2040`](../../scripts/07_grin_mining_public_pool.sh#L2038)
+writes this cron:
+
+```
+0 3 * * 0 root /usr/bin/sqlite3 $POOL_APP_DIR/pool.db "VACUUM;" >> $POOL_LOG 2>&1
+```
+
+`VACUUM` holds an exclusive lock on the whole database for its entire run — minutes on a
+multi-gigabyte file. It is opt-in, but the pool's own hub screen
+([`07_lib_hub.sh:25`](../../scripts/lib/07_lib_hub.sh#L25)) tells the operator *"File space is
+reclaimed by the weekly VACUUM cron — see option C"*, and memory `project_pool_db_capacity` records
+"VACUUM weekly still applies" as the reclamation plan. The break-glass CLI is a second such writer,
+and its own comment — *"WAL means this is safe alongside the running service"* — is true only for
+reads, for exactly this reason.
+
+**(3) The block-found write swallows the failure, and nothing retries or notices.**
+`BlockManager.creditBlock` wraps its INSERT in a try/catch that
+[logs and returns `{success:false}`](../../web/07_mining_pool_public/back-end-pool/lib/blocks.js#L125):
+
+```js
+} catch (err) {
+  console.error(`Error crediting block: ${err.message}`);
+  return { success: false, error: err.message };
+}
+```
+
+Its only caller **discards the return value entirely.**
+[stratum-server.js:840–846](../../web/07_mining_pool_public/back-end-pool/lib/stratum-server.js#L840)
+puts a `try/catch` around the `await`, but `creditBlock` never throws — so the catch never runs,
+`{success:false}` is dropped on the floor, and the very next statement writes
+`createSubmitResponse(id, true, nodeResult.blockHash)` to the miner. There is no retry, no queue,
+no re-derivation from the chain.
+
+**Why nothing catches it afterwards.** §J5-8's `distribution_stalled` detector was built for
+exactly this class of failure — but it reads `FROM blocks`
+([alert-monitor.js:613–624](../../web/07_mining_pool_public/back-end-pool/lib/alert-monitor.js#L613)),
+counting rows stuck in `'immature'` or `'confirmed'`. **A block that was never INSERTed has no
+row.** The `coverage_surplus` companion that §J5-8 recommended was explicitly *not* implemented, so
+the wallet excess is invisible too. The end state is indistinguishable from bad luck: as far as
+every dashboard, alert and reconciliation report is concerned, the pool simply found no block.
+
+**Scope beyond VACUUM.** The lock is the most concrete trigger, but the swallowed-error path is
+open to every DB fault — `SQLITE_FULL` on a full disk, an I/O error, a corrupt page. The same shape
+sits on the share path: `ShareValidator.submitShare` catches and returns `{success:false}`
+([shares.js:44–48](../../web/07_mining_pool_public/back-end-pool/lib/shares.js#L44)) and the caller
+reports the share **rejected** to the miner
+([stratum-server.js:753–759](../../web/07_mining_pool_public/back-end-pool/lib/stratum-server.js#L753)) —
+honest to the rig, but it means a lock window silently erases PPLNS weight for every miner in it.
+That one is at least visible as a reject count. The block is not visible at all.
+
+This is the §J5-5 shape ("a swallowed DB error confiscates a block reward") re-entered on the
+*earlier* half of the same pipeline. §J5-5 fixed the read; the write was never looked at.
+
+**Recommended (not applied — the complete fix spans a file this session does not own).**
+
+1. `db.pragma('busy_timeout = 5000')` in `initDb`, beside the other two. One line, but not free:
+   `DatabaseSync` is synchronous and the stratum server shares this event loop (CLAUDE.md), so a
+   5 s wait **blocks share submission for every connected miner** instead of failing one write.
+   That trade is right for a money write and wrong for a dashboard query, and picking one number
+   for both is an operator decision, not a patch.
+2. Make `creditBlock`'s failure loud: have `handleSubmit` read the return value, log at
+   `[CRITICAL]`, and raise an alert. A found block that could not be recorded is the most
+   expensive event this pool can have and it currently produces one `console.error` line.
+3. **§J16 owns the cron.** `VACUUM` against a live pool is the wrong shape whatever the pragma says
+   — it should stop the service, vacuum, restart; or the schema should be created with
+   `auto_vacuum=INCREMENTAL` and reclaimed with `PRAGMA incremental_vacuum`. A 5 s `busy_timeout`
+   does not survive a two-minute exclusive lock.
+4. **§J17 launch gate:** on the testnet run, find a block while `sqlite3 pool.db "VACUUM;"` is
+   running and confirm it is either recorded or loudly reported. Cheap to stage, and the only way
+   to prove the path.
+
+---
+
+### J7-2 — [Medium] `Math.min(parseInt(…), CAP)` has no lower bound, so `?limit=-1` is `LIMIT -1` — "no limit" — and defeats the row cap that is §C1's fix on two public money endpoints — **FIXED 2026-09-01**
+
+**Threat actor: anonymous.** One unauthenticated GET.
+
+SQLite treats a **negative `LIMIT` as no limit at all**. Confirmed against `node:sqlite` on a
+10-row table:
+
+```
+limit=-1 offset=0    -> 10 rows [1,2,3,4,5,6,7,8,9,10]
+limit=5  offset=-3   -> 5 rows  [1,2,3,4,5]        (negative OFFSET is clamped to 0 — harmless)
+```
+
+Fourteen route handlers clamped the limit with `Math.min(parseInt(…), CAP)` and **no
+`Math.max(…, 1)`**, so a negative passed straight through to the binding. The two that matter:
+
+- [`GET /api/pool/payments`](../../web/07_mining_pool_public/back-end-pool/index.js#L2974) —
+  capped at 500. With `?limit=-1` it returns **every confirmed payout the pool has ever made**,
+  with the **full** `grin_address`, amount, fee, method and `kernel_excess`. `withdrawals` is
+  never pruned (memory `project_pool_admin_table`), so that is the pool's entire lifetime payment
+  history in one request.
+- [`GET /api/pool/miners`](../../web/07_mining_pool_public/back-end-pool/index.js#L2924) — capped
+  at 500, addresses masked. With `?limit=-1` it returns **every account row**, ordered by balance
+  descending.
+
+That cap is not incidental: §C1 ("`/api/pool/miners` and `/api/pool/payments` leak full raw data")
+was closed on 2026-07-28 with masking, a rate limit and an explicit column list — and the row cap
+is the part that bounds how much one request can pull. A negative limit removed it.
+
+The same defect reached `/api/pool/top-block-finders`, `/api/pool/unclaimed`,
+`/api/public/lottery/winners`, `/api/account/:addr/shares`, `/api/account/:addr/balance/log`,
+`/api/account/:addr/withdrawals` and five `secureAdmin` list endpoints. **The second cost is not
+disclosure but the event loop:** an unbounded `SELECT` on the shared synchronous `DatabaseSync`
+blocks share submission for every connected miner while it runs — the same mechanism as the
+`hashrate_history` scan in memory `project_pool_db_capacity`, which is recorded there as a real
+incident and not a theoretical one.
+
+**Fixed** by moving all fourteen sites onto the safe idiom the same file already used at
+[index.js:4650–4651](../../web/07_mining_pool_public/back-end-pool/index.js#L4650):
+
+```js
+const limit  = Math.min(Math.max(parseInt(req.query.limit,  10) || 50, 1), 500);
+const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
+```
+
+The ordering matters and is the reason the broken variants were broken in two different ways —
+see J7-4. `grep -n "Math.min(parseInt(req.query.limit" index.js` now returns nothing.
+
+---
+
+### J7-3 — [Medium] Balances are un-quantised doubles, so the account page's "max" chip asks for more than the stored balance about half the time and the payout CAS refuses it — over less than one nanogrin — **OPEN**
+
+**Threat actor: the system.** A miner trying to withdraw their own money.
+
+Money is stored as SQLite `REAL` in **GRIN**, not as integer nanogrin
+([db.js:389–390](../../web/07_mining_pool_public/back-end-pool/lib/db.js#L389)), and the credit
+path never rounds. [rewards.js:110–121](../../web/07_mining_pool_public/back-end-pool/lib/rewards.js#L110):
+
+```js
+const poolFee     = block.reward * (this.config.pool_fee_percent / 100);
+const minerReward = block.reward - poolFee;
+const minerPayout = minerReward * (share.difficulty / totalDifficulty);
+```
+
+`minerPayout` is an arbitrary double — 59.4/7 is `8.485714285714286`, fourteen decimal places — and
+`creditBalances` writes it verbatim. Balances therefore live *off* the nanogrin grid permanently.
+
+Now the withdrawal round trip. The account page's max chip is
+[account-settings.html:935](../../web/07_mining_pool_public/public_html/account-settings.html#L935):
+
+```js
+$id('acct-amt-max').dataset.v = Number(a.balance || 0).toFixed(9).replace(/0+$/, '').replace(/\.$/, '');
+```
+
+`toFixed(9)` rounds to **nearest**, so it rounds *up* whenever the 10th decimal is ≥ 5. The server
+then re-normalises to the same 9 places
+([withdrawal-scheduler.js:694](../../web/07_mining_pool_public/back-end-pool/lib/withdrawal-scheduler.js#L694))
+and hands it to a CAS that has no tolerance at all
+([withdrawal-scheduler.js:725–730](../../web/07_mining_pool_public/back-end-pool/lib/withdrawal-scheduler.js#L725)):
+
+```js
+WHERE grin_address = ? AND balance >= ?
+...
+if (locked.changes !== 1) fail('insufficient balance', 409);
+```
+
+Simulating the credit arithmetic for 40 blocks across 2–400 equal-difficulty miners (there is no
+vardiff, so `session.difficulty` really is a hardcoded `1.0` — §J5 handoff):
+
+```
+over 399 simulated balances (40 blocks credited, n=2..400 miners):
+  max-chip amount > stored balance -> CAS refuses ("insufficient balance"): 188
+  max-chip amount < stored balance (dust stranded)                        : 211
+  exactly equal                                                           : 0
+  worst overshoot: 4.922240393057109e-10 GRIN
+
+examples that would 409:
+  miners=3  balance=791.9999999999995      max-chip sends=792           (balance >= amt is false)
+  miners=5  balance=475.1999999999999      max-chip sends=475.2         (balance >= amt is false)
+  miners=7  balance=339.42857142857133     max-chip sends=339.428571429 (balance >= amt is false)
+```
+
+**47% failure, and the overshoot is smaller than one nanogrin** — the smallest unit Grin can
+express. The miner sees a balance of 792, taps *max*, and is told they have insufficient balance
+for 792.
+
+Two aggravating details. The `createWithdrawal` path that *does* work — passing no amount, which
+uses `acct0.balance` at full precision
+([withdrawal-scheduler.js:690](../../web/07_mining_pool_public/back-end-pool/lib/withdrawal-scheduler.js#L690)) —
+is unreachable from the UI: *"blank no longer means full balance — tap the max chip instead"*
+([account-settings.html:1544](../../web/07_mining_pool_public/public_html/account-settings.html#L1544)).
+And the codebase already knows about float tolerance where it chose to: `dormancy.manualPayout`
+compares with `amt > r9(before) + 1e-9`
+([dormancy.js:442](../../web/07_mining_pool_public/back-end-pool/lib/dormancy.js#L442)). The
+withdrawal CAS, which is the one a miner actually meets, has no equivalent.
+
+**Not fixed — this is a money guard, and every repair changes what it guarantees.** The three
+candidates, with what each costs:
+
+1. **Front-end only (cheapest, §J15's file):** make the max chip round *down* — `Math.floor(bal *
+   1e9) / 1e9`. Fixes the 47% and strands at most 1 nanogrin. It does not fix an API caller that
+   sends `toFixed(9)`, and it leaves the underlying representation alone.
+2. **Quantise at credit time:** round every `balance_log`/`miner_accounts` write to 9 decimals.
+   Correct at the source, but it changes the invariant `Σ credits == minerReward` that
+   reconciliation and §J5-11's clamp both lean on, and it needs a migration story for existing
+   balances. Structural.
+3. **Tolerance in the CAS:** `balance >= ? - 1e-9`. One line, but it deliberately permits a
+   sub-nanogrin overdraw, which is exactly the kind of edge §J4 spent a session closing. Would
+   need `_netSend`'s floor re-checked against it.
+
+Recommendation: **(1) now, (2) as the real fix before mainnet**, and never (3) on its own.
+Handoff to **§J15** for the chip, and to **§J17** to confirm on testnet that a real miner can
+withdraw their full balance in one action.
+
+---
+
+### J7-4 — [Low] A non-numeric `limit` or `offset` binds `NaN`, which `node:sqlite` rejects outright, turning a typo into a 500 that echoes the driver's message — **FIXED 2026-09-01**
+
+**Threat actor: anonymous.** Same GETs as J7-2.
+
+`Math.max` and `Math.min` **propagate `NaN`** — that is why the "clamped" variants were no better
+than the unclamped ones:
+
+```
+Math.min(Math.max(parseInt("abc"), 1), 500) = NaN
+Math.min(parseInt("abc"), 500)              = NaN
+```
+
+`/api/pool/blocks` used the first form
+([index.js:2238](../../web/07_mining_pool_public/back-end-pool/index.js#L2238) before this pass), so
+it looked defended and was not. Binding the result:
+
+```
+limit=NaN offset=NaN -> THREW Error datatype mismatch
+limit=Infinity       -> THREW Error datatype mismatch
+limit=2.7            -> THREW Error datatype mismatch
+```
+
+`node:sqlite` binds a non-integer JS number as a REAL and SQLite refuses a REAL in `LIMIT`. Every
+one of these routes ends `catch (err) { res.status(500).json({ error: err.message }); }`, so
+`?limit=abc` returns **HTTP 500 with the string `datatype mismatch`** — a driver-level detail on a
+public endpoint, and a cheap way to fingerprint the storage engine. (Note this is a
+better-sqlite3 → `node:sqlite` behaviour change of the same family as memory
+`reference_nodesqlite_u64_throws`: the old driver would have coerced rather than thrown.)
+
+**Fixed** with J7-2: `parseInt(x, 10) || DEFAULT` **before** the clamps, so `NaN` becomes the
+default and never reaches `Math.max`.
+
+---
+
+### J7-5 — [Medium] `isNaN()` is not a finiteness check, so `"Infinity"` passes every amount guard — and a `REAL` balance stores `+Inf` permanently, invisibly, and with the prize-pool overdraw guard switched off for good — **FIXED 2026-09-01**
+
+**Threat actor: logged-in admin (`freshAdmin`).** Not an escalation — this admin can already move
+money. It is a one-typo, unrecoverable, *silent* corruption of the pool's accounting, on inputs
+where every neighbouring guard in the codebase is stricter.
+
+Four amount inputs guarded on `isNaN`/`> 0` and nothing else:
+
+| Route / function | Guard as written |
+|---|---|
+| `POST /api/admin/incentives/prize-pool/topup` → `manualTopup` | `if (!(amt > 0)) throw` |
+| `POST /api/admin/incentives/award` | `if (isNaN(amount) \|\| amount <= 0)` |
+| `POST /api/admin/miners/:addr/inject` | `if (isNaN(amount) \|\| amount <= 0)` |
+| `POST /api/admin/incentives/lottery/draw-now` | `parseFloat(req.body.pot_grin) \|\| 0` |
+
+`parseFloat("Infinity")` is `Infinity`; `isNaN(Infinity)` is `false`; `Infinity <= 0` is `false`;
+`Infinity` is truthy. All four accept it. Run through the real balance statement:
+
+```
+parseFloat("Infinity")       = Infinity
+manualTopup guard  !(amt > 0) rejects?          false
+award/inject guard isNaN(amt)||amt<=0 rejects?  false
+
+UPDATE accepted Infinity ->      { balance: Infinity, t: 'real' }
+after a -1000 correction ->      { balance: Infinity, t: 'real' }
+JSON to the admin panel  ->      {"balance":null,"t":"real"}
+Infinity - Infinity      =       NaN
+```
+
+Three consequences, in order of how bad they are:
+
+1. **It cannot be undone.** `balance = balance + delta` is the only way any code path moves a
+   balance. `Infinity + (any finite number)` is `Infinity`. The account is permanently broken and
+   nothing in the admin panel can repair it.
+2. **It is invisible.** `JSON.stringify(Infinity)` is **`null`**, so `GET /api/admin/incentives`
+   and every other read renders the corrupted bucket as empty, not as broken.
+3. **It disables a money guard.** `debitPrizePool`'s only overdraw check is
+   `if (this.prizePoolBalance() < amount) return false`
+   ([incentives.js:78–83](../../web/07_mining_pool_public/back-end-pool/lib/incentives.js#L78)).
+   With the bucket at `Infinity` that comparison is false forever, so **every subsequent prize
+   award is funded from a pool that does not exist** — crediting real, withdrawable miner
+   balances against nothing. And any reconciliation arithmetic that crosses the value yields
+   `NaN`, which compares `false` against every threshold, so the money alerts in
+   memory `project_pool_reconciliation` go quiet rather than firing.
+
+The same module gets it right two functions away: `setDonation` clamps with
+`Math.max(0, Math.min(100, p))` ([incentives.js:190](../../web/07_mining_pool_public/back-end-pool/lib/incentives.js#L190)),
+which handles `Infinity` correctly. This is an inconsistency, not a design choice.
+
+**Fixed** — all four inputs now use `Number.isFinite`:
+
+```js
+if (!Number.isFinite(amount) || amount <= 0) {
+  return res.status(400).json({ error: 'amount must be a positive, finite number' });
+}
+```
+
+and `manualTopup` throws *"top-up amount must be a positive, finite number"*. The `pot_grin`
+override resolves to `0` on a non-finite value. Nothing else changed; the 206-assertion suite is
+unchanged and green.
+
+---
+
+### J7-6 — [Medium] The break-glass admin-reset CLI still `require`s `better-sqlite3`, which the pool dropped and the installer no longer builds — so the documented 2FA-lockout recovery path cannot run on any installed pool — **FIXED 2026-09-01**
+
+**Threat actor: none — a lockout.** The failure mode is the operator losing their own pool.
+
+[`scripts/admin-reset.js:41`](../../web/07_mining_pool_public/back-end-pool/scripts/admin-reset.js#L41)
+loaded `require('better-sqlite3')`. Three facts make that unloadable on a real box:
+
+- `package.json` dependencies are `express, bcryptjs, jsonwebtoken, node-fetch, dotenv, ipaddr.js,
+  cookie-parser, multer, socks, nodemailer, nostr-tools, ws` (+ optional `geoip-lite`).
+  `'better-sqlite3' in dependencies` → **false**.
+- The installer deliberately removed the toolchain that would build it —
+  [`07_grin_mining_public_pool.sh:553–554`](../../scripts/07_grin_mining_public_pool.sh#L553):
+  *"No build-essential/gcc-c++: the pool has no native npm modules since the better-sqlite3 →
+  node:sqlite migration."*
+- `npm ci --omit=dev` installs exactly what `package.json` lists.
+
+Demonstrated: `require('better-sqlite3')` → `MODULE_NOT_FOUND`. And the failure is worse than a
+crash, because `loadDeps()` catches it and prints *"Run it through the installed wrapper
+(grin-pool-admin-reset-<net>), which execs node from the pool app dir where node_modules lives"* —
+advice that is already being followed, so the operator retries the thing that just failed.
+
+**Why this is a Medium and not a footnote.** This CLI is the only recovery path for an admin who
+enabled mandatory 2FA and lost the authenticator *and* the recovery codes. §J2-6 documented what it
+can and cannot do on the assumption that it runs. `--clear-2fa` and `--set-password` are the pool's
+entire break-glass story, and they could not execute.
+
+**Fixed** — the CLI now loads the same shim the service uses:
+
+```js
+Database = require('../lib/sqlite-compat');
+```
+
+Verified it is a true drop-in: the file uses only `.prepare/.run/.get/.all`, `.pragma`,
+`.transaction` and `.close`, which is exactly `sqlite-compat`'s surface. `--help` works, and
+`--list` was run end-to-end against a temp fixture DB carrying the production `users` and
+`admin_recovery_codes` schema:
+
+```
+  ID  USERNAME            ADMIN  ACTIVE  2FA   CODES  FAILED
+  ------------------------------------------------------------
+  1   operator            yes    yes     on    0      0
+```
+
+`db.pragma('busy_timeout = 5000')` was added at the same point and the "WAL means this is safe
+alongside the running service" comment corrected — per J7-1, a write from this CLI makes the live
+service's next write fail instantly, and the honest guidance is to run it with the service stopped.
+
+---
+
+### J7-7 — [Medium] `getSharesForDistribution` does `SELECT *` over the whole PPLNS window with an `ORDER BY` nothing uses, materialising it three times over in JS on the event loop the stratum server shares — **OPEN**
+
+**Threat actor: the system.** Pool growth is the trigger.
+
+[rewards.js:180–186](../../web/07_mining_pool_public/back-end-pool/lib/rewards.js#L180):
+
+```js
+const stmt = this.db.prepare(`
+  SELECT * FROM shares
+  WHERE block_height >= ? AND block_height <= ?
+  ORDER BY created_at ASC
+`);
+return stmt.all(windowStart, blockHeight);
+```
+
+`EXPLAIN QUERY PLAN` against the verbatim `shares` DDL, with no `ANALYZE` (production has no
+stats — memory `project_pool_db_capacity`):
+
+```
+as written:                   SEARCH shares USING INDEX idx_share_block_height (block_height>? AND block_height<?)
+                              USE TEMP B-TREE FOR ORDER BY
+ORDER BY dropped:             SEARCH shares USING INDEX idx_share_block_height (block_height>? AND block_height<?)
+aggregated in SQL:            SEARCH shares USING INDEX idx_share_block_height (block_height>? AND block_height<?)
+                              USE TEMP B-TREE FOR GROUP BY
+```
+
+The index seek is fine. The `ORDER BY created_at` is **not used by anything** — `creditBalances`
+folds the rows into a `Map` keyed by address, where order cannot affect the result — so the temp
+b-tree sorts the entire window for nothing.
+
+The materialisation is the real cost. There is no vardiff (`session.difficulty` is a hardcoded
+`1.0`), so share volume scales linearly with pool hashrate. Using the pool's own C32 arithmetic —
+one G1 ≈ 36 GPS, solutions/s ≈ GPS/42, PPLNS window 60 blocks ≈ 60 min:
+
+```
+  50 G1 miners ->   ~154,286 rows in the window  (~23 MB of JS objects)
+ 250 G1 miners ->   ~771,429 rows                (~116 MB)
+1000 G1 miners -> ~3,085,714 rows                (~463 MB)
+```
+
+And it is built **three times**: the row array from `.all()`, then
+[`distribution`](../../web/07_mining_pool_public/back-end-pool/lib/rewards.js#L113), which pushes
+one object *per share*, then `new Set(shares.map(…))`. All synchronous, all on the event loop the
+stratum server shares — so at every matured block, share submission stops for the duration. That is
+the same mechanism as the `hashrate_history` incident in memory `project_pool_db_capacity`, and
+that memory lists this exact query as an open fix from the 2026-07-16 capacity analysis; it has
+never been written into this audit doc.
+
+**Not fixed — the correct repair changes what `creditBalances` receives.** Replace the row dump
+with the aggregate it actually needs:
+
+```sql
+SELECT grin_address, SUM(difficulty) AS total_difficulty
+FROM shares WHERE block_height >= ? AND block_height <= ?
+GROUP BY grin_address
+```
+
+That returns one row per miner (hundreds, not millions), drops the pointless sort, and moves the
+`totalDifficulty` reduction into SQLite. It touches the distribution path, so it needs its own
+test pass against `scripts/test-money-path.js` — hence a decision, not a patch. **Note the
+interaction with J7-1:** the longer this read runs, the wider the window in which a concurrent
+writer meets `busy_timeout=0`.
+
+---
+
+### J7-8 — [Low] `key in PoolSettings.defaults[section]` accepts `__proto__`, and the resulting row makes `getSection()` return operator-chosen values that `Object.keys`, `JSON.stringify` **and the §J1-2 audit diff** are all blind to — **OPEN**
+
+**Threat actor: logged-in admin.** Robustness and auditability, not privilege.
+
+§J1-6 found that both `PoolSettings.defaults[section]` and `key in
+PoolSettings.defaults[section]` walk `Object.prototype`, and assessed the impact as *"confined to
+junk rows"*. That assessment holds for the **section** half. It does not hold for the **key** half,
+which this session tested, so this is a severity correction on an open item rather than a
+re-report — J1-6 stays open and its recommended fix is unchanged.
+
+[pool-settings.js:1339](../../web/07_mining_pool_public/back-end-pool/lib/pool-settings.js#L1339)
+is the unknown-key gate:
+
+```js
+if (!(key in PoolSettings.defaults[section])) {
+  throw new Error(`Unknown key '${key}' in section '${section}'`);
+}
+```
+
+`'__proto__' in {…}` is `true`, so a `POST /api/admin/settings/payout` carrying a `__proto__` key
+is accepted and INSERTed into `pool_config` against a **real** section. On read,
+[getSection()'s row loop](../../web/07_mining_pool_public/back-end-pool/lib/pool-settings.js#L1093)
+does `defaults[row.key] = JSON.parse(row.value)` — and assigning to `__proto__` on a plain object
+**replaces that object's prototype**. Replaying the loop verbatim:
+
+```
+own keys after the write   : ["pool_fee_percent","min_withdrawal"]
+JSON.stringify(section)    : {"pool_fee_percent":1,"min_withdrawal":25}
+section.anything           : attacker
+Object.prototype polluted globally?  undefined
+changedKeys the audit row would record: []
+```
+
+So: the injected values are readable via `section.<key>`, but **invisible to `Object.keys`, to
+`JSON.stringify`, and therefore to `GET /api/admin/settings/:section`**. Two things follow.
+
+- **It is the one settings write that leaves no audit trail.** §J1-2 closed "settings writes are
+  unaudited" by diffing the merged section and skipping the INSERT when `changedKeys.length === 0`
+  ([pool-settings.js:1418–1428](../../web/07_mining_pool_public/back-end-pool/lib/pool-settings.js#L1418)).
+  The diff runs over `Object.keys(afterState)` — which does not include a prototype write — so
+  `changedKeys` is `[]` and **no `admin_audit_log` row is written at all.**
+- **The value injection itself is currently inert, and I checked rather than assumed.** It can only
+  supply keys a section has no own default for. Every key `applyToConfig` reads was compared
+  against `PoolSettings.defaults` programmatically: **none is missing a default**, so nothing in
+  the config merge can be shadowed today. `require_admin_totp`, `pool_fee_percent` and
+  `min_withdrawal` are all own properties and unaffected. A string-typed `__proto__` row is a
+  silent no-op (assigning a primitive to `__proto__` does nothing); only a `json`-typed one lands.
+
+Low, therefore — but the audit blindness is a hole in a §J1-2 fix, not a junk row.
+
+**Fix** (same one-liner J1-6 already recommends, applied to the key check as well):
+
+```js
+if (!Object.prototype.hasOwnProperty.call(PoolSettings.defaults[section], key)) {
+```
+
+`pool-settings.js` is **§J9's** file and J1-6 already handed it there; this finding is the evidence
+for why that handoff should be treated as a required fix rather than tidy-up.
+
+---
+
+### J7-9 — [Info] Verified correct, with evidence
+
+Read and confirmed, not assumed. Recorded so the next pass does not re-derive them.
+
+**No unparameterised SQL reaches a request value.** Every template-literal SQL fragment in the
+backend, with what fills it:
+
+| Site | Interpolated value | Source |
+|---|---|---|
+| `ads.js:120`, `pages.js:108`, `posts.js:133` | `SET` column list | keys of a `_clean()` result — every key is a literal in that function |
+| `ads.js:165` | `?` placeholder list | `list.map(() => '?')`, ids `parseInt`-ed and capped at 20 |
+| `db.js:1252`, `owner-proof.js:439` | `SET` column list | string literals pushed alongside their bound values |
+| `retention.js:164` | table name | six literals in `status()`'s own object |
+| `withdrawal-scheduler.js` ×5, `index.js:2251/3526/3547` | `PENDING_SQL`, `LEDGER_DIRECTION_SQL`, `where` | module constants; the only request-chosen one (`?direction=`) is `Object.hasOwn`-gated per §J3-7 |
+| `reconciliation.js:45/48`, `ledger-rollup.js:64` | `FLOW_CASES(...)`, `DAY` | module constants |
+| `rewards.js:301/306`, `index.js:4224` | `?` placeholder lists | generated from array length |
+| `index.js:3527/3580` | `CSV_MAX_ROWS` | the literal `50000` |
+| `index.js:4671` | `resultClause` | one of two literals chosen by an allowlist |
+
+**No dynamic `ORDER BY` anywhere.** `grep` for `req.query.sort|order|by|column` and `ORDER BY ${`
+returns only the §J3-7 site. `AdminTable` sorts and pages in the browser, so the admin list
+endpoints never take a column name.
+
+**All 39 `db.transaction()` bodies are synchronous.** None is `async`, and none `await`s — which
+matters because the shim's `transaction()` runs `BEGIN`, calls `fn`, then `COMMIT` synchronously;
+an `async fn` would return a pending Promise and COMMIT before the body finished. Verified by
+grep across `lib/` and `index.js`.
+
+**The shim's savepoint nesting works.** `incentives.js` participating in the `rewards.js`
+transaction is the case it exists for. Tested: a committed outer keeps the inner write; a
+**rolled-back outer discards it**; an inner that throws and is caught leaves `_txDepth` correct so
+the next statement in the outer still commits.
+
+**`foreign_keys = ON` really is in force through the shim** — a violating INSERT throws
+`FOREIGN KEY constraint failed`. §I6's and §J5's guards depend on this and it is not obvious that
+a `PRAGMA` issued via `prepare().all()` takes effect.
+
+**The withdrawal amount path is correctly guarded**, unlike the admin amount inputs in J7-5.
+`createWithdrawal` takes `parseFloat(amount)` from the request body, and `Infinity` — which passes
+`isNaN(amt) || amt <= 0` and the `min_withdrawal` floor and `_netSend` — is stopped by the CAS,
+because `balance >= Infinity` is false and the handler maps 0 changed rows to a 409. Negative and
+`NaN` are rejected earlier. `_feeFor` is confirmed still unclamped, per memory
+`project_pool_fee_model`'s warning not to "fix" it.
+
+**§J5's INTEGER-column sweep is closed: no other column holds a value that can exceed 2^53.**
+The columns fed from chain data are `blocks.height` and `shares.block_height` (chain height, ~4 ×
+10⁶) and `blocks.nonce`, which §J5-1 already moved to TEXT with a DDL comment explaining why.
+`total_difficulty` — J5's named next candidate — **is never stored**: it is read in
+`_fetchNetworkDifficulty`, differenced immediately, and only the difference is persisted, into
+`blocks.network_difficulty` which is `REAL`. Every remaining INTEGER column is a unix timestamp, a
+row id, a boolean flag, a count, or a TOTP counter. Memory `reference_nodesqlite_u64_throws` needs
+no update.
+
+**`Σ credits == minerReward` to the nanogrin.** The float-drift worry from §J5's handoff was
+measured, not reasoned about: for a 7-way split the residual is `7.1e-15` GRIN, i.e. **0
+nanogrin**. Ledger and log take the same double, so the integrity invariant is unaffected. The
+float problem in this codebase is J7-3's rounding at the *boundary*, not accumulation.
+
+**Money writes are transactional where it counts.** Reward distribution (CAS flip + credits + fee +
+incentives), withdrawal creation, admin retry/cancel, dormancy disposition and `manualPayout` are
+each one `db.transaction()`. `dormancy.manualPayout` checks the balance *outside* its transaction
+and debits without a CAS — safe only because `DatabaseSync` is synchronous and nothing `await`s
+between the two, which is worth knowing before anyone makes that function `async`.
+
+---
+
+### J7-10 — [Info] Two smaller notes from the same sweep
+
+**`express.json()` is mounted at the 100 KB default**
+([index.js:228](../../web/07_mining_pool_public/back-end-pool/index.js#L228)), as the plan
+suspected. Nothing validates a maximum length on `branding.custom_css`,
+`analytics.custom_head_html`, `analytics.custom_body_html`, `pages.html` or `posts.body_html`, so
+those are unbounded on the way *in* but capped at 100 KB by the parser. Two consequences, neither
+a security issue: a long blog post or a pasted stylesheet fails to save, and it fails with
+express's **HTML** `entity.too.large` page against a `fetch()` that expects JSON, so the admin
+panel shows an opaque error rather than "too large". Worth an explicit
+`express.json({ limit: '256kb' })` plus a JSON 413 handler; the settings-form harvester posting
+*every* field in a section on every save (memory `project_pool_admin_settings_form`) makes the
+branding section the likeliest to hit it.
+
+**`migrateAdminAuditLog` is the only destructive migration in the schema.** It compares
+`admin_audit_log`'s columns against a hardcoded set and `DROP TABLE`s on any mismatch
+([db.js:33–50](../../web/07_mining_pool_public/back-end-pool/lib/db.js#L33), called first from
+`createSchema` at [db.js:383](../../web/07_mining_pool_public/back-end-pool/lib/db.js#L383)). The
+expected set matches today's DDL exactly, so nothing is wrong right now — but it means **adding one
+column to the audit table, or rolling the pool back one version, silently destroys the entire
+admin audit trail on the next restart**, which is exactly when a forensic question would be asked.
+The comment justifies it with "the pool isn't in production"; that stops being true at mainnet.
+Renaming to `admin_audit_log_legacy_<unixepoch>` instead of dropping costs nothing and keeps the
+rows.
+
+---
+
+### Handoffs
+
+- **§J9 (settings & config integrity)** owns the fix for J7-8, and this session raises its
+  priority: the `in`-walks-the-prototype key check is not a junk-row nuisance, it is the one
+  settings write that produces no `admin_audit_log` row. While in that file, the same pass should
+  answer J7-10's length-cap question for `custom_css` / `custom_head_html` / `body_html`.
+- **§J15 (public front-end)** owns the cheap half of J7-3: the max chip at
+  `account-settings.html:935` must round **down** (`Math.floor(bal * 1e9) / 1e9`), not to nearest.
+  Also worth checking there whether the *displayed* balance and the net-amount preview agree with
+  what the CAS will accept.
+- **§J16 (deployment)** owns two things this session found in the shell. (1) The weekly
+  `VACUUM` cron at `07_grin_mining_public_pool.sh:2039` takes an exclusive lock on the live
+  database — J7-1. It should stop the service around it, or the schema should move to
+  `auto_vacuum=INCREMENTAL`. (2) The same cron is the reason `busy_timeout` alone is not a fix.
+- **§J12 (rate limiting & resource exhaustion)** — J7-2's negative-limit dumps were also
+  event-loop levers, and they are closed. What remains for J12 from this file: the two public CSV
+  exports build a **50,000-row string in memory** on the synchronous path
+  ([index.js:3527](../../web/07_mining_pool_public/back-end-pool/index.js#L3527),
+  [3580](../../web/07_mining_pool_public/back-end-pool/index.js#L3580)) behind the `export`
+  bucket — confirm that bucket's rate is sized for that allocation, not just for download spam.
+- **§J17 (operational gate)** — three items only a run can settle. (1) **J7-1 is the one to
+  stage**: find a testnet block while `sqlite3 pool.db "VACUUM;"` runs and confirm it is recorded
+  or loudly reported. (2) **J7-3**: have a miner withdraw their exact full balance via the max
+  chip; the 47% figure predicts this fails roughly every other time and it will read as a UI bug.
+  (3) **J7-6**: run `grin-pool-admin-reset-<net> --list` on the box **before** enabling mandatory
+  2FA — the fix is verified locally but has never run on a VPS, and it is the recovery path.
+- **§J5's handoff list is now answered.** (1) `busy_timeout` — J7-1. (2) The "which other INTEGER
+  columns hold chain data" sweep — **closed, none** (J7-9). (3) The nanogrin float question —
+  answered in two parts: accumulation is exact to the nanogrin (J7-9), and the real defect is
+  boundary rounding (J7-3).
+- **§J6's handoff is answered too.** Every stratum-path write is parameterised, as J6 said. On
+  volume: the `shares` INSERT is a single statement and needs no transaction — but with
+  `busy_timeout=0` it is a single statement that can *fail*, and `submitShare` reports that failure
+  to the rig as a reject (J7-1). Moving `ensureMinerExists` off the login path is not needed on DB
+  grounds now that J6-6 stops junk addresses from INSERTing at all.
+
+---
+
+### Verification
+
+- **`npm test` — full suite green**: `12 + 47 + 32 + 52 + 26 + 18` assertions plus 19
+  ownership-gate checks = **206 passed, 0 failed**, before and after this session's four fixes.
+- Every quoted output above came from a one-shot harness in the scratchpad, run against
+  `node:sqlite` (`node v24.14.1`) and, where relevant, against the pool's **real**
+  `lib/sqlite-compat.js`. All five exited on their own; no server was started and nothing was left
+  running (CLAUDE.md local-process rule). The temp fixture DBs were deleted by the harnesses that
+  made them.
+- Nothing was run against a VPS. All eight findings are **add-ons, NOT VPS-TESTED**.
+- **Gap worth stating:** no regression test was added for the J7-2/J7-4 clamps or the J7-5
+  finiteness guards. Both are route-level and the existing suites are DB-level, so covering them
+  needs an Express harness this session did not build. `grep -n "Math.min(parseInt(req.query.limit"
+  index.js` returning nothing is the only standing check on J7-2.
+
+### Changed this session
+
+| File | Change |
+|---|---|
+| `index.js` | J7-2/J7-4 — all 14 `limit`/`offset` bounds moved onto `Math.min(Math.max(parseInt(x,10) \|\| D, 1), CAP)`; J7-5 — `Number.isFinite` on the inject, award and `pot_grin` amounts |
+| `lib/incentives.js` | J7-5 — `manualTopup` rejects non-finite amounts, with the reason in the comment |
+| `scripts/admin-reset.js` | J7-6 — driver switched from `better-sqlite3` to `lib/sqlite-compat`; `busy_timeout = 5000` added; the "WAL means this is safe" comment corrected per J7-1 |
+
+**Left open at the end of this session:** J7-1 (needs a `busy_timeout` decision *and* §J16's cron
+change — a partial fix would look like it closed the block-loss path and would not), J7-3 (a money
+guard: front-end round-down now, credit-time quantisation as the real fix), J7-7 (a distribution
+query redesign needing its own money-path test pass), and J7-8 (§J9's file, per §J1-6's handoff).
+
+---
+
+## §J8 — Secrets & key management (2026-09-01, add-ons, NOT VPS-TESTED)
+
+Eighth session of the pre-mainnet §J pass (plan:
+[`script07_reference_audit_session_plan.md`](script07_reference_audit_session_plan.md) §J8).
+Scope: the config load path, the JWT signing key, `.api_secret` / `.foreign_api_secret` handling,
+the wallet password on disk, `lib/alert-delivery.js` credentials, the poolstats API key, the Nostr
+identity key, admin password hashes and TOTP secrets, and **file modes** — plus the two redaction
+questions: does any secret reach a **response body**, and does any reach a **log line**?
+
+Method: build the inventory first (every secret, its file, its mode, its owner, its readers), then
+walk the two redaction questions across all ~180 routes and every `console.log`/`console.error` in
+`index.js` + the 40 `lib/` modules. The shell side (`07_grin_mining_public_pool.sh`,
+`lib/07_lib_pool_wallet.sh`, `lib/grin_node_secrets.sh`, `04_grin_node_foreign_api.sh`) was read to
+establish what the modes actually are — findings that live in the shell are handed to §J16, per the
+plan's own instruction for this session.
+
+**Headline — the secrets are stored correctly one file at a time, and the composition leaks.**
+
+*Every individual secret file is right.* `pool.json` is `0600` and never auto-generates its JWT
+secret; `.wallet_pass` is `0600` and is fed to grin-wallet on **stdin**, never argv, on both the
+ECDH unlock path and the `send` path — so the wallet passphrase is not in `ps aux`, which is the
+exact trap CLAUDE.md warns about; the Nostr identity key is written `{ mode: 0o600 }`; the node's
+two API secrets are `640 root:grinsecret` with a group grant for the de-rooted `grinpool` user; the
+poolstats key travels in an `Authorization` header over a scheme-checked HTTPS endpoint and is
+never logged. No route serialises `config`. No handler returns a stack trace.
+
+*But the database is not a file anybody thought of as a secret store, and it is the biggest one.*
+`pool.db` holds the admin bcrypt hash, the **plaintext** `users.totp_secret`, the bcrypt recovery
+codes, every miner's address and balance, the ownership-proof scrypt hashes and the whole admin
+audit log. SQLite creates it `0644` under systemd's default `UMask=0022`, and Script 07 makes the
+directory holding it traversable *and listable* by `others` so nginx can serve `custom_assets/` and
+`uploads/`. Two individually reasonable decisions compose into a world-readable ledger (J8-1).
+
+*And the same "one file at a time" blind spot appears three more times.* An admin route publishes
+the six ownership-proof hash columns the DB exists to keep unreadable (J8-2). An entire settings
+section — three live credentials among its nine keys — is stored in `pool_config`, read back to the
+browser in cleartext, and applied by **nothing** (J8-3). Two toolkit products both claim `.foreign_api_secret`'s group, one of them from
+a five-minute timer, and a file has one group (J8-4).
+
+Five findings plus two Info notes. **Two were fixed in this session** (J8-1's code half and J8-2 —
+both small and local, plan rule 3). J8-3 and J8-4 are left open as decisions; J8-5 is left open
+because it reverses a trade §G1 made deliberately and the operator should make the call.
+
+### Threat actors used in this section
+
+| Label | Means |
+|---|---|
+| **Local unprivileged** | Any account on the pool box that is not `root` and not `grinpool` — `www-data`, `grin`, `debian-tor`, an operator's own shell user, or anything that lands via a bug in one of the *other* products on the box. This is the actor de-rooting exists to contain |
+| **Stolen admin session** | A `secureAdmin` access token taken from an operator's browser. Per §C3 it survives logout, password change and *Revoke sessions* until it expires (≤24 h, capped for exactly this reason) |
+| **Logged-in admin** | A legitimate `secureAdmin`/`freshAdmin` session. Already able to move money, so anything reachable here is disclosure or robustness, never escalation |
+| **On-box root** | Reads everything by definition. Reported only as Info |
+| **The system** | No attacker. A timer, an install order, a umask |
+
+### The inventory
+
+Every secret the pool touches. Modes are what the code and the installer actually set — the
+"who can read it" column assumes a mainnet install after `4) Nginx` has run (see J8-1).
+
+| # | Secret | Lives in | Mode / owner | Readable by | In a response? | In a log? |
+|---|---|---|---|---|---|---|
+| 1 | JWT signing key | `pool.json` `jwt_secret` (64 hex) | `0600 grinpool:grinpool` | grinpool, root | no | no |
+| 2 | Admin password hash (bcrypt cost 12) | `pool.db users.password_hash` | `0644` → **`0600` (J8-1)** | ~~everyone~~ grinpool, root | no | no |
+| 3 | Admin TOTP secret — **plaintext base32** | `pool.db users.totp_secret`, `totp_pending_secret` | as #2 | as #2 | no | no |
+| 4 | 2FA recovery codes (bcrypt) | `pool.db admin_recovery_codes.code_hash` | as #2 | as #2 | once at enrollment, by design | no |
+| 5 | Miner rig password (scrypt `v1$salt$hash`, 16 MB) | `pool.db miner_accounts.{last,prev,anchor}_pass_hash` | as #2 | as #2 | **yes → J8-2, fixed** | reason only, never the value |
+| 6 | Miner mining IP (scrypt, same shape) | `pool.db miner_accounts.{last,prev,anchor}_ip` | as #2 | as #2 | **yes → J8-2, fixed** | **raw, → J8-5** |
+| 7 | Node **Owner** API secret | `<node dir>/.api_secret` | `640 root:grinsecret` | root, `grinsecret` (= grinpool) | no | path only |
+| 8 | Node **Foreign** API secret | `<node dir>/.foreign_api_secret` | `640 root:grinsecret` — **contested → J8-4** | root + whichever group won | no | path only |
+| 9 | Wallet passphrase | `<app dir>/.wallet_pass` | `0600 grinpool:grinpool` | grinpool, root | no | no — **stdin, never argv** |
+| 10 | Wallet Owner API secret | `<wallet dir>/.owner_api_secret` | grin-wallet's own mode, `chown -R grinpool` | grinpool, root | no | no |
+| 11 | Pool Nostr identity key (hex sk) | `<db dir>/.nostr_payout_key` | `0600` | grinpool, root | no | path only |
+| 12 | Poolstats API key | `pool.json` `poolstats_api_key` | `0600 grinpool:grinpool` | grinpool, root | **7+4-char preview → J8-7** | never |
+| 13 | Alert delivery creds (Discord / Slack / Telegram bot token / email) | `pool.db pool_config` section `alerts` | `0644` → **`0600` (J8-1)** | as #2 | **yes, cleartext, `secureAdmin` → J8-3** | no |
+| 14 | Admin session token | `httpOnly` `sameSite=strict` cookie | n/a | the operator's browser only | n/a (it *is* the auth) | no |
+
+---
+
+### J8-1 — [High] `pool.db` is created `0644` inside a directory Script 07 deliberately makes world-listable, so every local account on the box can read the admin bcrypt hash, the plaintext TOTP secret and the whole miner ledger — **CODE HALF FIXED 2026-09-01; the shell half is §J16's**
+
+**Threat actor: local unprivileged.** Not root — any account on the box. This is precisely the
+actor the pool's de-rooting exists to contain: the install comment at
+[07_grin_mining_public_pool.sh:614](../../scripts/07_grin_mining_public_pool.sh#L614) says the
+backend runs as `grinpool` because *"the backend parses untrusted input from the public internet on
+TWO surfaces (HTTP API + raw stratum TCP) atop a large npm tree"*, and that de-rooting is worth
+little if the thing it is protecting is readable by `www-data` anyway.
+
+Three facts compose.
+
+**(1) SQLite creates the database `0644`.** `initDb` opens the file and sets exactly two pragmas —
+no mode is passed anywhere:
+
+```js
+db = new Database(dbPath);          // lib/db.js:15
+db.pragma('journal_mode = WAL');
+db.pragma('foreign_keys = ON');
+```
+
+`lib/sqlite-compat.js:28` is `new DatabaseSync(filename)` with no options, so the mode is SQLite's
+`SQLITE_DEFAULT_FILE_PERMISSIONS` (`0644`) masked by the process umask. The systemd unit at
+[07_grin_mining_public_pool.sh:631–657](../../scripts/07_grin_mining_public_pool.sh#L631) sets
+`User=`, `ProtectSystem=strict`, `ProtectHome`, `PrivateTmp`, `RestrictSUIDSGID` and
+`ReadWritePaths` — but **no `UMask=`**, and systemd's default for a service is `0022`. So
+`0644 & ~0022` = `0644`. The `-wal` and `-shm` siblings inherit the database file's mode from
+SQLite's `findCreateFileMode()`, so they are `0644` too — and `-wal` is where the *most recent*
+writes live, which is the worst half to leave open.
+
+The code knows umask matters elsewhere:
+[lib/asset-manager.js:110](../../web/07_mining_pool_public/back-end-pool/lib/asset-manager.js#L110)
+writes uploaded assets with an explicit `{ mode: 0o644 }` *because nginx has to read them*. The
+inverse reasoning was never applied to the database.
+
+**(2) The directory is `705`, on purpose.** `pool_install` creates it tight:
+
+```bash
+mkdir -p "$POOL_APP_DIR"
+chmod 700 "$POOL_APP_DIR"          # :565–566
+```
+
+and then `pool_setup_nginx` — menu step `4) Nginx`, which every install runs — opens it again so
+nginx can traverse into the two subdirectories it serves:
+
+```bash
+chmod o+rx /opt/grin "$POOL_APP_DIR" "$POOL_APP_DIR/custom_assets"   # :1016
+chmod o+rx "$POOL_APP_DIR/uploads"                                   # :1022
+```
+
+`700 | o+rx` = **`705`**. `o+x` alone would have been enough for nginx (traverse); `o+r` also grants
+**listing**, so `others` can enumerate the directory rather than needing to guess a filename. The
+full path is open end to end: `/opt` `755` → `/opt/grin` `o+rx` → `/opt/grin/pubpool` `755` (plain
+`mkdir -p` under umask 022) → `/opt/grin/pubpool/mainnet` `705` → `pool.db` `644`.
+
+**(3) The database is the pool's secret store.** From
+[lib/db.js:637–666](../../web/07_mining_pool_public/back-end-pool/lib/db.js#L637) and
+[:386–416](../../web/07_mining_pool_public/back-end-pool/lib/db.js#L386):
+
+- `users.password_hash` — bcrypt, cost 12. Offline-crackable at leisure against a human-chosen
+  operator password.
+- `users.totp_secret` — **plaintext base32**. §J2-8 accepted plaintext-at-rest as unavoidable for
+  TOTP *and equivalent to the wallet password already accepted in §Residual risks* — that
+  equivalence held only while the file was as protected as `.wallet_pass` (`0600`). It is not.
+- `admin_recovery_codes.code_hash` — bcrypt; ~50 bits of entropy, so not the weak link, but present.
+- `miner_accounts` — every miner's address, `balance`, `balance_locked`, and the six ownership-proof
+  scrypt columns.
+- `admin_audit_log` — the full money trail including admin rows, which §G1 deliberately keeps at
+  **full IP precision** because they are operator data.
+
+The consequence is not "an attacker reads some hashes". It is that the plaintext TOTP secret plus
+an offline attack on one bcrypt hash reconstitutes **both** admin factors, including the mandatory-2FA
+gate that §J2-1/§J2-3 built specifically because it is the one control a password grind cannot
+out-scale. A local read is a complete bypass of the second factor with no online rate limit, no
+lockout, and no `login_failed` audit row anywhere.
+
+Disclosure only — `others` get `r--`, not `w`. The ledger cannot be tampered with this way.
+
+**Fixed (code half), 2026-09-01.** `initDb` now chmods the database and its two WAL siblings to
+`0600` after the schema runs, in a new `restrictDbFileModes()`
+([lib/db.js:20, 43](../../web/07_mining_pool_public/back-end-pool/lib/db.js#L43)). This closes the
+disclosure **on its own**, regardless of the directory mode — it is not a partial fix that only
+looks like one. Deliberately *not* a process-wide `umask(0o077)`: `fs.writeFileSync`'s `mode` is
+also masked, so a global umask would silently turn asset-manager's explicit `0o644` into `0600` and
+403 every white-label logo. Each file is guarded individually because `-wal`/`-shm` may not exist
+yet and because `chmod` is a no-op on the Windows dev machine.
+
+**Handed to §J16 (the shell half, both parts defence-in-depth):**
+1. `chmod o+rx "$POOL_APP_DIR"` should be `chmod o+x` — nginx needs traverse, not listing. Keep
+   `o+rx` on `custom_assets/` and `uploads/` themselves.
+2. Add `UMask=0077` to the systemd unit so *every* file the backend creates from now on is tight by
+   default, rather than each new one needing to remember.
+3. The root-run installer helper at
+   [:2415–2432](../../scripts/07_grin_mining_public_pool.sh#L2415) opens the same DB as root while
+   the service may be stopped; it already `chown`s `pool.db`/`-wal`/`-shm` back to `grinpool` but
+   does not `chmod` them. Add the chmod beside the chown.
+
+**§J17 must confirm this on a box**, because `chmod` is a no-op locally and the mode is the whole
+finding: `stat -c '%a %U:%G' /opt/grin/pubpool/<net>/pool.db*` and
+`stat -c '%a' /opt/grin/pubpool/<net>` after a full install → expect `600 grinpool:grinpool` and
+`701`/`705`.
+
+---
+
+### J8-2 — [Medium] `GET /api/admin/miners/:addr` was `SELECT *`, so it shipped the six ownership-proof scrypt hashes — the values the DB exists to keep unreadable — into an admin browser — **FIXED 2026-09-01**
+
+**Threat actor: stolen admin session** (a legitimate admin gains nothing they didn't have). §C3's
+access token is unrevocable for up to 24 h, so "the admin panel returned it" and "an attacker
+holding a stolen cookie downloaded it" are the same event here.
+
+`miner_accounts` carries six proof columns —
+`last_ip`, `prev_ip`, `anchor_ip` (salted scrypt of the miner's mining IP) and
+`last_pass_hash`, `prev_pass_hash`, `anchor_pass_hash` (salted scrypt of the rig password). They
+are hashed precisely so that *"the database holds no readable mining IP and no readable password,
+and a value can only be checked against a hash you supply yourself"* — which is what the pool's own
+public privacy page promises miners
+([lib/pool-settings.js:448](../../web/07_mining_pool_public/back-end-pool/lib/pool-settings.js#L448)).
+
+Two sibling routes get this right, and one did not:
+
+| Route | Query | Proof hashes exposed? |
+|---|---|---|
+| `GET /api/account/:addr` (public) | selects the hash columns, then builds an **explicit** response object reporting only `has_recorded_ip` / `has_recorded_pass` booleans ([index.js:3055–3086](../../web/07_mining_pool_public/back-end-pool/index.js#L3055)) | no |
+| `GET /api/admin/miners` (list) | explicit 8-column list ([index.js:6053](../../web/07_mining_pool_public/back-end-pool/index.js#L6053)) | no |
+| `GET /api/admin/miners/:addr` (detail) | `SELECT * FROM miner_accounts` → `res.json({ miner: { ...acct, … } })` | **all six** |
+
+The list was tightened and the detail was not — the same shape as the 2026-07-28 pass that replaced
+`SELECT *` on `/api/pool/payments` and `/api/pool/miners` (§C1), whose comment still stands at
+[index.js:2966](../../web/07_mining_pool_public/back-end-pool/index.js#L2966).
+
+Why it matters beyond tidiness: the rig-password hash is **one leg of the ownership gate** that
+authorises a payout and, after §J3-1, one of the two legs on the destination-change gate. scrypt at
+16 MB makes recovering it expensive rather than impossible, and an attacker who does recover one has
+a proof that is valid until the miner rotates it — which most never will. Exporting it moves a
+credential from a place nothing can read (post-J8-1) to a place a stolen cookie can.
+
+The admin panel reads **none** of the six —
+`grep -rn "pass_hash\|last_ip\|prev_ip\|anchor_ip\|anchor_pass" admin-panel/ public_html/` returns
+nothing, and `miners.html` only ever calls this route's `/ban` and `/unban` siblings. There was no
+consumer to break.
+
+**Fixed 2026-09-01.** Replaced with an explicit 23-column list
+([index.js:6070–6095](../../web/07_mining_pool_public/back-end-pool/index.js#L6070)). The
+`*_at` timestamps are kept (they carry the same "is a proof on record / when did it last change"
+signal the public route publishes, with no hash), and `pass_proof_state` is kept because it is a
+verdict string that is already public on `/api/account/:addr` and is what answers *"why won't my
+rig password work?"*.
+
+---
+
+### J8-3 — [Medium] The whole `alerts` settings section is inert: all nine keys — three of them live credentials — are stored in the DB, served back to the browser in cleartext, and read by nothing — so a Telegram bot token is pure liability, and every money alert §J5-8 built is delivered nowhere — **OPEN**
+
+**Threat actor: the system**, for the inert half — no attacker; the panel and the runtime read two
+different places. **Stolen admin session**, for the disclosure half.
+
+**The credentials are never applied.** `PoolSettings.defaults.alerts`
+([lib/pool-settings.js:266–276](../../web/07_mining_pool_public/back-end-pool/lib/pool-settings.js#L266))
+declares nine keys: `alert_check_interval_secs`, `alert_email_address`, `discord_webhook_url`,
+`slack_webhook_url`, `telegram_bot_token`, `telegram_chat_id`, `alert_large_withdrawal`,
+`alert_tor_fails_per_week` and `alert_thresholds`. Every consumer reads them off the **config
+object**, not off `PoolSettings`:
+
+```js
+this.discordWebhook   = config.discord_webhook_url;   // lib/alert-delivery.js:15
+this.telegramBotToken = config.telegram_bot_token;    // :20
+const t = config.alert_thresholds || {};              // lib/alert-monitor.js:52
+```
+
+and `PoolSettings.applyToConfig()`
+([lib/pool-settings.js:1467–1552](../../web/07_mining_pool_public/back-end-pool/lib/pool-settings.js#L1467))
+destructures exactly `{ pool_info, payout }`. **No `alerts` key is copied into `config` anywhere.**
+A repo-wide sweep confirms it — `telegram_bot_token` appears in only four places: the defaults, the
+HTML form, `alert-delivery.js` reading `config`, and a test fixture. Nothing bridges them.
+
+Nor does `pool.json` supply them: `pool_ensure_defaults`
+([07_grin_mining_public_pool.sh:305–320](../../scripts/07_grin_mining_public_pool.sh#L305)) never
+writes any alert key, and `lib/config.js` declares no default for them either. So on a **stock
+install, off-box alert delivery is impossible** — `configuredChannels()` returns all-false,
+`GET /api/admin/alerts/config` reports `delivery: {email:false, discord:false, slack:false}`, and
+`POST /api/admin/alerts/test` refuses with *"Set a webhook / email / Telegram in pool.json first."*
+The only route to a working alert is hand-editing a `0600` file the panel never mentions.
+
+`alert_thresholds` is dead twice over: it is stored as a **JSON string**, and `alert-monitor.js:52`
+does `config.alert_thresholds || {}` then reads `t.wallet_balance_warning_grin` — so even if it were
+merged, property access on a string yields `undefined` and every threshold falls back to its default.
+
+This matters more than a normal dead-key finding (cf. §J1-5, §J5-9) because of **what** goes
+undelivered. §J5-8 was raised and fixed on the grounds that *"every money detector is aimed at a
+shortfall, so a totally stalled distribution pipeline raises nothing"* — and the seven detectors it
+added (`coverage_shortfall`, `ledger_integrity_drift`, `wallet_drain`, `unrecorded_wallet_send`,
+`wallet_identity_changed`, …) are the ones that **freeze payouts**. On a stock mainnet install they
+reach the `alerts` table and the admin panel, and nowhere else. An operator who is not looking at
+the panel learns about a frozen payout queue from a miner.
+
+**The disclosure half.** Whatever the operator does type into that form is stored in `pool_config`
+and read straight back:
+
+- `GET /api/admin/settings/alerts` → `res.json({ data: poolSettings.getSection('alerts') })`
+  ([index.js:6254](../../web/07_mining_pool_public/back-end-pool/index.js#L6254)) — cleartext.
+- `GET /api/admin/settings` → `getAll()`, every section including `alerts`
+  ([index.js:6244](../../web/07_mining_pool_public/back-end-pool/index.js#L6244)).
+- `POST /api/admin/settings/alerts` echoes the saved section back too.
+
+All three are `secureAdmin` — the **lower** tier. `alerts` is not in `STEP_UP_SETTINGS_SECTIONS`
+and none of its keys is in `STEP_UP_SETTINGS_KEYS`, so a stolen access token both reads a Telegram
+bot token and rewrites it, with no step-up and no second factor. The section's audit diff is
+scrupulously **names-only** for exactly this reason
+([lib/pool-settings.js:1410–1414](../../web/07_mining_pool_public/back-end-pool/lib/pool-settings.js#L1410)):
+*"the `alerts` section holds discord_webhook_url, slack_webhook_url and telegram_bot_token; …
+recording before/after values here would move live credentials into a wider-read table."* The
+audit log was protected; the read endpoint was not.
+
+The form does carry an honest note — *"Delivery channels are read from the running config
+(pool.json); saving here records them for reference"*
+([settings-alerts.html:64–66](../../web/07_mining_pool_public/back-end-pool/admin-panel/settings-alerts.html#L64)) —
+but it sits under the *Send test alert* button, three fields below the token input, and the fields
+above it are indistinguishable from every other working settings form in the panel.
+
+**Left OPEN — this is a decision, not a patch**, and the two halves are coupled:
+
+- **Wire them up** (`applyToConfig` copies the `alerts` section; `alert_thresholds` gets
+  `JSON.parse`d; `AlertDelivery`/`AlertMonitor` re-read on a settings save the way
+  `sessionPolicyProvider` does) — **and then** the read endpoints must mask: return
+  `"••••••••"` for a set credential and treat that sentinel as "unchanged" on write. Wiring
+  without masking makes a live credential newly worth stealing.
+- **Or delete the three credential fields** from the section and the form, and say plainly that
+  delivery is configured in `pool.json`.
+
+Doing neither is the worst of the three: the pool stores a credential, hands it to any admin
+session, backs it up, and gets nothing for it.
+
+**Two riders if the wiring option is chosen.** (a) There is **no validator** for
+`discord_webhook_url` / `slack_webhook_url` / `telegram_bot_token` — the `alerts` validator block
+covers `alert_check_interval_secs` only
+([lib/pool-settings.js:983–989](../../web/07_mining_pool_public/back-end-pool/lib/pool-settings.js#L983)) —
+and `postWebhook()` builds its request from `url.hostname`/`url.port`/`url.pathname` with no
+allowlist, so wiring these up turns a `secureAdmin` settings write into an outbound-request
+primitive. That is **§J13's** call, and it must be made *before* the wiring lands, not after.
+(b) The section should move into `STEP_UP_SETTINGS_SECTIONS`, or at least its three credential keys
+into `STEP_UP_SETTINGS_KEYS`, once they mean something.
+
+---
+
+### J8-4 — [Medium] Script 04 and the pool both claim `.foreign_api_secret`'s group, a file has one group, and the pool re-claims it every five minutes — so installing the pool permanently 401s Script 04's collector, and it reads as "node down" — **OPEN**
+
+**Threat actor: the system.** No attacker; two products on the same box disagree, and a timer
+settles it the same way every time.
+
+Both products need the node's Foreign API secret, and each grants access by putting the file in
+*its own* service group:
+
+```bash
+# scripts/04_grin_node_foreign_api.sh:1900       — REST collector runs as the nginx web user
+chown "root:$web_user" "$_foreign_secret_file"
+chmod 640 "$_foreign_secret_file"
+```
+```bash
+# scripts/07_grin_mining_public_pool.sh:513–514  — de-rooted backend runs as grinpool
+chgrp grinsecret "$sf"
+chmod 640 "$sf"
+```
+
+A file has exactly one group. `usermod -aG grinsecret grinpool` is the only membership granted
+anywhere (`grep -rn grinsecret scripts/` returns ten lines, all in these two files) — **`www-data`
+is never added to `grinsecret`, and `grinpool` is never added to `www-data`.** So whichever product
+ran last owns the file and the other one is locked out.
+
+Except it is not even a race, because one side re-asserts on a timer.
+`grin_sync_pool_stratum()` — reached from `grin_secrets_sync_all()`
+([grin_node_secrets.sh:654–662](../../scripts/lib/grin_node_secrets.sh#L654)), which is what the
+`grin-secret-sync.timer` runs **every 5 minutes** — does this unconditionally whenever
+`/opt/grin/conf/grin_pubpool*.json` exists:
+
+```bash
+if getent group grinsecret >/dev/null 2>&1; then          # :611–616
+    for sf in "$dir/.api_secret" "$dir/.foreign_api_secret"; do
+        chgrp grinsecret "$sf" 2>/dev/null || true
+        chmod 640 "$sf" 2>/dev/null || true
+    done
+fi
+```
+
+Nothing anywhere re-applies Script 04's grant. `grin_sync_collector()`
+([:445–457](../../scripts/lib/grin_node_secrets.sh#L445)) only rewrites secret **paths** in
+`config.env`; it never touches ownership. So: re-run Script 04, and within five minutes the pool
+takes the group back, for good.
+
+The same file already contains the argument against this, 350 lines earlier. `_gns_node_put()`'s
+header comment ([:249–254](../../scripts/lib/grin_node_secrets.sh#L249)) reads:
+
+> An existing file is rewritten in place so its ownership and mode **SURVIVE** — Script 04 sets the
+> foreign secret to `root:<web_user>` 640 for the REST collector, and the de-rooted pool sets
+> `root:grinsecret` 640. **A blind chown/chmod here would silently 403 both.**
+
+`grin_sync_pool_stratum` is that blind chgrp, in the same lib, on the same files, on a timer.
+
+**Why it reads as an outage rather than a permissions bug.** Script 04's collector loses read
+access, so its authenticated call goes out unauthenticated and the node answers **401** — which
+CLAUDE.md records as the classic misdiagnosis: *"It fails as 'node down', not as 'bad endpoint'."*
+The pool's own `_warnNoSecret()` prints a genuinely diagnosable line for this exact case
+(`permission denied — the grinsecret group grant is missing`,
+[lib/grin-node.js:120–122](../../web/07_mining_pool_public/back-end-pool/lib/grin-node.js#L120)) —
+but that is the *pool's* diagnostic, and the pool is the side that wins. The side that loses is a
+`rest-collector` cron that writes static JSON and has no equivalent line.
+
+**Left OPEN — §J16 owns the fix, and it is a policy choice, not a patch:**
+
+1. **Preferred — one group, two members.** Have both products use `grinsecret` and add the nginx web
+   user to it (`usermod -aG grinsecret www-data`), keeping `640 root:grinsecret`. One writer of the
+   grant, one group, both readers. Note the trade honestly: `www-data` is a *large* attack surface
+   (it serves the public site), so this hands the node Owner secret to it as well — which argues for
+   splitting the grant so `www-data` gets only `.foreign_api_secret`.
+2. **Or ACLs** — `setfacl -m u:www-data:r,u:grinpool:r` on each file, and make both installers and
+   `grin_sync_pool_stratum` re-apply the ACL rather than a `chgrp`. Cleanest semantically; adds an
+   `acl` package dependency and a mount-option assumption.
+3. **Either way**, `grin_sync_pool_stratum` must stop issuing a blind `chgrp` and instead heal *only*
+   the case it was written for — a node rebuild that reset the file to `600 root:root` — leaving an
+   existing non-`root` group alone, exactly as `_gns_node_put` already does.
+
+**§J17:** on a box that has both products, `stat -c '%a %U:%G' <node dir>/.foreign_api_secret`,
+then `systemctl start grin-secret-sync.service` and stat it again. If the group flipped, this is
+confirmed live.
+
+---
+
+### J8-5 — [Low] The service journal writes the miner's full Grin address next to their raw mining IP on every stratum login — re-creating outside the DB the linkage §G1 removed inside it — **OPEN**
+
+**Threat actor: on-box readers of the journal** — root, and members of `systemd-journal`/`adm` —
+plus anyone who receives a host backup, a log export, or a journal forwarded off-box. Narrower than
+§G1's audience (`admin_audit_log` is readable by any admin session *and* its CSV export), which is
+why this is Low and not Medium.
+
+§G's opening claim is *"There are exactly three IP-bearing columns in `pool.db`"*, and its
+out-of-DB paragraph enumerates the other sinks: *"nginx `${POOL_SERVICE}-access.log` holds real IPs
+(unavoidable — fail2ban parses it; bounded by logrotate). `rate-limiter.js` / `ip-filter.js` keep
+IPs in in-memory Maps only, never persisted."* The pool's **own service journal** is not in that
+list, and it holds the one pairing nginx cannot produce — nginx never sees stratum, so the *mining*
+IP appears only here:
+
+```js
+console.log(`[${new Date().toISOString()}] Miner login: ${parsed.grin_address}.${parsed.worker_name} (${ip})`);
+```
+[lib/stratum-server.js:627](../../web/07_mining_pool_public/back-end-pool/lib/stratum-server.js#L627) —
+once per login, and per §J6-2 a rig re-logs in on every reconnect.
+
+That is the *exact* value `owner-proof.js` spends a 16 MB scrypt per capture to avoid storing
+(`miner_accounts.last_ip`), written in the clear beside the address it belongs to and a timestamp.
+Two more lines in the same class:
+
+- [:917](../../web/07_mining_pool_public/back-end-pool/lib/stratum-server.js#L917) —
+  `consecutive rejected submits from ${session.grinAddress} (${session.ip})`.
+- [lib/owner-proof.js:434](../../web/07_mining_pool_public/back-end-pool/lib/owner-proof.js#L434) —
+  full address, no IP. The comment there is careful to log *"the REASON (never the value)"* for the
+  password, which shows the redaction instinct was applied to the password and not to the address.
+
+Retention is journald's, not the pool's: `admin_audit_log` is pruned by
+`database.audit_log_keep_days` (default 180, floor 30) and the nginx log by logrotate, but the
+journal keeps whatever `SystemMaxUse`/`MaxRetentionSec` say — commonly months, and unbounded in
+time on a box that was never tuned.
+
+**Left OPEN deliberately, because closing it reverses a trade §G1 made on purpose.** §G1 chose
+*coarsen, don't hash* so incident response keeps *"group these events by origin"*, and it kept the
+throttle keyed on the full in-memory IP for the same reason. The journal's full IP has real
+operational value — it is how an operator identifies and `ufw deny`s an abusive rig, and there is
+no second copy of it. The options, for the operator to pick:
+
+1. **Coarsen the IP in these two lines** with the existing `coarsenIp()` (IPv4 `/24`, IPv6 `/48`),
+   matching §G1 exactly. Cheapest and consistent; costs the ability to ban a single address from the
+   log alone.
+2. **Keep the IP, truncate the address** to the head/tail form `/api/stratum/stats` already uses.
+   Keeps the ban workflow; weakens the linkage without removing it (a truncated address is still
+   matchable against a known address set).
+3. **Accept and bound it** — leave the lines alone and set `MaxRetentionSec=` on the journal, so the
+   exposure has an end date the way `audit_log_keep_days` gives one to the audit table.
+
+Whichever is chosen, §G / memory `project_pool_ip_privacy` should gain the journal as a **fourth**
+named sink, so the next reader of "exactly three IP-bearing columns" does not conclude the sweep
+was complete.
+
+---
+
+### J8-6 — [Info] Verified correct, with evidence
+
+Recorded so a later session does not re-derive them.
+
+| Question (plan §J8) | Result |
+|---|---|
+| **JWT secret at rest / in transit** | `pool.json` only, written `0600` by `pool_write_conf_key`'s `fs.chmodSync(path, 0o600)` ([07_grin_mining_public_pool.sh:229](../../scripts/07_grin_mining_public_pool.sh#L229)), `chown grinpool:grinpool` by `pool_deroot` ([:499](../../scripts/07_grin_mining_public_pool.sh#L499)). Never in the DB, never in a response, never in a log. Provenance / entropy / `expiresIn` were settled by §J2-8 — not re-checked here. |
+| **Wallet passphrase never in argv** | Confirmed on **both** consumers. `execWalletCommand` `spawn`s `grin-wallet` with an args array and writes the passphrase to `proc.stdin` ([lib/wallet-tor.js:214–252](../../web/07_mining_pool_public/back-end-pool/lib/wallet-tor.js#L214)); the generated listener launcher starts `owner_api` with **no** `-p` and the ECDH helper takes the passphrase as a **file path** ([07_lib_pool_wallet.sh:256–316](../../scripts/lib/07_lib_pool_wallet.sh#L256)). `.wallet_pass` is written `chmod 600` at both writers ([:602](../../scripts/lib/07_lib_pool_wallet.sh#L602), [:627](../../scripts/lib/07_lib_pool_wallet.sh#L627)) and `chown`ed to `grinpool` by `_pw_own_pass_file`. So the passphrase is not in `ps aux` — the trap CLAUDE.md flags. `-p` survives only in `init` and a one-shot `address` probe, already documented as bounded. |
+| **No secret reaches a response body** | Swept all ~180 routes. No handler serialises `config` (`grep` for `res.json(…config`, `...config`, `JSON.stringify(config)` → one hit, `adsManager.setConfig()`, which is ad layout). No handler returns `err.stack` — every `catch` is `err.message`. Two real leaks found and reported: J8-2 (fixed) and J8-3 (open). |
+| **`/api/admin/alerts/config`** | Correctly redacted — returns `{ email: !!…, discord: !!…, slack: !!… }`, booleans only ([index.js:5161–5171](../../web/07_mining_pool_public/back-end-pool/index.js#L5161)). |
+| **Settings audit diff** | Records **key names only**, never before/after values, with the reasoning written at the site ([lib/pool-settings.js:1410–1425](../../web/07_mining_pool_public/back-end-pool/lib/pool-settings.js#L1410)) and a regression test asserting it (`test-admin-guards.js:76–80`, which uses a literal `telegram_bot_token: '123456:SUPERSECRETTOKEN'`). |
+| **Node secret resolution + the de-rooting grant** | Three-step resolve — explicit value → explicit path → detected live node dir ([lib/grin-node.js:64–78](../../web/07_mining_pool_public/back-end-pool/lib/grin-node.js#L64)) — reading **by path**, so a node rebuild needs no copy kept in sync. `CHANGE_ME…` placeholders resolve to `''`. `_warnNoSecret` prints the path and the reason, **never the value**, and distinguishes EACCES (with the exact `chgrp`/`chmod` fix) from ENOENT ([:111–134](../../web/07_mining_pool_public/back-end-pool/lib/grin-node.js#L111)). The code's stated expectation — `640 root:grinsecret`, applied by `pool_deroot()` and re-applied by `grin_sync_pool_stratum()` — **matches what the shell sets**; the defect is that a second product sets something else (J8-4). |
+| **Poolstats API key** | Never logged (`updateApiKey` logs literally *"API key updated (never logged)"*); sent as `Authorization: Bearer` and never in the body or URL; endpoint forced to `https:` at `start()` or the reporter refuses to run; rotation persists atomically via a `{ mode: 0o600 }` temp file + `rename` that re-reads `pool.json` rather than dumping the merged in-memory config ([lib/poolstats-reporter.js:236–258](../../web/07_mining_pool_public/back-end-pool/lib/poolstats-reporter.js#L236)). One rough edge → J8-7. |
+| **Nostr identity key** | `fs.writeFileSync(this.keyFile, hex, { mode: 0o600 })` plus an explicit `chmodSync` ([lib/nostr-payout.js:441–442](../../web/07_mining_pool_public/back-end-pool/lib/nostr-payout.js#L441)); default path is `.nostr_payout_key` beside the DB. The log line names the **file**, not the key. Correctly scoped in its own comment: transport identity only, *"it can never sign a Grin slate, so a leak exposes metadata, not funds"*. |
+| **Telegram bot token in a URL** | The token is a **path segment** of `api.telegram.org/bot<token>/sendMessage`, but `postWebhook`'s rejection message is `HTTP ${statusCode}: ${body.slice(0,200)}` — the URL is not interpolated, and the caller wraps it as `Telegram delivery failed: ${err.message}`. So a delivery failure does not print the token. |
+| **Wallet-identity TOFU pin can't be silently re-pointed** | `adoptWalletIdentity` has exactly two callers. The admin one is `POST /api/admin/wallet/adopt-identity` — **`freshAdmin`**, refuses when the wallet is unreachable (*"you must not adopt a phantom"*), and writes a `wallet_adopt_identity` audit row carrying **both** `previous` and `adopted` ([index.js:2646–2660](../../web/07_mining_pool_public/back-end-pool/index.js#L2646)). The other is `probeWalletIdentity`'s documented trust-on-first-use, which fires only when the `wallet_identity` row is **absent** ([lib/reconciliation.js:361–386](../../web/07_mining_pool_public/back-end-pool/lib/reconciliation.js#L361)). Checked that nothing can make the row absent on a live pool: `retention.js` deletes from `shares`, `hashrate_history`, `alerts` and `admin_audit_log` only; `resetSection`/`resetAll` touch `pool_config` only; `db.js`'s two destructive migrations drop `admin_audit_log` and `blocks`. `wallet_identity` is never deleted. An unreachable wallet returns `{reachable:false}` **without mutating state**, so a wallet outage cannot re-pin. |
+| **Admin session token custody** | `httpOnly` + `sameSite:'strict'` cookies; `public_html/js/auth.js` uses `credentials:'include'` throughout and its header comment states the token is deliberately unreadable to JS. No `localStorage`/`sessionStorage` anywhere in `public_html/js/`. |
+| **Miner proof hashing** | Per-record random 16-byte salt, scrypt at 16 MB, format `v1$<saltB64>$<hashB64>`, compared with `crypto.timingSafeEqual` ([lib/owner-proof.js:197–228](../../web/07_mining_pool_public/back-end-pool/lib/owner-proof.js#L197)). No shared pepper to manage or back up. As described in memory `project_pool_ip_privacy`. |
+
+---
+
+### J8-7 — [Info] Two smaller notes from the same sweep
+
+**(a) `api_key_preview` publishes 11 of the poolstats key's characters.**
+`getStatus()` returns `` `${key.slice(0,7)}...${key.slice(-4)}` ``
+([lib/poolstats-reporter.js:190](../../web/07_mining_pool_public/back-end-pool/lib/poolstats-reporter.js#L190)),
+served by `GET /api/admin/poolstats` at `secureAdmin`. The intent is right — let the operator tell
+*which* key is loaded without showing it — but 11 characters is generous next to the usual 4, and
+several vendors' keys carry a fixed prefix, which makes the leading 7 nearly free. Suggest
+last-4 only. Low value either way: the reporter is off unless `poolstats_enabled: true`, which the
+installer never writes.
+
+**(b) The app directory's mode depends on which menu step ran last.** `1) Install` sets
+`chmod 700 "$POOL_APP_DIR"` and `4) Nginx` sets `chmod o+rx` on it. Re-running Install (the
+documented fix for a changed systemd unit) silently takes the directory back to `700`, at which
+point nginx can no longer traverse into `custom_assets/` and `uploads/` and every white-label logo
+and CMS image 404s until `4) Nginx` is re-run. Nothing warns. Worth folding into §J16 alongside
+J8-1's shell half — if `o+x` is set where the subdirectories are created rather than in the nginx
+step, the ordering stops mattering.
+
+---
+
+### Handoffs
+
+- **§J9 (settings & config integrity)** inherits J8-3's dead-section half. It is the same shape as
+  §J1-5 and §J5-9 but with credentials in it, and it is a **section**, not a key — so J9's sweep
+  should ask, per section, *"which keys in this section does `applyToConfig` actually copy?"* rather
+  than checking key-by-key. `alerts` is 0-for-9.
+- **§J13 (outbound calls & SSRF)** owns the rider on J8-3: `discord_webhook_url` /
+  `slack_webhook_url` / `telegram_bot_token` have **no validator**, and `postWebhook()` builds its
+  request from an operator-supplied `URL` with no host allowlist. Today that is inert because the
+  values never load; the moment J8-3 is "fixed" by wiring them up, a `secureAdmin` settings write
+  becomes an outbound-request primitive aimed at whatever the pool box can reach — including the
+  node's Owner API on loopback. **J13 must answer this before the wiring lands.**
+- **§J16 (deployment & infra)** owns three items from this session, all in the shell:
+  (1) J8-1's directory mode + `UMask=0077` on the unit + the chmod beside the installer helper's
+  chown; (2) J8-4's group tug-of-war — the fix is a policy choice between one shared group, ACLs,
+  or teaching `grin_sync_pool_stratum` to heal only `root:root`; (3) J8-7(b)'s Install-vs-Nginx
+  ordering. Also worth noting while in that file: `$POOL_LOG` gets a logrotate stanza and a
+  `postrotate systemctl kill -s USR2`, but **nothing writes to it** — the unit has no
+  `StandardOutput=append:`, so the service logs to the journal and the only writer of `$POOL_LOG`
+  is the weekly `VACUUM` cron's stdout. The rotation and the USR2 are both no-ops on a Node process.
+- **§J11 (public API leakage)** — the public `GET /api/account/:addr` was checked here for
+  proof-hash leakage and is clean (explicit response object, booleans only). J11 does not need to
+  re-derive that; what it still owns from this file is the address+balance question (§C1).
+- **§J17 (operational gate)** — three things only a box can settle. (1) **J8-1 is the one to stage**:
+  after a full install, `stat -c '%a %U:%G'` on `pool.db`, `pool.db-wal`, `pool.db-shm` and the app
+  directory. The fix is verified locally only in the sense that it *runs* — `chmod` is a no-op on
+  Windows (memory `reference_openssl_fd_pass_local`), so the mode itself has never been observed.
+  (2) **J8-4**: on a box with both Script 04 and the pool, stat `.foreign_api_secret`, run
+  `grin-secret-sync`, stat again. (3) **J8-3**: decide it before mainnet — if the answer is "wire
+  them up", a real test alert must arrive off-box *before* the money detectors are relied on.
+- **§G / memory `project_pool_ip_privacy`** should be amended with the journal as a fourth
+  out-of-DB IP sink (J8-5), whichever disposition is chosen.
+
+---
+
+### Verification
+
+- **`npm test` — full suite green**: `12 + 47 + 32 + 52 + 26 + 18` assertions plus 19
+  ownership-gate checks = **206 passed, 0 failed**, before and after this session's two fixes.
+  Same baseline as §J7.
+- **`node --check`** clean on both edited files.
+- **One-shot `initDb` probe** in the scratchpad (`node v24.14.1`, real `node:sqlite`): confirmed
+  `restrictDbFileModes()` runs without throwing and that **`-wal` and `-shm` both already exist** by
+  the time it is called, so all three files are covered. It reported `666` for all three — which is
+  MSYS/NTFS reporting, not a failure: `chmod` is a no-op on this machine. The probe deleted its own
+  fixture and exited on its own; no server was started and nothing was left running (CLAUDE.md
+  local-process rule).
+- Nothing was run against a VPS. All findings are **add-ons, NOT VPS-TESTED**.
+- **Gaps worth stating.** (1) **J8-1's mode change is unobservable locally** — the only proof
+  available here is that the call site executes and the files exist; §J17 must stat them on Linux.
+  (2) **No regression test was added for J8-2.** The existing suites are DB- and unit-level and this
+  is a route-level response shape, which needs the Express harness §J7 also did not build. The
+  standing check is `grep -n "SELECT \* FROM miner_accounts" index.js` returning nothing.
+  (3) J8-4 was established entirely by reading two installers and a timer; it has never been
+  observed happening.
+
+### Changed this session
+
+| File | Change |
+|---|---|
+| `lib/db.js` | J8-1 — new `restrictDbFileModes()`, called from `initDb` after `createSchema()`; chmods `pool.db`, `-wal` and `-shm` to `0600`, per-file guarded. Comment records why a process-wide `umask(0o077)` is the wrong instrument (it would mask asset-manager's deliberate `0o644`) |
+| `index.js` | J8-2 — `GET /api/admin/miners/:addr` moved off `SELECT * FROM miner_accounts` onto an explicit 23-column list; the six ownership-proof hash columns are dropped, their `*_at` timestamps and `pass_proof_state` kept |
+
+**Left open at the end of this session:** J8-3 (a decision — wire the alert credentials up *with*
+masking, or delete the fields; blocked on §J13's SSRF answer either way), J8-4 (§J16's file; a
+policy choice about which group owns a shared secret), and J8-5 (reverses a trade §G1 made
+deliberately, so the operator picks the disposition). J8-1's shell half is defence-in-depth on a
+disclosure the code fix already closes.
+
+---
+
+## §J9 — Settings & config integrity (2026-09-02, add-ons, NOT VPS-TESTED)
+
+Ninth session of the pre-mainnet §J pass (plan:
+[`script07_reference_audit_session_plan.md`](script07_reference_audit_session_plan.md) §J9).
+Scope: `lib/config.js` (275 lines), `lib/pool-settings.js` (1,556 lines),
+`GET|POST /api/admin/settings/:section` + `/restore`, and the `.config.sha256` integrity check.
+The brief is memory `project_config_loader_type_traps` — the two traps found and fixed in Script
+052 and recorded there as *"same shape unaudited"* here.
+
+Method: enumerate the schema mechanically rather than by eye — every key in
+`PoolSettings.defaults`, its validator (or absence), the shape of every read site, and whether
+`applyToConfig` or any consumer ever sees it. Then walk the write path (`updateSection`, the
+step-up decision, `resetSection`) and the boot path (`loadConfig` → `validateConfig` ×2 →
+`hashConfig` → `mergeDbSettings`).
+
+**Headline — trap 1 is closed everywhere; trap 2 is open exactly where §J1-6 and §J7-8 said; and
+the real problem in this file is neither of them.**
+
+*Trap 1 ("a quoted `false` is truthy") does not exist here.* Every one of the 22 boolean-shaped
+settings keys is read through `v === true || v === 'true'` — `flag()` in `incentives.js`,
+`lottery.js` and `dormancy.js`, the inline pair in `retention.js` and `networkMapPublic()`,
+`String(...) === 'true'` in `totpIsMandatory()`, and the coercion boundary in `buildPublicConfig()`
+that means the front-end never sees a string at all. The admin panel's checkbox binding uses the
+identical test, so the panel and the server cannot disagree about a switch. That is a genuinely
+clean result and it was checked key by key, not assumed (§J9-9).
+
+*Trap 2 is present, and §J7-8 was right that it is worse than a junk row.* Fixed here — it was
+already assigned to this session by §J1-6's handoff.
+
+*But the finding that matters is that the settings surface offers an access control it does not
+have.* `pool_visibility: private` + `address_whitelist` + `max_miners` are validated, audited,
+persisted, rendered in a purpose-built UI ("Private (whitelisted only)"), and placed in
+`STEP_UP_SETTINGS_KEYS` — the highest gate this surface has, the one whose whole point is to
+survive a stolen session. **Nothing reads any of them.** The stratum login gate checks
+`is_banned` and nothing else (J9-1).
+
+*And the step-up gate protecting the keys that ARE live can be walked past* with a hex literal,
+because the "did this value actually change?" comparison uses `Number()` while every validator
+uses `parseFloat`/`parseInt` (J9-2).
+
+Seven findings plus an Info sweep. **Six were fixed in this session** (J9-2, J9-3's gating half,
+J9-4, J9-5, J9-7 — all small and local, plan rule 3 — and then **J9-1 by deletion**, decided after
+the write-up below), with 38 new assertions in `scripts/test-admin-guards.js`. **J9-6** is left for
+a decision because it is a choice about what the product should do, not a defect with one right
+answer.
+
+### Threat actors used in this section
+
+| Label | Means |
+|---|---|
+| **Anonymous internet** | Anyone who can reach `:3333` or the public API. No credential of any kind |
+| **Stolen admin session** | A `secureAdmin` access token taken from an operator's browser. Per §C3 it survives logout, password change and *Revoke sessions* until it expires (≤24 h) |
+| **Logged-in admin** | A legitimate `secureAdmin`/`freshAdmin` session. Already able to move money, so a finding here is robustness or a durable self-inflicted outage, never escalation |
+| **On-box root** | Reads and writes `pool.json` by definition. Reported only where a control *claims* to detect it |
+| **The system** | No attacker. A typo, a restart, an install order |
+
+### Findings
+
+### J9-1 — [High] `pool_visibility`, `address_whitelist`, `max_miners` and `mining_mode` are enforced by nothing — a "Private (whitelisted only)" pool is fully open, and the step-up gate on those keys is what makes it look real — **FIXED BY DELETION 2026-09-02**
+
+**Threat actor: anonymous internet.** No credential is needed to defeat this, because there is
+nothing to defeat.
+
+Four keys in `pool_info` describe who may mine and how many of them:
+
+| Key | Default | Validator | UI | In `STEP_UP_SETTINGS_KEYS`? | Read by |
+|---|---|---|---|---|---|
+| `pool_visibility` | `'public'` | yes — `public\|private\|maintenance` | `<select>`: *"Private (whitelisted only)"* | **yes** | **nothing** |
+| `address_whitelist` | `'[]'` | none | a dedicated add/remove list manager | **yes** | **nothing** |
+| `max_miners` | `0` | yes — integer ≥ 0 | number input, *"0 = no limit"* | **yes** | **nothing** |
+| `mining_mode` | `'stratum'` | yes — `stratum\|solo` | `<select>` | no | **nothing** |
+
+Evidence, run over the whole product tree (`web/07_mining_pool_public/`, `--include=*.js
+--include=*.html --include=*.json`, `node_modules` excluded). Every hit for all four names is one
+of: the `defaults` block, the `validators` block, the admin form, `STEP_UP_SETTINGS_KEYS`, or the
+existing test that asserts they are in that Set. There is no consumer:
+
+```
+index.js:6299   'address_whitelist',  // who is allowed to mine here     <- the gate list
+index.js:6300   'max_miners',
+index.js:6301   'pool_visibility',
+settings-common.js:333   whitelistGroup.style.display = visibility.value === 'private' ? …
+settings-pool-info.html:53   <select id="pool_visibility">  … Private (whitelisted only)
+test-admin-guards.js:124   … .every(k => gated.includes(k))
+```
+
+The stratum login path is where an allow/deny decision would have to live, and the only moderation
+gate it has is the per-address ban:
+
+```js
+// lib/stratum-server.js:563 — the ONLY check between a login frame and a session
+// Moderation gate: a banned address is refused before a session is created …
+```
+([stratum-server.js:563–571](../../web/07_mining_pool_public/back-end-pool/lib/stratum-server.js#L563))
+
+`buildPublicConfig()` does publish `pool.visibility` at `/api/public/branding`
+([pool-settings.js:1188](../../web/07_mining_pool_public/back-end-pool/lib/pool-settings.js#L1188)),
+so the value leaves the box — but no page in `public_html/js/` reads it either. It is a label on a
+JSON response.
+
+**Why this is High and the other dead keys in this pass are Low.** §J1-5 (`admin_ip_allowlist`),
+§J5-9 (`confirm_depth_*`, since fixed) and §J8-3 (`alerts`) are all keys an operator can set and
+see persist while nothing happens. This one is different in three ways:
+
+1. **It is an access control, and the alternative to it working is "anyone in the world can mine
+   here".** An operator running a private pool for a known set of addresses gets no error, no
+   warning, and a whitelist UI that stores their entries.
+2. **The step-up gate is affirmative evidence that it is real.** These four keys were deliberately
+   singled out of an otherwise cosmetic section and put behind password re-auth + mandatory 2FA,
+   with the comment *"pool_info … also carries the pool's cut and who may mine at all"*
+   ([index.js:6296](../../web/07_mining_pool_public/back-end-pool/index.js#L6296)). An operator
+   who is challenged for a TOTP code when they edit a field has been told that field matters.
+3. **`max_miners` is also the pool's only stated admission bound.** §J6 and §J12 both reason about
+   connection caps; this is the one an operator would reach for, and it is not wired to anything.
+
+**Fixed by deletion.** Three options were written up here — (a) delete the keys and the UI,
+(b) enforce them in `stratum-server.js` beside the ban check, (c) enforce visibility/whitelist and
+delete `max_miners` + `mining_mode`. **(a) was chosen.** The deciding argument is below, and it is
+a stronger one than this finding first gave for (a) ("smallest, honest").
+
+**Partial enforcement would have been worse than none.** "Private" is a product mode, not a login
+check. Wiring only the stratum gate leaves a private pool publishing every member's address,
+balance and hashrate through `/api/pool/miners` (memory `project_pool_ip_privacy` records that
+leak as still open), the public leaderboard, `miners-stats.html` and the fortune board. The
+operator would get a control that works in the one place they can see it and fails in every place
+they cannot — a deeper deception than the current honest-because-total failure, and one that only
+surfaces after someone has already trusted it.
+
+Two supporting facts, both checked after the finding was first written:
+
+- **No design commitment existed.** `pool_visibility`, `address_whitelist` and `max_miners` appear
+  in **no** design doc and in no shipped CMS copy (`script07_design.md`'s "whitelist" hits are
+  Nostr destination whitelisting and the *solo* private pool, a different product). This was schema
+  scaffolding written early and never wired — there was no promised feature to honour.
+- **`max_miners` should not be built at all.** A global admission cap is a self-DoS lever: an
+  attacker opens `max_miners` connections — logins, no valid share required — and no legitimate
+  miner can join. §J6-3 already rated a *weaker* version of this High (a leaking per-IP counter
+  permanently locking out a shared NAT). Per-IP connection caps are the correct instrument; a
+  global one is strictly worse than what already ships.
+
+Enforcement was genuinely cheap — `stratum-server.js` already `require`s `IncentivesManager`,
+which builds its own `PoolSettings` via `getDb()`, so the wiring is two lines, and
+`owner-proof.js`'s `extraBannedSet()` 60 s in-process cache is the established pattern for a
+cached settings read on a hot path; about 25 lines at
+[stratum-server.js:563](../../web/07_mining_pool_public/back-end-pool/lib/stratum-server.js#L563).
+Cheapness was not the constraint. The design gap was, and 25 lines do not close it.
+
+**Six keys were deleted, not four.** `access.invite_codes_enabled` and `access.invite_codes`
+(§J9-8) are the same unbuilt gated-membership idea one section over, and went with them.
+
+| Site | Change |
+|---|---|
+| `lib/pool-settings.js` `defaults.pool_info` | 4 keys removed, replaced by a comment recording why they must not return unwired |
+| `lib/pool-settings.js` `defaults.access` | `invite_codes_enabled`, `invite_codes` removed |
+| `lib/pool-settings.js` `validators.pool_info` | `pool_visibility`, `mining_mode`, `max_miners` validators removed |
+| `lib/pool-settings.js` `buildPublicConfig` | `pool.visibility` no longer published (no page read it) |
+| `index.js` `STEP_UP_SETTINGS_KEYS` | 3 entries removed; `pool_fee_percent` stays |
+| `admin-panel/settings-pool-info.html` | the whole "Visibility & Mining" section; `max_miners` out of Pool Economics |
+| `admin-panel/settings-access.html` | the invite-codes checkbox |
+| `admin-panel/settings-common.js` | `updatePoolVisibilityUI()`, its `change` listener, its `populateForm` call, `addToWhitelist()` |
+| `scripts/test-admin-guards.js` | the old 4-key gated assertion replaced by 12 that hold all six out of **both** `defaults` and the step-up set |
+
+Orphan `pool_config` rows on an already-deployed pool are inert once the keys are gone — the same
+disposition §J1-5 chose. Maintenance mode is unaffected: it lives on the Announcements tab and
+never used `pool_visibility`'s vestigial third enum value.
+
+**If a private pool is wanted later**, it goes through `script07_design.md` as a designed feature
+covering the stratum gate **and** the public API/leaderboard surface **and** the two questions
+these four keys never answered: what happens to a removed member's existing balance, and whether
+the whitelist gates withdrawals as well as mining.
+
+---
+
+### J9-2 — [Medium] The step-up gate on `pool_fee_percent` compares with `Number()` while the validator parses with `parseFloat`, so `0x1` reads as "unchanged" against a stored `1` and then stores `0` — the pool fee goes to zero on a plain `secureAdmin` session — **FIXED 2026-09-02**
+
+**Threat actor: stolen admin session.** This defeats the exact control that exists to make a stolen
+token less useful than a live operator.
+
+`POST /api/admin/settings/:section` demands step-up in two cases: the section is in
+`STEP_UP_SETTINGS_SECTIONS`, or `criticalSettingChanged()` says a key in `STEP_UP_SETTINGS_KEYS`
+actually moved ([index.js:6353–6373](../../web/07_mining_pool_public/back-end-pool/index.js#L6353)).
+`pool_info` is **not** a step-up section, so for `pool_fee_percent` the whole gate is
+`settingValueUnchanged()`. As found:
+
+```js
+const na = Number(sa), nb = Number(sb);
+if (sa !== '' && sb !== '' && Number.isFinite(na) && Number.isFinite(nb)) return na === nb;
+```
+
+`Number()` accepts `0x`/`0b`/`0o` literals. Every numeric validator in `pool-settings.js` uses
+`parseFloat` or `parseInt(v, 10)`, which stop at the `x`. The two disagree, and the comparison is
+the half that decides whether a TOTP code is demanded. Demonstrated against the real function and
+the real validator, both read out of the source:
+
+```
+submitted   stored  step-up skipped?  validator stores
+0x10        16      true              0
+0X10        16      true              0
+0b1010      10      true              0
+0o12        10      true              0
+0x1         1       true              0
+```
+
+So against the shipped default fee of `1.0`, a single request:
+
+```
+POST /api/admin/settings/pool_info      Cookie: <stolen secureAdmin token>
+{"pool_fee_percent":"0x1"}
+```
+
+returns `200`, writes `pool_config` row `pool_info.pool_fee_percent = 0` (`value_type=number`),
+`applyToConfig` copies it into `config.pool_fee_percent` at the next restart, and no password
+re-auth and no TOTP code was asked for. The audit row **is** written (§J1-2's fix), naming
+`pool_fee_percent` — so it is detectable after the fact, which is why this is Medium and not High.
+
+Direction matters: `parseFloat` is a prefix parse, so it is always ≤ `Number` on these literals.
+The bypass drives a value **down to 0**, never up. For `pool_fee_percent` that is the pool giving
+away its own cut; for `max_miners` it means "unlimited" (moot, per J9-1). It is not a path to
+crediting an attacker.
+
+The function's own comment already states the right policy — *"Ambiguity resolves to 'changed' — a
+false positive costs one extra TOTP prompt, a false negative silently lets the fee move on a plain
+session."* The bug is that a hex literal was not recognised as ambiguous.
+
+**Fixed** — the numeric branch now requires both sides to be plain decimal, and anything else falls
+through to the string compare, which reads as changed:
+
+```js
+const plainDecimal = (v) =>
+  typeof v === 'number' || /^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/.test(String(v));
+const na = Number(sa), nb = Number(sb);
+if (sa !== '' && sb !== '' && plainDecimal(sa) && plainDecimal(sb) &&
+    Number.isFinite(na) && Number.isFinite(nb)) return na === nb;
+return String(sa) === String(sb);
+```
+
+Re-run: `0x1`/`0b1010`/`0o12` are all CHANGED; `'1.0'` vs `1` and `' 1.50 '` vs `1.5` still skip
+step-up (a cosmetic save must not prompt); `'2'` vs `1` still prompts; the structural JSON branch is
+untouched. Five assertions added.
+
+---
+
+### J9-3 — [Medium] `custom_theme` is the fourth operator-authored CSS sink in `branding`, and it was the only one that was neither step-up gated nor skipped on the admin login page — **GATE + VALIDATOR FIXED 2026-09-02; the credential-page half is §J15's**
+
+**Threat actor: stolen admin session.** Same actor and same shape as §J1-1, which this is a hole in.
+
+§J1-1 established that operator-authored script/CSS sinks in the *cosmetic* sections are not
+cosmetic, because `public_html/login.html` — the admin credential page — loads `branding.js`. Its
+fix did two things: put the sinks in `STEP_UP_SETTINGS_KEYS`, and make `branding.js` skip them on
+credential pages. `branding` contributes three keys to that fix: `custom_css`, `font_family`,
+`font_url`.
+
+There is a fourth. `custom_theme` is a JSON map of CSS variable → value, and `applyTheme()` writes
+every entry onto **both** `<html>` and `<body>`:
+
+```js
+function setVar(name, value) {
+  root.style.setProperty(name, value);
+  if (document.body) document.body.style.setProperty(name, value);
+}
+var custom = brand.custom_theme || {};
+Object.keys(custom).forEach(function (k) {
+  if (!custom[k]) return;
+  var name = k.charAt(0) === '-' ? k : '--' + k;
+  setVar(name, custom[k]);
+});
+```
+([branding.js:320–330](../../web/07_mining_pool_public/public_html/js/branding.js#L320))
+
+Two problems, both verified by reading the file:
+
+1. **It sits ABOVE the `isCredentialPage()` guard.** That guard begins 30 lines later, at the
+   comment *"Operator-authored CSS sinks — skipped on credential pages (§J1-1)"*
+   ([branding.js:357](../../web/07_mining_pool_public/public_html/js/branding.js#L357)), and wraps
+   `font_url`, `font_family` and `custom_css`. `custom_theme` is applied unconditionally, on
+   `login.html` included.
+2. **It was at `secureAdmin`.** `branding` is not a step-up section and `custom_theme` was not in
+   `STEP_UP_SETTINGS_KEYS`, so writing it needed only a live access token — no password re-auth, no
+   TOTP, on a pool with mandatory 2FA on.
+
+And the validator, as found, checked one thing:
+
+```js
+custom_theme: (val) => {
+  if (typeof val === 'object' && val !== null) return JSON.stringify(val);
+  if (typeof val === 'string') { … try { JSON.parse(val); } … return val; }
+  return '{}';
+},
+```
+
+No key allowlist, no value type check, no length cap, no count cap. That matters because a CSS
+custom property is a raw token stream — whatever consumes it via `var()` decides what it means, and
+`dashboard.css` consumes these variables in `background:` **shorthands** (`background: var(--bg-elev,
+transparent)` at [dashboard.css:104](../../web/07_mining_pool_public/public_html/css/dashboard.css#L104),
+and ~40 more). A `url(…)` value therefore becomes an outbound request from every page that renders
+it — the admin login page among them, which reports each visit, with an attacker-chosen path, to an
+attacker-chosen origin. CSS cannot capture a keystroke; §J1-1 already recorded why that is not the
+bar (*"it can hide the 2FA prompt or overlay a misleading form"*).
+
+**Fixed, both halves that live in this session's scope:**
+
+- `custom_theme` added to `STEP_UP_SETTINGS_KEYS`
+  ([index.js:6311+](../../web/07_mining_pool_public/back-end-pool/index.js#L6311)), with the reason
+  written at the entry so it is not tidied out as a branding field.
+- The validator now requires a flat object; ≤200 entries; keys matching
+  `/^[A-Za-z0-9_-]{1,64}$/` **and not starting with `-`** (a leading `-` is the one shape
+  `applyTheme` passes through raw, and `setProperty('-webkit-…')` sets a *real* property, not a
+  custom one); string/number values ≤200 chars; and no `url(`, `expression(` or angle brackets.
+  An imported `--accent` is normalised to `accent` rather than rejected.
+
+**Deliberately NOT normalised to the `--` form.** The admin theme builder stores keys un-prefixed
+(`THEME_VARS` / `data-var` at
+[settings-common.js:621–644](../../web/07_mining_pool_public/back-end-pool/admin-panel/settings-common.js#L621))
+and reads them back by that exact name. A first draft of this fix rewrote keys to `--accent`, which
+would have made `populateThemeBuilder()` miss every saved colour and the next Save silently wipe the
+operator's theme. The stored shape is unchanged, so there is no migration and no spurious step-up
+prompt on the first save after this change.
+
+**Handoff to §J15:** the `branding.js` half is not fixed here — `custom_theme` still applies on
+credential pages. The validator now bounds what can be in it, but the structural fix is to move the
+`custom_theme` loop *inside* the existing `isCredentialPage()` block, next to `custom_css`. That is
+§J15's file, and `test-branding-sinks.js` already has the jsdom harness and the section-[2] pattern
+to assert it.
+
+---
+
+### J9-4 — [Medium] Three settings validators guard on `isNaN()`, so `min_withdrawal = Infinity` persists — every payout rail refuses forever, it survives restart, and the admin panel renders it as an empty field — **FIXED 2026-09-02**
+
+**Threat actor: logged-in admin / the system.** A one-token typo or paste. §J7-5 fixed this class on
+four *route* inputs and explicitly did not cover `pool-settings.js`, which is this session's file.
+
+`parseFloat('Infinity')` is `Infinity`; so is `parseFloat('1e400')`. `isNaN(Infinity)` is `false`.
+Three validators had no upper bound to catch it:
+
+| Validator | Guard as found | `'Infinity'` → |
+|---|---|---|
+| `payout.min_withdrawal` | `isNaN(n) \|\| n <= 0` | **accepted** |
+| `incentives.join_bonus_amount` (`nonNeg`) | `isNaN(n) \|\| n < 0` | **accepted** |
+| `incentives.jackpot_amount` (`nonNeg`) | `isNaN(n) \|\| n < 0` | **accepted** |
+| `pool_info.pool_fee_percent` | `… n > 50` | throws |
+| `payout.withdrawal_fee` | `… n > 1` | throws |
+| `incentives.*_percent` (`percent`) | `… n > 100` | throws |
+| every `intRange` / `parseInt` key | `parseInt('Infinity')` is `NaN` | throws |
+
+Run against the real validators:
+
+```
+payout.min_withdrawal          "Infinity" -> Infinity   finite=false
+incentives.join_bonus_amount   "Infinity" -> Infinity   finite=false
+incentives.join_bonus_amount   "1e400"    -> Infinity   finite=false
+incentives.jackpot_amount      "Infinity" -> Infinity   finite=false
+```
+
+`min_withdrawal` is the one that bites. Follow it through:
+
+1. `updateSection` stores `valueStr = 'Infinity'`, `value_type = 'number'`
+   ([pool-settings.js:1408–1416](../../web/07_mining_pool_public/back-end-pool/lib/pool-settings.js#L1408)).
+2. `getSection` reads it back with `parseFloat` → `Infinity`.
+3. `applyToConfig` copies it: `config.min_withdrawal = payout.min_withdrawal`
+   ([pool-settings.js:1536](../../web/07_mining_pool_public/back-end-pool/lib/pool-settings.js#L1536)).
+   The cross-field guard right above it is `config.withdrawal_fee >= config.min_withdrawal` —
+   `0.04 >= Infinity` is false, so the guard does not fire.
+4. Neither `validateConfig` sees it. `lib/config.js`'s runs *before* `mergeDbSettings`, and its test
+   is `min_withdrawal <= 0`; `index.js`'s does not check the key at all.
+5. Every rail then reads `const minW = this.config.min_withdrawal || 25.0;` — `Infinity` is truthy,
+   so `minW` is `Infinity` and **every** withdrawal request is refused, on Tor, slatepack and Nostr
+   alike ([withdrawal-scheduler.js:698, 787, 938](../../web/07_mining_pool_public/back-end-pool/lib/withdrawal-scheduler.js#L698)).
+
+It is durable (a `pool_config` row, re-applied on every boot) and it is **invisible**:
+`JSON.stringify(Infinity)` is `null`, so `GET /api/admin/settings/payout` sends
+`"min_withdrawal": null` and the panel renders an **empty** Minimum Withdrawal box. The operator
+sees a blank field, not a broken one — §J7-5's point 2, reached through the settings surface.
+
+The two incentives keys are currently blocked one layer down: `maybePayJoinBonus` and
+`payBlockFinderJackpot` both call `debitPrizePool(amount, …)`, whose overdraw check
+`prizePoolBalance() < Infinity` is true, so the credit is refused and no balance is corrupted
+([incentives.js:264–280, 309–330](../../web/07_mining_pool_public/back-end-pool/lib/incentives.js#L264)).
+That is luck, not defence — §J7-5 established that this is exactly the guard that stops working the
+moment any bucket holds `+Inf`.
+
+**Fixed** — all three now use `Number.isFinite`, with the error text saying "finite":
+
+```js
+if (!Number.isFinite(n) || n <= 0) throw new Error('min_withdrawal must be a finite number > 0');
+…
+if (!Number.isFinite(n) || n < 0) throw new Error(`${name} must be a finite number >= 0`);
+```
+
+Five assertions added, including a control that `'25'` and `'0.5'` still validate.
+
+---
+
+### J9-5 — [Low] §J1-6 and §J7-8's prototype-walking schema lookups — **FIXED 2026-09-02**
+
+Not a new finding: this is the fix §J1-6 handed to this session and §J7-8 asked to be treated as
+required rather than tidy-up. Recorded here only so the two open items can be closed.
+
+Both gates walked `Object.prototype`: `if (!PoolSettings.defaults[section])` accepted
+`constructor`, `toString`, `valueOf`, `__proto__` and `hasOwnProperty`; `if (!(key in
+PoolSettings.defaults[section]))` accepted `name`, `length`, `call`, `toString`. §J7-8's point
+stands and is the reason this is a fix and not a shrug: the key gate is the one settings write that
+produces **no** `admin_audit_log` row, because the diff is taken over `Object.keys(afterState)` and
+a prototype key never appears there.
+
+**Fixed** with two own-property helpers used at all four call sites — `getSection`, `updateSection`
+(section + key), `resetSection`:
+
+```js
+const hasSection = (section) =>
+  Object.prototype.hasOwnProperty.call(PoolSettings.defaults, section) &&
+  PoolSettings.defaults[section] !== null && typeof PoolSettings.defaults[section] === 'object';
+const hasKey = (section, key) =>
+  Object.prototype.hasOwnProperty.call(PoolSettings.defaults[section], key);
+```
+([pool-settings.js:55–60](../../web/07_mining_pool_public/back-end-pool/lib/pool-settings.js#L55))
+
+The `typeof === 'object'` half is not decoration: without it a future own-property that happens to
+be a function or a string would pass the section gate and then be spread into `{}`.
+
+Verified against the real class: all five prototype names are refused by `getSection`,
+`updateSection` and `resetSection`, all five are refused as keys, and `pool_info` / `pool_name`
+still work. Eleven assertions added. **§J1-6 and §J7-8 are closed by this.**
+
+---
+
+### J9-6 — [Low] The `.config.sha256` integrity check overwrites its own baseline on the same startup that detects tampering, so the evidence survives exactly one restart — **OPEN**
+
+**Threat actor: on-box root** — which by rule 7 is an Info note, except that this control's entire
+reason to exist is to detect that actor, and §B's residual-risk section accepts on-box compromise
+as catastrophic precisely because tamper-*evidence* is one of the few things left.
+
+```js
+const configHash = hashConfig(config);
+const hashFile = '.config.sha256';
+if (fs.existsSync(hashFile)) {
+  const savedHash = fs.readFileSync(hashFile, 'utf-8').trim();
+  if (savedHash !== configHash) {
+    console.warn('[SECURITY] Config file modified since last startup! Verify changes are intentional.');
+  }
+}
+fs.writeFileSync(hashFile, configHash, 'utf-8');
+```
+([index.js:405–413](../../web/07_mining_pool_public/back-end-pool/index.js#L405))
+
+Five things are wrong with it, in descending order:
+
+1. **It re-anchors to the tampered value unconditionally.** The `writeFileSync` is outside the
+   `if`, so the mismatch is reported once and the new hash becomes the baseline. Restart again and
+   the pool reports clean. An attacker who edits `pool.json` and restarts twice — or who edits it
+   while the service is already restarting for another reason — leaves no trace at all.
+2. **The only output is `console.warn`.** No `alerts` row, no `admin_audit_log` row, nothing on the
+   admin dashboard. Per §J8-3 the alert delivery channels are inert anyway, so nothing reaches the
+   operator off-box. It lands in the journal beside the startup banner and scrolls away.
+3. **It hashes the wrong object.** `hashConfig` runs on the **merged** config — `mergeEnvVars`
+   output, so the systemd `PORT`/`HOST` environment and every per-network default are inside the
+   hash. A unit-file edit or a toolkit upgrade that adds a default key trips it. A detector that
+   cries wolf on routine maintenance is one the operator learns to ignore, which makes #1 and #2
+   worse rather than being a separate problem.
+4. **It covers the wrong values.** It runs *before* `mergeDbSettings`
+   ([index.js:405 vs 423](../../web/07_mining_pool_public/back-end-pool/index.js#L423)), so
+   `pool_fee_percent`, `min_withdrawal`, `withdrawal_fee`, the confirm depths and the Nostr NIP-05
+   allowlist — every value that governs money at runtime — are outside its coverage. Those live in
+   `pool_config`, where the real integrity control is §J1-2's audit row.
+5. **The baseline is stored in a different directory from the file it describes.** `hashFile` is
+   relative, so it resolves against the unit's `WorkingDirectory=$POOL_APP_DIR`
+   (`/opt/grin/pubpool/<net>/`), while the config is `GRIN_POOL_CONF=/opt/grin/conf/grin_pubpool*.json`
+   ([07_grin_mining_public_pool.sh:640–644](../../scripts/07_grin_mining_public_pool.sh#L640)).
+   Redeploying the app directory drops the baseline, and `existsSync` then makes the check a silent
+   no-op — the same "absent reads as clean" shape as #1.
+
+**Not fixed — the useful version is a different control, not a patch.** The minimal honest change
+is: hash the raw file bytes rather than the merged object, keep the baseline beside the config,
+refuse to overwrite it on a mismatch (write `.config.sha256.new` instead), and raise an `alerts`
+row so it reaches the dashboard §J5-8 built. That is four decisions about operator workflow — in
+particular whether a mismatch should keep warning on every restart until the operator acknowledges
+it, which is the only version that actually detects anything. The alternative, equally defensible,
+is to delete the check: it is 9 lines that currently provide reassurance rather than detection, and
+§J1-2's audit trail already covers the settings that matter.
+
+---
+
+### J9-7 — [Low] The pool's only fail-open security switch failed open in complete silence — **FIXED 2026-09-02**
+
+**Threat actor: the system.** This answers §J2's handoff (*"whether a settings-read failure should
+be loud is J9's question"*).
+
+The enumeration the plan asked for. Every security-relevant switch, and what it does when the
+settings read fails:
+
+| Switch | Read shape | On read error | Verdict |
+|---|---|---|---|
+| `access.require_admin_totp` | `String(…) === 'true'` ([index.js:817](../../web/07_mining_pool_public/back-end-pool/index.js#L817)) | **fail OPEN** — 2FA optional | correct, was **silent** |
+| `access.network_map_public` | `=== true \|\| === 'true'` | fail closed — feed 404s | correct |
+| `access.session_timeout_hours` / `_absolute_hours` | `sessionPolicyProvider` | falls back 1 h idle / 12 h absolute | correct |
+| `access.extra_banned_passwords` | raw `pool_config` row, 60 s cache | fail open to the hardcoded seed | correct — additions-only by design |
+| `payout.tor_preflight_gate` | `config` (startup) | fail open | deliberate; §J4-7 made it non-silent |
+| `payout.dormancy_enabled` | `flag()` | throws → no sweep | fail closed |
+| `database.retention_enabled` | `=== true \|\| === 'true'` | throws → no prune | fail closed |
+| `incentives.*` | `flag()` | throws → no credit | fail closed |
+| `criticalSettingChanged` | `getSection` in `try` | `return true` → demand step-up | fail closed, and commented as such |
+
+One fail-open switch, and the reasoning behind it is right — failing closed would brick every
+step-up endpoint, *including the ones needed to repair the settings*, on a transient DB error, and
+the break-glass CLI would be the only way back. Keep it.
+
+But it said nothing. A `getSection('access')` failure silently downgraded a pool from mandatory 2FA
+to optional 2FA with no log line, no alert and no audit row — and because `totpIsMandatory()` is
+called per-request from `requireTotpEnrolled` and `stepUpRefused`, the downgrade lasts exactly as
+long as the DB problem and then heals, leaving nothing behind.
+
+**Fixed** — the catch now logs, throttled to one line a minute so a persistently broken DB cannot
+flood the journal on a per-request read:
+
+```js
+console.error(
+  `[SECURITY] access.require_admin_totp is unreadable (${e.message}) — mandatory 2FA ` +
+  `is being treated as OFF until the settings read succeeds. Check the database.`
+);
+```
+
+An `alerts` row would be better than a log line and is the natural home for it, but per §J8-3 that
+section currently delivers nowhere; this is the honest version until that is settled.
+
+---
+
+### J9-8 — [Low] The `applyToConfig` coverage sweep the plan asked for: 13 more keys that round-trip through the UI and reach no consumer, and no length cap on any settings value — **OPEN**
+
+**Threat actor: the system.** Operator deception and unbounded growth, not privilege.
+
+§J5's handoff asked for a mechanical check: *"every key in `PoolSettings.defaults` that is neither
+in `applyToConfig` nor read directly from `pool_config` by a consumer."* §J8's asked for it
+per-section rather than per-key. Both, run over `index.js` + all 40 `lib/` modules + the consumer
+half of `pool-settings.js`:
+
+| Section | Keys | Reached by a consumer | Dead / shadowed |
+|---|---|---|---|
+| `pool_info` | 14 | 10 | **4** — `pool_visibility`, `address_whitelist`, `max_miners`, `mining_mode` → **J9-1, DELETED this session** |
+| `branding` | 24 | 20 | 4 — `logo_file`, `logo_dark_file`, `favicon_file`, `pool_theme` (superseded by AssetManager / `default_theme`) |
+| `seo` | 16 | 15 | 1 — `og_image_file` (as above) |
+| `analytics` | 12 | 12 | 0 |
+| `payout` | 20 | 17 | **3** — `auto_payout`, `payout_frequency`, `withdrawal_retry_delays` |
+| `access` | 11 | 7 | **4** — `invite_codes_enabled`, `invite_codes` (**DELETED this session**, with J9-1), plus `admin_ip_allowlist` / `admin_ip_blacklist` (§J1-5, still open) |
+| `alerts` | 9 | 0 | **9** — the whole section, §J8-3, still open |
+| `incentives` | 20 | 19 | 1 — `lottery_min_shares` (documented legacy) |
+| `notices` | 4 | 4 | 0 |
+| `database` | 7 | 7 | 0 |
+| `pages` | 6 | 0 | legacy — the `pages` CMS table superseded it; `db.js migratePagesFromConfig` reads it once, behind a marker |
+
+New in this pass, beyond J9-1 and the two already-open items:
+
+- **`payout.auto_payout` + `payout.payout_frequency`** — an automatic-payout switch and a
+  `manual|hourly|daily|weekly` schedule, both with a UI, both read by nothing. There is no
+  auto-payout loop in `withdrawal-scheduler.js`; every payout starts from a miner request or an
+  admin action. The default is `false`/`manual`, so the *safe* direction is the one that works: an
+  operator who turns it on gets nothing, never the reverse. Low — but it is a money-settings field
+  promising automation the pool does not have.
+- **`payout.withdrawal_retry_delays`** — editable in the panel, validated by nobody, and shadowed:
+  `applyToConfig` never copies it, so the scheduler keeps reading `pool.json`'s array. A third
+  variant of the §J5-9 shape (validated by nobody *and* applied by nobody).
+- **`access.invite_codes_enabled` + `invite_codes`** — same shape as §J1-5's two orphans, in the
+  same section. **Deleted with J9-1** rather than waiting on §J1-5: they are the same unbuilt
+  gated-membership idea as the whitelist keys, so they belonged to that decision, not to §J1-5's
+  IP-allowlist one.
+
+**No length cap anywhere.** This answers §J7-10's question. `updateSection` bounds *count* in three
+places (`extra_banned_passwords` 500, `nostr_relays` 6, `nostr_nip05_domains` 20) and *length* in
+two (`title_template`, `home_title`, 120 chars). Every other value — `custom_css`,
+`custom_head_html`, `custom_body_html`, `pool_description`, `footer_text`, the `pages` HTML — is
+capped only by `express.json()`'s default 100 KB body limit
+([index.js:228](../../web/07_mining_pool_public/back-end-pool/index.js#L228)). That limit is
+**per request**, not per value or per section, so successive writes accumulate: roughly 40 of those
+keys are republished by `buildPublicConfig()` at `/api/public/branding`, which every public page
+fetches on every load. **Handoff to §J12:** the bound on that response is an admin-set,
+multi-megabyte number, and §J12 owns whether that endpoint is cached or rate-limited.
+
+`custom_theme` gained a cap in this pass (J9-3). The rest is one line each and belongs in a single
+deliberate sweep alongside whatever is decided about the dead keys, not tacked on here.
+
+---
+
+### J9-9 — [Info] Verified correct, with evidence — including four inbound handoffs answered
+
+**1. Trap 1 does not exist in this product.** All 22 boolean-shaped keys, checked at every read
+site: `flag()` (`v === true || v === 'true'`) in `incentives.js:17`, `lottery.js:5`,
+`dormancy.js:43`; the same test inline in `retention.js:65` and `networkMapPublic()`;
+`String(…) === 'true'` in `totpIsMandatory()`; and `buildPublicConfig()` coercing every public
+boolean before it leaves the server, so `branding.js`'s bare truthiness tests
+(`if (seo.robots_noindex)`, `if (a.cookie_consent_enabled)`, `!!brand.allow_theme_switch`) never see
+a string. A quoted `"false"` reads as **off** at every one of them. Nineteen of the 22 have no
+validator, so this is a property of the readers, not the writer — worth stating, because a new
+reader written as `if (s.some_flag)` would reintroduce it immediately.
+
+**2. The admin panel cannot disagree with the server about a switch.** `populateForm` binds a
+checkbox with `el.checked = value === true || value === 'true'`
+([settings-common.js:78](../../web/07_mining_pool_public/back-end-pool/admin-panel/settings-common.js#L78))
+— the identical test. A value that is neither (an object, `"yes"`, `"1"`) renders **unchecked** and
+reads as **false**. There is no shape that shows "2FA required: ON" while the server reads it off.
+
+**3. The server-side validator is the authority, not the form** — but the authority is thinner than
+it looks. `updateSection` rejects any key not in `defaults[section]` and runs the section's
+validator server-side, so the harvester cannot introduce a key. **68 of ~143 keys have no validator
+at all**, though, so for those the only server-side check is "this key exists" — the *type* is
+whatever the client sent, and `updateSection` derives `value_type` from it. That is what made J9-3
+and J9-4 possible, and it is why the answer to "is the form the authority?" is "no, but for 68 keys
+the server is only checking the name."
+
+**4. `POST /api/admin/settings/:section/restore` is `freshAdmin`**
+([index.js:6391](../../web/07_mining_pool_public/back-end-pool/index.js#L6391)) — password re-auth
+**and** `requireTotpEnrolled`. It cannot roll a security setting back on a plain session.
+`resetSection` writes a `reset_settings` audit row, and unlike `updateSection` it always writes one
+(there is no no-op suppression), which is the right asymmetry for a bulk delete.
+
+**5. `resetAll()` is defined and unrouted — leave it that way.**
+([pool-settings.js:1515](../../web/07_mining_pool_public/back-end-pool/lib/pool-settings.js#L1515))
+It is `DELETE FROM pool_config` with **no WHERE**, and three subsystems keep private rows in that
+table outside `PoolSettings.defaults`: `_migrations` markers (`pages_seeded`, `regions_seeded`),
+the `ads` section ([ads.js:220, 418](../../web/07_mining_pool_public/back-end-pool/lib/ads.js#L220)),
+and the dormancy anchor. Wiring `resetAll` to a route would re-arm every one-time seeder at the
+next restart — re-seeding shipped CMS pages and the grinium.com default regions **over the
+operator's edits**. If it is ever exposed it needs `WHERE section IN (…)` over
+`Object.keys(defaults)` first.
+
+**6. §J3's handoff answered — no.** `access.extra_banned_passwords` cannot be left in a shape that
+parses as an empty array by accident: the validator always returns `JSON.stringify(cleaned)`, an
+array literal, and `''` / `'[]'` normalise to `'[]'` (the operator explicitly clearing the list).
+`owner-proof.js extraBannedSet()` reads the raw row, `JSON.parse`s it, and requires `Array.isArray`
+before use, falling through to the hardcoded seed otherwise
+([owner-proof.js:152–170](../../web/07_mining_pool_public/back-end-pool/lib/owner-proof.js#L152)).
+Both the 60 s cache and the fail-open-to-seed are correct: the list is additions-only on top of the
+seed and the structural rules, so the failure mode is "an operator's extra entry is briefly not
+enforced", never "a banned password becomes usable proof".
+
+**7. §J4's handoff answered — partly, and one item is worse than "can it emit a non-number".**
+`withdrawal_cooldown_minutes`, `nostr_destination_cooldown_hours` and `nostr_pending_ttl_minutes`
+all have `parseInt` validators that throw on `NaN` and enforce ranges, so no, they cannot emit a
+non-number. But **`max_pending_withdrawals` and `max_user_pending` have no validator at all** and
+`applyToConfig` copies them verbatim
+([pool-settings.js:1519–1524](../../web/07_mining_pool_public/back-end-pool/lib/pool-settings.js#L1519)).
+The consumer saves it: both are read once in the scheduler constructor as
+`Math.max(1, parseInt(config.max_pending_withdrawals, 10) || 100)`
+([withdrawal-scheduler.js:66–67](../../web/07_mining_pool_public/back-end-pool/lib/withdrawal-scheduler.js#L66)),
+so garbage falls back to the default. Two riders: the read is **constructor-time**, so editing
+either cap in the panel does nothing until a restart and the UI says nothing about that; and there
+is no **upper** bound, so an admin can set `max_pending_withdrawals` to any integer and remove the
+pool's global pending cap entirely. `slatepack_ttl_hours` and `wallet_send_timeout_ms`, the other
+two §J4 named, are **not settings keys at all** — they exist only in `pool.json`, so only a
+hand-edit reaches them, which is on-box root and §J16's file.
+
+**8. `getSection`'s per-key JSON fallback is right.** A malformed `json` row logs and keeps that
+key's default instead of throwing
+([pool-settings.js:1156–1168](../../web/07_mining_pool_public/back-end-pool/lib/pool-settings.js#L1156)).
+Checked against the security-relevant JSON keys: `nostr_nip05_domains` (the NIP-05 allowlist) falls
+back through `applyToConfig`'s `parseJsonArray(…, ['goblin.st'])` to the safe default, not to an
+empty allowlist; `enabled_themes`, `page_seo`, `custom_theme` and `banners` all fall back to their
+shipped defaults. No corrupt row widens anything.
+
+**9. Both `validateConfig` functions run, and they are different functions.** `lib/config.js`'s is
+called from inside `loadConfig` (jwt_secret ≥32 chars, with no auto-generate — correct; network;
+`min_withdrawal > 0`; `withdrawal_fee` non-negative and below the floor). `index.js:300`'s is a
+*second*, separately-defined function called at `index.js:402` (network, port range, `db_path`
+anchored to `/opt/grin/` or `./` with a traversal check, stratum port range, fee 0–50). The name
+collision is confusing but not a bug — `index.js` imports only `loadConfig` and `mergeDbSettings`
+from the module. Worth a rename the next time either is touched.
+
+**10. `applyToConfig`'s cross-field guard is correct and is the only place it can be.** Per-key
+validators see one value; lowering `min_withdrawal` on its own can strand a stored `withdrawal_fee`
+above the new floor, which would make every at-minimum payout net ≤ 0. The guard runs after both
+are merged and falls back to `withdrawal_fee = 0` with a warning
+([pool-settings.js:1540–1548](../../web/07_mining_pool_public/back-end-pool/lib/pool-settings.js#L1540)).
+Same reasoning as the `incentives` lottery-pot rule inside `updateSection`'s transaction, which
+rolls the whole update back — and takes the audit row with it — when the two pots exceed 100%.
+
+### Handoffs
+
+- **§J15 (public front-end)** owns J9-3's second half: `custom_theme` still applies on credential
+  pages because `applyTheme()`'s loop sits above `isCredentialPage()`. The fix is to move the loop
+  inside that block beside `custom_css`; `test-branding-sinks.js` section [2] is where the assertion
+  goes. While in `branding.js`: `accent_color` is applied through the same `setVar` and is likewise
+  unguarded, but it is regex-validated to `#xxxxxx`, so it is a colour and nothing else.
+- **§J6 (stratum & share intake)** owns option (b) of J9-1 if that is the direction chosen — the
+  visibility/whitelist/cap check belongs beside the `is_banned` gate at
+  [stratum-server.js:563](../../web/07_mining_pool_public/back-end-pool/lib/stratum-server.js#L563),
+  and that session should rule on the per-login read cost and on whether a refusal message leaks
+  whitelist membership.
+- **§J12 (rate limiting & resource exhaustion)** owns the consequence of J9-8's missing length caps:
+  `/api/public/branding` republishes ~40 operator-authored strings, each bounded only by a 100 KB
+  per-request body limit, on an endpoint every public page hits on every load.
+- **§J13 (outbound calls & SSRF)** — one confirmation for its `nostr_nip05_domains` question: the
+  validator normalises to lowercase bare hostnames, rejects IPv4 literals, leading/trailing dots and
+  `..`, and caps at 20
+  ([pool-settings.js:862–874](../../web/07_mining_pool_public/back-end-pool/lib/pool-settings.js#L862)).
+  An empty list falls back to `['goblin.st']`, never to "allow all". The relay list (`nostr_relays`)
+  is `wss://`-only but has no host allowlist, which is J13's to rate.
+- **§J16 (deployment & infra)** owns two from J9-6: `.config.sha256` is written to
+  `WorkingDirectory` while the config it describes lives in `/opt/grin/conf/`, so an app-directory
+  redeploy silently disarms the check; and if the control is kept, the baseline belongs beside the
+  config with the same `0600` treatment.
+- **§J17 (operational gate)** — J9-1 is a launch-blocking *documentation* item whichever way it is
+  resolved: if the keys are deleted, the admin UI changes; if they are enforced, a private-pool
+  login refusal has never been exercised against a real miner.
+
+### Verification
+
+Every finding was written from reading first, then demonstrated. The demonstrations ran as one-shot
+`node -e` calls or a single scratchpad script against the real modules — no server was started and
+nothing was left running (CLAUDE.md's local-process rule).
+
+- **J9-1** — a full-tree grep for all four key names across `web/07_mining_pool_public/`
+  (`*.js`, `*.html`, `*.json`, `node_modules` excluded); every hit hand-classified. The absence is
+  the finding, so it was established by exhaustion rather than by a positive test.
+- **J9-2** — `settingValueUnchanged` was `eval`'d out of `index.js` itself (not retyped) and run
+  against the real `pool_info.pool_fee_percent` validator, before and after the fix.
+- **J9-3** — `branding.js` read line by line to locate the `isCredentialPage()` boundary;
+  `dashboard.css` grepped for `background…var(--…)` to establish the `url()` sink; the theme
+  builder's `data-var` shape read out of `settings-common.js` *before* choosing the stored form.
+- **J9-4** — every numeric validator in the schema run against `'Infinity'` and `'1e400'`; the
+  three that accepted them traced through `applyToConfig` to their consumers.
+- **J9-5** — all five prototype names run through `getSection`, `updateSection` (section and key)
+  and `resetSection` against the real class with a stub `db`.
+- **J9-8** — the dead-key table was generated mechanically (concatenate `index.js` + all 40 `lib/`
+  modules + the consumer half of `pool-settings.js`, then test each key name for a mention), and
+  every row was then hand-checked — because a mention inside `STEP_UP_SETTINGS_KEYS` counts as a hit
+  to a grep and is not a consumer, which is exactly how J9-1 hid.
+
+**Suites, all green after the changes:** `test-admin-guards` 53 (was 26; **27 new §J9 assertions**),
+`test-money-path` 32, `test-auth-hardening` 48, `test-block-ledger` 52, `test-branding-sinks` 18,
+`test-stratum-guards` 47, `test-owner-gate` 19, `test-proxy-v2` 12, `check-syntax` 56 files.
+
+**Gaps worth stating.** (1) **Nothing here ran against a live settings write over HTTP.** J9-2's
+bypass was proved at the function level; the route wrapping it (`criticalSettingChanged` →
+`stepUpRefused`) was read, not exercised, because no session harness exists — the same gap §J7 and
+§J8 recorded. (2) **J9-1 was proved by absence, and the deletion is now the proof.** The original
+worry was that enforcement might live somewhere no grep for those four key names would reach — a
+value read through a variable, or in the shell. Deleting the keys converts that from an unproven
+negative into a positive: nothing in the tree references them, `check-syntax` covers all 56 files,
+and the eight suites pass. §J17 no longer needs a private-pool mining attempt. (3) **J9-6's point 5 (the baseline
+directory) is read from the installer, not observed** — no box has been checked.
+
+### Changed this session
+
+| File | Change |
+|---|---|
+| `index.js` | J9-2 — `settingValueUnchanged`'s numeric branch now requires `plainDecimal` on both sides · J9-3 — `custom_theme` added to `STEP_UP_SETTINGS_KEYS` · J9-7 — `totpIsMandatory`'s fail-open catch logs, throttled to 1/min via `_totpMandatoryReadFailAt` |
+| `lib/pool-settings.js` | J9-5 — `hasSection` / `hasKey` own-property helpers, used at all four schema gates · J9-4 — `min_withdrawal` and the `nonNeg` factory use `Number.isFinite` · J9-3 — `custom_theme` validator: flat object, ≤200 entries, key charset with no leading `-`, string/number values ≤200 chars, no `url(` / `expression(` / `<>`; stored un-prefixed to preserve the theme builder's round-trip |
+| `scripts/test-admin-guards.js` | New section `[5] §J9` — 27 assertions across J9-2 (5), J9-4 (5), J9-5 (11) and J9-3 (5, including the theme-builder round-trip control); `custom_theme` added to the section-[4] gated-key list · J9-1 — the 4-key gated assertion replaced by 12 that hold the six deleted keys out of both `defaults` and the step-up set |
+| **J9-1 deletion** | `lib/pool-settings.js` (defaults ×2, validators, `buildPublicConfig`), `index.js` (`STEP_UP_SETTINGS_KEYS`), `admin-panel/settings-pool-info.html`, `admin-panel/settings-access.html`, `admin-panel/settings-common.js` — itemised in the table in J9-1 |
+
+**Left open at the end of this session:** **J9-6** (keep the integrity check and make it a real
+one, or delete it; the current 9 lines provide reassurance rather than detection). **J9-8's** dead keys are one line each and belong in a single
+sweep with §J1-5 and §J8-3, not tacked onto this pass.
+
+---
+
+## §J10 — Uploads, assets, CMS & ads (2026-09-02, add-ons, NOT VPS-TESTED)
+
+Tenth session of the pre-mainnet §J pass (plan:
+[`script07_reference_audit_session_plan.md`](script07_reference_audit_session_plan.md) §J10).
+Scope: `lib/asset-manager.js` (190), `lib/ads.js` (426), `lib/pages.js` (140),
+`lib/posts.js` (333), the two upload endpoints (`POST /api/admin/assets/upload`,
+`POST /api/admin/media`), `DELETE /api/admin/assets/:filename`, both multer configs, the
+`/uploads` static handler, and the CMS/SEO public surface — `/blog/:slug`, `/page.html`,
+`/blog/rss.xml`, `/sitemap.xml`, `/robots.txt`, `/manifest.json`,
+`/api/public/{page/:key,pages,posts,post/:slug,ads}` and `POST /api/public/ads/event`.
+
+Method: follow a byte from the wire to the disk to the browser. For each upload endpoint —
+what multer accepts, what decides the name on disk, what decides the `Content-Type` it is
+served back with, and what header is on that response. For the CMS — every place operator
+text or a URL segment leaves the DB and reaches XML, an HTML attribute, or a filesystem path.
+
+**Headline — §A's two upload defences were never applied to the second upload endpoint, and
+the pool ships pointing every canonical link at a domain the operator does not own.**
+
+*The delete traversal the plan asked about first is genuinely closed*, and the sandbox CSP on
+served uploads is genuinely on both serving paths (nginx *and* the Express fallback). Those
+were checked, not assumed (J10-6).
+
+*But `POST /api/admin/media` — the CMS editor's image upload, added after §A — repeats §A
+finding #1 and #3 exactly.* It never looked at a single byte of the file, and it took the
+stored extension from the client-declared MIME. The extension is what nginx converts into the
+served `Content-Type`, so `Content-Type: image/svg+xml` on a file of arbitrary bytes produced a
+`.svg` served as `image/svg+xml`. §A built two layers against that (validate the bytes, then
+isolate at serve time); this endpoint had one, and nothing said so.
+
+*And the setting that decides where the operator's own content says it lives shipped with
+someone else's domain in it.* `seo.site_url` defaulted to `https://grinium.com`, and nothing —
+not the installer, not first boot — ever replaced it. Every fresh pool's `sitemap.xml`, RSS
+feed, server-rendered `<link rel="canonical">`, `og:url` and JSON-LD `url` named that host
+(J10-4).
+
+*The one anonymous write in this scope is a billing record.* `POST /api/public/ads/event`
+bumps the impression and click counters the admin panel renders a CTR from, with no existence
+check, no dedup and no cap — the dedup that makes those numbers mean anything lives in the
+browser (J10-3).
+
+Five findings plus an Info sweep. **Three fixed in this session** (J10-1, J10-4, J10-5 — all
+small and local, plan rule 3) with a new 21-assertion suite, `scripts/test-cms-uploads.js`.
+**J10-2 and J10-3 are left open**: one needs a table and a UI, the other is a product decision
+about whether ad statistics may cost the pool's no-visitor-data stance.
+
+### Threat actors used in this section
+
+| Label | Means |
+|---|---|
+| **Anonymous internet** | Anyone who can reach the public API. No credential of any kind |
+| **Stolen admin session** | A `secureAdmin` access token taken from an operator's browser. Per §C3 it survives logout, password change and *Revoke sessions* until it expires (≤24 h) |
+| **Logged-in admin** | A legitimate `secureAdmin` session — including a second, less-trusted one. Cannot move money at this tier, so a finding here is a foothold or a durable mess, not theft |
+| **Third-party domain holder** | Whoever controls a hostname the shipped defaults point at. Today the toolkit author; after an expiry, whoever buys it |
+
+### Findings
+
+### J10-1 — [Medium] The CMS media endpoint took the stored file extension from the client-declared MIME and never read a byte of the file, so §A's stored-XSS fix was absent from the second upload endpoint — **FIXED 2026-09-02**
+
+**Threat actor: stolen admin session** (a legitimate admin has no reason to do this, and the
+result is a file under the operator's own TLS name).
+
+§A hardened `POST /api/admin/assets/upload` on exactly this point, and the fix is still intact:
+`saveAsset` calls `detectImage()` on the buffer and builds the name as
+`${type}_${ts}_${rand}.${detected.ext}` — the uploader's filename and declared MIME reach disk
+nowhere ([asset-manager.js:103-113](../../web/07_mining_pool_public/back-end-pool/lib/asset-manager.js#L103-L113)).
+
+`POST /api/admin/media`, added later for the Quill CMS editor, did neither. Before this session:
+
+```js
+const ALLOWED_IMG = { 'image/jpeg': '.jpg', …, 'image/svg+xml': '.svg' };   // index.js:513
+mediaUpload = multer({
+  storage: multer.diskStorage({
+    destination: (req, file, cb) => cb(null, uploadsDir),
+    filename: (req, file, cb) => {
+      const ext = ALLOWED_IMG[file.mimetype] || '.bin';                     //  ← :518
+      …
+      cb(null, `${Date.now()}-${rand}-${safe}${ext}`);
+```
+
+`file.mimetype` is the part's `Content-Type` header — attacker-chosen. It is the *only* gate
+(`fileFilter` tests the same map) and it is what names the file. There is no sniff anywhere in
+the path, and `diskStorage` means the bytes are already written before the handler sees them.
+
+**Demonstrated**, driving the real multer config with a synthetic multipart body:
+
+```
+declared mimetype : image/svg+xml
+original name     : notes.txt
+stored filename   : 1788363314180-174ac525-notes.svg
+bytes on disk     : "<html><body><script>alert(document.domain)</script></body></html>"
+```
+
+nginx maps `.svg` → `image/svg+xml` from `mime.types`, so that file is served as a scriptable
+document from the pool's own origin.
+
+**Why Medium and not High.** It does not execute today. `location /uploads/` sets
+`Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; sandbox`
+([07_grin_mining_public_pool.sh:1434](../../scripts/07_grin_mining_public_pool.sh#L1434)) and the
+Express fallback mount sets the identical header
+([index.js:797-806](../../web/07_mining_pool_public/back-end-pool/index.js#L797-L806)), so a
+directly-opened SVG lands in an opaque origin with scripts blocked twice over. **The defect is
+that this was the whole defence.** §A deliberately built two layers because that header is one
+`add_header` in one `location` in a generated file, and §I1 is the recorded incident where a
+child block silently discarded the parent's entire header set — the exact failure mode this
+endpoint had no second line for. A pool whose vhost predates the §I1 snippets, or whose operator
+hand-edits that block, loses containment with nothing to notice it.
+
+**Fix applied.** `detectImage` and a new `WEBP_SNIFFER` are exported from `asset-manager.js`;
+`mediaUpload` moves to `memoryStorage`; the route sniffs the buffer, derives the extension from
+the detected type, asserts path containment and writes the file itself
+([index.js:2760-2790](../../web/07_mining_pool_public/back-end-pool/index.js#L2760-L2790)). The
+declared-MIME map survives only as a cheap pre-filter and now uses `hasOwnProperty` rather than
+a bare property lookup, matching §J9-5.
+
+WEBP is the wrinkle worth recording: the CMS endpoint accepts it and the branding-asset endpoint
+never has (`allowedMimeTypes` has four entries, and `SNIFFERS` had three). So WEBP detection is
+**not** in the shared `SNIFFERS` list — it is a separate export the media route passes in as
+`extra`. Folding it into `SNIFFERS` as a tidy-up would silently let a WEBP file through the
+logo/favicon endpoint by declaring itself `image/png`; `test-cms-uploads.js` asserts both
+directions.
+
+---
+
+### J10-2 — [Medium] A file uploaded to `/uploads` has no DB row, no listing, no delete path and no audit row, so it cannot be attributed or removed through the product at all — **OPEN**
+
+**Threat actor: stolen admin session**, with **logged-in admin** (a second, less-trusted one) as
+the disk-fill case.
+
+The two upload endpoints are asymmetric in a way that only shows up after an incident:
+
+| | `POST /api/admin/assets/upload` | `POST /api/admin/media` |
+|---|---|---|
+| DB row | `pool_assets`, with `uploaded_by` = the admin's user id | **none** |
+| Listed anywhere | `GET /api/admin/assets` → the branding settings previews | **nowhere** |
+| Deletable | `DELETE /api/admin/assets/:filename` (unlinks + removes the row) | **no endpoint exists** |
+| `admin_audit_log` row | no (§J1-2, one of the 24 still open) | no |
+| Size / count cap | 2 MB, 1 file per request, no total | 5 MB, 1 file per request, no total |
+
+Nothing in the backend so much as `readdir`s that directory — the only `readdirSync` in the tree
+is in `scripts/check-syntax.js`. So an attacker on a stolen `secureAdmin` session can write 5 MB
+of arbitrary (now image-shaped, post-J10-1) content per request under the operator's own TLS
+hostname, served with `Cache-Control: public, max-age=604800, immutable`, and:
+
+- the operator cannot list what is there from any screen the product ships;
+- the operator cannot delete it without an SSH session and `rm`;
+- nothing records that an upload happened, when, or by which admin.
+
+It is also the only unbounded write to the filesystem the app has. `uploadsDir` defaults to
+`path.dirname(config.db_path)/uploads` ([index.js:515](../../web/07_mining_pool_public/back-end-pool/index.js#L515))
+and the installer places it inside `$POOL_APP_DIR` beside `pool.db`, so filling it fills the
+partition holding the SQLite database and its WAL — and §J7-1 established that the block-found
+write discards its own failure, with no alert anywhere. That is a long path from an image upload
+to a lost block, but it is the same disk.
+
+**Not exploitable by an anonymous client**, hence Medium rather than High.
+
+**Fix (not applied — structural).** Give media uploads the same treatment assets already have:
+a `media_uploads` row (`filename`, `original_name`, `mime_type`, `size_bytes`, `uploaded_by`,
+`created_at`), a `GET`/`DELETE` pair, and a small library screen in the CMS editor. The audit row
+belongs in the §J1-2 sweep, not bolted on here. A total-bytes cap on the directory is one query
+against that new table, so it falls out of the same change.
+
+---
+
+### J10-3 — [Medium] `POST /api/public/ads/event` lets any anonymous client set the impression and click counters the operator bills sponsors from — no existence check, no dedup, no cap — **OPEN**
+
+**Threat actor: anonymous internet.** Specifically: a sponsor inflating the delivery numbers
+they are invoiced on, or a rival tanking a competitor's click-through rate.
+
+`recordEvents` ([ads.js:157-171](../../web/07_mining_pool_public/back-end-pool/lib/ads.js#L157-L171)):
+
+```js
+const ids = (v) => [...new Set((Array.isArray(v) ? v : []).map(x => parseInt(x, 10))
+  .filter(n => Number.isInteger(n) && n > 0))].slice(0, 20);
+…
+this.db.prepare(`UPDATE ads SET ${col} = ${col} + 1 WHERE id IN (…)`).run(...list);
+```
+
+The sanitising is real — ids are integers, deduped and capped at 20 per request, and `col` is a
+code literal, so there is no injection and no unbounded row growth. What is missing is any notion
+of whether the event *happened*: no check that the ad is `is_active`, in its date window, or in
+the placement the caller claims; no per-client dedup; no cap on how many times one source may
+bump one id; no audit; and the response is always `204`
+([index.js:2751-2755](../../web/07_mining_pool_public/back-end-pool/index.js#L2751-L2755)).
+
+**The dedup that makes these numbers mean anything is client-side.** `queueImpression` keeps a
+`_counted[id]` map for the life of the page load and only beacons ids it has not sent
+([public_html/js/ads.js:104-114](../../web/07_mining_pool_public/public_html/js/ads.js#L104-L114)),
+and the rotor deliberately does not count an ad in a background tab (`:202`, `:227`). All of that
+is enforcement in the attacker's own browser.
+
+**Failure scenario.** An operator sells a header slot for a month at an agreed CPM. The buyer —
+or anyone who reads `GET /api/public/ads` and sees the ids — posts
+`{"impressions":[1,2,…,20]}` in a loop. nginx allows 600 requests/min per IP on `/api/`
+([07_grin_mining_public_pool.sh:1050](../../scripts/07_grin_mining_public_pool.sh#L1050)) and the
+app's `public` bucket allows 1200/min, so one IP moves the counters ~200,000 times an hour, and a
+handful of hosts moves them arbitrarily. The admin panel renders exactly those two columns and
+computes the percentage from them, with no indication they are unverified:
+
+```js
+const v = a.impressions || 0, c = a.clicks || 0;
+const ctr = v > 0 ? ` (${(c / v * 100).toFixed(1)}%)` : '';   // admin-panel/ads.html:601-603
+```
+
+Inflating impressions alone drives the displayed CTR toward zero, which is the *deflation* half
+of the same lever.
+
+**No funds move**, and nothing here is a foothold — hence Medium, on the pool's commercial
+integrity rather than its security. But the counter is the invoice.
+
+**Fix (not applied — this is a product decision).** The honest options, in order of cost:
+
+1. **Say what they are.** One line under the table: *"Coarse client-reported counters — not
+   verified, not billable."* Zero code, and it stops the number being trusted for money.
+2. **Filter to plausible events.** `AND is_active = 1 AND (start_at IS NULL OR …)` in the
+   `UPDATE`, so an ad that is not being served cannot accrue. Cheap, and it does not stop a
+   determined client.
+3. **Bound one source.** A per-(IP-hash, ad, hour) seen-set, which is the only thing that
+   actually fixes it — and which costs the pool a per-visitor record. Memory
+   `project_pool_ip_privacy` and this endpoint's own comment ("no per-visitor rows, no IPs")
+   both say the pool has decided against that. **The pool cannot have both trustworthy ad
+   statistics and no visitor records, and option 1 is the consistent choice.**
+
+**Disposition taken 2026-09-03 (§J14-9's follow-up pass): options 1 + 2, and this finding stays
+OPEN.** The admin column now reads `Views / Clicks (unverified)` with a `(~x.x%)` ratio and a
+note saying the numbers are client-reported and never billable (option 1), and `recordEvents`
+now carries `publicByPlacement`'s serving predicate so an ad that is not being shown cannot
+accrue events (option 2). **Option 3 is declined** — a per-(IP-hash, ad, hour) seen-set is the
+per-visitor record this pool does not keep — so the endpoint remains anonymous-writable and a
+*live* ad can still be inflated. What changed is that nothing presents its output as
+measurement any more; the risk is now cosmetic rather than money-adjacent. Reversing the
+decision means changing `ads.html`'s wording back too: the label and the endpoint are one
+decision in two files.
+
+---
+
+### J10-4 — [Medium] `seo.site_url` shipped as `https://grinium.com`, so every fresh pool declared a domain the operator does not own as the canonical home of the operator's own content — **FIXED 2026-09-02**
+
+**Threat actor: third-party domain holder.** No attack is needed for the damage; an attack only
+determines who benefits.
+
+`siteOrigin()` is the single origin used by the whole SEO surface, and it prefers the setting
+over the request:
+
+```js
+function siteOrigin(req) {
+  const seo = poolSettings.getSection('seo');
+  if (seo.site_url) return String(seo.site_url).replace(/\/+$/, '');
+  return (req.protocol || 'https') + '://' + req.get('host');
+}
+```
+
+`seo.site_url` defaulted to `'https://grinium.com'`
+([pool-settings.js:159](../../web/07_mining_pool_public/back-end-pool/lib/pool-settings.js#L159)),
+`getSection` returns the default whenever no `pool_config` row exists, and **nothing writes that
+row at install time** — a full-tree grep for `site_url` finds the default, its validator, one
+`buildPublicConfig` line and `siteOrigin`; the installer never mentions it. So the fallback branch
+was dead and every pool that had not hand-edited SEO settings emitted, verbatim:
+
+| Surface | What it said |
+|---|---|
+| `/sitemap.xml` | `<loc>https://grinium.com/…</loc>` for every page, CMS page and blog post ([index.js:1399-1429](../../web/07_mining_pool_public/back-end-pool/index.js#L1399-L1429)) |
+| `/robots.txt` | `Sitemap: https://grinium.com/sitemap.xml` ([:1374](../../web/07_mining_pool_public/back-end-pool/index.js#L1374)) |
+| `/blog/rss.xml` | every `<link>` and `<guid isPermaLink="true">` ([:1327-1359](../../web/07_mining_pool_public/back-end-pool/index.js#L1327)) |
+| `/blog/<slug>`, `/page.html?p=` | server-rendered `<link rel="canonical">` **and** `og:url` |
+| every other public page | `branding.js` builds the client-side canonical, `og:url` and the JSON-LD `url` from the same value ([public_html/js/branding.js:232-245](../../web/07_mining_pool_public/public_html/js/branding.js#L232-L245), [:291](../../web/07_mining_pool_public/public_html/js/branding.js#L291)) |
+
+**Failure scenario.** An operator installs the pool at `pool.example.com`, writes three blog
+posts and shares them. Every unfurl on Discord/Telegram/Slack resolves `og:url` to
+`grinium.com/blog/…`; a search engine reads a canonical pointing off-site and drops
+`pool.example.com` in favour of a host that does not serve that content; `robots.txt` advertises a
+sitemap on a domain the operator has no control over. The pool works perfectly the whole time and
+nothing in the admin panel hints at it — the field is a blank-looking text input buried in SEO
+settings. If that domain later lapses, whoever buys it inherits the canonical, the RSS
+permalinks and the social-card destination of every pool ever deployed from this toolkit.
+
+**Fix applied.** The default is now `''`
+([pool-settings.js:159-166](../../web/07_mining_pool_public/back-end-pool/lib/pool-settings.js#L159)),
+and `siteOrigin` gains a middle branch that derives the origin from the installer-set domain
+([index.js:1363-1372](../../web/07_mining_pool_public/back-end-pool/index.js#L1363-L1372)):
+
+```js
+if (seo.site_url) return …;                                   // operator override, unchanged
+if (config.subdomain) return 'https://' + config.subdomain;   // pool.json, installer-written
+return (req.protocol || 'https') + '://' + req.get('host');   // last resort
+```
+
+`config.subdomain` is already loaded ([lib/config.js:200](../../web/07_mining_pool_public/back-end-pool/lib/config.js#L200))
+from the value the installer prompts for and writes
+([07_grin_mining_public_pool.sh:718-732](../../scripts/07_grin_mining_public_pool.sh#L718)),
+so this needs no new configuration.
+
+**The ordering is the point, and a naive fix gets it wrong.** Simply blanking the default would
+have handed the origin to `req.get('host')` — the client-supplied Host header — on a vhost that,
+being the only `listen 443` server the script writes, is the box's default server and therefore
+answers on any Host. That branch has been unreachable for the life of this code precisely because
+`site_url` was never empty; blanking the default without the `config.subdomain` step would have
+made it live in the same commit. It is kept only as the dev/no-installer fallback.
+
+One line was also added at the `/api/public/config` handler so the client half agrees with the
+server half ([index.js:983-990](../../web/07_mining_pool_public/back-end-pool/index.js#L983)):
+without it, the blanked default would merely *drop* `branding.js`'s canonical from every
+non-server-rendered page rather than correcting it.
+
+**Left as-is, deliberately:** `branding.website_link` also defaults to `https://grinium.com`
+([pool-settings.js:141](../../web/07_mining_pool_public/back-end-pool/lib/pool-settings.js#L141)).
+That one is a visible footer link, sitting in the Branding settings page with a label, and it is a
+default the operator is *meant* to see and change — not a machine-readable identity claim made on
+their behalf. Same for the GRINIUM strings in `og_title`, `meta_description` and
+`twitter_handle`. See the handoff below for the one member of this family that is not cosmetic.
+
+---
+
+### J10-5 — [Low] `POST /api/admin/assets/upload` with no `?type=` defaulted to `'custom'`, which is not an asset type, so the request always failed with an error naming an internal constant — **FIXED 2026-09-02**
+
+**Threat actor: none — the system.** A usability defect on an admin endpoint, recorded because
+it is a dead branch that reads as a working one.
+
+`const assetType = req.query.type || 'custom';` fed `saveAsset`, whose first line is
+`if (!this.allowedTypes.includes(assetType)) throw new Error(...)` — and `allowedTypes` is
+`['logo','logo_dark','favicon','og_image','apple_touch_icon','icon_192','icon_512']`
+([asset-manager.js:61](../../web/07_mining_pool_public/back-end-pool/lib/asset-manager.js#L61)).
+`'custom'` has never been in it. The admin panel always sends `?type=`
+([settings-common.js:289](../../web/07_mining_pool_public/back-end-pool/admin-panel/settings-common.js#L289)),
+so the branch is unreachable from the UI and the failure only appears to someone calling the API
+directly — who gets `Invalid asset type: custom` and no list of what would work. Worse, the
+default *looks* like a supported "miscellaneous upload" mode that a later change might rely on.
+
+**Fix applied:** the route validates `?type=` up front against `assetManager.allowedTypes` and
+returns the valid set in the error
+([index.js:6639-6647](../../web/07_mining_pool_public/back-end-pool/index.js#L6639)).
+
+---
+
+### J10-6 — [Info] Verified correct, with evidence
+
+Every row below was read and, where a behaviour was in question, exercised — not assumed.
+
+| Checked | Result |
+|---|---|
+| **`DELETE /api/admin/assets/:filename` traversal** (the plan's first item) | Closed, three ways. Express `:filename` cannot match a `/`; the handler looks the name up in `pool_assets` with a bound parameter *before* touching the disk, so an unknown name throws `Asset not found`; and the unlink uses `path.basename(asset.filename)` — the stored, server-generated name — with a `path.dirname(...) === uploadDir` assert ([asset-manager.js:154-173](../../web/07_mining_pool_public/back-end-pool/lib/asset-manager.js#L154-L173)). `..%2F..%2Fetc%2Fpasswd` decodes to one param, matches no row, and stops at the DB |
+| **Sandbox CSP on every path that serves an uploaded file** | Present on **both** serving paths, which matters because they are different code. In production nginx serves `/uploads/` and `/custom/` from `alias` directives — Express never sees them — and each block re-`include`s the common header snippet *and* sets `default-src 'none'; style-src 'unsafe-inline'; sandbox` with `always`, so it is on the `try_files … =404` error response too ([07_grin_mining_public_pool.sh:1428-1451](../../scripts/07_grin_mining_public_pool.sh#L1428)). The Express fallback mount sets the identical pair in `setHeaders` ([index.js:797-806](../../web/07_mining_pool_public/back-end-pool/index.js#L797)) and, being `send`'s pre-stream hook, it also covers a 304 |
+| **nginx `alias` traversal on `/uploads/`, `/custom/`** | Not present. Both locations carry the trailing slash (`location /uploads/`, not `location /uploads`), so the `/uploads../` escape does not match the prefix at all; and nginx normalises `..` out of the URI before location matching |
+| **`fs.readFileSync(path.join(config.web_dir, name))`** (the plan's named site) | `readShell(name)` is called from exactly two places, both with a hardcoded literal — `'post.html'` and `'page.html'`. No request value reaches it |
+| **RSS + sitemap XML escaping** | Both escape `& < >` and every interpolated value is element **text**; the one attribute in the feed (`isPermaLink="true"`) is a literal, so `"` being unescaped cannot break out. Post slugs additionally pass `encodeURIComponent` in the RSS `<link>`/`<guid>` |
+| **`:slug` / `:key` traversal or file read** | `postsManager.getPublic` / `pagesManager.getPublic` bind the value into a parameterised `WHERE slug = ?` and return a row or `null` — the param never touches a path. Slugs are written only through `slugify()` (`[a-z0-9-]`, ≤64/80 chars), including in the five-slug legacy `pages` migration and both content seeds |
+| **Host-header injection into the server-rendered `<head>`** | Contained even before J10-4's change: every value in `seoHead()` goes through `attrEsc`, which escapes `& < > " '` ([index.js:1509-1511](../../web/07_mining_pool_public/back-end-pool/index.js#L1509)) — including `canonical`, `og:url` and the 404 branch's `origin + '/blog/' + req.params.slug` |
+| **`toDescription()` on authored HTML** | Drops `<script>`/`<style>` **bodies** before stripping tags, and decodes entities only *after* tag-stripping, so `&lt;b&gt;` can never become a tag; output is then `attrEsc`'d into the meta content |
+| **`ALLOWED_IMG[file.mimetype]` prototype walk** | **Checked and NOT reachable**, despite matching §J1-6 / §J7-8 / §J9-5 exactly. `ALLOWED_IMG['constructor']` is truthy and would have put `function Object() { [native code] }` into the filename — but busboy composes the value as `` `${conType.type}/${conType.subtype}` `` (`node_modules/busboy/lib/types/multipart.js:325-327`), so `file.mimetype` always contains a `/` and no `Object.prototype` key does. Recorded so a later session does not re-flag it. The lookup was switched to `hasOwnProperty` anyway as part of J10-1 |
+| **CSRF on the multipart upload endpoints** | Covered. A multipart POST is a "simple request" that needs no preflight, but both auth cookies are `sameSite: 'strict'` ([index.js:934](../../web/07_mining_pool_public/back-end-pool/index.js#L934), [:943](../../web/07_mining_pool_public/back-end-pool/index.js#L943)), and CORS is `GET`-only with no `Allow-Credentials` |
+| **`/api/public/ads` field exposure** | `publicByPlacement` selects an explicit column list; `notes` (the admin-only sponsor memo — contact and payment terms), `weight`, `impressions`, `clicks` and both timestamps are not in it ([ads.js:135-144](../../web/07_mining_pool_public/back-end-pool/lib/ads.js#L135)). `?placement=` is validated against a fixed array and an array-valued param returns `[]` |
+| **Draft / unpublished enumeration** | No oracle. `posts.getPublic` requires `status='published'`, `pages.getPublic` requires `is_published=1` **and** non-empty HTML, and unknown vs unpublished return the identical 404 on both the API and the shell routes |
+| **`update()`'s dynamic `SET` clause in `ads`/`pages`/`posts`** | Safe: `Object.keys` runs over `_clean`'s output, which only ever assigns from a fixed key set; `_id` is stripped from the input shape and never copied into it. Values are bound. (§D's "`_clean()`-built SET clauses (fixed key set)" re-confirmed after three files changed since) |
+| **`parseInt(req.params.id)` → `NaN` on the six CMS CRUD routes** | Not a fault. Suspected as a §J7-4 sibling and tested against `node:sqlite` directly: binding `NaN` neither throws nor matches — `get(NaN)` returns `undefined` and `run(NaN)` reports `changes: 0`. So `/api/admin/pages/abc` returns a clean 404, which is correct |
+| **multer field limits** | Neither instance sets `fields`/`parts`/`fieldSize`, so multer's defaults apply (`fieldSize` 1 MB, `fields`/`parts` unbounded). Both endpoints are `secureAdmin`, and `files: 1` plus the byte cap bounds the file half. Noted, not a finding at this tier — but it belongs in §J12's sweep if that session wants a complete picture of admin-side body limits |
+| **`/sitemap.xml` cost** | Three queries per request (`listEnabled`, a `COUNT(*)`, a 50-row page), on the `public` bucket behind nginx's 600 r/m `_api` zone. Not a lever |
+
+---
+
+### Handoffs
+
+- **§J11 (public API leakage & privacy) — the one that should not wait.** The same defaults block
+  that produced J10-4 also ships `analytics.provider: 'ga4'` with
+  `analytics.ga_tracking_id: 'G-GMYJ4PVG4L'`
+  ([pool-settings.js:167-169](../../web/07_mining_pool_public/back-end-pool/lib/pool-settings.js#L167)).
+  Read literally, every pool deployed from this toolkit beacons every visitor of every public page
+  to one fixed third-party GA4 property until the operator notices and changes it — on a product
+  whose stated position is scrypt-hashed miner IPs, country-only geo and "no per-visitor rows".
+  That is J11's to rate and fix, because the sink is `branding.js`'s analytics loader and the
+  question is a privacy one, not a CMS one; J10 records only that the default exists and comes
+  from the same place as J10-4. The plausible/umami/matomo defaults are empty, so this is GA4 only.
+- **§J12 (rate limiting & resource exhaustion)** owns two: multer's unset `fields`/`parts`/
+  `fieldSize` limits on both upload endpoints (row above), and J10-2's unbounded filesystem
+  growth if that session is inventorying what can fill the disk the SQLite DB sits on.
+- **§J14 (admin panel front-end)** owns the rendering half of J10-3: `admin-panel/ads.html:601-603`
+  presents anonymous-writable counters as a measured CTR with no qualifier. If option 1 is taken,
+  the wording change lands there.
+- **§J15 (public front-end)** owns the client-side consumers of everything in this scope:
+  `js/ads.js` inserting `html_code` via `innerHTML` and re-creating `<script>` nodes so ad-network
+  snippets execute (`:116-118` — operator-trusted by design, tier already settled in §J1-1), and
+  `branding.js`'s canonical/JSON-LD block now that J10-4 changed what feeds it.
+- **§J16 (deployment & infra)** — one confirmation and one question. Confirmed: nginx serves
+  `/uploads/` and `/custom/` directly and both blocks carry the sandbox CSP, so the plan's
+  "does nginx bypass Express?" concern is answered *yes, and it is covered*. Question: those two
+  blocks use `alias` together with `try_files $uri =404`, a combination with a long-standing
+  nginx interaction; whether it resolves against the alias or the server `root` was **not**
+  established here and needs a real box, not a reading.
+- **§J1-2's audit sweep** gains one route it did not name: `POST /api/admin/media` writes no
+  `admin_audit_log` row either, and per J10-2 it is the only admin write with no record of any
+  kind anywhere.
+
+### Verification
+
+Every finding was read first and then demonstrated. Demonstrations ran as one-shot `node` calls
+against the real modules from a scratchpad directory outside the repo; no server was started and
+nothing was left running (CLAUDE.md's local-process rule).
+
+- **J10-1** — the *verbatim* pre-fix multer config was driven with a synthetic multipart body
+  through a `PassThrough` acting as the request, which is how the `notes.txt` → `notes.svg` output
+  quoted above was produced. After the fix the same harness was re-run over nine cases: the five
+  accepted image types all still round-trip with unchanged extensions (`image/jpeg` → `.jpg`, as
+  before), the three polyglots are rejected at the sniff, and a PNG declared `text/html` is
+  rejected earlier at the filter.
+- **J10-4** — established by exhaustion, which is the only way to prove *nothing* sets a value:
+  a full-tree grep for `site_url` across `web/07_mining_pool_public/` and `scripts/`, every hit
+  hand-classified (default, validator, `buildPublicConfig`, `siteOrigin`, `branding.js`). The
+  Host-header consequence of the naive fix was checked against the generated vhost before choosing
+  the `config.subdomain` ordering.
+- **J10-3** — the client-side dedup was read out of `public_html/js/ads.js` to establish that the
+  server has no counterpart, and the CTR computation read out of `admin-panel/ads.html` to
+  establish that the numbers are presented as measured. The rate ceiling is the nginx `_api` zone
+  and the app's `public` bucket, both read from source rather than estimated.
+- **J10-6's prototype-walk row** — the truthy-lookup half was confirmed with a one-shot over all
+  five `Object.prototype` names; the unreachability half by reading busboy's part-header parser,
+  not by assuming.
+- **`parseInt` → `NaN`** — tested against `node:sqlite` directly rather than reasoned from §J7-4,
+  which is why it is in the verified-correct table instead of being written up as a finding.
+
+**Suites, all green after the changes:** `test-cms-uploads` **21 (new)**, `test-admin-guards` 65,
+`test-money-path` 32, `test-block-ledger` 52, `test-stratum-guards` 47, `test-branding-sinks` 18,
+`test-owner-gate` 19, `test-proxy-v2` 12, `check-syntax` **57 files** (was 56).
+
+**Gaps worth stating.** (1) **No HTTP request was made to any of these routes.** J10-1's before
+and after were proved by driving multer itself; the `secureAdmin` chain in front of it was read,
+not exercised — the same session-harness gap §J7, §J8 and §J9 each recorded. (2) **The serve-time
+half of J10-1 is unobserved.** That `.svg` is served as `image/svg+xml` follows from nginx's
+stock `mime.types`, and that the sandbox CSP arrives with it follows from the generated vhost;
+neither has been seen on a box, and §J16's `alias`/`try_files` question above is part of the same
+unknown. (3) **J10-4's fix depends on `config.subdomain` being populated**, which the installer
+does at nginx-setup time — a pool configured by hand, or one where nginx setup was skipped, still
+falls through to the Host header.
+
+### Changed this session
+
+| File | Change |
+|---|---|
+| `lib/asset-manager.js` | J10-1 — `WEBP_SNIFFER` added as a standalone signature (deliberately **not** in `SNIFFERS`); `detectImage(buffer, extra = [])` takes a per-caller widening list; both exported as statics on `AssetManager` |
+| `index.js` | J10-1 — `mediaUpload` switched to `memoryStorage`, `ALLOWED_IMG` demoted to a `hasOwnProperty`-checked pre-filter, and `POST /api/admin/media` now sniffs the buffer, derives the extension from the detected type, asserts path containment and writes the file itself · `uploadsDir` is `path.resolve`d so that assert compares like with like · J10-4 — `siteOrigin()` gains the `config.subdomain` branch ahead of the Host header, and `/api/public/config` applies the same derivation to `cfg.seo.site_url` · J10-5 — `?type=` validated against `allowedTypes` up front, error names the valid set |
+| `lib/pool-settings.js` | J10-4 — `seo.site_url` default changed from `'https://grinium.com'` to `''`, with the reasoning in place |
+| `scripts/test-cms-uploads.js` | **New** — 21 assertions: [1] the extension comes from the bytes (12, incl. the HTML/text/PDF/runt rejections and binary-beats-SVG ordering), [2] WEBP widens the CMS endpoint only (4), [3] no `seo` default hardcodes an origin (3), [4] the asset-type allowlist (2) |
+| `package.json` | `test:unit` runs the new suite |
+
+**Left open at the end of this session:** **J10-2** (needs a `media_uploads` table, a list/delete
+pair and a library screen — and its audit row belongs in the §J1-2 sweep) and **J10-3** (a product
+decision: trustworthy ad statistics cost the pool a per-visitor record, so the consistent answer is
+to label the counters rather than to fix them).
+
+---
+
+## §J11 — Public API leakage & privacy (2026-09-02, add-ons, NOT VPS-TESTED)
+
+Eleventh session of the pre-mainnet §J pass (plan:
+[`script07_reference_audit_session_plan.md`](script07_reference_audit_session_plan.md) §J11).
+Scope: every unauthenticated route — `/api/public/*`, `/api/pool/*`, `/api/stratum/*`,
+`/api/network/*`, `/api/config/*`, the public `/api/account/:addr` GETs, `/health`,
+`/robots.txt`, `/sitemap.xml` — plus `lib/geoip.js` (172), `lib/retention.js` (209) and
+`lib/ip-filter.js` (299).
+
+Method: for every public route, list what leaves the box field by field, then ask the only
+question that matters at mainnet — **what does one anonymous client hold after an hour of
+polite polling?** Where a privacy control exists (the address mask, the k-anonymity floor, the
+network-map gate, scrypt-hashed IPs, coarsened audit IPs), check it at the **write** side and
+then try to defeat it from outside using nothing but other public routes.
+
+**Headline — the pool's address mask is a display truncation that six sibling feeds invert,
+and every confirmed payout is published with the miner's full Grin address next to its
+on-chain kernel excess.**
+
+*The privacy controls the pool built are real and correctly implemented.* Miner IPs are
+scrypt-hashed at the moment of capture, audit IPs are coarsened at write, geo resolves to a
+country and discards the address, the peer digest never leaves the DB, the network-map feeds
+404 by default with a k-anonymity floor applied before the points are built, and the sample
+globe is labelled. All of that was checked with evidence (J11-8), not assumed.
+
+*What defeats them is the surface next door.* `/api/pool/miners` was masked in response to §C1
+— but `/api/pool/blocks`, `/api/pool/top-block-finders`, `/api/pool/payments`,
+`/api/pool/donors`, `/api/stratum/top-miners` and `/api/stratum/top-avg-hashrate` all publish
+the same population's **full** addresses, in bulk, at 1200 requests a minute. The mask keeps
+9 leading and 4 trailing bech32 characters, which is a unique key — so every masked row
+re-attaches to its full address with a table join (J11-1). The sharpest consequence is
+`/api/pool/unclaimed`, whose masked rows are a list of *provably unwatched* balances with a
+disposal countdown.
+
+*And one field is worse than all the address exposure combined.* `withdrawals.kernel_excess`
+was added so a miner could verify **their own** payout against the chain. It is also published
+on the pool-wide `/api/pool/payments` feed, beside the full recipient address, where **no
+consumer renders it** — a permanent, public, unauthenticated Grin-address ↔ on-chain-kernel
+linkage table, on a coin whose entire product is that such a table cannot be built (J11-2).
+
+*Separately, the shipped analytics default sends every visitor of every deployed pool to one
+fixed third-party GA4 property*, with the nginx CSP already widened to permit it and no consent
+banner (J11-4) — the §J10 handoff, confirmed live and fixed here.
+
+Seven findings plus an Info sweep.
+
+**First pass (2026-09-02):** four fixed — J11-4, J11-6, J11-7 and the pool-wide half of J11-2 —
+with a new 24-assertion suite. J11-1, J11-3, J11-5 and the per-address half of J11-2 were written
+up and left open, because each is a product decision about what "address as identity" is allowed
+to cost rather than a bug with one right answer.
+
+**Resolution pass (2026-09-02, same day):** the operator took those decisions and **all four are
+now closed** — J11-1 on option (b), J11-2 on the ownership-gate option, J11-3 as recommended, and
+J11-5 on option (a). See the [§J11 resolution pass](#j11--resolution-pass-2026-09-02-add-ons-not-vps-tested)
+at the end of this section for what was built, the two things the fix itself uncovered, and what
+each choice costs. The suite is now **51 assertions**, every one of them mutation-tested.
+
+### Threat actors used in this section
+
+| Label | Means |
+|---|---|
+| **Anonymous internet** | Anyone who can reach the public API. No credential of any kind. The `public` rate-limit bucket is **1200/min** ([rate-limiter.js:41](../../web/07_mining_pool_public/back-end-pool/lib/rate-limiter.js#L41)), so "an hour of polling" is 72,000 requests from one IP |
+| **Chain analyst** | Anonymous internet plus a copy of the Grin chain. Does not attack the pool at all — reads it |
+| **Competitor / rival farm** | Anonymous internet, interested in *who* mines here and with what |
+| **Search engine / bulk crawler** | Follows links from any indexed page. Google honours `rel=canonical`; Common Crawl, Bing, and AI training crawlers largely do not |
+| **Third-party property holder** | Whoever owns the analytics property the shipped defaults point at. Today the toolkit author |
+
+### Findings
+
+### J11-1 — [Medium] The address mask is a 9+4 truncation and six sibling public feeds publish the full addresses that invert it, so §C1's fix, the dormant-balance mask and the live-session mask are all reversible by join — **FIXED 2026-09-02 (option b; see the §J11 resolution pass — it was SEVEN feeds, not six)**
+
+**Threat actor: anonymous internet / competitor.**
+
+`maskAddr` keeps nine leading and four trailing characters
+([index.js:295-298](../../web/07_mining_pool_public/back-end-pool/index.js#L295)), and three
+more copies of the same function exist —
+[index.js:2195](../../web/07_mining_pool_public/back-end-pool/index.js#L2195) (live sessions),
+[dormancy.js:47-51](../../web/07_mining_pool_public/back-end-pool/lib/dormancy.js#L47) and
+[lottery.js:539](../../web/07_mining_pool_public/back-end-pool/lib/lottery.js#L539) (10+4).
+
+Four public surfaces mask. **Six do not:**
+
+| Route | Field | Cap | Notes |
+|---|---|---|---|
+| `GET /api/pool/blocks` | `found_by` | 500/page, **`offset` has no upper bound** ([index.js:2271](../../web/07_mining_pool_public/back-end-pool/index.js#L2271)) | blocks are never pruned, so this walks the whole history |
+| `GET /api/pool/top-block-finders` | `found_by AS grin_address` + `total_reward`, sorted desc | 1000 rows / 3650 days ([index.js:3005](../../web/07_mining_pool_public/back-end-pool/index.js#L3005)) | the exact shape §C1 masked on `/api/pool/miners` |
+| `GET /api/pool/payments` | `grin_address` | 500 ([index.js:3041](../../web/07_mining_pool_public/back-end-pool/index.js#L3041)) | documented as deliberate |
+| `GET /api/pool/donors` | `grin_address AS address` | 100 ([index.js:3296](../../web/07_mining_pool_public/back-end-pool/index.js#L3296)) | |
+| `GET /api/stratum/top-miners` | `grin_address` | 1000 ([index.js:4636](../../web/07_mining_pool_public/back-end-pool/index.js#L4636) → [hashrate-tracker.js:133](../../web/07_mining_pool_public/back-end-pool/lib/hashrate-tracker.js#L133)) | |
+| `GET /api/stratum/top-avg-hashrate` | `grin_address` | 1000 / 90 days ([hashrate-tracker.js:162](../../web/07_mining_pool_public/back-end-pool/lib/hashrate-tracker.js#L162)) | |
+
+Nine leading plus four trailing bech32 characters is not a partial identifier — it is a unique
+one. Demonstrated against the real schema:
+
+```
+── GET /api/pool/miners — MASKED
+   {"grin_address":"grin1qqqq…zz9x","balance":1234.5,"is_online":1}
+
+── GET /api/pool/top-block-finders — FULL
+   {"grin_address":"grin1qqqqqqq…qqqzzzz9x","blocks_found":1,"total_reward":60}
+
+── Mask inversion
+   masked row from /api/pool/miners : grin1qqqq…zz9x  balance 1234.5
+   candidates from the FULL feeds   : 1
+   recovered full address           : grin1qqqqqqq…qqqzzzz9x
+```
+
+So the mask stops a copy-paste harvest and nothing else. Three consequences, worst first:
+
+1. **`/api/pool/unclaimed` becomes a targeting list.** It publishes, per masked address,
+   `balance`, `last_activity_at`, `idle_days`, `dispose_at` and `days_until_disposal`
+   ([dormancy.js:156-164](../../web/07_mining_pool_public/back-end-pool/lib/dormancy.js#L156)).
+   Un-masked by the join, that is "this exact address holds N GRIN, its owner has not been
+   seen in 700 days, and the pool will sweep it in 30" — an inventory of balances whose owners
+   demonstrably are not watching, which is precisely the population an ownership-gate attack
+   (§J3) wants.
+2. **§C1's fix does not hold.** `/api/pool/miners` is the rich list sorted by balance; the
+   join restores the address→balance mapping its own API doc line says "is not" public
+   ([index.js:1140](../../web/07_mining_pool_public/back-end-pool/index.js#L1140)).
+3. **`/api/stratum/stats`'s session mask does not hold either** — answering §J6's handoff
+   below.
+
+**The disposition §C1 asked for.** `/api/pool/miners` no longer publishes the raw pair, so
+§C1's specific finding is closed; the *control it installed* is not effective. The choice is
+between three coherent positions, and the pool currently holds none of them:
+
+- **(a) Address-as-identity, stated.** Drop the masks. They cost nothing to an attacker and
+  buy the operator a false claim. Publish full addresses everywhere and say so on the privacy
+  page. Cheapest, most honest, worst for miners.
+- **(b) Mask consistently and break the deep-link.** Mask the three leaderboards and
+  `found_by`. The account-page link (`addrCell`,
+  [miners-stats.html:284-288](../../web/07_mining_pool_public/public_html/miners-stats.html#L284))
+  then cannot be built from a leaderboard row, which is the actual cost — a miner would paste
+  their own address instead of clicking their row. **Recommended — and this is what was
+  built.**
+- **(c) Opt-in leaderboards.** A per-account "show me on the leaderboard" flag, default off.
+  Correct and the most work: it needs an ownership-gated write, a UI, and it silently empties
+  the leaderboards until miners find the switch.
+
+**Resolution: option (b), 2026-09-02.** Nine public list routes now mask (the six above, plus a
+seventh the table missed — `/api/stratum/hashrate`'s `top_miners` — and the two that already
+did), the four account-page deep-links are gone, and the invariant is asserted per route by the
+test suite. Detail, and what it costs a miner, in the resolution pass below.
+
+### J11-2 — [High] Every confirmed payout is published with the miner's full address beside its on-chain kernel excess — a permanent, public address↔chain linkage table for a privacy coin, on a feed where nothing renders the field — **FULLY FIXED 2026-09-02 (pool-wide feed dropped it; the per-address feed is now ownership-gated — see the §J11 resolution pass)**
+
+**Threat actor: chain analyst.** No attack on the pool is involved. This is the pool
+publishing the join key.
+
+Grin has no txid; the payment-proof primitive is the **kernel excess**, and
+`withdrawals.kernel_excess` exists so a miner can verify their own payout against a chain
+explorer (memory `project_pool_explorer_deeplinks`, the account page's *Proof* column). That
+is a good feature on the account page. It is also on the pool-wide feed:
+
+```
+index.js:3028  SELECT id, grin_address, amount, fee_charged, method, status,
+index.js:3029         created_at, confirmed_at, kernel_excess
+index.js:3030  FROM withdrawals WHERE status = 'confirmed'
+```
+
+One unauthenticated GET therefore returns, for the last 500 payouts:
+
+```
+{"grin_address":"grin1qqqq…zzzz9x","amount":500,"method":"tor","confirmed_at":1788383185,
+ "kernel_excess":"08c1f2d4aa9b6e5537f0e1c2b3a49586d7c8e9f0a1b2c3d4e5f60718293a4b5c6d7"}
+```
+
+**Both consumers of that endpoint drop the field.** The homepage teletype prints amount and a
+truncated address ([reactor-dashboard.js:570-600](../../web/07_mining_pool_public/public_html/js/reactor-dashboard.js#L570));
+`payment-history.html`'s payouts table renders time, address, amount, status
+([payment-history.html:433-451](../../web/07_mining_pool_public/public_html/payment-history.html#L433)).
+Nothing on any public page reads `kernel_excess` off this route. It is published and unused.
+
+**Why this outranks every address finding in J11-1.** A Grin slatepack address is a durable
+wallet identity. A kernel is a specific transaction in the public chain. Publishing the pair
+gives a chain analyst a bidirectional index:
+
+- *chain → person:* take any kernel from the Grin chain, look it up here, learn which pool
+  miner received it and how much.
+- *person → chain:* take any address off a leaderboard (J11-1), fetch
+  `GET /api/account/<addr>/withdrawals?format=csv` — public, all-time, 50,000 rows, also
+  carrying `kernel_excess` ([index.js:3643](../../web/07_mining_pool_public/back-end-pool/index.js#L3643),
+  [:3669](../../web/07_mining_pool_public/back-end-pool/index.js#L3669)) — and get every
+  on-chain transaction that ever paid that identity.
+
+This is not recoverable. Mainnet balances are real, and a table scraped once is public
+forever regardless of what the pool changes later. It is also a documented decision, not an
+oversight: the API reference advertises "the on-chain kernel when known"
+([index.js:1139](../../web/07_mining_pool_public/back-end-pool/index.js#L1139)) — one line
+above the row that says the address→balance mapping "is not" public. The two lines do not hold
+the same position.
+
+**Fixed for the pool-wide feed** (small and local, and no consumer regresses): `kernel_excess`
+dropped from `/api/pool/payments` and its doc row corrected.
+
+**Left open for `/api/account/:addr/withdrawals`.** There the field *is* the product — it
+backs the Proof column a miner uses to verify their own payout. Removing it removes a real
+feature; keeping it public means anyone may pull anyone's kernel list. The three coherent
+answers, none free:
+
+- gate the *field* behind the ownership proof the withdraw routes already use, leaving the
+  rest of the history public (the account page would need to post a proof to show Proof);
+- publish it only for the requester's own address, i.e. accept that the account page needs a
+  session after all — a departure from address-as-identity;
+- keep it, and say plainly on the privacy page that payouts are chain-linkable by address.
+
+This one should be decided before mainnet, not after.
+
+**Resolution: the first option, 2026-09-02.** `kernel_excess` left the per-address JSON row and
+the CSV column too (both replaced by a `has_kernel_proof` boolean), and
+`POST /api/account/:addr/withdrawals/proofs` returns the kernels behind the same ownership proof
+a withdrawal needs — same verifier, audited on both paths, and on the `withdraw` bucket rather
+than `public`, because `verifyOwnerProof` runs scrypt and §F2 is the reason that matters. The
+account page's Proof column keeps working behind a *Reveal proofs* button on the page's existing
+proof box. Detail in the resolution pass below.
+
+### J11-3 — [Medium] The account dossier is address-addressable with no login, the leaderboard hands out the addresses, and the page invites search engines to index the result — **FIXED 2026-09-02 (both halves: `noindex, follow` on the page, and J11-1 removed every link into it)**
+
+**Threat actor: anonymous internet, competitor, bulk crawler.** This answers §J3's handoff.
+
+`GET /api/account/:addr` ([index.js:3075-3199](../../web/07_mining_pool_public/back-end-pool/index.js#L3075))
+returns, for any address, with no credential: `balance`, `balance_locked`, `total`,
+`total_paid`, `payouts_count`, `blocks_found`, the full pending withdrawal row (id, amount,
+method, status, retry_count, next_retry_at), `is_online`, `last_seen_at`, `created_at`, share
+count, hashrate, the dormancy countdown, `has_recorded_ip` / `has_recorded_pass`, the evidence
+change timestamps, `donation_percent`, `password_proof.state` and `.live`, and the Nostr
+destination username. `GET /api/account/:addr/workers`
+([index.js:3210](../../web/07_mining_pool_public/back-end-pool/index.js#L3210)) adds the
+per-rig inventory: worker name, hashrate, share count, last share, reject% and stale%.
+
+Each field is defensible on its own and §J8 confirmed no proof hash escapes. The finding is
+the **composition at scale**: J11-1 supplies up to 1000 full addresses in one request, and the
+`public` bucket allows 1200/min, so one IP holds a complete per-miner dossier of the pool —
+balance, earnings, rig count, rig names, uptime and payout state — in **under a minute**. That
+is not "the address is identity"; it is a published customer list.
+
+**And the pool asks to have it indexed.** `account-settings.html` declares
+`<meta name="robots" content="index, follow, max-snippet:-1">`
+([account-settings.html:8](../../web/07_mining_pool_public/public_html/account-settings.html#L8)),
+`robots.txt` defaults to `Disallow:` — allow everything
+([index.js:1383](../../web/07_mining_pool_public/back-end-pool/index.js#L1383)) — and
+`miners-stats.html`, which **is** in `SITEMAP_PATHS`
+([index.js:1401](../../web/07_mining_pool_public/back-end-pool/index.js#L1401)), renders every
+leaderboard row as `<a href="/account-settings.html?addr=grin1…">`
+([miners-stats.html:284-288](../../web/07_mining_pool_public/public_html/miners-stats.html#L284)).
+A crawler following the sitemap therefore requests up to 1500 URLs each carrying a miner's full
+address in the query string.
+
+The static `<link rel="canonical">` points at the addr-less URL
+([account-settings.html:34](../../web/07_mining_pool_public/public_html/account-settings.html#L34)),
+which will usually keep the parameterised variants out of *Google's* index — but a canonical is
+a hint, it does not stop the crawl, and it binds nobody else. The addresses land in Bing, in
+Common Crawl, and in every AI training crawler's corpus, permanently and outside the operator's
+control. `login.html` got exactly this treatment for exactly this reason — *"an indexed admin
+login is free reconnaissance"*, `noindex, nofollow`
+([login.html:12-14](../../web/07_mining_pool_public/public_html/login.html#L12)) — and the page
+whose URL carries a miner's identity did not.
+
+**Recommended, and cheap:** set `account-settings.html` to `noindex, follow` (matching
+login.html's precedent; `follow` so the shell nav still passes link equity). Leave `robots.txt`
+permissive — a `Disallow` would stop the crawl *before* the `noindex` is read, which is the
+classic way a URL ends up indexed anyway.
+
+**Resolution, 2026-09-02: exactly that, and both halves landed.** The meta tag is now
+`noindex, follow` with the reasoning inline, `robots.txt` is untouched, and J11-1's option (b)
+independently removed every `?addr=` link the site emitted — so there is no longer a crawl path
+into the page at all. The `?addr=` *reader* stays (a miner may bookmark or share their own link);
+what is gone is the pool publishing one. Both are asserted in the suite.
+
+### J11-4 — [Medium] Every pool deployed from this toolkit beacons every visitor of every public page to one fixed third-party GA4 property, with the CSP already widened to allow it and no consent banner — **FIXED 2026-09-02**
+
+**Threat actor: none — the pool does this by default.** The beneficiary is the
+**third-party property holder**; the parties harmed are every visitor and the operator, who
+inherits the GDPR/ePrivacy exposure of a tracker they did not choose. This is §J10's handoff,
+confirmed live.
+
+The shipped defaults:
+
+```
+pool-settings.js:186   provider: 'none',      // was 'ga4'
+pool-settings.js:187   ga_tracking_id: '',    // was 'G-GMYJ4PVG4L'
+pool-settings.js:198   cookie_consent_enabled: 'false',
+```
+
+The chain is complete end to end — this is not a dead default:
+
+1. `buildPublicConfig` passes both through unchanged
+   ([pool-settings.js:1286-1288](../../web/07_mining_pool_public/back-end-pool/lib/pool-settings.js#L1286));
+2. `/api/public/branding` serves them to every public page
+   ([index.js:979](../../web/07_mining_pool_public/back-end-pool/index.js#L979));
+3. `loadProvider` dispatches `'ga4'` → `loadGa4('G-GMYJ4PVG4L')`
+   ([branding.js:761-762](../../web/07_mining_pool_public/public_html/js/branding.js#L761)),
+   which injects `https://www.googletagmanager.com/gtag/js?id=…`
+   ([branding.js:803-807](../../web/07_mining_pool_public/public_html/js/branding.js#L803));
+4. `cookie_consent_enabled` is `'false'`, so the consent gate at
+   [branding.js:744](../../web/07_mining_pool_public/public_html/js/branding.js#L744) is
+   skipped and the script loads immediately;
+5. **and the generated nginx CSP already allowlists it** —
+   `script-src … https://www.googletagmanager.com`, `connect-src … https://*.google-analytics.com`
+   ([07_grin_mining_public_pool.sh:1269](../../scripts/07_grin_mining_public_pool.sh#L1269)).
+   Nothing blocks the beacon.
+
+Same family as J10-4 and from the same defaults block, but with a sharper edge: `seo.site_url`
+mis-attributed the operator's *content*; this ships the operator's *visitors*. On a product
+whose stated position is scrypt-hashed miner IPs, country-only geo and a k-anonymity floor,
+the out-of-the-box behaviour is a full third-party page-view stream. The plausible / umami /
+matomo defaults are all empty — GA4 is the only one wired up.
+
+**Second half, found in the same read: the address scrub is one-sided.** `loadGa4` pins
+`page_location` to `scrubbedLocation()`, which deletes `?addr=` so a miner's address never
+reaches GA4 in the page URL
+([branding.js:775-820](../../web/07_mining_pool_public/public_html/js/branding.js#L775)) —
+good, and deliberate. But `gtag('config', …)` sets no `page_referrer`, and GA4 defaults that
+parameter to `document.referrer`. Every in-site navigation *away* from
+`account-settings.html?addr=grin1…` (the shell nav is on every page) therefore sends the
+address as the referrer of the next page view. The scrub covers the page you are on and not
+the page you came from.
+
+**Fixed:** `provider` defaults to `'none'` and `ga_tracking_id` to `''` — analytics is
+opt-in, the operator supplies their own property, and no pool ships pointing at someone
+else's. `loadGa4` now pins `page_referrer` to a scrubbed referrer alongside `page_location`,
+so an operator who *does* enable GA4 gets the scrub on both parameters. The CSP allowlist is
+left alone: it is what makes an operator's own GA4/Plausible/Umami choice work, and it emits
+nothing on its own.
+
+### J11-5 — [Low] The k-anonymity floor guards the country breakdown but not the region breakdown, and the region breakdown is not behind the network-map gate — **FIXED 2026-09-02 (option a, on both the live feed and its durable history — see the §J11 resolution pass)**
+
+**Threat actor: anonymous internet.**
+
+`/api/pool/topology` applies both controls: `networkMapPublic()` 404s the whole route when the
+map is off ([index.js:4201](../../web/07_mining_pool_public/back-end-pool/index.js#L4201)), and
+countries below `network_map_min_bucket` (default 3) are folded into an unnamed *Other* row
+before any point is built ([index.js:4314](../../web/07_mining_pool_public/back-end-pool/index.js#L4314)).
+`/api/network/peers` does the same ([index.js:4429](../../web/07_mining_pool_public/back-end-pool/index.js#L4429)).
+Both are correct.
+
+`/api/pool/stats/regions` has neither. It publishes, ungated and with no floor, per region:
+`region`, `label`, `country`, `country_code`, `stratum_url`, `status`, `hashrate_gps`,
+`miners`, `shares_window`
+([index.js:4584-4596](../../web/07_mining_pool_public/back-end-pool/index.js#L4584)). On a
+single-box pool this is harmless — one region, and it is the pool. On a **multi-region** pool
+each region carries an operator-declared `country_code`, so a row reading
+`{region:'sgn', country_code:'VN', miners:1}` is the same statement the floor exists to
+prevent, at gateway granularity: *one identifiable person mines near Vietnam*. The floor's own
+helper text names the harm — *"a country holding one participant never points at one person"*
+([settings-access.html:137-139](../../web/07_mining_pool_public/back-end-pool/admin-panel/settings-access.html#L137)).
+`/api/pool/metrics/history/regions`
+([index.js:3263](../../web/07_mining_pool_public/back-end-pool/index.js#L3263)) publishes the
+same counts as a durable series over `?range=all`, so the thin-region history is public too.
+
+Not the same severity as the country feed: a gateway country is a coarse proxy (a miner may
+route through any region), the floor only ever hid *which* country, and the operator declares
+the gateway's country themselves. But the control is inconsistent, and the inconsistency is
+invisible from the admin panel — an operator who leaves the network map off has not made the
+per-place miner count private.
+
+Two options: (a) apply `network_map_min_bucket` to the `miners` field only, reporting
+`miners: null` (not 0 — see §J5-4's lesson about a suppressed number reading as a real zero)
+below the floor while `status` and `stratum_url` stay; (b) accept it and say so in the toggle's
+helper text, which currently implies the map switch covers the whole who-mines-where question.
+
+**Resolution: option (a), 2026-09-02, with two corrections to the option as written above.**
+(1) `hashrate_gps` and `shares_window` are suppressed alongside `miners` — with one miner in a
+region the hashrate *is* that miner's rig size, so masking the count alone would have been
+theatre. (2) The floor was applied to `/api/pool/metrics/history/regions` as well; suppressing
+only the live view would have left `?range=all` publishing yesterday's thin-region counts
+forever. `status`/`online` are kept deliberately — a stated residual, not an oversight. Detail
+and the render-side trap it exposed are in the resolution pass below.
+
+### J11-6 — [Info] Express announces itself on every response, and the pool's vhost is the only toolkit vhost without `server_tokens off` — **EXPRESS HALF FIXED 2026-09-02; the nginx half is §J16's**
+
+**Threat actor: anonymous internet.**
+
+`app.disable('x-powered-by')` was never called — the app-setup block ran straight from
+`app.set('trust proxy', …)` into `app.use(express.json())` ([index.js:226-233](../../web/07_mining_pool_public/back-end-pool/index.js#L226),
+where the fix now sits), so every API response carried `X-Powered-By: Express`.
+The generated vhost neither sets `server_tokens off`
+nor `proxy_hide_header X-Powered-By` — verified by grep across
+`scripts/07_grin_mining_public_pool.sh`, which has no occurrence of either, while sibling
+products do set it
+([051_grin_fidelius.sh:903](../../scripts/051_grin_fidelius.sh#L903),
+[051x_grin_xp_wallet.sh:489](../../scripts/051x_grin_xp_wallet.sh#L489)).
+
+Low value on its own — the pool's stack is not a secret, and `/api/public/endpoints` publishes
+the route table by design. Worth closing because it is one line, and because it is the cheap
+half of a pair whose expensive half (nginx's own `Server:` banner) belongs to §J16.
+
+**Fixed:** `app.disable('x-powered-by')` added.
+
+### J11-7 — [Info] Two account routes parse their window parameter without a default, so `?hours=abc` silently answers "this miner has no data" — **FIXED 2026-09-02**
+
+**Threat actor: none (a typo, or a client that sends an empty string).** Reported because the
+failure mode is a *wrong answer on the money UI*, not an error.
+
+Three call sites use `parseInt(req.query.x || N)` rather than the `parseInt(x, 10) || N` form
+§J7-4 standardised — the `||` runs before `parseInt`, so a non-numeric string survives it and
+`NaN` reaches the clamps, which propagate it:
+
+```
+index.js:3213  Math.min(Math.max(parseInt('abc' || 10),   1), 1440)  -> NaN
+index.js:3225  Math.min(Math.max(parseInt('abc' || 24),   1),  720)  -> NaN
+index.js:3241  (same)
+```
+
+Unlike §J7-4's routes these do not 500 — both consumers carry their own try/catch and return an
+empty array — so the miner gets a plausible, wrong answer. Demonstrated:
+
+```
+index.js:3225  ?hours=abc  ->  hours = NaN
+  getAccountHistory(NaN) -> []
+index.js:3213  ?window=abc ->  windowMin = NaN
+  getWorkersForAccount(NaN) -> []
+
+  control: the same calls with the intended defaults
+  getAccountHistory(24)    -> [{"t":1788384829,"gps":12.5}]
+  getWorkersForAccount(10) -> [{"worker_name":"rig-01","hashrate_gps":0.000137,…}]
+```
+
+`window_min: NaN` also serialises to `null` in the response, so the echo does not reveal the
+bad input either. On the account page that renders as *no rigs online* and *no hashrate
+history* for a miner who is mining normally.
+
+`index.js:3577` (`parseInt(req.query.days || 0)`) is the same form but harmless — `NaN > 0` is
+false, so it falls through to "all history", which is the documented default.
+
+**Fixed:** all three switched to `parseInt(x, 10) || N`, matching §J7-2/§J7-4.
+
+### J11-8 — [Info] Verified correct, with evidence
+
+Each of these was the plan's explicit ask, and each was read at the write side rather than
+inferred from a comment.
+
+- **Miner IPs are scrypt-hashed at capture, not at read.** `recordOwnerEvidence` canonicalises,
+  then stores `v1$salt$hash` — the raw IP is never bound into an INSERT
+  ([owner-proof.js:387-405](../../web/07_mining_pool_public/back-end-pool/lib/owner-proof.js#L387)).
+  Capture is on the first **accepted share**, not at login, and deliberately so
+  ([stratum-server.js:592-596](../../web/07_mining_pool_public/back-end-pool/lib/stratum-server.js#L592)).
+- **Audit IPs are coarsened at write.** `auditOwnerProof` calls `coarsenIp(ip)` inside the
+  INSERT's parameter list — IPv4→/24, IPv6→/48, non-IP→NULL
+  ([owner-proof.js:116-127](../../web/07_mining_pool_public/back-end-pool/lib/owner-proof.js#L116),
+  applied at [:639](../../web/07_mining_pool_public/back-end-pool/lib/owner-proof.js#L639)).
+  The 180-day prune is real and runs: `retention_enabled` defaults to `'true'`
+  ([pool-settings.js:645](../../web/07_mining_pool_public/back-end-pool/lib/pool-settings.js#L645)),
+  `audit_log_keep_days` has a **runtime floor of 30**
+  ([retention.js:92](../../web/07_mining_pool_public/back-end-pool/lib/retention.js#L92)) so a
+  mis-set value cannot disable it, and the DELETE is inside the retention transaction
+  ([retention.js:119-121](../../web/07_mining_pool_public/back-end-pool/lib/retention.js#L119)).
+- **geoip is country-only by construction.** `lookupCountry` returns `{cc, name}` and the IP is
+  never returned, stored or logged
+  ([geoip.js:40-51](../../web/07_mining_pool_public/back-end-pool/lib/geoip.js#L40)); the only
+  three callers pass a transient IP and keep the code
+  ([miners.js:134-147](../../web/07_mining_pool_public/back-end-pool/lib/miners.js#L134),
+  [index.js:674](../../web/07_mining_pool_public/back-end-pool/index.js#L674),
+  [owner-proof.js:629](../../web/07_mining_pool_public/back-end-pool/lib/owner-proof.js#L629)).
+- **`network_peers.peer_key` re-verified (§G2, and the plan's `node_id` question).** It is
+  `sha256(net + '|' + ip)` truncated to 32 hex, unsalted
+  ([index.js:678](../../web/07_mining_pool_public/back-end-pool/index.js#L678)) — reversible for
+  IPv4, as §G2 accepted. **The re-verification the plan asked for is that it never leaves the
+  box**: `/api/network/peers` selects `country_code, country, COUNT(*)` and emits only country
+  rows plus scattered points
+  ([index.js:4418-4483](../../web/07_mining_pool_public/back-end-pool/index.js#L4418)); no
+  public route returns `peer_key`. The salt question that made memory
+  `project_peer_map_location_grouping` a finding on **06** does not arise here, because 06
+  publishes its per-node identifier and the pool publishes none. Do not "harden" this — salting
+  breaks the cross-snapshot dedup the column exists for.
+- **The network-map gate fails closed and the floor is applied before the points.**
+  `networkMapPublic()` returns `false` on a settings read error
+  ([index.js:4155-4164](../../web/07_mining_pool_public/back-end-pool/index.js#L4155)), the
+  default is `'false'`
+  ([pool-settings.js:277](../../web/07_mining_pool_public/back-end-pool/lib/pool-settings.js#L277)),
+  and both routes 404 rather than 403 so the feature's existence is not confirmed. In
+  `/api/network/peers` the thin rows are filtered *before* the twinkle loop
+  ([index.js:4430-4432](../../web/07_mining_pool_public/back-end-pool/index.js#L4430)), which is
+  the ordering that matters — points are placed inside their own country.
+- **Sample data is labelled** (memory `project_pool_network_map`). `#nm-note` distinguishes
+  "feed unreachable → sample topology" from "no miners yet" and from sample peers
+  ([network-map.js:439-451](../../web/07_mining_pool_public/public_html/js/network-map.js#L439)),
+  and `FALLBACK_TOPOLOGY` carries `geo_source:'sample'`
+  ([network-map.js:83](../../web/07_mining_pool_public/public_html/js/network-map.js#L83)). It
+  is small muted text under the globe — a legibility question for §J15, not a leak.
+- **CORS carries no cookie-reading route.** The `*` origin is set for **GET/OPTIONS only** on
+  `/api/public/`, `/api/config/`, `/api/pool/`, `/api/account/`, `/api/stratum/`,
+  `/api/network/`, with no `Access-Control-Allow-Credentials`
+  ([index.js:275-291](../../web/07_mining_pool_public/back-end-pool/index.js#L275)). Every route
+  under those six prefixes was enumerated: none reads `req.cookies`, none calls
+  `requireAdmin`, and the money actions on `/api/account/` are POST/DELETE, which the method
+  filter excludes. `/api/admin/` and `/api/auth/` are not in the list.
+- **`lib/ip-filter.js` is admin-only and leaks nothing outward.** It is mounted solely inside
+  `secureAdmin` ([index.js:814-818](../../web/07_mining_pool_public/back-end-pool/index.js#L814));
+  the one field it echoes is `your_ip`, which is the caller's own address
+  ([ip-filter.js:47](../../web/07_mining_pool_public/back-end-pool/lib/ip-filter.js#L47)); and
+  `getClientIp` reads `req.ip` under `trust proxy: 'loopback'`, not the raw header
+  ([ip-filter.js:288-291](../../web/07_mining_pool_public/back-end-pool/lib/ip-filter.js#L288)).
+- **No public route returns a raw IP.** Enumerated across all **51 unauthenticated route
+  registrations** — 50 GETs (`/health` carries an `/api/health` alias on the same call) plus
+  `POST /api/public/ads/event`; the four ownership-proof-gated account POST/DELETEs and
+  `GET /api/auth/captcha` (§J2's) are excluded from that count.
+  §J8-5's journal sink (the pool's own systemd journal logs address + raw mining IP on login)
+  remains the only out-of-DB IP↔address pairing, and it is not reachable over HTTP.
+- **`/api/pool/locations` and the gateway roster are public by necessity, and the hub is not
+  named.** `stratum_url` is where a miner points a rig
+  ([index.js:4134](../../web/07_mining_pool_public/back-end-pool/index.js#L4134)); the hub's own
+  host appears in no public response, and `/api/pool/topology` publishes the hub's **country**
+  only, behind the gate. The residual — that `/api/pool/stats/regions` gives an attacker live
+  feedback on whether a DoS against one gateway is working — is inherent to publishing honest
+  liveness and is accepted.
+
+### J11-9 — [Info] Two smaller notes from the same sweep
+
+**(a) `/api/pool/status` and `/api/pool/poolstats` publish node internals that a public Grin
+node deliberately cannot answer.** `/api/pool/status` returns `node.peers` (exact count),
+`node.synced` and `node.height`
+([index.js:2237-2252](../../web/07_mining_pool_public/back-end-pool/index.js#L2237)), and
+`/api/pool/poolstats` repeats the peer count as `network.connections`
+([index.js:3539](../../web/07_mining_pool_public/back-end-pool/index.js#L3539)). All three come
+from `get_status` on the node's **Owner** API. Per CLAUDE.md, a node published through Script 04
+answers `get_tip` and nothing else, precisely because *"peer count and sync state are unknowable
+from outside"* — so the pool re-publishes, unauthenticated, exactly what the node's own public
+surface withholds. Memory `project_health_api_security` lists "exact peer count" and "block
+height" under *don't expose*. Practical value to an attacker is small (height is on every
+explorer; a peer count helps only someone planning to eclipse or censor this specific node) and
+the poolstats feed's shape is fixed by what miningpoolstats.stream already imports — so this is
+recorded, not changed. If it is ever tightened, `peers` is the field to band or drop; `height`
+is genuinely public chain data.
+
+**(b) `/api/pool/blocks` has an unbounded `offset`.** `limit` is capped at 500 but
+`offset` is only floored at 0
+([index.js:2271](../../web/07_mining_pool_public/back-end-pool/index.js#L2271)), and blocks are
+never pruned — that is what makes the full `found_by` set walkable in J11-1. A large offset is
+also a deepening `LIMIT ? OFFSET ?` scan on the synchronous DB the stratum server shares
+(memory `project_pool_db_capacity`). The row cap holds, so this is not §J7-2; the cost question
+is **§J12's**, listed in the handoffs.
+
+### Handoffs
+
+- **§J12 (rate limiting & resource exhaustion)** owns three from this sweep. (1)
+  `/api/pool/blocks`'s unbounded `offset` (J11-9b) — deep-offset paging on the shared
+  synchronous DB, and the mechanism that makes the J11-1 harvest cheap. (2) The `public`
+  bucket at **1200/min** is what turns "the account page is public" into "the whole pool's
+  dossier in under a minute" (J11-3); if J11-1 is answered with option (a) or (c), the bucket
+  is the only remaining brake and should be sized for it. (3) `/api/account/:addr/withdrawals?format=csv`
+  and `/api/account/:addr/balance/log?format=csv` are 50,000-row exports **for any address**,
+  throttled by the `export` bucket (10/min) but not by ownership — J12 should confirm 10/min is
+  the intended budget for bulk export of someone else's ledger.
+- **§J14 (admin panel front-end)** — nothing new. The three admin surfaces that render a full
+  address (`miners.html`, `payments.html`, the payout audit) are behind `secureAdmin` and are
+  the operator's own data.
+- **§J15 (public front-end)** owns the render half of two things here. (1) J11-3's
+  `addrCell` — the leaderboard link is the mechanism, and if J11-1 lands on option (b) the
+  change is in `miners-stats.html`, not in `index.js`. (2) **Every public HTML page hardcodes
+  `pool.grin.money`** in its static `<link rel="canonical">`, `og:url`, `og:image`,
+  `twitter:image` and `twitter:domain` — 7 occurrences in `account-settings.html` alone, 10 in
+  `index.html`, 56 across the ten public pages. `branding.js` rewrites canonical and og:url at
+  runtime from `seo.site_url` ([branding.js:237-245](../../web/07_mining_pool_public/public_html/js/branding.js#L237)),
+  so a JS-capable client sees the right one — but a non-rendering crawler, an unfurling chat
+  client, and any page load where `/api/public/branding` fails all see the toolkit author's
+  domain. That is J10-4's bug surviving in the static half of the same surface; J10 fixed the
+  setting, and the HTML was not in its scope or mine.
+- **§J16 (deployment & infra)** owns the nginx half of J11-6 (`server_tokens off` /
+  `proxy_hide_header X-Powered-By` — the pool's vhost is the only toolkit vhost without it) and
+  should note that the generated page CSP allowlists `googletagmanager.com`,
+  `*.google-analytics.com`, `plausible.io` and `cloud.umami.is`
+  ([07_grin_mining_public_pool.sh:1269](../../scripts/07_grin_mining_public_pool.sh#L1269)).
+  That allowlist is correct — it is what makes an operator's own analytics choice work — but
+  after J11-4 it is now wider than the default configuration uses, which is the right way round
+  and worth stating so a later reader does not "tidy" it away.
+- **§J17 (operational gate)** — three, all cheap. (1) **Decide J11-2's per-address half before
+  mainnet.** Once a real payout confirms on mainnet, its kernel is published and cannot be
+  unpublished. (2) **Decide J11-1** before the first leaderboard has real addresses on it, for
+  the same reason. (3) After a real install, `curl -I` any public URL and confirm
+  `X-Powered-By` is gone and what the `Server:` banner says — the Express half is fixed in
+  code, the nginx half is not.
+- **§J6's handoff, answered.** *"Does a worker label leak rig identity a truncated address was
+  meant to hide?"* — the question is moot: the truncation itself does not hide the address
+  (J11-1), so `/api/stratum/stats`'s masked sessions are attributable regardless of the label.
+  *"Is a live session list a mining-farm's operational intelligence?"* — yes, and the label is
+  the smaller half of it. `getStats()` publishes per live session `worker_name`, `difficulty`,
+  `shares`, `accepted`, `rejected`, `stale` and `online_seconds`
+  ([stratum-server.js:962-971](../../web/07_mining_pool_public/back-end-pool/lib/stratum-server.js#L962)),
+  and `/api/account/:addr/workers` publishes the same inventory keyed by the **full** address
+  with no mask at all. A competitor reads rig count, per-rig difficulty, hardware quality
+  (reject/stale ratio) and uptime for every miner in the pool. That is folded into J11-3
+  rather than reported separately, because the fix is the same decision.
+- **§G / memory `project_pool_ip_privacy`** needs one amendment: its "still open —
+  `/api/pool/miners` returns every miner's FULL grin address + balance (§C1)" line is now
+  **wrong in the letter and right in the substance**. The endpoint masks; the mask is
+  invertible (J11-1). The memory should say so, and should record that the pool's most
+  consequential public linkage is not an IP at all — it is `kernel_excess` (J11-2).
+
+### Verification
+
+Every finding was read first and then demonstrated. Demonstrations ran as one-shot `node`
+calls against the real modules from a scratchpad directory outside the repo — `initDb()` on a
+temporary SQLite file, the routes' **exact** SQL, and the real `hashrate-tracker.js` — with the
+temp DB deleted at the end. No server was started, nothing was left running, and no HTTP
+request was made to any route (CLAUDE.md's local-process rule).
+
+| Check | Result |
+|---|---|
+| `node --check` on `index.js`, `lib/pool-settings.js`, `public_html/js/branding.js` | pass |
+| `scripts/test-public-leakage.js` (new, 24 assertions) | pass |
+| Existing unit suites (`npm run test:unit`) | unchanged, pass |
+
+**Gaps worth stating.** (1) **No HTTP request was made**, so the CORS middleware's behaviour,
+the `X-Powered-By` removal and the 404 on the gated map routes are all read, not observed —
+the same harness gap §J7 through §J10 each recorded. (2) **J11-3's crawler claim is a
+reasoning result, not a measurement.** That `miners-stats.html` is in the sitemap and emits
+`?addr=` links is verified in code; what any given crawler *does* with the canonical is not
+something this repo can settle. (3) **J11-4's beacon was traced through five files and not
+seen firing** — no page was loaded. The CSP allowlist is the strongest evidence that it was
+expected to work.
+
+### Changed this session
+
+| File | Change |
+|---|---|
+| `index.js` | J11-2 — `kernel_excess` dropped from the `/api/pool/payments` SELECT and its `API_DOC_META` description corrected · J11-6 — `app.disable('x-powered-by')` added beside the `trust proxy` line · J11-7 — the three `parseInt(req.query.x \|\| N)` sites at `:3213`, `:3225`, `:3241` switched to `parseInt(x, 10) \|\| N` |
+| `lib/pool-settings.js` | J11-4 — `analytics.provider` default `'ga4'` → `'none'`, `analytics.ga_tracking_id` `'G-GMYJ4PVG4L'` → `''`, with the reasoning in place |
+| `public_html/js/branding.js` | J11-4 — `scrubbedLocation()` generalised to `scrubAddr(url)`; `loadGa4` now pins `page_referrer` to a scrubbed `document.referrer` alongside `page_location` |
+| `scripts/test-public-leakage.js` | **New** — 24 assertions: [1] no `analytics` default names a third-party property, provider or GA measurement id (4), [2] `branding.js` scrubs `addr` from **both** `page_location` and `page_referrer` (4), [3] `maskAddr` resolves a masked row to exactly one full address, does not collide on a shared 9-char prefix, and agrees with `dormancy.js`'s copy (4), [4] `/api/pool/payments` selects no `kernel_excess` while `/api/account/:addr/withdrawals` still does (3), [5] `x-powered-by` is disabled and every `parseInt(req.query.x \|\| N)` site carries a NaN default (5), [6] `coarsenIp` masks /24 and /48 and returns null for a non-IP, and `geoip` hands back no IP (4) |
+| `package.json` | `test:unit` runs the new suite |
+
+**Left open at the end of the reporting pass:** **J11-1** (which of three positions on address
+masking the pool takes — all three change a shipped page), **J11-2's per-address half** (the
+kernel Proof column is a real feature; publishing it for arbitrary addresses is the cost),
+**J11-3** (it pairs with the J11-1 decision) and **J11-5** (suppress thin-region miner counts, or
+state that the map toggle does not cover them). All four are product decisions, and the first two
+should be settled before mainnet because what is published on mainnet cannot be withdrawn.
+
+**→ All four were decided and closed the same day. See the resolution pass immediately below.**
+
+
+### §J11 — resolution pass, 2026-09-02 (same day, add-ons, NOT VPS-TESTED)
+
+The four items §J11 left open were all product decisions rather than bugs, and the reporting pass
+said so. The operator took them, choosing the recommended option in each case. This pass records
+what was built, the **two things the fix itself uncovered that the reporting pass had missed**,
+and what each choice costs.
+
+| Finding | Decision | Cost accepted |
+|---|---|---|
+| **J11-1** | Option **(b)** — mask every public list, break the deep-link | A miner pastes their address instead of clicking their leaderboard row |
+| **J11-2** | Ownership-gate the kernel | The Proof column needs one click and the page's existing proof box |
+| **J11-3** | `noindex, follow` | The account page leaves search results (it was never a useful landing page) |
+| **J11-5** | Option **(a)** — floor the region counts | A thin gateway shows `<3 miners` instead of an exact number |
+
+#### Two things the fix found that the report had not
+
+**(1) There was a SEVENTH full-address feed.** §J11-1's table named six.
+`GET /api/stratum/hashrate` also carried one — `getHashrateStats()` builds a `top_miners` array
+with full addresses ([hashrate-tracker.js:1009-1013](../../web/07_mining_pool_public/back-end-pool/lib/hashrate-tracker.js#L1009)),
+and the route returned the object whole. It was missed because the endpoint's name and its
+documented job ("pool hashrate aggregates") say nothing about a per-miner list, and because
+**no consumer reads it** — `reactor-dashboard.js:356` and `miners-stats.html:464` both take only
+`pool_hashrate_1h_gps`. It was published and unused, exactly like `kernel_excess` on
+`/api/pool/payments`. That is the second time in one session a leak was found in a field nothing
+renders, which is the pattern worth naming: **an unread field is not an unnoticed field, it is an
+unreviewed one.**
+
+*Checked while there, because it would have been much worse:* `PoolstatsReporter.collectStats()`
+also calls `getHashrateStats()` and pushes to miningpoolstats.stream. It reads
+`pool_hashrate_1h_gps` and nothing else
+([poolstats-reporter.js:117-147](../../web/07_mining_pool_public/back-end-pool/lib/poolstats-reporter.js#L117)),
+so no miner address has ever left the box to a third party. The comment there now says to keep it
+that way.
+
+**(2) J11-5's suppression would have re-created §J5-4 on two front ends.** Nulling a count is only
+half a fix; the render side has to know that null ≠ 0.
+
+- `reactor-dashboard.js`'s gateway lamp read
+  `r.miners > 0 ? … : 'idle'`. With `miners: null` that prints **"idle"** next to an **online**
+  lamp — a suppressed value rendered as a measured state, and self-contradictory on the same row.
+- `charts-init.js`'s `renderMultiTrendLine` mapped every point through `Number(p.v) || 0`, so a
+  suppressed point would have been plotted as **a gateway with 0 miners**. Chart.js already draws
+  `null` as a gap (the same function emits one for any bucket a series has no point in), so the
+  correct value was there all along — the `|| 0` was overwriting it.
+
+Both are fixed, and the chart fix is the more valuable of the two because it is a **shared
+helper**: any future series that legitimately has no value for a bucket now draws a gap instead
+of a false zero.
+
+#### What was built
+
+**J11-1 — the invariant, not the endpoint list.** The point of the finding is that masking any
+*subset* of the feeds is worthless, so the fix is stated as a rule and asserted as one:
+
+> **No public route may emit an unmasked `grin_address` in a LIST.**
+
+`/api/account/:addr/*` is the sole exception and is not a list — the caller supplied the address.
+The rule and its reasoning sit on `maskAddr` itself
+([index.js:295-317](../../web/07_mining_pool_public/back-end-pool/index.js#L295)) rather than on
+any one route, because the next person to add a leaderboard will read the helper, not this
+document. Nine routes are asserted individually by
+`scripts/test-public-leakage.js` — add a new list route and add it there.
+
+The four deep-links are gone: `miners-stats.html`'s `addrCell` (three leaderboards),
+`payment-history.html`'s `addrCell`, `donate.html`'s donor card and `blocks.html`'s `title`
+tooltip. Two of those carried the full address **twice** (once in the `href`, once in a `title`),
+which is why the pages "already truncated" and leaked anyway. Nothing on screen changes except
+that the addresses stop being clickable: every one of those cells already displayed a 9+4
+truncation.
+
+**What this costs.** A miner who spots their row on the leaderboard can no longer click through
+to their account. They paste their address into the lookup console the account page already has
+(`#acct-addr`, P-00). That is the whole cost, and it is the right side of the trade: the
+convenience was one click for the owner and a complete pool roster for everyone else.
+
+**J11-2 — the kernel is now the one account field that costs a proof.** `kernel_excess` left the
+per-address JSON row and the CSV column, both replaced by `has_kernel_proof` (boolean) so the UI
+still knows which payouts *have* a proof to fetch. `POST /api/account/:addr/withdrawals/proofs`
+returns `{ proofs: { <withdrawal id>: <kernel> } }` behind `verifyOwnerProof` — the same function,
+the same proof (a recent mining IP or the rig's stratum password), audited on both the allow and
+deny path as `owner_proof:kernel_proofs:<ok|deny>`.
+
+Three details that are not incidental:
+
+- **It is a POST**, so the proof travels in a body and never lands in an nginx access log.
+- **It is on the `withdraw` bucket (20/min), never `public`.** `verifyOwnerProof` runs scrypt at
+  16 MB; a proof-taking endpoint on the 1200/min public bucket is a CPU-exhaustion lever, which
+  is precisely §F2. The test asserts the bucket.
+- **The account-existence check runs first**, matching its GET sibling, so a nonexistent address
+  is "not found" whether or not a proof was supplied — no new enumeration signal.
+
+Client side: a *Reveal proofs* button next to the withdrawal table feeds the page's existing
+single proof box through `getProof()`, exactly like every payout action. Until it is used, the
+Proof column reads `hidden` (with a title saying why) rather than `pending`, so a miner is never
+told a proof is missing when it exists. `revealedProofs` is cleared on every `lookup()`, so
+switching addresses can never show the previous address's kernels.
+
+**What this costs.** One click and the proof the miner already needs for a payout. The residual:
+the CSV export no longer carries kernels at all, so a miner reconciling in a spreadsheet has to
+take them from the proofs endpoint. That is a real, small loss of convenience, and it is the
+right trade against a 50,000-row all-time export of anyone's chain linkage.
+
+**J11-3 — both halves, and they are independent.** `account-settings.html` is now
+`noindex, follow`, with the reasoning inline and a note that `robots.txt` deliberately stays
+permissive (a `Disallow` stops the crawl *before* the tag is read, which is how a URL gets
+indexed URL-only). Separately, J11-1's de-linking means the site no longer emits an
+`?addr=` link at all, so there is no crawl path into the page. Either alone would have been
+partial; the pair closes it. The `?addr=` *reader* stays — a miner may legitimately bookmark or
+share their own link, and the comment there now says the pool no longer publishes one.
+
+**J11-5 — the floor, on both the live feed and its durable history.** `/api/pool/stats/regions`
+and `/api/pool/metrics/history/regions` now apply `network_map_min_bucket`, with four rules that
+are each a decision:
+
+1. **Suppress only `0 < n < kMin`.** A real zero stays `0`. "No miners on this gateway" identifies
+   nobody and is exactly what a miner picking a gateway needs to see; nulling it would be §J5-4
+   inverted — a real value read as suppressed.
+2. **Suppress `hashrate_gps` and `shares_window` with `miners`.** With one miner in a region the
+   hashrate is that miner's rig size, so it is *more* identifying than the count.
+3. **Keep `status`/`online`.** One bit, and that bit is the entire purpose of the public connect
+   grid; a miner pointed at a dead gateway is a real harm. **Stated residual:** on a thin region
+   `online` still implies at least one miner. The floor hides the *number*, not the existence.
+4. **Skip it entirely on a single-region pool.** The region is then the pool, `totals` publishes
+   the same number anyway, and suppressing would blank every single-box install's dashboard for
+   zero privacy gain.
+
+Totals are summed **before** suppression, so they stay exact: the floor hides *where*, never *how
+many*. The response also carries `min_bucket` and `suppressed_regions` (and `suppressed_points` on
+the history route) so a client can render "—" or "<3" instead of inventing a zero — publishing the
+threshold costs nothing, since it is in the admin UI already, and an unexplained blank reads as a
+bug.
+
+**What this costs.** On a multi-region pool, a gateway with one or two miners shows `<3 miners`
+instead of an exact count. Nothing else changes.
+
+#### Also changed: the syntax gate could not see any of this
+
+`scripts/check-syntax.js` extracted inline `<script>` blocks from `admin-panel/` only. Every page
+edited in this pass — the leaderboards, the blocks explorer, the payouts table, the donor wall and
+the whole account page — keeps its logic in an inline block in `public_html/`, so the pool's only
+pre-commit gate was blind to the money UI miners actually use, in exactly the way §J14's note
+describes it having been blind to half the admin panel. `public_html` is now in
+`INLINE_HTML_DIRS`, with a `type` filter so `<script type="application/ld+json">` (JSON, not
+JavaScript) is skipped rather than failing every public page on its schema.org markup. The gate
+went from 21 to **31 inline blocks**, and it was mutation-tested: a deliberate syntax error in
+`blocks.html` is caught and the check goes red.
+
+#### Verification
+
+| Check | Result |
+|---|---|
+| `npm test` (syntax gate + 9 unit suites) | pass, `rc=0` |
+| `scripts/test-public-leakage.js` | **51 assertions**, pass (was 24) |
+| **Mutation test — 9 deliberate regressions** | **all 9 caught**; suite green again after restore |
+| `npm run check-syntax` | 60 files + 31 inline blocks |
+
+The mutation test is the part worth keeping. It broke each fix in turn — un-masking the donor
+wall, un-masking the stratum top-10, restoring the leaderboard deep-link, putting `kernel_excess`
+back into the per-address row (twice: as a shorthand and as a named property), moving the proofs
+route to the `public` bucket, making the account page indexable, suppressing a real zero, and
+coercing a suppressed chart datum back to `0` — and confirmed the suite goes red for each.
+
+**It caught a bad assertion of mine.** The first version of the §J11-2 check tested that
+`has_kernel_proof` was *present* in the route, which is not the same as testing that the kernel is
+*absent*: re-adding `kernel_excess` to the response object passed it, because the string still
+appeared elsewhere in the handler. The assertion now counts every mention of `kernel_excess` in
+the handler (excluding SQL and comments) and requires each one to match a provably non-leaking
+form — the destructure that drops it, the `!!` coercion, or the CSV yes/no. A presence check is
+not an absence check, and only the mutation run exposed it.
+
+**Gaps worth stating.** (1) **Still no HTTP request to any route** — the masking, the new POST's
+403 path and the `noindex` header are read and unit-asserted, not observed on the wire; the same
+harness gap §J7–§J10 each recorded. (2) **The account page's *Reveal proofs* flow has not been
+driven in a browser** — the handler, the wiring and the state reset are read, and the page passes
+the syntax gate, but no click has happened. (3) **J11-5's floor has never seen a multi-region
+pool**, because nothing here has run on a VPS; a single-box install takes the skip branch, so the
+suppression path itself is exercised only by the unit assertions.
+
+#### Changed in this pass
+
+| File | Change |
+|---|---|
+| `index.js` | **J11-1** — `maskAddr` gains the stated invariant; `found_by` masked on `/api/pool/blocks`; addresses masked on `/api/pool/top-block-finders`, `/api/pool/payments`, `/api/pool/donors`, `/api/stratum/hashrate` (the seventh feed), `/api/stratum/top-miners`, `/api/stratum/top-avg-hashrate` · **J11-2** — `kernel_excess` dropped from the per-address JSON row and CSV column in favour of `has_kernel_proof`, and a new ownership-gated `POST /api/account/:addr/withdrawals/proofs` on the `withdraw` bucket · **J11-5** — k-anonymity floor + `min_bucket`/`suppressed_*` fields on `/api/pool/stats/regions` and `/api/pool/metrics/history/regions` · `API_DOC_META` updated for all nine changed routes and the new one added |
+| `public_html/miners-stats.html` | J11-1 — `addrCell` renders plain text, no `?addr=` link |
+| `public_html/payment-history.html` | J11-1 — same, and the full-address `title` tooltip removed |
+| `public_html/donate.html` | J11-1 — donor card de-linked, `title` removed |
+| `public_html/blocks.html` | J11-1 — full-address `title` tooltip removed from the `found_by` cell |
+| `public_html/account-settings.html` | J11-3 — `robots` → `noindex, follow` · J11-2 — `revealedProofs` state (cleared per lookup), the Proof cell's `hidden` state, the *Reveal proofs* button + `revealProofs()` handler, and a note that the `?addr=` reader stays while nothing emits one |
+| `public_html/js/reactor-dashboard.js` | J11-5 — gateway lamp renders a floored count as `<N miners`, never `idle`; region sort treats a floored count as 1, not 0 |
+| `public_html/js/charts-init.js` | J11-5 — `renderMultiTrendLine` preserves a `null` datum as a gap instead of `Number(null) \|\| 0` → a false zero |
+| `scripts/check-syntax.js` | `public_html` added to `INLINE_HTML_DIRS` with a `type` filter for JSON-LD — 21 → 31 inline blocks |
+| `scripts/test-public-leakage.js` | 24 → **51 assertions**: the nine-route masking invariant, the no-`?addr=`-link sweep across every public page, the kernel-absence count, the proofs route's guard + bucket + audit, the `noindex` pair, and the region floor on both feeds plus both render sites |
+
+**Nothing from §J11 is left open.** J11-9(a) (the node peer count on `/api/pool/status`) and
+J11-9(b) (the unbounded `offset`) were recorded as Info and handed to §J12, not left open here.
+
+---
+
+## §J12 — Rate limiting & resource exhaustion (2026-09-02, add-ons, NOT VPS-TESTED)
+
+Twelfth session of the pre-mainnet §J pass (plan:
+[`script07_reference_audit_session_plan.md`](script07_reference_audit_session_plan.md) §J12).
+Scope: [`lib/rate-limiter.js`](../../web/07_mining_pool_public/back-end-pool/lib/rate-limiter.js)
+(410), bucket assignment across all 171 route registrations in
+[`index.js`](../../web/07_mining_pool_public/back-end-pool/index.js), the `trust proxy` chain,
+the generated nginx `limit_req` map in
+[`scripts/07_grin_mining_public_pool.sh`](../../scripts/07_grin_mining_public_pool.sh), and the
+cost of every endpoint the plan named as expensive.
+
+Method: build the bucket matrix first (§J12's half of the J1 deliverable), then stop asking
+"is this route throttled?" — every route but four is — and ask the question that actually
+decides whether the box survives: **what does one request cost, multiplied by the rate the two
+throttle layers actually allow?** Where a query was suspect, its plan was read out of
+`node:sqlite` with `EXPLAIN QUERY PLAN` against the real schema rather than guessed.
+
+**Headline — the throttles are in good shape and the unit costs were never measured. Two
+anonymous GETs are priced wrong by orders of magnitude: one full-table-scans a table that
+grows by a row per miner per minute, on every request, whatever window you ask for; the other
+makes two upstream RPCs — including one to the hot wallet that pays miners — with no
+server-side cache, while the endpoint beside it in the same file got exactly that cache with
+the reasoning written out.**
+
+*The limiting itself is sound.* Every route carries a bucket except four, and those four are
+deliberate (J12-13). Buckets are keyed per `(type, IP)` so a login budget is not spent by
+dashboard polls; `getClientIp` reads `req.ip` under `trust proxy: 'loopback'`, which makes
+`X-Forwarded-For` unspoofable from off-box; nginx puts a second, independent per-IP
+`limit_req` zone in front of nearly everything. §F1 and §F2's dedicated `withdraw`, `export`
+and `torcheck` buckets are all still correctly attached, and §J2-1's `stepup` bucket is on both
+password-verifying routes. Five response caches exist in this code base and four of them are
+exemplary — bounded, in-flight-deduped, negative-result-aware.
+
+*What is wrong is on the cost side.* `hashrate_history` grows at one row per active miner per
+minute for 100 days;
+[`/api/stratum/top-avg-hashrate`](../../web/07_mining_pool_public/back-end-pool/index.js#L4665)
+scans **all** of it per request, and `?days` does not enter the query plan at all (J12-1,
+confirmed with `EXPLAIN QUERY PLAN`). `/api/pool/status` called the node Owner API and the
+wallet Owner API on every hit and answered with a `Cache-Control` header instead of a cache
+(J12-2). `/api/pool/effort`'s round window fell back to `> 0` — the whole `shares` table — on a
+pool that has not yet found a block, i.e. on launch day (J12-7).
+
+*And one throttle was not the throttle it is documented to be.* The limiter's exponential
+backoff could not escalate: the violation record was deleted at expiry, so `count` was always
+1 and every lockout was 30 s. The 30→60→120 ladder and the one-hour cap in the comment were
+unreachable code (J12-4).
+
+Twelve findings plus two Info sweeps. **Six fixed in this session** (J12-2, J12-4, J12-6,
+J12-7, J12-8 and half of J12-10 — each small and local, plan rule 3) with a new 22-assertion
+suite, `scripts/test-rate-limits.js`. **J12-1, J12-3, J12-5, J12-9, J12-11 and J12-12 are left
+open**: the first needs a schema decision, the rest are sized against traffic nobody has yet.
+
+### Threat actors used in this section
+
+| Label | Means | What the two throttle layers actually allow it |
+|---|---|---|
+| **Anonymous internet** | Anyone who can reach the public API. No credential | nginx `_api` **600 r/m** + app `public` **1200/min**, both per-IP → the binding limit is **~10 req/s from one host**, and nothing caps the number of hosts |
+| **Registered miner** | Holds one valid ownership proof for one address (a recent mining IP, or the rig password) | `withdraw` **20/min**, `export` **10/min**, `torcheck` **10/min**, all per-IP |
+| **Search engine / bulk crawler** | Follows links; fetches `/robots.txt` and `/sitemap.xml` unprompted | **No nginx zone at all** on those paths, and it shares one app bucket with every other visitor (J12-3) |
+| **Logged-in admin / stolen `secureAdmin` session** | A live session cookie; no step-up. §C3 keeps this a live actor | nginx `_admin` **2400 r/m** + app `admin` **2400/min** |
+| **On-box root** | Edits `pool.json` | Everything. Findings needing this are Info, per plan rule 7 |
+
+### The bucket matrix — every route, its bucket, and the zone in front of it
+
+The §J1 matrix says which *guard* a route carries. This is the other axis, and it is the half
+§J12 owes. `n` counts route registrations parsed from `index.js`; the nginx zone is whichever
+`location` block the path falls into in the generated vhost.
+
+| App bucket | Rate | n | nginx zone in front | Routes | Is the number right? |
+|---|---|---|---|---|---|
+| `admin` | 2400/min | 99 | `_admin` 2400 r/m burst 40 | Every `secureAdmin` (64), `freshAdmin` (31), `freshAdminEnroll` (2) — the bucket is the first element of all three chains ([index.js:830](../../web/07_mining_pool_public/back-end-pool/index.js#L830), [:879](../../web/07_mining_pool_public/back-end-pool/index.js#L879), [:893](../../web/07_mining_pool_public/back-end-pool/index.js#L893)) | **Yes, as DoS padding**, and it answers §J1's handoff: this is *not* the only thing in front of an unauthenticated caller. nginx's `_admin` zone is an independent per-IP layer at the same rate on both `/admin/` and `/api/admin/`, and it applies whether or not `admin_allowlist` is empty. The two routes behind it that should not be are J12-5 |
+| `public` | 1200/min | 51 | `_api` 600 r/m burst 10 (`_static` 6000 r/m for `/blog/<slug>`; **nothing** for four paths) | All public GETs, `/health`, `/api/public/*`, `/api/pool/*`, `/api/stratum/*`, the account GETs, `/robots.txt`, `/sitemap.xml`, `/manifest.json`, `/blog/rss.xml`, `/page.html`, `/blog/:slug` | **The rate is fine; four members are not.** nginx binds first at ~10 req/s, which is a correct budget for a page read and a catastrophic one for J12-1, J12-2, J12-7 and J12-9. Four members have no nginx zone at all (J12-3) |
+| `auth` | 200/min | 3 as middleware + 2 via peek/consume | `_auth` 200 r/m burst 5 | `POST /api/auth/login/totp`, `/logout`, `/refresh`; `register` and `login` gate on `peek` and only `consume` after the CAPTCHA passes | **Yes.** The peek/consume split is right and its free branch does no credential work. The recovery-code bcrypt behind `login/totp` is bounded by §J2-3's per-token budget, not by this number — see *Handoffs answered* |
+| `stepup` | 10/min | 2 | `_api` 600 r/m | `POST /api/admin/reauth`, `POST /api/auth/change-password` | **Yes.** §J2-1's fix, correctly attached to both password-verifying routes |
+| `withdraw` | 20/min | 4 | `_api` 600 r/m | `POST /withdraw`, `/withdraw/:id/finalize`, `POST` + `DELETE /nostr-destination` | **Yes for the money side.** It also silently prices the Tor pre-flight probe, which is J12-12 |
+| `export` | 10/min | 2 routes (peek + consume each) | `_api` 600 r/m | `?format=csv` on `/api/account/:addr/withdrawals` and `/balance/log` | **Yes**, and this answers §J11's handoff: both are row-capped at `CSV_MAX_ROWS = 50000` ([index.js:3654](../../web/07_mining_pool_public/back-end-pool/index.js#L3654)) and scoped to one address, so 10/min bounds the allocation at roughly 7 MB per request. §J11's *ownership* question is real and stands; it is not a cost question |
+| `torcheck` | 10/min | 1 | `_api` 600 r/m | `GET /api/account/:addr/tor-check` | **Yes, and it is the model the rest should copy.** 60 s cache + in-flight dedup + a 500-entry bound with expired-first eviction + a must-have-mined check ([index.js:3745-3790](../../web/07_mining_pool_public/back-end-pool/index.js#L3745)) |
+| `api` | 600/min | **0** | — | **Nothing.** Defined, documented, and `middleware()`'s default argument — attached to no route | **Dead** — J12-10, fixed |
+| *(none)* | — | 4 | varies | `POST /api/auth/register`, `POST /api/auth/login` (both gate internally on `peek`), `GET /api/admin/_authcheck`, the `/api/account` shape middleware | **All four correct** — J12-13 |
+
+nginx zone rates, all `$binary_remote_addr`-keyed through the shared
+`nginx_ensure_rate_limit_zones` primitive as CLAUDE.md requires
+([07_grin_mining_public_pool.sh:1048-1053](../../scripts/07_grin_mining_public_pool.sh#L1048)):
+`_auth` 200 r/m · `_captcha` 600 r/m · `_api` 600 r/m · `_admin` 2400 r/m · `_static` 6000 r/m.
+
+### Findings
+
+### J12-1 — [High] `/api/stratum/top-avg-hashrate` full-scans `hashrate_history` on every request and `?days` never enters the plan — the cheapest unauthenticated way to stall share intake — **FIXED 2026-09-02 (see §J12 resolution pass)**
+
+**Threat actor: anonymous internet.**
+
+The handler clamps its inputs correctly — `days ≤ 90`, `limit ≤ 1000`
+([index.js:4666-4667](../../web/07_mining_pool_public/back-end-pool/index.js#L4666)) — and
+hands them to `getTopAvgHashrate`
+([hashrate-tracker.js:156-179](../../web/07_mining_pool_public/back-end-pool/lib/hashrate-tracker.js#L156)):
+
+```sql
+SELECT grin_address, COALESCE(SUM(hashrate_gps * window_seconds), 0) / ? AS avg_gps
+FROM hashrate_history WHERE recorded_at > ?
+GROUP BY grin_address ORDER BY avg_gps DESC LIMIT ?
+```
+
+Two indexes exist on that table
+([db.js:506](../../web/07_mining_pool_public/back-end-pool/lib/db.js#L506),
+[:518](../../web/07_mining_pool_public/back-end-pool/lib/db.js#L518)) and **neither serves this
+query.** Run against the real schema in `node:sqlite`:
+
+```
+EXPLAIN QUERY PLAN → SCAN hashrate_history USING INDEX idx_hashrate_address
+                   | USE TEMP B-TREE FOR ORDER BY
+```
+
+`SCAN`, not `SEARCH`. The `recorded_at > ?` predicate sits on the **second** column of
+`idx_hashrate_address(grin_address, recorded_at DESC)`, so it cannot seek: SQLite walks the
+whole index, does a table lookup on every row for `hashrate_gps` and `window_seconds` (neither
+is in that index), and builds a temp B-tree to sort. **The `days` parameter never enters the
+plan at all** — `?days=1` costs exactly what `?days=90` costs, which is the entire table.
+
+That table is written at one row per active miner per minute
+([hashrate-tracker.js:9](../../web/07_mining_pool_public/back-end-pool/lib/hashrate-tracker.js#L9),
+[:63](../../web/07_mining_pool_public/back-end-pool/lib/hashrate-tracker.js#L63)) and pruned at
+`database.hashrate_keep_days`, **default 100**
+([retention.js:104-107](../../web/07_mining_pool_public/back-end-pool/lib/retention.js#L104)).
+At the 1000-miner target of memory `project_pool_db_capacity` the steady state is
+1000 × 1440 × 100 ≈ **144 million rows**, scanned per request. At 100 miners it is 14.4 M.
+
+`node:sqlite` is synchronous and the stratum server shares this process. This is the exact
+hazard the author has already identified and closed for the sibling endpoint — the comment
+above `idx_hashrate_time` spells it out, *"a multi-second scan blocks share submission for
+every connected miner"*
+([db.js:507-517](../../web/07_mining_pool_public/back-end-pool/lib/db.js#L507)) — and
+`getPoolHistory` additionally got a TTL cache for the same reason
+([hashrate-tracker.js:295-302](../../web/07_mining_pool_public/back-end-pool/lib/hashrate-tracker.js#L295)).
+`getTopAvgHashrate` got neither, and it is the more expensive of the two.
+
+**Impact.** nginx allows ~10 req/s from one host. Ten full-table scans a second against a
+synchronous DB is not a slow page — it is the share pipeline stopped, and §J6 established that
+stopped share intake is how a found block is lost. No credential, no proof, one `curl` loop.
+
+**Fix — NOT applied (plan rule 3: this is structural).** Three options, in order of preference:
+**(a)** add a covering index `hashrate_history(recorded_at, grin_address, hashrate_gps,
+window_seconds)` so the plan becomes a covering range seek and `days` finally bounds the work;
+**(b)** serve the sustained-contribution leaderboard from the never-pruned
+`pool_metrics_hourly` rollup instead of raw samples; **(c)** at minimum give it the same TTL
+cache `getPoolHistory` has — the answer is identical for every caller, so a 60 s memo makes the
+whole endpoint one query a minute. (a) and (c) together are the right answer. It is left open
+because creating that index on a populated 100-day table is a migration with a lock, not an
+edit — the same hazard class as §J7-1's `VACUUM` cron, and it belongs in the same conversation.
+`scripts/test-rate-limits.js` pins the `SCAN` plan so the day someone adds the index, the suite
+says the finding is closed rather than silently continuing to pass.
+
+### J12-2 — [High] `/api/pool/status` made two upstream RPCs per request — one to the hot wallet — and answered with a cache *header* instead of a cache — **FIXED 2026-09-02**
+
+**Threat actor: anonymous internet.**
+
+[index.js:2250-2278](../../web/07_mining_pool_public/back-end-pool/index.js#L2250) as it stood.
+Every hit did, unconditionally and in series:
+
+1. `await blockMonitor.grinNode.getStatus()` — a node **Owner API** JSON-RPC call with a 10 s
+   fetch timeout ([grin-node.js:307](../../web/07_mining_pool_public/back-end-pool/lib/grin-node.js#L307));
+2. `await wallet.getBalance()` — a **wallet Owner API v3** call: AES-256-GCM over the ECDH
+   session, 10 s timeout.
+
+Then it set `Cache-Control: public, max-age=15`. That is a hint to the *client*. It costs an
+attacker one header to ignore, and nothing on the box consults it.
+
+**Why this is a finding and not a nitpick.** The endpoint 1200 lines further down in the same
+file does the same class of work and got the real control, with the reasoning written out:
+
+> *"60s cache: MPS polls on a fixed interval and this is a public GET that touches the node and
+> the DB, so an uncached version is a free amplification handle (same reasoning as
+> getPoolHistory in lib/hashrate-tracker.js)."*
+> — [index.js:3471-3476](../../web/07_mining_pool_public/back-end-pool/index.js#L3471)
+
+`/api/pool/status` is the *other* public GET that touches the node, it also touches the wallet,
+and it is polled by every homepage visitor rather than by one listing service.
+
+**Impact.** At ~10 req/s from one host: 10 node Owner-API calls and 10 wallet Owner-API calls
+per second, sustained, unauthenticated. `getBalance()` defaults to `refresh = false`
+([wallet.js:40-44](../../web/07_mining_pool_public/back-end-pool/lib/wallet.js#L40)), so it is
+an LMDB read rather than a node-wide output scan — that is the single thing keeping this out of
+Critical, and it is deliberate and documented. What remains is still serious: `WalletAPI` is a
+**singleton shared with the payout path**, and `_call` mutates `this.aesKey` / `this.sessionOpen`
+and re-runs `initSession()` on any session-shaped error
+([wallet.js:200-219](../../web/07_mining_pool_public/back-end-pool/lib/wallet.js#L200)). A flood
+of concurrent status calls races that shared session against the withdrawal scheduler's own
+calls, and each in-flight request holds a 10 s socket to the wallet.
+
+**Fixed.** Given the 15 s server-side TTL its own header already advertised, plus in-flight
+dedup so a burst arriving on a cold cache collapses to one upstream pair — the pattern
+`torProbeCached` and `cachedGatewayStatus` already use in this file. Last-good is served when a
+build fails, so a down node cannot turn the endpoint back into a per-request prober.
+
+### J12-3 — [Medium] The four SEO paths are proxied with no `X-Forwarded-For` and no `limit_req` zone, so every visitor shares one app bucket and ~1200 requests from one host 429s `/robots.txt` and `/sitemap.xml` for everyone — **FIXED 2026-09-02 (see §J12 resolution pass)**
+
+**Threat actor: anonymous internet; the collateral is every crawler.**
+
+The generated vhost proxies four paths on one line each, with `Host` and nothing else
+([07_grin_mining_public_pool.sh:1400-1404](../../scripts/07_grin_mining_public_pool.sh#L1400)):
+
+```nginx
+location = /robots.txt    { proxy_pass http://127.0.0.1:$POOL_PORT; proxy_set_header Host $host; }
+location = /sitemap.xml   { proxy_pass http://127.0.0.1:$POOL_PORT; proxy_set_header Host $host; }
+location = /manifest.json { proxy_pass http://127.0.0.1:$POOL_PORT; proxy_set_header Host $host; }
+location = /blog/rss.xml  { proxy_pass http://127.0.0.1:$POOL_PORT; proxy_set_header Host $host; }
+```
+
+No `limit_req`. No `X-Forwarded-For`. All four handlers carry `rateLimiter.middleware('public')`
+([index.js:1347](../../web/07_mining_pool_public/back-end-pool/index.js#L1347),
+[:1394](../../web/07_mining_pool_public/back-end-pool/index.js#L1394),
+[:1419](../../web/07_mining_pool_public/back-end-pool/index.js#L1419),
+[:1451](../../web/07_mining_pool_public/back-end-pool/index.js#L1451)).
+
+With no `X-Forwarded-For` header present, `trust proxy: 'loopback'` leaves `req.ip` as the
+socket address — nginx's `127.0.0.1`. The limiter key for all four is therefore the single
+bucket `public|127.0.0.1`, **shared by every visitor on Earth**.
+
+**This exact trap is documented three blocks further down the same file**, where it was
+recognised and fixed for `/page.html`:
+
+> *"Forwards the client IP, unlike the SEO-file proxies above: this one is a real page a
+> visitor loads, and the app rate-limits it per IP — without these headers every visitor would
+> share nginx's single 127.0.0.1 bucket."*
+> — [07_grin_mining_public_pool.sh:1411-1414](../../scripts/07_grin_mining_public_pool.sh#L1411)
+
+The comment even names "the SEO-file proxies above" as the contrast case. What it does not say
+is that those four are *also* the only proxied paths with no `limit_req` zone, which is what
+makes the shared bucket cheap to reach.
+
+**Two consequences, both live.**
+
+1. **A denial of service on the pool's own discoverability.** ~1200 requests to `/sitemap.xml`
+   — seconds, since nginx applies no zone — trips `public|127.0.0.1` into a lockout. Every
+   subsequent request to any of the four then returns 429, for every visitor and every crawler,
+   re-tripping for as long as the attacker keeps going. A sustained 429 on `robots.txt` is read
+   by search engines as "do not crawl this site"; on `sitemap.xml` it is a fetch failure. This
+   is also the one place where J12-4's dead backoff worked in the *defender's* favour, and the
+   fix there makes the lockout longer.
+2. **Real per-request work, unmetered at the edge.** `/sitemap.xml` runs `listEnabled()`, a
+   `COUNT(*)` and a 50-row post page
+   ([index.js:1419-1447](../../web/07_mining_pool_public/back-end-pool/index.js#L1419)); the
+   other three each run uncached `getSection()` reads (see J12-8). None of it is capped by nginx.
+
+**And one latent trap from the same root cause.** `isLocalRequest(req)` returns `true` for any
+request arriving on a location that does not set `X-Forwarded-For`
+([index.js:241-244](../../web/07_mining_pool_public/back-end-pool/index.js#L241)) — its
+docstring's premise, *"a loopback `req.ip` can ONLY be a direct on-box call"*, is false for
+exactly these four locations. It is **not exploitable today**: its single call site is the
+CAPTCHA bypass in `POST /api/auth/register`
+([index.js:1735](../../web/07_mining_pool_public/back-end-pool/index.js#L1735)), which is served
+by `location /api/auth/` and does forward the header. But the invariant the function documents
+is not true of this vhost, and the next route proxied the SEO way would inherit "the trusted
+operator on the box" for free.
+
+**Fix (not applied — it is a vhost change, §J16's file).** Add `proxy_set_header X-Real-IP
+$remote_addr;` + `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;` and
+`limit_req zone=${POOL_SERVICE}_static burst=20 nodelay;` to all four blocks — i.e. treat them
+exactly as `/page.html` is already treated. Independently, tighten `isLocalRequest` to require
+*both* a loopback `req.ip` **and** an absent `x-forwarded-for` header, so the function's
+docstring becomes true by construction rather than by the vhost happening to agree with it.
+
+### J12-4 — [Medium] The limiter's exponential backoff was unreachable code: the violation record was deleted at expiry, so the lockout was always 30 s and the one-hour cap could never apply — **FIXED 2026-09-02**
+
+**Threat actor: anonymous internet — this is a control that under-performed, not a hole.**
+
+[rate-limiter.js:216-263](../../web/07_mining_pool_public/back-end-pool/lib/rate-limiter.js#L216)
+as it stood. The documented behaviour is a ladder:
+
+```js
+const violationCount = (this.violations.get(key)?.count || 0) + 1;
+const lockoutDuration = Math.min(
+  30000 * Math.pow(2, violationCount - 1), // Exponential backoff: 30s → 60s → 120s
+  3600000 // Cap at 1 hour
+);
+```
+
+`violationCount` could never be anything but 1. Every path into that line:
+
+- If a violation record existed and `lockedUntil > now`, `checkLimit` returned `false` at :226 —
+  it never reached the escalation.
+- If it existed and had expired, it was **`delete`d at :229** and execution continued.
+- So by the time the escalation ran, `this.violations.get(key)` was *always* `undefined` —
+  either it never existed, or the branch above had just removed it.
+  `(undefined?.count || 0) + 1` → `1`. `30000 * 2**0` → **30 s, every time.**
+- `startCleanup` deleted expired violations too, so no path preserved a count either.
+
+`getViolations()` therefore reported `violation_count: 1` for every entry it would ever return,
+and the admin *Login Security* panel's escalation column was a constant.
+
+**Impact.** A persistent violator was refused for 30 s, re-evaluated against a 60 s sliding
+window that had not yet drained, re-locked for another 30 s, and settled into roughly "budget
+requests per ~90 s" forever, with no escalating cost. That is a *weaker* control than the
+comment describes, not a broken one — the sliding window is what actually held the line. It is
+Medium rather than Low because both the audit trail and the operator UI present a ladder that
+did not exist, and because §J2-1 reasoned about the `stepup` budget while the code advertised an
+escalating penalty on top of it that was never applied.
+
+**Fixed.** `checkLimit` now keeps the record when it clears an expired `lockedUntil` instead of
+deleting it, and the cleanup sweep only drops a violation once it has been expired for a full
+`VIOLATION_MEMORY_MS` (10 minutes). An expired-but-remembered record is inert everywhere it
+matters — `peek()`, `getStatus()` and `getViolations()` all test `lockedUntil > now` — so
+keeping it does not extend a lockout by a millisecond; it only remembers that this bucket has
+misbehaved before. Ten minutes was chosen so a client hammering back through every lockout
+climbs the ladder while an operator who tripped the admin budget once during a busy afternoon
+is back to a 30 s penalty by the time they notice. Verified: 30 → 60 → 120 s across three
+consecutive expiries, and `getViolations()` empty for a lapsed record.
+
+### J12-5 — [Medium] The two admin CSV exports have no row cap and ride the 2400/min `admin` bucket, while the public per-address exports are capped at 50,000 rows on a dedicated 10/min bucket — **FIXED 2026-09-02 (see §J12 resolution pass)**
+
+**Threat actor: logged-in admin, or a stolen `secureAdmin` session — neither route is
+`freshAdmin`, and §C3 is still open.**
+
+```js
+app.get('/api/admin/export/payouts.csv', secureAdmin, ...)      // index.js:2950
+  SELECT ... FROM withdrawals WHERE status = 'confirmed' ORDER BY confirmed_at DESC
+app.get('/api/admin/export/fee-revenue.csv', secureAdmin, ...)  // index.js:2967
+  SELECT ... FROM blocks ORDER BY height DESC
+```
+
+No `LIMIT`. Both `.all()` the entire result into an array, then `sendCsv` builds **one string in
+memory** by `map` + `join` over every row
+([index.js:2941-2947](../../web/07_mining_pool_public/back-end-pool/index.js#L2941)) before a
+single byte is written. Neither table is ever pruned — `retention.js` prunes `shares`,
+`hashrate_history`, `alerts`, `admin_audit_log` and `balance_log`, and the code says so of
+`withdrawals` explicitly
+([index.js:3641-3643](../../web/07_mining_pool_public/back-end-pool/index.js#L3641)).
+
+The asymmetry is the point. The *public, per-address* exports two hundred lines away are capped
+at `CSV_MAX_ROWS = 50000` and gated on a dedicated 10/min `export` bucket
+([index.js:3637-3654](../../web/07_mining_pool_public/back-end-pool/index.js#L3637)). The
+*pool-wide, all-time* exports have neither, and sit on the 2400/min bucket the polling dashboard
+needs to stay loose.
+
+**Impact.** At 1000 miners over a year `payouts.csv` is a few hundred thousand rows; the peak
+allocation is the row array plus the joined string plus Express's copy of it — several times the
+row bytes, synchronously, on the event loop that validates shares. `blocks` holds one row per
+block *this pool finds*, so `fee-revenue.csv` is the milder half. A valid admin session is
+required, which is why this is Medium.
+
+**Fix (not applied — it changes what an operator's export contains, plan rule 3).** Put both on
+the `export` bucket, add the same `CSV_MAX_ROWS` cap their public siblings use with a `?before=`
+cursor for the operator who genuinely wants everything, or stream row-by-row with `res.write`
+instead of building one string.
+
+### J12-6 — [Medium] `/api/public/price` never cached a failure and had no in-flight dedup, so any upstream refusal turned it into a per-request outbound fetch — **FIXED 2026-09-02**
+
+**Threat actor: anonymous internet.**
+
+[index.js:1059-1088](../../web/07_mining_pool_public/back-end-pool/index.js#L1059) as it stood.
+The cache was written only on the success path, and only when a number came back:
+
+```js
+if (data.available) _priceCache = { ts: now, data };
+```
+
+`_priceCache.ts` was not touched on any failure. So an upstream `403`, `429`, timeout or network
+blip produced no negative cache entry — it produced **nothing**, and the very next request
+re-ran the `fetch`. There was also no in-flight guard, so even on the happy path every request
+arriving between cache expiry and the first response fired its own outbound call. Both are
+solved elsewhere in this same file: `cachedGatewayStatus` has a `running` flag
+([index.js:145-155](../../web/07_mining_pool_public/back-end-pool/index.js#L145)),
+`torProbeCached` has an in-flight `Map`, `refreshStratumProbes` has both.
+
+**Why the failure path is not hypothetical.** Memory `project_grin_btc_price_source` records
+that CoinGecko rejects requests without a *descriptive* `User-Agent` — it is why
+`06_price_collector.py`, `07_mining_block_collector.py`, `06b_grinscan/server.js` and
+`06d_tiny_explorer` all had to gain a headers block. This call set only
+`{ accept: 'application/json' }`, and Node's `fetch` supplies `user-agent: node` by default
+(probed locally on Node v24.14.1 against a throwaway one-shot listener). A bare `node` is not a
+descriptive User-Agent, so there is good reason to expect the failure branch to be the
+*permanent* state on a fresh mainnet pool — at which point every one of the ~10 req/s nginx
+allows becomes an outbound HTTPS request with a 5 s abort: up to 50 concurrent sockets held by
+one anonymous client, plus whatever reputation the pool's egress IP earns upstream.
+
+**Fixed.** Four changes: a descriptive `User-Agent` is now sent (matching what the other four
+toolkit callers had to add); any failure stamps a 60 s negative cache so a broken upstream is
+retried on a timer rather than per request; a 200 that carries no price is treated as a failure
+too, so an upstream that quietly drops the `grin` id cannot re-open the hole; and an in-flight
+promise collapses concurrent misses to one fetch. Stale-if-error behaviour is unchanged.
+
+### J12-7 — [Medium] `/api/pool/effort`'s round window had no lower bound, so a pool that has not yet found a block summed the entire `shares` table on every request — **FIXED 2026-09-02**
+
+**Threat actor: anonymous internet. Worst on a brand-new pool — i.e. on launch day.**
+
+[index.js:3409-3411](../../web/07_mining_pool_public/back-end-pool/index.js#L3409) as it stood:
+
+```js
+const roundDiff = db.prepare(
+  'SELECT COALESCE(SUM(difficulty), 0) AS d FROM shares WHERE created_at > ?'
+).get(lastBlockAt || 0).d;
+```
+
+`lastBlockAt` comes from `blockManager.getLastBlock()` and is `null` until this pool finds its
+first block. `null || 0` → `0`, so the predicate became `created_at > 0` — **every row**. The
+plan is a proper index seek (`SEARCH shares USING INDEX idx_share_created (created_at>?)`,
+confirmed with `EXPLAIN QUERY PLAN`), but a seek from zero visits the whole table, and
+`idx_share_created(created_at)` does not carry `difficulty`, so every row is also a table lookup.
+
+The network-difficulty half of the same handler is carefully cached for 60 s
+([index.js:3398-3407](../../web/07_mining_pool_public/back-end-pool/index.js#L3398)) precisely so
+a poll cannot hammer the node. The share sum beside it was uncached and unbounded.
+
+**Impact.** Two shapes. (1) *Launch day*: no block found yet, every hit sums the whole `shares`
+table, and the effort widget is on the homepage. (2) *Steady state*: a small pool's round can
+legitimately run for days, while `shares` retention is governed by the PPLNS/confirm window
+rather than by the round — so the sum grows without bound relative to the round it claims to
+measure. Both were uncached at ~10 req/s.
+
+**Fixed.** The window is floored at `now - 7 days` rather than at 0, which is well past the
+PPLNS/confirm retention horizon, so on a pool that *has* found a block the floor never binds and
+the published figure is unchanged. The response is also memoised for 30 s — its inputs move no
+faster than a block. Two new fields, `round_window_from` and `round_window_capped`, say when the
+figure is measured from the floor rather than from a real block, so a brand-new pool's effort
+number is honest rather than silently meaningless.
+
+### J12-8 — [Low] `/api/public/branding` rebuilt the entire white-label payload from five uncached settings reads on every request, on the endpoint every public page hits on every load — **FIXED 2026-09-02**
+
+**Threat actor: anonymous internet. Answers §J9-8's handoff.**
+
+`buildPublicConfig` calls `getSection()` five times
+([pool-settings.js:1202-1206](../../web/07_mining_pool_public/back-end-pool/lib/pool-settings.js#L1202)),
+and `getSection` is a fresh `SELECT key, value, value_type FROM pool_config WHERE section = ?`
+plus a per-row type coercion every single time — there is no memo anywhere in that module
+([pool-settings.js:1158-1187](../../web/07_mining_pool_public/back-end-pool/lib/pool-settings.js#L1158)).
+The route then adds asset lookups, an incentives summary and a lottery read
+([index.js:995-1049](../../web/07_mining_pool_public/back-end-pool/index.js#L995)) and set
+`Cache-Control: public, max-age=60` — again a client hint, not a control.
+
+§J9-8 established that ~40 of the strings in that payload are bounded only by
+`express.json()`'s 100 KB **per-request** limit, and that successive writes accumulate. So the
+response size is an operator-set number with no ceiling, rebuilt from roughly eight queries, on
+the one endpoint every page on the site fetches on every load.
+
+Low rather than Medium because the queries are small and indexed (`idx_pool_config_section`) and
+because the payload only gets large if the operator makes it large. It is on the list because it
+is the *most-hit* endpoint in the product and the one place where J9-8's missing length caps turn
+into a bandwidth multiplier.
+
+**Fixed.** A 60 s server-side memo of the built payload — the same window the header already
+advertised — keyed on `req.hostname` (which feeds `connection.stratum_host`) and bounded to 32
+entries, because the Host header is attacker-chosen and a cache must not become a registry. It is
+invalidated explicitly on every settings and asset write (`updateSection`, `resetSection`,
+`saveAsset`, `deleteAsset`) so an operator's edit still appears immediately; the TTL is the
+backstop for the inputs that are *not* settings writes — the prize-pool figure and the lottery
+schedule, both of which have their own live endpoints. **The length caps themselves stay §J9-8's
+open item**: caching does not make an unbounded payload smaller, it only stops it being paid for
+per request.
+
+### J12-9 — [Low] `/api/pool/topology` full-scans `shares` and compiles an `IN (…)` clause with one placeholder per live session — **MEMO FIXED 2026-09-02; the `IN (…)` width is unchanged (see §J12 resolution pass)**
+
+**Threat actor: anonymous internet, but only where the operator has published the network map.**
+
+[index.js:4215](../../web/07_mining_pool_public/back-end-pool/index.js#L4215). Two uncached costs
+per request:
+
+1. The 15-minute share aggregate
+   ([index.js:4237-4241](../../web/07_mining_pool_public/back-end-pool/index.js#L4237)) plans as
+   `SCAN shares USING INDEX idx_share_region | USE TEMP B-TREE FOR count(DISTINCT)` — a full
+   index scan, because `created_at > ?` sits on the second column of
+   `idx_share_region(region, created_at)` and cannot seek.
+2. The geo lookup builds its SQL *text* from the live session count
+   ([index.js:4302-4306](../../web/07_mining_pool_public/back-end-pool/index.js#L4302)):
+   `addrs.map(() => '?').join(',')`. Under §J6's global socket ceiling that is up to a ~50 KB
+   statement compiled per request, and it approaches SQLite's 32,766-parameter limit — past
+   which the `prepare` throws and the endpoint 500s rather than degrading.
+
+The expensive *outbound* parts are handled properly — `cachedGatewayStatus` (15 s + running flag)
+and `refreshStratumProbes` (60 s + running flag + 2-strike verdict) are both kept out of the
+request path with the reasoning written out. Only the DB half was left uncached.
+
+**Low** because `networkMapPublic()` gates the whole handler and it is **off by default**, so a
+stock pool 404s here (memory `project_pool_network_map`). It becomes a Medium the day an operator
+publishes the map. **Fix:** a 30 s memo — the response is identical for every caller and its
+inputs move on a 15-minute window — plus a chunked or temp-table lookup instead of a
+session-length `IN` clause.
+
+### J12-10 — [Low] The `api` bucket was dead, and a `rate_limits` value of `0` disables a bucket rather than blocking — **BUCKET FIXED 2026-09-02; the falsy-limit behaviour is documented, deliberately not changed**
+
+**Threat actor: nobody for the first half; on-box root for the second (Info, plan rule 7).**
+
+**The dead bucket.** `api: 600` was defined with a rationale, and was `middleware()`'s default
+argument — but a sweep of every `middleware(` / `peek(` / `consume(` call in `index.js` found
+**zero** uses: `admin` 8, `public` 51, `auth` 7, `export` 4, `withdraw` 4, `stepup` 2,
+`torcheck` 1, `api` **0**. A bucket nobody references is a number a future reviewer assumes
+covers something.
+
+**The falsy-limit trap.** `middleware()` treats any falsy limit as *no limit*
+([rate-limiter.js:112-119](../../web/07_mining_pool_public/back-end-pool/lib/rate-limiter.js#L112))
+and `Object.assign(this.limits, config.rate_limits)` merges the operator's `pool.json` values
+verbatim with no validation. So `"rate_limits": { "torcheck": 0 }` — the natural way to write
+"allow no probes", and the comments in that file actively invite the edit by saying the key is
+overridable — silently removes the bucket entirely. Same shape as
+`project_config_loader_type_traps`, on the security-switch axis.
+
+`rate_limits` reaches the app only from a hand-edited `pool.json`: the installer never writes it,
+it is not a settings section, nothing in the admin UI touches it, and it survives `mergeEnvVars`
+only via the `...config` spread at
+[config.js:41](../../web/07_mining_pool_public/back-end-pool/lib/config.js#L41). That makes it
+root-only and therefore Info.
+
+**Half fixed.** The dead `api` bucket is removed and `middleware()`'s default moved to `public`.
+The falsy-limit behaviour is left as it is and documented instead, at `middleware()` and at both
+comment sites that advertise an override: rejecting `0` would remove an operator's only way to
+switch a bucket off deliberately, and choosing between "0 means off" and "0 means block" is a
+product decision, not a defect to patch silently. The regression suite now fails if any bucket
+is defined without a consumer, or any route names a bucket that does not exist.
+
+### J12-11 — [Low] Nothing bounds the limiter's own maps or the three auto-ban maps, and two admin reads walk them end to end — **FIXED 2026-09-02 (see §J12 resolution pass)**
+
+**Threat actor: anonymous internet, but the ceiling is the attacker's IPv4 source space.**
+
+Five unbounded `Map`s keyed by client IP:
+
+| Map | Where | Swept? |
+|---|---|---|
+| `RateLimiter.requests` | [rate-limiter.js:17](../../web/07_mining_pool_public/back-end-pool/lib/rate-limiter.js#L17) | Every 5 min, whole-map iteration |
+| `RateLimiter.violations` | [rate-limiter.js:18](../../web/07_mining_pool_public/back-end-pool/lib/rate-limiter.js#L18) | Same sweep (now with a 10-minute memory — J12-4) |
+| `adminLoginFailures` | [index.js:386](../../web/07_mining_pool_public/back-end-pool/index.js#L386) | **Never.** Pruned only on the next failure from the same IP, or on threshold/success |
+| `admin2faFailures` | [index.js:397](../../web/07_mining_pool_public/back-end-pool/index.js#L397) | **Never**, same |
+| `IpFilter.tempBans` | [ip-filter.js:24](../../web/07_mining_pool_public/back-end-pool/lib/ip-filter.js#L24) | Lazily — only when that IP is looked up, or when the admin panel lists them |
+
+No size cap on any of them, unlike almost every other cache in this product (`torProbeCache` 500,
+`_poolHistoryCache` capped, and now `_brandingCache` 32; `nostr_seen_events` — §J4-8 — is the one
+other unbounded store). Two admin reads then walk the limiter maps in full per request:
+`getStatus(ip)` iterates every key to sum one IP's counters
+([rate-limiter.js:292-296](../../web/07_mining_pool_public/back-end-pool/lib/rate-limiter.js#L292))
+and `getViolations()` iterates every violation, both on one `secureAdmin` route at 2400/min
+([index.js:4855-4864](../../web/07_mining_pool_public/back-end-pool/index.js#L4855)); `resetIp` is
+a third full walk.
+
+**Why this is Low and not the "is the limiter itself the DoS?" answer the plan expected.** The key
+is the *real* source address — `X-Forwarded-For` is unspoofable here (J12-14) — so growing the map
+costs an attacker one distinct source IP per key. The obvious multiplier would be an IPv6 /64,
+which is 2^64 free keys; **the generated vhost is IPv4-only** (`listen 443 ssl http2` at
+[07_grin_mining_public_pool.sh:1285](../../scripts/07_grin_mining_public_pool.sh#L1285), with no
+`listen [::]:443` companion), so that lever does not exist on a stock deployment. What is left is
+botnet-sized: 10,000 distinct IPv4 sources → ~70,000 entries across the bucket types, tens of MB,
+swept within 5 minutes. The three auto-ban maps additionally cost a solved CAPTCHA per entry.
+
+**Fix (not applied — it should be sized against real traffic).** A size cap with oldest-first
+eviction on `requests`/`violations`, a TTL sweep on the two `adminLoginFailures` maps, and a
+per-IP index for `getStatus` if the admin panel is expected to work on a box under attack. Note
+that the eviction policy is security-relevant: evicting a `violations` entry **lifts a lockout**,
+so a cap must be large enough that it is never reached in normal operation.
+
+### J12-12 — [Low] The Tor pre-flight probe is priced by the `withdraw` bucket, so one proof-holding miner can force 20 circuit builds a minute — **FIXED 2026-09-02 (answers §J3's handoff; see §J12 resolution pass)**
+
+**Threat actor: registered miner — needs one valid ownership proof.**
+
+§J3 handed this over. Re-checked and still true: in `POST /api/account/:addr/withdraw` the probe
+runs at [index.js:3833](../../web/07_mining_pool_public/back-end-pool/index.js#L3833), **before**
+`createWithdrawal` — which is where the one-pending-per-address cap and the cross-rail cooldown
+live. So a miner whose every withdrawal would be refused by those checks still buys a probe per
+request. Each probe is up to `torCheckRetries` (2) SOCKS connects at `torCheckTimeoutMs` (3000)
+each ([wallet-tor.js:92-95](../../web/07_mining_pool_public/back-end-pool/lib/wallet-tor.js#L92),
+[:162-167](../../web/07_mining_pool_public/back-end-pool/lib/wallet-tor.js#L162)) — up to **6 s of
+tor descriptor lookup per request**, at the `withdraw` bucket's 20/min.
+
+The `tor-check` route's excellent cache is **deliberately not used here**, and the reason is sound
+and money-shaped:
+
+> *"DELIBERATELY NOT used by the withdraw pre-flight gate. That one is a money decision (it can
+> refuse a payout), so it always takes a fresh probe: a 60s-stale 'offline' must never block a
+> listener the miner just started."*
+> — [index.js:3737-3740](../../web/07_mining_pool_public/back-end-pool/index.js#L3737)
+
+**So the fix is not a cache — it is ordering.** Move the pre-flight below the pending/cooldown
+checks (or hoist those checks above it), so a request that is going to be refused anyway never
+buys a circuit. That preserves the freshness guarantee exactly: a request that *will* create a
+withdrawal still gets a fresh probe. Left open because it means splitting `createWithdrawal`'s
+admission checks out of the scheduler, which is §J4's module.
+
+The second half of §J3's handoff is also still true: every failed proof writes an
+`admin_audit_log` row
+([owner-proof.js:422](../../web/07_mining_pool_public/back-end-pool/lib/owner-proof.js#L422))
+*including* those already rejected by the lockout, so a locked-out attacker still grows that table
+at the bucket rate for the full 180-day retention. That is disk rather than CPU and it is bounded
+at 20/min/IP — recorded so it is not lost, not promoted to its own finding.
+
+### J12-13 — [Info] The four routes with no bucket, and why each one is correct
+
+The plan asked for the "none" set to be identified and each member justified. Parsed from all 171
+`app.<method>` registrations in `index.js`:
+
+| Route | Why it carries no `rateLimiter.middleware` | Verdict |
+|---|---|---|
+| `POST /api/auth/register` ([index.js:1695](../../web/07_mining_pool_public/back-end-pool/index.js#L1695)) | Gates internally on `peek('auth')` at :1699 and only `consume`s after the CAPTCHA passes at :1725, so a wrong CAPTCHA is free by design. The free branch does one `COUNT(*)` on `users` and a Map lookup — no bcrypt, no write | **Correct.** nginx `_auth` 200 r/m still applies |
+| `POST /api/auth/login` ([index.js:1766](../../web/07_mining_pool_public/back-end-pool/index.js#L1766)) | Same peek/consume split (:1772, :1789), plus an `ipFilter.isBlocked` check ahead of the CAPTCHA. The free branch does no DB write and no bcrypt | **Correct** |
+| `GET /api/admin/_authcheck` | nginx's `auth_request` fires it once per admin static asset; the handler is deliberately cheap and documented at [index.js:4925](../../web/07_mining_pool_public/back-end-pool/index.js#L4925). A JWT verify is one HMAC | **Correct.** Bounded by `_admin` 2400 r/m on the parent `/admin/` location |
+| `app.use('/api/account', …)` ([index.js:785](../../web/07_mining_pool_public/back-end-pool/index.js#L785)) | §J3-8's shape gate — a middleware, not a route. One regex, then `next()` into a route that does carry a bucket | **Correct**, and it is the cheapest possible rejection for a malformed address |
+
+### J12-14 — [Info] Verified correct, with evidence
+
+| Checked | Result |
+|---|---|
+| **`trust proxy: 'loopback'` and the XFF chain** | Correct, and for the right reason. nginx sets `X-Forwarded-For $proxy_add_x_forwarded_for` on every proxied location that matters, which appends `$remote_addr` on the **right**. Express with `trust proxy: 'loopback'` walks XFF right-to-left skipping trusted hops, so `req.ip` resolves to the rightmost *untrusted* entry — the real client. A client-supplied `X-Forwarded-For` lands to the **left** of that and can never win. Read at [07_grin_mining_public_pool.sh:1384-1395](../../scripts/07_grin_mining_public_pool.sh#L1384) against [rate-limiter.js:361-364](../../web/07_mining_pool_public/back-end-pool/lib/rate-limiter.js#L361). The four exceptions are J12-3 |
+| **The satellite / model-C gateway path breaking `req.ip`** | **Does not exist any more — the plan's premise is stale.** There is no satellite HTTP ingestion API: regional gateways are HAProxy + WireGuard *stratum* forwarders that carry the miner IP in PROXY-protocol v2 on the stratum port, and shares are written locally with the region stamped from the listener ([index.js:983-990](../../web/07_mining_pool_public/back-end-pool/index.js#L983)). Nothing a gateway does reaches the HTTP limiter. The PROXY-v2 half is §J6-3's, and is fixed there |
+| **Bucket keying** | `<type>\|<ip>` ([rate-limiter.js:188-190](../../web/07_mining_pool_public/back-end-pool/lib/rate-limiter.js#L188)). No bucket name contains `\|`, so no cross-type collision — and, the thing it was built to fix, a login budget is not consumed by dashboard polls |
+| **The five existing response caches** | Four are exemplary. `cachedGatewayStatus` (15 s + `running` flag, stale-while-revalidate, never in the request path), `refreshStratumProbes` (60 s + `running` flag + a 2-strike verdict so one flaky dial is not a verdict), `torProbeCached` (60 s + in-flight Map + a 500-entry bound with expired-first eviction), `getPoolHistory` (TTL + bounded key space + explicitly does *not* cache a failure), `_poolstatsFeed` (60 s + a **bounded** 15-minute last-good window, with the reasoning that a silently-frozen listing feed is worse than a visible error). The gaps were J12-2, J12-6, J12-7, J12-8 and J12-9 |
+| **`express.json()` body limit** | Default 100 KB, applied globally ([index.js:232](../../web/07_mining_pool_public/back-end-pool/index.js#L232)). nginx caps at its own 1 MB default everywhere except `/api/admin/` (6 MB, for the 5 MB media upload). Adequate; the per-*value* half is §J9-8's |
+| **multer field limits (§J10's handoff)** | Confirmed: neither instance sets `fields`/`parts`/`fieldSize` ([index.js:545-549](../../web/07_mining_pool_public/back-end-pool/index.js#L545), [asset-manager.js:83-86](../../web/07_mining_pool_public/back-end-pool/lib/asset-manager.js#L83)), so multer's defaults apply — `fieldSize` 1 MB but `fields`/`parts` unbounded. **Not a finding**: nginx's `client_max_body_size 6m` on `/api/admin/` bounds the whole body however many parts it is split into, `files: 1` plus the byte cap bounds the file half, and both endpoints are `secureAdmin`. Worth setting explicitly; it is not a lever |
+| **`/api/pool/blocks` unbounded `offset` (§J11-9b's handoff)** | **Not a cost lever.** `ORDER BY height DESC LIMIT ? OFFSET ?` uses `idx_block_height`, and `blocks` holds one row per block *this pool finds* — hundreds to low thousands, not a share-volume table. A deep offset walks an index that fits in page cache and returns empty. §J11's *privacy* point (it makes the full `found_by` set walkable) stands on its own; the cost half does not |
+| **The two public account CSV exports (§J7's and §J11's handoffs)** | The 10/min `export` bucket is sized correctly. Both are row-capped at 50,000 and scoped to one address ([index.js:3654](../../web/07_mining_pool_public/back-end-pool/index.js#L3654)), so the worst case is ~7 MB per request and 10/min bounds it. Real row counts are far lower — `withdrawals` is one row per payout for one miner, and `balance_log` raw rows prune at 60 days |
+| **`crypto.scrypt` on the ownership-proof path** | Uses the **async** form ([owner-proof.js:207](../../web/07_mining_pool_public/back-end-pool/lib/owner-proof.js#L207), [:225](../../web/07_mining_pool_public/back-end-pool/lib/owner-proof.js#L225)), so the 16 MB memory-hard work runs on the libuv threadpool, **not** the event loop that validates shares, and `maxmem: 64 MB` caps a single call. Up to ~6 compares per withdraw request at 20/min/IP saturates the 4 default threadpool slots but cannot stall share intake. §F2's per-IP throttle is still attached |
+| **nginx zone coverage** | `_auth` 200 · `_captcha` 600 · `_api` 600 · `_admin` 2400 · `_static` 6000 r/m, all `$binary_remote_addr`-keyed through `nginx_ensure_rate_limit_zones` ([07_grin_mining_public_pool.sh:1048-1053](../../scripts/07_grin_mining_public_pool.sh#L1048)) — so zone creation goes through the shared primitive CLAUDE.md requires, and nginx's fixed-size shared-memory zones self-bound under a source flood where the app's Maps do not. Every proxied location carries a zone **except** the four in J12-3, plus the two `alias` static blocks (`/uploads/`, `/custom/`, which nginx serves from disk without reaching the app) |
+
+### Handoffs answered from earlier sessions
+
+- **§J1** — *"the `admin` bucket is the only thing in front of every admin handler for an
+  unauthenticated caller while `admin_allowlist` is empty."* **Not quite.** nginx's `_admin` zone
+  is an independent per-IP layer at the same 2400 r/m on both `/admin/` and `/api/admin/`, and it
+  applies whether or not `$admin_rules` is empty. 2400/min is right for a polling dashboard; the
+  two routes behind it that should not be there are J12-5.
+- **§J2, all three CPU levers.** (1) `/api/admin/reauth` — **closed**, it is on `stepup` (10/min).
+  (2) `/api/auth/change-password` — **closed**, same bucket. (3) The `/api/auth/login/totp`
+  recovery branch — **closed by §J2-3, not by a bucket.** It is still up to 10 sequential cost-12
+  `bcrypt.compare`s per submission
+  ([auth.js:668-676](../../web/07_mining_pool_public/back-end-pool/lib/auth.js#L668)), but
+  `verify2faToken` refuses a spent token *before* any of that work and the per-`jti` budget caps a
+  token at `twofaMaxAttempts` submissions
+  ([auth.js:756-766](../../web/07_mining_pool_public/back-end-pool/lib/auth.js#L756)). Since a
+  token costs a correct password plus a solved CAPTCHA, the ceiling is a few dozen compares per
+  *successful* password authentication. No new bucket is needed.
+- **§J3, both levers** — J12-12.
+- **§J4** — *"the scheduler loop is strictly serial and one unreachable Tor recipient costs the
+  full `wallet_send_timeout_ms`."* Confirmed as stated, and it is a queueing bound rather than an
+  attack: one pending withdrawal per address means no single actor can lengthen the queue.
+  Recorded, not re-reported. The related shared-`WalletAPI`-session concern *is* attacker-driven
+  and is written up as part of J12-2.
+- **§J6** — *"is 25 msg/s × 320 connections the right budget at all?"* Outside this session's file
+  list (`stratum-server.js` is §J6's), and the two levers that made it urgent — the reject
+  amplifier and the pre-login squat — are closed there. The HTTP-side answer is that the stratum
+  budget is not comparable to an HTTP bucket: it prices work forwarded to the node's PoW verifier,
+  not work done in this process. Left with §J17 to settle against a real rig.
+- **§J7** — the two public CSV exports: sized correctly, see J12-14. The *admin* ones are not:
+  J12-5.
+- **§J9-8** — `/api/public/branding`: J12-8. The caching half is fixed here; the missing length
+  caps stay §J9-8's open item, and the two compose correctly (a memo does not make an unbounded
+  payload smaller, it only stops it being rebuilt).
+- **§J10** — multer field limits: J12-14, not a finding. J10-2's unbounded `/uploads` growth is a
+  filesystem question with no rate-limit answer — it needs a listing and a delete path, which is
+  what J10-2 already says. Not re-reported.
+- **§J11** — all three. Blocks offset and the account CSVs are J12-14; the `public`-bucket sizing
+  question is J12-1 and J12-2. The bucket rate is right; two of its members are not.
+
+### Handoffs
+
+- **§J16 (deployment & infra) owns the vhost half of J12-3** — the four SEO `location` blocks need
+  `X-Forwarded-For` and a `limit_req` zone. It is a four-line change to `pool_setup_nginx`, but it
+  is that file's, and it should land together with the `isLocalRequest` tightening so the
+  invariant and the config agree. §J16 should also note that `listen 443 ssl http2` has **no
+  `[::]:443` companion**: that is what keeps J12-11's map growth IPv4-bounded, so **adding IPv6 to
+  the vhost raises J12-11's severity** and must not be done as a cosmetic modernisation.
+- **§J16** — the `/uploads/` and `/custom/` `alias` blocks carry no `limit_req`. nginx serves those
+  from disk without reaching the app so it is not an app-side lever, but they are the only other
+  public locations with no zone at all, and they serve operator-uploaded files.
+- **§J4 (payout execution) owns the ordering change in J12-12** — hoisting the pending and cooldown
+  checks above the Tor pre-flight means splitting `createWithdrawal`'s admission checks out of the
+  scheduler.
+- **§J5 / §J7** — J12-1's option (b), serving the sustained-contribution leaderboard from
+  `pool_metrics_hourly`, would need a per-address rollup that does not exist today. If the covering
+  index is chosen instead, creating it on a populated 100-day table is a migration with a lock —
+  the same hazard as §J7-1's `VACUUM` cron, and it belongs in the same maintenance-window
+  conversation.
+- **§J15 (public front-end)** — J12-7's fix adds `round_window_from` and `round_window_capped` to
+  `/api/pool/effort`. On a pool that has not yet found a block the effort figure is now measured
+  from a floor rather than from a block, and the dashboard should say so rather than presenting it
+  as a real round. One string.
+- **§J17 (operational gate)** — five things only a run can settle. **(1) J12-1 is the one to
+  stage**: point a loop at `/api/stratum/top-avg-hashrate` on a testnet pool with a few days of
+  `hashrate_history` and watch share acceptance. It is the finding most likely to be
+  under-estimated on paper and most likely to be catastrophic on a box. **(2) J12-6**: hit
+  `/api/public/price` once on a fresh install and read the journal — if CoinGecko still refuses the
+  new User-Agent, the negative cache is now the only thing between that and a per-request outbound
+  fetch, and the footer ticker will be blank. **(3) J12-2's fix changes the homepage status strip
+  from "fresh every poll" to "fresh every 15 s"** — confirm it still reads as live. **(4) J12-4's
+  backoff now escalates for real**: confirm an operator who fumbles the admin login several times
+  is not locked out for an hour by a control that never used to bite. **(5) J12-3**: with the map
+  published, watch `/api/pool/topology` under a normal dashboard load before deciding whether
+  J12-9 needs its memo.
+
+### Verification
+
+- `node --check` on every changed JS file; `bash -n scripts/07_grin_mining_public_pool.sh` (no
+  shell change was made, but the file was read).
+- `npm test` — `check-syntax` plus all ten unit suites, **exit 0**.
+- **New: `scripts/test-rate-limits.js`, 22 assertions, all passing.** [1] §J12-4 — the backoff
+  ladder actually escalates 30 → 60 → 120 s across three consecutive expiries, the count survives
+  a lapsed lockout, and an expired-but-remembered record is *not* reported as an active lockout by
+  `getViolations()` or `getStatus()` (5); [2] §J12-10 — every bucket named by a
+  `middleware`/`peek`/`consume` call exists, no bucket exists without a consumer, and
+  `middleware()`'s default names a real one (3); [3] §J12-2 / §J12-7 — both endpoints hold a real
+  server-side TTL and in-flight guard, and the effort window is floored rather than
+  `lastBlockAt || 0` (4); [4] §J12-6 — a descriptive User-Agent is sent, a failure arms the
+  negative cache, a 200 carrying no price counts as a failure, and concurrent misses collapse (4);
+  [5] §J12-8 — the branding memo exists, its key space is bounded, and all four write sites
+  invalidate it (3); [6] §J12-1 — an `EXPLAIN QUERY PLAN` against the real schema pins
+  `getTopAvgHashrate` as a `SCAN` **and** pins the sibling `getPoolHistory` as a covering-index
+  seek, so the open finding cannot be lost and the day it is fixed the suite says so (3).
+- **`EXPLAIN QUERY PLAN` was run against the real schema** in `node:sqlite` (Node v24.14.1) for
+  the five hot queries; the plans quoted in J12-1, J12-7 and J12-9 are outputs, not readings.
+- The one-shot probe behind J12-6's `User-Agent` claim bound a throwaway listener on 127.0.0.1,
+  made one request, printed the headers Node's `fetch` sent (`user-agent: node`) and exited.
+  Nothing was left running.
+
+**Gaps worth stating.** (1) **No sustained load was generated**, so every rate figure here is
+`limit × unit cost`, not a measurement — the row *counts* in J12-1 are projections from the
+documented sampling interval and retention, not from a populated table. (2) **The nginx layer was
+read, never run**: that `_api` binds at 600 r/m before the app's 1200 is a reading of the generated
+vhost, and `limit_req`'s `burst … nodelay` behaviour under a real burst is not something this repo
+can settle. (3) **J12-2's shared-session race is reasoned from the code, not reproduced** — the fix
+removes the load that would cause it either way. (4) **J12-6's CoinGecko 403 is an expectation, not
+an observation**: what is *confirmed* is the mechanism (any failure re-opens a per-request fetch)
+and the header Node sends; whether CoinGecko refuses that particular string is memory plus the four
+sibling callers that had to add one, and only a run settles it. (5) The IPv4-only conclusion in
+J12-11 holds for the vhost this toolkit generates; an operator who has hand-added an IPv6 listener
+is outside it.
+
+### Changed this session
+
+| File | Change |
+|---|---|
+| `lib/rate-limiter.js` | J12-4 — `checkLimit` preserves a violation's `count` across a lockout expiry instead of deleting the record, and the cleanup sweep only drops one that has been expired for a full `RateLimiter.VIOLATION_MEMORY_MS` (10 min), so the documented 30→60→120 ladder and the 1 h cap are finally reachable · J12-10 — the unused `api` bucket removed, `middleware()`'s default argument moved to `public`, and `middleware()` plus both "Overridable via config.rate_limits.*" comments now state that a value of `0` means **disabled**, not *blocked* |
+| `index.js` | J12-2 — `/api/pool/status`'s body extracted into `buildPoolStatus()` behind a 15 s server-side cache with in-flight dedup and last-good-on-error · J12-6 — `/api/public/price` sends a descriptive `User-Agent`, arms a 60 s negative cache on any failure (including a 200 with no price), and collapses concurrent misses to one fetch · J12-7 — `/api/pool/effort`'s round window floored at `now − 7d` instead of 0, response memoised 30 s, and `round_window_from` / `round_window_capped` added so a capped figure is visible · J12-8 — `/api/public/branding` memoised 60 s, keyed on hostname, bounded to 32 entries, with `invalidateBranding()` called from `updateSection`, `resetSection`, `saveAsset` and `deleteAsset` |
+| `scripts/test-rate-limits.js` | **New** — 22 assertions (listed under *Verification*) |
+| `package.json` | `test:unit` runs the new suite |
+
+**Left open at the end of the review session:** **J12-1** (a covering index on a 100-day table
+is a migration, and it is the most dangerous item in this section), **J12-3** (a §J16 vhost
+change), **J12-5** (changing what an operator's export contains), **J12-9** (only reachable once
+the map is published), **J12-11** (should be sized against real traffic) and **J12-12** (needs
+§J4's module split).
+
+**All six were closed the same day — see the §J12 resolution pass below.** J12-1's fix is NOT
+the covering index this section recommended: that turned out to be the wrong tool (the ORDER BY
+is on a derived aggregate, so no index avoids visiting the window) and it was replaced by a
+per-address daily rollup. The correction is written up there.
+
+---
+
+### §J12 — resolution pass, 2026-09-02 (same day, add-ons, NOT VPS-TESTED)
+
+**All fourteen findings are now closed.** Six were fixed during the review session itself
+(J12-2, J12-4, J12-6, J12-7, J12-8, half of J12-10); the six left open as structural or
+cross-file work are fixed here. Two (J12-13, J12-14) were Info sweeps with nothing to fix.
+The suite is now `scripts/test-rate-limits.js`, **51 assertions**, and `npm test` passes all
+ten suites.
+
+Two of the six changed shape once the work started, and both corrections matter more than the
+fixes themselves.
+
+---
+
+#### J12-1 — the covering index was the wrong fix, and the session recommended it
+
+The finding proposed **(a)** a covering index `hashrate_history(recorded_at, grin_address,
+hashrate_gps, window_seconds)`, **(b)** a rollup, or **(c)** a TTL cache, and called (a)+(c)
+"the right answer". **(a) is wrong**, and the reason is in the query itself: the `ORDER BY` is
+on a *derived aggregate*, so no index can avoid visiting every row inside the window. An index
+only helps small `?days` values — and it would cost roughly **9 GB** of extra index on the
+largest table in the schema, because `grin_address` is 63 bytes and would have to be carried a
+second time. A rollup makes the read 100× smaller instead of making the scan faster, which is
+the thing that was actually needed.
+
+**Built: `miner_hashrate_daily`** — one row per miner per completed UTC day, holding
+`gps_seconds = SUM(hashrate_gps × window_seconds)`, which is exactly the numerator the
+leaderboard needs, so the composite read is a plain `SUM` with no re-derivation. ~100 k rows at
+1000 miners × 100 days, ~10 MB against the raw table's 20–30 GB.
+
+- **Writer:** `rollupMinerDays()` in `hashrate-tracker.js`, called from the same tracking loop
+  as `rollupCompletedHours()`. Idempotent upsert, bounded catch-up, a no-op on every call that
+  finds no new completed day — which is all but one call a day.
+- **Horizon marker, not `MAX(day)`.** A day on which no miner produced a sample writes no row,
+  so a `MAX(day)`-derived cursor sticks on the last busy day and re-walks every quiet day since,
+  on every call, forever. The marker (`pool_config('_state','miner_hashrate_day_horizon')`,
+  the pattern `ledger-rollup.js` already uses) advances regardless, is clamped into the window
+  so a restored backup or a backwards clock cannot make the rollup skip real days, and is
+  written **inside the same transaction** as the rows it describes.
+- **Reader:** the window is still the same rolling `now − days`, served in up to three pieces —
+  raw for the partial first day, rollup for the whole days, raw for the current partial day —
+  each raw piece bounded by **one day whatever `?days` says**. That bound, not raw speed, is
+  the property that was missing.
+- **Plus the TTL cache** (60 s, bounded key space, does not cache a failure), which is what
+  actually closes the amplification: N visitors now cost one query per TTL, not one each.
+
+**A bug this fix introduced and the test caught.** The first version excluded the
+partially-overlapping first day and counted only whole UTC days — reasoning that counting a
+partial day whole would *overstate* the average. It understates instead, badly: at `?days=1`
+the cutoff lands inside yesterday, so the answer came out **~5× low** while still dividing by a
+full day. It was caught because the regression test's oracle is the *original raw query,
+verbatim* — not a hand-computed expectation. That is the only reason it was caught, and it is
+the pattern to copy for any future rollup: **a rollup's test must compare against the query it
+replaces, at several window sizes, or it will silently answer a different question.**
+
+**A second trap, found with `EXPLAIN QUERY PLAN` and worth recording.** A **one-sided**
+`recorded_at >= ?` on the raw tail *still* plans as `SCAN hashrate_history USING INDEX
+idx_hashrate_address` — SQLite prefers reading in `grin_address` order to skip the temp b-tree,
+and an open-ended range gives the planner no reason to prefer the time index. Adding the upper
+bound flips it to `SEARCH … USING idx_hashrate_time (recorded_at>? AND recorded_at<?)`. The
+upper bound is therefore load-bearing, not tidiness, and the test pins **all three** plans —
+including the negative control that dropping it restores the full scan.
+
+**Retention — deliberately not keep-forever.** `pool_metrics_hourly` and `balance_log_daily`
+are never pruned, and copying that here would have been the obvious move. It would also have
+been a privacy regression: this is **per-address** mining activity, and a summary that outlived
+the raw rows it came from would retain more about a miner than the pool did before the table
+existed (§G1 / §J11's linkage concerns). `retention.js` prunes it on the *same*
+`hashrate_keep_days` horizon as its source, by whole UTC day. **A rollup must never extend a
+retention window.**
+
+Residual, stated rather than hidden: at 1000 miners the one-day raw tail is still ~1.4 M rows,
+so a cache miss is order-of-a-second. That is 100× better and bounded; the durable fix is the
+per-miner *hourly* rollup already tracked as item 2 of memory `project_pool_db_capacity`.
+
+#### J12-3 — both halves, plus one the finding did not ask for
+
+All four SEO `location` blocks (`= /robots.txt`, `= /sitemap.xml`, `= /manifest.json`,
+`= /blog/rss.xml`) now forward `X-Real-IP` + `X-Forwarded-For` and carry
+`limit_req zone=${POOL_SERVICE}_static burst=20 nodelay` — the same treatment `= /page.html`
+already had, with the reasoning quoted at the block so the next person to add an SEO proxy sees
+why. `isLocalRequest()` now requires **both** a loopback `req.ip` **and** an absent
+`x-forwarded-for` header, so its docstring's invariant is true by construction rather than by
+the vhost happening to agree with it.
+
+**Checked before changing it:** Script 07's guided installer registers the first admin with
+`curl http://127.0.0.1:$port/api/auth/register`
+([07_grin_mining_public_pool.sh:1763](../../scripts/07_grin_mining_public_pool.sh#L1763)) —
+straight at the app port, not through nginx, so no `X-Forwarded-For` is present and the
+tightened check still lets the setup-time CAPTCHA bypass through. Tightening that helper without
+confirming this would have broken first-install on a fresh box.
+
+#### J12-5 — capped, paged, throttled, streamed, and *visibly* truncated
+
+Both pool-wide admin exports now take the `export` bucket (10/min) instead of `admin`
+(2400/min), cap at `ADMIN_CSV_MAX_ROWS = 50000` — the same cap their public per-address
+siblings have had since §C1 — and page with `?before=<cursor>` for an operator who genuinely
+wants the whole ledger. `LIMIT` is `MAX_ROWS + 1` so the extra row *is* the truncation signal;
+a plain `LIMIT` can never distinguish "exactly a full page" from "there is more". `sendCsv`
+streams `res.write` per row instead of building one string by `map`+`join`, so Node's own
+backpressure bounds the peak rather than the row count deciding it.
+
+**One thing the finding missed.** Reporting truncation only in `X-Export-Truncated` /
+`X-Export-Next-Before` would have been correct and useless: those headers are invisible to an
+operator clicking a download link in the admin panel, so a capped export would arrive looking
+complete — which for a *financial* export is the worst possible failure. The last row of the
+file now says `TRUNCATED at 50000 rows - continue with ?before=<cursor>`. A capped export that
+looks complete is worse than one that visibly is not.
+
+#### J12-9 — memoised; the `IN (…)` width is left alone, deliberately
+
+`/api/pool/topology` now holds a 30 s server-side memo (no key — the response has no per-caller
+component), which removes the per-request full `SCAN shares USING INDEX idx_share_region`. The
+finding also suggested chunking the `IN (…)` clause built from the live session count. **Not
+done**, and the header is marked accordingly: at §J6's ceiling the clause approaches but stays
+under SQLite's 32,766-parameter limit, the memo means it is compiled once per 30 s rather than
+per request, and rewriting a working geo lookup for a bound that is not currently exceeded is
+the kind of change that introduces a bug to fix a hypothetical. Recorded as the residual.
+
+#### J12-11 — bounded, with one bound deliberately *not* added
+
+- `RateLimiter.requests` gains a hard cap (`MAX_TRACKED_BUCKETS = 200000`,
+  `EVICT_BATCH = 1000`), reclaimed stale-first and only oldest-insert-first if every tracked
+  bucket is genuinely live.
+- `adminLoginFailures` / `admin2faFailures` sweep expired rows before admitting a new IP, past
+  a floor (`ADMIN_FAIL_MAP_MAX = 10000`) no real pool reaches.
+- `IpFilter.tempBans` sweeps **expired** bans before inserting a new one.
+
+**`violations` is deliberately left uncapped**, and the code says so at the eviction site. The
+finding itself flagged why: *evicting a violation entry lifts a lockout*, so a size cap on that
+map turns a memory bound into a security bypass under exactly the flood that would trigger it.
+It is bounded by its own TTL sweep instead. `tempBans` gets the same treatment for the same
+reason — the sweep is by expiry and never by size, because dropping a live ban silently unbans
+an attacker. The regression test asserts both the cap *and* that a live lockout survives a
+500-source flood.
+
+#### J12-12 — ordering, not caching
+
+`WithdrawalScheduler.precheckWithdrawable()` is a read-only admission precheck (freeze, reversal
+cooldown, account exists, pool pending cap, one-pending-per-address) that the withdraw route now
+runs **before** the Tor pre-flight probe. A miner holding a valid proof whose request would be
+refused anyway no longer buys up to two fresh Tor circuits (≤6 s) per request at 20/min.
+
+Two properties preserved on purpose, both asserted in the test: every check is still repeated
+**authoritatively inside `createWithdrawal`'s transaction**, where the pending count and the
+balance CAS have to live to be race-free — this is a cheap early refusal, the same pattern
+`POST /api/auth/register` documents, not a replacement gate. And the probe is **still uncached
+on the money path**, so §J4-7's freshness guarantee is intact: a request that will actually
+create a withdrawal still takes a fresh probe.
+
+The second half of §J3's handoff — every failed proof writing an `admin_audit_log` row including
+those already refused by the lockout — is unchanged. It is disk rather than CPU, bounded at
+20/min/IP, and is noted in J12-12 rather than treated as a separate finding.
+
+---
+
+#### Verification
+
+`npm test` → **exit 0**, all ten suites. `scripts/test-rate-limits.js` grew from 22 to **51**
+assertions; `node --check` on all six changed JS files and `bash -n` on the vhost script.
+
+New in this pass:
+
+- **§J12-1 (14 assertions).** A synthetic 41-day dataset — five miners, random gaps, a
+  deliberately **quiet day** to exercise the horizon, and a partial current day — is aggregated
+  by both the new composite read and the **original raw query verbatim**, and compared at
+  `days = 1 / 7 / 30 / 40 / 90`. Plus: the rollup covers exactly the 39 busy completed days and
+  never the current one; the horizon advances past the quiet day; a second call is a no-op;
+  re-rolling five already-rolled days does not double count; the result is TTL-cached; and all
+  three `EXPLAIN QUERY PLAN` shapes are pinned, including the negative control that a one-sided
+  range restores the full `SCAN`.
+- **§J12-3.** All four SEO blocks parsed out of the generated vhost and checked for both the
+  forwarding header and a zone. (The first version of this assertion was itself wrong — it
+  sliced each block at the first `}`, which is the one inside `${POOL_SERVICE}`.)
+- **§J12-5 / -9.** Export bucket on both routes, no uncapped `SELECT` left, the in-file
+  truncation marker, streaming `sendCsv`, and the topology memo.
+- **§J12-11.** Behavioural, not textual: a real lockout is tripped, 500 distinct sources are
+  then flooded through the limiter, and the test asserts the map stayed bounded **and** the
+  live lockout survived.
+- **§J12-12.** The precheck exists, the route calls it *before* the probe (by source offset),
+  `createWithdrawal` still re-checks the pending cap inside its transaction, and the probe is
+  still uncached.
+
+**Gaps unchanged from the review session.** Nothing has run on a VPS; no sustained load was
+generated, so every rate figure remains `limit × unit cost`; the nginx layer is read, not run,
+so `limit_req burst … nodelay` behaviour under a real burst is still unsettled; and J12-6's
+CoinGecko 403 is still an expectation rather than an observation.
+
+**New for §J17, from this pass specifically.** (1) **The `miner_hashrate_daily` first run on an
+established pool** walks up to 120 days of `hashrate_history` in one transaction — it is bounded
+and it happens once, but it happens on the first tracking-loop tick after the upgrade, and that
+is the moment to watch share acceptance. (2) **Confirm the leaderboard numbers do not move**
+across the upgrade: the composite read is asserted to match the old query locally, but only a
+box with real history proves the rollup and the raw tail meet without a seam. (3) **Click both
+admin CSV export links** and confirm a normal-sized export carries no truncation row.
+
+#### Changed in this pass
+
+| File | Change |
+|---|---|
+| `lib/db.js` | J12-1 — `miner_hashrate_daily` table + covering `idx_mhd_day`, with the rejected-covering-index reasoning recorded at the schema |
+| `lib/hashrate-tracker.js` | J12-1 — `rollupMinerDays()` + `_minerDayHorizon()` / `_setMinerDayHorizon()`; `getTopAvgHashrate` rewritten as a three-piece composite read behind a 60 s bounded TTL cache; rollup wired into the tracking loop |
+| `lib/retention.js` | J12-1 — `miner_hashrate_daily` pruned on the same horizon as `hashrate_history`, reported in the run log and in `status().counts` |
+| `lib/rate-limiter.js` | J12-11 — `MAX_TRACKED_BUCKETS` / `EVICT_BATCH` cap on `requests`, stale-first then oldest-insert; `violations` deliberately exempt, with the reason at the site |
+| `lib/ip-filter.js` | J12-11 — `tempBan()` sweeps expired bans past `TEMP_BAN_SWEEP_AT`; never by size |
+| `lib/withdrawal-scheduler.js` | J12-12 — `precheckWithdrawable()`, a read-only early refusal; the authoritative checks inside `createWithdrawal`'s transaction are untouched |
+| `index.js` | J12-3 — `isLocalRequest()` now requires no `x-forwarded-for` as well as a loopback ip · J12-5 — both admin CSV exports capped, cursor-paged, on the `export` bucket, streamed, with an in-file truncation row · J12-9 — `/api/pool/topology` memoised 30 s · J12-11 — `ADMIN_FAIL_MAP_MAX` sweep in `recordAdminLoginFailure` · J12-12 — the route calls `precheckWithdrawable` before the Tor probe |
+| `scripts/07_grin_mining_public_pool.sh` | J12-3 — all four SEO proxy blocks gain `X-Real-IP`, `X-Forwarded-For` and a `_static` `limit_req` zone |
+| `scripts/test-rate-limits.js` | 22 → 51 assertions (sections 7 and 8 added) |
+
+**Nothing from §J12 remains open.** The residuals are named rather than tracked as findings:
+the ~1.4 M-row one-day raw tail at 1000 miners (durable fix = the per-miner hourly rollup in
+`project_pool_db_capacity` item 2), and `/api/pool/topology`'s session-width `IN (…)` clause,
+which the memo makes a once-per-30 s cost and which is still inside SQLite's parameter limit.
+
+---
+
+## §J13 — Outbound calls, SSRF & dependencies (2026-09-03, add-ons, NOT VPS-TESTED)
+
+Thirteenth session of the pre-mainnet §J pass (plan:
+[`script07_reference_audit_session_plan.md`](script07_reference_audit_session_plan.md) §J13).
+Scope: every call that leaves the box —
+[`lib/grin-node.js`](../../web/07_mining_pool_public/back-end-pool/lib/grin-node.js) (345),
+[`lib/wallet.js`](../../web/07_mining_pool_public/back-end-pool/lib/wallet.js) (290),
+[`lib/wallet-tor.js`](../../web/07_mining_pool_public/back-end-pool/lib/wallet-tor.js) (287),
+[`lib/poolstats-reporter.js`](../../web/07_mining_pool_public/back-end-pool/lib/poolstats-reporter.js),
+[`lib/alert-delivery.js`](../../web/07_mining_pool_public/back-end-pool/lib/alert-delivery.js),
+[`lib/nostr-payout.js`](../../web/07_mining_pool_public/back-end-pool/lib/nostr-payout.js),
+[`lib/node-stratum-client.js`](../../web/07_mining_pool_public/back-end-pool/lib/node-stratum-client.js),
+the CoinGecko price fetch, [`lib/captcha.js`](../../web/07_mining_pool_public/back-end-pool/lib/captcha.js),
+and the dependency tree in
+[`package.json`](../../web/07_mining_pool_public/back-end-pool/package.json) /
+`package-lock.json` plus the two `npm` call sites in
+[`scripts/07_grin_mining_public_pool.sh`](../../scripts/07_grin_mining_public_pool.sh).
+
+Method: enumerate every outbound sink first, then ask the plan's three questions of each one —
+**who chooses the URL, does a redirect/scheme/host check stand between that choice and the
+socket, and is the response bounded?** Advisory claims were resolved against the installed
+tree rather than accepted from `npm audit`'s severity column: `qs`'s call graph was read,
+`qs.parse` was driven with Express's real options, and `npm audit fix --dry-run` was run to
+see what a fix would actually change.
+
+**Headline — the SSRF question the plan asked has a reassuring answer and a surprising one.
+Reassuring: every server-chosen destination is compiled in or comes from `pool.json`, and the
+one settings-writable resolver (NIP-05) is closed at three independent layers including
+`redirect: "manual"` inside `nostr-tools` itself. Surprising: the pool's outbound destination
+set is not fully chosen by the operator at all — `_fetchDmRelays` takes any `wss://` string a
+payout *recipient* publishes in their own Nostr event and hands it to `SimplePool.publish`,
+so a registered miner picked up to four arbitrary WebSocket destinations per payout, loopback
+and link-local included.**
+
+*And the dependency half found its real problem one layer above the dependencies.* `npm audit`
+reports three moderates; all three trace to `qs`, both are unreachable in this configuration
+(evidence in J13-8), and no fix exists — express 4.22.2 pins `qs: ~6.15.1`, so
+`npm audit fix` changes zero packages. The finding is not the CVEs, it is that when a real
+lockfile-only fix does arrive, the toolkit's own deploy step will not install it: it re-runs
+`npm` only when `package.json`'s hash changed, and `npm ci` installs from `package-lock.json`
+(J13-6).
+
+Ten findings. **Five fixed in this session** (J13-1, J13-3, J13-4's host filter, J13-6, and
+J13-7's panel text — each small and local, plan rule 3). **J13-2 is a ruling, not a bug**:
+§J8-3 explicitly deferred to this session the question of whether the three alert credentials
+may be wired from settings into `config`, and the answer is *not without a host allowlist,
+validators and a step-up gate* — the primitive is inert today only because the keys never load.
+
+### The outbound inventory
+
+Every socket this process opens to something it did not compile in. "Who picks it" is the
+question that decides whether a finding exists.
+
+| # | Sink | Transport | Who picks the destination | Redirects | Timeout | Response cap |
+|---|---|---|---|---|---|---|
+| 1 | Node JSON-RPC (`/v2/owner`, `/v2/foreign`) | `node-fetch@2` | `config.node_api_url` — **pool.json / `NODE_API_URL` only**, absent from `pool-settings.js` ([config.js:115](../../web/07_mining_pool_public/back-end-pool/lib/config.js#L115)) | follows, but `authorization` is stripped cross-host (J13-9) | 10 s, covers the body | none (loopback) |
+| 2 | Wallet Owner API v3 | `node-fetch@2` | **hardcoded** `http://127.0.0.1:<owner_port>/v3/owner` ([wallet.js:24](../../web/07_mining_pool_public/back-end-pool/lib/wallet.js#L24)) | n/a | 10 s | none (loopback) |
+| 3 | Tor pre-flight probe | SOCKS5 → `127.0.0.1:<tor_socks_port>` | onion **derived** from the miner's bech32 address; proxy is loopback | n/a | 3 s × 2 | n/a |
+| 4 | `grin-wallet send` | `spawn`, argv array | address regex-gated before it reaches `-d` | n/a | 120 s hard kill | unbounded stdout/stderr (Info) |
+| 5 | Node stratum upstream | raw TCP | `node_stratum_host/port` — **pool.json only** | n/a | reconnect loop | n/a |
+| 6 | Poolstats push | `https.request` | `poolstats_endpoint` — **pool.json only**, absent from `pool-settings.js` | none (raw `https`) | 10 s **inactivity** | **was none** → J13-3 |
+| 7 | Discord / Slack / Telegram | `https.request` | `discord_webhook_url` / `slack_webhook_url` / `telegram_bot_token` — **pool.json only today** (§J8-3: the settings keys never reach `config`) | none | 10 s **inactivity** | **was none** → J13-3 |
+| 8 | SMTP | `nodemailer` | `config.smtp` object passed through verbatim — pool.json only | n/a | nodemailer default | n/a |
+| 9 | NIP-05 `/.well-known/nostr.json` | global `fetch` inside `nostr-tools` | miner supplies `name@domain`; **domain must be in `nostr_nip05_domains`** — settings-writable | **`redirect: "manual"`** | 10 s soft (J13-10) | none (J13-10) |
+| 10 | Nostr relays | WebSocket (`ws`) via `SimplePool` | `nostr_relays` (settings-writable, `wss://`-validated) **∪ whatever the recipient advertises** | n/a | 30 s publish budget | wrap/rumor size caps |
+| 11 | CoinGecko price | global `fetch` | **fixed literal** ([index.js:1131](../../web/07_mining_pool_public/back-end-pool/index.js#L1131)) | follows | 5 s `AbortSignal.timeout` | none (Info) |
+
+Two things that look like outbound and are not, both verified:
+[`lib/captcha.js`](../../web/07_mining_pool_public/back-end-pool/lib/captcha.js) is a
+self-hosted arithmetic challenge with **no network code at all** (no reCAPTCHA/hCaptcha/
+Turnstile anywhere in the backend), and `geoip-lite` is required and never asked to update —
+its only network path is the manual `updatedb` npm script, which nothing calls.
+
+### Threat actors used in this section
+
+| Label | Means | Reach into this scope |
+|---|---|---|
+| **Anonymous internet** | No credential | Cannot choose any outbound destination. Can *trigger* #11 (rate-limited + negative-cached, §J12-6) |
+| **Registered miner** | One valid ownership proof for one address | Chooses the NIP-05 name and, through their own npub's kind-10050, up to 4 relay URLs (J13-4). `withdraw` bucket, 20/min |
+| **Owner of an allowlisted NIP-05 domain** | Controls `goblin.st` (or whatever the operator added) | Answers #9. Can hold the socket open past the soft timeout (J13-10) |
+| **Logged-in admin / stolen `secureAdmin` session** | Session cookie, no step-up. §C3 keeps this live | Triggers #6 and #7 on demand (J13-1). Would gain a durable outbound primitive if §J8-3 is wired as proposed (J13-2) |
+| **The webhook platform itself** | Discord / Slack / Telegram, and everyone in the operator's channel | Receives miner addresses and payout amounts (J13-5) |
+| **On-box root** | Edits `pool.json` | Picks every destination in the table. Findings needing this are Info, per plan rule 7 |
+
+### Findings
+
+### J13-1 — [Medium] The admin *test* button bypasses every gate the poolstats pusher has, so a pool with the feature switched OFF and no API key still POSTs its live stats to a third party on demand — **FIXED 2026-09-03**
+
+**Threat actor: logged-in admin, including a stolen `secureAdmin` session** (§C3 keeps that a
+live actor).
+
+Every precondition the poolstats pusher has lives in `start()`
+([poolstats-reporter.js:38-65](../../web/07_mining_pool_public/back-end-pool/lib/poolstats-reporter.js#L38)):
+it returns early when `!this.enabled`, returns early when `poolstats_api_key` is blank, and
+returns early when `poolstats_endpoint` does not parse as `https:`. `submit()` had **none** of
+them — it went straight to `collectStats()` + `httpPost()`. And
+[`index.js:5079`](../../web/07_mining_pool_public/back-end-pool/index.js#L5079) calls
+`poolstatsReporter.submit()` directly:
+
+```js
+app.post('/api/admin/poolstats/test', secureAdmin, (req, res) => {
+  poolstatsReporter.submit()          // ← start()'s three gates are not on this path
+```
+
+So on a default pool — `poolstats_enabled` is not written by the installer, and the key is
+never set — one `secureAdmin` request makes the box POST `pool_name`, `subdomain`, `network`,
+live miner count, hashrate, block counts and `pool_fee` to
+`https://api.miningpoolstats.stream/submit`, with the header `Authorization: Bearer ` (empty),
+from a feature the operator has switched off. The aggregates are public; the *disclosure of
+this pool's existence and subdomain to a named third party* is not, and neither is the egress
+itself on a box whose whole design is Tor-friendly.
+
+**Its sibling gets this right**, which is what makes it a finding rather than a design
+position: `POST /api/admin/alerts/test` refuses with a 400 when no channel is configured
+([index.js:5402-5405](../../web/07_mining_pool_public/back-end-pool/index.js#L5402)) —
+`'No alert channels are configured. Set a webhook / email / Telegram in pool.json first.'`
+Two test routes, written to two different rules.
+
+Two riders found while reading it. (a) **The three poolstats routes have no admin-panel UI at
+all** — `grep -rn poolstats admin-panel/` returns nothing, so `GET /api/admin/poolstats`,
+`POST /api/admin/poolstats/update-key` (`freshAdmin`) and `POST /api/admin/poolstats/test`
+are an unreferenced admin surface reachable only by hand. (b) `getStatus()` returns
+`api_key_preview` — the first 7 and last 4 characters of the key
+([poolstats-reporter.js:241](../../web/07_mining_pool_public/back-end-pool/lib/poolstats-reporter.js#L241)) —
+which is a deliberate and normal affordance, but note it is `secureAdmin`, not `freshAdmin`,
+while *rotating* the same key is `freshAdmin`.
+
+**Fixed** by moving the preconditions onto the action instead of onto one of its two callers:
+new `_assertSubmittable()`
+([poolstats-reporter.js:81](../../web/07_mining_pool_public/back-end-pool/lib/poolstats-reporter.js#L81))
+re-checks enabled + key + `https:`, and `submit()` calls it first
+([:99](../../web/07_mining_pool_public/back-end-pool/lib/poolstats-reporter.js#L99)). The test
+route now answers `500 poolstats reporting is disabled (set poolstats_enabled in pool.json)`
+instead of silently sending. The periodic path is unchanged in behaviour — `start()` already
+refused to schedule.
+
+---
+
+### J13-2 — [High] The §J8-3 ruling: `postWebhook()` is an unrestricted outbound-request primitive, so wiring the three alert credentials from settings into `config` would turn a `secureAdmin` write into a durable, restart-surviving beacon — **RULING; do not wire without all three conditions below. Scheme check FIXED 2026-09-03, the rest is OPEN**
+
+**Threat actor: stolen `secureAdmin` session** (the whole point of the ruling — this actor
+cannot read the box's files today, and the wiring would hand them an egress channel that
+does not need to).
+
+§J8-3 found the `alerts` settings section inert: all nine keys are stored, served back to the
+browser in cleartext, and read by nothing, because `applyToConfig` copies none of them
+([pool-settings.js:305-309](../../web/07_mining_pool_public/back-end-pool/lib/pool-settings.js#L305);
+`grep -n discord_webhook_url lib/config.js` returns nothing). It offered three dispositions —
+wire them up, wire them up *with masking*, or delete the fields — and handed §J13 the rider
+that must be answered **before** the wiring lands. This is that answer.
+
+**What the primitive is.** `postWebhook()`
+([alert-delivery.js:196](../../web/07_mining_pool_public/back-end-pool/lib/alert-delivery.js#L196))
+builds its request out of an operator-supplied `URL`:
+
+```js
+const options = { hostname: url.hostname, port: url.port || 443,
+                  path: url.pathname + url.search, method: 'POST', … };
+```
+
+with no host allowlist, no scheme check (see the fix below), and an arbitrary port honoured
+from the authority. `sendDiscord`/`sendSlack` reach it via `new URL(this.discordWebhook)` /
+`new URL(this.slackWebhook)`, and there is **no validator for any of the three keys** — the
+`alerts` validator block covers `alert_check_interval_secs` alone
+([pool-settings.js:983-989](../../web/07_mining_pool_public/back-end-pool/lib/pool-settings.js#L983)).
+
+**Why it is worse than a one-shot SSRF.** Read-back is weak — the response body only reaches
+`this.error(…)`, i.e. the journal, which this actor cannot read. The value is *egress*: the
+destination is stored in `pool_config`, survives every restart, rides along in 089 backups,
+is invisible from any public page, and is fired automatically by AlertMonitor on every
+money event. Combined with J13-5 (the alert body carries miner addresses and payout amounts),
+a `secureAdmin` write becomes a durable subscription to the pool's money flow, aimed at a host
+of the attacker's choosing. That is a materially different asset from a session that expires.
+
+**Ruling — all three are required before the keys are copied into `config`:**
+
+1. **A host allowlist, and in this case a complete one.** This is not a case where an
+   allowlist is impractical: the real destinations are a closed set —
+   `discord.com` / `discordapp.com` for `https://discord.com/api/webhooks/…`,
+   `hooks.slack.com` for `https://hooks.slack.com/services/…`, and Telegram is **already**
+   hardcoded to `api.telegram.org`
+   ([alert-delivery.js:82](../../web/07_mining_pool_public/back-end-pool/lib/alert-delivery.js#L82))
+   with only the token operator-set. Enforce the host per key at *validate* time and again in
+   `postWebhook`, exactly as `nostr_nip05_domains` does for the NIP-05 resolver.
+2. **Per-key validators.** `discord_webhook_url` and `slack_webhook_url`: `https:` +
+   allowlisted host + a path matching the vendor's shape. `telegram_bot_token`:
+   `/^\d{5,15}:[A-Za-z0-9_-]{30,50}$/` — it is interpolated into a URL *string* before
+   parsing, so a token is a template hole, not a value. (The `/bot` prefix does terminate the
+   authority, so the host cannot be moved; the constraint is still owed.)
+3. **Step-up.** The section moves into `STEP_UP_SETTINGS_SECTIONS`, or at minimum the three
+   credential keys into `STEP_UP_SETTINGS_KEYS`. A `secureAdmin` write must not be able to
+   choose where the pool's money alerts go.
+
+§J8-3's masking rider stands on top of all three: read-back must return a `"••••••••"`
+sentinel treated as "unchanged" on write. **If any of the three is not going to be built, take
+§J8-3's third option and delete the fields** — a pool that stores a credential, hands it to any
+admin session and gets nothing for it is the worst of the three, and that is the status quo.
+
+**Fixed in this session (the one piece that was already live):** `postWebhook` never checked
+the scheme. `new URL('http://internal/x')` parses, and `https.request` then dialled
+`internal:443` *with TLS* regardless — so an operator pasting an `http://` webhook got a
+confusing handshake failure instead of an error naming the problem. It now rejects anything
+but `https:` up front
+([alert-delivery.js:203](../../web/07_mining_pool_public/back-end-pool/lib/alert-delivery.js#L203)).
+
+**One more, for the record, needing on-box root and therefore Info under plan rule 7:**
+`sendEmail` passes `this.smtpConfig` straight into `nodemailer.createTransport`
+([alert-delivery.js:115](../../web/07_mining_pool_public/back-end-pool/lib/alert-delivery.js#L115)).
+nodemailer accepts transport shapes other than SMTP — `{ sendmail: true, path, args }` runs a
+local binary — so `pool.json`'s `smtp` object is a command-execution surface, not just a host
+and port. It stays Info because writing `pool.json` already implies the box, but it is a
+reason `smtp` must **never** join the settings-writable set alongside the other three.
+
+---
+
+### J13-3 — [Low] Neither raw-`https` consumer capped its response body, and `timeout` on an `https.request` is an inactivity timer — so a drip-feeding endpoint holds the socket open and grows an unbounded string — **FIXED 2026-09-03**
+
+**Threat actor: whoever operates the configured endpoint** — `api.miningpoolstats.stream`, a
+Discord/Slack webhook host, or anything a compromised `pool.json` names. Not reachable by an
+anonymous client.
+
+Both raw-`https` sinks accumulated the whole response into a JS string with no bound:
+
+```js
+res.on('data', chunk => { responseBody += chunk.toString('utf8'); });   // poolstats
+res.on('data', chunk => { data += chunk; });                            // alert-delivery
+```
+
+and both relied on `timeout: 10000` in the request options to bound the exchange. That option
+sets a **socket inactivity** timer — a server that sends one byte every nine seconds never
+trips it, while the string grows for as long as it cares to keep sending. The two are
+complementary, not redundant: neither one alone bounds the interaction.
+
+This is a real difference from the two `node-fetch` sinks, which is why it is a finding rather
+than a general observation: node-fetch v2's `timeout` *is* applied to the response body as
+well as the request
+(`node_modules/node-fetch/lib/index.js:384-389`, comment `// allow timeout on slow response
+body`), so #1 and #2 in the inventory are bounded in time even though they set no `size`.
+
+**Fixed** with a 64 KB cap in both — far more than any webhook ack or submit response —
+destroying the request and rejecting on overflow
+([poolstats-reporter.js:180](../../web/07_mining_pool_public/back-end-pool/lib/poolstats-reporter.js#L180),
+[alert-delivery.js:223](../../web/07_mining_pool_public/back-end-pool/lib/alert-delivery.js#L223)).
+The `res.on('end')` handlers now return early when the cap tripped, so a capped request cannot
+also resolve.
+
+---
+
+### J13-4 — [Medium] `_fetchDmRelays` turns any `wss://` string a payout recipient publishes into an outbound WebSocket connection, so a registered miner — not the operator — chose up to four of the pool's outbound destinations — **HOST FILTER FIXED 2026-09-03; the connection-lifetime half is OPEN**
+
+**Threat actor: registered miner holding a valid ownership proof.** Gated behind
+`nostr_payouts_enabled`, which is off by default at four verified layers (J13-9), so this is a
+Medium rather than a High.
+
+The plan asked whether an operator-set URL can be aimed at loopback or a metadata IP. For the
+NIP-05 resolver the answer is a clean no (J13-9). But the relay set is not only operator-set.
+`publishSlatepack` and `publishNotice` both *widen* the target list with whatever the
+recipient advertises
+([nostr-payout.js:218](../../web/07_mining_pool_public/back-end-pool/lib/nostr-payout.js#L218),
+[:261](../../web/07_mining_pool_public/back-end-pool/lib/nostr-payout.js#L261)):
+
+```js
+let targets = this.relays.slice();
+const hint = await this._fetchDmRelays(recipientPubHex);
+if (hint && hint.length) targets = [...new Set([...hint, ...targets])];
+…
+const accepted = await this._publish(targets, wrap);   // SimplePool.publish → one WS per URL
+```
+
+and the only check `_fetchDmRelays` applied was a **prefix test**, `/^wss:\/\//`. That matched
+`wss://127.0.0.1:3413/`, `wss://169.254.169.254/`, `wss://[::1]/` and
+`wss://grin-node.internal/` as readily as a real relay. The chain is entirely inside the
+miner's control: register a Goblin destination (ownership-gated, `withdraw` bucket) whose npub
+you hold, publish a kind-10050 listing four hosts of your choosing, and every payout or
+security notice to that destination makes the pool box open WebSocket connections to them.
+
+Constraints that keep it Medium and not High, stated so the severity is auditable: `wss:` means
+TLS, so a plain-HTTP internal service will not complete a handshake and this is a *blind*
+probe, not a read-back; the payload is a NIP-59 gift wrap already encrypted to the recipient,
+so nothing confidential is disclosed by delivering it to a relay of their choosing; and the
+rail is off by default.
+
+**Fixed** with a real host policy replacing the prefix test — new static
+`_isPublicRelayUrl()`
+([nostr-payout.js:354](../../web/07_mining_pool_public/back-end-pool/lib/nostr-payout.js#L354))
+requires a parseable `wss:` URL with no credentials in the authority and a hostname that is
+not an IPv4 literal, not a bracketed IPv6 literal, not single-label (`localhost`, a container
+or service name), and not under `.localhost` / `.local` / `.internal`. Exercised over 16 cases
+(see *Verification*). It is exported for tests and deliberately **not** applied to
+`this.relays`, which the operator sets and `pool-settings.js` already validates.
+
+**Left open — the connection lifetime.** `SimplePool` holds a persistent connection per relay
+URL, and `stop()` closes only the configured set:
+`this._pool.close(this.relays)`
+([nostr-payout.js:138](../../web/07_mining_pool_public/back-end-pool/lib/nostr-payout.js#L138)).
+Hint relays are never closed and never counted, so distinct hinted hosts accumulate across the
+life of the process, bounded only by how many destinations register. The host filter bounds
+*where*; nothing bounds *how many*. The fix is either to close hinted relays after the publish
+or to keep a bounded LRU of them — sized against traffic that does not exist yet, so it is
+left as a decision rather than guessed at.
+
+---
+
+### J13-5 — [Medium] Every alert rail exports the miner's full Grin address and exact payout amount to a third-party chat platform, and the email rail ships the whole alert payload verbatim — **OPEN (product decision; inert today)**
+
+**Threat actor: the webhook platform, and every member of the operator's Discord/Slack channel
+or Telegram group.** No attacker required — this is the feature working as written.
+
+§G removed the (address, IP, time) linkage from the audit trail. §J11-2 removed the
+address ↔ `kernel_excess` linkage from the pool-wide payments feed, on the grounds that a
+permanent public address↔chain table is the worst thing a privacy coin's pool can publish. The
+alert rail re-creates a smaller version of the same disclosure, off-box, with no mask:
+
+```js
+message: `Large withdrawal: ${big.amount.toFixed(4)} GRIN (#${big.id}) to ${big.grin_address}.`
+```
+([alert-monitor.js:322](../../web/07_mining_pool_public/back-end-pool/lib/alert-monitor.js#L322))
+
+`alert.message` is what `sendDiscord` puts in the embed description, `sendSlack` in the
+attachment text, and `sendTelegram` in the message body — so a full `grin1…` address plus an
+exact amount goes to Discord's servers, Slack's servers, or Telegram's, and is then visible to
+everyone in whatever channel the webhook posts into. A pool webhook in a semi-public operator
+channel is a normal setup; nobody reading that channel has agreed to hold miner addresses.
+
+**Email carries strictly more.** `formatEmailBody` appends `formatAlertData(alert.data)`
+([alert-delivery.js:270-304](../../web/07_mining_pool_public/back-end-pool/lib/alert-delivery.js#L270)),
+which pretty-prints the raw payload — for `large_withdrawal` that is
+`{ withdrawal_id, amount, address, … }`, and for `unrecorded_wallet_send` the top five sends
+with amounts and timestamps
+([alert-monitor.js:285](../../web/07_mining_pool_public/back-end-pool/lib/alert-monitor.js#L285)).
+The chat rails leak the address; the email rail leaks the record.
+
+Also in this class: `wallet_identity_changed` publishes both the live and the expected pool
+wallet identity ([alert-monitor.js:379](../../web/07_mining_pool_public/back-end-pool/lib/alert-monitor.js#L379)).
+That one is arguably correct — it is the operator's own wallet, and an identity change is
+exactly the event you want delivered somewhere you will actually read.
+
+**Inert today** for the same reason as J13-2: the three webhook credentials never load, so
+nothing is delivered. That is *why* this belongs in the same decision. The disposition is a
+product call, not a patch:
+
+- **Mask the address in `message`** to the same 9+4 form the public feeds use, keep the full
+  value in `alert.data` (email only, a channel the operator controls), and say so in the
+  panel; or
+- **accept it and disclose it** — the privacy policy in
+  [`pool-settings.js:509`](../../web/07_mining_pool_public/back-end-pool/lib/pool-settings.js#L509)
+  currently describes no third-party alert processor, and if alerts are wired it needs one.
+
+Note §J11-1's caveat applied with full force here when this was written: the 9+4 mask was
+invertible by joining the pool's own public feeds. **§J11's resolution pass (2026-09-02) closed
+that** — all nine public list routes now mask and no page emits a full address — so masking the
+chat rails is now a real reduction, not a fig leaf. Two caveats survive and should still be said
+plainly rather than calling a masked address anonymous: the 9+4 form is still a unique key, so it
+re-attaches to a full address obtained from **anywhere else** (a forum post, a support e-mail, an
+earlier scrape taken before the fix); and the chat rails are off-box, where the pool's own
+controls end.
+
+---
+
+### J13-6 — [Medium] The deploy step re-runs `npm` only when `package.json` changed, but `npm ci` installs from `package-lock.json` — so a lockfile-only security fix rsyncs onto the box and is never installed — **FIXED 2026-09-03**
+
+**Threat actor: none directly.** This is the patch pipeline, and it fails in the direction
+where the operator believes a fix has landed.
+
+`pool_deploy_code` gates the dependency install on a single hash:
+
+```bash
+old_pkg_hash=$(sha1sum "$POOL_APP_DIR/package.json" …)
+new_pkg_hash=$(sha1sum "$POOL_APP_SRC/package.json" …)
+…
+if [[ "$old_pkg_hash" != "$new_pkg_hash" ]]; then
+    local npm_cmd="install"
+    [[ -f "$POOL_APP_DIR/package-lock.json" ]] && npm_cmd="ci"
+```
+
+and the `rsync` immediately above it copies the *whole* source tree, lockfile included, with
+no `--exclude` for it. So on a lockfile-only change the sequence is: new `package-lock.json`
+written to `$POOL_APP_DIR`, hashes compared on `package.json` alone, equal, `info "package.json
+unchanged — skipping npm"`, `node_modules` untouched. The box keeps running the old tree while
+the lockfile beside it claims otherwise, and **nothing on the box compares the two** — `npm ci`
+is the only thing that would have noticed, and it is exactly what was skipped.
+
+This is not a hypothetical shape. `npm ci` installs transitive versions **only** from the
+lockfile, and the overwhelming majority of dependency security fixes are transitive: a patched
+`qs` under `express`, a patched `cookie`, a patched `raw-body`. All of them are reachable by
+regenerating the lock with `package.json` byte-identical. Same code in the Install step at
+[07_grin_mining_public_pool.sh:584-588](../../scripts/07_grin_mining_public_pool.sh#L584) —
+that one is harmless, because Install always runs `npm` unconditionally.
+
+**Fixed** by hashing both files as one stream, in both the source and the deployed copy
+([07_grin_mining_public_pool.sh:901-902](../../scripts/07_grin_mining_public_pool.sh#L901)):
+
+```bash
+old_pkg_hash=$(cat "$POOL_APP_DIR/package.json" "$POOL_APP_DIR/package-lock.json" 2>/dev/null | sha1sum | awk '{print $1}')
+new_pkg_hash=$(cat "$POOL_APP_SRC/package.json"  "$POOL_APP_SRC/package-lock.json"  2>/dev/null | sha1sum | awk '{print $1}')
+```
+
+`cat` of a missing file is a no-op under `2>/dev/null` and the hash of the remaining stream is
+still stable, so a tree with no lockfile behaves exactly as before. The two log lines were
+updated to name both files, so the skip message does not keep making the claim that caused the
+bug. `bash -n` clean.
+
+---
+
+### J13-7 — [Low] The Goblin bridge snapshots its three security-relevant settings in the constructor, so turning the rail off — or **removing a domain from the NIP-05 allowlist** — persists, validates, and does nothing until restart — **PANEL TEXT FIXED 2026-09-03; the live-revocation half is OPEN**
+
+**Threat actor: none attacking directly** — it is the operator's incident response that is
+inert. It becomes attacker-relevant at exactly the wrong moment: when the operator is
+responding to a compromised or typo-squatted allowlist entry and believes they have revoked it.
+
+`NostrPayoutBridge`'s constructor reads all three once and nothing re-reads them:
+
+| Field | Line | Read again anywhere? |
+|---|---|---|
+| `this.enabled` | [:60](../../web/07_mining_pool_public/back-end-pool/lib/nostr-payout.js#L60) | No — `isEnabled()` returns the snapshot, and it is the gate on the withdraw branch, both destination routes, and the account summary |
+| `this.relays` | [:69](../../web/07_mining_pool_public/back-end-pool/lib/nostr-payout.js#L69) | No |
+| `this.nip05Domains` | [:77](../../web/07_mining_pool_public/back-end-pool/lib/nostr-payout.js#L77) | No — `resolveDestination`'s allowlist check at [:182](../../web/07_mining_pool_public/back-end-pool/lib/nostr-payout.js#L182) reads the snapshot |
+
+The underlying cause is one level up and is general, not Goblin-specific:
+`PoolSettings.applyToConfig()` has exactly **one** caller —
+[`config.js:262`](../../web/07_mining_pool_public/back-end-pool/lib/config.js#L262), reached
+from `mergeDbSettings(config, db)` at
+[`index.js:457`](../../web/07_mining_pool_public/back-end-pool/index.js#L457), which runs once
+at boot. Nothing in the settings write path re-runs it. So every key that reaches a consumer
+via `config` is a boot snapshot; the bridge is the case where one of those keys is described in
+the UI as a security control.
+
+**Why it is a finding and not just a property.** The same page already labels four fields
+`Applied on backend restart`
+([settings-payout.html:62, 75, 84, 89](../../web/07_mining_pool_public/back-end-pool/admin-panel/settings-payout.html#L62)).
+Against that background, the absence of the note on the Goblin block read as "this one is
+live" — and the block's existing text said a restart is needed *to enable* the rail
+(`Requires npm install … and a backend restart`), which is the opposite of the dangerous
+direction. Meanwhile the NIP-05 field's own helper text called itself
+"the SSRF / look-alike-domain guard" with no restart note at all.
+
+**Fixed (the honest half).** Making `isEnabled()` read `this.config` live would change nothing,
+because `config` is itself a boot snapshot — so the fix is to stop the UI implying otherwise.
+The Goblin section now states that **every** setting in it applies on backend restart
+*including turning the rail off*, and the NIP-05 field says removing a domain does not revoke
+it until the service restarts
+([settings-payout.html:149-151, 171](../../web/07_mining_pool_public/back-end-pool/admin-panel/settings-payout.html#L149)).
+
+**Left open:** whether a live kill-switch is wanted for this rail. It is buildable — the
+payout-freeze switch (§reconciliation) is read per scheduler tick and is the existing pattern —
+but it is a design decision, and §J4-5 already has an open finding about *that* switch's
+granularity. Better decided together than twice.
+
+---
+
+### J13-8 — [Info] The dependency review, with evidence: three moderates, both advisories unreachable here, and no fix reachable either
+
+`npm audit --omit=dev` against the committed lockfile, run once this session:
+**3 moderate, 0 high, 0 critical**, over 114 prod + 10 optional packages. All three rows are
+the same root — `qs`, reported once directly and twice through its dependents `body-parser`
+and `express`.
+
+| Advisory | Range | Installed | Reachable here? |
+|---|---|---|---|
+| GHSA-4mjr-xmp4-gh2g — DoS via attacker-controlled `isBuffer` (CVSS 5.3, `AV:N/AC:L/PR:N`) | `>=2.2.5 <6.16.0` | 6.15.3 | **No.** `utils.isBuffer` has exactly one caller in the installed tree — `qs/lib/stringify.js:127`. The pool never calls `qs.stringify`, and neither Express nor body-parser does: `qs` is reached only through Express's query **parser** |
+| GHSA-x5fp-wj9c-mxmx — array-limit bypass via bracket-key comma parsing (CVSS 3.7) | `>=6.14.2 <=6.15.3` | 6.15.3 | **No.** It needs `comma: true`. Express's extended parser passes `{ allowPrototypes: true, arrayLimit: 1000 }` (`express/lib/utils.js:289-291`) and nothing else; `express.json()` is the only body parser mounted ([index.js:232](../../web/07_mining_pool_public/back-end-pool/index.js#L232)), so body-parser's urlencoded path is not even registered |
+
+Driven directly rather than reasoned about: `qs.parse` was run under Express's exact options
+with an index past `arrayLimit`, comma-bearing bracket keys, a 5,000-element comma value and
+`a[2147483647]=x`; every case returned in under 3 ms with no array amplification.
+
+**And no fix exists.** `npm audit` says `fixAvailable: true`, but
+`npm audit fix --omit=dev --dry-run` reports `"added": 0, "removed": 0, "changed": 0` and
+leaves both files byte-identical. The reason is in the tree: express 4.22.2 declares
+`qs: "~6.15.1"`, which cannot reach the patched 6.16.0. The only path is express 5 behind
+`--force`. **So `npm audit` will be red on every install of this pool for reasons the operator
+cannot act on** — which is the actual risk here, because an audit that is permanently red is an
+audit nobody reads. It should be stated in the pre-mainnet gate rather than discovered.
+
+**The rest of the plan's dependency checklist, each checked:**
+
+- **`multer@2`** — lockfile pins **2.2.0**, past the 2.0.0–2.0.1 DoS line; clean in the audit.
+- **`jsonwebtoken@9`** → 9.0.3, **`ws@8`** → 8.21.1, **`socks`** → 2.8.9, **`nostr-tools`** →
+  2.24.1, **`dotenv`** → 16.6.1, **`ipaddr.js`** → 2.4.0, **`cookie-parser`** → 1.4.7,
+  **`nodemailer`** → 9.0.3, **`geoip-lite`** → 2.0.3. All clean; all satisfy the ranges in
+  `package.json`, so `npm ci` and `npm install` agree.
+- **`node-fetch@2` (EOL)** — no open advisory, and the one that mattered is verifiably fixed in
+  the installed copy: CVE-2022-0235's cross-host credential leak is closed at
+  `node_modules/node-fetch/lib/index.js:1610-1612`, which deletes `authorization`,
+  `www-authenticate`, `cookie` and `cookie2` when a redirect leaves the domain or changes
+  protocol. Both consumers are loopback anyway. EOL is a maintenance risk, not a live one.
+- **`bcryptjs@2` (unmaintained)** — cost factor 12
+  ([auth.js:50](../../web/07_mining_pool_public/back-end-pool/lib/auth.js#L50)), hashing is
+  `await`ed rather than sync ([auth.js:689](../../web/07_mining_pool_public/back-end-pool/lib/auth.js#L689),
+  [:802](../../web/07_mining_pool_public/back-end-pool/lib/auth.js#L802)) so it does not block
+  the event loop the stratum server shares.
+- **Install scripts: zero.** No package in the 124-entry lockfile carries `hasInstallScript`,
+  so `npm ci` executes no third-party code at install time — worth stating because the
+  installer runs it as root. `geoip-lite`'s network fetch is the manual `updatedb` script,
+  which nothing calls.
+- **`engines: node >=24`** matches the installer, which removes the distro packages and pulls
+  NodeSource `setup_24.x` on both apt and dnf
+  ([07_grin_mining_public_pool.sh:455-466](../../scripts/07_grin_mining_public_pool.sh#L455)).
+  Consistent. (That step is `curl … | bash -` as root — a real supply-chain surface, but it is
+  §J16's file and §J16's call.)
+
+**One sub-point worth carrying forward: the off-by-default guarantee does not extend to the
+supply chain.** `nostr-tools`, `ws` and `nodemailer` are hard `dependencies`, not
+`optionalDependencies`, even though all three are lazy-`require`d precisely so the pool boots
+without them ([nostr-payout.js:280-291](../../web/07_mining_pool_public/back-end-pool/lib/nostr-payout.js#L280),
+[alert-delivery.js:100-108](../../web/07_mining_pool_public/back-end-pool/lib/alert-delivery.js#L100),
+whose comment calls nodemailer "an optional dependency" — it is not). So every pool installs
+the full tree for two features that are off by default and, per §J8-3, one of which is wired to
+nothing. Moving them to `optionalDependencies` would make the code's own claim true and shrink
+the default install; it would also mean the Goblin rail's "run `npm install`" instruction
+becomes load-bearing rather than already-satisfied. A decision, not a defect.
+
+---
+
+### J13-9 — [Info] Verified correct, with evidence
+
+Each of these was read rather than assumed, and each answers a question the plan asked
+explicitly.
+
+**The NIP-05 resolver is closed at three independent layers**, which is the plan's
+"an allowed host that 302s to localhost is the classic bypass" question:
+(1) `nostr-tools`' `queryProfile` passes **`redirect: "manual"`** to `fetch`
+(`node_modules/nostr-tools/lib/cjs/nip05.js:62`) — the library does not follow redirects at
+all, so the bypass has no first step;
+(2) its `NIP05_REGEX` requires at least one dot in the host, so `localhost` and any
+single-label internal name cannot even form a query;
+(3) the settings validator normalises to lowercase bare hostnames, rejects IPv4 literals,
+leading/trailing dots and `..`, and caps the list at 20
+([pool-settings.js:944-953](../../web/07_mining_pool_public/back-end-pool/lib/pool-settings.js#L944)),
+with an empty list falling back to `['goblin.st']` and never to "allow all". This confirms and
+closes §J9's handoff on that key. The call is also wrapped in a 10 s budget
+([nostr-payout.js:383](../../web/07_mining_pool_public/back-end-pool/lib/nostr-payout.js#L383)) —
+see J13-10 for that budget's one weakness.
+
+**The node and wallet URLs are not settings-writable.** `node_api_url` resolves from
+`pool.json` or `NODE_API_URL` only ([config.js:115](../../web/07_mining_pool_public/back-end-pool/lib/config.js#L115))
+and appears nowhere in `pool-settings.js`; the wallet Owner URL is built from a constant
+`127.0.0.1` and a port ([wallet.js:24](../../web/07_mining_pool_public/back-end-pool/lib/wallet.js#L24));
+`node_stratum_host/port` are likewise pool.json-only
+([config.js:125-129](../../web/07_mining_pool_public/back-end-pool/lib/config.js#L125)). So the
+plan's central question — *can an operator-set URL be aimed at the node's Owner API?* — is
+**no** for every settings-writable key. Aiming any of them requires writing `pool.json`, which
+is on-box root.
+
+**The price fetch is correct on all four counts the plan named.** The descriptive User-Agent is
+present ([index.js:1126-1132](../../web/07_mining_pool_public/back-end-pool/index.js#L1126)),
+which memory `project_grin_btc_price_source` says CoinGecko 403s without; there is a 5 s
+`AbortSignal.timeout`; failures are negative-cached and in-flight-deduped (§J12-6); and the
+result reaches **no money path** — `grep -rn` for the cache and the endpoint finds only the
+route itself and its API-docs entry. A dead price feed degrades the footer ticker to
+`{ available: false }` and touches nothing else.
+
+**`captcha.js` is genuinely self-hosted.** No `require` of any network module, no third-party
+verify call — the answer is generated and checked in-process
+([captcha.js:73-97](../../web/07_mining_pool_public/back-end-pool/lib/captcha.js#L73)). The
+plan listed captcha as an outbound surface; on this pool it is not one.
+
+**`wallet-tor.js`'s `send` is the pattern CLAUDE.md asks for**, re-confirmed: `spawn` with an
+argv array and no shell, the passphrase fed on **stdin** rather than `-p`, a hard
+`sendTimeoutMs` kill, and the destination regex-validated by `isPayoutAddress` *before* it
+reaches `-d`. The SOCKS proxy is a loopback constant and the onion is derived from the miner's
+own bech32 address, never supplied. (`isPayoutAddress` accepting both `grin1` and `tgrin1`
+regardless of network is already §J16's, from §J4 — not re-reported.)
+
+**Goblin's four off-by-default layers, re-verified in code** (memory
+`project_pool_nostr_payouts`): (1) the default is `'false'` and the validator normalises
+empty/absent to `'false'`
+([pool-settings.js:223](../../web/07_mining_pool_public/back-end-pool/lib/pool-settings.js#L223),
+[:929](../../web/07_mining_pool_public/back-end-pool/lib/pool-settings.js#L929)), with
+`config.js:79` coercing the quoted boolean correctly — the trap from memory
+`project_config_loader_type_traps` is not present here; (2) the account summary reports runtime
+truth, `!!(nostrBridge && nostrBridge.isEnabled())`
+([index.js:3389](../../web/07_mining_pool_public/back-end-pool/index.js#L3389)), and the bridge
+is `null` whenever its constructor or `start()` threw
+([index.js:602-612](../../web/07_mining_pool_public/back-end-pool/index.js#L602)); (3) the
+markup fails closed (§J15's file); (4) the server refuses regardless of the page — 503 on the
+`method:'nostr'` withdraw branch
+([index.js:4089](../../web/07_mining_pool_public/back-end-pool/index.js#L4089)) and on `POST
+/nostr-destination` ([index.js:4261](../../web/07_mining_pool_public/back-end-pool/index.js#L4261)),
+with `DELETE` deliberately ungated. All four stand. J13-7 is the one thing this does not
+cover: the layers are correct *at boot*.
+
+**The registration route gates before it resolves.** `POST /api/account/:addr/nostr-destination`
+runs `requireBothProofs` and the account-existence check *before* calling
+`resolveDestination`, so the NIP-05 lookup — the outbound call — is not reachable by an
+unproven caller ([index.js:4257-4272](../../web/07_mining_pool_public/back-end-pool/index.js#L4257)).
+
+---
+
+### J13-10 — [Low] `withTimeout` gives up waiting but never aborts, so a slow allowlisted NIP-05 domain leaves a live socket and an uncapped `res.json()` behind for every attempt — **OPEN**
+
+**Threat actor: whoever controls an allowlisted NIP-05 domain** (by default `goblin.st`, a
+third party the operator has chosen to trust for *resolution*, not for *availability*).
+
+```js
+function withTimeout(promise, ms) {
+  return new Promise((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error('timeout')), ms);
+    …
+```
+([nostr-payout.js:494-502](../../web/07_mining_pool_public/back-end-pool/lib/nostr-payout.js#L494))
+
+It races a timer against the promise. It carries no `AbortController`, and `nostr-tools`'
+`queryProfile` accepts no signal — so when the 10 s budget expires the caller sees `timeout`
+and the underlying `fetch` keeps running: socket held, response still accumulating into an
+uncapped `res.json()`. Priced by the `withdraw` bucket at 20/min per IP, so a proof-holding
+miner pointing at a deliberately slow allowlisted domain accumulates abandoned sockets faster
+than they retire.
+
+Bounded in practice by the ownership gate, the rail being off by default, and the fact that
+the operator chose the domain — hence Low. The fix is to pass an `AbortSignal` through
+`nostr-tools`' `useFetchImplementation` hook (the module exports it precisely so the fetch can
+be replaced) and to cap the body there; it is a small change in a section the module marks as
+the only nostr-tools-coupled code, so it is a good candidate for whenever that section is next
+touched. Not done this session because it changes the wire section, which is not "small and
+local" in the sense plan rule 3 means.
+
+The same shape, benignly: `_fetchDmRelays` wraps `this._pool.get(...)` in the same helper, and
+the CoinGecko fetch at [index.js:1129](../../web/07_mining_pool_public/back-end-pool/index.js#L1129)
+uses a real `AbortSignal.timeout` — which is what the NIP-05 path should look like.
+
+### Handoffs
+
+- **§J8 (secrets & key management)** — J8-3's rider is answered as J13-2: **do not wire**
+  `discord_webhook_url` / `slack_webhook_url` / `telegram_bot_token` into `config` without a
+  host allowlist, per-key validators and step-up, or take J8-3's third option and delete the
+  fields. Its masking requirement stands on top. Also for J8's inventory: `config.smtp` is a
+  nodemailer transport object, not just a host and port, and must never become settings-writable.
+- **§J14 (admin panel front-end)** — two from this session. (a) `analytics.plausible_src` and
+  `analytics.umami_src` default to third-party script URLs
+  ([pool-settings.js:189-191](../../web/07_mining_pool_public/back-end-pool/lib/pool-settings.js#L189))
+  and their validators are a bare `new URL(val)`, so an operator-set value becomes a
+  `<script src>` on every public page bounded only by the nginx CSP allowlist; that is the same
+  family as §J9-3 and §J1-9 and belongs with the other script sinks. (b) The three
+  `/api/admin/poolstats/*` routes have **no page at all** (J13-1) — either build one or
+  remove them, because an unreferenced admin route is one nobody reviews.
+- **§J15 (public front-end)** — nothing new; the Goblin markup's fail-closed layer (layer 3 of
+  four) is confirmed as J15's to verify, unchanged from §J4's handoff.
+- **§J16 (deployment & infra)** — three. (a) The Node install is
+  `curl -fsSL https://deb.nodesource.com/setup_24.x | bash -` as root
+  ([07_grin_mining_public_pool.sh:458, 464](../../scripts/07_grin_mining_public_pool.sh#L458));
+  the version choice is correct against `engines`, the delivery is §J16's call. (b) J13-6 is
+  fixed in `pool_deploy_code`, but §J16 should decide whether the deploy ought to *verify*
+  rather than *infer* — `npm ci --dry-run` or an `npm ls --omit=dev` check would catch a
+  `node_modules` that has drifted from the lockfile for any other reason. (c) If J13-2's
+  allowlist is built, the nginx egress story should be stated: nothing on this box restricts
+  outbound connections, so the app-layer allowlist is the only control.
+- **§J17 (operational gate)** — three things only a box settles. (1) **State in the launch
+  notes that `npm audit` is permanently red** for the reason in J13-8, with the three rows
+  named, so an operator does not read it as a new finding — and re-run it at launch to confirm
+  nothing *else* has appeared. (2) If the Goblin rail is ever exercised on testnet, J13-4's
+  open half (unbounded hinted-relay connections) is observable with `ss -tp` on the pool
+  process and nothing else will show it. (3) J13-6's fix should be staged once: change only
+  `package-lock.json`, run the deploy step, and confirm `npm ci` runs.
+- **memory `project_pool_ip_privacy`** should gain the alert rail as a **fifth** out-of-DB
+  address sink alongside §J8-5's journal, whichever disposition J13-5 gets.
+- **memory `project_pool_nostr_payouts`** — the four-layer guarantee is verified but is a
+  *boot-time* guarantee (J13-7), and the relay set is not purely operator-chosen (J13-4). Both
+  are worth recording there, because the memory currently reads as though the operator controls
+  the whole outbound set.
+
+### Verification
+
+- **`npm test` — full suite green**: `12 + 47 + 32 + 52 + 65 + 18 + 21 + 24 + 51` =
+  **322 passed, 0 failed**, after this session's four code fixes. Same baseline as §J12.
+- **`node --check`** clean on all three edited JS files
+  (`lib/poolstats-reporter.js`, `lib/alert-delivery.js`, `lib/nostr-payout.js`).
+- **`bash -n scripts/07_grin_mining_public_pool.sh`** clean after the J13-6 fix.
+- **J13-4's host filter driven directly**, 16 cases via the newly exported
+  `require('./lib/nostr-payout')._isPublicRelayUrl`: `wss://relay.floonet.dev`,
+  `wss://relay.0xchat.com/` and `wss://sub.relay.example.co.uk:7777/path` accept;
+  `wss://127.0.0.1:3413/`, `wss://169.254.169.254/latest/meta-data/`, `wss://[::1]/`,
+  `wss://[fd00::1]:8080/`, `wss://localhost:3413/`, `wss://pool.localhost/`,
+  `wss://grin-node.internal/`, `wss://redis.local/`, `ws://relay.example.com/`,
+  `https://relay.example.com/`, `wss://user:pw@relay.example.com/`, `not a url` and `''`
+  all reject. **16/16.**
+- **`npm audit --omit=dev --json`** and **`npm audit fix --omit=dev --dry-run --json`** each run
+  once; `package.json` and `package-lock.json` verified byte-identical afterwards
+  (`diff -q`), so the audit left no residue.
+- **`qs` advisory reachability** established by reading the installed call graph
+  (`grep -n isBuffer node_modules/qs/lib/*.js` → one caller, in `stringify.js`) and by driving
+  `qs.parse` under Express's real options — not from the advisory text.
+- **node-fetch redirect behaviour** established the same way
+  (`node_modules/node-fetch/lib/index.js:1610-1612`), not from release notes.
+- Per plan rule 5: nothing ran on a VPS, and nothing long-running ran locally — every command
+  was a one-shot that exited.
+
+### Changed this session
+
+| File | Change |
+|---|---|
+| [`lib/poolstats-reporter.js`](../../web/07_mining_pool_public/back-end-pool/lib/poolstats-reporter.js) | J13-1 `_assertSubmittable()` + call from `submit()`; J13-3 64 KB response cap |
+| [`lib/alert-delivery.js`](../../web/07_mining_pool_public/back-end-pool/lib/alert-delivery.js) | J13-2 `https:`-only scheme check in `postWebhook`; J13-3 64 KB response cap |
+| [`lib/nostr-payout.js`](../../web/07_mining_pool_public/back-end-pool/lib/nostr-payout.js) | J13-4 `_isPublicRelayUrl()` host policy replacing the `^wss://` prefix test in `_fetchDmRelays`; exported for tests |
+| [`admin-panel/settings-payout.html`](../../web/07_mining_pool_public/back-end-pool/admin-panel/settings-payout.html) | J13-7 restart notes on the Goblin block and the NIP-05 allowlist field |
+| [`scripts/07_grin_mining_public_pool.sh`](../../scripts/07_grin_mining_public_pool.sh) | J13-6 `pool_deploy_code` hashes `package.json` **and** `package-lock.json`; both log lines updated |
+
+**Still open from this session:** J13-2 (the ruling — blocks §J8-3's wiring option), J13-4's
+connection-lifetime half, J13-5 (product decision, inert today), J13-7's live-revocation half,
+J13-10. None of them can move money incorrectly; J13-2 is the one that must be decided before
+any code changes in the `alerts` section.
+
+---
+
+## §J14 — Admin panel front-end (2026-09-03, add-ons, NOT VPS-TESTED)
+
+Fourteenth session of the pre-mainnet §J pass (plan:
+[`script07_reference_audit_session_plan.md`](script07_reference_audit_session_plan.md) §J14).
+Scope: the 21 pages and 3 shared scripts under
+[`back-end-pool/admin-panel/`](../../web/07_mining_pool_public/back-end-pool/admin-panel/) —
+`admin-shell.js` (1,008), `settings-common.js` (1,273), `cms-editor.js` (127), plus the
+**2,754 lines of inline `<script>`** the HTML pages carry — together with the three helper
+scripts the panel loads from the public tree (`js/api.js`, `js/auth.js`, `js/stepup.js`),
+which are §J15's files but the panel's only auth surface.
+
+Method: a mechanical DOM-XSS sweep first (every `innerHTML` / `insertAdjacentHTML` / template
+write, with each interpolation classified by who chooses its value), then the plan's four
+specific questions — token handling, the `AdminTable` cell renderer, the step-up retry path,
+and clickjacking. Two sweeps were automated rather than eyeballed: one that flags any `${…}`
+interpolation with no escape/format call, and one that re-runs the settings-harvester id diff
+from memory `project_pool_admin_settings_form` against the live `PoolSettings.defaults`.
+
+**Headline — the sweep the plan predicted would find an §I10 came back clean, and the real
+findings are a different kind of bug.** Every operator-, miner- and server-supplied string
+that reaches `innerHTML` in this panel is escaped; there is no reachable stored XSS here.
+What the sweep found instead is that **two of the screens an operator reads to decide whether
+money is moving correctly are misreporting it.** The dashboard renders every payout with a
+January-1970 date, the literal string `undefined` in the miner column, and a grey "finished"
+badge whether that payout succeeded or failed; the blocks page shows every block the pool has
+actually been paid for as a grey unknown status with its maturity countdown still running,
+under a KPI that contradicts it. Both are the *same* bug §H4 and §J5-4 already fixed
+elsewhere, surviving on the pages those fixes did not touch.
+
+*And the escaping that came back clean is clean by accident in five places.* Five row buttons
+splice an HTML-escaped value into a **JS string literal inside an `on*` attribute** — a
+context where `&#39;` is decoded back to a real apostrophe before the JS is parsed. Nothing in
+the panel prevents that; what prevents it is a charset validator in a different file, on a
+different route, and for `regions.html` on a different *branch* of that route.
+
+Eleven findings, **all now closed**. Seven were fixed in the review session itself (J14-1,
+J14-2, J14-3, J14-5, J14-6, J14-7, J14-8 — each small and local, plan rule 3); two were
+written up and deliberately left open under plan rules 3 and 6 (J14-4 belongs to §J16's file,
+J14-9 waited on a §J10 product decision) and were **fixed in a same-day follow-up pass on the
+operator's instruction to close everything this session found**; the remaining two are Info.
+All of it is pinned by a new `scripts/test-admin-panel.js` (39 assertions across 8 sections)
+and by extending `check-syntax.js` to the inline blocks.
+
+**The follow-up pass is marked separately throughout.** J14-4 and J14-9 were fixed *after* the
+findings were written, not folded back into them: the finding text still says what was wrong
+and the fix note says what changed, so the record of what the review actually found stays
+readable.
+
+### Threat actors used in this section
+
+| Actor | Meaning here |
+|---|---|
+| **Anonymous internet** | No session. Can write `admin_audit_log` rows (a failed login carries an attacker-chosen username) and the public ad counters — both rendered in this panel. |
+| **Registered miner** | Holds a stratum-valid Grin address. Chooses their own address and worker labels, both of which reach admin surfaces. |
+| **Logged-in admin** | A `secureAdmin` session, possibly a *stolen* one (§C3: an access token survives logout, password change and "revoke sessions"). Authors CMS, branding, ads, regions and settings. |
+| **On-box root** | Info-tier by plan rule 7. |
+
+### Findings
+
+### J14-1 — [Medium] `paid` is the terminal state of every block the pool actually earned, and the blocks page does not know it exists — so a healthy pool's own history renders as grey unknown rows with a maturity countdown still running, under a KPI that contradicts the table — **FIXED 2026-09-03**
+
+**Threat actor: none (operator observability).** A correctness finding on the screen §J5-8's
+money alerts assume an operator is reading.
+
+`lib/rewards.js` flips a block `confirmed → paid` the moment it distributes, roughly 30 s after
+maturity ([rewards.js:94, 135](../../web/07_mining_pool_public/back-end-pool/lib/rewards.js#L94)).
+`paid` is therefore not a rare state — on any pool that has run longer than a few hours it is
+the status of **almost every block in the table**. §J5-4 established exactly this and fixed the
+counters. It did not reach the admin panel, where three separate places still believed the
+status set was `immature | confirmed | orphaned`:
+
+1. **`STATUS`** in
+   [`admin-panel/blocks.html:94`](../../web/07_mining_pool_public/back-end-pool/admin-panel/blocks.html#L94)
+   had no `paid` row, so every paid block fell through to `['badge-dim', b.status]` — the
+   **same grey the panel uses for cancelled and expired payouts** — carrying the raw string
+   `paid` as its label.
+2. **The maturity cell** returned `'—'` only for `confirmed` and `orphaned`. A `paid` block
+   took the other branch and, with `blocks_to_maturity` at 0, rendered as **`ready`** — the
+   label for a block still *waiting* to be processed.
+3. **The backend feeding it**, `GET /api/admin/blocks`
+   ([index.js:3029](../../web/07_mining_pool_public/back-end-pool/index.js#L3029)), computed
+   `blocks_to_maturity` from the same three-status list.
+
+The compounding part is the filter strip. The chips are All / Maturing / Confirmed / Orphaned,
+and `Confirmed` sends `?status=confirmed`, which the route turns into `WHERE status = ?` — an
+exact match. The KPI directly above reads `summary.confirmed_blocks`, which `getPoolStats()`
+computes as `WHERE status IN ('confirmed','paid')`
+([blocks.js:246](../../web/07_mining_pool_public/back-end-pool/lib/blocks.js#L246)). **So the
+card says "47 confirmed" and clicking Confirmed shows one row**, with no chip at all that
+reaches the other 46. An operator checking whether the pool's blocks paid out sees a table of
+grey unknowns and a filter that looks broken.
+
+**Fix (this session).** `paid: ['badge-ok', 'Paid out']` added to `STATUS`; the maturity cell
+and `index.js:3029` both extended to treat `paid` like `confirmed`; a `Paid out` filter chip
+added. Pinned by `test-admin-panel.js` §1, which also asserts the premise (`rewards.js` still
+writes `'paid'`) so the test cannot pass by the status quietly disappearing.
+
+### J14-2 — [Medium] The dashboard's *Recent Withdrawals* table is wired to a schema that has never existed: every row shows a January-1970 date, the literal string `undefined` for the miner, an empty tx column, and a grey "finished" badge whether the payout succeeded or failed — **FIXED 2026-09-03**
+
+**Threat actor: none (operator observability).** `admin-panel/index.html` is the page an
+operator lands on, and this table is its only money content.
+
+`GET /api/admin/withdrawals` is `SELECT * FROM withdrawals`
+([index.js:2482](../../web/07_mining_pool_public/back-end-pool/index.js#L2482)). That table's
+columns are `id, grin_address, amount, fee, fee_charged, status, method, slate_id,
+retry_count, …, created_at, confirmed_at, kernel_excess`
+([db.js:588](../../web/07_mining_pool_public/back-end-pool/lib/db.js#L588)). The renderer read
+four fields and **three of them do not exist**:
+
+| Cell | Code | What the schema has | Rendered |
+|---|---|---|---|
+| Date | `fmtDate(w.created_at)` → `new Date(iso)` | `created_at INTEGER` **unixepoch seconds** | `21/01/1970, 16:47` |
+| User | `escHtml(w.username \|\| w.user_id)` | neither column exists | the literal `undefined` |
+| Tx ID | `w.tx_slate_id` | the column is `slate_id` | always `—` |
+| Status | `STATUS_BADGE[w.status]` | see below | grey `badge-dim`, for **every** status |
+
+The status map listed `waiting_finalize`, `finalized`, `completed`, `failed`, `expired` — a
+set **no payout rail has ever written**. The scheduler's real states are `tor_checking`,
+`tor_sending`, `retry_scheduled`, `slatepack_pending`, `finalizing`, `confirmed`,
+`tor_failed`, `slatepack_failed`, `nostr_failed`, `slatepack_expired`, `cancelled`, all
+enumerated correctly in `payments.html:392`. So every row fell through to
+`<span class="badge badge-dim">${escHtml(w.status)}</span>` — and `badge-dim` is precisely the
+colour `payments.html` reserves for **cancelled and expired**. A `tor_failed` payout and a
+`confirmed` one rendered identically, in the shade that means "over, nothing to do".
+
+That is §H4 verbatim ("Status-list and status-label drift found while reviewing H1–H3 —
+**FIXED**") — a fix that landed on `payments.html` only.
+
+Demonstrated with the real code paths and a live `created_at`:
+
+```
+created_at            : 1788440579
+index.html    fmtDate : 21/01/1970, 16:47:20      ← unscaled seconds
+payments.html fmtTs   : 03/09/2026, 13:02:59      ← the same value, ×1000
+index.html User cell  : undefined
+index.html Tx cell    : —
+badge for 'confirmed' : FALLS THROUGH to badge-dim + raw status
+badge for 'tor_failed': FALLS THROUGH to badge-dim + raw status
+```
+
+**Fix (this session).** `fmtDate` → `fmtTs` (`× 1000`); the User column reads `grin_address`
+(truncated, full value in `title=`, matching `payments.html`) and is relabelled **Miner**; the
+Tx column reads `slate_id` and is relabelled **Slate ID**; `STATUS_BADGE` replaced with the
+eleven real statuses and their `payments.html` labels. `test-admin-panel.js` §2 pins all five,
+asserts the schema premise by parsing `db.js` rather than trusting this write-up, checks the
+dashboard's badge set still **covers** `payments.html`'s so the two cannot drift apart again,
+and carries a control that fails if a status the scheduler never writes reappears.
+
+### J14-3 — [Low] Five row buttons splice an HTML-escaped value into a JS string literal inside an `on*` attribute, where the parser decodes it back before the JS runs — and the only thing stopping it is a validator in another file, on another route — **FIXED 2026-09-03**
+
+**Threat actor: registered miner (`miners.html`), anonymous internet (`users.html`),
+logged-in admin (`regions.html`)** — in each case whoever supplies the interpolated value.
+
+`escHtml()` maps `'` to `&#39;`. That is correct in text and in an attribute *value*. It is
+**not** correct for a value placed inside a JavaScript string literal that itself sits inside
+an attribute, because the HTML parser decodes entities in the attribute value **before** the
+JS is handed to the script parser. `&#39;` becomes a real apostrophe, closes the literal, and
+everything after it is code. Five sites had that shape:
+
+| Site | Interpolated value | Chosen by |
+|---|---|---|
+| `miners.html` ban button | `m.grin_address` | registered miner |
+| `miners.html` unban button | `m.grin_address` | registered miner |
+| `users.html` top failed-login origins | `r.ip` | anonymous internet |
+| `users.html` auto-banned addresses | `b.ip` | anonymous internet |
+| `regions.html` pairing button | `r.region` | logged-in admin |
+
+`onclick="banMiner('${escHtml(m.grin_address)}')"` with an address of `');alert(1);//` yields
+`onclick="banMiner('&#39;);alert(1);//')"`, which the parser hands to JS as
+`banMiner('');alert(1);//')`.
+
+**None of the five is exploitable today, and that is the finding.** Each is blocked by
+something outside the file:
+
+- The two addresses are blocked by §J6-6's bech32 validator in
+  [`lib/stratum-protocol.js:114`](../../web/07_mining_pool_public/back-end-pool/lib/stratum-protocol.js#L114)
+  (charset `[ac-hj-np-z02-9]` plus a BIP-173 checksum), and by the same charset test on
+  `POST /api/admin/incentives/award` (index.js:6534). Every `INSERT … miner_accounts` call
+  site was checked: the other four take an address that already came through one of those.
+- The two IPs are blocked by `trust proxy = 'loopback'` (index.js:227) plus nginx's
+  `$proxy_add_x_forwarded_for` — `proxy-addr` rejects any non-IP forwarded entry as untrusted
+  and stops walking there, so `req.ip` is the real client address and never a header string.
+- **`regions.html` has no such guarantee.** `POST /api/admin/locations` applies
+  `^[a-z0-9-]{2,12}$` to `region` **only when a `wg_pubkey` is present**
+  ([index.js:6098](../../web/07_mining_pool_public/back-end-pool/index.js#L6098)); a
+  metadata-only region takes any non-empty string at all. The button is nevertheless
+  unreachable for such a region because it renders only when `hasPeer` is true, and `hasPeer`
+  is fed from `config.region_ports` or a WireGuard handshake — both of which exist only on the
+  pairing branch that *does* validate. The sole defence is that two independent conditions
+  happen to be gated by the same `if (wgPubkey)`.
+
+That is defence by coincidence across three files, and exactly the kind of guarantee a later
+"let operators name regions freely" change removes without anyone noticing.
+
+**Fix (this session).** All five now pass the value as a `data-*` attribute and read it back
+with `this.dataset` — `data-addr="${escHtml(…)}" onclick="banMiner(this.dataset.addr)"` — so
+the value never enters a JS parsing context. `test-admin-panel.js` §3 sweeps every panel file
+for the `on…="fn('${esc…` shape, carries a control proving the sweep detects the pattern it
+looks for, and asserts the three `this.dataset` replacements are wired.
+
+### J14-4 — [Medium] The admin panel is served the **public** page CSP, so it allowlists four third-party script origins and five `connect-src` origins it never uses — handing any admin-panel XSS a ready exfiltration channel — **FIXED 2026-09-03 (follow-up pass)**
+
+**Threat actor: logged-in admin (a stolen `secureAdmin` session), escalating via an XSS the
+CSP would otherwise contain.**
+
+The plan asked this session to state plainly that XSS in the panel is unmitigated because the
+CSP carries `'unsafe-inline'`. It does, and it is — but the more actionable half is *which*
+CSP the panel actually receives.
+
+`/admin/` is served by nginx as **static files**, not proxied:
+
+```nginx
+location /admin/ {
+    …
+    include $hdr_page;
+    add_header Cache-Control "no-cache" always;
+    try_files $uri $uri/ $uri.html =404;
+}
+```
+([07_grin_mining_public_pool.sh:1315](../../scripts/07_grin_mining_public_pool.sh#L1315))
+
+So the Express security-header middleware — which sets a tight
+`default-src 'self'; script-src 'self' 'unsafe-inline'; …` at
+[index.js:264](../../web/07_mining_pool_public/back-end-pool/index.js#L264) — **never runs for
+an admin HTML page.** What the browser gets is `$hdr_page`, the snippet written for the public
+site:
+
+```
+script-src  'self' 'unsafe-inline' https://cdn.jsdelivr.net https://www.googletagmanager.com
+                                   https://plausible.io https://cloud.umami.is;
+connect-src 'self' https://*.google-analytics.com https://*.analytics.google.com
+                   https://*.googletagmanager.com https://plausible.io https://cloud.umami.is;
+```
+([07_grin_mining_public_pool.sh:1276](../../scripts/07_grin_mining_public_pool.sh#L1276))
+
+The admin panel needs **none of it**. Every asset all 21 pages load is same-origin, and both
+heavy libraries are vendored locally — the complete inventory:
+
+```
+/admin/styles.css   /admin/settings.css   /css/pool.css   /js/vendor/quill.snow.css
+/admin/admin-shell.js   /admin/cms-editor.js   /admin/settings-common.js
+/js/api.js   /js/auth.js   /js/charts-init.js   /js/stepup.js
+/js/vendor/chart.umd.min.js   /js/vendor/quill.js
+```
+
+The consequence is narrow but real. `default-src 'self'` would leave an injected script with
+no `fetch`/XHR/WebSocket destination at all — data would have to leave by navigation, which is
+visible and loses the session. The inherited `connect-src` restores a silent channel: five
+third-party hosts, three of them wildcards, reachable from a background `fetch()` on a page
+that holds the admin session, the reconciliation figures, the miner ledger and — during
+enrolment — the plaintext TOTP secret. The `script-src` half additionally permits an injected
+`<script src>` to pull code from jsdelivr, which serves arbitrary npm and GitHub content.
+
+Also absent from both snippets: `frame-ancestors`, `base-uri`, `form-action`, `object-src`.
+`X-Frame-Options: DENY` **is** present in `$hdr_common` and is re-included by `/admin/`, so
+the plan's clickjacking question is answered — nginx does not strip it, and the include that
+keeps it alive is the one §I1 added. `base-uri`/`form-action` matter only once an injection
+exists, but they are what stops an injected `<base>` or a re-pointed login form.
+
+**Fix (applied in the follow-up pass).** The panel gets its own snippet rather than the shared
+one being narrowed, since the public CSP legitimately needs the analytics hosts:
+
+```nginx
+# hdr_admin.conf — the admin panel loads NOTHING third-party (chart.js and quill are vendored
+# under /js/vendor/), so it must not inherit the public page's analytics allowlist.
+include <hdr_common>;
+add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'" always;
+```
+
+then swap `include $hdr_page;` for `include $hdr_admin;` in `location /admin/`.
+`'unsafe-inline'` must stay — the panel's logic lives in inline blocks (J14-5) — and
+`img-src data:` must stay, because the 2FA enrolment QR is a client-generated `data:` image.
+
+**As shipped.** `pool_setup_nginx` now writes a third snippet,
+`/etc/nginx/snippets/script07-<service>-admin-headers.conf`, alongside the common and page
+ones, and `location /admin/` includes it instead of `$hdr_page`
+([07_grin_mining_public_pool.sh:1281](../../scripts/07_grin_mining_public_pool.sh#L1281)).
+The policy shipped is the one above, verbatim. Four notes on the edges:
+
+- **The public CSP is untouched.** `location /` still includes `$hdr_page`; a global tightening
+  would have broken the analytics providers and Google Fonts on every public page. The
+  regression test asserts both halves — and the control that reads `location /` had to be
+  written to skip the pre-certbot **one-line** `location / { try_files …; }` bootstrap vhost
+  higher up the same file, which matched first and made the control pass vacuously.
+- **The panel's zero-third-party premise is now a test, not a claim.** A sweep over all 21 HTML
+  pages fails if any of them gains an off-origin `<script src>` or `<link href>`, because that
+  is exactly the edit that would turn this CSP from correct into a blank page. The only
+  external URL anywhere in the panel today is the *placeholder text* of the `font_url` input on
+  `settings-branding.html` — a value the public site loads, never this one.
+- **Cleanup names it.** `/etc/nginx/snippets/` is swept by nothing else on the box (08del walks
+  only `sites-available`/`sites-enabled`), so the new file is removed in the same `rm` as the
+  vhost that includes it — never before it, which would fail `nginx -t`.
+- **The theme export still works under `connect-src 'self'`.** `settings-common.js:729` builds a
+  `Blob` and clicks an anchor carrying `download`, so it is a download, not a navigation, and
+  no CSP fetch directive applies. Checked before shipping.
+
+**Not verifiable here:** no `nginx -t` was run — nothing in this repo runs on a VPS. The snippet
+is generated text; its content is asserted statically and the first real proof is §J17's deploy.
+On an existing box it lands only when the operator re-runs *4) Setup nginx*.
+
+### J14-5 — [Low] `npm run check-syntax` — the pool's only pre-commit gate — could not see 2,754 lines of the admin panel's JavaScript, because it lives in inline `<script>` blocks — **FIXED 2026-09-03**
+
+**Threat actor: none (process).** Recorded because that gate's own header comment already
+documents one round of this exact failure.
+
+`scripts/check-syntax.js` walks `lib/`, `scripts/` and `admin-panel/` for files ending `.js`.
+The panel's three `.js` files are 2,408 lines. **The other 2,754 lines — the payout queue and
+freeze kill-switch (`payments.html`), region CRUD and WireGuard pairing (`regions.html`),
+ban/unban (`miners.html`), the login-security dashboard (`users.html`) — sit inside one inline
+`<script>` per page and were never checked by anything.** Measured by extraction: 21 pages,
+21 inline blocks, 2,754 lines.
+
+The gate exists precisely because the previous one reported success unconditionally. A syntax
+error in `payments.html`'s inline block takes down the whole payouts page — including the
+`AdminTable.create` calls that run at parse time, which is the exact failure the no-op handle
+in `admin-shell.js:549` was written to prevent — and `npm test` would still be green.
+
+**Fix (this session).** `check-syntax.js` now extracts every inline `<script>` (skipping
+`<script src=…>`), line-pads it so node's reported line number is the real one in the HTML,
+and runs the same `node --check`. **Proven to fail**: injecting `{{{ deliberate syntax error`
+into `blocks.html` produced `FAIL admin-panel/blocks.html (inline <script> #1)` /
+`admin-panel/blocks.html:80` and exit 1; the file was restored and the gate returned to green.
+Current output: `Syntax OK — 59 files + 21 inline <script> blocks checked.`
+
+### J14-6 — [Low] A settings save the server refuses reported the fixed string "Save failed", discarding the reason — including the unknown-key error that names the offending element, every validator message, and the step-up refusal — **FIXED 2026-09-03**
+
+**Threat actor: none (operator diagnosis of a security control).**
+
+`saveSection()` posted the section and then did `if (!response.ok) throw new Error('Save failed')`
+([settings-common.js:184](../../web/07_mining_pool_public/back-end-pool/admin-panel/settings-common.js#L184)),
+so the toast read `Error saving settings: Save failed` for all of:
+
+- `Unknown key '<id>' in section '<x>'` — the error that *names the offending input id*, which
+  is the whole diagnostic value described in memory `project_pool_admin_settings_form`;
+- every per-key validator refusal, i.e. the visible half of §J9-2 (`pool_fee_percent`),
+  §J9-3 (`custom_theme`) and §J9-4 (`min_withdrawal = Infinity`);
+- `Re-authentication required to change a fee, whitelist or visibility setting` — the
+  §J1-1 / §J9-3 step-up gate. An operator who cancelled the password prompt, or whose step-up
+  was refused, got the same three words as for a typo.
+
+The last is the security-relevant case: a gate whose refusal is indistinguishable from a
+generic failure is a gate the operator learns to retry rather than to read.
+`restoreSection()` had the same shape.
+
+**Fix (this session).** Both read `body.error` and fall back to `HTTP <status>`. The step-up
+*retry* path itself was already correct — see J14-10.
+
+### J14-7 — [Low] The announcement and lottery-event attribute escapers escape `"` but not `&`, so an operator's own text is silently rewritten on the next render — **FIXED 2026-09-03**
+
+**Threat actor: none (data integrity).** Not an injection: the values sit in `value="…"` on an
+`<input>` and the quote *is* escaped, so there is no breakout.
+
+```js
+function bannerAttr(s) { return String(s == null ? '' : s).replace(/"/g, '&quot;'); }
+function eventAttr(s)  { return String(s == null ? '' : s).replace(/"/g, '&quot;'); }
+```
+([settings-common.js:803, 887](../../web/07_mining_pool_public/back-end-pool/admin-panel/settings-common.js#L803))
+
+Escaping `"` without escaping `&` first means any entity the operator typed is decoded by the
+browser on the way back in. A banner reading `Fees &amp; payouts explained` reloads as
+`Fees & payouts explained`, and the next save stores the changed text. Announcement banners
+are published on every public page and, per §J1-9, can carry an operator URL onto
+`login.html` — a surface whose stored text should not drift on its own.
+
+**Fix (this session).** `&` escaped first in both. Pinned by `test-admin-panel.js` §4.
+
+### J14-8 — [Low] Three escapers used `String(s || '')`, so a legitimate `0` rendered as blank — a pool with no connected rigs displayed "Miners:" with nothing after it — **FIXED 2026-09-03**
+
+**Threat actor: none (operator observability).**
+
+`escHtml` in `health.html:99`, `users.html:179` and `index.html:107` began `String(s || '')`.
+Every falsy value — `0` included — became the empty string. On `health.html` that reaches
+`renderServiceDetail()`, which builds the stratum card from `svc.miners_connected`,
+`svc.port`, `svc.pid` and `svc.size_mb`
+([health.html:103](../../web/07_mining_pool_public/back-end-pool/admin-panel/health.html#L103)),
+each guarded by `!= null` — so a genuine `0` passed the guard and then rendered as `Miners:`
+with nothing after the colon. "Zero miners" and "this field is missing" looked identical on
+the health page.
+
+**Fix (this session).** All three changed to `String(s == null ? '' : s)`, matching the six
+pages that already used that form. `test-admin-panel.js` §5 sweeps every escaper in the panel
+for both properties (all five characters escaped; no `String(s || '')`) and asserts the sweep
+found at least ten escapers, so a clean result cannot mean "found none".
+
+### J14-9 — [Low] The ads table presents anonymous-writable counters as a measured click-through rate, with no qualifier — **FIXED 2026-09-03 (follow-up pass); takes J10-3 dispositions 1 + 2**
+
+**Threat actor: anonymous internet.**
+
+Inbound handoff from §J10. `POST /api/public/ads/event` lets any unauthenticated client
+increment the impression and click counters with no existence check, dedup or cap (J10-3,
+OPEN). `admin-panel/ads.html:600` renders those two numbers as
+
+```js
+const ctr = v > 0 ? ` (${(c / v * 100).toFixed(1)}%)` : '';
+return `${v.toLocaleString()} / ${c.toLocaleString()}${ctr}`;
+```
+
+under the column heading **Views / Clicks** — a percentage to one decimal place, which reads
+as measurement. The page's only qualifier (`ads.html:113`) says *"Views/clicks are coarse
+counters (no visitor data stored)"*, which addresses privacy, not trust: it tells the operator
+nothing is recorded *about visitors*, not that anyone on the internet can set the number. If
+the operator ever bills a sponsor from this column, the figure is attacker-chosen.
+
+**Fix (applied in the follow-up pass).** §J10 offered three dispositions for J10-3, and its own
+text argues for option 1 — because option 3, the only one that actually makes the counters
+trustworthy, costs the pool a per-visitor record it has decided not to keep. The follow-up
+takes **option 1 and option 2**, and explicitly not option 3:
+
+- **Option 1 — the render half (this finding).** The column header is now
+  `Views / Clicks (unverified)`, the ratio renders as `(~4.5%)` rather than `(4.5%)`, and the
+  note above the table says the counters are *unverified client-reported* numbers that anyone
+  can inflate or deflate and are **never a billable measurement** — replacing the old sentence,
+  which only promised that no visitor data is stored (privacy, not trust). The qualifier is
+  header *text*, not a `title` tooltip, because a tooltip does not exist on touch.
+- **Option 2 — the cheap server half.** `recordEvents` now carries the same serving predicate as
+  `publicByPlacement` (`is_active = 1` and inside the start/end window,
+  [ads.js:157](../../web/07_mining_pool_public/back-end-pool/lib/ads.js#L157)), so an ad the
+  public site is **not** showing cannot accrue events at all. That does not stop a determined
+  client inflating a live ad, and the code comment says so plainly; it stops the counters of a
+  finished or unlaunched campaign moving, which is the case an operator is most likely to read
+  as fact. The route still answers `204` unconditionally, so counting fewer rows never becomes
+  an id-existence oracle.
+- **Option 3 still declined**, on the reasoning §J10 gave: a per-(IP-hash, ad, hour) seen-set
+  *is* a per-visitor record, and memory `project_pool_ip_privacy` plus this endpoint's own
+  comment both say the pool does not keep one. **§J10-3 therefore stays OPEN as a Medium** —
+  the endpoint remains anonymous-writable by design. What changed is that nothing presents its
+  output as measurement any more, which is what made it money-adjacent.
+
+A regression test pins both halves, including a control asserting the two SQL predicates stay
+identical: if `publicByPlacement` gains a condition and `recordEvents` does not, "served" and
+"countable" drift apart silently.
+
+### J14-10 — [Info] Verified correct, with evidence
+
+Everything the plan named that turned out sound, plus the sweeps behind the headline.
+
+- **DOM-XSS sweep — clean, mechanically.** A scanner over all 24 panel files flagged every
+  `${…}` interpolation with no escape/format call; each hit was then read in context. All
+  operator-, miner- and server-supplied strings reaching `innerHTML` are escaped:
+  `miners.html` (address, ban reason), `payments.html` (address, cancel reason, `ip_prefix`,
+  wallet identity, reconciliation problem list), `blocks.html` (`found_by`), `users.html`
+  (username, IP — *including the attacker-chosen username on a failed login*, which is the
+  highest-value string an anonymous actor can push into this panel), `regions.html` (label,
+  region, country, `stratum_url`), `ads.html` / `pages.html` / `posts.html` (CMS titles, slugs,
+  tags, notes), `health.html` (service messages), `settings-common.js` (IP lists, prize
+  ledger, lottery draws, campaign names, page-SEO keys). The remaining unescaped
+  interpolations are all numeric (`toFixed`, `toLocaleString`, `parseInt`) or static literals
+  from in-file constant maps (`STATUS`, `PLACEMENT_LABEL`, `STATUS_META`, `BLOCK_LABEL`,
+  `NAV_LABEL`, `LOGIN_LABEL`). The `${escapeHtmlSafe(…)}` sites in `settings-common.js` were
+  separately checked for *context*, since that helper deliberately does not escape quotes: all
+  are in text position, and every attribute position uses `escapeAttrSafe` (the page-SEO
+  title) or a dedicated `…Attr` helper.
+- **`AdminTable`'s own renderer is safe — and it was the right thing to check first.** It
+  escapes everything it composes itself: the error row (`'Error: ' + esc(state.err)`), the
+  empty row, and the "No rows match “q”" line
+  ([admin-shell.js:648](../../web/07_mining_pool_public/back-end-pool/admin-panel/admin-shell.js#L648)).
+  Row markup is delegated to each page's `row()`, which is where the escaping obligation has
+  to live — and does, above. Its one raw-HTML write, `note.innerHTML`, takes page-authored
+  markup with a single `{days}` placeholder filled from `parseInt(settings[key], 10)`; the
+  API-supplied variant (`setNoteDays(a.window_days)`) is a server integer.
+  `window.Explorer.link()` escapes both its URL and its label and `encodeURIComponent`s the
+  value into the path.
+- **No token, secret or credential reaches client storage.** The panel's only
+  `localStorage`/`sessionStorage` writes are the theme key, the sidebar scroll position, the
+  cached network name, and the two `AdminSession` activity timestamps
+  (`admin-shell.js:132, 258, 475, 861`). Sessions are httpOnly cookies (index.js:883, 892);
+  `Auth.setToken()` is a documented no-op and `API.decodePayload()` returns `null`. Nothing
+  puts a token in a URL — the only query strings the panel builds are `?hours=`, `?days=`,
+  `?limit=`, `?status=`, `?type=` and `?remove_peer=1`, all `encodeURIComponent`'d where they
+  carry a value. The two secrets the panel *does* display — the TOTP enrolment secret and the
+  recovery codes — go through `textContent`, and the otpauth QR is generated client-side.
+  Pinned by `test-admin-panel.js` §6.
+- **Step-up: the client re-authenticates and retries; it does not silently drop a money
+  action.** `adminFetch()` returns non-403s untouched, inspects a 403 via `res.clone().json()`
+  so the caller can still read the body, and steps up only on `challenge_required` — an
+  IP-allowlist or role 403 is correctly *not* treated as recoverable
+  ([stepup.js:59](../../web/07_mining_pool_public/public_html/js/stepup.js#L59)). It asks for
+  the TOTP code only when the server answers `totp_code_required`, surfaces §J2-1's lockout
+  and `retry_after_seconds` instead of failing mutely, and on cancel hands the original 403
+  back so the caller reports it. All 16 `adminFetch` call sites check `res.ok` (or an
+  equivalent body test) before claiming success, except `pushSeoGa4ToAnalytics()`, which is
+  deliberately best-effort and documented as such.
+- **Every page that calls a `freshAdmin` route also loads `stepup.js`.** Checked mechanically:
+  `miners.html`, `payments.html`, `regions.html`, `users.html` and all ten settings pages load
+  it; `ads.html`, `pages.html`, `posts.html`, `blocks.html`, `health.html` and `index.html` do
+  not — and every route those six call (`/api/admin/ads*`, `/api/admin/pages*`,
+  `/api/admin/posts*`, `/api/admin/media`, `/api/admin/blocks`, `/api/admin/health*`,
+  `/api/admin/dashboard`, `GET /api/admin/withdrawals`) is `secureAdmin`
+  (index.js:2832–3000, 5538–5989). So there is no page that can meet a step-up challenge it
+  has no handler for.
+- **Clickjacking: `X-Frame-Options: DENY` survives to the admin panel.** Set by Express
+  (index.js:265) *and* by nginx's `$hdr_common`, which `location /admin/` re-includes
+  alongside its own `add_header` — the §I1 discipline holding. The `frame-ancestors` gap was
+  J14-4, and the follow-up pass closed it for `/admin/` (`frame-ancestors 'none'` is in the new
+  admin snippet); the *public* pages still rely on `X-Frame-Options` alone.
+- **The auth gate is on every page.** `API.guardAdminPage()` is called by all eleven data
+  pages directly and by `settings-common.js`'s `DOMContentLoaded` handler for all ten settings
+  pages. It bounces only on 401/403 and treats 429/503 as transient — the same posture §J12-3
+  established server-side. nginx's `auth_request /admin/_authcheck` is the real gate; this is
+  the documented fallback.
+- **The settings-harvester id sweep re-runs clean.** Re-implemented from memory
+  `project_pool_admin_settings_form` against the live `PoolSettings.defaults`: for each of the
+  ten settings pages, every `input`/`select`/`textarea` id inside `.settings-form` that is not
+  `settings-skip` was diffed against that section's default keys. **Zero orphans** — which is
+  the specific confirmation §J9-1 needed, since deleting `pool_visibility`,
+  `address_whitelist`, `max_miners` and `mining_mode` from the defaults would have made
+  `pool_info` throw `Unknown key` on every save had any input survived. The reverse check (a
+  real key wrongly carrying `settings-skip`, which would make a field silently never save) is
+  also clean, and the five `settings-allow-empty` fields are exactly the five the memory
+  documents (`hub_country_code`, `ga_tracking_id`, `public_stratum_host`, `founded_year`,
+  `home_title`).
+- **`cms-editor.js`'s raw `innerHTML` in `setHTML()` is operator content by design** — it is
+  the editor round-trip for `pages.html` / `posts.body_html`, the same operator-trusted tier
+  §J1-1 settled. Uploads go through `/api/admin/media`, which §J10-1 fixed to sniff the file
+  rather than trust the declared MIME, and nginx serves `/uploads/` under a `sandbox` CSP.
+- **The manual/Tor payout form submits what it displays.** `sendTorPayout()` and
+  `recordManualPayout()` build their confirm text from the same `address`/`amount` locals they
+  post (`payments.html:1057–1099`) with no transform in between, and both disable their button
+  for the duration. `postPayoutWithAcks()`'s two escalation flags (`verified_ack`,
+  `above_min_needs_ack`) are each asked once and carried across the retry, so neither can be
+  set without an explicit operator confirmation that names what it waives.
+
+### J14-11 — [Info] Three `/api/admin/poolstats/*` routes have no page anywhere in the panel
+
+Inbound handoff (b) from §J13, confirmed by grep across all 24 panel files: nothing references
+`poolstats`. The routes are `GET /api/admin/poolstats` (secureAdmin),
+`POST /api/admin/poolstats/update-key` (freshAdmin) and `POST /api/admin/poolstats/test`
+(secureAdmin), at index.js:5053–5079. §J13-1 found and fixed a real gate bypass in the third —
+which restates J13's point: an admin route with no UI is a route nobody exercises and nobody
+reviews. Not fixed here, because the choice (build the page, or delete the routes) is a product
+decision rather than a front-end one.
+
+### Handoffs
+
+- **§J16 (deployment & infra)** — J14-4 was **handed over and then fixed in the follow-up
+  pass**, so §J16 inherits a change to its file rather than a task: `location /admin/` now
+  includes a new `$hdr_admin` snippet instead of `$hdr_page`, and the vhost has three header
+  snippets where it had two. **§J16 should re-read the whole header section as one unit** —
+  the §I1 rule that any block declaring an `add_header` must re-include a snippet now has a
+  third snippet to get right, and the only real proof any of it works is an `nginx -t` plus a
+  live response-header read, neither of which can happen here. The new snippet also sets
+  `frame-ancestors`, `base-uri`, `form-action` and `object-src`, which the other two still do
+  not — the public pages remain without them, and that is §J16's call, not this session's.
+  `X-Frame-Options: DENY` is unchanged and still correctly re-included everywhere.
+- **§J10 (uploads, assets, CMS & ads)** — J14-9 is fixed and took **J10-3 dispositions 1 + 2**
+  (qualify the counters; refuse events for ads that are not being served). **J10-3 itself
+  stays OPEN**: the endpoint is still anonymous-writable, because disposition 3 is the only
+  cure and it costs a per-visitor record the pool has decided against. §J10 should record that
+  the choice has now been made in code, and that reversing it means changing `ads.html`'s
+  wording back too — the label and the endpoint are one decision in two files.
+- **§J13 (outbound calls)** — handoff (b) answered as J14-11. Handoff (a) resolves differently
+  than the handoff assumed: `plausible_src`, `umami_src` and `matomo_url` **are** already in
+  `STEP_UP_SETTINGS_KEYS` (index.js:6622), gated on a real value change, alongside
+  `custom_head_html` and `custom_body_html` — §J1-1's fix covered them. The residual was that
+  the *nginx* CSP allowlisted those provider hosts for the whole site including `/admin/`; the
+  follow-up pass's J14-4 fix removes `/admin/` from that set, so the allowlist now covers only
+  the public pages that actually load those providers.
+- **§J6 (stratum & share intake)** — the worker-name render question is answered: the admin
+  panel does **not** render worker labels anywhere. `miners.html` shows only the account
+  address, and there is no admin worker list. §J6-9's "a login with no work behind it is
+  published as an online worker on someone else's account page" is therefore a public-page
+  problem only, and belongs entirely to §J15.
+- **§J15 (public front-end)** — three carried over. (1) `js/auth.js`, `js/api.js` and
+  `js/stepup.js` live in `public_html/js/` and are §J15's files, but they are the admin
+  panel's entire auth surface; the escaping in `guardAdminPage()` (username escaped before
+  `innerHTML`) and the httpOnly-cookie posture were checked here and are correct. (2)
+  `Auth.fetch()` returns `null` on a non-JSON response *and* on a network error, so a caller
+  cannot distinguish "the server refused" from "the request never happened" — every admin
+  caller happens to treat `null` as failure, but a public-page caller that treats it as an
+  empty result would render "no data" during an outage. (3) `login.html`'s own 2FA/step-up
+  flow was not read here — it is §J15's by the plan's split.
+- **§J17 (operational gate)** — two. (1) J14-1 and J14-2 both mean *the panel currently
+  misreports money state*, so both must be re-checked on a box with real rows before the soak
+  in §J17 step 5 is treated as evidence: a dashboard showing 1970 dates and uniformly grey
+  badges would have made a failed payout invisible during exactly that drill. (2)
+  `npm run check-syntax` now covers the inline blocks — re-run it after any admin-panel edit
+  made during the launch sequence, because a syntax error there takes the whole page down at
+  parse time.
+- **memory `project_pool_admin_settings_form`** — the toast it describes ("a toast that names
+  an element") was accurate when written and had stopped being true: `saveSection` discarded
+  the body. J14-6 restores it, so the memory is correct again; worth a line saying the
+  behaviour is now pinned by `test-admin-panel.js`.
+- **memory `project_pool_admin_table`** — add that `AdminTable` escapes its own composed
+  strings but `row()` is not escaped for you, so the obligation sits with the page; and that
+  panel row-action buttons pass values via `data-*` + `this.dataset`, never spliced into an
+  `on*` handler (J14-3).
+
+### Verification
+
+- **`npm test` — full suite green**: `12 + 47 + 32 + 52 + 65 + 18 + 21 + 24 + 51 + 39` =
+  **361 passed, 0 failed**, after this session's seven fixes *and* the follow-up pass's two.
+  Baseline was 322 (§J13); the 39 new assertions are `scripts/test-admin-panel.js`.
+- **`scripts/test-admin-panel.js` proven to fail, not just to pass** — three separate times.
+  Reverting the `miners.html` half of J14-3 produced `FAIL no on* handler splices an
+  HTML-escaped value into a JS string literal`; pointing `location /admin/` back at `$hdr_page`
+  produced `FAIL location /admin/ includes $hdr_admin, not $hdr_page`; and removing the `~`
+  from the CTR plus the `is_active = 1` predicate from `recordEvents` produced two more FAILs.
+  Every file was restored and the suite returned to 39/39 each time.
+  Five of its eight sections carry an internal control — the on*-sweep must detect its own
+  pattern, the escaper sweep must find ≥10 escapers, no status the scheduler never writes may
+  reappear in the dashboard map, `location /` must still get the public CSP, and
+  `publicByPlacement` must still use the predicate `recordEvents` was made to match — so a
+  clean result cannot come from a broken sweep. The `location /` control is the one that
+  earned its keep: written the obvious way it matched the pre-certbot one-line bootstrap
+  vhost and passed vacuously.
+- **`check-syntax.js`'s new inline coverage proven to fail**: `{{{ deliberate syntax error`
+  injected into `blocks.html` produced `FAIL admin-panel/blocks.html (inline <script> #1)`
+  with the correct source line (`admin-panel/blocks.html:80`) and exit 1. Restored; the gate
+  now reports `Syntax OK — 60 files + 21 inline <script> blocks checked.`
+- **`node --check`** clean on `index.js`, `lib/ads.js`, `scripts/check-syntax.js` and
+  `scripts/test-admin-panel.js`; the seven edited HTML pages are covered by the new inline
+  check. **`bash -n` clean** on `scripts/07_grin_mining_public_pool.sh` after the vhost change.
+- **J14-2 demonstrated against the real schema**, not asserted: the `withdrawals` CREATE TABLE
+  was parsed out of `lib/db.js` and shown to contain neither `username`, `user_id` nor
+  `tx_slate_id`, and `fmtDate`/`fmtTs` were run side by side on one live `created_at`.
+- **The `escHtml`-in-`onclick` decode order** was reasoned from the HTML parse order and then
+  *bounded* by reading each value's actual producer (the bech32 validator, `proxy-addr`'s
+  `isip` test, the `if (wgPubkey)` branch) — reported as a latent structural bug, not as a
+  live exploit.
+- **The settings-harvester sweep** was re-implemented against the live
+  `require('./lib/pool-settings.js').defaults`, not against a copy of the key list.
+- Per plan rule 5: nothing ran on a VPS and nothing long-running ran locally — every command
+  was a one-shot that exited. No test server was started.
+
+### Changed this session
+
+| File | Change |
+|---|---|
+| [`admin-panel/blocks.html`](../../web/07_mining_pool_public/back-end-pool/admin-panel/blocks.html) | J14-1 `paid` added to `STATUS`; maturity cell treats `paid` as matured; `Paid out` filter chip |
+| [`admin-panel/index.html`](../../web/07_mining_pool_public/back-end-pool/admin-panel/index.html) | J14-2 `fmtTs` (×1000), `grin_address` + `slate_id` columns, real 11-status badge map; J14-8 escaper |
+| [`admin-panel/miners.html`](../../web/07_mining_pool_public/back-end-pool/admin-panel/miners.html) | J14-3 ban/unban buttons pass the address via `data-addr` + `this.dataset` |
+| [`admin-panel/users.html`](../../web/07_mining_pool_public/back-end-pool/admin-panel/users.html) | J14-3 both *Lift ban* buttons pass the IP via `data-ip`; J14-8 escaper |
+| [`admin-panel/regions.html`](../../web/07_mining_pool_public/back-end-pool/admin-panel/regions.html) | J14-3 pairing button passes the region via `data-region` |
+| [`admin-panel/health.html`](../../web/07_mining_pool_public/back-end-pool/admin-panel/health.html) | J14-8 escaper no longer blanks a real `0` |
+| [`admin-panel/settings-common.js`](../../web/07_mining_pool_public/back-end-pool/admin-panel/settings-common.js) | J14-6 `saveSection`/`restoreSection` surface `body.error`; J14-7 `bannerAttr`/`eventAttr` escape `&` first |
+| [`index.js`](../../web/07_mining_pool_public/back-end-pool/index.js) | J14-1 `blocks_to_maturity` treats `paid` as matured |
+| [`scripts/check-syntax.js`](../../web/07_mining_pool_public/back-end-pool/scripts/check-syntax.js) | J14-5 inline `<script>` extraction + line-aligned `node --check` |
+| [`scripts/test-admin-panel.js`](../../web/07_mining_pool_public/back-end-pool/scripts/test-admin-panel.js) | **new** — 39 static assertions pinning J14-1/-2/-3/-4/-6/-7/-8/-9 and the token invariant |
+| [`package.json`](../../web/07_mining_pool_public/back-end-pool/package.json) | `test:unit` runs `test-admin-panel.js` |
+
+**Follow-up pass (same day), closing the two that were left open:**
+
+| File | Change |
+|---|---|
+| [`scripts/07_grin_mining_public_pool.sh`](../../scripts/07_grin_mining_public_pool.sh) | J14-4 new `hdr_admin` snippet (`connect-src 'self'`, no third-party origins, plus `frame-ancestors`/`base-uri`/`form-action`/`object-src`); `location /admin/` includes it instead of `$hdr_page`; cleanup removes it |
+| [`admin-panel/ads.html`](../../web/07_mining_pool_public/back-end-pool/admin-panel/ads.html) | J14-9 `(unverified)` column qualifier + `.th-qual` style, `(~x.x%)` ratio, rewritten note, cell `title` |
+| [`lib/ads.js`](../../web/07_mining_pool_public/back-end-pool/lib/ads.js) | J14-9 / J10-3 disposition 2 — `recordEvents` counts only ads the public site is actually serving |
+| [`index.js`](../../web/07_mining_pool_public/back-end-pool/index.js) | beacon route comment records that the endpoint is unauthenticated *by design* and its output is not measurement |
+
+**Still open from this session:** nothing. J14-4 and J14-9 were closed in the follow-up pass;
+J14-10 and J14-11 are Info. One inherited item is deliberately **not** closed: **§J10-3 remains
+OPEN** — the ad beacon is still anonymous-writable, which is a §J10 product decision this
+session's fix labels honestly rather than overrides.
+
+---
+
+## §J15 — Public front-end (2026-09-03, add-ons, NOT VPS-TESTED)
+
+**Scope, as set by `script07_reference_audit_session_plan.md` §J15:** `public_html/` — the
+thirteen pages (6,275 lines of HTML, 2,754 of it inline `<script>`) and `js/` (4,968 lines,
+twelve modules, vendor excluded). Every `innerHTML` / `insertAdjacentHTML` / template write
+was enumerated and traced to its producer; `account-settings.html` (1,923 lines, the
+withdrawal form) and `login.html` (612, the admin credential form) were read end to end.
+
+**Everything below is on `add-ons` and has never run on a VPS.** Nothing was executed here
+beyond one-shot `node --check`, `bash -n`, the repo's own `npm test`, and one `vm`-sandboxed
+harness that exits on its own. No server was started (plan rule 5).
+
+### The sink inventory
+
+94 HTML-writing sites exist under `public_html/`. One is vendor (`quill.js`). Of the
+remaining 93:
+
+| Class | Count | Verdict |
+|---|---|---|
+| Literal markup, no interpolation (`'<tr><td colspan="7">Loading…</td></tr>'`) | 41 | safe by construction |
+| Interpolates only `Number()`/`toFixed()`/`toLocaleString()` output | 17 | safe |
+| Interpolates a server string through a five-character escaper | 27 | safe — every escaper checked, see J15-11 |
+| `window.Explorer.link()` (escapes URL *and* label) | 6 | safe |
+| **Deliberate operator-HTML sinks** (`custom_head_html`, `custom_body_html`, ad `html_code`, CMS `body_html`/`html`) | 5 | by design, §B accepted, tier settled §J1-1 |
+| **Operator string reaching `innerHTML` raw, NOT by design** | 1 | **J15-1** |
+
+The last row is the finding. The 27-escaper column is what §I10 was about and it now holds:
+`escHtml` in `account-settings.html:851`, `miners-stats.html:263`, `payment-history.html:313`,
+`blocks.html`; `esc` in `network-map.js:31`, `fortune-board.html:195`, `post.html:80`,
+`blog.html:113`; `escapeText` in `branding.js`; `attr` in `ads.js:16`; `H.escHtml` in
+`payout-goblin.js`. Nine of the eleven escape all five of `& < > " '`; the two that escape
+only `& < >` (`branding.js escapeText`, `network-map.js esc`) are used **only** in element
+content, never in an attribute — checked at every one of their 14 call sites.
+
+### Threat actors used in this section
+
+- **Anonymous internet** — a visitor, or anyone who can make a public page's API call fail.
+- **Logged-in admin / stolen admin token** — the §C3 actor: `secureAdmin` for up to the idle
+  window, surviving logout, password change and *Revoke sessions*. This is the actor for
+  every operator-authored-content finding, exactly as in §J1-1.
+- **The deploying operator's own users** — for the identity/attribution findings, where the
+  harm is what a *fresh install* asserts on the operator's behalf.
+
+---
+
+### Findings
+
+### J15-1 — [Medium] `maintenance_message` reaches `innerHTML` raw on eleven public pages — the sixth operator-HTML sink, the one §J1-1's key table missed, and the only one still at plain `secureAdmin` with no validator at all — **FIXED 2026-09-03**
+
+**Threat actor: an attacker holding a live admin access token (§C3), or a logged-in admin.**
+The §J1-1 actor, at the §J1-1 tier.
+
+`showMaintenance()` built the overlay by string concatenation and set it with `innerHTML`.
+The title on the line above went through `escapeText()`; the message did not:
+
+```js
+inner += '<h1 …>🛠 ' + escapeText(maint.title || 'Under Maintenance') + '</h1>';
+inner += '<div style="…">' + (maint.message || '') + '</div>';   // operator-controlled message
+overlay.innerHTML = inner;
+```
+([branding.js:1078–1086](../../web/07_mining_pool_public/public_html/js/branding.js#L1078-L1086),
+pre-fix). The comment `// operator-controlled message` is the whole justification, and it is
+the §B accepted risk applied to a field that was never in it.
+
+**Why §J1-1 did not catch it.** §J1-1 built its table from the *settings keys* it could see in
+`analytics` and `branding`. `maintenance_message` lives in a third section, `notices`
+([pool-settings.js:629–632](../../web/07_mining_pool_public/back-end-pool/lib/pool-settings.js#L629-L632)),
+and the only `notices` key with any validator is `banners`
+([pool-settings.js:862–872](../../web/07_mining_pool_public/back-end-pool/lib/pool-settings.js#L862-L872)) —
+`maintenance_message` has none: no length cap, no HTML filter, nothing. It is also in neither
+gate: `STEP_UP_SETTINGS_KEYS` does not list it
+([index.js:6790–6817](../../web/07_mining_pool_public/back-end-pool/index.js#L6790-L6817)) and
+`STEP_UP_SETTINGS_SECTIONS` is `['payout','access','incentives','database']`
+([index.js:6770](../../web/07_mining_pool_public/back-end-pool/index.js#L6770)) — `notices` is
+not among them. So after §J1-1 promoted `custom_head_html`, `custom_body_html`, `custom_css`,
+`font_url`, `font_family`, `cta_link`, the three analytics origins and (in §J9-3)
+`custom_theme`, **this was the one raw-HTML sink left at plain `secureAdmin`.**
+
+**It is not innerHTML-inert.** A bare `<script>` set via `innerHTML` does not execute, but
+`<img src=x onerror=…>` does — the same distinction §J1-1 already recorded for `ads.js`.
+
+**Blast radius.** `showMaintenance` runs on every page whose `<html>` lacks
+`data-maintenance="exempt"`. Exactly two pages carry it — `login.html:2` and
+`account-settings.html:2` — so the overlay renders on the other **eleven**: `index`, `blocks`,
+`blog`, `post`, `page`, `donate`, `fortune-board`, `miners-stats`, `network-map`,
+`payment-history`, `api-docs`. Login being exempt means this does not reach the password
+field the way §J1-1 did, which is why this is Medium and not High. It is still script
+execution **on the origin that also serves `account-settings.html`**: same-origin, so
+`window.open('/account-settings.html')` from an injected script gives full DOM access to the
+withdrawal form regardless of `X-Frame-Options: DENY`.
+
+There is no CSP containment. The page CSP is `script-src 'self' 'unsafe-inline'`
+([07_grin_mining_public_pool.sh:1286](../../scripts/07_grin_mining_public_pool.sh#L1286)).
+
+**Fix applied — escape it, don't gate it.** `maint.message` now goes through the same
+`escapeText()` as the title
+([branding.js:1085](../../web/07_mining_pool_public/public_html/js/branding.js#L1085)). Gating
+would have been the §J1-1 move, but this field is not an HTML-authoring surface: it is a
+status notice, its shipped default is one plain sentence, and no admin page offers it as a
+rich-text editor. Escaping removes the sink instead of locking a door in front of it. **What
+an operator loses:** a `<b>` in a maintenance message. If one ever needs a link, add it as a
+`link`/`link_text` pair through `safeHref()` the way `renderBanners()` already does (§J1-9) —
+never by widening this back to raw HTML.
+
+**Pinned** by `test-branding-sinks.js` section [5], with a control that fails if the overlay
+does not render at all and a second control asserting the `&lt;img` entity is *present* — so
+the test cannot pass by the message being dropped rather than escaped.
+
+**Handoff to §J1 / §J9 (defence in depth, not applied here):** `maintenance_message` still has
+no validator and no length cap — it is one of the unbounded settings values §J9-8 left OPEN —
+and `notices` is still not a step-up section. The escape closes the script path; the missing
+cap is §J9's.
+
+---
+
+### J15-2 — [Medium] `Auth.fetch` never rejects and hands a 429's JSON body back as data, so every "unavailable" branch on the public pages was dead code and one rate-limited request rendered the pool as zero miners, zero blocks, zero payouts and a 0.0 % fee — **FIXED 2026-09-03**
+
+**Threat actor: anonymous, plus the system itself.** No attacker is required — an API
+restart, a node blip, or the visitor's own reload rate is enough. It is also reachable
+*against* a population: the app rate limiter buckets per `req.ip`, and every visitor behind
+one NAT or one un-`X-Forwarded-For`'d proxy location shares a bucket (the §J12-3 shape).
+
+`Auth.fetch()` ([auth.js:39–78](../../web/07_mining_pool_public/public_html/js/auth.js#L39-L78))
+puts its entire body inside one `try/catch` that returns `null`. It therefore **cannot
+reject**. It also returns the *parsed body* of a non-2xx — deliberately, because the admin
+panel reads `body.error` off a 4xx to show the server's reason (34 sites; `ads.html:670`,
+`pages.html:219`, `posts.html:261`, …). That contract is right for the panel and wrong for a
+public page, and eleven public reads used it anyway.
+
+**Demonstrated, not inferred.** The real `auth.js` was run in a `vm` context against a stubbed
+`fetch` in four modes, and the guard expressions from the three consuming pages were then
+replayed verbatim on its return value:
+
+```
+── 429 JSON ──  rejected? false   returned: {"error":"Too many requests","message":"Rate limit
+                                             exceeded. Retry after 37 seconds.", …}
+  reactor loadStats  "if (!s) return" -> guard passed? true
+    c-miners = 0 | c-blocks24 = 0 | c-total = 0 | c-reward = 0
+    pl-fee   = 0.0% | pl-min = 0.0 GRIN
+  reactor loadBlocks -> "NO BLOCKS FOUND YET"
+  miners-stats renderHrPage -> "No active miners in the last 24 hours"
+  payment-history ph-paid-all = 0.000 | ph-count-all = 0 | ph-fee-pct = 0 %
+
+── 502 HTML ──  rejected? false   returned: null      (same four render lines)
+── net error ──  rejected? false   returned: null     (same four render lines)
+── 200 OK   ──  rejected? false   returned: {"active_miners":42, …}
+  reactor loadStats -> c-miners = 42 | c-blocks24 = 3 | c-total = 118 | c-reward = 7080
+```
+
+The `200 OK` row is the control: the harness renders real numbers when the response is good,
+so the zeros above are the code's behaviour and not the shim's.
+
+Two distinct defects, both visible in that output:
+
+1. **A 429 body is an object, so `if (!s) return` does not fire.** The rate limiter answers
+   `res.status(429).json({error, message, retry_after_seconds, limit, window_minutes})`
+   ([rate-limiter.js:136](../../web/07_mining_pool_public/back-end-pool/lib/rate-limiter.js#L136),
+   [:214](../../web/07_mining_pool_public/back-end-pool/lib/rate-limiter.js#L214)). Every
+   `s.active_miners || 0` then evaluates to `0` — not a placeholder, a **number the page
+   presents as live**. On `/api/config/pool-info` that is a published **0.0 % pool fee and a
+   0.0 GRIN minimum withdrawal**.
+2. **`Auth.fetch` never throws, so every `catch` around it was unreachable.** The strings
+   `'Hashrate data unavailable'`, `'Block-finder data unavailable'`,
+   `'Hashrate history unavailable'` (miners-stats.html) sat in blocks that could not run. The
+   reachable branches said the opposite: *"No active miners in the last 24 hours"*, *"No
+   blocks found in the last 30 days yet — be the first!"*, *"NO BLOCKS FOUND YET"*, *"NO
+   PAYOUTS YET"*, and on the transparency page **`Total paid all-time` → `0 ツ`, `Payouts
+   all-time` → `0`, `Effective pool fee` → `0 %`**.
+
+That last one is the sharpest: `payment-history.html` exists to prove the pool pays. During
+any outage it asserted the pool has never paid anyone.
+
+**This is the §J14 handoff instantiated.** §J14 noted the `null`-ambiguity and handed it over;
+what it could not see from the panel side is that on a public page the ambiguity resolves into
+a *false statement about money*, and that the honest strings were unreachable.
+
+**One page already had it right**, which is what proves the pattern was reachable and simply
+not applied: `donate.html:389–397` distinguishes the two and prints `DONOR DATA UNAVAILABLE`.
+
+**Fix applied.**
+- New `Auth.read(url)` ([auth.js:80–111](../../web/07_mining_pool_public/public_html/js/auth.js#L80-L111)) —
+  parsed body on a 2xx **only**; `null` on any non-2xx, any non-JSON body and any network
+  failure. `Auth.fetch` is left exactly as it was, so the 34 admin sites that read `body.error`
+  keep working. `Auth.read` also does no 401 redirect: a public page has no session to lose.
+- All eleven public reads in `reactor-dashboard.js`, all seven in `miners-stats.html` and all
+  three in `payment-history.html` switched to it. `grep -c 'Auth.fetch' js/reactor-dashboard.js`
+  is now `0`.
+- `null` is now distinguished from empty where the distinction is a claim about the pool:
+  `BLOCK FEED UNAVAILABLE` + a warn lamp
+  ([reactor-dashboard.js:515–524](../../web/07_mining_pool_public/public_html/js/reactor-dashboard.js#L515-L524)),
+  `PAYOUT FEED UNAVAILABLE` + a warn lamp ([:590–598](../../web/07_mining_pool_public/public_html/js/reactor-dashboard.js#L590-L598)),
+  and `if (data === null) throw new Error('unavailable')` at the four sites in
+  `miners-stats.html` / `payment-history.html` whose `catch` already carried the right string —
+  which is what makes those blocks reachable for the first time.
+- Two pages that use a raw `fetch` with `r.ok ? r.json() : null` had the same collapse with a
+  different helper: `fortune-board.html` (a 429 printed *"Winners will appear here after the
+  first draw."*) and `api-docs.html` (*"No public endpoints reported."*). Both now reject a
+  non-2xx so their existing `.catch` strings fire. `blocks.html` and `donate.html` were already
+  correct and are unchanged.
+
+**Not changed, deliberately:** the tiles that fall back to their `—` placeholder
+(`ms-miners`, `ph-paid-all`, `pl-fee`, …) now simply keep it, because `Auth.read` returns
+`null` and every one of those guards is `if (x)`. Verified each placeholder is `—` and not
+`0` in the static markup.
+
+---
+
+### J15-3 — [Medium] Every fresh pool publishes the toolkit author's domain, X account and GitHub org as the operator's own identity — 56 static SEO tags plus two JSON-LD blocks, and since §J10-4 blanked `site_url` nothing rewrote any of them — **IDENTITY CLAIMS + RUNTIME HALF FIXED 2026-09-03; the 56 static URLs are OPEN**
+
+**Threat actor: none — this is integrity and attribution, not attack.** It is the §J10-4
+family (`seo.site_url` shipped as `https://grinium.com`, Medium, fixed by blanking the
+setting) surviving in the half §J10 could not reach: the static HTML.
+
+Measured, exactly: **56 occurrences of `pool.grin.money` across the ten static public pages** —
+7 in `account-settings.html`, 10 in `index.html`, 7 each in `donate`/`miners-stats`/
+`payment-history`, 6 in `fortune-board`, 4 in `network-map`, 3 each in `blocks`/`blog`, 2 in
+`api-docs`. They sit in `<link rel="canonical">`, `<link rel="alternate" hreflang>`,
+`og:url`, `og:image`, `twitter:image`, `twitter:domain` and inline JSON-LD.
+`page.html`, `post.html` and `login.html` carry none.
+
+**Why it was live.** `applySeo()` rewrites `canonical` and `og:url` — and *only* those two —
+from `seo.site_url`, and does nothing at all when that value is empty
+(`var siteUrl = seo.site_url || ''` … `if (canonical && !serverSeo)`). §J10-4 blanked the
+shipped default for good reasons. The two changes compose into: **on a default install nothing
+is rewritten and all 56 stand.**
+
+`index.html` carried worse than URLs — three identity claims the deploying operator cannot make:
+
+```html
+<meta name="twitter:site" content="@GriniumPool">
+…
+"sameAs": [ "https://x.com/griniumpool", "https://github.com/griniumpool" ]
+…
+"potentialAction": { "@type":"SearchAction", "urlTemplate":"https://pool.grin.money/search?q={search_term_string}" }
+```
+
+`sameAs` is the schema.org predicate for *"these accounts are this organisation"*. Every pool
+built from this repo asserted ownership of two third-party accounts. The `SearchAction`
+declared a sitelinks search box against `/search?q=`, an endpoint no pool has ever served —
+structured data claiming a 404.
+
+**Fixed here (small, local, unambiguous):**
+- `index.html` — `twitter:site` and both static JSON-LD blocks removed, each replaced by a
+  comment saying what stood there and why it went. `branding.js injectStructuredData()` already
+  emits an Organization block from the **live** config (real name, real canonical, real logo,
+  `sameAs` built from the operator's own social links), gated on `seo.structured_data_enabled` —
+  that is the only structured data a deployed pool should publish.
+- `branding.js` — `site_url` now falls back to `location.origin`
+  ([:238](../../web/07_mining_pool_public/public_html/js/branding.js#L238)), so a pool that
+  never fills the setting in still gets a correct self-canonical. The vhost 301s www → apex,
+  so a rendering client is on the canonical host by the time this runs.
+- `branding.js` — new `reclaimSeoHost()`
+  ([:293](../../web/07_mining_pool_public/public_html/js/branding.js#L293)), called last in
+  `applySeo` ([:277](../../web/07_mining_pool_public/public_html/js/branding.js#L277)). It
+  rewrites **by origin, not by a list of tags to set**: any `canonical` / `og:url` /
+  `og:image` / `twitter:image` / `hreflang` naming a host this deployment does not claim is
+  repointed onto the effective site URL, and `twitter:domain` (a bare host, invisible to a
+  URL loop) is set separately. Rewriting by origin means a page that adds another absolute tag
+  is covered without a second edit here. `canonical`/`og:url` are skipped when
+  `<meta name="server-seo">` is present, because the server owns them on `page.html`/`post.html`.
+
+**OPEN — the 56 static tags themselves.** `reclaimSeoHost` fixes every client that runs
+JavaScript. It fixes nothing for **a crawler that does not**, or for a link unfurler reading
+raw HTML — and those are precisely the consumers a canonical tag exists for. The remaining
+options, with what each costs:
+
+1. **Make them relative** (`href="/"`, `content="/images/og-image.svg"`). Correct and
+   guaranteed for `canonical` and `hreflang`, which resolve against the document. For
+   `og:image`/`twitter:image` it relies on the unfurler resolving a relative URL — most do,
+   the OG spec says absolute.
+2. **Delete the absolute ones and let `branding.js` emit them.** Unambiguously correct for
+   every JS client and for every non-JS consumer alike (no tag beats a wrong tag), at the cost
+   of an unfurl with no card image on a pool that never sets `og_image_url`.
+3. **Leave them and rely on the runtime rewrite.** What is shipping now. Wrong for crawlers.
+
+Recommendation: **(1) for `canonical`/`hreflang`, (2) for `og:image`/`twitter:image`/
+`twitter:domain`/`og:url`** — the first two resolve relatively by spec, the rest do not.
+Ten files, mechanical, but it changes what an operator's SEO looks like and it is a product
+call, not a security patch — plan rule 3. Recorded here rather than applied.
+
+---
+
+### J15-4 — [Low] The one box that gates every money action on the account page is `type="text"`, while the same secret is `type="password"` fifty lines below it — **FIXED 2026-09-03**
+
+**Threat actor: anyone with sight of the screen, plus the browser itself.** Shoulder-surfing,
+a screen share, a support screenshot, and browser session-restore.
+
+`#acct-ip-proof` is the single ownership-proof input. `getProof()` reads it
+([account-settings.html:1590–1594](../../web/07_mining_pool_public/public_html/account-settings.html#L1590-L1594))
+and **every** money action on the page calls `getProof()` first: the Tor withdraw, the
+slatepack create, the slatepack finalize, the Goblin send, and the §J11-2 kernel-proof reveal.
+Its own label and placeholder say what it accepts: *"A recent mining IP … **or** your rig's
+stratum password"*.
+
+It shipped as `type="text"`. Fifty lines below, `#acct-nostr-pass-proof` — the **same secret**,
+on the same page, in the Goblin destination form — was already `type="password"`. One of the
+two is wrong, and it is the one that gates more.
+
+Consequences, in order of likelihood: it is legible on screen for the whole session (this page
+is long-lived — miners leave it open watching hashrate); `autocomplete="off"` is advisory and
+Chrome and Firefox have each ignored it for non-login-shaped fields across various versions,
+so the value can land in form-restore and come back on a back-navigation or after a crash; and
+it is in every screenshot, which is how miners ask for support.
+
+**Fix applied.** `type="password"` by default, wrapped in `.proof-wrap` with an in-field
+**Show / Hide** toggle
+([account-settings.html:427–429](../../web/07_mining_pool_public/public_html/account-settings.html#L427-L429),
+wired at [:1915](../../web/07_mining_pool_public/public_html/account-settings.html#L1915)). The
+toggle exists because the *other* accepted value is an IP address, which is unusable masked —
+a plain `type="password"` would have been a worse form. The state is per-session and never
+persisted, so a reload always comes back masked, and the button carries `aria-pressed` and an
+`aria-label` so the state is announced.
+
+---
+
+### J15-5 — [Low] `custom_theme` still applied on the credential page — the last operator-authored CSS sink above `branding.js`'s guard — **FIXED 2026-09-03 (closes §J9-3's handoff)**
+
+**Threat actor: an attacker holding a live admin access token (§C3).** §J9-3 gated and
+validated this key server-side and handed the front-end half here, naming both the fix and the
+test hook.
+
+`applyTheme()`'s `custom_theme` loop sat **above** `if (!isCredentialPage())`, so unlike
+`custom_css`, `font_url` and `font_family` it reached `login.html`. Confirmed by the harness,
+which now prints the pre-fix state as a failure when the change is reverted:
+
+```
+FAIL  login: NO custom_theme CSS custom properties (audit J15-5)
+      {"--text":"#101010","--bg":"#101010","--pwned-marker":"#123456", …}
+```
+
+§J9-3's validator bounds what a value may *contain* (≤200 keys, ≤200 chars, no `url()`, no
+`expression()`, no angle brackets, custom properties only) but not what it *means* — whichever
+declaration consumes it via `var()` decides that. Setting `--bg` to the value of `--text` is
+enough to make the 2FA prompt unreadable, which is the same class of harm as `custom_css` and
+the reason `custom_css` has been gated here since §J1-1.
+
+**Fix applied:** the loop moved inside the existing guard, next to `custom_css`
+([branding.js:412–428](../../web/07_mining_pool_public/public_html/js/branding.js#L412-L428)),
+exactly as §J9-3 specified. A white-labelled login page keeps its accent colour, logo, pool
+name and named theme; only the raw variable map is withheld.
+
+`accent_color` travels through the same `setVar()` and is deliberately **not** gated — it is
+regex-bound to `/^#[0-9a-f]{6}$/`, so it is a colour and nothing else. That is now pinned as a
+positive assertion in the harness, so a future change that widens its validator has to come
+back and read the line.
+
+---
+
+### J15-6 — [Low] The public page CSP allowlists `cdn.jsdelivr.net`, which no public page loads — an unused third-party script origin in front of the withdrawal form — **FIXED 2026-09-03**
+
+**Threat actor: an attacker holding a live admin access token (§C3).** This is §J14-4's
+argument applied to the public origin.
+
+`$hdr_page` carried `script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net …`. A sweep of
+all thirteen public pages and every file under `public_html/js/` found **zero** references to
+that host — Chart.js is vendored at `public_html/js/vendor/chart.umd.min.js`, and the only
+`jsdelivr` string anywhere in the tree is inside that vendored file's own SRI comment plus two
+`node_modules` READMEs. It is a leftover from before the vendoring.
+
+It matters more here than it did in the panel: §B accepts that operator HTML can inject script
+into these pages, and the public origin serves `account-settings.html`. An unused third-party
+script origin is a ready loader for exactly that.
+
+**Fix applied:** removed from `script-src` in `$hdr_page`
+([07_grin_mining_public_pool.sh:1286](../../scripts/07_grin_mining_public_pool.sh#L1286)), with
+the reasoning written into the snippet's own header comment. The four analytics origins stay —
+unlike jsdelivr they become reachable by design the moment an operator switches a provider on.
+`bash -n` clean; `test-admin-panel.js` §7 (which asserts on the header section) still 39/39,
+and none of its assertions referenced jsdelivr.
+
+**Handoff to §J16:** this is your file. The plan already tells you to re-read the header
+section as one unit now that there are three snippets; this is one token less to read. The
+open question §J14 left you is unchanged: `$hdr_page` still sets no `frame-ancestors`,
+`base-uri`, `form-action` or `object-src`, which only `$hdr_admin` does.
+
+---
+
+### J15-7 — [Low] The pending-payout strip has no way to say "stuck": every in-flight label is written for the seconds-long case and §J4-3's stranded row rendered as "almost done" forever — **FIXED 2026-09-03 (answers §J4's handoff)**
+
+**Threat actor: the system.** §J4's handoff asked whether a long-lived `finalizing` state
+would make the account page's label a lie. It does, and `tor_sending` is worse.
+
+`BASE_PENDING` maps `finalizing` → *"broadcasting to the Grin network — almost done"*
+([payout-methods.js:55–58](../../web/07_mining_pool_public/public_html/js/payout-methods.js#L55-L58))
+and the Tor rail maps `tor_checking`/`tor_sending` → *"sending over Tor now…"*
+([account-settings.html:1174](../../web/07_mining_pool_public/public_html/account-settings.html#L1174)).
+**§J4-3 is OPEN**: a crash while a payout is `tor_sending` strands the row permanently — the
+balance stays locked, `canWithdraw` stays false because it requires `!a.pending_withdrawals`,
+the withdraw button stays disabled, and the strip said *"sending over Tor now…"* about it
+indefinitely with nothing to indicate how long. Only `retry_scheduled` had a time on it
+(`next attempt …`).
+
+**Fix applied.** The strip now shows how long the payout has been in flight, and past 30
+minutes in an in-flight state (`tor_checking`, `tor_sending`, `finalizing`) says so plainly and
+tells the miner to contact the operator with the payout number
+([account-settings.html:1204–1226](../../web/07_mining_pool_public/public_html/account-settings.html#L1204-L1226)).
+`created_at` is already on the wire — the account route selects it into `pendingRow`
+([index.js:3320–3325](../../web/07_mining_pool_public/back-end-pool/index.js#L3320-L3325)) — so
+no API change was needed. A local `fmtElapsed` was written rather than reusing `fmtAge()`,
+which is day-granular (it exists for account age) and rendered a 20-minute-old payout as
+"0 days".
+
+This does not unstick anything. It is the difference between a miner waiting and a miner
+reporting it — **§J4-3 remains OPEN and is still the real fix.**
+
+---
+
+### J15-8 — [Low] `/api/pool/effort` publishes `round_window_capped` and the dashboard never read it, so a pool that has not found a block presented a window as a round and printed a luck verdict for it — **FIXED 2026-09-03 (answers §J12's handoff)**
+
+**Threat actor: none — display integrity.** §J12-7 added a lower bound to the round window
+(the unbounded version summed the whole `shares` table on every request) and shipped
+`round_window_from` + `round_window_capped` so the page could say when the figure is measured
+from a floor rather than from a block
+([index.js:3699–3700](../../web/07_mining_pool_public/back-end-pool/index.js#L3699-L3700)). Nothing
+read either field: `grep round_window js/reactor-dashboard.js` returned nothing.
+
+The effort gauge and the sub-line therefore rendered *"luck 87% (lucky)"* for a pool that has
+never found a block — a verdict on a round that does not exist. The arithmetic is honest; the
+presentation was not.
+
+**Fix applied:** when `round_window_capped` is true the sub-line reads *"no block found yet —
+measured from a window, not a round"* and the luck figure is suppressed
+([reactor-dashboard.js:430–447](../../web/07_mining_pool_public/public_html/js/reactor-dashboard.js#L430-L447)).
+The gauge still shows the effort number, which is the one thing a pre-first-block pool can
+legitimately display.
+
+---
+
+### J15-9 — [Low] The "max" chip rounded to nearest, so it asked for more than the stored balance about half the time — **FIXED 2026-09-03 (closes §J7-3's front-end half)**
+
+**Threat actor: none — a money-UI defect the miner meets.** §J7-3 measured this and handed the
+cheap half here with the exact fix.
+
+```js
+$id('acct-amt-max').dataset.v = Number(a.balance || 0).toFixed(9)…   // pre-fix
+```
+
+Balances are un-quantised `REAL` doubles, so `toFixed(9)` rounds **up** roughly half the time,
+and the withdrawal CAS is `balance >= ?` with no tolerance. The chip labelled "your full
+balance" produced a refusal over less than one nanogrin — and the alternative §J7-3 named
+(leave the field blank) is unreachable from this UI: the help text says *"blank no longer means
+full balance — tap the max chip instead"*.
+
+**Fix applied:** `Math.floor(balance * 1e9) / 1e9`
+([account-settings.html:986–992](../../web/07_mining_pool_public/public_html/account-settings.html#L986-L992)).
+Strands at most one nanogrin and can never overshoot.
+
+**§J7-3 stays OPEN.** This is option (1) of three. It does not help an API caller that sends
+its own `toFixed(9)`, and it does not touch the representation. §J7-3's recommendation —
+option (2), quantise at credit time — is still the real fix, and §J17 still owes the testnet
+confirmation that a real miner can withdraw a full balance in one action.
+
+---
+
+### J15-10 — [Low] The account page sends miners to the toolkit author's server to look up the IP they are about to use as a credential — **REFERRER FIXED 2026-09-03; the link itself is a product decision**
+
+**Threat actor: a third party observing the click.** The help text under the ownership-proof
+field reads *"one of the last two IPs your miner submitted shares from (check yours at
+tools.grin.money/tools/my-ip)"*
+([account-settings.html:433–436](../../web/07_mining_pool_public/public_html/account-settings.html#L433-L436)).
+
+That host belongs to the toolkit author, not to the deploying operator, and it is on every
+pool built from this repo. A miner who clicks it hands `tools.grin.money` their IP, the
+timestamp, and — via the `Referer` — the pool they are on. The pool's own vhost sets
+`Referrer-Policy: strict-origin-when-cross-origin`
+([07_grin_mining_public_pool.sh:1264](../../scripts/07_grin_mining_public_pool.sh#L1264)), so
+the origin (not the path) crosses. That reconstitutes off-box exactly the *(mining IP, this
+pool, this time)* linkage §G1 spent a pass removing from `admin_audit_log`, on the one page
+where the visitor is demonstrably a miner of that pool.
+
+It is Low because the address never crosses and the click is voluntary. It is the same family
+as §J11-4 (the fixed GA4 property) and §J10-4 (`grinium.com` as `site_url`): a toolkit default
+pointing every deployed pool at the author's infrastructure.
+
+**Fix applied:** `rel="noopener noreferrer"` — the pool origin no longer crosses. **The link
+itself is left**, deliberately: the miner genuinely needs to know their egress IP, the pool
+cannot tell them (the browser's IP is not necessarily the rig's, which is the whole reason the
+link exists), and silently removing it would leave the instruction with no way to follow it.
+The clean answer is a same-origin echo endpoint or letting the operator set the host — a
+product decision, recorded not applied.
+
+---
+
+### J15-11 — [Info] Verified correct, with evidence
+
+Read and confirmed, not assumed. Each line says what was checked.
+
+- **`login.html` leaks no credential and cannot be bypassed client-side.** No credential
+  reaches the URL or history: both handlers `preventDefault()` and POST a JSON body
+  ([:486–532](../../web/07_mining_pool_public/public_html/login.html#L486-L532),
+  [:534–585](../../web/07_mining_pool_public/public_html/login.html#L534-L585)). `twofaToken`
+  lives in a closure variable, never in storage — the whole-tree storage sweep below confirms
+  it. The TOTP step cannot be skipped: `handleTotp` navigates only on `data.success` from
+  `/api/auth/login/totp`, and the password step's only other exit is `data.totp_required`,
+  which the server sets — there is no client-side branch that reaches `/admin/` without a
+  server "yes". `?reason=` is matched against a two-entry allowlist
+  (`/[?&]reason=([a-z_]+)/` → `{idle, expired}`) and unknown values render nothing, so the URL
+  cannot inject text. The CAPTCHA id is cleared **before** each fetch so a failed refresh says
+  "expired" rather than silently reusing a dead challenge.
+- **`login.html` loads no shell and therefore no ads.** It deliberately skips
+  `public-shell.js` ([:358](../../web/07_mining_pool_public/public_html/login.html#L358)), which
+  matters because `mount()` injects a header and footer `[data-ad-slot]` on every page that
+  *does* load it and then appends `/js/ads.js`
+  ([public-shell.js:335–357](../../web/07_mining_pool_public/public_html/js/public-shell.js#L335-L357)) —
+  and `renderAd()` inserts `html_code` raw and `activateScripts()` re-creates its `<script>`
+  nodes so they run ([ads.js:48–50](../../web/07_mining_pool_public/public_html/js/ads.js#L48-L50),
+  [:116–126](../../web/07_mining_pool_public/public_html/js/ads.js#L116-L126)). Ads on the
+  credential page would have been §J1-1 all over again through a second loader. They are not.
+  Ads **do** render on `account-settings.html`, which is the §B accepted position and no worse
+  than `branding.js`'s sinks already on that page at the same `secureAdmin` tier.
+- **The Goblin rail's markup fails closed** — layer 3 of the four in memory
+  `project_pool_nostr_payouts`, confirmed as §J4/§J13 asked. `acct-pay-nostr-label`,
+  `acct-pay-nostr-pane`, `acct-dest-goblin` and the `acct-destinations` wrapper all ship
+  `style="display:none"` in the static HTML and are revealed only by `applySummary()` on
+  `summary.nostr_payouts_enabled`
+  ([payout-goblin.js:210](../../web/07_mining_pool_public/public_html/js/payout-goblin.js#L210),
+  [payout-methods.js:122–137](../../web/07_mining_pool_public/public_html/js/payout-methods.js#L122-L137)).
+- **The rail list is server-driven and no public page names an optional rail in visible static
+  copy.** A grep for `Goblin|Nostr|nostr` across the other twelve pages and `public-shell.js`
+  returns two hits, both the operator's *social* link hook (`data-brand="social-nostr"`), itself
+  hidden until configured. The `PayoutMethods` registry holds no rail names in shared page code,
+  and the `fallback: true` rail is Tor — the one that cannot be switched off.
+- **The withdrawal status map matches what the scheduler actually writes.** Enumerated every
+  status literal across `withdrawal-scheduler.js`, `dormancy.js`, `nostr-payout.js` and
+  `index.js`: `pending` (never inserted), `tor_checking`, `tor_sending`, `tor_failed`,
+  `slatepack_pending`, `slatepack_expired`, `slatepack_failed`, `finalizing`, `retry_scheduled`,
+  `confirmed`, `cancelled`, `nostr_failed`. All twelve are covered by `BASE_STATUS` plus the
+  three rail `statuses` maps; rows insert as `tor_checking` or `slatepack_pending`, never
+  `pending`. This is the §J14-1/§J14-2 class of bug and the public page does **not** have it.
+  One dead entry: Goblin declares `nostr_sending`, which nothing writes — harmless,
+  `statusLabel` falls back to the raw string.
+- **§J11-1 and §J11-2's render halves are in place.** `miners-stats.html addrCell()` is plain
+  text with the deep-link removed and the reasoning in a comment; `blocks.html` dropped the
+  full-address `title` tooltip; `donate.html donorCard()` renders a masked address with neither
+  link nor title; the account page's kernel column shows `hidden` until `revealProofs()` returns
+  one for the ownership-proved address, and `revealedProofs` is cleared on every new lookup so a
+  revealed kernel cannot survive into another address's view
+  ([account-settings.html:906–908](../../web/07_mining_pool_public/public_html/account-settings.html#L906-L908)).
+- **§J6-9's render half is closed at the source, so there is nothing to fix here.** Worker names
+  are `escHtml`'d into the account page's table
+  ([account-settings.html:1257–1262](../../web/07_mining_pool_public/public_html/account-settings.html#L1257-L1262)),
+  and §J6-9's backend fix means a row can no longer be planted on a stranger's account without
+  an accepted share behind it. §J14 confirmed the admin panel renders no worker labels at all,
+  so the trace ends here.
+- **Nothing sensitive is in browser storage.** Whole-tree sweep of `localStorage` /
+  `sessionStorage`: the miner's own Grin address (`ADDR_KEY`, with a comment saying why),
+  `cookie-consent`, `banner-dismissed-<id>`, `pool-network`, `grinium-theme`, and ads'
+  per-placement session dismissal. **No token, no proof, no password, no address of anyone
+  else.** Every access is wrapped in `try/catch` for private mode.
+- **No external script, stylesheet, font or beacon in any static page.** The only absolute
+  off-origin references anywhere in `public_html/*.html` are two `<a href>` — `world.grin.money`
+  on the network map and the `tools.grin.money` link of J15-10 — plus the SEO URLs of J15-3.
+  Fonts are self-hosted under `public_html/fonts/`; `fonts.googleapis.com` appears exactly once
+  in the tree, inside `branding.js`'s `font_url` branch, which only runs when the operator sets
+  one. The page CSP (`default-src 'self'` + the analytics origins + Google Fonts) is therefore
+  wider than what any page actually loads — J15-6 removed the one entry that can never be
+  needed; the analytics hosts stay because §J11-4 left the *feature* available while removing
+  the *default*.
+- **No `on*` handler anywhere splices an interpolated value.** This is §J14-3's bug class on the
+  public side. A regex sweep for an `on…=` attribute containing `${`, `' +` or `" +` returns
+  nothing; the nine static `onclick` attributes that exist (`blog`, `donate`, `fortune-board`,
+  `login`) are literal function calls with constant arguments.
+- **`Explorer.link()` is safe for untrusted chain strings** — `encodeURIComponent` on the value,
+  then `xEsc` (all five characters) on both the built URL and the label
+  ([branding.js:147–166](../../web/07_mining_pool_public/public_html/js/branding.js#L147-L166)).
+  It is the only HTML-returning helper used across pages and it is used at six sinks.
+- **`safeHref()` still covers all five operator URL fields** (§J1-9): banner link, `cta_link`,
+  social links, `support_forum_url`, `pgp_key_url` — parsed with the WHATWG `URL` parser,
+  `http:`/`https:` only. `test-branding-sinks.js` section [4] pins it on both a normal page and
+  the credential page, with a control that an `https` link *does* render.
+- **`injectStructuredData` cannot break out of its `<script>`.** It sets `textContent` on an
+  element created with `createElement`, so a `</script>` inside a value is never re-parsed.
+- **`api.js guardAdminPage()` escapes the username** with all five characters before
+  `nav.innerHTML` ([api.js:111–114](../../web/07_mining_pool_public/public_html/js/api.js#L111-L114)),
+  and no public-page JS writes a token to storage, a URL or a log — re-confirming §J14's finding
+  from the file's own side of the split.
+- **`network-map.js` is clean beyond §I10's fix.** `esc()` covers every operator-authored region
+  label at all four sinks; the interpolated colours are literals or computed from a three-way
+  status switch; `fillPlacard`'s `set(id, html)` receives only `String(number)` and literal
+  `<small>` wrappers; `#nm-note`'s messages are constant strings chosen by a branch, not
+  composed from feed data.
+- **`charts-init.js` (591 lines) contains no HTML sink at all** — every label goes through
+  Chart.js as data.
+
+---
+
+### J15-12 — [Info] Two smaller notes from the same sweep
+
+1. **The account lookup accepts a spelling the server can never match.** `lookup()` validates
+   with `/^t?grin1[a-z0-9]{20,}$/i` — case-**insensitive**
+   ([account-settings.html:870](../../web/07_mining_pool_public/public_html/account-settings.html#L870)) —
+   and then submits the string verbatim. Grin slatepack addresses are lowercase bech32 and
+   SQLite's `=` on `TEXT` is case-sensitive by default, so `GRIN1…` is accepted by the form and
+   answered with *"No mining account for this address yet — point a miner at the pool first."*
+   That is a confusing message, not a gate bypass: nothing creates a second account, because
+   rows are created stratum-side. Left alone here because address canonicalisation is §J3's
+   question and the right fix (lowercase before submit) belongs beside whatever §J3 decides.
+2. **`login.html` fires an admin dashboard query on every page load.** `checkIfLoggedIn()` hits
+   `/api/admin/dashboard` to test for a session. The comment explains why it must be an
+   auth-gated route rather than `/api/health`, and that reasoning is right. Worth noting only
+   that an anonymous visitor to the login page therefore costs one `secureAdmin` middleware pass
+   plus a 401 — priced by the `admin` bucket, which §J12 already read as DoS-padding. Not a
+   finding.
+
+---
+
+### Handoffs
+
+- **§J16 (deployment & infra)** — three. (a) J15-6 changed your file: `cdn.jsdelivr.net` is out
+  of `$hdr_page`'s `script-src`, with the reasoning in the snippet's own comment. Nothing else
+  in the header section moved. (b) Your open question from §J14 is unchanged and this session
+  strengthens it: `$hdr_page` still omits `frame-ancestors`, `base-uri`, `form-action` and
+  `object-src`, and the public origin is the one that serves the withdrawal form. (c) J15-10's
+  residual: `tools.grin.money` is hardcoded into `account-settings.html`. If the deployment side
+  ever grows a "your egress IP" echo, that link should point at the pool's own host.
+- **§J9 (settings & config integrity)** — J15-1's defence-in-depth half is yours. After the
+  escape, `notices.maintenance_message` still has **no validator and no length cap** (it is one
+  of the unbounded settings values §J9-8 left OPEN) and `notices` is still not in
+  `STEP_UP_SETTINGS_SECTIONS`. The sink is gone; the unbounded operator string is not.
+- **§J1 (route & guard matrix)** — one correction to the §J1-1 write-up, not to its fix. Its
+  table of operator-HTML sinks was built from the `analytics` and `branding` sections and is
+  therefore incomplete: `notices.maintenance_message` was a sixth sink of the same class, in a
+  third section, at the same tier. If that table is ever used as the canonical list, add the
+  row — the sink is closed, but "which keys reach markup" is a question the matrix should
+  answer completely.
+- **§J4 (payout execution)** — J15-7 answers your handoff and confirms the worry: the strip now
+  shows elapsed time and warns past 30 minutes in an in-flight state. **That is presentation
+  only. §J4-3 is still OPEN** and is still the fix — a stranded `tor_sending` row locks the
+  balance, disables the withdraw button and cannot be cleared from any UI.
+- **§J7 (DB layer & arithmetic)** — J15-9 takes option (1) of §J7-3. **§J7-3 stays OPEN**: the
+  chip is fixed, the representation is not, and an API caller sending its own `toFixed(9)` is
+  still refused. Option (2) is still the recommendation.
+- **§J12 (rate limiting)** — J15-8 answers your handoff (`round_window_capped` is now read and
+  said out loud). Separately, J15-2 is a **consequence** of your bucket work that is worth
+  recording in §J12's ledger: a 429 from any public bucket used to render as live zeros on the
+  three busiest public pages, so a visitor who tripped a limit saw a dead pool. That is fixed
+  here, but it means the buckets' user-visible failure mode was, until today, worse than the
+  429 itself.
+- **§J10 (uploads, CMS & ads)** — one confirmation, no new work. `js/ads.js` inserting
+  `html_code` via `innerHTML` and re-creating `<script>` nodes is unchanged and remains the
+  §B/§J1-1 accepted position; what this session adds is that `public-shell.js` loads `ads.js` on
+  **twelve** pages, not the six that name it in their own markup — and that `login.html` is
+  correctly not one of them.
+- **§J17 (operational gate)** — three things only a run can settle. (1) **J15-2 is the one to
+  stage deliberately**: on a testnet pool, drive `/api/pool/stats` past its bucket from one host
+  and confirm the homepage, `miners-stats.html` and `payment-history.html` now say *unavailable*
+  rather than *zero*. The pre-fix behaviour was invisible on paper for three audit passes.
+  (2) **J15-4's masked proof field needs a real miner to use it once** — the Show/Hide toggle is
+  the only new interactive control on the money page. (3) **J15-3's runtime rewrite needs one
+  page fetched with JS off and one with JS on**, and the two canonicals compared; the whole
+  point of the finding is that they currently disagree.
+- **memory `project_pool_frontend_uiux_audit`** — worth adding that `Auth.fetch` is the admin
+  panel's helper and `Auth.read` is the public pages', that the difference is what a non-2xx
+  returns, and that mixing them renders a rate limit as live data.
+- **memory `project_frontend_seo_standards`** — needs J15-3: a deployed pool's static SEO tags
+  must not name the toolkit author's domain, X account or GitHub org, and `branding.js` now
+  falls back to `location.origin` so a blank `site_url` is no longer a silent no-op.
+
+---
+
+### Verification
+
+- **`npm test` — full suite green.** All eleven test files: `12 + 47 + 32 + 52 + 65 + 25 + 19 +
+  21 + 51 + 51 + 39` = **414 passed, 0 failed**, after this session's eleven changed files.
+  `check-syntax` reports `Syntax OK — 60 files + 31 inline <script> blocks checked`.
+- **The new assertions were proven to FAIL, not just to pass.** Both J15-1 and J15-5 were
+  reverted in `branding.js` — the escape removed and the `custom_theme` loop moved back above
+  the guard — and `test-branding-sinks.js` produced four failures naming exactly those two
+  changes, including `FAIL login: NO custom_theme CSS custom properties` with the leaked
+  variable map printed. The file was restored and the suite returned to 25/25.
+- **Section [5] carries two controls**, not one: the overlay must actually have rendered
+  (`/Back at 14:00/`), and the escaped entity must be **present** (`/&lt;img/`) — so the test
+  cannot pass by the message being dropped instead of escaped. Its second assertion was
+  deliberately rewritten from `!/onerror=/` to `!/<[a-z][^>]*onerror/` after the first version
+  failed on the *escaped* text: the literal string survives as text and must, so matching the
+  substring would have made the test passable only by deletion.
+- Sections [1] and [2] gained the matching control/negative pair for `custom_theme`, plus a
+  positive assertion that `accent_color` still applies, so a future widening of its validator
+  has to read the line.
+- **J15-2 was demonstrated by running the real `auth.js`**, not by reading it: the file was
+  loaded into a `vm` context against a stubbed `fetch` in four modes (429 JSON, 502 HTML,
+  network error, 200 OK) and the guard expressions from all three consuming pages replayed on
+  the return value. The 200 OK mode is the control and printed real numbers. The first attempt
+  at that harness was itself wrong — `const Auth = {…}` in a `vm` script is a lexical binding and
+  never becomes a context property, so `ctx.Auth` was `undefined` and every mode "rejected".
+  That was caught by printing the rejection reason, and the corrected harness is what the
+  finding rests on.
+- **The admin-panel dependency on `Auth.fetch`'s current contract was checked before changing
+  anything**, which is why `Auth.read` is a new method rather than a change to `Auth.fetch`:
+  34 sites in the panel read `body.error` off a non-2xx returned by `API.post`/`API.get`, which
+  wrap `Auth.fetch`. Narrowing `Auth.fetch` would have silently regressed §J14-6.
+- **The 56 static SEO URLs were counted mechanically** (`grep -o … | wc -l`), per file, not
+  estimated; the three identity claims in `index.html` were read in place before removal, and a
+  post-edit grep confirms the only surviving mentions are inside the explanatory comments.
+- **The escaper audit read all eleven escapers' definitions**, classified each as five-character
+  or three-character, and then checked every call site of the two three-character ones for
+  attribute context. It is not a grep for the word "escape".
+- **`node --check`** clean on `branding.js`, `auth.js`, `reactor-dashboard.js` and
+  `test-branding-sinks.js`; the six edited HTML pages are covered by §J14-5's inline-script gate.
+  **`bash -n`** clean on `scripts/07_grin_mining_public_pool.sh` after the CSP change.
+- Per plan rule 5: nothing ran on a VPS and nothing long-running ran locally. Every command was a
+  one-shot that exited; no server was started; the scratchpad harness files were deleted.
+
+### Changed this session
+
+| File | Change |
+|---|---|
+| [`js/branding.js`](../../web/07_mining_pool_public/public_html/js/branding.js) | J15-1 `maint.message` escaped; J15-5 `custom_theme` loop moved inside `isCredentialPage()`; J15-3 `site_url` falls back to `location.origin` + new `reclaimSeoHost()` |
+| [`js/auth.js`](../../web/07_mining_pool_public/public_html/js/auth.js) | J15-2 new `Auth.read()` — 2xx-only parsed body, `null` on every failure; `Auth.fetch` untouched |
+| [`js/reactor-dashboard.js`](../../web/07_mining_pool_public/public_html/js/reactor-dashboard.js) | J15-2 all 11 reads → `Auth.read`, `BLOCK/PAYOUT FEED UNAVAILABLE` states + warn lamps; J15-8 `round_window_capped` qualifier |
+| [`account-settings.html`](../../web/07_mining_pool_public/public_html/account-settings.html) | J15-4 proof field `type="password"` + Show/Hide toggle + CSS; J15-7 pending-payout age + stuck warning; J15-9 max chip floors to 9 dp; J15-10 `rel="noreferrer"` |
+| [`miners-stats.html`](../../web/07_mining_pool_public/public_html/miners-stats.html) | J15-2 all 7 reads → `Auth.read`; the three leaderboard "unavailable" catches made reachable |
+| [`payment-history.html`](../../web/07_mining_pool_public/public_html/payment-history.html) | J15-2 all 3 reads → `Auth.read`; transparency tiles no longer render 0 on an outage |
+| [`fortune-board.html`](../../web/07_mining_pool_public/public_html/fortune-board.html) | J15-2 a non-2xx now rejects instead of reading as "no draws yet" |
+| [`api-docs.html`](../../web/07_mining_pool_public/public_html/api-docs.html) | J15-2 a non-2xx now reaches the existing "temporarily unavailable" catch |
+| [`index.html`](../../web/07_mining_pool_public/public_html/index.html) | J15-3 `twitter:site @GriniumPool` and both static JSON-LD blocks removed (third-party `sameAs`, foreign `url`/`logo`, a `SearchAction` against a 404) |
+| [`scripts/07_grin_mining_public_pool.sh`](../../scripts/07_grin_mining_public_pool.sh) | J15-6 `cdn.jsdelivr.net` removed from `$hdr_page`'s `script-src` |
+| [`back-end-pool/scripts/test-branding-sinks.js`](../../web/07_mining_pool_public/back-end-pool/scripts/test-branding-sinks.js) | +7 assertions: `custom_theme` control + negative + `accent_color` control, and new section [5] pinning J15-1 with two controls; shim now records `style.setProperty` and exposes `bodyHtml` |
+
+**Still open from this session:** the static half of **J15-3** (56 SEO URLs across ten pages —
+a product decision, with a recommendation). **J15-10**'s third-party link is left in place by
+the same reasoning. Inherited and deliberately not closed: **§J4-3** (J15-7 labels it, does not
+fix it), **§J7-3** (J15-9 takes option 1 of three), and **§J9-8**'s missing length cap on
+`maintenance_message`.
+
+---
+
+## §J16 — Deployment & infra (2026-09-03, add-ons, NOT VPS-TESTED)
+
+**Scope, as set by `script07_reference_audit_session_plan.md` §J16:** the shell and the nginx
+it writes, not the Node app — `scripts/07_grin_mining_public_pool.sh` (3,329 lines),
+`scripts/lib/07_lib_hub.sh` (91), `scripts/lib/07_lib_gateway.sh` (537) and
+`scripts/lib/07_lib_gwctl.sh` (475, including the 400-line `grin-gateway-ctl` payload it
+generates), plus the artefacts they emit: the vhost, the three header snippets, the rate-limit
+zone conf, the two systemd units, the fail2ban jail, the logrotate stanza, the cron entries and
+every file mode. `07_lib_pool_backup.sh` and `07_lib_pool_wallet.sh` were read for context only
+— their content belongs to §J8 and §J4, which already covered it.
+
+> **Plan correction.** The §J16 brief asks about "Central API reachability from satellites: IP
+> allowlist + shared secret over the nginx HTTPS vhost." **There is no such surface.** The
+> satellite role was removed in the Model C refactor; the only trace left is
+> `pool_satellite_installed()` ([:3163](../../scripts/07_grin_mining_public_pool.sh#L3163)), a
+> detector kept so `Z) Cleanup` can still find a legacy install. Regional **gateways** forward
+> raw stratum over WireGuard and speak no HTTP to the hub at all — §J1 reached the same
+> conclusion from the route table. So there is no satellite shared secret whose entropy or
+> comparison could be wrong. What replaces that question is J16-2 below, and it is worse.
+
+**Nothing here has run on a VPS, and the two things that would prove most of this section —
+`nginx -t` on the generated vhost, and a live response-header read — cannot happen on a Windows
+workstation.** What *was* executed: `bash -n` on all six shell files, `bash -n` on the extracted
+`grin-gateway-ctl` payload, a one-shot `node` check that `node:sqlite`'s `readOnly` option works
+on the pinned v24, a heredoc render of the whole vhost into a scratch file to confirm the shell
+expansion produces the config intended (no bare `include ;`, every block's include resolved), and
+the repo's `npm test`. No server was started; scratch files were deleted (plan rule 5, CLAUDE.md's
+local-process rule).
+
+### Threat actors used in this section
+
+- **Anonymous internet** — reaches `:443`, `:3333` and, on a gateway box, `:3333` there too.
+- **Unprivileged local account on the pool box** — including **`grinpool` itself**, which is
+  where an RCE in the internet-facing backend lands. The whole point of `pool_deroot()` is that
+  this actor is *expected*; anything readable to it is compromised the moment the backend is.
+- **A regional gateway operator** — a third party the pool operator paired. New in this
+  section, and the actor §J1 explicitly wrote out of the *HTTP* threat model because gateways
+  speak no HTTP. They speak stratum, which turns out to be the more valuable channel.
+- **On-box root** — Info only, per plan rule 7.
+
+---
+
+### Findings
+
+### J16-1 — [Medium] The first-admin password is passed in **argv**, twice, so the plaintext sits in `/proc/*/cmdline` for the whole registration — readable by exactly the account a backend RCE lands on — **FIXED 2026-09-03**
+
+**Threat actor: any unprivileged local account, and specifically `grinpool`.**
+
+`pool_setup_admin` read the password with `read -rs` (correct), then handed it straight to two
+`execve()`s:
+
+```bash
+payload=$(node -e "…JSON.stringify({password: process.argv[2]…})" \
+    "$admin_user" "$admin_pass" "${admin_email:-}")      #  argv[2]
+resp=$(curl -sS -X POST … -d "$payload" …)               #  the JSON, password included
+```
+
+`/proc/<pid>/cmdline` is world-readable on a default Linux box — `hidepid` is not set by this
+toolkit or by any supported distro's default — so both processes published the plaintext to
+every local account for as long as they ran. The `node` hop is milliseconds. **The `curl` hop is
+not:** it stays alive for the whole HTTP round trip, and the server side of that round trip is a
+deliberately slow bcrypt hash. That is a comfortable polling window, and nothing about it is
+racy — the operator runs this step on a schedule the attacker can watch (`7) Create admin
+account`, or the guided flow, or any later re-run after a `Z) Cleanup`).
+
+This is the same trap CLAUDE.md sets out for `grin-wallet -p`, and §J8 verified that the *wallet*
+passphrase respects it on both consumers ("the passphrase is not in `ps aux`" — §J8's inventory
+row 9). The admin password did not, and no pass had looked.
+
+**Why it is worth more than "they already have the box".** The reader most likely to be present
+is `grinpool`, and `grinpool` already has `pool.db` — i.e. the **bcrypt hash**. The plaintext is
+strictly more: it is what passes `/api/admin/reauth`, and `freshAdmin` (the step-up +
+mandatory-2FA tier) is, per §J1's own framing, *"the only control that a stolen token does not
+carry."* Every money-moving route sits behind it. So the leak converts "attacker has the backend"
+into "attacker has the step-up gate too", and it is very likely a password reused elsewhere.
+
+**Fix applied** ([:1898–1924](../../scripts/07_grin_mining_public_pool.sh#L1898)). Both hops are
+stdin-fed. `printf` is a bash **builtin**, so the values never reach an `execve()` at all:
+
+```bash
+payload=$(printf '%s\0%s\0%s' "$admin_user" "$admin_pass" "${admin_email:-}" | node -e "…")
+resp=$(printf '%s' "$payload" | curl -sS … --data-binary @- …)
+```
+
+NUL-separated rather than newline-separated so no field can be confused with another and a
+password may contain anything but NUL. Verified against the real builder with a password
+containing a space, a double quote and a colon — `{"username":"bob","password":"p@ss w:rd\"x",
+"email":""}`, byte-identical in shape to what the argv version produced. `bash -n` clean.
+
+---
+
+### J16-2 — [High] A regional gateway is a plaintext-stratum man-in-the-middle **and** the sole source of the miner IP the pool records — so it holds **both** legs of the ownership proof for every miner in its region, and can retarget their payouts — **OPEN (structural; multi-region only)**
+
+**Threat actor: a regional gateway operator.** Not the pool operator, and not an outsider: the
+third party the pool operator deliberately paired and handed a `GRINGW1|…` line to. Under Model C
+that is the intended deployment for anyone with more than one region.
+
+Three facts, each individually documented and correct, combine into something no pass has stated:
+
+1. **The gateway forwards stratum in cleartext.** `gw_render_forwarder` writes `mode tcp` with
+   `server central ${hub_ep} send-proxy-v2` ([07_lib_gateway.sh:392–420](../../scripts/lib/07_lib_gateway.sh#L392)).
+   There is no TLS anywhere on this path — not miner→gateway, not gateway→hub (WireGuard
+   encrypts the *tunnel*, and the gateway is one of its two endpoints). The gateway therefore
+   reads every `login` frame, which carries the miner's Grin address **and their rig password**.
+2. **The gateway chooses the IP the pool records.** Region listeners parse PROXY-protocol v2 and
+   take the client address from it. `stratum-server.js`'s own comment says what that value
+   becomes: *"session.ip … the ownership gate's IP leg and the network map's country"*
+   ([:351–360](../../web/07_mining_pool_public/back-end-pool/lib/stratum-server.js#L351)). §J6-3
+   removed PROXY parsing from the **public** `:3333` listener precisely because an anonymous
+   client asserting its own IP was unacceptable; on a region listener it is asserted by design,
+   because that is the feature.
+3. **Those two values *are* the ownership proof.** On an accepted share the pool stores exactly
+   them: `recordOwnerEvidence(session.grinAddress, session.ip, session.pass, { mayDisplace })`
+   ([stratum-server.js:830–832](../../web/07_mining_pool_public/back-end-pool/lib/stratum-server.js#L830)).
+
+§J3-1 hardened the destination gate to **AND + AGE** — a payout-destination change needs the
+mining-IP leg *and* the rig-password leg, and the proof needs a write-once anchor with age behind
+it. That defeats an attacker who has one leg. It does not defeat a party who supplies both, and a
+gateway supplies both **for every miner routed through it, continuously, with no attack step at
+all** — it need only read what it is already forwarding and write what it is already asserting.
+The age requirement is satisfied by the victim's own honest mining.
+
+**What that buys.** `POST /api/account/:addr/nostr-destination` and the withdrawal path are
+gated on those two proofs (§J1's route review: *"the one that changes where money goes demands
+`requireBothProofs`"*). A hostile gateway can therefore point another miner's payouts at its own
+address, from a laptop, with no admin session and nothing the pool logs as anomalous. The pool's
+own audit row will show the legitimate mining IP, because the gateway asserted it.
+
+**This is not a bug in a line of code.** It is the trust boundary the Model C edge actually has,
+versus the one the design assumes. The design doc's gateway sections describe an edge that is
+"thin — no node, no wallet, no keys, no DB" ([07_lib_gateway.sh:4–9](../../scripts/lib/07_lib_gateway.sh#L4)),
+which is true about *stored* value and misleading about *authority*: the thin box is the origin
+of both authentication facts the money path uses. Grep for "gateway operator", "hostile gateway"
+or "compromised gateway" across this entire audit document before this section — it returns
+nothing.
+
+**Dispositions, for the operator to choose — none applied here (plan rule 3: structural).**
+
+1. **Trust it, and say so.** Treat a regional gateway as fully trusted, equal to the hub for the
+   miners behind it, and pair only boxes you run yourself. This is the honest reading of what is
+   built today and costs nothing but documentation — but it must be written into
+   `script07_design.md` §13 and into the gateway install screen, because the current copy invites
+   the opposite conclusion. It also means the multi-region feature is *not* a partner/franchise
+   feature, which is how a pool operator will naturally read "regional gateway".
+2. **Stop the gateway being the IP oracle for the proof.** Keep PROXY v2 for the network map and
+   the rate limiter, but make the ownership proof's IP leg record the *gateway peer's* tunnel IP
+   rather than the asserted client IP, on region listeners only. The proof then says "this miner
+   was behind gateway nyc", which is weaker per-miner but is a fact the gateway cannot forge about
+   *another* gateway's miners. Cheap; localised to `recordOwnerEvidence`'s call site; and it
+   reduces, not eliminates — the gateway still reads the password.
+3. **Take the password leg away from the wire.** The rig password is a shared secret sent in
+   cleartext on every login; nothing can fix that while stratum is plaintext. A per-account
+   *proof token* the miner sets on the account page (never sent over stratum) would replace it as
+   the second leg. That is a product change, and it is the only disposition that actually closes
+   this.
+4. **Interim, and cheap:** the account page already knows when a destination changed. Notify on
+   change (the alert rails exist, §J8-3/§J13-5) and make the destination change visible in the
+   miner's own payout history, so a retarget is detected rather than prevented.
+
+**Single-box and hub-with-no-gateways pools are unaffected** — the public `:3333` listener does
+not parse PROXY at all (§J6-3a), so `session.ip` there is the real socket peer.
+
+---
+
+### J16-3 — [Medium] The gateway's HAProxy — the process terminating anonymous internet TCP on a box that holds a WireGuard key into the pool — ran as **root** for its entire life — **FIXED 2026-09-03**
+
+**Threat actor: anonymous internet.**
+
+The generated `haproxy.cfg`'s `global` section carried `log` and `maxconn` and nothing else — no
+`user`, no `group`, no `chroot` — and the generated unit carried no `User=` and no sandbox
+directives at all:
+
+```
+[Service]
+Type=simple
+ExecStartPre=/usr/sbin/haproxy -c -f …
+ExecStart=/usr/sbin/haproxy -f … -db
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=65535
+```
+
+haproxy drops privileges only when told to, and it was not told to, so it stayed root. The
+distro's own `/etc/haproxy/haproxy.cfg` ships `user haproxy` / `group haproxy` — but this is a
+**dedicated instance** pointed at its own config file, deliberately not touching the distro's
+(comment at [07_lib_gateway.sh:135](../../scripts/lib/07_lib_gateway.sh#L135)), so it inherited
+none of that.
+
+This is the exact argument `pool_deroot()` makes for the hub, applied to the box where it was
+never applied. The hub's comment states it plainly: *"the backend parses untrusted input from the
+public internet on TWO surfaces … root here turned any RCE into hub-WG-key + node-secret +
+LE-key compromise"* ([:614–617](../../scripts/07_grin_mining_public_pool.sh#L614)). The gateway
+box has one of those surfaces and one of those keys: `/opt/grin/gateway/wg_private.key` and
+`/etc/wireguard/wg-grinpool.conf` are the credential that puts a peer inside the pool's tunnel,
+and per J16-2 a party inside that tunnel is trusted for every miner in the region.
+
+Nothing needed root: the stratum port is >1024, so root is unnecessary even at bind time.
+
+**Fix applied.**
+- `global` now emits `user`/`group` ([:395–400](../../scripts/lib/07_lib_gateway.sh#L395)),
+  resolved at render time to `haproxy` where that account exists and `nobody` otherwise —
+  emitting a `user` line naming a non-existent account would make `ExecStartPre`'s `-c` fail and
+  take the whole service down, which is a worse outcome than the bug. `chroot` deliberately
+  omitted: it breaks `log /dev/log`.
+- The unit gains `NoNewPrivileges=yes`, `ProtectSystem=full`, `ProtectHome`, `PrivateTmp`,
+  `ProtectKernelTunables`, `ProtectControlGroups`, `RestrictSUIDSGID` and
+  `RestrictAddressFamilies` ([:158–175](../../scripts/lib/07_lib_gateway.sh#L158)).
+  `NoNewPrivileges` is safe here and is *not* safe on the hub unit — the hub deliberately omits
+  it because the panel's pairing path runs `sudo grin-gateway-ctl`; a gateway never shells out.
+- **Deliberately stopped short of `ProtectSystem=strict` and `PrivateDevices=yes`.** Both are
+  the right end state, and both can take away `/dev/log` or a config read in ways that only show
+  up on a box. This unit has never started anywhere. §J17 should tighten once a real gateway has
+  been seen running — noted in the unit's own comment so the next reader knows it is a staged
+  decision, not an oversight.
+
+`bash -n` clean.
+
+---
+
+### J16-4 — [Medium] The app's admin IP allowlist is bound to a config key **nothing has ever written**, and the panel's allowlist is memory-only — so the gate an operator sets evaporates on the next restart, and setting one entry locks every other admin out until it does — **OPEN**
+
+**Threat actor: the system, plus whoever benefits from a gate silently being off.** This is
+§J1's handoff — *"the two-allowlist split (nginx `$admin_rules` from `pool.json:admin_allowlist`
+vs the app's runtime `IpFilter`) is a deployment-shaped question"* — answered.
+
+There are **three** admin allowlists, and they do not connect:
+
+| # | Surface | Written by | Read by | State |
+|---|---|---|---|---|
+| 1 | `pool.json` → `admin_allowlist` | the shell, hand-edit ([:337](../../scripts/07_grin_mining_public_pool.sh#L337), [:1157](../../scripts/07_grin_mining_public_pool.sh#L1157)) | nginx `$admin_rules` on `location /admin/` + `/api/admin/` | **works**, applied only when `4) Setup nginx` is re-run |
+| 2 | `config.admin_ip_allowlist` | **nobody** | `new IpFilter({ allowlist: config.admin_ip_allowlist \|\| [] })` ([index.js:747](../../web/07_mining_pool_public/back-end-pool/index.js#L747)) | permanently `[]` on every installed pool |
+| 3 | `POST /api/admin/security/ip-allowlist/add` | the panel, `freshAdmin` ([index.js:5301](../../web/07_mining_pool_public/back-end-pool/index.js#L5301)) | the same `IpFilter` | **in-memory only** |
+
+Row 2 is a **name mismatch**: the shell writes `admin_allowlist`, the app reads
+`admin_ip_allowlist`. A `grep -rn 'admin_ip_allowlist' scripts/ lib/config.js` returns the reader
+and no writer. (Note this is *not* §J1-5, which is about the DB **settings** keys
+`access.admin_ip_allowlist` / `admin_ip_blacklist` being dead. Those are a fourth thing. Three
+different surfaces now use two spellings of the same idea and none of them reach the one that
+works.)
+
+Row 3 is worse than dead, because it half-works:
+
+- `addAllowed()` pushes to `this.allowlist` and re-parses. There is no write to `pool.json`, no
+  write to `pool_settings`, no persistence of any kind
+  ([ip-filter.js:230–240](../../web/07_mining_pool_public/back-end-pool/lib/ip-filter.js#L230)).
+- The middleware's rule is *"if the allowlist is non-empty, deny anything not on it"*
+  ([ip-filter.js:51–60](../../web/07_mining_pool_public/back-end-pool/lib/ip-filter.js#L51)) —
+  and unlike the nginx rules, which always keep `allow 127.0.0.1; allow ::1;`, there is **no
+  implicit localhost entry**. So the first `add` an operator makes flips the app-side gate from
+  *off* to *only this one IP*, immediately, for every other admin and for the break-glass
+  loopback path.
+- On the next `systemctl restart` the list is empty again and the gate is gone. `9) Deploy new
+  code` restarts the service as its last step, so an ordinary code update silently disarms it.
+
+The net effect is a control that **reads as configured and is not**. `GET
+/api/admin/security/ip-filter-status` returns the live list, so the panel truthfully shows what
+is in memory — which is precisely why an operator would believe it survives.
+
+**Not fixed here** — the change lands in `index.js` / `lib/ip-filter.js`, another session's
+files, and the choice between the three shapes is a product decision:
+
+1. **Delete rows 2 and 3.** Make nginx's `admin_allowlist` the single admin network gate,
+   remove the panel's allowlist UI, and keep `IpFilter` for the blacklist + `tempBan` auto-ban
+   it actually does well. Smallest surface, honest, and one place to look. **Recommended.**
+2. **Make rows 1 and 3 the same list.** Have the panel write `pool.json:admin_allowlist`, and
+   have the app load it into `IpFilter` under that name — one list, defence in depth at both
+   layers, but the panel then needs an `nginx -s reload` path it does not have, and an operator
+   can lock themselves out at *two* layers with one click.
+3. **Persist row 3 only, and always allow loopback.** Keep the panel list app-side, store it in
+   `pool_settings`, and hard-code a `127.0.0.1`/`::1` allow the way the nginx rules do so the
+   break-glass path and the `_authcheck` subrequest cannot be cut off.
+
+Whichever is chosen, the panel must stop presenting an unpersisted list as a saved setting.
+
+**Cross-check for §J17:** the same three-way split exists for the blacklist
+(`config.admin_ip_blacklist`, also never written), so a **permanent** ban an admin adds in the
+panel is also lost on restart. Only the automatic `tempBan` — which is in-memory by design and
+documented as such — behaves as advertised.
+
+---
+
+### J16-5 — [Low] The vhost is symlinked into `sites-enabled` **before** it is tested, and left enabled when the test fails — so one bad `admin_allowlist` entry takes **every site on the box** down at the next reboot — **FIXED 2026-09-03**
+
+**Threat actor: none — this is an availability trap, and the operator springs it.** Reported
+because the blast radius is the whole box, not the pool.
+
+Both write paths did the same thing:
+
+```bash
+ln -sf "$POOL_NGINX_CONF" "$sites_enabled" 2>/dev/null || true
+nginx -t 2>&1 && systemctl reload nginx \
+    || { error "nginx config test failed. Check $POOL_NGINX_CONF"; return 1; }
+```
+
+On a failed test the function prints an error and returns — and the broken file stays symlinked
+into `sites-enabled`. The **running** nginx is unaffected (the reload never happened), so nothing
+looks wrong. The next `nginx` **start** is what fails, and that is a reboot, or a `systemctl
+restart` from any other toolkit script, or certbot's renewal hook. nginx refuses to start with a
+config error, so every vhost on the box goes down together — the same failure shape memory
+`project_fidelius_wg_dns01_access` records for a down `wg0`, from a different cause.
+
+The likely trigger is not a generator bug. `admin_allowlist` is a hand-edited `pool.json` string
+split on commas and spliced straight into `allow ${_entry};`
+([:1163–1168](../../scripts/07_grin_mining_public_pool.sh#L1163)) with no validation, so a
+stray character in an operator's CIDR list is enough. (The splice itself is on-box-root input and
+therefore Info under plan rule 7 — the *deferred, box-wide* failure is what makes it worth a
+finding.)
+
+The same lines also swallowed the symlink's own failure: `2>/dev/null || true` meant a failed
+`ln` left `nginx -t` passing — because it was testing *without* this vhost — and
+`success "nginx configured for https://…"` printing over a site that was never enabled. That is
+the errexit-suppression class CLAUDE.md and memory `project_lib_errexit_suppression` describe,
+in the parent script rather than a lib.
+
+**Fix applied** at both sites ([:1596–1606](../../scripts/07_grin_mining_public_pool.sh#L1596)
+for the HTTP bootstrap, [:1655–1682](../../scripts/07_grin_mining_public_pool.sh#L1655) for the
+SSL vhost). `ln -sf` is now guarded and fatal. On a failed `nginx -t` the symlink is removed
+again **when this run created it**; when the vhost was already enabled the previous symlink is
+left in place (removing it would take a *working* pool offline to protect against a reboot) and
+the operator is told explicitly that the on-disk file is invalid and must be fixed before any
+restart.
+
+---
+
+### J16-6 — [Low] The gateway accepts a `GRINGW1|` pairing string with only its **port** validated, so one field of an out-of-band text line sets the box's `AllowedIPs` — **FIXED 2026-09-03**
+
+**Threat actor: whoever hands the gateway operator their pairing line.** The pool operator, or
+anyone impersonating them — the string is explicitly designed to travel out of band ("Copy the
+key above to the pool operator… Both hand back one `GRINGW1|…` line").
+
+`gw_apply_pairing_string` checked the tag, checked six fields for non-emptiness, and checked
+`port` was digits. Every value then landed verbatim in `/etc/wireguard/wg-grinpool.conf`.
+
+The field that matters is `hubip`, which renders as `AllowedIPs = ${hub_ip}/32`. WireGuard
+accepts a **comma-separated list** there, so `0.0.0.0/0, 10.66.66.1` renders as a syntactically
+valid catch-all, and `wg-quick up` then installs a default route into the tunnel. Combined with
+`pub` and `ep` from the same line (also unvalidated, also attacker-chosen), the gateway box's
+**entire egress** goes to a WireGuard peer of the sender's choosing, with a working handshake. It
+is a noisy attack — the same field feeds `server central ${hubip}:${port}`, so haproxy's `-c`
+check fails and the forwarder does not start — but a dead forwarder on a freshly-paired box reads
+as a pairing problem, which is exactly what the operator has been told to expect at that step.
+
+The asymmetry is the tell: the **hub's** helper validates every input it takes before touching
+anything — `--net` against an enum, `--region` against `^[a-z0-9-]{2,12}$`, `--pubkey` against
+the 44-char WireGuard wire format, and its header says *"validates ALL inputs itself (never
+trusts the caller, even root)"* ([07_lib_gwctl.sh:34](../../scripts/lib/07_lib_gwctl.sh#L34)).
+The edge, which is the side receiving a string from someone else, validated one field.
+
+**Fix applied** ([:238–255](../../scripts/lib/07_lib_gateway.sh#L238)): per-field shape checks
+mirroring what `grin-gateway-ctl` actually emits — region against the hub's own regex, hub key
+against the same 44-char base64 form, endpoint as `host:port`, both tunnel IPs as a **single**
+dotted-quad (optionally `/32` for the gateway's own), port range-checked. Each failure names the
+offending field rather than falling through to the generic "not a valid GRINGW1 string", so a
+transcription error is diagnosable.
+
+---
+
+### J16-7 — [Low] A failed `wg genkey` leaves a zero-byte private key that the idempotency check reports as present **forever**, and the operator is told the keypair was generated — **FIXED 2026-09-03**
+
+**Threat actor: none — a silent-failure trap.** Reported because the hub side already fixed this
+exact bug and the edge kept it, and because the failure mode is "everything looks paired and no
+handshake ever happens", which is expensive to debug across two boxes.
+
+```bash
+if [[ ! -f "$GW_DIR/wg_private.key" ]]; then
+    ( umask 077; wg genkey > "$GW_DIR/wg_private.key" )
+    wg pubkey < "$GW_DIR/wg_private.key" > "$GW_DIR/wg_public.key"
+    success "Generated WireGuard keypair."
+fi
+```
+
+The redirect creates the file **before** `wg genkey` runs, so a failure leaves a 0-byte private
+key. `-f` then says "present" on every subsequent run, so it is never regenerated; `wg pubkey`
+on empty input leaves an empty public key; and the install screen prints the (blank) key with
+`success`. Nothing is guarded, and this lib runs with errexit suppressed for its whole body
+(`gw_install || true` in `pool_gateway_loop`, memory `project_lib_errexit_suppression`), so the
+`set -euo pipefail` at the top of the entry script protects none of it.
+
+The hub learned this and wrote the reason down: *"-s (non-empty), not -f: a truncated key file
+would otherwise be 'present' and every later pairing string would carry an empty hub pubkey"*
+([07_lib_gwctl.sh:160](../../scripts/lib/07_lib_gwctl.sh#L160)), and it also repairs a missing
+public half on the "kept" path. The gateway had neither.
+
+**Fix applied** ([:118–143](../../scripts/lib/07_lib_gateway.sh#L118)): `-s` instead of `-f`, an
+explicit non-empty check after `genkey`, both commands `||`-guarded with `return 1`, and the
+hub's public-half repair branch added. While in the same file, the neighbouring unguarded writes
+were closed too — `gw_render_wireguard` now fails loudly if `$GW_DIR/wg_private.key` is empty, if
+the config write fails, or if the `chmod 600` on the tunnel key fails
+([:390–402](../../scripts/lib/07_lib_gateway.sh#L390)), and `gw_render_forwarder`'s
+`cat > "$GW_HAPROXY_CFG"` is guarded ([:392](../../scripts/lib/07_lib_gateway.sh#L392)). The last
+one matters most: an unwritten forwarder config used to print `info "Wrote $GW_HAPROXY_CFG"` and
+then fail at `ExecStartPre`.
+
+---
+
+### J16-8 — [Low] `_pool_db_scalar` opens the miner database **read-write, as root, on every menu render**, and unlike its sibling never hands the WAL sidecars back — **FIXED 2026-09-03**
+
+**Threat actor: unprivileged local account (a brief 0644 window), and the system (a durable
+lockout).**
+
+`_pool_db_scalar` is a `SELECT` helper. `_pool_step_done 7` calls it to draw the ✓ next to
+*Create admin account*, so it runs **every time any Script 07 menu is drawn**, as root, against a
+database the de-rooted service owns. `DatabaseSync` opens read-write by default, and a read-write
+open of a WAL database **creates** `pool.db-wal` and `pool.db-shm` when they are absent — root
+owned, `0644` under the default umask. That is the same disclosure §J8-1 closed, on files §J8-1's
+own note calls out as carrying *"the most recent writes verbatim"*; `lib/db.js` tightens them only
+at **service start**, so anything created while the service is stopped stays `0644` until the next
+start. And if that `node` is interrupted the root-owned sidecars persist, after which the
+`grinpool` service cannot open its own database — which surfaces as "attempt to write a readonly
+database" after nothing but a menu being drawn.
+
+The sibling root-write at the region-card INSERT already knows this and chowns the three files
+back ([:2622–2626](../../scripts/07_grin_mining_public_pool.sh#L2622)). The far more frequent
+caller did not.
+
+**Fix applied** ([:391–404](../../scripts/07_grin_mining_public_pool.sh#L391)):
+`new DatabaseSync(path, { readOnly: true })`. A read-only open has no business creating either
+sidecar, so the repair is to stop asking for write access rather than to add a third chown.
+Verified the option exists and works on the pinned runtime with a one-shot `node` call against a
+scratch DB (node v24.14.1 — `readOnly open OK: { 'COUNT(*)': 1 }`); scratch DB deleted.
+
+While there, **§J8-1's handoff item 3 is applied**: the region-card helper now `chmod 600`s the
+three files beside the `chown` it already did
+([:2630](../../scripts/07_grin_mining_public_pool.sh#L2630)).
+
+---
+
+### J16-9 — [Low] The `www` → apex HTTPS redirect is a **server block**, so it inherited nothing — it was the one response on the box with no HSTS, no `nosniff` and no `X-Frame-Options` — **FIXED 2026-09-03**
+
+**Threat actor: an active network attacker on a first visit to `www.<domain>`.**
+
+`$www_https_block` emitted `listen`, `server_name`, the two cert paths, `$ssl_extra` and a
+`return 301`. It is a **separate `server`**, not a `location`, so the §I1 include rule — which
+every reader applies to `location` blocks — never got applied to it, and the block inherited
+nothing from the apex server below.
+
+HSTS is scoped **per host**. `www.<domain>` is a different host to the browser, and this vhost
+deliberately ships HSTS **without `includeSubDomains`** (with a good, written reason — the
+`subdomain` key is frequently the operator's apex, and pinning every sibling for a year is a
+blast radius the toolkit should not choose). The two facts combine: the www name was never
+pinned, no matter how long the apex had been.
+
+**Fix applied** ([:1279](../../scripts/07_grin_mining_public_pool.sh#L1279)): `include
+$hdr_common;` plus `server_tokens off;` in the www block. `add_header … always` applies to a
+`301`, so the redirect carries the full common set.
+
+**A second bug found while applying it, and worth its own line:** `$www_https_block` is assembled
+inside a double-quoted assignment at [:1210](../../scripts/07_grin_mining_public_pool.sh#L1210),
+while `hdr_common` was declared at what was line 1250 — **forty lines later**. Adding the include
+naively would have expanded `$hdr_common` to the empty string and emitted a bare `include ;`,
+which is a hard `nginx -t` failure that (before J16-5) would have been left symlinked. The four
+snippet-path `local`s were moved above the first block that references one
+([:1200–1208](../../scripts/07_grin_mining_public_pool.sh#L1200)), with a comment saying why they
+live there. This is the kind of thing that cannot be caught by reading the *generated* config,
+only by rendering it — see Verification.
+
+---
+
+### J16-10 — [Low] The pool vhost is the only toolkit vhost with no `server_tokens off`, and every rate-limit rejection answers **503** — the same status as a dead backend — **FIXED 2026-09-03**
+
+**Threat actor: anonymous internet (reconnaissance); and the operator, who cannot tell a throttle
+from an outage.** Closes **§J11-6's nginx half**.
+
+Two one-line gaps in the same block:
+
+1. **`server_tokens off`.** `grep -rn server_tokens scripts/` returns 051, 051x and 084 and not
+   07. §J11-6 fixed the Express half (`x-powered-by` disabled) and handed the nginx banner here.
+   With `server_tokens on` (the default) nginx puts its exact version in `Server:` and in its own
+   error pages — including the pages the rate limiter serves, which are the responses an attacker
+   probing the limits will see most of.
+2. **`limit_req_status`.** nginx's default rejection status for `limit_req` is **503**, which is
+   also what a proxied location returns when the backend is down. So in the access log, and to
+   the front end, "you are being throttled" and "the pool is offline" are the same event. The
+   app's own limiter returns **429**, which is what `Auth.read` / `public-shell.js` were built to
+   understand after §J15-2 — and §J12-3's whole finding was that a sustained 429 on `robots.txt`
+   reads as "do not crawl", which the 503 form reads as *worse*. Script 02 already sets
+   `limit_req_status 429` on its own vhost, so this is a consistency gap as much as a bug.
+
+**Fix applied** ([:1400–1407](../../scripts/07_grin_mining_public_pool.sh#L1400)): both
+directives on the apex `:443` server; `server_tokens off` also on the www block (J16-9). Not
+added to the `:80` redirect server — it emits a bare 301 and no rate limit, and the version
+banner there is disclosed by every other vhost on the box anyway; adding it is harmless and can
+ride along the next time that block is touched.
+
+`proxy_hide_header X-Powered-By` was **not** added, deliberately: §J11-6 removed the header at
+the source, so hiding a header the app no longer emits would be a control with nothing to do and
+a comment that goes stale the moment someone re-enables it.
+
+---
+
+### J16-11 — [Low] The public page CSP carried none of `frame-ancestors` / `base-uri` / `form-action` / `object-src`, on the origin that serves the withdrawal form — **FIXED 2026-09-03 (§J16's call, answering §J14 and §J15)**
+
+**Threat actor: an attacker holding a live admin token (§C3), via the operator-HTML sinks §B
+accepts.**
+
+Both §J14 and §J15 handed this over as an open question in the same words — *"`$hdr_page` still
+sets no `frame-ancestors`, `base-uri`, `form-action` or `object-src`, which only `$hdr_admin`
+does … that is §J16's call, not this session's."* **The call is yes**, and for a stronger reason
+than symmetry with the admin panel.
+
+§B accepts, by design, that operator-authored HTML reaches the public pages (`custom_head_html`,
+`custom_body_html`, ad `html_code`, CMS `body_html` — five sinks, tier settled in §J1-1). The
+public origin is also the one that serves `account-settings.html`: the withdrawal form and the
+rig-password box. Each of the four directives closes something `default-src 'self'` does not:
+
+- **`base-uri 'self'`** — an injected `<base href="https://evil/">` re-points every *relative*
+  URL on the page, including the page's own `/api/account/…` calls. `default-src` does not
+  constrain `<base>` at all. On a page whose relative fetches carry a payout destination, this
+  is the sharpest of the four.
+- **`form-action 'self'`** — stops a form being re-targeted off-origin. Does **not** fall back
+  to `default-src`, so its absence was a real hole rather than a redundancy.
+- **`object-src 'none'`** — `default-src` covered it as `'self'`; `'none'` is strictly tighter
+  and nothing on these pages uses `<object>`/`<embed>`.
+- **`frame-ancestors 'none'`** — the CSP form of the `X-Frame-Options: DENY` already in
+  `$hdr_common`. Unlike XFO it is honoured for nested frames and by browsers that have dropped
+  XFO entirely.
+
+**Compatibility verified mechanically before applying, not by eye:** across all thirteen pages
+and every file under `public_html/js/`, there are **zero** `<base>` tags, **zero**
+`<object>`/`<embed>`, and **zero** `<iframe>`. The only `<form>`s are the three on `login.html`,
+all `onsubmit=`-driven with no `action` attribute (so they submit to the current URL — `'self'`
+by definition). Ad-network iframes were already blocked by the existing `default-src 'self'`, so
+nothing regresses there.
+
+**Fix applied** ([:1357](../../scripts/07_grin_mining_public_pool.sh#L1357)), with the reasoning
+in the snippet's own header comment. The analytics and Google Fonts origins are untouched.
+`scripts/test-admin-panel.js` §7 gains two assertions — that `$hdr_page` now carries all four,
+and a **control** that it still allowlists the analytics + font origins, so a future tightening
+cannot quietly break every operator who switched a provider on. 41/41, up from 39.
+
+---
+
+### J16-12 — [Info] §J8's handoff item 2 — "add `UMask=0077` to the systemd unit" — must **NOT** be applied: it would 403 every uploaded logo and CMS image
+
+**Threat actor: n/a.** Recorded because a handoff followed without reading is worse than one
+refused with a reason, and this one contradicts the reasoning of the finding that issued it.
+
+§J8-1 handed §J16 three shell items. Items 1 and 3 are applied (see J16-8 and *Changed this
+session*). **Item 2 is refused.** §J8-1's own analysis explains why, about the Node-side
+equivalent:
+
+> *"Deliberately not a process-wide `umask(0o077)`: `fs.writeFileSync`'s `mode` is also masked, so
+> a global umask would silently turn asset-manager's explicit `0o644` into `0600` and 403 every
+> white-label logo."* — and the same sentence is written into `lib/db.js`'s own comment
+> ([:35–37](../../web/07_mining_pool_public/back-end-pool/lib/db.js#L35)).
+
+`UMask=` in a systemd unit sets the umask of the service process. Every `fs.writeFileSync` in
+that process inherits it. So `UMask=0077` does *exactly* what §J8-1 correctly refused to do in
+JavaScript, only from one directory further out: `asset-manager.js:120` and the CMS media writer
+at `index.js:2935` both pass an explicit `{ mode: 0o644 }` **because nginx has to read those
+files off disk** through the `/custom/` and `/uploads/` `alias` blocks. Under `UMask=0077` they
+land `0600 grinpool:grinpool`, nginx (`www-data`/`nginx`) cannot read them, and every white-label
+logo, favicon, OG image and CMS cover image 404s — after an upload that reported success.
+
+**The disclosure the umask was meant to close is already closed** without it: `restrictDbFileModes`
+chmods `pool.db`/`-wal`/`-shm` to `0600` on every start (§J8-1's code half), J16-8 stops the menu
+creating root-owned sidecars, and the shell half applied here narrows the app directory from
+`o+rx` to `o+x` so it is no longer listable. That is the correct set of controls: tighten the
+files that must be secret, keep readable the ones that must be public, and never do it with a
+blanket that cannot tell the difference.
+
+If a per-directory default is ever wanted, the right tool is a POSIX default ACL on
+`custom_assets/` and `uploads/` (`setfacl -d -m o::rx`) alongside a tight `UMask=`, not the umask
+alone. Not built; not needed today.
+
+---
+
+### J16-13 — [Info] Verified correct, with evidence
+
+Read and confirmed, not assumed. Listed because a later reader should not have to re-derive them.
+
+**1. The header section, re-read as one unit — the plan's headline ask.** There are now three
+snippets and **four** blocks that declare an `add_header` of their own. All four re-include:
+
+| Block | Declares | Re-includes |
+|---|---|---|
+| `location /admin/` | `Cache-Control: no-cache` | `$hdr_admin` ✓ (§J14-4's change, correct) |
+| `location /` | `Cache-Control: no-cache` | `$hdr_page` ✓ |
+| `location /uploads/` | sandbox CSP + `Cache-Control` | `$hdr_common` ✓ |
+| `location /custom/` | sandbox CSP + `Cache-Control` | `$hdr_common` ✓ |
+
+Every other `location` declares no header and correctly inherits the server-level
+`include $hdr_page`. The two `alias` blocks correctly take `$hdr_common` and **not** `$hdr_page`
+— they serve operator-uploaded files and must replace the page CSP with the sandbox one, which
+is the whole reason there were two snippets before there were three. `$hdr_common` is included by
+both other snippets rather than duplicated, so `X-Frame-Options`, `nosniff`, `Referrer-Policy`
+and HSTS have exactly one definition. The HSTS comment's reasoning for omitting
+`includeSubDomains` is sound and should not be "tidied" — see J16-9 for the one consequence it
+had. `/etc/nginx/snippets/` is not auto-included on Debian or RHEL, so none of this leaks into
+another vhost, and `Z) Cleanup` removes all three snippets (asserted by `test-admin-panel.js` §7).
+
+**2. Bind addresses — nothing else listens publicly, and the port roles are not collapsed.**
+`HOST=127.0.0.1` in the unit; `config.host || process.env.HOST || '127.0.0.1'`
+([config.js:53](../../web/07_mining_pool_public/back-end-pool/lib/config.js#L53)) and
+`pool_ensure_defaults` never seeds a `host` key, so the env value is what `app.listen` gets. Five
+distinct roles on five distinct ports: public stratum `3333` on `0.0.0.0` (intended), region
+listeners on `region_listen_host` = the hub's tunnel IP, node stratum upstream `127.0.0.1:3416`,
+Central API `127.0.0.1:8080` (`8090` testnet), WireGuard `51820/udp` (`51821`). The only port the
+installer opens in a firewall is the wg one, in `init-server`; region ports are deliberately left
+closed because they bind the tunnel address. Nothing shares a port with anything.
+
+**3. The `isLocalRequest` invariant §J2 asked me to protect is intact.** Every proxied `/api`
+location sets `X-Forwarded-For $proxy_add_x_forwarded_for` — all eleven of them, including the
+four SEO paths §J12-3 fixed and `= /admin/_authcheck`. With `trust proxy = 'loopback'` that
+appends the real client on the right, so `req.ip` never resolves to `127.0.0.1` for a proxied
+request and the register-captcha bypass stays on-box-only. **Treat that line as security-relevant
+in every future edit**, as §J2 asked.
+
+**4. Rate-limit zones are correct and globally unique.** Five zones, all created through
+`nginx_ensure_rate_limit_zones` into `/etc/nginx/conf.d/script07-${POOL_SERVICE}.conf` — never
+inline, per CLAUDE.md. Names are `${POOL_SERVICE}_{auth,api,static,captcha,admin}`, i.e.
+`grin-pool-manager_auth` and its testnet `-testnet` sibling; `grep -rn 'zone=' scripts/` shows no
+collision with Script 04's `grin_api`/`grin_conn`, Script 02's `grin_req`, or 051/051x's
+`grinwallet_*`/`grinxp_*`. Mainnet and testnet pools on one box get separate zones, separate
+snippets, separate vhosts and separate conf files.
+
+**5. The Cloudflare real-IP path is safe even when the answer is wrong.** The prompt defaults to
+**yes**, so an operator pressing Enter gets the snippet whether or not they use Cloudflare. That
+is harmless: `real_ip_header CF-Connecting-IP` only applies to peers matching a
+`set_real_ip_from` entry, and the snippet contains nothing but Cloudflare's published ranges,
+fetched fresh at write time with the existing file kept as a fallback if the fetch fails
+([nginx_shared_helpers.sh:526–558](../../scripts/lib/nginx_shared_helpers.sh#L526)). A direct
+connection from a non-Cloudflare address cannot spoof its IP through it.
+
+**6. `ReadWritePaths` does not widen what a compromised backend can reach.** The unit grants
+`/etc/wireguard` and `$(dirname "$POOL_CONF")` = `/opt/grin/conf`. Both are still governed by
+filesystem permissions inside the namespace: `/etc/wireguard` is `chmod 700 root:root`
+(`pool_ensure_wg_prereqs`) so `grinpool` cannot write it directly — only `sudo grin-gateway-ctl`
+can, which is the point, and that helper validates every input. `/opt/grin/conf` is `0755
+root:root`, so `grinpool` can rewrite the one file it owns (`pool.json`, `0600`) and cannot
+create, unlink or modify any other product's config there. `/opt/grin/conf/wg{,-testnet}/`, which
+holds the hub WireGuard private key, is `chmod 700 root:root` and not traversable by `grinpool`.
+
+**7. The scoped sudoers is genuinely scoped.** One line, one absolute path, no wildcard, no
+arguments: `grinpool ALL=(root) NOPASSWD: /usr/local/bin/grin-gateway-ctl`, written `0440` and
+`visudo -c`-validated with the file removed on failure
+([:520–528](../../scripts/07_grin_mining_public_pool.sh#L520)). The target is `root:root 0755`,
+so `grinpool` cannot rewrite the thing it is allowed to run as root. The helper's own argument
+parser accepts exactly `--net`/`--region`/`--pubkey` and rejects anything else outright, validates
+all three against enums/regexes, computes `AllowedIPs` internally so `0.0.0.0/0` is
+unrepresentable, and re-checks `EUID == 0`. This is the right shape for a privileged helper and
+it is worth saying so explicitly, because it is the one place the de-rooting hands power back.
+
+**8. The de-rooted unit's remaining shape is deliberate and documented.** `User=grinpool`,
+`ProtectSystem=strict`, `ProtectHome`, `PrivateTmp`, `RestrictSUIDSGID`. `NoNewPrivileges` is
+**absent on purpose** (it would break the `sudo grin-gateway-ctl` path) and the unit says so.
+`Restart=on-failure` with `RestartSec=5`. No `MemoryMax`/`TasksMax` — worth adding one day, but a
+Node process that OOMs is not the risk this pass is about.
+
+**9. `admin_allowlist` shipping open by default — §J16's decision: keep it, and the reason has
+changed.** The plan asked me to rule on this. **Keep the open default.** The written rationale
+(*"a fresh install is never locked out while there is no adoption yet for anyone to attack"*) is
+sound on its own, and the thing that made it dangerous is gone: it was dangerous because it left
+the `/api/auth/register` TOCTOU remotely winnable, and **§J2-2 closed that race in code** on
+2026-08-26. A network gate is now defence in depth over a login surface that has captcha, per-
+`(username,IP)` lockout, optional mandatory 2FA, an auto-ban and a fail2ban jail — not the only
+thing standing between an attacker and admin. Two riders, both for §J17's launch notes rather
+than for code: the gate covers `/admin/` and `/api/admin/` only, so **`/api/auth/*` stays
+globally reachable even when the allowlist is set** — which is correct (the login door must open
+for the allowlisted IPs and nginx cannot tell them apart before authentication) but is *not* what
+"the panel locks to localhost + those entries only" implies; and per J16-4 the app-side gate an
+operator might reach for instead does not persist.
+
+**10. Two `chmod`-adjacent things that are already right.** `pool_fix_web_perms` normalises the
+docroot to dirs `755` / files `644` and chowns to `www-data` — the `chown` silently no-ops on
+RHEL (where nginx runs as `nginx`), but the modes alone are sufficient there, so the docroot
+works on both families. And `pool_write_conf_key` does `chmodSync(…, 0o600)` on every write, so
+`pool.json` — which holds `jwt_secret` — is never briefly world-readable.
+
+---
+
+### J16-14 — [Info] Confirmed still open in this file, and not re-reported
+
+Three inherited items were re-read this session and remain exactly as the sessions that found
+them described. Listed so §J17 does not have to go looking.
+
+1. **§J7-1's weekly `VACUUM` cron** is unchanged at
+   [:2128–2131](../../scripts/07_grin_mining_public_pool.sh#L2128):
+   `0 3 * * 0 root /usr/bin/sqlite3 $POOL_APP_DIR/pool.db "VACUUM;"`. §J7 handed §J16 "the cron"
+   and asked for stop-service-around-it or `auto_vacuum=INCREMENTAL`. **Not changed here**,
+   because §J7-1 is explicit that the repair is paired with a `busy_timeout` decision that is an
+   operator trade-off, not a patch — a 5 s wait blocks share submission for every connected
+   miner, and picking one number for both a money write and a dashboard query is a choice §J7
+   deliberately left open. Changing the cron alone would move the problem, not fix it. One rider
+   this pass adds: the cron runs as **root** against a `grinpool`-owned WAL database with no
+   `chown`/`chmod` afterwards, so it is a third instance of the J16-8 / §J8-1 pattern — whichever
+   shape is chosen must include the ownership repair.
+2. **`$POOL_LOG`'s logrotate stanza is still a no-op.** The unit has no `StandardOutput=append:`,
+   so the service logs to the journal; the only writer of `$POOL_LOG` is the `VACUUM` cron's
+   stdout, and `postrotate systemctl kill -s USR2` means nothing to a Node process. §J8-7 spotted
+   it. It is harmless (an unrotated file nothing writes) and it is misleading (an operator
+   running `L) View logs` sees an almost-empty file and concludes the pool logs nothing). Fixing
+   it properly means deciding between journal and file logging, which is a §J17 operations
+   question, not a security one.
+3. **Node.js is installed by `curl -fsSL https://deb.nodesource.com/setup_24.x | bash -` as
+   root** ([:465, :471](../../scripts/07_grin_mining_public_pool.sh#L465)) — §J13's handoff (a).
+   §J16's call: **keep it.** It is NodeSource's only documented install path, it is TLS-pinned to
+   a vendor the operator is already trusting for the runtime itself, and the alternatives
+   (vendoring a keyring + apt source by hand) trade one trust root for the same trust root plus a
+   maintenance burden and a staleness failure mode. The version choice (24) is correct against
+   `engines` and required by `node:sqlite`. Worth stating so it is a decision on the record
+   rather than an unexamined line.
+
+---
+
+### Handoffs
+
+- **§J17 (operational gate)** — six, and four of them are the only way anything in this section
+  gets proven. (1) **`nginx -t` on a real box is the first thing to run**, before anything else
+  in this section is believed: every header claim, the three snippets, the new `include` in the
+  www block, `limit_req_status` and the four new CSP directives are all *rendered* configuration
+  that has never been parsed by nginx. Follow it with `curl -sI https://<pool>/`,
+  `https://www.<pool>/`, `https://<pool>/admin/` and `https://<pool>/uploads/<a real file>` and
+  compare the four header sets — that single sequence settles §I1, §J14-4, J16-9, J16-10 and
+  J16-11 at once, and answers §J10's `alias` + `try_files` question in the same breath (request
+  one file that exists and one that does not).
+  (2) **Start a gateway** and confirm haproxy is running as `haproxy`, not root (`ps -o user= -C
+  haproxy`), that the tunnel still comes up, and that `journalctl -u grin-gateway` still receives
+  its log lines under the new sandbox — then tighten to `ProtectSystem=strict` +
+  `PrivateDevices=yes` (J16-3). (3) **Stat the modes** after a full install:
+  `stat -c '%a %U:%G' /opt/grin/pubpool/<net>/pool.db*` → `600 grinpool:grinpool`, and
+  `stat -c '%a' /opt/grin /opt/grin/pubpool/<net>` → `701`/`701`, with `705` on `custom_assets/`
+  and `uploads/`. `chmod` is a no-op on the dev machine, so no mode asserted here has ever been
+  observed (§J8-1's request, now with J16-8's narrowing applied). (4) **Re-run `1) Install` on a
+  box that already serves logos** and confirm they still load — that is §J8-7(b)'s regression,
+  fixed here by calling `pool_ensure_served_dirs` from both steps. (5) **J16-4:** add an IP in the
+  panel's allowlist, restart the service, confirm the list is empty — then decide which of the
+  three dispositions to build, *before* an operator relies on it. (6) **J16-2 must be decided
+  before any third-party gateway is paired**, not after; if disposition 1 is chosen it is a
+  documentation task with a deadline, not a backlog item.
+- **§J3 / §J6 (ownership proof, stratum)** — J16-2 is yours to rate as a *proof* question if the
+  operator picks disposition 2 or 3. The specific ask: `recordOwnerEvidence` takes `session.ip`
+  and `session.pass`
+  ([stratum-server.js:830](../../web/07_mining_pool_public/back-end-pool/lib/stratum-server.js#L830)),
+  and on a region listener both of those are values a paired gateway chose. §J3-1's AND+AGE gate
+  is correct and is not weakened by anything in the app — the weakness is that one party supplies
+  both inputs. Whether the IP leg should record the *peer's* tunnel IP instead on region
+  listeners is a change in your file, not mine.
+- **§J1 (route & guard matrix)** — your handoff is answered as J16-4, and the answer changes one
+  row's meaning: `POST /api/admin/security/ip-allowlist/add` is `freshAdmin`, which is the right
+  tier for a control that locks out other admins — but the control does not persist, so the tier
+  is protecting a setting that cannot survive a restart. Worth a note beside it if the matrix is
+  ever regenerated. Also: J1-5's dead `access.admin_ip_allowlist` settings keys and J16-4's dead
+  `config.admin_ip_allowlist` are **two different keys with nearly the same name**, and closing
+  one does not close the other.
+- **§J8 (secrets & key management)** — items 1 and 3 of your shell handoff are applied (see
+  *Changed this session*); **item 2 is refused with reason as J16-12** — `UMask=0077` would do to
+  every uploaded asset exactly what your own analysis refused to do in JavaScript. Also new for
+  your inventory: the first-admin **password** was a tenth secret, in argv, missed because the
+  inventory was built from files on disk (J16-1). And **J8-4's group tug-of-war
+  (`.foreign_api_secret`) is NOT resolved here** — it is a policy choice between one shared group,
+  ACLs, or teaching `grin_sync_pool_stratum` to heal only `root:root`, and it changes
+  `scripts/lib/grin_node_secrets.sh`, a **shared** lib that Scripts 01/04/06/051/059 all depend
+  on. Changing a toolkit-wide secret-permission policy inside a Script 07 audit session is the
+  wrong place for it; it needs its own pass with all consumers in scope.
+- **§J12 (rate limiting)** — your two vhost items: the SEO `location`s' `X-Forwarded-For` +
+  `limit_req` were applied in your own resolution pass and are re-confirmed present here. The
+  `/uploads/` and `/custom/` `alias` blocks still carry **no** `limit_req`, and that is left
+  deliberate: nginx serves them from disk without reaching the app, so they are not an event-loop
+  lever, and a zone there would throttle a page's own images. Your note about `listen 443 ssl
+  http2` having no `[::]:443` companion is confirmed and **left exactly as it is** — if IPv6 is
+  ever added to this vhost, J12-11's map growth stops being IPv4-bounded and that must be
+  re-rated first. One more for you: `= /page.html` is a proxied location with `X-Forwarded-For`
+  but **no zone**, so it is covered by the app's per-IP bucket alone. Defensible (it is a real
+  page and the app rate-limits it per IP) but it is now the only such block, and it renders CMS
+  content from the DB on every hit.
+- **memory `project_pool_gateway_model_c`** should gain J16-2 as the headline fact about that
+  architecture: the thin edge stores nothing and is trusted for everything, and the "no keys, no
+  DB" framing is about stored value, not authority.
+
+---
+
+### Verification
+
+- **`bash -n` clean** on all four scope files plus the two libs read for context, and on the
+  `grin-gateway-ctl` payload extracted out of its quoted heredoc (`sed` the `<<'GWCTL'` block to
+  a scratch file, `bash -n`, delete) — the generated script is never syntax-checked by anything
+  else, because it does not exist until an install runs.
+- **The vhost was rendered, not just read.** The `www_https_block` assignment and the main
+  heredoc were spliced into a scratch harness with the variables set to representative values,
+  expanded by `bash`, and the output inspected. That is what caught J16-9's second half: the
+  naive fix expands `$hdr_common` to nothing and emits `include ;`. Reading the source would not
+  have shown it, and reading the *generated* config on a box would have shown it as an `nginx -t`
+  failure after the fact. All fourteen `include` lines resolve to real paths in the render;
+  scratch files deleted.
+- **`node:sqlite`'s `readOnly` option confirmed on the pinned runtime** (v24.14.1) with a
+  one-shot `node -e` against a scratch database — created, read back read-only, deleted. J16-8's
+  fix rests on that option existing, and `engines` pins ≥24 but the toolkit installs whatever
+  `setup_24.x` currently ships.
+- **`npm test` — full suite green, before and after**: `12 + 47 + 32 + 52 + 65 + 25 + 21 + 51 +
+  51 + 41` = **397 passed, 0 failed**. The delta is `test-admin-panel.js` 39 → 41 (J16-11's two
+  new assertions). No other suite's count moved, which is the point: this session changed shell
+  and nginx, and the one JavaScript file it touched is a test.
+- **Nothing ran on a VPS and nothing long-running ran locally.** No server started, no background
+  task left, no orphan process (CLAUDE.md's local-process rule). `git status --short` shows only
+  the files below plus this document.
+- **What is NOT verified, and cannot be from here:** every nginx claim in this section. `nginx -t`
+  has never parsed this file, no response header has ever been read off a deployed pool, no
+  gateway unit has ever started, and `chmod` is a no-op on the Windows dev machine so no mode
+  asserted here has been observed. §J17's first handoff item is that list.
+
+---
+
+### Changed this session
+
+| File | Change |
+|---|---|
+| [`scripts/07_grin_mining_public_pool.sh`](../../scripts/07_grin_mining_public_pool.sh) | J16-1 admin password off argv on both hops (stdin + `--data-binary @-`); J16-5 vhost enabled only after `nginx -t`, `ln` no longer swallowed, both write paths; J16-8 `_pool_db_scalar` opens `readOnly`, and the region-card helper `chmod 600`s the WAL sidecars beside its existing `chown` (§J8-1 item 3); J16-9 `include $hdr_common` in the www→apex server + the four snippet-path `local`s hoisted above their first use; J16-10 `server_tokens off` + `limit_req_status 429`; J16-11 four directives added to `$hdr_page`; §J8-1 shell half — new `pool_ensure_served_dirs()` narrows `/opt/grin` and the app dir from `o+rx` to `o+x`, keeps `o+rx` on the two served subdirectories, and is called from **both** `pool_install` and `pool_setup_nginx` so a re-run of Install no longer 404s every logo (§J8-7b) |
+| [`scripts/lib/07_lib_gateway.sh`](../../scripts/lib/07_lib_gateway.sh) | J16-3 `user`/`group` in the haproxy `global` section (resolved to an account that exists) + eight sandbox directives on the unit; J16-6 per-field validation of the `GRINGW1\|` pairing string; J16-7 `-s` not `-f` on the keypair check, non-empty assertion after `genkey`, the hub's public-half repair branch, and guards on the forwarder write, the wg config write and its `chmod` |
+| [`back-end-pool/scripts/test-admin-panel.js`](../../web/07_mining_pool_public/back-end-pool/scripts/test-admin-panel.js) | +2 assertions in §7: `$hdr_page` carries the four directives (J16-11) and a control that it still allowlists the analytics + font origins; the neighbouring assertion's label corrected — it said "the four directives the page CSP omits", which stopped being true in this session |
+| [`docs/generated/script07_security_audit.md`](script07_security_audit.md) | this section |
+
+**Left open at the end of this session:** **J16-2** (structural — four dispositions written, the
+choice is the operator's, and it must be made before a third-party gateway is paired) and
+**J16-4** (three dispositions, and the fix lands in `index.js`/`lib/ip-filter.js`). Inherited and
+deliberately not closed here: **§J7-1**'s VACUUM cron (paired with a `busy_timeout` decision that
+is §J7's, plus an ownership repair this pass adds to the requirement), **§J8-4**'s
+`.foreign_api_secret` group conflict (it changes a shared toolkit lib and needs its own pass),
+and **§J8-7**'s inert `$POOL_LOG` rotation. **§J8-1 item 2 is refused, not deferred** — see
+J16-12.
+
+---
+
+## §J17 — Pre-mainnet operational gate (2026-09-04, add-ons, NOT VPS-TESTED)
+
+Last session of the pre-mainnet §J pass (plan:
+[`script07_reference_audit_session_plan.md`](script07_reference_audit_session_plan.md) §J17).
+Not a code review of one surface — the **go/no-go**. The plan sets six gate conditions; this
+section answers each one with evidence and records what has to change before mainnet.
+
+**The headline: NO-GO, and not because of the arithmetic.** Sixteen sessions closed 150-odd
+findings, and that work holds. What this session found is that **four of the six gate conditions
+cannot be executed as written** — two of them because a mitigation the plan names does not exist
+in the code, and one because a *fix* from an earlier session removed the control the gate assumed.
+A gate that cannot be run is worse than a failed gate: it passes by default.
+
+**What was executed here** (plan rule 5 — no VPS, nothing long-running locally): the full
+`npm test` suite twice, before and after this session's changes; `node scripts/test-auth-hardening.js`
+standalone; a one-shot `node` harness that binds the pool's real `validateUsername` /
+`bech32ChecksumValid` and re-encodes one ed25519 key under both HRPs (J17-4, output quoted);
+`bash -n` on the touched shell lib. No server started, scratch files deleted.
+
+### Threat actors used in this section
+
+| Label | Means |
+|---|---|
+| **Anonymous internet** | No credentials. Reaches `:443` and `:3333`. Can watch Certificate Transparency logs, which is free, automated and real-time |
+| **Registered miner** | Anonymous plus one accepted share |
+| **The operator** | Not an attacker — but the gate exists because an operator following the documented procedure must not be able to lose miners' money. Half this section is operator-safety, and that is the point of a launch gate |
+| **On-box root** | Info only, per plan rule 7 |
+
+---
+
+### The gate, condition by condition
+
+| # | Gate condition (plan §J17) | Verdict |
+|---|---|---|
+| 1 | All P0 sessions closed; every P1 finding fixed or accepted in writing | ❌ **FAIL** — 4 High open in P0 sessions (J4-3, J4-10, J7-1, J16-2). See below |
+| 2 | `npm test` green, `test-money-path` extended for J4/J5 | ⚠️ **PASS with a gap** — green (445 assertions), but nothing runs it, and one suite was unreachable → **J17-6** |
+| 3 | A launch sequence that closes the first-admin TOCTOU | ❌ **FAIL** — both named mitigations are inert → **J17-1** |
+| 4 | Five drills performed and recorded | ❌ **CANNOT RUN AS WRITTEN** — the restore drill is itself a double-pay event (**J17-2**), the orphan drill is unschedulable, and the backup drill names the wrong script → **J17-8** |
+| 5 | Mainnet soak with the operator as the only miner | ❌ **NO MECHANISM** — the admission controls were deleted by §J9-1 → **J17-5** |
+| 6 | Monitoring live before miners; alert delivery tested and received | ❌ **FAIL** — the pool's top theft alarm delivers once, ever → **J17-3**; and the panel's alert settings reach nothing (§J8-3, open) |
+
+#### Condition 1 in detail — what is actually open in a P0 session
+
+P0 sessions are J1–J8 and J16. Open findings in them, at the start of this session:
+
+| Finding | Sev | Why it blocks | Owner's note |
+|---|---|---|---|
+| **J4-3** | High | A crash during `tor_sending` strands the row forever and that address can never withdraw again | Money, single-miner |
+| **J4-10** | High | `_priorSendLanded` shares J4-1's premise and its fix flips the risk direction | Money, and it is the guard the *retry drill* is supposed to prove |
+| **J7-1** | High | No `busy_timeout` + a toolkit-installed weekly `VACUUM` cron; a block found in that window is lost with no alert | Money, silent |
+| **J16-2** | High | A hostile regional gateway holds both ownership-proof legs and can retarget payouts | Structural; multi-region only. A **single-box mainnet launch does not touch it** |
+| J1-2 | Med | 24 mutating admin routes write no audit row | Forensics, not funds |
+| J1-4, J1-5, J1-7 | Low | tier drift; dead settings keys; Express HSTS `includeSubDomains` | |
+| J4-5 | Med | Freeze is read once per tick → up to 15 more payouts after an emergency stop | Degrades every drill in condition 4 |
+| J4-8, J4-11 | Low | unbounded `nostr_seen_events`; wrong slate attached as proof | Goblin rail is off by default |
+| J7-3, J7-7 | Med | un-quantised balances; `SELECT *` over the PPLNS window on the stratum event loop | |
+| J8-3, J8-4, J8-5 | Med/Low | inert alerts section; `.foreign_api_secret` group conflict with Script 04; address+IP in the journal | J8-3 also fails condition 6 |
+| J16-4 | Med | three disconnected admin allowlists | Compounds **J17-1** |
+| §C3 | Low | access token survives logout until expiry (≤1h) | Carried since 2026-07-10 |
+
+**J1-6 and J7-8 are closed** by §J9-5 and are not counted above.
+
+**The shape of it:** three of the four Highs are in the payout path, and the fourth is
+multi-region-only. A single-box mainnet launch has **three** High blockers, all of them in §J4
+and §J7, and all of them about a payout that is sent, stranded or lost without the ledger
+agreeing. None is closed by this session — they are the sessions' own to close.
+
+---
+
+### Findings
+
+### J17-1 — [High] The first-admin registration window is open to the internet, and **both** mitigations the gate plan names for it are inert — one is not wired to the route, the other is contradicted by the installer's own step order — **FIXED 2026-09-04**
+
+**Threat actor: anonymous internet.**
+
+`POST /api/auth/register`
+([index.js:1794](../../web/07_mining_pool_public/back-end-pool/index.js#L1794)) creates a
+**fully-privileged admin** — and sets its session cookies with `pwa=now`, so the session is even
+step-up *fresh* — for whoever asks, whenever `SELECT COUNT(*) FROM users WHERE is_admin=1` is
+zero. §J2-2 fixed the concurrency half (two simultaneous registrations both succeeding); it did
+not, and did not claim to, close the window itself. The plan's condition 3 is where that was
+meant to be handled, by procedure. Neither half of the procedure works:
+
+**(a) `admin_allowlist` does not cover this route.** The generator emits `$admin_rules` into
+exactly two locations — `location /admin/`
+([:1428](../../scripts/07_grin_mining_public_pool.sh#L1428)) and `location /api/admin/`
+([:1470](../../scripts/07_grin_mining_public_pool.sh#L1470)). Registration is `/api/auth/`
+([:1502](../../scripts/07_grin_mining_public_pool.sh#L1502)), which carries a `limit_req` zone
+and no allowlist at any setting. An operator who follows the plan, sets `admin_allowlist` to
+their own IP and believes the panel is locked down has not touched the registration route at all.
+
+**(b) "while the vhost is not yet publicly resolvable" is not a state the installer ever passes
+through.** Guided setup step 4 runs `certbot --nginx -d "$subdomain"`
+([:1223](../../scripts/07_grin_mining_public_pool.sh#L1223)) — HTTP-01, which **requires** public
+DNS and port 80 reachable, and whose issuance publishes the hostname to Certificate Transparency
+within seconds. The backend does not exist yet at that point (step 6 starts it), so the exposure
+opens at step 6 and closes at step 7. In the guided flow that is short. It is not short when:
+
+- the operator uses the numbered menu instead of `G)`, which is a first-class documented path;
+- step 7 fails — the guided flow *continues* on a warning
+  (`"Admin account not created — run 7) …"`,
+  [:2377](../../scripts/07_grin_mining_public_pool.sh#L2377)) and leaves the service running;
+- **the pool.db is ever reset.** `pool_reset_db`
+  ([:2256–2293](../../scripts/07_grin_mining_public_pool.sh#L2256)) deletes the database and
+  **restarts the service immediately** — on a live, CT-logged, DNS-published pool, now with zero
+  admins. Its closing message is *"A fresh schema is created automatically when the service
+  starts"*; nothing warns that admin registration just reopened to the internet. An attacker
+  polling that one endpoint at the `_auth` zone's rate wins the moment the operator does this.
+
+**The captcha is not the barrier.** It is single-digit `a+b` / `a×b`
+([captcha.js:74–79](../../web/07_mining_pool_public/back-end-pool/lib/captcha.js#L74)), and its
+own header says it exists *"purely to raise the per-attempt cost of scripted brute force"*
+([captcha.js:3–8](../../web/07_mining_pool_public/back-end-pool/lib/captcha.js#L3)) — a
+per-attempt cost is irrelevant when one attempt wins permanently.
+
+And the public login page **advertised it**: a permanently-visible *"New admin? Register here"*
+link on every pool forever ([login.html:308–310](../../web/07_mining_pool_public/public_html/login.html#L308)),
+whether or not an admin exists.
+
+**Fixed** by gating the route on `isLocalRequest(req)` — loopback IP **and** no forwarding
+header ([index.js:250–254](../../web/07_mining_pool_public/back-end-pool/index.js#L250)). This
+costs the supported path nothing: `pool_setup_admin` already POSTs to `http://127.0.0.1:$port`
+([:1922](../../scripts/07_grin_mining_public_pool.sh#L1922)), hitting Express directly with no
+nginx and therefore no `X-Forwarded-For`. Registering from elsewhere is an SSH port-forward. The
+code comment at `auth.js:113–115` had already named this as the stronger option; it is now taken.
+The login page's register link is replaced with a line saying registration runs on the server.
+
+> The register **form** in `login.html` is kept (its ids are referenced by `toggleRegister` /
+> `handleRegister` and `loadCaptcha('register')`), but is no longer reachable from the UI. A
+> later cleanup can remove all three together; removing the markup alone would break the JS.
+
+---
+
+### J17-2 — [High] The backup/restore drill the gate mandates is itself a double-pay event: a restore rewinds the ledger, and the scheduler starts 170 lines before the check that would freeze it — **FIXED 2026-09-04 (freeze-on-restore)**
+
+**Threat actor: the operator, following the documented procedure.**
+
+Gate condition 4 requires a *"DB **backup and restore** (089)"* drill. Restoring `pool.db`
+rewinds the pool's ledger to the snapshot. **The chain and the wallet do not rewind with it.**
+Every payout that settled between the snapshot and the restore comes back as an owed balance
+that the wallet has already spent:
+
+- a `withdrawals` row that was `confirmed` returns as `retry_scheduled` / `tor_sending` /
+  `finalizing` — the scheduler picks it up and re-sends;
+- a row that did not exist at snapshot time returns as **nothing at all**, with the miner's
+  balance restored. There is no prior row, so §H1's `_priorSendLanded` duplicate check has
+  nothing to match against. That is a clean double-pay with no guard in the path whatsoever.
+
+The safety net that should catch this is `coverage_shortfall` → `_maybeFreeze`
+([alert-monitor.js:191–201](../../web/07_mining_pool_public/back-end-pool/lib/alert-monitor.js#L191)),
+and `payout_auto_freeze` is on by default
+([:41](../../web/07_mining_pool_public/back-end-pool/lib/alert-monitor.js#L41)). **It arrives
+late.** Startup order in `index.js`:
+
+```
+595  withdrawalScheduler.start();   → schedulerLoop() runs processRetryQueue() on its first pass
+...
+766  alertMonitor.start();          → check() → computeReconciliation() → an await on a wallet RPC
+```
+
+`schedulerLoop`'s first iteration reads `isFrozen()` and, finding nothing frozen, goes straight
+to the send paths ([withdrawal-scheduler.js:79–99](../../web/07_mining_pool_public/back-end-pool/lib/withdrawal-scheduler.js#L79)).
+AlertMonitor is not even constructed until 170 lines later, and its first check is an async
+reconciliation against the wallet. The race is real and it is on the wrong side.
+
+`pbk_restore` never mentions any of this. Its framing is disaster recovery *onto a fresh box*
+(*"Disaster-recovery order on a FRESH box"*,
+[07_lib_pool_backup.sh:196](../../scripts/lib/07_lib_pool_backup.sh#L196)) — where the concern
+does not arise — but nothing restricts the menu entry to that case, and its five-step "to finish"
+checklist covers node secrets, WireGuard, the wallet listener, nginx and *"Service control →
+Start"*, with no step between the restore and the restart that looks at the money.
+
+**Fixed** in `pbk_restore`: after extraction and **before** `pool_deroot` (so the WAL sidecars the
+write creates are chowned back with everything else — §J16-8's trap in reverse), the restored
+`payout_control` row is set `frozen = 1`, `frozen_by = 'restore'`. `payout_control` is a persisted
+table, so the flag rides *inside* the restored DB and survives the restart the checklist asks
+for. A new step 5b tells the operator to reconcile before resuming, and the failure branch tells
+them explicitly not to start the service. Cost on a fresh-box rebuild from the newest backup:
+one click in admin → Payouts.
+
+> **This does not make the restore safe, it makes it inert.** The operator still has to reconcile
+> a ledger that is behind the chain. What it removes is the window where the scheduler acts on
+> the rewound ledger before a human has looked at it.
+
+---
+
+### J17-3 — [Medium] `wallet_drain` is the only detector in the file with no `resolveAlert`, so the pool's top theft alarm delivers **once for the life of the install** and every later drain is silent — **FIXED 2026-09-04**
+
+**Threat actor: whoever is draining the wallet. Also the operator, who is not told twice.**
+
+Gate condition 6 is *"alert delivery tested … and someone actually receiving them."*
+
+`triggerAlert` returns early when an active row of the same type already exists — incrementing
+`occurrence_count` and returning **before** `deliverAlert`
+([alert-monitor.js:684–691](../../web/07_mining_pool_public/back-end-pool/lib/alert-monitor.js#L684)).
+That is correct anti-spam design, and it depends entirely on something eventually resolving the
+row. Every detector in the file pairs its `triggerAlert` with a `resolveAlert` on the healthy
+branch — `coverage_shortfall`, `ledger_integrity_drift`, `unrecorded_wallet_send`,
+`large_withdrawal`, `payout_surge`, `wallet_identity_changed`, `node_down`, `wallet_offline`,
+`wallet_balance_low`, `high_rejection_rate`, `payout_failed`, `block_orphaned`,
+`distribution_stalled`. Thirteen of them. `grep -n "resolveAlert('" lib/alert-monitor.js` returns
+no `wallet_drain`.
+
+`wallet_drain` is the direct *"the wallet was swiped"* signal — `level: 'critical'`, auto-freezes
+payouts ([:244–251](../../web/07_mining_pool_public/back-end-pool/lib/alert-monitor.js#L244)).
+Consequence:
+
+1. First unexplained drain → row inserted `active` → delivered to Discord/Slack/Telegram/email.
+2. The row stays `active` forever. `acknowledgeAlert` writes `acknowledged_at` and
+   `snoozeAlert` writes `snoozed_until`; **neither touches `status`**
+   ([:801–835](../../web/07_mining_pool_public/back-end-pool/lib/alert-monitor.js#L801)) — and
+   there is no admin route to resolve an alert at all (`/acknowledge` and `/snooze` are the only
+   two, [index.js:5617,5631](../../web/07_mining_pool_public/back-end-pool/index.js#L5617)).
+3. Every subsequent drain — a second theft, a larger one — bumps a counter and delivers
+   **nothing**. The panel keeps showing the *first* drain's message and amount.
+
+The auto-freeze still fires each time, so the money protection is intact; it is the notification
+that is muted, on the one alarm where being told twice matters most. A single false positive
+during a legitimate manual sweep is enough to arm this permanently.
+
+**Fixed** — an `else` branch calling `resolveAlert('wallet_drain')` when the unexplained delta is
+under threshold, matching all thirteen siblings.
+
+**Not re-reported here:** §J8-3 (the panel's whole `alerts` settings section is inert — the nine
+keys, three of them credentials, are stored in the DB and read by nothing) remains **open** and is
+the *other* reason condition 6 fails. Delivery reads `config`
+([alert-delivery.js:14–21](../../web/07_mining_pool_public/back-end-pool/lib/alert-delivery.js#L14)),
+i.e. hand-edited `pool.json`. That path does work — `mergeEnvVars` spreads the raw config
+([config.js:38–42](../../web/07_mining_pool_public/back-end-pool/lib/config.js#L38)), so an
+operator-added `discord_webhook_url` reaches `alertDelivery` — and `/api/admin/alerts/test`'s
+refusal names the file. So condition 6 is *achievable*, but only by editing JSON on the box, and
+only if the operator ignores the settings page built for it.
+
+---
+
+### J17-4 — [Medium] One ed25519 key has **two** accepted spellings — `grin1…` and `tgrin1…` — so the same miner is two accounts with two balances, and a mainnet pool will credit and try to pay a testnet-labelled address — **FIXED 2026-09-04 (see the §J17 resolution pass)**
+
+**Threat actor: no attacker required. This is the testnet → mainnet transition the gate's own
+condition 5 prescribes.**
+
+§J3's headline was *"there is exactly one spelling, and it holds at every call site."* That claim
+is correct for what it examined — uppercase bech32, percent-encoding, trailing whitespace, and
+SQLite's BINARY collation on `miner_accounts.grin_address`. It did not consider the **HRP**. A
+Grin Slatepack address is `bech32(hrp, ed25519_pubkey)`; the same 32-byte key encodes to two
+different, fully-valid, lowercase, checksum-correct strings depending on whether the prefix is
+`grin` or `tgrin`, and `validateUsername` accepts both with **no network parameter**:
+
+```js
+const re = new RegExp(`^(grin1|tgrin1)(${bech32}{58})(\\.([a-z0-9_-]{1,${MAX_WORKER_RAW_LEN}}))?$`);
+```
+([stratum-protocol.js:112–121](../../web/07_mining_pool_public/back-end-pool/lib/stratum-protocol.js#L112))
+
+Demonstrated against the pool's own module (one-shot harness, output verbatim):
+
+```
+key (hex)       : a16b5a4a2aba4c0c5ee2591755b528eb4deb4cab5deb515c7c2a320ff8f8409d
+mainnet spelling: grin159445j32hfxqchhztyt4tdfgadx7kn9tth44zhru9geql78cgzws20lczj
+testnet spelling: tgrin159445j32hfxqchhztyt4tdfgadx7kn9tth44zhru9geql78cgzws46jh9l
+
+validateUsername(grin1…)      -> grin159445j32hfxqchhztyt4tdfgadx7kn9tth44zhru9geql78cgzws20lczj
+validateUsername(tgrin1…)     -> tgrin159445j32hfxqchhztyt4tdfgadx7kn9tth44zhru9geql78cgzws46jh9l
+both accepted                 : true
+same 5-bit body               : true
+distinct account keys         : true
+checksums independently valid : true true
+validateUsername arity        : 1        ← takes no network
+```
+
+Both strings are checksum-valid because bech32's checksum is computed **over the HRP** — the two
+are not each other's typo, they are two correct encodings. §J6-6 added checksum verification and
+closed the charset hole; it did not make the check network-aware, and could not have, because the
+function is never given the network.
+
+**Nothing else in the pool closes it either.** The one network-aware validator that exists —
+`validateGrinAddress(address, network)`
+([wallet.js:147–154](../../web/07_mining_pool_public/back-end-pool/lib/wallet.js#L147)) — is
+**dead code**: `grep -rn "validateGrinAddress" --include=*.js .` returns its definition and
+nothing else. The gate actually used on the payout path is
+`isPayoutAddress` ([wallet-tor.js:206–208](../../web/07_mining_pool_public/back-end-pool/lib/wallet-tor.js#L206)),
+`/^(grin1|tgrin1)[ac-hj-np-z02-9]{58}$/i` — both HRPs, and case-insensitive. `config.network` is
+never consulted anywhere on the address path, and `validateConfig`
+([config.js](../../web/07_mining_pool_public/back-end-pool/lib/config.js)) makes no
+network-consistency check of any kind between the pool, the node and the wallet.
+
+**Consequences, in order of likelihood:**
+
+1. **Split identity.** One miner, two `miner_accounts` rows, two balances, two independent
+   ownership proofs, two donation settings. Each balance is measured against `min_withdrawal`
+   (default 25 GRIN) separately, so a miner who changes the HRP mid-round strands the first
+   balance below threshold with no way to merge it. Nothing in the product can even show them
+   the two are the same key.
+2. **A mainnet pool crediting a testnet-labelled address.** This is condition 5's exact
+   sequence — testnet soak, then mainnet, with the operator's own rig config carried over. Real
+   GRIN accrues to `tgrin1…`, and the payout is then handed straight to `grin-wallet send -d`
+   ([wallet-tor.js:105–114](../../web/07_mining_pool_public/back-end-pool/lib/wallet-tor.js#L105)),
+   which *is* chain-aware and refuses it. The result is a failed payout and a balance the miner
+   cannot move — and per §J15-7 the pending strip has only just learned how to say "stuck".
+
+**Not fixed here.** The fix is one parameter — pass `config.network` into `validateUsername` and
+reject the foreign HRP at stratum login — but it sits on the share-intake path §J6 owns, it
+changes who can log in to an already-deployed pool, and it needs a decision about existing rows
+carrying the wrong prefix. It is small; it is not local. **§J6 owns it, and it must be closed
+before the testnet→mainnet switch, not after.**
+
+---
+
+### J17-5 — [Medium] Gate condition 5 requires *"the operator as the only miner"*, and §J9-1 deleted the only controls that could have delivered it — the stratum login gate checks `is_banned` and nothing else — **OPEN (procedure)**
+
+**Threat actor: anonymous internet — but the finding is that the gate cannot be run, not that
+someone attacks it.**
+
+Condition 5: *"start with a low payout threshold and the operator as the only miner … confirm one
+real block → maturity → credit → withdrawal → chain-confirmed payout, and reconcile, **before**
+any third-party miner is invited."*
+
+There is no product mechanism for "the only miner". §J9-1 removed `pool_visibility`,
+`address_whitelist`, `max_miners` and `mining_mode` on 2026-09-02, correctly — they were
+validated, audited, step-up gated, rendered in a *"Private (whitelisted only)"* UI, and read by
+nothing, which is worse than absent. The removal note is explicit about what remains:
+
+> *"the stratum login gate checks `is_banned` and nothing else, so a pool set to private was
+> fully open"* — [pool-settings.js:72–81](../../web/07_mining_pool_public/back-end-pool/lib/pool-settings.js#L72)
+
+That is still the state. Public stratum `:3333` accepts any checksum-valid address (and, per
+J17-4, either HRP). `is_banned` is reactive — it needs the stranger to have connected first.
+Script 07 never touches the firewall for the stratum port: `grep -n "ufw" scripts/07_grin_mining_public_pool.sh`
+finds rules only for WireGuard's UDP port and an advisory Cloudflare example for 80/443.
+
+So the soak has to be enforced **at the firewall**, and nothing in the plan, the script or the
+docs says so. Required addition to the runbook, before the mainnet soak and removed after it:
+
+```bash
+# Soak: stratum reachable only from the operator's own rig(s). Repeat -d per rig IP.
+ufw deny  3333/tcp
+ufw insert 1 allow from <rig-ip> to any port 3333 proto tcp
+# …soak…  then:  ufw delete allow from <rig-ip> to any port 3333 proto tcp
+#                ufw delete deny 3333/tcp
+```
+
+A pool whose DNS is already published (it must be — certbot, J17-1) is discoverable during the
+soak, and a stranger who connects mid-soak does not break anything, but they do invalidate the
+drill: the block whose full lifecycle the gate is watching is now split across accounts the
+operator does not control, and the reconciliation at the end is no longer a two-party sum.
+
+> The right long-term answer is not to bring `address_whitelist` back — §J9-1 explains why
+> ("private" is a product mode, not a login check, and would have to cover the miner list, the
+> leaderboards and `/api/pool/miners` too). For a one-off launch soak the firewall is the correct
+> instrument and it needs one paragraph of documentation, not a feature.
+
+---
+
+### J17-6 — [Low] Gate condition 2 is `npm test` green, and **nothing runs `npm test`** — no CI, no hook, and the deploy step does not; one suite of 48 assertions covering §J2's P0 fixes was wired to nothing at all — **FIXED 2026-09-04 (the orphan suite)**
+
+**Threat actor: none — this is the gate's own instrumentation.**
+
+The suite is real and it is good: **445 reported assertions across 12 suites**, encoding most of §J1–§J16's
+fixes as executable regressions. Run this session, twice, green both times.
+
+Nothing causes it to run:
+
+- **No CI.** `.github/` contains exactly one file, `ISSUE_TEMPLATE/ecosystem-submission.yml`.
+  There is no workflow.
+- **No git hook.** `.git/hooks` holds only the `.sample` files.
+- **The deploy step does not.** `pool_deploy_code` rsyncs the backend and then runs `npm ci`
+  **only when `package.json`/`package-lock.json` changed**
+  ([:959–962](../../scripts/07_grin_mining_public_pool.sh#L959)); `npm test` appears nowhere in
+  the shell. A deploy from a dirty working tree ships whatever is in it.
+- **And one suite was not even in the chain.** `scripts/test-auth-hardening.js` — 48 assertions
+  covering §J2-1 (step-up brute force + second factor), §J2-2 (the atomic first-admin gate),
+  §J2-3, §J2-4 (captcha store eviction), §J2-5 (TOTP replay) — was referenced by **nothing**:
+  not `test:unit`, not the shell, not any doc. `grep -rn "test-auth-hardening"` over the repo
+  returned exactly one hit: a `Run:` line in its own header comment. It passes 48/48 when run by
+  hand, which is how it was found. The §J2 fixes are all P0 and their only regression net was
+  detached.
+
+**Fixed** — `test-auth-hardening.js` added to `test:unit`, after `test-admin-guards.js`. The
+suite is now 445 reported assertions and `npm test` exits 0.
+
+**Not fixed:** nothing still runs it automatically. That is a repo-level decision (a CI workflow,
+or `npm test` as a gate inside `pool_deploy_code` — the latter is attractive because it would
+refuse to deploy a broken tree, and unattractive because it puts a test run on the operator's
+production box). Recorded for the operator; see the runbook below.
+
+---
+
+### J17-7 — [Info] The launch runbook, as it must actually be executed
+
+Conditions 1–6 rewritten as an ordered procedure, incorporating everything above. This replaces
+the plan's §J17 items 3–6, which cannot be followed as written.
+
+**Phase 0 — before touching a box**
+1. Close **J4-3**, **J4-10** and **J7-1**. Three Highs, all in the payout path. J16-2 may be
+   deferred *only* for a single-box launch with no paired gateway.
+2. Close **J17-4** (§J6 owns it) — before the testnet run, not between testnet and mainnet.
+3. Decide **J8-3** / **J13-2**: either wire the alert settings under §J13-2's three conditions,
+   or remove the section and document `pool.json` as the only place alerts are configured.
+   Shipping a credential field that reaches nothing is the worst of the three options.
+4. `npm test` on the exact tree being deployed. 445 assertions, exit 0.
+
+**Phase 1 — testnet install**
+5. Guided setup steps 1–4. Note that step 4 publishes the hostname to CT logs — from here the
+   host is public knowledge.
+6. Steps 5–7. **Registration is now on-box only (J17-1)**, so the step-6→7 window is no longer
+   remotely exploitable; run step 7 anyway before doing anything else.
+7. Enable mandatory 2FA (`access.require_admin_totp`) and enrol. Verify the break-glass CLI runs
+   *first* — §J7-6 fixed it, and a mandatory-2FA pool with no recovery path stops payouts.
+8. Set `admin_allowlist` and re-run step 4. Understand what it does and does not cover: `/admin/`
+   and `/api/admin/` only.
+
+**Phase 2 — testnet drills** (record each; the first four are condition 4)
+9. **Freeze / resume.** admin → Payouts. Confirm the public boolean shows on the miner side.
+   Note **J4-5**: up to 15 payouts in the current batch still go out after the freeze.
+10. **Forced retry on an already-sent withdrawal.** This is the §H1 drill. **Read J4-10 first** —
+    its fix flipped the risk direction, so decide what a "pass" means before you run it.
+11. **Orphan → reversal.** *Cannot be scheduled* — an orphan happens when it happens. The logic
+    is covered by `test-block-ledger.js` (§J5's suite, 52 assertions incl. reversal and the
+    clamp). Treat the live orphan as an observation to record if it occurs during the soak, not
+    as a gate you can wait on.
+12. **Backup and restore.** **Not 089** — 089 explicitly excludes `pool.db`
+    ([089_backup_restore.sh:362–364](../../scripts/089_backup_restore.sh#L362)); the pool ships
+    its own encrypted archive on the Script 07 hub. Restore now freezes payouts automatically
+    (J17-2) — verify the freeze is set, reconcile, then resume by hand.
+13. **Reconciliation clean.** admin → Health. This is also the acceptance check for step 12.
+14. Configure an alert channel in `pool.json`, `POST /api/admin/alerts/test`, confirm a human
+    receives it. Then confirm a *second* delivery of the same type arrives after the first is
+    resolved — that is the J17-3 regression.
+
+**Phase 3 — mainnet soak**
+15. Firewall `:3333` to the operator's rigs (**J17-5**), before the mainnet vhost exists.
+16. Low `min_withdrawal`. One block, all the way: found → immature → maturity → credit →
+    withdrawal → chain-confirmed → reconcile clean.
+17. Open the firewall. Watch the first third-party miner's first payout end to end before
+    advertising the pool anywhere.
+
+---
+
+### J17-8 — [Info] Three corrections to the plan itself
+
+1. **The backup drill names the wrong script.** Condition 4 says *"DB backup and restore (089)"*.
+   Script 089 deliberately does **not** back up `pool.db` — *"NOT 'every product DB': the public
+   pool (pool.db) and the Transporter each ship their own encrypted archive through the same
+   engine, and are covered there rather than here"*
+   ([089_backup_restore.sh:362–364](../../scripts/089_backup_restore.sh#L362)). The pool's backup
+   is `scripts/lib/07_lib_pool_backup.sh`, on the Script 07 hub's own menu. An operator who ran
+   089 and ticked the box would have backed up the node and not the ledger.
+2. **The orphan drill is not schedulable.** Nothing in the product can induce an orphan, and
+   there is no admin route to mark a block orphaned (`grep -n "orphan" index.js` returns only
+   read paths and status filters). It is an observation, not a step.
+3. **The progress tracker was stale.** It showed J1–J11 and J13 as *"not started"* while all
+   sixteen sessions are written up in this file with dates. Corrected in this session's edit to
+   the plan, along with J17's own row.
+
+---
+
+### Handoffs
+
+| To | Item |
+|---|---|
+| **§J6** | **J17-4** — pass `config.network` into `validateUsername` and reject the foreign HRP. Decide what happens to existing rows carrying the wrong prefix on an already-deployed pool. Must land before the testnet→mainnet switch |
+| **§J4** | **J4-3**, **J4-10**, **J4-5** — the three that make condition 4's drills either unrunnable or unreadable. J4-5 in particular means "freeze" does not mean "stopped" |
+| **§J7** | **J7-1** — the `busy_timeout` + `VACUUM` cron pair. §J16 declined to take it because the fix spans a shared toolkit lib |
+| **§J8 / §J13** | **J8-3** under **J13-2**'s ruling — condition 6 cannot be signed off while the settings page for alerts reaches nothing |
+| **§J16** | **J16-4** compounds **J17-1**: three disconnected admin allowlists, one of which never covered the registration route anyway |
+| **Repo / operator** | Nothing runs `npm test` (**J17-6**). A CI workflow is the clean answer; a gate inside `pool_deploy_code` is the pragmatic one |
+
+---
+
+### Verification
+
+Executed this session, on this Windows workstation, no server started (plan rule 5,
+CLAUDE.md's local-process rule):
+
+- **`npm test` — twice.** Before this session's edits: 12 scripts, 60 files + 31 inline
+  `<script>` blocks syntax-checked, **397 assertions, 0 failed**, exit 0. After: **445
+  assertions, 0 failed**, exit 0 (the delta is `test-auth-hardening.js`, now wired in).
+- **`node scripts/test-auth-hardening.js` standalone** — 48 passed, 0 failed, exit 0. This is
+  how the orphan was confirmed to be a working suite rather than an abandoned draft.
+- **The J17-4 harness** — a one-shot script binding the *real* `validateUsername` and
+  `bech32ChecksumValid` from `lib/stratum-protocol.js`, generating a random 32-byte key,
+  converting to 5-bit words and encoding it under both HRPs with an independently-implemented
+  BIP-173 checksum, then feeding both strings back through the pool's validator. Output quoted
+  verbatim in J17-4. Deleted after use.
+- **`bash -n scripts/lib/07_lib_pool_backup.sh`** — OK, after the freeze-on-restore edit.
+- **Static reads**, cited inline: the register route and `isLocalRequest`; the nginx generator's
+  three `$admin_rules` / `/api/auth/` locations; `certbot --nginx`; `pool_reset_db`;
+  `pool_setup_admin`'s loopback POST; `pool_deploy_code`'s npm branch; `.github/` and
+  `.git/hooks`; every `triggerAlert`/`resolveAlert` pair in `alert-monitor.js`;
+  `acknowledgeAlert`/`snoozeAlert`; the subsystem start order in `index.js`;
+  `schedulerLoop`'s first pass; `validateGrinAddress`'s zero call sites; `isPayoutAddress`;
+  `validateConfig`; §J9-1's removal note; `089_backup_restore.sh`'s exclusion comment.
+
+**What is NOT verified, and cannot be from here:** every operational claim about behaviour on a
+box. No pool has been installed, no `certbot` has run, no CT-log entry has been observed, no
+restore has been performed, no alert has been delivered, no share has reached a stratum port.
+**Every finding in this section is a reading of code and procedure, and the gate itself — the
+thing §J17 exists to be — has not been run.** That is the honest status: this session says what
+the gate must consist of and why four of its six conditions could not have been executed as
+written. It does not say the gate passed. It cannot.
+
+---
+
+### Changed this session
+
+| File | Change |
+|---|---|
+| [`back-end-pool/index.js`](../../web/07_mining_pool_public/back-end-pool/index.js) | **J17-1** — `POST /api/auth/register` gated on `isLocalRequest(req)`, with the reasoning (allowlist coverage, the certbot/CT ordering, the reset-db reopen) recorded at the call site |
+| [`back-end-pool/lib/alert-monitor.js`](../../web/07_mining_pool_public/back-end-pool/lib/alert-monitor.js) | **J17-3** — `resolveAlert('wallet_drain')` on the healthy branch, matching the file's other thirteen detectors |
+| [`back-end-pool/package.json`](../../web/07_mining_pool_public/back-end-pool/package.json) | **J17-6** — `test-auth-hardening.js` added to `test:unit` (397 → 445 reported assertions) |
+| [`public_html/login.html`](../../web/07_mining_pool_public/public_html/login.html) | **J17-1** — the standing *"New admin? Register here"* link replaced with an on-box notice; the form kept (its ids are live in the JS) but unreachable, and marked as such |
+| [`scripts/lib/07_lib_pool_backup.sh`](../../scripts/lib/07_lib_pool_backup.sh) | **J17-2** — `pbk_restore` sets `payout_control.frozen = 1` on the restored DB before `pool_deroot`, with a hard-failure branch telling the operator not to start the service, and a new "reconcile before resuming" step in the post-restore checklist |
+| [`docs/generated/script07_reference_audit_session_plan.md`](script07_reference_audit_session_plan.md) | progress tracker corrected (J1–J11, J13 were shown as not started) and J17's row filled in |
+| [`docs/generated/script07_security_audit.md`](script07_security_audit.md) | this section |
+
+**Left open at the end of this session:** **J17-4** (handed to §J6 — small fix, non-local
+consequences) and **J17-5** (procedure, not code — the runbook in J17-7 is the deliverable).
+**J17-1, -2, -3 and -6 are fixed.** The four P0 Highs inherited from §J4, §J7 and §J16 are not
+this session's to close and are the substance of the NO-GO.
+
+### Verdict
+
+**NO-GO for mainnet.** Three High findings sit in the payout path (§J4-3, §J4-10, §J7-1) and one
+in the multi-region edge (§J16-2, deferrable for a single-box launch only). Beyond the arithmetic,
+four of the six gate conditions could not have been executed as the plan wrote them; three of
+those are fixed here and the runbook in J17-7 is what replaces the rest. The gate can be run once
+Phase 0 is done. It has not been run.
+
+---
+
+### §J17 — resolution pass, 2026-09-04 (same day, add-ons, NOT VPS-TESTED)
+
+The four gate decisions §J17 put to the operator were answered, and the work below is what those
+answers cost. **Ten findings closed across four sessions**, including three of the four High
+blockers §J17's verdict named. The suite is now **490 assertions in 13 suites**, exit 0.
+
+**Decisions taken** (operator, 2026-09-04):
+
+| Question | Answer |
+|---|---|
+| §J4-10's three-state discriminator | **Build it** — and close §J4-3 with it in the same pass |
+| §J7-1's `busy_timeout` | **5000 ms, and fix the VACUUM cron too** — the pragma alone does not survive an exclusive lock |
+| Launch shape | **Single box, no gateways** — §J16-2 leaves the mainnet blocker set |
+| §J8-3's inert alerts section | **Delete it**, per §J13-2's ruling |
+
+---
+
+#### §J4-10 + §J4-3 — the payout guard now has three answers, and the Tor rail has a sweep
+
+Both closed together, because §J4-3's own writeup said its fix was *blocked on* the matcher.
+
+**`_priorSendLanded` returns `{ checked, outcome, tx }`** rather than "did a match exist"
+([withdrawal-scheduler.js:432–520](../../web/07_mining_pool_public/back-end-pool/lib/withdrawal-scheduler.js#L432)).
+The three outcomes and what each one costs to get wrong:
+
+| outcome | evidence | caller does | wrong guess costs |
+|---|---|---|---|
+| `confirmed` | `TxSent` **and** `confirmed` | confirm the payout | — |
+| `absent` | no match, or `TxSentCancelled` | send | — |
+| `unconfirmed` | `TxSent`, not yet confirmed | **defer** | send → §H1 double-pay · confirm → §J4-1 confiscation |
+| `checked:false` | wallet unreadable | send, loudly | a pool-wide outage must not strand every payout |
+
+The `unconfirmed` row is the whole point: it is either "locked but never posted" or "posted, not
+yet mined", the tx log cannot tell them apart, and §J4-10's objection to simply copying
+`reclaimStaleFinalizing`'s `confirmed` check was that it would flip the risk rather than remove
+it. Parking costs a delay. Guessing costs money in one direction or the other.
+
+One subtlety the amount branch needed: it can legitimately return several candidates (same miner,
+same net, two attempts), so it prefers a **confirmed** match over an unconfirmed sibling —
+otherwise a provably-settled payout could be parked because an unconfirmed twin sorted first.
+
+**`_deferSend()`** ([:558–612](../../web/07_mining_pool_public/back-end-pool/lib/withdrawal-scheduler.js#L558))
+returns the row to `retry_scheduled` with a fresh `next_retry_at` and **does not increment
+`retry_count`**. That is not tidiness. `scheduleRetry` consumes a rung, and an exhausted ladder
+calls `markFailed` → `_reverseLock` → the balance is **refunded**. For an ambiguous row that turns
+out to have been broadcast, refunding is precisely the double-pay this guard exists to prevent,
+arriving four deferrals later through a different door. A deferral is not a failed attempt.
+`SEND_DEFER_S` is 900 s (a broadcast Grin tx mines in minutes; the retry ladder's first rung is
+6 h), and after `MAX_SEND_DEFERRALS` = 8 the row keeps parking but stops being quiet about it.
+
+**`reclaimStaleTorSending()`** ([:1665–1755](../../web/07_mining_pool_public/back-end-pool/lib/withdrawal-scheduler.js#L1665))
+is the sweep §J4-3 found missing, wired into `schedulerLoop` beside `reclaimStaleFinalizing`
+([:108–111](../../web/07_mining_pool_public/back-end-pool/lib/withdrawal-scheduler.js#L108)). It
+resolves an abandoned `tor_sending` row through the same three-way answer: confirmed → confirm;
+absent → back onto the retry ladder (via `scheduleRetry`, so the freeze check and the attempt
+count still apply — the sweep never sends from inside itself); unconfirmed or unreadable → leave
+it and re-ask. It ages the **claim**, not the row, for the reason `reclaimStaleFinalizing`
+documents, and its threshold is derived per-instance from the configured send timeout
+(`max(600, wallet_send_timeout_ms/1000 × 2 + 120)`) so raising that timeout cannot make the sweep
+race a send that is still legitimately running. Freeze-safe, and it runs while frozen.
+
+#### §J4-11 — the proof capture uses the guard's rules
+
+[`_captureTorSlateId`](../../web/07_mining_pool_public/back-end-pool/lib/withdrawal-scheduler.js#L761)
+matched `/Sent/` (which also matches `TxSentCancelled`), `>= wantNano` rather than the exact net,
+no time bound, newest-by-id. It now applies exactly the guard's four rules — `TxSent` only, not a
+slate already claimed by another withdrawal, created no earlier than the row (with §J4-4's clock
+slack, and a missing timestamp failing the test rather than passing it), and the exact net within
+1 µGRIN. Regression-tested with the log that produced the observed bug.
+
+#### §J7-1 — all three parts
+
+1. **`busy_timeout = 5000`** in `initDb`
+   ([db.js:15–33](../../web/07_mining_pool_public/back-end-pool/lib/db.js#L15)), with the trade
+   written down at the call site: `DatabaseSync` is synchronous and the stratum server shares the
+   loop, so the wait blocks share submission for everyone rather than failing one write. Right for
+   a money write, tolerable for a dashboard query.
+2. **`creditBlock`'s failure is now loud**
+   ([stratum-server.js:836–872](../../web/07_mining_pool_public/back-end-pool/lib/stratum-server.js#L836)).
+   It never threw — it caught internally and returned `{success:false}` — so the surrounding
+   `try/catch` never fired and the return value was discarded. `handleSubmit` now reads it, logs
+   `[CRITICAL]` with every field needed to re-enter the block by hand, and pushes a new
+   `block_record_failed` alert. That alert type has **no** `resolveAlert` on purpose: unlike every
+   detector in `alert-monitor.js` it is an EVENT, not a condition, and no later observation can
+   say the lost block is fine now. The push needed a back-reference, wired in AlertMonitor's
+   constructor ([alert-monitor.js:23–29](../../web/07_mining_pool_public/back-end-pool/lib/alert-monitor.js#L23))
+   because `index.js` builds the stratum server ~270 lines before the monitor exists.
+3. **The VACUUM cron is offline now.** It was
+   `sqlite3 pool.db "VACUUM;"` against the **live** database, weekly, as root — an exclusive lock
+   for minutes, which no `busy_timeout` survives, and pointed at a binary this toolkit never
+   installs (the app uses `node:sqlite`), so the maintenance it promised had very likely never
+   run at all. Replaced by a generated `/usr/local/bin/<service>-vacuum`
+   ([07_grin_mining_public_pool.sh:2198–2262](../../scripts/07_grin_mining_public_pool.sh#L2198))
+   that stops the service, vacuums via `node:sqlite`, and restarts **in a trap** so a failed
+   vacuum can never leave the pool down until someone notices on Monday. It chowns `pool.db` and
+   its WAL sidecars back to `grinpool` afterwards — §J16-8's trap, in the other direction. The
+   menu now states plainly that the pool is stopped for the duration.
+
+#### §J8-3 — the alerts settings section is gone
+
+Nine keys deleted from `PoolSettings.defaults`, its one validator removed, `settings-alerts.html`
+deleted, and the row taken out of the admin nav and the legacy deep-link table. The note left in
+its place ([pool-settings.js:303–319](../../web/07_mining_pool_public/back-end-pool/lib/pool-settings.js#L303))
+records why deletion rather than wiring: §J13-2's ruling is that `postWebhook()` is an
+unrestricted outbound-request primitive, so making those keys live would turn a `secureAdmin`
+settings write into a durable, restart-surviving beacon.
+
+Worth recording, because it makes the "inert" verdict sharper than §J8-3 stated: the section's
+`alert_thresholds` was a JSON **string** carrying four keys, while `AlertMonitor` reads
+`config.alert_thresholds` as an **object** with eleven — including all seven money thresholds. So
+even had it been wired, it described a schema that no longer existed.
+
+One test moved with it. `test-admin-guards.js`'s §J1-2 case used the `alerts` section because it
+held credentials; it now uses `analytics`, and the assertion says what the audit writer actually
+implements — *no settings VALUE ever reaches `admin_audit_log`* — rather than the narrower claim
+about credentials. The rule's comment in `pool-settings.js` was updated for the same reason: it
+justified itself by naming three keys that no longer exist, and a rule that reads as a reaction to
+one section is one the next secret-shaped key has to remember to opt into.
+
+#### §J17-4 — one key, one spelling
+
+`validateUsername(username, network)`
+([stratum-protocol.js:112–147](../../web/07_mining_pool_public/back-end-pool/lib/stratum-protocol.js#L112))
+now rejects the foreign HRP, and stratum login — the only path that creates a `miner_accounts`
+row — passes the pool's network
+([stratum-server.js:557–566](../../web/07_mining_pool_public/back-end-pool/lib/stratum-server.js#L557)),
+with a refusal message that names the prefix the pool actually wants. The parameter is optional
+so the BIP-173 vector tests can still exercise the encoding alone.
+
+§J17 deferred this to §J6 on the grounds that it "changes who can log in to an already-deployed
+pool". **That reasoning was wrong and is withdrawn**: no pool has ever been deployed, so there are
+no rows carrying the wrong prefix and nothing to migrate. The fix is one parameter today and a
+data-migration problem the day after launch.
+
+#### §J9-6 — the config integrity check now detects instead of reassuring
+
+Three of its five defects, together, because fixing the first alone makes the third worse
+([index.js:459–512](../../web/07_mining_pool_public/back-end-pool/index.js#L459)):
+
+- the baseline is **no longer overwritten on a mismatch** — the warning stands on every restart
+  until a human replaces the file, and the observed hash goes to `.sha256.new` beside it;
+- it hashes the **raw file bytes**, not the merged config object, so a systemd `PORT`/`HOST` edit
+  or a toolkit upgrade that adds a default key no longer trips it. That mattered more than it
+  looks: keeping the warning forever (above) while it still cried wolf on routine maintenance
+  would have made it *less* useful, not more;
+- the baseline now lives **beside the config it describes** rather than in the app directory, so
+  a redeploy no longer drops it and turns the check into a silent no-op.
+
+It also raises a `config_tampered` alerts row now, which is why the check moved to just after
+`initDb` — `AlertMonitor` does not exist that early in startup. Still deliberately **not**
+covered: `pool_config`, where the runtime money values live; §J1-2's audit row is the control for
+those, as §J9-6 said.
+
+#### §J1-4 and §J1-7 — two one-line tier/header alignments
+
+- `POST /api/admin/security/rate-limit-reset` is `freshAdmin`
+  ([index.js:5300–5322](../../web/07_mining_pool_public/back-end-pool/index.js#L5300)), matching
+  its two functional siblings, and writes the audit row §J1-2 wanted. Three routes meaning "stop
+  throttling this IP" now share one tier — the previous split was the way to clear a login
+  lockout and then grind toward `freshAdmin` without passing through it.
+- Express's HSTS drops `includeSubDomains`
+  ([index.js:270–276](../../web/07_mining_pool_public/back-end-pool/index.js#L270)), matching the
+  nginx snippet §I fixed. nginx does not strip upstream headers, so proxied responses carried
+  both and RFC 6797 §8.1 makes the UA honour the first — Express's.
+
+#### §J13-10 / §J13-4 — the NIP-05 fetch aborts and is capped
+
+`withTimeout` only ever stopped **us waiting**; the request kept running. nostr-tools' `nip05` has
+no signal parameter, but it does expose `useFetchImplementation`, which is the only seam there is
+— so the bridge installs a wrapper carrying `AbortSignal.timeout(NIP05_TIMEOUT_MS)` and a 64 KB
+body cap read through `_readCapped`
+([nostr-payout.js:295–360](../../web/07_mining_pool_public/back-end-pool/lib/nostr-payout.js#L295)).
+The cap is enforced by streaming and cancelling, not by reading and then checking, because
+`timeout` on a socket is an **inactivity** timer and a slow trickle resets it indefinitely — the
+same shape §J13-3 fixed on the two raw-`https` consumers. The domain is allowlist-checked before
+this point, so this is a resource bound, not an SSRF control.
+
+#### §J4-8 — the Nostr dedup table is pruned
+
+`nostr_seen_events` is now swept on the ordinary retention pass at 24 h
+([retention.js:133–150](../../web/07_mining_pool_public/back-end-pool/lib/retention.js#L133)),
+comfortably past both windows that give an id meaning (`LOOKBACK_SECS`, `nostr_pending_ttl_minutes`),
+with `idx_nostr_seen_at` added by the bridge so that DELETE does not scan the table it exists to
+bound. Wrapped in a try/catch rather than a `CREATE TABLE`: retention must not conjure a table for
+a feature that is switched off. The write-before-decrypt ordering is left alone — §J4-8 agreed it
+is correct on its own terms (dedup ahead of an expensive `nip44` decrypt), and retention was
+always the right fix.
+
+#### §J8-5 — the journal no longer pairs an address with a mining IP
+
+§J8-5 offered three options and left the choice to the operator. **Option 2** is taken — mask the
+address, keep the IP whole — on both lines
+([stratum-server.js:633–645](../../web/07_mining_pool_public/back-end-pool/lib/stratum-server.js#L633),
+[:955](../../web/07_mining_pool_public/back-end-pool/lib/stratum-server.js#L955)), reusing
+`maskAddress` from `dormancy.js` so the journal redacts the same way the public feeds do rather
+than growing a second, divergent shape.
+
+Option 1 (coarsen the IP, matching §G1) was the one §J17 first said it would take. On reading
+§J8-5 in full it is the worse trade: the full IP is how an operator identifies and `ufw deny`s an
+abusive rig, there is no second copy of it — nginx never sees stratum — and coarsening removes
+that capability with no replacement. The defect is the *pairing*, and masking the address breaks
+the pairing while leaving the ban workflow intact. Flip it if you disagree; it is two call sites.
+
+> **§G / memory `project_pool_ip_privacy` still needs the journal added as a fourth named sink**,
+> so the next reader of *"exactly three IP-bearing columns"* does not conclude the sweep was
+> complete. Not done here — it is a memory edit, not a code change.
+
+---
+
+### Tests added this pass
+
+`npm test` is **490 assertions across 13 suites**, exit 0, run after every change above.
+
+**`scripts/test-payout-guard.js` is new — 38 assertions**, and it exists because §J17 found that
+§J4 verified all of this with scratchpad harnesses that were never committed. It runs the **real**
+`WithdrawalScheduler` against a throwaway SQLite file, stubbing only the process boundaries
+(Owner-API wallet, the `grin-wallet` CLI, the Tor probe). Four sections: the matcher's three
+outcomes on both branches; `sendWithdrawal`'s confirm / defer / send behaviour with the money
+asserted, not just the status; `reclaimStaleTorSending`'s four branches plus the premise that no
+other recovery pass touches a `tor_sending` row; and §J4-11's capture rules.
+
+Two of its assertions are worth naming because they guard reasoning rather than a line of code:
+
+- *"the deferral does NOT consume a retry rung"* — the refund-by-the-back-door path above.
+- *"a first attempt sends without consulting the wallet log **first**"* — §J4-2's regression.
+  This asserts on **order**, not on a call count. `sendWithdrawal` also reads the tx log *after* a
+  successful send for `_captureTorSlateId`'s proof link, so a bare counter reports "consulted" on
+  the clean path too and proves nothing. It was written as a counter first, and failed, which is
+  how the distinction was found.
+
+`test-stratum-guards.js` gains **7 assertions** for §J17-4, including the demonstration that the
+two spellings are one key with two independently valid checksums — bech32 computes the checksum
+over the HRP, so neither is a corruption of the other, which is why §J6-6's fix could not catch
+this — and a control that both are still accepted when no network is supplied.
+
+`test-admin-guards.js`'s §J1-2 case was re-pointed off the deleted `alerts` section.
+
+---
+
+### Status after this pass
+
+| Finding | Was | Now |
+|---|---|---|
+| §J4-3 | High, OPEN | **FIXED** |
+| §J4-8 | Low, OPEN | **FIXED** |
+| §J4-10 | High, OPEN | **FIXED** |
+| §J4-11 | Low, OPEN | **FIXED** |
+| §J7-1 | High, OPEN | **FIXED** (all three parts) |
+| §J8-3 | Medium, OPEN | **FIXED by deletion** |
+| §J8-5 | Low, OPEN | **FIXED** (option 2) |
+| §J9-6 | Low, OPEN | **FIXED** (defects 1, 3, 5) |
+| §J1-4 | Low, OPEN | **FIXED** |
+| §J1-7 | Low, RE-OPENED | **FIXED** |
+| §J13-10 + §J13-4's lifetime half | Low/Medium, OPEN | **FIXED** |
+| §J17-4 | Medium, OPEN | **FIXED** |
+
+**The gate, re-scored.** Condition 1 has no High findings left for a single-box launch: §J4-3,
+§J4-10 and §J7-1 are closed, and §J16-2 is out of scope for a pool with no paired gateway (it
+stays OPEN and must be settled before the first one is). Condition 2 is met and now has the
+payout path covered. Condition 3 is closed by §J17-1. Condition 6's code half is closed by §J17-3
+and §J8-3; what remains is the operator configuring a channel in `pool.json` and confirming a
+human receives a test alert.
+
+**Still open, and unchanged by this pass:** §J1-2 (24 routes with no audit row — one more closed
+here, 23 left), §J1-5, §J4-5, §J7-3, §J7-7, §J8-4, §J9-8, §J10-2, §J10-3, §J13-2's standing
+ruling, §J13-5, §J13-7's live-revocation half, §J15-3's 56 static URLs, §J16-2, §J16-4, §J17-5
+and §C3. None is a High, and none blocks a single-box mainnet start on its own — but **§J4-5**
+deserves a second look before the freeze drill, because "freeze" still does not mean "stopped"
+until the current batch drains.
+
+**The verdict does not change on code alone.** §J17's NO-GO rested on two things: open Highs, and
+four gate conditions that could not be executed. The Highs are closed and three of the four
+conditions are now executable. What is left is the part no desk audit can do — Phase 1 through 3
+of the runbook in §J17-7, on a real box, starting with testnet. **Nothing in this pass has run on
+a VPS.**
+
+---
+
+### Changed this session (resolution pass)
+
+| File | Change |
+|---|---|
+| [`back-end-pool/lib/withdrawal-scheduler.js`](../../web/07_mining_pool_public/back-end-pool/lib/withdrawal-scheduler.js) | §J4-10 three-state `_priorSendLanded` + the defer branch in `sendWithdrawal`; §J4-3 `_deferSend()` and `reclaimStaleTorSending()`, wired into `schedulerLoop`; `SEND_DEFER_S` / `MAX_SEND_DEFERRALS` / `torSendingStaleSeconds`; §J4-11 `_captureTorSlateId` re-uses the guard's four rules |
+| [`back-end-pool/lib/db.js`](../../web/07_mining_pool_public/back-end-pool/lib/db.js) | §J7-1 `busy_timeout = 5000`, with the stratum-loop trade documented |
+| [`back-end-pool/lib/stratum-server.js`](../../web/07_mining_pool_public/back-end-pool/lib/stratum-server.js) | §J7-1 `creditBlock`'s result is read → `[CRITICAL]` + `block_record_failed` alert; §J17-4 login passes the network; §J8-5 both journal lines mask the address |
+| [`back-end-pool/lib/stratum-protocol.js`](../../web/07_mining_pool_public/back-end-pool/lib/stratum-protocol.js) | §J17-4 `validateUsername(username, network)` rejects the foreign HRP |
+| [`back-end-pool/lib/alert-monitor.js`](../../web/07_mining_pool_public/back-end-pool/lib/alert-monitor.js) | §J17-3 `resolveAlert('wallet_drain')`; §J7-1 `block_record_failed` type + the stratum back-reference |
+| [`back-end-pool/lib/pool-settings.js`](../../web/07_mining_pool_public/back-end-pool/lib/pool-settings.js) | §J8-3 the `alerts` section and its validator deleted, with the reasoning left in place; the audit-writer's NAMES-ONLY comment rewritten so it no longer justifies itself by naming deleted keys |
+| [`back-end-pool/lib/retention.js`](../../web/07_mining_pool_public/back-end-pool/lib/retention.js) | §J4-8 `nostr_seen_events` pruned at 24 h |
+| [`back-end-pool/lib/nostr-payout.js`](../../web/07_mining_pool_public/back-end-pool/lib/nostr-payout.js) | §J13-10 NIP-05 fetch gets an `AbortSignal` + a streamed 64 KB body cap (`_readCapped`); §J4-8 `idx_nostr_seen_at` |
+| [`back-end-pool/index.js`](../../web/07_mining_pool_public/back-end-pool/index.js) | §J1-4 route to `freshAdmin` + audit row; §J1-7 HSTS aligned; §J9-6 integrity check rewritten and moved after `initDb`, `hashConfig` now takes bytes |
+| [`back-end-pool/admin-panel/`](../../web/07_mining_pool_public/back-end-pool/admin-panel/) | §J8-3 `settings-alerts.html` deleted; nav row removed from `admin-shell.js`; `'alerts'` removed from `settings.html`'s deep-link table |
+| [`back-end-pool/scripts/test-payout-guard.js`](../../web/07_mining_pool_public/back-end-pool/scripts/test-payout-guard.js) | **new** — 38 assertions over §H1 / §J4-1 / §J4-2 / §J4-3 / §J4-10 / §J4-11 |
+| [`back-end-pool/scripts/test-stratum-guards.js`](../../web/07_mining_pool_public/back-end-pool/scripts/test-stratum-guards.js) | +7 assertions for §J17-4 |
+| [`back-end-pool/scripts/test-admin-guards.js`](../../web/07_mining_pool_public/back-end-pool/scripts/test-admin-guards.js) | §J1-2 case re-pointed off the deleted `alerts` section |
+| [`back-end-pool/package.json`](../../web/07_mining_pool_public/back-end-pool/package.json) | `test-payout-guard.js` added to `test:unit` (with `test-auth-hardening.js` from the main pass) |
+| [`scripts/07_grin_mining_public_pool.sh`](../../scripts/07_grin_mining_public_pool.sh) | §J7-1 `pool_write_vacuum_script()` + the cron now calls it instead of vacuuming the live DB |
+
+### Verification
+
+- **`npm test` — 490 assertions, 0 failed, exit 0**, run after each change and once at the end.
+- **`node scripts/test-payout-guard.js`** — 38/38 standalone.
+- **`bash -n`** on both touched shell files; and the generated vacuum script **rendered** from its
+  heredoc into a scratch file with real values and `bash -n`'d — the expansion is checked, not
+  assumed.
+- **The `node:sqlite` VACUUM the cron runs was executed one-shot** against a throwaway 4.3 MB
+  database: 4,333,568 → 8,192 bytes. `sqlite3` is not installed by this toolkit, so this is the
+  path that has to work.
+- **`_readCapped` exercised one-shot** on both branches (under cap returns the body; over cap
+  cancels the reader and throws).
+- `node --check` on every edited module. Scratch files deleted; no process left running.
+
+**What is still NOT verified:** everything about behaviour on a box. No pool installed, no
+service stopped or restarted by the vacuum script, no `chown` observed (`chmod`/`chown` are no-ops
+on the Windows dev machine), no alert delivered, no stratum login refused for a wrong-network
+address, no payout deferred by a real wallet. The three-state guard and the sweep are tested
+against a **stubbed** Owner API — the field they turn on, `confirmed`, is the same one
+`reclaimStaleFinalizing` and `lib/reconciliation.js:278` already read, but no live grin-wallet has
+ever answered any of them. That is Phase 1 of the runbook, and it has not happened.

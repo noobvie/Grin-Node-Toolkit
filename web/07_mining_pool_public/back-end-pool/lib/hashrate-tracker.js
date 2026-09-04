@@ -32,6 +32,8 @@ class HashrateTracker {
         await this.recordHashrates();
         // Cheap + idempotent: only writes when a fresh completed hour exists (no-op otherwise).
         await this.rollupCompletedHours();
+        // Same contract, one row per miner per completed UTC day. Audit §J12-1.
+        this.rollupMinerDays();
       } catch (err) {
         console.error(`[ERROR] Hashrate tracking error: ${err.message}`);
       }
@@ -153,29 +155,221 @@ class HashrateTracker {
   // snapshot off the shares table, pruned after ~1 day on mainnet). Each sample covers window_seconds of mining at hashrate_gps, so
   // SUM(gps × window_seconds) / totalWindowSeconds is the time-weighted average GPS across the
   // whole window (gaps count as zero), rewarding sustained mining rather than a peak burst.
+  // ── §J12-1 ────────────────────────────────────────────────────────────────────────────────
+  // This used to aggregate the RAW hashrate_history table:
+  //
+  //     WHERE recorded_at > ? GROUP BY grin_address
+  //
+  // which plans as `SCAN hashrate_history USING INDEX idx_hashrate_address | USE TEMP B-TREE`.
+  // The range predicate is on the SECOND column of that index, so it cannot seek — and the
+  // consequence is the part that made this a High: **the ?days parameter never entered the
+  // plan.** ?days=1 cost exactly what ?days=90 cost, i.e. the whole 100-day table (144 M rows
+  // at the 1000-miner target of memory project_pool_db_capacity). node:sqlite is synchronous
+  // and the stratum server shares this process, so an anonymous GET loop at the rate limit
+  // was share intake stopped — and §J6 established that stopped share intake is a lost block.
+  //
+  // Two changes, both needed and neither sufficient alone:
+  //   (1) COMPOSITE READ. Completed UTC days come from miner_hashrate_daily (~100 k rows at
+  //       1000 miners × 100 days, covering-index range seek); only the CURRENT partial day is
+  //       read raw. The raw tail is bounded by ONE day whatever ?days says — that is the
+  //       property that was missing, not raw speed.
+  //   (2) TTL CACHE, like getPoolHistory's. The answer is identical for every caller and only
+  //       changes once per samplingInterval, so N visitors cost one query per TTL rather than
+  //       one query each. This is what actually closes the amplification.
+  //
+  // Residual, stated rather than hidden: at 1000 miners the one-day raw tail is still ~1.4 M
+  // rows, so a cache miss is order-of-a-second. That is 100× better and bounded, but the
+  // durable fix for it is the per-miner HOURLY rollup already tracked as item 2 of memory
+  // project_pool_db_capacity. Do not "simplify" this back into a single raw query.
+  static TOP_AVG_TTL_MS = 60000;
+  static TOP_AVG_CACHE_MAX = 32;
+
   getTopAvgHashrate(days = 30, limit = 500) {
+    const key = `${days}|${limit}`;
+    const now = Date.now();
+    if (!this._topAvgCache) this._topAvgCache = new Map();
+    const hit = this._topAvgCache.get(key);
+    if (hit && now - hit.at < HashrateTracker.TOP_AVG_TTL_MS) return hit.rows;
+
     try {
-      const windowSeconds = days * 86400;
-      const cutoffTime = Math.floor(Date.now() / 1000) - windowSeconds;
+      const DAY = 86400;
+      const windowSeconds = days * DAY;
+      const nowS = Math.floor(now / 1000);
+      const cutoffTime = nowS - windowSeconds;
+      const todayStart = Math.floor(nowS / DAY) * DAY;
+      // The window is the SAME rolling `now − days` window the raw query used, so the published
+      // numbers do not change. It is served in up to three pieces:
+      //
+      //   [cutoffTime, firstFullDay)   raw — the partial FIRST day the cutoff lands inside
+      //   [firstFullDay, todayStart)   rollup — whole completed UTC days, the bulk of the window
+      //   [todayStart, now]            raw — the partial CURRENT day
+      //
+      // Dropping the first piece and calling the window "whole days only" was tried and is
+      // WRONG: at days=1 the cutoff lands inside yesterday, so the answer came out ~5× low
+      // while still dividing by a full day. Each raw piece is bounded by ONE day whatever
+      // ?days says — that bound, not raw speed, is what this rewrite is for.
+      const firstFullDay = Math.ceil(cutoffTime / DAY) * DAY;
 
-      const rows = this.db.prepare(`
-        SELECT grin_address,
-               COALESCE(SUM(hashrate_gps * window_seconds), 0) / ? AS avg_gps
+      // gps_seconds is already SUM(hashrate_gps * window_seconds) per day, so the pieces sum
+      // directly — no re-derivation, and no overlap: the rollup only ever covers whole days
+      // strictly below todayStart (see rollupMinerDays), and the two raw ranges are disjoint
+      // from it and from each other.
+      const totals = new Map();
+      const add = (addr, v) => totals.set(addr, (totals.get(addr) || 0) + (v || 0));
+
+      // ⚠ Both bounds on every raw read are load-bearing and must not be "simplified" away.
+      // With a ONE-SIDED `recorded_at >= ?` SQLite still picks `SCAN hashrate_history USING
+      // INDEX idx_hashrate_address` — it prefers reading in grin_address order to avoid the
+      // temp b-tree, and an open-ended range gives the planner no reason to prefer the time
+      // index. The upper bound flips it to `SEARCH … USING idx_hashrate_time
+      // (recorded_at>? AND recorded_at<?)`, which is the whole point. Both plans verified with
+      // EXPLAIN QUERY PLAN against the real schema, and both pinned in test-rate-limits.js.
+      const rawStmt = this.db.prepare(`
+        SELECT grin_address, COALESCE(SUM(hashrate_gps * window_seconds), 0) AS s
         FROM hashrate_history
-        WHERE recorded_at > ?
-        GROUP BY grin_address
-        ORDER BY avg_gps DESC
-        LIMIT ?
-      `).all(windowSeconds, cutoffTime, limit);
+        WHERE recorded_at > ? AND recorded_at < ?
+        GROUP BY grin_address`);
+      const rawRange = (from, to) => {
+        if (!(to > from)) return;
+        for (const r of rawStmt.all(from, to)) add(r.grin_address, r.s);
+      };
 
-      return rows.map(r => ({
-        grin_address: r.grin_address,
-        avg_hashrate_gps: parseFloat((r.avg_gps || 0).toFixed(6))
-      }));
+      // Piece 1 — the partial first day. `> cutoffTime` (not >=) mirrors the original query's
+      // strict comparison exactly, so a sample landing on the boundary is counted the same way.
+      rawRange(cutoffTime, Math.min(firstFullDay, todayStart + DAY));
+
+      // Piece 2 — whole completed days from the rollup.
+      if (firstFullDay < todayStart) {
+        for (const r of this.db.prepare(`
+          SELECT grin_address, COALESCE(SUM(gps_seconds), 0) AS s
+          FROM miner_hashrate_daily
+          WHERE day >= ? AND day < ?
+          GROUP BY grin_address
+        `).all(firstFullDay, todayStart)) add(r.grin_address, r.s);
+      }
+
+      // Piece 3 — the current partial day. Skipped when piece 1 already covered it (a small
+      // ?days whose cutoff falls inside today), which is what `firstFullDay > todayStart` means.
+      if (firstFullDay <= todayStart) {
+        rawRange(Math.max(todayStart - 1, cutoffTime), todayStart + DAY);
+      }
+
+      const rows = [...totals.entries()]
+        .map(([grin_address, s]) => ({
+          grin_address,
+          avg_hashrate_gps: parseFloat((s / windowSeconds).toFixed(6))
+        }))
+        .filter(r => r.avg_hashrate_gps > 0)
+        .sort((a, b) => b.avg_hashrate_gps - a.avg_hashrate_gps)
+        .slice(0, limit);
+
+      // `days` and `limit` are clamped at the route, so the key space is bounded — but never
+      // trust a caller's clamp to bound server memory (getPoolHistory's rule).
+      if (this._topAvgCache.size >= HashrateTracker.TOP_AVG_CACHE_MAX) {
+        this._topAvgCache.delete(this._topAvgCache.keys().next().value);
+      }
+      this._topAvgCache.set(key, { at: now, rows });
+      return rows;
     } catch (err) {
       console.error(`Error fetching top avg hashrate: ${err.message}`);
-      return [];
+      // Do NOT cache a failure — a transient DB error would otherwise pin an empty leaderboard
+      // for a full TTL. Serve the last good answer if we still hold one.
+      return hit ? hit.rows : [];
     }
+  }
+
+  // Roll every COMPLETED UTC day of hashrate_history into one row per miner per day.
+  // Same contract as rollupCompletedHours: idempotent upsert, bounded catch-up, no backfill
+  // beyond the bound, a no-op on every call that finds no new completed day (which is all but
+  // one call a day). Synchronous — it is small, and it must not interleave with recordHashrates.
+  //
+  // Deliberately NOT keep-forever: lib/retention.js prunes it on the same horizon as the raw
+  // table, because this is per-address activity and a summary must never outlive its source.
+  rollupMinerDays() {
+    try {
+      const DAY = 86400;
+      const todayStart = Math.floor(Date.now() / 1000 / DAY) * DAY;
+
+      // An explicit horizon marker, NOT `MAX(day)` — the same pattern lib/ledger-rollup.js
+      // uses, and for the same reason. A day on which no miner produced a sample writes no
+      // row, so a MAX(day)-derived cursor would stick on the last busy day and re-walk every
+      // quiet day since, on every call, forever. The marker advances whether or not the day
+      // was busy.
+      const start = this._minerDayHorizon();
+      // No fully-completed day to roll up yet. This is the branch taken on all but one call a
+      // day, and it must return BEFORE the horizon write below — otherwise the no-op case
+      // would still put a row through the DB every minute for no reason.
+      if (start >= todayStart) return 0;
+
+      // Re-derives the day from scratch, so re-running a bucket is safe and self-healing.
+      const src = this.db.prepare(`
+        SELECT grin_address,
+               COALESCE(SUM(hashrate_gps * window_seconds), 0) AS gps_seconds,
+               COUNT(*) AS n
+        FROM hashrate_history
+        WHERE recorded_at >= ? AND recorded_at < ?
+        GROUP BY grin_address`);
+      const upsert = this.db.prepare(`
+        INSERT INTO miner_hashrate_daily (day, grin_address, gps_seconds, sample_count, updated_at)
+        VALUES (@day, @addr, @gps, @n, unixepoch())
+        ON CONFLICT(day, grin_address) DO UPDATE SET
+          gps_seconds  = excluded.gps_seconds,
+          sample_count = excluded.sample_count,
+          updated_at   = unixepoch()`);
+
+      let wrote = 0;
+      const tx = this.db.transaction(() => {
+        for (let d = start; d < todayStart; d += DAY) {
+          for (const r of src.all(d, d + DAY)) {
+            upsert.run({ day: d, addr: r.grin_address, gps: r.gps_seconds, n: r.n });
+            wrote++;
+          }
+        }
+        // Horizon advances inside the SAME transaction as the writes it describes: a crash
+        // between the two would otherwise either skip a day permanently or re-do it. The
+        // upsert is idempotent, so re-doing is harmless and skipping is not — but neither
+        // happens if they commit together.
+        this._setMinerDayHorizon(todayStart);
+      });
+      tx();
+      if (wrote) this._topAvgCache = new Map();   // the rollup just changed the answer
+      return wrote;
+    } catch (err) {
+      console.error(`Error rolling up miner hashrate days: ${err.message}`);
+      return 0;
+    }
+  }
+
+  // Horizon marker for rollupMinerDays: the first UTC day NOT yet rolled up.
+  // Unset (fresh DB, or a pool upgrading into this feature) → start one retention window back
+  // so an established pool's existing hashrate_history is picked up on the first run, bounded
+  // so it can never walk an unbounded range. MINER_DAY_MAX_CATCHUP is deliberately above the
+  // 100-day default of database.hashrate_keep_days: there is nothing older to find.
+  static MINER_DAY_MAX_CATCHUP = 120;
+
+  _minerDayHorizon() {
+    const DAY = 86400;
+    const todayStart = Math.floor(Date.now() / 1000 / DAY) * DAY;
+    const floor = todayStart - HashrateTracker.MINER_DAY_MAX_CATCHUP * DAY;
+    let h = 0;
+    try {
+      const row = this.db.prepare(
+        "SELECT value FROM pool_config WHERE section = '_state' AND key = 'miner_hashrate_day_horizon'"
+      ).get();
+      h = row ? parseInt(row.value, 10) : 0;
+    } catch (e) { h = 0; }
+    if (!Number.isFinite(h) || h <= 0) return floor;
+    // A marker from the future (clock moved back, a restored backup) must not make the rollup
+    // skip real days forever — clamp it into the window rather than trusting it.
+    return Math.min(Math.max(Math.floor(h / DAY) * DAY, floor), todayStart);
+  }
+
+  _setMinerDayHorizon(h) {
+    this.db.prepare(`
+      INSERT INTO pool_config (section, key, value, value_type)
+      VALUES ('_state', 'miner_hashrate_day_horizon', ?, 'string')
+      ON CONFLICT(section, key) DO UPDATE SET value = excluded.value
+    `).run(String(h));
   }
 
   // Per-worker breakdown for one address. Hashrate + share count + last_share come from the
@@ -207,6 +401,14 @@ class HashrateTracker {
         ? this.minerManager.getSessionsByMiner(minerAddress)
         : [];
       for (const s of sessions) {
+        // MINING sessions only (audit §J6-9, the sibling of §J3-2's fix in miners.js). A stratum
+        // session exists from LOGIN, and login is unauthenticated — the address IS the username —
+        // so without this filter anyone could open a socket under someone else's address and have
+        // an attacker-chosen worker label published as an ONLINE rig on that account's page (and
+        // on the public /api/stratum/stats), complete with accepted/rejected/stale counters that
+        // skew the reject_pct this breakdown exists to show. Requiring an accepted share puts the
+        // row behind real PoW; a rig that is not mining is not a rig this readout is about.
+        if (!(s.acceptedShares > 0)) continue;
         const wn = s.workerName || 'default';
         const acc = liveByWorker.get(wn) || { accepted: 0, rejected: 0, stale: 0, online: true };
         acc.accepted += s.accepted || 0;

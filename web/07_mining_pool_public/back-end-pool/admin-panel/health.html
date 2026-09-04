@@ -96,8 +96,11 @@ function statusClass(status) {
   return 'error';
 }
 
+// `s == null`, not `s || ''` — a numeric 0 is a real value here (0 miners connected, port 0
+// on a mis-set service) and the old form rendered it as an empty string, so "Miners: " read
+// as missing data rather than none. Audit §J14.
 function escHtml(s) {
-  return String(s || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 
 function renderServiceDetail(svc) {

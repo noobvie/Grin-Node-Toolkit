@@ -26,7 +26,21 @@ class MinerManager {
       difficulty: 1.0,
       subscribedAt: Date.now(),
       lastShareAt: null,
+      // ⚠ shareCount is an ADDRESS-wide counter, not this session's work: recordShare() below
+      // increments it on EVERY live session sharing the address, so a connection that has never
+      // submitted anything still shows a rising count. It is fine for the per-address stats it
+      // feeds — and useless as evidence about THIS connection.
       shareCount: 0,
+      // Accepted shares submitted BY THIS SESSION. Incremented only by the submit handler that
+      // owns the socket (stratum-server.handleSubmit), so it is the only per-connection proof of
+      // work available. Both §J3 guards read this and must never be moved back to shareCount:
+      // an attacker who merely opens a session under a victim's address would otherwise be
+      // credited with the victim's own mining, which defeats both of them silently.
+      acceptedShares: 0,
+      // `donateN` parsed from the worker name at login, but NOT applied until this session has
+      // mined (audit §J3-5) — see stratum-server.handleSubmit. Login is unauthenticated, so
+      // applying it here would let a bare TCP connect redirect a stranger's earnings.
+      donationPercent: null,
       lastSeenAt: Date.now()
     };
 
@@ -47,6 +61,25 @@ class MinerManager {
       session.lastSeenAt = Date.now();
     }
     return session;
+  }
+
+  // Mark a session as alive RIGHT NOW. Called from the stratum message loop on every
+  // well-formed message that survives the token bucket, which is the only thing standing
+  // between a working rig and pruneInactiveSessions() below.
+  //
+  // ⚠ This is the fix for audit §J6-2, and the bug it closes was not an attack: lastSeenAt was
+  // written once by createSession and NEVER again (updateSession above had zero call sites
+  // repo-wide, and recordShare touches lastShareAt, which the sweeper does not read). So every
+  // session — including one whose socket was open and actively submitting — was deleted ten
+  // minutes after login. After that the socket stayed up, the rig kept hashing, and every
+  // submit on it was answered "Session not found" BEFORE forwardSubmit, so a solution that
+  // solved a block was never handed to the node. Note the asymmetry that hid it:
+  // socket.setTimeout() is an INACTIVITY timer and resets on every byte, so the two timers of
+  // the same length were guaranteed to disagree for exactly the busy connections.
+  touchSession(sessionId) {
+    const session = this.activeSessions.get(sessionId);
+    if (session) session.lastSeenAt = Date.now();
+    return !!session;
   }
 
   closeSession(sessionId) {
@@ -88,8 +121,8 @@ class MinerManager {
   // on a session's first ACCEPTED share (never at login — that would let a bare TCP connect
   // poison the windows) with the real miner IP (direct socket address, or the gateway's
   // PROXY-protocol v2 header value under Model C). Async (scrypt); errors are swallowed inside.
-  recordOwnerEvidence(grinAddress, ip, pass) {
-    return recordOwnerEvidence(this.db, grinAddress, ip, pass);
+  recordOwnerEvidence(grinAddress, ip, pass, opts) {
+    return recordOwnerEvidence(this.db, grinAddress, ip, pass, opts);
   }
 
   // Network-map geo capture (lib/geoip.js). Resolves the miner's transient real IP to an ISO
@@ -205,6 +238,18 @@ class MinerManager {
     try {
       for (const [, s] of this.activeSessions) {
         if (s.grinAddress !== grinAddress) continue;
+        // MINING sessions only (audit §J3-2). This readout is published unauthenticated on
+        // GET /api/account/:addr, and a stratum session exists from LOGIN — which is
+        // unauthenticated, since the address is the username. So a stranger could open a
+        // session under any address carrying a candidate password, read `distinct` back, and
+        // learn from whether the count moved whether their candidate matched a live rig's
+        // password: an exact equality oracle that reached none of the controls guarding that
+        // secret (no failed-attempt lockout, no per-IP counter, no 16 MB scrypt, no audit row),
+        // batches — 320 connections per IP against a 1200/min bucket. Requiring an accepted
+        // share puts the oracle behind real proof of work, which is the same bar every other
+        // ownership signal in this subsystem already has to clear, and costs the diagnostic
+        // nothing: a rig that is not mining is not a rig this hint is about.
+        if (!(s.acceptedShares > 0)) continue;
         sessions++;
         const p = typeof s.pass === 'string' ? s.pass.trim() : '';
         if (p && isUsablePassword(p, this.db)) usable.add(p);
@@ -236,6 +281,9 @@ class MinerManager {
     return false;
   }
 
+  // Reap sessions that have sent NOTHING for timeoutMs. Correct only because touchSession()
+  // above is called from the stratum message loop — without it this deletes live miners
+  // (audit §J6-2). Anything that changes how a session stays alive belongs in that pair.
   pruneInactiveSessions(timeoutMs = 600000) {
     const now = Date.now();
     const toDelete = [];

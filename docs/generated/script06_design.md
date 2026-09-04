@@ -280,3 +280,316 @@ after swapping tiles, and `bringToFront` is defined on **FeatureGroup, not Layer
 Harmless today because nothing runs after it, but it would silently swallow whatever got added
 there next. `FeatureGroup.bringToFront()` delegates via `invoke()`, which skips layers lacking
 the method, so the mixed canvas/DOM marker set is safe.
+
+---
+
+## Peer map — self-hosted basemap, no third-party tiles (plan, rev. 2026-09-02)
+
+**Status: PLANNED. Nothing below is built.** Scope is the peer map at
+`web/06_stats_map/stats/index.html` and its deploy path in `scripts/06_global_grin_health.sh`.
+
+⚠ **Rev 2 replaces the 2026-09-01 PMTiles plan, which was wrong for this map.** That plan
+budgeted ~1-4 GB of vector tiles. The correction, and why, is in *Sizing* below. PMTiles is
+retained only as the fallback if the requirements ever change (see *Deferred*).
+
+### Why
+
+`TILE_URLS` (index.html:1030-1033) points at `{s}.basemaps.cartocdn.com`. CARTO now requires an
+API key on that host and serves keyless requests **watermarked instead of blocked**. Verified
+live 2026-09-01:
+
+```
+a.basemaps.cartocdn.com/dark_all/3/4/3.png  ->  200, image/png, 10861 bytes (Fastly HIT)
+```
+
+⚠ **HTTP 200 with a valid PNG body.** Nothing 404s, nothing appears in nginx logs, no JS error
+fires. The watermark *is* the error message — undebuggable from our side, and it would recur
+just as silently on any other keyless provider that changes policy. CARTO state that raster got
+the key requirement first and **vector basemaps are next**, so restyling is not an escape route.
+
+The free key (email + domain, no account, no card, 5M tiles/month) fixes the watermark and
+nothing else: it is *"intended for non-commercial use"*, it sits in client-side HTML on a public
+page, and every visitor's browser still connects to CARTO/Fastly directly. That last point is
+the one that decides it — we hash miner IPs, mask audit IPs to /24 and publish country-only geo,
+then hand a third party the raw IP of everyone who opens the peer map.
+
+### Sizing — the error in rev 1, and the correction
+
+Rev 1 reached for a **general-purpose street basemap** (Protomaps planet, z0-8 sub-pyramid,
+~1 GB). That number is real, but it is the size of *everything OSM knows about the planet down
+to zoom 8* — roads, buildings, landuse, waterways, POIs, sub-national boundaries. **This map
+draws almost none of it.** It draws land, country borders, and a few labels, with peer dots on
+top. Paying a gigabyte to throw away 98% of it is the wrong trade, and "a 2D world map should be
+lightweight" is the correct instinct.
+
+The right shape is a **thematic outline map**, not a basemap: ship the vector data itself and
+draw it client-side. Measured 2026-09-02, not estimated:
+
+| Asset | Vertices | Raw | Gzipped |
+|---|---|---|---|
+| `countries-110m` TopoJSON (world-atlas) | 8,246 | 108 KB | ~35 KB |
+| `countries-50m` TopoJSON (world-atlas) | 80,617 | 756 KB | ~230 KB |
+| Natural Earth 10m countries, TopoJSON `-q 1e5` | 548,471 | 3.63 MB | **0.91 MB** |
+| City labels — 1,251 places as `[name, rank, lon, lat]` | — | 36.7 KB | **17 KB** |
+| `topojson-client` (lib) | — | 7 KB | ~3 KB |
+
+**Full three-resolution set: ~4.5 MB in the repo, under 1.2 MB over the wire.** Against
+1-4 GB, that is roughly a **thousandfold** reduction — because it is our map, not the world's.
+
+Both `countries-*.json` files carry `countries` *and* `land` objects plus a `name` property, so
+one file gives land fill, borders and country names together (241 countries at 50m, 258 at 10m).
+
+**Licensing improves too.** Natural Earth is **public domain**; world-atlas is **ISC**. The ODbL
+/ OSM attribution obligation that came with the tile plan disappears entirely. Crediting Natural
+Earth is courtesy, not a licence term.
+
+### Decision
+
+**Draw the basemap as a vector overlay from Natural Earth data committed to this repo.**
+
+No tiles. No tile server, no PMTiles archive, no `pmtiles` CLI, no glyph fonts, no byte-range
+requests, no `location /tiles/`, no VPS download step, no disk-space gate, no cache-busting
+scheme, no build pipeline of any kind.
+
+| Option | Verdict |
+|---|---|
+| CARTO free key | no — per-domain key in public HTML, non-commercial terms, privacy leak unchanged, vector gets keyed next |
+| Swap to Esri / OSM / OpenFreeMap | no — same class of dependency. Keep only as the emergency one-liner (below) |
+| Pre-render raster PNGs | no — z0-10 is 1,398,101 tiles, ~14 GB and ~1.4M inodes, **per theme** |
+| Self-hosted PMTiles (rev 1) | no — ~1 GB of street data to render country outlines. Right tool, wrong map |
+| **Natural Earth vector overlay** | **yes — ~4.5 MB in-repo, public domain, no tiles, no server, no runtime dependency at all** |
+
+This also **fixes an existing defect**: `matrix` and `hp` are currently just `dark_all`
+re-pointed, because CARTO has no green or purple basemap. Once the geometry is ours, a theme is
+a fill colour and a stroke colour — all four themes get a real basemap, and adding a fifth is
+free.
+
+**The trade, stated plainly:** no roads, no districts, no buildings, no detailed coastline. At
+z10 the map shows a clean country outline with city dots instead of the street map in the
+current screenshot. For a page whose subject is *where Grin peers are*, the Vietnamese district
+names and motorways are noise — but this is a visible change to the map's character and it is
+an operator decision, not a technical one.
+
+### Requirements
+
+- **Nothing on the VPS.** No new package, process, port, systemd unit, or disk budget. The
+  assets are static files, ~4.5 MB, next to `leaflet.min.js`.
+- **Nothing at deploy time.** The files are **committed to the repo** and ride the existing
+  assets copy at `06_global_grin_health.sh:565` — the same path that already ships
+  `TwemojiCountryFlags.woff2`. No install-time download, so no network dependency and no
+  version drift between servers.
+- **Data prep is one-off and local**, not part of any build. `geo2topo -q 1e5` over the Natural
+  Earth GeoJSON, property-stripped to `name` + `iso_a2`. Re-run only when Natural Earth
+  publishes a new release — country borders do not move often.
+
+**On building/hosting locally:** the local Windows box can be the *prep* machine — that is where
+the one-off `geo2topo` run belongs. It cannot *serve* the data: the public page is served by the
+VPS, so visitors' browsers fetch these files from the stats domain and the workstation is not in
+that path. At 4.5 MB the distinction is academic anyway; the files live in git and are deployed
+by `cp`, so there is no upload step to think about.
+
+### Repo changes, file by file
+
+1. **`web/06_stats_map/stats/assets/`** *(new files)* — `countries-110m.json`,
+   `countries-50m.json`, `countries-10m.json`, `cities.json`.
+
+2. **`web/06_stats_map/stats/index.html`**
+   - Replace the four `TILE_URLS` entries with four **style objects** (dark / light / matrix /
+     hp): land fill, border stroke, label colour. No URLs.
+   - Replace the `L.tileLayer` construction with `L.geoJSON` over the TopoJSON, decoded by
+     `topojson-client`.
+   - ⚠ The layer is constructed in **two** places — `initMap()` (:1052) and again in
+     `applyTheme()`'s theme swap (:1518), with a duplicated options object. Factor them into one
+     `makeBasemapLayer()`. With vector, theme changes become `setStyle()` on the existing layer
+     rather than a rebuild — which removes the duplication at the root.
+   - Add `topojson-client` beside the existing local `leaflet.min.js` (:47).
+   - Attribution: drop CARTO, credit Natural Earth (courtesy, not obligation).
+   - Keep `maxZoom: 10`.
+
+3. **`scripts/06_global_grin_health.sh`**
+   - One vendor block for `topojson-client` in the existing `if [[ ! -f "$WWW_DIR/..." ]]` idiom
+     (:603-618) — or commit it too, and skip the download entirely.
+   - Nothing else. The `assets/` copy at :565 already carries the data files.
+   - **No vhost change.** No `/tiles/` block, no MIME type, no cache rules beyond what static
+     assets already get.
+
+4. **`docs/generated/script06_design.md`** — this section, updated as built.
+
+### The one real technical risk — vertex count, not file size
+
+The 10m set is **548,471 vertices**. Leaflet projects a polygon's full point list before
+clipping it to the viewport, so a single canvas redraw at that resolution will stutter on pan
+and zoom. File size is not the constraint here; per-frame projection cost is.
+
+**Mitigation — swap resolution by zoom**, which is why the table above lists three files:
+
+| Zoom | File | Vertices |
+|---|---|---|
+| 2-4 | `countries-110m` | 8,246 |
+| 5-7 | `countries-50m` | 80,617 |
+| 8-10 | `countries-10m` | 548,471 |
+
+Only one is in the map at a time, and the deep-zoom file is the one whose viewport is smallest.
+Load the higher-detail files lazily on first cross into their band, so the initial page paint
+costs 108 KB.
+
+⚠ **Measure this before committing to 10m at all.** If z8-10 stutters even with the swap, cap
+the detail at 50m and accept coarser coastlines at deep zoom — the peer dots are the content,
+and 50m outlines at z10 are a cosmetic loss, not a functional one. Do not discover this after
+wiring three files.
+
+### Page-load cost — measured, and it gets FASTER
+
+Repo space and page-load cost are different numbers, and conflating them is what makes "4.5 MB"
+sound alarming. All figures measured 2026-09-02.
+
+**Repo / disk:** 105 KB + 739 KB + 3.63 MB + 37 KB = **~4.5 MB** in the working tree, roughly
+**1.2 MB** added to git objects after zlib. The repo's `.git` is already 70 MB, and country
+borders do not change, so this is a one-time addition — not a recurring diff.
+
+**What the page fetches TODAY at first paint** (map tab, z2 world view, 16 CARTO tiles):
+
+| | Bytes |
+|---|---|
+| CARTO tiles @1x | 75.0 KB |
+| **CARTO tiles @2x** (what `{r}` resolves to on any retina/HiDPI screen — most laptops and phones) | **192.4 KB** |
+
+Plus a DNS lookup and TLS handshake to a third-party origin before the first tile can arrive.
+
+**What it would fetch instead at first paint:**
+
+| Asset | Gzipped |
+|---|---|
+| `countries-110m` | 38.6 KB |
+| `topojson-client` | 2.5 KB |
+| **Total** | **41.1 KB** |
+
+Same origin — connection already warm, no extra DNS/TLS. **First paint gets ~150 KB lighter on
+a retina screen** and drops a third-party round trip. The change makes the page faster, not
+slower. (For scale, the page already ships `chart.js` at 69.7 KB gzipped and `leaflet.js` at
+42.2 KB — the initial basemap is smaller than either.)
+
+**The deeper tiers are lazy and never block:**
+
+| Tier | Gzipped | Fetched when |
+|---|---|---|
+| `countries-110m` | 38.6 KB | at load, with the page |
+| `countries-50m` | 237.1 KB | on first cross into z5, or on idle prefetch |
+| `countries-10m` | 910 KB | on first cross into z8 |
+
+Rules that keep this off the critical path:
+
+1. **Progressive refinement, never a stall.** Keep drawing the resolution already in hand until
+   the finer one arrives, then swap. A slow fetch means a briefly coarser map — never a blank
+   one, never a frozen UI.
+2. **Prefetch 50m on idle** after first paint (`requestIdleCallback`), so ordinary z5-7
+   exploration is already warm.
+3. ⚠ **`flyTo(maxZoom)` on a dot click jumps straight to z10**, which is the one common
+   interaction that hits the 10m tier cold. Kick that fetch off at the *start* of the flight,
+   not on arrival — the animation runs ~1-1.5 s and covers most of the download.
+4. **Long cache headers.** These files are effectively immutable, so repeat visits and repeat
+   zooms cost nothing.
+
+**Net:** the median visitor who never leaves the world view pays **41 KB instead of 192 KB**.
+A visitor who clicks through to z10 pays 910 KB once — and then panning is **free**, where tiles
+keep billing on every pan for as long as they explore.
+
+**If 910 KB is judged too much,** ship 110m + 50m only and cap the ceiling at 237 KB; z10 gets
+coarser coastlines and nothing else changes. That decision can be made after seeing it, and
+reversed by adding one file.
+
+### Labels
+
+Leaflet has **no collision-aware label placement** — this is the one thing tiles gave us for
+free and the one place effort has genuinely moved rather than disappeared. Options, cheapest
+first:
+
+1. **No basemap labels.** Peer tooltips already show `city, country`. Zero work, and the
+   cleanest look for the matrix/hp themes.
+2. **Country names only**, one per country at low zoom, hidden past z6.
+3. **City labels from `cities.json`** (1,251 places, 17 KB gzipped), filtered by `scalerank`
+   per zoom. The rank histogram is well-shaped for this — rank 0: 27 places, 1: 41, 2: 118,
+   3: 336, 4: 606 — so `scalerank <= zoom - 2` gives a natural progression from ~27 labels at
+   z2 to the full set at z8. Render as `divIcon`, and accept that overlaps are not resolved.
+
+Start at (1). It is reversible and it is very possibly the right answer.
+
+### Acceptance
+
+1. Load the page with DevTools open: **zero requests to any third-party host.** This is the
+   success criterion — the watermark disappearing is also what a CARTO key buys, and that is
+   the outcome being rejected.
+2. Confirm the data files are served gzipped (`content-encoding: gzip`) — ~1.2 MB becomes the
+   wire cost only if nginx compresses JSON. Check `gzip_types` includes `application/json`.
+3. Cycle all four themes; confirm the basemap restyles each time (catches the two-site bug).
+4. Pan and zoom at z8-10 over a dense area and watch frame rate — the risk above.
+5. Confirm peer dots, tooltips, click-`flyTo` and the group markers still work. That code is
+   untouched but now sits on a swapped base layer.
+6. Confirm behaviour at the antimeridian and at `maxBounds` — the current map sets
+   `noWrap: true` and `worldCopyJump: false` on the tile layer; the equivalent constraint has
+   to be reproduced on a GeoJSON layer or the world repeats horizontally.
+
+### Rollback
+
+Keep the CARTO URLs in a commented block for one release; rollback is a `git revert` of the HTML
+plus a redeploy.
+
+**Emergency one-liner** if the map must render now: Esri World Dark Gray Base, keyless, verified
+200 `image/jpeg` on 2026-09-01. ⚠ Its path is `{z}/{y}/{x}` — **y before x**; copying our current
+`{z}/{x}/{y}` order silently mirrors the world. Drop `{r}`; `{s}` is unused.
+
+### Things easy to miss
+
+1. **Vertex count, not byte count, is the budget.** See the risk section above. A 3.6 MB file
+   that projects half a million points per frame is a worse problem than a 30 MB file that
+   projects ten thousand.
+2. **`_finalize_seo()` re-copies pristine HTML** from `$WEB_SRC` over `$WWW_DIR` (:490-493), and
+   `_inject_analytics` re-applies GA afterwards. Any edit made directly to the deployed file is
+   erased by the next SEO/domain step. All HTML changes go in the repo source.
+3. **TopoJSON is not GeoJSON.** `L.geoJSON` cannot read it directly; `topojson-client`'s
+   `feature()` must decode it first. Handing the raw file to Leaflet yields an empty map with no
+   error.
+4. **Quantization is lossy and irreversible.** `-q 1e5` is ~0.4 km at the equator — fine at z10,
+   but re-quantizing an already-quantized file compounds the error. Always regenerate from the
+   Natural Earth source, never from the shipped file.
+5. **`preferCanvas: true` stays.** The group markers are DOM `divIcon`s in `markerPane` (z 600)
+   and the base geometry goes to `overlayPane` (z 400); that existing arrangement is what keeps
+   the dots above the map. A GeoJSON layer added after the markers will cover them —
+   `markersLayer.bringToFront()` already exists in `applyTheme()` for exactly this reason and
+   must survive the rewrite.
+6. **`noWrap` / `worldCopyJump` do not transfer.** They are tile-layer options. The world-repeat
+   behaviour has to be re-established on the vector layer (acceptance step 6).
+7. **Check nginx actually gzips JSON.** The whole size argument rests on it. Debian's default
+   `gzip_types` does include `application/json`, but confirm rather than assume — uncompressed
+   this is 4.5 MB, and that would be a real regression on a phone.
+8. **Do not expect deletion to fix the vertex budget — simplification is the lever.** The
+   intuition that Antarctica dominates is wrong: measured, it is **4.3%** of the 10m vertex
+   count. The real weight is ordinary countries with crenellated coastlines — Canada **12.4%**,
+   Russia 6.7%, USA 6.6%, Greenland 3.7%, Indonesia 3.6%. Dropping polar geometry buys almost
+   nothing; `toposimplify` on the whole set buys a lot.
+9. **The peer dots do not change.** Grouping, radius, `divIcon`, pane stacking and the
+   `bringToFront` FeatureGroup fix (section above) are out of scope. Do not let a basemap swap
+   become a marker refactor.
+10. **Public domain still deserves a credit line.** Not a licence term for Natural Earth, but the
+    attribution control should not simply be deleted along with the CARTO string.
+
+### Build sessions
+
+Broken into six pasteable per-session prompts (five build + one VPS acceptance) in
+docs/generated/script06_reference_basemap_prompts.md. Part 2 is the shippable checkpoint: after
+it the watermark is gone and Parts 3-5 are improvements on a working map.
+
+### Deferred / not doing
+
+- **PMTiles / Protomaps (rev 1's plan).** Correct engineering for a *street* basemap and the
+  right answer if this map ever needs roads, districts or building footprints. The verified
+  recipe is kept for that day: `pmtiles extract https://build.protomaps.com/YYYYMMDD.pmtiles
+  out.pmtiles --maxzoom=8` range-reads the sub-pyramid out of the live 137.6 GB planet (verified
+  2026-09-01: `200`, `Content-Length 137,665,515,426`, 17-byte range answered `206`), so it needs
+  no Planetiler, no Java and no `planet.osm.pbf`. ~1 GB at z0-8, over-zoomed to z10 without blur.
+  Client would be `protomaps-leaflet` (canvas, no WebGL, maintenance-mode upstream).
+- **Offline / onion basemap.** Falls out for free here — with the geometry in-repo there are no
+  external fetches at all, so the peer map works unchanged behind an onion front.
+- **Sharing the data with the pool's network map** (memory `project_pool_network_map`). Same
+  problem, same fix, different vhost — and at 4.5 MB of static assets, sharing is a copy. Do 06
+  first, then lift.

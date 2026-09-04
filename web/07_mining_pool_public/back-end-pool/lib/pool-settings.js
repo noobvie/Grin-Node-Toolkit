@@ -46,6 +46,18 @@ function parseJsonArray(val, fallback) {
   return fallback;
 }
 
+// Own-property membership tests for the settings schema. `defaults[section]` and
+// `key in defaults[section]` both walk Object.prototype, so `constructor`, `toString`,
+// `valueOf` and `__proto__` passed the section gate and `name`/`length`/`call` passed the
+// key gate — audit §J1-6 and §J7-8 (the second is worse: it is the one settings write that
+// produces no admin_audit_log row, because the diff is taken over Object.keys()). Both
+// gates go through these, everywhere, so a schema lookup can never resolve off the chain.
+const hasSection = (section) =>
+  Object.prototype.hasOwnProperty.call(PoolSettings.defaults, section) &&
+  PoolSettings.defaults[section] !== null && typeof PoolSettings.defaults[section] === 'object';
+const hasKey = (section, key) =>
+  Object.prototype.hasOwnProperty.call(PoolSettings.defaults[section], key);
+
 class PoolSettings {
   constructor(db) {
     this.db = db;
@@ -57,11 +69,18 @@ class PoolSettings {
       pool_name: 'GRINIUM',
       pool_tagline: 'Mine Grin, anywhere',
       pool_description: 'Mine Grin and have fun while you do it. GRINIUM is a low-fee PPLNS pool with anonymous Tor payouts, a per-address identity (no accounts, no sign-up), and live per-rig stats. Stack rewards on top of your shares with prize draws, join bonuses, streak rewards and a community fortune board — fair payouts for everyone, plus a little luck for the lucky. Point your miner at the nearest region and start earning in minutes.',
-      pool_visibility: 'public',
-      address_whitelist: '[]',
-      mining_mode: 'stratum',
+      // `pool_visibility`, `address_whitelist`, `max_miners` and `mining_mode` were REMOVED
+      // 2026-09-02 (audit §J9-1). They were validated, audited, step-up gated and rendered in a
+      // purpose-built "Private (whitelisted only)" UI while NOTHING read any of them — the
+      // stratum login gate checks is_banned and nothing else, so a pool set to private was
+      // fully open. Deleted rather than wired up because "private" is a product mode, not a
+      // login check: it would also have to cover the public miner list, the leaderboards and
+      // /api/pool/miners, and a control that works only where the operator can see it is worse
+      // than one that visibly does nothing. If it returns it goes through script07_design.md
+      // first. `max_miners` should not return at all — a global admission cap is a self-DoS
+      // lever; §J6-3's per-IP connection caps are the right instrument. Orphan pool_config
+      // rows on an already-deployed pool are inert once the keys are gone.
       pool_fee_percent: 1.0,
-      max_miners: 0,
       contact_email: 'support@grinium.com',
       // No `homepage_banner` here — removed 2026-07-27 as dead (see the note in
       // admin-panel/settings-pool-info.html). Site notices are notices.banners, which
@@ -137,7 +156,13 @@ class PoolSettings {
       twitter_handle: '@GriniumPool',
       twitter_card_type: 'summary_large_image',
       theme_color: '#b8e600',
-      site_url: 'https://grinium.com',
+      // EMPTY by default, deliberately (audit §J10-4). This value is the canonical origin
+      // for sitemap.xml, the RSS feed, every server-rendered <link rel="canonical"> and
+      // og:url, and branding.js's client-side canonical + JSON-LD. Shipping a real domain
+      // here made every fresh pool declare someone else's site as the canonical home of the
+      // operator's own content. Blank means "derive it": siteOrigin() falls back to the
+      // installer-set `subdomain` from pool.json.
+      site_url: '',
       // page_seo: JSON map of page key -> {title, description}
       page_seo: '{}',
       structured_data_enabled: 'true',
@@ -145,9 +170,21 @@ class PoolSettings {
       robots_noindex: 'false',
     },
     analytics: {
-      // provider selects which analytics script loads: none|ga4|plausible|umami|matomo
-      provider: 'ga4',
-      ga_tracking_id: 'G-GMYJ4PVG4L',
+      // provider selects which analytics script loads: none|ga4|plausible|umami|matomo.
+      //
+      // 'none' with a BLANK id, deliberately (audit §J11-4). This shipped as
+      // provider:'ga4' + ga_tracking_id:'G-GMYJ4PVG4L', and the whole chain worked: the id
+      // reaches /api/public/branding -> branding.js loadGa4() -> a googletagmanager script
+      // tag, cookie_consent_enabled is 'false' so nothing gates it, and the generated nginx
+      // CSP already allowlists googletagmanager.com + *.google-analytics.com. So every pool
+      // deployed from this toolkit sent every visitor of every public page to one fixed
+      // third-party GA4 property until the operator noticed — on a product whose stated
+      // position is scrypt-hashed miner IPs, country-only geo and a k-anonymity floor.
+      // Same class as §J10-4's site_url, one step worse: that mis-attributed the operator's
+      // content, this ships the operator's visitors. Analytics is opt-in; the operator
+      // supplies their own property. Never ship a non-empty id here.
+      provider: 'none',
+      ga_tracking_id: '',
       plausible_domain: '',
       plausible_src: 'https://plausible.io/js/script.js',
       umami_website_id: '',
@@ -223,8 +260,8 @@ class PoolSettings {
       // Both are enforced server-side (auth.js _sessionPolicy / refreshAccessToken).
       session_timeout_hours: 1,
       session_absolute_hours: 12,
-      invite_codes_enabled: 'false',
-      invite_codes: '[]',
+      // `invite_codes_enabled` + `invite_codes` were REMOVED 2026-09-02 (audit §J9-8): the same
+      // unbuilt gated-membership idea as pool_info's whitelist keys, read by nothing.
       // Extra stratum passwords banned from the ownership gate, ON TOP of the hardcoded
       // seed in lib/owner-proof.js — additions-only: the seed and the structural rules
       // (length, d= prefix) always apply and cannot be removed here. Use it for newly
@@ -263,17 +300,22 @@ class PoolSettings {
       // AND the recovery codes with no CLI means no way back into the panel.
       require_admin_totp: 'false',
     },
-    alerts: {
-      alert_check_interval_secs: 60,
-      alert_email_address: '',
-      discord_webhook_url: '',
-      slack_webhook_url: '',
-      telegram_bot_token: '',
-      telegram_chat_id: '',
-      alert_large_withdrawal: 100,
-      alert_tor_fails_per_week: 3,
-      alert_thresholds: '{"wallet_balance_warning_grin":10,"rejection_rate_warning_percent":20,"error_rate_warning_percent":50,"difficulty_change_warning_percent":50}',
-    },
+    // The `alerts` section — nine keys, three of them live credentials — was REMOVED 2026-09-04
+    // (audit §J8-3, ruling §J13-2, decided in §J17). Every one of them was stored here, served
+    // back to the browser in cleartext and read by NOTHING: AlertDelivery takes its channels
+    // from `config` (lib/alert-delivery.js:14-21), i.e. pool.json, and AlertMonitor takes its
+    // thresholds from `config.alert_thresholds` — an OBJECT with eleven money keys, where this
+    // section stored a JSON STRING carrying four obsolete ones. So a Telegram bot token typed
+    // into the panel was pure liability: it never reached the delivery path, and it sat in a
+    // database §J8-1 had to be hardened to keep unreadable.
+    //
+    // Deleted rather than wired up, per §J13-2: postWebhook() is an unrestricted outbound-request
+    // primitive, so making these keys live would turn a `secureAdmin` settings write into a
+    // durable, restart-surviving beacon — a strictly worse thing to own than a missing feature.
+    // Alerts are configured in pool.json, which needs root on the box. If this ever returns it
+    // goes through script07_design.md first, with §J13-2's three conditions met.
+    //
+    // Orphan pool_config rows on an already-deployed pool are inert once the keys are gone.
     // Operator-authored content pages (HTML). Empty content = page disabled / hidden.
     // about/terms/privacy/faq ship with editable GRINIUM defaults (seeded once into the
     // `pages` CMS table by db.js migratePagesFromConfig — operators edit them in admin →
@@ -403,6 +445,7 @@ PASS      any-password-you-choose</code>
 <h2>3. Fees and payouts</h2>
 <ul>
   <li>The pool retains a percentage fee from block rewards (default 1%; the current value is shown on the website). It is applied once, when a block's reward matures, and is reversed with the rest of the credit if that block is later orphaned.</li>
+  <li>A block's reward is the full amount the network paid for it &mdash; the fixed 60 GRIN emission <em>plus</em> the transaction fees carried by that block. Both are split among miners by the same PPLNS shares; the pool does not keep block fees on the side. The per-block split is shown on the <a href="/blocks.html">Blocks</a> page.</li>
   <li>A flat withdrawal fee (default 0.04 GRIN) is deducted from each payout on every payout method. It covers the sender-paid Grin network transaction fee. It is charged only when a payout is confirmed — a payout that fails is returned to your balance in full. The real network fee actually paid on each payout is published on the <a href="/payment-history.html">Payments &amp; Transparency</a> page.</li>
   <li>Block rewards are credited only after the network coinbase maturity period (1,440 blocks on mainnet) to protect against chain reorganisations.</li>
   <li>Payouts are subject to a minimum withdrawal amount (default 25 GRIN; the live value is shown on your Account page). You choose the amount to withdraw, between that minimum and your available balance.</li>
@@ -663,19 +706,6 @@ PASS      any-password-you-choose</code>
         if (isNaN(n) || n < 0 || n > 50) throw new Error('pool_fee_percent must be 0-50');
         return n;
       },
-      pool_visibility: (val) => {
-        if (!['public', 'private', 'maintenance'].includes(val)) throw new Error('invalid pool_visibility');
-        return val;
-      },
-      mining_mode: (val) => {
-        if (!['stratum', 'solo'].includes(val)) throw new Error('invalid mining_mode');
-        return val;
-      },
-      max_miners: (val) => {
-        const n = parseInt(val, 10);
-        if (isNaN(n) || n < 0) throw new Error('max_miners must be >= 0');
-        return n;
-      },
     },
     branding: {
       accent_color: (val) => {
@@ -705,19 +735,60 @@ PASS      any-password-you-choose</code>
         }
         return JSON.stringify(cleaned);
       },
+      // Theme-builder output: a map of CSS custom-property name -> value, applied by
+      // branding.js applyTheme() via style.setProperty() on <html> AND <body>.
+      //
+      // Audit §J9-3: this is the FOURTH operator-authored CSS sink in this section, and until
+      // that pass it was the only one that was neither step-up gated nor skipped on credential
+      // pages — it validated "is this JSON?" and nothing else, so any shape (array, nested
+      // object, 100 KB of values) went through and any property name could be written. It is
+      // gated in STEP_UP_SETTINGS_KEYS now; this narrows the value itself.
+      //
+      // Shape: a flat object, custom properties only (a leading '--' is added if absent, so a
+      // bare `display` becomes `--display` and can never set a real property), string values,
+      // no url()/expression, capped in count and length. Anything else is a refusal, not a
+      // silent drop — a theme that half-applied would be debugged as a rendering bug.
       custom_theme: (val) => {
-        // Accept an object directly or a JSON string; always store as JSON string
-        if (typeof val === 'object' && val !== null) return JSON.stringify(val);
-        if (typeof val === 'string') {
-          if (val.trim() === '') return '{}';
-          try {
-            JSON.parse(val);
-          } catch (err) {
-            throw new Error('custom_theme must be valid JSON');
-          }
-          return val;
+        let obj = val;
+        if (typeof obj === 'string') {
+          if (obj.trim() === '') return '{}';
+          try { obj = JSON.parse(obj); } catch (err) { throw new Error('custom_theme must be valid JSON'); }
         }
-        return '{}';
+        if (obj === null || obj === undefined) return '{}';
+        if (typeof obj !== 'object' || Array.isArray(obj)) {
+          throw new Error('custom_theme must be a JSON object of CSS variable name -> value');
+        }
+        const keys = Object.keys(obj);
+        if (keys.length > 200) throw new Error('custom_theme: max 200 variables');
+        const out = {};
+        for (const k of keys) {
+          // Stored WITHOUT the leading '--', which is the shape the admin theme builder
+          // reads back (settings-common.js THEME_VARS / data-var) and the shape branding.js
+          // applyTheme() prefixes at apply time. A leading '-' is refused rather than kept:
+          // setProperty('-webkit-…') sets a REAL property, and applyTheme passes any
+          // '-'-leading key straight through — the '--' prefix it adds is the only thing
+          // keeping this a custom-property channel. An imported '--accent' is normalised
+          // rather than rejected, because that is the shape a hand-written export can carry.
+          const name = k.replace(/^--/, '');
+          if (name.startsWith('-') || !/^[A-Za-z0-9_-]{1,64}$/.test(name)) {
+            throw new Error(`custom_theme: invalid variable name '${k}'`);
+          }
+          const v = obj[k];
+          if (v === null || v === undefined || v === '') continue;
+          if (typeof v !== 'string' && typeof v !== 'number') {
+            throw new Error(`custom_theme: value for '${k}' must be a string or number`);
+          }
+          const sv = String(v).trim();
+          if (sv.length > 200) throw new Error(`custom_theme: value for '${k}' too long (max 200)`);
+          // A custom property is a raw token stream: whatever consumes it via var() decides
+          // what it means. url() in a value consumed by a `background:` shorthand is an
+          // outbound request from every page that renders it, including the login page.
+          if (/url\s*\(|expression\s*\(|[<>]/i.test(sv)) {
+            throw new Error(`custom_theme: value for '${k}' may not contain url(), expression() or angle brackets`);
+          }
+          out[name] = sv;
+        }
+        return JSON.stringify(out);
       },
       font_url: (val) => {
         if (val) {
@@ -805,9 +876,36 @@ PASS      any-password-you-choose</code>
       },
     },
     payout: {
+      // Number.isFinite, not !isNaN (audit §J9-4): parseFloat('Infinity') and parseFloat('1e400')
+      // are both +Infinity, isNaN(Infinity) is false, and Infinity > 0 — so the old guard stored
+      // a `number` row of +Inf that applyToConfig copied into config.min_withdrawal, where every
+      // rail's `amount < minW` test refused forever. It survived restart and rendered as an EMPTY
+      // field in the panel (JSON.stringify(Infinity) === 'null'), so it did not even look wrong.
       min_withdrawal: (val) => {
         const n = parseFloat(val);
-        if (isNaN(n) || n <= 0) throw new Error('min_withdrawal must be > 0');
+        if (!Number.isFinite(n) || n <= 0) throw new Error('min_withdrawal must be a finite number > 0');
+        return n;
+      },
+      // Blocks a found block must be buried under before its reward is credited and becomes
+      // withdrawable. On MAINNET this is not a pool policy — Grin's COINBASE_MATURITY is 1440
+      // and a coinbase literally cannot be spent before then, so anything lower credits (and
+      // lets miners withdraw) GRIN the wallet cannot yet send. The floor is consensus, not
+      // preference. Both keys were unvalidated AND unapplied until audit §J5-9.
+      confirm_depth_mainnet: (val) => {
+        const n = parseInt(val, 10);
+        if (isNaN(n) || n < 1440) {
+          throw new Error('confirm_depth_mainnet must be >= 1440 (Grin COINBASE_MATURITY)');
+        }
+        if (n > 100000) throw new Error('confirm_depth_mainnet must be <= 100000');
+        return n;
+      },
+      // Testnet is deliberately allowed below consensus: the point of the testnet run is to
+      // exercise the payout pipeline without waiting a day per block. Payouts may fail with
+      // "insufficient funds" until the real 1440 passes — that is the trade being made.
+      confirm_depth_testnet: (val) => {
+        const n = parseInt(val, 10);
+        if (isNaN(n) || n < 1) throw new Error('confirm_depth_testnet must be >= 1');
+        if (n > 100000) throw new Error('confirm_depth_testnet must be <= 100000');
         return n;
       },
       // Upper bound is a sanity rail, not a policy: a fat-fingered 40 instead of 0.04 would
@@ -957,22 +1055,20 @@ PASS      any-password-you-choose</code>
         return s;
       },
     },
-    alerts: {
-      alert_check_interval_secs: (val) => {
-        const n = parseInt(val, 10);
-        if (isNaN(n) || n < 5 || n > 3600) throw new Error('alert_check_interval_secs must be 5-3600');
-        return n;
-      },
-    },
+    // (no `alerts` validators — the section was removed, see the note in `defaults`)
     incentives: (() => {
       const percent = (name) => (val) => {
         const n = parseFloat(val);
         if (isNaN(n) || n < 0 || n > 100) throw new Error(`${name} must be 0-100`);
         return n;
       };
+      // Finiteness, not just NaN (audit §J9-4) — this is the only unbounded numeric family in
+      // the schema, and both keys it guards (join_bonus_amount, jackpot_amount) are credited
+      // straight onto a REAL miner balance. §J7-5 records what +Inf does to one: permanent,
+      // invisible, and it switches the prize-pool overdraw guard off for good.
       const nonNeg = (name) => (val) => {
         const n = parseFloat(val);
-        if (isNaN(n) || n < 0) throw new Error(`${name} must be >= 0`);
+        if (!Number.isFinite(n) || n < 0) throw new Error(`${name} must be a finite number >= 0`);
         return n;
       };
       const intRange = (name, lo, hi) => (val) => {
@@ -1059,7 +1155,7 @@ PASS      any-password-you-choose</code>
   };
 
   getSection(section) {
-    if (!PoolSettings.defaults[section]) {
+    if (!hasSection(section)) {
       throw new Error(`Unknown section: ${section}`);
     }
 
@@ -1130,7 +1226,8 @@ PASS      any-password-you-choose</code>
         contact_email_enc: b64(pool.contact_email),
         // `homepage_banner` was published here until 2026-07-27 and nothing ever rendered
         // it. Banners come from `announcements` further down (getActiveBanners()).
-        visibility: pool.pool_visibility || 'public',
+        // `visibility` was published here until 2026-09-02 and no page ever read it; the key
+        // behind it is gone (§J9-1).
         public_stratum_host: pool.public_stratum_host || '',
         founded_year: pool.founded_year || '',
         security_contact_enc: b64(pool.security_contact),
@@ -1277,11 +1374,12 @@ PASS      any-password-you-choose</code>
   }
 
   updateSection(section, values, userId = null) {
-    if (!PoolSettings.defaults[section]) {
+    if (!hasSection(section)) {
       throw new Error(`Unknown section: ${section}`);
     }
 
     const validators = PoolSettings.validators[section] || {};
+
     const stmt = this.db.prepare(`
       INSERT INTO pool_config (section, key, value, value_type, updated_by)
       VALUES (?, ?, ?, ?, ?)
@@ -1301,8 +1399,18 @@ PASS      any-password-you-choose</code>
       ? _flagBool(this.getSection('payout').dormancy_enabled) : null;
 
     const transaction = this.db.transaction(() => {
+      // Audit baseline (§J1-2). Before this pass, updateSection wrote NO admin_audit_log row
+      // while resetSection did — so restoring a section to defaults left a trail and *changing*
+      // it did not. Turning require_admin_totp off, moving pool_fee_percent, or widening the
+      // nostr_nip05_domains SSRF allowlist were all invisible.
+      //
+      // Read INSIDE the transaction, not before it: a baseline taken before BEGIN could be
+      // invalidated by a concurrent admin write landing between the read and the transaction,
+      // which would make the "changed keys" list name someone else's edit.
+      const beforeState = this.getSection(section);
+
       for (const [key, value] of Object.entries(values)) {
-        if (!(key in PoolSettings.defaults[section])) {
+        if (!hasKey(section, key)) {
           throw new Error(`Unknown key '${key}' in section '${section}'`);
         }
 
@@ -1356,6 +1464,48 @@ PASS      any-password-you-choose</code>
           stmt.run('payout', 'dormancy_policy_effective_at', '0', 'number', userId);
         }
       }
+
+      // Audit row (§J1-2), INSIDE the transaction so a cross-field rollback above takes the
+      // audit row with it — an audit row for a change that never landed is worse than none.
+      // The converse is deliberate too: because it is inside, a failed audit INSERT rolls the
+      // SETTINGS write back. That is fail-CLOSED, and it is the §B requirement ("no admin
+      // mutation succeeds without an audit row"). The only way this INSERT can fail is the
+      // admin_id FK to users(id), and no code path anywhere deletes a user row (accounts are
+      // deactivated via is_active), so a live admin cannot hit it. userId=null is the system
+      // caller (dormancy re-arm) and NULL never violates a FK.
+      //
+      // Diff the whole merged section, not just Object.keys(values): that also catches the
+      // dormancy re-arm write just above, which is not a key the caller sent. Skip the INSERT
+      // when nothing actually moved — the settings form harvester posts EVERY field in the
+      // section on every save, so logging presence rather than change would write a row each
+      // time an operator opened a page and pressed Save, and that noise ages real events out
+      // under audit_log_keep_days.
+      //
+      // NAMES ONLY, never values. admin_audit_log is readable through GET /api/admin/audit-log
+      // and its CSV export, so recording before/after values here would copy every settings
+      // value into a wider-read table. Which keys moved, by whom, when, is what the forensic
+      // question actually needs.
+      //
+      // This rule was written when the `alerts` section held three live credentials
+      // (discord_webhook_url, slack_webhook_url, telegram_bot_token). That section is gone
+      // (§J8-3), so nothing here is a credential TODAY — which is exactly why the rule has to
+      // stay a rule rather than a reaction: the next secret-shaped key added to any section
+      // must not have to remember to opt out of being logged.
+      const afterState = this.getSection(section);
+      // Sentinel for 'key absent': JSON.stringify(undefined) returns the VALUE undefined,
+      // so without it an added key would compare equal to a key that stayed unset. A bare
+      // word is safe because stringify always quotes a string, so it can never emit this.
+      const canon = (v) => (v === undefined ? '<undef>' : JSON.stringify(v));
+      const changedKeys = Object.keys(afterState)
+        .filter((k) => canon(beforeState[k]) !== canon(afterState[k]))
+        .sort();
+
+      if (changedKeys.length > 0) {
+        this.db.prepare(`
+          INSERT INTO admin_audit_log (admin_id, action, target_type, target_id, details)
+          VALUES (?, 'update_settings', 'pool_config', ?, ?)
+        `).run(userId, section, JSON.stringify({ section, changed_keys: changedKeys, count: changedKeys.length }));
+      }
     });
 
     transaction();
@@ -1363,7 +1513,7 @@ PASS      any-password-you-choose</code>
   }
 
   resetSection(section, userId = null) {
-    if (!PoolSettings.defaults[section]) {
+    if (!hasSection(section)) {
       throw new Error(`Unknown section: ${section}`);
     }
 
@@ -1415,6 +1565,35 @@ PASS      any-password-you-choose</code>
         `${config.min_withdrawal} — falling back to 0 (pool absorbs the network fee)`
       );
       config.withdrawal_fee = 0;
+    }
+    // §J5-9: these were readable and writable in the admin panel and applied by NOBODY, so
+    // every consumer kept reading pool.json's default. Coerced defensively — the validator is
+    // the gate, but applyToConfig also runs against values written before it existed.
+    const _depth = (v, floor) => {
+      const n = parseInt(v, 10);
+      return Number.isFinite(n) && n >= floor ? n : null;
+    };
+    if (payout.confirm_depth_mainnet !== undefined) {
+      const n = _depth(payout.confirm_depth_mainnet, 1440);
+      if (n === null) {
+        console.warn(
+          `[settings] ignoring confirm_depth_mainnet ${JSON.stringify(payout.confirm_depth_mainnet)} ` +
+          `— below Grin COINBASE_MATURITY (1440); keeping ${config.confirm_depth_mainnet}`
+        );
+      } else {
+        config.confirm_depth_mainnet = n;
+      }
+    }
+    if (payout.confirm_depth_testnet !== undefined) {
+      const n = _depth(payout.confirm_depth_testnet, 1);
+      if (n === null) {
+        console.warn(
+          `[settings] ignoring confirm_depth_testnet ${JSON.stringify(payout.confirm_depth_testnet)} ` +
+          `— must be a positive integer; keeping ${config.confirm_depth_testnet}`
+        );
+      } else {
+        config.confirm_depth_testnet = n;
+      }
     }
     if (payout.max_pending_withdrawals !== undefined) {
       config.max_pending_withdrawals = payout.max_pending_withdrawals;

@@ -47,6 +47,9 @@ const DEFAULT_RELAYS = [RELAY_FLOOR, 'wss://relay.0xchat.com', 'wss://offchain.p
 const LOOKBACK_SECS = 3 * 86400;       // catch-up window on (re)connect
 const PUBLISH_CONFIRM_MS = 30000;      // read-back confirm budget per goblin CONFIRM_TIMEOUT
 const NIP05_TIMEOUT_MS = 10000;
+// Hard ceiling on a /.well-known/nostr.json body (audit §J13-10). A real one is a few hundred
+// bytes; anything approaching this is a resource attack, not a profile.
+const NIP05_BODY_MAX = 64 * 1024;
 
 const PAYMENT_PREAMBLE =
   '[Goblin] GRIN payment message — open in Goblin (https://goblin.st) to process.';
@@ -302,7 +305,63 @@ class NostrPayoutBridge {
     } catch (e) {
       console.warn(`[nostr-payout] ws wiring: ${e.message}`);
     }
+
+    // NIP-05 fetch: abort it, and cap what it will read (audit §J13-10).
+    //
+    // withTimeout() only stops US WAITING — the underlying request keeps running, so a slow or
+    // deliberately-slow allowlisted domain left a live socket and an uncapped response behind
+    // for every attempt, and nothing ever closed them. nostr-tools' nip05 has no signal
+    // parameter, but it does let us replace the fetch it uses, which is the only seam there is.
+    //
+    // The domain is allowlist-checked before we get here, so this is not an SSRF control — it
+    // is a resource bound against a host that is trusted to be who it says and not to be fast
+    // or honest about size. A /.well-known/nostr.json is a few hundred bytes.
+    try {
+      if (typeof lib.nip05?.useFetchImplementation === 'function') {
+        lib.nip05.useFetchImplementation(async (url, opts = {}) => {
+          const res = await fetch(url, { ...opts, signal: AbortSignal.timeout(NIP05_TIMEOUT_MS) });
+          const body = await NostrPayoutBridge._readCapped(res, NIP05_BODY_MAX);
+          // queryProfile calls res.json(), so hand back a minimal response-shaped object whose
+          // json() resolves the already-capped text. Returning the real Response would leave the
+          // cap unenforced, since it would be read again downstream.
+          return {
+            ok: res.ok, status: res.status,
+            json: async () => JSON.parse(body),
+            text: async () => body,
+          };
+        });
+      }
+    } catch (e) {
+      console.warn(`[nostr-payout] nip05 fetch wiring: ${e.message} — falling back to the default`);
+    }
+
     this._lib = lib;
+  }
+
+  // Read at most `max` bytes of a response and abort the rest. Without this a domain that
+  // drip-feeds forever grows a string until the process dies — `timeout` on the socket is an
+  // INACTIVITY timer, so a slow trickle resets it indefinitely (the same shape §J13-3 fixed on
+  // the two raw-https consumers).
+  static async _readCapped(res, max) {
+    if (!res.body) return await res.text();
+    const reader = res.body.getReader();
+    const chunks = [];
+    let total = 0;
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        total += value.length;
+        if (total > max) {
+          await reader.cancel();
+          throw new Error(`nip05 response exceeded ${max} bytes`);
+        }
+        chunks.push(value);
+      }
+    } finally {
+      try { reader.releaseLock(); } catch (_) {}
+    }
+    return Buffer.concat(chunks.map((c) => Buffer.from(c))).toString('utf8');
   }
 
   _wrap(rumor, recipientPubHex) {
@@ -344,6 +403,28 @@ class NostrPayoutBridge {
     }
   }
 
+  // A relay URL advertised by SOMEONE ELSE (a recipient's kind-10050) is untrusted input that
+  // becomes an outbound connection, so it gets more than a `wss://` prefix test. `^wss://`
+  // matched `wss://127.0.0.1:3413/`, `wss://169.254.169.254/` and `wss://[::1]/` alike, and
+  // SimplePool would dial every one of them. Require a parseable wss: URL with a real public
+  // hostname: no IP literals (v4 or bracketed v6), no single-label hosts (localhost, an
+  // internal short name, a container/service name), no credentials in the authority.
+  // Audit §J13-4.
+  static _isPublicRelayUrl(raw) {
+    let u;
+    try { u = new URL(raw); } catch (_) { return false; }
+    if (u.protocol !== 'wss:') return false;
+    if (u.username || u.password) return false;
+    const host = u.hostname.toLowerCase();
+    if (!host) return false;
+    if (host.startsWith('[')) return false;                  // bracketed IPv6 literal
+    if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host)) return false;   // IPv4 literal
+    if (!host.includes('.')) return false;                   // single-label / localhost
+    if (host.endsWith('.localhost') || host.endsWith('.local') ||
+        host.endsWith('.internal')) return false;
+    return true;
+  }
+
   async _fetchDmRelays(pubHex) {
     // Best-effort kind-10050 lookup for a recipient (their preferred DM inbox relays).
     const ev = await withTimeout(
@@ -352,7 +433,8 @@ class NostrPayoutBridge {
     ).catch(() => null);
     if (!ev || !Array.isArray(ev.tags)) return [];
     return ev.tags
-      .filter((t) => t[0] === 'relay' && typeof t[1] === 'string' && /^wss:\/\//.test(t[1]))
+      .filter((t) => t[0] === 'relay' && typeof t[1] === 'string' &&
+                     NostrPayoutBridge._isPublicRelayUrl(t[1]))
       .map((t) => t[1])
       .slice(0, 4);
   }
@@ -457,6 +539,9 @@ class NostrPayoutBridge {
            seen_at INTEGER NOT NULL DEFAULT (unixepoch())
          )`
       );
+      // Pruned by lib/retention.js on the ordinary retention pass (audit §J4-8); the index is
+      // what keeps that DELETE from scanning the table it exists to bound.
+      this.db.exec('CREATE INDEX IF NOT EXISTS idx_nostr_seen_at ON nostr_seen_events(seen_at)');
     } catch (e) { console.warn(`[nostr-payout] seen-table init: ${e.message}`); }
   }
 
@@ -507,3 +592,4 @@ function safeRequire(mod) {
 
 module.exports = NostrPayoutBridge;
 module.exports._extractSlatepack = extractSlatepack; // exported for unit tests
+module.exports._isPublicRelayUrl = NostrPayoutBridge._isPublicRelayUrl; // exported for unit tests

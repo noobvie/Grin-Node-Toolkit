@@ -58,21 +58,36 @@ function hotp(secretBase32, counter) {
   return String(bin % (10 ** DIGITS)).padStart(DIGITS, '0');
 }
 
-// Verify a submitted code against the current time, tolerating ±`window` steps of clock
-// drift (default ±1 = ±30s). Constant-ish-time compare on the digit strings.
-function verify(secretBase32, token, window = 1) {
-  if (!secretBase32 || !token) return false;
+// Verify a submitted code and return the time-step counter it matched, or -1 for no match.
+// Tolerates ±`window` steps of clock drift (default ±1 = ±30s). Constant-ish-time compare
+// on the digit strings.
+//
+// The counter is returned, not swallowed, because RFC 6238 §5.2 requires a verifier to refuse
+// a SECOND use of the same OTP — being spent is the protocol's only defence against a code
+// someone has observed (shoulder-surf, screenshot, phishing page). A caller cannot implement
+// that against a boolean: it has to know WHICH step was accepted so it can store it and reject
+// anything at or below it next time. See auth.js verifyTotpOrRecovery / users.totp_last_counter.
+// Audit §J2-5.
+function verifyCounter(secretBase32, token, window = 1) {
+  if (!secretBase32 || !token) return -1;
   const clean = String(token).replace(/\s+/g, '');
-  if (!/^\d{6}$/.test(clean)) return false;
+  if (!/^\d{6}$/.test(clean)) return -1;
   const counter = Math.floor(Date.now() / 1000 / PERIOD);
   for (let w = -window; w <= window; w++) {
     const expected = hotp(secretBase32, counter + w);
     if (expected.length === clean.length &&
         crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(clean))) {
-      return true;
+      return counter + w;
     }
   }
-  return false;
+  return -1;
+}
+
+// Boolean form. Kept for callers that genuinely have no replay window to protect — today only
+// enrollment confirmation, which is immediately followed by a counter stamp. A NEW code check
+// should almost always use verifyCounter and enforce the replay rule.
+function verify(secretBase32, token, window = 1) {
+  return verifyCounter(secretBase32, token, window) >= 0;
 }
 
 // otpauth:// URI for the QR code / manual entry. label = account, issuer = pool name.
@@ -84,4 +99,4 @@ function keyuri(secretBase32, label, issuer) {
   return `otpauth://totp/${lbl}?${params}`;
 }
 
-module.exports = { generateSecret, hotp, verify, keyuri, base32Encode, base32Decode, PERIOD, DIGITS };
+module.exports = { generateSecret, hotp, verify, verifyCounter, keyuri, base32Encode, base32Decode, PERIOD, DIGITS };

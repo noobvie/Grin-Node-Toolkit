@@ -21,6 +21,12 @@ class AlertMonitor {
     this.walletTor = modules.walletTor;
     this.wallet = modules.wallet;               // WalletAPI (Owner-API) — online + balance signal
     this.stratumServer = modules.stratumServer;
+    // Back-reference so the stratum server can PUSH an alert rather than wait to be polled
+    // (audit §J7-1). A found block that cannot be written to the DB is the most expensive event
+    // this pool can have, and it is invisible to every detector in this file — they all read
+    // `FROM blocks`, and the row was never inserted. Wired here rather than in index.js because
+    // index.js constructs the stratum server ~270 lines before this class exists.
+    if (this.stratumServer) this.stratumServer.alertMonitor = this;
     this.withdrawalScheduler = modules.withdrawalScheduler;
     this.alertDelivery = modules.alertDelivery; // wired so alerts are actually delivered
     this.db = db;
@@ -88,7 +94,16 @@ class AlertMonitor {
       unrecorded_wallet_send: true,
       large_withdrawal: true,
       payout_surge: true,
-      wallet_identity_changed: true
+      wallet_identity_changed: true,
+      // §J5-8. Every detector above watches for money LEAVING. A distribution pipeline that
+      // has stopped is the opposite shape — the wallet fills up while the ledger owes nothing
+      // — so it slips past all of them and looks like a healthy, profitable pool.
+      distribution_stalled: true,
+      // §J7-1. Not a polled detector — pushed by the stratum server the moment a found block
+      // cannot be written to the DB. It has no `resolveAlert` on purpose: unlike every check
+      // above, this is an EVENT, not a condition, and there is no later observation that could
+      // say "the block that was lost is fine now". The row stays active until a human clears it.
+      block_record_failed: true
     };
     this.enabledAlerts = Object.assign({}, DEFAULT_ENABLED, config.alert_types_enabled || {});
 
@@ -141,6 +156,12 @@ class AlertMonitor {
       // Check for orphaned blocks
       if (this.enabledAlerts.block_orphaned) {
         await this.checkOrphanedBlocks();
+      }
+
+      // Blocks found but never credited (§J5-8). Cheap — two indexed counts, no wallet call —
+      // so it rides the fast loop rather than the money cadence.
+      if (this.enabledAlerts.distribution_stalled) {
+        await this.checkDistributionStalled();
       }
 
       // Money-integrity + withdrawal-anomaly checks — slower cadence (they force a fresh,
@@ -238,6 +259,15 @@ class AlertMonitor {
             data: { drop, explained_by_payouts: paid, explained_in_flight: inFlight, unexplained, threshold }
           });
           await this._maybeFreeze(`unexplained wallet drain ${unexplained.toFixed(4)} GRIN`);
+        } else {
+          // Audit §J17-3: this else branch was missing, and wallet_drain was the ONLY detector
+          // in this file with no resolveAlert() counterpart. triggerAlert() returns early when
+          // an active row of the same type already exists — BEFORE deliverAlert() — and
+          // acknowledge/snooze leave status='active', so without this the pool's own top theft
+          // alarm delivered exactly once for the life of the install and every later drain was
+          // a silent occurrence_count bump on a stale message. The auto-freeze above still
+          // fired; the notification did not.
+          await this.resolveAlert('wallet_drain');
         }
       }
       // Advance the snapshot only when the wallet was reachable (else we'd compare against stale zero).
@@ -562,6 +592,97 @@ class AlertMonitor {
 
     } catch (err) {
       this.error(`Orphan block check failed: ${err.message}`);
+    }
+  }
+
+  /**
+   * Blocks that matured but were never credited — audit §J5-8.
+   *
+   * This is the gap every other money detector leaves open. `coverage_shortfall` fires when
+   * the wallet holds LESS than the ledger owes; a stalled pipeline is the mirror image (the
+   * wallet holds MORE, because rewards arrive and are never distributed), and a surplus is
+   * the shape of a healthy pool. `ledger_integrity_drift` is ledger-vs-log and cannot see it
+   * either — nothing moved, consistently. `checkOrphanedBlocks` only counts 'orphaned'.
+   *
+   * So the signal has to come from the blocks table itself, and it is unambiguous: a block
+   * more than `confirm_depth` deep that is still 'immature' means the maturity sweep is not
+   * running (a poisoned nonce row, an unreachable node, a classification refusal), and a
+   * block sitting in 'confirmed' means maturity worked but distribution did not.
+   *
+   * Warning, never a freeze. Freezing payouts would punish miners for a fault that is already
+   * withholding their money, and the condition is legitimately transient during a node outage
+   * — which is why the immature side is given a full extra confirm_depth of slack.
+   */
+  async checkDistributionStalled() {
+    try {
+      const confirmDepth = this.config.network === 'mainnet'
+        ? (this.config.confirm_depth_mainnet || 1440)
+        : (this.config.confirm_depth_testnet || 100);
+
+      // Tip height from the blocks/shares the pool has seen, not from the node: this check
+      // must keep working while the node is unreachable, which is one of the states it exists
+      // to report. MAX(block_height) over shares is the pool's own view of the chain head.
+      const tipRow = this.db.prepare('SELECT MAX(block_height) AS h FROM shares').get();
+      const tip = (tipRow && tipRow.h) || 0;
+
+      // 'confirmed' = matured, distribution owed. distributeConfirmedBlocks runs every 30s,
+      // so anything older than STALE_CONFIRMED_S has failed repeatedly, not just once.
+      const STALE_CONFIRMED_S = 1800; // 30 min = ~60 missed distribution ticks
+      const stuckConfirmed = this.db.prepare(
+        `SELECT COUNT(*) AS n, COALESCE(SUM(reward), 0) AS grin, MIN(height) AS lowest
+         FROM blocks
+         WHERE status = 'confirmed' AND COALESCE(confirmed_at, found_at) < unixepoch() - ?`
+      ).get(STALE_CONFIRMED_S);
+
+      // 'immature' past DOUBLE the confirm depth: the sweep should have judged it long ago.
+      // The doubling is deliberate slack for a node outage or a slow resync.
+      const stuckImmature = tip > 0
+        ? this.db.prepare(
+            `SELECT COUNT(*) AS n, COALESCE(SUM(reward), 0) AS grin, MIN(height) AS lowest
+             FROM blocks WHERE status = 'immature' AND height <= ?`
+          ).get(tip - confirmDepth * 2)
+        : { n: 0, grin: 0, lowest: null };
+
+      const total = stuckConfirmed.n + stuckImmature.n;
+      if (total === 0) {
+        await this.resolveAlert('distribution_stalled');
+        return;
+      }
+
+      const parts = [];
+      if (stuckImmature.n > 0) {
+        parts.push(
+          `${stuckImmature.n} block(s) still 'immature' more than ${confirmDepth * 2} blocks ` +
+          `deep (oldest height ${stuckImmature.lowest}) — the maturity sweep is not completing`
+        );
+      }
+      if (stuckConfirmed.n > 0) {
+        parts.push(
+          `${stuckConfirmed.n} block(s) 'confirmed' but undistributed for over ` +
+          `${Math.round(STALE_CONFIRMED_S / 60)} min (oldest height ${stuckConfirmed.lowest}) — ` +
+          `reward distribution is failing`
+        );
+      }
+      const grin = Number((stuckConfirmed.grin + stuckImmature.grin).toFixed(9));
+
+      await this.triggerAlert('distribution_stalled', {
+        level: 'critical',
+        message:
+          `Block rewards are not reaching miners: ${parts.join('; ')}. ` +
+          `${grin} GRIN is sitting in the pool wallet uncredited. Check the backend log for ` +
+          `'maturity sweep aborted' or 'Reward distribution failed'.`,
+        data: {
+          stuck_immature: stuckImmature.n,
+          stuck_confirmed: stuckConfirmed.n,
+          uncredited_grin: grin,
+          lowest_height: Math.min(
+            ...[stuckImmature.lowest, stuckConfirmed.lowest].filter(v => v !== null && v !== undefined)
+          ),
+          confirm_depth: confirmDepth,
+        },
+      });
+    } catch (err) {
+      this.error(`Distribution stall check failed: ${err.message}`);
     }
   }
 

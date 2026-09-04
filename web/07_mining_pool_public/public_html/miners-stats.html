@@ -70,6 +70,16 @@
       text-decoration: none;
     }
     .addr-link:hover { text-decoration: underline; }
+    /* Same monospace treatment, no link affordance (audit §J11-1). The address is masked
+       server-side and no longer deep-links to the account page, so accent colour + underline
+       would advertise a click that does nothing. Keeps break-all so a narrow column still
+       shows the whole masked form. */
+    .addr-plain {
+      font-family: var(--mono, ui-monospace, monospace);
+      font-size: 12px;
+      word-break: break-all;
+      color: inherit;
+    }
 
     /* Shared timeframe toggle driving all three trend charts (Day/Week/Month/Year/All). */
     .rangebar { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-bottom: 2px; }
@@ -281,10 +291,17 @@
         }
 
         // Full miner address rendered as a link into the account view.
+        // Plain text, NOT a link to /account-settings.html?addr= (audit §J11-1, 2026-09-02).
+        // The three leaderboards below are the pool's largest address surface (up to 500 rows
+        // each), and the server now masks the address on all three. The deep-link was what made
+        // that mask worthless: it needed the FULL address to build the href, so every row put
+        // one in the page — which then inverted the mask on /api/pool/miners,
+        // /api/stratum/stats and, worst, /api/pool/unclaimed's list of unwatched balances.
+        // A miner reaches their own account by pasting their address into the lookup box on
+        // account-settings.html; that costs them one paste and costs a scraper the whole pool.
+        // Do not "restore the convenience" here without re-reading §J11-1.
         function addrCell(addr) {
-            addr = String(addr || '');
-            const href = '/account-settings.html?addr=' + encodeURIComponent(addr);
-            return '<a class="addr-link" href="' + href + '">' + escHtml(addr) + '</a>';
+            return '<span class="addr-plain">' + escHtml(String(addr || '')) + '</span>';
         }
 
         function setStat(id, text) {
@@ -391,8 +408,9 @@
             if (note) note.textContent = RANGE_NOTE[msRange] || '';
             if (typeof PoolCharts === 'undefined') return;
             try {
-                const data = await Auth.fetch('/api/pool/metrics/history?range=' + encodeURIComponent(msRange));
-                const points = (data && Array.isArray(data.points)) ? data.points : [];
+                const data = await Auth.read('/api/pool/metrics/history?range=' + encodeURIComponent(msRange));
+                if (data === null) throw new Error('unavailable');   // audit §J15-2
+                const points = Array.isArray(data.points) ? data.points : [];
                 const bucket = data && data.bucket_seconds;
                 const has = points.length > 0;
 
@@ -427,7 +445,7 @@
             // busiest-first legend order never repaints a line as rankings shift.
             const regionPanel = document.getElementById('panel-regions');
             try {
-                const rd = await Auth.fetch('/api/pool/metrics/history/regions?range=' + encodeURIComponent(msRange));
+                const rd = await Auth.read('/api/pool/metrics/history/regions?range=' + encodeURIComponent(msRange));
                 let series = (rd && Array.isArray(rd.series)) ? rd.series : [];
                 series = series.filter(s => s.points && s.points.length).slice(0, 8); // palette is 8 slots, UI caps regions at 8
                 const onlyDefault = series.length === 1 && series[0].region === 'default';
@@ -452,8 +470,8 @@
 
         async function loadMinersStats() {
             try {
-                const stats = await Auth.fetch('/api/pool/stats');
-                if (stats) {
+                const stats = await Auth.read('/api/pool/stats');
+                if (stats) {   // null (429/5xx/network) leaves the placeholders — audit §J15-2
                     setStat('ms-miners', stats.active_miners || 0);
                     setStat('ms-connections', stats.active_connections || 0);
                 }
@@ -461,14 +479,18 @@
 
             // Pool hashrate tile stays a 1h figure; the P-01 chart shows the selected timeframe.
             try {
-                const hr = await Auth.fetch('/api/stratum/hashrate');
+                const hr = await Auth.read('/api/stratum/hashrate');
                 if (hr) setStat('ms-hashrate', fmtGpsLabel(hr.pool_hashrate_1h_gps || 0));
             } catch (e) { /* tile keeps placeholder */ }
 
             const hrTbody = document.getElementById('top-hashrate');
             try {
-                const data = await Auth.fetch('/api/stratum/top-miners?window=1440&limit=500');
-                hrMiners = (data && Array.isArray(data.top_miners)) ? data.top_miners : [];
+                const data = await Auth.read('/api/stratum/top-miners?window=1440&limit=500');
+                // null = the endpoint did not answer. Auth.read never throws, so without this
+                // the catch below was unreachable and an outage rendered as "no miners"
+                // rather than "unavailable" (audit §J15-2).
+                if (data === null) throw new Error('unavailable');
+                hrMiners = Array.isArray(data.top_miners) ? data.top_miners : [];
                 setStat('ms-top', hrMiners.length ? fmtGpsLabel(hrMiners[0].hashrate_gps || 0) : '—');
                 renderHrPage();
             } catch (e) {
@@ -479,8 +501,12 @@
 
             const fndTbody = document.getElementById('top-finders');
             try {
-                const data = await Auth.fetch('/api/pool/top-block-finders?days=30&limit=500');
-                fndMiners = (data && Array.isArray(data.top_finders)) ? data.top_finders : [];
+                const data = await Auth.read('/api/pool/top-block-finders?days=30&limit=500');
+                // null = the endpoint did not answer. Auth.read never throws, so without this
+                // the catch below was unreachable and an outage rendered as "no miners"
+                // rather than "unavailable" (audit §J15-2).
+                if (data === null) throw new Error('unavailable');
+                fndMiners = Array.isArray(data.top_finders) ? data.top_finders : [];
                 renderFndPage();
             } catch (e) {
                 fndMiners = [];
@@ -490,8 +516,12 @@
 
             const avgTbody = document.getElementById('top-avg');
             try {
-                const data = await Auth.fetch('/api/stratum/top-avg-hashrate?days=30&limit=500');
-                avgMiners = (data && Array.isArray(data.top_miners)) ? data.top_miners : [];
+                const data = await Auth.read('/api/stratum/top-avg-hashrate?days=30&limit=500');
+                // null = the endpoint did not answer. Auth.read never throws, so without this
+                // the catch below was unreachable and an outage rendered as "no miners"
+                // rather than "unavailable" (audit §J15-2).
+                if (data === null) throw new Error('unavailable');
+                avgMiners = Array.isArray(data.top_miners) ? data.top_miners : [];
                 renderAvgPage();
             } catch (e) {
                 avgMiners = [];

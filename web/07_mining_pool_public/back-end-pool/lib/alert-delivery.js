@@ -195,6 +195,15 @@ class AlertDelivery {
    */
   postWebhook(url, payload) {
     return new Promise((resolve, reject) => {
+      // The scheme was never checked. `new URL('http://internal/x')` parses fine and
+      // https.request then dialled internal:443 with TLS regardless — so an operator who
+      // pasted an http:// webhook got a silent, confusing TLS attempt rather than an
+      // error naming the real problem. Refuse anything but https up front.
+      // Audit §J13-2 / §J13-3.
+      if (url.protocol !== 'https:') {
+        reject(new Error(`webhook URL must use https (got ${url.protocol})`));
+        return;
+      }
       const options = {
         hostname: url.hostname,
         port: url.port || 443,
@@ -208,10 +217,28 @@ class AlertDelivery {
         timeout: 10000
       };
 
+      // Response cap. `timeout` here is a socket INACTIVITY timer, so a server that drips
+      // a byte every 9 s never trips it while `data` grows without bound. 64 KB is far more
+      // than any webhook ack.
+      const MAX_RESPONSE_BYTES = 65536;
       const req = https.request(options, (res) => {
         let data = '';
-        res.on('data', chunk => { data += chunk; });
+        let bytes = 0;
+        let overflowed = false;
+        res.on('data', chunk => {
+          bytes += chunk.length;
+          if (bytes > MAX_RESPONSE_BYTES) {
+            if (!overflowed) {
+              overflowed = true;
+              req.destroy();
+              reject(new Error(`Response exceeded ${MAX_RESPONSE_BYTES} bytes`));
+            }
+            return;
+          }
+          data += chunk;
+        });
         res.on('end', () => {
+          if (overflowed) return;
           if (res.statusCode >= 200 && res.statusCode < 300) {
             resolve({ status: res.statusCode });
           } else {

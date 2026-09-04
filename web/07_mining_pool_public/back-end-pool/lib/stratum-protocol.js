@@ -56,14 +56,92 @@ function parseStratumMessage(jsonStr) {
 // clipped to `…rig-donate10` would donate 10% instead of 100%, or drop the donation entirely.
 // So the token is parsed and stripped FIRST (from the full suffix), and only the leftover
 // *label* is truncated — the donation % is always honored no matter how long the raw name was.
+// ── bech32 checksum (BIP-173) ───────────────────────────────────────────────────────────
+// A Grin Slatepack address is `bech32::encode(hrp, ed25519_pubkey.to_base32())` — the CLASSIC
+// bech32 variant (checksum constant 1), not bech32m: grin-wallet pins the `bech32` 0.7 crate,
+// which predates the variant split. So the last 6 symbols of every address are a checksum over
+// the other 52, and verifying it is the difference between "looks like an address" and "is one".
+//
+// Why this is here at all (audit §J6-6): validateUsername used to check the bech32 CHARSET and
+// the length and stop. Any 58 charset-valid characters were therefore a working stratum login,
+// which (a) gave an anonymous client an unbounded supply of distinct addresses, each of which
+// took a miner_accounts row plus three synchronous statements on the shared DB at login, and
+// (b) silently accepted a miner who fat-fingered one character of their own address and then
+// accrued a balance to a key nobody holds. The checksum catches exactly (b) — that is what it
+// was designed for — and puts a real cost on (a).
+const BECH32_CHARSET = 'qpzry9x8gf2tvdw0s3jn54khce6mua7l';
+
+function bech32Polymod(values) {
+  const GEN = [0x3b6a57b2, 0x26508e6d, 0x1ea119fa, 0x3d4233dd, 0x2a1462b3];
+  let chk = 1;
+  for (const v of values) {
+    const top = chk >> 25;
+    chk = ((chk & 0x1ffffff) << 5) ^ v;
+    for (let i = 0; i < 5; i++) {
+      if ((top >> i) & 1) chk ^= GEN[i];
+    }
+  }
+  return chk >>> 0;
+}
+
+// hrp expansion per BIP-173: high bits, a 0 separator, then low bits.
+function bech32HrpExpand(hrp) {
+  const out = [];
+  for (let i = 0; i < hrp.length; i++) out.push(hrp.charCodeAt(i) >> 5);
+  out.push(0);
+  for (let i = 0; i < hrp.length; i++) out.push(hrp.charCodeAt(i) & 31);
+  return out;
+}
+
+// Verify the 6-symbol checksum of `data` (the part AFTER the '1' separator) against `hrp`.
+// Lowercase only — grin never emits an uppercase address and mixed case is invalid bech32.
+function bech32ChecksumValid(hrp, data) {
+  if (typeof hrp !== 'string' || typeof data !== 'string') return false;
+  if (data.length < 6) return false;
+  const values = [];
+  for (const ch of data) {
+    const v = BECH32_CHARSET.indexOf(ch);
+    if (v < 0) return false;              // outside the charset (the regex already refuses these)
+    values.push(v);
+  }
+  return bech32Polymod(bech32HrpExpand(hrp).concat(values)) === 1;
+}
+
 const MAX_WORKER_NAME_LEN = 25;
 const MAX_WORKER_RAW_LEN = 40;
-function validateUsername(username) {
+// `network` — 'mainnet' | 'testnet'. When given, ONLY that chain's prefix is accepted.
+//
+// Why it must be given (audit §J17-4): a Slatepack address is bech32(hrp, ed25519_pubkey), and
+// the SAME 32-byte key encodes to two different, fully-valid, checksum-correct strings depending
+// on whether the hrp is `grin` or `tgrin`. Accepting both meant one miner could hold TWO
+// miner_accounts rows — two balances, each measured separately against min_withdrawal, two
+// ownership proofs, no way for the product to show they are the same key — and a MAINNET pool
+// would credit real GRIN to a `tgrin1…` account and then hand it to `grin-wallet send -d`,
+// which is chain-aware and refuses it. The result is a stuck payout on a balance the miner
+// cannot move.
+//
+// §J6-6 added the checksum verification that closed the charset hole; it could not close this
+// one, because the checksum is computed OVER the hrp — the two spellings are not each other's
+// typo, they are two correct encodings. Only the pool's own network settles which is right.
+//
+// The parameter is optional so the BIP-173 vector tests can exercise the encoding alone, but
+// every production call site passes it. It is checked BEFORE the checksum so a wrong-network
+// address is rejected on identity, not on a technicality.
+function validateUsername(username, network = null) {
   if (!username || typeof username !== 'string') return null;
   const bech32 = '[ac-hj-np-z02-9]';
   const re = new RegExp(`^(grin1|tgrin1)(${bech32}{58})(\\.([a-z0-9_-]{1,${MAX_WORKER_RAW_LEN}}))?$`);
   const m = username.match(re);
   if (!m) return null;
+
+  if (network) {
+    const want = network === 'mainnet' ? 'grin1' : 'tgrin1';
+    if (m[1] !== want) return null;
+  }
+
+  // Charset + length are not identity — verify the checksum those last 6 symbols ARE (§J6-6).
+  // m[1] is the prefix INCLUDING the '1' separator, so the hrp is it minus the last character.
+  if (!bech32ChecksumValid(m[1].slice(0, -1), m[2])) return null;
 
   let worker_name = m[4] || 'default';
   let donation_percent = null;
@@ -166,6 +244,7 @@ function createStatusResponse(id, sessionStats) {
 module.exports = {
   parseStratumMessage,
   validateUsername,
+  bech32ChecksumValid,   // exported for scripts/test-stratum-guards.js (BIP-173 vectors)
   createJobNotification,
   createLoginResponse,
   createSubmitResponse,

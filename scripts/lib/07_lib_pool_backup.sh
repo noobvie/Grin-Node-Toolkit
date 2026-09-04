@@ -248,6 +248,32 @@ pbk_restore() {
     fi
     rm -f "$tmp_clear"
 
+    # ── FREEZE PAYOUTS on the restored ledger (audit §J17-2) ────────────────────
+    # A restore rewinds pool.db to the snapshot. The CHAIN and the WALLET do not rewind with
+    # it, so every payout that settled after the snapshot comes back as an owed balance the
+    # wallet has already spent — and the withdrawal scheduler starts at index.js:595, roughly
+    # 170 lines and several subsystem inits BEFORE the AlertMonitor at index.js:766 whose
+    # coverage_shortfall check is what would auto-freeze. Its first loop pass sends. Freezing
+    # here makes the restored ledger inert until a human has reconciled it: payout_control is
+    # a persisted table, so the flag rides in the restored DB itself and survives the restart.
+    # Written BEFORE pool_deroot below so the WAL sidecars this read-write open creates get
+    # chowned back to the service user with everything else (§J16-8's trap, in reverse).
+    if [[ -f "$POOL_APP_DIR/pool.db" ]]; then
+        if node -e "
+const { DatabaseSync } = require('node:sqlite');
+const d = new DatabaseSync(process.argv[1]);
+d.exec('CREATE TABLE IF NOT EXISTS payout_control (id INTEGER PRIMARY KEY CHECK (id = 1), frozen INTEGER NOT NULL DEFAULT 0, reason TEXT DEFAULT NULL, frozen_by TEXT DEFAULT NULL, frozen_at INTEGER DEFAULT NULL, updated_at INTEGER NOT NULL DEFAULT (unixepoch()))');
+d.prepare(\"INSERT INTO payout_control (id, frozen, reason, frozen_by, frozen_at, updated_at) VALUES (1, 1, ?, 'restore', unixepoch(), unixepoch()) ON CONFLICT(id) DO UPDATE SET frozen = 1, reason = excluded.reason, frozen_by = excluded.frozen_by, frozen_at = excluded.frozen_at, updated_at = excluded.updated_at\").run('ledger restored from backup — reconcile before resuming');
+d.close();
+" "$POOL_APP_DIR/pool.db" 2>/dev/null; then
+            warn "Payouts FROZEN on the restored ledger — the wallet has spent money this DB no longer knows about."
+        else
+            error "Could not freeze payouts on the restored pool.db."
+            error "  Do NOT start the service yet: freeze from the admin panel first, or the"
+            error "  scheduler may re-send payouts the chain has already made."
+        fi
+    fi
+
     # Perms: tar extracts as root — re-assert the de-rooted ownership (§13.9) and
     # the secret modes. pool_deroot is the canonical sweep when available.
     if declare -F pool_deroot >/dev/null 2>&1; then
@@ -266,6 +292,12 @@ pbk_restore() {
     echo -e "       ${DIM}gateway edits wg_hub_endpoint once. Gateway boxes themselves need nothing else.${RESET}"
     echo -e "    3) ${BOLD}5) Set up wallet → 2) Start listener${RESET} — restored .wallet_pass unlocks it."
     echo -e "    4) ${BOLD}4) Setup nginx${RESET} if this is a fresh box (cert is NOT in the backup)."
+    echo -e "    ${RED}5b)${RESET} ${BOLD}Reconcile BEFORE resuming payouts${RESET} — admin → Health → Reconciliation."
+    echo -e "       ${DIM}Payouts are frozen (above). The restored ledger is older than the chain: any${RESET}"
+    echo -e "       ${DIM}payout that settled after the snapshot is owed again here but already spent${RESET}"
+    echo -e "       ${DIM}on-chain. Resuming without reconciling re-sends it. Resume from admin →${RESET}"
+    echo -e "       ${DIM}Payouts once coverage reports clean. (Not an issue on a FRESH-box rebuild${RESET}"
+    echo -e "       ${DIM}from the newest backup — but freeze/reconcile costs nothing there either.)${RESET}"
     echo -e "    5) ${BOLD}6) Service control → Start${RESET}, then check admin → health."
     mkdir -p "$(dirname "$PBK_LOG")"
     echo "[$(date -u '+%Y-%m-%d %H:%M:%S UTC')] restore from: $(basename "$chosen")" >> "$PBK_LOG" 2>/dev/null || true

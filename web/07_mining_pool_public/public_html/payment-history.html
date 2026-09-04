@@ -69,6 +69,16 @@
       text-decoration: none;
     }
     .addr-link:hover { text-decoration: underline; }
+    /* Same monospace treatment, no link affordance (audit §J11-1). The address is masked
+       server-side and no longer deep-links to the account page, so accent colour + underline
+       would advertise a click that does nothing. Keeps break-all so a narrow column still
+       shows the whole masked form. */
+    .addr-plain {
+      font-family: var(--mono, ui-monospace, monospace);
+      font-size: 12px;
+      word-break: break-all;
+      color: inherit;
+    }
 
     /* Shared timeframe toggle driving the trend recorders (Day/Week/Month/Year/All). */
     .rangebar { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-bottom: 2px; }
@@ -320,10 +330,13 @@
             return addr.length > 16 ? addr.slice(0, 9) + '…' + addr.slice(-4) : addr;
         }
         // Full miner address rendered as a link into the account view.
+        // Plain text, NOT a link, and NO `title` tooltip (audit §J11-1, 2026-09-02). The server
+        // masks grin_address on /api/pool/payments now, so `addr` arrives already truncated —
+        // truncAddr() below is a no-op on it and stays only as a guard. The old cell put the
+        // FULL address in both the href and the title, which is what made every masked feed
+        // elsewhere re-attachable by a join. See the note in miners-stats.html addrCell().
         function addrCell(addr) {
-            addr = String(addr || '');
-            const href = '/account-settings.html?addr=' + encodeURIComponent(addr);
-            return '<a class="addr-link" href="' + href + '" title="' + escHtml(addr) + '">' + escHtml(truncAddr(addr)) + '</a>';
+            return '<span class="addr-plain">' + escHtml(truncAddr(String(addr || ''))) + '</span>';
         }
 
         function setStat(id, text) {
@@ -365,11 +378,15 @@
             if (note) note.textContent = RANGE_NOTE[phRange] || '';
             if (typeof PoolCharts === 'undefined') return;
             try {
-                const data = await Auth.fetch('/api/pool/payments/history?range=' + encodeURIComponent(phRange));
-                const points = (data && Array.isArray(data.points)) ? data.points : [];
-                const dist   = (data && Array.isArray(data.distribution)) ? data.distribution : [];
-                const totals = (data && data.totals) ? data.totals : {};
-                const bucket = data && data.bucket_seconds;
+                const data = await Auth.read('/api/pool/payments/history?range=' + encodeURIComponent(phRange));
+                // null = no answer (429/5xx/network). Without this the lifetime transparency
+                // tiles below rendered 0 ツ paid / 0 payouts / 0 % fee during an outage, which
+                // on THIS page is the strongest possible false statement (audit §J15-2).
+                if (data === null) throw new Error('unavailable');
+                const points = Array.isArray(data.points) ? data.points : [];
+                const dist   = Array.isArray(data.distribution) ? data.distribution : [];
+                const totals = data.totals || {};
+                const bucket = data.bucket_seconds;
 
                 // ── Lifetime transparency tiles (range-independent) ──
                 setStat('ph-paid-all',  fmtGrin(totals.paid_all || 0));
@@ -430,7 +447,7 @@
         async function loadRecentPayouts() {
             const tbody = document.getElementById('payouts');
             try {
-                const data = await Auth.fetch('/api/pool/payments?limit=100');
+                const data = await Auth.read('/api/pool/payments?limit=100');
                 if (!Array.isArray(data)) throw new Error('bad response');
                 const when = w => w.confirmed_at || w.created_at || 0;
                 if (tbody) {
@@ -461,7 +478,7 @@
         async function loadUnclaimed() {
             const block = document.getElementById('unclaimed-block');
             try {
-                const data = await Auth.fetch('/api/pool/unclaimed');
+                const data = await Auth.read('/api/pool/unclaimed');
                 const dormant = (data && data.dormant) || { totals: {}, list: [] };
                 const disp = (data && data.dispositions) || { totals: {}, batches: [] };
                 const totals = dormant.totals || {};

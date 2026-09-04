@@ -5,7 +5,19 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta http-equiv="X-UA-Compatible" content="IE=edge">
-  <meta name="robots" content="index, follow, max-snippet:-1">
+  <!-- noindex (audit §J11-3, 2026-09-02). This page is address-addressable with no login, so
+       every ?addr= URL is one miner's identity, and behind it sit their balance, pending payout,
+       rig names and payout history. It was `index, follow` while miners-stats.html — which IS in
+       sitemap.xml — emitted up to 1500 `?addr=<full address>` links, so a crawl walked the whole
+       pool into third-party indexes: Google mostly consolidates on the canonical below, but a
+       canonical is a hint, it does not stop the crawl, and Bing / Common Crawl / AI training
+       crawlers are not bound by it. Once a miner's address is in someone else's corpus it cannot
+       be recalled. login.html carries the same treatment for the same reason.
+       `follow` is deliberate — the site shell's nav should still be crawlable from here; it is
+       the INDEXING of this URL that is the problem, not the outbound links.
+       robots.txt stays permissive on purpose: a Disallow would stop the crawl BEFORE this tag is
+       read, which is the classic way a URL gets indexed anyway (URL-only, no snippet). -->
+  <meta name="robots" content="noindex, follow">
   <meta name="language" content="English">
   <meta name="author" content="GRINIUM Mining Pool">
 
@@ -253,6 +265,18 @@
     .table-scroll .data-table { margin-bottom: 0; background: transparent; border-color: var(--border-soft); box-shadow: none; animation: none; }
     .amt-in { color: var(--ok); }
     .amt-out { color: var(--gold); }
+
+  /* Ownership-proof reveal toggle (audit §J15-4). The input is type=password by default;
+     this sits inside the field so the row keeps its single-control shape. */
+  .proof-wrap { position: relative; display: block; }
+  .proof-wrap > input { width: 100%; padding-right: 4.2rem; }
+  .proof-reveal {
+    position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
+    background: transparent; border: 1px solid var(--line); border-radius: 4px;
+    color: var(--text-dim); font: inherit; font-size: .78rem; line-height: 1;
+    padding: 4px 8px; cursor: pointer;
+  }
+  .proof-reveal:hover { color: var(--text); border-color: var(--text-dim); }
   </style>
 </head>
 <body>
@@ -392,13 +416,23 @@
                                         <span style="color:var(--text-mute);font-weight:400">(8&ndash;128 characters)</span></label>
                                     <!-- maxlength matches owner-proof PASS_MAX (128) — stop an over-long
                                          password at the keyboard rather than at the failed withdrawal. -->
-                                    <input type="text" id="acct-ip-proof" maxlength="128" placeholder="e.g. 203.0.113.42, 2001:db8::1, or your rig password" autocomplete="off" spellcheck="false">
+                                    <!-- type=password by default (audit §J15-4). This one box gates EVERY money
+                                         action on the page — both withdraw rails, slatepack finalize, the kernel
+                                         proof reveal and the CSV exports — and one of the two things it accepts is
+                                         the rig's stratum password. It shipped as type="text" while
+                                         #acct-nostr-pass-proof, the SAME secret fifty lines below, was already
+                                         type="password". The Show toggle exists because the other accepted value
+                                         is an IP address, which is unusable masked. -->
+                                    <span class="proof-wrap">
+                                    <input type="password" id="acct-ip-proof" maxlength="128" placeholder="e.g. 203.0.113.42, 2001:db8::1, or your rig password" autocomplete="off" spellcheck="false">
+                                    <button type="button" class="proof-reveal" id="acct-proof-reveal" aria-label="Show or hide the proof you typed" aria-pressed="false">Show</button>
+                                    </span>
                                     <small id="acct-ip-hint" style="color:var(--text-dim);"></small>
                                     <!-- Password-proof diagnostics (renderPasswordProof). Hidden until the
                                          account endpoint reports something worth saying. -->
                                     <div id="acct-pass-diag" class="pass-diag" style="display:none"></div>
                                     <small style="color:var(--text-mute);">Accepted: one of the last two IPs your miner submitted shares from
-                                        (check yours at <a href="https://tools.grin.money/tools/my-ip/" target="_blank" rel="noopener">tools.grin.money/tools/my-ip</a>),
+                                        (check yours at <a href="https://tools.grin.money/tools/my-ip/" target="_blank" rel="noopener noreferrer">tools.grin.money/tools/my-ip</a>),
                                         or the password set in your miner's pool config.</small>
                                     <!-- The "why" behind the password rules, collapsed (rgn-help pattern, css/reactor.css).
                                          The setup guide on the homepage stays inline because someone reading it is
@@ -618,6 +652,12 @@
                                 <li><span class="k">Pending withdrawal</span><span class="v" id="acct-pending">—</span></li>
                                 <li><span class="k">Payouts made</span><span class="v" id="acct-paid-count">—</span></li>
                                 <li><span class="k">Minimum payout (pool)</span><span class="v" id="acct-min">—</span></li>
+                                <!-- Donation row is HIDDEN at 0% and shown otherwise (see
+                                     renderAccount). The `donateN` worker-name tag sets this and
+                                     it debits every future block credit, so the miner has to be
+                                     able to read it back — it used to appear on no page they
+                                     could reach. Audit §J3-5. -->
+                                <li id="acct-donate-row" style="display:none"><span class="k" title="Set by adding donateN to your worker name; use donate0 to stop">Donating to prize pool</span><span class="v" id="acct-donate">—</span></li>
                                 <!-- Row is removed entirely (not shown as 0) on a pool that
                                      absorbs the network fee — see renderAccount. -->
                                 <li id="acct-fee-row"><span class="k" title="A flat fee covering the Grin blockchain transaction fee">Withdrawal fee</span><span class="v" id="acct-fee">—</span></li>
@@ -696,6 +736,11 @@
                         <h2 class="panel-title"><span class="tag">P-08</span> Withdrawal history <span class="right"><span class="dim">every payout, kept forever · </span><span id="wd-count"></span></span></h2>
                         <div class="panel-body">
                             <p class="note">Your payout requests only — no donations or clawbacks. Unlike the ledgers above (row detail kept 60 days), this list goes back to your first payout. Export the full history as CSV for your records.</p>
+                            <p class="note" id="wd-proof-note">On-chain proofs are hidden by default. A payout's <b>kernel</b> identifies its transaction in the Grin chain forever, so publishing it beside an address would let anyone link your payouts to the chain. Enter your ownership proof at the top of this page and press <b>Reveal proofs</b> to load the explorer links for your own payouts.</p>
+                            <div class="pager-row" style="margin-bottom:10px;">
+                                <button class="btn sm" id="wd-reveal-proofs">Reveal proofs</button>
+                                <span class="msg" id="wd-proof-msg"></span>
+                            </div>
                             <div class="table-scroll">
                                 <table class="data-table" aria-label="Withdrawal history">
                                     <thead><tr><th>Requested</th><th>Method</th><th>Status</th><th class="num">Amount</th><th class="num">Fee</th><th>Confirmed</th><th>Proof</th></tr></thead>
@@ -761,6 +806,10 @@
         let acctWithdrawalFee = 0;    // flat withdrawal fee (GRIN) from the summary; 0 = pool absorbs it
         const ledger = { in: { page: 0, total: 0 }, out: { page: 0, total: 0 } };
         const wd = { page: 0, total: 0 };   // withdrawal-history pager (P-08)
+        // withdrawal id -> kernel excess, filled only by revealProofs() after the ownership gate
+        // accepts (audit §J11-2). Cleared on every lookup(), so switching to another address can
+        // never show the previous address's proofs. Session-scoped: never persisted.
+        let revealedProofs = {};
 
         function $id(id) { return document.getElementById(id); }
 
@@ -855,6 +904,11 @@
                 $id('acct-view').style.display = '';
                 setMsg(msg, '', true);
                 ledger.in.page = 0; ledger.out.page = 0; wd.page = 0;
+                // Drop any revealed kernels — they belong to whichever address was looked up
+                // before this one (audit §J11-2).
+                revealedProofs = {};
+                const pmsg = $id('wd-proof-msg');
+                if (pmsg) { pmsg.textContent = ''; pmsg.className = 'msg'; }
                 loadChart();
                 loadWorkers();
                 loadEarnings();
@@ -888,6 +942,20 @@
             $id('acct-pending').textContent = a.pending_withdrawals ? 'Yes — 1 in progress' : 'No';
             $id('acct-paid-count').textContent = Number(a.payouts_count || 0).toLocaleString('en-US');
             $id('acct-min').textContent = fmtGrin(a.min_withdrawal);
+            // Donation share (audit §J3-5). Shown only when it is actually taking a cut, and
+            // worded so someone who never set it knows both that it is happening and how to
+            // stop it — the tag is set from the worker name, which is not where a miner would
+            // think to look for something that reduces their earnings.
+            const dRow = $id('acct-donate-row');
+            const dPct = Number(a.donation_percent || 0);
+            if (dRow) {
+                dRow.style.display = dPct > 0 ? '' : 'none';
+                if (dPct > 0) {
+                    $id('acct-donate').textContent = dPct + '% of new earnings';
+                    $id('acct-donate').style.color = 'var(--warn, inherit)';
+                    dRow.title = 'Set by a donateN tag in your worker name. Reconnect with donate0 in the worker name to stop it.';
+                }
+            }
             // Hide the row rather than print "0 ツ" — a pool that absorbs the network fee has no
             // withdrawal fee to disclose, and a zero row invites "will this change?" questions.
             const feeRow = $id('acct-fee-row');
@@ -912,7 +980,15 @@
             renderNetPreview();
             // min/max autofill chips: min = pool minimum, max = current spendable balance
             $id('acct-amt-min').dataset.v = Number(a.min_withdrawal || 0).toFixed(1);
-            $id('acct-amt-max').dataset.v = Number(a.balance || 0).toFixed(9).replace(/0+$/, '').replace(/\.$/, '');
+            // FLOOR to 9 dp, never round (audit §J15-9, closing §J7-3's front-end half).
+            // Balances are un-quantised REAL doubles, so toFixed(9) rounds UP about half the
+            // time — and the withdrawal CAS is `balance >= ?` with no tolerance, so the chip
+            // that says "your full balance" produced a refusal over less than one nanogrin.
+            // Flooring strands at most 1 nanogrin and can never overshoot. This does NOT fix
+            // an API caller that sends its own toFixed(9); that is §J7-3's option (2) and is
+            // still OPEN.
+            $id('acct-amt-max').dataset.v =
+                (Math.floor((Number(a.balance) || 0) * 1e9) / 1e9).toFixed(9).replace(/0+$/, '').replace(/\.$/, '');
             // Plain number here — the label markup already carries the ツ unit (fmtGrin would double it).
             $id('acct-amt-max-val').textContent = Number(a.balance || 0).toFixed(4);
 
@@ -946,7 +1022,7 @@
                 subEl.style.display = stuck ? '' : 'none';
             }
 
-            renderPasswordProof(a.password_proof);
+            renderPasswordProof(a.password_proof, a.evidence);
 
             // Hands the summary to every registered rail: each one toggles its own radio +
             // destination card and renders its own state. Adding a rail needs no edit here.
@@ -971,7 +1047,7 @@
             trivial_password:   ['too common', 'Your rig password is a known factory default (or a single repeated character), so it is not recorded as proof. Set a private one on the rig.'],
             password_invalid:   ['unreadable', 'Your rig password could not be read as proof. Set a plain-text password on the rig.']
         };
-        function renderPasswordProof(pp) {
+        function renderPasswordProof(pp, evidence) {
             const el = $id('acct-pass-diag');
             if (!el) return;
             el.innerHTML = '';
@@ -1013,6 +1089,24 @@
                     lines.push('<div class="pd-line pd-ok"><b>Consistent</b>' + escHtml(rigs) +
                         ', all using the same password.</div>');
                 }
+            }
+
+            // When the recorded evidence last CHANGED (audit §J3-4). Anyone can mine to any
+            // address, so a capture may be somebody else's rig displacing yours — and that used
+            // to be completely silent. Only shown when it is recent enough to be actionable;
+            // an ordinary miner whose rig has been on the same IP for months sees nothing.
+            const ev = evidence || {};
+            const changedAt = Math.max(Number(ev.ip_changed_at || 0), Number(ev.pass_changed_at || 0));
+            const ageDays = changedAt ? (Date.now() / 1000 - changedAt) / 86400 : Infinity;
+            if (changedAt && ageDays <= 7) {
+                lines.push('<div class="pd-line pd-warn"><b>Evidence changed</b>The mining IP or rig ' +
+                    'password recorded for this address last changed on ' + escHtml(fmtWhen(changedAt)) +
+                    '. If that was not you starting a rig or changing a password, someone else mined ' +
+                    'to this address. ' +
+                    (ev.anchor
+                        ? 'Your original recorded proof still works, so you can still withdraw to your own wallet.'
+                        : 'Withdraw to your own wallet now — Tor and Slatepack can only pay this address.') +
+                    '</div>');
             }
 
             if (!lines.length) return;
@@ -1102,6 +1196,31 @@
             let text = 'Pending payout #' + p.id + ' · ' + fmtGrin(p.amount) + ' · ' + (p.method || 'tor')
                      + ' — ' + label;
             if (p.status === 'retry_scheduled' && p.next_retry_at) text += ' · next attempt ' + fmtWhen(p.next_retry_at);
+            // How long it has been in flight (audit §J15-7). Every in-progress label on this
+            // strip — "sending over Tor now…", "broadcasting to the Grin network — almost
+            // done" — is written for the seconds-long normal case, and there was nothing to
+            // read when it was not. §J4-3 is OPEN: a crash during tor_sending strands the row
+            // permanently, the balance stays locked and the withdraw button stays disabled,
+            // and the page said "almost done" about it forever. An age does not unstick it,
+            // but it is the difference between a miner waiting and a miner reporting it.
+            const startedAt = Number(p.created_at || 0);
+            const ageMin = startedAt ? Math.floor((Date.now() / 1000 - startedAt) / 60) : 0;
+            const inFlight = ['tor_checking', 'tor_sending', 'finalizing'].indexOf(p.status) !== -1;
+            // fmtAge() is day-granular (it exists for account age), so it renders a 20-minute-old
+            // payout as "0 days". A pending payout is a minutes-to-hours object; format it here.
+            const fmtElapsed = function (mins) {
+                if (mins < 1) return 'just now';
+                if (mins < 60) return mins + (mins === 1 ? ' minute' : ' minutes') + ' ago';
+                const h = Math.floor(mins / 60);
+                if (h < 48) return h + (h === 1 ? ' hour' : ' hours') + ' ago';
+                const d = Math.floor(h / 24);
+                return d + (d === 1 ? ' day' : ' days') + ' ago';
+            };
+            if (startedAt) text += ' · requested ' + fmtElapsed(ageMin);
+            if (inFlight && ageMin >= 30) {
+                text += ' — this has been in progress for an unusually long time; if it does not '
+                      + 'clear, contact the operator with this payout number.';
+            }
             $id('acct-pending-text').innerHTML = escHtml(text).replace('Pending payout', '<b>Pending payout</b>');
             strip.style.display = 'flex';
             $id('pl-pending').textContent = '#' + p.id + ' · ' + (p.method || 'tor');
@@ -1389,9 +1508,19 @@
                 // Proof: the payout tx's on-chain kernel excess (Grin's payment-proof primitive),
                 // deep-linked to a chain explorer. Backfilled once the tx mines — until then (or
                 // for pre-feature/Tor-without-owner-API payouts) show a neutral placeholder.
+                //
+                // The API no longer returns the kernel with the row (audit §J11-2): it sends
+                // `has_kernel_proof` only, and the value arrives from the ownership-gated
+                // POST …/withdrawals/proofs into revealedProofs. `row.kernel_excess` is still
+                // read first so the demo fixture below keeps working unchanged.
+                const kernel = row.kernel_excess || revealedProofs[row.id];
                 const proof = document.createElement('td');
-                if (row.kernel_excess && window.Explorer) {
-                    proof.innerHTML = window.Explorer.link('kernel', row.kernel_excess, 'proof ↗');
+                if (kernel && window.Explorer) {
+                    proof.innerHTML = window.Explorer.link('kernel', kernel, 'proof ↗');
+                } else if (row.has_kernel_proof) {
+                    proof.className = 'dim';
+                    proof.textContent = 'hidden';
+                    proof.title = 'On-chain proof on record — press "Reveal proofs" with your ownership proof to show it';
                 } else {
                     proof.className = 'dim';
                     proof.textContent = row.status === 'confirmed' ? 'pending' : '—';
@@ -1425,6 +1554,46 @@
             } catch (e) {
                 tbody.innerHTML = '<tr><td colspan="7">History unavailable</td></tr>';
             }
+        }
+
+        // ── Reveal on-chain payment proofs (ownership-gated) ────────────────
+        // The kernel excess is the one account-page field that costs an ownership proof
+        // (audit §J11-2). It names a specific transaction in the Grin chain, permanently, so
+        // serving it beside an address to anyone who asks would be a public
+        // address-to-chain index on a coin whose whole point is that no such index exists.
+        // The gate is the SAME one every payout action uses — getProof() reads the single
+        // proof box at the top of the page — so this adds no new secret for the miner to hold.
+        async function revealProofs() {
+            const msg = $id('wd-proof-msg');
+            if (!currentAddr) return;
+            if (demoBlock(msg)) return;
+            const proof = getProof(msg);
+            if (!proof) return;
+            const btn = $id('wd-reveal-proofs');
+            btn.disabled = true;
+            setMsg(msg, 'Verifying ownership…', true);
+            try {
+                const r = await fetch('/api/account/' + encodeURIComponent(currentAddr) + '/withdrawals/proofs', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    credentials: 'same-origin',
+                    body: JSON.stringify({ proof: proof })
+                });
+                const json = await r.json().catch(() => null);
+                if (r.ok && json && json.proofs) {
+                    revealedProofs = json.proofs;
+                    const n = json.count || 0;
+                    setMsg(msg, n
+                        ? n + (n === 1 ? ' proof' : ' proofs') + ' loaded — the Proof column now links to the chain explorer.'
+                        : 'No on-chain proofs on record yet. They appear once a payout transaction is mined.', true);
+                    loadWithdrawals();   // repaint the current page with the kernels merged in
+                } else {
+                    setMsg(msg, apiErr(json, 'Could not verify ownership'), false);
+                }
+            } catch (e) {
+                setMsg(msg, 'Could not load proofs: ' + e.message, false);
+            }
+            btn.disabled = false;
         }
 
         // ── Tor reachability hint ──────────────────────────────────────────
@@ -1673,6 +1842,11 @@
                     has_recorded_ip: true, has_recorded_pass: true,
                     // Healthy case: both demo rigs online on one shared, compliant password.
                     password_proof: { state: 'ok', live: { sessions: 2, distinct: 1, unusable: 0 } },
+                    // Settled account: evidence recorded when they joined and untouched since,
+                    // anchor intact — so neither the "evidence changed" warning nor the
+                    // donation row appears. Both are exercised by changing these two values.
+                    evidence: { ip_changed_at: now - 75 * 86400, pass_changed_at: now - 75 * 86400, anchor: true },
+                    donation_percent: 0,
                     nostr_payouts_enabled: false, nostr_destination: null
                 },
                 series, workers10, workers24,
@@ -1736,6 +1910,20 @@
                 if (this.dataset.v) $id('acct-amount').value = this.dataset.v;
                 renderNetPreview();
             });
+            // Show/hide the ownership proof (audit §J15-4). Default is hidden; the toggle is
+            // per-session and never persisted, so a reload always comes back masked.
+            const proofBtn = $id('acct-proof-reveal');
+            if (proofBtn) {
+                proofBtn.addEventListener('click', function () {
+                    const f = $id('acct-ip-proof');
+                    const show = f.type === 'password';
+                    f.type = show ? 'text' : 'password';
+                    this.textContent = show ? 'Hide' : 'Show';
+                    this.setAttribute('aria-pressed', show ? 'true' : 'false');
+                    f.focus();
+                });
+            }
+
             // Wires every registered rail's radio ⇄ pane and lets each rail attach its own
             // listeners. Replaces the per-rail listener lines that used to live here.
             PayoutMethods.init(PAYOUT_HOST);
@@ -1775,9 +1963,14 @@
             $id('wd-export').addEventListener('click', function (e) {
                 if (isDemo) { e.preventDefault(); setMsg($id('acct-msg'), 'Demo account — export is disabled.', false); }
             });
+            $id('wd-reveal-proofs').addEventListener('click', revealProofs);
 
-            // Deep-link support: ?addr=grin1… (e.g. from the miners-stats leaderboard) takes
-            // priority over the last-viewed address stashed in localStorage.
+            // Deep-link support: ?addr=grin1… takes priority over the last-viewed address
+            // stashed in localStorage. Kept because a miner may legitimately bookmark or share
+            // their OWN link — but no page on this site emits one any more: the leaderboards,
+            // the payouts table and the donor wall stopped linking here on 2026-09-02 (audit
+            // §J11-1/§J11-3), because those links were the pool's full-address source and the
+            // crawl path into third-party indexes. This page is `noindex` for the same reason.
             let saved = '';
             try {
                 const qp = new URLSearchParams(window.location.search).get('addr');

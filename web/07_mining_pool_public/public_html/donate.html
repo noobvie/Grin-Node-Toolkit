@@ -68,6 +68,16 @@
       text-decoration: none;
     }
     .addr-link:hover { text-decoration: underline; }
+    /* Same monospace treatment, no link affordance (audit §J11-1). The address is masked
+       server-side and no longer deep-links to the account page, so accent colour + underline
+       would advertise a click that does nothing. Keeps break-all so a narrow column still
+       shows the whole masked form. */
+    .addr-plain {
+      font-family: var(--mono, ui-monospace, monospace);
+      font-size: 12px;
+      word-break: break-all;
+      color: inherit;
+    }
 
     /* Worker-name example rows: the ok/no verdict colours. */
     .ok { color: var(--accent, #7cb342); }
@@ -334,13 +344,16 @@
 
             function donorCard(d, idx) {
                 var medal = ['🥇', '🥈', '🥉'][idx] || ('#' + (idx + 1));
-                var href = '/account-settings.html?addr=' + encodeURIComponent(d.address);
                 var badge = d.current_percent > 0
                     ? '<span class="donor-badge on">donating ' + escHtml(d.current_percent) + '%</span>'
                     : '<span class="donor-badge off">paused</span>';
+                // Plain text, no link and no `title` (audit §J11-1, 2026-09-02). /api/pool/donors
+                // masks `address` now; the old card carried the FULL address twice (href + title),
+                // and a donor wall is a thank-you, not an identity register. See the note in
+                // miners-stats.html addrCell().
                 return '<div class="donor-card">' +
                     '<div class="donor-rank">' + medal + '</div>' +
-                    '<a class="addr-link" href="' + href + '" title="' + escHtml(d.address) + '">' + escHtml(truncAddr(d.address)) + '</a>' +
+                    '<span class="addr-plain">' + escHtml(truncAddr(d.address)) + '</span>' +
                     '<div class="donor-total">' + fmtGrin(d.total_donated) + ' <small>GRIN</small></div>' +
                     badge +
                     '<div class="donor-meta">' +

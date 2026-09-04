@@ -639,8 +639,12 @@ async function loadRegions(silent) {
       // 🔑 only makes sense when a wg peer exists (tunnel age present) OR a region
       // port is mapped — otherwise there is nothing to re-print.
       const hasPeer = hb && (hb.tunnel_handshake_age != null || hb.port);
+      // data-region + this.dataset: escHtml() output inside a JS string literal in an onclick
+      // is decoded by the HTML parser before the JS runs, so an apostrophe would break out.
+      // `region` is only charset-validated on the wg_pubkey branch of POST /api/admin/locations
+      // (index.js), so a metadata-only region can hold any characters at all. Audit §J14.
       const pairingBtn = hasPeer
-        ? `<button class="btn-icon" onclick="showPairing('${escHtml(r.region)}')" data-tip="Show pairing string (GRINGW1|…)" aria-label="Show pairing string for ${escHtml(r.region)}">🔑</button>`
+        ? `<button class="btn-icon" data-region="${escHtml(r.region)}" onclick="showPairing(this.dataset.region)" data-tip="Show pairing string (GRINGW1|…)" aria-label="Show pairing string for ${escHtml(r.region)}">🔑</button>`
         : '';
       return `
         <tr>
@@ -755,9 +759,24 @@ async function submitRegion() {
       // gateway will never hand-shake, and the symptom shows up on the OTHER box,
       // so it has to be said here rather than left to look like a pairing fault.
       if (r.sync_warning) warn = (warn ? warn + ' ' : '') + '⚠ ' + r.sync_warning;
-      flash(r.sync_warning
-        ? 'Region saved and peer written — but the running tunnel did not pick it up (see below).'
-        : 'Region saved and gateway paired — listener live, no restart needed.', !!r.sync_warning);
+      // The stratum listener for this region can fail to bind even when everything else
+      // succeeded (port already in use, tunnel IP not up yet). The success line below used to
+      // say "listener live" unconditionally, because the backend reported an unconditional
+      // success for an asynchronous bind it never waited on (audit §J6-12). If that happened,
+      // the region is saved and the peer is configured but NO MINER IN IT CAN CONNECT, and the
+      // symptom appears on the gateway box — so it has to be said here.
+      if (r.stratum_bind_error) {
+        warn = (warn ? warn + ' ' : '') +
+          '⚠ The stratum listener for this region did NOT bind: ' + r.stratum_bind_error +
+          ' — miners in this region cannot connect until it does. Restart the pool backend after freeing the port.';
+      }
+      const bindFailed = !!r.stratum_bind_error;
+      flash(bindFailed
+        ? 'Region saved and peer written — but the region stratum listener did not bind (see below).'
+        : (r.sync_warning
+          ? 'Region saved and peer written — but the running tunnel did not pick it up (see below).'
+          : 'Region saved and gateway paired — listener live, no restart needed.'),
+        bindFailed || !!r.sync_warning);
       closeForm();
       showPairingCard(region, r.pairing, warn);
     } else {

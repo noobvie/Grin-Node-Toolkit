@@ -230,6 +230,36 @@ fs.chmodSync(path, 0o600);
 " "$POOL_CONF" "$key" "$val"
 }
 
+# ─── The two directories nginx serves straight off disk ───────────────────────
+# custom_assets/ (white-label logos, /custom/) and uploads/ (CMS media, /uploads/) are
+# served by nginx directly, not through the app, so the nginx user must be able to
+# traverse down to them and read the files inside.
+#
+# ⚠ o+x on the PARENTS, not o+rx (audit §J8-1's shell half). nginx needs *traverse* on
+# /opt/grin and on the app directory; it never lists them. `o+rx` also granted `read`,
+# which is what let every local account enumerate the app directory — and pool.db sits
+# in it. lib/db.js now chmods pool.db/-wal/-shm to 0600 on every start, so the disclosure
+# is closed either way; this removes the second half of the pair rather than relying on
+# one of them. The two SERVED directories keep o+rx: nginx reads files there by name via
+# `alias` + `try_files`, and autoindex is off, so listing is not exposed.
+#
+# ⚠ Called from BOTH pool_install and pool_setup_nginx (audit §J8-7b). It used to live
+# only in the nginx step while Install did `chmod 700 "$POOL_APP_DIR"` — so re-running
+# Install (the documented fix for a changed systemd unit) silently took the directory
+# back to 700, nginx could no longer traverse it, and every white-label logo and CMS
+# image 404'd until an operator happened to re-run 4) Setup nginx. Nothing warned.
+#
+# ⚠ Do NOT "fix" this by adding UMask=0077 to the service unit — see §J16-12.
+pool_ensure_served_dirs() {
+    mkdir -p "$POOL_APP_DIR/custom_assets" "$POOL_APP_DIR/uploads" 2>/dev/null \
+        || { warn "could not create the served asset directories under $POOL_APP_DIR"; return 1; }
+    chmod o+x  /opt/grin "$POOL_APP_DIR" 2>/dev/null || true
+    chmod o+rx "$POOL_APP_DIR/custom_assets" "$POOL_APP_DIR/uploads" 2>/dev/null || true
+    if id grinpool >/dev/null 2>&1; then
+        chown grinpool:grinpool "$POOL_APP_DIR/custom_assets" "$POOL_APP_DIR/uploads" 2>/dev/null || true
+    fi
+}
+
 # ─── WireGuard prerequisites for the multi-region path (§13.12p) ──────────────
 # Two things that MUST exist before the hardened unit starts, both because of the
 # service's mount namespace (ProtectSystem=strict):
@@ -357,10 +387,18 @@ pool_ensure_defaults() {
 _pool_db_scalar() { # <sql> [db_path]
     local db="${2:-$POOL_APP_DIR/pool.db}"
     [[ -f "$db" ]] || return 1
+    # readOnly (audit §J16-8): this runs as ROOT, on every menu render (_pool_step_mark 7),
+    # against a database the de-rooted service owns. DatabaseSync opens read-write by
+    # default, and a read-write open of a WAL database CREATES pool.db-wal / -shm when they
+    # are absent — root-owned, 0644 — which is how a stopped service comes back to "attempt
+    # to write a readonly database" after nothing but a menu being drawn. Its sibling at the
+    # region-card INSERT chowns them back afterwards; this one, which fires far more often,
+    # never did. A read-only open has no business creating either file, so the repair is to
+    # stop asking for write access rather than to add another chown.
     node -e "
 try {
   const { DatabaseSync } = require('node:sqlite');
-  const d = new DatabaseSync(process.argv[1]);
+  const d = new DatabaseSync(process.argv[1], { readOnly: true });
   const row = d.prepare(process.argv[2]).get();
   process.stdout.write(String(row ? Object.values(row)[0] : ''));
 } catch (e) { process.exit(1); }
@@ -608,6 +646,12 @@ pool_install() {
     pool_gwctl_install || true
     pool_ensure_wg_prereqs
     pool_deroot || return 1
+
+    # Undo this step's own `chmod 700 "$POOL_APP_DIR"` for the two directories nginx has
+    # to reach, so a re-run of Install stops silently 404-ing every logo and CMS image
+    # until 4) Setup nginx is run again (audit §J8-7b). After pool_deroot so the chown
+    # inside it lands on a user that exists.
+    pool_ensure_served_dirs || true
 
     local node_bin; node_bin=$(command -v node 2>/dev/null || echo /usr/bin/node)
     local wallet_rw; wallet_rw=$(pw_wallet_dir 2>/dev/null || echo "$POOL_WALLET_DIR")
@@ -891,9 +935,16 @@ pool_deploy_code() {
     # Did package.json change? Capture the OLD (deployed) hash before the rsync
     # overwrites it, compare against the source. Only then do we re-run npm —
     # an ordinary js/html refresh skips the (slow) dependency install entirely.
+    #
+    # ⚠ BOTH files, not just package.json (audit §J13-6). npm ci installs from
+    # package-lock.json, and almost every dependency SECURITY fix is lockfile-only: a
+    # transitive pin bumped by `npm audit fix` changes the lock and leaves package.json
+    # byte-identical. Hashing package.json alone rsynced the new lock into place and then
+    # skipped npm, so the box kept running the vulnerable tree while the lockfile on disk
+    # claimed it was patched — and nothing compares the two.
     local old_pkg_hash new_pkg_hash
-    old_pkg_hash=$(sha1sum "$POOL_APP_DIR/package.json" 2>/dev/null | awk '{print $1}')
-    new_pkg_hash=$(sha1sum "$POOL_APP_SRC/package.json" 2>/dev/null | awk '{print $1}')
+    old_pkg_hash=$(cat "$POOL_APP_DIR/package.json" "$POOL_APP_DIR/package-lock.json" 2>/dev/null | sha1sum | awk '{print $1}')
+    new_pkg_hash=$(cat "$POOL_APP_SRC/package.json" "$POOL_APP_SRC/package-lock.json" 2>/dev/null | sha1sum | awk '{print $1}')
 
     info "Refreshing backend code → $POOL_APP_DIR ..."
     rsync -a --delete \
@@ -907,12 +958,12 @@ pool_deploy_code() {
     if [[ "$old_pkg_hash" != "$new_pkg_hash" ]]; then
         local npm_cmd="install"
         [[ -f "$POOL_APP_DIR/package-lock.json" ]] && npm_cmd="ci"
-        warn "package.json changed — running npm $npm_cmd ..."
+        warn "package.json / package-lock.json changed — running npm $npm_cmd ..."
         (cd "$POOL_APP_DIR" && npm "$npm_cmd" --omit=dev 2>&1 | tail -20) \
             || { error "npm $npm_cmd failed — see /root/.npm/_logs/ (latest *-debug-0.log)."; return 1; }
         success "Dependencies updated."
     else
-        info "package.json unchanged — skipping npm (deps untouched)."
+        info "package.json + package-lock.json unchanged — skipping npm (deps untouched)."
     fi
 
     # Frontend (public_html → /var/www/grin-pool) + admin panel + pool-config.js.
@@ -1009,17 +1060,10 @@ pool_setup_nginx() {
         rm -f "$_default_site"
     fi
 
-    # Uploaded white-label assets (logos/icons/OG image) are written here by the app
-    # (assets_dir in pool.json) and served by nginx at /custom/. Ensure the directory
-    # exists and that nginx can traverse into it (o+rX on the dir and its parents).
-    mkdir -p "$POOL_APP_DIR/custom_assets"
-    chmod o+rx /opt/grin "$POOL_APP_DIR" "$POOL_APP_DIR/custom_assets" 2>/dev/null || true
-
-    # CMS media uploads (admin blog/pages editor) live here, served by nginx at /uploads/.
-    # The app also creates this at boot, but pre-create + o+rx so nginx can traverse/read it
-    # on a fresh install before the service has written its first file.
-    mkdir -p "$POOL_APP_DIR/uploads"
-    chmod o+rx "$POOL_APP_DIR/uploads" 2>/dev/null || true
+    # Re-assert the served-asset directory modes (pool_ensure_served_dirs is the single
+    # definition; Install calls it too, so re-running Install no longer takes the app
+    # directory back to 700 and 404s every logo until this step is re-run — audit §J8-7b).
+    pool_ensure_served_dirs
 
     # nginx_ensure_rate_limit_zones is a no-op while its conf file exists (so operators can
     # hand-tune rates). That means a NEW zone added to the list below would never be written
@@ -1152,9 +1196,17 @@ server {
 }
 EOF
         nginx_ensure_sites_enabled_include
-        ln -sf "$POOL_NGINX_CONF" "$sites_enabled" 2>/dev/null || true
-        nginx -t 2>&1 && systemctl reload nginx \
-            || { error "nginx config test failed. Check $POOL_NGINX_CONF"; return 1; }
+        # Same rule as the SSL vhost below (audit §J16-5): never leave an untested
+        # vhost enabled. This one is always a fresh enable — the cert does not exist
+        # yet, so there was no working pool vhost to preserve.
+        ln -sf "$POOL_NGINX_CONF" "$sites_enabled" \
+            || { error "could not enable the vhost: $sites_enabled"; return 1; }
+        if ! { nginx -t 2>&1 && systemctl reload nginx; }; then
+            rm -f "$sites_enabled"
+            error "nginx config test failed. Check $POOL_NGINX_CONF"
+            warn "Disabled it again so a reboot cannot take every site on this box down."
+            return 1
+        fi
 
         echo ""
         echo -ne "Issue the SSL certificate with certbot now? [Y/n]: "
@@ -1191,6 +1243,16 @@ EOF
         fi
     fi
 
+    # Header-snippet paths. Declared HERE, above the first block that references one:
+    # $www_https_block is assembled inside a double-quoted assignment, so a path declared
+    # further down would expand to the empty string and emit a bare `include ;` (audit
+    # §J16-9). The snippets themselves are written a few dozen lines below, next to the
+    # comment that explains what goes in each of the three.
+    local snippet_dir="/etc/nginx/snippets"
+    local hdr_common="$snippet_dir/script07-${POOL_SERVICE}-headers.conf"
+    local hdr_page="$snippet_dir/script07-${POOL_SERVICE}-page-headers.conf"
+    local hdr_admin="$snippet_dir/script07-${POOL_SERVICE}-admin-headers.conf"
+
     # certbot --nginx creates options-ssl-nginx.conf; include it only when present
     # (a bare `include` of a missing file is a hard nginx -t error).
     local ssl_extra=""
@@ -1205,9 +1267,16 @@ EOF
         www_https_block="server {
     listen 443 ssl http2;
     server_name $www_alias;
+    server_tokens off;
     ssl_certificate     /etc/letsencrypt/live/$subdomain/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/$subdomain/privkey.pem;
     $ssl_extra
+    # Audit §J16-9: this is a server block, so it inherits NOTHING from the apex block
+    # below — it was the one response on the box with no HSTS, no nosniff and no
+    # X-Frame-Options. HSTS is per-HOST, and www.<domain> is a different host to the
+    # browser, so without this line the www name is never pinned no matter how long the
+    # apex has been. The redirect body is empty; the headers are the point.
+    include $hdr_common;
     return 301 https://$subdomain\$request_uri;
 }
 "
@@ -1232,9 +1301,7 @@ EOF
     # conf.d/ and sites-enabled/ are), so these files apply exactly where they are included
     # and never leak into another vhost. Putting add_header in conf.d/ would apply it to the
     # whole http context, i.e. to every site on the box.
-    local snippet_dir="/etc/nginx/snippets"
-    local hdr_common="$snippet_dir/script07-${POOL_SERVICE}-headers.conf"
-    local hdr_page="$snippet_dir/script07-${POOL_SERVICE}-page-headers.conf"
+    # (paths declared above, before $www_https_block referenced $hdr_common)
     mkdir -p "$snippet_dir" || { error "could not create $snippet_dir"; return 1; }
 
     cat > "$hdr_common" << 'HDREOF' || { error "could not write $hdr_common"; return 1; }
@@ -1265,8 +1332,51 @@ HDREOF
 # CSP must permit: inline scripts (page bootstraps + branding.js analytics init), the managed
 # analytics providers' script + beacon hosts, and Google Fonts. Self-hosted Plausible/Umami/
 # Matomo on a custom domain require adding that domain to script-src and connect-src.
+#
+# https://cdn.jsdelivr.net was removed from script-src on 2026-09-03 (audit §J15-6). It was a
+# leftover from before Chart.js was vendored: a sweep of all thirteen public pages and every
+# file under public_html/js/ found ZERO references to it. This is the same argument §J14-4 made
+# for the admin panel, and it applies here for a stronger reason — the public origin serves
+# account-settings.html, the withdrawal form, and §B accepts that operator HTML can inject
+# script into these pages. An unused third-party script origin in the CSP is a ready loader for
+# exactly that. The four analytics origins stay: unlike jsdelivr they are reachable by design
+# whenever an operator switches a provider on.
+#
+# frame-ancestors / base-uri / form-action / object-src added 2026-09-03 (audit §J16-11).
+# §J14 and §J15 both left this open as "J16's call" because only the admin snippet carried
+# them. The call is yes, and for a stronger reason than symmetry: §B accepts that operator
+# HTML can inject script into these pages, and this origin serves account-settings.html —
+# the withdrawal form and the rig-password box. Each directive shuts a sink that 'self' does
+# not: base-uri stops an injected <base> re-pointing every relative script/API URL off-site;
+# form-action stops the withdrawal form being re-targeted; object-src kills the plugin
+# loader; frame-ancestors is the CSP form of the X-Frame-Options: DENY already in
+# \$hdr_common, and unlike XFO it is honoured for nested frames. All four are verified
+# compatible: no public page frames another, declares a <base>, posts a form cross-origin,
+# or embeds an <object>/<embed> — the pages talk to same-origin /api/ over fetch only.
 include $hdr_common;
-add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://www.googletagmanager.com https://plausible.io https://cloud.umami.is; connect-src 'self' https://*.google-analytics.com https://*.analytics.google.com https://*.googletagmanager.com https://plausible.io https://cloud.umami.is; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https://*.google-analytics.com https://*.googletagmanager.com;" always;
+add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' https://www.googletagmanager.com https://plausible.io https://cloud.umami.is; connect-src 'self' https://*.google-analytics.com https://*.analytics.google.com https://*.googletagmanager.com https://plausible.io https://cloud.umami.is; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https://*.google-analytics.com https://*.googletagmanager.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none';" always;
+HDREOF
+
+    # Third snippet: the ADMIN panel CSP (audit §J14-4). /admin/ is served as STATIC files by
+    # nginx, so the Express security-header middleware never runs for an admin HTML page —
+    # whatever this vhost sends IS the admin panel's CSP. It used to send $hdr_page, the
+    # PUBLIC one, which allowlists four third-party script origins and five connect-src
+    # origins the panel does not use. That matters because XSS in this panel is otherwise
+    # unmitigated ('unsafe-inline' is required — the panel's logic lives in inline <script>
+    # blocks): with connect-src 'self' an injected script has no silent exfiltration
+    # destination for the admin session, the miner ledger or an in-flight TOTP secret.
+    #
+    # Every asset all 21 admin pages load is same-origin (chart.js and quill are vendored
+    # under /js/vendor/), so nothing here needs widening. Two directives are load-bearing:
+    #   'unsafe-inline' in script-src — the panel is inline blocks; removing it blanks it.
+    #   data: in img-src            — the 2FA enrolment QR is generated client-side.
+    cat > "$hdr_admin" << HDREOF || { error "could not write $hdr_admin"; return 1; }
+# Generated by Script 07 (pool_setup_nginx) — DO NOT EDIT, re-run "Setup nginx" instead.
+# Common headers + the ADMIN CSP. Include this from /admin/ ONLY. Do not use it for public
+# pages (they legitimately need the analytics + Google Fonts hosts) and do not point /admin/
+# at the page snippet instead — see audit §J14-4.
+include $hdr_common;
+add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none';" always;
 HDREOF
 
     info "Writing nginx vhost (${POOL_NET_LABEL}): $POOL_NGINX_CONF"
@@ -1285,6 +1395,16 @@ ${www_https_block}server {
     listen 443 ssl http2;
     server_name $subdomain;
 $cf_realip_include
+
+    # Audit §J11-6 (nginx half): drop nginx's version from the Server: header and from
+    # its own error pages. The Express half (\`x-powered-by\`) was closed in that pass;
+    # this was the remaining banner, and the pool's was the only toolkit vhost without it.
+    server_tokens off;
+    # Audit §J16-10: nginx answers limit_req with 503 by default — the SAME status a dead
+    # backend returns, so a throttled visitor and an outage are indistinguishable in the
+    # access log and to the front end. 429 is what the app's own limiter returns and what
+    # public-shell.js / Auth.read already understand (§J15-2). Script 02 already sets this.
+    limit_req_status 429;
 
     root $POOL_WEB_DIR;
     index index.html;
@@ -1325,8 +1445,10 @@ $admin_rules
         # every load (304 when unchanged). Without this, browsers heuristically cache
         # the HTML and keep showing the OLD admin panel after a redeploy.
         # ⚠ This add_header resets header inheritance — the include is what keeps the
-        # admin panel's CSP + X-Frame-Options alive. Never drop it (audit §I1).
-        include $hdr_page;
+        # admin panel's CSP + X-Frame-Options alive. Never drop it (audit §I1), and keep it
+        # pointed at $hdr_admin, NOT $hdr_page: this panel must not inherit the public
+        # page's third-party script/connect allowlist (audit §J14-4).
+        include $hdr_admin;
         add_header Cache-Control "no-cache" always;
         try_files \$uri \$uri/ \$uri.html =404;
     }
@@ -1397,11 +1519,44 @@ $admin_rules
 
     # SEO / PWA files generated dynamically from admin settings (proxied to the app).
     # Exact-match so they take priority over any static file of the same name.
-    location = /robots.txt    { proxy_pass http://127.0.0.1:$POOL_PORT; proxy_set_header Host \$host; }
-    location = /sitemap.xml   { proxy_pass http://127.0.0.1:$POOL_PORT; proxy_set_header Host \$host; }
-    location = /manifest.json { proxy_pass http://127.0.0.1:$POOL_PORT; proxy_set_header Host \$host; }
+    #
+    # ⚠ These four MUST forward the client IP and MUST carry a zone. Audit §J12-3: they were
+    # the only proxied locations with neither. Without X-Forwarded-For, `trust proxy=loopback`
+    # leaves req.ip as nginx's 127.0.0.1, so the app's per-IP `public` bucket became ONE bucket
+    # shared by every visitor on Earth — ~1200 requests from a single host put all four into a
+    # rolling lockout for everyone, Googlebot included, and a sustained 429 on robots.txt reads
+    # as "do not crawl this site". With no limit_req here, nothing slowed that down either.
+    # /sitemap.xml also runs three DB queries per hit. Same treatment as = /page.html below,
+    # which already documents the trap.
+    location = /robots.txt {
+        limit_req zone=${POOL_SERVICE}_static burst=20 nodelay;
+        proxy_pass         http://127.0.0.1:$POOL_PORT;
+        proxy_set_header   Host \$host;
+        proxy_set_header   X-Real-IP \$remote_addr;
+        proxy_set_header   X-Forwarded-For \$proxy_add_x_forwarded_for;
+    }
+    location = /sitemap.xml {
+        limit_req zone=${POOL_SERVICE}_static burst=20 nodelay;
+        proxy_pass         http://127.0.0.1:$POOL_PORT;
+        proxy_set_header   Host \$host;
+        proxy_set_header   X-Real-IP \$remote_addr;
+        proxy_set_header   X-Forwarded-For \$proxy_add_x_forwarded_for;
+    }
+    location = /manifest.json {
+        limit_req zone=${POOL_SERVICE}_static burst=20 nodelay;
+        proxy_pass         http://127.0.0.1:$POOL_PORT;
+        proxy_set_header   Host \$host;
+        proxy_set_header   X-Real-IP \$remote_addr;
+        proxy_set_header   X-Forwarded-For \$proxy_add_x_forwarded_for;
+    }
     # Blog RSS is generated by the app (not a static file).
-    location = /blog/rss.xml  { proxy_pass http://127.0.0.1:$POOL_PORT; proxy_set_header Host \$host; }
+    location = /blog/rss.xml {
+        limit_req zone=${POOL_SERVICE}_static burst=20 nodelay;
+        proxy_pass         http://127.0.0.1:$POOL_PORT;
+        proxy_set_header   Host \$host;
+        proxy_set_header   X-Real-IP \$remote_addr;
+        proxy_set_header   X-Forwarded-For \$proxy_add_x_forwarded_for;
+    }
 
     # CMS content pages (About / Terms / Privacy / FAQ). page.html IS a static file, but it
     # is a JS shell that fetches its content and sets the title client-side — so served
@@ -1492,11 +1647,36 @@ $admin_rules
 EOF
 
     nginx_ensure_sites_enabled_include
-    ln -sf "$POOL_NGINX_CONF" "$sites_enabled" 2>/dev/null || true
+    # ⚠ Audit §J16-5. Enabling BEFORE the test, and leaving it enabled when the test
+    # fails, makes a bad vhost outlive this function: `nginx -t` catches it, we print an
+    # error and return — and the broken file stays symlinked into sites-enabled. The
+    # running nginx is fine (the reload never happened), so nothing looks wrong until the
+    # NEXT start, which is a reboot or a certbot renewal hook — and then nginx refuses to
+    # start at all and EVERY vhost on the box goes down, not just the pool's. The most
+    # likely trigger is not a generator bug: `admin_allowlist` is a hand-edited pool.json
+    # string spliced straight into `allow <entry>;`, so one typo does this.
+    # `ln -sf` is also no longer swallowed — a failed symlink used to leave `nginx -t`
+    # passing (it was testing WITHOUT this vhost) and "nginx configured for …" printing
+    # over a site that was never enabled.
+    local _was_enabled=0
+    [[ -L "$sites_enabled" || -f "$sites_enabled" ]] && _was_enabled=1
+    ln -sf "$POOL_NGINX_CONF" "$sites_enabled" \
+        || { error "could not enable the vhost: $sites_enabled"; return 1; }
 
-    nginx -t 2>&1 && systemctl reload nginx \
-        && success "nginx configured for https://$subdomain" \
-        || { error "nginx config test failed. Check $POOL_NGINX_CONF"; return 1; }
+    if nginx -t 2>&1 && systemctl reload nginx; then
+        success "nginx configured for https://$subdomain"
+    else
+        error "nginx config test failed. Check $POOL_NGINX_CONF"
+        if (( _was_enabled )); then
+            warn "Leaving the previous symlink in place — the vhost was already enabled."
+            warn "  It is INVALID on disk: fix it before any reboot or nginx restart."
+        else
+            rm -f "$sites_enabled"
+            warn "Disabled the new vhost again ($sites_enabled removed) so a reboot"
+            warn "  cannot take every site on this box down with it. Fix and re-run 4)."
+        fi
+        return 1
+    fi
 
     if [[ "$cf_proxy" == "true" ]]; then
         echo ""
@@ -1709,14 +1889,26 @@ pool_setup_admin() {
     # (loopback) calls — see isLocalRequest() in back-end-pool/index.js. This guided
     # flow always POSTs to 127.0.0.1, and the captcha only exists to slow REMOTE brute
     # force on the public login form, not the trusted root operator doing first-admin setup.
+    # ⚠ The admin password NEVER goes in argv — not node's, not curl's (audit §J16-1).
+    # /proc/<pid>/cmdline is world-readable on a default Linux box, so `-d "$payload"`
+    # published the plaintext first-admin password to every local account for the whole
+    # HTTP round trip — which includes the server's deliberately-slow bcrypt hash. The
+    # account that reads it most cheaply is `grinpool`, i.e. exactly where an RCE in the
+    # internet-facing backend lands, and the plaintext is what defeats the freshAdmin
+    # step-up gate that a stolen token cannot. Same rule CLAUDE.md sets for grin-wallet's
+    # `-p`, and the same one lib/wallet-tor.js already follows.
+    #
+    # Both hops are therefore stdin-fed:
+    #   · node builds the JSON from stdin (a NUL-separated line, so no field can be
+    #     confused with another and a password may contain anything but NUL)
+    #   · curl reads the body with `--data-binary @-`, so nothing lands in its argv
+    # printf is a bash builtin — the values never reach an execve() either.
     local payload
-    payload=$(node -e "
-process.stdout.write(JSON.stringify({
-  username: process.argv[1],
-  password: process.argv[2],
-  email:    process.argv[3]
-}))
-" "$admin_user" "$admin_pass" "${admin_email:-}" 2>/dev/null)
+    payload=$(printf '%s\0%s\0%s' "$admin_user" "$admin_pass" "${admin_email:-}" | node -e "
+const b=[];process.stdin.on('data',d=>b.push(d)).on('end',()=>{
+  const [username,password,email]=Buffer.concat(b).toString('utf8').split('\0');
+  process.stdout.write(JSON.stringify({username,password,email}));
+});" 2>/dev/null)
     if [[ -z "$payload" ]]; then
         error "Failed to build JSON payload (node not available?)."
         return 1
@@ -1727,8 +1919,8 @@ process.stdout.write(JSON.stringify({
     # the body + status code separately so the operator sees the actual error
     # (e.g. "Password must be at least 8 characters" / "Admin registration closed").
     local resp http_code body
-    resp=$(curl -sS -X POST "http://127.0.0.1:$port/api/auth/register" \
-        -H "Content-Type: application/json" -d "$payload" \
+    resp=$(printf '%s' "$payload" | curl -sS -X POST "http://127.0.0.1:$port/api/auth/register" \
+        -H "Content-Type: application/json" --data-binary @- \
         -w $'\n%{http_code}' 2>&1)
     http_code="${resp##*$'\n'}"
     body="${resp%$'\n'*}"
@@ -2003,10 +2195,77 @@ _pool_pause() { echo ""; echo "Press Enter to continue..."; read -r; }
 # C) CRON SCHEDULES
 # ═══════════════════════════════════════════════════════════════════════════════
 
+# Write the offline-VACUUM maintenance script the cron calls (audit §J7-1).
+#
+# Offline because VACUUM holds an EXCLUSIVE lock for the whole rewrite, and a pool that keeps
+# serving through it loses every write that lands in the window — including the block-found
+# INSERT, which nothing can reconstruct. Stopping the service makes the outage explicit and
+# bounded instead of silent and arbitrary.
+#
+# Uses node, not sqlite3: node is a hard dependency of this product and `sqlite3` is not
+# installed by anything in this toolkit, so the old cron line pointed at a binary that is
+# usually absent — the "maintenance" it promised had very likely never run at all.
+pool_write_vacuum_script() {
+    local dest="/usr/local/bin/${POOL_SERVICE}-vacuum"
+    cat > "$dest" << EOF || { error "Could not write $dest"; return 1; }
+#!/bin/bash
+# Offline SQLite VACUUM for $POOL_SERVICE — generated by Script 07 (audit §J7-1).
+# Stops the pool, compacts pool.db, starts it again. NEVER run a VACUUM against the live DB.
+set -uo pipefail
+DB="$POOL_APP_DIR/pool.db"
+SVC="$POOL_SERVICE"
+log() { echo "[\$(date -u '+%Y-%m-%d %H:%M:%S UTC')] [vacuum] \$*"; }
+
+[[ -f "\$DB" ]] || { log "no database at \$DB — nothing to do"; exit 0; }
+
+was_active=no
+if systemctl is-active --quiet "\$SVC"; then was_active=yes; fi
+
+# The service comes back whatever happens below — a failed vacuum must never leave the pool
+# down until someone notices on Monday.
+restore() {
+  if [[ "\$was_active" == "yes" ]]; then
+    systemctl start "\$SVC" && log "\$SVC restarted" || log "FAILED to restart \$SVC — START IT BY HAND"
+  fi
+}
+trap restore EXIT
+
+if [[ "\$was_active" == "yes" ]]; then
+  systemctl stop "\$SVC" || { log "could not stop \$SVC — refusing to vacuum a live database"; exit 1; }
+  log "\$SVC stopped"
+  # Let the final WAL checkpoint land before touching the file.
+  sleep 2
+fi
+
+before=\$(stat -c %s "\$DB" 2>/dev/null || echo 0)
+if node -e '
+const { DatabaseSync } = require("node:sqlite");
+const d = new DatabaseSync(process.argv[1]);
+d.exec("VACUUM");
+d.close();
+' "\$DB"; then
+  after=\$(stat -c %s "\$DB" 2>/dev/null || echo 0)
+  log "VACUUM ok — \$before → \$after bytes"
+else
+  log "VACUUM FAILED — database left as it was"
+fi
+
+# The vacuum ran as root, so pool.db and any WAL sidecars it recreated are root-owned; the
+# de-rooted service could not then write to its own database (audit §J16-8, same trap).
+if id grinpool >/dev/null 2>&1; then
+  chown grinpool:grinpool "\$DB" "\$DB-wal" "\$DB-shm" 2>/dev/null || true
+fi
+chmod 600 "\$DB" 2>/dev/null || true
+EOF
+    chmod 700 "$dest" || { error "Could not chmod $dest"; return 1; }
+    return 0
+}
+
 pool_cron_schedules() {
     echo -e "\n${BOLD}Cron Schedules — ${POOL_NET_LABEL} ($POOL_SERVICE)${RESET}\n"
     local cron_backup="/etc/cron.d/${POOL_SERVICE}-backup"
     local cron_vacuum="/etc/cron.d/${POOL_SERVICE}-vacuum"
+    local vacuum_script="/usr/local/bin/${POOL_SERVICE}-vacuum"
 
     [[ -f "$cron_backup" ]] \
         && echo -e "  Daily backup  : ${GREEN}enabled${RESET}  ($cron_backup)" \
@@ -2032,13 +2291,33 @@ pool_cron_schedules() {
             ;;
         2)
             if [[ -f "$cron_vacuum" ]]; then
-                rm -f "$cron_vacuum"
+                rm -f "$cron_vacuum" "$vacuum_script"
                 success "Weekly VACUUM cron disabled."
             else
+                # ⚠ This used to be a one-liner: `sqlite3 pool.db "VACUUM;"` against the LIVE
+                # database, weekly, while the service was running (audit §J7-1). VACUUM takes an
+                # EXCLUSIVE lock for as long as it takes to rewrite the whole file — minutes on a
+                # busy pool — and no `busy_timeout` survives that. Everything the backend writes in
+                # that window fails, including the one write that cannot be redone: the INSERT that
+                # records a block the pool just found. It also assumed /usr/bin/sqlite3 exists,
+                # which the installer never installs (the app uses node:sqlite).
+                #
+                # So: stop the service, vacuum, start it again. The pool is down for the duration
+                # — which is the honest cost of a VACUUM and far cheaper than a lost block — and
+                # the restart is in a trap so a failed vacuum can never leave the pool stopped.
+                if ! pool_write_vacuum_script; then
+                    error "Could not write the maintenance script — VACUUM cron NOT enabled."
+                    _pool_pause
+                    return 0
+                fi
                 cat > "$cron_vacuum" << EOF
-0 3 * * 0 root /usr/bin/sqlite3 $POOL_APP_DIR/pool.db "VACUUM;" >> $POOL_LOG 2>&1
+0 3 * * 0 root $vacuum_script >> $POOL_LOG 2>&1
 EOF
                 success "Weekly VACUUM cron enabled ($cron_vacuum)."
+                warn "The pool is STOPPED for the duration of the vacuum (Sunday 03:00 UTC)."
+                echo -e "  ${DIM}Miners reconnect on their own; shares submitted while it is down are lost,${RESET}"
+                echo -e "  ${DIM}which is why it runs at the quietest hour. Run it by hand any time with:${RESET}"
+                echo -e "    ${CYAN}$vacuum_script${RESET}"
             fi
             _pool_pause
             ;;
@@ -2430,6 +2709,12 @@ try {
             if id grinpool >/dev/null 2>&1; then
                 chown grinpool:grinpool "$POOL_APP_DIR"/pool.db "$POOL_APP_DIR"/pool.db-wal "$POOL_APP_DIR"/pool.db-shm 2>/dev/null || true
             fi
+            # …and the MODE, not just the owner (audit §J8-1's shell half, item 3).
+            # A root-created -wal lands 0644 under systemd's default umask and carries
+            # the most recent writes verbatim; lib/db.js only tightens these at service
+            # START, so between this root write and the next restart they sat readable
+            # by every local account. Same three files, same 0600 as restrictDbFileModes.
+            chmod 600 "$POOL_APP_DIR"/pool.db "$POOL_APP_DIR"/pool.db-wal "$POOL_APP_DIR"/pool.db-shm 2>/dev/null || true
         fi
         if [[ "$_carded" == "1" ]]; then
             info "Created a HIDDEN '${reg}' card in admin → Regions."
@@ -2860,6 +3145,7 @@ pool_cleanup() {
     # a snippet deleted while a live vhost still has "include" for it fails nginx -t.
     local hdr_common="/etc/nginx/snippets/script07-${POOL_SERVICE}-headers.conf"
     local hdr_page="/etc/nginx/snippets/script07-${POOL_SERVICE}-page-headers.conf"
+    local hdr_admin="/etc/nginx/snippets/script07-${POOL_SERVICE}-admin-headers.conf"
     local backup_dir="/opt/grin/backups/${POOL_SERVICE}"
     local f2b_filter="/etc/fail2ban/filter.d/grin-pool-login.conf"
     local f2b_jail="/etc/fail2ban/jail.d/grin-pool.conf"
@@ -2974,17 +3260,17 @@ pool_cleanup() {
         if command -v nginx &>/dev/null && [[ -e "/etc/nginx/sites-enabled/$conf_name" || -f "$POOL_NGINX_CONF" ]]; then
             nginx_disable_site "$conf_name" || true
             [[ -n "$legacy_name" ]] && nginx_disable_site "$legacy_name" || true
-            rm -f "$POOL_NGINX_CONF" "$POOL_NGINX_CONF_LEGACY" "$zones_conf" "$hdr_common" "$hdr_page"
+            rm -f "$POOL_NGINX_CONF" "$POOL_NGINX_CONF_LEGACY" "$zones_conf" "$hdr_common" "$hdr_page" "$hdr_admin"
             nginx_test_reload "after removing $conf_name vhost" || true
         else
             # nginx absent (or only a dangling symlink left) — remove files directly
-            rm -f "/etc/nginx/sites-enabled/$conf_name" "$POOL_NGINX_CONF" "$zones_conf" "$hdr_common" "$hdr_page"
+            rm -f "/etc/nginx/sites-enabled/$conf_name" "$POOL_NGINX_CONF" "$zones_conf" "$hdr_common" "$hdr_page" "$hdr_admin"
             [[ -n "$legacy_name" ]] && rm -f "/etc/nginx/sites-enabled/$legacy_name" "$POOL_NGINX_CONF_LEGACY" || true
         fi
         rm -rf "${POOL_WEB_DIR:?}"
         success "Web files + vhost + rate-limit zones + header snippets removed."
         info "Any TLS cert under /etc/letsencrypt is left in place (harmless) — 'certbot delete' to drop it."
-        log "Cleanup: removed $POOL_WEB_DIR, $POOL_NGINX_CONF, $zones_conf, $hdr_common, $hdr_page"
+        log "Cleanup: removed $POOL_WEB_DIR, $POOL_NGINX_CONF, $zones_conf, $hdr_common, $hdr_page, $hdr_admin"
     fi
     echo ""
 

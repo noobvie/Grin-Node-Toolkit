@@ -15,9 +15,55 @@ function initDb(dbPath = './pool.sqlite') {
   db = new Database(dbPath);
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
+  // Wait for a held write lock instead of failing the statement instantly (audit §J7-1).
+  // Without this, SQLITE_BUSY surfaces as a thrown error the caller has to handle, and the
+  // most expensive caller — BlockManager.creditBlock, recording a block the pool just found —
+  // swallowed it. WAL means readers never block writers, so contention here is writer-vs-writer:
+  // brief, and 5 s covers it.
+  //
+  // The cost is real and deliberate: DatabaseSync is SYNCHRONOUS and the stratum server shares
+  // this event loop, so a statement that waits blocks share submission for every connected miner
+  // rather than failing one write. That trade is right for a money write and merely tolerable
+  // for a dashboard query, and 5 s is chosen as the ceiling a miner would not notice as a
+  // disconnect (stratum has no request timeout that tight) while still bounding the stall.
+  //
+  // It does NOT rescue a long exclusive lock — a VACUUM against a live pool holds one for
+  // minutes, far past any sane busy_timeout. That is why the toolkit's maintenance cron stops
+  // the service around it rather than relying on this pragma (07_grin_mining_public_pool.sh).
+  db.pragma('busy_timeout = 5000');
 
   createSchema();
+  restrictDbFileModes(dbPath);
   return db;
+}
+
+// Take the world-read bit off the database file and its WAL siblings (audit §J8-1).
+//
+// SQLite creates a new database with SQLITE_DEFAULT_FILE_PERMISSIONS (0644) masked by the
+// process umask, and systemd's default UMask for a service is 0022 — so pool.db lands 0644.
+// That is fine for a file nobody else can reach, but Script 07 deliberately makes the app
+// directory traversable AND listable by `others` (`chmod o+rx "$POOL_APP_DIR"` in
+// pool_setup_nginx) so nginx can serve custom_assets/ and uploads/. The two decisions
+// combine: every local account on the box can read pool.db, which holds the admin bcrypt
+// hash, the PLAINTEXT `users.totp_secret`, every miner's address and balance, the
+// ownership-proof scrypt hashes and the whole admin audit log.
+//
+// Never a process-wide `umask(0o077)` instead: asset-manager.js writes uploaded assets with
+// an explicit `{ mode: 0o644 }` BECAUSE nginx has to read them, and a umask masks that too —
+// the "fix" would silently 403 every white-label logo.
+//
+// -wal and -shm are chmod'd as well: -wal carries the most recent writes verbatim (a fresh
+// admin row, a settings save), so leaving it 0644 would leak exactly the newest secrets.
+// Both may not exist yet on a brand-new DB, and chmod is a no-op on Windows dev machines —
+// hence the per-file guard rather than one try/catch around the lot.
+function restrictDbFileModes(dbPath) {
+  for (const f of [dbPath, `${dbPath}-wal`, `${dbPath}-shm`]) {
+    try {
+      if (fs.existsSync(f)) fs.chmodSync(f, 0o600);
+    } catch (e) {
+      console.warn(`[db] could not restrict permissions on ${f}: ${e.message}`);
+    }
+  }
 }
 
 function getDb() {
@@ -66,7 +112,12 @@ function migrateUsers() {
       // totp_pending_secret = secret mid-enrollment, before the confirm code is entered.
       totp_secret: 'TEXT DEFAULT NULL',
       totp_enabled: 'INTEGER NOT NULL DEFAULT 0',
-      totp_pending_secret: 'TEXT DEFAULT NULL'
+      totp_pending_secret: 'TEXT DEFAULT NULL',
+      // Highest TOTP time-step already accepted for this user. A code is refused unless its
+      // matched counter is strictly greater, which is what makes a TOTP code single-use
+      // (RFC 6238 §5.2). 0 backfills safely: every real counter is ~5.8e7 and rising, so an
+      // existing account is not locked out by the migration. Audit §J2-5.
+      totp_last_counter: 'INTEGER NOT NULL DEFAULT 0'
     };
     for (const [name, def] of Object.entries(additions)) {
       if (!have.has(name)) {
@@ -121,7 +172,27 @@ function migrateMinerAccounts() {
       // to notify. Removal blanks these in the same UPDATE that blanks nostr_*, but index.js
       // READS the row into `prev` first, so the alert still goes out (see the DELETE route).
       nostr_prev_username: 'TEXT DEFAULT NULL',
-      nostr_prev_npub: 'TEXT DEFAULT NULL'
+      nostr_prev_npub: 'TEXT DEFAULT NULL',
+      // Capture time of each proof-window slot (audit §J3-1). The AND-gate on
+      // nostr-destination — the only miner-reachable route that can REDIRECT money — now
+      // refuses a leg younger than the destination cooldown, because both legs are written by
+      // one call on one accepted share, so a stranger who mines one share to this address
+      // otherwise holds both halves of a two-factor check. Timestamps travel with the value
+      // on rotation (last→prev carries last_*_at→prev_*_at).
+      last_ip_at: 'INTEGER DEFAULT NULL',
+      prev_ip_at: 'INTEGER DEFAULT NULL',
+      last_pass_at: 'INTEGER DEFAULT NULL',
+      prev_pass_at: 'INTEGER DEFAULT NULL',
+      // Anchor slot — the address's FIRST-EVER captured proof of each kind (audit §J3-4).
+      // The last-2 window is only two deep and anyone may mine to any address, so two hostile
+      // sessions evict both slots and a miner who has since stopped mining can never
+      // re-capture. The anchor is write-once at first capture and is never rotated, so that
+      // miner always retains a way to reach their own money. It is deliberately NOT accepted
+      // by requireBothProofs: it can never be revoked, so it must not be able to change where
+      // money goes — only to move money to the address's own wallet.
+      anchor_ip: 'TEXT DEFAULT NULL',
+      anchor_pass_hash: 'TEXT DEFAULT NULL',
+      anchor_set_at: 'INTEGER DEFAULT NULL'
     };
     for (const [name, def] of Object.entries(additions)) {
       if (!have.has(name)) {
@@ -176,7 +247,8 @@ function migrateBlocks() {
     const have = new Set(cols.map(c => c.name));
     const additions = {
       network_difficulty: 'REAL DEFAULT NULL',
-      round_shares: 'REAL DEFAULT NULL'
+      round_shares: 'REAL DEFAULT NULL',
+      fees: 'REAL DEFAULT NULL'
     };
     for (const [name, def] of Object.entries(additions)) {
       if (!have.has(name)) {
@@ -184,8 +256,87 @@ function migrateBlocks() {
         console.warn(`[db] blocks: added missing column ${name}`);
       }
     }
+    migrateBlocksNonceToText();
   } catch (e) {
     console.error(`[db] blocks migration check failed: ${e.message}`);
+  }
+}
+
+// §J5-1: rebuild `blocks` with nonce TEXT if it is still the old INTEGER column.
+//
+// ⚠ The copy is done ENTIRELY IN SQL. Reading the old rows through JS is precisely what is
+// broken — `.all()` throws ERR_OUT_OF_RANGE on any nonce past 2^53 — so a read-modify-write
+// migration would fail on exactly the rows that need migrating. SQLite converts internally
+// and never materialises a JS number.
+//
+// Three storage classes can be sitting in that column (INTEGER affinity splits by magnitude):
+//   integer  → the exact digits survive; CAST(… AS TEXT) recovers them losslessly.
+//   real     → the value was destroyed at INSERT time (a u64 >= 2^63 does not fit a 64-bit
+//              signed int, so SQLite stored a double). It is UNRECOVERABLE. Writing back the
+//              rounded rendering would be worse than useless: it would compare unequal to the
+//              node's own rounding and orphan a live block. Such rows get '' — which
+//              block-identity.js reads as "nonce not comparable" (unknown, never mismatch),
+//              leaving the intact 64-hex `hash` to carry verification for them.
+//   text     → already migrated; nothing to do.
+function migrateBlocksNonceToText() {
+  const col = db.prepare("PRAGMA table_info(blocks)").all().find(c => c.name === 'nonce');
+  if (!col || String(col.type).toUpperCase() === 'TEXT') return;
+
+  const lost = db.prepare("SELECT COUNT(*) AS c FROM blocks WHERE typeof(nonce) = 'real'").get().c;
+  const total = db.prepare('SELECT COUNT(*) AS c FROM blocks').get().c;
+  console.warn(`[db] blocks.nonce is ${col.type}; rebuilding as TEXT (audit §J5-1). ${total} row(s).`);
+  if (lost > 0) {
+    console.error(
+      `[db] blocks: ${lost} row(s) had a nonce stored as REAL — that value was lost at INSERT ` +
+      `time and cannot be recovered. Those blocks will verify by HASH only.`
+    );
+  }
+
+  // PRAGMA foreign_keys is a no-op inside a transaction, so it is toggled outside one.
+  // blocks.found_by references miner_accounts; dropping the table with FKs live would fail.
+  db.pragma('foreign_keys = OFF');
+  try {
+    const rebuild = db.transaction(() => {
+      db.exec(`CREATE TABLE blocks_j5_new (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        height INTEGER NOT NULL,
+        hash TEXT NOT NULL UNIQUE,
+        nonce TEXT NOT NULL,
+        reward REAL NOT NULL,
+        fees REAL DEFAULT NULL,
+        status TEXT NOT NULL DEFAULT 'immature',
+        found_by TEXT NOT NULL REFERENCES miner_accounts(grin_address),
+        found_at INTEGER NOT NULL,
+        confirmed_at INTEGER DEFAULT NULL,
+        network_difficulty REAL DEFAULT NULL,
+        round_shares REAL DEFAULT NULL,
+        created_at INTEGER NOT NULL DEFAULT (unixepoch())
+      )`);
+      db.exec(`INSERT INTO blocks_j5_new
+        (id, height, hash, nonce, reward, fees, status, found_by, found_at, confirmed_at,
+         network_difficulty, round_shares, created_at)
+        SELECT id, height, hash,
+               CASE WHEN typeof(nonce) = 'integer' THEN CAST(nonce AS TEXT)
+                    WHEN typeof(nonce) = 'text'    THEN nonce
+                    ELSE '' END,
+               reward, fees, status, found_by, found_at, confirmed_at,
+               network_difficulty, round_shares, created_at
+        FROM blocks`);
+      db.exec('DROP TABLE blocks');
+      db.exec('ALTER TABLE blocks_j5_new RENAME TO blocks');
+      // Indexes belonged to the dropped table; the UNIQUE on hash rides along with the schema.
+      db.exec('CREATE INDEX IF NOT EXISTS idx_block_height ON blocks(height)');
+      db.exec('CREATE INDEX IF NOT EXISTS idx_block_status ON blocks(status)');
+      db.exec('CREATE INDEX IF NOT EXISTS idx_block_found_by ON blocks(found_by)');
+    });
+    rebuild();
+    const bad = db.pragma('foreign_key_check');
+    if (Array.isArray(bad) && bad.length > 0) {
+      console.error(`[db] blocks: ${bad.length} foreign-key violation(s) after the nonce rebuild`);
+    }
+    console.warn('[db] blocks.nonce rebuilt as TEXT');
+  } finally {
+    db.pragma('foreign_keys = ON');
   }
 }
 
@@ -290,6 +441,13 @@ function createSchema() {
       prev_ip TEXT DEFAULT NULL,
       last_pass_hash TEXT DEFAULT NULL,
       prev_pass_hash TEXT DEFAULT NULL,
+      last_ip_at INTEGER DEFAULT NULL,
+      prev_ip_at INTEGER DEFAULT NULL,
+      last_pass_at INTEGER DEFAULT NULL,
+      prev_pass_at INTEGER DEFAULT NULL,
+      anchor_ip TEXT DEFAULT NULL,
+      anchor_pass_hash TEXT DEFAULT NULL,
+      anchor_set_at INTEGER DEFAULT NULL,
       pass_proof_state TEXT DEFAULT NULL,
       is_banned INTEGER NOT NULL DEFAULT 0,
       ban_reason TEXT DEFAULT NULL,
@@ -310,8 +468,20 @@ function createSchema() {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       height INTEGER NOT NULL,
       hash TEXT NOT NULL UNIQUE,
-      nonce INTEGER NOT NULL,
+      -- TEXT, not INTEGER. A Grin nonce is a full-width u64 and this DB is node:sqlite,
+      -- which THROWS ERR_OUT_OF_RANGE reading an INTEGER past 2^53 (better-sqlite3 rounded
+      -- silently; the migration off it changed this behaviour). Under INTEGER affinity a
+      -- nonce in [2^53,2^63) stored fine and then poisoned every SELECT * on this table
+      -- — one row aborted the whole maturity sweep, forever. See audit §J5-1 and memory
+      -- reference_nodesqlite_u64_throws. Always bind String(nonce).
+      nonce TEXT NOT NULL,
+      -- Total coinbase value in GRIN = 60 emission + fees. Grin pays the finder the block
+      -- fees on top of the fixed reward, so this is what the wallet actually received and
+      -- what PPLNS must split. See audit §J5-10.
       reward REAL NOT NULL,
+      -- Transaction fees included in reward, captured from the block's kernels at
+      -- found-time. NULL = not captured (node unreachable, or a pre-§J5-10 row).
+      fees REAL DEFAULT NULL,
       status TEXT NOT NULL DEFAULT 'immature',
       found_by TEXT NOT NULL REFERENCES miner_accounts(grin_address),
       found_at INTEGER NOT NULL,
@@ -362,6 +532,44 @@ function createSchema() {
     // better-sqlite3 is synchronous and the stratum server shares this process, so a multi-second
     // scan blocks share submission for every connected miner.
     `CREATE INDEX IF NOT EXISTS idx_hashrate_time ON hashrate_history(recorded_at, hashrate_gps)`,
+
+    // Per-address DAILY rollup of hashrate_history — audit §J12-1.
+    //
+    // `/api/stratum/top-avg-hashrate` (public, unauthenticated) aggregated the raw table with
+    // `WHERE recorded_at > ? GROUP BY grin_address`, which plans as a full
+    // `SCAN hashrate_history USING INDEX idx_hashrate_address` + a temp b-tree — and, because
+    // the range predicate is on the SECOND column of that index, the ?days parameter never
+    // entered the plan at all: ?days=1 cost exactly what ?days=90 cost, the whole 100-day
+    // table (144 M rows at the 1000-miner target). node:sqlite is synchronous and the stratum
+    // server shares this process, so that is share intake stopped, not a slow page.
+    //
+    // A covering index is the WRONG fix here and was considered and rejected: the ORDER BY is
+    // on a derived aggregate, so no index can avoid visiting every row in the window — an
+    // index would only help small ?days values, at the cost of ~9 GB of extra index on a table
+    // that is already the largest in the schema (grin_address is 63 bytes and would have to be
+    // carried a second time). A rollup makes the read 100× smaller instead of making the scan
+    // faster.
+    //
+    // gps_seconds is SUM(hashrate_gps * window_seconds) for the UTC day — exactly the numerator
+    // getTopAvgHashrate needs, so the composite read is a plain SUM with no re-derivation.
+    // Size is one row per active miner per day: ~100 k rows at 1000 miners × 100 days, ~10 MB.
+    //
+    // PRUNED at the same `database.hashrate_keep_days` horizon as its source table (see
+    // lib/retention.js) — deliberately, and unlike pool_metrics_hourly/balance_log_daily which
+    // are keep-forever. This is per-ADDRESS mining activity, and a summary that outlived the
+    // raw rows it came from would retain more about a miner than the pool previously did
+    // (§G1 / §J11's linkage concerns). A summary must never extend a retention window.
+    `CREATE TABLE IF NOT EXISTS miner_hashrate_daily (
+      day INTEGER NOT NULL,
+      grin_address TEXT NOT NULL,
+      gps_seconds REAL NOT NULL DEFAULT 0,
+      sample_count INTEGER NOT NULL DEFAULT 0,
+      updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+      PRIMARY KEY (day, grin_address)
+    )`,
+    // Leading `day` so the leaderboard's `WHERE day >= ? GROUP BY grin_address` range-seeks,
+    // and covering (gps_seconds is in the index) so it needs no table reads.
+    `CREATE INDEX IF NOT EXISTS idx_mhd_day ON miner_hashrate_daily(day, grin_address, gps_seconds)`,
 
     // Pool-wide hourly rollup — one row per hour, aggregated across ALL miners, so its size is
     // independent of miner count (~1 MB/year). NEVER pruned (kept out of lib/retention.js) so the
@@ -522,6 +730,7 @@ function createSchema() {
       totp_secret TEXT DEFAULT NULL,
       totp_enabled INTEGER NOT NULL DEFAULT 0,
       totp_pending_secret TEXT DEFAULT NULL,
+      totp_last_counter INTEGER NOT NULL DEFAULT 0,
       created_at INTEGER NOT NULL DEFAULT (unixepoch()),
       updated_at INTEGER NOT NULL DEFAULT (unixepoch())
     )`,

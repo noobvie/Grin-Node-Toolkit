@@ -176,8 +176,12 @@
 // admin-shell.js.
 API.guardAdminPage();
 
+// HTML escaper. Safe in text and in a quoted attribute VALUE — but never splice its output
+// into a JS string literal inside an on*="…" handler: the HTML parser decodes &#39; back to a
+// real ' before the JS is parsed. Row buttons pass values via data-* + this.dataset instead
+// (audit §J14). `s == null`, not `s || ''`, so a legitimate 0 renders as "0" and not blank.
 function escHtml(s) {
-  return String(s || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 
 function fmtWhen(ts) {
@@ -205,7 +209,7 @@ const originsTable = AdminTable.create({
       <td>${escHtml(String(r.attempts))}</td>
       <td>${escHtml(fmtWhen(r.last_at))}</td>
       <td style="text-align:right;">
-        <button class="btn btn-sm btn-outline" onclick="clearBan('${escHtml(r.ip)}')">Lift ban</button>
+        <button class="btn btn-sm btn-outline" data-ip="${escHtml(r.ip)}" onclick="clearBan(this.dataset.ip)">Lift ban</button>
       </td>
     </tr>`
 });
@@ -247,7 +251,7 @@ function renderLocks(d) {
     for (const b of bans) {
       html += `<li><span class="mono">${escHtml(b.ip)}</span> — expires in ${escHtml(fmtDur(b.seconds_remaining))} ` +
               `<button class="btn btn-sm btn-outline" style="margin-left:.4rem;" ` +
-              `onclick="clearBan('${escHtml(b.ip)}')">Lift</button></li>`;
+              `data-ip="${escHtml(b.ip)}" onclick="clearBan(this.dataset.ip)">Lift</button></li>`;
     }
     html += '</ul>';
   }

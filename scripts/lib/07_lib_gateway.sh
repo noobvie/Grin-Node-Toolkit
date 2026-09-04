@@ -115,10 +115,27 @@ gw_install() {
     gw_ensure_defaults
 
     # Generate this gateway's WireGuard keypair once (idempotent).
-    if [[ ! -f "$GW_DIR/wg_private.key" ]]; then
-        ( umask 077; wg genkey > "$GW_DIR/wg_private.key" )
-        wg pubkey < "$GW_DIR/wg_private.key" > "$GW_DIR/wg_public.key"
+    # -s, not -f (audit §J16-7): `> file` creates the file BEFORE wg genkey runs, so a
+    # failed genkey leaves a zero-byte private key that -f reports as present forever —
+    # the keypair is never regenerated, every pairing string is derived from an empty
+    # public key, and the operator was told "Generated WireGuard keypair." The hub side
+    # already learned this (07_lib_gwctl.sh init-server uses -s and repairs a missing
+    # public half); the edge had the original bug. Guard both commands: this lib runs
+    # with errexit suppressed (memory `project_lib_errexit_suppression`).
+    if [[ ! -s "$GW_DIR/wg_private.key" ]]; then
+        ( umask 077; wg genkey > "$GW_DIR/wg_private.key" ) \
+            || { error "wg genkey failed — no WireGuard keypair."; return 1; }
+        [[ -s "$GW_DIR/wg_private.key" ]] \
+            || { error "wg genkey produced an empty key file ($GW_DIR/wg_private.key)."; return 1; }
+        wg pubkey < "$GW_DIR/wg_private.key" > "$GW_DIR/wg_public.key" \
+            || { error "wg pubkey failed — private key unreadable?"; return 1; }
         success "Generated WireGuard keypair."
+    elif [[ ! -s "$GW_DIR/wg_public.key" ]]; then
+        # Same repair the hub does: an interrupted first run (or a restore that brought
+        # back only the private half) otherwise leaves the public key blank forever.
+        wg pubkey < "$GW_DIR/wg_private.key" > "$GW_DIR/wg_public.key" \
+            || { error "could not re-derive the gateway public key."; return 1; }
+        success "Re-derived the gateway WireGuard public key."
     fi
 
     # Dedicated HAProxy instance bound to our config — never touches the distro's
@@ -137,6 +154,22 @@ ExecStart=$haproxy_bin -f $GW_HAPROXY_CFG -db
 Restart=on-failure
 RestartSec=5
 LimitNOFILE=65535
+# Sandbox (audit §J16-3). haproxy itself drops to the unprivileged runtime account via
+# the `user`/`group` lines gw_render_forwarder writes into the global section; these are
+# the second layer, covering the brief root window before that drop. NoNewPrivileges is
+# safe here — unlike the hub unit, this service never shells out to sudo.
+# ProtectSystem=full (not strict) and no PrivateDevices on purpose: the forwarder logs to
+# /dev/log and this unit has never run on a box, so the hardening stops short of the two
+# settings that could silently take logging or the config read away. §J17 should tighten
+# to strict once a real gateway has been observed running.
+NoNewPrivileges=yes
+ProtectSystem=full
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 
 [Install]
 WantedBy=multi-user.target
@@ -202,6 +235,23 @@ gw_apply_pairing_string() {
     if [[ -z "$region" || -z "$pub" || -z "$ep" || -z "$hubip" || -z "$gwip" || ! "$port" =~ ^[0-9]+$ ]]; then
         return 1
     fi
+    # Per-field shape checks (audit §J16-6). This string arrives out-of-band — pasted by
+    # whoever told the gateway operator they were the pool — and every field lands verbatim
+    # in the WireGuard config. Only `port` was ever checked. The field that matters is
+    # `hubip`: it becomes `AllowedIPs = ${hubip}/32`, and wg accepts a comma-separated list,
+    # so `0.0.0.0/0, 10.66.66.1` renders as a valid catch-all route and wg-quick then puts
+    # the ENTIRE gateway box's egress inside a tunnel whose peer key (`pub`) and endpoint
+    # (`ep`) came from the same line. The hub's own helper validates every one of its inputs
+    # before touching anything (07_lib_gwctl.sh §13.2); the edge validated one.
+    # Shapes mirror what grin-gateway-ctl actually emits.
+    [[ "$region" =~ ^[a-z0-9-]{2,12}$ ]]        || { warn "pairing: region '$region' is not a region key."; return 1; }
+    [[ "$pub"    =~ ^[A-Za-z0-9+/]{43}=$ ]]     || { warn "pairing: hub key is not a WireGuard public key."; return 1; }
+    [[ "$ep"     =~ ^[A-Za-z0-9._-]+:[0-9]+$ ]] || { warn "pairing: hub endpoint '$ep' is not host:port."; return 1; }
+    [[ "$hubip"  =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] \
+        || { warn "pairing: hub tunnel IP '$hubip' is not a single IPv4 address."; return 1; }
+    [[ "$gwip"   =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}(/32)?$ ]] \
+        || { warn "pairing: gateway tunnel IP '$gwip' is not a single IPv4 address."; return 1; }
+    (( port >= 1 && port <= 65535 )) || { warn "pairing: region port '$port' is out of range."; return 1; }
     [[ "$gwip" == */* ]] || gwip="${gwip}/32"
     gw_write_conf_key "region"          "$region"
     gw_write_conf_key "wg_hub_pubkey"   "$pub"
@@ -325,12 +375,29 @@ gw_render_forwarder() {
     # mode tcp: HAProxy forwards the raw stratum byte stream. send-proxy-v2 prepends the
     # binary PROXY-protocol v2 header so the central box recovers the real miner IP.
     # stick-table conn-rate limit (Q5): blunt junk-login floods at the edge before the tunnel.
-    cat > "$GW_HAPROXY_CFG" << EOF
+    # The haproxy runtime account. It exists on every distro that ships the package
+    # (Debian/Ubuntu and RHEL both create `haproxy`), but fall back to `nobody` rather
+    # than emit a `user` line naming an account that does not exist — haproxy refuses
+    # to start on an unknown user and ExecStartPre would fail the whole service.
+    local hap_user="haproxy" hap_group="haproxy"
+    id -u haproxy >/dev/null 2>&1 || { hap_user="nobody"; hap_group="nogroup"; }
+    getent group "$hap_group" >/dev/null 2>&1 || hap_group="$(id -gn "$hap_user" 2>/dev/null || echo nogroup)"
+
+    cat > "$GW_HAPROXY_CFG" << EOF || { error "could not write $GW_HAPROXY_CFG"; return 1; }
 # Grin pool regional gateway — region: ${region}
 # Auto-generated by 07_lib_gateway.sh — edit via the gateway menu, not by hand.
 global
     log /dev/log local0
     maxconn 8192
+    # Drop privileges after the bind (audit §J16-3). This process terminates raw,
+    # unauthenticated TCP from the public internet on :${port} and it holds the box that
+    # holds the WireGuard private key for the tunnel into the pool — the same argument
+    # pool_deroot() makes for the hub backend (design §13.9), which the edge had never
+    # applied: with no `user`/`group` here and no `User=` in the unit, haproxy stayed
+    # root for its entire life. The stratum port is >1024, so nothing needs root after
+    # startup. Chroot deliberately omitted: it would break `log /dev/log`.
+    user ${hap_user}
+    group ${hap_group}
 
 defaults
     mode tcp
@@ -371,7 +438,10 @@ gw_render_wireguard() {
         return 1
     fi
     priv=$(cat "$GW_DIR/wg_private.key")
-    mkdir -p "$(dirname "$GW_WG_CONF")"
+    # A blank private key renders a config wg-quick accepts the shape of but can never
+    # handshake with, and the failure surfaces later as "no handshake" on the far box.
+    [[ -n "$priv" ]] || { error "$GW_DIR/wg_private.key is empty — re-run 1) Install."; return 1; }
+    mkdir -p "$(dirname "$GW_WG_CONF")" || { error "could not create $(dirname "$GW_WG_CONF")"; return 1; }
     ( umask 077; cat > "$GW_WG_CONF" << EOF
 # Grin pool gateway tunnel — auto-generated by 07_lib_gateway.sh
 [Interface]
@@ -384,8 +454,8 @@ Endpoint = ${hub_ep}
 AllowedIPs = ${hub_ip}/32
 PersistentKeepalive = 25
 EOF
-    )
-    chmod 600 "$GW_WG_CONF"
+    ) || { error "could not write $GW_WG_CONF"; return 1; }
+    chmod 600 "$GW_WG_CONF" || { error "could not chmod 600 $GW_WG_CONF — refusing to leave a readable tunnel key."; return 1; }
     info "Wrote $GW_WG_CONF."
 }
 

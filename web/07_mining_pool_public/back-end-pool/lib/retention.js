@@ -68,6 +68,7 @@ class RetentionManager {
       enabled,
       shares_deleted: 0,
       hashrate_deleted: 0,
+      hashrate_daily_deleted: 0,
       alerts_deleted: 0,
       audit_log_deleted: 0,
       balance_log_deleted: 0,
@@ -106,6 +107,16 @@ class RetentionManager {
       const r2 = this.db.prepare('DELETE FROM hashrate_history WHERE recorded_at < ?').run(hrCut);
       result.hashrate_deleted = r2.changes;
 
+      // 2b. The per-address DAILY rollup of the same data (audit §J12-1), pruned on the SAME
+      //     horizon. Deliberately not keep-forever like pool_metrics_hourly / balance_log_daily:
+      //     those are pool-wide aggregates, this one is per-ADDRESS mining activity, and a
+      //     summary that outlived the raw rows it was built from would quietly retain more
+      //     about a miner than the pool did before it existed. A rollup must never extend a
+      //     retention window. Pruned by whole UTC day so a partially-covered day is kept.
+      const dayCut = Math.floor(hrCut / 86400) * 86400;
+      const r2b = this.db.prepare('DELETE FROM miner_hashrate_daily WHERE day < ?').run(dayCut);
+      result.hashrate_daily_deleted = r2b.changes;
+
       // 3. Resolved/acknowledged alerts — prune by numeric created_at.
       const alCut = now - alertsKeepDays * 86400;
       const r3 = this.db.prepare(
@@ -119,6 +130,24 @@ class RetentionManager {
       const auCut = now - auditKeepDays * 86400;
       const r4 = this.db.prepare('DELETE FROM admin_audit_log WHERE created_at < ?').run(auCut);
       result.audit_log_deleted = r4.changes;
+
+      // 5. Goblin/Nostr replay-dedup ids (audit §J4-8). The bridge creates this table itself
+      //    and nothing ever pruned it: anyone can publish a kind-1059 event #p-tagged to the
+      //    pool's public key, and each one costs a PERMANENT row — the row is written before
+      //    the wrap is decrypted, which is the right order (dedup ahead of an expensive nip44
+      //    decrypt) but means undecryptable junk counts too. Unbounded growth on the same
+      //    SQLite file share intake writes to, which is the thing that stalls SHARES.
+      //
+      //    24 h is comfortably past both windows that give an id meaning — the relay lookback
+      //    (LOOKBACK_SECS) and nostr_pending_ttl_minutes — so a pruned id can no longer arrive
+      //    again as a "new" event. The table is absent on a pool that never enabled the rail,
+      //    hence the try/catch rather than a CREATE here: retention must not conjure a table
+      //    for a feature that is off.
+      try {
+        const nsCut = now - 86400;
+        const r5 = this.db.prepare('DELETE FROM nostr_seen_events WHERE seen_at < ?').run(nsCut);
+        result.nostr_seen_deleted = r5.changes;
+      } catch (_) { result.nostr_seen_deleted = 0; }
     });
     tx();
 
@@ -140,6 +169,7 @@ class RetentionManager {
     this.lastResult = result;
     console.log(
       `[Retention] shares=${result.shares_deleted} hashrate=${result.hashrate_deleted} ` +
+      `hashrate_daily=${result.hashrate_daily_deleted} ` +
       `alerts=${result.alerts_deleted} audit_log=${result.audit_log_deleted} ` +
       `balance_log=${result.balance_log_deleted}` +
       (result.shares_cutoff_height ? ` (shares cutoff height ${result.shares_cutoff_height})` : '') +
@@ -169,6 +199,7 @@ class RetentionManager {
       counts: {
         shares: count('shares'),
         hashrate_history: count('hashrate_history'),
+        miner_hashrate_daily: count('miner_hashrate_daily'),
         alerts: count('alerts'),
         admin_audit_log: count('admin_audit_log'),
         balance_log: count('balance_log'),

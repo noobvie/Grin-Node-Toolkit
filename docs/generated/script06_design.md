@@ -285,7 +285,12 @@ the method, so the mixed canvas/DOM marker set is safe.
 
 ## Peer map — self-hosted basemap, no third-party tiles (plan, rev. 2026-09-02)
 
-**Status: PLANNED. Nothing below is built.** Scope is the peer map at
+**Status: PART 2 BUILT (2026-09-05) — the CARTO dependency is GONE.** The peer map now
+draws a vector basemap from the committed `countries-110m.json`, at one resolution, with
+no labels: `assets/topojson-client.min.js` is vendored, `makeBasemapLayer()` is the single
+construction site, and a theme change is `setStyle()` rather than a rebuild. Still PLANNED
+below: the 50m/10m zoom-swap tiers (*The one real technical risk*) and labels. Scope is the
+peer map at
 `web/06_stats_map/stats/index.html` and its deploy path in `scripts/06_global_grin_health.sh`.
 
 ⚠ **Rev 2 replaces the 2026-09-01 PMTiles plan, which was wrong for this map.** That plan
@@ -413,6 +418,31 @@ by `cp`, so there is no upload step to think about.
    - **No vhost change.** No `/tiles/` block, no MIME type, no cache rules beyond what static
      assets already get.
 
+   **AS BUILT (2026-09-05) — "no vhost change" was wrong.** Two were needed, and the
+   second contradicts the line above:
+   - `topojson-client` is **vendored**, not downloaded: it lives in `assets/` and the
+     existing `cp -r "$WEB_SRC/assets/."` carries it. No curl block was added — a
+     download would reintroduce a build-time third-party fetch into the one directory
+     whose whole purpose is that there are none.
+   - That copy is now **guarded** (`|| { die …; return 1; }`) plus a presence check on
+     the four load-bearing files. It was a bare `cp -r` carrying only a flag font;
+     it now carries the map itself, and `install_stats()` is reached through an
+     ||-guarded menu dispatch, so it runs with **errexit disabled** — an unguarded
+     failure there is silent (CLAUDE.md, *Libs run WITHOUT errexit*).
+   - **gzip had to be declared in the vhost.** nginx's built-in `gzip_types` default is
+     `text/html` only; Debian ships the wider list **commented out** and the RHEL/nginx.org
+     package ships `#gzip on;`. The design's "Debian's default `gzip_types` does include
+     `application/json`" is false in the way that matters, and the entire size argument
+     rested on it. Declared at server level in the stats vhost — not in `nginx.conf`,
+     which a package upgrade resets.
+   - **`location /assets/`** added with `Cache-Control: public, max-age=2592000` (30 days,
+     not a year: a regenerated tier ships under the same filename). This is design rule 4
+     under *Page-load cost*, which had no implementation.
+   - **robots.txt: `assets/` stays crawlable.** It holds resources the page needs to
+     render, and blocking those is what Google advises against. Cost is bounded —
+     autoindex is off and nothing links `countries-10m.json`, so a renderer fetches only
+     the ~890 KB the page references (~295 KB gzipped).
+
 4. **`docs/generated/script06_design.md`** — this section, updated as built.
 
 ### The one real technical risk — vertex count, not file size
@@ -437,6 +467,36 @@ costs 108 KB.
 the detail at 50m and accept coarser coastlines at deep zoom — the peer dots are the content,
 and 50m outlines at z10 are a cosmetic loss, not a functional one. Do not discover this after
 wiring three files.
+
+#### AS BUILT (2026-09-05): measured, and 10m was NOT wired
+
+The bands shipped as **110m for z2-4 and 50m for z5-10**. `countries-10m.json` is committed
+but absent from `BASEMAP_TIERS`. Measured against the committed data with Leaflet 1.9.4's own
+`_project` / `PolyUtil.clipPolygon` / `LineUtil.simplify`, on an AMD Ryzen 5 PRO 3400GE —
+mid-range, so a median visitor is that class or slower:
+
+| Tier | Mount (parse + decode + project) | Every `zoomend` | Pan (`moveend`) at z8-10 |
+|---|---|---|---|
+| `countries-50m` | 58 ms | 11 ms | 0.1-2.1 ms |
+| `countries-10m` | 300 ms | 87 ms | 0.8-2.5 ms |
+
+**The prediction above was aimed at the wrong event.** Pan at z8-10 is cheap even at 10m:
+`Path._clipPoints` early-outs on `_pxBounds`, so only the 2-10 countries actually on screen
+are clipped and drawn. What is expensive is `Renderer._onZoomEnd`, which re-projects **every**
+layer with no culling at all — all 546,001 vertices, on every single zoom step, inside the one
+band whose entire purpose is zooming. 87 ms on this box is 200 ms+ on a low-end laptop, and the
+300 ms first mount is a visible freeze. So the cap is real, and it is the outcome this section
+told us to accept: coarser coastlines at deep zoom, nothing else.
+
+**What would unlock 10m** is culling by viewport before projection rather than after: a z10 view
+over Europe intersects only ~96k of the 546k vertices (~18%), and over east Asia ~50k (9%) —
+i.e. no worse than the 50m tier costs today. That means re-filtering the mounted feature set on
+pan, with the decoded LatLng arrays cached per feature so a re-filter is not a re-mount. That is
+a separate piece of work; do not simply add the row back.
+
+Note the vertex count in the table above (548,471) is the **source GeoJSON's** coordinate count.
+The committed file quantises to 478,373 arc vertices, which decode to 546,001 points — that last
+number is the one that gets projected, and the one measured here.
 
 ### Page-load cost — measured, and it gets FASTER
 
@@ -475,7 +535,7 @@ slower. (For scale, the page already ships `chart.js` at 69.7 KB gzipped and `le
 |---|---|---|
 | `countries-110m` | 38.6 KB | at load, with the page |
 | `countries-50m` | 237.1 KB | on first cross into z5, or on idle prefetch |
-| `countries-10m` | 910 KB | on first cross into z8 |
+| ~~`countries-10m`~~ | ~~910 KB~~ | **never — not mounted, see AS BUILT above** |
 
 Rules that keep this off the critical path:
 
@@ -513,6 +573,16 @@ first:
    z2 to the full set at z8. Render as `divIcon`, and accept that overlaps are not resolved.
 
 Start at (1). It is reversible and it is very possibly the right answer.
+
+**AS BUILT: (3), city labels.** `assets/cities.json`, filtered `scalerank <= zoom - 2` and by
+the padded viewport bounds, rebuilt on `moveend` only (Leaflet fires `moveend` after `zoomend`
+for the same zoom, so binding both rebuilds twice per step). Rendered as `divIcon` markers in a
+`citylabelPane` at z-index **390**, which is also why the basemap moved to its own canvas in a
+`basemapPane` at **380**: land is `fillOpacity: 1`, so a label under the basemap is invisible,
+and a label in or above the default overlayPane canvas paints over the single-peer dots that
+live in that canvas. With the split, 380 < 390 < 400 (dots) < 600 (group dots) — nothing below
+400 can cover a dot. Colour is `--map-label` / `--map-label-halo` per theme. Overlaps are
+**not** resolved and must not be: the lever is `CITY_LABEL_RANK_OFFSET`, not a placement solver.
 
 ### Acceptance
 

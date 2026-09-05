@@ -45,6 +45,10 @@
 <link rel="stylesheet" href="leaflet.min.css">
 <link rel="stylesheet" href="_header.css">
 <script src="leaflet.min.js"></script>
+<!-- topojson-client: decodes the committed TopoJSON basemap into GeoJSON that
+     L.geoJSON can read. Vendored in assets/ (like the Twemoji flag font) so the
+     page never hotlinks a CDN — see assets/README.md. -->
+<script src="assets/topojson-client.min.js"></script>
 <style>
   :root {
     --bg:        #0d1117;
@@ -58,6 +62,12 @@
     --panel-bg:  rgba(22,27,34,0.92);
     --ctrl-bg:   rgba(22,27,34,0.85);
     --tip-bg:    rgba(22,27,34,0.95);
+    /* Basemap city labels. DOM divIcons, so they follow the theme through CSS vars
+       exactly the way .grp-dot does — built once, restyled for free on a switch,
+       where a hex baked into a marker option would freeze at boot. Deliberately
+       dimmer than --text: the labels are context, the peer dots are the content. */
+    --map-label:      #7d8ea3;
+    --map-label-halo: rgba(5,8,12,0.9);
   }
   /* ── Light theme ─────────────────────────────────────────────────────────── */
   html[data-theme="light"] {
@@ -72,6 +82,8 @@
     --panel-bg:  rgba(255,255,255,0.95);
     --ctrl-bg:   rgba(246,248,250,0.92);
     --tip-bg:    rgba(255,255,255,0.98);
+    --map-label:      #5a6672;
+    --map-label-halo: rgba(255,255,255,0.9);
   }
   html[data-theme="light"] .leaflet-container { background: #aad3df !important; }
   html[data-theme="light"] .leaflet-control-attribution {
@@ -91,8 +103,14 @@
     --panel-bg:  rgba(0,21,0,0.95);
     --ctrl-bg:   rgba(0,10,0,0.90);
     --tip-bg:    rgba(0,21,0,0.98);
+    --map-label:      #00a82c;
+    --map-label-halo: rgba(0,0,0,0.9);
   }
   html[data-theme="matrix"] body { font-family: 'Courier New', Courier, monospace; }
+  /* The basemap is vector now, so the container background IS the ocean — the
+     CARTO raster used to paint it. Each theme needs its own or matrix/hp sit on
+     the default theme's navy. */
+  html[data-theme="matrix"] .leaflet-container { background: #000600 !important; }
   html[data-theme="matrix"] #map-container::after {
     content: "";
     position: absolute;
@@ -114,7 +132,10 @@
     --panel-bg:  rgba(26,5,69,0.95);
     --ctrl-bg:   rgba(13,2,33,0.90);
     --tip-bg:    rgba(26,5,69,0.98);
+    --map-label:      #a98fd6;
+    --map-label-halo: rgba(4,0,14,0.9);
   }
+  html[data-theme="hp"] .leaflet-container { background: #08011a !important; }
   html[data-theme="hp"] #map-container::after {
     content: "";
     position: absolute;
@@ -199,6 +220,29 @@
     font-size: 10px !important;
   }
   .leaflet-control-attribution a { color: var(--muted) !important; }
+
+  /* ── Basemap city labels (assets/cities.json) ───────────────────────────── */
+  /* The whole pane is pointer-transparent: a label sits between the basemap and the
+     dots, so without this a city name could swallow the hover or click of a peer
+     underneath it. interactive:false on each marker says the same thing to Leaflet;
+     this says it to the browser for the pane's own box as well. */
+  .leaflet-citylabel-pane { pointer-events: none; }
+  .bm-label { background: none; border: none; }   /* strip divIcon defaults */
+  /* The icon element itself carries Leaflet's positioning transform, so it cannot also
+     carry a centring one — hence an inner span (iconSize [0,0]) that centres itself on
+     the point. The doubled shadow is a cheap halo: it has to hold up over land fill AND
+     over ocean, which are different colours in every theme. */
+  .bm-label-t {
+    position: absolute;
+    left: 0; top: 0;
+    transform: translate(-50%, -50%);
+    white-space: nowrap;
+    font-size: 10px;
+    line-height: 1;
+    letter-spacing: 0.2px;
+    color: var(--map-label);
+    text-shadow: 0 0 3px var(--map-label-halo), 0 0 3px var(--map-label-halo);
+  }
 
   /* ── Location group dot (2+ nodes sharing one GeoIP point) ───────────────── */
   /* A DOM divIcon, not a canvas circleMarker, for two reasons: a canvas circle
@@ -1022,18 +1066,248 @@ function fmtPct(n, total) {
 }
 
 // ── Leaflet 2D map ────────────────────────────────────────────────────────────
-let leafletMap      = null;
-let markersLayer    = null;
-let currentTileLayer = null;
+let leafletMap   = null;
+let markersLayer = null;
+let basemapLayer = null;
 
-const TILE_URLS = {
-  dark:   "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",
-  light:  "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png",
-  matrix: "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",
-  hp:     "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",
+// ── Self-hosted vector basemap ────────────────────────────────────────────────
+// This used to be four CARTO raster tile URLs. CARTO now requires an API key on
+// that host and serves keyless requests WATERMARKED at HTTP 200 — nothing 404s and
+// no JS error fires, so the breakage is invisible from our side. Worse, every
+// visitor's browser connected to a third party directly, on a page that otherwise
+// hashes miner IPs and publishes country-only geo.
+//
+// So the geometry ships with us: assets/countries-110m.json (Natural Earth via
+// world-atlas — public domain / ISC), drawn client-side. Zero third-party requests,
+// and it is ~150 KB LIGHTER at first paint than the retina tiles it replaces.
+// Rationale: docs/generated/script06_design.md, "Peer map — self-hosted basemap".
+//
+// ⚠ noWrap / bounds were tileLayer options and do NOT transfer to L.geoJSON — but
+// they are also no longer needed. Tiles repeated because the layer requested wrapped
+// tiles; vector geometry is drawn once at its real coordinates, so there is nothing
+// to repeat. The map's own maxBounds + maxBoundsViscosity 1.0 keep the pan inside
+// that single copy. Do not "restore" noWrap here; L.geoJSON silently ignores it.
+// Three resolutions ship in assets/; only ONE is ever in the map at a time, because
+// Leaflet projects a polygon's FULL point list before clipping it to the viewport.
+// `maxZoom` is the highest zoom a tier serves; the table runs coarse -> fine.
+//
+// ⚠ countries-10m.json is committed but deliberately NOT listed here. Measured against
+// this repo's own data using Leaflet 1.9.4's project/clip/simplify code, on an AMD
+// Ryzen 5 PRO 3400GE — mid-range, so a median visitor's machine is this class or slower:
+//
+//                  mount (parse+decode+project)   every zoomend   pan (moveend)
+//     countries-50m           58 ms                   11 ms         0.1-2.1 ms
+//     countries-10m          300 ms                   87 ms         0.8-2.5 ms
+//
+// PAN is not the problem at 10m — Path._clipPoints early-outs on _pxBounds, so only the
+// 2-10 countries actually on screen cost anything. The killer is Renderer._onZoomEnd,
+// which re-projects EVERY layer with no culling whatsoever: all 546,001 vertices, on
+// every single zoom step, in the one band whose entire purpose is zooming. 87 ms here is
+// 200 ms+ on a low-end laptop, and the 300 ms first mount is a visible freeze. So detail
+// is capped at 50m — coarser coastlines at z8-10, which is cosmetic; the peer dots are
+// the content. Re-enabling is one row, but do not add it without culling by viewport
+// first: a z10 view needs only ~96k of those 546k vertices.
+const BASEMAP_TIERS = [
+  { key: "110m", src: "assets/countries-110m.json", maxZoom: 4  },
+  { key: "50m",  src: "assets/countries-50m.json",  maxZoom: 10 },
+];
+const BASEMAP_ATTR = 'Map data ' +
+  '<a href="https://www.naturalearthdata.com/" target="_blank" rel="noopener">Natural Earth</a>' +
+  ' — public domain';
+
+// Land fill + border stroke per theme, taken from each theme's CSS custom
+// properties. matrix and hp previously just re-pointed at CARTO's dark_all because
+// CARTO has no green or purple basemap; now that the geometry is ours, a theme is
+// two colours and all four get a real basemap.
+const BASEMAP_STYLES = {
+  dark:   { fillColor: "#1b2430", color: "#3d4655" },
+  light:  { fillColor: "#e9edf1", color: "#b4bdc7" },
+  matrix: { fillColor: "#00230a", color: "#00b833" },
+  hp:     { fillColor: "#1d0650", color: "#6b34c4" },
 };
-const TILE_ATTR = '&copy; <a href="https://carto.com/" target="_blank">CARTO</a>' +
-                  ' &copy; <a href="https://www.openstreetmap.org/copyright" target="_blank">OSM</a>';
+const basemapStyleFor = theme =>
+  Object.assign({ weight: 0.7, fillOpacity: 1, opacity: 1 },
+                BASEMAP_STYLES[theme] || BASEMAP_STYLES.dark);
+
+// ONE construction site, ONE layer, for the life of the page. The layer is built empty
+// and never rebuilt: a theme change is setStyle() on it (see applyTheme) and a
+// resolution change is clearLayers()+addData() on it (see drawBasemapTier). The old
+// code constructed a tile layer in initMap AND again in applyTheme with a duplicated
+// options object, which is how a fix to one of them silently reverted on the next
+// theme switch.
+function makeBasemapLayer() {
+  // interactive:false so land never swallows a peer dot's hover/click — the canvas
+  // renderer skips non-interactive layers entirely during hit detection.
+  return L.geoJSON(null, {
+    // Its OWN canvas, in a pane below the labels — not the default shared overlayPane
+    // renderer. Land is drawn fillOpacity 1, so a label under the basemap would be
+    // invisible and a label above the shared canvas would paint over the single-peer
+    // dots that live in it. Splitting the two canvases is what makes "labels above the
+    // land, below every dot" expressible at all (see the pane table in initMap).
+    renderer:    L.canvas({ pane: "basemapPane" }),
+    // Reads the live currentTheme instead of a captured argument. This runs again on
+    // every tier swap, so a captured theme would resurrect the old colours the first
+    // time the map crossed a zoom band after a theme switch.
+    style:       () => basemapStyleFor(currentTheme),
+    interactive: false,
+    attribution: BASEMAP_ATTR,
+  });
+}
+
+// ── Basemap tier loading ──────────────────────────────────────────────────────
+// The DECODED GeoJSON is cached, not the response: topojson.feature() over the 50m file
+// costs ~15 ms on its own, and re-running it on every band crossing would be exactly the
+// stall the bands exist to avoid.
+const basemapData    = Object.create(null);   // tier key -> decoded FeatureCollection
+const basemapLoading = Object.create(null);   // tier key -> in-flight Promise
+let   basemapTier    = null;                  // tier key currently drawn
+
+const tierForZoom = z =>
+  BASEMAP_TIERS.find(t => z <= t.maxZoom) || BASEMAP_TIERS[BASEMAP_TIERS.length - 1];
+
+// Fetched at most once per tier per page load — failures included. A failed tier stays
+// failed for the session on purpose: a coarser tier is already on screen and still
+// correct, so retrying on every zoomend would be a request storm in exchange for
+// nothing the visitor can see.
+function loadBasemapTier(tier) {
+  if (basemapData[tier.key])    return Promise.resolve(basemapData[tier.key]);
+  if (basemapLoading[tier.key]) return basemapLoading[tier.key];
+
+  basemapLoading[tier.key] = fetch(tier.src)
+    .then(r => { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+    .then(topo => {
+      // ⚠ TopoJSON is NOT GeoJSON. Handing the raw file to L.geoJSON yields an empty
+      // map with no error at all — it must be decoded first.
+      basemapData[tier.key] = topojson.feature(topo, topo.objects.countries);
+      return basemapData[tier.key];
+    })
+    .catch(e => {
+      // Degrade to whichever tier is already drawn (ocean + dots if that is none)
+      // rather than breaking the page: peer positions, panel and list are all still
+      // correct without country outlines.
+      console.error("Basemap tier " + tier.key + " failed to load:", e);
+      throw e;
+    });
+  return basemapLoading[tier.key];
+}
+
+// Swap the geometry inside the existing layer. Synchronous, and only ever reached with
+// decoded data already in hand, so there is no frame in which the map is blank.
+function drawBasemapTier(key) {
+  if (!basemapLayer || basemapTier === key || !basemapData[key]) return;
+  basemapTier = key;
+  basemapLayer.clearLayers();
+  basemapLayer.addData(basemapData[key]);
+  // Belt and braces since the basemap moved to its own pane (initMap): the pane order
+  // now keeps geometry under the dots on its own, but addData still appends to a draw
+  // order and the dots are the content. Cheap, and it fails safe if the pane split is
+  // ever undone.
+  if (markersLayer) markersLayer.bringToFront();
+}
+
+// The one entry point: draw the best tier we HAVE for the current zoom, and start
+// fetching the one we WANT if it is not here yet. Idempotent, so it is safe to call
+// from the zoom handler, from a fetch completion, and at startup.
+function syncBasemapTier() {
+  if (!leafletMap) return;
+  const want = tierForZoom(leafletMap.getZoom());
+
+  // Progressive refinement: walk back from the wanted tier to the finest one already
+  // decoded. Zooming IN therefore keeps the coarse map on screen until the finer one has
+  // landed — never a blank map, never a spinner. Zooming OUT drops to the coarse tier
+  // immediately, because a fine tier at low zoom is precisely the per-zoom projection
+  // cost the bands exist to avoid.
+  for (let i = BASEMAP_TIERS.indexOf(want); i >= 0; i--) {
+    if (basemapData[BASEMAP_TIERS[i].key]) { drawBasemapTier(BASEMAP_TIERS[i].key); break; }
+  }
+
+  if (!basemapData[want.key]) loadBasemapTier(want).then(syncBasemapTier).catch(() => {});
+}
+
+// Warm the next finer tier once the page is idle, so ordinary exploration past the first
+// band boundary is instant. requestIdleCallback so it never competes with first paint;
+// the timeout stops it being deferred forever in a busy tab, and the setTimeout fallback
+// covers Safari < 16.4.
+function prefetchNextBasemapTier() {
+  if (!leafletMap) return;
+  const next = BASEMAP_TIERS[BASEMAP_TIERS.indexOf(tierForZoom(leafletMap.getZoom())) + 1];
+  if (!next || basemapData[next.key]) return;
+  const warm = () => loadBasemapTier(next).then(syncBasemapTier).catch(() => {});
+  if (window.requestIdleCallback) requestIdleCallback(warm, { timeout: 5000 });
+  else setTimeout(warm, 2000);
+}
+
+// ── Basemap city labels ───────────────────────────────────────────────────────
+// assets/cities.json is a flat [name, scalerank, lon, lat] array — 1,251 Natural Earth
+// places, 17 KB gzipped, which is the entire cost of this feature.
+//
+// ⚠ Leaflet has NO collision-aware label placement. That is the one thing the raster
+// tiles gave us for free, and overlaps here are ACCEPTED, not solved — two labels can
+// and will sit on top of each other in a dense region. The lever when it looks cluttered
+// is CITY_LABEL_RANK_OFFSET, never a placement solver.
+//
+// Two filters keep the DOM small. scalerank thins by importance as zoom allows
+// (rank 0: 27 places, 1: 41, 2: 118, 3: 336, 4: 606), so `rank <= zoom - 2` runs from
+// ~27 labels at z2 to effectively everything by z8; the viewport bounds then throw away
+// whatever is off screen. Without the second filter this would be 1,251 DOM nodes, each
+// repositioned by Leaflet on every pan and zoom, to show at most a few dozen.
+const CITY_LABEL_SRC         = "assets/cities.json";
+const CITY_LABEL_RANK_OFFSET = 2;   // rank <= zoom - this. RAISE it to show fewer.
+
+let cityLabelData  = null;   // [name, scalerank, lon, lat][] once fetched
+let cityLabelLayer = null;
+
+// Rebuild the visible set from scratch. Cheap because the set is small by construction,
+// and it keeps the filter in exactly one place — a diff against the previous set would
+// buy nothing at these counts and is the kind of machinery this feature must not grow.
+function rebuildCityLabels() {
+  if (!leafletMap || !cityLabelLayer || !cityLabelData) return;
+
+  cityLabelLayer.clearLayers();
+  const maxRank = leafletMap.getZoom() - CITY_LABEL_RANK_OFFSET;
+  if (maxRank < 0) return;                  // below z2 there is nothing worth showing
+
+  // Padded: a label is centred on its point and extends either side of it, so an anchor
+  // just off screen can still have text reaching into view. The pad also stops a short
+  // drag flickering labels in and out along the edge.
+  const bounds = leafletMap.getBounds().pad(0.15);
+
+  for (const [name, rank, lon, lat] of cityLabelData) {
+    if (rank > maxRank || !bounds.contains([lat, lon])) continue;
+    cityLabelLayer.addLayer(L.marker([lat, lon], {
+      pane:        "citylabelPane",
+      interactive: false,     // never a hover/click target — the dots own the pointer
+      keyboard:    false,
+      icon: L.divIcon({
+        className: "bm-label",
+        iconSize:  [0, 0],    // CSS sizes the text; .bm-label-t centres it on the point
+        html:      `<span class="bm-label-t">${esc(name)}</span>`,
+      }),
+    }));
+  }
+}
+
+// Fetched once, never retried. Labels are context, not content: without them the map is
+// exactly as usable, so a failure is one console line rather than a retry loop.
+function loadCityLabels() {
+  fetch(CITY_LABEL_SRC)
+    .then(r => { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+    .then(rows => { cityLabelData = rows; rebuildCityLabels(); })
+    .catch(e => console.error("City labels failed to load:", e));
+}
+
+// A dot or peer-row click flies straight to maxZoom, crossing every band at once — the
+// one common interaction that can hit a tier cold. Kick the fetch off at the START of
+// the flight, not on arrival: flyTo runs ~1-1.5 s, which covers most of the download.
+// getMaxZoom() (not a literal) so this tracks the map's configured ceiling; that ceiling
+// is 10 because GeoIP is city-centroid accurate — zooming past it would only imply
+// street-level precision the data does not have.
+function flyToPeer(lat, lng) {
+  if (!leafletMap) return;
+  const zoom = leafletMap.getMaxZoom();
+  loadBasemapTier(tierForZoom(zoom)).then(syncBasemapTier).catch(() => {});
+  leafletMap.flyTo([lat, lng], zoom);
+}
 
 function initMap() {
   leafletMap = L.map("map", {
@@ -1048,20 +1322,42 @@ function initMap() {
     worldCopyJump:        false,
   });
 
-  const tileUrl = TILE_URLS[currentTheme] || TILE_URLS.dark;
-  currentTileLayer = L.tileLayer(tileUrl, {
-    attribution: TILE_ATTR,
-    subdomains:  "abcd",
-    maxZoom:     19,
-    noWrap:      true,
-    bounds:      [[-90, -180], [90, 180]],
-  }).addTo(leafletMap);
+  // Stacking, bottom-up. Leaflet can only order whole DOM containers, so the two extra
+  // panes are what put the city labels above the land but under every peer dot:
+  //   380 basemapPane     country geometry, its own canvas (see makeBasemapLayer)
+  //   390 citylabelPane   city labels, DOM divIcons, pointer-events:none
+  //   400 overlayPane     single peer dots — Leaflet's default shared canvas
+  //   600 markerPane      group dots (divIcons)
+  // Nothing below 400 can cover a dot, which is the whole point of the arrangement.
+  leafletMap.createPane("basemapPane").style.zIndex   = "380";
+  leafletMap.createPane("citylabelPane").style.zIndex = "390";
+
+  // Added BEFORE markersLayer so the basemap sits first in the shared canvas
+  // renderer's draw order — the dots go on top and stay there.
+  basemapLayer = makeBasemapLayer().addTo(leafletMap);
+
+  cityLabelLayer = L.layerGroup().addTo(leafletMap);
 
   // featureGroup, not layerGroup: applyTheme() calls markersLayer.bringToFront()
-  // after swapping tiles, and bringToFront lives on FeatureGroup — on a plain
+  // after restyling the basemap, and bringToFront lives on FeatureGroup — on a plain
   // layerGroup that call is a TypeError (console-only today, since nothing runs
   // after it, but it would silently swallow anything added there later).
   markersLayer = L.featureGroup().addTo(leafletMap);
+
+  // Resolution follows zoom. zoomend rather than zoomstart because getZoom() is only
+  // authoritative once the animation has settled — flyToPeer() is what starts a big
+  // jump's fetch early. markersLayer must already exist: a tier swap ends in
+  // bringToFront().
+  leafletMap.on("zoomend", syncBasemapTier);
+
+  // moveend ONLY. Leaflet's Map._moveEnd fires zoomend and then moveend for the same
+  // zoom, so listening to both would rebuild the whole label set twice per zoom step.
+  // Either way this runs once per settled view, never per frame.
+  leafletMap.on("moveend", rebuildCityLabels);
+
+  syncBasemapTier();            // fetches the z2 tier — the only one on the critical path
+  prefetchNextBasemapTier();    // warms the next one once the page goes idle
+  loadCityLabels();             // 17 KB gzipped, and nothing waits on it
 }
 
 // ── Tooltip ───────────────────────────────────────────────────────────────────
@@ -1188,7 +1484,7 @@ function singleMarker(peer) {
   marker.on("mouseover", e => showTooltip(peer, e.originalEvent));
   marker.on("mousemove", e => positionTooltip(e.originalEvent));
   marker.on("mouseout",  () => hideTooltip());
-  marker.on("click",     () => leafletMap.flyTo([peer.lat, peer.lng], leafletMap.getMaxZoom()));
+  marker.on("click",     () => flyToPeer(peer.lat, peer.lng));
   return marker;
 }
 
@@ -1422,16 +1718,15 @@ function renderPeerList() {
   }).join("");
 }
 
-// Click a row — fly map to that peer, all the way in. getMaxZoom() (not a
-// literal) so this tracks the map's configured ceiling; that ceiling is 10
-// because GeoIP is city-centroid accurate — zooming past it would only imply
-// street-level precision the data does not have.
+// Click a row — fly map to that peer, all the way in. flyToPeer() (not a bare
+// flyTo) so the deep-zoom basemap tier starts downloading as the flight starts,
+// not when it lands.
 $("peer-list").addEventListener("click", e => {
   const item = e.target.closest(".peer-item");
   if (!item) return;
   const p = window._filteredPeers[+item.dataset.i];
   if (!p || !p.lat || !p.lng) return;
-  if (leafletMap) leafletMap.flyTo([p.lat, p.lng], leafletMap.getMaxZoom());
+  flyToPeer(p.lat, p.lng);
 });
 
 $("f-ip").addEventListener("input",          renderPeerList);
@@ -1513,18 +1808,14 @@ function applyTheme(theme) {
     b.classList.toggle("active", b.dataset.theme === theme)
   );
 
-  // Swap Leaflet tile layer if map is ready
-  if (leafletMap && currentTileLayer) {
-    const tileUrl = TILE_URLS[theme] || TILE_URLS.dark;
-    leafletMap.removeLayer(currentTileLayer);
-    currentTileLayer = L.tileLayer(tileUrl, {
-      attribution: TILE_ATTR,
-      subdomains:  "abcd",
-      maxZoom:     19,
-      noWrap:      true,
-      bounds:      [[-90, -180], [90, 180]],
-    }).addTo(leafletMap);
-    // Keep markers on top
+  // Restyle the basemap in place. NOT a remove/re-add: keeping the one layer is
+  // what preserves its position under the dots in the canvas draw order, and it
+  // leaves exactly one place where basemap options are written.
+  if (basemapLayer) {
+    basemapLayer.setStyle(basemapStyleFor(theme));
+    // Belt and braces — setStyle does not reorder, but a tier fetch may still be in
+    // flight on an early theme switch. A tier that lands LATER is styled correctly
+    // regardless: makeBasemapLayer's style callback reads currentTheme live.
     if (markersLayer) markersLayer.bringToFront();
   }
 }

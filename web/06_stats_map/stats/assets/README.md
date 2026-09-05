@@ -14,8 +14,8 @@ at deploy time, and nothing to install on the server.
 | File | Raw (bytes) | Gzipped (bytes) | Vertices (arcs) | Countries | Used at zoom |
 |---|---|---|---|---|---|
 | `countries-110m.json` | 107,761 | 38,495 | 8,246 | 177 | 2–4 |
-| `countries-50m.json` | 756,420 | 229,996 | 80,617 | 241 | 5–7 |
-| `countries-10m.json` | 3,665,491 | 918,737 | 478,373 | 258 | 8–10 |
+| `countries-50m.json` | 756,420 | 229,996 | 80,617 | 241 | 5–10 |
+| `countries-10m.json` | 3,665,491 | 918,737 | 478,373 | 258 | *(not mounted — see below)* |
 | `cities.json` | 36,357 | 17,158 | — | 1,251 places | labels |
 | **Total** | **4,566,029** | **1,204,386** | | | |
 
@@ -26,6 +26,36 @@ lower level by default, so served sizes will be slightly larger.
 
 Total working tree ~4.35 MiB (4.57 MB); ~1.15 MiB over the wire if all three tiers load.
 Only one country file is in the map at a time — see the design doc's zoom-swap table.
+
+⚠ **`countries-10m.json` is committed but not currently used by the page.** `BASEMAP_TIERS`
+in `index.html` lists 110m and 50m only. Measured with Leaflet 1.9.4's own project/clip/
+simplify code on an AMD Ryzen 5 PRO 3400GE:
+
+| Tier | Mount (parse + decode + project) | Every `zoomend` | Pan (`moveend`) |
+|---|---|---|---|
+| `countries-50m` | 58 ms | 11 ms | 0.1–2.1 ms |
+| `countries-10m` | 300 ms | 87 ms | 0.8–2.5 ms |
+
+Panning is not the problem: `Path._clipPoints` early-outs on `_pxBounds`, so only the 2–10
+countries on screen cost anything. `Renderer._onZoomEnd` is — it re-projects **every** layer
+with no culling, so all 546,001 vertices are re-projected on every zoom step, in the one band
+whose purpose is zooming. Re-enabling 10m is one row in `BASEMAP_TIERS`, but it needs
+viewport culling first: a z10 view needs only ~96k of those vertices.
+
+Because it is not mounted, the 3.5 MB file is dead weight in the working tree and in the
+`cp -r assets/.` deploy. Keep it for the culling work, or drop it and re-fetch per
+*Regenerating* below — but do not leave it listed as a live tier.
+
+Plus the one library needed to read them:
+
+| File | Raw (bytes) | Gzipped (bytes) | Purpose |
+|---|---|---|---|
+| `topojson-client.min.js` | 7,169 | ~2,500 | decodes TopoJSON to GeoJSON for `L.geoJSON` |
+
+It is vendored here rather than downloaded by `scripts/06_global_grin_health.sh`
+(as Leaflet and Chart.js are) for the same reason the data files are: the point of
+this directory is that the peer map makes **zero third-party requests**, and the
+existing `cp -r assets/.` deploy step already carries it with no script change.
 
 Every `countries-*.json` is a TopoJSON `Topology` carrying **both** a `countries` object
 and a `land` object, so one file gives land fill, borders and names together.
@@ -55,6 +85,7 @@ pixel is ~153 m, so this is already finer than anything that can be displayed.
 |---|---|
 | [Natural Earth](https://www.naturalearthdata.com/) (`countries-10m.json`, `cities.json`) | **Public domain** — no attribution required |
 | [world-atlas](https://github.com/topojson/world-atlas) v2 (`countries-110m.json`, `countries-50m.json`) | **ISC** |
+| [topojson-client](https://github.com/topojson/topojson-client) v3.1.0 (`topojson-client.min.js`) | **ISC** |
 
 world-atlas is itself derived from Natural Earth. Crediting Natural Earth on the map is
 courtesy, not a licence obligation — there is no ODbL/OSM share-alike or attribution
@@ -88,7 +119,16 @@ npx -y -p topojson-server@3 geo2topo -q 1e5 countries=ne10m-stripped.geojson -o 
 npx -y -p topojson-client@3 topomerge land=countries ne10m-topo.json -o countries-10m.json
 ```
 
-### 3. `cities.json`
+### 3. `topojson-client.min.js`
+
+```sh
+curl -sSL -o topojson-client.min.js https://cdn.jsdelivr.net/npm/topojson-client@3/dist/topojson-client.min.js
+```
+
+Only `feature()` is used, but the whole 7 KB build is vendored unmodified so the
+banner comment keeps stating its version and origin.
+
+### 4. `cities.json`
 
 Source: `https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_50m_populated_places_simple.geojson`
 

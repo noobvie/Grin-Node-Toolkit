@@ -492,7 +492,13 @@ _finalize_seo() {
         [[ -f "$WWW_DIR/$f" ]] && sed -i "s|__SITE_URL__|${url}|g" "$WWW_DIR/$f"
     done
 
-    # robots.txt — allow the pages, keep crawlers out of the JSON API/data dirs
+    # robots.txt — allow the pages, keep crawlers out of the JSON API/data dirs.
+    # assets/ is deliberately NOT disallowed: it holds the basemap geometry and
+    # the decoder the peer map needs to render, and blocking resources required
+    # for rendering is exactly what Google advises against. The crawl cost is
+    # bounded anyway — autoindex is off and nothing links countries-10m.json, so
+    # a crawler only ever fetches the ~890 KB the page references (~295 KB over
+    # the wire, gzipped by the stats vhost).
     cat > "$WWW_DIR/robots.txt" <<ROBOTS
 User-agent: *
 Allow: /
@@ -558,11 +564,33 @@ install_stats() {
     # Shared header (markup spliced via nginx SSI) + its CSS
     cp "$WEB_SRC/_header.html"   "$WWW_DIR/_header.html"
     cp "$WEB_SRC/_header.css"    "$WWW_DIR/_header.css"
-    # Static assets (Twemoji country-flag font → fixes flag emoji in
-    # Chrome/Edge on Windows, which otherwise show the bare ISO letters)
+    # Static assets — two jobs now:
+    #   · Twemoji country-flag font → fixes flag emoji in Chrome/Edge on Windows,
+    #     which otherwise show the bare ISO letters
+    #   · the self-hosted basemap: Natural Earth TopoJSON tiers, the city-label
+    #     list and the topojson-client decoder, so the peer map needs no
+    #     third-party tile host (docs/generated/script06_design.md).
+    #     countries-10m.json ships but is NOT mounted — it is deployed so the
+    #     tier is in place if viewport culling ever lands; nothing fetches it.
+    # ⚠ Load-bearing since the basemap swap: with assets/ missing the peer map
+    # draws ocean and dots on no land at all. install_stats() is reached through
+    # an ||-guarded menu dispatch, so it runs with errexit DISABLED — the copy
+    # has to be guarded itself or it fails silently.
     if [[ -d "$WEB_SRC/assets" ]]; then
-        mkdir -p "$WWW_DIR/assets"
-        cp -r "$WEB_SRC/assets/." "$WWW_DIR/assets/"
+        mkdir -p "$WWW_DIR/assets" || { die "Could not create $WWW_DIR/assets"; return 1; }
+        cp -r "$WEB_SRC/assets/." "$WWW_DIR/assets/" || { die "Failed to copy web assets from $WEB_SRC/assets"; return 1; }
+        local _asset _assets_missing=0
+        for _asset in topojson-client.min.js countries-110m.json countries-50m.json cities.json; do
+            if [[ ! -s "$WWW_DIR/assets/$_asset" ]]; then
+                warn "Basemap asset missing or empty: assets/${_asset}"
+                _assets_missing=1
+            fi
+        done
+        if [[ "$_assets_missing" == "1" ]]; then
+            warn "Peer map will render without land — re-deploy from a complete toolkit checkout."
+        fi
+    else
+        die "Web assets not found: $WEB_SRC/assets (toolkit checkout incomplete)"; return 1
     fi
 
     # Optional Google Analytics
@@ -990,8 +1018,38 @@ server {
     # nginx already restricts SSI parsing to text/html by default.
     ssi on;
 
+    # ── Compression ────────────────────────────────────────────────────────────
+    # nginx's built-in gzip_types default is text/html ONLY. Debian ships the
+    # wider list in nginx.conf but COMMENTED OUT, and the RHEL/nginx.org package
+    # ships "#gzip on;" — so JSON and JS go out uncompressed unless this vhost
+    # says otherwise. It matters most for the self-hosted basemap:
+    # countries-50m.json is 739 KB raw and 237 KB gzipped.
+    # Declared here rather than in nginx.conf on purpose: a package upgrade
+    # resets nginx.conf and would silently drop it (the same trap as an inline
+    # limit_req_zone — see CLAUDE.md, nginx section).
+    gzip            on;
+    gzip_vary       on;
+    gzip_proxied    any;
+    gzip_comp_level 6;
+    gzip_min_length 1024;
+    gzip_types      text/plain text/css text/xml application/json
+                    application/javascript text/javascript application/xml
+                    image/svg+xml;
+
     location / {
         try_files \$uri \$uri/ =404;
+    }
+
+    # ── Static assets — basemap geometry, city labels, flag font ──────────────────
+    # Country borders do not change, so these are effectively immutable. 30 days
+    # rather than a year because a regenerated tier ships under the SAME name:
+    # long enough that repeat visits and repeat zooms cost nothing, short enough
+    # that a re-vendored file reaches visitors without needing a rename.
+    # ⚠ add_header in a child block DISCARDS the parent's set. The server block
+    # above adds none today; if one is added there it must be repeated here.
+    location /assets/ {
+        add_header Cache-Control "public, max-age=2592000";
+        try_files \$uri =404;
     }
 
     location /data/ {

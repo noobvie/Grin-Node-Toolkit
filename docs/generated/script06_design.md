@@ -130,11 +130,26 @@ Two facts that shape the whole design:
   checksum is reported "not verified" rather than failing the decode.
 
 ### Theme
-`/slate` is deliberately **self-contained cyberpunk** (`css/slate.css`, dark-only) and does
-**not** import `tiny-explorer.css`. Index/block/kernel/output keep their existing look, so
-this page carries zero regression risk. `injectGlobals()` now strips the shell's own
-`theme-color` and injects a per-page one (`_pageMeta[key].theme`) — otherwise a duplicate
-tag would win by document order and repaint the dark page orange.
+**Superseded 2026-09-05 (review R2).** `/slate` originally shipped as a self-contained
+dark-only cyberpunk page that did **not** import `tiny-explorer.css`. That was defensible
+while it was the only tool; with six tools it made `/slate` the one page with no Tools
+dropdown, no search, no theme toggle, and no light rendering — a dead end that stayed dark
+for a light-theme visitor.
+
+It is now on the shared chrome: `slate.html` carries the same `tx-header` / `tx-footer` /
+6-item dropdown as every other tool page and loads `tiny-explorer.css` **first**, with
+`css/slate.css` reduced to an overlay for the `sp-*` widgets alone (drop zone, the two
+buttons, and everything `js/slate-ui.js` writes into `#out`). Those class names are a
+contract with that script, which was not touched — the page decodes exactly what it did.
+Every colour in the overlay resolves through a shared token, plus four `--sp-*` verdict
+colours declared per theme; `slate-ui.js` inlines `var(--sp-green)` for a valid checksum,
+so that token name must keep existing.
+
+`_pageMeta.slate` no longer sets `theme: '#06070d'` — with the page following the light/dark
+toggle, a pinned dark `theme-color` would paint the browser chrome dark around a light page.
+`injectGlobals()` still strips the shell's own `title`/`description`/`theme-color` so the
+injected block is the single source of truth, and `meta.theme` remains available for any
+page that genuinely needs its own colour (none currently do).
 
 ### Wiring
 - `app.get('/slate')` → `sendEntityPage(res, 'slate.html', 'slate')` (express.static would
@@ -183,8 +198,8 @@ gone; its content is now the first `.tx-tool-card`.
   outside-click / Escape. Two items: Slate Inspector, Emission & Supply.
 - **Home `.tx-tools-section`** = responsive `.tx-tool-card` grid (cyan→magenta left edge, reused
   from the retired CTA). Scales to N tools via `repeat(auto-fit, minmax(260px,1fr))`.
-- Theme: hub + section use `tiny-explorer.css` (light/dark toggle) — **not** slate.css. The
-  cyberpunk look stays sandboxed to `/slate`.
+- Theme: hub + section use `tiny-explorer.css` (light/dark toggle). Since review R2 `/slate`
+  does too — see *Theme* above; `slate.css` is now an `sp-*` overlay, not a separate scene.
 
 ### Emission & Supply page (`/emission`)
 Second tool. **Node-light, no DB**: a static explainer served via `sendEntityPage('emission.html',
@@ -645,9 +660,10 @@ plus a redeploy.
 
 ### Build sessions
 
-Broken into six pasteable per-session prompts (five build + one VPS acceptance) in
-docs/generated/script06_reference_basemap_prompts.md. Part 2 is the shippable checkpoint: after
-it the watermark is gone and Parts 3-5 are improvements on a working map.
+Was broken into six pasteable per-session prompts (five build + one VPS acceptance); Part 2 was
+the shippable checkpoint, after which the watermark was gone and Parts 3-5 were improvements on a
+working map. **All parts are run and committed**, so the prompt file has been deleted — session
+plans are scaffolding, not reference (see the "Session plans" note in `docs/generated/README.md`).
 
 ### Deferred / not doing
 
@@ -663,3 +679,488 @@ it the watermark is gone and Parts 3-5 are improvements on a working map.
 - **Sharing the data with the pool's network map** (memory `project_pool_network_map`). Same
   problem, same fix, different vhost — and at 4.5 MB of static assets, sharing is a copy. Do 06
   first, then lift.
+
+---
+
+## Option D addendum — Tools hub expansion to six (plan, rev. 2026-09-05)
+
+Adds four tools to the Tiny Explorer hub — **Wallet Checker**, **Node Reachability
+Checker**, **Mining Calculator**, **Payment Proof Verifier** — taking it from 2 to 6, and
+compacts the homepage tool cards so six tiles cost *less* vertical space than the two
+verbose cards do today.
+
+### Why these four, and why 06d
+
+All four are **keyless and read-only**: none holds a seed, signs anything, or moves funds.
+That is the property that makes the hub safe to publish next to a block explorer, and it is
+the line every future tool must also clear. Three of the four need no Grin node at all,
+which suits a deliberately stateless explorer.
+
+The audience argues for them too. `scan.grin.money` exists as the pool's deep-link surface
+(`/block/<h>`, `/kernel/<excess>`), so arrivals are miners and people who have just been
+handed a slatepack or a payout. Every tool below answers a question one of those two people
+actually asks.
+
+### The six, as three pairs
+
+| | Verify what you were given | Operate your own side |
+|---|---|---|
+| **Transaction** | Slate Inspector · Payment Proof Verifier | — |
+| **Reachability** | Wallet Checker | Node Reachability Checker |
+| **Economics** | Emission & Supply | Mining Calculator |
+
+Row order on the homepage grid follows that reading — row 1 *verify*, row 2 *operate*:
+
+```
+Slate Inspector    Payment Proof Verifier   Wallet Checker
+Node Checker       Mining Calculator        Emission & Supply
+```
+
+### Phasing — every checkpoint lands on an even grid
+
+The operator constraint is that the tool grid never shows an odd count. Phasing respects
+it, and also happens to order the work cheapest-first:
+
+- **Phase 1 → 4 tools.** Mining Calculator + Wallet Checker *Tier 1*. Both are pure
+  page-and-client-JS on data already in the payload. Zero new dependencies, zero new
+  infrastructure, no nginx work. Ship the homepage reorg here.
+- **Phase 2 → 6 tools.** Payment Proof Verifier + Node Reachability Checker. Both need a
+  server route, both stay dependency-free (Node stdlib `crypto` and `https`). This phase
+  introduces the one new nginx rate-limit zone.
+- **Phase 3 → still 6 tools.** Wallet Checker *Tier 2* (the Tor liveness probe). This is
+  an **upgrade to a tile that already exists**, not a seventh card, so the tor-daemon
+  dependency never gates the grid. Behind a config flag, default off.
+
+---
+
+### Tool 1 — Mining Calculator (`/mining`, phase 1)
+
+`GPS_yours / GPS_network × 86400` per day. The homepage already ships this: `/api/stats`
+computes `g1_per_day` for a fixed 1.2 G/s IPOLLO G1 mini
+(`tiny-explorer-server.js`, `getDailyAvgHashrate()` basis). The calculator is that same
+line with the `1.2` replaced by an input, plus the `price_usd` already in the payload.
+
+- **One server change:** expose the day-average basis. `/api/stats` currently returns only
+  the *derived* `g1_per_day`, not `dailyHr`, so the client would have to invert
+  `1.2 / g1_per_day × 86400` to recover it. Add `hashrate_gps_24h` to the response instead.
+- **Inputs:** your hashrate (G/s), pool fee %, power draw (W), electricity cost. **Outputs:**
+  per day/week/month, USD at the live price, and a **break-even GRIN price** for the power cost.
+- Does *not* recompute hashrate — it consumes the server's figure, so the
+  `difficulty / 60` trap (see *Grin Hashrate Formula*, CLAUDE.md) cannot be reintroduced here.
+- Label every figure an **estimate at the current difficulty**. Difficulty moves; a
+  calculator that reads as a promise is the failure mode.
+
+### Tool 2 — Wallet Checker (`/wallet-check`, phase 1 + phase 3)
+
+"Is this `grin1…` wallet listening right now?" A Slatepack address *is* a 32-byte ed25519
+pubkey in bech32, and the wallet's v3 onion is a deterministic function of that same key.
+
+**Tier 1 — client-side, no infra (phase 1).** Validate the bech32 checksum, report
+mainnet vs testnet from the HRP, show the derived `.onion`. This alone catches the most
+common real failure (a truncated or mistyped address), and it is useful on its own — the
+`/slate` page already carries a ported bech32 to lift from.
+
+**Tier 2 — server probe (phase 3).** Both halves already exist in this repo, both
+dependency-free:
+
+- `web/07_mining_pool_public/back-end-pool/lib/wallet-tor.js` — `bech32Decode`,
+  `onionV3FromPubkey`, `deriveOnionAddress`, `probeToronlineStatus`. The derivation was
+  validated against an independent Python reference (memory `project_pool_tor_preflight_gate`).
+- `web/052_accio/gateway/socks5.js` — SOCKS5 CONNECT, RFC 1928/1929, zero npm deps, with
+  per-request circuit isolation. 06d has exactly one dependency (express); keep it that way.
+
+Carried forward from the pool's gate, do not re-derive:
+
+- **Virtual port 80, not 3415.** grin-wallet publishes the wallet foreign-API hidden service
+  at `HiddenServicePort 80 <listener>` (`impls/src/tor/config.rs`). Source-verified 2026-07-19.
+- **Tri-state, never a green/red binary.** online / confidently-offline / *could not check*.
+  The split hinges on the error string: a SOCKS-level "rejected connection" means the tor
+  daemon is up and the hidden service is not (→ offline); a raw `ECONNREFUSED` to
+  127.0.0.1:9050 means our own tor is down (→ indeterminate). Rendering our outage as the
+  user's wallet being offline is the same class of lie as reporting a healthy remote node's
+  peer count as `0`.
+
+Open question to settle on a live testnet listener before Tier 2 ships: **does the wallet
+foreign API over Tor require basic auth?** Probe with a real `check_version` JSON-RPC rather
+than a bare TCP connect — CLAUDE.md's *reachability needs a parsed result* rule applies
+verbatim. If it answers 401, that is still proof a grin-wallet is there, so treat 401 as
+online; a bare TCP accept is not.
+
+### Tool 3 — Node Reachability Checker (`/node-check`, phase 2)
+
+"Can the world reach my node?" — the question every operator who opened 3413 has. Input a
+host (optional `:port`, default 3413); the server POSTs `get_tip` to `/v2/foreign` and
+requires an unwrapped `{"Ok":…}`.
+
+The honest-output rules are already written down and apply directly (CLAUDE.md, *Node API
+method split*):
+
+- A 200 proves nothing — any parked domain or CDN error page answers 200, and a bare `GET`
+  on `/v2/foreign` proves nothing either because it is POST-only JSON-RPC.
+- Script 04 publishes `/v2/foreign` and **403s `/v2/owner`**, so from outside, peer count and
+  sync state are *unknowable*. Report them **unavailable — never `0` or `unknown`**, which
+  renders a healthy node as idle.
+- Useful output that *is* knowable: reachable yes/no, node version, its tip height, and its
+  drift against our own tip ("in sync" / "behind by N blocks").
+
+**This one is the only tool here with a genuine abuse surface, so it carries real controls.**
+The concern is not internet port-scanning; it is **SSRF into the operator's own box and LAN**:
+
+- Resolve DNS first, then block the *resolved* IP against loopback, RFC1918, link-local
+  (169.254/16), CGNAT (100.64/10), `::1` and `fc00::/7`. Checking the hostname is not enough —
+  DNS rebinding defeats it.
+- Do not follow redirects. Cap the response body. Short timeout (~5 s), one attempt.
+- Its own rate-limit zone, tighter than `tinyx_api`.
+
+### Tool 4 — Payment Proof Verifier (`/proof`, phase 2)
+
+Grin's answer to "prove you paid me". The receiver signs over the amount and kernel excess;
+verifying that signature plus finding the kernel on-chain is a complete proof.
+
+**Take the exported proof JSON as the primary input, not the binary slate.** `grin-wallet
+export_proof` writes a JSON file with sender/recipient addresses, amount, excess and
+signature — that is what a user actually holds when they need to prove a payment, and it is
+trivially parseable. Binary-slate proof extraction can follow later as a convenience.
+
+That choice keeps the risky part off the critical path: `slatepack-decode.js` deliberately
+stops at the optional-field block and does **not** walk `sigs`/`coms`/`proof` (see the Slate
+Inspector addendum above — that tail is the likeliest parse failure). Phase 2 does not have
+to change that.
+
+- **ed25519 verify with no dependency.** Node 18's `crypto.verify(null, msg, key, sig)`
+  handles ed25519; wrap the raw 32-byte pubkey in the fixed SPKI DER prefix
+  (`302a300506032b6570032100`) to build the `KeyObject`.
+- **Then cross-check the chain.** Feed the excess to the existing `/api/kernel/<excess>`
+  route: a valid signature over a kernel that never confirmed is not a settled payment. This
+  is the reuse that makes this tool cheap here and expensive anywhere else.
+- **Verify the signed-message serialisation against grin-wallet source before implementing**
+  (`verify_payment_proof`). Guessing the byte layout produces a verifier that says "invalid"
+  for every genuine proof, which is worse than no tool.
+
+#### Payment proof — verified wire facts (read from grin-wallet source, not assumed)
+
+Read 2026-09-05 from `mimblewimble/grin-wallet` at tag **v5.4.1** — the toolkit's pin (memory
+`project_grinwallet_binary_store`). Every layout fact below was re-checked field-by-field at
+**v5.5.0 and at `master`** and is byte-identical in all three, so a pin bump cannot silently
+move it. `grin-wallet` is the only implementation consulted; whether any other wallet writes a
+compatible file is **UNCONFIRMED**.
+
+**The file.** `grin-wallet export_proof` is `proof_export()`
+(`controller/src/command.rs:1385`), which calls `owner::retrieve_payment_proof`
+(`libwallet/src/api_impl/owner.rs:385`, returns at `:470`) and writes
+`serde_json::to_string_pretty(&PaymentProof)` straight to the output file
+(`command.rs:1400-1402`). So the file *is* the serde form of one struct — no wrapper, no
+envelope, no armor. `proof_verify` (`command.rs:1420`) reads it back with `json::from_str`.
+
+| JSON key | JSON type on the wire | Decoded | Serde source |
+|---|---|---|---|
+| `amount` | **decimal STRING** of nanogrin (`"1234567890"`) | u64 | `string_or_u64` serialises with `collect_str` → grin `core/src/libtx/secp_ser.rs:266-272`; it *deserialises* from a string **or** a bare number (`:275-299`), so a hand-edited file may carry either — accept both. u64 nanogrin exceeds 2^53 above ~9 M GRIN, so **BigInt**, per the `/slate` decoder's rule |
+| `excess` | hex string, **66 chars / 33 bytes** | `pedersen::Commitment` | `as_hex` (`secp_ser.rs:246-252`) / `commitment_from_hex` (`:235-243`) |
+| `recipient_address` | **bech32 string** (`grin1…` / `tgrin1…`) | 32-byte ed25519 pubkey | `impl Serialize for SlatepackAddress`, `libwallet/src/slatepack/address.rs:158`, via `TryFrom<&SlatepackAddress> for String` at `:101` |
+| `recipient_sig` | hex string, **128 chars / 64 bytes** | ed25519 signature | `dalek_sig_serde`, `libwallet/src/slate_versions/ser.rs:365-394` |
+| `sender_address` | bech32 string | 32-byte ed25519 pubkey | as `recipient_address` |
+| `sender_sig` | hex string, 128 chars | ed25519 signature | as `recipient_sig` |
+
+Struct and field order: `libwallet/src/api_impl/types.rs:310-331`. There are exactly these six
+keys — no version field, no timestamp, no tx UUID, no fee.
+
+**The signed message — 73 bytes, one concatenation, no hashing and no domain separator.**
+`payment_proof_message()`, `libwallet/src/internal/tx.rs:453-463`:
+
+```
+msg = amount        as u64 BIG-ENDIAN      8 bytes   (msg.write_u64::<BigEndian>)
+    ‖ excess        raw commitment bytes  33 bytes   (kernel_commitment.0.to_vec())
+    ‖ sender_pubkey raw ed25519 bytes     32 bytes   (sender_address.to_bytes())
+```
+
+The 33 and the 32 are not inferred — `_decode_payment_proof_message` (`tx.rs:465-484`) reads
+exactly `[0u8; 33]` then `[0u8; 32]` back out. The 33 bytes are the commitment **as stored**,
+i.e. the same compressed form the chain carries and the same hex our `/api/kernel/:excess`
+route already accepts (`isCommitLike` = 64–66 hex, `tiny-explorer-server.js:193`) — so
+`proof.excess` feeds that route verbatim, no re-encoding.
+
+ed25519 signs this message directly (`create_payment_proof_signature`, `tx.rs:487-506`,
+`keypair.sign(&msg)`) — ed25519 does its own SHA-512 internally, so **do not pre-hash**.
+
+**Which key signs what.** Both signatures are over **the same 73-byte message**:
+
+| | Signed by | Verified with | Source |
+|---|---|---|---|
+| `recipient_sig` | recipient's key at derivation index **0** | `recipient_address` | `libwallet/src/api_impl/foreign.rs:116-124` (recipient signs at `receive_tx`, S1→S2) |
+| `sender_sig` | sender's key at `context.payment_proof_derivation_index`, hard-coded `0` today | `sender_address` | `tx.rs:423-443` (signed at finalize); index set at `owner.rs:566`, with a `TODO` beside it |
+
+**`verify_payment_proof` order** (`owner.rs:1191-1257`), exactly as written:
+
+1. Build `msg` from `proof.amount`, `proof.excess`, `proof.sender_address.pub_key`.
+2. **Chain first:** `client.get_kernel(&proof.excess, None, None)` — a transport error and an
+   `Ok(None)` are two distinct errors, and both abort before any signature is looked at.
+3. `recipient_address.pub_key.verify(msg, recipient_sig)` → "Invalid recipient signature".
+4. `sender_address.pub_key.verify(msg, sender_sig)` → "Invalid sender signature".
+5. Derive this wallet's own index-0 address and return `(sender_mine, recipient_mine)` — a
+   convenience for the CLI's three-way message, not part of validity. Our tool has no wallet
+   and simply omits step 5.
+
+The HRP is never consulted, and neither is a tx UUID (there isn't one).
+
+**Q: does the recipient signature cover the sender address? YES** — `sender_pubkey` is the
+last 32 bytes of the message both parties sign. Re-pointing a proof at a different payer
+changes the message, so `recipient_sig` fails. The tool *can* detect that. What is **not** in
+the message is the recipient address (it is the verifying key instead, so it is equally
+unswappable) and the HRP (below).
+
+**Q: does anything identify the network? Only weakly, and not authentically.** The bech32 HRP
+is the single signal — `grin` vs `tgrin` — and it comes from the **exporting wallet's** chain
+type at export time (`SlatepackAddress::new`, `address.rs:46-55`), not from anything inside
+the transaction. It is **not covered by either signature** (the message uses the raw 32-byte
+key), and `TryFrom<&str>` (`address.rs:86`) accepts whatever HRP it is handed. So editing
+`tgrin1…` → `grin1…` in the file leaves both signatures valid. This is the **same limitation
+as SlateV4** (memory `project_slate_inspector_06d`, and the Slate Inspector addendum above):
+the artefact does not commit to a chain. Consequence for the tool: render the HRP as a
+*claim*, and let the kernel lookup — mainnet-only here — be the actual network evidence,
+exactly as `/slate`'s phase-1b note already says.
+
+**What a valid result does NOT prove.** All of these are properties of the format, not gaps in
+our implementation, and belong on the page as prose:
+
+- **The amount is attested, never verified.** Grin amounts are confidential; the kernel proves
+  a transaction happened, not its value. `amount` is true only insofar as both parties signed
+  it. Never render it as chain-derived.
+- **It is a mutual attestation.** Either signature alone is self-serving — a recipient can
+  sign any `(amount, excess, sender)` triple it likes, and a sender can sign over any kernel
+  already on the chain. The pair is what carries weight, because neither party can produce the
+  other's half.
+- **`sender_address == recipient_address` is self-attested and passes.** Both checks use the
+  same message, so one key signing twice satisfies both. Surface it, don't hide it.
+- **Nothing binds `sender_address` to the transaction's inputs.** The proof says "this key
+  claims this kernel", not "this key funded it".
+
+#### R4 — RESOLVED 2026-09-06: the layout is confirmed against real grin-wallet output
+
+The standing #1 risk of this expansion — *"every fact was read from source, no real proof file
+has ever been checked, so a shared misreading is uncatchable"* — **is settled, and it did not
+need a VPS.**
+
+**What was found.** grin-wallet's Owner API rustdoc carries a worked
+`retrieve_payment_proof` example whose response is a **complete, real `PaymentProof`**
+(`api/src/owner_rpc.rs:1802-1836`). It is not illustrative prose: the surrounding
+`doctest_helper_json_rpc_owner_assert_response!` macro **runs the call and asserts the
+response byte-for-byte in CI**, so that JSON is the output of the very `serde` impls tabulated
+above, produced by a real wallet doing a real transaction on the test chain.
+
+**Why it settles the question rather than restating it.** The concern was that fixtures built
+from our own reading cannot catch a misreading shared with the implementation. This fixture is
+immune to that, because the check is **cryptographic, not textual**: the 73-byte message is an
+*input to signature verification*. If any field were at the wrong offset, the wrong width, or
+the wrong endianness, the message would differ and both ed25519 signatures would fail. They do
+not fail. A hand-copied or hand-edited sample could not produce signatures that verify.
+
+Running the fixture through `lib/payment-proof.js` unmodified:
+
+```
+amount_nano  : 60000000000          amount_grin : 60
+excess       : 09eac5…fe0af (33 bytes)
+message      : 73 bytes
+recipient_sig: {ok:true}            sender_sig  : {ok:true}
+```
+
+**Negative controls** (a test that cannot fail proves nothing — each mutation is one field of
+the fixture, everything else untouched):
+
+| # | Mutation | Result | What it proves |
+|---|---|---|---|
+| 1 | none (baseline) | `R:ok S:ok` | — |
+| 2 | `amount` 60000000000→60000000001 | `R:FAIL S:FAIL` | amount is in the message, at that width |
+| 3 | `excess` last byte flipped | `R:FAIL S:FAIL` | all 33 commitment bytes are covered |
+| 4 | sender ↔ recipient address | `R:FAIL S:FAIL` | the message pins the **sender** key; roles are not interchangeable |
+| 5 | `sender_sig` last byte flipped | `R:ok S:FAIL` | the two checks are independent, and each uses its own key |
+| 6 | HRP `tgrin1…` → `slatepack1…` | `R:ok S:ok` | **the HRP is not signed** (below) |
+| 7 | `amount` as a bare JSON number | `R:ok S:ok` | the `string_or_u64` number path works, without 2^53 rounding |
+| 8 | same message, amount little-endian | `S:FAIL` | the u64 is **BIG**-endian — the one field most likely to be misread |
+
+Row 6 is a second, independent confirmation of the HRP finding above, and it comes from
+grin-wallet itself: its **`verify_payment_proof` doctest** (`owner_rpc.rs:1848-1884`) feeds the
+*same 32-byte keys under a `slatepack1` HRP* and returns `Ok`. So upstream's own CI demonstrates
+that re-labelling the network leaves both signatures valid. Rendering the HRP as a *claim*, with
+the kernel lookup as the only network evidence, is now evidence-backed rather than inferred.
+
+**Version stability.** The fixture and `payment_proof_message()` are **byte-identical at
+v5.4.1, v5.5.0 and `master`** (diffed, not eyeballed), so the same proof verifies at all three
+and a pin bump cannot silently move the layout.
+
+**Every row of the wire-facts table above is therefore confirmed** — key names and count,
+`amount` as a decimal string *and* as a bare number, 33-byte `excess`, bech32 addresses
+carrying raw 32-byte ed25519 keys, 128-hex signatures, the 73-byte concatenation, big-endian
+`u64`, no hashing, no domain separator, and both signatures over the same message.
+
+**Regression fixture** — commit this with the tool; it is the only real-wallet proof we have:
+
+```json
+{
+  "amount": "60000000000",
+  "excess": "09eac5f5872fa5e08e0c29fd900f1b8f77ff3ad1d0d1c46aeb202cbf92363fe0af",
+  "recipient_address": "tgrin10qlk22rxjap2ny8qltc2tl996kenxr3hhwuu6hrzs6tdq08yaqgqq6t83r",
+  "recipient_sig": "02868f2d2b983981f8f98043701687a8531ed2de564ea3df48e9e7e0229ccbe8359efe506896df2efbe3528e977252c50e4a41ca3cc9896e7c5a30bbb1d33604",
+  "sender_address": "tgrin1xtxavwfgs48ckf3gk8wwgcndmn0nt4tvkl8a7ltyejjcy2mc6nfs9gm2lp",
+  "sender_sig": "c511764f3f61ed3d1cbca9514df8bc6811fad5662b1cb0e0587b9c9e49db9f33183cce71af6cb24b507fabf525a2bc405c6e84e63a60334edff0b451ae5e6102"
+}
+```
+
+Its `excess` is a **testnet** kernel from a throwaway test chain, so the chain half of `/proof`
+will correctly report *kernel not found* against our mainnet node. That is the right answer,
+and it makes the fixture a good end-to-end check of the two-verdict split: signatures valid,
+kernel absent — exactly the case the page must not collapse into a single "invalid".
+
+**Recommendation: `/proof` SHIPS.** The reason to hold it was a possible shared misreading of
+the byte layout, and that reason is gone. The caveats that remain are properties of the format,
+not doubts about the implementation, and they already have prose on the page: the amount is
+attested and not chain-derived, the HRP is a claim, and a valid pair is a mutual attestation.
+
+**STILL UNCONFIRMED (bounded, and no longer ship-blocking):**
+
+- grin-wallet calls ed25519-dalek's non-strict `verify` (not `verify_strict`); the pin is
+  `ed25519-dalek = "1.0.0-pre.4"` (`libwallet/Cargo.toml:26`). Whether that and Node's
+  OpenSSL-backed `crypto.verify(null, …)` agree on adversarial edge cases is still
+  unconfirmed — settling it needs a Rust toolchain, not a VPS. **The direction is now known,
+  though:** Node was fed the four canonical small-order / non-canonical public-key encodings
+  and returned a clean `ok:false` for each — no throw, no 500 — whereas dalek's non-strict
+  path is the more permissive of the two. So a disagreement can only make our tool **stricter**
+  than grin-wallet, on a *crafted* file, and it fails **closed**. No honest proof is affected;
+  the honest case is exactly what the fixture above now proves.
+- Whether any **non-grin-wallet** implementation writes a compatible file remains unconfirmed;
+  `grin-wallet` is still the only implementation consulted.
+- A proof exported from an operator's *own* wallet has still never been read. This is no longer
+  a correctness risk — it is worth doing once as an ergonomics check (that `export_proof`
+  output pastes into the page cleanly), not as a gate.
+---
+
+### Homepage reorg
+
+The tool cards are the problem the operator flagged: each card today carries a three-line
+`.tx-tool-desc`, so two cards already cost ~200 px of column height and six would cost
+~600 px, pushing Latest Blocks off the screen entirely.
+
+**Compact the tile, keep the prose where it belongs.**
+
+- Drop `.tx-tool-desc` from the homepage card. Keep icon + name + **one** short line — the
+  same one-liner the header dropdown already uses (`Read a slatepack — amount, fee, step`).
+  The full explanation moves to each tool's own page, where someone who has arrived actually
+  wants it.
+- Result: roughly 90 px per tile instead of 200. Six compact tiles occupy *less* height than
+  the two verbose ones do now.
+
+**Pin the column count so a row is never ragged.** `.tx-tools-grid` is currently
+`repeat(auto-fit, minmax(260px, 1fr))`, which with six cards yields a 4 + 2 desktop row —
+the exact ragged-row look the operator wants to avoid. Make it explicit, mirroring
+`.tx-stats`:
+
+```css
+.tx-tools-grid { grid-template-columns: repeat(3, 1fr); }
+@media (max-width: 860px) { .tx-tools-grid { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 460px) { .tx-tools-grid { grid-template-columns: 1fr; } }
+```
+
+3+3 on desktop, 2+2+2 on tablet, single column on phone — even at every breakpoint.
+
+**Position stays.** Education `details` → stat grid → Tools → Latest Blocks is the
+operator-directed order from 2026-07-24 and is not in question; the tools section only gets
+shorter, not moved.
+
+**Group the header dropdown.** Six flat rows in `#tx-tools-menu` is a list, not a menu. Add
+the two group labels from the pair table (*Verify* / *Operate*) as non-interactive
+`role="presentation"` headings. `initTools()` (outside-click, Escape, `aria-expanded`) is
+unchanged.
+
+**Update the "What can you check here?" details block.** It already promises "Estimate mining
+income from the live hashrate" and "Prove a payment settled via its kernel excess" with no
+tool behind either — phase 1 and phase 2 respectively make those two bullets true, so link
+them the way the Emission and Slate bullets already link.
+
+### Wiring — repo-convention notes
+
+- **Routes:** four `sendEntityPage()` entries plus `_pageMeta` keys, exactly as `/slate`,
+  `/emission`, `/kernel`, `/output` do. nginx already proxies **all** paths to :8471, so no
+  vhost route work is needed for the pages.
+- **⚠ The rate-limit zone will NOT reach an installed box if added to the existing file.**
+  `nginx_ensure_rate_limit_zone` is a no-op when its conf file already exists, and
+  `06d_tiny_explorer.sh:280` already wrote `script06d-rate-limit.conf` with `tinyx_api` alone
+  (its non-helper fallback at :282-285 writes that single zone literally). So phase 2 must
+  add a **second conf basename** — `nginx_ensure_rate_limit_zone "tinyx_probe" "10r/m" "10m"
+  "script06d-probe-rate-limit"` — and mirror it in both the fallback branch and the uninstall
+  path at :447. Do not reuse `tinyx_api`, and do not edit the existing file in place.
+- **Config keys** (`06d_tiny_explorer.sh` + server `config.json`): `node_check_enabled`
+  (default true), `node_check_timeout_ms`; and for phase 3 `wallet_check_probe` (default
+  **false**), `tor_socks_port` 9050, `tor_onion_virtual_port` 80, `tor_check_timeout_ms`,
+  `tor_check_retries`.
+- **SEO:** per-page `_pageMeta` entries feed the existing server-injected canonical/OG/JSON-LD.
+  Per memory `project_frontend_seo_standards`, no static tag may name a host the deploying
+  operator does not own — build these from the configured domain, never a literal
+  `scan.grin.money`.
+- **Privacy:** do not log the queried address or host on either checker. A query log is a
+  record of who is interested in which wallet.
+- **Tests:** extend the existing jsdom assertion harness (18 green today) and keep
+  `node --check` clean. Kill every local test process in the same session.
+
+### Build sessions
+
+Broken into nine pasteable per-session prompts (eight build + one VPS acceptance), one tool per
+session. Part 3 is the first shippable checkpoint (4 tools) and Part 7 the second (6 tools) — both
+even grids. The prompt file itself is **kept outside the repo** with the other in-flight session
+plans; it is scaffolding, not reference (see `docs/generated/README.md`).
+
+### Review pass — CLOSED 2026-09-06 except the VPS run
+
+Parts 1-8 were run on 2026-09-05. The review over that working tree — four confirmed defects plus
+per-session review prompts R1-R8 — is **kept outside the repo** alongside the build plan
+(`D:/tmp/grin-toolkit-plans/`, see `docs/generated/README.md`). What follows is its durable
+outcome; the blow-by-blow stays in the plan file.
+
+**R1-R5 and R8 are run and landed. R7 was superseded and absorbed into R8, so it never ran as its
+own session. R6 — VPS acceptance, Part 9 — is the only thing left in the entire six-tool
+expansion, and it has still never run.** Nothing in this expansion has been served by the real
+server behind the real nginx vhost.
+
+Six confirmed defects were found and all six are fixed: `/node-check` rendering a rejected input
+as an unreachable node; `/slate` being the one tool off the shared chrome; the homepage grid order
+contradicting `TOOLS_MENU_GROUPS`; `--green`/`--red` never re-declared for dark; `--accent`
+illegible on light (found by rendering, after R1 had "fixed" contrast without measuring it); and
+hidden tooltips giving `/` and `/emission` a permanent horizontal scrollbar at exactly the width
+the page is normally viewed at.
+
+Three things worth carrying forward, because each is a trap rather than a fact:
+
+- **Resolve a colour per ground, per theme, and read it from the rendered pixel.** The palette now
+  carries three inks — `--green-ink` / `--red-ink` (R1), `--accent` (R3) and `--gold-ink` (R8) —
+  beside the fill tokens they were split out of. `--gold` is fill only; `--link` is an *alias* of
+  `--gold-ink`, not a second value. The one exemption is `.tx-title .tx-accent`, the wordmark.
+  Every text site measures >= 6.03:1 on both themes, and coverage is checked mechanically (sweep
+  all 11 pages in both themes for a computed `rgb(255, 140, 0)`; exactly one element matches, and
+  it is the wordmark) because the failure mode of this class is a site nobody thought to look at.
+- **R4 settled the payment-proof byte layout without a VPS**, against a real `PaymentProof` that
+  grin-wallet's own CI asserts byte-for-byte. `/proof` ships. What remains open is bounded and
+  stated in `lib/payment-proof.js`'s header: dalek's non-strict `verify` vs Node's OpenSSL, which
+  needs a Rust toolchain and can only make this tool *stricter*, on a crafted file, failing closed.
+- **An aria-live region must be unhidden BEFORE its content changes.** A `display:none` subtree is
+  not in the accessibility tree, so a mutation made while hidden is one several screen readers
+  never announce. `renderProbeResult()` was the one region appending first; it now unhides first,
+  and the comment says why so the next edit cannot tidy it back.
+
+**The checks are re-runnable now** — `web/06d_tiny_explorer/test/`, 98 assertions over
+`node test/run-all.js` (or `npm test`), still with express as the only npm dependency. It pins
+R4's real-wallet fixture and its eight negative controls, the SSRF blocklist and `parseTarget`,
+and the browser Keccak against node's sha3-256 **at the 135/136/137 rate boundary**. Before R8
+every one of those results was a claim in a document, because each had run in a harness that was
+then deleted. `test/` is excluded from the VPS deploy by `tinyx_deploy_files()`, which also
+replaced two unguarded `cp -r` calls.
+
+`/api/node-check` gained the total in-flight cap R5 specified (`node_check_max_inflight`, default
+8, a 503 carrying the `base` shape with `code: 'busy'`). It is a different control from the nginx
+zone: the limiter counts requests per IP, the cap counts outbound sockets in total, and Node's
+default agent is `keepAlive:true` / `maxSockets:Infinity`. Its client verdict carries `rows:false`
+— a 503 that never dialled must not draw `Checked:` plus two `unavailable` rows.
+
+### Not doing
+
+- **Fee & weight calculator.** Useful, but the input/output/kernel weight constants have
+  moved across grin versions; it needs `core/src/consensus.rs` read first, and a fee
+  calculator that is quietly one version stale is worse than none. Parked, not rejected.
+- **A seventh tool.** The grid is even at 6; the next addition comes in a pair.

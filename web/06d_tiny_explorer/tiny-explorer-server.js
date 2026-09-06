@@ -12,6 +12,21 @@ const fs      = require('fs');
 const path    = require('path');
 const http    = require('http');
 const https   = require('https');
+const net     = require('net');
+const dns     = require('dns').promises;
+
+// Payment proof verification (POST /api/proof/verify). Pure and config-free, so
+// it is unit-testable without this server — see lib/payment-proof.js.
+const paymentProof = require('./lib/payment-proof');
+
+// Node reachability check (POST /api/node-check): target parsing, the SSRF
+// address blocklist and the response reader. Also pure — see lib/node-check.js.
+const nodeCheck = require('./lib/node-check');
+
+// Wallet Checker tier 2 (POST /api/wallet-check): v3-onion derivation and the
+// tri-state Tor liveness probe. Ports the pool's wallet-tor.js and Accio's
+// SOCKS5 client, so it adds no npm dependency — see lib/wallet-tor.js.
+const walletTor = require('./lib/wallet-tor');
 
 // ── Config ───────────────────────────────────────────────────────────────────
 
@@ -622,6 +637,11 @@ app.get('/api/stats', async (_req, res) => {
       peers_label:   peers.label,
       peers_source:  peers.source,
       g1_per_day:    g1PerDay,
+      // The BASIS behind g1_per_day, exposed so a client (the Mining Calculator)
+      // never has to invert 1.2 / g1_per_day × 86400 to recover it — and never
+      // has a reason to recompute a hashrate from difficulty. Soft-null when the
+      // day-average couldn't be computed; the client falls back to hashrate_gps.
+      hashrate_gps_24h: dailyHr > 0 ? dailyHr : null,
       mempool:       mempool,
     });
   } catch (e) {
@@ -671,6 +691,459 @@ app.get('/api/output/:commit', async (req, res) => {
   } catch (e) { return res.status(502).json({ error: 'node unreachable' }); }
 });
 
+// ── POST /api/proof/verify — payment proof (grin-wallet export_proof JSON) ────
+//
+// TWO INDEPENDENT VERDICTS, never merged into one. A valid signature over a
+// kernel that never confirmed is not a settled payment, and a confirmed kernel
+// with a broken signature is not a proof that THIS payer paid THIS payee — so
+// the response names each half and the page renders each half.
+//
+// Order: signatures first, then the chain. grin-wallet's own
+// verify_payment_proof checks the chain first and aborts, which would leave the
+// page unable to say the signatures were fine; the maths here is identical
+// either way because the two checks share no state.
+//
+// The body is taken as TEXT, not via express.json: `amount` may arrive as a
+// bare JSON number and JSON.parse would silently round it past 2^53 (the same
+// u64 trap as the PoW nonce above). lib/payment-proof.js quotes it in the raw
+// text before parsing, so the raw text has to survive to it.
+//
+// PRIVACY: a payment proof names both parties and an amount. Nothing in this
+// handler logs the body, the addresses, the amount or the excess — not on
+// success and not in the error paths. Keep it that way.
+// Body-parser errors (over the 16kb cap, or a broken chunked upload) reach
+// express's default handler otherwise, which answers HTML and prints a stack
+// trace. Answer JSON — the page reads .error — and print nothing: the trace
+// would be noise, and this route's inputs are private.
+// Built once at load, not per request — express.text() returns a middleware,
+// and constructing one inside the handler rebuilt it on every call.
+const PROOF_TEXT_BODY = express.text({ type: () => true, limit: '16kb' });
+
+function proofBody(req, res, next) {
+  PROOF_TEXT_BODY(req, res, err => {
+    if (!err) return next();
+    const tooBig = err.type === 'entity.too.large' || err.status === 413;
+    return res.status(tooBig ? 413 : 400).json({
+      error: tooBig
+        ? 'That file is too large to be a payment proof (the format is six short keys).'
+        : 'Could not read that request body.',
+      code: tooBig ? 'too_large' : 'bad_input',
+    });
+  });
+}
+
+app.post('/api/proof/verify', proofBody, async (req, res) => {
+  let result;
+  try {
+    result = paymentProof.verifyPaymentProof(typeof req.body === 'string' ? req.body : '');
+  } catch (e) {
+    if (e && e.name === 'ProofError') return res.status(400).json({ error: e.message, code: e.code });
+    return res.status(400).json({ error: 'Could not read that proof.', code: 'bad_input' });
+  }
+
+  const sigsOk = result.checks.recipient_sig.ok && result.checks.sender_sig.ok;
+
+  // Chain half. Only reached once both signatures verify — an unsigned file
+  // gets no node call, and the page says plainly that the chain was not
+  // checked rather than implying it was.
+  let chain = { ok: false, checked: false, reason: 'not_checked' };
+  if (sigsOk) {
+    try {
+      const located = await getKernel(result.proof.excess);
+      if (located) {
+        chain = {
+          ok: true, checked: true, reason: null,
+          height:    located.height,
+          timestamp: located._timestamp  || null,   // unix seconds, set by attachBlockRef
+          block:     located._block_hash || null,
+        };
+        try { const tip = await getTip(); chain.confirmations = tip.height - located.height + 1; } catch { /* tip optional */ }
+      } else {
+        // Kernels are kept in full by a pruned node too, so "not found" here is
+        // a real answer about MAINNET — not a pruning artefact. It is still not
+        // an answer about testnet: this explorer only ever talks to mainnet, and
+        // the HRP that claims testnet is unsigned and unverifiable.
+        chain = {
+          ok: false, checked: true,
+          reason: result.proof.network_claim === 'testnet' ? 'not_found_testnet_claim' : 'not_found',
+        };
+      }
+    } catch {
+      chain = { ok: false, checked: false, reason: 'node_unreachable' };
+    }
+  }
+
+  const verdict = !sigsOk                 ? 'invalid_signature'
+                : chain.ok                ? 'settled'
+                : chain.reason === 'node_unreachable' ? 'chain_unavailable'
+                : chain.reason && chain.reason.startsWith('not_found') ? 'not_on_chain'
+                : 'chain_unavailable';
+
+  res.setHeader('Cache-Control', 'no-store');
+  return res.json({
+    verdict,
+    signatures_ok: sigsOk,
+    proof:       result.proof,
+    message_hex: result.message_hex,
+    checks:      Object.assign({}, result.checks, { chain }),
+    self_payment: result.self_payment,
+    hrp_mismatch: result.hrp_mismatch,
+    node_mode:    nodeMode,
+  });
+});
+
+// ── Node reachability check ───────────────────────────────────────────────────
+//
+// "Can the world reach my node?" — asked from OUT here, which is the only place
+// the question can honestly be answered. The mechanics of *why* this route is
+// written the way it is live in lib/node-check.js; what follows is the part that
+// touches the network, and it observes four rules:
+//
+//   1. RESOLVE FIRST, THEN CONNECT TO WHAT WAS RESOLVED. Every address the name
+//      resolves to is run past blockedReason(), and the request is then made to
+//      that literal address with the Host header carrying the original name.
+//      Re-resolving at connect time would reopen DNS rebinding — the whole point
+//      of checking the resolved address instead of the string.
+//   2. NO REDIRECTS. A 30x is data about the target, not an instruction: this
+//      code never issues the second request, so a redirect to 127.0.0.1 goes
+//      nowhere. (node's http.request does not follow redirects on its own —
+//      that stays true only as long as nobody swaps in a fetch/agent that does.)
+//   3. ONE ATTEMPT PER QUESTION, SHORT TIMEOUT, CAPPED BODY. No retry loop — a
+//      retry turns one visitor request into two outbound ones, which is how a
+//      checker becomes an amplifier. Count them honestly: every FAILING path
+//      spends exactly one outbound request, and the SUCCESS path spends two —
+//      get_tip, then the best-effort get_version garnish below. The second only
+//      ever fires at a host that already answered as a Grin node, so it costs
+//      the amplification argument nothing; the number is still two, and any
+//      third call added here would need the same sentence written for it.
+//   4. NOTHING HERE LOGS THE HOST. Not the target, not the resolved address, not
+//      on the error paths. Someone checking whether their own node is reachable
+//      is telling us where their node is; that is theirs, not ours. Keep it so.
+//
+// ⚠ THE LIMITER IS IN NGINX, NOT HERE. `location = /api/node-check` carries
+// zone=tinyx_probe (10r/m, burst 5) — its own zone in its own conf file,
+// script06d-probe-rate-limit.conf, NOT the tinyx_api zone the rest of /api/ uses.
+// An exact-match location wins outright over the /api/ prefix, so this route gets
+// the probe bucket and only that one. Reached directly on :8471, bypassing nginx,
+// this route is still unrated. The service binds 127.0.0.1 (app.listen below), so
+// reaching :8471 means already being on the box — accepted, and reviewed as such
+// in R5. What holds the public path is the nginx zone alone, so do not add a
+// second listen address without re-reading that acceptance.
+//
+// It does now have an in-flight cap of its own (R5 finding 1, landed in R8), and
+// that is a DIFFERENT control from the nginx zone: the limiter counts requests
+// PER IP, this counts outbound sockets IN TOTAL. Node's default outbound agent is
+// keepAlive:true / maxSockets:Infinity, so without a total cap enough distinct
+// source IPs — each individually under the per-IP limit — hold N sockets for up
+// to NODE_CHECK_TIMEOUT_MS each and exhaust the process's file descriptors. The
+// one route that dials out would then take down the routes that do not, chain
+// reads included. Mirrors /api/wallet-check's WALLET_PROBE_MAX_INFLIGHT exactly.
+
+const NODE_CHECK_TIMEOUT_MS = 5000;
+const NODE_CHECK_MAX_BYTES  = 64 * 1024;
+// 8, not wallet-check's 4: a node check is a plain TCP connect with a 5 s cap,
+// where a Tor probe builds a circuit and is retried, so it holds its slot for
+// far longer. Operator-tunable; 0 or a non-number falls back to the default.
+const NODE_CHECK_MAX_INFLIGHT = config.node_check_max_inflight || 8;
+let nodeCheckInflight = 0;
+
+// One outbound POST to a PINNED address. `address` is what DNS gave us and what
+// blockedReason() cleared; `target.host` is only ever used for the Host header
+// and TLS SNI, never for name resolution down here.
+function nodeCheckPost(target, address, rpcBody) {
+  return new Promise((resolve, reject) => {
+    const lib     = target.scheme === 'https' ? https : http;
+    const body    = JSON.stringify(rpcBody);
+    const bracket = net.isIPv6(target.host) ? '[' + target.host + ']' : target.host;
+    const defPort = target.scheme === 'https' ? 443 : 80;
+    const opts = {
+      host:   address,                       // pinned — no second lookup
+      port:   target.port,
+      path:   target.path,
+      method: 'POST',
+      headers: {
+        'Host':           target.port === defPort ? bracket : bracket + ':' + target.port,
+        'Content-Type':   'application/json',
+        'Content-Length': Buffer.byteLength(body),
+        'Accept':         'application/json',
+        'User-Agent':     HTTP_UA,
+      },
+      timeout: NODE_CHECK_TIMEOUT_MS,
+    };
+    // SNI has to carry the name, or a virtual-hosted node answers with the
+    // wrong certificate. An IP literal gets no SNI (sending one is illegal).
+    if (target.scheme === 'https' && !net.isIP(target.host)) opts.servername = target.host;
+
+    const req = lib.request(opts, res => {
+      let data = '';
+      let over = false;
+      res.setEncoding('utf8');
+      res.on('data', c => {
+        if (over) return;
+        data += c;
+        if (data.length > NODE_CHECK_MAX_BYTES) {   // a node's get_tip is ~200 bytes
+          over = true;
+          data = data.slice(0, NODE_CHECK_MAX_BYTES);
+          res.destroy();
+        }
+      });
+      res.on('end',   () => resolve({ status: res.statusCode, body: data, truncated: over }));
+      res.on('close', () => resolve({ status: res.statusCode, body: data, truncated: over }));
+      res.on('error', reject);
+    });
+    req.on('error',   reject);
+    req.on('timeout', () => req.destroy(new Error('timeout')));
+    req.write(body);
+    req.end();
+  });
+}
+
+// Socket-level failures, worded for someone who is trying to open a port. The
+// distinction that matters to them is refused (something answered, nothing is
+// listening) vs timeout (nothing answered at all — usually a firewall).
+function nodeCheckNetError(err) {
+  const c = String((err && err.code) || (err && err.message) || '');
+  if (/timeout|ETIMEDOUT/i.test(c))            return { code: 'timeout',     reason: 'No answer before the timeout — a firewall dropping the packets looks exactly like this.' };
+  if (/ECONNREFUSED/.test(c))                  return { code: 'refused',     reason: 'The connection was refused — the host answered, but nothing is listening on that port.' };
+  if (/ENOTFOUND|EAI_AGAIN/.test(c))           return { code: 'dns_failed',  reason: 'That host name did not resolve.' };
+  if (/EHOSTUNREACH|ENETUNREACH/.test(c))      return { code: 'unreachable', reason: 'No route to that host.' };
+  if (/ECONNRESET|EPIPE/.test(c))              return { code: 'reset',       reason: 'The connection was closed mid-answer.' };
+  if (/CERT|TLS|SSL|EPROTO/i.test(c))          return { code: 'tls_error',   reason: 'The TLS handshake failed — the certificate did not verify, or that port does not speak TLS.' };
+  return { code: 'unreachable', reason: 'The connection failed.' };
+}
+
+// Body: {"target":"host[:port]"}. Small cap — the payload is one host string.
+// Shared with walletCheckBody further down: same shape, same cap, and building
+// the middleware once at load beats rebuilding it on every request.
+const SMALL_JSON_BODY = express.json({ limit: '1kb' });
+
+function nodeCheckBody(req, res, next) {
+  SMALL_JSON_BODY(req, res, err => {
+    if (!err) return next();
+    return res.status(400).json({ error: 'Could not read that request.', code: 'bad_input' });
+  });
+}
+
+app.post('/api/node-check', nodeCheckBody, async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+
+  let target;
+  try {
+    target = nodeCheck.parseTarget(req.body && req.body.target);
+  } catch (e) {
+    return res.status(400).json({ error: (e && e.message) || 'That host could not be read.', code: 'bad_input' });
+  }
+
+  // The visitor-facing shape. `peers` and `sync_state` are ALWAYS unavailable
+  // and say so in words: Script 04 publishes /v2/foreign and 403s /v2/owner, so
+  // from outside they are not merely unknown, they are unknowABLE. Reporting
+  // them as 0 would draw a healthy node as an idle one.
+  const base = {
+    target:     target.display,
+    host:       target.host,
+    port:       target.port,
+    scheme:     target.scheme,
+    reachable:  false,
+    node_version: null,
+    height:     null,
+    our_height: null,
+    drift:      null,
+    peers:      { available: false, reason: 'not knowable from outside — a public node exposes /v2/foreign only and refuses /v2/owner' },
+    sync_state: { available: false, reason: 'not knowable from outside — same reason: sync state lives on the Owner API' },
+  };
+
+  // Total outbound-socket cap. Sits ABOVE the ++ and below `base`, so the 503
+  // carries the full visitor-facing shape rather than a bare error — the client
+  // renders it from the same code path as every other verdict. Everything from
+  // here to the end of the handler is inside the try, so every early return
+  // still runs the finally: `return` inside a try does not skip it.
+  if (nodeCheckInflight >= NODE_CHECK_MAX_INFLIGHT) {
+    return res.status(503).json(Object.assign(base, {
+      code: 'busy',
+      reason: 'This checker is already dialling as many hosts as it will hold at once. '
+            + 'Nothing was learned about your node — try again in a few seconds.',
+    }));
+  }
+
+  nodeCheckInflight++;
+  try {
+    let addrs;
+    try {
+      addrs = await dns.lookup(target.host, { all: true, verbatim: true });
+    } catch {
+      return res.json(Object.assign(base, {
+        code: 'dns_failed',
+        reason: 'That host name did not resolve.',
+      }));
+    }
+    if (!addrs.length) {
+      return res.json(Object.assign(base, { code: 'dns_failed', reason: 'That host name resolved to nothing.' }));
+    }
+
+    // EVERY resolved address must clear the gate, not just the one we intend to
+    // dial: a name answering with one public and one private address is the
+    // split-horizon version of the same attack.
+    for (const a of addrs) {
+      const why = nodeCheck.blockedReason(a.address);
+      if (why) {
+        return res.status(400).json(Object.assign(base, {
+          code: 'blocked',
+          blocked_scope: why,
+          reason: 'That name resolves to a ' + why + ' address. This checker only dials the public '
+                + 'internet — from in here, a private address would be reached from inside the '
+                + "server's own network, which answers a different question than the one you asked.",
+        }));
+      }
+    }
+    const address = addrs[0].address;
+
+    let answer;
+    try {
+      answer = await nodeCheckPost(target, address, { jsonrpc: '2.0', method: 'get_tip', params: [], id: 1 });
+    } catch (e) {
+      return res.json(Object.assign(base, nodeCheckNetError(e)));
+    }
+
+    if (answer.status >= 300) {
+      // A 30x is data about the target, never an instruction: the redirect is
+      // reported and not followed. Following it is how a blocklist gets walked
+      // around — Location: http://127.0.0.1:3413 is one hop from here.
+      const redirect = answer.status < 400;
+      return res.json(Object.assign(base, {
+        code: 'http_status',
+        http_status: answer.status,
+        reason: redirect
+          ? 'The endpoint answered HTTP ' + answer.status + ' — a redirect. Redirects are not '
+            + 'followed here, and a Grin node does not redirect: point this at the node itself.'
+          : (answer.status === 401 || answer.status === 403)
+            ? 'The endpoint answered ' + answer.status + ' — it is there, but it refuses '
+              + 'unauthenticated calls, so a wallet cannot use it either.'
+            : 'The endpoint answered HTTP ' + answer.status + ', not a node reply.',
+      }));
+    }
+
+    let tip;
+    try {
+      tip = nodeCheck.readTip(answer.body);
+    } catch (e) {
+      const code = (e && e.code) === 'node_error' ? 'node_error' : 'not_json_rpc';
+      return res.json(Object.assign(base, {
+        code,
+        http_status: answer.status,
+        reason: code === 'node_error'
+          ? 'A node answered, but returned an error instead of a tip.'
+          : 'Something answered on that port with HTTP ' + answer.status + ', but it was not a Grin node — '
+            + 'the reply carried no JSON-RPC tip. A 200 on its own proves nothing.',
+      }));
+    }
+
+    // Best-effort garnish, on the same pinned address. A failure here is not a
+    // failure of the check: the node already proved itself with get_tip.
+    let version = null;
+    try {
+      const v = await nodeCheckPost(target, address, { jsonrpc: '2.0', method: 'get_version', params: [], id: 1 });
+      if (v.status < 400) version = nodeCheck.readVersion(v.body);
+    } catch { /* version stays null → rendered "unavailable" */ }
+
+    let ours = null;
+    try { ours = (await getTip()).height; } catch { /* our own tip is optional here */ }
+
+    return res.json(Object.assign(base, {
+      reachable:    true,
+      code:         'ok',
+      http_status:  answer.status,
+      node_version: version,
+      height:       tip.height,
+      last_block:   tip.last_block_pushed,
+      our_height:   ours,
+      drift:        ours == null ? null : ours - tip.height,   // >0 → that node is behind us
+    }));
+  } finally {
+    nodeCheckInflight--;
+  }
+});
+
+// ── Wallet Tor liveness probe (Wallet Checker, tier 2) ────────────────────────
+//
+// Tier 1 runs in the visitor's browser and never asks this server anything. This
+// route is the one extra question arithmetic cannot answer: is a wallet
+// ANSWERING at the onion that address derives to. The derivation, the tri-state
+// and the SOCKS client live in lib/wallet-tor.js and lib/socks5.js; what follows
+// is the policy around them.
+//
+//   1. OFF BY DEFAULT. wallet_check_probe defaults to false, so a box with no
+//      tor daemon serves the tile as tier 1 and never offers a control that
+//      could only ever answer "could not check". The flag reaches the page as
+//      window.TINYEXP_WALLET_PROBE — a dead button is worse than no button.
+//   2. TRI-STATE OUT, ALWAYS. `online` is true | false | null and the page must
+//      render three states. A null is OUR failure and says so.
+//   3. NOTHING HERE LOGS THE ADDRESS. Not the address, not the derived onion,
+//      not on the error paths. A Slatepack address is a wallet identity and the
+//      onion is the same key again; someone checking their own wallet is
+//      telling us where their money lives. It is theirs, not ours. Keep it so.
+//   4. RATE LIMIT IS IN NGINX. `location = /api/wallet-check` carries
+//      zone=tinyx_probe (10r/m, burst 5) — written in Part 7, in its own conf
+//      file script06d-probe-rate-limit.conf, NOT the tinyx_api zone. The
+//      in-flight cap below is a different control for a different failure: the
+//      limiter counts requests per IP, this counts Tor circuits in total, and
+//      a probe holds one for up to retries × timeout.
+
+const walletProbeEnabled  = config.wallet_check_probe === true;
+const walletProbeOpts = {
+  socksHost: config.tor_socks_host || '127.0.0.1',
+  socksPort: config.tor_socks_port || 9050,
+  // grin-wallet publishes the foreign-API hidden service at virtual port 80,
+  // NOT 3415 (impls/src/tor/config.rs). Configurable, but do not "fix" it.
+  onionPort: config.tor_onion_virtual_port || 80,
+  timeoutMs: config.tor_check_timeout_ms || 8000,
+  retries:   config.tor_check_retries || 2,
+  userAgent: HTTP_UA,
+};
+const WALLET_PROBE_MAX_INFLIGHT = config.tor_check_max_inflight || 4;
+let walletProbeInflight = 0;
+
+// SMALL_JSON_BODY is the same 1kb JSON parser node-check uses — see above.
+function walletCheckBody(req, res, next) {
+  SMALL_JSON_BODY(req, res, err => {
+    if (!err) return next();
+    return res.status(400).json({ error: 'Could not read that request.', code: 'bad_input' });
+  });
+}
+
+app.post('/api/wallet-check', walletCheckBody, async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+
+  if (!walletProbeEnabled) {
+    // 503, not 404: the route exists, the capability is switched off. The page
+    // never reaches here — this is for someone calling the API directly.
+    return res.status(503).json(walletTor.verdict('probe_disabled'));
+  }
+
+  const address = (req.body && typeof req.body.address === 'string') ? req.body.address.trim() : '';
+  if (!walletTor.isSlatepackAddress(address)) {
+    return res.status(400).json(walletTor.verdict('invalid_address'));
+  }
+
+  if (walletProbeInflight >= WALLET_PROBE_MAX_INFLIGHT) {
+    return res.status(503).json(walletTor.verdict('probe_busy'));
+  }
+
+  walletProbeInflight++;
+  let result;
+  try {
+    result = await walletTor.probeWallet(address, walletProbeOpts);
+  } catch {
+    // Never leak an exception message here — it would carry the onion.
+    result = walletTor.verdict('probe_failed');
+  } finally {
+    walletProbeInflight--;
+  }
+
+  // The address is deliberately NOT echoed back. The caller already has it, and
+  // not carrying it means no response body, cache or proxy log can hold it.
+  return res.json(Object.assign({ checked_at: new Date().toISOString() }, result));
+});
+
 // ── GA4 analytics (before static) ────────────────────────────────────────────
 
 app.get('/js/analytics.js', (_req, res) => {
@@ -708,11 +1181,26 @@ const _pageMeta = {
   slate: {
     title: `Slate Inspector — ${domain}`,
     desc:  `Paste or drop a Grin slatepack to read what is inside it: amount, fee, which transaction step it is on (S1/S2/S3 or I1/I2/I3), and whether it belongs to mainnet or testnet. Decoding runs entirely in your browser — nothing is uploaded.`,
-    theme: '#06070d',
   },
   emission: {
     title: `Grin Emission & Supply — ${domain}`,
     desc:  `How Grin's monetary policy works: a constant 1 ツ every second, forever — 60 ツ per block. Verify circulating supply yourself on ${domain}: it is simply block height × 60. No halvening, no premine, no founder reward.`,
+  },
+  mining: {
+    title: `Grin Mining Calculator — ${domain}`,
+    desc:  `Estimate Grin (GRIN) mining income from the live network hashrate on ${domain}: enter your graphs-per-second, pool fee, power draw and electricity cost to see expected GRIN per day, week and month, the USD value at the current price, and the break-even GRIN price for your power bill. An estimate at the current difficulty.`,
+  },
+  walletcheck: {
+    title: `Grin Wallet Address Checker — ${domain}`,
+    desc:  `Check a Grin Slatepack address on ${domain}: whether its bech32 checksum is valid, whether it is mainnet (grin1…) or testnet (tgrin1…), and the Tor .onion address the same public key derives to. The check runs entirely in your browser — the address is never sent anywhere. It does not report whether the wallet is online.`,
+  },
+  proof: {
+    title: `Grin Payment Proof Verifier — ${domain}`,
+    desc:  `Verify a Grin payment proof on ${domain}: check both ed25519 signatures from a grin-wallet export_proof file, then confirm the kernel excess actually settled on the MimbleWimble chain. Two separate checks, reported separately. The amount is attested by the two parties, never read from the chain — Grin amounts are confidential.`,
+  },
+  nodecheck: {
+    title: `Grin Node Reachability Checker — ${domain}`,
+    desc:  `Check whether your Grin node answers from the public internet on ${domain}: enter host and port and this server POSTs get_tip to /v2/foreign from outside your network. Reports reachability, node version, tip height and how far it drifts from the chain tip. Peer count and sync state are not knowable from outside and are reported as unavailable.`,
   },
   notfound: {
     title: `Not found — ${domain}`,
@@ -730,6 +1218,10 @@ function injectGlobals(html, pageKey) {
   const canonPath = pageKey === 'index' ? '/'
     : pageKey === 'slate' ? '/slate'
     : pageKey === 'emission' ? '/emission'
+    : pageKey === 'mining' ? '/mining'
+    : pageKey === 'walletcheck' ? '/wallet-check'
+    : pageKey === 'proof' ? '/proof'
+    : pageKey === 'nodecheck' ? '/node-check'
     : (pageKey === 'block' || pageKey === 'kernel' || pageKey === 'output') ? ''
     : '/404.html';
   const canon = (baseUrl && canonPath) ? `\n<link rel="canonical" href="${baseUrl}${canonPath}">` : '';
@@ -757,11 +1249,13 @@ window.TINYEXP_DOMAIN=${JSON.stringify(domain)};
 window.TINYEXP_BASE_URL=${JSON.stringify(baseUrl)};
 window.TINYEXP_SLOGAN=${JSON.stringify(SLOGAN)};
 window.TINYEXP_FALLBACKS=${JSON.stringify(config.fallback_explorers || [])};
+window.TINYEXP_WALLET_PROBE=${JSON.stringify(walletProbeEnabled)};
 </script>`;
 
   // Strip the shell's own title/description/theme-color so the injected block is
-  // the single source of truth — a duplicate theme-color would otherwise win by
-  // document order and repaint the dark Slate page in the explorer's orange.
+  // the single source of truth — a duplicate would otherwise win by document
+  // order and override the injected one. `meta.theme` stays available for a page
+  // that needs its own colour; every page currently takes the default.
   let out = html
     .replace(/<title>[^<]*<\/title>/i, '')
     .replace(/<meta\s+name="description"[^>]*>/i, '')
@@ -807,6 +1301,33 @@ app.get('/slate', (_req, res) => sendEntityPage(res, 'slate.html', 'slate'));
 // Emission & Supply explainer — a static, node-light page (one /api/stats call
 // client-side for the live supply/inflation figures). Self-canonical /emission.
 app.get('/emission', (_req, res) => sendEntityPage(res, 'emission.html', 'emission'));
+
+// Mining Calculator — node-light: one client-side /api/stats call for the live
+// network hashrate and price. It CONSUMES the server's hashrate figure (the
+// day-average basis behind g1_per_day) and never derives one from difficulty.
+// Self-canonical /mining.
+app.get('/mining', (_req, res) => sendEntityPage(res, 'mining.html', 'mining'));
+
+// Wallet Checker (tier 1) — like /slate, this route makes NO node call and no
+// outbound call of any kind. The address is checked, and its .onion derived, in
+// the visitor's browser; the pasted address never reaches this server, which is
+// also why there is nothing here to log. Self-canonical /wallet-check.
+app.get('/wallet-check', (_req, res) => sendEntityPage(res, 'wallet-check.html', 'walletcheck'));
+
+// Payment Proof Verifier. UNLIKE /slate and /wallet-check, this page DOES send
+// what you paste to this server: ed25519 verification has no reliable browser
+// equivalent (crypto.subtle's Ed25519 support is too new to rely on), and the
+// kernel lookup needs the node anyway. The page says so plainly rather than
+// borrowing the other two tools' "checked locally" badge. Self-canonical /proof.
+app.get('/proof', (_req, res) => sendEntityPage(res, 'proof.html', 'proof'));
+
+// Node Reachability Checker. Like /proof this page sends what you type to this
+// server — it has to, since the whole question is what a request from OUTSIDE
+// your network sees. Unlike /proof it makes this server dial a third party, so
+// the route it posts to (/api/node-check) is the only one here with a real
+// abuse surface and the only one carrying an address blocklist.
+// Self-canonical /node-check.
+app.get('/node-check', (_req, res) => sendEntityPage(res, 'node-check.html', 'nodecheck'));
 
 // ── Static files ──────────────────────────────────────────────────────────────
 

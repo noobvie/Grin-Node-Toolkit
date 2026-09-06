@@ -9,8 +9,9 @@
 # Sourced lib → no shebang, no `set -e` of its own. Every tinyx_* entry point is
 # dispatched from the 06 menu as `tinyx_x || true`, which disables errexit for the
 # whole call tree below it (CLAUDE.md, project_lib_errexit_suppression) — so 06's
-# `set -euo pipefail` protects nothing in here. The bare `cp -r` deploy steps in
-# tinyx_install / tinyx_update are exactly the shape that fails silently.
+# `set -euo pipefail` protects nothing in here. Deploy therefore goes through
+# tinyx_deploy_files(), which guards its own copy; the bare `cp -r` it replaced in
+# tinyx_install / tinyx_update was exactly the shape that fails silently.
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 
@@ -22,6 +23,29 @@ TINYX_LOG="${TINYX_DIR}/tiny-explorer.log"
 TINYX_SVC="grin-tiny-explorer"
 NGINX_TINYX_CONF="/etc/nginx/sites-available/tiny-explorer"
 TINYX_PORT=8471
+
+# ── Deploy ──────────────────────────────────────────────────────────────────────
+
+# The ONE place app files are copied to the box. Both tinyx_install and
+# tinyx_update call it; neither may go back to a bare `cp -r`.
+#
+# Two exclusions, and neither is cosmetic:
+#   · test/  — the re-runnable assertion suite (fixtures + runners) added in R8.
+#     It exists to be run in the repo before a change ships and has no job on a
+#     production box, so it is EXCLUDED rather than "acceptable to ship".
+#   · node_modules — if anyone ever ran `npm install` in the toolkit checkout, a
+#     wholesale copy would clobber the box's `--omit=dev` tree with a dev tree.
+#     The VPS builds its own via `npm install --prefix "$TINYX_APP"`.
+#
+# tar, not cp: `cp -r` has no --exclude. tar is present on every target distro,
+# and the pipe is guarded by pipefail (set by 06_global_grin_health.sh and NOT
+# suppressed by the `tinyx_x || true` dispatch, unlike errexit).
+tinyx_deploy_files() {
+    [[ -d "$TINYX_WEB" ]] || { error "Toolkit source missing: ${TINYX_WEB}"; return 1; }
+    mkdir -p "$TINYX_APP" || { error "Could not create ${TINYX_APP}"; return 1; }
+    tar -C "$TINYX_WEB" --exclude=./test --exclude=./node_modules -cf - .         | tar -C "$TINYX_APP" -xf -         || { error "Deploy failed: could not copy app files to ${TINYX_APP}"; return 1; }
+    return 0
+}
 
 # ── Install ───────────────────────────────────────────────────────────────────
 
@@ -60,8 +84,7 @@ tinyx_install() {
     fi
 
     info "Deploying app to ${TINYX_APP}…"
-    mkdir -p "${TINYX_APP}"
-    cp -r "${TINYX_WEB}/." "${TINYX_APP}/"
+    tinyx_deploy_files || { die "Deploy failed."; return; }
 
     info "Installing npm dependencies…"
     npm install --prefix "${TINYX_APP}" --omit=dev --silent || { die "npm install failed."; return; }
@@ -156,6 +179,39 @@ tinyx_configure() {
     local peers_stats_url="https://world.grin.money"
     echo -ne "  Peers-stats source URL [${peers_stats_url}]: "; read -r p; [[ -n "$p" ]] && peers_stats_url="${p%/}"
 
+    # Wallet Checker tier 2 — the Tor liveness probe (POST /api/wallet-check).
+    #
+    # OFF unless the operator turns it on, and that default is load-bearing: the
+    # probe needs a local tor daemon, and a box without one would answer "we
+    # could not check" to every visitor forever. Left off, the Wallet Checker
+    # tile still works in full as tier 1 (checksum, network, derived .onion) —
+    # it just never offers the button, because a dead control is worse than no
+    # control at all.
+    #
+    # The current value is READ BACK from the existing config first. This
+    # function rewrites config.json wholesale, so without that an operator who
+    # turned the probe on loses it the next time they re-run Configure for an
+    # unrelated reason (a new domain, a GA4 id) with no message saying so.
+    local wallet_probe="false"
+    if [[ -f "$TINYX_CONFIG" ]] && grep -Eq '"wallet_check_probe"[[:space:]]*:[[:space:]]*true' "$TINYX_CONFIG" 2>/dev/null; then
+        wallet_probe="true"
+    fi
+    local tor_socks_port=9050
+    echo ""
+    if ss -tlnp 2>/dev/null | grep -q ":${tor_socks_port} "; then
+        echo -e "  ${DIM}Tor SOCKS detected on 127.0.0.1:${tor_socks_port}.${RESET}"
+    else
+        echo -e "  ${DIM}No Tor SOCKS listener on 127.0.0.1:${tor_socks_port} — the probe needs one (apt install tor).${RESET}"
+    fi
+    local probe_hint="y/N"; [[ "$wallet_probe" == "true" ]] && probe_hint="Y/n"
+    echo -ne "  Enable the Wallet Checker Tor liveness probe? [${probe_hint}]: "; read -r probe_ans
+    if [[ -n "$probe_ans" ]]; then
+        case "${probe_ans,,}" in
+            y|yes) wallet_probe="true" ;;
+            *)     wallet_probe="false" ;;
+        esac
+    fi
+
     mkdir -p "${TINYX_DIR}"
 
     # Copy node secrets into the app data dir (www-data-owned, 600) — same model
@@ -166,6 +222,13 @@ tinyx_configure() {
     if [[ -f "$owner_secret_path"   ]]; then cp "$owner_secret_path"   "$tx_owner";   chown www-data:www-data "$tx_owner";   chmod 600 "$tx_owner";   else warn "Owner secret not found at ${owner_secret_path}.";   fi
 
     # Build the fallback_explorers array + optional slogan line via a heredoc.
+    #
+    # ⚠ tor_onion_virtual_port is 80, NOT 3415. grin-wallet publishes the wallet
+    # foreign-API hidden service as `HiddenServicePort 80 <listener>`
+    # (impls/src/tor/config.rs, source-verified 2026-07-19). 3415 is the CLEARNET
+    # listener port and dialling it through Tor fails for every healthy wallet
+    # there is — which reads as "everyone is offline", not as a bug. Do not
+    # "correct" this to match the wallet port table in CLAUDE.md.
     cat > "$TINYX_CONFIG" <<JSON
 {
   "network":             "mainnet",
@@ -184,6 +247,13 @@ tinyx_configure() {
   "peers_cache_ms":      3600000,
   "latest_count":        20,
   "peers_stats_url":     "${peers_stats_url}",
+  "wallet_check_probe":  ${wallet_probe},
+  "tor_socks_host":      "127.0.0.1",
+  "tor_socks_port":      ${tor_socks_port},
+  "tor_onion_virtual_port": 80,
+  "tor_check_timeout_ms":   8000,
+  "tor_check_retries":      2,
+  "node_check_max_inflight": 8,
   "ga4_measurement_id":  "${ga4_id}",
   "fallback_explorers": [
     { "name": "Grincoin.org", "url": "https://grincoin.org", "blurb": "Full archive explorer — deep block bodies since genesis." },
@@ -275,14 +345,27 @@ tinyx_setup_nginx() {
         [[ -z "$ssl_email" ]] && { warn "Email required for first certbot run."; pause; return; }
     fi
 
-    # Unique rate-limit zone (never reuse grinscan_api) — via shared helper w/ fallback.
+    # Unique rate-limit zones (never reuse grinscan_api) — via shared helper w/ fallback.
+    #
+    # TWO conf basenames, deliberately. nginx_ensure_rate_limit_zone is a NO-OP when its
+    # conf file already exists, so appending tinyx_probe to script06d-rate-limit.conf would
+    # work on a fresh install and SILENTLY never reach a box installed before phase 2. A
+    # second basename is the only form that lands on both. Never merge these two files, and
+    # never reuse tinyx_api for the probe routes — they are rated an order of magnitude
+    # apart because a probe spends an outbound connection, not a chain read.
     if declare -F nginx_ensure_rate_limit_zone &>/dev/null; then
-        nginx_ensure_rate_limit_zone "tinyx_api" "30r/m" "10m" "script06d-rate-limit"
+        nginx_ensure_rate_limit_zone "tinyx_api"   "30r/m" "10m" "script06d-rate-limit"
+        nginx_ensure_rate_limit_zone "tinyx_probe" "10r/m" "10m" "script06d-probe-rate-limit"
     else
         local rate_conf="/etc/nginx/conf.d/script06d-rate-limit.conf"
         if [[ ! -f "$rate_conf" ]]; then
             mkdir -p /etc/nginx/conf.d
             echo 'limit_req_zone $binary_remote_addr zone=tinyx_api:10m rate=30r/m;' > "$rate_conf"
+        fi
+        local probe_conf="/etc/nginx/conf.d/script06d-probe-rate-limit.conf"
+        if [[ ! -f "$probe_conf" ]]; then
+            mkdir -p /etc/nginx/conf.d
+            echo 'limit_req_zone $binary_remote_addr zone=tinyx_probe:10m rate=10r/m;' > "$probe_conf"
         fi
     fi
 
@@ -293,6 +376,31 @@ tinyx_setup_nginx() {
 server {
     listen 80;
     server_name ${domain};
+
+    # Probe routes only. An exact-match location wins outright over the /api/ prefix
+    # below, so these do NOT also carry tinyx_api — one bucket each, the tighter one.
+    # Both routes are live: node-check spends an outbound HTTP request, wallet-check
+    # a Tor circuit for up to tor_check_retries x tor_check_timeout_ms. That is why
+    # they are rated an order of magnitude below the chain reads on /api/.
+    # wallet-check answers 503 {"reason":"probe_disabled"} while wallet_check_probe
+    # is false, which is the default — the page never offers the control then.
+    location = /api/node-check {
+        limit_req zone=tinyx_probe burst=5 nodelay;
+        proxy_set_header Host              \$host;
+        proxy_set_header X-Real-IP         \$remote_addr;
+        proxy_set_header X-Forwarded-For   \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_pass http://127.0.0.1:${TINYX_PORT};
+    }
+
+    location = /api/wallet-check {
+        limit_req zone=tinyx_probe burst=5 nodelay;
+        proxy_set_header Host              \$host;
+        proxy_set_header X-Real-IP         \$remote_addr;
+        proxy_set_header X-Forwarded-For   \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_pass http://127.0.0.1:${TINYX_PORT};
+    }
 
     location /api/ {
         limit_req zone=tinyx_api burst=20 nodelay;
@@ -408,7 +516,7 @@ tinyx_update() {
     [[ -d "$TINYX_APP" ]] || { warn "Not installed. Run Install (1) first."; pause; return; }
 
     info "Redeploying app files from toolkit…"
-    cp -r "${TINYX_WEB}/." "${TINYX_APP}/"
+    tinyx_deploy_files || { die "Redeploy failed — app files left as they were."; pause; return; }
     chown -R www-data:www-data "${TINYX_DIR}"
     success "App files redeployed."
 
@@ -429,7 +537,8 @@ tinyx_nuke() {
     clear
     echo -e "\n${BOLD}${RED}── Tiny Explorer: Nuke ──${RESET}\n"
     echo -e "  ${YELLOW}Stops + disables the service, removes the app dir, and removes ONLY${RESET}"
-    echo -e "  ${YELLOW}Tiny Explorer's nginx vhost + its script06d-rate-limit.conf zone.${RESET}"
+    echo -e "  ${YELLOW}Tiny Explorer's nginx vhost + its two rate-limit zone confs${RESET}"
+    echo -e "  ${YELLOW}(script06d-rate-limit.conf, script06d-probe-rate-limit.conf).${RESET}"
     echo -e "  ${DIM}Does NOT touch Node.js or the Grin node.${RESET}\n"
     echo -ne "  ${BOLD}${RED}Type 'nuke' to confirm: ${RESET}"; read -r confirm
     [[ "$confirm" != "nuke" ]] && { info "Cancelled — nothing removed."; sleep 1; return; }
@@ -445,6 +554,7 @@ tinyx_nuke() {
     [[ -f "$NGINX_TINYX_CONF" ]] && { rm -f "$NGINX_TINYX_CONF"; success "Removed ${NGINX_TINYX_CONF}"; }
     [[ -L "$nginx_link" ]] && { rm -f "$nginx_link"; success "Removed ${nginx_link}"; }
     [[ -f /etc/nginx/conf.d/script06d-rate-limit.conf ]] && { rm -f /etc/nginx/conf.d/script06d-rate-limit.conf; success "Removed script06d-rate-limit.conf"; }
+    [[ -f /etc/nginx/conf.d/script06d-probe-rate-limit.conf ]] && { rm -f /etc/nginx/conf.d/script06d-probe-rate-limit.conf; success "Removed script06d-probe-rate-limit.conf"; }
     [[ -f /etc/logrotate.d/tiny-explorer ]] && rm -f /etc/logrotate.d/tiny-explorer
 
     if command -v nginx &>/dev/null && systemctl is-active nginx &>/dev/null; then

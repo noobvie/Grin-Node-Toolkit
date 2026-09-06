@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Grin Mining Calculator — Tiny Explorer</title>
+  <meta name="description" content="Estimate Grin mining income from the live network hashrate: enter your G/s, pool fee, power draw and electricity cost to see expected GRIN per day, week and month, the USD value at the current price, and the break-even GRIN price for your power bill.">
+  <meta name="robots" content="index, follow">
+  <meta name="theme-color" content="#ff8c00">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/css/tiny-explorer.css">
+  <script>(function(){var t=localStorage.getItem('tinyexp-theme');if(t)document.documentElement.setAttribute('data-theme',t);})();</script>
+</head>
+<body data-page="mining">
+
+  <header class="tx-header">
+    <div class="tx-header-inner">
+      <a href="/" class="tx-brand">
+        <img src="/grin-logo.svg" class="tx-logo" alt="Grin logo">
+        <span class="tx-brand-text">
+          <span class="tx-title">Tiny<span class="tx-accent">Explorer</span></span>
+          <span class="tx-slogan" id="tx-slogan">Every Grin block, one link away.</span>
+        </span>
+      </a>
+      <div class="tx-header-spacer"></div>
+      <form class="tx-search" id="tx-search-form" role="search">
+        <input id="tx-search-input" type="text" placeholder="Height, hash, kernel or output…  ( / )" autocomplete="off" spellcheck="false" aria-label="Search by block height, hash, kernel excess or output commitment">
+        <button class="tx-btn" type="submit">Search</button>
+      </form>
+      <div class="tx-tools" id="tx-tools">
+        <button class="tx-toolbtn tx-tools-btn" id="tx-tools-btn" type="button" aria-haspopup="true" aria-expanded="false" title="Tools">
+          <span class="tx-toolbtn-icon">🧰</span><span class="tx-toolbtn-text">Tools</span><span class="tx-tools-caret" aria-hidden="true">▾</span>
+        </button>
+        <div class="tx-tools-menu" id="tx-tools-menu" role="menu" hidden>
+          <a class="tx-tools-item" href="/slate" role="menuitem">
+            <span class="tx-tools-ico">🔎</span>
+            <span class="tx-tools-txt"><b>Slate Inspector</b><small>Read a slatepack — amount, fee, step</small></span>
+          </a>
+          <a class="tx-tools-item" href="/proof" role="menuitem">
+            <span class="tx-tools-ico">🧾</span>
+            <span class="tx-tools-txt"><b>Payment Proof Verifier</b><small>Check a proof — signatures and kernel</small></span>
+          </a>
+          <a class="tx-tools-item" href="/wallet-check" role="menuitem">
+            <span class="tx-tools-ico">👛</span>
+            <span class="tx-tools-txt"><b>Wallet Checker</b><small>Address checksum, network and .onion</small></span>
+          </a>
+          <a class="tx-tools-item" href="/emission" role="menuitem">
+            <span class="tx-tools-ico">⏱</span>
+            <span class="tx-tools-txt"><b>Emission &amp; Supply</b><small>Verify 1 ツ/sec · height × 60</small></span>
+          </a>
+          <a class="tx-tools-item" href="/node-check" role="menuitem">
+            <span class="tx-tools-ico">📡</span>
+            <span class="tx-tools-txt"><b>Node Reachability Checker</b><small>Is your node reachable from outside?</small></span>
+          </a>
+          <a class="tx-tools-item" href="/mining" role="menuitem">
+            <span class="tx-tools-ico">⛏</span>
+            <span class="tx-tools-txt"><b>Mining Calculator</b><small>Your G/s → GRIN per day</small></span>
+          </a>
+        </div>
+      </div>
+      <button id="tx-theme-toggle" class="tx-theme-toggle" aria-label="Toggle light/dark theme" title="Toggle theme">☾</button>
+    </div>
+  </header>
+
+  <main class="tx-wrap tx-main">
+
+    <div class="tx-emit-hero">
+      <h1>Grin Mining Calculator</h1>
+      <p>Your share of the network is your share of the coins: Grin pays a flat
+        <strong>60 ツ per block</strong>, so a miner running <em>x</em> of the network's graphs
+        per second earns <em>x</em> of <strong>86,400 ツ</strong> a day. Enter your rate below.</p>
+    </div>
+
+    <div class="tx-note">
+      <strong>Every figure here is an estimate at the current difficulty.</strong> Difficulty
+      moves with the network hashrate, and block luck varies — these numbers are what your rate
+      is worth <em>right now</em>, not a promise of future earnings.
+    </div>
+
+    <section class="tx-emit-grid" aria-label="Live network basis">
+      <div class="tx-card">
+        <div class="tx-card-label">Network hashrate
+          <span class="tx-info" tabindex="0" role="tooltip" data-tip="The 24-hour average network hashrate, read straight from the chain by this explorer. It is the basis for every estimate below.">i</span>
+        </div>
+        <div class="tx-card-value" id="mine-net">—</div>
+        <div class="tx-card-sub" id="mine-net-sub">loading…</div>
+      </div>
+      <div class="tx-card">
+        <div class="tx-card-label">GRIN price</div>
+        <div class="tx-card-value" id="mine-price">—</div>
+        <div class="tx-card-sub" id="mine-price-sub">live, USD</div>
+      </div>
+      <div class="tx-card">
+        <div class="tx-card-label">Network pays</div>
+        <div class="tx-card-value">86,400 ツ</div>
+        <div class="tx-card-sub">per day, split by hashrate</div>
+      </div>
+    </section>
+
+    <div class="tx-rows" style="padding:16px 18px;display:block">
+      <div class="tx-row-label" style="margin-bottom:8px">Your setup</div>
+      <div class="tx-mine-form">
+        <label class="tx-mine-field">
+          <span>Your hashrate <small>(G/s)</small></span>
+          <input id="mine-gps" type="number" min="0" step="any" inputmode="decimal" placeholder="1.2" value="1.2">
+        </label>
+        <label class="tx-mine-field">
+          <span>Pool fee <small>(%)</small></span>
+          <input id="mine-fee" type="number" min="0" max="100" step="any" inputmode="decimal" placeholder="0" value="0">
+        </label>
+        <label class="tx-mine-field">
+          <span>Power draw <small>(W)</small></span>
+          <input id="mine-watt" type="number" min="0" step="any" inputmode="decimal" placeholder="0" value="0">
+        </label>
+        <label class="tx-mine-field">
+          <span>Electricity <small>(USD / kWh)</small></span>
+          <input id="mine-kwh" type="number" min="0" step="any" inputmode="decimal" placeholder="0.00" value="0">
+        </label>
+      </div>
+      <p class="tx-mine-hint">Leave power and electricity at zero to see gross mining income only.</p>
+    </div>
+
+    <section class="tx-emit-grid" aria-label="Estimated earnings">
+      <div class="tx-card">
+        <div class="tx-card-label">Per day</div>
+        <div class="tx-card-value"><span id="mine-day">—</span> <span class="tx-tsu">ツ</span></div>
+        <div class="tx-card-sub" id="mine-day-usd">—</div>
+      </div>
+      <div class="tx-card">
+        <div class="tx-card-label">Per week</div>
+        <div class="tx-card-value"><span id="mine-week">—</span> <span class="tx-tsu">ツ</span></div>
+        <div class="tx-card-sub" id="mine-week-usd">—</div>
+      </div>
+      <div class="tx-card">
+        <div class="tx-card-label">Per month <span class="tx-card-qual">(30 d)</span></div>
+        <div class="tx-card-value"><span id="mine-month">—</span> <span class="tx-tsu">ツ</span></div>
+        <div class="tx-card-sub" id="mine-month-usd">—</div>
+      </div>
+    </section>
+
+    <section class="tx-emit-grid" aria-label="Power cost and break-even">
+      <div class="tx-card">
+        <div class="tx-card-label">Power cost / day</div>
+        <div class="tx-card-value" id="mine-power">—</div>
+        <div class="tx-card-sub">watts ÷ 1000 × 24 × per kWh</div>
+      </div>
+      <div class="tx-card">
+        <div class="tx-card-label">Break-even GRIN price
+          <span class="tx-info" tabindex="0" role="tooltip" data-tip="The GRIN price at which one day of mining exactly pays that day's electricity: power cost per day ÷ GRIN mined per day. Above it you are ahead on power; below it the rig loses money every hour it runs.">i</span>
+        </div>
+        <div class="tx-card-value" id="mine-breakeven">—</div>
+        <div class="tx-card-sub" id="mine-breakeven-sub">covers electricity only</div>
+      </div>
+      <div class="tx-card">
+        <div class="tx-card-label">Profit / day <span class="tx-card-qual">(after power)</span></div>
+        <div class="tx-card-value" id="mine-profit">—</div>
+        <div class="tx-card-sub" id="mine-profit-sub">at the live price</div>
+      </div>
+    </section>
+
+    <div class="tx-note">
+      Hardware cost, pool payout minimums, stale shares and downtime are <strong>not</strong>
+      included. The break-even price covers <strong>electricity only</strong> — it is the floor
+      below which a rig burns money every hour it runs, not the price at which it pays for itself.
+    </div>
+
+    <details class="tx-details">
+      <summary>How this is calculated</summary>
+      <div class="tx-details-body">
+        <ul>
+          <li><strong>Your share.</strong> <code>your G/s ÷ network G/s × 86,400 ツ</code>. Grin's
+            reward is flat and blocks come one a minute, so the whole network is paid exactly
+            86,400 ツ a day — your cut is your fraction of the hashrate.</li>
+          <li><strong>The network figure comes from the chain, not from difficulty.</strong> This
+            page uses the 24-hour average hashrate this explorer already computes from block
+            headers (<code>Δtotal_difficulty × 42 ÷ Δt ÷ 16384</code>, the Cuckatoo32 solution
+            rate). Being an average, it is steadier than a per-block reading.</li>
+          <li><strong>Pool fee</strong> comes off the top; solo miners leave it at 0. Week and
+            month are 7 and 30 days of the same daily figure.</li>
+          <li><strong>Power cost</strong> is <code>watts ÷ 1000 × 24 × price per kWh</code>, and
+            the break-even price is that cost divided by the GRIN you mine in a day.</li>
+          <li><strong>Difficulty does not hold still.</strong> Hashrate joining the network
+            shrinks your share, and no calculator can know that in advance — which is why every
+            figure above is an estimate at the <em>current</em> difficulty.</li>
+        </ul>
+      </div>
+    </details>
+
+  </main>
+
+  <footer class="tx-footer">
+    <div id="tx-footer-text"></div>
+  </footer>
+
+  <div id="tx-toast" class="tx-toast" role="status" aria-live="polite"></div>
+
+  <script src="/js/tiny-explorer.js"></script>
+  <script src="/js/analytics.js"></script>
+</body>
+</html>

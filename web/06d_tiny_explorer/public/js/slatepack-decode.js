@@ -442,7 +442,9 @@
     looksLikeSlatepack,
     SlatepackError,
     // exported for the test harness / reuse
-    _internal: { base58Decode, bech32Decode, stripArmor, parseEnvelope, parseSlateV4Bin, formatGrin, networkFromAddress },
+    // wordsToBytes is exported so /js/wallet-check.js can lift the 32-byte
+    // ed25519 key out of an address without carrying a second bech32.
+    _internal: { base58Decode, bech32Decode, wordsToBytes, stripArmor, parseEnvelope, parseSlateV4Bin, formatGrin, networkFromAddress },
   };
 
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

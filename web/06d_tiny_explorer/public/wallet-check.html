@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Grin Wallet Address Checker — Tiny Explorer</title>
+  <meta name="description" content="Check a Grin Slatepack address (grin1… / tgrin1…): is the bech32 checksum valid, is it mainnet or testnet, and what Tor .onion address does it derive to. Runs entirely in your browser.">
+  <meta name="robots" content="index, follow">
+  <meta name="theme-color" content="#ff8c00">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/css/tiny-explorer.css">
+  <script>(function(){var t=localStorage.getItem('tinyexp-theme');if(t)document.documentElement.setAttribute('data-theme',t);})();</script>
+</head>
+<body data-page="wallet-check">
+
+  <header class="tx-header">
+    <div class="tx-header-inner">
+      <a href="/" class="tx-brand">
+        <img src="/grin-logo.svg" class="tx-logo" alt="Grin logo">
+        <span class="tx-brand-text">
+          <span class="tx-title">Tiny<span class="tx-accent">Explorer</span></span>
+          <span class="tx-slogan" id="tx-slogan">Every Grin block, one link away.</span>
+        </span>
+      </a>
+      <div class="tx-header-spacer"></div>
+      <form class="tx-search" id="tx-search-form" role="search">
+        <input id="tx-search-input" type="text" placeholder="Height, hash, kernel or output…  ( / )" autocomplete="off" spellcheck="false" aria-label="Search by block height, hash, kernel excess or output commitment">
+        <button class="tx-btn" type="submit">Search</button>
+      </form>
+      <div class="tx-tools" id="tx-tools">
+        <button class="tx-toolbtn tx-tools-btn" id="tx-tools-btn" type="button" aria-haspopup="true" aria-expanded="false" title="Tools">
+          <span class="tx-toolbtn-icon">🧰</span><span class="tx-toolbtn-text">Tools</span><span class="tx-tools-caret" aria-hidden="true">▾</span>
+        </button>
+        <div class="tx-tools-menu" id="tx-tools-menu" role="menu" hidden>
+          <a class="tx-tools-item" href="/slate" role="menuitem">
+            <span class="tx-tools-ico">🔎</span>
+            <span class="tx-tools-txt"><b>Slate Inspector</b><small>Read a slatepack — amount, fee, step</small></span>
+          </a>
+          <a class="tx-tools-item" href="/proof" role="menuitem">
+            <span class="tx-tools-ico">🧾</span>
+            <span class="tx-tools-txt"><b>Payment Proof Verifier</b><small>Check a proof — signatures and kernel</small></span>
+          </a>
+          <a class="tx-tools-item" href="/wallet-check" role="menuitem">
+            <span class="tx-tools-ico">👛</span>
+            <span class="tx-tools-txt"><b>Wallet Checker</b><small>Address checksum, network and .onion</small></span>
+          </a>
+          <a class="tx-tools-item" href="/emission" role="menuitem">
+            <span class="tx-tools-ico">⏱</span>
+            <span class="tx-tools-txt"><b>Emission &amp; Supply</b><small>Verify 1 ツ/sec · height × 60</small></span>
+          </a>
+          <a class="tx-tools-item" href="/node-check" role="menuitem">
+            <span class="tx-tools-ico">📡</span>
+            <span class="tx-tools-txt"><b>Node Reachability Checker</b><small>Is your node reachable from outside?</small></span>
+          </a>
+          <a class="tx-tools-item" href="/mining" role="menuitem">
+            <span class="tx-tools-ico">⛏</span>
+            <span class="tx-tools-txt"><b>Mining Calculator</b><small>Your G/s → GRIN per day</small></span>
+          </a>
+        </div>
+      </div>
+      <button id="tx-theme-toggle" class="tx-theme-toggle" aria-label="Toggle light/dark theme" title="Toggle theme">☾</button>
+    </div>
+  </header>
+
+  <main class="tx-wrap tx-main">
+
+    <div class="tx-emit-hero">
+      <h1>Grin Wallet Address Checker</h1>
+      <p>A Slatepack address is a <strong>32-byte public key</strong> wearing a checksum. Paste one
+        to see whether it survived the copy intact, which network it belongs to, and the
+        <strong>Tor address</strong> the same key derives to — all worked out in this page,
+        with nothing sent anywhere.</p>
+    </div>
+
+    <div class="tx-note">
+      <strong>This does not tell you whether the wallet is online.</strong> Pasting an address makes
+      no connection at all — not to that wallet, not to Tor, not to any server. An address can be
+      perfectly valid while the wallet behind it has been offline for a year. Where this server
+      offers the optional Tor liveness check, it runs only when you press its button, and it says so
+      before it does.
+    </div>
+
+    <div class="tx-rows tx-wc-panel">
+      <div class="tx-row-label" style="margin-bottom:8px">Slatepack address</div>
+      <input id="wc-input" class="tx-wc-input" type="text" spellcheck="false" autocomplete="off"
+             autocapitalize="off" autocorrect="off"
+             placeholder="grin1… or tgrin1…"
+             aria-label="Paste a Grin Slatepack address">
+      <div class="tx-wc-actions">
+        <button class="tx-btn" id="wc-check" type="button">Check</button>
+        <button class="tx-btn tx-wc-btn-ghost" id="wc-clear" type="button">Clear</button>
+        <span class="tx-wc-privacy" title="No network request is made — the check runs in your browser">
+          <b>●</b> Checked locally in your browser
+        </span>
+      </div>
+    </div>
+
+    <section id="wc-out" hidden aria-live="polite"></section>
+
+    <details class="tx-details">
+      <summary>What this tells you — and what it does not</summary>
+      <div class="tx-details-body">
+        <ul>
+          <li><strong>The checksum is the point.</strong> bech32 carries six characters of error
+            detection, so an address that lost its tail to a truncated copy-paste, or gained a
+            mis-typed character, fails here rather than on a payment. That is the failure this
+            tool actually catches — a wrong-but-valid address is not something any checker can
+            spot, because it belongs to someone.</li>
+          <li><strong>Mainnet vs testnet comes from the prefix, and only the prefix.</strong>
+            <code>grin1…</code> is mainnet, <code>tgrin1…</code> is testnet. Nothing else in the
+            Grin transaction format records the network — a slate itself carries no network field
+            at all — so the address prefix is the single signal that exists.</li>
+          <li><strong>The address check does not say the wallet is listening.</strong> The
+            <code>.onion</code> shown is arithmetic on the address, not evidence that anything
+            answers there. If this server offers the Tor liveness check, that is a separate,
+            deliberate step and its answer is reported separately — including a third outcome,
+            <em>we could not check</em>, which is about this server and not about your wallet. A
+            checker that collapsed that into "offline" would be blaming you for its own outage.</li>
+          <li><strong>It holds no keys and never will.</strong> A public key is public: deriving
+            an onion from it reveals nothing the address did not already reveal. This page cannot
+            sign, send, or spend.</li>
+        </ul>
+      </div>
+    </details>
+
+    <details class="tx-details">
+      <summary>Where the .onion comes from</summary>
+      <div class="tx-details-body">
+        <ul>
+          <li><strong>The address <em>is</em> the key.</strong> Strip the bech32 wrapper off a
+            Slatepack address and what is left is the wallet's 32-byte ed25519 public key.</li>
+          <li><strong>A v3 onion is that same key, re-wrapped.</strong> Tor builds it as
+            <code>base32(pubkey ‖ checksum ‖ 0x03)</code>, where the checksum is the first two
+            bytes of <code>SHA3-256(".onion checksum" ‖ pubkey ‖ 0x03)</code>. So a Grin wallet's
+            Tor address is not a separate secret to be handed out — it follows from the address
+            you already have.</li>
+          <li><strong>Which is why this works offline.</strong> Both directions are pure
+            arithmetic. The derivation here matches the one this toolkit's mining pool uses to
+            reach miners over Tor.</li>
+          <li><strong>Grin's wallet publishes on virtual port 80</strong>, not 3415 — the hidden
+            service maps port 80 to the wallet's local listener. Worth knowing if you ever dial
+            one by hand.</li>
+        </ul>
+      </div>
+    </details>
+
+  </main>
+
+  <footer class="tx-footer">
+    <div id="tx-footer-text"></div>
+  </footer>
+
+  <div id="tx-toast" class="tx-toast" role="status" aria-live="polite"></div>
+
+  <script src="/js/tiny-explorer.js"></script>
+  <script src="/js/slatepack-decode.js"></script>
+  <script src="/js/wallet-check.js"></script>
+  <script src="/js/analytics.js"></script>
+</body>
+</html>

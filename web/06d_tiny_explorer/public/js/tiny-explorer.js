@@ -121,14 +121,66 @@ function initChrome() {
       const q = inp.value.trim();
       if (q) window.location.href = searchTarget(q);
     });
+    // "/" focuses the search box — but only when the visitor is not already
+    // typing somewhere. Every tool page has its own field (a URL on /node-check
+    // legitimately contains "/", and /slate takes a pasted multi-line slatepack),
+    // so stealing focus mid-entry would eat the keystroke.
+    const typing = el => !!el && (el.isContentEditable ||
+      el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT');
     document.addEventListener('keydown', e => {
-      if (e.key === '/' && document.activeElement !== inp) { e.preventDefault(); inp.focus(); }
+      if (e.key === '/' && !typing(document.activeElement)) { e.preventDefault(); inp.focus(); }
       if (e.key === 'Escape') inp.blur();
     });
   }
 
   initTooltips();
   initTools();
+}
+
+// Group labels for the Tools dropdown, in render order. The hub is going from
+// two tools to six; six flat rows is a list, not a menu, so the rows are grouped
+// under the pair table in script06_design.md ("Option D addendum — Tools hub
+// expansion to six"): Verify what you were handed / Operate your own side.
+//
+// Membership is keyed on the row's href, NOT on DOM order, so the six page
+// headers can keep carrying the rows in whatever order and still group the same
+// way. A tool listed here that no page carries yet is skipped, and a group with
+// no rows renders no heading — so "Operate" simply appears when the first tool
+// that belongs to it ships. An href not listed here still renders, ungrouped,
+// after the groups.
+// Membership follows the pair table's COLUMNS, reading down (Transaction,
+// Reachability, Economics). Note the design doc's illustrative 3x2 grid puts
+// Emission in the second row with the operate tools; the table itself files it
+// under Verify, and that is what its own one-liner says it does ("Verify 1
+// tsu/sec"), so Verify is what it gets here.
+const TOOLS_MENU_GROUPS = [
+  { label: 'Verify',  hrefs: ['/slate', '/proof', '/wallet-check', '/emission'] },
+  { label: 'Operate', hrefs: ['/node-check', '/mining'] }
+];
+
+// Rewrite #tx-tools-menu as grouped sections. The headings are labels, not menu
+// items: role="presentation", no tabindex, no href — so neither the tab order
+// nor the menu's accessible child list gains anything focusable.
+function groupToolsMenu(menu) {
+  const items = Array.from(menu.querySelectorAll('.tx-tools-item'));
+  if (!items.length || menu.querySelector('.tx-tools-group')) return;
+  const byHref = new Map();
+  items.forEach(a => byHref.set(new URL(a.getAttribute('href'), location.origin).pathname, a));
+
+  const frag = document.createDocumentFragment();
+  const placed = new Set();
+  TOOLS_MENU_GROUPS.forEach(group => {
+    const rows = group.hrefs.map(h => byHref.get(h)).filter(Boolean);
+    if (!rows.length) return;                    // no rows yet → no heading
+    const h = document.createElement('div');
+    h.className = 'tx-tools-group';
+    h.setAttribute('role', 'presentation');
+    h.textContent = group.label;
+    frag.appendChild(h);
+    rows.forEach(a => { frag.appendChild(a); placed.add(a); });
+  });
+  items.forEach(a => { if (!placed.has(a)) frag.appendChild(a); });
+  menu.appendChild(frag);                        // moves the existing nodes
 }
 
 // Header "Tools" dropdown — identical markup on every page, so this runs from
@@ -138,6 +190,7 @@ function initTools() {
   const btn  = document.getElementById('tx-tools-btn');
   const menu = document.getElementById('tx-tools-menu');
   if (!wrap || !btn || !menu) return;
+  groupToolsMenu(menu);
   function open(v) {
     wrap.classList.toggle('open', v);
     btn.setAttribute('aria-expanded', v ? 'true' : 'false');
@@ -261,7 +314,7 @@ async function pollStats() {
     if (chEl) {
       if (s.change_24h_pct != null) {
         chEl.textContent = (s.change_24h_pct >= 0 ? '+' : '') + s.change_24h_pct.toFixed(2) + '% · 24h';
-        chEl.style.color = s.change_24h_pct > 0 ? 'var(--green)' : s.change_24h_pct < 0 ? 'var(--red)' : '';
+        chEl.style.color = s.change_24h_pct > 0 ? 'var(--green-ink)' : s.change_24h_pct < 0 ? 'var(--red-ink)' : '';
       } else { chEl.textContent = ''; }
     }
 
@@ -729,6 +782,127 @@ function initEmission() {
   }).catch(() => {});
 }
 
+// ── MINING CALCULATOR PAGE ──────────────────────────────────
+
+// A blank, negative, non-numeric or infinite input is 0 here — never NaN, which
+// propagates silently through every later multiplication and lands in a money
+// figure (memory reference_money_number_boundary_traps).
+function posNum(v) {
+  const n = typeof v === 'number' ? v : parseFloat(v);
+  return (isFinite(n) && n > 0) ? n : 0;
+}
+
+// Pure arithmetic, deliberately split from the DOM so it is directly testable.
+// netGps is the SERVER's figure; this page never derives a hashrate from
+// difficulty (the difficulty/60 trap). A null output means "unknown" and must
+// render as —, never as 0: a missing network basis is not an idle miner.
+function miningEstimate(inp) {
+  const netGps = posNum(inp.netGps);
+  const gps    = posNum(inp.gps);
+  const fee    = Math.min(100, posNum(inp.feePct));
+  const watts  = posNum(inp.watts);
+  const kwh    = posNum(inp.kwhCost);
+  const price  = posNum(inp.priceUsd) || null;
+
+  // Your share of a network that is paid exactly 86,400 ツ a day (60 ツ × 1440).
+  const grinDay = netGps > 0 ? gps / netGps * 86400 * (1 - fee / 100) : null;
+  const powerDay = watts / 1000 * 24 * kwh;
+  const usd = g => (g != null && price != null) ? g * price : null;
+
+  return {
+    grinDay,
+    grinWeek:  grinDay != null ? grinDay * 7  : null,
+    grinMonth: grinDay != null ? grinDay * 30 : null,
+    usdDay:    usd(grinDay),
+    usdWeek:   usd(grinDay != null ? grinDay * 7  : null),
+    usdMonth:  usd(grinDay != null ? grinDay * 30 : null),
+    powerDay,
+    // Undefined with no power cost (nothing to break even against) and with no
+    // yield (the division would be Infinity) — both are —, not a number.
+    breakEven: (grinDay > 0 && powerDay > 0) ? powerDay / grinDay : null,
+    profitDay: usd(grinDay) != null ? usd(grinDay) - powerDay : null,
+  };
+}
+
+function fmtGrinAmt(n) {
+  if (n == null || !isFinite(n)) return '—';
+  const d = n === 0 ? 0 : Math.abs(n) < 1 ? 4 : Math.abs(n) < 1000 ? 2 : 0;
+  return Number(n).toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d });
+}
+
+function _usd(n, d) {
+  return (n < 0 ? '-$' : '$') + Math.abs(n).toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d });
+}
+
+// TOTALS (a day's income, a power bill): cents, widening only for sub-cent sums.
+function fmtUsdAmt(n) {
+  if (n == null || !isFinite(n)) return '—';
+  const a = Math.abs(n);
+  return _usd(n, (a !== 0 && a < 0.01) ? 4 : 2);
+}
+
+// UNIT PRICES (GRIN price, break-even price): GRIN trades in cents, so 2 dp
+// would round a break-even of $0.0667 to $0.07 and destroy the only digits
+// that matter.
+function fmtUsdPrice(n) {
+  if (n == null || !isFinite(n)) return '—';
+  const a = Math.abs(n);
+  return _usd(n, a !== 0 && a < 0.001 ? 8 : 4);
+}
+
+function initMining() {
+  const ids = ['mine-gps', 'mine-fee', 'mine-watt', 'mine-kwh'];
+  const el  = {};
+  ids.forEach(id => { el[id] = document.getElementById(id); });
+  let netGps = null, priceUsd = null;
+
+  function render() {
+    const r = miningEstimate({
+      netGps,
+      priceUsd,
+      gps:     el['mine-gps']  ? el['mine-gps'].value  : 0,
+      feePct:  el['mine-fee']  ? el['mine-fee'].value  : 0,
+      watts:   el['mine-watt'] ? el['mine-watt'].value : 0,
+      kwhCost: el['mine-kwh']  ? el['mine-kwh'].value  : 0,
+    });
+    setText('mine-day',   fmtGrinAmt(r.grinDay));
+    setText('mine-week',  fmtGrinAmt(r.grinWeek));
+    setText('mine-month', fmtGrinAmt(r.grinMonth));
+    setText('mine-day-usd',   r.usdDay   != null ? fmtUsdAmt(r.usdDay)   : (priceUsd == null ? 'price unavailable' : '—'));
+    setText('mine-week-usd',  r.usdWeek  != null ? fmtUsdAmt(r.usdWeek)  : (priceUsd == null ? 'price unavailable' : '—'));
+    setText('mine-month-usd', r.usdMonth != null ? fmtUsdAmt(r.usdMonth) : (priceUsd == null ? 'price unavailable' : '—'));
+    setText('mine-power', fmtUsdAmt(r.powerDay));
+    setText('mine-breakeven', fmtUsdPrice(r.breakEven));
+    setText('mine-breakeven-sub', r.breakEven != null
+      ? 'per ツ, to cover electricity'
+      : (r.powerDay > 0 ? 'enter your hashrate' : 'no power cost entered'));
+    setText('mine-profit', fmtUsdAmt(r.profitDay));
+    setText('mine-profit-sub', r.profitDay != null
+      ? 'income at the live price minus power'
+      : (priceUsd == null ? 'price unavailable' : 'at the live price'));
+  }
+
+  ids.forEach(id => { if (el[id]) el[id].addEventListener('input', render); });
+  render();
+
+  // ONE call. hashrate_gps_24h is the day-average basis the server already uses
+  // for its own G1/day figure; hashrate_gps (the ~20-block instantaneous rate)
+  // is the documented fallback when the day-average could not be computed.
+  fetch('/api/stats').then(r => r.ok ? r.json() : null).then(s => {
+    if (!s) return;
+    const daily = posNum(s.hashrate_gps_24h);
+    const inst  = posNum(s.hashrate_gps);
+    netGps   = daily || inst || null;
+    priceUsd = posNum(s.price_usd) || null;
+    setText('mine-net', netGps != null ? fmtHashrate(netGps) : 'unavailable');
+    setText('mine-net-sub', netGps == null ? 'cannot estimate without it'
+      : daily ? '24h average' : 'recent blocks · 24h average unavailable');
+    setText('mine-price', priceUsd != null ? fmtUsdPrice(priceUsd) : 'unavailable');
+    setText('mine-price-sub', priceUsd != null ? 'live, USD' : 'USD figures unavailable');
+    render();
+  }).catch(() => { render(); });
+}
+
 // ── Init ─────────────────────────────────────────────────────────────────────────
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -741,4 +915,5 @@ document.addEventListener('DOMContentLoaded', () => {
   if (page === 'output') loadEntity('output');
   if (page === 'notfound') init404();
   if (page === 'emission') initEmission();
+  if (page === 'mining') initMining();
 });

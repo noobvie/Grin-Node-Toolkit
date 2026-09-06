@@ -45,9 +45,25 @@
             <span class="tx-tools-ico">🔎</span>
             <span class="tx-tools-txt"><b>Slate Inspector</b><small>Read a slatepack — amount, fee, step</small></span>
           </a>
+          <a class="tx-tools-item" href="/proof" role="menuitem">
+            <span class="tx-tools-ico">🧾</span>
+            <span class="tx-tools-txt"><b>Payment Proof Verifier</b><small>Check a proof — signatures and kernel</small></span>
+          </a>
+          <a class="tx-tools-item" href="/wallet-check" role="menuitem">
+            <span class="tx-tools-ico">👛</span>
+            <span class="tx-tools-txt"><b>Wallet Checker</b><small>Address checksum, network and .onion</small></span>
+          </a>
           <a class="tx-tools-item" href="/emission" role="menuitem">
             <span class="tx-tools-ico">⏱</span>
             <span class="tx-tools-txt"><b>Emission &amp; Supply</b><small>Verify 1 ツ/sec · height × 60</small></span>
+          </a>
+          <a class="tx-tools-item" href="/node-check" role="menuitem">
+            <span class="tx-tools-ico">📡</span>
+            <span class="tx-tools-txt"><b>Node Reachability Checker</b><small>Is your node reachable from outside?</small></span>
+          </a>
+          <a class="tx-tools-item" href="/mining" role="menuitem">
+            <span class="tx-tools-ico">⛏</span>
+            <span class="tx-tools-txt"><b>Mining Calculator</b><small>Your G/s → GRIN per day</small></span>
           </a>
         </div>
       </div>
@@ -76,8 +92,12 @@
         <ul>
           <li>Confirm a block you mined landed — and watch its <strong>1,440-block maturity</strong> tick up.</li>
           <li>Gauge network health at a glance: hashrate, difficulty, peers, mempool.</li>
-          <li>Estimate mining income from the live hashrate.</li>
-          <li>Prove a payment settled via its <strong>kernel excess</strong> (Grin's txid equivalent).</li>
+          <li>Estimate mining income from the live hashrate with the
+              <a href="/mining"><strong>Mining Calculator</strong></a> — GRIN per day, week
+              and month, and the break-even price for your power bill.</li>
+          <li>Prove a payment settled with the <a href="/proof"><strong>Payment Proof Verifier</strong></a> —
+              both signatures from a wallet's proof file, then the <strong>kernel excess</strong>
+              (Grin's txid equivalent) on chain.</li>
           <li>Verify emission yourself: circulating supply is simply <strong>height × 60 ツ</strong> —
               explore it on the <a href="/emission"><strong>Emission &amp; Supply</strong></a> page.</li>
           <li>Read a slatepack before you act on it with the <a href="/slate"><strong>Slate Inspector</strong></a> —
@@ -140,22 +160,69 @@
       </div>
     </section>
 
+    <!-- CANONICAL TOOL TILE — every tool added to this grid copies this shape,
+         and nothing else. Three parts, in this order:
+           .tx-tool-head  icon + name on ONE row (optional .tx-tool-badge)
+           .tx-tool-line  ONE short line, the SAME wording as this tool's row in
+                          the header Tools dropdown above — keep the two in step
+           .tx-tool-go    the "Open →" affordance
+         A badge is for ONE tile, briefly. Five of six carried "New" at launch —
+         Slate Inspector included, live since July — which is decoration, not
+         information, and nothing scheduled its removal. If you add one, say in
+         a comment which tile it is on and the date it comes off.
+         Deliberately no paragraph description: the full explanation lives on the
+         tool's own page, where someone who arrived actually wants it. The hub is
+         growing from 2 tiles to 6, so a tile must stay compact or Latest Blocks
+         gets pushed off the first screen. -->
     <section class="tx-tools-section" aria-label="Tools">
       <h2 class="tx-tools-h">Tools</h2>
       <div class="tx-tools-grid">
         <a class="tx-tool-card" href="/slate">
-          <span class="tx-tool-ico">&#128269;</span>
-          <span class="tx-tool-name">Slate Inspector<span class="tx-tool-badge">New</span></span>
-          <span class="tx-tool-desc">Received a slatepack? Read what is actually inside it before you act —
-            amount, fee, which step of the transaction it is on, and mainnet vs testnet.
-            Decoded entirely in your browser; nothing is uploaded.</span>
+          <span class="tx-tool-head">
+            <span class="tx-tool-ico">&#128269;</span>
+            <span class="tx-tool-name">Slate Inspector</span>
+          </span>
+          <span class="tx-tool-line">Read a slatepack — amount, fee, step</span>
+          <span class="tx-tool-go">Open &#8594;</span>
+        </a>
+        <a class="tx-tool-card" href="/proof">
+          <span class="tx-tool-head">
+            <span class="tx-tool-ico">&#129534;</span>
+            <span class="tx-tool-name">Payment Proof Verifier</span>
+          </span>
+          <span class="tx-tool-line">Check a proof &#8212; signatures and kernel</span>
+          <span class="tx-tool-go">Open &#8594;</span>
+        </a>
+        <a class="tx-tool-card" href="/wallet-check">
+          <span class="tx-tool-head">
+            <span class="tx-tool-ico">&#128091;</span>
+            <span class="tx-tool-name">Wallet Checker</span>
+          </span>
+          <span class="tx-tool-line">Address checksum, network and .onion</span>
           <span class="tx-tool-go">Open &#8594;</span>
         </a>
         <a class="tx-tool-card" href="/emission">
-          <span class="tx-tool-ico">⏱</span>
-          <span class="tx-tool-name">Emission &amp; Supply</span>
-          <span class="tx-tool-desc">Grin emits exactly 1 ツ every second, forever. See the numbers and verify
-            circulating supply yourself — it is simply block height × 60. No halvening, no premine.</span>
+          <span class="tx-tool-head">
+            <span class="tx-tool-ico">⏱</span>
+            <span class="tx-tool-name">Emission &amp; Supply</span>
+          </span>
+          <span class="tx-tool-line">Verify 1 ツ/sec · height × 60</span>
+          <span class="tx-tool-go">Open &#8594;</span>
+        </a>
+        <a class="tx-tool-card" href="/node-check">
+          <span class="tx-tool-head">
+            <span class="tx-tool-ico">&#128225;</span>
+            <span class="tx-tool-name">Node Reachability Checker</span>
+          </span>
+          <span class="tx-tool-line">Is your node reachable from outside?</span>
+          <span class="tx-tool-go">Open &#8594;</span>
+        </a>
+        <a class="tx-tool-card" href="/mining">
+          <span class="tx-tool-head">
+            <span class="tx-tool-ico">&#9935;</span>
+            <span class="tx-tool-name">Mining Calculator</span>
+          </span>
+          <span class="tx-tool-line">Your G/s &#8594; GRIN per day</span>
           <span class="tx-tool-go">Open &#8594;</span>
         </a>
       </div>

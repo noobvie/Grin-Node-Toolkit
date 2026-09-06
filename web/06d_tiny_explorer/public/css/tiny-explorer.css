@@ -3,9 +3,22 @@
    Dark   = deep blue-black "cyberworld", faint cyan grid, neon glow. */
 
 :root {
+  /* --gold / --gold-soft are FILL + decoration only: button grounds, badge
+     grounds, hover borders, focus outlines, sparkline strokes, the wordmark.
+     #ff8c00 is 2.30 / 2.11 / 1.98 on the light --surface / --bg / --surface-2,
+     so it is never legible as text on the light theme. Use --gold-ink below.
+     Deliberately theme-invariant, the same way --green / --red are. */
   --gold:        #ff8c00;
   --gold-soft:   #ffb454;
-  --green:       #16a34a;
+  /* Fill + decoration only: dots, spent/unspent badge grounds, verdict rails.
+     Deliberately theme-invariant — they are never text. Two bars apply even so:
+     a dot or rail is a non-text indicator (3:1), and .spent-tag puts WHITE ink
+     ON the fill at 10px/700 (4.5:1). #16a34a cleared neither — white on it was
+     3.30, and as a dot on the light page ground (--bg) it was 2.98.
+     --green #15803d: white on it 5.02; as a mark 4.94 on --surface, 4.53 on
+     --bg, 3.66 on dark --surface, 3.92 on dark --bg.
+     --red   #dc2626: white on it 4.83; as a mark 4.75 / 4.37 / 3.81 / 4.08. */
+  --green:       #15803d;
   --red:         #dc2626;
 
   /* Light (default) */
@@ -19,8 +32,43 @@
   /* Stat-card label: deliberately dark + heavy for contrast on the surface */
   --label:       #3a352c;
   --value:       #12100c;
-  --accent:      #c26a00;
-  --link:        #b45f00;
+  /* Verdict INK — the same two signals as TEXT. Resolved per ground, per
+     theme, because one value cannot clear 4.5:1 on both: the fill --green is
+     3.24:1 on the light surface and --red is 3.81:1 on the dark one.
+     .tx-wc-mark (15px/800) and .tx-pf-mark (14px/800) are under the 18.66px
+     bold "large text" threshold, so 4.5:1 is the bar, not 3:1. Never colour
+     verdict text with --green/--red.
+     Resolved against --surface-2, NOT --surface: that is the darkest ground
+     these marks land on (a hovered .tx-table row carries .age-old, and
+     .tx-copy.copied sits on a --surface-2 button), and the earlier pair passed
+     on --surface while failing there — 4.26 green, 4.10 red. Measured below as
+     --surface / --bg / --surface-2. */
+  --green-ink:   #166534;   /* 7.02 / 6.45 / 6.06 */
+  --red-ink:     #b91c1c;   /* 6.37 / 5.85 / 5.50 */
+  /* Third-state / accent INK. Same rule as the verdict pair above: it is TEXT
+     (.tx-wc-verdict.is-warn .tx-wc-mark 15px/800, .tx-pf-mark.is-skip 14px/800,
+     .tx-pf-attested 10px/800, .tx-tool-go 13px/700, .tx-slogan 12px), so the bar
+     is 4.5:1, not 3:1. The previous #c26a00 was 3.86 / 3.55 / 3.33 and failed on
+     all three grounds — measured in a browser, not computed from --surface alone.
+     #92400e is the same value slate.css resolved --sp-amber to against the same
+     grounds, so the third state reads identically on /slate and /proof. */
+  --accent:      #92400e;   /* 6.98 / 6.41 / 6.03 */
+  /* Brand-gold INK — the gold signal as TEXT. Same rule as the verdict pair and
+     --accent above: --gold is a fill token, so every rule that paints TEXT gold
+     (.tx-tsu, .age-warn, .tx-404 h1, .tx-row-value a.tx-link, .tx-details >
+     summary::before, .tx-emit-big .tx-tsu, .tx-compare tr.is-grin td:first-child,
+     .tx-toolbtn:hover) reads at 2.30 / 2.11 / 1.98 on light and must use this
+     instead. Only ONE ink is minted: --link is an alias of it, not a second
+     token — #b45f00 was 4.52 / 4.15 / 3.90 and failed on --bg (the footer's
+     ground) and --surface-2, so it needed this fix anyway.
+     Light #92400e is deliberately the same value as --accent and as slate.css's
+     --sp-amber: one dark-orange ink for the whole light theme, resolved once
+     against the three grounds. The names stay distinct so a future retune of the
+     third verdict state cannot drag the currency symbol with it.
+     .tx-title .tx-accent keeps --gold: it is the wordmark, a logotype, exempt.
+     Measured as --surface / --bg / --surface-2. */
+  --gold-ink:    #92400e;   /* 6.98 / 6.41 / 6.03 */
+  --link:        var(--gold-ink);
   --badge-bg:    #f2ece0;
   --shadow:      0 1px 2px rgba(40,30,10,.06), 0 6px 20px rgba(40,30,10,.05);
   --glow:        none;
@@ -41,10 +89,13 @@
     --label:     #7fdcff;
     --value:     #f4f8ff;
     --accent:    #ffb454;
-    --link:      #ffb454;
+    --gold-ink:  #ffb454;   /* 10.42 / 11.16 / 9.81 */
+    --link:      var(--gold-ink);
     --badge-bg:  #111a30;
     --shadow:    0 1px 2px rgba(0,0,0,.4), 0 8px 30px rgba(0,0,0,.35);
     --glow:      0 0 14px rgba(255,140,0,.35);
+    --green-ink: #16a34a;   /* 5.58 / 5.97 / 5.25 */
+    --red-ink:   #ef4444;   /* 4.88 / 5.23 / 4.60 */
   }
 }
 
@@ -59,10 +110,13 @@
   --label:     #7fdcff;
   --value:     #f4f8ff;
   --accent:    #ffb454;
-  --link:      #ffb454;
+  --gold-ink:  #ffb454;   /* 10.42 / 11.16 / 9.81 */
+  --link:      var(--gold-ink);
   --badge-bg:  #111a30;
   --shadow:    0 1px 2px rgba(0,0,0,.4), 0 8px 30px rgba(0,0,0,.35);
   --glow:      0 0 14px rgba(255,140,0,.35);
+  --green-ink: #16a34a;   /* 5.58 / 5.97 / 5.25 */
+  --red-ink:   #ef4444;   /* 4.88 / 5.23 / 4.60 */
 }
 
 * { box-sizing: border-box; }
@@ -164,7 +218,7 @@ a:hover { text-decoration: underline; }
   color: var(--value); margin-top: 8px; word-break: break-word;
 }
 .tx-card-sub { font-size: 11px; color: var(--text-soft); margin-top: 3px; font-family: var(--mono); }
-.tx-tsu { color: var(--gold); }
+.tx-tsu { color: var(--gold-ink); }   /* text: 6.98 / 6.41 / 6.03 light, 10.42 / 11.16 / 9.81 dark */
 
 .tx-info {
   display: inline-flex; align-items: center; justify-content: center;
@@ -173,13 +227,23 @@ a:hover { text-decoration: underline; }
   color: var(--text-soft); font-size: 10px; cursor: help; font-style: normal;
   font-weight: 700;
 }
-.tx-info[data-tip] { position: relative; }
-/* The bubble is always in the DOM but hidden; visibility is flipped per state
-   below. pointer-events:none means a tap on the bubble passes through to the
-   document, which closes it (see initTooltips). */
+/* Anchored to the CARD, not to the 15px icon, at EVERY width. The bubble is
+   always in the DOM but hidden; visibility is flipped per state below, and
+   `visibility: hidden` STILL OCCUPIES LAYOUT. Anchored to the icon (the old
+   `left: 0; width: max-content` up to 240px) that invisible box sat to the
+   right of an icon which can be 200px from the page edge, so it extended the
+   scrollable area with nothing drawn: / and /emission carried a permanent
+   horizontal scrollbar at 1280 (scrollWidth 1318 vs clientWidth 1265, measured
+   in Chrome; 58px on /emission). The narrow branch below 860px already anchored
+   to the card for exactly this reason — the wide path never did, which is why
+   the bug only showed at the width nobody re-measured. Card-anchored is now the
+   only path; .tx-card is position:relative and every .tx-info lives in one.
+   pointer-events:none means a tap on the bubble passes through to the document,
+   which closes it (see initTooltips). */
+.tx-info[data-tip] { position: static; }
 .tx-info[data-tip]::after {
-  content: attr(data-tip); position: absolute; left: 0; top: 130%;
-  width: max-content; max-width: 240px; z-index: 30;
+  content: attr(data-tip); position: absolute; left: 12px; right: 12px; top: 34px;
+  width: auto; max-width: none; white-space: normal; z-index: 30;
   background: var(--value); color: var(--bg); padding: 8px 10px;
   border-radius: 7px; font-size: 11px; font-weight: 500; line-height: 1.4;
   letter-spacing: 0; text-transform: none; box-shadow: var(--shadow);
@@ -192,26 +256,15 @@ a:hover { text-decoration: underline; }
 @media (hover: hover) {
   .tx-info[data-tip]:hover::after { opacity: 1; visibility: visible; }
 }
-/* On narrow screens anchor the tooltip to the card (not the tiny icon) so it
-   wraps inside the card zone instead of overflowing the viewport to the right
-   — a right-side overflow forces the mobile browser to zoom the whole page out. */
-@media (max-width: 860px) {
-  .tx-info[data-tip] { position: static; }
-  .tx-info[data-tip]::after {
-    left: 12px; right: 12px; top: 34px;
-    width: auto; max-width: none; white-space: normal;
-  }
-}
-
 .live-dot {
   display: inline-block; width: 8px; height: 8px; border-radius: 50%;
   background: var(--green); margin-right: 6px; vertical-align: middle;
-  box-shadow: 0 0 0 0 rgba(22,163,74,.5); animation: tx-pulse 2s infinite;
+  box-shadow: 0 0 0 0 rgba(21,128,61,.5); animation: tx-pulse 2s infinite;
 }
 @keyframes tx-pulse {
-  0% { box-shadow: 0 0 0 0 rgba(22,163,74,.5); }
-  70% { box-shadow: 0 0 0 7px rgba(22,163,74,0); }
-  100% { box-shadow: 0 0 0 0 rgba(22,163,74,0); }
+  0% { box-shadow: 0 0 0 0 rgba(21,128,61,.5); }
+  70% { box-shadow: 0 0 0 7px rgba(21,128,61,0); }
+  100% { box-shadow: 0 0 0 0 rgba(21,128,61,0); }
 }
 @media (prefers-reduced-motion: reduce) { .live-dot { animation: none; } }
 
@@ -226,7 +279,7 @@ a:hover { text-decoration: underline; }
   list-style: none; display: flex; align-items: center; gap: 8px;
 }
 .tx-details > summary::-webkit-details-marker { display: none; }
-.tx-details > summary::before { content: "▸"; color: var(--gold); font-size: 12px; }
+.tx-details > summary::before { content: "▸"; color: var(--gold-ink); font-size: 12px; }   /* a text glyph, not a rule mark */
 .tx-details[open] > summary::before { content: "▾"; }
 .tx-details-body { padding: 0 16px 16px; color: var(--text-soft); font-size: 14px; }
 .tx-details-body ul { margin: 6px 0 0; padding-left: 18px; }
@@ -250,7 +303,7 @@ a:hover { text-decoration: underline; }
   content: ''; width: 8px; height: 8px; border-radius: 50%;
   background: var(--text-soft); display: inline-block; flex: none;
 }
-.tx-sync.ok   { color: var(--green); }
+.tx-sync.ok   { color: var(--green-ink); }
 .tx-sync.ok::before   { background: var(--green); }
 .tx-sync.warn { color: #d97706; }
 .tx-sync.warn::before { background: #d97706; }
@@ -272,8 +325,8 @@ table.tx-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .tx-table tbody tr:hover { background: var(--surface-2); }
 .tx-table .col-h { color: var(--value); font-weight: 700; }
 .tx-hash { color: var(--text-soft); }
-.age-warn { color: var(--gold); }
-.age-old { color: var(--red); }
+.age-warn { color: var(--gold-ink); }   /* on --surface AND the --surface-2 hovered row */
+.age-old { color: var(--red-ink); }
 
 .tx-skel { display: inline-block; height: 14px; width: 70%; border-radius: 4px;
   background: linear-gradient(90deg, var(--surface-2) 25%, var(--border) 37%, var(--surface-2) 63%);
@@ -301,7 +354,7 @@ table.tx-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .tx-row:last-child { border-bottom: none; }
 .tx-row-label { color: var(--label); font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; }
 .tx-row-value { font-family: var(--mono); font-size: 13px; color: var(--value); word-break: break-all; }
-.tx-row-value a.tx-link { color: var(--gold); text-decoration: none; }
+.tx-row-value a.tx-link { color: var(--gold-ink); text-decoration: none; }
 .tx-row-value a.tx-link:hover { text-decoration: underline; }
 .tx-error code.commit { font-family: var(--mono); color: var(--text-soft); word-break: break-all; }
 .tx-copy {
@@ -309,7 +362,7 @@ table.tx-table { width: 100%; border-collapse: collapse; font-size: 13px; }
   border-radius: 6px; padding: 4px 9px; font-size: 11px; cursor: pointer; white-space: nowrap;
 }
 .tx-copy:hover { border-color: var(--gold); color: var(--text); }
-.tx-copy.copied { color: var(--green); border-color: var(--green); }
+.tx-copy.copied { color: var(--green-ink); border-color: var(--green-ink); }
 @media (max-width: 620px) { .tx-row { grid-template-columns: 1fr; gap: 4px; } }
 
 .tx-lists { display: grid; gap: 16px; }
@@ -353,7 +406,7 @@ pre.tx-raw {
 /* ── 404 fallback cards ─────────────────────────────────────────────── */
 
 .tx-404 { text-align: center; padding: 40px 16px 10px; }
-.tx-404 h1 { font-size: 64px; margin: 0; color: var(--gold); font-family: var(--mono); }
+.tx-404 h1 { font-size: 64px; margin: 0; color: var(--gold-ink); font-family: var(--mono); }   /* 64px is large text (bar 3) but sat at 2.11 on --bg */
 .tx-404 p { color: var(--text-soft); }
 .tx-fallbacks { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); margin: 22px 0; }
 .tx-fallback {
@@ -396,7 +449,9 @@ pre.tx-raw {
   color: var(--text); font-size: 13px; font-weight: 600; text-decoration: none;
   white-space: nowrap;
 }
-.tx-toolbtn:hover { border-color: var(--gold); color: var(--gold); text-decoration: none; }
+/* border-color keeps --gold, with every other hover border in this file (decoration);
+   only the LABEL moves -- it is 13px/600 text on the --surface-2 button. */
+.tx-toolbtn:hover { border-color: var(--gold); color: var(--gold-ink); text-decoration: none; }
 .tx-toolbtn .tx-toolbtn-icon { font-size: 14px; line-height: 1; }
 @media (max-width: 700px) { .tx-toolbtn .tx-toolbtn-text { display: none; } }
 
@@ -422,6 +477,14 @@ pre.tx-raw {
 .tx-tools-txt { display: flex; flex-direction: column; }
 .tx-tools-txt b { font-size: 13px; font-weight: 700; color: var(--value); }
 .tx-tools-txt small { font-size: 11px; color: var(--text-soft); }
+/* Group headings inside the dropdown ("Verify" / "Operate"). Injected by
+   initTools() so all six page headers stay in step; role="presentation" and no
+   tabindex, so they are labels and never menu items. */
+.tx-tools-group {
+  font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: .09em;
+  color: var(--label); padding: 9px 11px 4px; user-select: none;
+}
+.tx-tools-group:first-child { padding-top: 4px; }
 
 /* ── Tools section (home) ───────────────────────────────────────────── */
 .tx-tools-section { margin: 0 0 22px; }
@@ -434,13 +497,22 @@ pre.tx-raw {
 @media (prefers-color-scheme: light) {
   :root:not([data-theme="dark"]) .tx-tools-h { text-shadow: none; }
 }
+/* Explicit column count, mirroring .tx-stats' breakpoints — auto-fit was ragged
+   (at 1280px it already opened a third, empty track). Three columns is a layout
+   choice only: the tiles are ordered to match TOOLS_MENU_GROUPS (Verify ×4, then
+   Operate ×2), so a row boundary never lines up with a group boundary and must
+   not be read as one — the dropdown is where the grouping is stated. The two
+   media queries below give 2+2+2 and a single column and are unchanged. */
 .tx-tools-grid {
   display: grid; gap: 14px;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  grid-template-columns: repeat(3, 1fr);
 }
+@media (max-width: 860px) { .tx-tools-grid { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 460px) { .tx-tools-grid { grid-template-columns: 1fr; } }
+/* Compact tile — see the CANONICAL TOOL TILE comment in index.html. */
 .tx-tool-card {
-  display: flex; flex-direction: column; gap: 7px;
-  padding: 16px 18px 15px; border-radius: 12px;
+  display: flex; flex-direction: column; gap: 6px;
+  padding: 13px 16px 12px; border-radius: 12px;
   border: 1px solid var(--border); box-shadow: var(--shadow);
   background: linear-gradient(150deg, rgba(0, 240, 255, .08), transparent 60%), var(--surface);
   color: inherit; text-decoration: none; position: relative; overflow: hidden;
@@ -452,14 +524,19 @@ pre.tx-raw {
 }
 .tx-tool-card:hover { border-color: var(--gold); text-decoration: none; transform: translateY(-1px); }
 @media (prefers-reduced-motion: reduce) { .tx-tool-card:hover { transform: none; } }
-.tx-tool-ico { font-size: 24px; line-height: 1; filter: drop-shadow(0 0 10px rgba(0, 240, 255, .5)); }
+.tx-tool-head { display: flex; align-items: center; gap: 10px; }
+.tx-tool-ico { font-size: 20px; line-height: 1; flex: none; filter: drop-shadow(0 0 10px rgba(0, 240, 255, .5)); }
 .tx-tool-name { font-size: 15px; font-weight: 800; color: var(--value); display: flex; align-items: center; gap: 8px; }
 .tx-tool-badge {
   padding: 1px 7px; border-radius: 999px; font-size: 10px; font-weight: 700;
   letter-spacing: .12em; text-transform: uppercase; color: #04121a; background: #00f0ff;
 }
-.tx-tool-desc { font-size: 13px; color: var(--text-soft); line-height: 1.5; flex: 1 1 auto; }
-.tx-tool-go { font-size: 13px; font-weight: 700; color: var(--gold); margin-top: 2px; }
+/* The one short line. flex:1 1 auto keeps "Open →" on the bottom edge so tiles
+   in a row stay aligned even if one line wraps. */
+.tx-tool-line { font-size: 13px; color: var(--text-soft); line-height: 1.45; flex: 1 1 auto; }
+/* --accent, not --gold: this is text at 13px/700, and --gold is a fill token
+   (#ff8c00 is 2.3:1 on the light tile). */
+.tx-tool-go { font-size: 13px; font-weight: 700; color: var(--accent); }
 
 /* ── Sparklines (inline in stat cards) ──────────────────────────────── */
 .tx-spark { margin-top: 6px; height: 26px; }
@@ -477,7 +554,7 @@ pre.tx-raw {
   font-family: var(--mono); font-size: clamp(30px, 8vw, 52px); font-weight: 800;
   color: var(--value); text-align: center; margin: 20px 0 2px; word-break: break-word;
 }
-.tx-emit-big .tx-tsu { color: var(--gold); }
+.tx-emit-big .tx-tsu { color: var(--gold-ink); }   /* on --bg: 6.41 light, 11.16 dark */
 .tx-emit-caption { text-align: center; color: var(--text-soft); font-size: 13px; margin-bottom: 22px; font-family: var(--mono); }
 .tx-emit-grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); margin-bottom: 16px; }
 .tx-calc { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 8px; }
@@ -493,4 +570,127 @@ pre.tx-raw {
 .tx-compare th { color: var(--label); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; font-weight: 800; }
 .tx-compare td { font-family: var(--mono); color: var(--value); }
 .tx-compare td:first-child, .tx-compare th:first-child { font-family: var(--sans); font-weight: 700; }
-.tx-compare tr.is-grin td:first-child { color: var(--gold); }
+.tx-compare tr.is-grin td:first-child { color: var(--gold-ink); }
+
+/* ── Mining Calculator page ────────────────────────────────────────── */
+.tx-mine-form { display: grid; gap: 12px; grid-template-columns: repeat(4, 1fr); }
+@media (max-width: 860px) { .tx-mine-form { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 460px) { .tx-mine-form { grid-template-columns: 1fr; } }
+.tx-mine-field { display: flex; flex-direction: column; gap: 5px; }
+.tx-mine-field > span {
+  font-size: 11px; font-weight: 800; text-transform: uppercase;
+  letter-spacing: .07em; color: var(--label);
+}
+.tx-mine-field > span small { font-weight: 700; text-transform: none; letter-spacing: 0; color: var(--text-soft); }
+.tx-mine-field input {
+  padding: 9px 12px; border-radius: 8px; border: 1px solid var(--border);
+  background: var(--bg); color: var(--text); font-family: var(--mono);
+  font-size: 14px; width: 100%; box-sizing: border-box;
+}
+.tx-mine-field input:focus { outline: 2px solid var(--gold); outline-offset: 0; }
+.tx-mine-hint { margin: 10px 0 0; font-size: 12px; color: var(--text-soft); }
+.tx-card-qual { font-size: 10px; font-weight: 700; text-transform: none; letter-spacing: 0; color: var(--text-soft); }
+.tx-details-body code {
+  font-family: var(--mono); font-size: 12px; background: var(--surface-2);
+  border: 1px solid var(--border); border-radius: 5px; padding: 1px 5px; color: var(--value);
+}
+
+/* ── Wallet Checker page ───────────────────────────────────────────── */
+.tx-wc-panel { display: block; padding: 16px 18px; }
+.tx-wc-input {
+  padding: 11px 13px; border-radius: 8px; border: 1px solid var(--border);
+  background: var(--bg); color: var(--text); font-family: var(--mono);
+  font-size: 14px; width: 100%; box-sizing: border-box;
+}
+.tx-wc-input:focus { outline: 2px solid var(--gold); outline-offset: 0; }
+.tx-wc-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 12px; }
+.tx-wc-btn-ghost { background: var(--surface-2); color: var(--text-soft); }
+.tx-wc-privacy { font-size: 12px; color: var(--text-soft); margin-left: auto; }
+.tx-wc-privacy b { color: var(--green-ink); }
+/* Verdict banner. Colour alone must not carry the answer, so the mark (✓ / ✕)
+   and the sentence say it too — this reads the same in greyscale. */
+.tx-wc-verdict {
+  display: flex; gap: 10px; align-items: flex-start;
+  border: 1px solid var(--border); border-left-width: 3px; border-radius: 8px;
+  padding: 12px 14px; margin-bottom: 14px; font-size: 13px; background: var(--surface);
+}
+.tx-wc-verdict.is-ok  { border-left-color: var(--green); }
+.tx-wc-verdict.is-bad { border-left-color: var(--red); }
+.tx-wc-mark { font-weight: 800; font-size: 15px; line-height: 1.2; }
+.tx-wc-verdict.is-ok  .tx-wc-mark { color: var(--green-ink); }
+.tx-wc-verdict.is-bad .tx-wc-mark { color: var(--red-ink); }
+.tx-wc-verdict-text { color: var(--text); }
+
+/* Tier 2 — the optional Tor liveness probe. Rendered only when the server has
+   wallet_check_probe on, so this whole block is absent on a box without tor.
+   It sits BELOW the derived rows and inside its own frame because it is the one
+   part of this page that leaves the browser: the visual break is the disclosure.
+   Its verdict reuses .tx-wc-verdict, including .is-warn for the third state
+   ("could not check" — ours, not theirs). */
+.tx-wc-probe {
+  margin-top: 14px; padding: 14px 16px;
+  border: 1px solid var(--border); border-radius: 10px; background: var(--surface);
+}
+.tx-wc-probe-head { font-size: 13px; color: var(--text-soft); line-height: 1.55; }
+.tx-wc-probe-head strong { color: var(--text); }
+.tx-wc-probe-status { font-size: 12px; color: var(--text-soft); }
+.tx-wc-probe-out { margin-top: 12px; }
+.tx-wc-probe-out .tx-wc-verdict { margin-bottom: 0; }
+
+/* ── Payment Proof Verifier (/proof) ──────────────────────────────────────────
+   Reuses the wallet-checker panel + verdict banner. What it adds is the
+   three-state mark (the chain half can be "not checked", which is neither a
+   pass nor a fail) and a textarea instead of a single-line input.
+   --accent is used for that third state, not --gold: it is the token resolved
+   per theme against the ground it lands on (#92400e light / #ffb454 dark),
+   where raw gold is thin on paper. */
+
+.tx-pf-input {
+  width: 100%; min-height: 190px; resize: vertical;
+  padding: 11px 12px; border-radius: 8px; border: 1px solid var(--border);
+  background: var(--bg); color: var(--text);
+  font-family: var(--mono); font-size: 12.5px; line-height: 1.5;
+}
+.tx-pf-input:focus { outline: 2px solid var(--gold); outline-offset: 0; }
+.tx-pf-input.is-over { border-color: var(--gold); border-style: dashed; background: var(--surface-2); }
+.tx-pf-drophint { font-size: 12px; color: var(--text-soft); margin: 8px 0 0; }
+
+/* Honest counterpart to .tx-wc-privacy: this tool DOES send what you paste. */
+.tx-pf-sent { font-size: 12px; color: var(--text-soft); margin-left: auto; }
+.tx-pf-sent b { color: var(--accent); }
+
+.tx-wc-verdict.is-warn { border-left-color: var(--accent); }
+.tx-wc-verdict.is-warn .tx-wc-mark { color: var(--accent); }
+
+/* The three checks, always all three, always in the same order — a missing row
+   would read as a check that passed. */
+.tx-pf-checks { display: grid; gap: 0; margin-bottom: 14px;
+  border: 1px solid var(--border); border-radius: 10px; background: var(--surface); overflow: hidden; }
+.tx-pf-check {
+  display: grid; grid-template-columns: 22px 190px 1fr; gap: 10px; align-items: baseline;
+  padding: 11px 14px; border-bottom: 1px solid var(--border); font-size: 13px;
+}
+.tx-pf-check:last-child { border-bottom: none; }
+.tx-pf-check-name { font-weight: 700; color: var(--value); }
+.tx-pf-check-note { color: var(--text-soft); }
+.tx-pf-mark { font-weight: 800; font-size: 14px; line-height: 1.3; }
+.tx-pf-mark.is-ok   { color: var(--green-ink); }
+.tx-pf-mark.is-bad  { color: var(--red-ink); }
+.tx-pf-mark.is-skip { color: var(--accent); }
+@media (max-width: 620px) { .tx-pf-check { grid-template-columns: 22px 1fr; }
+  .tx-pf-check-note { grid-column: 2; } }
+
+/* Attested-not-verified marker on the amount row. The amount is the one figure
+   here a reader is most likely to take as chain-derived; it is not, and cannot
+   be — Grin amounts are confidential. */
+.tx-pf-attested {
+  font-family: var(--sans); font-size: 10px; font-weight: 800; letter-spacing: .04em;
+  text-transform: uppercase; color: var(--accent); border: 1px solid var(--accent);
+  border-radius: 5px; padding: 1px 5px; margin-left: 8px; white-space: nowrap;
+}
+.tx-pf-msg { font-family: var(--mono); font-size: 11.5px; color: var(--text-soft); word-break: break-all; }
+
+/* Node Checker: "unavailable" is a stated fact, not a missing value. It gets
+   the value column and the soft ink — never a 0, which would draw a healthy
+   node as an idle one. */
+.tx-nc-unavail { font-style: italic; color: var(--text-soft); }

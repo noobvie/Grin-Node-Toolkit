@@ -10,6 +10,43 @@ deploy/runbook: [`script07_implementation.md`](script07_implementation.md).
 > validation against `grin-pool` / `open-grin-pool`). Treat (B) as the audit checklist; verify each
 > against current code before mainnet.
 
+
+---
+
+## Status roll-up — read this first
+
+The §J pass below is 17 sessions and ~13 000 lines. This table is the whole of it: what each
+session found, and what it left open. **Folded in here on 2026-09-06** from the pre-mainnet run
+plan (`script07_reference_audit_session_plan.md`), which was a session-scaffolding file and has
+been deleted now that all 17 sessions are run — the §J sections below *are* the evidence record,
+and this is its index. Session scope descriptions live in each §J section's own opening paragraph.
+
+**Where it stands:** all 17 sessions run (2026-08-25 → 2026-09-04). §J17's desk-audit verdict was
+**NO-GO for mainnet**; a follow-up resolution pass then closed 10 findings across
+§J1/§J4/§J7/§J8/§J9/§J13/§J17, including all three single-box **High** blockers. **No code blocker
+remains. What is left is the runbook on a real box** — and the standing repo-wide caveat still
+applies: none of this has ever been VPS-tested.
+
+| # | Session | Owner/date | Findings | Status |
+|---|---|---|---|---|
+| J1 | Route & guard matrix | 2026-08-25 | 10 (1 High, 2 Med, 5 Low, 2 Info) · **6 fixed, 4 open** (J1-2 partial, J1-4, J1-5, J1-7) | ☑ done |
+| J2 | Auth, session & 2FA | 2026-08-25/26 | 8 (1 High, 4 Med, 2 Low, 1 Info) · **all closed**; §C3 still carried | ☑ done |
+| J3 | Ownership gate & account API | 2026-08-26 | 9 (4 High, 1 Med, 3 Low, 1 Info) · **all fixed** | ☑ done |
+| J4 | Payout execution | 2026-08-26/27 | 11 (1 Crit, 3 High, 2 Med, 4 Low, 1 Info) · **6 fixed, 5 open** — J4-3 + J4-10 are **High** | ☑ done |
+| J5 | Reward & orphan ledger | 2026-08-27 | 11 (1 Crit, 2 High, 5 Med, 2 Low, 1 Info) · **all fixed**; J5-11 post-distribution reorg is an accepted risk | ☑ done |
+| J6 | Stratum & share intake | 2026-08-27 → 09-01 | 13 (2 Crit, 1 High, 4 Med, 5 Low, 1 Info) · **all fixed** | ☑ done |
+| J7 | DB, SQL & amounts | 2026-09-01 | 10 (1 High, 5 Med, 2 Low, 2 Info) · **6 fixed, 4 open** — J7-1 is **High**; J7-8 closed by J9-5 | ☑ done |
+| J8 | Secrets & key management | 2026-09-01 | 7 (1 High, 3 Med, 1 Low, 2 Info) · **3 fixed, 3 open**; J8-1 shell half done in J16 | ☑ done |
+| J9 | Settings & config integrity | 2026-09-02 | 9 (1 High, 3 Med, 4 Low, 1 Info) · **6 fixed** (J9-1 by deletion), 3 open | ☑ done |
+| J10 | Uploads, assets, CMS & ads | 2026-09-02 | 6 (4 Med, 1 Low, 1 Info) · **3 fixed, 2 open** (J10-2, J10-3; J10-3 partly taken by J14-9) | ☑ done |
+| J11 | Public API leakage & privacy | 2026-09-02 | 9 (1 High, 4 Med, 1 Low, 3 Info) · **all fixed**; J11-6 nginx half taken by J16 | ☑ done |
+| J12 | Rate limiting & exhaustion | 2026-09-02 | 12 + 2 Info · **all 14 closed** | ☑ done |
+| J13 | Outbound, SSRF & deps | 2026-09-03 | 10 (1 High ruling, 4 Med, 3 Low, 2 Info) · **4 fixed, 6 open/partial**; J13-2 is a standing ruling, not a bug | ☑ done |
+| J14 | Admin panel front-end | 2026-09-03 | 11 (2 Med observability, 1 Med CSP, 6 Low, 2 Info) · **9 fixed, 0 open** (7 in-session + J14-4/-9 in a same-day follow-up) | ☑ done |
+| J15 | Public front-end | 2026-09-03 | 12 (3 Med, 7 Low, 2 Info) · **10 fixed**; J15-3's static-HTML half + J15-10's third-party link left as product decisions | ☑ done |
+| J16 | Deployment & infra | 2026-09-03 | 14 (1 High, 3 Med, 7 Low, 3 Info) · **9 fixed, 2 open**; J16-2 (hostile gateway holds both ownership-proof legs) and J16-4 (three disconnected admin allowlists) are dispositions for the operator. §J8-1 items 1+3 applied, **item 2 refused with reason (J16-12)** | ☑ done |
+| J17 | Pre-mainnet operational gate | 2026-09-04 | 8 (2 High, 3 Med, 1 Low, 2 Info) · **7 fixed, 1 open** (J17-5, procedure). **VERDICT: NO-GO on desk audit**, then a resolution pass closed 10 findings across §J1/§J4/§J7/§J8/§J9/§J13/§J17 — including all three single-box High blockers. No code blocker remains; what is left is the runbook on a real box | ☑ done |
+
 ---
 
 ## Trust model
@@ -1266,8 +1303,7 @@ there. Worth a note in the changelog.
 
 ## §J1 — Route & guard matrix (2026-08-25, add-ons, NOT VPS-TESTED)
 
-First session of the pre-mainnet §J pass (plan:
-[`script07_reference_audit_session_plan.md`](script07_reference_audit_session_plan.md) §J1).
+First session of the pre-mainnet §J pass (see the Status roll-up at the top of this file).
 Scope: every Express route registered in
 [`index.js`](../../web/07_mining_pool_public/back-end-pool/index.js) and the chain definitions
 in [`lib/auth-middleware.js`](../../web/07_mining_pool_public/back-end-pool/lib/auth-middleware.js).
@@ -2150,8 +2186,7 @@ Guard chain column is machine-read from the route registration. `$` = moves GRIN
 
 ## §J2 — Auth, session & 2FA (2026-08-25, add-ons, NOT VPS-TESTED)
 
-Second session of the pre-mainnet §J pass (plan:
-[`script07_reference_audit_session_plan.md`](script07_reference_audit_session_plan.md) §J2).
+Second session of the pre-mainnet §J pass (see the Status roll-up at the top of this file).
 Scope: [`lib/auth.js`](../../web/07_mining_pool_public/back-end-pool/lib/auth.js) (702),
 [`lib/totp.js`](../../web/07_mining_pool_public/back-end-pool/lib/totp.js) (87),
 [`lib/captcha.js`](../../web/07_mining_pool_public/back-end-pool/lib/captcha.js) (59),
@@ -2895,8 +2930,7 @@ rather than by procedure, so the procedure no longer has to carry it.
 
 ## §J3 — Ownership gate & account API (2026-08-26, add-ons, NOT VPS-TESTED)
 
-Third session of the pre-mainnet §J pass (plan:
-[`script07_reference_audit_session_plan.md`](script07_reference_audit_session_plan.md) §J3).
+Third session of the pre-mainnet §J pass (see the Status roll-up at the top of this file).
 Scope: [`lib/owner-proof.js`](../../web/07_mining_pool_public/back-end-pool/lib/owner-proof.js) (486)
 and the `/api/account/:addr/*` block in
 [`index.js`](../../web/07_mining_pool_public/back-end-pool/index.js) (2832–3798 — thirteen routes,
@@ -3830,8 +3864,7 @@ account-page surfaces read well alongside the rest of the gate block.
 
 ## §J4 — Payout execution (2026-08-26, add-ons, NOT VPS-TESTED)
 
-Fourth session of the pre-mainnet §J pass (plan:
-[`script07_reference_audit_session_plan.md`](script07_reference_audit_session_plan.md) §J4).
+Fourth session of the pre-mainnet §J pass (see the Status roll-up at the top of this file).
 Scope: [`lib/withdrawal-scheduler.js`](../../web/07_mining_pool_public/back-end-pool/lib/withdrawal-scheduler.js)
 (1512), [`lib/wallet.js`](../../web/07_mining_pool_public/back-end-pool/lib/wallet.js) (290),
 [`lib/wallet-tor.js`](../../web/07_mining_pool_public/back-end-pool/lib/wallet-tor.js) (287),
@@ -4644,8 +4677,7 @@ arming signal is genuinely durable; and no path other than `sendWithdrawal` writ
 
 ## §J5 — Reward & orphan ledger (2026-08-27, add-ons, NOT VPS-TESTED)
 
-Fifth session of the pre-mainnet §J pass (plan:
-[`script07_reference_audit_session_plan.md`](script07_reference_audit_session_plan.md) §J5).
+Fifth session of the pre-mainnet §J pass (see the Status roll-up at the top of this file).
 Scope: [`lib/rewards.js`](../../web/07_mining_pool_public/back-end-pool/lib/rewards.js) (335),
 [`lib/blocks.js`](../../web/07_mining_pool_public/back-end-pool/lib/blocks.js) (330),
 [`lib/block-monitor.js`](../../web/07_mining_pool_public/back-end-pool/lib/block-monitor.js) (192),
@@ -5305,8 +5337,7 @@ each case. Nothing from §J5 remains open.
 
 ## §J6 — Stratum & share intake (2026-08-27, add-ons, NOT VPS-TESTED)
 
-Sixth session of the pre-mainnet §J pass (plan:
-[`script07_reference_audit_session_plan.md`](script07_reference_audit_session_plan.md) §J6).
+Sixth session of the pre-mainnet §J pass (see the Status roll-up at the top of this file).
 Scope: [`lib/stratum-server.js`](../../web/07_mining_pool_public/back-end-pool/lib/stratum-server.js)
 (759), [`lib/stratum-protocol.js`](../../web/07_mining_pool_public/back-end-pool/lib/stratum-protocol.js)
 (174), [`lib/node-stratum-client.js`](../../web/07_mining_pool_public/back-end-pool/lib/node-stratum-client.js)
@@ -6426,8 +6457,7 @@ Fixtures now bind `String(nonce)`, and the comparator tolerates the `.0` tail re
 
 ## §J7 — DB layer, SQL & amount arithmetic (2026-09-01, add-ons, NOT VPS-TESTED)
 
-Seventh session of the pre-mainnet §J pass (plan:
-[`script07_reference_audit_session_plan.md`](script07_reference_audit_session_plan.md) §J7).
+Seventh session of the pre-mainnet §J pass (see the Status roll-up at the top of this file).
 Scope: [`lib/db.js`](../../web/07_mining_pool_public/back-end-pool/lib/db.js) (1273),
 [`lib/sqlite-compat.js`](../../web/07_mining_pool_public/back-end-pool/lib/sqlite-compat.js) (80),
 **and every call site** — which for this session meant a mechanical sweep of all 39
@@ -7160,8 +7190,7 @@ query redesign needing its own money-path test pass), and J7-8 (§J9's file, per
 
 ## §J8 — Secrets & key management (2026-09-01, add-ons, NOT VPS-TESTED)
 
-Eighth session of the pre-mainnet §J pass (plan:
-[`script07_reference_audit_session_plan.md`](script07_reference_audit_session_plan.md) §J8).
+Eighth session of the pre-mainnet §J pass (see the Status roll-up at the top of this file).
 Scope: the config load path, the JWT signing key, `.api_secret` / `.foreign_api_secret` handling,
 the wallet password on disk, `lib/alert-delivery.js` credentials, the poolstats API key, the Nostr
 identity key, admin password hashes and TOTP secrets, and **file modes** — plus the two redaction
@@ -7730,8 +7759,7 @@ disclosure the code fix already closes.
 
 ## §J9 — Settings & config integrity (2026-09-02, add-ons, NOT VPS-TESTED)
 
-Ninth session of the pre-mainnet §J pass (plan:
-[`script07_reference_audit_session_plan.md`](script07_reference_audit_session_plan.md) §J9).
+Ninth session of the pre-mainnet §J pass (see the Status roll-up at the top of this file).
 Scope: `lib/config.js` (275 lines), `lib/pool-settings.js` (1,556 lines),
 `GET|POST /api/admin/settings/:section` + `/restore`, and the `.config.sha256` integrity check.
 The brief is memory `project_config_loader_type_traps` — the two traps found and fixed in Script
@@ -8483,8 +8511,7 @@ sweep with §J1-5 and §J8-3, not tacked onto this pass.
 
 ## §J10 — Uploads, assets, CMS & ads (2026-09-02, add-ons, NOT VPS-TESTED)
 
-Tenth session of the pre-mainnet §J pass (plan:
-[`script07_reference_audit_session_plan.md`](script07_reference_audit_session_plan.md) §J10).
+Tenth session of the pre-mainnet §J pass (see the Status roll-up at the top of this file).
 Scope: `lib/asset-manager.js` (190), `lib/ads.js` (426), `lib/pages.js` (140),
 `lib/posts.js` (333), the two upload endpoints (`POST /api/admin/assets/upload`,
 `POST /api/admin/media`), `DELETE /api/admin/assets/:filename`, both multer configs, the
@@ -8933,8 +8960,7 @@ to label the counters rather than to fix them).
 
 ## §J11 — Public API leakage & privacy (2026-09-02, add-ons, NOT VPS-TESTED)
 
-Eleventh session of the pre-mainnet §J pass (plan:
-[`script07_reference_audit_session_plan.md`](script07_reference_audit_session_plan.md) §J11).
+Eleventh session of the pre-mainnet §J pass (see the Status roll-up at the top of this file).
 Scope: every unauthenticated route — `/api/public/*`, `/api/pool/*`, `/api/stratum/*`,
 `/api/network/*`, `/api/config/*`, the public `/api/account/:addr` GETs, `/health`,
 `/robots.txt`, `/sitemap.xml` — plus `lib/geoip.js` (172), `lib/retention.js` (209) and
@@ -9763,8 +9789,7 @@ J11-9(b) (the unbounded `offset`) were recorded as Info and handed to §J12, not
 
 ## §J12 — Rate limiting & resource exhaustion (2026-09-02, add-ons, NOT VPS-TESTED)
 
-Twelfth session of the pre-mainnet §J pass (plan:
-[`script07_reference_audit_session_plan.md`](script07_reference_audit_session_plan.md) §J12).
+Twelfth session of the pre-mainnet §J pass (see the Status roll-up at the top of this file).
 Scope: [`lib/rate-limiter.js`](../../web/07_mining_pool_public/back-end-pool/lib/rate-limiter.js)
 (410), bucket assignment across all 171 route registrations in
 [`index.js`](../../web/07_mining_pool_public/back-end-pool/index.js), the `trust proxy` chain,
@@ -10719,8 +10744,7 @@ which the memo makes a once-per-30 s cost and which is still inside SQLite's par
 
 ## §J13 — Outbound calls, SSRF & dependencies (2026-09-03, add-ons, NOT VPS-TESTED)
 
-Thirteenth session of the pre-mainnet §J pass (plan:
-[`script07_reference_audit_session_plan.md`](script07_reference_audit_session_plan.md) §J13).
+Thirteenth session of the pre-mainnet §J pass (see the Status roll-up at the top of this file).
 Scope: every call that leaves the box —
 [`lib/grin-node.js`](../../web/07_mining_pool_public/back-end-pool/lib/grin-node.js) (345),
 [`lib/wallet.js`](../../web/07_mining_pool_public/back-end-pool/lib/wallet.js) (290),
@@ -11423,8 +11447,7 @@ any code changes in the `alerts` section.
 
 ## §J14 — Admin panel front-end (2026-09-03, add-ons, NOT VPS-TESTED)
 
-Fourteenth session of the pre-mainnet §J pass (plan:
-[`script07_reference_audit_session_plan.md`](script07_reference_audit_session_plan.md) §J14).
+Fourteenth session of the pre-mainnet §J pass (see the Status roll-up at the top of this file).
 Scope: the 21 pages and 3 shared scripts under
 [`back-end-pool/admin-panel/`](../../web/07_mining_pool_public/back-end-pool/admin-panel/) —
 `admin-shell.js` (1,008), `settings-common.js` (1,273), `cms-editor.js` (127), plus the
@@ -12079,7 +12102,7 @@ session's fix labels honestly rather than overrides.
 
 ## §J15 — Public front-end (2026-09-03, add-ons, NOT VPS-TESTED)
 
-**Scope, as set by `script07_reference_audit_session_plan.md` §J15:** `public_html/` — the
+**Scope, as set for §J15 by the run plan (since deleted; see the Status roll-up):** `public_html/` — the
 thirteen pages (6,275 lines of HTML, 2,754 of it inline `<script>`) and `js/` (4,968 lines,
 twelve modules, vendor excluded). Every `innerHTML` / `insertAdjacentHTML` / template write
 was enumerated and traced to its producer; `account-settings.html` (1,923 lines, the
@@ -12806,7 +12829,7 @@ fix it), **§J7-3** (J15-9 takes option 1 of three), and **§J9-8**'s missing le
 
 ## §J16 — Deployment & infra (2026-09-03, add-ons, NOT VPS-TESTED)
 
-**Scope, as set by `script07_reference_audit_session_plan.md` §J16:** the shell and the nginx
+**Scope, as set for §J16 by the run plan (since deleted; see the Status roll-up):** the shell and the nginx
 it writes, not the Node app — `scripts/07_grin_mining_public_pool.sh` (3,329 lines),
 `scripts/lib/07_lib_hub.sh` (91), `scripts/lib/07_lib_gateway.sh` (537) and
 `scripts/lib/07_lib_gwctl.sh` (475, including the 400-line `grin-gateway-ctl` payload it
@@ -13629,8 +13652,7 @@ J16-12.
 
 ## §J17 — Pre-mainnet operational gate (2026-09-04, add-ons, NOT VPS-TESTED)
 
-Last session of the pre-mainnet §J pass (plan:
-[`script07_reference_audit_session_plan.md`](script07_reference_audit_session_plan.md) §J17).
+Last session of the pre-mainnet §J pass (see the Status roll-up at the top of this file).
 Not a code review of one surface — the **go/no-go**. The plan sets six gate conditions; this
 section answers each one with evidence and records what has to change before mainnet.
 
@@ -14137,7 +14159,7 @@ written. It does not say the gate passed. It cannot.
 | [`back-end-pool/package.json`](../../web/07_mining_pool_public/back-end-pool/package.json) | **J17-6** — `test-auth-hardening.js` added to `test:unit` (397 → 445 reported assertions) |
 | [`public_html/login.html`](../../web/07_mining_pool_public/public_html/login.html) | **J17-1** — the standing *"New admin? Register here"* link replaced with an on-box notice; the form kept (its ids are live in the JS) but unreachable, and marked as such |
 | [`scripts/lib/07_lib_pool_backup.sh`](../../scripts/lib/07_lib_pool_backup.sh) | **J17-2** — `pbk_restore` sets `payout_control.frozen = 1` on the restored DB before `pool_deroot`, with a hard-failure branch telling the operator not to start the service, and a new "reconcile before resuming" step in the post-restore checklist |
-| [`docs/generated/script07_reference_audit_session_plan.md`](script07_reference_audit_session_plan.md) | progress tracker corrected (J1–J11, J13 were shown as not started) and J17's row filled in |
+| `docs/generated/script07_reference_audit_session_plan.md` *(deleted 2026-09-06; tracker folded into the Status roll-up above)* | progress tracker corrected (J1–J11, J13 were shown as not started) and J17's row filled in |
 | [`docs/generated/script07_security_audit.md`](script07_security_audit.md) | this section |
 
 **Left open at the end of this session:** **J17-4** (handed to §J6 — small fix, non-local

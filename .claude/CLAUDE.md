@@ -526,6 +526,26 @@ value in the lib actually reaches an installed box; `nginx_ensure_grin_api_zone`
 ## Generated & Temporary Files
 ALL generated docs go to `docs/generated/` — never scatter into `web/` etc. The old
 `flowcharts/` dir was merged into `docs/generated/` (2026-07-09); don't recreate it.
+**`docs/generated/README.md` is the index** — read it to find a doc, and add a row to it when
+you add a file. (The folder name is historical: nothing in it is machine-generated.)
+
+**⚠ `docs/generated/` is the DURABLE REFERENCE LIBRARY — design, architecture, flows — for
+other people to read. Session scaffolding does NOT go in it and is NOT committed.** A
+per-session build plan, prompt series, review checklist or batch tracker is a handoff between
+chat sessions: it dies once every part has been run. Write it to **`D:/tmp/grin-toolkit-plans/`**
+(outside the repo, not version-controlled — see that dir's `README.md`), never to
+`docs/generated/`, and never to a scratchpad that is wiped between sessions.
+- **Cross-link ONE way.** The design doc may say "broken into nine sessions, plan kept outside
+  the repo"; it must never link a `D:/tmp/...` path — that is a dead link for anyone who clones.
+  The plan links *into* the repo docs freely.
+- **On completion: fold, then delete.** The durable outcome (what was decided, what shipped,
+  what is still open) goes into that product's `script##_design.md` or
+  `script##_implementation.md`; the plan file is deleted. A finished plan is not reference.
+- **Why:** on 2026-09-06 five such files held ~164 KB in `docs/generated/`, three of them long
+  finished, and they were the single biggest reason the folder read as a dump. One of them
+  (`script07_reference_audit_session_plan.md`) had also become the *only* home of live state —
+  the §J open-findings tracker — which is now the **Status roll-up** at the top of
+  `script07_security_audit.md`. Fold before deleting; check for exactly that trap.
 
 **Naming:** `script<XX>_<type>_<optional_service>_<optional_date>.md`
 - `script<XX>` — REQUIRED prefix, ONE script per file (never `script01-03_`); `type` — one of

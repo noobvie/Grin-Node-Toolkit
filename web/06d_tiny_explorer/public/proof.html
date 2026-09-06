@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Grin Payment Proof Verifier — Tiny Explorer</title>
+  <meta name="description" content="Verify a Grin payment proof: check both ed25519 signatures from a grin-wallet export_proof file, then confirm the kernel actually settled on chain. Two checks, reported separately.">
+  <meta name="robots" content="index, follow">
+  <meta name="theme-color" content="#ff8c00">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/css/tiny-explorer.css">
+  <script>(function(){var t=localStorage.getItem('tinyexp-theme');if(t)document.documentElement.setAttribute('data-theme',t);})();</script>
+</head>
+<body data-page="proof">
+
+  <header class="tx-header">
+    <div class="tx-header-inner">
+      <a href="/" class="tx-brand">
+        <img src="/grin-logo.svg" class="tx-logo" alt="Grin logo">
+        <span class="tx-brand-text">
+          <span class="tx-title">Tiny<span class="tx-accent">Explorer</span></span>
+          <span class="tx-slogan" id="tx-slogan">Every Grin block, one link away.</span>
+        </span>
+      </a>
+      <div class="tx-header-spacer"></div>
+      <form class="tx-search" id="tx-search-form" role="search">
+        <input id="tx-search-input" type="text" placeholder="Height, hash, kernel or output…  ( / )" autocomplete="off" spellcheck="false" aria-label="Search by block height, hash, kernel excess or output commitment">
+        <button class="tx-btn" type="submit">Search</button>
+      </form>
+      <div class="tx-tools" id="tx-tools">
+        <button class="tx-toolbtn tx-tools-btn" id="tx-tools-btn" type="button" aria-haspopup="true" aria-expanded="false" title="Tools">
+          <span class="tx-toolbtn-icon">🧰</span><span class="tx-toolbtn-text">Tools</span><span class="tx-tools-caret" aria-hidden="true">▾</span>
+        </button>
+        <div class="tx-tools-menu" id="tx-tools-menu" role="menu" hidden>
+          <a class="tx-tools-item" href="/slate" role="menuitem">
+            <span class="tx-tools-ico">🔎</span>
+            <span class="tx-tools-txt"><b>Slate Inspector</b><small>Read a slatepack — amount, fee, step</small></span>
+          </a>
+          <a class="tx-tools-item" href="/proof" role="menuitem">
+            <span class="tx-tools-ico">🧾</span>
+            <span class="tx-tools-txt"><b>Payment Proof Verifier</b><small>Check a proof — signatures and kernel</small></span>
+          </a>
+          <a class="tx-tools-item" href="/wallet-check" role="menuitem">
+            <span class="tx-tools-ico">👛</span>
+            <span class="tx-tools-txt"><b>Wallet Checker</b><small>Address checksum, network and .onion</small></span>
+          </a>
+          <a class="tx-tools-item" href="/emission" role="menuitem">
+            <span class="tx-tools-ico">⏱</span>
+            <span class="tx-tools-txt"><b>Emission &amp; Supply</b><small>Verify 1 ツ/sec · height × 60</small></span>
+          </a>
+          <a class="tx-tools-item" href="/node-check" role="menuitem">
+            <span class="tx-tools-ico">📡</span>
+            <span class="tx-tools-txt"><b>Node Reachability Checker</b><small>Is your node reachable from outside?</small></span>
+          </a>
+          <a class="tx-tools-item" href="/mining" role="menuitem">
+            <span class="tx-tools-ico">⛏</span>
+            <span class="tx-tools-txt"><b>Mining Calculator</b><small>Your G/s → GRIN per day</small></span>
+          </a>
+        </div>
+      </div>
+      <button id="tx-theme-toggle" class="tx-theme-toggle" aria-label="Toggle light/dark theme" title="Toggle theme">☾</button>
+    </div>
+  </header>
+
+  <main class="tx-wrap tx-main">
+
+    <div class="tx-emit-hero">
+      <h1>Grin Payment Proof Verifier</h1>
+      <p>Grin's answer to <em>“prove you paid me”</em>. Both parties sign the same 73 bytes —
+        <strong>amount, kernel excess and the payer's key</strong> — and the kernel then settles on
+        chain. This page checks both halves and tells you which one holds.</p>
+    </div>
+
+    <div class="tx-note">
+      <strong>Two separate questions, two separate answers.</strong> A valid signature over a kernel
+      that never confirmed is not a settled payment, and a confirmed kernel with a broken signature
+      says nothing about who paid whom. You will always see both results — never one merged verdict.
+    </div>
+
+    <div class="tx-rows tx-wc-panel">
+      <div class="tx-row-label" style="margin-bottom:8px">Payment proof (JSON)</div>
+      <textarea id="pf-input" class="tx-pf-input" spellcheck="false" autocomplete="off"
+                autocapitalize="off" autocorrect="off"
+                placeholder='Paste the file written by:  grin-wallet export_proof --id &lt;tx id&gt; proof.json&#10;&#10;{&#10;  "amount": "1000000000",&#10;  "excess": "09…",&#10;  "recipient_address": "grin1…",&#10;  "recipient_sig": "…",&#10;  "sender_address": "grin1…",&#10;  "sender_sig": "…"&#10;}'
+                aria-label="Paste a grin-wallet payment proof JSON file"></textarea>
+      <p class="tx-pf-drophint">…or drop the <code>.json</code> file anywhere on this page.</p>
+      <div class="tx-wc-actions">
+        <button class="tx-btn" id="pf-verify" type="button">Verify</button>
+        <button class="tx-btn tx-wc-btn-ghost" id="pf-clear" type="button">Clear</button>
+        <span class="tx-pf-sent" title="ed25519 verification and the kernel lookup both happen on this server">
+          <b>↑</b> Checked on this server · not logged
+        </span>
+      </div>
+    </div>
+
+    <section id="pf-out" hidden aria-live="polite"></section>
+
+    <details class="tx-details">
+      <summary>What a valid result proves — and what it does not</summary>
+      <div class="tx-details-body">
+        <ul>
+          <li><strong>The amount is attested, never verified.</strong> Grin amounts are
+            confidential: the chain proves a transaction happened, not what it was worth. The
+            amount is true only insofar as <em>both</em> parties signed it, which is why it is
+            marked <em>attested</em> above and never presented as chain data.</li>
+          <li><strong>It is a mutual attestation.</strong> Either signature alone is self-serving —
+            a recipient can sign any amount/kernel/sender triple it likes, and a sender can sign
+            over any kernel already on the chain. The <em>pair</em> is what carries weight, because
+            neither party can produce the other's half.</li>
+          <li><strong>A proof where sender and recipient are the same address passes.</strong> Both
+            checks use the same message, so one key signing twice satisfies both. That is a
+            self-attestation, not a payment — this page flags it rather than hiding it.</li>
+          <li><strong>Nothing binds the sender address to the transaction's inputs.</strong> The
+            proof says “this key claims this kernel”, not “this key funded it”.</li>
+          <li><strong>Mainnet vs testnet is a claim, not evidence.</strong> The
+            <code>grin1…</code>/<code>tgrin1…</code> prefix comes from the exporting wallet and is
+            <em>not covered by either signature</em> — editing it leaves both signatures valid. The
+            kernel lookup is the real network evidence, and this explorer only ever asks
+            <strong>mainnet</strong>.</li>
+          <li><strong>The signature check is done with Node's ed25519, grin-wallet's with
+            ed25519-dalek.</strong> They agree on every honest proof. On a deliberately crafted key
+            or signature — a small-order point, a non-canonical encoding — whether the two libraries
+            agree has not been established here, so treat a hostile file's verdict as this page's
+            answer, not as grin-wallet's.</li>
+        </ul>
+      </div>
+    </details>
+
+    <details class="tx-details">
+      <summary>How to produce one, and what is inside it</summary>
+      <div class="tx-details-body">
+        <ul>
+          <li><strong>The payer asks for it when sending.</strong> A payment proof only exists if the
+            send was addressed to a Slatepack address and the recipient's wallet signed the receipt.
+            Export it afterwards with <code>grin-wallet export_proof --id &lt;tx id&gt; proof.json</code>,
+            and check your own copy with <code>grin-wallet verify_proof proof.json</code>.</li>
+          <li><strong>Six keys, no envelope.</strong> The file is one JSON object:
+            <code>amount</code> (nanogrin), <code>excess</code> (the 33-byte kernel commitment),
+            and an address plus signature for each side. No version field, no timestamp, no
+            transaction id — the kernel excess <em>is</em> the identifier.</li>
+          <li><strong>The signed message is 73 bytes.</strong> The amount as a big-endian
+            <code>u64</code>, then the 33-byte excess, then the payer's 32-byte key — concatenated,
+            with no hashing and no domain separator. Both signatures cover exactly that, which is
+            why re-pointing a proof at a different payer breaks the recipient's signature.</li>
+          <li><strong>The kernel half works on a pruned node.</strong> Kernels are kept in full at
+            every height, unlike block bodies — so “found on chain” here is a reliable answer, not
+            a horizon artefact.</li>
+        </ul>
+      </div>
+    </details>
+
+    <details class="tx-details">
+      <summary>What this page does with your file</summary>
+      <div class="tx-details-body">
+        <ul>
+          <li><strong>It is sent to this server.</strong> Unlike the
+            <a href="/slate">Slate Inspector</a> and the <a href="/wallet-check">Wallet Checker</a>,
+            which never transmit what you paste, this tool posts the proof to
+            <code>/api/proof/verify</code>: the kernel lookup needs the node, and browser ed25519 is
+            not yet dependable enough to rely on.</li>
+          <li><strong>Nothing about it is logged</strong> — not the addresses, the amount, the
+            excess, or the file. It is verified and the response is thrown away.</li>
+          <li><strong>A payment proof is not a secret, but it is private.</strong> It names both
+            parties and an amount. Nothing here puts it in the URL, so it stays out of your browser
+            history and out of any referrer.</li>
+        </ul>
+      </div>
+    </details>
+
+  </main>
+
+  <footer class="tx-footer">
+    <div id="tx-footer-text"></div>
+  </footer>
+
+  <div id="tx-toast" class="tx-toast" role="status" aria-live="polite"></div>
+
+  <script src="/js/tiny-explorer.js"></script>
+  <script src="/js/proof.js"></script>
+  <script src="/js/analytics.js"></script>
+</body>
+</html>

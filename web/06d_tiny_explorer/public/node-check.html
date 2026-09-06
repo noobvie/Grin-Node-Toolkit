@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Grin Node Reachability Checker — Tiny Explorer</title>
+  <meta name="description" content="Check whether your Grin node answers from the public internet: this server POSTs get_tip to /v2/foreign from outside your network and reports reachability, node version, tip height and drift.">
+  <meta name="robots" content="index, follow">
+  <meta name="theme-color" content="#ff8c00">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/css/tiny-explorer.css">
+  <script>(function(){var t=localStorage.getItem('tinyexp-theme');if(t)document.documentElement.setAttribute('data-theme',t);})();</script>
+</head>
+<body data-page="node-check">
+
+  <header class="tx-header">
+    <div class="tx-header-inner">
+      <a href="/" class="tx-brand">
+        <img src="/grin-logo.svg" class="tx-logo" alt="Grin logo">
+        <span class="tx-brand-text">
+          <span class="tx-title">Tiny<span class="tx-accent">Explorer</span></span>
+          <span class="tx-slogan" id="tx-slogan">Every Grin block, one link away.</span>
+        </span>
+      </a>
+      <div class="tx-header-spacer"></div>
+      <form class="tx-search" id="tx-search-form" role="search">
+        <input id="tx-search-input" type="text" placeholder="Height, hash, kernel or output…  ( / )" autocomplete="off" spellcheck="false" aria-label="Search by block height, hash, kernel excess or output commitment">
+        <button class="tx-btn" type="submit">Search</button>
+      </form>
+      <div class="tx-tools" id="tx-tools">
+        <button class="tx-toolbtn tx-tools-btn" id="tx-tools-btn" type="button" aria-haspopup="true" aria-expanded="false" title="Tools">
+          <span class="tx-toolbtn-icon">🧰</span><span class="tx-toolbtn-text">Tools</span><span class="tx-tools-caret" aria-hidden="true">▾</span>
+        </button>
+        <div class="tx-tools-menu" id="tx-tools-menu" role="menu" hidden>
+          <a class="tx-tools-item" href="/slate" role="menuitem">
+            <span class="tx-tools-ico">🔎</span>
+            <span class="tx-tools-txt"><b>Slate Inspector</b><small>Read a slatepack — amount, fee, step</small></span>
+          </a>
+          <a class="tx-tools-item" href="/proof" role="menuitem">
+            <span class="tx-tools-ico">🧾</span>
+            <span class="tx-tools-txt"><b>Payment Proof Verifier</b><small>Check a proof — signatures and kernel</small></span>
+          </a>
+          <a class="tx-tools-item" href="/wallet-check" role="menuitem">
+            <span class="tx-tools-ico">👛</span>
+            <span class="tx-tools-txt"><b>Wallet Checker</b><small>Address checksum, network and .onion</small></span>
+          </a>
+          <a class="tx-tools-item" href="/emission" role="menuitem">
+            <span class="tx-tools-ico">⏱</span>
+            <span class="tx-tools-txt"><b>Emission &amp; Supply</b><small>Verify 1 ツ/sec · height × 60</small></span>
+          </a>
+          <a class="tx-tools-item" href="/node-check" role="menuitem">
+            <span class="tx-tools-ico">📡</span>
+            <span class="tx-tools-txt"><b>Node Reachability Checker</b><small>Is your node reachable from outside?</small></span>
+          </a>
+          <a class="tx-tools-item" href="/mining" role="menuitem">
+            <span class="tx-tools-ico">⛏</span>
+            <span class="tx-tools-txt"><b>Mining Calculator</b><small>Your G/s → GRIN per day</small></span>
+          </a>
+        </div>
+      </div>
+      <button id="tx-theme-toggle" class="tx-theme-toggle" aria-label="Toggle light/dark theme" title="Toggle theme">☾</button>
+    </div>
+  </header>
+
+  <main class="tx-wrap tx-main">
+
+    <div class="tx-emit-hero">
+      <h1>Grin Node Reachability Checker</h1>
+      <p>You opened the port and the node says it is listening — but the only way to know
+        whether <em>the world</em> can reach it is to ask from outside. Enter your host and
+        this server POSTs <code>get_tip</code> to <code>/v2/foreign</code> from where it sits,
+        and tells you exactly what came back.</p>
+    </div>
+
+    <div class="tx-note">
+      <strong>This check is made by this server, not by your browser.</strong> The host you type
+      is sent here, and the request to your node comes from this machine's address — which is the
+      point: a test from your own network would answer a different question. Nothing about the
+      host you enter is written to any log.
+    </div>
+
+    <div class="tx-rows tx-wc-panel">
+      <div class="tx-row-label" style="margin-bottom:8px">Node host</div>
+      <input id="nc-input" class="tx-wc-input" type="text" spellcheck="false" autocomplete="off"
+             autocapitalize="off" autocorrect="off"
+             placeholder="node.example.com  ·  node.example.com:3413  ·  https://api.example.com"
+             aria-label="Enter your Grin node host, with an optional port">
+      <div class="tx-wc-actions">
+        <button class="tx-btn" id="nc-check" type="button">Check</button>
+        <button class="tx-btn tx-wc-btn-ghost" id="nc-clear" type="button">Clear</button>
+        <span class="tx-wc-privacy" title="Port 3413 is the grin mainnet node API; testnet is 13413">
+          <b>●</b> Default port 3413 · one attempt · 5 s
+        </span>
+      </div>
+    </div>
+
+    <section id="nc-out" hidden aria-live="polite"></section>
+
+    <details class="tx-details">
+      <summary>What "reachable" means here — and what it does not</summary>
+      <div class="tx-details-body">
+        <ul>
+          <li><strong>An HTTP 200 proves nothing.</strong> A parked domain, a CDN error page and a
+            router login form all answer 200 on port 443. This tool only calls a node reachable
+            when it POSTs <code>get_tip</code> and gets back an unwrapped
+            <code>{"Ok":{…}}</code> with a real tip height in it — which is also why a plain
+            <code>GET</code> in your browser tells you nothing:
+            <code>/v2/foreign</code> is POST-only JSON-RPC.</li>
+          <li><strong>Peer count and sync state are not knowable from outside.</strong> They live
+            on the Owner API, and a node published for the public exposes <code>/v2/foreign</code>
+            and refuses <code>/v2/owner</code> — as it should. So this page reports them
+            <em>unavailable</em>. It will never print <code>0</code> peers for them: a zero would
+            read as an idle node, when the truth is that the question cannot be asked from here.</li>
+          <li><strong>A refusal and a timeout mean different things.</strong> <em>Refused</em> means
+            the host answered and nothing is listening on that port — usually the node is down or
+            bound to localhost. <em>Timed out</em> means nothing answered at all, which is what a
+            firewall dropping packets looks like.</li>
+          <li><strong>Reachable today is not reachable tomorrow.</strong> This is one probe at one
+            moment, from one address. It says nothing about your peer count, your bandwidth, or
+            whether your host will still route in an hour.</li>
+        </ul>
+      </div>
+    </details>
+
+    <details class="tx-details">
+      <summary>Why private addresses are refused</summary>
+      <div class="tx-details-body">
+        <ul>
+          <li><strong>This server can reach places you cannot.</strong> It sits on a machine with
+            its own loopback and its own LAN. Left open, a checker like this becomes a way to ask
+            it "what is on <code>127.0.0.1:3413</code>?" or "what is on
+            <code>192.168.1.1</code>?" — with the answers relayed back to a stranger. So the host
+            is resolved first, and if the address it resolves to is loopback, RFC1918 private,
+            link-local, carrier-grade NAT or an IPv6 equivalent, the request is never made.</li>
+          <li><strong>The name is not what gets checked — the address is.</strong> Anyone can point
+            a public host name at <code>127.0.0.1</code>; that is a legal DNS record, not a trick.
+            The check therefore runs on what DNS actually returned, and the connection is then made
+            to that same address rather than looking the name up a second time.</li>
+          <li><strong>Checking your node from your own LAN answers a different question.</strong>
+            If your node is at <code>192.168.x.x</code>, what you want to know is whether your
+            router forwards the port — so enter the public host name or IP that should reach it.</li>
+          <li><strong>Redirects are not followed and the reply is size-capped.</strong> One request,
+            one answer, five seconds, no retry.</li>
+        </ul>
+      </div>
+    </details>
+
+    <details class="tx-details">
+      <summary>Running a public Grin node</summary>
+      <div class="tx-details-body">
+        <ul>
+          <li><strong>3414 is the port that matters for the network; 3413 is the one for wallets.</strong>
+            P2P runs on <code>3414</code> (testnet <code>13414</code>) and is how you contribute to
+            the chain. The API on <code>3413</code> (testnet <code>13413</code>) is what a wallet
+            dials — this tool checks the API, because that is the one people publish and the one
+            that breaks quietly.</li>
+          <li><strong>Publish the Foreign API only.</strong> <code>/v2/foreign</code> serves public
+            chain data. <code>/v2/owner</code> manages the node and must never face the internet —
+            if this tool reports your node reachable, check that <code>/v2/owner</code> answers
+            403 from outside too.</li>
+          <li><strong>Behind TLS, use the host name.</strong> A node fronted by nginx on 443 is
+            checked over HTTPS with the certificate verified, exactly as a wallet would.</li>
+        </ul>
+      </div>
+    </details>
+
+  </main>
+
+  <footer class="tx-footer">
+    <div id="tx-footer-text"></div>
+  </footer>
+
+  <div id="tx-toast" class="tx-toast" role="status" aria-live="polite"></div>
+
+  <script src="/js/tiny-explorer.js"></script>
+  <script src="/js/node-check.js"></script>
+  <script src="/js/analytics.js"></script>
+</body>
+</html>

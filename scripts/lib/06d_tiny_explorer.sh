@@ -47,6 +47,42 @@ tinyx_deploy_files() {
     return 0
 }
 
+# ── Restart-onto-new-state helper ─────────────────────────────────────────────
+
+# Anything that rewrites app files or config.json must land on the RUNNING
+# process, and nothing else in this lib does that: server.js is read into memory
+# once at exec, and config.json is JSON.parse'd once at startup and never re-read.
+# `systemctl daemon-reload` does NOT help — it re-reads unit files only.
+#
+# The failure is silent and reads as a broken deploy rather than a stale one: the
+# page shells ARE re-read from disk per request (sendEntityPage), so a new
+# index.html shows its new tool cards at once while the routes behind them exist
+# only in the new server.js and 404 out of the OLD process's catch-all handler.
+# New pages, old router. That is exactly how /proof, /wallet-check, /node-check
+# and /mining shipped dead on an already-running box.
+#
+# No-op (rc 0) when the service is not running — the caller's own Start step will
+# pick the new state up. rc 1 only when a restart was attempted and FAILED, i.e.
+# the box is still serving the old state.
+tinyx_restart_if_running() {
+    local what="${1:-build}"
+    systemctl is-active --quiet "$TINYX_SVC" || return 0
+    info "Service is running — restarting it onto the new ${what}…"
+    if ! systemctl restart "$TINYX_SVC" 2>/dev/null; then
+        warn "Failed to restart ${TINYX_SVC} — it is STILL serving the old ${what}."
+        echo -e "  ${DIM}Fix: systemctl restart ${TINYX_SVC}${RESET}"
+        return 1
+    fi
+    sleep 3
+    if ss -tlnp 2>/dev/null | grep -q ":${TINYX_PORT} "; then
+        success "${TINYX_SVC} restarted — port :${TINYX_PORT} listening."
+    else
+        warn "${TINYX_SVC} restarted but port :${TINYX_PORT} is not listening."
+        echo -e "  ${DIM}Check: journalctl -u ${TINYX_SVC} -n 20${RESET}"
+    fi
+    return 0
+}
+
 # ── Install ───────────────────────────────────────────────────────────────────
 
 tinyx_install() {
@@ -113,8 +149,16 @@ WantedBy=multi-user.target
 UNIT
 
     systemctl daemon-reload
-    success "Tiny Explorer installed."
-    echo -e "  Next: run ${BOLD}Configure (2)${RESET} to write config.json."
+
+    # Re-running Install on a box that is ALREADY serving is the normal way a new
+    # build lands, so the redeploy above must reach the running process.
+    if systemctl is-active --quiet "$TINYX_SVC"; then
+        tinyx_restart_if_running "build" || true
+        success "Tiny Explorer updated — files redeployed and service restarted."
+    else
+        success "Tiny Explorer installed."
+        echo -e "  Next: run ${BOLD}Configure (2)${RESET} to write config.json."
+    fi
     log "tinyx_install complete"
     pause
 }
@@ -274,7 +318,18 @@ JSON
     if declare -F grin_install_secret_sync &>/dev/null; then grin_install_secret_sync || true; fi
 
     echo ""
-    echo -e "  Next: ${BOLD}Service Control (3) → Start${RESET}, then ${BOLD}Setup Nginx (4)${RESET}."
+    # config.json is parsed ONCE at startup, so every value written above is inert
+    # on a live service until it is restarted. The Wallet Checker Tor probe is the
+    # sharp edge: the page decides whether to offer the button from
+    # window.TINYEXP_WALLET_PROBE, injected at render from the value the PROCESS
+    # holds — so an un-restarted box keeps showing tier 1 and the toggle reads as
+    # a control that does nothing.
+    if systemctl is-active --quiet "$TINYX_SVC"; then
+        tinyx_restart_if_running "config" || true
+        echo -e "  Next: ${BOLD}Setup Nginx (4)${RESET} if you have not already."
+    else
+        echo -e "  Next: ${BOLD}Service Control (3) → Start${RESET}, then ${BOLD}Setup Nginx (4)${RESET}."
+    fi
     log "tinyx_configure: ${domain} → ${TINYX_CONFIG}"
     pause
 }
@@ -332,10 +387,35 @@ tinyx_setup_nginx() {
 
     local domain=""
     [[ -f "$TINYX_CONFIG" ]] && domain=$(grep -oE '"domain":[[:space:]]*"[^"]*"' "$TINYX_CONFIG" | head -1 | sed 's/.*"\([^"]*\)"$/\1/')
+    local cfg_domain="$domain"
     echo -ne "  Public domain (e.g. scan.grin.money)${domain:+ [${domain}]}: "; read -r d
     [[ -n "$d" ]] && domain="$d"
     [[ -z "$domain" ]] && { warn "Domain required."; pause; return; }
     if [[ ! "$domain" =~ ^[a-zA-Z0-9]([a-zA-Z0-9._-]*[a-zA-Z0-9])?$ ]]; then warn "Invalid domain."; pause; return; fi
+
+    # The domain lives in TWO places and only ONE of them is prompted here. The
+    # vhost decides which host reaches the app; config.json's domain/base_url are
+    # baked into <title>, the canonical link and every og:/twitter: tag at render
+    # time (injectGlobals). Typing a different host here therefore serves host A
+    # while all seven pages claim host B — which crawlers act on and no visitor
+    # ever sees. Sync it rather than letting the two drift silently.
+    if [[ -n "$cfg_domain" && "$domain" != "$cfg_domain" && -f "$TINYX_CONFIG" ]]; then
+        echo ""
+        warn "config.json still says ${cfg_domain} — page titles, canonical and og: tags would claim that host."
+        echo -ne "  Update config.json to ${domain} and restart the service? [Y/n]: "; read -r sync_ans
+        if [[ "${sync_ans,,}" != "n" ]]; then
+            if sed -i -e "s|\"domain\":[[:space:]]*\"[^\"]*\"|\"domain\":              \"${domain}\"|" \
+                      -e "s|\"base_url\":[[:space:]]*\"[^\"]*\"|\"base_url\":            \"https://${domain}\"|" \
+                      "$TINYX_CONFIG"; then
+                success "config.json domain → ${domain}"
+                tinyx_restart_if_running "domain" || true
+            else
+                warn "Could not update ${TINYX_CONFIG} — edit domain/base_url by hand, or re-run Configure (2)."
+            fi
+        else
+            warn "Left as-is — canonical and og: tags will keep pointing at ${cfg_domain}."
+        fi
+    fi
 
     echo -e "  ${YELLOW}Note:${RESET} pointing this domain here ${BOLD}repoints it from option C (grincoin clone) to D${RESET} if C used it."
 
@@ -489,6 +569,31 @@ tinyx_status() {
     if [[ "$active" == active ]]; then
         local tip; tip=$(curl -s --max-time 4 "http://127.0.0.1:${TINYX_PORT}/api/tip" 2>/dev/null || true)
         [[ -n "$tip" ]] && echo -e "  Tip:      ${CYAN}${tip}${RESET}"
+
+        # Staleness guard. server.js and config.json are read ONCE at exec, so a
+        # process older than the files on disk is serving code the box no longer
+        # has — the exact state in which the tool pages 404 while the homepage
+        # already links to them. Nothing else in this lib can see that, so it has
+        # to be reported here rather than left to be inferred from a 404.
+        # tar preserves mtimes on deploy, so a file's mtime is its checkout time:
+        # newer-than-start means it arrived after this process did.
+        local started_epoch=0 newest_app=0 cfg_epoch=0 raw_started=""
+        raw_started=$(systemctl show -p ActiveEnterTimestamp --value "$TINYX_SVC" 2>/dev/null || true)
+        [[ -n "$raw_started" ]] && started_epoch=$(date -d "$raw_started" +%s 2>/dev/null || echo 0)
+        newest_app=$(find "$TINYX_APP" -path "${TINYX_APP}/node_modules" -prune -o -type f -printf '%T@\n' 2>/dev/null \
+            | sort -n | tail -1 | cut -d. -f1)
+        [[ -f "$TINYX_CONFIG" ]] && cfg_epoch=$(stat -c %Y "$TINYX_CONFIG" 2>/dev/null || echo 0)
+        if [[ "${started_epoch:-0}" -gt 0 ]]; then
+            if [[ "${newest_app:-0}" -gt "$started_epoch" ]]; then
+                echo ""
+                warn "App files are NEWER than the running process — it is serving the old build."
+                echo -e "  ${DIM}New pages/routes will 404 until you run ${BOLD}U) Update${RESET}${DIM} (or: systemctl restart ${TINYX_SVC}).${RESET}"
+            elif [[ "${cfg_epoch:-0}" -gt "$started_epoch" ]]; then
+                echo ""
+                warn "config.json is NEWER than the running process — its settings are not in effect."
+                echo -e "  ${DIM}Restart to apply: systemctl restart ${TINYX_SVC}${RESET}"
+            fi
+        fi
     fi
     echo ""
     pause

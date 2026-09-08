@@ -1,7 +1,7 @@
 # Script 06 — Global Grin Health (design notes)
 
-> **Covers code as of:** 2026-09-06 · **Last verified:** never systematically verified
-> **Product code last changed:** 2026-09-06 — `scripts/06_global_grin_health.sh`, `scripts/lib/06*`, `web/06_stats_map/`, `web/06d_tiny_explorer/`
+> **Covers code as of:** 2026-09-08 · **Last verified:** never systematically verified
+> **Product code last changed:** 2026-09-08 — `web/06d_tiny_explorer/public/` (mining calculator presets); 2026-09-07 — `scripts/lib/06d_tiny_explorer.sh` (deploy/restart lifecycle); 2026-09-06 — `scripts/06_global_grin_health.sh`, `scripts/lib/06*`, `web/06_stats_map/`, `web/06d_tiny_explorer/`
 > 06d has a test suite (`web/06d_tiny_explorer/test/`, 98 assertions), but it tests the code, not this doc.
 
 Only sections that need durable prose live here; the menu/wiring lives in
@@ -754,6 +754,52 @@ line with the `1.2` replaced by an input, plus the `price_usd` already in the pa
 - Label every figure an **estimate at the current difficulty**. Difficulty moves; a
   calculator that reads as a promise is the failure mode.
 
+**Hardware and electricity presets (2026-09-08).** Two `<select>`s were added — a rig picker
+(iPollo G1 / G1 Mini, 11 NVIDIA and 7 AMD GPUs) and an electricity-rate
+picker grouped by region — North America (US ≈ $0.17/kWh, US industrial ≈ $0.08, Canada ≈ $0.13,
+Quebec/Manitoba hydro ≈ $0.06), Europe (Germany ≈ $0.40, EU average ≈ $0.30, Norway/Sweden ≈ $0.12),
+Asia-Pacific (China ≈ $0.08, Australia ≈ $0.25) and a low-cost hosting band (Iceland / Paraguay /
+Kazakhstan hydro ≈ $0.05, or free). Three rules hold them honest:
+
+- **A preset writes into the number field; it is never a second input.** `miningEstimate()`
+  still reads only the visible boxes, so there is no path where the dropdown and the figure
+  below it disagree and the money number follows the invisible one. Typing over a filled-in
+  figure snaps its select back to `Custom`, so the dropdown can never name a rig whose numbers
+  have left the screen.
+- **Every row names where its numbers came from, and a row with no source does not ship.**
+  ASIC rows are the manufacturer's published spec. GPU rows are whattomine's Cuckatoo32 table
+  (`whattomine.com/coins/324-grin-cuckatoo32/gpus`), cited in the hint line under the form —
+  they started as guesses and were replaced wholesale on 2026-09-08, which moved the RTX 4090
+  from an invented 2.2 G/s to a sourced **1.40**, a 57% error that would have overstated a
+  miner's income by the same margin. Two Innosilicon G32 rows were dropped the same day for
+  having no defensible figure at all; `Custom` covers the gap without putting an invented
+  number in front of a miner. **A claim that the cited source contradicts goes too** — the
+  optgroup said Cuckatoo32 needs ≥ 11 GB VRAM, and whattomine lists 6 GB cards, so the claim
+  came out rather than being argued for. The electricity rows are rough regional averages converted
+  to USD, not quotes, and are rounded hard for that reason — the three cheapest hosting
+  countries share **one** `$0.05` row rather than three, because country-level precision is not
+  something this page has. All of them live as
+  `data-gps` / `data-watts` / `data-kwh` attributes on the `<option>`s in `mining.html` — one
+  place to correct, visible in view-source, no JS table to keep in step.
+- **Defaults are now a real setup, not zeros.** The page opens on a G1 at the US average rather
+  than 970 W at $0.00/kWh — a $0 power cost renders as pure profit, which is the one answer a
+  mining calculator must not give by default.
+
+Layout: one field per line (`.tx-mine-row`, a 190px label column) rather than the old
+four-across grid, because the rows now carry a note line each.
+
+**The two basis cards are the page's error surface.** `/api/stats` was fetched as
+`r.ok ? r.json() : null` and then `if (!s) return`, so any failure left *Network hashrate* on
+`loading…` and *GRIN price* on `—` for ever — indistinguishable from a slow network, and silent
+about which half broke. Since 2026-09-08 the rejection path names it (`live stats did not load ·
+HTTP 503`), which separates the three real causes at a glance: **503** is nginx's `tinyx_api`
+limiter (30r/m, `burst=20`), **502** is the handler's own catch-all — `getTip()` is the one
+un-`.catch()`ed call in the `Promise.all`, so an unreachable node fails the entire payload
+including the price — and a bare network error is the browser. `hashrate_gps_24h` and
+`price_usd` are independently soft-null in the payload, so **both cards blank at once is
+evidence about the request, not about the data.** The identical swallow is still in
+`initEmission()`.
+
 ### Tool 2 — Wallet Checker (`/wallet-check`, phase 1 + phase 3)
 
 "Is this `grin1…` wallet listening right now?" A Slatepack address *is* a 32-byte ed25519
@@ -1168,3 +1214,52 @@ default agent is `keepAlive:true` / `maxSockets:Infinity`. Its client verdict ca
   moved across grin versions; it needs `core/src/consensus.rs` read first, and a fee
   calculator that is quietly one version stale is worse than none. Parked, not rejected.
 - **A seventh tool.** The grid is even at 6; the next addition comes in a pair.
+
+## Option D addendum — the deploy is the copy AND the restart (2026-09-07)
+
+**Found on a live box:** the six tool pages 404'd for every visitor while the homepage
+already showed their cards. Not nginx — the vhost has no `root` and no `try_files`, and
+its catch-all `location /` proxies every path to `127.0.0.1:8471`, so it cannot 404
+`/proof`. The app did.
+
+**Why it splits that way, and why it is invisible:** the two halves of a page have
+different lifetimes in this server. Page *shells* are `readFileSync` per request
+(`sendEntityPage`), so a redeployed `index.html` serves its new tool cards on the next
+hit. *Routes* live in `server.js`, read into memory once at exec. `tinyx_install`
+redeployed both and then ran only `systemctl daemon-reload` — which re-reads unit files,
+never the process. Result: new pages, old router, every new link 404 out of the catch-all
+handler. It reads as a broken build rather than a stale one, which is what made it cost a
+debugging session instead of a restart.
+
+`config.json` has the same lifetime as `server.js` — `JSON.parse` once at startup, never
+re-read — so `tinyx_configure` had the identical hole. The sharp edge there is the Wallet
+Checker Tor probe: the page decides whether to offer the button from
+`window.TINYEXP_WALLET_PROBE`, injected at render from the value the *process* holds, so
+turning it on without a restart looks like a toggle that does nothing.
+
+**Fixed, in one helper rather than three copies** — `tinyx_restart_if_running <what>`
+(no-op when the service is down, since the caller's own Start step will pick the new state
+up; rc 1 only when a restart was attempted and failed):
+
+| Path | Before | Now |
+|---|---|---|
+| `1) Install` on a running box | copied files, `daemon-reload`, stopped | restarts, and says *"updated"* rather than *"installed"* |
+| `2) Configure` on a running box | wrote `config.json`, pointed at `Start` | restarts, then points at `Setup Nginx` |
+| `4) Setup Nginx` with a new domain | vhost moved, `config.json` left behind | offers to sync `domain`/`base_url`, then restarts |
+| `6) Status` | could not see the state at all | warns when app files or config are **newer than the running process** |
+
+The Status check is the durable half: it compares the service's `ActiveEnterTimestamp`
+against the newest file under `app/` (excluding `node_modules`) and against `config.json`'s
+mtime. `tar` preserves mtimes on deploy, so a file's mtime is its checkout time — newer
+than the start time means it arrived after the process did. That makes this whole class of
+bug self-announcing for **any** future code change, not just this one.
+
+**Not changed, deliberately:** `4) Setup Nginx` needed no new `location` block for the six
+tools. Every tool route is a page or an `/api/` path, and both are already covered — the
+catch-all and the `/api/` prefix — with the two probe routes carrying their own exact-match
+blocks from the phase-2 work. A tool that needs a *new* nginx rule would be the exception,
+not the rule.
+
+**Same shape, still open elsewhere:** `grinscan_install` in `scripts/lib/06b_grinscan.sh`
+deploys with `cp -r` and ends at `daemon-reload` with no restart, exactly as this did;
+`grinscan_update` restarts. Not touched here — it is a separate product's lifecycle.

@@ -97,27 +97,113 @@
       </div>
     </section>
 
-    <div class="tx-rows" style="padding:16px 18px;display:block">
-      <div class="tx-row-label" style="margin-bottom:8px">Your setup</div>
+    <div class="tx-rows tx-mine-panel">
+      <div class="tx-row-label" style="margin-bottom:10px">Your setup</div>
       <div class="tx-mine-form">
-        <label class="tx-mine-field">
-          <span>Your hashrate <small>(G/s)</small></span>
-          <input id="mine-gps" type="number" min="0" step="any" inputmode="decimal" placeholder="1.2" value="1.2">
-        </label>
-        <label class="tx-mine-field">
-          <span>Pool fee <small>(%)</small></span>
-          <input id="mine-fee" type="number" min="0" max="100" step="any" inputmode="decimal" placeholder="0" value="0">
-        </label>
-        <label class="tx-mine-field">
-          <span>Power draw <small>(W)</small></span>
-          <input id="mine-watt" type="number" min="0" step="any" inputmode="decimal" placeholder="0" value="0">
-        </label>
-        <label class="tx-mine-field">
-          <span>Electricity <small>(USD / kWh)</small></span>
-          <input id="mine-kwh" type="number" min="0" step="any" inputmode="decimal" placeholder="0.00" value="0">
-        </label>
+
+        <div class="tx-mine-row">
+          <label class="tx-mine-label" for="mine-rig">Mining hardware</label>
+          <div class="tx-mine-control">
+            <select id="mine-rig" class="tx-mine-select">
+              <optgroup label="ASIC — manufacturer specification">
+                <option value="ipollo-g1" data-gps="1.2" data-watts="970">iPollo G1 — 1.20 G/s · 970 W</option>
+                <option value="ipollo-g1-mini" data-gps="0.3" data-watts="240">iPollo G1 Mini — 0.30 G/s · 240 W</option>
+              </optgroup>
+              <optgroup label="GPU · NVIDIA — whattomine Cuckatoo32 table">
+                <option value="rtx-4090" data-gps="1.40" data-watts="260">NVIDIA RTX 4090 — 1.40 G/s · 260 W</option>
+                <option value="rtx-4080" data-gps="1.40" data-watts="260">NVIDIA RTX 4080 — 1.40 G/s · 260 W</option>
+                <option value="rtx-3090-ti" data-gps="1.30" data-watts="380">NVIDIA RTX 3090 Ti — 1.30 G/s · 380 W</option>
+                <option value="rtx-3080-ti" data-gps="1.15" data-watts="280">NVIDIA RTX 3080 Ti — 1.15 G/s · 280 W</option>
+                <option value="rtx-5080" data-gps="1.10" data-watts="220">NVIDIA RTX 5080 — 1.10 G/s · 220 W</option>
+                <option value="rtx-4070-ti" data-gps="1.10" data-watts="200">NVIDIA RTX 4070 Ti — 1.10 G/s · 200 W</option>
+                <option value="rtx-3090" data-gps="1.05" data-watts="290">NVIDIA RTX 3090 — 1.05 G/s · 290 W</option>
+                <option value="rtx-3080" data-gps="0.90" data-watts="250">NVIDIA RTX 3080 — 0.90 G/s · 250 W</option>
+                <option value="rtx-3070" data-gps="0.70" data-watts="180">NVIDIA RTX 3070 — 0.70 G/s · 180 W</option>
+                <option value="rtx-2080-ti" data-gps="0.68" data-watts="220">NVIDIA RTX 2080 Ti — 0.68 G/s · 220 W</option>
+                <option value="gtx-1080-ti" data-gps="0.46" data-watts="190">NVIDIA GTX 1080 Ti — 0.46 G/s · 190 W</option>
+              </optgroup>
+              <optgroup label="GPU · AMD — whattomine Cuckatoo32 table">
+                <option value="rx-7900-xtx" data-gps="1.80" data-watts="350">AMD RX 7900 XTX — 1.80 G/s · 350 W</option>
+                <option value="rx-7900-xt" data-gps="1.40" data-watts="320">AMD RX 7900 XT — 1.40 G/s · 320 W</option>
+                <option value="rx-7800-xt" data-gps="0.90" data-watts="180">AMD RX 7800 XT — 0.90 G/s · 180 W</option>
+                <option value="rx-6900-xt" data-gps="0.90" data-watts="160">AMD RX 6900 XT — 0.90 G/s · 160 W</option>
+                <option value="rx-6800-xt" data-gps="0.90" data-watts="150">AMD RX 6800 XT — 0.90 G/s · 150 W</option>
+                <option value="radeon-vii" data-gps="0.70" data-watts="200">AMD Radeon VII — 0.70 G/s · 200 W</option>
+                <option value="rx-6700-xt" data-gps="0.40" data-watts="120">AMD RX 6700 XT — 0.40 G/s · 120 W</option>
+              </optgroup>
+              <option value="custom">Custom — enter your own figures</option>
+            </select>
+            <p class="tx-mine-note" id="mine-rig-note">Picking one fills in the hashrate and power draw below.</p>
+          </div>
+        </div>
+
+        <div class="tx-mine-row">
+          <label class="tx-mine-label" for="mine-gps">Your hashrate <small>(G/s)</small></label>
+          <div class="tx-mine-control">
+            <input id="mine-gps" type="number" min="0" step="any" inputmode="decimal" placeholder="1.2" value="1.2">
+            <p class="tx-mine-note">Graphs per second, as your miner reports it. Running several rigs? Enter their total.</p>
+          </div>
+        </div>
+
+        <div class="tx-mine-row">
+          <label class="tx-mine-label" for="mine-fee">Pool fee <small>(%)</small></label>
+          <div class="tx-mine-control">
+            <input id="mine-fee" type="number" min="0" max="100" step="any" inputmode="decimal" placeholder="0" value="0">
+            <p class="tx-mine-note">Solo miners leave this at 0.</p>
+          </div>
+        </div>
+
+        <div class="tx-mine-row">
+          <label class="tx-mine-label" for="mine-watt">Power draw <small>(W)</small></label>
+          <div class="tx-mine-control">
+            <input id="mine-watt" type="number" min="0" step="any" inputmode="decimal" placeholder="0" value="970">
+            <p class="tx-mine-note">At the wall, for everything you are counting. 0 shows gross income only.</p>
+          </div>
+        </div>
+
+        <div class="tx-mine-row">
+          <label class="tx-mine-label" for="mine-kwh-preset">Electricity rate</label>
+          <div class="tx-mine-control">
+            <select id="mine-kwh-preset" class="tx-mine-select">
+              <optgroup label="North America">
+                <option value="us" data-kwh="0.17">United States — ≈ $0.17 / kWh</option>
+                <option value="us-industrial" data-kwh="0.08">United States · industrial or hosted — ≈ $0.08 / kWh</option>
+                <option value="ca" data-kwh="0.13">Canada — ≈ $0.13 / kWh</option>
+                <option value="ca-hydro" data-kwh="0.06">Canada · Quebec / Manitoba hydro — ≈ $0.06 / kWh</option>
+              </optgroup>
+              <optgroup label="Europe">
+                <option value="de" data-kwh="0.40">Germany — ≈ $0.40 / kWh</option>
+                <option value="eu" data-kwh="0.30">European Union average — ≈ $0.30 / kWh</option>
+                <option value="nordic" data-kwh="0.12">Norway / Sweden — ≈ $0.12 / kWh</option>
+              </optgroup>
+              <optgroup label="Asia-Pacific">
+                <option value="cn" data-kwh="0.08">China — ≈ $0.08 / kWh</option>
+                <option value="au" data-kwh="0.25">Australia — ≈ $0.25 / kWh</option>
+              </optgroup>
+              <optgroup label="Low-cost hosting">
+                <option value="hydro" data-kwh="0.05">Iceland / Paraguay / Kazakhstan hydro — ≈ $0.05 / kWh</option>
+                <option value="free" data-kwh="0">Free — own solar, or included in rent</option>
+              </optgroup>
+              <option value="custom">Custom — enter your own rate</option>
+            </select>
+            <p class="tx-mine-note" id="mine-kwh-note">Rough regional averages converted to USD, not quotes. Your own bill is the number that matters.</p>
+          </div>
+        </div>
+
+        <div class="tx-mine-row">
+          <label class="tx-mine-label" for="mine-kwh">Electricity <small>(USD / kWh)</small></label>
+          <div class="tx-mine-control">
+            <input id="mine-kwh" type="number" min="0" step="any" inputmode="decimal" placeholder="0.00" value="0.17">
+            <p class="tx-mine-note">The all-in rate off your bill — energy plus delivery, after tax.</p>
+          </div>
+        </div>
+
       </div>
-      <p class="tx-mine-hint">Leave power and electricity at zero to see gross mining income only.</p>
+      <p class="tx-mine-hint">Hardware figures are the manufacturer's specification for the ASICs
+        and <a href="https://whattomine.com/coins/324-grin-cuckatoo32/gpus" rel="noopener nofollow"
+        target="_blank">whattomine's Cuckatoo32 table</a> for the GPUs — both are starting points, so
+        edit any field to match what your own miner reports. Set power draw and electricity to 0 to
+        see gross mining income only.</p>
     </div>
 
     <section class="tx-emit-grid" aria-label="Estimated earnings">

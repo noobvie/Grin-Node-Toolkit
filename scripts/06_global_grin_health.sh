@@ -1928,7 +1928,10 @@ show_menu_a() {
     crontab -l 2>/dev/null | grep -q "grin_stats_update"           && cron="${GREEN}active${RESET}"
     crontab -l 2>/dev/null | grep -q "grin_ecosystem_update"       && eco_cron="${GREEN}active${RESET}"
     [[ -f "$NGINX_STATS_CONF" ]]                                   && ngnx="${GREEN}✓ configured${RESET}"
-    local _ga_id; _ga_id=$(grep -E "^GA_MEASUREMENT_ID=" "$DATA_DIR/config.env" 2>/dev/null | cut -d= -f2-)
+    local _ga_id=""
+    # pipefail: grep exits 1 (no match) / 2 (no config.env) and would kill the
+    # script under set -e — this renderer is called bare, with errexit live.
+    _ga_id=$(grep -E "^GA_MEASUREMENT_ID=" "$DATA_DIR/config.env" 2>/dev/null | cut -d= -f2-) || true
     [[ -n "$_ga_id" ]] && ga_lbl="${GREEN}${_ga_id}${RESET}"
 
     echo -e "  ${GREEN}1${RESET})   Install          ${DIM}collector + ecosystem checker + Chart.js + Leaflet${RESET}   [$inst]"
@@ -2188,12 +2191,12 @@ run_interactive() {
         show_main_menu
         read -r choice
         case "${choice^^}" in
-            N) install_nginx_certbot ;;
-            A) run_menu_a            ;;
-            B) run_menu_b            ;;
-            C) run_menu_c            ;;
-            D) run_menu_d            ;;
-            0) break                 ;;
+            N) install_nginx_certbot || true ;;
+            A) run_menu_a            || true ;;
+            B) run_menu_b            || true ;;
+            C) run_menu_c            || true ;;
+            D) run_menu_d            || true ;;
+            0) break                         ;;
             *) warn "Invalid option."; sleep 1 ;;
         esac
     done

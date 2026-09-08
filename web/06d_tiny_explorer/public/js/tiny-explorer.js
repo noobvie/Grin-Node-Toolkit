@@ -854,6 +854,8 @@ function initMining() {
   const ids = ['mine-gps', 'mine-fee', 'mine-watt', 'mine-kwh'];
   const el  = {};
   ids.forEach(id => { el[id] = document.getElementById(id); });
+  const rigSel = document.getElementById('mine-rig');
+  const kwhSel = document.getElementById('mine-kwh-preset');
   let netGps = null, priceUsd = null;
 
   function render() {
@@ -882,25 +884,100 @@ function initMining() {
       : (priceUsd == null ? 'price unavailable' : 'at the live price'));
   }
 
-  ids.forEach(id => { if (el[id]) el[id].addEventListener('input', render); });
+  // The presets WRITE INTO the number fields rather than feeding the maths
+  // themselves, so the visible figures stay the only input miningEstimate ever
+  // reads — a dropdown that quietly disagreed with the box below it would be a
+  // money figure nobody can audit. Everything below is note text and plumbing.
+  const rigName = () => {
+    const o = rigSel && rigSel.options[rigSel.selectedIndex];
+    return o ? o.text.split(' — ')[0] : '';
+  };
+  function rigNote() {
+    if (!rigSel) return;
+    setText('mine-rig-note', rigSel.value === 'custom'
+      ? 'Custom — fill in the hashrate and power draw yourself.'
+      : rigName() + ' figures filled in below. Edit either one if yours differs, or if you run more than one.');
+  }
+  function kwhNote() {
+    if (!kwhSel) return;
+    setText('mine-kwh-note', kwhSel.value === 'custom'
+      ? 'Custom — take the rate off your own bill.'
+      : 'A rough regional average converted to USD, not a quote — your own bill is the number that matters.');
+  }
+
+  if (rigSel) {
+    rigSel.addEventListener('change', () => {
+      const o = rigSel.options[rigSel.selectedIndex];
+      if (o && rigSel.value !== 'custom') {
+        if (el['mine-gps']  && o.dataset.gps   != null) el['mine-gps'].value  = o.dataset.gps;
+        if (el['mine-watt'] && o.dataset.watts != null) el['mine-watt'].value = o.dataset.watts;
+      }
+      rigNote();
+      render();
+    });
+  }
+  if (kwhSel) {
+    kwhSel.addEventListener('change', () => {
+      const o = kwhSel.options[kwhSel.selectedIndex];
+      if (o && kwhSel.value !== 'custom' && el['mine-kwh'] && o.dataset.kwh != null) {
+        el['mine-kwh'].value = o.dataset.kwh;
+      }
+      kwhNote();
+      render();
+    });
+  }
+
+  // Typing over a filled-in figure drops its select back to Custom, so the
+  // dropdown can never name a rig or a region whose numbers are no longer on
+  // screen. Assigning .value from the handlers above fires no `input` event,
+  // so this cannot loop back on itself.
+  ids.forEach(id => {
+    if (!el[id]) return;
+    el[id].addEventListener('input', () => {
+      if ((id === 'mine-gps' || id === 'mine-watt') && rigSel && rigSel.value !== 'custom') {
+        rigSel.value = 'custom'; rigNote();
+      }
+      if (id === 'mine-kwh' && kwhSel && kwhSel.value !== 'custom') {
+        kwhSel.value = 'custom'; kwhNote();
+      }
+      render();
+    });
+  });
+
+  rigNote();
+  kwhNote();
   render();
 
   // ONE call. hashrate_gps_24h is the day-average basis the server already uses
   // for its own G1/day figure; hashrate_gps (the ~20-block instantaneous rate)
   // is the documented fallback when the day-average could not be computed.
-  fetch('/api/stats').then(r => r.ok ? r.json() : null).then(s => {
-    if (!s) return;
-    const daily = posNum(s.hashrate_gps_24h);
-    const inst  = posNum(s.hashrate_gps);
-    netGps   = daily || inst || null;
-    priceUsd = posNum(s.price_usd) || null;
-    setText('mine-net', netGps != null ? fmtHashrate(netGps) : 'unavailable');
-    setText('mine-net-sub', netGps == null ? 'cannot estimate without it'
-      : daily ? '24h average' : 'recent blocks · 24h average unavailable');
-    setText('mine-price', priceUsd != null ? fmtUsdPrice(priceUsd) : 'unavailable');
-    setText('mine-price-sub', priceUsd != null ? 'live, USD' : 'USD figures unavailable');
-    render();
-  }).catch(() => { render(); });
+  fetch('/api/stats')
+    .then(r => r.ok ? r.json() : Promise.reject(new Error('HTTP ' + r.status)))
+    .then(s => {
+      const daily = posNum(s.hashrate_gps_24h);
+      const inst  = posNum(s.hashrate_gps);
+      netGps   = daily || inst || null;
+      priceUsd = posNum(s.price_usd) || null;
+      setText('mine-net', netGps != null ? fmtHashrate(netGps) : 'unavailable');
+      setText('mine-net-sub', netGps == null ? 'cannot estimate without it'
+        : daily ? '24h average' : 'recent blocks · 24h average unavailable');
+      setText('mine-price', priceUsd != null ? fmtUsdPrice(priceUsd) : 'unavailable');
+      setText('mine-price-sub', priceUsd != null ? 'live, USD' : 'USD figures unavailable');
+      render();
+    })
+    .catch(err => {
+      // These two cards ARE this page's error surface. Swallowing the failure
+      // left them reading "—" and "loading…" for ever, which is indistinguishable
+      // from a slow network and says nothing about WHICH half broke — the reason
+      // a dead /api/stats (nginx 503 from the tinyx_api limiter, a 502 when the
+      // node is unreachable, an offline browser) could not be told apart from a
+      // rendering bug. Name the failure and let the estimates fall to —.
+      setText('mine-net', 'unavailable');
+      setText('mine-net-sub', 'live stats did not load · ' + (err && err.message ? err.message : 'network error'));
+      setText('mine-price', 'unavailable');
+      setText('mine-price-sub', 'USD figures unavailable');
+      render();
+    });
 }
 
 // ── Init ─────────────────────────────────────────────────────────────────────────

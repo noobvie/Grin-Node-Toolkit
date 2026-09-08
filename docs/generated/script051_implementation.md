@@ -1,5 +1,9 @@
 # Script 051 — Fidelius: Grin Transporter integration
 
+> **Covers code as of:** 2026-08-06 (the doc states "built 2026-08-06") · **Last verified:** never systematically verified
+> **Product code last changed:** 2026-08-17 — `scripts/051*_*.sh`, `web/051_fidelius/`, `web/051_xp_wallet/`
+> The doc's "121 assertions, all passing" is a test of the *code*, not a check of this document.
+
 **Status:** built 2026-08-06, **NOT VPS-tested.** Verified locally against a live
 Transporter (121 assertions, all passing) with a stubbed wallet.
 **Depends on:** Script 093 Grin Transporter ≥ v0.2.1.

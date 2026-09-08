@@ -1,5 +1,8 @@
 # Script 07 — Public Mining Pool (Security Audit)
 
+> **Covers code as of:** 2026-09-06 · **Last verified:** never verified as a whole — individual findings carry their own dates in the Status roll-up. One scoped exception: **2026-09-07, PARTIAL — §B's two satellite claims only**, read against the code (`requireSatellite` exists nowhere in `back-end-pool/`; `validateConfig()` in `lib/config.js` throws on a missing `jwt_secret` unconditionally, with no role gate). Nothing else in §B, and no §J finding, was re-checked.
+> **Product code last changed:** 2026-09-04 — `scripts/07_grin_mining_*.sh`, `scripts/lib/07_lib_*.sh`, `web/07_mining_pool_public/`
+
 Security model, verified upload/XSS fixes, and the hardening requirements for
 `web/07_mining_pool_public/`. Design: [`script07_design.md`](script07_design.md);
 deploy/runbook: [`script07_implementation.md`](script07_implementation.md).
@@ -47,6 +50,17 @@ applies: none of this has ever been VPS-tested.
 | J16 | Deployment & infra | 2026-09-03 | 14 (1 High, 3 Med, 7 Low, 3 Info) · **9 fixed, 2 open**; J16-2 (hostile gateway holds both ownership-proof legs) and J16-4 (three disconnected admin allowlists) are dispositions for the operator. §J8-1 items 1+3 applied, **item 2 refused with reason (J16-12)** | ☑ done |
 | J17 | Pre-mainnet operational gate | 2026-09-04 | 8 (2 High, 3 Med, 1 Low, 2 Info) · **7 fixed, 1 open** (J17-5, procedure). **VERDICT: NO-GO on desk audit**, then a resolution pass closed 10 findings across §J1/§J4/§J7/§J8/§J9/§J13/§J17 — including all three single-box High blockers. No code blocker remains; what is left is the runbook on a real box | ☑ done |
 
+**Reading the §J record — the retired "satellite" role.** §J and the pre-§J sections mention a
+**satellite** role. It does not exist: it was deleted from the code on 2026-06-22 (`f2ebade`),
+along with `scripts/lib/07_lib_satellite.sh`, `back-end-pool/satellite.js` and
+`lib/share-relay.js`. A region is now a **thin stratum gateway** — HAProxy + WireGuard forwarding
+raw stratum with the miner IP in PROXY-protocol v2; it is not a pool-app role and it exposes **no
+HTTP ingestion API**, so there is no `requireSatellite` allowlist and nothing a gateway does
+reaches the HTTP rate limiter (§J1 route matrix, §J12-, §J16). Those mentions are left as written
+because §J is a dated evidence log — a finding records what was true when its session ran, and
+rewriting one falsifies the record. The only place the term was live guidance rather than history
+was §B, and it is corrected there.
+
 ---
 
 ## Trust model
@@ -91,17 +105,23 @@ alert thresholds. `:key` is validated against the fixed `pages` allowlist; `page
 > **Implemented 2026-06-08 (verified in code):**
 > - **`trust proxy` + `req.ip`** — `index.js` sets `app.set('trust proxy', 'loopback')`; the
 >   spoofable raw-`x-forwarded-for` reads in `rate-limiter.js`/`ip-filter.js` `getClientIp()` now
->   use `req.ip`. This also makes the satellite ingestion allowlist (`requireSatellite`) compare the
->   real satellite IP instead of nginx's loopback.
+>   use `req.ip`, so a client IP behind the loopback nginx proxy is read from the trusted hop
+>   rather than from an attacker-settable header. *(This entry originally also credited a
+>   `requireSatellite` ingestion allowlist. There is no such middleware — the satellite role and its
+>   HTTP ingestion API were removed on 2026-06-22; regional gateways forward **stratum**, never HTTP,
+>   so nothing a gateway does reaches this limiter. See §J12 and §J16.)*
 > - **bcrypt ≥ 12** — `auth.js` `bcryptRounds` default 12 (was 10).
 > - **Account lockout** — `users.failed_login_attempts` + `locked_until`; `login()` locks for 15 min
 >   after 5 failures and clears on success (additive `migrateUsers()` for existing DBs).
 > - **Refresh-token revocation** — `users.token_version`; refresh **rotates** (bumps the version so the
 >   presented refresh token can't be replayed), and logout/password-change call `revokeUserTokens()`.
 > - **`jwt_secret` fail-loud** — `config.js` no longer auto-generates at boot; `validateConfig()` throws
->   if it is missing/&lt;32 chars. **Role-gated:** the check is skipped for `role: satellite` (satellites
->   have no web/admin/auth and carry no jwt_secret), so satellite boot is unaffected. Installer still
->   writes it once for hub/singlebox (`07_grin_mining_public_pool.sh`).
+>   if it is missing/&lt;32 chars. **Not role-gated:** the only remaining roles are `singlebox` and
+>   `hub` and both serve the admin auth surface, so the check is unconditional
+>   ([`lib/config.js`](../../web/07_mining_pool_public/back-end-pool/lib/config.js) `validateConfig`).
+>   *(It was originally skipped for `role: satellite`; that role was removed on 2026-06-22 and the
+>   skip went with it.)* Installer still writes the secret once
+>   (`07_grin_mining_public_pool.sh`).
 > - **escHtml on public sinks** — `miners-stats.html` (grin_address) and `payment-history.html`
 >   (tx_hash/status) now escape; `fortune-board.html` already escaped. Defense-in-depth atop the
 >   stratum-layer bech32 address regex (`stratum-protocol.js`).
@@ -7493,6 +7513,10 @@ above it are indistinguishable from every other working settings form in the pan
 
 Doing neither is the worst of the three: the pool stores a credential, hands it to any admin
 session, backs it up, and gets nothing for it.
+
+> **Later outcome (added 2026-09-07, not part of the original finding).** The resolution pass took
+> the delete option: `settings-alerts.html` no longer exists, so the link above is to a deleted
+> file — see **§J8-3** below for what was removed and why. The riders were never exercised.
 
 **Two riders if the wiring option is chosen.** (a) There is **no validator** for
 `discord_webhook_url` / `slack_webhook_url` / `telegram_bot_token` — the `alerts` validator block

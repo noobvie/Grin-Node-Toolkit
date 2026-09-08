@@ -2,6 +2,10 @@
 ║           04_grin_node_foreign_api.sh  —  REFERENCE & FLOWCHART          ║
 ╚══════════════════════════════════════════════════════════════════════════╝
 
+
+> **Covers code as of:** 2026-05-24 · **Last verified:** never systematically verified
+> **Product code last changed:** 2026-07-19 — `scripts/04_grin_node_foreign_api.sh`, `web/04_node_api/`
+
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   PORTS & SERVICES
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

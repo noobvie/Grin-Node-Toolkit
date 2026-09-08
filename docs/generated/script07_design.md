@@ -1,17 +1,13 @@
 # Script 07 — Public Mining Pool (Design)
 
-> ⚠ **SUPERSEDED — multi-region (§3–4) was re-architected to Model C (2026-06).**
-> The satellite/relay "node + stratum proxy + share relay per region" design described in
-> §3, §4, and §11 below is **removed**. Regions are now **thin stratum gateways** (HAProxy +
-> WireGuard) that forward miner stratum to ONE central node + wallet — no edge node/wallet, no
-> `/api/shares` ingestion API, no `hub_shared_secret`. **Authoritative Model C design:**
-> the Model C appendix of [`script07_implementation.md`](script07_implementation.md)
-> and the "Multi-region — Model C" section of `.claude/CLAUDE.md`. The rest of this doc (database,
-> API, reward pipeline, payments, white-label, UI) is still current.
+> **Covers code as of:** 2026-09-07 for the multi-region surface (§2–§7, §11–§12, rewritten against the live code) · 2026-06-08 for the rest of the §6 endpoint table
+> **Last verified:** 2026-09-07, PARTIAL — **the multi-region surface only**, read against the code: the mode selector + `pool_mode_conflict_check` in `scripts/07_grin_mining_public_pool.sh`, `role`/`region`/`region_ports` in `back-end-pool/lib/config.js`, listener-port region stamping in `lib/stratum-server.js`, `shares.region` + `pool_locations` + `pool_region_metrics_hourly` in `lib/db.js`, the ingestion/health/region routes in `index.js`, and the WireGuard + region-port derivation in `scripts/lib/07_lib_gwctl.sh`. Everything outside that surface — the rest of §6, and §7–§10, §13–§15 — still rests on the 2026-06-08 pass (account + payout routes re-verified 2026-07-13) and was **not** re-checked, with one line-scoped exception: the admin-surface note in the §6 not-built list was corrected 2026-09-07 against `back-end-pool/admin-panel/` and `admin-shell.js`.
+> **Product code last changed:** 2026-09-04 — `scripts/07_grin_mining_*.sh`, `scripts/lib/07_lib_*.sh`, `web/07_mining_pool_public/`
+> Prose last edited 2026-09-07.
 
 **Product:** `scripts/07_grin_mining_public_pool.sh` + web app under `web/07_mining_pool_public/`.
 **Scope:** the complete public-pool design — architecture, deployment modes, multi-region
-federation, database, API, reward pipeline, payments, white-label, and UI/UX.
+(Model C gateways), database, API, reward pipeline, payments, white-label, and UI/UX.
 
 > **Companion docs (max-3 convention):**
 > [`script07_implementation.md`](script07_implementation.md) — deploy, runbook, status, troubleshooting ·
@@ -72,7 +68,7 @@ stack is:
 │   orphan-detector · hashrate-tracker · wallet · wallet-tor    │
 │   withdrawal-scheduler · pool-settings · rate-limiter         │
 │   ip-filter · alert-monitor/-delivery · asset-manager         │
-│   incentives · lottery · retention · share-relay              │
+│   incentives · lottery · retention · reconciliation           │
 └───────────────────────────────┬──────────────────────────────┘
                                  ▼
 ┌──────────────────────────────────────────────────────────────┐
@@ -111,86 +107,121 @@ writes a `withdrawal_events` row.
 
 ---
 
-## 3. Deployment modes (hub-and-spoke) — ⚠ SUPERSEDED by Model C
-> The `satellite` role below was removed. Roles are now `singlebox | hub` (app) plus a thin
-> `gateway` (HAProxy+WireGuard, no app). See the Model C plan + CLAUDE.md.
+## 3. Deployment modes
 
-Script 07 has a **mode selector** (may be passed non-interactively as `$1`):
+Script 07 has a **mode selector**. Two modes are offered on the menu; a third is arg-only.
+A mode may also be passed non-interactively as `$1` (`singlebox` | `hub` | `gateway`).
 
 ```
-Script 07 ─ install mode:
-  1) Single-box pool   (Hub + local Satellite on one server — original behaviour)
-  2) Central Hub       (brain only; remote satellites relay in)
-  3) Satellite         (regional node + proxy + relay → points at a Hub)
+Public Mining Pool Deployment Mode — <network>
+  1) Pool server      The pool itself — runs everything. Start here.
+                      Serves local miners as region "main"; accepts regional
+                      gateways from other zones later — no rebuild.
+  2) Regional gateway A thin stratum forwarder on ANOTHER box: no node,
+                      no wallet — tunnels miners to your pool server.
+  Z) Cleanup public pool        0) Back to mining hub
 ```
 
-| Mode | Deploys | Library | Config file |
-|---|---|---|---|
-| **singlebox** | Everything on one box (Hub + co-located Satellite) | core `pool_*` fns | `grin_pubpool.json` |
-| **hub** | Central API (sole DB writer) + SQLite/WAL + schema + retention + web dashboard + admin + wallet (Tor payouts) + nginx | `scripts/lib/07_lib_hub.sh` | `grin_pubpool.json` |
-| **satellite** | Regional node + stratum proxy + share relay — **no** web/admin/DB/wallet | `scripts/lib/07_lib_satellite.sh` | `grin_satellite.json` |
+| Mode | Arg | Deploys | Library | Config file |
+|---|---|---|---|---|
+| **Pool server** | `singlebox` | Everything on one box: Central API (sole DB writer) + SQLite/WAL + schema + retention + web dashboard + admin + wallet (Tor/Slatepack payouts) + nginx + the **public** stratum listener | core `pool_*` fns (`pool_singlebox_loop`) | `grin_pubpool.json` · testnet `grin_pubpool_testnet.json` |
+| **Regional gateway** | `gateway` | HAProxy (`mode tcp`) + WireGuard **only** — no Node process, no node, no wallet, no DB, no keys | `scripts/lib/07_lib_gateway.sh` | `grin_gateway.json` |
+| **Central Hub** *(arg-only)* | `hub` | The same brain, without a local public stratum — all mining arrives via gateways | `scripts/lib/07_lib_hub.sh` | `grin_pubpool.json` |
 
-`config.js` selects mode via the `role` key (`singlebox` | `hub` | `satellite`).
+`config.js` selects the app role via the `role` key — **`singlebox` | `hub`, and nothing else.**
+A **regional gateway is not an app role**: it runs no Node process, so it never reads `role`.
+`pool_mode_conflict_check` refuses to put a pool server/hub and a gateway on the same box —
+both want stratum `:3333`, so it is one mining role per box.
+
+WireGuard peers and the central `region_ports` map are mutated through exactly one path,
+`grin-gateway-ctl` (`scripts/lib/07_lib_gwctl.sh`), shared by the CLI (`W` menu) and the admin
+panel so the two can never drift apart. See §13 for that pairing flow.
 
 ---
 
-## 4. Multi-region — why SQLite stays, and how shares federate — ⚠ SUPERSEDED by Model C
-> Shares no longer "federate" over HTTP. Gateways forward raw stratum over WireGuard to a
-> per-region central listener port; the central box records every share directly (still
-> single-writer SQLite). The `/api/shares` + `/api/blocks` transport below is removed.
-> The SQLite-single-writer rationale still holds. See the Model C plan + CLAUDE.md.
+## 4. Multi-region — why SQLite stays, and how regions attach
+
+> This section is the **why**. The as-built account — bring-up order, scenario matrix, smoke
+> tests — is §8 "Multi-region (Model C) — as built" of
+> [`script07_implementation.md`](script07_implementation.md).
+> **Multi-region is optional and most pools never need it:** one pool box already serves every
+> miner on `:3333` as region `main`. Add a gateway only to cut latency for miners on another
+> continent.
 
 ### Single-writer by design
-Trace every arrow that reaches the DB: there is exactly **one** — `Central API → DB`. Satellites,
-nodes, stratum servers, and relays never open the database. Three regions ingest shares, but all
-paths converge on **one Central API process**, and only that process writes.
+Trace every arrow that reaches the DB: there is exactly **one** — the central pool process → DB.
+Gateways, nodes and stratum listeners never open the database. Several regions can feed shares in,
+but every path converges on **one process**, and only that process writes.
 
 ```
-Satellite (Asia)   ─ relay ─ HTTPS POST /api/shares ─┐
-Satellite (USA)    ─ relay ─ HTTPS POST /api/shares ─┼─▶ Central API ──▶ SQLite (WAL)
-Hub-local stratum  ─ in-process ─────────────────────┘   (single writer)        ▲
-                                                                                 │
-                                                  Dashboard ── reads ────────────┘
+Miners (Asia) ─▶ Asia Gateway ─┐  WireGuard: raw stratum + PROXY-v2
+Miners (US)   ─▶ US Gateway   ─┼─▶ region listeners 10.66.66.1:3391, :3392 … ─┐
+                               │                                              ├─▶ pool process ──▶ SQLite (WAL)
+Miners (local) ── stratum :3333 ──▶ public listener ───────────────────────────┘    (single writer)        ▲
+                                                                                                           │
+                                                                       Dashboard ── reads ─────────────────┘
 ```
 
-"Concurrent writes from 3 regions" is **connection** concurrency at the HTTP layer (Node's event
-loop), not **database-writer** concurrency. The Central API accepts concurrent POSTs, then batches
-each interval's shares into one transaction. SQLite WAL gives one writer + unlimited concurrent
+"Concurrent load from 3 regions" is **connection** concurrency at the TCP/HTTP layer (Node's event
+loop), not **database-writer** concurrency. SQLite WAL gives one writer + unlimited concurrent
 readers, 100k+ batched inserts/sec (vs ~100 shares/sec for a 1,000-miner pool), and single-file
-backup. **Adding a satellite is a new HTTP client, not a new DB writer — so SQLite keeps fitting.**
+backup.
 
-**Migrate to PostgreSQL only if the hub topology changes** so the DB stops having a single writer:
-Central API goes multi-process/replicated behind an LB; the DB moves onto a separate box (SQLite has
-no network protocol — NFS/SMB breaks its locking); sustained >10k durable shares/sec; hot relational
-data >~20–50 GB; or you need multi-master/hot-standby. **Never MariaDB.**
+**That argument survived the Model C refactor — and got stronger, so it is kept here, not merely
+inherited.** Its pre-2026-06 form was *"adding a satellite is a new HTTP client, not a new DB
+writer."* Under Model C a region is not even a new client: it is **a new TCP listener inside the
+same process**, bound to the WireGuard interface. The old form leaned on a *discipline* (a relay
+must POST and never touch the DB file) that a future contributor could break; the new one is
+*structural* — a gateway ships no code that could open a database, because it ships no Node at
+all. The conclusion is unchanged and now harder to violate: **adding a region does not add a DB
+writer, so SQLite keeps fitting.**
+
+**Migrate to PostgreSQL only if the topology changes** so the DB stops having a single writer: the
+pool process goes multi-process/replicated behind an LB; the DB moves onto a separate box (SQLite
+has no network protocol — NFS/SMB breaks its locking); sustained >10k durable shares/sec; hot
+relational data >~20–50 GB; or you need multi-master/hot-standby. **Never MariaDB.**
 
 PRAGMAs at DB creation: `journal_mode=WAL`, `synchronous=NORMAL`, `busy_timeout=5000`,
 `foreign_keys=ON` (file space reclaimed by the weekly `VACUUM` cron — Script 07 option C).
 
-### Share capture = own stratum proxy (not log-tailing)
+### Share capture = our own stratum proxy (not log-tailing)
 In Grin the node's stratum is integrated with no clean external `getblocktemplate`, so the practical
 "own server" is a **stratum proxy in front of the node's built-in stratum** (the proven `grin-pool`
-model):
+model). Ours is not a separate daemon: `lib/stratum-server.js` (miner-facing) and
+`lib/node-stratum-client.js` (node-facing) both run **inside the pool process**, so recording a
+share is an in-process call, never a network hop:
 
 ```
-Miners ──stratum──▶ Stratum Proxy ──stratum (client)──▶ node built-in stratum (localhost)
-                         │
-                         └── structured share/block events ──▶ Share Relay ──▶ Hub
+Miners ──stratum──▶ stratum-server.js ──▶ accounting ──▶ pool.sqlite
+                          │
+                          └── node-stratum-client.js ──stratum──▶ node built-in stratum (localhost)
 ```
 
-The proxy binds the **public** stratum port (`3333`); the node's built-in stratum binds **localhost
-only** (`3416` / testnet `13416` — grin's own `stratum_server_addr` default, which the
+It binds the **public** stratum port (`3333` / testnet `13333`); the node's built-in stratum binds
+**localhost only** (`3416` / testnet `13416` — grin's own `stratum_server_addr` default, which the
 toolkit never moves). It sees every `login`/`submit` as structured JSON → reliable
 `address.worker` identity + difficulty + nonce + timestamp, per-miner **vardiff**, dedup by
 `(nonce, height)`, rate-limits, and abuse bans. Log-tailing was **rejected** (brittle format, one
 global difficulty, no guaranteed per-share identity).
 
-### Satellite → Hub transport
-- `POST /api/shares` (batched) + `POST /api/blocks` (block-found) to the Central API `:8080`.
-- Auth: shared-secret header over HTTPS + optional IP allowlist (mTLS later).
-- Payload e.g. `{"region":"us-east","worker":"addr.rig1","difficulty":100,"timestamp":…}`.
-- On Hub outage the relay buffers to a **local SQLite failover file** and replays (at-least-once;
-  idempotent on the hub via `share_hash` / block `hash` UNIQUE).
+### Region attribution is by listener PORT, not by a string the edge sends
+Each gateway's WireGuard tunnel targets **its own** central listener port — `region_ports`, a
+`{ "<region>": <port> }` map in the pool config, allocated from a per-network base (`3391`
+mainnet / `13391` testnet) by `grin-gateway-ctl`. `stratum-server.js` binds one listener per entry
+on `region_listen_host` — **the WireGuard server IP in production**, defaulting to loopback so a
+misconfigured box fails closed instead of exposing an unauthenticated port — and stamps that
+listener's static label on every share arriving on it.
+
+That is a security property, not just plumbing. The region tag is **server-derived and
+unspoofable**: nothing a miner or a compromised edge sends can change it, which removes the old
+"the region string the relay sends must match the hub's" footgun outright. PROXY-protocol v2
+(which recovers the real miner IP behind the tunnel) is armed on **region listeners only**, so the
+public `:3333` can never be fed a forged header. Conversely the per-IP connection cap applies to
+the public listener only — a region tunnel is trusted, and one peer IP fronts a whole region.
+
+`StratumServer.bindRegionListener(region, port)` adds a listener at runtime, so pairing a gateway
+from the admin panel takes effect with **no restart and no miner disruption** (§13.3). Removing a
+peer does not hot-unbind: that listener simply goes idle until the next natural restart.
 
 ---
 
@@ -206,7 +237,7 @@ Core tables (`/opt/grin/pubpool/<net>/pool.sqlite`):
 | Table | Purpose | Retention |
 |---|---|---|
 | `miner_accounts` | balance, balance_locked, total_paid, is_online, location — keyed by `grin_address` | live |
-| `shares` | PPLNS input (grin_address, worker, difficulty, block_height, **region**, created_at) — `region` tags the originating region (local stratum → `config.region`; ingested → satellite's region) for per-region stats; PPLNS weighting is region-agnostic | sliding window (pruned) |
+| `shares` | PPLNS input (grin_address, worker, difficulty, block_height, **region**, created_at) — `region` is the **listener label**, stamped by whichever stratum listener accepted the connection (public listener → `config.region`, default `'default'`/`main`; a per-region tunnel listener → that region's key). It is server-derived, never client-asserted, and drives per-region stats only; PPLNS weighting is region-agnostic. Legacy rows predating the column read `'default'`. | sliding window (pruned) |
 | `blocks` | found blocks + maturity (height, hash, nonce, reward, status, found_by) | forever |
 | `withdrawals` | payouts (amount, fee, method tor\|slatepack, status, retry_count, txid) | forever |
 | `balance_log` | append-only ledger of every balance/locked change | raw window `balance_log_keep_days` (default 60, floor 45) — rolled into `balance_log_daily` first; see §14 |
@@ -215,8 +246,9 @@ Core tables (`/opt/grin/pubpool/<net>/pool.sqlite`):
 | `users` | admin accounts only (bcrypt, lockout columns) | forever |
 | `admin_audit_log` | every admin mutation (admin_id, action, target, before/after, ip) | forever |
 | `pool_settings` | runtime config overrides editable via admin UI (key/value/value_type) | live |
-| `pool_locations` | operator-declared regions (region UNIQUE, label, api_url, stratum_url, is_active) — descriptive registry joined onto live share aggregates by `region`; ingestion auth is the pool.json allowlist+secret, not this table | live |
+| `pool_locations` | operator-declared regions (region UNIQUE, label, api_url, stratum_url, is_active) — **purely descriptive**: labels + public stratum URLs for the "point your rig at your nearest region" grid, left-joined onto live share aggregates by `region`. A row here grants nothing; the real region wiring is the WireGuard peer + `region_ports` entry created by `grin-gateway-ctl`, and this box self-registers its own region via `ensureLocalRegion()`. | live |
 | `hashrate_history` | timeseries + per-region aggregates | pruned by age |
+| `pool_region_metrics_hourly` | one row per (hour, region) — hashrate/miner counts aggregated from `shares.region`; backs the public per-region trend charts | durable (bounded by region count) |
 | `miner_incentives` | per-address join_bonus_paid, donation_percent, streak_days | live |
 | `lottery_draws` / `lottery_winners` | verifiable lottery state | forever |
 
@@ -227,7 +259,8 @@ out of every miner-facing surface. Money flows through `balance_log` for audit.
 
 ## 6. API catalog (Express routes)
 
-> **Verified against `back-end-pool/index.js` (2026-06-08; account + payout routes re-verified 2026-07-13).** ✅ = wired in the backend ·
+> **Verified against `back-end-pool/index.js` (2026-06-08; account + payout routes re-verified 2026-07-13;
+> the ingestion / `health/*` / region routes re-verified 2026-09-07).** ✅ = wired in the backend ·
 > ❌ = documented target, not yet built (see "Not yet implemented" below). Paths are the
 > *actual* registered routes — earlier drafts of this catalog overstated the surface.
 
@@ -250,12 +283,25 @@ out of every miner-facing surface. Money flows through `balance_log` for audit.
                               IP-gated account self-service flow above (§8), not a claim link
 ```
 
-**Ingestion (satellites only — IP allowlist + shared secret; region-tagged):**
+**Ingestion: there is none — and that is the design.**
 ```
-✅ POST /api/shares   (batched; { region, shares:[…] } — region stamped onto each share row)
-✅ POST /api/blocks   (block-found; { region, block:{…} })
+❌ POST /api/shares | /api/blocks   REMOVED 2026-06-22 (f2ebade) with the satellite role.
 ```
-Both also feed the in-memory satellite-liveness monitor surfaced at `/api/admin/health/satellites`.
+Regional gateways forward **raw stratum over WireGuard**, not shares over HTTP, so there is no
+share/block ingestion API, no `hub_shared_secret`, and no ingestion allowlist to get wrong. Every
+share is recorded by the central stratum server exactly like a local miner's (§4). Per-region
+liveness is derived from recent shares plus a best-effort WireGuard handshake age, and served at
+`/api/admin/health/gateways`.
+
+Public region surface (no auth):
+```
+✅ GET  /api/pool/stats/regions | /api/pool/metrics/history/regions
+✅ GET  /api/pool/topology        (404 unless the operator has enabled the public network map)
+```
+`/stats/regions` and `/metrics/history/regions` apply a **k-anonymity floor**: a region with
+`0 < miners < min_bucket` reports `miners` / `hashrate_gps` / `shares_window` as `null` with
+`below_floor:true`. That is *withheld*, not zero — a real zero is still `0`, and a chart must draw
+a `null` as a **gap**, never as `0`. Totals stay exact.
 
 **Admin auth (admin register is CLI-only):**
 ```
@@ -266,7 +312,7 @@ Both also feed the in-memory satellite-liveness monitor surfaced at `/api/admin/
 **Admin (`requireAdmin` = rate-limit + IP filter + JWT):**
 ```
 ✅ GET  /api/admin/dashboard | /metrics | /audit-log
-✅ GET  /api/admin/health/node | /health/wallet | /health/system | /health/satellites
+✅ GET  /api/admin/health  (roll-up)  |  /health/node | /health/wallet | /health/system | /health/gateways
 ✅ GET  /api/admin/miners | /miners/:addr     POST /api/admin/miners/:addr/inject  (testnet only)
 ✅ GET  /api/admin/withdrawals | /withdrawal-scheduler
 ✅ GET/POST/DELETE /api/admin/locations[/:id]
@@ -290,8 +336,9 @@ These remain **documented targets without backend routes**; tracked so the catal
   to the miner address (§8). Tor is **no longer** the only wired payout rail.
 - **Admin user CRUD** (`/api/admin/users[/:id]`) — NOT built (create via CLI). Manual withdrawal
   `retry`/`cancel` **ARE now built** (`freshAdmin`-gated); only the `/…/:id/events` timeline is missing.
-  The legacy `back-end-pool/admin-panel/users.html` UI references user-CRUD; the primary admin surface
-  (`public_html/admin-dashboard.html`) does not depend on it.
+  `back-end-pool/admin-panel/users.html` (nav title **Sessions**) references user-CRUD, but nothing
+  else in the panel depends on it. There is no `public_html/admin-dashboard.html` — the admin surface
+  is `back-end-pool/admin-panel/`, rsynced to the web root's `/admin/` at install.
 - **`/api/admin/miners/:addr` PUT**, **`/api/auth/reauth` + `/me`**, **`/api/admin/payment-stats`**.
 
 ---
@@ -299,9 +346,10 @@ These remain **documented targets without backend routes**; tracked so the catal
 ## 7. Reward pipeline (PPLNS)
 
 ```
-1. Stratum proxy detects a found block → blocks(status=pending, nonce, height, reward)
-   - single-box/hub: BlockManager.creditBlock (local DB)
-   - satellite: relay POST /api/blocks → hub credits
+1. The stratum server detects a found block → blocks(status=pending, nonce, height, reward)
+   - always local: BlockManager.creditBlock on this box (dedups by `hash` UNIQUE).
+     Under Model C there is only ever one node + one wallet, so a share arriving over a
+     region tunnel credits by exactly the same path as a local one.
 2. block-monitor (each tick): tip_height − block.height ≥ confirm_depth ?
 3. orphan-detector: is the block's nonce still in the chain?  no → orphan+reverse · yes → confirmed
 4. rewards.distributeConfirmedBlocks: PPLNS over the last-N-blocks share window
@@ -492,13 +540,19 @@ interpolation sink; worker-name regex enforced at the stratum layer.
 | Service | Mainnet | Testnet | Access |
 |---|---|---|---|
 | Public stratum (miners) | 3333 | 13333 | Public |
+| Per-region stratum listeners (Model C) | 3391, 3392 … | 13391, 13392 … | **WireGuard interface only** (`region_listen_host`; loopback until set) |
+| WireGuard (gateway tunnels) | udp 51820 (`wg-grinpool`, 10.66.66.0/24) | udp 51821 (`wg-grinpool-tn`, 10.66.67.0/24) | Public UDP on the central box; peers are explicit |
 | Node built-in stratum (proxy upstream) | 127.0.0.1:3416 | 127.0.0.1:13416 | localhost only |
-| Central API / Pool HTTP API | 8080 | 8090 | Public web; ingestion satellites-only (allowlist+secret) |
+| Central API / Pool HTTP API | 8080 | 8090 | Public web (nginx). No ingestion surface — see §6 |
 | Web dashboard | 443 | 443 | Public |
 | Node API (Owner/Foreign) | 3413 | 13413 | localhost |
 | Wallet Foreign / Owner | 3415 / 3420 | 13415 / 13420 | localhost |
 | P2P | 3414 | 13414 | Public |
 
+> A regional gateway box exposes **only** the public stratum port `3333`/`13333`; it holds no
+> node, wallet, DB or keys, and reaches the central box over the tunnel alone. Because both a
+> pool server and a gateway want `:3333`, `pool_mode_conflict_check` keeps them on separate boxes.
+>
 > The single-box installer was migrated off the legacy `3417/3002` to `3333/8080` in 2026-06
 > (bash + backend in sync — see `config.js`). The **node upstream** was NOT moved with them:
 > the `3334` this doc once planned was never implemented, because Script 01 leaves the node's
@@ -522,7 +576,6 @@ interpolation sink; worker-name regex enforced at the stratum layer.
 
 - Move money columns from `REAL` GRIN to **integer nanoGRIN** (engine-independent; do it in SQLite,
   carries to Postgres later).
-- mTLS for satellite→hub transport (v1 is shared-secret over HTTPS).
 - i18n / multi-language content; fiat (USD/EUR/BTC) price display.
 - Unify the public `body.<theme>-theme` system onto the `theme.js` CSS-variable system.
 - Admin live-preview iframe + WCAG contrast check in the theme builder.
@@ -640,7 +693,8 @@ Page renames to **"Regions & Gateways"**. Changes to the existing form/table (48
 form fields at ~180–210):
 
 - New form field: **Gateway WireGuard public key** *(optional — leave empty for a
-  metadata-only region / satellite-era entry)*, with inline format hint (44 chars, ends `=`).
+  metadata-only region entry: a label with no tunnel behind it)*, with inline format hint
+  (44 chars, ends `=`).
 - After save-with-pubkey: result card showing the `GRINGW1|…` string in a monospace box with a
   📋 copy button + the four-step "what to do on the gateway box now" mini-guide. Warn banner
   when `existing:true` ("key already paired — existing tunnel IP/port kept").

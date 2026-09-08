@@ -1,5 +1,8 @@
 # Script 05 — Goblin interop planning: Grin Drop (059) ↔ Goblin usernames
 
+> **Covers code as of:** 2026-07-09 (the doc: "Research complete (2026-07-09), no code yet") · **Last verified:** never re-checked
+> **Product code last changed:** n/a — this describes *upstream* goblin source, which moves independently of this repo.
+
 **Status:** Research complete (2026-07-09), no code yet. Feature: a Drop visitor enters a
 Goblin username (`bob` / `bob@goblin.st` / npub) and (a) **claims** the giveaway straight into
 their Goblin wallet, or (b) **donates** to the Drop from their Goblin wallet — no slatepack

@@ -4,6 +4,10 @@
   Updated: 2026-04-25
 ================================================================================
 
+> **Covers code as of:** 2026-04-25 (the doc's own `Updated:`) · **Last verified:** never systematically verified
+> **Product code last changed:** 2026-08-04 — `scripts/053_grin_woocommerce.sh`, `web/053_woocommerce/`
+> Last edited 2026-08-04, but that was the 052-to-059 renumber sweep, not a re-write against the code.
+
 ────────────────────────────────────────────────────────────────────────────────
 1. OVERVIEW
 ────────────────────────────────────────────────────────────────────────────────

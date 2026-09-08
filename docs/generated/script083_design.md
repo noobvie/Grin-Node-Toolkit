@@ -1,5 +1,8 @@
 # Script 083 — Host Optimization & Hardening
 
+> **Covers code as of:** 2026-08-25 (the doc: "built 2026-08-25") · **Last verified:** never systematically verified
+> **Product code last changed:** 2026-08-25 — `scripts/083_host_optimization.sh`, `scripts/lib/083_lib_*.sh`
+
 **Status:** built 2026-08-25, **never run on a VPS.** Read-only advisor; no apply paths.
 **Menu:** hub 08, key `3`.
 **Files:** `scripts/083_host_optimization.sh`, `scripts/lib/083_lib_profile.sh`,

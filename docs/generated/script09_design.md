@@ -1,5 +1,8 @@
 # Script 09 — Grin Connectivity Hub (design)
 
+> **Covers code as of:** 2026-08-13 · **Last verified:** never systematically verified
+> **Product code last changed:** 2026-08-13 — `scripts/09*_*.sh`, `scripts/lib/09*_lib_*.sh`, `scripts/lib/nostr_relay_deploy.sh`, `web/093_transporter/`
+
 **Status:** 091 Floonet relay deployer **IMPLEMENTED 2026-07-10**; 093 Transporter
 **Phase 1 IMPLEMENTED 2026-07-11 — standalone only** (server + agent; NO Drop/pool wiring,
 still gated on B.9 #6; see `script09_implementation.md` for both built shapes).

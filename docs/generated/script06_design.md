@@ -1,5 +1,9 @@
 # Script 06 — Global Grin Health (design notes)
 
+> **Covers code as of:** 2026-09-06 · **Last verified:** never systematically verified
+> **Product code last changed:** 2026-09-06 — `scripts/06_global_grin_health.sh`, `scripts/lib/06*`, `web/06_stats_map/`, `web/06d_tiny_explorer/`
+> 06d has a test suite (`web/06d_tiny_explorer/test/`, 98 assertions), but it tests the code, not this doc.
+
 Only sections that need durable prose live here; the menu/wiring lives in
 `scripts/06_global_grin_health.sh`. Options A (network stats), B (GrinScan),
 C (grincoin clone) are documented in git history + their own libs.

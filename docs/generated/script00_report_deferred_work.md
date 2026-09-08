@@ -1,5 +1,9 @@
 # Scripts 01 / 03 — Deferred DRY Migration to Shared Node Libs
 
+> **Covers code as of:** 2026-06-01 · **Last verified:** never systematically verified
+> **Product code last changed:** 2026-08-25 — `scripts/lib/grin_node_*.sh` and scripts 01 / 03 / 04 / 08
+> The doc states `Created: 2026-05-31`; the deferred migration it tracks has not been re-checked since.
+
 **Status:** TODO (not yet done — capture so it isn't forgotten)
 **Created:** 2026-05-31
 **Context:** Track B (solo-mining supervision) introduced three shared libs:

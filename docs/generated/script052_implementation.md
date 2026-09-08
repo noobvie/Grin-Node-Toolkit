@@ -1,5 +1,8 @@
 # Script 052 — Accio: implementation & session log
 
+> **Covers code as of:** 2026-08-24 · **Last verified:** 2026-08-24, PARTIAL — the doc's own record of `bash -n` 5/5 and `node --check` 9/9 over the tree; no systematic doc-vs-code pass
+> **Product code last changed:** 2026-08-22 — `scripts/052_grin_accio.sh`, `scripts/lib/052_lib_*.sh`, `web/052_accio/`
+
 The **handoff between build sessions is this file, never the chat.** Each packet ends by
 writing its outcome here; the next session reads this file plus its own packet in
 `script052_design.md` §"Build plan" — and nothing else. If a session ends with knowledge only

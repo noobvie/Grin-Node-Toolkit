@@ -1,5 +1,8 @@
 # Script 09 — Implementation notes
 
+> **Covers code as of:** 2026-08-13 · **Last verified:** never systematically verified
+> **Product code last changed:** 2026-08-13 — `scripts/09*_*.sh`, `scripts/lib/09*_lib_*.sh`, `scripts/lib/nostr_relay_deploy.sh`, `web/093_transporter/`
+
 **Scope:** what is actually built, per member. Design/rationale lives in
 `script09_design.md`; this file records the implemented shape and the decisions
 locked at implementation time.

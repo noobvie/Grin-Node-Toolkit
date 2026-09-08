@@ -1,5 +1,8 @@
 # Script 05 — Wallet & Payment Services Hub — implementation record
 
+> **Covers code as of:** 2026-08-04 (the doc: "current as of 2026-08-04") · **Last verified:** never systematically verified
+> **Product code last changed:** 2026-08-15 — `scripts/05_grin_wallet_service.sh`
+
 **Status: current as of 2026-08-04.** Two changes landed the same day and this document covers
 both: the **05x renumber + rename** (Grin Drop `052 → 059`, Fidelius/Accio codenames) and,
 immediately after it, the **fixed-slot menu keys** that replaced positional keys.

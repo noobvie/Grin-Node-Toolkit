@@ -1,5 +1,8 @@
 # Script 09 — Connectivity Hub (091 Floonet relay / 093 Transporter) — Security Audit
 
+> **Covers code as of:** 2026-08-06 (the doc: "Audit date: 2026-08-05, re-reviewed 2026-08-06") · **Last verified:** 2026-08-06, PARTIAL — the audit read plus local harnesses (33 + 10 assertions); no doc-vs-code pass since
+> **Product code last changed:** 2026-08-13 — `scripts/09*_*.sh`, `scripts/lib/09*_lib_*.sh`, `scripts/lib/nostr_relay_deploy.sh`, `web/093_transporter/`
+
 **Scope:** 091 Floonet relay deployer, 093 Grin Transporter (server + agent + deployer), and the
 shared `lib/nostr_relay_deploy.sh` primitive they both lean on.
 

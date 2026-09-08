@@ -1,5 +1,8 @@
 # Script 052 — Accio (self-custodial Grin web wallet) — Security Audit
 
+> **Covers code as of:** 2026-08-16 · **Last verified:** never re-verified since
+> **Product code last changed:** 2026-08-22 — `scripts/052_grin_accio.sh`, `scripts/lib/052_lib_*.sh`, `web/052_accio/`
+
 **Scope:** the gateway (`web/052_accio/gateway/`, 9 modules), the four libraries
 (`scripts/lib/052_lib_{build,gateway,nginx,vendor}.sh`), the nginx artefacts they generate, the
 systemd unit, and the pin chain that decides which bytes a visitor's browser executes. The

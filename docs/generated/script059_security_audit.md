@@ -1,5 +1,8 @@
 # Script 059 — Grin Drop — Security Audit
 
+> **Covers code as of:** 2026-07-10 (the audit's own stated date) · **Last verified:** never re-verified since
+> **Product code last changed:** 2026-08-22 — `scripts/059_grin_drop.sh`, `scripts/lib/059_lib_*.sh`, `web/059_drop/`
+
 **Scope:** the public faucet + donation web service (`web/059_drop/server/*.js`) and its
 nginx edge (`scripts/lib/059_lib_nginx.sh`). Focus: fund-drain, rate-limit bypass, wallet
 abuse, injection. Admin is a server-side bash TUI (root already), so no web-admin surface.

@@ -4,6 +4,10 @@
   Created: 2026-04-25
 ================================================================================
 
+> **Covers code as of:** 2026-04-25 (the doc's own `Created:`) · **Last verified:** never systematically verified
+> **Product code last changed:** 2026-07-27 — `scripts/lib/06b_grinscan.sh`, `web/06b_grinscan/`
+> Last substantive edit 2026-05-05.
+
 ────────────────────────────────────────────────────────────────────────────────
 1. OVERVIEW
 ────────────────────────────────────────────────────────────────────────────────

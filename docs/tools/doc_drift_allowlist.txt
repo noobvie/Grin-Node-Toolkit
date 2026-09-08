@@ -1,0 +1,102 @@
+# Allowlist for docs/tools/check_doc_drift.sh
+#
+# Format, one entry per line:
+#     <path-or-glob> | <category> | <reason>
+#
+#   planned     documented on purpose, deliberately NOT BUILT yet
+#   not-a-path  the token looks like a path but is not a claim about a repo file
+#               (a library name, an example filename, a VPS runtime artifact)
+#   external    a real file, but in someone else's repo or on the operator's box
+#   deleted     the file really is gone, and the doc names it in order to RECORD
+#               that it went — an append-only audit log, or a status row saying
+#               a feature was removed. Never use this to park a live dead link.
+#
+# A REASON IS MANDATORY and the checker refuses to run without one. A bare
+# allowlist rots exactly as silently as the docs it is meant to protect: the
+# reason is what lets the next reader tell "still true" from "was true once".
+#
+# The checker also warns when an entry is referenced by no doc, or when its file
+# now exists — both mean the entry should be deleted.
+
+# ---------------------------------------------------------------------------
+# planned — reserved script numbers (CLAUDE.md, script 09 band and 05 band)
+# ---------------------------------------------------------------------------
+scripts/092_grin_mwixnet_mixer.sh | planned | 092 is RESERVED for the mwixnet CoinSwap mixer and is explicitly NOT BUILT; script09_design.md PART D documents it on purpose
+092_grin_mwixnet_mixer.sh         | planned | same file, named bare in script09_design.md prose
+scripts/lib/092_lib_build.sh      | planned | planned lib of the unbuilt 092 mixer
+092_lib_build.sh                  | planned | same file, named bare in script09_design.md prose
+scripts/lib/092_lib_mixer.sh      | planned | planned lib of the unbuilt 092 mixer
+092_*.sh                          | planned | glob for the unbuilt 092 mixer file set
+scripts/054_*.sh                  | planned | 054-058 is the FREE band; a number is assigned when a build STARTS, so no file exists yet
+
+# ---------------------------------------------------------------------------
+# not-a-path — library and framework names written in prose
+# ---------------------------------------------------------------------------
+Node.js         | not-a-path | the Node.js runtime, named in prose stack descriptions
+Next.js         | not-a-path | the Next.js framework, named in prose when comparing stacks
+[Cc]hart.js     | not-a-path | the Chart.js charting library, named in prose
+leaflet*.js     | not-a-path | the Leaflet mapping library, named in prose (06 peer map)
+bignumber.js    | not-a-path | the bignumber.js library, named in an upstream dependency list
+normalize.css   | not-a-path | the normalize.css reset, named in an upstream dependency list
+ipaddr.js       | not-a-path | an npm dependency name in a package.json dependency list
+gtag.js         | not-a-path | Google's GA4 loader, served from Google's CDN
+stringify.js    | not-a-path | a file inside the npm qs package, named while tracing a CVE
+qs/lib/stringify.js  | not-a-path | node_modules path written without the node_modules/ prefix
+express/lib/utils.js | not-a-path | node_modules path written without the node_modules/ prefix
+.min.js         | not-a-path | a filename SUFFIX, not a path — "the tree ships zero .min.js files"
+.test.js        | not-a-path | a filename SUFFIX naming the test-file convention
+
+# ---------------------------------------------------------------------------
+# not-a-path — example and attacker filenames in security-audit narratives
+# ---------------------------------------------------------------------------
+evil.html       | not-a-path | attacker-supplied filename in the script07 upload finding
+backdoor.js     | not-a-path | hypothetical dropped-in file in the script052 vendor-integrity argument
+accio-wallet-test.html | not-a-path | example filename used to probe nginx quoted-string parsing
+scripts/x.js    | not-a-path | example src= value quoted from an upstream HTML page
+notes.svg       | not-a-path | example uploaded filename in a stored-upload audit excerpt
+1788363314180-174ac525-notes.svg | not-a-path | the stored form of that same example upload
+scratchpad/j4harness.js | not-a-path | one-shot harness in the scratchpad, deleted with it (the doc says so)
+test-ledger-rollup.js   | not-a-path | scratchpad smoke-test harness, never committed
+
+# ---------------------------------------------------------------------------
+# not-a-path — files that exist only on the VPS at runtime, or by negation
+# ---------------------------------------------------------------------------
+pool.sql        | not-a-path | output filename of the `sqlite3 pool.sqlite .dump > pool.sql` example
+listen.sh       | not-a-path | wallet listener script generated on the VPS at deploy time
+current.html    | not-a-path | the standalone build's published copy under ACC_DIR on the VPS
+wp-config.php   | not-a-path | WordPress core config on the merchant's own server
+analytics.js         | not-a-path | script06b_design.md says explicitly it is NOT a static file — it is served dynamically
+public/js/analytics.js | not-a-path | same line adds "Do not create a file at public/js/analytics.js"
+LICENSE.md      | not-a-path | named inside a NEGATIVE statement — "No LICENSE, LICENSE.md ... and no licence mention"
+
+# ---------------------------------------------------------------------------
+# external — real files, but not in this repo
+# ---------------------------------------------------------------------------
+MEMORY.md                   | external | the local-memory index, which lives outside the repo by design (CLAUDE.md)
+project_drop_backup_052.md  | external | a local-memory file, outside the repo; named while recording its rename to _059
+install.sh                  | external | 2ro's floonet-rs upstream repo — we deploy it, we do not fork it
+deploy/install.sh           | external | same floonet-rs upstream repo
+apply-spec.sh               | external | same floonet-rs upstream repo
+docs/reverse-proxy.md       | external | floonet-rs upstream documentation, not ours
+deploy_grinwallet.sh        | external | lives in the Office Tools repo; script059 mirrors its wallet setup
+wporg-svn/trunk/bridge-config.php | external | a WordPress.org SVN working copy on the operator's machine
+mwcwallet.com-master/public_html/index.html | external | the upstream wallet release zip as downloaded, before vendoring
+
+# ---------------------------------------------------------------------------
+# deleted — the file is genuinely gone, and the doc naming it is RECORDING that
+# it went, not claiming it is there. Script 07's security audit is append-only
+# (a dated finding may not be rewritten), so it necessarily names files that
+# were later deleted; the design/implementation docs do the same when a row
+# says a feature was removed. Delete an entry here if the doc stops naming it.
+# ---------------------------------------------------------------------------
+script07_multi_region_design.md | deleted | absorbed into script07_design.md and deleted 2026-06-08; that doc's own header says so
+lib/wallet-transporter.js | deleted | dead pool-side Transporter stub, removed 2026-08-06; script07_implementation.md's status row records the removal
+grin_mining_testnet_instruction.html | deleted | in-repo solo/testnet walkthrough, deleted 2026-06-13 in ea0cc43; script07_implementation.md now names it only to say where it went
+public_html/admin-dashboard.html | deleted | never existed under this name — script07_design.md names it to correct an earlier claim that it was the primary admin surface (it is back-end-pool/admin-panel/)
+settings-alerts.html | deleted | admin alerts settings page, deleted by audit §J8-3; §J8-2's dated finding still links it and may not be rewritten
+web/07_mining_pool_public/back-end-pool/admin-panel/settings-alerts.html | deleted | same file, full path form in the §J8-2 link
+script07_reference_audit_session_plan.md | deleted | pre-mainnet run plan, session scaffolding folded into the audit's Status roll-up and deleted 2026-09-06; the roll-up names it to say where it went
+docs/generated/script07_reference_audit_session_plan.md | deleted | same file, repo-relative form
+scripts/lib/07_lib_satellite.sh | deleted | the retired satellite role's lib, deleted 2026-06-22 in f2ebade; the audit's Status roll-up and CLAUDE.md name it to say it is GONE
+back-end-pool/satellite.js | deleted | satellite app entry point, deleted with the role in f2ebade
+lib/share-relay.js | deleted | satellite share-forwarding module, deleted with the role in f2ebade

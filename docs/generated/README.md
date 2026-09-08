@@ -27,6 +27,37 @@ Before creating any `.md` here, check whether it belongs inside an existing core
 
 ---
 
+## Read the freshness header first
+
+Every doc here opens with a blockquote under its title:
+
+> **Covers code as of:** 2026-06-08 · **Last verified:** never systematically verified
+> **Product code last changed:** 2026-09-04 — `scripts/07_*`, `web/07_mining_pool_public/`
+
+- **Covers code as of** — when the doc was last written *against the code*. Often much older
+  than its git date, because bulk renames and comment-only sweeps touch files without changing
+  a word of substance. In 2026-08 one rename commit gave 12 docs the same date.
+- **Last verified** — when someone actually checked **this document** against the code and said
+  so. On almost every doc it reads *never systematically verified*, and that is the truth, not
+  an oversight: it tells you exactly how much to trust the page. Where a date appears it carries
+  its scope and its source, and it is always **partial**. A product's test suite passing does
+  not count — that verifies the code, not the prose about it.
+- **Product code last changed** — the last real commit to that product's own files. **The gap
+  between this and the first line is the number that matters.** A doc covering 2026-06-08 code
+  in front of a product last changed 2026-09-04 is three months behind, and says so.
+
+The header is a label, not a promise of accuracy. Nothing here has been through a systematic
+doc-vs-code pass. If you change a doc, update its `Last verified`; if you change code a doc
+describes, update the doc or move its `Covers code as of` back to honest.
+
+One part of this *is* mechanical. `docs/tools/check_doc_drift.sh` reads every repo file path
+named in this folder and reports the ones that do not exist — the failure a read-through
+cannot catch, because a filename that is no longer on disk still reads perfectly well in a
+sentence. It currently exits non-zero; its own [README](../tools/README.md) explains the
+resolver, the allowlist rules, and what is still open.
+
+---
+
 ## Nodes, chain data & APIs (Scripts 01–04)
 
 | Doc | What it covers |
@@ -63,7 +94,7 @@ Before creating any `.md` here, check whether it belongs inside an existing core
 
 | Doc | What it covers |
 |---|---|
-| [script07_design.md](script07_design.md) | Public mining pool architecture — PPLNS, address-as-identity, hub/satellite |
+| [script07_design.md](script07_design.md) | Public mining pool architecture — PPLNS, address-as-identity, Model C regional gateways |
 | [script07_implementation.md](script07_implementation.md) | Pool deploy + runbook |
 | [script07_security_audit.md](script07_security_audit.md) | Pool security record, §A–§J17. **Start at the Status roll-up** — 14 k lines, and the roll-up is the whole of it in one table |
 

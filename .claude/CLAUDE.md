@@ -124,8 +124,15 @@ scripts/
        in the 05_grin_wallet_service.sh header + docs/generated/script05_implementation.md.
   06_  Global health + price collector (06b = GrinScan explorer)
   07_  Mining services hub → 07_grin_mining_solo.sh (solo private, has a `lan` arg) and
-       07_grin_mining_public_pool.sh (GRINIUM public pool; libs 07_lib_hub.sh /
-       07_lib_satellite.sh; app code in web/07_mining_pool_public/)
+       07_grin_mining_public_pool.sh (GRINIUM public pool; libs 07_lib_hub.sh central hub /
+       07_lib_gateway.sh thin regional stratum forwarder / 07_lib_gwctl.sh the single
+       WireGuard-mutation binary / 07_lib_pool_wallet.sh / 07_lib_pool_backup.sh; app code in
+       web/07_mining_pool_public/). ⚠ The old SATELLITE role is GONE — deleted 2026-06-22
+       (f2ebade) together with 07_lib_satellite.sh, back-end-pool/satellite.js and
+       lib/share-relay.js. A region is a THIN stratum gateway under Model C: no node, no
+       wallet, no DB, no Node app. It carries **no HTTP ingestion API**, so there is no
+       share/block POST surface, no `requireSatellite` allowlist and no shared secret. Only
+       the pool script's `Z) Cleanup` still knows the name, to remove a legacy install.)
   08_  Node admin centre (monitoring, nginx, firewall, backup, disk cleanup)
   08del_ Full cleanup (destructive)
   09_  Grin Connectivity Hub → 091_ Floonet relay deployer (deploys 2ro's floonet-rs via
@@ -248,8 +255,11 @@ curl -s "https://api.nonlogs.io/api/markets/GRIN-BTC" | python3 -m json.tool
 
 Script 07 (mining pool) adds operator-configurable ports: **public stratum** `3333`,
 **node built-in stratum upstream** `127.0.0.1:3416` (testnet `13416`), **Central API**
-`8080` (testnet `8090`; localhost-bound; satellites reach it via the nginx HTTPS vhost,
-IP-allowlist + shared-secret). Solo mining uses the same node stratum `3416`/`13416`.
+`8080` (testnet `8090`; localhost-bound, fronted by the nginx HTTPS vhost — that vhost is the
+only way in, and `/api/admin/` is IP-allowlisted there). ⚠ Regional gateways do **not** reach
+it: they forward raw **stratum** over WireGuard to a per-region internal port on the central box
+(`3391+` mainnet / `13391+` testnet, miner IP in PROXY-protocol v2) and speak no HTTP to the pool
+at all. Solo mining uses the same node stratum `3416`/`13416`.
 ⚠ The upstream port is **grin's own `stratum_server_addr` default and the toolkit does not
 move it** — Script 01 leaves the addr alone, so the pool dials 3416 rather than the `3334`
 an older plan called for. Three sites agree and must stay agreed: `pool_ensure_defaults`
@@ -529,6 +539,25 @@ ALL generated docs go to `docs/generated/` — never scatter into `web/` etc. Th
 **`docs/generated/README.md` is the index** — read it to find a doc, and add a row to it when
 you add a file. (The folder name is historical: nothing in it is machine-generated.)
 
+**Every doc in `docs/generated/` carries a freshness header** directly under its title — a
+blockquote naming three things: **Covers code as of** (when the doc was last written against
+the code), **Last verified** (when someone actually checked the doc *against* the code and
+said so), and **Product code last changed** (the last real commit to that product's own files).
+The gap between the first and the third is the whole point: it tells a reader how much to trust
+the page. Two rules keep it honest:
+- **Never write a date in `Last verified` you did not verify.** A false freshness stamp is
+  worse than none — it converts an unknown into a wrong known. For almost every doc the true
+  value is `never systematically verified`; write that. A date is allowed only when it is a
+  *real* check, and it must carry its scope (`2026-06-08, PARTIAL — §2 and §8.4 only`) and say
+  where it came from. Reporting the doc's own recorded claim, attributed, is fine; inventing one
+  is not. A test suite passing verifies the **code**, not the document.
+- **When you materially change a doc, update its `Last verified`. When you change code a doc
+  describes, either update the doc or move its `Covers code as of` back to honest** — and bump
+  `Product code last changed`. Git dates cannot answer this on their own: a bulk rename or a
+  comment-only sweep touches dozens of files without changing a word of substance, which is
+  exactly how 15 docs came to look uniformly fresh in 2026-08. Read the commit, don't trust the
+  timestamp.
+
 **⚠ `docs/generated/` is the DURABLE REFERENCE LIBRARY — design, architecture, flows — for
 other people to read. Session scaffolding does NOT go in it and is NOT committed.** A
 per-session build plan, prompt series, review checklist or batch tracker is a handoff between
@@ -595,7 +624,7 @@ because the box hadn't rebooted. A reboot clears them — that is luck, not a cl
 Deep implementation facts live in local memory + committed docs. When working on a product,
 recall the relevant memory and read its doc:
 - **Script 07 public mining pool** (architecture, locked design decisions, admin panel, CMS,
-  multi-region hub/satellite, payments) → memory `project_pool_*` + `docs/generated/script07_*.md`.
+  multi-region hub + thin stratum gateways, payments) → memory `project_pool_*` + `docs/generated/script07_*.md`.
   The pool lives in THIS repo (`scripts/07_grin_mining_public_pool.sh` + `web/07_mining_pool_public/`);
   the standalone GRINIUM repo is **deprecated — never edit it**.
 - **GrinScan / grin-explorer (06b), pruned vs archive runtime behaviour** → memory `project_grinscan_archive_lazy`.

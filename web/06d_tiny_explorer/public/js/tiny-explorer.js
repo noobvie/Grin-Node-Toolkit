@@ -899,9 +899,47 @@ function initMining() {
   const ids = ['mine-gps', 'mine-fee', 'mine-watt', 'mine-kwh'];
   const el  = {};
   ids.forEach(id => { el[id] = document.getElementById(id); });
-  const rigSel = document.getElementById('mine-rig');
-  const kwhSel = document.getElementById('mine-kwh-preset');
+  const rigSel  = document.getElementById('mine-rig');
+  const kwhSel  = document.getElementById('mine-kwh-preset');
+  const unitsEl = document.getElementById('mine-units');
   let netGps = null, priceUsd = null;
+
+  // ── Number of units ────────────────────────────────────────────────────────
+  // The hashrate and wattage boxes hold TOTALS, always — that is what the labels
+  // say and what miningEstimate() is handed, so the unit count never becomes a
+  // hidden multiplier inside the maths (see the preset note below). What it needs
+  // instead is a PER-UNIT BASIS to multiply, kept here.
+  //
+  // Keeping the basis rather than only the total is the part that earns its
+  // keep: an operator who picks a preset, sets 4 units, then corrects the
+  // wattage to what the wall meter actually reads has 4 × measured, not 4 × spec
+  // — and moving 4 → 8 must double the MEASURED figure. Re-deriving the basis on
+  // every manual edit (total ÷ count) is what makes that hold, and it is also
+  // what lets the count work for hardware that isn't in the list at all.
+  const unit = { gps: 0, watts: 0 };
+
+  // Blank, 0, junk and a half-typed value are all one unit — never 0 (which
+  // would zero the rig) and never NaN (which would poison every figure below).
+  function unitCount() {
+    const n = Math.floor(posNum(unitsEl ? unitsEl.value : 1));
+    return n > 0 ? n : 1;
+  }
+
+  // Float noise must not reach a field the reader retypes: 1.15 × 3 is
+  // 3.4499999999999997 and 0.7 × 3 is 2.0999999999999996. Twelve significant
+  // digits is far past any real hashrate or wattage and drops the tail.
+  function trimFloat(n) { return isFinite(n) ? String(Number(n.toPrecision(12))) : ''; }
+
+  function captureUnit() {   // the boxes are the truth → re-derive the basis
+    const c = unitCount();
+    unit.gps   = posNum(el['mine-gps']  ? el['mine-gps'].value  : 0) / c;
+    unit.watts = posNum(el['mine-watt'] ? el['mine-watt'].value : 0) / c;
+  }
+  function applyUnits() {    // the basis is the truth → rewrite the boxes
+    const c = unitCount();
+    if (el['mine-gps'])  el['mine-gps'].value  = trimFloat(unit.gps   * c);
+    if (el['mine-watt']) el['mine-watt'].value = trimFloat(unit.watts * c);
+  }
 
   function render() {
     const r = miningEstimate({
@@ -970,9 +1008,24 @@ function initMining() {
   };
   function rigNote() {
     if (!rigSel) return;
+    const c = unitCount();
     setText('mine-rig-note', rigSel.value === 'custom'
       ? 'Custom — fill in the hashrate and power draw yourself.'
-      : rigName() + ' figures filled in below. Edit either one if yours differs, or if you run more than one.');
+      : rigName() + (c > 1 ? ' × ' + c : '') + ' figures filled in below. Edit either one if yours differs, or change the number of units.');
+  }
+  // Says the multiplication back in words. A count that silently rewrites two
+  // fields further down the form is a figure the reader has to take on trust;
+  // naming the total here is what makes it checkable without a calculator.
+  function unitsNote() {
+    if (!unitsEl) return;
+    const c = unitCount();
+    if (c <= 1) {
+      setText('mine-units-note', 'How many you run. The hashrate and power draw below are the total for all of them — no need to multiply anything yourself.');
+      return;
+    }
+    const what = (rigSel && rigSel.value !== 'custom') ? c + ' × ' + rigName() : c + ' units';
+    setText('mine-units-note', what + ' — ' + trimFloat(unit.gps * c) + ' G/s and '
+      + fmtWatts(unit.watts * c) + ' W in total, filled in below.');
   }
   function kwhNote() {
     if (!kwhSel) return;
@@ -985,10 +1038,15 @@ function initMining() {
     rigSel.addEventListener('change', () => {
       const o = rigSel.options[rigSel.selectedIndex];
       if (o && rigSel.value !== 'custom') {
-        if (el['mine-gps']  && o.dataset.gps   != null) el['mine-gps'].value  = o.dataset.gps;
-        if (el['mine-watt'] && o.dataset.watts != null) el['mine-watt'].value = o.dataset.watts;
+        // The preset is a PER-UNIT spec, so it lands in the basis and reaches the
+        // boxes multiplied. Writing it straight into them would silently drop the
+        // count back to one every time the hardware changed.
+        if (o.dataset.gps   != null) unit.gps   = posNum(o.dataset.gps);
+        if (o.dataset.watts != null) unit.watts = posNum(o.dataset.watts);
+        applyUnits();
       }
       rigNote();
+      unitsNote();
       render();
     });
   }
@@ -1010,8 +1068,13 @@ function initMining() {
   ids.forEach(id => {
     if (!el[id]) return;
     el[id].addEventListener('input', () => {
-      if ((id === 'mine-gps' || id === 'mine-watt') && rigSel && rigSel.value !== 'custom') {
-        rigSel.value = 'custom'; rigNote();
+      if (id === 'mine-gps' || id === 'mine-watt') {
+        // What was typed is the TOTAL for the whole fleet, so one unit is that
+        // divided by the count. Without this the next change of the count would
+        // throw the correction away and go back to multiplying the spec.
+        captureUnit();
+        if (rigSel && rigSel.value !== 'custom') { rigSel.value = 'custom'; rigNote(); }
+        unitsNote();
       }
       if (id === 'mine-kwh' && kwhSel && kwhSel.value !== 'custom') {
         kwhSel.value = 'custom'; kwhNote();
@@ -1020,7 +1083,23 @@ function initMining() {
     });
   });
 
+  if (unitsEl) {
+    unitsEl.addEventListener('input', () => {
+      applyUnits();   // assigning .value fires no 'input', so this cannot loop
+      rigNote();
+      unitsNote();
+      render();
+    });
+  }
+
+  // Seed the basis from what is ON SCREEN, not from the selected preset: a
+  // browser that restores form values across a reload (Firefox does) can bring
+  // back a total and a count together, and total ÷ count is right in that case
+  // where the preset's spec would quietly undo the restored count.
+  captureUnit();
+
   rigNote();
+  unitsNote();
   kwhNote();
   render();
 

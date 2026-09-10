@@ -6,7 +6,7 @@
 > below are measured from the data, not inferred); *Tool 2 — Wallet Checker* was read against
 > `lib/wallet-tor.js`, `tiny-explorer-server.js` and `scripts/lib/06d_tiny_explorer.sh`.
 > The rest of this doc is still never systematically verified.
-> **Product code last changed:** 2026-09-09 — `web/06d_tiny_explorer/` (mining calculator: `/api/price` fallback, blocker copy, first test suite for the money maths); 2026-09-09 — `web/06_stats_map/stats/index.html` (antimeridian seam repair, land+mesh basemap, city-label cull, trimmed maxBounds); 2026-09-09 — `scripts/lib/06d_tiny_explorer.sh` (tor install + probe status row) and `web/06d_tiny_explorer/` (probe-aware page copy); 2026-09-09 — `web/06d_tiny_explorer/` (node-check assumed-port retry); 2026-09-08 — `web/06d_tiny_explorer/public/` (mining calculator presets); 2026-09-07 — `scripts/lib/06d_tiny_explorer.sh` (deploy/restart lifecycle); 2026-09-06 — `scripts/06_global_grin_health.sh`, `scripts/lib/06*`, `web/06_stats_map/`, `web/06d_tiny_explorer/`
+> **Product code last changed:** 2026-09-09 — `web/06d_tiny_explorer/` (mining calculator: number-of-units multiplier, `/api/price` fallback, blocker copy, first test suite for the money maths); 2026-09-09 — `web/06_stats_map/stats/index.html` (antimeridian seam repair, land+mesh basemap, city-label cull, trimmed maxBounds, Vietnam flag fill + East Sea islands + Saigon relabel); 2026-09-09 — `scripts/lib/06d_tiny_explorer.sh` (tor install + probe status row) and `web/06d_tiny_explorer/` (probe-aware page copy); 2026-09-09 — `web/06d_tiny_explorer/` (node-check assumed-port retry); 2026-09-08 — `web/06d_tiny_explorer/public/` (mining calculator presets); 2026-09-07 — `scripts/lib/06d_tiny_explorer.sh` (deploy/restart lifecycle); 2026-09-06 — `scripts/06_global_grin_health.sh`, `scripts/lib/06*`, `web/06_stats_map/`, `web/06d_tiny_explorer/`
 > 06d has a test suite (`web/06d_tiny_explorer/test/`, 113 assertions), but it tests the code, not this doc.
 
 Only sections that need durable prose live here; the menu/wiring lives in
@@ -793,6 +793,72 @@ collision and that the result is stable under input reordering, and that the CSS
 computes is in the wrong place. Both carry a mutation run that fails without the change.
 **None of this is a browser.** Nothing here has been rendered on the VPS.
 
+### As built — Vietnam (2026-09-09)
+
+Three operator requests, one theme: the map was the last surface that did not agree with
+the rest of the page about Vietnam.
+
+**Saigon, everywhere or nowhere.** `CITY_RELABEL` ("Ho Chi Minh City" → "Saigon") and the
+`FLAG_SVG.VN` override have been in this page for a long time, used by the peer tooltip,
+the peer list and the footer byline. The **basemap labels never went through them** — they
+printed `cities.json` raw — so the map said *Ho Chi Minh City* while every readout pointing
+at it said *Saigon*. `rebuildCityLabels` now calls `displayCity()`. ⚠ It must relabel
+**before** measuring: the cull reserves a box from `measureText`, so measuring the raw name
+would reserve space for text nobody sees.
+
+**The flag is geometry, not a pattern.** Vietnam is filled yellow and then the same
+polygons, clipped to three latitude bands, are filled red.
+
+- Fitted in **projected space**, not degrees — a flag has equal stripes on screen, and 5°
+  of latitude at 23 °N is not the same number of pixels as 5° at 9 °N. `clipRingHalf`
+  interpolates the cut in Mercator y for the same reason: that is the space Leaflet draws
+  the edge in.
+- ⚠ **Not a `CanvasPattern`.** Leaflet will accept one as `fillColor`, but a pattern tiles
+  in *screen* space — it would repeat across the country and slide under it on every pan.
+- `stroke: false` on the stripes, or every band edge draws as a red line across the
+  country; and `vn-base` re-draws its own outline, because the merged land fill is painted
+  before it and would otherwise swallow Vietnam's coastline.
+- The flag colours are **fixed**, not theme tokens. A flag does not restyle; these three
+  roles are the deliberate exception to everything else on the basemap following the theme.
+
+⚠ This is only possible because the flag needs Vietnam as its **own** geometry — which the
+land+mesh change above had just taken away. `vnFlagFeatures()` reads `objects.countries`
+again for that one country. Paths go 2 → 25; vertices 7,956 → 8,047 (110m) and 80,303 →
+81,096 (50m), still well under the 10,587 / 99,539 of the per-country version.
+
+⚠ **The flag had three definitions and two of them disagreed.** `FLAG_SVG.VN`'s
+hand-written rects put the three stripes 7.5% of the flag height **below centre**; the
+footer's inline `<svg>` had them centred, and used a different yellow (`#FFCD00` against
+`#f9d616`). There is now one `VN_FLAG` constant — stripe 1/9 tall, gap 1/9, centred — and
+`FLAG_SVG.VN` is generated from it. The footer is static HTML and out of reach from there;
+it is still the odd one out.
+
+**The East Sea islands were never in the data.** Neither mounted tier holds any land
+between 110 °E and 118 °E, so this was not a regression. They are in the un-mounted 10m
+file only, where Natural Earth files the Spratlys as their own entity and the Paracels
+under China — and all 19 islets are 0.4–2.4 km across, which is sub-pixel below ~z7 and a
+few pixels at `maxZoom` 10. Mounting 3.5 MB would not have made them visible. The 19
+centroids are inline in `VN_ISLANDS` and drawn as **fixed-pixel dots** (`pointToLayer` →
+`circleMarker`, radius 2), plus two labels via a new `MAP_EXTRA_PLACES` list that goes
+through the same rank filter and the same cull as any city.
+
+⚠ **Drawing them as Vietnamese is the site operator's editorial choice, not the data's
+attribution.** It is marked as such at `VN_ISLANDS`, in `assets/README.md` and here, in all
+three cases with the instruction not to "correct" it without asking. Recorded so a later
+reader does not mistake it for a data error.
+
+**Verification.** The two harnesses grew with it: the basemap one asserts one base, exactly
+three stripes and 19 island Points, that each stripe lands on its `VN_FLAG` fraction of
+Vietnam's bbox **measured in Mercator space** (matches to 1e-6 in both tiers), that no
+stripe clipped away to zero area, that draw order is land → flag → border, and that the
+flag colours are fixed while land and border stay themed in all four themes — plus that
+`VN_FLAG`'s own stripes are equal, evenly gapped and centred on 0.5, which is the check the
+old hand-written rects would have failed. The label one asserts the basemap renders
+"Saigon" and never the raw name (reading `CITY_RELABEL` out of the page rather than copying
+it), that both archipelago labels are hidden at z3 and shown at z4 and z8, and that an
+extra place is culled by a peer dot exactly like a city. Still no browser, still nothing
+rendered on the VPS.
+
 ### Deferred / not doing
 
 - **PMTiles / Protomaps (rev 1's plan).** Correct engineering for a *street* basemap and the
@@ -967,11 +1033,35 @@ requires `gps > 0`: `posNum()` flattens an empty box and a rig running at 0 G/s 
 **-$0.49** daily loss — the same "a missing basis is not an idle miner" rule that already
 governed the network figure, applied to the operator's own.
 
-**The money maths had no test until 2026-09-09.** `test/test-mining.js` (27 assertions) lifts
+**Number of units multiplies the PRESET, not the maths (2026-09-09).** Operators run fleets,
+and the form made them do the arithmetic themselves — the hashrate note simply said "Running
+several rigs? Enter their total." A count field could have been wired straight into
+`miningEstimate()`, and that is the wrong place: the page's rule is that the visible boxes are
+the *only* input the estimate reads, so no figure on screen can disagree with the money below
+it. The count instead multiplies a **per-unit basis** into those boxes, which stay totals.
+
+Keeping a basis rather than only a total is what makes the field survive contact with real use.
+An operator who picks a preset, sets 4 units, then corrects the wattage to what the wall meter
+actually reads has *4 × measured*, not 4 × spec — and moving 4 → 8 has to double the measured
+figure, not snap back to the manufacturer's. So a manual edit re-derives the basis (`total ÷
+count`) and flips the picker to Custom; a preset change overwrites the basis and re-multiplies;
+the count re-multiplies whatever basis is current. That also makes the field work for hardware
+that is not in the list at all. Three details are load-bearing and all three are asserted:
+a blank, `0`, negative or half-typed count is **one** unit (`0` would zero the rig, `NaN` would
+poison every figure below it); writes go through a 12-significant-digit trim, because `1.15 × 3`
+is `3.4499999999999997` and that must never land in a box the reader retypes; and the basis is
+seeded from **what is on screen**, not from the selected preset, so a browser that restores a
+form across a reload (Firefox) does not silently undo the restored count.
+
+**The money maths had no test until 2026-09-09.** `test/test-mining.js` (34 assertions) lifts
 the pure helpers out of the shipped `tiny-explorer.js` by brace-matching — so it tests the file
 that deploys, not a copy — and covers the share formula, the fee clamp, every missing-input
 path resolving to `null` rather than a number, the formatter dash/precision rules, the blocker
-order, and the client↔server↔markup id contract.
+order, and the client↔server↔markup id contract. §7 is the exception to the suite's
+no-DOM rule: "number of units" is pure interaction — a count, a preset and two boxes that
+rewrite each other — and nothing read off the source would prove it, so it drives the real
+`initMining()` through a ~40-line listener-capturing shim. Still no jsdom and no
+devDependency, which is the constraint that actually binds.
 
 #### The assumed-port false negative (2026-09-09)
 

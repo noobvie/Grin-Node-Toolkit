@@ -20,9 +20,11 @@
 //     input, and no arithmetic test would have caught it.
 //
 // So this asserts the estimate function AND the sub-line each card falls back to.
-// It reads the shipped file as text and evaluates only the pure functions out of
-// it — there is no DOM here and no devDependency (06d has one npm dependency,
-// express, and that is not negotiable).
+// It reads the shipped file as text and evaluates the pure functions out of it;
+// §7 additionally drives initMining() through a ~40-line listener-capturing shim,
+// because "number of units" is pure interaction and nothing read off the source
+// would prove it. There is no jsdom and no devDependency either way (06d has one
+// npm dependency, express, and that is not negotiable).
 //
 // Run: node test/test-mining.js
 
@@ -248,6 +250,135 @@ ok('every electricity preset carries a rate, and none is negative', () => {
     const n = parseFloat(v);
     assert.ok(isFinite(n) && n >= 0, 'bad kWh preset: ' + JSON.stringify(v));
   }
+});
+
+// ═══ 7. "Number of units" — the multiplier, driven through real handlers ═══
+console.log('\n[7] number of units — the boxes below hold the FLEET total');
+
+// This one feature cannot be tested by reading the source: it is entirely
+// interaction — a count, a preset and two boxes that rewrite each other. So the
+// shim below captures listeners and fires them against the shipped initMining().
+// It is ~40 lines of plain JS and node:assert; there is still no jsdom and no
+// devDependency, which is the constraint that actually matters here.
+//
+// The invariant under test: the hashrate and wattage boxes are ALWAYS the total
+// for every unit, because miningEstimate() reads nothing else. The count is not
+// a hidden multiplier inside the maths — it multiplies a per-unit basis INTO the
+// visible boxes, so every figure on the page stays checkable against what the
+// reader can see.
+function drive() {
+  const vals = { 'mine-gps':'1.2','mine-fee':'0','mine-watt':'120','mine-kwh':'0.17','mine-units':'1' };
+  const text = {}, listeners = {};
+  const mk = (id) => ({ id,
+    get value(){ return vals[id]; }, set value(v){ vals[id] = String(v); },
+    get textContent(){ return text[id]; }, set textContent(v){ text[id] = v; },
+    dataset:{}, options:[], selectedIndex:0, style:{},
+    addEventListener(ev, fn){ (listeners[id] = listeners[id] || {})[ev] = fn; },
+    setAttribute(){}, removeAttribute(){}, classList:{ add(){}, remove(){}, toggle(){} } });
+
+  const RIGS = [
+    { value:'ipollo-g1-mini', text:'iPollo G1 Mini — 1.20 G/s · 120 W', gps:'1.2', watts:'120' },
+    { value:'ipollo-g1',      text:'iPollo G1 — 36.0 G/s · 2800 W',    gps:'36',  watts:'2800' },
+    { value:'custom',         text:'Custom — enter your own figures' },
+  ];
+  const nodes = {};
+  for (const id of Object.keys(vals).concat(['mine-rig-note','mine-units-note','mine-watt-note',
+    'mine-kwh-note','mine-day','mine-week','mine-month','mine-day-usd','mine-week-usd','mine-month-usd',
+    'mine-power','mine-breakeven','mine-breakeven-sub','mine-profit','mine-profit-sub',
+    'mine-net','mine-net-sub','mine-price','mine-price-sub'])) nodes[id] = mk(id);
+
+  const rig = mk('mine-rig');
+  rig.options = RIGS.map(r => { const o = mk('o'); o.text = r.text;
+    if (r.gps) { o.dataset.gps = r.gps; o.dataset.watts = r.watts; } return o; });
+  Object.defineProperty(rig, 'value', {
+    get(){ return RIGS[rig.selectedIndex].value; },
+    set(v){ rig.selectedIndex = RIGS.findIndex(r => r.value === v); } });
+  nodes['mine-rig'] = rig;
+  const kwh = mk('mine-kwh-preset');
+  kwh.options = [Object.assign(mk('o'), { dataset:{ kwh:'0.17' } })];
+  Object.defineProperty(kwh, 'value', { get(){ return 'us'; }, set(){} });
+  nodes['mine-kwh-preset'] = kwh;
+
+  let ready = null;
+  const sandbox = {
+    document: { documentElement:{ setAttribute(){}, getAttribute(){ return null; } },
+      body:{ dataset:{ page:'mining' }, classList:{ add(){}, remove(){} } },
+      getElementById: id => nodes[id] || null,
+      querySelector: () => null, querySelectorAll: () => [], createElement: () => mk('t'),
+      addEventListener: (ev, fn) => { if (ev === 'DOMContentLoaded') ready = fn; } },
+    window: { location:{ pathname:'/mining', href:'' }, addEventListener(){} },
+    localStorage: { getItem: () => null, setItem(){}, removeItem(){} },
+    navigator: { clipboard: null },
+    matchMedia: () => ({ matches:false, addEventListener(){}, addListener(){} }),
+    // Never settles: these assertions are about the form, and a live basis would
+    // make them depend on a timer. run-all.js calls report() synchronously.
+    fetch: () => new Promise(() => {}),
+    console: { log(){} },
+  };
+  const args = Object.keys(sandbox);
+  new Function(...args, js)(...args.map(k => sandbox[k]));
+  ready();
+
+  return {
+    vals, text,
+    rig: () => rig.value,
+    set(id, v, ev) { nodes[id].value = v; listeners[id][ev || 'input'](); },
+    boxes: () => vals['mine-gps'] + '/' + vals['mine-watt'],
+  };
+}
+
+ok('a count of 1 leaves the shipped defaults alone', () => {
+  const d = drive();
+  assert.strictEqual(d.boxes(), '1.2/120');
+});
+
+ok('4 units multiplies BOTH the hashrate and the power draw', () => {
+  const d = drive();
+  d.set('mine-units', '4');
+  assert.strictEqual(d.boxes(), '4.8/480', 'the count did not reach both boxes');
+  assert.ok(d.text['mine-units-note'].includes('4.8 G/s and 480 W'),
+    'the note does not say the multiplication back: ' + d.text['mine-units-note']);
+});
+
+ok('changing the hardware keeps the count instead of dropping to one', () => {
+  const d = drive();
+  d.set('mine-units', '4');
+  d.set('mine-rig', 'ipollo-g1', 'change');
+  assert.strictEqual(d.boxes(), '144/11200', 'the preset overwrote the fleet total');
+});
+
+ok('a figure corrected by hand is what gets multiplied — 4 x measured, not 4 x spec', () => {
+  const d = drive();
+  d.set('mine-units', '4');
+  d.set('mine-watt', '600');          // 150 W each at the wall, not the 120 W spec
+  assert.strictEqual(d.rig(), 'custom', 'editing a total left the picker naming a preset');
+  d.set('mine-units', '8');
+  assert.strictEqual(d.vals['mine-watt'], '1200', 'the measured wattage was thrown away');
+});
+
+ok('blank, zero, junk and negative counts are ONE unit — never zero, never NaN', () => {
+  for (const v of ['', '0', 'abc', '-3']) {
+    const d = drive();
+    d.set('mine-units', '4');
+    d.set('mine-units', v);
+    assert.strictEqual(d.boxes(), '1.2/120', 'count ' + JSON.stringify(v) + ' did not fall back to one');
+  }
+});
+
+ok('no float dust reaches a box the reader retypes', () => {
+  const d = drive();
+  d.set('mine-units', '3');
+  d.set('mine-gps', '2.1');           // 0.7 each
+  d.set('mine-units', '3');
+  assert.strictEqual(d.vals['mine-gps'], '2.1', '0.7 x 3 leaked its binary tail');
+  d.set('mine-units', '7');
+  assert.strictEqual(d.vals['mine-gps'], '4.9');
+});
+
+ok('the count never becomes a hidden multiplier inside the maths', () => {
+  // miningEstimate() must still take no unit count: the boxes are the only input.
+  assert.ok(!/units?/.test(lift('miningEstimate')),
+    'miningEstimate() now knows about unit counts — the visible total is no longer the whole input');
 });
 
 // ═══ Report ══════════════════════════════════════════════════════════════════

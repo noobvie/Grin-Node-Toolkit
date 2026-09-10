@@ -100,6 +100,28 @@ Coordinates are rounded to 3 decimal places (~110 m). The map's `maxZoom` is 10,
 pixel is ~153 m, so this is already finer than anything that can be displayed.
 `scalerank` runs 0 (most prominent) to 10 — filter on it to thin labels at low zoom.
 
+## What the mounted tiers do NOT contain
+
+Measured, because "the map is missing an island" is otherwise unanswerable:
+
+**`countries-110m.json` and `countries-50m.json` hold no land at all between 110 °E and
+118 °E.** The Paracel (Hoàng Sa) and Spratly (Trường Sa) groups are absent from both, so
+they cannot be missing "because of a bug" — the geometry was never in the file.
+
+They exist only in `countries-10m.json`, which is **not mounted**, and there Natural Earth
+files the Spratlys as their own entity (`Spratly Is.`) and the Paracels under **China**.
+19 islets in total, and every one of them is **0.4–2.4 km across** — at the map's `maxZoom`
+of 10 one pixel is ~153 m, so a true-size polygon is a couple of pixels at the deepest zoom
+this map allows and nothing at all below about z7. Mounting the 3.5 MB tier would therefore
+still not make them appear.
+
+So `index.html` carries the 19 centroids inline (`VN_ISLANDS`) and draws them as
+**fixed-pixel dots**, the way an atlas symbolises an archipelago. No asset changed.
+
+⚠ **They are drawn in Vietnamese flag colours. That is the site operator's editorial
+choice, not what the data says** — see the note beside `VN_ISLANDS`. Do not "correct" it
+to match Natural Earth's attribution without asking.
+
 ## Dateline seams — repaired at runtime, do NOT "fix" the data
 
 Every one of these files stores **Russia, Fiji and Antarctica** with a ring that steps

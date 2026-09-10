@@ -138,10 +138,18 @@
         </div>
 
         <div class="tx-mine-row">
+          <label class="tx-mine-label" for="mine-units">Number of units</label>
+          <div class="tx-mine-control">
+            <input id="mine-units" type="number" min="1" step="1" inputmode="numeric" placeholder="1" value="1">
+            <p class="tx-mine-note" id="mine-units-note">How many you run. The hashrate and power draw below are the <strong>total</strong> for all of them — no need to multiply anything yourself.</p>
+          </div>
+        </div>
+
+        <div class="tx-mine-row">
           <label class="tx-mine-label" for="mine-gps">Your hashrate <small>(G/s)</small></label>
           <div class="tx-mine-control">
             <input id="mine-gps" type="number" min="0" step="any" inputmode="decimal" placeholder="1.2" value="1.2">
-            <p class="tx-mine-note">Graphs per second, as your miner reports it. Running several rigs? Enter their total.</p>
+            <p class="tx-mine-note">Graphs per second, as your miner reports it — the total across every unit above. Typing your own figure here switches the hardware picker to Custom and treats what you type as one unit's worth times the count.</p>
           </div>
         </div>
 
@@ -157,7 +165,7 @@
           <label class="tx-mine-label" for="mine-watt">Power draw <small>(W, continuous)</small></label>
           <div class="tx-mine-control">
             <input id="mine-watt" type="number" min="0" step="any" inputmode="decimal" placeholder="0" value="120">
-            <p class="tx-mine-note" id="mine-watt-note">A continuous rate, not a daily total.</p>
+            <p class="tx-mine-note" id="mine-watt-note">A continuous rate, not a daily total — the total across every unit above.</p>
           </div>
         </div>
 

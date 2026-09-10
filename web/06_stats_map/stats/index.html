@@ -1028,15 +1028,31 @@ function countryFlag(code) {
   } catch { return ""; }
 }
 
+// The yellow flag with three red stripes, defined ONCE. Two things draw it from here:
+// the flag beside a country name (FLAG_SVG.VN below) and the map's Vietnam fill
+// (buildBasemapFC). Stripes are fractions of the flag's HEIGHT measured from the top —
+// each 1/9 tall with a 1/9 gap, the set of three centred on the flag.
+// ⚠ There is a THIRD copy this cannot reach: the literal <svg> in the footer's static
+// HTML. It is the one that was already centred correctly; the hand-written FLAG_SVG.VN
+// rects were not (their three stripes sat 7.5% of the height below centre), which is why
+// they are generated now instead of typed. The footer also uses a different yellow
+// (#FFCD00). Aligning it is a one-line edit nobody has made yet.
+const VN_FLAG = {
+  yellow:  "#f9d616",
+  red:     "#da251d",
+  stripes: [[4 / 18, 6 / 18], [8 / 18, 10 / 18], [12 / 18, 14 / 18]],
+};
+
 // Display-only flag overrides. The yellow/3-red-stripe flag has no Unicode
 // emoji, so it is rendered as an inline SVG instead of a codepoint flag.
 const FLAG_SVG = {
   VN: '<svg viewBox="0 0 36 24" width="18" height="12" ' +
       'style="vertical-align:-2px;border:1px solid rgba(0,0,0,.2)" aria-label="Saigon">' +
-      '<rect width="36" height="24" fill="#f9d616"/>' +
-      '<rect y="9"  width="36" height="2.4" fill="#da251d"/>' +
-      '<rect y="12.6" width="36" height="2.4" fill="#da251d"/>' +
-      '<rect y="16.2" width="36" height="2.4" fill="#da251d"/></svg>',
+      '<rect width="36" height="24" fill="' + VN_FLAG.yellow + '"/>' +
+      VN_FLAG.stripes.map(([a, b]) =>
+        '<rect y="' + (a * 24).toFixed(2) + '" width="36" height="' +
+        ((b - a) * 24).toFixed(2) + '" fill="' + VN_FLAG.red + '"/>').join("") +
+      '</svg>',
 };
 function displayFlag(code) {
   if (!code) return "";
@@ -1145,11 +1161,29 @@ const BASEMAP_STYLES = {
 // which paints a lake-shaped blob over half of Eurasia.
 function basemapStyleFor(theme, feature) {
   const t = BASEMAP_STYLES[theme] || BASEMAP_STYLES.dark;
-  return feature && feature.properties && feature.properties.role === "border"
-    ? { color: t.color, weight: 0.5, opacity: 0.85, fill: false }
-    : { color: t.color, weight: 0.7, opacity: 1, fill: true,
-        fillColor: t.fillColor, fillOpacity: 1 };
+  const role = (feature && feature.properties && feature.properties.role) || "";
+  switch (role) {
+    case "border":
+      return { color: t.color, weight: 0.5, opacity: 0.85, fill: false };
+    // The land fill is drawn before this and would otherwise cover Vietnam's coastline
+    // stroke, so the base re-draws its own outline in the theme's border colour.
+    case "vn-base":
+      return { color: t.color, weight: 0.7, opacity: 1, fill: true,
+               fillColor: VN_FLAG.yellow, fillOpacity: 1 };
+    // stroke:false or every band edge draws as a red line across the country.
+    case "vn-stripe":
+      return { stroke: false, fill: true, fillColor: VN_FLAG.red, fillOpacity: 1 };
+    case "vn-island":
+      return { color: VN_FLAG.red, weight: 0.8, opacity: 1, fill: true,
+               fillColor: VN_FLAG.yellow, fillOpacity: 1 };
+    default:
+      return { color: t.color, weight: 0.7, opacity: 1, fill: true,
+               fillColor: t.fillColor, fillOpacity: 1 };
+  }
 }
+
+// The flag colours are FIXED, not theme tokens: a flag does not restyle. Everything else
+// on the basemap follows the theme, so these three roles are the deliberate exception.
 
 // Land as ONE merged shape plus internal borders as ONE line mesh — not 177/241 separate
 // country polygons. Two reasons, and the second is the one that shows:
@@ -1168,14 +1202,124 @@ function basemapStyleFor(theme, feature) {
 // country. Nothing did — the layer is interactive:false and the peer dots own every
 // interaction on this map — but a future "click a country" feature would have to undo
 // this, not extend it.
+// ── Vietnam, painted with the flag ───────────────────────────────────────────
+// Web Mercator's y, and back. The stripes are fitted in PROJECTED space, not in degrees:
+// a flag has equal-height stripes on screen, and 5 degrees of latitude at 23N is a
+// different number of pixels from 5 degrees at 9N.
+const mercY    = lat => Math.log(Math.tan(Math.PI / 4 + lat * Math.PI / 360));
+const mercLat  = y   => (Math.atan(Math.sinh(y)) * 180) / Math.PI;
+
+// Sutherland-Hodgman against ONE horizontal half-plane. The cut is placed by
+// interpolating in Mercator y, because that is the space Leaflet draws the edge in —
+// interpolating in degrees would put the corner a fraction of a pixel off the line.
+function clipRingHalf(ring, lat, keepAbove) {
+  const inside = pt => (keepAbove ? pt[1] >= lat : pt[1] <= lat);
+  const yL = mercY(lat);
+  const out = [];
+  for (let i = 0; i < ring.length - 1; i++) {   // GeoJSON rings are closed: last == first
+    const a = ring[i], b = ring[i + 1];
+    const ai = inside(a), bi = inside(b);
+    if (ai) out.push(a);
+    if (ai !== bi) {
+      const ya = mercY(a[1]), yb = mercY(b[1]);
+      const t = yb === ya ? 0 : (yL - ya) / (yb - ya);
+      out.push([a[0] + t * (b[0] - a[0]), lat]);
+    }
+  }
+  if (out.length) out.push(out[0]);
+  return out.length >= 4 ? out : null;
+}
+
+// A band is convex, so clipping a concave country to it with S-H yields one ring per
+// input ring. Where the band cuts the country into disjoint pieces that ring carries a
+// zero-width bridge along the cut — no area, so it does not show.
+function clipPolysToBand(polys, latLo, latHi) {
+  const out = [];
+  for (const poly of polys) {
+    const rings = [];
+    for (const ring of poly) {
+      const top = clipRingHalf(ring, latHi, false);
+      const cut = top && clipRingHalf(top, latLo, true);
+      if (cut) rings.push(cut);
+    }
+    if (rings.length) out.push(rings);
+  }
+  return out;
+}
+
+// ⚠ The Paracel (Hoang Sa) and Spratly (Truong Sa) groups are NOT in either mounted
+// tier — 110m and 50m have no land at all between 110E and 118E. They exist only in the
+// un-mounted countries-10m.json, where Natural Earth files the Spratlys as their own
+// disputed entity and the Paracels under China. These are the 19 islet centroids from
+// that file, and every one of them is 0.4-2.4 km across: true polygons would be
+// sub-pixel below about z7, which is exactly why the sea looks empty. So they are drawn
+// as fixed-PIXEL dots — the way an atlas symbolises an archipelago — rather than as
+// landmasses whose real size is a rounding error at this scale.
+// ⚠ Showing them as Vietnamese is an editorial choice by the operator of this site, not
+// something the data says. Do not "correct" it to match Natural Earth without asking.
+const VN_ISLANDS = [
+  [112.337, 16.928], [112.332, 16.831], [112.732, 16.664], [111.680, 16.579],
+  [111.605, 16.529], [111.760, 16.045], [111.200, 15.782],
+  [115.016, 11.112], [114.280, 11.046], [115.838, 10.828], [115.822, 10.729],
+  [114.456, 10.393], [114.362, 10.374], [114.467, 10.373], [115.367, 10.239],
+  [114.364, 10.182], [114.035, 10.017], [114.362,  9.769], [114.377,  9.686],
+];
+
+// world-atlas names its features `name`; the 10m file this repo builds uses `n`.
+const featureName = f => (f.properties && (f.properties.name || f.properties.n)) || "";
+
+// The flag, as real geometry: Vietnam's own polygons filled yellow, then the same
+// polygons clipped to three latitude bands filled red. Geometry rather than a canvas
+// pattern because a CanvasPattern tiles in screen space — it would repeat across the
+// country and slide under it on every pan, instead of being three stripes on a flag.
+function vnFlagFeatures(topo) {
+  const countries = topojson.feature(topo, topo.objects.countries);
+  const vn = countries.features.find(f => /^viet ?nam$/i.test(featureName(f)));
+  if (!vn) return [];                       // no Vietnam in this file: draw plain land
+
+  const g = vn.geometry;
+  const polys = g.type === "Polygon" ? [g.coordinates]
+              : g.type === "MultiPolygon" ? g.coordinates : null;
+  if (!polys) return [];
+
+  let top = -Infinity, bot = Infinity;
+  for (const poly of polys) for (const pt of poly[0]) {
+    if (pt[1] > top) top = pt[1];
+    if (pt[1] < bot) bot = pt[1];
+  }
+  const yTop = mercY(top), yBot = mercY(bot), h = yTop - yBot;
+
+  const out = [{
+    type: "Feature",
+    properties: { role: "vn-base" },
+    geometry: { type: "MultiPolygon", coordinates: polys },
+  }];
+  for (const [a, b] of VN_FLAG.stripes) {
+    const band = clipPolysToBand(polys, mercLat(yTop - b * h), mercLat(yTop - a * h));
+    if (band.length) out.push({
+      type: "Feature",
+      properties: { role: "vn-stripe" },
+      geometry: { type: "MultiPolygon", coordinates: band },
+    });
+  }
+  for (const [lon, lat] of VN_ISLANDS) out.push({
+    type: "Feature",
+    properties: { role: "vn-island" },
+    geometry: { type: "Point", coordinates: [lon, lat] },
+  });
+  return out;
+}
+
 function buildBasemapFC(topo) {
   const land = topojson.feature(topo, topo.objects.land);
   return {
     type: "FeatureCollection",
+    // Draw order is array order in one canvas: land, then the flag over Vietnam's part of
+    // it, then the border mesh last so no fill can paint over a border.
     // feature() returns a FeatureCollection for a GeometryCollection and a bare Feature
     // otherwise. world-atlas ships the former; the guard is one expression and means a
     // re-vendored file that ships the latter degrades to a map instead of a blank page.
-    features: (land.features || [land]).concat([{
+    features: (land.features || [land]).concat(vnFlagFeatures(topo), [{
       type:       "Feature",
       properties: { role: "border" },
       geometry:   topojson.mesh(topo, topo.objects.countries, (a, b) => a !== b),
@@ -1199,6 +1343,12 @@ function makeBasemapLayer() {
     // dots that live in it. Splitting the two canvases is what makes "labels above the
     // land, below every dot" expressible at all (see the pane table in initMap).
     renderer:    L.canvas({ pane: "basemapPane" }),
+    // The island points are the only Point features here, and they must keep a fixed
+    // PIXEL size — their true extent is 0.4-2.4 km, which is sub-pixel at every zoom
+    // this map allows below ~z7. interactive:false is repeated because the geoJSON
+    // option does not reach a layer this callback builds itself.
+    pointToLayer: (feat, latlng) =>
+      L.circleMarker(latlng, { radius: 2, interactive: false }),
     // Reads the live currentTheme instead of a captured argument. This runs again on
     // every tier swap, so a captured theme would resurrect the old colours the first
     // time the map crossed a zoom band after a theme switch.
@@ -1474,6 +1624,16 @@ const CITY_LABEL_H           = 11;  // 10px text at line-height 1, +1 for descen
 const CITY_LABEL_DY          = 4;   // MUST match .bm-label-t's translate Y
 const CITY_LABEL_PAD         = 2;   // breathing room between two kept boxes
 
+// Places the basemap needs a name for that Natural Earth's populated-places file has no
+// row for. Same [name, scalerank, lon, lat] shape as cities.json, so they go through the
+// same rank filter and the same cull — they can be dropped by a collision like any other
+// label, and they cannot be drawn over a peer dot. Rank 3 puts them on the map from z4.
+// See VN_ISLANDS for what these two label, and for whose attribution this is.
+const MAP_EXTRA_PLACES = [
+  ["Hoàng Sa", 3, 111.95, 16.45],
+  ["Trường Sa", 3, 114.60, 10.40],
+];
+
 let cityLabelData  = null;   // [name, scalerank, lon, lat][] once fetched
 let cityLabelLayer = null;
 
@@ -1523,11 +1683,16 @@ function rebuildCityLabels() {
   // Most important first, so what a cull drops is what a reader misses least. scalerank
   // is the only ordering the data carries; the name tie-break exists purely to make the
   // outcome stable — without it two equal-rank cities could swap places on every pan.
-  const cands = cityLabelData
+  const cands = cityLabelData.concat(MAP_EXTRA_PLACES)
     .filter(row => row[1] <= maxRank && bounds.contains([row[3], row[2]]))
     .sort((a, b) => a[1] - b[1] || (a[0] < b[0] ? -1 : 1));
 
-  for (const [name, , lon, lat] of cands) {
+  for (const [rawName, , lon, lat] of cands) {
+    // Same relabel the tooltip, the peer list and the footer byline already use — the
+    // basemap was the one surface still printing the raw GeoIP/Natural Earth string, so
+    // the map said "Ho Chi Minh City" while everything pointing at it said "Saigon".
+    // Measure the DISPLAYED name, or the cull reserves a box for text nobody sees.
+    const name = displayCity(rawName);
     const pt = leafletMap.latLngToLayerPoint([lat, lon]);
     const w  = ctx.measureText(name).width + CITY_LABEL_PAD * 2;
     const box = {

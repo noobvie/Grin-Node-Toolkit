@@ -1,8 +1,10 @@
 # Script 06 — Global Grin Health (design notes)
 
-> **Covers code as of:** 2026-09-08 · **Last verified:** never systematically verified
-> **Product code last changed:** 2026-09-08 — `web/06d_tiny_explorer/public/` (mining calculator presets); 2026-09-07 — `scripts/lib/06d_tiny_explorer.sh` (deploy/restart lifecycle); 2026-09-06 — `scripts/06_global_grin_health.sh`, `scripts/lib/06*`, `web/06_stats_map/`, `web/06d_tiny_explorer/`
-> 06d has a test suite (`web/06d_tiny_explorer/test/`, 98 assertions), but it tests the code, not this doc.
+> **Covers code as of:** 2026-09-09 · **Last verified:** 2026-09-09, PARTIAL — the *Tool 2 —
+> Wallet Checker* section only, read against `lib/wallet-tor.js`, `tiny-explorer-server.js`
+> and `scripts/lib/06d_tiny_explorer.sh`. The rest of this doc is still never systematically verified.
+> **Product code last changed:** 2026-09-09 — `scripts/lib/06d_tiny_explorer.sh` (tor install + probe status row) and `web/06d_tiny_explorer/` (probe-aware page copy); 2026-09-09 — `web/06d_tiny_explorer/` (node-check assumed-port retry); 2026-09-08 — `web/06d_tiny_explorer/public/` (mining calculator presets); 2026-09-07 — `scripts/lib/06d_tiny_explorer.sh` (deploy/restart lifecycle); 2026-09-06 — `scripts/06_global_grin_health.sh`, `scripts/lib/06*`, `web/06_stats_map/`, `web/06d_tiny_explorer/`
+> 06d has a test suite (`web/06d_tiny_explorer/test/`, 113 assertions), but it tests the code, not this doc.
 
 Only sections that need durable prose live here; the menu/wiring lives in
 `scripts/06_global_grin_health.sh`. Options A (network stats), B (GrinScan),
@@ -755,7 +757,7 @@ line with the `1.2` replaced by an input, plus the `price_usd` already in the pa
   calculator that reads as a promise is the failure mode.
 
 **Hardware and electricity presets (2026-09-08).** Two `<select>`s were added — a rig picker
-(iPollo G1 / G1 Mini, 11 NVIDIA and 7 AMD GPUs) and an electricity-rate
+(iPollo G1 Mini / G1, 11 NVIDIA and 7 AMD GPUs) and an electricity-rate
 picker grouped by region — North America (US ≈ $0.17/kWh, US industrial ≈ $0.08, Canada ≈ $0.13,
 Quebec/Manitoba hydro ≈ $0.06), Europe (Germany ≈ $0.40, EU average ≈ $0.30, Norway/Sweden ≈ $0.12),
 Asia-Pacific (China ≈ $0.08, Australia ≈ $0.25) and a low-cost hosting band (Iceland / Paraguay /
@@ -767,11 +769,23 @@ Kazakhstan hydro ≈ $0.05, or free). Three rules hold them honest:
   figure snaps its select back to `Custom`, so the dropdown can never name a rig whose numbers
   have left the screen.
 - **Every row names where its numbers came from, and a row with no source does not ship.**
-  ASIC rows are the manufacturer's published spec. GPU rows are whattomine's Cuckatoo32 table
+  ASIC rows are the manufacturer's published spec — **G1 Mini 1.2 G/s / 120 W, G1 36 G/s /
+  2800 W** (both confirmed by their own efficiency ratings, 100 and 77.8 J/GPS). They shipped
+  wrong on 2026-09-08 as `G1 1.2 / 970` and `G1 Mini 0.3 / 240`: the Mini's hashrate had been
+  put on the G1 and both wattages invented. **The repo already contained the correction** —
+  `tiny-explorer-server.js`'s `g1_per_day` comment and the homepage tooltip both say *IPOLLO
+  G1 mini (1.2 G/s)*, so an in-repo `grep` would have caught it before any web source did.
+  Check the product's own strings first. The picker therefore defaults to the **G1 Mini**, which
+  keeps the form's opening figures identical to the homepage's `g1_per_day` basis; defaulting
+  to the G1 would open the page on a 2.8 kW farm box. GPU rows are whattomine's Cuckatoo32 table
   (`whattomine.com/coins/324-grin-cuckatoo32/gpus`), cited in the hint line under the form —
   they started as guesses and were replaced wholesale on 2026-09-08, which moved the RTX 4090
   from an invented 2.2 G/s to a sourced **1.40**, a 57% error that would have overstated a
-  miner's income by the same margin. Two Innosilicon G32 rows were dropped the same day for
+  miner's income by the same margin. Cross-checked against minerstat the same day: the two
+  disagree by **up to ~25%** on some cards (RTX 3080 0.90 vs 1.16, RTX 2080 Ti 0.68 vs 0.85)
+  and whattomine sits at the **conservative** end of the spread — the right bias for an income
+  estimate, and the reason to keep one source rather than average two. Do not "improve" a row
+  by splitting the difference; that produces a number no source stands behind. Two Innosilicon G32 rows were dropped the same day for
   having no defensible figure at all; `Custom` covers the gap without putting an invented
   number in front of a miner. **A claim that the cited source contradicts goes too** — the
   optgroup said Cuckatoo32 needs ≥ 11 GB VRAM, and whattomine lists 6 GB cards, so the claim
@@ -788,6 +802,16 @@ Kazakhstan hydro ≈ $0.05, or free). Three rules hold them honest:
 Layout: one field per line (`.tx-mine-row`, a 190px label column) rather than the old
 four-across grid, because the rows now carry a note line each.
 
+**Power draw is a rate, and it was read as a daily total.** Nothing on screen converted it: the
+*Power cost / day* card shows the money, never the energy. The field is now labelled
+`(W, continuous)` and carries a live line — *"120 W running 24/7 is 2.9 kWh a day"* — recomputed
+in `render()`. A unit that only appears in a formula caption (`watts ÷ 1000 × 24 × per kWh`) is a
+unit the reader has to reverse-engineer; state it next to the input instead. The wattage goes
+through its own `fmtWatts`, not `fmtGrinAmt`: that formatter picks decimals by magnitude for a
+GRIN *balance*, which rendered the same sentence as "120.00 W" on one preset and "2,800 W" on
+the next. The one line whose whole job is to make a unit unambiguous cannot be inconsistent
+about the number in it.
+
 **The two basis cards are the page's error surface.** `/api/stats` was fetched as
 `r.ok ? r.json() : null` and then `if (!s) return`, so any failure left *Network hashrate* on
 `loading…` and *GRIN price* on `—` for ever — indistinguishable from a slow network, and silent
@@ -800,6 +824,54 @@ including the price — and a bare network error is the browser. `hashrate_gps_2
 evidence about the request, not about the data.** The identical swallow is still in
 `initEmission()`.
 
+#### The assumed-port false negative (2026-09-09)
+
+`api.grin.money` — a node this toolkit itself publishes — reported **"Not reachable — nothing
+answered before the timeout."** Verified from outside on 2026-09-09: `POST get_tip` to
+`https://api.grin.money/v2/foreign` returns **HTTP 200** with `{"Ok":{"height":4011570,…}}`,
+while `http://api.grin.money:3413/v2/foreign` times out with no answer at all.
+
+The verdict was *true about the address it dialled and false about the question asked*.
+`parseTarget()` defaults a bare host to `http` + **3413**, but Script 04's whole design binds the
+node API to localhost and fronts it with nginx on **443** — CLAUDE.md lists
+`https://api.grin.money` as *the* Node API (nginx) endpoint. So for a node deployed the way this
+toolkit deploys them, the default port is the wrong one, and a firewalled 3413 is the expected
+state rather than a fault.
+
+**Not fixed by dialling both.** Rule 3 of the route ("one attempt per question") exists so a
+failing check cannot cost two outbound requests — the failing path is the one an abuser drives.
+A fallback would double exactly that path. Instead `parseTarget()` now returns **`assumed`**
+(true only when neither scheme nor port was given), the route attaches a `suggest` object, and
+the client renders a one-click **"Check https://host instead"** button under the failed verdict.
+A retry is a new question from the visitor, so the count per question stays at one.
+
+Three things this shape depends on:
+
+- **The suggestion is rendering, not diagnosis.** `busy` (503, nothing dialled), `blocked` and
+  `bad_input` (400s) and `dns_failed` all carry the full result shape including `suggest`, so
+  they are named in a `NO_SUGGEST` deny-set. Ending a queue-is-full banner with "try https://"
+  invents a finding for a request that never left the box.
+- **`assumed` is false the moment either half is explicit.** `host:13413` and `https://host` both
+  suppress it — offering the alternative to someone who typed a port second-guesses a deliberate
+  choice, and the tests assert the flag on all ten accepted forms for that reason.
+- **The retry rewrites the input box first**, so what is on screen always matches what was
+  dialled. A result whose "Checked" row disagrees with the field above it is how this class of
+  confusion started. The rewrite sits *below* the `busy` guard, though: the suggestion button
+  stays clickable while a check is in flight (the output is not cleared until the answer lands),
+  and a rewrite above the guard would put a host in the box that was never dialled and then
+  bail — recreating the exact confusion, from the control built to end it.
+- **Names only — a bare IP is `assumed` but gets no suggestion.** The obvious reading of the
+  flag ("we picked the port, so offer the other one") sends anyone who typed an IP into a
+  certificate failure: the route verifies certificates and deliberately omits SNI for an IP
+  literal, so `https://203.0.113.9` returns `tls_error` whatever is running there. A second dead
+  end dressed as a fix is worse than no suggestion — the visitor now has two verdicts to
+  disbelieve. The thing being suggested, a node fronted by nginx with a real certificate, has a
+  name. `test-node-check.js` §4 asserts the gate against the server source rather than
+  re-implementing it, because a copy of the expression would agree with itself for ever.
+
+The reverse case — an explicit `https://host` failing while the node is really on 3413 — is
+deliberately left alone: `assumed` is false there, and a suggestion would be a guess.
+
 ### Tool 2 — Wallet Checker (`/wallet-check`, phase 1 + phase 3)
 
 "Is this `grin1…` wallet listening right now?" A Slatepack address *is* a 32-byte ed25519
@@ -810,8 +882,10 @@ mainnet vs testnet from the HRP, show the derived `.onion`. This alone catches t
 common real failure (a truncated or mistyped address), and it is useful on its own — the
 `/slate` page already carries a ported bech32 to lift from.
 
-**Tier 2 — server probe (phase 3).** Both halves already exist in this repo, both
-dependency-free:
+**Tier 2 — server probe (phase 3). SHIPPED** as `lib/wallet-tor.js` + `lib/socks5.js` +
+`POST /api/wallet-check` + the `probeSection()` half of `public/js/wallet-check.js`. It is
+**off by default** (`wallet_check_probe`) and needs a local tor SOCKS proxy; see *As built*
+below. Both halves it was ported from already existed in this repo, both dependency-free:
 
 - `web/07_mining_pool_public/back-end-pool/lib/wallet-tor.js` — `bech32Decode`,
   `onionV3FromPubkey`, `deriveOnionAddress`, `probeToronlineStatus`. The derivation was
@@ -830,11 +904,59 @@ Carried forward from the pool's gate, do not re-derive:
   user's wallet being offline is the same class of lie as reporting a healthy remote node's
   peer count as `0`.
 
-Open question to settle on a live testnet listener before Tier 2 ships: **does the wallet
-foreign API over Tor require basic auth?** Probe with a real `check_version` JSON-RPC rather
-than a bare TCP connect — CLAUDE.md's *reachability needs a parsed result* rule applies
-verbatim. If it answers 401, that is still proof a grin-wallet is there, so treat 401 as
-online; a bare TCP accept is not.
+The open question — **does the wallet foreign API over Tor require basic auth?** — was
+*decided* rather than settled: the shipped probe sends a real `check_version` JSON-RPC (never
+a bare TCP connect, per CLAUDE.md's *reachability needs a parsed result*) and treats an HTTP
+401 as **online**, since a 401 still proves a grin-wallet is answering. That rule has never
+been exercised against a live listener, so it stays the one unverified assumption in tier 2.
+
+**As built — operator enablement.** The probe's failure mode is silent from the outside: the
+flag can be on with no tor, and every visitor then gets *"could not check"* while the service,
+port, config and nginx status rows all read green. Two guards close that:
+
+- **Configure offers the tor install.** Answering *yes* with nothing on `127.0.0.1:9050` calls
+  `_tinyx_ensure_tor` (client only, no hidden service — ported from `_acg_ensure_tor` in
+  `052_lib_gateway.sh`), then re-checks that the SOCKS port is actually **listening** rather
+  than trusting `systemctl is-active`: a tor with `SocksPort 0` is active and proxies nothing.
+  If it still does not come up, the operator is told what they are choosing and the flag
+  defaults back to off. Before this, *yes* wrote the flag and printed "(apt install tor)",
+  which made a probe that always answers "could not check" the single likeliest outcome of
+  enabling it.
+- **Status reports it.** `tinyx_status` prints a `Probe:` row — off / on-with-SOCKS-up /
+  on-but-no-SOCKS — because nothing else on that screen looks at tor.
+- **The listener test has to be wider than one literal string.** `_tinyx_tor_socks_up` is what
+  that red row and the enable prompt both rest on, so a false negative there talks an operator
+  out of a probe that works. It matches `127.0.0.1:<port>` **or** `[::1]:<port>` (a torrc saying
+  `SocksPort [::1]:9050` is up and usable), anchors on trailing whitespace so `:9050` never
+  matches `:90501` or tor's control port `:9051`, and falls back to a real connect over bash's
+  `/dev/tcp` where the box has no `ss` at all — reporting "no SOCKS" about a proxy nobody
+  looked for is the same lie in the other direction.
+
+**As built — the copy has two states, and the static HTML is the OFF one.** The page described
+itself as tier-1-only long after tier 2 shipped, and hedged the difference (*"where this server
+offers the optional Tor liveness check…"*), which makes the visitor resolve a conditional the
+page already knows the answer to — `window.TINYEXP_WALLET_PROBE` is injected per request.
+Both states are now definite:
+
+- The **static HTML carries the probe-OFF wording**, deliberately. It is what ships by default
+  and what a visitor sees if the script fails to load, so the failure direction is
+  under-promising, never a page insisting it can report liveness with no control that does.
+- `applyProbeCopy()` in `public/js/wallet-check.js` replaces three elements (`#wc-lede`,
+  `#wc-scope-note`, `#wc-detail-live`) when the probe is on, and `applyWalletProbeLabels()` in
+  `tiny-explorer.js` relabels the tools-menu row and homepage card on every shell — *"can I see
+  whether this wallet is online before I send to it"* is why most people open the tool, and a
+  label that never says so hides it behind a page nobody had a reason to click.
+- The **`<meta name="description">` branches server-side** in `_pageMeta.walletcheck` — the only
+  per-deployment line in `_pageMeta`. A fixed string is wrong on one of the two boxes: either a
+  search result promising a liveness check the visitor will not find, or one denying a
+  capability sitting on the page. The `title` stays fixed so the tool keeps one name.
+- `/proof` claimed the Wallet Checker "never transmits what you paste". With the probe on it
+  does, on request. Reworded to stay true in both states without needing the flag.
+
+The whole arrangement has one silent failure — a renamed id makes the swap a no-op and the page
+then denies a capability whose button is directly below the sentence, in the state operators
+look at least. `test/test-probe-copy.js` (12 assertions) asserts that contract across five
+files rather than the prose.
 
 ### Tool 3 — Node Reachability Checker (`/node-check`, phase 2)
 

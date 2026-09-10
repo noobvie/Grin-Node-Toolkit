@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Grin Wallet Address Checker — Tiny Explorer</title>
-  <meta name="description" content="Check a Grin Slatepack address (grin1… / tgrin1…): is the bech32 checksum valid, is it mainnet or testnet, and what Tor .onion address does it derive to. Runs entirely in your browser.">
+  <meta name="description" content="Check a Grin Slatepack address (grin1… / tgrin1…): is the bech32 checksum valid, is it mainnet or testnet, and what Tor .onion address does it derive to. The address check runs entirely in your browser. Where the operator has enabled it, an optional press-to-run Tor check also reports whether the wallet is answering right now.">
   <meta name="robots" content="index, follow">
   <meta name="theme-color" content="#ff8c00">
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
@@ -66,18 +66,17 @@
 
     <div class="tx-emit-hero">
       <h1>Grin Wallet Address Checker</h1>
-      <p>A Slatepack address is a <strong>32-byte public key</strong> wearing a checksum. Paste one
+      <p id="wc-lede">A Slatepack address is a <strong>32-byte public key</strong> wearing a checksum. Paste one
         to see whether it survived the copy intact, which network it belongs to, and the
         <strong>Tor address</strong> the same key derives to — all worked out in this page,
         with nothing sent anywhere.</p>
     </div>
 
-    <div class="tx-note">
+    <div class="tx-note" id="wc-scope-note">
       <strong>This does not tell you whether the wallet is online.</strong> Pasting an address makes
       no connection at all — not to that wallet, not to Tor, not to any server. An address can be
-      perfectly valid while the wallet behind it has been offline for a year. Where this server
-      offers the optional Tor liveness check, it runs only when you press its button, and it says so
-      before it does.
+      perfectly valid while the wallet behind it has been offline for a year, and this server is not
+      set up to find out.
     </div>
 
     <div class="tx-rows tx-wc-panel">
@@ -89,8 +88,8 @@
       <div class="tx-wc-actions">
         <button class="tx-btn" id="wc-check" type="button">Check</button>
         <button class="tx-btn tx-wc-btn-ghost" id="wc-clear" type="button">Clear</button>
-        <span class="tx-wc-privacy" title="No network request is made — the check runs in your browser">
-          <b>●</b> Checked locally in your browser
+        <span class="tx-wc-privacy" id="wc-privacy-chip" title="The address check makes no network request — it runs in this page">
+          <b>●</b> Address checked in your browser
         </span>
       </div>
     </div>
@@ -110,12 +109,11 @@
             <code>grin1…</code> is mainnet, <code>tgrin1…</code> is testnet. Nothing else in the
             Grin transaction format records the network — a slate itself carries no network field
             at all — so the address prefix is the single signal that exists.</li>
-          <li><strong>The address check does not say the wallet is listening.</strong> The
-            <code>.onion</code> shown is arithmetic on the address, not evidence that anything
-            answers there. If this server offers the Tor liveness check, that is a separate,
-            deliberate step and its answer is reported separately — including a third outcome,
-            <em>we could not check</em>, which is about this server and not about your wallet. A
-            checker that collapsed that into "offline" would be blaming you for its own outage.</li>
+          <li id="wc-detail-live"><strong>The address check does not say the wallet is
+            listening.</strong> The <code>.onion</code> shown is arithmetic on the address, not
+            evidence that anything answers there. This server does not offer the optional Tor
+            liveness check, so this page never finds out — an address stays valid whether or not a
+            wallet is behind it. To know, ask the recipient, or send a small amount first.</li>
           <li><strong>It holds no keys and never will.</strong> A public key is public: deriving
             an onion from it reveals nothing the address did not already reveal. This page cannot
             sign, send, or spend.</li>

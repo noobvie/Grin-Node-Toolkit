@@ -905,7 +905,7 @@ function nodeCheckNetError(err) {
   const c = String((err && err.code) || (err && err.message) || '');
   if (/timeout|ETIMEDOUT/i.test(c))            return { code: 'timeout',     reason: 'No answer before the timeout — a firewall dropping the packets looks exactly like this.' };
   if (/ECONNREFUSED/.test(c))                  return { code: 'refused',     reason: 'The connection was refused — the host answered, but nothing is listening on that port.' };
-  if (/ENOTFOUND|EAI_AGAIN/.test(c))           return { code: 'dns_failed',  reason: 'That host name did not resolve.' };
+  if (/ENOTFOUND|EAI_AGAIN/.test(c))           return { code: 'dns_failed',  reason: 'No DNS record answered for that name. Check the spelling, and that the record has propagated.' };
   if (/EHOSTUNREACH|ENETUNREACH/.test(c))      return { code: 'unreachable', reason: 'No route to that host.' };
   if (/ECONNRESET|EPIPE/.test(c))              return { code: 'reset',       reason: 'The connection was closed mid-answer.' };
   if (/CERT|TLS|SSL|EPROTO/i.test(c))          return { code: 'tls_error',   reason: 'The TLS handshake failed — the certificate did not verify, or that port does not speak TLS.' };
@@ -950,6 +950,27 @@ app.post('/api/node-check', nodeCheckBody, async (req, res) => {
     drift:      null,
     peers:      { available: false, reason: 'not knowable from outside — a public node exposes /v2/foreign only and refuses /v2/owner' },
     sync_state: { available: false, reason: 'not knowable from outside — same reason: sync state lives on the Owner API' },
+    // A bare host name was dialled on an ASSUMED :3413. When that fails, the
+    // verdict is true about the port we picked and says nothing about the
+    // operator's node — Script 04 publishes a node through nginx on 443, so
+    // `api.grin.money` answers get_tip perfectly over https and not at all on
+    // 3413. Hand the other form back as a ONE-CLICK RETRY rather than dialling
+    // it here: a fallback would make every failing check cost two outbound
+    // requests, which is rule 3 above. A retry is a new question from the
+    // visitor, so the count per question stays at one.
+    //
+    // ⚠ NAMES ONLY. A bare IP is `assumed` too, but suggesting https for one
+    // sends the visitor into a certificate failure: this checker verifies certs
+    // (no rejectUnauthorized override anywhere) and deliberately omits SNI for
+    // an IP literal, so `https://203.0.113.9` lands on `tls_error` whatever is
+    // running there. That is a second dead end dressed as a fix. The thing being
+    // suggested — a node fronted by nginx with a real certificate — has a name.
+    suggest: (target.assumed && !net.isIP(target.host)) ? {
+      target: target.host,
+      scheme: 'https',
+      note: 'Port ' + target.port + ' was assumed because you gave no port or scheme. '
+          + 'A node published through nginx answers on 443 over TLS instead.',
+    } : null,
   };
 
   // Total outbound-socket cap. Sits ABOVE the ++ and below `base`, so the 503
@@ -960,8 +981,11 @@ app.post('/api/node-check', nodeCheckBody, async (req, res) => {
   if (nodeCheckInflight >= NODE_CHECK_MAX_INFLIGHT) {
     return res.status(503).json(Object.assign(base, {
       code: 'busy',
-      reason: 'This checker is already dialling as many hosts as it will hold at once. '
-            + 'Nothing was learned about your node — try again in a few seconds.',
+      // The banner already says the checker is at its dial limit; repeating it
+      // here just prints the same sentence twice. The detail line's job is what
+      // the headline cannot say: that this is OUR limit, not their node.
+      reason: 'Nothing was learned about your node — the request never left this box. '
+            + 'Try again in a few seconds.',
     }));
   }
 
@@ -973,7 +997,8 @@ app.post('/api/node-check', nodeCheckBody, async (req, res) => {
     } catch {
       return res.json(Object.assign(base, {
         code: 'dns_failed',
-        reason: 'That host name did not resolve.',
+        reason: 'No DNS record answered for that name, so there was nothing to dial. '
+              + 'Check the spelling, and that the record has propagated.',
       }));
     }
     if (!addrs.length) {
@@ -1030,8 +1055,13 @@ app.post('/api/node-check', nodeCheckBody, async (req, res) => {
       return res.json(Object.assign(base, {
         code,
         http_status: answer.status,
+        // Not a restatement of the banner: the banner says WHAT happened, this
+        // says what it usually means. Printing the headline again here was the
+        // one place in this route where both lines were the same sentence.
         reason: code === 'node_error'
-          ? 'A node answered, but returned an error instead of a tip.'
+          ? 'It is a Grin node and it is reachable — the port and the firewall are fine. A node '
+            + 'that cannot give its tip is usually one that is still syncing or has just '
+            + 'restarted, so try again once it has caught up.'
           : 'Something answered on that port with HTTP ' + answer.status + ', but it was not a Grin node — '
             + 'the reply carried no JSON-RPC tip. A 200 on its own proves nothing.',
       }));
@@ -1192,7 +1222,15 @@ const _pageMeta = {
   },
   walletcheck: {
     title: `Grin Wallet Address Checker — ${domain}`,
-    desc:  `Check a Grin Slatepack address on ${domain}: whether its bech32 checksum is valid, whether it is mainnet (grin1…) or testnet (tgrin1…), and the Tor .onion address the same public key derives to. The check runs entirely in your browser — the address is never sent anywhere. It does not report whether the wallet is online.`,
+    // The last sentence is the only per-deployment line in _pageMeta, and it has
+    // to be: with the probe off this page genuinely cannot say whether a wallet
+    // is online, and with it on that is the main reason to visit. A fixed string
+    // is wrong on one of the two boxes — either a search result that promises a
+    // liveness check the visitor will not find, or one that denies a capability
+    // sitting on the page. The title stays fixed so the tool keeps one name.
+    desc:  `Check a Grin Slatepack address on ${domain}: whether its bech32 checksum is valid, whether it is mainnet (grin1…) or testnet (tgrin1…), and the Tor .onion address the same public key derives to. The address check runs entirely in your browser — it is never sent anywhere. ` + (walletProbeEnabled
+      ? `An optional second check, run only when you press it, asks that wallet's Tor address whether it is answering right now — useful before sending to an address you were given.`
+      : `It does not report whether the wallet is online.`),
   },
   proof: {
     title: `Grin Payment Proof Verifier — ${domain}`,
@@ -1330,6 +1368,42 @@ app.get('/proof', (_req, res) => sendEntityPage(res, 'proof.html', 'proof'));
 app.get('/node-check', (_req, res) => sendEntityPage(res, 'node-check.html', 'nodecheck'));
 
 // ── Static files ──────────────────────────────────────────────────────────────
+
+// Every page above has a STATIC TWIN under express.static: /wallet-check.html
+// serves the same file with none of injectGlobals' work done. That twin is a
+// worse page in three separate ways — no <title>/description/og tags, no
+// canonical, and no window.TINYEXP_* globals, which on a probe-enabled box
+// means /wallet-check.html renders the probe-OFF copy and hides a feature the
+// server actually has. It is also a second indexable URL for identical content,
+// with the canonical missing from exactly the copy that needed it.
+//
+// So the twins are not served, they are redirected — 301, because the pretty
+// URL is the permanent home and a crawler should collapse the pair. Must sit
+// ABOVE express.static: below it the static handler answers first and this
+// never runs. block/kernel/output are deliberately absent — their shells need
+// a :ref segment and have no bare pretty URL to point at.
+const HTML_TWINS = {
+  '/index.html':        '/',
+  '/slate.html':        '/slate',
+  '/emission.html':     '/emission',
+  '/mining.html':       '/mining',
+  '/wallet-check.html': '/wallet-check',
+  '/proof.html':        '/proof',
+  '/node-check.html':   '/node-check',
+};
+// The lookup is normalised because Express matches these routes more loosely
+// than it looks: `case sensitive routing` and `strict routing` are both OFF by
+// default, so /Index.HTML and /index.html/ also match — and a raw
+// HTML_TWINS[req.path] would be undefined for exactly those, making
+// res.redirect(301, undefined) send a Location of "undefined". Falling through
+// to next() on a miss is the safe default: worst case the visitor gets the
+// static file they asked for, which is the behaviour that already shipped.
+app.get(Object.keys(HTML_TWINS), (req, res, next) => {
+  const key = req.path.toLowerCase().replace(/\/+$/, '');
+  const to  = HTML_TWINS[key];
+  if (!to) return next();
+  return res.redirect(301, to);
+});
 
 app.use(express.static(webDir));
 

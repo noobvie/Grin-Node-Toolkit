@@ -265,11 +265,10 @@
     if (q) { input.value = q; inspect(); }
   } catch { /* no-op */ }
 
-  // The footer itself is static markup (it must survive a JS failure); only the
-  // version tag is server-supplied, so that is all we fill in here.
-  const footVer = document.getElementById('foot-ver');
-  if (footVer && window.TINYEXP_VERSION) {
-    footVer.textContent = ' v' + window.TINYEXP_VERSION;
-  }
+  // No footer handling here. #foot-ver does not exist in any page of this app —
+  // the footer, version tag included, is written by initChrome() in
+  // /js/tiny-explorer.js into #tx-footer-text, which slate.html carries like
+  // every other page. This was dead code guarded by a null check, so it never
+  // failed loudly enough to be noticed.
 
 })();

@@ -606,6 +606,14 @@ pre.tx-raw {
   border: 1px solid var(--border); border-radius: 5px; padding: 1px 5px; color: var(--value);
 }
 
+/* Node-check retry suggestion: a note that ends in an action. The button must
+   start its own line — a <button> is already inline-block by default, so
+   `display: inline-block` here was a no-op and a long "Check
+   https://api.grin.money instead" label still wrapped inline, mid-sentence.
+   `display: block` breaks the line; `width: fit-content` stops the block from
+   stretching to the note's full width. */
+.tx-nc-suggest .tx-btn { display: block; width: fit-content; margin-top: 10px; }
+
 /* ── Wallet Checker page ───────────────────────────────────────────── */
 .tx-wc-panel { display: block; padding: 16px 18px; }
 .tx-wc-input {

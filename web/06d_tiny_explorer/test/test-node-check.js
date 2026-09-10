@@ -16,6 +16,7 @@
 'use strict';
 
 const assert = require('node:assert');
+const fs     = require('node:fs');
 const path   = require('node:path');
 
 const APP = path.resolve(__dirname, '..');
@@ -90,16 +91,22 @@ ok('an address it cannot parse is REFUSED, never dialled', () => {
 //
 // Accepted rows assert the WHOLE resolved tuple: a target that parsed but landed
 // on the wrong port or scheme is a worse outcome than one that was rejected.
+// The 5th column is `assumed` — true only when NEITHER a scheme nor a port was
+// given, so the whole endpoint below the host was our choice. It drives the
+// "check https://host instead" retry, and getting it wrong either hides the
+// suggestion from the person who needs it or offers it to someone who typed an
+// explicit port and does not.
 const ACCEPT = [
-  ['node.example.com',                    'http',  'node.example.com', 3413],
-  ['node.example.com:13413',              'http',  'node.example.com', 13413],
-  ['https://node.example.com',            'https', 'node.example.com', 443],
-  ['http://node.example.com:3413',        'http',  'node.example.com', 3413],
-  ['https://node.example.com/v2/foreign', 'https', 'node.example.com', 443],
-  ['  NODE.Example.COM.  ',               'http',  'node.example.com', 3413],
-  ['[2001:db8::1]:3413',                  'http',  '2001:db8::1',      3413],
-  ['2001:db8::1',                         'http',  '2001:db8::1',      3413],
-  ['203.0.113.9:443',                     'https', '203.0.113.9',      443],
+  ['node.example.com',                    'http',  'node.example.com', 3413,  true],
+  ['node.example.com:13413',              'http',  'node.example.com', 13413, false],
+  ['https://node.example.com',            'https', 'node.example.com', 443,   false],
+  ['http://node.example.com:3413',        'http',  'node.example.com', 3413,  false],
+  ['https://node.example.com/v2/foreign', 'https', 'node.example.com', 443,   false],
+  ['  NODE.Example.COM.  ',               'http',  'node.example.com', 3413,  true],
+  ['[2001:db8::1]:3413',                  'http',  '2001:db8::1',      3413,  false],
+  ['2001:db8::1',                         'http',  '2001:db8::1',      3413,  true],
+  ['203.0.113.9:443',                     'https', '203.0.113.9',      443,   false],
+  ['http://node.example.com',             'http',  'node.example.com', 80,    false],
 ];
 
 const REJECT = [
@@ -119,13 +126,15 @@ const REJECT = [
 console.log('\n[2] lib/node-check.js — parseTarget() over ' + (ACCEPT.length + REJECT.length)
   + ' inputs (R5 ran 14)');
 
-for (const [input, scheme, host, port] of ACCEPT) {
-  ok('accepts ' + JSON.stringify(input) + ' -> ' + scheme + '://' + host + ':' + port, () => {
+for (const [input, scheme, host, port, assumed] of ACCEPT) {
+  ok('accepts ' + JSON.stringify(input) + ' -> ' + scheme + '://' + host + ':' + port
+     + (assumed ? '  (assumed)' : ''), () => {
     const t = nc.parseTarget(input);
     assert.strictEqual(t.scheme, scheme);
     assert.strictEqual(t.host,   host);
     assert.strictEqual(t.port,   port);
     assert.strictEqual(t.path,   nc.RPC_PATH);
+    assert.strictEqual(t.assumed, assumed, 'assumed flag wrong for ' + input);
   });
 }
 
@@ -166,6 +175,35 @@ ok('a parked page / CDN error page / bare 200 is not_json_rpc', () => {
   for (const body of ['<html>hello</html>', '{}', '[]', '{"result":{"Ok":{}}}', 'null']) {
     assert.throws(() => nc.readTip(body), (e) => e.code === 'not_json_rpc', body);
   }
+});
+
+// ═══ 4. the retry suggestion is offered to NAMES only ════════════════════════
+//
+// `assumed` is true for a bare IP as much as for a bare host name, and the
+// obvious reading of it — "we picked the port, so offer the other one" — sends
+// anyone who typed an IP into a certificate failure: the route verifies certs
+// and omits SNI for an IP literal, so https://203.0.113.9 answers `tls_error`
+// no matter what is running there. A second dead end dressed as a fix is worse
+// than no suggestion, because the visitor now has two verdicts to disbelieve.
+//
+// The gate lives in the route, not in this lib, so this asserts the CONTRACT
+// against the server source rather than re-implementing it here — a copy of the
+// expression would agree with itself for ever.
+console.log('\n[4] tiny-explorer-server.js — the suggestion is gated on a host NAME');
+
+const serverSrc = fs.readFileSync(path.join(APP, 'tiny-explorer-server.js'), 'utf8');
+
+ok('the suggest gate excludes IP literals', () => {
+  assert.match(serverSrc, /suggest:\s*\(target\.assumed\s*&&\s*!net\.isIP\(target\.host\)\)\s*\?/,
+    'the `suggest` gate must be (target.assumed && !net.isIP(target.host))');
+});
+
+ok('parseTarget still marks a bare IP assumed — the gate is what excludes it', () => {
+  // If this ever stops being true the gate above is dead code, and the next
+  // person removes it as redundant.
+  assert.strictEqual(nc.parseTarget('203.0.113.9').assumed, true);
+  assert.strictEqual(nc.parseTarget('2001:db8::1').assumed, true);
+  assert.strictEqual(nc.parseTarget('node.example.com').assumed, true);
 });
 
 module.exports = { report: () => ({ pass, fail }) };

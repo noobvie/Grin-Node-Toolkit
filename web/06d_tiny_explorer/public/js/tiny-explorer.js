@@ -161,6 +161,24 @@ const TOOLS_MENU_GROUPS = [
 // Rewrite #tx-tools-menu as grouped sections. The headings are labels, not menu
 // items: role="presentation", no tabindex, no href — so neither the tab order
 // nor the menu's accessible child list gains anything focusable.
+// The Wallet Checker's one-line description is written for the tier-1-only page
+// (checksum, network, .onion) because that is what ships by default and what a
+// visitor gets if this script never runs. Where the operator has switched the
+// Tor liveness probe on, the tool genuinely does more than the line claims — and
+// "can I see whether this wallet is online before I send to it" is the reason
+// most people open it, so a label that never mentions it hides the feature
+// behind a page nobody had a reason to click. Runs on every shell (the tools
+// menu is in all of them) and on the homepage card grid.
+const WALLET_PROBE_LINE = 'Address checks — and is the wallet listening?';
+
+function applyWalletProbeLabels() {
+  if (window.TINYEXP_WALLET_PROBE !== true) return;
+  document.querySelectorAll('.tx-tools-item[href="/wallet-check"] small')
+    .forEach(n => { n.textContent = WALLET_PROBE_LINE; });
+  document.querySelectorAll('.tx-tool-card[href="/wallet-check"] .tx-tool-line')
+    .forEach(n => { n.textContent = WALLET_PROBE_LINE; });
+}
+
 function groupToolsMenu(menu) {
   const items = Array.from(menu.querySelectorAll('.tx-tools-item'));
   if (!items.length || menu.querySelector('.tx-tools-group')) return;
@@ -191,6 +209,7 @@ function initTools() {
   const menu = document.getElementById('tx-tools-menu');
   if (!wrap || !btn || !menu) return;
   groupToolsMenu(menu);
+  applyWalletProbeLabels();
   function open(v) {
     wrap.classList.toggle('open', v);
     btn.setAttribute('aria-expanded', v ? 'true' : 'false');
@@ -589,9 +608,13 @@ async function loadBlock() {
   }
 }
 
+// esc(), like its twin showEntityError below. `msg` is not always a constant:
+// the catch path passes e.message, and a failed res.json() builds that message
+// from a SNIPPET OF THE RESPONSE BODY — so raw bytes off the wire reached
+// innerHTML here while the identical function 130 lines down escaped them.
 function showBlockError(msg) {
   const l = document.getElementById('block-loading');
-  if (l) l.innerHTML = '<div class="tx-error"><h2>Unable to load block</h2><p>' + msg + '</p>' +
+  if (l) l.innerHTML = '<div class="tx-error"><h2>Unable to load block</h2><p>' + esc(msg) + '</p>' +
     '<p><a href="/">← Back to explorer</a></p></div>';
 }
 
@@ -752,9 +775,19 @@ function init404() {
         { name: 'Grincoin.org', url: 'https://grincoin.org', blurb: 'Full archive explorer — deep block bodies since genesis.' },
         { name: 'GrinScan', url: 'https://grinscan.org', blurb: 'Dual-network explorer with charts, peers, price, and a REST API.' },
       ];
-  if (wrap) wrap.innerHTML = fallbacks.map(f =>
-    `<a class="tx-fallback" href="${f.url}" target="_blank" rel="noopener">` +
-    `<div class="name">${f.name} ↗</div><div class="blurb">${f.blurb || ''}</div></a>`).join('');
+  // Operator-supplied (config.fallback_explorers), so this is not a visitor XSS
+  // — but it is still untrusted-by-shape: an unescaped " in a url closes the
+  // href attribute, and a javascript: url would run on click. Escape all three,
+  // and let only http(s) through, so a typo in the config degrades to a missing
+  // card instead of a broken page.
+  const safeUrl = u => /^https?:\/\//i.test(String(u || '')) ? String(u) : '';
+  if (wrap) wrap.innerHTML = fallbacks.map(f => {
+    const href = safeUrl(f.url);
+    if (!href) return '';
+    return `<a class="tx-fallback" href="${esc(href)}" target="_blank" rel="noopener noreferrer">` +
+      `<div class="name">${esc(f.name || href)} ↗</div>` +
+      `<div class="blurb">${esc(f.blurb || '')}</div></a>`;
+  }).join('');
 }
 
 // ── EMISSION PAGE ─────────────────────────────────────────────────────────────
@@ -830,6 +863,13 @@ function fmtGrinAmt(n) {
   return Number(n).toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d });
 }
 
+// WATTS. A whole number above 10 W (no rig is specified to a tenth), one decimal
+// below it so a small figure someone typed on purpose is not rounded to nothing.
+function fmtWatts(n) {
+  if (n == null || !isFinite(n)) return '—';
+  return Number(n).toLocaleString(undefined, { maximumFractionDigits: Math.abs(n) < 10 ? 1 : 0 });
+}
+
 function _usd(n, d) {
   return (n < 0 ? '-$' : '$') + Math.abs(n).toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d });
 }
@@ -882,6 +922,20 @@ function initMining() {
     setText('mine-profit-sub', r.profitDay != null
       ? 'income at the live price minus power'
       : (priceUsd == null ? 'price unavailable' : 'at the live price'));
+
+    // Watts are a RATE, and the field was read as a daily total. Spelling the
+    // conversion out beside the box is the only place it can't be missed: the
+    // "Power cost / day" card shows the money, not the energy, so nothing on
+    // screen previously said that 120 W means 2.9 kWh a day.
+    // fmtWatts, not fmtGrinAmt: that formatter picks its decimals by magnitude
+    // for a GRIN balance, which reads a wattage back as "120.00 W" beside
+    // "2,800 W". The one line on the page whose entire job is to make a unit
+    // unambiguous cannot itself be inconsistent about the number.
+    const w = posNum(el['mine-watt'] ? el['mine-watt'].value : 0);
+    setText('mine-watt-note', w > 0
+      ? 'A continuous rate, not a daily total — ' + fmtWatts(w) + ' W running 24/7 is '
+        + (w * 24 / 1000).toFixed(1) + ' kWh a day.'
+      : 'A continuous rate, not a daily total. At 0 W the page shows gross mining income only.');
   }
 
   // The presets WRITE INTO the number fields rather than feeding the maths

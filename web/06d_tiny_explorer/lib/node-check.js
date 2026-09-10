@@ -105,6 +105,15 @@ function parseTarget(raw) {
   }
 
   let port;
+  // TRUE only when the visitor gave NEITHER a scheme NOR a port, i.e. every part
+  // of the endpoint below the host name was assumed by us. It is not a parsing
+  // detail — it is the difference between "your node did not answer" and "the
+  // port WE picked did not answer", and the caller needs it to say which.
+  // A bare host lands on 3413, but the toolkit's own Script 04 publishes a node
+  // through nginx on 443 (`https://api.grin.money/v2/foreign`), so the single
+  // commonest wrong verdict this tool can give is a correct answer about a port
+  // the operator never uses.
+  let assumed = false;
   if (portStr !== '') {
     if (!/^[0-9]{1,5}$/.test(portStr)) throw new NodeCheckError('bad_input', 'That port is not a number.');
     port = Number(portStr);
@@ -113,10 +122,11 @@ function parseTarget(raw) {
     // A scheme with no port means what it means in a URL. Otherwise the grin
     // node default — this tool's whole subject.
     port = scheme === 'https' ? 443 : scheme === 'http' ? 80 : DEFAULT_PORT;
+    assumed = !scheme;
   }
   if (!scheme) scheme = port === 443 ? 'https' : 'http';
 
-  return { scheme, host, port, path: RPC_PATH, display: displayTarget(scheme, host, port) };
+  return { scheme, host, port, path: RPC_PATH, assumed, display: displayTarget(scheme, host, port) };
 }
 
 function displayTarget(scheme, host, port) {

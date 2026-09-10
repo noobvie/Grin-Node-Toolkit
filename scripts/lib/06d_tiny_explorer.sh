@@ -24,6 +24,96 @@ TINYX_SVC="grin-tiny-explorer"
 NGINX_TINYX_CONF="/etc/nginx/sites-available/tiny-explorer"
 TINYX_PORT=8471
 
+# ── Tor (Wallet Checker tier 2) ───────────────────────────────────────────────
+
+# The liveness probe dials the wallet's onion through a LOCAL tor SOCKS proxy —
+# tor as a CLIENT only, no hidden service. Ported from _acg_ensure_tor in
+# 052_lib_gateway.sh so both products fail the same way.
+#
+# Called only when the operator has just answered "yes" to the probe. Before R9
+# this function did not exist and the prompt merely printed "(apt install tor)",
+# so the single most likely outcome of answering yes was a probe that returned
+# "could not check" to every visitor — the exact state the off-by-default is
+# there to prevent. Returns 0 when 127.0.0.1:<port> is listening, 1 otherwise;
+# the caller decides what to do about it, because leaving the probe on with no
+# tor is a choice an operator is allowed to make (they may be about to install
+# it by hand) — but not one they should make by accident.
+# Two loopback families and two ways of asking, because this answer is what the
+# status screen turns red and what talks an operator out of the probe:
+#   · a tor whose torrc says `SocksPort [::1]:9050` is up and usable, and the
+#     old literal 127.0.0.1 match called it down;
+#   · a box with no iproute2 has no `ss` at all, and returning 1 there reports
+#     "no SOCKS" about a proxy nobody looked for.
+# The fallback is bash's own /dev/tcp — an actual connect, which is better
+# evidence than a listener table anyway. Run in a subshell so the fd closes with
+# it; tor drops an unspoken SOCKS connection without complaint.
+_tinyx_tor_socks_up() {
+    local port="${1:-9050}"
+    if command -v ss &>/dev/null; then
+        ss -ltn 2>/dev/null | grep -Eq "(127\.0\.0\.1|\[::1\]):${port}([[:space:]]|$)" && return 0
+        return 1
+    fi
+    (exec 3<>"/dev/tcp/127.0.0.1/${port}") 2>/dev/null && return 0
+    (exec 3<>"/dev/tcp/::1/${port}") 2>/dev/null && return 0
+    return 1
+}
+
+_tinyx_ensure_tor() {
+    local port="${1:-9050}"
+
+    if ! command -v tor &>/dev/null; then
+        echo -ne "  tor is not installed — install it now? [Y/n]: "
+        local yn; read -r yn || true
+        if [[ "${yn,,}" == "n" ]]; then
+            return 1
+        fi
+        if command -v apt-get &>/dev/null; then
+            # Refresh first, as 01_lib_source_build.sh / 052_lib_nginx.sh /
+            # 07_lib_gateway.sh all do: a box whose apt cache predates the
+            # current pool fails the install on 404s for URLs that no longer
+            # exist, which reads as "tor is unavailable" rather than "run apt
+            # update". Non-fatal — a stale cache may still have a usable tor.
+            apt-get update -qq || warn "apt-get update reported errors — trying the install anyway."
+            apt-get install -y tor || { error "apt-get install tor failed."; return 1; }
+        elif command -v dnf &>/dev/null; then
+            dnf install -y tor || { error "dnf install tor failed."; return 1; }
+        else
+            yum install -y tor || { error "yum install tor failed."; return 1; }
+        fi
+    fi
+
+    systemctl is-active --quiet tor 2>/dev/null || systemctl is-active --quiet tor@default 2>/dev/null || {
+        systemctl enable --now tor 2>/dev/null || systemctl enable --now tor@default 2>/dev/null || true
+    }
+
+    # Prove the SOCKS port is listening rather than trusting the unit state: a
+    # tor that is "active" with SocksPort 0 in torrc looks healthy and proxies
+    # nothing, and the probe would report every wallet as uncheckable.
+    #
+    # ⚠ POLL, never ask once. `systemctl enable --now tor` returns as soon as
+    # the unit is started, which is BEFORE tor has read its torrc, opened its
+    # control socket and bound SocksPort — a second or three on a small VPS.
+    # Asking immediately therefore fails on a tor that was just installed
+    # perfectly well, and the caller's next prompt ("Leave the probe enabled
+    # anyway? [y/N]") defaults to No — so a successful install ended with the
+    # probe switched OFF, which is the exact outcome this function exists to
+    # prevent. 052's version gets away with one shot only because it merely
+    # warns and always returns 0; this one's return value decides a setting.
+    local waited=0
+    while true; do
+        if _tinyx_tor_socks_up "$port"; then
+            success "Tor SOCKS proxy is listening on 127.0.0.1:${port}."
+            return 0
+        fi
+        (( waited >= 15 )) && break
+        [[ $waited -eq 0 ]] && info "Waiting for tor to bind 127.0.0.1:${port}..."
+        sleep 1
+        waited=$(( waited + 1 ))
+    done
+    warn "Nothing is listening on 127.0.0.1:${port} after ${waited}s — check: systemctl status tor; grep SocksPort /etc/tor/torrc"
+    return 1
+}
+
 # ── Deploy ──────────────────────────────────────────────────────────────────────
 
 # The ONE place app files are copied to the box. Both tinyx_install and
@@ -241,11 +331,13 @@ tinyx_configure() {
         wallet_probe="true"
     fi
     local tor_socks_port=9050
+    local tor_up="no"
     echo ""
-    if ss -tlnp 2>/dev/null | grep -q ":${tor_socks_port} "; then
+    if _tinyx_tor_socks_up "$tor_socks_port"; then
+        tor_up="yes"
         echo -e "  ${DIM}Tor SOCKS detected on 127.0.0.1:${tor_socks_port}.${RESET}"
     else
-        echo -e "  ${DIM}No Tor SOCKS listener on 127.0.0.1:${tor_socks_port} — the probe needs one (apt install tor).${RESET}"
+        echo -e "  ${DIM}No Tor SOCKS listener on 127.0.0.1:${tor_socks_port} — the probe needs one; this can install it.${RESET}"
     fi
     local probe_hint="y/N"; [[ "$wallet_probe" == "true" ]] && probe_hint="Y/n"
     echo -ne "  Enable the Wallet Checker Tor liveness probe? [${probe_hint}]: "; read -r probe_ans
@@ -254,6 +346,23 @@ tinyx_configure() {
             y|yes) wallet_probe="true" ;;
             *)     wallet_probe="false" ;;
         esac
+    fi
+
+    # Answering "yes" with no tor on the box used to write the flag and stop
+    # there, leaving a button that could only ever answer "could not check" —
+    # which reads to a visitor as every wallet being offline, not as an
+    # unequipped server. So offer the install here, and if it does not come up,
+    # say plainly what the operator is choosing before writing the flag.
+    if [[ "$wallet_probe" == "true" && "$tor_up" != "yes" ]]; then
+        if ! _tinyx_ensure_tor "$tor_socks_port"; then
+            echo -e "  ${DIM}Without a SOCKS proxy the probe answers \"could not check\" every time.${RESET}"
+            echo -ne "  Leave the probe enabled anyway? [y/N]: "
+            local keep; read -r keep || true
+            case "${keep,,}" in
+                y|yes) warn "Probe left ON — install tor, then: systemctl restart ${TINYX_SVC}" ;;
+                *)     wallet_probe="false"; info "Probe left OFF. Re-run Configure once tor is listening." ;;
+            esac
+        fi
     fi
 
     mkdir -p "${TINYX_DIR}"
@@ -553,6 +662,27 @@ tinyx_status() {
     [[ "$active" == active ]] && echo -e "  Service:  ${GREEN}● running${RESET}" || echo -e "  Service:  ${RED}○ ${active}${RESET}"
     ss -tlnp 2>/dev/null | grep -q ":${TINYX_PORT} " && echo -e "  Port :${TINYX_PORT}: ${GREEN}listening${RESET}" || echo -e "  Port :${TINYX_PORT}: ${YELLOW}not listening${RESET}"
     [[ -f "$TINYX_CONFIG" ]] && echo -e "  Config:   ${GREEN}✓ ${TINYX_CONFIG}${RESET}" || echo -e "  Config:   ${RED}✗ not found${RESET}"
+
+    # Wallet Checker tier 2. This line exists because the probe's failure mode is
+    # otherwise invisible from here: the flag can be on while tor is gone or has
+    # SocksPort 0, and every visitor then gets "could not check" while the
+    # service, port, config and nginx rows all read green. Nothing else on this
+    # screen looks at tor.
+    if [[ -f "$TINYX_CONFIG" ]]; then
+        local probe_port
+        probe_port=$(grep -oE '"tor_socks_port"[[:space:]]*:[[:space:]]*[0-9]+' "$TINYX_CONFIG" 2>/dev/null | grep -oE '[0-9]+$')
+        probe_port="${probe_port:-9050}"
+        if grep -Eq '"wallet_check_probe"[[:space:]]*:[[:space:]]*true' "$TINYX_CONFIG" 2>/dev/null; then
+            if _tinyx_tor_socks_up "$probe_port"; then
+                echo -e "  Probe:    ${GREEN}✓ on${RESET}  ${DIM}Tor SOCKS 127.0.0.1:${probe_port} listening${RESET}"
+            else
+                echo -e "  Probe:    ${RED}on, but no Tor SOCKS on 127.0.0.1:${probe_port}${RESET}"
+                echo -e "            ${DIM}Every wallet check answers \"could not check\" — systemctl status tor${RESET}"
+            fi
+        else
+            echo -e "  Probe:    ${DIM}off — Wallet Checker is address-only (no liveness button)${RESET}"
+        fi
+    fi
 
     if [[ -f "$NGINX_TINYX_CONF" ]]; then
         local domain; domain=$(grep -E "^\s+server_name " "$NGINX_TINYX_CONF" | awk '{print $2}' | tr -d ';' | head -1)

@@ -128,6 +128,25 @@
     },
   };
 
+  // The ONLY two codes where "try 443 instead" is a real diagnosis, as an
+  // ALLOWLIST rather than a blocklist: both mean the assumed port itself was
+  // the dead end, and nothing else does. A blocklist was wrong twice over —
+  // it had to enumerate every code that must stay silent, and it silently
+  // opted in any code added later.
+  //
+  //   · refused  — the host answered, nothing is listening on THAT port
+  //   · timeout  — packets to that port are being dropped, i.e. filtered
+  //
+  // Everything else is excluded for one of two reasons. Either nothing was
+  // dialled at all (busy, blocked, bad_input) or the port was never the
+  // problem: dns_failed and unreachable are name- and host-level, so 443 fails
+  // identically, and http_status / not_json_rpc / node_error / reset all mean
+  // SOMETHING ANSWERED on the assumed port. Offering the retry there prints a
+  // suggestion that contradicts the banner directly above it — "a node
+  // answered" followed by "your node is probably on 443" is the tool arguing
+  // with itself, and the operator has no way to tell which half to believe.
+  const SUGGEST_OK = { refused: 1, timeout: 1 };
+
   function driftText(drift) {
     if (drift === 0) return 'In step with this explorer’s tip.';
     if (drift > 0)  return 'Behind this explorer’s tip by ' + fmtNum(drift)
@@ -145,7 +164,7 @@
     out.appendChild(v);
   }
 
-  function render(out, res) {
+  function render(out, res, onRetry) {
     out.textContent = '';
     out.hidden = false;
 
@@ -164,6 +183,25 @@
     }
     banner.appendChild(txt);
     out.appendChild(banner);
+
+    // The commonest wrong verdict this tool gives is a CORRECT answer about the
+    // wrong port: a bare host name is dialled on an assumed :3413, while the
+    // toolkit's own Script 04 publishes the node behind nginx on 443. The route
+    // does not dial the alternative itself (that would double the cost of every
+    // failing check), so the fix has to be reachable in one click from the
+    // verdict that caused the confusion — not buried in the placeholder text.
+    if (!res.reachable && res.suggest && res.suggest.target
+        && SUGGEST_OK[res.code] && typeof onRetry === 'function') {
+      const alt = (res.suggest.scheme || 'https') + '://' + res.suggest.target;
+      const s = el('div', 'tx-note tx-nc-suggest');
+      s.appendChild(el('strong', null, 'Is your node published behind nginx or TLS?'));
+      s.appendChild(document.createTextNode(' ' + (res.suggest.note || '') + ' '));
+      const b = el('button', 'tx-btn', 'Check ' + alt + ' instead');
+      b.type = 'button';
+      b.addEventListener('click', () => onRetry(alt));
+      s.appendChild(b);
+      out.appendChild(s);
+    }
 
     // No target means nothing was dialled, so there is nothing to report about
     // it: a 'Checked: undefined' row plus two 'unavailable' rows would dress a
@@ -219,11 +257,22 @@
     const clear = document.getElementById('nc-clear');
     let busy = false;
 
-    async function run() {
+    // `override` is the one-click retry from a suggestion: it rewrites the input
+    // so what is on screen always matches what was dialled, then asks again. It
+    // is a fresh visitor-initiated question, not a fallback inside one.
+    //
+    // The busy guard comes FIRST, before the rewrite. The suggestion button lives
+    // in the results area and stays clickable while a check is in flight (the
+    // output is not cleared until the answer lands), so a rewrite above this line
+    // would put a host in the box that was never dialled and then bail — the
+    // exact "what did it actually check" confusion this whole feature exists to
+    // remove. Nothing may touch the input on a run that is not going to happen.
+    async function run(override) {
+      if (busy) return;
+      if (typeof override === 'string' && override) input.value = override;
       const text = input.value.trim();
       if (!text) { out.hidden = true; out.textContent = ''; return; }
       if (text.length > MAX_LEN) { renderError(out, 'That is too long to be a host.'); return; }
-      if (busy) return;
       busy = true;
       if (btn) { btn.disabled = true; btn.textContent = 'Checking…'; }
       try {
@@ -240,14 +289,14 @@
         // was actually dialled. Anything with no mapped code is a genuine
         // transport failure and falls through to the toast-style error, the
         // same way /proof handles !r.ok.
-        if (data && data.code && VERDICTS[data.code]) { render(out, data); return; }
+        if (data && data.code && VERDICTS[data.code]) { render(out, data, run); return; }
         if (!r.ok || !data) {
           renderError(out, (data && data.error) ||
             (r.status === 429 ? 'Too many checks — wait a moment and try again.'
                               : 'The check could not be made (HTTP ' + r.status + ').'));
           return;
         }
-        render(out, data);
+        render(out, data, run);
       } catch {
         renderError(out, 'Could not reach the checker. Check your connection and try again.');
       } finally {
@@ -256,7 +305,7 @@
       }
     }
 
-    if (btn) btn.addEventListener('click', run);
+    if (btn) btn.addEventListener('click', () => run());
     if (clear) clear.addEventListener('click', () => {
       input.value = ''; out.hidden = true; out.textContent = ''; input.focus();
     });

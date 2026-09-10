@@ -80,7 +80,7 @@
     <section class="tx-emit-grid" aria-label="Live network basis">
       <div class="tx-card">
         <div class="tx-card-label">Network hashrate
-          <span class="tx-info" tabindex="0" role="tooltip" data-tip="The 24-hour average network hashrate, read straight from the chain by this explorer. It is the basis for every estimate below.">i</span>
+          <span class="tx-info" tabindex="0" aria-label="The 24-hour average network hashrate, read straight from the chain by this explorer. It is the basis for every estimate below." data-tip="The 24-hour average network hashrate, read straight from the chain by this explorer. It is the basis for every estimate below.">i</span>
         </div>
         <div class="tx-card-value" id="mine-net">—</div>
         <div class="tx-card-sub" id="mine-net-sub">loading…</div>
@@ -106,8 +106,8 @@
           <div class="tx-mine-control">
             <select id="mine-rig" class="tx-mine-select">
               <optgroup label="ASIC — manufacturer specification">
-                <option value="ipollo-g1" data-gps="1.2" data-watts="970">iPollo G1 — 1.20 G/s · 970 W</option>
-                <option value="ipollo-g1-mini" data-gps="0.3" data-watts="240">iPollo G1 Mini — 0.30 G/s · 240 W</option>
+                <option value="ipollo-g1-mini" data-gps="1.2" data-watts="120">iPollo G1 Mini — 1.20 G/s · 120 W</option>
+                <option value="ipollo-g1" data-gps="36" data-watts="2800">iPollo G1 — 36.0 G/s · 2800 W</option>
               </optgroup>
               <optgroup label="GPU · NVIDIA — whattomine Cuckatoo32 table">
                 <option value="rtx-4090" data-gps="1.40" data-watts="260">NVIDIA RTX 4090 — 1.40 G/s · 260 W</option>
@@ -154,10 +154,10 @@
         </div>
 
         <div class="tx-mine-row">
-          <label class="tx-mine-label" for="mine-watt">Power draw <small>(W)</small></label>
+          <label class="tx-mine-label" for="mine-watt">Power draw <small>(W, continuous)</small></label>
           <div class="tx-mine-control">
-            <input id="mine-watt" type="number" min="0" step="any" inputmode="decimal" placeholder="0" value="970">
-            <p class="tx-mine-note">At the wall, for everything you are counting. 0 shows gross income only.</p>
+            <input id="mine-watt" type="number" min="0" step="any" inputmode="decimal" placeholder="0" value="120">
+            <p class="tx-mine-note" id="mine-watt-note">A continuous rate, not a daily total.</p>
           </div>
         </div>
 
@@ -232,7 +232,7 @@
       </div>
       <div class="tx-card">
         <div class="tx-card-label">Break-even GRIN price
-          <span class="tx-info" tabindex="0" role="tooltip" data-tip="The GRIN price at which one day of mining exactly pays that day's electricity: power cost per day ÷ GRIN mined per day. Above it you are ahead on power; below it the rig loses money every hour it runs.">i</span>
+          <span class="tx-info" tabindex="0" aria-label="The GRIN price at which one day of mining exactly pays that day's electricity: power cost per day ÷ GRIN mined per day. Above it you are ahead on power; below it the rig loses money every hour it runs." data-tip="The GRIN price at which one day of mining exactly pays that day's electricity: power cost per day ÷ GRIN mined per day. Above it you are ahead on power; below it the rig loses money every hour it runs.">i</span>
         </div>
         <div class="tx-card-value" id="mine-breakeven">—</div>
         <div class="tx-card-sub" id="mine-breakeven-sub">covers electricity only</div>

@@ -1332,8 +1332,10 @@ function initMap() {
   leafletMap.createPane("basemapPane").style.zIndex   = "380";
   leafletMap.createPane("citylabelPane").style.zIndex = "390";
 
-  // Added BEFORE markersLayer so the basemap sits first in the shared canvas
-  // renderer's draw order — the dots go on top and stay there.
+  // Order here is not what keeps the dots on top — the pane z-indexes above do
+  // that, and the basemap has its own canvas (makeBasemapLayer), not the shared
+  // overlayPane renderer this comment used to appeal to. It is still added first
+  // so that if the pane split is ever undone, the fallback is the right one.
   basemapLayer = makeBasemapLayer().addTo(leafletMap);
 
   cityLabelLayer = L.layerGroup().addTo(leafletMap);

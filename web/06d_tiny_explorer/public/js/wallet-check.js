@@ -344,9 +344,13 @@
     txt.appendChild(el('strong', null, headline));
     txt.appendChild(document.createTextNode(' ' + ((data && data.message) || '')));
     if (online === false) {
+      // A real <code> element, not backticks. This is rendered copy, not
+      // markdown: a text node keeps the grave accents literal, so the visitor
+      // reads `grin-wallet listen` with the quotes showing.
+      txt.appendChild(document.createTextNode(' A wallet only answers while '));
+      txt.appendChild(el('code', null, 'grin-wallet listen'));
       txt.appendChild(document.createTextNode(
-        ' A wallet only answers while `grin-wallet listen` is running — an address stays '
-        + 'valid whether or not anything is behind it.'));
+        ' is running — an address stays valid whether or not anything is behind it.'));
     }
     v.appendChild(txt);
     box.appendChild(v);
@@ -440,10 +444,80 @@
     if (probeEnabled()) out.appendChild(probeSection(res.address));
   }
 
+  // ── Page copy follows the capability, not the other way round ───────────────
+  //
+  // The static HTML describes the tier-1-only page, and that is deliberate: it
+  // is what ships by default, and it is also what a visitor sees if this script
+  // fails to load. Copy that over-promised in that state would be the worse
+  // failure — a page insisting it can tell you whether a wallet is online, with
+  // no control anywhere that does it.
+  //
+  // So when the probe IS on, the hedged phrasing is replaced here with definite
+  // phrasing. Nothing on this page may say "where this server offers…": the page
+  // KNOWS which server it is on (window.TINYEXP_WALLET_PROBE is injected per
+  // request), and making the visitor guess which half of a conditional applies
+  // to them is not caution, it is just an unanswered question.
+  function applyProbeCopy() {
+    if (!probeEnabled()) return;
+
+    // REBUILT, not appended to. The static lede ends "with nothing sent
+    // anywhere" — true of the page that ships, and false the moment a probe
+    // button exists below it. Appending the second question left that absolute
+    // standing in the same paragraph, so the lede both promised and withdrew
+    // the same guarantee and the visitor had to work out which half was live.
+    // The claim is narrowed to the part that is still unconditionally true —
+    // the address check — and the network call is named in the same breath.
+    const lede = document.getElementById('wc-lede');
+    if (lede) {
+      lede.textContent = '';
+      lede.appendChild(document.createTextNode('A Slatepack address is a '));
+      lede.appendChild(el('strong', null, '32-byte public key'));
+      lede.appendChild(document.createTextNode(
+        ' wearing a checksum. Paste one to see whether it survived the copy intact, which '
+        + 'network it belongs to, and the '));
+      lede.appendChild(el('strong', null, 'Tor address'));
+      lede.appendChild(document.createTextNode(
+        ' the same key derives to — all worked out in this page, with the address itself never '
+        + 'leaving your browser. Then, if you want it, one more question this server can put to '
+        + 'the network on your behalf: '));
+      lede.appendChild(el('strong', null, 'is that wallet answering right now?'));
+    }
+
+    const note = document.getElementById('wc-scope-note');
+    if (note) {
+      note.textContent = '';
+      note.appendChild(el('strong', null, 'Two checks, and only the second one connects.'));
+      note.appendChild(document.createTextNode(
+        ' Pasting an address makes no connection at all — not to that wallet, not to Tor, not to '
+        + 'any server; an address can be perfectly valid while the wallet behind it has been '
+        + 'offline for a year. Whether it is answering is a separate question, and this server '
+        + 'can try the wallet\'s Tor address for you. That check appears as a button once you '
+        + 'check an address, it sends the address to this server, and nothing leaves your '
+        + 'browser until you press it.'));
+    }
+
+    const li = document.getElementById('wc-detail-live');
+    if (li) {
+      li.textContent = '';
+      li.appendChild(el('strong', null,
+        'The address check does not say the wallet is listening — the Tor check does.'));
+      li.appendChild(document.createTextNode(
+        ' The .onion shown is arithmetic on the address, not evidence that anything answers '
+        + 'there. Press "Check over Tor" and this server dials that onion and asks a real '
+        + 'grin-wallet question (check_version); a reply proves a wallet is there — even a '
+        + 'refusal to authenticate counts, because only a wallet could refuse. The answer has '
+        + 'three outcomes, not two: answering, not answering, and "we could not check", which '
+        + 'is about this server and not about your wallet. Collapsing that third one into '
+        + '"offline" would blame you for our outage.'));
+    }
+  }
+
   function initWalletCheck() {
     const input = document.getElementById('wc-input');
     const out   = document.getElementById('wc-out');
     if (!input || !out) return;
+
+    applyProbeCopy();
 
     const btn   = document.getElementById('wc-check');
     const clear = document.getElementById('wc-clear');
@@ -478,7 +552,7 @@
     onionV3FromPubkey,
     sha3_256,
     initWalletCheck,
-    _internal: { base32LowerNoPad, keccakF, render, probeEnabled, renderProbeResult, PROBE_STATE }
+    _internal: { base32LowerNoPad, keccakF, render, probeEnabled, renderProbeResult, applyProbeCopy, PROBE_STATE }
   };
 
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

@@ -154,8 +154,9 @@
       <div class="tx-details-body">
         <ul>
           <li><strong>It is sent to this server.</strong> Unlike the
-            <a href="/slate">Slate Inspector</a> and the <a href="/wallet-check">Wallet Checker</a>,
-            which never transmit what you paste, this tool posts the proof to
+            <a href="/slate">Slate Inspector</a>, which never transmits what you paste — and unlike
+            the <a href="/wallet-check">Wallet Checker</a>, whose address check is equally local and
+            reaches the network only if you press its optional Tor button — this tool posts the proof to
             <code>/api/proof/verify</code>: the kernel lookup needs the node, and browser ed25519 is
             not yet dependable enough to rely on.</li>
           <li><strong>Nothing about it is logged</strong> — not the addresses, the amount, the

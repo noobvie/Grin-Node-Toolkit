@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Grin Node Reachability Checker — Tiny Explorer</title>
-  <meta name="description" content="Check whether your Grin node answers from the public internet: this server POSTs get_tip to /v2/foreign from outside your network and reports reachability, node version, tip height and drift.">
+  <meta name="description" content="Check whether your Grin node answers from the public internet — both ports at once: this server POSTs get_tip to the wallet API on 3413 and opens a TCP connection to the P2P port on 3414, and reports each separately with node version, tip height and drift.">
   <meta name="robots" content="index, follow">
   <meta name="theme-color" content="#ff8c00">
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
@@ -67,9 +67,16 @@
     <div class="tx-emit-hero">
       <h1>Grin Node Reachability Checker</h1>
       <p>You opened the port and the node says it is listening — but the only way to know
-        whether <em>the world</em> can reach it is to ask from outside. Enter your host and
-        this server POSTs <code>get_tip</code> to <code>/v2/foreign</code> from where it sits,
-        and tells you exactly what came back.</p>
+        whether <em>the world</em> can reach it is to ask from outside. Enter your host and this
+        server checks <strong>both halves</strong> from where it sits: it POSTs
+        <code>get_tip</code> to your wallet API, and it opens a TCP connection to the P2P port on
+        <code>3414</code>. You get a separate answer for each — they fail independently, and a
+        node with one open and the other closed is usually configured that way on purpose.</p>
+      <p>Give a <strong>host name</strong> and the API is checked over
+        <strong>HTTPS on 443</strong>, because that is where a node published through nginx
+        actually answers. Give a <strong>bare IP</strong> and it is checked on <code>3413</code>,
+        because an address with no name has no certificate to present. Either assumption is one
+        click to undo, and typing an explicit port or scheme overrides both.</p>
     </div>
 
     <div class="tx-note">
@@ -83,13 +90,20 @@
       <div class="tx-row-label" style="margin-bottom:8px">Node host</div>
       <input id="nc-input" class="tx-wc-input" type="text" spellcheck="false" autocomplete="off"
              autocapitalize="off" autocorrect="off"
-             placeholder="node.example.com  ·  node.example.com:3413  ·  https://api.example.com"
+             placeholder="node.example.com  ·  node.example.com:3413  ·  203.0.113.9  ·  https://api.example.com"
              aria-label="Enter your Grin node host, with an optional port">
+      <div class="tx-nc-net" role="radiogroup" aria-label="Which Grin network — decides the P2P port">
+        <span class="tx-nc-net-label">P2P port</span>
+        <label><input type="radio" name="nc-net" value="auto" checked> Auto</label>
+        <label><input type="radio" name="nc-net" value="mainnet"> Mainnet <small>3414</small></label>
+        <label><input type="radio" name="nc-net" value="testnet"> Testnet <small>13414</small></label>
+      </div>
+
       <div class="tx-wc-actions">
         <button class="tx-btn" id="nc-check" type="button">Check</button>
         <button class="tx-btn tx-wc-btn-ghost" id="nc-clear" type="button">Clear</button>
-        <span class="tx-wc-privacy" title="Port 3413 is the grin mainnet node API; testnet is 13413">
-          <b>●</b> Default port 3413 · one attempt · 5 s
+        <span class="tx-wc-privacy" title="A name is checked on 443 (nginx front); a bare IP on 3413. P2P is 3414, testnet 13414.">
+          <b>●</b> API 443 · name — 3413 · IP + P2P 3414 · one attempt each
         </span>
       </div>
     </div>
@@ -100,21 +114,33 @@
       <summary>What "reachable" means here — and what it does not</summary>
       <div class="tx-details-body">
         <ul>
+          <li><strong>The two legs prove different amounts, and are labelled differently.</strong>
+            The API leg says <em>answered get_tip</em> — that is proof of a Grin node. The P2P leg
+            says <em>port open</em> and never more than that: it is a bare TCP connection that
+            sends no bytes and reads none, so all it establishes is that something accepted a
+            connection there. Reading the two as equally strong is the one mistake this page is
+            built to prevent.</li>
           <li><strong>An HTTP 200 proves nothing.</strong> A parked domain, a CDN error page and a
-            router login form all answer 200 on port 443. This tool only calls a node reachable
+            router login form all answer 200 on port 443. This tool only calls the API leg reachable
             when it POSTs <code>get_tip</code> and gets back an unwrapped
             <code>{"Ok":{…}}</code> with a real tip height in it — which is also why a plain
             <code>GET</code> in your browser tells you nothing:
-            <code>/v2/foreign</code> is POST-only JSON-RPC.</li>
+            <code>/v2/foreign</code> is POST-only JSON-RPC. And since a bare TCP accept is
+            <em>weaker</em> evidence than an HTTP 200, the P2P leg never claims a node at all.</li>
+          <li><strong>One open and one closed is not a failure.</strong> A node published to serve
+            wallets may answer on 3413 with 3414 firewalled. A node that only peers may do exactly
+            the reverse — and that is the safer of the two to leave closed. This page reports those
+            as configurations, not errors; only <em>both</em> closed is a red ✕.</li>
           <li><strong>Peer count and sync state are not knowable from outside.</strong> They live
             on the Owner API, and a node published for the public exposes <code>/v2/foreign</code>
             and refuses <code>/v2/owner</code> — as it should. So this page reports them
             <em>unavailable</em>. It will never print <code>0</code> peers for them: a zero would
             read as an idle node, when the truth is that the question cannot be asked from here.</li>
-          <li><strong>A refusal and a timeout mean different things.</strong> <em>Refused</em> means
-            the host answered and nothing is listening on that port — usually the node is down or
-            bound to localhost. <em>Timed out</em> means nothing answered at all, which is what a
-            firewall dropping packets looks like.</li>
+          <li><strong>A refusal and a timeout mean different things — on either leg.</strong>
+            <em>Refused</em> means the host answered and nothing is listening on that port — usually
+            the node is down or bound to localhost. <em>Filtered</em> means nothing answered at all,
+            which is what a firewall dropping packets looks like. For a P2P port that second one is
+            the commonest real answer, because forwarding 3414 is a step people skip.</li>
           <li><strong>Reachable today is not reachable tomorrow.</strong> This is one probe at one
             moment, from one address. It says nothing about your peer count, your bandwidth, or
             whether your host will still route in an hour.</li>
@@ -139,8 +165,14 @@
           <li><strong>Checking your node from your own LAN answers a different question.</strong>
             If your node is at <code>192.168.x.x</code>, what you want to know is whether your
             router forwards the port — so enter the public host name or IP that should reach it.</li>
-          <li><strong>Redirects are not followed and the reply is size-capped.</strong> One request,
-            one answer, five seconds, no retry.</li>
+          <li><strong>Both legs go through the same gate, and the P2P port is not yours to
+            choose.</strong> The address is checked once and both legs dial that same cleared
+            address. The API port is whatever you typed; the P2P port is only ever 3414 or 13414 —
+            a connect-only probe on an arbitrary port would be a port scanner, and this is
+            deliberately not one.</li>
+          <li><strong>Redirects are not followed and the reply is size-capped.</strong> One request
+            per leg, no retry, five seconds for the API and four for the connect. The P2P probe
+            sends nothing and closes the moment it has its answer.</li>
         </ul>
       </div>
     </details>
@@ -150,16 +182,26 @@
       <div class="tx-details-body">
         <ul>
           <li><strong>3414 is the port that matters for the network; 3413 is the one for wallets.</strong>
-            P2P runs on <code>3414</code> (testnet <code>13414</code>) and is how you contribute to
-            the chain. The API on <code>3413</code> (testnet <code>13413</code>) is what a wallet
-            dials — this tool checks the API, because that is the one people publish and the one
-            that breaks quietly.</li>
+            P2P runs on <code>3414</code> (testnet <code>13414</code>) and is how you accept inbound
+            peers and contribute to the chain. The API on <code>3413</code> (testnet
+            <code>13413</code>) is what a wallet dials. This tool checks both, and reports them
+            apart — because they are opened separately, they break separately, and neither one
+            answers the other's question.</li>
+          <li><strong>Which P2P port gets dialled is never guessed from the host name.</strong>
+            On <em>Auto</em> the only signal used is a port you typed yourself: give
+            <code>:13413</code> and the testnet P2P port <code>13414</code> is checked. Type a bare
+            host name and mainnet <code>3414</code> is assumed — say so with the Testnet button if
+            that is wrong, or a closed testnet node will be reported against a port it never
+            opened.</li>
           <li><strong>Publish the Foreign API only.</strong> <code>/v2/foreign</code> serves public
             chain data. <code>/v2/owner</code> manages the node and must never face the internet —
             if this tool reports your node reachable, check that <code>/v2/owner</code> answers
             403 from outside too.</li>
-          <li><strong>Behind TLS, use the host name.</strong> A node fronted by nginx on 443 is
-            checked over HTTPS with the certificate verified, exactly as a wallet would.</li>
+          <li><strong>Behind TLS, use the host name — and that is the default.</strong> A node
+            fronted by nginx on 443 is checked over HTTPS with the certificate verified, exactly as
+            a wallet would. Typing a bare name gets that endpoint, because it is what Script 04
+            deploys; typing <code>name:3413</code> gets the direct port instead, and a failed
+            guess offers the other form in one click.</li>
         </ul>
       </div>
     </details>

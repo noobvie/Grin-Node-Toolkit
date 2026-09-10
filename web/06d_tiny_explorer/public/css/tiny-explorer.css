@@ -713,3 +713,21 @@ pre.tx-raw {
    the value column and the soft ink — never a 0, which would draw a healthy
    node as an idle one. */
 .tx-nc-unavail { font-style: italic; color: var(--text-soft); }
+
+/* Node Checker: the P2P network picker. A radiogroup rather than a <select> —
+   three options, all three worth seeing at once, and the port each one dials is
+   printed on its own label so "Auto" is never a mystery about what got checked.
+   It sits between the input and the buttons because it changes what the check
+   DOES, not how the result is shown. */
+.tx-nc-net {
+  display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+  margin-top: 12px; font-size: 12.5px; color: var(--text-soft);
+}
+.tx-nc-net-label { font-weight: 700; color: var(--value); }
+.tx-nc-net label { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+.tx-nc-net input { accent-color: var(--gold); margin: 0; }
+.tx-nc-net small { font-family: var(--mono); font-size: 11px; color: var(--text-soft); }
+
+/* The node-check hero carries a second paragraph — the name-vs-IP default split
+   — and .tx-emit-hero p is margin:0 auto, so without this the two run together. */
+.tx-emit-hero p + p { margin-top: 10px; }

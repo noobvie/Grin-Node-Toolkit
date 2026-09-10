@@ -1,13 +1,16 @@
 # Script 06 — Global Grin Health (design notes)
 
-> **Covers code as of:** 2026-09-09 · **Last verified:** 2026-09-09, PARTIAL — two sections
-> only: *Peer map — self-hosted basemap* was read against `web/06_stats_map/stats/index.html`
-> **and against the committed `assets/countries-*.json` themselves** (the three dateline seams
-> below are measured from the data, not inferred); *Tool 2 — Wallet Checker* was read against
-> `lib/wallet-tor.js`, `tiny-explorer-server.js` and `scripts/lib/06d_tiny_explorer.sh`.
+> **Covers code as of:** 2026-09-10 · **Last verified:** 2026-09-10, PARTIAL — three sections
+> only: *Tool 3 — Node Reachability Checker* was rewritten against `lib/node-check.js`,
+> `tiny-explorer-server.js`, `public/js/node-check.js` and `public/node-check.html` on the day
+> the second leg landed; *Peer map — self-hosted basemap* was read (2026-09-09) against
+> `web/06_stats_map/stats/index.html` **and against the committed `assets/countries-*.json`
+> themselves** (the three dateline seams below are measured from the data, not inferred);
+> *Tool 2 — Wallet Checker* was read (2026-09-09) against `lib/wallet-tor.js`,
+> `tiny-explorer-server.js` and `scripts/lib/06d_tiny_explorer.sh`.
 > The rest of this doc is still never systematically verified.
-> **Product code last changed:** 2026-09-09 — `web/06d_tiny_explorer/` (mining calculator: number-of-units multiplier, `/api/price` fallback, blocker copy, first test suite for the money maths); 2026-09-09 — `web/06_stats_map/stats/index.html` (antimeridian seam repair, land+mesh basemap, city-label cull, trimmed maxBounds, Vietnam flag fill + East Sea islands + Saigon relabel); 2026-09-09 — `scripts/lib/06d_tiny_explorer.sh` (tor install + probe status row) and `web/06d_tiny_explorer/` (probe-aware page copy); 2026-09-09 — `web/06d_tiny_explorer/` (node-check assumed-port retry); 2026-09-08 — `web/06d_tiny_explorer/public/` (mining calculator presets); 2026-09-07 — `scripts/lib/06d_tiny_explorer.sh` (deploy/restart lifecycle); 2026-09-06 — `scripts/06_global_grin_health.sh`, `scripts/lib/06*`, `web/06_stats_map/`, `web/06d_tiny_explorer/`
-> 06d has a test suite (`web/06d_tiny_explorer/test/`, 113 assertions), but it tests the code, not this doc.
+> **Product code last changed:** 2026-09-10 — `web/06d_tiny_explorer/` (node-check second leg: P2P 3414/13414 TCP probe, composed two-leg verdict, network picker; **assumed API endpoint flipped from 3413 to https/443 for host names**, retry inverted); 2026-09-09 — `web/06d_tiny_explorer/` (mining calculator: number-of-units multiplier, `/api/price` fallback, blocker copy, first test suite for the money maths); 2026-09-09 — `web/06_stats_map/stats/index.html` (antimeridian seam repair, land+mesh basemap, city-label cull, trimmed maxBounds, Vietnam flag fill + East Sea islands + Saigon relabel); 2026-09-09 — `scripts/lib/06d_tiny_explorer.sh` (tor install + probe status row) and `web/06d_tiny_explorer/` (probe-aware page copy); 2026-09-09 — `web/06d_tiny_explorer/` (node-check assumed-port retry); 2026-09-08 — `web/06d_tiny_explorer/public/` (mining calculator presets); 2026-09-07 — `scripts/lib/06d_tiny_explorer.sh` (deploy/restart lifecycle); 2026-09-06 — `scripts/06_global_grin_health.sh`, `scripts/lib/06*`, `web/06_stats_map/`, `web/06d_tiny_explorer/`
+> 06d has a test suite (`web/06d_tiny_explorer/test/`, 179 assertions across 5 suites — count read from `node test/run-all.js` on 2026-09-10), but it tests the code, not this doc.
 
 Only sections that need durable prose live here; the menu/wiring lives in
 `scripts/06_global_grin_health.sh`. Options A (network stats), B (GrinScan),
@@ -1200,8 +1203,99 @@ files rather than the prose.
 ### Tool 3 — Node Reachability Checker (`/node-check`, phase 2)
 
 "Can the world reach my node?" — the question every operator who opened 3413 has. Input a
-host (optional `:port`, default 3413); the server POSTs `get_tip` to `/v2/foreign` and
-requires an unwrapped `{"Ok":…}`.
+host (optional `:port`, default 3413); the server checks **two ports** and reports them
+separately.
+
+#### The two legs (second leg added 2026-09-10)
+
+| Leg | Port | Probe | What a pass proves |
+|---|---|---|---|
+| **Wallet API** | typed; assumed **443 for a name**, **3413 for an IP** | POST `get_tip` to `/v2/foreign` | A Grin node is there — an unwrapped `{"Ok":{height}}` came back |
+| **P2P** | 3414 / 13414 only | bare TCP connect, **no bytes sent** | Only that *something accepted a connection* |
+
+**Why the second leg exists at all.** The API is what a *wallet* dials; 3414 is what the
+*network* dials. A node that peers correctly and deliberately keeps its API off the internet
+is a correct configuration, and the single-leg checker drew it as a red ✕. That is not a
+missing feature — it was a **wrong verdict**, and it is the reason this leg was added.
+
+**The asymmetry is the whole design constraint.** This page's own copy says an HTTP 200
+proves nothing; a bare TCP accept is *weaker* evidence than an HTTP 200. So the P2P leg is
+labelled **"port open"** and never "node reachable", in the leg table, the banner and the
+`<details>` copy alike. `test-node-check.js` §6 asserts the probe never calls `.write()` —
+adding one would change what the leg proves without changing a word of the copy.
+
+**Tier B was declined, not overlooked.** A real `Hand`/`Shake` handshake would prove a Grin
+node *and* identify the network from the magic bytes, removing the guess below. It needs
+genesis hashes, capability flags and a protocol version that moves with every grin release —
+a standing maintenance debt in a tool whose value is being stateless. Revisit only if
+"port open" turns out to mislead in practice.
+
+**Which P2P port.** `p2pPortFor()` in `lib/node-check.js`, and the port is **never visitor
+input** — only ever 3414 or 13414. A connect-only probe on an operator-chosen port is a port
+scanner with a Grin logo on it. The page ships a three-way picker (`Auto` / `Mainnet` /
+`Testnet`) and the returned `source` field says where the choice came from, because the
+client words a *defaulted* port more cautiously than a chosen one:
+
+| `source` | When | Client behaviour on a closed port |
+|---|---|---|
+| `chosen` | operator picked Mainnet/Testnet | states it plainly |
+| `derived` | they typed `:13413` / `:13414` | states it plainly |
+| `default` | bare host, picker on Auto | adds the "3414 was assumed — switch to Testnet if that is wrong" hedge |
+
+On `Auto` the **only** signal used is a port the visitor typed themselves; the network is
+never guessed from a host name.
+
+#### The assumed API endpoint — why a bare name goes to 443, not 3413 (flipped 2026-09-10)
+
+Until 2026-09-10 a bare host defaulted to `http://host:3413`, and the route's own comment called
+that **"the single commonest wrong verdict this tool can give"** — a *correct* answer about a port
+the operator never published. Script 04 fronts a node with nginx + certbot and publishes it at
+`https://api.grin.money/v2/foreign`; 3413 is bound to localhost and firewalled. The tool was
+therefore defaulting to the one endpoint its own toolkit does **not** expose.
+
+The default now splits on **what kind of host it is**, and the split is load-bearing in both
+directions:
+
+| Input | Assumed endpoint | Why |
+|---|---|---|
+| bare **name** (`node.example.com`) | `https://name:443` | Owning a name means DNS and, nearly always, a certificate. This is the shape Script 04 deploys. |
+| bare **IP** (`203.0.113.9`, `2001:db8::1`) | `http://ip:3413` | The checker verifies certificates and deliberately sends **no SNI** for an IP literal, so https on a bare address lands on `tls_error` *whatever* is running there. Defaulting an IP to 443 would trade a sometimes-wrong answer for an always-wrong one. |
+| anything explicit (`:3413`, `https://…`) | as typed | `assumed` is false; no suggestion is offered. |
+
+**The default and the retry are two ends of one mechanism.** The one-click suggestion now points
+at `http://name:3413` — *away* from the assumption. Flipping one end without the other yields a
+button that re-runs the check that just failed, and nothing else in the codebase would notice, so
+`test-node-check.js` §9 asserts the direction explicitly.
+
+**The retry allowlist grew with the flip.** It held `refused` + `timeout` only, because the old
+assumption was a bare *port* and those are the only two ways a port dead-ends. The assumption is
+now a port **and** a protocol **and** a certificate, so `tls_error`, `http_status` and
+`not_json_rpc` joined the list — each means "something owns 443 but it is not publishing a node
+there". `tls_error` is now the likeliest failure on the page for a name with no front.
+`node_error` stays out: a real Grin node answered, and sending the operator elsewhere would
+contradict the banner above it.
+
+**Three failure sentences, not one.** `composeVerdict()` separates *did not answer* (nothing came
+back) from *answered as something else* (`API_ANSWERED`: a 403, a parked page) from *accepted the
+connection and then failed the TLS handshake*. Collapsing them into "did not answer" sends an
+operator into `ufw` when the real problem is a missing certificate or a web server squatting 443.
+
+#### The composed verdict — two of four combinations are configurations, not failures
+
+| API | P2P | Banner |
+|---|---|---|
+| ✓ | open | **✓ is-ok** — reachable both ways |
+| ✓ | closed | **ⓘ is-warn** — wallets can reach it, no inbound peers. *Not a failure* |
+| ✗ | open | **ⓘ is-warn** — peering fine, API not published. *Not a failure, and the safer half to leave closed* |
+| ✗ | closed | **✕ is-bad** — the genuine failure |
+
+`composeVerdict()` also splits "did not answer" from "answered as something else"
+(`API_ANSWERED` = `http_status` / `not_json_rpc` / `node_error`): conflating them sends the
+operator to the firewall when the real problem is a web server on the port.
+
+**One hedge the ✕ needs.** When the API was reached over TLS on 443 — an nginx front, which
+is exactly what Script 04 deploys — a filtered 3414 may describe a proxy rather than the
+node's box. The client says so next to the ✕, not in a collapsed section.
 
 The honest-output rules are already written down and apply directly (CLAUDE.md, *Node API
 method split*):
@@ -1220,8 +1314,20 @@ The concern is not internet port-scanning; it is **SSRF into the operator's own 
 - Resolve DNS first, then block the *resolved* IP against loopback, RFC1918, link-local
   (169.254/16), CGNAT (100.64/10), `::1` and `fc00::/7`. Checking the hostname is not enough —
   DNS rebinding defeats it.
-- Do not follow redirects. Cap the response body. Short timeout (~5 s), one attempt.
+- Do not follow redirects. Cap the response body. Short timeout (5 s API / 4 s connect), one
+  attempt per leg, no retry.
+- **Both legs dial the SAME cleared address.** The gate runs once, on every address DNS
+  returned; neither leg re-resolves. The P2P leg adds no new destination — only a second port
+  on a host already cleared, and that port is a constant.
 - Its own rate-limit zone, tighter than `tinyx_api`.
+- **Outbound cost, restated for two legs:** 2 requests on a failing check, 3 on a fully
+  successful one (API `get_tip`, the best-effort `get_version` on success only, and one TCP
+  connect). The connect is skipped entirely when the API was aimed at the P2P port itself —
+  `same_port`, derived from the API outcome rather than dialled twice.
+- **The in-flight cap counts CHECKS, not sockets**, and a check now holds two. Eight in flight
+  is up to sixteen outbound sockets; that is the number to weigh against the process's file
+  descriptors. Counted per check deliberately: the legs share a deadline and are released
+  together, so a socket-counted cap could admit half a check.
 
 ### Tool 4 — Payment Proof Verifier (`/proof`, phase 2)
 

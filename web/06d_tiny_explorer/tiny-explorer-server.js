@@ -827,12 +827,17 @@ app.post('/api/proof/verify', proofBody, async (req, res) => {
 //      that stays true only as long as nobody swaps in a fetch/agent that does.)
 //   3. ONE ATTEMPT PER QUESTION, SHORT TIMEOUT, CAPPED BODY. No retry loop — a
 //      retry turns one visitor request into two outbound ones, which is how a
-//      checker becomes an amplifier. Count them honestly: every FAILING path
-//      spends exactly one outbound request, and the SUCCESS path spends two —
-//      get_tip, then the best-effort get_version garnish below. The second only
-//      ever fires at a host that already answered as a Grin node, so it costs
-//      the amplification argument nothing; the number is still two, and any
-//      third call added here would need the same sentence written for it.
+//      checker becomes an amplifier. Count them honestly. There are now TWO
+//      legs, run in parallel against the same pinned address:
+//        · the API leg — get_tip, plus a best-effort get_version on success
+//          only. One outbound request when it fails, two when it succeeds.
+//        · the P2P leg — ONE bare TCP connect, no bytes sent, closed the moment
+//          it resolves. It is skipped entirely when the API leg already dialled
+//          that same port, so the pair never double-dials one socket address.
+//      So: 2 outbound on a failing check, 3 on a fully successful one. That is
+//      up from 1 and 2, and it is the whole cost of the second leg — a connect
+//      is a SYN, not a request. Any further call added here needs this sentence
+//      rewritten again rather than quietly appended to.
 //   4. NOTHING HERE LOGS THE HOST. Not the target, not the resolved address, not
 //      on the error paths. Someone checking whether their own node is reachable
 //      is telling us where their node is; that is theirs, not ours. Keep it so.
@@ -861,6 +866,14 @@ const NODE_CHECK_MAX_BYTES  = 64 * 1024;
 // 8, not wallet-check's 4: a node check is a plain TCP connect with a 5 s cap,
 // where a Tor probe builds a circuit and is retried, so it holds its slot for
 // far longer. Operator-tunable; 0 or a non-number falls back to the default.
+//
+// ⚠ THE UNIT IS THE CHECK, AND A CHECK NOW HOLDS TWO SOCKETS — the API leg and
+// the P2P leg run at the same time. The cap counts checks, so 8 in flight is up
+// to 16 outbound sockets; that is the number to reason about against the
+// process's file-descriptor limit, not the 8. It is deliberately still counted
+// per check rather than per socket: the two legs share a deadline and are
+// released together, so a socket-counted cap would admit half a check and then
+// have nowhere to put the other half.
 const NODE_CHECK_MAX_INFLIGHT = config.node_check_max_inflight || 8;
 let nodeCheckInflight = 0;
 
@@ -929,6 +942,77 @@ function nodeCheckNetError(err) {
   return { code: 'unreachable', reason: 'The connection failed.' };
 }
 
+// ── The P2P leg (3414 / 13414) ────────────────────────────────────────────────
+//
+// A bare TCP connect. NOTHING IS SENT and nothing is read: the socket is closed
+// the instant it resolves either way. That is the entire probe, and the wording
+// everywhere downstream has to match how weak it is —
+//
+//   open      the three-way handshake completed. Something accepted a
+//             connection on that port. It is NOT proof of a Grin node: this
+//             page's whole doctrine is that an HTTP 200 proves nothing, and a
+//             bare accept is weaker evidence than an HTTP 200. Never let this
+//             render as "node reachable"; it renders as "port open".
+//   refused   the host answered with RST — reachable, nothing listening there.
+//   filtered  no answer at all before the deadline. A firewall dropping packets
+//             looks exactly like this, and for a P2P port it is the single
+//             commonest real answer.
+//
+// Proving a Grin node here would mean a real Hand/Shake handshake: genesis
+// hashes, capability flags and a protocol version that moves with every grin
+// release. That is a standing maintenance debt in a tool whose value is being
+// stateless, and it was declined deliberately — not overlooked.
+//
+// `address` is the SAME pinned address the API leg uses, already cleared by
+// blockedReason(). net.connect does not resolve an IP literal, so there is no
+// second lookup here; the assert makes that a guarantee rather than a habit.
+const NODE_CHECK_P2P_TIMEOUT_MS = 4000;   // under the API leg's 5 s — a connect
+                                          // that has not landed in 4 s is filtered.
+
+function nodeCheckP2pProbe(address, port) {
+  return new Promise(resolve => {
+    if (!net.isIP(address)) {                 // unreachable by construction
+      return resolve({ state: 'error', reason: 'The P2P probe was not given an address to dial.' });
+    }
+    const sock = new net.Socket();
+    let settled = false;
+    const finish = (state, reason) => {
+      if (settled) return;
+      settled = true;
+      sock.destroy();                          // half-open connect, closed at once
+      resolve({ state, reason });
+    };
+    sock.setTimeout(NODE_CHECK_P2P_TIMEOUT_MS);
+    sock.once('connect', () => finish('open',
+      'The connection was accepted — something is listening on that port.'));
+    sock.once('timeout', () => finish('filtered',
+      'No answer before the timeout — a firewall dropping the packets looks exactly like this.'));
+    sock.once('error', err => {
+      const c = String((err && err.code) || (err && err.message) || '');
+      if (/ECONNREFUSED/.test(c))              return finish('refused',
+        'The connection was refused — the host answered, but nothing is listening on that port.');
+      if (/EHOSTUNREACH|ENETUNREACH/.test(c))  return finish('unreachable', 'No route to that host.');
+      if (/ETIMEDOUT/i.test(c))                return finish('filtered',
+        'No answer before the timeout — a firewall dropping the packets looks exactly like this.');
+      return finish('error', 'The connection could not be made.');
+    });
+    sock.connect({ host: address, port });
+  });
+}
+
+// When the visitor pointed the API check at the P2P port itself, the API leg has
+// ALREADY dialled that socket address — a second connect would be a wasted
+// outbound request measuring a port we just measured. Derive instead: any HTTP
+// answer at all, of any shape, means the port accepted a connection.
+function nodeCheckP2pFromApi(code) {
+  if (code === 'refused')  return { state: 'refused',  reason: 'The connection was refused — nothing is listening on that port.' };
+  if (code === 'timeout')  return { state: 'filtered', reason: 'No answer before the timeout — a firewall dropping the packets looks exactly like this.' };
+  if (code === 'unreachable' || code === 'dns_failed') return { state: 'unreachable', reason: 'The connection could not be made.' };
+  // ok / http_status / not_json_rpc / node_error / reset / tls_error all mean
+  // the handshake completed and bytes moved — the port is open.
+  return { state: 'open', reason: 'The connection was accepted — the check above reached this same port.' };
+}
+
 // Body: {"target":"host[:port]"}. Small cap — the payload is one host string.
 // Shared with walletCheckBody further down: same shape, same cap, and building
 // the middleware once at load beats rebuilding it on every request.
@@ -967,26 +1051,32 @@ app.post('/api/node-check', nodeCheckBody, async (req, res) => {
     drift:      null,
     peers:      { available: false, reason: 'not knowable from outside — a public node exposes /v2/foreign only and refuses /v2/owner' },
     sync_state: { available: false, reason: 'not knowable from outside — same reason: sync state lives on the Owner API' },
-    // A bare host name was dialled on an ASSUMED :3413. When that fails, the
-    // verdict is true about the port we picked and says nothing about the
-    // operator's node — Script 04 publishes a node through nginx on 443, so
-    // `api.grin.money` answers get_tip perfectly over https and not at all on
-    // 3413. Hand the other form back as a ONE-CLICK RETRY rather than dialling
-    // it here: a fallback would make every failing check cost two outbound
-    // requests, which is rule 3 above. A retry is a new question from the
-    // visitor, so the count per question stays at one.
+    // A bare host name was dialled on an ASSUMED https://name:443 — the shape
+    // Script 04 deploys. When that fails, the verdict is true about the endpoint
+    // WE picked and says nothing about the operator's node: a node published
+    // without an nginx front answers plain HTTP on 3413 and not at all on 443.
+    // Hand the other form back as a ONE-CLICK RETRY rather than dialling it
+    // here: a fallback would make every failing check cost an extra outbound
+    // request, which is rule 3 above. A retry is a new question from the
+    // visitor, so the count per question is unchanged.
     //
-    // ⚠ NAMES ONLY. A bare IP is `assumed` too, but suggesting https for one
-    // sends the visitor into a certificate failure: this checker verifies certs
-    // (no rejectUnauthorized override anywhere) and deliberately omits SNI for
-    // an IP literal, so `https://203.0.113.9` lands on `tls_error` whatever is
-    // running there. That is a second dead end dressed as a fix. The thing being
-    // suggested — a node fronted by nginx with a real certificate — has a name.
+    // ⚠ THE DIRECTION FLIPPED ON 2026-09-10, with the default. It used to dial
+    // 3413 and suggest https; it now dials https and suggests 3413. If you are
+    // reading this next to a suggestion that points at 443, one of the two ends
+    // has been changed without the other.
+    //
+    // ⚠ NAMES ONLY. A bare IP is `assumed` too, but it is assumed onto 3413,
+    // which is already the right guess for an address with no name — and the
+    // only alternative to offer would be https on an IP literal, which this
+    // checker cannot make work: it verifies certificates and deliberately sends
+    // no SNI for an IP, so that lands on `tls_error` whatever is running there.
+    // A second dead end dressed as a fix.
     suggest: (target.assumed && !net.isIP(target.host)) ? {
-      target: target.host,
-      scheme: 'https',
-      note: 'Port ' + target.port + ' was assumed because you gave no port or scheme. '
-          + 'A node published through nginx answers on 443 over TLS instead.',
+      target: target.host + ':' + nodeCheck.DEFAULT_PORT,
+      scheme: 'http',
+      note: 'TLS on 443 was assumed because you gave no port or scheme — that is where a node '
+          + 'behind nginx answers. A node published without a front answers plain HTTP on '
+          + nodeCheck.DEFAULT_PORT + ' instead.',
     } : null,
   };
 
@@ -1039,71 +1129,108 @@ app.post('/api/node-check', nodeCheckBody, async (req, res) => {
     }
     const address = addrs[0].address;
 
-    let answer;
-    try {
-      answer = await nodeCheckPost(target, address, { jsonrpc: '2.0', method: 'get_tip', params: [], id: 1 });
-    } catch (e) {
-      return res.json(Object.assign(base, nodeCheckNetError(e)));
+    // Which P2P port, and where that choice came from. `network` is the
+    // visitor's toggle — 'auto' derives from a port they typed themselves,
+    // 'mainnet'/'testnet' is an explicit pick. The PORT is never visitor
+    // supplied; see p2pPortFor() in lib/node-check.js for why that is the line
+    // between a reachability checker and a port scanner.
+    const p2p      = nodeCheck.p2pPortFor(target, req.body && req.body.network);
+    const samePort = target.port === p2p.port;
+
+    // ── The API leg ──────────────────────────────────────────────────────────
+    // Returns the PATCH to merge into `base` rather than answering directly, so
+    // the two legs compose into one response. Every branch below was a
+    // `return res.json(Object.assign(base, …))` before and is now the same
+    // object without the wrapper — the response shapes are unchanged.
+    async function apiLeg() {
+      let answer;
+      try {
+        answer = await nodeCheckPost(target, address, { jsonrpc: '2.0', method: 'get_tip', params: [], id: 1 });
+      } catch (e) {
+        return nodeCheckNetError(e);
+      }
+
+      if (answer.status >= 300) {
+        // A 30x is data about the target, never an instruction: the redirect is
+        // reported and not followed. Following it is how a blocklist gets walked
+        // around — Location: http://127.0.0.1:3413 is one hop from here.
+        const redirect = answer.status < 400;
+        return {
+          code: 'http_status',
+          http_status: answer.status,
+          reason: redirect
+            ? 'The endpoint answered HTTP ' + answer.status + ' — a redirect. Redirects are not '
+              + 'followed here, and a Grin node does not redirect: point this at the node itself.'
+            : (answer.status === 401 || answer.status === 403)
+              ? 'The endpoint answered ' + answer.status + ' — it is there, but it refuses '
+                + 'unauthenticated calls, so a wallet cannot use it either.'
+              : 'The endpoint answered HTTP ' + answer.status + ', not a node reply.',
+        };
+      }
+
+      let tip;
+      try {
+        tip = nodeCheck.readTip(answer.body);
+      } catch (e) {
+        const code = (e && e.code) === 'node_error' ? 'node_error' : 'not_json_rpc';
+        return {
+          code,
+          http_status: answer.status,
+          // Not a restatement of the banner: the banner says WHAT happened, this
+          // says what it usually means. Printing the headline again here was the
+          // one place in this route where both lines were the same sentence.
+          reason: code === 'node_error'
+            ? 'It is a Grin node and it is reachable — the port and the firewall are fine. A node '
+              + 'that cannot give its tip is usually one that is still syncing or has just '
+              + 'restarted, so try again once it has caught up.'
+            : 'Something answered on that port with HTTP ' + answer.status + ', but it was not a Grin node — '
+              + 'the reply carried no JSON-RPC tip. A 200 on its own proves nothing.',
+        };
+      }
+
+      // Best-effort garnish, on the same pinned address. A failure here is not a
+      // failure of the check: the node already proved itself with get_tip.
+      let version = null;
+      try {
+        const v = await nodeCheckPost(target, address, { jsonrpc: '2.0', method: 'get_version', params: [], id: 1 });
+        if (v.status < 400) version = nodeCheck.readVersion(v.body);
+      } catch { /* version stays null → rendered "unavailable" */ }
+
+      let ours = null;
+      try { ours = (await getTip()).height; } catch { /* our own tip is optional here */ }
+
+      return {
+        reachable:    true,
+        code:         'ok',
+        http_status:  answer.status,
+        node_version: version,
+        height:       tip.height,
+        last_block:   tip.last_block_pushed,
+        our_height:   ours,
+        drift:        ours == null ? null : ours - tip.height,   // >0 → that node is behind us
+      };
     }
 
-    if (answer.status >= 300) {
-      // A 30x is data about the target, never an instruction: the redirect is
-      // reported and not followed. Following it is how a blocklist gets walked
-      // around — Location: http://127.0.0.1:3413 is one hop from here.
-      const redirect = answer.status < 400;
-      return res.json(Object.assign(base, {
-        code: 'http_status',
-        http_status: answer.status,
-        reason: redirect
-          ? 'The endpoint answered HTTP ' + answer.status + ' — a redirect. Redirects are not '
-            + 'followed here, and a Grin node does not redirect: point this at the node itself.'
-          : (answer.status === 401 || answer.status === 403)
-            ? 'The endpoint answered ' + answer.status + ' — it is there, but it refuses '
-              + 'unauthenticated calls, so a wallet cannot use it either.'
-            : 'The endpoint answered HTTP ' + answer.status + ', not a node reply.',
-      }));
-    }
+    // ── Both legs at once ────────────────────────────────────────────────────
+    // The P2P connect learns nothing from the API leg and vice versa, so running
+    // them in sequence would double the wait for no extra information. The
+    // promise is created BEFORE the await so it genuinely overlaps.
+    //
+    // When the visitor aimed the API check at the P2P port itself, the API leg
+    // already dialled that socket address and a second connect would measure a
+    // port we just measured — so it is derived from the API outcome instead, and
+    // the response says so with same_port.
+    const p2pPromise = samePort ? null : nodeCheckP2pProbe(address, p2p.port);
+    const patch      = await apiLeg();
+    const p2pResult  = p2pPromise ? await p2pPromise : nodeCheckP2pFromApi(patch.code || 'ok');
 
-    let tip;
-    try {
-      tip = nodeCheck.readTip(answer.body);
-    } catch (e) {
-      const code = (e && e.code) === 'node_error' ? 'node_error' : 'not_json_rpc';
-      return res.json(Object.assign(base, {
-        code,
-        http_status: answer.status,
-        // Not a restatement of the banner: the banner says WHAT happened, this
-        // says what it usually means. Printing the headline again here was the
-        // one place in this route where both lines were the same sentence.
-        reason: code === 'node_error'
-          ? 'It is a Grin node and it is reachable — the port and the firewall are fine. A node '
-            + 'that cannot give its tip is usually one that is still syncing or has just '
-            + 'restarted, so try again once it has caught up.'
-          : 'Something answered on that port with HTTP ' + answer.status + ', but it was not a Grin node — '
-            + 'the reply carried no JSON-RPC tip. A 200 on its own proves nothing.',
-      }));
-    }
-
-    // Best-effort garnish, on the same pinned address. A failure here is not a
-    // failure of the check: the node already proved itself with get_tip.
-    let version = null;
-    try {
-      const v = await nodeCheckPost(target, address, { jsonrpc: '2.0', method: 'get_version', params: [], id: 1 });
-      if (v.status < 400) version = nodeCheck.readVersion(v.body);
-    } catch { /* version stays null → rendered "unavailable" */ }
-
-    let ours = null;
-    try { ours = (await getTip()).height; } catch { /* our own tip is optional here */ }
-
-    return res.json(Object.assign(base, {
-      reachable:    true,
-      code:         'ok',
-      http_status:  answer.status,
-      node_version: version,
-      height:       tip.height,
-      last_block:   tip.last_block_pushed,
-      our_height:   ours,
-      drift:        ours == null ? null : ours - tip.height,   // >0 → that node is behind us
+    return res.json(Object.assign(base, patch, {
+      p2p: Object.assign({
+        port:      p2p.port,
+        network:   p2p.network,
+        source:    p2p.source,      // chosen | derived | default — the client
+        same_port: samePort,        // words a default port more cautiously
+      }, p2pResult),
     }));
   } finally {
     nodeCheckInflight--;

@@ -13,6 +13,19 @@
 // so each failure code gets its own sentence and the same verdict banner as a
 // success — never a bare "check failed".
 //
+// Third rule, and the reason this page has TWO legs: THE API LEG IS NOT THE
+// VERDICT. 3413 is what a wallet dials; 3414 is what the network dials. A node
+// that peers perfectly and deliberately keeps its API off the internet is a
+// correct configuration, and drawing it as a red ✕ — which is what a
+// single-leg check did — is the worst answer this tool can give. So the banner
+// is COMPOSED from both legs, and two of the four combinations are neither a
+// pass nor a fail: they are configurations, and they are worded as such.
+//
+// Fourth rule: THE P2P LEG SAYS "PORT OPEN", NEVER "NODE REACHABLE". It is a
+// bare TCP connect that sends nothing. This page tells the reader two boxes
+// further down that an HTTP 200 proves nothing; a bare accept is weaker
+// evidence than that, and the label must not claim more than the probe did.
+//
 // Like /proof and unlike /slate and /wallet-check, this page transmits what you
 // type: the whole question is what a request from OUTSIDE sees, which only the
 // server can answer. Do not copy the other two tools' "checked locally" badge.
@@ -128,24 +141,169 @@
     },
   };
 
-  // The ONLY two codes where "try 443 instead" is a real diagnosis, as an
-  // ALLOWLIST rather than a blocklist: both mean the assumed port itself was
-  // the dead end, and nothing else does. A blocklist was wrong twice over —
-  // it had to enumerate every code that must stay silent, and it silently
-  // opted in any code added later.
+  // ── The two legs ──────────────────────────────────────────────────────
   //
-  //   · refused  — the host answered, nothing is listening on THAT port
-  //   · timeout  — packets to that port are being dropped, i.e. filtered
+  // Each leg carries a one-word status of its own, because the combined banner
+  // deliberately does not name which half failed — that is this block's job.
+
+  // The API leg, keyed by the same code the banner uses.
+  const API_LEG = {
+    ok:           { mark: '✓', cls: 'is-ok',   label: 'Answered get_tip' },
+    refused:      { mark: '✕', cls: 'is-bad',  label: 'Refused' },
+    timeout:      { mark: '✕', cls: 'is-bad',  label: 'Filtered' },
+    unreachable:  { mark: '✕', cls: 'is-bad',  label: 'No route' },
+    reset:        { mark: '✕', cls: 'is-bad',  label: 'Connection reset' },
+    dns_failed:   { mark: '✕', cls: 'is-bad',  label: 'No DNS record' },
+    tls_error:    { mark: '✕', cls: 'is-bad',  label: 'TLS handshake failed' },
+    http_status:  { mark: '!',      cls: 'is-skip', label: 'Not a node reply' },
+    not_json_rpc: { mark: '!',      cls: 'is-skip', label: 'Not a Grin node' },
+    node_error:   { mark: '!',      cls: 'is-skip', label: 'Node error' },
+  };
+
+  // The P2P leg. `open` is the one to read carefully: a completed TCP handshake
+  // is ALL it means. Never relabel this "node reachable" — see rule four above.
+  const P2P_LEG = {
+    open:        { mark: '✓', cls: 'is-ok',   label: 'Port open' },
+    refused:     { mark: '✕', cls: 'is-bad',  label: 'Refused' },
+    filtered:    { mark: '✕', cls: 'is-bad',  label: 'Filtered' },
+    unreachable: { mark: '✕', cls: 'is-bad',  label: 'No route' },
+    error:       { mark: '!',      cls: 'is-skip', label: 'Not checked' },
+  };
+
+  // The API codes where BYTES CAME BACK. Every one of these means the port is
+  // open and something is serving it — the check failed on what was said, not on
+  // whether anything said it. `ok` is in the set for completeness; the callers
+  // that read it have already branched on reachable.
+  const API_ANSWERED = { ok: 1, http_status: 1, not_json_rpc: 1, node_error: 1 };
+
+  // The four-way banner. Two of these are CONFIGURATIONS, not failures, and
+  // they carry ⓘ rather than ✓/✕ so the mark itself stops short of a
+  // judgement — greyscale-readable, like every other verdict on this site.
+  function composeVerdict(res) {
+    const p = res && res.p2p;
+    if (!p) return null;                    // nothing dialled — single-leg path
+    const apiOk   = !!res.reachable;
+    const p2pOpen = p.state === 'open';
+    const port    = p.port;
+
+    if (apiOk && p2pOpen) return {
+      cls: 'is-ok', mark: '✓',
+      text: 'Reachable both ways — wallets can call the API, and peers can connect on ' + port + '.',
+    };
+    if (apiOk && !p2pOpen) return {
+      cls: 'is-warn', mark: 'ⓘ',
+      text: 'Reachable for wallets — but nothing accepted a peer connection on ' + port + '.',
+      note: 'That is a complete answer for a node published to serve wallets. It does mean this '
+          + 'node takes no INBOUND peers: it can still dial out and sync, but the rest of the '
+          + 'network cannot start a connection to it. Forward TCP ' + port + ' if you want it to.',
+    };
+    // THREE failures, three sentences. "Did not answer" is only true when
+    // nothing came back at all — a 403 or a parked page means the port is OPEN
+    // and serving, and a TLS error means the connection WAS made and only the
+    // handshake failed. Collapsing all three into "did not answer" is how an
+    // operator spends an hour in ufw while the actual problem is nginx, or a
+    // missing certificate, or a web server squatting the port.
+    const answered = !!API_ANSWERED[res.code];   // bytes came back, wrong shape
+    const tlsFail  = res.code === 'tls_error';   // connected, handshake failed
+
+    const apiClause = answered ? 'the API port answered with something that is not a Grin node'
+                    : tlsFail  ? 'the API port accepted the connection and then failed the TLS handshake'
+                    :            'the wallet API did not answer';
+
+    const apiNote = answered
+      ? 'The port is open and something is serving it, so this is not a firewall problem. '
+      + 'Check what is bound to that port, and that you pointed this at the node rather than '
+      + 'at a web server in front of it.'
+      : tlsFail
+      ? 'The port is open, so this is not a firewall problem either — it is a TLS one. A node '
+      + 'with no nginx front and no certificate looks exactly like this when it is dialled over '
+      + 'HTTPS; so does a certificate that does not match the name you typed.'
+      : 'This is often deliberate, and it is the safer half to leave closed: a node that only '
+      + 'peers does not need its API on the internet at all. Publish /v2/foreign only if you '
+      + 'actually want wallets to use this node.';
+
+    if (!apiOk && p2pOpen) return {
+      cls: 'is-warn', mark: 'ⓘ',
+      text: 'Peers can connect on ' + port + ' — but ' + apiClause + '.',
+      note: apiNote,
+    };
+    return {
+      cls: 'is-bad', mark: '✕',
+      text: (answered || tlsFail)
+        ? 'Not usable — the P2P port on ' + port + ' did not answer, and ' + apiClause + '.'
+        : 'Not reachable — neither the wallet API nor the P2P port on ' + port + ' answered.',
+      note: (answered || tlsFail) ? apiNote : null,
+    };
+  }
+
+  // Both hedges exist because a confident-looking ✕ on the P2P leg can be an
+  // artefact of what we ASSUMED, rather than a fact about the operator's node.
+  function p2pCaveats(res) {
+    const out = [];
+    const p = res.p2p;
+    if (!p || p.state === 'open') return out;
+    if (p.source === 'default') {
+      out.push('Port ' + p.port + ' was assumed (mainnet), because you gave no port and left the '
+             + 'network on Auto. If this is a testnet node, switch to Testnet and check again — '
+             + 'its P2P port is 13414.');
+    }
+    if (res.scheme === 'https' && res.port === 443) {
+      out.push('You checked the API over TLS on 443, which usually means an nginx front. The P2P '
+             + 'probe went to the same NAME — if that name points at a proxy or CDN rather than '
+             + 'the node’s own box, this result describes the proxy, not your node.');
+    }
+    return out;
+  }
+
+  // One row of the two-leg block. Same markup the Payment Proof checks use, so
+  // a "not checked" row looks the same everywhere on this site.
+  function legRow(name, spec, detail) {
+    const r = el('div', 'tx-pf-check');
+    r.appendChild(el('span', 'tx-pf-mark ' + spec.cls, spec.mark));
+    r.appendChild(el('span', 'tx-pf-check-name', name));
+    const note = el('span', 'tx-pf-check-note');
+    note.appendChild(el('b', null, spec.label));
+    if (detail) {
+      note.appendChild(document.createElement('br'));
+      note.appendChild(document.createTextNode(detail));
+    }
+    r.appendChild(note);
+    return r;
+  }
+
+  // The codes where "try plain HTTP on 3413 instead" is a real diagnosis, as an
+  // ALLOWLIST rather than a blocklist. A blocklist was wrong twice over — it
+  // had to enumerate every code that must stay silent, and it silently opted in
+  // any code added later.
   //
-  // Everything else is excluded for one of two reasons. Either nothing was
-  // dialled at all (busy, blocked, bad_input) or the port was never the
-  // problem: dns_failed and unreachable are name- and host-level, so 443 fails
-  // identically, and http_status / not_json_rpc / node_error / reset all mean
-  // SOMETHING ANSWERED on the assumed port. Offering the retry there prints a
-  // suggestion that contradicts the banner directly above it — "a node
-  // answered" followed by "your node is probably on 443" is the tool arguing
-  // with itself, and the operator has no way to tell which half to believe.
-  const SUGGEST_OK = { refused: 1, timeout: 1 };
+  // ⚠ THIS LIST GREW WHEN THE DEFAULT FLIPPED (2026-09-10). It used to hold
+  // refused + timeout only, because the assumed endpoint was a bare PORT (3413)
+  // and those were the only two ways a port itself dead-ends. The assumed
+  // endpoint is now https://name:443, which is a port AND a protocol AND a
+  // certificate — so there are three more ways for the assumption to be wrong,
+  // and every one of them means the same thing: the node is probably sitting on
+  // its own port with no front.
+  //
+  //   · refused      — nothing is listening on 443 at all
+  //   · timeout      — packets to 443 are being dropped, i.e. filtered
+  //   · tls_error    — 443 answered but does not speak TLS, or the certificate
+  //                    does not verify. For a name with no nginx front this is
+  //                    now the single likeliest failure on the page.
+  //   · http_status  — a web server answered 404/403/parked. Something owns 443,
+  //                    but it is not publishing a node there.
+  //   · not_json_rpc — a website answered 200. Same conclusion.
+  //
+  // Excluded, and each for its own reason:
+  //   · node_error   — it IS a Grin node, just unable to give a tip. Sending the
+  //                    operator to another port contradicts the banner above it.
+  //   · dns_failed / unreachable — name- and host-level, so 3413 fails
+  //                    identically. A retry that cannot succeed is a dead end
+  //                    dressed as a fix.
+  //   · reset        — something was mid-answer when the connection died. Too
+  //                    ambiguous to advise on; staying silent is the honest move.
+  //   · blocked / bad_input / busy — nothing was dialled, so there is no
+  //                    assumption to correct.
+  const SUGGEST_OK = { refused: 1, timeout: 1, tls_error: 1, http_status: 1, not_json_rpc: 1 };
 
   function driftText(drift) {
     if (drift === 0) return 'In step with this explorer’s tip.';
@@ -169,20 +327,59 @@
     out.hidden = false;
 
     const verdict = VERDICTS[res.code] || (res.reachable ? VERDICTS.ok : VERDICTS.unreachable);
-    const banner = el('div', 'tx-wc-verdict ' + verdict.cls);
-    banner.appendChild(el('span', 'tx-wc-mark', verdict.mark));
+
+    // When both legs ran, the headline is composed from the PAIR and the API
+    // leg's own sentence moves down into the two-leg block. Announcing one
+    // half's result as the whole answer is precisely the bug the second leg
+    // exists to fix, so `both` wins over the single-code verdict whenever the
+    // server actually dialled a P2P port.
+    const both = composeVerdict(res);
+    const head = both || verdict;
+
+    const banner = el('div', 'tx-wc-verdict ' + head.cls);
+    banner.appendChild(el('span', 'tx-wc-mark', head.mark));
     const txt = el('span', 'tx-wc-verdict-text');
-    txt.appendChild(el('b', null, verdict.text));
+    txt.appendChild(el('b', null, head.text));
     // `reason` on a result, `error` on a refusal — the route names the field
     // differently either side of the 400, and the sentence is the whole value
-    // of a refusal ("Remove the credentials from that URL").
-    const detail = res.reason || res.error;
+    // of a refusal ("Remove the credentials from that URL"). With both legs the
+    // per-leg sentences live in the block below, so the banner's second line is
+    // the composed guidance instead — and may be absent entirely.
+    const detail = both ? both.note : (res.reason || res.error);
     if (detail) {
       txt.appendChild(document.createElement('br'));
       txt.appendChild(document.createTextNode(detail));
     }
     banner.appendChild(txt);
     out.appendChild(banner);
+
+    // The two legs, always both, always in this order — a missing row would
+    // read as a check that passed.
+    if (both) {
+      const p       = res.p2p;
+      const legs    = el('div', 'tx-pf-checks');
+      const apiSpec = API_LEG[res.code] || (res.reachable ? API_LEG.ok : API_LEG.unreachable);
+      const p2pSpec = P2P_LEG[p.state]  || P2P_LEG.error;
+
+      legs.appendChild(legRow('Wallet API · ' + res.port, apiSpec, res.reason || res.error || ''));
+
+      let p2pDetail = p.reason || '';
+      if (p.same_port) {
+        p2pDetail += ' You aimed the API check at this same port, so it was measured once, '
+                   + 'not dialled twice.';
+      }
+      legs.appendChild(legRow('P2P · ' + p.port + ' (' + p.network + ')', p2pSpec, p2pDetail));
+      out.appendChild(legs);
+
+      // A ✕ on the P2P leg can be an artefact of a port WE assumed, or of a name
+      // that fronts a proxy rather than the node. Say so next to the ✕, not in a
+      // collapsed section further down.
+      p2pCaveats(res).forEach(c => {
+        const n = el('div', 'tx-note');
+        n.textContent = c;
+        out.appendChild(n);
+      });
+    }
 
     // The commonest wrong verdict this tool gives is a CORRECT answer about the
     // wrong port: a bare host name is dialled on an assumed :3413, while the
@@ -194,7 +391,7 @@
         && SUGGEST_OK[res.code] && typeof onRetry === 'function') {
       const alt = (res.suggest.scheme || 'https') + '://' + res.suggest.target;
       const s = el('div', 'tx-note tx-nc-suggest');
-      s.appendChild(el('strong', null, 'Is your node published behind nginx or TLS?'));
+      s.appendChild(el('strong', null, 'Is your node on its own port, without nginx in front?'));
       s.appendChild(document.createTextNode(' ' + (res.suggest.note || '') + ' '));
       const b = el('button', 'tx-btn', 'Check ' + alt + ' instead');
       b.type = 'button';
@@ -257,6 +454,16 @@
     const clear = document.getElementById('nc-clear');
     let busy = false;
 
+    // Which P2P port to dial. 'auto' lets the server derive it from a port the
+    // visitor typed themselves; the two explicit values are how someone with a
+    // bare host name says "this is a testnet node". Read at submit time, never
+    // cached — and a missing control degrades to 'auto' rather than throwing,
+    // because the API leg does not depend on it.
+    function currentNetwork() {
+      const picked = document.querySelector('input[name="nc-net"]:checked');
+      return (picked && picked.value) || 'auto';
+    }
+
     // `override` is the one-click retry from a suggestion: it rewrites the input
     // so what is on screen always matches what was dialled, then asks again. It
     // is a fresh visitor-initiated question, not a fallback inside one.
@@ -279,7 +486,7 @@
         const r = await fetch('/api/node-check', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ target: text }),
+          body: JSON.stringify({ target: text, network: currentNetwork() }),
         });
         const data = await r.json().catch(() => null);
         // A 400 still carries an ANSWER here — `blocked` sends the full result

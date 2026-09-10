@@ -34,6 +34,23 @@ const net = require('net');
 const DEFAULT_PORT = 3413;          // grin node API (mainnet). Testnet is 13413.
 const RPC_PATH     = '/v2/foreign'; // POST-only JSON-RPC — a GET here proves nothing.
 
+// The OTHER half of "is my node reachable". 3413 is the port a WALLET dials;
+// 3414 is the port the NETWORK dials, and it is the one that decides whether
+// this node ever accepts an inbound peer. Checking only 3413 gave a red verdict
+// to a node that peers perfectly and simply keeps its API private — a correct
+// configuration drawn as a failure.
+//
+// ⚠ THESE TWO ARE CONSTANTS, NEVER VISITOR INPUT. The API port is whatever was
+// typed; the P2P port is only ever one of these two. A connect-only probe on an
+// operator-chosen port is a general port scanner with a Grin logo on it, and
+// that is the one thing this must not become.
+const HTTPS_PORT       = 443;   // where a node fronted by nginx actually answers
+const P2P_PORT         = 3414;
+const TESTNET_API_PORT = 13413;
+const TESTNET_P2P_PORT = 13414;
+
+const NETWORKS = { auto: 1, mainnet: 1, testnet: 1 };
+
 class NodeCheckError extends Error {
   constructor(code, message) {
     super(message);
@@ -109,20 +126,37 @@ function parseTarget(raw) {
   // of the endpoint below the host name was assumed by us. It is not a parsing
   // detail — it is the difference between "your node did not answer" and "the
   // port WE picked did not answer", and the caller needs it to say which.
-  // A bare host lands on 3413, but the toolkit's own Script 04 publishes a node
-  // through nginx on 443 (`https://api.grin.money/v2/foreign`), so the single
-  // commonest wrong verdict this tool can give is a correct answer about a port
-  // the operator never uses.
   let assumed = false;
   if (portStr !== '') {
     if (!/^[0-9]{1,5}$/.test(portStr)) throw new NodeCheckError('bad_input', 'That port is not a number.');
     port = Number(portStr);
     if (port < 1 || port > 65535) throw new NodeCheckError('bad_input', 'That port is out of range.');
   } else {
-    // A scheme with no port means what it means in a URL. Otherwise the grin
-    // node default — this tool's whole subject.
-    port = scheme === 'https' ? 443 : scheme === 'http' ? 80 : DEFAULT_PORT;
-    assumed = !scheme;
+    // A scheme with no port means what it means in a URL. With NEITHER, the
+    // default depends on what kind of host this is — and that split is the
+    // whole point, because one default is wrong far more often than the other.
+    //
+    // ⚠ A BARE NAME DEFAULTS TO 443, NOT 3413. Until 2026-09-10 it was 3413,
+    // the protocol default, and that produced this tool's commonest wrong
+    // answer: a CORRECT verdict about a port the operator never published.
+    // The toolkit's own Script 04 fronts a node with nginx + certbot and
+    // publishes it at `https://api.grin.money/v2/foreign` — 443, with 3413
+    // bound to localhost and firewalled off. Somebody who owns a NAME has DNS
+    // and, overwhelmingly, a certificate; 3413 answering directly on a named
+    // host is the rarer setup, and it is the one where people type the port.
+    //
+    // ⚠ AN IP LITERAL STILL DEFAULTS TO 3413, and must. This checker verifies
+    // certificates (there is no rejectUnauthorized override anywhere) and
+    // deliberately sends no SNI for an IP literal, so `https://203.0.113.9`
+    // lands on tls_error whatever is running there. Defaulting an IP to 443
+    // would trade a sometimes-wrong answer for an always-wrong one. An address
+    // with no name is also, in practice, a node published without a front.
+    if (scheme === 'https')     port = 443;
+    else if (scheme === 'http') port = 80;
+    else {
+      port = net.isIP(host) ? DEFAULT_PORT : HTTPS_PORT;
+      assumed = true;
+    }
   }
   if (!scheme) scheme = port === 443 ? 'https' : 'http';
 
@@ -304,8 +338,39 @@ function readVersion(bodyText) {
   } catch { return null; }
 }
 
+// ── Which P2P port ───────────────────────────────────────────────────────────
+
+// The visitor's toggle. Anything unrecognised is 'auto' rather than an error:
+// a bad hint must never fail a check that the rest of the input supports.
+function normalizeNetworkHint(hint) {
+  const h = (typeof hint === 'string') ? hint.trim().toLowerCase() : '';
+  return NETWORKS[h] ? h : 'auto';
+}
+
+// Decide the P2P port and say WHERE the decision came from — the source matters
+// as much as the port, because a "filtered" verdict on a DEFAULTED mainnet port
+// is a much weaker statement than one on a port the operator chose. The client
+// words the two differently, so this must not collapse them.
+//
+// On 'auto' the only honest signal is a port the visitor typed themselves; the
+// tool never guesses testnet from a host name. When they typed nothing, 3413 is
+// assumed and so is mainnet — Tiny Explorer is a mainnet explorer.
+function p2pPortFor(target, hint) {
+  const h = normalizeNetworkHint(hint);
+  if (h === 'mainnet') return { port: P2P_PORT,         network: 'mainnet', source: 'chosen' };
+  if (h === 'testnet') return { port: TESTNET_P2P_PORT, network: 'testnet', source: 'chosen' };
+
+  const p = target && target.port;
+  if (p === TESTNET_API_PORT || p === TESTNET_P2P_PORT) {
+    return { port: TESTNET_P2P_PORT, network: 'testnet', source: 'derived' };
+  }
+  return { port: P2P_PORT, network: 'mainnet', source: 'default' };
+}
+
 module.exports = {
   DEFAULT_PORT, RPC_PATH,
+  HTTPS_PORT, P2P_PORT, TESTNET_API_PORT, TESTNET_P2P_PORT,
+  normalizeNetworkHint, p2pPortFor,
   NodeCheckError,
   parseTarget, blockedReason, readTip, readVersion, unwrapResult,
   _internals: { v4Blocked, v6Blocked, v6Bytes },

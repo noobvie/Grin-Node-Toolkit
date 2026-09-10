@@ -58,7 +58,26 @@ this directory is that the peer map makes **zero third-party requests**, and the
 existing `cp -r assets/.` deploy step already carries it with no script change.
 
 Every `countries-*.json` is a TopoJSON `Topology` carrying **both** a `countries` object
-and a `land` object, so one file gives land fill, borders and names together.
+and a `land` object, so one file gives land fill and borders together.
+
+**The page reads both objects, and not in the obvious way.** `buildBasemapFC()` in
+`index.html` draws:
+
+- **fill** from `objects.land` — one merged shape, so no internal border is ever a fill
+  edge;
+- **borders** from `topojson.mesh(topo, objects.countries, (a, b) => a !== b)` — one
+  unfilled line mesh of the internal borders only.
+
+It does **not** draw the 177/241 per-country features. Drawn that way every shared border
+is stroked twice, once by each neighbour, and the second country's opaque fill then paints
+over part of the first one's stroke — visibly uneven border weight anywhere countries are
+small. Land + mesh is also **~20% fewer vertices in 2 Leaflet paths instead of 241**, which
+matters because `Renderer._onZoomEnd` re-projects every layer with no culling.
+
+⚠ The trade is that **no country is a Leaflet layer of its own**, so there is nothing to
+hit-test, highlight or label per country. Nothing needs it today (the layer is
+`interactive: false`; the peer dots own every interaction). A future "click a country"
+feature would have to undo this, not extend it.
 
 **Property names differ between sources and this is deliberate:**
 
@@ -67,7 +86,9 @@ and a `land` object, so one file gives land fill, borders and names together.
 
 The 10m set is stripped to two short keys because Natural Earth ships **168 properties
 per feature**; keeping them would roughly double the file for data the map never reads.
-Consumers must read `name` on the two world-atlas files and `n` on the 10m file.
+The peer map currently reads **no** country property at all — land and the border mesh
+carry none — but keep them: a country name is the first thing anything else built on this
+data will want, and re-vendoring to add it back is not free.
 
 `cities.json` is a flat array, **not** GeoJSON:
 
@@ -78,6 +99,32 @@ Consumers must read `name` on the two world-atlas files and `n` on the 10m file.
 Coordinates are rounded to 3 decimal places (~110 m). The map's `maxZoom` is 10, where one
 pixel is ~153 m, so this is already finer than anything that can be displayed.
 `scalerank` runs 0 (most prominent) to 10 — filter on it to thin labels at low zoom.
+
+## Dateline seams — repaired at runtime, do NOT "fix" the data
+
+Every one of these files stores **Russia, Fiji and Antarctica** with a ring that steps
+straight from `+180` to `-180` (or back). That is normal, valid Natural Earth: in lon/lat
+the edge just means *continues on the other side*. Projected onto a flat canvas it is a
+straight line across the **entire** map, and because the ring returns at a slightly
+different latitude the pair fills as a full-width horizontal band:
+
+| Country | Crossings per ring | Band appears at |
+|---|---|---|
+| Russia | 2 | ~65 °N (110m); ~65 °N and ~71.5 °N (50m) |
+| Fiji | 2 | ~16 °S |
+| Antarctica | 1 | ~84.7 °S (110m); ~90 °S and ~84.3 °S (50m) |
+
+The CARTO raster never showed this because a tile renderer cuts geometry at the dateline
+before it reaches the browser. Drawing our own geometry means owning that cut, so
+`index.html` does it — `amRepair()`, once per tier, on the cached decode (0.4 ms for
+110m, 1.8 ms for 50m). Rings with an **even** number of crossings are split into real
+lobes and closed along the dateline; the **odd** one is Antarctica's closing seam, whose
+polar cap edge is simply absent from the data, and is closed over the pole instead.
+
+⚠ **The files are correct as published — do not edit them and do not re-export them to
+remove the seams.** A pre-cut asset would be silently undone by the `curl` in
+*Regenerating* below, which is exactly the kind of fix that comes back. The repair belongs
+in the one place that projects the geometry.
 
 ## Licences
 
@@ -139,6 +186,10 @@ Emit `[name, scalerank, lon, lat]` per feature, lon/lat rounded to 3 decimals.
 - all four parse as JSON
 - each `countries-*.json` has objects `countries` **and** `land`
 - arc vertices are 8,246 / 80,617 / 478,373 and `cities.json` has 1,251 rows
+- exactly three features per tier contain a segment spanning more than 180° of
+  longitude — Russia, Fiji, Antarctica. **More than three, or a different set, means
+  the runtime repair now has cases it was never measured against**; re-read *Dateline
+  seams* above before shipping the file.
 
 ⚠ The design doc quotes **548,471** for the 10m tier. That is the coordinate count of the
 **source GeoJSON**, measured before conversion — not a property of the file in this

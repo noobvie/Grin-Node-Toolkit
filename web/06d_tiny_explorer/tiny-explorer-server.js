@@ -649,6 +649,23 @@ app.get('/api/stats', async (_req, res) => {
   }
 });
 
+// The GRIN price comes from gate.io/CoinGecko and needs the node for NOTHING, but
+// it only ever shipped inside /api/stats — which 502s as a whole when getTip()
+// fails. A node outage therefore made every page report "GRIN price unavailable",
+// which is false: the price was fine and cached. This route is the node-free half,
+// so a client whose /api/stats call died can still say WHICH half broke.
+app.get('/api/price', async (_req, res) => {
+  const p = await getPrice().catch(() => null);
+  if (!p) return res.status(502).json({ error: 'price unavailable' });
+  res.setHeader('Cache-Control', 'public, max-age=60');
+  res.json({
+    price_usd:      p.price_usd      ?? null,
+    price_btc:      p.price_btc      ?? null,
+    change_24h_pct: p.change_24h_pct ?? null,
+    sources:        p.sources        || [],
+  });
+});
+
 app.get('/api/block/:ref', async (req, res) => {
   const ref = req.params.ref;
   if (!isValidRef(ref)) return res.status(400).json({ error: 'Invalid block reference' });

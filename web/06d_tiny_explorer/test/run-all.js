@@ -19,6 +19,7 @@ const SUITES = [
   'test-node-check.js',      // the SSRF blocklist + parseTarget
   'test-wallet-check.js',    // browser Keccak at the rate boundary + onion derivation
   'test-probe-copy.js',      // the probe-on/probe-off copy contract across 5 files
+  'test-mining.js',          // the /mining money maths + which missing figure a dash blames
 ];
 
 let pass = 0, fail = 0;

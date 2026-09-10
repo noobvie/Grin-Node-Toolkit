@@ -229,13 +229,27 @@
   .leaflet-citylabel-pane { pointer-events: none; }
   .bm-label { background: none; border: none; }   /* strip divIcon defaults */
   /* The icon element itself carries Leaflet's positioning transform, so it cannot also
-     carry a centring one — hence an inner span (iconSize [0,0]) that centres itself on
-     the point. The doubled shadow is a cheap halo: it has to hold up over land fill AND
-     over ocean, which are different colours in every theme. */
+     carry a centring one — hence inner elements (iconSize [0,0]) that place themselves
+     relative to the point at left:0/top:0.
+     ⚠ The name is BELOW the point, not centred on it. Peer geo is city-centroid, and so
+     are these labels, so the two sets share coordinates by construction — a centred label
+     sat underneath the very dot it was naming, and did so hardest in exactly the cities
+     that had peers. The tick is what keeps the offset name attached to its point. */
+  .bm-label-d {
+    position: absolute;
+    left: 0; top: 0;
+    width: 3px; height: 3px;
+    margin: -1.5px 0 0 -1.5px;
+    border-radius: 50%;
+    background: var(--map-label);
+    opacity: 0.75;
+  }
+  /* The doubled shadow is a cheap halo: it has to hold up over land fill AND over ocean,
+     which are different colours in every theme. */
   .bm-label-t {
     position: absolute;
     left: 0; top: 0;
-    transform: translate(-50%, -50%);
+    transform: translate(-50%, 4px);
     white-space: nowrap;
     font-size: 10px;
     line-height: 1;
@@ -1125,9 +1139,49 @@ const BASEMAP_STYLES = {
   matrix: { fillColor: "#00230a", color: "#00b833" },
   hp:     { fillColor: "#1d0650", color: "#6b34c4" },
 };
-const basemapStyleFor = theme =>
-  Object.assign({ weight: 0.7, fillOpacity: 1, opacity: 1 },
-                BASEMAP_STYLES[theme] || BASEMAP_STYLES.dark);
+// Two roles now, and they need different options: land is a filled polygon whose stroke
+// is the COASTLINE, borders are a single unfilled line mesh. `fill: false` is not
+// cosmetic on the border feature — without it Leaflet closes and fills the line mesh,
+// which paints a lake-shaped blob over half of Eurasia.
+function basemapStyleFor(theme, feature) {
+  const t = BASEMAP_STYLES[theme] || BASEMAP_STYLES.dark;
+  return feature && feature.properties && feature.properties.role === "border"
+    ? { color: t.color, weight: 0.5, opacity: 0.85, fill: false }
+    : { color: t.color, weight: 0.7, opacity: 1, fill: true,
+        fillColor: t.fillColor, fillOpacity: 1 };
+}
+
+// Land as ONE merged shape plus internal borders as ONE line mesh — not 177/241 separate
+// country polygons. Two reasons, and the second is the one that shows:
+//
+//   1. Cost. 110m: 7,934 vertices across 2 paths, against 10,587 across 177. 50m: 80,274
+//      across 2, against 99,539 across 241. Renderer._onZoomEnd re-projects every layer
+//      with no culling at all, so the whole number is paid on every zoom step.
+//   2. Ink. Drawn per country, every shared border is stroked TWICE — once by each
+//      neighbour — and the second country's fillOpacity:1 then paints over part of the
+//      first one's stroke. That is the uneven border weight across Europe. A border
+//      belongs to two countries but IS one line: draw it once, on top of both fills.
+//
+// Both objects already ship inside every countries-*.json (see assets/README.md); this
+// reads what is there, it does not add a file. The tradeoff is that no country is a
+// Leaflet layer of its own any more, so there is nothing to hit-test or highlight per
+// country. Nothing did — the layer is interactive:false and the peer dots own every
+// interaction on this map — but a future "click a country" feature would have to undo
+// this, not extend it.
+function buildBasemapFC(topo) {
+  const land = topojson.feature(topo, topo.objects.land);
+  return {
+    type: "FeatureCollection",
+    // feature() returns a FeatureCollection for a GeometryCollection and a bare Feature
+    // otherwise. world-atlas ships the former; the guard is one expression and means a
+    // re-vendored file that ships the latter degrades to a map instead of a blank page.
+    features: (land.features || [land]).concat([{
+      type:       "Feature",
+      properties: { role: "border" },
+      geometry:   topojson.mesh(topo, topo.objects.countries, (a, b) => a !== b),
+    }]),
+  };
+}
 
 // ONE construction site, ONE layer, for the life of the page. The layer is built empty
 // and never rebuilt: a theme change is setStyle() on it (see applyTheme) and a
@@ -1148,10 +1202,167 @@ function makeBasemapLayer() {
     // Reads the live currentTheme instead of a captured argument. This runs again on
     // every tier swap, so a captured theme would resurrect the old colours the first
     // time the map crossed a zoom band after a theme switch.
-    style:       () => basemapStyleFor(currentTheme),
+    style:       f => basemapStyleFor(currentTheme, f),
     interactive: false,
     attribution: BASEMAP_ATTR,
   });
+}
+
+// ── Antimeridian seam repair ──────────────────────────────────────────────────
+// ⚠ Natural Earth stores three countries with rings that step straight from +180 to
+// -180 (or back). In lon/lat that edge is legal shorthand for "continues on the other
+// side"; projected onto a flat canvas it is a straight line across the ENTIRE map, and
+// since the ring returns at a slightly different latitude the pair fills as a full-width
+// horizontal BAND. Measured in both shipped tiers, and it is exactly these three:
+//
+//   Russia      2 crossings per ring  -> band at ~65N (110m) / ~65N + ~71.5N (50m)
+//   Fiji        2 crossings per ring  -> band at ~16S
+//   Antarctica  1 crossing  per ring  -> band at ~84.7S (110m) / ~89.999S + ~84.3S (50m)
+//
+// The CARTO raster never showed this because a tile renderer cuts geometry at the
+// dateline before it ever reaches the browser. Drawing our own geometry means owning
+// that cut, so it happens here, once per tier, on the cached decode.
+//
+// Two shapes of ring, and they need opposite repairs — which is why this is not a
+// one-line "drop the long segment":
+//   EVEN crossings  the ring genuinely straddles the dateline. Cut it into pieces and
+//                   close each piece along the dateline edge it starts and ends on.
+//                   Fiji becomes its real two lobes; Russia its mainland + Chukotka.
+//   ODD crossings   the segment IS the ring's closing seam and the polar cap edge is
+//                   simply absent from the data (Antarctica). Closing the two ends
+//                   directly would recreate the band, so route them via the pole.
+//                   Leaflet clamps to +/-85.0511 on projection, so this renders as the
+//                   fill-to-the-bottom-edge every web map shows.
+const AM_POLE = 90;
+
+function amRingWraps(ring) {
+  for (let i = 1; i < ring.length; i++) {
+    if (Math.abs(ring[i][0] - ring[i - 1][0]) > 180) return true;
+  }
+  return false;
+}
+
+// Where a wrapping segment meets the dateline: the edge p runs INTO, and the latitude it
+// crosses at. A jump with `dx > 0` (p near -180, q near +180) is a pen stroke from the
+// left edge of the map to the right one, so the real path left the map heading west, at
+// -180. `dx < 0` is the mirror image and leaves at +180.
+function amCut(p, q) {
+  const dx   = q[0] - p[0];
+  const edge = dx > 0 ? -180 : 180;      // dateline p runs into
+  const span = (q[0] + (dx > 0 ? -360 : 360)) - p[0];   // q in p's continuous frame
+  const t    = span === 0 ? 0 : (edge - p[0]) / span;   // === 0 for an exact +/-180 pair
+  return [edge, p[1] + t * (q[1] - p[1])];
+}
+
+// One closed ring in, one or more closed rings out. Returns the INPUT ARRAY ITSELF when
+// there is nothing to cut, so the 99.9% of rings that never touch the dateline cost one
+// scan and zero allocation.
+function amSplitRing(ring) {
+  if (!amRingWraps(ring)) return [ring];
+
+  const pieces = [];
+  let cur = [ring[0]];
+  for (let i = 1; i < ring.length; i++) {
+    const p = ring[i - 1], q = ring[i];
+    if (Math.abs(q[0] - p[0]) > 180) {
+      const c = amCut(p, q);
+      cur.push(c);
+      pieces.push(cur);
+      cur = [[-c[0], c[1]], q];          // re-enter on the opposite edge, same latitude
+    } else {
+      cur.push(q);
+    }
+  }
+  pieces.push(cur);
+
+  // The ring is closed, so its last point is its first: the tail piece and the head
+  // piece are two halves of one run and must be rejoined before anything is closed.
+  if (pieces.length > 1) {
+    const tail = pieces.pop();
+    pieces[0] = tail.concat(pieces[0].slice(1));
+  }
+
+  const out = [];
+  for (const piece of pieces) {
+    const a = piece[0], b = piece[piece.length - 1];
+    if (a[0] !== b[0]) {
+      // Opposite dateline edges: this was the ring's closing seam and the polar cap edge
+      // is simply missing from the data. Close over the nearer pole instead. Walked in
+      // 90-degree steps rather than one 180 -> -180 hop so the output still satisfies
+      // "no segment spans more than half the world" — the invariant this whole pass
+      // exists to restore, and the one a later simplifier or clipper will assume.
+      const pole = piece.reduce((s, pt) => s + pt[1], 0) / piece.length < 0 ? -AM_POLE : AM_POLE;
+      const step = b[0] > a[0] ? -90 : 90;
+      for (let x = b[0]; x !== a[0]; x += step) piece.push([x, pole]);
+      piece.push([a[0], pole]);
+    }
+    piece.push(a);                       // GeoJSON rings are explicitly closed
+    if (piece.length >= 4) out.push(piece);   // drop slivers the cut degenerated
+  }
+  return out;
+}
+
+// A line has no interior to close, so a wrapping segment just cuts it in two, each half
+// stopping at the dateline. The internal-border mesh has no wrapping segment in either
+// shipped tier today — this exists so a re-vendored file that grows one cannot put a
+// full-width line back on the map without anyone noticing.
+function amSplitLine(line) {
+  if (!amRingWraps(line)) return [line];
+
+  const parts = [];
+  let cur = [line[0]];
+  for (let i = 1; i < line.length; i++) {
+    const p = line[i - 1], q = line[i];
+    if (Math.abs(q[0] - p[0]) > 180) {
+      const c = amCut(p, q);
+      cur.push(c);
+      parts.push(cur);
+      cur = [[-c[0], c[1]], q];
+    } else {
+      cur.push(q);
+    }
+  }
+  parts.push(cur);
+  return parts.filter(part => part.length >= 2);
+}
+
+// Whole-tier pass. Exactly three of the 177/241 features need anything done to them, so
+// the shape of this is a cheap scan for everyone and allocation for nobody else: a
+// feature with no wrapping ring keeps its geometry object by reference. Measured on this
+// repo's own data, warm: 0.4 ms for 110m, 1.8 ms for 50m — once per tier, on the same
+// cached decode topojson.feature() already pays for.
+function amRepair(fc) {
+  for (const ft of fc.features) {
+    const g = ft.geometry;
+    if (!g) continue;
+
+    if (g.type === "LineString" || g.type === "MultiLineString") {
+      const lines = g.type === "LineString" ? [g.coordinates] : g.coordinates;
+      if (!lines.some(amRingWraps)) continue;
+      const cut = [];
+      for (const line of lines) for (const part of amSplitLine(line)) cut.push(part);
+      ft.geometry = { type: "MultiLineString", coordinates: cut };
+      continue;
+    }
+
+    const polys = g.type === "Polygon" ? [g.coordinates]
+                : g.type === "MultiPolygon" ? g.coordinates : null;
+    if (!polys) continue;
+    if (!polys.some(poly => poly.some(amRingWraps))) continue;
+
+    const rebuilt = [];
+    for (const poly of polys) {
+      // A hole is cut by the same rule as its shell, and the pieces are appended to the
+      // SAME polygon rather than promoted to polygons of their own — that is what keeps
+      // a split hole attached to the shell it belongs to. None of the three actually has
+      // a hole at the dateline today; this is so the pass stays correct if one appears.
+      const rings = [];
+      for (const ring of poly) for (const part of amSplitRing(ring)) rings.push(part);
+      rebuilt.push(rings);
+    }
+    ft.geometry = { type: "MultiPolygon", coordinates: rebuilt };
+  }
+  return fc;
 }
 
 // ── Basemap tier loading ──────────────────────────────────────────────────────
@@ -1178,7 +1389,11 @@ function loadBasemapTier(tier) {
     .then(topo => {
       // ⚠ TopoJSON is NOT GeoJSON. Handing the raw file to L.geoJSON yields an empty
       // map with no error at all — it must be decoded first.
-      basemapData[tier.key] = topojson.feature(topo, topo.objects.countries);
+      // amRepair: cut the dateline-wrapping rings before Leaflet ever sees them, once,
+      // on the cached decode. See "Antimeridian seam repair" above. The merged `land`
+      // object wraps in MORE places than the per-country one did (7 segments at 110m, 8
+      // at 50m, because merging welds Europe to Asia), so this is not optional here.
+      basemapData[tier.key] = amRepair(buildBasemapFC(topo));
       return basemapData[tier.key];
     })
     .catch(e => {
@@ -1241,21 +1456,41 @@ function prefetchNextBasemapTier() {
 // assets/cities.json is a flat [name, scalerank, lon, lat] array — 1,251 Natural Earth
 // places, 17 KB gzipped, which is the entire cost of this feature.
 //
-// ⚠ Leaflet has NO collision-aware label placement. That is the one thing the raster
-// tiles gave us for free, and overlaps here are ACCEPTED, not solved — two labels can
-// and will sit on top of each other in a dense region. The lever when it looks cluttered
-// is CITY_LABEL_RANK_OFFSET, never a placement solver.
+// Leaflet has NO collision-aware label placement — the one thing the raster tiles gave us
+// for free. Overlaps used to be ACCEPTED here, with CITY_LABEL_RANK_OFFSET as the only
+// lever; that trades a dense region's clutter against a sparse one's emptiness, and every
+// setting is wrong for half the map. The cull below is ~15 lines and settles it per view.
 //
-// Two filters keep the DOM small. scalerank thins by importance as zoom allows
-// (rank 0: 27 places, 1: 41, 2: 118, 3: 336, 4: 606), so `rank <= zoom - 2` runs from
-// ~27 labels at z2 to effectively everything by z8; the viewport bounds then throw away
-// whatever is off screen. Without the second filter this would be 1,251 DOM nodes, each
-// repositioned by Leaflet on every pan and zoom, to show at most a few dozen.
+// Three filters, cheapest first. scalerank thins by importance as zoom allows (rank 0: 27
+// places, 1: 41, 2: 118, 3: 336, 4: 606); the viewport bounds throw away what is off
+// screen; then the cull drops whatever will not FIT. Without the first two this would be
+// 1,251 DOM nodes, each repositioned by Leaflet on every pan, to show a few dozen.
 const CITY_LABEL_SRC         = "assets/cities.json";
-const CITY_LABEL_RANK_OFFSET = 2;   // rank <= zoom - this. RAISE it to show fewer.
+// Eligibility, not density — the cull decides density now. One lower than it was, because
+// with a cull a generous candidate list is strictly better: more names where there is
+// room, none where there is not. RAISE it to make even a sparse ocean quieter.
+const CITY_LABEL_RANK_OFFSET = 1;
+const CITY_LABEL_H           = 11;  // 10px text at line-height 1, +1 for descenders
+const CITY_LABEL_DY          = 4;   // MUST match .bm-label-t's translate Y
+const CITY_LABEL_PAD         = 2;   // breathing room between two kept boxes
 
 let cityLabelData  = null;   // [name, scalerank, lon, lat][] once fetched
 let cityLabelLayer = null;
+
+const boxesOverlap = (a, b) =>
+  a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+
+// ONE canvas for the life of the page, one font read per rebuild. Measuring in the DOM
+// would mean appending each candidate and reading its box back — a forced layout per
+// label, on every pan. font-size is ours (10px, .bm-label-t); the family follows the
+// theme, and matrix swaps the page to Courier New, which is a different width for the
+// same string.
+let cityLabelCtx = null;
+function cityLabelMetrics() {
+  if (!cityLabelCtx) cityLabelCtx = document.createElement("canvas").getContext("2d");
+  cityLabelCtx.font = "10px " + getComputedStyle(document.body).fontFamily;
+  return cityLabelCtx;
+}
 
 // Rebuild the visible set from scratch. Cheap because the set is small by construction,
 // and it keeps the filter in exactly one place — a diff against the previous set would
@@ -1267,21 +1502,50 @@ function rebuildCityLabels() {
   const maxRank = leafletMap.getZoom() - CITY_LABEL_RANK_OFFSET;
   if (maxRank < 0) return;                  // below z2 there is nothing worth showing
 
-  // Padded: a label is centred on its point and extends either side of it, so an anchor
-  // just off screen can still have text reaching into view. The pad also stops a short
-  // drag flickering labels in and out along the edge.
+  // Padded: a label extends either side of its point, so an anchor just off screen can
+  // still have text reaching into view. The pad also stops a short drag flickering
+  // labels in and out along the edge.
   const bounds = leafletMap.getBounds().pad(0.15);
+  const ctx    = cityLabelMetrics();
 
-  for (const [name, rank, lon, lat] of cityLabelData) {
-    if (rank > maxRank || !bounds.contains([lat, lon])) continue;
+  // ⚠ Seed the occupied list with the DOTS, before any label is considered. A city name
+  // covering the data the map exists to show is worse than a missing city name — and
+  // since peer geo and this file are both city-centroid, those collisions are guaranteed
+  // rather than unlucky. drawnGroups is whatever buildMarkers last drew, so this can
+  // never describe a marker set that is no longer on screen.
+  const taken = [];
+  for (const g of drawnGroups) {
+    const pt = leafletMap.latLngToLayerPoint([g.lat, g.lng]);
+    const r  = (g.nodes.length === 1 ? 5 : groupRadius(g.nodes.length)) + 1;
+    taken.push({ x: pt.x - r, y: pt.y - r, w: r * 2, h: r * 2 });
+  }
+
+  // Most important first, so what a cull drops is what a reader misses least. scalerank
+  // is the only ordering the data carries; the name tie-break exists purely to make the
+  // outcome stable — without it two equal-rank cities could swap places on every pan.
+  const cands = cityLabelData
+    .filter(row => row[1] <= maxRank && bounds.contains([row[3], row[2]]))
+    .sort((a, b) => a[1] - b[1] || (a[0] < b[0] ? -1 : 1));
+
+  for (const [name, , lon, lat] of cands) {
+    const pt = leafletMap.latLngToLayerPoint([lat, lon]);
+    const w  = ctx.measureText(name).width + CITY_LABEL_PAD * 2;
+    const box = {
+      x: pt.x - w / 2,
+      y: pt.y + CITY_LABEL_DY - CITY_LABEL_PAD,
+      w: w,
+      h: CITY_LABEL_H + CITY_LABEL_PAD * 2,
+    };
+    if (taken.some(t => boxesOverlap(box, t))) continue;
+    taken.push(box);
     cityLabelLayer.addLayer(L.marker([lat, lon], {
       pane:        "citylabelPane",
       interactive: false,     // never a hover/click target — the dots own the pointer
       keyboard:    false,
       icon: L.divIcon({
         className: "bm-label",
-        iconSize:  [0, 0],    // CSS sizes the text; .bm-label-t centres it on the point
-        html:      `<span class="bm-label-t">${esc(name)}</span>`,
+        iconSize:  [0, 0],    // CSS places both marks relative to the point
+        html:      `<i class="bm-label-d"></i><span class="bm-label-t">${esc(name)}</span>`,
       }),
     }));
   }
@@ -1317,7 +1581,19 @@ function initMap() {
     maxZoom:              10,
     zoomControl:          false,
     preferCanvas:         true,
-    maxBounds:            [[-85.05, -180], [85.05, 180]],
+    // Not the Mercator limit (+/-85.05): the poles are ~30% of that box's height and hold
+    // nothing this map draws. North is 84 because the northernmost vertex in the data is
+    // Greenland at 83.65N, so no land is lost. South is -60 because the southernmost peer
+    // -- ever, on any network -- is well north of Tierra del Fuego at -56, and the only
+    // thing below is Antarctica. Trading empty ocean for ~20% more pixels on the
+    // latitudes that actually hold nodes, at the same zoom.
+    // ⚠ maxBounds limits PANNING, not rendering. This box is 694 px tall at z2, so on a
+    // map taller than that the view is centred and the geometry beyond the bounds still
+    // draws — you see some polar ocean again, you just cannot pan into it. That is the
+    // same degradation the old +/-85.05 box had above 1024 px, at a lower threshold.
+    // Raising minZoom to make the box always fill would cost the whole-world view, which
+    // is the one view this map is for.
+    maxBounds:            [[-60, -180], [84, 180]],
     maxBoundsViscosity:   1.0,
     worldCopyJump:        false,
   });
@@ -1516,6 +1792,12 @@ function groupMarker(g) {
   return marker;
 }
 
+// What is on the map right now. Read by rebuildCityLabels so a city name is never placed
+// over a dot; a module-level handle rather than a walk of markersLayer because the two
+// marker kinds carry their size in different places (circleMarker radius vs divIcon
+// iconSize), and the group is the thing that knows.
+let drawnGroups = [];
+
 function buildMarkers(groups) {
   markersLayer.clearLayers();
   // Insertion order is NOT the stacking order here: single dots are canvas circles in
@@ -1528,6 +1810,12 @@ function buildMarkers(groups) {
   groups.forEach(g => markersLayer.addLayer(
     g.nodes.length === 1 ? singleMarker(g.nodes[0]) : groupMarker(g)
   ));
+  drawnGroups = groups;
+  // The labels were placed against the PREVIOUS marker set — on first load, against none
+  // at all, since cities.json and peers.json land in whichever order the network gives
+  // them. Re-place them now that the dots they must avoid actually exist. No-op until
+  // cities.json has landed, and the next moveend re-places them anyway.
+  rebuildCityLabels();
 }
 
 // ── Right side panel ──────────────────────────────────────────────────────────
@@ -1814,7 +2102,10 @@ function applyTheme(theme) {
   // what preserves its position under the dots in the canvas draw order, and it
   // leaves exactly one place where basemap options are written.
   if (basemapLayer) {
-    basemapLayer.setStyle(basemapStyleFor(theme));
+    // A FUNCTION, not an object: L.GeoJSON.setStyle passes each layer's own feature
+    // through it, which is the only way land and the border mesh get different options.
+    // Handing it a flat object would give the border mesh a fill and blot out Eurasia.
+    basemapLayer.setStyle(f => basemapStyleFor(theme, f));
     // Belt and braces — setStyle does not reorder, but a tier fetch may still be in
     // flight on an early theme switch. A tier that lands LATER is styled correctly
     // regardless: makeBasemapLayer's style callback reads currentTheme live.

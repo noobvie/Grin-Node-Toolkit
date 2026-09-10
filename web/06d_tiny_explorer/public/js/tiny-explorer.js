@@ -838,7 +838,12 @@ function miningEstimate(inp) {
   const price  = posNum(inp.priceUsd) || null;
 
   // Your share of a network that is paid exactly 86,400 ツ a day (60 ツ × 1440).
-  const grinDay = netGps > 0 ? gps / netGps * 86400 * (1 - fee / 100) : null;
+  // Both operands must be REAL: an empty hashrate box is "not told yet", not a
+  // miner running at 0 G/s, and posNum() flattens the two into the same 0. It
+  // rendered as a confident "0 ツ · $0.00" a day and a "-$0.49" daily loss for a
+  // rig the reader has not described — the same class of mistake as printing 0
+  // for a missing network basis, one field further in.
+  const grinDay = (netGps > 0 && gps > 0) ? gps / netGps * 86400 * (1 - fee / 100) : null;
   const powerDay = watts / 1000 * 24 * kwh;
   const usd = g => (g != null && price != null) ? g * price : null;
 
@@ -910,18 +915,35 @@ function initMining() {
     setText('mine-day',   fmtGrinAmt(r.grinDay));
     setText('mine-week',  fmtGrinAmt(r.grinWeek));
     setText('mine-month', fmtGrinAmt(r.grinMonth));
-    setText('mine-day-usd',   r.usdDay   != null ? fmtUsdAmt(r.usdDay)   : (priceUsd == null ? 'price unavailable' : '—'));
-    setText('mine-week-usd',  r.usdWeek  != null ? fmtUsdAmt(r.usdWeek)  : (priceUsd == null ? 'price unavailable' : '—'));
-    setText('mine-month-usd', r.usdMonth != null ? fmtUsdAmt(r.usdMonth) : (priceUsd == null ? 'price unavailable' : '—'));
+    // WHY a figure is —, named in the order the reader can act on it. Every
+    // unknown used to print 'enter your hashrate' or 'price unavailable', so a
+    // dead /api/stats told a miner who HAD entered a hashrate to enter one —
+    // copy that blames the operator for the server's own outage. The missing
+    // input in that case is the NETWORK figure, which no field on this page can
+    // supply. Order matters: without the network basis nothing downstream is
+    // computable, so it is reported first even when the price is also missing.
+    const noNet  = (netGps == null);
+    const noRate = posNum(el['mine-gps'] ? el['mine-gps'].value : 0) <= 0;
+    const blocker = noNet  ? 'needs the network hashrate'
+                  : noRate ? 'enter your hashrate'
+                  : priceUsd == null ? 'price unavailable'
+                  : '—';
+
+    setText('mine-day-usd',   r.usdDay   != null ? fmtUsdAmt(r.usdDay)   : blocker);
+    setText('mine-week-usd',  r.usdWeek  != null ? fmtUsdAmt(r.usdWeek)  : blocker);
+    setText('mine-month-usd', r.usdMonth != null ? fmtUsdAmt(r.usdMonth) : blocker);
     setText('mine-power', fmtUsdAmt(r.powerDay));
     setText('mine-breakeven', fmtUsdPrice(r.breakEven));
+    // Power comes first here: with no power cost there is nothing to break even
+    // against, so the missing network basis is not what is holding this card up.
     setText('mine-breakeven-sub', r.breakEven != null
       ? 'per ツ, to cover electricity'
-      : (r.powerDay > 0 ? 'enter your hashrate' : 'no power cost entered'));
+      : r.powerDay > 0 ? (noNet ? 'needs the network hashrate' : 'enter your hashrate')
+      : 'no power cost entered');
     setText('mine-profit', fmtUsdAmt(r.profitDay));
     setText('mine-profit-sub', r.profitDay != null
       ? 'income at the live price minus power'
-      : (priceUsd == null ? 'price unavailable' : 'at the live price'));
+      : blocker === '—' ? 'at the live price' : blocker);
 
     // Watts are a RATE, and the field was read as a daily total. Spelling the
     // conversion out beside the box is the only place it can't be missed: the
@@ -1028,9 +1050,28 @@ function initMining() {
       // rendering bug. Name the failure and let the estimates fall to —.
       setText('mine-net', 'unavailable');
       setText('mine-net-sub', 'live stats did not load · ' + (err && err.message ? err.message : 'network error'));
-      setText('mine-price', 'unavailable');
-      setText('mine-price-sub', 'USD figures unavailable');
       render();
+
+      // /api/stats is all-or-nothing on the NODE: it 502s whenever getTip()
+      // fails, taking the price down with it even though the price is fetched
+      // from an exchange and needs the node for nothing. Reporting it as
+      // 'unavailable' there was simply false. /api/price is that node-free half,
+      // so an outage costs the estimates but not the price card.
+      fetch('/api/price')
+        .then(r => r.ok ? r.json() : Promise.reject(new Error('HTTP ' + r.status)))
+        .then(pr => {
+          priceUsd = posNum(pr && pr.price_usd) || null;
+          if (priceUsd == null) throw new Error('no price');
+          setText('mine-price', fmtUsdPrice(priceUsd));
+          setText('mine-price-sub', 'live, USD · network hashrate is the missing figure');
+          render();
+        })
+        .catch(() => {
+          priceUsd = null;
+          setText('mine-price', 'unavailable');
+          setText('mine-price-sub', 'USD figures unavailable');
+          render();
+        });
     });
 }
 

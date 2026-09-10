@@ -1,9 +1,12 @@
 # Script 06 — Global Grin Health (design notes)
 
-> **Covers code as of:** 2026-09-09 · **Last verified:** 2026-09-09, PARTIAL — the *Tool 2 —
-> Wallet Checker* section only, read against `lib/wallet-tor.js`, `tiny-explorer-server.js`
-> and `scripts/lib/06d_tiny_explorer.sh`. The rest of this doc is still never systematically verified.
-> **Product code last changed:** 2026-09-09 — `scripts/lib/06d_tiny_explorer.sh` (tor install + probe status row) and `web/06d_tiny_explorer/` (probe-aware page copy); 2026-09-09 — `web/06d_tiny_explorer/` (node-check assumed-port retry); 2026-09-08 — `web/06d_tiny_explorer/public/` (mining calculator presets); 2026-09-07 — `scripts/lib/06d_tiny_explorer.sh` (deploy/restart lifecycle); 2026-09-06 — `scripts/06_global_grin_health.sh`, `scripts/lib/06*`, `web/06_stats_map/`, `web/06d_tiny_explorer/`
+> **Covers code as of:** 2026-09-09 · **Last verified:** 2026-09-09, PARTIAL — two sections
+> only: *Peer map — self-hosted basemap* was read against `web/06_stats_map/stats/index.html`
+> **and against the committed `assets/countries-*.json` themselves** (the three dateline seams
+> below are measured from the data, not inferred); *Tool 2 — Wallet Checker* was read against
+> `lib/wallet-tor.js`, `tiny-explorer-server.js` and `scripts/lib/06d_tiny_explorer.sh`.
+> The rest of this doc is still never systematically verified.
+> **Product code last changed:** 2026-09-09 — `web/06d_tiny_explorer/` (mining calculator: `/api/price` fallback, blocker copy, first test suite for the money maths); 2026-09-09 — `web/06_stats_map/stats/index.html` (antimeridian seam repair, land+mesh basemap, city-label cull, trimmed maxBounds); 2026-09-09 — `scripts/lib/06d_tiny_explorer.sh` (tor install + probe status row) and `web/06d_tiny_explorer/` (probe-aware page copy); 2026-09-09 — `web/06d_tiny_explorer/` (node-check assumed-port retry); 2026-09-08 — `web/06d_tiny_explorer/public/` (mining calculator presets); 2026-09-07 — `scripts/lib/06d_tiny_explorer.sh` (deploy/restart lifecycle); 2026-09-06 — `scripts/06_global_grin_health.sh`, `scripts/lib/06*`, `web/06_stats_map/`, `web/06d_tiny_explorer/`
 > 06d has a test suite (`web/06d_tiny_explorer/test/`, 113 assertions), but it tests the code, not this doc.
 
 Only sections that need durable prose live here; the menu/wiring lives in
@@ -671,6 +674,125 @@ the shippable checkpoint, after which the watermark was gone and Parts 3-5 were 
 working map. **All parts are run and committed**, so the prompt file has been deleted — session
 plans are scaffolding, not reference (see the "Session plans" note in `docs/generated/README.md`).
 
+### As built — the dateline seams the raster used to hide (2026-09-09)
+
+First live deployment showed two full-width horizontal bands across the map, one at ~65 °N
+and one at ~16 °S. They are not a bug in the swap: **Natural Earth stores Russia, Fiji and
+Antarctica with a ring that steps straight from `+180` to `-180`**, which in lon/lat is
+valid shorthand for *continues on the other side* and on a flat canvas is a straight line
+across the whole world. The ring returns at a slightly different latitude, so the pair
+fills as a band. Measured, not guessed — exactly three offending features per tier:
+
+| Country | Crossings per ring | Band at |
+|---|---|---|
+| Russia | 2 | ~65 °N (110m); ~65 °N and ~71.5 °N (50m) |
+| Fiji | 2 | ~16 °S |
+| Antarctica | 1 | ~84.7 °S (110m); ~90 °S and ~84.3 °S (50m) |
+
+⚠ **This is the hidden cost of owning the geometry, and it was not in rev 2's risk list.**
+A tile server cuts geometry at the dateline before it ever reaches a browser; that cut was
+part of what CARTO was doing for us, and nothing in the swap plan replaced it.
+
+`amRepair()` in `index.html` now does it, once per tier on the cached decode (0.4 ms 110m,
+1.8 ms 50m; +22 / +29 vertices). The two ring shapes need **opposite** repairs, which is
+why it is not a one-line "drop the long segment":
+
+- **Even crossings** — the ring genuinely straddles the dateline. Cut it at each crossing,
+  rejoin the head and tail pieces (a closed ring's last point is its first), and close each
+  piece along the dateline edge it starts and ends on. Fiji becomes its real lobes, Russia
+  its mainland plus Chukotka.
+- **Odd crossings** — the segment *is* the ring's closing seam and the polar cap edge is
+  simply absent from the data (Antarctica). Closing the two ends directly would recreate the
+  band, so they are closed over the pole instead, walked in 90° steps so the output still
+  satisfies "no segment spans more than half the world". Leaflet clamps to ±85.0511 on
+  projection, so it renders as the fill-to-the-bottom-edge every web map shows.
+
+**The repair belongs in the renderer, not in the assets.** Pre-cutting the committed files
+would be silently undone by the `curl` in `assets/README.md`'s *Regenerating* recipe — the
+files are correct as published. That README now carries the seam table and a verification
+step: *more than three wrapping features means the repair has cases it was never measured
+against*.
+
+Local harness (`amRepair` extracted from the page, run over both committed tiers) asserts
+feature count unchanged, every ring closed, no ring under 4 points, planar area unchanged
+for all 174/238 untouched features, and no segment spanning more than 90° — plus a mutation
+run without the repair, which reports 360° and proves the check can fail.
+
+### As built — three follow-ups from the first live look (2026-09-09)
+
+All three came out of the same screenshot that showed the dateline bands, and all three
+are in `index.html` only — no asset changed, no deploy step changed.
+
+**1. Land fill + border mesh, not 177/241 country polygons.** `buildBasemapFC()` now takes
+fill from the file's `land` object and internal borders from
+`topojson.mesh(topo, objects.countries, (a, b) => a !== b)`.
+
+| Tier | Was (per country) | Now (land + mesh) |
+|---|---|---|
+| 110m | 177 paths, 10,587 verts | 2 paths, 7,956 verts |
+| 50m | 241 paths, 99,539 verts | 2 paths, 80,303 verts |
+
+The vertex saving is real but secondary. The visible reason is **ink**: drawn per country
+every shared border is stroked twice, once by each neighbour, and the second country's
+`fillOpacity: 1` then paints over part of the first one's stroke — that is the uneven
+border weight across Europe. A border belongs to two countries but is one line.
+
+Two things this costs, both accepted and neither measured in a browser:
+
+- ⚠ **No country is a Leaflet layer any more.** Nothing hit-tests or highlights per
+  country today (`interactive: false`, the dots own the pointer), but a future "click a
+  country" feature has to undo this rather than extend it.
+- ⚠ **Pan loses the per-layer `_pxBounds` early-out.** With 241 layers an off-screen
+  country skipped `clipPolygon` entirely; with one world-spanning layer it does not, so a
+  pan now runs one clip pass over all ~80k vertices (~1400 rings) instead of only the 2-10
+  countries on screen. Bounded and small — clipping is 4 ops per vertex against a
+  rectangle — but it is a real trade of the *cheap* number (pan was 0.1-2.1 ms) for the
+  *expensive* one (`zoomend`, 11 ms at 50m, and the reason the tier system exists).
+
+Also: `basemapStyleFor()` now takes the feature and returns different options per role.
+`fill: false` on the border feature is not cosmetic — without it Leaflet closes and fills
+the line mesh, painting a lake-shaped blob over half of Eurasia. And `applyTheme` must
+hand `setStyle` a **function**, not an object, or every layer gets the land style.
+
+**2. City labels: offset off the point, then culled.** The labels were centred on their
+point (`translate(-50%, -50%)`). Peer geo is city-centroid and so is `cities.json`, so the
+two sets **share coordinates by construction** — a centred label sat underneath the very
+dot it was naming, and did so hardest in exactly the cities that had peers. The name is
+now 4 px below the point with a 3 px tick left on the point itself.
+
+The old rule was "overlaps are ACCEPTED, the lever is `CITY_LABEL_RANK_OFFSET`, never a
+placement solver". ⚠ **That rule is withdrawn.** One rank threshold has to serve both a
+crowded Europe and an empty Pacific, so every setting is wrong for half the map. The cull
+is ~15 lines: sort candidates by scalerank, keep one only if its measured box clears
+everything already kept — with the list **seeded from the peer dots first**, so a city
+name can never be the thing covering the data. Text is measured on one reused canvas
+(`measureText`), not in the DOM, so a pan costs no forced layout. `CITY_LABEL_RANK_OFFSET`
+dropped 2 → 1: with a cull, a generous candidate list is strictly better.
+
+Measured against the committed `cities.json` at 1068×566: **z2 50 labels, z3 101, z4 90,
+z6 32, z8 4 — zero overlapping pairs at any of them**, where the same z4 view uncalled has
+139 candidates and 38 overlapping pairs.
+
+**3. maxBounds trimmed to `[-60, 84]`** from `±85.05`. North is 84 because the
+northernmost vertex in the data is Greenland at 83.65 °N, so no land is lost; south is -60
+because nothing below it has ever held a peer. ⚠ maxBounds limits **panning, not
+rendering** — the box is 694 px tall at z2, so on a taller map the view is centred and the
+polar geometry still draws; you simply cannot pan into it. The old ±85.05 box degraded the
+same way above 1024 px. Raising `minZoom` so the box always fills would cost the
+whole-world view, which is the view this map is for.
+
+**Verification.** Two local vm harnesses, both extracting the real functions out of
+`index.html` (no copy, so they cannot drift): the basemap one asserts the repaired
+land+mesh has no segment over 90° of longitude, every ring closed, no ring under 4 points,
+land area never *lost*, exactly one border feature and that it is a line, and land filled /
+border unfilled in all four themes — plus a synthetic wrapping line, because the
+`LineString` branch is dead against today's data. The label one asserts zero overlaps at
+five zooms, that a dot beats the label sharing its coordinate, that rank decides a
+collision and that the result is stable under input reordering, and that the CSS
+`translate` Y and `CITY_LABEL_DY` agree — a mismatch there would mean every box the cull
+computes is in the wrong place. Both carry a mutation run that fails without the change.
+**None of this is a browser.** Nothing here has been rendered on the VPS.
+
 ### Deferred / not doing
 
 - **PMTiles / Protomaps (rev 1's plan).** Correct engineering for a *street* basemap and the
@@ -823,6 +945,33 @@ including the price — and a bare network error is the browser. `hashrate_gps_2
 `price_usd` are independently soft-null in the payload, so **both cards blank at once is
 evidence about the request, not about the data.** The identical swallow is still in
 `initEmission()`.
+
+**But naming the failure is not the same as reporting it honestly (2026-09-09).** A 502 made
+the page say *GRIN price — unavailable*, and that was simply false: the price comes from
+gate.io/CoinGecko, is already `.catch()`-guarded and cached for two minutes, and needs the node
+for nothing. It only ever shipped *inside* the node-backed payload, so `getTip()` took it down
+with it. `GET /api/price` is now that node-free half — same `getPrice()`, its own route — and
+the `/api/stats` rejection path falls back to it. An outage now costs the estimates and says so
+(*live, USD · network hashrate is the missing figure*); it no longer misreports a feed that is
+working. `/api/stats` itself is unchanged and still 502s as a whole: the homepage treats it as
+the node-liveness signal, and a 200 full of nulls would trade a loud failure for a quiet one.
+
+**The dash has to blame the right input.** Every unknown fell back to `'enter your hashrate'`
+or `'price unavailable'`, so a dead `/api/stats` told a miner to enter a hashrate that was
+already on screen — the missing figure was the *network* one, which no field on the page can
+supply. `render()` now resolves a single `blocker` in the order the reader can act on:
+network basis → own hashrate → price. The order is the whole fix, and it is asserted in
+`test/test-mining.js` §5, not left to prose. One field further in, `miningEstimate()` now also
+requires `gps > 0`: `posNum()` flattens an empty box and a rig running at 0 G/s into the same
+`0`, and the page was answering a rig nobody had described with a confident **0 ツ/day** and a
+**-$0.49** daily loss — the same "a missing basis is not an idle miner" rule that already
+governed the network figure, applied to the operator's own.
+
+**The money maths had no test until 2026-09-09.** `test/test-mining.js` (27 assertions) lifts
+the pure helpers out of the shipped `tiny-explorer.js` by brace-matching — so it tests the file
+that deploys, not a copy — and covers the share formula, the fee clamp, every missing-input
+path resolving to `null` rather than a number, the formatter dash/precision rules, the blocker
+order, and the client↔server↔markup id contract.
 
 #### The assumed-port false negative (2026-09-09)
 

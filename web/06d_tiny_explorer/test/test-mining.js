@@ -381,6 +381,29 @@ ok('the count never becomes a hidden multiplier inside the maths', () => {
     'miningEstimate() now knows about unit counts — the visible total is no longer the whole input');
 });
 
+// Break-even is the one card a unit count CANNOT move, because the count
+// multiplies the power bill and the income by the same factor and cancels.
+// That is correct arithmetic and looks exactly like a field that stopped
+// updating, so the page has to say so — and the claim in that copy is a
+// property of miningEstimate(), which is testable here directly.
+ok('break-even does not move with the count — the ratio cancels', () => {
+  const one  = est();
+  const four = est({ gps: '4.8', watts: '480' });   // the same rig, x4
+  assert.ok(Math.abs(four.breakEven - one.breakEven) < 1e-12,
+    'break-even changed with fleet size: ' + one.breakEven + ' -> ' + four.breakEven);
+  // ...while everything the reader expects to scale actually does.
+  assert.ok(Math.abs(four.grinDay  / one.grinDay  - 4) < 1e-9, 'income did not scale x4');
+  assert.ok(Math.abs(four.powerDay / one.powerDay - 4) < 1e-9, 'power did not scale x4');
+});
+
+ok('and the page explains that stillness instead of leaving it ambiguous', () => {
+  const src = lift('initMining');
+  const i = src.indexOf("'mine-breakeven-sub'");
+  assert.notStrictEqual(i, -1, 'the break-even sub-label is gone');
+  assert.ok(/unchanged by unit count/.test(src.slice(i, i + 400)),
+    'nothing tells the reader WHY break-even sits still while every other card moves');
+});
+
 // ═══ Report ══════════════════════════════════════════════════════════════════
 console.log('\n' + '─'.repeat(72));
 console.log('mining: ' + pass + ' passed, ' + fail + ' failed');

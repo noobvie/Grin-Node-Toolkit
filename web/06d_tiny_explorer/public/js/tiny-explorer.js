@@ -974,8 +974,16 @@ function initMining() {
     setText('mine-breakeven', fmtUsdPrice(r.breakEven));
     // Power comes first here: with no power cost there is nothing to break even
     // against, so the missing network basis is not what is holding this card up.
+    // The ONE figure on this page a unit count cannot move, and it looks broken
+    // for exactly that reason: break-even is power ÷ income, and the count
+    // multiplies both, so it cancels. A reader who raises the count and watches
+    // every other card change while this one sits still has no way to tell a
+    // cancelling ratio from a field that stopped updating — so say which it is,
+    // but only when there is a count to explain.
     setText('mine-breakeven-sub', r.breakEven != null
-      ? 'per ツ, to cover electricity'
+      ? (unitCount() > 1
+          ? 'per ツ, to cover electricity — unchanged by unit count, it scales both sides'
+          : 'per ツ, to cover electricity')
       : r.powerDay > 0 ? (noNet ? 'needs the network hashrate' : 'enter your hashrate')
       : 'no power cost entered');
     setText('mine-profit', fmtUsdAmt(r.profitDay));

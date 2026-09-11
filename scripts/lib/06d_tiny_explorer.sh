@@ -315,20 +315,41 @@ tinyx_configure() {
 
     # Wallet Checker tier 2 — the Tor liveness probe (POST /api/wallet-check).
     #
-    # OFF unless the operator turns it on, and that default is load-bearing: the
-    # probe needs a local tor daemon, and a box without one would answer "we
-    # could not check" to every visitor forever. Left off, the Wallet Checker
-    # tile still works in full as tier 1 (checksum, network, derived .onion) —
-    # it just never offers the button, because a dead control is worse than no
-    # control at all.
+    # ON by default for a NEW install (changed 2026-09-10). "Is this wallet
+    # answering right now?" is the reason most visitors open the Wallet Checker
+    # at all, and leaving it off shipped a tile that answered every question
+    # except the one that was asked. The original default was written when this
+    # prompt could only DETECT a missing tor daemon; _tinyx_ensure_tor now
+    # installs one, starts it and polls until SOCKS is actually bound, so the
+    # box no longer has to arrive qualified — it can be made so here.
     #
-    # The current value is READ BACK from the existing config first. This
-    # function rewrites config.json wholesale, so without that an operator who
-    # turned the probe on loses it the next time they re-run Configure for an
-    # unrelated reason (a new domain, a GA4 id) with no message saying so.
-    local wallet_probe="false"
-    if [[ -f "$TINYX_CONFIG" ]] && grep -Eq '"wallet_check_probe"[[:space:]]*:[[:space:]]*true' "$TINYX_CONFIG" 2>/dev/null; then
-        wallet_probe="true"
+    # ⚠ This is the INSTALLER default, not the code default. The server still
+    # treats a missing wallet_check_probe key as false (tiny-explorer-server.js,
+    # `config.wallet_check_probe === true`) and that must stay: a config that
+    # lost the key — hand-edited, half-restored, written by an older toolkit —
+    # must fail CLOSED rather than start dialling Tor because a line went
+    # missing. The two defaults answer different questions: this one is "what
+    # should a fresh box do", that one is "what does an unreadable config mean".
+    #
+    # The current value is READ BACK from the existing config first, and now
+    # reads BOTH values, not just true. This function rewrites config.json
+    # wholesale, so a one-sided read-back silently overwrites whichever choice
+    # is not the default: before, an operator who turned the probe ON lost it by
+    # re-running Configure for a new domain; with the default flipped, a
+    # one-sided read-back would do the same to an operator who deliberately
+    # turned it OFF. An explicit value in the config is a decision and outranks
+    # the default in both directions — only an install whose config does not
+    # already record a choice gets the default. That is very nearly "a new
+    # install" but not exactly: a config written before this key existed
+    # (pre-99087d9) matches neither grep and takes the default too. The
+    # operator still sees the prompt, so it is a proposal, never a migration.
+    local wallet_probe="true"
+    if [[ -f "$TINYX_CONFIG" ]]; then
+        if grep -Eq '"wallet_check_probe"[[:space:]]*:[[:space:]]*true' "$TINYX_CONFIG" 2>/dev/null; then
+            wallet_probe="true"
+        elif grep -Eq '"wallet_check_probe"[[:space:]]*:[[:space:]]*false' "$TINYX_CONFIG" 2>/dev/null; then
+            wallet_probe="false"
+        fi
     fi
     local tor_socks_port=9050
     local tor_up="no"
@@ -340,11 +361,36 @@ tinyx_configure() {
         echo -e "  ${DIM}No Tor SOCKS listener on 127.0.0.1:${tor_socks_port} — the probe needs one; this can install it.${RESET}"
     fi
     local probe_hint="y/N"; [[ "$wallet_probe" == "true" ]] && probe_hint="Y/n"
-    echo -ne "  Enable the Wallet Checker Tor liveness probe? [${probe_hint}]: "; read -r probe_ans
+    # Name the consequence IN the prompt when the default is yes and the box has
+    # no tor. Installing a daemon is a side effect beyond what "set up an
+    # explorer" implies, and an operator pressing Enter through the prompts
+    # should not discover it afterwards. The install itself still asks
+    # separately inside _tinyx_ensure_tor — this is the warning, not the
+    # consent.
+    local probe_extra=""
+    [[ "$wallet_probe" == "true" && "$tor_up" != "yes" ]] && probe_extra=" ${DIM}(installs tor)${RESET}"
+    # `|| probe_ans="n"` is the EOF branch and it must DECLINE, not fall through
+    # to the default. A read at EOF (stdin closed, Configure driven from a pipe)
+    # returns non-zero and leaves the variable empty — indistinguishable from a
+    # pressed Enter — and with the default now yes that walks straight into
+    # _tinyx_ensure_tor and apt-get installs a daemon with nobody at the
+    # keyboard. A printed default is an offer to a human; with no human, take
+    # the answer that changes nothing.
+    local probe_ans
+    echo -ne "  Enable the Wallet Checker Tor liveness probe?${probe_extra} [${probe_hint}]: "
+    read -r probe_ans || probe_ans="n"
+    # The catch-all keeps the DEFAULT and must never name a value. It used to be
+    # `*) wallet_probe="false"`, which was invisible while the default was false
+    # and became a live bug the moment it flipped: the prompt printed [Y/n]
+    # while every input but a bare "y"/"yes" — "Y " with the space a paste
+    # leaves behind, "ye", "1" — silently answered no, with nothing echoed to
+    # say so. This is also the idiom the rest of this file already uses (:284,
+    # :560): only an explicit n means no.
     if [[ -n "$probe_ans" ]]; then
         case "${probe_ans,,}" in
             y|yes) wallet_probe="true" ;;
-            *)     wallet_probe="false" ;;
+            n|no)  wallet_probe="false" ;;
+            *)     warn "Unrecognised answer '${probe_ans}' — keeping the default (${wallet_probe})." ;;
         esac
     fi
 
@@ -680,7 +726,10 @@ tinyx_status() {
                 echo -e "            ${DIM}Every wallet check answers \"could not check\" — systemctl status tor${RESET}"
             fi
         else
+            # Off is no longer the default, so say how to change it: reaching
+            # this line now means someone chose it or a tor install failed.
             echo -e "  Probe:    ${DIM}off — Wallet Checker is address-only (no liveness button)${RESET}"
+            echo -e "            ${DIM}Turn it on with Configure (2) — it is on by default for new installs.${RESET}"
         fi
     fi
 

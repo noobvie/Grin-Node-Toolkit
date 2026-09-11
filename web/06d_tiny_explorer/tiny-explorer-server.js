@@ -1245,10 +1245,18 @@ app.post('/api/node-check', nodeCheckBody, async (req, res) => {
 // and the SOCKS client live in lib/wallet-tor.js and lib/socks5.js; what follows
 // is the policy around them.
 //
-//   1. OFF BY DEFAULT. wallet_check_probe defaults to false, so a box with no
-//      tor daemon serves the tile as tier 1 and never offers a control that
-//      could only ever answer "could not check". The flag reaches the page as
-//      window.TINYEXP_WALLET_PROBE — a dead button is worse than no button.
+//   1. THE CODE DEFAULT IS FALSE — and that is NOT the same as the product
+//      default. Script 06d's Configure now writes `true` on a new install and
+//      installs tor to back it, so a normally-installed box has the probe ON.
+//      This line is the fallback for a config that does not say: hand-edited,
+//      half-restored, or written by a toolkit older than the flag. Such a
+//      config must fail CLOSED — a box does not start dialling Tor on behalf of
+//      visitors because a key went missing. Do not "align" this with the
+//      installer; they answer different questions.
+//      Either way the flag reaches the page as window.TINYEXP_WALLET_PROBE, and
+//      with it false the tile serves as tier 1 with no control at all: a dead
+//      button that could only ever answer "could not check" is worse than no
+//      button, because it reads as every wallet being offline.
 //   2. TRI-STATE OUT, ALWAYS. `online` is true | false | null and the page must
 //      render three states. A null is OUR failure and says so.
 //   3. NOTHING HERE LOGS THE ADDRESS. Not the address, not the derived onion,

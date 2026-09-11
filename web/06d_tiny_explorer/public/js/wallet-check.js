@@ -446,11 +446,18 @@
 
   // ── Page copy follows the capability, not the other way round ───────────────
   //
-  // The static HTML describes the tier-1-only page, and that is deliberate: it
-  // is what ships by default, and it is also what a visitor sees if this script
-  // fails to load. Copy that over-promised in that state would be the worse
-  // failure — a page insisting it can tell you whether a wallet is online, with
-  // no control anywhere that does it.
+  // The static HTML describes the tier-1-only page, and it still does even
+  // though a freshly installed box now has the probe ON. The reason changed: it
+  // is no longer "that is what ships", it is that THE BUTTON IS BUILT BY THIS
+  // SCRIPT. A visitor whose browser never runs this file has no control on the
+  // page whatever config.json says, so static copy promising a liveness check
+  // would over-promise in exactly the state that cannot deliver it.
+  //
+  // What the static copy must no longer do is the mirror of that. It used to
+  // say "this server does not offer the optional Tor liveness check" — a claim
+  // about the SERVER, which is false on most deployments now. It is written
+  // config-neutral instead: it says what this page has done, never what the box
+  // is capable of, so it is true in all four combinations of flag and script.
   //
   // So when the probe IS on, the hedged phrasing is replaced here with definite
   // phrasing. Nothing on this page may say "where this server offers…": the page

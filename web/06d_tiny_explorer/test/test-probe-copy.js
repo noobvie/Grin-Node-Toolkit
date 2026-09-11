@@ -4,17 +4,24 @@
 // that actually ship.
 //
 // WHY THIS FILE EXISTS. /wallet-check has two truthful sets of words: one for a
-// box with the Tor liveness probe off (the shipped default) and one for a box
-// with it on. The static HTML carries the OFF wording — it is what ships, and it
-// is what a visitor sees if the script fails to load — and applyProbeCopy() in
-// public/js/wallet-check.js replaces three elements when the probe is on.
+// box with the Tor liveness probe off and one for a box with it on. The static
+// HTML carries the baseline — the probe button is BUILT BY THE SCRIPT, so a
+// visitor whose browser never runs it has no control on the page whatever
+// config.json says — and applyProbeCopy() in public/js/wallet-check.js replaces
+// three elements when the probe is on.
 //
 // That design has exactly one silent failure, and it is the bad direction: a
-// renamed or mis-typed id makes the swap a no-op, and the page then tells a
-// visitor "this server does not offer the optional Tor liveness check" while the
-// button sits directly below the sentence. Nobody would catch it by eye, because
-// the operators who read the page most are the ones with the probe OFF, where
-// the wording is already correct.
+// renamed or mis-typed id makes the swap a no-op, and the page then talks about
+// not being able to check while the button sits directly below the sentence.
+// Nobody would catch it by eye.
+//
+// Since the probe became ON by default for a new install (2026-09-10) that
+// failure got MORE likely, not less: the swap now has to fire on most boxes,
+// and the people best placed to notice it silently not firing are the ones with
+// the probe off, whose page is correct either way. So the baseline copy is now
+// held to a two-sided rule — it may not promise the probe (the no-script state
+// has no button) and it may not deny it either (a claim about the server that
+// is false wherever the flag is on). It describes the PAGE, not the box.
 //
 // So this asserts the CONTRACT between the three files, not the prose: every id
 // and selector the JS writes to exists in the HTML it writes to, and neither
@@ -68,12 +75,32 @@ for (const id of new Set(swapped)) {
 console.log('\n[2] neither state claims the other\'s capability');
 
 ok('static HTML does not promise a liveness check', () => {
-  // The static copy is the probe-OFF page. If it ever says the server *can*
-  // check, a default deployment is lying in the direction that matters.
+  // Direction 1: the no-script state has no button, so naming one strands the
+  // visitor looking for a control that was never built.
   assert.ok(!/Check over Tor/.test(walletHtml),
     'static HTML names the probe button, which only exists when the probe is on');
-  assert.ok(/does not offer the optional Tor\s+liveness check/.test(walletHtml),
-    'static HTML no longer states the probe-off limitation');
+});
+
+ok('static HTML does not deny a liveness check either', () => {
+  // Direction 2, and the one the flipped default made live. The baseline copy
+  // may not assert anything about the SERVER's capability: with the probe on —
+  // now the norm — any such claim is simply false, and it is read by exactly
+  // the visitor whose script failed and who has no way to tell. Assertions are
+  // about the page's own actions ("nothing here has asked"), never the box's.
+  const forbidden = [
+    /this server is not set up to find out/i,
+    /this server does not offer/i,
+    /does not offer the optional Tor\s+liveness check/i,
+    /never finds out/i,
+  ];
+  for (const re of forbidden) {
+    assert.ok(!re.test(walletHtml),
+      'static HTML claims the server cannot check (' + re + ') — false wherever the probe is on');
+  }
+  // …but it must still tell the visitor the address check alone proves nothing,
+  // or the page over-reads a valid checksum as a working wallet.
+  assert.ok(/does not tell you whether the wallet is online/i.test(walletHtml),
+    'static HTML dropped the "a valid address is not a live wallet" warning');
 });
 
 ok('no conditional hedging survives in the static copy', () => {

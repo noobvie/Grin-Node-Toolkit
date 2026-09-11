@@ -133,7 +133,7 @@
               </optgroup>
               <option value="custom">Custom — enter your own figures</option>
             </select>
-            <p class="tx-mine-note" id="mine-rig-note">Picking one fills in the hashrate and power draw below.</p>
+            <p class="tx-mine-note" id="mine-rig-note">Picking one fills in the hashrate and power draw for you.</p>
           </div>
         </div>
 
@@ -141,7 +141,7 @@
           <label class="tx-mine-label" for="mine-units">Number of units</label>
           <div class="tx-mine-control">
             <input id="mine-units" type="number" min="1" step="1" inputmode="numeric" placeholder="1" value="1">
-            <p class="tx-mine-note" id="mine-units-note">How many you run. The hashrate and power draw below are the <strong>total</strong> for all of them — no need to multiply anything yourself.</p>
+            <p class="tx-mine-note" id="mine-units-note">How many you run. The hashrate, power draw and hardware cost are the <strong>total</strong> for all of them — no need to multiply anything yourself.</p>
           </div>
         </div>
 
@@ -149,15 +149,7 @@
           <label class="tx-mine-label" for="mine-gps">Your hashrate <small>(G/s)</small></label>
           <div class="tx-mine-control">
             <input id="mine-gps" type="number" min="0" step="any" inputmode="decimal" placeholder="1.2" value="1.2">
-            <p class="tx-mine-note">Graphs per second, as your miner reports it — the total across every unit above. Typing your own figure here switches the hardware picker to Custom and treats what you type as one unit's worth times the count.</p>
-          </div>
-        </div>
-
-        <div class="tx-mine-row">
-          <label class="tx-mine-label" for="mine-fee">Pool fee <small>(%)</small></label>
-          <div class="tx-mine-control">
-            <input id="mine-fee" type="number" min="0" max="100" step="any" inputmode="decimal" placeholder="0" value="0">
-            <p class="tx-mine-note">Solo miners leave this at 0.</p>
+            <p class="tx-mine-note">Graphs per second, as your miner reports it — the total across every unit. Typing your own figure here switches the hardware picker to Custom and treats what you type as one unit's worth times the count.</p>
           </div>
         </div>
 
@@ -165,7 +157,7 @@
           <label class="tx-mine-label" for="mine-watt">Power draw <small>(W, continuous)</small></label>
           <div class="tx-mine-control">
             <input id="mine-watt" type="number" min="0" step="any" inputmode="decimal" placeholder="0" value="120">
-            <p class="tx-mine-note" id="mine-watt-note">A continuous rate, not a daily total — the total across every unit above.</p>
+            <p class="tx-mine-note" id="mine-watt-note">A continuous rate, not a daily total — the total across every unit.</p>
           </div>
         </div>
 
@@ -206,6 +198,22 @@
           </div>
         </div>
 
+        <div class="tx-mine-row">
+          <label class="tx-mine-label" for="mine-fee">Pool fee <small>(%)</small></label>
+          <div class="tx-mine-control">
+            <input id="mine-fee" type="number" min="0" max="100" step="any" inputmode="decimal" placeholder="0" value="0">
+            <p class="tx-mine-note">Solo miners leave this at 0.</p>
+          </div>
+        </div>
+
+        <div class="tx-mine-row">
+          <label class="tx-mine-label" for="mine-cost">Hardware cost <small>(USD, all units)</small></label>
+          <div class="tx-mine-control">
+            <input id="mine-cost" type="number" min="0" step="any" inputmode="decimal" placeholder="0" value="">
+            <p class="tx-mine-note" id="mine-cost-note">What the hardware cost you, all units together. Type one unit's price with the count at 1 and it scales with the count from then on, the same way the hashrate and power draw do. Leave it blank to skip the payback estimate.</p>
+          </div>
+        </div>
+
       </div>
       <p class="tx-mine-hint">Hardware figures are the manufacturer's specification for the ASICs
         and <a href="https://whattomine.com/coins/324-grin-cuckatoo32/gpus" rel="noopener nofollow"
@@ -232,7 +240,7 @@
       </div>
     </section>
 
-    <section class="tx-emit-grid" aria-label="Power cost and break-even">
+    <section class="tx-emit-grid" aria-label="Power cost, break-even and payback">
       <div class="tx-card">
         <div class="tx-card-label">Power cost / day</div>
         <div class="tx-card-value" id="mine-power">—</div>
@@ -250,12 +258,21 @@
         <div class="tx-card-value" id="mine-profit">—</div>
         <div class="tx-card-sub" id="mine-profit-sub">at the live price</div>
       </div>
+      <div class="tx-card">
+        <div class="tx-card-label">Pays for itself in
+          <span class="tx-info" tabindex="0" aria-label="What the hardware cost, divided by the profit it makes each day after electricity. It assumes today's GRIN price and today's difficulty both hold for the whole period. Neither will: Grin pays a fixed 86,400 ツ a day no matter how big the network gets, so your share of it shrinks as hashrate joins. Read this as the best case, not a forecast." data-tip="What the hardware cost, divided by the profit it makes each day after electricity. It assumes today's GRIN price and today's difficulty both hold for the whole period. Neither will: Grin pays a fixed 86,400 ツ a day no matter how big the network gets, so your share of it shrinks as hashrate joins. Read this as the best case, not a forecast.">i</span>
+        </div>
+        <div class="tx-card-value" id="mine-payback">—</div>
+        <div class="tx-card-sub" id="mine-payback-sub">enter what the hardware cost</div>
+      </div>
     </section>
 
     <div class="tx-note">
-      Hardware cost, pool payout minimums, stale shares and downtime are <strong>not</strong>
+      Pool payout minimums, stale shares, downtime and hardware failure are <strong>not</strong>
       included. The break-even price covers <strong>electricity only</strong> — it is the floor
-      below which a rig burns money every hour it runs, not the price at which it pays for itself.
+      below which a rig burns money every hour it runs. Paying off the hardware is the separate
+      question answered by <strong>Pays for itself in</strong>, and that figure holds today's price
+      and today's difficulty still for years at a time, which is not something either of them does.
     </div>
 
     <details class="tx-details">

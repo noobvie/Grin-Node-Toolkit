@@ -73,10 +73,10 @@
     </div>
 
     <div class="tx-note" id="wc-scope-note">
-      <strong>This does not tell you whether the wallet is online.</strong> Pasting an address makes
-      no connection at all — not to that wallet, not to Tor, not to any server. An address can be
-      perfectly valid while the wallet behind it has been offline for a year, and this server is not
-      set up to find out.
+      <strong>Checking an address does not tell you whether the wallet is online.</strong> Pasting
+      one makes no connection at all — not to that wallet, not to Tor, not to any server. An address
+      can be perfectly valid while the wallet behind it has been offline for a year, and nothing on
+      this page has looked.
     </div>
 
     <div class="tx-rows tx-wc-panel">
@@ -111,9 +111,9 @@
             at all — so the address prefix is the single signal that exists.</li>
           <li id="wc-detail-live"><strong>The address check does not say the wallet is
             listening.</strong> The <code>.onion</code> shown is arithmetic on the address, not
-            evidence that anything answers there. This server does not offer the optional Tor
-            liveness check, so this page never finds out — an address stays valid whether or not a
-            wallet is behind it. To know, ask the recipient, or send a small amount first.</li>
+            evidence that anything answers there — an address stays valid whether or not a wallet is
+            behind it. Unless a Tor check appears under your result and you press it, nothing here
+            has asked. Otherwise: ask the recipient, or send a small amount first.</li>
           <li><strong>It holds no keys and never will.</strong> A public key is public: deriving
             an onion from it reveals nothing the address did not already reveal. This page cannot
             sign, send, or spend.</li>

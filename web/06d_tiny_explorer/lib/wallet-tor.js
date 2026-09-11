@@ -42,9 +42,13 @@
 // malformed in far more detail — a second, vaguer "offline" verdict on top of
 // that would be noise, and it would be an observation we never made.
 //
-// The probe is INERT unless the operator turns it on: wallet_check_probe
-// defaults to false, because a box with no tor daemon would otherwise answer
-// "could not check" to every visitor forever.
+// The probe is INERT unless wallet_check_probe is true, and nothing in this file
+// decides that. Script 06d's Configure writes `true` on a new install and
+// installs tor to back it, so the normal deployment has it ON; the server's own
+// fallback for a config that does not say stays false, so a box that never got
+// a tor daemon answers as tier 1 rather than telling every visitor "could not
+// check" — which reads as every wallet being offline, not as an unequipped
+// server.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const crypto = require('crypto');

@@ -162,9 +162,10 @@ const TOOLS_MENU_GROUPS = [
 // items: role="presentation", no tabindex, no href — so neither the tab order
 // nor the menu's accessible child list gains anything focusable.
 // The Wallet Checker's one-line description is written for the tier-1-only page
-// (checksum, network, .onion) because that is what ships by default and what a
-// visitor gets if this script never runs. Where the operator has switched the
-// Tor liveness probe on, the tool genuinely does more than the line claims — and
+// (checksum, network, .onion) because that is what a visitor gets if this script
+// never runs — not because it is the common case, which it no longer is: a
+// freshly installed box has the Tor liveness probe ON. Where it is on, the tool
+// genuinely does more than the static line claims — and
 // "can I see whether this wallet is online before I send to it" is the reason
 // most people open it, so a label that never mentions it hides the feature
 // behind a page nobody had a reason to click. Runs on every shell (the tools
@@ -836,6 +837,7 @@ function miningEstimate(inp) {
   const watts  = posNum(inp.watts);
   const kwh    = posNum(inp.kwhCost);
   const price  = posNum(inp.priceUsd) || null;
+  const hwCost = posNum(inp.hwCost);
 
   // Your share of a network that is paid exactly 86,400 ツ a day (60 ツ × 1440).
   // Both operands must be REAL: an empty hashrate box is "not told yet", not a
@@ -846,6 +848,7 @@ function miningEstimate(inp) {
   const grinDay = (netGps > 0 && gps > 0) ? gps / netGps * 86400 * (1 - fee / 100) : null;
   const powerDay = watts / 1000 * 24 * kwh;
   const usd = g => (g != null && price != null) ? g * price : null;
+  const profitDay = usd(grinDay) != null ? usd(grinDay) - powerDay : null;
 
   return {
     grinDay,
@@ -858,7 +861,17 @@ function miningEstimate(inp) {
     // Undefined with no power cost (nothing to break even against) and with no
     // yield (the division would be Infinity) — both are —, not a number.
     breakEven: (grinDay > 0 && powerDay > 0) ? powerDay / grinDay : null,
-    profitDay: usd(grinDay) != null ? usd(grinDay) - powerDay : null,
+    profitDay,
+    // CAPITAL PAYBACK, in days — a duration, not an ROI percentage, so nobody
+    // has to supply a horizon before the page will answer. null is every case
+    // that has no number, and there are three of them: nothing spent yet, no
+    // basis to compute a profit from, and a rig that loses money every day.
+    // That last one HAS a real answer — never — but it is a word, and
+    // smuggling it in here as Infinity would put a non-finite value into the
+    // one struct on this page whose fields get printed as money. render()
+    // tells the three apart from what was spent and says which is which.
+    paybackDays: (hwCost > 0 && profitDay != null && profitDay > 0)
+      ? hwCost / profitDay : null,
   };
 }
 
@@ -895,8 +908,24 @@ function fmtUsdPrice(n) {
   return _usd(n, a !== 0 && a < 0.001 ? 8 : 4);
 }
 
+// PAYBACK, as a duration someone would say out loud. One unit at a time —
+// days, then months, then years — because "1 yr 8 mo 3 d" is precision this
+// estimate does not have and never can: it rests on a price and a difficulty
+// that are only true today. Past a century the figure has stopped carrying
+// information, so it stops being a figure.
+function fmtPayback(days) {
+  if (days == null || !isFinite(days) || days <= 0) return '—';
+  if (days < 1) return 'under a day';
+  const d = Math.round(days);
+  if (days < 90)   return d + (d === 1 ? ' day' : ' days');
+  if (days < 1096) return Math.round(days / 30.44) + ' months';   // out to 3 years
+  const yr = days / 365.25;
+  return yr > 100 ? 'over 100 years'
+       : (yr < 10 ? yr.toFixed(1) : String(Math.round(yr))) + ' years';
+}
+
 function initMining() {
-  const ids = ['mine-gps', 'mine-fee', 'mine-watt', 'mine-kwh'];
+  const ids = ['mine-gps', 'mine-fee', 'mine-watt', 'mine-kwh', 'mine-cost'];
   const el  = {};
   ids.forEach(id => { el[id] = document.getElementById(id); });
   const rigSel  = document.getElementById('mine-rig');
@@ -916,7 +945,7 @@ function initMining() {
   // — and moving 4 → 8 must double the MEASURED figure. Re-deriving the basis on
   // every manual edit (total ÷ count) is what makes that hold, and it is also
   // what lets the count work for hardware that isn't in the list at all.
-  const unit = { gps: 0, watts: 0 };
+  const unit = { gps: 0, watts: 0, cost: 0 };
 
   // Blank, 0, junk and a half-typed value are all one unit — never 0 (which
   // would zero the rig) and never NaN (which would poison every figure below).
@@ -934,14 +963,25 @@ function initMining() {
     const c = unitCount();
     unit.gps   = posNum(el['mine-gps']  ? el['mine-gps'].value  : 0) / c;
     unit.watts = posNum(el['mine-watt'] ? el['mine-watt'].value : 0) / c;
+    unit.cost  = posNum(el['mine-cost'] ? el['mine-cost'].value : 0) / c;
   }
   function applyUnits() {    // the basis is the truth → rewrite the boxes
     const c = unitCount();
     if (el['mine-gps'])  el['mine-gps'].value  = trimFloat(unit.gps   * c);
     if (el['mine-watt']) el['mine-watt'].value = trimFloat(unit.watts * c);
+    // Cost ships EMPTY and has to stay empty until someone types in it.
+    // trimFloat(0) here would answer "what did it cost?" with 0 on behalf of a
+    // reader who has not said — and 0 is the one value that makes the payback
+    // card drop its "enter what the hardware cost" and print a confident
+    // "under a day" for hardware nobody has priced.
+    if (el['mine-cost']) el['mine-cost'].value = unit.cost > 0 ? trimFloat(unit.cost * c) : '';
   }
 
   function render() {
+    // Read separately as well as passed in: the payback card has to tell "no
+    // price entered" apart from "priced, but it never pays back", and those
+    // two both arrive from miningEstimate() as a null paybackDays.
+    const hwCost = posNum(el['mine-cost'] ? el['mine-cost'].value : 0);
     const r = miningEstimate({
       netGps,
       priceUsd,
@@ -949,6 +989,7 @@ function initMining() {
       feePct:  el['mine-fee']  ? el['mine-fee'].value  : 0,
       watts:   el['mine-watt'] ? el['mine-watt'].value : 0,
       kwhCost: el['mine-kwh']  ? el['mine-kwh'].value  : 0,
+      hwCost,
     });
     setText('mine-day',   fmtGrinAmt(r.grinDay));
     setText('mine-week',  fmtGrinAmt(r.grinWeek));
@@ -991,6 +1032,25 @@ function initMining() {
       ? 'income at the live price minus power'
       : blocker === '—' ? 'at the live price' : blocker);
 
+    // PAYBACK. The SECOND card here that a unit count cannot move, and for the
+    // same reason break-even cannot: the count multiplies what you spent and
+    // what you earn by the identical factor, so it cancels. Knowing that in
+    // advance is the only reason this one did not ship as a bug report too.
+    //
+    // Three ways there is no number, and they are not interchangeable: nothing
+    // priced yet (ask for a price), no basis (name the missing input, same
+    // blocker chain as every card above), or priced and losing money — which
+    // is not a missing answer at all. It is the answer, and for a lot of real
+    // hardware at a real electricity rate it is the only honest one.
+    setText('mine-payback', r.paybackDays != null ? fmtPayback(r.paybackDays)
+      : (hwCost > 0 && r.profitDay != null) ? 'never' : '—');
+    setText('mine-payback-sub', r.paybackDays != null
+      ? ("at today's price and difficulty"
+         + (unitCount() > 1 ? ' — unchanged by unit count, it scales both sides' : ''))
+      : hwCost <= 0          ? 'enter what the hardware cost'
+      : r.profitDay == null  ? blocker
+      : 'it loses money every day at these numbers');
+
     // Watts are a RATE, and the field was read as a daily total. Spelling the
     // conversion out beside the box is the only place it can't be missed: the
     // "Power cost / day" card shows the money, not the energy, so nothing on
@@ -1019,7 +1079,7 @@ function initMining() {
     const c = unitCount();
     setText('mine-rig-note', rigSel.value === 'custom'
       ? 'Custom — fill in the hashrate and power draw yourself.'
-      : rigName() + (c > 1 ? ' × ' + c : '') + ' figures filled in below. Edit either one if yours differs, or change the number of units.');
+      : rigName() + (c > 1 ? ' × ' + c : '') + ' figures filled in for you. Edit either one if yours differs, or change the number of units.');
   }
   // Says the multiplication back in words. A count that silently rewrites two
   // fields further down the form is a figure the reader has to take on trust;
@@ -1028,12 +1088,14 @@ function initMining() {
     if (!unitsEl) return;
     const c = unitCount();
     if (c <= 1) {
-      setText('mine-units-note', 'How many you run. The hashrate and power draw below are the total for all of them — no need to multiply anything yourself.');
+      setText('mine-units-note', 'How many you run. The hashrate, power draw and hardware cost are the total for all of them — no need to multiply anything yourself.');
       return;
     }
     const what = (rigSel && rigSel.value !== 'custom') ? c + ' × ' + rigName() : c + ' units';
     setText('mine-units-note', what + ' — ' + trimFloat(unit.gps * c) + ' G/s and '
-      + fmtWatts(unit.watts * c) + ' W in total, filled in below.');
+      + fmtWatts(unit.watts * c) + ' W in total'
+      + (unit.cost > 0 ? ', ' + fmtUsdAmt(unit.cost * c) + ' spent' : '')
+      + ', filled in for you.');
   }
   function kwhNote() {
     if (!kwhSel) return;
@@ -1076,12 +1138,18 @@ function initMining() {
   ids.forEach(id => {
     if (!el[id]) return;
     el[id].addEventListener('input', () => {
-      if (id === 'mine-gps' || id === 'mine-watt') {
+      if (id === 'mine-gps' || id === 'mine-watt' || id === 'mine-cost') {
         // What was typed is the TOTAL for the whole fleet, so one unit is that
         // divided by the count. Without this the next change of the count would
         // throw the correction away and go back to multiplying the spec.
         captureUnit();
-        if (rigSel && rigSel.value !== 'custom') { rigSel.value = 'custom'; rigNote(); }
+        // ...but only the two SPEC figures belong to the hardware picker. No
+        // preset in that list carries a price, so a price the reader types is
+        // not a departure from the spec and must not drop the picker to Custom
+        // — that would blank a rig name the two figures above still match.
+        if (id !== 'mine-cost' && rigSel && rigSel.value !== 'custom') {
+          rigSel.value = 'custom'; rigNote();
+        }
         unitsNote();
       }
       if (id === 'mine-kwh' && kwhSel && kwhSel.value !== 'custom') {

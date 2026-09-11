@@ -6,11 +6,17 @@
 > the second leg landed; *Peer map — self-hosted basemap* was read (2026-09-09) against
 > `web/06_stats_map/stats/index.html` **and against the committed `assets/countries-*.json`
 > themselves** (the three dateline seams below are measured from the data, not inferred);
-> *Tool 2 — Wallet Checker* was read (2026-09-09) against `lib/wallet-tor.js`,
-> `tiny-explorer-server.js` and `scripts/lib/06d_tiny_explorer.sh`.
+> *Tool 2 — Wallet Checker* was read (2026-09-10) against `lib/wallet-tor.js`,
+> `tiny-explorer-server.js`, `public/wallet-check.html`, `public/js/wallet-check.js`,
+> `public/js/tiny-explorer.js`, `test/test-probe-copy.js` and
+> `scripts/lib/06d_tiny_explorer.sh`, when the probe default was flipped;
+> *Tool 4 — Mining Calculator* was read (2026-09-10) against `public/mining.html`,
+> `public/css/tiny-explorer.css`, `public/js/tiny-explorer.js` and `test/test-mining.js`
+> when payback and the two-column form landed — that section only, not the rest of Tool 4's
+> history.
 > The rest of this doc is still never systematically verified.
-> **Product code last changed:** 2026-09-10 — `web/06d_tiny_explorer/` (node-check second leg: P2P 3414/13414 TCP probe, composed two-leg verdict, network picker; **assumed API endpoint flipped from 3413 to https/443 for host names**, retry inverted); 2026-09-09 — `web/06d_tiny_explorer/` (mining calculator: number-of-units multiplier, `/api/price` fallback, blocker copy, first test suite for the money maths); 2026-09-09 — `web/06_stats_map/stats/index.html` (antimeridian seam repair, land+mesh basemap, city-label cull, trimmed maxBounds, Vietnam flag fill + East Sea islands + Saigon relabel); 2026-09-09 — `scripts/lib/06d_tiny_explorer.sh` (tor install + probe status row) and `web/06d_tiny_explorer/` (probe-aware page copy); 2026-09-09 — `web/06d_tiny_explorer/` (node-check assumed-port retry); 2026-09-08 — `web/06d_tiny_explorer/public/` (mining calculator presets); 2026-09-07 — `scripts/lib/06d_tiny_explorer.sh` (deploy/restart lifecycle); 2026-09-06 — `scripts/06_global_grin_health.sh`, `scripts/lib/06*`, `web/06_stats_map/`, `web/06d_tiny_explorer/`
-> 06d has a test suite (`web/06d_tiny_explorer/test/`, 179 assertions across 5 suites — count read from `node test/run-all.js` on 2026-09-10), but it tests the code, not this doc.
+> **Product code last changed:** 2026-09-10 — `web/06d_tiny_explorer/` (mining calculator: **capital payback card + hardware-cost input**, setup form rebuilt as two columns, break-even sub-label explains its scale invariance); 2026-09-10 — `scripts/lib/06d_tiny_explorer.sh` + `web/06d_tiny_explorer/` (**Wallet Checker Tor liveness probe now ON by default for a new install**: two-sided config read-back, `(installs tor)` prompt warning, config-neutral baseline page copy; **prompt catch-all now keeps the default instead of naming `false`, and `read` at EOF declines** — both latent until the flip); 2026-09-10 — `web/06d_tiny_explorer/` (node-check second leg: P2P 3414/13414 TCP probe, composed two-leg verdict, network picker; **assumed API endpoint flipped from 3413 to https/443 for host names**, retry inverted); 2026-09-09 — `web/06d_tiny_explorer/` (mining calculator: number-of-units multiplier, `/api/price` fallback, blocker copy, first test suite for the money maths); 2026-09-09 — `web/06_stats_map/stats/index.html` (antimeridian seam repair, land+mesh basemap, city-label cull, trimmed maxBounds, Vietnam flag fill + East Sea islands + Saigon relabel); 2026-09-09 — `scripts/lib/06d_tiny_explorer.sh` (tor install + probe status row) and `web/06d_tiny_explorer/` (probe-aware page copy); 2026-09-09 — `web/06d_tiny_explorer/` (node-check assumed-port retry); 2026-09-08 — `web/06d_tiny_explorer/public/` (mining calculator presets); 2026-09-07 — `scripts/lib/06d_tiny_explorer.sh` (deploy/restart lifecycle); 2026-09-06 — `scripts/06_global_grin_health.sh`, `scripts/lib/06*`, `web/06_stats_map/`, `web/06d_tiny_explorer/`
+> 06d has a test suite (`web/06d_tiny_explorer/test/`, 210 assertions across 5 suites — count read from `node test/run-all.js` on 2026-09-10), but it tests the code, not this doc.
 
 Only sections that need durable prose live here; the menu/wiring lives in
 `scripts/06_global_grin_health.sh`. Options A (network stats), B (GrinScan),
@@ -1056,14 +1062,79 @@ is `3.4499999999999997` and that must never land in a box the reader retypes; an
 seeded from **what is on screen**, not from the selected preset, so a browser that restores a
 form across a reload (Firefox) does not silently undo the restored count.
 
-**The money maths had no test until 2026-09-09.** `test/test-mining.js` (34 assertions) lifts
+**Break-even cannot move with the count, and that reads as a dead field (2026-09-10).**
+The first bug report after the count shipped was "when I put a new number in units, the values
+are not updated correctly". Driving the shipped `initMining()` through every entry sequence —
+pasted, spinner, digit-by-digit, cleared, reduced, hardware changed mid-way, a figure corrected
+by hand and then re-counted — reproduced nothing: the multiply was correct in all of them. What
+is correct and *looks* broken is **break-even**, which is `powerDay / grinDay`; the count
+multiplies both sides and cancels exactly. A reader who raises the count and watches every other
+card move while that one holds still has no way to tell a cancelling ratio from a field that
+stopped updating. The fix was copy, not arithmetic: above one unit the sub-label reads *"per ツ,
+to cover electricity — unchanged by unit count, it scales both sides."* (The other live
+explanation for that report was simply that the node was still 502ing, in which case only the
+two boxes and the power cost move and every income card stays a dash — correct outage behaviour
+that is indistinguishable from a broken multiplier.)
+
+**Capital payback — "Pays for itself in" (2026-09-10).** The calculator answered *is this worth
+running* and not *was this worth buying*, and the closing note said hardware cost was excluded.
+One input (**Hardware cost**, USD) and one card now close that. Four decisions:
+
+- **A duration, not an ROI percentage.** ROI needs a horizon supplied before the page will say
+  anything; payback needs nothing and answers the question people actually ask. `fmtPayback()`
+  gives one unit at a time — days under three months, months under three years, years beyond,
+  and *over 100 years* past the point the figure carries information. "1 yr 8 mo 3 d" is
+  precision this estimate does not have and never can.
+- **The cost box holds the FLEET total, like the hashrate and wattage boxes.** `unit.cost` joins
+  the per-unit basis, so a price typed at count 1 multiplies from then on and a price corrected
+  by hand survives the next count change. This keeps the rule that `miningEstimate()` reads only
+  what is on screen — asserted by the same test that forbids a unit count inside the maths.
+  One asymmetry with the other two boxes: an **empty** cost box stays empty when the count
+  changes. `trimFloat(0)` there would answer "what did it cost?" with `0` on the reader's
+  behalf, and `0` is the one value that makes the card print a confident *under a day*.
+- **A losing rig has an answer, and it is a word.** `paybackDays` is `null` for all three
+  no-number cases; `render()` tells them apart from `hwCost` and `profitDay` and prints *never*,
+  *enter what the hardware cost*, or the same blocker chain every other card uses. Returning
+  `Infinity` would have put a non-finite value into the one struct on this page whose fields are
+  printed as money (memory `reference_money_number_boundary_traps`). At the shipped defaults the
+  card says **never** — that is the honest answer for most hardware at most electricity rates,
+  and it is the most useful thing this page can say to someone about to spend $500.
+- **Payback is scale-invariant too**, for the identical reason break-even is: the count
+  multiplies capex and profit by the same factor. Knowing that in advance is the only reason it
+  did not ship as a second bug report — it carries the same sub-label sentence from day one.
+
+The honesty caveat is structural, not decorative. Grin pays a flat **86,400 ツ a day forever**,
+so a miner's share shrinks continuously as hashrate joins — there are no halvings to schedule
+around, just monotonic dilution. A straight-line payback at today's difficulty is an *upper
+bound on optimism*. Difficulty growth is deliberately **not** modelled: there is no defensible
+forecast basis here, and it would be the least trustworthy number on a page whose whole
+credibility is that every figure is derived from something visible. The card says *at today's
+price and difficulty* and the closing note says both will move.
+
+**The setup form went to two columns (2026-09-10).** Eight fields in eight full-width rows meant
+scrolling past the form to reach the cards it feeds. The rows are now paired — picker beside its
+value, hashrate beside power draw, electricity rate beside the rate itself, pool fee beside
+hardware cost — which fits the whole setup on one screen. The label moved from *beside* the
+control to *above* it: the old 190px label column inside a half-width cell left about 140px for
+the input, too narrow to read a wattage in. `align-items: start` makes every cell in a grid row
+share a top edge, so the rules line up across each pair even though the notes below them are
+wildly different lengths. Two traps: `:first-child` no longer suffices to drop the top border
+(the first row is *two* cells, so it is `:nth-child(-n+2)`, undone again in the single-column
+media query), and the breakpoint is **820px** rather than something tighter because of the two
+selects — the widest option reads *"United States · industrial or hosted — ≈ $0.08 / kWh"*, and
+a half-width cell below ~360px truncates it to something that names a country and hides the
+rate. Reordering the fields also falsified four notes that said "below"; they now say "for you"
+or name nothing.
+
+**The money maths had no test until 2026-09-09.** `test/test-mining.js` (34 assertions at
+creation; **47** as of 2026-09-10) lifts
 the pure helpers out of the shipped `tiny-explorer.js` by brace-matching — so it tests the file
 that deploys, not a copy — and covers the share formula, the fee clamp, every missing-input
 path resolving to `null` rather than a number, the formatter dash/precision rules, the blocker
-order, and the client↔server↔markup id contract. §7 is the exception to the suite's
-no-DOM rule: "number of units" is pure interaction — a count, a preset and two boxes that
-rewrite each other — and nothing read off the source would prove it, so it drives the real
-`initMining()` through a ~40-line listener-capturing shim. Still no jsdom and no
+order, and the client↔server↔markup id contract. §7 and §8 are the exception to the suite's
+no-DOM rule: "number of units" and the cost box are pure interaction — a count, a preset and
+three boxes that rewrite each other — and nothing read off the source would prove it, so they
+drive the real `initMining()` through a ~40-line listener-capturing shim. Still no jsdom and no
 devDependency, which is the constraint that actually binds.
 
 #### The assumed-port false negative (2026-09-09)
@@ -1126,8 +1197,9 @@ common real failure (a truncated or mistyped address), and it is useful on its o
 
 **Tier 2 — server probe (phase 3). SHIPPED** as `lib/wallet-tor.js` + `lib/socks5.js` +
 `POST /api/wallet-check` + the `probeSection()` half of `public/js/wallet-check.js`. It is
-**off by default** (`wallet_check_probe`) and needs a local tor SOCKS proxy; see *As built*
-below. Both halves it was ported from already existed in this repo, both dependency-free:
+**on by default for a new install** since 2026-09-10 (`wallet_check_probe`); it needs a local
+tor SOCKS proxy, and Configure installs one to back the default. ⚠ The *code* default is still
+`false` — see *The probe default has two halves* below. See *As built* below. Both halves it was ported from already existed in this repo, both dependency-free:
 
 - `web/07_mining_pool_public/back-end-pool/lib/wallet-tor.js` — `bech32Decode`,
   `onionV3FromPubkey`, `deriveOnionAddress`, `probeToronlineStatus`. The derivation was
@@ -1180,9 +1252,18 @@ offers the optional Tor liveness check…"*), which makes the visitor resolve a 
 page already knows the answer to — `window.TINYEXP_WALLET_PROBE` is injected per request.
 Both states are now definite:
 
-- The **static HTML carries the probe-OFF wording**, deliberately. It is what ships by default
-  and what a visitor sees if the script fails to load, so the failure direction is
-  under-promising, never a page insisting it can report liveness with no control that does.
+- The **static HTML carries the baseline wording**, deliberately — but the reason changed when
+  the default flipped on 2026-09-10. It is no longer "what ships"; it is that **the probe button
+  is built by `wallet-check.js`**, so a visitor whose browser never runs that file has no control
+  on the page whatever `config.json` says. Static copy promising a liveness check would
+  over-promise in exactly the state that cannot deliver one.
+  The mirror of that is now banned too, and it is the change the flipped default forced: the
+  baseline may no longer **deny** the capability. It used to read *"this server does not offer
+  the optional Tor liveness check"* — a claim about the **server**, false wherever the flag is
+  on, i.e. on most boxes, and read by exactly the visitor whose script failed and who cannot
+  tell. The copy is config-neutral instead: it describes what the **page** has done (*"nothing
+  here has asked"*), never what the box can do, so it is true in all four combinations of flag
+  and script. `test/test-probe-copy.js` enforces both directions.
 - `applyProbeCopy()` in `public/js/wallet-check.js` replaces three elements (`#wc-lede`,
   `#wc-scope-note`, `#wc-detail-live`) when the probe is on, and `applyWalletProbeLabels()` in
   `tiny-explorer.js` relabels the tools-menu row and homepage card on every shell — *"can I see
@@ -1196,9 +1277,69 @@ Both states are now definite:
   does, on request. Reworded to stay true in both states without needing the flag.
 
 The whole arrangement has one silent failure — a renamed id makes the swap a no-op and the page
-then denies a capability whose button is directly below the sentence, in the state operators
-look at least. `test/test-probe-copy.js` (12 assertions) asserts that contract across five
-files rather than the prose.
+then denies a capability whose button is directly below the sentence. Flipping the default made
+that **more** likely, not less: the swap now has to fire on most boxes, and the operators best
+placed to notice it silently not firing are the ones with the probe off, whose page reads
+correctly either way. `test/test-probe-copy.js` (13 assertions) asserts that contract across
+five files rather than the prose.
+
+#### The probe default has two halves (changed 2026-09-10)
+
+`wallet_check_probe` has **two** defaults, they disagree on purpose, and aligning them would be
+a bug either way round:
+
+| | Value | Set in | Answers |
+|---|---|---|---|
+| **Installer default** | `true` | `tinyx_configure` in `scripts/lib/06d_tiny_explorer.sh` | *What should a fresh box do?* |
+| **Code default** | `false` | `config.wallet_check_probe === true` in `tiny-explorer-server.js` | *What does a config that does not say mean?* |
+
+- **Why the installer flipped.** *"Is this wallet answering right now?"* is the reason most
+  visitors open the Wallet Checker, and off-by-default shipped a tile that answered every
+  question except that one. The original default was written when the prompt could only
+  **detect** a missing tor daemon; `_tinyx_ensure_tor` now installs one, starts it and **polls
+  until SOCKS is actually bound** (a tor with `SocksPort 0` reads as "active" and proxies
+  nothing), so the box no longer has to arrive qualified — it can be made so.
+- **Why the code default did not.** A `config.json` that lost the key — hand-edited,
+  half-restored, written by an older toolkit — must fail **closed**. A box does not start
+  dialling Tor for visitors because a line went missing.
+- **The read-back is now two-sided.** `tinyx_configure` rewrites `config.json` wholesale, so it
+  reads the current value back before prompting. It used to detect only `true`, which was
+  correct when the default was `false`: it stopped an operator who had turned the probe **on**
+  from losing it by re-running Configure for a new domain. With the default flipped, a one-sided
+  read-back does that same damage in the other direction — to an operator who deliberately
+  turned it **off**. An explicit value in the config is a decision and outranks the default in
+  both directions; only an install whose config does not already record a choice gets the
+  default. That is very nearly "a new install" but not exactly — a `config.json` written before
+  the key existed (pre-`99087d9`) matches neither grep and takes the default too. The operator
+  still sees the prompt, so it is a proposal, never a silent migration.
+- **A deployed box keeps what it chose.** Any `config.json` this toolkit has written since the
+  key existed carries a literal `"wallet_check_probe"`, and nothing in an update path rewrites
+  it — so a box already in service is unaffected by the flip in either direction. This changes
+  what Configure *proposes*; an existing deployment turns the probe on by re-running **Script
+  06 → `D` → `2` Configure**, where the prompt now defaults to yes.
+- **Consent for the daemon is still explicit.** Where the default is yes and no tor is
+  listening, the prompt names the consequence inline — `(installs tor)` — and the install itself
+  asks separately inside `_tinyx_ensure_tor`. Installing a daemon is a side effect beyond what
+  "set up an explorer" implies; an operator pressing Enter through the prompts should not
+  discover it afterwards. If the install fails, the existing fallback asks whether to leave the
+  probe on and **defaults to no**, so a failed install cannot leave a box answering "could not
+  check" to every visitor.
+- **The prompt's catch-all keeps the default, and the EOF branch declines.** Both were latent
+  while the default was `false` and became live the moment it flipped. `*) wallet_probe="false"`
+  under a printed `[Y/n]` meant every input but a bare `y`/`yes` — `Y ` with the space a paste
+  leaves behind, `ye`, `1` — silently answered **no**, with nothing echoed to say so; the
+  catch-all now keeps whatever the default is and warns. And `read` at EOF (stdin closed,
+  Configure driven from a pipe) returns non-zero leaving the variable empty, which is
+  indistinguishable from a pressed Enter — with the default now yes that reached `apt-get
+  install tor` with nobody at the keyboard, so the read falls back to `n`. **Rule: a catch-all
+  may never name a value, and a printed default is an offer to a human.**
+
+**What flipping the default does not change.** The probe is still press-to-run — nothing leaves
+the browser until the visitor clicks — the tri-state is unchanged, and `/api/wallet-check` still
+logs no address. It does widen one surface by default: any valid `grin1…` string maps to an
+arbitrary v3 onion, so a visitor chooses who the server dials. That is fenced by the nginx
+`tinyx_probe` zone (10r/m, burst 5), `WALLET_PROBE_MAX_INFLIGHT` 4, a ~120-byte POST, a 16 KB
+response cap and an 8 s timeout — but it is now on unless an operator turns it off.
 
 ### Tool 3 — Node Reachability Checker (`/node-check`, phase 2)
 
@@ -1605,8 +1746,8 @@ them the way the Emission and Slate bullets already link.
   "script06d-probe-rate-limit"` — and mirror it in both the fallback branch and the uninstall
   path at :447. Do not reuse `tinyx_api`, and do not edit the existing file in place.
 - **Config keys** (`06d_tiny_explorer.sh` + server `config.json`): `node_check_enabled`
-  (default true), `node_check_timeout_ms`; and for phase 3 `wallet_check_probe` (default
-  **false**), `tor_socks_port` 9050, `tor_onion_virtual_port` 80, `tor_check_timeout_ms`,
+  (default true), `node_check_timeout_ms`; and for phase 3 `wallet_check_probe` (installer
+  default **true**, code default **false**), `tor_socks_port` 9050, `tor_onion_virtual_port` 80, `tor_check_timeout_ms`,
   `tor_check_retries`.
 - **SEO:** per-page `_pageMeta` entries feed the existing server-injected canonical/OG/JSON-LD.
   Per memory `project_frontend_seo_standards`, no static tag may name a host the deploying

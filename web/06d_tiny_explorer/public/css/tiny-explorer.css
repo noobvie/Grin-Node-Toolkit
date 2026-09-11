@@ -573,21 +573,49 @@ pre.tx-raw {
 .tx-compare tr.is-grin td:first-child { color: var(--gold-ink); }
 
 /* ── Mining Calculator page ────────────────────────────────────────── */
-/* One field per line: a fixed label column beside the control, so the eye runs
-   straight down the values instead of hunting across a grid. Collapses to a
-   stacked pair on narrow screens, where a 2-column split would squeeze both. */
-.tx-mine-form { display: block; }
-.tx-mine-row {
-  display: grid; grid-template-columns: 190px minmax(0, 1fr); gap: 6px 16px;
-  align-items: start; padding: 12px 0; border-top: 1px solid var(--border);
+/* TWO fields per line, label ABOVE its control. Eight fields in four rows
+   instead of eight rows, which is what gets the whole setup onto one screen
+   without scrolling — the reason the form was rebuilt at all.
+
+   The label sits above rather than beside because the old 190px label column
+   inside a half-width cell leaves ~140px for the input, too narrow to read a
+   wattage in. Above costs one line of height and buys the full cell width.
+
+   Rows are paired deliberately in the markup (picker beside its value, hashrate
+   beside power draw), so this is plain auto-flow: no explicit placement to keep
+   in sync with the HTML order.
+
+   ALIGNMENT: align-items:start makes every cell in a grid row share a top edge,
+   so the border-tops line up across the pair even though the notes below them
+   are wildly different lengths. Cell heights differ; the rules do not. */
+.tx-mine-form {
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 26px; align-items: start;
 }
-.tx-mine-row:first-child { border-top: 0; padding-top: 4px; }
-@media (max-width: 620px) { .tx-mine-row { grid-template-columns: 1fr; } }
+.tx-mine-row { display: block; padding: 12px 0; border-top: 1px solid var(--border); }
+/* The top row is TWO cells wide, so :first-child alone would leave a rule
+   hanging over the second field with nothing above it. */
+.tx-mine-row:nth-child(-n+2) { border-top: 0; padding-top: 4px; }
 .tx-mine-label {
-  font-size: 11px; font-weight: 800; text-transform: uppercase;
-  letter-spacing: .07em; color: var(--label); padding-top: 10px;
+  display: block; font-size: 11px; font-weight: 800; text-transform: uppercase;
+  letter-spacing: .07em; color: var(--label); padding: 0 0 6px;
 }
-@media (max-width: 620px) { .tx-mine-label { padding-top: 0; } }
+/* One column on a phone or a portrait tablet. Two number inputs side by side at
+   400px is a mis-tap, and the notes — which are most of this form's value —
+   would be shredded into six-word lines.
+
+   820px rather than something tighter because of the two SELECTS: the widest
+   option reads "United States · industrial or hosted — ≈ $0.08 / kWh", and a
+   half-width cell below ~360px truncates it to something that names a country
+   and hides the rate. A select is the one control here that cannot be read by
+   its neighbours, so it sets the breakpoint.
+
+   The nth-child(-n+2) rule above has to be undone here: at one column the
+   second field is a row of its own again and needs its rule back. */
+@media (max-width: 820px) {
+  .tx-mine-form { grid-template-columns: 1fr; gap: 0; }
+  .tx-mine-row:nth-child(2) { border-top: 1px solid var(--border); padding-top: 12px; }
+}
 .tx-mine-label small { font-weight: 700; text-transform: none; letter-spacing: 0; color: var(--text-soft); }
 .tx-mine-control { min-width: 0; }
 .tx-mine-control input, .tx-mine-select {

@@ -57,8 +57,8 @@ function lift(name) {
   }
   throw new Error('unbalanced braces in ' + name);
 }
-const PURE = ['posNum', 'miningEstimate', 'fmtGrinAmt', 'fmtWatts', '_usd', 'fmtUsdAmt', 'fmtUsdPrice'];
-const { posNum, miningEstimate, fmtGrinAmt, fmtWatts, fmtUsdAmt, fmtUsdPrice } =
+const PURE = ['posNum', 'miningEstimate', 'fmtGrinAmt', 'fmtWatts', '_usd', 'fmtUsdAmt', 'fmtUsdPrice', 'fmtPayback'];
+const { posNum, miningEstimate, fmtGrinAmt, fmtWatts, fmtUsdAmt, fmtUsdPrice, fmtPayback } =
   new Function(PURE.map(lift).join('\n') + '\nreturn {' + PURE.join(',') + '};')();
 
 // A healthy basis, and the page's own shipped defaults.
@@ -217,7 +217,7 @@ ok('every id render() writes to exists in mining.html', () => {
 });
 
 ok('every input id the page reads exists as an input', () => {
-  for (const id of ['mine-gps', 'mine-fee', 'mine-watt', 'mine-kwh']) {
+  for (const id of ['mine-gps', 'mine-fee', 'mine-watt', 'mine-kwh', 'mine-units', 'mine-cost']) {
     assert.ok(new RegExp('<input id="' + id + '"').test(html), 'no <input> for #' + id);
   }
 });
@@ -267,7 +267,7 @@ console.log('\n[7] number of units — the boxes below hold the FLEET total');
 // visible boxes, so every figure on the page stays checkable against what the
 // reader can see.
 function drive() {
-  const vals = { 'mine-gps':'1.2','mine-fee':'0','mine-watt':'120','mine-kwh':'0.17','mine-units':'1' };
+  const vals = { 'mine-gps':'1.2','mine-fee':'0','mine-watt':'120','mine-kwh':'0.17','mine-units':'1','mine-cost':'' };
   const text = {}, listeners = {};
   const mk = (id) => ({ id,
     get value(){ return vals[id]; }, set value(v){ vals[id] = String(v); },
@@ -285,6 +285,7 @@ function drive() {
   for (const id of Object.keys(vals).concat(['mine-rig-note','mine-units-note','mine-watt-note',
     'mine-kwh-note','mine-day','mine-week','mine-month','mine-day-usd','mine-week-usd','mine-month-usd',
     'mine-power','mine-breakeven','mine-breakeven-sub','mine-profit','mine-profit-sub',
+    'mine-payback','mine-payback-sub','mine-cost-note',
     'mine-net','mine-net-sub','mine-price','mine-price-sub'])) nodes[id] = mk(id);
 
   const rig = mk('mine-rig');
@@ -402,6 +403,101 @@ ok('and the page explains that stillness instead of leaving it ambiguous', () =>
   assert.notStrictEqual(i, -1, 'the break-even sub-label is gone');
   assert.ok(/unchanged by unit count/.test(src.slice(i, i + 400)),
     'nothing tells the reader WHY break-even sits still while every other card moves');
+});
+
+// ═══ 8. "Pays for itself in" — capital payback ══════════════════════════════
+console.log('\n[8] payback — a duration, and three different ways to have none');
+
+// The shipped defaults LOSE money (-$0.43/day at $0.17/kWh), which is the
+// honest answer for most real hardware and useless as an arithmetic fixture.
+// Cheap power, so there is a positive profit to divide into.
+const cheap = { kwhCost: '0.02' };
+const paid  = (over) => est(Object.assign({ hwCost: '500' }, cheap, over));
+
+ok('payback is what you spent divided by what you clear in a day', () => {
+  const r = paid();
+  assert.ok(r.profitDay > 0, 'the profitable fixture stopped being profitable');
+  assert.strictEqual(r.paybackDays, 500 / r.profitDay);
+});
+
+ok('nothing spent is not a free rig — blank, 0 and junk all decline to answer', () => {
+  for (const v of ['', '   ', '0', 'abc', '-100']) {
+    assert.strictEqual(paid({ hwCost: v }).paybackDays, null,
+      'a cost of ' + JSON.stringify(v) + ' produced a payback anyway');
+  }
+});
+
+ok('a rig that loses money has no payback — never is a word, not Infinity', () => {
+  const r = est({ hwCost: '500' });     // the shipped defaults, at $0.17/kWh
+  assert.ok(r.profitDay < 0, 'the default fixture stopped being a loss-maker');
+  assert.strictEqual(r.paybackDays, null);
+});
+
+ok('and no basis is no payback — never a 0, never a NaN', () => {
+  for (const over of [{ netGps: null }, { priceUsd: 0 }, { gps: '' }]) {
+    const r = paid(over);
+    assert.strictEqual(r.paybackDays, null, 'a missing basis produced a payback: ' + JSON.stringify(over));
+  }
+});
+
+ok('payback does not move with the count either — the same cancellation as break-even', () => {
+  const one  = paid();
+  const four = paid({ hwCost: '2000', gps: '4.8', watts: '480' });   // the same rig, x4
+  assert.ok(Math.abs(four.paybackDays / one.paybackDays - 1) < 1e-9,
+    'payback changed with fleet size: ' + one.paybackDays + ' -> ' + four.paybackDays);
+});
+
+ok('fmtPayback says days, then months, then years — one unit at a time', () => {
+  assert.strictEqual(fmtPayback(0.5),  'under a day');
+  assert.strictEqual(fmtPayback(1),    '1 day');
+  assert.strictEqual(fmtPayback(45),   '45 days');
+  assert.strictEqual(fmtPayback(89),   '89 days');
+  assert.strictEqual(fmtPayback(365),  '12 months');
+  assert.strictEqual(fmtPayback(1095), '36 months');
+  assert.strictEqual(fmtPayback(1096), '3.0 years');
+  assert.strictEqual(fmtPayback(365.25 * 12), '12 years');
+});
+
+ok('a payback long enough to be meaningless stops being a number', () => {
+  assert.strictEqual(fmtPayback(1e9), 'over 100 years');
+  for (const v of [Infinity, NaN, null, undefined, 0, -5]) {
+    assert.strictEqual(fmtPayback(v), '—', String(v) + ' rendered as a duration');
+  }
+});
+
+ok('the cost box scales with the count, like the two figures above it', () => {
+  const d = drive();
+  d.set('mine-cost', '520');
+  d.set('mine-units', '4');
+  assert.strictEqual(d.vals['mine-cost'], '2080', 'the count did not reach the cost box');
+  assert.ok(/spent/.test(d.text['mine-units-note']),
+    'the note does not say the cost multiplication back: ' + d.text['mine-units-note']);
+});
+
+ok('an empty cost box stays empty when the count changes — 0 is not "unpriced"', () => {
+  const d = drive();
+  d.set('mine-units', '4');
+  assert.strictEqual(d.vals['mine-cost'], '', 'the count answered an unasked question with 0');
+  assert.strictEqual(d.text['mine-payback-sub'], 'enter what the hardware cost',
+    'the card claims something other than a missing price');
+});
+
+ok('typing a price does not accuse the reader of leaving the preset', () => {
+  const d = drive();
+  d.set('mine-cost', '520');
+  assert.strictEqual(d.rig(), 'ipollo-g1-mini',
+    'a hardware price dropped the picker to Custom — no preset in that list carries one');
+});
+
+ok('and the card says "never" in words rather than leaving a readable-as-broken dash', () => {
+  const src = lift('initMining');
+  const i = src.indexOf("'mine-payback'");
+  assert.notStrictEqual(i, -1, 'the payback card is gone');
+  assert.ok(/'never'/.test(src.slice(i, i + 300)),
+    'a rig that loses money renders as a dash, indistinguishable from a missing input');
+  const j = src.indexOf("'mine-payback-sub'");
+  assert.ok(/unchanged by unit count/.test(src.slice(j, j + 500)),
+    'payback is scale-invariant like break-even and nothing on the card says so');
 });
 
 // ═══ Report ══════════════════════════════════════════════════════════════════

@@ -47,7 +47,7 @@
   --red-ink:     #b91c1c;   /* 6.37 / 5.85 / 5.50 */
   /* Third-state / accent INK. Same rule as the verdict pair above: it is TEXT
      (.tx-wc-verdict.is-warn .tx-wc-mark 15px/800, .tx-pf-mark.is-skip 14px/800,
-     .tx-pf-attested 10px/800, .tx-tool-go 13px/700, .tx-slogan 12px), so the bar
+     .tx-pf-attested 10px/800, .tx-slogan 12px), so the bar
      is 4.5:1, not 3:1. The previous #c26a00 was 3.86 / 3.55 / 3.33 and failed on
      all three grounds — measured in a browser, not computed from --surface alone.
      #92400e is the same value slate.css resolved --sp-amber to against the same
@@ -531,12 +531,8 @@ pre.tx-raw {
   padding: 1px 7px; border-radius: 999px; font-size: 10px; font-weight: 700;
   letter-spacing: .12em; text-transform: uppercase; color: #04121a; background: #00f0ff;
 }
-/* The one short line. flex:1 1 auto keeps "Open →" on the bottom edge so tiles
-   in a row stay aligned even if one line wraps. */
-.tx-tool-line { font-size: 13px; color: var(--text-soft); line-height: 1.45; flex: 1 1 auto; }
-/* --accent, not --gold: this is text at 13px/700, and --gold is a fill token
-   (#ff8c00 is 2.3:1 on the light tile). */
-.tx-tool-go { font-size: 13px; font-weight: 700; color: var(--accent); }
+/* The one short line — the tile's last element, so no "Open →" row below it. */
+.tx-tool-line { font-size: 13px; color: var(--text-soft); line-height: 1.45; }
 
 /* ── Sparklines (inline in stat cards) ──────────────────────────────── */
 .tx-spark { margin-top: 6px; height: 26px; }
@@ -762,18 +758,20 @@ pre.tx-raw {
 
 /* Homepage H1. Deliberately restrained: this page's job is the stats and the
    latest-blocks table, so the heading states what the site IS for a crawler and
-   a first-time visitor without eating a band of the first screen. Sized between
-   .tx-emit-hero h1 (26px, where the heading IS the page) and a plain h2. */
+   a first-time visitor without eating a band of the first screen. Sized as a
+   single quiet line just above the accordions — smaller than .tx-emit-hero h1
+   (26px, where the heading IS the page) and than a section h2. The separator
+   and the space around it are real characters in the markup, so the line reads
+   correctly even before the stylesheet arrives. */
 .tx-index-h1 {
-  font-size: 18px; font-weight: 800; line-height: 1.3;
-  margin: 0 0 12px; color: var(--value); letter-spacing: -.01em;
+  font-size: 15px; font-weight: 700; line-height: 1.4;
+  margin: 0 0 14px; color: var(--value); letter-spacing: .01em;
 }
-.tx-index-h1 span { font-weight: 600; color: var(--text-soft); }
-.tx-index-h1 span::before { content: " — "; }
+.tx-index-sep { color: var(--gold); font-weight: 400; margin: 0 2px; }
+.tx-index-sub { font-weight: 500; color: var(--text-soft); }
 @media (max-width: 560px) {
-  /* The em-dash clause reads badly when it wraps mid-phrase, so on a narrow
-     screen it becomes its own line and sheds the leading dash. */
-  .tx-index-h1 { font-size: 17px; }
-  .tx-index-h1 span { display: block; font-size: 13px; margin-top: 2px; }
-  .tx-index-h1 span::before { content: none; }
+  /* The clause reads badly when it wraps mid-phrase, so on a narrow screen it
+     becomes its own line and the dot separator goes away. */
+  .tx-index-sep { display: none; }
+  .tx-index-sub { display: block; font-size: 13px; margin-top: 2px; }
 }

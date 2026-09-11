@@ -20,6 +20,7 @@ const SUITES = [
   'test-wallet-check.js',    // browser Keccak at the rate boundary + onion derivation
   'test-probe-copy.js',      // the probe-on/probe-off copy contract across 5 files
   'test-mining.js',          // the /mining money maths + which missing figure a dash blames
+  'test-seo.js',             // robots/sitemap/JSON-LD — the claims no browser shows
 ];
 
 let pass = 0, fail = 0;

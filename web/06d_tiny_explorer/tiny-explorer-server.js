@@ -1339,6 +1339,68 @@ app.get('/js/analytics.js', (_req, res) => {
     + `window.gtag=gtag;gtag('js',new Date());gtag('config',id);})();`);
 });
 
+// ── robots.txt + sitemap.xml (generated, never served from disk) ─────────────
+// Both have to name THIS deployment's host, so neither can be a checked-in
+// static file. A committed sitemap.xml would be either invalid (relative URLs)
+// or — far worse — an advertisement for the toolkit author's domain from an
+// operator's box, which is an identity claim nobody here is entitled to make.
+// With no base_url configured there is no honest absolute URL to publish at
+// all: the sitemap 404s and robots.txt simply omits its Sitemap: line.
+//
+// Only the seven STABLE pages are listed. block/kernel/output are deliberately
+// absent — one URL per chain entity, all noindex (see injectGlobals), and a
+// sitemap is a list of the pages you want indexed, not an inventory of a site.
+
+const SITEMAP_PAGES = [
+  { path: '/',             file: 'index.html' },
+  { path: '/mining',       file: 'mining.html' },
+  { path: '/slate',        file: 'slate.html' },
+  { path: '/proof',        file: 'proof.html' },
+  { path: '/wallet-check', file: 'wallet-check.html' },
+  { path: '/emission',     file: 'emission.html' },
+  { path: '/node-check',   file: 'node-check.html' },
+];
+
+app.get('/sitemap.xml', (_req, res) => {
+  if (!baseUrl) {
+    return res.status(404).type('text/plain').send('No sitemap: base_url is not configured.');
+  }
+  const entries = SITEMAP_PAGES.map(p => {
+    // lastmod is taken from the page shell's own mtime, never from a date typed
+    // into this file. A hand-kept date goes stale the first time someone edits a
+    // page and forgets it, and a sitemap that misreports freshness is worse than
+    // one that omits the field — so an unreadable shell omits it.
+    let lastmod = '';
+    try {
+      const d = fs.statSync(path.join(webDir, p.file)).mtime.toISOString().slice(0, 10);
+      lastmod = '\n    <lastmod>' + d + '</lastmod>';
+    } catch { /* omit rather than invent */ }
+    return '  <url>\n    <loc>' + baseUrl + p.path + '</loc>' + lastmod + '\n  </url>';
+  }).join('\n');
+  res.setHeader('Content-Type', 'application/xml; charset=utf-8');
+  res.setHeader('Cache-Control', 'public, max-age=3600');
+  res.send('<?xml version="1.0" encoding="UTF-8"?>\n'
+    + '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
+    + entries + '\n</urlset>\n');
+});
+
+// robots.txt keeps its RULES in public/robots.txt — one source of truth for what
+// is disallowed — and this route appends only the one line that needs the host.
+// It must sit above express.static, or the static file answers first and the
+// Sitemap: line never reaches a crawler.
+app.get('/robots.txt', (_req, res) => {
+  let body;
+  try {
+    body = fs.readFileSync(path.join(webDir, 'robots.txt'), 'utf8').replace(/\s*$/, '\n');
+  } catch {
+    body = 'User-agent: *\nAllow: /\n';
+  }
+  if (baseUrl) body += '\nSitemap: ' + baseUrl + '/sitemap.xml\n';
+  res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+  res.setHeader('Cache-Control', 'public, max-age=3600');
+  res.send(body);
+});
+
 // ── HTML pages with injected SEO + globals ────────────────────────────────────
 
 const SLOGAN = config.slogan || 'Every Grin block, one link away.';
@@ -1370,7 +1432,7 @@ const _pageMeta = {
   },
   mining: {
     title: `Grin Mining Calculator — ${domain}`,
-    desc:  `Estimate Grin (GRIN) mining income from the live network hashrate on ${domain}: enter your graphs-per-second, pool fee, power draw and electricity cost to see expected GRIN per day, week and month, the USD value at the current price, and the break-even GRIN price for your power bill. An estimate at the current difficulty.`,
+    desc:  `Estimate Grin (GRIN) mining income from the live network hashrate on ${domain}: enter your graphs-per-second, pool fee, power draw and electricity cost to see expected GRIN per day, week and month, the USD value at the current price, and the break-even GRIN price for your power bill. Add what the hardware cost and it estimates how long the rig takes to pay for itself. An estimate at the current difficulty.`,
   },
   walletcheck: {
     title: `Grin Wallet Address Checker — ${domain}`,
@@ -1398,6 +1460,21 @@ const _pageMeta = {
   },
 };
 
+// The six tools that get WebApplication structured data, keyed by page key.
+// The value is the tool's NAME and nothing else — no domain, because the name
+// belongs to the tool rather than to whoever deployed it, and no tagline,
+// because the description field already carries one. A page key absent from
+// this map simply gets no structured data, which is the right answer for the
+// entity shells and the 404.
+const TOOL_SCHEMA = {
+  slate:       'Grin Slatepack Inspector',
+  proof:       'Grin Payment Proof Verifier',
+  walletcheck: 'Grin Wallet Address Checker',
+  emission:    'Grin Emission & Supply',
+  nodecheck:   'Grin Node Reachability Checker',
+  mining:      'Grin Mining Calculator',
+};
+
 function esc(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
 
 function injectGlobals(html, pageKey) {
@@ -1415,14 +1492,67 @@ function injectGlobals(html, pageKey) {
     : (pageKey === 'block' || pageKey === 'kernel' || pageKey === 'output') ? ''
     : '/404.html';
   const canon = (baseUrl && canonPath) ? `\n<link rel="canonical" href="${baseUrl}${canonPath}">` : '';
+
+  // block/kernel/output are one URL per chain entity — millions of them, all
+  // sharing this one shell, its title and its description, and all resolved
+  // client-side. Indexed, they would be millions of near-duplicate thin pages
+  // competing with the seven that can actually rank; and on a PRUNED node most
+  // of them cannot even render a body, because get_block fails below the
+  // pruning horizon. So they are noindex — but deliberately still FOLLOW,
+  // because the mining pool deep-links into /block/:ref from outside and follow
+  // is what lets that reach the rest of the site instead of dead-ending.
+  //
+  // ⚠ This is also why robots.txt does NOT Disallow them. A disallowed URL can
+  // still be indexed as a bare listing when something links to it, and a
+  // crawler forbidden from fetching the page can never read this tag. Never
+  // block a path you want de-indexed.
+  const robots = (pageKey === 'block' || pageKey === 'kernel' || pageKey === 'output'
+    || pageKey === 'notfound') ? 'noindex, follow' : 'index, follow';
   const ogImage = baseUrl ? `${baseUrl}/grin-logo.svg` : '/grin-logo.svg';
-  const jsonLd = pageKey === 'index'
-    ? `\n<script type="application/ld+json">{"@context":"https://schema.org","@type":"WebSite","name":${JSON.stringify(domain + ' — Grin Block Explorer')},"url":${JSON.stringify(baseUrl || '')},"description":${JSON.stringify(meta.desc)}}</script>`
-    : '';
+  // Structured data. Each TOOL is a WebApplication — that is what they are:
+  // free, browser-run utilities with a single job each. The homepage stays a
+  // WebSite. Entity pages and 404 get none; they are noindex, and schema on a
+  // page asking not to be indexed is noise at best.
+  //
+  // Two rules this markup has to obey, both learned the expensive way on the
+  // pool (audit §J15-3). First, it may only assert what THIS deployment can
+  // actually back: no `sameAs` naming accounts the operator does not own, no
+  // SearchAction pointing at an endpoint nobody serves, no aggregateRating
+  // invented out of nothing. Second, `url` is emitted only when base_url is
+  // configured — an absolute URL is the one field here that can name the
+  // WRONG host, so with nothing configured it is simply left out.
+  const jsonLd = (() => {
+    let obj = null;
+    if (pageKey === 'index') {
+      obj = {
+        '@context': 'https://schema.org',
+        '@type': 'WebSite',
+        name: domain + ' — Grin Block Explorer',
+        description: meta.desc,
+      };
+    } else if (TOOL_SCHEMA[pageKey]) {
+      obj = {
+        '@context': 'https://schema.org',
+        '@type': 'WebApplication',
+        name: TOOL_SCHEMA[pageKey],
+        applicationCategory: 'UtilitiesApplication',
+        // Every tool here runs in the browser against this server; there is
+        // nothing to install and nothing to pay for, and both are true on
+        // every deployment rather than being a claim about ours.
+        operatingSystem: 'Any',
+        browserRequirements: 'Requires JavaScript',
+        isAccessibleForFree: true,
+        description: meta.desc,
+      };
+    }
+    if (!obj) return '';
+    if (baseUrl && canonPath) obj.url = baseUrl + canonPath;
+    return '\n<script type="application/ld+json">' + JSON.stringify(obj) + '</scr' + 'ipt>';
+  })();
 
   const seoBlock = `<title>${esc(meta.title)}</title>
 <meta name="description" content="${esc(meta.desc)}">
-<meta name="robots" content="index, follow">
+<meta name="robots" content="${robots}">
 <meta name="theme-color" content="${esc(meta.theme || '#ff8c00')}">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="${esc(domain)}">

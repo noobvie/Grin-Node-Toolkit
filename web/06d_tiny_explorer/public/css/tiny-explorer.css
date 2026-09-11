@@ -337,7 +337,7 @@ table.tx-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 /* ── Block detail page ──────────────────────────────────────────────── */
 
 .tx-block-head { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin: 20px 0 16px; }
-.tx-block-head h1 { font-size: 24px; margin: 0; color: var(--value); font-family: var(--mono); }
+.tx-block-head h1, .tx-block-head .tx-block-h { font-size: 24px; margin: 0; color: var(--value); font-family: var(--mono); }
 .tx-nav { display: flex; gap: 8px; }
 .tx-nav a {
   padding: 7px 12px; border: 1px solid var(--border); border-radius: 8px;
@@ -759,3 +759,21 @@ pre.tx-raw {
 /* The node-check hero carries a second paragraph — the name-vs-IP default split
    — and .tx-emit-hero p is margin:0 auto, so without this the two run together. */
 .tx-emit-hero p + p { margin-top: 10px; }
+
+/* Homepage H1. Deliberately restrained: this page's job is the stats and the
+   latest-blocks table, so the heading states what the site IS for a crawler and
+   a first-time visitor without eating a band of the first screen. Sized between
+   .tx-emit-hero h1 (26px, where the heading IS the page) and a plain h2. */
+.tx-index-h1 {
+  font-size: 18px; font-weight: 800; line-height: 1.3;
+  margin: 0 0 12px; color: var(--value); letter-spacing: -.01em;
+}
+.tx-index-h1 span { font-weight: 600; color: var(--text-soft); }
+.tx-index-h1 span::before { content: " — "; }
+@media (max-width: 560px) {
+  /* The em-dash clause reads badly when it wraps mid-phrase, so on a narrow
+     screen it becomes its own line and sheds the leading dash. */
+  .tx-index-h1 { font-size: 17px; }
+  .tx-index-h1 span { display: block; font-size: 13px; margin-top: 2px; }
+  .tx-index-h1 span::before { content: none; }
+}

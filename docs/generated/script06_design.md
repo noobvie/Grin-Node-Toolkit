@@ -13,10 +13,15 @@
 > *Tool 4 — Mining Calculator* was read (2026-09-10) against `public/mining.html`,
 > `public/css/tiny-explorer.css`, `public/js/tiny-explorer.js` and `test/test-mining.js`
 > when payback and the two-column form landed — that section only, not the rest of Tool 4's
-> history.
+> history;
+> *Option D addendum — the crawl surface* was written (2026-09-10) against
+> `tiny-explorer-server.js`, `public/robots.txt`, all eleven `public/*.html` shells,
+> `public/css/tiny-explorer.css`, `test/test-seo.js` and the nginx vhost in
+> `scripts/lib/06d_tiny_explorer.sh` — the sitemap, robots and JSON-LD output in it were
+> read from the handlers ACTUALLY RUN, not from the source.
 > The rest of this doc is still never systematically verified.
-> **Product code last changed:** 2026-09-10 — `web/06d_tiny_explorer/` (mining calculator: **capital payback card + hardware-cost input**, setup form rebuilt as two columns, break-even sub-label explains its scale invariance); 2026-09-10 — `scripts/lib/06d_tiny_explorer.sh` + `web/06d_tiny_explorer/` (**Wallet Checker Tor liveness probe now ON by default for a new install**: two-sided config read-back, `(installs tor)` prompt warning, config-neutral baseline page copy; **prompt catch-all now keeps the default instead of naming `false`, and `read` at EOF declines** — both latent until the flip); 2026-09-10 — `web/06d_tiny_explorer/` (node-check second leg: P2P 3414/13414 TCP probe, composed two-leg verdict, network picker; **assumed API endpoint flipped from 3413 to https/443 for host names**, retry inverted); 2026-09-09 — `web/06d_tiny_explorer/` (mining calculator: number-of-units multiplier, `/api/price` fallback, blocker copy, first test suite for the money maths); 2026-09-09 — `web/06_stats_map/stats/index.html` (antimeridian seam repair, land+mesh basemap, city-label cull, trimmed maxBounds, Vietnam flag fill + East Sea islands + Saigon relabel); 2026-09-09 — `scripts/lib/06d_tiny_explorer.sh` (tor install + probe status row) and `web/06d_tiny_explorer/` (probe-aware page copy); 2026-09-09 — `web/06d_tiny_explorer/` (node-check assumed-port retry); 2026-09-08 — `web/06d_tiny_explorer/public/` (mining calculator presets); 2026-09-07 — `scripts/lib/06d_tiny_explorer.sh` (deploy/restart lifecycle); 2026-09-06 — `scripts/06_global_grin_health.sh`, `scripts/lib/06*`, `web/06_stats_map/`, `web/06d_tiny_explorer/`
-> 06d has a test suite (`web/06d_tiny_explorer/test/`, 210 assertions across 5 suites — count read from `node test/run-all.js` on 2026-09-10), but it tests the code, not this doc.
+> **Product code last changed:** 2026-09-10 — `web/06d_tiny_explorer/` (**crawl surface**: generated `/sitemap.xml` + `/robots.txt` routes, `noindex, follow` on block/kernel/output and the 404, `WebApplication` JSON-LD for the six tools, homepage `<h1>`, duplicate `<h1>` removed from the three entity shells, analytics on the 404, `/mining` description updated for payback); 2026-09-10 — `web/06d_tiny_explorer/` (mining calculator: **capital payback card + hardware-cost input**, setup form rebuilt as two columns, break-even sub-label explains its scale invariance); 2026-09-10 — `scripts/lib/06d_tiny_explorer.sh` + `web/06d_tiny_explorer/` (**Wallet Checker Tor liveness probe now ON by default for a new install**: two-sided config read-back, `(installs tor)` prompt warning, config-neutral baseline page copy; **prompt catch-all now keeps the default instead of naming `false`, and `read` at EOF declines** — both latent until the flip); 2026-09-10 — `web/06d_tiny_explorer/` (node-check second leg: P2P 3414/13414 TCP probe, composed two-leg verdict, network picker; **assumed API endpoint flipped from 3413 to https/443 for host names**, retry inverted); 2026-09-09 — `web/06d_tiny_explorer/` (mining calculator: number-of-units multiplier, `/api/price` fallback, blocker copy, first test suite for the money maths); 2026-09-09 — `web/06_stats_map/stats/index.html` (antimeridian seam repair, land+mesh basemap, city-label cull, trimmed maxBounds, Vietnam flag fill + East Sea islands + Saigon relabel); 2026-09-09 — `scripts/lib/06d_tiny_explorer.sh` (tor install + probe status row) and `web/06d_tiny_explorer/` (probe-aware page copy); 2026-09-09 — `web/06d_tiny_explorer/` (node-check assumed-port retry); 2026-09-08 — `web/06d_tiny_explorer/public/` (mining calculator presets); 2026-09-07 — `scripts/lib/06d_tiny_explorer.sh` (deploy/restart lifecycle); 2026-09-06 — `scripts/06_global_grin_health.sh`, `scripts/lib/06*`, `web/06_stats_map/`, `web/06d_tiny_explorer/`
+> 06d has a test suite (`web/06d_tiny_explorer/test/`, 232 assertions across 6 suites — count read from `node test/run-all.js` on 2026-09-10), but it tests the code, not this doc.
 
 Only sections that need durable prose live here; the menu/wiring lives in
 `scripts/06_global_grin_health.sh`. Options A (network stats), B (GrinScan),
@@ -1871,3 +1876,127 @@ not the rule.
 **Same shape, still open elsewhere:** `grinscan_install` in `scripts/lib/06b_grinscan.sh`
 deploys with `cp -r` and ends at `daemon-reload` with no restart, exactly as this did;
 `grinscan_update` restarts. Not touched here — it is a separate product's lifecycle.
+
+## Option D addendum — the crawl surface (2026-09-10)
+
+Six tools had shipped since 2026-09-05 and nobody had asked what a search engine
+made of them. The answer turned out to be *mostly good, with three holes* — and one
+of the holes was large enough to affect how the whole domain is assessed.
+
+### What was already right
+
+Every tool page carried a unique keyword-led `<title>`, a long specific
+`description`, OG + Twitter tags, a self-canonical and an `<h1>` matching its
+title, all injected server-side by `injectGlobals()`. Discovery was never the
+problem either: each tool is linked from `/` three separate times — the header
+Tools dropdown, the prose intro, and the tool cards — all plain `<a href>` in
+server-rendered HTML. **A sitemap was never going to make this site get found
+faster.** That is worth writing down, because it is the reason the sitemap here
+is justified on a different basis (below) rather than on the usual one.
+
+GA4 was already universal rather than homepage-only: every page loads
+`/js/analytics.js`, which is a *route*, not a file — it generates the gtag
+snippet from `config.ga4_measurement_id` and returns a comment when that is
+blank. That indirection is why coverage is uniform and why disabling analytics
+is one config key. The 404 was the only page missing the tag; it has it now,
+which is worth having, since a mistyped block hash landing on 404 is one of the
+more useful things this site can measure.
+
+### Hole 1 — the homepage had no `<h1>`
+
+The most important page on the site opened straight into `<h2>Tools</h2>`. The
+header brand is a `<span>` inside a link — it repeats on every page, so it is
+navigation, not a heading. Fixed with `.tx-index-h1`, deliberately restrained
+(18px, one line) because this page's job is the stats and the block table; the
+descriptive half drops to its own line under 560px and sheds its em-dash via
+`::before`, so the dash lives in CSS rather than in the markup.
+
+Three *more* H1 bugs fell out of the test written to cover that one:
+`block.html`, `kernel.html` and `output.html` each carried **two** — one in the
+loading skeleton and one in the real content. Only ever one is visible
+(`#block-content` starts `display:none`), but both are in the DOM. The skeletons
+are placeholders, not headings, so they became `<p class="tx-block-h">` sharing
+the same style rule.
+
+### Hole 2 — `/block/:ref` was a crawl trap (the big one)
+
+Roughly four million heights, every one marked `index, follow`, every one
+carrying the **identical** title and description, none with a canonical, each
+rendering `Loading block…` until JS resolves. Mass near-duplicate thin content,
+competing for crawl budget with the seven pages that can actually rank. On a
+**pruned** node it is worse than duplicate: `get_block` fails below the pruning
+horizon, so most historical heights cannot render a body at all.
+
+Entity pages and the 404 are now `noindex` — and, deliberately, still **follow**.
+Three decisions are worth preserving:
+
+- **`noindex`, not `nofollow`.** The pool deep-links into `/block/<height>` from
+  outside. Those are real inbound links; `follow` lets them reach the rest of the
+  site through the header nav instead of dead-ending.
+- **`noindex`, not `Disallow: /block/` in robots.txt.** This is the trap. A
+  disallowed URL can still be indexed as a bare listing when something links to
+  it, and a crawler forbidden from fetching the page **can never read the
+  noindex**. Never block a path you want de-indexed. `test-seo.js` asserts the
+  absence of that Disallow, because adding it would look like a tightening.
+- Entity pages already carried **no canonical** (they are per-ref), which pairs
+  correctly with noindex and needed no change.
+
+### Hole 3 — no structured data on the tools
+
+Only `/` had JSON-LD (a `WebSite` block). The six tools are now each a
+`WebApplication` — which is what they are: free, browser-run utilities with one
+job apiece — via a `TOOL_SCHEMA` map keyed by page key. Pages absent from that
+map get none, which is the right answer for the noindex shells.
+
+The markup obeys two rules carried over from the pool's audit §J15-3, both
+asserted by tests: it may assert **no identity the operator does not own** (no
+`sameAs`, no `SearchAction` pointing at an endpoint nobody serves, no invented
+`aggregateRating`), and `url` is emitted **only when `base_url` is configured** —
+it is the one field here that can name the wrong host.
+
+### The sitemap, and why it is justified on reporting rather than discovery
+
+`/sitemap.xml` and `/robots.txt` are both **generated routes, never static
+files**, sitting above `express.static` (below it, the plain file answers first
+and the annotation never ships). Neither could be checked in: a committed
+`sitemap.xml` would be either invalid (relative URLs) or an advertisement for the
+toolkit author's domain from an operator's box. With no `base_url` the sitemap
+**404s** and robots.txt simply omits its `Sitemap:` line — there is no honest
+absolute URL to publish, so it publishes none.
+
+Its value is Search Console per-URL coverage reporting (*"Crawled – currently not
+indexed"* vs *"Discovered"*), not discovery. It lists only the seven stable
+pages; `block`/`kernel`/`output` are absent, because a sitemap is a list of pages
+you want indexed, not an inventory of a chain.
+
+`robots.txt` keeps its **rules** in `public/robots.txt` — one source of truth for
+what is disallowed — and the route appends only the line that needs the host.
+`lastmod` is read from each shell's own **mtime**, never a hand-kept date: a date
+typed into the source goes stale the first time someone edits a page and forgets
+it, and a sitemap that misreports freshness is worse than one omitting the field.
+An unreadable shell omits `lastmod` rather than inventing one.
+
+**Deploy note:** both are routes in `server.js`, so a redeploy that does not
+restart the service serves the old router — exactly the failure documented in the
+*deploy is the copy AND the restart* addendum above. nginx needs no new
+`location`: it proxies **all** paths to the app.
+
+### `test-seo.js` (22 assertions)
+
+A new suite, because every claim in this section is **invisible in a browser**.
+A wrong robots directive, a sitemap naming the wrong host, a JSON-LD block
+asserting an account nobody owns — none change a pixel, none throw, and the
+feedback loop is a Search Console graph weeks later.
+
+It **executes** the sitemap and robots handlers rather than pattern-matching them,
+lifting both out of the server source and running them against a stub `app`, with
+and without a configured `base_url`. No socket, no express — 06d still has exactly
+one npm dependency. The H1 count assertion deliberately collects **all** offenders
+before failing: a per-file assert would have reported `block.html` alone and
+turned one bug into three rounds of fixing.
+
+### Still open
+
+The `/mining` description was updated to mention payback, which the page has
+computed since earlier the same day — a reminder that `_pageMeta` is prose about
+a feature set and goes stale silently when the feature set moves.

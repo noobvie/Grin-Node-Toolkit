@@ -192,7 +192,13 @@ TMUX_SESSION=""
 
 # _grin_session_name() now lives in lib/grin_node_control.sh (sourced above).
 
-log() { echo "[$(date '+%Y-%m-%d %H:%M:%S UTC' -u)] $1" | tee -a "$LOG_FILE"; }
+# LOG_FILE is empty until the build resolver or the remote-copy runner sets it,
+# and the interactive mirror menus (rc_log -> log) run before either does. A
+# bare tee on "" prints "tee: '': No such file or directory" beside every line.
+log() {
+    local line="[$(date -u '+%Y-%m-%d %H:%M:%S UTC')] $1"
+    if [ -n "${LOG_FILE:-}" ]; then echo "$line" | tee -a "$LOG_FILE"; else echo "$line"; fi
+}
 error_exit() { log "ERROR: $1"; exit 1; }
 get_utc_timestamp() { date -u '+%Y-%m-%d %H:%M:%S UTC'; }
 

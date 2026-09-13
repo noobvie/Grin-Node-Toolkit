@@ -736,7 +736,7 @@
                         <h2 class="panel-title"><span class="tag">P-08</span> Withdrawal history <span class="right"><span class="dim">every payout, kept forever · </span><span id="wd-count"></span></span></h2>
                         <div class="panel-body">
                             <p class="note">Your payout requests only — no donations or clawbacks. Unlike the ledgers above (row detail kept 60 days), this list goes back to your first payout. Export the full history as CSV for your records.</p>
-                            <p class="note" id="wd-proof-note">On-chain proofs are hidden by default. A payout's <b>kernel</b> identifies its transaction in the Grin chain forever, so publishing it beside an address would let anyone link your payouts to the chain. Enter your ownership proof at the top of this page and press <b>Reveal proofs</b> to load the explorer links for your own payouts.</p>
+                            <p class="note" id="wd-proof-note">Proofs are hidden by default. A payout's <b>kernel</b> identifies its transaction in the Grin chain forever, so publishing it beside an address would let anyone link your payouts to the chain. Enter your ownership proof at the top of this page and press <b>Reveal proofs</b>: every mined payout gets an explorer link (<b>proof ↗</b>, the kernel — proves the transaction was mined), and every Tor payout also gets a <b>⬇ file</b> — the <b>signed payment proof</b>. That file carries your own wallet's signature over the amount, the kernel and the sender, so it proves to anyone, with no trust in this pool, that your wallet received exactly this payment. Compare the kernel with <code>grin-wallet txs</code> on your side, or check the file with <code>grin-wallet verify_proof</code>. Slatepack payouts carry no signed proof — you finalised those yourself, and their kernel is the evidence.</p>
                             <div class="pager-row" style="margin-bottom:10px;">
                                 <button class="btn sm" id="wd-reveal-proofs">Reveal proofs</button>
                                 <span class="msg" id="wd-proof-msg"></span>
@@ -810,6 +810,9 @@
         // accepts (audit §J11-2). Cleared on every lookup(), so switching to another address can
         // never show the previous address's proofs. Session-scoped: never persisted.
         let revealedProofs = {};
+        // withdrawal id -> grin-wallet PaymentProof object (signed by the miner's own wallet),
+        // same source, same gate, same lifecycle as revealedProofs.
+        let revealedPaymentProofs = {};
 
         function $id(id) { return document.getElementById(id); }
 
@@ -907,6 +910,7 @@
                 // Drop any revealed kernels — they belong to whichever address was looked up
                 // before this one (audit §J11-2).
                 revealedProofs = {};
+                revealedPaymentProofs = {};
                 const pmsg = $id('wd-proof-msg');
                 if (pmsg) { pmsg.textContent = ''; pmsg.className = 'msg'; }
                 loadChart();
@@ -1514,9 +1518,32 @@
                 // POST …/withdrawals/proofs into revealedProofs. `row.kernel_excess` is still
                 // read first so the demo fixture below keeps working unchanged.
                 const kernel = row.kernel_excess || revealedProofs[row.id];
+                const signed = revealedPaymentProofs[row.id];
                 const proof = document.createElement('td');
                 if (kernel && window.Explorer) {
                     proof.innerHTML = window.Explorer.link('kernel', kernel, 'proof ↗');
+                    // The signed proof: a real file the miner can hand to anyone. Built as a
+                    // Blob client-side from the object the gated route returned — no second
+                    // request, no URL that could land in a log, and the pool never serves a
+                    // file it did not sign for. Text-only DOM: the proof came from OUR API but
+                    // its fields are chain/wallet strings, so nothing is innerHTML'd.
+                    if (signed) {
+                        proof.appendChild(document.createTextNode(' · '));
+                        const dl = document.createElement('a');
+                        dl.href = '#';
+                        dl.className = 'xplink';
+                        dl.textContent = '⬇ file';
+                        dl.title = 'Download the signed payment proof (JSON) — your wallet\'s signature over amount + kernel + sender; verify with grin-wallet verify_proof';
+                        dl.addEventListener('click', (ev) => { ev.preventDefault(); downloadPaymentProof(row.id, signed); });
+                        proof.appendChild(dl);
+                    } else if (row.has_payment_proof) {
+                        proof.appendChild(document.createTextNode(' · '));
+                        const hint = document.createElement('span');
+                        hint.className = 'dim';
+                        hint.textContent = 'file';
+                        hint.title = 'A signed payment proof is on record — press "Reveal proofs" to download it';
+                        proof.appendChild(hint);
+                    }
                 } else if (row.has_kernel_proof) {
                     proof.className = 'dim';
                     proof.textContent = 'hidden';
@@ -1582,9 +1609,12 @@
                 const json = await r.json().catch(() => null);
                 if (r.ok && json && json.proofs) {
                     revealedProofs = json.proofs;
+                    revealedPaymentProofs = (json.payment_proofs && typeof json.payment_proofs === 'object') ? json.payment_proofs : {};
                     const n = json.count || 0;
+                    const ns = json.payment_proof_count || 0;
                     setMsg(msg, n
-                        ? n + (n === 1 ? ' proof' : ' proofs') + ' loaded — the Proof column now links to the chain explorer.'
+                        ? n + (n === 1 ? ' proof' : ' proofs') + ' loaded — the Proof column now links to the chain explorer' +
+                          (ns ? '; ' + ns + ' signed payment proof' + (ns === 1 ? '' : 's') + ' ready to download (⬇ file).' : '.')
                         : 'No on-chain proofs on record yet. They appear once a payout transaction is mined.', true);
                     loadWithdrawals();   // repaint the current page with the kernels merged in
                 } else {
@@ -1594,6 +1624,26 @@
                 setMsg(msg, 'Could not load proofs: ' + e.message, false);
             }
             btn.disabled = false;
+        }
+
+        // Save one signed proof as the exact JSON grin-wallet's export_proof would write, so
+        // `grin-wallet verify_proof payout-<id>-proof.json` and the explorer's /proof page both
+        // accept it unchanged. Object URL is revoked after the click — nothing lingers.
+        function downloadPaymentProof(withdrawalId, proof) {
+            try {
+                const blob = new Blob([JSON.stringify(proof, null, 2) + '\n'], { type: 'application/json' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'payout-' + String(withdrawalId).replace(/[^0-9]/g, '') + '-proof.json';
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                setTimeout(() => URL.revokeObjectURL(url), 1000);
+            } catch (e) {
+                const msg = $id('wd-proof-msg');
+                if (msg) setMsg(msg, 'Could not build the proof file: ' + e.message, false);
+            }
         }
 
         // ── Tor reachability hint ──────────────────────────────────────────

@@ -373,6 +373,208 @@ console.log('\n[1] §J4-10 — the matcher has three outcomes, not two');
       String(rowOf(id).slate_id));
   }
 
+  // ═══ 5. The LAST rung asks the wallet before it refunds ═════════════════════
+  // sendWithdrawal's guard runs BEFORE each re-attempt, so it covers attempts 0..N-1 and never
+  // attempt N: the final send that reported failure used to go straight to markFailed → refund.
+  // A send that reports failure may still have posted (SIGKILLed after the broadcast), and on
+  // the final rung a miner can arrange exactly that on purpose — the ladder is deterministic and
+  // the retry count is on their account page. These drive the REAL path: a row on its last rung,
+  // a send that "fails" but leaves a TxSent in the wallet log, then whatever markFailed decides.
+  console.log('\n[5] last-rung guard — the final failed attempt is checked before the refund');
+  const LAST = new WithdrawalScheduler(config).retryDelays.length;
+  // A wallet whose log the send can append to: the pre-send guard sees it empty (→ absent →
+  // send), the send "fails" but leaves `landed` behind, and markFailed reads it back.
+  function lastRung(landed, { walletReadable = true } = {}) {
+    const log = [];
+    const s = newScheduler(log, { walletReadable });
+    s.walletTor = {
+      async sendToTorAddress(address, amount) {
+        timeline.push('send'); sends.push({ address, amount });
+        if (landed) log.push(landed);
+        return { success: false, error: 'killed at wallet_send_timeout_ms' };
+      },
+      async checkTorReachable() { return { online: true }; },
+    };
+    return s;
+  }
+  {
+    sends = []; reset();
+    const id = seedWithdrawal({ status: 'tor_checking', retries: LAST, slate: null });
+    await lastRung(tx({ slate: 'LAST-CONF', confirmed: true })).sendWithdrawal(id);
+    const r = rowOf(id);
+    ok('final attempt "failed" but is CONFIRMED on chain → the payout is settled, not refunded',
+      r.status === 'confirmed', r.status);
+    ok('  …the miner keeps neither the balance nor a lock (paid once)',
+      acct().balance === 0 && acct().balance_locked === 0, JSON.stringify(acct()));
+    ok('  …and the landed slate is attached as its proof', r.slate_id === 'LAST-CONF', String(r.slate_id));
+    ok('  …and the send really was attempted first (this is the real path, not a stub of it)',
+      sends.length === 1, `${sends.length} sends`);
+  }
+  {
+    sends = []; reset();
+    const id = seedWithdrawal({ status: 'tor_checking', retries: LAST, slate: null });
+    await lastRung(tx({ slate: 'LAST-UNCONF', confirmed: false })).sendWithdrawal(id);
+    const r = rowOf(id);
+    ok('final attempt "failed" but left an UNCONFIRMED send → parked, not refunded',
+      r.status === 'retry_scheduled', r.status);
+    ok('  …the balance stays LOCKED', acct().balance_locked > 0 && acct().balance === 0, JSON.stringify(acct()));
+    ok('  …the deferral does not push retry_count past the ladder', r.retry_count === LAST, String(r.retry_count));
+    ok('  …and the event log says why', !!db.prepare(
+      "SELECT 1 FROM withdrawal_events WHERE withdrawal_id = ? AND note LIKE 'deferred:%'").get(id));
+  }
+  {
+    sends = []; reset();
+    const id = seedWithdrawal({ status: 'tor_checking', retries: LAST, slate: null });
+    await lastRung(null).sendWithdrawal(id);
+    const r = rowOf(id);
+    ok('control — final attempt failed and the wallet holds NO send → refunded as before',
+      r.status === 'tor_failed', r.status);
+    ok('  …balance back, lock released', acct().balance === 100 && acct().balance_locked === 0, JSON.stringify(acct()));
+    ok('  …with the reversal in the ledger', !!db.prepare(
+      "SELECT 1 FROM balance_log WHERE reference_id = ? AND event_type = 'reversal'").get(id));
+  }
+  {
+    // The asymmetry with sendWithdrawal's "proceed loudly": there proceeding moves live money
+    // through a brief wallet outage; here proceeding can only refund, and a refund on top of a
+    // landed send is unrecoverable. Unreadable must therefore park, never refund.
+    sends = []; reset();
+    const id = seedWithdrawal({ status: 'tor_checking', retries: LAST, slate: null });
+    await lastRung(null, { walletReadable: false }).sendWithdrawal(id);
+    const r = rowOf(id);
+    ok('wallet UNREADABLE at the last rung → parked, NOT refunded', r.status === 'retry_scheduled', r.status);
+    ok('  …the balance stays LOCKED', acct().balance_locked > 0 && acct().balance === 0, JSON.stringify(acct()));
+    ok('  …and the event note says the log could not be read, not that a send was found', !!db.prepare(
+      "SELECT 1 FROM withdrawal_events WHERE withdrawal_id = ? AND note LIKE 'deferred:%could not be read%'").get(id));
+
+    // The deferral is a standing statement that the outcome is unknown. Fifteen minutes later
+    // the scheduler picks the row up again through sendWithdrawal — and if the wallet is STILL
+    // unreadable, the ordinary "proceed loudly" branch would send blind, paying twice if the
+    // final attempt had landed. A deferred row must be re-parked instead, on every rung.
+    sends = [];
+    db.prepare("UPDATE withdrawals SET status = 'tor_checking' WHERE id = ?").run(id);
+    await newScheduler([], { walletReadable: false }).sendWithdrawal(id);
+    const r2 = rowOf(id);
+    ok('  …picked up again with the wallet STILL unreadable → re-parked, not sent blind',
+      r2.status === 'retry_scheduled' && sends.length === 0, `${r2.status}, ${sends.length} sends`);
+    ok('  …the balance is still LOCKED', acct().balance_locked > 0 && acct().balance === 0, JSON.stringify(acct()));
+    ok('  …and a second deferral is on record', db.prepare(
+      "SELECT COUNT(*) AS c FROM withdrawal_events WHERE withdrawal_id = ? AND note LIKE 'deferred:%'").get(id).c === 2);
+  }
+  {
+    // Same rule reached from an ORDINARY rung: a row deferred because an unconfirmed send was
+    // seen must not be sent blind when the wallet later goes dark — the unconfirmed send is
+    // still the last thing anyone knew about it.
+    sends = []; reset();
+    const id = seedWithdrawal({ status: 'tor_checking', retries: 1, slate: 'DEF-THEN-DARK' });
+    await newScheduler([tx({ slate: 'DEF-THEN-DARK', confirmed: false })]).sendWithdrawal(id);
+    ok('ordinary rung: unconfirmed send seen → deferred', rowOf(id).status === 'retry_scheduled' && sends.length === 0);
+    db.prepare("UPDATE withdrawals SET status = 'tor_checking' WHERE id = ?").run(id);
+    await newScheduler([], { walletReadable: false }).sendWithdrawal(id);
+    ok('  …then the wallet goes dark → re-parked, NOT sent blind',
+      rowOf(id).status === 'retry_scheduled' && sends.length === 0, `${rowOf(id).status}, ${sends.length} sends`);
+    // Control: a row with NO deferral behind it keeps the documented proceed-loudly behaviour.
+    sends = []; reset();
+    const id2 = seedWithdrawal({ status: 'tor_checking', retries: 1, slate: null });
+    await newScheduler([], { walletReadable: false }).sendWithdrawal(id2);
+    ok('  control — never deferred + wallet unreadable → proceeds loudly (unchanged §J4 policy)',
+      sends.length === 1, `${sends.length} sends`);
+  }
+
+  // ═══ 6. Signed payment proofs (§H6) — stored only when they are provably OURS ═══
+  // The proof is served to the miner as "your wallet signed for this payment", so a wrong one
+  // is worse than none: it would hand a miner a stranger's transaction as their receipt. The
+  // guard is the kernel: the excess the wallet signed over must equal the kernel the backfill
+  // attached to the row, or nothing is stored. The rest is lifecycle — '' is terminal, NULL is
+  // "ask again", and non-Tor rails (which never requested a proof) are settled to '' up front.
+  console.log('\n[6] §H6 signed payment proofs — fetch, store, refuse');
+  const PROOF = {
+    amount: '99960000000', excess: '08' + 'ab'.repeat(32),
+    recipient_address: ADDR, recipient_sig: 'aa'.repeat(64),
+    sender_address: 'tgrin1' + 'q'.repeat(58), sender_sig: 'bb'.repeat(64)
+  };
+  function proofScheduler(reply) {
+    const s = newScheduler([]);
+    s.wallet.retrievePaymentProof = async (slateId) => {
+      timeline.push('proof:' + slateId);
+      if (reply instanceof Error) throw reply;
+      return reply;
+    };
+    return s;
+  }
+  const seedConfirmed = (over = {}) => {
+    const id = seedWithdrawal({ status: 'confirmed', slate: 'P-' + (++seq), priorAttempt: false, retries: 0 });
+    db.prepare('UPDATE withdrawals SET method = ?, kernel_excess = ?, payment_proof = ? WHERE id = ?')
+      .run(over.method || 'tor', 'kernel_excess' in over ? over.kernel_excess : PROOF.excess,
+           'payment_proof' in over ? over.payment_proof : null, id);
+    return id;
+  };
+  {
+    reset(); timeline = [];
+    const id = seedConfirmed();
+    const r = await proofScheduler(PROOF).fetchAndStorePaymentProof(id);
+    ok('a confirmed Tor row whose proof matches its kernel → stored',
+      r.ok && !r.cached && rowOf(id).payment_proof === JSON.stringify(PROOF), JSON.stringify(r));
+    const again = await proofScheduler(PROOF).fetchAndStorePaymentProof(id);
+    ok('  …and a second ask is served from the row, not the wallet',
+      again.ok && again.cached && timeline.filter((t) => t.startsWith('proof:')).length === 1, timeline.join(','));
+  }
+  {
+    reset();
+    const id = seedConfirmed({ kernel_excess: '09' + 'cd'.repeat(32) });
+    const r = await proofScheduler(PROOF).fetchAndStorePaymentProof(id);
+    ok('a proof whose excess differs from the row\'s kernel → REFUSED, nothing stored',
+      !r.ok && r.reason === 'kernel_mismatch' && rowOf(id).payment_proof === null, JSON.stringify(r));
+  }
+  {
+    reset(); timeline = [];
+    const id = seedConfirmed({ method: 'slatepack' });
+    const r = await proofScheduler(PROOF).fetchAndStorePaymentProof(id);
+    ok('a slatepack row is settled to \'\' (none) without asking the wallet',
+      !r.ok && r.reason === 'none' && rowOf(id).payment_proof === '' && !timeline.some((t) => t.startsWith('proof:')),
+      JSON.stringify(r));
+  }
+  {
+    reset(); timeline = [];
+    const id = seedConfirmed({ kernel_excess: null });
+    const r = await proofScheduler(PROOF).fetchAndStorePaymentProof(id);
+    ok('a row with no kernel yet is not asked — the wallet refuses proofs for unconfirmed txs',
+      !r.ok && r.reason === 'not_confirmed' && !timeline.some((t) => t.startsWith('proof:')), JSON.stringify(r));
+  }
+  {
+    reset();
+    const id = seedConfirmed();
+    const r = await proofScheduler(new Error('Payment proof not present in transaction')).fetchAndStorePaymentProof(id);
+    ok('the wallet\'s definitive "no proof" error → \'\' so the backfill stops asking',
+      !r.ok && r.reason === 'none' && rowOf(id).payment_proof === '', JSON.stringify(r));
+  }
+  {
+    reset();
+    const id = seedConfirmed();
+    const r = await proofScheduler(new Error('HTTP 401: Unauthorized')).fetchAndStorePaymentProof(id);
+    ok('a transient wallet error leaves NULL (retry later), never \'\'',
+      !r.ok && r.reason === 'error' && rowOf(id).payment_proof === null, JSON.stringify(r));
+  }
+  {
+    reset();
+    const id = seedConfirmed({ payment_proof: '' });
+    const r = await proofScheduler(PROOF).fetchAndStorePaymentProof(id);
+    ok('\'\' is terminal — a settled "none" row is never re-asked', !r.ok && r.reason === 'none' && rowOf(id).payment_proof === '');
+  }
+  {
+    // The backfill's selection: only confirmed Tor rows with a kernel and no answer yet.
+    reset(); timeline = [];
+    const want = seedConfirmed();
+    seedConfirmed({ method: 'slatepack' });       // wrong rail
+    seedConfirmed({ kernel_excess: null });        // not yet mined
+    seedConfirmed({ payment_proof: '' });          // already settled: none
+    const s = proofScheduler(PROOF);
+    await s.backfillPaymentProofs();
+    const asked = timeline.filter((t) => t.startsWith('proof:'));
+    ok('backfill asks the wallet for exactly the one eligible row',
+      asked.length === 1 && asked[0] === 'proof:' + rowOf(want).slate_id && rowOf(want).payment_proof === JSON.stringify(PROOF),
+      asked.join(','));
+  }
+
   console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed\n`);
   cleanup();
   process.exit(fail === 0 ? 0 : 1);

@@ -359,7 +359,11 @@ function migrateWithdrawals() {
       // Flat withdrawal fee charged to the miner, frozen at request time (see CREATE TABLE).
       // Legacy rows default to 0 — those payouts predate the fee and sent the full amount, so
       // 0 is the historically CORRECT value, not a placeholder.
-      fee_charged: 'REAL NOT NULL DEFAULT 0.0'
+      fee_charged: 'REAL NOT NULL DEFAULT 0.0',
+      // Signed payment proof JSON (see CREATE TABLE). Backfilled by
+      // withdrawal-scheduler.backfillPaymentProofs(); older confirmed Tor rows get theirs too,
+      // since the wallet keeps the proof for as long as it keeps the transaction.
+      payment_proof: 'TEXT DEFAULT NULL'
     };
     for (const [name, def] of Object.entries(additions)) {
       if (!have.has(name)) {
@@ -624,7 +628,12 @@ function createSchema() {
       cancel_reason TEXT DEFAULT NULL,
       created_at INTEGER NOT NULL DEFAULT (unixepoch()),
       confirmed_at INTEGER DEFAULT NULL,
-      kernel_excess TEXT DEFAULT NULL
+      kernel_excess TEXT DEFAULT NULL,
+      -- grin-wallet PaymentProof JSON (amount, excess, recipient_address, recipient_sig,
+      -- sender_address, sender_sig), fetched from the Owner API once the payout is confirmed.
+      -- NULL = not fetched yet; '' = the wallet holds no proof for this tx (the slatepack/
+      -- nostr rail never requests one), so the backfill stops asking.
+      payment_proof TEXT DEFAULT NULL
     )`,
 
     `CREATE INDEX IF NOT EXISTS idx_withdrawal_address ON withdrawals(grin_address, status)`,

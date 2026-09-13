@@ -1287,7 +1287,7 @@ function setupRoutes() {
     'GET /api/pool/unclaimed': { desc: 'Lost-and-found: masked addresses of long-dormant balances with a per-address disposal countdown, plus the historical disposition ledger (sweeps into the prize pool).', shape: 'raw', params: 'limit (≤200, default 100)' },
     'GET /api/pool/donors': { desc: 'Donor wall: per-address lifetime donations to the prize pool, first/last donation date, current donate-tag %. Top 100. Addresses are MASKED.', shape: 'raw' },
     'GET /api/pool/prize-pool': { desc: 'Prize-pool transparency report: current balance + LIFETIME in/out totals by source (fee-cut, donations, operator top-ups, abandoned balances, orphan clawbacks). Per-event rows are deliberately withheld — their timestamps would expose the cadence of discretionary operator top-ups.', shape: 'raw' },
-    'GET /api/pool/topology': { desc: 'Network map: hub → gateways → miners aggregated BY COUNTRY. Country-only geolocation; no per-miner coordinate is ever resolved or stored, and countries under the k-anonymity floor merge into one unnamed bucket.', shape: 'raw', gated: 'the operator publishes the network map (off by default → 404)' },
+    'GET /api/pool/topology': { desc: 'Network map: hub → gateways → miners aggregated BY COUNTRY. Country-only geolocation; no per-miner coordinate is ever resolved or stored, and countries under the k-anonymity floor merge into one unnamed bucket.', shape: 'raw', gated: 'the operator publishes the network map (on by default; 404 while switched off in admin → Access)' },
 
     // ── Stratum (live session aggregates) ─────────────────────────────────────
     'GET /api/stratum/stats': { desc: 'Live stratum server state: connection counts and per-session share tallies. Session addresses are truncated so the live list cannot be scraped to enumerate miners.', shape: 'raw' },
@@ -1296,7 +1296,7 @@ function setupRoutes() {
     'GET /api/stratum/top-avg-hashrate': { desc: 'Top miners by AVERAGE hashrate over a multi-day window (sustained contribution). Backed by hashrate_history, so a 30-day window is meaningful. Addresses are MASKED.', shape: 'raw', params: 'days (≤90, default 30) · limit (≤1000, default 500)' },
 
     // ── Network ───────────────────────────────────────────────────────────────
-    'GET /api/network/peers': { desc: 'Grin P2P peers this node has seen, aggregated by country over a rolling window (+ mainnet/testnet split). Country-only, no IPs; thin countries merge into one unnamed bucket.', shape: 'raw', params: 'window days (1–90, default 30)', gated: 'the operator publishes the network map (off by default → 404)' },
+    'GET /api/network/peers': { desc: 'Grin P2P peers this node has seen, aggregated by country over a rolling window (+ mainnet/testnet split). Country-only, no IPs; thin countries merge into one unnamed bucket.', shape: 'raw', params: 'window days (1–90, default 30)', gated: 'the operator publishes the network map (on by default; 404 while switched off in admin → Access)' },
 
     // ── Account (address-as-identity: the address IS the credential to READ) ──
     'GET /api/account/:addr': { desc: 'Account summary: balance, locked, lifetime paid, pending payout, share/hashrate snapshot, active donation %, and when the ownership evidence on record last changed. 404 if the address has never mined here OR is not a well-formed Grin address.', shape: 'raw' },
@@ -1305,8 +1305,8 @@ function setupRoutes() {
     'GET /api/account/:addr/hashrate/history': { desc: 'Account hashrate time-series, downsampled for charting.', shape: 'raw', params: 'hours (1–720, default 24)' },
     'GET /api/account/:addr/earnings': { desc: 'Credited earnings per period (1h/24h/7d/30d) + 30d in/out totals. Payout reversals count as money-in but never as earnings.', shape: 'raw' },
     'GET /api/account/:addr/balance/log': { desc: 'Address ledger. Raw rows prune after ~60 days (the durable record is the withdrawal history below). format=csv streams the filtered window as a download on a tighter rate limit.', shape: 'raw · csv', params: 'direction=in|out · days (≤3650, default all) · limit (≤500, default 50) · offset · format=csv' },
-    'GET /api/account/:addr/withdrawals': { desc: 'Payout history for an address — kept forever, so this is the durable record for accounting. Payouts only: no donations or orphan clawbacks. format=csv streams all-time on a tighter rate limit. The on-chain kernel is NOT returned here — rows carry has_kernel_proof (boolean) and the kernels themselves need an ownership proof; see POST /api/account/:addr/withdrawals/proofs.', shape: 'raw · csv', params: 'limit (≤200, default 20) · offset · format=csv' },
-    'POST /api/account/:addr/withdrawals/proofs': { desc: 'On-chain payment proofs (kernel excess) for your own payouts. Returns { proofs: { <withdrawal id>: <kernel> } } for every confirmed payout that has one. Ownership-gated on purpose: publishing an address next to its kernels would be a public address-to-chain index on a privacy coin, so this is the one account field that costs a proof. 403 = proof failed, 404 = no such account.', shape: 'raw', auth: 'ownership proof', rate: 'withdraw', body: OWNER_PROOF_BODY },
+    'GET /api/account/:addr/withdrawals': { desc: 'Payout history for an address — kept forever, so this is the durable record for accounting. Payouts only: no donations or orphan clawbacks. format=csv streams all-time on a tighter rate limit. The on-chain kernel is NOT returned here — rows carry has_kernel_proof and has_payment_proof (booleans) and the proofs themselves need an ownership proof; see POST /api/account/:addr/withdrawals/proofs.', shape: 'raw · csv', params: 'limit (≤200, default 20) · offset · format=csv' },
+    'POST /api/account/:addr/withdrawals/proofs': { desc: 'Payment proofs for your own payouts, two kinds in one call. proofs: { <withdrawal id>: <kernel excess> } - the on-chain kernel of every confirmed payout (proves the tx was mined). payment_proofs: { <withdrawal id>: <PaymentProof> } - the signed proof grin-wallet requested on Tor payouts: { amount (nanogrin), excess, recipient_address, recipient_sig, sender_address, sender_sig }, the same JSON `grin-wallet export_proof` writes; save one as a file and `grin-wallet verify_proof` it. recipient_sig is YOUR wallet\'s signature, so it proves receipt to anyone. Slatepack/nostr payouts carry no signed proof (kernel only). Newest 500 signed proofs. Ownership-gated on purpose: publishing an address next to its kernels would be a public address-to-chain index on a privacy coin. 403 = proof failed, 404 = no such account.', shape: 'raw', auth: 'ownership proof', rate: 'withdraw', body: OWNER_PROOF_BODY },
     'GET /api/account/:addr/tor-check': { desc: 'Is this miner\'s wallet reachable over Tor right now? Read-only probe behind the payout UI hint. online is TRI-STATE: true/false when known, null = "decided at payout time". 404 if the address has never mined here — the probe is not offered for arbitrary Grin addresses. Answers are cached 60s per address; the payout gate always re-probes fresh.', shape: 'raw', rate: 'torcheck' },
     'POST /api/account/:addr/withdraw': { desc: 'Request a payout on one of three rails. 403 = ownership proof failed; 409 (tor) = wallet unreachable, retry or switch to slatepack; 409 (nostr) = destination unregistered, still in cooldown, or its npub changed.', shape: 'flat', auth: 'ownership proof', rate: 'withdraw', body: `method=tor|slatepack|nostr (default tor) · amount · ${OWNER_PROOF_BODY}` },
     'POST /api/account/:addr/withdraw/:id/finalize': { desc: 'Complete a slatepack payout by posting back the response slatepack your wallet produced with `receive`. The pool finalizes and broadcasts.', shape: 'raw', auth: 'ownership proof', rate: 'withdraw', body: `response_slatepack · ${OWNER_PROOF_BODY}` },
@@ -2564,15 +2564,52 @@ function setupRoutes() {
       const status = req.query.status || null;
       const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 100, 1), 500);
 
-      if (status) {
-        res.json(db.prepare(`
-          SELECT * FROM withdrawals WHERE status = ? ORDER BY created_at DESC LIMIT ?
-        `).all(status, limit));
-      } else {
-        res.json(db.prepare(`
-          SELECT * FROM withdrawals ORDER BY created_at DESC LIMIT ?
-        `).all(limit));
+      const rows = status
+        ? db.prepare('SELECT * FROM withdrawals WHERE status = ? ORDER BY created_at DESC LIMIT ?').all(status, limit)
+        : db.prepare('SELECT * FROM withdrawals ORDER BY created_at DESC LIMIT ?').all(limit);
+      // The signed proof is a ~600-byte blob per row; the list carries a flag and the per-row
+      // route below serves the document.
+      res.json(rows.map((r) => {
+        const { payment_proof, ...rest } = r;
+        return { ...rest, has_payment_proof: !!payment_proof };
+      }));
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // The signed payment proof for ONE payout — the document that settles "I never received it"
+  // in front of a third party (the recipient's own key signed for this amount at this kernel;
+  // see withdrawal-scheduler.fetchAndStorePaymentProof). Read-only and secureAdmin: it moves no
+  // money, and the list above already shows this admin the address, slate and kernel. The id
+  // is the only input and the slate it resolves to comes from OUR row, never the request, so
+  // this cannot be used to look up arbitrary transactions in the wallet. If the backfill has
+  // not stored it yet the route asks the wallet once (one local tx-log read) — that is the
+  // operator's "fetch it now" for a fresh dispute.
+  app.get('/api/admin/withdrawals/:id/payment-proof', secureAdmin, async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'bad withdrawal id' });
+      const w = db.prepare(
+        'SELECT id, grin_address, amount, fee_charged, method, status, slate_id, kernel_excess, confirmed_at FROM withdrawals WHERE id = ?'
+      ).get(id);
+      if (!w) return res.status(404).json({ error: 'withdrawal not found' });
+      if (!withdrawalScheduler) return res.status(503).json({ error: 'withdrawal scheduler not running' });
+      const r = await withdrawalScheduler.fetchAndStorePaymentProof(id);
+      if (!r.ok) {
+        const why = {
+          none: 'this payout carries no signed proof (only the Tor rail requests one) - the kernel is its evidence',
+          not_confirmed: 'proof is only available once the payout is confirmed and its kernel is on record',
+          owner_api_unavailable: 'the wallet Owner API is not configured on this pool',
+          kernel_mismatch: 'the wallet proof does not match the kernel on this row - check the slate attribution before relying on either',
+          malformed: 'the wallet returned an unexpected proof shape',
+          error: r.error || 'the wallet could not be read'
+        }[r.reason] || r.reason;
+        return res.status(r.reason === 'error' || r.reason === 'owner_api_unavailable' ? 503 : 409)
+          .json({ error: why, reason: r.reason, withdrawal: w });
       }
+      res.json({ withdrawal: w, proof: r.proof, cached: !!r.cached,
+                 verify: 'grin-wallet verify_proof <file> - or the chain explorer /proof page' });
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
@@ -4020,13 +4057,17 @@ function setupRoutes() {
       // `kernel_excess` is NOT in this response (audit §J11-2) — `has_kernel_proof` replaces it,
       // so the account page can render the Proof column's affordance without the value. The
       // value itself needs an ownership proof; see the route directly below.
+      // Same treatment for the signed payment proof: it names the miner's address AND the
+      // kernel in one signed document, so it is at least as linking as the kernel. Rows carry
+      // has_payment_proof only; the proof itself comes from the ownership-gated route below.
       const rows = db.prepare(
-        `SELECT id, amount, fee, method, status, created_at, confirmed_at, kernel_excess
+        `SELECT id, amount, fee, method, status, created_at, confirmed_at, kernel_excess, payment_proof
          FROM withdrawals WHERE grin_address = ?
          ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?`
       ).all(addr, limit, offset).map((r) => {
         const { kernel_excess, ...rest } = r;
-        return { ...rest, has_kernel_proof: !!kernel_excess };
+        const { payment_proof, ...pub } = rest;
+        return { ...pub, has_kernel_proof: !!kernel_excess, has_payment_proof: !!payment_proof };
       });
       res.json({ grin_address: addr, total, count: rows.length, withdrawals: rows });
     } catch (err) {
@@ -4075,7 +4116,21 @@ function setupRoutes() {
       ).all(addr);
       const proofs = {};
       for (const r of rows) proofs[r.id] = r.kernel_excess;
-      res.json({ grin_address: addr, count: rows.length, proofs });
+
+      // Signed payment proofs, behind the same single proof so a miner reveals everything in
+      // one press. Served from the DB only — this route never touches the wallet, so it cannot
+      // be turned into a wallet-load lever no matter how many payouts an address has. Bounded to
+      // the newest 500 (each is ~600 bytes); older ones are still on the operator's side.
+      const payment_proofs = {};
+      const withProof = db.prepare(
+        `SELECT id, payment_proof FROM withdrawals
+         WHERE grin_address = ? AND payment_proof IS NOT NULL AND payment_proof != ''
+         ORDER BY id DESC LIMIT 500`
+      ).all(addr);
+      for (const r of withProof) {
+        try { payment_proofs[r.id] = JSON.parse(r.payment_proof); } catch (_) { /* skip a bad row, never fail the reveal */ }
+      }
+      res.json({ grin_address: addr, count: rows.length, proofs, payment_proof_count: withProof.length, payment_proofs });
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
@@ -4563,15 +4618,16 @@ function setupRoutes() {
     }
   });
 
-  // ─── Network-map exposure gate (access.network_map_public, OFF by default) ──────────────
+  // ─── Network-map exposure gate (access.network_map_public, ON by default since 2026-09-13) ──
   // Guards the two feeds behind /network-map.html. Neither has ever returned an IP — peer IPs
   // never leave the DB and no coordinate is ever resolved: an aggregate marker sits on its
   // country's exact centroid (geoip.countryCentroid) and the country itself is published beside
   // it, so there is nothing for a scattered point to hide — but
   // both publish a per-country breakdown of who mines here / who this node peers with, and on
   // a small pool a country with one entry names one person. Disabled → 404 (not 403: a 403
-  // confirms the feature exists and is merely switched off). network-map.js already treats a
-  // failed fetch as "no data" and renders its illustrative fallback, so the page degrades.
+  // confirms the feature exists and is merely switched off). network-map.js treats a failed
+  // fetch as "not published": bare globe, zeroed placards, a note — no sample data (removed
+  // 2026-09-13 after it was twice mistaken for the pool's real footprint).
   const networkMapPublic = () => {
     try {
       const a = poolSettings.getSection('access');
@@ -4585,6 +4641,9 @@ function setupRoutes() {
   // published totals still add up.
   const minBucket = () => {
     try {
+      // `|| 3` / `catch → 3` are NOT the default (that is 1, in PoolSettings.defaults): they
+      // are the conservative floor for a value that is missing or garbage, fail-closed like
+      // networkMapPublic() above. A readable default of 1 parses cleanly and never lands here.
       return Math.max(1, parseInt(poolSettings.getSection('access').network_map_min_bucket, 10) || 3);
     } catch (e) {
       return 3;
@@ -4845,7 +4904,7 @@ function setupRoutes() {
   // Aggregates network_peers (populated by the peer-snapshot collector — COUNTRY ONLY, no IPs)
   // over the last ?window days (default 30, max 90). Returns per-country counts (+ main/test
   // split) and a capped set of scattered-in-country twinkle points for the globe. Empty when geoip-lite
-  // isn't installed or the node has no peers yet (page then shows its illustrative fallback).
+  // isn't installed or the node has no peers yet (page then shows no twinkles and says so).
   app.get('/api/network/peers', rateLimiter.middleware('public'), (req, res) => {
     try {
       if (!networkMapPublic()) return res.status(404).json({ error: 'not_found' });
@@ -4904,6 +4963,11 @@ function setupRoutes() {
       res.json({
         window_days: days,
         countries, points,
+        // Whether the collector CAN produce sightings. snapshotNetworkPeers is a permanent
+        // no-op without geoip-lite, so an empty `countries` means "install the package" on
+        // one box and "wait 30 s" on another — network-map.js words its note from this flag
+        // rather than promising data that will never arrive.
+        geo_available: geoip.available(),
         // Totals span ALL peers (including the ones folded into "Other") — the floor hides
         // which country a thin peer is in, not that it exists.
         totals: {

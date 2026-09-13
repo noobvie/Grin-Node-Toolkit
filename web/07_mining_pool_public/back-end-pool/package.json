@@ -9,7 +9,7 @@
     "dev": "NODE_ENV=development node index.js",
     "nuke": "node scripts/nuke.js",
     "test": "npm run check-syntax && npm run test:unit",
-    "test:unit": "node scripts/test-proxy-v2.js && node scripts/test-stratum-guards.js && node scripts/test-money-path.js",
+    "test:unit": "node scripts/test-proxy-v2.js && node scripts/test-stratum-guards.js && node scripts/test-money-path.js && node scripts/test-payout-guard.js && node scripts/test-block-ledger.js && node scripts/test-admin-guards.js && node scripts/test-auth-hardening.js && node scripts/test-branding-sinks.js && node scripts/test-owner-gate.js && node scripts/test-cms-uploads.js && node scripts/test-public-leakage.js && node scripts/test-rate-limits.js && node scripts/test-admin-panel.js",
     "check-syntax": "node scripts/check-syntax.js"
   },
   "keywords": [

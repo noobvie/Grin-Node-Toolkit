@@ -63,8 +63,11 @@ const GOOD_HASH = 'ab'.repeat(32), NONCE = 12345;
 mine(H, GOOD_HASH, NONCE);
 
 db.prepare("INSERT INTO miner_accounts (grin_address, balance) VALUES ('grin1miner', 0)").run();
+// String(NONCE): blocks.nonce is TEXT and node:sqlite binds a JS number as a double, which
+// lands '12345.0' in the column. Production binds a string (blocks.js#creditBlock); fixtures
+// must too, or they are not testing the same row shape. Audit §J5-1.
 db.prepare(`INSERT INTO blocks (height, hash, nonce, reward, status, found_by, found_at)
-            VALUES (?, ?, ?, 60, 'confirmed', 'grin1miner', unixepoch())`).run(H, GOOD_HASH, NONCE);
+            VALUES (?, ?, ?, 60, 'confirmed', 'grin1miner', unixepoch())`).run(H, GOOD_HASH, String(NONCE));
 const blockId = db.prepare('SELECT id FROM blocks WHERE height = ?').get(H).id;
 db.prepare(`INSERT INTO shares (grin_address, worker_name, difficulty, block_height, share_hash)
             VALUES ('grin1miner','w1', 100, ?, 'h1')`).run(H);
@@ -77,17 +80,43 @@ db.prepare(`INSERT INTO shares (grin_address, worker_name, difficulty, block_hei
   ok('block left confirmed after refusal',
      db.prepare('SELECT status FROM blocks WHERE id=?').get(blockId).status === 'confirmed');
 
-  // 1b. Hash/nonce mismatch must block the payout.
+  // 1b. A different block at this height must block the payout. The comparator is HASH-first
+  // (lib/block-identity.js, audit §J5-3) — the nonce is only consulted when a hash is not
+  // available on both sides, because JSON.parse has already rounded the node's u64.
   const rd = new RewardDistributor(config, fakeNode);
   mine(H, 'cd'.repeat(32), NONCE);            // chain says a different block at this height
   const rBad = await rd.distributeRewards(blockId);
-  ok('rejects a block whose chain hash differs', rBad.success === false && /hash mismatch/i.test(rBad.error || ''), JSON.stringify(rBad));
+  ok('rejects a block whose chain hash differs',
+     rBad.success === false && /does not match the chain \(hash\)/i.test(rBad.error || ''), JSON.stringify(rBad));
   ok('nothing credited on mismatch',
      db.prepare("SELECT balance FROM miner_accounts WHERE grin_address='grin1miner'").get().balance === 0);
 
-  mine(H, GOOD_HASH, 999);                     // right hash, wrong nonce
+  // A matching hash settles it: the nonce is an input to the hash, so "same hash, different
+  // nonce" cannot occur on a real chain and must NOT be treated as a mismatch.
+  mine(H, GOOD_HASH, 999);
+  const rHashWins = await rd.distributeRewards(blockId);
+  ok('a matching hash is authoritative — a differing nonce does not veto it', rHashWins.success === true,
+     JSON.stringify(rHashWins));
+  // Undo it so the happy path below starts from the same state as before.
+  db.prepare("UPDATE blocks SET status='confirmed' WHERE id=?").run(blockId);
+  db.prepare("UPDATE miner_accounts SET balance=0 WHERE grin_address='grin1miner'").run();
+  db.prepare("DELETE FROM balance_log WHERE reference_id=?").run(H);
+  db.prepare("UPDATE miner_accounts SET balance=0 WHERE grin_address='pool_fee'").run();
+
+  // The nonce fallback still has teeth where it is the only comparator available: a stored
+  // hash that is not 64-hex forces block-identity.js onto the nonce leg.
+  db.prepare("UPDATE blocks SET hash='not-a-real-hash' WHERE id=?").run(blockId);
+  mine(H, GOOD_HASH, 999);
   const rNonce = await rd.distributeRewards(blockId);
-  ok('rejects a nonce mismatch', rNonce.success === false && /nonce mismatch/i.test(rNonce.error || ''), JSON.stringify(rNonce));
+  ok('falls back to the nonce when the hash is not comparable, and rejects a mismatch',
+     rNonce.success === false && /does not match the chain \(nonce\)/i.test(rNonce.error || ''), JSON.stringify(rNonce));
+
+  // And a block that can be compared by NEITHER must refuse, not credit (fail closed).
+  db.prepare("UPDATE blocks SET nonce='' WHERE id=?").run(blockId);
+  const rUnknown = await rd.distributeRewards(blockId);
+  ok('refuses to credit a block it cannot verify at all (fail closed)',
+     rUnknown.success === false && /could not be verified/i.test(rUnknown.error || ''), JSON.stringify(rUnknown));
+  db.prepare("UPDATE blocks SET hash=?, nonce=? WHERE id=?").run(GOOD_HASH, String(NONCE), blockId);
 
   // 1c. Happy path.
   mine(H, GOOD_HASH, NONCE);

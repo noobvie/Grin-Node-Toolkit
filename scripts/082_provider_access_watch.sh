@@ -689,7 +689,8 @@ hardening_pointers() {
     echo -e "     ${DIM}Keep the wallet seed / owner-API secret OFF the public VPS — node${RESET}"
     echo -e "     ${DIM}on the VPS, wallet elsewhere. Fits the toolkit's existing split.${RESET}"
     echo ""
-    echo -e "  ${DIM}Also run: Admin > SSH Key Hardening (085) for key-only root login.${RESET}"
+    echo -e "  ${DIM}Also run: Admin > Host Optimization & Hardening > SSH Key Hardening${RESET}"
+    echo -e "  ${DIM}for key-only root login.${RESET}"
     pause
 }
 

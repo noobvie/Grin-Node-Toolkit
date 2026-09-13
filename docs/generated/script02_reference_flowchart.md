@@ -1,6 +1,10 @@
 ╔══════════════════════════════════════════════════════════════════════════╗
 ║                  02_nginx_fileserver_manager.sh  —  ENTRY               ║
 ╚══════════════════════════════════════════════════════════════════════════╝
+
+> **Covers code as of:** 2026-03-12 · **Last verified:** never systematically verified
+> **Product code last changed:** 2026-08-22 — `scripts/02_nginx_fileserver_manager.sh`, `scripts/lib/02_lib_landing.sh`
+
                                     │
                     ┌───────────────▼───────────────┐
                     │   check_root()                 │

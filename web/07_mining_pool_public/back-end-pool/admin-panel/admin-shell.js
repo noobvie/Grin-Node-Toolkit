@@ -46,7 +46,6 @@
         { file: 'settings-payout.html',        title: 'Payout' },
         { file: 'settings-incentives.html',    title: 'Incentives' },
         { file: 'settings-access.html',        title: 'Access Control' },
-        { file: 'settings-alerts.html',        title: 'Alerts' },
         { file: 'settings-database.html',      title: 'Database' }
       ] }
   ];

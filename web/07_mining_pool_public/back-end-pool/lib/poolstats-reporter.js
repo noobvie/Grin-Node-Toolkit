@@ -72,8 +72,31 @@ class PoolstatsReporter {
     }
   }
 
+  // Every gate that guards the periodic submission lives in start(), which the admin
+  // "test" route (POST /api/admin/poolstats/test) does not go through — it calls submit()
+  // directly. So a pool with the pusher switched OFF and no API key configured still
+  // POSTed its live stats to a third party on demand, with an empty `Bearer ` header,
+  // and an unvalidated (possibly non-HTTPS) endpoint. Re-assert the gates here so the
+  // preconditions belong to the ACTION, not to one of its two callers. Audit §J13-1.
+  _assertSubmittable() {
+    if (!this.enabled) {
+      throw new Error('poolstats reporting is disabled (set poolstats_enabled in pool.json)');
+    }
+    if (!this.apiKey || this.apiKey.trim().length === 0) {
+      throw new Error('poolstats_api_key is not configured');
+    }
+    let url;
+    try {
+      url = new URL(this.endpoint);
+    } catch (err) {
+      throw new Error(`invalid poolstats endpoint: ${err.message}`);
+    }
+    if (url.protocol !== 'https:') throw new Error('poolstats endpoint must use HTTPS');
+  }
+
   async submit() {
     try {
+      this._assertSubmittable();
       const stats = this.collectStats();
       await this.httpPost(stats);
       this.lastSubmitTime = Date.now();
@@ -151,14 +174,30 @@ class PoolstatsReporter {
           timeout: 10000  // 10 second timeout
         };
 
+        // Response cap. `timeout` on an https.request is a socket INACTIVITY timer — a
+        // server that drips one byte every 9s never trips it, while responseBody grows
+        // without bound. Cap the body and destroy the request past it. Audit §J13-3.
+        const MAX_RESPONSE_BYTES = 65536;
         const req = https.request(options, (res) => {
           let responseBody = '';
+          let responseBytes = 0;
+          let overflowed = false;
 
           res.on('data', chunk => {
+            responseBytes += chunk.length;
+            if (responseBytes > MAX_RESPONSE_BYTES) {
+              if (!overflowed) {
+                overflowed = true;
+                req.destroy();
+                reject(new Error(`Response exceeded ${MAX_RESPONSE_BYTES} bytes`));
+              }
+              return;
+            }
             responseBody += chunk.toString('utf8');
           });
 
           res.on('end', () => {
+            if (overflowed) return;
             if (res.statusCode >= 200 && res.statusCode < 300) {
               resolve({
                 status: res.statusCode,

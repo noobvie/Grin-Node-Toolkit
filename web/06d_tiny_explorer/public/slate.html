@@ -6,29 +6,77 @@
   <title>Slate Inspector — Read a Grin Slatepack</title>
   <meta name="description" content="Paste or drop a Grin slatepack to read what is inside it: amount, fee, which transaction step it is on, and whether it belongs to mainnet or testnet. Decoding happens entirely in your browser.">
   <meta name="robots" content="index, follow">
-  <meta name="theme-color" content="#06070d">
+  <meta name="theme-color" content="#ff8c00">
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/css/tiny-explorer.css">
   <link rel="stylesheet" href="/css/slate.css">
+  <script>(function(){var t=localStorage.getItem('tinyexp-theme');if(t)document.documentElement.setAttribute('data-theme',t);})();</script>
 </head>
-<body>
+<body data-page="slate">
 
-  <div class="sp-wrap">
+  <header class="tx-header">
+    <div class="tx-header-inner">
+      <a href="/" class="tx-brand">
+        <img src="/grin-logo.svg" class="tx-logo" alt="Grin logo">
+        <span class="tx-brand-text">
+          <span class="tx-title">Tiny<span class="tx-accent">Explorer</span></span>
+          <span class="tx-slogan" id="tx-slogan">Every Grin block, one link away.</span>
+        </span>
+      </a>
+      <div class="tx-header-spacer"></div>
+      <form class="tx-search" id="tx-search-form" role="search">
+        <input id="tx-search-input" type="text" placeholder="Height, hash, kernel or output…  ( / )" autocomplete="off" spellcheck="false" aria-label="Search by block height, hash, kernel excess or output commitment">
+        <button class="tx-btn" type="submit">Search</button>
+      </form>
+      <div class="tx-tools" id="tx-tools">
+        <button class="tx-toolbtn tx-tools-btn" id="tx-tools-btn" type="button" aria-haspopup="true" aria-expanded="false" title="Tools">
+          <span class="tx-toolbtn-icon">🧰</span><span class="tx-toolbtn-text">Tools</span><span class="tx-tools-caret" aria-hidden="true">▾</span>
+        </button>
+        <div class="tx-tools-menu" id="tx-tools-menu" role="menu" hidden>
+          <a class="tx-tools-item" href="/slate" role="menuitem">
+            <span class="tx-tools-ico">🔎</span>
+            <span class="tx-tools-txt"><b>Slate Inspector</b><small>Read a slatepack — amount, fee, step</small></span>
+          </a>
+          <a class="tx-tools-item" href="/proof" role="menuitem">
+            <span class="tx-tools-ico">🧾</span>
+            <span class="tx-tools-txt"><b>Payment Proof Verifier</b><small>Check a proof — signatures and kernel</small></span>
+          </a>
+          <a class="tx-tools-item" href="/wallet-check" role="menuitem">
+            <span class="tx-tools-ico">👛</span>
+            <span class="tx-tools-txt"><b>Wallet Checker</b><small>Address checksum, network and .onion</small></span>
+          </a>
+          <a class="tx-tools-item" href="/emission" role="menuitem">
+            <span class="tx-tools-ico">⏱</span>
+            <span class="tx-tools-txt"><b>Emission &amp; Supply</b><small>Verify 1 ツ/sec · height × 60</small></span>
+          </a>
+          <a class="tx-tools-item" href="/node-check" role="menuitem">
+            <span class="tx-tools-ico">📡</span>
+            <span class="tx-tools-txt"><b>Node Reachability Checker</b><small>Is your node reachable from outside?</small></span>
+          </a>
+          <a class="tx-tools-item" href="/mining" role="menuitem">
+            <span class="tx-tools-ico">⛏</span>
+            <span class="tx-tools-txt"><b>Mining Calculator</b><small>Your G/s → GRIN per day</small></span>
+          </a>
+        </div>
+      </div>
+      <button id="tx-theme-toggle" class="tx-theme-toggle" aria-label="Toggle light/dark theme" title="Toggle theme">☾</button>
+    </div>
+  </header>
 
-    <nav class="sp-nav">
-      <a href="/">&#8592; Explorer</a>
-      <span class="sp-sep"></span>
-      <span>Slate Inspector</span>
-    </nav>
+  <main class="tx-wrap tx-main">
 
-    <header class="sp-head">
-      <div class="sp-kicker">Read-only &#183; nothing is sent anywhere</div>
-      <h1 class="sp-title">Slate<span>pack</span> Inspector</h1>
-      <p class="sp-sub">
-        Paste or drop a Grin slatepack to see exactly what it contains — the amount, the fee,
+    <div class="tx-emit-hero">
+      <h1>Grin Slatepack Inspector</h1>
+      <p>Paste or drop a Grin slatepack to see exactly what it contains — the amount, the fee,
         which step of the transaction it is on, and which network it belongs to. Check that a
-        slatepack says what the sender promised <em>before</em> you act on it.
-      </p>
-    </header>
+        slatepack says what the sender promised <em>before</em> you act on it.</p>
+    </div>
+
+    <div class="tx-note">
+      <strong>Read-only — nothing is sent anywhere.</strong> The slatepack you paste is decoded in
+      this page, by this page. It never reaches this server or any other, and the page holds no
+      keys: it cannot sign, finalize, or broadcast a transaction.
+    </div>
 
     <section class="sp-drop" id="drop">
       <textarea id="input" spellcheck="false" autocomplete="off" aria-label="Paste a slatepack here"
@@ -45,9 +93,9 @@
 
     <section class="sp-out" id="out" hidden aria-live="polite"></section>
 
-    <details class="sp-details">
+    <details class="tx-details">
       <summary>What this can and cannot tell you</summary>
-      <div class="sp-details-body">
+      <div class="tx-details-body">
         <ul>
           <li><strong>Plaintext slatepacks are fully readable.</strong> These come from the manual
             flow — <code>grin-wallet send</code> <em>without</em> a <code>-d</code> destination.
@@ -66,9 +114,9 @@
       </div>
     </details>
 
-    <details class="sp-details">
+    <details class="tx-details">
       <summary>The three steps of a Grin transaction</summary>
-      <div class="sp-details-body">
+      <div class="tx-details-body">
         <p>Grin transactions are <strong>interactive</strong> — both sides must take part. There are
         two directions, and a slate tells you which one it is on:</p>
         <ul>
@@ -84,29 +132,15 @@
       </div>
     </details>
 
-    <footer class="sp-foot">
-      <p class="sp-foot-links">
-        <span class="sp-foot-brand">Tiny Explorer<span id="foot-ver"></span></span>
-        <span class="sp-dot"></span>
-        <a href="/">Explorer</a>
-        <span class="sp-dot"></span>
-        <a href="https://grinscan.org" target="_blank" rel="noopener">GrinScan</a>
-        <span class="sp-dot"></span>
-        <a href="https://forum.grin.mw" target="_blank" rel="noopener">Grin Forum</a>
-        <span class="sp-dot"></span>
-        <a href="https://github.com/noobvie/Grin-Node-Toolkit" target="_blank" rel="noopener">Node Toolkit</a>
-      </p>
-      <p class="sp-foot-made">
-        Made with <span class="sp-heart">&#10084;&#65039;</span> from Saigon
-        <svg class="sp-flag" viewBox="0 0 27 18" width="21" height="14" role="img" aria-label="Yellow flag with three red stripes">
-          <rect width="27" height="18" fill="#FFCD00"/><rect y="4" width="27" height="2" fill="#DA251D"/>
-          <rect y="8" width="27" height="2" fill="#DA251D"/><rect y="12" width="27" height="2" fill="#DA251D"/>
-        </svg>
-      </p>
-    </footer>
+  </main>
 
-  </div>
+  <footer class="tx-footer">
+    <div id="tx-footer-text"></div>
+  </footer>
 
+  <div id="tx-toast" class="tx-toast" role="status" aria-live="polite"></div>
+
+  <script src="/js/tiny-explorer.js"></script>
   <script src="/js/slatepack-decode.js"></script>
   <script src="/js/slate-ui.js"></script>
   <script src="/js/analytics.js"></script>

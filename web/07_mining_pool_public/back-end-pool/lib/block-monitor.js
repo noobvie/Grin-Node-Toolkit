@@ -88,20 +88,29 @@ class BlockMonitor {
         const confirmationCount = tip.height - block.height;
 
         if (confirmationCount >= confirmDepth) {
-          const verification = await this.orphanDetector.verifyBlockOnChain(
-            block.height,
-            block.nonce
-          );
+          let verification;
+          try {
+            verification = await this.orphanDetector.verifyBlockOnChain(block);
+          } catch (err) {
+            // Per-block data problem → skip this block and keep sweeping. Node-level
+            // failures still propagate to the catch below and abort the sweep.
+            if (!err || err.unverifiable !== true) throw err;
+            console.error(`[block ${block.id}] maturity check skipped: ${err.message}`);
+            continue;
+          }
 
           if (verification.onChain) {
-            this.orphanDetector.confirmBlock(block.id);
+            // The status flip is the CLAIM on this block. If it does not land (CAS reports 0
+            // rows), the row is still 'immature' and the next tick will run this branch again
+            // — so paying the jackpot anyway would pay it twice. See audit §J5-6.
+            if (!this.orphanDetector.confirmBlock(block.id)) continue;
             // Block-finder jackpot is paid at maturity (idempotent per block height).
             this.orphanDetector.incentives.payBlockFinderJackpot(block);
             console.log(
               `[${new Date().toISOString()}] Block confirmed: height=${block.height}, confirmations=${confirmationCount}`
             );
           } else {
-            this.orphanDetector.orphanBlock(block.id, verification.reason);
+            if (!this.orphanDetector.orphanBlock(block.id, verification.reason)) continue;
             this.orphanDetector.reverseBlockPayouts(block.id);
             console.log(
               `[${new Date().toISOString()}] Block orphaned: height=${block.height}, reason=${verification.reason}`
@@ -110,7 +119,10 @@ class BlockMonitor {
         }
       }
     } catch (err) {
-      console.error(`Error checking immature blocks: ${err.message}`);
+      // Includes verifyBlockOnChain refusing to judge a block while the node is unreachable.
+      // Aborting the sweep is the SAFE outcome — blocks stay immature and the next 30s tick
+      // retries — but it must not be mistaken for "nothing to do".
+      console.error(`Error checking immature blocks (maturity sweep aborted): ${err.message}`);
     }
   }
 
@@ -118,6 +130,16 @@ class BlockMonitor {
     try {
       console.log(`[${new Date().toISOString()}] Running orphan detection...`);
       const results = await this.orphanDetector.detectOrphans();
+
+      if (results.aborted || results.error) {
+        // Aborted, not clean — almost always an unreachable node. Blocks stay immature and
+        // the next 6h tick retries. Say so loudly: "complete: 0 checked" reads as healthy.
+        console.error(
+          `[${new Date().toISOString()}] Orphan detection ABORTED after ${results.checked} checked ` +
+          `(${results.confirmed} confirmed, ${results.orphaned} orphaned) — ${results.error}`
+        );
+        return;
+      }
 
       console.log(
         `[${new Date().toISOString()}] Orphan detection complete: ${results.checked} checked, ${results.confirmed} confirmed, ${results.orphaned} orphaned`

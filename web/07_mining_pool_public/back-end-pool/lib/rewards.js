@@ -1,5 +1,6 @@
 const { getDb } = require('./db');
 const IncentivesManager = require('./incentives');
+const { compareBlockToHeader } = require('./block-identity');
 
 class RewardDistributor {
   // grinNode: a GrinNodeAPI. REQUIRED for the pre-credit chain re-verification below — it was
@@ -28,8 +29,8 @@ class RewardDistributor {
       }
 
       // CRITICAL — re-verify against the chain immediately before crediting. This is the
-      // second, independent check: OrphanDetector already verified by NONCE when it moved the
-      // block to 'confirmed', but that ran up to hours earlier, so a reorg (or a compromised
+      // second, independent check: OrphanDetector already compared this block when it moved it
+      // to 'confirmed', but that ran up to hours earlier, so a reorg (or a compromised
       // block_monitor) in between must not turn into credited balances.
       //
       // get_HEADER, not get_block: a pruned node keeps the full header chain at every height
@@ -38,46 +39,39 @@ class RewardDistributor {
       // top level — get_block nests it under `.header`, which is why the previous (unreachable)
       // version of this check would have thrown a false "hash mismatch" on every block had it
       // ever run. See audit §I3.
+      //
+      // The comparison itself lives in lib/block-identity.js and is SHARED with
+      // orphan-detector.js — the two had drifted into different comparisons, and only the
+      // other one was destructive on a false mismatch (audit §J5-3).
       if (this.grinNode) {
         try {
           const nodeHeader = await this.grinNode.getHeader(block.height);
+          const cmp = compareBlockToHeader(block, nodeHeader);
 
-          if (!nodeHeader) {
-            throw new Error(`[SECURITY ALERT] Block ${block.height} marked confirmed in DB but NOT FOUND on blockchain!`);
-          }
-
-          // NONCE is the authoritative comparison — it is exactly what OrphanDetector
-          // .verifyBlockOnChain() uses to promote a block to 'confirmed', so it is known to
-          // line up with what we store. Both sides are coerced to String: the node returns a
-          // u64 that may arrive as a number or a string depending on magnitude.
-          if (String(nodeHeader.nonce) !== String(block.nonce)) {
+          // FAIL CLOSED on anything that is not an affirmative match. `unknown` means we
+          // could not compare (a legacy row whose nonce was destroyed by the old INTEGER
+          // column AND a hash that is not 64-hex) — that is a reason to wait, never a reason
+          // to credit. The block stays 'confirmed' and the next tick retries.
+          if (cmp.verdict === 'mismatch') {
             throw new Error(
-              `[SECURITY ALERT] Block ${block.height} nonce mismatch! DB: ${block.nonce}, Node: ${nodeHeader.nonce}`
+              `[SECURITY ALERT] Block ${block.height} does not match the chain (${cmp.by}): ${cmp.detail}`
             );
           }
-
-          // HASH is the stronger check, but blocks.hash is parsed out of the node stratum's
-          // "blockfound - <hash>" reply rather than read from the Foreign API, so its exact
-          // formatting is not verified against a live node here. Compare it only when it has
-          // the shape of a real block hash; anything else means the stored value is not a hash
-          // and must be reported loudly, NOT silently treated as a mismatch that freezes every
-          // payout. The nonce check above already carries the security property meanwhile.
-          const HASH_RE = /^[0-9a-f]{64}$/i;
-          if (HASH_RE.test(String(block.hash || '')) && HASH_RE.test(String(nodeHeader.hash || ''))) {
-            if (String(nodeHeader.hash).toLowerCase() !== String(block.hash).toLowerCase()) {
-              throw new Error(
-                `[SECURITY ALERT] Block ${block.height} hash mismatch! DB: ${block.hash}, Node: ${nodeHeader.hash}`
-              );
-            }
-          } else {
+          if (cmp.verdict !== 'match') {
+            throw new Error(
+              `Block ${block.height} could not be verified against the chain: ${cmp.detail}`
+            );
+          }
+          if (cmp.by === 'nonce') {
+            // The hash is the comparator this check is meant to run on; the nonce is only
+            // ever approximate (see block-identity.js). Landing here is worth reporting.
             console.warn(
-              `[WARNING] Block ${block.height}: stored hash ${JSON.stringify(block.hash)} or node hash ` +
-              `${JSON.stringify(nodeHeader.hash)} is not a 64-hex block hash — verified by nonce only. ` +
-              `Report this: the hash comparison is meant to be the primary check (audit §I3).`
+              `[WARNING] Block ${block.height} verified by NONCE only — ${cmp.detail}. ` +
+              `Report this: the hash comparison is meant to be primary (audit §J5-3).`
             );
           }
 
-          console.log(`[VERIFIED] Block ${block.height} confirmed on blockchain before distribution`);
+          console.log(`[VERIFIED] Block ${block.height} confirmed on blockchain before distribution (by ${cmp.by})`);
         } catch (err) {
           console.error(`[CRITICAL] Blockchain verification failed: ${err.message}`);
           throw new Error(`Blockchain verification failed: ${err.message}`);
@@ -191,8 +185,14 @@ class RewardDistributor {
 
       return stmt.all(windowStart, blockHeight);
     } catch (err) {
+      // RETHROW — never `return []`. An empty result is TERMINAL for the block: the caller
+      // reads it as "matured with no attributable shares", CAS-flips the row to 'paid' and
+      // keeps the whole reward, with nothing left to retry. Swallowing a SQLITE_BUSY /
+      // SQLITE_FULL / I-O error into that branch confiscates a full block reward from the
+      // miners on a transient fault. Throwing lands in distributeRewards' outer catch, which
+      // leaves the block 'confirmed' for the next 30s tick — delayed, never wrong. See §J5-5.
       console.error(`Error fetching shares for distribution: ${err.message}`);
-      return [];
+      throw new Error(`share query failed for block height ${blockHeight}: ${err.message}`);
     }
   }
 

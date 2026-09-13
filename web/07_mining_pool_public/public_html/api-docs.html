@@ -229,7 +229,13 @@
     document.addEventListener('DOMContentLoaded', function () {
       document.getElementById('api-base').textContent = location.origin;
       fetch('/api/public/endpoints', { credentials: 'same-origin' })
-        .then(function (r) { return r.ok ? r.json() : null; })
+        // A non-2xx must reach the .catch below ("API reference is temporarily unavailable")
+        // rather than collapsing to null, which renders "No public endpoints reported" — a
+        // statement about the pool, not about the request (audit §J15-2).
+        .then(function (r) {
+          if (!r.ok) return Promise.reject(new Error('HTTP ' + r.status));
+          return r.json();
+        })
         .then(function (j) {
           var d = (j && j.data) || {};
           render(d.endpoints, d.notes);

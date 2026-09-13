@@ -34,6 +34,28 @@ const geoip = require('./geoip');
 // via a regional gateway (Model C). Both IP and password keep a last-2 window so an ISP
 // re-lease or a rig-side password change never locks the owner out.
 //
+// ⚠ PoW is a COST, not an identity. Anyone may mine to anyone's address, so "requires an
+// accepted share" narrows who can write to a proof window — it does not restrict it to the
+// owner. The 2026-08-26 audit (§J3) found three consequences and the three answers now in
+// this file; none of them should be removed without re-reading that section:
+//   · §J3-1 — both legs are written by ONE call on ONE share, so the AND-gate on the Goblin
+//     destination was never two factors. verifyOwnerProof therefore reports WHICH slot matched
+//     and HOW OLD it is, and index.js requireBothProofs refuses a leg younger than the
+//     destination cooldown. Age is the only thing that separates the owner from a stranger who
+//     mined here for ten seconds.
+//   · §J3-4 — two hostile sessions evicted both window slots, permanently for a miner who had
+//     stopped mining. Hence the write-once ANCHOR slot (below), plus a caller-supplied
+//     mayDisplace flag so rotation costs sustained work while first capture stays cheap.
+//   · §J3-3 — the failed-attempt lockout was address-keyed, so a stranger's failures locked the
+//     owner out of their own money. Denial is now keyed to the (address, origin) pair.
+//
+// The ANCHOR is the address's first-ever proof of each kind. It is never rotated, so a miner
+// always retains a route to their own wallet; and it is deliberately REFUSED by
+// requireBothProofs, because an unrevocable credential must not be able to change where money
+// goes — only to move money to the address's own wallet. Pre-existing accounts are anchored to
+// the value they already hold by backfillProofAnchors() at startup, which must run before the
+// stratum listener accepts a share.
+//
 // Trivial passwords (`x`, `123`, factory defaults…) are never captured and never verify —
 // otherwise every rig shipping the same default would share one skeleton key. Those addresses
 // simply keep using IP proof.
@@ -218,25 +240,78 @@ async function matchesStoredIp(canonicalIp, stored) {
 // ─── In-memory failed-attempt throttle ──────────────────────────────────────
 // Single-process Central API. Slows proof brute-forcing on top of the HTTP rate-limiter.
 //
-// TWO independent counters share the same Map, distinguished by key prefix:
-//   · per-ADDRESS (bare grin address) — bounds guesses against ONE address. FAIL_MAX = 8.
+// THREE counters share one Map, distinguished by key shape. Only two of them can REFUSE:
+//   · per-PAIR (`<addr>|<canonical ip>`) — bounds guesses against one address from one
+//     origin. FAIL_MAX_PAIR = 8. This is the lock that actually stops brute force, and it is
+//     the only address-scoped one that denies.
 //   · per-IP (`ip:<canonical>`) — bounds TOTAL failed guesses from one source IP across ALL
-//     addresses. Without it, an attacker walking the public leaderboard gets a fresh 8-guess
-//     budget per address (and each guess forces a 16 MB scrypt — a CPU/mem-exhaustion lever).
-//     FAIL_MAX_IP is looser (a NAT/farm may host several miners that each fumble their proof)
-//     but still caps a distributed sweep from one origin. A single-address user hits their
-//     address lock (8) long before the IP lock, so this adds no false-positive for normal use.
+//     addresses. Without it, an attacker walking the public leaderboard gets a fresh budget
+//     per address (and each guess forces a 16 MB scrypt — a CPU/mem-exhaustion lever).
+//   · per-ADDRESS (bare grin address) — counts only. Never denies. See below.
+//
+// WHY THE ADDRESS COUNTER NO LONGER DENIES (audit §J3-3). It used to, and that made the
+// anti-brute-force lock a griefing weapon aimed at the very people it protects: the eight
+// failures that armed it did not have to come from the person being locked out, so ~9
+// requests per 10-minute window from ONE address — under every rate bucket, from a target
+// list read straight off the public leaderboard — permanently denied a miner access to their
+// own balance, with no miner-facing appeal (the public cancel was removed in §E.1). Denial
+// is now keyed to the (address, origin) pair, so a stranger's failures can never refuse the
+// owner's attempt.
+//
+// The trade, stated so it is not rediscovered as a regression: an attacker with N source IPs
+// now gets 8 guesses per IP against one address instead of 8 in total. The per-IP cap of 20
+// still bounds each origin, so a dictionary run needs roughly one fresh IP per 20 guesses —
+// a real botnet — and what it buys is griefing, not theft (Tor pays the address's own onion,
+// a slatepack is encrypted to it, and the one rail that can redirect money now demands two
+// aged legs, §J3-1). Certain harm to every miner was the worse side of that trade.
+//
+// The address counter is kept because "many origins failing on one address" is exactly the
+// signal an operator wants. Over the threshold it (a) makes every attempt on that address pay
+// ATTACK_DELAY_MS and (b) is surfaced by underAttack() for alerting. A delay does not cap a
+// parallel attacker's throughput and is not pretended to — it costs the real owner one slow
+// page-load and takes the cheapest sequential scripting off the table.
 const FAIL_WINDOW_MS = 10 * 60 * 1000; // 10 min
-const FAIL_MAX = 8;                    // failed proofs per window per ADDRESS before lockout
-const FAIL_MAX_IP = 20;                // failed proofs per window per source IP before lockout
+const FAIL_MAX_PAIR = 8;               // failed proofs per window per (address, source IP)
+const FAIL_MAX_IP = 20;                // failed proofs per window per source IP, all addresses
+const ADDR_ALERT_MAX = 8;              // failed proofs per window per address → under-attack mode
 const LOCKOUT_MS = 5 * 60 * 1000;      // 5 min lockout once a window is exhausted
-const _fails = new Map();              // key -> { count, first, lockedUntil }  (key = addr | `ip:<ip>`)
+const ATTACK_DELAY_MS = 2000;          // per-attempt delay while an address is under attack
+const _fails = new Map();              // key -> { count, first, lockedUntil }
+
+// Bounded, self-sweeping (audit §J3-6). Entries used to be created on every failure and
+// removed ONLY by a later success, with no expiry pass and no ceiling — so every key an
+// attacker touched once and abandoned stayed for the life of the process. Sweeping happens
+// opportunistically on write rather than on a timer: this module is required by one-shot
+// scripts and test harnesses, and a module-level setInterval would keep those processes alive.
+const FAILS_SWEEP_MS = 60 * 1000;      // at most one sweep per minute
+const FAILS_MAX_KEYS = 20000;          // hard ceiling; oldest UNLOCKED entries evicted first
+let _failsSweptAt = 0;
+
+function _sweepFails(force) {
+  const now = Date.now();
+  if (!force && (now - _failsSweptAt) < FAILS_SWEEP_MS && _fails.size < FAILS_MAX_KEYS) return;
+  _failsSweptAt = now;
+  for (const [k, s] of _fails) {
+    const expired = (now - s.first) > FAIL_WINDOW_MS;
+    const unlocked = !s.lockedUntil || now >= s.lockedUntil;
+    if (expired && unlocked) _fails.delete(k);
+  }
+  // Still over the ceiling → evict oldest-inserted entries, but NEVER one that is currently
+  // locked out: eviction would otherwise be the throttle bypass.
+  if (_fails.size > FAILS_MAX_KEYS) {
+    for (const [k, s] of _fails) {
+      if (_fails.size <= FAILS_MAX_KEYS) break;
+      if (!s.lockedUntil || now >= s.lockedUntil) _fails.delete(k);
+    }
+  }
+}
 
 function _throttleState(key) {
   const now = Date.now();
   let s = _fails.get(key);
   if (!s || (now - s.first) > FAIL_WINDOW_MS) {
     s = { count: 0, first: now, lockedUntil: 0 };
+    _sweepFails(false);
     _fails.set(key, s);
   }
   return s;
@@ -247,37 +322,86 @@ function isLockedOut(key) {
   return !!(s && s.lockedUntil && Date.now() < s.lockedUntil);
 }
 
+// Is this address seeing failures from enough origins to look like a targeted campaign?
+// Never refuses anything — read by verifyOwnerProof (to add a delay) and by callers that
+// want to alert. Exported so AlertMonitor can surface it without duplicating the threshold.
+function underAttack(grinAddress) {
+  const s = _fails.get(grinAddress);
+  if (!s) return false;
+  if ((Date.now() - s.first) > FAIL_WINDOW_MS) return false;
+  return s.count >= ADDR_ALERT_MAX;
+}
+
 function _registerFail(key, max) {
   const s = _throttleState(key);
   s.count += 1;
-  if (s.count >= max) s.lockedUntil = Date.now() + LOCKOUT_MS;
+  if (max && s.count >= max) s.lockedUntil = Date.now() + LOCKOUT_MS;
 }
 
 function _clearFails(key) {
   _fails.delete(key);
 }
 
+// The under-attack delay is bounded so it cannot become its own resource lever: an attacker
+// who puts many addresses into that mode would otherwise have every honest request park a
+// pending handler. Over the ceiling the delay is SKIPPED rather than converted into a refusal
+// — refusing is precisely the §J3-3 behaviour being removed, and a slow gate that fails open
+// to "not slow" is better than a fast one that fails closed on the owner.
+const ATTACK_DELAY_MAX_INFLIGHT = 64;
+let _delayInflight = 0;
+async function _attackDelay() {
+  if (_delayInflight >= ATTACK_DELAY_MAX_INFLIGHT) return;
+  _delayInflight += 1;
+  try {
+    await new Promise((r) => setTimeout(r, ATTACK_DELAY_MS));
+  } finally {
+    _delayInflight -= 1;
+  }
+}
+
 // ─── Evidence capture (called on a session's first accepted share) ──────────
 // Records BOTH proofs for an address: source IP (always, when valid) and stratum password
 // (only when usable). Each keeps a last-2 distinct window: on change, last → prev. Async
 // (scrypt) — the stratum caller fires and forgets. Returns true if anything was written.
-async function recordOwnerEvidence(db, grinAddress, rawIp, rawPass) {
+async function recordOwnerEvidence(db, grinAddress, rawIp, rawPass, opts) {
+  // mayDisplace=false → write into EMPTY slots only. The caller (stratum-server) sets it from
+  // how much accepted work this session has done, so one share can establish a proof for an
+  // address that has none but cannot push out a proof somebody else's rig recorded (§J3-4).
+  // Defaults true so existing callers and tests keep the original behaviour.
+  const mayDisplace = !(opts && opts.mayDisplace === false);
   if (!grinAddress) return false;
   try {
     const row = db.prepare(
-      `SELECT last_ip, prev_ip, last_pass_hash, prev_pass_hash, pass_proof_state
+      `SELECT last_ip, prev_ip, last_pass_hash, prev_pass_hash, pass_proof_state,
+              last_ip_at, last_pass_at, anchor_ip, anchor_pass_hash, anchor_set_at
        FROM miner_accounts WHERE grin_address = ?`
     ).get(grinAddress);
     if (!row) return false; // account not created yet — caller ensures existence first
 
     const sets = [];
     const vals = [];
+    const now = Math.floor(Date.now() / 1000);
+    let displaced = null;        // which windows this capture pushed an existing value out of
+    let anchorStamped = false;   // `row` is a snapshot, so both branches would re-add the stamp
 
     const ip = canonicalizeIp(rawIp);
     if (ip && ip !== 'unknown' && net.isIP(ip)) {
-      if (!(await matchesStoredIp(ip, row.last_ip))) {
-        sets.push('prev_ip = ?', 'last_ip = ?');
-        vals.push(row.last_ip || null, await hashProof(ip));
+      if (!(await matchesStoredIp(ip, row.last_ip)) && (mayDisplace || !row.last_ip)) {
+        const h = await hashProof(ip);
+        // Timestamps travel with the value (§J3-1): the AND-gate judges a leg by the age of
+        // the slot that matched, so a rotation must carry last_ip_at down to prev_ip_at
+        // rather than leaving prev's age describing a value that has moved on.
+        sets.push('prev_ip = ?', 'prev_ip_at = ?', 'last_ip = ?', 'last_ip_at = ?');
+        vals.push(row.last_ip || null, row.last_ip_at || null, h, now);
+        if (row.last_ip) displaced = displaced ? 'ip+password' : 'ip';
+        // Write-once anchor (§J3-4). Set only on a true first capture; accounts that already
+        // held a value are anchored to it by backfillProofAnchors() at startup, so a hostile
+        // session can never become the anchor of an established address.
+        if (!row.anchor_ip && !row.last_ip) {
+          sets.push('anchor_ip = ?', 'anchor_set_at = ?');
+          vals.push(h, now);
+          anchorStamped = true;
+        }
       }
     }
 
@@ -293,9 +417,16 @@ async function recordOwnerEvidence(db, grinAddress, rawIp, rawPass) {
     }
 
     if (isUsablePassword(pass, db)) {
-      if (!(await verifyHashedProof(pass, row.last_pass_hash))) {
-        sets.push('prev_pass_hash = ?', 'last_pass_hash = ?');
-        vals.push(row.last_pass_hash || null, await hashProof(pass));
+      if (!(await verifyHashedProof(pass, row.last_pass_hash)) && (mayDisplace || !row.last_pass_hash)) {
+        const h = await hashProof(pass);
+        sets.push('prev_pass_hash = ?', 'prev_pass_at = ?', 'last_pass_hash = ?', 'last_pass_at = ?');
+        vals.push(row.last_pass_hash || null, row.last_pass_at || null, h, now);
+        if (row.last_pass_hash) displaced = displaced ? 'ip+password' : 'password';
+        if (!row.anchor_pass_hash && !row.last_pass_hash) {
+          sets.push('anchor_pass_hash = ?');
+          vals.push(h);
+          if (!anchorStamped && !row.anchor_set_at) { sets.push('anchor_set_at = ?'); vals.push(now); anchorStamped = true; }
+        }
       }
     } else if (pass) {
       // Also log the REASON (never the value) so the operator can answer "why won't my
@@ -307,6 +438,17 @@ async function recordOwnerEvidence(db, grinAddress, rawIp, rawPass) {
     db.prepare(
       `UPDATE miner_accounts SET ${sets.join(', ')}, updated_at = unixepoch() WHERE grin_address = ?`
     ).run(...vals, grinAddress);
+
+    // A capture that DISPLACES an existing value is the one event a miner would want to know
+    // about — it is what a hostile session looks like from the inside (§J3-4), and until now
+    // it happened in complete silence. Audited, never blocking; the account page reads the
+    // resulting last_ip_at/last_pass_at to show "ownership evidence last changed on …".
+    if (displaced) {
+      auditOwnerProof(db, {
+        action: 'evidence_displaced', grinAddress, ip: rawIp, ok: true,
+        details: { window: displaced, anchor_intact: !!(row.anchor_ip || row.anchor_pass_hash) }
+      });
+    }
     return true;
   } catch (e) {
     console.error(`[owner-proof] recordOwnerEvidence failed for ${grinAddress}: ${e.message}`);
@@ -321,9 +463,14 @@ async function recordOwnerEvidence(db, grinAddress, rawIp, rawPass) {
 // per-address and (when clientIp is supplied) the per-IP throttle. Returns { ok, reason, method? }.
 // clientIp is optional — omitting it preserves the original address-only behaviour, so any caller
 // that doesn't have a request IP handy is unaffected.
-async function verifyOwnerProof(db, grinAddress, submitted, clientIp) {
-  const ipKey = clientIp ? `ip:${canonicalizeIp(clientIp)}` : null;
-  if (isLockedOut(grinAddress) || (ipKey && isLockedOut(ipKey))) {
+async function verifyOwnerProof(db, grinAddress, submitted, clientIp, opts) {
+  const allowAnchor = !(opts && opts.allowAnchor === false);
+  const cip = clientIp ? canonicalizeIp(clientIp) : null;
+  const ipKey = cip ? `ip:${cip}` : null;
+  const pairKey = cip ? `${grinAddress}|${cip}` : null;
+  // Only the pair lock and the per-IP lock refuse. The bare-address counter never does —
+  // see the throttle block above (§J3-3): a stranger's failures must not deny the owner.
+  if ((pairKey && isLockedOut(pairKey)) || (ipKey && isLockedOut(ipKey))) {
     return { ok: false, reason: 'too_many_attempts' };
   }
   const raw = typeof submitted === 'string' ? submitted.trim() : '';
@@ -332,30 +479,62 @@ async function verifyOwnerProof(db, grinAddress, submitted, clientIp) {
   let row;
   try {
     row = db.prepare(
-      'SELECT last_ip, prev_ip, last_pass_hash, prev_pass_hash FROM miner_accounts WHERE grin_address = ?'
+      `SELECT last_ip, prev_ip, last_pass_hash, prev_pass_hash,
+              last_ip_at, prev_ip_at, last_pass_at, prev_pass_at,
+              anchor_ip, anchor_pass_hash, anchor_set_at
+       FROM miner_accounts WHERE grin_address = ?`
     ).get(grinAddress);
   } catch (e) {
     return { ok: false, reason: 'lookup_failed' };
   }
   if (!row) return { ok: false, reason: 'account_not_found' };
-  if (!row.last_ip && !row.prev_ip && !row.last_pass_hash && !row.prev_pass_hash) {
+  if (!row.last_ip && !row.prev_ip && !row.last_pass_hash && !row.prev_pass_hash &&
+      !row.anchor_ip && !row.anchor_pass_hash) {
     return { ok: false, reason: 'no_recorded_proof' };
   }
 
-  const clearBoth = () => { _clearFails(grinAddress); if (ipKey) _clearFails(ipKey); };
-  const failBoth = () => { _registerFail(grinAddress, FAIL_MAX); if (ipKey) _registerFail(ipKey, FAIL_MAX_IP); };
+  // Under-attack mode costs every attempt on this address a fixed delay, the owner's included.
+  // It is applied BEFORE the KDF so it also throttles the scrypt work, and it never refuses.
+  if (underAttack(grinAddress)) await _attackDelay();
+
+  const nowS = Math.floor(Date.now() / 1000);
+  const age = (t) => (t ? Math.max(0, nowS - t) : null);
+  const clearAll = () => {
+    if (pairKey) _clearFails(pairKey);
+    if (ipKey) _clearFails(ipKey);
+    _clearFails(grinAddress);
+  };
+  const failAll = () => {
+    if (pairKey) _registerFail(pairKey, FAIL_MAX_PAIR);
+    if (ipKey) _registerFail(ipKey, FAIL_MAX_IP);
+    // Counts only — 0 means "never lock this key". Skipped when there is no client IP, which
+    // is the admin verify-owner tool (index.js /api/admin/dormancy/verify-owner): this counter
+    // exists to spot failures arriving from MANY origins, which is meaningless without an
+    // origin, and an operator checking a proof from a support e-mail must not be able to slow
+    // the miner they are trying to help.
+    if (cip) _registerFail(grinAddress, 0);
+  };
+  const hit = (method, slot, at) => {
+    clearAll();
+    return { ok: true, reason: 'match', method, slot, age_seconds: age(at) };
+  };
 
   const ip = canonicalizeIp(raw);
   if (net.isIP(ip)) {
-    if (await matchesStoredIp(ip, row.last_ip) || await matchesStoredIp(ip, row.prev_ip)) {
-      clearBoth();
-      return { ok: true, reason: 'match', method: 'ip' };
+    if (await matchesStoredIp(ip, row.last_ip)) return hit('ip', 'last', row.last_ip_at);
+    if (await matchesStoredIp(ip, row.prev_ip)) return hit('ip', 'prev', row.prev_ip_at);
+    // Anchor last: it is the weakest slot (unrevocable), so a live window value must win the
+    // slot label when both match, or an active miner would be needlessly barred from §J3-1's
+    // destination gate.
+    if (allowAnchor && await matchesStoredIp(ip, row.anchor_ip)) {
+      return hit('ip', 'anchor', row.anchor_set_at);
     }
   }
   if (isUsablePassword(raw, db)) {
-    if (await verifyHashedProof(raw, row.last_pass_hash) || await verifyHashedProof(raw, row.prev_pass_hash)) {
-      clearBoth();
-      return { ok: true, reason: 'match', method: 'password' };
+    if (await verifyHashedProof(raw, row.last_pass_hash)) return hit('password', 'last', row.last_pass_at);
+    if (await verifyHashedProof(raw, row.prev_pass_hash)) return hit('password', 'prev', row.prev_pass_at);
+    if (allowAnchor && await verifyHashedProof(raw, row.anchor_pass_hash)) {
+      return hit('password', 'anchor', row.anchor_set_at);
     }
   } else if (!net.isIP(ip)) {
     // Not an IP, and unusable as a password — so it was never captured and can never match.
@@ -365,7 +544,7 @@ async function verifyOwnerProof(db, grinAddress, submitted, clientIp) {
     return { ok: false, reason: passwordRejectReason(raw, db) };
   }
 
-  failBoth();
+  failAll();
   return { ok: false, reason: 'no_match' };
 }
 
@@ -393,6 +572,37 @@ async function migrateOwnerProofHashes(db) {
     }
   } catch (e) {
     console.error(`[owner-proof] hash migration failed: ${e.message}`);
+  }
+}
+
+// ─── One-time startup backfill: anchor the proof each existing account already holds ────────
+// The anchor slot (§J3-4) is write-once at first capture, which leaves every PRE-EXISTING
+// account anchorless — and if the anchor were instead filled by whatever arrives next, the
+// first hostile session after an upgrade would become the permanent proof of somebody else's
+// address. So seed it from the value the account already holds, before any capture can run.
+//
+// Synchronous on purpose (this is a column copy, not a KDF — the values are already hashed),
+// and it must run BEFORE the stratum listener accepts a share. Idempotent: the WHERE clause
+// skips rows that already have an anchor. anchor_set_at is backdated to the slot's own
+// capture time when one is known, so a backfilled anchor is not treated as freshly written.
+function backfillProofAnchors(db) {
+  try {
+    const info = db.prepare('SELECT COUNT(*) AS c FROM miner_accounts').get();
+    if (!info || !info.c) return 0;
+    const res = db.prepare(
+      `UPDATE miner_accounts
+          SET anchor_ip = COALESCE(anchor_ip, last_ip),
+              anchor_pass_hash = COALESCE(anchor_pass_hash, last_pass_hash),
+              anchor_set_at = COALESCE(anchor_set_at, last_ip_at, last_pass_at, created_at)
+        WHERE (anchor_ip IS NULL AND last_ip IS NOT NULL)
+           OR (anchor_pass_hash IS NULL AND last_pass_hash IS NOT NULL)`
+    ).run();
+    const n = res.changes || 0;
+    if (n > 0) console.log(`[owner-proof] anchored ${n} existing account(s) to their current proof`);
+    return n;
+  } catch (e) {
+    console.error(`[owner-proof] anchor backfill failed: ${e.message}`);
+    return 0;
   }
 }
 
@@ -481,6 +691,12 @@ module.exports = {
   recordOwnerEvidence,
   verifyOwnerProof,
   migrateOwnerProofHashes,
+  backfillProofAnchors,
   auditOwnerProof,
-  isLockedOut
+  isLockedOut,
+  underAttack,
+  _sweepFails,
+  FAIL_MAX_PAIR,
+  FAIL_MAX_IP,
+  ADDR_ALERT_MAX
 };

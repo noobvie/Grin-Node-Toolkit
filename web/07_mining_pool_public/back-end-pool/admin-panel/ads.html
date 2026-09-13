@@ -93,6 +93,9 @@
     .tp-cta:empty { display:none; }
     .badge-warn { color: var(--warn, #f5b942) !important; border-color: var(--warn, #f5b942); }
     .stats-cell { font-family: var(--mono, monospace); font-size:.8rem; white-space:nowrap; }
+    /* Audit §J14-9 — the "(unverified)" qualifier on the Views/Clicks column header. It is
+       deliberately part of the header text, not a tooltip: a tooltip is invisible on touch. */
+    .th-qual { font-weight:400; text-transform:none; letter-spacing:0; color: var(--text-dim, #8a978f); }
     .notes-flag { cursor:help; margin-left:.3rem; }
     td .btn-sm { margin:1px 0; }
     /* the Actions column is icon buttons now (.row-actions/.btn-icon in styles.css) */
@@ -110,7 +113,7 @@
     <!-- Existing ads -->
     <h2>All ads</h2>
     <div class="table-toolbar">
-      <p class="rotate-note" style="margin:0;">Multiple <em>active</em> ads in the same placement rotate on the public site — one at a time, advancing every <strong id="rotate-now">8</strong>&nbsp;s. Weight sets the cycle order (highest first); a single ad just shows permanently. Views/clicks are coarse counters (no visitor data stored).</p>
+      <p class="rotate-note" style="margin:0;">Multiple <em>active</em> ads in the same placement rotate on the public site — one at a time, advancing every <strong id="rotate-now">8</strong>&nbsp;s. Weight sets the cycle order (highest first); a single ad just shows permanently. <strong>Views/clicks are unverified client-reported counters</strong> — the public beacon that increments them is unauthenticated by design (no visitor data is stored), so anyone can inflate or deflate them. Treat them as a rough delivery signal, never as a billable measurement.</p>
       <div class="toolbar-controls">
         <label for="filter-placement">Show</label>
         <select id="filter-placement" onchange="renderTable()">
@@ -154,7 +157,7 @@
               <th>Status</th>
               <th>Weight</th>
               <th>Window</th>
-              <th>Views / Clicks</th>
+              <th>Views / Clicks <span class="th-qual" title="Unverified — the counters come from an unauthenticated public beacon. Not billable.">(unverified)</span></th>
               <th>Actions</th>
             </tr>
           </thead>
@@ -597,9 +600,15 @@ function statusOf(a) {
   return ['On', 'badge-ok'];
 }
 
+// Audit §J14-9 / §J10-3: these two numbers are bumped by POST /api/public/ads/event, which is
+// unauthenticated and undeduped on purpose (the pool stores no per-visitor rows, so it cannot
+// tell a real impression from a scripted one). A bare "4.5%" reads as a measurement, so the
+// ratio is rendered approximate and the column + the note above the table say "unverified".
+// Do not remove those qualifiers while the beacon stays open — an operator who bills a sponsor
+// from this column is billing from an attacker-writable number.
 function fmtStats(a) {
   const v = a.impressions || 0, c = a.clicks || 0;
-  const ctr = v > 0 ? ` (${(c / v * 100).toFixed(1)}%)` : '';
+  const ctr = v > 0 ? ` (~${(c / v * 100).toFixed(1)}%)` : '';
   return `${v.toLocaleString()} / ${c.toLocaleString()}${ctr}`;
 }
 
@@ -639,7 +648,7 @@ function renderTable() {
         <td><span class="badge ${cls}">${label}</span></td>
         <td class="mono">${a.weight}</td>
         <td>${escHtml(fmtWindow(a))}</td>
-        <td class="stats-cell">${escHtml(fmtStats(a))}</td>
+        <td class="stats-cell" title="Unverified client-reported counters — see the note above the table.">${escHtml(fmtStats(a))}</td>
         <td>
           <div class="row-actions">
             <button class="btn-icon" onclick="editAd(${a.id})" data-tip="Edit this ad" aria-label="Edit this ad">✏️</button>

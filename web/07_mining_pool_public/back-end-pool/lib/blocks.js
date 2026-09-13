@@ -31,6 +31,45 @@ class BlockManager {
     }
   }
 
+  // Transaction fees carried by this block, in GRIN. Grin pays the finder
+  // REWARD + sum(kernel fees) — 60 is the EMISSION, not the payment — so crediting the flat
+  // constant quietly kept every block's fees for the pool on top of pool_fee_percent, and
+  // biased reconciliation's coverage gap positive (masking a real shortfall of the same
+  // size). Audit §J5-10.
+  //
+  // Read at FOUND time on purpose: get_block returns the block BODY, which a pruned node
+  // serves only inside its pruning horizon — at maturity (1440 blocks later) it may already
+  // be gone, while a block we have just this second submitted is certainly there.
+  //
+  // Best-effort and hash-gated: a race at the tip can hand us a competitor's block at the
+  // same height, so the fees are only trusted when the node's header hash is OUR hash.
+  // Anything else returns null and the caller falls back to the flat reward.
+  async _fetchBlockFees(height, hash) {
+    if (!this.nodeApi || !height) return null;
+    try {
+      const blk = await this.nodeApi.getBlock(height);
+      const gotHash = blk && blk.header && blk.header.hash;
+      if (!gotHash || String(gotHash).toLowerCase() !== String(hash || '').toLowerCase()) {
+        console.warn(
+          `[BlockManager] fee capture skipped for ${height}: node has ${gotHash}, we found ${hash}`
+        );
+        return null;
+      }
+      const kernels = Array.isArray(blk.kernels) ? blk.kernels : [];
+      // Coinbase kernels carry fee 0, so a bare sum is correct. Fees are nanogrin.
+      let nano = 0;
+      for (const k of kernels) {
+        const f = Number(k && k.fee);
+        if (Number.isFinite(f) && f > 0) nano += f;
+      }
+      const grin = nano / 1e9;
+      return Number.isFinite(grin) && grin >= 0 ? grin : null;
+    } catch (e) {
+      console.warn(`[BlockManager] block fee fetch failed for ${height}: ${e.message}`);
+      return null;
+    }
+  }
+
   // Accumulated pool share-difficulty for the round that found this block — shares since the
   // previous block's found_at. Captured now so luck stays exact after raw shares are pruned.
   _roundShareDiff(prevFoundAt) {
@@ -44,22 +83,35 @@ class BlockManager {
     }
   }
 
+  // `reward` is the flat emission (60). The value actually stored is that plus the block's
+  // transaction fees when they can be read from the chain — see _fetchBlockFees.
   async creditBlock(height, hash, nonce, reward, minerAddress) {
     try {
       // Capture round/network stats BEFORE inserting (round = shares since the previous block).
       const prev = this.getLastBlock();
       const roundShares = this._roundShareDiff(prev ? prev.found_at : 0);
-      const networkDiff = await this._fetchNetworkDifficulty(height);
+      // In PARALLEL, not in sequence: creditBlock is awaited before the miner's submit ack is
+      // written, and each of these carries the node client's 10s timeout. Serially that is up
+      // to 20s of dead air on an unreachable node; concurrently it is 10s, which is also
+      // better than the pre-§J5-10 code managed with the difficulty fetch alone.
+      const [networkDiff, fees] = await Promise.all([
+        this._fetchNetworkDifficulty(height),
+        this._fetchBlockFees(height, hash),
+      ]);
+      const total = fees === null ? reward : reward + fees;
 
       const stmt = this.db.prepare(`
-        INSERT INTO blocks (height, hash, nonce, reward, status, found_by, found_at, network_difficulty, round_shares)
-        VALUES (?, ?, ?, ?, 'immature', ?, unixepoch(), ?, ?)
+        INSERT INTO blocks (height, hash, nonce, reward, fees, status, found_by, found_at, network_difficulty, round_shares)
+        VALUES (?, ?, ?, ?, ?, 'immature', ?, unixepoch(), ?, ?)
       `);
 
-      const result = stmt.run(height, hash, nonce, reward, minerAddress, networkDiff, roundShares);
+      // String(nonce): the column is TEXT and a Grin nonce is a u64 that must never be
+      // rounded through a JS number. See db.js's blocks DDL and audit §J5-1.
+      const result = stmt.run(height, hash, String(nonce), total, fees, minerAddress, networkDiff, roundShares);
 
       console.log(
-        `[${new Date().toISOString()}] Block credited: height=${height}, hash=${hash.substring(0, 16)}..., reward=${reward} GRIN, miner=${minerAddress}`
+        `[${new Date().toISOString()}] Block credited: height=${height}, hash=${hash.substring(0, 16)}..., ` +
+        `reward=${total} GRIN (${reward} emission${fees === null ? ', fees unread' : ` + ${fees} fees`}), miner=${minerAddress}`
       );
 
       return {
@@ -67,7 +119,8 @@ class BlockManager {
         block_id: result.lastInsertRowid,
         height,
         hash,
-        reward
+        reward: total,
+        fees
       };
     } catch (err) {
       console.error(`Error crediting block: ${err.message}`);
@@ -185,12 +238,23 @@ class BlockManager {
         'SELECT COALESCE(SUM(reward), 0) as total FROM blocks'
       ).get();
 
+      // 'paid' is the TERMINAL success state — rewards.js flips confirmed→paid the moment it
+      // distributes, ~30s after maturity. Counting only 'confirmed' therefore reported a pool
+      // that has confirmed 0 blocks and earned 0 confirmed reward in steady state, and rolled
+      // every paid block into `immature_blocks` below. This feeds /api/pool/stats and the
+      // external poolstats reporter, so it was wrong in public. See audit §J5-4.
       const confirmedBlocks = this.db.prepare(
-        "SELECT COUNT(*) as count FROM blocks WHERE status = 'confirmed'"
+        "SELECT COUNT(*) as count FROM blocks WHERE status IN ('confirmed', 'paid')"
       ).get();
 
       const confirmedReward = this.db.prepare(
-        "SELECT COALESCE(SUM(reward), 0) as total FROM blocks WHERE status = 'confirmed'"
+        "SELECT COALESCE(SUM(reward), 0) as total FROM blocks WHERE status IN ('confirmed', 'paid')"
+      ).get();
+
+      // Counted directly, not as (total − confirmed): that subtraction also folded every
+      // ORPHANED block into the maturing count.
+      const immatureCount = this.db.prepare(
+        "SELECT COUNT(*) as count FROM blocks WHERE status = 'immature'"
       ).get();
 
       // "Found" = any non-orphaned block. created_at is INTEGER unixepoch.
@@ -206,7 +270,7 @@ class BlockManager {
         total_reward: totalReward.total,
         confirmed_blocks: confirmedBlocks.count,
         confirmed_reward: confirmedReward.total,
-        immature_blocks: totalBlocks.count - confirmedBlocks.count,
+        immature_blocks: immatureCount.count,
         blocks_24h: blocks24h.count,
         blocks_7d: blocks7d.count
       };
@@ -290,7 +354,8 @@ class BlockManager {
       this.db.prepare(`
         SELECT status, COUNT(*) AS n FROM blocks WHERE found_at >= ? GROUP BY status
       `).all(cutoff).forEach(r => {
-        if (r.status === 'confirmed') status.confirmed = r.n;
+        // 'paid' is confirmed-and-distributed, not maturing — see getPoolStats above.
+        if (r.status === 'confirmed' || r.status === 'paid') status.confirmed += r.n;
         else if (r.status === 'orphaned') status.orphaned = r.n;
         else status.immature += r.n; // 'immature' (and any legacy/unknown) count as maturing
       });

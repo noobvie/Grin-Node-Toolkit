@@ -260,7 +260,13 @@
             var pager = document.getElementById('fb-pager');
             btn.disabled = true;
             fetch('/api/public/lottery/winners?limit=' + PAGE + '&offset=' + offset, { credentials: 'same-origin' })
-                .then(function (r) { return r.ok ? r.json() : null; })
+                // REJECT a non-2xx rather than folding it into `null` (audit §J15-2): `null`
+                // already means "answered, but with nothing", and that branch prints "Winners
+                // will appear here after the first draw." A 429 or a 5xx is not that fact.
+                .then(function (r) {
+                    if (!r.ok) return Promise.reject(new Error('HTTP ' + r.status));
+                    return r.json();
+                })
                 .then(function (json) {
                     var body = document.getElementById('winners-body');
                     if (!json || !json.data) { if (!loadedAny) body.innerHTML = '<tr><td colspan="6">Winners will appear here after the first draw.</td></tr>'; return; }

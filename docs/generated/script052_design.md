@@ -1,5 +1,8 @@
 # Script 052 — Accio, the Grin public web wallet (design)
 
+> **Covers code as of:** 2026-08-16 · **Last verified:** never systematically verified
+> **Product code last changed:** 2026-08-22 — `scripts/052_grin_accio.sh`, `scripts/lib/052_lib_*.sh`, `web/052_accio/`
+
 **Status: BUILT, NEVER RUN.** `052` was born on **2026-08-09** with build packet **S0 (Vendor &
 pin)**; every packet through **S7** was written by **2026-08-10**, so `scripts/052_grin_accio.sh`
 has no stub left in it, hub 05 key `2` dispatches to it for real, and

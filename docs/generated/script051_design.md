@@ -1,5 +1,9 @@
 # Script 051 — PHP → Node.js Wallet Port
 
+> **Covers code as of:** 2026-05-24 (the doc's own `Date:`) · **Last verified:** never systematically verified
+> **Product code last changed:** 2026-08-17 — `scripts/051*_*.sh`, `web/051_fidelius/`, `web/051_xp_wallet/`
+> Last edited 2026-08-06, but the port plan it describes is the 2026-05-24 one.
+
 **Date:** 2026-05-24
 **Source:** `noobvie/GrinSuite@origin/main:web/03_web_wallet/` (Node + Express)
 **Target:** `Grin-Node-Toolkit/web/051_fidelius/` + `scripts/051_grin_fidelius.sh`

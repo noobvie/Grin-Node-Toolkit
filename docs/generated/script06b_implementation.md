@@ -1,5 +1,9 @@
 GrinScan (06b) — Implementation Gotchas & Solutions
 =====================================================
+
+> **Covers code as of:** 2026-05-10 · **Last verified:** never systematically verified
+> **Product code last changed:** 2026-07-27 — `scripts/lib/06b_grinscan.sh`, `web/06b_grinscan/`
+
 Compiled from real bugs and surprises hit during development.
 Reference this before touching server.js, info.js, app.js, or the CSS theme system.
 

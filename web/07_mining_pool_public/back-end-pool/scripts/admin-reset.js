@@ -32,13 +32,16 @@ const readline = require('readline');
 // Dependencies are loaded LAZILY, not at import time, so `--help` always works. An operator
 // following the "confirm this command exists before enabling mandatory 2FA" advice must get
 // the usage text, not a module-resolution error — the latter reads like the tool is broken.
-// better-sqlite3 is a native module built in place on the pool box; it only resolves when run
-// from the installed app dir, which the Script 07 wrapper guarantees.
+// The DB driver is lib/sqlite-compat.js (node:sqlite / DatabaseSync), NOT better-sqlite3 —
+// the pool dropped that native module and Script 07 no longer installs a build toolchain for
+// it, so `require('better-sqlite3')` threw MODULE_NOT_FOUND on every installed box and this
+// break-glass CLI could not run at all (audit §J7-6). Only .prepare/.run/.get/.all/.pragma/
+// .transaction/.close are used below, which is exactly the shim's surface.
 let Database, bcrypt, totp;
 function loadDeps() {
   if (Database) return;
   try {
-    Database = require('better-sqlite3');
+    Database = require('../lib/sqlite-compat');
     bcrypt = require('bcryptjs');
     totp = require('../lib/totp');
   } catch (e) {
@@ -93,8 +96,12 @@ grin-pool-admin-reset — break-glass admin recovery (root, on the pool server o
 Every action writes an admin_audit_log row (action 'admin_cli_reset'), visible afterwards
 on the admin panel's Login Activity table.
 
-Changing a password or clearing 2FA also REVOKES that account's existing sessions, so a
-stolen cookie can't outlive the recovery.
+Changing a password or clearing 2FA bumps token_version, which kills every REFRESH token for
+that account - nobody can renew a session. It does NOT kill an access token already issued:
+the pool never checks token_version on access tokens, so a stolen cookie keeps working until
+it expires (access.session_timeout_hours, 1-24 h). If you are recovering from an active
+compromise and not just a lost password, also rotate jwt_secret in pool.json and restart the
+pool service - that is the only thing that invalidates live access tokens immediately.
 
 No service restart is needed: the pool re-reads these columns per request.
 
@@ -130,9 +137,14 @@ function openDb(dbPath) {
     throw new Error(`database not found: ${dbPath}\n` +
       '       Has the pool ever been started? The DB is created on first run.');
   }
-  // Not readonly — we write. WAL means this is safe alongside the running service.
+  // Not readonly — we write. WAL lets this coexist with the running service's reads, but a
+  // write here still takes the single write lock, and the service opens its connection with
+  // busy_timeout 0 (lib/db.js) — so while this CLI holds a write transaction the live pool's
+  // next write fails immediately rather than waiting. Audit §J7-1. Keep the writes below
+  // short, and prefer running this with the service stopped.
   const db = new Database(dbPath);
   db.pragma('foreign_keys = ON');
+  db.pragma('busy_timeout = 5000');
   const t = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='users'").get();
   if (!t) {
     db.close();
@@ -201,9 +213,11 @@ function audit(db, userId, op, details) {
   }
 }
 
-// Invalidate every issued refresh token for the account (same mechanism as
-// AuthManager.revokeUserTokens). A recovery that left a hijacked session alive would defeat
-// its own purpose.
+// Invalidate every issued REFRESH token for the account (same mechanism as
+// AuthManager.revokeUserTokens). Deliberately named for what it does: it stops renewal, it
+// does not evict a live session. Access tokens are not checked against token_version
+// (auth-middleware.js), so one already in an attacker's hands survives this call until it
+// expires. Callers must not tell the operator otherwise - see the usage text.
 function revokeSessions(db, userId) {
   db.prepare('UPDATE users SET token_version = token_version + 1, updated_at = ? WHERE id = ?')
     .run(Math.floor(Date.now() / 1000), userId);
@@ -259,15 +273,23 @@ async function actionClear2fa(db, args) {
   const now = Math.floor(Date.now() / 1000);
   const tx = db.transaction(() => {
     db.prepare(
+      // totp_last_counter goes back to 0 with the secret. It records the most recent TOTP
+      // step SPENT against that secret (the single-use guard, audit §J2-5), and a spent step
+      // for a secret that no longer exists is meaningless state. Harmless either way — real
+      // counters only ever climb — but clearing it keeps the invariant simple: no secret,
+      // nothing spent.
       `UPDATE users SET totp_secret = NULL, totp_enabled = 0, totp_pending_secret = NULL,
-                        updated_at = ? WHERE id = ?`
+                        totp_last_counter = 0, updated_at = ? WHERE id = ?`
     ).run(now, u.id);
     db.prepare('DELETE FROM admin_recovery_codes WHERE user_id = ?').run(u.id);
     revokeSessions(db, u.id);
   });
   tx();
   audit(db, u.id, 'clear_2fa', { username: u.username });
-  console.log(`\n2FA disabled for '${u.username}'. Recovery codes deleted. Sessions revoked.`);
+  console.log(`\n2FA disabled for '${u.username}'. Recovery codes deleted. Refresh tokens revoked.`);
+  console.log('An access token already issued still works until it expires (up to');
+  console.log('access.session_timeout_hours). If this is an active compromise, rotate');
+  console.log('jwt_secret in pool.json and restart the pool service as well.');
   console.log('Log in with username + password only, then re-enroll 2FA from the admin panel.');
   console.log("If this pool requires 2FA, re-enroll before money actions will work again.\n");
 }
@@ -307,7 +329,10 @@ async function actionSetPassword(db, args) {
   });
   tx();
   audit(db, u.id, 'set_password', { username: u.username });
-  console.log(`\nPassword updated for '${u.username}'. Existing sessions revoked.`);
+  console.log(`\nPassword updated for '${u.username}'. Refresh tokens revoked.`);
+  console.log('An access token already issued still works until it expires (up to');
+  console.log('access.session_timeout_hours). If this is an active compromise, rotate');
+  console.log('jwt_secret in pool.json and restart the pool service as well.');
   if (u.totp_enabled) console.log('2FA is still ON for this account — you will also need a TOTP or recovery code.');
   console.log('');
 }

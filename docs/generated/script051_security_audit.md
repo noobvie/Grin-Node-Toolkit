@@ -1,5 +1,8 @@
 # Script 051 / 055 — Web Wallets — Security Audit
 
+> **Covers code as of:** 2026-08-05 (the doc's own `Revised:`) · **Last verified:** never re-verified since that revision
+> **Product code last changed:** 2026-08-17 — `scripts/051*_*.sh`, `web/051_fidelius/`, `web/051_xp_wallet/`
+
 **Scope:** the private single-user web wallet (`web/051_fidelius/server.js` +
 `scripts/051_grin_fidelius.sh`), the XP-themed client variant (`web/051_xp_wallet/`),
 and the public WASM wallet (055). Focus: key/passphrase handling, auth boundary, SSRF, slate

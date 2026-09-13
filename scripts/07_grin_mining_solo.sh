@@ -91,6 +91,20 @@ LOG_FILE="$LOG_DIR/grin_mining_$(date +%Y%m%d_%H%M%S).log"
 # ─── Global state ─────────────────────────────────────────────────────────────
 FOUND_GRIN_TOML=""
 
+# ─── Root guard ───────────────────────────────────────────────────────────────
+# MUST stay above the mkdir below: /opt/grin is root-owned, so a non-root run
+# died on `mkdir: cannot create directory '/opt/grin': Permission denied` with
+# no banner and no hint — under `set -e` that is the entire output the operator
+# sees. Everything this script does (node toml, firewall, nginx, cron, systemd)
+# needs root anyway, so fail here with the command to re-run.
+if [[ $EUID -ne 0 ]]; then
+    echo -e "${RED}${BOLD}[ERROR]${RESET} Script 07 (solo mining) must be run as root."
+    echo -e "  Re-run with sudo:  ${BOLD}sudo $0${*:+ $*}${RESET}"
+    echo -e "  ${DIM}It edits the node's grin-server.toml, the firewall, nginx and cron —${RESET}"
+    echo -e "  ${DIM}all of which need root. Nothing was changed.${RESET}"
+    exit 1
+fi
+
 # ─── Logging ──────────────────────────────────────────────────────────────────
 mkdir -p "$LOG_DIR"
 log()     { echo -e "[$(date -u '+%Y-%m-%d %H:%M:%S UTC')] $*" >> "$LOG_FILE" 2>/dev/null || true; }
@@ -122,6 +136,48 @@ source "$SCRIPT_DIR/lib/07_solo_backup.sh"
 # Needs STRATUM_PORT_* (above) + colors/logging + _solo_pause — all defined here.
 # shellcheck source=lib/07_solo_quiet.sh
 source "$SCRIPT_DIR/lib/07_solo_quiet.sh"
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# NODE DIRECTORY / SECRET RESOLUTION  (never hardcode "<net>-prune")
+# ═══════════════════════════════════════════════════════════════════════════════
+# A mainnet node can live in EITHER /opt/grin/node/mainnet-prune (pruned) or
+# /opt/grin/node/mainnet-full (archive — what Script 01's archive build and
+# GrinScan need). Assuming "-prune" broke everything on the stats side for an
+# archive operator while the stratum side kept working (find_grin_server_toml
+# already searched mainnet-full), so they got a mining rig with a permanently
+# empty dashboard — and no error to point at. These two wrappers are the ONLY
+# way this script may name a node dir or secret.
+#
+# grin_live_node_dir / grin_node_secret_path come from lib/grin_node_secrets.sh
+# (sourced above): they resolve from the RUNNING node's tmux session first, then
+# the instances-conf registry, then the standard path — and grin_node_secret_path
+# additionally honours a custom api_secret_path set in the node's toml.
+
+# _solo_node_dir <net> → node dir serving this network. Always echoes a usable
+# path (falls back to the historic pruned path when nothing resolves) and always
+# returns 0, so callers can use it inline; every caller still guards on the file
+# it actually needs existing.
+_solo_node_dir() {
+    local net="$1" dir
+    if dir=$(grin_live_node_dir "$net" 2>/dev/null) && [[ -n "$dir" ]]; then
+        printf '%s\n' "$dir"
+    else
+        printf '/opt/grin/node/%s-prune\n' "$net"
+    fi
+}
+
+# _solo_node_secret <net> <owner|foreign> → absolute secret path for that node.
+# Same always-echo/always-0 contract as _solo_node_dir.
+_solo_node_secret() {
+    local net="$1" which="$2" p
+    if p=$(grin_node_secret_path "$net" "$which" 2>/dev/null) && [[ -n "$p" ]]; then
+        printf '%s\n' "$p"
+    elif [[ "$which" == "owner" ]]; then
+        printf '%s/.api_secret\n' "$(_solo_node_dir "$net")"
+    else
+        printf '%s/.foreign_api_secret\n' "$(_solo_node_dir "$net")"
+    fi
+}
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # TOML DETECTION
@@ -1370,14 +1426,16 @@ solo_live_stats() {
 
     local api_port="$NODE_API_PORT_MAINNET"
     local stratum_port="$STRATUM_PORT_MAINNET"
-    local secret_path="/opt/grin/node/mainnet-prune/.api_secret"
+    local net_key="mainnet"
     local net_label="MAINNET"
     if [[ "${net_choice:-1}" == "2" ]]; then
         api_port="$NODE_API_PORT_TESTNET"
         stratum_port="$STRATUM_PORT_TESTNET"
-        secret_path="/opt/grin/node/testnet-prune/.api_secret"
+        net_key="testnet"
         net_label="TESTNET"
     fi
+    # Resolved, not assumed: a mainnet archive node lives in mainnet-full.
+    local secret_path; secret_path=$(_solo_node_secret "$net_key" owner)
 
     local secret=""
     if [[ -f "$secret_path" ]]; then
@@ -1389,11 +1447,14 @@ solo_live_stats() {
         [[ "$alt_secret_path" != "0" && -f "$alt_secret_path" ]] && secret=$(cat "$alt_secret_path")
     fi
 
-    # Foreign API secret (same node dir) — used by get_header for the instant
-    # network-hashrate calc below. Derived from the owner secret's dir, so a custom
-    # owner path still finds its sibling foreign secret.
+    # Foreign API secret — used by get_header for the instant network-hashrate
+    # calc below. Resolved in its OWN right, never derived from the owner path:
+    # api_secret_path in the toml may point at a file NOT named ".api_secret", and
+    # then `${secret_path%/.api_secret}` strips nothing and the derived sibling is
+    # a path that cannot exist — auth silently drops and the hashrate line goes
+    # blank with no error. The resolver reads foreign_api_secret_path properly.
     local fsecret=""
-    local foreign_secret_path="${secret_path%/.api_secret}/.foreign_api_secret"
+    local foreign_secret_path; foreign_secret_path=$(_solo_node_secret "$net_key" foreign)
     [[ -f "$foreign_secret_path" ]] && fsecret=$(cat "$foreign_secret_path")
 
     while true; do
@@ -1474,7 +1535,7 @@ EOF
 #   $1 = network (mainnet|testnet)  →  echoes an absolute log file path
 _solo_node_log_path() {
     local net="$1" node_dir toml log=""
-    node_dir="/opt/grin/node/${net}-prune"
+    node_dir=$(_solo_node_dir "$net")
     toml="$node_dir/grin-server.toml"
     if [[ -f "$toml" ]]; then
         log=$(grep -E '^[[:space:]]*log_file_path[[:space:]]*=' "$toml" 2>/dev/null \
@@ -1489,7 +1550,8 @@ _solo_node_log_path() {
 # grin-server.toml), falling back to the toolkit default. Used by the setup page.
 #   $1 = network (mainnet|testnet)  →  echoes a port number
 _solo_stratum_port() {
-    local net="$1" toml="/opt/grin/node/${1}-prune/grin-server.toml" def addr port=""
+    local net="$1" toml def addr port=""
+    toml="$(_solo_node_dir "$net")/grin-server.toml"
     def=$STRATUM_PORT_MAINNET; [[ "$net" == "testnet" ]] && def=$STRATUM_PORT_TESTNET
     if [[ -f "$toml" ]]; then
         addr=$(grep -E '^[[:space:]]*stratum_server_addr[[:space:]]*=' "$toml" 2>/dev/null \
@@ -1503,7 +1565,8 @@ _solo_stratum_port() {
 # (logged at INFO) won't be captured. Empty if not found.
 #   $1 = network (mainnet|testnet)
 _solo_node_file_log_level() {
-    local net="$1" toml="/opt/grin/node/${1}-prune/grin-server.toml" lvl=""
+    local net="$1" toml lvl=""
+    toml="$(_solo_node_dir "$net")/grin-server.toml"
     if [[ -f "$toml" ]]; then
         lvl=$(grep -E '^[[:space:]]*file_log_level[[:space:]]*=' "$toml" 2>/dev/null \
               | head -1 | sed 's/.*=[[:space:]]*//' | tr -d '"' | xargs || true)
@@ -1521,7 +1584,7 @@ _solo_wallet_listener_url() {
     # 3415/13415 Foreign listener. The direct probe still needs the /v2/foreign path.
     local net="$1" default_port=3420 toml url=""
     [[ "$net" == "testnet" ]] && default_port=13420
-    toml="/opt/grin/node/${net}-prune/grin-server.toml"
+    toml="$(_solo_node_dir "$net")/grin-server.toml"
     if [[ -f "$toml" ]]; then
         url=$(grep -E '^[[:space:]]*wallet_listener_url[[:space:]]*=' "$toml" 2>/dev/null \
               | head -1 | sed 's/.*=[[:space:]]*//' | tr -d '"' | xargs || true)
@@ -1741,8 +1804,12 @@ solo_deploy_stats_page() {
     local conf_name="$STATS_BASENAME"
     local web_dir="/var/www/$conf_name"
     local nginx_conf="/etc/nginx/sites-available/$conf_name"
-    local mn_secret_path="/opt/grin/node/mainnet-prune/.api_secret"
-    local tn_secret_path="/opt/grin/node/testnet-prune/.api_secret"
+    # Resolved per network — an archive mainnet node lives in mainnet-full, and
+    # assuming "-prune" here used to abort the deploy outright with "No node
+    # .api_secret found for either network" on a perfectly healthy box.
+    local mn_secret_path tn_secret_path
+    mn_secret_path=$(_solo_node_secret mainnet owner)
+    tn_secret_path=$(_solo_node_secret testnet owner)
 
     local have_main=0 have_test=0
     [[ -f "$mn_secret_path" ]] && have_main=1

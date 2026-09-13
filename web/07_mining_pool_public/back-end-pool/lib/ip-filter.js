@@ -112,7 +112,18 @@ class IpFilter {
    */
   tempBan(ipStr, ttlMs) {
     const ip = String(ipStr).replace('::ffff:', '');
-    this.tempBans.set(ip, Date.now() + ttlMs);
+    const now = Date.now();
+    // Sweep EXPIRED bans before adding a new IP (audit §J12-11). This map was pruned only
+    // lazily — when that exact IP was looked up again, or when the admin panel listed active
+    // bans — so an IP banned once and never seen again held its entry for the life of the
+    // process. Only expired entries are ever removed here: dropping a LIVE ban to save memory
+    // would silently unban an attacker, so the sweep is by expiry and never by size.
+    if (!this.tempBans.has(ip) && this.tempBans.size >= IpFilter.TEMP_BAN_SWEEP_AT) {
+      for (const [k, exp] of this.tempBans) {
+        if (exp <= now) this.tempBans.delete(k);
+      }
+    }
+    this.tempBans.set(ip, now + ttlMs);
     this.log(`Temp-banned ${ip} for ${Math.round(ttlMs / 1000)}s`);
   }
 
@@ -295,5 +306,10 @@ class IpFilter {
     console.log(`[${timestamp}] [IpFilter] ${msg}`);
   }
 }
+
+// Entry count past which tempBan() sweeps expired bans before inserting a new IP. Far above
+// any real pool's concurrent auto-ban count, so the sweep only engages under a distributed
+// login flood. Audit §J12-11.
+IpFilter.TEMP_BAN_SWEEP_AT = 10000;
 
 module.exports = IpFilter;

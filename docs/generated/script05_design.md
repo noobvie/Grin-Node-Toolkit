@@ -1,5 +1,9 @@
 # Script 05 hub — designs for planned wallet/payment products
 
+> **Covers code as of:** n/a — designs for products that have no code yet · **Last verified:** never systematically verified
+> **Product code last changed:** n/a. The hub that will launch them, `scripts/05_grin_wallet_service.sh`, last changed 2026-08-15.
+> Last written 2026-08-09.
+
 Designs for products the Script 05 hub will launch **once they are built**. They live under
 the hub's number `05` on purpose: an unbuilt product has **no number of its own**, and naming
 a design doc `script055_*` would reserve `055` — the habit that scrambled the hub menu in the

@@ -30,6 +30,7 @@
         <button class="tab-btn active" data-filter=""          onclick="setFilter('', this)">All</button>
         <button class="tab-btn"        data-filter="immature"  onclick="setFilter('immature', this)">Maturing</button>
         <button class="tab-btn"        data-filter="confirmed" onclick="setFilter('confirmed', this)">Confirmed</button>
+        <button class="tab-btn"        data-filter="paid"      onclick="setFilter('paid', this)">Paid out</button>
         <button class="tab-btn"        data-filter="orphaned"  onclick="setFilter('orphaned', this)">Orphaned</button>
       </div>
 
@@ -92,9 +93,15 @@ function luckCell(b) {
   return `<td class="mono" style="color:${color}" title="round shares ÷ network difficulty">${v.toFixed(0)}%</td>`;
 }
 
+// Every status lib/blocks.js and lib/rewards.js can write. 'paid' is the TERMINAL success
+// state — rewards.js flips confirmed→paid ~30 s after maturity — so on a pool that has been
+// running a while it is the status of almost every block. It was missing here, so those rows
+// fell through to ['badge-dim', <raw status>]: the grey the panel uses for dead rows, on the
+// blocks that actually paid. Audit §J14; same class as §J5-4, which fixed the counters only.
 const STATUS = {
   immature:  ['badge-warn',  'Maturing'],
   confirmed: ['badge-ok',    'Confirmed'],
+  paid:      ['badge-ok',    'Paid out'],
   orphaned:  ['badge-error', 'Orphaned'],
 };
 
@@ -110,7 +117,10 @@ const blocksTable = AdminTable.create({
               fmtTs(b.found_at)].join(' '),
   row: b => {
     const [cls, label] = STATUS[b.status] || ['badge-dim', b.status];
-    const maturity = (b.status === 'confirmed' || b.status === 'orphaned')
+    // 'paid' belongs with confirmed/orphaned: maturity is behind it, so the countdown cell is
+    // meaningless. Without it a fully-distributed block rendered its maturity as "ready",
+    // i.e. still-waiting (audit §J14).
+    const maturity = (b.status === 'confirmed' || b.status === 'paid' || b.status === 'orphaned')
       ? '—'
       : (b.blocks_to_maturity > 0 ? `${b.blocks_to_maturity.toLocaleString()} blocks left` : 'ready');
     return `<tr>

@@ -14,7 +14,7 @@
   // legacy deep-link: /admin/settings.html#access → /admin/settings-access.html.
   (function () {
     var TABS = ['pool-info','branding','seo','analytics','announcements',
-                'payout','incentives','access','alerts','database'];
+                'payout','incentives','access','database'];  // 'alerts' removed — audit §J8-3
     var tab = (location.hash || '').replace(/^#/, '');
     // Pages became a standalone CMS CRUD page (no longer a settings section).
     if (tab === 'pages') { location.replace('/admin/pages.html'); return; }

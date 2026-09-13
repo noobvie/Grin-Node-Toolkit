@@ -45,52 +45,21 @@
           </div>
         </div>
 
-        <div class="form-section">
-          <h3 class="section-title">Visibility & Mining</h3>
-          <div class="form-row">
-            <div class="form-group">
-              <label for="pool_visibility">Pool Visibility</label>
-              <select id="pool_visibility" name="pool_visibility">
-                <option value="public">Public (open to all)</option>
-                <option value="private">Private (whitelisted only)</option>
-              </select>
-              <div class="helper-text">Maintenance mode is on the <strong>Announcements</strong> tab.</div>
-            </div>
-            <div class="form-group">
-              <label for="mining_mode">Mining Mode</label>
-              <select id="mining_mode" name="mining_mode">
-                <option value="stratum">Stratum (traditional pool)</option>
-                <option value="solo">Solo (solo mining proxy)</option>
-              </select>
-            </div>
-          </div>
-
-          <div class="form-group" id="address-whitelist-group" style="display: none;">
-            <label>Address Whitelist (Private Mode)</label>
-            <div class="list-item-input">
-              <input type="text" id="whitelist-input" class="settings-skip" placeholder="grin1xxxxx..." required>
-              <button class="btn btn-secondary" onclick="addToWhitelist()">Add</button>
-            </div>
-            <div class="list-manager" id="whitelist-list"></div>
-          </div>
-        </div>
+        <!-- The "Visibility & Mining" section (Pool Visibility, Mining Mode, Address Whitelist)
+             was REMOVED 2026-09-02, audit §J9-1. Nothing in the backend read any of those keys:
+             a pool set to "Private (whitelisted only)" accepted every miner on earth, and the
+             step-up prompt on those fields told the operator the opposite. Maintenance mode is
+             on the Announcements tab and is unaffected. -->
 
         <div class="form-section">
           <h3 class="section-title">Pool Economics</h3>
-          <div class="form-row">
-            <div class="form-group">
-              <label for="pool_fee_percent">Pool Fee (%)</label>
-              <div class="slider-group">
-                <input type="range" id="pool_fee_percent" name="pool_fee_percent" min="0" max="50" step="0.1" value="1">
-                <span class="slider-value"><span id="fee-value">1</span>%</span>
-              </div>
-              <div class="helper-text">Retained by pool operator (0-50%)</div>
+          <div class="form-group">
+            <label for="pool_fee_percent">Pool Fee (%)</label>
+            <div class="slider-group">
+              <input type="range" id="pool_fee_percent" name="pool_fee_percent" min="0" max="50" step="0.1" value="1">
+              <span class="slider-value"><span id="fee-value">1</span>%</span>
             </div>
-            <div class="form-group">
-              <label for="max_miners">Max Miners</label>
-              <input type="number" id="max_miners" name="max_miners" min="0" placeholder="0 (unlimited)">
-              <div class="helper-text">0 = no limit</div>
-            </div>
+            <div class="helper-text">Retained by pool operator (0-50%)</div>
           </div>
         </div>
 

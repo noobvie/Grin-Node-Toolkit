@@ -1,5 +1,8 @@
 # Script 04 — Node Foreign API Exposure — Security Audit
 
+> **Covers code as of:** 2026-07-10 (the audit's own stated date) · **Last verified:** never re-verified since
+> **Product code last changed:** 2026-07-19 — `scripts/04_grin_node_foreign_api.sh`, `web/04_node_api/`
+
 **Scope:** how Script 04 publishes the Grin node's API to the world — MODE A (raw TCP firewall
 port), MODE B (nginx HTTPS reverse proxy), and the Tor onion variant. Focus: over-exposure of
 management endpoints, transport privacy, rate-limiting.

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" data-page="login" data-maintenance="exempt">
+<html lang="en" data-page="login" data-maintenance="exempt" data-untrusted-html="exempt">
 <head>
   <!-- ===== ESSENTIAL META TAGS ===== -->
   <meta charset="UTF-8">
@@ -306,7 +306,14 @@
         <button type="submit" id="login-btn">Login</button>
       </form>
       <div class="register-link">
-        New admin? <button type="button" class="linkbtn" onclick="toggleRegister(event)">Register here</button>
+        <!-- Audit §J17-1: this used to read "New admin? Register here" on every pool, forever —
+             pointing anonymous visitors at /api/auth/register, which is open to whoever asks
+             whenever the users table holds no admin (a fresh install between service start and
+             admin creation, and again after every pool.db reset). The route is now on-box only,
+             so the link advertised a door that can no longer open from a browser. The form
+             below is kept (toggleRegister/handleRegister still reference its ids) but is no
+             longer reachable from the UI. -->
+        New admin? Registration runs on the pool server — Script 07 &rarr; Create admin account.
       </div>
     </div>
 
@@ -422,8 +429,12 @@
           window.location.href = '/admin/';
         } else {
           showError(data.error || 'Verification failed');
-          // 2fa session expired → back to the login form (needs a fresh password + captcha).
-          if (/expired/i.test(data.error || '')) cancelTotp();
+          // The token is finished — expired, or burned through its guess budget (the budget is
+          // bound to the token, not to the IP; audit §J2-3). Either way the code form can no
+          // longer succeed, so go back for a fresh password + captcha rather than leaving the
+          // operator typing into a dead form. `restart_login` is the server's explicit signal;
+          // the string test stays as a fallback for the expiry message.
+          if (data.restart_login || /expired/i.test(data.error || '')) cancelTotp();
         }
       } catch (err) {
         showError('Connection error: ' + err.message);

@@ -38,10 +38,51 @@ Key facts to recall:
 
 `--floonet` is obsolete — never use it.
 
-## 5. Output format
+## 5. Session splitting — propose it, don't wait to be asked
+
+If the research concludes the work is **more than one sitting** — several files, several
+products, a shell lib plus a web app, or anything with a VPS step — then **propose a
+per-session prompt plan as part of the output**. Do not wait for it to be requested; it is
+easy to forget at planning time and expensive to retrofit once a session is already large.
+
+What a good split looks like:
+
+- **One coherent unit per session** — one tool, one page, one lib. Two features in one
+  session is what balloons the context and makes the review shallow.
+- **Each prompt is pasteable into a COLD session.** `CLAUDE.md` and `MEMORY.md` load
+  automatically, but the prompt must still name the design doc and section to read first,
+  and name the files it may touch. Do not make a cold session infer scope.
+- **State what NOT to touch.** Most scope creep between sessions comes from a prompt that
+  said what to build but not what to leave alone.
+- **Split research away from build** when a wire format, byte layout or third-party API has
+  to be confirmed from source. That session writes no code, and it is allowed to conclude
+  "not confirmable" — which is a result, not a failure.
+- **Name the shippable checkpoints.** Say which sessions end in a deployable state and which
+  are mid-flight, so a build can be paused without leaving something half-wired.
+- **Isolate a known trap into its own small session** rather than burying it in a large one
+  (an nginx zone that silently no-ops on an upgraded box, a migration, a port change).
+- **Put the VPS acceptance last, as its own session**, and make it report what actually
+  happened per check — a check that could not be run is not a pass.
+
+**Write the plan OUTSIDE the repo**, to `D:/tmp/grin-toolkit-plans/script<XX>_<service>_plan.md`.
+A session plan is scaffolding that dies once every part is run — it is not documentation, and
+committing it is what turned `docs/generated/` into a dump (five such files, ~164 KB, three of
+them long finished, cleared 2026-09-06). `docs/generated/` is the durable reference library:
+design, architecture, flows.
+
+Cross-link **one way only**: the design doc may say the work is "broken into nine sessions" and
+that the plan is kept outside the repo, but it must never link to a `D:/tmp/...` path — that is a
+dead link for anyone who clones. The plan links *into* the design doc freely.
+
+When every part has been run, fold the durable outcome — what was decided, what shipped, what is
+still open — into that product's `script<XX>_design.md` or `script<XX>_implementation.md`, then
+delete the plan file. See `D:/tmp/grin-toolkit-plans/README.md`.
+
+## 6. Output format
 
 Return:
 1. What already exists in the codebase that's relevant
 2. What the Grin API / docs say about this area
 3. Gaps that need to be filled
 4. Recommended approach (no code)
+5. A per-session prompt plan, if §5 applies — or one line saying why it is a single session

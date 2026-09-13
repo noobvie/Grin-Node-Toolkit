@@ -2,6 +2,10 @@
 ║         059_grin_drop.sh  —  IMPLEMENTATION PLAN  (Node.js + HTTP API)      ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
 
+> **Covers code as of:** 2026-04-04 (the doc's own `Date:`, planning v12) · **Last verified:** never systematically verified
+> **Product code last changed:** 2026-08-22 — `scripts/059_grin_drop.sh`, `scripts/lib/059_lib_*.sh`, `web/059_drop/`
+> Last edited 2026-08-04, but that was the 052-to-059 renumber sweep, not a re-write against the code.
+
   Version:  planning v12
   Date:     2026-04-04
   Scope:    - Node.js/Express backend with HTTP API (Owner + Foreign)

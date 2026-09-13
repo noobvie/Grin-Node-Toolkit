@@ -1,7 +1,7 @@
 /* reactor-dashboard.js — homepage "Reactor Control" instrument wiring.
  *
  * Drives the control-panel deck in index.html from the public endpoints
- * (no auth; Auth.fetch returns parsed JSON or null):
+ * (no auth; Auth.read returns parsed JSON on a 2xx, else null — audit §J15-2):
  *   /api/pool/stats            miners / blocks / rewards / share_quality
  *   /api/stratum/hashrate      pool GPS aggregates (hashrate gauge)
  *   /api/config/pool-info      fee / min payout / network (spec placard)
@@ -343,7 +343,7 @@
 
   async function loadPoolInfo() {
     try {
-      var info = await Auth.fetch('/api/config/pool-info');
+      var info = await Auth.read('/api/config/pool-info');
       if (!info) return;
       setText('pl-fee', (info.pool_fee_percent != null ? info.pool_fee_percent : 0).toFixed(1) + '%');
       setText('pl-min', (info.min_withdrawal != null ? info.min_withdrawal : 0).toFixed(1) + ' GRIN');
@@ -353,7 +353,7 @@
 
   async function loadHashrate() {
     try {
-      var hr = await Auth.fetch('/api/stratum/hashrate');
+      var hr = await Auth.read('/api/stratum/hashrate');
       if (!hr) return;
       var gps = hr.pool_hashrate_1h_gps || 0;
       var g1 = fmtGps(gps);
@@ -384,7 +384,7 @@
 
   async function loadStats() {
     try {
-      var s = await Auth.fetch('/api/pool/stats');
+      var s = await Auth.read('/api/pool/stats');
       if (!s) return;
       setText('c-miners', String(s.active_miners || 0));
       lastActiveMiners = Number(s.active_miners) || 0;
@@ -414,7 +414,7 @@
 
   async function loadShare() {
     try {
-      var e = await Auth.fetch('/api/pool/effort');
+      var e = await Auth.read('/api/pool/effort');
       if (!e) return;
       var share = e.network_share_pct;
       // Spec-plate network conditions (same endpoint already carries them).
@@ -427,14 +427,23 @@
       // (both still useful, but not gauge-shaped) ride the sub-line under the numeral.
       var effort = e.round_effort_pct != null ? e.round_effort_pct : 0;
       setText('g-share-v', e.round_effort_pct != null ? Math.round(effort) + '%' : '—');
-      setText('g-share-luck',
-        // Shares ÷ network difficulty, so UNDER 100% is a lucky pool — the same
-        // convention as the blocks page. Bare "luck 87%" reads as bad news to
-        // anyone assuming higher-is-better, hence the suffix.
-        (e.luck_100_pct != null
-          ? 'luck ' + e.luck_100_pct.toFixed(0) + '% ' + (e.luck_100_pct <= 100 ? '(lucky)' : '(unlucky)')
-          : 'luck —') +
-        ' · ' + (share != null ? 'share ' + fmtShare(share) : 'share —'));
+      // §J12-7 added round_window_capped: true means the round window was clamped to a floor
+      // because the pool has not found a block yet, so "effort" is measured from an arbitrary
+      // start rather than from the last block. The number is honest arithmetic on a window
+      // that is not a round; presenting it as one is not (audit §J15-8, answering §J12's
+      // handoff). Say so in the sub-line and skip the luck figure, which needs a real round.
+      if (e.round_window_capped) {
+        setText('g-share-luck', 'no block found yet — measured from a window, not a round');
+      } else {
+        setText('g-share-luck',
+          // Shares ÷ network difficulty, so UNDER 100% is a lucky pool — the same
+          // convention as the blocks page. Bare "luck 87%" reads as bad news to
+          // anyone assuming higher-is-better, hence the suffix.
+          (e.luck_100_pct != null
+            ? 'luck ' + e.luck_100_pct.toFixed(0) + '% ' + (e.luck_100_pct <= 100 ? '(lucky)' : '(unlucky)')
+            : 'luck —') +
+          ' · ' + (share != null ? 'share ' + fmtShare(share) : 'share —'));
+      }
       if (gaugeShare) {
         // Stable 0–200% dial (bumps if a very unlucky round runs past it). Zones:
         // 0–100 nominal, 100–150 running long, 150→top overdue.
@@ -453,7 +462,7 @@
 
   async function loadStatus() {
     try {
-      var s = await Auth.fetch('/api/pool/status');
+      var s = await Auth.read('/api/pool/status');
       if (!s) throw new Error('no status');
       var poolOk = !!(s.pool && s.pool.ok);
       var nodeOk = !!(s.node && s.node.reachable);
@@ -501,8 +510,18 @@
     var wrap = $('rx-rods');
     if (!wrap) return;
     try {
-      var blocks = await Auth.fetch('/api/pool/blocks?limit=8');
+      var blocks = await Auth.read('/api/pool/blocks?limit=8');
       wrap.textContent = '';
+      // null = the feed did not answer (429, 5xx, network). That is NOT "no blocks yet", and
+      // saying so told every visitor a working pool had never found a block (audit §J15-2).
+      if (blocks === null) {
+        var u = document.createElement('div');
+        u.className = 'rods-empty';
+        u.textContent = 'BLOCK FEED UNAVAILABLE';
+        wrap.appendChild(u);
+        setLamp('an-orphan', 'warn', 'feed down');
+        return;
+      }
       if (!Array.isArray(blocks) || blocks.length === 0) {
         var d = document.createElement('div');
         d.className = 'rods-empty';
@@ -567,8 +586,17 @@
     var tty = $('rx-tty');
     if (!tty) return;
     try {
-      var payments = await Auth.fetch('/api/pool/payments?limit=7');
+      var payments = await Auth.read('/api/pool/payments?limit=7');
       tty.textContent = '';
+      // Same split as loadBlocks: "the feed is down" and "nobody has been paid yet" are
+      // opposite facts about a pool and must not share a line (audit §J15-2).
+      if (payments === null) {
+        var pu = document.createElement('div');
+        pu.textContent = 'PAYOUT FEED UNAVAILABLE';
+        tty.appendChild(pu);
+        setLamp('an-payouts', 'warn', 'feed down');
+        return;
+      }
       if (!Array.isArray(payments) || payments.length === 0) {
         var d = document.createElement('div');
         d.textContent = 'NO PAYOUTS YET — first payout prints here';
@@ -616,7 +644,7 @@
     // dial's 24h-peak marker — and it IS the pool trace when the 24H range is selected.
     var fine = [];
     try {
-      var data = await Auth.fetch('/api/pool/hashrate/history?hours=24');
+      var data = await Auth.read('/api/pool/hashrate/history?hours=24');
       fine = (data && data.series) || [];
       hashPeakGps = fine.reduce(function (m, p) { return Math.max(m, Number(p.gps) || 0); }, 0);
     } catch (e) { /* keep last peak / trace */ }
@@ -624,7 +652,7 @@
     // Durable hourly/daily rollup for the selected range (pool 7D/30D + network line).
     var points = [], bucket = 3600;
     try {
-      var m = await Auth.fetch('/api/pool/metrics/history?range=' + chartRange);
+      var m = await Auth.read('/api/pool/metrics/history?range=' + chartRange);
       points = (m && m.points) || [];
       bucket = (m && m.bucket_seconds) || 3600;
     } catch (e) { /* charts keep last trace */ }
@@ -807,9 +835,9 @@
       // endpoint itself never blocks on a liveness read server-side (handshake + stratum dial
       // are cached out of the request path), so this resolves as fast as the DB query.
       var brandingP = (!BASE_PORT || !DEFAULT_URI)
-        ? Auth.fetch('/api/public/branding').catch(function () { return null; })
+        ? Auth.read('/api/public/branding').catch(function () { return null; })
         : Promise.resolve(null);
-      var regionsP = Auth.fetch('/api/pool/stats/regions');
+      var regionsP = Auth.read('/api/pool/stats/regions');
       var b = await brandingP;
       var conn = b && b.data && b.data.connection;
       if (conn) {
@@ -845,8 +873,13 @@
           lamp.className = 'lamp' + (st ? ' ' + st : '');
           lamp.appendChild(document.createTextNode('REG ' + String(r.region || '').toUpperCase()));
           var small = document.createElement('small');
+          // `miners` is null when the server withheld it under the k-anonymity floor
+          // (audit §J11-5) — that is NOT zero, and rendering it as 'idle' would contradict
+          // the 'online' lamp beside it and re-create §J5-4's suppressed-reads-as-real bug.
+          // "<N miners" states exactly what the null already discloses (0 < n < N) and no more.
           small.textContent = r.status === 'offline' ? 'offline'
             : r.status === 'checking' ? 'checking'
+            : r.below_floor ? '<' + (data.min_bucket || 3) + ' miners'
             : (r.miners > 0 ? r.miners + (r.miners === 1 ? ' miner' : ' miners') : 'idle');
           lamp.appendChild(small);
           lampHost.appendChild(lamp);
@@ -882,7 +915,11 @@
       regions.sort(function (a, b2) {
         if (a.region === nearestKey) return -1;
         if (b2.region === nearestKey) return 1;
-        if ((b2.miners || 0) !== (a.miners || 0)) return (b2.miners || 0) - (a.miners || 0);
+        // A floor-suppressed region (§J11-5) has 1-2 miners, not 0 — count it as 1 so it does
+        // not sort below a genuinely empty gateway.
+        var mA = a.miners != null ? a.miners : (a.below_floor ? 1 : 0);
+        var mB = b2.miners != null ? b2.miners : (b2.below_floor ? 1 : 0);
+        if (mB !== mA) return mB - mA;
         return (a.label || a.region).localeCompare(b2.label || b2.region);
       });
 

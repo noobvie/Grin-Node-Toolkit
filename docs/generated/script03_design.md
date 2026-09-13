@@ -1,5 +1,9 @@
 # Script 03 — Chain-Data Snapshot Method Redesign
 
+> **Covers code as of:** 2026-08-22 · **Last verified:** never systematically verified
+> **Product code last changed:** 2026-08-24 — `scripts/03_grin_share_chain_data.sh`, `scripts/lib/03_lib_remote.sh`
+> The doc states `Created: 2026-08-17`, with phases 1-4 landing 2026-08-17/18.
+
 **Status:** Phases 1-4 **IMPLEMENTED** (1-3 on 2026-08-17, 4 + review fixes on
 2026-08-18) — not yet VPS-tested. **Phase 5 (object storage) is DROPPED** — decision
 2026-08-18: stay on VPS free space. Everything below is therefore local-only.

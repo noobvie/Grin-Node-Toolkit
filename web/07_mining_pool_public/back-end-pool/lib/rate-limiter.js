@@ -9,7 +9,7 @@ class RateLimiter {
   constructor(config = {}) {
     this.config = config;
     // Buckets are keyed by `<limitType>|<ip>`, NOT by IP alone — each limit type
-    // (public/auth/api/admin) gets its OWN per-IP counter. Sharing one per-IP array
+    // (public/auth/admin/…) gets its OWN per-IP counter. Sharing one per-IP array
     // across all types meant the strict `auth` budget (10/min) was measured against the
     // IP's TOTAL request volume (captcha + /api/config + admin dashboard polls + assets),
     // so a single login-page load tripped "Too many requests" before the first real login
@@ -37,10 +37,15 @@ class RateLimiter {
     // admin polling. These are DoS-padding only — the real brute-force controls are
     // JWT + login captcha + per-account lockout + IP auto-ban (in index.js), which were
     // deliberately NOT loosened. Dial these back down when you tighten security.
+    //
+    // There was an `api: 600` bucket here until 2026-09-02. It was defined, documented, and was
+    // middleware()'s default argument — and a sweep of every middleware()/peek()/consume() call
+    // in index.js found ZERO uses of it (audit §J12-10). A bucket nobody references is a number
+    // the next reviewer assumes covers something. Removed; middleware()'s default moved to
+    // `public`. If a genuinely separate API tier is ever wanted, add it AND attach it.
     this.limits = {
       public: 1200,
       auth: 200,
-      api: 600,
       admin: 2400,
       // Bulk CSV downloads (account ledger / withdrawal history). Deliberately tight and
       // SEPARATE from `public` (1200/min) so a human's occasional export works but automated
@@ -55,7 +60,8 @@ class RateLimiter {
       // The 60s response cache in index.js already makes REPEAT probes of one address free, so
       // this number is really about ENUMERATION — how many DISTINCT addresses one IP can probe
       // per minute. At 1200 you could walk the whole leaderboard sampling every miner's wallet
-      // uptime in seconds; at 10 you cannot. Overridable via config.rate_limits.torcheck.
+      // uptime in seconds; at 10 you cannot. Overridable via config.rate_limits.torcheck
+      // (a value of 0 there DISABLES the bucket — see middleware()).
       torcheck: 10,
       // Money-write actions (withdraw / slatepack finalize / nostr-destination register+remove).
       // SEPARATE from `public` (1200/min) so ownership-proof guessing and payout spam are cut off
@@ -63,8 +69,25 @@ class RateLimiter {
       // loose budget every read endpoint shares. A real payout is only ~2 requests (create then
       // finalize); 20/min/IP leaves ample headroom for a small NAT'd farm while still blocking
       // automation. The per-IP proof throttle in owner-proof.js is the finer brute-force control;
-      // this bucket is the coarse DoS pad in front of it. Overridable via config.rate_limits.withdraw.
-      withdraw: 20
+      // this bucket is the coarse DoS pad in front of it. Overridable via config.rate_limits.withdraw
+      // (a value of 0 there DISABLES the bucket — see middleware()).
+      withdraw: 20,
+      // Password RE-verification: POST /api/admin/reauth and POST /api/auth/change-password.
+      // Deliberately the tightest bucket here, and deliberately NOT `admin` (2400/min) or
+      // `auth` (200/min), which is what these two ran on.
+      //
+      // reauth is the entire step-up gate on every money/destructive route, so its budget is
+      // the budget for guessing the admin password against a stolen session. At 2400/min that
+      // was 3.46 M guesses/day against a password the register form only requires to be 8
+      // characters. It is also the CPU lever: bcryptjs is pure JS on the same event loop that
+      // validates stratum shares, ~304 ms per compare at cost 12, so 2400/min demanded 730
+      // CPU-seconds per 60 s of wall clock — a session thief who never guesses the password
+      // still stalls share intake. The (username, IP) lockout added in auth.js cannot fix that
+      // half: the bcrypt runs BEFORE any counter can see the result. Only the bucket bounds it.
+      //
+      // 10/min is generous for the human it serves: a step-up lasts 5 minutes, so an operator
+      // working through a payout run steps up a handful of times an hour. Audit §J2-1.
+      stepup: 10
     };
 
     // Override with config
@@ -82,13 +105,17 @@ class RateLimiter {
    * Middleware factory: returns express middleware
    * Usage: app.use(rateLimiter.middleware('public'))
    */
-  middleware(limitType = 'api') {
+  middleware(limitType = 'public') {
     return (req, res, next) => {
       const clientIp = this.getClientIp(req);
       const limit = this.limits[limitType];
 
       if (!limit) {
-        // No limit configured for this type
+        // No limit configured for this type — and note that a limit of 0 lands here too.
+        // `config.rate_limits: { "torcheck": 0 }` therefore means DISABLED, not "block
+        // everything". That is deliberate (it is the only way an operator can switch a bucket
+        // off), but it is the opposite of what "0" reads like, so both comments above that
+        // advertise an override say so explicitly. Audit §J12-10.
         return next();
       }
 
@@ -166,7 +193,7 @@ class RateLimiter {
 
   /**
    * Build the per-(type,IP) bucket key. limitType comes from a fixed internal set
-   * (the keys of this.limits: public/auth/api/admin/export/torcheck/withdraw), none of
+   * (the keys of this.limits: public/auth/admin/export/torcheck/withdraw/stepup), none of
    * which contains '|', so this never collides across IPs.
    */
   bucketKey(limitType, ip) {
@@ -208,14 +235,53 @@ class RateLimiter {
         // Still locked out
         violation.attemptedRequests++;
         return false;
-      } else {
-        // Lockout expired — reset
-        this.violations.delete(key);
       }
+      // Lockout EXPIRED — but the record is deliberately kept, with its `count` intact.
+      //
+      // This used to `delete` it here, which made the exponential backoff below unreachable
+      // code (audit §J12-4): the only path that reads `violations.get(key)?.count` is the
+      // escalation line, and by the time it ran the record had always just been removed — so
+      // `count` was always 1, every lockout was 30 s, and the documented 30→60→120 ladder and
+      // the one-hour cap never happened. `getViolations()` reported `violation_count: 1`
+      // forever, and the admin Login Security panel's escalation column was a constant.
+      //
+      // An expired record is invisible everywhere it matters: peek(), getStatus() and
+      // getViolations() all test `lockedUntil > now`, so keeping it does not extend a lockout
+      // by one millisecond. It only remembers that this bucket has misbehaved before.
+      //
+      // The memory is dropped by the cleanup sweep once the bucket has been quiet for a full
+      // VIOLATION_MEMORY_MS, so a client that backs off starts again at the base 30 s.
     }
 
     // Get requests for this bucket in current window
     if (!this.requests.has(key)) {
+      // Bound the map before adding a NEW key (audit §J12-11). One entry per distinct source IP
+      // per bucket type, swept only every 5 minutes and previously with no cap at all — so a
+      // distributed flood grew it unchecked between sweeps, while getStatus(), getViolations()
+      // and resetIp() each walk it end to end.
+      //
+      // Eviction only ever touches `requests`, NEVER `violations`: evicting a violation would
+      // LIFT A LOCKOUT, which turns a memory bound into a security bypass. The violations map
+      // is bounded by its own TTL sweep instead. Losing a request-count entry can only grant a
+      // client a fresh window — exactly what the sweep does for an idle key anyway.
+      //
+      // Stale entries first (a bucket with no timestamp inside the window is already dead);
+      // only if every tracked bucket is genuinely live do we drop oldest-insert-first, which
+      // Map iteration order gives for free.
+      if (this.requests.size >= RateLimiter.MAX_TRACKED_BUCKETS) {
+        let dropped = 0;
+        for (const k of this.requests.keys()) {
+          const ts = this.requests.get(k);
+          if (!ts || !ts.some(t => now - t < windowMs)) { this.requests.delete(k); dropped++; }
+          if (dropped >= RateLimiter.EVICT_BATCH) break;
+        }
+        if (dropped === 0) {
+          for (const k of this.requests.keys()) {
+            this.requests.delete(k);
+            if (++dropped >= RateLimiter.EVICT_BATCH) break;
+          }
+        }
+      }
       this.requests.set(key, []);
     }
 
@@ -239,7 +305,7 @@ class RateLimiter {
       return false;
     }
 
-    // Request allowed — record it
+    // Request allowed — record it.
     recentRequests.push(now);
     this.requests.set(key, recentRequests);
 
@@ -369,9 +435,14 @@ class RateLimiter {
         }
       });
 
-      // Clean expired violations
+      // Clean expired violations — but only once they have been expired for a full
+      // VIOLATION_MEMORY_MS. An expired record is already inert everywhere (peek/getStatus/
+      // getViolations all test `lockedUntil > now`); the only thing it still carries is the
+      // `count` the exponential backoff escalates from. Deleting it the instant the lockout
+      // lapsed — here and in checkLimit — is what made that backoff unreachable (§J12-4).
+      // A client that goes quiet for the memory window is forgiven and starts again at 30 s.
       this.violations.forEach((v, key) => {
-        if (v.lockedUntil <= now) {
+        if (v.lockedUntil + RateLimiter.VIOLATION_MEMORY_MS <= now) {
           this.violations.delete(key);
         }
       });
@@ -390,5 +461,18 @@ class RateLimiter {
     console.log(`[${timestamp}] [RateLimiter] ${msg}`);
   }
 }
+
+// How long a lapsed violation is remembered so the NEXT one escalates (30s → 60s → 120s …).
+// Ten minutes: long enough that a client hammering back through every lockout climbs the
+// ladder, short enough that an operator who tripped the admin budget once during a busy
+// afternoon is back to a 30 s penalty by the time they notice. Audit §J12-4.
+RateLimiter.VIOLATION_MEMORY_MS = 10 * 60 * 1000;
+
+// Hard cap on tracked (type, IP) request buckets, and how many to reclaim when it is hit.
+// 200 k entries is far above any legitimate load — a busy pool sees one entry per active
+// visitor per bucket type — so this only ever engages under a distributed flood, which is
+// precisely when an unbounded Map is the wrong thing to have. Audit §J12-11.
+RateLimiter.MAX_TRACKED_BUCKETS = 200000;
+RateLimiter.EVICT_BATCH = 1000;
 
 module.exports = RateLimiter;

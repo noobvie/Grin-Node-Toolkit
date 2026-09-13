@@ -33,44 +33,29 @@
     <meta name="twitter:description" content="High-performance Grin mining pool with real-time PPLNS rewards, Tor-based anonymous payouts, and advanced monitoring tools.">
     <meta name="twitter:image" content="https://pool.grin.money/images/twitter-card.svg">
     <meta name="twitter:domain" content="pool.grin.money">
-    <meta name="twitter:site" content="@GriniumPool">
+    <!-- twitter:site removed 2026-09-03 (audit §J15-3): it named @GriniumPool, an X
+         account the deploying operator does not own, on every pool built from this
+         toolkit. branding.js sets this tag from seo.twitter_handle when the operator
+         configures one; with none configured the correct value is no tag at all. -->
 
     <!-- ===== CANONICAL & HREFLANG ===== -->
     <link rel="canonical" href="https://pool.grin.money/">
     <link rel="alternate" hreflang="en" href="https://pool.grin.money/">
 
     <!-- ===== STRUCTURED DATA (JSON-LD) ===== -->
-    <script type="application/ld+json">
-    {
-      "@context": "https://schema.org",
-      "@type": "WebSite",
-      "name": "GRINIUM Mining Pool",
-      "description": "High-performance Grin cryptocurrency mining pool with PPLNS rewards distribution",
-      "url": "https://pool.grin.money/",
-      "potentialAction": {
-        "@type": "SearchAction",
-        "target": {
-          "@type": "EntryPoint",
-          "urlTemplate": "https://pool.grin.money/search?q={search_term_string}"
-        }
-      }
-    }
-    </script>
-
-    <script type="application/ld+json">
-    {
-      "@context": "https://schema.org",
-      "@type": "Organization",
-      "name": "GRINIUM Mining Pool",
-      "description": "Secure Grin cryptocurrency mining pool with real-time monitoring",
-      "url": "https://pool.grin.money/",
-      "logo": "https://pool.grin.money/images/logo.svg",
-      "sameAs": [
-        "https://x.com/griniumpool",
-        "https://github.com/griniumpool"
-      ]
-    }
-    </script>
+    <!-- Two static JSON-LD blocks stood here until 2026-09-03. Removed (audit §J15-3):
+         structured data is an IDENTITY claim, and these made three the deploying operator
+         cannot make. (1) `sameAs` named https://x.com/griniumpool and
+         https://github.com/griniumpool — third-party accounts belonging to the toolkit
+         author, asserted as the operator's own on every pool built from this repo.
+         (2) `url`/`logo` named pool.grin.money, a host the operator does not serve.
+         (3) The WebSite block declared a SearchAction against /search?q=, an endpoint no
+         pool has ever had, so the one thing it could have earned (a sitelinks search box)
+         was a claim to a 404.
+         branding.js injectStructuredData() emits an Organization block from the LIVE config
+         instead — real pool name, real canonical, real logo, and `sameAs` built from the
+         operator's own social links — gated on seo.structured_data_enabled. That is the only
+         structured data a deployed pool should publish. -->
 
     <!-- ===== ADDITIONAL SEO ===== -->
     <meta name="theme-color" content="#07090c">

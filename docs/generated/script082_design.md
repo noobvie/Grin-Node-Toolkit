@@ -1,5 +1,9 @@
 # Script 082 — Provider / Host-Access Tamper Watch
 
+> **Covers code as of:** 2026-07-25 (the doc: "BUILT 2026-07-25") · **Last verified:** never systematically verified
+> **Product code last changed:** 2026-08-25 — `scripts/082_provider_access_watch.sh`
+> The menu-key note was updated 2026-08-06; the rest is the 2026-07-25 build.
+
 **Status:** BUILT 2026-07-25 (add-ons branch), NOT VPS-tested.
 **Entry:** Admin Centre (08) → Monitoring → `2) Provider Access Watch`
 (key = sub-script number since the 2026-08-05 re-sort: 082 → key 2. It first

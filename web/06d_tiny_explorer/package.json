@@ -4,7 +4,8 @@
   "description": "Tiny Explorer — stateless, mainnet-only Grin block explorer for pool deep-links",
   "main": "tiny-explorer-server.js",
   "scripts": {
-    "start": "node tiny-explorer-server.js"
+    "start": "node tiny-explorer-server.js",
+    "test": "node test/run-all.js"
   },
   "dependencies": {
     "express": "^4.18.2"

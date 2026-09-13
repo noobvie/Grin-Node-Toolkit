@@ -21,6 +21,10 @@ const { parseStratumMessage } = require('./stratum-protocol');
 
 const RECONNECT_DELAY_MS = 5000;
 const SUBMIT_TIMEOUT_MS  = 15000;
+
+// Sentinel swapped in for a string nonce so the quote-stripping replacement targets a value
+// this module injected rather than anything a miner sent (see _serialize / audit §J6-11).
+const NONCE_PLACEHOLDER = '__GRIN_NONCE_U64__';
 // Cap the inbound line buffer from the node stratum. The node is trusted (localhost), so this
 // is defence-in-depth against a malformed/oversized frame growing lineBuffer without bound;
 // legitimate node messages (job push, submit responses) are well under a KB. 64 KB never trips
@@ -181,16 +185,37 @@ class NodeStratumClient {
     });
   }
 
+  // Serialise one message for the node's wire, re-emitting a string nonce as a bare u64.
+  //
+  // The nonce travels through the pool as a STRING (a u64 above 2^53 would be rounded by
+  // JSON.parse — the node then logs nonces ending in zeros and rejects the share as Invalid
+  // PoW). The node's serde wants a bare u64 number, so the quotes come off on the wire only.
+  //
+  // ⚠ This used to be `.replace(/"nonce":"(\d+)"/, …)` over the whole serialised blob —
+  // NON-GLOBAL, so FIRST MATCH WINS — while handleSubmit forwarded `{ ...params }` verbatim,
+  // every miner-invented key included, in the miner's own insertion order. A nested object
+  // keyed `nonce` holding a quoted number therefore satisfied this pattern while being
+  // invisible to the parse-side regex, so a miner-chosen key decided what the node parsed
+  // (audit §J6-11). Two changes closed it: handleSubmit now whitelists the five real submit
+  // fields and type-checks them, and the substitution below targets a placeholder THIS module
+  // put in the object rather than pattern-matching miner data. The placeholder cannot collide
+  // with miner input because every remaining value is a number or a digits-only string.
+  _serialize(msgObj) {
+    const p = msgObj.params;
+    if (p && typeof p === 'object' && !Array.isArray(p) &&
+        typeof p.nonce === 'string' && /^\d+$/.test(p.nonce)) {
+      const raw = p.nonce;
+      return JSON.stringify({ ...msgObj, params: { ...p, nonce: NONCE_PLACEHOLDER } })
+        .replace(`"${NONCE_PLACEHOLDER}"`, raw);
+    }
+    return JSON.stringify(msgObj);
+  }
+
   send(msgObj) {
     if (!msgObj.id)       msgObj.id = ++this.msgId;
     if (!msgObj.jsonrpc)  msgObj.jsonrpc = '2.0';
     if (this.socket && !this.socket.destroyed) {
-      // The nonce travels through the pool as a STRING (a u64 above 2^53 would be
-      // rounded by JSON.parse — the node then logs nonces ending in zeros and rejects
-      // the share as Invalid PoW). The node's serde wants a bare u64 number, so strip
-      // the quotes on the wire only.
-      const payload = JSON.stringify(msgObj).replace(/"nonce":"(\d+)"/, '"nonce":$1');
-      this.socket.write(payload + '\n');
+      this.socket.write(this._serialize(msgObj) + '\n');
     }
   }
 

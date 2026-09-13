@@ -1,5 +1,8 @@
 # Script 053 — WooCommerce Grin Gateway — Security Audit
 
+> **Covers code as of:** 2026-07-10 (the audit's own stated date) · **Last verified:** never re-verified since
+> **Product code last changed:** 2026-08-04 — `scripts/053_grin_woocommerce.sh`, `web/053_woocommerce/`
+
 **Scope:** the Node.js bridge (`web/053_woocommerce/bridge/`) and the WooCommerce PHP plugin
 (`web/053_woocommerce/plugin/`). Focus: merchant fund loss (0-conf / underpayment / replay),
 AJAX auth, injection. **Payment Pro is unbuilt** — its `scripts/054_*.sh` "COMING SOON"

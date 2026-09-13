@@ -154,19 +154,39 @@ class IncentivesManager {
     return this.db.prepare('SELECT * FROM miner_incentives WHERE grin_address = ?').get(address);
   }
 
+  // Is a stored donation % actually taking a cut right now? Mirrors the two flags
+  // applyToDistribution checks, so the account page can report the donation only when it is
+  // real (audit §J3-5). Reporting a stored-but-dormant 100% would be a false alarm on a pool
+  // that has donations switched off — and the row exists to warn about actual loss.
+  donationsActive() {
+    const s = this.settingsView();
+    return flag(s.incentives_enabled) && flag(s.allow_miner_donations);
+  }
+
   donationPercent(address) {
     const row = this.db.prepare('SELECT donation_percent FROM miner_incentives WHERE grin_address = ?').get(address);
     return row ? row.donation_percent : 0;
   }
 
   // Set a miner's voluntary donation %, parsed from the `donateN` worker-name tag at login.
-  // No-op unless donations are enabled. Idempotent.
+  // No-op unless donations are enabled. Idempotent. Returns true when a value was written.
+  //
+  // Both flags are checked, not just allow_miner_donations (audit §J6-7): donationsActive()
+  // above — the predicate that decides whether a stored % actually takes a cut — requires
+  // incentives_enabled too, so checking only one of them here let an operator who had switched
+  // incentives OFF still accumulate donation percentages that would all take effect at once the
+  // moment they switched them back on. A write that cannot take effect today must not be
+  // silently banked for a day when it can.
+  //
+  // The CALLER decides whether this session has earned the right to write (see
+  // stratum-server.handleSubmit): stratum login is unauthenticated, so "who asked" is not a
+  // question this method can answer.
   setDonation(address, percent) {
-    if (RESERVED_ADDRESSES.includes(address)) return;
+    if (RESERVED_ADDRESSES.includes(address)) return false;
     const s = this.settingsView();
-    if (!flag(s.allow_miner_donations)) return;
+    if (!flag(s.incentives_enabled) || !flag(s.allow_miner_donations)) return false;
     let p = parseFloat(percent);
-    if (isNaN(p)) return;
+    if (isNaN(p)) return false;
     p = Math.max(0, Math.min(100, p));
     this.ensureAccount(address);
     this.db.prepare(`
@@ -174,6 +194,7 @@ class IncentivesManager {
       VALUES (?, ?, unixepoch())
       ON CONFLICT(grin_address) DO UPDATE SET donation_percent = excluded.donation_percent, updated_at = unixepoch()
     `).run(address, p);
+    return true;
   }
 
   // Streak multiplier as a fraction (e.g. 0.03 for +3%). Returns 0 if the streak is stale
@@ -356,7 +377,11 @@ class IncentivesManager {
   // Manual operator top-up of the prize bucket (accounting only — real GRIN must be in wallet).
   manualTopup(amount) {
     const amt = parseFloat(amount);
-    if (!(amt > 0)) throw new Error('top-up amount must be > 0');
+    // Finite, not just > 0 (audit §J7-5): parseFloat('Infinity') passes `> 0`, and
+    // `balance = balance + Infinity` on a REAL column is permanent — every later finite
+    // correction leaves it at Infinity, JSON.stringify reports it as `null`, and
+    // debitPrizePool()'s `prizePoolBalance() < amount` guard is then off for good.
+    if (!Number.isFinite(amt) || amt <= 0) throw new Error('top-up amount must be a positive, finite number');
     this.creditPrizePool(amt, 'topup', 0);
     return this.prizePoolBalance();
   }

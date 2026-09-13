@@ -300,7 +300,12 @@
                             '<td>' + statusCell(b.status) + '</td>' +
                             luckCell(b) +
                             '<td class="num">' + (Number(b.reward) || 0).toFixed(2) + ' ツ</td>' +
-                            '<td title="' + escHtml(b.found_by) + '">' + escHtml(shortAddr(b.found_by)) + '</td>' +
+                            // No `title` tooltip (audit §J11-1): /api/pool/blocks masks found_by
+                            // now, so the tooltip would only repeat the visible text — but the
+                            // old one carried the FULL address on every row of an offset-paged,
+                            // never-pruned table, which was the cheapest full-address walk there
+                            // was. shortAddr() stays as a guard; it is a no-op on a masked value.
+                            '<td>' + escHtml(shortAddr(b.found_by)) + '</td>' +
                             '<td class="num" title="' + escHtml(fmtTs(b.found_at)) + '">' + escHtml(timeAgo(b.found_at)) + '</td>' +
                             '<td>' + Explorer.link('block', h, 'view ↗') + '</td>' +
                             '</tr>';

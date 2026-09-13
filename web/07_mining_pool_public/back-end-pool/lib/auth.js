@@ -48,6 +48,20 @@ class AuthManager {
     this.lockoutMaxEntries = 20000;  // flood guard: bound the Map (see _pruneLockouts)
     // bcrypt work factor (cost). ≥12 per the security audit.
     this.bcryptRounds = config.bcrypt_rounds || 12;
+
+    // Per-TOKEN code budget for the second login step, keyed on the twofa_token's jti.
+    //
+    // The 2FA guess counter used to be per-IP only (ADMIN_2FA_FAIL_THRESHOLD in index.js),
+    // and the twofa_token was unlimited-use for its whole 300 s. An attacker who already
+    // holds the password could therefore mint one token, fan it out to N hosts, and spend
+    // 20 guesses per host — extra IPs bought extra guesses, so "mandatory 2FA" cost only
+    // patience. Nothing made the attacker pay per ACCOUNT, which is the axis that matters.
+    // Binding the budget to the token fixes the axis: N hosts now share 5 guesses, while an
+    // operator fumbling codes on one device is untouched — which is the false-positive worry
+    // that set the per-IP threshold at 20 in the first place. Audit §J2-3.
+    this.twofaMaxAttempts = config.twofa_max_attempts || 5;
+    this.twofaTokens = new Map();  // jti -> { userId, fails, expires }  (in-memory, per-process)
+    this.twofaMaxEntries = 10000;  // flood guard; see _pruneTwofaTokens
   }
 
   // Live session policy: { idle, abs } in seconds. Every value is clamped and every failure
@@ -85,7 +99,22 @@ class AuthManager {
     return { idle, abs };
   }
 
-  async registerAdmin(username, password) {
+  // opts.firstAdminOnly — refuse if an admin already exists, checked ATOMICALLY with the insert.
+  //
+  // That check used to sit in index.js's /api/auth/register handler, ahead of
+  // `await registerAdmin(...)`. The await is a ~300 ms bcrypt hash and it yields the event
+  // loop, so two registrations posted concurrently in the pre-registration window both read
+  // "0 admins", both proceeded, and — because they carried different usernames — the UNIQUE
+  // constraint never fired. Audit §J2-2 demonstrated it: two calls, two fully-privileged admin
+  // accounts, no user-management surface in the panel to remove the second one, and only a
+  // `register` audit row as evidence.
+  //
+  // The fix is the ORDER, not the transaction: hash first, then read-and-insert with no await
+  // between them, so the whole decision runs inside one tick of a single-threaded process. The
+  // transaction is the belt to that braces (and keeps it true if a future caller adds an await).
+  // An operator who wants the window not to exist remotely at all can additionally refuse the
+  // route unless isLocalRequest(req) — stronger, at the cost of registering from another machine.
+  async registerAdmin(username, password, opts = {}) {
     try {
       if (!username || !password) {
         throw new Error('Username and password required');
@@ -99,22 +128,35 @@ class AuthManager {
         throw new Error('Password must be at least 8 characters');
       }
 
-      const existing = this.db.prepare(
-        'SELECT id FROM users WHERE username = ?'
-      ).get(username);
-
-      if (existing) {
-        throw new Error('Username already exists');
-      }
-
+      // BEFORE the transaction: this is the only slow step, and it must not sit between the
+      // existence check and the insert.
       const hashedPassword = await this.hashPassword(password);
 
-      const stmt = this.db.prepare(`
-        INSERT INTO users (username, password_hash, is_admin, is_active)
-        VALUES (?, ?, 1, 1)
-      `);
+      const insertAdmin = this.db.transaction(() => {
+        if (opts.firstAdminOnly) {
+          const admins = this.db.prepare(
+            'SELECT COUNT(*) AS cnt FROM users WHERE is_admin = 1'
+          ).get();
+          if ((admins ? admins.cnt : 0) > 0) {
+            throw new Error('Admin registration closed.');
+          }
+        }
 
-      const result = stmt.run(username, hashedPassword);
+        const existing = this.db.prepare(
+          'SELECT id FROM users WHERE username = ?'
+        ).get(username);
+
+        if (existing) {
+          throw new Error('Username already exists');
+        }
+
+        return this.db.prepare(`
+          INSERT INTO users (username, password_hash, is_admin, is_active)
+          VALUES (?, ?, 1, 1)
+        `).run(username, hashedPassword);
+      });
+
+      const result = insertAdmin();
 
       return {
         success: true,
@@ -246,16 +288,20 @@ class AuthManager {
         };
       }
 
-      if (!user.is_active) {
-        return {
-          success: false,
-          error: 'Account is disabled'
-        };
-      }
-
       const passwordValid = await this.comparePassword(password, user.password_hash);
 
-      if (!passwordValid) {
+      // is_active is checked AFTER the compare, and answers exactly like a wrong password.
+      // Checked before it, a disabled account returned a distinct string ('Account is
+      // disabled'), skipped the bcrypt above, and never armed the pair lock — three separate
+      // leaks in a function that otherwise goes to real trouble to close them (see the
+      // _dummyHash note above, which exists to kill the very timing oracle the early return
+      // reopened). Now a prober learns nothing and pays the same cost either way. Audit §J2-7.
+      //
+      // Cost to the operator: an admin who disabled their own account gets the generic error
+      // with no hint why. That is deliberate — the recovery path is the break-glass CLI
+      // (`admin-reset.js --unlock`, which also sets is_active = 1), not an error string that
+      // doubles as an account oracle for everyone else.
+      if (!passwordValid || !user.is_active) {
         // Lock the (username, IP) pair, not the account — see the constructor note.
         this._recordPairFailure(username, ip);
         // users.failed_login_attempts is still maintained as a VISIBILITY signal ("this
@@ -473,7 +519,10 @@ class AuthManager {
     }
   }
 
-  async changePassword(userId, oldPassword, newPassword) {
+  // `ip` arms the same (username, IP) lockout login() and stepUp() use. This route verifies
+  // old_password, so without it a hijacked session had a second, quieter password oracle —
+  // one that wrote no audit row and had no auto-ban behind it (audit §J2-1).
+  async changePassword(userId, oldPassword, newPassword, ip = null) {
     try {
       const user = this.db.prepare(
         'SELECT * FROM users WHERE id = ?'
@@ -483,10 +532,17 @@ class AuthManager {
         throw new Error('User not found');
       }
 
+      const remaining = this.lockoutRemaining(user.username, ip);
+      if (remaining > 0) {
+        throw new Error('Too many failed attempts from this location. Try again later.');
+      }
+
       const passwordValid = await this.comparePassword(oldPassword, user.password_hash);
       if (!passwordValid) {
+        this._recordPairFailure(user.username, ip);
         throw new Error('Current password is incorrect');
       }
+      this._clearPairFailures(user.username, ip);
 
       if (newPassword.length < 8) {
         throw new Error('New password must be at least 8 characters');
@@ -537,31 +593,74 @@ class AuthManager {
   async confirm2faEnrollment(userId, code) {
     const u = this.db.prepare('SELECT totp_pending_secret FROM users WHERE id = ?').get(userId);
     if (!u || !u.totp_pending_secret) return { success: false, error: 'No enrollment in progress' };
-    if (!totp.verify(u.totp_pending_secret, code)) return { success: false, error: 'Incorrect code — check your authenticator and try again' };
-    this.db.prepare('UPDATE users SET totp_secret = ?, totp_enabled = 1, totp_pending_secret = NULL, updated_at = ? WHERE id = ?')
-      .run(u.totp_pending_secret, Math.floor(Date.now() / 1000), userId);
+    const counter = totp.verifyCounter(u.totp_pending_secret, code);
+    if (counter < 0) return { success: false, error: 'Incorrect code — check your authenticator and try again' };
+    // Stamp the accepted step here too. The code the admin typed to CONFIRM enrollment is a
+    // live code for up to another 90 s, and it was just echoed through a form; without this it
+    // would still open /api/auth/login/totp. Enrollment is where the replay guard starts.
+    this.db.prepare('UPDATE users SET totp_secret = ?, totp_enabled = 1, totp_pending_secret = NULL, totp_last_counter = ?, updated_at = ? WHERE id = ?')
+      .run(u.totp_pending_secret, counter, Math.floor(Date.now() / 1000), userId);
     const recovery_codes = await this.generateRecoveryCodes(userId);
     return { success: true, recovery_codes };
   }
 
   // Disable 2FA — requires a valid current TOTP or recovery code (verified by the caller's
   // route via verifyTotpOrRecovery before calling, or pass the code here).
-  async disable2fa(userId, code) {
-    const ok = await this.verifyTotpOrRecovery(userId, code);
-    if (!ok) return { success: false, error: 'Incorrect 2FA / recovery code' };
+  async disable2fa(userId, code, detail = {}) {
+    const ok = await this.verifyTotpOrRecovery(userId, code, detail);
+    if (!ok) {
+      return {
+        success: false,
+        code_replay: !!detail.replay,
+        error: detail.replay
+          ? 'That code has already been used. Wait for your authenticator to show the next one.'
+          : 'Incorrect 2FA / recovery code'
+      };
+    }
     this.db.prepare('UPDATE users SET totp_secret = NULL, totp_enabled = 0, totp_pending_secret = NULL, updated_at = ? WHERE id = ?')
       .run(Math.floor(Date.now() / 1000), userId);
     this.db.prepare('DELETE FROM admin_recovery_codes WHERE user_id = ?').run(userId);
     return { success: true };
   }
 
-  // Verify a 6-digit TOTP OR a one-time backup recovery code. Recovery codes are consumed.
-  async verifyTotpOrRecovery(userId, code) {
-    const u = this.db.prepare('SELECT totp_secret FROM users WHERE id = ?').get(userId);
+  // Verify a 6-digit TOTP OR a one-time backup recovery code. BOTH are consumed on success.
+  //
+  // Recovery codes were always single-use; TOTP codes were not. `totp.verify` compared against
+  // steps -1…+1 and returned, and nothing recorded that a step had been spent — so one observed
+  // code (shoulder-surf, a screenshot in a support thread, a phishing page that harvests
+  // password + code) stayed valid for its full ~90 s and could be replayed any number of times,
+  // at /api/auth/login/totp, /api/admin/2fa/disable and /api/admin/2fa/recovery/regenerate in
+  // any combination. RFC 6238 §5.2 forbids exactly that, because being spent is the protocol's
+  // only defence against an observed code. Audit §J2-5.
+  //
+  // window stays ±1: clock drift is the false-positive an operator actually meets, and
+  // single-use is orthogonal to it — the guard is "strictly newer than the last accepted step",
+  // so drift inside the window still works while a replay of the same step does not.
+  // `detail` is an optional out-param: on a rejection it is filled with `{ replay: true }` when
+  // the code was GENUINE but already spent. Callers that are past the gate already (step-up,
+  // the two 2FA management routes) use it to say so, because "Incorrect code" for a code the
+  // operator just used successfully reads as "2FA is broken" — and there is one sequence where
+  // that happens by design: on a mandatory-2FA pool a freshAdmin route carries a code in its
+  // body, the step-up challenge then asks for a code too, and the operator naturally reads the
+  // same one off their authenticator. Step-up consumes it, the retry replays it. The answer is
+  // an honest message, not a weaker guard.
+  //
+  // Deliberately NOT surfaced at /api/auth/login/totp: distinguishing "spent" from "wrong"
+  // there would confirm to a phisher that a harvested code was genuine, which is the exact
+  // attacker this guard exists for. An out-param keeps the return value a plain boolean —
+  // returning an object instead would make every existing `if (!ok)` truthy and silently open
+  // the gate.
+  async verifyTotpOrRecovery(userId, code, detail = {}) {
+    const u = this.db.prepare('SELECT totp_secret, totp_last_counter FROM users WHERE id = ?').get(userId);
     if (!u || !u.totp_secret) return false;
     const raw = String(code == null ? '' : code).trim();
     if (/^\d{6}$/.test(raw.replace(/\s+/g, ''))) {
-      return totp.verify(u.totp_secret, raw);
+      const counter = totp.verifyCounter(u.totp_secret, raw);
+      if (counter < 0) return false;
+      if (counter <= (u.totp_last_counter || 0)) { detail.replay = true; return false; }   // spent
+      this.db.prepare('UPDATE users SET totp_last_counter = ?, updated_at = ? WHERE id = ?')
+        .run(counter, Math.floor(Date.now() / 1000), userId);
+      return true;
     }
     // Recovery code path: normalise (strip separators, uppercase), compare against unused hashes.
     const norm = raw.toUpperCase().replace(/[^A-Z0-9]/g, '');
@@ -601,16 +700,75 @@ class AuthManager {
 
   // Short-lived token that proves the password step passed; the holder may complete the 2FA
   // step (POST /api/auth/login/totp). Not a session — confers no admin access by itself.
+  //
+  // Carries a `jti` with server-side state, so the token is more than a bearer timestamp: it
+  // holds its own guess budget (twofaMaxAttempts) and is destroyed on success. Without that
+  // state the token was replayable for its full 300 s from anywhere, and the only counter was
+  // per-IP — see the constructor note and audit §J2-3.
   generate2faToken(userId) {
-    return jwt.sign({ user_id: userId, type: '2fa' }, this.jwtSecret, { expiresIn: 300 });
+    this._pruneTwofaTokens();
+    const jti = crypto.randomBytes(16).toString('hex');
+    this.twofaTokens.set(jti, {
+      userId,
+      fails: 0,
+      expires: Math.floor(Date.now() / 1000) + 300
+    });
+    return jwt.sign({ user_id: userId, type: '2fa', jti }, this.jwtSecret, { expiresIn: 300 });
   }
 
+  _pruneTwofaTokens() {
+    const now = Math.floor(Date.now() / 1000);
+    for (const [jti, v] of this.twofaTokens) {
+      if (v.expires <= now) this.twofaTokens.delete(jti);
+    }
+    // Oldest-inserted first. Unlike the captcha store (§J2-4) this eviction is not a lever:
+    // every entry costs the attacker one correct password, so filling it is strictly harder
+    // than the thing it would buy.
+    if (this.twofaTokens.size > this.twofaMaxEntries) {
+      let excess = this.twofaTokens.size - this.twofaMaxEntries;
+      for (const jti of this.twofaTokens.keys()) {
+        this.twofaTokens.delete(jti);
+        if (--excess <= 0) break;
+      }
+    }
+  }
+
+  // Returns { userId, jti } for a live token, or null. A token whose jti is unknown is refused
+  // even when the JWT itself still verifies — that is what makes "spent" and "burned through
+  // its budget" stick across the whole fleet rather than per requesting host.
   verify2faToken(token) {
     try {
       const d = jwt.verify(token, this.jwtSecret);
-      if (d.type !== '2fa') return null;
-      return d.user_id;
+      if (d.type !== '2fa' || !d.jti) return null;
+      const rec = this.twofaTokens.get(d.jti);
+      if (!rec) return null;
+      if (rec.expires <= Math.floor(Date.now() / 1000)) {
+        this.twofaTokens.delete(d.jti);
+        return null;
+      }
+      if (rec.userId !== d.user_id) return null;
+      return { userId: d.user_id, jti: d.jti };
     } catch (e) { return null; }
+  }
+
+  // Count a wrong code against the TOKEN. Returns true when the budget is now spent and the
+  // token has been destroyed — the caller should tell the operator to log in again.
+  record2faFailure(jti) {
+    const rec = this.twofaTokens.get(jti);
+    if (!rec) return true;
+    rec.fails++;
+    if (rec.fails >= this.twofaMaxAttempts) {
+      this.twofaTokens.delete(jti);
+      return true;
+    }
+    this.twofaTokens.set(jti, rec);
+    return false;
+  }
+
+  // Destroy the token — on success, so it cannot be re-presented to mint a second session or
+  // to buy a fresh budget.
+  consume2faToken(jti) {
+    this.twofaTokens.delete(jti);
   }
 
   // Build session tokens for an already-authenticated user (used after the 2FA step). pwa=now
@@ -681,12 +839,66 @@ class AuthManager {
   // Re-authenticate an already-logged-in admin: verify the password and mint a NEW access
   // token stamped pwa=now (same token_version, so the existing refresh token stays valid).
   // Powers the step-up challenge on money/destructive endpoints.
-  async stepUp(userId, password, sst = 0) {
+  //
+  // This is the WHOLE gate on every freshAdmin route — withdrawal retry/cancel, payout freeze,
+  // dormancy send-payout, prize-pool topup, wallet adopt-identity — so its password check has
+  // to be at least as well defended as login()'s, and it was not defended at all: no pair
+  // lockout, no failure record, nothing but one audit row per attempt. A session thief holding
+  // a stolen access token could grind it at the `admin` bucket's 2400/min. Audit §J2-1.
+  //
+  // The pair lock is checked FIRST, before the bcrypt, for the same two reasons login() gives:
+  // a locked source costs no CPU, and the key being (username, IP) means a third party cannot
+  // turn it into an operator lockout.
+  //
+  // `requireCode` is set by the caller when the pool mandates 2FA (access.require_admin_totp).
+  // freshAdmin's requireTotpEnrolled only checks that the account HAS 2FA — it never asks for a
+  // code — so on a mandatory-2FA pool the money gate was still password-only. Verified through
+  // verifyTotpOrRecovery, so the code is consumed and cannot be replayed (§J2-5).
+  async stepUp(userId, password, sst = 0, opts = {}) {
     try {
       const user = this.db.prepare('SELECT * FROM users WHERE id = ?').get(userId);
       if (!user || !user.is_active) return { success: false, error: 'User not found' };
+
+      const ip = opts.ip || null;
+      const remaining = this.lockoutRemaining(user.username, ip);
+      if (remaining > 0) {
+        return {
+          success: false,
+          locked: true,
+          retry_after_seconds: remaining,
+          error: 'Too many failed attempts from this location. Try again later.'
+        };
+      }
+
       const ok = await this.comparePassword(password, user.password_hash);
-      if (!ok) return { success: false, error: 'Incorrect password' };
+      if (!ok) {
+        this._recordPairFailure(user.username, ip);
+        return { success: false, error: 'Incorrect password' };
+      }
+
+      if (opts.requireCode) {
+        const code = String(opts.code == null ? '' : opts.code).trim();
+        if (!code) {
+          return { success: false, totp_code_required: true, error: 'Two-factor code required' };
+        }
+        const codeDetail = {};
+        const codeOk = await this.verifyTotpOrRecovery(userId, code, codeDetail);
+        if (!codeOk) {
+          // Counted against the same pair lock as a wrong password: an attacker who has the
+          // password must not get an unmetered oracle on the second factor.
+          this._recordPairFailure(user.username, ip);
+          return {
+            success: false,
+            totp_code_required: true,
+            code_replay: !!codeDetail.replay,
+            error: codeDetail.replay
+              ? 'That code has already been used. Wait for your authenticator to show the next one.'
+              : 'Incorrect 2FA / recovery code'
+          };
+        }
+      }
+
+      this._clearPairFailures(user.username, ip);
       const now = Math.floor(Date.now() / 1000);
       // sst comes from the CALLER's existing token: a step-up re-verifies the password but
       // does not start a new session, so it must not reset the absolute cap. (Without this,

@@ -73,15 +73,27 @@ class ShareValidator {
     }
   }
 
-  // Dedup key for a submitted share. Keyed on `workId` = the job's pre_pow (the identity of the
-  // actual work), NOT the pool's incrementing job_id: the node re-issues many job_ids for one
-  // identical pre_pow, and keying on job_id let the same solved (nonce,pow) be credited once per
-  // wrapping job. pre_pow collapses every re-version of a template to one dedup identity, so a
-  // resubmitted solution always hits the share_hash UNIQUE constraint. Includes grin_address so
-  // two different miners that share a worker name (e.g. the default) can never collide on
-  // (work, worker, nonce) and have one's valid share rejected as the other's duplicate.
+  // Dedup key for a submitted share: address + work + nonce, and NOTHING the miner can re-spell.
+  //
+  // `workId` = the job's pre_pow (the identity of the actual work), NOT the pool's incrementing
+  // job_id: the node re-issues many job_ids for one identical pre_pow, and keying on job_id let
+  // the same solved (nonce,pow) be credited once per wrapping job. pre_pow collapses every
+  // re-version of a template to one dedup identity, so a resubmitted solution always hits the
+  // share_hash UNIQUE constraint. `grinAddress` gives total cross-miner isolation: two miners
+  // are two different addresses, so one's valid share can never be rejected as the other's
+  // duplicate even when both use the default worker name.
+  //
+  // ⚠ `workerName` is accepted but DELIBERATELY NOT HASHED (audit §J6-1). It used to be in the
+  // key, justified as the cross-miner-collision guard — but grinAddress already was that guard,
+  // and the worker label is whatever the miner types after the dot. Including it meant one
+  // solved (pre_pow, nonce, pow) re-submitted under N rig labels inserted N times and multiplied
+  // that address's PPLNS weight N-fold for one unit of real work, from one socket, inside the
+  // token bucket. That is the SAME defect the 2026-07-17 pre_pow fix closed, re-entered through
+  // a second miner-chosen field. The parameter stays so call sites and tests keep their shape,
+  // and shares.worker_name is still written — as attribution, never as part of the uniqueness
+  // decision. Do not put it back.
   generateShareHash(grinAddress, workId, workerName, nonce) {
-    const input = `${grinAddress}-${workId}-${workerName}-${nonce}`;
+    const input = `${grinAddress}-${workId}-${nonce}`;
     return crypto.createHash('sha256').update(input).digest('hex');
   }
 

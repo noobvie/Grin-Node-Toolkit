@@ -1,6 +1,10 @@
 ╔══════════════════════════════════════════════════════════════════════════╗
 ║                  03_grin_share_chain_data.sh  —  ENTRY                  ║
 ╚══════════════════════════════════════════════════════════════════════════╝
+
+> **Covers code as of:** 2026-03-14 · **Last verified:** never systematically verified
+> **Product code last changed:** 2026-08-24 — `scripts/03_grin_share_chain_data.sh`, `scripts/lib/03_lib_remote.sh`
+
                                     │
                          parse argument $1
                                     │

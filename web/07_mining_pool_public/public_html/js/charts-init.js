@@ -466,7 +466,17 @@
 
     const mk = function (s, i) {
       const c = s.color || PALETTE[i % PALETTE.length];
-      const byT = new Map((s.points || []).map(function (p) { return [p.t, Number(p.v) || 0]; }));
+      // A null/undefined `v` stays NULL, it does not become 0 (audit §J11-5). Chart.js already
+      // treats null as a gap — the `grid.map` below emits one for any bucket a series has no
+      // point in — and a withheld value must draw as that same gap, never as a real zero.
+      // `/api/pool/metrics/history/regions` now nulls per-region miner counts under the
+      // k-anonymity floor, and `Number(null) || 0` would have plotted "this gateway had 0
+      // miners" for a gateway that had one or two. Same failure §J5-4 recorded on the block
+      // counts: a suppressed number rendered as a measured one is worse than no number.
+      // NaN and non-numeric junk still collapse to 0, as before.
+      const byT = new Map((s.points || []).map(function (p) {
+        return [p.t, (p.v === null || p.v === undefined) ? null : (Number(p.v) || 0)];
+      }));
       return {
         label: s.label || ('Series ' + (i + 1)),
         data: grid.map(function (t) { return byT.has(t) ? byT.get(t) : null; }),

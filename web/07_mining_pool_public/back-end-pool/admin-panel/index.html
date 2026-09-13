@@ -72,10 +72,10 @@
           <thead>
             <tr>
               <th>Date</th>
-              <th>User</th>
+              <th>Miner</th>
               <th>Amount ツ</th>
               <th>Status</th>
-              <th>Tx ID</th>
+              <th>Slate ID</th>
             </tr>
           </thead>
           <tbody id="recent-tbody">
@@ -103,17 +103,35 @@ function fmtHashrate(gps) {
   if (gps >= 1000) return (gps / 1000).toFixed(2) + ' KG/s';
   return gps.toFixed(2) + ' G/s';
 }
-function fmtDate(iso) { return iso ? new Date(iso).toLocaleString() : '—'; }
+// withdrawals.created_at is INTEGER unixepoch (see lib/db.js) — seconds, not ms. Passing it
+// to new Date() unscaled rendered every row as January 1970 (audit §J14).
+function fmtTs(t) { return t ? new Date(t * 1000).toLocaleString() : '—'; }
 function escHtml(s) {
-  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+function shortAddr(a) {
+  a = String(a || '');
+  return a.length > 18 ? a.slice(0, 10) + '…' + a.slice(-6) : a;
 }
 
+// Must stay in step with STATUS in payments.html and with every status the withdrawal
+// scheduler can write. The old map here listed five statuses no rail has ever produced
+// (waiting_finalize / finalized / completed / failed / expired), so EVERY row fell through
+// to the grey badge-dim fallback — the same colour the panel uses for CANCELLED. A failed
+// payout read as a finished one on the operator's landing page (audit §J14, same class as
+// §H4, which was fixed on payments.html only).
 const STATUS_BADGE = {
-  waiting_finalize: '<span class="badge badge-warn">Awaiting Finalize</span>',
-  finalized:        '<span class="badge badge-ok">Finalized</span>',
-  completed:        '<span class="badge badge-ok">Completed</span>',
-  failed:           '<span class="badge badge-error">Failed</span>',
-  expired:          '<span class="badge badge-dim">Expired</span>',
+  tor_checking:      '<span class="badge badge-warn">Checking (Tor)</span>',
+  tor_sending:       '<span class="badge badge-warn">Sending</span>',
+  retry_scheduled:   '<span class="badge badge-warn">Retry scheduled</span>',
+  slatepack_pending: '<span class="badge badge-warn">Awaiting slate</span>',
+  finalizing:        '<span class="badge badge-warn">Settling</span>',
+  confirmed:         '<span class="badge badge-ok">Paid</span>',
+  tor_failed:        '<span class="badge badge-error">Failed (Tor)</span>',
+  slatepack_failed:  '<span class="badge badge-error">Failed (slate)</span>',
+  nostr_failed:      '<span class="badge badge-error">Failed (Goblin)</span>',
+  slatepack_expired: '<span class="badge badge-dim">Expired</span>',
+  cancelled:         '<span class="badge badge-dim">Cancelled</span>',
 };
 
 async function loadAdminDashboard() {
@@ -138,15 +156,19 @@ async function loadAdminDashboard() {
     }
     tbody.innerHTML = items.map(w => {
       const badge = STATUS_BADGE[w.status] || `<span class="badge badge-dim">${escHtml(w.status)}</span>`;
-      const txId  = w.tx_slate_id
-        ? `<span class="truncate mono" title="${escHtml(w.tx_slate_id)}">${escHtml(w.tx_slate_id.slice(0,16))}…</span>`
+      // The column is `slate_id` (lib/db.js). `tx_slate_id` does not exist on this row, so
+      // this cell was permanently '—' (audit §J14).
+      const slate = w.slate_id
+        ? `<span class="truncate mono" title="${escHtml(w.slate_id)}">${escHtml(String(w.slate_id).slice(0,16))}…</span>`
         : '—';
+      // withdrawals are keyed by grin_address — there is no username/user_id column, so this
+      // cell used to render the literal string "undefined" on every row (audit §J14).
       return `<tr>
-        <td>${fmtDate(w.created_at)}</td>
-        <td>${escHtml(w.username || w.user_id)}</td>
+        <td>${escHtml(fmtTs(w.created_at))}</td>
+        <td><span class="mono" title="${escHtml(w.grin_address)}">${escHtml(shortAddr(w.grin_address))}</span></td>
         <td class="mono">${fmtGrin(w.amount)}</td>
         <td>${badge}</td>
-        <td>${txId}</td>
+        <td>${slate}</td>
       </tr>`;
     }).join('');
   } catch (e) {}

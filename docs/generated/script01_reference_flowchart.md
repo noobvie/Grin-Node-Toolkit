@@ -1,6 +1,10 @@
 ╔══════════════════════════════════════════════════════════════════════════╗
 ║                    01_build_new_grin_node.sh  —  ENTRY                  ║
 ╚══════════════════════════════════════════════════════════════════════════╝
+
+> **Covers code as of:** 2026-07-01 · **Last verified:** never systematically verified
+> **Product code last changed:** 2026-08-18 — `scripts/01_build_new_grin_node.sh`, `scripts/lib/01_lib_source_build.sh`
+
                                     │
                     ┌───────────────▼───────────────┐
                     │   STEP 1 — Process & Port Check│

@@ -1,5 +1,9 @@
 # Script 06 — Explorers & Peer Map — Security Audit
 
+> **Covers code as of:** 2026-08-15 · **Last verified:** never re-verified since
+> **Product code last changed:** 2026-09-06 — `scripts/06_global_grin_health.sh`, `scripts/lib/06*`, `web/06_stats_map/`, `web/06d_tiny_explorer/`
+> ⚠ The 06d tools hub (probe routes, its own nginx rate-limit zone) landed **after** this audit and is **not covered by it**.
+
 **Scope:** the public read services in front of the Grin node — **06b GrinScan**
 (`web/06b_grinscan/server.js` + `scripts/lib/06b_grinscan.sh`) and **06d Tiny Explorer**
 (`web/06d_tiny_explorer/tiny-explorer-server.js`), plus the peer/topology data both expose

@@ -154,20 +154,41 @@ class AdsManager {
   // Public beacon: bump coarse impression/click counters. Aggregates only — no
   // per-visitor rows, no IPs (pool privacy stance). Ids are sanitised and capped so
   // a hostile client can at worst inflate counters, never grow the DB or error out.
+  //
+  // ⚠ These counters are NOT trustworthy and the admin panel must not present them as
+  // measurement (audit §J10-3 / §J14-9). This endpoint is unauthenticated and undeduped by
+  // design: the only thing that could tell a real impression from a scripted one is a
+  // per-visitor record, and the pool has decided against keeping one. The dedup that makes
+  // the numbers mean anything (`_counted[id]` in public_html/js/ads.js) runs in the
+  // ATTACKER'S OWN BROWSER. Do not add a fix here that implies otherwise.
+  //
+  // What IS enforced (the cheap half of §J10-3, applied 2026-09-03): the UPDATE carries the
+  // same serving predicate as publicByPlacement(), so an ad that the public site is not
+  // showing — switched off, not started yet, or expired — cannot accrue events at all. That
+  // does not stop a determined client inflating a LIVE ad; it stops the counters of a
+  // finished or unlaunched campaign moving, which is the case an operator is most likely to
+  // read as a fact. Keep the two predicates identical: if one gains a condition, so does
+  // the other, or "served" and "countable" drift apart.
   recordEvents(body) {
     const ids = (v) => [...new Set((Array.isArray(v) ? v : []).map(x => parseInt(x, 10))
       .filter(n => Number.isInteger(n) && n > 0))].slice(0, 20);
     const impressions = ids(body && body.impressions);
     const clicks = ids(body && body.clicks);
+    const now = Math.floor(Date.now() / 1000);
     const bump = (col, list) => {
-      if (!list.length) return;
-      this.db.prepare(
-        `UPDATE ads SET ${col} = ${col} + 1 WHERE id IN (${list.map(() => '?').join(',')})`
-      ).run(...list);
+      if (!list.length) return 0;
+      const info = this.db.prepare(
+        `UPDATE ads SET ${col} = ${col} + 1
+          WHERE id IN (${list.map(() => '?').join(',')})
+            AND is_active = 1
+            AND (start_at IS NULL OR start_at <= ?)
+            AND (end_at   IS NULL OR end_at   >= ?)`
+      ).run(...list, now, now);
+      return info && typeof info.changes === 'number' ? info.changes : 0;
     };
-    bump('impressions', impressions);
-    bump('clicks', clicks);
-    return { impressions: impressions.length, clicks: clicks.length };
+    // Counted rows, not requested ids — but the route answers 204 either way, so this never
+    // becomes an id-existence oracle for an anonymous caller.
+    return { impressions: bump('impressions', impressions), clicks: bump('clicks', clicks) };
   }
 
   // Render settings for the public renderer. Stored in pool_config (same 'ads'

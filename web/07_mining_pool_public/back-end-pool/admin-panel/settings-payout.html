@@ -80,13 +80,13 @@
           <div class="form-row">
             <div class="form-group">
               <label for="confirm_depth_mainnet">Mainnet Confirm Depth</label>
-              <input type="number" id="confirm_depth_mainnet" name="confirm_depth_mainnet" value="1440">
-              <div class="helper-text">Blocks until mainnet reward is spendable (Grin COINBASE_MATURITY = 1440)</div>
+              <input type="number" id="confirm_depth_mainnet" name="confirm_depth_mainnet" value="1440" min="1440" step="1">
+              <div class="helper-text">Blocks a found block must be buried under before its reward is credited to miners and becomes withdrawable. <strong>1440 is a Grin consensus rule, not a pool setting</strong> — a coinbase cannot be spent before then, so values below 1440 are refused. Raise it only if you want a wider reorg margin. Applied on backend restart.</div>
             </div>
             <div class="form-group">
               <label for="confirm_depth_testnet">Testnet Confirm Depth</label>
-              <input type="number" id="confirm_depth_testnet" name="confirm_depth_testnet" value="100">
-              <div class="helper-text">Blocks until testnet reward is spendable</div>
+              <input type="number" id="confirm_depth_testnet" name="confirm_depth_testnet" value="100" min="1" step="1">
+              <div class="helper-text">Same, for testnet. Deliberately allowed below 1440 so a test run can exercise the payout pipeline without waiting a day per block — payouts may then fail with "insufficient funds" until the real maturity passes. Applied on backend restart.</div>
             </div>
           </div>
         </div>
@@ -146,6 +146,9 @@
             <b>username</b>, not the mining address's own wallet, so it is guarded by a registration + cooldown + key-pin on
             top of the ownership gate. Requires <code>npm install</code> in the backend (adds nostr-tools + ws) and a backend
             restart. Test on testnet / with tiny amounts first.
+            <b>Every setting in this box is applied on backend restart — including turning the rail OFF.</b>
+            The bridge reads them once at boot, so unticking the box here saves the setting but the rail keeps
+            paying until the service is restarted. Restart to make any change below take effect.
           </p>
           <div class="checkbox-group">
             <input type="checkbox" id="nostr_payouts_enabled" name="nostr_payouts_enabled">
@@ -167,7 +170,7 @@
             <div class="form-group">
               <label for="nostr_nip05_domains">Allowed NIP-05 Domains</label>
               <textarea id="nostr_nip05_domains" rows="2" placeholder="goblin.st">goblin.st</textarea>
-              <div class="helper-text">One hostname per line. The ONLY domains a username is resolved against — the SSRF / look-alike-domain guard. Leave as <code>goblin.st</code> unless you know why.</div>
+              <div class="helper-text">One hostname per line. The ONLY domains a username is resolved against — the SSRF / look-alike-domain guard. Leave as <code>goblin.st</code> unless you know why. <b>Applied on backend restart</b> — removing a domain here does not revoke it until the service restarts.</div>
             </div>
             <div class="form-group">
               <label for="nostr_relays">Relays</label>

@@ -2,6 +2,9 @@
 ║         059_grin_drop.sh  —  REALIZATION  (As Built)                        ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
 
+> **Covers code as of:** 2026-05-04 (the doc's own `Date:`) · **Last verified:** never systematically verified
+> **Product code last changed:** 2026-08-22 — `scripts/059_grin_drop.sh`, `scripts/lib/059_lib_*.sh`, `web/059_drop/`
+
   Date:     2026-05-04
   Scope:    Documents the architecture and flow of the code actually shipped
             in scripts/059_grin_drop.sh + scripts/lib/059_lib_*.sh

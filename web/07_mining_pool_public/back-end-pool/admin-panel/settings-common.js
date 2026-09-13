@@ -109,9 +109,6 @@
         }
       }
 
-      // Update conditional visibility
-      updatePoolVisibilityUI();
-
       // Load asset previews
       loadAssetPreviews();
     }
@@ -184,7 +181,14 @@
           body: JSON.stringify(data)
         });
 
-        if (!response.ok) throw new Error('Save failed');
+        // Read the server's reason. Every rejection this route can emit is specific and
+        // actionable — an unknown key names the offending element id, a validator names the
+        // setting, and a step-up refusal says re-authentication is required — and all of it
+        // used to be replaced by the word "failed". Audit §J14.
+        if (!response.ok) {
+          const body = await response.json().catch(() => ({}));
+          throw new Error(body.error || ('HTTP ' + response.status));
+        }
         if (!opts.quiet) showToast(`${section} settings saved!`, 'success');
 
         // The SEO tab exposes GA4 as a convenience; persist it through the canonical analytics
@@ -231,7 +235,10 @@
           credentials: 'include'
         });
 
-        if (!response.ok) throw new Error('Restore failed');
+        if (!response.ok) {
+          const body = await response.json().catch(() => ({}));
+          throw new Error(body.error || ('HTTP ' + response.status));   // audit §J14
+        }
         const data = await response.json();
         location.reload();
       } catch (err) {
@@ -326,15 +333,8 @@
       }
     }
 
-    function updatePoolVisibilityUI() {
-      const visibility = document.getElementById('pool_visibility');
-      const whitelistGroup = document.getElementById('address-whitelist-group');
-      if (visibility && whitelistGroup) {
-        whitelistGroup.style.display = visibility.value === 'private' ? 'block' : 'none';
-      }
-    }
-
-    document.getElementById('pool_visibility')?.addEventListener('change', updatePoolVisibilityUI);
+    // updatePoolVisibilityUI() + its change listener were REMOVED 2026-09-02 (audit §J9-1)
+    // along with the pool_visibility / address_whitelist fields they showed and hid.
 
     function updateColorPreview(el) {
       // Prefer a per-input preview span (e.g. theme_color-preview); fall back to accent.
@@ -357,13 +357,6 @@
       toast.textContent = message;
       document.body.appendChild(toast);
       setTimeout(() => toast.remove(), 4000);
-    }
-
-    function addToWhitelist() {
-      const input = document.getElementById('whitelist-input');
-      if (!input.value) return;
-      addToList('whitelist-list', input.value);
-      input.value = '';
     }
 
     // ─── Admin TOTP 2FA (wired to /api/admin/2fa/*) ─────────────────────────────
@@ -442,7 +435,15 @@
           body: JSON.stringify({ code })
         });
         const d = await r.json().catch(() => ({}));
-        if (!r.ok) throw new Error(d.error || 'Disable failed');
+        if (!r.ok) {
+          // A spent code is the one failure the operator can act on immediately, and on a
+          // mandatory-2FA pool it is EXPECTED here: this route carries a code in its body, the
+          // step-up challenge in front of it asks for a code too, and the same one off the
+          // authenticator satisfies the challenge and is then replayed by the retry. Clear the
+          // box so the natural next move is a fresh code rather than re-submitting the dead one.
+          if (d.code_replay) document.getElementById('twofa-action-code').value = '';
+          throw new Error(d.error || 'Disable failed');
+        }
         showToast('2FA disabled', 'success');
         document.getElementById('twofa-action-code').value = '';
         load2fa();
@@ -459,7 +460,15 @@
           body: JSON.stringify({ code })
         });
         const d = await r.json().catch(() => ({}));
-        if (!r.ok) throw new Error(d.error || 'Regenerate failed');
+        if (!r.ok) {
+          // A spent code is the one failure the operator can act on immediately, and on a
+          // mandatory-2FA pool it is EXPECTED here: this route carries a code in its body, the
+          // step-up challenge in front of it asks for a code too, and the same one off the
+          // authenticator satisfies the challenge and is then replayed by the retry. Clear the
+          // box so the natural next move is a fresh code rather than re-submitting the dead one.
+          if (d.code_replay) document.getElementById('twofa-action-code').value = '';
+          throw new Error(d.error || 'Regenerate failed');
+        }
         showToast('New recovery codes generated', 'success');
         document.getElementById('twofa-action-code').value = '';
         showRecoveryCodes(d.recovery_codes || []);
@@ -801,7 +810,11 @@
     }
 
     // ─── Announcement banner editor ────────────────────────────────────────
-    function bannerAttr(s) { return String(s == null ? '' : s).replace(/"/g, '&quot;'); }
+    // & FIRST, or an entity the operator typed is re-decoded on the next render and the stored
+    // value silently changes under them ("A &amp; B" comes back as "A & B"). Audit §J14.
+    function bannerAttr(s) {
+      return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+    }
 
     function renderBannerRow(b) {
       b = b || {};
@@ -888,7 +901,10 @@
     }
 
     // ─── Lottery special-event editor ──────────────────────────────────────
-    function eventAttr(s) { return String(s == null ? '' : s).replace(/"/g, '&quot;'); }
+    // Same &-before-" ordering as bannerAttr above (audit §J14).
+    function eventAttr(s) {
+      return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+    }
 
     function renderEventRow(ev) {
       ev = ev || {};

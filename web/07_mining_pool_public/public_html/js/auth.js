@@ -77,6 +77,39 @@ const Auth = {
     }
   },
 
+  // Public-page read. Returns the parsed body ONLY on a 2xx; null on any non-2xx, any
+  // non-JSON body and any network failure.
+  //
+  // Why this exists rather than "just use Auth.fetch" (audit §J15-2). Auth.fetch deliberately
+  // returns the PARSED BODY of a non-2xx, because the admin panel reads `body.error` off a 4xx
+  // to show the server's reason (ads.html, pages.html, posts.html and 30 more sites; §J14-6 is
+  // the same idea on a different helper). That contract is right for the panel and wrong for a
+  // public page: a rate-limiter 429 is `{error, message, retry_after_seconds, limit, …}`, which
+  // is an OBJECT, so it sails through `if (!data) return` and then renders as data —
+  // `data.active_miners || 0` is 0, `data.total_blocks_found || 0` is 0, and the homepage tells
+  // every visitor the pool has never found a block. Auth.fetch also never REJECTS (it catches
+  // its own errors and returns null), so the `catch` around every one of those call sites was
+  // unreachable and their "data unavailable" strings could not render.
+  //
+  // So: public reads use this, admin writes keep Auth.fetch. null here means "no answer" and is
+  // distinguishable from an empty answer ([] / {}), which is what lets a page say "unavailable"
+  // instead of "none yet". No 401 redirect: a public page has no session to lose.
+  async read(url) {
+    try {
+      const response = await fetch(url, {
+        credentials: 'same-origin',
+        headers: { 'Accept': 'application/json' }
+      });
+      if (!response.ok) return null;
+      const contentType = response.headers.get('content-type');
+      if (!contentType || !contentType.includes('application/json')) return null;
+      const data = await response.json();
+      return (data !== null && typeof data === 'object') ? data : null;
+    } catch (error) {
+      return null;
+    }
+  },
+
   // Login - tokens now returned as httpOnly cookies
   async login(username, password) {
     try {

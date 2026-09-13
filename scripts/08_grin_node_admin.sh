@@ -5,9 +5,9 @@
 # Menu:
 #   8.1  Remote Node Manager       — 081_host_monitor_port.sh (mass deploy, remote control)
 #   8.2  Provider Access Watch     — 082_provider_access_watch.sh (host-tamper detect)
-#   8.3  Node Status & Sync        — local PIDs, ports, tmux, binary versions + chain tip
+#   8.3  Host Optimization & Hard. — 083_host_optimization.sh (profile CPU/RAM/IO → advice)
 #   8.4  Nginx Extended Features   — 084_nginx_extended_features.sh (audit · proxy · security)
-#   8.5  SSH Key Hardening         — 085_ssh_hardening.sh (key-only root login)
+#   8.5  Node Status & Sync        — local PIDs, ports, tmux, binary versions + chain tip
 #   8.6  Top 20 Bandwidth Consumers— parse nginx logs, block/limit from menu
 #   8.7  Disk Cleanup              — tar archives + OS temp/logs + nginx web dirs + swap manager
 #   8.8  Self-Update               — download latest from GitHub
@@ -15,11 +15,21 @@
 #   DEL  Full Grin Cleanup         — 08del_clean_all_grin_things.sh
 #
 # Key = sub-script number. Every numbered sub-script sits on its own digit
-# (081→1, 082→2, 084→4, 085→5, 089→9); un-numbered inline features fill the
-# rest (3, 6, 7, 8). Re-sorted 2026-08-05 — Provider Access Watch was on key 7
+# (081→1, 082→2, 083→3, 084→4, 089→9); un-numbered inline features fill the
+# rest (5, 6, 7, 8). Re-sorted 2026-08-05 — Provider Access Watch was on key 7
 # and Backup on key 10, so neither key matched its script. Keeping that mapping
 # is why Service & Port Dashboard and Chain Sync Status were merged into one
 # "Node Status & Sync" screen: 10 rows do not fit 9 digits.
+#
+# 2026-08-25 — 083 Host Optimization added. Adding a 10th row would have broken
+# the digit mapping again, so SSH Key Hardening (085) came OFF the top level and
+# is now reached from inside 083, whose remit (harden + tune this host) contains
+# it. That freed key 5 for Node Status & Sync, which vacated key 3 for 083.
+# TWO KEYS THEREFORE CHANGED HANDS: 3 was Node Status, 5 was SSH. Per the
+# repo-wide rule a reassigned key gets NO alias `case` arm — bash takes the
+# first match, so an alias would silently open the wrong product. The per-screen
+# banner is the mis-key safety net. 085 itself is unchanged and still numbered
+# 085; only its route into the menu moved.
 # =============================================================================
 
 set -euo pipefail
@@ -30,6 +40,14 @@ WALLETS_CONF="$CONF_DIR/grin_wallets_location.conf"
 # Shared node primitives (canonical _grin_session_name, etc.). Source-guarded,
 # no side effects; defines info/warn/error fallbacks only if absent.
 source "$SCRIPT_DIR/lib/grin_node_control.sh"
+# Canonical node-dir / secret-path resolvers (grin_live_node_dir,
+# grin_node_secret_path). Sourced so the status screen never hand-rolls a
+# secret path again — see _query_node_tip().
+source "$SCRIPT_DIR/lib/grin_node_secrets.sh"
+# ui_ask()/ui_ask_num() — value prompts that can be cancelled with `q` instead
+# of Ctrl+C. See the lib header: several prompts here used to treat a bare Enter
+# as "proceed with the default", so backing out USED to confirm the action.
+source "$SCRIPT_DIR/lib/ui_shared_helpers.sh"
 
 # ─── GitHub self-update ───────────────────────────────────────────────────────
 # Official public repository. A fork slug saved in /opt/grin/conf/github_repo.conf
@@ -96,15 +114,18 @@ menu_nginx_extended() {
 }
 
 # =============================================================================
-# 8.5  SSH Key Hardening  (085_ssh_hardening.sh)
+# 8.3  Host Optimization & Hardening  (083_host_optimization.sh)
 # =============================================================================
-menu_ssh_hardening() {
-    local ssh_script="$SCRIPT_DIR/085_ssh_hardening.sh"
-    if [[ ! -f "$ssh_script" ]]; then
-        error "085_ssh_hardening.sh not found in $SCRIPT_DIR"
+# Profiles CPU/RAM/disk/kernel/security and reports what a Grin node needs from
+# this box. Read-only — it changes nothing. SSH Key Hardening (085) is reached
+# from inside it, which is why 085 no longer has a top-level key of its own.
+menu_host_optimization() {
+    local opt_script="$SCRIPT_DIR/083_host_optimization.sh"
+    if [[ ! -f "$opt_script" ]]; then
+        error "083_host_optimization.sh not found in $SCRIPT_DIR"
         pause; return
     fi
-    bash "$ssh_script"
+    bash "$opt_script"
 }
 
 # =============================================================================
@@ -120,7 +141,7 @@ menu_access_watch() {
 }
 
 # =============================================================================
-# 8.3  Node Status & Sync
+# 8.5  Node Status & Sync
 # =============================================================================
 # One read-only screen for "is my node alive, and is it caught up": the service
 # /port dashboard (ports, tmux, processes, binary versions) followed by the
@@ -129,7 +150,7 @@ menu_access_watch() {
 show_node_status_sync() {
     clear
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo -e "${BOLD}${CYAN}  3  Node Status & Sync${RESET}"
+    echo -e "${BOLD}${CYAN}  5  Node Status & Sync${RESET}"
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
 
     # ||-guarded per the set -e menu rule: these are display-only, and a
@@ -192,18 +213,47 @@ _ns_service_dashboard() {
         warn "Wallet listener port (3415/13415) is open — only expose to the internet if you know what you're doing!."
     fi
 
-    # ── tmux sessions ─────────────────────────────────────────────────────────
+    # ── tmux sessions (BOTH tmux servers) ─────────────────────────────────────
+    # Since the gtmux unification the node's tmux SERVER runs on the grin user's
+    # per-user socket (/tmp/tmux-<uid>/default), which a plain root `tmux ls`
+    # cannot see. This panel used to call bare `tmux ls` and so reported "No
+    # grin* tmux sessions found" while the node was running perfectly — the
+    # classic false negative. Enumerate grin's socket first, then root's, and
+    # label each row so a root-socket leftover (the duplicate-node trap) is
+    # visible rather than silently merged into the same list.
     echo ""
     echo -e "${BOLD}tmux Sessions (grin*):${RESET}"
-    local sessions
-    sessions=$(tmux ls -F '#{session_name}  #{session_windows} window(s)  [#{session_created_string}]' \
-        2>/dev/null | grep '^grin' || true)
-    if [[ -n "$sessions" ]]; then
+    local _gsock _found=0
+    _gsock=$(gnc_grin_tmux_socket 2>/dev/null || true)
+
+    _list_sessions_on() {   # <socket-or-empty> <label>
+        local _sock="$1" _label="$2" _out
+        if [[ -n "$_sock" ]]; then
+            _out=$(tmux -S "$_sock" ls \
+                -F '#{session_name}  #{session_windows} window(s)  [#{session_created_string}]' \
+                2>/dev/null | grep '^grin' || true)
+        else
+            _out=$(tmux ls \
+                -F '#{session_name}  #{session_windows} window(s)  [#{session_created_string}]' \
+                2>/dev/null | grep '^grin' || true)
+        fi
+        [[ -z "$_out" ]] && return 0
         while IFS= read -r s; do
-            echo -e "  ${GREEN}▶${RESET} $s"
-        done <<< "$sessions"
-    else
-        echo -e "  ${DIM}No grin* tmux sessions found.${RESET}"
+            echo -e "  ${GREEN}▶${RESET} $s  ${DIM}[$_label]${RESET}"
+            _found=1
+        done <<< "$_out"
+    }
+
+    if [[ -n "$_gsock" ]]; then
+        _list_sessions_on "$_gsock" "grin socket — attach: gtmux attach -t <name>"
+    fi
+    _list_sessions_on "" "root socket — attach: tmux attach -t <name>"
+
+    if (( _found == 0 )); then
+        echo -e "  ${DIM}No grin* tmux sessions found on either tmux server.${RESET}"
+        if [[ -z "$_gsock" ]]; then
+            echo -e "  ${DIM}(grin user's tmux socket does not exist — node has not been started via the toolkit.)${RESET}"
+        fi
     fi
 
     # ── Running grin processes + binary versions ─────────────────────────────
@@ -248,46 +298,121 @@ _ns_chain_sync() {
         return
     fi
 
+    # -------------------------------------------------------------------------
+    # _query_node_tip <mainnet|testnet> <port> <label>
+    # -------------------------------------------------------------------------
+    # get_tip lives on the FOREIGN API, so it needs .foreign_api_secret — NOT
+    # the owner .api_secret. Both are resolved from the LIVE node through
+    # grin_node_secret_path(). This used to hardcode "$HOME/.grin/<net>/api_secret",
+    # which is not a path the toolkit ever writes (secrets live in the node dir,
+    # the filename is dot-prefixed, and $HOME is /root here). The secret read
+    # back empty, grin answered 401 with an empty body, and the empty-body test
+    # below printed [OFFLINE] — so a perfectly healthy node rendered as dead.
+    #
+    # An empty reply is therefore NOT proof a node is down. Separate the cases
+    # by HTTP status so an auth fault can never masquerade as an outage.
     _query_node_tip() {
-        local port="$1" secret_file="$2" label="$3"
-        local secret=""
-        [[ -f "$secret_file" ]] && secret=$(cat "$secret_file" 2>/dev/null || true)
+        local net="$1" port="$2" label="$3"
+        local secret_file="" secret="" node_dir=""
 
-        local response
-        response=$(curl -s --max-time 5 \
-            --user "grin:$secret" \
-            -X POST "http://localhost:$port/v2/foreign" \
-            -H "Content-Type: application/json" \
-            -d '{"jsonrpc":"2.0","method":"get_tip","id":1,"params":[]}' \
-            2>/dev/null || true)
+        node_dir=$(grin_live_node_dir "$net" 2>/dev/null || true)
+        secret_file=$(grin_node_secret_path "$net" foreign 2>/dev/null || true)
+        if [[ -n "$secret_file" && -f "$secret_file" ]]; then
+            secret=$(cat "$secret_file" 2>/dev/null || true)
+        fi
 
-        if [[ -z "$response" ]]; then
-            echo -e "  ${RED}[OFFLINE]${RESET} $label on port $port — no response"
+        # Is anything listening at all? This is what separates "node down" from
+        # "node up, credential wrong" — ss reads the kernel, so unlike `tmux ls`
+        # it is unaffected by which tmux socket the node was launched on.
+        # `ss -tln … | tail -n +2` (drop the header row), NOT `ss -tlnH`: the -H
+        # flag needs iproute2 >= 4.5, and where it is unsupported ss exits
+        # non-zero printing nothing — which here would read as "no listener" and
+        # reinstate the false [OFFLINE] this function exists to fix. The rest of
+        # this script uses the same tail idiom.
+        if ! ss -tln "sport = :$port" 2>/dev/null | tail -n +2 | grep -q .; then
+            echo -e "  ${RED}[OFFLINE]${RESET} $label — nothing listening on port $port"
+            [[ -n "$node_dir" ]] && echo -e "  ${DIM}  Node dir: $node_dir${RESET}"
+            echo ""
+            log "[8.5] $label port $port — no listener"
             return
         fi
 
-        # Extract fields without jq dependency
-        local height last_block difficulty sync_status
-        height=$(echo "$response"     | grep -oP '"height":\K[0-9]+'            || echo "?")
-        last_block=$(echo "$response" | grep -oP '"last_block_pushed":"\K[^"]+' || echo "?")
-        difficulty=$(echo "$response" | grep -oP '"total_difficulty":\K[0-9]+'  || echo "?")
+        if [[ -z "$secret" ]]; then
+            echo -e "  ${YELLOW}[NO SECRET]${RESET} $label — port $port is open, but the foreign"
+            echo -e "  ${DIM}  API secret could not be read. Expected: ${secret_file:-<unresolved>}${RESET}"
+            echo -e "  ${DIM}  Fix: run 'grin-secret-sync' to re-link consumer secrets.${RESET}"
+            echo ""
+            log "[8.5] $label port $port — secret unreadable ($secret_file)"
+            return
+        fi
+
+        # Capture body and HTTP status in one call. The trailing newline keeps
+        # them separable even when the body is empty — which is exactly the 401.
+        local raw response code
+        raw=$(curl -s --max-time 5 -w '\n%{http_code}' \
+            --user "grin:$secret" \
+            -X POST "http://127.0.0.1:$port/v2/foreign" \
+            -H "Content-Type: application/json" \
+            -d '{"jsonrpc":"2.0","method":"get_tip","id":1,"params":[]}' \
+            2>/dev/null || true)
+        code="${raw##*$'\n'}"
+        response="${raw%$'\n'*}"
+
+        if [[ "$code" == "401" || "$code" == "403" ]]; then
+            echo -e "  ${YELLOW}[AUTH FAILED]${RESET} $label — port $port answered HTTP $code"
+            echo -e "  ${DIM}  The node is RUNNING; the secret we sent is stale or wrong.${RESET}"
+            echo -e "  ${DIM}  Secret file: $secret_file${RESET}"
+            echo -e "  ${DIM}  Fix: run 'grin-secret-sync', then retry.${RESET}"
+            echo ""
+            log "[8.5] $label port $port — HTTP $code (auth)"
+            return
+        fi
+
+        if [[ -z "$response" || "$code" != "200" ]]; then
+            echo -e "  ${RED}[NO DATA]${RESET} $label — port $port open but returned HTTP ${code:-?}"
+            echo ""
+            log "[8.5] $label port $port — HTTP ${code:-?} empty/unexpected"
+            return
+        fi
+
+        # The node serialises Rust Result<T,E> as {"Ok":…}/{"Err":…} inside the
+        # JSON-RPC `result` field. An Err is still HTTP 200 but carries no
+        # height, so it must be caught before the field extraction below.
+        if grep -q '"Err"' <<< "$response"; then
+            echo -e "  ${RED}[API ERROR]${RESET} $label — node returned an Err response"
+            echo -e "  ${DIM}  ${response:0:120}${RESET}"
+            echo ""
+            log "[8.5] $label port $port — Err response"
+            return
+        fi
+
+        # Extract fields without a jq dependency.
+        local height last_block difficulty
+        height=$(grep -oP '"height":\K[0-9]+'               <<< "$response" | head -1 || true)
+        last_block=$(grep -oP '"last_block_pushed":"\K[^"]+' <<< "$response" | head -1 || true)
+        difficulty=$(grep -oP '"total_difficulty":\K[0-9]+'  <<< "$response" | head -1 || true)
 
         echo -e "  ${GREEN}[ONLINE]${RESET}  $label — port $port"
-        echo -e "  ${BOLD}  Height     :${RESET} $height"
-        echo -e "  ${BOLD}  Last block :${RESET} ${last_block:0:16}..."
-        echo -e "  ${BOLD}  Difficulty :${RESET} $difficulty"
+        echo -e "  ${BOLD}  Height     :${RESET} ${height:-?}"
+        # Guard the truncation: on an empty field "${x:0:16}..." renders as a
+        # bare "..." , which reads as a value rather than as a missing one.
+        local lb_disp="?"
+        [[ -n "$last_block" ]] && lb_disp="${last_block:0:16}..."
+        echo -e "  ${BOLD}  Last block :${RESET} $lb_disp"
+        echo -e "  ${BOLD}  Difficulty :${RESET} ${difficulty:-?}"
+        [[ -n "$node_dir" ]] && echo -e "  ${DIM}  Node dir   : $node_dir${RESET}"
         echo ""
-        log "[8.3] $label port $port — height=$height"
+        log "[8.5] $label port $port — height=${height:-?}"
     }
 
     echo -e "${BOLD}Mainnet node (port 3413):${RESET}"
-    _query_node_tip 3413 "$HOME/.grin/main/api_secret" "Mainnet"
+    _query_node_tip mainnet 3413 "Mainnet"
 
     echo -e "${BOLD}Testnet node (port 13413):${RESET}"
-    _query_node_tip 13413 "$HOME/.grin/test/api_secret" "Testnet"
+    _query_node_tip testnet 13413 "Testnet"
 
     echo -e "  ${DIM}Note: Compare height against a public explorer to estimate sync progress.${RESET}"
-    echo -e "  ${DIM}  Mainnet: grin.blockscan.com  |  Testnet: testnet.grin.blockscan.com${RESET}"
+    echo -e "  ${DIM}  Mainnet: https://grinscan.org  |  Testnet: https://test.grinscan.org${RESET}"
 }
 
 # =============================================================================
@@ -377,11 +502,10 @@ show_bandwidth_consumers() {
 
     if [[ "$choice" == "1" ]]; then
         echo ""
-        echo -ne "Enter IP address to act on: "
-        read -r target_ip
-
-        if [[ -z "$target_ip" ]]; then
-            warn "No IP entered."; pause; return
+        local target_ip
+        if ! ui_ask target_ip "Enter IP address to act on"; then
+            info "Cancelled — nothing was blocked or rate-limited."
+            pause; return
         fi
 
         echo ""
@@ -464,13 +588,15 @@ _scan_nginx_web_dirs() {
 _clean_tmp()          { info "Cleaning /tmp (files >1 day)..."; find /tmp -mindepth 1 -mtime +1 -delete 2>/dev/null || true; success "/tmp cleaned."; log "CLEANED /tmp"; }
 _clean_grin_logs()    {
     if [[ ! -d "$GRIN_LOG_DIR" ]]; then warn "Grin log dir not found: $GRIN_LOG_DIR"; return; fi
-    echo -ne "Keep logs from last N days [default 7]: "; read -r kd; kd="${kd:-7}"
+    local kd
+    ui_ask_num kd "Keep logs from last N days" 7 0 || { info "Skipped Grin logs."; return; }
     find "$GRIN_LOG_DIR" -type f -name "*.log" -mtime +"$kd" -delete 2>/dev/null || true
     success "Grin logs older than $kd days removed."; log "CLEANED grin logs >$kd days"; }
 _clean_syslog()       {
     info "Cleaning system journal..."
     if command -v journalctl &>/dev/null; then
-        echo -ne "Vacuum journal to last N days [default 7]: "; read -r vd; vd="${vd:-7}"
+        local vd
+        ui_ask_num vd "Vacuum journal to last N days" 7 0 || { info "Skipped journald."; return; }
         journalctl --vacuum-time="${vd}d"; success "journald vacuumed to last $vd days."; log "CLEANED journald --vacuum-time=${vd}d"
     else
         find /var/log -name "*.gz" -mtime +7 -delete 2>/dev/null || true
@@ -638,9 +764,10 @@ manage_auto_cleanup() {
         local c; read -r c
         case "$c" in
             1)
-                echo -ne "Keep /opt/grin/logs from last N days [default $AUTO_CLEANUP_RETENTION_DEFAULT]: "
-                local days; read -r days; days="${days:-$AUTO_CLEANUP_RETENTION_DEFAULT}"
-                if ! [[ "$days" =~ ^[0-9]+$ ]]; then warn "Not a number — using $AUTO_CLEANUP_RETENTION_DEFAULT."; days="$AUTO_CLEANUP_RETENTION_DEFAULT"; fi
+                local days
+                ui_ask_num days "Keep /opt/grin/logs from last N days" \
+                    "$AUTO_CLEANUP_RETENTION_DEFAULT" 0 \
+                    || { info "Cancelled — auto-cleanup not enabled."; sleep 1; continue; }
                 _install_auto_cleanup "$days"
                 success "Auto-cleanup enabled (runs daily 04:30, log retention ${days}d)."
                 sleep 2 ;;
@@ -783,13 +910,14 @@ _swap_remove_file() {
     log "SWAP removed ($f)"
 }
 
-# Validate a positive-integer GB amount; echoes the value or empty on failure.
+# Validate a positive-integer GB amount; echoes the value, or returns 1 when the
+# operator cancels (`q` / bare Enter). No default: there is no safe size to
+# assume for "add swap", so Enter must mean cancel here, not proceed.
 _swap_read_gb() {
     local prompt="$1" gb
-    echo -ne "$prompt" >&2
-    read -r gb
-    [[ "$gb" =~ ^[0-9]+$ ]] && (( gb > 0 )) && { echo "$gb"; return 0; }
-    return 1
+    ui_ask_num gb "$prompt" "" 1 || return 1
+    echo "$gb"
+    return 0
 }
 
 manage_swap() {
@@ -848,8 +976,10 @@ manage_swap() {
         local c; read -r c
         case "$c" in
             1)
-                local gb; gb="$(_swap_read_gb "GB to ADD [integer]: ")" \
-                    || { warn "Enter a positive whole number of GB."; sleep 1; continue; }
+                # ui_ask_num re-prompts on a bad number itself, so a non-zero
+                # return here means the operator cancelled, not that they typo'd.
+                local gb; gb="$(_swap_read_gb "GB to ADD")" \
+                    || { info "Cancelled — no swapfile created."; sleep 1; continue; }
                 echo -ne "${YELLOW}Create a new ${gb} GB swapfile and enable it? [y/N]: ${RESET}"
                 read -r confirm
                 [[ "${confirm,,}" == "y" ]] && { _swap_add "$gb" || true; } || info "Cancelled."
@@ -857,15 +987,14 @@ manage_swap() {
                 ;;
             2)
                 if (( ${#files[@]} == 0 )); then warn "No managed swapfiles to remove."; sleep 1; continue; fi
-                echo -ne "Number of swapfile to remove [1-${#files[@]}, 0 cancel]: "
-                read -r n
-                if [[ "$n" =~ ^[0-9]+$ ]] && (( n >= 1 && n <= ${#files[@]} )); then
+                local n
+                if ui_ask_num n "Number of swapfile to remove" "" 1 "${#files[@]}"; then
                     local target="${files[$((n-1))]}"
                     echo -ne "${RED}Disable and delete $target? [y/N]: ${RESET}"
                     read -r confirm
                     [[ "${confirm,,}" == "y" ]] && { _swap_remove_file "$target" || true; } || info "Cancelled."
                 else
-                    [[ "$n" != "0" ]] && warn "Invalid selection."
+                    info "Cancelled — no swapfile removed."
                 fi
                 sleep 2
                 ;;
@@ -1019,7 +1148,9 @@ clean_maintenance() {
                 ;;
             2)
                 if [[ $tar_count -eq 0 ]]; then warn "No tar archives found."; sleep 1; continue; fi
-                echo -ne "Keep newest N archives [default 2]: "; read -r keep_n; keep_n="${keep_n:-2}"
+                local keep_n
+                ui_ask_num keep_n "Keep newest N archives" 2 0 \
+                    || { info "Cancelled — no archives deleted."; sleep 1; continue; }
                 local delete_list
                 delete_list="$(_find_tar_files "$tar_dir" | head -n -"$keep_n" || true)"
                 if [[ -z "$delete_list" ]]; then
@@ -1036,7 +1167,9 @@ clean_maintenance() {
                 ;;
             3)
                 if [[ $tar_count -eq 0 ]]; then warn "No tar archives found."; sleep 1; continue; fi
-                echo -ne "Delete archives older than N days [default 14]: "; read -r days; days="${days:-14}"
+                local days
+                ui_ask_num days "Delete archives older than N days" 14 0 \
+                    || { info "Cancelled — no archives deleted."; sleep 1; continue; }
                 local del_count=0
                 while IFS= read -r f; do
                     if find "$f" -mtime +"$days" -print 2>/dev/null | grep -q .; then
@@ -1048,7 +1181,10 @@ clean_maintenance() {
                 sleep 2
                 ;;
             4)
-                echo -ne "Letters to clean (e.g. A B D): "; read -r items; items="${items^^}"
+                local items
+                ui_ask items "Letters to clean (e.g. A B D)" \
+                    || { info "Cancelled — nothing was cleaned."; sleep 1; continue; }
+                items="${items^^}"
                 [[ "$items" == *"A"* ]] && _clean_tmp
                 [[ "$items" == *"B"* ]] && _clean_txhashset "$txhashset_files"
                 [[ "$items" == *"C"* ]] && _clean_grin_logs
@@ -1167,12 +1303,19 @@ self_update() {
         3) branch="corefeatures" ;;
         4) branch="publicpool" ;;
         5)
-            echo -ne "  Branch name: "
-            read -r branch
+            # Cancel returns to the menu — it must NOT fall through to `main`.
+            # This prompt used to answer a bare Enter with "Defaulting to
+            # 'main'", so the instinctive way to back out of a mistyped choice
+            # silently armed a self-update from a branch the operator never
+            # picked. Backing out has to mean backing out.
+            if ! ui_ask branch "  Branch name"; then
+                info "Update cancelled — nothing was downloaded."
+                pause; return
+            fi
             branch=$(echo "$branch" | tr -d '[:space:]')
             if [[ -z "$branch" ]]; then
-                warn "No branch entered. Defaulting to 'main'."
-                branch="main"
+                info "Update cancelled — nothing was downloaded."
+                pause; return
             fi
             ;;
         *) branch="main" ;;
@@ -1278,14 +1421,14 @@ show_menu() {
     echo -e "${BOLD}${CYAN} 08)  Grin Node Administration Centre${RESET}"
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
     echo ""
-    echo -e "${BOLD}  Monitoring${RESET}"
+    echo -e "${BOLD}  Monitoring & Host${RESET}"
     echo -e "  ${GREEN}1${RESET})   Remote Node Manager       ${DIM}monitor · mass deploy · remote control${RESET}"
     echo -e "  ${GREEN}2${RESET})   Provider Access Watch     ${DIM}host-tamper detection + off-box alerts${RESET}"
-    echo -e "  ${GREEN}3${RESET})   Node Status & Sync        ${DIM}ports, tmux, versions + chain tip${RESET}"
+    echo -e "  ${GREEN}3${RESET})   Host Optimization & Hard. ${DIM}profile CPU/RAM/IO → tuning advice${RESET}"
     echo ""
-    echo -e "${BOLD}  Security & Network${RESET}"
+    echo -e "${BOLD}  Network & Status${RESET}"
     echo -e "  ${CYAN}4${RESET})   Nginx Extended Features   ${DIM}audit · reverse proxy · security · logs${RESET}"
-    echo -e "  ${CYAN}5${RESET})   SSH Key Hardening         ${DIM}key-only root login · disable passwords${RESET}"
+    echo -e "  ${CYAN}5${RESET})   Node Status & Sync        ${DIM}ports, tmux, versions + chain tip${RESET}"
     echo -e "  ${CYAN}6${RESET})   Top 20 Bandwidth Consumers${DIM} parse nginx logs, block/limit IP${RESET}"
     echo ""
     echo -e "${BOLD}  Maintenance${RESET}"
@@ -1313,9 +1456,14 @@ main() {
             # of returning here. `0)` is exempt — break must not be guarded.
             "1")   menu_node_monitor        || true ;;
             "2")   menu_access_watch        || true ;;
-            "3")   show_node_status_sync    || true ;;
+            # Keys 3 and 5 changed hands on 2026-08-25 (see the header note):
+            # 3 was Node Status, 5 was SSH Key Hardening. Deliberately NO alias
+            # arm for either old meaning — bash takes the first matching arm, so
+            # an alias here would silently open the wrong product instead of
+            # erroring. The per-screen banner is the mis-key safety net.
+            "3")   menu_host_optimization   || true ;;
             "4")   menu_nginx_extended      || true ;;
-            "5")   menu_ssh_hardening       || true ;;
+            "5")   show_node_status_sync    || true ;;
             "6")   show_bandwidth_consumers || true ;;
             "7")   clean_maintenance        || true ;;
             "8")   self_update              || true ;;

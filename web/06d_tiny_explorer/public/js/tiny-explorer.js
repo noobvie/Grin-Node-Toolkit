@@ -121,14 +121,85 @@ function initChrome() {
       const q = inp.value.trim();
       if (q) window.location.href = searchTarget(q);
     });
+    // "/" focuses the search box — but only when the visitor is not already
+    // typing somewhere. Every tool page has its own field (a URL on /node-check
+    // legitimately contains "/", and /slate takes a pasted multi-line slatepack),
+    // so stealing focus mid-entry would eat the keystroke.
+    const typing = el => !!el && (el.isContentEditable ||
+      el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT');
     document.addEventListener('keydown', e => {
-      if (e.key === '/' && document.activeElement !== inp) { e.preventDefault(); inp.focus(); }
+      if (e.key === '/' && !typing(document.activeElement)) { e.preventDefault(); inp.focus(); }
       if (e.key === 'Escape') inp.blur();
     });
   }
 
   initTooltips();
   initTools();
+}
+
+// Group labels for the Tools dropdown, in render order. The hub is going from
+// two tools to six; six flat rows is a list, not a menu, so the rows are grouped
+// under the pair table in script06_design.md ("Option D addendum — Tools hub
+// expansion to six"): Verify what you were handed / Operate your own side.
+//
+// Membership is keyed on the row's href, NOT on DOM order, so the six page
+// headers can keep carrying the rows in whatever order and still group the same
+// way. A tool listed here that no page carries yet is skipped, and a group with
+// no rows renders no heading — so "Operate" simply appears when the first tool
+// that belongs to it ships. An href not listed here still renders, ungrouped,
+// after the groups.
+// Membership follows the pair table's COLUMNS, reading down (Transaction,
+// Reachability, Economics). Note the design doc's illustrative 3x2 grid puts
+// Emission in the second row with the operate tools; the table itself files it
+// under Verify, and that is what its own one-liner says it does ("Verify 1
+// tsu/sec"), so Verify is what it gets here.
+const TOOLS_MENU_GROUPS = [
+  { label: 'Verify',  hrefs: ['/slate', '/proof', '/wallet-check', '/emission'] },
+  { label: 'Operate', hrefs: ['/node-check', '/mining'] }
+];
+
+// Rewrite #tx-tools-menu as grouped sections. The headings are labels, not menu
+// items: role="presentation", no tabindex, no href — so neither the tab order
+// nor the menu's accessible child list gains anything focusable.
+// The Wallet Checker's one-line description is written for the tier-1-only page
+// (checksum, network, .onion) because that is what a visitor gets if this script
+// never runs — not because it is the common case, which it no longer is: a
+// freshly installed box has the Tor liveness probe ON. Where it is on, the tool
+// genuinely does more than the static line claims — and
+// "can I see whether this wallet is online before I send to it" is the reason
+// most people open it, so a label that never mentions it hides the feature
+// behind a page nobody had a reason to click. Runs on every shell (the tools
+// menu is in all of them) and on the homepage card grid.
+const WALLET_PROBE_LINE = 'Address checks — and is the wallet listening?';
+
+function applyWalletProbeLabels() {
+  if (window.TINYEXP_WALLET_PROBE !== true) return;
+  document.querySelectorAll('.tx-tools-item[href="/wallet-check"] small')
+    .forEach(n => { n.textContent = WALLET_PROBE_LINE; });
+  document.querySelectorAll('.tx-tool-card[href="/wallet-check"] .tx-tool-line')
+    .forEach(n => { n.textContent = WALLET_PROBE_LINE; });
+}
+
+function groupToolsMenu(menu) {
+  const items = Array.from(menu.querySelectorAll('.tx-tools-item'));
+  if (!items.length || menu.querySelector('.tx-tools-group')) return;
+  const byHref = new Map();
+  items.forEach(a => byHref.set(new URL(a.getAttribute('href'), location.origin).pathname, a));
+
+  const frag = document.createDocumentFragment();
+  const placed = new Set();
+  TOOLS_MENU_GROUPS.forEach(group => {
+    const rows = group.hrefs.map(h => byHref.get(h)).filter(Boolean);
+    if (!rows.length) return;                    // no rows yet → no heading
+    const h = document.createElement('div');
+    h.className = 'tx-tools-group';
+    h.setAttribute('role', 'presentation');
+    h.textContent = group.label;
+    frag.appendChild(h);
+    rows.forEach(a => { frag.appendChild(a); placed.add(a); });
+  });
+  items.forEach(a => { if (!placed.has(a)) frag.appendChild(a); });
+  menu.appendChild(frag);                        // moves the existing nodes
 }
 
 // Header "Tools" dropdown — identical markup on every page, so this runs from
@@ -138,6 +209,8 @@ function initTools() {
   const btn  = document.getElementById('tx-tools-btn');
   const menu = document.getElementById('tx-tools-menu');
   if (!wrap || !btn || !menu) return;
+  groupToolsMenu(menu);
+  applyWalletProbeLabels();
   function open(v) {
     wrap.classList.toggle('open', v);
     btn.setAttribute('aria-expanded', v ? 'true' : 'false');
@@ -261,7 +334,7 @@ async function pollStats() {
     if (chEl) {
       if (s.change_24h_pct != null) {
         chEl.textContent = (s.change_24h_pct >= 0 ? '+' : '') + s.change_24h_pct.toFixed(2) + '% · 24h';
-        chEl.style.color = s.change_24h_pct > 0 ? 'var(--green)' : s.change_24h_pct < 0 ? 'var(--red)' : '';
+        chEl.style.color = s.change_24h_pct > 0 ? 'var(--green-ink)' : s.change_24h_pct < 0 ? 'var(--red-ink)' : '';
       } else { chEl.textContent = ''; }
     }
 
@@ -536,9 +609,13 @@ async function loadBlock() {
   }
 }
 
+// esc(), like its twin showEntityError below. `msg` is not always a constant:
+// the catch path passes e.message, and a failed res.json() builds that message
+// from a SNIPPET OF THE RESPONSE BODY — so raw bytes off the wire reached
+// innerHTML here while the identical function 130 lines down escaped them.
 function showBlockError(msg) {
   const l = document.getElementById('block-loading');
-  if (l) l.innerHTML = '<div class="tx-error"><h2>Unable to load block</h2><p>' + msg + '</p>' +
+  if (l) l.innerHTML = '<div class="tx-error"><h2>Unable to load block</h2><p>' + esc(msg) + '</p>' +
     '<p><a href="/">← Back to explorer</a></p></div>';
 }
 
@@ -699,9 +776,19 @@ function init404() {
         { name: 'Grincoin.org', url: 'https://grincoin.org', blurb: 'Full archive explorer — deep block bodies since genesis.' },
         { name: 'GrinScan', url: 'https://grinscan.org', blurb: 'Dual-network explorer with charts, peers, price, and a REST API.' },
       ];
-  if (wrap) wrap.innerHTML = fallbacks.map(f =>
-    `<a class="tx-fallback" href="${f.url}" target="_blank" rel="noopener">` +
-    `<div class="name">${f.name} ↗</div><div class="blurb">${f.blurb || ''}</div></a>`).join('');
+  // Operator-supplied (config.fallback_explorers), so this is not a visitor XSS
+  // — but it is still untrusted-by-shape: an unescaped " in a url closes the
+  // href attribute, and a javascript: url would run on click. Escape all three,
+  // and let only http(s) through, so a typo in the config degrades to a missing
+  // card instead of a broken page.
+  const safeUrl = u => /^https?:\/\//i.test(String(u || '')) ? String(u) : '';
+  if (wrap) wrap.innerHTML = fallbacks.map(f => {
+    const href = safeUrl(f.url);
+    if (!href) return '';
+    return `<a class="tx-fallback" href="${esc(href)}" target="_blank" rel="noopener noreferrer">` +
+      `<div class="name">${esc(f.name || href)} ↗</div>` +
+      `<div class="blurb">${esc(f.blurb || '')}</div></a>`;
+  }).join('');
 }
 
 // ── EMISSION PAGE ─────────────────────────────────────────────────────────────
@@ -729,6 +816,420 @@ function initEmission() {
   }).catch(() => {});
 }
 
+// ── MINING CALCULATOR PAGE ──────────────────────────────────
+
+// A blank, negative, non-numeric or infinite input is 0 here — never NaN, which
+// propagates silently through every later multiplication and lands in a money
+// figure (memory reference_money_number_boundary_traps).
+function posNum(v) {
+  const n = typeof v === 'number' ? v : parseFloat(v);
+  return (isFinite(n) && n > 0) ? n : 0;
+}
+
+// Pure arithmetic, deliberately split from the DOM so it is directly testable.
+// netGps is the SERVER's figure; this page never derives a hashrate from
+// difficulty (the difficulty/60 trap). A null output means "unknown" and must
+// render as —, never as 0: a missing network basis is not an idle miner.
+function miningEstimate(inp) {
+  const netGps = posNum(inp.netGps);
+  const gps    = posNum(inp.gps);
+  const fee    = Math.min(100, posNum(inp.feePct));
+  const watts  = posNum(inp.watts);
+  const kwh    = posNum(inp.kwhCost);
+  const price  = posNum(inp.priceUsd) || null;
+  const hwCost = posNum(inp.hwCost);
+
+  // Your share of a network that is paid exactly 86,400 ツ a day (60 ツ × 1440).
+  // Both operands must be REAL: an empty hashrate box is "not told yet", not a
+  // miner running at 0 G/s, and posNum() flattens the two into the same 0. It
+  // rendered as a confident "0 ツ · $0.00" a day and a "-$0.49" daily loss for a
+  // rig the reader has not described — the same class of mistake as printing 0
+  // for a missing network basis, one field further in.
+  const grinDay = (netGps > 0 && gps > 0) ? gps / netGps * 86400 * (1 - fee / 100) : null;
+  const powerDay = watts / 1000 * 24 * kwh;
+  const usd = g => (g != null && price != null) ? g * price : null;
+  const profitDay = usd(grinDay) != null ? usd(grinDay) - powerDay : null;
+
+  return {
+    grinDay,
+    grinWeek:  grinDay != null ? grinDay * 7  : null,
+    grinMonth: grinDay != null ? grinDay * 30 : null,
+    usdDay:    usd(grinDay),
+    usdWeek:   usd(grinDay != null ? grinDay * 7  : null),
+    usdMonth:  usd(grinDay != null ? grinDay * 30 : null),
+    powerDay,
+    // Undefined with no power cost (nothing to break even against) and with no
+    // yield (the division would be Infinity) — both are —, not a number.
+    breakEven: (grinDay > 0 && powerDay > 0) ? powerDay / grinDay : null,
+    profitDay,
+    // CAPITAL PAYBACK, in days — a duration, not an ROI percentage, so nobody
+    // has to supply a horizon before the page will answer. null is every case
+    // that has no number, and there are three of them: nothing spent yet, no
+    // basis to compute a profit from, and a rig that loses money every day.
+    // That last one HAS a real answer — never — but it is a word, and
+    // smuggling it in here as Infinity would put a non-finite value into the
+    // one struct on this page whose fields get printed as money. render()
+    // tells the three apart from what was spent and says which is which.
+    paybackDays: (hwCost > 0 && profitDay != null && profitDay > 0)
+      ? hwCost / profitDay : null,
+  };
+}
+
+function fmtGrinAmt(n) {
+  if (n == null || !isFinite(n)) return '—';
+  const d = n === 0 ? 0 : Math.abs(n) < 1 ? 4 : Math.abs(n) < 1000 ? 2 : 0;
+  return Number(n).toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d });
+}
+
+// WATTS. A whole number above 10 W (no rig is specified to a tenth), one decimal
+// below it so a small figure someone typed on purpose is not rounded to nothing.
+function fmtWatts(n) {
+  if (n == null || !isFinite(n)) return '—';
+  return Number(n).toLocaleString(undefined, { maximumFractionDigits: Math.abs(n) < 10 ? 1 : 0 });
+}
+
+function _usd(n, d) {
+  return (n < 0 ? '-$' : '$') + Math.abs(n).toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d });
+}
+
+// TOTALS (a day's income, a power bill): cents, widening only for sub-cent sums.
+function fmtUsdAmt(n) {
+  if (n == null || !isFinite(n)) return '—';
+  const a = Math.abs(n);
+  return _usd(n, (a !== 0 && a < 0.01) ? 4 : 2);
+}
+
+// UNIT PRICES (GRIN price, break-even price): GRIN trades in cents, so 2 dp
+// would round a break-even of $0.0667 to $0.07 and destroy the only digits
+// that matter.
+function fmtUsdPrice(n) {
+  if (n == null || !isFinite(n)) return '—';
+  const a = Math.abs(n);
+  return _usd(n, a !== 0 && a < 0.001 ? 8 : 4);
+}
+
+// PAYBACK, as a duration someone would say out loud. One unit at a time —
+// days, then months, then years — because "1 yr 8 mo 3 d" is precision this
+// estimate does not have and never can: it rests on a price and a difficulty
+// that are only true today. Past a century the figure has stopped carrying
+// information, so it stops being a figure.
+function fmtPayback(days) {
+  if (days == null || !isFinite(days) || days <= 0) return '—';
+  if (days < 1) return 'under a day';
+  const d = Math.round(days);
+  if (days < 90)   return d + (d === 1 ? ' day' : ' days');
+  if (days < 1096) return Math.round(days / 30.44) + ' months';   // out to 3 years
+  const yr = days / 365.25;
+  return yr > 100 ? 'over 100 years'
+       : (yr < 10 ? yr.toFixed(1) : String(Math.round(yr))) + ' years';
+}
+
+function initMining() {
+  const ids = ['mine-gps', 'mine-fee', 'mine-watt', 'mine-kwh', 'mine-cost'];
+  const el  = {};
+  ids.forEach(id => { el[id] = document.getElementById(id); });
+  const rigSel  = document.getElementById('mine-rig');
+  const kwhSel  = document.getElementById('mine-kwh-preset');
+  const unitsEl = document.getElementById('mine-units');
+  let netGps = null, priceUsd = null;
+
+  // ── Number of units ────────────────────────────────────────────────────────
+  // The hashrate and wattage boxes hold TOTALS, always — that is what the labels
+  // say and what miningEstimate() is handed, so the unit count never becomes a
+  // hidden multiplier inside the maths (see the preset note below). What it needs
+  // instead is a PER-UNIT BASIS to multiply, kept here.
+  //
+  // Keeping the basis rather than only the total is the part that earns its
+  // keep: an operator who picks a preset, sets 4 units, then corrects the
+  // wattage to what the wall meter actually reads has 4 × measured, not 4 × spec
+  // — and moving 4 → 8 must double the MEASURED figure. Re-deriving the basis on
+  // every manual edit (total ÷ count) is what makes that hold, and it is also
+  // what lets the count work for hardware that isn't in the list at all.
+  const unit = { gps: 0, watts: 0, cost: 0 };
+
+  // Blank, 0, junk and a half-typed value are all one unit — never 0 (which
+  // would zero the rig) and never NaN (which would poison every figure below).
+  function unitCount() {
+    const n = Math.floor(posNum(unitsEl ? unitsEl.value : 1));
+    return n > 0 ? n : 1;
+  }
+
+  // Float noise must not reach a field the reader retypes: 1.15 × 3 is
+  // 3.4499999999999997 and 0.7 × 3 is 2.0999999999999996. Twelve significant
+  // digits is far past any real hashrate or wattage and drops the tail.
+  function trimFloat(n) { return isFinite(n) ? String(Number(n.toPrecision(12))) : ''; }
+
+  function captureUnit() {   // the boxes are the truth → re-derive the basis
+    const c = unitCount();
+    unit.gps   = posNum(el['mine-gps']  ? el['mine-gps'].value  : 0) / c;
+    unit.watts = posNum(el['mine-watt'] ? el['mine-watt'].value : 0) / c;
+    unit.cost  = posNum(el['mine-cost'] ? el['mine-cost'].value : 0) / c;
+  }
+  function applyUnits() {    // the basis is the truth → rewrite the boxes
+    const c = unitCount();
+    if (el['mine-gps'])  el['mine-gps'].value  = trimFloat(unit.gps   * c);
+    if (el['mine-watt']) el['mine-watt'].value = trimFloat(unit.watts * c);
+    // Cost ships EMPTY and has to stay empty until someone types in it.
+    // trimFloat(0) here would answer "what did it cost?" with 0 on behalf of a
+    // reader who has not said — and 0 is the one value that makes the payback
+    // card drop its "enter what the hardware cost" and print a confident
+    // "under a day" for hardware nobody has priced.
+    if (el['mine-cost']) el['mine-cost'].value = unit.cost > 0 ? trimFloat(unit.cost * c) : '';
+  }
+
+  function render() {
+    // Read separately as well as passed in: the payback card has to tell "no
+    // price entered" apart from "priced, but it never pays back", and those
+    // two both arrive from miningEstimate() as a null paybackDays.
+    const hwCost = posNum(el['mine-cost'] ? el['mine-cost'].value : 0);
+    const r = miningEstimate({
+      netGps,
+      priceUsd,
+      gps:     el['mine-gps']  ? el['mine-gps'].value  : 0,
+      feePct:  el['mine-fee']  ? el['mine-fee'].value  : 0,
+      watts:   el['mine-watt'] ? el['mine-watt'].value : 0,
+      kwhCost: el['mine-kwh']  ? el['mine-kwh'].value  : 0,
+      hwCost,
+    });
+    setText('mine-day',   fmtGrinAmt(r.grinDay));
+    setText('mine-week',  fmtGrinAmt(r.grinWeek));
+    setText('mine-month', fmtGrinAmt(r.grinMonth));
+    // WHY a figure is —, named in the order the reader can act on it. Every
+    // unknown used to print 'enter your hashrate' or 'price unavailable', so a
+    // dead /api/stats told a miner who HAD entered a hashrate to enter one —
+    // copy that blames the operator for the server's own outage. The missing
+    // input in that case is the NETWORK figure, which no field on this page can
+    // supply. Order matters: without the network basis nothing downstream is
+    // computable, so it is reported first even when the price is also missing.
+    const noNet  = (netGps == null);
+    const noRate = posNum(el['mine-gps'] ? el['mine-gps'].value : 0) <= 0;
+    const blocker = noNet  ? 'needs the network hashrate'
+                  : noRate ? 'enter your hashrate'
+                  : priceUsd == null ? 'price unavailable'
+                  : '—';
+
+    setText('mine-day-usd',   r.usdDay   != null ? fmtUsdAmt(r.usdDay)   : blocker);
+    setText('mine-week-usd',  r.usdWeek  != null ? fmtUsdAmt(r.usdWeek)  : blocker);
+    setText('mine-month-usd', r.usdMonth != null ? fmtUsdAmt(r.usdMonth) : blocker);
+    setText('mine-power', fmtUsdAmt(r.powerDay));
+    setText('mine-breakeven', fmtUsdPrice(r.breakEven));
+    // Power comes first here: with no power cost there is nothing to break even
+    // against, so the missing network basis is not what is holding this card up.
+    // The ONE figure on this page a unit count cannot move, and it looks broken
+    // for exactly that reason: break-even is power ÷ income, and the count
+    // multiplies both, so it cancels. A reader who raises the count and watches
+    // every other card change while this one sits still has no way to tell a
+    // cancelling ratio from a field that stopped updating — so say which it is,
+    // but only when there is a count to explain.
+    setText('mine-breakeven-sub', r.breakEven != null
+      ? (unitCount() > 1
+          ? 'per ツ, to cover electricity — unchanged by unit count, it scales both sides'
+          : 'per ツ, to cover electricity')
+      : r.powerDay > 0 ? (noNet ? 'needs the network hashrate' : 'enter your hashrate')
+      : 'no power cost entered');
+    setText('mine-profit', fmtUsdAmt(r.profitDay));
+    setText('mine-profit-sub', r.profitDay != null
+      ? 'income at the live price minus power'
+      : blocker === '—' ? 'at the live price' : blocker);
+
+    // PAYBACK. The SECOND card here that a unit count cannot move, and for the
+    // same reason break-even cannot: the count multiplies what you spent and
+    // what you earn by the identical factor, so it cancels. Knowing that in
+    // advance is the only reason this one did not ship as a bug report too.
+    //
+    // Three ways there is no number, and they are not interchangeable: nothing
+    // priced yet (ask for a price), no basis (name the missing input, same
+    // blocker chain as every card above), or priced and losing money — which
+    // is not a missing answer at all. It is the answer, and for a lot of real
+    // hardware at a real electricity rate it is the only honest one.
+    setText('mine-payback', r.paybackDays != null ? fmtPayback(r.paybackDays)
+      : (hwCost > 0 && r.profitDay != null) ? 'never' : '—');
+    setText('mine-payback-sub', r.paybackDays != null
+      ? ("at today's price and difficulty"
+         + (unitCount() > 1 ? ' — unchanged by unit count, it scales both sides' : ''))
+      : hwCost <= 0          ? 'enter what the hardware cost'
+      : r.profitDay == null  ? blocker
+      : 'it loses money every day at these numbers');
+
+    // Watts are a RATE, and the field was read as a daily total. Spelling the
+    // conversion out beside the box is the only place it can't be missed: the
+    // "Power cost / day" card shows the money, not the energy, so nothing on
+    // screen previously said that 120 W means 2.9 kWh a day.
+    // fmtWatts, not fmtGrinAmt: that formatter picks its decimals by magnitude
+    // for a GRIN balance, which reads a wattage back as "120.00 W" beside
+    // "2,800 W". The one line on the page whose entire job is to make a unit
+    // unambiguous cannot itself be inconsistent about the number.
+    const w = posNum(el['mine-watt'] ? el['mine-watt'].value : 0);
+    setText('mine-watt-note', w > 0
+      ? 'A continuous rate, not a daily total — ' + fmtWatts(w) + ' W running 24/7 is '
+        + (w * 24 / 1000).toFixed(1) + ' kWh a day.'
+      : 'A continuous rate, not a daily total. At 0 W the page shows gross mining income only.');
+  }
+
+  // The presets WRITE INTO the number fields rather than feeding the maths
+  // themselves, so the visible figures stay the only input miningEstimate ever
+  // reads — a dropdown that quietly disagreed with the box below it would be a
+  // money figure nobody can audit. Everything below is note text and plumbing.
+  const rigName = () => {
+    const o = rigSel && rigSel.options[rigSel.selectedIndex];
+    return o ? o.text.split(' — ')[0] : '';
+  };
+  function rigNote() {
+    if (!rigSel) return;
+    const c = unitCount();
+    setText('mine-rig-note', rigSel.value === 'custom'
+      ? 'Custom — fill in the hashrate and power draw yourself.'
+      : rigName() + (c > 1 ? ' × ' + c : '') + ' figures filled in for you. Edit either one if yours differs, or change the number of units.');
+  }
+  // Says the multiplication back in words. A count that silently rewrites two
+  // fields further down the form is a figure the reader has to take on trust;
+  // naming the total here is what makes it checkable without a calculator.
+  function unitsNote() {
+    if (!unitsEl) return;
+    const c = unitCount();
+    if (c <= 1) {
+      setText('mine-units-note', 'How many you run. The hashrate, power draw and hardware cost are the total for all of them — no need to multiply anything yourself.');
+      return;
+    }
+    const what = (rigSel && rigSel.value !== 'custom') ? c + ' × ' + rigName() : c + ' units';
+    setText('mine-units-note', what + ' — ' + trimFloat(unit.gps * c) + ' G/s and '
+      + fmtWatts(unit.watts * c) + ' W in total'
+      + (unit.cost > 0 ? ', ' + fmtUsdAmt(unit.cost * c) + ' spent' : '')
+      + ', filled in for you.');
+  }
+  function kwhNote() {
+    if (!kwhSel) return;
+    setText('mine-kwh-note', kwhSel.value === 'custom'
+      ? 'Custom — take the rate off your own bill.'
+      : 'A rough regional average converted to USD, not a quote — your own bill is the number that matters.');
+  }
+
+  if (rigSel) {
+    rigSel.addEventListener('change', () => {
+      const o = rigSel.options[rigSel.selectedIndex];
+      if (o && rigSel.value !== 'custom') {
+        // The preset is a PER-UNIT spec, so it lands in the basis and reaches the
+        // boxes multiplied. Writing it straight into them would silently drop the
+        // count back to one every time the hardware changed.
+        if (o.dataset.gps   != null) unit.gps   = posNum(o.dataset.gps);
+        if (o.dataset.watts != null) unit.watts = posNum(o.dataset.watts);
+        applyUnits();
+      }
+      rigNote();
+      unitsNote();
+      render();
+    });
+  }
+  if (kwhSel) {
+    kwhSel.addEventListener('change', () => {
+      const o = kwhSel.options[kwhSel.selectedIndex];
+      if (o && kwhSel.value !== 'custom' && el['mine-kwh'] && o.dataset.kwh != null) {
+        el['mine-kwh'].value = o.dataset.kwh;
+      }
+      kwhNote();
+      render();
+    });
+  }
+
+  // Typing over a filled-in figure drops its select back to Custom, so the
+  // dropdown can never name a rig or a region whose numbers are no longer on
+  // screen. Assigning .value from the handlers above fires no `input` event,
+  // so this cannot loop back on itself.
+  ids.forEach(id => {
+    if (!el[id]) return;
+    el[id].addEventListener('input', () => {
+      if (id === 'mine-gps' || id === 'mine-watt' || id === 'mine-cost') {
+        // What was typed is the TOTAL for the whole fleet, so one unit is that
+        // divided by the count. Without this the next change of the count would
+        // throw the correction away and go back to multiplying the spec.
+        captureUnit();
+        // ...but only the two SPEC figures belong to the hardware picker. No
+        // preset in that list carries a price, so a price the reader types is
+        // not a departure from the spec and must not drop the picker to Custom
+        // — that would blank a rig name the two figures above still match.
+        if (id !== 'mine-cost' && rigSel && rigSel.value !== 'custom') {
+          rigSel.value = 'custom'; rigNote();
+        }
+        unitsNote();
+      }
+      if (id === 'mine-kwh' && kwhSel && kwhSel.value !== 'custom') {
+        kwhSel.value = 'custom'; kwhNote();
+      }
+      render();
+    });
+  });
+
+  if (unitsEl) {
+    unitsEl.addEventListener('input', () => {
+      applyUnits();   // assigning .value fires no 'input', so this cannot loop
+      rigNote();
+      unitsNote();
+      render();
+    });
+  }
+
+  // Seed the basis from what is ON SCREEN, not from the selected preset: a
+  // browser that restores form values across a reload (Firefox does) can bring
+  // back a total and a count together, and total ÷ count is right in that case
+  // where the preset's spec would quietly undo the restored count.
+  captureUnit();
+
+  rigNote();
+  unitsNote();
+  kwhNote();
+  render();
+
+  // ONE call. hashrate_gps_24h is the day-average basis the server already uses
+  // for its own G1/day figure; hashrate_gps (the ~20-block instantaneous rate)
+  // is the documented fallback when the day-average could not be computed.
+  fetch('/api/stats')
+    .then(r => r.ok ? r.json() : Promise.reject(new Error('HTTP ' + r.status)))
+    .then(s => {
+      const daily = posNum(s.hashrate_gps_24h);
+      const inst  = posNum(s.hashrate_gps);
+      netGps   = daily || inst || null;
+      priceUsd = posNum(s.price_usd) || null;
+      setText('mine-net', netGps != null ? fmtHashrate(netGps) : 'unavailable');
+      setText('mine-net-sub', netGps == null ? 'cannot estimate without it'
+        : daily ? '24h average' : 'recent blocks · 24h average unavailable');
+      setText('mine-price', priceUsd != null ? fmtUsdPrice(priceUsd) : 'unavailable');
+      setText('mine-price-sub', priceUsd != null ? 'live, USD' : 'USD figures unavailable');
+      render();
+    })
+    .catch(err => {
+      // These two cards ARE this page's error surface. Swallowing the failure
+      // left them reading "—" and "loading…" for ever, which is indistinguishable
+      // from a slow network and says nothing about WHICH half broke — the reason
+      // a dead /api/stats (nginx 503 from the tinyx_api limiter, a 502 when the
+      // node is unreachable, an offline browser) could not be told apart from a
+      // rendering bug. Name the failure and let the estimates fall to —.
+      setText('mine-net', 'unavailable');
+      setText('mine-net-sub', 'live stats did not load · ' + (err && err.message ? err.message : 'network error'));
+      render();
+
+      // /api/stats is all-or-nothing on the NODE: it 502s whenever getTip()
+      // fails, taking the price down with it even though the price is fetched
+      // from an exchange and needs the node for nothing. Reporting it as
+      // 'unavailable' there was simply false. /api/price is that node-free half,
+      // so an outage costs the estimates but not the price card.
+      fetch('/api/price')
+        .then(r => r.ok ? r.json() : Promise.reject(new Error('HTTP ' + r.status)))
+        .then(pr => {
+          priceUsd = posNum(pr && pr.price_usd) || null;
+          if (priceUsd == null) throw new Error('no price');
+          setText('mine-price', fmtUsdPrice(priceUsd));
+          setText('mine-price-sub', 'live, USD · network hashrate is the missing figure');
+          render();
+        })
+        .catch(() => {
+          priceUsd = null;
+          setText('mine-price', 'unavailable');
+          setText('mine-price-sub', 'USD figures unavailable');
+          render();
+        });
+    });
+}
+
 // ── Init ─────────────────────────────────────────────────────────────────────────
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -741,4 +1242,5 @@ document.addEventListener('DOMContentLoaded', () => {
   if (page === 'output') loadEntity('output');
   if (page === 'notfound') init404();
   if (page === 'emission') initEmission();
+  if (page === 'mining') initMining();
 });

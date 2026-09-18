@@ -1216,7 +1216,7 @@ flr_write_landing_page() {
 
 <footer>
   <div class="wrap">
-    <span class="made">Made with &#10084;&#65039; from Saigon
+    <span class="made">From Saigon with &#10084;&#65039;
       <svg viewBox="0 0 27 18" width="21" height="14" role="img" aria-label="Yellow flag with three red stripes" style="vertical-align:-2px;border-radius:2px"><rect width="27" height="18" fill="#FFCD00"/><rect y="4" width="27" height="2" fill="#DA251D"/><rect y="8" width="27" height="2" fill="#DA251D"/><rect y="12" width="27" height="2" fill="#DA251D"/></svg>
     </span>
     <nav class="fnav">

@@ -200,55 +200,91 @@
   };
 
   // Plain-English "what is this and whose move is it" for each round.
+  //
+  // `next` is a list of per-role instructions, because the reader can be
+  // EITHER party: a receiver pastes the S2 they just produced to check it before
+  // sending it back, and a sender pastes the S2 they were handed to check it
+  // before finalizing. A single line addressed to "the sender" tells the
+  // receiver nothing about their own move (send it back, ask for `finalize`),
+  // which is exactly the question this page exists to answer. Backticks mark
+  // wallet commands; the UI renders them as <code>.
   const STATE_GUIDE = {
     S1: {
       title: 'Payment offer — awaiting the receiver',
       step: 1, of: 3,
       whose: 'receiver',
-      says: 'The sender has built a payment and is offering it to you.',
-      next: 'Receive this in your wallet, then send the resulting slatepack back to the sender.',
+      says: 'The sender has built a payment and is offering it to the receiver.',
+      next: [
+        { role: 'Receiver', text: 'Run `grin-wallet receive` and paste this slatepack when prompted '
+            + '(or `-i <file>`). Your wallet prints a new slatepack — send THAT back to the sender.' },
+        { role: 'Sender',   text: 'Nothing yet. Wait for the receiver to return the slatepack, '
+            + 'then run `grin-wallet finalize` with it.' },
+      ],
     },
     S2: {
       title: 'Signed by the receiver — awaiting the sender',
       step: 2, of: 3,
       whose: 'sender',
-      says: 'The receiver has added their output and signed.',
-      next: 'The SENDER finalizes this and broadcasts it to the network.',
+      says: 'The receiver has added their output and signed. Nothing is on-chain until the sender finalizes.',
+      next: [
+        { role: 'Sender',   text: 'Run `grin-wallet finalize` and paste this slatepack when prompted '
+            + '(or `-i <file>`). Your wallet signs and broadcasts the transaction.' },
+        { role: 'Receiver', text: 'Send this slatepack back to the sender and ask them to run '
+            + '`grin-wallet finalize` with it. You are done once they do.' },
+      ],
     },
     S3: {
       title: 'Finalized',
       step: 3, of: 3,
       whose: null,
       says: 'This transaction is complete and ready to post (or already posted).',
-      next: 'Nothing to do — check the kernel on-chain to confirm it settled.',
+      next: [
+        { role: null, text: 'Nothing to do — check the kernel on-chain to confirm it settled. '
+            + 'If it was finalized without a node connection, `grin-wallet post -i <file>` broadcasts it.' },
+      ],
     },
     I1: {
-      title: 'Invoice — you are being asked to pay',
+      title: 'Invoice — someone is asking to be paid',
       step: 1, of: 3,
       whose: 'payer',
-      says: 'Someone has issued an invoice requesting this amount FROM you.',
-      next: 'Verify the amount, then pay it in your wallet and send the result back.',
+      says: 'The invoicer is requesting this amount from the payer.',
+      next: [
+        { role: 'Payer',    text: 'Verify the amount, then run `grin-wallet pay` and paste this slatepack '
+            + 'when prompted (or `-i <file>`). Send the slatepack it produces back to the invoicer.' },
+        { role: 'Invoicer', text: 'Nothing yet. Wait for the payer to return the slatepack, '
+            + 'then run `grin-wallet finalize` with it.' },
+      ],
     },
     I2: {
       title: 'Invoice paid — awaiting the invoicer',
       step: 2, of: 3,
       whose: 'invoicer',
-      says: 'The payer has signed and is returning the paid invoice.',
-      next: 'The INVOICER finalizes this and broadcasts it to the network.',
+      says: 'The payer has signed and is returning the paid invoice. Nothing is on-chain until the invoicer finalizes.',
+      next: [
+        { role: 'Invoicer', text: 'Run `grin-wallet finalize` and paste this slatepack when prompted '
+            + '(or `-i <file>`). Your wallet signs and broadcasts the transaction.' },
+        { role: 'Payer',    text: 'Send this slatepack back to the invoicer and ask them to run '
+            + '`grin-wallet finalize` with it. You are done once they do.' },
+      ],
     },
     I3: {
       title: 'Finalized',
       step: 3, of: 3,
       whose: null,
       says: 'This invoice is complete and ready to post (or already posted).',
-      next: 'Nothing to do — check the kernel on-chain to confirm it settled.',
+      next: [
+        { role: null, text: 'Nothing to do — check the kernel on-chain to confirm it settled. '
+            + 'If it was finalized without a node connection, `grin-wallet post -i <file>` broadcasts it.' },
+      ],
     },
     NA: {
       title: 'Unknown state',
       step: null, of: null,
       whose: null,
       says: 'This slate does not declare a recognised transaction state.',
-      next: 'Treat with caution — it may be malformed or from a newer slate version.',
+      next: [
+        { role: null, text: 'Treat with caution — it may be malformed or from a newer slate version.' },
+      ],
     },
   };
 

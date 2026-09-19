@@ -16,6 +16,12 @@
       .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   }
 
+  // Guide text with `wallet command` spans → escaped HTML with <code>. The
+  // only markup the guide may carry; everything else is escaped.
+  function guideText(s) {
+    return esc(s).replace(/`([^`]+)`/g, '<code>$1</code>');
+  }
+
   // Kernel feature codes as used by the node/wallet.
   const KERNEL_FEATURES = {
     0: 'Plain',
@@ -144,7 +150,9 @@
 
         <div class="sp-next">
           <div class="sp-next-label">${isFinal ? 'Status' : 'Your next move'}</div>
-          <p>${esc(g.next)}</p>
+          ${g.next.map(n => n.role
+              ? `<p><b class="sp-next-role">If you are the ${esc(n.role.toLowerCase())}:</b> ${guideText(n.text)}</p>`
+              : `<p>${guideText(n.text)}</p>`).join('')}
         </div>
 
         ${netWarn}

@@ -97,13 +97,15 @@
       <summary>What this can and cannot tell you</summary>
       <div class="tx-details-body">
         <ul>
-          <li><strong>Plaintext slatepacks are fully readable.</strong> These come from the manual
-            flow — <code>grin-wallet send</code> <em>without</em> a <code>-d</code> destination.
-            Amount, fee, step, and sender are all visible.</li>
+          <li><strong>Plaintext slatepacks are fully readable.</strong> These come from a
+            transaction started <em>without</em> a destination address — <code>grin-wallet send</code>
+            or <code>invoice</code> with no <code>-d</code> — and that covers every round of it: the
+            offer <em>and</em> the reply. Amount, fee, step, and the author's address are all visible.</li>
           <li><strong>Encrypted slatepacks are not, and that is the point.</strong> The default
-            <code>send -d &lt;address&gt;</code> encrypts the slate to the recipient and moves the
-            sender inside that encrypted envelope. Only the recipient's wallet can open it — this
-            page will tell you it is encrypted and nothing more.</li>
+            <code>send -d &lt;address&gt;</code> (or <code>invoice -d</code>) encrypts the slate to
+            the recipient and moves the author's address inside that encrypted envelope; the reply
+            comes back encrypted too. Only the wallet it is addressed to can open it — this page will
+            tell you it is encrypted and nothing more.</li>
           <li><strong>Mainnet vs testnet comes from the sender's address prefix</strong> —
             <code>grin1…</code> is mainnet, <code>tgrin1…</code> is testnet. A slate itself carries
             <em>no</em> network field at all, which is why a testnet slate can be signed by a
@@ -129,6 +131,12 @@
         </ul>
         <p>Getting lost between rounds is the most common confusion in Grin. That is what the step
         rail above is for.</p>
+        <p><strong>Why encryption follows the transaction, not the step.</strong> It is decided once,
+        at step 1: a wallet given the other side's Slatepack address (<code>-d</code>) encrypts to it,
+        and the wallet that opens that slatepack now knows who to reply to, so <code>S2</code> /
+        <code>I2</code> goes back encrypted as well. A wallet started without an address sends
+        plaintext, and the answering wallet has no address to encrypt to, so the reply is plaintext
+        too. A whole transaction is therefore either readable here at every round, or at none.</p>
       </div>
     </details>
 

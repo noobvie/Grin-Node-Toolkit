@@ -85,7 +85,9 @@
     not_on_chain: {
       cls: 'is-bad', mark: '✕',
       text: 'Both signatures are valid, but this kernel is not on the mainnet chain. ' +
-            'A signed proof of a transaction that never confirmed is not a settled payment.',
+            'A signed proof only shows both parties agreed — it is not a settled payment until ' +
+            'the kernel confirms. If the transaction was finalized recently, check again in a ' +
+            'few minutes; if it was never posted, it never will.',
     },
     invalid_signature: {
       cls: 'is-bad', mark: '✕',
@@ -100,7 +102,8 @@
   };
 
   const CHAIN_NOTES = {
-    not_found: 'No kernel with this excess exists on the mainnet chain.',
+    not_found: 'No kernel with this excess is on the mainnet chain yet. A proof can be exported ' +
+               'as soon as the transaction is finalized, before it is posted or mined.',
     not_found_testnet_claim:
       'Not on the mainnet chain. The addresses claim testnet, and this explorer only ever ' +
       'asks mainnet — so this is not evidence either way. Check it on a testnet explorer.',

@@ -81,7 +81,7 @@
       <div class="tx-row-label" style="margin-bottom:8px">Payment proof (JSON)</div>
       <textarea id="pf-input" class="tx-pf-input" spellcheck="false" autocomplete="off"
                 autocapitalize="off" autocorrect="off"
-                placeholder='Paste the file written by:  grin-wallet export_proof --id &lt;tx id&gt; proof.json&#10;&#10;{&#10;  "amount": "1000000000",&#10;  "excess": "09…",&#10;  "recipient_address": "grin1…",&#10;  "recipient_sig": "…",&#10;  "sender_address": "grin1…",&#10;  "sender_sig": "…"&#10;}'
+                placeholder='Paste the file written by:  grin-wallet export_proof --id &lt;tx id&gt; proof.json&#10;(only a send made with  -d &lt;slatepack address&gt;  carries a proof — coinbase, received and manual-file transactions have none)&#10;&#10;{&#10;  "amount": "1000000000",&#10;  "excess": "09…",&#10;  "recipient_address": "grin1…",&#10;  "recipient_sig": "…",&#10;  "sender_address": "grin1…",&#10;  "sender_sig": "…"&#10;}'
                 aria-label="Paste a grin-wallet payment proof JSON file"></textarea>
       <p class="tx-pf-drophint">…or drop the <code>.json</code> file anywhere on this page.</p>
       <div class="tx-wc-actions">

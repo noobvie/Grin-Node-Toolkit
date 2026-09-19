@@ -208,6 +208,12 @@
   // receiver nothing about their own move (send it back, ask for `finalize`),
   // which is exactly the question this page exists to answer. Backticks mark
   // wallet commands; the UI renders them as <code>.
+  //
+  // NOTE: grin-wallet's `receive`/`pay` always seal the reply to the address in
+  // the slatepack header (controller/src/command.rs: ret_address = slatepack
+  // .sender), and `send`/`invoice` always put that address there — so an S2/I2
+  // from grin-wallet is mode 1 and never reaches these S2/I2 entries. They are
+  // kept for a slatepack produced by a wallet that omits its address.
   const STATE_GUIDE = {
     S1: {
       title: 'Payment offer — awaiting the receiver',
@@ -216,7 +222,8 @@
       says: 'The sender has built a payment and is offering it to the receiver.',
       next: [
         { role: 'Receiver', text: 'Run `grin-wallet receive` and paste this slatepack when prompted '
-            + '(or `-i <file>`). Your wallet prints a new slatepack — send THAT back to the sender.' },
+            + '(or `-i <file>`). Your wallet prints a new slatepack — send THAT back to the sender. '
+            + 'It will be encrypted to them, so this page cannot read it; that is normal.' },
         { role: 'Sender',   text: 'Nothing yet. Wait for the receiver to return the slatepack, '
             + 'then run `grin-wallet finalize` with it.' },
       ],
@@ -250,7 +257,8 @@
       says: 'The invoicer is requesting this amount from the payer.',
       next: [
         { role: 'Payer',    text: 'Verify the amount, then run `grin-wallet pay` and paste this slatepack '
-            + 'when prompted (or `-i <file>`). Send the slatepack it produces back to the invoicer.' },
+            + 'when prompted (or `-i <file>`). Send the slatepack it produces back to the invoicer. '
+            + 'It will be encrypted to them, so this page cannot read it; that is normal.' },
         { role: 'Invoicer', text: 'Nothing yet. Wait for the payer to return the slatepack, '
             + 'then run `grin-wallet finalize` with it.' },
       ],

@@ -1,6 +1,8 @@
 # Script 06 — Global Grin Health (design notes)
 
-> **Covers code as of:** 2026-09-10 · **Last verified:** 2026-09-10, PARTIAL — three sections
+> **Covers code as of:** 2026-09-18 · **Last verified:** 2026-09-18, PARTIAL — the slatepack
+> "two facts" item 1 was re-read against grin-wallet v5.4.1 `controller/src/command.rs` and
+> confirmed by a live plaintext-S1 / sealed-S2 test the same day; 2026-09-10, PARTIAL — three sections
 > only: *Tool 3 — Node Reachability Checker* was rewritten against `lib/node-check.js`,
 > `tiny-explorer-server.js`, `public/js/node-check.js` and `public/node-check.html` on the day
 > the second leg landed; *Peer map — self-hosted basemap* was read (2026-09-09) against
@@ -20,7 +22,7 @@
 > `scripts/lib/06d_tiny_explorer.sh` — the sitemap, robots and JSON-LD output in it were
 > read from the handlers ACTUALLY RUN, not from the source.
 > The rest of this doc is still never systematically verified.
-> **Product code last changed:** 2026-09-10 — `web/06d_tiny_explorer/` (**crawl surface**: generated `/sitemap.xml` + `/robots.txt` routes, `noindex, follow` on block/kernel/output and the 404, `WebApplication` JSON-LD for the six tools, homepage `<h1>`, duplicate `<h1>` removed from the three entity shells, analytics on the 404, `/mining` description updated for payback); 2026-09-10 — `web/06d_tiny_explorer/` (mining calculator: **capital payback card + hardware-cost input**, setup form rebuilt as two columns, break-even sub-label explains its scale invariance); 2026-09-10 — `scripts/lib/06d_tiny_explorer.sh` + `web/06d_tiny_explorer/` (**Wallet Checker Tor liveness probe now ON by default for a new install**: two-sided config read-back, `(installs tor)` prompt warning, config-neutral baseline page copy; **prompt catch-all now keeps the default instead of naming `false`, and `read` at EOF declines** — both latent until the flip); 2026-09-10 — `web/06d_tiny_explorer/` (node-check second leg: P2P 3414/13414 TCP probe, composed two-leg verdict, network picker; **assumed API endpoint flipped from 3413 to https/443 for host names**, retry inverted); 2026-09-09 — `web/06d_tiny_explorer/` (mining calculator: number-of-units multiplier, `/api/price` fallback, blocker copy, first test suite for the money maths); 2026-09-09 — `web/06_stats_map/stats/index.html` (antimeridian seam repair, land+mesh basemap, city-label cull, trimmed maxBounds, Vietnam flag fill + East Sea islands + Saigon relabel); 2026-09-09 — `scripts/lib/06d_tiny_explorer.sh` (tor install + probe status row) and `web/06d_tiny_explorer/` (probe-aware page copy); 2026-09-09 — `web/06d_tiny_explorer/` (node-check assumed-port retry); 2026-09-08 — `web/06d_tiny_explorer/public/` (mining calculator presets); 2026-09-07 — `scripts/lib/06d_tiny_explorer.sh` (deploy/restart lifecycle); 2026-09-06 — `scripts/06_global_grin_health.sh`, `scripts/lib/06*`, `web/06_stats_map/`, `web/06d_tiny_explorer/`
+> **Product code last changed:** 2026-09-18 — `web/06d_tiny_explorer/public/` (Slate Inspector: per-role next-move guides with wallet commands, encryption rule corrected — every grin-wallet reply is sealed; Proof Verifier: proof is automatic with `send -d`, standard flow only, "not on chain" no longer reads as "never confirmed"); 2026-09-10 — `web/06d_tiny_explorer/` (**crawl surface**: generated `/sitemap.xml` + `/robots.txt` routes, `noindex, follow` on block/kernel/output and the 404, `WebApplication` JSON-LD for the six tools, homepage `<h1>`, duplicate `<h1>` removed from the three entity shells, analytics on the 404, `/mining` description updated for payback); 2026-09-10 — `web/06d_tiny_explorer/` (mining calculator: **capital payback card + hardware-cost input**, setup form rebuilt as two columns, break-even sub-label explains its scale invariance); 2026-09-10 — `scripts/lib/06d_tiny_explorer.sh` + `web/06d_tiny_explorer/` (**Wallet Checker Tor liveness probe now ON by default for a new install**: two-sided config read-back, `(installs tor)` prompt warning, config-neutral baseline page copy; **prompt catch-all now keeps the default instead of naming `false`, and `read` at EOF declines** — both latent until the flip); 2026-09-10 — `web/06d_tiny_explorer/` (node-check second leg: P2P 3414/13414 TCP probe, composed two-leg verdict, network picker; **assumed API endpoint flipped from 3413 to https/443 for host names**, retry inverted); 2026-09-09 — `web/06d_tiny_explorer/` (mining calculator: number-of-units multiplier, `/api/price` fallback, blocker copy, first test suite for the money maths); 2026-09-09 — `web/06_stats_map/stats/index.html` (antimeridian seam repair, land+mesh basemap, city-label cull, trimmed maxBounds, Vietnam flag fill + East Sea islands + Saigon relabel); 2026-09-09 — `scripts/lib/06d_tiny_explorer.sh` (tor install + probe status row) and `web/06d_tiny_explorer/` (probe-aware page copy); 2026-09-09 — `web/06d_tiny_explorer/` (node-check assumed-port retry); 2026-09-08 — `web/06d_tiny_explorer/public/` (mining calculator presets); 2026-09-07 — `scripts/lib/06d_tiny_explorer.sh` (deploy/restart lifecycle); 2026-09-06 — `scripts/06_global_grin_health.sh`, `scripts/lib/06*`, `web/06_stats_map/`, `web/06d_tiny_explorer/`
 > 06d has a test suite (`web/06d_tiny_explorer/test/`, 232 assertions across 6 suites — count read from `node test/run-all.js` on 2026-09-10), but it tests the code, not this doc.
 
 Only sections that need durable prose live here; the menu/wiring lives in
@@ -127,9 +129,16 @@ Two facts that shape the whole design:
 
 1. **Mode 1 (encrypted) is opaque by design.** The wallet *moves* the sender out of the
    header into the age-encrypted metadata. A keyless reader recovers **only** version +
-   mode — no sender, no network, no amount. The default `grin-wallet send -d <addr>`
-   produces mode 1, so the inspector is fully useful only for the **manual (no `-d`)
-   plaintext flow**. This is a privacy property, not a gap.
+   mode — no sender, no network, no amount, **not even the step**. The default
+   `grin-wallet send -d <addr>` produces mode 1, so the inspector is fully useful only for
+   the **manual (no `-d`) plaintext flow** — and only for its FIRST slatepack: `send` /
+   `invoice` always put the author's address in the header (sender index `Some(0)`), and
+   `receive` / `pay` always seal the reply to that header address
+   (`controller/src/command.rs`, `ret_address = slatepack.sender`, verified v5.4.1). So an
+   S2/I2 from grin-wallet is mode 1 regardless of how S1/I1 was made; a plaintext reply can
+   only come from a wallet that omits its own address. Confirmed by a live test 2026-09-18
+   (plaintext S1 read fine, its S2 came back sealed). The sender reads a sealed reply with
+   `grin-wallet unpack`. This is a privacy property, not a gap.
 2. **SlateV4 carries NO chain/network/genesis field.** Confirmed in source. This is the
    structural reason a testnet slate can be signed by a mainnet wallet and only fails at
    broadcast. The single network signal is the **bech32 HRP of the sender address**
@@ -1691,9 +1700,22 @@ attested and not chain-derived, the HRP is a claim, and a valid pair is a mutual
   the honest case is exactly what the fixture above now proves.
 - Whether any **non-grin-wallet** implementation writes a compatible file remains unconfirmed;
   `grin-wallet` is still the only implementation consulted.
-- A proof exported from an operator's *own* wallet has still never been read. This is no longer
-  a correctness risk — it is worth doing once as an ergonomics check (that `export_proof`
-  output pastes into the page cleanly), not as a gate.
+- ~~A proof exported from an operator's *own* wallet has still never been read.~~ **Done
+  2026-09-19** on a live mainnet solo wallet (grin-wallet v5.4.1): a `send -d <slatepack
+  address>` → `receive` → `finalize` → `export_proof` round-trip pasted cleanly and both
+  signatures verified. It surfaced two things the fixture could not:
+  - **Operator trap:** the first attempt was `export_proof --id` on a coinbase entry, which fails
+    with *"Transaction does not contain a payment proof"*. A proof exists only for a `send -d …`
+    (no `-n`) that has been finalized — never for coinbase, received, invoice or manual-file
+    entries. The textarea placeholder now says so; the collapsed "How to produce one" block
+    already did, but nobody reads it before their first failure.
+  - **Real bug, fixed:** grin's `get_kernel` answers a missing kernel with `{"Err":"NotFound"}`
+    (`api/src/handlers/chain_api.rs`, `kernel.ok_or(Error::NotFound)`), **not** `Ok(None)` as
+    `getKernel()`'s comment claimed. `unwrapResult` throws on every `Err`, so a finalized-but-
+    unmined proof — the normal state for the first minute after `finalize` — rendered as *"The
+    node could not be reached"* on `/proof`, and `/api/kernel/<excess>` answered 502 instead of
+    404. `getKernel()` now maps that one error to `null`; every other throw (timeout, 401, 5xx)
+    still means the node. The `not_found` copy that was written for this case is now reachable.
 ---
 
 ### Homepage reorg

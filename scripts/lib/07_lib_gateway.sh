@@ -155,7 +155,7 @@ Restart=on-failure
 RestartSec=5
 LimitNOFILE=65535
 # Sandbox (audit §J16-3). haproxy itself drops to the unprivileged runtime account via
-# the `user`/`group` lines gw_render_forwarder writes into the global section; these are
+# the 'user'/'group' lines gw_render_forwarder writes into the global section; these are
 # the second layer, covering the brief root window before that drop. NoNewPrivileges is
 # safe here — unlike the hub unit, this service never shells out to sudo.
 # ProtectSystem=full (not strict) and no PrivateDevices on purpose: the forwarder logs to
@@ -393,9 +393,11 @@ global
     # unauthenticated TCP from the public internet on :${port} and it holds the box that
     # holds the WireGuard private key for the tunnel into the pool — the same argument
     # pool_deroot() makes for the hub backend (design §13.9), which the edge had never
-    # applied: with no `user`/`group` here and no `User=` in the unit, haproxy stayed
+    # applied: with no 'user'/'group' here and no 'User=' in the unit, haproxy stayed
     # root for its entire life. The stratum port is >1024, so nothing needs root after
-    # startup. Chroot deliberately omitted: it would break `log /dev/log`.
+    # startup. Chroot deliberately omitted: it would break 'log /dev/log'.
+    # (No backticks in this heredoc: it is unquoted for the variables, so a backtick is a
+    # command substitution — this comment once ran 'user' and 'group' as shell commands.)
     user ${hap_user}
     group ${hap_group}
 

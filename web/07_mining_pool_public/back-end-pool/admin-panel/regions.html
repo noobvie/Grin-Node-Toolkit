@@ -471,9 +471,9 @@ async function loadServerState() {
 async function enableMultiRegion() {
   const btn = document.getElementById('mr-enable');
   const original = btn.textContent;
-  // Names the password prompt that may follow: it is a second dialog right after this
-  // one, and an OK with nothing typed there cancels the action (§13.12r).
-  if (!confirm("Set up this pool's WireGuard tunnel?\n\nThis generates the hub keypair (or keeps the existing one), writes its tunnel config, opens the WireGuard UDP port in the firewall, and brings the interface up. Existing miners are not affected, and gateways that are already paired stay paired.\n\nThis is a protected action: if you haven't entered your password in the last 5 minutes, the next dialog asks for it — type it before pressing OK.")) return;
+  // Names the password step that may follow, so the in-page dialog that opens after this
+  // one is expected rather than read as a glitch (§13.12r).
+  if (!confirm("Set up this pool's WireGuard tunnel?\n\nThis generates the hub keypair (or keeps the existing one), writes its tunnel config, opens the WireGuard UDP port in the firewall, and brings the interface up. Existing miners are not affected, and gateways that are already paired stay paired.\n\nThis is a protected action: if you haven't entered your password in the last 5 minutes, a password box opens on the page next — type it there and press Authorize.")) return;
   btn.disabled = true;
   btn.textContent = 'Working…';
   const errBox = document.getElementById('mr-error');

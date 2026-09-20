@@ -1089,16 +1089,37 @@ So the POST was refused **before** the handler. The nginx access log settled whi
 `"Session expired"` (false: the session was fine) into the dead `flash()`, and the button reset.
 
 Fixed at the two places the story went wrong, on top of (r)'s visibility fixes:
-- `stepup.js` `reauth()` now resolves `'ok' | 'cancelled' | 'failed'`, and `adminFetch` answers a
-  dismissed or failed step-up with a **synthetic 403** whose body says what happened ("Not done —
-  this action needs your admin password, and the prompt was closed without one…"; `step_up:
-  'cancelled'|'failed'`). Every caller prints `body.error` verbatim and none matched the literal
-  text, so this corrects payments, users, miners and settings in the same edit.
-- The Enable confirm() now says a password prompt may follow and to type into it before OK.
+- `stepup.js` `reauth()` now resolves `{ outcome: 'ok' | 'cancelled' | 'failed', reason }`, and
+  `adminFetch` answers a cancelled or failed step-up with a **synthetic 403** whose body says what
+  happened ("Not done — this action needs your admin password and the authorization dialog was
+  cancelled…"; `step_up: 'cancelled'|'failed'`, the failure `reason` inlined). Every caller
+  prints `body.error` verbatim and none matched the literal text, so this corrects payments,
+  users, miners and settings in the same edit.
+- The Enable confirm() now says a password box may open next, and how to complete it.
 
 Verified locally by driving `adminFetch` through a stub `fetch` + empty `prompt`: one request, no
-reauth call, no retry, 403 with the new body. NOT VPS-tested. Note the operator's own reproduction
+reauth call, no retry, 403 with the new body. Note the operator's own reproduction
 (`nsenter … init-server`) had already raised the tunnel, so the panel path was not re-clicked.
+
+**Second live finding, same day, after deploying the above:** the operator clicked Enable, got
+the new red "Not done — … the prompt was closed without one" — and **no password prompt had
+appeared at all**. That branch is reachable only when `window.prompt()` returns null/empty, so
+the browser (Firefox 156) had refused to open it. The pattern is exactly what browsers throttle as
+"successive dialogs": the step-up prompt comes ~200 ms after the action's own `confirm()` closes,
+from an async continuation (the 403 has to arrive first), i.e. without user activation. Which
+rule fired is not knowable from the page, and does not matter: a page cannot tell a suppressed
+native dialog from a Cancel, so **`window.prompt()` is the wrong tool for the step-up** — and it
+had also been echoing the admin password in cleartext. `stepup.js` now opens an **in-page
+dialog** (built lazily from the panel's own `.modal-overlay`/`.modal` rules in `pool.css`, which
+every admin page loads; masked `type=password`, `autocomplete=current-password`; Enter submits,
+Escape/Cancel/backdrop cancel, focus returns to the button). Null now means the operator's own
+decision, and the message says "the authorization dialog was cancelled". Flow: a wrong password or
+code re-opens the dialog with the server's reason (a typo must not cost the whole action); the
+second factor is a separate code-only step, asked only after the pool accepted the password
+(`/api/admin/reauth` verifies before it answers `totp_code_required`); a lockout or budget
+refusal ends the loop and the 403 carries the retry time; concurrent protected requests share one
+dialog. Verified with a stub DOM through nine scenarios (three cancel paths, empty submit, wrong→
+right password, 2FA with a wrong code, lockout, two-at-once, fresh session). NOT VPS-tested.
 
 ---
 

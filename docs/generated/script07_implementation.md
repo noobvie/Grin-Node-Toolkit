@@ -3,7 +3,7 @@
 > **Covers code as of:** 2026-09-07 · **Last verified:** 2026-09-07 — §§1–8 and §11 re-derived from
 > `scripts/07_grin_mining_public_pool.sh`, `scripts/lib/07_lib_{gateway,gwctl,hub,pool_backup,pool_wallet}.sh`
 > and `web/07_mining_pool_public/back-end-pool/`. §§9–10 are as-written add-on notes, not re-verified.
-> **Product code last changed:** 2026-09-19 (admin-panel failure surfacing, design §13.12r) — `scripts/07_grin_mining_*.sh`, `scripts/lib/07_lib_*.sh`, `web/07_mining_pool_public/`
+> **Product code last changed:** 2026-09-20 (pairing string carries the public port; gateway Status boot line, design §13.12s) — `scripts/07_grin_mining_*.sh`, `scripts/lib/07_lib_*.sh`, `web/07_mining_pool_public/`
 
 Deployment layout, build/wiring status, database runbook, pre-launch checklist, multi-region
 (Model C) as-built, and troubleshooting for the public pool. Design lives in
@@ -391,7 +391,7 @@ outside. Treat latency/behaviour claims as "measure on a real link".
 |---|---|---|
 | WireGuard server | central | mainnet `wg-grinpool`, udp **51820**, tunnel net `10.66.66.0/24`; testnet `wg-grinpool-tn`, udp **51821**, `10.66.67.0/24`. Hub is always `.1`, gateways `.2`, `.3`, … Keys/state in `/opt/grin/conf/wg[-testnet]/`. |
 | Region ports | central, `region_ports` in the pool config | allocated from **3391** (mainnet) / **13391** (testnet), bound to `region_listen_host` = the wg server IP |
-| Pairing string | `GRINGW1\|region\|hub_pubkey\|hub_public_endpoint\|hub_tunnel_ip\|gw_tunnel_ip/32\|region_port` | one line, printed by the pool box; paste it on the gateway instead of typing seven values |
+| Pairing string | `GRINGW1\|region\|hub_pubkey\|hub_public_endpoint\|hub_tunnel_ip\|gw_tunnel_ip/32\|region_port\|public_stratum_port` | one line, printed by the pool box; paste it on the gateway instead of typing the values. The 8th field (since 2026-09-20) is the pool's **public miner port** — the gateway must listen on exactly it, so the gateway takes it from here rather than asking. A 7-field string from an older hub still parses (the gateway keeps its saved port); an 8-field string on a pre-2026-09-20 gateway is **rejected** (`read` folds the extra field into `region_port`) — pull both boxes together. |
 | Mutation path | `/usr/local/bin/grin-gateway-ctl` (`init-server`/`add-peer`/`remove-peer`/`list`/`status`) | the ONLY writer of `/etc/wireguard/wg-grinpool*.conf` and `region_ports`; validates every input itself and computes AllowedIPs internally (`0.0.0.0/0` is unrepresentable) |
 | Operator surfaces | admin panel **Regions & Gateways**, or CLI menu **W** | both call the same helper, so they cannot drift. The panel binds a new listener without the service restart the CLI path needs; the CLI is the SSH/offline fallback. |
 | Hub endpoint DNS name | menu `W → 5` | pairing strings then carry a name instead of a raw IP, so a provider/IP change needs only an A-record update + a tunnel restart on each gateway — no re-pairing |
@@ -414,9 +414,18 @@ federation and the core pipeline at the same time.
 1. `1) Install` (haproxy + wireguard-tools + python3; generates the keypair — hand its public key to
    the pool box's add-peer step).
 2. `2) Configure` → paste the `GRINGW1|…` string (or type region / hub endpoint / tunnel keys).
+   The public stratum port it then shows must be the **pool's** public port (`3333` mainnet): the
+   admin Regions card appends that shared port to the region's hostname itself, so a gateway
+   listening anywhere else is advertised on a port it does not serve. A current pairing string
+   carries it (8th field) and pre-fills the prompt; the bracketed value is otherwise whatever was
+   saved on this box last time, not a default.
 3. `3) Bring up tunnel` (`wg-quick up wg-grinpool` — the gateway box always names its single
    tunnel `wg-grinpool`, whichever network the pool is on) → `4) Service control` → start the forwarder.
-4. `5) Status` → tunnel handshake present, `:3333` listening.
+4. `5) Status` → tunnel handshake present, `:3333` listening, and `On reboot : forwarder and
+   tunnel start automatically`. The two units are enabled by two different steps (`1)` enables
+   `grin-gateway`, `3)` enables `wg-quick@wg-grinpool`); a box missing either reboots into
+   `:3333` listening with nothing behind it, which the pool's Port check cannot tell from healthy —
+   Status names the missing one and the `systemctl enable` that fixes it.
 
 **Miner:** point lolMiner/GMiner/IPOLLO at `stratum+tcp://<gateway-ip>:3333`, username
 `<grin_address>.<worker>`. Miners always connect to the public stratum port on their nearest

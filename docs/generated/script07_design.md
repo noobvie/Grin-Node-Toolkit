@@ -2,7 +2,7 @@
 
 > **Covers code as of:** 2026-09-07 for the multi-region surface (§2–§7, §11–§12, rewritten against the live code) · 2026-06-08 for the rest of the §6 endpoint table
 > **Last verified:** 2026-09-07, PARTIAL — **the multi-region surface only**, read against the code: the mode selector + `pool_mode_conflict_check` in `scripts/07_grin_mining_public_pool.sh`, `role`/`region`/`region_ports` in `back-end-pool/lib/config.js`, listener-port region stamping in `lib/stratum-server.js`, `shares.region` + `pool_locations` + `pool_region_metrics_hourly` in `lib/db.js`, the ingestion/health/region routes in `index.js`, and the WireGuard + region-port derivation in `scripts/lib/07_lib_gwctl.sh`. Everything outside that surface — the rest of §6, and §7–§10, §13–§15 — still rests on the 2026-06-08 pass (account + payout routes re-verified 2026-07-13) and was **not** re-checked, with one line-scoped exception: the admin-surface note in the §6 not-built list was corrected 2026-09-07 against `back-end-pool/admin-panel/` and `admin-shell.js`.
-> **Product code last changed:** 2026-09-19 (admin-panel failure surfacing, §13.12r) — `scripts/07_grin_mining_*.sh`, `scripts/lib/07_lib_*.sh`, `web/07_mining_pool_public/`
+> **Product code last changed:** 2026-09-20 (pairing string carries the public port; gateway Status boot line, §13.12s) — `scripts/07_grin_mining_*.sh`, `scripts/lib/07_lib_*.sh`, `web/07_mining_pool_public/`
 > Prose last edited 2026-09-07.
 
 **Product:** `scripts/07_grin_mining_public_pool.sh` + web app under `web/07_mining_pool_public/`.
@@ -1120,6 +1120,35 @@ second factor is a separate code-only step, asked only after the pool accepted t
 refusal ends the loop and the 403 carries the retry time; concurrent protected requests share one
 dialog. Verified with a stub DOM through nine scenarios (three cancel paths, empty submit, wrong→
 right password, 2FA with a wrong code, lockout, two-at-once, fresh session). NOT VPS-tested.
+
+**s) The gateway was asked for a number only the hub knows (found 2026-09-19, first live
+pairing).** The Regions card for `yyz` read `stratum+tcp://yyz.grinium.com:3333 · ✗ :3333
+unreachable · 🔒 1m ago · ● Active` — a healthy tunnel and a dead port — while `ss` on the gateway
+showed haproxy on **:13333**. Every region is advertised on the pool's single public port
+(`regions.html` appends `STRATUM_PORT` to the host, and the Port check dials the same URL), so the
+gateway has exactly one right answer for "Public stratum port", and it cannot derive it: the value
+lives in the hub's `pool.json`. Yet `gw_configure` *asked*, and its prompt printed the saved value
+in brackets, so the 13333 typed once (the pool's testnet number) came back on every later run
+looking like a default — the operator's reading, reasonably, was "the setup says 13333". Two
+"command not found" lines from the heredoc trap (memory `reference_bash_unquoted_heredoc_backticks`)
+printed in the same screen, which did not help the prompt's credibility.
+
+Fixed at the source: `grin-gateway-ctl` reads `stratum_port` from `pool.json` (per-network default
+when absent) and appends it as the pairing string's **8th field** in both emitters (`add-peer` and
+`list`, so the panel's Save, its 🔑 re-print and the SSH menu all agree); the response JSON also
+carries `public_stratum_port`. `gw_apply_pairing_string` accepts 7 or 8 fields (a string from an
+older hub still works), validates the port, writes `public_stratum_port` and says so when it
+changed the saved value; it also strips CRs, since the last field is now a number a Windows
+clipboard would turn into `3333\r`. The prompt gained the missing sentence — the POOL's port, where
+to read it (admin → Regions shows `Port :NNNN`), and that a current pairing string fills it in.
+Compatibility edge: an 8-field string on a pre-fix gateway is **rejected** (bash `read` folds the
+extra field into `region_port`, which fails the digit check) — pull both boxes together; documented
+in the implementation doc's format row. Same day, `5) Status` gained an **On reboot** line: the
+forwarder and the tunnel are enabled by two different menu steps (`1)` and `3)`), each `|| true`,
+and a box missing either reboots into `:3333 listening` with nothing behind it — which the Port
+check reads as ✓. Verified with stubs: hub emitter (default / explicit / missing key, both
+emitters), gateway parser (7 fields, 8 fields, CR, bogus port, out-of-range, 9 fields, unchanged
+port), Status in all four enabled/disabled combinations. NOT VPS-tested.
 
 ---
 

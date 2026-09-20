@@ -90,6 +90,7 @@ if [[ "$NET" == "testnet" ]]; then
     WG_TUNNEL_NET="10.66.67"
     WG_LISTEN_PORT=51821
     REGION_PORT_BASE=13391
+    STRATUM_PORT_DEFAULT=13333
     POOL_CONF="/opt/grin/conf/grin_pubpool_testnet.json"
 else
     WG_IFACE="wg-grinpool"
@@ -97,6 +98,7 @@ else
     WG_TUNNEL_NET="10.66.66"
     WG_LISTEN_PORT=51820
     REGION_PORT_BASE=3391
+    STRATUM_PORT_DEFAULT=3333
     POOL_CONF="/opt/grin/conf/grin_pubpool.json"
 fi
 WG_CONF="/etc/wireguard/${WG_IFACE}.conf"
@@ -111,6 +113,18 @@ hub_endpoint() {
     ip=$(curl -s --max-time 4 https://api.ipify.org 2>/dev/null || true)
     [[ "$ip" =~ ^[0-9a-fA-F.:]+$ ]] || ip="<server-public-ip>"
     echo "${ip}:${WG_LISTEN_PORT}"
+}
+
+# The pool's PUBLIC miner port — 8th field of every pairing string (since 2026-09-20).
+# The admin Regions card appends THIS port to each region's hostname and dials it for
+# the Port check, so a gateway must listen on exactly it; yet the gateway used to be
+# ASKED for the number, and its prompt echoed whatever was typed last time as if it
+# were a default. First live pairing: haproxy on :13333, card advertising :3333,
+# "✗ unreachable" beside a green tunnel. Carry the value instead of asking for it.
+pool_stratum_port() {
+    local p
+    p=$(node -e 'try{const d=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));process.stdout.write(String(d.stratum_port||""))}catch(e){}' "$POOL_CONF" 2>/dev/null || true)
+    if [[ "$p" =~ ^[0-9]+$ ]]; then echo "$p"; else echo "$STRATUM_PORT_DEFAULT"; fi
 }
 
 wg_sync() { wg syncconf "$WG_IFACE" <(wg-quick strip "$WG_IFACE") 2>/dev/null; }
@@ -302,7 +316,7 @@ if [[ "$CMD" == "list" ]]; then
     IFACE_UP=false; wg show "$WG_IFACE" >/dev/null 2>&1 && IFACE_UP=true
     node -e '
 const fs = require("fs");
-const [wgConf, poolConf, hubPub, hubEp, hubIp, ifaceUp] = process.argv.slice(1);
+const [wgConf, poolConf, hubPub, hubEp, hubIp, ifaceUp, pubPort] = process.argv.slice(1);
 const txt = fs.readFileSync(wgConf, "utf8");
 let d = {}; try { d = JSON.parse(fs.readFileSync(poolConf, "utf8")); } catch (e) {}
 const ports = d.region_ports || {};
@@ -314,12 +328,12 @@ while ((m = re.exec(txt))) {
   const port = ports[region] || null;
   gateways.push({
     region, pubkey, peer_ip: ip, region_port: port,
-    pairing: "GRINGW1|" + region + "|" + hubPub + "|" + hubEp + "|" + hubIp + "|" + ip + "|" + (port || "?")
+    pairing: "GRINGW1|" + region + "|" + hubPub + "|" + hubEp + "|" + hubIp + "|" + ip + "|" + (port || "?") + "|" + pubPort
   });
 }
 console.log(JSON.stringify({ ok: true, hub_pubkey: hubPub, hub_endpoint: hubEp, hub_tunnel_ip: hubIp,
-  interface_up: ifaceUp === "true", gateways }));
-' "$WG_CONF" "$POOL_CONF" "$HUB_PUB" "$(hub_endpoint)" "$HUB_IP" "$IFACE_UP" || jerr "could not parse $WG_CONF"
+  public_stratum_port: parseInt(pubPort, 10), interface_up: ifaceUp === "true", gateways }));
+' "$WG_CONF" "$POOL_CONF" "$HUB_PUB" "$(hub_endpoint)" "$HUB_IP" "$IFACE_UP" "$(pool_stratum_port)" || jerr "could not parse $WG_CONF"
     exit 0
 fi
 
@@ -353,17 +367,19 @@ fi
 HUB_PUB=$(cat "$WG_DIR_CONF/server_public.key" 2>/dev/null || true)
 [[ -n "$HUB_PUB" ]] || jerr "hub wg public key missing ($WG_DIR_CONF/server_public.key)"
 HUB_EP=$(hub_endpoint)
+PUB_PORT=$(pool_stratum_port)
 
 emit_pairing() {  # <existing 0|1> <replaced 0|1> <region> <peer_ip/32> <port> <synced 0|1>
     node -e '
-const [existing, replaced, region, peerIp, port, synced, hubPub, hubEp, hubIp] = process.argv.slice(1);
+const [existing, replaced, region, peerIp, port, synced, hubPub, hubEp, hubIp, pubPort] = process.argv.slice(1);
 console.log(JSON.stringify({
   ok: true, existing: existing === "1", replaced: replaced === "1",
   region, peer_ip: peerIp, region_port: parseInt(port, 10) || null,
   hub_pubkey: hubPub, hub_endpoint: hubEp, hub_tunnel_ip: hubIp,
+  public_stratum_port: parseInt(pubPort, 10),
   synced: synced === "1",
-  pairing: "GRINGW1|" + region + "|" + hubPub + "|" + hubEp + "|" + hubIp + "|" + peerIp + "|" + port
-}));' "$1" "$2" "$3" "$4" "$5" "$6" "$HUB_PUB" "$HUB_EP" "$HUB_IP"
+  pairing: "GRINGW1|" + region + "|" + hubPub + "|" + hubEp + "|" + hubIp + "|" + peerIp + "|" + port + "|" + pubPort
+}));' "$1" "$2" "$3" "$4" "$5" "$6" "$HUB_PUB" "$HUB_EP" "$HUB_IP" "$PUB_PORT"
 }
 
 # Dup-pubkey guard: wg keeps ONE entry per PublicKey — a second [Peer] block for

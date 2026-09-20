@@ -226,11 +226,20 @@ gw_open_firewall() {
 # ─── 2) Configure ───────────────────────────────────────────────────────────────
 # Parse the one-line pairing string the central pool box prints on "Add a gateway
 # peer" (and re-prints on "List gateways"):
-#   GRINGW1|region|hub_wg_pubkey|hub_public_endpoint|hub_tunnel_ip|gw_tunnel_ip/32|region_port
-# Returns 1 (writing nothing) unless the tag matches and all 6 fields are present.
+#   GRINGW1|region|hub_wg_pubkey|hub_public_endpoint|hub_tunnel_ip|gw_tunnel_ip/32|region_port[|public_stratum_port]
+# Returns 1 (writing nothing) unless the tag matches and the first 6 fields are present.
+# The 8th field (hubs emit it since 2026-09-20) is the POOL's public miner port. The pool
+# advertises this region as <host>:<that port> and dials it for the Port check, so the
+# gateway must listen there and nothing on this box can know the number — yet Configure
+# used to ASK for it, echoing whatever was typed last time as the "default". First live
+# pairing: haproxy on :13333, card on :3333, "✗ unreachable" beside a green tunnel. When
+# the field is present it overwrites public_stratum_port; absent (older hub) → the saved
+# value stands and the prompt below says where to copy it from.
 gw_apply_pairing_string() {
-    local tag region pub ep hubip gwip port
-    IFS='|' read -r tag region pub ep hubip gwip port <<< "$1"
+    local tag region pub ep hubip gwip port pubport _rest
+    # Strip CRs: the string is pasted, and the LAST field now carries a port that a
+    # Windows clipboard would otherwise turn into "3333\r" and fail the shape check.
+    IFS='|' read -r tag region pub ep hubip gwip port pubport _rest <<< "${1//$'\r'/}"
     [[ "$tag" == "GRINGW1" ]] || return 1
     if [[ -z "$region" || -z "$pub" || -z "$ep" || -z "$hubip" || -z "$gwip" || ! "$port" =~ ^[0-9]+$ ]]; then
         return 1
@@ -252,6 +261,11 @@ gw_apply_pairing_string() {
     [[ "$gwip"   =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}(/32)?$ ]] \
         || { warn "pairing: gateway tunnel IP '$gwip' is not a single IPv4 address."; return 1; }
     (( port >= 1 && port <= 65535 )) || { warn "pairing: region port '$port' is out of range."; return 1; }
+    if [[ -n "$pubport" ]]; then
+        if [[ ! "$pubport" =~ ^[0-9]+$ ]] || (( pubport < 1 || pubport > 65535 )); then
+            warn "pairing: public stratum port '$pubport' is not a port."; return 1
+        fi
+    fi
     [[ "$gwip" == */* ]] || gwip="${gwip}/32"
     gw_write_conf_key "region"          "$region"
     gw_write_conf_key "wg_hub_pubkey"   "$pub"
@@ -260,6 +274,13 @@ gw_apply_pairing_string() {
     gw_write_conf_key "wg_address"      "$gwip"
     gw_write_conf_key "hub_endpoint"    "${hubip}:${port}"
     success "Pairing applied: region '${region}', tunnel ${gwip} → hub ${hubip}:${port}."
+    if [[ -n "$pubport" ]]; then
+        local was; was=$(gw_read_conf public_stratum_port "3333")
+        gw_write_conf_key "public_stratum_port" "$pubport"
+        if [[ "$was" != "$pubport" ]]; then
+            info "Public stratum port set to :${pubport} from the pairing string (was :${was}) — the pool advertises this region on :${pubport}."
+        fi
+    fi
 }
 
 gw_configure() {
@@ -293,6 +314,11 @@ gw_configure() {
         read -r val; [[ -n "$val" ]] && gw_write_conf_key "region" "$val"
     fi
 
+    echo ""
+    echo -e "  ${DIM}This must be the POOL's public miner port (3333 mainnet / 13333 testnet), not a${RESET}"
+    echo -e "  ${DIM}port of your choosing: the pool advertises this region as <host>:<that port> and${RESET}"
+    echo -e "  ${DIM}dials it for its Port check. A pairing string from a current pool fills it in;${RESET}"
+    echo -e "  ${DIM}otherwise copy it from the pool box (admin → Regions shows 'Port :NNNN').${RESET}"
     echo -ne "Public stratum port (miners connect here) [$(gw_read_conf public_stratum_port "3333")]: "
     read -r val; [[ -n "$val" ]] && gw_write_conf_key "public_stratum_port" "$val"
 
@@ -506,9 +532,11 @@ gw_status() {
     echo -e "\n${BOLD}Regional Gateway Status${RESET}"
     echo -e "${DIM}────────────────────────────────────────────────${RESET}"
 
+    # "Installed" is the unit file, not is-enabled: a unit that exists but was disabled
+    # used to read "not installed" here. Boot behaviour has its own line below.
     if systemctl is-active --quiet "$GW_SERVICE" 2>/dev/null; then
         echo -e "  ${BOLD}Forwarder${RESET} : ${GREEN}● active${RESET}"
-    elif systemctl is-enabled --quiet "$GW_SERVICE" 2>/dev/null; then
+    elif [[ -f "/etc/systemd/system/$GW_SERVICE.service" ]]; then
         echo -e "  ${BOLD}Forwarder${RESET} : ${YELLOW}installed, stopped${RESET}"
     else
         echo -e "  ${BOLD}Forwarder${RESET} : ${DIM}not installed${RESET}"
@@ -556,6 +584,22 @@ gw_status() {
         fi
     else
         echo -e "  ${BOLD}Tunnel${RESET}    : ${DIM}${GW_WG_IFACE} not up${RESET}"
+    fi
+
+    # Boot persistence. Two units, enabled by two DIFFERENT menu steps (1) Install →
+    # grin-gateway, 3) Bring up tunnel → wg-quick@), each with `|| true`. A gateway that
+    # is missing one comes back from a reboot in the worst state there is: :$sp listens
+    # with nothing behind it, so the pool's Port check reads ✓ while no share ever
+    # arrives. Nothing else on this screen can tell that apart from a healthy box.
+    local fw_boot="enabled" tn_boot="enabled"
+    systemctl is-enabled --quiet "$GW_SERVICE" 2>/dev/null            || fw_boot="NOT enabled"
+    systemctl is-enabled --quiet "wg-quick@${GW_WG_IFACE}" 2>/dev/null || tn_boot="NOT enabled"
+    if [[ "$fw_boot" == "enabled" && "$tn_boot" == "enabled" ]]; then
+        echo -e "  ${BOLD}On reboot${RESET} : ${GREEN}forwarder and tunnel start automatically${RESET}"
+    else
+        echo -e "  ${BOLD}On reboot${RESET} : ${YELLOW}forwarder ${fw_boot} · tunnel ${tn_boot}${RESET}"
+        [[ "$fw_boot" == "enabled" ]] || echo -e "              ${DIM}fix: systemctl enable ${GW_SERVICE}   (1) Install does this)${RESET}"
+        [[ "$tn_boot" == "enabled" ]] || echo -e "              ${DIM}fix: systemctl enable wg-quick@${GW_WG_IFACE}   (3) Bring up tunnel does this)${RESET}"
     fi
 
     if [[ -f "$GW_DIR/wg_public.key" ]]; then

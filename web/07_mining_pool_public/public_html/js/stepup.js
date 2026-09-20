@@ -22,12 +22,18 @@
     return { ok: r.ok, data: data || {} };
   }
 
+  // Resolves 'ok' | 'cancelled' | 'failed'. The two non-ok outcomes are kept apart because
+  // the caller's message must be different: a dismissed prompt means the operator has not
+  // yet typed anything (say so, plainly), while a failed check has already been explained
+  // by the alert() below.
   async function reauth() {
     var pw = window.prompt('This action is protected. Re-enter your admin password to authorize it:');
-    if (pw === null || pw === '') return false; // cancelled
+    // An empty OK counts as cancel. It is the common slip: this prompt opens right after
+    // the action's own confirm() dialog, and a second OK lands here with nothing typed.
+    if (pw === null || pw === '') return 'cancelled';
     try {
       var res = await post({ password: pw });
-      if (res.ok) return true;
+      if (res.ok) return 'ok';
 
       // The pool may require a second factor for step-up as well as for login
       // (access.require_admin_totp). The server answers the password-only attempt with
@@ -35,9 +41,9 @@
       // prompting unconditionally would train operators on a pool that never uses 2FA.
       if (res.data.totp_code_required) {
         var code = window.prompt('Enter the 6-digit code from your authenticator app (or a recovery code):');
-        if (code === null || code === '') return false;   // cancelled
+        if (code === null || code === '') return 'cancelled';
         res = await post({ password: pw, code: code });
-        if (res.ok) return true;
+        if (res.ok) return 'ok';
       }
 
       // Say why. The step-up route now has a real lockout and a 10/min budget behind it, so a
@@ -50,10 +56,20 @@
       } else if (res.data.error) {
         window.alert(res.data.error);
       }
-      return false;
+      return 'failed';
     } catch (e) {
-      return false;
+      return 'failed';
     }
+  }
+
+  // A 403 whose body says what actually happened. The server's challenge body reads
+  // "Session expired", which is the wrong story for a dismissed prompt — the session is
+  // fine, the step-up simply never completed — and every caller prints `body.error`
+  // verbatim. First live report (design §13.12r): an operator pressed OK on the empty
+  // prompt, was told nothing, and concluded the button did nothing.
+  function refused(message, why) {
+    return new Response(JSON.stringify({ error: message, challenge_required: true, step_up: why }),
+                        { status: 403, headers: { 'Content-Type': 'application/json' } });
   }
 
   async function adminFetch(url, opts) {
@@ -66,8 +82,16 @@
     try { body = await res.clone().json(); } catch (e) { /* not json */ }
     if (!body || !body.challenge_required) return res;
 
-    var ok = await reauth();
-    if (!ok) return res;            // cancelled or reauth failed → hand back the original 403
+    var outcome = await reauth();
+    if (outcome === 'cancelled') {
+      return refused('Not done — this action needs your admin password, and the prompt was closed '
+                   + 'without one. Click the button again and type your password into the prompt that follows.',
+                     'cancelled');
+    }
+    if (outcome !== 'ok') {
+      return refused('Not done — the password re-check did not pass, so the action was not performed. '
+                   + 'Click the button again to retry.', 'failed');
+    }
     return fetch(url, opts);        // retry once with the now-fresh session
   }
 

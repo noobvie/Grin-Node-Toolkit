@@ -76,6 +76,12 @@
       <p class="helper-text dim" style="margin:0 0 .8rem;" id="mr-reason"></p>
       <button class="btn btn-sm" id="mr-enable" onclick="enableMultiRegion()">Enable multi-region</button>
       <span class="helper-text dim" style="margin-left:.6rem;" id="mr-enable-note">Takes up to a minute if WireGuard isn't installed yet.</span>
+      <!-- Why the LAST click failed. Persistent and inside the banner: #mr-reason above
+           describes the STATE ("conf missing") and is unchanged by a failed attempt, and
+           flash() lands on the region-form toolbar three cards down and clears in 5 s —
+           so a failed enable used to leave this card looking exactly as it did before
+           the click. Cleared on the next attempt, hidden once the tunnel reads as up. -->
+      <p class="error-msg mono" id="mr-error" style="display:none;margin:.8rem 0 0;white-space:pre-wrap;"></p>
     </div>
 
     <!-- Same card, other state: tunnel up. Keeps the hub's own coordinates visible
@@ -432,6 +438,7 @@ async function loadServerState() {
   if (_mrReady && d.interface_up !== false) {
     banner.style.display = 'none';
     ready.style.display = '';
+    document.getElementById('mr-error').style.display = 'none';
     document.getElementById('mr-ready-detail').textContent = detail;
     return;
   }
@@ -464,15 +471,26 @@ async function loadServerState() {
 async function enableMultiRegion() {
   const btn = document.getElementById('mr-enable');
   const original = btn.textContent;
-  if (!confirm("Set up this pool's WireGuard tunnel?\n\nThis generates the hub keypair (or keeps the existing one), writes its tunnel config, opens the WireGuard UDP port in the firewall, and brings the interface up. Existing miners are not affected, and gateways that are already paired stay paired.")) return;
+  // Names the password prompt that may follow: it is a second dialog right after this
+  // one, and an OK with nothing typed there cancels the action (§13.12r).
+  if (!confirm("Set up this pool's WireGuard tunnel?\n\nThis generates the hub keypair (or keeps the existing one), writes its tunnel config, opens the WireGuard UDP port in the firewall, and brings the interface up. Existing miners are not affected, and gateways that are already paired stay paired.\n\nThis is a protected action: if you haven't entered your password in the last 5 minutes, the next dialog asks for it — type it before pressing OK.")) return;
   btn.disabled = true;
   btn.textContent = 'Working…';
+  const errBox = document.getElementById('mr-error');
+  errBox.style.display = 'none';          // a retry starts clean; the catch below refills it
   try {
     // freshAdmin server-side → adminFetch carries the step-up challenge/retry.
     // It always resolves to a Response (never null), so res.ok is safe to read.
     const res = await adminFetch('/api/admin/gateways/server', { method: 'POST' });
     const r = await res.json().catch(() => null);
-    if (!res.ok || !r || r.error) throw new Error(r && r.error ? r.error : 'Enable failed (' + res.status + ')');
+    if (!res.ok || !r || r.error) {
+      const e = new Error(r && r.error ? r.error : 'Enable failed (' + res.status + ')');
+      // `step_up` is set only on the 403 adminFetch synthesises in the browser when the
+      // password prompt was dismissed or failed: nothing reached the pool, so the
+      // journal/SSH footer below would point at the wrong place.
+      e.stepUp = !!(r && r.step_up);
+      throw e;
+    }
     // A caveat means the tunnel IS up but a step this process cannot perform was
     // skipped (boot persistence, firewall). Both are silent until much later — a
     // reboot, or a gateway that never hand-shakes — so they must not be flashed as
@@ -498,6 +516,14 @@ async function enableMultiRegion() {
     await loadServerState();
   } catch (err) {
     flash(err.message, true);
+    // The helper's own errors already say what to do ("re-run pool menu 1) Install",
+    // "install wireguard-tools"…); a raw exec failure ("sudo: a password is required",
+    // "timed out") is the operator's evidence for the next step. Either way it has to
+    // stay on screen, next to the button that produced it.
+    errBox.textContent = 'Last attempt failed: ' + err.message
+      + (err.stepUp ? ''             // the message already says: click again, type the password
+         : '\n\nIf the request reached the pool, its service journal has the server-side detail. Pool menu W → 1 (over SSH) performs this step as root, outside the service sandbox.');
+    errBox.style.display = '';
     btn.textContent = original;
   } finally {
     btn.disabled = false;

@@ -68,6 +68,12 @@ function gwctl(args, timeoutMs) {
         let out = null;
         try { out = JSON.parse(String(stdout || '').trim()); } catch (e) { /* not JSON */ }
         if (out && out.ok) return resolve(out);
+        // A helper killed by the timeout has printed no JSON, and execFile's message for
+        // it is the bare "Command failed: sudo -n …" — after init-server's 3-minute wait
+        // that reads as an instant failure of the command itself. Name the timeout.
+        if (err && err.killed) {
+          return reject(new Error(`gateway helper timed out after ${Math.round((timeoutMs || 10000) / 1000)}s (${args[0]}) — the box may be waiting on apt or a hung wg-quick; check the pool service journal`));
+        }
         reject(new Error((out && out.error) ? out.error : (err ? err.message : 'gateway helper failed')));
       });
   });
@@ -6618,6 +6624,10 @@ function setupRoutes() {
         caveats: caveats.length ? caveats : undefined
       });
     } catch (e) {
+      // Journal it: the audit row above is written only on success, so until this
+      // line a failed enable left no trace on the box at all — and the browser's
+      // copy of the message is one page reload from gone.
+      console.error(`[gateways] init-server failed (${req.user && req.user.user_id ? 'admin ' + req.user.user_id : 'admin ?'}): ${e.message}`);
       res.status(502).json({ error: 'Could not enable multi-region: ' + e.message });
     }
   });

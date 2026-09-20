@@ -2,7 +2,7 @@
 
 > **Covers code as of:** 2026-09-07 for the multi-region surface (§2–§7, §11–§12, rewritten against the live code) · 2026-06-08 for the rest of the §6 endpoint table
 > **Last verified:** 2026-09-07, PARTIAL — **the multi-region surface only**, read against the code: the mode selector + `pool_mode_conflict_check` in `scripts/07_grin_mining_public_pool.sh`, `role`/`region`/`region_ports` in `back-end-pool/lib/config.js`, listener-port region stamping in `lib/stratum-server.js`, `shares.region` + `pool_locations` + `pool_region_metrics_hourly` in `lib/db.js`, the ingestion/health/region routes in `index.js`, and the WireGuard + region-port derivation in `scripts/lib/07_lib_gwctl.sh`. Everything outside that surface — the rest of §6, and §7–§10, §13–§15 — still rests on the 2026-06-08 pass (account + payout routes re-verified 2026-07-13) and was **not** re-checked, with one line-scoped exception: the admin-surface note in the §6 not-built list was corrected 2026-09-07 against `back-end-pool/admin-panel/` and `admin-shell.js`.
-> **Product code last changed:** 2026-09-04 — `scripts/07_grin_mining_*.sh`, `scripts/lib/07_lib_*.sh`, `web/07_mining_pool_public/`
+> **Product code last changed:** 2026-09-19 (admin-panel failure surfacing, §13.12r) — `scripts/07_grin_mining_*.sh`, `scripts/lib/07_lib_*.sh`, `web/07_mining_pool_public/`
 > Prose last edited 2026-09-07.
 
 **Product:** `scripts/07_grin_mining_public_pool.sh` + web app under `web/07_mining_pool_public/`.
@@ -1047,6 +1047,58 @@ living *outside* `public_html` protects a dir from the **docroot** rsync in `poo
 not at all from the **backend** rsync, which `--delete`s `POOL_APP_DIR` itself. Both comments are
 corrected, and the rule is now stated where the next author will be adding a runtime dir: every new
 dir the app writes under `POOL_APP_DIR` needs an exclude in **both** rsyncs.
+
+**r) A failed "Enable multi-region" was indistinguishable from an ignored click (found 2026-09-19,
+first live report).** The operator clicked, confirmed, and minutes later saw the same banner with the
+same pre-flight reason (`wg-grinpool.conf missing`). Three independent gaps, all fixed:
+- **Every `flash()` in the admin panel rendered nothing.** `pool.css` gave `.error-msg` /
+  `.success-msg` `display: none`, and each page's `flash()` reveals with `el.style.display = ''` —
+  which only removes the element's inline `display:none` and then defers back to the stylesheet's.
+  So the red "Could not enable multi-region: …" was never painted, on this page or on miners,
+  payments, pages, posts, ads or users (all use the pattern; all have carried it since the
+  2026-06 merge). The `display:none` is gone from the two rules — every element that uses them
+  already hides itself inline, which is where the initial state belongs.
+- **The failure did not stay on screen, and was not where the operator was looking.** `flash()`
+  targets `#r-msg` on the *Add or edit a region* toolbar, three cards below the banner, and
+  clears in 5 s; `#mr-reason` describes the STATE and is untouched by a failed attempt. The
+  banner now has a persistent `#mr-error` under the button — cleared on retry, hidden when the
+  tunnel reads as up — carrying the helper's message plus the journal / `W → 1` fallback. The
+  fallback is **omitted when the 403 carries `step_up`** (the browser-side refusal below): nothing
+  reached the pool then, so "check the journal" would be false and SSH the wrong next step.
+- **The box kept no record.** The POST route audits `gateway_server_init` only on success and its
+  catch did not log, so a failed enable left nothing in the journal either. It now
+  `console.error`s. `gwctl()` also names a **timeout** explicitly — a helper killed at 180 s
+  prints no JSON, and execFile's bare `Command failed: sudo -n …` read as an instant failure.
+
+A fourth gap turned up on the same path while reading the evidence: the `/api/admin/` nginx block
+had `proxy_read_timeout 30s` under a route whose helper is budgeted **180 s** (the apt path). On
+that path nginx would 504 the browser while init-server kept running to success — "Enable failed"
+about a tunnel that came up seconds later. Raised to 200 s (re-run **4) Setup nginx** to apply).
+
+On the reporting operator's box the evidence cleared every server-side candidate: the sudo journal
+showed the page's `list`/`status` reads and **no `init-server` call at all**, the helper carried the
+subcommand, sudoers/`ReadWritePaths`/`wireguard-tools` were all in place, and an in-namespace
+reproduction (`nsenter -m` → `runuser -u grinpool` → `sudo -n … init-server`) succeeded first time.
+So the POST was refused **before** the handler. The nginx access log settled which gate: one
+`POST /api/admin/gateways/server … 403` with a **53-byte** body — exactly
+`{"error":"Session expired","challenge_required":true}`, the `requireFreshAuth` step-up challenge
+(the 2FA refusal is 131 bytes) — and **no `POST /api/admin/reauth` after it**. The password prompt
+`adminFetch` opens on that challenge was closed without a password: the operator's own account was
+"clicked Enable and OK", i.e. OK on the *second* dialog, the prompt, with nothing typed — which
+`reauth()` treats as cancel. `adminFetch` then handed back the original 403, the caller threw
+`"Session expired"` (false: the session was fine) into the dead `flash()`, and the button reset.
+
+Fixed at the two places the story went wrong, on top of (r)'s visibility fixes:
+- `stepup.js` `reauth()` now resolves `'ok' | 'cancelled' | 'failed'`, and `adminFetch` answers a
+  dismissed or failed step-up with a **synthetic 403** whose body says what happened ("Not done —
+  this action needs your admin password, and the prompt was closed without one…"; `step_up:
+  'cancelled'|'failed'`). Every caller prints `body.error` verbatim and none matched the literal
+  text, so this corrects payments, users, miners and settings in the same edit.
+- The Enable confirm() now says a password prompt may follow and to type into it before OK.
+
+Verified locally by driving `adminFetch` through a stub `fetch` + empty `prompt`: one request, no
+reauth call, no retry, 403 with the new body. NOT VPS-tested. Note the operator's own reproduction
+(`nsenter … init-server`) had already raised the tunnel, so the panel path was not re-clicked.
 
 ---
 

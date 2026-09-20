@@ -1477,7 +1477,13 @@ $admin_rules
         proxy_set_header   Host \$host;
         proxy_set_header   X-Real-IP \$remote_addr;
         proxy_set_header   X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_read_timeout 30s;
+        # Must cover the longest admin action: POST /api/admin/gateways/server gives
+        # grin-gateway-ctl init-server a 180 s exec budget (design §13.12 — it may run
+        # apt on a box that missed pool_ensure_wg_prereqs). At the old 30 s nginx 504'd
+        # the browser while the helper kept running, so the panel said "Enable failed"
+        # about a tunnel that came up seconds later. This block is IP-allowlisted and
+        # authenticated, so a long-held connection here costs nothing on the public side.
+        proxy_read_timeout 200s;
     }
 
     # The CAPTCHA challenge is a read-only GET the login page fetches on load, on

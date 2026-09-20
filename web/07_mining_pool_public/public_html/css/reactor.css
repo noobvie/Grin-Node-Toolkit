@@ -206,7 +206,13 @@ body {
    and it mirrors the mobile stack so there's a single layout to reason about. */
 .instruments { display: flex; flex-direction: column; gap: 18px; }
 .gauge-row { display: flex; flex-wrap: wrap; justify-content: center; align-items: flex-start; gap: clamp(16px, 5vw, 52px); }
-.gauge-block { text-align: center; }
+/* flex-basis 0 + min-width 0: a block takes its width from the ROW, never from its label.
+   A basis:auto flex item breaks lines on its max-content width, and the round-effort
+   sub-line ("no block found yet — measured from a window, not a round", ~440px of spaced
+   mono) is wider than half the panel — so the second dial dropped onto its own row on a
+   maximised desktop and read as a responsive collapse. Now the label wraps inside the
+   block instead; max-width keeps the pair from drifting apart on a very wide panel. */
+.gauge-block { flex: 1 1 0; min-width: 0; max-width: 280px; text-align: center; }
 .gauge-block canvas { display: block; margin: 0 auto; width: 190px; height: 150px; max-width: 100%; }
 .gauge-label {
   font-family: var(--mono); font-size: 10.5px; letter-spacing: .16em;
@@ -575,9 +581,15 @@ body {
   .panel-title { padding: 10px 16px 8px; letter-spacing: .16em; }
 }
 @media (max-width: 640px) {
-  /* gauge-row flex-wraps the two gauges to a vertical stack on its own; counters tighten to
-     2 columns so the readouts stay legible on a phone. */
+  /* Counters tighten to 2 columns so the readouts stay legible on a phone. The two dials
+     stay side by side down to 480px (see below) — a 190px canvas pair still fits there. */
   .counters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .annun { grid-template-columns: repeat(2, 1fr); }
   .deck-head { align-items: flex-start; flex-direction: column; }
+}
+@media (max-width: 480px) {
+  /* Two 190px dials + gap + page/panel padding need ~460px; below that the canvas
+     (pinned at 190×150 by Gauge(), so it can't shrink without distorting) would clip,
+     so stack them explicitly — flex-basis 0 above means they never wrap on their own. */
+  .gauge-block { flex-basis: 100%; max-width: none; }
 }

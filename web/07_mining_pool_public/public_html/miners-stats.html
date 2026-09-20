@@ -132,7 +132,7 @@
             <span><i>Miners online</i><b id="ms-miners">—</b></span>
             <span><i>Pool hashrate · 1h</i><b id="ms-hashrate">—</b></span>
             <span><i>Top miner</i><b id="ms-top">—</b></span>
-            <span><i>Connections</i><b id="ms-connections">—</b></span>
+            <span><i>Workers</i><b id="ms-connections">—</b></span>
         </div>
 
         <div class="deck">
@@ -160,9 +160,10 @@
 
                 <!-- ═══ P-02 · MINERS COUNT TREND ═══ -->
                 <div class="panel"><span class="screws"></span>
-                    <h2 class="panel-title"><span class="tag">P-02</span> Chart recorder — miners online</h2>
+                    <h2 class="panel-title"><span class="tag">P-02</span> Chart recorder — miners online
+                        <span class="right" id="ms-miners-agg">distinct per hour</span></h2>
                     <div class="panel-body chart-wrap">
-                        <canvas id="ms-chart-miners" aria-label="Active miner count over the selected timeframe" role="img"></canvas>
+                        <canvas id="ms-chart-miners" aria-label="Miners and workers online over the selected timeframe" role="img"></canvas>
                         <div class="chart-empty" id="ms-empty-miners">NO TRACE DATA YET</div>
                     </div>
                 </div>
@@ -422,9 +423,29 @@
                     points.map(p => ({ t: p.t, v: p.hashrate_gps })),
                     { label: 'Pool hashrate', bucketSeconds: bucket, valueFmt: PoolCharts.fmtGps });
 
-                PoolCharts.renderTrendLine('ms-chart-miners',
-                    points.map(p => ({ t: p.t, v: p.miner_count })),
-                    { label: 'Miners online', bucketSeconds: bucket, valueFmt: PoolCharts.fmtInt, color: '#58a6ff' });
+                // P-02: miners + workers on one count axis (a miner runs ≥1 worker, so the
+                // workers line always sits on or above the miners line). worker_count is null
+                // for hours rolled up before the column existed — a null stays a gap in
+                // renderMultiTrendLine, never a 0 — and the whole series is dropped (no legend
+                // entry) while nothing has been recorded yet. Colours are the blue/amber pair,
+                // the CVD-safe two-series choice.
+                const minerPts  = points.map(p => ({ t: p.t, v: p.miner_count }));
+                const workerPts = points.map(p => ({ t: p.t, v: p.worker_count }));
+                const minerSeries = [{ label: 'Miners', color: '#58a6ff', points: minerPts }];
+                if (workerPts.some(p => p.v != null)) {
+                    minerSeries.push({ label: 'Workers', color: '#c98500', points: workerPts });
+                }
+                PoolCharts.renderMultiTrendLine('ms-chart-miners', minerSeries,
+                    { bucketSeconds: bucket, valueFmt: PoolCharts.fmtInt });
+                // Coarser buckets carry the PEAK hour, not the average (an average counts every
+                // idle hour as zero and rounded a 3-hour session on a 16-hour day to 0 miners).
+                // Say so on the panel, since the same line reads differently by range.
+                const agg = document.getElementById('ms-miners-agg');
+                if (agg) {
+                    agg.textContent = !bucket || bucket <= 3600 ? 'distinct per hour'
+                        : bucket <= 86400 ? 'peak hour per day'
+                        : bucket <= 7 * 86400 ? 'peak hour per week' : 'peak hour per month';
+                }
 
                 // Shared elastic UTC labeller (charts-init.js) — the same span-aware format the
                 // trend lines use, so all three panels read consistently at every range.
@@ -473,7 +494,7 @@
                 const stats = await Auth.read('/api/pool/stats');
                 if (stats) {   // null (429/5xx/network) leaves the placeholders — audit §J15-2
                     setStat('ms-miners', stats.active_miners || 0);
-                    setStat('ms-connections', stats.active_connections || 0);
+                    setStat('ms-connections', (stats.active_workers != null ? stats.active_workers : stats.active_connections) || 0);
                 }
             } catch (e) { /* tiles keep placeholders */ }
 

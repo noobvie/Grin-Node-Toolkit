@@ -610,6 +610,27 @@ a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 /* Anchors reuse the class (View opens the public page) — kill the link underline. */
 a.btn-icon, a.btn-icon:hover { text-decoration: none; }
 
+/* Click-to-copy address cells — the truncated address IS the control, not a second
+   button crowding the Actions column. <button class="addr-copy" data-copy="<full>"
+   data-tip="…">grin1…</button>; admin-shell.js does the copying and flips the tip.
+   Styled as text (mono, dotted underline) with a faint ⧉ that brightens on hover so it
+   still reads as clickable. .is-copied / .is-copy-failed are set by the shell for ~1.5 s. */
+.addr-copy {
+  display: inline-flex; align-items: center; gap: .3rem;
+  padding: 0; margin: 0; border: 0; background: none;
+  color: inherit; cursor: pointer;
+  font-family: var(--font-mono); font-size: .82rem; line-height: inherit;
+  border-bottom: 1px dotted var(--text-dim);
+  border-radius: 0;
+}
+.addr-copy::after { content: '⧉'; font-size: .85em; opacity: .45; transition: opacity .15s ease; }
+.addr-copy:hover { color: var(--accent); border-bottom-color: var(--accent); }
+.addr-copy:hover::after { opacity: 1; }
+.addr-copy:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
+.addr-copy.is-copied { color: var(--success); border-bottom-color: var(--success); }
+.addr-copy.is-copied::after { content: '✓'; opacity: 1; }
+.addr-copy.is-copy-failed { color: var(--danger); border-bottom-style: solid; border-bottom-color: var(--danger); }
+
 /* ============================================================================
    AdminTable — tools bar + pager injected around history/audit tables
    ----------------------------------------------------------------------------
@@ -722,6 +743,9 @@ a.btn-icon, a.btn-icon:hover { text-decoration: none; }
   border-radius: 6px;
   box-shadow: var(--shadow);
   font: 500 .78rem/1.35 var(--font-sans);
+  /* pre-line: a copy tip carries "<full address>\nClick to copy" on two lines; anywhere:
+     a 62-char address has no break opportunity and would otherwise overflow max-width. */
+  white-space: pre-line; overflow-wrap: anywhere;
   opacity: 0; transform: translateY(3px);
   transition: opacity .12s ease, transform .12s ease;
 }

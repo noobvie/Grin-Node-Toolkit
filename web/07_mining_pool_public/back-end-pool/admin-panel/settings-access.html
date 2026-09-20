@@ -169,8 +169,10 @@
           <div class="helper-text">
             Stratum passwords listed here are <strong>never</strong> accepted as ownership proof on the
             public account page — additions on top of the built-in list (<code>x</code>, <code>123</code>,
-            <code>worker</code>, per-vendor factory defaults, anything under 8 characters, and any single
-            repeated character such as <code>xxxx</code> or <code>0000</code>). Add entries when you
+            <code>worker</code>, per-vendor factory defaults, anything under 8 characters, any single
+            repeated character such as <code>xxxx</code> or <code>0000</code>, straight digit runs such as
+            <code>12345678</code>, and anything with characters outside printable ASCII — accented or
+            non-Latin letters arrive mangled from most ASIC firmware and could never match). Add entries when you
             spot a new firmware default in the wild. Case-insensitive; the built-in list cannot be removed.
           </div>
           <div class="form-group">

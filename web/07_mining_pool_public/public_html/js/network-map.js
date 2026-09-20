@@ -350,7 +350,19 @@
     // publishable subset, where every country under the k-anonymity floor has been folded into
     // a single unnamed "Other" row. Counting rows would report "n named + 1" instead.
     set('nm-s-reg', String(t.countries != null ? t.countries : (topo.countries||[]).length));
-    set('nm-s-nodes', String((peers.totals && peers.totals.peers) || (peers.countries||[]).reduce((s,c)=>s+c.peers,0)));
+    const pt = peers.totals || {};
+    const nodesTotal = pt.peers != null ? pt.peers : (peers.countries||[]).reduce((s,c)=>s+c.peers,0);
+    const nMain = pt.main || 0, nTest = pt.test || 0;
+    // Which networks the sensor reads is a server fact (`sources`), not something a zero can
+    // tell us — "testnet 0" and "no testnet node on this box" must read differently.
+    const src = peers.sources || { main: nMain > 0, test: nTest > 0 };
+    const both = src.main && src.test;
+    set('nm-s-nodes', String(nodesTotal) + (both ? '<small class="nm-split">' + nMain + ' main · ' + nTest + ' test</small>' : (src.test && !src.main ? '<small class="nm-split">testnet</small>' : '')));
+    const days = peers.window_days || 30;
+    const netWord = both ? 'this pool\'s <b>mainnet</b> and <b>testnet</b> nodes have' : (src.test && !src.main ? 'this pool\'s <b>testnet</b> node has' : 'this pool\'s <b>mainnet</b> node has');
+    const split = both ? ' — <b>' + nMain + '</b> mainnet · <b>' + nTest + '</b> testnet' : '';
+    set('nm-nodes-note', 'Distinct <b>Grin nodes</b> ' + netWord + ' handshaked with over the last ' + days + ' days, by country' + split +
+      '. Live connections plus each node\'s own peer store (the node probes the network in the background) — not a full crawl, so nodes that never accept inbound connections are missing.');
   }
 
   function utcClock() {
@@ -388,7 +400,9 @@
     // no snapshot will ever land, so "wait a moment" would be the sample-data lie in new words.
     const peersGeoOff = peersOk && peers && peers.geo_available === false;
     if (!topoUsable) topo = { hub: null, gateways: [], countries: [], totals: { miners: 0, gateways_up: 0, gateways_total: 0, countries: 0 } };
-    if (peersEmpty) peers = { window_days: 30, points: [], countries: [], totals: { peers: 0, main: 0, test: 0 } };
+    // Keep the server's own facts (`sources`, `window_days`) on the empty stub: "no sightings
+    // yet" on a box that reads both nets must still say "mainnet and testnet nodes".
+    if (peersEmpty) peers = Object.assign({ window_days: 30 }, peers || {}, { points: [], countries: [], totals: { peers: 0, main: 0, test: 0 } });
 
     // Context note: distinguish "feed unreachable" (bare globe) from the ordinary
     // "no miners yet" state (real hub + gateways still shown) and the no-peers-yet states.

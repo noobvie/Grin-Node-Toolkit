@@ -1,7 +1,7 @@
 # Script 07 — Public Mining Pool (Security Audit)
 
 > **Covers code as of:** 2026-09-06 · **Last verified:** never verified as a whole — individual findings carry their own dates in the Status roll-up. One scoped exception: **2026-09-07, PARTIAL — §B's two satellite claims only**, read against the code (`requireSatellite` exists nowhere in `back-end-pool/`; `validateConfig()` in `lib/config.js` throws on a missing `jwt_secret` unconditionally, with no role gate). Nothing else in §B, and no §J finding, was re-checked.
-> **Product code last changed:** 2026-09-13 — `scripts/07_grin_mining_*.sh`, `scripts/lib/07_lib_*.sh`, `web/07_mining_pool_public/`
+> **Product code last changed:** 2026-09-20 (share credit unit; one shared `MinerManager` — §J6 addendum) — `scripts/07_grin_mining_*.sh`, `scripts/lib/07_lib_*.sh`, `web/07_mining_pool_public/`
 
 Security model, verified upload/XSS fixes, and the hardening requirements for
 `web/07_mining_pool_public/`. Design: [`script07_design.md`](script07_design.md);
@@ -406,8 +406,12 @@ Operator-decided redesign of the account-page gate ([owner-proof.js](../../web/0
    at the stratum layer on a session's **first accepted share** (PoW-backed, same
    anti-poisoning rationale as D.2), each in a last-2 distinct window (ISP re-lease /
    rig-side password change never locks the owner out). Trivial passwords (`x`, `123`,
-   factory defaults, `d=…` directives, <4 chars) are never captured and never verify —
-   a shared default must not become a skeleton key.
+   factory defaults, `d=…` directives, one repeated character, straight digit runs, <8 chars)
+   are never captured and never verify — a shared default must not become a skeleton key.
+   Since 2026-09-20 anything outside printable ASCII is refused too (`password_charset`):
+   ASIC firmware does not send non-Latin characters faithfully, so the pool would hash
+   garbage as `ok` and the miner would only find out on withdrawal day. The connect page
+   now asks for a numeric PIN (8+ digits) — digits survive every firmware and encoding.
 3. **Proofs hashed at rest (data minimisation).** Salted scrypt (`N=16384, r=8, p=1`,
    memory-hard vs GPU brute-force of the 2^32 IPv4 space / low-entropy passwords), format
    `v1$salt$hash` in `miner_accounts.last_ip/prev_ip/last_pass_hash/prev_pass_hash`.
@@ -5450,6 +5454,13 @@ needed a change.
   ([miners.js:26](../../web/07_mining_pool_public/back-end-pool/lib/miners.js#L26)). Good for J5
   (unforgeable PPLNS weight) but it means share volume scales linearly with pool hashrate, which is
   the `shares`-table growth bound memory `project_pool_db_capacity` lists as open.
+  **2026-09-20 addendum:** that `1.0` was ALSO what every share was *recorded* at, and the
+  hashrate/effort/luck arithmetic divides by the C32 graph weight (16384) expecting the chain's
+  unit — so every hashrate on the site read 16384× low (0.00 G/s with 8 rigs mining) until the
+  first live-miner test. Shares are now credited `job target × 16384`
+  (`stratum-protocol.js shareCreditDifficulty`, from the JOB the submit names, never the session
+  field); still a constant per share, so the J5 property holds. `db.js migrateShareCreditUnit`
+  rescales pre-fix rows once. The vardiff/growth point above is unchanged.
 - **§J9 (settings) — `confirm_depth_mainnet` / `confirm_depth_testnet` (J5-9)** are a *third*
   variant beyond J1-5's dead keys and J4-6's uncoerced values: keys that are validated by nobody
   **and** applied by nobody, yet round-trip through the UI convincingly. Worth a mechanical check

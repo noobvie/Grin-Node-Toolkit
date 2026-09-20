@@ -269,6 +269,28 @@ class GrinNodeAPI {
     }
   }
 
+  // Owner API get_peers with no address — the node's whole PEER STORE, not just its live
+  // connections. This is where the network-map volume is: grin v5.5 `monitor_peers`
+  // (servers/src/grin/seed.rs) probes up to 64 random disconnected Healthy peers plus 32–96
+  // Unknown ones every ~20 s, a successful handshake writes `last_connected = now` and the
+  // real user_agent (p2p/src/peers.rs `add_connected`), and once the node already holds
+  // enough outbound peers that probe connection is DROPPED straight after — so those nodes
+  // never show up in get_connected_peers at all. Entries with `last_connected: 0` are
+  // gossip-only addresses the node never reached. Defunct rows are forgotten 14 days after
+  // last_connected (core PEER_EXPIRATION_DAYS); Healthy ones persist. Each row:
+  // { addr: "ip:port", flags: "Healthy"|"Defunct"|"Banned"|"Unknown", user_agent,
+  //   last_connected: <unix s>, ... }. The arg is Option<SocketAddr>, so params is `[null]` —
+  // NOT `[]`: easy-jsonrpc's get_rpc_args rejects a positional list whose length differs
+  // from the declared arity (WrongNumberOfArgs) before serde ever sees the Option.
+  async getPeerStore() {
+    try {
+      const result = await this._ownerRpcCall('get_peers', [null]);
+      return Array.isArray(result) ? result : [];
+    } catch (_) {
+      return [];
+    }
+  }
+
   async _ownerRpcCall(method, params = []) {
     return this._rpcCall(`${this.nodeUrl}/v2/owner`, method, params, this.secret);
   }

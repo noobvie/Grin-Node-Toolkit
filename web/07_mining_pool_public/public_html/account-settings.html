@@ -455,13 +455,16 @@
                                         <p class="rgn-note"><b>Why factory defaults are refused.</b> A default like <code>x</code>,
                                             <code>xxxx</code> or <code>123</code> isn't a secret — thousands of rigs ship with the
                                             same value, so accepting it would hand one skeleton key to every account using it. Same
-                                            for a single repeated character of any length, and for anything under 8 characters
-                                            (short enough to guess offline). Those are never recorded, and the address keeps working
-                                            on IP proof alone.</p>
-                                        <p class="rgn-note"><b>Setting one.</b> Put any private 8–128 character string in your
-                                            miner's pool password field, use the <b>same</b> one on every rig, and it is recorded on
-                                            your next accepted share. Changing it is safe — the last two are both accepted, so a
-                                            rotation never locks you out.</p>
+                                            for a single repeated character of any length, a straight run like <code>12345678</code>,
+                                            and anything under 8 characters (short enough to guess offline). Accented or non-Latin
+                                            letters are refused too — not for strength, but because ASIC firmware does not send them
+                                            reliably, so what the pool recorded might never match what you type here. None of those
+                                            are recorded, and the address keeps working on IP proof alone.</p>
+                                        <p class="rgn-note"><b>Setting one.</b> Put a private PIN of 8 or more digits in your
+                                            miner's pool password field (plain letters and keyboard symbols work too, up to 128
+                                            characters), use the <b>same</b> one on every rig, and it is recorded on your next
+                                            accepted share. Changing it is safe — the last two are both accepted, so a rotation
+                                            never locks you out.</p>
                                     </details>
                                 </div>
                             </div>
@@ -1048,7 +1051,8 @@
             none:               ['not set', 'Your rig connects without a password — set one in the miner config to unlock this as a second proof. Your mining IP still works.'],
             password_too_short: ['too short', 'Your rig password is under 8 characters, so it is not recorded as proof. Set a longer one on the rig.'],
             password_too_long:  ['too long',  'Your rig password is over 128 characters, so it is not recorded as proof. Shorten it on the rig.'],
-            trivial_password:   ['too common', 'Your rig password is a known factory default (or a single repeated character), so it is not recorded as proof. Set a private one on the rig.'],
+            trivial_password:   ['too common', 'Your rig password is a known factory default, a single repeated character or a straight digit run like 12345678, so it is not recorded as proof. Set a private PIN on the rig.'],
+            password_charset:   ['unsupported characters', 'Your rig password contains characters outside plain letters, digits and keyboard symbols (accented or non-Latin letters, for example). ASIC firmware does not send those reliably, so it is not recorded as proof. Set a numeric PIN on the rig.'],
             password_invalid:   ['unreadable', 'Your rig password could not be read as proof. Set a plain-text password on the rig.']
         };
         function renderPasswordProof(pp, evidence) {
@@ -1682,6 +1686,7 @@
             trivial_password: 'that password is too common to count as proof — use your mining IP instead',
             password_too_short: 'a rig password must be at least 8 characters to count as proof — use your mining IP instead',
             password_too_long: 'a rig password longer than 128 characters cannot be used as proof',
+            password_charset: 'a rig password with accented or non-Latin characters is never recorded as proof — use your mining IP instead, then set a numeric PIN on the rig',
             password_invalid: 'that proof could not be read — enter a mining IP or your rig password',
             too_many_attempts: 'too many failed attempts — wait 5 minutes',
             no_recorded_proof: 'nothing on record yet — submit at least one accepted share first',

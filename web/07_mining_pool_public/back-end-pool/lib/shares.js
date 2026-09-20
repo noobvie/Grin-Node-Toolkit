@@ -97,9 +97,9 @@ class ShareValidator {
     return crypto.createHash('sha256').update(input).digest('hex');
   }
 
-  // UNUSED — there is no vardiff. Every session is created with difficulty 1.0 (miners.js
-  // createSession) and nothing ever calls setSessionDifficulty, so every share is recorded at
-  // difficulty 1. Kept as the intended formula if vardiff is built; wiring it up also means
+  // UNUSED — there is no vardiff. Every share is recorded at the JOB's target × the C32 graph
+  // weight (stratum-protocol shareCreditDifficulty), i.e. the node's minimum_share_difficulty
+  // in chain units. Kept as the intended formula if vardiff is built; wiring it up also means
   // telling the miner the new difficulty, which this stratum server does not yet do.
   calculateDifficulty(networkDifficulty, poolTargetHashrate) {
     const minDiff = 0.001;

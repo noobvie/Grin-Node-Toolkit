@@ -436,6 +436,9 @@ let pagesManager = null;
 let postsManager = null;
 let uploadsDir = null;       // persistent media dir (served at /uploads, nginx in prod)
 let mediaUpload = null;      // configured multer instance for image uploads
+// Which Grin networks the network-map peer sensor reads (set once the collector is wired,
+// reported by /api/network/peers so the page can say "mainnet + testnet" vs "mainnet only").
+let _peerSensorNets = { main: false, test: false };
 
 async function initializePool() {
   try {
@@ -544,7 +547,10 @@ async function initializePool() {
     minerManager = new MinerManager(config);
     console.log(`[${new Date().toISOString()}] Mining managers initialized`);
 
-    stratumServer = new StratumServer(config);
+    // The stratum server MUST share this minerManager — sessions are created there on login and
+    // read here (/api/pool/stats, per-worker online flags, network map, poolstats, hashrate
+    // tracker). Two instances = an API that never sees a miner. See the StratumServer ctor note.
+    stratumServer = new StratumServer(config, minerManager);
     stratumServer.setBlockManager(blockManager);
     stratumServer.start();
 
@@ -708,16 +714,29 @@ async function initializePool() {
     hashrateTracker.start();
 
     // Network-map peer snapshot (feeds /api/network/peers). Every 20 min, read each running
-    // Grin node's connected peers, geolocate each to a COUNTRY ONLY (lib/geoip), and upsert
+    // Grin node's peers, geolocate each to a COUNTRY ONLY (lib/geoip), and upsert
     // network_peers keyed by a hash of net+IP — the raw address is never stored. Rows
     // accumulate a rolling country picture; the endpoint windows them (default 30d). No-op
     // when geoip-lite is not installed (available() false → lookups return null).
+    //
+    // TWO reads per node, and the second is the one that carries the volume:
+    //  • get_connected_peers — the live seats (8 outbound by default + whatever inbound the
+    //    firewall lets in). Sticky connections, so over 30 days this alone yields tens of
+    //    distinct nodes, not the hundreds the network has.
+    //  • get_peers (the node's PEER STORE) — the node itself crawls the network in the
+    //    background (grin v5.5 seed.rs `monitor_peers`: ~100 handshake probes every 20 s) and
+    //    records each success as `last_connected`, then drops the probe connection when it
+    //    already has enough outbound peers — so a node it verified 10 minutes ago is in the
+    //    store but never in the connected list. Store rows are stamped with the NODE's own
+    //    `last_connected`, so the endpoint's window measures when the handshake happened, not
+    //    when we noticed; `last_connected: 0` = gossip-only address never reached, skipped.
+    //    Steady state only rows newer than the previous snapshot are pushed (1 h overlap).
     //
     // Dual-network: a Grin node only peers within its OWN network (mainnet 3414 / testnet
     // 13414 are separate graphs), so besides this pool's own node we opportunistically read
     // the OTHER network's node too — that is how the map shows mainnet (green) + testnet
     // (pink) peers at once. The toolkit typically runs both nodes on the box; a network whose
-    // node isn't running simply contributes nothing (getConnectedPeers returns [] on error).
+    // node isn't running simply contributes nothing (both reads return [] on error).
     let otherNetNode = null;
     try {
       const ownIsMain = /^main/i.test(config.network || '');
@@ -736,40 +755,80 @@ async function initializePool() {
       console.error(`[network-map] other-net node init failed: ${e.message}`);
     }
 
+    const peerSources = [];
+    if (blockMonitor && blockMonitor.grinNode) {
+      peerSources.push({ node: blockMonitor.grinNode, net: /^main/i.test(config.network || '') ? 'main' : 'test' });
+    }
+    if (otherNetNode) {
+      peerSources.push({ node: otherNetNode, net: /^main/i.test(otherNetNode.network || '') ? 'main' : 'test' });
+    }
+    for (const src of peerSources) _peerSensorNets[src.net] = true;
+
+    // Upper bound of the endpoint's ?window (90 d): store rows older than that can never be
+    // shown, so the first pass after boot doesn't bother writing them.
+    const PEER_STORE_HORIZON_S = 90 * 86400;
+    const PEER_WRITE_CHUNK = 500;
+    let peerStoreMark = 0;   // `now` of the last snapshot that committed; 0 = none yet
+    const storeWarned = {};  // per net: warned once that get_peers yields nothing
     const snapshotNetworkPeers = async () => {
       try {
         if (!geoip.available()) return;
         const now = Math.floor(Date.now() / 1000);
-        const sources = [];
-        if (blockMonitor && blockMonitor.grinNode) {
-          sources.push({ node: blockMonitor.grinNode, net: /^main/i.test(config.network || '') ? 'main' : 'test' });
-        }
-        if (otherNetNode) {
-          sources.push({ node: otherNetNode, net: /^main/i.test(otherNetNode.network || '') ? 'main' : 'test' });
-        }
-        const rows = [];
-        for (const src of sources) {
-          const peers = await src.node.getConnectedPeers();
-          if (!peers || !peers.length) continue;
-          for (const p of peers) {
-            const addr = String(p.addr || p.address || '');
-            const ip = addr.replace(/:\d+$/, '').replace(/^\[|\]$/g, '');  // strip :port / [v6]
-            const geo = geoip.lookupCountry(ip);
-            if (!geo) continue;
-            // Key includes net so the same IP running BOTH a mainnet and a testnet node yields
-            // two distinct rows instead of one flipping the other's colour on ON CONFLICT.
-            const key = crypto.createHash('sha256').update(src.net + '|' + ip).digest('hex').slice(0, 32);
-            rows.push({ key, cc: geo.cc, name: geo.name, net: src.net });
+        const since = peerStoreMark ? peerStoreMark - 3600 : now - PEER_STORE_HORIZON_S;
+        // key → row carrying the earliest and latest stamp seen in this batch: a node in both
+        // the live list (`now`) and the store (its handshake time) is ONE write, and neither
+        // stamp is lost — first_seen stays the handshake, last_seen the live sighting.
+        const rows = new Map();
+        const push = (net, addr, seen) => {
+          const ip = String(addr || '').replace(/:\d+$/, '').replace(/^\[|\]$/g, '');  // strip :port / [v6]
+          const geo = geoip.lookupCountry(ip);
+          if (!geo) return;
+          // Key includes net so the same IP running BOTH a mainnet and a testnet node yields
+          // two distinct rows instead of one flipping the other's colour on ON CONFLICT.
+          const key = crypto.createHash('sha256').update(net + '|' + ip).digest('hex').slice(0, 32);
+          const prev = rows.get(key);
+          if (!prev) rows.set(key, { key, cc: geo.cc, name: geo.name, net, first: seen, last: seen });
+          else { if (seen < prev.first) prev.first = seen; if (seen > prev.last) prev.last = seen; }
+        };
+        for (const src of peerSources) {
+          const live = await src.node.getConnectedPeers();
+          for (const p of live || []) push(src.net, p.addr || p.address, now);
+          const store = await src.node.getPeerStore();
+          // Every connected peer is saved to the store on handshake, so an empty store beside
+          // a non-empty live list means the get_peers call itself failed (getPeerStore swallows
+          // errors) — say so once, or the map silently falls back to the ~8-seat count while
+          // the page copy still promises the peer store.
+          if ((!store || !store.length) && live && live.length && !storeWarned[src.net]) {
+            storeWarned[src.net] = true;
+            console.error(`[network-map] ${src.net}: get_peers returned nothing while ${live.length} peers are connected — peer-store sensor inactive, node count will stay low`);
+          }
+          for (const p of store || []) {
+            const t = Number(p.last_connected) || 0;
+            if (t >= since) push(src.net, p.addr, t);
           }
         }
-        if (!rows.length) return;
+        if (!rows.size) return;
+        // MAX/MIN, not plain overwrite: a live sighting stamped `now` and the store's older
+        // `last_connected` for the same node can arrive in consecutive snapshots in either order.
         const upsert = db.prepare(`
           INSERT INTO network_peers (peer_key, country_code, country, net, first_seen, last_seen)
           VALUES (?, ?, ?, ?, ?, ?)
           ON CONFLICT(peer_key) DO UPDATE SET
-            country_code = excluded.country_code, country = excluded.country,
-            net = excluded.net, last_seen = excluded.last_seen`);
-        db.transaction((rs) => { for (const r of rs) upsert.run(r.key, r.cc, r.name, r.net, now, now); })(rows);
+            country_code = excluded.country_code, country = excluded.country, net = excluded.net,
+            first_seen = MIN(first_seen, excluded.first_seen),
+            last_seen = MAX(last_seen, excluded.last_seen)`);
+        const writeChunk = db.transaction((rs) => { for (const r of rs) upsert.run(r.key, r.cc, r.name, r.net, r.first, r.last); });
+        // Chunked, yielding between chunks: the first pass after boot can be a few thousand
+        // rows and this DB is the same synchronous handle the share path writes through — one
+        // long transaction would stall share acceptance for its whole duration. Steady-state
+        // passes are a handful of rows and finish in one chunk. Idempotent, so a failure
+        // mid-way just leaves `peerStoreMark` where it was and the next pass re-covers it.
+        const all = Array.from(rows.values());
+        for (let i = 0; i < all.length; i += PEER_WRITE_CHUNK) {
+          writeChunk(all.slice(i, i + PEER_WRITE_CHUNK));
+          if (i + PEER_WRITE_CHUNK < all.length) await new Promise((r) => setImmediate(r));
+        }
+        peerStoreMark = now;
       } catch (e) {
         console.error(`[network-map] peer snapshot failed: ${e.message}`);
       }
@@ -1275,7 +1334,7 @@ function setupRoutes() {
     'GET /api/config/pool-info': { desc: 'Pool terms: network, pool fee %, minimum withdrawal, the flat per-payout withdrawal fee (0 = the pool absorbs the network fee), address format and which listener a miner needs.', shape: 'raw' },
 
     // ── Pool ──────────────────────────────────────────────────────────────────
-    'GET /api/pool/stats': { desc: 'Live pool stats: block totals, active miners, connections, and share quality (accepted/stale/rejected). Share quality is LIVE in-memory only — it is empty with no connected sessions and resets on disconnect.', shape: 'raw' },
+    'GET /api/pool/stats': { desc: 'Live pool stats: block totals (found / confirmed / immature counts, confirmed + immature reward), active miners (distinct addresses), active workers (logged-in rigs), raw connections, and share quality (accepted/stale/rejected). Share quality is LIVE in-memory only — it is empty with no connected sessions and resets on disconnect.', shape: 'raw' },
     'GET /api/pool/status': { desc: 'Coarse service health for the status strip: pool up, node reachable/synced/peers/height, wallet reachable. Never exposes balances or addresses.', shape: 'raw' },
     'GET /api/pool/stats/regions': { desc: 'Per-region stratum endpoints + live status (online | idle | offline) and 15-minute regional hashrate. On a MULTI-region pool a k-anonymity floor applies: a region with 0 < miners < min_bucket reports miners/hashrate_gps/shares_window as null with below_floor:true — that is withheld, not zero (a real zero is still 0). Totals are always exact.', shape: 'raw' },
     'GET /api/pool/locations': { desc: 'Operator-declared stratum regions that are currently active — region key, label, and the stratum URL to point a rig at.', shape: 'raw' },
@@ -1284,7 +1343,7 @@ function setupRoutes() {
     'GET /api/pool/effort': { desc: 'Pool network share, luck over the last 100 blocks, current round effort, and time since the last block. Network difficulty is cached ~60s.', shape: 'raw' },
     'GET /api/pool/hashrate/history': { desc: 'Pool hashrate time-series, summed across addresses per bucket.', shape: 'raw', params: 'hours (1–720, default 24)' },
     'GET /api/pool/poolstats': { desc: 'Listing feed for pool directories — this is the URL to hand to miningpoolstats.stream (they poll it; nothing is pushed). Pool + network aggregates in the same field layout as the toolkit\'s solo-mining poolstats_<net>.json, so an importer written for that needs no changes. Recomputed at most once every 60s and served from cache in between, so polling faster than 1/min returns identical bytes — 1–5 min is the sensible range. Every value is an aggregate already shown on the homepage; no address or per-miner row is included, so it needs no auth. The ts field is the generation time: if it stops advancing, the feed is stale. Fields are null (not 0) when the node is unreachable, and network.hashrate_gps_24h is null until the pool has an hour of history.', shape: 'raw' },
-    'GET /api/pool/metrics/history': { desc: 'Durable pool trend series: hashrate, miners, earnings, payout, network hashrate. Rolled up hourly and never pruned.', shape: 'raw', params: 'range=day|week|month|year|all (default day)' },
+    'GET /api/pool/metrics/history': { desc: 'Durable pool trend series: hashrate, miners, workers, earnings, payout, network hashrate. Rolled up hourly and never pruned. At day-or-coarser buckets (month/year/all) miner_count/worker_count are the PEAK hour in the bucket, hashrate the average, money the sum. worker_count is null for hours recorded before it existed — draw a null as a GAP, never as 0.', shape: 'raw', params: 'range=day|week|month|year|all (default day)' },
     'GET /api/pool/metrics/history/regions': { desc: 'Per-region miners/hashrate trend series (the "miners by gateway" view). Same k-anonymity floor as /api/pool/stats/regions, applied per point: below the floor miner_count and hashrate_gps are null with below_floor:true. Draw a null as a GAP, never as 0.', shape: 'raw', params: 'range=day|week|month|year|all (default day)' },
     'GET /api/pool/payments/history': { desc: 'Durable payments & transparency series: payouts, reward split, giveaways, donations, fee, plus lifetime totals.', shape: 'raw', params: 'range=day|week|month|year|all (default month)' },
     'GET /api/pool/payments': { desc: 'Recent confirmed payouts: address, amount, flat fee charged, method and timestamps. The on-chain kernel is NOT published here — pool-wide it would be a public address-to-chain index; it is available per address on /api/account/:addr/withdrawals. Pool-internal payout machinery (slate id, Tor probe result, retry state, cancel reason) is deliberately not published either.', shape: 'array', params: 'limit (≤500, default 100)' },
@@ -1302,7 +1361,7 @@ function setupRoutes() {
     'GET /api/stratum/top-avg-hashrate': { desc: 'Top miners by AVERAGE hashrate over a multi-day window (sustained contribution). Backed by hashrate_history, so a 30-day window is meaningful. Addresses are MASKED.', shape: 'raw', params: 'days (≤90, default 30) · limit (≤1000, default 500)' },
 
     // ── Network ───────────────────────────────────────────────────────────────
-    'GET /api/network/peers': { desc: 'Grin P2P peers this node has seen, aggregated by country over a rolling window (+ mainnet/testnet split). Country-only, no IPs; thin countries merge into one unnamed bucket.', shape: 'raw', params: 'window days (1–90, default 30)', gated: 'the operator publishes the network map (on by default; 404 while switched off in admin → Access)' },
+    'GET /api/network/peers': { desc: 'Distinct Grin nodes the pool box\'s node(s) have handshaked with — live connections plus each node\'s own peer store, NOT a network crawl — aggregated by country over a rolling window (+ mainnet/testnet split, and `sources` = which networks are read). Country-only, no IPs; thin countries merge into one unnamed bucket.', shape: 'raw', params: 'window days (1–90, default 30)', gated: 'the operator publishes the network map (on by default; 404 while switched off in admin → Access)' },
 
     // ── Account (address-as-identity: the address IS the credential to READ) ──
     'GET /api/account/:addr': { desc: 'Account summary: balance, locked, lifetime paid, pending payout, share/hashrate snapshot, active donation %, and when the ownership evidence on record last changed. 404 if the address has never mined here OR is not a well-formed Grin address.', shape: 'raw' },
@@ -2396,6 +2455,9 @@ function setupRoutes() {
         ...blockStats,
         active_miners: minerCount,
         active_connections: sstats.active_connections,
+        // Logged-in rigs (one stratum login = one worker). `active_connections` is raw TCP
+        // sockets, which also counts a connection that has not (yet) sent its login.
+        active_workers: (sstats.sessions || []).length,
         share_quality: sq
       });
     } catch (err) {
@@ -4907,9 +4969,10 @@ function setupRoutes() {
   });
 
   // ─── Network map: Grin P2P peers by country (rolling window) ────────────────────────────
-  // Aggregates network_peers (populated by the peer-snapshot collector — COUNTRY ONLY, no IPs)
-  // over the last ?window days (default 30, max 90). Returns per-country counts (+ main/test
-  // split) and a capped set of scattered-in-country twinkle points for the globe. Empty when geoip-lite
+  // Aggregates network_peers (populated by the peer-snapshot collector — COUNTRY ONLY, no IPs;
+  // live connections + each node's own peer store, see snapshotNetworkPeers) over the last
+  // ?window days (default 30, max 90). Returns per-country counts (+ main/test split) and a
+  // capped set of scattered-in-country twinkle points for the globe. Empty when geoip-lite
   // isn't installed or the node has no peers yet (page then shows no twinkles and says so).
   app.get('/api/network/peers', rateLimiter.middleware('public'), (req, res) => {
     try {
@@ -4974,6 +5037,10 @@ function setupRoutes() {
         // one box and "wait 30 s" on another — network-map.js words its note from this flag
         // rather than promising data that will never arrive.
         geo_available: geoip.available(),
+        // Which networks' nodes the sensor reads on this box (a node only peers within its own
+        // network). Lets the page say "mainnet + testnet" or "mainnet only" from fact, not
+        // from a zero it can't tell apart from "no testnet sightings yet".
+        sources: { main: !!_peerSensorNets.main, test: !!_peerSensorNets.test },
         // Totals span ALL peers (including the ones folded into "Other") — the floor hides
         // which country a thin peer is in, not that it exists.
         totals: {

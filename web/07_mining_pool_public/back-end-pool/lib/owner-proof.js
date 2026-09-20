@@ -143,6 +143,32 @@ const TRIVIAL_PASSWORDS = new Set([
 // enumerate every length, so this is a structural rule instead.
 const REPEATED_CHAR_RE = /^(.)\1*$/;
 
+// Straight digit runs (`12345678`, `87654321`, `01234567`, …): the connect page asks for a
+// numeric PIN, and a keyboard row is the first thing typed when a form demands 8+ digits.
+// Structural like the rule above — the seed list can't enumerate every length either.
+function isDigitRun(p) {
+  if (!/^[0-9]{2,}$/.test(p)) return false;
+  let asc = true, desc = true;
+  for (let i = 1; i < p.length; i++) {
+    const d = p.charCodeAt(i) - p.charCodeAt(i - 1);
+    if (d !== 1) asc = false;
+    if (d !== -1) desc = false;
+  }
+  return asc || desc;
+}
+
+// Printable ASCII only (0x20–0x7E). Not a strength rule — a sanity rule for the OTHER end of
+// the wire: ASIC firmware builds the stratum login from a web-form field, and a non-Latin
+// character in that field arrives here however the firmware happened to encode it (a Latin-1
+// store decodes to U+FFFD; so does a UTF-8 sequence split across TCP chunks, since the
+// stratum reader decodes per chunk). The pool would hash that garbage and record the state
+// as `ok`, and the miner would find out on withdrawal day, when the value they type into the
+// account page — correct UTF-8 over HTTPS — can never match. Refusing it with its own reason
+// turns that silent mismatch into a chip on the account page at the first share. Digits and
+// letters pass every firmware, shell and encoding untouched, which is why the connect page
+// asks for a PIN.
+const PRINTABLE_ASCII_RE = /^[\x20-\x7e]*$/;
+
 // Operator-added banned passwords (admin → Access, access.extra_banned_passwords) —
 // additions-only ON TOP of the hardcoded seed above; the seed + structural rules always
 // apply so an admin edit can never turn `x` into a valid proof. Cached briefly so the hot
@@ -183,8 +209,10 @@ function passwordRejectReason(pass, db) {
   const p = pass.trim();
   if (p.length < PASS_MIN) return 'password_too_short';
   if (p.length > PASS_MAX) return 'password_too_long';
+  if (!PRINTABLE_ASCII_RE.test(p)) return 'password_charset';
   if (TRIVIAL_PASSWORDS.has(p.toLowerCase())) return 'trivial_password';
   if (REPEATED_CHAR_RE.test(p)) return 'trivial_password';
+  if (isDigitRun(p)) return 'trivial_password';
   if (extraBannedSet(db).has(p.toLowerCase())) return 'trivial_password';
   if (/^d=/i.test(p)) return 'trivial_password'; // difficulty-request convention, not a secret
   return null;

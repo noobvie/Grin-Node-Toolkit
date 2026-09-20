@@ -826,6 +826,79 @@
   window.addEventListener('scroll', tipHide, true);
   window.addEventListener('resize', tipHide);
 
+  // ── Click-to-copy for [data-copy] elements (truncated addresses) ─────────
+  // A 62-char bech32 address renders as `grin12rgur8d…swdz7s2` on every list page with
+  // the full value one hover away — but a tooltip can't be selected, so getting an
+  // address into a log grep, an explorer search or a ban reason meant a detour. Any
+  // element with data-copy="<full value>" now copies that value on click (Enter/Space
+  // too when it is a <button>) and flips its [data-tip] to "Copied ✓" for a moment.
+  // Pages render the markup themselves — see the address cell in miners.html.
+  var copyHost = null, copyTimer = null;
+
+  function legacyCopy(text) {
+    // Selection-based copy for browsers where navigator.clipboard is absent or blocked.
+    var ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', '');
+    ta.style.cssText = 'position:fixed;top:0;left:0;width:1px;height:1px;opacity:0;';
+    document.body.appendChild(ta);
+    ta.select();
+    var ok = false;
+    try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+    document.body.removeChild(ta);
+    if (!ok) throw new Error('clipboard blocked');
+  }
+
+  function copyText(text) {
+    // navigator.clipboard needs a secure context; an http:// admin on a LAN box (a testnet
+    // trial with no cert yet) has none, so fall through to the selection-based copy there.
+    if (navigator.clipboard && window.isSecureContext) {
+      return navigator.clipboard.writeText(text).catch(function () { return legacyCopy(text); });
+    }
+    return new Promise(function (resolve) { resolve(legacyCopy(text)); });
+  }
+
+  function copyRestore() {
+    if (copyTimer) { clearTimeout(copyTimer); copyTimer = null; }
+    var host = copyHost;
+    copyHost = null;
+    if (!host) return;
+    var orig = host.getAttribute('data-tip-orig');
+    if (orig !== null) { host.setAttribute('data-tip', orig); host.removeAttribute('data-tip-orig'); }
+    host.classList.remove('is-copied', 'is-copy-failed');
+    // Still hovered? Re-show the normal tip — unless a table refresh replaced the row.
+    if (tipHost === host) {
+      if (document.body.contains(host) && host.getAttribute('data-tip')) tipShow(host);
+      else tipHide();
+    }
+  }
+
+  function copyFlash(host, text, cls) {
+    copyRestore();                      // a second click mid-flash must not save "Copied ✓" as the original
+    copyHost = host;
+    if (!host.hasAttribute('data-tip-orig')) host.setAttribute('data-tip-orig', host.getAttribute('data-tip') || '');
+    host.setAttribute('data-tip', text);
+    host.classList.add(cls);
+    tipHost = host;                     // the click listener above just hid it; bring it back with the new text
+    tipShow(host);
+    copyTimer = setTimeout(copyRestore, 1500);
+  }
+
+  document.addEventListener('click', function (e) {
+    var host = e.target && e.target.closest ? e.target.closest('[data-copy]') : null;
+    if (!host) return;
+    var value = host.getAttribute('data-copy');
+    if (!value) return;
+    e.preventDefault();
+    copyText(value).then(function () {
+      copyFlash(host, 'Copied ✓', 'is-copied');
+    }, function () {
+      // Nothing worked: expand the cell to the full value so it can at least be selected.
+      host.textContent = value;
+      copyFlash(host, 'Copy blocked by the browser — select it by hand', 'is-copy-failed');
+    });
+  });
+
   // ── Idle session manager (window.AdminSession) ──────────────────────────
   // Started by API.guardAdminPage once /api/admin/me confirms the session, with the policy
   // that endpoint returns. Two jobs:

@@ -131,13 +131,15 @@
                                 </div>
                             </div>
                             <div class="readouts">
+                                <!-- Four readouts (2×2), one big figure + one small qualifier each.
+                                     Was six: Last block and Blocks found had tiles of their own and are
+                                     now the Blocks · 24h sub-line; the 7-day count lives on the blocks
+                                     page only; Confirmed gained the still-maturing GRIN. -->
                                 <div class="counters">
                                     <div class="counter"><div class="k">Block height</div><div class="v num" id="c-height">—</div></div>
                                     <div class="counter alt"><div class="k">Miners online</div><div class="v num"><span id="c-miners">—</span> <small id="c-miners-sub"></small></div></div>
-                                    <div class="counter"><div class="k">Blocks · 24h</div><div class="v num"><span id="c-blocks24">—</span> <small id="c-blocks24-sub"></small></div></div>
-                                    <div class="counter alt"><div class="k">Last block</div><div class="v num" id="c-last">—</div></div>
-                                    <div class="counter"><div class="k">Blocks found</div><div class="v num" id="c-total">—</div></div>
-                                    <div class="counter alt"><div class="k">Confirmed</div><div class="v num"><span id="c-reward">—</span> <small>GRIN</small></div></div>
+                                    <div class="counter"><div class="k">Blocks · 24h</div><div class="v num"><span id="c-blocks24">—</span> <small><span id="c-last">—</span> · <span id="c-total">—</span> total</small></div></div>
+                                    <div class="counter alt"><div class="k">Confirmed</div><div class="v num"><span id="c-reward">—</span> <small>GRIN · <span id="c-immature">—</span> immature</small></div></div>
                                 </div>
                                 <div class="ledbar-wrap">
                                     <div class="ledbar-title">Share quality — live sessions <span id="led-note"></span></div>
@@ -352,7 +354,7 @@
                                 <div class="mform-row"><span class="mform-k">Select Coin</span><span class="mform-val">GRIN</span></div>
                                 <div class="mform-row"><span class="mform-k">Pool 1</span><span class="mform-val is-live" id="rx-guide-uri">stratum host not configured</span></div>
                                 <div class="mform-row"><span class="mform-k">Pool1 worker</span><span class="mform-val">&lt;your_grin_address&gt;.rig1</span></div>
-                                <div class="mform-row"><span class="mform-k">Pool1 password</span><span class="mform-val">&lt;your_own_password&gt;</span></div>
+                                <div class="mform-row"><span class="mform-k">Pool1 password</span><span class="mform-val">&lt;your_pin&gt;</span></div>
                             </div>
                             <!-- 1-2-3 = the three fields you actually type into, in mock order. -->
                             <ol class="mguide-steps">
@@ -362,13 +364,13 @@
                                 <li><b>Worker</b> — your Grin address; it <b>is</b> your login, no signup. Optionally
                                     add <code>.rig1</code> to name the machine (lowercase letters/digits/<code>-</code>/<code>_</code>,
                                     max 25 chars — longer names are trimmed, never rejected).</li>
-                                <li><b>Password</b> — <b>choose a strong, private password</b> (8+ chars; never
-                                    <code>x</code>, <code>xxxx</code>, <code>123</code> or firmware defaults —
-                                    one repeated character is rejected). This is your
-                                    <b>ownership proof</b> for withdrawals, so treat it like a key.
-                                    <b>Use the same password on every rig</b> under this address — any of them can
-                                    then prove ownership, and a real password means you can always withdraw even if
-                                    your IP changes.</li>
+                                <li><b>Password</b> — <b>choose a PIN of 8 or more digits</b> you will remember
+                                    (not <code>12345678</code>, not one repeated digit, not the firmware default such as
+                                    <code>x</code> or <code>123</code>). It is your <b>ownership proof</b> on the account
+                                    page, and it stays readable in the rig&rsquo;s own panel, so you can always look it up.
+                                    <b>Use the same PIN on every rig</b> under this address — any of them can then
+                                    prove ownership, and it keeps working when your IP changes. Plain letters work
+                                    too; avoid accented or non-Latin characters, which some firmware cannot send.</li>
                             </ol>
                             <!-- Also unnumbered: this happens after the form is filled in. -->
                             <p class="mguide-note mguide-span">Optionally point <b>Pool 2 / Pool 3</b> at other green

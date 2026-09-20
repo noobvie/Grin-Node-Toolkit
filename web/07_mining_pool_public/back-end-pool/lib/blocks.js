@@ -256,6 +256,10 @@ class BlockManager {
       const immatureCount = this.db.prepare(
         "SELECT COUNT(*) as count FROM blocks WHERE status = 'immature'"
       ).get();
+      // Not (total_reward − confirmed_reward): total_reward also sums ORPHANED rewards.
+      const immatureReward = this.db.prepare(
+        "SELECT COALESCE(SUM(reward), 0) as total FROM blocks WHERE status = 'immature'"
+      ).get();
 
       // "Found" = any non-orphaned block. created_at is INTEGER unixepoch.
       const blocks24h = this.db.prepare(
@@ -271,6 +275,7 @@ class BlockManager {
         confirmed_blocks: confirmedBlocks.count,
         confirmed_reward: confirmedReward.total,
         immature_blocks: immatureCount.count,
+        immature_reward: immatureReward.total,
         blocks_24h: blocks24h.count,
         blocks_7d: blocks7d.count
       };
@@ -282,6 +287,7 @@ class BlockManager {
         confirmed_blocks: 0,
         confirmed_reward: 0,
         immature_blocks: 0,
+        immature_reward: 0,
         blocks_24h: 0,
         blocks_7d: 0
       };

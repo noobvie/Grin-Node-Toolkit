@@ -389,11 +389,15 @@
       setText('c-miners', String(s.active_miners || 0));
       lastActiveMiners = Number(s.active_miners) || 0;
       applyHashState();
-      setText('c-miners-sub', (s.active_connections || 0) + ' conn');
+      // Logged-in rigs. Older backends only carry the raw socket count, which is the same
+      // number once every connection has logged in.
+      var workers = Number(s.active_workers != null ? s.active_workers : s.active_connections) || 0;
+      setText('c-miners-sub', workers + (workers === 1 ? ' worker' : ' workers'));
       setText('c-blocks24', String(s.blocks_24h || 0));
-      setText('c-blocks24-sub', (s.blocks_7d || 0) + ' wk');
       setText('c-total', Number(s.total_blocks_found || 0).toLocaleString('en-US'));
       setText('c-reward', Number(s.confirmed_reward || 0).toFixed(0));
+      // Still maturing (1,440 confirmations); older backends don't send it.
+      setText('c-immature', Number(s.immature_reward || 0).toFixed(0));
       setText('mi-miners', (s.active_miners || 0) + ' UNITS');
       var q = s.share_quality || {};
       renderLedbar(Number(q.accepted) || 0, Number(q.stale) || 0, Number(q.rejected) || 0);
@@ -452,7 +456,7 @@
           [[0, 100, C.accent], [100, 150, C.warn], [150, emax, C.danger]], 8);
         gaugeShare.setValue(Math.min(effort, emax));
       }
-      setText('c-last', e.last_block_at ? timeAgo(e.last_block_at) : '—');
+      setText('c-last', e.last_block_at ? timeAgo(e.last_block_at) + ' ago' : 'none yet');
       setText('mi-core-share', 'NET-SHARE ' + (share != null ? fmtShare(share) : '—'));
       setText('mi-core-shares', e.round_shares != null
         ? Number(e.round_shares).toLocaleString('en-US', { maximumFractionDigits: 0 }) + ' SHARES'

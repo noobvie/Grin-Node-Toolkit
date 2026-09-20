@@ -108,8 +108,15 @@ const minersTable = AdminTable.create({
     const action = m.is_banned
       ? `<button class="btn-icon" data-addr="${escHtml(m.grin_address)}" onclick="unbanMiner(this.dataset.addr)" data-tip="Unban this miner" aria-label="Unban this miner">✅</button>`
       : `<button class="btn-icon btn-icon-danger" data-addr="${escHtml(m.grin_address)}" onclick="banMiner(this.dataset.addr)" data-tip="Ban this miner" aria-label="Ban this miner">🚫</button>`;
+    // The truncated address is itself the copy control: click (or Enter/Space) copies the
+    // full address, handled by admin-shell.js via data-copy. The tip shows the full value
+    // (the old title= did that, but a native tooltip can't be selected) above the hint.
+    const addr = escHtml(m.grin_address);
+    const addrCell = `<button type="button" class="addr-copy" data-copy="${addr}" ` +
+      `data-tip="${addr}&#10;Click to copy" aria-label="Copy address ${escHtml(shortAddr(m.grin_address))}">` +
+      `${escHtml(shortAddr(m.grin_address))}</button>`;
     return `<tr>
-      <td><span class="mono" title="${escHtml(m.grin_address)}">${escHtml(shortAddr(m.grin_address))}</span>${bannedBadge}</td>
+      <td>${addrCell}${bannedBadge}</td>
       <td>${onlineBadge}</td>
       <td class="mono">${fmtGrin(m.balance)}</td>
       <td class="mono">${fmtGrin(m.balance_locked)}</td>

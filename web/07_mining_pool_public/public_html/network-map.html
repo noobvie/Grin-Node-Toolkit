@@ -108,6 +108,9 @@
     .nm-dl-row .pc { font-size: 11px; color: var(--text-dim); font-variant-numeric: tabular-nums; text-align: right; }
     .nm-chart-note { margin: 14px 0 0; font-size: 11.5px; color: var(--text-mute); font-family: var(--mono); letter-spacing: .02em; line-height: 1.5; }
     .nm-chart-note b { color: var(--text-dim); }
+    /* mainnet/testnet split under the nodes placard total: its own line, so a long split never
+       overflows the 140px cell (.placard b is nowrap), engraved like the label above. */
+    .placard b .nm-split { display: block; font-size: 9px; letter-spacing: .08em; font-weight: 500; color: var(--text-dim); text-shadow: none; }
     .panel-title a.tlink { color: var(--info); text-decoration: none; border-bottom: 1px dotted color-mix(in srgb, var(--info) 55%, transparent); }
     .panel-title a.tlink:hover { color: var(--accent); border-bottom-color: var(--accent); }
   </style>
@@ -196,7 +199,7 @@
           <h2 class="panel-title"><span class="tag">N-04</span> Grin nodes by country <span class="right">30d · top 10 · <a class="tlink" href="https://world.grin.money/" target="_blank" rel="noopener">see details ↗</a></span></h2>
           <div class="panel-body">
             <div class="nm-donut-wrap"><svg class="nm-donut" id="nm-donut-nodes" viewBox="0 0 200 200" role="img" aria-label="Grin node distribution by country"></svg><div class="nm-dlegend" id="nm-legend-nodes"></div></div>
-            <p class="nm-chart-note">Distinct <b>Grin P2P peers</b> this pool's node has seen over the last 30 days, by country.</p>
+            <p class="nm-chart-note" id="nm-nodes-note">Distinct <b>Grin nodes</b> this pool's node has handshaked with over the last 30 days, by country.</p>
           </div>
         </section>
       </div>

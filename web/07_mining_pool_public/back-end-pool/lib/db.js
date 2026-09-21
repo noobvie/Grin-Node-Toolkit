@@ -359,7 +359,11 @@ function migrateWithdrawals() {
       // Flat withdrawal fee charged to the miner, frozen at request time (see CREATE TABLE).
       // Legacy rows default to 0 — those payouts predate the fee and sent the full amount, so
       // 0 is the historically CORRECT value, not a placeholder.
-      fee_charged: 'REAL NOT NULL DEFAULT 0.0'
+      fee_charged: 'REAL NOT NULL DEFAULT 0.0',
+      // Signed payment proof JSON (see CREATE TABLE). Backfilled by
+      // withdrawal-scheduler.backfillPaymentProofs(); older confirmed Tor rows get theirs too,
+      // since the wallet keeps the proof for as long as it keeps the transaction.
+      payment_proof: 'TEXT DEFAULT NULL'
     };
     for (const [name, def] of Object.entries(additions)) {
       if (!have.has(name)) {
@@ -388,17 +392,22 @@ function migrateLotteryDraws() {
   }
 }
 
-// Additive, non-destructive: add the sampled network hashrate to an existing
-// pool_metrics_hourly table (older DBs predate it). NULL = hour rolled up before the
-// column existed / node unreachable at rollup time — trend charts skip those points.
+// Additive, non-destructive: add the sampled network hashrate and the distinct worker
+// count to an existing pool_metrics_hourly table (older DBs predate them). NULL = hour
+// rolled up before the column existed / node unreachable at rollup time — trend charts
+// skip those points (a gap, never a 0).
 function migratePoolMetricsHourly() {
   try {
     const cols = db.prepare("PRAGMA table_info(pool_metrics_hourly)").all();
-    if (cols.length === 0) return; // fresh DB: CREATE TABLE below has the column
+    if (cols.length === 0) return; // fresh DB: CREATE TABLE below has the columns
     const have = new Set(cols.map(c => c.name));
     if (!have.has('network_hashrate_gps')) {
       db.exec(`ALTER TABLE pool_metrics_hourly ADD COLUMN network_hashrate_gps REAL DEFAULT NULL`);
       console.warn(`[db] pool_metrics_hourly: added missing column network_hashrate_gps`);
+    }
+    if (!have.has('worker_count')) {
+      db.exec(`ALTER TABLE pool_metrics_hourly ADD COLUMN worker_count INTEGER DEFAULT NULL`);
+      console.warn(`[db] pool_metrics_hourly: added missing column worker_count`);
     }
   } catch (e) {
     console.error(`[db] pool_metrics_hourly migration check failed: ${e.message}`);
@@ -420,6 +429,58 @@ function migrateShares() {
     }
   } catch (e) {
     console.error(`[db] shares migration check failed: ${e.message}`);
+  }
+}
+
+// ONE-SHOT unit change, marker-guarded: every share-derived number written before 2026-09-20
+// was recorded 16384× too small. shares.difficulty held the session's vardiff placeholder (1.0)
+// instead of the job target × the Cuckatoo32 graph weight (the chain's difficulty unit — see
+// stratum-protocol.js shareCreditDifficulty), and every figure summed from it inherited the
+// error: blocks.round_shares (luck), hashrate_history (account/pool charts, lottery ticket
+// weight), miner_hashrate_daily (top-average leaderboard), pool_metrics_hourly and
+// pool_region_metrics_hourly (trend charts). All are linear in the share credit, so one
+// multiply makes old rows the same unit as new ones.
+//
+// Why rescale rather than let history read ~0: shares.difficulty is PPLNS weight. A block
+// found in the first window after the upgrade would otherwise split its reward across rows in
+// two units, paying the pre-upgrade shares 1/16384 of a post-upgrade share for identical work
+// — the same skew in a lottery draw's ticket weight. Assumes the job target was 1 for the old
+// rows, which is grin's default minimum_share_difficulty and the only value the toolkit ever
+// deploys. pool_metrics_hourly.network_hashrate_gps is a NODE sample and is deliberately not
+// touched. Runs inside one transaction; a fresh DB just records the marker.
+function migrateShareCreditUnit() {
+  const MARKER = 'share_credit_c32_units';
+  try {
+    const done = db.prepare(
+      "SELECT value FROM pool_config WHERE section = '_migrations' AND key = ?"
+    ).get(MARKER);
+    if (done) return;
+    const FACTOR = 16384; // C32_GRAPH_WEIGHT — literal on purpose: a migration must not move
+                          // with the constant, it records what the OLD rows were short by.
+    const tx = db.transaction(() => {
+      const n = {};
+      n.shares   = db.prepare('UPDATE shares SET difficulty = difficulty * ?').run(FACTOR).changes;
+      n.blocks   = db.prepare('UPDATE blocks SET round_shares = round_shares * ? WHERE round_shares IS NOT NULL').run(FACTOR).changes;
+      n.history  = db.prepare('UPDATE hashrate_history SET hashrate_gps = hashrate_gps * ?').run(FACTOR).changes;
+      n.daily    = db.prepare('UPDATE miner_hashrate_daily SET gps_seconds = gps_seconds * ?').run(FACTOR).changes;
+      n.hourly   = db.prepare('UPDATE pool_metrics_hourly SET pool_hashrate_gps = pool_hashrate_gps * ?').run(FACTOR).changes;
+      n.regional = db.prepare('UPDATE pool_region_metrics_hourly SET hashrate_gps = hashrate_gps * ?').run(FACTOR).changes;
+      db.prepare(`
+        INSERT INTO pool_config (section, key, value, value_type)
+        VALUES ('_migrations', ?, '1', 'string')
+        ON CONFLICT(section, key) DO NOTHING
+      `).run(MARKER);
+      return n;
+    });
+    const n = tx();
+    const total = Object.values(n).reduce((a, b) => a + b, 0);
+    if (total > 0) {
+      console.warn(`[db] share credit unit: rescaled pre-2026-09-20 rows ×${FACTOR} — ` +
+                   Object.entries(n).map(([k, v]) => `${k}=${v}`).join(' '));
+    }
+  } catch (e) {
+    // Rolled back as a whole; the marker is inside the transaction, so the next boot retries.
+    console.error(`[db] share credit unit migration failed: ${e.message}`);
   }
 }
 
@@ -584,6 +645,7 @@ function createSchema() {
       earnings          REAL    NOT NULL DEFAULT 0,  -- block rewards confirmed that hour (by confirmed_at)
       payout            REAL    NOT NULL DEFAULT 0,  -- withdrawals confirmed that hour (by confirmed_at)
       network_hashrate_gps REAL DEFAULT NULL,  -- network GPS sampled at rollup time (NULL = no sample)
+      worker_count      INTEGER DEFAULT NULL,  -- distinct (address, worker_name) rigs active that hour (NULL = pre-column hour)
       updated_at        INTEGER NOT NULL DEFAULT (unixepoch())
     )`,
 
@@ -624,7 +686,12 @@ function createSchema() {
       cancel_reason TEXT DEFAULT NULL,
       created_at INTEGER NOT NULL DEFAULT (unixepoch()),
       confirmed_at INTEGER DEFAULT NULL,
-      kernel_excess TEXT DEFAULT NULL
+      kernel_excess TEXT DEFAULT NULL,
+      -- grin-wallet PaymentProof JSON (amount, excess, recipient_address, recipient_sig,
+      -- sender_address, sender_sig), fetched from the Owner API once the payout is confirmed.
+      -- NULL = not fetched yet; '' = the wallet holds no proof for this tx (the slatepack/
+      -- nostr rail never requests one), so the backfill stops asking.
+      payment_proof TEXT DEFAULT NULL
     )`,
 
     `CREATE INDEX IF NOT EXISTS idx_withdrawal_address ON withdrawals(grin_address, status)`,
@@ -1079,6 +1146,7 @@ function createSchema() {
   migrateWithdrawals();
   migrateLotteryDraws();
   migratePoolMetricsHourly();
+  migrateShareCreditUnit(); // after migrateShares/migrateBlocks: it touches columns they add
   migrateLocations();
   migrateAds();
   migratePagesFromConfig();

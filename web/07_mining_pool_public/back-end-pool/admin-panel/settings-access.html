@@ -123,8 +123,9 @@
             gateway is located to its <strong>country only</strong>, drawn as the filled country
             itself, with the marker on that country's exact centroid — so the shape states
             exactly the precision we hold. Together they still publish <strong>which countries
-            mine here and which countries this node peers with</strong>. Off by default. While
-            off, both endpoints return 404 and the page renders its illustrative sample globe.
+            mine here and which countries this node peers with</strong>. On by default. While
+            off, both endpoints return 404 and the page shows an empty globe with a notice that
+            the pool has not published its network map (there is no sample data).
           </div>
           <div class="checkbox-group">
             <input type="checkbox" id="network_map_public" name="network_map_public">
@@ -132,12 +133,14 @@
           </div>
           <div class="form-group">
             <label for="network_map_min_bucket">Minimum entries per country</label>
-            <input type="number" id="network_map_min_bucket" name="network_map_min_bucket" min="1" max="100" value="3">
+            <input type="number" id="network_map_min_bucket" name="network_map_min_bucket" min="1" max="100" value="1">
             <div class="helper-text">
               Applies only when publishing is on. A country with fewer than this many miners
-              or peers is folded into an unnamed <em>Other</em> bucket instead of being named,
-              so a country holding one participant never points at one person. Totals still
-              include them. Raise it on a small pool; <code>1</code> disables the protection.
+              or peers is folded into an unnamed <em>Other</em> bucket instead of being named.
+              Default <code>1</code> = no floor, so a country lights up on the globe from its
+              first miner. Raise it (e.g. <code>3</code>) if naming a country with a single
+              participant would point at one person; totals still include the folded ones.
+              The same floor applies to per-region miner counts on a multi-region pool.
             </div>
           </div>
           <div class="form-group">
@@ -166,8 +169,10 @@
           <div class="helper-text">
             Stratum passwords listed here are <strong>never</strong> accepted as ownership proof on the
             public account page — additions on top of the built-in list (<code>x</code>, <code>123</code>,
-            <code>worker</code>, per-vendor factory defaults, anything under 8 characters, and any single
-            repeated character such as <code>xxxx</code> or <code>0000</code>). Add entries when you
+            <code>worker</code>, per-vendor factory defaults, anything under 8 characters, any single
+            repeated character such as <code>xxxx</code> or <code>0000</code>, straight digit runs such as
+            <code>12345678</code>, and anything with characters outside printable ASCII — accented or
+            non-Latin letters arrive mangled from most ASIC firmware and could never match). Add entries when you
             spot a new firmware default in the wild. Case-insensitive; the built-in list cannot be removed.
           </div>
           <div class="form-group">

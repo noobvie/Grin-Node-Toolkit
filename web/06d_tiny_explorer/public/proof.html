@@ -81,7 +81,7 @@
       <div class="tx-row-label" style="margin-bottom:8px">Payment proof (JSON)</div>
       <textarea id="pf-input" class="tx-pf-input" spellcheck="false" autocomplete="off"
                 autocapitalize="off" autocorrect="off"
-                placeholder='Paste the file written by:  grin-wallet export_proof --id &lt;tx id&gt; proof.json&#10;&#10;{&#10;  "amount": "1000000000",&#10;  "excess": "09…",&#10;  "recipient_address": "grin1…",&#10;  "recipient_sig": "…",&#10;  "sender_address": "grin1…",&#10;  "sender_sig": "…"&#10;}'
+                placeholder='Paste the file written by:  grin-wallet export_proof --id &lt;tx id&gt; proof.json&#10;(only a send made with  -d &lt;slatepack address&gt;  carries a proof — coinbase, received and manual-file transactions have none)&#10;&#10;{&#10;  "amount": "1000000000",&#10;  "excess": "09…",&#10;  "recipient_address": "grin1…",&#10;  "recipient_sig": "…",&#10;  "sender_address": "grin1…",&#10;  "sender_sig": "…"&#10;}'
                 aria-label="Paste a grin-wallet payment proof JSON file"></textarea>
       <p class="tx-pf-drophint">…or drop the <code>.json</code> file anywhere on this page.</p>
       <div class="tx-wc-actions">
@@ -130,10 +130,15 @@
       <summary>How to produce one, and what is inside it</summary>
       <div class="tx-details-body">
         <ul>
-          <li><strong>The payer asks for it when sending.</strong> A payment proof only exists if the
-            send was addressed to a Slatepack address and the recipient's wallet signed the receipt.
-            Export it afterwards with <code>grin-wallet export_proof --id &lt;tx id&gt; proof.json</code>,
-            and check your own copy with <code>grin-wallet verify_proof proof.json</code>.</li>
+          <li><strong>It is requested automatically, in the standard flow only.</strong>
+            <code>grin-wallet send -d &lt;slatepack address&gt;</code> asks the recipient to sign a
+            proof unless you pass <code>-n</code> (<code>--no_payment_proof</code>); a manual send
+            with no <code>-d</code> has no address to sign for, and the invoice flow
+            (<code>invoice</code> / <code>pay</code>) never carries one. Export it once the
+            transaction is finalized &mdash; it does not need to be confirmed yet &mdash; with
+            <code>grin-wallet export_proof --id &lt;tx id&gt; proof.json</code>, where the id is the
+            number shown by <code>grin-wallet txs</code> (or <code>-t &lt;slate uuid&gt;</code>), and
+            check your own copy with <code>grin-wallet verify_proof proof.json</code>.</li>
           <li><strong>Six keys, no envelope.</strong> The file is one JSON object:
             <code>amount</code> (nanogrin), <code>excess</code> (the 33-byte kernel commitment),
             and an address plus signature for each side. No version field, no timestamp, no

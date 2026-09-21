@@ -123,6 +123,7 @@ class WithdrawalScheduler {
         // Read-only: attach on-chain kernel proofs to confirmed payouts. Never moves funds, so
         // it runs regardless of the freeze state. Self-throttled + no-op when nothing's pending.
         await this.backfillKernelProofs();
+        await this.backfillPaymentProofs();
       } catch (err) {
         console.error(`[ERROR] Withdrawal scheduler error: ${err.message}`);
       }
@@ -423,6 +424,20 @@ class WithdrawalScheduler {
         }
 
         if (!prior.checked) {
+          // A row that has ALREADY been deferred is one whose outcome was declared unknown —
+          // an unconfirmed send was seen, or the last rung could not read the log. That
+          // statement stands until the wallet is read again; an unreadable wallet cannot
+          // dissolve it, so a deferred row is re-parked, never sent blind. Only a row with no
+          // deferral behind it takes the proceed-loudly branch below (brief outage on an
+          // ordinary retry; nothing has said "maybe posted" about it yet).
+          const everDeferred = this.db.prepare(
+            "SELECT 1 FROM withdrawal_events WHERE withdrawal_id = ? AND note LIKE 'deferred:%' LIMIT 1"
+          ).get(withdrawalId);
+          if (everDeferred) {
+            this._deferSend(withdrawalId, withdrawal.slate_id,
+              'wallet tx log could not be read after an earlier deferral');
+            return;
+          }
           console.error(
             `⚠️  Withdrawal ${withdrawalId}: retrying WITHOUT a double-send check — the wallet tx log ` +
             `could not be read. If this payout later looks duplicated, this is where to look.`
@@ -593,14 +608,19 @@ class WithdrawalScheduler {
   //
   // The balance stays locked and the row stays inside PENDING_SQL throughout, so the miner cannot
   // start a second withdrawal against money that may already be moving.
-  _deferSend(withdrawalId, slateId) {
+  //
+  // `why` overrides the default cause in the event note (the last-rung guard parks a row whose
+  // wallet could not be READ, which is not "holds an unconfirmed send"). It must keep the
+  // 'deferred:' prefix — the deferral counter above is keyed on it.
+  _deferSend(withdrawalId, slateId, why = null) {
     try {
       const priorDefers = this.db.prepare(
         "SELECT COUNT(*) AS c FROM withdrawal_events WHERE withdrawal_id = ? AND note LIKE 'deferred:%'"
       ).get(withdrawalId).c;
 
       const nextAt = Math.floor(Date.now() / 1000) + SEND_DEFER_S;
-      const note = `deferred: wallet holds an unconfirmed send${slateId ? ` (slate ${slateId})` : ''} — outcome unknown`;
+      const cause = why || `wallet holds an unconfirmed send${slateId ? ` (slate ${slateId})` : ''}`;
+      const note = `deferred: ${cause} — outcome unknown`;
 
       const moved = this.db.transaction(() => {
         // Guarded on the status this attempt claimed, exactly like scheduleRetry: an admin
@@ -629,7 +649,7 @@ class WithdrawalScheduler {
         );
       } else {
         console.warn(
-          `[double-send guard] withdrawal ${withdrawalId}: an unconfirmed send matches this payout — ` +
+          `[double-send guard] withdrawal ${withdrawalId}: ${cause} — ` +
           `neither confirming nor re-sending, re-asking in ${SEND_DEFER_S}s (deferral ${priorDefers + 1})`
         );
       }
@@ -741,6 +761,104 @@ class WithdrawalScheduler {
     }
   }
 
+  // ─── Signed payment proofs (dispute evidence) ───────────────────────────────
+  // The kernel above proves a transaction was MINED; it does not, on its own, prove WHO received
+  // it — a kernel carries no addresses, so a pool could point at any kernel and write a miner's
+  // address beside it. The payment proof closes that: grin-wallet's PaymentProof carries the
+  // RECIPIENT's ed25519 signature over (amount ‖ excess ‖ sender address), and the recipient key
+  // IS the miner's grin1 address, so it is third-party-verifiable evidence that this wallet took
+  // this amount at this kernel (`grin-wallet verify_proof`, or the explorer's /proof page).
+  //
+  // Only the Tor CLI rail has one: `grin-wallet send -d grin1…` requests a proof by default for
+  // a slatepack destination. The Owner-API slatepack/nostr rail passes
+  // payment_proof_recipient_address: null (lib/wallet.js initSendTx) — turning that on changes
+  // the slate every recipient wallet must sign and is a money-path change, so it is NOT done
+  // here; those rows keep '' (none) and the kernel remains their evidence.
+  //
+  // Read-only + best-effort, like the kernel backfill: never moves funds, runs while frozen.
+  // Only rows the kernel backfill has already seen CONFIRMED are asked (the wallet refuses a
+  // proof for an unconfirmed tx), so the call is a local tx-log read — no node round-trip.
+  // '' is a terminal answer ("the wallet holds no proof for this tx") so a row is never asked
+  // twice; a transient failure leaves NULL and is retried on a later tick, logged once per row.
+  async fetchAndStorePaymentProof(withdrawalId) {
+    if (!this.wallet || typeof this.wallet.retrievePaymentProof !== 'function') {
+      return { ok: false, reason: 'owner_api_unavailable' };
+    }
+    const w = this.db.prepare(
+      'SELECT id, status, method, slate_id, kernel_excess, payment_proof FROM withdrawals WHERE id = ?'
+    ).get(withdrawalId);
+    if (!w) return { ok: false, reason: 'not_found' };
+    if (w.payment_proof) return { ok: true, proof: JSON.parse(w.payment_proof), cached: true };
+    if (w.payment_proof === '') return { ok: false, reason: 'none' };
+    if (w.status !== 'confirmed' || !w.slate_id || !w.kernel_excess) return { ok: false, reason: 'not_confirmed' };
+    if (w.method !== 'tor') {
+      // The rail never requested one — record that so the backfill does not keep asking.
+      this.db.prepare("UPDATE withdrawals SET payment_proof = '' WHERE id = ? AND payment_proof IS NULL").run(withdrawalId);
+      return { ok: false, reason: 'none' };
+    }
+    try {
+      const proof = await this.wallet.retrievePaymentProof(w.slate_id, false);
+      if (!proof || typeof proof !== 'object' || !proof.recipient_sig || !proof.excess) {
+        return { ok: false, reason: 'malformed' };
+      }
+      // The proof must be OUR payout: the kernel the backfill attached and the kernel the
+      // wallet signed over have to agree, or a wrong slate_id (§J4-11's failure class) would
+      // hand the miner a stranger's proof file.
+      if (String(proof.excess).toLowerCase() !== String(w.kernel_excess).toLowerCase()) {
+        console.error(
+          `[payment-proof] withdrawal ${withdrawalId}: proof excess ${proof.excess} does not match the row's ` +
+          `kernel ${w.kernel_excess} — NOT storing (slate_id ${w.slate_id} may be misattributed)`
+        );
+        return { ok: false, reason: 'kernel_mismatch' };
+      }
+      this.db.prepare('UPDATE withdrawals SET payment_proof = ? WHERE id = ? AND payment_proof IS NULL')
+        .run(JSON.stringify(proof), withdrawalId);
+      return { ok: true, proof, cached: false };
+    } catch (err) {
+      const msg = String(err.message || err);
+      // grin-wallet's definitive "this tx has no proof" errors — terminal, stop asking.
+      if (/no payment proof|does not (have|contain) a payment proof|payment proof not (present|requested|found)/i.test(msg)) {
+        this.db.prepare("UPDATE withdrawals SET payment_proof = '' WHERE id = ? AND payment_proof IS NULL").run(withdrawalId);
+        return { ok: false, reason: 'none' };
+      }
+      this._proofWarned = this._proofWarned || new Set();
+      if (!this._proofWarned.has(withdrawalId)) {
+        this._proofWarned.add(withdrawalId);
+        console.warn(`[payment-proof] withdrawal ${withdrawalId}: could not retrieve proof (${msg}) — will retry`);
+      }
+      return { ok: false, reason: 'error', error: msg };
+    }
+  }
+
+  async backfillPaymentProofs() {
+    if (!this.wallet) return;
+    try {
+      // Cheap local reads, but bound the per-tick work so a wallet outage cannot turn every
+      // tick into a burst of failing calls. Newest first: a fresh payout is the one a miner is
+      // about to look for.
+      if (this._lastProofScan && (Date.now() - this._lastProofScan) < 60000) return;
+      const pending = this.db.prepare(
+        `SELECT id FROM withdrawals
+         WHERE status = 'confirmed' AND method = 'tor' AND payment_proof IS NULL
+           AND slate_id IS NOT NULL AND kernel_excess IS NOT NULL
+         ORDER BY id DESC LIMIT 20`
+      ).all();
+      if (!pending.length) return;
+      this._lastProofScan = Date.now();
+      let stored = 0;
+      for (const w of pending) {
+        const r = await this.fetchAndStorePaymentProof(w.id);
+        if (r.ok && !r.cached) stored++;
+        else if (r.reason === 'owner_api_unavailable') return;
+      }
+      if (stored) {
+        console.log(`[${new Date().toISOString()}] payment-proof backfill: stored ${stored} signed proof(s)`);
+      }
+    } catch (err) {
+      console.warn(`[payment-proof] backfill skipped: ${err.message}`);
+    }
+  }
+
   // After a Tor CLI send, record the slate_id of the just-broadcast tx so backfillKernelProofs()
   // can later attach its on-chain kernel excess (the CLI rail never returns a structured slate).
   // Best-effort + READ-ONLY: any failure leaves slate_id NULL (that payout just won't get a proof
@@ -809,14 +927,73 @@ class WithdrawalScheduler {
   // Uses the shared guarded/transactional reversal — critically, this means a row the double-send
   // guard has already confirmed can never be reversed on top of it.
   //
-  // The guard reads the row's CURRENT status rather than assuming one. In practice this is always
-  // 'tor_sending' (scheduleRetry is only ever reached from inside sendWithdrawal, after the claim),
-  // NOT the 'retry_scheduled' the old event row claimed — but reading it keeps the compare-and-swap
-  // honest for any future caller. Both statements are synchronous, so nothing can interleave
-  // between the read and the swap; a status that changed anyway loses the swap and is skipped.
+  // ── Last-rung guard ──────────────────────────────────────────────────────────
+  // The double-send guard in sendWithdrawal runs BEFORE each re-attempt, so it covers attempts
+  // 0..N-1. It never covered attempt N: the final send that "failed" went straight here, and
+  // here reversed the lock with no question asked. A `grin-wallet send` that reports failure
+  // may still have posted (SIGKILLed at wallet_send_timeout_ms after the broadcast — §E.1), and
+  // on the final rung that is not a timing accident a miner has to get lucky with: the ladder
+  // is deterministic and the retry count is on their account page, so a wallet that stays dark
+  // for attempts 0..N-1 and then answers attempt N slowly enough to straddle the timeout keeps
+  // the coins AND gets the balance back. So the final rung makes the same three-way decision a
+  // re-attempt does, against the wallet's own tx log:
+  //   confirmed    → the payout landed; settle it, never refund
+  //   unconfirmed  → outcome unknown; park it (balance stays locked), re-ask in SEND_DEFER_S
+  //   absent       → never posted; reverse the lock — the only branch that refunds
+  // A wallet that cannot be read is treated like 'unconfirmed', NOT like sendWithdrawal's
+  // proceed-loudly: there, proceeding keeps live money moving through a brief outage; here the
+  // only thing "proceeding" does is refund, and a refund on top of a landed send is the one
+  // outcome that cannot be undone. Waiting costs the miner minutes; guessing costs the pool the
+  // payout twice.
+  //
+  // The reversal reads the row's CURRENT status rather than assuming one. In practice this is
+  // always 'tor_sending' (scheduleRetry is only ever reached from inside sendWithdrawal, after
+  // the claim), NOT the 'retry_scheduled' the old event row claimed — but reading it keeps the
+  // compare-and-swap honest for any future caller. Both statements are synchronous, so nothing
+  // can interleave between the read and the swap; a status that changed anyway loses the swap.
   async markFailed(withdrawalId) {
-    const w = this.db.prepare('SELECT amount, status FROM withdrawals WHERE id = ?').get(withdrawalId);
+    const w = this.db.prepare('SELECT * FROM withdrawals WHERE id = ?').get(withdrawalId);
     if (!w) return;
+
+    const netSend = this._netSend(w.amount, w.fee_charged || 0);
+    let prior = { checked: false, outcome: 'unknown', tx: null };
+    try {
+      prior = await this._priorSendLanded(w, netSend);
+    } catch (e) {
+      console.error(`[last-rung guard] withdrawal ${withdrawalId}: tx-log check threw (${e.message}) — treating as unknown`);
+    }
+    if (prior.outcome === 'confirmed') {
+      const slate = prior.tx && prior.tx.tx_slate_id;
+      console.warn(
+        `[last-rung guard] withdrawal ${withdrawalId}: the final attempt reported failure but its send is ` +
+        `CONFIRMED on chain${slate ? ` (slate ${slate})` : ''} — settling instead of refunding`
+      );
+      if (slate) {
+        this.db.prepare('UPDATE withdrawals SET slate_id = COALESCE(slate_id, ?) WHERE id = ?')
+          .run(String(slate), withdrawalId);
+      }
+      // Same settlement as sendWithdrawal's recovered branch: the network fee is recorded so
+      // reconciliation can explain the wallet-vs-ledger gap this payout leaves.
+      await this.recordTorFee(withdrawalId, netSend);
+      await this.markConfirmed(withdrawalId, 'recovered on the last rung: final attempt confirmed in the wallet tx log');
+      return;
+    }
+    if (prior.outcome === 'unconfirmed' || !prior.checked) {
+      if (!prior.checked) {
+        console.error(
+          `⚠️  [last-rung guard] withdrawal ${withdrawalId}: the wallet tx log could not be read, so it is ` +
+          `unknown whether the final attempt posted. NOT refunding — parked with the balance locked until ` +
+          `the wallet answers.`
+        );
+      }
+      this._deferSend(
+        withdrawalId,
+        prior.tx && prior.tx.tx_slate_id,
+        prior.checked ? null : 'last rung reached but the wallet tx log could not be read'
+      );
+      return;
+    }
+
     const ok = this._reverseLock(withdrawalId, 'tor_failed', w.status, 'Max retries exceeded');
     if (ok) {
       console.warn(

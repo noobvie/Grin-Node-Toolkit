@@ -170,6 +170,37 @@ function validateUsername(username, network = null) {
   };
 }
 
+// ── Share work credit ──────────────────────────────────────────────────────────────────────
+// The `difficulty` a job carries is the node's `minimum_share_difficulty` (grin-server.toml,
+// default 1 — the toolkit never changes it). A miner submits a solution only when that
+// solution's UNSCALED difficulty (2^64 / blake2b(packed nonces)) is ≥ the job value — see
+// grin-miner cuckoo-miner/src/miner/miner.rs, which filters on `to_difficulty_unscaled()`.
+// The chain does not count difficulty in that unit: a header's difficulty (and so the
+// per-block network difficulty = total_difficulty delta) is the unscaled value × the graph
+// weight, `(2 << (edge_bits − BASE_EDGE_BITS 24)) × edge_bits` = 16384 for Cuckatoo32. So one
+// accepted share represents `job_difficulty × 16384` of chain-unit work, which is the number
+// every consumer of shares.difficulty needs: /api/pool/effort divides the round's Σ by the
+// per-block network difficulty, luck divides blocks.round_shares by the same, and the GPS
+// formula divides by this very constant — `GPS = Σ × 42 / window / 16384` collapses to
+// `shares × job_diff × 42 / window`, i.e. one C32 graph yields a 42-cycle about once in 42.
+//
+// Until 2026-09-20 every share was recorded at difficulty 1 — the session's never-tuned
+// vardiff placeholder — and every derived figure (pool/miner/worker hashrate, the charts,
+// round effort, luck) read 16384× too small: a rig turning in 30 shares an hour showed
+// 0.00 G/s. db.js migrateShareCreditUnit rescales rows written before the fix.
+//
+// This credits the TARGET the miner was told, not the solution's actual difficulty (which is
+// heavy-tailed — see the SHARE_CREDIT_DIFF note in scripts/lib/07_mining_block_collector.py).
+// The pool does not recompute the proof hash; the node is the PoW authority and, at the
+// default target of 1, every valid cycle is a share, so target and actual floor coincide.
+const C32_GRAPH_WEIGHT = 16384;
+
+function shareCreditDifficulty(jobDifficulty) {
+  const d = Number(jobDifficulty);
+  // Difficulty::from_num clamps at 1 in grin; a job can never ask for less.
+  return (Number.isFinite(d) && d >= 1 ? d : 1) * C32_GRAPH_WEIGHT;
+}
+
 // Server → all miners: push a new job when the node finds a new block height.
 // Miners must use the returned job_id in their submit.
 function createJobNotification(jobId, height, difficulty, prePow) {
@@ -244,6 +275,8 @@ function createStatusResponse(id, sessionStats) {
 module.exports = {
   parseStratumMessage,
   validateUsername,
+  C32_GRAPH_WEIGHT,
+  shareCreditDifficulty,
   bech32ChecksumValid,   // exported for scripts/test-stratum-guards.js (BIP-173 vectors)
   createJobNotification,
   createLoginResponse,

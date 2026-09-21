@@ -434,7 +434,12 @@ const payTable = AdminTable.create({
     const [cls, label] = STATUS[w.status] || ['badge-dim', w.status];
     const canRetry  = w.status === 'retry_scheduled' || w.status === 'tor_failed';
     const canCancel = w.status === 'retry_scheduled' || w.status === 'tor_checking' || w.status === 'tor_failed';
+    // Signed payment proof — the dispute document (recipient's own signature over amount +
+    // kernel + sender). Only a confirmed Tor payout can have one; a row whose backfill has not
+    // stored it yet still gets the button, because the route fetches it from the wallet on demand.
+    const canProof = w.status === 'confirmed' && w.method === 'tor' && w.slate_id && w.kernel_excess;
     let actions = '';
+    if (canProof)  actions += `<button class="btn-icon" onclick="downloadProof(${w.id})" data-tip="${w.has_payment_proof ? 'Download the signed payment proof' : 'Fetch the signed payment proof from the wallet and download it'}" aria-label="Download the signed payment proof">🧾</button>`;
     if (canRetry)  actions += `<button class="btn-icon" onclick="retryWithdrawal(${w.id})" data-tip="Retry this payout now" aria-label="Retry this payout now">🔁</button>`;
     if (canCancel) actions += `<button class="btn-icon btn-icon-danger" onclick="cancelWithdrawal(${w.id}, ${fmtGrin(w.amount)})" data-tip="Cancel this payout (refunds the balance)" aria-label="Cancel this payout">❌</button>`;
     actions = actions
@@ -483,6 +488,26 @@ function flash(msg, isErr) {
   el.className = isErr ? 'error-msg' : 'success-msg';
   el.style.display = '';
   setTimeout(() => { el.style.display = 'none'; }, 5000);
+}
+
+// Saves the proof as the JSON `grin-wallet export_proof` would write, so `grin-wallet
+// verify_proof <file>` (or the explorer's /proof page) accepts it unchanged. 409 means the
+// row has no proof to give (non-Tor rail, or not confirmed yet); 503 means the wallet could
+// not be asked — both are shown verbatim, neither is retried automatically.
+async function downloadProof(id) {
+  try {
+    const res = await adminFetch('/api/admin/withdrawals/' + id + '/payment-proof');
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.error || ('HTTP ' + res.status));
+    const blob = new Blob([JSON.stringify(body.proof, null, 2) + '\n'], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'payout-' + id + '-proof.json';
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    flash(`Proof for withdrawal #${id} ${body.cached ? 'downloaded' : 'fetched from the wallet and downloaded'} — verify with: grin-wallet verify_proof payout-${id}-proof.json`, false);
+    if (!body.cached) refresh();
+  } catch (err) { flash(err.message, true); }
 }
 
 async function retryWithdrawal(id) {

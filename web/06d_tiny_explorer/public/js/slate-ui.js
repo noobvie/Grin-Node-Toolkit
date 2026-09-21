@@ -16,6 +16,12 @@
       .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   }
 
+  // Guide text with `wallet command` spans → escaped HTML with <code>. The
+  // only markup the guide may carry; everything else is escaped.
+  function guideText(s) {
+    return esc(s).replace(/`([^`]+)`/g, '<code>$1</code>');
+  }
+
   // Kernel feature codes as used by the node/wallet.
   const KERNEL_FEATURES = {
     0: 'Plain',
@@ -76,14 +82,21 @@
         <div class="sp-panel-label">Encrypted slatepack</div>
         <p class="sp-locked-title">&#128274; Sealed to the recipient</p>
         <p class="sp-locked-body">
-          This slatepack is encrypted. The sender's address, the amount, and the transaction step
-          are all inside the encrypted payload — only the wallet holding the recipient's key can
-          open it. That is the format working as intended, not an error.
+          This slatepack is encrypted. The author's address, the amount, and the transaction step
+          are all inside the encrypted payload — only the wallet it was addressed to can open it,
+          and this page cannot even tell which step it is. That is the format working as intended,
+          not an error.
         </p>
         <p class="sp-locked-body" style="margin-top:12px">
-          To read it, receive it in the wallet it was addressed to. If you expected a readable
-          slate, ask the sender to produce one with <code>grin-wallet send</code> <em>without</em>
-          a <code>-d</code> destination.
+          <strong>If this is a reply to your own send or invoice</strong>, it is sealed to you:
+          <code>grin-wallet unpack</code> shows what is inside without acting on it, and
+          <code>grin-wallet finalize</code> completes the transaction. Replies are always encrypted,
+          even when the first slatepack was readable here.
+        </p>
+        <p class="sp-locked-body" style="margin-top:12px">
+          <strong>If this is a payment or invoice you were handed</strong>, open it with
+          <code>grin-wallet receive</code> or <code>pay</code>. If you wanted to check it here first,
+          ask the other side to produce it <em>without</em> a <code>-d</code> destination.
         </p>
       </div>
       <div class="sp-panel">
@@ -144,7 +157,9 @@
 
         <div class="sp-next">
           <div class="sp-next-label">${isFinal ? 'Status' : 'Your next move'}</div>
-          <p>${esc(g.next)}</p>
+          ${g.next.map(n => n.role
+              ? `<p><b class="sp-next-role">If you are the ${esc(n.role.toLowerCase())}:</b> ${guideText(n.text)}</p>`
+              : `<p>${guideText(n.text)}</p>`).join('')}
         </div>
 
         ${netWarn}

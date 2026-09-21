@@ -3,7 +3,7 @@
 > **Covers code as of:** 2026-09-07 · **Last verified:** 2026-09-07 — §§1–8 and §11 re-derived from
 > `scripts/07_grin_mining_public_pool.sh`, `scripts/lib/07_lib_{gateway,gwctl,hub,pool_backup,pool_wallet}.sh`
 > and `web/07_mining_pool_public/back-end-pool/`. §§9–10 are as-written add-on notes, not re-verified.
-> **Product code last changed:** 2026-09-04 — `scripts/07_grin_mining_*.sh`, `scripts/lib/07_lib_*.sh`, `web/07_mining_pool_public/`
+> **Product code last changed:** 2026-09-20 (share credit unit + one shared `MinerManager` — first live-miner test found every hashrate at 0.00 G/s and MINERS ONLINE 0; §7 rows 3–4. Earlier the same day: pairing string carries the public port; gateway Status boot line, design §13.12s) — `scripts/07_grin_mining_*.sh`, `scripts/lib/07_lib_*.sh`, `web/07_mining_pool_public/`
 
 Deployment layout, build/wiring status, database runbook, pre-launch checklist, multi-region
 (Model C) as-built, and troubleshooting for the public pool. Design lives in
@@ -214,7 +214,7 @@ unless noted.
 | Dormancy sweep | `dormancy.js` | 6 h (first pass +60 s) | 24-month abandoned-balance disposition → prize pool |
 | Lottery / campaigns | `index.js` | 1 h | reveal committed draws, then run due draws + campaigns |
 | Loyalty streaks | `index.js` | 24 h | `incentivesManager.updateStreaks()` |
-| Network peer snapshot | `index.js` | 20 min | `snapshotNetworkPeers` |
+| Network peer snapshot | `index.js` | 20 min | `snapshotNetworkPeers` — per node (mainnet + testnet when both run on the box) reads `get_connected_peers` **and** `get_peers` (the node's own peer store, stamped with its `last_connected`); the live list alone is ~8 sticky outbound seats, the store is what the node's own background probing (~100 handshakes / 20 s) has verified. Country-only rows in `network_peers`; feeds `/api/network/peers` |
 | Stale stratum sessions | `stratum-server.js` | 60 s | `pruneInactiveSessions` |
 | miningpoolstats submit | `poolstats-reporter.js` | `poolstats_interval_mins` (default 10) | only when `poolstats_enabled` — **push** mode; the pull feed (§8.6) needs none of this |
 
@@ -311,8 +311,8 @@ that page was deleted on 2026-06-13 in `ea0cc43`. The solo product's own walkthr
 |---|---|
 | Miners connect but get no work | `NodeStratumClient` needs `pool_address` set, or it can't log in to the node's built-in stratum → no jobs. Verify `config.pool_address` and that the node stratum is up on `127.0.0.1:3416`/`13416`. |
 | Miners Alive, **GetWorks = 0**, pool otherwise healthy | The pool wallet is LOCKED. `build_coinbase` needs the decrypted keychain for every template, so a locked wallet halts the whole pool, not just rewards. Re-run the ECDH unlock (`pw_*` autostart/watchdog) — after a crash or reboot the decrypted seed is gone from RAM. |
-| Pool hashrate reads ~0 / meaningless | Hashrate must come from summed accepted-share difficulty over the window (`GPS = sumDiff × 42 / window_s / 16384`), not the assigned session target. |
-| `/api/pool/stats` disagrees with `/api/stratum/stats` | Two `MinerManager` instances — construct one in `index.js` and inject it into the stratum server. |
+| Pool hashrate reads ~0 / meaningless | Hashrate is summed accepted-share difficulty over the window (`GPS = sumDiff × 42 / window_s / 16384`), so what each share is CREDITED must be in the chain's unit: job target × the C32 graph weight (16384), `shareCreditDifficulty()` in `stratum-protocol.js`. **This shipped wrong until 2026-09-20** — every share was written at the session's `1.0` vardiff placeholder, so the first live test (8 rigs, ~350 accepted shares) showed 0.00 G/s on every gauge, chart and worker row, and 0 % round effort. `db.js migrateShareCreditUnit` rescales pre-fix rows once (marker `share_credit_c32_units`) so PPLNS weight and luck stay in one unit across the upgrade. Sanity check after a deploy: one rig at job target 1 = `shares_per_min × 0.7 G/s`. |
+| `/api/pool/stats` disagrees with `/api/stratum/stats` (MINERS ONLINE 0 with rigs connected; every account worker "dropped"; stale/reject `–`) | Two `MinerManager` instances. **Was the shipped state until 2026-09-20**: `index.js` and the `StratumServer` constructor each made their own, and the API side's never held a session. `index.js` now injects its instance (`new StratumServer(config, minerManager)`); the constructor's private fallback is for standalone (test) construction only. |
 | **100 % stale / reject** on a gateway region | **Never latency — suspect the protocol.** Two real causes, both fixed in-repo and both worth re-checking after any stratum change: the pool must echo the **node's own `job_id`** (jobIdMap, kept for the whole submit window), and the u64 **nonce must travel as a string** (`JSON.parse` rounds past 2^53 — the tell is node-logged nonces ending in zeros). |
 | Miner shows "Dead" but the tunnel pings | The gateway's `hub_endpoint` points at the wrong port — e.g. the node stratum (13416) instead of the **assigned central region port** (13391). Diagnose with a raw stratum login over the tunnel (`nc`). Pasting the `GRINGW1\|…` pairing string instead of typing values makes this impossible to mistype. |
 | WireGuard handshake fine, **all TCP dead** | Cryptokey-routing (AllowedIPs) mismatch — the classic cause was a duplicate add-peer moving the hub's AllowedIPs to a fresh tunnel IP while the gateway kept the old one. `grin-gateway-ctl add-peer` now refuses to re-add an existing pubkey (it re-prints the pairing string) and a region keeps its port when its box is replaced. To genuinely re-pair: **remove the peer first**, then add. Handshake age proves the tunnel, not the routing. |
@@ -391,7 +391,7 @@ outside. Treat latency/behaviour claims as "measure on a real link".
 |---|---|---|
 | WireGuard server | central | mainnet `wg-grinpool`, udp **51820**, tunnel net `10.66.66.0/24`; testnet `wg-grinpool-tn`, udp **51821**, `10.66.67.0/24`. Hub is always `.1`, gateways `.2`, `.3`, … Keys/state in `/opt/grin/conf/wg[-testnet]/`. |
 | Region ports | central, `region_ports` in the pool config | allocated from **3391** (mainnet) / **13391** (testnet), bound to `region_listen_host` = the wg server IP |
-| Pairing string | `GRINGW1\|region\|hub_pubkey\|hub_public_endpoint\|hub_tunnel_ip\|gw_tunnel_ip/32\|region_port` | one line, printed by the pool box; paste it on the gateway instead of typing seven values |
+| Pairing string | `GRINGW1\|region\|hub_pubkey\|hub_public_endpoint\|hub_tunnel_ip\|gw_tunnel_ip/32\|region_port\|public_stratum_port` | one line, printed by the pool box; paste it on the gateway instead of typing the values. The 8th field (since 2026-09-20) is the pool's **public miner port** — the gateway must listen on exactly it, so the gateway takes it from here rather than asking. A 7-field string from an older hub still parses (the gateway keeps its saved port); an 8-field string on a pre-2026-09-20 gateway is **rejected** (`read` folds the extra field into `region_port`) — pull both boxes together. |
 | Mutation path | `/usr/local/bin/grin-gateway-ctl` (`init-server`/`add-peer`/`remove-peer`/`list`/`status`) | the ONLY writer of `/etc/wireguard/wg-grinpool*.conf` and `region_ports`; validates every input itself and computes AllowedIPs internally (`0.0.0.0/0` is unrepresentable) |
 | Operator surfaces | admin panel **Regions & Gateways**, or CLI menu **W** | both call the same helper, so they cannot drift. The panel binds a new listener without the service restart the CLI path needs; the CLI is the SSH/offline fallback. |
 | Hub endpoint DNS name | menu `W → 5` | pairing strings then carry a name instead of a raw IP, so a provider/IP change needs only an A-record update + a tunnel restart on each gateway — no re-pairing |
@@ -414,9 +414,18 @@ federation and the core pipeline at the same time.
 1. `1) Install` (haproxy + wireguard-tools + python3; generates the keypair — hand its public key to
    the pool box's add-peer step).
 2. `2) Configure` → paste the `GRINGW1|…` string (or type region / hub endpoint / tunnel keys).
+   The public stratum port it then shows must be the **pool's** public port (`3333` mainnet): the
+   admin Regions card appends that shared port to the region's hostname itself, so a gateway
+   listening anywhere else is advertised on a port it does not serve. A current pairing string
+   carries it (8th field) and pre-fills the prompt; the bracketed value is otherwise whatever was
+   saved on this box last time, not a default.
 3. `3) Bring up tunnel` (`wg-quick up wg-grinpool` — the gateway box always names its single
    tunnel `wg-grinpool`, whichever network the pool is on) → `4) Service control` → start the forwarder.
-4. `5) Status` → tunnel handshake present, `:3333` listening.
+4. `5) Status` → tunnel handshake present, `:3333` listening, and `On reboot : forwarder and
+   tunnel start automatically`. The two units are enabled by two different steps (`1)` enables
+   `grin-gateway`, `3)` enables `wg-quick@wg-grinpool`); a box missing either reboots into
+   `:3333` listening with nothing behind it, which the pool's Port check cannot tell from healthy —
+   Status names the missing one and the `systemctl enable` that fixes it.
 
 **Miner:** point lolMiner/GMiner/IPOLLO at `stratum+tcp://<gateway-ip>:3333`, username
 `<grin_address>.<worker>`. Miners always connect to the public stratum port on their nearest
@@ -652,14 +661,24 @@ Two never-pruned hourly rollup tables (kept out of `lib/retention.js`), written 
   `hashrateTracker.networkGpsProvider` (wired in `index.js` to the block monitor's node client;
   `diff × 42 / 60 / 16384`), fetched at most once per completed hour and applied only to the
   just-completed bucket (catch-up buckets after an outage keep NULL — no fake history). Upsert
-  keeps an existing sample via `COALESCE` when a re-run passes NULL.
+  keeps an existing sample via `COALESCE` when a re-run passes NULL. **2026-09-20: `worker_count`**
+  (additive migration, NULL for hours rolled up before it) — distinct `(grin_address,
+  COALESCE(worker_name,'default'))` pairs per hour, the same key `getWorkerBreakdown` groups on.
 - **`pool_region_metrics_hourly`** — `(bucket_start, region)` PK: per-region GPS, distinct
   miners, share count, from the `shares.region` stamp. Backs "miners by gateway" trends.
 
 **Endpoints** (public, rate-limited, same `?range=day|week|month|year|all` vocabulary):
-- `/api/pool/metrics/history` — now also returns `network_hashrate_gps` per point (null-safe).
+- `/api/pool/metrics/history` — now also returns `network_hashrate_gps` per point (null-safe),
+  and since 2026-09-20 `worker_count` (null = pre-column hour; a gap, never 0).
 - `/api/pool/metrics/history/regions` (new) — `{ series: [{ region, points: [{t, miner_count,
   hashrate_gps}] }] }`, busiest-first.
+- **Re-bucketing rule for counts (2026-09-20):** at day-or-coarser buckets both readers take the
+  **peak hour** (`MAX`) for `miner_count`/`worker_count`, not the average. `AVG` counted every idle
+  hour as zero: the first live day had 2 miners for 3 of 16 completed hours, Month/Year/All rounded
+  6/16 to **0** while Day showed 2. Hashrate stays `AVG`, money stays `SUM`. The P-02 panel title
+  says which it is showing (`distinct per hour` / `peak hour per day|week|month`), and P-02 now
+  draws miners + workers as two lines on one count axis (`renderMultiTrendLine`), the workers line
+  omitted entirely until the first hour with a recorded value.
 
 **Frontend**
 - Homepage **P-04** now stacks three Chart.js recorders (the hand-rolled 24h strip chart was

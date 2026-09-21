@@ -1,5 +1,6 @@
 const { getDb } = require('./db');
 const { getHorizon } = require('./ledger-rollup');
+const { C32_GRAPH_WEIGHT } = require('./stratum-protocol');
 
 class HashrateTracker {
   constructor(config, minerManager) {
@@ -44,9 +45,12 @@ class HashrateTracker {
 
   // Cuckatoo32 hashrate: GPS = Σ(share difficulty) × 42 / window_seconds / 16384
   // (matches CLAUDE.md and /api/pool/stats/regions). Derived from the SHARES table — real
-  // accepted work — NOT from a static per-session difficulty.
+  // accepted work — NOT from a static per-session difficulty. The divisor is the SAME constant
+  // each share is credited with (job target × C32_GRAPH_WEIGHT, stratum-protocol.js), which is
+  // what makes this collapse to shares × target × 42 / window; a different number in either
+  // place is a hashrate off by their ratio.
   static CYCLE_LENGTH = 42;
-  static SOLUTION_RATE = 16384;
+  static SOLUTION_RATE = C32_GRAPH_WEIGHT;
   static HOUR = 3600;
 
   // Snapshot each active miner's hashrate over the last sampling window into hashrate_history
@@ -527,7 +531,7 @@ class HashrateTracker {
 
   // ── Durable pool-wide hourly rollup (pool_metrics_hourly) ─────────────────────────────────
   // Collapse every fully-completed hour that isn't rolled up yet into one aggregate row, computed
-  // from shares (pool GPS + distinct miners), blocks (found + confirmed rewards) and withdrawals
+  // from shares (pool GPS + distinct miners + distinct workers), blocks (found + confirmed rewards) and withdrawals
   // (confirmed payouts) BEFORE those source tables prune. The table is NEVER pruned, so the public
   // trend charts have Day→All-Time history at ~1 MB/year (size independent of miner count).
   // Idempotent upsert (safe to re-run a bucket). No backfill: an empty table starts at the
@@ -555,11 +559,12 @@ class HashrateTracker {
 
       const upsert = this.db.prepare(`
         INSERT INTO pool_metrics_hourly
-          (bucket_start, pool_hashrate_gps, miner_count, blocks_found, earnings, payout, network_hashrate_gps, updated_at)
-        VALUES (@b, @gps, @miners, @blocks, @earnings, @payout, @net, unixepoch())
+          (bucket_start, pool_hashrate_gps, miner_count, worker_count, blocks_found, earnings, payout, network_hashrate_gps, updated_at)
+        VALUES (@b, @gps, @miners, @workers, @blocks, @earnings, @payout, @net, unixepoch())
         ON CONFLICT(bucket_start) DO UPDATE SET
           pool_hashrate_gps = excluded.pool_hashrate_gps,
           miner_count       = excluded.miner_count,
+          worker_count      = excluded.worker_count,
           blocks_found      = excluded.blocks_found,
           earnings          = excluded.earnings,
           payout            = excluded.payout,
@@ -576,8 +581,13 @@ class HashrateTracker {
           shares       = excluded.shares,
           updated_at   = unixepoch()
       `);
+      // A worker is the (address, rig) pair: worker_name is NULL for a rig that sent no name,
+      // which getWorkerBreakdown groups as 'default' — same key here, so the two counts agree.
+      // '|' cannot occur in a bech32 address, so the concatenation is unambiguous.
       const shareStmt = this.db.prepare(`
-        SELECT COALESCE(SUM(difficulty), 0) AS sumdiff, COUNT(DISTINCT grin_address) AS miners
+        SELECT COALESCE(SUM(difficulty), 0) AS sumdiff,
+               COUNT(DISTINCT grin_address) AS miners,
+               COUNT(DISTINCT grin_address || '|' || COALESCE(worker_name, 'default')) AS workers
         FROM shares WHERE created_at >= ? AND created_at < ?`);
       const regionStmt = this.db.prepare(`
         SELECT COALESCE(region, 'default') AS region,
@@ -611,6 +621,7 @@ class HashrateTracker {
             b,
             gps: parseFloat((sh.sumdiff * factor).toFixed(6)),
             miners: sh.miners || 0,
+            workers: sh.workers || 0,
             blocks: bl.n || 0,
             earnings: parseFloat((en.s || 0).toFixed(9)),
             payout: parseFloat((pa.s || 0).toFixed(9)),
@@ -639,8 +650,16 @@ class HashrateTracker {
   // Read the durable rollup for the public trend charts. `range` selects span + bucket size:
   //   day → 24×1h · week → 7d×1h · month → 30d×1d · year → 365d×1d · all → whole series, bucket
   //   auto-scaled by total span (≤90d→1d, ≤2y→1w, else 1m). Hourly rows are re-bucketed by integer
-  //   division on bucket_start (UTC-aligned). Aggregation: hashrate = AVG of hourly avgs, miners =
-  //   AVG concurrent (rounded), blocks/earnings/payout = SUM. Returns { range, bucket_seconds, points }.
+  //   division on bucket_start (UTC-aligned). Aggregation: hashrate = AVG of hourly avgs,
+  //   miners/workers = MAX (the peak hour), blocks/earnings/payout = SUM.
+  //   Returns { range, bucket_seconds, points }.
+  //   Counts are MAX, not AVG, on purpose: the hourly value is already "distinct miners active
+  //   that hour", and averaging it across a day counts every idle hour as a zero — the live pool
+  //   showed 2 miners for 3 hours of a 16-hour day and the Month/Year/All charts rounded
+  //   6/16 to 0 miners for that day while the Day chart showed 2 (2026-09-20). "Online" at a
+  //   coarser bucket means the busiest hour in it; the frontend labels it as the peak.
+  //   worker_count is NULL for hours rolled up before the column existed (MAX of all-NULL is
+  //   NULL) — the chart draws those as a gap, never as 0.
   getMetricsHistory(range = 'day') {
     try {
       const H = HashrateTracker.HOUR;
@@ -669,7 +688,8 @@ class HashrateTracker {
       const rows = this.db.prepare(`
         SELECT CAST(bucket_start / ? AS INTEGER) * ?  AS t,
                AVG(pool_hashrate_gps)           AS hashrate_gps,
-               AVG(miner_count)                 AS miner_count,
+               MAX(miner_count)                 AS miner_count,
+               MAX(worker_count)                AS worker_count,
                COALESCE(SUM(blocks_found), 0)   AS blocks_found,
                COALESCE(SUM(earnings), 0)       AS earnings,
                COALESCE(SUM(payout), 0)         AS payout,
@@ -686,7 +706,8 @@ class HashrateTracker {
         points: rows.map(r => ({
           t: r.t,
           hashrate_gps: parseFloat((r.hashrate_gps || 0).toFixed(6)),
-          miner_count: Math.round(r.miner_count || 0),
+          miner_count: r.miner_count || 0,
+          worker_count: r.worker_count != null ? r.worker_count : null,
           blocks_found: r.blocks_found || 0,
           earnings: parseFloat((r.earnings || 0).toFixed(9)),
           payout: parseFloat((r.payout || 0).toFixed(9)),
@@ -702,7 +723,8 @@ class HashrateTracker {
   }
 
   // Per-region (gateway) trend series from pool_region_metrics_hourly — same range/bucket rules
-  // as getMetricsHistory (they chart side by side off one range toggle). Returns
+  // AND the same peak (MAX) miner count as getMetricsHistory (they chart side by side off one
+  // range toggle, so a day must mean the same thing on both). Returns
   // { range, bucket_seconds, series: [{ region, points: [{ t, miner_count, hashrate_gps }] }] }
   // with series ordered by total shares desc (busiest first, for legend order). Chart colours
   // are NOT tied to this order — the frontend keys them by region name so a region never
@@ -736,7 +758,7 @@ class HashrateTracker {
         SELECT CAST(bucket_start / ? AS INTEGER) * ? AS t,
                region,
                AVG(hashrate_gps)   AS hashrate_gps,
-               AVG(miner_count)    AS miner_count,
+               MAX(miner_count)    AS miner_count,
                COALESCE(SUM(shares), 0) AS shares
         FROM pool_region_metrics_hourly
         WHERE bucket_start >= ?
@@ -750,7 +772,7 @@ class HashrateTracker {
         if (!byRegion.has(r.region)) byRegion.set(r.region, []);
         byRegion.get(r.region).push({
           t: r.t,
-          miner_count: Math.round(r.miner_count || 0),
+          miner_count: r.miner_count || 0,
           hashrate_gps: parseFloat((r.hashrate_gps || 0).toFixed(6))
         });
         shareTotals.set(r.region, (shareTotals.get(r.region) || 0) + (r.shares || 0));

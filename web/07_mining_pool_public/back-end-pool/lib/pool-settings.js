@@ -269,16 +269,25 @@ class PoolSettings {
       // Stored as a JSON array of lowercase strings.
       extra_banned_passwords: '[]',
       // Publish the network-map data feeds (/api/pool/topology + /api/network/peers)?
-      // OFF by default. Neither endpoint has ever returned an IP — no coordinate is resolved at
-      // all (an aggregate sits on its country's centroid, and that country is published beside
-      // it) and peer IPs never leave the DB — but both publish a per-country breakdown of who
-      // connects to this pool, and on a small pool a country with a single entry is effectively
-      // a pointer at one operator. Opt in deliberately.
-      network_map_public: 'false',
+      // ON by default since 2026-09-13 (was OFF): the map is a headline page in the public
+      // nav and sitemap, and with the feeds closed it rendered nothing useful — worse, until
+      // that date it rendered a SAMPLE globe that operators took for real data. Neither endpoint
+      // has ever returned an IP — no coordinate is resolved at all (an aggregate sits on its
+      // country's centroid, and that country is published beside it) and peer IPs never leave
+      // the DB — but both publish a per-country breakdown of who connects to this pool, so an
+      // operator who considers that too much can switch it off (→ 404, bare globe).
+      // NOTE: getSection() layers stored rows over these defaults, so an existing install that
+      // never SAVED the Access form has no row for this key and flips ON at upgrade too.
+      network_map_public: 'true',
       // k-anonymity floor applied when the above IS enabled: a country is omitted from the
       // public response unless it holds at least this many peers/miners. Rolled into an
       // "Other" bucket instead, so totals stay honest without naming the thin countries.
-      network_map_min_bucket: 3,
+      // Default 1 since 2026-09-13 (was 3) = no floor: a country lights up from its first
+      // miner. The old 3 meant a new pool's own country stayed dark until three rigs joined,
+      // which read as "the map is broken". Raise it on a pool where naming a one-miner country
+      // would point at a person. The SAME value floors the per-region miner counts on a
+      // multi-region pool (/api/pool/stats/regions + history).
+      network_map_min_bucket: 1,
       // Country of the central (hub) box, as an ISO-3166-1 alpha-2 code — the top of the hub
       // location chain in /api/pool/topology. The box cannot discover this itself (it sits
       // behind nginx and usually a CDN), so it is declared here. Blank = derive it (pool.json
@@ -637,10 +646,12 @@ PASS      any-password-you-choose</code>
       maintenance_message: 'We are performing scheduled maintenance and will be back shortly.',
       // banners: JSON array of {id,type,message,link,link_text,dismissible,enabled,start,end}
       // Seeded ON by default: a fresh pool is pre-launch, so every new operator wants the
-      // "under development" notice up from day one. It renders site-wide via branding.js
+      // testing-phase notice up from day one. It renders site-wide via branding.js
       // renderBanners() and is fully overridable — edit/disable it in admin → Settings →
-      // Announcements the moment the pool goes live (a saved row overrides this default).
-      banners: '[{"id":"under-dev","type":"warning","message":"This website is under development & testing — data may be incomplete or reset without notice. When the pool goes live, the official announcement will be posted on the Grin Forum.","link":"https://forum.grin.mw/","link_text":"Grin Forum","dismissible":false,"enabled":true}]',
+      // Announcements the moment the pool goes live (a saved row overrides this default, so
+      // a box whose Announcements section was ever saved keeps ITS text, not this one).
+      // The contact link is the operator's forum profile, same as support_forum_url above.
+      banners: '[{"id":"under-dev","type":"warning","message":"Testing phase in progress — feel free to join! Please note that data can be lost or reset without notice while we test. Interested?","link":"https://forum.grin.mw/u/hellogrin","link_text":"Contact hellogrin on the Grin Forum","dismissible":false,"enabled":true}]',
     },
     // Database retention / cleanup. Keeps the SQLite file bounded WITHOUT ever
     // deleting shares still needed for PPLNS distribution or orphan reversal:

@@ -451,13 +451,13 @@ footer a:hover{color:var(--a1)}
     <div>Chain-data mirror served by the
       <a href="https://github.com/noobvie/Grin-Node-Toolkit">Grin Node Toolkit</a>.</div>
     <div class="made">
+      <span>From Saigon with <span class="hrt">&#10084;</span></span>
       <svg class="vn" viewBox="0 0 30 20" role="img" aria-label="Vietnamese heritage and freedom flag">
         <rect width="30" height="20" fill="#f2c200"/>
         <rect y="6"  width="30" height="2.4" fill="#da251d"/>
         <rect y="9.4" width="30" height="2.4" fill="#da251d"/>
         <rect y="12.8" width="30" height="2.4" fill="#da251d"/>
       </svg>
-      <span>Made with <span class="hrt">&#10084;</span> from Saigon</span>
     </div>
   </footer>
 </div>

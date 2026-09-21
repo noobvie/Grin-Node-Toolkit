@@ -395,17 +395,22 @@ textarea { resize: vertical; min-height: 100px; font-family: var(--font-mono); f
 }
 
 /* ── Error / success messages ─────────────────────────────────────────────── */
+/* No `display: none` here, deliberately. Every element that carries one of these
+   classes hides itself with an inline style="display:none" and is revealed by the
+   page's flash() with `el.style.display = ''` — which only REMOVES the inline
+   declaration and then defers to this rule. With `display: none` here, that reveal
+   was a no-op: every flash() in the admin panel (regions, miners, payments, pages,
+   posts, ads, users) rendered nothing, so a failed "Enable multi-region" looked
+   exactly like an ignored click. Initial hidden state belongs on the element. */
 .error-msg {
   color: var(--error-color);
   font-size: .85rem;
   margin-top: .45rem;
-  display: none;
 }
 .success-msg {
   color: var(--ok-color);
   font-size: .85rem;
   margin-top: .45rem;
-  display: none;
 }
 .warn-msg {
   color: var(--warn-color);

@@ -200,7 +200,7 @@
       // Yellow flag with three red stripes = Saigon.
       '<p class="footer-copyright" data-brand="copyright">Since 2026</p>' +
       '<span class="footer-sep" aria-hidden="true">·</span>' +
-      '<span class="footer-saigon">Made with &#10084;&#65039; from Saigon ' +
+      '<span class="footer-saigon">From Saigon with &#10084;&#65039; ' +
         '<svg viewBox="0 0 27 18" width="21" height="14" role="img" aria-label="Yellow flag with three red stripes" style="vertical-align:-2px;border-radius:2px">' +
           '<rect width="27" height="18" fill="#FFCD00"/>' +
           '<rect y="4" width="27" height="2" fill="#DA251D"/>' +

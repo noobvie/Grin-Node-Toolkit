@@ -1,7 +1,7 @@
 # Script 07 — Public Mining Pool (Security Audit)
 
 > **Covers code as of:** 2026-09-06 · **Last verified:** never verified as a whole — individual findings carry their own dates in the Status roll-up. One scoped exception: **2026-09-07, PARTIAL — §B's two satellite claims only**, read against the code (`requireSatellite` exists nowhere in `back-end-pool/`; `validateConfig()` in `lib/config.js` throws on a missing `jwt_secret` unconditionally, with no role gate). Nothing else in §B, and no §J finding, was re-checked.
-> **Product code last changed:** 2026-09-04 — `scripts/07_grin_mining_*.sh`, `scripts/lib/07_lib_*.sh`, `web/07_mining_pool_public/`
+> **Product code last changed:** 2026-09-20 (share credit unit; one shared `MinerManager` — §J6 addendum) — `scripts/07_grin_mining_*.sh`, `scripts/lib/07_lib_*.sh`, `web/07_mining_pool_public/`
 
 Security model, verified upload/XSS fixes, and the hardening requirements for
 `web/07_mining_pool_public/`. Design: [`script07_design.md`](script07_design.md);
@@ -406,8 +406,12 @@ Operator-decided redesign of the account-page gate ([owner-proof.js](../../web/0
    at the stratum layer on a session's **first accepted share** (PoW-backed, same
    anti-poisoning rationale as D.2), each in a last-2 distinct window (ISP re-lease /
    rig-side password change never locks the owner out). Trivial passwords (`x`, `123`,
-   factory defaults, `d=…` directives, <4 chars) are never captured and never verify —
-   a shared default must not become a skeleton key.
+   factory defaults, `d=…` directives, one repeated character, straight digit runs, <8 chars)
+   are never captured and never verify — a shared default must not become a skeleton key.
+   Since 2026-09-20 anything outside printable ASCII is refused too (`password_charset`):
+   ASIC firmware does not send non-Latin characters faithfully, so the pool would hash
+   garbage as `ok` and the miner would only find out on withdrawal day. The connect page
+   now asks for a numeric PIN (8+ digits) — digits survive every firmware and encoding.
 3. **Proofs hashed at rest (data minimisation).** Salted scrypt (`N=16384, r=8, p=1`,
    memory-hard vs GPU brute-force of the 2^32 IPv4 space / low-entropy passwords), format
    `v1$salt$hash` in `miner_accounts.last_ip/prev_ip/last_pass_hash/prev_pass_hash`.
@@ -715,6 +719,22 @@ and progressively worse as the pool gets smaller — the G2 minimum-bucket probl
    the floor are merged into one unnamed `Other` row (no `country_code`, `lat`/`lng` null) rather than
    dropped, so totals stay truthful while thin countries go unnamed. Closes the G2 open item.
 
+> **Defaults changed 2026-09-13** (operator decision, add-ons branch, not VPS-tested):
+> `network_map_public` now defaults **`'true'`** and `network_map_min_bucket` **`1`** (no floor).
+> Rationale: the map is a nav/sitemap headline page, and closed-by-default + floor 3 meant a new
+> pool's own country never lit up — read as "broken" rather than "private". The gate, the 404
+> semantics and the floor mechanics are unchanged; the operator switches them back on in
+> admin → Access. Note `getSection()` layers stored rows over defaults, so an existing install that
+> never saved the Access form also flips on at upgrade. In the same change the **sample globe was
+> REMOVED** from `network-map.js` — an unreachable feed now renders a bare globe, zeroed placards and
+> a "not published" note. The sample topology had been mistaken for real data twice (2026-07-26,
+> 2026-09-13), which makes it a misinformation surface, not a degradation aid. The same-day
+> review of that change added **`geo_available`** to `/api/network/peers` (the flag the admin
+> owner-evidence endpoint already carried): without `geoip-lite` the peer collector is a permanent
+> no-op, so an empty peer layer must read "install the optional package", never "wait 30 s". The
+> page now words the peer-layer note by cause — feed off (one sentence shared with topology),
+> geo off, or genuinely not collected yet — and says nothing when both feeds are populated.
+
 The floor is applied to `network_peers` **before the twinkle `points` array is built**, not only to
 the country list — points are placed at their country's position, so emitting them for a thin country
 would re-expose precisely what the floor hides. Client-side this is already safe: `network-map.js`
@@ -962,6 +982,130 @@ shape — confirm a real `retrieve_txs` response carries `creation_ts` and the
   that mimic other event types and muddy an incident trail.
 - **Placeholder zeros in `_releaseLockAndDebit`** — its two debit rows still write `0` for balance
   before/after (the locked columns are correct). Reversals were fixed in §H2.
+
+### H5 — [High] The LAST rung of the Tor retry ladder refunded without asking the wallet — **FIXED 2026-09-13** (add-ons, NOT VPS-tested)
+
+**Found** while answering the question "can a miner keep the wallet online for the pre-flight,
+then pull it offline once the send starts, and get paid twice?" The literal version of that
+attack is harmless — a Grin tx needs the recipient's signature, so a wallet that goes dark before
+the slate round-trip completes produces no transaction at all and the eventual refund is correct.
+The mirror image is not: the wallet **answers**, the pool finalises and **broadcasts**, and the
+CLI still reports failure (SIGKILLed at `wallet_send_timeout_ms` after the post — §H1's scenario).
+
+§H1's guard (`_priorSendLanded`) runs **before each re-attempt**, so it covered attempts 0..N-1 of
+the ladder. It never covered attempt N: `sendWithdrawal` → send "fails" → `scheduleRetry` sees
+`retry_count >= retryDelays.length` → `markFailed()` → `_reverseLock()` with no question asked.
+Under §H1 this was a timing accident; under an adversary it is a recipe — the ladder is
+deterministic (6 h / 12 h / 24 h / 48 h) and the retry count is on the account page, so a wallet
+that stays dark for attempts 0..3 and then answers attempt 4 slowly enough to straddle the 120 s
+timeout keeps the coins **and** gets the balance back. Reconciliation's coverage invariant would
+have flagged the shortfall afterwards (detection), but nothing prevented it.
+
+**Fix** (`lib/withdrawal-scheduler.js` `markFailed`): the final rung now makes the same three-way
+decision a re-attempt does, against the wallet's own tx log —
+`confirmed` → settle via `markConfirmed` (slate attached as proof, never refund);
+`unconfirmed` → `_deferSend` (balance stays locked, re-ask in 15 min, no rung consumed);
+`absent`/`TxSentCancelled` → `_reverseLock` as before — the **only** branch that refunds.
+One deliberate asymmetry with `sendWithdrawal`: a wallet that **cannot be read** is parked, not
+proceeded past. In `sendWithdrawal` proceeding keeps live money moving through a brief outage; in
+`markFailed` the only thing proceeding does is refund, and a refund on top of a landed send is the
+one outcome that cannot be undone. `_deferSend` gained an optional `why` so the event note says
+"could not be read" rather than "holds an unconfirmed send" in that case.
+
+**Tests** — `scripts/test-payout-guard.js` §5 drives the real path (row on its last rung, a stub
+send that returns failure but leaves a `TxSent` in the wallet log): confirmed → settled, paid
+once, slate attached; unconfirmed → parked, locked, `retry_count` unchanged; absent → refunded
+with the reversal in `balance_log` (control); unreadable → parked with the honest note. Run
+against the pre-fix scheduler the first three cases fail with `{"balance":100,"balance_locked":0}`
+beside a confirmed on-chain send — i.e. the double payment, reproduced. 52/52 after the fix; the
+full `npm run test:unit` suite stays green.
+
+**Not changed:** the admin `POST /api/admin/withdrawals/:id/retry` route (re-locks a `tor_failed`
+row and re-enters the ladder with the guard armed off the event log — §J4-2) and
+`reclaimStaleTorSending`, both of which already consult the log before moving money.
+
+**Same-day review found the wait was one cycle long.** A deferred row comes back through
+`sendWithdrawal` 15 min later, and that path's unreadable-wallet policy is *proceed loudly* — so a
+last-rung row parked because the log could not be read would, if the wallet was **still** dark,
+be sent **blind** on pickup: the double payment this section closes, reached by the door it
+opened. The same gap already existed for an ordinary-rung deferral (an unconfirmed send was
+*seen*, then the wallet went dark → blind send). Fixed in `sendWithdrawal`: when the log cannot
+be read and the row carries any `deferred:%` event, it is re-parked via `_deferSend` (note
+"could not be read after an earlier deferral"); only a row that has **never** been deferred keeps
+proceed-loudly. A deferral is a standing statement that the outcome is unknown, and an unreadable
+wallet cannot dissolve it. Second review item: the last-rung `confirmed` branch now calls
+`recordTorFee` before `markConfirmed`, as `sendWithdrawal`'s recovered branch does, so
+reconciliation can explain the fee gap. Tests §5 +6 (re-park on both rungs, plus the
+never-deferred control); 67/67. Also: this section and the next were first numbered H3/H4,
+colliding with the 2026-08-01 H3/H4 above — renumbered H5/H6 the same day.
+
+### H6 — Signed payment proofs as dispute evidence — **BUILT 2026-09-13** (add-ons, NOT VPS-tested), with its threat model
+
+**Why.** The account page's kernel link (§J11-2) proves a payout transaction was *mined*. It does
+not prove *who received it*: a Grin kernel carries no addresses, so a pool could point at any
+kernel and write a miner's address beside it, and the explorer would truthfully confirm the
+kernel exists. Against a miner who says "I never received it" in front of a third party that is
+a tie. grin-wallet's `PaymentProof` breaks it: `{amount, excess, recipient_address,
+recipient_sig, sender_address, sender_sig}` where `recipient_sig` is the recipient key's ed25519
+signature over `amount ‖ excess ‖ sender_address` — and the recipient key *is* the miner's
+`grin1…` address. Anyone can verify it with `grin-wallet verify_proof` (layout confirmed against
+upstream's CI-asserted test vector, memory `project_payment_proof_fixture`). The Tor CLI rail
+already had one for every payout — `grin-wallet send -d <slatepack addr>` requests a proof by
+default (only `--no_payment_proof` disables it, v5.4.1 CLI spec) — it was simply never fetched.
+
+**What was built.**
+- `withdrawals.payment_proof TEXT` (additive migration; `NULL` = not fetched, `''` = the wallet
+  holds none, terminal). `lib/wallet.js retrievePaymentProof(slateId)` → Owner API
+  `retrieve_payment_proof`, local tx-log read.
+- `withdrawal-scheduler.fetchAndStorePaymentProof(id)` + `backfillPaymentProofs()` on the
+  scheduler tick (after the kernel backfill; read-only, runs while frozen). Asks only for rows
+  that are `confirmed` **and already have a kernel** (the wallet refuses proofs for unconfirmed
+  txs), Tor rail only, newest 20 per tick, ≥60 s apart.
+- **Miner:** `POST /api/account/:addr/withdrawals/proofs` (the existing ownership-gated reveal)
+  now also returns `payment_proofs: { id: PaymentProof }` (newest 500). One press of *Reveal
+  proofs* gives every mined payout its `proof ↗` kernel link and every Tor payout a `⬇ file`
+  that saves `payout-<id>-proof.json` — byte-compatible with `export_proof`, built client-side
+  from a Blob. The list GET carries `has_payment_proof` (boolean) only.
+- **Operator:** `GET /api/admin/withdrawals/:id/payment-proof` (`secureAdmin`) serves the stored
+  proof or fetches it from the wallet once; 🧾 on the admin payments page downloads it.
+  `/api/admin/withdrawals` strips the blob to `has_payment_proof`.
+
+**Threat model — what this surface does and does not add.**
+1. *Misattribution (the real risk).* A proof is served as "your wallet signed for this", so a
+   wrong one is worse than none — §J4-11's failure class (a stranger's `slate_id` on the row)
+   would hand a miner someone else's receipt. **Guard:** the proof's `excess` must equal the
+   row's `kernel_excess` or nothing is stored (`kernel_mismatch`, logged). Test §6 covers it.
+2. *Privacy / leakage.* The proof names the miner's address **and** the kernel in one signed
+   document — at least as linking as the kernel, so it gets the identical §J11-2 treatment: the
+   per-address GET may only drop it or coerce it to a boolean (leakage test asserts the mention
+   count exactly as it does for `kernel_excess`); the value travels only on the ownership-gated
+   POST on the `withdraw` bucket. Nothing new is published.
+3. *Sender-address disclosure.* The proof carries the pool wallet's own slatepack address. To the
+   miner this is **not new information** — it was in the slate their wallet signed, and their
+   wallet's tx log holds it. To the admin it is theirs. No public route emits it.
+4. *Wallet-load lever.* The miner route **never touches the wallet** (DB only; leakage test asserts
+   no `wallet.`/`withdrawalScheduler.` in the handler) — an address with 500 payouts costs one
+   SELECT. The admin route may make one local tx-log read per call, behind admin auth; the id is
+   the only input and the slate comes from **our row**, so it cannot look up arbitrary wallet txs.
+5. *Forgery / tamper.* The server never accepts a proof from a client — it only serves what the
+   wallet returned. A proof altered by anyone (pool included) fails signature verification, which
+   is the property that makes it evidence. A proof is only as strong as its verification: the
+   miner-facing copy says to run `verify_proof` and to compare the kernel with `grin-wallet txs`.
+6. *Front-end.* Text-only DOM for every proof field; the download is a same-page Blob (no URL to
+   land in a log). Demo mode is unaffected (no `payment_proofs` in the fixture → no button).
+
+**Deliberately not done:** enabling proofs on the Owner-API slatepack/nostr rail
+(`payment_proof_recipient_address: null` in `initSendTx`). It changes the slate every recipient
+wallet must sign and is a money-path change; those payouts keep `''` and the UI says so. And no
+new bucket, no new secret, no new public route.
+
+**Tests:** `test-payout-guard.js` §6 (store on kernel match; refuse on mismatch; `''` for non-Tor
+and for the wallet's definitive "no proof"; `NULL` on transient error; `''` terminal; backfill
+selects exactly the eligible row) and `test-public-leakage.js` §H6 (7 assertions). Migration
+checked by building a DB with HEAD's `db.js` and opening it with the new one. Full suite green.
+
+**VPS still owes:** one real `retrieve_payment_proof` round-trip (field names/`amount` type as
+returned by v5.4.1 over Owner v3), and one `verify_proof` of a downloaded file.
 
 ## I. Re-audit 2026-08-21 (pre-retest pass — backend, frontend, payment path)
 
@@ -5310,6 +5454,13 @@ needed a change.
   ([miners.js:26](../../web/07_mining_pool_public/back-end-pool/lib/miners.js#L26)). Good for J5
   (unforgeable PPLNS weight) but it means share volume scales linearly with pool hashrate, which is
   the `shares`-table growth bound memory `project_pool_db_capacity` lists as open.
+  **2026-09-20 addendum:** that `1.0` was ALSO what every share was *recorded* at, and the
+  hashrate/effort/luck arithmetic divides by the C32 graph weight (16384) expecting the chain's
+  unit — so every hashrate on the site read 16384× low (0.00 G/s with 8 rigs mining) until the
+  first live-miner test. Shares are now credited `job target × 16384`
+  (`stratum-protocol.js shareCreditDifficulty`, from the JOB the submit names, never the session
+  field); still a constant per share, so the J5 property holds. `db.js migrateShareCreditUnit`
+  rescales pre-fix rows once. The vardiff/growth point above is unchanged.
 - **§J9 (settings) — `confirm_depth_mainnet` / `confirm_depth_testnet` (J5-9)** are a *third*
   variant beyond J1-5's dead keys and J4-6's uncoerced values: keys that are validated by nobody
   **and** applied by nobody, yet round-trip through the UI convincingly. Worth a mechanical check
@@ -9003,8 +9154,10 @@ on-chain kernel excess.**
 *The privacy controls the pool built are real and correctly implemented.* Miner IPs are
 scrypt-hashed at the moment of capture, audit IPs are coarsened at write, geo resolves to a
 country and discards the address, the peer digest never leaves the DB, the network-map feeds
-404 by default with a k-anonymity floor applied before the points are built, and the sample
-globe is labelled. All of that was checked with evidence (J11-8), not assumed.
+404 when unpublished with a k-anonymity floor applied before the points are built, and (at the
+time) the sample globe was labelled — since 2026-09-13 there is no sample globe and the feeds
+default to published, see the note under §J11-8's fix. All of that was checked with evidence
+(J11-8), not assumed.
 
 *What defeats them is the surface next door.* `/api/pool/miners` was masked in response to §C1
 — but `/api/pool/blocks`, `/api/pool/top-block-finders`, `/api/pool/payments`,
@@ -9461,6 +9614,9 @@ inferred from a comment.
   and `FALLBACK_TOPOLOGY` carries `geo_source:'sample'`
   ([network-map.js:83](../../web/07_mining_pool_public/public_html/js/network-map.js#L83)). It
   is small muted text under the globe — a legibility question for §J15, not a leak.
+  **Superseded 2026-09-13:** the legibility question answered itself — the label was missed
+  twice and the sample was taken for real data, so `FALLBACK_TOPOLOGY`/`FALLBACK_PEERS` were
+  deleted. An unreachable feed now draws a bare globe with a "not published" note.
 - **CORS carries no cookie-reading route.** The `*` origin is set for **GET/OPTIONS only** on
   `/api/public/`, `/api/config/`, `/api/pool/`, `/api/account/`, `/api/stratum/`,
   `/api/network/`, with no `Access-Control-Allow-Credentials`
@@ -10285,6 +10441,12 @@ stock pool 404s here (memory `project_pool_network_map`). It becomes a Medium th
 publishes the map. **Fix:** a 30 s memo — the response is identical for every caller and its
 inputs move on a 15-minute window — plus a chunked or temp-table lookup instead of a
 session-length `IN` clause.
+
+> **Superseded 2026-09-13:** `network_map_public` now defaults to **`'true'`**, so the "off by
+> default" half of the Low rating no longer holds — every stock pool serves this handler. The
+> severity does not rise because the fix above (30 s memo, `TOPOLOGY_TTL_MS`) had already
+> shipped and is asserted by `scripts/test-rate-limits.js` (§J12-9); the un-memoised path this
+> finding describes is not reachable. The session-length `IN` clause is still as written.
 
 ### J12-10 — [Low] The `api` bucket was dead, and a `rate_limits` value of `0` disables a bucket rather than blocking — **BUCKET FIXED 2026-09-02; the falsy-limit behaviour is documented, deliberately not changed**
 

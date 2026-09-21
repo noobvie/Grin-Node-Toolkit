@@ -2,7 +2,7 @@
 
 > **Covers code as of:** 2026-09-07 for the multi-region surface (§2–§7, §11–§12, rewritten against the live code) · 2026-06-08 for the rest of the §6 endpoint table
 > **Last verified:** 2026-09-07, PARTIAL — **the multi-region surface only**, read against the code: the mode selector + `pool_mode_conflict_check` in `scripts/07_grin_mining_public_pool.sh`, `role`/`region`/`region_ports` in `back-end-pool/lib/config.js`, listener-port region stamping in `lib/stratum-server.js`, `shares.region` + `pool_locations` + `pool_region_metrics_hourly` in `lib/db.js`, the ingestion/health/region routes in `index.js`, and the WireGuard + region-port derivation in `scripts/lib/07_lib_gwctl.sh`. Everything outside that surface — the rest of §6, and §7–§10, §13–§15 — still rests on the 2026-06-08 pass (account + payout routes re-verified 2026-07-13) and was **not** re-checked, with one line-scoped exception: the admin-surface note in the §6 not-built list was corrected 2026-09-07 against `back-end-pool/admin-panel/` and `admin-shell.js`.
-> **Product code last changed:** 2026-09-04 — `scripts/07_grin_mining_*.sh`, `scripts/lib/07_lib_*.sh`, `web/07_mining_pool_public/`
+> **Product code last changed:** 2026-09-20 (pairing string carries the public port; gateway Status boot line, §13.12s; anchored ufw test + unmanaged-firewall readout, §13.12t) — `scripts/07_grin_mining_*.sh`, `scripts/lib/07_lib_*.sh`, `web/07_mining_pool_public/`
 > Prose last edited 2026-09-07.
 
 **Product:** `scripts/07_grin_mining_public_pool.sh` + web app under `web/07_mining_pool_public/`.
@@ -1047,6 +1047,127 @@ living *outside* `public_html` protects a dir from the **docroot** rsync in `poo
 not at all from the **backend** rsync, which `--delete`s `POOL_APP_DIR` itself. Both comments are
 corrected, and the rule is now stated where the next author will be adding a runtime dir: every new
 dir the app writes under `POOL_APP_DIR` needs an exclude in **both** rsyncs.
+
+**r) A failed "Enable multi-region" was indistinguishable from an ignored click (found 2026-09-19,
+first live report).** The operator clicked, confirmed, and minutes later saw the same banner with the
+same pre-flight reason (`wg-grinpool.conf missing`). Three independent gaps, all fixed:
+- **Every `flash()` in the admin panel rendered nothing.** `pool.css` gave `.error-msg` /
+  `.success-msg` `display: none`, and each page's `flash()` reveals with `el.style.display = ''` —
+  which only removes the element's inline `display:none` and then defers back to the stylesheet's.
+  So the red "Could not enable multi-region: …" was never painted, on this page or on miners,
+  payments, pages, posts, ads or users (all use the pattern; all have carried it since the
+  2026-06 merge). The `display:none` is gone from the two rules — every element that uses them
+  already hides itself inline, which is where the initial state belongs.
+- **The failure did not stay on screen, and was not where the operator was looking.** `flash()`
+  targets `#r-msg` on the *Add or edit a region* toolbar, three cards below the banner, and
+  clears in 5 s; `#mr-reason` describes the STATE and is untouched by a failed attempt. The
+  banner now has a persistent `#mr-error` under the button — cleared on retry, hidden when the
+  tunnel reads as up — carrying the helper's message plus the journal / `W → 1` fallback. The
+  fallback is **omitted when the 403 carries `step_up`** (the browser-side refusal below): nothing
+  reached the pool then, so "check the journal" would be false and SSH the wrong next step.
+- **The box kept no record.** The POST route audits `gateway_server_init` only on success and its
+  catch did not log, so a failed enable left nothing in the journal either. It now
+  `console.error`s. `gwctl()` also names a **timeout** explicitly — a helper killed at 180 s
+  prints no JSON, and execFile's bare `Command failed: sudo -n …` read as an instant failure.
+
+A fourth gap turned up on the same path while reading the evidence: the `/api/admin/` nginx block
+had `proxy_read_timeout 30s` under a route whose helper is budgeted **180 s** (the apt path). On
+that path nginx would 504 the browser while init-server kept running to success — "Enable failed"
+about a tunnel that came up seconds later. Raised to 200 s (re-run **4) Setup nginx** to apply).
+
+On the reporting operator's box the evidence cleared every server-side candidate: the sudo journal
+showed the page's `list`/`status` reads and **no `init-server` call at all**, the helper carried the
+subcommand, sudoers/`ReadWritePaths`/`wireguard-tools` were all in place, and an in-namespace
+reproduction (`nsenter -m` → `runuser -u grinpool` → `sudo -n … init-server`) succeeded first time.
+So the POST was refused **before** the handler. The nginx access log settled which gate: one
+`POST /api/admin/gateways/server … 403` with a **53-byte** body — exactly
+`{"error":"Session expired","challenge_required":true}`, the `requireFreshAuth` step-up challenge
+(the 2FA refusal is 131 bytes) — and **no `POST /api/admin/reauth` after it**. The password prompt
+`adminFetch` opens on that challenge was closed without a password: the operator's own account was
+"clicked Enable and OK", i.e. OK on the *second* dialog, the prompt, with nothing typed — which
+`reauth()` treats as cancel. `adminFetch` then handed back the original 403, the caller threw
+`"Session expired"` (false: the session was fine) into the dead `flash()`, and the button reset.
+
+Fixed at the two places the story went wrong, on top of (r)'s visibility fixes:
+- `stepup.js` `reauth()` now resolves `{ outcome: 'ok' | 'cancelled' | 'failed', reason }`, and
+  `adminFetch` answers a cancelled or failed step-up with a **synthetic 403** whose body says what
+  happened ("Not done — this action needs your admin password and the authorization dialog was
+  cancelled…"; `step_up: 'cancelled'|'failed'`, the failure `reason` inlined). Every caller
+  prints `body.error` verbatim and none matched the literal text, so this corrects payments,
+  users, miners and settings in the same edit.
+- The Enable confirm() now says a password box may open next, and how to complete it.
+
+Verified locally by driving `adminFetch` through a stub `fetch` + empty `prompt`: one request, no
+reauth call, no retry, 403 with the new body. Note the operator's own reproduction
+(`nsenter … init-server`) had already raised the tunnel, so the panel path was not re-clicked.
+
+**Second live finding, same day, after deploying the above:** the operator clicked Enable, got
+the new red "Not done — … the prompt was closed without one" — and **no password prompt had
+appeared at all**. That branch is reachable only when `window.prompt()` returns null/empty, so
+the browser (Firefox 156) had refused to open it. The pattern is exactly what browsers throttle as
+"successive dialogs": the step-up prompt comes ~200 ms after the action's own `confirm()` closes,
+from an async continuation (the 403 has to arrive first), i.e. without user activation. Which
+rule fired is not knowable from the page, and does not matter: a page cannot tell a suppressed
+native dialog from a Cancel, so **`window.prompt()` is the wrong tool for the step-up** — and it
+had also been echoing the admin password in cleartext. `stepup.js` now opens an **in-page
+dialog** (built lazily from the panel's own `.modal-overlay`/`.modal` rules in `pool.css`, which
+every admin page loads; masked `type=password`, `autocomplete=current-password`; Enter submits,
+Escape/Cancel/backdrop cancel, focus returns to the button). Null now means the operator's own
+decision, and the message says "the authorization dialog was cancelled". Flow: a wrong password or
+code re-opens the dialog with the server's reason (a typo must not cost the whole action); the
+second factor is a separate code-only step, asked only after the pool accepted the password
+(`/api/admin/reauth` verifies before it answers `totp_code_required`); a lockout or budget
+refusal ends the loop and the 403 carries the retry time; concurrent protected requests share one
+dialog. Verified with a stub DOM through nine scenarios (three cancel paths, empty submit, wrong→
+right password, 2FA with a wrong code, lockout, two-at-once, fresh session). NOT VPS-tested.
+
+**s) The gateway was asked for a number only the hub knows (found 2026-09-19, first live
+pairing).** The Regions card for `yyz` read `stratum+tcp://yyz.grinium.com:3333 · ✗ :3333
+unreachable · 🔒 1m ago · ● Active` — a healthy tunnel and a dead port — while `ss` on the gateway
+showed haproxy on **:13333**. Every region is advertised on the pool's single public port
+(`regions.html` appends `STRATUM_PORT` to the host, and the Port check dials the same URL), so the
+gateway has exactly one right answer for "Public stratum port", and it cannot derive it: the value
+lives in the hub's `pool.json`. Yet `gw_configure` *asked*, and its prompt printed the saved value
+in brackets, so the 13333 typed once (the pool's testnet number) came back on every later run
+looking like a default — the operator's reading, reasonably, was "the setup says 13333". Two
+"command not found" lines from the heredoc trap (memory `reference_bash_unquoted_heredoc_backticks`)
+printed in the same screen, which did not help the prompt's credibility.
+
+Fixed at the source: `grin-gateway-ctl` reads `stratum_port` from `pool.json` (per-network default
+when absent) and appends it as the pairing string's **8th field** in both emitters (`add-peer` and
+`list`, so the panel's Save, its 🔑 re-print and the SSH menu all agree); the response JSON also
+carries `public_stratum_port`. `gw_apply_pairing_string` accepts 7 or 8 fields (a string from an
+older hub still works), validates the port, writes `public_stratum_port` and says so when it
+changed the saved value; it also strips CRs, since the last field is now a number a Windows
+clipboard would turn into `3333\r`. The prompt gained the missing sentence — the POOL's port, where
+to read it (admin → Regions shows `Port :NNNN`), and that a current pairing string fills it in.
+Compatibility edge: an 8-field string on a pre-fix gateway is **rejected** (bash `read` folds the
+extra field into `region_port`, which fails the digit check) — pull both boxes together; documented
+in the implementation doc's format row. Same day, `5) Status` gained an **On reboot** line: the
+forwarder and the tunnel are enabled by two different menu steps (`1)` and `3)`), each `|| true`,
+and a box missing either reboots into `:3333 listening` with nothing behind it — which the Port
+check reads as ✓. Verified with stubs: hub emitter (default / explicit / missing key, both
+emitters), gateway parser (7 fields, 8 fields, CR, bogus port, out-of-range, 9 fields, unchanged
+port), Status in all four enabled/disabled combinations. NOT VPS-tested.
+
+**t) Status cried wolf about ufw (found 2026-09-20, first live gateway).** With the port fixed by
+(s), the gateway's `5) Status` read `:3333 listening · ufw is ACTIVE but :3333 is not allowed —
+miners will be refused`, and re-running `1) Install` and `2) Configure` (both call
+`gw_open_firewall`) changed nothing. The actual unreachability was a wrong A record; once that was
+corrected miners connected — *while Status still showed the warning*, which is only possible if ufw
+was never active on that box. The cause: (g)'s three ufw tests in `07_lib_gateway.sh` and
+`07_lib_gwctl.sh` were the bare `ufw status | grep -q active`, and a disabled ufw answers
+`Status: inactive` — a string that contains `active`. So an inactive ufw was "active": Configure
+printed `ufw: opened 3333/tcp` (a rule on an inactive ufw does nothing), Status found no rule table
+to match and warned forever, and on the hub `init-server` reported `firewall: ufw` for a UDP port it
+had not opened. Every other script in the repo already anchored the test (`"Status: active"`); the
+three Script-07 sites now do too. The unmanaged branch also stopped being a blank: Status now says
+`host firewall: none active — not what blocks :3333`, checks `iptables -S INPUT` for a raw
+DROP/REJECT (the Oracle-image trap that `ufw status` never shows) and points at the provider's
+network firewall, and firewalld gained the `--query-port` readout ufw always had. Configure's order
+is unchanged and deliberate: the port is opened at the END, after the pairing string may have
+changed it — opening "as soon as the port is entered" would open the stale number. Stub-tested
+(inactive / active-no-rule / active-rule / `on eth0` rule / raw-iptables REJECT).
 
 ---
 

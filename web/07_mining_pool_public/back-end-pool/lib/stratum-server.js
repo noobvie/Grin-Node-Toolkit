@@ -18,7 +18,8 @@ const {
   createLoginResponse,
   createSubmitResponse,
   createJobTemplateResponse,
-  createStatusResponse
+  createStatusResponse,
+  shareCreditDifficulty
 } = require('./stratum-protocol');
 const ShareValidator = require('./shares');
 const MinerManager = require('./miners');
@@ -141,7 +142,16 @@ function parseProxyV2Header(buf) {
 }
 
 class StratumServer {
-  constructor(config) {
+  // `minerManager` is the process-wide session registry. index.js MUST pass its own instance:
+  // the HTTP side (/api/pool/stats, the account page's per-worker online flag and stale/reject
+  // columns, the network map, the poolstats feed, HashrateTracker) all read sessions from the
+  // instance index.js holds, and the sessions are created HERE, on login. Until 2026-09-20 this
+  // constructor made a private `new MinerManager(config)` while index.js made another, so the
+  // API's copy never held a session: eight rigs mining showed "MINERS ONLINE 0", "0 UNITS", and
+  // every worker on the account page as dropped with stale/reject "–" — with shares accepted
+  // the whole time, because the stratum side was reading its own, populated, copy. The
+  // fallback below exists only for standalone construction (tests); it is not a second registry.
+  constructor(config, minerManager = null) {
     this.config = config;
     this.port = config.stratum_port || 3333;
     // Connection-flood caps. Global ceiling bounds total sockets; the per-IP cap
@@ -166,7 +176,7 @@ class StratumServer {
     // the previous bind settled read null, skipped the match and bound the same port twice.
     this.boundPorts = new Set();
     this.shareValidator = new ShareValidator(config);
-    this.minerManager = new MinerManager(config);
+    this.minerManager = minerManager || new MinerManager(config);
     this.incentives = new IncentivesManager(config);
     // Map<socket, sessionId|null> — authoritative socket registry for broadcasting
     this.sockets = new Map();
@@ -292,7 +302,9 @@ class StratumServer {
     // so the share dedup key is derived from pre_pow, not the pool job_id (otherwise the same
     // solved (nonce,pow) could be credited once per wrapping job_id). Drop entries older
     // than the submit window (keys ascend in insertion order, so stop at the first keeper).
-    this.jobIdMap.set(this.jobCounter, { node: job.node_job_id, pre_pow: job.pre_pow });
+    // `difficulty` rides along too: it is the target the miner filtered THIS job's solutions
+    // against, and so the work one accepted share on it is credited (shareCreditDifficulty).
+    this.jobIdMap.set(this.jobCounter, { node: job.node_job_id, pre_pow: job.pre_pow, difficulty: job.difficulty });
     for (const k of this.jobIdMap.keys()) {
       if (k >= this.jobCounter - JOB_WINDOW) break;
       this.jobIdMap.delete(k);
@@ -309,8 +321,12 @@ class StratumServer {
       this.currentJob.difficulty,
       this.currentJob.pre_pow
     )) + '\n';
-    for (const socket of this.sockets.keys()) {
-      if (!socket.destroyed) socket.write(msg);
+    for (const [socket, sessionId] of this.sockets) {
+      if (socket.destroyed) continue;
+      socket.write(msg);
+      // No vardiff: the session's difficulty IS the job target it was just sent (it is what
+      // /api/stratum/stats and the `status` reply report as this rig's difficulty).
+      if (sessionId) this.minerManager.setSessionDifficulty(sessionId, this.currentJob.difficulty);
     }
   }
 
@@ -625,6 +641,7 @@ class StratumServer {
 
     // Push current job immediately so the miner can start working
     if (this.currentJob) {
+      this.minerManager.setSessionDifficulty(sessionId, this.currentJob.difficulty);
       socket.write(JSON.stringify(createJobNotification(
         this.currentJob.job_id,
         this.currentJob.height,
@@ -722,6 +739,11 @@ class StratumServer {
     // signature compatibility only and is NOT hashed — see generateShareHash (audit §J6-1).
     const workId = jobEntry.pre_pow;
     const shareHash = this.shareValidator.generateShareHash(session.grinAddress, workId, session.workerName, nonce);
+    // Work this share is worth, in the chain's difficulty unit (job target × C32 graph weight)
+    // — taken from the JOB the submit references, since that is the target the miner filtered
+    // this solution against. Never `session.difficulty`'s 1.0 placeholder: that is what made
+    // every hashrate on the site read 0.00 G/s (see shareCreditDifficulty).
+    const shareDiff = shareCreditDifficulty(jobEntry.difficulty);
 
     // CRITICAL ORDERING: validate the PoW with the Grin node BEFORE crediting anything.
     // The node is the authority — it checks the actual Cuckatoo32 solution against the pool's
@@ -765,7 +787,7 @@ class StratumServer {
       const result = await this.shareValidator.submitShare(
         session.grinAddress,
         session.workerName,
-        session.difficulty,
+        shareDiff,
         height,
         shareHash,
         session.region
@@ -784,7 +806,7 @@ class StratumServer {
       // uninterrupted run of failures, which a real rig at a ~1% reject rate never produces.
       session.consecutiveRejects = 0;
 
-      this.minerManager.recordShare(session.grinAddress, session.difficulty);
+      this.minerManager.recordShare(session.grinAddress, shareDiff);
       this._stat(sessionId, 'accepted');
       // Per-CONNECTION accepted-share count. recordShare() above deliberately fans out across
       // every session on the address, so it cannot answer "has THIS socket done any work?" —

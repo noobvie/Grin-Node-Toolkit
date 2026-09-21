@@ -206,7 +206,13 @@ body {
    and it mirrors the mobile stack so there's a single layout to reason about. */
 .instruments { display: flex; flex-direction: column; gap: 18px; }
 .gauge-row { display: flex; flex-wrap: wrap; justify-content: center; align-items: flex-start; gap: clamp(16px, 5vw, 52px); }
-.gauge-block { text-align: center; }
+/* flex-basis 0 + min-width 0: a block takes its width from the ROW, never from its label.
+   A basis:auto flex item breaks lines on its max-content width, and the round-effort
+   sub-line ("no block found yet — measured from a window, not a round", ~440px of spaced
+   mono) is wider than half the panel — so the second dial dropped onto its own row on a
+   maximised desktop and read as a responsive collapse. Now the label wraps inside the
+   block instead; max-width keeps the pair from drifting apart on a very wide panel. */
+.gauge-block { flex: 1 1 0; min-width: 0; max-width: 280px; text-align: center; }
 .gauge-block canvas { display: block; margin: 0 auto; width: 190px; height: 150px; max-width: 100%; }
 .gauge-label {
   font-family: var(--mono); font-size: 10.5px; letter-spacing: .16em;
@@ -224,10 +230,13 @@ body {
   display: inline-block; width: 2px; height: 8px; margin-right: 4px; vertical-align: -1px;
   background: var(--info); box-shadow: 0 0 6px var(--info);
 }
-/* Full-width 3-column strip under the gauges (6 readouts → 2 rows); minmax(0,1fr) lets each
-   tile shrink to its track, and each .counter is overflow:hidden + container-type so labels
-   clip and values self-shrink instead of overflowing. Drops to 2 columns on phones. */
-.counters { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+/* Full-width 2×2 strip under the gauges (4 readouts); minmax(0,1fr) lets each tile shrink
+   to its track, and each .counter is overflow:hidden + container-type so labels clip and
+   values self-shrink instead of overflowing. Two columns at EVERY width, not four: at the
+   1180px page max P-01 hands this strip ~605px, so four-across is a ~142px tile — the block
+   height would clamp down to ~16px and a sub-line like "41m ago · 1,234 total" (~160px of
+   12px mono) would clip. Half-width tiles keep the 24px figure and fit the sub inline. */
+.counters { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .counter {
   background: var(--rx-inset); border: 1px solid var(--rx-line); border-radius: 6px;
   padding: 10px 14px 9px; box-shadow: inset 0 2px 10px var(--rx-shade);
@@ -242,7 +251,9 @@ body {
   margin-top: 3px; color: var(--accent); text-shadow: 0 0 10px var(--glow);
   font-variant-numeric: tabular-nums; text-align: left; white-space: nowrap;
 }
-.counter .v small { font-size: 12px; color: var(--text-dim); text-shadow: none; letter-spacing: .04em; }
+/* white-space:normal on the qualifier lets it break onto a second line under the figure on a
+   narrow phone (a 360px tile is ~114px of content) instead of the nowrap parent clipping it. */
+.counter .v small { font-size: 12px; color: var(--text-dim); text-shadow: none; letter-spacing: .04em; white-space: normal; }
 .counter.alt .v { color: var(--info); text-shadow: 0 0 10px color-mix(in srgb, var(--info) 45%, transparent); }
 
 .ledbar-wrap { margin-top: 14px; }
@@ -575,9 +586,14 @@ body {
   .panel-title { padding: 10px 16px 8px; letter-spacing: .16em; }
 }
 @media (max-width: 640px) {
-  /* gauge-row flex-wraps the two gauges to a vertical stack on its own; counters tighten to
-     2 columns so the readouts stay legible on a phone. */
-  .counters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  /* The two dials stay side by side down to 480px (see below) — a 190px canvas pair still
+     fits there. (.counters is already 2 columns at every width.) */
   .annun { grid-template-columns: repeat(2, 1fr); }
   .deck-head { align-items: flex-start; flex-direction: column; }
+}
+@media (max-width: 480px) {
+  /* Two 190px dials + gap + page/panel padding need ~460px; below that the canvas
+     (pinned at 190×150 by Gauge(), so it can't shrink without distorting) would clip,
+     so stack them explicitly — flex-basis 0 above means they never wrap on their own. */
+  .gauge-block { flex-basis: 100%; max-width: none; }
 }

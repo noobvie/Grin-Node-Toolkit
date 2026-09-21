@@ -155,7 +155,7 @@ Restart=on-failure
 RestartSec=5
 LimitNOFILE=65535
 # Sandbox (audit §J16-3). haproxy itself drops to the unprivileged runtime account via
-# the `user`/`group` lines gw_render_forwarder writes into the global section; these are
+# the 'user'/'group' lines gw_render_forwarder writes into the global section; these are
 # the second layer, covering the brief root window before that drop. NoNewPrivileges is
 # safe here — unlike the hub unit, this service never shells out to sudo.
 # ProtectSystem=full (not strict) and no PrivateDevices on purpose: the forwarder logs to
@@ -204,10 +204,17 @@ EOF
 # ─── Firewall — the public stratum port ─────────────────────────────────────────
 # Idempotent; safe to call from both Install and Configure (the port can change).
 # No-op when no managed firewall is active, which is the common fresh-VPS case.
+# ⚠ Test ufw with the ANCHORED '^Status: active'. A disabled ufw answers `ufw status`
+# with "Status: inactive", and a bare `grep -q active` matches that word too. This ran
+# with the bare form until 2026-09-20 (first live gateway): on a box whose ufw was never
+# enabled it printed "ufw: opened 3333/tcp", Status then said "ufw is ACTIVE but :3333 is
+# not allowed" no matter what was run (an inactive ufw lists no rules for the regex to
+# find), and the operator re-ran Install and Configure chasing a ufw rule while the real
+# block sat outside the box. Every other script in the repo already anchored this test.
 gw_open_firewall() {
     local port; port=$(gw_read_conf public_stratum_port "3333")
     [[ "$port" =~ ^[0-9]+$ ]] || return 0
-    if command -v ufw &>/dev/null && ufw status 2>/dev/null | grep -q active; then
+    if command -v ufw &>/dev/null && ufw status 2>/dev/null | grep -q '^Status: active'; then
         if ufw allow "${port}/tcp" >/dev/null 2>&1; then
             info "ufw: opened ${port}/tcp (miner stratum)."
         else
@@ -218,19 +225,54 @@ gw_open_firewall() {
         firewall-cmd --reload >/dev/null 2>&1 || true
         info "firewalld: opened ${port}/tcp (miner stratum)."
     else
-        info "No active ufw/firewalld detected — nothing to open for :${port}."
-        echo -e "    ${DIM}If your provider has its own network firewall, allow TCP ${port} there.${RESET}"
+        if command -v ufw &>/dev/null; then
+            # Installed but disabled. A rule on an inactive ufw changes nothing today, but
+            # record it so a later `ufw enable` does not cut every miner off in one keypress.
+            ufw allow "${port}/tcp" >/dev/null 2>&1 || true
+            info "ufw is installed but INACTIVE — it is not what blocks :${port}. (Allow rule recorded for if you enable it later.)"
+        else
+            info "No active ufw/firewalld detected — nothing to open for :${port}."
+        fi
+        _gw_unmanaged_filter_hint "$port" "    "
     fi
+}
+
+# Neither managed firewall is active, yet :port can still be refused by two things that
+# no `ufw status` will ever show: raw iptables/nftables rules baked into the provider's
+# image (Oracle Cloud's Ubuntu images ship a REJECT-all INPUT rule in /etc/iptables/rules.v4
+# — the classic "ufw says inactive, port still dead"), and the provider's network firewall
+# outside the VM (Hetzner/Vultr/DO cloud firewall, AWS security group, GCP rule, OCI
+# security list), which is invisible from inside the box entirely. Say both, in that
+# order, because the first is checkable from here and the second is not.
+#   $1 = port, $2 = indent prefix (the Status screen nests deeper than Configure).
+_gw_unmanaged_filter_hint() {
+    local port="$1" ind="${2:-}"
+    if iptables -S INPUT 2>/dev/null | grep -qE -- '^-P INPUT (DROP|REJECT)|-j (DROP|REJECT)'; then
+        echo -e "${ind}${YELLOW}Raw iptables rules filter INPUT on this box (not ufw/firewalld) — :${port} may be rejected there.${RESET}"
+        echo -e "${ind}${DIM}Inspect: iptables -S INPUT      Open: iptables -I INPUT -p tcp --dport ${port} -j ACCEPT${RESET}"
+        echo -e "${ind}${DIM}then persist it (netfilter-persistent save, or edit /etc/iptables/rules.v4) or it is gone at reboot.${RESET}"
+    fi
+    echo -e "${ind}${DIM}If the pool's Port check still reads unreachable: allow TCP ${port} in your provider's${RESET}"
+    echo -e "${ind}${DIM}network firewall (cloud console) — nothing on this box can see that one.${RESET}"
 }
 
 # ─── 2) Configure ───────────────────────────────────────────────────────────────
 # Parse the one-line pairing string the central pool box prints on "Add a gateway
 # peer" (and re-prints on "List gateways"):
-#   GRINGW1|region|hub_wg_pubkey|hub_public_endpoint|hub_tunnel_ip|gw_tunnel_ip/32|region_port
-# Returns 1 (writing nothing) unless the tag matches and all 6 fields are present.
+#   GRINGW1|region|hub_wg_pubkey|hub_public_endpoint|hub_tunnel_ip|gw_tunnel_ip/32|region_port[|public_stratum_port]
+# Returns 1 (writing nothing) unless the tag matches and the first 6 fields are present.
+# The 8th field (hubs emit it since 2026-09-20) is the POOL's public miner port. The pool
+# advertises this region as <host>:<that port> and dials it for the Port check, so the
+# gateway must listen there and nothing on this box can know the number — yet Configure
+# used to ASK for it, echoing whatever was typed last time as the "default". First live
+# pairing: haproxy on :13333, card on :3333, "✗ unreachable" beside a green tunnel. When
+# the field is present it overwrites public_stratum_port; absent (older hub) → the saved
+# value stands and the prompt below says where to copy it from.
 gw_apply_pairing_string() {
-    local tag region pub ep hubip gwip port
-    IFS='|' read -r tag region pub ep hubip gwip port <<< "$1"
+    local tag region pub ep hubip gwip port pubport _rest
+    # Strip CRs: the string is pasted, and the LAST field now carries a port that a
+    # Windows clipboard would otherwise turn into "3333\r" and fail the shape check.
+    IFS='|' read -r tag region pub ep hubip gwip port pubport _rest <<< "${1//$'\r'/}"
     [[ "$tag" == "GRINGW1" ]] || return 1
     if [[ -z "$region" || -z "$pub" || -z "$ep" || -z "$hubip" || -z "$gwip" || ! "$port" =~ ^[0-9]+$ ]]; then
         return 1
@@ -252,6 +294,11 @@ gw_apply_pairing_string() {
     [[ "$gwip"   =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}(/32)?$ ]] \
         || { warn "pairing: gateway tunnel IP '$gwip' is not a single IPv4 address."; return 1; }
     (( port >= 1 && port <= 65535 )) || { warn "pairing: region port '$port' is out of range."; return 1; }
+    if [[ -n "$pubport" ]]; then
+        if [[ ! "$pubport" =~ ^[0-9]+$ ]] || (( pubport < 1 || pubport > 65535 )); then
+            warn "pairing: public stratum port '$pubport' is not a port."; return 1
+        fi
+    fi
     [[ "$gwip" == */* ]] || gwip="${gwip}/32"
     gw_write_conf_key "region"          "$region"
     gw_write_conf_key "wg_hub_pubkey"   "$pub"
@@ -260,6 +307,13 @@ gw_apply_pairing_string() {
     gw_write_conf_key "wg_address"      "$gwip"
     gw_write_conf_key "hub_endpoint"    "${hubip}:${port}"
     success "Pairing applied: region '${region}', tunnel ${gwip} → hub ${hubip}:${port}."
+    if [[ -n "$pubport" ]]; then
+        local was; was=$(gw_read_conf public_stratum_port "3333")
+        gw_write_conf_key "public_stratum_port" "$pubport"
+        if [[ "$was" != "$pubport" ]]; then
+            info "Public stratum port set to :${pubport} from the pairing string (was :${was}) — the pool advertises this region on :${pubport}."
+        fi
+    fi
 }
 
 gw_configure() {
@@ -293,6 +347,11 @@ gw_configure() {
         read -r val; [[ -n "$val" ]] && gw_write_conf_key "region" "$val"
     fi
 
+    echo ""
+    echo -e "  ${DIM}This must be the POOL's public miner port (3333 mainnet / 13333 testnet), not a${RESET}"
+    echo -e "  ${DIM}port of your choosing: the pool advertises this region as <host>:<that port> and${RESET}"
+    echo -e "  ${DIM}dials it for its Port check. A pairing string from a current pool fills it in;${RESET}"
+    echo -e "  ${DIM}otherwise copy it from the pool box (admin → Regions shows 'Port :NNNN').${RESET}"
     echo -ne "Public stratum port (miners connect here) [$(gw_read_conf public_stratum_port "3333")]: "
     read -r val; [[ -n "$val" ]] && gw_write_conf_key "public_stratum_port" "$val"
 
@@ -393,9 +452,11 @@ global
     # unauthenticated TCP from the public internet on :${port} and it holds the box that
     # holds the WireGuard private key for the tunnel into the pool — the same argument
     # pool_deroot() makes for the hub backend (design §13.9), which the edge had never
-    # applied: with no `user`/`group` here and no `User=` in the unit, haproxy stayed
+    # applied: with no 'user'/'group' here and no 'User=' in the unit, haproxy stayed
     # root for its entire life. The stratum port is >1024, so nothing needs root after
-    # startup. Chroot deliberately omitted: it would break `log /dev/log`.
+    # startup. Chroot deliberately omitted: it would break 'log /dev/log'.
+    # (No backticks in this heredoc: it is unquoted for the variables, so a backtick is a
+    # command substitution — this comment once ran 'user' and 'group' as shell commands.)
     user ${hap_user}
     group ${hap_group}
 
@@ -504,9 +565,11 @@ gw_status() {
     echo -e "\n${BOLD}Regional Gateway Status${RESET}"
     echo -e "${DIM}────────────────────────────────────────────────${RESET}"
 
+    # "Installed" is the unit file, not is-enabled: a unit that exists but was disabled
+    # used to read "not installed" here. Boot behaviour has its own line below.
     if systemctl is-active --quiet "$GW_SERVICE" 2>/dev/null; then
         echo -e "  ${BOLD}Forwarder${RESET} : ${GREEN}● active${RESET}"
-    elif systemctl is-enabled --quiet "$GW_SERVICE" 2>/dev/null; then
+    elif [[ -f "/etc/systemd/system/$GW_SERVICE.service" ]]; then
         echo -e "  ${BOLD}Forwarder${RESET} : ${YELLOW}installed, stopped${RESET}"
     else
         echo -e "  ${BOLD}Forwarder${RESET} : ${DIM}not installed${RESET}"
@@ -518,13 +581,28 @@ gw_status() {
         # Listening is not the same as reachable. A firewall DROP in front of this
         # port looks identical from here AND looks identical to a pairing fault on
         # the pool's Port-check column, so report the rule state right beside it.
-        if command -v ufw &>/dev/null && ufw status 2>/dev/null | grep -q active; then
-            if ufw status 2>/dev/null | grep -qE "^${sp}(/tcp)?[[:space:]]+ALLOW"; then
+        # Anchored '^Status: active' — see gw_open_firewall for the "inactive" trap;
+        # this line cried wolf on the first live gateway because of it.
+        if command -v ufw &>/dev/null && ufw status 2>/dev/null | grep -q '^Status: active'; then
+            # `ufw allow in on eth0 to any port N` lists as "N/tcp on eth0  ALLOW" — accept that too.
+            if ufw status 2>/dev/null | grep -qE "^${sp}(/tcp)?([[:space:]]+on[[:space:]]+[^[:space:]]+)?[[:space:]]+ALLOW"; then
                 echo -e "              ${DIM}ufw: :$sp allowed${RESET}"
             else
                 echo -e "              ${YELLOW}ufw is ACTIVE but :$sp is not allowed — miners will be refused${RESET}"
                 echo -e "              ${DIM}fix: ufw allow ${sp}/tcp   (or re-run 2) Configure)${RESET}"
             fi
+        elif command -v firewall-cmd &>/dev/null && firewall-cmd --state &>/dev/null; then
+            if firewall-cmd --query-port="${sp}/tcp" &>/dev/null; then
+                echo -e "              ${DIM}firewalld: :$sp allowed${RESET}"
+            else
+                echo -e "              ${YELLOW}firewalld is running but :$sp is not open — miners will be refused${RESET}"
+                echo -e "              ${DIM}fix: re-run 2) Configure   (or firewall-cmd --permanent --add-port=${sp}/tcp; firewall-cmd --reload)${RESET}"
+            fi
+        else
+            # Say it outright: a blank here used to read as "nothing to worry about", while
+            # the box could still be filtered by raw iptables or the provider's firewall.
+            echo -e "              ${DIM}host firewall: none active (ufw/firewalld) — not what blocks :$sp${RESET}"
+            _gw_unmanaged_filter_hint "$sp" "              "
         fi
     else
         echo -e "  ${BOLD}Stratum${RESET}   : ${DIM}:$sp not listening${RESET}"
@@ -554,6 +632,22 @@ gw_status() {
         fi
     else
         echo -e "  ${BOLD}Tunnel${RESET}    : ${DIM}${GW_WG_IFACE} not up${RESET}"
+    fi
+
+    # Boot persistence. Two units, enabled by two DIFFERENT menu steps (1) Install →
+    # grin-gateway, 3) Bring up tunnel → wg-quick@), each with `|| true`. A gateway that
+    # is missing one comes back from a reboot in the worst state there is: :$sp listens
+    # with nothing behind it, so the pool's Port check reads ✓ while no share ever
+    # arrives. Nothing else on this screen can tell that apart from a healthy box.
+    local fw_boot="enabled" tn_boot="enabled"
+    systemctl is-enabled --quiet "$GW_SERVICE" 2>/dev/null            || fw_boot="NOT enabled"
+    systemctl is-enabled --quiet "wg-quick@${GW_WG_IFACE}" 2>/dev/null || tn_boot="NOT enabled"
+    if [[ "$fw_boot" == "enabled" && "$tn_boot" == "enabled" ]]; then
+        echo -e "  ${BOLD}On reboot${RESET} : ${GREEN}forwarder and tunnel start automatically${RESET}"
+    else
+        echo -e "  ${BOLD}On reboot${RESET} : ${YELLOW}forwarder ${fw_boot} · tunnel ${tn_boot}${RESET}"
+        [[ "$fw_boot" == "enabled" ]] || echo -e "              ${DIM}fix: systemctl enable ${GW_SERVICE}   (1) Install does this)${RESET}"
+        [[ "$tn_boot" == "enabled" ]] || echo -e "              ${DIM}fix: systemctl enable wg-quick@${GW_WG_IFACE}   (3) Bring up tunnel does this)${RESET}"
     fi
 
     if [[ -f "$GW_DIR/wg_public.key" ]]; then

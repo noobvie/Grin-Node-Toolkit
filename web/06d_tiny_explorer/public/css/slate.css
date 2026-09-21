@@ -156,6 +156,9 @@
   color: var(--label); margin-bottom: 5px;
 }
 .sp-next p { margin: 0; color: var(--text); font-size: 14px; }
+.sp-next p + p { margin-top: 8px; }
+.sp-next-role { color: var(--value); }
+.sp-next code { font-family: var(--mono); color: var(--value); }
 
 /* ── Step rail ───────────────────────────────────────────────────────────── */
 

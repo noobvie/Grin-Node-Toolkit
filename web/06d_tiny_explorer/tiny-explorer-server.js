@@ -118,6 +118,13 @@ function unwrapResult(result) {
   return result;
 }
 
+// A missing entity is an Err, not an Ok(None): get_kernel answers
+// {"Err":"NotFound"} (api/src/handlers/chain_api.rs, `kernel.ok_or(Error::NotFound)`),
+// so unwrapResult throws for it exactly as it does for a dead node. A lookup that
+// wants to say "not found" must pick this one out of the catch, or every
+// finalized-but-unmined transaction reports as "node unreachable".
+function isNotFound(e) { return !!e && /^"?NotFound"?$/.test(e.message || ''); }
+
 async function foreignApi(method, params, stringifyKeys) {
   const data = await jsonRpc(config.node_url, foreignSecret, method, params, stringifyKeys);
   if (data.error) throw new Error(JSON.stringify(data.error));
@@ -279,8 +286,15 @@ async function getKernel(excess) {
   const ttl = config.entity_cache_ms || 300000;
   const hit = entityCacheGet(kernelCache, excess, ttl);
   if (hit) return hit;
-  // Ok(None) → null when the excess isn't in the kernel set.
-  const located = await foreignApi('get_kernel', [excess, null, null]);
+  // Err(NotFound) → null when the excess isn't in the kernel set; anything
+  // else (timeout, 401, 5xx) keeps propagating so the caller reports the node.
+  let located;
+  try {
+    located = await foreignApi('get_kernel', [excess, null, null]);
+  } catch (e) {
+    if (isNotFound(e)) return null;
+    throw e;
+  }
   if (!located || located.height == null) return null;
   await attachBlockRef(located, located.height);
   entityCacheSet(kernelCache, excess, located);

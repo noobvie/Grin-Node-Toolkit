@@ -68,6 +68,12 @@ function gwctl(args, timeoutMs) {
         let out = null;
         try { out = JSON.parse(String(stdout || '').trim()); } catch (e) { /* not JSON */ }
         if (out && out.ok) return resolve(out);
+        // A helper killed by the timeout has printed no JSON, and execFile's message for
+        // it is the bare "Command failed: sudo -n …" — after init-server's 3-minute wait
+        // that reads as an instant failure of the command itself. Name the timeout.
+        if (err && err.killed) {
+          return reject(new Error(`gateway helper timed out after ${Math.round((timeoutMs || 10000) / 1000)}s (${args[0]}) — the box may be waiting on apt or a hung wg-quick; check the pool service journal`));
+        }
         reject(new Error((out && out.error) ? out.error : (err ? err.message : 'gateway helper failed')));
       });
   });
@@ -430,6 +436,9 @@ let pagesManager = null;
 let postsManager = null;
 let uploadsDir = null;       // persistent media dir (served at /uploads, nginx in prod)
 let mediaUpload = null;      // configured multer instance for image uploads
+// Which Grin networks the network-map peer sensor reads (set once the collector is wired,
+// reported by /api/network/peers so the page can say "mainnet + testnet" vs "mainnet only").
+let _peerSensorNets = { main: false, test: false };
 
 async function initializePool() {
   try {
@@ -538,7 +547,10 @@ async function initializePool() {
     minerManager = new MinerManager(config);
     console.log(`[${new Date().toISOString()}] Mining managers initialized`);
 
-    stratumServer = new StratumServer(config);
+    // The stratum server MUST share this minerManager — sessions are created there on login and
+    // read here (/api/pool/stats, per-worker online flags, network map, poolstats, hashrate
+    // tracker). Two instances = an API that never sees a miner. See the StratumServer ctor note.
+    stratumServer = new StratumServer(config, minerManager);
     stratumServer.setBlockManager(blockManager);
     stratumServer.start();
 
@@ -702,16 +714,29 @@ async function initializePool() {
     hashrateTracker.start();
 
     // Network-map peer snapshot (feeds /api/network/peers). Every 20 min, read each running
-    // Grin node's connected peers, geolocate each to a COUNTRY ONLY (lib/geoip), and upsert
+    // Grin node's peers, geolocate each to a COUNTRY ONLY (lib/geoip), and upsert
     // network_peers keyed by a hash of net+IP — the raw address is never stored. Rows
     // accumulate a rolling country picture; the endpoint windows them (default 30d). No-op
     // when geoip-lite is not installed (available() false → lookups return null).
+    //
+    // TWO reads per node, and the second is the one that carries the volume:
+    //  • get_connected_peers — the live seats (8 outbound by default + whatever inbound the
+    //    firewall lets in). Sticky connections, so over 30 days this alone yields tens of
+    //    distinct nodes, not the hundreds the network has.
+    //  • get_peers (the node's PEER STORE) — the node itself crawls the network in the
+    //    background (grin v5.5 seed.rs `monitor_peers`: ~100 handshake probes every 20 s) and
+    //    records each success as `last_connected`, then drops the probe connection when it
+    //    already has enough outbound peers — so a node it verified 10 minutes ago is in the
+    //    store but never in the connected list. Store rows are stamped with the NODE's own
+    //    `last_connected`, so the endpoint's window measures when the handshake happened, not
+    //    when we noticed; `last_connected: 0` = gossip-only address never reached, skipped.
+    //    Steady state only rows newer than the previous snapshot are pushed (1 h overlap).
     //
     // Dual-network: a Grin node only peers within its OWN network (mainnet 3414 / testnet
     // 13414 are separate graphs), so besides this pool's own node we opportunistically read
     // the OTHER network's node too — that is how the map shows mainnet (green) + testnet
     // (pink) peers at once. The toolkit typically runs both nodes on the box; a network whose
-    // node isn't running simply contributes nothing (getConnectedPeers returns [] on error).
+    // node isn't running simply contributes nothing (both reads return [] on error).
     let otherNetNode = null;
     try {
       const ownIsMain = /^main/i.test(config.network || '');
@@ -730,40 +755,80 @@ async function initializePool() {
       console.error(`[network-map] other-net node init failed: ${e.message}`);
     }
 
+    const peerSources = [];
+    if (blockMonitor && blockMonitor.grinNode) {
+      peerSources.push({ node: blockMonitor.grinNode, net: /^main/i.test(config.network || '') ? 'main' : 'test' });
+    }
+    if (otherNetNode) {
+      peerSources.push({ node: otherNetNode, net: /^main/i.test(otherNetNode.network || '') ? 'main' : 'test' });
+    }
+    for (const src of peerSources) _peerSensorNets[src.net] = true;
+
+    // Upper bound of the endpoint's ?window (90 d): store rows older than that can never be
+    // shown, so the first pass after boot doesn't bother writing them.
+    const PEER_STORE_HORIZON_S = 90 * 86400;
+    const PEER_WRITE_CHUNK = 500;
+    let peerStoreMark = 0;   // `now` of the last snapshot that committed; 0 = none yet
+    const storeWarned = {};  // per net: warned once that get_peers yields nothing
     const snapshotNetworkPeers = async () => {
       try {
         if (!geoip.available()) return;
         const now = Math.floor(Date.now() / 1000);
-        const sources = [];
-        if (blockMonitor && blockMonitor.grinNode) {
-          sources.push({ node: blockMonitor.grinNode, net: /^main/i.test(config.network || '') ? 'main' : 'test' });
-        }
-        if (otherNetNode) {
-          sources.push({ node: otherNetNode, net: /^main/i.test(otherNetNode.network || '') ? 'main' : 'test' });
-        }
-        const rows = [];
-        for (const src of sources) {
-          const peers = await src.node.getConnectedPeers();
-          if (!peers || !peers.length) continue;
-          for (const p of peers) {
-            const addr = String(p.addr || p.address || '');
-            const ip = addr.replace(/:\d+$/, '').replace(/^\[|\]$/g, '');  // strip :port / [v6]
-            const geo = geoip.lookupCountry(ip);
-            if (!geo) continue;
-            // Key includes net so the same IP running BOTH a mainnet and a testnet node yields
-            // two distinct rows instead of one flipping the other's colour on ON CONFLICT.
-            const key = crypto.createHash('sha256').update(src.net + '|' + ip).digest('hex').slice(0, 32);
-            rows.push({ key, cc: geo.cc, name: geo.name, net: src.net });
+        const since = peerStoreMark ? peerStoreMark - 3600 : now - PEER_STORE_HORIZON_S;
+        // key → row carrying the earliest and latest stamp seen in this batch: a node in both
+        // the live list (`now`) and the store (its handshake time) is ONE write, and neither
+        // stamp is lost — first_seen stays the handshake, last_seen the live sighting.
+        const rows = new Map();
+        const push = (net, addr, seen) => {
+          const ip = String(addr || '').replace(/:\d+$/, '').replace(/^\[|\]$/g, '');  // strip :port / [v6]
+          const geo = geoip.lookupCountry(ip);
+          if (!geo) return;
+          // Key includes net so the same IP running BOTH a mainnet and a testnet node yields
+          // two distinct rows instead of one flipping the other's colour on ON CONFLICT.
+          const key = crypto.createHash('sha256').update(net + '|' + ip).digest('hex').slice(0, 32);
+          const prev = rows.get(key);
+          if (!prev) rows.set(key, { key, cc: geo.cc, name: geo.name, net, first: seen, last: seen });
+          else { if (seen < prev.first) prev.first = seen; if (seen > prev.last) prev.last = seen; }
+        };
+        for (const src of peerSources) {
+          const live = await src.node.getConnectedPeers();
+          for (const p of live || []) push(src.net, p.addr || p.address, now);
+          const store = await src.node.getPeerStore();
+          // Every connected peer is saved to the store on handshake, so an empty store beside
+          // a non-empty live list means the get_peers call itself failed (getPeerStore swallows
+          // errors) — say so once, or the map silently falls back to the ~8-seat count while
+          // the page copy still promises the peer store.
+          if ((!store || !store.length) && live && live.length && !storeWarned[src.net]) {
+            storeWarned[src.net] = true;
+            console.error(`[network-map] ${src.net}: get_peers returned nothing while ${live.length} peers are connected — peer-store sensor inactive, node count will stay low`);
+          }
+          for (const p of store || []) {
+            const t = Number(p.last_connected) || 0;
+            if (t >= since) push(src.net, p.addr, t);
           }
         }
-        if (!rows.length) return;
+        if (!rows.size) return;
+        // MAX/MIN, not plain overwrite: a live sighting stamped `now` and the store's older
+        // `last_connected` for the same node can arrive in consecutive snapshots in either order.
         const upsert = db.prepare(`
           INSERT INTO network_peers (peer_key, country_code, country, net, first_seen, last_seen)
           VALUES (?, ?, ?, ?, ?, ?)
           ON CONFLICT(peer_key) DO UPDATE SET
-            country_code = excluded.country_code, country = excluded.country,
-            net = excluded.net, last_seen = excluded.last_seen`);
-        db.transaction((rs) => { for (const r of rs) upsert.run(r.key, r.cc, r.name, r.net, now, now); })(rows);
+            country_code = excluded.country_code, country = excluded.country, net = excluded.net,
+            first_seen = MIN(first_seen, excluded.first_seen),
+            last_seen = MAX(last_seen, excluded.last_seen)`);
+        const writeChunk = db.transaction((rs) => { for (const r of rs) upsert.run(r.key, r.cc, r.name, r.net, r.first, r.last); });
+        // Chunked, yielding between chunks: the first pass after boot can be a few thousand
+        // rows and this DB is the same synchronous handle the share path writes through — one
+        // long transaction would stall share acceptance for its whole duration. Steady-state
+        // passes are a handful of rows and finish in one chunk. Idempotent, so a failure
+        // mid-way just leaves `peerStoreMark` where it was and the next pass re-covers it.
+        const all = Array.from(rows.values());
+        for (let i = 0; i < all.length; i += PEER_WRITE_CHUNK) {
+          writeChunk(all.slice(i, i + PEER_WRITE_CHUNK));
+          if (i + PEER_WRITE_CHUNK < all.length) await new Promise((r) => setImmediate(r));
+        }
+        peerStoreMark = now;
       } catch (e) {
         console.error(`[network-map] peer snapshot failed: ${e.message}`);
       }
@@ -1269,7 +1334,7 @@ function setupRoutes() {
     'GET /api/config/pool-info': { desc: 'Pool terms: network, pool fee %, minimum withdrawal, the flat per-payout withdrawal fee (0 = the pool absorbs the network fee), address format and which listener a miner needs.', shape: 'raw' },
 
     // ── Pool ──────────────────────────────────────────────────────────────────
-    'GET /api/pool/stats': { desc: 'Live pool stats: block totals, active miners, connections, and share quality (accepted/stale/rejected). Share quality is LIVE in-memory only — it is empty with no connected sessions and resets on disconnect.', shape: 'raw' },
+    'GET /api/pool/stats': { desc: 'Live pool stats: block totals (found / confirmed / immature counts, confirmed + immature reward), active miners (distinct addresses), active workers (logged-in rigs), raw connections, and share quality (accepted/stale/rejected). Share quality is LIVE in-memory only — it is empty with no connected sessions and resets on disconnect.', shape: 'raw' },
     'GET /api/pool/status': { desc: 'Coarse service health for the status strip: pool up, node reachable/synced/peers/height, wallet reachable. Never exposes balances or addresses.', shape: 'raw' },
     'GET /api/pool/stats/regions': { desc: 'Per-region stratum endpoints + live status (online | idle | offline) and 15-minute regional hashrate. On a MULTI-region pool a k-anonymity floor applies: a region with 0 < miners < min_bucket reports miners/hashrate_gps/shares_window as null with below_floor:true — that is withheld, not zero (a real zero is still 0). Totals are always exact.', shape: 'raw' },
     'GET /api/pool/locations': { desc: 'Operator-declared stratum regions that are currently active — region key, label, and the stratum URL to point a rig at.', shape: 'raw' },
@@ -1278,7 +1343,7 @@ function setupRoutes() {
     'GET /api/pool/effort': { desc: 'Pool network share, luck over the last 100 blocks, current round effort, and time since the last block. Network difficulty is cached ~60s.', shape: 'raw' },
     'GET /api/pool/hashrate/history': { desc: 'Pool hashrate time-series, summed across addresses per bucket.', shape: 'raw', params: 'hours (1–720, default 24)' },
     'GET /api/pool/poolstats': { desc: 'Listing feed for pool directories — this is the URL to hand to miningpoolstats.stream (they poll it; nothing is pushed). Pool + network aggregates in the same field layout as the toolkit\'s solo-mining poolstats_<net>.json, so an importer written for that needs no changes. Recomputed at most once every 60s and served from cache in between, so polling faster than 1/min returns identical bytes — 1–5 min is the sensible range. Every value is an aggregate already shown on the homepage; no address or per-miner row is included, so it needs no auth. The ts field is the generation time: if it stops advancing, the feed is stale. Fields are null (not 0) when the node is unreachable, and network.hashrate_gps_24h is null until the pool has an hour of history.', shape: 'raw' },
-    'GET /api/pool/metrics/history': { desc: 'Durable pool trend series: hashrate, miners, earnings, payout, network hashrate. Rolled up hourly and never pruned.', shape: 'raw', params: 'range=day|week|month|year|all (default day)' },
+    'GET /api/pool/metrics/history': { desc: 'Durable pool trend series: hashrate, miners, workers, earnings, payout, network hashrate. Rolled up hourly and never pruned. At day-or-coarser buckets (month/year/all) miner_count/worker_count are the PEAK hour in the bucket, hashrate the average, money the sum. worker_count is null for hours recorded before it existed — draw a null as a GAP, never as 0.', shape: 'raw', params: 'range=day|week|month|year|all (default day)' },
     'GET /api/pool/metrics/history/regions': { desc: 'Per-region miners/hashrate trend series (the "miners by gateway" view). Same k-anonymity floor as /api/pool/stats/regions, applied per point: below the floor miner_count and hashrate_gps are null with below_floor:true. Draw a null as a GAP, never as 0.', shape: 'raw', params: 'range=day|week|month|year|all (default day)' },
     'GET /api/pool/payments/history': { desc: 'Durable payments & transparency series: payouts, reward split, giveaways, donations, fee, plus lifetime totals.', shape: 'raw', params: 'range=day|week|month|year|all (default month)' },
     'GET /api/pool/payments': { desc: 'Recent confirmed payouts: address, amount, flat fee charged, method and timestamps. The on-chain kernel is NOT published here — pool-wide it would be a public address-to-chain index; it is available per address on /api/account/:addr/withdrawals. Pool-internal payout machinery (slate id, Tor probe result, retry state, cancel reason) is deliberately not published either.', shape: 'array', params: 'limit (≤500, default 100)' },
@@ -1287,7 +1352,7 @@ function setupRoutes() {
     'GET /api/pool/unclaimed': { desc: 'Lost-and-found: masked addresses of long-dormant balances with a per-address disposal countdown, plus the historical disposition ledger (sweeps into the prize pool).', shape: 'raw', params: 'limit (≤200, default 100)' },
     'GET /api/pool/donors': { desc: 'Donor wall: per-address lifetime donations to the prize pool, first/last donation date, current donate-tag %. Top 100. Addresses are MASKED.', shape: 'raw' },
     'GET /api/pool/prize-pool': { desc: 'Prize-pool transparency report: current balance + LIFETIME in/out totals by source (fee-cut, donations, operator top-ups, abandoned balances, orphan clawbacks). Per-event rows are deliberately withheld — their timestamps would expose the cadence of discretionary operator top-ups.', shape: 'raw' },
-    'GET /api/pool/topology': { desc: 'Network map: hub → gateways → miners aggregated BY COUNTRY. Country-only geolocation; no per-miner coordinate is ever resolved or stored, and countries under the k-anonymity floor merge into one unnamed bucket.', shape: 'raw', gated: 'the operator publishes the network map (off by default → 404)' },
+    'GET /api/pool/topology': { desc: 'Network map: hub → gateways → miners aggregated BY COUNTRY. Country-only geolocation; no per-miner coordinate is ever resolved or stored, and countries under the k-anonymity floor merge into one unnamed bucket.', shape: 'raw', gated: 'the operator publishes the network map (on by default; 404 while switched off in admin → Access)' },
 
     // ── Stratum (live session aggregates) ─────────────────────────────────────
     'GET /api/stratum/stats': { desc: 'Live stratum server state: connection counts and per-session share tallies. Session addresses are truncated so the live list cannot be scraped to enumerate miners.', shape: 'raw' },
@@ -1296,7 +1361,7 @@ function setupRoutes() {
     'GET /api/stratum/top-avg-hashrate': { desc: 'Top miners by AVERAGE hashrate over a multi-day window (sustained contribution). Backed by hashrate_history, so a 30-day window is meaningful. Addresses are MASKED.', shape: 'raw', params: 'days (≤90, default 30) · limit (≤1000, default 500)' },
 
     // ── Network ───────────────────────────────────────────────────────────────
-    'GET /api/network/peers': { desc: 'Grin P2P peers this node has seen, aggregated by country over a rolling window (+ mainnet/testnet split). Country-only, no IPs; thin countries merge into one unnamed bucket.', shape: 'raw', params: 'window days (1–90, default 30)', gated: 'the operator publishes the network map (off by default → 404)' },
+    'GET /api/network/peers': { desc: 'Distinct Grin nodes the pool box\'s node(s) have handshaked with — live connections plus each node\'s own peer store, NOT a network crawl — aggregated by country over a rolling window (+ mainnet/testnet split, and `sources` = which networks are read). Country-only, no IPs; thin countries merge into one unnamed bucket.', shape: 'raw', params: 'window days (1–90, default 30)', gated: 'the operator publishes the network map (on by default; 404 while switched off in admin → Access)' },
 
     // ── Account (address-as-identity: the address IS the credential to READ) ──
     'GET /api/account/:addr': { desc: 'Account summary: balance, locked, lifetime paid, pending payout, share/hashrate snapshot, active donation %, and when the ownership evidence on record last changed. 404 if the address has never mined here OR is not a well-formed Grin address.', shape: 'raw' },
@@ -1305,8 +1370,8 @@ function setupRoutes() {
     'GET /api/account/:addr/hashrate/history': { desc: 'Account hashrate time-series, downsampled for charting.', shape: 'raw', params: 'hours (1–720, default 24)' },
     'GET /api/account/:addr/earnings': { desc: 'Credited earnings per period (1h/24h/7d/30d) + 30d in/out totals. Payout reversals count as money-in but never as earnings.', shape: 'raw' },
     'GET /api/account/:addr/balance/log': { desc: 'Address ledger. Raw rows prune after ~60 days (the durable record is the withdrawal history below). format=csv streams the filtered window as a download on a tighter rate limit.', shape: 'raw · csv', params: 'direction=in|out · days (≤3650, default all) · limit (≤500, default 50) · offset · format=csv' },
-    'GET /api/account/:addr/withdrawals': { desc: 'Payout history for an address — kept forever, so this is the durable record for accounting. Payouts only: no donations or orphan clawbacks. format=csv streams all-time on a tighter rate limit. The on-chain kernel is NOT returned here — rows carry has_kernel_proof (boolean) and the kernels themselves need an ownership proof; see POST /api/account/:addr/withdrawals/proofs.', shape: 'raw · csv', params: 'limit (≤200, default 20) · offset · format=csv' },
-    'POST /api/account/:addr/withdrawals/proofs': { desc: 'On-chain payment proofs (kernel excess) for your own payouts. Returns { proofs: { <withdrawal id>: <kernel> } } for every confirmed payout that has one. Ownership-gated on purpose: publishing an address next to its kernels would be a public address-to-chain index on a privacy coin, so this is the one account field that costs a proof. 403 = proof failed, 404 = no such account.', shape: 'raw', auth: 'ownership proof', rate: 'withdraw', body: OWNER_PROOF_BODY },
+    'GET /api/account/:addr/withdrawals': { desc: 'Payout history for an address — kept forever, so this is the durable record for accounting. Payouts only: no donations or orphan clawbacks. format=csv streams all-time on a tighter rate limit. The on-chain kernel is NOT returned here — rows carry has_kernel_proof and has_payment_proof (booleans) and the proofs themselves need an ownership proof; see POST /api/account/:addr/withdrawals/proofs.', shape: 'raw · csv', params: 'limit (≤200, default 20) · offset · format=csv' },
+    'POST /api/account/:addr/withdrawals/proofs': { desc: 'Payment proofs for your own payouts, two kinds in one call. proofs: { <withdrawal id>: <kernel excess> } - the on-chain kernel of every confirmed payout (proves the tx was mined). payment_proofs: { <withdrawal id>: <PaymentProof> } - the signed proof grin-wallet requested on Tor payouts: { amount (nanogrin), excess, recipient_address, recipient_sig, sender_address, sender_sig }, the same JSON `grin-wallet export_proof` writes; save one as a file and `grin-wallet verify_proof` it. recipient_sig is YOUR wallet\'s signature, so it proves receipt to anyone. Slatepack/nostr payouts carry no signed proof (kernel only). Newest 500 signed proofs. Ownership-gated on purpose: publishing an address next to its kernels would be a public address-to-chain index on a privacy coin. 403 = proof failed, 404 = no such account.', shape: 'raw', auth: 'ownership proof', rate: 'withdraw', body: OWNER_PROOF_BODY },
     'GET /api/account/:addr/tor-check': { desc: 'Is this miner\'s wallet reachable over Tor right now? Read-only probe behind the payout UI hint. online is TRI-STATE: true/false when known, null = "decided at payout time". 404 if the address has never mined here — the probe is not offered for arbitrary Grin addresses. Answers are cached 60s per address; the payout gate always re-probes fresh.', shape: 'raw', rate: 'torcheck' },
     'POST /api/account/:addr/withdraw': { desc: 'Request a payout on one of three rails. 403 = ownership proof failed; 409 (tor) = wallet unreachable, retry or switch to slatepack; 409 (nostr) = destination unregistered, still in cooldown, or its npub changed.', shape: 'flat', auth: 'ownership proof', rate: 'withdraw', body: `method=tor|slatepack|nostr (default tor) · amount · ${OWNER_PROOF_BODY}` },
     'POST /api/account/:addr/withdraw/:id/finalize': { desc: 'Complete a slatepack payout by posting back the response slatepack your wallet produced with `receive`. The pool finalizes and broadcasts.', shape: 'raw', auth: 'ownership proof', rate: 'withdraw', body: `response_slatepack · ${OWNER_PROOF_BODY}` },
@@ -2390,6 +2455,9 @@ function setupRoutes() {
         ...blockStats,
         active_miners: minerCount,
         active_connections: sstats.active_connections,
+        // Logged-in rigs (one stratum login = one worker). `active_connections` is raw TCP
+        // sockets, which also counts a connection that has not (yet) sent its login.
+        active_workers: (sstats.sessions || []).length,
         share_quality: sq
       });
     } catch (err) {
@@ -2564,15 +2632,52 @@ function setupRoutes() {
       const status = req.query.status || null;
       const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 100, 1), 500);
 
-      if (status) {
-        res.json(db.prepare(`
-          SELECT * FROM withdrawals WHERE status = ? ORDER BY created_at DESC LIMIT ?
-        `).all(status, limit));
-      } else {
-        res.json(db.prepare(`
-          SELECT * FROM withdrawals ORDER BY created_at DESC LIMIT ?
-        `).all(limit));
+      const rows = status
+        ? db.prepare('SELECT * FROM withdrawals WHERE status = ? ORDER BY created_at DESC LIMIT ?').all(status, limit)
+        : db.prepare('SELECT * FROM withdrawals ORDER BY created_at DESC LIMIT ?').all(limit);
+      // The signed proof is a ~600-byte blob per row; the list carries a flag and the per-row
+      // route below serves the document.
+      res.json(rows.map((r) => {
+        const { payment_proof, ...rest } = r;
+        return { ...rest, has_payment_proof: !!payment_proof };
+      }));
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // The signed payment proof for ONE payout — the document that settles "I never received it"
+  // in front of a third party (the recipient's own key signed for this amount at this kernel;
+  // see withdrawal-scheduler.fetchAndStorePaymentProof). Read-only and secureAdmin: it moves no
+  // money, and the list above already shows this admin the address, slate and kernel. The id
+  // is the only input and the slate it resolves to comes from OUR row, never the request, so
+  // this cannot be used to look up arbitrary transactions in the wallet. If the backfill has
+  // not stored it yet the route asks the wallet once (one local tx-log read) — that is the
+  // operator's "fetch it now" for a fresh dispute.
+  app.get('/api/admin/withdrawals/:id/payment-proof', secureAdmin, async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'bad withdrawal id' });
+      const w = db.prepare(
+        'SELECT id, grin_address, amount, fee_charged, method, status, slate_id, kernel_excess, confirmed_at FROM withdrawals WHERE id = ?'
+      ).get(id);
+      if (!w) return res.status(404).json({ error: 'withdrawal not found' });
+      if (!withdrawalScheduler) return res.status(503).json({ error: 'withdrawal scheduler not running' });
+      const r = await withdrawalScheduler.fetchAndStorePaymentProof(id);
+      if (!r.ok) {
+        const why = {
+          none: 'this payout carries no signed proof (only the Tor rail requests one) - the kernel is its evidence',
+          not_confirmed: 'proof is only available once the payout is confirmed and its kernel is on record',
+          owner_api_unavailable: 'the wallet Owner API is not configured on this pool',
+          kernel_mismatch: 'the wallet proof does not match the kernel on this row - check the slate attribution before relying on either',
+          malformed: 'the wallet returned an unexpected proof shape',
+          error: r.error || 'the wallet could not be read'
+        }[r.reason] || r.reason;
+        return res.status(r.reason === 'error' || r.reason === 'owner_api_unavailable' ? 503 : 409)
+          .json({ error: why, reason: r.reason, withdrawal: w });
       }
+      res.json({ withdrawal: w, proof: r.proof, cached: !!r.cached,
+                 verify: 'grin-wallet verify_proof <file> - or the chain explorer /proof page' });
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
@@ -4020,13 +4125,17 @@ function setupRoutes() {
       // `kernel_excess` is NOT in this response (audit §J11-2) — `has_kernel_proof` replaces it,
       // so the account page can render the Proof column's affordance without the value. The
       // value itself needs an ownership proof; see the route directly below.
+      // Same treatment for the signed payment proof: it names the miner's address AND the
+      // kernel in one signed document, so it is at least as linking as the kernel. Rows carry
+      // has_payment_proof only; the proof itself comes from the ownership-gated route below.
       const rows = db.prepare(
-        `SELECT id, amount, fee, method, status, created_at, confirmed_at, kernel_excess
+        `SELECT id, amount, fee, method, status, created_at, confirmed_at, kernel_excess, payment_proof
          FROM withdrawals WHERE grin_address = ?
          ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?`
       ).all(addr, limit, offset).map((r) => {
         const { kernel_excess, ...rest } = r;
-        return { ...rest, has_kernel_proof: !!kernel_excess };
+        const { payment_proof, ...pub } = rest;
+        return { ...pub, has_kernel_proof: !!kernel_excess, has_payment_proof: !!payment_proof };
       });
       res.json({ grin_address: addr, total, count: rows.length, withdrawals: rows });
     } catch (err) {
@@ -4075,7 +4184,21 @@ function setupRoutes() {
       ).all(addr);
       const proofs = {};
       for (const r of rows) proofs[r.id] = r.kernel_excess;
-      res.json({ grin_address: addr, count: rows.length, proofs });
+
+      // Signed payment proofs, behind the same single proof so a miner reveals everything in
+      // one press. Served from the DB only — this route never touches the wallet, so it cannot
+      // be turned into a wallet-load lever no matter how many payouts an address has. Bounded to
+      // the newest 500 (each is ~600 bytes); older ones are still on the operator's side.
+      const payment_proofs = {};
+      const withProof = db.prepare(
+        `SELECT id, payment_proof FROM withdrawals
+         WHERE grin_address = ? AND payment_proof IS NOT NULL AND payment_proof != ''
+         ORDER BY id DESC LIMIT 500`
+      ).all(addr);
+      for (const r of withProof) {
+        try { payment_proofs[r.id] = JSON.parse(r.payment_proof); } catch (_) { /* skip a bad row, never fail the reveal */ }
+      }
+      res.json({ grin_address: addr, count: rows.length, proofs, payment_proof_count: withProof.length, payment_proofs });
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
@@ -4563,15 +4686,16 @@ function setupRoutes() {
     }
   });
 
-  // ─── Network-map exposure gate (access.network_map_public, OFF by default) ──────────────
+  // ─── Network-map exposure gate (access.network_map_public, ON by default since 2026-09-13) ──
   // Guards the two feeds behind /network-map.html. Neither has ever returned an IP — peer IPs
   // never leave the DB and no coordinate is ever resolved: an aggregate marker sits on its
   // country's exact centroid (geoip.countryCentroid) and the country itself is published beside
   // it, so there is nothing for a scattered point to hide — but
   // both publish a per-country breakdown of who mines here / who this node peers with, and on
   // a small pool a country with one entry names one person. Disabled → 404 (not 403: a 403
-  // confirms the feature exists and is merely switched off). network-map.js already treats a
-  // failed fetch as "no data" and renders its illustrative fallback, so the page degrades.
+  // confirms the feature exists and is merely switched off). network-map.js treats a failed
+  // fetch as "not published": bare globe, zeroed placards, a note — no sample data (removed
+  // 2026-09-13 after it was twice mistaken for the pool's real footprint).
   const networkMapPublic = () => {
     try {
       const a = poolSettings.getSection('access');
@@ -4585,6 +4709,9 @@ function setupRoutes() {
   // published totals still add up.
   const minBucket = () => {
     try {
+      // `|| 3` / `catch → 3` are NOT the default (that is 1, in PoolSettings.defaults): they
+      // are the conservative floor for a value that is missing or garbage, fail-closed like
+      // networkMapPublic() above. A readable default of 1 parses cleanly and never lands here.
       return Math.max(1, parseInt(poolSettings.getSection('access').network_map_min_bucket, 10) || 3);
     } catch (e) {
       return 3;
@@ -4842,10 +4969,11 @@ function setupRoutes() {
   });
 
   // ─── Network map: Grin P2P peers by country (rolling window) ────────────────────────────
-  // Aggregates network_peers (populated by the peer-snapshot collector — COUNTRY ONLY, no IPs)
-  // over the last ?window days (default 30, max 90). Returns per-country counts (+ main/test
-  // split) and a capped set of scattered-in-country twinkle points for the globe. Empty when geoip-lite
-  // isn't installed or the node has no peers yet (page then shows its illustrative fallback).
+  // Aggregates network_peers (populated by the peer-snapshot collector — COUNTRY ONLY, no IPs;
+  // live connections + each node's own peer store, see snapshotNetworkPeers) over the last
+  // ?window days (default 30, max 90). Returns per-country counts (+ main/test split) and a
+  // capped set of scattered-in-country twinkle points for the globe. Empty when geoip-lite
+  // isn't installed or the node has no peers yet (page then shows no twinkles and says so).
   app.get('/api/network/peers', rateLimiter.middleware('public'), (req, res) => {
     try {
       if (!networkMapPublic()) return res.status(404).json({ error: 'not_found' });
@@ -4904,6 +5032,15 @@ function setupRoutes() {
       res.json({
         window_days: days,
         countries, points,
+        // Whether the collector CAN produce sightings. snapshotNetworkPeers is a permanent
+        // no-op without geoip-lite, so an empty `countries` means "install the package" on
+        // one box and "wait 30 s" on another — network-map.js words its note from this flag
+        // rather than promising data that will never arrive.
+        geo_available: geoip.available(),
+        // Which networks' nodes the sensor reads on this box (a node only peers within its own
+        // network). Lets the page say "mainnet + testnet" or "mainnet only" from fact, not
+        // from a zero it can't tell apart from "no testnet sightings yet".
+        sources: { main: !!_peerSensorNets.main, test: !!_peerSensorNets.test },
         // Totals span ALL peers (including the ones folded into "Other") — the floor hides
         // which country a thin peer is in, not that it exists.
         totals: {
@@ -6554,6 +6691,10 @@ function setupRoutes() {
         caveats: caveats.length ? caveats : undefined
       });
     } catch (e) {
+      // Journal it: the audit row above is written only on success, so until this
+      // line a failed enable left no trace on the box at all — and the browser's
+      // copy of the message is one page reload from gone.
+      console.error(`[gateways] init-server failed (${req.user && req.user.user_id ? 'admin ' + req.user.user_id : 'admin ?'}): ${e.message}`);
       res.status(502).json({ error: 'Could not enable multi-region: ' + e.message });
     }
   });

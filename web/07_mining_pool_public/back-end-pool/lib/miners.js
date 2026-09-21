@@ -23,6 +23,10 @@ class MinerManager {
       // Region the miner connected through (which stratum listener accepted it). Stamped on
       // every share for per-region aggregation; falls back to this box's configured region.
       region: region || this.config.region || 'default',
+      // The job target this rig was last pushed (stratum-server sets it on login and on every
+      // broadcast; there is no vardiff). Informational — /api/stratum/stats and the `status`
+      // reply. It is NOT what a share is credited: that comes from the job the submit names
+      // (stratum-protocol shareCreditDifficulty), so this placeholder can never reach the DB.
       difficulty: 1.0,
       subscribedAt: Date.now(),
       lastShareAt: null,

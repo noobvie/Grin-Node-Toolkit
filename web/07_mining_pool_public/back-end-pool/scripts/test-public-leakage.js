@@ -192,6 +192,32 @@ ok('§J11-2 the proofs route is on the `withdraw` bucket, not `public`',
   /rateLimiter\.middleware\('withdraw'\)/.test(proofsRoute) &&
   !/rateLimiter\.middleware\('public'\)/.test(proofsRoute));
 
+// The signed payment proof (§H6) names the miner's address AND the kernel in one signed
+// document, so it is at least as linking as the kernel and gets the identical treatment:
+// the per-address GET may only drop it or coerce it to a boolean; the value travels only on
+// the ownership-gated POST; and that POST must not reach for the wallet (a per-address list of
+// hundreds of payouts must never become a wallet-load lever).
+const ppMentions = (wJs.match(/(?<![\w])payment_proof\b/g) || []).length; // not has_payment_proof
+const ppAllowed =
+  (wJs.match(/const \{\s*payment_proof,\s*\.\.\.pub\s*\}/g) || []).length +
+  (wJs.match(/!!payment_proof/g) || []).length;
+ok('§H6 the per-address withdrawals GET never puts the signed proof in a response',
+  ppMentions > 0 && ppMentions === ppAllowed,
+  `${ppMentions} mention(s), ${ppAllowed} of them provably non-leaking`);
+ok('§H6 its JSON row carries has_payment_proof instead', /has_payment_proof: !!payment_proof/.test(wJs));
+ok('§H6 the gated proofs route is the one that emits payment_proofs',
+  /payment_proofs\[r\.id\] = JSON\.parse\(r\.payment_proof\)/.test(proofsRoute));
+ok('§H6 the gated proofs route reads the DB only — no wallet call in the request path',
+  !/wallet\./.test(proofsRoute.replace(/\/\/[^\n]*/g, '')) && !/withdrawalScheduler\./.test(proofsRoute));
+const adminWdList = routeSrc('get', '/api/admin/withdrawals');
+ok('§H6 the admin withdrawals list strips the blob to a flag (SELECT * would carry it)',
+  /const \{\s*payment_proof,\s*\.\.\.rest\s*\}/.test(adminWdList) && /has_payment_proof: !!payment_proof/.test(adminWdList));
+const adminProofRoute = routeSrc('get', '/api/admin/withdrawals/:id/payment-proof');
+ok('§H6 the admin per-row proof route exists and is admin-authenticated',
+  adminProofRoute.length > 0 && /secureAdmin/.test(adminProofRoute));
+ok('§H6 it resolves the slate from OUR row by id — the request never names a slate or address',
+  /req\.params\.id/.test(adminProofRoute) && !/req\.(query|body)\.(slate|slate_id|address|addr)/.test(adminProofRoute));
+
 console.log('\n[5] §J11-6 / §J11-7 — header suppression and the NaN-safe window parsers\n');
 
 ok("§J11-6 app.disable('x-powered-by') is called",

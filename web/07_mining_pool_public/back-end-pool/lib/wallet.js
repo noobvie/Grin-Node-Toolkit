@@ -68,6 +68,18 @@ class WalletAPI {
     return Array.isArray(result) ? result[1] : (result && result.txs) || [];
   }
 
+  // The signed payment proof for a sent transaction — grin-wallet's PaymentProof
+  // { amount, excess, recipient_address, recipient_sig, sender_address, sender_sig }, the same
+  // object `grin-wallet export_proof` writes and `verify_proof` reads. Only exists for a tx that
+  // REQUESTED one (the Tor CLI rail does by default for a slatepack destination; the Owner-API
+  // slatepack/nostr rail passes payment_proof_recipient_address: null and so never does) and
+  // only once the tx is confirmed. refresh=false reads the local tx log — the caller is expected
+  // to ask only for rows the kernel backfill has already seen confirmed.
+  // Params: [keychain_mask, refresh_from_node, tx_id, tx_slate_id].
+  async retrievePaymentProof(slateId, refresh = false) {
+    return this._call('retrieve_payment_proof', [null, !!refresh, null, String(slateId)]);
+  }
+
   // The wallet's slatepack address at a derivation index (default 0). Deterministic from the
   // seed, so index 0 is a stable per-wallet fingerprint used as the pool's wallet-identity anchor
   // (lib/reconciliation.js probeWalletIdentity → AlertMonitor swap guard). grin-wallet Owner v3

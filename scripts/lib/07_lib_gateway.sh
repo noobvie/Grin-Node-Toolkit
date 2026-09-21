@@ -204,10 +204,17 @@ EOF
 # ─── Firewall — the public stratum port ─────────────────────────────────────────
 # Idempotent; safe to call from both Install and Configure (the port can change).
 # No-op when no managed firewall is active, which is the common fresh-VPS case.
+# ⚠ Test ufw with the ANCHORED '^Status: active'. A disabled ufw answers `ufw status`
+# with "Status: inactive", and a bare `grep -q active` matches that word too. This ran
+# with the bare form until 2026-09-20 (first live gateway): on a box whose ufw was never
+# enabled it printed "ufw: opened 3333/tcp", Status then said "ufw is ACTIVE but :3333 is
+# not allowed" no matter what was run (an inactive ufw lists no rules for the regex to
+# find), and the operator re-ran Install and Configure chasing a ufw rule while the real
+# block sat outside the box. Every other script in the repo already anchored this test.
 gw_open_firewall() {
     local port; port=$(gw_read_conf public_stratum_port "3333")
     [[ "$port" =~ ^[0-9]+$ ]] || return 0
-    if command -v ufw &>/dev/null && ufw status 2>/dev/null | grep -q active; then
+    if command -v ufw &>/dev/null && ufw status 2>/dev/null | grep -q '^Status: active'; then
         if ufw allow "${port}/tcp" >/dev/null 2>&1; then
             info "ufw: opened ${port}/tcp (miner stratum)."
         else
@@ -218,9 +225,35 @@ gw_open_firewall() {
         firewall-cmd --reload >/dev/null 2>&1 || true
         info "firewalld: opened ${port}/tcp (miner stratum)."
     else
-        info "No active ufw/firewalld detected — nothing to open for :${port}."
-        echo -e "    ${DIM}If your provider has its own network firewall, allow TCP ${port} there.${RESET}"
+        if command -v ufw &>/dev/null; then
+            # Installed but disabled. A rule on an inactive ufw changes nothing today, but
+            # record it so a later `ufw enable` does not cut every miner off in one keypress.
+            ufw allow "${port}/tcp" >/dev/null 2>&1 || true
+            info "ufw is installed but INACTIVE — it is not what blocks :${port}. (Allow rule recorded for if you enable it later.)"
+        else
+            info "No active ufw/firewalld detected — nothing to open for :${port}."
+        fi
+        _gw_unmanaged_filter_hint "$port" "    "
     fi
+}
+
+# Neither managed firewall is active, yet :port can still be refused by two things that
+# no `ufw status` will ever show: raw iptables/nftables rules baked into the provider's
+# image (Oracle Cloud's Ubuntu images ship a REJECT-all INPUT rule in /etc/iptables/rules.v4
+# — the classic "ufw says inactive, port still dead"), and the provider's network firewall
+# outside the VM (Hetzner/Vultr/DO cloud firewall, AWS security group, GCP rule, OCI
+# security list), which is invisible from inside the box entirely. Say both, in that
+# order, because the first is checkable from here and the second is not.
+#   $1 = port, $2 = indent prefix (the Status screen nests deeper than Configure).
+_gw_unmanaged_filter_hint() {
+    local port="$1" ind="${2:-}"
+    if iptables -S INPUT 2>/dev/null | grep -qE -- '^-P INPUT (DROP|REJECT)|-j (DROP|REJECT)'; then
+        echo -e "${ind}${YELLOW}Raw iptables rules filter INPUT on this box (not ufw/firewalld) — :${port} may be rejected there.${RESET}"
+        echo -e "${ind}${DIM}Inspect: iptables -S INPUT      Open: iptables -I INPUT -p tcp --dport ${port} -j ACCEPT${RESET}"
+        echo -e "${ind}${DIM}then persist it (netfilter-persistent save, or edit /etc/iptables/rules.v4) or it is gone at reboot.${RESET}"
+    fi
+    echo -e "${ind}${DIM}If the pool's Port check still reads unreachable: allow TCP ${port} in your provider's${RESET}"
+    echo -e "${ind}${DIM}network firewall (cloud console) — nothing on this box can see that one.${RESET}"
 }
 
 # ─── 2) Configure ───────────────────────────────────────────────────────────────
@@ -548,13 +581,28 @@ gw_status() {
         # Listening is not the same as reachable. A firewall DROP in front of this
         # port looks identical from here AND looks identical to a pairing fault on
         # the pool's Port-check column, so report the rule state right beside it.
-        if command -v ufw &>/dev/null && ufw status 2>/dev/null | grep -q active; then
-            if ufw status 2>/dev/null | grep -qE "^${sp}(/tcp)?[[:space:]]+ALLOW"; then
+        # Anchored '^Status: active' — see gw_open_firewall for the "inactive" trap;
+        # this line cried wolf on the first live gateway because of it.
+        if command -v ufw &>/dev/null && ufw status 2>/dev/null | grep -q '^Status: active'; then
+            # `ufw allow in on eth0 to any port N` lists as "N/tcp on eth0  ALLOW" — accept that too.
+            if ufw status 2>/dev/null | grep -qE "^${sp}(/tcp)?([[:space:]]+on[[:space:]]+[^[:space:]]+)?[[:space:]]+ALLOW"; then
                 echo -e "              ${DIM}ufw: :$sp allowed${RESET}"
             else
                 echo -e "              ${YELLOW}ufw is ACTIVE but :$sp is not allowed — miners will be refused${RESET}"
                 echo -e "              ${DIM}fix: ufw allow ${sp}/tcp   (or re-run 2) Configure)${RESET}"
             fi
+        elif command -v firewall-cmd &>/dev/null && firewall-cmd --state &>/dev/null; then
+            if firewall-cmd --query-port="${sp}/tcp" &>/dev/null; then
+                echo -e "              ${DIM}firewalld: :$sp allowed${RESET}"
+            else
+                echo -e "              ${YELLOW}firewalld is running but :$sp is not open — miners will be refused${RESET}"
+                echo -e "              ${DIM}fix: re-run 2) Configure   (or firewall-cmd --permanent --add-port=${sp}/tcp; firewall-cmd --reload)${RESET}"
+            fi
+        else
+            # Say it outright: a blank here used to read as "nothing to worry about", while
+            # the box could still be filtered by raw iptables or the provider's firewall.
+            echo -e "              ${DIM}host firewall: none active (ufw/firewalld) — not what blocks :$sp${RESET}"
+            _gw_unmanaged_filter_hint "$sp" "              "
         fi
     else
         echo -e "  ${BOLD}Stratum${RESET}   : ${DIM}:$sp not listening${RESET}"

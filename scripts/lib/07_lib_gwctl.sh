@@ -211,7 +211,8 @@ CONF
     # Only the wg UDP port is opened. Region listener ports stay unopened on
     # purpose — they bind the tunnel IP, so only an authenticated peer reaches them.
     FIREWALL="not-managed"
-    if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q active; then
+    # Anchored: a disabled ufw prints "Status: inactive", which a bare 'active' matches.
+    if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q '^Status: active'; then
         ufw allow "${WG_LISTEN_PORT}/udp" >/dev/null 2>&1 && FIREWALL="ufw" || FIREWALL="ufw-failed"
     elif command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; then
         firewall-cmd --permanent --add-port="${WG_LISTEN_PORT}/udp" >/dev/null 2>&1 || true

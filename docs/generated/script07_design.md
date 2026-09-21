@@ -2,7 +2,7 @@
 
 > **Covers code as of:** 2026-09-07 for the multi-region surface (§2–§7, §11–§12, rewritten against the live code) · 2026-06-08 for the rest of the §6 endpoint table
 > **Last verified:** 2026-09-07, PARTIAL — **the multi-region surface only**, read against the code: the mode selector + `pool_mode_conflict_check` in `scripts/07_grin_mining_public_pool.sh`, `role`/`region`/`region_ports` in `back-end-pool/lib/config.js`, listener-port region stamping in `lib/stratum-server.js`, `shares.region` + `pool_locations` + `pool_region_metrics_hourly` in `lib/db.js`, the ingestion/health/region routes in `index.js`, and the WireGuard + region-port derivation in `scripts/lib/07_lib_gwctl.sh`. Everything outside that surface — the rest of §6, and §7–§10, §13–§15 — still rests on the 2026-06-08 pass (account + payout routes re-verified 2026-07-13) and was **not** re-checked, with one line-scoped exception: the admin-surface note in the §6 not-built list was corrected 2026-09-07 against `back-end-pool/admin-panel/` and `admin-shell.js`.
-> **Product code last changed:** 2026-09-20 (pairing string carries the public port; gateway Status boot line, §13.12s) — `scripts/07_grin_mining_*.sh`, `scripts/lib/07_lib_*.sh`, `web/07_mining_pool_public/`
+> **Product code last changed:** 2026-09-20 (pairing string carries the public port; gateway Status boot line, §13.12s; anchored ufw test + unmanaged-firewall readout, §13.12t) — `scripts/07_grin_mining_*.sh`, `scripts/lib/07_lib_*.sh`, `web/07_mining_pool_public/`
 > Prose last edited 2026-09-07.
 
 **Product:** `scripts/07_grin_mining_public_pool.sh` + web app under `web/07_mining_pool_public/`.
@@ -1149,6 +1149,25 @@ and a box missing either reboots into `:3333 listening` with nothing behind it �
 check reads as ✓. Verified with stubs: hub emitter (default / explicit / missing key, both
 emitters), gateway parser (7 fields, 8 fields, CR, bogus port, out-of-range, 9 fields, unchanged
 port), Status in all four enabled/disabled combinations. NOT VPS-tested.
+
+**t) Status cried wolf about ufw (found 2026-09-20, first live gateway).** With the port fixed by
+(s), the gateway's `5) Status` read `:3333 listening · ufw is ACTIVE but :3333 is not allowed —
+miners will be refused`, and re-running `1) Install` and `2) Configure` (both call
+`gw_open_firewall`) changed nothing. The actual unreachability was a wrong A record; once that was
+corrected miners connected — *while Status still showed the warning*, which is only possible if ufw
+was never active on that box. The cause: (g)'s three ufw tests in `07_lib_gateway.sh` and
+`07_lib_gwctl.sh` were the bare `ufw status | grep -q active`, and a disabled ufw answers
+`Status: inactive` — a string that contains `active`. So an inactive ufw was "active": Configure
+printed `ufw: opened 3333/tcp` (a rule on an inactive ufw does nothing), Status found no rule table
+to match and warned forever, and on the hub `init-server` reported `firewall: ufw` for a UDP port it
+had not opened. Every other script in the repo already anchored the test (`"Status: active"`); the
+three Script-07 sites now do too. The unmanaged branch also stopped being a blank: Status now says
+`host firewall: none active — not what blocks :3333`, checks `iptables -S INPUT` for a raw
+DROP/REJECT (the Oracle-image trap that `ufw status` never shows) and points at the provider's
+network firewall, and firewalld gained the `--query-port` readout ufw always had. Configure's order
+is unchanged and deliberate: the port is opened at the END, after the pairing string may have
+changed it — opening "as soon as the port is entered" would open the stale number. Stub-tested
+(inactive / active-no-rule / active-rule / `on eth0` rule / raw-iptables REJECT).
 
 ---
 

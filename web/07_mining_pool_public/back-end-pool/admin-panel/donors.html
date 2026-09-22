@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Donors | Grin Pool ツ</title>
+  <link rel="stylesheet" href="/css/pool.css">
+  <link rel="stylesheet" href="/admin/styles.css">
+  <!-- settings.css for the Donation settings card (.form-section/.form-group/.helper-text) — the
+       first data page to carry a settings form. Its .btn rule outranks pool.css's .btn-sm, so the
+       row actions below are .btn-icon (the panel's row-action convention), not text buttons. -->
+  <link rel="stylesheet" href="/admin/settings.css">
+  <style>
+    /* Page-local bits only; everything else is the shared bundle. */
+    .donor-name { font-weight: 600; }
+    .donor-none { color: var(--text-dim); font-style: italic; }
+    .donor-state { display: flex; flex-wrap: wrap; gap: .3rem; align-items: center; margin-top: .25rem; }
+    .worker-list { display: flex; flex-direction: column; gap: .15rem; font-size: .8rem; }
+    .worker-list .w-tag { color: var(--accent); font-weight: 600; }
+    .worker-list .w-off { color: var(--text-dim); }
+    .rank-medal { font-size: 1rem; }
+    /* Operator list: one entry per line, monospace so a stray space or a look-alike glyph shows. */
+    #donor_name_blocklist { font-family: var(--font-mono); font-size: .82rem; min-height: 200px; }
+    /* settings.css's .form-row is a 2-column grid; the ranking card has three fields. */
+    .form-row.cols-3 { grid-template-columns: 1fr 1fr 1fr; }
+    @media (max-width: 900px) { .form-row.cols-3 { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+
+<main>
+  <div class="container">
+    <section>
+      <h2>
+        Donors
+        <span id="donor-summary" style="font-size:.82rem;color:var(--text-dim);font-weight:400;margin-left:.8rem;"></span>
+      </h2>
+      <p class="helper-text" style="margin:0 0 .8rem;">
+        Every address that has donated to the prize pool, carries a live <code>donateN</code> tag, or
+        has a donor name on file. A donor's name is the label of their tagged rig
+        (<code>yourbrand-donate10</code> → <code>yourbrand</code>), captured only when the tag is set
+        from zero. Censoring is per <em>address</em> and sticky — later renames stay hidden until you
+        un-censor, which also tells the auto-list to leave that address alone. Rank and score are what
+        the public wall ranks by (GRIN in the window × loyalty). All dates are UTC.
+      </p>
+
+      <!-- The address/name filter lives in the AdminTable tools bar; only the state filter is here. -->
+      <div style="display:flex;gap:.6rem;align-items:center;margin-bottom:.8rem;flex-wrap:wrap;">
+        <label for="donor-filter" style="font-size:.85rem;margin-bottom:0;">Show</label>
+        <select id="donor-filter" class="settings-skip" onchange="filterDonors(true)" style="font-size:.85rem;padding:.3rem .5rem;">
+          <option value="all">All</option>
+          <option value="named">With a name</option>
+          <option value="censored">Censored (auto or admin)</option>
+          <option value="new">New this week</option>
+        </select>
+      </div>
+
+      <div class="card" style="padding:0;">
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Score</th>
+                <th>Address</th>
+                <th>Donor name</th>
+                <th>Now</th>
+                <th>Lifetime ツ</th>
+                <th>In window ツ</th>
+                <th>Months · ×</th>
+                <th>First / last</th>
+                <th>Workers (24 h)</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="donors-tbody">
+              <tr class="loading-row"><td colspan="11"><span class="spinner"></span>Loading…</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <!-- Initial hidden state is INLINE; the .error-msg/.success-msg classes must not carry
+           display:none or flash()'s reveal (style.display = '') is a no-op. -->
+      <p class="error-msg" id="donor-msg" style="display:none;margin-top:.6rem;"></p>
+    </section>
+
+    <section>
+      <h2>Donation settings</h2>
+      <p class="helper-text" style="margin:0 0 1rem;">
+        These are keys of the <em>incentives</em> section (saving is step-up gated, like the
+        Incentives page). Saving a changed word list re-scans every stored name and reports the
+        counts here. <em>Restore defaults</em> on Settings → Incentives resets these too.
+      </p>
+      <div id="donation-settings">
+        <div class="settings-form">
+          <div class="form-section">
+            <h4 class="sub-title">Miner donations</h4>
+            <div class="checkbox-group">
+              <input type="checkbox" id="allow_miner_donations" name="allow_miner_donations">
+              <label for="allow_miner_donations">Allow miner donations (<code>donateN</code> worker tag)</label>
+            </div>
+            <div class="helper-text">
+              Miners donate N % of their payout by naming a worker <code>donate10</code> (10 %) or
+              <code>yourbrand-donate10</code>. N is clamped 0–100; <code>donate0</code> pauses. Off →
+              stored percentages are dormant: nothing is taken, the wall shows every donor as paused,
+              and no name is shown.
+            </div>
+            <div class="form-group" style="margin-top:.8rem;">
+              <label for="donation_address">Public donation address (Slatepack)</label>
+              <input type="text" id="donation_address" name="donation_address" class="settings-allow-empty" placeholder="grin1… (your pool donation receiving address)">
+              <div class="helper-text">Shown on the fortune board so anyone can donate. Leave blank to show none. Reflect what arrives there into the prize pool with a manual top-up on Settings → Incentives.</div>
+            </div>
+          </div>
+
+          <div class="form-section">
+            <h4 class="sub-title">Donor names</h4>
+            <div class="form-group">
+              <label for="donor_name_blocklist">Auto-censor word list</label>
+              <textarea id="donor_name_blocklist" name="donor_name_blocklist" rows="10" spellcheck="false"></textarea>
+              <div class="helper-text">
+                One entry per line, matched <em>inside</em> the name after removing <code>-</code>/<code>_</code>
+                and the leet digits 0 1 3 4 5 7 (so <code>a55-h0le</code> matches <code>asshole</code>).
+                Substring matching means false positives (<code>classic</code> contains <code>ass</code>) —
+                un-censor those above and they stay allowed. Ten fixed impersonation words (admin,
+                official, operator, support, staff, pool, grinium, prize, jackpot, winner) plus your pool
+                name are always applied whatever this list says. Saving re-scans every stored name.
+              </div>
+            </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label for="donor_censored_display">Censored name shows as</label>
+                <select id="donor_censored_display" name="donor_censored_display">
+                  <option value="masked">Masked address (default)</option>
+                  <option value="marker">&lt;censored-donor&gt; marker</option>
+                </select>
+                <div class="helper-text">The masked address is the quiet choice — a visible marker is the reaction a troll wants.</div>
+              </div>
+              <div class="form-group">
+                <label for="donor_name_expiry_months">Name expiry (months)</label>
+                <input type="number" id="donor_name_expiry_months" name="donor_name_expiry_months" min="0" max="120" step="1">
+                <div class="helper-text">Masked address again this many months after the last donation (or the capture, whichever is later). 0 = never.</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="form-section">
+            <h4 class="sub-title">Donor league ranking</h4>
+            <div class="helper-text" style="margin-bottom:.8rem;">
+              score = GRIN donated in the window × min(1 + loyalty % × active months, cap). Active months
+              are distinct UTC months with a donation debit. Rigs are shown, never ranked.
+            </div>
+            <div class="form-row cols-3">
+              <div class="form-group">
+                <label for="donor_rank_window_days">Ranking window (days)</label>
+                <input type="number" id="donor_rank_window_days" name="donor_rank_window_days" min="0" max="3650" step="1">
+                <div class="helper-text">Donors with nothing in the window move to the "past donors" strip. 0 = lifetime (the board freezes).</div>
+              </div>
+              <div class="form-group">
+                <label for="donor_loyalty_percent_per_month">Loyalty bonus per active month (%)</label>
+                <input type="number" id="donor_loyalty_percent_per_month" name="donor_loyalty_percent_per_month" min="0" max="100" step="0.5">
+                <div class="helper-text">+10 % per month → ×1.4 after four months of giving.</div>
+              </div>
+              <div class="form-group">
+                <label for="donor_loyalty_cap">Loyalty multiplier cap (×)</label>
+                <input type="number" id="donor_loyalty_cap" name="donor_loyalty_cap" min="1" max="100" step="0.1">
+                <div class="helper-text">Ceiling on the multiplier. Minimum 1 (no bonus).</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="form-actions">
+            <button type="button" class="btn btn-primary" onclick="saveDonationSettings()">Save changes</button>
+          </div>
+          <p class="error-msg" id="settings-msg" style="display:none;"></p>
+        </div>
+      </div>
+    </section>
+  </div>
+</main>
+
+<script src="/js/auth.js"></script>
+<script src="/js/api.js"></script>
+<script src="/admin/admin-shell.js"></script>
+<script src="/js/stepup.js"></script>
+<script>
+let _allDonors = [];
+let _donationsActive = true;
+let _windowDays = 365;
+
+// Auth gate (httpOnly-cookie aware): redirects to /login.html if not an admin, else wires
+// up the topbar username + Logout. Pool name + testnet banner are handled by admin-shell.js.
+// stepup.js provides adminFetch() for the step-up-gated censor/un-censor actions and the
+// settings save (the incentives section is step-up gated server-side).
+API.guardAdminPage();
+
+function escHtml(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+function fmtGrin(v) { return (Number(v) || 0).toFixed(4); }
+function fmtDate(t) {
+  if (!t) return '—';
+  return new Date(t * 1000).toISOString().slice(0, 10);   // UTC, stated once on the page
+}
+function shortAddr(a) {
+  a = String(a || '');
+  return a.length > 22 ? a.slice(0, 12) + '…' + a.slice(-7) : a;
+}
+
+// The state badge per design §16.8. `renamed_while_censored` is a second badge beside
+// admin-censored — it is the signal that the censor is doing its job (the name changed and
+// stayed hidden), not a new state.
+function stateBadges(d) {
+  const b = [];
+  if (d.donor_censor === 'admin') {
+    b.push('<span class="badge badge-error" title="Hidden by an admin — sticky across renames">admin-censored</span>');
+    if (d.renamed_while_censored) {
+      b.push('<span class="badge badge-error" title="The name changed after the censor and is still hidden">renamed while censored</span>');
+    }
+  } else if (d.donor_censor === 'auto') {
+    b.push(`<span class="badge badge-warn" title="Matched the word list — un-censor to allow this address">auto: &quot;${escHtml(d.donor_censor_word || '?')}&quot;</span>`);
+  } else if (d.donor_censor === 'allow') {
+    b.push('<span class="badge badge-ok" title="Admin override — the word list skips this address">allowed</span>');
+  } else if (d.donor_name) {
+    b.push('<span class="badge badge-ok">ok</span>');
+  }
+  if (d.is_new) b.push('<span class="badge badge-warn" title="Captured within the last 7 days">NEW</span>');
+  return b.join(' ');
+}
+
+function workersCell(ws) {
+  if (!ws || !ws.length) return '<span class="donor-none">none in 24 h</span>';
+  const shown = ws.slice(0, 6).map(w => {
+    const dot = w.online ? '<span class="dot dot-green"></span>' : '<span class="dot dot-red"></span>';
+    const cls = w.tagged ? 'w-tag' : (w.online ? '' : 'w-off');
+    const tip = w.tagged ? ' title="This rig carries the donate tag — its label is the donor name"' : '';
+    return `<span class="${cls}"${tip}>${dot}${escHtml(w.name)}${w.tagged ? ' 🏷' : ''}</span>`;
+  });
+  if (ws.length > 6) shown.push(`<span class="w-off">+${ws.length - 6} more</span>`);
+  return `<div class="worker-list">${shown.join('')}</div>`;
+}
+
+// Search + 20-per-page paging come from AdminTable (admin-shell.js); the state select stays
+// page-side and feeds it a pre-filtered array.
+const donorsTable = AdminTable.create({
+  tbody: 'donors-tbody',
+  search: 'Filter by address or name…',
+  empty: 'No donors yet — a row appears when a miner sets a donate tag or a donation is debited.',
+  note: 'Donors are kept permanently (the ledger behind them is rolled up daily, never deleted). ' +
+        'Workers are read from the 24 h share window.',
+  text: d => (d.address || '') + ' ' + (d.donor_name || '') + ' ' + (d.donor_censor_word || ''),
+  row: d => {
+    // data-addr + this.dataset, NOT a value spliced into a JS string literal (audit §J14).
+    const addr = escHtml(d.address);
+    const addrCell = `<button type="button" class="addr-copy" data-copy="${addr}" ` +
+      `data-tip="${addr}&#10;Click to copy" aria-label="Copy address ${escHtml(shortAddr(d.address))}">` +
+      `${escHtml(shortAddr(d.address))}</button>`;
+    const medal = d.rank === 1 ? '🥇' : d.rank === 2 ? '🥈' : d.rank === 3 ? '🥉' : '';
+    const rankCell = d.rank
+      ? (medal ? `<span class="rank-medal">${medal}</span>` : String(d.rank))
+      : '<span class="donor-none" title="Nothing donated inside the ranking window">—</span>';
+    const nameCell = d.donor_name
+      ? `<span class="donor-name">${escHtml(d.donor_name)}</span>`
+      : '<span class="donor-none">masked address</span>';
+    const nowCell = !_donationsActive
+      ? '<span class="badge badge-dim" title="Miner donations are switched off">off</span>'
+      : (d.current_percent > 0
+          ? `<span class="badge badge-ok">${escHtml(String(d.current_percent))} %</span>`
+          : '<span class="badge badge-dim">paused</span>');
+    const canCensor = d.donor_censor !== 'admin';
+    const canAllow  = d.donor_censor !== 'allow';
+    const actions =
+      (canCensor ? `<button class="btn-icon btn-icon-danger" data-addr="${addr}" onclick="censorDonor(this.dataset.addr)" data-tip="Censor this address (sticky)" aria-label="Censor this address">🚫</button>` : '') +
+      (canAllow  ? `<button class="btn-icon" data-addr="${addr}" onclick="uncensorDonor(this.dataset.addr)" data-tip="Allow this address (auto-list override)" aria-label="Allow this address">✅</button>` : '');
+    return `<tr>
+      <td class="mono">${rankCell}</td>
+      <td class="mono" title="${escHtml(fmtGrin(d.in_window_donated))} × ${escHtml(String(d.multiplier))}">${fmtGrin(d.score)}</td>
+      <td>${addrCell}</td>
+      <td>${nameCell}<div class="donor-state">${stateBadges(d)}</div></td>
+      <td>${nowCell}</td>
+      <td class="mono">${fmtGrin(d.lifetime_donated)}</td>
+      <td class="mono">${fmtGrin(d.in_window_donated)}</td>
+      <td class="mono">${d.active_months || 0} · ×${escHtml(String(d.multiplier))}</td>
+      <td class="mono" style="white-space:nowrap;">${fmtDate(d.first_donated_at)}<br>${fmtDate(d.last_donated_at)}</td>
+      <td>${workersCell(d.workers)}</td>
+      <td><div class="row-actions">${actions}</div></td>
+    </tr>`;
+  }
+});
+
+async function loadDonors() {
+  try {
+    const data = await API.get('/api/admin/donors?limit=500');
+    // API.get (Auth.fetch) hands back the parsed ERROR body on a non-2xx — a 429 is JSON too.
+    // `null`/error and "no donors" are different facts; never render the first as the second.
+    if (!data || data.success !== true || !Array.isArray(data.donors)) {
+      donorsTable.setError((data && data.error) || 'Could not load donors');
+      return;
+    }
+    _allDonors = data.donors;
+    _donationsActive = data.donations_active !== false;
+    _windowDays = Number(data.window_days) || 0;
+    const named    = _allDonors.filter(d => d.donor_name).length;
+    const censored = _allDonors.filter(d => d.donor_censor === 'auto' || d.donor_censor === 'admin').length;
+    const fresh    = _allDonors.filter(d => d.is_new).length;
+    document.getElementById('donor-summary').textContent =
+      `${data.count} total · ${named} named · ${censored} censored · ${fresh} new this week · ` +
+      `window ${_windowDays > 0 ? _windowDays + ' d' : 'lifetime'}`;
+    filterDonors();
+  } catch (err) {
+    donorsTable.setError(err.message);
+  }
+}
+
+// `reset` is passed only when the select changed — the refresh timer must not yank the
+// operator back to page 1 while they are reading page 3.
+function filterDonors(reset) {
+  const mode = document.getElementById('donor-filter').value;
+  let rows = _allDonors;
+  if (mode === 'named')    rows = rows.filter(d => !!d.donor_name);
+  if (mode === 'censored') rows = rows.filter(d => d.donor_censor === 'auto' || d.donor_censor === 'admin');
+  if (mode === 'new')      rows = rows.filter(d => d.is_new);
+  donorsTable.setRows(rows, { reset: reset === true });   // server order = league order
+}
+
+function flashInto(id, msg, isErr) {
+  const el = document.getElementById(id);
+  el.textContent = msg;
+  el.className = isErr ? 'error-msg' : 'success-msg';
+  el.style.display = '';
+  setTimeout(() => { el.style.display = 'none'; }, isErr ? 9000 : 6000);
+}
+function flash(msg, isErr) { flashInto('donor-msg', msg, isErr); }
+
+async function censorDonor(addr) {
+  if (!confirm(`Censor the donor name on ${addr}?\n\nThe name (and every later rename on this address) stays hidden on the wall until you un-censor it. The donation itself is unaffected.`)) return;
+  await moderate(addr, 'censor', 'Donor name censored.');
+}
+async function uncensorDonor(addr) {
+  if (!confirm(`Allow the donor name on ${addr}?\n\nThis also tells the auto-list to skip this address from now on.`)) return;
+  await moderate(addr, 'uncensor', 'Donor name allowed.');
+}
+async function moderate(addr, action, okMsg) {
+  try {
+    const res = await adminFetch('/api/admin/donors/' + encodeURIComponent(addr) + '/' + action, { method: 'POST' });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.error || ('HTTP ' + res.status));
+    flash(okMsg + (body.donor_name ? ` (${body.donor_name})` : ''), false);
+    loadDonors();
+  } catch (err) { flash(err.message, true); }
+}
+
+// ── Donation settings (incentives section, page-local form) ──────────────────────────
+// Not settings-common.js: its saveSection() discards the response body, and the one thing
+// this form must show is the rescan counts that ride on it. The harvester below follows the
+// same three rules (bind by id; skip `settings-skip`; drop EMPTY scalars unless
+// `settings-allow-empty`, send checkboxes and textareas always), so a stray id here fails
+// the save the same way it would there — and updateSection() upserts only the keys it is
+// sent, so this partial form and the Incentives page never clobber each other.
+const FORM_SEL = '#donation-settings .settings-form';
+
+async function loadDonationSettings() {
+  try {
+    const d = await API.get('/api/admin/settings/incentives');
+    if (!d || d.success !== true || !d.data) throw new Error((d && d.error) || 'Could not load settings');
+    const v = d.data;
+    document.querySelectorAll(FORM_SEL + ' input, ' + FORM_SEL + ' select, ' + FORM_SEL + ' textarea').forEach(el => {
+      if (!el.id || el.classList.contains('settings-skip')) return;
+      if (!(el.id in v)) return;
+      const val = v[el.id];
+      if (el.type === 'checkbox') el.checked = val === true || val === 'true';
+      else el.value = val == null ? '' : String(val);
+    });
+  } catch (err) { flashInto('settings-msg', err.message, true); }
+}
+
+function harvestDonationSettings() {
+  const data = {};
+  document.querySelectorAll(FORM_SEL + ' input, ' + FORM_SEL + ' select, ' + FORM_SEL + ' textarea').forEach(el => {
+    if (!el.id || el.classList.contains('settings-skip')) return;
+    if (el.type === 'checkbox') data[el.id] = el.checked;
+    else if (el.tagName === 'TEXTAREA') data[el.id] = el.value;
+    else if (el.value || el.classList.contains('settings-allow-empty')) data[el.id] = el.value;
+  });
+  return data;
+}
+
+async function saveDonationSettings() {
+  try {
+    const res = await adminFetch('/api/admin/settings/incentives', {
+      method: 'POST', credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(harvestDonationSettings())
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.error || ('HTTP ' + res.status));   // the server's reason, §J14
+    let msg = 'Donation settings saved.';
+    const r = body.rescan;
+    if (r && r.error) msg += ` The list was stored but the rescan failed: ${r.error}`;
+    else if (r) msg += ` Rescanned ${r.scanned} name${r.scanned === 1 ? '' : 's'}: ${r.censored} censored, ${r.cleared} cleared.`;
+    flashInto('settings-msg', msg, !!(r && r.error));
+    loadDonors();
+  } catch (err) { flashInto('settings-msg', 'Not saved: ' + err.message, true); }
+}
+
+document.addEventListener('DOMContentLoaded', () => { loadDonors(); loadDonationSettings(); });
+setInterval(loadDonors, 60000);
+</script>
+</body>
+</html>

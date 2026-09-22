@@ -44,6 +44,13 @@
         <div class="kpi-label">Pending Withdrawals</div>
         <div class="kpi-value" id="kpi-pending">—</div>
       </div>
+      <!-- Donor names captured in the last 7 days (design §16.8) — the moderation inbox. -->
+      <div class="kpi-card">
+        <div class="kpi-ico">🏷</div>
+        <div class="kpi-label">New Donor Names <span style="font-weight:400;">(7 d)</span></div>
+        <div class="kpi-value" id="kpi-donor-names">—</div>
+        <a href="donors.html" style="font-size:.78rem;">Review on Donors →</a>
+      </div>
     </div>
 
     <!-- 30-day pool hashrate -->
@@ -142,6 +149,7 @@ async function loadAdminDashboard() {
     document.getElementById('kpi-hashrate').textContent = fmtHashrate(d.pool_hashrate_gps);
     document.getElementById('kpi-unclaimed').textContent = fmtGrin(d.unclaimed_balance);
     document.getElementById('kpi-pending').textContent  = d.pending_withdrawals ?? '—';
+    document.getElementById('kpi-donor-names').textContent = d.new_donor_names_7d ?? '—';
   } catch (e) {}
 
   loadHashrateChart();

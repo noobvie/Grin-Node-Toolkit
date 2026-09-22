@@ -16,7 +16,10 @@
  * shape itself states the precision we have and there is no point position to misread; the
  * centroid marker is only a label/hover anchor. A country with no polygon on file, or one
  * too small to read at the current zoom, falls back to a size-scaled dot on its centroid.
- * Hub and gateways sit on the country centroid (see back-end lib/geoip.js).
+ * The hub sits on the country centroid (see back-end lib/geoip.js). A gateway sits on the
+ * lat/lng the operator declared for it in admin → Regions, else on the centroid: a gateway is
+ * the pool's own public server, not a miner, and two US gateways on the centroid drew
+ * "Los Angeles" and "New York" 140 km apart in Kansas (2026-09-21) — a bug to any viewer.
  *
  * Canvas colours are intentionally the dark Reactor palette (the phosphor glow only
  * reads on black); the surrounding panels use the theme tokens and reskin normally.
@@ -230,8 +233,12 @@
     drawLand(); drawGrat(MERIDIANS); drawGrat(PARALLELS); drawCountries();
     if (opts.nodes) drawPeers(now);
     if (opts.arcs) {
-      REGIONS.forEach((r,i) => { if (r.gwv) drawAnimArc(r.v, r.gwv, "90,209,255", 1, 0.10, now, i*0.09, 2600, r.gwStatus==="connected"); });
-      if (HUB.located) GATEWAYS.forEach((g,i) => { if (g.status==="offline") drawAnimArc(g.v, HUB.v, "255,90,82", 1.2, 0.16, now, 0, 2000, false); else if (g.status==="checking") drawAnimArc(g.v, HUB.v, "139,152,165", 1.2, 0.12, now, 0, 2600, false); else drawAnimArc(g.v, HUB.v, "255,182,61", 1.6, 0.17, now, i*0.18, g.status==="handshake"?3200:2000, true); });
+      // Arcs are LINKS, not launches (2026-09-21): lift ≤ 0.06 R (0.17 drew a ballistic bulge)
+      // and the motion is evenly spaced packets at constant speed — see drawAnimArc. Hub links
+      // encode status: connected = 3 packets (traffic), handshake = 1 slow packet (keepalive,
+      // no miners yet), checking = static grey, offline = static red DASHED (link down).
+      REGIONS.forEach((r,i) => { if (r.gwv) drawAnimArc(r.v, r.gwv, "90,209,255", 1, 0.05, now, i*0.09, 2600, r.gwStatus==="connected", { packets: 2 }); });
+      if (HUB.located) GATEWAYS.forEach((g,i) => { if (g.status==="offline") drawAnimArc(g.v, HUB.v, "255,90,82", 1.2, 0.06, now, 0, 2000, false, { dashed: true }); else if (g.status==="checking") drawAnimArc(g.v, HUB.v, "139,152,165", 1.2, 0.06, now, 0, 2600, false); else drawAnimArc(g.v, HUB.v, "255,182,61", 1.6, 0.06, now, i*0.18, g.status==="handshake"?3200:2000, true, { packets: g.status==="handshake" ? 1 : 3 }); });
     }
     NODES.map(n => ({ n, p: project(n.v) })).sort((a,b)=>a.p.z-b.p.z).forEach(({n,p}) => { n._sx=p.x; n._sy=p.y; n._front=p.z>-0.05; if (p.z<=-0.05) return; drawNode(n,p,Math.max(0,Math.min(1,(p.z+0.1)/0.5)),now); });
   }
@@ -282,15 +289,25 @@
     }
   }
   function drawPeers(now) { for (const pr of PEERS){ const p=project(pr.v); if (p.z<=0.03) continue; let a = pr.blink ? (Math.sin(now*pr.spd*2.2+pr.phase)>0.4?1:0.12) : (0.35+0.4*(0.5+0.5*Math.sin(now*pr.spd+pr.phase))); a *= Math.min(1,p.z*1.4); const rgb = pr.net==="main"?"93,255,115":"255,79,216"; ctx.fillStyle="rgba("+rgb+","+(a*0.85).toFixed(3)+")"; ctx.shadowColor="rgba("+rgb+","+a.toFixed(3)+")"; ctx.shadowBlur=10*a; ctx.beginPath(); ctx.arc(p.x,p.y,3.2,0,7); ctx.fill(); ctx.shadowBlur=0; } }
-  function drawAnimArc(a, b, rgb, width, lift, now, phase, period, active) {
+  // A link drawn on the globe, a → b. Static part: a faint great-circle arc with a shallow
+  // bulge (`lift`, as a fraction of R), dashed when opt.dashed — a link that is down. Motion
+  // (active && !REDUCED): opt.packets (default 3) evenly spaced short dashes riding a → b at
+  // constant speed and constant width, each a little brighter at its front so direction still
+  // reads — data on a cable. The previous version was ONE comet with a thickening fade tail
+  // and a blurred glowing head on a 17%-lift arc, which made every hub link look like a rocket
+  // launch (2026-09-21); there is deliberately no tail flare and no glow here.
+  function drawAnimArc(a, b, rgb, width, lift, now, phase, period, active, opt) {
+    const packets = Math.max(1, (opt && opt.packets) | 0 || 3), dashed = !!(opt && opt.dashed);
     const N=30, pt = t => { const s=slerp(a,b,t); const k=1+lift*Math.sin(Math.PI*t); return project([s[0]*k,s[1]*k,s[2]*k]); };
-    ctx.lineWidth=width; let st=false;
+    ctx.lineWidth=width; if (dashed) ctx.setLineDash([3,5]); let st=false;
     for (let i=0;i<=N;i++){ const p=pt(i/N); if (p.z>-0.15){ const al=(active?0.28:0.16)*Math.max(0.1,Math.min(1,(p.z+0.15)/0.6)); ctx.strokeStyle="rgba("+rgb+","+al.toFixed(3)+")"; if (!st){ ctx.beginPath(); ctx.moveTo(p.x,p.y); st=true; } else ctx.lineTo(p.x,p.y); } else if (st){ ctx.stroke(); st=false; } }
     if (st) ctx.stroke();
+    if (dashed) ctx.setLineDash([]);
     if (!active || REDUCED) return;
-    const head=((now/period)+phase)%1, TAIL=0.16, STEPS=9; ctx.lineCap="round";
-    for (let j=0;j<STEPS;j++){ const t1=head-(j/STEPS)*TAIL, t2=head-((j+1)/STEPS)*TAIL; if (t2<0) break; const p1=pt(t1), p2=pt(t2); if (p1.z<=0||p2.z<=0) continue; const fade=1-j/STEPS; ctx.strokeStyle="rgba("+rgb+","+(fade*0.9*Math.min(1,p1.z*1.5)).toFixed(3)+")"; ctx.lineWidth=width+fade*1.8; ctx.beginPath(); ctx.moveTo(p1.x,p1.y); ctx.lineTo(p2.x,p2.y); ctx.stroke(); }
-    const ph=pt(head); if (ph.z>0){ ctx.fillStyle="rgba("+rgb+","+Math.min(1,ph.z*1.6).toFixed(3)+")"; ctx.shadowColor="rgba("+rgb+",0.9)"; ctx.shadowBlur=8; ctx.beginPath(); ctx.arc(ph.x,ph.y,width+1.2,0,7); ctx.fill(); ctx.shadowBlur=0; }
+    const LEN=0.05, SEG=4, base=((now/period)+phase)%1; ctx.lineCap="round"; ctx.lineWidth=width+0.8;
+    for (let k=0;k<packets;k++){ const head=(base+k/packets)%1;
+      for (let j=0;j<SEG;j++){ const t1=head-(j/SEG)*LEN, t2=head-((j+1)/SEG)*LEN; if (t2<0) break; const p1=pt(t1), p2=pt(t2); if (p1.z<=0||p2.z<=0) continue; const al=(1-0.55*j/SEG)*0.9*Math.min(1,p1.z*1.5); ctx.strokeStyle="rgba("+rgb+","+al.toFixed(3)+")"; ctx.beginPath(); ctx.moveTo(p1.x,p1.y); ctx.lineTo(p2.x,p2.y); ctx.stroke(); }
+    }
     ctx.lineCap="butt";
   }
   function drawNode(n, p, fade, now) {

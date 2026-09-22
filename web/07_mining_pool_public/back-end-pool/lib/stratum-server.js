@@ -28,6 +28,7 @@ const IncentivesManager = require('./incentives');
 // one shape (grin1qxy…mn4p) rather than a second, divergent redaction (audit §J8-5).
 const { maskAddress } = require('./dormancy');
 const { PASS_MAX } = require('./owner-proof');
+const { captureDonorName, donorSettings } = require('./donor-names');
 
 // How many old job IDs remain valid for submit (avoids instant stale on slow networks)
 const JOB_WINDOW = 10;
@@ -579,7 +580,7 @@ class StratumServer {
       socket.write(JSON.stringify(
         createLoginResponse(id, { code: -1, message:
           `Invalid login. Use a ${isMain ? 'mainnet grin1…' : 'testnet tgrin1…'} Slatepack address, ` +
-          `optionally as address.worker_name (worker name auto-shortens to 25 chars; keep it under 40)` })
+          `optionally as address.worker_name (worker name auto-shortens to 32 chars; keep it within 48)` })
       ) + '\n');
       socket.destroy();
       return;
@@ -634,7 +635,12 @@ class StratumServer {
     // from someone who has proved anything.
     if (parsed.donation_percent !== null && parsed.donation_percent !== undefined) {
       const s = this.minerManager.getSession(sessionId);
-      if (s) s.donationPercent = parsed.donation_percent;
+      if (s) {
+        s.donationPercent = parsed.donation_percent;
+        // The label part of the tag (`acme-donate10` → 'acme'; plain `donate10` → ''). Parked
+        // with the percent and consumed by the SAME gated write below — design §16.4.
+        s.donorLabel = parsed.donor_label;
+      }
     }
 
     socket.write(JSON.stringify(createLoginResponse(id)) + '\n');
@@ -653,7 +659,7 @@ class StratumServer {
     // Address MASKED, IP in full (audit §J8-5). This one line is the only place the pool ever
     // writes a miner's full address next to their real MINING ip — nginx never sees stratum, so
     // there is no second copy — and it is exactly the pairing owner-proof.js spends a 16 MB
-    // scrypt per capture to avoid storing in `miner_accounts.last_ip`. journald keeps it for
+    // scrypt per capture to avoid storing a raw IP in `miner_proofs`. journald keeps it for
     // whatever SystemMaxUse/MaxRetentionSec say, which on an untuned box is months.
     //
     // The IP is kept whole on purpose, and the address is masked instead: the full IP is how an
@@ -839,32 +845,27 @@ class StratumServer {
       //     someone else set by logging in once with `.donate0`, and the first value an address
       //     ever sets still works with no ceremony. This matters because the proceeds go to the
       //     prize pool, which pays out to OTHER people — the diversion is irreversible once made.
+      // The branch itself is _applyParkedDonation so scripts/test-donor-names.js can drive it
+      // with a stub session and assert which arms reach the donor-name write.
       if (session.donationPercent !== null && session.donationPercent !== undefined &&
           !session.donationDone && session.acceptedShares >= PROOF_MIN_SHARES) {
         session.donationDone = true;
-        try {
-          const current = this.incentives.donationPercent(session.grinAddress) || 0;
-          if (session.donationPercent <= current || current === 0) {
-            this.incentives.setDonation(session.grinAddress, session.donationPercent);
-          } else {
-            console.warn(`[${new Date().toISOString()}] Donation raise ${current}%→${session.donationPercent}% ` +
-                         `refused for ${session.grinAddress}: a stored donation may only be LOWERED from stratum (§J6-7)`);
-          }
-        } catch (e) {
-          console.error(`Error setting donation for ${session.grinAddress}: ${e.message}`);
-        }
+        this._applyParkedDonation(session);
       }
 
       // Ownership-proof capture runs at most twice per session, and the second pass is the
-      // point of it (audit §J3-4). The window is only two slots deep and anyone may mine to
-      // anyone's address, so two hostile sessions used to evict both of a miner's proofs — and
-      // a miner who had since stopped mining could never re-capture, leaving their balance
-      // unreachable. DISPLACING a stored value now costs sustained work, not one share:
-      //   · first accepted share  → capture, but only into EMPTY slots (mayDisplace false).
+      // point of it (audit §J3-4). Anyone may mine to anyone's address, so ADDING a proof
+      // beside the ones an address already holds costs sustained work, not one share:
+      //   · first accepted share  → capture, but only into an EMPTY set (mayDisplace false).
       //     A brand-new address has nothing to protect, and gating first capture would strand
       //     a rig that reconnects too often to ever reach the threshold.
-      //   · PROOF_MIN_SHARES-th   → capture again, now permitted to rotate an existing value.
-      // recordOwnerEvidence is a no-op when nothing changed, so a normal rig writes once.
+      //   · PROOF_MIN_SHARES-th   → capture again, now permitted to add to a non-empty set.
+      // A value already on record only refreshes its last-seen stamp (design §17), so a rig
+      // reconnecting from a known IP costs one UPDATE and writes no audit row — that path is
+      // why honest multi-site churn is now silent where the old 2-slot window raised an alarm
+      // for it. `session.acceptedShares`, never `shareCount`: the latter counts the whole
+      // address, so a bare-login attacker would ride the victim's own mining to the threshold
+      // (§J3 self-review).
       if (!session.evidenceDone &&
           (session.acceptedShares === 1 || session.acceptedShares >= PROOF_MIN_SHARES)) {
         const mayDisplace = session.acceptedShares >= PROOF_MIN_SHARES;
@@ -1008,6 +1009,54 @@ class StratumServer {
     st.suppressed = 0;
     st.last = now;
     console.warn(build(n));
+  }
+
+  // The parked `donateN` tag, applied once the session has earned it (the PROOF_MIN_SHARES
+  // gate is at the call site in handleSubmit — see the §J3-5 / §J6-7 note there). Three arms:
+  //   · same-or-lower, or the slot is empty → written (§J6-7: a LOWER is always honoured)
+  //   · a raise into an occupied slot        → refused, logged
+  // and the donor NAME (design §16.4) rides the from-zero set ONLY — `current === 0` AND a
+  // percent above 0 AND the percent actually written. A LOWER never reaches the capture, for
+  // the same reason a raise needs the slot empty: a stranger who mines four shares to a live
+  // donor's address may reduce their cut (harmless) but must not be able to rename them. A
+  // `donate0` on a paused address is not from-zero either, so the pause leg of the ceremony
+  // keeps the name and the raise leg rewrites it.
+  _applyParkedDonation(session) {
+    try {
+      const current = this.incentives.donationPercent(session.grinAddress) || 0;
+      if (session.donationPercent <= current || current === 0) {
+        const wrote = this.incentives.setDonation(session.grinAddress, session.donationPercent);
+        if (wrote && current === 0 && session.donationPercent > 0) {
+          this._captureDonorName(session);
+        }
+      } else {
+        console.warn(`[${new Date().toISOString()}] Donation raise ${current}%→${session.donationPercent}% ` +
+                     `refused for ${session.grinAddress}: a stored donation may only be LOWERED from stratum (§J6-7)`);
+      }
+    } catch (e) {
+      console.error(`Error setting donation for ${session.grinAddress}: ${e.message}`);
+    }
+  }
+
+  // Donor-name capture (design §16.4). Called from _applyParkedDonation on the from-zero
+  // branch only — that gate lives at the call site, not here. Reads the operator's
+  // list + the pool name fresh each time (a capture is rare: once per ceremony, never per
+  // share), hands the label to lib/donor-names.js, and logs ONE line: the masked address, the
+  // name and its censor state. Never the password, never the IP.
+  _captureDonorName(session) {
+    try {
+      const settings = this.incentives.settings;
+      const ds = donorSettings(settings.getSection('incentives'), settings.getSection('pool_info').pool_name);
+      const r = captureDonorName(this.incentives.db, session.grinAddress, session.donorLabel, ds);
+      const state = r.censor === 'auto' ? `auto-censored: "${r.word}"`
+                  : r.censor === 'admin' ? 'admin-censored (sticky)'
+                  : r.censor === 'allow' ? 'allowed (admin override)'
+                  : 'ok';
+      console.log(`[${new Date().toISOString()}] Donor name ${r.name === null ? 'cleared' : `"${r.name}"`} ` +
+                  `for ${maskAddress(session.grinAddress)} (${state})`);  // §J8-5
+    } catch (e) {
+      console.error(`Error capturing donor name for ${maskAddress(session.grinAddress)}: ${e.message}`);
+    }
   }
 
   pruneInactiveSessions() {

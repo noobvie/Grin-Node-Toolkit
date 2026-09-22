@@ -89,8 +89,15 @@ class MinerManager {
   closeSession(sessionId) {
     const session = this.activeSessions.get(sessionId);
     if (session) {
-      this.updateMinerOnline(session.grinAddress, false);
       this.activeSessions.delete(sessionId);
+      // is_online is per ADDRESS, sessions are per RIG. Flip it off only when this was the
+      // address's last live session — until 2026-09-21 every close wrote 0 unconditionally, so
+      // a two-rig miner read "Offline" (account page, admin lists) the moment either rig
+      // dropped or reconnected, while the other kept submitting. Nothing but the next login
+      // ever set it back.
+      if (!this.getSessionsByMiner(session.grinAddress).length) {
+        this.updateMinerOnline(session.grinAddress, false);
+      }
       return true;
     }
     return false;
@@ -119,12 +126,13 @@ class MinerManager {
     }
   }
 
-  // Record the ownership-gate evidence for an address — source IP (last-2 window) and, when
-  // usable, the rig's stratum password — both as salted hashes. Delegates to
-  // owner-proof.recordOwnerEvidence; no-op when both are unchanged. Called from stratum-server
-  // on a session's first ACCEPTED share (never at login — that would let a bare TCP connect
-  // poison the windows) with the real miner IP (direct socket address, or the gateway's
-  // PROXY-protocol v2 header value under Model C). Async (scrypt); errors are swallowed inside.
+  // Record the ownership-gate evidence for an address — source IP and, when usable, the rig's
+  // stratum password — into the proof SET (design §17), as salted hashes. Delegates to
+  // owner-proof.recordOwnerEvidence; a value already on record just refreshes its
+  // last-seen stamp. Called from stratum-server on a session's ACCEPTED shares (never at
+  // login — that would let a bare TCP connect write to an address's proofs) with the real
+  // miner IP (direct socket address, or the gateway's PROXY-protocol v2 header value under
+  // Model C). Async (scrypt); errors are swallowed inside.
   recordOwnerEvidence(grinAddress, ip, pass, opts) {
     return recordOwnerEvidence(this.db, grinAddress, ip, pass, opts);
   }
@@ -219,12 +227,14 @@ class MinerManager {
     return uniqueAddresses.size;
   }
 
-  // Do all of this address's live rigs use the SAME stratum password?
+  // How many DIFFERENT stratum passwords are this address's live rigs using?
   //
-  // This matters because miner_accounts keeps only last_pass_hash + prev_pass_hash — a last-2
-  // window. Three rigs on three different passwords keep overwriting each other, so only the
-  // two most recently rotated survive, and WHICH one works depends on which rig last submitted
-  // an accepted share. Silent, and confusing exactly when the miner needs the gate to work.
+  // It used to matter because the store was a last-2 window: three rigs on three passwords
+  // overwrote each other, so which one worked depended on which rig last submitted a share.
+  // The proof SET (design §17) holds ten per kind, so different passwords on different rigs
+  // are fine and the page says so. What this readout is for now is the CAP: a farm running
+  // more than PROOF_SET_MAX distinct passwords will find the least recently used ones dropping
+  // off, and that is worth telling them before withdrawal day rather than after it.
   //
   // Computed from the in-memory sessions, which already hold the password as typed by the rig
   // (createSession above). It cannot be done from the stored hashes: those are SALTED, so two

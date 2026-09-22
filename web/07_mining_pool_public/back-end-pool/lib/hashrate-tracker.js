@@ -513,7 +513,17 @@ class HashrateTracker {
         GROUP BY recorded_at
         ORDER BY recorded_at ASC
       `).all(cutoff);
-      const series = HashrateTracker._thin(rows, maxPoints);
+      // recordHashrates() writes a row per address that had a share in the minute — a minute
+      // with none writes NOTHING, so a pause (or the process being down, which is the same
+      // thing for "shares accepted") leaves a hole in TIME, not a zero. The chart labels are
+      // categorical, so two samples hours apart sit one step apart and the pause vanishes
+      // entirely: the trace just continues. Regularize onto the sampling grid first, so an
+      // absent minute is the 0 GPS it was. This is a known zero, not a withheld value — the
+      // "draw a null as a GAP" rule (metrics/history) is for numbers the server chose not to
+      // publish, and does not apply here.
+      const stepS = this.samplingInterval / 1000;
+      const series = HashrateTracker._thin(
+        HashrateTracker._fillGaps(rows, Math.floor(now / 1000), stepS), maxPoints);
       // `hours` is clamped 1–720 at the route, so the key space is bounded — but never trust a
       // caller's clamp to bound server memory. Drop the oldest entry past the cap.
       if (this._poolHistoryCache.size >= HashrateTracker.POOL_HISTORY_CACHE_MAX) {
@@ -997,6 +1007,25 @@ class HashrateTracker {
   }
 
   // Evenly downsample a dense oldest→newest series to at most maxPoints (keeps the last point).
+  // Insert { t, gps: 0 } for every sampling slot with no row, between the FIRST sample and
+  // `nowS` (rows oldest→newest, on a ~stepS cadence with a little jitter, so a gap only counts
+  // once it reaches two steps). Leading absence is left alone: before the first sample the pool
+  // may simply not have existed, and zeros there would squash a young pool's real trace into
+  // the right edge. Trailing absence IS filled — the process answering this request is the
+  // one that would have sampled, so nothing recorded means nothing accepted.
+  static _fillGaps(rows, nowS, stepS) {
+    if (!rows.length || !(stepS > 0)) return rows;
+    const out = [];
+    let prev = rows[0].t;
+    for (const r of rows) {
+      while (r.t - prev >= 2 * stepS) { prev += stepS; out.push({ t: prev, gps: 0 }); }
+      out.push(r);
+      prev = r.t;
+    }
+    while (nowS - prev >= 2 * stepS) { prev += stepS; out.push({ t: prev, gps: 0 }); }
+    return out;
+  }
+
   static _thin(rows, maxPoints) {
     if (rows.length <= maxPoints) {
       return rows.map(r => ({ t: r.t, gps: parseFloat((r.gps || 0).toFixed(6)) }));

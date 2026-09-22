@@ -1,7 +1,7 @@
 # Script 07 — Public Mining Pool (Security Audit)
 
 > **Covers code as of:** 2026-09-06 · **Last verified:** never verified as a whole — individual findings carry their own dates in the Status roll-up. One scoped exception: **2026-09-07, PARTIAL — §B's two satellite claims only**, read against the code (`requireSatellite` exists nowhere in `back-end-pool/`; `validateConfig()` in `lib/config.js` throws on a missing `jwt_secret` unconditionally, with no role gate). Nothing else in §B, and no §J finding, was re-checked.
-> **Product code last changed:** 2026-09-20 (share credit unit; one shared `MinerManager` — §J6 addendum) — `scripts/07_grin_mining_*.sh`, `scripts/lib/07_lib_*.sh`, `web/07_mining_pool_public/`
+> **Product code last changed:** 2026-09-21 (donor names + donor league, design §16 Parts 1–5: Part 1 login grammar — worker part case-folded, label cap 25 → 32, raw 40 → 48, `donor_label` field; the five limit statements in §J6-1, §J6-9, §J6-13 and the §J6 Handoffs updated in place. **Parts 2–4 added surface this file has NOT audited** — a public free-text name on `/api/pool/donors` + `/api/account/:addr`, two `freshAdmin` write routes, six settings incl. an operator word list, a rescan hook — see the Status roll-up note "Surface added after §J closed"; Part 5's review of it lives in design §16.12). 2026-09-20 (share credit unit; one shared `MinerManager` — §J6 addendum) — `scripts/07_grin_mining_*.sh`, `scripts/lib/07_lib_*.sh`, `web/07_mining_pool_public/`
 
 Security model, verified upload/XSS fixes, and the hardening requirements for
 `web/07_mining_pool_public/`. Design: [`script07_design.md`](script07_design.md);
@@ -49,6 +49,20 @@ applies: none of this has ever been VPS-tested.
 | J15 | Public front-end | 2026-09-03 | 12 (3 Med, 7 Low, 2 Info) · **10 fixed**; J15-3's static-HTML half + J15-10's third-party link left as product decisions | ☑ done |
 | J16 | Deployment & infra | 2026-09-03 | 14 (1 High, 3 Med, 7 Low, 3 Info) · **9 fixed, 2 open**; J16-2 (hostile gateway holds both ownership-proof legs) and J16-4 (three disconnected admin allowlists) are dispositions for the operator. §J8-1 items 1+3 applied, **item 2 refused with reason (J16-12)** | ☑ done |
 | J17 | Pre-mainnet operational gate | 2026-09-04 | 8 (2 High, 3 Med, 1 Low, 2 Info) · **7 fixed, 1 open** (J17-5, procedure). **VERDICT: NO-GO on desk audit**, then a resolution pass closed 10 findings across §J1/§J4/§J7/§J8/§J9/§J13/§J17 — including all three single-box High blockers. No code blocker remains; what is left is the runbook on a real box | ☑ done |
+
+**Surface added after §J closed — donor names + donor league (design §16, built 2026-09-21).**
+Four build parts added, in one day: a public **free-text field** on the wall and the account API
+(a donor's opt-in name — the label of a `<label>-donateN` login, charset `[a-z0-9_-]{1,32}`),
+six `donor_*` columns, two admin **write** routes (`POST /api/admin/donors/:addr/censor|uncensor`,
+`freshAdmin`, audited), an admin read route + summary, six `incentives` settings incl. an
+operator-editable word list, and a rescan hook on the settings save. **None of it has had a
+§J-style session.** Its only review so far is the design's own Part 5 pass, recorded in
+**`script07_design.md` §16.12** (2026-09-21): stranger-write trace, public leakage field list,
+censor state table, ranking recompute, type traps, `EXPLAIN QUERY PLAN` on every new query,
+panel + public-page rules — two findings (a per-name list re-parse that cost ~1 s of the shared
+synchronous connection per list save at the validator's ceiling; a separators-only name shown as
+`-`), both fixed. That pass is a review against the design's own security notes, not an
+adversarial audit: the next §J-style session should take §16 as its scope. Not VPS-tested.
 
 **Reading the §J record — the retired "satellite" role.** §J and the pre-§J sections mention a
 **satellite** role. It does not exist: it was deleted from the code on 2026-06-22 (`f2ebade`),
@@ -5579,7 +5593,7 @@ and [shares.js:83–86](../../web/07_mining_pool_public/back-end-pool/lib/shares
 is the 2026-07-17 fix and it is correct. `session.workerName` is not: it comes from
 `validateUsername`'s `.worker_name` suffix
 ([stratum-protocol.js:61–92](../../web/07_mining_pool_public/back-end-pool/lib/stratum-protocol.js#L61)),
-i.e. **whatever the miner typed after the dot**, up to 25 characters of `[a-z0-9_-]`. Change the
+i.e. **whatever the miner typed after the dot**, up to 32 characters of `[a-z0-9_-]` (25 until 2026-09-21; the worker part is now case-folded before the charset check, the address is not). Change the
 label, change the hash, and the same `(pre_pow, nonce, pow)` inserts again.
 
 Measured end to end through the real handlers — one socket, one solved share, eight labels:
@@ -5993,7 +6007,7 @@ This is the sibling of §J3-2, which added exactly that filter to `getPasswordCo
 (!(s.acceptedShares > 0)) continue;`) for the same reason: a stratum session exists from *login*,
 and login is unauthenticated. `getWorkersForAccount` was not given the same treatment.
 
-Impact is bounded — the label is `[a-z0-9_-]{1,25}`, so nothing escapes into markup, and no money
+Impact is bounded — the label is `[a-z0-9_-]{1,32}` (`{1,25}` until 2026-09-21), so nothing escapes into markup, and no money
 moves. What it costs is the diagnostic: a miner reading their own workers list sees rigs they do not
 own, and the injected rows carry `accepted`/`rejected`/`stale` counters that skew the `reject_pct`
 the page exists to show. The same sessions also surface on the public `/api/stratum/stats`
@@ -6157,13 +6171,13 @@ Checked and found sound — recorded so a later pass does not re-derive them.
   three that remain are `ensureMinerExists` (J6-6), `createSession` (J6-4) and `updateMinerOnline`,
   all reported above; there are no others.
 - **Injection surface is clean at the source.** The address is charset- and length-anchored and the
-  worker label is `[a-z0-9_-]{1,25}` after truncation
+  worker label is `[a-z0-9_-]{1,32}` after truncation (`{1,25}` until 2026-09-21; the case-fold runs BEFORE the charset regex, so it adds nothing to the charset)
   ([stratum-protocol.js:59–86](../../web/07_mining_pool_public/back-end-pool/lib/stratum-protocol.js#L59)),
   so neither can carry markup, quotes, control characters or a newline into a log line, a DB column
   or a JSON body. Every statement in `shares.js` and `hashrate-tracker.js` is parameterised; the only
   template interpolations in the latter's SQL are the two frozen literal tuples at
   [hashrate-tracker.js:589–590](../../web/07_mining_pool_public/back-end-pool/lib/hashrate-tracker.js#L589).
-  The `donateN` and worker-label regexes are bounded (`{1,3}`, input ≤ 40 chars) — no ReDoS.
+  The `donateN` and worker-label regexes are bounded (`{1,3}`, input ≤ 48 chars — 40 until 2026-09-21) — no ReDoS.
 - **`getPoolHistory`'s cache is the right shape** — keyed on `hours|maxPoints` with a 64-entry
   ceiling and a TTL equal to the sampling interval
   ([hashrate-tracker.js:11–18](../../web/07_mining_pool_public/back-end-pool/lib/hashrate-tracker.js#L11)),
@@ -6191,7 +6205,7 @@ Checked and found sound — recorded so a later pass does not re-derive them.
   25,000-socket global ceiling is exhaustible with one byte per socket per nine minutes (J6-8).
   (3) Leaked sessions (J6-4) make two anonymous public GETs O(n) in the leak.
 - **§J14 / §J15 (front ends)** — the render half of the worker-name trace. The label is safe at the
-  source (charset-limited, 25 chars) and reaches the browser via `/api/account/:addr` workers and
+  source (charset-limited, 32 chars — 25 until 2026-09-21) and reaches the browser via `/api/account/:addr` workers and
   `/api/stratum/stats`; both surfaces can carry an attacker-chosen label for an address the attacker
   does not own (J6-9), so the question for J14/J15 is whether either page presents a worker row as
   something the account holder configured.

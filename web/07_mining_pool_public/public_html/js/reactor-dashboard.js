@@ -458,9 +458,20 @@
       }
       setText('c-last', e.last_block_at ? timeAgo(e.last_block_at) + ' ago' : 'none yet');
       setText('mi-core-share', 'NET-SHARE ' + (share != null ? fmtShare(share) : '—'));
-      setText('mi-core-shares', e.round_shares != null
-        ? Number(e.round_shares).toLocaleString('en-US', { maximumFractionDigits: 0 }) + ' SHARES'
-        : '— SHARES');
+      // `round_shares` is the round's SUMMED share difficulty in chain units (each accepted
+      // share weighs job target × 16384 — the effort numerator), so printing it as "SHARES"
+      // showed 21.5 M for ~1,300 real shares. `round_share_count` is the count a miner can
+      // check against their rig's accepted tally; the sum stays on hover for the curious.
+      var sharesEl = $('mi-core-shares');
+      if (e.round_share_count != null) {
+        setText('mi-core-shares', fmtCompact(e.round_share_count) + ' SHARES');
+        if (sharesEl) sharesEl.title = Number(e.round_share_count).toLocaleString('en-US') +
+          ' accepted shares this round · summed difficulty ' +
+          fmtCompact(e.round_shares) + ' (chain units, the round-effort numerator)';
+      } else {
+        setText('mi-core-shares', '— SHARES');
+        if (sharesEl) sharesEl.removeAttribute('title');
+      }
     } catch (err) { /* gauge keeps last position */ }
   }
 
@@ -880,11 +891,16 @@
           // `miners` is null when the server withheld it under the k-anonymity floor
           // (audit §J11-5) — that is NOT zero, and rendering it as 'idle' would contradict
           // the 'online' lamp beside it and re-create §J5-4's suppressed-reads-as-real bug.
-          // "<N miners" states exactly what the null already discloses (0 < n < N) and no more.
+          // "<N miners" states exactly what the null already discloses (0 < n < N) and no more
+          // — `workers` is withheld with it (one person's rig count), so no worker figure there.
+          // "2 miners / 5 workers": miners = distinct addresses, workers = distinct rigs.
           small.textContent = r.status === 'offline' ? 'offline'
             : r.status === 'checking' ? 'checking'
             : r.below_floor ? '<' + (data.min_bucket || 3) + ' miners'
-            : (r.miners > 0 ? r.miners + (r.miners === 1 ? ' miner' : ' miners') : 'idle');
+            : (r.miners > 0
+                ? r.miners + (r.miners === 1 ? ' miner' : ' miners') +
+                  (r.workers > 0 ? ' / ' + r.workers + (r.workers === 1 ? ' worker' : ' workers') : '')
+                : 'idle');
           lamp.appendChild(small);
           lampHost.appendChild(lamp);
         });

@@ -209,6 +209,56 @@ try {
     V.branding.custom_theme('{"accent":"#ff0000","bg-card":"#111111"}')
       === '{"accent":"#ff0000","bg-card":"#111111"}');
 
+  console.log('\n[6] design §16.8 — donor moderation routes sit on the right guard tier');
+
+  // Read the route DECLARATIONS from index.js: the guard array is the first argument after
+  // the path, so a tier downgrade (freshAdmin → secureAdmin) is a one-word edit this catches.
+  const routeGuard = (method, route) => {
+    const re = new RegExp("app\\." + method + "\\('" + route.replace(/[.*+?^${}()|[\]\\\/]/g, '\\$&') + "',\\s*([A-Za-z]+),");
+    const m = src.match(re);
+    return m ? m[1] : null;
+  };
+  ok('GET /api/admin/donors is secureAdmin (read)', routeGuard('get', '/api/admin/donors') === 'secureAdmin');
+  ok('GET /api/admin/donors/summary is secureAdmin (read)', routeGuard('get', '/api/admin/donors/summary') === 'secureAdmin');
+  ok('POST /api/admin/donors/:addr/censor is freshAdmin (moderation = step-up tier, like ban)',
+    routeGuard('post', '/api/admin/donors/:addr/censor') === 'freshAdmin');
+  ok('POST /api/admin/donors/:addr/uncensor is freshAdmin', routeGuard('post', '/api/admin/donors/:addr/uncensor') === 'freshAdmin');
+  // Control: the sweep must be able to see a tier at all.
+  ok('control — the same reader sees ban as freshAdmin and miners as secureAdmin',
+    routeGuard('post', '/api/admin/miners/:addr/ban') === 'freshAdmin' && routeGuard('get', '/api/admin/miners') === 'secureAdmin');
+
+  // The censor routes validate the address with the ONE gate the account family uses, and
+  // delegate state + audit to lib/donor-names.js (tested with the real schema in
+  // test-donor-names.js) rather than carrying a second copy of the state machine.
+  const censorBlock = src.slice(src.indexOf('const donorCensorRoute'), src.indexOf("app.post('/api/admin/donors/:addr/uncensor'"));
+  ok('censor routes validate :addr with GRIN_ADDR_RE', /GRIN_ADDR_RE\.test\(addr\)/.test(censorBlock));
+  ok('censor routes delegate to adminCensor (no inline UPDATE miner_incentives)',
+    /donorAdminCensor\(db, addr/.test(censorBlock) && !/UPDATE miner_incentives/.test(censorBlock));
+  ok('404 on an unknown address, 409 when already in that state',
+    /not_found[\s\S]{0,60}status\(404\)/.test(censorBlock) && /already[\s\S]{0,60}status\(409\)/.test(censorBlock));
+
+  // The rescan hook lives on the settings save and fires on a CHANGE of the list (or the
+  // pool name — a reserved word), never on presence in the body.
+  const saveBlock = src.slice(src.indexOf("app.post('/api/admin/settings/:section'"), src.indexOf("app.post('/api/admin/settings/:section/restore'"));
+  ok('the settings save reads the list + pool name BEFORE the write and rescans on a change',
+    /rescanBefore/.test(saveBlock) && /after\.list !== rescanBefore\.list \|\| after\.poolName !== rescanBefore\.poolName/.test(saveBlock) &&
+    /donorRescanAll\(db, \{ listText: after\.list, poolName: after\.poolName \}\)/.test(saveBlock));
+  ok('the rescan counts ride on the response for the page to flash', /\.\.\.\(rescan \? \{ rescan \} : \{\}\)/.test(saveBlock));
+  ok('a rescan failure cannot fail a save that already landed', /rescan = \{ error: e\.message \}/.test(saveBlock));
+
+  // The public donor list must not have grown a moderation field or a full address by
+  // accident. Since Part 4 the route delegates to lib/donor-ledger.js donorWall() and hands
+  // it the mask as an argument (the lib throws without one); the full public contract is
+  // pinned in test-public-leakage.js §9 and test-donor-league.js.
+  const pubBlock = src.slice(src.indexOf("app.get('/api/pool/donors'"), src.indexOf("app.get('/api/pool/prize-pool'"));
+  ok('public /api/pool/donors still emits no donor_censor_word / donor_censor_by',
+    !/donor_censor_word|donor_censor_by/.test(pubBlock));
+  ok('public /api/pool/donors still masks the address', /mask:\s*\(a\)\s*=>\s*maskAddr\(a\)/.test(pubBlock));
+
+  // The dashboard carries the new-names counter (the Overview tile).
+  const dashBlock = src.slice(src.indexOf("app.get('/api/admin/dashboard'"), src.indexOf("// REMOVED (2026-07-28): GET /api/miners/top"));
+  ok('/api/admin/dashboard emits new_donor_names_7d from countNewNames', /new_donor_names_7d:\s*newDonorNames7d/.test(dashBlock) && /donorCountNewNames\(db\)/.test(dashBlock));
+
 
   console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed\n`);
   cleanup();

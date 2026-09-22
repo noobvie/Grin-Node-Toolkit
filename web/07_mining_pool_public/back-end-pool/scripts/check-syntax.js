@@ -82,12 +82,20 @@ for (const dir of INLINE_HTML_DIRS) {
     const rel = `${dir}/${name}`;
     const html = fs.readFileSync(path.join(abs, name), 'utf8');
     let n = 0;
-    for (const m of html.matchAll(/<script(?![^>]*\ssrc=)[^>]*>([\s\S]*?)<\/script>/gi)) {
-      const code = m[1];
+    for (const m of html.matchAll(/<script(?![^>]*\ssrc=)([^>]*)>([\s\S]*?)<\/script>/gi)) {
+      const attrs = m[1];
+      const code = m[2];
       if (!code.trim()) continue;
       // Skip non-JavaScript payloads (JSON-LD, templates). A bare <script> or an explicit
       // JS type is checked; anything else is data.
-      const typeAttr = /\stype\s*=\s*["']?([^"'\s>]+)/i.exec(m[0]);
+      //
+      // Sniff the OPENING TAG's attributes only — never the whole match. Until 2026-09-21 this
+      // ran over m[0], i.e. the script BODY too, so any inline block whose row template
+      // contains `type="button"` (miners.html, donors.html, index.html …) read as
+      // type=button → "not JavaScript" → skipped. Those pages were never syntax-checked, and
+      // a deliberately broken donors.html passed this gate. Exactly the "looks thorough,
+      // cannot fail" failure the header of this file describes.
+      const typeAttr = /\stype\s*=\s*["']?([^"'\s>]+)/i.exec(attrs);
       const type = typeAttr ? typeAttr[1].toLowerCase() : '';
       if (type && !/^(text\/javascript|application\/javascript|module)$/.test(type)) continue;
       n++;

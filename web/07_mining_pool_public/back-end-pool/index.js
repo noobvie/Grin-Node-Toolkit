@@ -29,7 +29,12 @@ const Captcha = require('./lib/captcha');
 const { requireAdmin, requireFreshAuth } = require('./lib/auth-middleware');
 const HashrateTracker = require('./lib/hashrate-tracker');
 const { getHorizon: getLedgerRollupHorizon } = require('./lib/ledger-rollup');
-const { verifyOwnerProof, auditOwnerProof, normalizeIp, migrateOwnerProofHashes, migrateAuditLogIps, backfillProofAnchors } = require('./lib/owner-proof');
+const { displayState: donorDisplayState, donorSettings, rescanAll: donorRescanAll,
+        adminCensor: donorAdminCensor, countNewNames: donorCountNewNames } = require('./lib/donor-names');
+const { lastDonatedAt: donorLastDonatedAt, donorLedger, donorScore, loyaltyMultiplier: donorLoyaltyMultiplier,
+        leagueOrder: donorLeagueOrder, donorWall } = require('./lib/donor-ledger');
+const { parseDonateToken } = require('./lib/stratum-protocol');
+const { verifyOwnerProof, auditOwnerProof, normalizeIp, migrateProofSet, migrateAuditLogIps, PROOF_SET_MAX } = require('./lib/owner-proof');
 const geoip = require('./lib/geoip');
 const PoolstatsReporter = require('./lib/poolstats-reporter');
 const RateLimiter = require('./lib/rate-limiter');
@@ -672,19 +677,17 @@ async function initializePool() {
       }
     }
 
-    // One-time background upgrade of legacy plaintext ownership-proof IPs to salted hashes
-    // (owner-proof.js v1$ format). Non-blocking; verify accepts both forms while it runs.
-    migrateOwnerProofHashes(db);
-
     // One-time in-place coarsening of historical miner audit IPs to network prefixes
     // (/24, /48). Synchronous — truncation only, no KDF — and idempotent.
     migrateAuditLogIps(db);
 
-    // Seed the write-once proof anchor (§J3-4) from the proof each existing account already
-    // holds. MUST stay synchronous and MUST stay ahead of the stratum listener: if an account
-    // reached its first post-upgrade capture anchorless, whoever mined that share — not the
-    // owner — would become its permanent proof.
-    backfillProofAnchors(db);
+    // One-time copy of the legacy 2-slot proof window into the proof set (design §17.2 #9),
+    // subsuming the old plaintext-hash upgrade and the anchor backfill. MUST stay synchronous
+    // and MUST stay ahead of the stratum listener, for the backfill's original reason: an
+    // account that reached its first post-upgrade capture with an EMPTY set would anchor to
+    // whoever mined that share, not to the owner. Idempotent — it NULLs the columns it copied,
+    // so a second start finds nothing to do.
+    migrateProofSet(db);
 
     authManager = new AuthManager(config);
     // Live session policy. A provider function (not a snapshot) so changing the timeout in
@@ -1319,7 +1322,7 @@ function setupRoutes() {
   const API_DOC_META = {
     // ── Public ────────────────────────────────────────────────────────────────
     'GET /api/public/branding': { desc: 'White-label config (name, theme, SEO, social, footer links).', shape: 'envelope' },
-    'GET /api/public/price': { desc: 'Cached GRIN price (USD + BTC) from CoinGecko. Serves the last good value on upstream failure; { available: false } if never fetched.', shape: 'envelope' },
+    'GET /api/public/price': { desc: 'Cached GRIN price (USD + BTC) from CoinGecko. Serves the last good value on upstream failure; { available: false } if never fetched. updated_at is UNIX MILLISECONDS (the one such field on this API).', shape: 'envelope' },
     'GET /api/public/endpoints': { desc: 'This API reference (machine-readable).', shape: 'envelope' },
     'GET /api/public/ads': { desc: 'Active operator ads by placement (+ rotation interval). Cached 60s, so ad edits take up to a minute to appear.', shape: 'raw', params: 'placement (omit for every slot keyed by placement)' },
     'POST /api/public/ads/event': { desc: 'Ad impression/click beacon — aggregate counters only, no visitor data. Always 204, even on a malformed body.', shape: 'none', body: 'impressions[], clicks[] (ad ids)' },
@@ -1327,7 +1330,7 @@ function setupRoutes() {
     'GET /api/public/lottery/stats': { desc: 'Fortune-board aggregates: total prizes/winners/draws, Pot A/B split, monthly series.', shape: 'envelope' },
     'GET /api/public/pages': { desc: 'Published CMS pages (slug + title) for the header/footer link lists.', shape: 'envelope' },
     'GET /api/public/page/:key': { desc: 'One published CMS page by slug (About / Terms / Privacy / FAQ …). 404 if the slug is unknown or unpublished.', shape: 'envelope' },
-    'GET /api/public/posts': { desc: 'Blog: paginated list of published posts (card view — excerpt, cover, date).', shape: 'envelope', params: 'limit · offset' },
+    'GET /api/public/posts': { desc: 'Blog: paginated list of published posts (card view — excerpt, cover, date).', shape: 'envelope', params: 'limit (≤50, default 10) · offset' },
     'GET /api/public/post/:slug': { desc: 'Blog: one published post in full, by slug. 404 if unknown or unpublished.', shape: 'envelope' },
 
     // ── Config ────────────────────────────────────────────────────────────────
@@ -1336,23 +1339,23 @@ function setupRoutes() {
     // ── Pool ──────────────────────────────────────────────────────────────────
     'GET /api/pool/stats': { desc: 'Live pool stats: block totals (found / confirmed / immature counts, confirmed + immature reward), active miners (distinct addresses), active workers (logged-in rigs), raw connections, and share quality (accepted/stale/rejected). Share quality is LIVE in-memory only — it is empty with no connected sessions and resets on disconnect.', shape: 'raw' },
     'GET /api/pool/status': { desc: 'Coarse service health for the status strip: pool up, node reachable/synced/peers/height, wallet reachable. Never exposes balances or addresses.', shape: 'raw' },
-    'GET /api/pool/stats/regions': { desc: 'Per-region stratum endpoints + live status (online | idle | offline) and 15-minute regional hashrate. On a MULTI-region pool a k-anonymity floor applies: a region with 0 < miners < min_bucket reports miners/hashrate_gps/shares_window as null with below_floor:true — that is withheld, not zero (a real zero is still 0). Totals are always exact.', shape: 'raw' },
-    'GET /api/pool/locations': { desc: 'Operator-declared stratum regions that are currently active — region key, label, and the stratum URL to point a rig at.', shape: 'raw' },
+    'GET /api/pool/stats/regions': { desc: 'Per-region stratum endpoints + live status (online | idle | offline | checking — the last only on the first poll after a restart, before the reachability probe has a verdict) and 15-minute regional hashrate, miners (distinct addresses) and workers (distinct address+rig pairs). On a MULTI-region pool a k-anonymity floor applies: a region with 0 < miners < min_bucket reports miners/workers/hashrate_gps/shares_window as null with below_floor:true — that is withheld, not zero (a real zero is still 0). Totals are always exact. timestamp is ISO 8601.', shape: 'raw' },
+    'GET /api/pool/locations': { desc: 'Operator-declared stratum regions that are currently active — region key, label, and the stratum URL to point a rig at.', shape: 'array' },
     'GET /api/pool/blocks': { desc: 'Pool-found blocks, newest first. A short page (fewer rows than limit) means the last page. found_by is MASKED (grin1qxy…mn4p).', shape: 'array', params: 'limit (≤500, default 50) · offset · status=immature|confirmed|orphaned' },
     'GET /api/pool/blocks/history': { desc: 'Durable block series: luck, per-period counts, status split, cumulative reward. Blocks are never pruned, so any range is meaningful.', shape: 'raw', params: 'range=week|month|year|all (default month)' },
-    'GET /api/pool/effort': { desc: 'Pool network share, luck over the last 100 blocks, current round effort, and time since the last block. Network difficulty is cached ~60s.', shape: 'raw' },
+    'GET /api/pool/effort': { desc: 'Pool network share, luck over the last 100 blocks, current round effort, and time since the last block. round_shares is the round\'s SUMMED share difficulty in chain units (the effort numerator — every accepted share weighs job target × 16384), NOT a count; round_share_count is the number of accepted shares. The round window is capped at 7 days (round_window_capped:true when the cap, not the last block, set round_window_from). The whole response is cached 30s; network difficulty ~60s.', shape: 'raw' },
     'GET /api/pool/hashrate/history': { desc: 'Pool hashrate time-series, summed across addresses per bucket.', shape: 'raw', params: 'hours (1–720, default 24)' },
-    'GET /api/pool/poolstats': { desc: 'Listing feed for pool directories — this is the URL to hand to miningpoolstats.stream (they poll it; nothing is pushed). Pool + network aggregates in the same field layout as the toolkit\'s solo-mining poolstats_<net>.json, so an importer written for that needs no changes. Recomputed at most once every 60s and served from cache in between, so polling faster than 1/min returns identical bytes — 1–5 min is the sensible range. Every value is an aggregate already shown on the homepage; no address or per-miner row is included, so it needs no auth. The ts field is the generation time: if it stops advancing, the feed is stale. Fields are null (not 0) when the node is unreachable, and network.hashrate_gps_24h is null until the pool has an hour of history.', shape: 'raw' },
-    'GET /api/pool/metrics/history': { desc: 'Durable pool trend series: hashrate, miners, workers, earnings, payout, network hashrate. Rolled up hourly and never pruned. At day-or-coarser buckets (month/year/all) miner_count/worker_count are the PEAK hour in the bucket, hashrate the average, money the sum. worker_count is null for hours recorded before it existed — draw a null as a GAP, never as 0.', shape: 'raw', params: 'range=day|week|month|year|all (default day)' },
+    'GET /api/pool/poolstats': { desc: 'Listing feed for pool directories — this is the URL to hand to miningpoolstats.stream (they poll it; nothing is pushed). Pool + network aggregates in the same field layout as the toolkit\'s solo-mining poolstats_<net>.json, so an importer written for that needs no changes. Recomputed at most once every 60s and served from cache in between, so polling faster than 1/min returns identical bytes — 1–5 min is the sensible range. Every value is an aggregate already shown on the homepage; no address or per-miner row is included, so it needs no auth. The ts field is the generation time: if it stops advancing, the feed is stale. ts and pool.last_block.ts are ISO 8601 strings, not UNIX seconds — the solo feed layout this mirrors uses them. Fields are null (not 0) when the node is unreachable, and network.hashrate_gps_24h is null until the pool has an hour of history.', shape: 'raw' },
+    'GET /api/pool/metrics/history': { desc: 'Durable pool trend series: hashrate, miners, workers, blocks found, earnings, payout, network hashrate. Rolled up hourly and never pruned. At day-or-coarser buckets (month/year/all) miner_count/worker_count are the PEAK hour in the bucket, hashrate the average, money the sum. worker_count is null for hours recorded before it existed — draw a null as a GAP, never as 0.', shape: 'raw', params: 'range=day|week|month|year|all (default day)' },
     'GET /api/pool/metrics/history/regions': { desc: 'Per-region miners/hashrate trend series (the "miners by gateway" view). Same k-anonymity floor as /api/pool/stats/regions, applied per point: below the floor miner_count and hashrate_gps are null with below_floor:true. Draw a null as a GAP, never as 0.', shape: 'raw', params: 'range=day|week|month|year|all (default day)' },
     'GET /api/pool/payments/history': { desc: 'Durable payments & transparency series: payouts, reward split, giveaways, donations, fee, plus lifetime totals.', shape: 'raw', params: 'range=day|week|month|year|all (default month)' },
-    'GET /api/pool/payments': { desc: 'Recent confirmed payouts: address, amount, flat fee charged, method and timestamps. The on-chain kernel is NOT published here — pool-wide it would be a public address-to-chain index; it is available per address on /api/account/:addr/withdrawals. Pool-internal payout machinery (slate id, Tor probe result, retry state, cancel reason) is deliberately not published either.', shape: 'array', params: 'limit (≤500, default 100)' },
+    'GET /api/pool/payments': { desc: 'Recent confirmed payouts: address, amount, flat fee charged, method and timestamps. Addresses are MASKED (grin1qxy…mn4p). The on-chain kernel is NOT published here — pool-wide it would be a public address-to-chain index; it is available per address on /api/account/:addr/withdrawals. Pool-internal payout machinery (slate id, Tor probe result, retry state, cancel reason) is deliberately not published either.', shape: 'array', params: 'limit (≤500, default 100)' },
     'GET /api/pool/miners': { desc: 'Balance distribution across accounts, richest first. Addresses are MASKED (grin1qxy…mn4p) — the distribution is public, the address→balance mapping is not.', shape: 'array', params: 'limit (≤500, default 50)' },
     'GET /api/pool/top-block-finders': { desc: 'Lucky-miner leaderboard: blocks found and total reward per address over a recent window. Orphans do not count as a find. Addresses are MASKED.', shape: 'raw', params: 'days (≤3650, default 30) · limit (≤1000, default 500)' },
     'GET /api/pool/unclaimed': { desc: 'Lost-and-found: masked addresses of long-dormant balances with a per-address disposal countdown, plus the historical disposition ledger (sweeps into the prize pool).', shape: 'raw', params: 'limit (≤200, default 100)' },
-    'GET /api/pool/donors': { desc: 'Donor wall: per-address lifetime donations to the prize pool, first/last donation date, current donate-tag %. Top 100. Addresses are MASKED.', shape: 'raw' },
+    'GET /api/pool/donors': { desc: 'Donor league + past donors. `league` = addresses with a donation debit inside the ranking window, ranked by score = GRIN in window × loyalty multiplier (min(1 + loyalty_percent_per_month/100 × active_months, loyalty_cap); active_months = distinct UTC months with a debit, lifetime), ties by months then first donation; top 100 with `rank` 1..N. `past.donors` = up to 20 addresses with a lifetime total but nothing in the window, newest last donation first, plus `past.more` for the rest. Both arrays share one card shape: rank (null on past), name, name_state, address, in_window_donated, total_donated, active_months, multiplier, score, current_percent, first_donated_at, last_donated_at, donation_count, rigs_online (display only, never ranked). `name` is OPT-IN (the label of a `<label>-donateN` worker login), lowercase a-z0-9_-, at most 32 chars, and is null for every name_state but `shown` (masked = no name set, censored, expired) — EXCEPT that when the operator chose `censored_display: "marker"` a censored card carries the literal string `<censored-donor>` in `name`. Names are chosen by donors and not verified by the pool; escape before rendering. Addresses are MASKED. `totals` are LIFETIME over EVERY donor, not the cards (donor_count, total_donated) and `totals.active_donors` counts addresses with a live donate tag (a tag shows there before its first slice is taken — that only happens when a block matures). `ranking` = {window_days (0 = all-time), loyalty_percent_per_month, loyalty_cap, name_expiry_months} for the page\'s one ranking sentence. current_percent and active_donors read 0 while the operator has donations switched off. Window edge: a day already rolled into the daily ledger counts WHOLE when its UTC midnight is ≥ now − window.', shape: 'raw' },
     'GET /api/pool/prize-pool': { desc: 'Prize-pool transparency report: current balance + LIFETIME in/out totals by source (fee-cut, donations, operator top-ups, abandoned balances, orphan clawbacks). Per-event rows are deliberately withheld — their timestamps would expose the cadence of discretionary operator top-ups.', shape: 'raw' },
-    'GET /api/pool/topology': { desc: 'Network map: hub → gateways → miners aggregated BY COUNTRY. Country-only geolocation; no per-miner coordinate is ever resolved or stored, and countries under the k-anonymity floor merge into one unnamed bucket.', shape: 'raw', gated: 'the operator publishes the network map (on by default; 404 while switched off in admin → Access)' },
+    'GET /api/pool/topology': { desc: 'Network map: hub → gateways → miners aggregated BY COUNTRY. Country-only geolocation; no per-miner coordinate is ever resolved or stored, and countries under the k-anonymity floor merge into one unnamed bucket. Gateway lat/lng is the operator-declared position of that public server (admin → Regions), or the country centroid when none was declared. timestamp is ISO 8601.', shape: 'raw', gated: 'the operator publishes the network map (on by default; 404 while switched off in admin → Access)' },
 
     // ── Stratum (live session aggregates) ─────────────────────────────────────
     'GET /api/stratum/stats': { desc: 'Live stratum server state: connection counts and per-session share tallies. Session addresses are truncated so the live list cannot be scraped to enumerate miners.', shape: 'raw' },
@@ -1361,10 +1364,10 @@ function setupRoutes() {
     'GET /api/stratum/top-avg-hashrate': { desc: 'Top miners by AVERAGE hashrate over a multi-day window (sustained contribution). Backed by hashrate_history, so a 30-day window is meaningful. Addresses are MASKED.', shape: 'raw', params: 'days (≤90, default 30) · limit (≤1000, default 500)' },
 
     // ── Network ───────────────────────────────────────────────────────────────
-    'GET /api/network/peers': { desc: 'Distinct Grin nodes the pool box\'s node(s) have handshaked with — live connections plus each node\'s own peer store, NOT a network crawl — aggregated by country over a rolling window (+ mainnet/testnet split, and `sources` = which networks are read). Country-only, no IPs; thin countries merge into one unnamed bucket.', shape: 'raw', params: 'window days (1–90, default 30)', gated: 'the operator publishes the network map (on by default; 404 while switched off in admin → Access)' },
+    'GET /api/network/peers': { desc: 'Distinct Grin nodes the pool box\'s node(s) have handshaked with — live connections plus each node\'s own peer store, NOT a network crawl — aggregated by country over a rolling window (+ mainnet/testnet split, and `sources` = which networks are read). Country-only, no IPs; thin countries merge into one unnamed bucket. timestamp is ISO 8601.', shape: 'raw', params: 'window days (1–90, default 30)', gated: 'the operator publishes the network map (on by default; 404 while switched off in admin → Access)' },
 
     // ── Account (address-as-identity: the address IS the credential to READ) ──
-    'GET /api/account/:addr': { desc: 'Account summary: balance, locked, lifetime paid, pending payout, share/hashrate snapshot, active donation %, and when the ownership evidence on record last changed. 404 if the address has never mined here OR is not a well-formed Grin address.', shape: 'raw' },
+    'GET /api/account/:addr': { desc: 'Account summary: balance, locked, lifetime paid, pending payout, share/hashrate snapshot, active donation %, the donor name this address put on the wall with its state (donor_name_state: shown | masked | censored | expired; both null while the operator has donations switched off), and the ownership proofs on record. `proofs` is COUNTS ONLY — { ip, pass, max, anchor, last_added_at }: how many distinct mining IPs and rig passwords the pool currently holds for this address, the per-kind cap, whether the original write-once proof is still on record, and the newest capture time across both kinds (UTC seconds; it does not move when a known rig reconnects). No proof value, hash, salt or per-row timestamp is ever returned, here or anywhere else. 404 if the address has never mined here OR is not a well-formed Grin address.', shape: 'raw' },
     'GET /api/account/:addr/shares': { desc: 'Raw accepted shares for an address, newest first. Shares are pruned aggressively — use the hashrate history for anything older than ~a day.', shape: 'raw', params: 'limit (≤500, default 100) · offset' },
     'GET /api/account/:addr/workers': { desc: 'Per-worker (rig) hashrate + share quality over a recent window.', shape: 'raw', params: 'window minutes (1–1440, default 10)' },
     'GET /api/account/:addr/hashrate/history': { desc: 'Account hashrate time-series, downsampled for charting.', shape: 'raw', params: 'hours (1–720, default 24)' },
@@ -1373,9 +1376,12 @@ function setupRoutes() {
     'GET /api/account/:addr/withdrawals': { desc: 'Payout history for an address — kept forever, so this is the durable record for accounting. Payouts only: no donations or orphan clawbacks. format=csv streams all-time on a tighter rate limit. The on-chain kernel is NOT returned here — rows carry has_kernel_proof and has_payment_proof (booleans) and the proofs themselves need an ownership proof; see POST /api/account/:addr/withdrawals/proofs.', shape: 'raw · csv', params: 'limit (≤200, default 20) · offset · format=csv' },
     'POST /api/account/:addr/withdrawals/proofs': { desc: 'Payment proofs for your own payouts, two kinds in one call. proofs: { <withdrawal id>: <kernel excess> } - the on-chain kernel of every confirmed payout (proves the tx was mined). payment_proofs: { <withdrawal id>: <PaymentProof> } - the signed proof grin-wallet requested on Tor payouts: { amount (nanogrin), excess, recipient_address, recipient_sig, sender_address, sender_sig }, the same JSON `grin-wallet export_proof` writes; save one as a file and `grin-wallet verify_proof` it. recipient_sig is YOUR wallet\'s signature, so it proves receipt to anyone. Slatepack/nostr payouts carry no signed proof (kernel only). Newest 500 signed proofs. Ownership-gated on purpose: publishing an address next to its kernels would be a public address-to-chain index on a privacy coin. 403 = proof failed, 404 = no such account.', shape: 'raw', auth: 'ownership proof', rate: 'withdraw', body: OWNER_PROOF_BODY },
     'GET /api/account/:addr/tor-check': { desc: 'Is this miner\'s wallet reachable over Tor right now? Read-only probe behind the payout UI hint. online is TRI-STATE: true/false when known, null = "decided at payout time". 404 if the address has never mined here — the probe is not offered for arbitrary Grin addresses. Answers are cached 60s per address; the payout gate always re-probes fresh.', shape: 'raw', rate: 'torcheck' },
-    'POST /api/account/:addr/withdraw': { desc: 'Request a payout on one of three rails. 403 = ownership proof failed; 409 (tor) = wallet unreachable, retry or switch to slatepack; 409 (nostr) = destination unregistered, still in cooldown, or its npub changed.', shape: 'flat', auth: 'ownership proof', rate: 'withdraw', body: `method=tor|slatepack|nostr (default tor) · amount · ${OWNER_PROOF_BODY}` },
-    'POST /api/account/:addr/withdraw/:id/finalize': { desc: 'Complete a slatepack payout by posting back the response slatepack your wallet produced with `receive`. The pool finalizes and broadcasts.', shape: 'raw', auth: 'ownership proof', rate: 'withdraw', body: `response_slatepack · ${OWNER_PROOF_BODY}` },
-    'POST /api/account/:addr/nostr-destination': { desc: 'Register/replace the Goblin username for Nostr payouts. Does NOT move funds — it pins the destination and (re)starts a security cooldown, during which the nostr rail refuses to pay. Needs BOTH proofs, and each must have been on record for at least the cooldown period — a 409 reason of proof_too_recent means the evidence is newer than that, and anchor_not_accepted_here means the original recorded proof was used (it can withdraw, but not redirect). 503 when the rail is disabled.', shape: 'flat', auth: 'ownership proof', rate: 'withdraw', body: `username (Goblin/NIP-05) · ${OWNER_PROOF_BODY}` },
+    'POST /api/account/:addr/withdraw': { desc: 'Request a payout on one of three rails. amount defaults to the full available balance. 403 = ownership proof failed; 400 = invalid amount, below the minimum, or too small to cover the flat fee; 409 = insufficient balance, or payouts frozen by the operator; 409 (tor) = wallet unreachable, retry or switch to slatepack; 409 (nostr) = destination unregistered, still in cooldown, or its npub changed; 429 = a payout is already pending on ANY rail (one at a time), a recently reversed payout is still in its cooldown, or the pool-wide pending cap is full; 503 = the nostr rail is disabled.', shape: 'flat', auth: 'ownership proof', rate: 'withdraw', body: `method=tor|slatepack|nostr (default tor) · amount (default: full balance) · ${OWNER_PROOF_BODY}` },
+    'POST /api/account/:addr/withdraw/:id/finalize': { desc: 'Complete a slatepack payout by posting back the response slatepack your wallet produced with `receive`. The pool finalizes and broadcasts. 404 = no such withdrawal; 409 = not awaiting a slatepack (already settled or expired); 400 = the slatepack does not match this withdrawal.', shape: 'flat', auth: 'ownership proof', rate: 'withdraw', body: `response_slatepack · ${OWNER_PROOF_BODY}` },
+    // NOT the shared OWNER_PROOF_BODY: this is the one route that needs the IP and the password
+    // as two separate fields (either alone is a 400 both_proofs_required), so the "IP or
+    // password" wording every other money route carries would be wrong here.
+    'POST /api/account/:addr/nostr-destination': { desc: 'Register/replace the Goblin username for Nostr payouts. Does NOT move funds — it pins the destination and (re)starts a security cooldown, during which the nostr rail refuses to pay. Needs BOTH proofs as separate fields (400 both_proofs_required otherwise), and each must have been on record for at least the cooldown period — a 409 reason of proof_too_recent means the evidence is newer than that, and anchor_not_accepted_here means the original recorded proof was used (it can withdraw, but not redirect). Replacing an existing destination is refused with 409 confirm_replace_required (the response echoes `replacing`) until the call carries confirm_replace = the username being replaced. 503 when the rail is disabled.', shape: 'flat', auth: 'ownership proof (BOTH kinds)', rate: 'withdraw', body: 'username (Goblin/NIP-05) · proof (recent mining IP; legacy alias ip_proof) · password_proof (the rig\'s stratum password) · confirm_replace (current username, only when replacing)' },
     'DELETE /api/account/:addr/nostr-destination': { desc: 'Remove the registered Goblin payout destination, clearing the pin and cooldown.', shape: 'flat', auth: 'ownership proof', rate: 'withdraw', body: OWNER_PROOF_BODY },
   };
   app.get('/api/public/endpoints',
@@ -1429,9 +1435,12 @@ function setupRoutes() {
               errors: 'Errors are always { "error": "…" } with an HTTP status — never { success: false }.',
               cors: 'Public GETs send Access-Control-Allow-Origin: * (no credentials). POST/DELETE are same-origin only.',
               rate_limits: rateLimiter && rateLimiter.limits
-                ? { public: rateLimiter.limits.public, withdraw: rateLimiter.limits.withdraw, export: rateLimiter.limits.export }
+                ? { public: rateLimiter.limits.public, withdraw: rateLimiter.limits.withdraw, export: rateLimiter.limits.export, torcheck: rateLimiter.limits.torcheck }
                 : null,
-              times: 'All timestamps are UNIX seconds (UTC).',
+              // Not "all timestamps": the row-level *_at fields are UNIX seconds, but the aggregate
+              // feeds stamp their generation time as an ISO string and the price ticker in ms.
+              // The rows that differ say so in their own description.
+              times: 'Row timestamps (*_at, ts fields on ledger rows) are UNIX seconds (UTC). Exceptions are named on their rows: the generation-time `timestamp`/`ts` on the aggregate feeds (topology, peers, regions, poolstats) is ISO 8601, and price.updated_at is UNIX milliseconds.',
             },
           },
         });
@@ -3416,8 +3425,9 @@ function setupRoutes() {
   // pool's operational internals — slate_id, tor_check_result, retry_count, next_retry_at,
   // cancel_reason, cancelled_by. Those describe how the pool's payout machinery and a miner's
   // wallet behaved, are read by nothing public, and read as a per-miner reliability record.
-  // grin_address stays FULL: address-as-identity means the account page is public and keyed by
-  // it, and both consumers link the row through to /account-settings.html?addr=.
+  // grin_address was FULL until 2026-09-02 (address-as-identity, and both consumers deep-linked
+  // the row to /account-settings.html?addr=); it is MASKED now — see the note at the query —
+  // and neither consumer links the row any more.
   //
   // `kernel_excess` was dropped from this feed 2026-09-02 (audit §J11-2). It is the on-chain
   // payment proof, and pairing it POOL-WIDE with a full recipient address builds a public,
@@ -3474,12 +3484,41 @@ function setupRoutes() {
       const { addr } = req.params;
       const acct = db.prepare(
         `SELECT grin_address, balance, balance_locked, is_online, last_seen_at, created_at,
-                last_ip, prev_ip, last_pass_hash, prev_pass_hash, pass_proof_state,
-                last_ip_at, last_pass_at, anchor_ip, anchor_pass_hash,
-                nostr_username, nostr_npub, nostr_registered_at
+                pass_proof_state, nostr_username, nostr_npub, nostr_registered_at
          FROM miner_accounts WHERE grin_address = ?`
       ).get(addr);
       if (!acct) return res.status(404).json({ error: 'Account not found' });
+
+      // Ownership-proof set (design §17.2 #7) — COUNTS ONLY. Never a value, never a hash,
+      // never proof_salt, and never a per-row timestamp: one row's capture time published
+      // next to an address rebuilds the (address, origin, time) linkage the hashing exists to
+      // remove. `live` counts live rows; `has_anchor` covers the write-once original even
+      // once it has been evicted, because it still verifies (as slot 'anchor') and so still
+      // means "this address can reach its own wallet".
+      const proofAgg = db.prepare(
+        `SELECT kind,
+                SUM(CASE WHEN evicted_at IS NULL THEN 1 ELSE 0 END) AS live,
+                MAX(CASE WHEN evicted_at IS NULL THEN first_seen_at END) AS newest,
+                MAX(is_anchor) AS has_anchor
+           FROM miner_proofs
+          WHERE grin_address = ?
+          GROUP BY kind`
+      ).all(addr);
+      const proofOf = (k) => proofAgg.find((r) => r.kind === k) || { live: 0, newest: null, has_anchor: 0 };
+      const ipSet = proofOf('ip');
+      const passSet = proofOf('pass');
+      const proofs = {
+        ip: ipSet.live || 0,
+        pass: passSet.live || 0,
+        max: PROOF_SET_MAX,
+        anchor: !!(ipSet.has_anchor || passSet.has_anchor),
+        // Newest first_seen_at across BOTH kinds — the page renders it as "last added", which
+        // is what a miner checks after moving a rig. first_seen_at never moves, so a rig
+        // reconnecting from a known IP does not bump this.
+        last_added_at: [ipSet.newest, passSet.newest]
+          .filter((t) => t !== null && t !== undefined)
+          .reduce((a, b) => (a === null ? b : Math.max(a, b)), null)
+      };
 
       // Lifetime withdrawals actually paid (confirmed only): total amount + how many.
       const paidAgg = db.prepare(
@@ -3515,6 +3554,28 @@ function setupRoutes() {
 
       const hr = hashrateTracker.getMinerHashrate(addr, 60) || {};
 
+      // Donor name (design §16.9) — the miner's own view of what the wall will show, through
+      // the SAME displayState the wall uses (Part 4), so the two can never disagree. Gated on
+      // donationsActive() exactly like donation_percent below: with the operator's donation
+      // switch OFF nothing is shown, because nothing is being taken. Guarded on its own for the
+      // same reason as that field — a settings hiccup must degrade one row, never 500 the page.
+      // `name` is the marker string only when the operator chose 'marker'; otherwise null for
+      // every state but `shown` (the account page keys off `name_state`, not the string).
+      const donor = (() => {
+        try {
+          if (!incentivesManager || !incentivesManager.donationsActive()) return { name: null, name_state: null };
+          const row = db.prepare(
+            'SELECT donor_name, donor_name_set_at, donor_censor FROM miner_incentives WHERE grin_address = ?'
+          ).get(acct.grin_address) || null;
+          const ds = donorSettings(poolSettings.getSection('incentives'), poolSettings.getSection('pool_info').pool_name);
+          return donorDisplayState(row, {
+            expiryMonths: ds.nameExpiryMonths,
+            censoredDisplay: ds.censoredDisplay,
+            lastDonatedAt: donorLastDonatedAt(db, acct.grin_address, getLedgerRollupHorizon(db))
+          });
+        } catch (e) { return { name: null, name_state: null }; }
+      })();
+
       // Proof values are NOT exposed (they back the ownership gate; hashed at rest anyway) —
       // only whether one is on record, so the UI can hint which proof kinds will work.
       res.json({
@@ -3544,19 +3605,15 @@ function setupRoutes() {
         // Abandoned-balance countdown for THIS address (state: active|idle|counting|eligible|
         // disposed|no_balance). Drives the account-page dormancy notice + reclaim CTA.
         dormancy: dormancyManager ? dormancyManager.statusFor(acct.grin_address) : null,
-        has_recorded_ip: !!(acct.last_ip || acct.prev_ip || acct.anchor_ip),
-        has_recorded_pass: !!(acct.last_pass_hash || acct.prev_pass_hash || acct.anchor_pass_hash),
-        // When the ownership evidence for this address last CHANGED (audit §J3-4). Anyone may
-        // mine to any address, so a capture can be somebody else's session displacing yours —
-        // and until now that happened in silence. Surfacing the timestamp lets the page say
-        // "evidence last changed on <date>", which is the only way a miner can notice.
-        // `anchor` reports whether the write-once original proof is still on record; while it
-        // is, the address can always reach its own wallet even if both window slots are lost.
-        evidence: {
-          ip_changed_at: acct.last_ip_at || null,
-          pass_changed_at: acct.last_pass_at || null,
-          anchor: !!(acct.anchor_ip || acct.anchor_pass_hash),
-        },
+        has_recorded_ip: !!(ipSet.live || ipSet.has_anchor),
+        has_recorded_pass: !!(passSet.live || passSet.has_anchor),
+        // How many mining IPs and rig passwords are on record for this address, against the
+        // cap (design §17.2 #7). Replaced the `evidence` object, which reported WHEN a proof
+        // last changed so the page could warn about it: with ten slots per kind a second site
+        // no longer pushes the first one out, so a new value beside the old ones is ordinary
+        // operation, not an alarm. What a miner actually needs is the count — "are all three
+        // of my rigs on record?" — and when one was last added.
+        proofs,
         // The `donateN` worker-name tag writes this, and it debits every future block credit
         // (lib/incentives.js applyToDistribution). It was previously invisible to the miner:
         // this endpoint never returned it and the only public surface is a Top-100 donor wall,
@@ -3570,6 +3627,10 @@ function setupRoutes() {
             return incentivesManager.donationPercent(acct.grin_address) || 0;
           } catch (e) { return 0; }
         })(),
+        // The name this address put on the donor wall (design §16.9) and whether it shows:
+        // null (donations off) · 'shown' · 'masked' (no name) · 'censored' · 'expired'.
+        donor_name: donor.name,
+        donor_name_state: donor.name_state,
         // Password-proof diagnostics — why the gate will or won't accept a rig password.
         //   state — the LAST-SEEN login's verdict ('ok' | 'none' | a reject code). Persisted.
         //   live  — cross-rig consistency among CURRENTLY CONNECTED sessions (counts only).
@@ -3705,54 +3766,57 @@ function setupRoutes() {
     }
   });
 
-  // Donor wall — every address that has donated payout slices (donateN worker tag) to the
-  // prize pool, with lifetime total and first/last donation date. Composite read per the
-  // ledger-rollup horizon contract: rollup(day < H) + raw(created_at >= H), so totals stay
-  // exact forever while raw rows age out. first/last dates from rolled days are UTC-day
-  // aligned — day precision is all the public wall displays anyway. Current donate-% comes
-  // from miner_incentives (0 = paused; past donors stay on the wall).
+  // Donor wall — design §16.6/§16.7 (Part 4, 2026-09-21). The league: every address with a
+  // donation debit inside the ranking window, scored GRIN-in-window × loyalty multiplier
+  // (distinct months with a debit, +P %/month, capped) and ranked; a capped "past donors"
+  // strip for the ones with nothing in the window (a thank-you is not revoked because the
+  // giving stopped — nothing is ever deleted); `totals` lifetime over EVERY donor. The whole
+  // response is built by lib/donor-ledger.js donorWall() from the composite ledger read
+  // (rollup day < H + raw ≥ H, so totals stay exact after raw rows prune; rolled days are
+  // UTC-day aligned) — the route only supplies what the lib cannot know: the switch state,
+  // the live rigs, and the mask.
+  //
+  // Names: opt-in via the `<label>-donateN` login (Part 2 capture), moderated admin-side
+  // (Part 3), displayed through the SAME displayState /api/account/:addr uses — `name` is null
+  // for everything but `shown`, and the censored marker appears only when the operator chose
+  // it. No censor word, censoring admin or raw censor state leaves this route
+  // (scripts/test-public-leakage.js §9, scripts/test-donor-league.js).
+  //
+  // Two readings of "current" are gated on donationsActive(), the same predicate
+  // /api/account/:addr uses for its donation row: with the operator's donation switch OFF a
+  // stored % is dormant, so every card reads `paused` and nobody counts as currently donating,
+  // rather than the wall advertising cuts that are not being taken.
   app.get('/api/pool/donors', rateLimiter.middleware('public'), (req, res) => {
     try {
-      const H = getLedgerRollupHorizon(db); // 0 = no rollup yet → whole ledger is raw
-      const donors = db.prepare(`
-        SELECT d.grin_address AS address,
-               d.total_donated, d.first_donated_at, d.last_donated_at, d.donation_count,
-               COALESCE(mi.donation_percent, 0) AS current_percent
-        FROM (
-          SELECT grin_address,
-                 SUM(amt) AS total_donated,
-                 MIN(t)   AS first_donated_at,
-                 MAX(t)   AS last_donated_at,
-                 SUM(cnt) AS donation_count
-          FROM (
-            SELECT grin_address, total_amount AS amt, day AS t, event_count AS cnt
-            FROM balance_log_daily
-            WHERE event_type = 'debit' AND reference_type = 'donation' AND day < ?
-            UNION ALL
-            SELECT grin_address, amount, created_at, 1
-            FROM balance_log
-            WHERE event_type = 'debit' AND reference_type = 'donation' AND created_at >= ?
-          )
-          GROUP BY grin_address
-        ) d
-        LEFT JOIN miner_incentives mi ON mi.grin_address = d.grin_address
-        WHERE d.total_donated > 0
-        ORDER BY d.total_donated DESC
-        LIMIT 100
-      `).all(H, H);
+      let active = false;
+      try { active = !!(incentivesManager && incentivesManager.donationsActive()); } catch (_) { active = false; }
+      const ds = donorSettings(poolSettings.getSection('incentives'), poolSettings.getSection('pool_info').pool_name);
 
-      const totals = {
-        donor_count: donors.length,
-        active_donors: donors.filter((r) => r.current_percent > 0).length,
-        total_donated: parseFloat(donors.reduce((a, r) => a + r.total_donated, 0).toFixed(9))
-      };
-      // `address` MASKED since 2026-09-02 (audit §J11-1) — after the totals are summed, so the
-      // wall's arithmetic is unaffected. A donor wall is a thank-you, not an identity register.
-      donors.forEach((r) => {
-        r.total_donated = parseFloat(r.total_donated.toFixed(9));
-        r.address = maskAddr(r.address);
-      });
-      res.json({ donors, totals });
+      // Rigs online per address — ONE pass over the live sessions, not a shares query per card.
+      // MINING sessions only (audit §J6-9): a session exists from an unauthenticated login, so
+      // without the accepted-share bar anyone could put "3 rigs online" on someone else's card
+      // by opening sockets under their address. Distinct worker names, like the account page.
+      const rigsOnline = new Map();
+      const seen = new Map();
+      for (const sess of (minerManager ? minerManager.getActiveSessions() : [])) {
+        if (!(sess.acceptedShares > 0)) continue;
+        const a = sess.grinAddress;
+        if (!a) continue;
+        let names = seen.get(a);
+        if (!names) { names = new Set(); seen.set(a, names); }
+        names.add(sess.workerName || 'default');
+        rigsOnline.set(a, names.size);
+      }
+
+      // `address` MASKED (audit §J11-1) — the mask is a REQUIRED argument of donorWall and is
+      // applied inside it to both arrays, so `past` cannot be the list a later edit forgets.
+      res.json(donorWall(db, {
+        ds,
+        H: getLedgerRollupHorizon(db), // 0 = no rollup yet → whole ledger is raw
+        active,
+        rigsOnline,
+        mask: (a) => maskAddr(a)
+      }));
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
@@ -3838,9 +3902,15 @@ function setupRoutes() {
       }
       const netDiff = app.locals._netDiffCache.value;
 
-      const roundDiff = db.prepare(
-        'SELECT COALESCE(SUM(difficulty), 0) AS d FROM shares WHERE created_at > ?'
-      ).get(roundFrom).d;
+      // Sum AND count from the one scan. The sum is in chain units (each accepted share is
+      // credited job target × C32 graph weight, stratum-protocol.js), so it is ~16384× the
+      // share count — a page that labels it "shares" is off by that factor. The count is what
+      // a miner can check against their own rig's accepted tally.
+      const roundRow = db.prepare(
+        'SELECT COALESCE(SUM(difficulty), 0) AS d, COUNT(*) AS n FROM shares WHERE created_at > ?'
+      ).get(roundFrom);
+      const roundDiff = roundRow.d;
+      const roundShareCount = roundRow.n;
 
       const roundEffortPct = (netDiff && netDiff > 0)
         ? parseFloat(((roundDiff / netDiff) * 100).toFixed(2)) : null;
@@ -3871,6 +3941,7 @@ function setupRoutes() {
         last_block_at: lastBlockAt,
         seconds_since_last_block: lastBlockAt ? (now - lastBlockAt) : null,
         round_shares: parseFloat(roundDiff.toFixed(6)),
+        round_share_count: roundShareCount,
         round_window_from: roundFrom,
         round_window_capped: roundFrom > (lastBlockAt || 0),
         network_difficulty: netDiff,
@@ -4743,6 +4814,11 @@ function setupRoutes() {
   //     would hide nothing and could only land the dot in the wrong country. The map draws
   //     miner countries as a filled polygon; the centroid is just the label/hover anchor.
   //     Exact per-miner coordinates are never resolved or stored — country is all we hold.
+  //     ONE exception, since 2026-09-21: a GATEWAY carries the operator-declared lat/lng
+  //     from its pool_locations row when set. A gateway is the pool's own published server,
+  //     not a person — its stratum hostname is on the connect grid and geolocatable by
+  //     anyone — and the centroid rule drew "Los Angeles" and "New York" 140 km apart in
+  //     Kansas, which reads as a broken map, not as privacy. Blank → centroid, as before.
   //
   // MEMOISED 30 s (audit §J12-9). The expensive OUTBOUND parts were already kept out of the
   // request path — cachedGatewayStatus (15 s + running flag) and refreshStratumProbes (60 s +
@@ -4773,7 +4849,7 @@ function setupRoutes() {
       //     broken pool rather than an unused row. Also what the stratum probe works from —
       //     no point dialling an endpoint nobody is being sent to.
       const locationsAll = db.prepare(
-        `SELECT region, label, country, country_code, stratum_url, is_active FROM pool_locations`
+        `SELECT region, label, country, country_code, stratum_url, is_active, lat, lng FROM pool_locations`
       ).all();
       const locations = locationsAll.filter(l => l.is_active === 1 || l.is_active === true);
       const locAllByRegion = new Map(locationsAll.map(l => [l.region, l]));
@@ -4825,7 +4901,13 @@ function setupRoutes() {
         const shareAge = a.last_share ? (nowS - a.last_share) : null;
         const status = statusOf(loc.region, a.miners > 0, shareAge, !!loc.stratum_url);
         const gps = (a.sumdiff * CYCLE) / (WINDOW_S * SOL);
-        const pos = geoip.countryCentroid(loc.country_code, nudgeFor(loc.country_code));
+        // Declared position wins and does NOT take a nudge slot: the de-stack ring exists only
+        // for markers that would otherwise share the centroid pixel, and a pinned gateway isn't
+        // there. (Both columns are set together or not at all — POST /api/admin/locations
+        // enforces the pair — so a lone value never reaches here; the guard is belt-and-braces.)
+        const pinned = Number.isFinite(loc.lat) && Number.isFinite(loc.lng);
+        const pos = pinned ? { lat: loc.lat, lng: loc.lng }
+                           : geoip.countryCentroid(loc.country_code, nudgeFor(loc.country_code));
         const g = {
           region: loc.region, label: loc.label || loc.region,
           country: loc.country || (loc.country_code ? geoip.countryName(loc.country_code) : null),
@@ -5071,10 +5153,13 @@ function setupRoutes() {
       const nowS = Math.floor(Date.now() / 1000);
       const cutoff = nowS - WINDOW_S;
 
+      // `workers` = distinct (address, rig) pairs — the same key the hourly rollup and
+      // getWorkerBreakdown group on (NULL worker_name → 'default'), so the three agree.
       const agg = db.prepare(
         `SELECT region,
                 COUNT(*) AS shares,
                 COUNT(DISTINCT grin_address) AS miners,
+                COUNT(DISTINCT grin_address || '|' || COALESCE(worker_name, 'default')) AS workers,
                 COALESCE(SUM(difficulty), 0) AS sumdiff,
                 MAX(created_at) AS last_share
          FROM shares WHERE created_at > ? GROUP BY region`
@@ -5144,12 +5229,12 @@ function setupRoutes() {
       // Union of regions seen in shares and regions declared in pool_locations.
       const regions = new Set([...byRegion.keys(), ...locByRegion.keys()]);
       const out = [];
-      let totalGps = 0, totalMiners = 0, totalShares = 0, checking = 0;
+      let totalGps = 0, totalMiners = 0, totalWorkers = 0, totalShares = 0, checking = 0;
       for (const region of regions) {
-        const a = byRegion.get(region) || { shares: 0, miners: 0, sumdiff: 0, last_share: 0 };
+        const a = byRegion.get(region) || { shares: 0, miners: 0, workers: 0, sumdiff: 0, last_share: 0 };
         const loc = locByRegion.get(region) || {};
         const gps = (a.sumdiff * CYCLE_LENGTH) / (WINDOW_S * SOLUTION_RATE);
-        totalGps += gps; totalMiners += a.miners; totalShares += a.shares;
+        totalGps += gps; totalMiners += a.miners; totalWorkers += a.workers; totalShares += a.shares;
         const shareAge = a.last_share ? (nowS - a.last_share) : null;
         const status = regionStatus(region, a.shares > 0, shareAge, !!loc.stratum_url);
         if (status === 'checking') checking++;
@@ -5164,6 +5249,7 @@ function setupRoutes() {
           online: status !== 'offline', // reachable? (up regardless of miner count)
           hashrate_gps: parseFloat(gps.toFixed(6)),
           miners: a.miners,
+          workers: a.workers,
           shares_window: a.shares
         });
       }
@@ -5182,9 +5268,10 @@ function setupRoutes() {
       //     nobody and a gateway with none is exactly what a miner picking one needs to see.
       //     Nulling it would repeat §J5-4's mistake in reverse (a suppressed number read as a
       //     real one); here a real zero must not be read as suppressed.
-      //  2. Suppress `hashrate_gps` and `shares_window` alongside `miners`. With one miner in a
-      //     region the hashrate IS that miner's rig size — more identifying than the count, and
-      //     suppressing the count alone would have been security theatre.
+      //  2. Suppress `hashrate_gps`, `shares_window` and `workers` alongside `miners`. With one
+      //     miner in a region the hashrate IS that miner's rig size — more identifying than the
+      //     count, and suppressing the count alone would have been security theatre. `workers`
+      //     under the floor is that one person's rig count — the same disclosure.
       //  3. `status`/`online` are KEPT. They are one bit ("can I mine here?"), that bit is the
       //     entire point of the public connect grid, and a miner pointed at a dead gateway is a
       //     real harm. This is a stated residual, not an oversight: on a thin region 'online'
@@ -5200,6 +5287,7 @@ function setupRoutes() {
         for (const r of out) {
           if (r.miners > 0 && r.miners < kMinRegions) {
             r.miners = null;
+            r.workers = null;
             r.hashrate_gps = null;
             r.shares_window = null;
             r.below_floor = true;
@@ -5223,6 +5311,7 @@ function setupRoutes() {
         totals: {
           hashrate_gps: parseFloat(totalGps.toFixed(6)),
           miners: totalMiners,
+          workers: totalWorkers,
           shares_window: totalShares
         },
         regions: out,
@@ -5959,6 +6048,10 @@ function setupRoutes() {
       const unclaimedRow = db.prepare(
         `SELECT COALESCE(SUM(balance),0) AS s FROM miner_accounts WHERE grin_address NOT IN ('pool_fee','prize_pool')`
       ).get() || { s: 0 };
+      // Donor names captured this week (design §16.8) — the Overview tile that says the
+      // moderation page has something to look at. Same count the nav badge reads.
+      let newDonorNames7d = 0;
+      try { newDonorNames7d = donorCountNewNames(db); } catch (_) { newDonorNames7d = 0; }
 
       res.json({
         timestamp: new Date().toISOString(),
@@ -5968,6 +6061,7 @@ function setupRoutes() {
         pool_hashrate_gps:   hashrateStats?.current_hashrate || 0,
         unclaimed_balance:   unclaimedRow.s || 0,
         pending_withdrawals: withdrawalStatus?.pending_count || 0,
+        new_donor_names_7d:  newDonorNames7d,
         pool_status: {
           name: config.pool_name || 'GRINIUM',
           uptime_hours: +(process.uptime() / 3600).toFixed(1),
@@ -6481,6 +6575,27 @@ function setupRoutes() {
       const is_active = req.body && req.body.is_active === false ? 0 : 1;
       const reg = String(region || '').trim();
       if (!reg) return res.status(400).json({ error: 'region is required' });
+      // Optional map position of the gateway box (operator-typed, never resolved from an IP —
+      // see the column comment in lib/db.js). Both blank → NULL/NULL and the network map falls
+      // back to the country centroid; one blank, non-numeric, or out of range → 400, because a
+      // half pair silently becomes "no pin" and NaN/Infinity would put the marker off the globe.
+      // Number() not parseFloat(): parseFloat('12abc') is 12, and a typo must not save as a spot.
+      // A body with NEITHER key (an API caller editing just the label) keeps the stored pin —
+      // clearing is an explicit blank pair, never an omission. The panel always posts both.
+      const _rawLat = req.body && req.body.lat, _rawLng = req.body && req.body.lng;
+      const _blank = (v) => v == null || String(v).trim() === '';
+      const keepPin = !(req.body && ('lat' in req.body || 'lng' in req.body));
+      let lat = null, lng = null;
+      if (!_blank(_rawLat) || !_blank(_rawLng)) {
+        if (_blank(_rawLat) || _blank(_rawLng)) {
+          return res.status(400).json({ error: 'lat and lng must be given together (or both left blank)' });
+        }
+        lat = Number(String(_rawLat).trim()); lng = Number(String(_rawLng).trim());
+        if (!Number.isFinite(lat) || !Number.isFinite(lng) || lat < -90 || lat > 90 || lng < -180 || lng > 180) {
+          return res.status(400).json({ error: 'lat must be a number in -90..90 and lng in -180..180 (decimal degrees, e.g. 34.05 / -118.24)' });
+        }
+        lat = Math.round(lat * 1e4) / 1e4; lng = Math.round(lng * 1e4) / 1e4;
+      }
       const wgPubkey = req.body && req.body.wg_pubkey ? String(req.body.wg_pubkey).trim() : '';
       // A malformed key is a typo, not wg state — fail fast before saving anything.
       if (wgPubkey && !/^[A-Za-z0-9+/]{43}=$/.test(wgPubkey)) {
@@ -6507,10 +6622,11 @@ function setupRoutes() {
       // prompt, and treat "no stored row yet" as a change so a freshly INSERTed region carrying
       // a URL is gated too.
       const _u = (v) => String(v == null ? '' : v).trim();
-      const prevLoc = db.prepare('SELECT api_url, stratum_url FROM pool_locations WHERE region = ?').get(reg);
+      const prevLoc = db.prepare('SELECT api_url, stratum_url, lat, lng FROM pool_locations WHERE region = ?').get(reg);
       const endpointChanged = _u(stratum_url) !== _u(prevLoc && prevLoc.stratum_url) ||
                               _u(api_url) !== _u(prevLoc && prevLoc.api_url);
       if (endpointChanged && stepUpRefused(req, res)) return;
+      if (keepPin && prevLoc) { lat = prevLoc.lat; lng = prevLoc.lng; }
 
       // Pre-flight the hub tunnel BEFORE writing anything (read-only `list`).
       // The upsert used to run first, so a pool that had never raised its
@@ -6532,8 +6648,8 @@ function setupRoutes() {
       const cc = country_code ? String(country_code).trim().toUpperCase().slice(0, 2) : null;
 
       db.prepare(`
-        INSERT INTO pool_locations (region, label, country, country_code, api_url, stratum_url, is_active, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, unixepoch())
+        INSERT INTO pool_locations (region, label, country, country_code, api_url, stratum_url, is_active, lat, lng, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, unixepoch())
         ON CONFLICT(region) DO UPDATE SET
           label = excluded.label,
           country = excluded.country,
@@ -6541,14 +6657,19 @@ function setupRoutes() {
           api_url = excluded.api_url,
           stratum_url = excluded.stratum_url,
           is_active = excluded.is_active,
+          lat = excluded.lat,
+          lng = excluded.lng,
           updated_at = unixepoch()
-      `).run(reg, label || null, country || null, cc, api_url || null, stratum_url || null, is_active);
+      `).run(reg, label || null, country || null, cc, api_url || null, stratum_url || null, is_active, lat, lng);
 
       const row = db.prepare('SELECT * FROM pool_locations WHERE region = ?').get(reg);
+      // The public map memoises /api/pool/topology for 30 s; an operator who just moved a
+      // pin (or hid a region) and opens the map expects to see it, not the previous answer.
+      _topologyCache = { at: 0, body: null };
       db.prepare(`
         INSERT INTO admin_audit_log (admin_id, action, target_type, target_id, details, ip)
         VALUES (?, 'location_upsert', 'pool_location', ?, ?, ?)
-      `).run(req.user.user_id, reg, JSON.stringify({ label, country, country_code: cc, api_url, stratum_url, is_active }), req.ip);
+      `).run(req.user.user_id, reg, JSON.stringify({ label, country, country_code: cc, api_url, stratum_url, is_active, lat, lng }), req.ip);
 
       if (!wgPubkey) return res.json({ success: true, location: row });
 
@@ -6723,6 +6844,7 @@ function setupRoutes() {
       const row = db.prepare('SELECT * FROM pool_locations WHERE id = ?').get(id);
       if (!row) return res.status(404).json({ error: 'location not found' });
       db.prepare('DELETE FROM pool_locations WHERE id = ?').run(id);
+      _topologyCache = { at: 0, body: null }; // same 30 s memo as the upsert above
       db.prepare(`
         INSERT INTO admin_audit_log (admin_id, action, target_type, target_id, details, ip)
         VALUES (?, 'location_delete', 'pool_location', ?, ?, ?)
@@ -6779,16 +6901,15 @@ function setupRoutes() {
     }
   });
 
-  // Explicit column list, NOT `SELECT *` (audit §J8-2). `miner_accounts` carries six
-  // ownership-proof columns — last_ip / prev_ip / anchor_ip (salted scrypt of the miner's
-  // mining IP) and last_pass_hash / prev_pass_hash / anchor_pass_hash (salted scrypt of the
-  // rig password). Those exist so the DB holds no readable mining IP and no readable rig
-  // password (§G, memory `project_pool_ip_privacy`), and the PUBLIC account summary is
-  // careful to report only `has_recorded_ip` / `has_recorded_pass` booleans. `...acct` here
-  // was shipping the hashes themselves into an admin browser, where §C3's unrevocable
-  // access token puts them one stolen session away from an offline attack on the payout
-  // gate's second factor. Same fix, same reason, as the 2026-07-28 pass on
-  // /api/pool/payments and /api/pool/miners. The panel reads none of these six.
+  // Explicit column list, NOT `SELECT *` (audit §J8-2). `miner_accounts` carries the
+  // ownership-gate's `proof_salt` plus ten legacy proof columns, and the proof HASHES now
+  // live in `miner_proofs`. None of that may reach a browser: the hashes exist so the DB
+  // holds no readable mining IP and no readable rig password (§G, memory
+  // `project_pool_ip_privacy`), and §C3's unrevocable admin access token puts anything an
+  // admin page receives one stolen session away from an offline attack on the payout gate's
+  // second factor. `...acct` below spreads whatever this SELECT names, so the SELECT is the
+  // control — the same fix, and the same reason, as the 2026-07-28 pass on
+  // /api/pool/payments and /api/pool/miners.
   // `pass_proof_state` IS included: it is a verdict string ('ok' / a reject code), already
   // public on /api/account/:addr, and it is what answers "why won't my password work?".
   app.get('/api/admin/miners/:addr', secureAdmin, (req, res) => {
@@ -6796,7 +6917,6 @@ function setupRoutes() {
       const { addr } = req.params;
       const acct = db.prepare(
         `SELECT id, grin_address, balance, balance_locked, is_online, last_seen_at, min_payout,
-                last_ip_at, prev_ip_at, last_pass_at, prev_pass_at, anchor_set_at,
                 pass_proof_state, is_banned, ban_reason, banned_at,
                 nostr_username, nostr_npub, nostr_registered_at,
                 nostr_prev_username, nostr_prev_npub,
@@ -6804,6 +6924,30 @@ function setupRoutes() {
            FROM miner_accounts WHERE grin_address = ?`
       ).get(addr);
       if (!acct) return res.status(404).json({ error: 'miner not found' });
+
+      // Support view of the proof set (design §17.2 #7): COUNTS AND TIMESTAMPS ONLY, per kind.
+      // Enough to answer "does this miner have any proof on record, and how old is it?" —
+      // which is the question a support ticket asks — without handing the panel a digest to
+      // grind or a per-row capture time to correlate. `anchor_live` distinguishes an anchor
+      // that is still an ordinary set member from one that has been evicted (and so is
+      // refused by the destination gate, §J3-4), because that is the difference between a
+      // miner who can change their payout destination and one who cannot.
+      const proofSets = {};
+      for (const kind of ['ip', 'pass']) {
+        const agg = db.prepare(
+          `SELECT SUM(CASE WHEN evicted_at IS NULL THEN 1 ELSE 0 END) AS live,
+                  MIN(first_seen_at) AS oldest_first_seen,
+                  MAX(CASE WHEN evicted_at IS NULL THEN last_seen_at END) AS newest_last_seen,
+                  MAX(CASE WHEN is_anchor = 1 AND evicted_at IS NULL THEN 1 ELSE 0 END) AS anchor_live
+             FROM miner_proofs WHERE grin_address = ? AND kind = ?`
+        ).get(addr, kind) || {};
+        proofSets[kind] = {
+          live: agg.live || 0,
+          oldest_first_seen: agg.oldest_first_seen === undefined ? null : agg.oldest_first_seen,
+          newest_last_seen: agg.newest_last_seen === undefined ? null : agg.newest_last_seen,
+          anchor_live: !!agg.anchor_live
+        };
+      }
 
       const total_paid = db.prepare(
         `SELECT COALESCE(SUM(amount),0) AS t FROM withdrawals WHERE grin_address = ? AND status='confirmed'`
@@ -6831,6 +6975,7 @@ function setupRoutes() {
           blocks_found,
           hashrate_gps: parseFloat(((hr.avg_hashrate || 0)).toFixed(6)),
           pending_withdrawals: pending,
+          proofs: { max: PROOF_SET_MAX, ip: proofSets.ip, pass: proofSets.pass },
           incentives
         }
       });
@@ -6914,6 +7059,160 @@ function setupRoutes() {
       res.status(500).json({ error: err.message });
     }
   });
+
+  // ─── DONORS (Admin only) — design §16.8 ────────────────────────────────────────────
+  // The operator's moderation surface for the donor wall. FULL addresses on purpose — this is
+  // the admin side (the public wall masks, §J11-1); every write is audited by lib/donor-names.js
+  // inside the same transaction as the state change.
+  //
+  // One row per address that has EVER donated (a ledger debit), has a LIVE tag
+  // (donation_percent > 0), or has a STORED name. The third set is a deliberate widening of
+  // §16.8's two: a miner who ran the ceremony and then paused before the first matured block has
+  // a name on file and no debit, and the operator must be able to see (and censor) it BEFORE the
+  // first debit makes it public — moderation that starts after publication is the review gate
+  // §16.1 #3 rejected. Rank/score are the §16.6 numbers the wall will show (same helpers), so the
+  // operator sees the board the miners see; rows with nothing in the window carry rank null.
+  //
+  // Cost: the ledger aggregate is the ONE composite scan /api/pool/donors already does; the
+  // per-row workers read is getWorkersForAccount over the 24 h window, an indexed
+  // (grin_address) lookup on a table pruned to ~31 h, done only for the rows returned (cap
+  // 500, like /api/admin/miners). It never walks shares per donor beyond that window.
+  app.get('/api/admin/donors', secureAdmin, (req, res) => {
+    try {
+      const now = Math.floor(Date.now() / 1000);
+      const H = getLedgerRollupHorizon(db);
+      const ds = donorSettings(poolSettings.getSection('incentives'), poolSettings.getSection('pool_info').pool_name);
+      let active = false;
+      try { active = !!(incentivesManager && incentivesManager.donationsActive()); } catch (_) { active = false; }
+
+      const ledgerByAddr = new Map();
+      for (const r of donorLedger(db, { H, windowDays: ds.rankWindowDays, now })) ledgerByAddr.set(r.address, r);
+
+      const incRows = db.prepare(`
+        SELECT grin_address, donation_percent, donor_name, donor_name_set_at,
+               donor_censor, donor_censor_word, donor_censor_at, donor_censor_by
+        FROM miner_incentives
+        WHERE donation_percent > 0 OR donor_name IS NOT NULL
+      `).all();
+      const incByAddr = new Map();
+      for (const r of incRows) incByAddr.set(r.grin_address, r);
+      // Ledger donors whose incentives row carries neither a tag nor a name still need their
+      // censor state (a pre-emptive admin censor lives there too).
+      const missing = [...ledgerByAddr.keys()].filter((a) => !incByAddr.has(a));
+      if (missing.length) {
+        const q = db.prepare(`
+          SELECT grin_address, donation_percent, donor_name, donor_name_set_at,
+                 donor_censor, donor_censor_word, donor_censor_at, donor_censor_by
+          FROM miner_incentives WHERE grin_address = ?
+        `);
+        for (const a of missing) { const r = q.get(a); if (r) incByAddr.set(a, r); }
+      }
+
+      const addrs = new Set([...ledgerByAddr.keys(), ...incByAddr.keys()]);
+      const newSince = now - 7 * 86400;
+      const rows = [];
+      for (const address of addrs) {
+        const l = ledgerByAddr.get(address) || {};
+        const i = incByAddr.get(address) || {};
+        const activeMonths = l.active_months || 0;
+        const inWindow = l.in_window_donated || 0;
+        const censor = i.donor_censor || null;
+        rows.push({
+          address,
+          donor_name: i.donor_name || null,
+          donor_name_set_at: i.donor_name_set_at || null,
+          donor_censor: censor,
+          donor_censor_word: i.donor_censor_word || null,
+          donor_censor_at: i.donor_censor_at || null,
+          donor_censor_by: i.donor_censor_by || null,
+          // Same gate as the wall and the account page: with donations switched off a stored
+          // percent is dormant, so it reads as paused here too rather than as a live cut.
+          current_percent: active ? (Number(i.donation_percent) || 0) : 0,
+          lifetime_donated: l.total_donated || 0,
+          in_window_donated: inWindow,
+          active_months: activeMonths,
+          first_donated_at: l.first_donated_at || null,
+          last_donated_at: l.last_donated_at || null,
+          donation_count: l.donation_count || 0,
+          multiplier: donorLoyaltyMultiplier(activeMonths, ds),
+          score: donorScore(inWindow, activeMonths, ds),
+          is_new: !!(i.donor_name && i.donor_name_set_at && i.donor_name_set_at >= newSince),
+          renamed_while_censored: censor === 'admin' && !!i.donor_name && !!i.donor_censor_at &&
+                                  Number(i.donor_name_set_at || 0) > Number(i.donor_censor_at),
+          rank: null,
+          workers: []
+        });
+      }
+      rows.sort(donorLeagueOrder);
+      let rank = 0;
+      for (const r of rows) { if (r.in_window_donated > 0) r.rank = ++rank; }
+
+      const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 500, 1), 500);
+      const page = rows.slice(0, limit);
+      for (const r of page) {
+        // 24 h window: name, live flag, and whether the rig carries a donate tag — the rig
+        // whose label IS the donor name. Same grammar as the login (parseDonateToken).
+        let ws = [];
+        try { ws = hashrateTracker.getWorkersForAccount(r.address, 1440) || []; } catch (_) { ws = []; }
+        r.workers = ws.map((w) => ({
+          name: w.worker_name,
+          online: !!w.online,
+          tagged: parseDonateToken(w.worker_name) !== null
+        }));
+      }
+
+      res.json({
+        success: true,
+        count: rows.length,
+        donors: page,
+        window_days: ds.rankWindowDays,
+        donations_active: active,
+        new_names_7d: donorCountNewNames(db, { now }),
+        now
+      });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // The nav badge on every admin page reads this instead of /api/admin/dashboard: one COUNT on
+  // miner_incentives (a small table) versus the dashboard's dozen queries, per page load.
+  app.get('/api/admin/donors/summary', secureAdmin, (req, res) => {
+    try {
+      res.json({ success: true, new_names_7d: donorCountNewNames(db) });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Censor / un-censor a donor name — per ADDRESS and sticky (§16.1 #4). Step-up gated
+  // (freshAdmin): it is a moderation action, the same tier as ban/unban. The address is
+  // validated with the one gate the /api/account family uses (GRIN_ADDR_RE, §J3-8) — the
+  // prize_pool/pool_fee pseudo-accounts have no donor name and must not be reachable here.
+  // The state machine, the write and the audit row live in lib/donor-names.js adminCensor()
+  // so the test suite drives the real thing; this route only maps its codes to status.
+  const donorCensorRoute = (censor) => (req, res) => {
+    try {
+      const addr = String(req.params.addr || '').trim();
+      if (!GRIN_ADDR_RE.test(addr)) return res.status(400).json({ error: 'Not a well-formed Grin address' });
+      const r = donorAdminCensor(db, addr, { censor, adminId: req.user.user_id, ip: req.ip });
+      if (!r.ok) {
+        if (r.code === 'not_found') return res.status(404).json({ error: 'This address has never mined here' });
+        if (r.code === 'already') {
+          return res.status(409).json({
+            error: censor ? 'This address is already censored by an admin' : 'This address is already allowed',
+            donor_censor: r.censor
+          });
+        }
+        return res.status(400).json({ error: r.code || 'refused' });
+      }
+      res.json({ success: true, grin_address: addr, donor_name: r.name, donor_censor: r.censor, previous: r.previous });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  };
+  app.post('/api/admin/donors/:addr/censor', freshAdmin, donorCensorRoute(true));
+  app.post('/api/admin/donors/:addr/uncensor', freshAdmin, donorCensorRoute(false));
 
   // Award a contest/incentive prize directly to a miner's address (address-as-identity —
   // no account needed). Funded from the prize_pool bucket by default so it's backed by real
@@ -7107,9 +7406,41 @@ function setupRoutes() {
           totp_enrollment_required: true
         });
       }
+      // Donor-name rescan hook (design §16.5 layer 2): saving a CHANGED blocklist, or renaming
+      // the pool (its name is a reserved word), re-runs the auto-list over every stored name.
+      // Read the two inputs before the write so "changed" is a real before/after, not
+      // presence in the body (the harvester posts every key on every save). Only the operator
+      // list and the pool name enter the matcher, so nothing else can move a verdict.
+      const rescanInputs = () => {
+        try {
+          return {
+            list: String(poolSettings.getSection('incentives').donor_name_blocklist || ''),
+            poolName: String(poolSettings.getSection('pool_info').pool_name || '')
+          };
+        } catch (e) { return null; }
+      };
+      const rescanBefore = (req.params.section === 'incentives' || req.params.section === 'pool_info')
+        ? rescanInputs() : null;
+
       const updated = poolSettings.updateSection(req.params.section, req.body, req.user.user_id);
       invalidateBranding();   // §J12-8: /api/public/branding is memoised; an edit must show at once
-      res.json({ success: true, section: req.params.section, data: updated });
+
+      // The counts ride on the response so the Donors page can flash "rescanned 12 names,
+      // 1 censored". A rescan that throws must not fail a save that already landed — the
+      // list is stored, and the next capture reads it; report the failure instead.
+      let rescan = null;
+      if (rescanBefore) {
+        const after = rescanInputs();
+        if (after && (after.list !== rescanBefore.list || after.poolName !== rescanBefore.poolName)) {
+          try {
+            rescan = donorRescanAll(db, { listText: after.list, poolName: after.poolName });
+          } catch (e) {
+            rescan = { error: e.message };
+            console.error(`[donor-names] rescan after settings save failed: ${e.message}`);
+          }
+        }
+      }
+      res.json({ success: true, section: req.params.section, data: updated, ...(rescan ? { rescan } : {}) });
     } catch (err) {
       res.status(400).json({ error: err.message });
     }

@@ -61,7 +61,10 @@ class ShareValidator {
     }
   }
 
-  async getSharesForMiner(grinAddress, limit = 100, offset = 0) {
+  // Synchronous on purpose (better-sqlite3 is). This was declared `async` with no caller
+  // awaiting it, so GET /api/account/:addr/shares serialised the Promise and answered `{}`
+  // for every address — a dead public endpoint nobody consumed (found 2026-09-21).
+  getSharesForMiner(grinAddress, limit = 100, offset = 0) {
     try {
       const stmt = this.db.prepare(`
         SELECT * FROM shares WHERE grin_address = ? ORDER BY created_at DESC LIMIT ? OFFSET ?

@@ -210,6 +210,75 @@ const shareHash = (addr, workId, worker, nonce) =>
   check('§J6-6 ...and the donateN tag still parses on a real address',
     (validateUsername(main + '.rig01-donate10') || {}).donation_percent === 10);
 
+  // The worker label is what the miner TYPED — the donate token is read, never stripped
+  // (2026-09-21: `.donate10` used to come back as worker "default" and read as a bug).
+  const wn = (u) => (validateUsername(main + '.' + u) || {}).worker_name;
+  const dp = (u) => (validateUsername(main + '.' + u) || {}).donation_percent;
+  check('donate tag: whole-name token keeps its name AND donates',
+    wn('donate10') === 'donate10' && dp('donate10') === 10);
+  check('donate tag: suffixed token keeps the full typed name',
+    wn('rig01-donate10') === 'rig01-donate10' && wn('rig01_donate5') === 'rig01_donate5' && dp('rig01_donate5') === 5);
+  check('donate tag: out-of-range / mistyped is a plain name, donates nothing',
+    wn('donate101') === 'donate101' && dp('donate101') === null && dp('donatexx') === null);
+  // 2026-09-21 (design §16.2): the cut label loses its trailing separator, so the join is
+  // `…long-donate100`, never `…long--donate100` (the label is 28 chars, the token 10, cap 32 → 22
+  // of the label survive and the 22nd is the '-' after "long").
+  check('donate tag: a long name is cut on the LABEL so the token stays visible',
+    wn('rig-name-that-is-long-enough-donate100') === 'rig-name-that-is-long-donate100' &&
+    dp('rig-name-that-is-long-enough-donate100') === 100);
+  check('donate tag: a cut that lands on `_` or a run of separators strips them all',
+    wn('rig_name_that_is_long_enough_donate100') === 'rig_name_that_is_long_donate100' &&
+    wn('a'.repeat(21) + '--zz-donate10') === 'a'.repeat(21) + '-donate10' &&
+    dp('a'.repeat(21) + '--zz-donate10') === 10);
+  check('no tag: a long name is cut to 32 (was 25 until 2026-09-21)',
+    wn('a'.repeat(40)) === 'a'.repeat(32));
+  check('length: a 32-char name is kept whole, plain and tagged (22 + `-donate100`)',
+    wn('a'.repeat(32)) === 'a'.repeat(32) &&
+    wn('b'.repeat(22) + '-donate100') === 'b'.repeat(22) + '-donate100' &&
+    dp('b'.repeat(22) + '-donate100') === 100);
+  check('length: a 33-char name is cut, plain and tagged, and the tag survives',
+    wn('a'.repeat(33)) === 'a'.repeat(32) &&
+    wn('b'.repeat(23) + '-donate100') === 'b'.repeat(22) + '-donate100' &&
+    dp('b'.repeat(23) + '-donate100') === 100);
+  check('length: a 48-char raw worker is accepted (and shortened), 49 is REFUSED',
+    wn('a'.repeat(48)) === 'a'.repeat(32) &&
+    validateUsername(main + '.' + 'a'.repeat(49)) === null);
+
+  // §16.2 case-fold: the WORKER part folds to lowercase before the grammar (`MyBrand-donate10`
+  // used to be refused at login); the ADDRESS never folds — uppercase bech32 is not grin's.
+  check('case-fold: an uppercase worker logs in lowercase with its donation intact',
+    wn('MyBrand-donate10') === 'mybrand-donate10' && dp('MyBrand-donate10') === 10 &&
+    wn('RIG01') === 'rig01' && wn('Donate5') === 'donate5' && dp('Donate5') === 5);
+  check('case-fold: an uppercase or mixed-case ADDRESS is still REFUSED, worker or not',
+    validateUsername(main.toUpperCase()) === null &&
+    validateUsername(main.toUpperCase() + '.rig01') === null &&
+    validateUsername('GRIN1' + main.slice(5)) === null &&
+    validateUsername(main.slice(0, 10) + main.slice(10).replace(/[a-z]/, c => c.toUpperCase())) === null &&
+    !!validateUsername(main + '.RIG01'));
+
+  // `donor_label` (design §16, Part 1): the label PART of a tagged name, for Part 2 to store.
+  // null = no live token, '' = the token is the whole name, else the label AFTER the cut.
+  const dl = (u) => (validateUsername(main + '.' + u) || {}).donor_label;
+  check('donor_label: null when the login carries no live donate token',
+    dl('rig01') === null && dl('donate101') === null && dl('donatexx') === null &&
+    validateUsername(main).donor_label === null);
+  check("donor_label: '' when the token is the whole worker name",
+    dl('donate10') === '' && dl('donate0') === '' && dl('Donate5') === '');
+  check('donor_label: the label after the cut, never the raw one, lowercase',
+    dl('rig01-donate10') === 'rig01' && dl('MyBrand-donate10') === 'mybrand' &&
+    dl('rig-name-that-is-long-enough-donate100') === 'rig-name-that-is-long' &&
+    dl('b'.repeat(23) + '-donate100') === 'b'.repeat(22));
+  check('validateUsername returns exactly the four fields, existing three first',
+    JSON.stringify(Object.keys(validateUsername(main + '.rig01-donate10'))) ===
+      JSON.stringify(['grin_address', 'worker_name', 'donation_percent', 'donor_label']));
+  // Leading zeros are just zeros — parseInt(…, 10) — so donate09 = 9 %, donate005 = 5 %,
+  // donate000 = opt-out; a 4th digit no longer matches \d{1,3} and is a plain name (no donation).
+  check('donate tag: leading zeros read as the plain number (donate09 = 9 %)',
+    dp('donate09') === 9 && dp('rig01-donate005') === 5 && dp('donate000') === 0 &&
+    wn('donate09') === 'donate09');
+  check('donate tag: four digits is not a token (donate0100 donates nothing)',
+    dp('donate0100') === null && wn('donate0100') === 'donate0100');
+
   // The two cases the checksum exists for.
   const i = 20;
   const typo = main.slice(0, i) + CS[(CS.indexOf(main[i]) + 1) % 32] + main.slice(i + 1);

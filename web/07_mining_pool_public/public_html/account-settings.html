@@ -431,9 +431,9 @@
                                     <!-- Password-proof diagnostics (renderPasswordProof). Hidden until the
                                          account endpoint reports something worth saying. -->
                                     <div id="acct-pass-diag" class="pass-diag" style="display:none"></div>
-                                    <small style="color:var(--text-mute);">Accepted: one of the last two IPs your miner submitted shares from
+                                    <small style="color:var(--text-mute);">Accepted: any IP your rigs have recently submitted shares from
                                         (check yours at <a href="https://tools.grin.money/tools/my-ip/" target="_blank" rel="noopener noreferrer">tools.grin.money/tools/my-ip</a>),
-                                        or the password set in your miner's pool config.</small>
+                                        or any password your rigs send in their pool config &mdash; the pool keeps up to 10 of each.</small>
                                     <!-- The "why" behind the password rules, collapsed (rgn-help pattern, css/reactor.css).
                                          The setup guide on the homepage stays inline because someone reading it is
                                          configuring a rig right then; this is reference for the subset who hit a
@@ -447,11 +447,21 @@
                                             nowhere else for the money to go. What the gate stops is a stranger reading the public
                                             leaderboard and triggering payouts you never asked for — each one burns a pool-paid
                                             network fee and force-moves coins you meant to leave alone.</p>
+                                        <p class="rgn-note"><b>What the pool keeps.</b> Up to <b>10 mining IPs</b> and
+                                            <b>10 rig passwords</b> for this address. A rig reconnecting from an IP already on
+                                            record simply refreshes it &mdash; nothing is pushed out, and the clock the pool reads
+                                            for a destination change does not restart. Only if you run more than 10 of either does
+                                            the least recently used one drop off.</p>
                                         <p class="rgn-note"><b>A password is your backup when your IP changes.</b> IP proof breaks
                                             quietly: an ISP re-lease, a router reboot, switching to mobile data, or moving the rig
-                                            all give you a new one. Only your last two are kept, so once yours has rotated twice
-                                            you cannot prove ownership until you mine a fresh share from the new address. A
-                                            password you chose survives all of that.</p>
+                                            all give you a new one. Each new IP is recorded on your next accepted share from it, but
+                                            a password you chose is yours wherever the rig runs.</p>
+                                        <p class="rgn-note"><b>If a proof appeared that you did not add.</b> Anyone can point a
+                                            miner at any address, so a value on record may be a stranger's rig rather than yours.
+                                            It cannot cost you coins: a Tor payout goes to this address's own wallet and a slatepack
+                                            is encrypted to this address, so the money can only reach you either way. What it can do
+                                            is trigger payouts you did not ask for. Your own proofs keep working &mdash; a stranger's
+                                            entry sits beside them, it does not replace them.</p>
                                         <p class="rgn-note"><b>Why factory defaults are refused.</b> A default like <code>x</code>,
                                             <code>xxxx</code> or <code>123</code> isn't a secret — thousands of rigs ship with the
                                             same value, so accepting it would hand one skeleton key to every account using it. Same
@@ -462,9 +472,10 @@
                                             are recorded, and the address keeps working on IP proof alone.</p>
                                         <p class="rgn-note"><b>Setting one.</b> Put a private PIN of 8 or more digits in your
                                             miner's pool password field (plain letters and keyboard symbols work too, up to 128
-                                            characters), use the <b>same</b> one on every rig, and it is recorded on your next
-                                            accepted share. Changing it is safe — the last two are both accepted, so a rotation
-                                            never locks you out.</p>
+                                            characters) and it is recorded on your next accepted share. Different passwords on
+                                            different sites all work &mdash; using one everywhere is a convenience, not a
+                                            requirement. Changing it is safe: the old one stays on record until it is the least
+                                            recently used of your ten, so a rotation never locks you out.</p>
                                     </details>
                                 </div>
                             </div>
@@ -655,12 +666,15 @@
                                 <li><span class="k">Pending withdrawal</span><span class="v" id="acct-pending">—</span></li>
                                 <li><span class="k">Payouts made</span><span class="v" id="acct-paid-count">—</span></li>
                                 <li><span class="k">Minimum payout (pool)</span><span class="v" id="acct-min">—</span></li>
-                                <!-- Donation row is HIDDEN at 0% and shown otherwise (see
-                                     renderAccount). The `donateN` worker-name tag sets this and
-                                     it debits every future block credit, so the miner has to be
-                                     able to read it back — it used to appear on no page they
-                                     could reach. Audit §J3-5. -->
-                                <li id="acct-donate-row" style="display:none"><span class="k" title="Set by adding donateN to your worker name; use donate0 to stop">Donating to prize pool</span><span class="v" id="acct-donate">—</span></li>
+                                <!-- Donation row is HIDDEN at 0% with no donor name and shown
+                                     otherwise (see renderAccount). The `donateN` worker-name
+                                     tag sets this and it debits every future block credit, so
+                                     the miner has to be able to read it back — it used to appear
+                                     on no page they could reach. Audit §J3-5. The second line
+                                     (design §16.9) is the donor NAME this address put on the wall
+                                     via `<name>-donateN`, and whether it shows — a paused donor
+                                     keeps their name, so the row stays while one exists. -->
+                                <li id="acct-donate-row" style="display:none"><span class="k" title="Set by adding donateN to your worker name; use donate0 to stop">Donating to prize pool</span><span class="v" style="text-align:right"><span id="acct-donate">—</span><span id="acct-donor-name" style="display:none;font-size:12px;color:var(--text-dim);margin-top:2px"></span></span></li>
                                 <!-- Row is removed entirely (not shown as 0) on a pool that
                                      absorbs the network fee — see renderAccount. -->
                                 <li id="acct-fee-row"><span class="k" title="A flat fee covering the Grin blockchain transaction fee">Withdrawal fee</span><span class="v" id="acct-fee">—</span></li>
@@ -937,8 +951,9 @@
             $id('acct-locked').textContent = fmtGrin(a.balance_locked);
             $id('acct-paid').textContent = fmtGrin(a.total_paid);
             $id('acct-hashrate').textContent = fmtGps(a.hashrate_gps || 0);
-            $id('acct-status').textContent = a.is_online ? 'Online ⛏' : 'Offline';
-            $id('acct-status').style.color = a.is_online ? 'var(--ok)' : '';
+            // First paint from the account flag; renderWorkers() refines it to x / y once the
+            // per-rig data is in (see renderOnlineState).
+            renderOnlineState(a.is_online ? 1 : 0, 1);
             $id('acct-since').textContent = fmtWhen(a.created_at);
             $id('acct-age').textContent = fmtAge(a.created_at);
             $id('acct-last-seen').textContent = fmtWhen(a.last_seen_at);
@@ -955,12 +970,29 @@
             // think to look for something that reduces their earnings.
             const dRow = $id('acct-donate-row');
             const dPct = Number(a.donation_percent || 0);
+            // Donor name (design §16.9): shown / censored / expired get a line each; 'masked'
+            // (no name set) and null (donations off) get nothing. The name is the miner's own
+            // label from the worker name — untrusted text, so textContent (never innerHTML).
+            const dState = a.donor_name_state || null;
+            const hasNameLine = dState === 'shown' || dState === 'censored' || dState === 'expired';
             if (dRow) {
-                dRow.style.display = dPct > 0 ? '' : 'none';
-                if (dPct > 0) {
-                    $id('acct-donate').textContent = dPct + '% of new earnings';
-                    $id('acct-donate').style.color = 'var(--warn, inherit)';
-                    dRow.title = 'Set by a donateN tag in your worker name. Reconnect with donate0 in the worker name to stop it.';
+                dRow.style.display = (dPct > 0 || hasNameLine) ? '' : 'none';
+                if (dPct > 0 || hasNameLine) {
+                    $id('acct-donate').textContent = dPct > 0 ? dPct + '% of new earnings' : 'paused (0%)';
+                    $id('acct-donate').style.color = dPct > 0 ? 'var(--warn, inherit)' : '';
+                    dRow.title = 'Set by a donateN tag in your worker name. Reconnect with donate0 in the worker name to stop it. ' +
+                        'A tag can only be lowered directly — to raise it, go through donate0 first, then reconnect with the new value. ' +
+                        'Your donor name on the wall is the label in front of the tag (yourbrand-donate10) and is set the same way: ' +
+                        'donate0 first, a few shares, then reconnect with the new label; a plain donateN removes it.';
+                }
+                const nameEl = $id('acct-donor-name');
+                if (nameEl) {
+                    let line = '';
+                    if (dState === 'shown') line = 'Donor name: ' + String(a.donor_name || '');
+                    else if (dState === 'censored') line = 'Donor name hidden by the pool — contact the operator if this is a mistake';
+                    else if (dState === 'expired') line = 'Donor name expired — reconnect with your tag to refresh it';
+                    nameEl.textContent = line;
+                    nameEl.style.display = line ? 'block' : 'none';
                 }
             }
             // Hide the row rather than print "0 ツ" — a pool that absorbs the network fee has no
@@ -971,10 +1003,7 @@
                 $id('acct-fee').textContent = fmtGrin(a.withdrawal_fee);
             }
 
-            const lamp = $id('acct-lamp');
-            lamp.style.display = '';
-            lamp.className = 'master-lamp' + (a.is_online ? '' : ' warn');
-            $id('acct-lamp-text').textContent = a.is_online ? 'Miner online' : 'Miner offline';
+            $id('acct-lamp').style.display = '';
 
             $id('acct-pool-min').textContent = Number(a.min_withdrawal || 0).toFixed(1);
             acctWithdrawalFee = Number(a.withdrawal_fee || 0);
@@ -1008,12 +1037,7 @@
                 ? 'The operator has temporarily paused all payouts — balances are safe, try again later.'
                 : 'Payouts are operating normally.';
 
-            const proofs = [];
-            if (a.has_recorded_ip) proofs.push('a mining IP');
-            if (a.has_recorded_pass) proofs.push('a rig password');
-            $id('acct-ip-hint').textContent = proofs.length
-                ? 'On record for this address: ' + proofs.join(' and ') + '.'
-                : 'No proof recorded yet — connect a miner and submit at least one accepted share first.';
+            $id('acct-ip-hint').textContent = proofHintText(a);
 
             const canWithdraw = (a.balance || 0) >= (a.min_withdrawal || 0)
                 && !a.pending_withdrawals && !a.payouts_frozen;
@@ -1029,7 +1053,7 @@
                 subEl.style.display = stuck ? '' : 'none';
             }
 
-            renderPasswordProof(a.password_proof, a.evidence);
+            renderPasswordProof(a.password_proof, a.proofs);
 
             // Hands the summary to every registered rail: each one toggles its own radio +
             // destination card and renders its own state. Adding a rail needs no edit here.
@@ -1038,16 +1062,58 @@
             renderDormancy(a.dormancy);
         }
 
+        // ── On-record hint ───────────────────────────────────────────────────
+        // The pool keeps a SET of proofs per address — up to PROOF_SET_MAX of each kind
+        // (design §17.2 #7). The API sends counts only: { ip, pass, max, anchor,
+        // last_added_at } — never a value, a hash, a salt or a per-row timestamp. What a
+        // miner actually checks here is "are all three of my rigs on record?", which a
+        // yes/no could never answer. `last_added_at` is the newest first_seen_at across both
+        // kinds and does NOT move when a known rig reconnects, so it reads as "the last time
+        // something new was recorded", not as rig activity.
+        const NO_PROOF_HINT = 'No proof recorded yet — connect a miner and submit at least one accepted share first.';
+        function proofHintText(a) {
+            const p = a.proofs;
+            if (!p || typeof p !== 'object') {
+                // A backend older than the proof-set build, or a cached response: we know
+                // WHETHER, not HOW MANY. Render the old sentence rather than zeros — a count
+                // the server did not send is not a fact about the account.
+                const kinds = [];
+                if (a.has_recorded_ip) kinds.push('a mining IP');
+                if (a.has_recorded_pass) kinds.push('a rig password');
+                return kinds.length
+                    ? 'On record for this address: ' + kinds.join(' and ') + '.'
+                    : NO_PROOF_HINT;
+            }
+            const nIp = Number(p.ip) || 0, nPass = Number(p.pass) || 0, max = Number(p.max) || 0;
+            if (!nIp && !nPass) {
+                // Live set empty but the write-once original survives — it is flagged, never
+                // deleted (audit §J3-4), and still verifies. "Nothing recorded" would be a lie
+                // to the one miner who most needs to know they can still reach their wallet.
+                return (p.anchor || a.has_recorded_ip || a.has_recorded_pass)
+                    ? 'Only your original recorded proof is still on record for this address — it works for payouts. Mine a share to put a current one back on record.'
+                    : NO_PROOF_HINT;
+            }
+            const parts = [];
+            if (nIp) parts.push(nIp + (nIp === 1 ? ' mining IP' : ' mining IPs'));
+            if (nPass) parts.push(nPass + (nPass === 1 ? ' rig password' : ' rig passwords'));
+            let out = 'On record for this address: ' + parts.join(' and ');
+            // "of each" only when both kinds are named — the cap is per kind either way.
+            if (max > 0) out += (nIp && nPass) ? ' (up to ' + max + ' of each)' : ' (up to ' + max + ')';
+            if (p.last_added_at) out += ' · last added ' + fmtWhen(p.last_added_at);
+            return out;
+        }
+
         // ── Password-proof diagnostics ────────────────────────────────────────
         // Two independent readouts, both counts/verdicts only — no password value ever leaves
         // the server. (1) state: was the LAST rig login's password usable as proof? Until this
         // existed a refused password was completely silent — the rig mined fine and the miner
-        // found out on withdrawal day. (2) live: do all currently-connected rigs share one
-        // password? The account keeps only a last-2 window, so three different passwords across
-        // three rigs mean only the two most recently rotated still work, and which one depends
-        // on whichever rig last submitted an accepted share.
+        // found out on withdrawal day. (2) live: how many DISTINCT passwords are the connected
+        // rigs using? Different passwords on different rigs all work now — the pool keeps a SET
+        // of up to PROOF_SET_MAX per kind — so this is no longer a consistency check. It has
+        // something to report only when the distinct count runs past the cap, at which point
+        // the least recently used values start dropping off.
         const PASS_STATE_TEXT = {
-            ok:                 ['ok',      'Your rig password is recorded and will work as proof.'],
+            ok:                 ['recorded', "This rig's password is on record and will work as proof."],
             none:               ['not set', 'Your rig connects without a password — set one in the miner config to unlock this as a second proof. Your mining IP still works.'],
             password_too_short: ['too short', 'Your rig password is under 8 characters, so it is not recorded as proof. Set a longer one on the rig.'],
             password_too_long:  ['too long',  'Your rig password is over 128 characters, so it is not recorded as proof. Shorten it on the rig.'],
@@ -1055,13 +1121,16 @@
             password_charset:   ['unsupported characters', 'Your rig password contains characters outside plain letters, digits and keyboard symbols (accented or non-Latin letters, for example). ASIC firmware does not send those reliably, so it is not recorded as proof. Set a numeric PIN on the rig.'],
             password_invalid:   ['unreadable', 'Your rig password could not be read as proof. Set a plain-text password on the rig.']
         };
-        function renderPasswordProof(pp, evidence) {
+        function renderPasswordProof(pp, proofs) {
             const el = $id('acct-pass-diag');
             if (!el) return;
             el.innerHTML = '';
             el.style.display = 'none';
             if (!pp) return;
 
+            // 0 = the backend did not send a cap (an older build, or a cached response).
+            // Every branch below treats that as "unknown", never as "zero allowed".
+            const max = Number(proofs && proofs.max) || 0;
             const lines = [];
             const st = PASS_STATE_TEXT[pp.state];
             if (st) {
@@ -1085,37 +1154,45 @@
                                 : ', none of them sending a password that can serve as proof.') +
                             ' Your mining IP still works.</div>');
                     }
-                } else if (live.distinct > 1) {
-                    lines.push('<div class="pd-line pd-warn"><b>Mismatch</b>' + escHtml(rigs) +
+                } else if (max > 0 && live.distinct > max) {
+                    // The only failure mode left: more distinct passwords in flight than the
+                    // pool stores. Below the cap they all coexist, so there is nothing to warn
+                    // about — this branch used to fire at TWO, which is why the page told
+                    // everyone to run one password everywhere.
+                    lines.push('<div class="pd-line pd-warn"><b>Too many passwords</b>' + escHtml(rigs) +
                         ', using <b style="text-transform:none;letter-spacing:0;margin:0">' + live.distinct +
-                        '</b> different passwords. Only the two most recent are kept, so set every rig to the same password.</div>');
+                        '</b> different passwords — more distinct passwords than the pool keeps (' + max +
+                        '). The ' + max + ' most recently used are the ones that work.</div>');
+                } else if (live.distinct > 1 && max > 0) {
+                    lines.push('<div class="pd-line pd-ok"><b>On record</b>' + escHtml(rigs) +
+                        ', using <b style="text-transform:none;letter-spacing:0;margin:0">' + live.distinct +
+                        '</b> different passwords — ' + (live.distinct === 2 ? 'both are' : 'all of them are') +
+                        ' on record.</div>');
+                } else if (live.distinct > 1) {
+                    // Cap unknown: report the reading without the verdict.
+                    lines.push('<div class="pd-line pd-ok"><b>Passwords</b>' + escHtml(rigs) +
+                        ', using <b style="text-transform:none;letter-spacing:0;margin:0">' + live.distinct +
+                        '</b> different passwords.</div>');
                 } else if (live.distinct === 1 && live.unusable > 0) {
                     lines.push('<div class="pd-line pd-warn"><b>Partial</b>' + escHtml(rigs) + ', but ' +
                         live.unusable + ' of them ' + (live.unusable === 1 ? 'sends' : 'send') +
-                        ' no usable password. Set the same password on every rig.</div>');
+                        ' no usable password. Set one on ' + (live.unusable === 1 ? 'that rig' : 'those rigs') +
+                        ' too — it does not have to match the others.</div>');
                 } else if (live.distinct === 1) {
                     lines.push('<div class="pd-line pd-ok"><b>Consistent</b>' + escHtml(rigs) +
                         ', all using the same password.</div>');
                 }
             }
 
-            // When the recorded evidence last CHANGED (audit §J3-4). Anyone can mine to any
-            // address, so a capture may be somebody else's rig displacing yours — and that used
-            // to be completely silent. Only shown when it is recent enough to be actionable;
-            // an ordinary miner whose rig has been on the same IP for months sees nothing.
-            const ev = evidence || {};
-            const changedAt = Math.max(Number(ev.ip_changed_at || 0), Number(ev.pass_changed_at || 0));
-            const ageDays = changedAt ? (Date.now() / 1000 - changedAt) / 86400 : Infinity;
-            if (changedAt && ageDays <= 7) {
-                lines.push('<div class="pd-line pd-warn"><b>Evidence changed</b>The mining IP or rig ' +
-                    'password recorded for this address last changed on ' + escHtml(fmtWhen(changedAt)) +
-                    '. If that was not you starting a rig or changing a password, someone else mined ' +
-                    'to this address. ' +
-                    (ev.anchor
-                        ? 'Your original recorded proof still works, so you can still withdraw to your own wallet.'
-                        : 'Withdraw to your own wallet now — Tor and Slatepack can only pay this address.') +
-                    '</div>');
-            }
+            // The "Evidence changed" warning that stood here is GONE (design §17.2 #8). It
+            // fired whenever a capture displaced a stored value — which, with two slots, was
+            // ordinary churn: an ISP re-lease or a second site rotating the window lit a
+            // seven-day alarm about a theft that had not happened. A new value now sits BESIDE
+            // the old ones instead of pushing one out, so there is no displacement to report.
+            // Both facts it carried survive: "last added" is in the on-record hint above, and
+            // the "someone else mined to this address" explanation moved into the "Why does my
+            // rig password matter?" fold — read by someone asking the question, rather than
+            // shown as an alert to everyone.
 
             if (!lines.length) return;
             el.innerHTML = lines.join('');
@@ -1264,6 +1341,29 @@
             } catch (e) { renderChart([]); }
         }
 
+        // Account-wide online state = the P-03 worker LEDs summed, in three states: every
+        // rig seen in 24 h is online, none is, or some are (shown as x / y so a dropped rig on a
+        // multi-rig account reads as "one rig down", not "miner offline"). Drives the P-05
+        // Status row and the header lamp together so they can never disagree. With no worker
+        // rows yet (first paint, or nothing mined in 24 h) it is the plain online/offline flag.
+        function renderOnlineState(online, total) {
+            const st = $id('acct-status'), lamp = $id('acct-lamp'), lt = $id('acct-lamp-text');
+            let text, lampText, cls = '', color = '';
+            if (total > 0 && online > 0 && online < total) {
+                text = 'Partial — ' + online + ' / ' + total + ' online';
+                lampText = online + ' of ' + total + ' workers online';
+                cls = ' warn'; color = 'var(--warn)';
+            } else if (online > 0) {
+                text = 'Online ⛏'; lampText = 'Miner online'; color = 'var(--ok)';
+            } else {
+                text = 'Offline'; lampText = 'Miner offline'; cls = ' warn';
+            }
+            st.textContent = text;
+            st.style.color = color;
+            lamp.className = 'master-lamp' + cls;
+            lt.textContent = lampText;
+        }
+
         // ── P-03 workers: 10-min + 24h windows merged, LED status ──────────
         function ledClass(w) {
             if (w.online) return 'wled on';
@@ -1294,6 +1394,7 @@
 
             const online = ws.filter(w => w.online).length;
             $id('pl-workers').textContent = ws.length ? (online + ' / ' + ws.length) : '0';
+            if (ws.length) renderOnlineState(online, ws.length);
 
             renderWorkerCharts(ws);
             if (!ws.length) { tbody.innerHTML = '<tr><td colspan="7">No worker activity in the last 24 hours</td></tr>'; return; }
@@ -1895,12 +1996,17 @@
                     shares: { count: 184207, last_share_at: now - 40 }, blocks_found: 3,
                     hashrate_gps: 4.82, min_withdrawal: 25.0, withdrawal_fee: 0.04, payouts_frozen: false,
                     has_recorded_ip: true, has_recorded_pass: true,
-                    // Healthy case: both demo rigs online on one shared, compliant password.
-                    password_proof: { state: 'ok', live: { sessions: 2, distinct: 1, unusable: 0 } },
-                    // Settled account: evidence recorded when they joined and untouched since,
-                    // anchor intact — so neither the "evidence changed" warning nor the
-                    // donation row appears. Both are exercised by changing these two values.
-                    evidence: { ip_changed_at: now - 75 * 86400, pass_changed_at: now - 75 * 86400, anchor: true },
+                    // Two rigs online on two DIFFERENT compliant passwords — an ordinary
+                    // multi-site setup. Renders the "On record" line, not a warning: that is
+                    // the whole point of the set (design §17.2 #8). Raise distinct past
+                    // proofs.max to exercise the "Too many passwords" branch.
+                    password_proof: { state: 'ok', live: { sessions: 2, distinct: 2, unusable: 0 } },
+                    // Counts only — the live API never sends a value, a hash or a salt
+                    // (§17.2 #7). Three sites' IPs, two passwords, the write-once original
+                    // still on record, and one value added nine days ago. Set ip/pass to 0 to
+                    // see the first-run text; drop the whole object to see the older-backend
+                    // fallback.
+                    proofs: { ip: 3, pass: 2, max: 10, anchor: true, last_added_at: now - 9 * 86400 },
                     donation_percent: 0,
                     nostr_payouts_enabled: false, nostr_destination: null
                 },

@@ -46,6 +46,10 @@ function parseJsonArray(val, fallback) {
   return fallback;
 }
 
+// The shipped donor-name starter list (design §16) is the DEFAULT of a setting, so it lives
+// with the rest of the name logic and is imported here — never the other way round.
+const { STARTER_BLOCKLIST, CENSORED_DISPLAY_VALUES } = require('./donor-names');
+
 // Own-property membership tests for the settings schema. `defaults[section]` and
 // `key in defaults[section]` both walk Object.prototype, so `constructor`, `toString`,
 // `valueOf` and `__proto__` passed the section gate and `name`/`length`/`call` passed the
@@ -273,7 +277,8 @@ class PoolSettings {
       // nav and sitemap, and with the feeds closed it rendered nothing useful — worse, until
       // that date it rendered a SAMPLE globe that operators took for real data. Neither endpoint
       // has ever returned an IP — no coordinate is resolved at all (an aggregate sits on its
-      // country's centroid, and that country is published beside it) and peer IPs never leave
+      // country's centroid, and that country is published beside it; the one typed-in position
+      // is a gateway's own, operator-declared on the Regions page) and peer IPs never leave
       // the DB — but both publish a per-country breakdown of who connects to this pool, so an
       // operator who considers that too much can switch it off (→ 404, bare globe).
       // NOTE: getSection() layers stored rows over these defaults, so an existing install that
@@ -607,6 +612,16 @@ PASS      any-password-you-choose</code>
       // Published pool Slatepack address for community donations (shown on the fortune board).
       // External donations land in the wallet; the operator reflects them via a manual top-up.
       donation_address: '',
+      // Donor names + donor league (design §16). A donor's `<name>-donateN` label becomes
+      // their name on the wall; these six shape moderation + ranking. Read ONLY through
+      // donorSettings() in lib/donor-names.js, which bounds every value again on read.
+      donor_name_blocklist: STARTER_BLOCKLIST.join('\n'),  // one entry per line; substring of the
+                                                           // normalised name; saving re-scans all names
+      donor_censored_display: 'masked',      // 'masked' (address, default) | 'marker' (<censored-donor>)
+      donor_rank_window_days: 365,           // league window; 0 = lifetime
+      donor_loyalty_percent_per_month: 10,   // +% per distinct month with a donation debit
+      donor_loyalty_cap: 3,                  // multiplier ceiling (×3)
+      donor_name_expiry_months: 12,          // masked again this long after the last debit; 0 = never
       // Join bonus — paid once per address, only after its first successful withdrawal
       join_bonus_enabled: 'false',
       join_bonus_amount: 0.1,                // GRIN
@@ -1097,6 +1112,33 @@ PASS      any-password-you-choose</code>
           }
           return v;
         },
+        // Donor names (design §16.10 type traps): the list is stored as cleaned text — one
+        // trimmed entry per line, empties dropped, size-capped — and is only ever SPLIT by the
+        // matcher, never compiled. Bounded so a pasted novel cannot become the per-capture
+        // scan. The enum is closed; the numbers carry the same bounds donorSettings() re-applies
+        // on read.
+        donor_name_blocklist: (val) => {
+          const text = val == null ? '' : String(val);
+          if (text.length > 65536) throw new Error('donor_name_blocklist must be under 64 KB');
+          const lines = text.split(/\r?\n/).map((l) => l.trim()).filter((l) => l !== '');
+          if (lines.length > 4000) throw new Error('donor_name_blocklist must have at most 4000 entries');
+          return lines.join('\n');
+        },
+        donor_censored_display: (val) => {
+          const v = String(val == null ? '' : val).trim().toLowerCase();
+          if (!CENSORED_DISPLAY_VALUES.includes(v)) {
+            throw new Error(`donor_censored_display must be one of ${CENSORED_DISPLAY_VALUES.join(', ')}`);
+          }
+          return v;
+        },
+        donor_rank_window_days: intRange('donor_rank_window_days', 0, 3650),
+        donor_loyalty_percent_per_month: percent('donor_loyalty_percent_per_month'),
+        donor_loyalty_cap: (val) => {
+          const n = parseFloat(val);
+          if (!Number.isFinite(n) || n < 1 || n > 100) throw new Error('donor_loyalty_cap must be 1-100');
+          return n;
+        },
+        donor_name_expiry_months: intRange('donor_name_expiry_months', 0, 120),
         join_bonus_amount: nonNeg('join_bonus_amount'),
         jackpot_amount: nonNeg('jackpot_amount'),
         streak_bonus_per_week_percent: percent('streak_bonus_per_week_percent'),

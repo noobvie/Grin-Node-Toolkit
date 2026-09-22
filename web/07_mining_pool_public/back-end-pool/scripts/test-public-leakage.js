@@ -28,6 +28,17 @@
 //           Math.min/Math.max — and because both consumers swallow it, the miner gets a
 //           plausible EMPTY answer rather than an error.
 //   §J11-8  coarsenIp() and the geo resolver must hold at the WRITE side.
+//   §17.4   Ownership proofs (design §17): NOTHING that reaches a browser may carry a proof
+//           hash, the per-address `proof_salt`, or a per-row capture time. The public account
+//           summary emits `proofs` as COUNTS ONLY, and the admin miner view — which §C3's
+//           unrevocable access token makes a near-public surface — emits counts and set-level
+//           timestamps. Both routes SELECT an explicit column list; the SELECT is the control,
+//           because both spread their row into the response.
+//   §16.10  Donor names (design §16): /api/pool/donors and /api/account/:addr may emit a
+//           donor's opt-in `name` and its state, and NOTHING else from the six donor_*
+//           columns — never the censor word, the censoring admin, or the raw censor state —
+//           and the censored MARKER string only when the operator chose `marker`. The address
+//           on the wall stays masked; the mask is a REQUIRED argument of the lib builder.
 //
 // Pure in-process assertions against the real modules — no server, no DB, nothing left
 // running. Run: node scripts/test-public-leakage.js
@@ -39,10 +50,13 @@ const WEB = path.resolve(APP, '..');
 const PoolSettings = require(path.join(APP, 'lib/pool-settings.js'));
 const ownerProof = require(path.join(APP, 'lib/owner-proof.js'));
 const geoip = require(path.join(APP, 'lib/geoip.js'));
+const donorNames = require(path.join(APP, 'lib/donor-names.js'));
 
 const indexSrc = fs.readFileSync(path.join(APP, 'index.js'), 'utf8');
 const brandingSrc = fs.readFileSync(path.join(WEB, 'public_html/js/branding.js'), 'utf8');
 const dormancySrc = fs.readFileSync(path.join(APP, 'lib/dormancy.js'), 'utf8');
+const donorLedgerSrc = fs.readFileSync(path.join(APP, 'lib/donor-ledger.js'), 'utf8');
+const donorNamesSrc = fs.readFileSync(path.join(APP, 'lib/donor-names.js'), 'utf8');
 const chartsSrc = fs.readFileSync(path.join(WEB, 'public_html/js/charts-init.js'), 'utf8');
 const PUBLIC_PAGES = fs.readdirSync(path.join(WEB, 'public_html')).filter((n) => n.endsWith('.html'));
 
@@ -54,6 +68,13 @@ function routeSrc(verb, routePath) {
   if (start < 0) return '';
   const next = indexSrc.slice(start + 10).search(/\n\s{0,4}app\.(get|post|put|delete|patch)\(/);
   return next < 0 ? indexSrc.slice(start) : indexSrc.slice(start, start + 10 + next);
+}
+
+// One API_DOC_META row's source line, by its `'VERB /path':` key (line-anchored, like §1b).
+function routeMeta(key) {
+  const lines = indexSrc.split('\n');
+  const hit = lines.find((l) => l.trimStart().startsWith(`'${key}':`));
+  return hit || '';
 }
 
 let pass = 0, fail = 0;
@@ -305,6 +326,135 @@ ok('§J11-8 coarsenIp returns null for a non-IP rather than storing junk',
 ok('§J11-8 geoip never hands an IP back to a caller',
   (() => { const r = geoip.lookupCountry('8.8.8.8'); return r === null || (!('ip' in r) && Object.keys(r).sort().join(',') === 'cc,name'); })(),
   JSON.stringify(geoip.lookupCountry('8.8.8.8')));
+
+
+console.log('\n[9] §16.10 — donor names: only `name` + `name_state` leave the public routes\n');
+
+// The wall. The response is built in lib/donor-ledger.js donorWall() (index.js cannot be
+// required, so the behavioural sweep — 102 donors, censored rows, both display modes — lives in
+// scripts/test-donor-league.js). Here: the route hands the lib the mask and nothing it must not,
+// and the lib's card builder cannot emit a donor_* column by construction.
+const donorsRoute = routeSrc('get', '/api/pool/donors');
+const donorsJs = donorsRoute.replace(/\/\/[^\n]*/g, '');
+ok('§16.10 /api/pool/donors delegates to donorWall() with the mask as an argument',
+  /donorWall\(db,\s*\{[\s\S]*?mask:\s*\(a\)\s*=>\s*maskAddr\(a\)/.test(donorsJs));
+ok('§16.10 /api/pool/donors reads no donor_* column itself (the lib does, and never emits it)',
+  !/donor_censor|donor_name|balance_log/.test(donorsJs),
+  'the route used to carry the ledger SQL inline; the v2 shape is the lib\'s');
+ok('§16.10 /api/pool/donors counts rigs from MINING sessions only (acceptedShares > 0, §J6-9)',
+  /acceptedShares > 0/.test(donorsJs) && /getActiveSessions\(\)/.test(donorsJs),
+  'a login is unauthenticated — without the share bar anyone can put rigs on someone else\'s card');
+
+const wallFn = donorLedgerSrc.slice(donorLedgerSrc.indexOf('function donorWall('),
+                                    donorLedgerSrc.indexOf('module.exports'));
+ok('§16.10 donorWall THROWS when no mask function is passed (fail closed)',
+  /typeof opts\.mask !== 'function'\)\s*throw/.test(wallFn));
+const cardBlock = (() => {
+  const a = wallFn.indexOf('const card = (r, rank) => {');
+  const b = wallFn.indexOf('\n  };', a);
+  return a < 0 || b < 0 ? '' : wallFn.slice(a, b);
+})();
+// `rank,` is shorthand — a key is followed by `:` OR `,`.
+const cardKeys = [...cardBlock.replace(/\/\/[^\n]*/g, '').matchAll(/^\s{6}([a-z_]+)[:,]/gm)].map((m) => m[1]);
+ok('§16.10 the card builder was found', cardBlock.length > 0 && cardKeys.length >= 14, `${cardKeys.length} keys`);
+ok('§16.10 no card key starts with donor_ (word / by / at / raw censor state stay admin-side)',
+  cardKeys.length > 0 && !cardKeys.some((k) => /^donor_/.test(k)), cardKeys.join(','));
+ok('§16.10 the card address goes through the mask, and only the mask',
+  /address:\s*opts\.mask\(r\.address\)/.test(cardBlock) && !/address:\s*r\.address/.test(cardBlock));
+ok('§16.10 name + name_state come from displayState, the function the account API also uses',
+  /displayState\(i,\s*\{/.test(cardBlock) && /name:\s*st\.name,/.test(cardBlock) && /name_state:\s*st\.name_state/.test(cardBlock));
+ok('§16.10 the lib never reads donor_censor_word or donor_censor_by for the wall',
+  !/donor_censor_word|donor_censor_by/.test(wallFn.replace(/\/\/[^\n]*/g, '')));
+// index.js may SPELL the marker in one place only: the API_DOC_META row that documents it
+// (a client must know the string can arrive). Outside that block, neither file references
+// the string or the constant.
+const indexNoMeta = (() => {
+  const a = indexSrc.indexOf('const API_DOC_META = {');
+  const b = indexSrc.indexOf('\n  };', a);
+  return (indexSrc.slice(0, a) + indexSrc.slice(b)).replace(/\/\/[^\n]*/g, '');
+})();
+ok('§16.10 the lib never spells the censored marker itself — displayState is the one emitter',
+  !/censored-donor|CENSORED_MARKER/.test(donorLedgerSrc.replace(/\/\/[^\n]*/g, '')) &&
+  !/censored-donor|CENSORED_MARKER/.test(indexNoMeta));
+ok('§16.10 the api-docs row documents the marker and the masking',
+  /censored-donor/.test(routeMeta('GET /api/pool/donors')) && /MASKED/.test(routeMeta('GET /api/pool/donors')));
+ok('§16.10 in lib/donor-names.js the marker is returned from displayState only',
+  (donorNamesSrc.replace(/\/\/[^\n]*/g, '').match(/CENSORED_MARKER/g) || []).length === 3,
+  'const, the displayState return, the export — a 4th mention is a new emitter to review');
+
+// The miner's own view. The account route reads three donor columns for displayState and
+// emits the two fields it returns; a response key named donor_censor* would be a new leak.
+const acctRoute = routeSrc('get', '/api/account/:addr');
+const acctJs = acctRoute.replace(/\/\/[^\n]*/g, '');
+ok('§16.10 /api/account/:addr selects donor_name, donor_name_set_at, donor_censor and nothing more',
+  /SELECT donor_name, donor_name_set_at, donor_censor FROM miner_incentives/.test(acctJs) &&
+  !/donor_censor_word|donor_censor_by/.test(acctJs));
+ok('§16.10 /api/account/:addr emits donor_name + donor_name_state via displayState only',
+  /donorDisplayState\(row,/.test(acctJs) && /donor_name:\s*donor\.name,/.test(acctJs) &&
+  /donor_name_state:\s*donor\.name_state/.test(acctJs) && !/donor_censor\s*:/.test(acctJs));
+
+// displayState is the single emitter, so its contract IS the public contract — asserted live.
+const censoredRow = { donor_name: 'sh1thead', donor_name_set_at: 1_800_000_000, donor_censor: 'auto' };
+const adminRow = { donor_name: 'spam', donor_name_set_at: 1_800_000_000, donor_censor: 'admin' };
+const shownRow = { donor_name: 'acme', donor_name_set_at: 1_800_000_000, donor_censor: null };
+const now = 1_800_000_100;
+const st = (row, censoredDisplay, extra = {}) =>
+  donorNames.displayState(row, { now, expiryMonths: 12, censoredDisplay, lastDonatedAt: now - 10, ...extra });
+ok("§16.10 displayState: censored + 'masked' → name null",
+  st(censoredRow, 'masked').name === null && st(adminRow, 'masked').name === null &&
+  st(censoredRow, 'masked').name_state === 'censored');
+ok("§16.10 displayState: censored + 'marker' → the marker, and only then",
+  st(censoredRow, 'marker').name === donorNames.CENSORED_MARKER && st(adminRow, 'marker').name === donorNames.CENSORED_MARKER);
+ok('§16.10 displayState: an unknown display value is treated as masked, never as marker',
+  st(censoredRow, 'MARKER').name === null && st(censoredRow, undefined).name === null && st(censoredRow, 'yes').name === null);
+ok("§16.10 displayState: 'marker' never touches a shown, masked or expired card",
+  st(shownRow, 'marker').name === 'acme' && st(null, 'marker').name === null &&
+  st(shownRow, 'marker', { now: now + 400 * 86400 }).name === null &&
+  st(shownRow, 'marker', { now: now + 400 * 86400 }).name_state === 'expired');
+ok('§16.10 displayState never returns the censor word or any donor_ key',
+  Object.keys(st(censoredRow, 'marker')).sort().join(',') === 'name,name_state' &&
+  !JSON.stringify(st({ ...censoredRow, donor_censor_word: 'shit', donor_censor_by: 7 }, 'marker')).includes('shit'));
+
+// ── §17.4 — the ownership-proof set must never reach a browser ───────────────────────────
+const acctProofJs = routeSrc('get', '/api/account/:addr').replace(/\/\/[^\n]*/g, '');
+const adminMinerJs = routeSrc('get', '/api/admin/miners/:addr').replace(/\/\/[^\n]*/g, '');
+
+ok('§17.4 /api/account/:addr never selects proof_salt or any legacy proof column',
+  !/proof_salt/.test(acctProofJs) &&
+  !/\b(last_ip|prev_ip|anchor_ip|last_pass_hash|prev_pass_hash|anchor_pass_hash)\b/.test(acctProofJs));
+ok('§17.4 /api/account/:addr never selects a proof HASH from miner_proofs',
+  !/SELECT[^`]*\bhash\b[^`]*FROM miner_proofs/i.test(acctProofJs),
+  'the summary reads counts and MAX(first_seen_at) only');
+ok('§17.4 the public `proofs` object is counts, the cap, a boolean and one timestamp',
+  /ip:\s*ipSet\.live/.test(acctProofJs) && /pass:\s*passSet\.live/.test(acctProofJs) &&
+  /max:\s*PROOF_SET_MAX/.test(acctProofJs) && /anchor:\s*!!\(/.test(acctProofJs) &&
+  /last_added_at:/.test(acctProofJs));
+ok('§17.4 the retired `evidence` object is gone from the summary',
+  !/evidence:\s*\{/.test(acctProofJs),
+  'it reported per-row capture times, which is the (address, origin, time) linkage hashing removes');
+ok('§17.4 /api/admin/miners/:addr does not select proof_salt or a legacy proof column',
+  !/proof_salt/.test(adminMinerJs) &&
+  !/\b(last_ip|prev_ip|anchor_ip|last_pass_hash|prev_pass_hash|anchor_pass_hash)\b/.test(adminMinerJs));
+ok('§17.4 the admin miner view still uses an explicit column list, not SELECT *',
+  /SELECT id, grin_address, balance/.test(adminMinerJs) && !/SELECT \* FROM miner_accounts/.test(adminMinerJs),
+  'audit §J8-2 — `...acct` spreads whatever the SELECT names');
+ok('§17.4 the admin proof view is per-kind counts and set-level timestamps only',
+  !/\bhash\b/.test(adminMinerJs.slice(adminMinerJs.indexOf('miner_proofs'))) &&
+  /anchor_live/.test(adminMinerJs) && /oldest_first_seen/.test(adminMinerJs));
+ok('§17.4 no CODE path in index.js touches proof_salt',
+  !/proof_salt/.test(indexSrc.replace(/\/\/[^\n]*/g, '')),
+  'the salt is minted and read inside lib/owner-proof.js and nowhere else');
+
+// Every `${…}` interpolated into a console line in owner-proof.js, checked against the
+// identifiers that HOLD a secret. A password or a digest in a service log is exactly the leak
+// the hashing exists to prevent, and journald keeps it far longer than the row would.
+const ownerProofSrc = fs.readFileSync(path.join(APP, 'lib/owner-proof.js'), 'utf8');
+const loggedExprs = (ownerProofSrc.match(/console\.(?:warn|error|log)\(`[^`]*`/g) || [])
+  .flatMap((l) => (l.match(/\$\{([^}]*)\}/g) || []).map((x) => x.slice(2, -1).trim()));
+const SECRET_IDENT = /^(rawPass|pass|rawIp|ip|value|salt|v2|hash|row\.hash|e\.value)$/;
+ok('§17.4 owner-proof.js interpolates no proof value, digest or salt into a log line',
+  loggedExprs.length > 0 && loggedExprs.every((x) => !SECRET_IDENT.test(x)),
+  `logged: ${loggedExprs.join(', ')}`);
 
 console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed\n`);
 process.exit(fail === 0 ? 0 : 1);

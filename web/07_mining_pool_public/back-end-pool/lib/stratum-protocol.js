@@ -26,6 +26,10 @@ function parseStratumMessage(jsonStr) {
 }
 
 // Validate a Grin address with optional .worker_name suffix and optional donation token.
+// The worker part (everything after the first '.') is case-folded to lowercase BEFORE the grammar
+// runs, so `MyBrand-donate10` logs in as worker `mybrand-donate10` donating 10 %. The ADDRESS is
+// never folded — grin never emits uppercase bech32 and mixed case is invalid bech32, so `GRIN1…`
+// stays refused (design §16.2). Until 2026-09-21 an uppercase worker was refused at login.
 // Bech32 charset excludes b, i, o, 1 → [ac-hj-np-z02-9]
 // A Grin Slatepack address is the bech32 encoding of a 32-byte ed25519 key:
 // 52 data symbols + 6 checksum symbols = 58 bech32 chars after the prefix.
@@ -36,26 +40,33 @@ function parseStratumMessage(jsonStr) {
 // into donating N% of their PPLNS payouts to the pool prize pool. It can be the whole worker
 // name or a `-`/`_`-separated suffix. The `+` form is deliberately NOT used — some miners read
 // a `+NNNN` username suffix as a fixed-difficulty request.
-//   grin1abc….donate10      → worker "default", donate 10%
-//   grin1abc….rig01-donate10 → worker "rig01",  donate 10%
-//   grin1abc….rig01          → worker "rig01",  no donation
+//   grin1abc….donate10      → worker "donate10",       donate 10%
+//   grin1abc….rig01-donate10 → worker "rig01-donate10", donate 10%
+//   grin1abc….rig01          → worker "rig01",          no donation
+// The token is READ, never stripped: the worker label is whatever the miner typed. Until
+// 2026-09-21 it was cut out (`.donate10` became worker "default"), and the first miner to try it
+// read that as a bug — nothing on screen said why their name had changed. The literal name is
+// also the one place a miner can SEE that a donation is set on this rig, which is what audit
+// §J3-5 wanted: a tag that reduces earnings must not be invisible.
 // Edge handling: only N in 0-100 donates (donate0 = explicit opt-out). Anything else is
 // treated as NOT a donation and kept as a literal worker name — a typo like `donate101`,
 // `donate999`, `donate-1`, `donatexx`, or `donate` alone never causes an accidental donation.
 //
 // Worker label length — accept-and-shorten, never reject a realistic login:
-//   · The *visible* label is capped at MAX_WORKER_NAME_LEN and a longer label is TRUNCATED from
-//     the left (slice(0,N)), not rejected — a miner with a long rig name still connects and just
-//     shows a tidy shortened label in public stats.
+//   · The *visible* label is capped at MAX_WORKER_NAME_LEN and a longer one is TRUNCATED, not
+//     rejected — a miner with a long rig name still connects and just shows a tidy shortened
+//     label in public stats.
 //   · MAX_WORKER_RAW_LEN is the raw accept ceiling (label + any donate token). It exists ONLY to
-//     refuse pathological/abuse input; it sits well above a full 25-char label + the longest
-//     `-donate100` token (35), so no real miner is ever rejected for length.
+//     refuse pathological/abuse input; it sits above a full 32-char label + the longest
+//     `-donate100` token (32 + 10 = 42 < 48), so no real miner is ever rejected for length.
 //
-// Why we DON'T just cut the raw suffix to N from the left before parsing: the donateN token
-// lives at the END of the name, so a left-cut would silently corrupt it — `…rig-donate100`
-// clipped to `…rig-donate10` would donate 10% instead of 100%, or drop the donation entirely.
-// So the token is parsed and stripped FIRST (from the full suffix), and only the leftover
-// *label* is truncated — the donation % is always honored no matter how long the raw name was.
+// Why the token is parsed from the FULL raw suffix before any cut: it lives at the END of the
+// name, so a plain slice(0,N) would silently corrupt it — `…rig-donate100` clipped to
+// `…rig-donate10` would donate 10% instead of 100%, or drop the donation entirely. The
+// donation % is therefore always honored no matter how long the raw name was; and when a
+// name that carries a token must be shortened, the cut lands on the label part so the token
+// stays visible — the shortened label must not hide the cue the full one gave. The cut label
+// also loses any trailing `-`/`_`, so it never reads `…long--donate100`.
 // ── bech32 checksum (BIP-173) ───────────────────────────────────────────────────────────
 // A Grin Slatepack address is `bech32::encode(hrp, ed25519_pubkey.to_base32())` — the CLASSIC
 // bech32 variant (checksum constant 1), not bech32m: grin-wallet pins the `bech32` 0.7 crate,
@@ -107,8 +118,25 @@ function bech32ChecksumValid(hrp, data) {
   return bech32Polymod(bech32HrpExpand(hrp).concat(values)) === 1;
 }
 
-const MAX_WORKER_NAME_LEN = 25;
-const MAX_WORKER_RAW_LEN = 40;
+const MAX_WORKER_NAME_LEN = 32;   // visible label; 25 until 2026-09-21 (a 27-char brand was clipped)
+const MAX_WORKER_RAW_LEN = 48;    // raw accept ceiling, label + token; was 40
+
+// The donate token: the whole worker name, or a `-`/`_`-separated suffix. dm[1] is the label
+// (undefined when the token is the whole name), dm[2] the digits. ONE definition — validateUsername
+// parses logins with it and parseDonateToken() lets the admin donors list flag a tagged rig
+// without a second copy of the grammar drifting from this one.
+const DONATE_TOKEN_RE = /^(?:(.*?)[-_])?donate(\d{1,3})$/;
+
+// { label, percent } for a worker name that carries a LIVE token (0-100), else null. An
+// out-of-range `donate101` is a plain name here exactly as it is at login — a typo donates
+// nothing and is not "tagged".
+function parseDonateToken(workerName) {
+  const dm = String(workerName == null ? '' : workerName).match(DONATE_TOKEN_RE);
+  if (!dm) return null;
+  const n = parseInt(dm[2], 10);
+  if (n < 0 || n > 100) return null;
+  return { label: dm[1] || '', percent: n };
+}
 // `network` — 'mainnet' | 'testnet'. When given, ONLY that chain's prefix is accepted.
 //
 // Why it must be given (audit §J17-4): a Slatepack address is bech32(hrp, ed25519_pubkey), and
@@ -129,6 +157,17 @@ const MAX_WORKER_RAW_LEN = 40;
 // address is rejected on identity, not on a technicality.
 function validateUsername(username, network = null) {
   if (!username || typeof username !== 'string') return null;
+
+  // Case-fold the WORKER part only: split at the first '.', fold ASCII A-Z after it, and leave
+  // the address exactly as typed so an uppercase address still fails the bech32 regex below.
+  // ASCII only on purpose — toLowerCase() maps a few non-ASCII letters INTO the charset
+  // (U+212A KELVIN SIGN → 'k'), and a byte outside [a-z0-9_-] should keep failing the grammar,
+  // not be quietly adopted.
+  const dot = username.indexOf('.');
+  if (dot !== -1) {
+    username = username.slice(0, dot) + username.slice(dot).replace(/[A-Z]/g, c => c.toLowerCase());
+  }
+
   const bech32 = '[ac-hj-np-z02-9]';
   const re = new RegExp(`^(grin1|tgrin1)(${bech32}{58})(\\.([a-z0-9_-]{1,${MAX_WORKER_RAW_LEN}}))?$`);
   const m = username.match(re);
@@ -146,27 +185,43 @@ function validateUsername(username, network = null) {
   let worker_name = m[4] || 'default';
   let donation_percent = null;
 
-  // Extract a `donateN` token: whole worker name, or a `-`/`_`-separated suffix.
-  // Only apply it when N is a sane percentage (0-100); out-of-range is a typo, so we leave
-  // the worker name untouched and donate nothing.
-  const dm = worker_name.match(/^(?:(.*?)[-_])?donate(\d{1,3})$/);
+  // Read a `donateN` token: whole worker name, or a `-`/`_`-separated suffix. Only apply it
+  // when N is a sane percentage (0-100); out-of-range is a typo and donates nothing. The
+  // worker name is left exactly as typed either way (see the note above).
+  const dm = worker_name.match(DONATE_TOKEN_RE);
   if (dm) {
     const n = parseInt(dm[2], 10);
-    if (n >= 0 && n <= 100) {
-      donation_percent = n;
-      worker_name = dm[1] || 'default'; // strip the token from the visible worker name
-    }
+    if (n >= 0 && n <= 100) donation_percent = n;
   }
 
-  // Cap the visible label: truncate (don't reject) anything over the limit.
+  // `donor_label` is the label PART of a tagged name — what design §16 Part 2 stores as the
+  // donor name. null: no live donate token (a plain name, including an out-of-range typo);
+  // '': the token IS the whole name (`donate10` — masked address on the wall); otherwise the
+  // label as the miner will see it, i.e. AFTER the cut below — never the raw one.
+  let donor_label = null;
+  if (donation_percent !== null) donor_label = dm[1] || '';
+
+  // Cap the visible label: truncate (don't reject) anything over the limit. A name carrying a
+  // live token is cut on its LABEL part so the token stays on screen (`-donate100` is 10 chars,
+  // so at least 22 of the label survive); a whole-name token is ≤ 9 chars and never gets here.
+  // The cut label loses any trailing '-'/'_' so the join never doubles a separator:
+  // `rig-name-that-is-long-enough-donate100` → `rig-name-that-is-long-donate100`, not `…long--donate100`.
   if (worker_name.length > MAX_WORKER_NAME_LEN) {
-    worker_name = worker_name.slice(0, MAX_WORKER_NAME_LEN);
+    if (donation_percent !== null) {
+      const label = dm[1] || '';
+      const token = worker_name.slice(label.length);       // separator + donateN
+      donor_label = label.slice(0, MAX_WORKER_NAME_LEN - token.length).replace(/[-_]+$/, '');
+      worker_name = donor_label + token;
+    } else {
+      worker_name = worker_name.slice(0, MAX_WORKER_NAME_LEN);
+    }
   }
 
   return {
     grin_address: m[1] + m[2],
     worker_name,
-    donation_percent
+    donation_percent,
+    donor_label
   };
 }
 
@@ -278,6 +333,8 @@ module.exports = {
   C32_GRAPH_WEIGHT,
   shareCreditDifficulty,
   bech32ChecksumValid,   // exported for scripts/test-stratum-guards.js (BIP-173 vectors)
+  MAX_WORKER_NAME_LEN,   // the donor-name ceiling too (lib/donor-names.js) — one constant, not two
+  parseDonateToken,      // admin donors list: is this rig tagged? — same grammar as the login
   createJobNotification,
   createLoginResponse,
   createSubmitResponse,

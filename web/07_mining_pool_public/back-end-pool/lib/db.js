@@ -131,12 +131,18 @@ function migrateUsers() {
 }
 
 // Additive, non-destructive: add the ownership-gate proof columns to an existing
-// miner_accounts table (older DBs predate them). last_ip/prev_ip + last_pass_hash/
-// prev_pass_hash back the address-as-identity ownership gate (lib/owner-proof.js): the
-// last-2 mining source IPs and last-2 stratum passwords, all stored as salted scrypt
-// hashes (`v1$…`) — the *_ip names are kept for schema continuity but no longer hold raw
-// IPs after migrateOwnerProofHashes() runs. min_payout is a legacy column from the retired
-// per-account payout threshold (2026-07-17) — kept in the schema, read by nothing.
+// miner_accounts table (older DBs predate them). proof_salt is the per-address scrypt salt
+// for the ownership-proof SET (design §17, table `miner_proofs` below) — minted lazily on
+// an address's first v2 hash, never returned to any client. min_payout is a legacy column
+// from the retired per-account payout threshold (2026-07-17) — kept in the schema, read by
+// nothing.
+//
+// The ten last_*/prev_*/anchor_* proof columns below are LEGACY as of design §17: they held
+// the old 2-slot proof window, and owner-proof.migrateProofSet() copies them into
+// `miner_proofs` once at startup and then NULLs them (that NULL is the migration's
+// idempotency proof). They stay in the schema — never DROP COLUMN — so a rollback to the
+// previous release still finds its columns, and so the migration has somewhere to read from
+// on a DB that upgrades late. Nothing writes them any more.
 function migrateMinerAccounts() {
   try {
     const cols = db.prepare("PRAGMA table_info(miner_accounts)").all();
@@ -144,6 +150,11 @@ function migrateMinerAccounts() {
     const have = new Set(cols.map(c => c.name));
     const additions = {
       min_payout: 'REAL DEFAULT NULL',
+      // Per-address scrypt salt for the proof set (design §17.2 #3). One salt per address so
+      // a verify costs ONE scrypt whatever the set size; minted by owner-proof.getOrCreateSalt
+      // with `UPDATE … WHERE proof_salt IS NULL` + re-read, so two rigs' first shares landing
+      // together can only ever agree on one value. Never leaves the process.
+      proof_salt: 'TEXT DEFAULT NULL',
       last_ip: 'TEXT DEFAULT NULL',
       prev_ip: 'TEXT DEFAULT NULL',
       last_pass_hash: 'TEXT DEFAULT NULL',
@@ -173,7 +184,7 @@ function migrateMinerAccounts() {
       // READS the row into `prev` first, so the alert still goes out (see the DELETE route).
       nostr_prev_username: 'TEXT DEFAULT NULL',
       nostr_prev_npub: 'TEXT DEFAULT NULL',
-      // Capture time of each proof-window slot (audit §J3-1). The AND-gate on
+      // LEGACY (design §17) — capture time of each proof-window slot (audit §J3-1). The AND-gate on
       // nostr-destination — the only miner-reachable route that can REDIRECT money — now
       // refuses a leg younger than the destination cooldown, because both legs are written by
       // one call on one accepted share, so a stranger who mines one share to this address
@@ -183,7 +194,9 @@ function migrateMinerAccounts() {
       prev_ip_at: 'INTEGER DEFAULT NULL',
       last_pass_at: 'INTEGER DEFAULT NULL',
       prev_pass_at: 'INTEGER DEFAULT NULL',
-      // Anchor slot — the address's FIRST-EVER captured proof of each kind (audit §J3-4).
+      // LEGACY (design §17) — anchor slot, the address's FIRST-EVER captured proof of each
+      // kind (audit §J3-4). The anchor SURVIVES §17 as `miner_proofs.is_anchor`; only its
+      // storage moved.
       // The last-2 window is only two deep and anyone may mine to any address, so two hostile
       // sessions evict both slots and a miner who has since stopped mining can never
       // re-capture. The anchor is write-once at first capture and is never rotated, so that
@@ -498,6 +511,7 @@ function createSchema() {
       is_online INTEGER NOT NULL DEFAULT 0,
       last_seen_at INTEGER DEFAULT NULL,
       min_payout REAL DEFAULT NULL,
+      proof_salt TEXT DEFAULT NULL,
       last_ip TEXT DEFAULT NULL,
       prev_ip TEXT DEFAULT NULL,
       last_pass_hash TEXT DEFAULT NULL,
@@ -524,6 +538,34 @@ function createSchema() {
 
     `CREATE INDEX IF NOT EXISTS idx_miner_address ON miner_accounts(grin_address)`,
     `CREATE INDEX IF NOT EXISTS idx_miner_online ON miner_accounts(is_online)`,
+
+    // Ownership-proof SET (design §17.3) — replaces the 2-slot window that lived in
+    // miner_accounts. Up to PROOF_SET_MAX live rows per (address, kind); see
+    // lib/owner-proof.js for the capture, verify and eviction rules.
+    //   hash          'v2$<b64>' (scrypt under the address's proof_salt) or a legacy
+    //                 'v1$<salt>$<b64>' row carried over by migrateProofSet().
+    //   first_seen_at NEVER updated. It is what the destination age gate (§J3-1) reads, so a
+    //                 path that moved it would defeat that gate exactly as window rotation did.
+    //                 NULL = migrated without a known timestamp = treated as OLD.
+    //   last_seen_at  refreshed whenever a capture matches this row; the LRU eviction key.
+    //   is_anchor     the address's first-ever value of this kind (§J3-4). NEVER deleted —
+    //                 when it is the LRU pick of a full set it is flagged evicted_at instead,
+    //                 so a miner who has stopped mining keeps a route to their own wallet.
+    //   evicted_at    NULL = live. Counts, the cap and the LRU pick range over live rows only.
+    //                 Only an anchor row is ever non-live; any other evicted row is deleted.
+    `CREATE TABLE IF NOT EXISTS miner_proofs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      grin_address TEXT NOT NULL,
+      kind TEXT NOT NULL CHECK (kind IN ('ip','pass')),
+      hash TEXT NOT NULL,
+      first_seen_at INTEGER DEFAULT NULL,
+      last_seen_at INTEGER NOT NULL,
+      is_anchor INTEGER NOT NULL DEFAULT 0,
+      evicted_at INTEGER DEFAULT NULL,
+      UNIQUE (grin_address, kind, hash)
+    )`,
+
+    `CREATE INDEX IF NOT EXISTS idx_miner_proofs_lru ON miner_proofs (grin_address, kind, evicted_at, last_seen_at)`,
 
     `CREATE TABLE IF NOT EXISTS blocks (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -909,13 +951,22 @@ function createSchema() {
     // ─── Incentives (Script 07 incentive features) ────────────────────────────
     // Per-address incentive state. Identity-ready (address-keyed) but register-free —
     // there is no account, the grin_address IS the identity.
+    // The donor_* columns (design §16.3, 2026-09-21) carry the optional public donor name a
+    // miner puts on the wall via `<name>-donateN`, plus its moderation state. See
+    // lib/donor-names.js for the capture rule and migrateMinerIncentives() for older DBs.
     `CREATE TABLE IF NOT EXISTS miner_incentives (
       grin_address TEXT PRIMARY KEY REFERENCES miner_accounts(grin_address),
       join_bonus_paid INTEGER NOT NULL DEFAULT 0,
       donation_percent REAL NOT NULL DEFAULT 0,
       streak_days INTEGER NOT NULL DEFAULT 0,
       last_active_day INTEGER DEFAULT NULL,
-      updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+      updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+      donor_name TEXT DEFAULT NULL,
+      donor_name_set_at INTEGER DEFAULT NULL,
+      donor_censor TEXT DEFAULT NULL,
+      donor_censor_word TEXT DEFAULT NULL,
+      donor_censor_at INTEGER DEFAULT NULL,
+      donor_censor_by INTEGER DEFAULT NULL
     )`,
 
     // One row per lottery draw. seed_height/seed_hash make the draw publicly verifiable:
@@ -1018,9 +1069,16 @@ function createSchema() {
       api_url TEXT DEFAULT NULL,
       stratum_url TEXT DEFAULT NULL,
       is_active INTEGER NOT NULL DEFAULT 1,
+      lat REAL DEFAULT NULL,
+      lng REAL DEFAULT NULL,
       created_at INTEGER NOT NULL DEFAULT (unixepoch()),
       updated_at INTEGER NOT NULL DEFAULT (unixepoch())
     )`,
+    // lat/lng: OPERATOR-DECLARED position of the gateway box for the public network map
+    // (both set, or both NULL). Typed in by the operator in admin → Regions, never resolved
+    // from an IP — a gateway is the pool's own published server (its stratum hostname is on
+    // the connect grid), so its city is public already. NULL → the map falls back to the
+    // country centroid, which put "Los Angeles" and "New York" 140 km apart in Kansas.
 
     `CREATE INDEX IF NOT EXISTS idx_pool_locations_active ON pool_locations(is_active)`,
 
@@ -1148,6 +1206,7 @@ function createSchema() {
   migratePoolMetricsHourly();
   migrateShareCreditUnit(); // after migrateShares/migrateBlocks: it touches columns they add
   migrateLocations();
+  migrateMinerIncentives();
   migrateAds();
   migratePagesFromConfig();
   seedShippedPages();   // must follow the legacy migration: same table, own markers
@@ -1157,9 +1216,10 @@ function createSchema() {
   // regional gateways the operator declares in admin → Regions.
 }
 
-// Additive, non-destructive: add the country grouping columns to an existing
-// pool_locations table (older DBs predate them). Lets the public connect grid group
-// regional cards under country headings + show a flag.
+// Additive, non-destructive: add the country grouping columns (and the optional
+// operator-declared map position, 2026-09-21) to an existing pool_locations table (older
+// DBs predate them). Lets the public connect grid group regional cards under country
+// headings + show a flag, and the network map pin a gateway on its real city.
 function migrateLocations() {
   try {
     const cols = db.prepare("PRAGMA table_info(pool_locations)").all();
@@ -1167,7 +1227,9 @@ function migrateLocations() {
     const have = new Set(cols.map(c => c.name));
     const additions = {
       country: 'TEXT DEFAULT NULL',
-      country_code: 'TEXT DEFAULT NULL'
+      country_code: 'TEXT DEFAULT NULL',
+      lat: 'REAL DEFAULT NULL',
+      lng: 'REAL DEFAULT NULL'
     };
     for (const [name, def] of Object.entries(additions)) {
       if (!have.has(name)) {
@@ -1177,6 +1239,34 @@ function migrateLocations() {
     }
   } catch (e) {
     console.error(`[db] pool_locations migration check failed: ${e.message}`);
+  }
+}
+
+// Additive, non-destructive: add the donor-name columns (design §16.3, 2026-09-21) to an
+// existing miner_incentives table (older DBs predate them). All six default to NULL, which
+// is the "no name, no censor" state — so every existing donor row reads as a plain donateN
+// donor (masked address on the wall) until its owner sets a name through the ceremony.
+function migrateMinerIncentives() {
+  try {
+    const cols = db.prepare("PRAGMA table_info(miner_incentives)").all();
+    if (cols.length === 0) return; // fresh DB: CREATE TABLE above has the columns
+    const have = new Set(cols.map(c => c.name));
+    const additions = {
+      donor_name: 'TEXT DEFAULT NULL',
+      donor_name_set_at: 'INTEGER DEFAULT NULL',
+      donor_censor: 'TEXT DEFAULT NULL',
+      donor_censor_word: 'TEXT DEFAULT NULL',
+      donor_censor_at: 'INTEGER DEFAULT NULL',
+      donor_censor_by: 'INTEGER DEFAULT NULL'
+    };
+    for (const [name, def] of Object.entries(additions)) {
+      if (!have.has(name)) {
+        db.exec(`ALTER TABLE miner_incentives ADD COLUMN ${name} ${def}`);
+        console.warn(`[db] miner_incentives: added missing column ${name}`);
+      }
+    }
+  } catch (e) {
+    console.error(`[db] miner_incentives migration check failed: ${e.message}`);
   }
 }
 

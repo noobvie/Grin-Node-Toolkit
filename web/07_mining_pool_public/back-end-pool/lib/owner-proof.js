@@ -4,57 +4,77 @@ const crypto = require('crypto');
 const net = require('net');
 const geoip = require('./geoip');
 
-// Address-as-identity ownership gate (v2 — IP or password, hashed at rest).
+// Address-as-identity ownership gate — a SET of proofs per address (design §17).
 //
 // The pool has no miner accounts — the grin address IS the identity. For self-service money
-// actions we need a cheap proof that the
-// requester actually controls the rig mining under that address, WITHOUT introducing
-// registration. It gates every self-service money action — Tor payout, slatepack create and
-// finalize, and the Goblin/Nostr destination register/remove (which demands BOTH proofs, see
-// index.js requireBothProofs). Proof = EITHER of:
-//   · one of the address's last-2 distinct mining source IPs (IPv4 or IPv6), or
-//   · the rig's stratum password (as typed into the miner's Pool1 config).
+// actions we need a cheap proof that the requester actually controls a rig mining under that
+// address, WITHOUT introducing registration. It gates every self-service money action — Tor
+// payout, slatepack create and finalize, the payment-proof reveal, and the Goblin/Nostr
+// destination register/remove (which demands BOTH proofs, see index.js requireBothProofs).
+// Proof = EITHER of:
+//   · one of the address's recent mining source IPs (IPv4 or IPv6), or
+//   · one of the rig passwords its miners send (as typed into the miner's Pool1 config).
 //
 // This is an anti-griefing / anti-spam gate, NOT strong authentication: both payout rails are
 // independently theft-proof (Tor pays only to the address's own wallet; a slatepack is
-// age-encrypted to the address). The gate exists so a stranger reading the public leaderboard
-// cannot trigger payouts for other people's addresses (each one burns a pool-paid network fee,
+// age-encrypted to it). The gate exists so a stranger reading the public leaderboard cannot
+// trigger payouts for other people's addresses (each one burns a pool-paid network fee,
 // consumes a hot-wallet output, and force-moves coins the owner didn't ask to move).
 //
-// Storage (data minimisation, operator decision 2026-07-17): proofs are stored as salted
-// scrypt hashes (`v1$<salt>$<hash>`), never plaintext — the DB holds no raw mining IPs and no
-// raw passwords. The legacy plaintext last_ip/prev_ip values from older deploys are upgraded
-// in place by migrateOwnerProofHashes() at startup (and verify handles both forms meanwhile).
-// Column names last_ip/prev_ip are kept for schema continuity even though they now hold hashes.
+// ── THE SET (design §17.2, replaced the 2-slot window on 2026-09-22) ──────────────────
+// Each (address, kind) owns up to PROOF_SET_MAX = 10 LIVE rows in `miner_proofs`. A value
+// already in the set refreshes its `last_seen_at`; a new one is inserted, evicting the
+// least-recently-SEEN live row when the set is full. `first_seen_at` NEVER moves.
 //
-// Capture lives at the stratum layer, on a session's FIRST ACCEPTED SHARE (not at login —
-// login is unauthenticated, so recording there let anyone poison an address's proof window
-// with a bare TCP connect; a recorded proof requires actual PoW). The real miner IP is the
-// socket address for direct miners, or the PROXY-protocol v2 header value for miners arriving
-// via a regional gateway (Model C). Both IP and password keep a last-2 window so an ISP
-// re-lease or a rig-side password change never locks the owner out.
+// The window it replaced held two slots and compared a capture against the newer one only, so
+// two facilities whose rigs reconnected in turn rotated it on EVERY reconnect. Each rotation
+// re-stamped the age the §J3-1 gate reads (refusing the owner's own destination change as
+// `proof_too_recent`) and lit an "evidence changed" warning for honest churn. The page's
+// "use the same password on every rig" was a workaround for the slot count, not a security
+// property; with ten slots per kind, different passwords on different sites all work.
+//
+// ── STORAGE ─────────────────────────────────────────────────────────────
+// Data minimisation (operator decision 2026-07-17): rows hold scrypt hashes, never a raw
+// mining IP and never a raw password. ONE SALT PER ADDRESS (`miner_accounts.proof_salt`), so
+// a verify costs ONE scrypt whatever the set size — that is what makes a set of ten as cheap
+// as a window of two, and it is the whole reason the cap could be raised. Rows read
+// `v2$<hashB64>`; digests are compared with crypto.timingSafeEqual.
+//   → An offline attacker holding the DB can precompute per ADDRESS instead of per row: at
+//     most a ×10 saving on a 2^32 × 16 MB job, still unshareable across addresses. Accepted
+//     (§17.4) — do not "fix" it by re-salting per row without re-reading that trade.
+// Legacy `v1$<salt>$<hash>` rows carried over by migrateProofSet() cost one scrypt each until
+// they are evicted; a capture that MATCHES one has the plaintext in hand and rewrites it as
+// v2 in place, so a migrated account converges on the one-scrypt cost by itself.
+//
+// ── CAPTURE ─────────────────────────────────────────────────────────────
+// Capture lives at the stratum layer, on a session's ACCEPTED shares (never at login — login
+// is unauthenticated, so recording there let a bare TCP connect write to an address's proofs;
+// a recorded proof requires actual PoW). The real miner IP is the socket address for direct
+// miners, or the PROXY-protocol v2 header value for miners arriving via a regional gateway
+// (Model C).
 //
 // ⚠ PoW is a COST, not an identity. Anyone may mine to anyone's address, so "requires an
-// accepted share" narrows who can write to a proof window — it does not restrict it to the
-// owner. The 2026-08-26 audit (§J3) found three consequences and the three answers now in
-// this file; none of them should be removed without re-reading that section:
+// accepted share" narrows who can write to an address's proofs — it does not restrict it to
+// the owner. The 2026-08-26 audit (§J3) found three consequences, and all three answers are
+// still here; none should be removed without re-reading that section:
 //   · §J3-1 — both legs are written by ONE call on ONE share, so the AND-gate on the Goblin
-//     destination was never two factors. verifyOwnerProof therefore reports WHICH slot matched
-//     and HOW OLD it is, and index.js requireBothProofs refuses a leg younger than the
-//     destination cooldown. Age is the only thing that separates the owner from a stranger who
-//     mined here for ten seconds.
-//   · §J3-4 — two hostile sessions evicted both window slots, permanently for a miner who had
-//     stopped mining. Hence the write-once ANCHOR slot (below), plus a caller-supplied
-//     mayDisplace flag so rotation costs sustained work while first capture stays cheap.
-//   · §J3-3 — the failed-attempt lockout was address-keyed, so a stranger's failures locked the
-//     owner out of their own money. Denial is now keyed to the (address, origin) pair.
+//     destination was never two factors. verifyOwnerProof therefore reports WHICH KIND of row
+//     matched and HOW OLD it is, and index.js requireBothProofs refuses a leg younger than the
+//     destination cooldown. AGE is the only thing that separates the owner from a stranger who
+//     mined here for ten seconds — which is why `first_seen_at` is write-once. A path that
+//     moved it would defeat that gate exactly as window rotation did.
+//   · §J3-4 — hostile sessions evicted both window slots, permanently for a miner who had
+//     stopped mining. Hence the ANCHOR (below) and the caller-supplied mayDisplace flag: an
+//     insert into a NON-EMPTY set costs sustained work, while first capture stays cheap.
+//   · §J3-3 — the failed-attempt lockout was address-keyed, so a stranger's failures locked
+//     the owner out of their own money. Denial is now keyed to the (address, origin) pair.
 //
-// The ANCHOR is the address's first-ever proof of each kind. It is never rotated, so a miner
-// always retains a route to their own wallet; and it is deliberately REFUSED by
-// requireBothProofs, because an unrevocable credential must not be able to change where money
-// goes — only to move money to the address's own wallet. Pre-existing accounts are anchored to
-// the value they already hold by backfillProofAnchors() at startup, which must run before the
-// stratum listener accepts a share.
+// The ANCHOR is the address's first-ever value of each kind, flagged `is_anchor` on its own
+// row. It is never DELETED — when it is the LRU pick of a full set it is flagged `evicted_at`
+// instead — so a miner who has stopped mining always retains a route to their own wallet. An
+// evicted anchor verifies with `slot: 'anchor'` and is deliberately REFUSED by
+// requireBothProofs: an unrevocable credential must not be able to change where money goes,
+// only to move money to the address's own wallet. A LIVE anchor is an ordinary set member.
 //
 // Trivial passwords (`x`, `123`, factory defaults…) are never captured and never verify —
 // otherwise every rig shipping the same default would share one skeleton key. Those addresses
@@ -222,13 +242,38 @@ function isUsablePassword(pass, db) {
   return passwordRejectReason(pass, db) === null;
 }
 
-// ─── Salted scrypt hashing (v1$<saltB64>$<hashB64>) ─────────────────────────
+// ─── Salted scrypt hashing ──────────────────────────────────────────────────
 // scrypt (memory-hard, 16 MB) so a leaked DB can't be brute-forced on GPUs — relevant for
 // IPv4 proofs (2^32 space) and low-entropy rig passwords. Hashing happens off the hot path:
-// once per session (first accepted share) and on user-triggered verifies.
+// at most twice per stratum session (accepted share 1 and PROOF_MIN_SHARES) and on
+// user-triggered verifies. The parameters are shared by both forms — changing them
+// invalidates every stored hash, so they are not a dial.
 const SCRYPT_OPTS = { N: 16384, r: 8, p: 1, maxmem: 64 * 1024 * 1024 };
 const KEYLEN = 32;
 
+// v2 — the current form. `v2$<hashB64>`, scrypt under the ADDRESS's salt, so the digest is a
+// pure function of (value, address) and one KDF call serves a whole set (§17.2 #3).
+function hashProofV2(value, salt) {
+  return new Promise((resolve, reject) => {
+    crypto.scrypt(String(value), Buffer.from(String(salt), 'base64'), KEYLEN, SCRYPT_OPTS, (err, dk) => {
+      if (err) return reject(err);
+      resolve(`v2$${dk.toString('base64')}`);
+    });
+  });
+}
+
+// Synchronous v2 — migrateProofSet() only, for the pre-v1 PLAINTEXT values a very old deploy
+// may still hold. That migration is one-time, bounded by the number of such accounts, and must
+// finish before the stratum listener accepts a share, so it cannot be async.
+function hashProofV2Sync(value, salt) {
+  return `v2$${crypto.scryptSync(String(value), Buffer.from(String(salt), 'base64'), KEYLEN, SCRYPT_OPTS).toString('base64')}`;
+}
+
+// v1 — legacy per-row salt (`v1$<saltB64>$<hashB64>`). No production path writes one any
+// more: migrateProofSet() carries EXISTING v1 values across as-is and they must keep verifying
+// until a matching capture rewrites them or the LRU evicts them. Exported so the regression
+// suite can build a legacy row through the same code that parses one, rather than hand-rolling
+// the format and testing its own idea of it.
 function hashProof(value) {
   return new Promise((resolve, reject) => {
     const salt = crypto.randomBytes(16);
@@ -257,12 +302,112 @@ function verifyHashedProof(value, stored) {
   });
 }
 
-// Does a canonical IP match a stored slot? Handles both hashed (v1$…) and legacy plaintext
-// values (pre-migration DBs).
-async function matchesStoredIp(canonicalIp, stored) {
-  if (!stored) return false;
-  if (stored.startsWith('v1$')) return verifyHashedProof(canonicalIp, stored);
-  return canonicalizeIp(stored) === canonicalIp;
+// Constant-time equality of two `v2$…` strings (§17.2 #3). timingSafeEqual THROWS on a length
+// mismatch, so the lengths are checked first — a digest of the wrong length is corruption, not
+// a secret, and rejecting it early leaks nothing.
+function sameDigest(a, b) {
+  if (typeof a !== 'string' || typeof b !== 'string') return false;
+  if (!a.startsWith('v2$') || !b.startsWith('v2$')) return false;
+  let x, y;
+  try {
+    x = Buffer.from(a.slice(3), 'base64');
+    y = Buffer.from(b.slice(3), 'base64');
+  } catch (e) { return false; }
+  if (x.length !== KEYLEN || y.length !== KEYLEN) return false;
+  return crypto.timingSafeEqual(x, y);
+}
+
+// ─── The proof set ──────────────────────────────────────────────────────────
+// Live rows per (address, kind). A module constant, NOT an admin setting: the only reason the
+// old window was two deep was scrypt cost, and the per-address salt removed that. A dial here
+// would make "how many of your rigs can prove ownership" an operator guess, and the account
+// page quotes the number to the miner — it is a product fact, not a tuning knob.
+const PROOF_SET_MAX = 10;
+
+// A row is LIVE unless it carries an eviction stamp. Only an anchor row is ever non-live.
+// 0 is a legitimate stamp (a migrated anchor with no known timestamp), so this tests for
+// NULL rather than for falsiness.
+const isLiveProof = (r) => !!r && (r.evicted_at === null || r.evicted_at === undefined);
+
+// One salt per ADDRESS (§17.2 #3), minted lazily on its first v2 hash.
+//
+// ⚠ The UPDATE is CONDITIONAL and the value is RE-READ. Two rigs' first accepted shares for a
+// brand-new address can land together; without `WHERE proof_salt IS NULL` both would mint a
+// salt, and the row hashed under the loser's salt could never be matched again. The first
+// writer wins and the loser adopts its salt. NEVER return the value you just generated.
+// Returns null when the account row is missing or the DB errors — callers then decline to
+// write, rather than storing a proof that nobody can reproduce.
+function getOrCreateSalt(db, grinAddress) {
+  try {
+    db.prepare(
+      'UPDATE miner_accounts SET proof_salt = ? WHERE grin_address = ? AND proof_salt IS NULL'
+    ).run(crypto.randomBytes(16).toString('base64'), grinAddress);
+    const row = db.prepare('SELECT proof_salt FROM miner_accounts WHERE grin_address = ?').get(grinAddress);
+    return (row && row.proof_salt) || null;
+  } catch (e) {
+    console.error(`[owner-proof] proof salt unavailable for ${grinAddress}: ${e.message}`);
+    return null;
+  }
+}
+
+// Every proof row for one (address, kind): LIVE first, least-recently-seen first inside each
+// group, `id` breaking ties so migrated rows carrying no timestamps still evict oldest-first
+// (the migration inserts anchor → prev → last). ONE read serves the match test, the live count
+// and the eviction pick, so those three can never disagree with each other.
+function _proofRows(db, grinAddress, kind) {
+  return db.prepare(
+    `SELECT id, hash, first_seen_at, last_seen_at, is_anchor, evicted_at
+       FROM miner_proofs WHERE grin_address = ? AND kind = ?
+      ORDER BY (evicted_at IS NULL) DESC, last_seen_at ASC, id ASC`
+  ).all(grinAddress, kind);
+}
+
+// Which row holds `value`? ONE scrypt for the whole set (the v2 digest, precomputed by the
+// caller so one submission can be tested against BOTH kinds for a single KDF call), plus one
+// per legacy v1 row. Returns the row or null. Reads only — never writes.
+async function _matchProofRow(rows, value, v2) {
+  if (v2) {
+    for (const r of rows) if (sameDigest(r.hash, v2)) return r;
+  }
+  for (const r of rows) {
+    if (typeof r.hash === 'string' && r.hash.startsWith('v1$') &&
+        await verifyHashedProof(value, r.hash)) return r;
+  }
+  return null;
+}
+
+// Make room for `headroom` more LIVE rows (default 1); returns how many were evicted. Pass 0
+// to merely TRIM a set back to the cap without freeing a slot — over-evicting would throw
+// away an owner's working proof for nothing.
+//
+// Evicts `live - PROOF_SET_MAX + 1`, not just one: node:sqlite runs each statement to
+// completion, but a capture's KDF is an await point, so two captures can both decide to insert
+// and leave the set one over the cap. Clearing the overshoot on the next insert makes that
+// self-correcting instead of permanent (§17.2 #5). An ANCHOR row is flagged, never deleted
+// (§J3-4) — a miner who has stopped mining must keep a route to their own wallet.
+function _makeRoom(db, rows, now, headroom) {
+  const live = rows.filter(isLiveProof);
+  const excess = live.length - PROOF_SET_MAX + (headroom === undefined ? 1 : headroom);
+  if (excess <= 0) return 0;
+  let n = 0;
+  for (const r of live.slice(0, excess)) { // rows arrive least-recently-seen first
+    if (r.is_anchor) db.prepare('UPDATE miner_proofs SET evicted_at = ? WHERE id = ?').run(now, r.id);
+    else db.prepare('DELETE FROM miner_proofs WHERE id = ?').run(r.id);
+    n++;
+  }
+  return n;
+}
+
+// A capture that matched a v1 row has the plaintext in hand, so re-hash it under the address
+// salt: that row stops costing its own scrypt on every future verify, and a migrated account
+// converges on the one-KDF cost with no sweep. Best-effort — an account carrying two v1 rows
+// for one value (two legacy slots, two per-row salts) would hit the UNIQUE constraint on the
+// second rewrite, and the last_seen_at refresh that matters has already happened.
+function _upgradeV1Row(db, row, v2) {
+  if (!v2 || typeof row.hash !== 'string' || !row.hash.startsWith('v1$')) return;
+  try {
+    db.prepare('UPDATE miner_proofs SET hash = ? WHERE id = ?').run(v2, row.id);
+  } catch (e) { /* a v2 row for this value already exists — leave the v1 row to age out */ }
 }
 
 // ─── In-memory failed-attempt throttle ──────────────────────────────────────
@@ -387,110 +532,171 @@ async function _attackDelay() {
   }
 }
 
-// ─── Evidence capture (called on a session's first accepted share) ──────────
-// Records BOTH proofs for an address: source IP (always, when valid) and stratum password
-// (only when usable). Each keeps a last-2 distinct window: on change, last → prev. Async
-// (scrypt) — the stratum caller fires and forgets. Returns true if anything was written.
+// ─── Evidence capture (called from the stratum accepted-share path) ─────────
+// Records BOTH kinds for an address: source IP (always, when valid) and stratum password
+// (only when usable). Async (scrypt) — the stratum caller fires and forgets. Returns true if
+// anything was written.
+//
+// Per kind, exactly one of three things happens (§17.2 #5):
+//   · the value is already a LIVE row  → refresh last_seen_at. No insert, no audit row. This
+//     is the normal case for every rig that reconnects, and it is what makes honest churn
+//     silent where the old window wrote an audit row and an alarm for it.
+//   · the set is EMPTY                 → insert; the row becomes the anchor. Always allowed:
+//     a brand-new address has nothing to protect, and gating first capture would strand a rig
+//     that reconnects too often to ever reach PROOF_MIN_SHARES.
+//   · anything else (a new value, or re-activating the evicted anchor) → an INSERT into a
+//     non-empty set. Needs mayDisplace, evicts the LRU live row when the set is full, and
+//     writes the `evidence_added` audit row. That is the hostile signature.
 async function recordOwnerEvidence(db, grinAddress, rawIp, rawPass, opts) {
-  // mayDisplace=false → write into EMPTY slots only. The caller (stratum-server) sets it from
-  // how much accepted work this session has done, so one share can establish a proof for an
-  // address that has none but cannot push out a proof somebody else's rig recorded (§J3-4).
+  // mayDisplace=false → refresh-or-first-capture only. The caller (stratum-server) sets it
+  // from how much accepted work THIS SESSION has done, so one share can establish a proof for
+  // an address that has none but cannot add one beside somebody else's rig (§J3-4).
   // Defaults true so existing callers and tests keep the original behaviour.
   const mayDisplace = !(opts && opts.mayDisplace === false);
   if (!grinAddress) return false;
   try {
-    const row = db.prepare(
-      `SELECT last_ip, prev_ip, last_pass_hash, prev_pass_hash, pass_proof_state,
-              last_ip_at, last_pass_at, anchor_ip, anchor_pass_hash, anchor_set_at
-       FROM miner_accounts WHERE grin_address = ?`
+    const acct = db.prepare(
+      'SELECT pass_proof_state FROM miner_accounts WHERE grin_address = ?'
     ).get(grinAddress);
-    if (!row) return false; // account not created yet — caller ensures existence first
+    if (!acct) return false; // account not created yet — caller ensures existence first
 
-    const sets = [];
-    const vals = [];
     const now = Math.floor(Date.now() / 1000);
-    let displaced = null;        // which windows this capture pushed an existing value out of
-    let anchorStamped = false;   // `row` is a snapshot, so both branches would re-add the stamp
+    let wrote = false;
 
     const ip = canonicalizeIp(rawIp);
     if (ip && ip !== 'unknown' && net.isIP(ip)) {
-      if (!(await matchesStoredIp(ip, row.last_ip)) && (mayDisplace || !row.last_ip)) {
-        const h = await hashProof(ip);
-        // Timestamps travel with the value (§J3-1): the AND-gate judges a leg by the age of
-        // the slot that matched, so a rotation must carry last_ip_at down to prev_ip_at
-        // rather than leaving prev's age describing a value that has moved on.
-        sets.push('prev_ip = ?', 'prev_ip_at = ?', 'last_ip = ?', 'last_ip_at = ?');
-        vals.push(row.last_ip || null, row.last_ip_at || null, h, now);
-        if (row.last_ip) displaced = displaced ? 'ip+password' : 'ip';
-        // Write-once anchor (§J3-4). Set only on a true first capture; accounts that already
-        // held a value are anchored to it by backfillProofAnchors() at startup, so a hostile
-        // session can never become the anchor of an established address.
-        if (!row.anchor_ip && !row.last_ip) {
-          sets.push('anchor_ip = ?', 'anchor_set_at = ?');
-          vals.push(h, now);
-          anchorStamped = true;
-        }
-      }
+      if (await _captureProof(db, grinAddress, 'ip', ip, now, mayDisplace, rawIp)) wrote = true;
     }
 
     const pass = typeof rawPass === 'string' ? rawPass.trim() : '';
     // Diagnostic state for THIS login's password — persisted so the account page can tell the
     // miner why their password isn't working, instead of them finding out on withdrawal day.
     // 'none' (rig sent nothing) is deliberately distinct from a reject code: "you set no
-    // password" and "your password was refused" need different fixes.
+    // password" and "your password was refused" need different fixes. Not a proof: it says
+    // nothing about which passwords are on record, and §17 does not change it.
     const passState = pass ? (passwordRejectReason(pass, db) || 'ok') : 'none';
-    if (passState !== row.pass_proof_state) {
-      sets.push('pass_proof_state = ?');
-      vals.push(passState);
+    if (passState !== acct.pass_proof_state) {
+      db.prepare(
+        'UPDATE miner_accounts SET pass_proof_state = ?, updated_at = unixepoch() WHERE grin_address = ?'
+      ).run(passState, grinAddress);
+      wrote = true;
     }
 
     if (isUsablePassword(pass, db)) {
-      if (!(await verifyHashedProof(pass, row.last_pass_hash)) && (mayDisplace || !row.last_pass_hash)) {
-        const h = await hashProof(pass);
-        sets.push('prev_pass_hash = ?', 'prev_pass_at = ?', 'last_pass_hash = ?', 'last_pass_at = ?');
-        vals.push(row.last_pass_hash || null, row.last_pass_at || null, h, now);
-        if (row.last_pass_hash) displaced = displaced ? 'ip+password' : 'password';
-        if (!row.anchor_pass_hash && !row.last_pass_hash) {
-          sets.push('anchor_pass_hash = ?');
-          vals.push(h);
-          if (!anchorStamped && !row.anchor_set_at) { sets.push('anchor_set_at = ?'); vals.push(now); anchorStamped = true; }
-        }
-      }
+      if (await _captureProof(db, grinAddress, 'pass', pass, now, mayDisplace, rawIp)) wrote = true;
     } else if (pass) {
       // Also log the REASON (never the value) so the operator can answer "why won't my
       // password work?" from the service log without asking the miner to reveal it.
       console.warn(`[owner-proof] password not captured for ${grinAddress}: ${passState}`);
     }
 
-    if (sets.length === 0) return false; // both unchanged: skip the write
-    db.prepare(
-      `UPDATE miner_accounts SET ${sets.join(', ')}, updated_at = unixepoch() WHERE grin_address = ?`
-    ).run(...vals, grinAddress);
-
-    // A capture that DISPLACES an existing value is the one event a miner would want to know
-    // about — it is what a hostile session looks like from the inside (§J3-4), and until now
-    // it happened in complete silence. Audited, never blocking; the account page reads the
-    // resulting last_ip_at/last_pass_at to show "ownership evidence last changed on …".
-    if (displaced) {
-      auditOwnerProof(db, {
-        action: 'evidence_displaced', grinAddress, ip: rawIp, ok: true,
-        details: { window: displaced, anchor_intact: !!(row.anchor_ip || row.anchor_pass_hash) }
-      });
-    }
-    return true;
+    return wrote;
   } catch (e) {
     console.error(`[owner-proof] recordOwnerEvidence failed for ${grinAddress}: ${e.message}`);
     return false;
   }
 }
 
+// One kind of one capture. Returns true if a row was written.
+//
+// ⚠ ORDER MATTERS. The KDF is the only await, and everything that DECIDES (live count, cap,
+// anchor, LRU pick) reads the table AFTER it. An earlier draft hashed against a snapshot taken
+// before the await and then wrote against it; two captures landing together could each see an
+// empty set and each claim the anchor. The rows are therefore read twice: once to find out
+// which v1 hashes need testing, and again — with no await after it — to decide and write.
+async function _captureProof(db, grinAddress, kind, value, now, mayDisplace, auditIp) {
+  const salt = getOrCreateSalt(db, grinAddress);
+  if (!salt) return false; // no salt → any row written now could never be matched again
+
+  const v2 = await hashProofV2(value, salt);
+  const pre = _proofRows(db, grinAddress, kind);
+  const preMatch = await _matchProofRow(pre, value, v2);
+
+  // From here down: synchronous. Re-read so the counts and the LRU pick describe the table as
+  // it is now, and locate the match by its hash string (stable across the re-read).
+  const rows = _proofRows(db, grinAddress, kind);
+  const row = preMatch ? rows.find((r) => r.hash === preMatch.hash) || null : null;
+  const live = rows.filter(isLiveProof);
+
+  if (row && isLiveProof(row)) {
+    // Known value, seen again. Refresh the LRU key ONLY: first_seen_at is what the §J3-1 age
+    // gate reads, and moving it here would defeat that gate exactly as window rotation did.
+    db.prepare('UPDATE miner_proofs SET last_seen_at = ? WHERE id = ?').run(now, row.id);
+    _upgradeV1Row(db, row, v2);
+    return true;
+  }
+
+  // Everything below is an INSERT into the set. Re-activating the evicted anchor counts as
+  // one (§17.2 #5) — it is a value returning to the live set, and a returning value is exactly
+  // what an attacker replaying an old capture would be doing.
+  if (live.length > 0 && !mayDisplace) return false;
+
+  const evicted = _makeRoom(db, rows, now);
+
+  if (row) {
+    // The evicted anchor is coming back. first_seen_at stays where it is — the row is old, and
+    // it is old regardless of how long it spent outside the live set.
+    db.prepare('UPDATE miner_proofs SET evicted_at = NULL, last_seen_at = ? WHERE id = ?')
+      .run(now, row.id);
+    _upgradeV1Row(db, row, v2);
+  } else {
+    // is_anchor is decided INSIDE the statement, not from the snapshot above: node:sqlite runs
+    // one statement to completion, so the EXISTS can never see a half-written table and two
+    // addresses' first captures can never both claim the anchor. OR IGNORE because the same
+    // value may already have been inserted by a capture that raced this one through the KDF —
+    // the UNIQUE (address, kind, hash) index is what decides, not our read.
+    const res = db.prepare(
+      `INSERT OR IGNORE INTO miner_proofs
+         (grin_address, kind, hash, first_seen_at, last_seen_at, is_anchor, evicted_at)
+       SELECT ?, ?, ?, ?, ?,
+              CASE WHEN EXISTS (SELECT 1 FROM miner_proofs
+                                 WHERE grin_address = ? AND kind = ? AND is_anchor = 1)
+                   THEN 0 ELSE 1 END,
+              NULL`
+    ).run(grinAddress, kind, v2, now, now, grinAddress, kind);
+    if (!res.changes) {
+      // Lost that race: the row exists, so this capture is a refresh after all.
+      db.prepare(
+        'UPDATE miner_proofs SET last_seen_at = ? WHERE grin_address = ? AND kind = ? AND hash = ?'
+      ).run(now, grinAddress, kind, v2);
+      return true;
+    }
+  }
+
+  // Audited only for an insert into a NON-EMPTY set (§17.2 #6). A refresh writes nothing and a
+  // first capture is not news; a value arriving beside existing ones is the event a miner or an
+  // operator would want to see. live_after is re-counted rather than derived, so the row cannot
+  // disagree with the table. The VALUE is never audited — only its kind.
+  if (live.length > 0) {
+    const liveAfter = db.prepare(
+      'SELECT COUNT(*) AS c FROM miner_proofs WHERE grin_address = ? AND kind = ? AND evicted_at IS NULL'
+    ).get(grinAddress, kind).c;
+    auditOwnerProof(db, {
+      action: 'evidence_added', grinAddress, ip: auditIp, ok: true,
+      details: { kind, live_after: liveAfter, evicted: evicted > 0 }
+    });
+  }
+  db.prepare('UPDATE miner_accounts SET updated_at = unixepoch() WHERE grin_address = ?').run(grinAddress);
+  return true;
+}
+
 // ─── Verify (one field: IP or password) ─────────────────────────────────────
-// The account page has a single proof input. If it parses as an IP, try the IP window; a
-// usable-password-shaped value is also tried against the password window (both paths run when
+// The account page has a single proof input. If it parses as an IP, the IP set is tried; a
+// usable-password-shaped value is also tried against the password set (both run when
 // applicable, so a password that happens to look odd still gets its chance). Honours BOTH the
-// per-address and (when clientIp is supplied) the per-IP throttle. Returns { ok, reason, method? }.
-// clientIp is optional — omitting it preserves the original address-only behaviour, so any caller
-// that doesn't have a request IP handy is unaffected.
+// per-(address, origin) and (when clientIp is supplied) the per-IP throttle.
+// Returns { ok, reason, method?, slot?, age_seconds? }.
+//   slot  'set' for a live row, 'anchor' ONLY for an evicted anchor. index.js
+//         requireBothProofs refuses 'anchor' outright (§J3-4).
+//   age_seconds  from first_seen_at, which never moves. NULL → null, which every caller
+//         already treats as OLD — those rows predate the timestamps, not the attack.
+// clientIp is optional — omitting it preserves the original address-only behaviour, so any
+// caller without a request IP (the admin verify-owner tool) is unaffected.
+//
+// COST: ONE scrypt for the whole submission, plus one per legacy v1 row. The v2 digest does
+// not depend on the kind, so the same digest is reused for both sets; the small memo below is
+// what keeps that true when canonicalising the input changes it (a typed `203.0.113.09`).
+// §F2's per-IP throttle is sized against this number — see audit §F2 before changing it.
 async function verifyOwnerProof(db, grinAddress, submitted, clientIp, opts) {
   const allowAnchor = !(opts && opts.allowAnchor === false);
   const cip = clientIp ? canonicalizeIp(clientIp) : null;
@@ -504,20 +710,16 @@ async function verifyOwnerProof(db, grinAddress, submitted, clientIp, opts) {
   const raw = typeof submitted === 'string' ? submitted.trim() : '';
   if (!raw) return { ok: false, reason: 'proof_required' };
 
-  let row;
+  let acct, ipRows, passRows;
   try {
-    row = db.prepare(
-      `SELECT last_ip, prev_ip, last_pass_hash, prev_pass_hash,
-              last_ip_at, prev_ip_at, last_pass_at, prev_pass_at,
-              anchor_ip, anchor_pass_hash, anchor_set_at
-       FROM miner_accounts WHERE grin_address = ?`
-    ).get(grinAddress);
+    acct = db.prepare('SELECT proof_salt FROM miner_accounts WHERE grin_address = ?').get(grinAddress);
+    if (!acct) return { ok: false, reason: 'account_not_found' };
+    ipRows = _proofRows(db, grinAddress, 'ip');
+    passRows = _proofRows(db, grinAddress, 'pass');
   } catch (e) {
     return { ok: false, reason: 'lookup_failed' };
   }
-  if (!row) return { ok: false, reason: 'account_not_found' };
-  if (!row.last_ip && !row.prev_ip && !row.last_pass_hash && !row.prev_pass_hash &&
-      !row.anchor_ip && !row.anchor_pass_hash) {
+  if (ipRows.length === 0 && passRows.length === 0) {
     return { ok: false, reason: 'no_recorded_proof' };
   }
 
@@ -542,28 +744,38 @@ async function verifyOwnerProof(db, grinAddress, submitted, clientIp, opts) {
     // the miner they are trying to help.
     if (cip) _registerFail(grinAddress, 0);
   };
-  const hit = (method, slot, at) => {
+  const hit = (method, row) => {
     clearAll();
-    return { ok: true, reason: 'match', method, slot, age_seconds: age(at) };
+    return {
+      ok: true,
+      reason: 'match',
+      method,
+      // A LIVE anchor is an ordinary member — labelling it 'anchor' would needlessly bar an
+      // actively-mining owner from the destination gate (§17.2 #4).
+      slot: isLiveProof(row) ? 'set' : 'anchor',
+      age_seconds: age(row.first_seen_at)
+    };
   };
+
+  // An address with no salt can hold no v2 rows, so skip the KDF entirely and let the v1 scan
+  // do the work. Verify must never MINT a salt: it is a read path, and a write here would let
+  // an unauthenticated probe create state on an address it does not own.
+  const digests = new Map();
+  const v2of = async (v) => {
+    if (!acct.proof_salt) return null;
+    if (!digests.has(v)) digests.set(v, await hashProofV2(v, acct.proof_salt));
+    return digests.get(v);
+  };
+  const usable = (row) => !!row && (allowAnchor || isLiveProof(row));
 
   const ip = canonicalizeIp(raw);
   if (net.isIP(ip)) {
-    if (await matchesStoredIp(ip, row.last_ip)) return hit('ip', 'last', row.last_ip_at);
-    if (await matchesStoredIp(ip, row.prev_ip)) return hit('ip', 'prev', row.prev_ip_at);
-    // Anchor last: it is the weakest slot (unrevocable), so a live window value must win the
-    // slot label when both match, or an active miner would be needlessly barred from §J3-1's
-    // destination gate.
-    if (allowAnchor && await matchesStoredIp(ip, row.anchor_ip)) {
-      return hit('ip', 'anchor', row.anchor_set_at);
-    }
+    const row = await _matchProofRow(ipRows, ip, await v2of(ip));
+    if (usable(row)) return hit('ip', row);
   }
   if (isUsablePassword(raw, db)) {
-    if (await verifyHashedProof(raw, row.last_pass_hash)) return hit('password', 'last', row.last_pass_at);
-    if (await verifyHashedProof(raw, row.prev_pass_hash)) return hit('password', 'prev', row.prev_pass_at);
-    if (allowAnchor && await verifyHashedProof(raw, row.anchor_pass_hash)) {
-      return hit('password', 'anchor', row.anchor_set_at);
-    }
+    const row = await _matchProofRow(passRows, raw, await v2of(raw));
+    if (usable(row)) return hit('password', row);
   } else if (!net.isIP(ip)) {
     // Not an IP, and unusable as a password — so it was never captured and can never match.
     // Report WHY (too short / too long / too common), and deliberately do NOT count it toward
@@ -576,62 +788,157 @@ async function verifyOwnerProof(db, grinAddress, submitted, clientIp, opts) {
   return { ok: false, reason: 'no_match' };
 }
 
-// ─── One-time startup migration: plaintext last_ip/prev_ip → v1$ hashes ─────
-// Runs in the background (async scrypt, sequential) so startup isn't blocked; verify accepts
-// both forms while it runs. Idempotent: hashed values are skipped by the WHERE clause.
-async function migrateOwnerProofHashes(db) {
+// ─── One-time startup migration: the 2-slot window → the proof set (§17.2 #9) ───────────────
+// Copies miner_accounts' ten legacy proof columns into `miner_proofs`, then NULLs them.
+//
+// THE NULL IS THE IDEMPOTENCY PROOF. There is no marker table (repo style): the SELECT below
+// only finds accounts that still hold a legacy VALUE, so a second run reads nothing and writes
+// nothing. It subsumes both jobs of the functions it replaces — migrateOwnerProofHashes()
+// (plaintext → hash) and backfillProofAnchors() (seed the anchor) — which are DELETED.
+//
+// Synchronous, and it MUST stay ahead of the stratum listener, for backfillProofAnchors()'s
+// original reason: an account that reached its first post-upgrade capture with an empty set
+// would anchor to whoever mined that share, not to the owner.
+//
+// Mapping (§17.2 #9). The legacy slots hold hash STRINGS that were copied byte-for-byte
+// between columns, so string equality is exactly "the same value":
+//   anchor  → is_anchor = 1. Live when it equals `last` or `prev`; otherwise it was already
+//             outside the window, so it lands evicted, stamped with anchor_set_at.
+//   last,
+//   prev    → live rows, first_seen_at = last_*_at / prev_*_at (NULL = unknown = OLD, the
+//             existing rule that requireBothProofs already implements).
+// Rows are inserted anchor → prev → last so that `id` — the tiebreaker when timestamps are
+// unknown — runs oldest to newest.
+function migrateProofSet(db) {
+  let accounts = 0, inserted = 0;
   try {
     const rows = db.prepare(
-      `SELECT grin_address, last_ip, prev_ip FROM miner_accounts
-       WHERE (last_ip IS NOT NULL AND last_ip NOT LIKE 'v1$%')
-          OR (prev_ip IS NOT NULL AND prev_ip NOT LIKE 'v1$%')`
+      `SELECT grin_address, created_at,
+              last_ip, prev_ip, anchor_ip, last_ip_at, prev_ip_at,
+              last_pass_hash, prev_pass_hash, anchor_pass_hash,
+              last_pass_at, prev_pass_at, anchor_set_at
+         FROM miner_accounts
+        WHERE last_ip IS NOT NULL OR prev_ip IS NOT NULL OR anchor_ip IS NOT NULL
+           OR last_pass_hash IS NOT NULL OR prev_pass_hash IS NOT NULL
+           OR anchor_pass_hash IS NOT NULL`
     ).all();
+    if (rows.length === 0) return 0;
+
+    const insert = db.prepare(
+      `INSERT OR IGNORE INTO miner_proofs
+         (grin_address, kind, hash, first_seen_at, last_seen_at, is_anchor, evicted_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
+    );
+    const clear = db.prepare(
+      `UPDATE miner_accounts
+          SET last_ip = NULL, prev_ip = NULL, anchor_ip = NULL,
+              last_ip_at = NULL, prev_ip_at = NULL,
+              last_pass_hash = NULL, prev_pass_hash = NULL, anchor_pass_hash = NULL,
+              last_pass_at = NULL, prev_pass_at = NULL, anchor_set_at = NULL,
+              updated_at = unixepoch()
+        WHERE grin_address = ?`
+    );
+
     for (const r of rows) {
-      const li = (r.last_ip && !r.last_ip.startsWith('v1$'))
-        ? await hashProof(canonicalizeIp(r.last_ip)) : r.last_ip;
-      const pi = (r.prev_ip && !r.prev_ip.startsWith('v1$'))
-        ? await hashProof(canonicalizeIp(r.prev_ip)) : r.prev_ip;
-      db.prepare(
-        'UPDATE miner_accounts SET last_ip = ?, prev_ip = ?, updated_at = unixepoch() WHERE grin_address = ?'
-      ).run(li, pi, r.grin_address);
+      const fallback = r.created_at || 0;
+      const plan = [];
+      for (const kind of ['ip', 'pass']) {
+        const anchorVal = kind === 'ip' ? r.anchor_ip : r.anchor_pass_hash;
+        const lastVal = kind === 'ip' ? r.last_ip : r.last_pass_hash;
+        const prevVal = kind === 'ip' ? r.prev_ip : r.prev_pass_hash;
+        const lastAt = kind === 'ip' ? r.last_ip_at : r.last_pass_at;
+        const prevAt = kind === 'ip' ? r.prev_ip_at : r.prev_pass_at;
+        const entries = [];
+        // Both slots of one kind may hold the same stored string (an anchor backfilled from
+        // `last`, or a rotation that carried `last` down to `prev`). That is ONE row: keep the
+        // OLDEST first_seen_at, the NEWEST last_seen_at, the anchor flag from whichever slot
+        // had it, and live beats evicted.
+        const push = (val, firstAt, isAnchor, evictedAt) => {
+          const v = _normalizeLegacy(val, kind);
+          if (!v) return;
+          const dup = entries.find((e) => e.value === v.value && e.hashed === v.hashed);
+          if (dup) {
+            dup.firstAt = _olderStamp(dup.firstAt, firstAt);
+            dup.seenAt = Math.max(dup.seenAt, firstAt === null || firstAt === undefined ? fallback : firstAt);
+            dup.isAnchor = dup.isAnchor || isAnchor;
+            if (evictedAt === null) dup.evictedAt = null;
+            return;
+          }
+          entries.push({
+            kind, value: v.value, hashed: v.hashed,
+            firstAt: (firstAt === null || firstAt === undefined) ? null : firstAt,
+            seenAt: (firstAt === null || firstAt === undefined) ? fallback : firstAt,
+            isAnchor, evictedAt
+          });
+        };
+        // An anchor that matches neither window slot was already outside the window, so it
+        // arrives evicted. `|| 0` because evicted_at must be NOT NULL to mean "not live" —
+        // an unknown eviction time is still an eviction.
+        push(anchorVal, r.anchor_set_at, 1, (r.anchor_set_at || fallback || 0));
+        push(prevVal, prevAt, 0, null);
+        push(lastVal, lastAt, 0, null);
+        plan.push(...entries);
+      }
+      if (plan.length === 0) { clear.run(r.grin_address); continue; }
+
+      // Hash any pre-v1 PLAINTEXT value before opening the transaction: scryptSync is ~16 MB
+      // and ~100 ms, and holding the write lock across it buys nothing. No VPS has ever held
+      // one of these — the column has stored hashes since 2026-07-17 — so this is a
+      // correctness path, not a hot one.
+      let salt = null;
+      for (const e of plan) {
+        if (e.hashed) continue;
+        if (!salt) salt = getOrCreateSalt(db, r.grin_address);
+        if (!salt) { e.skip = true; continue; }
+        e.value = hashProofV2Sync(e.value, salt);
+        e.hashed = true;
+      }
+
+      const tx = db.transaction(() => {
+        for (const e of plan) {
+          if (e.skip) continue;
+          const res = insert.run(r.grin_address, e.kind, e.value, e.firstAt, e.seenAt, e.isAnchor, e.evictedAt);
+          if (res.changes) inserted++;
+        }
+        // Defensive: an account that somehow already held a full set AND legacy columns (a
+        // hand-edited DB) must not come out of the migration over the cap.
+        for (const kind of ['ip', 'pass']) {
+          const now = Math.floor(Date.now() / 1000);
+          const set = _proofRows(db, r.grin_address, kind);
+          if (set.filter(isLiveProof).length > PROOF_SET_MAX) _makeRoom(db, set, now, 0);
+        }
+        clear.run(r.grin_address);
+      });
+      tx();
+      accounts++;
     }
-    if (rows.length > 0) {
-      console.log(`[owner-proof] migrated ${rows.length} account(s) from plaintext IPs to salted hashes`);
-    }
+
+    console.log(`[owner-proof] proof-set migration: ${inserted} row(s) from ${accounts} account(s); legacy columns cleared`);
+    return accounts;
   } catch (e) {
-    console.error(`[owner-proof] hash migration failed: ${e.message}`);
+    console.error(`[owner-proof] proof-set migration failed: ${e.message}`);
+    return accounts;
   }
 }
 
-// ─── One-time startup backfill: anchor the proof each existing account already holds ────────
-// The anchor slot (§J3-4) is write-once at first capture, which leaves every PRE-EXISTING
-// account anchorless — and if the anchor were instead filled by whatever arrives next, the
-// first hostile session after an upgrade would become the permanent proof of somebody else's
-// address. So seed it from the value the account already holds, before any capture can run.
-//
-// Synchronous on purpose (this is a column copy, not a KDF — the values are already hashed),
-// and it must run BEFORE the stratum listener accepts a share. Idempotent: the WHERE clause
-// skips rows that already have an anchor. anchor_set_at is backdated to the slot's own
-// capture time when one is known, so a backfilled anchor is not treated as freshly written.
-function backfillProofAnchors(db) {
-  try {
-    const info = db.prepare('SELECT COUNT(*) AS c FROM miner_accounts').get();
-    if (!info || !info.c) return 0;
-    const res = db.prepare(
-      `UPDATE miner_accounts
-          SET anchor_ip = COALESCE(anchor_ip, last_ip),
-              anchor_pass_hash = COALESCE(anchor_pass_hash, last_pass_hash),
-              anchor_set_at = COALESCE(anchor_set_at, last_ip_at, last_pass_at, created_at)
-        WHERE (anchor_ip IS NULL AND last_ip IS NOT NULL)
-           OR (anchor_pass_hash IS NULL AND last_pass_hash IS NOT NULL)`
-    ).run();
-    const n = res.changes || 0;
-    if (n > 0) console.log(`[owner-proof] anchored ${n} existing account(s) to their current proof`);
-    return n;
-  } catch (e) {
-    console.error(`[owner-proof] anchor backfill failed: ${e.message}`);
-    return 0;
-  }
+// A legacy slot value as it should be STORED. v1$/v2$ strings carry across untouched; anything
+// else is pre-v1 plaintext from a deploy that predates hashing (IPs only in practice) and is
+// canonicalised here so it hashes the way a typed one will. Returns null for an empty slot.
+function _normalizeLegacy(val, kind) {
+  if (val === null || val === undefined || val === '') return null;
+  const str = String(val);
+  if (str.startsWith('v1$') || str.startsWith('v2$')) return { value: str, hashed: true };
+  const plain = kind === 'ip' ? canonicalizeIp(str) : str.trim();
+  return plain ? { value: plain, hashed: false } : null;
+}
+
+// The older of two capture stamps, where NULL means "unknown, therefore OLD" — the rule
+// requireBothProofs already applies to age_seconds. An unknown stamp wins, because the value
+// it describes genuinely predates the timestamp columns.
+function _olderStamp(a, b) {
+  if (a === null || a === undefined) return null;
+  if (b === null || b === undefined) return null;
+  return Math.min(a, b);
 }
 
 // Audit an ownership-gated attempt to admin_audit_log (admin_id NULL — actor is a miner address,
@@ -718,8 +1025,10 @@ module.exports = {
   PASS_MAX,
   recordOwnerEvidence,
   verifyOwnerProof,
-  migrateOwnerProofHashes,
-  backfillProofAnchors,
+  migrateProofSet,
+  hashProof,
+  getOrCreateSalt,
+  PROOF_SET_MAX,
   auditOwnerProof,
   isLockedOut,
   underAttack,

@@ -12,7 +12,7 @@
   <!-- ===== DESCRIPTION & KEYWORDS ===== -->
   <title>Donate — Support the Prize Pool | GRINIUM Mining Pool</title>
   <meta name="description" content="Support the GRINIUM mining pool prize pool: donate a slice of your mining payouts with a donate worker tag, or send a one-off Slatepack donation. See the donor wall of supporters.">
-  <meta name="keywords" content="grin donation, mining pool prize pool, donate mining payouts, slatepack donation, grin pool giveaway, donor wall">
+  <meta name="keywords" content="grin donation, mining pool prize pool, donate mining payouts, slatepack donation, grin pool giveaway, donor wall, donor league">
 
   <!-- ===== OPEN GRAPH ===== -->
   <meta property="og:type" content="website">
@@ -144,6 +144,48 @@
       padding: 1.2rem; text-align: center; font-family: var(--mono, monospace);
       font-size: 12px; letter-spacing: .12em; color: var(--text-mute, #6b7480);
     }
+    /* Display name (design §16.7). Names are lowercase a-z0-9_- up to 32 chars, but the
+       operator's censored MARKER is `<censored-donor>` — every name goes through escHtml and
+       break-all keeps a 32-char name inside a 390 px card. The first line of a card clears
+       the absolutely-positioned rank badge on the right. */
+    .donor-name {
+      font-weight: 700; font-size: 15px; color: var(--text, #e6edf3); word-break: break-all;
+    }
+    .donor-name.censored {
+      font-weight: 400; font-size: 12px; color: var(--text-mute, #6b7480);
+      font-family: var(--mono, monospace);
+    }
+    .donor-card > .donor-name, .donor-card > .addr-plain { display: block; padding-right: 44px; }
+    .donor-lifetime, .donor-loyalty {
+      margin-top: 3px; font-family: var(--mono, monospace); font-size: 11.5px;
+      color: var(--text-dim, #9aa4b2);
+    }
+    .donor-loyalty b { color: var(--text, #e6edf3); font-weight: 600; }
+    .donor-ranking { margin: 0 0 .8rem; }
+    /* Past-donors strip: nothing in the window, never deleted (§16.1 #11). */
+    .donor-past {
+      margin-top: 14px; padding-top: 10px;
+      border-top: 1px solid var(--border, rgba(255,255,255,.10));
+    }
+    .donor-past-head {
+      margin-bottom: 6px; font-size: 11px; letter-spacing: .12em; text-transform: uppercase;
+      color: var(--text-mute, #6b7480);
+    }
+    .donor-past-list { list-style: none; margin: 0; padding: 0; }
+    .donor-past-list li {
+      display: flex; flex-wrap: wrap; gap: 2px 12px; align-items: baseline;
+      padding: 5px 0; font-size: 12px;
+      border-bottom: 1px dashed var(--border, rgba(255,255,255,.08));
+    }
+    .donor-past-list li > :first-child { flex: 1 1 160px; min-width: 0; }
+    .donor-past-list .donor-name { font-size: 13px; }
+    .donor-past-amt { font-family: var(--mono, monospace); color: var(--accent, #7cb342); white-space: nowrap; }
+    .donor-past-date { font-family: var(--mono, monospace); color: var(--text-dim, #9aa4b2); white-space: nowrap; }
+    .donor-past-more {
+      margin-top: 6px; font-family: var(--mono, monospace); font-size: 11.5px;
+      color: var(--text-mute, #6b7480);
+    }
+    .donor-disclaimer { margin-top: 12px; font-size: .8rem; }
 
     /* Where-donations-go fund list. */
     .fund-list { margin: .3rem 0 .3rem 1.2rem; }
@@ -214,16 +256,21 @@
                     <table class="data-table">
                         <thead><tr><th>Worker name</th><th>Result</th></tr></thead>
                         <tbody>
-                            <tr><td><code>grin1…address.donate10</code></td><td class="ok">Donate 10% of your payouts</td></tr>
-                            <tr><td><code>grin1…address.rig01-donate5</code></td><td class="ok">Worker “rig01”, donate 5%</td></tr>
+                            <tr><td><code>grin1…address.donate10</code></td><td class="ok">Donate 10% of your payouts — the wall below shows your masked address</td></tr>
+                            <tr><td><code>grin1…address.yourbrandname-donate10</code></td><td class="ok">Donate 10% — and the name on your tagged rig becomes your <strong>donor name</strong> on the wall below (lowercase, up to 32 characters); plain <code>donate10</code> shows your masked address instead</td></tr>
                             <tr><td><code>grin1…address.donate0</code></td><td class="no">0% — turn a donation back off</td></tr>
                             <tr><td><code>grin1…address.rig01</code></td><td class="no">No donation (normal worker)</td></tr>
                             <tr><td><code>donate101</code>, <code>donate-1</code>, <code>donatexx</code></td><td class="no">Ignored — treated as a normal worker name, donates nothing</td></tr>
+                            <tr><td><code>donate5</code> → <code>donate20</code></td><td>To <strong>raise</strong> a tag you already set, go through <code>donate0</code> first (let it mine a few shares), then reconnect with <code>donate20</code>. A stored donation can only be lowered directly — so nobody else who mines to your address can ever raise it.</td></tr>
                         </tbody>
                     </table>
                     <p class="panel-note">Only <code>donate0</code>–<code>donate100</code> donate. Anything out of
                         range or mistyped is safely treated as an ordinary worker name — a typo can never donate
-                        more than you meant. The donation is applied to each payout as it's calculated.</p>
+                        more than you meant. A tag takes effect after a few accepted shares; the slice is taken
+                        from each block reward as it matures, which is also when you first appear on the wall below.
+                        Your current setting is shown on your account page. To <strong>change your donor name</strong>,
+                        use the same ceremony as a raise: <code>donate0</code>, a few shares, then
+                        <code>newname-donate10</code> — a plain <code>donate10</code> at that step removes the name.</p>
                 </div>
             </div>
 
@@ -240,13 +287,22 @@
                 </div>
             </div>
 
-            <!-- ═══ D-03 · DONOR WALL ═══ -->
+            <!-- ═══ D-03 · DONOR LEAGUE (design §16.6/§16.7) ═══ -->
             <div class="panel"><span class="screws"></span>
-                <h2 class="panel-title"><span class="tag">D-03</span> Donor wall
+                <h2 class="panel-title"><span class="tag">D-03</span> Donor league
                     <span class="right">every miner who has donated payout slices</span></h2>
                 <div class="panel-body">
+                    <!-- Rewritten from /api/pool/donors `ranking` once it answers; this is the
+                         window-agnostic fallback so a failed fetch never states a wrong number. -->
+                    <p class="panel-note donor-ranking" id="donor-ranking">Ranked by GRIN donated in the ranking window × loyalty.</p>
                     <div class="donor-grid" id="donor-grid" style="display:none;"></div>
                     <div class="donor-empty" id="donor-empty">LOADING DONORS…</div>
+                    <div class="donor-past" id="donor-past" style="display:none;">
+                        <div class="donor-past-head">Past donors <span class="dim">— nothing in the window, never forgotten</span></div>
+                        <ul class="donor-past-list" id="donor-past-list"></ul>
+                        <div class="donor-past-more" id="donor-past-more" style="display:none;"></div>
+                    </div>
+                    <p class="panel-note donor-disclaimer">Names are chosen by the donors and are not verified by the pool.</p>
                 </div>
             </div>
 
@@ -324,7 +380,7 @@
             setTimeout(function () { btn.textContent = old; }, 1500);
         }
 
-        // ── Donor wall (/api/pool/donors) ──────────────────────────────────────
+        // ── Donor league (/api/pool/donors v2 — design §16.6/§16.7) ─────────────
         (function () {
             'use strict';
 
@@ -332,6 +388,7 @@
                 return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
             }
             function truncAddr(a) {
+                a = String(a || '');
                 return a.length > 22 ? a.slice(0, 12) + '…' + a.slice(-6) : a;
             }
             // Dates shown as plain UTC days (page-wide UTC note in the header strip).
@@ -339,34 +396,95 @@
                 return sec ? new Date(sec * 1000).toISOString().slice(0, 10) : '—';
             }
             function fmtGrin(v) {
-                return (typeof v === 'number' ? v : 0).toFixed(4);
+                return (typeof v === 'number' && isFinite(v) ? v : 0).toFixed(4);
+            }
+            // ×1.4, ×2, ×3 — up to two decimals, no trailing zeros.
+            function fmtMult(m) {
+                m = typeof m === 'number' && isFinite(m) ? m : 1;
+                return String(Math.round(m * 100) / 100);
+            }
+            function plural(n, one, many) { return n === 1 ? one : many; }
+
+            var windowDays = 0; // set from `ranking` before any card renders
+
+            // What a card is headed by (§16.7): the donor's name when the API says `shown`; the
+            // operator's censored marker when the API sent one (name_state `censored`); else the
+            // masked address the API already applied. EVERY name goes through escHtml — the
+            // marker contains angle brackets and must display literally, and the login grammar
+            // is not a reason to trust a string that reaches innerHTML.
+            function nameCell(d) {
+                if (d.name != null && d.name_state === 'shown') {
+                    return '<span class="donor-name">' + escHtml(d.name) + '</span>';
+                }
+                if (d.name != null) {
+                    return '<span class="donor-name censored">' + escHtml(d.name) + '</span>';
+                }
+                // Plain text, no link and no `title` (audit §J11-1): the address is masked
+                // server-side and a donor wall is a thank-you, not an identity register.
+                return '<span class="addr-plain">' + escHtml(truncAddr(d.address)) + '</span>';
             }
 
-            function donorCard(d, idx) {
-                var medal = ['🥇', '🥈', '🥉'][idx] || ('#' + (idx + 1));
-                var badge = d.current_percent > 0
-                    ? '<span class="donor-badge on">donating ' + escHtml(d.current_percent) + '%</span>'
+            function medal(rank) {
+                return rank >= 1 && rank <= 3 ? ['🥇', '🥈', '🥉'][rank - 1] : '#' + escHtml(rank);
+            }
+
+            function leagueCard(d) {
+                var inWin = typeof d.in_window_donated === 'number' ? d.in_window_donated : 0;
+                var life = typeof d.total_donated === 'number' ? d.total_donated : 0;
+                var months = Number(d.active_months) || 0;
+                var rigs = Number(d.rigs_online) || 0;
+                var pct = Number(d.current_percent) || 0;
+                var badge = pct > 0
+                    ? '<span class="donor-badge on">donating ' + escHtml(pct) + '%</span>'
                     : '<span class="donor-badge off">paused</span>';
-                // Plain text, no link and no `title` (audit §J11-1, 2026-09-02). /api/pool/donors
-                // masks `address` now; the old card carried the FULL address twice (href + title),
-                // and a donor wall is a thank-you, not an identity register. See the note in
-                // miners-stats.html addrCell().
+                // Lifetime printed only when it differs from the window figure (§16.7) — with an
+                // all-time window the two are the same number and printing it twice reads as a bug.
+                var lifetime = Math.abs(life - inWin) > 5e-10
+                    ? '<div class="donor-lifetime">' + fmtGrin(life) + ' GRIN lifetime</div>'
+                    : '';
                 return '<div class="donor-card">' +
-                    '<div class="donor-rank">' + medal + '</div>' +
-                    '<span class="addr-plain">' + escHtml(truncAddr(d.address)) + '</span>' +
-                    '<div class="donor-total">' + fmtGrin(d.total_donated) + ' <small>GRIN</small></div>' +
+                    '<div class="donor-rank">' + medal(d.rank) + '</div>' +
+                    nameCell(d) +
+                    '<div class="donor-total">' + fmtGrin(inWin) + ' <small>GRIN' + (windowDays > 0 ? ' in window' : '') + '</small></div>' +
+                    lifetime +
+                    '<div class="donor-loyalty">×<b>' + escHtml(fmtMult(d.multiplier)) + '</b> loyalty · <b>' + escHtml(months) + '</b> ' + plural(months, 'month', 'months') + '</div>' +
                     badge +
                     '<div class="donor-meta">' +
-                        'First donation <b>' + utcDay(d.first_donated_at) + '</b><br>' +
-                        'Most recent <b>' + utcDay(d.last_donated_at) + '</b><br>' +
-                        'Donated on <b>' + escHtml(d.donation_count) + '</b> payout' + (d.donation_count === 1 ? '' : 's') +
+                        'since <b>' + utcDay(d.first_donated_at) + '</b> · ' +
+                        '<b>' + escHtml(rigs) + '</b> ' + plural(rigs, 'rig', 'rigs') + ' online' +
                     '</div>' +
                 '</div>';
             }
 
+            // Past strip row: name/masked + lifetime GRIN + last donation (§16.7).
+            function pastRow(d) {
+                return '<li>' + nameCell(d) +
+                    '<span class="donor-past-amt">' + fmtGrin(d.total_donated) + ' GRIN</span>' +
+                    '<span class="donor-past-date">last ' + utcDay(d.last_donated_at) + '</span>' +
+                '</li>';
+            }
+
+            // The one ranking sentence (§16.6, "published on the page in one sentence"), built
+            // from the settings the API sends so it can never disagree with the score.
+            function rankingSentence(r) {
+                r = r || {};
+                var w = Number(r.window_days) || 0;
+                var p = Number(r.loyalty_percent_per_month);
+                var c = Number(r.loyalty_cap);
+                if (!isFinite(p) || p < 0) p = 0;
+                if (!isFinite(c) || c < 1) c = 1;
+                var span = w > 0 ? 'in the last ' + w + ' ' + plural(w, 'day', 'days') : 'all-time';
+                return 'Ranked by GRIN donated ' + span + ' × loyalty (+' + p + ' % per month you’ve donated in, up to ×' + c + ').';
+            }
+
             function render(data) {
-                var donors = (data && data.donors) || [];
+                var league = (data && Array.isArray(data.league)) ? data.league : [];
+                var past = (data && data.past && Array.isArray(data.past.donors)) ? data.past.donors : [];
+                var more = (data && data.past && Number(data.past.more)) || 0;
                 var totals = (data && data.totals) || {};
+                var ranking = (data && data.ranking) || {};
+                windowDays = Number(ranking.window_days) || 0;
+
                 var set = function (id, v) {
                     var el = document.getElementById(id);
                     if (el && v != null) el.textContent = v;
@@ -374,22 +492,52 @@
                 set('dn-total', fmtGrin(totals.total_donated) + ' ツ');
                 set('dn-count', totals.donor_count != null ? String(totals.donor_count) : '—');
                 set('dn-active', totals.active_donors != null ? String(totals.active_donors) : '—');
+                set('donor-ranking', rankingSentence(ranking));
 
                 var grid = document.getElementById('donor-grid');
                 var empty = document.getElementById('donor-empty');
-                if (!donors.length) {
-                    empty.textContent = 'NO DONORS YET — BE THE FIRST 💚';
-                    return;
+                var pastBox = document.getElementById('donor-past');
+
+                if (!league.length) {
+                    // A card needs an actual slice, and a slice is only taken when a block
+                    // MATURES — so a new pool has tags set for days before the first card. Say so,
+                    // or the miner who just set donate10 reads "no donors" as "my tag didn't take".
+                    // With past donors but an empty window the page says THAT instead.
+                    var tagged = Number(totals.active_donors || 0);
+                    empty.textContent = past.length
+                        ? 'NO DONATIONS IN THE RANKING WINDOW YET — past donors below'
+                        : tagged > 0
+                            ? tagged + (tagged === 1 ? ' MINER HAS' : ' MINERS HAVE') + ' A DONATE TAG SET 💚 — the first slice is taken when the pool’s next block matures'
+                            : 'NO DONORS YET — BE THE FIRST 💚';
+                    empty.style.display = '';
+                    grid.style.display = 'none';
+                } else {
+                    grid.innerHTML = league.map(leagueCard).join('');
+                    grid.style.display = '';
+                    empty.style.display = 'none';
                 }
-                grid.innerHTML = donors.map(donorCard).join('');
-                grid.style.display = '';
-                empty.style.display = 'none';
+
+                if (past.length) {
+                    document.getElementById('donor-past-list').innerHTML = past.map(pastRow).join('');
+                    var moreEl = document.getElementById('donor-past-more');
+                    if (more > 0) {
+                        moreEl.textContent = 'and ' + more + ' more past ' + plural(more, 'donor', 'donors');
+                        moreEl.style.display = '';
+                    } else {
+                        moreEl.style.display = 'none';
+                    }
+                    pastBox.style.display = '';
+                } else {
+                    pastBox.style.display = 'none';
+                }
             }
 
-            fetch('/api/pool/donors', { credentials: 'same-origin' })
+            // 2xx-only read: a non-2xx (a 429 is an object with `error`) must never render as
+            // data — same contract as Auth.read on the other public pages (audit §J15-2).
+            fetch('/api/pool/donors', { credentials: 'same-origin', headers: { 'Accept': 'application/json' } })
                 .then(function (r) { return r.ok ? r.json() : null; })
                 .then(function (json) {
-                    if (json) { render(json); }
+                    if (json && typeof json === 'object') { render(json); }
                     else { document.getElementById('donor-empty').textContent = 'DONOR DATA UNAVAILABLE'; }
                 })
                 .catch(function () {

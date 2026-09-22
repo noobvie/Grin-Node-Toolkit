@@ -245,5 +245,88 @@ console.log('\n[8] §J14-9 — ad counters are labelled unverified');
   ok('control — publicByPlacement still uses the same serving predicate',
      /is_active = 1\s*\n\s*AND \(start_at IS NULL OR start_at <= \?\)\s*\n\s*AND \(end_at IS NULL OR end_at >= \?\)/.test(adsLib));
 }
+// ── design §16.8 — admin → Donors page (donor-name moderation + the moved donation settings) ──
+console.log('\n[9] §16.8 — donors.html');
+{
+  const exists = fs.existsSync(path.join(PANEL, 'donors.html'));
+  ok('donors.html exists', exists);
+  const donors = exists ? read('donors.html') : '';
+  const shell = read('admin-shell.js');
+
+  // NAV: a Dashboard child directly after Miners — read the NAV block itself, not the file.
+  const navBlock = (shell.match(/var NAV = \[([\s\S]*?)\n  \];/) || [])[1] || '';
+  const files = [...navBlock.matchAll(/file: '([a-z0-9-]+\.html)'/g)].map((m) => m[1]);
+  ok('NAV lists donors.html directly after miners.html',
+     files.indexOf('donors.html') === files.indexOf('miners.html') + 1 && files.indexOf('miners.html') > 0,
+     files.join(','));
+  ok('the nav badge is a plain count, painted only for a positive number',
+     /decorateDonorBadge/.test(shell) && /typeof d\.new_names_7d === 'number'/.test(shell) && /if \(!\(n > 0\)\) return;/.test(shell));
+
+  // Settings ids: every id inside the settings form is either an incentives key or opted
+  // out with settings-skip — one stray id fails the whole save (memory
+  // project_pool_admin_settings_form). Checked against the LIVE defaults, not a hand list.
+  const PoolSettings = require(path.resolve(__dirname, '../lib/pool-settings.js'));
+  const keys = new Set(Object.keys(PoolSettings.defaults.incentives));
+  const form = (donors.match(/<div id="donation-settings">([\s\S]*?)<\/section>/) || [])[1] || '';
+  ok('the settings form exists on the page', form.length > 0);
+  const inputs = [...form.matchAll(/<(input|select|textarea)\b([^>]*)>/gi)];
+  const stray = [], present = new Set();
+  for (const m of inputs) {
+    const attrs = m[2];
+    const id = (attrs.match(/\bid="([^"]+)"/) || [])[1];
+    if (!id) continue;
+    if (/\bclass="[^"]*\bsettings-skip\b/.test(attrs)) continue;
+    if (keys.has(id)) present.add(id); else stray.push(id);
+  }
+  ok('no input id in the form that is not an incentives key (or settings-skip)', stray.length === 0, stray.join(','));
+  for (const k of ['allow_miner_donations', 'donation_address', 'donor_name_blocklist', 'donor_censored_display',
+                   'donor_rank_window_days', 'donor_loyalty_percent_per_month', 'donor_loyalty_cap', 'donor_name_expiry_months']) {
+    ok(`form carries ${k}`, present.has(k));
+  }
+  ok('donation_address may be saved EMPTY (settings-allow-empty) — "leave blank" must be able to persist',
+     /id="donation_address"[^>]*class="[^"]*settings-allow-empty/.test(form));
+  ok('the censored-display select offers exactly the closed enum',
+     [...(form.match(/<select id="donor_censored_display"[\s\S]*?<\/select>/) || [''])[0].matchAll(/value="([a-z]+)"/g)]
+       .map((m) => m[1]).join(',') === 'masked,marker');
+
+  // The two moved keys must exist on exactly one page: here, not on settings-incentives.html.
+  const inc = read('settings-incentives.html').replace(/<!--[\s\S]*?-->/g, '');   // the comment names them on purpose
+  ok('settings-incentives.html no longer carries allow_miner_donations', !/id="allow_miner_donations"/.test(inc));
+  ok('settings-incentives.html no longer carries donation_address', !/id="donation_address"/.test(inc));
+  ok('settings-incentives.html points at Donors instead', /href="donors\.html"/.test(inc));
+  const dupes = panelFiles().filter((f) => f !== 'donors.html' && /id="(allow_miner_donations|donation_address)"/.test(read(f)));
+  ok('no other admin page binds the moved keys', dupes.length === 0, dupes.join(','));
+
+  // flash() must be able to reveal: the message element hides INLINE, never via a class that
+  // carries display:none (2026-09-19 — every admin flash was invisible for that reason).
+  ok('the flash targets hide inline, not by class',
+     /id="donor-msg" style="display:none/.test(donors) && /id="settings-msg" style="display:none/.test(donors));
+  const poolCss = fs.readFileSync(path.resolve(__dirname, '../../public_html/css/pool.css'), 'utf8');
+  const msgRules = (poolCss.match(/\.error-msg \{[^}]*\}/) || [''])[0] + (poolCss.match(/\.success-msg \{[^}]*\}/) || [''])[0];
+  ok('.error-msg/.success-msg carry no display:none', msgRules.length > 0 && !/display:\s*none/.test(msgRules));
+
+  // Row actions pass the address via this.dataset (audit §J14), and use the panel helper for
+  // step-up-gated writes (adminFetch handles the freshAdmin challenge; a bare Auth.fetch
+  // would show "re-authentication required" with no way to complete it).
+  ok('censor/un-censor buttons pass the address via this.dataset',
+     /onclick="censorDonor\(this\.dataset\.addr\)"/.test(donors) && /onclick="uncensorDonor\(this\.dataset\.addr\)"/.test(donors));
+  ok('the moderation POSTs and the settings save go through adminFetch (step-up aware)',
+     /adminFetch\('\/api\/admin\/donors\/' \+ encodeURIComponent\(addr\)/.test(donors) &&
+     /adminFetch\('\/api\/admin\/settings\/incentives'/.test(donors));
+  ok('the page never uses Auth.read (public pages\' helper) or a bare fetch()',
+     !/Auth\.read\(/.test(donors) && !/[^a-zA-Z.]fetch\(/.test(donors.replace(/adminFetch\(/g, 'X(')));
+  ok('a failed load renders as an error, not as an empty donor list',
+     /data\.success !== true[\s\S]{0,120}setError/.test(donors));
+  ok('the ink on the accent pill is the theme token, not a literal',
+     /\.admin-subnav a \.nav-count \{[^}]*color: var\(--btn-text\)/.test(read('styles.css')));
+  ok('every donor name / word / worker name is escaped before it reaches the row',
+     /escHtml\(d\.donor_name\)/.test(donors) && /escHtml\(d\.donor_censor_word/.test(donors) && /escHtml\(w\.name\)/.test(donors));
+  ok('the rescan counts from the save response are shown', /body\.rescan/.test(donors) && /Rescanned \$\{r\.scanned\}/.test(donors));
+  ok('UTC is stated once on the page', (donors.match(/UTC/g) || []).length >= 1);
+  const home = read('index.html');
+  ok('the Overview shows the 7-day new-names tile from the dashboard field and links to Donors',
+     /id="kpi-donor-names"/.test(home) && /d\.new_donor_names_7d \?\? '—'/.test(home) && /href="donors\.html"/.test(home));
+}
+
 console.log('\n' + (fail ? 'FAILURES' : 'ALL PASS') + ` — ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

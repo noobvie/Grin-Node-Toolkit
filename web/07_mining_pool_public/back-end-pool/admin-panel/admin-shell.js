@@ -24,6 +24,7 @@
     // Dashboard is the overview group: all the live data pages + System Health hang off it.
     { file: 'index.html', title: 'Dashboard', ico: '📊', children: [
         { file: 'miners.html',   title: 'Miners' },
+        { file: 'donors.html',   title: 'Donors' },     // donor-name moderation + donation settings (design §16.8)
         { file: 'payments.html', title: 'Payouts' },
         { file: 'blocks.html',   title: 'Blocks' },
         { file: 'users.html',    title: 'Sessions' },
@@ -292,6 +293,33 @@
 
     // Page title in the browser tab + topbar pool name
     decoratePoolIdentity();
+
+    // "N new donor names this week" on the Donors nav row (design §16.8)
+    decorateDonorBadge();
+  }
+
+  // ── Donors nav badge ─────────────────────────────────────────────────────
+  // One cheap secureAdmin COUNT per page load (/api/admin/donors/summary — not the dashboard
+  // route, which runs a dozen queries). Silent on any failure: before the page's own
+  // API.guardAdminPage() has redirected a logged-out visitor, this may 401, and a badge is
+  // not worth a toast. Rendered only when the count is a positive number, so a stale or
+  // malformed body (a rate-limit 429 is JSON too) can never paint "undefined".
+  function decorateDonorBadge() {
+    var link = sidebar.querySelector('.admin-subnav a[href="donors.html"]');
+    if (!link) return;
+    fetch('/api/admin/donors/summary', { credentials: 'include', cache: 'no-store' })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (d) {
+        var n = d && typeof d.new_names_7d === 'number' ? d.new_names_7d : 0;
+        if (!(n > 0)) return;
+        var b = document.createElement('span');
+        b.className = 'nav-count';
+        b.textContent = String(n);
+        b.title = n + ' new donor name' + (n === 1 ? '' : 's') + ' this week';
+        b.setAttribute('aria-label', b.title);
+        link.appendChild(b);
+      })
+      .catch(function () {});
   }
 
   /* ── In-page section rail ─────────────────────────────────────────────────

@@ -7,7 +7,10 @@
 // the 2-letter country code + a display name — no city, no coordinates, no IP.
 //
 // Map positions therefore carry NO information beyond the country, and the two helpers
-// below say which is which. countryCentroid() is for AGGREGATE markers (hub, gateway,
+// below say which is which. (The one marker that can carry more is a GATEWAY with an
+// operator-declared lat/lng on its pool_locations row — that is the pool's own public server,
+// typed in by the operator, and index.js uses it instead of calling in here.)
+// countryCentroid() is for AGGREGATE markers (hub, gateway without a declared position,
 // miners-of-a-country): the exact centroid, because the country is published in the same
 // payload — scattering the point would hide nothing it doesn't already say, and could only
 // land the marker in a neighbouring country. placeInCountry() is for the one layer that

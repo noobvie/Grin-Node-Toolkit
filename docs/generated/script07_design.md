@@ -2,8 +2,8 @@
 
 > **Covers code as of:** 2026-09-07 for the multi-region surface (§2–§7, §11–§12, rewritten against the live code) · 2026-06-08 for the rest of the §6 endpoint table
 > **Last verified:** 2026-09-07, PARTIAL — **the multi-region surface only**, read against the code: the mode selector + `pool_mode_conflict_check` in `scripts/07_grin_mining_public_pool.sh`, `role`/`region`/`region_ports` in `back-end-pool/lib/config.js`, listener-port region stamping in `lib/stratum-server.js`, `shares.region` + `pool_locations` + `pool_region_metrics_hourly` in `lib/db.js`, the ingestion/health/region routes in `index.js`, and the WireGuard + region-port derivation in `scripts/lib/07_lib_gwctl.sh`. Everything outside that surface — the rest of §6, and §7–§10, §13–§15 — still rests on the 2026-06-08 pass (account + payout routes re-verified 2026-07-13) and was **not** re-checked, with one line-scoped exception: the admin-surface note in the §6 not-built list was corrected 2026-09-07 against `back-end-pool/admin-panel/` and `admin-shell.js`.
-> **Product code last changed:** 2026-09-20 (pairing string carries the public port; gateway Status boot line, §13.12s; anchored ufw test + unmanaged-firewall readout, §13.12t) — `scripts/07_grin_mining_*.sh`, `scripts/lib/07_lib_*.sh`, `web/07_mining_pool_public/`
-> Prose last edited 2026-09-07.
+> **Product code last changed:** 2026-09-22 (§17 Part 2 built — the account page: `public_html/account-settings.html` renders `proofs` as counts, drops the "Evidence changed" banner, warns only past the cap and restates the gate copy for a set of ten; **not VPS-tested**, impl §10.4 "Part 2", §17.6 records the deltas). Same day (§17 Part 1 built — the ownership-proof SET backend: `miner_proofs` + `miner_accounts.proof_salt`, per-address scrypt salt, set capture/verify with LRU eviction and a flagged-not-deleted anchor, `migrateProofSet()` replacing `migrateOwnerProofHashes` and `backfillProofAnchors`, `proofs` on the account and admin miner views, suite 849 → 875; **not VPS-tested**, impl §10.4, §17.6 records the deltas). 2026-09-21 (§16 Part 5 review: two fixes in `lib/donor-names.js` — the rescan parses the list once per walk, not per name, and a separators-only label is no label — §16.12; the same day Parts 1–4 were built in order: login grammar → storage + capture + account view → admin moderation → the public league, impl §10.3 "Part 1"–"Part 4", every part **not VPS-tested**; earlier the same day: `/api/pool/donors` totals over every donor + `active_donors` from live tags, account `is_online` per rig — impl §10.3). 2026-09-20: pairing string carries the public port; gateway Status boot line, §13.12s; anchored ufw test + unmanaged-firewall readout, §13.12t — `scripts/07_grin_mining_*.sh`, `scripts/lib/07_lib_*.sh`, `web/07_mining_pool_public/`
+> Prose last edited 2026-09-22 (§17.6 updated — Parts 1 (backend) and 2 (account page) are built, with each part's deltas from §17 recorded there; Parts 3–5 unrun. Earlier the same day: §17 added — ownership-proof SET of 10 per kind with a per-address salt, replacing the 2-slot window). 2026-09-21 (§16 added — donor names + donor league; §16.11 tracks the build, Parts 1–5 done, Part 6 = VPS acceptance still owed; §16.12 records what building changed against the design and the Part 5 review's findings).
 
 **Product:** `scripts/07_grin_mining_public_pool.sh` + web app under `web/07_mining_pool_public/`.
 **Scope:** the complete public-pool design — architecture, deployment modes, multi-region
@@ -1435,6 +1435,381 @@ so history never renders `undefined`.
 > also hidden by default). It has nothing to do with the payout rail — do not wire the two together.
 
 ---
+
+## 16. Donor names + donor league — DESIGN (2026-09-21; Parts 1–5 BUILT + reviewed the same day, NOT VPS-tested)
+
+Operator idea, settled in discussion 2026-09-21 after the first live-miner test of the donate
+tag: let a donor put a **brand name** on the public donor wall (`donate.html` D-03), make the
+wall **competitive** (amount × loyalty), and keep every donor forever with **post-moderation**
+from the admin panel rather than a review gate. Six build sessions; the per-session prompts are
+kept outside the repo (plans dir) and fold back here when run. Status per part → §16.11; what
+building changed against §16.1–§16.10, and the independent review's findings → §16.12. §16.1–§16.10
+are left as designed — read them with §16.12 beside them.
+
+### 16.1 Decisions (all FINAL unless a build finds a hard reason)
+
+| # | Decision | Why |
+|---|---|---|
+| 1 | Name comes from the **worker label** of the tagged rig: `yourbrandname-donate10` → name `yourbrandname`; plain `donateN` → **masked address** (as today) | Register-free, no new UI for the miner; the tag already lives in the worker name (§J3-5) |
+| 2 | Name is written **only on a set-from-zero** (`donate0` → `donateN`), the same path as a raise (§J6-7). A lower never touches the name | Stratum login is unauthenticated; without this anyone can rename any active donor by mining four shares to their address |
+| 3 | **Post-moderation, accept-all by default.** A name shows as soon as its card exists; the operator censors after the fact | The cheapest way to put text on this page is to donate GRIN and wait for a block ("cost to post"); a review queue would gate the honest 99 % for the troll 1 % |
+| 4 | Censor is **per address and sticky**: a censored donor's later renames stay censored until an admin clears it. Un-censor sets an `allow` override the auto-list respects | Otherwise it is whack-a-mole |
+| 5 | Censored / expired / absent name → the card shows the **masked address** by default; `<censored-donor>` is an operator setting, off by default | A visible "censored" marker is the reaction a troll wants and makes the wall look like it has a problem |
+| 6 | **Auto-censor word list** ships as a starter (impersonation words + compact English profanity), editable in admin; saving **re-scans** every name | Never complete, English-only — the operator's own words are the real list |
+| 7 | Ranking **score = GRIN in window × (1 + loyalty% × active months)**, multiplier capped; ties by months ↓ then first donation ↑ | A strict amount → duration → rigs priority never reaches the second key: 9-decimal amounts never tie |
+| 8 | **Active months** = distinct UTC months with ≥ 1 donation **debit** | "Months since first donation" rewards a one-off; "months the tag was on" costs nothing on an idle rig; a debit costs GRIN |
+| 9 | Window default **365 days** (setting; 0 = lifetime). Lifetime GRIN still printed on every card | A lifetime board freezes — the early big donor is #1 forever |
+| 10 | **Rigs displayed, never ranked** | Renaming a worker is free and says nothing about generosity |
+| 11 | Donors with nothing in the window leave the league for a capped **Past donors** strip; nothing is ever deleted and `Donors` / `Donated all-time` stay lifetime | The user's "prune by date" without removing a thank-you |
+| 12 | **Name expiry**: masked address again 12 months after the last donation (setting; 0 = never) | Keeping the tag on is what keeps the name up |
+| 13 | Names display **lowercase**; charset stays `a-z0-9_-` (no dots → no domains) | Login grammar has no case; the charset is the best free anti-spam rule we have |
+| 14 | Worker part **case-folded** at login; visible label **32**, raw **48** (was 25 / 40) | `MyBrand-donate10` was *refused at login*; a 27-char brand clipped to `northern-hashwo-donate10` |
+
+### 16.2 Login grammar (`lib/stratum-protocol.js validateUsername`)
+`grin1…` + `.` + worker, worker lowercased **before** the regex (the address stays strict —
+grin never emits uppercase bech32). `MAX_WORKER_NAME_LEN` 25 → 32, `MAX_WORKER_RAW_LEN` 40 → 48;
+the existing rule "cut the label, keep the token" is unchanged, so beside `-donate100` a label
+keeps ≥ 22 chars. Token parse unchanged (`(?:(.*?)[-_])?donate(\d{1,3})$`, 0–100 only, leading
+zeros allowed, 4+ digits = plain name). `dm[1]` (the label) is what becomes the donor name.
+
+### 16.3 Data model — six columns on `miner_incentives` (ALTER … ADD COLUMN, same helper pattern as `miner_accounts`)
+| Column | Meaning |
+|---|---|
+| `donor_name TEXT` | lowercase label as captured; NULL = none |
+| `donor_name_set_at INTEGER` | unix, when captured (drives the admin NEW badge) |
+| `donor_censor TEXT` | NULL · `auto` · `admin` · `allow` (admin override — auto-list skips this address) |
+| `donor_censor_word TEXT` | the list entry that matched, for the admin badge (`auto: "word"`) |
+| `donor_censor_at INTEGER`, `donor_censor_by INTEGER` | unix + admin user id (NULL for auto) |
+No new table. Lifetime totals, first/last dates, active months and rigs are all derived at read
+time from the ledger composite (`balance_log_daily` + `balance_log`) and the 24 h share window.
+
+### 16.4 Capture rule (`lib/stratum-server.js`, in the block that applies `session.donationPercent` after `PROOF_MIN_SHARES`)
+Only when `setDonation` is called on the **from-zero** branch (`current === 0 && new > 0`):
+`label = dm[1]` from the parsed login (empty → clear `donor_name` to NULL — a plain `donateN`
+after a branded one removes the name). Then `lib/donor-names.js`:
+1. `normalise(label)` — strip `-`/`_`, map leet `0→o 1→i 3→e 4→a 5→s 7→t`, lowercase.
+2. Reserved (fixed in code, always applied): pool `pool_name` lowercased, `admin official
+   operator support staff pool grinium prize jackpot winner`.
+3. Operator list (`donor_name_blocklist`, one entry per line, matched as a **substring of the
+   normalised name**).
+4. Write `donor_name`, `donor_name_set_at`; if `donor_censor` is `admin` → leave it (sticky);
+   if `allow` → leave it (override); else set `auto` + word on a match, or NULL.
+Reserved and list hits are **stored, not refused** — the name exists, it just never displays.
+`setDonation` itself is untouched (it still refuses reserved addresses and honours both flags).
+
+### 16.5 Moderation model — three layers, in order of what they catch
+1. **Cost to post** — a name displays only on a card with a donation debit (existing card rule).
+2. **Auto-list** at capture and on every list save (rescan walks all `donor_name IS NOT NULL`
+   rows, skipping `allow` and `admin`). False positives (`classic` ⊃ `ass`) are expected; the
+   fix is the admin un-censor, which sets `allow`.
+3. **Admin → Donors** page (§16.8): Censor / Un-censor per address, audit-logged
+   (`donor_censor` / `donor_uncensor` in `admin_audit_log`, target_type `donor`).
+Plus one public line under the wall: *"Names are chosen by the donors and are not verified by
+the pool."* And the stranger case (decision 2) is closed at the write, not by moderation.
+
+### 16.6 Ranking (`/api/pool/donors`)
+```
+W  = donor_rank_window_days (365; 0 = lifetime)
+A  = GRIN donated inside W          (composite read; day-aligned for rolled days)
+M  = distinct UTC months with a donation debit, lifetime
+mult = min(1 + donor_loyalty_percent_per_month/100 × M, donor_loyalty_cap)   (10 %, ×3)
+score = A × mult
+league  = donors with A > 0, ORDER BY score DESC, M DESC, first_donated_at ASC, LIMIT 100
+past    = donors with A = 0 (lifetime > 0), ORDER BY last_donated_at DESC, LIMIT 20 + count
+```
+Published on the page in one sentence. `totals` stay lifetime over every donor (fixed
+2026-09-21, impl §10.3). `active_donors` counts live tags (same fix).
+
+### 16.7 Public wall (`donate.html` D-03) — per card
+rank (🥇🥈🥉 for the league top 3) · **display name** · GRIN in window · lifetime GRIN (when
+different) · `×1.4 loyalty · 4 months` · `donating 10 %` / `paused` · since (first donation) ·
+`N rigs online` (display only). **Display name** = `donor_name` when it is set, not censored,
+and `last_donated_at` is inside the expiry — else the masked address, or `<censored-donor>`
+when the operator chose that and the reason is a censor. The API emits `name` (or `null`) and
+`name_state` (`shown` · `masked` · `censored` · `expired`) and **never** the censored string.
+Past-donors strip: name/masked + lifetime GRIN + last donation, then "and N more past donors".
+
+### 16.8 Admin → Donors (`admin-panel/donors.html`, NAV child of Dashboard after Miners)
+Table (one row per address with a lifetime debit **or** a live tag; **full** addresses — admin
+side): rank · score · address · donor name + state badge (`ok` / `auto: "word"` /
+`admin-censored` / `allowed` / NEW < 7 d / `renamed while censored`) · current % · lifetime ·
+in-window · active months · first / last · workers (24 h window, LED, tagged rig marked) ·
+**Censor** / **Un-censor**. `AdminTable` controller, search + filter (all / censored / new).
+Settings form on the same page (harvester, ids = keys): `allow_miner_donations` and
+`donation_address` **move here** from `settings-incentives.html` (which keeps a link) ·
+`donor_name_blocklist` (textarea) · `donor_censored_display` (`masked` | `marker`) ·
+`donor_rank_window_days` · `donor_loyalty_percent_per_month` · `donor_loyalty_cap` ·
+`donor_name_expiry_months`. Dashboard + nav show "N new donor names this week".
+Routes: `GET /api/admin/donors` (secureAdmin), `POST /api/admin/donors/:addr/censor` and
+`/uncensor` (freshAdmin, audit), rescan hooked into the settings save for the list key.
+
+### 16.9 Miner side
+`/api/account/:addr` gains `donor_name` + `donor_name_state`; the account page donation row
+prints *Donor name: acme* · *hidden by the pool* (a false positive must know to contact the
+operator) · *expired — reconnect with your tag to refresh*. Changing a name = the raise
+ceremony (`donate0`, a few shares, `newname-donateN`), documented beside the raise row on D-01.
+D-01 example row becomes `grin1…address.yourbrandname-donate10`.
+
+### 16.10 Security notes for the audit pass
+- **Stranger write** is bounded to paused addresses (decision 2) and costs 4 accepted shares
+  paid to the victim; the address is masked so a hostile name on someone's card identifies
+  no one but them; the victim clears it with the ceremony, the admin with a click.
+- **Leakage**: `name` on a public feed is opt-in disclosure by the donor; the address stays
+  masked (§J11-1); `test-public-leakage.js` must assert no full address and no censored string
+  ever leave `/api/pool/donors` or `/api/account/:addr`.
+- **Gaming**: months need a debit (GRIN); rigs are not ranked; the window resets the race.
+- **Type traps** (memory `project_config_loader_type_traps`): every new numeric setting is
+  parsed with a bound, `donor_censored_display` is a closed enum, the list is split on
+  newlines and trimmed, never `eval`'d or used as a regex.
+
+### 16.11 Status
+| Part | Scope | State |
+|---|---|---|
+| 1 | Login grammar: case-fold, 32/48, `donor_label`, tests (D-01 example row moved to Part 4 with the rest of the page copy) | **done 2026-09-21, not VPS-tested** — impl §10.3 "Part 1"; guard suite 71/71 |
+| 2 | Storage + capture + `lib/donor-names.js` + settings keys + account API/page | **done 2026-09-21, not VPS-tested** — impl §10.3 "Part 2"; `test-donor-names.js` 100/100. Two deltas recorded there: expiry counts from the later of last debit and capture (calendar months), and censor outranks expiry. `lib/donor-ledger.js` started early with the per-address `lastDonatedAt` so Part 3/4 extend one file |
+| 3 | Admin: routes, audit, rescan, `donors.html`, settings move, dashboard count | **done 2026-09-21, not VPS-tested** — impl §10.3 "Part 3"; `test-donor-names.js` 148/148, admin-panel 71/71, admin-guards 79/79. Deltas recorded there: the admin list also shows STORED-NAME rows with no debit and no tag (moderate before the first debit publishes); un-censor from NULL and censor of a nameless address are both allowed (pre-emptive, sticky); renaming the pool re-scans too; the settings form is page-local so the rescan counts can be shown; the nav badge reads a one-COUNT `/api/admin/donors/summary`, not the dashboard route. §16.6's window edge is now stated: a rolled day at its UTC midnight ≥ cutoff is in WHOLE |
+| 4 | Public: `/api/pool/donors` v2, D-03 league/past, copy, api-docs meta, leakage tests | **done 2026-09-21, not VPS-tested** — impl §10.3 "Part 4"; `test-donor-league.js` 68/68, leakage 77/77, admin-guards 79/79. The response is built by `lib/donor-ledger.js donorWall()` (the route is thin) with the address mask a REQUIRED argument; two implicit points now stated: past-strip ties break on lifetime DESC then address ASC, and a league overflow (>100 in window) is counted in `totals` but shown on neither list. 390 px iframe probe: 0 overflow on three page states |
+| 5 | Review of 1–4 against this section + security notes; fold into docs + memory | **done 2026-09-21** (a separate cold session reading the working-tree diff) — the nine questions and their answers are §16.12; **two code findings, both fixed** in `lib/donor-names.js` (rescan parsed the list per NAME — ~1 s per list save at the validator's ceiling on the shared synchronous connection; a separators-only label was stored and shown as the name `-`), `test-donor-names.js` 148 → 156/156; three docs corrections (this section's heading + header said "NOT built" / "Parts 3–6 design only" while §16.11 said Parts 1–4 done; the security audit named only Part 1). All 16 suites green after the fixes. Nothing here has run on a VPS |
+| 6 | VPS acceptance on testnet with live miners | not started |
+
+### 16.12 Implementation deltas + the Part 5 review (2026-09-21)
+
+What the four build sessions changed against §16.1–§16.10 (each was recorded in §16.11 / impl
+§10.3 as it happened; collected here so the design reads true), then what the independent
+review found. Nothing below has been VPS-tested.
+
+**Deltas — what shipped differs from the section above in these ways, and why:**
+
+| § | As designed | As built | Why |
+|---|---|---|---|
+| 16.2 | worker part "lowercased" | ASCII `A-Z` only, folded BEFORE the charset regex | `toLowerCase()` maps U+212A KELVIN SIGN into the charset as `k`; a byte outside `[a-z0-9_-]` must keep failing, not be adopted |
+| 16.4 #2 | pool name always reserved | reserved only when it normalises to **≥ 3 chars** | a one- or two-letter pool name would censor nearly every donor |
+| 16.4 | `''` clears `donor_name` | `''` clears the name **and an `auto` verdict**; `admin` / `allow` survive | the auto verdict was about the name that is gone; the two admin states are per-ADDRESS decisions |
+| 16.4 (review) | any label inside the grammar is a name | a label with **no letter or digit** (`--donate10` → `-`) is **no label** — same as `''` | it normalises to nothing, matches nothing, and headed a card as the name `-` |
+| 16.7 #12 | expiry = 12 months after the **last donation** | 12 **calendar** months (UTC) after the **later of** the last debit and the capture; **censor outranks expiry** | a name just re-set through the ceremony must not read "expired" while its first debit is a block away; an aged-out censored name is still the operator's decision |
+| 16.5 #2 | rescan on list save | rescan on list save **or pool rename**; the list is parsed **once per walk** (review) | the pool name is a reserved word, so renaming the pool changes verdicts; per-name parsing cost ~1 s per save at 4000 entries × 300 names |
+| 16.5 #3 / 16.8 | table = addresses with a debit **or** a live tag | also addresses with a **stored name** and neither; un-censor from NULL and censor of a nameless address both allowed (pre-emptive, sticky) | a donor who ran the ceremony then paused has a name on file and no debit — moderation that starts after the first debit publishes it is the review gate #3 rejected |
+| 16.6 | "day-aligned for rolled days" | stated exactly: a rolled day is **in WHOLE** when its UTC midnight ≥ `now − W`, else out whole; raw rows at second precision | the cutoff lands on a day edge for anything older than the rollup horizon — say so once, in the lib |
+| 16.6 | `past` ORDER BY `last_donated_at DESC` | ties broken on lifetime DESC, then address ASC | rolled days tie by the day; an unordered tie shuffles the strip on every poll |
+| 16.6 | league LIMIT 100 | a donor past the 100th league place is counted in `totals` and shown on **neither** list | design as written; now stated |
+| 16.6 | `active_donors` "counts live tags" | `COUNT(*)` of `miner_incentives.donation_percent > 0`, 0 while donations are off | one COUNT, not a filter over the cards; the same `donationsActive()` gate as every other "current" reading |
+| 16.8 | settings form "harvester, ids = keys" | the form is **page-local** (same three harvester rules), not `settings-common.js` | `saveSection()` discards the response body, and the one thing this form must show is the rescan counts; `updateSection()` upserts only the keys it is sent, so no merge step was needed |
+| 16.8 | "Dashboard + nav show N new names" | dashboard tile from `/api/admin/dashboard new_donor_names_7d`; the nav badge from a one-COUNT `GET /api/admin/donors/summary` | the dashboard route runs a dozen queries; a badge painted on every page load must not |
+| 16.8 | workers "tagged rig marked" | `parseDonateToken()` exported from `lib/stratum-protocol.js` (the login regex became a named constant both use) | one grammar, not a second copy drifting from the login |
+| 16.9 | donation row shows a name | the row stays visible for a **paused** donor who has a name (`paused (0%)` + the name line) | a paused donor keeps their name; hiding the row would hide the one place they can read it |
+| 16.10 | mask the address | `donorWall()` **throws** without a mask function and applies it to both arrays inside the lib | `past` is exactly the second array a route would forget (§J11-1) |
+| — | — | `scripts/check-syntax.js` sniffed `type=` over the whole `<script>` MATCH, body included, so any page whose row template contains `type="button"` was never syntax-checked | found while adding `donors.html`; fixed to the opening tag only (29 → 32 inline blocks) |
+
+**Part 5 review — nine questions, read cold against the diff (answers verified against the code,
+not the notes):**
+
+1. **Stranger write.** `captureDonorName` has ONE call site: `_applyParkedDonation` → `wrote && current === 0 && percent > 0`. A LOWER, a same-% reconnect, `donate0`, a refused raise, and a set `setDonation` refused (donations off, reserved address) never reach it; a banned address is refused at login before a session exists. A stranger at `donate1` against a PAUSED donor does reach it — by design (#2, §16.10): the name is replaced (or cleared by a plain tag), an `auto` verdict goes with it, `admin`/`allow` survive, and the victim's account page shows the new name / "hidden by the pool". Confirmed as designed.
+2. **Leakage.** Public responses touching `miner_incentives`: `/api/account/:addr` (emits `donor_name` + `donor_name_state`, selects three columns) and `/api/pool/donors` (via `donorWall`; no card key starts with `donor_`, `donor_censor` is read for `displayState` and never emitted). `GET /api/admin/miners/:addr` returns the whole row (`SELECT *`) but is `secureAdmin`. The marker string leaves only when `censored_display` is `marker`. Nothing else.
+3. **Censor state table** (current → capture(name) / capture('') / rescan / censor / uncensor): NULL → auto-or-NULL / NULL / auto-or-NULL / admin / allow · auto → re-matched / NULL (word, at, by cleared) / auto-or-cleared / admin / allow · admin → admin (name + set_at updated) / NULL, admin kept / skipped / 409 / allow · allow → allow / NULL, allow kept / skipped / admin / 409. Matches §16.4/§16.5 plus the deltas above.
+4. **Ranking.** One card hand-recomputed from a stub DB (rolled 1.0 + rolled 2.0 + raw 0.5, three distinct months: `3.5 × 1.3 = 4.55`; a second donor `0.25 × 1.2 = 0.3`); the rolled day at `now − 365 d` (midnight < a noon cutoff) is OUT and the next day IN, as stated; ties by months then first donation; `slice()` in JS, no `LIMIT -1`; blank / `"abc"` / `NaN` / `"Infinity"` / `0` cap / `1e9` months all resolve to the documented defaults through `donorSettings()`, and a raw section passed by mistake still gives a finite score.
+5. **Type traps.** Every reader of the six keys goes through `donorSettings()` (bounded ints, 0–100 percent, cap ≥ 1, closed enum) except the rescan hook, which reads the list text and hands it to `rescanAll` → `parseList` (split on newlines, trimmed, never a `RegExp`; the only `new RegExp` in the lib is built from the `MAX_WORKER_NAME_LEN` constant). Write-side validators mirror the bounds. No new booleans.
+6. **DB cost** (EXPLAIN QUERY PLAN, no ANALYZE — as the capacity memory prescribes): `donorLedger` = the same two `SEARCH`es the old wall query ran plus a temp b-tree for `COUNT(DISTINCT)` over donation rows only; `lastDonatedAt` = two indexed `SEARCH`es; the three `miner_incentives` reads are scans of a table with one row per address; the admin list's per-row `getWorkersForAccount(addr, 1440)` is a `SEARCH shares USING INDEX idx_share_address` + a per-address temp b-tree — bounded by that address's ≤ 31 h of shares, up to 500 rows per page load, polled every 60 s per open admin tab. **First per-row shares read in the panel**; cheaper than one table-wide 24 h scan while donors ≪ miners. The one real cost found was the rescan (finding A below).
+7. **Admin panel.** `.error-msg`/`.success-msg` carry no `display:none` (inline `style` hides them); the nav pill's ink is `var(--btn-text)`, the admin bundle's ink-on-accent token; the page uses `API.get` (= `Auth.fetch`) for reads and `adminFetch` (step-up aware, in-page dialog — `confirm()` then `adminFetch` is one native dialog, not a chain) for every write; the two moved keys exist on exactly one page, and `updateSection()` upserts partial key sets so the Incentives page and this one cannot clobber each other; both POSTs are `freshAdmin` and `adminCensor()` writes its `admin_audit_log` row in the same transaction; the settings save is audited by `updateSection`.
+8. **Public page.** Every name passes `escHtml` (`nameCell` serves both the grid and the past strip); "(all times UTC)" is stated once in the deck-head; the 390 px iframe probe was run by Part 4 on three fixtures (0 elements past the right edge) and not re-run here; empty league + non-empty past, tags-set-but-no-debit, and unavailable each have their own copy; the `API_DOC_META` row lists the 14 card keys and the four top-level ones exactly as `donorWall()` emits them, with the notes (opt-in lowercase ≤ 32, masked, marker only under `marker`, totals lifetime over every donor, window edge) hand-read against the builder.
+9. **Docs.** §16.11's counts matched a fresh run of every suite (guards 71, names 148 → 156 after the fixes, league 68, leakage 77, admin-panel 71, admin-guards 79). Three honesty defects, fixed: this section's heading and the file header still said "NOT built" / "Parts 3–6 are design only" / "Parts 1–2 done" while §16.11 said Parts 1–4 done; the security audit's freshness header named only Part 1 although Parts 2–4 added a public text surface, two admin write routes, six settings and a rescan hook (none of which has had a §J-style pass — this review is the only one so far, and its header now says so). No session scaffolding in `docs/generated/`.
+
+**Findings (both fixed, `lib/donor-names.js`):**
+
+- **A · Medium (efficiency on the shared connection).** `rescanAll` called `matchBlocklist` per row, and `matchBlocklist` re-parsed the whole list text (normalising every entry) on every call. Measured: 300 stored names × the validator's 4000-entry ceiling = **1048 ms** per list save, on the synchronous connection StratumServer shares — a one-second stall of share intake, admin-triggered (not an amplification vector). Fixed by splitting the matcher (`matchEntries(name, entries, poolEntry)` under `matchBlocklist`) and parsing once per walk: **16 ms**. Pinned by an equivalence test, a source check that `parseList` is called once above the loop, and a 2 s ceiling.
+- **B · Low (cosmetic, but a name-shaped non-name on a public page).** A worker label made only of separators is inside the grammar — `--donate10` hands `validateUsername`'s `donor_label` over as `-`, `_-_-donate10` as `_-_` — passed `LABEL_RE`, normalised to `''`, matched nothing, and was stored and SHOWN as the donor name `-`. Now treated as no label at capture (clears, like `''`); one real character (`-a-`, or a lone leet digit `0`) is still a name.
+
+**Known properties, not findings (stated so the next reader does not re-derive them):** an
+`allow` override is exactly that — a donor un-censored for a false positive can rename to
+anything and it shows until an admin acts; the NEW badge (7 d) and the dashboard tile are the
+signal, there is no "renamed while allowed" state. A stranger's rig mining to a donor's address
+appears in that donor's admin `workers` cell (with the tag mark if tagged) — §J6-9 already
+accepted this for sessions with an accepted share, and here it is what lets the operator SEE a
+stranger write. Donation ledger rows are counted as debits only, as the wall always did; an orphan
+reversal has never touched donation rows (out of §16's scope). `parseInt` quirks (`"1e3"` → 1)
+apply to every `intRange` setting on the panel and are the same on the write side, so a stored
+value never disagrees with its read.
+
+---
+
+## 17. Ownership-proof SET — 10 per kind, per-address salt (2026-09-22 — Parts 1–2 BUILT, nothing VPS-tested)
+
+Replaces the **2-slot proof window** (`last_ip`/`prev_ip`, `last_pass_hash`/`prev_pass_hash`)
+that has gated every self-service money action since 2026-07-17 (impl §10; audit §E, §F, §J3).
+Built in five sessions — backend → account page → copy sweep + docs → independent review → VPS
+acceptance — with the run order kept outside the repo. §17.6 carries each part's state: **Parts 1
+(the backend) and 2 (the account page) are built**; the homepage setup guide, the shipped CMS
+pages and `admin-panel/users.html` still state the old window until Part 3. Nothing in this
+section has run on a VPS.
+
+### 17.1 Why the 2-slot window is wrong, not merely small
+
+- `recordOwnerEvidence` compares a capture against **`last_ip` only** (owner-proof.js, the
+  `matchesStoredIp(ip, row.last_ip)` test). Two facilities A/B whose rigs reconnect in turn
+  rotate the window on **every** reconnect: `last=b,prev=a` → `last=a,prev=b` → …. Each
+  rotation (1) re-stamps `last_ip_at = now`, so the §J3-1 AND+AGE gate reads a freshly-reset
+  age and refuses the owner's own destination change (`proof_too_recent`) whenever their rigs
+  reconnected inside the last hour; (2) writes an `evidence_displaced` audit row and lights the
+  account page's **"Evidence changed"** warning for seven days — for honest churn. With three
+  or more sites every reconnect evicts one site's proof.
+- The page's "use the **same** password on every rig" was therefore a workaround for the slot
+  count, not a security property. **Operator decision 2026-09-22:** it becomes a convenience
+  tip; different passwords per site all work; the window becomes a set of ten.
+
+### 17.2 Decisions (all FINAL unless a build finds a hard reason)
+
+1. **Storage is a SET per (address, kind)** in a new table `miner_proofs` (§17.3). Cap
+   **`PROOF_SET_MAX = 10` live rows per kind**, a hardcoded constant in `lib/owner-proof.js` —
+   not an admin setting: the only reason to keep it small was scrypt cost, and #3 removes that.
+2. **Eviction is least-recently-SEEN** (`last_seen_at`), never FIFO. A known value seen again
+   refreshes `last_seen_at`; **`first_seen_at` never moves** and is what the age gate reads.
+3. **One salt per address.** `miner_accounts.proof_salt` (16 random bytes, base64, minted on the
+   address's first v2 hash with `UPDATE … WHERE proof_salt IS NULL` then re-read, so two rigs'
+   first shares landing together share one salt). Rows store `v2$<hashB64>`; scrypt parameters
+   unchanged (N=16384, r=8, p=1, keylen 32, 16 MB). **One scrypt per verify and per capture
+   regardless of set size**; digests compared with `crypto.timingSafeEqual`. Legacy
+   `v1$salt$hash` rows are copied as-is and cost one scrypt each until evicted; a capture that
+   MATCHES a v1 row (the plaintext is in hand at that moment) rewrites it in place as v2.
+4. **Anchor unchanged in meaning** (§J3-4): the address's first-ever value of each kind, flagged
+   `is_anchor=1` on its own row. Never deleted — when it is the LRU row of a full set it is
+   marked `evicted_at` instead of removed. `verifyOwnerProof` reports `slot='anchor'` **only for
+   an evicted anchor row**; a live anchor is an ordinary member (today a window hit already
+   wins the label). `requireBothProofs` in index.js keeps refusing `slot='anchor'` and any leg
+   younger than `MIN_PROOF_AGE_SEC` — its code does not change.
+5. **Capture rule** (`mayDisplace` keeps its §J3-4 meaning): refreshing a known live value is
+   always allowed; INSERT into an **empty** set is allowed on the first accepted share and that
+   row becomes the anchor; INSERT into a **non-empty** set — including re-activating an evicted
+   anchor — needs `mayDisplace` (`PROOF_MIN_SHARES = 4`, unchanged). A full set evicts LRU live
+   rows until the count is below the cap (evict `count − max + 1`, so a concurrent double-insert
+   self-corrects on the next capture instead of growing).
+6. **Audit:** `evidence_added` (`kind`, live count after, `evicted` yes/no) on every insert into
+   a non-empty set — that is the hostile signature. No row on refresh. `evidence_displaced` is
+   retired.
+7. **Public account summary** gains `proofs: { ip, pass, max, anchor, last_added_at }` — live
+   counts, the cap, whether an anchor row exists, and the newest `first_seen_at` across both
+   kinds. Never a value, a hash, a salt, or per-row timestamps. `has_recorded_ip` /
+   `has_recorded_pass` stay (derived from the counts). The `evidence` object is removed. The
+   admin miner view gets per-kind `{ live, oldest_first_seen, newest_last_seen, anchor_live }`,
+   no hashes (§J8-2 stays satisfied).
+8. **Account page:** no warning banner. The on-record hint states the counts and the last-added
+   time; the "someone else mined to this address" explanation moves into the collapsed *Why
+   does my rig password matter?* fold. Password diagnostics keep every reject-reason state;
+   **"Mismatch" only when live distinct passwords exceed `max`**; two or more distinct passwords
+   within the cap is an OK line. The "same password on every rig" sentences become a tip.
+9. **Legacy columns** (`last_ip`, `prev_ip`, `last_pass_hash`, `prev_pass_hash`, the four `*_at`,
+   `anchor_ip`, `anchor_pass_hash`, `anchor_set_at`) are copied into the set by ONE synchronous
+   `migrateProofSet(db)` that runs where `backfillProofAnchors` ran — ahead of the stratum
+   listener, for the same reason — and are then **NULLed; the NULL is the idempotency proof**
+   (repo style: no marker table; `migrateOwnerProofHashes` + `backfillProofAnchors` are deleted,
+   their jobs subsumed). Columns stay in the schema — never `DROP COLUMN`. Mapping: the anchor
+   value becomes a row with `is_anchor=1`; if it equals `last` or `prev` that is the same row and
+   it is live; otherwise `evicted_at = anchor_set_at` (it was already outside the window). `last`
+   and `prev` become live rows with `first_seen_at = last_*_at` / `prev_*_at` (NULL = unknown =
+   old, the existing rule). A pre-v1 plaintext value is hashed to v2 with `scryptSync` during the
+   copy — bounded, one-time, and no VPS has ever held one.
+10. **Not touched:** `PROOF_MIN_SHARES`, the (address, origin) lockout and its counters, the
+    AND+AGE gate, `pass_proof_state`, `getPasswordConsistency`, the `withdraw`/`export` rate
+    buckets, `verifyOwnerProof`'s signature and return keys (`ok, reason, method, slot,
+    age_seconds` — `slot` is now `'set' | 'anchor'`).
+
+### 17.3 Data model
+
+```sql
+CREATE TABLE IF NOT EXISTS miner_proofs (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  grin_address  TEXT    NOT NULL,
+  kind          TEXT    NOT NULL CHECK (kind IN ('ip','pass')),
+  hash          TEXT    NOT NULL,                 -- 'v2$<b64>' (per-address salt) or legacy 'v1$<salt>$<b64>'
+  first_seen_at INTEGER DEFAULT NULL,             -- never updated; NULL = migrated without a timestamp = old
+  last_seen_at  INTEGER NOT NULL,                 -- refreshed on every matching capture; the LRU key
+  is_anchor     INTEGER NOT NULL DEFAULT 0,       -- first-ever value of this kind; never deleted
+  evicted_at    INTEGER DEFAULT NULL,             -- NULL = live. Only an anchor row can be non-live
+  UNIQUE (grin_address, kind, hash)
+);
+CREATE INDEX IF NOT EXISTS idx_miner_proofs_lru ON miner_proofs (grin_address, kind, evicted_at, last_seen_at);
+-- miner_accounts: + proof_salt TEXT DEFAULT NULL (same add-column-if-missing helper as the other 2026 columns)
+```
+
+"Live" = `evicted_at IS NULL`. Counts, the cap and the LRU pick all range over live rows only.
+A non-anchor row that is evicted is deleted, not flagged.
+
+### 17.4 Threat notes for the review pass
+
+- **Grief ceiling unchanged.** A stranger's proof still lets them trigger a payout to the
+  OWNER's wallet (Tor pays the address's onion, a slatepack is encrypted to it) — the accepted
+  residue from §E. What changes is that their entry now sits *beside* the owner's instead of
+  pushing it out.
+- **Evicting an owner's value** now requires out-churning every live owner rig: LRU keeps
+  whatever is most recently seen and the owner's rigs keep refreshing. The departed miner is
+  covered by the anchor exactly as before.
+- **Per-address salt vs per-row salt:** an offline attacker with the DB precomputes scrypt once
+  per address instead of once per row — at most a ×10 saving on a 2^32 × 16 MB job, and the
+  work still cannot be shared across addresses. Same order, accepted.
+- **The CPU lever (§F2 math) holds:** a failed verify costs 1 scrypt + n_v1, where n_v1 ≤ 3 for a
+  migrated account and 0 once its v1 rows are upgraded or evicted. Today it is 2–3.
+- **First capture into an empty set is still cheap**, so an address's anchor is whoever mines
+  to it first. Unchanged from §J3-4; the AND+AGE gate is what keeps that from redirecting money.
+- **Keying trap (§J3 self-review):** every per-connection question must read
+  `session.acceptedShares`, never `shareCount` — the latter counts the whole address.
+- **Nothing that reaches a browser may carry a hash or the salt**: `test-public-leakage.js`
+  must assert the shape of `proofs` and the absence of `proof_salt`.
+
+### 17.5 Copy that states the old window (must all change)
+
+`public_html/account-settings.html` (P-04 gate block, `PASS_STATE_TEXT`, `renderPasswordProof`,
+the fold), `public_html/index.html` (setup guide), `back-end-pool/lib/pool-settings.js` (shipped
+CMS defaults — privacy page + FAQ; seeds only, an installed pool keeps its edited pages),
+`index.js` `API_DOC_META` for `GET /api/account/:addr`, `admin-panel/users.html`,
+`lib/miners.js` + `lib/stratum-server.js` comments, and the prose in audit §E/§F/§J3 (which
+describes what WAS — add a pointer to this section rather than rewriting findings).
+
+### 17.6 Status
+| Part | Scope | State |
+|---|---|---|
+| 1 | Backend: `miner_proofs`, per-address salt, set capture/verify, migration, account + admin API, tests | **done 2026-09-22, NOT VPS-tested** |
+| 2 | Account page P-04: counts hint, fold text, password diagnostics, demo dataset | **done 2026-09-22, NOT VPS-tested** |
+| 3 | Copy sweep (§17.5), docs fold, memory | not started |
+| 4 | Independent review of 1–3 against this section + §17.4 | not started |
+| 5 | VPS acceptance on testnet | not started |
+
+**Part 2 as built** → `script07_implementation.md` §10.4, "Part 2". §17.2 #8 was built as
+specified. Three deltas, all additive:
+1. **A third hint state** — live counts 0 but the write-once anchor alive. §17.2 #7 does not name
+   it and the run plan said "both zero → first-run text", which would tell an account that can
+   still reach its wallet that nothing is recorded. Reachable via the migration (an `anchor_*`
+   with both window slots empty lands as one evicted row, no live row).
+2. **`proofs` absent is its own branch** — an older backend or a cached response gets the old
+   whether-not-how-many sentence, and the two cap-dependent password lines fail quiet. A count the
+   server did not send is not a fact about the account, and "0 on record" would be a false alarm.
+3. **The *Partial* line's advice changed** ("set the same password on every rig" → "set one on
+   that rig too — it does not have to match the others"). The run plan said to leave that branch
+   alone; §17.5 names `renderPasswordProof` as copy that must change, and Part 3's grep would not
+   have found the sentence. Logic unchanged.
+
+**Part 1 as built** → `script07_implementation.md` §10.4. Everything in §17.2 and §17.3 was built
+as specified. Deltas, all additive and all recorded in §10.4:
+1. **`test-public-leakage.js` got the §17.4 assertions** (the `proofs` shape, the absence of
+   `proof_salt`, no digest in a log line). §17.4 asks for them; the run plan's Part-1 file list
+   did not name the file. They are API-shape assertions, and Parts 2–3 do not touch it.
+2. **`_makeRoom(db, rows, now, headroom)`** — 1 when a row is about to be inserted, 0 for the
+   migration's defensive trim. Evicting `live − max + 1` when nothing is being inserted would
+   discard a working proof for nothing.
+3. **`is_anchor` is computed inside the INSERT** (`CASE WHEN EXISTS (… is_anchor = 1)`), not from
+   a snapshot taken before the KDF. Two first captures racing through scrypt would otherwise each
+   see an empty set and each claim the anchor. For the same reason `_captureProof` reads the rows
+   twice — once to learn which v1 rows need testing, once after the last `await` — so nothing that
+   decides (live count, cap, LRU pick) is read across an await from the write depending on it.
+4. **`hashProof` (the v1 writer) is exported.** No production path writes v1 any more, but the
+   regression suite must build a legacy row through the code that parses one.
+5. **`freshDb()` in the test now uses `lib/sqlite-compat.js`**, the wrapper production uses. A bare
+   `node:sqlite` `DatabaseSync` has no `.transaction()`, so the migration threw in the test and
+   worked in production.
+
+Measured, not assumed — a failed verify costs **1** scrypt on a v2-only set of any size, **1 + n_v1**
+on a migrated account that has a salt, **n_v1** while it has none (§F2's throttle is sized on this;
+the old window cost up to 6). Suite: **849 → 875 checks across 15 suites, all passing.**
+
+**Part 1 ships alone.** `account-settings.html` still reads the removed `evidence` object but
+guards it with `|| {}`, so it degrades to no warning and no crash until Part 2.
 
 ## Appendix — Solo private pool flowchart, merged from flowcharts/script07_mining_solo_flow_chart.txt 2026-07-09
 

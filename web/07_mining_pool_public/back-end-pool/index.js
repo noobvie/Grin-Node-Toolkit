@@ -5,6 +5,7 @@ const path = require('path');
 const { initDb, getDb, ensureLocalRegion, seedDefaultRegions } = require('./lib/db');
 const { loadConfig, mergeDbSettings } = require('./lib/config');
 const { computeReconciliation, auditWalletSends, probeWalletIdentity, adoptWalletIdentity } = require('./lib/reconciliation');
+const { pushRttSample, hubRttMs } = require('./lib/region-rtt');
 const PoolSettings = require('./lib/pool-settings');
 const AssetManager = require('./lib/asset-manager');
 const WalletAPI = require('./lib/wallet');
@@ -36,6 +37,8 @@ const { lastDonatedAt: donorLastDonatedAt, donorLedger, donorScore, loyaltyMulti
 const { parseDonateToken } = require('./lib/stratum-protocol');
 const { verifyOwnerProof, auditOwnerProof, normalizeIp, migrateProofSet, migrateAuditLogIps, PROOF_SET_MAX } = require('./lib/owner-proof');
 const geoip = require('./lib/geoip');
+const connectSuggest = require('./lib/connect-suggest');
+const { latencyConfig } = require('./lib/latency-probe');
 const PoolstatsReporter = require('./lib/poolstats-reporter');
 const RateLimiter = require('./lib/rate-limiter');
 const IpFilter = require('./lib/ip-filter');
@@ -168,9 +171,13 @@ function cachedGatewayStatus() {
 // rig takes. Resolves ms-to-connect on success, null on refuse/timeout/DNS fail. Never rejects.
 // Connect-only (no stratum handshake): proves the region's HAProxy/listener is up and
 // reachable, which is all the edge can prove without a fake miner login.
+// The clock restarts on 'lookup' (DNS done) and on each 'connectionAttempt' (Node's
+// happy-eyeballs tries each address in turn), so the figure is the connecting attempt's SYN →
+// SYN-ACK alone — about one RTT, which hub_rtt_ms publishes (lib/region-rtt.js). Uncached DNS
+// and a dead IPv6 attempt used to be counted in it.
 function probeStratumTcp(host, port, timeoutMs = 2500) {
   return new Promise((resolve) => {
-    const t0 = Date.now();
+    let t0 = Date.now();
     let sock, settled = false;
     const done = (ok) => {
       if (settled) return;
@@ -179,6 +186,9 @@ function probeStratumTcp(host, port, timeoutMs = 2500) {
       resolve(ok ? Date.now() - t0 : null);
     };
     try { sock = net.connect({ host, port: +port }); } catch (e) { return resolve(null); }
+    const restart = () => { t0 = Date.now(); };
+    sock.on('lookup', restart);
+    sock.on('connectionAttempt', restart);
     sock.setTimeout(timeoutMs, () => done(false));
     sock.once('connect', () => done(true));
     sock.once('error', () => done(false));
@@ -208,11 +218,13 @@ function refreshStratumProbes(locations) {
   _stratumProbe.running = true;
   Promise.all(targets.map(async (t) => {
     const ms = await probeStratumTcp(t.host, t.port);
-    const prev = _stratumProbe.byRegion.get(t.region) || { fails: 0 };
+    const prev = _stratumProbe.byRegion.get(t.region) || { fails: 0, rtt: [] };
     _stratumProbe.byRegion.set(t.region, {
       ok: ms !== null,
       fails: ms !== null ? 0 : prev.fails + 1,
       ms,
+      // Rolling window of the last successful connect times → hub_rtt_ms (lib/region-rtt.js).
+      rtt: pushRttSample(prev.rtt, ms),
       ts: Math.floor(Date.now() / 1000)
     });
   })).catch(() => { /* probeStratumTcp never rejects; belt and braces */ })
@@ -225,6 +237,38 @@ function stratumVerdict(region) {
   if (!p) return null;
   if (p.ok) return true;
   return p.fails >= STRATUM_PROBE_STRIKES ? false : null;
+}
+// A region's rolling connect-time window (undefined until its first probe).
+function stratumRttWindow(region) {
+  const p = _stratumProbe.byRegion.get(region);
+  return p ? p.rtt : undefined;
+}
+// A region's public status — 'online' | 'idle' | 'offline' | 'checking'. ONE implementation for
+// every public reader that names a region reachable or not (GET /api/pool/stats/regions and
+// GET /api/pool/connect/suggest), so the connect suggestion can never recommend a region the
+// patch bay beside it paints red. The precedence and the reasons for it are documented at the
+// regions route. ctx = { localRegion, wgSnapshot, nowS, offlineS }.
+function publicRegionStatus(region, hasShares, shareAge, hasTarget, ctx) {
+  const { localRegion, wgSnapshot, nowS, offlineS } = ctx;
+  const wgByRegion = (wgSnapshot && wgSnapshot.regions) || {};
+  const sharesFresh = shareAge !== null && shareAge < offlineS;
+  const verdict = stratumVerdict(region);
+  let up;
+  if (sharesFresh) up = true;
+  else if (region === localRegion) up = true;
+  else if (wgSnapshot && wgSnapshot.available && wgByRegion[region]) {
+    const wg = wgByRegion[region];
+    up = !!(wg.handshake && (nowS - wg.handshake) < offlineS) && verdict !== false;
+  } else if (verdict === null) {
+    // Nothing to dial and no tunnel to read → liveness is genuinely unknowable; keep the
+    // old lenient behaviour rather than stranding the region on 'checking' forever.
+    if (!hasTarget) return hasShares ? 'online' : 'idle';
+    return 'checking';
+  } else {
+    up = verdict;
+  }
+  if (!up) return 'offline';
+  return hasShares ? 'online' : 'idle';
 }
 
 const app = express();
@@ -530,6 +574,8 @@ async function initializePool() {
     // Self-register this pool server's own region so it shows as a real connect card
     // and auto-joins the grid when a gateway for another zone forwards shares in. Only the
     // singlebox role runs a local stratum; a bare hub relies purely on regional gateways.
+    // After a hub MOVE (config.region differs from the last one this DB saw) it also activates
+    // the new region's row once — see the note on ensureLocalRegion.
     if (config.role === 'singlebox') {
       const localStratum = config.subdomain ? `${config.subdomain}:${config.stratum_port}` : '';
       ensureLocalRegion(config.region, localStratum, {
@@ -551,6 +597,16 @@ async function initializePool() {
     shareValidator = new ShareValidator(config);
     minerManager = new MinerManager(config);
     console.log(`[${new Date().toISOString()}] Mining managers initialized`);
+
+    // One-time copy of the legacy 2-slot proof window into the proof set (design §17.2 #9),
+    // subsuming the old plaintext-hash upgrade and the anchor backfill. MUST stay synchronous
+    // and MUST run BEFORE stratumServer.start() below: an account that reached its first
+    // post-upgrade capture with an EMPTY set would anchor to whoever mined that share, not to
+    // the owner. It used to sit ~130 lines further down, after `await nostrBridge.start()` —
+    // so with Nostr payouts on, the listener was accepting shares for as long as the relays
+    // took to answer (Part 4 review; the §J3 backfill had the same placement). Idempotent — it
+    // NULLs the columns it copied, so a second start finds nothing to do.
+    migrateProofSet(db);
 
     // The stratum server MUST share this minerManager — sessions are created there on login and
     // read here (/api/pool/stats, per-worker online flags, network map, poolstats, hashrate
@@ -680,14 +736,6 @@ async function initializePool() {
     // One-time in-place coarsening of historical miner audit IPs to network prefixes
     // (/24, /48). Synchronous — truncation only, no KDF — and idempotent.
     migrateAuditLogIps(db);
-
-    // One-time copy of the legacy 2-slot proof window into the proof set (design §17.2 #9),
-    // subsuming the old plaintext-hash upgrade and the anchor backfill. MUST stay synchronous
-    // and MUST stay ahead of the stratum listener, for the backfill's original reason: an
-    // account that reached its first post-upgrade capture with an EMPTY set would anchor to
-    // whoever mined that share, not to the owner. Idempotent — it NULLs the columns it copied,
-    // so a second start finds nothing to do.
-    migrateProofSet(db);
 
     authManager = new AuthManager(config);
     // Live session policy. A provider function (not a snapshot) so changing the timeout in
@@ -1178,6 +1226,12 @@ function setupRoutes() {
           stratum_port: config.stratum_port || '',
           network: config.network || 'mainnet',
           algorithm: 'Cuckatoo32',
+          // Where the connect page may time latency (lib/latency-probe.js): probe_domain
+          // (gateways it may probe at https://<stratum host>/ping, the nginx CSP's
+          // connect-src wildcard), hub_url (this hub's /ping, or null behind a CDN proxy) and
+          // direct_bias_ms (the suggestion's ranking bias, so the page re-ranks by the same rule).
+          // Installer-set values only, so it is safe inside this hostname-keyed cache.
+          latency: latencyConfig(config),
         };
         // Public incentive summary (prize-pool size, next draw, recent winners). Only shown
         // when the operator has enabled incentives. Winner addresses are truncated.
@@ -1321,7 +1375,7 @@ function setupRoutes() {
   const OWNER_PROOF_BODY = 'proof (recent mining IP or the rig\'s stratum password; legacy alias ip_proof)';
   const API_DOC_META = {
     // ── Public ────────────────────────────────────────────────────────────────
-    'GET /api/public/branding': { desc: 'White-label config (name, theme, SEO, social, footer links).', shape: 'envelope' },
+    'GET /api/public/branding': { desc: 'White-label config (name, theme, SEO, social, footer links). connection.latency tells the connect page where it may measure latency from your browser: probe_domain (regional servers under https://*.<probe_domain> answer GET /ping with an empty 204; null = none), hub_url (where the pool itself answers /ping; null when it sits behind a CDN proxy, which would time the CDN instead) and direct_bias_ms (integer milliseconds: connecting directly is preferred unless a regional server is more than this much faster — the same rule as /api/pool/connect/suggest).', shape: 'envelope' },
     'GET /api/public/price': { desc: 'Cached GRIN price (USD + BTC) from CoinGecko. Serves the last good value on upstream failure; { available: false } if never fetched. updated_at is UNIX MILLISECONDS (the one such field on this API).', shape: 'envelope' },
     'GET /api/public/endpoints': { desc: 'This API reference (machine-readable).', shape: 'envelope' },
     'GET /api/public/ads': { desc: 'Active operator ads by placement (+ rotation interval). Cached 60s, so ad edits take up to a minute to appear.', shape: 'raw', params: 'placement (omit for every slot keyed by placement)' },
@@ -1339,7 +1393,8 @@ function setupRoutes() {
     // ── Pool ──────────────────────────────────────────────────────────────────
     'GET /api/pool/stats': { desc: 'Live pool stats: block totals (found / confirmed / immature counts, confirmed + immature reward), active miners (distinct addresses), active workers (logged-in rigs), raw connections, and share quality (accepted/stale/rejected). Share quality is LIVE in-memory only — it is empty with no connected sessions and resets on disconnect.', shape: 'raw' },
     'GET /api/pool/status': { desc: 'Coarse service health for the status strip: pool up, node reachable/synced/peers/height, wallet reachable. Never exposes balances or addresses.', shape: 'raw' },
-    'GET /api/pool/stats/regions': { desc: 'Per-region stratum endpoints + live status (online | idle | offline | checking — the last only on the first poll after a restart, before the reachability probe has a verdict) and 15-minute regional hashrate, miners (distinct addresses) and workers (distinct address+rig pairs). On a MULTI-region pool a k-anonymity floor applies: a region with 0 < miners < min_bucket reports miners/workers/hashrate_gps/shares_window as null with below_floor:true — that is withheld, not zero (a real zero is still 0). Totals are always exact. timestamp is ISO 8601.', shape: 'raw' },
+    'GET /api/pool/stats/regions': { desc: 'Per-region stratum endpoints + live status (online | idle | offline | checking — the last only on the first poll after a restart, before the reachability probe has a verdict) and 15-minute regional hashrate, miners (distinct addresses) and workers (distinct address+rig pairs). On a MULTI-region pool a k-anonymity floor applies: a region with 0 < miners < min_bucket reports miners/workers/hashrate_gps/shares_window as null with below_floor:true — that is withheld, not zero (a real zero is still 0). Totals are always exact. Per region, is_hub (boolean) marks this server\'s own region — connecting there is connecting to the pool directly; false on every row of a pool that runs no local stratum. hub_rtt_ms (integer milliseconds) is the round trip between the pool and that region\'s server — the minimum of its last 5 TCP connects to the region\'s public stratum port; add it to your own latency to that server for your effective latency to the pool. It is 0 on the is_hub row, and null when that server has not been reached yet (just after a restart, or never). timestamp is ISO 8601.', shape: 'raw' },
+    'GET /api/pool/connect/suggest': { desc: 'Which server to point a rig at, for YOU: estimated effective latency per region, from the country your IP resolves to. Effective = your distance to that server + its link to the pool (hub_rtt_ms) — a regional server does not shorten the trip to the pool, so a far one can lose to connecting directly. Returns { basis: "estimate", recommended (region tag, or null), estimates: [{ region, est_ms (integer milliseconds, round trip), via: direct | gateway }] }; direct is preferred unless a gateway is more than 15 ms faster. Regions that are offline, or whose link to the pool has not been measured yet, get no estimate. { basis: "unavailable" } alone when no country can be resolved. An estimate from geography, not a measurement. Your IP and country are used for this one answer and neither stored, logged nor returned; never cached (Cache-Control: private, no-store).', shape: 'raw' },
     'GET /api/pool/locations': { desc: 'Operator-declared stratum regions that are currently active — region key, label, and the stratum URL to point a rig at.', shape: 'array' },
     'GET /api/pool/blocks': { desc: 'Pool-found blocks, newest first. A short page (fewer rows than limit) means the last page. found_by is MASKED (grin1qxy…mn4p).', shape: 'array', params: 'limit (≤500, default 50) · offset · status=immature|confirmed|orphaned' },
     'GET /api/pool/blocks/history': { desc: 'Durable block series: luck, per-period counts, status split, cumulative reward. Blocks are never pruned, so any range is meaningful.', shape: 'raw', params: 'range=week|month|year|all (default month)' },
@@ -1375,13 +1430,13 @@ function setupRoutes() {
     'GET /api/account/:addr/balance/log': { desc: 'Address ledger. Raw rows prune after ~60 days (the durable record is the withdrawal history below). format=csv streams the filtered window as a download on a tighter rate limit.', shape: 'raw · csv', params: 'direction=in|out · days (≤3650, default all) · limit (≤500, default 50) · offset · format=csv' },
     'GET /api/account/:addr/withdrawals': { desc: 'Payout history for an address — kept forever, so this is the durable record for accounting. Payouts only: no donations or orphan clawbacks. format=csv streams all-time on a tighter rate limit. The on-chain kernel is NOT returned here — rows carry has_kernel_proof and has_payment_proof (booleans) and the proofs themselves need an ownership proof; see POST /api/account/:addr/withdrawals/proofs.', shape: 'raw · csv', params: 'limit (≤200, default 20) · offset · format=csv' },
     'POST /api/account/:addr/withdrawals/proofs': { desc: 'Payment proofs for your own payouts, two kinds in one call. proofs: { <withdrawal id>: <kernel excess> } - the on-chain kernel of every confirmed payout (proves the tx was mined). payment_proofs: { <withdrawal id>: <PaymentProof> } - the signed proof grin-wallet requested on Tor payouts: { amount (nanogrin), excess, recipient_address, recipient_sig, sender_address, sender_sig }, the same JSON `grin-wallet export_proof` writes; save one as a file and `grin-wallet verify_proof` it. recipient_sig is YOUR wallet\'s signature, so it proves receipt to anyone. Slatepack/nostr payouts carry no signed proof (kernel only). Newest 500 signed proofs. Ownership-gated on purpose: publishing an address next to its kernels would be a public address-to-chain index on a privacy coin. 403 = proof failed, 404 = no such account.', shape: 'raw', auth: 'ownership proof', rate: 'withdraw', body: OWNER_PROOF_BODY },
-    'GET /api/account/:addr/tor-check': { desc: 'Is this miner\'s wallet reachable over Tor right now? Read-only probe behind the payout UI hint. online is TRI-STATE: true/false when known, null = "decided at payout time". 404 if the address has never mined here — the probe is not offered for arbitrary Grin addresses. Answers are cached 60s per address; the payout gate always re-probes fresh.', shape: 'raw', rate: 'torcheck' },
+    'GET /api/account/:addr/tor-check': { desc: 'Is this miner\'s wallet answering over Tor right now? The pool opens a fresh Tor circuit to the onion derived from the address and POSTs check_version to its foreign API; can take up to ~30 s. online is TRI-STATE: true = a grin-wallet answered; false = our Tor works and the wallet did not answer (or something that is not a wallet did); null = this pool could not look (its own Tor is down) — says nothing about the wallet, and a Tor payout is still allowed. reason: reachable · reachable_auth · onion_unreachable · onion_timeout · no_answer · not_wallet · invalid_format · derivation_failed · tor_unavailable · probe_failed. 404 if the address has never mined here — the probe is not offered for arbitrary Grin addresses. Answers are cached 60s per address; fresh=1 re-probes, but only once the cached answer is 10s old (younger answers are served as-is), and joins a probe already running. The payout gate always re-probes fresh.', shape: 'raw', params: 'fresh=1 (re-probe; 10s floor)', rate: 'torcheck' },
     'POST /api/account/:addr/withdraw': { desc: 'Request a payout on one of three rails. amount defaults to the full available balance. 403 = ownership proof failed; 400 = invalid amount, below the minimum, or too small to cover the flat fee; 409 = insufficient balance, or payouts frozen by the operator; 409 (tor) = wallet unreachable, retry or switch to slatepack; 409 (nostr) = destination unregistered, still in cooldown, or its npub changed; 429 = a payout is already pending on ANY rail (one at a time), a recently reversed payout is still in its cooldown, or the pool-wide pending cap is full; 503 = the nostr rail is disabled.', shape: 'flat', auth: 'ownership proof', rate: 'withdraw', body: `method=tor|slatepack|nostr (default tor) · amount (default: full balance) · ${OWNER_PROOF_BODY}` },
     'POST /api/account/:addr/withdraw/:id/finalize': { desc: 'Complete a slatepack payout by posting back the response slatepack your wallet produced with `receive`. The pool finalizes and broadcasts. 404 = no such withdrawal; 409 = not awaiting a slatepack (already settled or expired); 400 = the slatepack does not match this withdrawal.', shape: 'flat', auth: 'ownership proof', rate: 'withdraw', body: `response_slatepack · ${OWNER_PROOF_BODY}` },
     // NOT the shared OWNER_PROOF_BODY: this is the one route that needs the IP and the password
     // as two separate fields (either alone is a 400 both_proofs_required), so the "IP or
     // password" wording every other money route carries would be wrong here.
-    'POST /api/account/:addr/nostr-destination': { desc: 'Register/replace the Goblin username for Nostr payouts. Does NOT move funds — it pins the destination and (re)starts a security cooldown, during which the nostr rail refuses to pay. Needs BOTH proofs as separate fields (400 both_proofs_required otherwise), and each must have been on record for at least the cooldown period — a 409 reason of proof_too_recent means the evidence is newer than that, and anchor_not_accepted_here means the original recorded proof was used (it can withdraw, but not redirect). Replacing an existing destination is refused with 409 confirm_replace_required (the response echoes `replacing`) until the call carries confirm_replace = the username being replaced. 503 when the rail is disabled.', shape: 'flat', auth: 'ownership proof (BOTH kinds)', rate: 'withdraw', body: 'username (Goblin/NIP-05) · proof (recent mining IP; legacy alias ip_proof) · password_proof (the rig\'s stratum password) · confirm_replace (current username, only when replacing)' },
+    'POST /api/account/:addr/nostr-destination': { desc: 'Register/replace the Goblin username for Nostr payouts. Does NOT move funds — it pins the destination and (re)starts a security cooldown, during which the nostr rail refuses to pay. Needs BOTH proofs as separate fields (400 both_proofs_required otherwise), and each must have been on record for at least the cooldown period — a 409 reason of proof_too_recent means the evidence is newer than that, and anchor_not_accepted_here means the proof matched only the original write-once record after it had dropped out of the live set of 10 (it can withdraw, but not redirect; while it is still live it counts as an ordinary proof). Replacing an existing destination is refused with 409 confirm_replace_required (the response echoes `replacing`) until the call carries confirm_replace = the username being replaced. 503 when the rail is disabled.', shape: 'flat', auth: 'ownership proof (BOTH kinds)', rate: 'withdraw', body: 'username (Goblin/NIP-05) · proof (recent mining IP; legacy alias ip_proof) · password_proof (the rig\'s stratum password) · confirm_replace (current username, only when replacing)' },
     'DELETE /api/account/:addr/nostr-destination': { desc: 'Remove the registered Goblin payout destination, clearing the pin and cooldown.', shape: 'flat', auth: 'ownership proof', rate: 'withdraw', body: OWNER_PROOF_BODY },
   };
   app.get('/api/public/endpoints',
@@ -3186,9 +3241,11 @@ function setupRoutes() {
   });
 
   // ─── POOL BLOCKS EXPLORER (Admin) ──────────────────────────────────
-  // Pool-found blocks with maturity countdown + GrinScan deep-links. Distinct from the public
-  // chain explorer (grinscan.org): this is only THIS pool's blocks, with payout-relevant context
-  // (status, maturity, orphan reversals) that a chain explorer cannot have.
+  // Pool-found blocks with maturity countdown + chain-explorer deep-links. Distinct from a public
+  // chain explorer: this is only THIS pool's blocks, with payout-relevant context (status,
+  // maturity, orphan reversals) that a chain explorer cannot have. `grinscan_url` is a legacy
+  // field name kept for API shape — it holds whichever explorer explorerBlockUrl() picks
+  // (grincoin.org on mainnet), and the admin page builds its own links via window.Explorer.
   app.get('/api/admin/blocks', secureAdmin, async (req, res) => {
     try {
       const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 50, 1), 500);
@@ -3214,12 +3271,12 @@ function setupRoutes() {
       } catch (e) { tipHeight = 0; }
 
       // Must match the client-side builders in /js/branding.js + admin-panel/admin-shell.js:
-      // the two explorers do NOT share a path scheme. Mainnet → scan.grin.money (06d Tiny
-      // Explorer, /block/<h>); testnet → test.grinscan.org (06b sibling, /block.html?h=<h>).
-      // `testnet.grinscan.org` does not resolve — never use it.
+      // the two explorers do NOT share a path scheme. Mainnet → grincoin.org (aglkm archive,
+      // /block/<h> — digits only, a hash would need /hash/); testnet → test.grinscan.org (06b
+      // sibling, /block.html?h=<h>). `testnet.grinscan.org` does not resolve — never use it.
       const explorerBlockUrl = (height) => (config.network === 'testnet'
         ? `https://test.grinscan.org/block.html?h=${encodeURIComponent(height)}`
-        : `https://scan.grin.money/block/${encodeURIComponent(height)}`);
+        : `https://grincoin.org/block/${encodeURIComponent(height)}`);
 
       const blocks = rows.map((b) => {
         const confirmations = tipHeight ? Math.max(0, tipHeight - b.height) : 0;
@@ -4312,22 +4369,31 @@ function setupRoutes() {
   // Is this miner reachable over Tor right now? Drives the UI hint for whether an
   // auto (Tor) payout can succeed vs. needing a Slatepack claim. No state change.
   // ─── Tor reachability probe cache ───────────────────────────────────────────
-  // probeToronlineStatus builds a Tor circuit and SOCKS-connects (up to torCheckRetries attempts
-  // × tor_check_timeout_ms), so an uncached public endpoint turns one cheap HTTP request into
-  // seconds of outbound work. The answer barely changes minute to minute — a wallet listener is
-  // either up or it isn't — so a short cache costs the miner nothing and makes repeat clicks free.
+  // probeToronlineStatus builds a fresh Tor circuit per attempt and POSTs check_version down it
+  // (up to torCheckRetries attempts × connect + reply timeouts — ~32 s worst case at the
+  // defaults), so an uncached public endpoint turns one cheap HTTP request into seconds of
+  // outbound work. The answer barely changes minute to minute — a wallet listener is either up
+  // or it isn't — so a short cache costs the miner nothing and makes repeat clicks free.
+  //
+  // `?fresh=1` (the page's "Check" button) re-probes instead of serving the cache — the miner
+  // who has just started a listener must not be shown the ✗ from a minute ago — but ONLY once
+  // the cached answer is TOR_PROBE_FRESH_FLOOR_MS old. The floor stops a click-spammer turning
+  // the cache off; the `torcheck` rate bucket still applies to every request, fresh or not, and
+  // a fresh request still joins an in-flight probe rather than starting a second one.
   //
   // DELIBERATELY NOT used by the withdraw pre-flight gate. That one is a money decision (it can
   // refuse a payout), so it always takes a fresh probe: a 60s-stale "offline" must never block a
   // listener the miner just started. Caching a UI hint and caching a gate are different calls.
   const TOR_PROBE_TTL_MS = 60000;
+  const TOR_PROBE_FRESH_FLOOR_MS = 10000;    // ?fresh=1 cannot re-probe an answer younger than this
   const TOR_PROBE_MAX = 500;                 // bound the map — this is a cache, not a registry
   const torProbeCache = new Map();           // addr -> { at, result }
   const torProbeInflight = new Map();        // addr -> Promise (collapses concurrent probes)
 
-  const torProbeCached = async (addr) => {
+  const torProbeCached = async (addr, fresh = false) => {
     const hit = torProbeCache.get(addr);
-    if (hit && (Date.now() - hit.at) < TOR_PROBE_TTL_MS) return hit.result;
+    const ttl = fresh ? TOR_PROBE_FRESH_FLOOR_MS : TOR_PROBE_TTL_MS;
+    if (hit && (Date.now() - hit.at) < ttl) return hit.result;
 
     // Rapid repeat clicks are exactly what this endpoint sees, and they arrive before the first
     // probe resolves — so dedup in-flight too, or the cache never gets the chance to help.
@@ -4370,11 +4436,12 @@ function setupRoutes() {
       const known = db.prepare('SELECT 1 AS x FROM miner_accounts WHERE grin_address = ?').get(addr);
       if (!known) return res.status(404).json({ error: 'no mining account for this address' });
 
-      const result = await torProbeCached(addr);
+      const result = await torProbeCached(addr, req.query.fresh === '1');
       res.json({
         grin_address: addr,
-        // Tri-state: true/false when known, null = "determined at payout time" (grin-wallet
-        // performs the actual Tor connection to the recipient during the send).
+        // Tri-state: true/false when known; null = this pool could not look (its own tor is
+        // down or silent) — says nothing about the wallet, and the payout is still allowed
+        // (the pre-flight gate fails open; grin-wallet is the authority at send).
         online: result.online === null ? null : !!result.online,
         reason: result.reason || (result.online ? 'reachable' : 'unreachable')
       });
@@ -4406,8 +4473,9 @@ function setupRoutes() {
 
       if (method === 'tor') {
         // Cheap admission checks FIRST — audit §J12-12. The pre-flight probe below builds up to
-        // two fresh Tor circuits (≤6 s), and it used to run before any of this, so a miner
-        // holding one valid proof could force 20 circuit builds a minute at the `withdraw`
+        // two fresh Tor circuits (≤~32 s worst case at the 8 s default), and it used to run
+        // before any of this, so a miner holding one valid proof could force 20 circuit builds
+        // a minute at the `withdraw`
         // bucket while every withdrawal they asked for would have been refused anyway. This is
         // an early refusal, not the gate: createWithdrawal repeats all of it authoritatively
         // inside its transaction, so the ordering change costs nothing and races nothing.
@@ -4430,6 +4498,17 @@ function setupRoutes() {
           let reach = { online: null };
           try { reach = await walletTor.probeToronlineStatus(addr); }
           catch (e) { reach = { online: null, reason: `probe_error: ${e.message}` }; }
+          // The requester may have LEFT while that ran. The probe can take ~32 s at the defaults
+          // and nginx gives /api/ 30 s — past that it has already shown the browser a 504
+          // ("Withdrawal failed") and closed our socket, but Express still runs this handler, so
+          // it used to lock the balance and queue a payout the miner had just been told failed.
+          // res.destroyed, NOT req.destroyed: Node ≥ 16 sets the latter for every request once
+          // its body is read (scripts/test-payout-rails.js proves both). (Review fix, Part 5.)
+          if (res.destroyed) {
+            auditOwnerProof(db, { action: 'withdraw_tor', grinAddress: addr, ip: reqIp, ok: false, details: { reason: 'requester_gone', probe: reach.reason } });
+            console.warn(`[tor-preflight] requester left during the probe (${reach.reason || 'unknown'}) — no withdrawal created`);
+            return;
+          }
           if (reach.online === null) {
             // Fail OPEN is deliberate (memory project_pool_tor_preflight_gate). It must not be
             // fail SILENT: neither the probe nor this route said anything when it could not run,
@@ -4546,9 +4625,9 @@ function setupRoutes() {
   // must additionally have been captured at least `minAgeSec` ago — the destination cooldown,
   // the same window the operator already accepts as "long enough for the real owner to notice".
   // A miner whose IP has just changed is not locked out by this: their PREVIOUS IP is still in
-  // the window with its own older timestamp, and submitting that one passes.
+  // the proof set with its own older timestamp, and submitting that one passes.
   //
-  // The anchor slot is refused outright. It is unrevocable by construction (§J3-4), which is
+  // An EVICTED anchor (slot 'anchor') is refused outright. It is unrevocable by construction (§J3-4), which is
   // exactly right for getting your own money to your own wallet and exactly wrong for changing
   // where the money goes — a leaked first-ever rig password must not be a permanent key to
   // somebody else's payout destination.
@@ -4567,8 +4646,11 @@ function setupRoutes() {
     // then redirect" while staying invisible to anyone who has actually been mining here.
     const MIN_PROOF_AGE_SEC = 3600;
     const minAgeSec = Math.max(MIN_PROOF_AGE_SEC, (Math.max(0, Number(cooldownH) || 0) * 3600));
-    // A leg is acceptable only from the live last-2 window, and only once it has aged.
-    // age_seconds === null means the slot predates the timestamp columns; treat an unknown
+    // A leg is acceptable only from a LIVE row of the proof set (never an evicted anchor), and
+    // only once it has aged — age is first_seen_at, which a refresh never moves (design §17.2
+    // #2) and a returning evicted anchor restarts (§17.7), so an anchor cannot be re-activated
+    // into an aged leg.
+    // age_seconds === null means the row predates the timestamp columns; treat an unknown
     // age as OLD, not as fresh — those rows were written before this attack was reachable,
     // and failing them closed would lock out every miner who mined before the upgrade.
     const legFails = (p) => {
@@ -4583,9 +4665,11 @@ function setupRoutes() {
       return {
         ok: false, code: code || 403, reason,
         error: reason === 'proof_too_recent'
-          ? `That ${leg === 'ip' ? 'mining IP' : 'rig password'} was only recorded recently. A payout destination can only be changed using evidence at least ${cooldownH} h old — this is what stops someone who briefly mined to your address from re-pointing your payouts.`
+          // minAgeSec, not cooldownH: the age floor is what was enforced, and with the
+          // cooldown dial at 0 the old text told the miner "at least 0 h old" while refusing.
+          ? `That ${leg === 'ip' ? 'mining IP' : 'rig password'} was only recorded recently. A payout destination can only be changed using evidence at least ${Math.ceil(minAgeSec / 3600)} h old — this is what stops someone who briefly mined to your address from re-pointing your payouts.`
           : reason === 'anchor_not_accepted_here'
-            ? 'That proof is your original recorded one. It can withdraw to your own wallet, but changing a payout destination needs your current mining IP and rig password.'
+            ? `That proof is your original recorded one, and it has dropped out of the ${PROOF_SET_MAX} most recently used. It can withdraw to your own wallet, but changing a payout destination needs a mining IP and rig password your rigs are still using.`
             : (leg === 'ip' ? 'Mining IP proof failed' : 'Rig password proof failed'),
       };
     };
@@ -5176,7 +5260,6 @@ function setupRoutes() {
       // of miner traffic — a handshake older than OFFLINE_S (or none at all) means the gateway
       // is genuinely DOWN, not merely quiet. Cached snapshot, never awaited in the request path.
       const wgSnapshot = cachedGatewayStatus();
-      const wgByRegion = wgSnapshot.regions || {};
 
       // Active reachability: TCP-dial each declared stratum_url in the BACKGROUND. This is the
       // only signal that covers a region with no WireGuard peer at all — a declared/seeded
@@ -5205,26 +5288,10 @@ function setupRoutes() {
       //      handshake means down even if its public port still answers (HAProxy up, no route
       //      home). A fresh handshake is still overruled by a CONFIRMED dead public port.
       //   ④ otherwise the stratum dial — covers every region wg cannot speak for.
-      const regionStatus = (region, hasShares, shareAge, hasTarget) => {
-        const sharesFresh = shareAge !== null && shareAge < OFFLINE_S;
-        const verdict = stratumVerdict(region);
-        let up;
-        if (sharesFresh) up = true;
-        else if (region === localRegion) up = true;
-        else if (wgSnapshot.available && wgByRegion[region]) {
-          const wg = wgByRegion[region];
-          up = !!(wg.handshake && (nowS - wg.handshake) < OFFLINE_S) && verdict !== false;
-        } else if (verdict === null) {
-          // Nothing to dial and no tunnel to read → liveness is genuinely unknowable; keep the
-          // old lenient behaviour rather than stranding the region on 'checking' forever.
-          if (!hasTarget) return hasShares ? 'online' : 'idle';
-          return 'checking';
-        } else {
-          up = verdict;
-        }
-        if (!up) return 'offline';
-        return hasShares ? 'online' : 'idle';
-      };
+      // The rules live in publicRegionStatus() (module level), shared with /api/pool/connect/suggest.
+      const statusCtx = { localRegion, wgSnapshot, nowS, offlineS: OFFLINE_S };
+      const regionStatus = (region, hasShares, shareAge, hasTarget) =>
+        publicRegionStatus(region, hasShares, shareAge, hasTarget, statusCtx);
 
       // Union of regions seen in shares and regions declared in pool_locations.
       const regions = new Set([...byRegion.keys(), ...locByRegion.keys()]);
@@ -5247,6 +5314,14 @@ function setupRoutes() {
           is_active: loc.is_active === undefined ? null : !!loc.is_active,
           status,                       // 'online' | 'idle' | 'offline' | 'checking'
           online: status !== 'offline', // reachable? (up regardless of miner count)
+          // This box's own (singlebox) region = connecting DIRECT to the hub. The connect page's
+          // latency estimate needs to know which row that is: every other region adds its
+          // hub_rtt_ms leg on top of the viewer's. A 'hub' role runs no local stratum → no row.
+          is_hub: region === localRegion,
+          // ≈ one hub↔gateway RTT in integer ms: min of the last 5 successful TCP connects from
+          // this box to the region's public stratum (lib/region-rtt.js). 0 for the hub row, null
+          // with no sample. Feeds effective latency = viewer→gateway + gateway→hub.
+          hub_rtt_ms: hubRttMs(stratumRttWindow(region), region === localRegion),
           hashrate_gps: parseFloat(gps.toFixed(6)),
           miners: a.miners,
           workers: a.workers,
@@ -5319,6 +5394,57 @@ function setupRoutes() {
       });
     } catch (err) {
       res.status(500).json({ error: err.message });
+    }
+  });
+
+  // "Best server for you" on the connect page — the geographic ESTIMATE (lib/connect-suggest.js):
+  // effective latency = viewer→gateway + gateway→hub, vs viewer→hub for connecting direct.
+  // Per viewer, so never cacheable. PRIVACY: the IP is resolved to a COUNTRY for this one
+  // computation and dropped — not stored, not logged, not echoed, and neither is the country; the
+  // response carries only per-region milliseconds. No country (geoip-lite not installed, a private
+  // or unknown address, a country with no centroid on file) → { basis: 'unavailable' } alone, and
+  // the page keeps its timezone fallback.
+  // Reads the same inputs as /api/pool/stats/regions — the published rows (active, with a
+  // stratum_url), publicRegionStatus(), hub_rtt_ms, is_hub — so it can never recommend a region
+  // the patch bay paints red. Positions are the operator-declared lat/lng where set (a server's
+  // own public location), else the region's country centroid.
+  app.get('/api/pool/connect/suggest', rateLimiter.middleware('public'), (req, res) => {
+    res.setHeader('Cache-Control', 'private, no-store');
+    try {
+      const geo = geoip.available()
+        ? geoip.lookupCountry(String(req.ip || '').replace('::ffff:', ''))
+        : null;
+      if (!geo || !geoip.countryCentroid(geo.cc)) return res.json({ basis: 'unavailable' });
+
+      const OFFLINE_S = 600;  // same threshold as /api/pool/stats/regions
+      const nowS = Math.floor(Date.now() / 1000);
+      const locations = db.prepare(
+        `SELECT region, country_code, stratum_url, is_active, lat, lng FROM pool_locations`
+      ).all().filter((l) => l.stratum_url && (l.is_active === 1 || l.is_active === true));
+      // Fresh shares are the strongest liveness signal (precedence ①); only the newest time is needed.
+      const lastShare = new Map(db.prepare(
+        `SELECT region, MAX(created_at) AS last_share FROM shares WHERE created_at > ? GROUP BY region`
+      ).all(nowS - OFFLINE_S).map((r) => [r.region, r.last_share]));
+
+      refreshStratumProbes(locations);
+      const localRegion = (config && config.role === 'singlebox') ? config.region : null;
+      const statusCtx = { localRegion, wgSnapshot: cachedGatewayStatus(), nowS, offlineS: OFFLINE_S };
+      const regions = locations.map((l) => {
+        const ls = lastShare.get(l.region);
+        return {
+          region: l.region,
+          country_code: l.country_code || null,
+          lat: l.lat, lng: l.lng,
+          is_hub: l.region === localRegion,
+          hub_rtt_ms: hubRttMs(stratumRttWindow(l.region), l.region === localRegion),
+          status: publicRegionStatus(l.region, !!ls, ls ? nowS - ls : null, true, statusCtx),
+        };
+      });
+
+      const { recommended, estimates } = connectSuggest.estimate({ viewerCc: geo.cc, regions });
+      res.json({ basis: 'estimate', recommended, estimates });
+    } catch (err) {
+      res.status(500).json({ error: 'Failed to build a suggestion' });
     }
   });
 

@@ -109,16 +109,21 @@
   // ONE deterministic explorer per network — deliberately NOT randomized across two. The
   // earlier 50/50 rotation assumed the two explorers shared a path scheme; they do not
   // (verified live 2026-07-25), so every link that landed on grinscan.org 404'd, and the
-  // rotation is what hid it — half the clicks worked. The two schemes:
+  // rotation is what hid it — half the clicks worked. The schemes:
+  //   grincoin.org       /block/<h>  (hash → /hash/<hash>)  /kernel/<excess>  /output/<commit>
   //   scan.grin.money    /block/<h>           /kernel/<excess>          /output/<commit>
   //   *.grinscan.org     /block.html?h=<h>    /kernel.html?ex=<excess>  /output.html?c=<commit>
-  // Both accept a height OR a 64-hex block hash in the block slot.
+  // grincoin.org (aglkm/grin-explorer) takes DIGITS ONLY in /block/ — a 64-hex hash there
+  // renders its error page — so its style carries a separate `blockHash` segment. It also
+  // answers HTTP 200 for every path, error page included: a status code proves nothing about
+  // a link, compare page content (verified live 2026-09-23). /output/ finds UNSPENT outputs only.
   //
-  // Default: mainnet → scan.grin.money (06d Tiny Explorer), testnet → test.grinscan.org
-  // (06b GrinScan's testnet sibling). scan.grin.money is mainnet-only and test.grinscan.org
-  // is testnet-only, so the pair covers both networks with no overlap. NOTE the testnet host
-  // is `test.` — `testnet.grinscan.org` does NOT resolve (that typo made every testnet link
-  // dead). To switch explorer, change DEFAULT_EXPLORER below — the style travels with the
+  // Default: mainnet → grincoin.org (third-party full archive, so a toolkit operator's small
+  // VPS going down no longer breaks every proof link; was scan.grin.money / 06d until
+  // 2026-09-23), testnet → test.grinscan.org (06b GrinScan's testnet sibling —
+  // testnet.grincoin.org is PRUNED, so it cannot open old testnet blocks). NOTE the testnet
+  // host is `test.` — `testnet.grinscan.org` does NOT resolve (that typo made every testnet
+  // link dead). To switch explorer, change DEFAULT_EXPLORER below — the style travels with the
   // entry, so a swap can never resurrect the mismatched-scheme bug.
   //
   // Network is resolved from the branding fetch (cfg.connection.network) and cached in
@@ -129,26 +134,31 @@
     return 'mainnet';
   }
   // Path styles, keyed by explorer product. The value is the segment placed between the base
-  // URL and the encoded reference.
+  // URL and the encoded reference. `blockHash`, when present, replaces `block` for a
+  // non-numeric block reference (a hash).
   var EXPLORER_STYLES = {
-    path:  { block: 'block/',            kernel: 'kernel/',             output: 'output/' },
-    query: { block: 'block.html?h=',     kernel: 'kernel.html?ex=',     output: 'output.html?c=' }
+    path:     { block: 'block/',        kernel: 'kernel/',        output: 'output/' },
+    grincoin: { block: 'block/', blockHash: 'hash/', kernel: 'kernel/', output: 'output/' },
+    query:    { block: 'block.html?h=', kernel: 'kernel.html?ex=', output: 'output.html?c=' }
   };
   var EXPLORERS = {
-    tiny:             { base: 'https://scan.grin.money',  style: 'path'  }, // 06d, mainnet only
-    grinscan:         { base: 'https://grinscan.org',      style: 'query' }, // 06b mainnet
-    grinscan_testnet: { base: 'https://test.grinscan.org', style: 'query' }  // 06b testnet sibling
+    grincoin:         { base: 'https://grincoin.org',      style: 'grincoin' }, // aglkm full archive, mainnet
+    tiny:             { base: 'https://scan.grin.money',   style: 'path'     }, // 06d, mainnet only
+    grinscan:         { base: 'https://grinscan.org',      style: 'query'    }, // 06b mainnet
+    grinscan_testnet: { base: 'https://test.grinscan.org', style: 'query'    }  // 06b testnet sibling
   };
-  var DEFAULT_EXPLORER = { mainnet: 'tiny', testnet: 'grinscan_testnet' };
+  var DEFAULT_EXPLORER = { mainnet: 'grincoin', testnet: 'grinscan_testnet' };
   function explorerPick() {
     var net = explorerNetwork() === 'testnet' ? 'testnet' : 'mainnet';
-    return EXPLORERS[DEFAULT_EXPLORER[net]] || EXPLORERS.tiny;
+    return EXPLORERS[DEFAULT_EXPLORER[net]] || EXPLORERS.grincoin;
   }
   function explorerUrl(kind, value) {
     var ex = explorerPick();
     var style = EXPLORER_STYLES[ex.style] || EXPLORER_STYLES.path;
-    var seg = (kind === 'kernel') ? style.kernel : (kind === 'output') ? style.output : style.block;
-    return ex.base.replace(/\/+$/, '') + '/' + seg + encodeURIComponent(String(value));
+    var v = String(value);
+    var seg = (kind === 'kernel') ? style.kernel : (kind === 'output') ? style.output
+      : (style.blockHash && !/^\d+$/.test(v)) ? style.blockHash : style.block;
+    return ex.base.replace(/\/+$/, '') + '/' + seg + encodeURIComponent(v);
   }
   function xEsc(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
@@ -684,13 +694,13 @@
     } catch (e) { /* logo just stays on the main variant */ }
   }
 
-  // ── 3b. Site-wide header: swinging logo + slogan, Rewards link, miner auth ──
+  // ── 3b. Site-wide header: swinging logo + slogan, prize-pool links, miner auth ──
   // Applied on every public page so headers stay consistent without editing each file.
   // Acts only when a .brand element exists (skips login/admin pages that have none).
   function enhanceHeader(cfg) {
     injectHeaderStyles();
     enhanceBrand(cfg);
-    injectRewardsLink(cfg);
+    applyIncentivesNav(cfg);
   }
 
   function injectHeaderStyles() {
@@ -759,17 +769,17 @@
     applyLogoVariant();
   }
 
-  // Add a "Rewards" nav link to the incentive/contest page when incentives are live.
-  function injectRewardsLink(cfg) {
-    if (!cfg.incentives || !cfg.incentives.enabled) return;
-    var nav = document.querySelector('.header-nav');
-    if (!nav || nav.querySelector('a[href$="fortune-board.html"]')) return;
-    var a = document.createElement('a');
-    a.className = 'nav-link';
-    a.href = 'fortune-board.html';
-    a.textContent = '🎁 Rewards';
-    var account = nav.querySelector('a[href$="account-settings.html"]');
-    if (account) nav.insertBefore(a, account); else nav.appendChild(a);
+  // Hide the prize-pool chrome (header "Prize Pool" group + footer Donate / Fortune Board,
+  // all marked data-incentives by public-shell.js) when the operator has incentives off.
+  // Shown by default and hidden only on an explicit `enabled: false`: incentives ship ON,
+  // and a failed/partial config fetch should not strip working links off the page.
+  // style.display, not the `hidden` attribute — .nav-group / .footer-donate set their own
+  // display in CSS, which beats the UA [hidden] rule.
+  function applyIncentivesNav(cfg) {
+    var off = !!(cfg.incentives && cfg.incentives.enabled === false);
+    document.querySelectorAll('[data-incentives]').forEach(function (el) {
+      el.style.display = off ? 'none' : '';
+    });
   }
 
   // ── 4. Analytics + custom head HTML ────────────────────────────────────────
@@ -1158,7 +1168,7 @@
     try { injectExplorerCss(); } catch (e) {}
     // The header/footer + base nav are now injected synchronously by public-shell.js
     // (single source of truth, no flash). branding.js only ENHANCES that chrome:
-    // logo/slogan, [data-brand] hooks, and the incentives-gated 🎁 Rewards link.
+    // logo/slogan, [data-brand] hooks, and the incentives-gated prize-pool links.
     fetch(ENDPOINT, { credentials: 'same-origin' })
       .then(function (r) { return r.ok ? r.json() : null; })
       .then(function (json) { if (json && json.data) apply(json.data); })

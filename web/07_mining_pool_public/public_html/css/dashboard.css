@@ -224,7 +224,7 @@ header {
     color: var(--accent); background: var(--accent-soft);
     text-shadow: 0 0 8px var(--glow);
 }
-/* ── Nav dropdown group (e.g. Pool Stats → Miners Stats / Network Map) ─────────
+/* ── Nav dropdown group (e.g. Stats → Miners / Blocks / Payouts / Network Map) ─────────
    A group is a non-link parent (.nav-group) with a caret trigger + a floating
    .nav-dropdown of child links. Opens on hover / keyboard focus (desktop) and via
    the .open class toggled by public-shell.js (touch / keyboard). */
@@ -262,6 +262,14 @@ header {
    dropdown is open so the floating menu isn't cut off. */
 .header-nav:has(.nav-group.open) { overflow: visible; }
 .nav-right, .header-buttons { display: flex; align-items: center; gap: 10px; }
+/* margin-left:auto keeps Account + theme on the right edge once the nav drops to its own
+   row (≤900px); on desktop the flex:1 nav already pushes it there, so this is a no-op. */
+.nav-right { margin-left: auto; }
+/* Account = the visitor's OWN page, set apart from the pool-wide nav as an outlined chip
+   (public-shell.js ACCOUNT). Same radius/height language as the theme button beside it. */
+.nav-link.nav-account { border: 1px solid var(--border); color: var(--text); padding: 7px 12px; }
+.nav-link.nav-account:hover { border-color: var(--accent); }
+.nav-link.nav-account.active { border-color: var(--accent); }
 .theme-switcher { display: flex; align-items: center; color: var(--accent); }
 /* Theme control = a single palette icon that cycles enabled themes on click.
    Shape: a rounded SQUARE (radius matches --radius-sm, same language as the nav chips
@@ -701,6 +709,10 @@ footer a:hover { color: var(--accent); }
     .nav-link { padding: 8px 9px; gap: 0; }
     .nav-label { display: none; }
     .nav-ico { font-size: 20px; }
+    .nav-link.nav-account { padding: 6px 9px; }
+    /* space-around puts the LAST group near the right edge, so a left-anchored 180px menu
+       would run off a phone screen — open that one leftward instead. */
+    .nav-group:last-child > .nav-dropdown { left: auto; right: 0; }
 }
 
 /* ── Ad slots (filled by /js/ads.js; hidden until they have active ads) ───────── */

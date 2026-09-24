@@ -94,8 +94,8 @@ resolver, the allowlist rules, and what is still open.
 
 | Doc | What it covers |
 |---|---|
-| [script07_design.md](script07_design.md) | Public mining pool architecture — PPLNS, address-as-identity, Model C regional gateways |
-| [script07_implementation.md](script07_implementation.md) | Pool deploy + runbook |
+| [script07_design.md](script07_design.md) | Public mining pool architecture — PPLNS, address-as-identity, Model C regional gateways, hub move + connect-page latency (§13.13) |
+| [script07_implementation.md](script07_implementation.md) | Pool deploy + runbook, incl. the hub-move runbook (§8.7) |
 | [script07_security_audit.md](script07_security_audit.md) | Pool security record, §A–§J17. **Start at the Status roll-up** — 14 k lines, and the roll-up is the whole of it in one table |
 
 ## Admin & host (Script 08 band)
@@ -117,6 +117,7 @@ resolver, the allowlist rules, and what is still open.
 | Doc | What it covers |
 |---|---|
 | [script00_report_deferred_work.md](script00_report_deferred_work.md) | Scripts 01/03/04/08 still carry private copies of the shared node libs — deferred DRY migration |
+| [script00_report_manual_findings.md](script00_report_manual_findings.md) | Where the code disagrees with the README, CLAUDE.md, menu hints and `docs/generated/` — ~100 findings logged while writing the grinnode.org manual, 14 flagged to fix first |
 
 ---
 

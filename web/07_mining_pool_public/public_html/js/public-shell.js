@@ -14,7 +14,7 @@
    you saw each page's (inconsistent) hardcoded fallback nav, and maintaining the
    markup meant editing 7 files. Now the nav lives HERE, once, and renders before
    any fetch. branding.js still ENHANCES this injected DOM (logo/slogan via
-   .brand, [data-brand] hooks, and the incentives-gated 🎁 Rewards link); it no
+   .brand, [data-brand] hooks, and hiding the incentives-gated Prize Pool links); it no
    longer owns the base nav.
 
    Load order at the end of <body>:  public-shell.js → public-theme.js → branding.js
@@ -27,34 +27,43 @@
   'use strict';
 
   // ── Canonical public navigation (single source of truth) ────────────────
-  // Fortune Board is a permanent nav item (it replaced the redundant "Info"
-  // link, whose target index.html#info is already on the dashboard). Because
-  // fortune-board.html is now always present here, branding.js injectRewardsLink
-  // detects it and no longer adds the separate "🎁 Rewards" link.
+  // Grouped by what the visitor is after (2026-09-23): the POOL's numbers under Stats,
+  // the prize pool's two halves (money out = Fortune Board, money in = the donate page)
+  // under Prize Pool, and the visitor's OWN page — Account — split out to the right of
+  // the header (ACCOUNT below), so the pool-wide "Payouts" and your own withdrawals no
+  // longer sit side by side as peers.
   // Each item carries an icon: on narrow screens the header collapses to icons-only
   // (the .nav-label is hidden via CSS) so the mobile header stays tidy; desktop shows
   // icon + label. The footer "Pool" column reuses the labels only (always text).
   // An item is either a leaf link ({href,label,icon}) or a GROUP
   // ({label,icon,children:[…leaf links…]}). A group has NO href of its own — it
-  // only opens a dropdown of its children (Pool Stats → Miners Stats / Network Map).
+  // only opens a dropdown of its children. A group marked `incentives: true` is hidden
+  // by branding.js when the operator has incentives switched off (applyIncentivesNav).
   var NAV = [
-    // "Home", not "Dashboard": two items along sits "Account", so "Dashboard" read as
-    // "my dashboard" when this is in fact the POOL-wide overview. The 🏠 icon already
-    // says home, and index.html's own <h1> still says "Pool Dashboard" — nav label and
-    // page identity, not the same job.
+    // "Home", not "Dashboard": "Dashboard" read as "my dashboard" when this is in fact the
+    // POOL-wide overview. The 🏠 icon already says home, and index.html's own <h1> still
+    // says "Pool Dashboard" — nav label and page identity, not the same job.
     { href: 'index.html',            label: 'Home',          icon: '🏠' },
-    { label: 'Pool Stats', icon: '📊', children: [
-      { href: 'miners-stats.html',   label: 'Miners Stats',  icon: '📈' },
+    { label: 'Stats', icon: '📊', children: [
+      { href: 'miners-stats.html',   label: 'Miners',        icon: '📈' },
+      { href: 'blocks.html',         label: 'Blocks',        icon: '🧱' },
+      { href: 'payment-history.html', label: 'Payouts',      icon: '💸' },
       { href: 'network-map.html',    label: 'Network Map',   icon: '🛰️' }
     ] },
-    // "Account", not "My Stats": the page's <title> and <h1> both say Account, and it is
-    // where withdrawals happen — calling it "Stats" in the nav both misnamed the
-    // destination and undersold it. Every other item here is a plain noun too.
-    { href: 'account-settings.html', label: 'Account',       icon: '👤' },
-    { href: 'blocks.html',           label: 'Blocks',        icon: '🧱' },
-    { href: 'payment-history.html',  label: 'Payouts',       icon: '💸' },
-    { href: 'fortune-board.html',    label: 'Fortune Board', icon: '🎁' }
+    // Every prize-pool GRIN is paid back out to miners, never to the operator — so the
+    // donate page is "Contribute" here, not "Donate" (reads as tipping the operator) and
+    // not "Sponsors" (reads as companies funding the operator). Its <h1> stays
+    // "Support the Prize Pool".
+    { label: 'Prize Pool', icon: '🎁', incentives: true, children: [
+      { href: 'fortune-board.html',  label: 'Fortune Board', icon: '🏆' },
+      { href: 'donate.html',         label: 'Contribute',    icon: '💚' }
+    ] }
   ];
+  // "Account", not "My Stats": the page's <title> and <h1> both say Account, and it is
+  // where withdrawals happen. Rendered as a chip in .nav-right, not in NAV: it is the only
+  // page about YOUR mining rather than the pool's, and "your stuff on the right, beside the
+  // settings" is the convention visitors already expect.
+  var ACCOUNT = { href: 'account-settings.html', label: 'Account', icon: '👤' };
   // Blog is intentionally NOT in NAV (header) — it lives in the footer "Resources"
   // column only, to keep the header focused on critical mining/stats links.
 
@@ -74,9 +83,10 @@
   var here = currentFile();
 
   // Render one leaf link (also used for the items inside a group dropdown).
-  function leafLink(l) {
+  function leafLink(l, extraClass) {
     var active = fileOf(l.href) === here ? ' active' : '';
-    return '<a href="' + l.href + '" class="nav-link' + active + '" title="' + esc(l.label) + '">' +
+    var cls = 'nav-link' + (extraClass ? ' ' + extraClass : '') + active;
+    return '<a href="' + l.href + '" class="' + cls + '" title="' + esc(l.label) + '">' +
       '<span class="nav-ico" aria-hidden="true">' + (l.icon || '') + '</span>' +
       '<span class="nav-label">' + esc(l.label) + '</span>' +
     '</a>';
@@ -87,7 +97,8 @@
     // Group: a caret trigger (no href) + a dropdown of children. The trigger carries
     // .active when the current page is one of the children so the parent stays lit.
     var childActive = l.children.some(function (c) { return fileOf(c.href) === here; });
-    return '<div class="nav-group' + (childActive ? ' active' : '') + '">' +
+    return '<div class="nav-group' + (childActive ? ' active' : '') + '"' +
+        (l.incentives ? ' data-incentives="1"' : '') + '>' +
       '<button type="button" class="nav-link nav-group-trigger" aria-haspopup="true" ' +
         'aria-expanded="false" title="' + esc(l.label) + '">' +
         '<span class="nav-ico" aria-hidden="true">' + (l.icon || '') + '</span>' +
@@ -95,7 +106,7 @@
         '<span class="nav-caret" aria-hidden="true">▾</span>' +
       '</button>' +
       '<div class="nav-dropdown" role="menu">' +
-        l.children.map(leafLink).join('') +
+        l.children.map(function (c) { return leafLink(c); }).join('') +
       '</div>' +
     '</div>';
   }).join('');
@@ -111,6 +122,7 @@
     '</div>' +
     '<nav class="header-nav" aria-label="Main" data-shell="1">' + navLinks + '</nav>' +
     '<div class="nav-right">' +
+      leafLink(ACCOUNT, 'nav-account') +
       '<div class="theme-switcher"></div>' +
     '</div>';
 
@@ -129,12 +141,13 @@
     if (l.children) { l.children.forEach(function (c) { poolLeaves.push(c); }); }
     else poolLeaves.push(l);
   });
-  // Excluded from the Pool column: Blog (Resources col), Fortune Board (surfaced under
-  // Donate in the brand col) and Home. Home briefly appeared here after the Resources
-  // column's "Get Started" was dropped, but a footer row reading just "Home" is a weak
-  // link — every page already carries the 🏠 Home item in the header nav, which is where
-  // people look for it. The footer is for destinations the header does NOT cover.
-  var POOL_COL_SKIP = { 'blog.html': 1, 'index.html': 1, 'fortune-board.html': 1 };
+  poolLeaves.push(ACCOUNT);   // lives in .nav-right, not NAV, but is still a pool page
+  // Excluded from the Pool column: Blog (Resources col), Fortune Board + the donate page
+  // (both surfaced as CTAs in the brand col) and Home. Home briefly appeared here after
+  // the Resources column's "Get Started" was dropped, but a footer row reading just
+  // "Home" is a weak link — every page already carries the 🏠 Home item in the header
+  // nav, which is where people look for it.
+  var POOL_COL_SKIP = { 'blog.html': 1, 'index.html': 1, 'fortune-board.html': 1, 'donate.html': 1 };
   var poolCol = poolLeaves.filter(function (l) { return !POOL_COL_SKIP[fileOf(l.href)]; })
     .map(function (l) {
       return '<a href="' + l.href + '">' + esc(l.label) + '</a>';
@@ -160,10 +173,12 @@
         // Donate lives in the brand column, highlighted with a heart, as the primary
         // community call-to-action (moved out of the Legal column). Fortune Board sits
         // right below it (moved out of the Pool column to keep the columns balanced).
-        '<a class="footer-donate" href="donate.html">' +
+        // Both carry data-incentives: hidden with the header's Prize Pool group when the
+        // operator has incentives off (branding.js applyIncentivesNav).
+        '<a class="footer-donate" href="donate.html" data-incentives="1">' +
           '<span class="footer-donate-ico" aria-hidden="true">❤</span> Donate' +
         '</a>' +
-        '<a class="footer-fortune" href="fortune-board.html">' +
+        '<a class="footer-fortune" href="fortune-board.html" data-incentives="1">' +
           '<span class="footer-fortune-ico" aria-hidden="true">🎁</span> Fortune Board' +
         '</a>' +
       '</div>' +
@@ -313,7 +328,7 @@
   }
 
   // Skip-to-content link. It must be the FIRST focusable thing in the document, which is
-  // why it is injected here rather than per page: the nav below it is 6+ items on every
+  // why it is injected here rather than per page: the nav below it is several stops on every
   // page, and without this a keyboard or screen-reader user re-tabs the whole thing on
   // every navigation. Visually hidden until focused (see .skip-link in dashboard.css).
   // Target is #main — the <main> landmark each page now carries; it has tabindex="-1" so

@@ -98,6 +98,9 @@ chmod +x grin-node-toolkit.sh scripts/*.sh
 sudo ./grin-node-toolkit.sh
 ```
 
+**New here?** The step-by-step manual — what each script asks, what it creates, and how to
+fix what goes wrong — is at **https://grinnode.org/docs/**.
+
 ---
 
 ## Disclaimer

@@ -24,7 +24,8 @@ const geoip = require('./geoip');
 // ── THE SET (design §17.2, replaced the 2-slot window on 2026-09-22) ──────────────────
 // Each (address, kind) owns up to PROOF_SET_MAX = 10 LIVE rows in `miner_proofs`. A value
 // already in the set refreshes its `last_seen_at`; a new one is inserted, evicting the
-// least-recently-SEEN live row when the set is full. `first_seen_at` NEVER moves.
+// least-recently-SEEN live row when the set is full. `first_seen_at` never moves while a row is
+// live; the one write that restarts it is an evicted anchor returning (see _captureProof).
 //
 // The window it replaced held two slots and compared a capture against the newer one only, so
 // two facilities whose rigs reconnected in turn rotated it on EVERY reconnect. Each rotation
@@ -61,8 +62,10 @@ const geoip = require('./geoip');
 //     destination was never two factors. verifyOwnerProof therefore reports WHICH KIND of row
 //     matched and HOW OLD it is, and index.js requireBothProofs refuses a leg younger than the
 //     destination cooldown. AGE is the only thing that separates the owner from a stranger who
-//     mined here for ten seconds — which is why `first_seen_at` is write-once. A path that
-//     moved it would defeat that gate exactly as window rotation did.
+//     mined here for ten seconds — which is why a refresh never touches `first_seen_at`. A
+//     path that moved it FORWARD on a live row would defeat that gate exactly as window
+//     rotation did; one that kept an OLD stamp on a returning value would hand the gate an
+//     aged leg nobody earned (the re-activated anchor, below).
 //   · §J3-4 — hostile sessions evicted both window slots, permanently for a miner who had
 //     stopped mining. Hence the ANCHOR (below) and the caller-supplied mayDisplace flag: an
 //     insert into a NON-EMPTY set costs sustained work, while first capture stays cheap.
@@ -119,7 +122,7 @@ function canonicalizeIp(raw) {
 const normalizeIp = canonicalizeIp;
 
 // ─── Network-prefix coarsening (for the audit log) ──────────────────────────
-// The proof windows above store scrypt hashes, so the DB holds no raw mining IP — but the
+// The proof set stores scrypt hashes, so the DB holds no raw mining IP — but the
 // audit trail used to write the requester's FULL IP next to the grin address, re-creating
 // exactly the (address, IP, time) linkage the hashing removed, and with no expiry.
 //
@@ -380,10 +383,10 @@ async function _matchProofRow(rows, value, v2) {
 // to merely TRIM a set back to the cap without freeing a slot — over-evicting would throw
 // away an owner's working proof for nothing.
 //
-// Evicts `live - PROOF_SET_MAX + 1`, not just one: node:sqlite runs each statement to
-// completion, but a capture's KDF is an await point, so two captures can both decide to insert
-// and leave the set one over the cap. Clearing the overshoot on the next insert makes that
-// self-correcting instead of permanent (§17.2 #5). An ANCHOR row is flagged, never deleted
+// Evicts `live - PROOF_SET_MAX + 1`, not just one (§17.2 #5). _captureProof decides after its
+// last await, so it cannot overshoot on its own; the excess form is defensive, so a set pushed
+// over the cap any other way (a hand-edited DB, a future caller) is trimmed back on the next
+// insert instead of staying over it permanently. An ANCHOR row is flagged, never deleted
 // (§J3-4) — a miner who has stopped mining must keep a route to their own wallet.
 function _makeRoom(db, rows, now, headroom) {
   const live = rows.filter(isLiveProof);
@@ -613,9 +616,14 @@ async function _captureProof(db, grinAddress, kind, value, now, mayDisplace, aud
   const preMatch = await _matchProofRow(pre, value, v2);
 
   // From here down: synchronous. Re-read so the counts and the LRU pick describe the table as
-  // it is now, and locate the match by its hash string (stable across the re-read).
+  // it is now. Locate the match by the pre-read's hash string OR by our own v2 digest: while
+  // this capture awaited the v1 checks above, a capture of the SAME value could have inserted
+  // it, or rewritten the v1 row we matched as v2. Missing either sent this capture down the
+  // insert path, where _makeRoom evicted an owner's proof for a row that already existed
+  // (Part 4 review: two NAT'd rigs reaching PROOF_MIN_SHARES together cost a full set two rows).
   const rows = _proofRows(db, grinAddress, kind);
-  const row = preMatch ? rows.find((r) => r.hash === preMatch.hash) || null : null;
+  const row = (preMatch && rows.find((r) => r.hash === preMatch.hash)) ||
+              rows.find((r) => sameDigest(r.hash, v2)) || null;
   const live = rows.filter(isLiveProof);
 
   if (row && isLiveProof(row)) {
@@ -634,10 +642,16 @@ async function _captureProof(db, grinAddress, kind, value, now, mayDisplace, aud
   const evicted = _makeRoom(db, rows, now);
 
   if (row) {
-    // The evicted anchor is coming back. first_seen_at stays where it is — the row is old, and
-    // it is old regardless of how long it spent outside the live set.
-    db.prepare('UPDATE miner_proofs SET evicted_at = NULL, last_seen_at = ? WHERE id = ?')
-      .run(now, row.id);
+    // The evicted anchor is coming back — and its AGE RESTARTS. This is the one write that
+    // moves first_seen_at, and it must: an evicted anchor is refused by requireBothProofs
+    // (§J3-4, an unrevocable credential must not redirect money), but once live it reads as an
+    // ordinary 'set' member. Keeping its original stamp would let four shares from whoever now
+    // holds that value — the owner's old CGNAT or re-leased IP — launder it into an AGED leg
+    // for the destination gate. A value returning to the live set is treated like any other
+    // new value (a non-anchor one is re-inserted with first_seen_at = now), which is also what
+    // the 2-slot window did. The owner's other live proofs keep their ages (Part 4 review).
+    db.prepare('UPDATE miner_proofs SET evicted_at = NULL, first_seen_at = ?, last_seen_at = ? WHERE id = ?')
+      .run(now, now, row.id);
     _upgradeV1Row(db, row, v2);
   } else {
     // is_anchor is decided INSIDE the statement, not from the snapshot above: node:sqlite runs
@@ -688,15 +702,20 @@ async function _captureProof(db, grinAddress, kind, value, now, mayDisplace, aud
 // Returns { ok, reason, method?, slot?, age_seconds? }.
 //   slot  'set' for a live row, 'anchor' ONLY for an evicted anchor. index.js
 //         requireBothProofs refuses 'anchor' outright (§J3-4).
-//   age_seconds  from first_seen_at, which never moves. NULL → null, which every caller
+//   age_seconds  from first_seen_at, which a refresh never moves (only a returning anchor
+//         restarts it). NULL → null, which every caller
 //         already treats as OLD — those rows predate the timestamps, not the attack.
 // clientIp is optional — omitting it preserves the original address-only behaviour, so any
 // caller without a request IP (the admin verify-owner tool) is unaffected.
 //
-// COST: ONE scrypt for the whole submission, plus one per legacy v1 row. The v2 digest does
-// not depend on the kind, so the same digest is reused for both sets; the small memo below is
-// what keeps that true when canonicalising the input changes it (a typed `203.0.113.09`).
-// §F2's per-IP throttle is sized against this number — see audit §F2 before changing it.
+// COST (measured in scripts/test-owner-gate.js, not assumed): the v2 digest does not depend on
+// the kind, so the memo below lets one digest serve both sets — ONE scrypt when the input is
+// used as typed. TWO when canonicalising changes an IP that is also password-shaped (a
+// compressed IPv6 like `2001:db8::1`): the IP set needs the canonical form, the password set
+// the raw one. Plus one per legacy v1 row of every kind tried — up to 6 on a migrated account
+// that still holds its anchor/last/prev of both kinds, so the transitional ceiling is 8, above
+// the old window's 6, falling as captures rewrite v1 rows. §F2's per-IP throttle is sized
+// against this number — see audit §F2 and design §17.7 before changing it.
 async function verifyOwnerProof(db, grinAddress, submitted, clientIp, opts) {
   const allowAnchor = !(opts && opts.allowAnchor === false);
   const cip = clientIp ? canonicalizeIp(clientIp) : null;

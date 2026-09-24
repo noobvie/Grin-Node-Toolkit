@@ -12,7 +12,9 @@
  *   /api/pool/stats/regions    patch-bay switches + region lamps
  *   /api/pool/hashrate/history fine 24h pool trace + gauge 24h-peak marker
  *   /api/pool/metrics/history  P-04 trend recorders (pool/network hashrate, miners online)
- *   /api/public/branding       default stratum host/port fallback
+ *   /api/public/branding       default stratum host/port fallback + where latency may be timed
+ *   /api/pool/connect/suggest  estimated latency per region + Recommended
+ *   <hub or gateway>/ping      the browser's own RTT, replacing the estimate (empty 204s)
  *
  * All canvas instruments read their colors from the theme token bridge on <body>
  * (--accent/--gold/--warn/--danger/--info/--text-*) and re-render when the theme
@@ -790,29 +792,348 @@
       : 'idle — reachable, no recent miners';
   }
 
-  // Best-effort nearest region from the browser IANA timezone (no geo-IP; same
-  // heuristic the previous dashboard used).
-  function detectNearestRegion(keys) {
+  // FALLBACK only — used when /api/pool/connect/suggest has no answer (no geo-IP on the server,
+  // an unknown country). A gateway does not shorten the trip to the pool, so the honest default
+  // is the pool's own region (is_hub). The one exception is mainland China / HK / Taiwan / Macau,
+  // where the cross-border route is the problem a Hong Kong gateway exists for. No per-region
+  // timezone table: that went stale every time the region list changed.
+  function detectNearestRegion(regions) {
     var tz = '';
-    try { tz = (Intl.DateTimeFormat().resolvedOptions().timeZone) || ''; } catch (e) { return null; }
-    if (!tz) return null;
-    var has = function (k) { return keys.indexOf(k) !== -1 ? k : null; };
-    var exact = {
-      'Asia/Ho_Chi_Minh': 'sgn', 'America/New_York': 'nyc',
-      'America/Los_Angeles': 'lax', 'America/Toronto': 'yyz',
-      'Europe/Amsterdam': 'ams'
+    try { tz = (Intl.DateTimeFormat().resolvedOptions().timeZone) || ''; } catch (e) { tz = ''; }
+    var usable = function (k) {
+      return regions.some(function (r) { return r.region === k && r.status !== 'offline'; }) ? k : null;
     };
-    if (exact[tz] && has(exact[tz])) return exact[tz];
-    if (tz === 'Asia/Ho_Chi_Minh' && has('han')) return 'han';
-    var area = tz.split('/')[0];
-    if (area === 'America') {
-      if (/Los_Angeles|Vancouver|Tijuana|Phoenix|Denver|Edmonton|Boise|Anchorage|Whitehorse|Dawson|Mazatlan/.test(tz)) return has('lax') || has('nyc') || has('yyz');
-      if (/Toronto|Montreal|Halifax|Winnipeg|Regina|St_Johns/.test(tz)) return has('yyz') || has('nyc');
-      return has('nyc') || has('yyz') || has('lax');
+    if (/^Asia\/(Shanghai|Hong_Kong|Taipei|Macau|Macao|Urumqi)$/.test(tz) && usable('hkg')) return 'hkg';
+    var hub = regions.filter(function (r) { return r.is_hub === true; })[0];
+    return hub ? usable(hub.region) : null;
+  }
+
+  // ── connect suggestion: "~NN ms" per chip + a "Recommended" badge ─────────
+  // Server-side ESTIMATE (effective latency = your distance to a server + its link to the pool,
+  // lib/connect-suggest.js). Fetched ONCE per page load, in parallel with the region list and
+  // never awaited by it: the patch bay paints from /stats/regions alone, then re-renders when
+  // this lands. `suggestion` = { recommended: tag|null, byRegion: { tag: { est_ms, via } } }.
+  var suggestion = null;
+  var suggestionP = null;
+  var userPickedRegion = false;  // a chip was clicked this page load → the selection is theirs
+  var lastRegionsData = null;    // last /stats/regions payload, so the suggestion can re-render it
+
+  function loadSuggestion() {
+    if (suggestionP) return suggestionP;
+    suggestionP = Auth.read('/api/pool/connect/suggest').then(function (d) {
+      if (!d || d.basis !== 'estimate' || !Array.isArray(d.estimates)) return;
+      var by = {};
+      d.estimates.forEach(function (e) {
+        if (e && e.region && e.est_ms > 0) by[e.region] = { est_ms: Math.round(e.est_ms), via: e.via };
+      });
+      suggestion = { recommended: (d.recommended && by[d.recommended]) ? d.recommended : null, byRegion: by };
+      if (lastRegionsData) renderRegions(lastRegionsData);
+    });
+    return suggestionP;
+  }
+
+  // ── connect measurement: the browser times each server itself ─────────────
+  // Replaces the estimate above wherever it succeeds; a server it cannot time keeps its estimate.
+  // Where it may time (lib/latency-probe.js → /api/public/branding connection.latency):
+  //   · the hub (the is_hub "direct" row) at hub_url: '/ping' same-origin, an un-proxied
+  //     https://<host>/ping, or null behind a CDN (the edge would answer, a few ms from everyone);
+  //   · a gateway at https://<its stratum host>/ping, and ONLY under probe_domain. The page CSP's
+  //     connect-src carries https://*.<probe_domain> and nothing wider, so any other host would be
+  //     a CSP violation, not a measurement.
+  // That is viewer→server. A gateway does not shorten the trip to the pool, so its figure is that
+  // PLUS its hub_rtt_ms; direct is viewer→hub alone. The pick re-runs through pickRecommended()
+  // with the server's own bias (direct_bias_ms). No latency config = no measurement at all.
+  // Budget: a gateway answers 30 req / 10 s per IP, the hub a burst of 20. One run is 4 requests
+  // per host, and re-test is held off RETEST_HOLD_MS after every run.
+  var RTT_TIMEOUT_MS = 2500;   // per request; a gateway without the probe may DROP, not refuse
+  var RTT_SAMPLES = 3;         // after one warm-up that pays DNS + TLS
+  var RTT_CACHE_KEY = 'pool.rtt.v1';
+  var RTT_CACHE_MS = 10 * 60 * 1000;
+  var RETEST_HOLD_MS = 15000;
+  var latencyCfg = null;       // { probe_domain, hub_url, direct_bias_ms } once branding answers
+  var latencyCfgP = null;
+  var measuredByUrl = {};      // probe URL → viewer→server ms, or null (tried and failed)
+  var measuredAt = {};         // probe URL → when (ms epoch), for the session cache
+  var measuring = false;
+  var bayVisible = false;      // the connect panel has been on screen (IntersectionObserver)
+  var retestBtn = null;
+  var retestHeldUntil = 0;
+  var retestTimer = null;
+
+  // ⚠ A copy of pickRecommended() in back-end-pool/lib/connect-suggest.js — this file deploys
+  // to the web root, apart from the app, so it cannot load that one. test-connect-suggest.js [h]
+  // runs both on the same inputs: change both or neither. Keep it self-contained (the test
+  // lifts it out by its text). rows: [{ region, ms, direct }] → tag | null.
+  function pickRecommended(rows, bias) {
+    var list = [];
+    for (var i = 0; i < rows.length; i++) {
+      var r = rows[i];
+      if (r && r.region && typeof r.ms === 'number' && isFinite(r.ms)) list.push(r);
     }
-    if (area === 'Asia' || area === 'Australia' || area === 'Indian') return has('han') || has('sgn');
-    var pref = { Pacific: 'lax', Europe: 'ams', Africa: 'ams', Atlantic: 'ams', Antarctica: 'lax' };
-    return pref[area] ? has(pref[area]) : null;
+    if (!list.length) return null;
+    list.sort(function (a, b) {
+      return (a.ms - b.ms) || (a.region < b.region ? -1 : a.region > b.region ? 1 : 0);
+    });
+    var best = list[0];
+    var direct = null;
+    for (var j = 0; j < list.length; j++) { if (list[j].direct === true) { direct = list[j]; break; } }
+    return (direct && best.direct !== true && direct.ms - best.ms <= bias) ? direct.region : best.region;
+  }
+
+  // Branding is read once and shared with loadRegions' port/host fallback. A failed read is
+  // forgotten so the next caller retries; an answer is kept for the page's life.
+  var brandingP = null;
+  function readBranding() {
+    if (!brandingP) {
+      brandingP = Auth.read('/api/public/branding').catch(function () { return null; }).then(function (b) {
+        if (!b) brandingP = null;
+        return b;
+      });
+    }
+    return brandingP;
+  }
+
+  function loadLatencyConfig() {
+    if (latencyCfg || latencyCfgP) return;
+    latencyCfgP = readBranding().then(function (b) {
+      latencyCfgP = null;
+      var l = b && b.data && b.data.connection && b.data.connection.latency;
+      if (!l || !(typeof l.direct_bias_ms === 'number' && isFinite(l.direct_bias_ms) && l.direct_bias_ms >= 0)) return;
+      latencyCfg = {
+        probe_domain: (typeof l.probe_domain === 'string' && /^[a-z0-9.-]+$/.test(l.probe_domain)) ? l.probe_domain : null,
+        hub_url: (l.hub_url === '/ping' ||
+          (typeof l.hub_url === 'string' && /^https:\/\/[a-z0-9.-]+\/ping$/.test(l.hub_url))) ? l.hub_url : null,
+        direct_bias_ms: l.direct_bias_ms,
+      };
+      if (lastRegionsData) renderRegions(lastRegionsData);
+    });
+  }
+
+  function publishedRegions(data) {
+    var regions = (data && Array.isArray(data.regions)) ? data.regions : [];
+    return regions.filter(function (r) { return r.stratum_url && r.is_active !== false; });
+  }
+
+  // The /ping URL this page may time for a region, or null.
+  function probeUrlFor(r) {
+    if (!latencyCfg) return null;
+    if (r.is_hub === true) return latencyCfg.hub_url;
+    var dom = latencyCfg.probe_domain;
+    var host = String(r.stratum_url || '').split(':')[0].toLowerCase();
+    if (!dom || !/^[a-z0-9.-]+$/.test(host)) return null;
+    if (host.slice(-(dom.length + 1)) !== '.' + dom) return null;  // the CSP wildcard skips the apex
+    return 'https://' + host + '/ping';
+  }
+
+  // One timed GET. RTT = responseStart − requestStart from Resource Timing when it is readable
+  // (both probes send Timing-Allow-Origin: *), else the fetch's wall time. Only an empty 204 counts
+  // — a redirect, an error page or a 429 is not this probe.
+  function pingOnce(url) {
+    var ctl = (typeof AbortController === 'function') ? new AbortController() : null;
+    var timer = ctl ? setTimeout(function () { ctl.abort(); }, RTT_TIMEOUT_MS) : null;
+    var u = url + '?r=' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+    var t0 = performance.now();
+    return fetch(u, { cache: 'no-store', credentials: 'omit', redirect: 'error', signal: ctl ? ctl.signal : undefined })
+      .then(function (res) {
+        var wall = performance.now() - t0;
+        if (res.status !== 204) return null;
+        var e = null;
+        try {
+          var list = performance.getEntriesByName(new URL(u, location.href).href, 'resource');
+          e = list[list.length - 1] || null;
+        } catch (err) { e = null; }
+        return (e && e.requestStart > 0 && e.responseStart > e.requestStart) ? e.responseStart - e.requestStart : wall;
+      })
+      .catch(function () { return null; })
+      .then(function (ms) { if (timer) clearTimeout(timer); return ms; });
+  }
+
+  // Warm-up, then RTT_SAMPLES in sequence on the same (kept-alive) connection → the fastest, or
+  // null. A failed warm-up ends it: a host that is not answering would otherwise cost 4 timeouts.
+  function measureRtt(url) {
+    return pingOnce(url).then(function (warm) {
+      if (warm == null) return null;
+      var best = null;
+      var n = 0;
+      function next() {
+        if (n++ >= RTT_SAMPLES) return best;
+        return pingOnce(url).then(function (ms) {
+          if (ms != null && (best == null || ms < best)) best = ms;
+          return next();
+        });
+      }
+      return next();
+    });
+  }
+
+  // sessionStorage, 10 min per URL. Every access guarded: a private window or blocked storage
+  // throws, and the page must measure as if the cache were empty.
+  function readRttCache() {
+    try {
+      var c = JSON.parse(sessionStorage.getItem(RTT_CACHE_KEY) || 'null');
+      var out = {};
+      var now = Date.now();
+      if (!c || typeof c !== 'object') return out;
+      Object.keys(c).forEach(function (url) {
+        var v = c[url];
+        if (!v || typeof v.at !== 'number' || v.at > now || now - v.at > RTT_CACHE_MS) return;
+        if (v.ms === null || (typeof v.ms === 'number' && isFinite(v.ms) && v.ms > 0 && v.ms < 60000)) out[url] = v;
+      });
+      return out;
+    } catch (e) { return {}; }
+  }
+  function writeRttCache() {
+    try {
+      var c = {};
+      Object.keys(measuredByUrl).forEach(function (url) { c[url] = { ms: measuredByUrl[url], at: measuredAt[url] }; });
+      sessionStorage.setItem(RTT_CACHE_KEY, JSON.stringify(c));
+    } catch (e) { /* no storage — measure again next load */ }
+  }
+
+  // Time every region's probe that has not been tried this page load (force: all of them again).
+  // Runs only once the connect panel has been on screen. Hosts run in parallel, samples within a
+  // host in sequence. The bay re-renders ONCE, when every host has answered or timed out, so the
+  // Recommended badge does not hop between chips as results trickle in.
+  function maybeMeasure(force) {
+    if (measuring || !bayVisible || !latencyCfg || !lastRegionsData) return;
+    if (force && Date.now() < retestHeldUntil) return;
+    var cached = force ? {} : readRttCache();
+    var fromCache = false;
+    var todo = [];
+    publishedRegions(lastRegionsData).forEach(function (r) {
+      if (r.status === 'offline') return;
+      var url = probeUrlFor(r);
+      if (!url || todo.indexOf(url) >= 0) return;
+      if (!force && url in measuredByUrl) return;
+      if (!force && cached[url]) {
+        measuredByUrl[url] = cached[url].ms;
+        measuredAt[url] = cached[url].at;
+        fromCache = true;
+        return;
+      }
+      todo.push(url);
+    });
+    if (!todo.length) {
+      if (fromCache) renderRegions(lastRegionsData);
+      return;
+    }
+    measuring = true;
+    updateRetest();
+    Promise.all(todo.map(function (url) {
+      return measureRtt(url).then(function (ms) { return [url, ms]; }, function () { return [url, null]; });
+    })).then(function (pairs) {
+      var now = Date.now();
+      pairs.forEach(function (p) { measuredByUrl[p[0]] = p[1]; measuredAt[p[0]] = now; });
+      writeRttCache();
+    }).catch(function () { /* keep the estimates */ }).then(function () {
+      measuring = false;
+      retestHeldUntil = Date.now() + RETEST_HOLD_MS;
+      renderRegions(lastRegionsData);
+    });
+  }
+
+  // "Re-test latency" — below the switch bank, shown only when there is something to time.
+  function updateRetest() {
+    var bank = $('rx-switches');
+    if (!bank) return;
+    if (!retestBtn) {
+      retestBtn = document.createElement('button');
+      retestBtn.type = 'button';
+      retestBtn.className = 'rgn-retest';
+      retestBtn.id = 'rx-retest';
+      retestBtn.hidden = true;
+      retestBtn.addEventListener('click', function () { maybeMeasure(true); });
+      bank.insertAdjacentElement('afterend', retestBtn);
+    }
+    var any = bank.style.display !== 'none' && publishedRegions(lastRegionsData).some(function (r) {
+      return r.status !== 'offline' && !!probeUrlFor(r);
+    });
+    var wait = retestHeldUntil - Date.now();
+    retestBtn.hidden = !any || !bayVisible;
+    retestBtn.disabled = measuring || wait > 0;
+    retestBtn.textContent = measuring ? 'Testing latency…' : 'Re-test latency';
+    if (!measuring && wait > 0 && !retestTimer) {
+      retestTimer = setTimeout(function () { retestTimer = null; updateRetest(); }, wait + 50);
+    }
+  }
+
+  // Measurement starts the first time the connect panel scrolls into view: a visitor who never
+  // reaches it costs no probe traffic. No IntersectionObserver → treat it as visible.
+  (function watchConnectPanel() {
+    var panel = $('connect');
+    var seen = function () { bayVisible = true; loadLatencyConfig(); maybeMeasure(false); };
+    if (!panel || typeof IntersectionObserver !== 'function') { seen(); return; }
+    var io = new IntersectionObserver(function (entries) {
+      if (entries.some(function (e) { return e.isIntersecting; })) { io.disconnect(); seen(); }
+    });
+    io.observe(panel);
+  })();
+
+  // The figure a chip shows: the browser's measurement when there is one, else the server's
+  // estimate, else null. { ms, via, measured, leg (viewer→server, measured only) }.
+  function latencyFor(r) {
+    if (r.status === 'offline') return null;
+    var url = probeUrlFor(r);
+    var leg = url ? measuredByUrl[url] : null;
+    if (typeof leg === 'number') {
+      if (r.is_hub === true) return { ms: leg, via: 'direct', measured: true, leg: leg };
+      // Without its link home a gateway's figure is the misleading viewer→gateway-only number.
+      if (typeof r.hub_rtt_ms === 'number' && isFinite(r.hub_rtt_ms) && r.hub_rtt_ms >= 0) {
+        return { ms: leg + r.hub_rtt_ms, via: 'gateway', measured: true, leg: leg };
+      }
+    }
+    var s = suggestion && suggestion.byRegion[r.region];
+    return s ? { ms: s.est_ms, via: s.via, measured: false } : null;
+  }
+
+  // Recommended region for this payload. With at least one measurement: re-rank everything shown
+  // (measured where possible, estimated elsewhere) by the shared rule. Estimates only: the
+  // server's pick, while it is still published and not offline.
+  function recommendedKey(regions) {
+    var rows = [];
+    var measured = false;
+    regions.forEach(function (r) {
+      var l = latencyFor(r);
+      if (!l) return;
+      rows.push({ region: r.region, ms: l.ms, direct: r.is_hub === true });
+      if (l.measured) measured = true;
+    });
+    if (measured) return pickRecommended(rows, latencyCfg.direct_bias_ms);
+    return (suggestion && suggestion.recommended &&
+      regions.some(function (r) { return r.region === suggestion.recommended && r.status !== 'offline'; }))
+      ? suggestion.recommended : null;
+  }
+
+  // Latency figure + badge on one chip — the ONE place that writes them.
+  function decorateRegionChip(sw, r, recKey, nearestKey) {
+    var l = latencyFor(r);
+    if (l) {
+      var shown = Math.max(1, Math.round(l.ms));
+      var ms = document.createElement('span');
+      ms.className = l.measured ? 'rgn-ms' : 'rgn-ms is-est';
+      ms.textContent = (l.measured ? '' : '~') + shown + ' ms';
+      sw.appendChild(ms);
+      sw.title += l.measured
+        ? '\n' + shown + ' ms measured: ' + (l.via === 'direct'
+          ? 'your browser to the pool'
+          : 'your browser to this server (' + Math.max(1, Math.round(l.leg)) + ') + its link to the pool (' +
+            Math.round(r.hub_rtt_ms) + ')')
+        : '\n~' + shown + ' ms estimated: ' + (l.via === 'direct'
+          ? 'your distance to the pool'
+          : 'your distance to this server + its link to the pool');
+    }
+    if (r.region === recKey) {
+      var rec = document.createElement('span');
+      rec.className = 'rgn-rec';
+      rec.textContent = 'Recommended';
+      sw.appendChild(rec);
+    } else if (r.region === nearestKey) {
+      var pin = document.createElement('span');
+      pin.className = 'rgn-pin';
+      pin.title = 'Suggested for you';
+      pin.textContent = '📍';
+      sw.appendChild(pin);
+    }
   }
 
   function selectRegion(regions, key) {
@@ -843,24 +1164,21 @@
   var checkingTimer = null;
 
   async function loadRegions() {
-    var bank = $('rx-switches');
     try {
       // Region list and branding are fetched CONCURRENTLY: branding only supplies the fallback
       // port/host, so making the patch bay wait on it just delayed first paint. The regions
       // endpoint itself never blocks on a liveness read server-side (handshake + stratum dial
       // are cached out of the request path), so this resolves as fast as the DB query.
-      var brandingP = (!BASE_PORT || !DEFAULT_URI)
-        ? Auth.read('/api/public/branding').catch(function () { return null; })
-        : Promise.resolve(null);
+      var fallbackP = (!BASE_PORT || !DEFAULT_URI) ? readBranding() : Promise.resolve(null);
       var regionsP = Auth.read('/api/pool/stats/regions');
-      var b = await brandingP;
+      loadSuggestion();  // once per page load; re-renders the bay itself when it lands
+      var b = await fallbackP;
       var conn = b && b.data && b.data.connection;
       if (conn) {
         BASE_PORT = conn.stratum_port || BASE_PORT;
         if (conn.stratum_host) DEFAULT_URI = conn.stratum_host + ':' + (conn.stratum_port || '3333');
       }
       var data = await regionsP;
-      var regions = (data && Array.isArray(data.regions)) ? data.regions : [];
 
       // Verdict still pending → re-poll in 4s (up to 5 times ≈ the server's 60s probe TTL).
       if (checkingTimer) { clearTimeout(checkingTimer); checkingTimer = null; }
@@ -870,7 +1188,25 @@
       } else if (!data || !data.checking) {
         checkingRetries = 0;
       }
-      regions = regions.filter(function (r) { return r.stratum_url && r.is_active !== false; });
+      if (data) lastRegionsData = data;
+      renderRegions(data);
+    } catch (e) { /* keep whatever the patch bay currently shows */ }
+  }
+
+  // Paint the gateway lamps + patch bay from one /stats/regions payload. Called by loadRegions
+  // and again when the connect suggestion or a measurement lands — idempotent, keeps the
+  // selection. Then time any server not yet tried (a no-op until the panel has been seen).
+  function renderRegions(data) {
+    paintRegions(data);
+    updateRetest();
+    if (bayVisible) loadLatencyConfig();  // retries a failed branding read; a no-op once known
+    maybeMeasure(false);
+  }
+
+  function paintRegions(data) {
+    var bank = $('rx-switches');
+    try {
+      var regions = publishedRegions(data);
 
       // Gateway array (P-02b): one lamp per region, rebuilt each poll (capped at 8).
       var lampHost = $('an-regions');
@@ -930,11 +1266,17 @@
       bank.style.display = '';
       if (help) help.hidden = false;
 
-      // Nearest region first, then most miners, then name — same order as before.
-      var nearestKey = detectNearestRegion(regions.map(function (r) { return r.region; }));
+      // The Recommended region (measured, else estimated — recommendedKey) when there is one, else
+      // the timezone fallback — which gets the 📍 pin, never the badge: it is a guess, not an
+      // estimate. Judged against THIS payload: a region that has since gone offline (or been
+      // withdrawn) loses the badge rather than steering a rig at it.
+      var recKey = recommendedKey(regions);
+      var nearestKey = recKey ? null : detectNearestRegion(regions);
+      var firstKey = recKey || nearestKey;
+      // Suggested region first, then most miners, then name.
       regions.sort(function (a, b2) {
-        if (a.region === nearestKey) return -1;
-        if (b2.region === nearestKey) return 1;
+        if (a.region === firstKey) return -1;
+        if (b2.region === firstKey) return 1;
         // A floor-suppressed region (§J11-5) has 1-2 miners, not 0 — count it as 1 so it does
         // not sort below a genuinely empty gateway.
         var mA = a.miners != null ? a.miners : (a.below_floor ? 1 : 0);
@@ -943,9 +1285,11 @@
         return (a.label || a.region).localeCompare(b2.label || b2.region);
       });
 
-      // Preserve the visitor's current selection across the 60s refresh.
+      // Preserve the current selection across the 60s refresh. Until the visitor clicks a chip,
+      // the Recommended region takes it (it may land after the first paint).
       var prev = bank.querySelector('.rgn.sel');
       var selectedKey = prev ? prev.dataset.region : null;
+      if (recKey && !userPickedRegion) selectedKey = recKey;
       if (!selectedKey || !regions.some(function (r) { return r.region === selectedKey; })) {
         selectedKey = regions[0].region;
       }
@@ -967,14 +1311,11 @@
         name.textContent = String(r.region || '').toUpperCase();
         sw.appendChild(led);
         sw.appendChild(name);
-        if (r.region === nearestKey) {
-          var pin = document.createElement('span');
-          pin.className = 'rgn-pin';
-          pin.title = 'Nearest to you';
-          pin.textContent = '📍';
-          sw.appendChild(pin);
-        }
-        sw.addEventListener('click', function () { selectRegion(regions, r.region); });
+        decorateRegionChip(sw, r, recKey, nearestKey);
+        sw.addEventListener('click', function () {
+          userPickedRegion = true;
+          selectRegion(regions, r.region);
+        });
         bank.appendChild(sw);
       });
       selectRegion(regions, selectedKey);

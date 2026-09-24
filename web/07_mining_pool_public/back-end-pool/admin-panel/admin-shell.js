@@ -70,14 +70,16 @@
   // ONE deterministic explorer per network — deliberately NOT randomized across two. The
   // earlier 50/50 rotation assumed the two explorers shared a path scheme; they do not
   // (verified live 2026-07-25), so every link that landed on grinscan.org 404'd, and the
-  // rotation is what hid it — half the clicks worked. The two schemes:
+  // rotation is what hid it — half the clicks worked. The schemes:
+  //   grincoin.org       /block/<h>  (hash → /hash/<hash>)  /kernel/<excess>  /output/<commit>
   //   scan.grin.money    /block/<h>           /kernel/<excess>          /output/<commit>
   //   *.grinscan.org     /block.html?h=<h>    /kernel.html?ex=<excess>  /output.html?c=<commit>
-  // Both accept a height OR a 64-hex block hash in the block slot.
+  // grincoin.org takes DIGITS ONLY in /block/, hence its separate `blockHash` segment.
   //
-  // Default: mainnet → scan.grin.money (06d Tiny Explorer), testnet → test.grinscan.org
-  // (06b GrinScan's testnet sibling). NOTE the testnet host is `test.` —
-  // `testnet.grinscan.org` does NOT resolve (that typo made every testnet link dead).
+  // Default: mainnet → grincoin.org (third-party full archive; was scan.grin.money / 06d until
+  // 2026-09-23), testnet → test.grinscan.org (06b GrinScan's testnet sibling). NOTE the
+  // testnet host is `test.` — `testnet.grinscan.org` does NOT resolve (that typo made every
+  // testnet link dead). Full rationale lives in /js/branding.js.
   // Keep this block in sync with the identical one in /js/branding.js.
   //
   // Network is resolved once by decoratePoolIdentity() (below) and cached in
@@ -88,24 +90,28 @@
     return 'mainnet';
   }
   var EXPLORER_STYLES = {
-    path:  { block: 'block/',        kernel: 'kernel/',         output: 'output/' },
-    query: { block: 'block.html?h=', kernel: 'kernel.html?ex=', output: 'output.html?c=' }
+    path:     { block: 'block/',        kernel: 'kernel/',        output: 'output/' },
+    grincoin: { block: 'block/', blockHash: 'hash/', kernel: 'kernel/', output: 'output/' },
+    query:    { block: 'block.html?h=', kernel: 'kernel.html?ex=', output: 'output.html?c=' }
   };
   var EXPLORERS = {
-    tiny:             { base: 'https://scan.grin.money',  style: 'path'  }, // 06d, mainnet only
-    grinscan:         { base: 'https://grinscan.org',      style: 'query' }, // 06b mainnet
-    grinscan_testnet: { base: 'https://test.grinscan.org', style: 'query' }  // 06b testnet sibling
+    grincoin:         { base: 'https://grincoin.org',      style: 'grincoin' }, // aglkm full archive, mainnet
+    tiny:             { base: 'https://scan.grin.money',   style: 'path'     }, // 06d, mainnet only
+    grinscan:         { base: 'https://grinscan.org',      style: 'query'    }, // 06b mainnet
+    grinscan_testnet: { base: 'https://test.grinscan.org', style: 'query'    }  // 06b testnet sibling
   };
-  var DEFAULT_EXPLORER = { mainnet: 'tiny', testnet: 'grinscan_testnet' };
+  var DEFAULT_EXPLORER = { mainnet: 'grincoin', testnet: 'grinscan_testnet' };
   function explorerPick() {
     var net = explorerNetwork() === 'testnet' ? 'testnet' : 'mainnet';
-    return EXPLORERS[DEFAULT_EXPLORER[net]] || EXPLORERS.tiny;
+    return EXPLORERS[DEFAULT_EXPLORER[net]] || EXPLORERS.grincoin;
   }
   function explorerUrl(kind, value) {
     var ex = explorerPick();
     var style = EXPLORER_STYLES[ex.style] || EXPLORER_STYLES.path;
-    var seg = (kind === 'kernel') ? style.kernel : (kind === 'output') ? style.output : style.block;
-    return ex.base.replace(/\/+$/, '') + '/' + seg + encodeURIComponent(String(value));
+    var v = String(value);
+    var seg = (kind === 'kernel') ? style.kernel : (kind === 'output') ? style.output
+      : (style.blockHash && !/^\d+$/.test(v)) ? style.blockHash : style.block;
+    return ex.base.replace(/\/+$/, '') + '/' + seg + encodeURIComponent(v);
   }
   // Returns an <a> that opens the explorer in a new tab. `label` defaults to `value`.
   // Both URL and label are HTML-escaped — safe to embed untrusted chain strings.

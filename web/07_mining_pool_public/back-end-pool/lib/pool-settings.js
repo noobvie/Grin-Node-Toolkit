@@ -446,7 +446,7 @@ PASS      any-password-you-choose</code>
 
 <p>Ready to start? See the <a href="/">homepage</a> for connection details, or read the <a href="/page.html?p=faq">FAQ</a>.</p>`,
 
-      terms: `<p class="muted">Last updated: July 2026</p>
+      terms: `<p class="muted">Last updated: September 2026</p>
 <p>These Terms of Service ("Terms") govern your use of the GRINIUM mining pool and its website (the "Service"). By connecting a miner or using the website you agree to these Terms. If you do not agree, do not use the Service.</p>
 
 <h2>1. The Service</h2>
@@ -454,7 +454,7 @@ PASS      any-password-you-choose</code>
 
 <h2>2. Identity and accounts</h2>
 <p>The Service does not use registered miner accounts. Your Grin address is your identity: rewards earned by hashpower submitted under an address are credited to, and payable only to, that address. You are solely responsible for the security and correctness of the address you mine to. <strong>Rewards paid to an address you do not control cannot be recovered.</strong></p>
-<p>Because there is no login, self-service money actions (requesting a payout, creating or finalising a Slatepack, registering a payout destination) require a lightweight ownership check: either one of the last two source IP addresses your address has mined from, or the stratum password configured on your rig. Both are stored only as salted hashes. This is an anti-abuse gate, not authentication — it exists so that a stranger reading the public leaderboard cannot move coins you did not ask to move.</p>
+<p>Because there is no login, self-service money actions (requesting a payout, creating or finalising a Slatepack, registering a payout destination) require a lightweight ownership check: either a source IP address your address has recently mined from, or the stratum password configured on one of your rigs. The pool keeps up to ten of each per address, stored only as salted hashes. This is an anti-abuse gate, not authentication — it exists so that a stranger reading the public leaderboard cannot move coins you did not ask to move.</p>
 
 <h2>3. Fees and payouts</h2>
 <ul>
@@ -495,13 +495,13 @@ PASS      any-password-you-choose</code>
 <h2>10. Contact</h2>
 <p>Questions about these Terms can be directed to the pool operator using the contact links in the website footer, or via the Grin forum (<a href="https://forum.grin.mw/u/hellogrin" target="_blank" rel="noopener">hellogrin on forum.grin.mw</a>).</p>`,
 
-      privacy: `<p class="muted">Last updated: July 2026</p>
+      privacy: `<p class="muted">Last updated: September 2026</p>
 <p>This Privacy Policy explains what information the GRINIUM mining pool processes when you mine with us or visit our website. Grin is a privacy-focused cryptocurrency, and we keep data collection to the minimum needed to run the pool.</p>
 
 <h2>What we collect</h2>
 <ul>
   <li><strong>Your Grin address.</strong> Submitted as your stratum username; it is your public mining identity and the destination for your payouts.</li>
-  <li><strong>Proof of ownership — stored hashed, never in the clear.</strong> So that only you can move your balance, we keep the last two source IP addresses and the last two stratum passwords your address has mined with. Both are stored as <strong>salted scrypt hashes</strong>: the database holds no readable mining IP and no readable password, and a value can only be checked against a hash you supply yourself. Trivial or factory-default passwords are never recorded.</li>
+  <li><strong>Proof of ownership — stored hashed, never in the clear.</strong> So that only you can move your balance, we keep up to ten source IP addresses and up to ten stratum passwords your address has mined with; past ten, the least recently used one is dropped. Both are stored as <strong>salted scrypt hashes</strong>: the database holds no readable mining IP and no readable password, and a value can only be checked against a hash you supply yourself. Trivial or factory-default passwords are never recorded.</li>
   <li><strong>Country, not location.</strong> Where a connecting IP is geolocated at all it is resolved to a <strong>country only</strong> — no city, no coordinates. Country counts feed the public statistics and the network map; the map's data feeds are off unless the operator enables them, and even then a country is only named once enough peers share it.</li>
   <li><strong>Mining metrics.</strong> Shares, hashrate samples, worker names, and reject/stale counts — used to calculate rewards and display statistics.</li>
   <li><strong>Administrative audit log.</strong> Security-relevant events (admin logins, payout approvals, ownership checks — both accepted and refused) are logged. Any IP recorded there is <strong>truncated to its network block</strong> (/24 for IPv4, /48 for IPv6) rather than stored in full.</li>
@@ -527,7 +527,7 @@ PASS      any-password-you-choose</code>
 <h2>Your control</h2>
 <p>Because mining is address-based and pseudonymous, you can stop participating at any time by disconnecting your miner. To ask about data tied to your address, contact the operator via the footer contact links or the Grin forum (<a href="https://forum.grin.mw/u/hellogrin" target="_blank" rel="noopener">hellogrin on forum.grin.mw</a>).</p>`,
 
-      faq: `<p class="muted">Last updated: July 2026</p>
+      faq: `<p class="muted">Last updated: September 2026</p>
 
 <h2>What is GRINIUM?</h2>
 <p>GRINIUM is a mining pool for Grin (GRIN). We combine many miners' hashpower to find blocks more steadily and share the rewards.</p>
@@ -539,13 +539,13 @@ PASS      any-password-you-choose</code>
 <p>Point your miner at the nearest region's stratum endpoint (shown on the homepage), using:</p>
 <ul>
   <li><strong>Username:</strong> <code>your_grin_address.worker_name</code> (e.g. <code>grin1abc….rig1</code>)</li>
-  <li><strong>Password:</strong> a private string of <strong>at least 8 characters</strong> — use the <em>same</em> one on every rig. It is not a login, but it is one of the two ways you can later prove the address is yours, so don't leave it as <code>x</code> or <code>123</code>.</li>
+  <li><strong>Password:</strong> a private string of <strong>at least 8 characters</strong> — one per rig is fine, and using the same one everywhere is simply easier to remember. It is not a login, but it is one of the two ways you can later prove the address is yours, so don't leave it as <code>x</code> or <code>123</code>.</li>
   <li><strong>Port:</strong> the stratum port on the homepage (default 3333), the same across all regions.</li>
 </ul>
 <p>Grin-capable ASICs (the iPollo G1 and G1 mini) are configured in their own web interface; GPU miners need a Cuckatoo32-capable miner and a card with at least 11&nbsp;GB of VRAM.</p>
 
 <h2>Isn't the stratum password ignored?</h2>
-<p>It used to be. It is still never a login — you cannot use it to sign in anywhere, and no account exists — but the pool now records it (as a salted hash) alongside your recent mining IP addresses, and accepts either one as proof that you control the address when you ask to move your coins. That matters because IP addresses change: a router reboot, an ISP re-lease, switching to mobile data or moving the rig all give you a new one, and only your last two are kept. A password you chose survives all of that.</p>
+<p>It used to be. It is still never a login — you cannot use it to sign in anywhere, and no account exists — but the pool now records it (as a salted hash) alongside your recent mining IP addresses, and accepts either one as proof that you control the address when you ask to move your coins. That matters because IP addresses change: a router reboot, an ISP re-lease, switching to mobile data or moving the rig all give you a new one. The pool keeps up to ten of each and drops the least recently used past that, but a password you chose survives all of that.</p>
 
 <h2>What makes a valid rig password?</h2>
 <p>Any private string of <strong>8 to 128 characters</strong>. A password that breaks these rules is <strong>silently not recorded</strong> — mining still works normally and you keep earning, but that address is left relying on IP proof alone, which you will only notice on the day you try to withdraw. Refused values:</p>
@@ -555,7 +555,7 @@ PASS      any-password-you-choose</code>
   <li><strong>Known factory defaults</strong> such as <code>123456</code> or <code>password</code>. Thousands of rigs ship with the same value, so accepting one would hand a single skeleton key to every address using it.</li>
   <li>Anything starting with <code>d=</code> — some miners put a difficulty request like <code>d=32</code> in the password field. That is a mining instruction, not a secret, so it is never treated as one.</li>
 </ul>
-<p>Use the same password on every rig, and check the ownership section of your <a href="/account-settings.html">Account</a> page — it shows whether your current password was accepted and recorded. Changing it is safe: the last two are both accepted, so a rotation never locks you out.</p>
+<p>Different rigs may use different passwords — every one of them is kept (up to ten per address) and each works as proof on its own; one password everywhere is a convenience, not a requirement. Check the ownership section of your <a href="/account-settings.html">Account</a> page — it shows whether your current password was accepted and recorded. Changing it is safe: the old password stays on record beside the new one, so a rotation never locks you out.</p>
 
 <h2>What does it cost?</h2>
 <p>Two charges, both published on the site and neither hidden:</p>
@@ -666,7 +666,7 @@ PASS      any-password-you-choose</code>
       // Announcements the moment the pool goes live (a saved row overrides this default, so
       // a box whose Announcements section was ever saved keeps ITS text, not this one).
       // The contact link is the operator's forum profile, same as support_forum_url above.
-      banners: '[{"id":"under-dev","type":"warning","message":"Testing phase in progress — feel free to join! Please note that data can be lost or reset without notice while we test. Interested?","link":"https://forum.grin.mw/u/hellogrin","link_text":"Contact hellogrin on the Grin Forum","dismissible":false,"enabled":true}]',
+      banners: '[{"id":"under-dev","type":"warning","message":"Testing phase in progress — interested in joining as a tester?","link":"https://forum.grin.mw/u/hellogrin","link_text":"Contact hellogrin on the Grin Forum","dismissible":false,"enabled":true}]',
     },
     // Database retention / cleanup. Keeps the SQLite file bounded WITHOUT ever
     // deleting shares still needed for PPLNS distribution or orphan reversal:

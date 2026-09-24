@@ -73,8 +73,9 @@ function destinationLegOk(p, cooldownH = COOLDOWN_H) {
   if (p.age_seconds !== null && p.age_seconds !== undefined && p.age_seconds < minAge) return false;
   return true;
 }
-// Age a whole set. first_seen_at is what the destination gate reads and nothing in production
-// ever moves it, so a test that needs an "old" proof has to reach into the table like this.
+// Age a whole set. first_seen_at is what the destination gate reads and production only ever
+// moves it FORWARD (a returning anchor), so a test that needs an "old" proof has to reach into
+// the table like this.
 const backdate = (db, a, secs) => db.prepare(
   `UPDATE miner_proofs SET first_seen_at = first_seen_at - ? WHERE grin_address = ?`
 ).run(secs, a);
@@ -169,8 +170,8 @@ const backdate = (db, a, secs) => db.prepare(
     assert.ok(ip[0].id < ip[1].id && ip[1].id < ip[2].id, 'inserted anchor → prev → last');
     ok('§17.2 #9 anchor/last/prev map to rows with the right flags and timestamps');
 
-    // An anchor that EQUALS the current window value is ONE row, and it is live — the address
-    // is still mining from it, so it must not be labelled 'anchor' and barred from the gate.
+    // Same rules for the password kind: an anchor that differs from both window slots arrives
+    // evicted. (The EQUAL case — the common one — is asserted separately below.)
     const pass = setRows(db, V, 'pass');
     assert.strictEqual(pass.length, 2, 'two distinct password values');
     const pAnchor = pass.find((r) => r.is_anchor === 1);
@@ -189,6 +190,26 @@ const backdate = (db, a, secs) => db.prepare(
     assert.strictEqual(op.migrateProofSet(db), 0, 'second run finds nothing to do');
     assert.strictEqual(setRows(db, V, 'ip').length, 3, 'and inserts nothing on a second run');
     ok('§17.2 #9 migrateProofSet is idempotent');
+
+    // The COMMON pre-§17 shape: backfillProofAnchors seeded the anchor FROM `last`, so on most
+    // upgrading accounts anchor == last (same stored string). That must be ONE row, LIVE, still
+    // flagged, carrying the older stamp. Without the merge the anchor row lands evicted, the
+    // `last` insert is IGNOREd by the UNIQUE index, and the owner's current proof migrates as
+    // an evicted anchor — refused by the destination gate on every account that upgraded.
+    // (Part 4 review: this path had no test; the check above claimed to be it and was not.)
+    const dbE = freshDb();
+    const E = ADDR('e');
+    dbE.prepare(`INSERT INTO miner_accounts
+      (grin_address, balance, anchor_ip, anchor_set_at, last_ip, last_ip_at, prev_ip, prev_ip_at)
+      VALUES (?, 1, 'v1$same-ip', 1800000000, 'v1$same-ip', 1700000000, 'v1$older-ip', 1650000000)`).run(E);
+    op.migrateProofSet(dbE);
+    const eIp = setRows(dbE, E, 'ip');
+    assert.strictEqual(eIp.length, 2, 'anchor == last is ONE row, plus prev');
+    const merged = eIp.find((r) => r.hash === 'v1$same-ip');
+    assert.strictEqual(merged.is_anchor, 1, 'the merged row keeps the anchor flag');
+    assert.strictEqual(merged.evicted_at, null, 'and is LIVE — the address is still mining from it');
+    assert.strictEqual(merged.first_seen_at, 1700000000, 'carrying the OLDER of the two stamps');
+    ok('§17.2 #9 an anchor equal to a window slot migrates as one live anchor row');
 
     // A migrated v1 row still verifies, and a capture that matches it rewrites it as v2 so it
     // stops costing its own scrypt. Built through op.hashProof so the test cannot invent a
@@ -281,14 +302,25 @@ const backdate = (db, a, secs) => db.prepare(
       'a one-share session must not bring the anchor back into the live set');
     ok('§17.2 #5 re-activating an evicted anchor counts as an insert, and is gated');
 
+    // Age it first, so the assertion below can tell "restarted" from "never old".
+    db.prepare('UPDATE miner_proofs SET first_seen_at = first_seen_at - ? WHERE id = ?').run(30 * 86400, anchorId);
     await op.recordOwnerEvidence(db, V, '203.0.113.9', null);
     const back = setRows(db, V, 'ip').find((r) => r.id === anchorId);
     assert.strictEqual(back.evicted_at, null, 'with mayDisplace it returns to the live set');
-    assert.strictEqual(back.first_seen_at, anchorFirstSeen, 'still carrying its original age');
+    assert.strictEqual(back.is_anchor, 1, 'still the anchor row, not a copy');
     assert.strictEqual(liveRows(db, V, 'ip').length, MAX, 'and the cap still holds');
-    assert.strictEqual((await op.verifyOwnerProof(db, V, '203.0.113.9', '203.0.113.9')).slot, 'set',
-      'a re-activated anchor is live again, so it is an ordinary member again');
+    const reborn = await op.verifyOwnerProof(db, V, '203.0.113.9', '203.0.113.9');
+    assert.strictEqual(reborn.slot, 'set', 'a re-activated anchor is live again, so it is an ordinary member again');
     ok('§17.2 #5 a re-activated anchor rejoins the set without breaking the cap');
+
+    // …which is exactly why its age must RESTART (Part 4 review). Once live it is labelled
+    // 'set', so an old stamp would turn four shares from whoever now holds the value — the
+    // owner's former CGNAT or re-leased IP — into an AGED destination leg: the evicted-anchor
+    // refusal above, laundered. Before the fix this row kept the month-old stamp and passed.
+    assert.ok(reborn.age_seconds < MIN_PROOF_AGE_SEC, 'a returning anchor starts a fresh age');
+    assert.strictEqual(destinationLegOk(reborn), false,
+      'a re-activated anchor must not be an aged leg for the destination gate');
+    ok('Part 4 a re-activated anchor cannot be laundered into an aged destination leg');
   }
 
   // ── §17.2 #2 — a multi-site owner keeps every proof across reconnects ───────────────────
@@ -378,6 +410,32 @@ const backdate = (db, a, secs) => db.prepare(
         'exactly ONE anchor per kind, even when both captures saw an empty set');
     }
     ok('§17.2 #3 concurrent first captures share one salt and produce one anchor');
+  }
+
+  // ── Part 4 — two captures of the SAME new value must cost a full set ONE row ────────────
+  // Ten rigs behind one NAT reach PROOF_MIN_SHARES together after a pool restart. While a
+  // capture awaits the v1 checks of a migrated account, the other one inserts the value; the
+  // first then re-read the table without recognising it, took the insert path, evicted an
+  // owner's proof, and had its INSERT ignored — one proof lost for nothing, set left at 9.
+  // Reproduced against the unfixed code before the fix (2 rows lost, not 1).
+  {
+    const db = freshDb();
+    const V = ADDR('g'); mk(db, V);
+    db.prepare('UPDATE miner_accounts SET last_ip = ?, last_ip_at = 1700000000 WHERE grin_address = ?')
+      .run(await op.hashProof('192.0.2.1'), V);
+    op.migrateProofSet(db); // one v1 row: that is what gives the race its await window
+    for (let i = 0; i < 9; i++) await op.recordOwnerEvidence(db, V, '198.51.100.' + i, null);
+    const before = liveRows(db, V, 'ip').map((r) => r.id);
+    assert.strictEqual(before.length, op.PROOF_SET_MAX, 'a full set');
+    await Promise.all([
+      op.recordOwnerEvidence(db, V, '203.0.113.7', null),
+      op.recordOwnerEvidence(db, V, '203.0.113.7', null)
+    ]);
+    const after = liveRows(db, V, 'ip').map((r) => r.id);
+    assert.strictEqual(after.length, op.PROOF_SET_MAX, 'the set is still full, not one short');
+    assert.strictEqual(before.filter((id) => !after.includes(id)).length, 1,
+      'exactly one owner proof made room for the one new value');
+    ok('Part 4 a racing duplicate capture refreshes instead of evicting a second proof');
   }
 
   // ── §J3-3 — a stranger must not be able to lock the owner out ───────────────────────────
@@ -521,6 +579,27 @@ const backdate = (db, a, secs) => db.prepare(
     ok('J3-5 donation tag is applied only after node-accepted PoW');
   }
 
+  // ── §17.2 #9 — the migration must run BEFORE the stratum listener starts ─────────────────
+  // Source order, because it cannot be observed any other way without booting the pool. The
+  // §J3 backfill and then migrateProofSet both sat AFTER stratumServer.start() with an
+  // `await nostrBridge.start()` between them, so on a pool with Nostr payouts on, shares were
+  // being accepted — and captures anchoring whoever mined them — while the relays answered.
+  // Every other check in this file passed throughout (Part 4 review).
+  {
+    const fs = require('fs');
+    const src = fs.readFileSync(path.join(__dirname, '..', 'index.js'), 'utf8');
+    // Anchored on the STATEMENTS, not the names — comments mention both.
+    const at = (re) => { const m = re.exec(src); return m ? m.index : -1; };
+    const mig = at(/^[ \t]*migrateProofSet\(db\);/m);
+    const start = at(/^[ \t]*stratumServer\.start\(\);/m);
+    assert.ok(mig > 0 && start > 0, 'both call sites exist');
+    assert.ok(mig < start, 'migrateProofSet(db) must come before stratumServer.start()');
+    const between = src.slice(mig, start);
+    assert.strictEqual(/\bawait\b/.test(between.replace(/\/\/.*$/gm, '')), false,
+      'and no await may sit between them');
+    ok('§17.2 #9 the proof-set migration runs before the stratum listener, with no await between');
+  }
+
   // ── §17.4 / audit §F2 — what a FAILED verify costs in KDF calls ─────────────────────────
   // The per-IP throttle (FAIL_MAX_IP = 20 per 10 min) is sized against this number, so it is
   // asserted rather than reasoned about: the old 2-slot code cost up to 6 scrypts per failed
@@ -552,6 +631,14 @@ const backdate = (db, a, secs) => db.prepare(
       assert.strictEqual(calls, 1, 'and a SUCCESSFUL verify costs one too');
       ok('§17.4 one KDF call per successful verify, regardless of which row matches');
 
+      // The exception the old comment denied (Part 4 review): an IP whose canonical form
+      // differs from what was typed AND which is password-shaped needs two digests — the IP
+      // set is keyed on the canonical form, the password set on the raw one.
+      calls = 0;
+      assert.strictEqual((await op.verifyOwnerProof(db, V, '2001:db8::1', '203.0.113.202')).ok, false);
+      assert.strictEqual(calls, 2, 'a compressed IPv6 costs two digests, not one');
+      ok('§17.4 a non-canonical, password-shaped IP costs two KDF calls');
+
       // A migrated account still carrying v1 rows pays one extra per v1 row — bounded by the
       // three the old window could hold, and it falls away as captures rewrite them.
       const L = ADDR('l'); mk(db, L);
@@ -577,6 +664,23 @@ const backdate = (db, a, secs) => db.prepare(
       assert.strictEqual((await op.verifyOwnerProof(db, L, '203.0.113.201', '203.0.113.201')).ok, false);
       assert.strictEqual(calls, 1, 'back to one KDF call once the set is fully v2');
       ok('§17.4 a legacy row adds exactly one KDF call, and only until it is rewritten');
+
+      // The transitional CEILING, which is what §F2 has to be sized against: a migrated
+      // account holding anchor/last/prev of BOTH kinds (six v1 rows) and a salt, probed with
+      // an input that is both a non-canonical IP and password-shaped. 2 + 6 = 8 — above the
+      // old window's 6. §17.4 said "1 + n_v1, n_v1 ≤ 3"; both halves were under-counted.
+      const W = ADDR('h');
+      const [a1, a2, a3, p1, p2, p3] = await Promise.all(
+        ['192.0.2.1', '192.0.2.2', '192.0.2.3', 'pw-anchor-1', 'pw-last-22', 'pw-prev-333'].map((v) => op.hashProof(v)));
+      db.prepare(`INSERT INTO miner_accounts (grin_address, balance, anchor_ip, last_ip, prev_ip,
+        anchor_pass_hash, last_pass_hash, prev_pass_hash, anchor_set_at, last_ip_at, prev_ip_at)
+        VALUES (?, 1, ?, ?, ?, ?, ?, ?, 1, 3, 2)`).run(W, a1, a2, a3, p1, p2, p3);
+      op.migrateProofSet(db);
+      await op.recordOwnerEvidence(db, W, '198.51.100.250', null); // mints the salt
+      calls = 0;
+      assert.strictEqual((await op.verifyOwnerProof(db, W, '2001:db8::1', '203.0.113.203')).ok, false);
+      assert.strictEqual(calls, 8, '2 v2 digests + 6 legacy rows is the transitional ceiling');
+      ok('§17.4 the transitional worst case is 8 KDF calls, and is asserted');
     } finally {
       crypto.scrypt = realAsync;
       crypto.scryptSync = realSync;

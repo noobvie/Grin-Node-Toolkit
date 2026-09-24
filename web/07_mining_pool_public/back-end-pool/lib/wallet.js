@@ -97,9 +97,10 @@ class WalletAPI {
   // address's private key can decrypt + `receive`, so a non-owner who triggers the payout gets
   // an undecryptable blob → no theft. The IP gate (owner-proof.js) only throttles who can trigger.
   //
-  // Param order matches grin-wallet Owner API v3 (docs.rs grin_wallet_api::Owner / owner_rpc).
-  // Every method's first param is the keychain-mask token from open_wallet; call sites leave
-  // it null and _call() substitutes the live session token (same as 059 Drop's ownerApiSession —
+  // Param order matches grin-wallet Owner API v3 (owner_rpc.rs OwnerRpc, checked against v5.4.1).
+  // Every method's first param is the keychain-mask token from open_wallet (params[0], or
+  // `token` for a named-params call); call sites leave it null and _call() substitutes the
+  // live session token (same as 059 Drop's ownerApiSession —
   // passing an actual null gets "Supplied keychain mask is invalid" from the LMDB backend).
 
   // 1a. Build an unconfirmed send slate. amountGrin → nanoGRIN (u64; pool payouts stay well
@@ -127,10 +128,19 @@ class WalletAPI {
   }
 
   // 1c. Armor + ENCRYPT the slate to the recipient address(es). recipients = [SlatepackAddress];
-  //     a non-empty recipients list is what triggers age-encryption to those keys. Returns the
-  //     `BEGINSLATEPACK…ENDSLATEPACK` string to hand to the miner.
+  //     a non-empty recipients list is what triggers age-encryption to those keys; [] gives plain
+  //     armor (the Goblin/Nostr rail). Returns the `BEGINSLATEPACK…ENDSLATEPACK` string.
+  //     Owner v3 signature: create_slatepack_message(token, slate, sender_index: Option<u32>,
+  //     recipients: Vec<SlatepackAddress>). This call used to go out POSITIONAL as
+  //     [token, sender_index, recipients, slate] — the wallet read the number 0 as the slate and
+  //     every slatepack and Goblin payout failed with `InvalidArgStructure "slate" at position 1`.
+  //     It now sends NAMED params (as 051 Fidelius and the 053 bridge do), which cannot be
+  //     misordered. The key names must match the Rust parameter names exactly.
+  //     sender_index stays 0, not null: the miner's response slatepack is then encrypted back to
+  //     the pool's index-0 address, which finalize decodes with secret_indices [0].
   async createSlatepackMessage(slate, recipients, senderIndex = 0) {
-    return this._call('create_slatepack_message', [null, senderIndex, recipients, slate]);
+    return this._call('create_slatepack_message',
+      { token: null, slate, sender_index: senderIndex, recipients });
   }
 
   // 2. Decode the miner's returned (response) slatepack back into a slate.
@@ -204,13 +214,16 @@ class WalletAPI {
   }
 
   // Ensure session is open before making a call; re-init if it was dropped.
-  // params[0] is always the keychain-mask slot in Owner API v3 — filled with the
-  // live open_wallet token here (and re-filled on retry, since re-init rotates it).
+  // The keychain mask is always the `token` param in Owner API v3 — filled with the live
+  // open_wallet token here (and re-filled on retry, since re-init rotates it). Two param
+  // shapes are accepted: a positional array (token is params[0]) or a named object (token is
+  // params.token). Named params are order-proof; create_slatepack_message uses them because
+  // its positional order was wrong once and broke every slatepack payout.
   async _call(method, params) {
     if (!this.sessionOpen) {
       await this.initSession();
     }
-    params[0] = this.token;
+    this._fillToken(params);
     try {
       return await this._encryptedCall(method, params);
     } catch (err) {
@@ -225,11 +238,17 @@ class WalletAPI {
         this.aesKey      = null;
         this.sessionOpen = false;
         await this.initSession();
-        params[0] = this.token;
+        this._fillToken(params);
         return this._encryptedCall(method, params);
       }
       throw err;
     }
+  }
+
+  // Write the live token into either param shape _call accepts (see above).
+  _fillToken(params) {
+    if (Array.isArray(params)) params[0] = this.token;
+    else params.token = this.token;
   }
 
   // --- Wire-level helpers ---------------------------------------------------

@@ -147,18 +147,23 @@ function mergeEnvVars(config) {
 
     tor_enabled: config.tor_enabled !== undefined ? config.tor_enabled : true,
     tor_socks_port: config.tor_socks_port || 9050,
-    tor_check_timeout_ms: config.tor_check_timeout_ms || 3000,
+    // Per-step inactivity timeout of the Tor reachability probe (SOCKS connect, then the
+    // check_version reply). 8 s matches 06d; the old 3 s timed out healthy wallets, because a
+    // cold onion connect routinely takes 5–15 s.
+    tor_check_timeout_ms: config.tor_check_timeout_ms || 8000,
     // Pre-flight Tor reachability gate: when ON, a Tor withdrawal is refused up front if the
     // miner's wallet listener isn't answering over Tor RIGHT NOW (probe = derive the v3 onion
-    // from the grin address, SOCKS5-connect to onion:80 via the tor daemon). Blocks only on a
-    // CONFIDENT offline signal — if the pool box can't run the probe at all (no tor daemon /
-    // socks lib), it fails OPEN and lets grin-wallet be the authority at send time, so a
-    // misconfigured box never bricks every Tor payout. grin-wallet maps the onion HS to
-    // virtual port 80 (impls/src/tor/config.rs: `HiddenServicePort 80 <listener>`).
+    // from the grin address, SOCKS5-tunnel to onion:80 via the tor daemon, POST check_version
+    // to the wallet's foreign API — lib/wallet-tor.js). Blocks only on a CONFIDENT offline
+    // signal — if the pool box can't run the probe at all (tor daemon down or silent), it
+    // fails OPEN and lets grin-wallet be the authority at send time, so a misconfigured box
+    // never bricks every Tor payout. grin-wallet maps the onion HS to virtual port 80
+    // (impls/src/tor/config.rs: `HiddenServicePort 80 <listener>`).
     tor_preflight_gate: config.tor_preflight_gate !== undefined ? config.tor_preflight_gate : true,
     tor_onion_virtual_port: config.tor_onion_virtual_port || 80,
-    // Fresh-circuit retries before the probe declares a wallet offline — dodges a single
-    // transient Tor circuit failure wrongly blocking a healthy listener.
+    // Attempts before the probe declares a wallet offline, each on a FRESH circuit (per-attempt
+    // SOCKS isolation tag) — dodges a single transient circuit failure wrongly blocking a
+    // healthy listener. Worst case ≈ retries × 2 × tor_check_timeout_ms (32 s at the defaults).
     tor_check_retries: config.tor_check_retries || 2,
 
     alert_large_withdrawal: config.alert_large_withdrawal || 100,

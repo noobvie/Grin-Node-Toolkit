@@ -557,7 +557,7 @@ class StratumServer {
       ? (params.login || (Array.isArray(params) ? params[0] : null))
       : null);
     // Stratum password — kept in the in-memory session only, and hashed into the address's
-    // ownership-proof window on the session's first ACCEPTED share (owner-proof.js decides
+    // ownership-proof set on the session's first ACCEPTED share (owner-proof.js decides
     // whether it is usable; factory defaults like "x" are never captured). Never logged.
     //
     // Retention cap: ASIC firmware password fields are often unbounded (a G1 Mini accepts 54k+
@@ -617,8 +617,8 @@ class StratumServer {
 
     // NOTE: the miner's source IP / password are deliberately NOT recorded here. Stratum login
     // is unauthenticated (the address IS the username), so recording at login let anyone with a
-    // TCP socket log in under a victim's address and poison its ownership-proof windows
-    // (evicting the real owner's proofs / passing the gate). Both are recorded on the session's
+    // TCP socket log in under a victim's address and poison its ownership-proof set
+    // (adding its own entries / passing the gate). Both are recorded on the session's
     // first ACCEPTED share instead (see handleSubmit) — evidence requires actual PoW.
 
     const sessionId = this.minerManager.createSession(parsed.grin_address, parsed.worker_name, ip, region, pass);
@@ -820,7 +820,7 @@ class StratumServer {
       session.acceptedShares = (session.acceptedShares || 0) + 1;
 
       // Ownership-gate evidence: record the miner's source IP + stratum password into the
-      // address's proof windows only after the node ACCEPTED a share on this session — a login
+      // address's proof set only after the node ACCEPTED a share on this session — a login
       // alone must not count (see handleLogin). Once per session; session.ip is the real miner
       // IP (direct socket, or PROXY-protocol v2 value on a Model C gateway listener). Async
       // (scrypt hashing) — fire and forget, never blocks the share path.

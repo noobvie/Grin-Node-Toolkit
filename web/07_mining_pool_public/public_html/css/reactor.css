@@ -405,6 +405,28 @@ body {
 @media (prefers-reduced-motion: reduce) { .rgn.s-checking .rgn-led { animation: none; opacity: .6; } }
 .rgn .rgn-name { font-size: 11.5px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; }
 .rgn .rgn-pin  { font-size: 11px; margin-left: -2px; }
+/* Latency beside the tag: small and dim — a hint, not a readout. `is-est` = the server's
+   geographic estimate (shown with "~"); a browser measurement drops the class. */
+.rgn .rgn-ms   { font-size: 10.5px; letter-spacing: .02em; color: var(--text-mute); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.rgn .rgn-ms.is-est { font-style: italic; }
+/* "Recommended" — accent2 outline so it reads apart from both the status LED and the
+   selection outline (--accent). No fill, so there is no ink-on-accent pairing to get wrong. */
+.rgn .rgn-rec  {
+  font-size: 9.5px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; line-height: 1.4;
+  padding: 1px 5px; border-radius: 4px; white-space: nowrap;
+  color: var(--accent2); border: 1px solid color-mix(in srgb, var(--accent2) 55%, transparent);
+}
+/* "Re-test latency" — a quiet text control under the switch bank, styled like the legend's
+   summary. No `display` here: the element relies on [hidden] until there is a server to time.
+   The negative margin pulls it back toward the chips it belongs to (.patchbay gap is 22px). */
+.rgn-retest {
+  align-self: flex-start; margin-top: -14px; padding: 2px 0; cursor: pointer;
+  background: none; border: 0; font-family: var(--mono);
+  font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase; color: var(--text-mute);
+}
+.rgn-retest::before { content: "↻ "; color: var(--accent2); }
+.rgn-retest:hover:not(:disabled) { color: var(--text); }
+.rgn-retest:disabled { cursor: default; opacity: .55; }
 /* selected — accent outline, deliberately NOT the LED colour */
 .rgn.sel {
   border-color: var(--accent); color: var(--text);

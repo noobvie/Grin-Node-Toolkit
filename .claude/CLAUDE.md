@@ -57,7 +57,8 @@ scripts/
        THREE ports — tor → ACC_TOR_FRONT_PORT (nginx block) → ACC_TOR_PORT
        (gateway), beside ACC_PORT (gateway ← :443). Collapsing two roles onto one
        port is a bind collision, not a saving, and NOTHING on this box reports one:
-       `nginx -t` parses and never binds, `systemctl reload` returns 0 before the
+       `nginx -t` ignores a port someone else holds (EADDRINUSE is not an error
+       in test mode — it does try the bind), `systemctl reload` returns 0 before the
        master binds, and a status line that greps `ss` for a port two roles share
        goes green whichever won. Verify the listener after the reload. ⚠ Its
        /opt/grin/accio-<net>/gateway-state/ is DURABLE STATE, not a cache: losing it

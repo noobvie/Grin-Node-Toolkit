@@ -197,11 +197,11 @@ function migrateMinerAccounts() {
       // LEGACY (design §17) — anchor slot, the address's FIRST-EVER captured proof of each
       // kind (audit §J3-4). The anchor SURVIVES §17 as `miner_proofs.is_anchor`; only its
       // storage moved.
-      // The last-2 window is only two deep and anyone may mine to any address, so two hostile
-      // sessions evict both slots and a miner who has since stopped mining can never
+      // The last-2 window was only two deep and anyone may mine to any address, so two hostile
+      // sessions evicted both slots and a miner who had since stopped mining could never
       // re-capture. The anchor is write-once at first capture and is never rotated, so that
-      // miner always retains a way to reach their own money. It is deliberately NOT accepted
-      // by requireBothProofs: it can never be revoked, so it must not be able to change where
+      // miner always retains a way to reach their own money. Once EVICTED from the set it is
+      // deliberately NOT accepted by requireBothProofs: it can never be revoked, so it must not be able to change where
       // money goes — only to move money to the address's own wallet.
       anchor_ip: 'TEXT DEFAULT NULL',
       anchor_pass_hash: 'TEXT DEFAULT NULL',
@@ -544,8 +544,10 @@ function createSchema() {
     // lib/owner-proof.js for the capture, verify and eviction rules.
     //   hash          'v2$<b64>' (scrypt under the address's proof_salt) or a legacy
     //                 'v1$<salt>$<b64>' row carried over by migrateProofSet().
-    //   first_seen_at NEVER updated. It is what the destination age gate (§J3-1) reads, so a
-    //                 path that moved it would defeat that gate exactly as window rotation did.
+    //   first_seen_at never updated on a LIVE row. It is what the destination age gate (§J3-1)
+    //                 reads, so a refresh that moved it would defeat that gate exactly as window
+    //                 rotation did. The one write: an evicted anchor returning restarts it (= now),
+    //                 or it would come back as an aged leg nobody earned (design §17.7).
     //                 NULL = migrated without a known timestamp = treated as OLD.
     //   last_seen_at  refreshed whenever a capture matches this row; the LRU eviction key.
     //   is_anchor     the address's first-ever value of this kind (§J3-4). NEVER deleted —
@@ -1401,20 +1403,22 @@ function seedShippedPages() {
 // box whose region tag matches a seed tag (e.g. 'sgn') got an INACTIVE row created here first,
 // and ensureLocalRegion only backfills empty columns — it deliberately never re-activates a row,
 // so as not to override an operator who switched a region off — leaving the pool's own region
-// unpublished: no connect card, no gateway on the map.
+// unpublished: no connect card, no gateway on the map. The exclusion only sees the CURRENT tag:
+// a hub that moves to a new tag inherits a DB where that tag was seeded inactive while the old
+// one was local — ensureLocalRegion() handles that case (the local-region change rule).
 function seedDefaultRegions(stratumPort, poolDomain, localRegion) {
   try {
     const dom = String(poolDomain || '').toLowerCase();
     if (!(dom === 'grinium.com' || dom.endsWith('.grinium.com'))) return;
     // Versioned seed: v1 (2026-06) originally shipped han/nyc/lax/yyz/ams; v2 adds sgn
-    // (Saigon). The 'han' (Hanoi) row was later dropped from the seed — fresh installs no
-    // longer get it; already-seeded installs keep any han row until the operator removes it
+    // (Saigon); v3 adds hkg/sin/cqf, 2026-09-23. The 'han' (Hanoi) row was later dropped from
+    // the seed — fresh installs no longer get it; already-seeded installs keep any han row until the operator removes it
     // via the admin Regions page (the seed never retroactively deletes).
     // The marker value stores the applied version — the legacy marker wrote '1', which
     // reads back as "v1 applied", so an already-seeded install inserts ONLY the newer
     // additions. Rows the operator deleted from an already-applied version are never
     // re-created (that version doesn't re-run).
-    const SEED_VERSION = 2;
+    const SEED_VERSION = 3;
     const marker = db.prepare(
       "SELECT value FROM pool_config WHERE section = '_migrations' AND key = 'regions_seeded'"
     ).get();
@@ -1427,7 +1431,11 @@ function seedDefaultRegions(stratumPort, poolDomain, localRegion) {
       { v: 1, region: 'lax', label: 'Los Angeles', country: 'United States',  cc: 'US', host: 'lax.grinium.com' },
       { v: 1, region: 'yyz', label: 'Toronto',     country: 'Canada',         cc: 'CA', host: 'yyz.grinium.com' },
       { v: 1, region: 'ams', label: 'Amsterdam',   country: 'Netherlands',    cc: 'NL', host: 'ams.grinium.com' },
-      { v: 2, region: 'sgn', label: 'Saigon',      country: 'Vietnam',        cc: 'VN', host: 'sgn.grinium.com' }
+      { v: 2, region: 'sgn', label: 'Saigon',      country: 'Vietnam',        cc: 'VN', host: 'sgn.grinium.com' },
+      { v: 3, region: 'hkg', label: 'Hong Kong',   country: 'Hong Kong',      cc: 'HK', host: 'hkg.grinium.com' },
+      { v: 3, region: 'sin', label: 'Singapore',   country: 'Singapore',      cc: 'SG', host: 'sin.grinium.com' },
+      // cqf = Calais–Dunkerque, the IATA code of the airport nearest OVH Gravelines (~15 km) — not `gra`/`lil`.
+      { v: 3, region: 'cqf', label: 'Gravelines',  country: 'France',         cc: 'FR', host: 'cqf.grinium.com' }
     ];
     const local = String(localRegion || '').trim().toLowerCase();
     const pending = REGIONS.filter(r => r.v > applied && r.region !== local);
@@ -1466,21 +1474,60 @@ function seedDefaultRegions(stratumPort, poolDomain, localRegion) {
 //   { label, country, country_code }
 // Backfilling rule mirrors stratum_url: only fill a field that is still empty/NULL, so a
 // fresh config edit applies on the next restart but admin → Regions edits are never clobbered.
+//
+// is_active is NEVER re-asserted on an unchanged region: an operator who switched this box's
+// own region off in admin → Regions meant it, and a restart must not undo that. The ONE
+// exception is a MOVE — the configured region differs from the last local region this DB saw
+// (pool_config `_state`/`local_region`, stamped on every boot that reaches here). A moved hub
+// restores the old hub's DB, where its new tag (e.g. 'cqf') was seeded INACTIVE as a plan while
+// 'nyc' was local; without this it would come up with no connect card and no map marker. So on a
+// change the new local row is activated ONCE and the new tag stamped in the same transaction —
+// the next restart sees an unchanged region and the rule above holds again. The OLD local row is
+// left as it is: that box may be rebuilt as a gateway for the region it used to be.
+// No stamp yet (a DB from before 2026-09-23, or a wiped pool_config) = previous region unknown:
+// stamp only, never activate, because an inactive row there is indistinguishable from one the
+// operator switched off. A move therefore needs the OLD hub to have run this code once.
 function ensureLocalRegion(region, stratumUrl, opts = {}) {
   if (!region || region === 'default') return;
   const label = opts.label || (region.charAt(0).toUpperCase() + region.slice(1));
   const country = opts.country || null;
   const cc = opts.country_code ? String(opts.country_code).toUpperCase() : null;
   try {
+    const seen = db.prepare(
+      "SELECT value FROM pool_config WHERE section = '_state' AND key = 'local_region'"
+    ).get();
+    const prev = seen ? String(seen.value || '') : '';
+    const moved = prev !== '' && prev !== region;
+    const stampLocal = db.prepare(`
+      INSERT INTO pool_config (section, key, value, value_type)
+      VALUES ('_state', 'local_region', ?, 'string')
+      ON CONFLICT(section, key) DO UPDATE SET value = excluded.value
+    `);
     const row = db.prepare(
-      'SELECT region, label, country, country_code, stratum_url FROM pool_locations WHERE region = ?'
+      'SELECT region, label, country, country_code, stratum_url, is_active FROM pool_locations WHERE region = ?'
     ).get(region);
     if (!row) {
-      db.prepare(
-        'INSERT INTO pool_locations (region, label, country, country_code, stratum_url, is_active) VALUES (?, ?, ?, ?, ?, 1)'
-      ).run(region, label, country, cc, stratumUrl || null);
-      console.warn(`[db] registered local region '${region}'${stratumUrl ? ' (' + stratumUrl + ')' : ''}`);
+      db.transaction(() => {
+        db.prepare(
+          'INSERT INTO pool_locations (region, label, country, country_code, stratum_url, is_active) VALUES (?, ?, ?, ?, ?, 1)'
+        ).run(region, label, country, cc, stratumUrl || null);
+        if (prev !== region) stampLocal.run(region);
+      })();
+      console.warn(`[db] registered local region '${region}'${stratumUrl ? ' (' + stratumUrl + ')' : ''}` +
+        (moved ? ` — local region changed from '${prev}'` : ''));
       return;
+    }
+    if (prev !== region) {
+      const activate = moved && !row.is_active;
+      db.transaction(() => {
+        if (activate) db.prepare('UPDATE pool_locations SET is_active = 1 WHERE region = ?').run(region);
+        stampLocal.run(region);
+      })();
+      if (moved) {
+        console.warn(`[db] local region changed '${prev}' → '${region}': ` +
+          (activate ? `activated '${region}' (it was inactive)` : `'${region}' already active`) +
+          `; '${prev}' left as it is — deactivate or re-point it in admin → Regions`);
+      }
     }
     // Backfill only empty fields (the row may predate these columns, or have been created
     // on a pre-nginx first boot when subdomain/location were still blank).

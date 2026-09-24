@@ -176,15 +176,15 @@
     .pstat.on  { color: var(--ok);   border: 1px solid color-mix(in srgb, var(--ok) 45%, transparent); }
     .pstat.off { color: var(--warn); border: 1px solid color-mix(in srgb, var(--warn) 45%, transparent); }
 
-    /* "Why does my rig password matter?" — the rgn-help disclosure from reactor.css, which
-       styles its whole subtree mono. Right for the short region legend it was built for, hard
-       going across four paragraphs, so the summary keeps the mono chrome and the body reverts
-       to --sans at the size of the sibling <small> hints. */
-    .gate-why { margin-top: 10px; }
-    .gate-why .rgn-note { font-family: var(--sans); font-size: 12px; max-width: 68ch; }
-    .gate-why .rgn-note:first-of-type { margin-top: 10px; }
-    .gate-why .rgn-note b { color: var(--text, #e6edf3); }
-    .gate-why code { font-family: var(--mono); font-size: 11px; }
+    /* Tor pane: "Check" (quiet) beside "Pay" (primary), one status line under them. The quiet
+       button keeps .btn-save's size and caps so the pair lines up, but drops the fill: accent ink
+       on the page ground, never accent-on-accent. The status line is page-local and
+       content-driven — it collapses while empty (nothing is said until the miner asks). */
+    .tor-actions { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+    .btn-save.btn-quiet { background: transparent; color: var(--accent); box-shadow: none; }
+    .btn-save.btn-quiet:hover { background: color-mix(in srgb, var(--accent) 10%, transparent); box-shadow: none; }
+    .tor-status { margin: 10px 0 0; font-family: var(--mono); font-size: 12.5px; line-height: 1.5; color: var(--text-dim); }
+    .tor-status:empty { display: none; }
 
     /* ── password-proof diagnostics (state chip + cross-rig consistency) ── */
     .pass-diag { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
@@ -406,13 +406,27 @@
                 <div class="deck-row acct-main">
                     <!-- ═══ P-04 · PAYOUT CONTROLS (one ownership gate) ═══ -->
                     <div class="panel"><span class="screws"></span>
-                        <h2 class="panel-title"><span class="tag">P-04</span> Payout controls <span class="right"><span class="pstat" id="acct-payout-status" style="display:none"></span>one gate &middot; amount &middot; Tor or slatepack</span></h2>
+                        <h2 class="panel-title"><span class="tag">P-04</span> Payout controls <span class="right"><span class="pstat" id="acct-payout-status" style="display:none"></span></span></h2>
                         <div class="panel-body">
 
                             <div class="gate-block">
                                 <div class="gate-title">🔐 Ownership gate — required for every payout action</div>
                                 <div class="form-group" style="margin-bottom:0">
-                                    <label for="acct-ip-proof">A recent mining IP (IPv4 or IPv6) <b>or</b> your rig's stratum password
+                                    <!-- WHY THIS GATE EXISTS — it can't be used to steal coins. A Tor payout goes
+                                         only to this address's own wallet and a slatepack is encrypted to this
+                                         address, so there is nowhere else for the money to go. What the gate stops
+                                         is a stranger reading the public leaderboard and triggering payouts the
+                                         owner never asked for — each burns a pool-paid network fee and force-moves
+                                         coins the owner meant to leave alone. Same reason a proof on record that the
+                                         owner did not add is harmless to their coins: anyone can point a miner at any
+                                         address, a stranger's value sits BESIDE the owner's (it never replaces one),
+                                         and it can still only pay this address.
+                                         Placement history: the proof-set work (design §17 Part 2, 2026-09-22) moved
+                                         this paragraph into a "Why does my rig password matter?" fold here; the
+                                         operator removed that fold on 2026-09-23 (payout-rails fix Part 3, "less
+                                         text"), so the reasoning now lives only in this comment and in the withdraw
+                                         route's comment in back-end-pool/index.js. -->
+                                    <label for="acct-ip-proof">A recent mining IP <b>or</b> your rig's stratum password
                                         <span style="color:var(--text-mute);font-weight:400">(8&ndash;128 characters)</span></label>
                                     <!-- maxlength matches owner-proof PASS_MAX (128) — stop an over-long
                                          password at the keyboard rather than at the failed withdrawal. -->
@@ -434,49 +448,19 @@
                                     <small style="color:var(--text-mute);">Accepted: any IP your rigs have recently submitted shares from
                                         (check yours at <a href="https://tools.grin.money/tools/my-ip/" target="_blank" rel="noopener noreferrer">tools.grin.money/tools/my-ip</a>),
                                         or any password your rigs send in their pool config &mdash; the pool keeps up to 10 of each.</small>
-                                    <!-- The "why" behind the password rules, collapsed (rgn-help pattern, css/reactor.css).
-                                         The setup guide on the homepage stays inline because someone reading it is
-                                         configuring a rig right then; this is reference for the subset who hit a
-                                         problem here, so it folds away. It ABSORBED the old inline "common defaults
-                                         never count" tail rather than stacking on top of it — the gate block already
-                                         carries a label, an on-record hint and the live diagnostics. -->
-                                    <details class="rgn-help gate-why">
-                                        <summary>Why does my rig password matter?</summary>
-                                        <p class="rgn-note"><b>It can't be used to steal your coins.</b> A Tor payout goes only to
-                                            this address's own wallet and a slatepack is encrypted to this address, so there is
-                                            nowhere else for the money to go. What the gate stops is a stranger reading the public
-                                            leaderboard and triggering payouts you never asked for — each one burns a pool-paid
-                                            network fee and force-moves coins you meant to leave alone.</p>
-                                        <p class="rgn-note"><b>What the pool keeps.</b> Up to <b>10 mining IPs</b> and
-                                            <b>10 rig passwords</b> for this address. A rig reconnecting from an IP already on
-                                            record simply refreshes it &mdash; nothing is pushed out, and the clock the pool reads
-                                            for a destination change does not restart. Only if you run more than 10 of either does
-                                            the least recently used one drop off.</p>
-                                        <p class="rgn-note"><b>A password is your backup when your IP changes.</b> IP proof breaks
-                                            quietly: an ISP re-lease, a router reboot, switching to mobile data, or moving the rig
-                                            all give you a new one. Each new IP is recorded on your next accepted share from it, but
-                                            a password you chose is yours wherever the rig runs.</p>
-                                        <p class="rgn-note"><b>If a proof appeared that you did not add.</b> Anyone can point a
-                                            miner at any address, so a value on record may be a stranger's rig rather than yours.
-                                            It cannot cost you coins: a Tor payout goes to this address's own wallet and a slatepack
-                                            is encrypted to this address, so the money can only reach you either way. What it can do
-                                            is trigger payouts you did not ask for. Your own proofs keep working &mdash; a stranger's
-                                            entry sits beside them, it does not replace them.</p>
-                                        <p class="rgn-note"><b>Why factory defaults are refused.</b> A default like <code>x</code>,
-                                            <code>xxxx</code> or <code>123</code> isn't a secret — thousands of rigs ship with the
-                                            same value, so accepting it would hand one skeleton key to every account using it. Same
-                                            for a single repeated character of any length, a straight run like <code>12345678</code>,
-                                            and anything under 8 characters (short enough to guess offline). Accented or non-Latin
-                                            letters are refused too — not for strength, but because ASIC firmware does not send them
-                                            reliably, so what the pool recorded might never match what you type here. None of those
-                                            are recorded, and the address keeps working on IP proof alone.</p>
-                                        <p class="rgn-note"><b>Setting one.</b> Put a private PIN of 8 or more digits in your
-                                            miner's pool password field (plain letters and keyboard symbols work too, up to 128
-                                            characters) and it is recorded on your next accepted share. Different passwords on
-                                            different sites all work &mdash; using one everywhere is a convenience, not a
-                                            requirement. Changing it is safe: the old one stays on record until it is the least
-                                            recently used of your ten, so a rotation never locks you out.</p>
-                                    </details>
+                                    <!-- The "Why does my rig password matter?" fold that stood here was removed
+                                         at the operator's request (2026-09-23): it repeated the homepage setup guide.
+                                         Where each of its facts lives now:
+                                         · can't steal / what the gate stops / a stranger's proof → the comment above
+                                           the label (reasoning only — no miner-visible home when Goblin is off)
+                                         · 10 IPs + 10 passwords kept → the "Accepted:" hint above + homepage step 3
+                                         · a password survives an IP change; any rig may use its own → homepage step 3
+                                         · defaults / repeated / straight runs / <8 / non-Latin refused → homepage step 3,
+                                           the (8–128) label, and PROOF_REASONS on a failed submit
+                                         · a returning IP only refreshes; the least recently used of 10 drops off, so a
+                                           password rotation never locks anyone out → design §17 (not on any page)
+                                         · how to set one (8+ digit PIN in the pool password field) → homepage step 3 -->
+                                    <small><a href="/#rx-miner-guide">Password rules → Miner setup</a></small>
                                 </div>
                             </div>
 
@@ -504,9 +488,10 @@
                                         <!-- Label stays "withdrawal fee", NOT "blockchain fee": this is a flat
                                              rate that covers the chain fee, and the payments page publishes the
                                              REAL per-payout chain fee. Naming it after the chain would read as a
-                                             contradiction the moment a miner compares the two. The title/note
-                                             carry the plain-language "blockchain" explanation instead. -->
-                                        <span title="A flat fee covering the Grin blockchain transaction fee">Withdrawal fee</span>
+                                             contradiction the moment a miner compares the two. The title carries
+                                             the plain-language "blockchain" explanation instead (it was a visible
+                                             closing note until 2026-09-23). -->
+                                        <span title="A flat fee on every payout method. It covers the Grin blockchain transaction fee, which is charged by transaction size, not by amount — so fewer, larger withdrawals cost less in total. The real fee paid on each payout is published on the payments page." style="border-bottom:1px dotted currentColor;cursor:help">Withdrawal fee</span>
                                         <b><span id="acct-fee-val">—</span> ツ</b>
                                         &middot; you receive <b><span id="acct-net-val">—</span> ツ</b>
                                     </p>
@@ -521,28 +506,36 @@
                                 </div>
 
                                 <!-- Tor method -->
+                                <!-- Two buttons, no prose (operator, 2026-09-23). What the removed paragraph
+                                     said, for the record: the amount goes straight to this address's own wallet
+                                     over Tor, so the miner needs a wallet listener running; the pool probes the
+                                     wallet before sending and a confident "no answer" declines the payout (HTTP
+                                     409, nothing locked) — Slatepack is the fallback that needs no listener.
+                                     "Check" is on demand only and re-probes (?fresh=1; the server serves anything
+                                     younger than 10 s from cache). #acct-tor stays EMPTY until a check or a
+                                     declined payout writes it (setTorStatus). -->
                                 <div id="acct-pay-tor-pane">
-                                    <p class="note" style="margin-bottom:12px">Sends the amount straight to this address's wallet over Tor — keep a wallet listener running.
-                                        The pool checks your wallet is reachable before sending; if it isn't, the payout is declined and you can use Slatepack instead. Wallet reachability:
-                                        <span id="acct-tor" style="font-family:var(--mono);">checking…</span>
-                                        <a class="amt-chip" id="acct-tor-recheck" title="Re-probe your wallet now — click after you start your listener" style="margin-left:6px;">re-check</a></p>
-                                    <button class="btn-save" id="acct-withdraw">Request Tor Payout</button>
+                                    <div class="tor-actions">
+                                        <button type="button" class="btn-save btn-quiet" id="acct-tor-check">Check Tor wallet</button>
+                                        <button class="btn-save" id="acct-withdraw">Pay to Tor wallet</button>
+                                    </div>
+                                    <p class="tor-status" id="acct-tor" aria-live="polite"></p>
                                     <div class="acct-msg" id="acct-withdraw-msg"></div>
                                 </div>
 
                                 <!-- Slatepack method -->
+                                <!-- The slatepack is ENCRYPTED to this address, so only the owner's wallet can
+                                     open it — no listener needed, which is why this is the fallback when the Tor
+                                     check says no. (Cut from the visible note 2026-09-23.) -->
                                 <div id="acct-pay-slatepack-pane" style="display:none;">
-                                    <p class="note" style="margin-bottom:12px">
-                                        Generates a slatepack <b>encrypted to your address</b> — only your wallet can open it.
-                                        Steps: 1) generate, 2) <code>receive</code> it in your wallet, 3) paste the response to finalize.
-                                    </p>
+                                    <p class="note" style="margin-bottom:12px">Generate &rarr; <code>receive</code> it in your wallet &rarr; paste the response below.</p>
                                     <button class="btn-save" id="acct-sp-create">Generate Slatepack</button>
                                     <div class="acct-msg" id="acct-sp-msg"></div>
                                     <div id="acct-sp-out" style="display:none;margin-top:14px;">
-                                        <label>Encrypted slatepack — import into your wallet and run <code>receive</code>:</label>
+                                        <label for="acct-sp-armored">Slatepack for your wallet</label>
                                         <textarea id="acct-sp-armored" readonly rows="5" style="width:100%;font-family:var(--mono);font-size:12px;"></textarea>
                                         <div class="form-group" style="margin-top:12px;">
-                                            <label for="acct-sp-response">Paste your wallet's response slatepack:</label>
+                                            <label for="acct-sp-response">Your wallet's response</label>
                                             <textarea id="acct-sp-response" rows="5" style="width:100%;font-family:var(--mono);font-size:12px;" placeholder="BEGINSLATEPACK. ..."></textarea>
                                         </div>
                                         <button class="btn-save" id="acct-sp-finalize">Finalize Payout</button>
@@ -572,20 +565,18 @@
                                 <span id="acct-pending-text"></span>
                             </div>
 
+                            <!-- Closing note cut to two sentences (2026-09-23). Moved out of sight:
+                                 · the fee economics → the title on the "Withdrawal fee" label (the live
+                                   fee → you-receive preview under the amount field stays VISIBLE; it is a
+                                   number, and hiding what a payout costs is the one cut not to make). The
+                                   #acct-fee-note span that carried it is gone with its JS.
+                                 · "while one is in flight it shows above" → the pending strip says so itself.
+                                 · no manual cancel, because a payout that looks failed can still land
+                                   (memory project_pool_account_page, Round 3).
+                                 · after a payout is returned, a short cooldown applies before the next
+                                   request on ANY rail — the server says so when it refuses one. -->
                             <p class="note" style="margin:16px 0 0;font-size:12.5px;color:var(--text-mute);">
-                                <span id="acct-fee-note" style="display:none">A flat withdrawal fee of
-                                <b><span id="acct-fee-note-val">—</span> ツ</b> is deducted from the amount you request,
-                                on every method. It covers the <b>Grin blockchain transaction fee</b>, which on Grin
-                                is paid by the sender and is charged by transaction size rather than by the amount
-                                sent — so it costs the same whether you withdraw 25 or 2500 ツ. Fewer, larger
-                                withdrawals therefore cost you less in total. It is a flat rate, not a pass-through
-                                of the exact chain fee: the real fee paid on every payout is published on the
-                                <a href="/payment-history.html">payments page</a>.</span>
-                                One payout at a time — while one is in flight it shows above with its status.
-                                Nothing gets stuck: a payout that can't be delivered returns to your balance
-                                automatically once its retry or expiry window passes. There's no manual cancel
-                                (a payout that looks failed can still land), and after one is returned a short
-                                cooldown applies before your next request on any method.
+                                One payout at a time. One that can't be delivered returns to your balance automatically.
                             </p>
 
                             <!-- ═══ PAYOUT DESTINATIONS ═══════════════════════════════════════════
@@ -936,7 +927,12 @@
                 loadLedger('in');
                 loadLedger('out');
                 loadWithdrawals();
-                torCheck(addr);
+                // NO automatic Tor check here (removed 2026-09-23). It used to run torCheck(addr)
+                // on every lookup, so every page view built a Tor circuit to the miner's onion and
+                // POSTed check_version — up to ~30 s of outbound work nobody asked for. The check
+                // is on demand now ("Check Tor wallet"), and the pay path probes fresh anyway (the
+                // withdraw pre-flight gate). resetTorStatus drops the previous address's answer.
+                resetTorStatus();
             } catch (e) {
                 $id('acct-view').style.display = 'none';
                 $id('acct-lamp').style.display = 'none';
@@ -1007,12 +1003,9 @@
 
             $id('acct-pool-min').textContent = Number(a.min_withdrawal || 0).toFixed(1);
             acctWithdrawalFee = Number(a.withdrawal_fee || 0);
-            const feeNote = $id('acct-fee-note');
-            if (feeNote) {
-                feeNote.style.display = acctWithdrawalFee > 0 ? '' : 'none';
-                $id('acct-fee-note-val').textContent =
-                    acctWithdrawalFee.toFixed(4).replace(/0+$/, '').replace(/\.$/, '');
-            }
+            // The fee is disclosed by the net preview (shown whenever fee > 0); the prose note
+            // that repeated it (#acct-fee-note) was cut 2026-09-23 — its explanation is the
+            // preview label's title now.
             renderNetPreview();
             // min/max autofill chips: min = pool minimum, max = current spendable balance
             $id('acct-amt-min').dataset.v = Number(a.min_withdrawal || 0).toFixed(1);
@@ -1191,8 +1184,8 @@
             // the old ones instead of pushing one out, so there is no displacement to report.
             // Both facts it carried survive: "last added" is in the on-record hint above, and
             // the "someone else mined to this address" explanation moved into the "Why does my
-            // rig password matter?" fold — read by someone asking the question, rather than
-            // shown as an alert to everyone.
+            // rig password matter?" fold — which was itself removed 2026-09-23 at the operator's
+            // request, so that explanation is now only the HTML comment above the P-04 gate label.
 
             if (!lines.length) return;
             el.innerHTML = lines.join('');
@@ -1751,20 +1744,58 @@
             }
         }
 
-        // ── Tor reachability hint ──────────────────────────────────────────
+        // ── Tor wallet check (on demand — the "Check Tor wallet" button) ───
+        // GET /tor-check is TRI-STATE and only `online` picks the wording; the raw reason goes in
+        // the title for whoever is debugging. Reasons (index.js API_DOC_META, payout-rails Part 2):
+        //   true  → reachable · reachable_auth           (a grin-wallet answered, or asked for auth)
+        //   false → onion_unreachable · onion_timeout · no_answer · not_wallet · invalid_format
+        //   null  → tor_unavailable · derivation_failed · probe_failed   (OUR tor could not look —
+        //           says nothing about the wallet; the payout gate fails open on it)
+        // Advisory only: "Pay" is never disabled on this answer — the pool re-probes at request
+        // time and is the authority (a confident ✗ there is a 409 with nothing locked).
+        const TOR_STATUS_TEXT = {
+            yes: '✓ Your wallet answered',
+            no: '✗ No answer — start your wallet listener, or use Slatepack',
+            unknown: 'Couldn\'t check from here — you can still request the payout'
+        };
+        function setTorStatus(online, reason) {
+            const el = $id('acct-tor');
+            if (!el) return;
+            el.textContent = online === true ? TOR_STATUS_TEXT.yes
+                : online === false ? TOR_STATUS_TEXT.no : TOR_STATUS_TEXT.unknown;
+            el.title = reason ? 'reason: ' + reason : '';
+        }
+        // Bumped on every new check AND every lookup, so a slow probe (up to ~30 s) for the
+        // previous address can never write its answer under the one now on screen.
+        let torSeq = 0;
+        function resetTorStatus() {
+            torSeq++;
+            const el = $id('acct-tor');
+            if (el) { el.textContent = ''; el.title = ''; }
+            const btn = $id('acct-tor-check');
+            if (btn) btn.disabled = false;
+        }
         async function torCheck(addr) {
             const el = $id('acct-tor');
-            el.textContent = 'checking…';
+            const btn = $id('acct-tor-check');
+            if (!el || !addr) return;
+            const seq = ++torSeq;
+            if (isDemo) { setTorStatus(true, 'demo'); el.textContent += ' (demo)'; return; }
+            if (btn) btn.disabled = true;
+            el.textContent = 'Checking… (can take up to 30 s)';
+            el.title = '';
             try {
-                const r = await getJson('/api/account/' + encodeURIComponent(addr) + '/tor-check');
-                // Advisory hint only — the pool re-probes (with retries) at request time and is the
-                // authority, so we never disable the button on this; a genuine offline is caught by
-                // the server gate with a Slatepack suggestion.
-                if (r.online === true) el.textContent = '✓ reachable now';
-                else if (r.online === false) el.textContent = '✗ not reachable right now — start your wallet listener, or use Slatepack';
-                else el.textContent = 'checked when you request the payout';
+                // fresh=1: a miner who just started their listener must not get the ✗ from a
+                // minute ago. The server serves answers younger than 10 s from cache regardless.
+                const r = await getJson('/api/account/' + encodeURIComponent(addr) + '/tor-check?fresh=1');
+                if (seq !== torSeq) return;
+                setTorStatus(r.online === true ? true : r.online === false ? false : null, r.reason);
             } catch (e) {
-                el.textContent = 'unknown';
+                // Rate limit, 5xx or network — we did not look, so never a ✗.
+                if (seq !== torSeq) return;
+                setTorStatus(null, e.message);
+            } finally {
+                if (seq === torSeq && btn) btn.disabled = false;
             }
         }
 
@@ -1850,7 +1881,9 @@
             const amount = amountValue(msg);
             if (amount === null) return;
             btn.disabled = true;
-            setMsg(msg, 'Submitting…', true);
+            // The pre-flight gate probes the wallet INSIDE this request (fresh, up to ~30 s), so
+            // say what the wait is rather than a bare "Submitting…".
+            setMsg(msg, 'Checking your wallet over Tor, then sending… (up to 30 s)', true);
             try {
                 const r = await fetch('/api/account/' + encodeURIComponent(currentAddr) + '/withdraw', {
                     method: 'POST',
@@ -1862,12 +1895,18 @@
                 if (r.ok && json && json.success) {
                     setMsg(msg, 'Payout queued (#' + json.withdrawal_id + ') — it will be sent to your wallet over Tor.', true);
                     lookup(); // refresh balances + pending strip
+                } else if (json && json.tor_online === false) {
+                    // Pre-flight gate declined it (409). The gate runs BEFORE the balance lock, so
+                    // nothing was deducted; the status line carries the ✗ + Slatepack pointer, so
+                    // the message stays short rather than repeat the server's sentence.
+                    // resetTorStatus first: a Check still in flight must not overwrite this fresher
+                    // answer, and its button must come back (its own finally no longer will).
+                    resetTorStatus();
+                    setTorStatus(false, json.reason);
+                    setMsg(msg, 'Not sent — nothing was deducted.', false);
+                    btn.disabled = false;
                 } else {
                     setMsg(msg, apiErr(json, 'Withdrawal failed'), false);
-                    // Tor pre-flight gate declined it: reflect the offline status and point at Slatepack.
-                    if (json && json.tor_online === false) {
-                        $id('acct-tor').textContent = '✗ not reachable right now — start your wallet listener, or use Slatepack';
-                    }
                     btn.disabled = false;
                 }
             } catch (e) {
@@ -2039,7 +2078,9 @@
             loadLedger('in');
             loadLedger('out');
             loadWithdrawals();
-            $id('acct-tor').textContent = '✓ reachable now (demo)';
+            // Status stays empty until "Check Tor wallet" is pressed, same as a real account;
+            // torCheck answers ✓ (demo) without a request.
+            resetTorStatus();
             $id('acct-withdraw').disabled = false;
         }
 
@@ -2048,10 +2089,10 @@
             $id('acct-lookup').addEventListener('click', lookup);
             $id('acct-addr').addEventListener('keydown', function (e) { if (e.key === 'Enter') lookup(); });
             $id('acct-withdraw').addEventListener('click', withdraw);
-            $id('acct-tor-recheck').addEventListener('click', function () {
-                // Manual re-probe: the on-load check goes stale once the miner starts their
-                // listener. Reuses the same endpoint/status span; no-op until an address is loaded.
-                if (currentAddr && !isDemo) torCheck(currentAddr);
+            $id('acct-tor-check').addEventListener('click', function () {
+                // The ONLY thing that probes for display — there is no check on page load.
+                // No-op until an address is loaded; the demo answers locally.
+                if (currentAddr) torCheck(currentAddr);
             });
             // Decimal-only amount: strip any non-digit/dot and collapse to a single decimal point.
             $id('acct-amount').addEventListener('input', function () {

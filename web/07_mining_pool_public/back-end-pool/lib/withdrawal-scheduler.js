@@ -711,7 +711,7 @@ class WithdrawalScheduler {
 
   // ─── On-chain kernel proof (payment-proof deep-link surface) ────────────────
   // Fill in the kernel excess of each confirmed payout so the account page can deep-link it to a
-  // chain explorer (scan.grin.money/kernel/<excess>). READ-ONLY w.r.t. balances — it only writes
+  // chain explorer (grincoin.org/kernel/<excess>). READ-ONLY w.r.t. balances — it only writes
   // the proof column, never moves or unlocks funds — so it is safe to run even while payouts are
   // frozen. Requires the Owner-API wallet (this.wallet): the Tor CLI rail exposes no structured
   // kernel, so a Tor-only deployment without the Owner API simply gets no kernel column.

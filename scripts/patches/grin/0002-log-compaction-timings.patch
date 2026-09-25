@@ -1,0 +1,97 @@
+From c6679bd8bd00a3ef834d5ee453d3d603c328dc39 Mon Sep 17 00:00:00 2001
+From: Grin Node Toolkit <noreply@grin-node-toolkit.local>
+Date: Fri, 25 Sep 2026 17:41:38 -0400
+Subject: [PATCH 2/2] chain: log compaction start, phase timings and output_pos
+ repair at info
+
+Compaction runs roughly once a day at random (1/DAY_HEIGHT per block) and
+again whenever sync finishes, and holds the txhashset write lock while it
+runs. At the default Info file log level none of it is visible, so a
+multi-hour stall on a small archive node leaves no trace in the log. Log
+start, finish and per-phase timings, and promote the output_pos repair
+counts from debug to info so the log shows how many UTXOs were missing
+index entries.
+---
+ chain/src/chain.rs               | 12 ++++++++++++
+ chain/src/txhashset/txhashset.rs |  6 +++---
+ 2 files changed, 15 insertions(+), 3 deletions(-)
+
+diff --git a/chain/src/chain.rs b/chain/src/chain.rs
+index 7a55d22..43055d8 100644
+--- a/chain/src/chain.rs
++++ b/chain/src/chain.rs
+@@ -1346,6 +1346,9 @@ impl Chain {
+ 			}
+ 		}
+ 
++		let compact_start = Instant::now();
++		info!("compact: starting (archive_mode: {})", self.archive_mode());
++
+ 		// Retrieve archive header here, so as not to attempt a read
+ 		// lock while removing historical blocks
+ 		let archive_header = self.txhashset_archive_header()?;
+@@ -1366,6 +1369,7 @@ impl Chain {
+ 
+ 			txhashset.compact(&horizon_header, &batch)?;
+ 		}
++		let txhashset_secs = compact_start.elapsed().as_secs();
+ 
+ 		// If we are not in archival mode remove historical blocks from the db.
+ 		if !self.archive_mode() {
+@@ -1373,7 +1377,9 @@ impl Chain {
+ 		}
+ 
+ 		// Make sure our output_pos index is consistent with the UTXO set.
++		let output_pos_start = Instant::now();
+ 		txhashset.init_output_pos_index(&header_pmmr, &mut batch)?;
++		let output_pos_secs = output_pos_start.elapsed().as_secs();
+ 
+ 		// TODO - Why is this part of chain compaction?
+ 		// Rebuild our NRD kernel_pos index based on recent kernel history.
+@@ -1382,6 +1388,12 @@ impl Chain {
+ 		// Commit all the above db changes.
+ 		batch.commit()?;
+ 
++		info!(
++			"compact: finished in {}s (txhashset {}s, output_pos index {}s)",
++			compact_start.elapsed().as_secs(),
++			txhashset_secs,
++			output_pos_secs,
++		);
+ 		Ok(())
+ 	}
+ 
+diff --git a/chain/src/txhashset/txhashset.rs b/chain/src/txhashset/txhashset.rs
+index 61ddac4..83baebf 100644
+--- a/chain/src/txhashset/txhashset.rs
++++ b/chain/src/txhashset/txhashset.rs
+@@ -666,7 +666,7 @@ impl TxHashSet {
+ 			batch.delete(Some(store::OUTPUT_POS_PREFIX), &p)?;
+ 			removed_count += 1;
+ 		}
+-		debug!(
++		info!(
+ 			"init_output_pos_index: removed {} stale index entries",
+ 			removed_count
+ 		);
+@@ -687,7 +687,7 @@ impl TxHashSet {
+ 				.unwrap_or(true)
+ 		});
+ 
+-		debug!(
++		info!(
+ 			"init_output_pos_index: {} utxos with missing index entries",
+ 			outputs_pos.len()
+ 		);
+@@ -735,7 +735,7 @@ impl TxHashSet {
+ 			}
+ 			next_height = h.height + 1;
+ 		}
+-		debug!(
++		info!(
+ 			"init_output_pos_index: added entries for {} utxos, took {}s",
+ 			total_outputs,
+ 			now.elapsed().as_secs(),
+-- 
+2.53.0.windows.1
+

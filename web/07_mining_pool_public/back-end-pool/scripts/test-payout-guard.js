@@ -1179,6 +1179,7 @@ console.log('\n[1] §J4-10 — the matcher has three outcomes, not two');
       rowOf(id).status === 'confirmed' && h.cancels.length === 0, JSON.stringify({ c: h.cancels, row: rowOf(id) }));
   }
 
+  await slatepackRecoverySection();
   await stepwiseSection();
   await reviewSection();
 
@@ -1186,6 +1187,243 @@ console.log('\n[1] §J4-10 — the matcher has three outcomes, not two');
   cleanup();
   process.exit(fail === 0 ? 0 : 1);
 })().catch((e) => { console.error(e); cleanup(); process.exit(1); });
+
+// ═══ [sp-recover] a lost slatepack tab, and the expiry sweep's pool-wallet cancel (2026-09-25) ═══
+// Three money-path changes, each shown to fail against the code it replaced:
+//   · the manual rail stores its (encrypted) S1 so the owner can fetch it again; the Goblin rail's
+//     PLAIN S1 never is; a settled row's copy goes with the settling claim;
+//   · expiry refunds FIRST and cancels only a row it won — the old cancel-then-claim order
+//     cancelled a slate a concurrent finalize had just broadcast;
+//   · a failed expiry cancel is remembered (slate_cancel_pending) and retried against the wallet's
+//     own tx log, never re-cancelling a cancelled tx and never cancelling a mined one.
+async function slatepackRecoverySection() {
+  console.log('\n[sp-recover] stored S1, refund-then-cancel, and the cancel retry');
+  const quiet = async (fn) => {
+    const o = [console.log, console.error, console.warn];
+    console.log = console.error = console.warn = () => {};
+    try { return await fn(); } finally { [console.log, console.error, console.warn] = o; }
+  };
+  const now = () => Math.floor(Date.now() / 1000);
+  const S1 = (recips) => `BEGINSLATEPACK. ${recips.length ? 'enc:' + recips.join(',') : 'plain'} . ENDSLATEPACK.`;
+  // A stateful fake Owner API: tx_lock_outputs writes a TxSent, cancel_tx turns it into
+  // TxSentCancelled. `hooks` lets a case run code INSIDE a wallet call, which is where the
+  // scheduler yields and where every race below actually happens.
+  const fakeWallet = (hooks = {}) => {
+    const w = {
+      log: [], cancels: [], recips: [], n: 0,
+      async initSendTx(amount) { if (hooks.init) await hooks.init(); w.n++; return { id: `sp-${seq}-${w.n}`, amt: amount, fee: '23500000' }; },
+      async txLockOutputs(slate) { w.log.push({ tx_slate_id: slate.id, tx_type: 'TxSent', confirmed: false }); },
+      async createSlatepackMessage(slate, recips) { w.recips.push(recips); if (hooks.message) await hooks.message(slate); return S1(recips); },
+      async cancelTx(id) {
+        w.cancels.push(id);
+        if (hooks.cancel) await hooks.cancel(id);
+        const e = w.log.find((t) => t.tx_slate_id === id);
+        if (!e) throw new Error(`TransactionDoesntExist ${id}`);
+        e.tx_type = 'TxSentCancelled';
+      },
+      async getTransactions() { if (hooks.log) return hooks.log(); return w.log.map((t) => ({ ...t })); },
+    };
+    return w;
+  };
+  const sched = (wallet, c = {}) => {
+    const s = new WithdrawalScheduler({ ...config, ...c }, wallet);
+    s.incentives = { maybePayJoinBonus() {} };
+    return s;
+  };
+  const fund = (bal) => db.prepare('UPDATE miner_accounts SET balance = ?, balance_locked = 0 WHERE grin_address = ?').run(bal, ADDR);
+  const seedPending = ({ slate, ageMin = 31, s1 = 'BEGINSLATEPACK. stored . ENDSLATEPACK.', method = 'slatepack', amount = 25 }) => {
+    db.prepare('UPDATE miner_accounts SET balance_locked = balance_locked + ? WHERE grin_address = ?').run(amount, ADDR);
+    return Number(db.prepare(
+      `INSERT INTO withdrawals (grin_address, amount, fee, fee_charged, status, method, slate_id, slatepack_s1, created_at)
+       VALUES (?, ?, 0, 0.04, 'slatepack_pending', ?, ?, ?, ?)`
+    ).run(ADDR, amount, method, slate, s1, now() - ageMin * 60).lastInsertRowid);
+  };
+  const seedOwed = (slate) => Number(db.prepare(
+    `INSERT INTO withdrawals (grin_address, amount, fee, fee_charged, status, method, slate_id, slate_cancel_pending, created_at)
+     VALUES (?, 25, 0, 0.04, 'slatepack_expired', 'slatepack', ?, 1, ?)`
+  ).run(ADDR, slate, now() - 3600).lastInsertRowid);
+  const alertOf = (type) => db.prepare("SELECT * FROM alerts WHERE type = ? AND status = 'active' ORDER BY id DESC LIMIT 1").get(type);
+
+  // ── SP1 the manual rail stores the S1 it hands out, encrypted to the owner ──
+  {
+    reset(); fund(30); seq++;
+    const w = fakeWallet();
+    const r = await quiet(() => sched(w).createSlatepackWithdrawal(ADDR, 25));
+    const row = rowOf(r.withdrawal_id);
+    ok('SP1. manual rail: the S1 returned to the miner is the one stored on the row',
+      row.slatepack_s1 === r.slatepack && r.slatepack === S1([ADDR]), JSON.stringify({ s1: row.slatepack_s1, r: r.slatepack }));
+    ok('SP1. …and it was encrypted to the payout address (recipients = [addr])',
+      w.recips.length === 1 && w.recips[0].length === 1 && w.recips[0][0] === ADDR, JSON.stringify(w.recips));
+  }
+
+  // ── SP2 the Goblin rail never stores its PLAIN S1 ──
+  {
+    reset(); fund(30); seq++;
+    const w = fakeWallet();
+    const s = sched(w);
+    const published = [];
+    s.nostrBridge = { isEnabled: () => true, async publishSlatepack(pub, armored) { published.push(armored); } };
+    const r = await quiet(() => s.createNostrWithdrawal(ADDR, 25, 'ab'.repeat(32), 'test'));
+    const row = rowOf(r.withdrawal_id);
+    ok('SP2. Goblin rail: plain S1 published, slatepack_s1 stays NULL',
+      published.length === 1 && published[0] === S1([]) && row.slatepack_s1 === null && row.method === 'nostr',
+      JSON.stringify({ published, s1: row.slatepack_s1 }));
+  }
+
+  // ── SP3 a row the sweep refunded while the wallet built its slate never gets that slate ──
+  for (const rail of ['slatepack', 'nostr']) {
+    reset(); fund(30); seq++;
+    let s = null;
+    const w = fakeWallet({
+      async message() {
+        // The TTL passes mid-build: the expiry sweep's guarded refund runs inside this await.
+        const id = db.prepare("SELECT id FROM withdrawals WHERE grin_address = ? AND status = 'slatepack_pending'").get(ADDR).id;
+        s._reverseLock(id, 'slatepack_expired', 'slatepack_pending', 'test: expired mid-build', { owesSlateCancel: false });
+      },
+    });
+    s = sched(w);
+    s.nostrBridge = { isEnabled: () => true, async publishSlatepack() { throw new Error('must not publish'); } };
+    let err = null;
+    await quiet(async () => {
+      try {
+        if (rail === 'slatepack') await s.createSlatepackWithdrawal(ADDR, 25);
+        else await s.createNostrWithdrawal(ADDR, 25, 'ab'.repeat(32), 'test');
+      } catch (e) { err = e; }
+    });
+    const row = db.prepare('SELECT * FROM withdrawals WHERE grin_address = ? ORDER BY id DESC LIMIT 1').get(ADDR);
+    ok(`SP3. ${rail}: expired mid-build → the slate is cancelled, never attached, the create fails`,
+      !!err && w.cancels.length === 1 && row.status === 'slatepack_expired' && row.slate_id === null && row.slatepack_s1 === null,
+      JSON.stringify({ err: err && err.message, cancels: w.cancels, row }));
+    ok(`SP3. ${rail}: …and the balance was refunded exactly once`,
+      Math.abs(acct().balance - 30) < 1e-9 && Math.abs(acct().balance_locked) < 1e-9, JSON.stringify(acct()));
+  }
+
+  // ── SP4 refund FIRST: the wallet cancel only ever sees a row already refunded ──
+  {
+    reset(); db.exec("DELETE FROM alerts WHERE type IN ('slate_cancel_owed','slate_refunded_but_mined')");
+    const w = fakeWallet();
+    w.log.push({ tx_slate_id: 'sp4', tx_type: 'TxSent', confirmed: false });
+    const id = seedPending({ slate: 'sp4' });
+    let seenAtCancel = null;
+    const s = sched({ ...w, async cancelTx(sid) { seenAtCancel = rowOf(id).status; return w.cancelTx(sid); } });
+    await quiet(() => s.processSlatepackExpiry());
+    const r = rowOf(id);
+    ok('SP4. the row was already slatepack_expired when cancel_tx ran', seenAtCancel === 'slatepack_expired', String(seenAtCancel));
+    ok('SP4. expiry clears the stored S1 and, with the cancel landed, owes nothing',
+      r.status === 'slatepack_expired' && r.slatepack_s1 === null && r.slate_cancel_pending === 0, JSON.stringify(r));
+  }
+
+  // ── SP5 a finalize that wins a row mid-batch keeps its slate ──
+  // Two stale rows in ONE batch. While the sweep awaits row A's cancel, the miner of row B
+  // finalizes (the claim is synchronous, first thing in finalize). The old order had already
+  // selected B and went on to cancel B's slate — a transaction that finalize was broadcasting.
+  {
+    reset();
+    let s = null;
+    let idB = null;
+    const w = fakeWallet({ async cancel(sid) { if (sid === 'sp5-a') s._claimForFinalize(idB); } });
+    w.log.push({ tx_slate_id: 'sp5-a', tx_type: 'TxSent', confirmed: false }, { tx_slate_id: 'sp5-b', tx_type: 'TxSent', confirmed: false });
+    const idA = seedPending({ slate: 'sp5-a', ageMin: 40 });
+    idB = seedPending({ slate: 'sp5-b', ageMin: 35 });
+    s = sched(w);
+    await quiet(() => s.processSlatepackExpiry());
+    ok('SP5. the row finalize claimed mid-batch: its slate is NEVER cancelled',
+      !w.cancels.includes('sp5-b') && rowOf(idB).status === 'finalizing', JSON.stringify({ cancels: w.cancels, b: rowOf(idB).status }));
+    ok('SP5. …row A still expired + cancelled, and only A was refunded',
+      rowOf(idA).status === 'slatepack_expired' && w.cancels.join(',') === 'sp5-a' &&
+      Math.abs(acct().balance - 25) < 1e-9 && Math.abs(acct().balance_locked - 25) < 1e-9, JSON.stringify({ c: w.cancels, a: acct() }));
+  }
+
+  // ── SP6 a failed expiry cancel is remembered, refund untouched ──
+  {
+    reset();
+    const w = fakeWallet({ async cancel() { throw new Error("Can't contact running Grin node. Not Cancelling."); } });
+    w.log.push({ tx_slate_id: 'sp6', tx_type: 'TxSent', confirmed: false });
+    const id = seedPending({ slate: 'sp6' });
+    await quiet(() => sched(w).processSlatepackExpiry());
+    ok('SP6. node down at expiry: refunded anyway, slate_cancel_pending = 1',
+      rowOf(id).status === 'slatepack_expired' && rowOf(id).slate_cancel_pending === 1 && Math.abs(acct().balance - 25) < 1e-9,
+      JSON.stringify({ r: rowOf(id), a: acct() }));
+  }
+
+  // ── SP7 the retry sweep: one decision per tx-log state ──
+  {
+    reset(); db.exec("DELETE FROM alerts WHERE type IN ('slate_cancel_owed','slate_refunded_but_mined')");
+    const w = fakeWallet();
+    w.log.push(
+      { tx_slate_id: 'r-locked', tx_type: 'TxSent', confirmed: false },
+      { tx_slate_id: 'r-cancelled', tx_type: 'TxSentCancelled', confirmed: false },
+      { tx_slate_id: 'r-mined', tx_type: 'TxSent', confirmed: true });
+    const locked = seedOwed('r-locked');
+    const cancelled = seedOwed('r-cancelled');
+    const absent = seedOwed('r-absent');
+    const mined = seedOwed('r-mined');
+    // Never selected: the flag on a row that is not slatepack_expired means nothing to this sweep.
+    const other = Number(db.prepare(
+      `INSERT INTO withdrawals (grin_address, amount, fee_charged, status, method, slate_id, slate_cancel_pending)
+       VALUES (?, 25, 0.04, 'confirmed', 'slatepack', 'r-other', 1)`).run(ADDR).lastInsertRowid);
+    await quiet(() => sched(w).retryExpiredSlateCancels());
+    ok('SP7. still-locked TxSent → cancel_tx, flag cleared', w.cancels.includes('r-locked') && rowOf(locked).slate_cancel_pending === 0,
+      JSON.stringify(w.cancels));
+    ok('SP7. already cancelled / absent from the wallet → flag cleared WITHOUT calling cancel_tx again',
+      !w.cancels.includes('r-cancelled') && !w.cancels.includes('r-absent') &&
+      rowOf(cancelled).slate_cancel_pending === 0 && rowOf(absent).slate_cancel_pending === 0, JSON.stringify(w.cancels));
+    ok('SP7. CONFIRMED on chain → never cancelled, critical alert raised',
+      !w.cancels.includes('r-mined') && rowOf(mined).slate_cancel_pending === 0 &&
+      !!alertOf('slate_refunded_but_mined') && alertOf('slate_refunded_but_mined').level === 'critical',
+      JSON.stringify({ c: w.cancels, a: alertOf('slate_refunded_but_mined') }));
+    ok('SP7. a flagged row in any other status is never touched', !w.cancels.includes('r-other') && rowOf(other).slate_cancel_pending === 1);
+    ok('SP7. exactly one cancel_tx in the whole pass', w.cancels.length === 1, JSON.stringify(w.cancels));
+  }
+
+  // ── SP8 a node outage: quiet, then one rolling alert, then resolved ──
+  {
+    reset(); db.exec("DELETE FROM alerts WHERE type = 'slate_cancel_owed'");
+    let down = true;
+    const w = fakeWallet({ async cancel() { if (down) throw new Error("Can't contact running Grin node. Not Cancelling."); } });
+    w.log.push({ tx_slate_id: 'o-1', tx_type: 'TxSent', confirmed: false }, { tx_slate_id: 'o-2', tx_type: 'TxSent', confirmed: false });
+    const a = seedOwed('o-1'); const b = seedOwed('o-2');
+    const s = sched(w);
+    for (let i = 0; i < 4; i++) await quiet(() => s.retryExpiredSlateCancels());
+    ok('SP8. four failing ticks: no alert yet, and each tick stopped at its FIRST failure',
+      !alertOf('slate_cancel_owed') && w.cancels.length === 4 && w.cancels.every((x) => x === 'o-1'), JSON.stringify(w.cancels));
+    await quiet(() => s.retryExpiredSlateCancels());
+    const al = alertOf('slate_cancel_owed');
+    ok('SP8. the fifth failing tick raises ONE warning naming both payouts',
+      !!al && al.level === 'warning' && al.message.includes(`#${a}`) && al.message.includes(`#${b}`), JSON.stringify(al));
+    down = false;
+    await quiet(() => s.retryExpiredSlateCancels());
+    ok('SP8. node back: both cancelled, both flags cleared',
+      rowOf(a).slate_cancel_pending === 0 && rowOf(b).slate_cancel_pending === 0, JSON.stringify([rowOf(a), rowOf(b)]));
+    await quiet(() => s.retryExpiredSlateCancels());
+    ok('SP8. …and the next clean tick resolves the alert', !alertOf('slate_cancel_owed'));
+  }
+
+  // ── SP9 an unreadable wallet log decides nothing ──
+  {
+    reset();
+    const w = fakeWallet({ async log() { throw new Error('owner API down'); } });
+    const id = seedOwed('u-1');
+    await quiet(() => sched(w).retryExpiredSlateCancels());
+    ok('SP9. tx log unreadable → no cancel, flag kept', w.cancels.length === 0 && rowOf(id).slate_cancel_pending === 1);
+  }
+
+  // ── SP10 a finalized payout drops its stored S1 in the confirm claim ──
+  {
+    reset(); fund(0);
+    const id = seedPending({ slate: 'sp10', ageMin: 1 });
+    const s = sched({
+      async slateFromSlatepackMessage() { return { id: 'sp10' }; },
+      async finalizeTx(slate) { return slate; },
+      async postTx() {},
+    });
+    const r = await quiet(() => s.finalizeSlatepackWithdrawal(ADDR, id, 'BEGINSLATEPACK. s2 . ENDSLATEPACK.'));
+    ok('SP10. finalize → confirmed, slatepack_s1 cleared', r && r.status === 'confirmed' &&
+      rowOf(id).status === 'confirmed' && rowOf(id).slatepack_s1 === null, JSON.stringify(rowOf(id)));
+  }
+  reset();
+  db.exec("DELETE FROM alerts WHERE type IN ('slate_cancel_owed','slate_refunded_but_mined')");
+}
 
 // ═══ [stepwise] F5 (Part 6) — step-by-step Tor send, design §8.1 ═════════════════════════════
 // The REAL WalletAPI with only its wire boundary (_encryptedCall) faked, so what is asserted is

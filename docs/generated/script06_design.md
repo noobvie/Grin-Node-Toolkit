@@ -1,6 +1,8 @@
 # Script 06 — Global Grin Health (design notes)
 
-> **Covers code as of:** 2026-09-18 · **Last verified:** 2026-09-18, PARTIAL — the slatepack
+> **Covers code as of:** 2026-09-25 · **Last verified:** 2026-09-25, PARTIAL — *When the node
+> stops answering* only, written against `tiny-explorer-server.js` + `public/js/tiny-explorer.js`
+> the day it landed, behaviour run in a scratch e2e (20 checks); 2026-09-18, PARTIAL — the slatepack
 > "two facts" item 1 was re-read against grin-wallet v5.4.1 `controller/src/command.rs` and
 > confirmed by a live plaintext-S1 / sealed-S2 test the same day; 2026-09-10, PARTIAL — three sections
 > only: *Tool 3 — Node Reachability Checker* was rewritten against `lib/node-check.js`,
@@ -22,7 +24,7 @@
 > `scripts/lib/06d_tiny_explorer.sh` — the sitemap, robots and JSON-LD output in it were
 > read from the handlers ACTUALLY RUN, not from the source.
 > The rest of this doc is still never systematically verified.
-> **Product code last changed:** 2026-09-18 — `web/06d_tiny_explorer/public/` (Slate Inspector: per-role next-move guides with wallet commands, encryption rule corrected — every grin-wallet reply is sealed; Proof Verifier: proof is automatic with `send -d`, standard flow only, "not on chain" no longer reads as "never confirmed"); 2026-09-10 — `web/06d_tiny_explorer/` (**crawl surface**: generated `/sitemap.xml` + `/robots.txt` routes, `noindex, follow` on block/kernel/output and the 404, `WebApplication` JSON-LD for the six tools, homepage `<h1>`, duplicate `<h1>` removed from the three entity shells, analytics on the 404, `/mining` description updated for payback); 2026-09-10 — `web/06d_tiny_explorer/` (mining calculator: **capital payback card + hardware-cost input**, setup form rebuilt as two columns, break-even sub-label explains its scale invariance); 2026-09-10 — `scripts/lib/06d_tiny_explorer.sh` + `web/06d_tiny_explorer/` (**Wallet Checker Tor liveness probe now ON by default for a new install**: two-sided config read-back, `(installs tor)` prompt warning, config-neutral baseline page copy; **prompt catch-all now keeps the default instead of naming `false`, and `read` at EOF declines** — both latent until the flip); 2026-09-10 — `web/06d_tiny_explorer/` (node-check second leg: P2P 3414/13414 TCP probe, composed two-leg verdict, network picker; **assumed API endpoint flipped from 3413 to https/443 for host names**, retry inverted); 2026-09-09 — `web/06d_tiny_explorer/` (mining calculator: number-of-units multiplier, `/api/price` fallback, blocker copy, first test suite for the money maths); 2026-09-09 — `web/06_stats_map/stats/index.html` (antimeridian seam repair, land+mesh basemap, city-label cull, trimmed maxBounds, Vietnam flag fill + East Sea islands + Saigon relabel); 2026-09-09 — `scripts/lib/06d_tiny_explorer.sh` (tor install + probe status row) and `web/06d_tiny_explorer/` (probe-aware page copy); 2026-09-09 — `web/06d_tiny_explorer/` (node-check assumed-port retry); 2026-09-08 — `web/06d_tiny_explorer/public/` (mining calculator presets); 2026-09-07 — `scripts/lib/06d_tiny_explorer.sh` (deploy/restart lifecycle); 2026-09-06 — `scripts/06_global_grin_health.sh`, `scripts/lib/06*`, `web/06_stats_map/`, `web/06d_tiny_explorer/`
+> **Product code last changed:** 2026-09-25 — `web/06d_tiny_explorer/` (**node circuit breaker + serve-stale** for archive-node compaction stalls; busy node → 503 not 404; `getLatest` no longer caches `[]`); 2026-09-18 — `web/06d_tiny_explorer/public/` (Slate Inspector: per-role next-move guides with wallet commands, encryption rule corrected — every grin-wallet reply is sealed; Proof Verifier: proof is automatic with `send -d`, standard flow only, "not on chain" no longer reads as "never confirmed"); 2026-09-10 — `web/06d_tiny_explorer/` (**crawl surface**: generated `/sitemap.xml` + `/robots.txt` routes, `noindex, follow` on block/kernel/output and the 404, `WebApplication` JSON-LD for the six tools, homepage `<h1>`, duplicate `<h1>` removed from the three entity shells, analytics on the 404, `/mining` description updated for payback); 2026-09-10 — `web/06d_tiny_explorer/` (mining calculator: **capital payback card + hardware-cost input**, setup form rebuilt as two columns, break-even sub-label explains its scale invariance); 2026-09-10 — `scripts/lib/06d_tiny_explorer.sh` + `web/06d_tiny_explorer/` (**Wallet Checker Tor liveness probe now ON by default for a new install**: two-sided config read-back, `(installs tor)` prompt warning, config-neutral baseline page copy; **prompt catch-all now keeps the default instead of naming `false`, and `read` at EOF declines** — both latent until the flip); 2026-09-10 — `web/06d_tiny_explorer/` (node-check second leg: P2P 3414/13414 TCP probe, composed two-leg verdict, network picker; **assumed API endpoint flipped from 3413 to https/443 for host names**, retry inverted); 2026-09-09 — `web/06d_tiny_explorer/` (mining calculator: number-of-units multiplier, `/api/price` fallback, blocker copy, first test suite for the money maths); 2026-09-09 — `web/06_stats_map/stats/index.html` (antimeridian seam repair, land+mesh basemap, city-label cull, trimmed maxBounds, Vietnam flag fill + East Sea islands + Saigon relabel); 2026-09-09 — `scripts/lib/06d_tiny_explorer.sh` (tor install + probe status row) and `web/06d_tiny_explorer/` (probe-aware page copy); 2026-09-09 — `web/06d_tiny_explorer/` (node-check assumed-port retry); 2026-09-08 — `web/06d_tiny_explorer/public/` (mining calculator presets); 2026-09-07 — `scripts/lib/06d_tiny_explorer.sh` (deploy/restart lifecycle); 2026-09-06 — `scripts/06_global_grin_health.sh`, `scripts/lib/06*`, `web/06_stats_map/`, `web/06d_tiny_explorer/`
 > 06d has a test suite (`web/06d_tiny_explorer/test/`, 232 assertions across 6 suites — count read from `node test/run-all.js` on 2026-09-10), but it tests the code, not this doc.
 
 Only sections that need durable prose live here; the menu/wiring lives in
@@ -91,6 +93,55 @@ dedicated high-contrast `--label` token (bright/glow on dark, heavy/dark on ligh
 headlines read clearly on either ground. Footer carries the Saigon ❤ + yellow-flag SVG.
 Full kernel/input/output detail on the block page (kernel excess framed as the txid
 equivalent) + collapsible raw `get_block` JSON.
+
+### When the node stops answering — circuit breaker + serve-stale (2026-09-25)
+
+**Why:** an archive node on a small box can hold its API shut for **hours** while grin runs
+chain compaction. Compaction holds the txhashset write lock, and on archive it used to walk every
+header since genesis. That walk is the upstream bug `scripts/patches/grin/0001` fixes (see
+`scripts/patches/grin/README.md`). Diagnosed on scan.grin.money 2026-09-25: 8–10 h episodes,
+roughly daily. Before this change every page view opened fresh node connections that each waited
+out the full 10 s timeout, ~90 sockets piled up in CLOSE-WAIT on :3413, and visitors got 502s the
+whole time. The explorer can't fix the stall. It can stop making it worse and stay readable.
+
+**Circuit breaker** (one choke point: `nodeRpc`, under `foreignApi`/`ownerApi`):
+- The first **transport** failure (timeout, refused, reset, hang-up) opens it. For
+  `node_busy_backoff_ms` (default 30 s) every node call fails fast with code `NODE_BUSY` and
+  opens no connection.
+- After the backoff exactly **one** real request goes through as a probe. Success closes the
+  breaker, failure re-opens it. So a stalled node sees at most one connection per ~40 s from us.
+- An RPC-level answer (`Err`, JSON-RPC error, unparseable body) is still an answer and never
+  trips it. A `NotFound` must keep meaning "not found".
+- Identical calls already in flight share one connection (key = url + method + params).
+
+**Serve-stale** (bounded by `stale_max_ms`, default 24 h):
+- `/api/stats` replays its last good body with `stale: true`, `as_of`, `busy_since`. The price
+  is refreshed (it needs no node), and `mempool` is nulled because it is live-only.
+- `/api/latest` returns the last good table with an `X-Tinyx-Stale: <iso>` header. The body
+  stays a plain array because every client reads it as one.
+- `/api/tip` returns the last tip with `stale`/`as_of`. The block page **does not compute
+  confirmations from a stale tip**, since a frozen tip under-counts them. Kernel and output
+  confirmations come from a fresh `getTip()` only and are omitted while the node is busy.
+- `/api/sync` compares the stale tip. That is honest: a node stuck in compaction applies no
+  blocks, so its frozen height is its height.
+- `/api/block|kernel|output` answer **503 `{error:'node busy'}` + `Retry-After`**. A busy node
+  used to make `fetchBlockLive` return null → **404**, which sent valid pool permalinks to the
+  404 page. The body is what separates this 503 from nginx's `tinyx_api` limiter 503.
+- `getLatest` no longer caches `[]` when every block fetch failed. That wiped the table
+  serve-stale needs.
+
+**Page:** Tip-height sub-line reads `node busy · as of HH:MM` (tooltip has `busy_since`). The
+table footer reads `Node busy · blocks as of HH:MM`. Block/kernel/output pages say the node is
+busy instead of "Server error 503".
+
+**Known edge:** the first response after recovery is the probe's, so its `mempool` is blank for
+one poll (`get_pool_size` failed fast while the probe was in flight).
+
+**Verified 2026-09-25** by a scratch e2e (not committed — it opens sockets, which
+`test/run-all.js` promises not to): the real server against a fake node switched to "stalled".
+20 checks: 0 node requests during an open-breaker burst of 19 API calls answered in ~115 ms; one
+probe per backoff; 503 not 404 for a block; recovery; 8 identical block requests → one
+`get_block` + one `get_header`. **NOT VPS-tested.**
 
 ---
 

@@ -76,6 +76,31 @@
     .lookup-row .form-group { flex: 1 1 420px; margin: 0; }
     .lookup-row .btn-save { flex: 0 0 auto; align-self: flex-end; }
 
+    /* ── account figures: a LARGE variant of reactor.css .placard ──────────
+       Scoped to .acct-figures so the shared 13px engraved strip on every other page is
+       untouched. These six numbers are what a miner opens the page for, so each tile gets
+       its own tone (--tone): a lit top rail, a faint wash of the same hue, and the value in
+       that hue. Glow goes through var(--glow) so the light themes (which set it to
+       transparent) stay crisp. clamp() keeps the nowrap values inside a phone-width tile. */
+    .placard.acct-figures { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
+    .placard.acct-figures span {
+      --tone: var(--accent);
+      gap: 8px; padding: 18px 14px 16px;
+      background: linear-gradient(180deg, color-mix(in srgb, var(--tone) 10%, transparent), transparent 75%);
+      box-shadow: inset 0 3px 0 color-mix(in srgb, var(--tone) 75%, transparent);
+    }
+    .placard.acct-figures i { font-size: 11px; letter-spacing: .14em; color: var(--text-dim); }
+    .placard.acct-figures b {
+      font-size: clamp(20px, 2.1vw, 26px); letter-spacing: .02em; color: var(--tone);
+      font-variant-numeric: tabular-nums; text-shadow: 0 0 12px var(--glow);
+    }
+    .placard.acct-figures .t-bal b { font-size: clamp(24px, 2.7vw, 32px); }
+    .placard.acct-figures .t-lock { --tone: var(--warn); }
+    .placard.acct-figures .t-paid { --tone: var(--gold); }
+    .placard.acct-figures .t-hash { --tone: var(--info); }
+    .placard.acct-figures .t-work { --tone: var(--ok); }
+    .placard.acct-figures .t-pend { --tone: var(--text); }
+
     /* ── shared timeframe toggle (same pattern as miners-stats) ─────────── */
     .rangebar { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; }
     .rangebar .rng-btn {
@@ -148,6 +173,18 @@
       font-family: var(--mono); font-size: 11px; font-weight: 700; letter-spacing: .16em;
       text-transform: uppercase; color: var(--text-dim); margin: 0 0 12px;
       padding-bottom: 7px; border-bottom: 1px solid var(--border-soft);
+    }
+    /* The Withdraw heading is the action the whole P-04 panel exists for, so it outranks
+       the quiet 11px section caps above ("Payout destinations" keeps those). */
+    .withdraw-col h3.withdraw-title {
+      display: flex; align-items: center; gap: 10px;
+      font-size: 18px; letter-spacing: .14em; color: var(--accent);
+      text-shadow: 0 0 10px var(--glow); margin-bottom: 16px; padding-bottom: 10px;
+      border-bottom: 2px solid color-mix(in srgb, var(--accent) 45%, transparent);
+    }
+    .withdraw-col h3.withdraw-title::before {
+      content: ''; flex: none; width: 4px; height: 20px; border-radius: 2px;
+      background: var(--accent); box-shadow: 0 0 8px var(--glow);
     }
     .radio-row { display: flex; gap: 18px; flex-wrap: wrap; margin-bottom: 14px; }
     .radio-row label { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; font-size: 14px; color: var(--text); font-weight: 400; margin: 0; }
@@ -371,13 +408,13 @@
         <div id="acct-view" style="display:none">
 
             <!-- ═══ Spec placard: live account figures ═══ -->
-            <div class="placard" aria-label="Live account figures">
-                <span><i>Available balance</i><b id="acct-balance">—</b></span>
-                <span><i>Locked / immature</i><b id="acct-locked">—</b></span>
-                <span><i>Total paid out</i><b id="acct-paid">—</b></span>
-                <span><i>Hashrate &middot; 1h</i><b id="acct-hashrate">—</b></span>
-                <span><i>Workers online</i><b id="pl-workers">—</b></span>
-                <span><i>Pending payout</i><b id="pl-pending">—</b></span>
+            <div class="placard acct-figures" aria-label="Live account figures">
+                <span class="t-bal"><i>Available balance</i><b id="acct-balance">—</b></span>
+                <span class="t-lock"><i>Locked / immature</i><b id="acct-locked">—</b></span>
+                <span class="t-paid"><i>Total paid out</i><b id="acct-paid">—</b></span>
+                <span class="t-hash"><i>Hashrate &middot; 1h</i><b id="acct-hashrate">—</b></span>
+                <span class="t-work"><i>Workers online</i><b id="pl-workers">—</b></span>
+                <span class="t-pend"><i>Pending payout</i><b id="pl-pending">—</b></span>
             </div>
 
             <!-- Abandoned-balance countdown for THIS address. Hidden unless the address is idle
@@ -516,7 +553,7 @@
                             <div class="withdraw-col">
                                 <!-- h3, not h4: this is the first level under P-04's h2, and
                                      jumping straight to h4 skips a level for screen readers. -->
-                                <h3>Withdraw</h3>
+                                <h3 class="withdraw-title">Withdraw</h3>
                                 <!-- Shown only when 0 < balance < pool minimum: the manual-payout escape hatch. -->
                                 <div id="acct-subthreshold" class="subthreshold-note" style="display:none" role="note">
                                     Your balance is below the <b><span id="acct-sub-min">—</span> ツ</b> withdrawal minimum. If you've stopped
@@ -580,12 +617,23 @@
                                     <p class="note" style="margin-bottom:12px">Generate &rarr; <code>receive</code> it in your wallet &rarr; paste the response below.</p>
                                     <button class="btn-save" id="acct-sp-create">Generate Slatepack</button>
                                     <div class="acct-msg" id="acct-sp-msg"></div>
+                                    <!-- Rebuilt from the account summary on every lookup (spSyncPending), so a
+                                         reload or a second device still reaches a pending slatepack payout: the
+                                         response box always, the S1 itself via "Show my slatepack again" (the
+                                         ownership-gated re-fetch returns the SAME stored S1, never a new slate). -->
                                     <div id="acct-sp-out" style="display:none;margin-top:14px;">
-                                        <label for="acct-sp-armored">Slatepack for your wallet</label>
-                                        <textarea id="acct-sp-armored" readonly rows="5" style="width:100%;font-family:var(--mono);font-size:12px;"></textarea>
-                                        <div class="pager-row" style="margin-top:6px;">
-                                            <button type="button" class="btn sm" id="acct-sp-copy">&#10697; Copy slatepack</button>
-                                            <span class="msg" id="acct-sp-copy-msg" aria-live="polite"></span>
+                                        <div id="acct-sp-reshow" style="display:none;">
+                                            <p class="note" style="margin-bottom:8px">Payout <b id="acct-sp-reshow-id"></b> is waiting for your wallet's response. Already ran <code>receive</code>? Paste the response below. Lost the slatepack? Fetch the same one again (uses the ownership proof above).</p>
+                                            <button type="button" class="btn sm" id="acct-sp-reshow-btn">Show my slatepack again</button>
+                                            <div class="acct-msg" id="acct-sp-reshow-msg"></div>
+                                        </div>
+                                        <div id="acct-sp-s1">
+                                            <label for="acct-sp-armored">Slatepack for your wallet</label>
+                                            <textarea id="acct-sp-armored" readonly rows="5" style="width:100%;font-family:var(--mono);font-size:12px;"></textarea>
+                                            <div class="pager-row" style="margin-top:6px;">
+                                                <button type="button" class="btn sm" id="acct-sp-copy">&#10697; Copy slatepack</button>
+                                                <span class="msg" id="acct-sp-copy-msg" aria-live="polite"></span>
+                                            </div>
                                         </div>
                                         <div class="form-group" style="margin-top:12px;">
                                             <label for="acct-sp-response">Your wallet's response</label>
@@ -720,9 +768,8 @@
                                      has donated before; hidden otherwise and while donations are
                                      off. The donor NAME moved to P-09 (§18 pre-moderation). -->
                                 <li id="acct-donate-row" style="display:none"><span class="k" id="acct-donate-k">Donating to prize pool</span><span class="v" style="text-align:right"><span id="acct-donate">—</span><span id="acct-donate-rigs" style="display:none;font-size:12px;color:var(--text-dim);margin-top:2px"></span><a id="acct-donate-profile" href="#acct-donor" style="display:none;font-size:12px;margin-top:2px">Donor profile ↓</a></span></li>
-                                <!-- Row is removed entirely (not shown as 0) on a pool that
-                                     absorbs the network fee — see renderAccount. -->
-                                <li id="acct-fee-row"><span class="k" title="A flat fee covering the Grin blockchain transaction fee">Withdrawal fee</span><span class="v" id="acct-fee">—</span></li>
+                                <!-- No "Withdrawal fee" row (cut 2026-09-25): P-04's net preview
+                                     under the amount field already discloses it where it matters. -->
                             </ul>
 
                             <div class="fx-head">Earnings <span class="src" id="fx-src">est. &middot; spot price</span></div>
@@ -744,7 +791,7 @@
                     <div class="panel"><span class="screws"></span>
                         <h2 class="panel-title"><span class="tag">P-06</span> Ledger — money in <span class="right"><span class="dim">row detail kept 60 days · </span><span class="amt-in" id="in-sum"></span></span></h2>
                         <div class="panel-body">
-                            <p class="note">Block rewards (PPLNS), contest bonuses, giveaways — and <b>payout returned</b>, when a payout fails, expires or is cancelled and its amount comes back to your balance (it also appears once in Money out, as <b>payout requested</b>). 20 entries per page — full history is kept forever.</p>
+                            <p class="note">Block rewards (PPLNS), contest bonuses, giveaways — and <b>payout returned</b>, when a payout fails, expires or is cancelled and its amount comes back to your balance (it also appears once in Money out, as <b>payout requested</b>). Showing the 5 most recent — use Prev/Next or CSV for older entries.</p>
                             <div class="table-scroll">
                                 <table class="data-table" aria-label="Money in">
                                     <thead><tr><th>When</th><th>Event</th><th class="num">Amount</th><th class="num">Balance after</th></tr></thead>
@@ -769,7 +816,7 @@
                     <div class="panel"><span class="screws"></span>
                         <h2 class="panel-title"><span class="tag">P-07</span> Ledger — money out <span class="right"><span class="dim">row detail kept 60 days · </span><span class="amt-out" id="out-sum"></span></span></h2>
                         <div class="panel-body">
-                            <p class="note"><b>Payout requested</b> — the full amount, fee included, leaves your balance the moment you request it; the outcome is in Withdrawal history below — plus voluntary donations (donateNN worker tag) and orphan clawbacks. 20 entries per page — full history is kept forever.</p>
+                            <p class="note"><b>Payout requested</b> — the full amount, fee included, leaves your balance the moment you request it; the outcome is in Withdrawal history below — plus voluntary donations (donateNN worker tag) and orphan clawbacks. Showing the 5 most recent — use Prev/Next or CSV for older entries.</p>
                             <div class="table-scroll">
                                 <table class="data-table" aria-label="Money out">
                                     <thead><tr><th>When</th><th>Event</th><th class="num">Amount</th><th class="num">Balance after</th></tr></thead>
@@ -945,6 +992,7 @@
         //   GET  /api/account/:addr/tor-check          wallet reachability hint
         //   GET  /api/public/price                     cached GRIN spot price (USD + BTC)
         //   POST /api/account/:addr/withdraw           request a payout (ownership-gated)
+        //   POST /api/account/:addr/withdraw/:id/slatepack   the SAME pending S1 again (ownership-gated)
         // (No public cancel — parked payouts auto-refund: Tor after its final retry,
         //  slatepack when the expiry window passes. Admin-only cancel exists server-side.)
         // Every payout action sends `proof` — a recent mining IP (v4/v6) or the rig's stratum
@@ -957,7 +1005,8 @@
 
         const ADDR_KEY = 'grinium-my-address';
         const DEMO_ADDR = 'grin1demodemodemodemodemodemo';
-        const PAGE_SIZE = 20;
+        const PAGE_SIZE = 20;          // P-08 withdrawal history
+        const LEDGER_PAGE_SIZE = 5;    // P-06/P-07 ledgers: the 5 most recent, older via the pager
         let currentAddr = '';
         let isDemo = false;
         let acctRange = 'day';
@@ -1124,14 +1173,6 @@
             // blocks, never the balances and payout controls rendered around them.
             try { renderDonationRow(a); } catch (e) { const r = $id('acct-donate-row'); if (r) r.style.display = 'none'; }
             try { renderDonor(a.donor_profile); } catch (e) { const p = $id('acct-donor'); if (p) p.style.display = 'none'; }
-            // Hide the row rather than print "0 ツ" — a pool that absorbs the network fee has no
-            // withdrawal fee to disclose, and a zero row invites "will this change?" questions.
-            const feeRow = $id('acct-fee-row');
-            if (feeRow) {
-                feeRow.style.display = Number(a.withdrawal_fee || 0) > 0 ? '' : 'none';
-                $id('acct-fee').textContent = fmtGrin(a.withdrawal_fee);
-            }
-
             $id('acct-lamp').style.display = '';
 
             $id('acct-pool-min').textContent = Number(a.min_withdrawal || 0).toFixed(1);
@@ -1877,7 +1918,8 @@
             radioLabel: 'acct-pay-slatepack-label',
             pane: 'acct-pay-slatepack-pane',
             statuses: { slatepack_pending: 'awaiting response', slatepack_failed: 'failed' },
-            pendingStatuses: { slatepack_pending: 'awaiting your response slatepack' }
+            pendingStatuses: { slatepack_pending: 'awaiting your response slatepack' },
+            onSummary: function (summary) { spSyncPending(summary && summary.pending_withdrawal); }
         });
 
         // ── Pending payout strip (one-pending-per-address slot) ────────────
@@ -2116,7 +2158,7 @@
             } catch (e) { /* table keeps placeholders */ }
         }
 
-        // ── P-06/P-07 split ledgers (server-paged, 20/page) ────────────────
+        // ── P-06/P-07 split ledgers (server-paged, 5/page) ─────────────────
         const EVENT_LABEL = {
             'credit/block': 'block reward',
             'credit/streak': 'streak bonus',
@@ -2174,7 +2216,7 @@
                 });
                 tbody.appendChild(tr);
             });
-            const pages = Math.max(1, Math.ceil(st.total / PAGE_SIZE));
+            const pages = Math.max(1, Math.ceil(st.total / LEDGER_PAGE_SIZE));
             $id(dir + '-page-label').textContent = 'Page ' + (st.page + 1) + ' of ' + pages;
             $id(dir + '-prev').disabled = st.page <= 0;
             $id(dir + '-next').disabled = st.page >= pages - 1;
@@ -2183,15 +2225,15 @@
         async function loadLedger(dir) {
             if (isDemo) {
                 const all = DEMO.ledger[dir];
-                const start = ledger[dir].page * PAGE_SIZE;
-                renderLedger(dir, all.slice(start, start + PAGE_SIZE), all.length);
+                const start = ledger[dir].page * LEDGER_PAGE_SIZE;
+                renderLedger(dir, all.slice(start, start + LEDGER_PAGE_SIZE), all.length);
                 return;
             }
             const tbody = $id('log-' + dir);
             tbody.innerHTML = '<tr><td colspan="4">Loading…</td></tr>';
             try {
                 const data = await getJson('/api/account/' + encodeURIComponent(currentAddr) +
-                    '/balance/log?direction=' + dir + '&limit=' + PAGE_SIZE + '&offset=' + (ledger[dir].page * PAGE_SIZE));
+                    '/balance/log?direction=' + dir + '&limit=' + LEDGER_PAGE_SIZE + '&offset=' + (ledger[dir].page * LEDGER_PAGE_SIZE));
                 renderLedger(dir, (data && data.log) || [], (data && data.total) || 0);
             } catch (e) {
                 tbody.innerHTML = '<tr><td colspan="4">Ledger unavailable</td></tr>';
@@ -2574,6 +2616,8 @@
                 if (r.ok && json && json.success) {
                     $id('acct-sp-armored').value = json.slatepack || '';
                     $id('acct-sp-out').style.display = '';
+                    $id('acct-sp-s1').style.display = '';
+                    $id('acct-sp-reshow').style.display = 'none';
                     $id('acct-sp-finalize').dataset.wid = json.withdrawal_id;
                     // The window is short (30 min by default) and miners cannot cancel, so the
                     // deadline is stated up front rather than discovered on a refused finalize.
@@ -2628,25 +2672,118 @@
                     body: JSON.stringify({ response_slatepack: resp, proof: proof })
                 });
                 const json = await r.json().catch(() => null);
+                // The two outcomes below close the pane, and #acct-sp-final-msg sits INSIDE it —
+                // so they report on the pane's outer line, or the miner would never see them.
+                const outer = $id('acct-sp-msg');
                 if (r.ok && json && json.success) {
-                    setMsg(msg, 'Payout broadcast — confirmed. 🎉', true);
-                    $id('acct-sp-out').style.display = 'none';
-                    $id('acct-sp-response').value = '';
+                    spClear();
+                    setMsg(outer, 'Payout #' + wid + ' broadcast — confirmed. 🎉', true);
                     lookup();
                 } else if (r.status === 409 && /slatepack_expired/.test(apiErr(json, ''))) {
                     // Too late: the pool already cancelled its side and refunded the balance.
                     // The miner's wallet still holds the receive it made — an incoming tx that
                     // can never confirm — so say how to clear it rather than just "409".
-                    setMsg(msg, 'This payout expired before your response arrived — the full amount is back in your balance. ' +
+                    spClear();
+                    setMsg(outer, 'Payout #' + wid + ' expired before your response arrived — the full amount is back in your balance. ' +
                         'Your wallet still lists it as an unconfirmed incoming transaction that will never confirm; remove it with grin-wallet cancel. ' +
                         'You can request a new payout after the cooldown.', false);
-                    $id('acct-sp-out').style.display = 'none';
-                    $id('acct-sp-response').value = '';
                     lookup();
                 } else {
                     setMsg(msg, apiErr(json, 'Finalize failed'), false);
                 }
             } catch (e) { setMsg(msg, 'Finalize failed: ' + e.message, false); }
+        }
+
+        // ── Pending slatepack payout ⇄ pane (called from the rail's onSummary) ──
+        // The create response used to be the ONLY thing that filled this pane, so a reload, a
+        // closed tab or a second device lost the withdrawal id — and Finalize then refused a
+        // perfectly good response ("Generate a slatepack first") until the payout expired. Every
+        // lookup now re-derives the pane from the summary's pending payout: the response box comes
+        // back at once, and the S1 via slatepackReshow(). Manual rail only — a Goblin payout also
+        // parks in slatepack_pending, but its response arrives over Nostr, never by paste.
+        function spSyncPending(p) {
+            const btn = $id('acct-sp-finalize');
+            const live = !isDemo && !!p && p.status === 'slatepack_pending' && p.method === 'slatepack';
+            // One pending payout per address: a second Generate would only be refused (429).
+            $id('acct-sp-create').disabled = live;
+            if (!live) {
+                if (btn.dataset.wid) spClear();
+                return;
+            }
+            const wid = String(p.id);
+            if (btn.dataset.wid !== wid) {
+                // A payout this tab did not just create (reload, another device, another address):
+                // nothing on screen belongs to it, so start clean and put the miner where it waits.
+                spClear();
+                btn.dataset.wid = wid;
+                const radio = $id('acct-pay-slatepack');
+                if (radio) radio.checked = true;   // applySummary's sync() shows the pane after this
+            }
+            $id('acct-sp-reshow-id').textContent = '#' + wid;
+            $id('acct-sp-out').style.display = '';
+            const has = !!$id('acct-sp-armored').value;
+            $id('acct-sp-s1').style.display = has ? '' : 'none';
+            $id('acct-sp-reshow').style.display = has ? 'none' : '';
+        }
+
+        function spClear() {
+            delete $id('acct-sp-finalize').dataset.wid;
+            $id('acct-sp-armored').value = '';
+            $id('acct-sp-response').value = '';
+            $id('acct-sp-out').style.display = 'none';
+            $id('acct-sp-reshow').style.display = 'none';
+            $id('acct-sp-copy-msg').textContent = '';
+            setMsg($id('acct-sp-msg'), '', true);
+            setMsg($id('acct-sp-final-msg'), '', true);
+            setMsg($id('acct-sp-reshow-msg'), '', true);
+        }
+
+        // Fetch the pending payout's S1 again. The server returns the SAME stored slatepack (never a
+        // new slate), only for this address's own pending manual-rail payout, behind the same proof
+        // as every payout action — so pressing this twice, or after a receive, changes nothing.
+        async function slatepackReshow() {
+            if (!currentAddr) return;
+            const msg = $id('acct-sp-reshow-msg');
+            if (demoBlock(msg)) return;
+            const wid = $id('acct-sp-finalize').dataset.wid;
+            if (!wid) return;
+            const proof = getProof(msg);
+            if (!proof) return;
+            const addr = currentAddr;
+            const btn = $id('acct-sp-reshow-btn');
+            btn.disabled = true;
+            setMsg(msg, 'Fetching your slatepack…', true);
+            try {
+                const r = await fetch('/api/account/' + encodeURIComponent(addr) + '/withdraw/' + encodeURIComponent(wid) + '/slatepack', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin',
+                    body: JSON.stringify({ proof: proof })
+                });
+                const json = await r.json().catch(() => null);
+                // The page may have moved on meanwhile (another address looked up, or the payout
+                // settled and the pane was cleared) — never paint one payout's S1 onto another.
+                if (addr !== currentAddr || $id('acct-sp-finalize').dataset.wid !== wid) return;
+                if (r.ok && json && json.success && typeof json.slatepack === 'string' && json.slatepack &&
+                    String(json.withdrawal_id) === wid) {
+                    $id('acct-sp-armored').value = json.slatepack;
+                    $id('acct-sp-s1').style.display = '';
+                    $id('acct-sp-reshow').style.display = 'none';
+                    setMsg(msg, '', true);
+                    const by = json.expires_at ? ' Respond by ' + fmtShort(json.expires_at) + ' UTC (' +
+                        minutesLeft(json.expires_at) + ') — after that it expires and the amount returns to your balance.' : '';
+                    setMsg($id('acct-sp-msg'), 'Slatepack #' + wid + ' (' + fmtGrin(json.amount) + ') — the same one issued when you requested it. ' +
+                        'If your wallet already received it, just paste that response below.' + by, true);
+                } else if (r.status === 404) {
+                    // Settled or expired since this page last looked: refresh shows which.
+                    setMsg(msg, apiErr(json, 'This payout is no longer waiting for a slatepack.'), false);
+                    lookup();
+                } else {
+                    setMsg(msg, apiErr(json, 'Could not fetch the slatepack'), false);
+                }
+            } catch (e) {
+                setMsg(msg, 'Could not fetch the slatepack: ' + e.message, false);
+            } finally {
+                btn.disabled = false;
+            }
         }
 
         // Payout-rail helpers handed to each registered rail module. This is the ENTIRE
@@ -2798,6 +2935,7 @@
             $id('acct-sp-create').addEventListener('click', slatepackCreate);
             $id('acct-sp-copy').addEventListener('click', slatepackCopy);
             $id('acct-sp-finalize').addEventListener('click', slatepackFinalize);
+            $id('acct-sp-reshow-btn').addEventListener('click', slatepackReshow);
             $id('acct-amt-min').addEventListener('click', function (e) {
                 e.preventDefault();
                 if (this.dataset.v) $id('acct-amount').value = this.dataset.v;

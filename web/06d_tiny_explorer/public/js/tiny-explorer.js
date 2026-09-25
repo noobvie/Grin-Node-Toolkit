@@ -351,10 +351,22 @@ async function pollStats() {
     setText('stat-g1', s.g1_per_day != null ? s.g1_per_day.toFixed(2) + ' ツ' : '—');
 
     // Mempool — shown as a sub-line under Tip Height (pending vs settled); blank
-    // if the node didn't answer get_pool_size.
-    setText('stat-mempool', s.mempool != null
-      ? fmtNum(s.mempool) + (s.mempool === 1 ? ' tx' : ' txs') + ' pending'
-      : '');
+    // if the node didn't answer get_pool_size. While the node is busy (the server
+    // replays its last good figures, flagged stale) the line says so instead.
+    const memEl = document.getElementById('stat-mempool');
+    if (memEl) {
+      if (s.stale) {
+        memEl.textContent = 'node busy · as of ' + new Date(s.as_of).toLocaleTimeString();
+        memEl.title = 'The node API is not answering (usually chain maintenance), so these ' +
+          'figures are the last good ones' + (s.busy_since ? ' — busy since ' +
+          new Date(s.busy_since).toLocaleTimeString() : '') + '. They update by themselves when it is back.';
+      } else {
+        memEl.textContent = s.mempool != null
+          ? fmtNum(s.mempool) + (s.mempool === 1 ? ' tx' : ' txs') + ' pending'
+          : '';
+        memEl.title = "Unconfirmed transactions currently waiting in this node's transaction pool";
+      }
+    }
   } catch {}
 }
 
@@ -375,17 +387,20 @@ function blockRow(b) {
 const LATEST_INTERVAL_MS = 120000; // 2-min cooldown between table refreshes
 let _lastUpdatedStr = '';
 let _nextLatestAt   = 0;
+let _latestStaleStr = ''; // set while the server replays the last good table
 
 async function loadLatest() {
   try {
     const r = await fetch('/api/latest?n=20');
     if (!r.ok) return;
     const blocks = await r.json();
+    const stale = r.headers.get('X-Tinyx-Stale');
     const tb = document.getElementById('blocks-tbody');
     if (!tb) return;
     tb.innerHTML = '';
     blocks.forEach(b => tb.appendChild(blockRow(b)));
     renderSparklines(blocks);
+    _latestStaleStr = stale ? new Date(stale).toLocaleTimeString() : '';
     _lastUpdatedStr = new Date().toLocaleTimeString();
     _nextLatestAt   = Date.now() + LATEST_INTERVAL_MS;
     renderUpdated();
@@ -398,7 +413,8 @@ function renderUpdated() {
   if (!up || !_lastUpdatedStr) return;
   const remain = Math.max(0, Math.round((_nextLatestAt - Date.now()) / 1000));
   const mm = Math.floor(remain / 60), ss = remain % 60;
-  up.textContent = 'Updated ' + _lastUpdatedStr + ' · next in ' + mm + ':' + String(ss).padStart(2, '0');
+  const head = _latestStaleStr ? 'Node busy · blocks as of ' + _latestStaleStr : 'Updated ' + _lastUpdatedStr;
+  up.textContent = head + ' · next in ' + mm + ':' + String(ss).padStart(2, '0');
 }
 
 // Sync badge: compare our tip to public explorers via /api/sync (server-side).
@@ -597,11 +613,12 @@ async function loadBlock() {
       fetch('/api/tip').catch(() => null),
     ]);
     if (br.status === 404) { window.location.replace('/404.html?q=' + encodeURIComponent(ref)); return; }
-    if (!br.ok) { showBlockError('Server error ' + br.status); return; }
+    if (!br.ok) { showBlockError(await serverErrorText(br)); return; }
     const block = await br.json();
     if (tr && tr.ok) {
       const tip = await tr.json();
-      if (tip.height != null && block.header) block._confirmations = tip.height - block.header.height + 1;
+      // A stale tip (node busy) is frozen — confirmations from it would under-count.
+      if (tip.height != null && !tip.stale && block.header) block._confirmations = tip.height - block.header.height + 1;
     }
     renderBlock(block);
   } catch (e) {
@@ -613,6 +630,22 @@ async function loadBlock() {
 // the catch path passes e.message, and a failed res.json() builds that message
 // from a SNIPPET OF THE RESPONSE BODY — so raw bytes off the wire reached
 // innerHTML here while the identical function 130 lines down escaped them.
+// This server answers 503 {error:'node busy'} when the node API is not answering
+// (chain compaction can hold it for hours). nginx's own 503 — the rate limiter —
+// carries no such body, so only the server's one gets the friendly wording.
+async function serverErrorText(r) {
+  if (r.status === 503) {
+    try {
+      const j = await r.json();
+      if (j && j.error === 'node busy') {
+        return 'The Grin node is busy (usually chain maintenance) and is not answering right now. ' +
+          'Please try again in a few minutes.';
+      }
+    } catch {}
+  }
+  return 'Server error ' + r.status;
+}
+
 function showBlockError(msg) {
   const l = document.getElementById('block-loading');
   if (l) l.innerHTML = '<div class="tx-error"><h2>Unable to load block</h2><p>' + esc(msg) + '</p>' +
@@ -756,7 +789,7 @@ async function loadEntity(kind) {
   try {
     const r = await fetch('/api/' + kind + '/' + encodeURIComponent(ref));
     if (r.status === 404) { return entityNotFound(kind, ref); }
-    if (!r.ok) { return showEntityError('Server error ' + r.status); }
+    if (!r.ok) { return showEntityError(await serverErrorText(r)); }
     const data = await r.json();
     if (kind === 'kernel') renderKernel(data, ref);
     else renderOutput(data, ref);

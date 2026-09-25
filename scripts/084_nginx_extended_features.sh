@@ -14,6 +14,8 @@
 #   2) Reverse Proxy Manager    — add · remove · list reverse proxy vhosts
 #   3) Enhance Security         — harden SSL settings and HTTP security headers
 #   4) Log Rotation Setup       — configure logrotate (10 MB or 10 days, whichever first)
+#   5) Top 20 Bandwidth Consumers — parse access logs, block/rate-limit an IP
+#                                   (moved from hub 08 key 6 on 2026-09-25)
 #   0) Return to admin menu
 #
 # GRIN RESERVED NAMES (protected — cannot be used as reverse proxy domains)
@@ -58,6 +60,8 @@ pause()   { echo ""; echo "Press Enter to continue..."; read -r; }
 # ─── Shared nginx/certbot install + evict helpers ─────────────────────────────
 # shellcheck source=lib/nginx_shared_helpers.sh
 source "$SCRIPT_DIR/lib/nginx_shared_helpers.sh"
+# ui_ask() — the bandwidth screen's cancellable IP prompt (option 5).
+source "$SCRIPT_DIR/lib/ui_shared_helpers.sh"
 
 # ─── Reserved Grin names (owned by script 02) ─────────────────────────────────
 RESERVED_PREFIXES=("fullmain" "prunemain" "prunetest")
@@ -594,6 +598,157 @@ ROTEOF
 }
 
 # =============================================================================
+# 5) Top 20 Bandwidth Consumers
+# =============================================================================
+# Moved here from hub 08 (was its inline key 6) on 2026-09-25, when key 6 went
+# to 086 Diagnostics. It reads nginx access logs, so it belongs with the rest
+# of the nginx tooling. Behaviour is unchanged.
+show_bandwidth_consumers() {
+    clear
+    echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+    echo -e "${BOLD}${CYAN} 084  Top 20 Bandwidth Consumers${RESET}"
+    echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+    echo ""
+
+    # Collect nginx access logs
+    local -a log_paths=()
+    [[ -f /var/log/nginx/access.log ]] && log_paths+=("/var/log/nginx/access.log")
+    while IFS= read -r f; do
+        [[ "$f" != "/var/log/nginx/access.log" ]] && log_paths+=("$f")
+    done < <(find /var/log/nginx -name '*.log' 2>/dev/null | grep -i access | head -10 || true)
+
+    if [[ ${#log_paths[@]} -eq 0 ]]; then
+        warn "No nginx access logs found in /var/log/nginx/."
+        echo -e "  ${DIM}Ensure nginx is installed and access logging is enabled.${RESET}"
+        pause; return
+    fi
+
+    info "Parsing ${#log_paths[@]} log file(s)..."
+    echo ""
+
+    local tmp
+    tmp=$(mktemp)
+
+    # Parse nginx combined log format using " as field separator.
+    # With FS='"':  $1="IP - - [date time] "  $2="METHOD /path HTTP/x"  $3=" status bytes "
+    # This is robust against URL paths containing spaces (which shift $10-based parsing).
+    awk -F'"' '{
+        split($1, a, " "); ip = a[1]
+        split($3, b, " "); bytes = b[3]
+        if (ip != "" && bytes ~ /^[0-9]+$/) tot[ip] += bytes
+    }
+    END { for (ip in tot) printf "%012d %s\n", tot[ip], ip }' \
+        "${log_paths[@]}" 2>/dev/null \
+        | sort -rn \
+        | head -20 \
+        | awk '{print $2, $1+0}' > "$tmp"
+
+    if [[ ! -s "$tmp" ]]; then
+        warn "No parseable data found in nginx access logs."
+        echo ""
+        info "Sample log lines (check format matches nginx combined):"
+        head -3 "${log_paths[0]}" 2>/dev/null \
+            | while IFS= read -r line; do echo -e "  ${DIM}$line${RESET}"; done \
+            || true
+        echo ""
+        echo -e "  ${DIM}Expected format: \$remote_addr - \$remote_user [\$time_local] \"\$request\" \$status \$body_bytes_sent \"...\" \"...\"${RESET}"
+        rm -f "$tmp"
+        pause; return
+    fi
+
+    printf "  ${BOLD}%-6s  %-18s  %15s${RESET}\n" "Rank" "IP Address" "Data Served"
+    printf "  %-6s  %-18s  %15s\n" "──────" "──────────────────" "───────────────"
+
+    local rank=1
+    local -a ip_list=()
+    while IFS=' ' read -r ip bytes; do
+        local human
+        if   (( bytes >= 1073741824 )); then
+            human=$(awk "BEGIN{printf \"%.2f GB\", $bytes/1073741824}")
+        elif (( bytes >= 1048576 ));    then
+            human=$(awk "BEGIN{printf \"%.2f MB\", $bytes/1048576}")
+        elif (( bytes >= 1024 ));       then
+            human=$(awk "BEGIN{printf \"%.2f KB\", $bytes/1024}")
+        else
+            human="${bytes} B"
+        fi
+        printf "  %-6s  %-18s  %15s\n" "$rank" "$ip" "$human"
+        ip_list+=("$ip")
+        rank=$((rank + 1))
+    done < "$tmp"
+    rm -f "$tmp"
+
+    echo ""
+    echo -e "  ${YELLOW}1${RESET}) Block or rate-limit a specific IP"
+    echo -e "  ${DIM}0${RESET}) Return"
+    echo ""
+    echo -ne "${BOLD}Select [0-1]: ${RESET}"
+    read -r choice
+
+    if [[ "$choice" == "1" ]]; then
+        echo ""
+        local target_ip
+        if ! ui_ask target_ip "Enter IP address to act on"; then
+            info "Cancelled — nothing was blocked or rate-limited."
+            pause; return
+        fi
+
+        echo ""
+        echo -e "  ${RED}1${RESET}) Block all traffic from $target_ip"
+        echo -e "  ${YELLOW}2${RESET}) Rate-limit with iptables hashlimit (25 conn/min)"
+        echo -e "  ${DIM}0${RESET}) Cancel"
+        echo ""
+        echo -ne "${BOLD}Select [0-2]: ${RESET}"
+        read -r action
+
+        case "$action" in
+            1)
+                if command -v ufw &>/dev/null; then
+                    echo -ne "${RED}Block ALL traffic from $target_ip? [y/N]: ${RESET}"
+                    read -r c
+                    if [[ "${c,,}" == "y" ]]; then
+                        ufw deny from "$target_ip" to any \
+                            && success "UFW rule added: deny from $target_ip" \
+                            && log "[084] UFW BLOCKED: $target_ip"
+                    else
+                        info "Cancelled."
+                    fi
+                else
+                    warn "ufw not available."
+                    info "Equivalent iptables command:"
+                    echo -e "  ${YELLOW}iptables -I INPUT -s $target_ip -j DROP${RESET}"
+                fi
+                ;;
+            2)
+                if ! command -v iptables &>/dev/null; then
+                    warn "iptables not available."
+                else
+                    echo -ne "${YELLOW}Add hashlimit rate-limit for $target_ip? [y/N]: ${RESET}"
+                    read -r c
+                    if [[ "${c,,}" == "y" ]]; then
+                        # Allow up to 25 connections/min, burst 100
+                        iptables -I INPUT -s "$target_ip" \
+                            -m hashlimit \
+                            --hashlimit-name "rl_${target_ip//\./_}" \
+                            --hashlimit-above 25/min \
+                            --hashlimit-burst 100 \
+                            --hashlimit-mode srcip \
+                            -j DROP \
+                            && success "Rate-limit rule added for $target_ip (>25 conn/min → DROP)" \
+                            && log "[084] RATE-LIMITED via iptables hashlimit: $target_ip"
+                    else
+                        info "Cancelled."
+                    fi
+                fi
+                ;;
+            0|*) info "Cancelled." ;;
+        esac
+    fi
+
+    pause
+}
+
+# =============================================================================
 # Main menu
 # =============================================================================
 show_menu() {
@@ -606,11 +761,12 @@ show_menu() {
     echo -e "  ${CYAN}2${RESET})  Reverse Proxy Manager    ${DIM}add · remove · list reverse proxy vhosts${RESET}"
     echo -e "  ${YELLOW}3${RESET})  Enhance Security         ${DIM}harden SSL settings and HTTP security headers${RESET}"
     echo -e "  ${YELLOW}4${RESET})  Log Rotation Setup       ${DIM}configure logrotate (10 MB or 10 days)${RESET}"
+    echo -e "  ${CYAN}5${RESET})  Top 20 Bandwidth Consumers ${DIM}parse access logs, block/limit an IP${RESET}"
     echo ""
     echo -e "  ${DIM}0${RESET})  Return to admin menu"
     echo ""
     echo -e "${DIM}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo -ne "${BOLD}Select [0-4]: ${RESET}"
+    echo -ne "${BOLD}Select [0-5]: ${RESET}"
 }
 
 main() {
@@ -622,8 +778,9 @@ main() {
             2) menu_reverse_proxy  ;;
             3) enhance_security    ;;
             4) setup_log_rotation  ;;
+            5) show_bandwidth_consumers || true ;;
             0) break               ;;
-            *) warn "Invalid option — choose 1-4 or 0."; sleep 1 ;;
+            *) warn "Invalid option — choose 1-5 or 0."; sleep 1 ;;
         esac
     done
 }

@@ -573,11 +573,45 @@ console.log('\n[F5] stepwise columns stay off every public route');
   ok('GET /api/admin/withdrawals drops tor_final_slate from every row', /delete rest\.tor_final_slate;/.test(adminList));
   const adminMiner = routeSrc('get', '/api/admin/miners/:addr');
   ok('GET /api/admin/miners/:addr drops tor_final_slate from pending_withdrawals',
-    /\.map\(\(\{ tor_final_slate, \.\.\.rest \}\) => rest\)/.test(adminMiner));
+    /\.map\(\(\{ tor_final_slate, (?:[a-z_0-9]+, )*\.\.\.rest \}\) => rest\)/.test(adminMiner));
   ok('every admin route that serves SELECT * FROM withdrawals rows is one of those two',
     routes.filter(([v, p]) => p.startsWith('/api/admin') &&
       /SELECT \* FROM withdrawals WHERE (status|grin_address)/.test(routeSrc(v, p)))
       .every(([v, p]) => (v === 'get' && (p === '/api/admin/withdrawals' || p === '/api/admin/miners/:addr'))));
+}
+
+// ─── Stored manual-rail S1 (2026-09-25) ───────────────────────────────────────────────────────
+// withdrawals.slatepack_s1 is served by exactly ONE route: the owner's ownership-gated re-fetch,
+// narrowed in its SQL to their own pending manual-rail payout. Encrypted to the owner, so a leak
+// would not steal — but a Goblin row must never carry one (plain armor), and a second route
+// serving it would quietly drop the proof gate the payout surface is built on.
+console.log('\n[S1] the stored slatepack is served by one gated route only');
+{
+  const RESHOW = ['post', '/api/account/:addr/withdraw/:id/slatepack'];
+  const routes = [...indexSrc.matchAll(/\bapp\.(get|post|put|delete|patch)\('([^']+)'/g)].map((m) => [m[1], m[2]]);
+  const mentions = routes.filter(([v, p]) => /slatepack_s1/.test(routeSrc(v, p).replace(/\/\/[^\n]*/g, '')));
+  ok('only the re-fetch route reads slatepack_s1 (admin routes only strip it)',
+    mentions.every(([v, p]) => (v === RESHOW[0] && p === RESHOW[1]) ||
+      (v === 'get' && (p === '/api/admin/withdrawals' || p === '/api/admin/miners/:addr'))) &&
+    mentions.some(([v, p]) => v === RESHOW[0] && p === RESHOW[1]),
+    mentions.map(([v, p]) => `${v} ${p}`).join(', '));
+  const src = routeSrc(...RESHOW).replace(/\/\/[^\n]*/g, '');
+  const proofAt = src.indexOf('verifyOwnerProof(');
+  const selectAt = src.indexOf('slatepack_s1 FROM withdrawals');
+  ok('re-fetch: the ownership proof is checked BEFORE the row is read', proofAt > 0 && selectAt > proofAt && /if \(!proof\.ok\)/.test(src));
+  ok('re-fetch: the SELECT is narrowed to this address, the manual rail and a still-pending row',
+    /WHERE id = \? AND grin_address = \? AND method = 'slatepack' AND status = 'slatepack_pending'/.test(src));
+  ok('re-fetch: rate-limited on the withdraw bucket, answered no-store',
+    /rateLimiter\.middleware\('withdraw'\)/.test(src) && /Cache-Control', 'no-store'/.test(src));
+  ok('GET /api/admin/withdrawals drops slatepack_s1', /delete rest\.slatepack_s1;/.test(routeSrc('get', '/api/admin/withdrawals')));
+  ok('GET /api/admin/miners/:addr drops slatepack_s1',
+    /\(\{ tor_final_slate, slatepack_s1, \.\.\.rest \}\) => rest/.test(routeSrc('get', '/api/admin/miners/:addr')));
+  const sched = fs.readFileSync(path.join(APP, 'lib/withdrawal-scheduler.js'), 'utf8');
+  const nostrCreate = sched.slice(sched.indexOf('async createNostrWithdrawal('), sched.indexOf('async finalizeNostrWithdrawal('));
+  ok('the Goblin rail (plain-armor S1) never writes slatepack_s1', nostrCreate.length > 500 && !/slatepack_s1/.test(nostrCreate));
+  const pageSync = acctPageJs.slice(acctPageJs.indexOf('function spSyncPending('), acctPageJs.indexOf('function spClear('));
+  ok('the page restores a pending payout only for the manual rail',
+    /p\.status === 'slatepack_pending' && p\.method === 'slatepack'/.test(pageSync));
 }
 
 console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed\n`);

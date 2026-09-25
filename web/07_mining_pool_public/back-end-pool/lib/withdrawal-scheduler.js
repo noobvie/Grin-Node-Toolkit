@@ -68,6 +68,14 @@ const REPOST_EVERY_S = 3600;
 const REPOST_MAX_PER_TICK = 3;
 const MAX_REPOSTS = 24;
 
+// An expired slatepack is refunded even when grin-wallet's cancel_tx fails (it needs a reachable
+// node), so the row carries slate_cancel_pending = 1 and retryExpiredSlateCancels re-asks every
+// tick. At most SLATE_CANCEL_BATCH rows per tick, stopping at the first failure — a dead node fails
+// every one of them the same way. After SLATE_CANCEL_ALERT_TICKS failing ticks in a row (~5 min)
+// the operator gets one rolling admin alert, not before: a node restart must not page anyone.
+const SLATE_CANCEL_BATCH = 10;
+const SLATE_CANCEL_ALERT_TICKS = 5;
+
 // The pseudo-address the flat withdrawal fee is credited to — the SAME bucket the block-reward
 // pool fee lands in, so both show up as one fee-income line on the transparency page.
 const POOL_FEE_ADDRESS = IncentivesManager.POOL_FEE;
@@ -161,6 +169,10 @@ class WithdrawalScheduler {
     // Ids of stepwise attempts running in THIS process. The stale sweep never touches one of
     // them: an attempt can take ~4 min at the worst-case timeouts, and the sweep must not race it.
     this._liveStepwise = new Set();
+    // retryExpiredSlateCancels: consecutive ticks whose cancel failed, and whether the rolling
+    // alert may be active (null = unknown after a restart, so the first clean tick resolves it).
+    this._slateCancelFailTicks = 0;
+    this._slateCancelAlerted = null;
   }
 
   start() {
@@ -193,6 +205,8 @@ class WithdrawalScheduler {
           await this.processTorChecks();
           await this.processSlatepackExpiry();
         }
+        // Freeze-safe: cancel_tx only UNLOCKS pool-wallet inputs of payouts already refunded.
+        await this.retryExpiredSlateCancels();
         // Read-only: attach on-chain kernel proofs to confirmed payouts, and in the same wallet
         // read flag the ones marked paid but not mined (F2). Never moves funds, so it runs
         // regardless of the freeze state — only its repost step checks the freeze itself.
@@ -2195,8 +2209,18 @@ class WithdrawalScheduler {
       // wallet-vs-ledger gap — a permanent fee = 0 makes coverage erode silently. This is the
       // REAL chain fee, not the flat fee_charged we bill the miner; the two are independent.
       const feeGrin = this._slateFeeGrin(slate);
-      this.db.prepare('UPDATE withdrawals SET slate_id = ?, fee = COALESCE(?, fee) WHERE id = ?')
-        .run(slateId, feeGrin, withdrawalId);
+      // The armored S1 is kept so a miner who closed the tab can fetch it again (the ownership-
+      // gated /withdraw/:id/slatepack route). It is ENCRYPTED to grinAddress above, so a copy at
+      // rest opens only in the owner's wallet. Only this rail writes it: the Goblin rail's S1 is
+      // plain armor and must never be stored or re-served.
+      // Guarded on the status: the row sat in slatepack_pending across three wallet awaits, and a
+      // wallet slow enough to outlast the TTL lets the expiry sweep refund it first — with no
+      // slate_id to cancel yet. Attaching a live slate to that refunded row would strand its
+      // inputs, so a lost guard throws into the catch below, which cancels this slate.
+      const attached = this.db.prepare(
+        "UPDATE withdrawals SET slate_id = ?, fee = COALESCE(?, fee), slatepack_s1 = ? WHERE id = ? AND status = 'slatepack_pending'"
+      ).run(slateId, feeGrin, typeof armored === 'string' && armored ? armored : null, withdrawalId);
+      if (attached.changes !== 1) throw new Error('the payout expired while its slate was being built');
       console.log(`[${new Date().toISOString()}] Slatepack withdrawal ${withdrawalId} created for ${grinAddress} (${amt} GRIN gross, ${netSend} net, slate ${slateId})`);
       // The deadline is measured from the ROW's created_at — the same clock
       // processSlatepackExpiry compares — so what the miner is told is what the sweep enforces.
@@ -2351,8 +2375,14 @@ class WithdrawalScheduler {
       const armored = await this.wallet.createSlatepackMessage(slate, []); // recipients:[] → plain armor
       const slateId = slate && slate.id ? slate.id : null;
       const feeGrin = this._slateFeeGrin(slate);
-      this.db.prepare('UPDATE withdrawals SET slate_id = ?, fee = COALESCE(?, fee) WHERE id = ?')
-        .run(slateId, feeGrin, withdrawalId);
+      // Guarded like the manual rail (createSlatepackWithdrawal) — and this rail's TTL is only 10
+      // min. A row the expiry sweep refunded while the wallet built the slate is never published
+      // to: the throw lands in the catch below, which cancels the slate. The S1 is NOT stored —
+      // it is plain armor.
+      const attached = this.db.prepare(
+        "UPDATE withdrawals SET slate_id = ?, fee = COALESCE(?, fee) WHERE id = ? AND status = 'slatepack_pending'"
+      ).run(slateId, feeGrin, withdrawalId);
+      if (attached.changes !== 1) throw new Error('the payout expired while its slate was being built');
 
       await this.nostrBridge.publishSlatepack(recipientPubHex, armored, note);
 
@@ -2458,7 +2488,7 @@ class WithdrawalScheduler {
 
     const txn = this.db.transaction(() => {
       const claimed = this.db.prepare(
-        "UPDATE withdrawals SET status = 'cancelled' WHERE id = ? AND status = ?"
+        "UPDATE withdrawals SET status = 'cancelled', slatepack_s1 = NULL WHERE id = ? AND status = ?"
       ).run(withdrawalId, w.status);
       if (claimed.changes !== 1) fail('withdrawal state changed — refresh and try again', 409);
 
@@ -2492,7 +2522,19 @@ class WithdrawalScheduler {
     return { success: true, withdrawal_id: withdrawalId, status: 'cancelled', amount: w.amount };
   }
 
-  // Cancel + reverse slatepack payouts the miner never completed within the TTL.
+  // Reverse + cancel slatepack payouts the miner never completed within the TTL.
+  //
+  // REFUND FIRST, CANCEL SECOND. The refund is the guarded claim (slatepack_pending →
+  // slatepack_expired), so it is also the decision: only a row this sweep actually won gets its
+  // slate cancelled. The old order cancelled first and claimed after. This batch is selected once
+  // and then walked with an await per row, so a miner finalizing row 3 while rows 1–2 were being
+  // cancelled won the claim and BROADCAST — and the sweep then cancelled that posted transaction
+  // anyway, unlocking inputs that were already spent in the mempool (the refund itself was
+  // correctly skipped, so the ledger stayed right; the pool wallet's view did not).
+  //
+  // A cancel that fails (grin-wallet refuses without a reachable node) no longer vanishes into a
+  // log line: the refund transaction set slate_cancel_pending, and retryExpiredSlateCancels keeps
+  // asking until the wallet's inputs are free.
   async processSlatepackExpiry() {
     try {
       const now = Math.floor(Date.now() / 1000);
@@ -2507,14 +2549,132 @@ class WithdrawalScheduler {
           ORDER BY created_at ASC LIMIT 10`
       ).all(nostrCutoff, cutoff);
       for (const w of stale) {
-        if (this.wallet && w.slate_id) {
-          try { await this.wallet.cancelTx(w.slate_id); } catch (e) { console.warn(`[slatepack] cancelTx ${w.slate_id}: ${e.message}`); }
-        }
-        this._reverseLock(w.id, 'slatepack_expired', 'slatepack_pending', 'slatepack not returned within TTL — reversed');
+        const owes = !!(this.wallet && w.slate_id);
+        const won = this._reverseLock(w.id, 'slatepack_expired', 'slatepack_pending',
+          'slatepack not returned within TTL — reversed', { owesSlateCancel: owes });
+        // Lost the claim: a finalize took this row after the batch was selected. Its slate now
+        // belongs to that settlement — never cancel it from here.
+        if (!won) continue;
         console.warn(`⚠️  Slatepack withdrawal ${w.id} expired (${w.amount} GRIN reversed to ${w.grin_address})`);
+        if (owes) await this._cancelExpiredSlate(w.id, w.slate_id);
       }
     } catch (err) {
       console.error(`Error processing slatepack expiry: ${err.message}`);
+    }
+  }
+
+  // Cancel one refunded row's slate in the pool wallet and clear its slate_cancel_pending flag.
+  // Only ever called for a row already in slatepack_expired (the guarded refund above, or the
+  // retry sweep below), i.e. one no finalize can claim any more. Returns true when the wallet
+  // accepted the cancel; a failure leaves the flag set for the retry sweep.
+  async _cancelExpiredSlate(withdrawalId, slateId) {
+    try {
+      await this.wallet.cancelTx(slateId);
+    } catch (e) {
+      console.warn(`[slatepack] withdrawal ${withdrawalId}: cancelTx ${slateId} failed (${e.message}) — will retry`);
+      return false;
+    }
+    this._clearSlateCancel(withdrawalId);
+    return true;
+  }
+
+  _clearSlateCancel(withdrawalId) {
+    try {
+      this.db.prepare(
+        "UPDATE withdrawals SET slate_cancel_pending = 0 WHERE id = ? AND status = 'slatepack_expired'"
+      ).run(withdrawalId);
+    } catch (e) {
+      console.error(`[slatepack] could not clear slate_cancel_pending on ${withdrawalId}: ${e.message}`);
+    }
+  }
+
+  // Retry the pool-wallet cancel for expired slatepacks whose first cancel failed (see
+  // processSlatepackExpiry). Without this, one node blip at expiry left the slate's inputs AND its
+  // change locked in the pool wallet until someone ran `grin-wallet cancel` by hand, which shrinks
+  // what every later payout can spend and surfaces as "pool wallet short".
+  //
+  // The wallet's own tx log (local read, no node round-trip) decides each row, so a row whose
+  // cancel already landed — say the process died between cancel_tx and the flag clear — is
+  // settled without calling cancel_tx on a cancelled tx again:
+  //   · absent / TxSentCancelled → nothing is locked            → clear the flag
+  //   · confirmed                → the refunded payout is MINED → never cancel; critical alert
+  //   · anything else            → still locked                 → cancel_tx, clear on success
+  // Every row here is slatepack_expired: refunded through the guarded claim, so no finalize can
+  // take it and the pool never posts its slate. Cancelling is therefore always the right move;
+  // the "confirmed" branch exists only to shout if that invariant is ever broken.
+  async retryExpiredSlateCancels() {
+    try {
+      const rows = this.db.prepare(
+        `SELECT id, slate_id, grin_address, amount FROM withdrawals
+          WHERE status = 'slatepack_expired' AND slate_cancel_pending = 1
+          ORDER BY id ASC LIMIT ?`
+      ).all(SLATE_CANCEL_BATCH);
+      if (!rows.length) {
+        this._slateCancelFailTicks = 0;
+        if (this._slateCancelAlerted !== false) {
+          this._resolveAlert('slate_cancel_owed');
+          this._slateCancelAlerted = false;
+        }
+        return;
+      }
+      if (!this.wallet || typeof this.wallet.cancelTx !== 'function' ||
+          typeof this.wallet.getTransactions !== 'function') return;
+
+      let txs;
+      try { txs = await this.wallet.getTransactions(false); }
+      catch (e) { this._noteSlateCancelFailure(rows, `wallet tx log unreadable: ${e.message}`); return; }
+      if (!Array.isArray(txs)) return;
+      const bySlate = new Map();
+      for (const t of txs) if (t && t.tx_slate_id) bySlate.set(String(t.tx_slate_id), t);
+
+      for (const w of rows) {
+        const sid = w.slate_id ? String(w.slate_id) : null;
+        const t = sid ? bySlate.get(sid) : undefined;
+        if (!t || String(t.tx_type) === 'TxSentCancelled') {
+          this._clearSlateCancel(w.id);
+          console.warn(`[slatepack] withdrawal ${w.id}: slate ${sid || '(none)'} ${t ? 'already cancelled' : 'not in the wallet'} — nothing locked`);
+          continue;
+        }
+        if (t.confirmed) {
+          this._clearSlateCancel(w.id);
+          const msg = `Expired slatepack payout #${w.id} was REFUNDED (${w.amount} GRIN to ${w.grin_address}) ` +
+            `but its slate ${sid} is CONFIRMED on chain — the miner may have been paid twice. Reconcile by hand.`;
+          console.error(`⚠️  ${msg}`);
+          try { this._rollingAlert('slate_refunded_but_mined', 'critical', msg, { withdrawal_id: w.id, slate_id: sid }); }
+          catch (e) { console.error(`[slatepack] failed to record slate_refunded_but_mined alert: ${e.message}`); }
+          continue;
+        }
+        let err = null;
+        try { await this.wallet.cancelTx(sid); } catch (e) { err = e; }
+        if (err) {
+          // One failure means the wallet or its node is down; the rest would fail identically.
+          this._noteSlateCancelFailure(rows, `cancelTx ${sid} for #${w.id}: ${err.message}`);
+          return;
+        }
+        this._clearSlateCancel(w.id);
+        console.warn(`[slatepack] withdrawal ${w.id}: expired slate ${sid} cancelled on retry — pool-wallet inputs released`);
+      }
+      this._slateCancelFailTicks = 0;
+    } catch (err) {
+      console.error(`Error retrying expired-slate cancels: ${err.message}`);
+    }
+  }
+
+  _noteSlateCancelFailure(rows, why) {
+    this._slateCancelFailTicks += 1;
+    console.warn(`[slatepack] ${rows.length} expired slate(s) still owe a pool-wallet cancel — ${why}`);
+    if (this._slateCancelFailTicks < SLATE_CANCEL_ALERT_TICKS) return;
+    const ids = rows.map((r) => `#${r.id}`).join(', ');
+    const message =
+      `Expired slatepack payout(s) ${ids} were refunded to the miner, but the pool wallet could not ` +
+      `cancel their slates for ${this._slateCancelFailTicks} minutes (${String(why).slice(0, 300)}). ` +
+      `Their inputs stay locked in the pool wallet until cancelled — check that the node is reachable; ` +
+      `retried every minute. No miner funds are affected.`;
+    try {
+      this._rollingAlert('slate_cancel_owed', 'warning', message, { withdrawal_ids: rows.map((r) => r.id) });
+      this._slateCancelAlerted = true;
+    } catch (e) {
+      console.error(`[slatepack] failed to record slate_cancel_owed alert: ${e.message}`);
     }
   }
 
@@ -2645,8 +2805,9 @@ class WithdrawalScheduler {
     try {
       let w = null;
       this.db.transaction(() => {
+        // slatepack_s1 goes with the claim: a settled payout's S1 has nothing left to do.
         const claimed = this.db.prepare(
-          "UPDATE withdrawals SET status = 'confirmed', confirmed_at = unixepoch() WHERE id = ? AND status = ?"
+          "UPDATE withdrawals SET status = 'confirmed', confirmed_at = unixepoch(), slatepack_s1 = NULL WHERE id = ? AND status = ?"
         ).run(withdrawalId, fromStatus);
         if (claimed.changes !== 1) return;
 
@@ -2682,13 +2843,19 @@ class WithdrawalScheduler {
   // means nothing can interleave between "I won the claim" and "the balance is back". Without
   // the guard, a finalize that had already posted on-chain could be reversed alongside it — the
   // miner keeps the coins AND gets the balance back.
-  _reverseLock(withdrawalId, newStatus, fromStatus, note) {
+  //
+  // `owesSlateCancel` (expiry sweep): mark, in this same transaction, that the pool wallet still
+  // has to cancel the row's slate. The refund lands first and the cancel is attempted after it, so
+  // a failed cancel — or a crash between the two — is remembered rather than lost.
+  _reverseLock(withdrawalId, newStatus, fromStatus, note, { owesSlateCancel = false } = {}) {
     try {
       let done = false;
       this.db.transaction(() => {
         const claimed = this.db.prepare(
-          'UPDATE withdrawals SET status = ? WHERE id = ? AND status = ?'
-        ).run(newStatus, withdrawalId, fromStatus);
+          'UPDATE withdrawals SET status = ?, slatepack_s1 = NULL, ' +
+          'slate_cancel_pending = CASE WHEN ? THEN 1 ELSE slate_cancel_pending END ' +
+          'WHERE id = ? AND status = ?'
+        ).run(newStatus, owesSlateCancel ? 1 : 0, withdrawalId, fromStatus);
         if (claimed.changes !== 1) return; // someone else moved it first — do NOT touch balances
 
         this.db.prepare(`

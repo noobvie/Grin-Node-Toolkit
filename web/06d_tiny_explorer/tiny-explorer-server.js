@@ -125,16 +125,101 @@ function unwrapResult(result) {
 // finalized-but-unmined transaction reports as "node unreachable".
 function isNotFound(e) { return !!e && /^"?NotFound"?$/.test(e.message || ''); }
 
+// ── Node circuit breaker + in-flight sharing ─────────────────────────────────
+// An archive node can stop answering its API for HOURS while it runs chain
+// compaction (it holds the chain's write lock; seen 2026-09-24/25 on a 4 GB box,
+// 8-10 h per episode — see scripts/patches/grin/README.md). Before this, every
+// page view opened fresh node connections that each waited the full 10 s
+// timeout: ~90 dead sockets piled up in CLOSE-WAIT on :3413 and every visitor
+// got a 502 after 10 s.
+//
+// Now: the first transport failure (timeout / refused / reset) opens the
+// breaker, and for NODE_BUSY_BACKOFF_MS every node call fails fast with
+// code NODE_BUSY and opens no connection. After that exactly ONE real request
+// is let through as a probe; success closes the breaker, failure re-opens it.
+// An RPC-level error (Err result, JSON-RPC error, bad JSON) is an ANSWER, so it
+// never trips the breaker.
+//
+// Identical calls already in flight share one connection (key = url + method
+// + params), so a burst of visitors costs the node one request, not one each.
+const NODE_BUSY_BACKOFF_MS = config.node_busy_backoff_ms || 30000;
+const nodeBreaker = { busySince: 0, openUntil: 0, probing: false };
+const nodeInflight = new Map();
+
+function nodeBusyError() {
+  const e = new Error('node busy');
+  e.code = 'NODE_BUSY';
+  return e;
+}
+function isNodeBusy(e) { return !!e && e.code === 'NODE_BUSY'; }
+function isTransportError(e) {
+  if (!e) return false;
+  if (e.message === 'Request timeout' || /socket hang up/i.test(e.message || '')) return true;
+  return ['ECONNREFUSED', 'ECONNRESET', 'EPIPE', 'ETIMEDOUT', 'EHOSTUNREACH'].includes(e.code);
+}
+
+function nodeRpc(url, secret, method, params, stringifyKeys) {
+  const key = url + '\n' + method + '\n' + JSON.stringify(params) + '\n' + (stringifyKeys || []).join(',');
+  const shared = nodeInflight.get(key);
+  if (shared) return shared;
+
+  if (nodeBreaker.busySince) {
+    if (Date.now() < nodeBreaker.openUntil || nodeBreaker.probing) return Promise.reject(nodeBusyError());
+  }
+  const isProbe = !!nodeBreaker.busySince;
+  if (isProbe) nodeBreaker.probing = true;
+
+  const p = jsonRpc(url, secret, method, params, stringifyKeys).then(
+    data => {
+      if (nodeBreaker.busySince) {
+        log(`[INFO] node API answering again after ${Math.round((Date.now() - nodeBreaker.busySince) / 1000)}s`);
+        nodeBreaker.busySince = 0;
+        nodeBreaker.openUntil = 0;
+      }
+      return data;
+    },
+    err => {
+      if (isTransportError(err)) {
+        if (!nodeBreaker.busySince) {
+          nodeBreaker.busySince = Date.now();
+          log(`[WARN] node API not answering (${method}: ${err.message}) — failing fast, one probe every ${NODE_BUSY_BACKOFF_MS / 1000}s`);
+        }
+        nodeBreaker.openUntil = Date.now() + NODE_BUSY_BACKOFF_MS;
+      }
+      throw err;
+    }
+  ).finally(() => {
+    nodeInflight.delete(key);
+    if (isProbe) nodeBreaker.probing = false;
+  });
+  nodeInflight.set(key, p);
+  return p;
+}
+
 async function foreignApi(method, params, stringifyKeys) {
-  const data = await jsonRpc(config.node_url, foreignSecret, method, params, stringifyKeys);
+  const data = await nodeRpc(config.node_url, foreignSecret, method, params, stringifyKeys);
   if (data.error) throw new Error(JSON.stringify(data.error));
   return unwrapResult(data.result);
 }
 
 async function ownerApi(method, params) {
-  const data = await jsonRpc(config.node_owner_url, ownerSecret, method, params);
+  const data = await nodeRpc(config.node_owner_url, ownerSecret, method, params);
   if (data.error) throw new Error(JSON.stringify(data.error));
   return unwrapResult(data.result);
+}
+
+// Status for a failed node-backed API call. NODE_BUSY and transport failures get
+// 503 + {error:'node busy'} so the page can tell "the node is busy, try again"
+// apart from nginx's own 503 (the tinyx_api limiter) and from a real 502.
+function sendNodeError(res, e, fallbackMsg) {
+  if (isNodeBusy(e) || isTransportError(e)) {
+    res.setHeader('Retry-After', String(Math.ceil(NODE_BUSY_BACKOFF_MS / 1000)));
+    return res.status(503).json({
+      error: 'node busy',
+      busy_since: nodeBreaker.busySince ? new Date(nodeBreaker.busySince).toISOString() : null,
+    });
+  }
+  return res.status(502).json({ error: fallbackMsg || 'node unreachable' });
 }
 
 // ── Node mode probe (guard/log only — archive is expected) ────────────────────
@@ -158,6 +243,13 @@ function makeTtlCache(ttlMs) {
 }
 function ttlGet(c) { return (Date.now() - c.at < c.ttl) ? c.value : null; }
 function ttlSet(c, v) { c.value = v; c.at = Date.now(); return v; }
+// Last good value past its TTL — what the page shows while the node is busy,
+// flagged `stale` with its `as_of` time. Bounded so a node that is gone for
+// good eventually reads as down instead of frozen.
+const STALE_MAX_MS = config.stale_max_ms || 24 * 3600 * 1000;
+function ttlStale(c) {
+  return (c.value != null && Date.now() - c.at < STALE_MAX_MS) ? c.value : null;
+}
 
 const tipCache    = makeTtlCache(config.tip_cache_ms   || 30000);
 const latestCache = makeTtlCache(config.block_cache_ms || 45000);
@@ -202,6 +294,19 @@ async function getTip() {
   });
 }
 
+// Fresh tip, or the last good one while the node is busy: { tip, stale, as_of }.
+// Callers that turn the tip into a NUMBER someone relies on (confirmations) must
+// use getTip() instead — a frozen tip under-counts them.
+async function getTipOrStale() {
+  try {
+    return { tip: await getTip(), stale: false, as_of: null };
+  } catch (e) {
+    const last = ttlStale(tipCache);
+    if (!last) throw e;
+    return { tip: last, stale: true, as_of: new Date(tipCache.at).toISOString() };
+  }
+}
+
 // ── Block fetch (ref-validated, LRU-cached, nonce preserved as string) ────────
 
 function isValidRef(ref) {
@@ -221,7 +326,10 @@ async function fetchBlockLive(ref) {
       return await foreignApi('get_block', [parseInt(ref, 10), null, null], ['nonce']);
     }
     return await foreignApi('get_block', [null, ref, null], ['nonce']);
-  } catch {
+  } catch (e) {
+    // A busy/unreachable node is not "no such block" — rethrow so the route
+    // answers 503 instead of sending a valid permalink to the 404 page.
+    if (isNodeBusy(e) || isTransportError(e)) throw e;
     return null;
   }
 }
@@ -348,6 +456,12 @@ async function getLatest(n) {
   );
   const blocks = [];
   results.forEach(r => { if (r.status === 'fulfilled' && r.value) blocks.push(r.value); });
+  // Not one block came back: the node is in trouble, not the chain empty.
+  // Caching [] here would overwrite the last good table that serve-stale needs.
+  if (blocks.length === 0 && heights.length > 0) {
+    const firstErr = results.find(r => r.status === 'rejected');
+    throw firstErr ? firstErr.reason : new Error('no blocks returned');
+  }
   // warm the LRU too
   blocks.forEach(b => { const h = b.header; blockCacheSet(String(h.height), b); if (h.hash) blockCacheSet(h.hash, b); });
 
@@ -387,7 +501,7 @@ async function getDailyAvgHashrate() {
              - Math.floor(new Date(older.timestamp).getTime() / 1000);
     if (dt > 0 && delta > 0) return ttlSet(dailyHrCache, Math.round((delta * 42 / dt / 16384) * 100) / 100);
     return ttlSet(dailyHrCache, 0);
-  } catch { return cached != null ? cached : 0; }
+  } catch { return ttlStale(dailyHrCache) ?? 0; }
 }
 
 // ── Price (Gate.io USD + CoinGecko BTC), on-demand, cached ────────────────────
@@ -451,8 +565,10 @@ async function getSyncStatus() {
   const cached = ttlGet(syncCache);
   if (cached) return cached;
 
+  // The last good tip while the node is busy: a node stuck in compaction is not
+  // applying blocks, so its frozen height IS its height and the lag it shows is real.
   let ours = null;
-  try { ours = (await getTip()).height; } catch {}
+  try { ours = (await getTipOrStale()).tip.height; } catch {}
 
   const nodeUrls = (Array.isArray(config.sync_ref_nodes) && config.sync_ref_nodes.length)
     ? config.sync_ref_nodes
@@ -590,10 +706,12 @@ app.get('/healthz', (_req, res) => res.json({ status: 'ok', node_mode: nodeMode 
 
 app.get('/api/tip', async (_req, res) => {
   try {
-    const tip = await getTip();
+    const t = await getTipOrStale();
     res.setHeader('Cache-Control', 'public, max-age=15');
-    res.json({ height: tip.height, hash: tip.hash });
-  } catch (e) { res.status(502).json({ error: 'node unreachable' }); }
+    const body = { height: t.tip.height, hash: t.tip.hash };
+    if (t.stale) Object.assign(body, { stale: true, as_of: t.as_of });
+    res.json(body);
+  } catch (e) { sendNodeError(res, e); }
 });
 
 app.get('/api/sync', async (_req, res) => {
@@ -610,14 +728,26 @@ app.get('/api/latest', async (req, res) => {
     const rows = await getLatest(n);
     res.setHeader('Cache-Control', 'public, max-age=15');
     res.json(rows);
-  } catch (e) { res.status(502).json({ error: 'node unreachable' }); }
+  } catch (e) {
+    // The body stays a plain array (every client reads it as one), so the
+    // stale marker rides in a header.
+    const last = ttlStale(latestCache);
+    if (!last || !last.length) return sendNodeError(res, e);
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('X-Tinyx-Stale', new Date(latestCache.at).toISOString());
+    res.json(last.slice(0, n));
+  }
 });
+
+// Last successful /api/stats body, replayed (flagged stale) while the node is busy.
+let lastStats = null; // { body, at }
 
 app.get('/api/stats', async (_req, res) => {
   try {
     const [tip, latest, price, peers, dailyHr, mempool] = await Promise.all([
       getTip(),
-      getLatest(config.latest_count || 20).catch(() => []),
+      // A busy node mid-refresh must not zero the hashrate/difficulty cards.
+      getLatest(config.latest_count || 20).catch(() => ttlStale(latestCache) || []),
       getPrice().catch(() => null),
       getPeersStat().catch(() => ({ count: null, source: 'none', label: 'Node peers · 30d' })),
       getDailyAvgHashrate().catch(() => 0),
@@ -635,7 +765,7 @@ app.get('/api/stats', async (_req, res) => {
     const g1PerDay = g1Basis > 0 ? Math.round((1.2 / g1Basis * 86400) * 100) / 100 : null;
 
     res.setHeader('Cache-Control', 'public, max-age=15');
-    res.json({
+    const body = {
       tip_height:    tip.height,
       hash:          tip.hash,
       difficulty:    perBlockDiff,
@@ -657,9 +787,30 @@ app.get('/api/stats', async (_req, res) => {
       // day-average couldn't be computed; the client falls back to hashrate_gps.
       hashrate_gps_24h: dailyHr > 0 ? dailyHr : null,
       mempool:       mempool,
-    });
+    };
+    lastStats = { body, at: Date.now() };
+    res.json(body);
   } catch (e) {
-    res.status(502).json({ error: 'node unreachable' });
+    if (!lastStats || Date.now() - lastStats.at >= STALE_MAX_MS) return sendNodeError(res, e);
+    // Chain figures frozen at their last good values; the price needs no node,
+    // so refresh it. mempool is live-only — a frozen pending count would lie.
+    const price = await getPrice().catch(() => null);
+    const body = Object.assign({}, lastStats.body, {
+      mempool: null,
+      stale: true,
+      as_of: new Date(lastStats.at).toISOString(),
+      busy_since: nodeBreaker.busySince ? new Date(nodeBreaker.busySince).toISOString() : null,
+    });
+    if (price) {
+      Object.assign(body, {
+        price_usd: price.price_usd ?? null,
+        price_btc: price.price_btc ?? null,
+        change_24h_pct: price.change_24h_pct ?? null,
+        market_cap: price.price_usd ? body.supply * price.price_usd : null,
+      });
+    }
+    res.setHeader('Cache-Control', 'no-store');
+    res.json(body);
   }
 });
 
@@ -688,7 +839,7 @@ app.get('/api/block/:ref', async (req, res) => {
     if (block) return res.json(block);
     return res.status(404).json({ error: 'Block not found', hint: nodeMode === 'pruned' ? 'pruned_horizon' : 'not_found' });
   } catch (e) {
-    return res.status(502).json({ error: 'node unreachable' });
+    return sendNodeError(res, e);
   }
 });
 
@@ -704,7 +855,7 @@ app.get('/api/kernel/:excess', async (req, res) => {
     try { const tip = await getTip(); out._confirmations = tip.height - located.height + 1; } catch {}
     res.setHeader('Cache-Control', 'public, max-age=30');
     return res.json(out);
-  } catch (e) { return res.status(502).json({ error: 'node unreachable' }); }
+  } catch (e) { return sendNodeError(res, e); }
 });
 
 app.get('/api/output/:commit', async (req, res) => {
@@ -719,7 +870,7 @@ app.get('/api/output/:commit', async (req, res) => {
     }
     res.setHeader('Cache-Control', 'public, max-age=15');
     return res.json(out);
-  } catch (e) { return res.status(502).json({ error: 'node unreachable' }); }
+  } catch (e) { return sendNodeError(res, e); }
 });
 
 // ── POST /api/proof/verify — payment proof (grin-wallet export_proof JSON) ────

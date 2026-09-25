@@ -206,8 +206,8 @@ curl -s "https://api.nonlogs.io/api/markets/GRIN-BTC" | python3 -m json.tool
   Hub 05 assigns every category a contiguous block of keys ending in a spare (wallets
   1-4, payments 5-8, giveaways 9); a row owns its key permanently, and planned/spare rows
   own theirs from the start. Hub 08 instead keys each row that HAS a sub-script to that
-  script's last digit — 081→`1`, 082→`2`, 084→`4`, 085→`5`, 089→`9` — and fills the gaps
-  (`3`,`6`,`7`,`8`) with its un-numbered inline features. Other hubs (07, 09) still assign
+  script's last digit — 081→`1`, 082→`2`, 083→`3`, 084→`4`, 086→`6`, 089→`9` — and fills the
+  gaps (`5`,`7`,`8`) with its un-numbered inline features (085 SSH is reached from inside 083). Other hubs (07, 09) still assign
   the key positionally at render. **Outside hub 08 the key is NOT the script number** — in
   05, key 5 is WooCommerce (053) and key 9 is Drop (059); they coincide only by accident.
   - Hub 08's rule (adopted 2026-08-05, when Provider Access Watch sat on key 7 and Backup

@@ -104,6 +104,7 @@ resolver, the allowlist rules, and what is still open.
 |---|---|
 | [script082_design.md](script082_design.md) | Provider Access Watch — VPS host-tamper detection |
 | [script083_design.md](script083_design.md) | Host Optimization advisor (read-only) |
+| [script086_design.md](script086_design.md) | Diagnostics & Support Bundle — health check, support bundle, log triage |
 
 ## Connectivity (Script 09)
 

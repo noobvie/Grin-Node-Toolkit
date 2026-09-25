@@ -192,7 +192,7 @@ A hub that deploys **one** mining setup per server — solo private *or* a publi
 
 ### 8. Admin & Maintenance — `08_grin_node_admin.sh`
 
-Operations toolbox: **remote node monitor** (registry + custom hosts, emails on state change, cron-ready), **provider access watch** (host-tamper detection + off-box alerts), **node status & sync** (ports, tmux, binary versions + chain tip on one screen), **nginx extended features** (SSL/cert audit, reverse proxy, security, log rotation), **SSH key hardening**, **top bandwidth consumers**, **disk cleanup**, **self-update** with a branch selector, and **backup & restore**. **DEL** runs the full nuclear cleanup (`08del_…`, requires typing `DESTROY`).
+Operations toolbox: **remote node monitor** (registry + custom hosts, emails on state change, cron-ready), **provider access watch** (host-tamper detection + off-box alerts), **node status & sync** (ports, tmux, binary versions + chain tip on one screen), **nginx extended features** (SSL/cert audit, reverse proxy, security, log rotation, top bandwidth consumers), **SSH key hardening**, **diagnostics & support bundle** (quick health check with likely-origin tags, one-file support bundle, node API timings, log triage), **disk cleanup**, **self-update** with a branch selector, and **backup & restore**. **DEL** runs the full nuclear cleanup (`08del_…`, requires typing `DESTROY`).
 
 Menu keys mirror the sub-script numbers — 081→`1`, 082→`2`, 084→`4`, 085→`5`, 089→`9` — and the un-numbered inline features fill `3`, `6`, `7`, `8`.
 

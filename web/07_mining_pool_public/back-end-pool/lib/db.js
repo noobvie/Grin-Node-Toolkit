@@ -383,7 +383,11 @@ function migrateWithdrawals() {
       // Step-by-step Tor send progress (see CREATE TABLE). NULL on every legacy row, and no
       // backfill: they are read only under a stepwise claim, which a legacy row never has.
       tor_step: 'TEXT DEFAULT NULL',
-      tor_final_slate: 'TEXT DEFAULT NULL'
+      tor_final_slate: 'TEXT DEFAULT NULL',
+      // Manual slatepack rail: the armored S1 handed to the miner, and the "pool-wallet cancel
+      // still owed" flag (see CREATE TABLE). Legacy rows: NULL / 0 — nothing to re-show or cancel.
+      slatepack_s1: 'TEXT DEFAULT NULL',
+      slate_cancel_pending: 'INTEGER NOT NULL DEFAULT 0'
     };
     for (const [name, def] of Object.entries(additions)) {
       if (!have.has(name)) {
@@ -756,7 +760,17 @@ function createSchema() {
       -- The finalized S3 slate (JSON), stored in the same write that moves tor_step to 'posting'
       -- so the stale sweep can post the IDENTICAL tx again. Cleared once the row confirms. Holds
       -- a complete transaction: admin routes strip it and no public route selects it.
-      tor_final_slate TEXT DEFAULT NULL
+      tor_final_slate TEXT DEFAULT NULL,
+      -- Manual slatepack rail only: the armored S1 exactly as first handed to the miner, kept so
+      -- a closed tab can fetch it again (POST /api/account/:addr/withdraw/:id/slatepack, which
+      -- is ownership-gated and serves it only while the row is slatepack_pending). It is
+      -- ENCRYPTED to the miner's own address — only their wallet can open it — and the Goblin
+      -- rail's PLAIN-armor S1 is never written here. Cleared when the row confirms or reverses.
+      slatepack_s1 TEXT DEFAULT NULL,
+      -- 1 = this row was refunded but grin-wallet's cancel_tx for its slate has not succeeded
+      -- yet, so the pool wallet may still hold the slate's inputs locked. Set in the SAME
+      -- transaction as the expiry refund; cleared once the cancel lands (retryExpiredSlateCancels).
+      slate_cancel_pending INTEGER NOT NULL DEFAULT 0
     )`,
 
     `CREATE INDEX IF NOT EXISTS idx_withdrawal_address ON withdrawals(grin_address, status)`,

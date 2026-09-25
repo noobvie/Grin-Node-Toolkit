@@ -1448,6 +1448,7 @@ function setupRoutes() {
     'GET /api/account/:addr/tor-check': { desc: 'Is this miner\'s wallet answering over Tor right now? The pool opens a fresh Tor circuit to the onion derived from the address and POSTs check_version to its foreign API; can take up to ~30 s. online is TRI-STATE: true = a grin-wallet answered; false = our Tor works and the wallet did not answer (or something that is not a wallet did); null = this pool could not look (its own Tor is down) — says nothing about the wallet, and a Tor payout is still allowed. reason: reachable · reachable_auth · onion_unreachable · onion_timeout · no_answer · not_wallet · invalid_format · derivation_failed · tor_unavailable · probe_failed. 404 if the address has never mined here — the probe is not offered for arbitrary Grin addresses. Answers are cached 60s per address; fresh=1 re-probes, but only once the cached answer is 10s old (younger answers are served as-is), and joins a probe already running. The payout gate always re-probes fresh.', shape: 'raw', params: 'fresh=1 (re-probe; 10s floor)', rate: 'torcheck' },
     'POST /api/account/:addr/withdraw': { desc: 'Request a payout on one of three rails. amount defaults to the full available balance. 403 = ownership proof failed; 400 = invalid amount, below the minimum, or too small to cover the flat fee; 409 = insufficient balance, or payouts frozen by the operator; 409 (tor) = wallet unreachable, retry or switch to slatepack; 409 (nostr) = destination unregistered, still in cooldown, or its npub changed; 429 = a payout is already pending on ANY rail (one at a time), a recently reversed payout is still in its cooldown, or the pool-wide pending cap is full; 503 = the nostr rail is disabled, or the pool wallet cannot cover the payout right now (funds tied up in payouts still settling — the balance is returned; retry in about an hour). A slatepack request also returns `slatepack` (encrypted to your address) and `expires_at` (unix seconds): return the response before then or the payout expires and the balance comes back.', shape: 'flat', auth: 'ownership proof', rate: 'withdraw', body: `method=tor|slatepack|nostr (default tor) · amount (default: full balance) · ${OWNER_PROOF_BODY}` },
     'POST /api/account/:addr/withdraw/:id/finalize': { desc: 'Complete a slatepack payout by posting back the response slatepack your wallet produced with `receive`. The pool finalizes and broadcasts. 404 = no such withdrawal; 409 = not awaiting a slatepack (already settled or expired); 400 = the slatepack does not match this withdrawal.', shape: 'flat', auth: 'ownership proof', rate: 'withdraw', body: `response_slatepack · ${OWNER_PROOF_BODY}` },
+    'POST /api/account/:addr/withdraw/:id/slatepack': { desc: 'Fetch a pending slatepack payout\'s slatepack again — for when the tab was closed or it was never copied. Returns the SAME slatepack issued at request time (encrypted to your address), never a new one, plus `expires_at` (unix seconds). Manual slatepack rail only; served only while the payout is still awaiting your response. 403 = ownership proof failed; 404 = no pending slatepack payout with that number for this address (settled, expired, another rail, or not yours).', shape: 'flat', auth: 'ownership proof', rate: 'withdraw', body: OWNER_PROOF_BODY },
     // NOT the shared OWNER_PROOF_BODY: this is the one route that needs the IP and the password
     // as two separate fields (either alone is a 400 both_proofs_required), so the "IP or
     // password" wording every other money route carries would be wrong here.
@@ -2732,10 +2733,12 @@ function setupRoutes() {
       const chainState = (r) => (withdrawalScheduler ? withdrawalScheduler.chainStateOf(r, now) : null);
       // tor_final_slate (stepwise Tor send, design §8.1) is a complete signed transaction held
       // only so the sweep can post it again — never served. tor_step stays: it tells the
-      // operator where a tor_sending row stopped.
+      // operator where a tor_sending row stopped. slatepack_s1 (the manual rail's stored S1) is
+      // served by exactly one route — the owner's ownership-gated re-fetch — and not here either.
       res.json(rows.map((r) => {
         const { payment_proof, ...rest } = r;
         delete rest.tor_final_slate;
+        delete rest.slatepack_s1;
         return { ...rest, has_payment_proof: !!payment_proof, chain_state: chainState(r) };
       }));
     } catch (err) {
@@ -4681,6 +4684,48 @@ function setupRoutes() {
     }
   });
 
+  // Show a pending slatepack payout's S1 again — the miner closed the tab, reloaded, or never
+  // copied it. Before this, the S1 lived only in the create response, so a lost tab meant waiting
+  // out the TTL and the post-reversal cooldown (~1 h) even when the wallet already held a valid
+  // response. It moves no money and creates nothing: the SAME stored S1 is returned, never a new
+  // slate, so re-fetching cannot double anything.
+  //
+  // Gated like every payout action (the stored S1 is encrypted to this address, so the gate is
+  // consistency, not the only defence) and narrowed four ways in the SQL itself: this address's
+  // row, the manual rail only (the Goblin rail's S1 is plain armor and is never stored), still
+  // slatepack_pending (a settled/expired row is not served even if a copy lingered), and a stored
+  // S1 present. Everything else is one 404 — the page cannot tell "not yours" from "gone", which
+  // is all it needs. POST, not GET: the proof travels in the body, never in a URL or access log.
+  app.post('/api/account/:addr/withdraw/:id/slatepack', rateLimiter.middleware('withdraw'), async (req, res) => {
+    try {
+      const { addr, id } = req.params;
+      const reqIp = normalizeIp(req.ip);
+      const wid = /^\d{1,15}$/.test(String(id)) ? Number(id) : 0;
+      const proof = await verifyOwnerProof(db, addr, (req.body && (req.body.proof || req.body.ip_proof)) || '', reqIp);
+      if (!proof.ok) {
+        auditOwnerProof(db, { action: 'slatepack_reshow', grinAddress: addr, ip: reqIp, ok: false, details: { reason: proof.reason, withdrawal_id: wid || null } });
+        return res.status(403).json({ error: 'Ownership proof failed', reason: proof.reason });
+      }
+      const row = wid ? db.prepare(
+        `SELECT id, amount, created_at, slatepack_s1 FROM withdrawals
+          WHERE id = ? AND grin_address = ? AND method = 'slatepack' AND status = 'slatepack_pending'`
+      ).get(wid, addr) : null;
+      if (!row || !row.slatepack_s1) {
+        return res.status(404).json({ error: 'No slatepack is waiting for this payout — it may already be settled or expired. Refresh the page to see its status.' });
+      }
+      auditOwnerProof(db, { action: 'slatepack_reshow', grinAddress: addr, ip: reqIp, ok: true, details: { withdrawal_id: row.id, proof_method: proof.method } });
+      // The S1 is per-payout and short-lived; keep it out of every cache between here and the tab.
+      res.set('Cache-Control', 'no-store');
+      res.json({
+        success: true, withdrawal_id: row.id, amount: row.amount, slatepack: row.slatepack_s1,
+        // Same clock the expiry sweep enforces (created_at + TTL), as on create.
+        expires_at: withdrawalScheduler ? Number(row.created_at) + withdrawalScheduler.slatepackTtlSeconds : null
+      });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // ─── Goblin/Nostr payout destination (design §15) ────────────────────────────
   // Register/replace the Goblin username funds may be sent to over Nostr. This does NOT move
   // funds — it stores the pinned destination and (re)starts the security cooldown.
@@ -5813,8 +5858,10 @@ function setupRoutes() {
 
       // Money actions only. A LIKE over the action prefix keeps this in step with owner-proof.js
       // without duplicating its action list here.
+      // slatepack\_% = finalize + reshow (the S1 re-fetch moves no money, but it spends the same
+      // proof check, so a guessing run against it belongs in this view too).
       const MONEY = "(a.action LIKE 'owner_proof:withdraw\\_%' ESCAPE '\\'" +
-                    " OR a.action LIKE 'owner_proof:slatepack\\_finalize%' ESCAPE '\\'" +
+                    " OR a.action LIKE 'owner_proof:slatepack\\_%' ESCAPE '\\'" +
                     " OR a.action LIKE 'owner_proof:nostr\\_destination\\_%' ESCAPE '\\')";
       const resultClause = only === 'deny' ? " AND a.action LIKE '%:deny'"
                          : only === 'ok'   ? " AND a.action LIKE '%:ok'" : '';
@@ -7361,10 +7408,11 @@ function setupRoutes() {
       const total_paid = db.prepare(
         `SELECT COALESCE(SUM(amount),0) AS t FROM withdrawals WHERE grin_address = ? AND status='confirmed'`
       ).get(addr).t;
-      // Same strip as GET /api/admin/withdrawals: never serve the stepwise send's final slate.
+      // Same strip as GET /api/admin/withdrawals: never serve the stepwise send's final slate, nor
+      // the manual rail's stored S1.
       const pending = db.prepare(
         `SELECT * FROM withdrawals WHERE grin_address = ? AND status IN ('tor_checking','tor_sending','retry_scheduled','slatepack_pending','finalizing') ORDER BY created_at DESC`
-      ).all(addr).map(({ tor_final_slate, ...rest }) => rest);
+      ).all(addr).map(({ tor_final_slate, slatepack_s1, ...rest }) => rest);
       const shareAgg = db.prepare(
         `SELECT COUNT(*) AS count, MAX(created_at) AS last_share_at FROM shares WHERE grin_address = ?`
       ).get(addr);

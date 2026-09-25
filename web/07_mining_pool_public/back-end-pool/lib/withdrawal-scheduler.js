@@ -41,6 +41,26 @@ const TOR_SENDING_STALE_FLOOR_S = 600;
 // pool fee lands in, so both show up as one fee-income line on the transparency page.
 const POOL_FEE_ADDRESS = IncentivesManager.POOL_FEE;
 
+// Miner-facing wording for the two "not now" refusals (2026-09-24, operator decision). Payouts
+// are miner-initiated with ONE pending per address, never an automatic mass run, so both states
+// clear on their own as other payouts settle — telling the miner to come back in an hour is the
+// whole remedy. The pool-wide cap is deliberately NOT split per rail (a slatepack sub-cap was
+// considered and declined): filling it takes one funded address per slot, and a slatepack slot
+// frees itself within slatepack_ttl_minutes.
+const POOL_BUSY_MSG =
+  'the pool is processing a lot of payouts right now — nothing was deducted from your balance; ' +
+  'please try again in about an hour';
+// grin-wallet's NotEnoughFunds carries the wallet's available + needed amounts. Passing it through
+// told any miner with an ownership proof how much the POOL wallet can spend, as raw JSON. The
+// miner gets this line; the operator log keeps the real error. The usual cause is outputs locked
+// by other payouts still settling (an unanswered slatepack holds its inputs + change) — so it is
+// temporary — but a pool wallet that is simply underfunded looks identical, hence the last clause.
+const WALLET_SHORT_MSG =
+  "the pool wallet can't cover this payout right now — part of its funds are tied up in other " +
+  'payouts that are still settling. Your full balance has been returned; please try again in ' +
+  'about an hour (if this keeps happening, contact the pool operator)';
+const isNotEnoughFunds = (err) => /NotEnoughFunds|not enough funds/i.test(String((err && err.message) || ''));
+
 class WithdrawalScheduler {
   constructor(config, wallet = null) {
     this.config = config;
@@ -57,8 +77,12 @@ class WithdrawalScheduler {
     this.isRunning = false;
     this.checkInterval = 60000;
     // How long an unfinalized slatepack payout stays pending before it's cancelled and the
-    // locked balance is returned (the miner never imported/returned the slate).
-    this.slatepackTtlSeconds = (config.slatepack_ttl_hours || 24) * 3600;
+    // locked balance is returned (the miner never imported/returned the slate). Minutes, 30 by
+    // default (config.slatepack_ttl_minutes). The old `slatepack_ttl_hours` was never set by
+    // config.js or the settings table, so every pool ran the `|| 24` fallback. A non-number or a
+    // value below the validator's floor falls back to 30 rather than to "expire at once".
+    const spTtl = Number(config.slatepack_ttl_minutes);
+    this.slatepackTtlSeconds = (Number.isFinite(spTtl) && spTtl >= 10 ? spTtl : 30) * 60;
     // Goblin/Nostr rows (method='nostr') expire on a much shorter clock: the wallet AutoReceives,
     // so a live miner answers in seconds — no human paste-back to wait for. Bounds a stranded
     // lock when the wallet is offline. See config.nostr_pending_ttl_minutes.
@@ -460,11 +484,12 @@ class WithdrawalScheduler {
         await this.markConfirmed(withdrawalId, 'Successfully sent');
       } else {
         console.error(`Send failed for withdrawal ${withdrawalId}: ${sendResult.error}`);
-        await this.scheduleRetry(withdrawalId);
+        await this.scheduleRetry(withdrawalId, this._retryReasonFor(withdrawal, netSend, sendResult.error));
       }
     } catch (err) {
       console.error(`Error sending withdrawal ${withdrawalId}: ${err.message}`);
-      await this.scheduleRetry(withdrawalId);
+      // `withdrawal` / `netSend` are scoped to the try block, so only the id is known here.
+      await this.scheduleRetry(withdrawalId, this._retryReasonFor({ id: withdrawalId, method: 'tor' }, null, err.message));
     }
   }
 
@@ -660,7 +685,59 @@ class WithdrawalScheduler {
     }
   }
 
-  async scheduleRetry(withdrawalId) {
+  // A failed Tor send: 'pool_wallet_short' when grin-wallet refused for lack of POOL funds (and
+  // the health card is told), otherwise null. `error` is the CLI's message.
+  _retryReasonFor(withdrawal, netSend, error) {
+    if (!isNotEnoughFunds({ message: error })) return null;
+    this._noteWalletShort({ withdrawalId: withdrawal.id, method: withdrawal.method || 'tor', amount: netSend, error });
+    return 'pool_wallet_short';
+  }
+
+  // The pool wallet could not cover a payout. The miner is told only "pool busy, try later"; the
+  // real figures (grin-wallet's available/needed) belong to the operator, so they go to the log
+  // and to ONE rolling `alerts` row of type 'pool_wallet_short', which /api/admin/health turns
+  // into a Degraded state on the Grin Wallet card. Rolling = while the last occurrence is under
+  // 24h old the row is updated in place (count + latest figures) instead of stacking one row per
+  // failed attempt; an older one is resolved and a fresh row starts. Best-effort: a failure to
+  // record must never change what happens to the payout.
+  _noteWalletShort({ withdrawalId, method, amount, error }) {
+    const amt = amount == null ? 'an unknown amount of' : amount;
+    console.error(`⚠️  Payout ${withdrawalId} (${method}): pool wallet cannot cover ${amt} GRIN — ${error}`);
+    try {
+      const now = new Date().toISOString();
+      const dayAgo = new Date(Date.now() - 86400000).toISOString();
+      const message = `Pool wallet could not cover ${method} payout #${withdrawalId} (${amt} GRIN): ${String(error).slice(0, 400)}`;
+      const data = JSON.stringify({ withdrawal_id: withdrawalId, method, amount });
+      this.db.transaction(() => {
+        const live = this.db.prepare(
+          `SELECT id FROM alerts WHERE type = 'pool_wallet_short' AND status = 'active' AND last_seen >= ?
+           ORDER BY id DESC LIMIT 1`
+        ).get(dayAgo);
+        if (live) {
+          this.db.prepare(
+            `UPDATE alerts SET occurrence_count = occurrence_count + 1, last_seen = ?, message = ?, data = ?
+             WHERE id = ?`
+          ).run(now, message, data, live.id);
+          return;
+        }
+        this.db.prepare(
+          `UPDATE alerts SET status = 'resolved', resolved_at = ? WHERE type = 'pool_wallet_short' AND status = 'active'`
+        ).run(now);
+        this.db.prepare(
+          `INSERT INTO alerts (type, level, message, data, status, triggered_at, last_seen)
+           VALUES ('pool_wallet_short', 'warning', ?, ?, 'active', ?, ?)`
+        ).run(message, data, now, now);
+      })();
+    } catch (e) {
+      console.error(`[payout] failed to record pool_wallet_short alert: ${e.message}`);
+    }
+  }
+
+  // `reason` is stored on the row (retry_reason) so the account page can say WHY the payout is
+  // parked: 'pool_wallet_short' (the pool's own wallet could not cover it) vs NULL (anything else —
+  // almost always the miner's listener not answering over Tor). Every call rewrites it, so a
+  // payout that was short once and then hits an offline miner is not left saying "pool busy".
+  async scheduleRetry(withdrawalId, reason = null) {
     try {
       const withdrawal = this.db.prepare(`
         SELECT * FROM withdrawals WHERE id = ?
@@ -681,10 +758,10 @@ class WithdrawalScheduler {
       // retry ladder for another send.
       const stmt = this.db.prepare(`
         UPDATE withdrawals
-        SET status = 'retry_scheduled', retry_count = retry_count + 1, next_retry_at = ?
+        SET status = 'retry_scheduled', retry_count = retry_count + 1, next_retry_at = ?, retry_reason = ?
         WHERE id = ? AND status = ?
       `);
-      if (stmt.run(nextRetryAt, withdrawalId, withdrawal.status).changes !== 1) {
+      if (stmt.run(nextRetryAt, reason, withdrawalId, withdrawal.status).changes !== 1) {
         console.warn(`[retry] withdrawal ${withdrawalId} left ${withdrawal.status} before retry scheduling — skipped`);
         return;
       }
@@ -698,7 +775,8 @@ class WithdrawalScheduler {
         withdrawalId,
         withdrawal.status,
         'retry_scheduled',
-        `Retry ${withdrawal.retry_count + 1}/${this.retryDelays.length} at ${new Date(nextRetryAt * 1000).toISOString()}`
+        `Retry ${withdrawal.retry_count + 1}/${this.retryDelays.length} at ${new Date(nextRetryAt * 1000).toISOString()}` +
+          (reason ? ` (${reason})` : '')
       );
 
       console.log(
@@ -1050,7 +1128,7 @@ class WithdrawalScheduler {
       `SELECT COUNT(*) AS c FROM withdrawals WHERE ${PENDING_SQL}`
     ).get().c;
     if (totalPending >= this.MAX_PENDING_WITHDRAWALS) {
-      fail(`pool has reached maximum pending withdrawals (${this.MAX_PENDING_WITHDRAWALS})`, 429);
+      fail(POOL_BUSY_MSG, 429);
     }
     const userPending = this.db.prepare(
       `SELECT COUNT(*) AS c FROM withdrawals WHERE grin_address = ? AND ${PENDING_SQL}`
@@ -1096,7 +1174,7 @@ class WithdrawalScheduler {
         `SELECT COUNT(*) AS c FROM withdrawals WHERE ${PENDING_SQL}`
       ).get().c;
       if (totalPending >= this.MAX_PENDING_WITHDRAWALS) {
-        fail(`pool has reached maximum pending withdrawals (${this.MAX_PENDING_WITHDRAWALS})`, 429);
+        fail(POOL_BUSY_MSG, 429);
       }
       // Design §8: at most ONE pending withdrawal per address — across ALL rails.
       const userPending = this.db.prepare(
@@ -1183,7 +1261,7 @@ class WithdrawalScheduler {
     // lock happens during tx_lock_outputs below, and is released via cancelTx on failure.
     const txn = this.db.transaction(() => {
       const totalPending = this.db.prepare(`SELECT COUNT(*) AS c FROM withdrawals WHERE ${PENDING_SQL}`).get().c;
-      if (totalPending >= this.MAX_PENDING_WITHDRAWALS) fail(`pool has reached maximum pending withdrawals (${this.MAX_PENDING_WITHDRAWALS})`, 429);
+      if (totalPending >= this.MAX_PENDING_WITHDRAWALS) fail(POOL_BUSY_MSG, 429);
       const userPending = this.db.prepare(`SELECT COUNT(*) AS c FROM withdrawals WHERE grin_address = ? AND ${PENDING_SQL}`).get(grinAddress).c;
       if (userPending >= 1) fail('you already have a pending withdrawal', 429);
 
@@ -1231,13 +1309,21 @@ class WithdrawalScheduler {
       this.db.prepare('UPDATE withdrawals SET slate_id = ?, fee = COALESCE(?, fee) WHERE id = ?')
         .run(slateId, feeGrin, withdrawalId);
       console.log(`[${new Date().toISOString()}] Slatepack withdrawal ${withdrawalId} created for ${grinAddress} (${amt} GRIN gross, ${netSend} net, slate ${slateId})`);
+      // The deadline is measured from the ROW's created_at — the same clock
+      // processSlatepackExpiry compares — so what the miner is told is what the sweep enforces.
+      const row = this.db.prepare('SELECT created_at FROM withdrawals WHERE id = ?').get(withdrawalId);
       return {
         success: true, withdrawal_id: withdrawalId, amount: amt,
-        fee_charged: feeCharged, net_amount: netSend, slatepack: armored
+        fee_charged: feeCharged, net_amount: netSend, slatepack: armored,
+        expires_at: (row ? row.created_at : Math.floor(Date.now() / 1000)) + this.slatepackTtlSeconds
       };
     } catch (err) {
       try { if (slate && slate.id) await this.wallet.cancelTx(slate.id); } catch (_) { /* best-effort */ }
       this._reverseLock(withdrawalId, 'slatepack_failed', 'slatepack_pending', `slate creation failed: ${err.message}`);
+      if (isNotEnoughFunds(err)) {
+        this._noteWalletShort({ withdrawalId, method: 'slatepack', amount: netSend, error: err.message });
+        const e = new Error(WALLET_SHORT_MSG); e.code = 503; throw e;
+      }
       const e = new Error(`failed to create slatepack: ${err.message}`); e.code = 502; throw e;
     }
   }
@@ -1333,7 +1419,7 @@ class WithdrawalScheduler {
     // Lock the pool-side balance first (authoritative). Same CAS + caps as the other rails.
     const txn = this.db.transaction(() => {
       const totalPending = this.db.prepare(`SELECT COUNT(*) AS c FROM withdrawals WHERE ${PENDING_SQL}`).get().c;
-      if (totalPending >= this.MAX_PENDING_WITHDRAWALS) fail(`pool has reached maximum pending withdrawals (${this.MAX_PENDING_WITHDRAWALS})`, 429);
+      if (totalPending >= this.MAX_PENDING_WITHDRAWALS) fail(POOL_BUSY_MSG, 429);
       const userPending = this.db.prepare(`SELECT COUNT(*) AS c FROM withdrawals WHERE grin_address = ? AND ${PENDING_SQL}`).get(grinAddress).c;
       if (userPending >= 1) fail('you already have a pending withdrawal', 429);
 
@@ -1387,6 +1473,10 @@ class WithdrawalScheduler {
     } catch (err) {
       try { if (slate && slate.id) await this.wallet.cancelTx(slate.id); } catch (_) { /* best-effort */ }
       this._reverseLock(withdrawalId, 'nostr_failed', 'slatepack_pending', `nostr send failed: ${err.message}`);
+      if (isNotEnoughFunds(err)) {
+        this._noteWalletShort({ withdrawalId, method: 'nostr', amount: netSend, error: err.message });
+        const e = new Error(WALLET_SHORT_MSG); e.code = 503; throw e;
+      }
       const e = new Error(`failed to send nostr payout: ${err.message}`); e.code = err.code && err.code >= 400 && err.code < 600 ? err.code : 502; throw e;
     }
   }
@@ -1515,7 +1605,7 @@ class WithdrawalScheduler {
   async processSlatepackExpiry() {
     try {
       const now = Math.floor(Date.now() / 1000);
-      const cutoff = now - this.slatepackTtlSeconds;             // manual slatepack rail (24h default)
+      const cutoff = now - this.slatepackTtlSeconds;             // manual slatepack rail (30 min default)
       const nostrCutoff = now - this.nostrPendingTtlSeconds;     // Goblin/Nostr rail (10 min default)
       // Nostr rows expire on the shorter clock; every other pending rail uses the long TTL.
       const stale = this.db.prepare(
@@ -1596,9 +1686,12 @@ class WithdrawalScheduler {
   _releaseLockAndDebit(withdrawal) {
     const txn = this.db.transaction(() => {
       const acct = this.db.prepare(
-        'SELECT balance_locked FROM miner_accounts WHERE grin_address = ?'
+        'SELECT balance, balance_locked FROM miner_accounts WHERE grin_address = ?'
       ).get(withdrawal.grin_address);
       const lockedBefore = acct ? acct.balance_locked : 0;
+      // The settlement drains locked only, so spendable is unchanged — but record its REAL value
+      // (these rows used to carry a literal 0/0, which the ledger rendered as "balance after 0").
+      const spendable = acct ? acct.balance : 0;
       const released = Math.min(lockedBefore, withdrawal.amount);
       if (released < withdrawal.amount) {
         console.error(
@@ -1622,13 +1715,13 @@ class WithdrawalScheduler {
         INSERT INTO balance_log
         (grin_address, event_type, amount, balance_before, balance_after,
          locked_before, locked_after, reference_type, reference_id)
-        VALUES (?, 'debit', ?, 0, 0, ?, ?, ?, ?)
+        VALUES (?, 'debit', ?, ?, ?, ?, ?, ?, ?)
       `);
-      logDebit.run(withdrawal.grin_address, netPaid, lockedBefore,
+      logDebit.run(withdrawal.grin_address, netPaid, spendable, spendable, lockedBefore,
                    lockedBefore - released, 'withdrawal', withdrawal.id);
 
       if (feeCharged > 0) {
-        logDebit.run(withdrawal.grin_address, feeCharged, lockedBefore - released,
+        logDebit.run(withdrawal.grin_address, feeCharged, spendable, spendable, lockedBefore - released,
                      lockedBefore - released, 'withdrawal_fee', withdrawal.id);
 
         // Matching credit to the pool_fee pseudo-account. INSERT OR IGNORE first: on a pool

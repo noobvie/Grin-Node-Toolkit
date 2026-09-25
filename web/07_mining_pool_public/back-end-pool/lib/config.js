@@ -71,6 +71,12 @@ function mergeEnvVars(config) {
     withdrawal_fee: config.withdrawal_fee !== undefined ? config.withdrawal_fee : 0.04,
     // Cross-rail wait after a reversed payout before the miner can request another (0 disables).
     withdrawal_cooldown_minutes: config.withdrawal_cooldown_minutes !== undefined ? config.withdrawal_cooldown_minutes : 30,
+    // Minutes a manual Slatepack payout waits for the miner's response before it expires: the
+    // pool cancels its wallet tx and returns the locked balance. Was a hardcoded 24h until
+    // 2026-09-24 (scheduler read a `slatepack_ttl_hours` nothing ever set). 30 min: a miner who
+    // is at their wallet needs a few; a long window only keeps pool-wallet coins locked for a
+    // request nobody is finishing — and miners have no cancel, so expiry is the only way out.
+    slatepack_ttl_minutes: config.slatepack_ttl_minutes !== undefined ? config.slatepack_ttl_minutes : 30,
 
     // ── Goblin/Nostr payout rail (design §15; OFF by default — needs `npm install`
     // for nostr-tools + ws and a VPS E2E test with a real Goblin wallet). Pays a THIRD
@@ -83,7 +89,7 @@ function mergeEnvVars(config) {
     // Hours a registered destination must age before it can receive a payout.
     nostr_destination_cooldown_hours: config.nostr_destination_cooldown_hours !== undefined ? config.nostr_destination_cooldown_hours : 48,
     // Minutes a DELIVERED-but-unanswered Goblin payout stays locked before it auto-refunds.
-    // Separate from the manual slatepack rail's 24h (slatepack_ttl_hours): Goblin AutoReceives
+    // Separate from the manual slatepack rail's slatepack_ttl_minutes (30): Goblin AutoReceives
     // automatically, so if the miner has the wallet open the S2 comes back in seconds — a short
     // window bounds a stranded lock without hurting the human paste-back flow. Too tight only
     // risks a harmless false refund (retry), never a double-pay. Tune from a real pilot round-trip.

@@ -36,19 +36,21 @@ function parseStratumMessage(jsonStr) {
 // Mainnet: grin1 + 58 bech32 chars = 63 chars total
 // Testnet: tgrin1 + 58 bech32 chars = 64 chars total
 //
-// Donation (register-free, self-service): a `donateN` token in the worker name opts the miner
-// into donating N% of their PPLNS payouts to the pool prize pool. It can be the whole worker
+// Donation (register-free, self-service): a `donateN` token in the worker name donates N% of
+// the PPLNS credit THAT RIG's shares earn to the pool prize pool — per share, read when a block
+// matures (lib/rewards.js, design §18.2); the address's other rigs are unaffected and nothing is
+// stored. Rename the rig and restart the miner to change or stop it. It can be the whole worker
 // name or a `-`/`_`-separated suffix. The `+` form is deliberately NOT used — some miners read
 // a `+NNNN` username suffix as a fixed-difficulty request.
-//   grin1abc….donate10      → worker "donate10",       donate 10%
-//   grin1abc….rig01-donate10 → worker "rig01-donate10", donate 10%
+//   grin1abc….donate10      → worker "donate10",       this rig donates 10%
+//   grin1abc….rig01-donate10 → worker "rig01-donate10", this rig donates 10%
 //   grin1abc….rig01          → worker "rig01",          no donation
 // The token is READ, never stripped: the worker label is whatever the miner typed. Until
 // 2026-09-21 it was cut out (`.donate10` became worker "default"), and the first miner to try it
 // read that as a bug — nothing on screen said why their name had changed. The literal name is
 // also the one place a miner can SEE that a donation is set on this rig, which is what audit
 // §J3-5 wanted: a tag that reduces earnings must not be invisible.
-// Edge handling: only N in 0-100 donates (donate0 = explicit opt-out). Anything else is
+// Edge handling: only N in 1-100 donates (donate0 is a tag of 0 %, the same as no tag). Anything else is
 // treated as NOT a donation and kept as a literal worker name — a typo like `donate101`,
 // `donate999`, `donate-1`, `donatexx`, or `donate` alone never causes an accidental donation.
 //
@@ -123,8 +125,9 @@ const MAX_WORKER_RAW_LEN = 48;    // raw accept ceiling, label + token; was 40
 
 // The donate token: the whole worker name, or a `-`/`_`-separated suffix. dm[1] is the label
 // (undefined when the token is the whole name), dm[2] the digits. ONE definition — validateUsername
-// parses logins with it and parseDonateToken() lets the admin donors list flag a tagged rig
-// without a second copy of the grammar drifting from this one.
+// parses logins with it, and parseDonateToken() is what rewards.js reads PER SHARE to move money
+// (design §18.2) and what every live "who is donating" reading uses, so the login, the money and
+// the display can never disagree about whether a rig is tagged.
 const DONATE_TOKEN_RE = /^(?:(.*?)[-_])?donate(\d{1,3})$/;
 
 // { label, percent } for a worker name that carries a LIVE token (0-100), else null. An
@@ -194,34 +197,30 @@ function validateUsername(username, network = null) {
     if (n >= 0 && n <= 100) donation_percent = n;
   }
 
-  // `donor_label` is the label PART of a tagged name — what design §16 Part 2 stores as the
-  // donor name. null: no live donate token (a plain name, including an out-of-range typo);
-  // '': the token IS the whole name (`donate10` — masked address on the wall); otherwise the
-  // label as the miner will see it, i.e. AFTER the cut below — never the raw one.
-  let donor_label = null;
-  if (donation_percent !== null) donor_label = dm[1] || '';
-
   // Cap the visible label: truncate (don't reject) anything over the limit. A name carrying a
   // live token is cut on its LABEL part so the token stays on screen (`-donate100` is 10 chars,
   // so at least 22 of the label survive); a whole-name token is ≤ 9 chars and never gets here.
   // The cut label loses any trailing '-'/'_' so the join never doubles a separator:
   // `rig-name-that-is-long-enough-donate100` → `rig-name-that-is-long-donate100`, not `…long--donate100`.
+  // Keeping the token intact matters more since design §18.2: the stored worker name is now the
+  // ONLY donation input (rewards.js reads it per share), so a cut token would change the money.
   if (worker_name.length > MAX_WORKER_NAME_LEN) {
     if (donation_percent !== null) {
       const label = dm[1] || '';
       const token = worker_name.slice(label.length);       // separator + donateN
-      donor_label = label.slice(0, MAX_WORKER_NAME_LEN - token.length).replace(/[-_]+$/, '');
-      worker_name = donor_label + token;
+      worker_name = label.slice(0, MAX_WORKER_NAME_LEN - token.length).replace(/[-_]+$/, '') + token;
     } else {
       worker_name = worker_name.slice(0, MAX_WORKER_NAME_LEN);
     }
   }
 
+  // `donation_percent` is informational (the login log line, the grammar tests): nothing stores
+  // it. The label in front of the token is only a rig name again — v1 captured it as a donor
+  // name, which design §18.1 #3 removed along with the field that carried it.
   return {
     grin_address: m[1] + m[2],
     worker_name,
-    donation_percent,
-    donor_label
+    donation_percent
   };
 }
 
@@ -333,8 +332,8 @@ module.exports = {
   C32_GRAPH_WEIGHT,
   shareCreditDifficulty,
   bech32ChecksumValid,   // exported for scripts/test-stratum-guards.js (BIP-173 vectors)
-  MAX_WORKER_NAME_LEN,   // the donor-name ceiling too (lib/donor-names.js) — one constant, not two
-  parseDonateToken,      // admin donors list: is this rig tagged? — same grammar as the login
+  MAX_WORKER_NAME_LEN,
+  parseDonateToken,      // THE donation input (rewards.js, per share) + every live reading — one grammar
   createJobNotification,
   createLoginResponse,
   createSubmitResponse,

@@ -376,7 +376,10 @@ function migrateWithdrawals() {
       // Signed payment proof JSON (see CREATE TABLE). Backfilled by
       // withdrawal-scheduler.backfillPaymentProofs(); older confirmed Tor rows get theirs too,
       // since the wallet keeps the proof for as long as it keeps the transaction.
-      payment_proof: 'TEXT DEFAULT NULL'
+      payment_proof: 'TEXT DEFAULT NULL',
+      // Why the row is parked in retry_scheduled (see CREATE TABLE). NULL on legacy rows = cause
+      // unknown, which the page renders with its generic retry wording, exactly as before.
+      retry_reason: 'TEXT DEFAULT NULL'
     };
     for (const [name, def] of Object.entries(additions)) {
       if (!have.has(name)) {
@@ -735,7 +738,12 @@ function createSchema() {
       -- sender_address, sender_sig), fetched from the Owner API once the payout is confirmed.
       -- NULL = not fetched yet; '' = the wallet holds no proof for this tx (the slatepack/
       -- nostr rail never requests one), so the backfill stops asking.
-      payment_proof TEXT DEFAULT NULL
+      payment_proof TEXT DEFAULT NULL,
+      -- Why the latest retry was scheduled, rewritten by every scheduleRetry(): 'pool_wallet_short'
+      -- when the POOL wallet could not cover the send (outputs tied up in payouts still settling),
+      -- NULL for everything else — overwhelmingly the miner's own listener not answering over Tor.
+      -- The account page words the two differently; a NULL is never shown as "pool busy".
+      retry_reason TEXT DEFAULT NULL
     )`,
 
     `CREATE INDEX IF NOT EXISTS idx_withdrawal_address ON withdrawals(grin_address, status)`,
@@ -953,9 +961,11 @@ function createSchema() {
     // ─── Incentives (Script 07 incentive features) ────────────────────────────
     // Per-address incentive state. Identity-ready (address-keyed) but register-free —
     // there is no account, the grin_address IS the identity.
-    // The donor_* columns (design §16.3, 2026-09-21) carry the optional public donor name a
-    // miner puts on the wall via `<name>-donateN`, plus its moderation state. See
-    // lib/donor-names.js for the capture rule and migrateMinerIncentives() for older DBs.
+    // The donor_* columns (design §16.3, 2026-09-21) held v1's donor name (captured from a
+    // `<name>-donateN` login) and its censor state. UNREAD since design §18 Part 3 — donor
+    // names are pre-moderated donor_requests rows now — and kept only because dropping a
+    // column is a later cleanup. donation_percent is dead too (§18.2). migrateMinerIncentives()
+    // still adds them to older DBs so both schemas stay identical.
     `CREATE TABLE IF NOT EXISTS miner_incentives (
       grin_address TEXT PRIMARY KEY REFERENCES miner_accounts(grin_address),
       join_bonus_paid INTEGER NOT NULL DEFAULT 0,
@@ -969,6 +979,40 @@ function createSchema() {
       donor_censor_word TEXT DEFAULT NULL,
       donor_censor_at INTEGER DEFAULT NULL,
       donor_censor_by INTEGER DEFAULT NULL
+    )`,
+
+    // ─── Donor profiles (design §18.4, 2026-09-24) — pre-moderated name + banner ────────
+    // A request LOG, not columns: every submission is a row and every decision a status change,
+    // so history and audit come free. The two PARTIAL unique indexes are the "one pending + one
+    // approved per (address, kind)" rule as a database fact — lib/donor-profiles.js relies on
+    // them and turns a constraint hit into a clean 409. `image` holds a banner's bytes while it
+    // is PENDING only (never web-reachable, backed up with pool.db) and is NULLed by every
+    // decision; an approved banner lives on disk as uploads/donors/<file>. `reason` is shown to
+    // the donor on their own account page. The v1 donor_* columns above are left alone.
+    `CREATE TABLE IF NOT EXISTS donor_requests (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      grin_address TEXT NOT NULL REFERENCES miner_accounts(grin_address),
+      kind         TEXT NOT NULL CHECK (kind IN ('name','banner')),
+      status       TEXT NOT NULL CHECK (status IN ('pending','approved','rejected','replaced','withdrawn','removed')),
+      name         TEXT,
+      image        BLOB,
+      file         TEXT,
+      mime TEXT, width INTEGER, height INTEGER, bytes INTEGER, sha256 TEXT,
+      submitted_at INTEGER NOT NULL DEFAULT (unixepoch()),
+      decided_at   INTEGER, decided_by INTEGER REFERENCES users(id),
+      reason       TEXT
+    )`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS uq_donor_req_pending  ON donor_requests(grin_address, kind) WHERE status = 'pending'`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS uq_donor_req_approved ON donor_requests(grin_address, kind) WHERE status = 'approved'`,
+    `CREATE INDEX        IF NOT EXISTS idx_donor_req_status  ON donor_requests(status, submitted_at)`,
+
+    // Addresses the operator has barred from SUBMITTING (§18.6). Blocking also withdraws the
+    // address's pending requests; it does not touch a live name/banner (that is a separate remove).
+    `CREATE TABLE IF NOT EXISTS donor_blocks (
+      grin_address TEXT PRIMARY KEY REFERENCES miner_accounts(grin_address),
+      blocked_at INTEGER NOT NULL DEFAULT (unixepoch()),
+      blocked_by INTEGER REFERENCES users(id),
+      reason TEXT
     )`,
 
     // One row per lottery draw. seed_height/seed_hash make the draw publicly verifiable:
@@ -1247,7 +1291,9 @@ function migrateLocations() {
 // Additive, non-destructive: add the donor-name columns (design §16.3, 2026-09-21) to an
 // existing miner_incentives table (older DBs predate them). All six default to NULL, which
 // is the "no name, no censor" state — so every existing donor row reads as a plain donateN
-// donor (masked address on the wall) until its owner sets a name through the ceremony.
+// donor (masked address on the wall). Since design §18 nothing writes them, and since §18
+// Part 3 nothing reads them either (names are pre-moderated donor_requests rows); they stay in
+// the schema until a later cleanup drops them.
 function migrateMinerIncentives() {
   try {
     const cols = db.prepare("PRAGMA table_info(miner_incentives)").all();

@@ -8,22 +8,43 @@
   <link rel="stylesheet" href="/admin/styles.css">
   <!-- settings.css for the Donation settings card (.form-section/.form-group/.helper-text) — the
        first data page to carry a settings form. Its .btn rule outranks pool.css's .btn-sm, so the
-       row actions below are .btn-icon (the panel's row-action convention), not text buttons. -->
+       donors-list row actions are .btn-icon (the panel's row-action convention); the queue's two
+       decision buttons are full .btn because they are the page's main action. -->
   <link rel="stylesheet" href="/admin/settings.css">
   <style>
     /* Page-local bits only; everything else is the shared bundle. */
-    .donor-name { font-weight: 600; }
+    .donor-name { font-weight: 600; overflow-wrap: anywhere; }
     .donor-none { color: var(--text-dim); font-style: italic; }
     .donor-state { display: flex; flex-wrap: wrap; gap: .3rem; align-items: center; margin-top: .25rem; }
     .worker-list { display: flex; flex-direction: column; gap: .15rem; font-size: .8rem; }
     .worker-list .w-tag { color: var(--accent); font-weight: 600; }
     .worker-list .w-off { color: var(--text-dim); }
     .rank-medal { font-size: 1rem; }
-    /* Operator list: one entry per line, monospace so a stray space or a look-alike glyph shows. */
+    /* Flag words: one entry per line, monospace so a stray space or a look-alike glyph shows. */
     #donor_name_blocklist { font-family: var(--font-mono); font-size: .82rem; min-height: 200px; }
     /* settings.css's .form-row is a 2-column grid; the ranking card has three fields. */
     .form-row.cols-3 { grid-template-columns: 1fr 1fr 1fr; }
     @media (max-width: 900px) { .form-row.cols-3 { grid-template-columns: 1fr; } }
+
+    /* Review queue. The requested name is the thing being judged, so it is big and set in the
+       mono face: a doubled space or an O-for-0 swap must be visible before it is approved. */
+    .req-name { font-family: var(--font-mono); font-size: 1.05rem; font-weight: 600; overflow-wrap: anywhere; }
+    .req-meta { font-size: .78rem; color: var(--text-dim); margin-top: .2rem; }
+    /* A banner is shown at its own aspect inside a bounded box (never stretched): width/height
+       attributes come from the stored dimensions, so the row does not jump when the image lands. */
+    .req-banner { display: block; max-width: min(100%, 420px); height: auto; border-radius: 4px;
+                  box-shadow: inset 0 0 0 1px var(--border); background: var(--bg); }
+    .req-thumb { display: block; max-width: 160px; height: auto; border-radius: 3px; margin-top: .3rem;
+                 box-shadow: inset 0 0 0 1px var(--border); }
+    .req-decide { display: flex; flex-direction: column; gap: .4rem; min-width: 220px; }
+    .req-decide input[type="text"] { font-size: .82rem; padding: .35rem .5rem; }
+    .req-decide .req-btns { display: flex; gap: .4rem; flex-wrap: wrap; }
+    .req-reason-note { font-size: .72rem; color: var(--text-dim); }
+    .toolbar { display: flex; gap: .6rem; align-items: center; margin-bottom: .8rem; flex-wrap: wrap; }
+    .toolbar label { font-size: .85rem; margin-bottom: 0; }
+    .toolbar select { font-size: .85rem; padding: .3rem .5rem; }
+    /* The reason dialog reuses the panel's .modal-overlay/.modal (pool.css), like stepup.js. */
+    #reason-dialog .modal { max-width: 460px; }
   </style>
 </head>
 <body>
@@ -32,26 +53,75 @@
   <div class="container">
     <section>
       <h2>
+        Review queue
+        <span id="queue-summary" style="font-size:.82rem;color:var(--text-dim);font-weight:400;margin-left:.8rem;"></span>
+      </h2>
+      <p class="helper-text" style="margin:0 0 .8rem;">
+        Donor names and banners are set by donors on their account page (both ownership proofs,
+        and only after a first donation). <strong>Nothing here is public until you approve it.</strong>
+        Flags are hints, never decisions: a reserved word or the pool's name, a word from your flag
+        list, or a name equal to another donor's approved one (impersonation). Approving a name or
+        banner replaces the donor's current one. All dates are UTC.
+      </p>
+
+      <div class="toolbar">
+        <label for="queue-status">Show</label>
+        <select id="queue-status" class="settings-skip" onchange="loadQueue(true)">
+          <option value="pending">Waiting for review</option>
+          <option value="approved">Approved (live)</option>
+          <option value="rejected">Rejected</option>
+          <option value="removed">Removed</option>
+          <option value="withdrawn">Withdrawn by the donor or by a block</option>
+          <option value="replaced">Replaced</option>
+        </select>
+        <button type="button" class="btn btn-secondary" onclick="loadQueue()">Refresh</button>
+      </div>
+
+      <div class="card" style="padding:0;">
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Submitted</th>
+                <th>Donor</th>
+                <th>Request</th>
+                <th>Flags</th>
+                <th>Decision</th>
+              </tr>
+            </thead>
+            <tbody id="queue-tbody">
+              <tr class="loading-row"><td colspan="5"><span class="spinner"></span>Loading…</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <!-- Initial hidden state is INLINE; the .error-msg/.success-msg classes must not carry
+           display:none or flash()'s reveal (style.display = '') is a no-op. -->
+      <p class="error-msg" id="queue-msg" style="display:none;margin-top:.6rem;"></p>
+    </section>
+
+    <section>
+      <h2>
         Donors
         <span id="donor-summary" style="font-size:.82rem;color:var(--text-dim);font-weight:400;margin-left:.8rem;"></span>
       </h2>
       <p class="helper-text" style="margin:0 0 .8rem;">
-        Every address that has donated to the prize pool, carries a live <code>donateN</code> tag, or
-        has a donor name on file. A donor's name is the label of their tagged rig
-        (<code>yourbrand-donate10</code> → <code>yourbrand</code>), captured only when the tag is set
-        from zero. Censoring is per <em>address</em> and sticky — later renames stay hidden until you
-        un-censor, which also tells the auto-list to leave that address alone. Rank and score are what
-        the public wall ranks by (GRIN in the window × loyalty). All dates are UTC.
+        Every address that has donated to the prize pool, has a rig mining with a live
+        <code>donateN</code> tag, or has a donor profile on file. <em>Remove</em> takes a live name or
+        banner off the wall (the reason you give is shown to the donor). <em>Block</em> stops an address
+        from submitting and withdraws anything it has waiting; a live name or banner stays until you
+        remove it. Rank and score are what the public wall ranks by (GRIN in the window × loyalty).
       </p>
 
       <!-- The address/name filter lives in the AdminTable tools bar; only the state filter is here. -->
-      <div style="display:flex;gap:.6rem;align-items:center;margin-bottom:.8rem;flex-wrap:wrap;">
-        <label for="donor-filter" style="font-size:.85rem;margin-bottom:0;">Show</label>
-        <select id="donor-filter" class="settings-skip" onchange="filterDonors(true)" style="font-size:.85rem;padding:.3rem .5rem;">
+      <div class="toolbar">
+        <label for="donor-filter">Show</label>
+        <select id="donor-filter" class="settings-skip" onchange="filterDonors(true)">
           <option value="all">All</option>
-          <option value="named">With a name</option>
-          <option value="censored">Censored (auto or admin)</option>
-          <option value="new">New this week</option>
+          <option value="profile">With a live name or banner</option>
+          <option value="pending">With a request waiting</option>
+          <option value="donating">Donating now</option>
+          <option value="blocked">Blocked</option>
         </select>
       </div>
 
@@ -63,7 +133,7 @@
                 <th>#</th>
                 <th>Score</th>
                 <th>Address</th>
-                <th>Donor name</th>
+                <th>Profile</th>
                 <th>Now</th>
                 <th>Lifetime ツ</th>
                 <th>In window ツ</th>
@@ -79,8 +149,6 @@
           </table>
         </div>
       </div>
-      <!-- Initial hidden state is INLINE; the .error-msg/.success-msg classes must not carry
-           display:none or flash()'s reveal (style.display = '') is a no-op. -->
       <p class="error-msg" id="donor-msg" style="display:none;margin-top:.6rem;"></p>
     </section>
 
@@ -88,8 +156,7 @@
       <h2>Donation settings</h2>
       <p class="helper-text" style="margin:0 0 1rem;">
         These are keys of the <em>incentives</em> section (saving is step-up gated, like the
-        Incentives page). Saving a changed word list re-scans every stored name and reports the
-        counts here. <em>Restore defaults</em> on Settings → Incentives resets these too.
+        Incentives page). <em>Restore defaults</em> on Settings → Incentives resets these too.
       </p>
       <div id="donation-settings">
         <div class="settings-form">
@@ -100,10 +167,10 @@
               <label for="allow_miner_donations">Allow miner donations (<code>donateN</code> worker tag)</label>
             </div>
             <div class="helper-text">
-              Miners donate N % of their payout by naming a worker <code>donate10</code> (10 %) or
-              <code>yourbrand-donate10</code>. N is clamped 0–100; <code>donate0</code> pauses. Off →
-              stored percentages are dormant: nothing is taken, the wall shows every donor as paused,
-              and no name is shown.
+              A rig named <code>rig01-donate10</code> (or just <code>donate10</code>) donates 10 % of what
+              <em>that rig's</em> shares earn; the miner's other rigs are unaffected. N is 0–100. Off →
+              every tag is ignored: nothing is taken, the wall shows every donor as paused, and
+              donor profiles cannot be changed.
             </div>
             <div class="form-group" style="margin-top:.8rem;">
               <label for="donation_address">Public donation address (Slatepack)</label>
@@ -113,32 +180,29 @@
           </div>
 
           <div class="form-section">
-            <h4 class="sub-title">Donor names</h4>
+            <h4 class="sub-title">Donor profiles</h4>
             <div class="form-group">
-              <label for="donor_name_blocklist">Auto-censor word list</label>
+              <label for="donor_name_blocklist">Flag words — highlighted in the review queue</label>
               <textarea id="donor_name_blocklist" name="donor_name_blocklist" rows="10" spellcheck="false"></textarea>
               <div class="helper-text">
-                One entry per line, matched <em>inside</em> the name after removing <code>-</code>/<code>_</code>
-                and the leet digits 0 1 3 4 5 7 (so <code>a55-h0le</code> matches <code>asshole</code>).
-                Substring matching means false positives (<code>classic</code> contains <code>ass</code>) —
-                un-censor those above and they stay allowed. Ten fixed impersonation words (admin,
-                official, operator, support, staff, pool, grinium, prize, jackpot, winner) plus your pool
-                name are always applied whatever this list says. Saving re-scans every stored name.
+                One entry per line, matched <em>inside</em> a requested name after removing spaces and
+                <code>- _ . &amp; '</code> and mapping the leet digits 0 1 3 4 5 7 (so <code>a55-h0le</code>
+                matches <code>asshole</code>). A hit only puts a flag on the queued name — you still decide,
+                so false positives (<code>classic</code> contains <code>ass</code>) cost nothing. Ten fixed
+                impersonation words (admin, official, operator, support, staff, pool, grinium, prize,
+                jackpot, winner) plus your pool name are always flagged.
               </div>
             </div>
             <div class="form-row">
               <div class="form-group">
-                <label for="donor_censored_display">Censored name shows as</label>
-                <select id="donor_censored_display" name="donor_censored_display">
-                  <option value="masked">Masked address (default)</option>
-                  <option value="marker">&lt;censored-donor&gt; marker</option>
-                </select>
-                <div class="helper-text">The masked address is the quiet choice — a visible marker is the reaction a troll wants.</div>
+                <label for="donor_banner_slots">Banner slots</label>
+                <input type="number" id="donor_banner_slots" name="donor_banner_slots" min="0" max="10" step="1">
+                <div class="helper-text">How many of the top league donors show their approved banner on the donate page. 0 = banners off (they are still reviewed and kept). Maximum 10.</div>
               </div>
               <div class="form-group">
-                <label for="donor_name_expiry_months">Name expiry (months)</label>
+                <label for="donor_name_expiry_months">Profile expiry (months)</label>
                 <input type="number" id="donor_name_expiry_months" name="donor_name_expiry_months" min="0" max="120" step="1">
-                <div class="helper-text">Masked address again this many months after the last donation (or the capture, whichever is later). 0 = never.</div>
+                <div class="helper-text">An approved name or banner stops showing this many months after the later of the last donation and its approval. 0 = never.</div>
               </div>
             </div>
           </div>
@@ -178,6 +242,24 @@
   </div>
 </main>
 
+<!-- In-page reason dialog for Remove / Block (never window.prompt(): browsers throttle a native
+     dialog that follows another, and the step-up password dialog may follow this one). Static
+     markup; the title and help text are set with textContent. -->
+<div class="modal-overlay" id="reason-dialog" role="dialog" aria-modal="true" aria-labelledby="reason-title">
+  <form class="modal" id="reason-form" novalidate>
+    <h3 id="reason-title">Reason</h3>
+    <p class="helper-text dim" id="reason-body" style="margin:0 0 1rem;white-space:pre-line;overflow-wrap:anywhere;"></p>
+    <div class="form-group">
+      <label for="reason-input" id="reason-label">Reason (optional)</label>
+      <input type="text" id="reason-input" class="settings-skip" maxlength="200" autocomplete="off">
+    </div>
+    <div class="modal-actions">
+      <button type="button" class="btn btn-outline" id="reason-cancel">Cancel</button>
+      <button type="submit" class="btn" id="reason-submit">Confirm</button>
+    </div>
+  </form>
+</div>
+
 <script src="/js/auth.js"></script>
 <script src="/js/api.js"></script>
 <script src="/admin/admin-shell.js"></script>
@@ -186,11 +268,12 @@
 let _allDonors = [];
 let _donationsActive = true;
 let _windowDays = 365;
+let _bannerSlots = 5;
 
 // Auth gate (httpOnly-cookie aware): redirects to /login.html if not an admin, else wires
 // up the topbar username + Logout. Pool name + testnet banner are handled by admin-shell.js.
-// stepup.js provides adminFetch() for the step-up-gated censor/un-censor actions and the
-// settings save (the incentives section is step-up gated server-side).
+// stepup.js provides adminFetch() for every step-up-gated decision and the settings save
+// (the incentives section is step-up gated server-side).
 API.guardAdminPage();
 
 function escHtml(s) {
@@ -199,41 +282,283 @@ function escHtml(s) {
 function fmtGrin(v) { return (Number(v) || 0).toFixed(4); }
 function fmtDate(t) {
   if (!t) return '—';
-  return new Date(t * 1000).toISOString().slice(0, 10);   // UTC, stated once on the page
+  return new Date(t * 1000).toISOString().slice(0, 10);   // UTC, stated once per section
 }
+function fmtDateTime(t) {
+  if (!t) return '—';
+  return new Date(t * 1000).toISOString().slice(0, 16).replace('T', ' ');
+}
+function fmtKb(b) { return b ? (Math.round(b / 102.4) / 10) + ' KB' : '—'; }
 function shortAddr(a) {
   a = String(a || '');
   return a.length > 22 ? a.slice(0, 12) + '…' + a.slice(-7) : a;
 }
+// data-copy + this.dataset, NOT a value spliced into a JS string literal (audit §J14).
+function addrButton(a) {
+  const addr = escHtml(a);
+  return `<button type="button" class="addr-copy" data-copy="${addr}" ` +
+    `data-tip="${addr}&#10;Click to copy" aria-label="Copy address ${escHtml(shortAddr(a))}">` +
+    `${escHtml(shortAddr(a))}</button>`;
+}
+// Only a URL the server could have produced for an approved banner (defence in depth).
+function bannerUrl(u) {
+  return /^\/uploads\/donors\/[0-9a-f]{16}\.(png|jpg|gif)$/.test(String(u || '')) ? u : null;
+}
 
-// The state badge per design §16.8. `renamed_while_censored` is a second badge beside
-// admin-censored — it is the signal that the censor is doing its job (the name changed and
-// stayed hidden), not a new state.
-function stateBadges(d) {
-  const b = [];
-  if (d.donor_censor === 'admin') {
-    b.push('<span class="badge badge-error" title="Hidden by an admin — sticky across renames">admin-censored</span>');
-    if (d.renamed_while_censored) {
-      b.push('<span class="badge badge-error" title="The name changed after the censor and is still hidden">renamed while censored</span>');
-    }
-  } else if (d.donor_censor === 'auto') {
-    b.push(`<span class="badge badge-warn" title="Matched the word list — un-censor to allow this address">auto: &quot;${escHtml(d.donor_censor_word || '?')}&quot;</span>`);
-  } else if (d.donor_censor === 'allow') {
-    b.push('<span class="badge badge-ok" title="Admin override — the word list skips this address">allowed</span>');
-  } else if (d.donor_name) {
-    b.push('<span class="badge badge-ok">ok</span>');
+function flashInto(id, msg, isErr) {
+  const el = document.getElementById(id);
+  el.textContent = msg;
+  el.className = isErr ? 'error-msg' : 'success-msg';
+  el.style.display = '';
+  setTimeout(() => { el.style.display = 'none'; }, isErr ? 9000 : 6000);
+}
+
+// Every write: adminFetch (step-up aware, in-page password dialog), the SERVER's error text
+// on a refusal (§J14), then a reload of both lists — a decision changes the queue AND the list.
+async function postAction(url, body, okMsg, msgId) {
+  try {
+    const res = await adminFetch(url, {
+      method: 'POST', credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body || {})
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
+    flashInto(msgId, okMsg + (data.warning ? ` Warning: ${data.warning}` : ''), !!data.warning);
+    loadQueue();
+    loadDonors();
+    return true;
+  } catch (err) {
+    flashInto(msgId, err.message, true);
+    if (/already been decided/.test(err.message)) loadQueue();
+    return false;
   }
-  if (d.is_new) b.push('<span class="badge badge-warn" title="Captured within the last 7 days">NEW</span>');
-  return b.join(' ');
+}
+
+// ── Reason dialog ───────────────────────────────────────────────────────────────────
+// Resolves the typed reason ('' allowed) on Confirm, or null on Cancel / Escape / a click on
+// the backdrop — the only ways to get null, so null really is the operator's decision.
+function askReason({ title, body, label, confirmText, danger }) {
+  const ov = document.getElementById('reason-dialog');
+  const form = document.getElementById('reason-form');
+  const input = document.getElementById('reason-input');
+  const submit = document.getElementById('reason-submit');
+  document.getElementById('reason-title').textContent = title;
+  document.getElementById('reason-body').textContent = body;
+  document.getElementById('reason-label').textContent = label;
+  submit.textContent = confirmText || 'Confirm';
+  submit.className = danger ? 'btn btn-danger' : 'btn';
+  input.value = '';
+  return new Promise((resolve) => {
+    const done = (v) => {
+      ov.classList.remove('open');
+      form.removeEventListener('submit', onSubmit);
+      document.getElementById('reason-cancel').removeEventListener('click', onCancel);
+      ov.removeEventListener('click', onBackdrop);
+      document.removeEventListener('keydown', onKey);
+      resolve(v);
+    };
+    const onSubmit = (e) => { e.preventDefault(); done(input.value.trim()); };
+    const onCancel = () => done(null);
+    const onBackdrop = (e) => { if (e.target === ov) done(null); };
+    const onKey = (e) => { if (e.key === 'Escape') done(null); };
+    form.addEventListener('submit', onSubmit);
+    document.getElementById('reason-cancel').addEventListener('click', onCancel);
+    ov.addEventListener('click', onBackdrop);
+    document.addEventListener('keydown', onKey);
+    ov.classList.add('open');
+    input.focus();
+  });
+}
+
+// ── Review queue ────────────────────────────────────────────────────────────────────
+let _queueStatus = 'pending';
+// A reason typed into a queue row must survive a re-render (a search keystroke or page change
+// repaints the rows), so the inputs write through to this map and the row reads it back.
+const _reasons = new Map();
+
+function flagBadges(r) {
+  if (r.kind !== 'name') return '<span class="donor-none">—</span>';
+  if (!r.flags || !r.flags.length) return '<span class="badge badge-ok">no flags</span>';
+  return r.flags.map(f => {
+    if (f.type === 'reserved') {
+      return `<span class="badge badge-error" title="A fixed impersonation word or the pool's own name">reserved: &quot;${escHtml(f.word)}&quot;</span>`;
+    }
+    if (f.type === 'word') {
+      return `<span class="badge badge-warn" title="Matches your flag-word list">flag word: &quot;${escHtml(f.word)}&quot;</span>`;
+    }
+    if (f.type === 'same_as_donor') {
+      const who = (f.addresses || []).map(shortAddr).join(', ');
+      return `<span class="badge badge-warn" title="Another address already has this approved name: ${escHtml((f.addresses || []).join(' '))}">same as an approved donor (${escHtml(who)})</span>`;
+    }
+    return '';
+  }).join(' ');
+}
+
+function requestCell(r) {
+  if (r.kind === 'name') {
+    const cur = r.current && r.current.name != null
+      ? `<div class="req-meta">replaces the live name <span class="donor-name">${escHtml(r.current.name)}</span></div>` : '';
+    return `<span class="badge badge-dim">name</span> <span class="req-name">${escHtml(r.name)}</span>${cur}`;
+  }
+  const w = Number(r.width) || 0, h = Number(r.height) || 0;
+  // A plain same-origin src (design §18.11 Part 3 #1): the httpOnly session cookie rides along,
+  // and every way of viewing the image keeps the route's own headers — the stored mime, nosniff
+  // and a sandbox CSP — which an object URL copy would drop. No img-src widening is needed.
+  const img = r.has_image
+    ? `<img class="req-banner" data-req-img="${escHtml(String(r.id))}" alt="Banner request #${escHtml(String(r.id))}" ` +
+      `src="/api/admin/donors/requests/${encodeURIComponent(String(r.id))}/image" ` +
+      `${w && h ? `width="${w}" height="${h}"` : ''}>`
+    : '<span class="donor-none">image discarded after the decision</span>';
+  const cur = r.current && bannerUrl(r.current.url)
+    ? `<div class="req-meta">replaces the <a href="${escHtml(bannerUrl(r.current.url))}" target="_blank" rel="noopener">live banner</a></div>` : '';
+  return `<span class="badge badge-dim">banner</span>
+    <div style="margin-top:.35rem;">${img}</div>
+    <div class="req-meta">${w} × ${h} px · ${escHtml(fmtKb(r.bytes))} · ${escHtml(r.mime || '?')}</div>${cur}`;
+}
+
+function donorCell(r) {
+  const rank = r.rank ? `league #${r.rank}` : 'not in the league window';
+  return `${addrButton(r.address)}
+    <div class="req-meta">${escHtml(rank)} · ${fmtGrin(r.lifetime_donated)} ツ lifetime</div>
+    ${r.blocked ? '<div class="donor-state"><span class="badge badge-error">blocked</span></div>' : ''}`;
+}
+
+function decisionCell(r) {
+  const id = escHtml(String(r.id));
+  if (r.status === 'pending') {
+    const val = escHtml(_reasons.get(String(r.id)) || '');
+    return `<div class="req-decide">
+      <input type="text" class="settings-skip" maxlength="200" placeholder="Reason for a rejection (optional)"
+             aria-label="Rejection reason for request ${id}" data-reason-for="${id}" value="${val}">
+      <span class="req-reason-note">The reason is shown to the donor on their account page, which anyone holding the address can open.</span>
+      <div class="req-btns">
+        <button type="button" class="btn btn-primary" data-id="${id}" onclick="approveRequest(this.dataset.id)">Approve</button>
+        <button type="button" class="btn btn-danger" data-id="${id}" onclick="rejectRequest(this.dataset.id)">Reject</button>
+      </div>
+    </div>`;
+  }
+  const badge = { approved: 'badge-ok', rejected: 'badge-error', removed: 'badge-error' }[r.status] || 'badge-dim';
+  const by = r.decided_by ? ` · admin #${escHtml(String(r.decided_by))}` : '';
+  return `<span class="badge ${badge}">${escHtml(r.status)}</span>
+    <div class="req-meta">${escHtml(fmtDateTime(r.decided_at))} UTC${by}</div>
+    ${r.reason ? `<div class="req-meta">reason: ${escHtml(r.reason)}</div>` : ''}`;
+}
+
+const queueTable = AdminTable.create({
+  tbody: 'queue-tbody',
+  search: 'Filter by address or name…',
+  empty: 'Nothing to review. A request appears here when a donor submits a name or banner.',
+  text: r => (r.address || '') + ' ' + (r.name || '') + ' ' + r.kind + ' ' +
+             (r.flags || []).map(f => f.word || f.type).join(' '),
+  row: r => `<tr>
+      <td class="mono" style="white-space:nowrap;">${escHtml(fmtDateTime(r.submitted_at))}</td>
+      <td>${donorCell(r)}</td>
+      <td>${requestCell(r)}</td>
+      <td><div class="donor-state">${flagBadges(r)}</div></td>
+      <td>${decisionCell(r)}</td>
+    </tr>`,
+  onRender: tbody => {
+    tbody.querySelectorAll('input[data-reason-for]').forEach(inp => {
+      inp.addEventListener('input', () => _reasons.set(inp.dataset.reasonFor, inp.value));
+    });
+    // Attached in the same task that painted the rows; an image's error event is always queued
+    // for later, so none can fire before its listener exists.
+    tbody.querySelectorAll('img[data-req-img]').forEach(img => {
+      img.addEventListener('error', () => imageFailed(img), { once: true });
+    });
+  }
+});
+
+// A preview that cannot load (the request was decided meanwhile, the file is gone, the session
+// expired) becomes a line of text instead of a broken-image icon.
+function imageFailed(img) {
+  if (!img.isConnected) return;
+  img.replaceWith(Object.assign(document.createElement('span'), {
+    className: 'donor-none',
+    textContent: 'preview unavailable — reload the queue (the request may have been decided, or your session expired)'
+  }));
+}
+
+async function loadQueue(reset) {
+  const sel = document.getElementById('queue-status');
+  _queueStatus = sel.value;
+  try {
+    const data = await API.get('/api/admin/donors/requests?status=' + encodeURIComponent(_queueStatus));
+    // API.get (Auth.fetch) hands back the parsed ERROR body on a non-2xx — a 429 is JSON too.
+    if (!data || data.success !== true || !Array.isArray(data.requests)) {
+      queueTable.setError((data && data.error) || 'Could not load the review queue');
+      return;
+    }
+    const ids = new Set(data.requests.map(r => String(r.id)));
+    for (const id of [..._reasons.keys()]) if (!ids.has(id)) _reasons.delete(id);
+    document.getElementById('queue-summary').textContent = _queueStatus === 'pending'
+      ? `${data.total} waiting for review`
+      : `${data.total} ${_queueStatus}` + (data.total > data.requests.length ? ` (newest ${data.requests.length} shown)` : '');
+    queueTable.setRows(data.requests, { reset: reset === true });
+  } catch (err) {
+    queueTable.setError(err.message);
+  }
+}
+
+async function approveRequest(id) {
+  await postAction('/api/admin/donors/requests/' + encodeURIComponent(id) + '/approve', {},
+                   'Approved — it is live now.', 'queue-msg');
+}
+async function rejectRequest(id) {
+  const reason = _reasons.get(String(id)) || '';
+  const ok = await postAction('/api/admin/donors/requests/' + encodeURIComponent(id) + '/reject', { reason },
+                              'Rejected' + (reason ? ' — the donor will see your reason.' : '.'), 'queue-msg');
+  if (ok) _reasons.delete(String(id));
+}
+
+// ── Donors list ─────────────────────────────────────────────────────────────────────
+
+function profileCell(d) {
+  const parts = [];
+  if (d.name && d.name.text != null) {
+    parts.push(`<span class="donor-name">${escHtml(d.name.text)}</span>`);
+  } else {
+    parts.push('<span class="donor-none">masked address</span>');
+  }
+  const b = [];
+  if (d.name) b.push(d.name.state === 'expired'
+    ? '<span class="badge badge-dim" title="Approved, but aged out — shows again after the next donation">name expired</span>'
+    : '<span class="badge badge-ok">name live</span>');
+  if (d.banner) b.push(d.banner.state === 'expired'
+    ? '<span class="badge badge-dim">banner expired</span>'
+    : (d.rank && d.rank <= _bannerSlots
+        ? '<span class="badge badge-ok" title="In the banner slots — shown on the wall">banner showing</span>'
+        : `<span class="badge badge-dim" title="Approved; shows while the donor is in the top ${escHtml(String(_bannerSlots))}">banner (not in top ${escHtml(String(_bannerSlots))})</span>`));
+  if (d.pending && d.pending.name) b.push('<span class="badge badge-warn">name waiting</span>');
+  if (d.pending && d.pending.banner) b.push('<span class="badge badge-warn">banner waiting</span>');
+  if (d.blocked) b.push(`<span class="badge badge-error" title="${escHtml('Blocked ' + fmtDate(d.blocked.at) + (d.blocked.reason ? ' — ' + d.blocked.reason : ''))}">blocked</span>`);
+  const url = d.banner && bannerUrl(d.banner.url);
+  const thumb = url
+    ? `<img class="req-thumb" src="${escHtml(url)}" alt="Banner of ${escHtml(d.name && d.name.text ? d.name.text : shortAddr(d.address))}" loading="lazy"` +
+      `${d.banner.width && d.banner.height ? ` width="${Number(d.banner.width)}" height="${Number(d.banner.height)}"` : ''}>`
+    : '';
+  return `${parts.join('')}<div class="donor-state">${b.join(' ')}</div>${thumb}`;
+}
+
+function nowCell(d) {
+  if (!_donationsActive) return '<span class="badge badge-dim" title="Miner donations are switched off">off</span>';
+  if (!(d.rigs_donating > 0)) {
+    return `<span class="badge badge-dim" title="${escHtml(String(d.rigs_online || 0))} rig(s) online, none tagged">paused</span>`;
+  }
+  const pct = d.pct_min === d.pct_max ? `${d.pct_max} %` : `${d.pct_min}–${d.pct_max} %`;
+  return `<span class="badge badge-ok">${escHtml(pct)}</span>
+    <div class="req-meta">${escHtml(String(d.rigs_donating))} of ${escHtml(String(d.rigs_online))} rigs</div>`;
 }
 
 function workersCell(ws) {
   if (!ws || !ws.length) return '<span class="donor-none">none in 24 h</span>';
   const shown = ws.slice(0, 6).map(w => {
     const dot = w.online ? '<span class="dot dot-green"></span>' : '<span class="dot dot-red"></span>';
-    const cls = w.tagged ? 'w-tag' : (w.online ? '' : 'w-off');
-    const tip = w.tagged ? ' title="This rig carries the donate tag — its label is the donor name"' : '';
-    return `<span class="${cls}"${tip}>${dot}${escHtml(w.name)}${w.tagged ? ' 🏷' : ''}</span>`;
+    const tagged = w.donate_percent != null && w.donate_percent > 0;
+    const cls = tagged ? 'w-tag' : (w.online ? '' : 'w-off');
+    const tip = tagged ? ` title="This rig donates ${escHtml(String(w.donate_percent))} % of what it earns"` : '';
+    return `<span class="${cls}"${tip}>${dot}${escHtml(w.name)}${tagged ? ' 🏷' : ''}</span>`;
   });
   if (ws.length > 6) shown.push(`<span class="w-off">+${ws.length - 6} more</span>`);
   return `<div class="worker-list">${shown.join('')}</div>`;
@@ -244,39 +569,29 @@ function workersCell(ws) {
 const donorsTable = AdminTable.create({
   tbody: 'donors-tbody',
   search: 'Filter by address or name…',
-  empty: 'No donors yet — a row appears when a miner sets a donate tag or a donation is debited.',
+  empty: 'No donors yet — a row appears when a miner tags a rig with donateN or a donation is debited.',
   note: 'Donors are kept permanently (the ledger behind them is rolled up daily, never deleted). ' +
-        'Workers are read from the 24 h share window.',
-  text: d => (d.address || '') + ' ' + (d.donor_name || '') + ' ' + (d.donor_censor_word || ''),
+        'Workers are read from the 24 h share window. Dates are UTC.',
+  text: d => (d.address || '') + ' ' + (d.name && d.name.text ? d.name.text : ''),
   row: d => {
-    // data-addr + this.dataset, NOT a value spliced into a JS string literal (audit §J14).
     const addr = escHtml(d.address);
-    const addrCell = `<button type="button" class="addr-copy" data-copy="${addr}" ` +
-      `data-tip="${addr}&#10;Click to copy" aria-label="Copy address ${escHtml(shortAddr(d.address))}">` +
-      `${escHtml(shortAddr(d.address))}</button>`;
     const medal = d.rank === 1 ? '🥇' : d.rank === 2 ? '🥈' : d.rank === 3 ? '🥉' : '';
     const rankCell = d.rank
       ? (medal ? `<span class="rank-medal">${medal}</span>` : String(d.rank))
       : '<span class="donor-none" title="Nothing donated inside the ranking window">—</span>';
-    const nameCell = d.donor_name
-      ? `<span class="donor-name">${escHtml(d.donor_name)}</span>`
-      : '<span class="donor-none">masked address</span>';
-    const nowCell = !_donationsActive
-      ? '<span class="badge badge-dim" title="Miner donations are switched off">off</span>'
-      : (d.current_percent > 0
-          ? `<span class="badge badge-ok">${escHtml(String(d.current_percent))} %</span>`
-          : '<span class="badge badge-dim">paused</span>');
-    const canCensor = d.donor_censor !== 'admin';
-    const canAllow  = d.donor_censor !== 'allow';
+    const live = d.banner && d.banner.state;
     const actions =
-      (canCensor ? `<button class="btn-icon btn-icon-danger" data-addr="${addr}" onclick="censorDonor(this.dataset.addr)" data-tip="Censor this address (sticky)" aria-label="Censor this address">🚫</button>` : '') +
-      (canAllow  ? `<button class="btn-icon" data-addr="${addr}" onclick="uncensorDonor(this.dataset.addr)" data-tip="Allow this address (auto-list override)" aria-label="Allow this address">✅</button>` : '');
+      (d.name ? `<button class="btn-icon btn-icon-danger" data-addr="${addr}" data-kind="name" onclick="removeLive(this.dataset.addr, this.dataset.kind)" data-tip="Remove the live name" aria-label="Remove the live name">✂️</button>` : '') +
+      (live ? `<button class="btn-icon btn-icon-danger" data-addr="${addr}" data-kind="banner" onclick="removeLive(this.dataset.addr, this.dataset.kind)" data-tip="Remove the live banner" aria-label="Remove the live banner">🖼</button>` : '') +
+      (d.blocked
+        ? `<button class="btn-icon" data-addr="${addr}" onclick="unblockDonor(this.dataset.addr)" data-tip="Unblock — allow profile submissions again" aria-label="Unblock this address">✅</button>`
+        : `<button class="btn-icon btn-icon-danger" data-addr="${addr}" onclick="blockDonor(this.dataset.addr)" data-tip="Block profile submissions from this address" aria-label="Block this address">🚫</button>`);
     return `<tr>
       <td class="mono">${rankCell}</td>
       <td class="mono" title="${escHtml(fmtGrin(d.in_window_donated))} × ${escHtml(String(d.multiplier))}">${fmtGrin(d.score)}</td>
-      <td>${addrCell}</td>
-      <td>${nameCell}<div class="donor-state">${stateBadges(d)}</div></td>
-      <td>${nowCell}</td>
+      <td>${addrButton(d.address)}</td>
+      <td>${profileCell(d)}</td>
+      <td>${nowCell(d)}</td>
       <td class="mono">${fmtGrin(d.lifetime_donated)}</td>
       <td class="mono">${fmtGrin(d.in_window_donated)}</td>
       <td class="mono">${d.active_months || 0} · ×${escHtml(String(d.multiplier))}</td>
@@ -290,7 +605,6 @@ const donorsTable = AdminTable.create({
 async function loadDonors() {
   try {
     const data = await API.get('/api/admin/donors?limit=500');
-    // API.get (Auth.fetch) hands back the parsed ERROR body on a non-2xx — a 429 is JSON too.
     // `null`/error and "no donors" are different facts; never render the first as the second.
     if (!data || data.success !== true || !Array.isArray(data.donors)) {
       donorsTable.setError((data && data.error) || 'Could not load donors');
@@ -299,12 +613,13 @@ async function loadDonors() {
     _allDonors = data.donors;
     _donationsActive = data.donations_active !== false;
     _windowDays = Number(data.window_days) || 0;
-    const named    = _allDonors.filter(d => d.donor_name).length;
-    const censored = _allDonors.filter(d => d.donor_censor === 'auto' || d.donor_censor === 'admin').length;
-    const fresh    = _allDonors.filter(d => d.is_new).length;
+    _bannerSlots = Number.isFinite(Number(data.banner_slots)) ? Number(data.banner_slots) : 5;
+    const withProfile = _allDonors.filter(d => d.name || d.banner).length;
+    const blocked = _allDonors.filter(d => d.blocked).length;
+    const donating = _allDonors.filter(d => d.rigs_donating > 0).length;
     document.getElementById('donor-summary').textContent =
-      `${data.count} total · ${named} named · ${censored} censored · ${fresh} new this week · ` +
-      `window ${_windowDays > 0 ? _windowDays + ' d' : 'lifetime'}`;
+      `${data.count} total · ${withProfile} with a profile · ${donating} donating now · ${blocked} blocked · ` +
+      `window ${_windowDays > 0 ? _windowDays + ' d' : 'lifetime'} · banner slots ${_bannerSlots}`;
     filterDonors();
   } catch (err) {
     donorsTable.setError(err.message);
@@ -316,46 +631,44 @@ async function loadDonors() {
 function filterDonors(reset) {
   const mode = document.getElementById('donor-filter').value;
   let rows = _allDonors;
-  if (mode === 'named')    rows = rows.filter(d => !!d.donor_name);
-  if (mode === 'censored') rows = rows.filter(d => d.donor_censor === 'auto' || d.donor_censor === 'admin');
-  if (mode === 'new')      rows = rows.filter(d => d.is_new);
+  if (mode === 'profile')  rows = rows.filter(d => d.name || d.banner);
+  if (mode === 'pending')  rows = rows.filter(d => d.pending && (d.pending.name || d.pending.banner));
+  if (mode === 'donating') rows = rows.filter(d => d.rigs_donating > 0);
+  if (mode === 'blocked')  rows = rows.filter(d => !!d.blocked);
   donorsTable.setRows(rows, { reset: reset === true });   // server order = league order
 }
 
-function flashInto(id, msg, isErr) {
-  const el = document.getElementById(id);
-  el.textContent = msg;
-  el.className = isErr ? 'error-msg' : 'success-msg';
-  el.style.display = '';
-  setTimeout(() => { el.style.display = 'none'; }, isErr ? 9000 : 6000);
+async function removeLive(addr, kind) {
+  const reason = await askReason({
+    title: kind === 'banner' ? 'Remove the live banner' : 'Remove the live name',
+    body: `${addr}\n\nIt comes off the donor wall now. The donor can submit a new one, which goes through review again.`,
+    label: 'Reason (optional) — shown to the donor on their public account page',
+    confirmText: 'Remove', danger: true
+  });
+  if (reason === null) return;
+  await postAction('/api/admin/donors/' + encodeURIComponent(addr) + '/remove', { kind, reason },
+                   kind === 'banner' ? 'Banner removed.' : 'Name removed.', 'donor-msg');
 }
-function flash(msg, isErr) { flashInto('donor-msg', msg, isErr); }
-
-async function censorDonor(addr) {
-  if (!confirm(`Censor the donor name on ${addr}?\n\nThe name (and every later rename on this address) stays hidden on the wall until you un-censor it. The donation itself is unaffected.`)) return;
-  await moderate(addr, 'censor', 'Donor name censored.');
+async function blockDonor(addr) {
+  const reason = await askReason({
+    title: 'Block donor-profile submissions',
+    body: `${addr}\n\nThis address can no longer submit a name or banner, and anything it has waiting is withdrawn. A live name or banner stays until you remove it. Donations are unaffected.`,
+    label: 'Note (optional) — kept for the admin side only, never shown to the donor',
+    confirmText: 'Block', danger: true
+  });
+  if (reason === null) return;
+  await postAction('/api/admin/donors/' + encodeURIComponent(addr) + '/block', { reason }, 'Address blocked.', 'donor-msg');
 }
-async function uncensorDonor(addr) {
-  if (!confirm(`Allow the donor name on ${addr}?\n\nThis also tells the auto-list to skip this address from now on.`)) return;
-  await moderate(addr, 'uncensor', 'Donor name allowed.');
-}
-async function moderate(addr, action, okMsg) {
-  try {
-    const res = await adminFetch('/api/admin/donors/' + encodeURIComponent(addr) + '/' + action, { method: 'POST' });
-    const body = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(body.error || ('HTTP ' + res.status));
-    flash(okMsg + (body.donor_name ? ` (${body.donor_name})` : ''), false);
-    loadDonors();
-  } catch (err) { flash(err.message, true); }
+async function unblockDonor(addr) {
+  if (!confirm(`Unblock ${addr}?\n\nIt can submit a donor name and banner again (each still needs your approval).`)) return;
+  await postAction('/api/admin/donors/' + encodeURIComponent(addr) + '/unblock', {}, 'Address unblocked.', 'donor-msg');
 }
 
 // ── Donation settings (incentives section, page-local form) ──────────────────────────
-// Not settings-common.js: its saveSection() discards the response body, and the one thing
-// this form must show is the rescan counts that ride on it. The harvester below follows the
-// same three rules (bind by id; skip `settings-skip`; drop EMPTY scalars unless
-// `settings-allow-empty`, send checkboxes and textareas always), so a stray id here fails
-// the save the same way it would there — and updateSection() upserts only the keys it is
-// sent, so this partial form and the Incentives page never clobber each other.
+// The harvester follows settings-common.js's three rules (bind by id; skip `settings-skip`;
+// drop EMPTY scalars unless `settings-allow-empty`, send checkboxes and textareas always), so a
+// stray id here fails the save the same way it would there — and updateSection() upserts only
+// the keys it is sent, so this partial form and the Incentives page never clobber each other.
 const FORM_SEL = '#donation-settings .settings-form';
 
 async function loadDonationSettings() {
@@ -393,16 +706,16 @@ async function saveDonationSettings() {
     });
     const body = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(body.error || ('HTTP ' + res.status));   // the server's reason, §J14
-    let msg = 'Donation settings saved.';
-    const r = body.rescan;
-    if (r && r.error) msg += ` The list was stored but the rescan failed: ${r.error}`;
-    else if (r) msg += ` Rescanned ${r.scanned} name${r.scanned === 1 ? '' : 's'}: ${r.censored} censored, ${r.cleared} cleared.`;
-    flashInto('settings-msg', msg, !!(r && r.error));
+    flashInto('settings-msg', 'Donation settings saved.', false);
+    // Flag words and the pool name feed the queue's flags; slots/expiry feed the list's badges.
+    loadQueue();
     loadDonors();
   } catch (err) { flashInto('settings-msg', 'Not saved: ' + err.message, true); }
 }
 
-document.addEventListener('DOMContentLoaded', () => { loadDonors(); loadDonationSettings(); });
+document.addEventListener('DOMContentLoaded', () => { loadQueue(); loadDonors(); loadDonationSettings(); });
+// The donors list re-polls; the queue does NOT — a timer repaint would throw away a reason the
+// operator is typing. It reloads after every decision and on the Refresh button.
 setInterval(loadDonors, 60000);
 </script>
 </body>

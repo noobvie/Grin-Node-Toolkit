@@ -177,7 +177,12 @@ console.log('\n[7] §J14-4 — the admin panel gets its own CSP');
   ok('the admin CSP allowlists no third-party origin at all',
      !!adminCsp && !/https:\/\//.test(adminCsp));
   ok('it still permits inline script (the panel IS inline blocks) and data: images (2FA QR)',
-     /script-src 'self' 'unsafe-inline';/.test(adminCsp) && /img-src 'self' data:;/.test(adminCsp));
+     /script-src 'self' 'unsafe-inline';/.test(adminCsp) && /img-src 'self' data:/.test(adminCsp));
+  // design §18.11 Part 3 #1: the Donors queue loads banners from a plain same-origin src, so
+  // img-src stays exactly 'self' data: — no blob:, which would let a preview escape the image
+  // route's sandbox headers.
+  ok("img-src is exactly 'self' data: — no blob:, no other widening",
+     /img-src 'self' data:;/.test(adminCsp) && !/blob:/.test(adminCsp));
   ok('it carries the four navigation/embedding directives',
      /frame-ancestors 'none'/.test(adminCsp) && /base-uri 'self'/.test(adminCsp) &&
      /form-action 'self'/.test(adminCsp) && /object-src 'none'/.test(adminCsp));
@@ -245,8 +250,8 @@ console.log('\n[8] §J14-9 — ad counters are labelled unverified');
   ok('control — publicByPlacement still uses the same serving predicate',
      /is_active = 1\s*\n\s*AND \(start_at IS NULL OR start_at <= \?\)\s*\n\s*AND \(end_at IS NULL OR end_at >= \?\)/.test(adsLib));
 }
-// ── design §16.8 — admin → Donors page (donor-name moderation + the moved donation settings) ──
-console.log('\n[9] §16.8 — donors.html');
+// ── design §18.6 — admin → Donors page (review queue + donors list + donation settings) ──
+console.log('\n[9] §18.6 — donors.html');
 {
   const exists = fs.existsSync(path.join(PANEL, 'donors.html'));
   ok('donors.html exists', exists);
@@ -259,8 +264,13 @@ console.log('\n[9] §16.8 — donors.html');
   ok('NAV lists donors.html directly after miners.html',
      files.indexOf('donors.html') === files.indexOf('miners.html') + 1 && files.indexOf('miners.html') > 0,
      files.join(','));
-  ok('the nav badge is a plain count, painted only for a positive number',
-     /decorateDonorBadge/.test(shell) && /typeof d\.new_names_7d === 'number'/.test(shell) && /if \(!\(n > 0\)\) return;/.test(shell));
+  ok('the nav badge is the PENDING count, painted only for a positive number',
+     /decorateDonorBadge/.test(shell) && /typeof d\.pending_requests === 'number'/.test(shell) &&
+     /if \(!\(n > 0\)\) return;/.test(shell) && !/new_names_7d/.test(shell));
+
+  // Page order (§18 Part 3): the review queue first, then the donors list, then the settings.
+  const qAt = donors.indexOf('id="queue-tbody"'), dAt = donors.indexOf('id="donors-tbody"'), sAt = donors.indexOf('id="donation-settings"');
+  ok('page order: review queue → donors list → settings', qAt > 0 && qAt < dAt && dAt < sAt);
 
   // Settings ids: every id inside the settings form is either an incentives key or opted
   // out with settings-skip — one stray id fails the whole save (memory
@@ -279,15 +289,22 @@ console.log('\n[9] §16.8 — donors.html');
     if (keys.has(id)) present.add(id); else stray.push(id);
   }
   ok('no input id in the form that is not an incentives key (or settings-skip)', stray.length === 0, stray.join(','));
-  for (const k of ['allow_miner_donations', 'donation_address', 'donor_name_blocklist', 'donor_censored_display',
+  for (const k of ['allow_miner_donations', 'donation_address', 'donor_name_blocklist', 'donor_banner_slots',
                    'donor_rank_window_days', 'donor_loyalty_percent_per_month', 'donor_loyalty_cap', 'donor_name_expiry_months']) {
     ok(`form carries ${k}`, present.has(k));
   }
+  ok('the removed donor_censored_display is on no admin page', !panelFiles().some((f) => /donor_censored_display/.test(read(f))));
+  ok('the word list is relabelled as FLAG words for the review queue',
+     /<label for="donor_name_blocklist">Flag words — highlighted in the review queue<\/label>/.test(form));
+  ok('banner slots carries the validator bounds (0–10)', /id="donor_banner_slots"[^>]*min="0" max="10"/.test(form));
   ok('donation_address may be saved EMPTY (settings-allow-empty) — "leave blank" must be able to persist',
      /id="donation_address"[^>]*class="[^"]*settings-allow-empty/.test(form));
-  ok('the censored-display select offers exactly the closed enum',
-     [...(form.match(/<select id="donor_censored_display"[\s\S]*?<\/select>/) || [''])[0].matchAll(/value="([a-z]+)"/g)]
-       .map((m) => m[1]).join(',') === 'masked,marker');
+  // Inputs OUTSIDE the settings form (the queue's reason boxes, the dialog, the two filters)
+  // are never harvested, but carry settings-skip anyway so a later move into the form is safe.
+  const outside = donors.replace(form, '');
+  const outsideIds = [...outside.matchAll(/<(input|select)\b([^>]*)>/gi)].map((m) => m[2]).filter((a) => /\bid="/.test(a));
+  ok('every input/select outside the settings form is settings-skip',
+     outsideIds.length >= 3 && outsideIds.every((a) => /\bsettings-skip\b/.test(a)), outsideIds.join(' | '));
 
   // The two moved keys must exist on exactly one page: here, not on settings-incentives.html.
   const inc = read('settings-incentives.html').replace(/<!--[\s\S]*?-->/g, '');   // the comment names them on purpose
@@ -300,32 +317,85 @@ console.log('\n[9] §16.8 — donors.html');
   // flash() must be able to reveal: the message element hides INLINE, never via a class that
   // carries display:none (2026-09-19 — every admin flash was invisible for that reason).
   ok('the flash targets hide inline, not by class',
-     /id="donor-msg" style="display:none/.test(donors) && /id="settings-msg" style="display:none/.test(donors));
+     /id="queue-msg" style="display:none/.test(donors) && /id="donor-msg" style="display:none/.test(donors) &&
+     /id="settings-msg" style="display:none/.test(donors));
   const poolCss = fs.readFileSync(path.resolve(__dirname, '../../public_html/css/pool.css'), 'utf8');
   const msgRules = (poolCss.match(/\.error-msg \{[^}]*\}/) || [''])[0] + (poolCss.match(/\.success-msg \{[^}]*\}/) || [''])[0];
   ok('.error-msg/.success-msg carry no display:none', msgRules.length > 0 && !/display:\s*none/.test(msgRules));
 
-  // Row actions pass the address via this.dataset (audit §J14), and use the panel helper for
-  // step-up-gated writes (adminFetch handles the freshAdmin challenge; a bare Auth.fetch
-  // would show "re-authentication required" with no way to complete it).
-  ok('censor/un-censor buttons pass the address via this.dataset',
-     /onclick="censorDonor\(this\.dataset\.addr\)"/.test(donors) && /onclick="uncensorDonor\(this\.dataset\.addr\)"/.test(donors));
-  ok('the moderation POSTs and the settings save go through adminFetch (step-up aware)',
-     /adminFetch\('\/api\/admin\/donors\/' \+ encodeURIComponent\(addr\)/.test(donors) &&
+  // Row actions pass their value via this.dataset (audit §J14), and every write uses the panel
+  // helper for step-up-gated writes (adminFetch handles the freshAdmin challenge; a bare
+  // Auth.fetch would show "re-authentication required" with no way to complete it).
+  ok('queue decisions pass the request id via this.dataset',
+     /onclick="approveRequest\(this\.dataset\.id\)"/.test(donors) && /onclick="rejectRequest\(this\.dataset\.id\)"/.test(donors));
+  ok('remove / block / unblock pass the address (and kind) via this.dataset',
+     /onclick="removeLive\(this\.dataset\.addr, this\.dataset\.kind\)"/.test(donors) &&
+     /onclick="blockDonor\(this\.dataset\.addr\)"/.test(donors) && /onclick="unblockDonor\(this\.dataset\.addr\)"/.test(donors));
+  ok('every decision POST and the settings save go through adminFetch (step-up aware)',
+     /async function postAction[\s\S]{0,120}adminFetch\(url,/.test(donors) &&
+     /postAction\('\/api\/admin\/donors\/requests\/' \+ encodeURIComponent\(id\) \+ '\/approve'/.test(donors) &&
+     /postAction\('\/api\/admin\/donors\/requests\/' \+ encodeURIComponent\(id\) \+ '\/reject'/.test(donors) &&
+     /postAction\('\/api\/admin\/donors\/' \+ encodeURIComponent\(addr\) \+ '\/remove'/.test(donors) &&
+     /postAction\('\/api\/admin\/donors\/' \+ encodeURIComponent\(addr\) \+ '\/block'/.test(donors) &&
+     /postAction\('\/api\/admin\/donors\/' \+ encodeURIComponent\(addr\) \+ '\/unblock'/.test(donors) &&
      /adminFetch\('\/api\/admin\/settings\/incentives'/.test(donors));
+  ok('a refusal shows the SERVER\'s reason (§J14), not a generic word',
+     /throw new Error\(data\.error \|\| \('HTTP ' \+ res\.status\)\)/.test(donors));
   ok('the page never uses Auth.read (public pages\' helper) or a bare fetch()',
      !/Auth\.read\(/.test(donors) && !/[^a-zA-Z.]fetch\(/.test(donors.replace(/adminFetch\(/g, 'X(')));
-  ok('a failed load renders as an error, not as an empty donor list',
-     /data\.success !== true[\s\S]{0,120}setError/.test(donors));
+  ok('a failed load renders as an error, not as an empty list — both lists',
+     /data\.success !== true[\s\S]{0,160}queueTable\.setError/.test(donors) && /data\.success !== true[\s\S]{0,160}donorsTable\.setError/.test(donors));
+  ok('the reason prompts are an IN-PAGE dialog, never window.prompt()',
+     /id="reason-dialog"[^>]*class="modal-overlay"|class="modal-overlay" id="reason-dialog"/.test(donors) &&
+     !/\bprompt\(/.test(donors.replace(/<!--[\s\S]*?-->/g, '').replace(/\/\/[^\n]*/g, '')));
   ok('the ink on the accent pill is the theme token, not a literal',
      /\.admin-subnav a \.nav-count \{[^}]*color: var\(--btn-text\)/.test(read('styles.css')));
-  ok('every donor name / word / worker name is escaped before it reaches the row',
-     /escHtml\(d\.donor_name\)/.test(donors) && /escHtml\(d\.donor_censor_word/.test(donors) && /escHtml\(w\.name\)/.test(donors));
-  ok('the rescan counts from the save response are shown', /body\.rescan/.test(donors) && /Rescanned \$\{r\.scanned\}/.test(donors));
-  ok('UTC is stated once on the page', (donors.match(/UTC/g) || []).length >= 1);
+
+  // §18.9 — the reject/remove reason is PUBLIC (the donor's account page is address-addressable);
+  // the UI must say so beside every field that collects one. A block note is admin-only.
+  ok('the queue\'s reason field says it is shown to the donor on their account page',
+     /The reason is shown to the donor on their account page, which anyone holding the address can open\./.test(donors));
+  ok('the remove dialog says the reason is shown on the donor\'s public account page',
+     /label: 'Reason \(optional\) — shown to the donor on their public account page'/.test(donors));
+  ok('the block dialog says its note is admin-side only',
+     /label: 'Note \(optional\) — kept for the admin side only, never shown to the donor'/.test(donors));
+
+  // Images (design §18.11 Part 3 #1): the queue points a plain same-origin src at the admin image
+  // route, so the route's headers (stored mime, nosniff, sandbox CSP) govern every way the image
+  // is viewed. No object URL: a blob copy would drop those headers and need blob: in img-src.
+  // Approved thumbnails in the list are the PUBLIC /uploads/donors/ file, shape-checked.
+  ok('queue images: a same-origin src on the admin image route, the id URL-encoded',
+     /src="\/api\/admin\/donors\/requests\/\$\{encodeURIComponent\(String\(r\.id\)\)\}\/image"/.test(donors));
+  ok('no object URL / blob anywhere on the page',
+     !/createObjectURL|revokeObjectURL|\.blob\(\)|blob:/.test(donors.replace(/<!--[\s\S]*?-->/g, '').replace(/\/\/[^\n]*/g, '')));
+  ok('a preview that fails to load becomes text, wired after each render (onRender)',
+     /onRender:\s*tbody\s*=>[\s\S]{0,700}addEventListener\('error', \(\) => imageFailed\(img\), \{ once: true \}\)/.test(donors) &&
+     /function imageFailed\(img\)[\s\S]{0,300}preview unavailable/.test(donors));
+  ok('the queue banner carries width/height from the stored dims (no layout jump)',
+     /class="req-banner" data-req-img=[\s\S]{0,320}width="\$\{w\}" height="\$\{h\}"/.test(donors));
+  ok('list thumbnails accept only the /uploads/donors/<16 hex>.(png|jpg|gif) shape',
+     /\^\\\/uploads\\\/donors\\\/\[0-9a-f\]\{16\}\\\.\(png\|jpg\|gif\)\$/.test(donors) && /bannerUrl\(d\.banner\.url\)|d\.banner && bannerUrl\(d\.banner\.url\)/.test(donors));
+  ok('the queue does NOT poll on a timer (a repaint would wipe a reason being typed)',
+     !/setInterval\(loadQueue/.test(donors) && /setInterval\(loadDonors, 60000\)/.test(donors));
+  ok('a typed reason survives a re-render (written through to a map the row reads back)',
+     /_reasons\.set\(inp\.dataset\.reasonFor, inp\.value\)/.test(donors) && /_reasons\.get\(String\(r\.id\)\)/.test(donors));
+
+  // Escaping — AdminTable inserts row() output raw, so every server string passes escHtml.
+  ok('every requested name, flag word, reason, current name and worker name is escaped',
+     /escHtml\(r\.name\)/.test(donors) && /escHtml\(f\.word\)/.test(donors) && /escHtml\(r\.reason\)/.test(donors) &&
+     /escHtml\(r\.current\.name\)/.test(donors) && /escHtml\(w\.name\)/.test(donors) && /escHtml\(d\.name\.text\)/.test(donors));
+  ok('no v1 moderation left on the page (censor / uncensor / rescan / marker)',
+     !/censorDonor|uncensorDonor|\/censor'|\/uncensor'|body\.rescan|Rescanned|censored-donor|donor_censor/.test(donors));
+  ok('UTC is stated on the page', (donors.match(/UTC/g) || []).length >= 1);
   const home = read('index.html');
-  ok('the Overview shows the 7-day new-names tile from the dashboard field and links to Donors',
-     /id="kpi-donor-names"/.test(home) && /d\.new_donor_names_7d \?\? '—'/.test(home) && /href="donors\.html"/.test(home));
+  ok('the Overview shows the pending-requests tile from the dashboard field and links to Donors',
+     /id="kpi-donor-requests"/.test(home) && /d\.pending_donor_requests \?\? '—'/.test(home) && /href="donors\.html"/.test(home) &&
+     !/new_donor_names_7d|kpi-donor-names/.test(home));
+
+  // AdminTable's onRender hook (added for this page): runs only after real rows are painted,
+  // and a throw inside it cannot blank the table.
+  ok('AdminTable.onRender runs after rows are painted and is try/caught',
+     /tbody\.innerHTML = slice\.map[\s\S]{0,120}if \(typeof opts\.onRender === 'function'\) \{\s*try \{ opts\.onRender\(tbody\); \} catch/.test(shell));
 }
 
 console.log('\n' + (fail ? 'FAILURES' : 'ALL PASS') + ` — ${pass} passed, ${fail} failed`);

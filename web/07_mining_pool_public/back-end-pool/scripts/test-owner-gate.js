@@ -566,17 +566,20 @@ const backdate = (db, a, secs) => db.prepare(
     }
   }
 
-  // ── §J3-5 — the donation tag must not be applied by an unauthenticated login ────────────
+  // ── §J3-5 → design §18.2 — the stratum server writes NO donation state at all ───────────
+  // §J3-5 moved the tag's write off the unauthenticated login onto the accepted-share path;
+  // §18.2 removed the write entirely (the % is read per SHARE from its worker name at
+  // distribution). So the property is now stronger: nothing in stratum-server.js stores a
+  // donation, on any path. Comments stripped — they may describe the removal.
   {
     const fs = require('fs');
-    const src = fs.readFileSync(path.join(LIB, 'stratum-server.js'), 'utf8');
-    const login = src.slice(src.indexOf('handleLogin('), src.indexOf('handleSubmit('));
-    const submit = src.slice(src.indexOf('handleSubmit('));
-    assert.strictEqual(/this\.incentives\.setDonation\(/.test(login), false,
-      'setDonation must not run in handleLogin — login is unauthenticated (§J3-5)');
-    assert.ok(/this\.incentives\.setDonation\(/.test(submit),
-      'setDonation must run on the accepted-share path');
-    ok('J3-5 donation tag is applied only after node-accepted PoW');
+    const src = fs.readFileSync(path.join(LIB, 'stratum-server.js'), 'utf8').replace(/\/\/[^\n]*/g, '');
+    assert.strictEqual(/setDonation|donationPercent|donation_percent|captureDonorName|incentives/.test(src), false,
+      'stratum-server.js must not store a donation % or a donor name (§J3-5, design §18.2)');
+    const incSrc = fs.readFileSync(path.join(LIB, 'incentives.js'), 'utf8').replace(/\/\/[^\n]*/g, '');
+    assert.strictEqual(/donation_percent/.test(incSrc), false,
+      'incentives.js must not read the dead v1 donation_percent column (design §18.9)');
+    ok('J3-5 / §18.2 no stratum path stores a donation; the money path never reads the v1 column');
   }
 
   // ── §17.2 #9 — the migration must run BEFORE the stratum listener starts ─────────────────

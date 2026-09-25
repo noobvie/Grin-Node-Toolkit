@@ -23,12 +23,10 @@ const {
 } = require('./stratum-protocol');
 const ShareValidator = require('./shares');
 const MinerManager = require('./miners');
-const IncentivesManager = require('./incentives');
 // Shared with the public feeds so the journal masks addresses the same way they do —
 // one shape (grin1qxy…mn4p) rather than a second, divergent redaction (audit §J8-5).
 const { maskAddress } = require('./dormancy');
 const { PASS_MAX } = require('./owner-proof');
-const { captureDonorName, donorSettings } = require('./donor-names');
 
 // How many old job IDs remain valid for submit (avoids instant stale on slow networks)
 const JOB_WINDOW = 10;
@@ -178,7 +176,6 @@ class StratumServer {
     this.boundPorts = new Set();
     this.shareValidator = new ShareValidator(config);
     this.minerManager = minerManager || new MinerManager(config);
-    this.incentives = new IncentivesManager(config);
     // Map<socket, sessionId|null> — authoritative socket registry for broadcasting
     this.sockets = new Map();
     // Current job pushed by NodeStratumClient via setNewJob()
@@ -624,24 +621,10 @@ class StratumServer {
     const sessionId = this.minerManager.createSession(parsed.grin_address, parsed.worker_name, ip, region, pass);
     setSession(sessionId);
 
-    // Optional `donateN` worker tag → the miner's voluntary donation %. PARKED on the session
-    // here and applied on the first accepted share (audit §J3-5), for exactly the reason the
-    // note below gives about proof capture: this handler is unauthenticated, so applying it at
-    // login let ANY TCP client send `{"login":"<victim>.x-donate100"}` and permanently divert
-    // up to 100% of that address's future PPLNS credit into the prize pool — persistently (a
-    // normal login carries no donate tag, so the victim's own rig never clears it) and
-    // irreversibly (the prize pool pays out to other people). Donations are on by default, so
-    // this needed no operator misconfiguration. The tag is a convenience, not an instruction
-    // from someone who has proved anything.
-    if (parsed.donation_percent !== null && parsed.donation_percent !== undefined) {
-      const s = this.minerManager.getSession(sessionId);
-      if (s) {
-        s.donationPercent = parsed.donation_percent;
-        // The label part of the tag (`acme-donate10` → 'acme'; plain `donate10` → ''). Parked
-        // with the percent and consumed by the SAME gated write below — design §16.4.
-        s.donorLabel = parsed.donor_label;
-      }
-    }
+    // A `donateN` worker tag needs nothing here (design §18.2): it stays in the worker name,
+    // every share is stored under that name, and rewards.js reads the % per SHARE when a block
+    // matures. Nothing is written per address, so a stranger's login under someone else's
+    // address can only ever donate the credit of that stranger's own shares.
 
     socket.write(JSON.stringify(createLoginResponse(id)) + '\n');
 
@@ -832,27 +815,6 @@ class StratumServer {
 
       }
 
-      // Voluntary donation tag, parked at login and applied here. §J3-5 moved it off the
-      // unauthenticated login handler and onto the first accepted share; §J6-7 adds the two
-      // conditions that make the cost match what it moves:
-      //
-      //   · PROOF_MIN_SHARES, not one share — the same bar as ROTATING an ownership proof this
-      //     address already has. Redirecting up to 100% of an address's future PPLNS credit must
-      //     not be cheaper than rotating its identity, and it was: one share, and the share the
-      //     attacker had to produce was itself credited to the victim.
-      //   · A RAISE needs the slot to be empty; a LOWER is always honoured. So a stranger can
-      //     only ever reduce someone's donation (harmless), the victim can always clear a tag
-      //     someone else set by logging in once with `.donate0`, and the first value an address
-      //     ever sets still works with no ceremony. This matters because the proceeds go to the
-      //     prize pool, which pays out to OTHER people — the diversion is irreversible once made.
-      // The branch itself is _applyParkedDonation so scripts/test-donor-names.js can drive it
-      // with a stub session and assert which arms reach the donor-name write.
-      if (session.donationPercent !== null && session.donationPercent !== undefined &&
-          !session.donationDone && session.acceptedShares >= PROOF_MIN_SHARES) {
-        session.donationDone = true;
-        this._applyParkedDonation(session);
-      }
-
       // Ownership-proof capture runs at most twice per session, and the second pass is the
       // point of it (audit §J3-4). Anyone may mine to anyone's address, so ADDING a proof
       // beside the ones an address already holds costs sustained work, not one share:
@@ -1009,54 +971,6 @@ class StratumServer {
     st.suppressed = 0;
     st.last = now;
     console.warn(build(n));
-  }
-
-  // The parked `donateN` tag, applied once the session has earned it (the PROOF_MIN_SHARES
-  // gate is at the call site in handleSubmit — see the §J3-5 / §J6-7 note there). Three arms:
-  //   · same-or-lower, or the slot is empty → written (§J6-7: a LOWER is always honoured)
-  //   · a raise into an occupied slot        → refused, logged
-  // and the donor NAME (design §16.4) rides the from-zero set ONLY — `current === 0` AND a
-  // percent above 0 AND the percent actually written. A LOWER never reaches the capture, for
-  // the same reason a raise needs the slot empty: a stranger who mines four shares to a live
-  // donor's address may reduce their cut (harmless) but must not be able to rename them. A
-  // `donate0` on a paused address is not from-zero either, so the pause leg of the ceremony
-  // keeps the name and the raise leg rewrites it.
-  _applyParkedDonation(session) {
-    try {
-      const current = this.incentives.donationPercent(session.grinAddress) || 0;
-      if (session.donationPercent <= current || current === 0) {
-        const wrote = this.incentives.setDonation(session.grinAddress, session.donationPercent);
-        if (wrote && current === 0 && session.donationPercent > 0) {
-          this._captureDonorName(session);
-        }
-      } else {
-        console.warn(`[${new Date().toISOString()}] Donation raise ${current}%→${session.donationPercent}% ` +
-                     `refused for ${session.grinAddress}: a stored donation may only be LOWERED from stratum (§J6-7)`);
-      }
-    } catch (e) {
-      console.error(`Error setting donation for ${session.grinAddress}: ${e.message}`);
-    }
-  }
-
-  // Donor-name capture (design §16.4). Called from _applyParkedDonation on the from-zero
-  // branch only — that gate lives at the call site, not here. Reads the operator's
-  // list + the pool name fresh each time (a capture is rare: once per ceremony, never per
-  // share), hands the label to lib/donor-names.js, and logs ONE line: the masked address, the
-  // name and its censor state. Never the password, never the IP.
-  _captureDonorName(session) {
-    try {
-      const settings = this.incentives.settings;
-      const ds = donorSettings(settings.getSection('incentives'), settings.getSection('pool_info').pool_name);
-      const r = captureDonorName(this.incentives.db, session.grinAddress, session.donorLabel, ds);
-      const state = r.censor === 'auto' ? `auto-censored: "${r.word}"`
-                  : r.censor === 'admin' ? 'admin-censored (sticky)'
-                  : r.censor === 'allow' ? 'allowed (admin override)'
-                  : 'ok';
-      console.log(`[${new Date().toISOString()}] Donor name ${r.name === null ? 'cleared' : `"${r.name}"`} ` +
-                  `for ${maskAddress(session.grinAddress)} (${state})`);  // §J8-5
-    } catch (e) {
-      console.error(`Error capturing donor name for ${maskAddress(session.grinAddress)}: ${e.message}`);
-    }
   }
 
   pruneInactiveSessions() {

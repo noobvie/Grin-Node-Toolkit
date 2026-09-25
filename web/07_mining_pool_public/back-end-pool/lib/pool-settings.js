@@ -48,7 +48,8 @@ function parseJsonArray(val, fallback) {
 
 // The shipped donor-name starter list (design §16) is the DEFAULT of a setting, so it lives
 // with the rest of the name logic and is imported here — never the other way round.
-const { STARTER_BLOCKLIST, CENSORED_DISPLAY_VALUES } = require('./donor-names');
+const { STARTER_BLOCKLIST } = require('./donor-names');
+const explorers = require('./explorers');
 
 // Own-property membership tests for the settings schema. `defaults[section]` and
 // `key in defaults[section]` both walk Object.prototype, so `constructor`, `toString`,
@@ -144,6 +145,10 @@ class PoolSettings {
       nostr_link: '',
       website_link: 'https://grinium.com',
       footer_text: '',
+      // Mainnet chain explorer every block / kernel / proof link opens (lib/explorers.js):
+      // grincoin | tiny | grinscan — an enum, never a URL. Testnet ignores it (always
+      // test.grinscan.org); an unknown stored value resolves to grincoin.
+      explorer_mainnet: explorers.DEFAULT_MAINNET,
     },
     seo: {
       meta_description: 'GRINIUM is a low-fee Grin (GRIN) mining pool — PPLNS rewards, anonymous Tor payouts, prize draws and bonuses. No sign-up; point your miner and start earning.',
@@ -218,6 +223,9 @@ class PoolSettings {
       // Minutes a miner must wait after a reversed payout (Tor failure, slatepack expiry,
       // admin cancel) before requesting another payout on ANY rail. 0 disables.
       withdrawal_cooldown_minutes: 30,
+      // Minutes an unanswered manual Slatepack payout stays pending before it expires (the
+      // pool cancels its wallet tx, the balance returns). See config.js slatepack_ttl_minutes.
+      slatepack_ttl_minutes: 30,
       // Pre-flight Tor reachability gate: refuse a Tor payout up front when the miner's wallet
       // listener isn't answering over Tor now (probe = onion:80 SOCKS5 connect). Fails OPEN if
       // the pool box can't run the probe, so it never blocks every payout. ON by default.
@@ -612,16 +620,18 @@ PASS      any-password-you-choose</code>
       // Published pool Slatepack address for community donations (shown on the fortune board).
       // External donations land in the wallet; the operator reflects them via a manual top-up.
       donation_address: '',
-      // Donor names + donor league (design §16). A donor's `<name>-donateN` label becomes
-      // their name on the wall; these six shape moderation + ranking. Read ONLY through
-      // donorSettings() in lib/donor-names.js, which bounds every value again on read.
-      donor_name_blocklist: STARTER_BLOCKLIST.join('\n'),  // one entry per line; substring of the
-                                                           // normalised name; saving re-scans all names
-      donor_censored_display: 'masked',      // 'masked' (address, default) | 'marker' (<censored-donor>)
+      // Donor profiles + donor league (design §16 ranking, §18 reviewed profiles). Read ONLY
+      // through donorSettings() in lib/donor-names.js, which bounds every value on read.
+      // `donor_censored_display` was REMOVED 2026-09-24 (§18 Part 3): names are pre-moderated,
+      // so there is no censored name to display. A row still stored for it is inert.
+      donor_name_blocklist: STARTER_BLOCKLIST.join('\n'),  // FLAG words, one per line: a substring hit on the
+                                                           // normalised name is highlighted in the review queue
       donor_rank_window_days: 365,           // league window; 0 = lifetime
       donor_loyalty_percent_per_month: 10,   // +% per distinct month with a donation debit
       donor_loyalty_cap: 3,                  // multiplier ceiling (×3)
       donor_name_expiry_months: 12,          // masked again this long after the last debit; 0 = never
+      donor_banner_slots: 5,                 // design §18: top N league donors show their approved
+                                             // banner; 0 = banners off (int 0-10)
       // Join bonus — paid once per address, only after its first successful withdrawal
       join_bonus_enabled: 'false',
       join_bonus_amount: 0.1,                // GRIN
@@ -822,6 +832,8 @@ PASS      any-password-you-choose</code>
         }
         return val;
       },
+      // Exactly one of the three registry keys — see lib/explorers.js for why it is not a URL.
+      explorer_mainnet: explorers.validateMainnetChoice,
     },
     seo: {
       title_template: (val) => {
@@ -987,9 +999,17 @@ PASS      any-password-you-choose</code>
         if (isNaN(n) || n < 0 || n > 720) throw new Error('nostr_destination_cooldown_hours must be 0-720');
         return n;
       },
+      slatepack_ttl_minutes: (val) => {
+        // Floor of 10: a human has to copy the slatepack into a wallet, run receive and paste
+        // the reply back, and the expiry sweep runs only every 60s. Cap of 1440 (24h), the old
+        // hardcoded value — anything longer just keeps pool-wallet outputs locked.
+        const n = parseInt(val, 10);
+        if (isNaN(n) || n < 10 || n > 1440) throw new Error('slatepack_ttl_minutes must be 10-1440');
+        return n;
+      },
       nostr_pending_ttl_minutes: (val) => {
         // Floor of 2: the expiry sweep runs every 60s, so a TTL under ~2 min can't be enforced
-        // accurately. Cap of 1440 (24h) keeps it at or below the manual slatepack rail.
+        // accurately. Cap of 1440 (24h).
         const n = parseInt(val, 10);
         if (isNaN(n) || n < 2 || n > 1440) throw new Error('nostr_pending_ttl_minutes must be 2-1440');
         return n;
@@ -1112,24 +1132,16 @@ PASS      any-password-you-choose</code>
           }
           return v;
         },
-        // Donor names (design §16.10 type traps): the list is stored as cleaned text — one
+        // Flag words (design §16.10 / §18.9 type traps): the list is stored as cleaned text — one
         // trimmed entry per line, empties dropped, size-capped — and is only ever SPLIT by the
-        // matcher, never compiled. Bounded so a pasted novel cannot become the per-capture
-        // scan. The enum is closed; the numbers carry the same bounds donorSettings() re-applies
-        // on read.
+        // matcher, never compiled. Bounded so a pasted novel cannot make every review-queue read
+        // slow. The numbers carry the same bounds donorSettings() re-applies on read.
         donor_name_blocklist: (val) => {
           const text = val == null ? '' : String(val);
           if (text.length > 65536) throw new Error('donor_name_blocklist must be under 64 KB');
           const lines = text.split(/\r?\n/).map((l) => l.trim()).filter((l) => l !== '');
           if (lines.length > 4000) throw new Error('donor_name_blocklist must have at most 4000 entries');
           return lines.join('\n');
-        },
-        donor_censored_display: (val) => {
-          const v = String(val == null ? '' : val).trim().toLowerCase();
-          if (!CENSORED_DISPLAY_VALUES.includes(v)) {
-            throw new Error(`donor_censored_display must be one of ${CENSORED_DISPLAY_VALUES.join(', ')}`);
-          }
-          return v;
         },
         donor_rank_window_days: intRange('donor_rank_window_days', 0, 3650),
         donor_loyalty_percent_per_month: percent('donor_loyalty_percent_per_month'),
@@ -1139,6 +1151,7 @@ PASS      any-password-you-choose</code>
           return n;
         },
         donor_name_expiry_months: intRange('donor_name_expiry_months', 0, 120),
+        donor_banner_slots: intRange('donor_banner_slots', 0, 10),
         join_bonus_amount: nonNeg('join_bonus_amount'),
         jackpot_amount: nonNeg('jackpot_amount'),
         streak_bonus_per_week_percent: percent('streak_bonus_per_week_percent'),
@@ -1303,6 +1316,10 @@ PASS      any-password-you-choose</code>
         cta_text: b.cta_text || '',
         cta_link: b.cta_link || '',
         footer_text: b.footer_text || '',
+        // The operator's MAINNET choice, resolved (a corrupt row publishes as grincoin, never
+        // raw). Links must follow connection.explorer instead — index.js adds it — which is the
+        // network-aware key; on a testnet pool the two differ.
+        explorer_mainnet: explorers.resolveExplorerKey('mainnet', b.explorer_mainnet),
         social: {
           discord: b.discord_link || '',
           telegram: b.telegram_link || '',
@@ -1656,6 +1673,9 @@ PASS      any-password-you-choose</code>
     }
     if (payout.withdrawal_cooldown_minutes !== undefined) {
       config.withdrawal_cooldown_minutes = payout.withdrawal_cooldown_minutes;
+    }
+    if (payout.slatepack_ttl_minutes !== undefined) {
+      config.slatepack_ttl_minutes = payout.slatepack_ttl_minutes;
     }
     if (payout.tor_preflight_gate !== undefined) {
       config.tor_preflight_gate = payout.tor_preflight_gate === true || payout.tor_preflight_gate === 'true';

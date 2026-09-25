@@ -17,7 +17,9 @@
 #     on every loop, so the live process obeys it at once and cannot start a
 #     payout while we wait). Every restart path is then DISABLED, not just
 #     stopped — pool service, the wallet listener's @reboot line and its */5
-#     watchdog — so a reboot of this box cannot bring a second pool back.
+#     watchdog — so a reboot of this box cannot bring a second pool back. The
+#     weekly VACUUM cron goes too, and step 4 refuses while a vacuum runs: its
+#     script restarts the pool from an EXIT trap (audit Part 9 P1).
 #   · The final archive is taken AFTER everything stops, so pool.db and the
 #     wallet it describes leave the box as one consistent pair.
 #   · The hub's WireGuard goes DOWN and is disabled at boot. While it still
@@ -51,6 +53,10 @@ PMG_FREEZE_REASON="hub migration in progress"
 PMG_FREEZE_BY="migrate-out"
 # Where Migrate IN looks first. Same path as this box's archive dir on purpose.
 PMG_REMOTE_DIR_DEFAULT="/opt/grin/backups"
+# The weekly VACUUM (pool menu c) Cron schedules → 2). Same names pool_write_vacuum_script and
+# pool_cron_schedules use. Its script restarts the pool from an EXIT trap — see _pmg_out_stop.
+PMG_VACUUM_CRON="${PMG_VACUUM_CRON:-/etc/cron.d/${POOL_SERVICE:-grin-pool-manager}-vacuum}"
+PMG_VACUUM_BIN="${PMG_VACUUM_BIN:-/usr/local/bin/${POOL_SERVICE:-grin-pool-manager}-vacuum}"
 
 if ! declare -F info    >/dev/null 2>&1; then info()    { echo "[INFO]  $*"; }; fi
 if ! declare -F warn    >/dev/null 2>&1; then warn()    { echo "[WARN]  $*"; }; fi
@@ -286,12 +292,13 @@ _pmg_print_state() {
     wg_up="down"; ip link show "${WG_IFACE:-none}" >/dev/null 2>&1 && wg_up="${YELLOW}UP${RESET}"
     wg_en=$(systemctl is-enabled "wg-quick@${WG_IFACE:-none}" 2>/dev/null)
     cron="off"; [[ -f "$PBK_CRON" ]] && cron="on"
+    local vac="off"; [[ -f "$PMG_VACUUM_CRON" ]] && vac="${YELLOW}on${RESET}"
     echo -e "  ${BOLD}State of this box now:${RESET}"
     echo -e "    payouts          : $pay"
     echo -e "    pool service     : ${svc_a:-unknown} · ${svc_e:-unknown}  ${DIM}($POOL_SERVICE)${RESET}"
     echo -e "    wallet listener  : $lst  ${DIM}· watchdog $wd · @reboot $ar${RESET}"
     echo -e "    hub WireGuard    : $wg_up · boot ${wg_en:-n/a}  ${DIM}(${WG_IFACE:-none})${RESET}"
-    echo -e "    daily backup     : $cron   ${DIM}· grin node: left running${RESET}"
+    echo -e "    daily backup     : $cron   ${DIM}· weekly vacuum: ${RESET}$vac${DIM} · grin node: left running${RESET}"
 }
 
 _pmg_print_rollback() {
@@ -304,6 +311,7 @@ _pmg_print_rollback() {
     echo -e "    env SHELL=/bin/bash $(pw_boot_script 2>/dev/null || echo '<wallet dir>/pool-wallet-boot.sh')   ${DIM}# listener + unlock${RESET}"
     echo -e "    systemctl enable --now $POOL_SERVICE"
     echo -e "    ${DIM}then: pool menu 5) → 6) e (boot autostart) + 7) i (watchdog); B → 3) daily backup;${RESET}"
+    echo -e "    ${DIM}c) Cron schedules → 2) weekly VACUUM, if it was on;${RESET}"
     echo -e "    ${DIM}reconcile, THEN resume payouts in admin → Payouts (never before).${RESET}"
 }
 
@@ -514,8 +522,9 @@ _pmg_out_intro() {
     echo -e "    2. Payouts FROZEN — before anything stops."
     echo -e "    3. Wallet listener stopped (watchdog + boot autostart removed first), then a"
     echo -e "       one-shot wallet info records the balance as evidence."
-    echo -e "    4. Pool service stopped + disabled; hub WireGuard down + disabled; daily"
-    echo -e "       backup cron off. The grin node keeps running."
+    echo -e "    4. Weekly VACUUM cron off (refused while a vacuum runs); pool service stopped +"
+    echo -e "       disabled; hub WireGuard down + disabled; daily backup cron off. The grin node"
+    echo -e "       keeps running."
     echo -e "    5. Manifest written (the figures Migrate IN checks against)."
     echo -e "    6. Final encrypted archive — with the TLS cert, this archive only — verified."
     echo -e "    7. Copy to the new box (scp), or the command to do it yourself."
@@ -622,6 +631,25 @@ _pmg_out_wallet() {
 
 _pmg_out_stop() {
     echo ""; echo -e "${BOLD}Step 4 — stop and disable${RESET}"
+    # The weekly VACUUM's script stops the pool, compacts pool.db, and STARTS it again from an
+    # EXIT trap whenever the pool was running when the vacuum began. One in flight now would
+    # start this pool again after the checks below said it was stopped — a live old hub, the
+    # one thing this order exists to prevent (audit Part 9 P1). So: its cron goes FIRST (no new
+    # vacuum can begin after the check), then refuse while one runs. A vacuum started by hand
+    # after the stop finds the pool inactive and never restarts it.
+    if [[ -f "$PMG_VACUUM_CRON" ]]; then
+        rm -f "$PMG_VACUUM_CRON" || { _pmg_fail 4 "could not remove the weekly VACUUM cron ($PMG_VACUUM_CRON)"; return 1; }
+        success "Weekly VACUUM cron off (its script restarts a pool it stopped)."
+    fi
+    if command -v pgrep >/dev/null 2>&1; then
+        if pgrep -f -- "$PMG_VACUUM_BIN" >/dev/null 2>&1; then
+            _pmg_fail 4 "a VACUUM ($PMG_VACUUM_BIN) is running, and it restarts the pool when it ends — wait until the pool log says 'VACUUM ok' (or FAILED) and the pool is back, then B → 6 again"
+            return 1
+        fi
+    else
+        warn "pgrep not found — cannot check for a VACUUM in progress. Make sure $PMG_VACUUM_BIN is not running."
+    fi
+
     systemctl stop "$POOL_SERVICE" 2>/dev/null || true
     systemctl disable "$POOL_SERVICE" >/dev/null 2>&1 || true
     if systemctl is-active --quiet "$POOL_SERVICE" 2>/dev/null; then

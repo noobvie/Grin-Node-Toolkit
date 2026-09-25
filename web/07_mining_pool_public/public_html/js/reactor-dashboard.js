@@ -598,6 +598,17 @@
     }
   }
 
+  // Rail tag for a teletype line, from withdrawals.method. This used to be a hard-coded
+  // '[TOR OK]', so a Slatepack or Goblin payout printed as Tor. The column is
+  // `NOT NULL DEFAULT 'tor'` (db.js — the Tor rail's INSERT relies on that default), so a
+  // missing value can only mean an older API response and still reads as Tor. Any other
+  // unknown rail prints its own name rather than being passed off as one we know.
+  var PAY_RAIL_TAG = { tor: 'TOR', slatepack: 'SLATEPACK', nostr: 'GOBLIN', manual: 'MANUAL' };
+  function payRailTag(method) {
+    var m = String(method || 'tor').toLowerCase();
+    return '[' + (PAY_RAIL_TAG[m] || m.toUpperCase()) + ' OK]';
+  }
+
   // Payout teletype (addresses are miner-supplied → textContent only).
   async function loadPayments() {
     var tty = $('rx-tty');
@@ -641,7 +652,7 @@
         line.appendChild(document.createTextNode(' → ' + truncAddr(p.grin_address) + '  '));
         var via = document.createElement('span');
         via.className = 'via';
-        via.textContent = '[TOR OK]';
+        via.textContent = payRailTag(p.method);
         line.appendChild(via);
         tty.appendChild(line);
       });

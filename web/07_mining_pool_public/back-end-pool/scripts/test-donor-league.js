@@ -6,10 +6,14 @@
 // everything the route hands the lib — switch state, live rigs, the mask — is passed here as
 // fixtures. Covers: the 100/20 limits with totals over every donor and an exact Σ; the window
 // dropping a donor whose last debit is older (and 0 = lifetime); active months across rollup +
-// raw; the multiplier cap; tie order; past-strip order + `more`; expired → masked; censored +
-// marker → the string and censored + masked → null; league/past disjoint; the mask being
+// raw; the multiplier cap; tie order; past-strip order + `more`; names from APPROVED donor
+// profiles only (§18 Part 3 — pending/rejected/removed and v1 names never reach a card) and
+// expired → null; banners (§18 Part 4) only on league ranks ≤ donor_banner_slots, never on
+// the past strip, never from a non-approved row; league/past disjoint; the mask being
 // REQUIRED and applied to both arrays; blank/junk settings never reaching a score; the
-// donations switch zeroing current_percent; rigs_online from a Map or a function.
+// donations switch zeroing the live readings; and (design §18.3) liveDonations() — the one
+// per-rig reading of who is donating now — plus the wall's rigs_* / pct_* fields built from it
+// and NEVER from the dead v1 donation_percent column.
 // Run: node scripts/test-donor-league.js   (no server, no file on disk)
 
 const path = require('path');
@@ -21,7 +25,7 @@ const db = getDb();
 
 const DN = require(path.join(APP, 'lib/donor-names.js'));
 const DL = require(path.join(APP, 'lib/donor-ledger.js'));
-const { donorWall, LEAGUE_LIMIT, PAST_LIMIT } = DL;
+const { donorWall, liveDonations, LEAGUE_LIMIT, PAST_LIMIT } = DL;
 
 let pass = 0, fail = 0;
 function check(name, cond, extra = '') {
@@ -62,13 +66,19 @@ function setInc(a, fields) {
   db.prepare(`UPDATE miner_incentives SET ${keys.map((k) => `${k} = ?`).join(', ')} WHERE grin_address = ?`)
     .run(...keys.map((k) => fields[k]), a);
 }
+// A donor_requests row (design §18.4) — the one source of a card's name since §18 Part 3.
+function req(a, f) {
+  db.prepare(`INSERT INTO donor_requests (grin_address, kind, status, name, submitted_at, decided_at, reason)
+              VALUES (?, 'name', ?, ?, ?, ?, ?)`)
+    .run(a, f.status, f.name, f.submitted_at || NOW - 2 * 86400, f.decided_at || null, f.reason || null);
+}
 function reset() {
-  db.exec('DELETE FROM balance_log; DELETE FROM balance_log_daily; DELETE FROM miner_incentives; DELETE FROM miner_accounts;');
+  db.exec('DELETE FROM donor_requests; DELETE FROM donor_blocks; DELETE FROM balance_log; DELETE FROM balance_log_daily; DELETE FROM miner_incentives; DELETE FROM miner_accounts;');
   allAddrs.clear();
 }
 const ds = (over = {}) => DN.donorSettings({
   donor_rank_window_days: 365, donor_loyalty_percent_per_month: 10, donor_loyalty_cap: 3,
-  donor_name_expiry_months: 12, donor_censored_display: 'masked', ...over
+  donor_name_expiry_months: 12, ...over
 }, 'GRINIUM');
 const wall = (opts = {}) => donorWall(db, { ds: ds(), now: NOW, H, active: true, mask, ...opts });
 
@@ -113,14 +123,13 @@ function keys(v, out = new Set()) {
         w.league.length + w.past.donors.length === 100);
   check('mask: every league address is masked and none equals a seeded full address',
         w.league.every((c) => MASK_RE.test(c.address) && !allAddrs.has(c.address)));
-  check('shape: every card carries exactly the §16.7 fields',
+  check('shape: every card carries exactly the §18.7 fields (banner in, current_percent gone)',
         w.league.every((c) => Object.keys(c).sort().join(',') ===
-          'active_months,address,current_percent,donation_count,first_donated_at,in_window_donated,last_donated_at,multiplier,name,name_state,rank,rigs_online,score,total_donated'));
-  check('shape: top level is league/past/totals/ranking/censored_display',
-        Object.keys(w).sort().join(',') === 'censored_display,league,past,ranking,totals');
-  check('shape: ranking echoes the four bounded settings',
-        JSON.stringify(w.ranking) === JSON.stringify({ window_days: 365, loyalty_percent_per_month: 10, loyalty_cap: 3, name_expiry_months: 12 }));
-  check('shape: censored_display echoes the setting', w.censored_display === 'masked');
+          'active_months,address,banner,donation_count,first_donated_at,in_window_donated,last_donated_at,multiplier,name,name_state,pct_max,pct_min,rank,rigs_donating,rigs_online,score,total_donated'));
+  check('shape: top level is league/past/totals/ranking (censored_display is gone, §18.6)',
+        Object.keys(w).sort().join(',') === 'league,past,ranking,totals');
+  check('shape: ranking echoes the five bounded settings (banner_slots default 5)',
+        JSON.stringify(w.ranking) === JSON.stringify({ window_days: 365, loyalty_percent_per_month: 10, loyalty_cap: 3, name_expiry_months: 12, banner_slots: 5 }));
 }
 
 // ── window: drops a donor whose last debit is older; 0 = lifetime ────────────────────────
@@ -241,98 +250,204 @@ function keys(v, out = new Set()) {
   })());
 }
 
-// ── names: shown / masked / censored (marker + masked) / expired ─────────────────────────
+// ── names: approved-only (design §18.7, since §18 Part 3) ────────────────────────────────
+// A card's name is the APPROVED, unexpired donor_requests name (publicProfiles). Pending,
+// rejected, withdrawn and removed rows never reach a card, and the v1 donor_name column on
+// miner_incentives is not read at all — v1 names were never reviewed.
 {
   reset();
-  const shown = seedAddr(1), noname = seedAddr(2), auto = seedAddr(3), adm = seedAddr(4), allow = seedAddr(5), old = seedAddr(6);
-  for (const a of [shown, noname, auto, adm, allow]) raw(a, 1, NOW - 3600);
-  setInc(shown, { donor_name: 'acme', donor_name_set_at: NOW - 86400, donation_percent: 10 });
+  const shown = seedAddr(1), noname = seedAddr(2), pend = seedAddr(3), rej = seedAddr(4), v1 = seedAddr(5),
+        rem = seedAddr(6), old = seedAddr(7);
+  for (const a of [shown, noname, pend, rej, v1, rem]) raw(a, 1, NOW - 3600);
+  req(shown, { name: 'Acme Inc.', status: 'approved', decided_at: NOW - 86400 });
+  setInc(shown, { donation_percent: 10 });
   setInc(noname, { donation_percent: 5 });
-  setInc(auto, { donor_name: 'sh1thead', donor_name_set_at: NOW - 86400, donor_censor: 'auto', donor_censor_word: 'shit', donor_censor_at: NOW - 86400 });
-  setInc(adm, { donor_name: 'spam', donor_name_set_at: NOW - 86400, donor_censor: 'admin', donor_censor_at: NOW - 86400, donor_censor_by: 1 });
-  setInc(allow, { donor_name: 'classic', donor_name_set_at: NOW - 86400, donor_censor: 'allow' });
-  // old: name set 2 years ago, last debit 14 months ago (rolled) → in window (365 d? no: 14 months
-  // ≈ 425 d → past) — use a raw debit 13 months ago is below H; so give it a rolled 200-day-old
-  // debit (in window) and a set_at 13 months back: expiry counts from the LATER of the two.
+  req(pend, { name: 'Pending Secret', status: 'pending' });
+  req(rej, { name: 'Rejected Rude', status: 'rejected', decided_at: NOW - 100, reason: 'reason-text-for-the-donor' });
+  setInc(v1, { donor_name: 'v1brand', donor_name_set_at: NOW - 86400 });                // v1 capture, never reviewed
+  req(rem, { name: 'Taken Down', status: 'removed', decided_at: NOW - 100, reason: 'removed-reason' });
+  // old: approved 400 days ago, last debit a rolled day 200 days ago (in window) — expiry counts
+  // from the LATER of the two, so 12 months have not passed yet.
   rolled(old, 1, NOW - 200 * 86400);
-  setInc(old, { donor_name: 'veteran', donor_name_set_at: NOW - 400 * 86400 });
+  req(old, { name: 'Veteran', status: 'approved', decided_at: NOW - 400 * 86400 });
 
   let w = wall();
   const byAddr = (arr, a) => arr.find((c) => c.address === mask(a));
-  const cs = byAddr(w.league, shown), cn = byAddr(w.league, noname), ca = byAddr(w.league, auto),
-        cd = byAddr(w.league, adm), cl = byAddr(w.league, allow), co = byAddr(w.league, old);
-  check('names: shown → name + name_state shown', cs && cs.name === 'acme' && cs.name_state === 'shown');
-  check('names: no name → null + masked', cn && cn.name === null && cn.name_state === 'masked');
-  check('names: auto-censored + masked display → null + censored', ca && ca.name === null && ca.name_state === 'censored');
-  check('names: admin-censored + masked display → null + censored', cd && cd.name === null && cd.name_state === 'censored');
-  check('names: allow override → shown even though the list would match', cl && cl.name === 'classic' && cl.name_state === 'shown');
-  check('names: 200-day-old debit with a 12-month expiry → shown (ref = later of debit and set_at)', co && co.name_state === 'shown');
-  check('names: current_percent from the row when donations are active', cs.current_percent === 10 && cn.current_percent === 5 && ca.current_percent === 0);
+  const cs = byAddr(w.league, shown), cn = byAddr(w.league, noname), cp = byAddr(w.league, pend),
+        cr = byAddr(w.league, rej), cv = byAddr(w.league, v1), cm = byAddr(w.league, rem), co = byAddr(w.league, old);
+  check('names: approved → the name AS TYPED (case kept) + shown', cs && cs.name === 'Acme Inc.' && cs.name_state === 'shown');
+  check('names: no request at all → null + masked', cn && cn.name === null && cn.name_state === 'masked');
+  check('names: a PENDING name never reaches a card', cp && cp.name === null && cp.name_state === 'masked');
+  check('names: a REJECTED name never reaches a card', cr && cr.name === null && cr.name_state === 'masked');
+  check('names: a REMOVED name never reaches a card', cm && cm.name === null && cm.name_state === 'masked');
+  check('names: a v1 donor_name on miner_incentives is NOT read (pre-moderation starts clean)', cv && cv.name === null && cv.name_state === 'masked');
+  check('names: approved 400 d ago, last debit 200 d ago, 12-month expiry → shown (ref = the later)', co && co.name === 'Veteran' && co.name_state === 'shown');
+  check('names: the dead v1 donation_percent column never reaches a card (10 / 5 stored, no live rig → pct 0)',
+        cn.pct_max === 0 && cs.pct_max === 0 && cs.rigs_donating === 0);
 
-  w = wall({ ds: ds({ donor_censored_display: 'marker' }) });
-  const ma = byAddr(w.league, auto), md = byAddr(w.league, adm), ms = byAddr(w.league, shown);
-  check('marker: censored cards carry the literal string in `name`', ma && ma.name === DN.CENSORED_MARKER && md && md.name === DN.CENSORED_MARKER && ma.name_state === 'censored');
-  check('marker: a shown name is unaffected by the display setting', ms && ms.name === 'acme');
-  check('marker: censored_display echoes marker', w.censored_display === 'marker');
-  check('marker: the string appears in NO field but `name`', (() => {
-    const hits = [];
-    const walk = (v, k) => {
-      if (typeof v === 'string' && v === DN.CENSORED_MARKER && k !== 'name') hits.push(k);
-      else if (Array.isArray(v)) v.forEach((x) => walk(x, k));
-      else if (v && typeof v === 'object') Object.entries(v).forEach(([kk, x]) => walk(x, kk));
-    };
-    walk(w, '');
-    return hits.length === 0;
-  })());
-
-  // Expiry: move the clock 13 months past the later of debit and set_at.
+  // Expiry: move the clock 200 days on — now 13+ months after the later of debit and approval.
   w = wall({ now: NOW + 200 * 86400, ds: ds({ donor_rank_window_days: 0 }) });
   const eo = byAddr(w.league, old);
-  check('expired: 12 months after the last debit the name is null + expired', eo && eo.name === null && eo.name_state === 'expired');
+  check('expired: 12 months after the later of last debit and approval the name is null + expired', eo && eo.name === null && eo.name_state === 'expired');
   check('expired: expiry 0 = never', (() => {
     const w2 = wall({ now: NOW + 200 * 86400, ds: ds({ donor_rank_window_days: 0, donor_name_expiry_months: 0 }) });
     const c = byAddr(w2.league, old);
-    return c && c.name === 'veteran' && c.name_state === 'shown';
+    return c && c.name === 'Veteran' && c.name_state === 'shown';
   })());
 
-  // Leakage sweep on the masked-mode response with censored rows present.
+  // Leakage sweep with every non-approved state present.
   w = wall();
   const ks = keys(w);
-  check('leak: no key named donor_censor*, donor_name_set_at or grin_address anywhere in the response',
-        ![...ks].some((k) => /^donor_censor|donor_name_set_at|grin_address/.test(k)), [...ks].join(','));
+  check('leak: no key named donor_* (but totals.donor_count), reason, decided_by, image or grin_address anywhere in the response',
+        ![...ks].some((k) => /^donor_(?!count$)|^reason$|decided_by|^image$|grin_address/.test(k)), [...ks].join(','));
   check('leak: no full address string anywhere in the response',
         !strings(w).some((s) => allAddrs.has(s) || /^grin1[a-z0-9]{40,}$/.test(s)));
-  check('leak: the censor word never appears anywhere', !strings(w).some((s) => /shit/.test(s)));
-  check('leak: the marker never appears under masked display', !strings(w).includes(DN.CENSORED_MARKER));
+  check('leak: no pending / rejected / removed name and no reason text anywhere',
+        !strings(w).some((s) => /Pending Secret|Rejected Rude|Taken Down|reason-text|removed-reason|v1brand/.test(s)));
+  check('leak: no censored_display key — the setting is gone (§18.6)', !('censored_display' in w));
 }
 
-// ── donations switch: current_percent + active_donors gated ──────────────────────────────
+// ── liveDonations(): per-rig, mining sessions only, distinct names (§18.3) ──────────────
 {
-  reset();
-  const a = seedAddr(1), b = seedAddr(2);
-  raw(a, 1, NOW - 3600);
-  setInc(a, { donation_percent: 10 });
-  setInc(b, { donation_percent: 5 });                    // live tag, no debit yet
-  let w = wall({ active: true });
-  check('switch ON: active_donors counts LIVE tags (2), including one with no card', w.totals.active_donors === 2 && w.totals.donor_count === 1);
-  check('switch ON: current_percent on the card', w.league[0].current_percent === 10);
-  w = wall({ active: false });
-  check('switch OFF: active_donors 0 and every current_percent 0', w.totals.active_donors === 0 && w.league.every((c) => c.current_percent === 0));
-  check('switch not a boolean true → treated as OFF', wall({ active: 'true' }).totals.active_donors === 0);
+  const A = mkAddr(1), B = mkAddr(2), C = mkAddr(3), X = mkAddr(4);
+  const sess = (a, w, acc = 5) => ({ grinAddress: a, workerName: w, acceptedShares: acc });
+  const m = liveDonations([
+    sess(A, 'rig01-donate10'), sess(A, 'rig02'), sess(A, 'rig03-donate20'),
+    sess(A, 'rig01-donate10'),                                  // the same rig reconnecting
+    sess(B, 'donate0'), sess(B, 'rig-donate101'),               // 0 % tag + an out-of-range typo
+    sess(C, 'donate5', 0),                                      // login only, no accepted share
+    sess(X, null), { grinAddress: '', workerName: 'donate50', acceptedShares: 9 }, null
+  ]);
+  const a = m.get(A), b = m.get(B);
+  check('live: distinct worker names — a reconnecting rig counts once (3 online, 2 donating)',
+        a.rigs_online === 3 && a.rigs_donating === 2);
+  check('live: pct range over the DONATING rigs only (10–20), untagged rig ignored',
+        a.pct_min === 10 && a.pct_max === 20);
+  check('live: donating_workers names each tagged rig with its own %, sorted',
+        JSON.stringify(a.donating_workers) === JSON.stringify([{ name: 'rig01-donate10', percent: 10 }, { name: 'rig03-donate20', percent: 20 }]));
+  check('live: donate0 and donate101 are online but NOT donating; pct 0',
+        b.rigs_online === 2 && b.rigs_donating === 0 && b.pct_min === 0 && b.pct_max === 0 && b.donating_workers.length === 0);
+  check('live: a session with no accepted share is not counted at all (§J6-9)', !m.has(C));
+  check('live: a null worker name counts as the "default" rig; a blank address and a null session are skipped',
+        m.get(X) && m.get(X).rigs_online === 1 && m.get(X).rigs_donating === 0 && !m.has('') && m.size === 3);
+  check('live: no sessions / junk input → empty Map, never a throw',
+        liveDonations().size === 0 && liveDonations(null).size === 0 && liveDonations([]).size === 0);
+  check('live: the parser is the money path’s (MyBrand folded at login → donate10 reads 10)',
+        liveDonations([sess(A, 'mybrand-donate10')]).get(A).pct_max === 10);
 }
 
-// ── rigs_online: display only, from a Map or a function, never ranked ────────────────────
+// ── the wall reads `live`: rigs_* / pct_* / active_donors, gated ──────────────────────────
 {
   reset();
-  const a = seedAddr(1), b = seedAddr(2);
-  raw(a, 1, NOW - 3600); raw(b, 2, NOW - 3600);
-  let w = wall({ rigsOnline: new Map([[a, 3]]) });
-  const ca = w.league.find((c) => c.address === mask(a)), cb = w.league.find((c) => c.address === mask(b));
-  check('rigs: Map lookup → 3, missing → 0', ca.rigs_online === 3 && cb.rigs_online === 0);
-  w = wall({ rigsOnline: (addr) => (addr === b ? 2.7 : NaN) });
-  check('rigs: function lookup, floored, NaN → 0', w.league.find((c) => c.address === mask(b)).rigs_online === 2 && w.league.find((c) => c.address === mask(a)).rigs_online === 0);
-  check('rigs: order is by score, not rigs (b leads with 2 GRIN and fewer rigs)', w.league[0].address === mask(b));
-  check('rigs: no rigsOnline at all → 0', wall().league.every((c) => c.rigs_online === 0));
+  const a = seedAddr(1), b = seedAddr(2), c = seedAddr(3);
+  raw(a, 1, NOW - 3600); raw(b, 2, NOW - 3600);            // c: tagged live, no debit yet
+  const sess = (ad, w) => ({ grinAddress: ad, workerName: w, acceptedShares: 3 });
+  const live = liveDonations([
+    sess(a, 'r1-donate5'), sess(a, 'r2-donate20'), sess(a, 'r3'),
+    sess(b, 'rig01'),
+    sess(c, 'donate10')
+  ]);
+  let w = wall({ live });
+  const ca = w.league.find((x) => x.address === mask(a)), cb = w.league.find((x) => x.address === mask(b));
+  check('wall: mixed tags → rigs_donating 2 of rigs_online 3, pct 5–20',
+        ca.rigs_online === 3 && ca.rigs_donating === 2 && ca.pct_min === 5 && ca.pct_max === 20);
+  check('wall: an untagged address reads paused (0 donating, 0 %) with its rig still online',
+        cb.rigs_online === 1 && cb.rigs_donating === 0 && cb.pct_min === 0 && cb.pct_max === 0);
+  check('wall: active_donors = addresses with a donating rig NOW, incl. one with no card yet (a, c)',
+        w.totals.active_donors === 2 && w.totals.donor_count === 2);
+  check('wall: order is by score, not rigs (b leads with 2 GRIN and fewer rigs)', w.league[0].address === mask(b));
+  // The column is dead: set it to 100 on b and nothing changes.
+  setInc(b, { donation_percent: 100 });
+  w = wall({ live });
+  check('wall: miner_incentives.donation_percent = 100 is ignored (b still 0 %)',
+        w.league.find((x) => x.address === mask(b)).pct_max === 0 && w.totals.active_donors === 2);
+  w = wall({ live, active: false });
+  check('switch OFF: rigs_donating / pct_* / active_donors all 0, rigs_online kept',
+        w.totals.active_donors === 0 &&
+        w.league.every((x) => x.rigs_donating === 0 && x.pct_min === 0 && x.pct_max === 0) &&
+        w.league.find((x) => x.address === mask(a)).rigs_online === 3);
+  check('switch not a boolean true → treated as OFF', wall({ live, active: 'true' }).totals.active_donors === 0);
+  check('wall: no `live` at all → every reading 0, not a throw',
+        wall().league.every((x) => x.rigs_online === 0 && x.rigs_donating === 0) && wall().totals.active_donors === 0);
+  check('wall: junk readings in `live` are bounded (NaN → 0, 250 % → 100, 2.7 rigs → 2)', (() => {
+    const junk = new Map([[a, { rigs_online: 2.7, rigs_donating: NaN, pct_min: 5, pct_max: 5 }],
+                          [b, { rigs_online: -1, rigs_donating: 1, pct_min: -3, pct_max: 250 }]]);
+    const j = wall({ live: junk });
+    const ja = j.league.find((x) => x.address === mask(a)), jb = j.league.find((x) => x.address === mask(b));
+    return ja.rigs_online === 2 && ja.rigs_donating === 0 && ja.pct_max === 0 &&
+           jb.rigs_online === 0 && jb.rigs_donating === 1 && jb.pct_min === 0 && jb.pct_max === 100;
+  })());
+}
+
+// ── banners: the Top-N slot rule (design §18.7, §18 Part 4) ─────────────────────────────
+// `banner` is { url, width, height } only on a LEAGUE card with rank ≤ donor_banner_slots and
+// an approved, unexpired banner; null everywhere else, and always null on the past strip.
+{
+  reset();
+  let seq = 0;
+  const hex16 = () => (++seq).toString(16).padStart(16, '0');
+  function banner(a, f = {}) {
+    const file = f.file !== undefined ? f.file : `${hex16()}.png`;
+    db.prepare(`INSERT INTO donor_requests (grin_address, kind, status, file, mime, width, height, bytes, submitted_at, decided_at, reason, image)
+                VALUES (?, 'banner', ?, ?, 'image/png', ?, ?, 1000, ?, ?, ?, ?)`)
+      .run(a, f.status || 'approved', file, f.width === undefined ? 800 : f.width, f.height === undefined ? 200 : f.height,
+           NOW - 2 * 86400, f.status === 'pending' ? null : (f.decided_at || NOW - 86400), f.reason || null,
+           f.status === 'pending' ? Buffer.from('pending-bytes') : null);
+    return file;
+  }
+  // Seven in-window donors with strictly falling amounts → ranks 1..7 in address order, and
+  // one past donor. Every one of them has an approved banner.
+  const L = [];
+  for (let i = 1; i <= 7; i++) { const a = seedAddr(i); raw(a, 10 - i, NOW - 3600); L.push(a); }
+  const past = seedAddr(50);
+  rolled(past, 5, NOW - 500 * 86400);
+  const files = L.map((a) => banner(a));
+  banner(past);
+  const rankOf = (w, a) => w.league.find((c) => c.address === mask(a));
+
+  let w = wall();
+  check('banner: ranks come out 1..7 in the seeded order (fixture sanity)', L.every((a, i) => rankOf(w, a).rank === i + 1));
+  check('banner: default 5 slots → ranks 1..5 carry { url, width, height }',
+        L.slice(0, 5).every((a, i) => JSON.stringify(rankOf(w, a).banner) ===
+          JSON.stringify({ url: `/uploads/donors/${files[i]}`, width: 800, height: 200 })));
+  check('banner: rank 6 and 7 (N+1 and beyond) → null, though approved', rankOf(w, L[5]).banner === null && rankOf(w, L[6]).banner === null);
+  check('banner: the past strip never carries one (approved and unexpired, still null)',
+        w.past.donors.length === 1 && w.past.donors[0].banner === null);
+  check('banner: ranking.banner_slots tells the page N', w.ranking.banner_slots === 5);
+
+  w = wall({ ds: ds({ donor_banner_slots: 1 }) });
+  check('banner: slots = 1 → rank 1 only', rankOf(w, L[0]).banner !== null && rankOf(w, L[1]).banner === null && w.ranking.banner_slots === 1);
+  w = wall({ ds: ds({ donor_banner_slots: 7 }) });
+  check('banner: slots = 7 → the boundary card (rank 7) has it', rankOf(w, L[6]).banner !== null);
+  w = wall({ ds: ds({ donor_banner_slots: 0 }) });
+  check('banner: slots = 0 → banners off: no card anywhere carries one', w.league.concat(w.past.donors).every((c) => c.banner === null) && w.ranking.banner_slots === 0);
+  w = wall({ ds: ds({ donor_banner_slots: 99 }) });
+  check('banner: slots 99 is bounded to the default (donorSettings 0–10), never "everyone"',
+        w.ranking.banner_slots === 5 && rankOf(w, L[5]).banner === null);
+  w = donorWall(db, { ds: { rankWindowDays: 365, bannerSlots: 'abc' }, now: NOW, H, active: true, mask });
+  check('banner: a raw ds with junk bannerSlots → 5, not NaN (every comparison false = no banners at all)',
+        w.ranking.banner_slots === 5 && rankOf(w, L[0]).banner !== null && rankOf(w, L[5]).banner === null);
+
+  // What may NOT become a banner, each on a top-3 card.
+  db.exec("DELETE FROM donor_requests");
+  banner(L[0], { status: 'pending' });                          // pending: bytes in the DB, never public
+  banner(L[1], { status: 'rejected', reason: 'banner-reject-reason' });
+  banner(L[2], { file: '../../etc/passwd' });                   // approved row, file not the server's shape
+  banner(L[3], { width: 0 });                                   // approved, dims junk
+  banner(L[4], { status: 'removed', reason: 'banner-removed-reason' });
+  w = wall();
+  check('banner: pending / rejected / removed / bad file / zero width → null on a top-5 card',
+        L.slice(0, 5).every((a) => rankOf(w, a).banner === null));
+  check('banner: no pending bytes, reason, or path of a non-approved banner anywhere in the response',
+        !strings(w).some((s) => /pending-bytes|banner-reject-reason|banner-removed-reason|passwd|\/uploads\//.test(s)));
+
+  // Expiry hides an approved banner the same way it hides a name (§18.1 #9).
+  db.exec("DELETE FROM donor_requests");
+  const f0 = banner(L[0], { decided_at: NOW - 400 * 86400 });
+  w = wall({ now: NOW + 400 * 86400, ds: ds({ donor_rank_window_days: 0 }) });
+  check('banner: 12 months past the later of last debit and approval → null', rankOf(w, L[0]).banner === null);
+  w = wall({ now: NOW + 400 * 86400, ds: ds({ donor_rank_window_days: 0, donor_name_expiry_months: 0 }) });
+  check('banner: expiry 0 = never', rankOf(w, L[0]).banner && rankOf(w, L[0]).banner.url === `/uploads/donors/${f0}`);
 }
 
 // ── settings traps: blank / junk / Infinity never reach a score ──────────────────────────
@@ -342,17 +457,16 @@ function keys(v, out = new Set()) {
   raw(a, 1, NOW - 3600); rolled(a, 1, NOW - 100 * 86400);
   const junk = DN.donorSettings({
     donor_rank_window_days: '', donor_loyalty_percent_per_month: 'abc', donor_loyalty_cap: 'Infinity',
-    donor_name_expiry_months: '-5', donor_censored_display: 'MARKER '
+    donor_name_expiry_months: '-5'
   }, 'GRINIUM');
   const w = wall({ ds: junk });
   const c = w.league[0];
   check('traps: blank/junk settings resolve to the documented defaults',
         w.ranking.window_days === 365 && w.ranking.loyalty_percent_per_month === 10 && w.ranking.loyalty_cap === 3 && w.ranking.name_expiry_months === 12);
   check('traps: score and multiplier are finite numbers', Number.isFinite(c.score) && Number.isFinite(c.multiplier) && c.multiplier === 1.2);
-  check('traps: enum is closed but case/space tolerant (MARKER → marker)', w.censored_display === 'marker');
   check('traps: no ds at all → defaults, not a throw', (() => {
     const w2 = donorWall(db, { now: NOW, H, active: true, mask });
-    return w2.ranking.window_days === 365 && w2.censored_display === 'masked';
+    return w2.ranking.window_days === 365 && w2.ranking.name_expiry_months === 12;
   })());
   check('traps: a raw settings object passed as ds (not donorSettings) still cannot NaN the score', (() => {
     const w2 = donorWall(db, { ds: { rankWindowDays: 'abc', loyaltyPercentPerMonth: NaN, loyaltyCap: -1 }, now: NOW, H, active: true, mask });

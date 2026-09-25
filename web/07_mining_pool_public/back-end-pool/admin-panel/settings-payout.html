@@ -61,6 +61,11 @@
               <input type="number" id="withdrawal_cooldown_minutes" name="withdrawal_cooldown_minutes" min="0" max="1440" step="1" value="30">
               <div class="helper-text">After a payout is returned to a miner's balance (Tor failure, expired slatepack, cancel), the miner must wait this long before requesting another — on any payout method. 0 disables. Applied on backend restart.</div>
             </div>
+            <div class="form-group">
+              <label for="slatepack_ttl_minutes">Slatepack Response Window (minutes)</label>
+              <input type="number" id="slatepack_ttl_minutes" name="slatepack_ttl_minutes" min="10" max="1440" step="1" value="30">
+              <div class="helper-text">How long a manual Slatepack payout waits for the miner's response. After that the pool cancels its wallet transaction and returns the balance; a late response is refused (never a double-pay), and the miner then waits out the cooldown on the left. Miners cannot cancel a payout themselves, so this window is their only way out of an abandoned request — and every pending slatepack locks pool-wallet coins until it ends. 10–1440. Applied on backend restart.</div>
+            </div>
           </div>
 
           <div class="checkbox-group">

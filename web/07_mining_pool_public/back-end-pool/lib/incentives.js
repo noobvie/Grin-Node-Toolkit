@@ -154,48 +154,18 @@ class IncentivesManager {
     return this.db.prepare('SELECT * FROM miner_incentives WHERE grin_address = ?').get(address);
   }
 
-  // Is a stored donation % actually taking a cut right now? Mirrors the two flags
-  // applyToDistribution checks, so the account page can report the donation only when it is
-  // real (audit §J3-5). Reporting a stored-but-dormant 100% would be a false alarm on a pool
-  // that has donations switched off — and the row exists to warn about actual loss.
+  // Would a `donateN` tag take a cut right now? Mirrors the two flags applyToDistribution
+  // checks, so every live reading (account page, wall, admin list) reports a donation only
+  // when it is real (audit §J3-5) — a tag on a pool with donations switched off moves nothing.
   donationsActive() {
     const s = this.settingsView();
     return flag(s.incentives_enabled) && flag(s.allow_miner_donations);
   }
 
-  donationPercent(address) {
-    const row = this.db.prepare('SELECT donation_percent FROM miner_incentives WHERE grin_address = ?').get(address);
-    return row ? row.donation_percent : 0;
-  }
-
-  // Set a miner's voluntary donation %, parsed from the `donateN` worker-name tag at login.
-  // No-op unless donations are enabled. Idempotent. Returns true when a value was written.
-  //
-  // Both flags are checked, not just allow_miner_donations (audit §J6-7): donationsActive()
-  // above — the predicate that decides whether a stored % actually takes a cut — requires
-  // incentives_enabled too, so checking only one of them here let an operator who had switched
-  // incentives OFF still accumulate donation percentages that would all take effect at once the
-  // moment they switched them back on. A write that cannot take effect today must not be
-  // silently banked for a day when it can.
-  //
-  // The CALLER decides whether this session has earned the right to write (see
-  // stratum-server.handleSubmit): stratum login is unauthenticated, so "who asked" is not a
-  // question this method can answer.
-  setDonation(address, percent) {
-    if (RESERVED_ADDRESSES.includes(address)) return false;
-    const s = this.settingsView();
-    if (!flag(s.incentives_enabled) || !flag(s.allow_miner_donations)) return false;
-    let p = parseFloat(percent);
-    if (isNaN(p)) return false;
-    p = Math.max(0, Math.min(100, p));
-    this.ensureAccount(address);
-    this.db.prepare(`
-      INSERT INTO miner_incentives (grin_address, donation_percent, updated_at)
-      VALUES (?, ?, unixepoch())
-      ON CONFLICT(grin_address) DO UPDATE SET donation_percent = excluded.donation_percent, updated_at = unixepoch()
-    `).run(address, p);
-    return true;
-  }
+  // There is no stored donation % any more (design §18.2, 2026-09-24). The v1 per-address
+  // percentage — written from a login tag, lower-only once set (§J6-7) — was replaced by the
+  // per-share read in rewards.js, so donationPercent()/setDonation() are gone and the
+  // miner_incentives.donation_percent column is kept in the schema but read by nothing.
 
   // Streak multiplier as a fraction (e.g. 0.03 for +3%). Returns 0 if the streak is stale
   // (the address didn't mine today or yesterday) or streaks are disabled.
@@ -213,11 +183,13 @@ class IncentivesManager {
 
   // ─── Hook called by rewards.js (inside its distribution transaction) ────────
   // minerMap: Map<grin_address, grossPayout>. poolFee: the operator fee already credited to
-  // pool_fee by rewards.js. This rebalances those base credits into the incentive system:
+  // pool_fee by rewards.js. donateMap: Map<grin_address, Σ share credit × that share's donate
+  // %> — built per SHARE by rewards.js (design §18.2); absent/empty = nobody donates. This
+  // rebalances those base credits into the incentive system:
   //   1. divert prize_fee_cut_percent of the fee from pool_fee → prize_pool
-  //   2. divert each miner's donation_percent of their payout → prize_pool
+  //   2. divert each address's donateMap amount (≤ its gross) → prize_pool
   //   3. top up each miner with their streak bonus, funded from prize_pool
-  applyToDistribution(blockHeight, minerMap, poolFee) {
+  applyToDistribution(blockHeight, minerMap, poolFee, donateMap = null) {
     const s = this.settingsView();
     if (!flag(s.incentives_enabled)) return;
 
@@ -228,17 +200,18 @@ class IncentivesManager {
       this.creditPrizePool(cut, 'fee_cut', blockHeight);
     }
 
-    // 2. Voluntary miner donations → prize pool.
-    if (flag(s.allow_miner_donations)) {
+    // 2. Voluntary miner donations → prize pool. Iterates minerMap, not donateMap, so only an
+    // address this block actually credited can be debited. The clamp is float-drift insurance:
+    // a donate100-only address sums to exactly its gross, and nothing may take more than that.
+    // Ledger shape unchanged from v1 — one debit per address per block, one prize-pool credit.
+    if (flag(s.allow_miner_donations) && donateMap && typeof donateMap.get === 'function') {
       for (const [address, gross] of minerMap) {
         if (RESERVED_ADDRESSES.includes(address)) continue;
-        const pct = this.donationPercent(address);
-        if (pct > 0) {
-          const donated = gross * (pct / 100);
-          if (donated > 0) {
-            this._move(address, -donated, 'debit', 'donation', blockHeight);
-            this.creditPrizePool(donated, 'donation', blockHeight);
-          }
+        const want = Number(donateMap.get(address)) || 0;
+        const donated = Math.min(want, gross);
+        if (Number.isFinite(donated) && donated > 0) {
+          this._move(address, -donated, 'debit', 'donation', blockHeight);
+          this.creditPrizePool(donated, 'donation', blockHeight);
         }
       }
     }

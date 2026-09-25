@@ -128,9 +128,11 @@
       font-size: 18px; font-weight: 700; color: var(--accent, #7cb342);
     }
     .donor-total small { font-size: 11px; font-weight: 400; color: var(--text-dim, #9aa4b2); }
+    /* The live donation line (§18.3): a sentence now ("10 % of new earnings from 2 rigs"), so
+       sentence case and a radius that still reads as a tag when it wraps at 390 px. */
     .donor-badge {
-      display: inline-block; margin-top: 6px; padding: 2px 8px; border-radius: 999px;
-      font-size: 11px; letter-spacing: .05em; text-transform: uppercase;
+      display: inline-block; margin-top: 6px; padding: 2px 8px; border-radius: 8px;
+      font-size: 11.5px; line-height: 1.45;
       border: 1px solid var(--border, rgba(255,255,255,.10));
     }
     .donor-badge.on  { color: var(--accent, #7cb342); border-color: var(--accent, #7cb342); }
@@ -144,18 +146,51 @@
       padding: 1.2rem; text-align: center; font-family: var(--mono, monospace);
       font-size: 12px; letter-spacing: .12em; color: var(--text-mute, #6b7480);
     }
-    /* Display name (design §16.7). Names are lowercase a-z0-9_- up to 32 chars, but the
-       operator's censored MARKER is `<censored-donor>` — every name goes through escHtml and
-       break-all keeps a 32-char name inside a 390 px card. The first line of a card clears
-       the absolutely-positioned rank badge on the right. */
+    /* Display name (design §18.5/§18.7): the donor's APPROVED nickname, 2–32 chars of
+       A–Z a–z 0–9 space - _ . & ' with case kept. Every name goes through escHtml anyway, and
+       break-word keeps a 32-char unbroken name inside a 390 px card. The first line of a card
+       clears the absolutely-positioned rank badge on the right. */
     .donor-name {
-      font-weight: 700; font-size: 15px; color: var(--text, #e6edf3); word-break: break-all;
+      font-weight: 700; font-size: 15px; color: var(--text, #e6edf3); overflow-wrap: anywhere;
     }
-    .donor-name.censored {
-      font-weight: 400; font-size: 12px; color: var(--text-mute, #6b7480);
-      font-family: var(--mono, monospace);
+    .donor-card > .donor-name, .donor-card > .addr-plain,
+    .spot-body > .donor-rank + * { display: block; padding-right: 44px; }
+
+    /* ── Top-N spotlight (design §18.7) ─────────────────────────────────────
+       Ranks 1..donor_banner_slots, above the compact league: rank 1 spans the row, 2..N share
+       a grid. The banner sits in a fixed 4:1 box with object-fit: contain, so an 8:1 or a 2:1
+       banner letterboxes inside it instead of changing the card's height, and the <img>
+       width/height attributes keep the box from jumping when the image arrives. The box is
+       absolutely filled rather than sized by a percentage height, which some engines leave
+       unresolved inside an aspect-ratio box. */
+    .donor-sec-head {
+      margin: 0 0 6px; font-size: 11px; letter-spacing: .12em; text-transform: uppercase;
+      color: var(--text-mute, #6b7480);
     }
-    .donor-card > .donor-name, .donor-card > .addr-plain { display: block; padding-right: 44px; }
+    .donor-spot {
+      display: grid; gap: 10px; margin-bottom: 14px;
+      grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+    }
+    .donor-spot > .spot-first { grid-column: 1 / -1; }
+    .donor-spot .donor-card { padding: 10px; }
+    .spot-banner {
+      position: relative; width: 100%; aspect-ratio: 4 / 1; overflow: hidden;
+      border-radius: 6px; background: var(--bg, #07090c);
+      border: 1px solid var(--border, rgba(255,255,255,.10));
+    }
+    .spot-banner img {
+      position: absolute; inset: 0; width: 100%; height: 100%;
+      object-fit: contain; display: block;
+    }
+    /* No banner (none approved, expired, or banners off for this card): the name, large. */
+    .spot-banner.noimg {
+      display: flex; align-items: center; justify-content: center;
+      padding: 0 12px; text-align: center;
+    }
+    .spot-banner.noimg .donor-name { font-size: clamp(16px, 4.2vw, 26px); line-height: 1.15; }
+    .spot-banner.noimg .addr-plain { font-size: clamp(12px, 3vw, 16px); color: var(--text-dim, #9aa4b2); }
+    .spot-body { position: relative; padding: 8px 4px 2px; }
+    .spot-body .donor-rank { top: 8px; right: 4px; font-size: 13px; }
     .donor-lifetime, .donor-loyalty {
       margin-top: 3px; font-family: var(--mono, monospace); font-size: 11.5px;
       color: var(--text-dim, #9aa4b2);
@@ -250,27 +285,53 @@
                     <span class="right">for miners — no account, no extra step</span></h2>
                 <div class="panel-body">
                     <span class="pill">Option 1 · for miners</span>
-                    <p>Just name one of your workers <code>donate&lt;N&gt;</code> — where <strong>N is the
-                        percentage</strong> of your payouts (0–100) you want to give to the prize pool.
-                        The <code>donate</code> tag can be the whole worker name or a <code>-</code>/<code>_</code> suffix:</p>
+                    <p>Add <code>donate&lt;N&gt;</code> to a rig's worker name, where <strong>N is the
+                        percentage</strong> (0–100) of what <strong>that rig</strong> earns that goes to the
+                        prize pool. A donation is per rig: your other rigs keep everything they earn.
+                        The tag can be the whole worker name or a <code>-</code>/<code>_</code> suffix:</p>
                     <table class="data-table">
                         <thead><tr><th>Worker name</th><th>Result</th></tr></thead>
                         <tbody>
-                            <tr><td><code>grin1…address.donate10</code></td><td class="ok">Donate 10% of your payouts — the wall below shows your masked address</td></tr>
-                            <tr><td><code>grin1…address.yourbrandname-donate10</code></td><td class="ok">Donate 10% — and the name on your tagged rig becomes your <strong>donor name</strong> on the wall below (lowercase, up to 32 characters); plain <code>donate10</code> shows your masked address instead</td></tr>
-                            <tr><td><code>grin1…address.donate0</code></td><td class="no">0% — turn a donation back off</td></tr>
-                            <tr><td><code>grin1…address.rig01</code></td><td class="no">No donation (normal worker)</td></tr>
-                            <tr><td><code>donate101</code>, <code>donate-1</code>, <code>donatexx</code></td><td class="no">Ignored — treated as a normal worker name, donates nothing</td></tr>
-                            <tr><td><code>donate5</code> → <code>donate20</code></td><td>To <strong>raise</strong> a tag you already set, go through <code>donate0</code> first (let it mine a few shares), then reconnect with <code>donate20</code>. A stored donation can only be lowered directly — so nobody else who mines to your address can ever raise it.</td></tr>
+                            <tr><td><code>grin1…address.rig01-donate10</code></td><td class="ok">This rig donates 10% of what it earns. Your other rigs are unaffected.</td></tr>
+                            <tr><td><code>grin1…address.donate10</code></td><td class="ok">The same, with the tag as the whole worker name</td></tr>
+                            <tr><td><code>grin1…address.rig01</code></td><td class="no">No donation (normal worker). <code>rig01-donate0</code> is the same.</td></tr>
+                            <tr><td><code>donate101</code>, <code>donate-1</code>, <code>donatexx</code></td><td class="no">Ignored: treated as a normal worker name, donates nothing</td></tr>
                         </tbody>
                     </table>
-                    <p class="panel-note">Only <code>donate0</code>–<code>donate100</code> donate. Anything out of
-                        range or mistyped is safely treated as an ordinary worker name — a typo can never donate
-                        more than you meant. A tag takes effect after a few accepted shares; the slice is taken
-                        from each block reward as it matures, which is also when you first appear on the wall below.
-                        Your current setting is shown on your account page. To <strong>change your donor name</strong>,
-                        use the same ceremony as a raise: <code>donate0</code>, a few shares, then
-                        <code>newname-donate10</code> — a plain <code>donate10</code> at that step removes the name.</p>
+                    <p class="panel-note"><strong>To change or stop:</strong> rename the rig and restart the miner.
+                        It applies from that rig's next share (shares from the last hour keep the old tag if a
+                        block is found soon). Anything out of range or mistyped is treated as an ordinary worker
+                        name, so a typo can never donate more than you meant. The slice is taken from each block
+                        reward as it matures, which is also when you first appear on the wall below. Your account
+                        page shows which of your rigs are donating.</p>
+                </div>
+            </div>
+
+            <!-- ═══ D-01b · DONOR NAME & BANNER (design §18.7) ═══ -->
+            <div class="panel"><span class="screws"></span>
+                <h2 class="panel-title"><span class="tag">D-01b</span> Your donor name &amp; banner
+                    <span class="right">optional, reviewed before it appears</span></h2>
+                <div class="panel-body">
+                    <p>The wall below shows your masked address until you choose a name.</p>
+                    <ul class="fund-list">
+                        <li>🪪 <strong>Where</strong>: in the Donor profile panel on your
+                            <a class="nav-link" href="account-settings.html" style="text-decoration:underline;">account page</a>.
+                            It unlocks after your first donation is taken, which happens when a pool block
+                            your tagged rig mined for matures.</li>
+                        <li>🔐 <strong>Proof</strong>: a recent mining IP <em>and</em> your rig's stratum
+                            password, both. Someone who only mines to your address cannot set a name for you.</li>
+                        <li>👀 <strong>Reviewed first</strong>: the pool checks every name and banner before it
+                            appears. Nothing you submit is public until it is approved.</li>
+                        <li id="dn-banner-li">🖼️ <strong>Banner</strong>: <span id="dn-banner-top">the top donors in
+                            the league</span> also show a banner. 800 × 200 px is recommended; PNG, JPG or GIF
+                            (animation allowed), up to 300 KB.</li>
+                    </ul>
+                    <p class="panel-note">A name is 2–32 characters: letters, digits, spaces and
+                        <code>- _ . &amp; '</code>. <span id="dn-expiry">A name and banner stop showing some months
+                        after your last donation, and come back when you donate again.</span></p>
+                    <p class="panel-note">Can't pass the check, for example because you mine from a new IP or your
+                        rigs have no password? Ask the pool operator.
+                        <a data-brand="contact-link" style="display:none">Contact the operator</a></p>
                 </div>
             </div>
 
@@ -287,7 +348,7 @@
                 </div>
             </div>
 
-            <!-- ═══ D-03 · DONOR LEAGUE (design §16.6/§16.7) ═══ -->
+            <!-- ═══ D-03 · DONOR LEAGUE (design §16.6 ranking, §18.7 cards + Top-N spotlight) ═══ -->
             <div class="panel"><span class="screws"></span>
                 <h2 class="panel-title"><span class="tag">D-03</span> Donor league
                     <span class="right">every miner who has donated payout slices</span></h2>
@@ -295,6 +356,10 @@
                     <!-- Rewritten from /api/pool/donors `ranking` once it answers; this is the
                          window-agnostic fallback so a failed fetch never states a wrong number. -->
                     <p class="panel-note donor-ranking" id="donor-ranking">Ranked by GRIN donated in the ranking window × loyalty.</p>
+                    <div id="donor-spot-wrap" style="display:none;">
+                        <div class="donor-sec-head" id="donor-spot-head">Top donors</div>
+                        <div class="donor-spot" id="donor-spot"></div>
+                    </div>
                     <div class="donor-grid" id="donor-grid" style="display:none;"></div>
                     <div class="donor-empty" id="donor-empty">LOADING DONORS…</div>
                     <div class="donor-past" id="donor-past" style="display:none;">
@@ -302,7 +367,7 @@
                         <ul class="donor-past-list" id="donor-past-list"></ul>
                         <div class="donor-past-more" id="donor-past-more" style="display:none;"></div>
                     </div>
-                    <p class="panel-note donor-disclaimer">Names are chosen by the donors and are not verified by the pool.</p>
+                    <p class="panel-note donor-disclaimer">Names and banners are chosen by donors and reviewed by the pool before they appear.</p>
                 </div>
             </div>
 
@@ -380,7 +445,7 @@
             setTimeout(function () { btn.textContent = old; }, 1500);
         }
 
-        // ── Donor league (/api/pool/donors v2 — design §16.6/§16.7) ─────────────
+        // ── Donor league (/api/pool/donors v3 — design §16.6 + §18.3/§18.7) ─────
         (function () {
             'use strict';
 
@@ -407,17 +472,13 @@
 
             var windowDays = 0; // set from `ranking` before any card renders
 
-            // What a card is headed by (§16.7): the donor's name when the API says `shown`; the
-            // operator's censored marker when the API sent one (name_state `censored`); else the
-            // masked address the API already applied. EVERY name goes through escHtml — the
-            // marker contains angle brackets and must display literally, and the login grammar
-            // is not a reason to trust a string that reaches innerHTML.
+            // What a card is headed by (§18.7): the donor's APPROVED name when the API says
+            // `shown`, else the masked address the API already applied. Every name goes through
+            // escHtml: the server's name rule is not a reason to trust a string that reaches
+            // innerHTML.
             function nameCell(d) {
-                if (d.name != null && d.name_state === 'shown') {
+                if (typeof d.name === 'string' && d.name !== '' && d.name_state === 'shown') {
                     return '<span class="donor-name">' + escHtml(d.name) + '</span>';
-                }
-                if (d.name != null) {
-                    return '<span class="donor-name censored">' + escHtml(d.name) + '</span>';
                 }
                 // Plain text, no link and no `title` (audit §J11-1): the address is masked
                 // server-side and a donor wall is a thank-you, not an identity register.
@@ -428,30 +489,80 @@
                 return rank >= 1 && rank <= 3 ? ['🥇', '🥈', '🥉'][rank - 1] : '#' + escHtml(rank);
             }
 
-            function leagueCard(d) {
+            // The live donation (§18.3 copy rules): one % → "10 %", mixed rigs → "5–20 %", and
+            // no tagged rig mining right now → "paused". rigs_donating / pct_* already read 0
+            // while the operator has donations off, so that case needs no branch here.
+            function liveCopy(d) {
+                var n = Number(d.rigs_donating);
+                var hi = Number(d.pct_max), lo = Number(d.pct_min);
+                n = isFinite(n) && n > 0 ? Math.floor(n) : 0;
+                if (!n || !(isFinite(hi) && hi > 0)) return { n: 0, badge: '<span class="donor-badge off">paused — no tagged rig online</span>' };
+                if (!(isFinite(lo) && lo > 0) || lo > hi) lo = hi;
+                var pct = (lo === hi ? escHtml(hi) : escHtml(lo) + '–' + escHtml(hi)) + ' %';
+                return { n: n, badge: '<span class="donor-badge on">' + pct + ' of new earnings from ' +
+                    escHtml(n) + ' ' + plural(n, 'rig', 'rigs') + '</span>' };
+            }
+
+            // Everything under a card's name: window total, lifetime, loyalty, the live line and
+            // "since <date> · N rigs donating". Shared by the compact and the spotlight cards.
+            function cardStats(d) {
                 var inWin = typeof d.in_window_donated === 'number' ? d.in_window_donated : 0;
                 var life = typeof d.total_donated === 'number' ? d.total_donated : 0;
                 var months = Number(d.active_months) || 0;
-                var rigs = Number(d.rigs_online) || 0;
-                var pct = Number(d.current_percent) || 0;
-                var badge = pct > 0
-                    ? '<span class="donor-badge on">donating ' + escHtml(pct) + '%</span>'
-                    : '<span class="donor-badge off">paused</span>';
+                var live = liveCopy(d);
                 // Lifetime printed only when it differs from the window figure (§16.7) — with an
                 // all-time window the two are the same number and printing it twice reads as a bug.
                 var lifetime = Math.abs(life - inWin) > 5e-10
                     ? '<div class="donor-lifetime">' + fmtGrin(life) + ' GRIN lifetime</div>'
                     : '';
+                return '<div class="donor-total">' + fmtGrin(inWin) + ' <small>GRIN' + (windowDays > 0 ? ' in window' : '') + '</small></div>' +
+                    lifetime +
+                    '<div class="donor-loyalty">×<b>' + escHtml(fmtMult(d.multiplier)) + '</b> loyalty · <b>' + escHtml(months) + '</b> ' + plural(months, 'month', 'months') + '</div>' +
+                    live.badge +
+                    '<div class="donor-meta">' +
+                        'since <b>' + utcDay(d.first_donated_at) + '</b>' +
+                        (live.n > 0 ? ' · <b>' + escHtml(live.n) + '</b> ' + plural(live.n, 'rig', 'rigs') + ' donating' : '') +
+                    '</div>';
+            }
+
+            function leagueCard(d) {
                 return '<div class="donor-card">' +
                     '<div class="donor-rank">' + medal(d.rank) + '</div>' +
                     nameCell(d) +
-                    '<div class="donor-total">' + fmtGrin(inWin) + ' <small>GRIN' + (windowDays > 0 ? ' in window' : '') + '</small></div>' +
-                    lifetime +
-                    '<div class="donor-loyalty">×<b>' + escHtml(fmtMult(d.multiplier)) + '</b> loyalty · <b>' + escHtml(months) + '</b> ' + plural(months, 'month', 'months') + '</div>' +
-                    badge +
-                    '<div class="donor-meta">' +
-                        'since <b>' + utcDay(d.first_donated_at) + '</b> · ' +
-                        '<b>' + escHtml(rigs) + '</b> ' + plural(rigs, 'rig', 'rigs') + ' online' +
+                    cardStats(d) +
+                '</div>';
+            }
+
+            // The banner the API sent, or null. The server already refuses to emit anything but
+            // its own approved-file URL; this is the second fence (defence in depth against a bad
+            // row or a proxy rewriting the response): exactly the shape lib/donor-profiles.js
+            // writes, and positive integer dims for the width/height attributes.
+            var BANNER_URL_RE = /^\/uploads\/donors\/[0-9a-f]{16}\.(png|jpg|gif)$/;
+            function bannerOf(d) {
+                var b = d && d.banner;
+                if (!b || typeof b.url !== 'string' || !BANNER_URL_RE.test(b.url)) return null;
+                var w = Number(b.width), h = Number(b.height);
+                if (!(w > 0 && h > 0 && Math.floor(w) === w && Math.floor(h) === h)) return null;
+                return { url: b.url, width: w, height: h };
+            }
+
+            // A spotlight card (§18.7): the banner in a 4:1 box — or, with no banner, the name
+            // large in the same box — then the rank and the same stats as a compact card. The
+            // name is repeated under a banner as text, because a banner may be a logo alone.
+            function spotCard(d, first) {
+                var b = bannerOf(d);
+                var named = typeof d.name === 'string' && d.name !== '' && d.name_state === 'shown';
+                var alt = named ? d.name : 'Donor #' + d.rank;
+                var box = b
+                    ? '<div class="spot-banner"><img src="' + escHtml(b.url) + '" width="' + b.width +
+                        '" height="' + b.height + '" alt="' + escHtml(alt) + '" loading="lazy" decoding="async"></div>'
+                    : '<div class="spot-banner noimg">' + nameCell(d) + '</div>';
+                return '<div class="donor-card' + (first ? ' spot-first' : '') + '">' +
+                    box +
+                    '<div class="spot-body">' +
+                        '<div class="donor-rank">' + medal(d.rank) + '</div>' +
+                        (b ? nameCell(d) : '') +
+                        cardStats(d) +
                     '</div>' +
                 '</div>';
             }
@@ -494,9 +605,26 @@
                 set('dn-active', totals.active_donors != null ? String(totals.active_donors) : '—');
                 set('donor-ranking', rankingSentence(ranking));
 
+                // N of the Top-N spotlight: the operator's donor_banner_slots, 0–10, 0 = off.
+                var slots = Number(ranking.banner_slots);
+                slots = isFinite(slots) && slots > 0 ? Math.min(10, Math.floor(slots)) : 0;
+                // D-01b follows the same two settings, so it never promises what the wall won't do.
+                var bannerLi = document.getElementById('dn-banner-li');
+                if (bannerLi) {
+                    if (slots > 0) set('dn-banner-top', 'the top ' + slots + ' ' + plural(slots, 'donor', 'donors') + ' in the league');
+                    else bannerLi.textContent = '🖼️ Banners are switched off on this pool, so the wall shows names only.';
+                }
+                var exp = Number(ranking.name_expiry_months);
+                if (isFinite(exp) && exp >= 0) {
+                    set('dn-expiry', exp > 0
+                        ? 'A name and banner stop showing ' + exp + ' ' + plural(exp, 'month', 'months') + ' after your last donation, and come back when you donate again.'
+                        : 'An approved name and banner stay up for as long as the pool keeps them approved.');
+                }
+
                 var grid = document.getElementById('donor-grid');
                 var empty = document.getElementById('donor-empty');
                 var pastBox = document.getElementById('donor-past');
+                var spotWrap = document.getElementById('donor-spot-wrap');
 
                 if (!league.length) {
                     // A card needs an actual slice, and a slice is only taken when a block
@@ -511,9 +639,21 @@
                             : 'NO DONORS YET — BE THE FIRST 💚';
                     empty.style.display = '';
                     grid.style.display = 'none';
+                    spotWrap.style.display = 'none';
                 } else {
-                    grid.innerHTML = league.map(leagueCard).join('');
-                    grid.style.display = '';
+                    // Ranks 1..N in the spotlight, N+1.. as today's compact cards. The API sends
+                    // the league in rank order; a card only gets a banner if the API attached one.
+                    var top = league.slice(0, slots), rest = league.slice(slots);
+                    if (top.length) {
+                        document.getElementById('donor-spot').innerHTML =
+                            top.map(function (d, i) { return spotCard(d, i === 0); }).join('');
+                        set('donor-spot-head', 'Top ' + slots);
+                        spotWrap.style.display = '';
+                    } else {
+                        spotWrap.style.display = 'none';
+                    }
+                    grid.innerHTML = rest.map(leagueCard).join('');
+                    grid.style.display = rest.length ? '' : 'none';
                     empty.style.display = 'none';
                 }
 

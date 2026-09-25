@@ -34,11 +34,15 @@
 //           unrevocable access token makes a near-public surface — emits counts and set-level
 //           timestamps. Both routes SELECT an explicit column list; the SELECT is the control,
 //           because both spread their row into the response.
-//   §16.10  Donor names (design §16): /api/pool/donors and /api/account/:addr may emit a
-//           donor's opt-in `name` and its state, and NOTHING else from the six donor_*
-//           columns — never the censor word, the censoring admin, or the raw censor state —
-//           and the censored MARKER string only when the operator chose `marker`. The address
-//           on the wall stays masked; the mask is a REQUIRED argument of the lib builder.
+//   §16.10  Donor names (design §16, reworked by §18.9): /api/pool/donors and /api/account/:addr
+//   §18.9   may emit a donor's APPROVED `name` and its state — never a pending name, image
+//           bytes, a decider, or anything from the six v1 donor_* columns (unread since §18
+//           Part 3, when the censor + marker machinery was deleted). Every route that touches
+//           donor_requests is enumerated and pinned: the public ones use only the public-safe
+//           readers, the admin readers sit behind secureAdmin/freshAdmin. The address on the
+//           wall stays masked; the mask is a REQUIRED argument of the lib builder. A card's
+//           approved `banner` is built only under the Top-N slot guard (§18 Part 4), and
+//           donate.html keeps its own exact-shape fence on the banner URL.
 //
 // Pure in-process assertions against the real modules — no server, no DB, nothing left
 // running. Run: node scripts/test-public-leakage.js
@@ -50,7 +54,6 @@ const WEB = path.resolve(APP, '..');
 const PoolSettings = require(path.join(APP, 'lib/pool-settings.js'));
 const ownerProof = require(path.join(APP, 'lib/owner-proof.js'));
 const geoip = require(path.join(APP, 'lib/geoip.js'));
-const donorNames = require(path.join(APP, 'lib/donor-names.js'));
 
 const indexSrc = fs.readFileSync(path.join(APP, 'index.js'), 'utf8');
 const brandingSrc = fs.readFileSync(path.join(WEB, 'public_html/js/branding.js'), 'utf8');
@@ -176,9 +179,15 @@ console.log('\n[4] §J11-2 — the on-chain kernel needs an ownership proof\n');
 
 const paymentsRoute = routeSrc('get', '/api/pool/payments');
 ok('§J11-2 the /api/pool/payments route exists', paymentsRoute.length > 0);
+// The one permitted mention is the yes/no coercion behind `has_kernel_proof` ("seen mined").
+// Strip exactly that expression first; any OTHER mention of kernel_excess in the SELECT — a bare
+// column, an alias, a substr() — is still the value and still fails.
+const KERNEL_BOOL_SQL = /\(kernel_excess IS NOT NULL AND kernel_excess != ''\) AS has_kernel_proof/g;
 ok('§J11-2 /api/pool/payments does NOT select kernel_excess',
-  !/SELECT[\s\S]*kernel_excess[\s\S]*FROM withdrawals/i.test(paymentsRoute),
+  !/SELECT[\s\S]*kernel_excess[\s\S]*FROM withdrawals/i.test(paymentsRoute.replace(KERNEL_BOOL_SQL, '')),
   'a pool-wide address+kernel pair is a public chain-analysis index');
+ok('§J11-2 /api/pool/payments sends has_kernel_proof as a boolean only',
+  /has_kernel_proof: !!p\.has_kernel_proof/.test(paymentsRoute));
 
 const withdrawalsRoute = routeSrc('get', '/api/account/:addr/withdrawals');
 // Testing that `has_kernel_proof` is PRESENT is not the same as testing that the kernel is
@@ -328,10 +337,10 @@ ok('§J11-8 geoip never hands an IP back to a caller',
   JSON.stringify(geoip.lookupCountry('8.8.8.8')));
 
 
-console.log('\n[9] §16.10 — donor names: only `name` + `name_state` leave the public routes\n');
+console.log('\n[9] §16.10 / §18.9 — donor names: only the APPROVED `name` + `name_state` leave the public routes\n');
 
 // The wall. The response is built in lib/donor-ledger.js donorWall() (index.js cannot be
-// required, so the behavioural sweep — 102 donors, censored rows, both display modes — lives in
+// required, so the behavioural sweep — 102 donors, every non-approved profile state — lives in
 // scripts/test-donor-league.js). Here: the route hands the lib the mask and nothing it must not,
 // and the lib's card builder cannot emit a donor_* column by construction.
 const donorsRoute = routeSrc('get', '/api/pool/donors');
@@ -341,12 +350,19 @@ ok('§16.10 /api/pool/donors delegates to donorWall() with the mask as an argume
 ok('§16.10 /api/pool/donors reads no donor_* column itself (the lib does, and never emits it)',
   !/donor_censor|donor_name|balance_log/.test(donorsJs),
   'the route used to carry the ledger SQL inline; the v2 shape is the lib\'s');
+// Since design §18.3 the count lives in lib/donor-ledger.js liveDonations() (shared with the
+// account page + admin list), so the bar is asserted THERE and the route must go through it.
+const liveFn = donorLedgerSrc.slice(donorLedgerSrc.indexOf('function liveDonations('),
+                                    donorLedgerSrc.indexOf('const NO_LIVE'));
 ok('§16.10 /api/pool/donors counts rigs from MINING sessions only (acceptedShares > 0, §J6-9)',
-  /acceptedShares > 0/.test(donorsJs) && /getActiveSessions\(\)/.test(donorsJs),
+  /donorLiveDonations\(minerManager \? minerManager\.getActiveSessions\(\) : \[\]\)/.test(donorsJs) &&
+  /live,/.test(donorsJs) && /acceptedShares > 0/.test(liveFn.replace(/\/\/[^\n]*/g, '')),
   'a login is unauthenticated — without the share bar anyone can put rigs on someone else\'s card');
 
 const wallFn = donorLedgerSrc.slice(donorLedgerSrc.indexOf('function donorWall('),
                                     donorLedgerSrc.indexOf('module.exports'));
+ok('§18.3 the wall never reads the dead v1 donation_percent column',
+  !/donation_percent/.test(wallFn.replace(/\/\/[^\n]*/g, '')) && !/donation_percent/.test(donorsJs));
 ok('§16.10 donorWall THROWS when no mask function is passed (fail closed)',
   /typeof opts\.mask !== 'function'\)\s*throw/.test(wallFn));
 const cardBlock = (() => {
@@ -361,59 +377,135 @@ ok('§16.10 no card key starts with donor_ (word / by / at / raw censor state st
   cardKeys.length > 0 && !cardKeys.some((k) => /^donor_/.test(k)), cardKeys.join(','));
 ok('§16.10 the card address goes through the mask, and only the mask',
   /address:\s*opts\.mask\(r\.address\)/.test(cardBlock) && !/address:\s*r\.address/.test(cardBlock));
-ok('§16.10 name + name_state come from displayState, the function the account API also uses',
-  /displayState\(i,\s*\{/.test(cardBlock) && /name:\s*st\.name,/.test(cardBlock) && /name_state:\s*st\.name_state/.test(cardBlock));
-ok('§16.10 the lib never reads donor_censor_word or donor_censor_by for the wall',
-  !/donor_censor_word|donor_censor_by/.test(wallFn.replace(/\/\/[^\n]*/g, '')));
-// index.js may SPELL the marker in one place only: the API_DOC_META row that documents it
-// (a client must know the string can arrive). Outside that block, neither file references
-// the string or the constant.
-const indexNoMeta = (() => {
-  const a = indexSrc.indexOf('const API_DOC_META = {');
-  const b = indexSrc.indexOf('\n  };', a);
-  return (indexSrc.slice(0, a) + indexSrc.slice(b)).replace(/\/\/[^\n]*/g, '');
-})();
-ok('§16.10 the lib never spells the censored marker itself — displayState is the one emitter',
-  !/censored-donor|CENSORED_MARKER/.test(donorLedgerSrc.replace(/\/\/[^\n]*/g, '')) &&
-  !/censored-donor|CENSORED_MARKER/.test(indexNoMeta));
-ok('§16.10 the api-docs row documents the marker and the masking',
-  /censored-donor/.test(routeMeta('GET /api/pool/donors')) && /MASKED/.test(routeMeta('GET /api/pool/donors')));
-ok('§16.10 in lib/donor-names.js the marker is returned from displayState only',
-  (donorNamesSrc.replace(/\/\/[^\n]*/g, '').match(/CENSORED_MARKER/g) || []).length === 3,
-  'const, the displayState return, the export — a 4th mention is a new emitter to review');
+// Names (design §18.7, since §18 Part 3): the card's name comes from publicProfiles() — the
+// APPROVED, unexpired donor_requests row, nothing else. The v1 displayState/censor/marker
+// machinery is deleted, and the lib must not read the v1 donor_* columns for the wall.
+ok('§18.7 name + name_state come from publicProfiles (approved rows only), not a v1 column',
+  /publicProfiles\(db,/.test(wallFn) && /name:\s*st\.name,/.test(cardBlock) && /name_state:\s*st\.name_state/.test(cardBlock));
+// Banners (design §18.7/§18.9, §18 Part 4). Behaviour (rank N has one, N+1 and the past strip
+// never, slots 0 = none, non-approved rows never) is swept in scripts/test-donor-league.js;
+// here, the card builder's guard itself: the banner is built only under the slot test, the
+// slot count is the bounded helper's, and past cards reach the builder with rank null.
+const cardJs = cardBlock.replace(/\/\/[^\n]*/g, '');
+ok('§18.9 the card banner exists only under inSlot (a safe-integer rank ≥ 1 and ≤ slots)',
+  /const inSlot = Number\.isSafeInteger\(rank\) && rank >= 1 && rank <= slots;/.test(cardJs) &&
+  /const banner = inSlot && b && /.test(cardJs) && /^\s{6}banner,/m.test(cardJs));
+ok('§18.9 slots come from donor-profiles bannerSlots() (bounded 0–10), past cards get rank null',
+  /const slots = bannerSlots\(ds\);/.test(wallFn) && /past\.map\(\(r\) => card\(r, null\)\)/.test(wallFn));
+ok('§18.7 current_percent is gone from the card (Part 4 drops the v1 alias of pct_max)',
+  !/current_percent/.test(cardJs));
 
-// The miner's own view. The account route reads three donor columns for displayState and
-// emits the two fields it returns; a response key named donor_censor* would be a new leak.
+// The page. donate.html is the wall's only renderer: no v1 copy may survive the §18.7
+// rewrite, it must not read the dropped field, and it keeps its own fence on the banner URL.
+const donateHtml = fs.readFileSync(path.join(WEB, 'public_html/donate.html'), 'utf8');
+ok('§18.7 donate.html carries no v1 copy (yourbrandname / ceremony / donate0-first / censored)',
+  !/yourbrandname|ceremony|go through <code>donate0|censored/i.test(donateHtml));
+ok('§18.7 donate.html no longer reads current_percent', !/current_percent/.test(donateHtml));
+ok('§18.9 donate.html renders a banner only through bannerOf() and its exact-shape URL regex',
+  donateHtml.includes('var BANNER_URL_RE = /^\\/uploads\\/donors\\/[0-9a-f]{16}\\.(png|jpg|gif)$/;') &&
+  /var b = bannerOf\(d\);/.test(donateHtml) &&
+  (donateHtml.match(/<img /g) || []).length === 1 && /<img src="' \+ escHtml\(b\.url\) \+/.test(donateHtml));
+ok('§18.9 donate.html escapes every name it renders (nameCell + the banner alt)',
+  /'<span class="donor-name">' \+ escHtml\(d\.name\)/.test(donateHtml) && /alt="' \+ escHtml\(alt\)/.test(donateHtml));
+
+ok('§18.7 the wall reads no v1 donor_* column and no miner_incentives row at all',
+  !/donor_name|donor_censor|miner_incentives/.test(wallFn.replace(/\/\/[^\n]*/g, '')));
+ok('§18.6 the censored marker is gone from every source (lib, index incl. api-docs, donor-names)',
+  !/censored-donor|CENSORED_MARKER|censored_display/.test(donorLedgerSrc.replace(/\/\/[^\n]*/g, '')) &&
+  !/censored-donor|CENSORED_MARKER|censored_display|donorDisplayState/.test(indexSrc.replace(/\/\/[^\n]*/g, '')) &&
+  !/censored-donor|CENSORED_MARKER|displayState/.test(donorNamesSrc.replace(/\/\/[^\n]*/g, '')));
+ok('§18.7 the api-docs row says names are APPROVED and addresses MASKED',
+  /APPROVED/.test(routeMeta('GET /api/pool/donors')) && /MASKED/.test(routeMeta('GET /api/pool/donors')));
+
+// The two public readers in lib/donor-profiles.js. publicProfiles selects APPROVED rows only;
+// profileFor's column list never names `image`, and it reads `name` only through the
+// CASE WHEN status = 'approved' expression — the pending text cannot come back from either.
+const profilesSrc = fs.readFileSync(path.join(APP, 'lib/donor-profiles.js'), 'utf8');
+const fnSrc = (name) => {
+  const a = profilesSrc.indexOf(`function ${name}(`);
+  return a < 0 ? '' : profilesSrc.slice(a, profilesSrc.indexOf('\nfunction ', a + 1)).replace(/\/\/[^\n]*/g, '');
+};
+const readCols = (profilesSrc.match(/const READ_COLS = '([^']*)'/) || [])[1] || '';
+ok('§18.9 publicProfiles selects status = approved only, and never `image`',
+  /WHERE status = 'approved'/.test(fnSrc('publicProfiles')) && !/\bimage\b/.test(fnSrc('publicProfiles')));
+ok('§18.9 profileFor reads READ_COLS (no image, no name) + the name of APPROVED rows only',
+  readCols !== '' && !/\bimage\b|\bname\b/.test(readCols) &&
+  /CASE WHEN status = 'approved' THEN name END AS live_name/.test(fnSrc('profileFor')) &&
+  !/\bimage\b/.test(fnSrc('profileFor')));
+
+// Every route that touches donor_requests, directly (SQL) or through the profile/wall libs,
+// enumerated from the route declarations. A public route on this list reads only the
+// public-safe readers (profileFor / publicProfiles via donorWall) or the donor's own writes; the
+// admin readers (adminQueue, requestImage, adminProfiles — full addresses, pending text, bytes)
+// may appear under /api/admin/ only, behind secureAdmin/freshAdmin. A NEW public route here
+// fails this test on purpose: read what it emits (§18.9), then add it.
+const routeDecls = [...indexSrc.matchAll(/\n\s{2}app\.(get|post|put|delete|patch)\('([^']+)',\s*([A-Za-z]+)?/g)]
+  .map((m) => ({ verb: m[1], path: m[2], guard: m[3] || '' }));
+// The handler only: routeSrc runs to the NEXT app.* call, so a route followed by a block of
+// shared setup (the donor-profile multer config follows the Goblin DELETE) would otherwise be
+// charged with that setup. Cut at the handler's own closing `  });` (2-space indent).
+const handlerSrc = (verb, p) => {
+  const s = routeSrc(verb, p);
+  const e = s.indexOf('\n  });');
+  return (e < 0 ? s : s.slice(0, e)).replace(/\/\/[^\n]*/g, '');
+};
+const touching = routeDecls.filter((r) => /donor_requests|DonorProfiles\.|donorWall\(/.test(handlerSrc(r.verb, r.path)));
+const ADMIN_READERS = /DonorProfiles\.(adminQueue|requestImage|adminProfiles)\(/;
+const publicTouching = touching.filter((r) => !r.path.startsWith('/api/admin/'))
+  .map((r) => `${r.verb.toUpperCase()} ${r.path}`).sort();
+ok('§18.9 the public routes that touch donor_requests are exactly the reviewed five',
+  publicTouching.join(' | ') === [
+    'DELETE /api/account/:addr/donor-profile/:kind',
+    'GET /api/account/:addr',
+    'GET /api/pool/donors',
+    'POST /api/account/:addr/donor-profile/banner',
+    'POST /api/account/:addr/donor-profile/name'
+  ].join(' | '), publicTouching.join(' | '));
+ok('§18.9 no public route calls an admin reader (adminQueue / requestImage / adminProfiles)',
+  touching.filter((r) => !r.path.startsWith('/api/admin/'))
+    .every((r) => !ADMIN_READERS.test(handlerSrc(r.verb, r.path))));
+ok('§18.9 every admin route that touches donor_requests is secureAdmin or freshAdmin',
+  touching.filter((r) => r.path.startsWith('/api/admin/')).length >= 8 &&
+  touching.filter((r) => r.path.startsWith('/api/admin/')).every((r) => r.guard === 'secureAdmin' || r.guard === 'freshAdmin'),
+  touching.filter((r) => r.path.startsWith('/api/admin/')).map((r) => `${r.path}:${r.guard}`).join(', '));
+
+// The miner's own view. The account route reads no v1 column, and since §18 Part 5 it no
+// longer sends the v1 aliases either: `donation_percent` (= pct_max) and the donor_name /
+// donor_name_state pair (derived from donor_profile) went once the page read `donation` and
+// `donor_profile` directly (§18.3 "then dropped").
 const acctRoute = routeSrc('get', '/api/account/:addr');
 const acctJs = acctRoute.replace(/\/\/[^\n]*/g, '');
-ok('§16.10 /api/account/:addr selects donor_name, donor_name_set_at, donor_censor and nothing more',
-  /SELECT donor_name, donor_name_set_at, donor_censor FROM miner_incentives/.test(acctJs) &&
-  !/donor_censor_word|donor_censor_by/.test(acctJs));
-ok('§16.10 /api/account/:addr emits donor_name + donor_name_state via displayState only',
-  /donorDisplayState\(row,/.test(acctJs) && /donor_name:\s*donor\.name,/.test(acctJs) &&
-  /donor_name_state:\s*donor\.name_state/.test(acctJs) && !/donor_censor\s*:/.test(acctJs));
+ok('§18.7 /api/account/:addr reads no v1 donor_* column',
+  !/SELECT[^`]*donor_(name|censor)[^`]*FROM miner_incentives/.test(acctJs) && !/donor_censor/.test(acctJs));
+ok('§18.3 /api/account/:addr sends donation + donor_profile (profileFor), and none of the v1 aliases',
+  /donation:\s*donation,/.test(acctJs) && /donor_profile:\s*donorProfile,/.test(acctJs) &&
+  /DonorProfiles\.profileFor\(db,/.test(acctJs) &&
+  !/donation_percent|donor_name_state|donor_name:/.test(acctJs));
+ok('§18.3 the account api-docs row no longer documents the dropped aliases',
+  !/donation_percent|donor_name_state/.test(routeMeta('GET /api/account/:addr')));
 
-// displayState is the single emitter, so its contract IS the public contract — asserted live.
-const censoredRow = { donor_name: 'sh1thead', donor_name_set_at: 1_800_000_000, donor_censor: 'auto' };
-const adminRow = { donor_name: 'spam', donor_name_set_at: 1_800_000_000, donor_censor: 'admin' };
-const shownRow = { donor_name: 'acme', donor_name_set_at: 1_800_000_000, donor_censor: null };
-const now = 1_800_000_100;
-const st = (row, censoredDisplay, extra = {}) =>
-  donorNames.displayState(row, { now, expiryMonths: 12, censoredDisplay, lastDonatedAt: now - 10, ...extra });
-ok("§16.10 displayState: censored + 'masked' → name null",
-  st(censoredRow, 'masked').name === null && st(adminRow, 'masked').name === null &&
-  st(censoredRow, 'masked').name_state === 'censored');
-ok("§16.10 displayState: censored + 'marker' → the marker, and only then",
-  st(censoredRow, 'marker').name === donorNames.CENSORED_MARKER && st(adminRow, 'marker').name === donorNames.CENSORED_MARKER);
-ok('§16.10 displayState: an unknown display value is treated as masked, never as marker',
-  st(censoredRow, 'MARKER').name === null && st(censoredRow, undefined).name === null && st(censoredRow, 'yes').name === null);
-ok("§16.10 displayState: 'marker' never touches a shown, masked or expired card",
-  st(shownRow, 'marker').name === 'acme' && st(null, 'marker').name === null &&
-  st(shownRow, 'marker', { now: now + 400 * 86400 }).name === null &&
-  st(shownRow, 'marker', { now: now + 400 * 86400 }).name_state === 'expired');
-ok('§16.10 displayState never returns the censor word or any donor_ key',
-  Object.keys(st(censoredRow, 'marker')).sort().join(',') === 'name,name_state' &&
-  !JSON.stringify(st({ ...censoredRow, donor_censor_word: 'shit', donor_censor_by: 7 }, 'marker')).includes('shit'));
+// The page (design §18.8, §18 Part 5). account-settings.html renders the donor's own view:
+// no v1 copy, no dropped alias read, a live banner only through the exact-shape URL fence,
+// previews from data: URLs (the public CSP's img-src has no blob:), and the two proof boxes
+// cleared after every change that went through.
+const acctHtml5 = fs.readFileSync(path.join(WEB, 'public_html/account-settings.html'), 'utf8');
+const acctPageJs = acctHtml5.replace(/<!--[\s\S]*?-->/g, '').replace(/^\s*\/\/[^\n]*$/gm, '');
+ok('§18.8 account-settings.html carries no v1 donation copy (ceremony / yourbrand / donate0-first / censored)',
+  !/yourbrand|ceremony|go through donate0|donate0 first|censored/i.test(acctPageJs));
+ok('§18.8 account-settings.html reads no dropped alias (donation_percent / donor_name / donor_name_state)',
+  !/donation_percent|donor_name/.test(acctPageJs));
+ok('§18.9 the page shows a live banner only through DP_BANNER_URL_RE, the server\'s exact file shape',
+  acctHtml5.includes('const DP_BANNER_URL_RE = /^\\/uploads\\/donors\\/[0-9a-f]{16}\\.(png|jpg|gif)$/;') &&
+  /DP_BANNER_URL_RE\.test\(b\.live_url\)/.test(acctPageJs));
+ok('§18.8 banner previews are data: URLs — createObjectURL appears only in the proof-file download',
+  /readAsDataURL/.test(acctPageJs) && (acctPageJs.match(/createObjectURL/g) || []).length === 1 &&
+  /function downloadPaymentProof[\s\S]*?createObjectURL/.test(acctPageJs));
+ok('§18.8 every donor-profile success clears both proof boxes (name, banner, delete)',
+  (acctPageJs.match(/dpClearProofs\(\);/g) || []).length === 3 &&
+  /function dpClearProofs\(\) \{ \$id\('dp-ip-proof'\)\.value = ''; \$id\('dp-pass-proof'\)\.value = ''; \}/.test(acctPageJs));
+ok('§18.6 the page never reads a pending name or image from the API (only its own POST response)',
+  !/pending_name|pending_image|\.pending\.name|name\.pending\b/.test(acctPageJs) &&
+  /text: String\(json\.name \|\| v\.name\)/.test(acctPageJs));
 
 // ── §17.4 — the ownership-proof set must never reach a browser ───────────────────────────
 const acctProofJs = routeSrc('get', '/api/account/:addr').replace(/\/\/[^\n]*/g, '');

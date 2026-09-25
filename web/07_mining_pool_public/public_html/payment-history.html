@@ -215,11 +215,12 @@
                                 <th>Date &amp; Time (UTC)</th>
                                 <th>Miner</th>
                                 <th class="num">Amount (ツ)</th>
+                                <th>Method</th>
                                 <th>Status</th>
                             </tr>
                         </thead>
                         <tbody id="payouts">
-                            <tr><td colspan="4">Loading…</td></tr>
+                            <tr><td colspan="5">Loading…</td></tr>
                         </tbody>
                     </table>
                 </div>
@@ -444,6 +445,21 @@
             }
         }
 
+        // P-05 method + status. This feed lists CONFIRMED payouts only — the pool has finalized
+        // and broadcast them — so the status splits on whether the tx has been seen MINED:
+        // has_kernel_proof turns true once the scheduler's backfill finds the kernel in the pool
+        // wallet's tx log (minutes after broadcast; never on a pool with no Owner API wallet,
+        // where the row honestly stays "sent"). The kernel itself is NOT on this public list and
+        // must not be linked from it (audit §J11-2: a masked address + amount + time beside its
+        // kernel is a public address-to-chain index). The owner reveals their own kernel links
+        // on the account page's Withdrawal history with an ownership proof.
+        const PAY_METHOD = { tor: 'Tor', slatepack: 'Slatepack', nostr: 'Goblin', manual: 'Manual' };
+        function payStatusCell(w) {
+            return w.has_kernel_proof
+                ? '<span class="status-badge status-active" title="Broadcast and seen mined on the Grin chain">paid · mined</span>'
+                : '<span class="status-badge" title="Finalized and broadcast by the pool; not yet seen mined (or this pool cannot read its wallet tx log)">paid · sent</span>';
+        }
+
         async function loadRecentPayouts() {
             const tbody = document.getElementById('payouts');
             try {
@@ -452,20 +468,21 @@
                 const when = w => w.confirmed_at || w.created_at || 0;
                 if (tbody) {
                     if (!data.length) {
-                        tbody.innerHTML = '<tr><td colspan="4">No payouts yet</td></tr>';
+                        tbody.innerHTML = '<tr><td colspan="5">No payouts yet</td></tr>';
                     } else {
                         tbody.innerHTML = data.slice(0, 25).map(w => `
                             <tr>
                                 <td>${escHtml(new Date(when(w) * 1000).toLocaleString('en-US', { timeZone: 'UTC' }))}</td>
                                 <td>${addrCell(w.grin_address)}</td>
                                 <td class="num">${Number(w.amount || 0).toFixed(2)}</td>
-                                <td><span class="status-badge status-active">confirmed</span></td>
+                                <td>${escHtml(PAY_METHOD[w.method] || w.method || 'Tor')}</td>
+                                <td>${payStatusCell(w)}</td>
                             </tr>
                         `).join('');
                     }
                 }
             } catch (error) {
-                if (tbody) tbody.innerHTML = '<tr><td colspan="4">Payment data unavailable</td></tr>';
+                if (tbody) tbody.innerHTML = '<tr><td colspan="5">Payment data unavailable</td></tr>';
             }
         }
 

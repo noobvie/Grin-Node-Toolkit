@@ -575,6 +575,167 @@ console.log('\n[1] §J4-10 — the matcher has three outcomes, not two');
       asked.join(','));
   }
 
+  // ═══ Slatepack response window (2026-09-24) ═══
+  // The manual rail's expiry was a hardcoded 24h: the scheduler read `slatepack_ttl_hours`,
+  // which neither config.js nor the settings table ever set. It is now slatepack_ttl_minutes,
+  // 30 by default, wired end to end. Miners have no cancel, so this window is their only exit
+  // from an abandoned request — and each pending one locks pool-wallet outputs until it ends.
+  console.log('\n[slatepack] response window — default, config path, and the expiry sweep');
+  {
+    const PoolSettings = require(path.join(APP, 'lib/pool-settings.js'));
+    const V = PoolSettings.validators.payout;
+    const throws = (fn) => { try { fn(); return false; } catch (e) { return true; } };
+
+    ok('settings default is 30 min', PoolSettings.defaults.payout.slatepack_ttl_minutes === 30);
+    ok('validator accepts 10 and 1440, rejects 9 / 1441 / junk',
+      V.slatepack_ttl_minutes('10') === 10 && V.slatepack_ttl_minutes(1440) === 1440 &&
+      throws(() => V.slatepack_ttl_minutes(9)) && throws(() => V.slatepack_ttl_minutes(1441)) &&
+      throws(() => V.slatepack_ttl_minutes('soon')));
+    const applied = PoolSettings.applyToConfig({}, { pool_info: {}, payout: { slatepack_ttl_minutes: 45 } });
+    ok('applyToConfig carries the setting into config', applied.slatepack_ttl_minutes === 45);
+    // loadConfig() refuses to run without a real jwt_secret, so read the default from source.
+    ok('config.js default is 30 min',
+      /slatepack_ttl_minutes:\s*config\.slatepack_ttl_minutes !== undefined \? config\.slatepack_ttl_minutes : 30,/
+        .test(fs.readFileSync(path.join(APP, 'lib/config.js'), 'utf8')));
+
+    const ttlOf = (c) => new WithdrawalScheduler({ ...config, ...c }, null).slatepackTtlSeconds;
+    ok('scheduler: no setting → 30 min (was the 24h fallback)', ttlOf({}) === 1800);
+    ok('scheduler: 60 → 60 min', ttlOf({ slatepack_ttl_minutes: 60 }) === 3600);
+    ok('scheduler: junk or below the floor → 30 min, never "expire at once"',
+      ttlOf({ slatepack_ttl_minutes: 'x' }) === 1800 && ttlOf({ slatepack_ttl_minutes: 0 }) === 1800);
+
+    // The sweep itself: 31 min old expires (cancelTx + full refund); 29 min old is left alone.
+    reset();
+    db.prepare('UPDATE miner_accounts SET balance = 0, balance_locked = 50 WHERE grin_address = ?').run(ADDR);
+    const now = Math.floor(Date.now() / 1000);
+    const seedSp = (ageMin, slate) => Number(db.prepare(
+      `INSERT INTO withdrawals (grin_address, amount, fee, fee_charged, status, method, slate_id, created_at)
+       VALUES (?, 25, 0, 0.04, 'slatepack_pending', 'slatepack', ?, ?)`
+    ).run(ADDR, slate, now - ageMin * 60).lastInsertRowid);
+    const oldId = seedSp(31, 'sp-old');
+    const freshId = seedSp(29, 'sp-fresh');
+    const cancelled = [];
+    const s = new WithdrawalScheduler(config, { async cancelTx(id) { cancelled.push(id); } });
+    await s.processSlatepackExpiry();
+    ok('31-min-old slatepack expires', rowOf(oldId).status === 'slatepack_expired', rowOf(oldId).status);
+    ok('…its pool-wallet tx is cancelled', cancelled.length === 1 && cancelled[0] === 'sp-old', cancelled.join(','));
+    ok('…and the full amount returns to spendable', Math.abs(acct().balance - 25) < 1e-9 && Math.abs(acct().balance_locked - 25) < 1e-9,
+      JSON.stringify(acct()));
+    ok('29-min-old slatepack is still pending', rowOf(freshId).status === 'slatepack_pending', rowOf(freshId).status);
+  }
+
+  // ═══ "Not now" refusals say "try again in about an hour" (2026-09-24) ═══
+  // Neither may leak pool internals: the cap's size, or — far worse — the pool wallet's
+  // spendable balance, which grin-wallet's NotEnoughFunds carries and used to reach the miner.
+  console.log('\n[busy] pool-full and wallet-short refusals');
+  {
+    reset();
+    db.prepare('UPDATE miner_accounts SET balance = 30 WHERE grin_address = ?').run(ADDR);
+    const s = new WithdrawalScheduler({ ...config, max_pending_withdrawals: 1 }, null);
+    db.prepare("INSERT OR IGNORE INTO miner_accounts (grin_address, balance, balance_locked) VALUES ('tgrin1someoneelse', 0, 25)").run();
+    db.prepare(`INSERT INTO withdrawals (grin_address, amount, fee, fee_charged, status, method)
+                VALUES ('tgrin1someoneelse', 25, 0, 0.04, 'slatepack_pending', 'slatepack')`).run();
+    let e1 = null;
+    try { s.createWithdrawal(ADDR, 25); } catch (e) { e1 = e; }
+    ok('pool-wide cap: 429 that says "try again in about an hour"',
+      e1 && e1.code === 429 && /try again in about an hour/.test(e1.message) && !/maximum|\(\d+\)/.test(e1.message),
+      e1 && e1.message);
+    ok('…and nothing was locked', Math.abs(acct().balance - 30) < 1e-9 && acct().balance_locked === 0, JSON.stringify(acct()));
+  }
+  {
+    reset();
+    db.prepare('UPDATE miner_accounts SET balance = 30 WHERE grin_address = ?').run(ADDR);
+    const RAW = 'Wallet error: {"NotEnoughFunds":{"available":123456789000,"available_disp":"123.456789","needed":24960000000,"needed_disp":"24.96"}}';
+    const cancelled = [];
+    const s = new WithdrawalScheduler(config, {
+      async initSendTx() { throw new Error(RAW); },
+      async cancelTx(id) { cancelled.push(id); },
+    });
+    const origErr = console.error; const logged = []; console.error = (m) => logged.push(String(m));
+    let e2 = null;
+    try { await s.createSlatepackWithdrawal(ADDR, 25); } catch (e) { e2 = e; }
+    console.error = origErr;
+    ok('wallet short: 503 with the friendly "about an hour" message',
+      e2 && e2.code === 503 && /try again in about an hour/.test(e2.message), e2 && e2.message);
+    ok('…which never carries the pool wallet balance', e2 && !/123\.456789|123456789000|NotEnoughFunds|available/.test(e2.message), e2 && e2.message);
+    ok('…while the operator log keeps the real error', logged.some((l) => l.includes('NotEnoughFunds')), logged.join(' | '));
+    const spAlert = db.prepare("SELECT message FROM alerts WHERE type = 'pool_wallet_short' AND status = 'active' ORDER BY id DESC LIMIT 1").get();
+    ok('…and so does the admin health alert', !!spAlert && /slatepack payout/.test(spAlert.message) && /123\.456789/.test(spAlert.message),
+      spAlert && spAlert.message);
+    ok('…and the full balance is back', Math.abs(acct().balance - 30) < 1e-9 && Math.abs(acct().balance_locked) < 1e-9, JSON.stringify(acct()));
+
+    // CONTROL: any OTHER wallet failure keeps its specific message (operators debug from it).
+    reset();
+    db.prepare('UPDATE miner_accounts SET balance = 30 WHERE grin_address = ?').run(ADDR);
+    const s2 = new WithdrawalScheduler(config, {
+      async initSendTx() { throw new Error('HTTP 502: Bad Gateway'); }, async cancelTx() {},
+    });
+    let e3 = null;
+    try { await s2.createSlatepackWithdrawal(ADDR, 25); } catch (e) { e3 = e; }
+    ok('CONTROL: an unrelated wallet error is still reported as-is (502)',
+      e3 && e3.code === 502 && /Bad Gateway/.test(e3.message), e3 && e3.message);
+  }
+
+  // ═══ Why a Tor payout is parked: retry_reason + the admin health alert (2026-09-24) ═══
+  // The account page used to say "wallet unreachable" for every retry — to a miner that means
+  // THEIR wallet, which is wrong when the POOL wallet was the one short. The cause is now stored,
+  // and the figures go to one rolling admin alert instead of to the miner.
+  console.log('\n[retry-reason] pool-wallet shortfall vs everything else');
+  {
+    const shortAlert = () => db.prepare(
+      "SELECT * FROM alerts WHERE type = 'pool_wallet_short' AND status = 'active' ORDER BY id DESC LIMIT 1").get();
+    const failingScheduler = (error) => {
+      const s = newScheduler([]);
+      s.walletTor.sendToTorAddress = async () => ({ success: false, error });
+      return s;
+    };
+    const quiet = async (fn) => { const o = console.error; console.error = () => {}; try { await fn(); } finally { console.error = o; } };
+    db.exec("DELETE FROM alerts WHERE type = 'pool_wallet_short'");
+
+    reset();
+    const id = seedWithdrawal({ status: 'tor_checking', retries: 0, priorAttempt: false });
+    const SHORT = 'Wallet command failed: Not enough funds. Required: 99.96, Available: 12.5';
+    await quiet(() => failingScheduler(SHORT).sendWithdrawal(id));
+    ok('pool wallet short → parked with retry_reason = pool_wallet_short',
+      rowOf(id).status === 'retry_scheduled' && rowOf(id).retry_reason === 'pool_wallet_short', JSON.stringify(rowOf(id)));
+    const a1 = shortAlert();
+    ok('…and ONE admin alert carries the real figures', a1 && /Available: 12\.5/.test(a1.message) && a1.occurrence_count === 1,
+      a1 && a1.message);
+
+    // Second shortfall within 24h rolls into the same row rather than stacking a new one.
+    db.prepare("UPDATE withdrawals SET status = 'tor_checking' WHERE id = ?").run(id);
+    await quiet(() => failingScheduler(SHORT.replace('12.5', '7.25')).sendWithdrawal(id));
+    const a2 = shortAlert();
+    const activeCount = db.prepare("SELECT COUNT(*) c FROM alerts WHERE type = 'pool_wallet_short' AND status = 'active'").get().c;
+    ok('a repeat within 24h updates the same alert (count 2, latest figures)',
+      a2 && a2.id === a1.id && a2.occurrence_count === 2 && /Available: 7\.25/.test(a2.message) && activeCount === 1,
+      JSON.stringify({ a2, activeCount }));
+
+    // A later failure with a DIFFERENT cause must clear the reason, or the page keeps blaming the pool.
+    db.prepare("UPDATE withdrawals SET status = 'tor_checking' WHERE id = ?").run(id);
+    await quiet(() => failingScheduler('Tor: recipient onion not reachable').sendWithdrawal(id));
+    ok('a later non-funds failure resets retry_reason to NULL',
+      rowOf(id).status === 'retry_scheduled' && rowOf(id).retry_reason === null, JSON.stringify(rowOf(id)));
+    ok('…and does not touch the alert', shortAlert().occurrence_count === 2);
+
+    // CONTROL: the ordinary case — the miner is offline — never reads as "pool busy".
+    reset();
+    const id2 = seedWithdrawal({ status: 'tor_checking', retries: 0, priorAttempt: false });
+    await quiet(() => failingScheduler('Tor: recipient onion not reachable').sendWithdrawal(id2));
+    ok('CONTROL: miner unreachable → retry_reason stays NULL',
+      rowOf(id2).status === 'retry_scheduled' && rowOf(id2).retry_reason === null, JSON.stringify(rowOf(id2)));
+
+    // An alert older than 24h is resolved and a fresh one starts (the card shows only the last day).
+    db.prepare("UPDATE alerts SET last_seen = ? WHERE id = ?").run(new Date(Date.now() - 2 * 86400000).toISOString(), a1.id);
+    reset();
+    const id3 = seedWithdrawal({ status: 'tor_checking', retries: 0, priorAttempt: false });
+    await quiet(() => failingScheduler(SHORT).sendWithdrawal(id3));
+    const a3 = shortAlert();
+    ok('a shortfall after a quiet day starts a fresh alert and resolves the stale one',
+      a3 && a3.id !== a1.id && a3.occurrence_count === 1 &&
+      db.prepare('SELECT status FROM alerts WHERE id = ?').get(a1.id).status === 'resolved');
+  }
+
   console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed\n`);
   cleanup();
   process.exit(fail === 0 ? 0 : 1);

@@ -41,10 +41,8 @@ class MinerManager {
       // an attacker who merely opens a session under a victim's address would otherwise be
       // credited with the victim's own mining, which defeats both of them silently.
       acceptedShares: 0,
-      // `donateN` parsed from the worker name at login, but NOT applied until this session has
-      // mined (audit §J3-5) — see stratum-server.handleSubmit. Login is unauthenticated, so
-      // applying it here would let a bare TCP connect redirect a stranger's earnings.
-      donationPercent: null,
+      // No donation field: a `donateN` tag lives in workerName and is read per share at
+      // distribution (design §18.2) and per session by donor-ledger.js liveDonations().
       lastSeenAt: Date.now()
     };
 

@@ -427,13 +427,18 @@
                 });
             }
 
-            // Prime the network cache BEFORE the first render, so window.Explorer picks the
-            // right explorer for the chain instead of falling back to its mainnet default
-            // (branding.js writes the same key, but may not have landed yet).
+            // Prime the network + explorer cache BEFORE the first render, so window.Explorer
+            // picks the operator's explorer for the chain instead of falling back to its
+            // mainnet default (branding.js writes the same two keys, but may not have landed
+            // yet). `explorer` is the server-resolved key; Explorer re-validates it.
             fetch('/api/config/pool-info', { credentials: 'same-origin' })
                 .then(function (r) { return r.ok ? r.json() : null; })
                 .then(function (d) {
-                    if (d && d.network) { try { sessionStorage.setItem('pool-network', d.network); } catch (e) {} }
+                    if (!d) return;
+                    try {
+                        if (d.network) sessionStorage.setItem('pool-network', d.network);
+                        if (typeof d.explorer === 'string' && d.explorer) sessionStorage.setItem('pool-explorer', d.explorer);
+                    } catch (e) {}
                 })
                 .catch(function () {})
                 .finally(function () { loadSummary(); loadBlocks(); loadBlockCharts(); });

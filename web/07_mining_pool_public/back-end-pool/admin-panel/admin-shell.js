@@ -24,7 +24,7 @@
     // Dashboard is the overview group: all the live data pages + System Health hang off it.
     { file: 'index.html', title: 'Dashboard', ico: '📊', children: [
         { file: 'miners.html',   title: 'Miners' },
-        { file: 'donors.html',   title: 'Donors' },     // donor-name moderation + donation settings (design §16.8)
+        { file: 'donors.html',   title: 'Donors' },     // donor-profile review queue + donors + donation settings (design §18.6)
         { file: 'payments.html', title: 'Payouts' },
         { file: 'blocks.html',   title: 'Blocks' },
         { file: 'users.html',    title: 'Sessions' },
@@ -76,15 +76,18 @@
   //   *.grinscan.org     /block.html?h=<h>    /kernel.html?ex=<excess>  /output.html?c=<commit>
   // grincoin.org takes DIGITS ONLY in /block/, hence its separate `blockHash` segment.
   //
-  // Default: mainnet → grincoin.org (third-party full archive; was scan.grin.money / 06d until
-  // 2026-09-23), testnet → test.grinscan.org (06b GrinScan's testnet sibling). NOTE the
-  // testnet host is `test.` — `testnet.grinscan.org` does NOT resolve (that typo made every
-  // testnet link dead). Full rationale lives in /js/branding.js.
-  // Keep this block in sync with the identical one in /js/branding.js.
+  // WHICH explorer is an ADMIN SETTING (Settings → Branding, `branding.explorer_mainnet`):
+  // mainnet picks grincoin (default) | tiny | grinscan; testnet is FIXED on test.grinscan.org
+  // (NOTE the host is `test.` — `testnet.grinscan.org` does NOT resolve). The server publishes
+  // the RESOLVED key as `explorer` beside `network`; it is mapped through the registry below,
+  // never used as a URL. Full rationale lives in /js/branding.js.
+  // ⚠ EXPLORERS / EXPLORER_STYLES / MAINNET_CHOICES MIRROR lib/explorers.js and /js/branding.js;
+  // scripts/test-explorers.js fails if they drift.
   //
-  // Network is resolved once by decoratePoolIdentity() (below) and cached in
-  // sessionStorage; until then we assume mainnet (the common deployment).
+  // Network + key are resolved once by decoratePoolIdentity() (below, from /api/pool/stats)
+  // and cached in sessionStorage; until then we assume mainnet + grincoin.
   var NETWORK_KEY = 'pool-network';
+  var EXPLORER_KEY = 'pool-explorer';
   function explorerNetwork() {
     try { var n = sessionStorage.getItem(NETWORK_KEY); if (n) return n; } catch (e) {}
     return 'mainnet';
@@ -100,10 +103,21 @@
     grinscan:         { base: 'https://grinscan.org',      style: 'query'    }, // 06b mainnet
     grinscan_testnet: { base: 'https://test.grinscan.org', style: 'query'    }  // 06b testnet sibling
   };
-  var DEFAULT_EXPLORER = { mainnet: 'grincoin', testnet: 'grinscan_testnet' };
+  var MAINNET_CHOICES = ['grincoin', 'tiny', 'grinscan'];
+  var DEFAULT_MAINNET = 'grincoin';
+  var TESTNET_EXPLORER = 'grinscan_testnet';
+  // resolveExplorerKey() re-applied to the cached key: testnet always test.grinscan.org (a stale
+  // mainnet key can't leak onto a testnet pool); mainnet takes it only if it is one of the three
+  // choices AND an own registry entry, else grincoin.
+  function explorerKey() {
+    if (explorerNetwork() === 'testnet') return TESTNET_EXPLORER;
+    var k = null;
+    try { k = sessionStorage.getItem(EXPLORER_KEY); } catch (e) {}
+    return (typeof k === 'string' && MAINNET_CHOICES.indexOf(k) !== -1 &&
+      Object.prototype.hasOwnProperty.call(EXPLORERS, k)) ? k : DEFAULT_MAINNET;
+  }
   function explorerPick() {
-    var net = explorerNetwork() === 'testnet' ? 'testnet' : 'mainnet';
-    return EXPLORERS[DEFAULT_EXPLORER[net]] || EXPLORERS.grincoin;
+    return EXPLORERS[explorerKey()];
   }
   function explorerUrl(kind, value) {
     var ex = explorerPick();
@@ -119,10 +133,22 @@
     if (value == null || value === '') return esc(label == null ? '' : label);
     return '<a href="' + esc(explorerUrl(kind, value)) + '" target="_blank" rel="noopener"' +
       (cls ? ' class="' + esc(cls) + '"' : '') +
-      ' title="Open on Grin chain explorer ↗">' +
+      ' title="Open on Grin chain explorer ↗"' +
+      ' data-xp-kind="' + esc(kind) + '" data-xp-ref="' + esc(value) + '">' +
       esc(label == null ? value : label) + '</a>';
   }
-  window.Explorer = { url: explorerUrl, link: explorerLink, network: explorerNetwork };
+  // A page's own fetch can render links before decoratePoolIdentity() caches network + explorer
+  // (sessionStorage is per tab, so every new tab starts empty) — those took the mainnet/grincoin
+  // fallback, a MAINNET explorer on a testnet pool. Re-point every tagged anchor: the host comes
+  // from the registry and the ref is re-encoded, so an attribute value never becomes the URL.
+  function explorerRelink() {
+    var list = document.querySelectorAll('a[data-xp-kind]');
+    for (var i = 0; i < list.length; i++) {
+      var a = list[i], ref = a.getAttribute('data-xp-ref');
+      if (ref) a.setAttribute('href', explorerUrl(a.getAttribute('data-xp-kind'), ref));
+    }
+  }
+  window.Explorer = { url: explorerUrl, link: explorerLink, network: explorerNetwork, key: explorerKey, relink: explorerRelink };
 
   // ── Theme (Dark default, Light) ─────────────────────────────────────────
   // Own key, and deliberately not 'admin-theme'. branding.js used to write the
@@ -300,7 +326,7 @@
     // Page title in the browser tab + topbar pool name
     decoratePoolIdentity();
 
-    // "N new donor names this week" on the Donors nav row (design §16.8)
+    // "N donor requests waiting for review" on the Donors nav row (design §18.6)
     decorateDonorBadge();
   }
 
@@ -316,12 +342,12 @@
     fetch('/api/admin/donors/summary', { credentials: 'include', cache: 'no-store' })
       .then(function (r) { return r.ok ? r.json() : null; })
       .then(function (d) {
-        var n = d && typeof d.new_names_7d === 'number' ? d.new_names_7d : 0;
+        var n = d && typeof d.pending_requests === 'number' ? d.pending_requests : 0;
         if (!(n > 0)) return;
         var b = document.createElement('span');
         b.className = 'nav-count';
         b.textContent = String(n);
-        b.title = n + ' new donor name' + (n === 1 ? '' : 's') + ' this week';
+        b.title = n + ' donor request' + (n === 1 ? '' : 's') + ' waiting for review';
         b.setAttribute('aria-label', b.title);
         link.appendChild(b);
       })
@@ -504,8 +530,20 @@
   function decoratePoolIdentity() {
     fetch('/api/pool/stats').then(function (r) { return r.json(); }).then(function (d) {
       if (!d) return;
-      // Cache the chain so window.Explorer builds testnet-correct deep-links.
-      if (d.network) { try { sessionStorage.setItem(NETWORK_KEY, d.network); } catch (e) {} }
+      // Cache the chain + the operator's (server-resolved) explorer so window.Explorer builds
+      // the right deep-links; explorerKey() re-validates it. No key → clear a stale one.
+      try {
+        if (d.network) sessionStorage.setItem(NETWORK_KEY, d.network);
+        if (typeof d.explorer === 'string' && d.explorer) sessionStorage.setItem(EXPLORER_KEY, d.explorer);
+        else sessionStorage.removeItem(EXPLORER_KEY);
+      } catch (e) {}
+      try { explorerRelink(); } catch (e) {}   // links a page rendered before this landed
+      // Pages that depend on the chain (Settings → Branding greys out the explorer select on
+      // testnet) read the attribute if they load late, or the event if they are listening.
+      if (d.network) {
+        document.documentElement.setAttribute('data-pool-network', d.network);
+        try { document.dispatchEvent(new CustomEvent('admin:pool-network', { detail: { network: d.network } })); } catch (e) {}
+      }
       if (d.pool_name) {
         var bn = sidebar.querySelector('.brand-name');
         if (bn) bn.textContent = d.pool_name;
@@ -536,7 +574,8 @@
          retentionKey: 'audit_log_keep_days',
          row:  function (e) { return '<tr>…</tr>'; },
          text: function (e) { return e.grin_address + ' ' + e.action; }, // searchable
-         empty: 'No payout requests in this window.'
+         empty: 'No payout requests in this window.',
+         onRender: function (tbody) { … }   // optional: after rows are painted
        });
        t.setLoading();  t.setRows(list);  t.setError(err.message);
 
@@ -548,7 +587,11 @@
        address (full value parked in the title) findable by its full string.
      • setRows() keeps the current query and page — these pages re-poll on a
        timer, and resetting to page 1 mid-read (or wiping what was typed) would
-       make the table unusable while it refreshes. */
+       make the table unusable while it refreshes.
+     • onRender(tbody) runs after every paint of real rows (a page change, a search
+       keystroke, setRows) — for work that must follow the markup, such as the Donors
+       queue filling each banner <img> from an authenticated blob. Never for the
+       loading/error/empty rows. A throw in it is caught: it must not blank the table. */
 
   var _dbSettings = null;
   function databaseSettings() {
@@ -724,6 +767,9 @@
         fillRow(esc(state.q ? 'No rows match “' + state.q + '”.' : (opts.empty || 'Nothing to show.')), 'empty-row');
       } else {
         tbody.innerHTML = slice.map(function (item, i) { return opts.row(item, start + i); }).join('');
+        if (typeof opts.onRender === 'function') {
+          try { opts.onRender(tbody); } catch (e) { /* the rows are already painted */ }
+        }
       }
 
       if (!total) {

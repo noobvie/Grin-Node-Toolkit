@@ -256,21 +256,12 @@ const shareHash = (addr, workId, worker, nonce) =>
     validateUsername(main.slice(0, 10) + main.slice(10).replace(/[a-z]/, c => c.toUpperCase())) === null &&
     !!validateUsername(main + '.RIG01'));
 
-  // `donor_label` (design §16, Part 1): the label PART of a tagged name, for Part 2 to store.
-  // null = no live token, '' = the token is the whole name, else the label AFTER the cut.
-  const dl = (u) => (validateUsername(main + '.' + u) || {}).donor_label;
-  check('donor_label: null when the login carries no live donate token',
-    dl('rig01') === null && dl('donate101') === null && dl('donatexx') === null &&
-    validateUsername(main).donor_label === null);
-  check("donor_label: '' when the token is the whole worker name",
-    dl('donate10') === '' && dl('donate0') === '' && dl('Donate5') === '');
-  check('donor_label: the label after the cut, never the raw one, lowercase',
-    dl('rig01-donate10') === 'rig01' && dl('MyBrand-donate10') === 'mybrand' &&
-    dl('rig-name-that-is-long-enough-donate100') === 'rig-name-that-is-long' &&
-    dl('b'.repeat(23) + '-donate100') === 'b'.repeat(22));
-  check('validateUsername returns exactly the four fields, existing three first',
+  // design §18.1 #3: the label in front of the token is only a rig name again — v1 returned it
+  // as `donor_label` for a donor-name capture that no longer exists. donation_percent stays
+  // (the login log line reads it); nothing stores it.
+  check('validateUsername returns exactly grin_address, worker_name, donation_percent (no donor_label)',
     JSON.stringify(Object.keys(validateUsername(main + '.rig01-donate10'))) ===
-      JSON.stringify(['grin_address', 'worker_name', 'donation_percent', 'donor_label']));
+      JSON.stringify(['grin_address', 'worker_name', 'donation_percent']));
   // Leading zeros are just zeros — parseInt(…, 10) — so donate09 = 9 %, donate005 = 5 %,
   // donate000 = opt-out; a 4th digit no longer matches \d{1,3} and is a plain name (no donation).
   check('donate tag: leading zeros read as the plain number (donate09 = 9 %)',

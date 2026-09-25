@@ -277,6 +277,53 @@
     padding: 4px 8px; cursor: pointer;
   }
   .proof-reveal:hover { color: var(--text); border-color: var(--text-dim); }
+
+    /* ── P-03 per-rig donation badge (design §18.8) ─────────────────────── */
+    .wbadge {
+      display: inline-block; margin-left: 8px; padding: 1px 7px; border-radius: 4px;
+      font-family: var(--mono); font-size: 10.5px; letter-spacing: .04em; white-space: nowrap;
+      color: var(--warn, #d29922); border: 1px solid color-mix(in srgb, var(--warn, #d29922) 45%, transparent);
+    }
+
+    /* ── P-09 donor profile (design §18.8) ─────────────────────────────────
+       Two columns (name | banner) under one two-proof gate. Every block that starts hidden
+       does so with an inline style="display:none", never through these classes, so a
+       style.display = '' reveal always works (memory: project_pool_frontend_uiux_audit). */
+    .dp-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 26px; }
+    @media (max-width: 900px) { .dp-grid { grid-template-columns: minmax(0, 1fr); } }
+    .dp-col h3 {
+      font-family: var(--mono); font-size: 11px; font-weight: 700; letter-spacing: .16em;
+      text-transform: uppercase; color: var(--text-dim); margin: 0 0 12px;
+      padding-bottom: 7px; border-bottom: 1px solid var(--border-soft);
+    }
+    .dp-proofs { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 0 14px; }
+    @media (max-width: 640px) { .dp-proofs { grid-template-columns: minmax(0, 1fr); } }
+    .dp-lines { display: flex; flex-direction: column; gap: 6px; margin: 0 0 12px; }
+    .dp-line {
+      font-size: 13px; line-height: 1.5; padding: 7px 11px; border-radius: 6px; overflow-wrap: anywhere;
+      border: 1px solid var(--border, rgba(255,255,255,.12));
+      background: var(--panel-2, rgba(255,255,255,.04)); color: var(--text-dim, #9aa4b2);
+    }
+    .dp-line b { color: var(--text); }
+    .dp-line.ok   { border-color: color-mix(in srgb, var(--ok, #3fb950) 34%, transparent); }
+    .dp-line.warn { border-color: color-mix(in srgb, var(--warn, #d29922) 38%, transparent);
+      background: color-mix(in srgb, var(--warn, #d29922) 7%, transparent); }
+    .dp-line.bad  { border-color: color-mix(in srgb, var(--danger, #f85149) 38%, transparent);
+      background: color-mix(in srgb, var(--danger, #f85149) 6%, transparent); }
+    /* The same 4:1 box as the wall's spotlight (donate.html .spot-banner), so the donor sees
+       their banner at the proportions it will be shown at: an 8:1 or 2:1 image letterboxes. */
+    .dp-banner {
+      position: relative; width: 100%; aspect-ratio: 4 / 1; overflow: hidden; margin: 0 0 8px;
+      border-radius: 6px; background: var(--bg, #07090c);
+      border: 1px solid var(--border, rgba(255,255,255,.10));
+    }
+    .dp-banner img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; display: block; }
+    .dp-cap { margin: 0 0 12px; font-size: 12px; color: var(--text-mute); font-family: var(--mono); }
+    .dp-hint { display: block; margin-top: 6px; font-size: 12.5px; line-height: 1.5; color: var(--text-dim); }
+    .dp-hint.bad { color: var(--danger, #f85149); }
+    .dp-hint.warn { color: var(--warn, #d29922); }
+    .dp-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+    .dp-col input[type="file"] { width: 100%; max-width: 100%; font-size: 13px; }
   </style>
 </head>
 <body>
@@ -534,6 +581,10 @@
                                     <div id="acct-sp-out" style="display:none;margin-top:14px;">
                                         <label for="acct-sp-armored">Slatepack for your wallet</label>
                                         <textarea id="acct-sp-armored" readonly rows="5" style="width:100%;font-family:var(--mono);font-size:12px;"></textarea>
+                                        <div class="pager-row" style="margin-top:6px;">
+                                            <button type="button" class="btn sm" id="acct-sp-copy">&#10697; Copy slatepack</button>
+                                            <span class="msg" id="acct-sp-copy-msg" aria-live="polite"></span>
+                                        </div>
                                         <div class="form-group" style="margin-top:12px;">
                                             <label for="acct-sp-response">Your wallet's response</label>
                                             <textarea id="acct-sp-response" rows="5" style="width:100%;font-family:var(--mono);font-size:12px;" placeholder="BEGINSLATEPACK. ..."></textarea>
@@ -657,15 +708,16 @@
                                 <li><span class="k">Pending withdrawal</span><span class="v" id="acct-pending">—</span></li>
                                 <li><span class="k">Payouts made</span><span class="v" id="acct-paid-count">—</span></li>
                                 <li><span class="k">Minimum payout (pool)</span><span class="v" id="acct-min">—</span></li>
-                                <!-- Donation row is HIDDEN at 0% with no donor name and shown
-                                     otherwise (see renderAccount). The `donateN` worker-name
-                                     tag sets this and it debits every future block credit, so
-                                     the miner has to be able to read it back — it used to appear
-                                     on no page they could reach. Audit §J3-5. The second line
-                                     (design §16.9) is the donor NAME this address put on the wall
-                                     via `<name>-donateN`, and whether it shows — a paused donor
-                                     keeps their name, so the row stays while one exists. -->
-                                <li id="acct-donate-row" style="display:none"><span class="k" title="Set by adding donateN to your worker name; use donate0 to stop">Donating to prize pool</span><span class="v" style="text-align:right"><span id="acct-donate">—</span><span id="acct-donor-name" style="display:none;font-size:12px;color:var(--text-dim);margin-top:2px"></span></span></li>
+                                <!-- Donation row (design §18.8, renderDonationRow). A `donateN`
+                                     tag in a rig's worker name donates N % of what THAT rig's
+                                     shares earn, so a number the pool acts on to reduce this
+                                     miner's earnings has to be readable here (audit §J3-5): the
+                                     % (a range when rigs differ), how many of the rigs online
+                                     carry a tag, and their names on the second line. Shown while
+                                     a tagged rig is online, and as "paused" for an address that
+                                     has donated before; hidden otherwise and while donations are
+                                     off. The donor NAME moved to P-09 (§18 pre-moderation). -->
+                                <li id="acct-donate-row" style="display:none"><span class="k" id="acct-donate-k">Donating to prize pool</span><span class="v" style="text-align:right"><span id="acct-donate">—</span><span id="acct-donate-rigs" style="display:none;font-size:12px;color:var(--text-dim);margin-top:2px"></span><a id="acct-donate-profile" href="#acct-donor" style="display:none;font-size:12px;margin-top:2px">Donor profile ↓</a></span></li>
                                 <!-- Row is removed entirely (not shown as 0) on a pool that
                                      absorbs the network fee — see renderAccount. -->
                                 <li id="acct-fee-row"><span class="k" title="A flat fee covering the Grin blockchain transaction fee">Withdrawal fee</span><span class="v" id="acct-fee">—</span></li>
@@ -690,7 +742,7 @@
                     <div class="panel"><span class="screws"></span>
                         <h2 class="panel-title"><span class="tag">P-06</span> Ledger — money in <span class="right"><span class="dim">row detail kept 60 days · </span><span class="amt-in" id="in-sum"></span></span></h2>
                         <div class="panel-body">
-                            <p class="note">Block rewards (PPLNS), contest bonuses, giveaways and returned payouts. 20 entries per page — full history is kept forever.</p>
+                            <p class="note">Block rewards (PPLNS), contest bonuses, giveaways — and <b>payout returned</b>, when a payout fails, expires or is cancelled and its amount comes back to your balance (it also appears once in Money out, as <b>payout requested</b>). 20 entries per page — full history is kept forever.</p>
                             <div class="table-scroll">
                                 <table class="data-table" aria-label="Money in">
                                     <thead><tr><th>When</th><th>Event</th><th class="num">Amount</th><th class="num">Balance after</th></tr></thead>
@@ -715,7 +767,7 @@
                     <div class="panel"><span class="screws"></span>
                         <h2 class="panel-title"><span class="tag">P-07</span> Ledger — money out <span class="right"><span class="dim">row detail kept 60 days · </span><span class="amt-out" id="out-sum"></span></span></h2>
                         <div class="panel-body">
-                            <p class="note">Payouts to your wallet, voluntary donations (donateNN worker tag) and orphan clawbacks. 20 entries per page — full history is kept forever.</p>
+                            <p class="note"><b>Payout requested</b> — the full amount, fee included, leaves your balance the moment you request it; the outcome is in Withdrawal history below — plus voluntary donations (donateNN worker tag) and orphan clawbacks. 20 entries per page — full history is kept forever.</p>
                             <div class="table-scroll">
                                 <table class="data-table" aria-label="Money out">
                                     <thead><tr><th>When</th><th>Event</th><th class="num">Amount</th><th class="num">Balance after</th></tr></thead>
@@ -762,6 +814,102 @@
                                 <span class="spacer"></span>
                                 <span class="dim" style="font-size:12px;">all-time</span>
                                 <a class="export-link" id="wd-export" href="#" download>&#10515; CSV</a>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ═══ P-09 · DONOR PROFILE (design §18.8) ═══════════════════════════════════
+                     The donor's nickname + banner on the donor wall, set here and nowhere else.
+                     Everything is PRE-moderated: a submission is invisible to the public until the
+                     operator approves it. Rendered by renderDonor() from `donor_profile` on the
+                     summary, which never carries the pending name or image (anyone holding the
+                     address can open this page) — a pending item is shown from THIS tab's own
+                     submit response only (dpMine), and after a reload by its submit time alone.
+                     Hidden while donations are off, unless there is something here to withdraw
+                     or remove: removing your own data is always allowed (§18.11 Part 2 #3). -->
+                <div class="deck-row" id="acct-donor" style="display:none">
+                    <div class="panel"><span class="screws"></span>
+                        <h2 class="panel-title"><span class="tag">P-09</span> Donor profile <span class="right">reviewed before it appears</span></h2>
+                        <div class="panel-body">
+                            <div id="dp-lead" class="dp-lines"></div>
+                            <div id="dp-body" style="display:none">
+                                <!-- The two proof inputs + help text are the Goblin destination
+                                     card's (P-04, acct-nostr-*), restated for this purpose: the
+                                     server gate is the same requireBothProofs, with donor wording. -->
+                                <div class="gate-block">
+                                    <div class="gate-title">🔐 Both proofs — required for every donor-profile change</div>
+                                    <p class="note" style="margin:0 0 12px;">
+                                        Your name and banner speak for this address on a public page, so changing them asks for
+                                        your mining IP <em>and</em> your rig password, not either one. Each must have been on
+                                        record for a while — that is what stops someone who briefly mined to your address from
+                                        putting words on the donor wall in your name.
+                                    </p>
+                                    <div class="dp-proofs">
+                                        <div class="form-group">
+                                            <label for="dp-ip-proof">Proof 1 — a recent mining IP</label>
+                                            <input type="text" id="dp-ip-proof" maxlength="64" placeholder="e.g. 203.0.113.42" autocomplete="off" spellcheck="false">
+                                        </div>
+                                        <div class="form-group">
+                                            <label for="dp-pass-proof">Proof 2 — your rig's stratum password</label>
+                                            <input type="password" id="dp-pass-proof" maxlength="128" placeholder="the password your miner logs in with" autocomplete="off">
+                                        </div>
+                                    </div>
+                                    <small style="color:var(--text-mute);">Check your IP at
+                                        <a href="https://tools.grin.money/tools/my-ip/" target="_blank" rel="noopener noreferrer">tools.grin.money/tools/my-ip</a>.
+                                        Both boxes are cleared after every change that goes through.</small>
+                                </div>
+
+                                <div class="dp-grid">
+                                    <div class="dp-col">
+                                        <h3>Donor name</h3>
+                                        <div class="dp-lines" id="dp-name-lines"></div>
+                                        <div id="dp-name-form" style="display:none">
+                                            <div class="form-group">
+                                                <label for="dp-name">Name for the donor wall
+                                                    <span style="color:var(--text-mute);font-weight:400">(2&ndash;32 characters: letters, digits, spaces and - _ . &amp; ')</span></label>
+                                                <input type="text" id="dp-name" maxlength="40" placeholder="e.g. Acme Mining" autocomplete="off" spellcheck="false">
+                                                <small class="dp-hint" id="dp-name-hint" aria-live="polite"></small>
+                                            </div>
+                                        </div>
+                                        <div class="dp-actions">
+                                            <button class="btn-save" id="dp-name-submit" style="display:none">Submit name for review</button>
+                                            <button type="button" class="btn-save btn-quiet" id="dp-name-withdraw" style="display:none">Withdraw request</button>
+                                            <button type="button" class="btn-save btn-quiet" id="dp-name-remove" style="display:none">Remove from wall</button>
+                                        </div>
+                                        <div class="acct-msg" id="dp-name-msg"></div>
+                                    </div>
+
+                                    <div class="dp-col">
+                                        <h3>Banner</h3>
+                                        <div class="dp-lines" id="dp-banner-lines"></div>
+                                        <!-- The approved banner, from its public /uploads/donors/ URL. -->
+                                        <div id="dp-banner-live" style="display:none">
+                                            <div class="dp-banner"><img id="dp-banner-live-img" alt="Your approved banner" width="800" height="200"></div>
+                                        </div>
+                                        <!-- A local preview: the file just chosen, or the one this tab
+                                             submitted. A data: URL, never blob: — the public CSP's
+                                             img-src is 'self' data: only. -->
+                                        <div id="dp-banner-preview" style="display:none">
+                                            <div class="dp-banner"><img id="dp-banner-preview-img" alt="Preview of the banner you chose" width="800" height="200"></div>
+                                            <p class="dp-cap" id="dp-banner-preview-cap"></p>
+                                        </div>
+                                        <div id="dp-banner-form" style="display:none">
+                                            <div class="form-group">
+                                                <label for="dp-banner-file">Banner image
+                                                    <span style="color:var(--text-mute);font-weight:400">(800 &times; 200 recommended &middot; PNG, JPG or GIF, animation allowed &middot; up to 300 KB)</span></label>
+                                                <input type="file" id="dp-banner-file" accept="image/png,image/jpeg,image/gif">
+                                                <small class="dp-hint" id="dp-banner-hint" aria-live="polite"></small>
+                                            </div>
+                                        </div>
+                                        <div class="dp-actions">
+                                            <button class="btn-save" id="dp-banner-submit" style="display:none">Submit banner for review</button>
+                                            <button type="button" class="btn-save btn-quiet" id="dp-banner-withdraw" style="display:none">Withdraw request</button>
+                                            <button type="button" class="btn-save btn-quiet" id="dp-banner-remove" style="display:none">Remove from wall</button>
+                                        </div>
+                                        <div class="acct-msg" id="dp-banner-msg"></div>
+                                    </div>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -846,6 +994,12 @@
             return d.getUTCFullYear() + '-' + pad2(d.getUTCMonth() + 1) + '-' + pad2(d.getUTCDate())
                  + ' ' + pad2(d.getUTCHours()) + ':' + pad2(d.getUTCMinutes());
         }
+        // "expires in 27 min" for a pending slatepack. The sweep runs every 60s, so at 0 it says
+        // "expiring now" rather than claiming it is already gone.
+        function minutesLeft(expiresAt) {
+            const mins = Math.ceil((Number(expiresAt) - Date.now() / 1000) / 60);
+            return mins > 0 ? 'expires in ' + mins + ' min' : 'expiring now';
+        }
         // Compact form for tables: same UTC day → "HH:MM", else "Jul 12 03:19".
         function fmtShort(unixSeconds) {
             if (!unixSeconds) return 'never';
@@ -899,6 +1053,7 @@
             const addr = $id('acct-addr').value.trim();
             const msg = $id('acct-msg');
             if (addr.toLowerCase() === DEMO_ADDR) { renderDemo(); return; }
+            const wasDemo = isDemo;
             isDemo = false;
             // Accept mainnet grin1… and testnet tgrin1… (the backend validates per-network).
             if (!/^t?grin1[a-z0-9]{20,}$/i.test(addr)) {
@@ -908,6 +1063,8 @@
             setMsg(msg, 'Loading…', true);
             try {
                 const a = await getJson('/api/account/' + encodeURIComponent(addr));
+                // A different address must not inherit P-09's proofs, file or pending text.
+                if (addr !== currentAddr || wasDemo) dpReset();
                 currentAddr = addr;
                 try { localStorage.setItem(ADDR_KEY, addr); } catch (e) {}
 
@@ -960,37 +1117,11 @@
             $id('acct-pending').textContent = a.pending_withdrawals ? 'Yes — 1 in progress' : 'No';
             $id('acct-paid-count').textContent = Number(a.payouts_count || 0).toLocaleString('en-US');
             $id('acct-min').textContent = fmtGrin(a.min_withdrawal);
-            // Donation share (audit §J3-5). Shown only when it is actually taking a cut, and
-            // worded so someone who never set it knows both that it is happening and how to
-            // stop it — the tag is set from the worker name, which is not where a miner would
-            // think to look for something that reduces their earnings.
-            const dRow = $id('acct-donate-row');
-            const dPct = Number(a.donation_percent || 0);
-            // Donor name (design §16.9): shown / censored / expired get a line each; 'masked'
-            // (no name set) and null (donations off) get nothing. The name is the miner's own
-            // label from the worker name — untrusted text, so textContent (never innerHTML).
-            const dState = a.donor_name_state || null;
-            const hasNameLine = dState === 'shown' || dState === 'censored' || dState === 'expired';
-            if (dRow) {
-                dRow.style.display = (dPct > 0 || hasNameLine) ? '' : 'none';
-                if (dPct > 0 || hasNameLine) {
-                    $id('acct-donate').textContent = dPct > 0 ? dPct + '% of new earnings' : 'paused (0%)';
-                    $id('acct-donate').style.color = dPct > 0 ? 'var(--warn, inherit)' : '';
-                    dRow.title = 'Set by a donateN tag in your worker name. Reconnect with donate0 in the worker name to stop it. ' +
-                        'A tag can only be lowered directly — to raise it, go through donate0 first, then reconnect with the new value. ' +
-                        'Your donor name on the wall is the label in front of the tag (yourbrand-donate10) and is set the same way: ' +
-                        'donate0 first, a few shares, then reconnect with the new label; a plain donateN removes it.';
-                }
-                const nameEl = $id('acct-donor-name');
-                if (nameEl) {
-                    let line = '';
-                    if (dState === 'shown') line = 'Donor name: ' + String(a.donor_name || '');
-                    else if (dState === 'censored') line = 'Donor name hidden by the pool — contact the operator if this is a mistake';
-                    else if (dState === 'expired') line = 'Donor name expired — reconnect with your tag to refresh it';
-                    nameEl.textContent = line;
-                    nameEl.style.display = line ? 'block' : 'none';
-                }
-            }
+            // Donation (design §18.8) — the P-05 row, then the P-09 donor-profile panel. Donor
+            // wiring is DOM-only and guarded, so a surprise in either object degrades those two
+            // blocks, never the balances and payout controls rendered around them.
+            try { renderDonationRow(a); } catch (e) { const r = $id('acct-donate-row'); if (r) r.style.display = 'none'; }
+            try { renderDonor(a.donor_profile); } catch (e) { const p = $id('acct-donor'); if (p) p.style.display = 'none'; }
             // Hide the row rather than print "0 ツ" — a pool that absorbs the network fee has no
             // withdrawal fee to disclose, and a zero row invites "will this change?" questions.
             const feeRow = $id('acct-fee-row');
@@ -1234,6 +1365,492 @@
             // active / idle (policy off) / no_balance → no notice.
         }
 
+        // ── Donation row (P-05) + per-rig badge (P-03) — design §18.3 / §18.8 ──────────────
+        // The donation is per SHARE: a `donateN` tag in a rig's worker name donates N % of what
+        // that rig earns, and nothing is stored per address. So the row reports the live reading
+        // (`donation`: rigs_donating, rigs_online, pct_min, pct_max, workers) and how to change
+        // it — rename + restart — and nothing else. All zeros while donations are off.
+        const DONATE_RULE = 'A donateN tag in a rig\'s worker name (for example rig01-donate10) donates N % of what that rig ' +
+            'earns to the prize pool; your other rigs are unaffected. To change or stop it, rename the rig and restart ' +
+            'the miner. It applies from that rig\'s next share (shares from the last hour keep the old tag if a block is found soon).';
+        function pctText(min, max) {
+            const lo = Number(min) || 0, hi = Number(max) || 0;
+            return (lo > 0 && lo !== hi) ? lo + '–' + hi + ' %' : hi + ' %';
+        }
+        function renderDonationRow(a) {
+            const row = $id('acct-donate-row');
+            if (!row) return;
+            const d = (a && a.donation && typeof a.donation === 'object') ? a.donation : null;
+            const dp = (a && a.donor_profile && typeof a.donor_profile === 'object') ? a.donor_profile : null;
+            const donating = d ? (Number(d.rigs_donating) || 0) : 0;
+            // "paused" only for an address that has donated before: `eligible` is exactly
+            // "donations on AND ≥ 1 donation debit" (profileFor). Anyone else sees no row.
+            const paused = donating === 0 && !!(dp && dp.eligible);
+            row.style.display = (donating > 0 || paused) ? '' : 'none';
+            const k = $id('acct-donate-k');
+            if (k) k.title = DONATE_RULE;
+            row.title = DONATE_RULE;
+            const v = $id('acct-donate'), rigs = $id('acct-donate-rigs');
+            if (donating > 0) {
+                const online = Math.max(donating, Number(d.rigs_online) || 0);
+                v.textContent = pctText(d.pct_min, d.pct_max) + ' of new earnings from ' + donating + ' of ' +
+                    online + (online === 1 ? ' rig' : ' rigs') + ' online';
+                v.style.color = 'var(--warn, inherit)';
+                // The donating rigs by name; the % beside each only when they differ.
+                const ws = Array.isArray(d.workers) ? d.workers : [];
+                const mixed = Number(d.pct_min) !== Number(d.pct_max);
+                const shown = ws.slice(0, 6).map(w => String(w && w.name || 'default') +
+                    (mixed ? ' (' + (Number(w && w.percent) || 0) + ' %)' : ''));
+                const more = ws.length - shown.length;
+                rigs.textContent = shown.length ? shown.join(', ') + (more > 0 ? ' +' + more + ' more' : '') : '';
+                rigs.style.display = shown.length ? 'block' : 'none';
+            } else {
+                v.textContent = 'paused — no tagged rig online';
+                v.style.color = '';
+                rigs.textContent = '';
+                rigs.style.display = 'none';
+            }
+        }
+        // P-03 badge. The server sends null for an untagged rig and for every rig while
+        // donations are off, 0 for a donate0 rig — which equals no tag (§18.1 #2), so no badge.
+        function donateBadge(pct) {
+            const n = Number(pct);
+            if (pct === null || pct === undefined || !Number.isFinite(n) || n <= 0) return '';
+            return '<span class="wbadge" title="' + escHtml('This rig donates ' + n + ' % of what it earns to the prize pool. Rename it and restart the miner to change that.') +
+                '">donates ' + escHtml(n) + ' %</span>';
+        }
+
+        // ── P-09 Donor profile — design §18.6 / §18.8 ──────────────────────────────────────
+        // The server is the check for everything here. The client-side rules below only save a
+        // miner a round trip (and a rate-limit slot); they mirror lib/donor-profiles.js — NAME_*
+        // and BANNER / MAX_BANNER_BYTES — and must follow it if those ever change.
+        const DP_NAME = { min: 2, max: 32, re: /^[A-Za-z0-9 \-_.&']+$/ };
+        const DP_BANNER = { minW: 320, maxW: 1600, minH: 80, maxH: 400, minAspect: 2, maxAspect: 8, maxBytes: 300 * 1024 };
+        // The exact file shape the server serves (lib/donor-profiles.js FILE_RE; donate.html keeps
+        // the same fence). Anything else is never put in an <img src>.
+        const DP_BANNER_URL_RE = /^\/uploads\/donors\/[0-9a-f]{16}\.(png|jpg|gif)$/;
+        // Server reason codes → plain sentences. The name_* / banner_* / not_a_donor / blocked /
+        // donations_off / nothing_* refusals already arrive as sentences in `error`, so only the
+        // codes whose `error` is terse, or absent, need a line here.
+        const DP_REASONS = {
+            // A proof that verified, but as the OTHER kind: an IP typed into the password box, or
+            // the password into the IP box (requireBothProofs checks each leg's method).
+            wrong_kind: 'That proof is valid, but it is in the wrong box. Proof 1 takes a mining IP, and Proof 2 takes your rig password.',
+            ip_no_match: 'That mining IP is not on record for this address.',
+            password_no_match: 'That rig password is not on record for this address.',
+            no_match: 'That proof did not match this address\'s records. Proof 1 is a recent mining IP, and Proof 2 is the password your rig logs in with.',
+            too_many_attempts: 'Too many failed attempts. Wait 5 minutes, then try again.',
+            no_recorded_proof: 'Nothing is on record for this address yet. Mine at least one accepted share first.',
+            bad_upload: 'The upload could not be read. Choose the image again and retry.'
+        };
+        function dpErr(json, status, fallback) {
+            if (!json) return fallback + (status ? ' (HTTP ' + status + ')' : '') + '.';
+            const r = json.reason;
+            if (r && DP_REASONS[r]) return DP_REASONS[r];
+            if (r && PROOF_REASONS[r]) return (json.error ? json.error + ' — ' : '') + PROOF_REASONS[r] + '.';
+            return json.error || (fallback + '.');
+        }
+
+        let dpProfile = null;      // the donor_profile last rendered — the buttons read it
+        // What THIS tab submitted, for as long as the server still reports that submission as
+        // pending (matched on its submit time). The API never returns a pending name or image,
+        // so this is the only place the donor can see what is waiting; a reload forgets it.
+        let dpMine = { addr: '', name: null, banner: null };
+        let dpFile = null;         // the chosen banner file + its client-side reading
+        let dpPickSeq = 0;         // drops a slow read of a file that was since replaced
+
+        // A new address (or the demo) must not inherit the previous one's proofs, file or
+        // pending text. Called by lookup() only when the address actually changes.
+        function dpReset() {
+            dpMine = { addr: '', name: null, banner: null };
+            dpFile = null;
+            dpPickSeq++;
+            ['dp-ip-proof', 'dp-pass-proof', 'dp-name', 'dp-banner-file'].forEach(function (id) {
+                const el = $id(id); if (el) el.value = '';
+            });
+            ['dp-name-msg', 'dp-banner-msg'].forEach(function (id) { const el = $id(id); if (el) setMsg(el, '', true); });
+            ['dp-name-hint', 'dp-banner-hint'].forEach(function (id) { const el = $id(id); if (el) { el.textContent = ''; el.className = 'dp-hint'; } });
+            dpShowPreview(null);
+            dpDisarm();
+        }
+
+        function dpLine(cls, label, text) {
+            return '<div class="dp-line' + (cls ? ' ' + cls : '') + '">' +
+                (label ? '<b>' + escHtml(label) + '</b> ' : '') + escHtml(text) + '</div>';
+        }
+        // "Rejected" / "Removed" news, with the operator's reason when one was given. The reason
+        // IS shown on this page by design (§18.9) — the admin form says so beside the field.
+        function dpVerdict(kind, what, v) {
+            if (!v) return '';
+            const head = what === 'rejected'
+                ? 'Your last ' + kind + ' submission' + (v.at ? ', reviewed ' + fmtWhen(v.at) : '') + '.'
+                : 'The pool took your ' + kind + ' off the wall' + (v.at ? ' on ' + fmtWhen(v.at) : '') + '.';
+            return dpLine('bad', what === 'rejected' ? 'Not approved' : 'Removed', head +
+                (v.reason ? ' Reason: ' + String(v.reason) : ' No reason was given.'));
+        }
+        const dpHasAny = (x) => !!x && (x.state !== 'none' || !!x.pending_at || !!x.rejected || !!x.removed);
+        const dpHasLive = (x) => !!x && (x.state === 'shown' || x.state === 'expired');
+
+        function renderDonor(dp) {
+            const panel = $id('acct-donor');
+            const link = $id('acct-donate-profile');
+            dpProfile = (dp && typeof dp === 'object' && dp.name && dp.banner) ? dp : null;
+            dp = dpProfile;
+            const anything = !!dp && (dpHasAny(dp.name) || dpHasAny(dp.banner));
+            // Donations off and nothing here: the feature is simply not on this pool.
+            const visible = !!dp && !(dp.refusal === 'donations_off' && !anything);
+            panel.style.display = visible ? '' : 'none';
+            if (link) link.style.display = visible ? 'block' : 'none';
+            if (!visible) return;
+
+            const slots = Number.isSafeInteger(dp.banner.slots) ? dp.banner.slots : 5;
+            const canSubmit = dp.refusal === null && dp.eligible === true;
+            const act = (x) => !!x.pending_at || dpHasLive(x);
+
+            // Lead: why the forms are (or are not) there.
+            let lead = '';
+            if (dp.refusal === 'donations_off') {
+                lead = dpLine('warn', 'Donations are switched off', 'on this pool, so a new name or banner cannot be submitted right now. You can still withdraw or remove what is here.');
+            } else if (dp.refusal === 'blocked') {
+                lead = dpLine('bad', 'Not available', 'This address cannot submit a donor name or banner. Contact the pool operator if you think this is a mistake.' +
+                    (anything ? ' You can still withdraw or remove what is here.' : ''));
+            } else if (dp.refusal === 'not_a_donor' || !dp.eligible) {
+                lead = dpLine('', 'Donate from any rig to unlock.', 'Add a donateN tag to a rig\'s worker name, for example rig01-donate10. Once that rig has earned a share of a matured block, you can set your name and banner here.');
+            } else {
+                lead = dpLine('', '', 'Choose the name the donor wall shows for this address' +
+                    (slots > 0 ? ', and a banner for when you rank in the top ' + slots + '.' : '.') +
+                    ' The pool reviews every name and banner before it appears. If one is not approved, the reason is shown here, on a page anyone with your address can open.');
+            }
+            $id('dp-lead').innerHTML = lead;
+
+            const body = canSubmit || act(dp.name) || act(dp.banner);
+            $id('dp-body').style.display = body ? '' : 'none';
+
+            // ── name ──
+            const n = dp.name;
+            const nl = [];
+            if (n.state === 'shown') nl.push(dpLine('ok', 'Showing', 'on the donor wall as “' + String(n.live || '') + '”.'));
+            else if (n.state === 'expired') nl.push(dpLine('warn', 'Expired', 'Your approved name is off the wall because you have not donated for a while. It shows again after your next donation.'));
+            if (n.pending_at) {
+                const mine = dpMine.name && dpMine.addr === currentAddr && dpMine.name.at === n.pending_at ? dpMine.name.text : null;
+                nl.push(dpLine('warn', 'Waiting for review', (mine !== null ? '“' + mine + '”, submitted ' : 'A name submitted ') + fmtWhen(n.pending_at) + '. Nothing shows on the wall until the pool approves it.'));
+            }
+            nl.push(dpVerdict('name', 'rejected', n.rejected));
+            nl.push(dpVerdict('name', 'removed', n.removed));
+            if (!nl.join('')) nl.push(dpLine('', '', 'No donor name yet. Until one is approved, the wall shows your address, masked.'));
+            $id('dp-name-lines').innerHTML = nl.join('');
+            $id('dp-name-form').style.display = canSubmit ? '' : 'none';
+            $id('dp-name-submit').style.display = canSubmit ? '' : 'none';
+            $id('dp-name-submit').textContent = n.pending_at ? 'Replace the name waiting' : (dpHasLive(n) ? 'Submit a new name' : 'Submit name for review');
+            $id('dp-name-withdraw').style.display = n.pending_at ? '' : 'none';
+            $id('dp-name-remove').style.display = dpHasLive(n) ? '' : 'none';
+
+            // ── banner ──
+            const b = dp.banner;
+            const bl = [];
+            const rank = Number.isSafeInteger(b.slot_rank) && b.slot_rank > 0 ? b.slot_rank : null;
+            const liveUrl = (b.state === 'shown' && typeof b.live_url === 'string' && DP_BANNER_URL_RE.test(b.live_url)) ? b.live_url : null;
+            if (b.state === 'shown') {
+                if (slots === 0) bl.push(dpLine('warn', 'Approved, not showing', 'Banners are switched off on this pool right now.'));
+                else if (b.showing === true) bl.push(dpLine('ok', 'Showing', 'You are #' + rank + ', inside the top ' + slots + ', so your banner is on the donor wall.'));
+                else if (rank) bl.push(dpLine('warn', 'Approved, not showing', 'You are #' + rank + '. Your banner shows while you are in the top ' + slots + '.'));
+                else bl.push(dpLine('warn', 'Approved, not showing', 'You are not ranked in the donor league right now. Your banner shows while you are in the top ' + slots + '.'));
+            } else if (b.state === 'expired') {
+                bl.push(dpLine('warn', 'Expired', 'Your approved banner is off the wall because you have not donated for a while. It shows again after your next donation, while you are in the top ' + slots + '.'));
+            }
+            const minePend = b.pending_at && dpMine.banner && dpMine.addr === currentAddr && dpMine.banner.at === b.pending_at ? dpMine.banner : null;
+            if (b.pending_at) {
+                bl.push(dpLine('warn', 'Waiting for review', (minePend ? 'Your ' + minePend.width + ' × ' + minePend.height + ' px banner (preview below), submitted ' : 'A banner submitted ') +
+                    fmtWhen(b.pending_at) + '. Nothing shows on the wall until the pool approves it.'));
+            }
+            bl.push(dpVerdict('banner', 'rejected', b.rejected));
+            bl.push(dpVerdict('banner', 'removed', b.removed));
+            if (!bl.join('')) {
+                bl.push(slots > 0
+                    ? dpLine('', '', 'No banner yet. The top ' + slots + ' donors show one on the wall' + (rank ? ' — you are #' + rank + '.' : '.'))
+                    : dpLine('', '', 'Banners are switched off on this pool.'));
+            }
+            $id('dp-banner-lines').innerHTML = bl.join('');
+
+            const liveBox = $id('dp-banner-live'), liveImg = $id('dp-banner-live-img');
+            if (liveUrl) {
+                const w = Number(b.width), h = Number(b.height);
+                if (Number.isSafeInteger(w) && w > 0 && Number.isSafeInteger(h) && h > 0) { liveImg.width = w; liveImg.height = h; }
+                if (liveImg.getAttribute('src') !== liveUrl) liveImg.setAttribute('src', liveUrl);
+                liveBox.style.display = '';
+            } else {
+                liveBox.style.display = 'none';
+                liveImg.removeAttribute('src');
+            }
+            // The preview box: a freshly chosen file wins; otherwise this tab's pending submit.
+            if (!(dpFile && dpFile.src)) dpShowPreview(minePend ? { src: minePend.src, width: minePend.width, height: minePend.height, cap: 'Waiting for review — shown from this tab only.' } : null);
+
+            const bannerForm = canSubmit && slots > 0;
+            $id('dp-banner-form').style.display = bannerForm ? '' : 'none';
+            $id('dp-banner-submit').style.display = bannerForm ? '' : 'none';
+            $id('dp-banner-submit').textContent = b.pending_at ? 'Replace the banner waiting' : (dpHasLive(b) ? 'Submit a new banner' : 'Submit banner for review');
+            $id('dp-banner-withdraw').style.display = b.pending_at ? '' : 'none';
+            $id('dp-banner-remove').style.display = dpHasLive(b) ? '' : 'none';
+        }
+
+        function dpShowPreview(p) {
+            const box = $id('dp-banner-preview'), img = $id('dp-banner-preview-img'), cap = $id('dp-banner-preview-cap');
+            if (!box) return;
+            if (!p || !p.src) { box.style.display = 'none'; img.removeAttribute('src'); cap.textContent = ''; return; }
+            if (p.width > 0 && p.height > 0) { img.width = p.width; img.height = p.height; }
+            img.setAttribute('src', p.src);
+            cap.textContent = p.cap || '';
+            box.style.display = '';
+        }
+
+        // Name rules, mirrored from lib/donor-profiles.js validateName: trim, collapse ASCII
+        // whitespace, 2–32 chars of A-Z a-z 0-9 space - _ . & ', at least one letter or digit.
+        function dpCheckName(raw) {
+            const name = String(raw || '').replace(/[ \t\n\r\f\v]+/g, ' ').trim();
+            if (!name) return { ok: false, name, text: '' };
+            if (name.length < DP_NAME.min || name.length > DP_NAME.max) return { ok: false, name, text: 'Use 2–32 characters (this is ' + name.length + ').' };
+            if (!DP_NAME.re.test(name)) return { ok: false, name, text: 'Only letters, digits, spaces and - _ . & \' are allowed — no accents, emoji or other symbols.' };
+            if (!/[A-Za-z0-9]/.test(name)) return { ok: false, name, text: 'Include at least one letter or digit.' };
+            return { ok: true, name, text: '✓ “' + name + '” fits the rules. The pool still reviews it before it appears.' };
+        }
+        function dpNameHint() {
+            const v = dpCheckName($id('dp-name').value);
+            const el = $id('dp-name-hint');
+            el.textContent = v.text;
+            el.className = 'dp-hint' + (v.text && !v.ok ? ' bad' : '');
+        }
+
+        // The same three signatures the server sniffs (lib/asset-manager.js SNIFFERS).
+        function dpSniff(b) {
+            if (b.length > 7 && b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47 &&
+                b[4] === 0x0d && b[5] === 0x0a && b[6] === 0x1a && b[7] === 0x0a) return 'PNG';
+            if (b.length > 2 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return 'JPG';
+            if (b.length > 5 && b[0] === 0x47 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x38 &&
+                (b[4] === 0x37 || b[4] === 0x39) && b[5] === 0x61) return 'GIF';
+            return null;
+        }
+        function dpReadAs(file, how) {
+            return new Promise(function (resolve, reject) {
+                const fr = new FileReader();
+                fr.onload = function () { resolve(fr.result); };
+                fr.onerror = function () { reject(fr.error || new Error('read failed')); };
+                if (how === 'buf') fr.readAsArrayBuffer(file); else fr.readAsDataURL(file);
+            });
+        }
+        function dpImageSize(src) {
+            return new Promise(function (resolve) {
+                const im = new Image();
+                im.onload = function () { resolve({ w: im.naturalWidth, h: im.naturalHeight }); };
+                im.onerror = function () { resolve(null); };
+                im.src = src;
+            });
+        }
+        // Size and type are exact, so a failure there blocks the submit. Dimensions are only a
+        // WARNING: the browser applies a JPEG's EXIF rotation to naturalWidth/Height and the
+        // server reads the raw header, so the two can legitimately disagree — the server decides.
+        async function dpPickFile() {
+            const seq = ++dpPickSeq;
+            const input = $id('dp-banner-file'), hint = $id('dp-banner-hint');
+            const f = input.files && input.files[0];
+            dpFile = null;
+            hint.textContent = ''; hint.className = 'dp-hint';
+            dpShowPreview(null);
+            if (!f) { renderDonor(dpProfile); return; }
+            const kb = Math.ceil(f.size / 1024);
+            if (f.size > DP_BANNER.maxBytes) {
+                dpFile = { file: f, block: true };
+                hint.textContent = 'That file is ' + kb + ' KB. The limit is 300 KB.';
+                hint.className = 'dp-hint bad';
+                return;
+            }
+            try {
+                const head = new Uint8Array(await dpReadAs(f.slice(0, 16), 'buf'));
+                if (seq !== dpPickSeq) return;
+                const type = dpSniff(head);
+                if (!type) {
+                    dpFile = { file: f, block: true };
+                    hint.textContent = 'That is not a PNG, JPG or GIF image. SVG and WEBP are not accepted.';
+                    hint.className = 'dp-hint bad';
+                    return;
+                }
+                const src = await dpReadAs(f, 'url');
+                if (seq !== dpPickSeq) return;
+                const dim = await dpImageSize(src);
+                if (seq !== dpPickSeq) return;
+                dpFile = { file: f, block: false, src: src, w: dim ? dim.w : 0, h: dim ? dim.h : 0, type: type };
+                if (!dim) {
+                    hint.textContent = type + ' · ' + kb + ' KB. Your browser could not preview it; the pool checks it on upload.';
+                    hint.className = 'dp-hint warn';
+                    return;
+                }
+                const probs = [];
+                if (dim.w < DP_BANNER.minW || dim.w > DP_BANNER.maxW) probs.push('width must be 320–1600 px');
+                if (dim.h < DP_BANNER.minH || dim.h > DP_BANNER.maxH) probs.push('height must be 80–400 px');
+                const ar = dim.w / dim.h;
+                if (!(ar >= DP_BANNER.minAspect && ar <= DP_BANNER.maxAspect)) probs.push('it must be between 2:1 and 8:1 wide');
+                dpShowPreview({ src: src, width: dim.w, height: dim.h, cap: 'Preview at the wall\'s 4:1 proportions — not submitted yet.' });
+                hint.textContent = dim.w + ' × ' + dim.h + ' px · ' + type + ' · ' + kb + ' KB' +
+                    (probs.length ? ' — the pool will likely refuse this: ' + probs.join('; ') + '.' : ' — ✓ fits the rules.');
+                hint.className = 'dp-hint' + (probs.length ? ' warn' : '');
+            } catch (e) {
+                if (seq !== dpPickSeq) return;
+                dpFile = { file: f, block: false };
+                hint.textContent = 'Could not read the file here (' + e.message + '); the pool checks it on upload.';
+                hint.className = 'dp-hint warn';
+            }
+        }
+
+        // Both proofs, from P-09's own two boxes (never the P-04 single-proof gate).
+        function dpProofs(msgEl) {
+            const ip = ($id('dp-ip-proof').value || '').trim();
+            const pass = $id('dp-pass-proof').value || '';
+            if (!ip || !pass) {
+                setMsg(msgEl, 'Fill in both proofs above: a recent mining IP and your rig password.', false);
+                return null;
+            }
+            return { proof: ip, password_proof: pass };
+        }
+        // After every change that went through: the rig password must not sit in the page.
+        function dpClearProofs() { $id('dp-ip-proof').value = ''; $id('dp-pass-proof').value = ''; }
+        // Re-read the summary for the SAME address and repaint (not lookup(): that resets the
+        // ledger pagers and reloads every panel for a change that touched only this one).
+        async function dpRefresh(addr) {
+            try {
+                const a = await getJson('/api/account/' + encodeURIComponent(addr));
+                if (addr === currentAddr && !isDemo) renderSummary(a);
+            } catch (e) { /* the panel keeps its last state; the message above says what happened */ }
+        }
+
+        async function dpSubmitName() {
+            if (!currentAddr) return;
+            const msg = $id('dp-name-msg'), btn = $id('dp-name-submit');
+            if (demoBlock(msg)) return;
+            const v = dpCheckName($id('dp-name').value);
+            if (!v.ok) { setMsg(msg, v.text || 'Type the name you want on the donor wall.', false); return; }
+            const p = dpProofs(msg);
+            if (!p) return;
+            const addr = currentAddr;
+            btn.disabled = true;
+            setMsg(msg, 'Checking your proofs and submitting…', true);
+            try {
+                const r = await fetch('/api/account/' + encodeURIComponent(addr) + '/donor-profile/name', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin',
+                    body: JSON.stringify({ name: v.name, proof: p.proof, password_proof: p.password_proof })
+                });
+                const json = await r.json().catch(() => null);
+                if (addr !== currentAddr) return;
+                if (r.ok && json && json.success) {
+                    // The typed name comes back ONLY in this response; keep it for this tab.
+                    dpMine = { addr: addr, name: { text: String(json.name || v.name), at: json.submitted_at },
+                               banner: dpMine.addr === addr ? dpMine.banner : null };
+                    dpClearProofs();
+                    $id('dp-name').value = '';
+                    dpNameHint();
+                    setMsg(msg, 'Submitted. The pool reviews it before it appears' +
+                        (json.replaced_pending ? '; it replaced the name that was waiting.' : '.'), true);
+                    await dpRefresh(addr);
+                } else {
+                    setMsg(msg, dpErr(json, r.status, 'The name could not be submitted'), false);
+                }
+            } catch (e) {
+                setMsg(msg, 'The name could not be submitted: ' + e.message, false);
+            } finally { btn.disabled = false; }
+        }
+
+        async function dpSubmitBanner() {
+            if (!currentAddr) return;
+            const msg = $id('dp-banner-msg'), btn = $id('dp-banner-submit');
+            if (demoBlock(msg)) return;
+            if (!dpFile || !dpFile.file) { setMsg(msg, 'Choose an image first.', false); return; }
+            if (dpFile.block) { setMsg(msg, $id('dp-banner-hint').textContent || 'That file cannot be used as a banner.', false); return; }
+            const p = dpProofs(msg);
+            if (!p) return;
+            const addr = currentAddr, picked = dpFile;
+            const fd = new FormData();
+            fd.append('proof', p.proof);
+            fd.append('password_proof', p.password_proof);
+            // A fixed filename: the server never reads the client's, so there is no reason to
+            // send the one from the donor's disk.
+            fd.append('file', picked.file, 'banner');
+            btn.disabled = true;
+            setMsg(msg, 'Uploading and checking your proofs…', true);
+            try {
+                const r = await fetch('/api/account/' + encodeURIComponent(addr) + '/donor-profile/banner', {
+                    method: 'POST', credentials: 'same-origin', body: fd
+                });
+                const json = await r.json().catch(() => null);
+                if (addr !== currentAddr) return;
+                if (r.ok && json && json.success) {
+                    dpMine = { addr: addr, name: dpMine.addr === addr ? dpMine.name : null,
+                               banner: picked.src ? { src: picked.src, width: json.width, height: json.height, at: json.submitted_at } : null };
+                    dpClearProofs();
+                    dpFile = null;
+                    $id('dp-banner-file').value = '';
+                    $id('dp-banner-hint').textContent = '';
+                    dpShowPreview(null);
+                    setMsg(msg, 'Submitted (' + json.width + ' × ' + json.height + ' px). The pool reviews it before it appears' +
+                        (json.replaced_pending ? '; it replaced the banner that was waiting.' : '.'), true);
+                    await dpRefresh(addr);
+                } else {
+                    setMsg(msg, r.status === 413 && !json
+                        ? 'That upload is too large for the pool to accept. A banner can be at most 300 KB.'
+                        : dpErr(json, r.status, 'The banner could not be submitted'), false);
+                }
+            } catch (e) {
+                setMsg(msg, 'The banner could not be submitted: ' + e.message, false);
+            } finally { btn.disabled = false; }
+        }
+
+        // Taking the live item off the wall is a public change: the button arms on the first
+        // click and acts on a second one within a few seconds (an in-page confirm, no dialog).
+        let dpArmed = null;
+        function dpDisarm() {
+            if (!dpArmed) return;
+            clearTimeout(dpArmed.timer);
+            const btn = $id('dp-' + dpArmed.kind + '-remove');
+            if (btn) btn.textContent = 'Remove from wall';
+            dpArmed = null;
+        }
+        async function dpDelete(kind, which) {
+            if (!currentAddr) return;
+            const msg = $id('dp-' + kind + '-msg');
+            const btn = $id('dp-' + kind + (which === 'pending' ? '-withdraw' : '-remove'));
+            if (demoBlock(msg)) return;
+            const p = dpProofs(msg);
+            if (!p) return;
+            if (which === 'live' && !(dpArmed && dpArmed.kind === kind)) {
+                dpDisarm();
+                btn.textContent = 'Click again to remove';
+                dpArmed = { kind: kind, timer: setTimeout(dpDisarm, 6000) };
+                setMsg(msg, 'This takes your ' + kind + ' off the donor wall. Click again to confirm.', true);
+                return;
+            }
+            dpDisarm();
+            const addr = currentAddr;
+            btn.disabled = true;
+            setMsg(msg, 'Checking your proofs…', true);
+            try {
+                const r = await fetch('/api/account/' + encodeURIComponent(addr) + '/donor-profile/' + kind, {
+                    method: 'DELETE', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin',
+                    body: JSON.stringify({ which: which, proof: p.proof, password_proof: p.password_proof })
+                });
+                const json = await r.json().catch(() => null);
+                if (addr !== currentAddr) return;
+                if (r.ok && json && json.success) {
+                    dpClearProofs();
+                    if (which === 'pending' && dpMine.addr === addr) dpMine[kind] = null;
+                    setMsg(msg, which === 'pending'
+                        ? 'Withdrawn. The ' + kind + ' that was waiting will not be reviewed.'
+                        : 'Removed. Your ' + kind + ' is off the donor wall.', true);
+                    await dpRefresh(addr);
+                } else {
+                    setMsg(msg, dpErr(json, r.status, which === 'pending' ? 'The request could not be withdrawn' : 'The ' + kind + ' could not be removed'), false);
+                }
+            } catch (e) {
+                setMsg(msg, 'Failed: ' + e.message, false);
+            } finally { btn.disabled = false; }
+        }
+
         // ── Built-in payout rails ─────────────────────────────────────────
         // Tor and Slatepack ship with every pool and pay only this address's own wallet, so
         // they carry no destination card and no enablement flag. Third-party rails live in
@@ -1295,6 +1912,7 @@
                 return d + (d === 1 ? ' day' : ' days') + ' ago';
             };
             if (startedAt) text += ' · requested ' + fmtElapsed(ageMin);
+            if (p.status === 'slatepack_pending' && p.expires_at) text += ' · ' + minutesLeft(p.expires_at);
             if (inFlight && ageMin >= 30) {
                 text += ' — this has been in progress for an unusually long time; if it does not '
                       + 'clear, contact the operator with this payout number.';
@@ -1371,7 +1989,8 @@
                 name: w.worker_name, hr10: 0, hr24: w.hashrate_gps || 0,
                 shares: w.share_count || 0, last_share_at: w.last_share_at || 0,
                 online: !!w.online, accepted: w.accepted, rejected: w.rejected, stale: w.stale,
-                stale_pct: w.stale_pct, reject_pct: w.reject_pct
+                stale_pct: w.stale_pct, reject_pct: w.reject_pct,
+                donate_percent: w.donate_percent
             }));
             (w10 || []).forEach(w => {
                 const m = byName.get(w.worker_name) || { name: w.worker_name, hr24: 0, shares: w.share_count || 0 };
@@ -1381,6 +2000,8 @@
                 if (w.accepted != null) { m.accepted = w.accepted; m.rejected = w.rejected; m.stale = w.stale; }
                 if (w.stale_pct != null) m.stale_pct = w.stale_pct;
                 if (w.reject_pct != null) m.reject_pct = w.reject_pct;
+                // Both windows read the % from the same worker name; take whichever sent one.
+                if (w.donate_percent !== undefined) m.donate_percent = w.donate_percent;
                 byName.set(w.worker_name, m);
             });
             const ws = [...byName.values()].sort((a, b) => (b.hr24 || 0) - (a.hr24 || 0));
@@ -1395,7 +2016,7 @@
             const rate = v => (v > 0 ? fmtGps(v) : '—');
             tbody.innerHTML = ws.map(w =>
                 '<tr>' +
-                '<td><span class="' + ledClass(w) + '" title="' + (w.online ? 'Online' : 'Offline') + '"></span>' + escHtml(w.name || 'default') + '</td>' +
+                '<td><span class="' + ledClass(w) + '" title="' + (w.online ? 'Online' : 'Offline') + '"></span>' + escHtml(w.name || 'default') + donateBadge(w.donate_percent) + '</td>' +
                 '<td class="num">' + escHtml(rate(w.hr10)) + '</td>' +
                 '<td class="num">' + escHtml(rate(w.hr24)) + '</td>' +
                 '<td class="num">' + Number(w.shares || 0).toLocaleString('en-US') + '</td>' +
@@ -1501,7 +2122,13 @@
             'credit/prize_award': 'prize',
             'credit/jackpot': 'jackpot',
             'credit/admin_inject': 'adjustment',
+            // A payout shows in Money out ONCE, as its lock at request time (gross, fee included).
+            // The confirm-time 'debit' rows only drain the locked balance, so the server filters
+            // them out of both split views; 'debit/withdrawal' still labels the admin's manual
+            // out-of-band payout, which does draw on spendable balance directly.
+            'lock/withdrawal': 'payout requested',
             'debit/withdrawal': 'payout',
+            'debit/withdrawal_fee': 'payout fee',
             'debit/donation': 'donation',
             'debit/dormant_sweep': 'balance disposed (abandoned → prize pool)',
             'reversal/withdrawal': 'payout returned',
@@ -1934,12 +2561,40 @@
                     $id('acct-sp-armored').value = json.slatepack || '';
                     $id('acct-sp-out').style.display = '';
                     $id('acct-sp-finalize').dataset.wid = json.withdrawal_id;
-                    setMsg(msg, 'Slatepack #' + json.withdrawal_id + ' created (' + json.amount + ' ツ). Import it, run receive, paste the response below.', true);
+                    // The window is short (30 min by default) and miners cannot cancel, so the
+                    // deadline is stated up front rather than discovered on a refused finalize.
+                    const by = json.expires_at ? ' Respond by ' + fmtShort(json.expires_at) + ' UTC (' +
+                        minutesLeft(json.expires_at) + ') — after that it expires and the amount returns to your balance.' : '';
+                    setMsg(msg, 'Slatepack #' + json.withdrawal_id + ' created (' + json.amount + ' ツ). Copy it, run receive in your wallet, paste the response below.' + by, true);
                     lookup();
                 } else {
                     setMsg(msg, apiErr(json, 'Failed'), false);
                 }
             } catch (e) { setMsg(msg, 'Failed: ' + e.message, false); }
+        }
+
+        // Copy the armored slatepack. The Clipboard API needs a secure context (the pool is served
+        // over HTTPS; plain-http testing is not), so fall back to select + execCommand, and as a
+        // last resort leave the text selected with a hint rather than failing silently.
+        async function slatepackCopy() {
+            const ta = $id('acct-sp-armored');
+            const msg = $id('acct-sp-copy-msg');
+            const text = ta.value;
+            if (!text) { msg.textContent = 'Nothing to copy yet'; return; }
+            let copied = false;
+            try {
+                if (navigator.clipboard && window.isSecureContext) {
+                    await navigator.clipboard.writeText(text);
+                    copied = true;
+                }
+            } catch (e) { /* fall through to the legacy path */ }
+            if (!copied) {
+                ta.focus();
+                ta.select();
+                try { copied = document.execCommand('copy'); } catch (e) { copied = false; }
+            }
+            msg.textContent = copied ? '✓ Copied' : 'Copy blocked by the browser — the text is selected, press Ctrl+C';
+            setTimeout(() => { if (msg.textContent === '✓ Copied') msg.textContent = ''; }, 2500);
         }
 
         async function slatepackFinalize() {
@@ -1961,6 +2616,16 @@
                 const json = await r.json().catch(() => null);
                 if (r.ok && json && json.success) {
                     setMsg(msg, 'Payout broadcast — confirmed. 🎉', true);
+                    $id('acct-sp-out').style.display = 'none';
+                    $id('acct-sp-response').value = '';
+                    lookup();
+                } else if (r.status === 409 && /slatepack_expired/.test(apiErr(json, ''))) {
+                    // Too late: the pool already cancelled its side and refunded the balance.
+                    // The miner's wallet still holds the receive it made — an incoming tx that
+                    // can never confirm — so say how to clear it rather than just "409".
+                    setMsg(msg, 'This payout expired before your response arrived — the full amount is back in your balance. ' +
+                        'Your wallet still lists it as an unconfirmed incoming transaction that will never confirm; remove it with grin-wallet cancel. ' +
+                        'You can request a new payout after the cooldown.', false);
                     $id('acct-sp-out').style.display = 'none';
                     $id('acct-sp-response').value = '';
                     lookup();
@@ -1999,14 +2664,16 @@
                 return out;
             }
             const workers24 = [
-                { worker_name: 'ipollo-01', hashrate_gps: 3.18, share_count: 121540, last_share_at: now - 40, online: true, accepted: 121540, stale: 1360, rejected: 300, stale_pct: 0.8, reject_pct: 0.1 },
-                { worker_name: 'ipollo-02', hashrate_gps: 1.64, share_count: 62110, last_share_at: now - 95, online: true, accepted: 60806, stale: 744, rejected: 212, stale_pct: 1.4, reject_pct: 0.4 },
+                // ipollo-01 carries a donate10 tag (the name keeps the token, as the API sends it),
+                // so the P-03 badge and the P-05 "1 of 2 rigs" row both have something to show.
+                { worker_name: 'ipollo-01-donate10', hashrate_gps: 3.18, share_count: 121540, last_share_at: now - 40, online: true, accepted: 121540, stale: 1360, rejected: 300, stale_pct: 0.8, reject_pct: 0.1, donate_percent: 10 },
+                { worker_name: 'ipollo-02', hashrate_gps: 1.64, share_count: 62110, last_share_at: now - 95, online: true, accepted: 60806, stale: 744, rejected: 212, stale_pct: 1.4, reject_pct: 0.4, donate_percent: null },
                 { worker_name: 'rack-rig', hashrate_gps: 1.02, share_count: 18432, last_share_at: now - 7 * 3600, online: false, accepted: null, stale: null, rejected: null },
                 { worker_name: 'garage-rig', hashrate_gps: 0, share_count: 557, last_share_at: now - 4 * 86400, online: false, accepted: null, stale: null, rejected: null }
             ];
             const workers10 = [
-                { worker_name: 'ipollo-01', hashrate_gps: 3.21, share_count: 41, last_share_at: now - 40, online: true, accepted: 121540, stale: 1360, rejected: 300, stale_pct: 0.8, reject_pct: 0.1 },
-                { worker_name: 'ipollo-02', hashrate_gps: 1.61, share_count: 20, last_share_at: now - 95, online: true, accepted: 60806, stale: 744, rejected: 212, stale_pct: 1.4, reject_pct: 0.4 }
+                { worker_name: 'ipollo-01-donate10', hashrate_gps: 3.21, share_count: 41, last_share_at: now - 40, online: true, accepted: 121540, stale: 1360, rejected: 300, stale_pct: 0.8, reject_pct: 0.1, donate_percent: 10 },
+                { worker_name: 'ipollo-02', hashrate_gps: 1.61, share_count: 20, last_share_at: now - 95, online: true, accepted: 60806, stale: 744, rejected: 212, stale_pct: 1.4, reject_pct: 0.4, donate_percent: null }
             ];
             const logIn = [];
             let bal = 31.221;
@@ -2021,10 +2688,10 @@
                 bal = Math.max(0.5, bal - amt);
             }
             const logOut = [
-                { created_at: now - 3 * 86400, event_type: 'debit', reference_type: 'withdrawal', amount: 25.0, balance_after: 21.7245 },
+                { created_at: now - 3 * 86400, event_type: 'lock', reference_type: 'withdrawal', amount: 25.0, balance_after: 21.7245 },
                 { created_at: now - 4 * 86400, event_type: 'debit', reference_type: 'donation', amount: 0.742, balance_after: 44.9518 },
-                { created_at: now - 8 * 86400, event_type: 'debit', reference_type: 'withdrawal', amount: 25.0, balance_after: 18.3306 },
-                { created_at: now - 15 * 86400, event_type: 'debit', reference_type: 'withdrawal', amount: 30.0, balance_after: 12.7981 }
+                { created_at: now - 8 * 86400, event_type: 'lock', reference_type: 'withdrawal', amount: 25.0, balance_after: 18.3306 },
+                { created_at: now - 15 * 86400, event_type: 'lock', reference_type: 'withdrawal', amount: 30.0, balance_after: 12.7981 }
             ];
             return {
                 summary: {
@@ -2046,7 +2713,20 @@
                     // see the first-run text; drop the whole object to see the older-backend
                     // fallback.
                     proofs: { ip: 3, pass: 2, max: 10, anchor: true, last_added_at: now - 9 * 86400 },
-                    donation_percent: 0,
+                    // One of two rigs online donates 10 % (design §18.3), and the address has
+                    // donated before (the debit in logOut below), so P-09 is unlocked.
+                    donation: { rigs_donating: 1, rigs_online: 2, pct_min: 10, pct_max: 10,
+                                workers: [{ name: 'ipollo-01-donate10', percent: 10 }] },
+                    // A representative P-09 state (§18.6 shape): an approved name on the wall,
+                    // a banner waiting for review, and rank 3 of 5 banner slots. Swap in
+                    // refusal 'not_a_donor' / eligible false, a `rejected: { reason, at }`, or
+                    // a banner.live_url to see the other states.
+                    donor_profile: {
+                        eligible: true, blocked: false, refusal: null,
+                        name: { live: 'Demo Mining Co.', state: 'shown', pending_at: null, rejected: null, removed: null },
+                        banner: { live_url: null, width: null, height: null, state: 'none', pending_at: now - 2 * 3600,
+                                  rejected: null, removed: null, slot_rank: 3, slots: 5, showing: false }
+                    },
                     nostr_payouts_enabled: false, nostr_destination: null
                 },
                 series, workers10, workers24,
@@ -2066,6 +2746,7 @@
         })();
 
         function renderDemo() {
+            if (currentAddr !== DEMO_ADDR) dpReset();
             isDemo = true;
             currentAddr = DEMO_ADDR;   // demo is never saved to localStorage
             renderSummary(DEMO.summary);
@@ -2101,6 +2782,7 @@
                 renderNetPreview();
             });
             $id('acct-sp-create').addEventListener('click', slatepackCreate);
+            $id('acct-sp-copy').addEventListener('click', slatepackCopy);
             $id('acct-sp-finalize').addEventListener('click', slatepackFinalize);
             $id('acct-amt-min').addEventListener('click', function (e) {
                 e.preventDefault();
@@ -2166,6 +2848,17 @@
                 if (isDemo) { e.preventDefault(); setMsg($id('acct-msg'), 'Demo account — export is disabled.', false); }
             });
             $id('wd-reveal-proofs').addEventListener('click', revealProofs);
+
+            // P-09 donor profile
+            $id('dp-name').addEventListener('input', dpNameHint);
+            $id('dp-name').addEventListener('keydown', function (e) { if (e.key === 'Enter') dpSubmitName(); });
+            $id('dp-name-submit').addEventListener('click', dpSubmitName);
+            $id('dp-banner-file').addEventListener('change', dpPickFile);
+            $id('dp-banner-submit').addEventListener('click', dpSubmitBanner);
+            ['name', 'banner'].forEach(function (kind) {
+                $id('dp-' + kind + '-withdraw').addEventListener('click', function () { dpDelete(kind, 'pending'); });
+                $id('dp-' + kind + '-remove').addEventListener('click', function () { dpDelete(kind, 'live'); });
+            });
 
             // Deep-link support: ?addr=grin1… takes priority over the last-viewed address
             // stashed in localStorage. Kept because a miner may legitimately bookmark or share

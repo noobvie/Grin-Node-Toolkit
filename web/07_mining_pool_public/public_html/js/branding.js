@@ -118,17 +118,23 @@
   // answers HTTP 200 for every path, error page included: a status code proves nothing about
   // a link, compare page content (verified live 2026-09-23). /output/ finds UNSPENT outputs only.
   //
-  // Default: mainnet → grincoin.org (third-party full archive, so a toolkit operator's small
-  // VPS going down no longer breaks every proof link; was scan.grin.money / 06d until
-  // 2026-09-23), testnet → test.grinscan.org (06b GrinScan's testnet sibling —
-  // testnet.grincoin.org is PRUNED, so it cannot open old testnet blocks). NOTE the testnet
-  // host is `test.` — `testnet.grinscan.org` does NOT resolve (that typo made every testnet
-  // link dead). To switch explorer, change DEFAULT_EXPLORER below — the style travels with the
-  // entry, so a swap can never resurrect the mismatched-scheme bug.
+  // WHICH explorer is an ADMIN SETTING (Settings → Branding, `branding.explorer_mainnet`), not a
+  // code edit: mainnet picks one of grincoin (default) | tiny | grinscan; testnet is FIXED on
+  // test.grinscan.org (testnet.grincoin.org is PRUNED, so it cannot open old testnet blocks;
+  // NOTE the host is `test.` — `testnet.grinscan.org` does NOT resolve). The server resolves
+  // the setting (lib/explorers.js resolveExplorerKey) and publishes only the resulting KEY as
+  // `explorer` beside `network` (cfg.connection.explorer here). A key is mapped through the
+  // registry below and never used as a URL, so a style always travels with its host and a
+  // swap can never resurrect the mismatched-scheme bug.
   //
-  // Network is resolved from the branding fetch (cfg.connection.network) and cached in
-  // sessionStorage; until then we assume mainnet (the common deployment).
+  // ⚠ EXPLORERS / EXPLORER_STYLES / MAINNET_CHOICES MIRROR back-end-pool/lib/explorers.js (and
+  // the copy in admin-panel/admin-shell.js). scripts/test-explorers.js fails if they drift.
+  //
+  // Network + key are resolved from the branding fetch (cfg.connection) and cached in
+  // sessionStorage; until then we assume mainnet + grincoin (a valid explorer, never a dead
+  // link). blocks.html primes the same two keys before its first render.
   var NETWORK_KEY = 'pool-network';
+  var EXPLORER_KEY = 'pool-explorer';
   function explorerNetwork() {
     try { var n = sessionStorage.getItem(NETWORK_KEY); if (n) return n; } catch (e) {}
     return 'mainnet';
@@ -147,10 +153,23 @@
     grinscan:         { base: 'https://grinscan.org',      style: 'query'    }, // 06b mainnet
     grinscan_testnet: { base: 'https://test.grinscan.org', style: 'query'    }  // 06b testnet sibling
   };
-  var DEFAULT_EXPLORER = { mainnet: 'grincoin', testnet: 'grinscan_testnet' };
+  var MAINNET_CHOICES = ['grincoin', 'tiny', 'grinscan'];
+  var DEFAULT_MAINNET = 'grincoin';
+  var TESTNET_EXPLORER = 'grinscan_testnet';
+  // Same rule as resolveExplorerKey() on the server, re-applied to the cached key: testnet is
+  // always test.grinscan.org (so a stale mainnet key cached by an earlier response can never
+  // send a testnet pool's links to a mainnet explorer); mainnet takes the cached key only if it
+  // is one of the three choices AND an own registry entry (never `in` — 'constructor' would
+  // pass), else grincoin.
+  function explorerKey() {
+    if (explorerNetwork() === 'testnet') return TESTNET_EXPLORER;
+    var k = null;
+    try { k = sessionStorage.getItem(EXPLORER_KEY); } catch (e) {}
+    return (typeof k === 'string' && MAINNET_CHOICES.indexOf(k) !== -1 &&
+      Object.prototype.hasOwnProperty.call(EXPLORERS, k)) ? k : DEFAULT_MAINNET;
+  }
   function explorerPick() {
-    var net = explorerNetwork() === 'testnet' ? 'testnet' : 'mainnet';
-    return EXPLORERS[DEFAULT_EXPLORER[net]] || EXPLORERS.grincoin;
+    return EXPLORERS[explorerKey()];
   }
   function explorerUrl(kind, value) {
     var ex = explorerPick();
@@ -167,12 +186,26 @@
   }
   // Returns an <a> (HTML string) that opens the explorer in a new tab. `label` defaults to
   // `value`. Both URL and label are HTML-escaped — safe for untrusted chain strings. A missing
-  // value returns just the escaped label (no dead link).
+  // value returns just the escaped label (no dead link). data-xp-kind/-ref let relink() below
+  // re-point the anchor once the network + explorer are known.
   function explorerLink(kind, value, label, cls) {
     if (value == null || value === '') return xEsc(label == null ? '' : label);
     return '<a href="' + xEsc(explorerUrl(kind, value)) + '" target="_blank" rel="noopener" ' +
-      'class="xplink' + (cls ? ' ' + xEsc(cls) : '') + '" title="Open on Grin chain explorer ↗">' +
+      'class="xplink' + (cls ? ' ' + xEsc(cls) : '') + '" title="Open on Grin chain explorer ↗" ' +
+      'data-xp-kind="' + xEsc(kind) + '" data-xp-ref="' + xEsc(value) + '">' +
       xEsc(label == null ? value : label) + '</a>';
+  }
+  // A page may render links BEFORE apply() caches network + explorer (its own fetch can beat the
+  // branding fetch, and sessionStorage is per tab, so every new tab starts empty) — those links
+  // took the mainnet/grincoin fallback, i.e. a MAINNET explorer on a testnet pool. Re-point every
+  // tagged anchor through explorerUrl(): the ref is re-encoded and the host comes from the
+  // registry, so an attribute value can never become the URL.
+  function explorerRelink() {
+    var list = document.querySelectorAll('a[data-xp-kind]');
+    for (var i = 0; i < list.length; i++) {
+      var a = list[i], ref = a.getAttribute('data-xp-ref');
+      if (ref) a.setAttribute('href', explorerUrl(a.getAttribute('data-xp-kind'), ref));
+    }
   }
   function injectExplorerCss() {
     if (document.getElementById('xplink-css')) return;
@@ -185,7 +218,7 @@
       'a.xplink:hover{text-decoration-style:solid;opacity:.82;}';
     head().appendChild(s);
   }
-  window.Explorer = { url: explorerUrl, link: explorerLink, network: explorerNetwork };
+  window.Explorer = { url: explorerUrl, link: explorerLink, network: explorerNetwork, key: explorerKey, relink: explorerRelink };
 
   // ── 1. SEO / meta tags ─────────────────────────────────────────────────────
   function applySeo(cfg) {
@@ -960,11 +993,17 @@
 
   // ── bootstrap ──────────────────────────────────────────────────────────────
   function apply(cfg) {
-    // Cache the chain so window.Explorer builds testnet-correct deep-links.
+    // Cache the chain + the operator's explorer so window.Explorer builds the right deep-links.
+    // The explorer key is the server-RESOLVED one; explorerKey() still re-validates it. A
+    // response without one clears any stale key, so the network default applies.
     try {
       var net = cfg.connection && cfg.connection.network;
       if (net) sessionStorage.setItem(NETWORK_KEY, net);
+      var xk = cfg.connection && cfg.connection.explorer;
+      if (typeof xk === 'string' && xk) sessionStorage.setItem(EXPLORER_KEY, xk);
+      else sessionStorage.removeItem(EXPLORER_KEY);
     } catch (e) {}
+    try { explorerRelink(); } catch (e) {}   // links a page rendered before this landed
 
     try { applyTheme(cfg); } catch (e) {}
 

@@ -1,4 +1,5 @@
-// Money-path regression tests — block-reward distribution + the commit-reveal lottery.
+// Money-path regression tests — block-reward distribution, the commit-reveal lottery, and the
+// per-share donation (design §18.2).
 //
 // Guards the audit §I3–I6 and §I8 fixes. Each of these was a real bug that moved (or failed
 // to move) real GRIN, so they get a test rather than a comment. Runs against a throwaway
@@ -232,6 +233,108 @@ db.prepare(`INSERT INTO shares (grin_address, worker_name, difficulty, block_hei
   const lotLed = db.prepare("SELECT * FROM balance_log WHERE reference_type='lottery' AND event_type='credit'").get();
   ok('lottery ledger row has non-zero before/after',
      lotLed && !(lotLed.balance_before === 0 && lotLed.balance_after === 0), JSON.stringify(lotLed));
+
+  // ═══ 3. Donations are per SHARE (design §18.2) ═══
+  // A `donateN` tag on a share's worker name donates N % of the credit THAT share earns. Nothing
+  // is stored per address: the v1 miner_incentives.donation_percent column is dead, and case (f)
+  // proves it by setting it to 100 on an address that mines untagged.
+  console.log('\n[3] per-share donation — rewards.js → incentives.applyToDistribution');
+  tipHeight = 100000;
+  const near = (a, b) => Math.abs(a - b) < 1e-9;
+  const balOf = (a) => (db.prepare('SELECT balance FROM miner_accounts WHERE grin_address = ?').get(a) || { balance: 0 }).balance;
+  const debitAt = (a, h) => db.prepare(`SELECT COALESCE(SUM(amount),0) s, COUNT(*) c FROM balance_log
+    WHERE grin_address = ? AND event_type = 'debit' AND reference_type = 'donation' AND reference_id = ?`).get(a, h);
+  const creditAt = (a, h) => db.prepare(`SELECT COALESCE(SUM(amount),0) s FROM balance_log
+    WHERE grin_address = ? AND event_type = 'credit' AND reference_type = 'block' AND reference_id = ?`).get(a, h).s;
+  const potDonationsAt = (h) => db.prepare(`SELECT COALESCE(SUM(amount),0) s FROM balance_log
+    WHERE grin_address = 'prize_pool' AND event_type = 'credit' AND reference_type = 'donation' AND reference_id = ?`).get(h).s;
+  let shareSeq = 0;
+  // A matured block at height h with the given [address, worker, difficulty] shares. Heights are
+  // ≥ 100 apart so no PPLNS window (60) overlaps another case or the §1 shares.
+  const settleBlock = async (h, shares) => {
+    const hash = (h % 256).toString(16).padStart(2, '0').repeat(32);
+    mine(h, hash, h);
+    // Accounts first: blocks.found_by is a foreign key to miner_accounts.
+    for (const [addr] of shares) {
+      db.prepare('INSERT OR IGNORE INTO miner_accounts (grin_address, balance) VALUES (?, 0)').run(addr);
+    }
+    db.prepare(`INSERT INTO blocks (height, hash, nonce, reward, status, found_by, found_at)
+                VALUES (?, ?, ?, 60, 'confirmed', ?, unixepoch())`).run(h, hash, String(h), shares[0][0]);
+    const id = db.prepare('SELECT id FROM blocks WHERE height = ?').get(h).id;
+    for (const [addr, worker, diff] of shares) {
+      db.prepare(`INSERT INTO shares (grin_address, worker_name, difficulty, block_height, share_hash)
+                  VALUES (?, ?, ?, ?, ?)`).run(addr, worker, diff, h, `don-${++shareSeq}`);
+    }
+    return rd.distributeRewards(id);
+  };
+  // Miner reward is 60 − 1 % fee = 59.4, split by difficulty over the block's shares.
+  ps.updateSection('incentives', { incentives_enabled: 'true', allow_miner_donations: 'true' }, uid);
+  const A = 'grin1donorA', B = 'grin1donorB', C = 'grin1donorC', V = 'grin1victim', D = 'grin1oldcol';
+  // Σ difficulty = 1000 → one unit of difficulty earns 0.0594.
+  const HD = 5000;
+  const rD = await settleBlock(HD, [
+    [A, 'riga-donate10', 100], [A, 'rigb', 100],                                  // (a) one tagged rig of two
+    [B, 'donate100', 100],                                                         // (b) whole-name donate100
+    [C, 'r1-donate5', 100], [C, 'r2-donate20', 300],                               // (c) mixed pcts
+    [V, 'rig1', 100], [V, 'stranger-donate100', 100],                              // (d) stranger tags the victim
+    [D, 'rig1', 100],                                                              // (f) dead column set to 100
+  ]);
+  ok('the per-share block distributes', rD.success === true, JSON.stringify(rD));
+  const u = 59.4 / 1000;
+  // Only the tagged rig's credit donates: 100 × u × 10 % — rigb's 100 × u is untouched.
+  ok('(a) one tagged rig of two: donation = only that rig’s share credit × 10 %',
+     near(debitAt(A, HD).s, 100 * u * 0.10) && debitAt(A, HD).c === 1, JSON.stringify(debitAt(A, HD)));
+  ok('(a) the address keeps the untagged rig’s credit and 90 % of the tagged one',
+     near(balOf(A), 200 * u - 100 * u * 0.10), `got ${balOf(A)}`);
+  ok('(b) donate100: donated == gross exactly, one debit row',
+     debitAt(B, HD).s === creditAt(B, HD) && debitAt(B, HD).c === 1, `${debitAt(B, HD).s} vs ${creditAt(B, HD)}`);
+  ok('(b) donate100: the balance is untouched net', near(balOf(B), 0), `got ${balOf(B)}`);
+  ok('(c) mixed 5 % + 20 %: donation = Σ each share’s credit × its own %',
+     near(debitAt(C, HD).s, 100 * u * 0.05 + 300 * u * 0.20), JSON.stringify(debitAt(C, HD)));
+  ok('(d) a stranger’s donate100 share on the victim’s address moves ONLY that share’s credit',
+     near(debitAt(V, HD).s, 100 * u) && near(balOf(V), 100 * u), `debit ${debitAt(V, HD).s} bal ${balOf(V)}`);
+
+  // (f) The v1 column, set to 100 on an address that mines untagged, must move NOTHING.
+  db.prepare('INSERT OR IGNORE INTO miner_incentives (grin_address) VALUES (?)').run(D);
+  db.prepare('UPDATE miner_incentives SET donation_percent = 100 WHERE grin_address = ?').run(D);
+  const HF = 5100;
+  await settleBlock(HF, [[D, 'rig1', 100]]);
+  ok('(f) miner_incentives.donation_percent = 100 with NO tagged share donates NOTHING',
+     debitAt(D, HF).c === 0 && near(balOf(D), 100 * u + 59.4), `debit ${JSON.stringify(debitAt(D, HF))} bal ${balOf(D)}`);
+
+  // Invariants over every address in both blocks: donated ≤ gross, and the prize pool receives
+  // exactly what the donors were debited (the ledger shape reconciliation.js relies on).
+  for (const h of [HD, HF]) {
+    const addrs = db.prepare(`SELECT DISTINCT grin_address a FROM balance_log
+      WHERE reference_id = ? AND reference_type IN ('block','donation') AND grin_address != 'prize_pool'`).all(h).map((r) => r.a);
+    ok(`height ${h}: donated ≤ gross for every address (${addrs.length})`,
+       addrs.every((a) => debitAt(a, h).s <= creditAt(a, h)));
+    const debits = addrs.reduce((s, a) => s + debitAt(a, h).s, 0);
+    ok(`height ${h}: prize-pool donation credits == Σ donor debits`, near(potDonationsAt(h), debits),
+       `${potDonationsAt(h)} vs ${debits}`);
+  }
+
+  // (e) Donations OFF: a tagged share donates nothing.
+  ps.updateSection('incentives', { allow_miner_donations: 'false' }, uid);
+  const HE = 5200;
+  const balE = balOf(A);
+  await settleBlock(HE, [[A, 'riga-donate50', 100]]);
+  ok('(e) donations OFF: a tagged share moves nothing', debitAt(A, HE).c === 0 && near(balOf(A), balE + 59.4),
+     `debit ${JSON.stringify(debitAt(A, HE))}`);
+  ps.updateSection('incentives', { allow_miner_donations: 'true' }, uid);
+
+  // (e2) Master switch OFF too: applyToDistribution never runs the donation leg.
+  ps.updateSection('incentives', { incentives_enabled: 'false' }, uid);
+  const HE2 = 5300;
+  const balE2 = balOf(A);
+  await settleBlock(HE2, [[A, 'donate100', 100]]);
+  ok('(e2) incentives OFF: even donate100 moves nothing', debitAt(A, HE2).c === 0 && near(balOf(A), balE2 + 59.4));
+  ps.updateSection('incentives', { incentives_enabled: 'true' }, uid);
+
+  // A typo is a plain name at distribution exactly as it is at login (one parser).
+  const HT = 5400;
+  await settleBlock(HT, [[C, 'rig-donate101', 100], [C, 'donatexx', 100]]);
+  ok('an out-of-range or malformed tag donates nothing', debitAt(C, HT).c === 0);
 
   console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed`);
   cleanup();

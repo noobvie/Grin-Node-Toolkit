@@ -1,13 +1,13 @@
 # Script 07 — Public Mining Pool (Implementation)
 
-> **Covers code as of:** 2026-09-07, except §8.7 and the §4/§8.2/§11 rows that point at it (2026-09-23, the uncommitted hub-move + latency working tree) · **Last verified:** 2026-09-23, PARTIAL — **§8.7 *Part 9 review fixes* only, by the review session**: each fix read in the code it wrote and its harness result as run that session. Also 2026-09-23, PARTIAL — **§8.7 only, by the doc-fold session**: its file list, menu keys, config keys, endpoint shapes and on-box paths grepped/read in the code (`07_lib_pool_backup.sh` menu dispatch, the `pmg_*` function list and manifest name in `07_lib_pool_migrate.sh`, the `GW_*` paths + `maxconn` in `07_lib_gateway.sh`, the latency keys + page CSP in the pool script, the suggest route in full in `index.js`, `lib/connect-suggest.js` constants, the three new suites in `package.json`) and `npm test` re-run, 1133/1133 across 19 suites; the step order of Migrate OUT/IN, the manifest's field list and the harness results are **taken from the build sessions' reports, not re-checked**. Before that: 2026-09-07 — §§1–8 and §11 re-derived from
+> **Covers code as of:** 2026-09-07, except §8.7 and the §4/§8.2/§11 rows that point at it (2026-09-23, the uncommitted hub-move + latency working tree) and §10.6 (2026-09-24, the uncommitted §18 Parts 1–6 working tree) and §10.7 (2026-09-24, the uncommitted explorer-setting working tree) · **Last verified:** 2026-09-24, PARTIAL — **§10.7 only, by the explorer-setting docs-fold session**: written against the code as read that session (`lib/explorers.js` in full, the `index.js` resolve helper + the three publishing routes + `/api/admin/blocks`, `lib/pool-settings.js` default/validator/`buildPublicConfig`, the `window.Explorer` block and primer in `branding.js` and `admin-shell.js`, the `blocks.html` primer, the Branding select + its testnet script, and every `Explorer.link` call site grepped); `npm test` re-run, exit 0, `test-explorers.js` 198/198. The Part 3 relink finding and the audit-row correction are taken from the code comments and the plan, not from a review report. Same day, PARTIAL — **§10.6 *Part 6* only, by the §18 Part 6 review session**: its fix read in `index.js` and the page, its two new checks seen failing before the edit and passing after, `npm test` re-run (1345/1345, 20 suites); the same session re-ran `npm test` before any edit and found every §10.6 Part 1–5 total and per-suite count exact (1343), but did **not** re-verify the rest of those Part notes' prose. Same day, PARTIAL — **§10.6 *Part 5* only, by the §18 Part 5 build session**: written against the code as edited that session, with `npm test` re-run (1343/1343, 20 suites) and a one-shot 390 px headless-Edge probe of `account-settings.html` in both themes (0 overflow, four fixtures). Same day, PARTIAL — **§10.6 *Part 4* only, by the §18 Part 4 build session**: written against the code as edited that session, with `npm test` re-run (1331/1331, 20 suites) and a one-shot 390 px + 1280 px headless-Edge probe of `donate.html` in both themes (0 overflow, five fixtures). Same day, PARTIAL — **§10.6 *Part 3* only, by the §18 Part 3 build session**: written against the code as edited that session, with `npm test` re-run (1310/1310, 20 suites, after the same-day switch to a plain-`src` preview), the cookie attributes behind that switch read in `index.js`, and a one-shot jsdom render of `donors.html` (26/26). Same day, PARTIAL — **§10.6 *Part 2* only, by the §18 Part 2 build session**: written against the code as edited that session, with `npm test` re-run (1298/1298, 20 suites), the multer size boundary measured with a one-shot fake-stream run, and the `/uploads/` nginx/rsync/backup claim grepped in the pool script. Same day, PARTIAL — **§10.6 *Part 1* only, by the §18 Part 1 build session**: written against the code as edited that session, with `npm test` re-run (1145/1145, 19 suites). 2026-09-23, PARTIAL — **§8.7 *Part 9 review fixes* only, by the review session**: each fix read in the code it wrote and its harness result as run that session. Also 2026-09-23, PARTIAL — **§8.7 only, by the doc-fold session**: its file list, menu keys, config keys, endpoint shapes and on-box paths grepped/read in the code (`07_lib_pool_backup.sh` menu dispatch, the `pmg_*` function list and manifest name in `07_lib_pool_migrate.sh`, the `GW_*` paths + `maxconn` in `07_lib_gateway.sh`, the latency keys + page CSP in the pool script, the suggest route in full in `index.js`, `lib/connect-suggest.js` constants, the three new suites in `package.json`) and `npm test` re-run, 1133/1133 across 19 suites; the step order of Migrate OUT/IN, the manifest's field list and the harness results are **taken from the build sessions' reports, not re-checked**. Before that: 2026-09-07 — §§1–8 and §11 re-derived from
 > `scripts/07_grin_mining_public_pool.sh`, `scripts/lib/07_lib_{gateway,gwctl,hub,pool_backup,pool_wallet}.sh`
 > and `web/07_mining_pool_public/back-end-pool/`. §§9–10 are as-written add-on notes, not re-verified — except §10.4, written against the
 > code it describes on 2026-09-22 (Part 1 backend and Part 2 account page, both re-read after the
 > edits) and 2026-09-23 (Part 3: every surface in its table re-read after the edit, and the CMS
 > seed-once claim read in `lib/db.js`) and again by the Part 4 review (2026-09-23: §10.4's capture/verify, cost, migration and test paragraphs re-read against `lib/owner-proof.js`, `index.js` and `test-owner-gate.js`; four statements corrected in place, KDF counts measured), backed by the suite counts quoted in it. And §10.5 (payout-rails fix), written 2026-09-23 against the uncommitted diff of its three code parts — `lib/wallet.js`, `lib/wallet-tor.js` in full, `lib/socks5.js` header, `lib/config.js`, the `index.js` tor-check/pre-flight hunks, `account-settings.html` — with `npm test` re-run that session (945/945, 16 suites) and the `proxy_read_timeout` values read in `07_grin_mining_public_pool.sh`. **Taken from the build sessions' own reports, not re-checked:** the revert-proofs, the P-04 word counts, the headless-Chrome probe, and the audit of the other ten Owner calls against `owner_rpc.rs`. §10.5 then re-read by the Part 5 review (2026-09-23, PARTIAL — Parts 1–3 bullets against `lib/wallet.js`, `lib/wallet-tor.js`, `lib/socks5.js` (diffed against 06d), the `index.js` route + gate and `account-settings.html`; the ten Owner-call orders and `create_slatepack_message`/`tx_lock_outputs` re-checked against v5.4.1 `owner_rpc.rs` upstream; one claim corrected — a misspelt named key is rejected, not ignored; Part 5 fixes written against their own code, suite 960/960). The word counts and headless probe are still taken from Part 3's report.
 > §1b re-verified 2026-09-21: all 49 `API_DOC_META` rows read against their handlers (static, no VPS).
-> **Product code last changed:** 2026-09-23 (Part 9 review fixes C1–C6 in `07_lib_pool_migrate.sh` + `07_lib_pool_backup.sh`, §8.7 *Part 9 review fixes*). Same day (hub move + connect-page latency, §8.7: NEW `07_lib_pool_migrate.sh` (`B → 6/7`), shared freeze/archive/restore cores in `07_lib_pool_backup.sh`, gateway re-resolve timer + `6) Latency probe` in `07_lib_gateway.sh`, hub `/ping` + CSP + pairing warning in the pool script; backend seeds v3 + local-region stamp, NEW `lib/region-rtt.js` / `lib/connect-suggest.js` / `lib/latency-probe.js`, `/api/pool/connect/suggest`, `hub_rtt_ms`/`is_hub`, `connection.latency`; connect-page measurement in `reactor-dashboard.js`; suite 960 → 1133, 16 → 19 suites; **uncommitted, not VPS-tested**). Same day (payout-rails fix, §10.5: `create_slatepack_message` named params in `lib/wallet.js`; Tor probe ported from 06d — `lib/wallet-tor.js`, new `lib/socks5.js`, `lib/config.js` 8 s default, `index.js` `?fresh=1`; P-04 slimmed in `account-settings.html`; new `scripts/test-payout-rails.js`, suite 881 → 945; then the Part 5 review's three fixes — an absolute reply deadline and proxy-protocol errors → null in `lib/wallet-tor.js`, a `res.destroyed` guard in the `index.js` pre-flight gate — suite 945 → 960; **not VPS-tested**). Same day (ownership-proof SET, design §17 Part 4 review — three fixes: `migrateProofSet` now runs before `stratumServer.start()`, `_captureProof` re-locates a racing duplicate by its digest instead of evicting a second proof, a returning evicted anchor restarts `first_seen_at`; plus the `proof_too_recent` text; `test-owner-gate.js` 36 → 42, suite 875 → 881 — §10.4 "Part 4"). Same day (design §17 Part 3 — copy and comments only: `public_html/index.html` setup-guide PIN line, the Terms/Privacy/FAQ defaults in `lib/pool-settings.js`, `index.js` (`anchor_not_accepted_here` text, one `API_DOC_META` row, one comment), `lib/stratum-server.js` / `lib/owner-proof.js` / `lib/db.js` comments; suite unchanged at 875/875 — §10.4 "Part 3"). 2026-09-22 (ownership-proof SET, design §17 Part 2 — account page: `public_html/account-settings.html` only — `proofHintText()` renders `a.proofs` as counts + last-added instead of two booleans, the "Evidence changed" banner and the `evidence` argument deleted, `renderPasswordProof(pp, proofs)` warns only past `proofs.max` ("Too many passwords") with several passwords inside the cap now an OK line, `PASS_STATE_TEXT.ok` reworded, the `Accepted:` line and three fold paragraphs restated for a set of ten, DEMO dataset reshaped; suite unchanged at 875/875 — §10.4 "Part 2". Same day, Part 1 — backend: `miner_proofs` table + `miner_accounts.proof_salt`, per-address scrypt salt, set capture/verify with LRU eviction and a flagged-not-deleted anchor, `migrateProofSet()` replacing `migrateOwnerProofHashes`+`backfillProofAnchors`, `proofs` on the account and admin miner views, `test-owner-gate.js` 19 → 36 and `test-public-leakage.js` 77 → 86 — §10.4. 2026-09-21 (donor names, design §16 Part 5 — the independent review: two fixes in `lib/donor-names.js` (rescan parses the list once per walk; a separators-only label is no label), `test-donor-names.js` 148 → 156, design §16.12 written — §10.3 "Part 5". Same day, Part 4: `/api/pool/donors` v2 — league/past/totals/ranking via `lib/donor-ledger.js donorWall()`, `donate.html` D-03 league + past strip + ranking sentence + not-verified line, D-01 `yourbrandname-donate10`, api-docs row, `test-donor-league.js` 68/68, leakage §9 — §10.3 "Part 4". Same day, Part 3: admin → Donors page, `GET /api/admin/donors` + `/summary`, `POST …/censor|uncensor` audited, rescan on list/pool-name change, dashboard `new_donor_names_7d` + nav badge, `allow_miner_donations`/`donation_address` moved off `settings-incentives.html`, `parseDonateToken` export, `check-syntax.js` type-sniff fix — §10.3 "Part 3". Same day, Part 2: six `donor_*` columns, `lib/donor-names.js` + `lib/donor-ledger.js`, six `incentives` settings keys, capture on the from-zero set only, `/api/account/:addr` `donor_name` + state, account-page row — §10.3 "Part 2". Same day, Part 1: worker part case-folded, label cap 25 → 32, raw 40 → 48, `donor_label` — §10.3 "Part 1". Same day: api-docs audit: 9 meta rows corrected, the drift-check
+> **Product code last changed:** 2026-09-24 (operator-selectable mainnet explorer — NEW `lib/explorers.js`, `branding.explorer_mainnet` in `lib/pool-settings.js`, `explorer` published on three routes in `index.js`, `window.Explorer` + relink in `branding.js`/`admin-shell.js`, the `blocks.html` primer, the Branding select, NEW `test-explorers.js`; §10.7; **uncommitted, not VPS-tested**). Same day (hub move, review P1 — Migrate OUT removes the weekly VACUUM cron and refuses while a vacuum runs, §8.7 *Part 9 review fixes*). Same day (donations v2, design §18 Part 6 review fix — `index.js` `requireBothProofs` refusal code `match` → `wrong_kind`, `account-settings.html` `DP_REASONS` key; suite 1343 → 1345; **uncommitted, not VPS-tested** — §10.6 *Part 6*). Same day (donations v2, design §18 Part 5 — account page: `public_html/account-settings.html` P-05 donation row from `donation`, P-03 per-rig badge, NEW P-09 Donor profile panel; `index.js` drops the v1 account aliases `donation_percent` / `donor_name` / `donor_name_state` + api-docs row; suite 1331 → 1343; **uncommitted, not VPS-tested** — §10.6 *Part 5*). Same day (donations v2, design §18 Part 4 — public wall: `lib/donor-ledger.js donorWall()` card `banner` under the Top-N slot rule + `ranking.banner_slots`, `current_percent` dropped; `bannerSlots` exported from `lib/donor-profiles.js`; `index.js` donors route comment + `API_DOC_META` row v3; `public_html/donate.html` D-01 rewrite, new D-01b, D-03 Top-N spotlight + §18.3 card copy; suite 1310 → 1331; **uncommitted, not VPS-tested** — §10.6 *Part 4*). Same day (donations v2, design §18 Part 3 — admin review queue: `index.js` donor admin routes rewritten (queue, image, approve/reject/remove/block/unblock, summary + dashboard pending count; censor/uncensor + the settings-save rescan removed; wall + account names from approved profiles only), `lib/donor-names.js` reduced to words + flags + settings, `lib/donor-profiles.js` admin reads, `lib/donor-ledger.js` names via `publicProfiles`, `donor_censored_display` removed from `lib/pool-settings.js`, `admin-panel/donors.html` rewritten, `admin-shell.js` badge + `AdminTable.onRender`, `admin-panel/index.html` tile, banner previews from a plain same-origin `src` (admin CSP unchanged — a comment only in `07_grin_mining_public_pool.sh`); suite 1298 → 1310; **uncommitted, not VPS-tested** — §10.6 *Part 3*). Same day (donations v2, design §18 Part 2 — donor-profile backend: `donor_requests` + `donor_blocks` in `lib/db.js`, NEW `lib/donor-profiles.js` (name rules, banner sniff + header dims, the request state machine, approved files under `uploads/donors/`, `profileFor` / `publicProfiles`), `leagueRank()` in `lib/donor-ledger.js`, `SNIFFERS` exported from `lib/asset-manager.js`, `donor_banner_slots` in `lib/pool-settings.js` + `lib/donor-names.js`, `index.js` `requireBothProofs` purpose wording + three `/api/account/:addr/donor-profile` routes + account `donor_profile`; NEW `scripts/test-donor-profiles.js`, suite 1145 → 1298; **uncommitted, not VPS-tested** — §10.6 *Part 2*). Same day (donations v2, design §18 Part 1 — the donation is per SHARE: `lib/rewards.js` `donateMap`, `lib/incentives.js` `applyToDistribution(…, donateMap)`, stored-% machinery removed from `incentives.js` / `stratum-server.js` / `miners.js` / `stratum-protocol.js` (`donor_label`), NEW `liveDonations()` in `lib/donor-ledger.js`, additive `donation` / `donate_percent` / `rigs_donating` / `pct_min` / `pct_max` fields on four routes in `index.js`; suite 1134 → 1145; **uncommitted, not VPS-tested** — §10.6). 2026-09-23 (Part 9 review fixes C1–C6 in `07_lib_pool_migrate.sh` + `07_lib_pool_backup.sh`, §8.7 *Part 9 review fixes*). Same day (hub move + connect-page latency, §8.7: NEW `07_lib_pool_migrate.sh` (`B → 6/7`), shared freeze/archive/restore cores in `07_lib_pool_backup.sh`, gateway re-resolve timer + `6) Latency probe` in `07_lib_gateway.sh`, hub `/ping` + CSP + pairing warning in the pool script; backend seeds v3 + local-region stamp, NEW `lib/region-rtt.js` / `lib/connect-suggest.js` / `lib/latency-probe.js`, `/api/pool/connect/suggest`, `hub_rtt_ms`/`is_hub`, `connection.latency`; connect-page measurement in `reactor-dashboard.js`; suite 960 → 1133, 16 → 19 suites; **uncommitted, not VPS-tested**). Same day (payout-rails fix, §10.5: `create_slatepack_message` named params in `lib/wallet.js`; Tor probe ported from 06d — `lib/wallet-tor.js`, new `lib/socks5.js`, `lib/config.js` 8 s default, `index.js` `?fresh=1`; P-04 slimmed in `account-settings.html`; new `scripts/test-payout-rails.js`, suite 881 → 945; then the Part 5 review's three fixes — an absolute reply deadline and proxy-protocol errors → null in `lib/wallet-tor.js`, a `res.destroyed` guard in the `index.js` pre-flight gate — suite 945 → 960; **not VPS-tested**). Same day (ownership-proof SET, design §17 Part 4 review — three fixes: `migrateProofSet` now runs before `stratumServer.start()`, `_captureProof` re-locates a racing duplicate by its digest instead of evicting a second proof, a returning evicted anchor restarts `first_seen_at`; plus the `proof_too_recent` text; `test-owner-gate.js` 36 → 42, suite 875 → 881 — §10.4 "Part 4"). Same day (design §17 Part 3 — copy and comments only: `public_html/index.html` setup-guide PIN line, the Terms/Privacy/FAQ defaults in `lib/pool-settings.js`, `index.js` (`anchor_not_accepted_here` text, one `API_DOC_META` row, one comment), `lib/stratum-server.js` / `lib/owner-proof.js` / `lib/db.js` comments; suite unchanged at 875/875 — §10.4 "Part 3"). 2026-09-22 (ownership-proof SET, design §17 Part 2 — account page: `public_html/account-settings.html` only — `proofHintText()` renders `a.proofs` as counts + last-added instead of two booleans, the "Evidence changed" banner and the `evidence` argument deleted, `renderPasswordProof(pp, proofs)` warns only past `proofs.max` ("Too many passwords") with several passwords inside the cap now an OK line, `PASS_STATE_TEXT.ok` reworded, the `Accepted:` line and three fold paragraphs restated for a set of ten, DEMO dataset reshaped; suite unchanged at 875/875 — §10.4 "Part 2". Same day, Part 1 — backend: `miner_proofs` table + `miner_accounts.proof_salt`, per-address scrypt salt, set capture/verify with LRU eviction and a flagged-not-deleted anchor, `migrateProofSet()` replacing `migrateOwnerProofHashes`+`backfillProofAnchors`, `proofs` on the account and admin miner views, `test-owner-gate.js` 19 → 36 and `test-public-leakage.js` 77 → 86 — §10.4. 2026-09-21 (donor names, design §16 Part 5 — the independent review: two fixes in `lib/donor-names.js` (rescan parses the list once per walk; a separators-only label is no label), `test-donor-names.js` 148 → 156, design §16.12 written — §10.3 "Part 5". Same day, Part 4: `/api/pool/donors` v2 — league/past/totals/ranking via `lib/donor-ledger.js donorWall()`, `donate.html` D-03 league + past strip + ranking sentence + not-verified line, D-01 `yourbrandname-donate10`, api-docs row, `test-donor-league.js` 68/68, leakage §9 — §10.3 "Part 4". Same day, Part 3: admin → Donors page, `GET /api/admin/donors` + `/summary`, `POST …/censor|uncensor` audited, rescan on list/pool-name change, dashboard `new_donor_names_7d` + nav badge, `allow_miner_donations`/`donation_address` moved off `settings-incentives.html`, `parseDonateToken` export, `check-syntax.js` type-sniff fix — §10.3 "Part 3". Same day, Part 2: six `donor_*` columns, `lib/donor-names.js` + `lib/donor-ledger.js`, six `incentives` settings keys, capture on the from-zero set only, `/api/account/:addr` `donor_name` + state, account-page row — §10.3 "Part 2". Same day, Part 1: worker part case-folded, label cap 25 → 32, raw 40 → 48, `donor_label` — §10.3 "Part 1". Same day: api-docs audit: 9 meta rows corrected, the drift-check
 > regex line-anchored, and `GET /api/account/:addr/shares` un-broken — it had answered `{}` since it
 > was written because `getSharesForMiner` was `async` and never awaited. Same day: P-02b lamps show workers; P-03 prints the share COUNT, not the summed difficulty; P-04 24H trace gap-filled with zeros — §7 row 4, §9. Same day: account `is_online` per rig, not per address; donor-wall totals over every donor and `active_donors` from live tags — §10.3. 2026-09-20: share credit unit + one shared `MinerManager` — first live-miner test found every hashrate at 0.00 G/s and MINERS ONLINE 0; §7 rows 3 and 5. Earlier the same day: pairing string carries the public port; gateway Status boot line, design §13.12s) — `scripts/07_grin_mining_*.sh`, `scripts/lib/07_lib_*.sh`, `web/07_mining_pool_public/`
 
@@ -677,7 +677,8 @@ journalctl -u grin-pool-manager${NET:+-$NET} -n 50 --no-pager
 Built in seven parts on 2026-09-23 for the move of the mainnet hub from New York to OVH Gravelines.
 The *why* — effective latency, the F1/F2/F3/F4 traps, the step order — is design §4 and §13.13.
 **Nothing here has run on a VPS.** The adversarial review ran the same day (audit Status roll-up,
-"Part 9 review"): six fixes, listed under *Part 9 review fixes* at the end of this section.
+"Part 9 review"): seven fixes (six on 2026-09-23, P1 on 2026-09-24), listed under *Part 9 review
+fixes* at the end of this section.
 `npm test` 960 (16 suites) → **1133 (19 suites)**, re-run 1133/1133 by the doc-fold session.
 
 #### Files
@@ -779,8 +780,9 @@ balance_log (explicit columns, never `SELECT *`), `in_flight_statuses{sql, sourc
    `grin-secret-sync` → restart the node, let it sync → open 80/443/3333 tcp + 51820 udp.
 4. New box: `B → 7` → `CHECK` until READY. Have the personal backup key to hand.
 
-*Cutover (a low-hashrate hour — but NOT near Sunday 03:00 UTC if the weekly VACUUM cron is on:
-its EXIT trap restarts a pool it stopped, review P1)*
+*Cutover (a low-hashrate hour. Migrate OUT turns the weekly VACUUM cron off and refuses while a
+vacuum runs — its EXIT trap restarts a pool it stopped, review P1 — so a Sunday 03:00 UTC start only
+costs a wait)*
 
 5. **Old hub:** `B → 6` → `MIGRATE` (+ `PROCEED` if withdrawals are in flight) → push to
    `root@<new>` → note the sha256.
@@ -860,6 +862,16 @@ across 19 still pass). Daily cron wrapper rendered through the real lib and run 
 logs `ERROR`); `bash -n` on the rendered wrapper. Part 3's Migrate OUT harness (7 scenarios):
 same exit codes, and the recorded effect order byte-identical to before the fixes. `npm test`
 1133 → 1133 (19 suites; no JS changed).
+
+**P1, 2026-09-24** (`_pmg_out_stop`, plus `PMG_VACUUM_CRON`/`PMG_VACUUM_BIN` = the pool script's
+`/etc/cron.d/<service>-vacuum` and `/usr/local/bin/<service>-vacuum`): step 4 removes the weekly
+VACUUM cron BEFORE anything else, then refuses (`_pmg_fail 4`, payouts stay frozen, resume = B → 6
+again) while `pgrep -f` finds the vacuum script; with no `pgrep` it warns and carries on. The state
+screen shows `weekly vacuum: on/off`; the rollback adds `c) Cron schedules → 2)`. Verified in Part
+3's Migrate OUT harness with a fake `pgrep`: scenarios `vacuumcron` (cron removed before the stop,
+move completes) and `vacuumrun` (refused before OUT's own stop, cron already gone, frozen) —
+**8 of 10 new checks red on the old code, 17/17 after**, including the 7 original scenarios' call
+logs byte-identical to Part 3's (archive date normalised).
 
 ---
 
@@ -1902,6 +1914,701 @@ against the Parts 1–4 code and pass now.
 **Owed:** VPS acceptance (Part 6): testnet first (listener
 up, listener down, pool tor stopped → fail-open, a Tor payout with its proof, a Slatepack
 round trip, a Slatepack abandoned to its TTL), then mainnet.
+
+### 10.6 Donations v2 — per-share donation + reviewed donor profiles (design §18; 2026-09-24, add-ons — NOT VPS-tested)
+
+Design contract: [`script07_design.md` §18](script07_design.md). Built in seven parts. This
+section gets one sub-heading per part as it lands. **Nothing here has run on a VPS.**
+
+#### §18 Part 1 — per-share donation (2026-09-24, uncommitted)
+
+**What changed in the money.** A `donateN` tag now donates N % of the PPLNS credit **that
+share** earns, read from `shares.worker_name` at distribution. Nothing is stored per address.
+- `lib/rewards.js`: each `distribution` entry gets
+  `donate_pct = parseDonateToken(share.worker_name)?.percent ?? 0`. `creditBalances` builds
+  `donateMap` (address → Σ credit × pct/100) next to `minerMap`, in the same order, and passes it
+  as the 4th argument of `applyToDistribution`.
+- `lib/incentives.js applyToDistribution(blockHeight, minerMap, poolFee, donateMap)`: the
+  donation leg iterates `minerMap`, so only an address this block credited can be debited. It
+  reads `donateMap.get(address)`, clamps to `min(donated, gross)`, and skips reserved addresses.
+  It runs only when `incentives_enabled` **and** `allow_miner_donations` are on. The ledger shape
+  is unchanged: one `debit/donation` per address per block and one `prize_pool` `credit/donation`.
+  `donor-ledger.js`, the prize-pool statement and `reconciliation.js` needed no change. The
+  invariant test below checks that pot credits equal the sum of donor debits.
+- **Removed:** `IncentivesManager.donationPercent` + `setDonation`; in `lib/stratum-server.js`
+  the parked donation (login block, the `PROOF_MIN_SHARES` donation branch,
+  `_applyParkedDonation`, `_captureDonorName`), plus its now-unused `IncentivesManager` and
+  `donor-names` requires and the `this.incentives` field; `miners.js` session `donationPercent`;
+  `validateUsername`'s `donor_label`. `validateUsername` still returns `donation_percent`, but
+  nothing stores it. `PROOF_MIN_SHARES` stays because ownership-proof capture still uses it.
+- The `miner_incentives.donation_percent` column and the six v1 `donor_*` columns stay in the
+  schema. **Nothing reads the percent column.** `lib/donor-names.js captureDonorName` stays in the
+  lib with **no production caller** until Part 3 removes v1 moderation. Names v1 already stored
+  still display through `displayState`.
+
+**Live readings (§18.3).** `lib/donor-ledger.js liveDonations(sessions)` is pure. It reads
+MINING sessions only (`acceptedShares > 0`) and counts distinct worker names. It returns
+`Map<address, { rigs_online, rigs_donating, pct_min, pct_max, donating_workers: [{name, percent}] }>`.
+`donate0` counts as online, not as donating. The export `NO_LIVE` is the empty reading. The
+callers apply the `donationsActive()` gate. Every added field is additive, and the kept fields
+still feed today's pages until Parts 3–5:
+| Surface | Adds | Kept (for the current page) |
+|---|---|---|
+| `GET /api/account/:addr` | `donation: { rigs_donating, rigs_online, pct_min, pct_max, workers }` | `donation_percent` = `pct_max` |
+| `GET /api/account/:addr/workers` | per worker `donate_percent` (null = untagged, or donations off) | — |
+| `GET /api/pool/donors` | per card `rigs_donating`, `pct_min`, `pct_max`; `totals.active_donors` = addresses with `rigs_donating > 0` (no more `miner_incentives` COUNT); `donorWall` takes `live` in place of `rigsOnline` | `current_percent` = `pct_max`, `rigs_online` |
+| `GET /api/admin/donors` | per row `rigs_online`, `rigs_donating`, `pct_min`, `pct_max`; a row now exists for a debit, a **live** tag (only while donations are on) or a stored name — the `WHERE donation_percent > 0` is gone | `current_percent` = `pct_max` |
+
+API reference rows updated for the three public routes.
+
+**Upgrade effect — put this in the release note.** A v1 address-wide % **stops at deploy**. A
+miner who tagged one of five rigs now donates from that one only. A miner who removed a tag but
+never sent `donate0` stops donating. Shares already in the PPLNS window keep their tag, so for
+about an hour after a rename, a block found then can still take the old tag's cut. The testnet
+pool ran the v1 tag with a live miner (§16 intro). Tell the operator before deploying there.
+
+**Interim copy gap (until Part 5).** `account-settings.html` still renders
+`donation_percent` as *"N% of new earnings"*. That is now the highest tag among the live rigs,
+not an address-wide cut. The row's tooltip still describes the v1 `donate0` ceremony and the
+`yourbrand-donate10` name. `donate.html`'s D-01 copy also still describes v1 (Part 4). Neither
+page reads a wrong NUMBER. The words are wrong until those parts land.
+
+**Tests.** `npm test` **1134 → 1145**, 19 suites, exit 0.
+- `test-money-path.js` 32 → 47, new §3. Cases: one tagged rig of two (only that share's credit ×
+  10 %); `donate100` (donated == gross exactly, balance unchanged net); mixed 5 % + 20 %; a
+  stranger's `donate100` share on a victim's address (moves only that share's credit); the dead
+  column set to 100 with no tagged share (moves nothing); donations off; incentives off; and an
+  out-of-range or malformed tag. Two invariants hold for every address in each block: donated ≤
+  gross, and prize-pool donation credits = Σ donor debits.
+- `test-donor-league.js` 68 → 77: `liveDonations` unit tests (distinct names, the pct range over
+  donating rigs only, `donate0`/`donate101`, no-share sessions excluded, junk input) and the wall
+  built from `live` (mixed tags, paused, `active_donors` counting an address with no card yet,
+  the dead column ignored, switch off, junk readings bounded). The old `current_percent`-from-column
+  and `rigsOnline` checks were rewritten.
+- `test-donor-names.js` 156 → 145: the 11 checks that drove `_applyParkedDonation` /
+  `_captureDonorName` were deleted with the code. The lib's capture tests still run until Part 3.
+- `test-stratum-guards.js` 71 → 68: the three `donor_label` checks and the four-field check
+  became one check for three fields. The tag grammar checks are unchanged.
+- `test-owner-gate.js` stays at 42. The §J3-5 check used to assert that `setDonation` runs on the
+  share path. It now asserts that `stratum-server.js` stores no donation at all and that
+  `incentives.js` never reads `donation_percent`.
+- `test-public-leakage.js` 87 → 88: §9's rig-count check now asserts the route goes through
+  `liveDonations` and that the share bar lives there. A new check asserts the wall never reads
+  `donation_percent`.
+
+#### §18 Part 2 — donor-profile backend (2026-09-24, uncommitted)
+
+API only. Nothing public reads a profile yet: the wall still shows v1 names until Part 4, and
+no admin route can approve anything until Part 3.
+
+**Schema** (`lib/db.js`, in the `CREATE … IF NOT EXISTS` list, so new and existing DBs both get
+it and no migrate helper is needed). `donor_requests`, `donor_blocks`, and the three indexes
+match §18.4 exactly. The two partial unique indexes (`uq_donor_req_pending`,
+`uq_donor_req_approved`) are the "one pending + one approved per (address, kind)" rule. The v1
+`donor_*` columns are untouched.
+
+**`lib/donor-profiles.js`** (new; no dependency on `index.js` or `donor-ledger.js`):
+- **Name**: `normaliseName` / `validateName`. ASCII whitespace is collapsed. Anything outside
+  `A-Z a-z 0-9 space - _ . & '` is refused, including NBSP, zero-width characters, bidi overrides
+  and Cyrillic look-alikes. The name is 2–32 characters with at least one letter or digit, and case
+  is kept. A non-string is refused as `name_invalid`, not coerced. Codes: `name_invalid`,
+  `name_length`, `name_charset`, `name_no_alnum`. Each message states the rule.
+- **Banner**:
+  - `sniffBanner` uses `asset-manager.js`'s binary `SNIFFERS` only. That array is now exported;
+    `detectImage` is never called.
+  - `parseDimensions` reads the PNG IHDR (it must be the first chunk, length 13), the GIF
+    logical screen, or the JPEG's first SOFn. The JPEG walk skips APPn/DQT/DHT and fill bytes, and
+    refuses at SOS or EOI. Every read is bounds-checked, and the parser returns null on any input,
+    so nothing throws.
+  - `validateBanner` enforces 320–1600 × 80–400 px, 2:1 to 8:1, and ≤ 300 KB. It returns
+    `ext`/`mime` from the sniff plus dims, bytes and sha256. Codes: `banner_missing`,
+    `banner_too_large`, `banner_type`, `banner_unreadable`, `banner_dimensions`, `banner_aspect`.
+- **Donor transitions**:
+  - `submitName` / `submitBanner` require `opts.isDonor === true` (fail closed). The caller reads
+    the ledger. They re-check the account and the block inside the transaction.
+  - An existing pending request becomes `replaced` and loses its blob.
+  - A unique-index hit comes back as `{ code: 'conflict' }`. The test proves this with a real
+    constraint, not a stub.
+  - `withdraw` covers a pending request; `removeLive` covers the live one.
+- **Admin transitions** (written and tested now, wired by Part 3): `approve`, `reject`, `block`,
+  `unblock`, and `removeLive` with `adminId`. Each writes its `admin_audit_log` row
+  (`target_type 'donor'`) inside the transaction: `donor_request_approve`, `donor_request_reject`,
+  `donor_profile_remove`, `donor_block`, `donor_unblock`. Every `:id` goes through `parseId`. A
+  reason goes through `cleanReason`: one line, no control characters, ≤ 200 characters. A blank
+  reason is stored as NULL.
+  - `approve` on a banner re-validates the **stored** bytes and takes the extension from that
+    sniff.
+  - It writes `uploads/donors/<16 hex>.<ext>` (mode 0644, `wx`, containment-checked) **before**
+    the transaction and unlinks it if the transaction fails.
+  - It unlinks the superseded file after the commit. A failed unlink comes back as `warning`; it
+    does not abort.
+  - It refuses a blocked address's request.
+- **`profileFor`** builds the account's `donor_profile`, and **`publicProfiles`** builds the
+  wall's `Map` (approved + unexpired only; Part 4 applies the slot rule). Neither selects
+  `image`, and neither reads `name` from a non-approved row. An item expires `months` after
+  the **later** of the last debit and its approval. Name and banner expire separately.
+
+**`lib/donor-ledger.js`** gains `leagueRank(db, address, opts)`: the wall's own ordering, 1-based,
+or null for the past strip and for anything below `LEAGUE_LIMIT`. A test proves it agrees with
+`donorWall`'s numbering.
+
+**Settings.** `donor_banner_slots` has a default of 5, is validated as an int 0–10, and is
+re-bounded on read as `donorSettings().bannerSlots`, where junk reads as 5 and `'0'` as 0.
+`donor_censored_display` stays until Part 3.
+
+**`index.js`:**
+- **`requireBothProofs(addr, body, reqIp, action, purpose = 'destination')`.** `PROOF_PURPOSES`
+  changes only the wording. The Goblin texts are byte-identical: the old and new bodies were run
+  against stubbed proofs over all 8 refusal and success paths, and all 8 compared equal.
+- **Routes** (`rateLimiter 'withdraw'`, both proofs aged, `auditOwnerProof` as
+  `donor_profile_submit` / `_withdraw` / `_remove`). The two submits refuse in this order:
+  donations off (503), then no account (404), then blocked (403), then `not_a_donor` (409), then
+  bad input (400/413), then the proof codes. The input is checked before the proofs, so a typo
+  never burns a proof attempt. The banner route runs the four checks that need no body
+  **before** multer reads it.
+  - `POST /api/account/:addr/donor-profile/name` returns the typed name, and only this route
+    does.
+  - `POST …/donor-profile/banner` is multipart, with `file` plus the two proof fields.
+  - `DELETE …/donor-profile/:kind` takes `{ which: pending|live }` and needs both proofs. It does
+    **not** need donations on, a debit, or an unblocked address, because removing your own data
+    is always allowed. It returns 404 before spending a proof attempt when there is nothing to
+    act on.
+- **`GET /api/account/:addr`** gains `donor_profile`, guarded to `null` on failure.
+  `slot_rank` costs one ledger scan and only runs for an address that has donated.
+- **API reference**: three new rows, and the account row documents `donor_profile`.
+
+**Upload size, measured, not assumed.** A one-shot run fed multer's real stream parser a fake
+request, with no server.
+- Busboy trips `LIMIT_FILE_SIZE` when a file **reaches** the limit. So the limit is
+  `MAX_BANNER_BYTES + 1`: exactly 300 KB passes to `validateBanner`, and 300 KB + 1 is refused.
+- Multer stops **buffering** at the cap but reads and discards the rest of the body before the
+  413 goes out. Memory per request is bounded at about 300 KB.
+- The total body is bounded by nginx: the public `location /api/` sets no
+  `client_max_body_size`, so the 1 MB default applies.
+
+**§18.4's deploy claim, verified in `07_grin_mining_public_pool.sh`.** The claim was "no
+deploy-script change".
+- The nginx `location /uploads/` aliases `$POOL_APP_DIR/uploads/` with nosniff and the sandbox
+  CSP.
+- Both backend rsyncs pass `--exclude='uploads'`.
+- `07_lib_pool_backup.sh` lists `uploads`.
+- `uploads/donors/` is created by the app (0755) on the first approval.
+
+**Tests.** `npm test` **1145 → 1298**, 19 → 20 suites, exit 0. The +153 is exactly the new
+suite, so no existing suite changed.
+
+`scripts/test-donor-profiles.js` (153) was added to `test:unit` after `test-donor-league`. It
+covers:
+- the name rules;
+- sniff and dims on hand-built PNG/GIF/JPEG, including truncated, lying, zero and 2³²-wide
+  headers, SVG, WEBP, and the 300 KB / aspect / size edges;
+- a fuzz pass over 3,500+ truncated and random inputs: nothing throws, and nothing out of bounds
+  is accepted;
+- every transition, including both unique indexes directly and the conflict mapping via a real
+  constraint;
+- the file writes: one file, the submitted bytes, a second approve deleting the first, and an
+  unwritable dir leaving the request pending with its blob;
+- `profileFor`: never carries the pending name, bytes or `decided_by`; handles rejection
+  supersession and admin-vs-donor removal;
+- `publicProfiles`: excludes pending, rejected and expired; a non-conforming stored filename
+  never becomes a URL;
+- the settings bounds;
+- `leagueRank`;
+- route wiring read as text: withdraw limiter, the `'donor_profile'` gate on all three routes,
+  the banner route refusing before multer, input validated before proofs, and the account route
+  reaching `donor_requests` only through `profileFor`.
+
+#### §18 Part 3 — admin review queue + moderation swap (2026-09-24, uncommitted)
+
+Admins can now approve profiles. v1's post-moderation is gone. An approved **name** shows on the
+wall from this part on. **Banners** still reach no public page until Part 4.
+
+**Admin routes** (`index.js`, the `DONORS (Admin only)` block). All reads are `secureAdmin`. All
+writes are `freshAdmin`, and each one delegates to the Part 2 lib, which writes the state change
+and its `admin_audit_log` row in one transaction.
+
+| Route | Does |
+|---|---|
+| `GET /api/admin/donors/requests?status=&limit=` | The queue. `status` is a closed enum and defaults to `pending`, oldest first. The decided statuses are the history, newest decision first. Each row gets `rank`, `lifetime_donated` and `last_donated_at` from one ledger scan. |
+| `GET /api/admin/donors/requests/:id/image` | Returns the pending blob or the approved file. Headers: `Content-Type` = the stored mime (png/jpeg/gif only, anything else is refused), `nosniff`, `Content-Security-Policy: default-src 'none'; sandbox`, `Cache-Control: no-store`, `Content-Length`. No bytes → 404; bad id → 400. |
+| `POST …/requests/:id/approve` · `…/reject {reason}` | `approve()` / `reject()`. A banner approve with no uploads dir → 503 before the lib, since the lib would throw. |
+| `POST /api/admin/donors/:addr/remove {kind, reason}` | `removeLive()` with `adminId`. `kind` is a closed enum. |
+| `POST /api/admin/donors/:addr/block {reason}` · `/unblock` | `block()` also withdraws pending requests. The note stays admin-side. |
+| `GET /api/admin/donors/summary` | `{ pending_requests }`, which drives the nav badge. |
+| `GET /api/admin/donors` | Rewritten list. Per row: live `name` / `banner` (with the donor's own expiry state), `pending: {name, banner}` and `blocked`. Workers carry `donate_percent`. `current_percent`, the `donor_censor*` fields, `is_new`, `renamed_while_censored` and `new_names_7d` are gone. A row exists for a debit, a live tag while donations are on, or **any profile row or block**, so a blocked address can be unblocked. |
+
+`:addr` goes through `GRIN_ADDR_RE`. Lib codes map through one `DONOR_ADMIN_CODES` table.
+The dashboard's `new_donor_names_7d` became `pending_donor_requests`, and the Overview tile
+changed with it.
+
+**Removed:** the `censor` / `uncensor` routes, the rescan-on-settings-save hook,
+`donor_censored_display` (default, validator and form), and in `lib/donor-names.js`:
+`captureDonorName`, `rescanAll`, `adminCensor`, `countNewNames`, `NEW_NAME_DAYS`,
+`CENSORED_MARKER`, `CENSORED_DISPLAY_VALUES`, `displayState` and `matchBlocklist`.
+- A pool that still has a `donor_censored_display` row in `pool_config` is harmless: nothing
+  reads it and no form binds it. A save that sends the key now fails with `Unknown key`.
+- `lib/donor-names.js` kept `normalise`, `parseList`, `poolNameEntry`, `matchEntries`,
+  `RESERVED`, `STARTER_BLOCKLIST`, `addMonthsUtc` and `donorSettings`. It gained
+  `nameFlagContext` / `nameFlags` for the queue flags.
+- `normalise` now also strips space, `.`, `&` and `'` (the v2 name separators), so
+  `Acme & Co.` and `acme co` compare equal.
+- The `donor_*` / `donation_percent` columns on `miner_incentives` stay in the schema, and
+  nothing reads them any more.
+
+**Flags** (hints, never decisions), computed at queue-read time from one context per read:
+- `reserved`: a fixed word, or the pool's name if it is 3+ characters.
+- `word`: an entry from the operator's list.
+- `same_as_donor`: the addresses of **other** donors whose approved name normalises the same.
+  Expired approvals count, because an expired name comes back with the next donation.
+
+300 names against a 4,000-entry list flag in milliseconds, because the list is parsed once.
+
+**`lib/donor-profiles.js` admin reads** (new):
+- `adminQueue`: never selects `image`. `has_image` is true only for a pending blob or an
+  approved file of the exact server shape. `current` is the address's approved item of the same
+  kind, so a rename reads as a rename.
+- `requestImage`: containment and `FILE_RE` checks on the approved file. A missing file → `no_image`.
+- `adminProfiles`: uses the same `isExpired` rule as `profileFor`.
+- `pendingCount`.
+
+**v1 names stop showing everywhere.** `donorWall` now reads names from `publicProfiles`, which
+returns approved, unexpired rows only. The wall response dropped `censored_display`.
+`/api/account/:addr`'s `donor_name` / `donor_name_state` are **derived from `donor_profile`**
+(`none` → `masked`). v1 names were never reviewed, so pre-moderation starts clean, as the plan
+notes. Part 4 still owns banners, the slot rule and `current_percent`.
+
+**`admin-panel/donors.html`** (rewritten). The page has three sections, so the section rail
+picks up three chips:
+1. **Review queue** (an AdminTable). Name requests show in the mono face with their flags and
+   the live name they replace. Banners show the image and its dims, KB and mime.
+   - Each row has an inline reason box. Its note says the reason is shown on the donor's public
+     account page.
+   - A typed reason survives repaints: it is written through to a `Map`, and the row reads it
+     back.
+   - The queue does **not** poll, because a timer repaint would wipe a reason being typed. It
+     reloads after each decision and on Refresh.
+2. **Donors.** Live name + state, the banner thumbnail (public `/uploads/donors/` URL,
+   shape-checked) with "showing / not in top N", pending and blocked badges, the donating %
+   range, and "k of n rigs". Actions: ✂️ remove name, 🖼 remove banner, 🚫 block / ✅ unblock.
+   Remove and block use an **in-page** reason dialog (`.modal-overlay`, never `prompt()`).
+   Unblock uses one `confirm()`.
+3. **Donation settings.** The word list is relabelled *"Flag words — highlighted in the review
+   queue"*. `donor_banner_slots` was added, and the expiry field was renamed "Profile expiry".
+
+`admin-shell.js`: the badge now shows the pending count, and `AdminTable` gained an optional
+`onRender(tbody)` hook. The hook is try/caught and runs only after real rows are painted. The
+queue uses it to wire the reason boxes and each banner's error handler.
+
+**Banner previews: a plain same-origin `<img src>`, no CSP change.** Each queued banner's `src`
+is `/api/admin/donors/requests/<id>/image`. The access token is an httpOnly `SameSite=strict`
+cookie on the default path, so the request carries admin auth. That also means §18.6's premise
+("a plain `<img src>` would not carry admin auth") was wrong.
+- The route's own headers govern every way the image is viewed, including *Open image in new
+  tab*: the stored mime, `nosniff`, and `default-src 'none'; sandbox`.
+- A failed load (the request was decided meanwhile, the file is gone, the session expired)
+  becomes a line of text. The error listener is attached by `onRender` in the same task that
+  paints the row.
+- The admin CSP stays `img-src 'self' data:`, and a test pins it without `blob:`. No
+  **Setup nginx** re-run is needed.
+
+The first build used `adminFetch` → blob → object URL, and added `blob:` to the admin CSP. It was
+switched the same day, on security grounds: an object URL is a copy of the bytes on the admin
+page's origin and does **not** carry the route's sandbox headers. That approach also needed the
+CSP widened and an nginx re-run that a code deploy does not perform. What it bought was only
+convenience: the server's refusal text, and no refetch on a repaint of a handful of admin-only
+images. See design §18.11 *Part 3* #1.
+
+**Tests.** `npm test` **1298 → 1310**, 20 suites, exit 0.
+- `test-donor-names.js` 145 → 92. The capture, rescan, `displayState`, censor and new-names
+  blocks were deleted with the code. Added: the new separators, the flag tests (including 300
+  names × 4,000 entries), a "removed API stays removed" block, and the `donor_banner_slots`
+  bounds. It also checks that a save carrying `donor_censored_display` is refused.
+- `test-donor-league.js` 77 → 72. The name block was rewritten over `donor_requests`: approved
+  shows as typed; pending, rejected and removed names never show; a v1 `donor_name` is not read;
+  expiry and expiry-0 are covered. A leak sweep checks for pending names and reasons, and
+  `censored_display` is gone from the shape.
+- `test-donor-profiles.js` 153 → 182, new [9] admin reads:
+  - queue order, flags, `current`, and no `image` key or Buffer;
+  - the closed status enum, including an array and SQL text;
+  - image bytes for pending and approved rows, and the refusals: name row, junk ids, a tampered
+    mime, a traversal filename, a deleted file, and a rejected request;
+  - block emptying the queue;
+  - `adminProfiles` states and expiry parity with `profileFor`.
+- `test-admin-guards.js` 79 → 102, [6] rewritten:
+  - the tier of all nine routes;
+  - censor/uncensor absent, which means 404, and no catch-all;
+  - every write delegating to the lib with admin id + ip, with no inline SQL;
+  - `GRIN_ADDR_RE`, the closed `kind`, and the two 503s;
+  - the image route's four headers and its 404/400;
+  - the rescan gone from the settings save;
+  - the dashboard and summary counts.
+- `test-admin-panel.js` 71 → 90, [9] rewritten, plus a §J14-4 check that `img-src` stays `'self' data:` with no `blob:`. It covers:
+  - page order;
+  - the settings-id sweep against live defaults, with `donor_censored_display` on no page;
+  - `settings-skip` on every input outside the form;
+  - `this.dataset` on every action, and `adminFetch` for every write;
+  - the in-page dialog, and the reason-is-public labels;
+  - the same-origin `src` (id URL-encoded), no object URL or blob anywhere, and a failed load turning into text;
+  - the thumbnail URL shape;
+  - the queue not polling, and reasons surviving a repaint;
+  - escaping;
+  - `onRender` being try/caught.
+- `test-public-leakage.js` 88 → 87. §9's `displayState` checks were replaced with:
+  - the wall reading `publicProfiles`, with no v1 column and no marker anywhere;
+  - `publicProfiles` and `profileFor` never selecting `image` or a non-approved name;
+  - **an enumerated inventory of every route that touches `donor_requests`**. The public ones
+    must be exactly the reviewed five, no public route may call an admin reader, and every admin
+    one must be `secureAdmin` / `freshAdmin`. A new public route fails the test until it is
+    reviewed;
+  - the account route deriving its two name fields from `donor_profile`.
+
+Also run once, not kept in the repo: a jsdom render of `donors.html` with the real
+`admin-shell.js` and stubbed `API`/`adminFetch` (26/26 after the switch to a plain `src`). It checked:
+- hostile names, flag words, worker names and a `javascript:` banner URL all render as text or
+  not at all;
+- the same-origin `src` on both banners, with no image going through `adminFetch`, and a failed
+  load becoming text;
+- a reason surviving a search repaint;
+- reject posting the typed reason, and approve / remove / unblock posting;
+- Escape cancelling a block;
+- `prompt()` never being used;
+- no script errors.
+
+#### §18 Part 4 — public wall: `/api/pool/donors` v3 + `donate.html` (2026-09-24, uncommitted)
+
+**The response (v3).** Built in `lib/donor-ledger.js donorWall()`. The route in `index.js` is
+unchanged apart from its comment.
+- Every card gains `banner`: `{ url, width, height }` or `null`. It is set only on a **league**
+  card whose rank ≤ `donor_banner_slots`, and only when the address has an approved, unexpired
+  banner (from `publicProfiles`) whose stored width and height are positive integers. Past cards
+  are always `null`: they reach the card builder with `rank` null, and the slot test needs a
+  safe-integer rank ≥ 1.
+- `ranking` gains `banner_slots` (0–10). This is how the page learns N for its Top-N spotlight.
+  It is bounded by `bannerSlots()`, now exported from `lib/donor-profiles.js`, so a raw `ds` that
+  skipped `donorSettings()` still reads 0–10 rather than NaN.
+- `current_percent` is **dropped** from the card. It was a v1 alias of `pct_max`, and
+  `donate.html` was its last reader. A grep of `public_html/`, `admin-panel/`, `lib/` and
+  `index.js` finds only the comment that records the removal.
+- The `API_DOC_META` row for `GET /api/pool/donors` is rewritten to the v3 card list, with the
+  banner rule and `banner_slots`. The route comment's v1 phrase "a stored % is dormant" is
+  replaced with the per-share wording.
+
+**The page (`public_html/donate.html`).**
+- **D-01 is rewritten** per §18.7. The table now has four rows: `rig01-donate10` (this rig only,
+  other rigs unaffected), whole-name `donate10`, plain `rig01` (`rig01-donate0` is the same), and
+  typos ignored. The note leads with *"To change or stop: rename the rig and restart the miner…"*.
+  The `yourbrandname` row, the raise row and the name ceremony are gone.
+- **New D-01b "Your donor name & banner"**: where to set it (account page → Donor profile), the
+  two proofs (a mining IP *and* the rig's stratum password), reviewed first, and the banner spec
+  (800 × 200 recommended, PNG/JPG/GIF, ≤ 300 KB, top N only). Two lines follow the API's
+  `ranking`:
+  - the banner line: "the top 5 donors", or "Banners are switched off on this pool" at 0;
+  - the expiry sentence: N months, or "stay up for as long as the pool keeps them approved" at 0.
+
+  The fallback line ("Can't pass the check? Ask the pool operator.") carries branding.js's
+  existing `data-brand="contact-link"`. That link stays hidden when no contact email is
+  configured, and the sentence still reads correctly without it.
+- **D-03 Top-N spotlight** above the compact league, for ranks 1..`banner_slots`:
+  - Rank 1 spans the row and 2..N share the grid.
+  - The banner sits in a fixed **4:1 box**: `aspect-ratio: 4 / 1`, the `<img>` absolutely
+    filled with `object-fit: contain`, `width`/`height` attributes, `alt` = the name or
+    "Donor #N", `loading="lazy"`.
+  - A spotlight card without a banner shows the name large in the same box, so the grid stays
+    even. Under a banner the name is repeated as text, because a banner may be a logo alone.
+  - Ranks N+1.. keep the compact cards. At `banner_slots` 0 there is no spotlight, and the
+    whole league renders as compact cards.
+- **Card copy (§18.3).** The live line is *"10 % of new earnings from 2 rigs"*; mixed tags give a
+  range (*"5–20 %"*), and none gives *"paused — no tagged rig online"*. The meta line is
+  *"since 2026-09-21 · 2 rigs donating"*, with the rig count left off when paused. The badge is
+  now a sentence-case tag instead of an uppercase pill, so it can wrap at 390 px.
+- `nameCell` lost its v1 `censored` branch, and the `.donor-name.censored` CSS went with it. The
+  disclaimer now reads *"Names and banners are chosen by donors and reviewed by the pool before
+  they appear."*
+- **The page keeps its own banner fence.** `bannerOf()` renders an `<img>` only for a URL that
+  matches the server's exact file shape (`^/uploads/donors/<16 hex>.(png|jpg|gif)$`), which is
+  stricter than the plan's "starts with /uploads/donors/", and only with positive-integer dims.
+  The URL and `alt` go through `escHtml`. It is the page's only `<img>`.
+
+**Deploy.** No nginx, deploy-script or schema change. Approved files are served by the existing
+`location /uploads/` (verified in Part 2, §18.11 *Part 2* #11). `donate.html` and the backend
+ship together in one deploy. A browser holding a cached pre-v3 page would read the missing
+`current_percent` as 0 and show "paused" until it reloads.
+
+**Tests.** `npm test` **1310 → 1331**, 20 suites, exit 0.
+- `test-donor-league.js` 72 → 86. The shape check is now the v3 card list, `ranking` has five
+  keys, and the `current_percent` asserts moved to `pct_max`. A new banner block checks:
+  - default 5 slots: ranks 1–5 carry the exact `{url,width,height}`, and ranks 6 and 7 are null
+    although their banners are approved;
+  - the past strip is null;
+  - slots 1, 7 (the boundary card) and 0 (no card anywhere);
+  - 99 bounded to 5, and a raw `ds` with junk `bannerSlots` reading 5;
+  - pending, rejected, removed, a traversal filename and zero width are all null on top-5 cards,
+    with no pending bytes, reason text or `/uploads/` path anywhere in the response;
+  - expiry hides a banner, and expiry 0 = never.
+- `test-public-leakage.js` 87 → 94, §9:
+  - the card builder's `inSlot` guard, verbatim;
+  - `slots = bannerSlots(ds)`, and past cards built with rank null;
+  - no `current_percent` in the card;
+  - `donate.html` carries no v1 copy (`yourbrandname` / `ceremony` / "go through donate0" /
+    `censored`) and no `current_percent`;
+  - `donate.html` renders an image only through `bannerOf()` with the exact regex, as its single
+    `<img>`;
+  - names and `alt` go through `escHtml`.
+
+Also run once, not kept in the repo: a **390 px iframe probe**, as in the v1 method (impl §10.3
+*Part 4*). It used a throwaway Node server on 127.0.0.1 with stubbed `/api/*`, generated PNG
+banners at 4:1, 8:1, 2:1, 320×80 and 1200×300, and headless Edge with `--screenshot`. The page
+POSTed its measurements back, because Edge on Windows has no stdout for `--dump-dom`. The server
+and every headless Edge process were killed in-session.
+- **Fixtures:** 0 banners, 1 banner (8:1), 5 banners, slots 0, and a hostile set (an
+  `<img onerror>` name, a `javascript:` banner URL, a `..` URL, zero width).
+- **At 390 px, both the Reactor (dark) and Light themes:** `docWidth` 375 (= 390 − scrollbar)
+  and **0 elements past the right edge** in all five fixtures. Every banner loaded into a 291×73
+  box. The hostile fixture rendered the name as text, with no `<img>` and no `onerror` attribute.
+  The D-01b slot, expiry and contact lines followed the fixture.
+- **At 1280 px, dark:** 0 overflow. Rank 1's box is 1064×266 and ranks 2–5 sit four across at
+  242×61.
+- Both theme screenshots were read by eye, and the ink is legible in each.
+
+#### §18 Part 5 — account page: donation row, rig badges, Donor profile panel (2026-09-24, uncommitted)
+
+**The page (`public_html/account-settings.html`).**
+- **P-05 donation row** (`renderDonationRow`). It reads `donation`:
+  - With a tagged rig online: *"10 % of new earnings from 2 of 5 rigs online"*. Mixed tags show a
+    range (*"5–20 %"*).
+  - The second line names the donating rigs, with each rig's % when they differ (six names, then
+    *"+N more"*).
+  - An address that has donated before (`donor_profile.eligible`) but has no tagged rig online
+    reads *"paused — no tagged rig online"*. Anyone else sees no row.
+  - The tooltip states the per-rig rule and "rename + restart". The v1 ceremony text is deleted.
+  - A *"Donor profile ↓"* link jumps to P-09 while it is visible.
+- **P-03 badge.** A *"donates 10 %"* tag sits beside each rig whose `donate_percent` is above 0
+  (`donateBadge`). Both workers windows are merged by name, as before.
+- **NEW P-09 Donor profile** (`renderDonor`, from `donor_profile`):
+  - **A lead line** for each refusal: donations off, blocked, or *"Donate from any rig to
+    unlock"*. An eligible donor gets the intro, which says the reason for a refusal is shown on
+    this (public) page.
+  - **A two-proof gate.** It uses its own `dp-ip-proof` / `dp-pass-proof` inputs, restating the
+    Goblin card's labels and help for this purpose.
+  - **Two columns, name | banner**, each with state lines: showing, expired, waiting for review
+    (+ UTC time), not approved (+ reason), taken off by the pool (+ reason), or none. Then the
+    form and the Submit / Withdraw / Remove buttons.
+  - **The banner column** also shows the approved banner in the wall's 4:1 box, through the
+    exact-shape URL fence `DP_BANNER_URL_RE`. It says *"Showing — #2, inside the top 5"*,
+    *"#8 — shows while you're in the top 5"*, *"not ranked in the donor league right now"*, or
+    that banners are switched off.
+- **Banner upload.** Picking a file does this in order:
+  1. Size check (300 KB), which blocks.
+  2. Magic-byte sniff of the first 16 bytes, the same three signatures as `SNIFFERS`, which
+     blocks.
+  3. A `data:` URL preview in the same 4:1 box, with the header dims as a **warning only**.
+
+  It is sent as multipart, with the two proofs as text fields and the file named `banner`.
+- **Pending content** comes only from the POST response, kept in the tab (`dpMine`) while
+  `pending_at` still equals its `submitted_at`. After a reload the page shows the time only.
+- **Removing a live item** arms on the first click (6 s) and acts on the second. Withdrawing
+  a pending request is one click.
+- **Errors** are the server's `error` sentences. The terse proof codes, including `wrong_kind`
+  (the right proof in the wrong box — `match` until the Part 6 review renamed it), map to
+  sentences in `DP_REASONS`, so no raw code is shown.
+- **After a success** the page re-reads only the summary (`dpRefresh`) and clears both proof
+  boxes. `dpReset` clears proofs, file, messages and pending text when the address changes or
+  the demo loads.
+- **DEMO**: `ipollo-01-donate10` (badge + "1 of 2 rigs"), an approved name, and a banner waiting
+  for review at rank 3 of 5.
+
+**Backend (`index.js`).** The account route drops `donation_percent`, `donor_name` and
+`donor_name_state`, along with the `donor` helper that derived the pair; the api-docs row follows.
+Nothing else changed. The miner routes and `profileFor` already carried every field §18.6/§18.8
+need.
+
+**Tests.** `npm test` **1331 → 1343**, 20 suites, exit 0.
+- `test-donor-profiles.js` 182 → 187. The page's `DP_NAME` / `DP_BANNER` equal the lib's
+  `NAME_MIN` / `NAME_MAX` / `NAME_CHARSET_RE` / `BANNER` / `MAX_BANNER_BYTES`. The page's own
+  `dpCheckName`, evaluated from its source, agrees with `validateName` over a 19-name matrix
+  (NBSP, RTL override, emoji, tabs, 32/33 chars, separators only) and sends the same normalised
+  name.
+- `test-public-leakage.js` 94 → 101. The account route sends `donation` + `donor_profile` and no
+  v1 alias, and the api-docs row drops them. The page:
+  - has no v1 copy and reads no dropped alias;
+  - shows a live banner only through the exact-shape regex;
+  - builds previews with `readAsDataURL` (`createObjectURL` only in the proof download);
+  - clears both proof boxes on all three success paths;
+  - never reads a pending name from the API.
+
+Also run once, not kept in the repo: a **390 px iframe probe** with the Part 4 method. It used a
+throwaway Node server on 127.0.0.1 that exits by itself, stubbed `/api/*`, a generated 1600×200
+(8:1) PNG, and headless Edge with `--screenshot`. The measurements were POSTed back. Nothing was
+left running afterwards (process sweep).
+- **Fixtures:**
+  - **A**: eligible, name showing, a rejected rename whose reason carries an
+    `<img onerror>`, an approved 8:1 banner showing at #2 of 5, and mixed 5–20 % tags from 3 of 5
+    rigs with long names.
+  - **B**: never donated.
+  - **C**: blocked and paused, name expired with a rename pending, banner removed by the pool with
+    a long reason.
+  - **D**: the built-in demo.
+- **Reactor (dark) and Light, all four:** `docWidth` 375 and **0 elements past the right edge**.
+  Each fixture showed the intended buttons and forms: B has no body, and C offers only
+  Withdraw/Remove. The 8:1 banner letterboxed in a 311×76 box. The hostile reason rendered as
+  text: no `<img>` in the panel, and no script ran. Screenshots of A-light and C-dark were read by
+  eye, and the ink is legible.
+- A copy tweak after the probe removed the doubled "not approved" wording. That changes text
+  only, and `npm test` was re-run after it.
+
+#### §18 Part 6 — independent review (2026-09-24, uncommitted)
+
+A separate cold session read §18 and the working-tree diff, answered every §18.9 point with
+evidence, and ran three one-shot scratch harnesses outside the repo (a per-share distribution on a
+stub DB with the reconciliation invariant, a banner-parser fuzz, and the route inventory). The
+answers and findings are in design §18.11 *Part 6*. What it changed:
+
+- **One fix: `wrong_kind`.** `requireBothProofs` refused a proof that verified as the *other*
+  kind with the verifier's own success code, `match`. So both the response and the
+  `auditOwnerProof` row read `ok:false, reason:'match'`. The code is now `wrong_kind`, on the
+  donor routes and the Goblin route alike. The refusal **text** did not change, so the Goblin
+  strings stay byte-identical. The account page's `DP_REASONS` key was renamed to match.
+- **Tests first.** `test-donor-profiles.js` gained two checks, one for the gate and one for the
+  page map. Both failed before the edit and pass after it. `npm test` **1343 → 1345**, 20
+  suites, exit 0. `bash -n scripts/07_grin_mining_public_pool.sh` OK.
+
+### 10.7 Operator-selectable chain explorer — `branding.explorer_mainnet` (2026-09-24, add-ons — NOT VPS-tested)
+
+**Origin:** every block height, block hash, kernel and output the pool shows links out to a public
+Grin explorer. That link is the miner's independent proof. Until 2026-09-23 the explorer was
+hardcoded (`DEFAULT_EXPLORER` in two browser files, plus `explorerBlockUrl()` in `index.js`). That
+day the mainnet default moved from `scan.grin.money` to `grincoin.org`, which took a code edit in
+three places. The explorer is now an **admin setting**, so a dead explorer can be swapped from the
+panel. The work ran as backend, frontend, a cold review and this docs fold. **None of it has run
+on a VPS.**
+
+#### The setting
+
+- **Settings → Branding → Chain Explorer**, `<select id="explorer_mainnet">`, stored as
+  `branding.explorer_mainnet`. It is an **enum of exactly three keys, default `grincoin`**:
+
+  | Key | Host | block (height) | block (hash) | kernel | output |
+  |---|---|---|---|---|---|
+  | `grincoin` (default) | `https://grincoin.org` | `/block/<h>` | `/hash/<hash>` | `/kernel/<ex>` | `/output/<c>` (unspent only) |
+  | `tiny` | `https://scan.grin.money` (06d) | `/block/<h>` | `/block/<hash>` | `/kernel/<ex>` | `/output/<c>` |
+  | `grinscan` | `https://grinscan.org` (06b) | `/block.html?h=<h>` | `/block.html?h=<hash>` | `/kernel.html?ex=<ex>` | `/output.html?c=<c>` |
+
+- **Testnet is fixed** on `https://test.grinscan.org` (query style, key `grinscan_testnet`) and
+  ignores the setting. Only grinscan has a usable testnet explorer: `testnet.grincoin.org` is
+  pruned, so old blocks fail there, and `testnet.grinscan.org` is NXDOMAIN. On a testnet pool the
+  select is greyed out, and the help line changes to say every link opens test.grinscan.org.
+  `grinscan_testnet` is deliberately **not** a mainnet choice.
+- **Validation** (`validateMainnetChoice`, wired into `lib/pool-settings.js` `validators.branding`)
+  is an exact match: no trim and no case folding, so `' grincoin'`, `'GRINCOIN'`, a URL or a
+  non-string is refused with a readable error, and the whole section save rolls back. `branding`
+  is not a step-up section, so no second factor is needed. The save writes the ordinary
+  `update_settings` audit row. Like every settings save, that row lists `changed_keys` (names
+  only, never the old → new values, audit §J1-2), so a reader sees *that* `explorer_mainnet`
+  changed but not to what.
+
+#### How a key becomes a link
+
+1. **One server registry, `back-end-pool/lib/explorers.js`** (new, pure, frozen): `STYLES`
+   (`path` / `grincoin` / `query`), `EXPLORERS`, `MAINNET_CHOICES`, `DEFAULT_MAINNET`, `TESTNET`,
+   `resolveExplorerKey(network, stored)` and `explorerUrl(key, kind, value)`.
+2. **The server publishes the RESOLVED key, never the raw setting.**
+   `resolveExplorerKey` returns `grinscan_testnet` on testnet. On mainnet it returns the stored
+   value only if it is a string that `MAINNET_CHOICES.includes()`; otherwise it returns
+   `grincoin`. That covers unset, `''`, a corrupt DB row, `__proto__` / `constructor`, and
+   `grinscan_testnet`. The resolved key goes out as `explorer` beside `network` on the three
+   routes that prime a page's network cache:
+   - `GET /api/public/branding` → `connection.explorer`, which `branding.js apply()` reads.
+   - `GET /api/pool/stats` → `explorer`, which admin-shell `decoratePoolIdentity()` reads.
+   - `GET /api/config/pool-info` → `explorer`, which public `blocks.html` reads before its first render.
+
+   `buildPublicConfig()` also publishes `branding.explorer_mainnet`, again resolved as mainnet:
+   that is the operator's choice as made, and on a testnet pool it differs from
+   `connection.explorer`. **Links follow `connection.explorer`.** All three routes' `API_DOC_META`
+   rows describe the new key.
+3. **Two browser mirrors of the registry**, `public_html/js/branding.js` and
+   `admin-panel/admin-shell.js`, each back `window.Explorer`
+   (`url` / `link` / `network` / `key` / `relink`). A primer caches the key in
+   `sessionStorage['pool-explorer']` next to `'pool-network'`, and removes it when a response
+   carries no key. `explorerKey()` **re-applies the resolve rule on the client**:
+   - testnet → `grinscan_testnet`, whatever is cached, so a stale mainnet key from another tab
+     can't leak onto a testnet pool;
+   - otherwise the cached key if it is in `MAINNET_CHOICES` and is an own registry entry, else
+     `grincoin`;
+   - a `sessionStorage` that throws (private mode) also gives the network default.
+
+   A key is only ever looked up in the registry. A published value is never used as a URL, so a
+   path style always travels with its host.
+4. **`/api/admin/blocks`** builds `grinscan_url` through `explorers.explorerUrl`. The field name
+   is legacy and kept for API shape; it holds whichever explorer the setting resolves to.
+
+**Link sites** (all through `Explorer.link`, which `xEsc`-escapes URL and label, adds
+`rel="noopener"`, and `encodeURIComponent`s the value):
+- public: `blocks.html` height + *view* column, `reactor-dashboard.js` `#height` and the tip,
+  the `fortune-board.html` seed cell, `account-settings.html` ledger block rows and the
+  withdrawal *Proof* column;
+- admin: `blocks.html` and `health.html`.
+
+#### Review fix — links rendered before the primer lands (Part 3)
+
+A page's own fetch can beat its primer. Examples: branding's fetch against reactor-dashboard's
+`loadStatus`, fortune-board's winners and the account ledger, or `decoratePoolIdentity` against
+every admin page's fetch. `sessionStorage` is per **tab**, so every new tab counts as a first
+visit. Those early links took the `mainnet` + `grincoin` fallback, and nothing re-rendered them.
+On a testnet pool that meant test heights opened on grincoin.org (mainnet), and a mainnet pool
+set to `tiny` or `grinscan` showed grincoin links anyway.
+
+**Fix:** `link()` tags each anchor with `data-xp-kind` / `data-xp-ref`, and both primers call
+`Explorer.relink()`, which re-points every tagged anchor through `explorerUrl()`. The host still
+comes from the registry and the ref is re-encoded, so an attribute value never becomes the URL.
+The review also corrected the plan's acceptance step, which expected old → new values in the
+audit row. It records key names only, deliberately (above).
+
+#### Propagation delay after a save
+
+The server memo is dropped at once: the settings save and restore routes both call
+`invalidateBranding()`. `/api/public/branding` is still served with `Cache-Control: public,
+max-age=60`, and the primers rewrite `sessionStorage` on every page load. So an open browser
+switches explorer on its **next page load after up to ~60 s**, and a hard refresh switches it
+sooner. Operators should expect a delay of about a minute. It is not a bug.
+
+#### Decided against
+
+- **A free-text URL.** The three sites use different path schemes, so a typed host would bring
+  back the 2026-07-25 bug where every grinscan link 404'd. A compromised admin panel could also
+  point every miner's proof link at a fake explorer that confirms whatever the pool claims.
+- **A "test this explorer" button.** grincoin.org answers HTTP 200 for every path, its error
+  page included, so a status probe would call a dead explorer healthy.
+- **Accepted caveat:** on 2026-07-25 `scan.grin.money` and `grinscan.org` resolved to the same
+  Cloudflare IP and the same Express origin. If both still run on the operator's VPS, `tiny` and
+  `grinscan` fail together, and the default `grincoin` is the independent choice.
+
+#### Tests
+
+`scripts/test-explorers.js` (new, last in `test:unit`) runs **198 checks**. They cover:
+- every key × kind URL, including grincoin hash → `/hash/`, and URL-encoding of `1/../x` and `"<>`;
+- `resolveExplorerKey` against every junk and prototype value;
+- the validator;
+- a `PoolSettings` round-trip on a throwaway SQLite file: default, the audit row naming the
+  key, rollback on a refused value, a corrupt row still publishing `grincoin`, and Restore
+  Defaults;
+- the three routes publishing the resolved key, and `explorer_mainnet` not being step-up;
+- **registry parity**: the `EXPLORERS` / `STYLES` / `MAINNET_CHOICES` literals in both browser
+  files must equal `lib/explorers.js`, and `window.Explorer.url()` in each must equal
+  `explorerUrl()` for every network × cached key (garbage, prototype keys, a stale mainnet key
+  on testnet, a throwing `sessionStorage`);
+- the three primers;
+- the Branding select: exactly three options, and greyed out on testnet whether the network was
+  already known or arrives later;
+- the relink fix.
+
+⚠ **Change a base or a segment in one of the three registry copies and this suite fails, so
+change all three together.** On 2026-09-24, `npm test` exited 0 with `test-explorers.js` at
+198/198.
+
+**VPS acceptance is still owed.** Run testnet first, then mainnet: the select disabled on testnet
+while Branding still saves; each of the three keys producing working block and kernel links on
+mainnet, judged by page content and not by status code; the admin Blocks *view* column following
+the setting; and a tampered DB row falling back to grincoin.org.
 
 ---
 

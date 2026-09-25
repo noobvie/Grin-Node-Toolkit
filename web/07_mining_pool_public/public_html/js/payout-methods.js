@@ -93,8 +93,18 @@
   }
 
   // ── Live pending strip ────────────────────────────────────────────────
+  // A retry caused by the POOL wallet being short (retry_reason, set by the scheduler) must not
+  // read "wallet unreachable" — to a miner that means THEIR wallet. It wins over every rail's own
+  // wording because the cause is the pool, not the transport. Deliberately not the refusal's
+  // "nothing was deducted — try again in about an hour": here the amount IS held and the pool
+  // retries by itself (the strip appends the next attempt time); a miner who tried again would
+  // just hit the one-pending-payout rule. A NULL reason keeps the generic wording.
+  var POOL_SHORT_PENDING =
+    'the pool is processing a lot of payouts right now — your payout is queued and will be retried automatically, nothing to do on your side';
+
   function pendingLabel(p) {
     if (!p) return '';
+    if (p.status === 'retry_scheduled' && p.retry_reason === 'pool_wallet_short') return POOL_SHORT_PENDING;
     var d = get(p.method);
     if (d && typeof d.pendingLabel === 'function') {
       var s = d.pendingLabel(p);

@@ -181,6 +181,7 @@
 
     <script src="/js/vendor/chart.umd.min.js"></script>
     <script src="/js/charts-init.js"></script>
+    <script src="/js/num-format.js"></script>
     <script>
         // Paginated fortune board, fed by the public winner-history endpoint. All fetched winners
         // accumulate in `all`; the search box + pot filter narrow them client-side (over what's
@@ -296,7 +297,7 @@
                 .then(function (json) {
                     if (!json || !json.data) return;
                     var d = json.data;
-                    setStat('fb-total-prizes', fmtGrin(d.total_prizes_grin));
+                    PoolFmt.setGrinTile(document.getElementById('fb-total-prizes'), Number(d.total_prizes_grin || 0));
                     setStat('fb-draws', Number(d.total_draws || 0).toLocaleString('en-US'));
                     setStat('fb-unique', Number(d.unique_winners || 0).toLocaleString('en-US'));
                     renderCharts(d);

@@ -1,7 +1,7 @@
 # Script 05 — Wallet & Payment Services Hub — implementation record
 
 > **Covers code as of:** 2026-08-04 (the doc: "current as of 2026-08-04") · **Last verified:** never systematically verified
-> **Product code last changed:** 2026-08-15 — `scripts/05_grin_wallet_service.sh`
+> **Product code last changed:** 2026-09-25 — `scripts/05_grin_wallet_service.sh` (CMD wallet Nuke + Re-initialize fix; the section for it is current, the rest of the doc is still as of 2026-08-04)
 
 **Status: current as of 2026-08-04.** Two changes landed the same day and this document covers
 both: the **05x renumber + rename** (Grin Drop `052 → 059`, Fidelius/Accio codenames) and,
@@ -236,6 +236,38 @@ Details that bite:
 
 The trade is printed at the prompt and repeated in the summary. An operator who
 only wants to receive slates by hand is strictly better off on `listen`.
+
+### CMD wallet (05C) — Nuke screen + Re-initialize fix, 2026-09-25
+
+⚠ Built and exercised locally against a fake `grin-wallet` only — **not run on a VPS**.
+
+**The bug.** Re-initialize deleted `<net>_pass_wallet.txt` / `<net>_seed.txt`, then ran
+`init -h` over the old wallet. grin-wallet refuses that whenever the toml **and** `wallet_data/`
+both exist (`create_config` → "… already exists in the target directory. Please remove it
+first", `impls/src/lifecycle/default.rs` at v5.5.0). The success check only looked for the toml,
+which the old wallet still had, so setup printed **"Wallet initialized."** with the old wallet
+untouched — and then saved the *new* passphrase, which does not open it. The pass/seed files were
+also deleted before the mode prompt, so cancelling there left a wallet with no saved passphrase.
+
+**The fix** (`_cmd_retire_wallet`, shared with the new screen):
+
+| | |
+|---|---|
+| **Every question first** | Mode, new passphrase and the mainnet typed confirm are all collected before anything on disk changes. A `0` at any of them still cancels with nothing touched. |
+| **Success = the seed** | `wallet_data/wallet.seed`, never the toml — grin-wallet writes the toml (`create_config`) *before* the seed (`create_wallet`), so a failed init leaves a toml behind. |
+| **Half-initialized dir** | toml present, no seed → reported as a failed earlier init and cleared without the "destroy" prompt; there is nothing in it to lose. |
+| **Stop by cwd, not port** | `_cmd_stop_wallet` kills the tmux session, then any `grin-wallet` whose cwd is the wallet dir (TERM, then KILL), and refuses to touch disk if one survives. A foreign holder of 3415/3420 is still never killed. |
+| **Mainnet is archived** | Testnet is deleted. Mainnet is **moved** to `/opt/grin/cmdwallet/.retired/mainnet-<ts>/` (700) and gated behind typing `MAINNET`. Purging it is a manual `rm -rf`. |
+| **Keep-lists** | Re-init keeps `grin-wallet`, `.grin-wallet.version`, `.listen_mode`. Nuke keeps the first two unless the operator declines "keep binary"; then the whole dir goes. The binary store `/opt/grin/wallet-bin/` is never touched. |
+
+**`N) Nuke wallet`** on the 05C screen: one network per run, shows what will go (seed present,
+listener running, whether a saved seed exists), warns when a Transporter `agent.json` points into
+the dir (it is **not** edited), removes the `CMDWALLET_<NET>_WALLET_DIR` line from
+`grin_wallets_location.conf` so 089 stops collecting an empty dir, and prints restore/purge
+commands for a mainnet archive. Setup re-registers on its next run.
+
+Also fixed: the summary's "Listener started" line always printed the Foreign port; it now prints
+the active mode and its port.
 
 ---
 

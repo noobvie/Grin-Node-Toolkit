@@ -95,6 +95,20 @@
       font-variant-numeric: tabular-nums; text-shadow: 0 0 12px var(--glow);
     }
     .placard.acct-figures .t-bal b { font-size: clamp(24px, 2.7vw, 32px); }
+    /* Size each value by its OWN tile, not the viewport. The vw clamp above assumed six tiles
+       share the row evenly, and at ~1400px a 32px "345.9303 ツ" was wider than its ~230px tile
+       and clipped at both edges (the placard is overflow:hidden, the value nowrap). cqi = 1% of
+       the tile's width, so the value shrinks with the tile at every breakpoint. The vw
+       declarations stay as the fallback for a browser without container queries. */
+    /* The pending tile holds words ("Awaiting you · Slatepack"), not a number: smaller, and
+       allowed to wrap onto a second line rather than clip. */
+    .placard.acct-figures .t-pend b { font-size: clamp(14px, 1.4vw, 18px); white-space: normal; line-height: 1.3; }
+    @supports (container-type: inline-size) {
+      .placard.acct-figures span { container-type: inline-size; }
+      .placard.acct-figures b { font-size: clamp(15px, 12cqi, 26px); }
+      .placard.acct-figures .t-bal b { font-size: clamp(17px, 14cqi, 32px); }
+      .placard.acct-figures .t-pend b { font-size: clamp(13px, 8.5cqi, 18px); }
+    }
     .placard.acct-figures .t-lock { --tone: var(--warn); }
     .placard.acct-figures .t-paid { --tone: var(--gold); }
     .placard.acct-figures .t-hash { --tone: var(--info); }
@@ -224,6 +238,14 @@
     .btn-save.btn-quiet:hover { background: color-mix(in srgb, var(--accent) 10%, transparent); box-shadow: none; }
     .tor-status { margin: 10px 0 0; font-family: var(--mono); font-size: 12.5px; line-height: 1.5; color: var(--text-dim); }
     .tor-status:empty { display: none; }
+    /* The answer in its colour: green = the wallet answered, red = it did not, amber = we could
+       not look (our side — says nothing about the wallet). "Checking…" keeps the dim default. */
+    .tor-status.is-yes { color: var(--ok, #3fb950); }
+    .tor-status.is-no { color: var(--danger, #f85149); }
+    .tor-status.is-unknown { color: var(--warn, #d29922); }
+    /* A finished payout: dashboard.css gives .acct-msg.ok the ACCENT colour (it means "accepted,
+       working on it"); a payout that actually went out gets the success green. */
+    .acct-msg.good { color: var(--ok, #3fb950); }
 
     /* ── password-proof diagnostics (state chip + cross-rig consistency) ── */
     .pass-diag { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
@@ -977,6 +999,7 @@
          a rail registers itself at parse time, so the registry must exist first, and both
          must run before the page script below reads the registry. Deleting a rail's script
          tag removes the rail — nothing in the page script names it. -->
+    <script src="/js/num-format.js"></script>
     <script src="/js/payout-methods.js"></script>
     <script src="/js/payout-goblin.js"></script>
     <script>
@@ -1151,9 +1174,11 @@
         }
 
         function renderSummary(a) {
-            $id('acct-balance').textContent = fmtGrin(a.balance);
-            $id('acct-locked').textContent = fmtGrin(a.balance_locked);
-            $id('acct-paid').textContent = fmtGrin(a.total_paid);
+            // Placard tiles: short figure, exact one in the tooltip (js/num-format.js). The exact
+            // spendable balance is also the "max" chip below, which is what a payout copies.
+            PoolFmt.setGrinTile($id('acct-balance'), Number(a.balance || 0));
+            PoolFmt.setGrinTile($id('acct-locked'), Number(a.balance_locked || 0));
+            PoolFmt.setGrinTile($id('acct-paid'), Number(a.total_paid || 0));
             $id('acct-hashrate').textContent = fmtGps(a.hashrate_gps || 0);
             // First paint from the account flag; renderWorkers() refines it to x / y once the
             // per-rig data is in (see renderOnlineState).
@@ -1909,7 +1934,9 @@
             // only this address's own wallet, so it can never be switched off underneath us.
             fallback: true,
             statuses: { tor_checking: 'sending (Tor)', tor_sending: 'sending (Tor)', tor_failed: 'failed' },
-            pendingStatuses: { tor_checking: 'sending over Tor now…', tor_sending: 'sending over Tor now…' }
+            // tor_checking is the queue: the scheduler picks a new payout up on its next pass
+            // (every 60 s), so "sending now" was not yet true for up to a minute.
+            pendingStatuses: { tor_checking: 'queued — sending starts within a minute', tor_sending: 'sending over Tor now…' }
         });
         PayoutMethods.register({
             key: 'slatepack',
@@ -1923,8 +1950,20 @@
         });
 
         // ── Pending payout strip (one-pending-per-address slot) ────────────
+        // Statuses the scheduler moves on by itself within minutes — the page polls while one is
+        // showing (watchPending). Parked states (retry_scheduled, slatepack_pending) wait on a
+        // clock or on the miner, so polling them would only spend requests.
+        const PENDING_IN_FLIGHT = ['tor_checking', 'tor_sending', 'finalizing'];
+        // One word for the placard tile. The tile used to print "#10 · tor", which reads as a
+        // queue position ("10th in line"), not as the payout's id. The id stays on the strip,
+        // labelled, because it is what the operator asks for.
+        const PENDING_TILE = {
+            tor_checking: 'Queued', tor_sending: 'Sending', finalizing: 'Settling',
+            retry_scheduled: 'Retrying', slatepack_pending: 'Awaiting you'
+        };
         function renderPending(p) {
             const strip = $id('acct-pending-strip');
+            watchPending(p);
             if (!p) {
                 strip.style.display = 'none';
                 $id('pl-pending').textContent = 'none';
@@ -1932,9 +1971,16 @@
             }
             // Rail-specific wording comes from the registry — this page holds no method names.
             let label = PayoutMethods.pendingLabel(p);
-            let text = 'Pending payout #' + p.id + ' · ' + fmtGrin(p.amount) + ' · ' + (p.method || 'tor')
-                     + ' — ' + label;
-            if (p.status === 'retry_scheduled' && p.next_retry_at) text += ' · next attempt ' + fmtWhen(p.next_retry_at);
+            const railName = PayoutMethods.methodLabel(p.method || 'tor');
+            let text = 'Pending payout · ' + fmtGrin(p.amount) + ' via ' + railName + ' — ' + label;
+            if (p.status === 'retry_scheduled' && p.next_retry_at) {
+                text += ' · next attempt ' + fmtWhen(p.next_retry_at) + ' — the amount stays reserved until then';
+            }
+            // The time a miner is actually waiting for: the next scheduler pass (≤ 60 s) plus the
+            // send itself (the CLI is killed at wallet_send_timeout_ms, 120 s by default).
+            if (p.status === 'tor_checking' || p.status === 'tor_sending') {
+                text += ' · usually done within 1–3 minutes, this page updates by itself';
+            }
             // How long it has been in flight (audit §J15-7). Every in-progress label on this
             // strip — "sending over Tor now…", "broadcasting to the Grin network — almost
             // done" — is written for the seconds-long normal case, and there was nothing to
@@ -1959,11 +2005,119 @@
             if (p.status === 'slatepack_pending' && p.expires_at) text += ' · ' + minutesLeft(p.expires_at);
             if (inFlight && ageMin >= 30) {
                 text += ' — this has been in progress for an unusually long time; if it does not '
-                      + 'clear, contact the operator with this payout number.';
+                      + 'clear, contact the operator with the payout ID below.';
             }
+            text += ' · payout ID ' + p.id;
             $id('acct-pending-text').innerHTML = escHtml(text).replace('Pending payout', '<b>Pending payout</b>');
             strip.style.display = 'flex';
-            $id('pl-pending').textContent = '#' + p.id + ' · ' + (p.method || 'tor');
+            $id('pl-pending').textContent = (PENDING_TILE[p.status] || 'Pending') + ' · ' + railName;
+        }
+
+        // ── Live follow-up while a payout is in flight ─────────────────────
+        // A Tor payout is queued by the request and SENT by the scheduler a minute or two later,
+        // so the request's own answer can only ever say "queued". Without this the strip kept
+        // saying "sending over Tor now…" until the miner thought to reload, and the result —
+        // paid, parked, returned — was never announced at all. Polls the account summary (one
+        // cheap GET on the `public` bucket) every 15 s while the pending row is in flight, and
+        // reports the outcome once it moves on. Stops after 15 min: past that the strip's own
+        // "unusually long" line takes over, and a reload restarts the watch.
+        const PENDING_POLL_MS = 15000;
+        const PENDING_WATCH_MAX_MS = 15 * 60 * 1000;
+        let pendingWatch = null; // { id, addr, method, amount, until, timer }
+
+        function stopPendingWatch() {
+            if (pendingWatch && pendingWatch.timer) clearTimeout(pendingWatch.timer);
+            pendingWatch = null;
+        }
+
+        function watchPending(p) {
+            if (isDemo) { stopPendingWatch(); return; }
+            const w = pendingWatch;
+            // A different address on screen: its payout is none of our business now.
+            if (w && w.addr !== currentAddr) stopPendingWatch();
+            const inFlight = !!(p && PENDING_IN_FLIGHT.indexOf(p.status) !== -1);
+            if (pendingWatch && (!p || p.id !== pendingWatch.id || !inFlight)) {
+                const done = pendingWatch;
+                stopPendingWatch();
+                announcePayoutOutcome(done, p && p.id === done.id ? p : null);
+            }
+            if (!inFlight) return;
+            if (!pendingWatch) {
+                pendingWatch = { id: p.id, addr: currentAddr, method: p.method || 'tor', amount: p.amount,
+                                 until: Date.now() + PENDING_WATCH_MAX_MS, timer: null };
+            }
+            if (pendingWatch.timer) clearTimeout(pendingWatch.timer);
+            if (Date.now() > pendingWatch.until) return; // leave the watch object: no announce spam
+            pendingWatch.timer = setTimeout(pollPending, PENDING_POLL_MS);
+        }
+
+        async function pollPending() {
+            const w = pendingWatch;
+            if (!w || w.addr !== currentAddr || isDemo) return;
+            w.timer = null;
+            let a;
+            try {
+                a = await getJson('/api/account/' + encodeURIComponent(w.addr));
+            } catch (e) {
+                // A blip must not end the watch — try again on the next beat.
+                if (pendingWatch === w) w.timer = setTimeout(pollPending, PENDING_POLL_MS);
+                return;
+            }
+            if (pendingWatch !== w || w.addr !== currentAddr) return;
+            const p = a.pending_withdrawal || null;
+            const same = p && p.id === w.id && PENDING_IN_FLIGHT.indexOf(p.status) !== -1;
+            if (same) {
+                renderPending(p); // refresh the label + elapsed time; re-arms the timer
+                return;
+            }
+            // It moved on: repaint the whole account once (balances, ledgers, history), and let
+            // renderSummary → renderPending → watchPending announce the outcome.
+            renderSummary(a);
+            loadLedger('in');
+            loadLedger('out');
+            loadWithdrawals();
+        }
+
+        // Outcome of a watched payout. `stillPending` is its row when it is parked (retry /
+        // slatepack), else null and the history's newest row says what happened.
+        async function announcePayoutOutcome(w, stillPending) {
+            // Only the Tor pane has a message line for this; the Slatepack rail reports its own
+            // finalize result in its own panel.
+            if (w.method !== 'tor') return;
+            const msg = $id('acct-withdraw-msg');
+            if (!msg) return;
+            const say = function (text, tone) {
+                msg.textContent = text;
+                msg.className = 'acct-msg ' + tone;
+            };
+            if (stillPending) {
+                if (stillPending.status === 'retry_scheduled') {
+                    if (stillPending.retry_reason === 'pool_wallet_short') {
+                        say('The pool could not send this payout yet — it is queued and will be retried automatically.', 'err');
+                    } else {
+                        say('✗ Your wallet did not take the payout over Tor. It is parked and will be retried'
+                            + (stillPending.next_retry_at ? ' at ' + fmtWhen(stillPending.next_retry_at) + ' UTC' : '')
+                            + ' — keep your wallet listener running.', 'err');
+                    }
+                }
+                return;
+            }
+            let row = null;
+            try {
+                const data = await getJson('/api/account/' + encodeURIComponent(w.addr) + '/withdrawals?limit=5&offset=0');
+                const rows = (data && data.withdrawals) || [];
+                for (let i = 0; i < rows.length; i++) if (rows[i].id === w.id) { row = rows[i]; break; }
+            } catch (e) { /* fall through to the neutral line */ }
+            if (w.addr !== currentAddr) return;
+            if (row && row.status === 'confirmed') {
+                // row.amount is the GROSS the balance was charged, not what arrived (the flat
+                // withdrawal fee stays behind), so it is named as the payout, not as "received".
+                say('✓ Payout of ' + fmtGrin(row.amount) + ' sent to your wallet over Tor.', 'good');
+            } else if (row && /_failed$/.test(String(row.status))) {
+                say('✗ Payout failed — the full amount is back in your balance.', 'err');
+            } else {
+                say('Your payout has finished processing — see Withdrawal history below for the result.', 'ok');
+            }
         }
 
         // ── P-01 hashrate chart (Day/Week/Month; retention caps at 100 days) ──
@@ -2446,6 +2600,7 @@
             if (!el) return;
             el.textContent = online === true ? TOR_STATUS_TEXT.yes
                 : online === false ? TOR_STATUS_TEXT.no : TOR_STATUS_TEXT.unknown;
+            el.className = 'tor-status ' + (online === true ? 'is-yes' : online === false ? 'is-no' : 'is-unknown');
             el.title = reason ? 'reason: ' + reason : '';
         }
         // Bumped on every new check AND every lookup, so a slow probe (up to ~30 s) for the
@@ -2454,7 +2609,7 @@
         function resetTorStatus() {
             torSeq++;
             const el = $id('acct-tor');
-            if (el) { el.textContent = ''; el.title = ''; }
+            if (el) { el.textContent = ''; el.title = ''; el.className = 'tor-status'; }
             const btn = $id('acct-tor-check');
             if (btn) btn.disabled = false;
         }
@@ -2466,6 +2621,7 @@
             if (isDemo) { setTorStatus(true, 'demo'); el.textContent += ' (demo)'; return; }
             if (btn) btn.disabled = true;
             el.textContent = 'Checking… (can take up to 30 s)';
+            el.className = 'tor-status';
             el.title = '';
             try {
                 // fresh=1: a miner who just started their listener must not get the ✗ from a
@@ -2576,8 +2732,11 @@
                 });
                 const json = await r.json().catch(() => null);
                 if (r.ok && json && json.success) {
-                    setMsg(msg, 'Payout queued (#' + json.withdrawal_id + ') — it will be sent to your wallet over Tor.', true);
-                    lookup(); // refresh balances + pending strip
+                    // No "#<id>" here: beside "queued" it read as a place in line. The id is on the
+                    // pending strip, labelled "payout ID", for when the operator needs it.
+                    setMsg(msg, 'Payout requested — ' + fmtGrin(amount) + ' will be sent to your wallet over Tor. '
+                        + 'This usually takes 1–3 minutes; this page shows the result when it is done.', true);
+                    lookup(); // refresh balances + pending strip (and start following it)
                 } else if (json && json.tor_online === false) {
                     // Pre-flight gate declined it (409). The gate runs BEFORE the balance lock, so
                     // nothing was deducted; the status line carries the ✗ + Slatepack pointer, so
@@ -2623,7 +2782,7 @@
                     // deadline is stated up front rather than discovered on a refused finalize.
                     const by = json.expires_at ? ' Respond by ' + fmtShort(json.expires_at) + ' UTC (' +
                         minutesLeft(json.expires_at) + ') — after that it expires and the amount returns to your balance.' : '';
-                    setMsg(msg, 'Slatepack #' + json.withdrawal_id + ' created (' + json.amount + ' ツ). Copy it, run receive in your wallet, paste the response below.' + by, true);
+                    setMsg(msg, 'Slatepack created (payout ID ' + json.withdrawal_id + ', ' + json.amount + ' ツ). Copy it, run receive in your wallet, paste the response below.' + by, true);
                     lookup();
                 } else {
                     setMsg(msg, apiErr(json, 'Failed'), false);
@@ -2677,14 +2836,14 @@
                 const outer = $id('acct-sp-msg');
                 if (r.ok && json && json.success) {
                     spClear();
-                    setMsg(outer, 'Payout #' + wid + ' broadcast — confirmed. 🎉', true);
+                    setMsg(outer, 'Payout ID ' + wid + ' broadcast — confirmed. 🎉', true);
                     lookup();
                 } else if (r.status === 409 && /slatepack_expired/.test(apiErr(json, ''))) {
                     // Too late: the pool already cancelled its side and refunded the balance.
                     // The miner's wallet still holds the receive it made — an incoming tx that
                     // can never confirm — so say how to clear it rather than just "409".
                     spClear();
-                    setMsg(outer, 'Payout #' + wid + ' expired before your response arrived — the full amount is back in your balance. ' +
+                    setMsg(outer, 'Payout ID ' + wid + ' expired before your response arrived — the full amount is back in your balance. ' +
                         'Your wallet still lists it as an unconfirmed incoming transaction that will never confirm; remove it with grin-wallet cancel. ' +
                         'You can request a new payout after the cooldown.', false);
                     lookup();
@@ -2719,7 +2878,7 @@
                 const radio = $id('acct-pay-slatepack');
                 if (radio) radio.checked = true;   // applySummary's sync() shows the pane after this
             }
-            $id('acct-sp-reshow-id').textContent = '#' + wid;
+            $id('acct-sp-reshow-id').textContent = 'ID ' + wid;
             $id('acct-sp-out').style.display = '';
             const has = !!$id('acct-sp-armored').value;
             $id('acct-sp-s1').style.display = has ? '' : 'none';
@@ -2770,7 +2929,7 @@
                     setMsg(msg, '', true);
                     const by = json.expires_at ? ' Respond by ' + fmtShort(json.expires_at) + ' UTC (' +
                         minutesLeft(json.expires_at) + ') — after that it expires and the amount returns to your balance.' : '';
-                    setMsg($id('acct-sp-msg'), 'Slatepack #' + wid + ' (' + fmtGrin(json.amount) + ') — the same one issued when you requested it. ' +
+                    setMsg($id('acct-sp-msg'), 'Slatepack for payout ID ' + wid + ' (' + fmtGrin(json.amount) + ') — the same one issued when you requested it. ' +
                         'If your wallet already received it, just paste that response below.' + by, true);
                 } else if (r.status === 404) {
                     // Settled or expired since this page last looked: refresh shows which.

@@ -724,6 +724,157 @@ _cmd_trap_cleanup() {
     return 0
 }
 
+# ─── Retire a wallet: stop · archive-or-delete · unregister ──────────────────
+# Shared by Re-initialize (setup Step 2) and the N) Nuke screen. Re-initialize
+# used to delete only the saved pass/seed files and then run `init -h` over the
+# old wallet_data/ — which grin-wallet REFUSES whenever the toml and wallet_data/
+# both exist ("… already exists in the target directory. Please remove it
+# first", impls/src/lifecycle/default.rs create_config). The Step 2 check only
+# looked for the toml, which the old wallet still had, so it printed "Wallet
+# initialized." over a wallet that was never replaced — whose saved passphrase
+# it had just deleted.
+
+# The wallet's seed file. Its presence — not the toml's — is what "initialized"
+# means: grin-wallet writes the toml (create_config) BEFORE the seed
+# (create_wallet), so a failed init leaves a toml with no wallet behind it.
+_cmd_seed_path() { echo "$(_cmd_dir "$1")/wallet_data/wallet.seed"; }
+_cmd_has_seed()  { [[ -f "$(_cmd_seed_path "$1")" ]]; }
+
+# PIDs of grin-wallet processes working IN this wallet's dir: the listener (its
+# launcher cd's there before exec) and any `./grin-wallet info` an operator left
+# running. Matched on cwd, not on the port — so, unlike the port guard above,
+# these are provably THIS wallet's processes and are safe to stop.
+_cmd_wallet_pids() {
+    local dir p; dir=$(_cmd_dir "$1")
+    for p in /proc/[0-9]*; do
+        [[ "$(cat "$p/comm" 2>/dev/null)" == "grin-wallet" ]] || continue
+        [[ "$(readlink "$p/cwd" 2>/dev/null)" == "$dir" ]] || continue
+        echo "${p#/proc/}"
+    done
+    return 0
+}
+
+# Stop everything holding this wallet open. rc 1 = something survived, and then
+# the caller must change NOTHING on disk.
+_cmd_stop_wallet() {
+    local net="$1" tmux_name pids _w=0
+    tmux_name=$(_cmd_tmux_name "$net")
+    if tmux has-session -t "$tmux_name" 2>/dev/null; then
+        tmux kill-session -t "$tmux_name" 2>/dev/null || true
+        info "Stopped listener session '$tmux_name'."
+    fi
+    pids=$(_cmd_wallet_pids "$net")
+    while [[ -n "$pids" && $_w -lt 10 ]]; do
+        sleep 1; _w=$((_w + 1)); pids=$(_cmd_wallet_pids "$net")
+    done
+    if [[ -n "$pids" ]]; then
+        warn "grin-wallet still running in $(_cmd_dir "$net") (PID ${pids//$'\n'/ }) — sending TERM."
+        # shellcheck disable=SC2086  # one PID per word, on purpose
+        kill $pids 2>/dev/null || true
+        _w=0
+        while [[ -n "$pids" && $_w -lt 5 ]]; do
+            sleep 1; _w=$((_w + 1)); pids=$(_cmd_wallet_pids "$net")
+        done
+    fi
+    if [[ -n "$pids" ]]; then
+        # shellcheck disable=SC2086
+        kill -9 $pids 2>/dev/null || true
+        sleep 1; pids=$(_cmd_wallet_pids "$net")
+    fi
+    if [[ -n "$pids" ]]; then
+        error "Could not stop grin-wallet (PID ${pids//$'\n'/ }) — nothing was removed."
+        return 1
+    fi
+    return 0
+}
+
+# _cmd_retire_wallet <net> <reinit|nuke|all>
+#   reinit  keeps the binary, its version record and the listener mode
+#   nuke    keeps the binary and its version record (setup skips the download)
+#   all     removes the whole per-network dir
+# TESTNET is deleted. MAINNET is MOVED to /opt/grin/cmdwallet/.retired/<net>-<ts>/
+# (mode 700, same custody as before) — a mis-keyed network or a phrase never
+# written down must not be a way to lose real GRIN. Purging it is a manual rm.
+# Sets CMD_RETIRED_TO to the archive path (empty on testnet).
+CMD_RETIRED_TO=""
+_cmd_retire_wallet() {
+    local net="$1" scope="$2" dir dest="" item base k keep_it
+    dir=$(_cmd_dir "$net"); CMD_RETIRED_TO=""
+    # Belt and braces before any rm -rf: only ever the two dirs this hub owns.
+    case "$dir" in
+        /opt/grin/cmdwallet/mainnet|/opt/grin/cmdwallet/testnet) ;;
+        *) error "Refusing to remove unexpected path: $dir"; return 1 ;;
+    esac
+    [[ -d "$dir" ]] || return 0
+    _cmd_stop_wallet "$net" || return 1
+
+    local -a keep=()
+    case "$scope" in
+        reinit) keep=(grin-wallet .grin-wallet.version .listen_mode) ;;
+        nuke)   keep=(grin-wallet .grin-wallet.version) ;;
+        all)    keep=() ;;
+        *) error "_cmd_retire_wallet: unknown scope '$scope'"; return 1 ;;
+    esac
+
+    if [[ "$net" == "mainnet" ]]; then
+        dest="/opt/grin/cmdwallet/.retired/${net}-$(date +%Y%m%d_%H%M%S)"
+        mkdir -p "$dest" || { error "Could not create $dest — nothing was moved."; return 1; }
+        chmod 700 /opt/grin/cmdwallet/.retired "$dest" 2>/dev/null || true
+        CMD_RETIRED_TO="$dest"
+    fi
+
+    while IFS= read -r -d '' item; do
+        base="${item##*/}"; keep_it=0
+        # ${a[@]+…}: an empty array is "unbound" under set -u on bash < 4.4.
+        for k in ${keep[@]+"${keep[@]}"}; do [[ "$base" == "$k" ]] && keep_it=1; done
+        [[ $keep_it -eq 1 ]] && continue
+        if [[ -n "$dest" ]]; then
+            mv -- "$item" "$dest/" \
+                || { error "Could not move $item → $dest/ (the rest is still in $dir)."; return 1; }
+        else
+            rm -rf -- "$item" || { error "Could not delete $item."; return 1; }
+        fi
+    done < <(find "$dir" -mindepth 1 -maxdepth 1 -print0 2>/dev/null)
+
+    if [[ "$scope" == "all" ]]; then
+        rmdir "$dir" 2>/dev/null || { error "Could not remove $dir (not empty?)."; return 1; }
+    fi
+    return 0
+}
+
+# Counterpart of _cmd_register_wallet_dir: without it 089 keeps collecting a dir
+# that no longer holds a wallet.
+_cmd_unregister_wallet_dir() {
+    local net="$1" conf key
+    conf="/opt/grin/conf/grin_wallets_location.conf"
+    key="CMDWALLET_$(_cmd_net_label "$net")_WALLET_DIR"
+    [[ -f "$conf" ]] || return 0
+    grep -q "^${key}=" "$conf" 2>/dev/null || return 0
+    sed -i "/^${key}=/d" "$conf" || return 1
+}
+
+# A Transporter (093) poll agent stores this wallet's owner-secret and pass-file
+# PATHS in its agent.json. Retiring the wallet does not edit that file — say so,
+# so the agent's next failure (or its silent switch to a NEW wallet) is expected.
+_cmd_warn_transporter_bound() {
+    local net="$1" conf dir
+    conf="/opt/grin/transporter-agent-${net}/agent.json"; dir=$(_cmd_dir "$net")
+    [[ -f "$conf" ]] && grep -qF "$dir/" "$conf" 2>/dev/null || return 0
+    warn "The Transporter agent ($conf) is wired to this wallet."
+    warn "  It is NOT changed here — re-run its wallet step in the Connectivity Hub (09)."
+    return 0
+}
+
+# Mainnet-only second gate: typing the word, not a y, is what stops a
+# muscle-memory "y" meant for testnet. Testnet passes straight through.
+_cmd_confirm_mainnet() {
+    [[ "$1" == "mainnet" ]] || return 0
+    echo -ne "  ${BOLD}${RED}Type MAINNET to confirm:${RESET} "
+    local t; read -r t || true
+    if [[ "$t" != "MAINNET" ]]; then info "Not confirmed — nothing was changed."; return 1; fi
+    return 0
+}
+
 # Setup wallet for one network.
 # Returns 0 = completed or skipped, 1 = user cancelled mid-flow.
 _cmd_wallet_setup_for_net() {
@@ -793,22 +944,31 @@ _cmd_wallet_setup_for_net() {
     echo ""
 
     # ── Step 2: Init or recover ──────────────────────────────────────────────
-    local do_init=1 tmp_init=""
-    if [[ -f "$toml_file" ]]; then
+    # Re-initializing now RETIRES the old wallet (_cmd_retire_wallet) — toml,
+    # wallet_data/, tor/, the saved pass/seed — AFTER every question below has
+    # been answered. The old order deleted the pass/seed files first, so
+    # cancelling at the next prompt left the old wallet in place with no saved
+    # passphrase, and its listener could no longer restart.
+    local do_init=1 tmp_init="" _reinit=0 _half=0
+    if [[ -f "$toml_file" ]] && ! _cmd_has_seed "$net"; then
+        # toml without a seed = an earlier init that failed after create_config.
+        # Nothing to keep, and grin-wallet would refuse a fresh init over it once
+        # wallet_data/ exists — so clear it without asking to "destroy" anything.
+        warn "Half-initialized wallet at $wallet_dir — a toml but no wallet_data/wallet.seed."
+        info "An earlier init did not finish; it will be cleared and initialized fresh."
+        _reinit=1; _half=1
+    elif [[ -f "$toml_file" ]]; then
         warn "Wallet already initialized at $wallet_dir"
-        echo -ne "  Re-initialize? ${RED}(destroys the existing wallet!)${RESET} [y/N/0 cancel]: "
+        if [[ "$net" == "mainnet" ]]; then
+            echo -e "  ${DIM}Re-initializing moves the current wallet to /opt/grin/cmdwallet/.retired/${RESET}"
+        else
+            echo -e "  ${DIM}Re-initializing DELETES the current testnet wallet.${RESET}"
+        fi
+        echo -ne "  Re-initialize? ${RED}(replaces the existing wallet!)${RESET} [y/N/0 cancel]: "
         local reinit; read -r reinit || true
         [[ "$reinit" == "0" ]] && return 1
         if [[ "${reinit,,}" == "y" ]]; then
-            # The saved pass/seed belong to the wallet about to be destroyed.
-            # Leaving them was the worst failure mode in this script: the
-            # listener would boot with a stale passphrase and fail, and
-            # <net>_seed.txt would hold the mnemonic of a wallet that no longer
-            # exists — a silent fund-loss trap on mainnet.
-            if [[ -f "$pass_file" || -f "$seed_file" ]]; then
-                rm -f "$pass_file" "$seed_file"
-                warn "Removed the old $(basename "$pass_file") / $(basename "$seed_file") — they belong to the wallet being replaced."
-            fi
+            _reinit=1
         else
             do_init=0
             info "Existing wallet kept — config, checks and listener still run below."
@@ -838,29 +998,12 @@ _cmd_wallet_setup_for_net() {
         if [[ "$mode" != "1" && "$mode" != "2" ]]; then
             error "Invalid mode."; sleep 1; return 1
         fi
-        mkdir -p "$wallet_dir"
         echo ""
 
-        if [[ "$mode" == "2" ]]; then
-            # RECOVER — stdin is deliberately NOT piped here. grin-wallet prompts
-            # for the passphrase and the recovery phrase on the real terminal, so
-            # the mnemonic is typed straight into grin-wallet and never passes
-            # through this script or any file it controls.
-            info "Running grin-wallet init -hr — enter your passphrase, then the recovery phrase."
-            echo ""
-            ( cd "$wallet_dir" && "$wallet_bin" $net_flag init -hr ) || true
-            echo ""
-            if [[ ! -f "$toml_file" ]]; then
-                warn "Recovery did not complete — grin-wallet.toml not found."
-                echo -e "         ${DIM}Check the output above.${RESET}"
-                echo -ne "  Press Enter to return..."; read -r || true; return 0
-            fi
-            success "Wallet recovered from seed."
-            _did_init="recovered"
-        else
+        if [[ "$mode" == "1" ]]; then
             # NEW — this script owns the passphrase, so collect it here and feed
-            # it to init on STDIN. Two lines: grin-wallet asks to confirm, and a
-            # spare line is harmless if a release ever stops asking twice.
+            # it to init on STDIN. Collected BEFORE the old wallet is retired, so
+            # a "0" here still cancels with nothing changed.
             echo -e "  Enter a wallet passphrase  ${DIM}(0 at any prompt to cancel)${RESET}:"
             local pass2=""
             while true; do
@@ -880,6 +1023,47 @@ _cmd_wallet_setup_for_net() {
             done
             know_pass=1
             echo ""
+        fi
+
+        # Last question, then the point of no return. A half-initialized dir
+        # holds no seed, so it needs no second gate.
+        if [[ $_reinit -eq 1 ]]; then
+            if [[ $_half -eq 0 ]]; then
+                _cmd_warn_transporter_bound "$net"
+                if ! _cmd_confirm_mainnet "$net"; then wallet_pass=""; return 1; fi
+            fi
+            if ! _cmd_retire_wallet "$net" reinit; then
+                wallet_pass=""
+                echo -ne "  Press Enter to return..."; read -r || true; return 0
+            fi
+            if [[ -n "$CMD_RETIRED_TO" ]]; then
+                success "Old wallet moved → $CMD_RETIRED_TO"
+            else
+                success "Old wallet removed."
+            fi
+            echo ""
+        fi
+        mkdir -p "$wallet_dir" || { error "Could not create $wallet_dir."; wallet_pass=""; return 0; }
+
+        if [[ "$mode" == "2" ]]; then
+            # RECOVER — stdin is deliberately NOT piped here. grin-wallet prompts
+            # for the passphrase and the recovery phrase on the real terminal, so
+            # the mnemonic is typed straight into grin-wallet and never passes
+            # through this script or any file it controls.
+            info "Running grin-wallet init -hr — enter your passphrase, then the recovery phrase."
+            echo ""
+            ( cd "$wallet_dir" && "$wallet_bin" $net_flag init -hr ) || true
+            echo ""
+            # The SEED, not the toml: grin-wallet writes the toml first, so a
+            # rejected phrase still leaves one behind.
+            if ! _cmd_has_seed "$net"; then
+                warn "Recovery did not complete — no $(_cmd_seed_path "$net")."
+                echo -e "         ${DIM}Check the output above.${RESET}"
+                echo -ne "  Press Enter to return..."; read -r || true; return 0
+            fi
+            success "Wallet recovered from seed."
+            _did_init="recovered"
+        else
             info "Running grin-wallet init -h  ${DIM}(write the seed phrase down!)${RESET}"
             echo ""
 
@@ -888,11 +1072,18 @@ _cmd_wallet_setup_for_net() {
             # mode. Kept inside the wallet dir rather than /tmp, so a tmp cleaner
             # can never race it and it inherits the same custody as the seed file.
             tmp_init="$wallet_dir/.init_capture"
-            install -m 600 /dev/null "$tmp_init"
+            if ! install -m 600 /dev/null "$tmp_init"; then
+                # Without the 600 pre-create, tee would write the mnemonic into a
+                # file at the default umask. Stop rather than risk it.
+                error "Could not create $tmp_init (mode 600) — init not run."
+                wallet_pass=""; return 0
+            fi
             _CMD_TMP_INIT="$tmp_init"
             trap '_cmd_trap_cleanup' INT TERM
             # printf is a bash BUILTIN — it forks no process, so the passphrase
             # never appears in any argv, unlike the -p this replaced.
+            # Two lines: grin-wallet asks to confirm, and a spare line is
+            # harmless if a release ever stops asking twice.
             # Subshell for the cd: a bare cd here would leak into the menu loop's cwd.
             (
                 cd "$wallet_dir" || exit 1
@@ -901,8 +1092,8 @@ _cmd_wallet_setup_for_net() {
             ) 2>&1 | tee "$tmp_init" || true
             echo ""
 
-            if [[ ! -f "$toml_file" ]]; then
-                warn "Init may have failed — grin-wallet.toml not found."
+            if ! _cmd_has_seed "$net"; then
+                warn "Init failed — no $(_cmd_seed_path "$net")."
                 echo -e "         ${DIM}Check the output above.${RESET}"
                 _cmd_trap_cleanup; wallet_pass=""
                 echo -ne "  Press Enter to return..."; read -r || true; return 0
@@ -1186,7 +1377,7 @@ _cmd_wallet_setup_for_net() {
         *)       echo -e "  $_skip  7. Checks                ${DIM}skipped — passphrase not held${RESET}" ;;
     esac
     if [[ "$_did_listen" == "yes" ]]; then
-        echo -e "  $_tick  8. Listener started     ${DIM}tmux: $tmux_name · Foreign API $_listen_port${RESET}"
+        echo -e "  $_tick  8. Listener started     ${DIM}tmux: $tmux_name · $(_cmd_mode "$net") :$(_cmd_mode_port "$net")${RESET}"
     else
         echo -e "  $_skip  8. Listener              ${DIM}not started${RESET}"
     fi
@@ -1321,6 +1512,98 @@ _cmd_start_listener() {
     return 0
 }
 
+# ─── N) Nuke — wipe one network's CMD wallet for a fresh test ───────────────
+# One screen, every answer collected before anything is touched. Testnet is
+# deleted; mainnet is moved to /opt/grin/cmdwallet/.retired/ (see
+# _cmd_retire_wallet). Only this wallet's OWN processes are stopped — a foreign
+# holder of 3415/3420 is still never killed.
+_cmd_nuke_menu() {
+    clear
+    echo -e "${BOLD}${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+    echo -e "${BOLD}${RED} CMD Wallet — Nuke (reset for a fresh wallet)${RESET}"
+    echo -e "${BOLD}${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+    echo ""
+    echo -e "  ${DIM}Stops the listener and removes the wallet: toml, wallet_data/, tor/,${RESET}"
+    echo -e "  ${DIM}saved passphrase + seed, logs. Testnet is DELETED; mainnet is MOVED to${RESET}"
+    echo -e "  ${DIM}/opt/grin/cmdwallet/.retired/ so real GRIN can never be lost by a mis-key.${RESET}"
+    echo ""
+    echo -ne "  Which network? [1 mainnet / 2 testnet / 0 cancel]: "
+    local sel net; read -r sel || true
+    case "$sel" in
+        1) net="mainnet" ;;
+        2) net="testnet" ;;
+        *) return 0 ;;
+    esac
+
+    local dir tmux_name; dir=$(_cmd_dir "$net"); tmux_name=$(_cmd_tmux_name "$net")
+    echo ""
+    if [[ ! -d "$dir" ]]; then
+        info "No $net CMD wallet at $dir — nothing to remove."
+        echo -ne "\n  Press Enter to return..."; read -r || true; return 0
+    fi
+
+    echo -e "  ${DIM}─── $(_cmd_net_label "$net") ─────────────────────────────────────────${RESET}"
+    echo -e "  Wallet dir   : $dir"
+    if _cmd_has_seed "$net"; then
+        echo -e "  Wallet       : ${BOLD}initialized${RESET}"
+    else
+        echo -e "  Wallet       : ${DIM}no wallet_data/wallet.seed${RESET}"
+    fi
+    if tmux has-session -t "$tmux_name" 2>/dev/null; then
+        echo -e "  Listener     : ${YELLOW}running${RESET} ${DIM}(tmux: $tmux_name) — will be stopped${RESET}"
+    else
+        echo -e "  Listener     : ${DIM}not running${RESET}"
+    fi
+    if [[ -f "$(_cmd_seed_file "$net")" ]]; then
+        echo -e "  Saved seed   : ${DIM}$(_cmd_seed_file "$net")${RESET}"
+    elif [[ "$net" == "mainnet" ]] && _cmd_has_seed "$net"; then
+        echo -e "  Saved seed   : ${YELLOW}none on this box — make sure you hold the phrase${RESET}"
+    fi
+    echo ""
+    _cmd_warn_transporter_bound "$net"
+
+    local keep_bin="y"
+    if [[ -x "$(_cmd_wallet_bin "$net")" ]]; then
+        echo -ne "  Keep the grin-wallet binary, so setup skips the download? [Y/n]: "
+        read -r keep_bin || true
+    fi
+    local scope="nuke"
+    [[ "${keep_bin,,}" == "n" ]] && scope="all"
+
+    echo ""
+    echo -ne "  ${BOLD}${RED}Nuke the $net CMD wallet?${RESET} [y/N]: "
+    local go; read -r go || true
+    if [[ "${go,,}" != "y" ]]; then
+        info "Cancelled — nothing was changed."
+        echo -ne "\n  Press Enter to return..."; read -r || true; return 0
+    fi
+    if ! _cmd_confirm_mainnet "$net"; then
+        echo -ne "\n  Press Enter to return..."; read -r || true; return 0
+    fi
+    echo ""
+
+    if ! _cmd_retire_wallet "$net" "$scope"; then
+        echo -ne "\n  Press Enter to return..."; read -r || true; return 0
+    fi
+    # The registry entry points 089 at the dir. Setup re-registers on the next run.
+    _cmd_unregister_wallet_dir "$net" \
+        || warn "Could not remove the backup registry entry — edit /opt/grin/conf/grin_wallets_location.conf."
+
+    if [[ -n "$CMD_RETIRED_TO" ]]; then
+        success "Mainnet CMD wallet moved → ${BOLD}$CMD_RETIRED_TO${RESET}"
+        echo -e "         ${DIM}Restore: stop the listener, then move its contents back into $dir${RESET}"
+        echo -e "         ${DIM}Purge  : rm -rf $CMD_RETIRED_TO   (only once you are sure it holds nothing)${RESET}"
+    else
+        success "Testnet CMD wallet removed."
+    fi
+    if [[ "$scope" == "nuke" ]]; then
+        echo -e "         ${DIM}grin-wallet binary kept in $dir${RESET}"
+    fi
+    echo -e "         ${DIM}Set up a fresh one with option $([[ "$net" == "mainnet" ]] && echo 1 || echo 2) on the previous screen.${RESET}"
+    echo -ne "\n  Press Enter to return..."; read -r || true
+    return 0
+}
+
 cmd_wallet_run() {
     while true; do
         clear
@@ -1374,9 +1657,10 @@ cmd_wallet_run() {
         echo -e "  ${GREEN}3${RESET}) Both"
         echo ""
         echo -e "  ${GREEN}B${RESET}) grin-wallet binary  ${DIM}(update · roll back · verify)${RESET}"
+        echo -e "  ${RED}N${RESET}) Nuke wallet         ${DIM}(stop + remove one network's wallet, for a fresh test)${RESET}"
         echo -e "  ${RED}0${RESET}) Back"
         echo ""
-        echo -ne "${BOLD}Select [1/2/3/B/0]: ${RESET}"
+        echo -ne "${BOLD}Select [1/2/3/B/N/0]: ${RESET}"
 
         local sel; read -r sel || true
         case "$sel" in
@@ -1392,6 +1676,7 @@ cmd_wallet_run() {
                     *) : ;;
                 esac
                 ;;
+            n|N) _cmd_nuke_menu || true ;;
             3)
                 local _ok=0
                 _cmd_wallet_setup_for_net "mainnet" && _ok=1 || true

@@ -1052,7 +1052,12 @@
     // Prize-pool size hook.
     document.querySelectorAll('[data-brand="prize-pool"]').forEach(function (el) {
       if (inc.enabled && typeof inc.prize_pool_grin === 'number') {
-        el.textContent = inc.prize_pool_grin.toFixed(4) + ' GRIN';
+        // Every current hook is a placard tile (donate, fortune-board), so it takes the tile
+        // rule from js/num-format.js — short figure, exact tooltip, the ツ unit the tiles beside
+        // it use (this one alone said "GRIN"). A page that does not load num-format keeps the
+        // exact figure.
+        if (window.PoolFmt) window.PoolFmt.setGrinTile(el, inc.prize_pool_grin);
+        else el.textContent = inc.prize_pool_grin.toFixed(4) + ' ツ';
       }
     });
 

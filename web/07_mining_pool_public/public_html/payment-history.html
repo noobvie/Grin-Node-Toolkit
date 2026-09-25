@@ -314,6 +314,7 @@
     <!-- footer injected by /js/public-shell.js -->
 
     <script src="/js/auth.js"></script>
+    <script src="/js/num-format.js"></script>
     <script src="/js/vendor/chart.umd.min.js"></script>
     <script src="/js/charts-init.js"></script>
     <script>
@@ -351,6 +352,9 @@
             const el = document.getElementById(id);
             if (el) el.textContent = text;
         }
+        // Placard GRIN tiles: short figure + exact tooltip, the one rule in js/num-format.js.
+        // Tables below keep fmtGrin's exact figures.
+        function setGrinStat(id, v) { PoolFmt.setGrinTile(document.getElementById(id), Number(v || 0)); }
         function toggleEmpty(emptyId, show, text) {
             const el = document.getElementById(emptyId);
             if (!el) return;
@@ -397,14 +401,14 @@
                 const bucket = data.bucket_seconds;
 
                 // ── Lifetime transparency tiles (range-independent) ──
-                setStat('ph-paid-all',  fmtGrin(totals.paid_all || 0));
+                setGrinStat('ph-paid-all', totals.paid_all);
                 setStat('ph-count-all', fmtInt(totals.payout_count || 0));
-                setStat('ph-avg',       totals.payout_count ? fmtGrin(totals.avg_payout || 0) : '—');
+                if (totals.payout_count) setGrinStat('ph-avg', totals.avg_payout); else setStat('ph-avg', '—');
                 setStat('ph-fee-pct',   (totals.to_miners_all || totals.fee_all)
                                           ? (Number(totals.fee_percent || 0).toFixed(2) + ' %')
                                           : '0 %');
-                setStat('ph-giveaways', fmtGrin(totals.giveaways_all || 0));
-                setStat('ph-donations', fmtGrin(totals.donations_all || 0));
+                setGrinStat('ph-giveaways', totals.giveaways_all);
+                setGrinStat('ph-donations', totals.donations_all);
 
                 // ── P-01 · cumulative GRIN paid (running sum of per-bucket payouts) ──
                 let run = 0;
@@ -538,10 +542,10 @@
                             + 'Automatic sweeping is not currently active.');
                 }
 
-                setStat('uc-total',    fmtGrin(totals.amount || 0));
+                setGrinStat('uc-total', totals.amount);
                 setStat('uc-count',    fmtInt(totals.count || 0));
                 setStat('uc-oldest',   daysAgoLabel(totals.oldest_activity_at));
-                setStat('uc-disposed', fmtGrin(dispTotals.total_disposed || 0));
+                setGrinStat('uc-disposed', dispTotals.total_disposed);
 
                 // U-02 · dormant list (addresses already masked server-side)
                 const dt = document.getElementById('uc-dormant');

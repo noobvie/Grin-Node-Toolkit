@@ -424,6 +424,7 @@
 
     <!-- footer injected by /js/public-shell.js -->
 
+    <script src="/js/num-format.js"></script>
     <script>
         // ── Slatepack address copy ─────────────────────────────────────────────
         function copyAddress() {
@@ -600,7 +601,8 @@
                     var el = document.getElementById(id);
                     if (el && v != null) el.textContent = v;
                 };
-                set('dn-total', fmtGrin(totals.total_donated) + ' ツ');
+                // Placard tile: short figure + exact tooltip (js/num-format.js).
+                if (totals.total_donated != null) PoolFmt.setGrinTile(document.getElementById('dn-total'), Number(totals.total_donated));
                 set('dn-count', totals.donor_count != null ? String(totals.donor_count) : '—');
                 set('dn-active', totals.active_donors != null ? String(totals.active_donors) : '—');
                 set('donor-ranking', rankingSentence(ranking));

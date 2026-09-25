@@ -1406,7 +1406,7 @@ function setupRoutes() {
     'GET /api/config/pool-info': { desc: 'Pool terms: network, pool fee %, minimum withdrawal, the flat per-payout withdrawal fee (0 = the pool absorbs the network fee), address format, which listener a miner needs, and explorer — the chain explorer key this pool links to (grincoin, tiny or grinscan on mainnet; grinscan_testnet on testnet).', shape: 'raw' },
 
     // ── Pool ──────────────────────────────────────────────────────────────────
-    'GET /api/pool/stats': { desc: 'Live pool stats: block totals (found / confirmed / immature counts, confirmed + immature reward), active miners (distinct addresses), active workers (logged-in rigs), raw connections, and share quality (accepted/stale/rejected). Share quality is LIVE in-memory only — it is empty with no connected sessions and resets on disconnect. Also network (mainnet or testnet) and explorer, the chain explorer key this pool links to (grincoin, tiny or grinscan on mainnet; grinscan_testnet on testnet).', shape: 'raw' },
+    'GET /api/pool/stats': { desc: 'Live pool stats: block totals (found / confirmed / immature counts, confirmed + immature reward; orphans_24h = blocks found in the last 24 h that were later orphaned, null if unreadable), active miners (distinct addresses), active workers (logged-in rigs), raw connections, and share quality (accepted/stale/rejected). Share quality is LIVE in-memory only — it is empty with no connected sessions and resets on disconnect. Also network (mainnet or testnet) and explorer, the chain explorer key this pool links to (grincoin, tiny or grinscan on mainnet; grinscan_testnet on testnet).', shape: 'raw' },
     'GET /api/pool/status': { desc: 'Coarse service health for the status strip: pool up, node reachable/synced/peers/height, wallet reachable. Never exposes balances or addresses.', shape: 'raw' },
     'GET /api/pool/stats/regions': { desc: 'Per-region stratum endpoints + live status (online | idle | offline | checking — the last only on the first poll after a restart, before the reachability probe has a verdict) and 15-minute regional hashrate, miners (distinct addresses) and workers (distinct address+rig pairs). On a MULTI-region pool a k-anonymity floor applies: a region with 0 < miners < min_bucket reports miners/workers/hashrate_gps/shares_window as null with below_floor:true — that is withheld, not zero (a real zero is still 0). Totals are always exact. Per region, is_hub (boolean) marks this server\'s own region — connecting there is connecting to the pool directly; false on every row of a pool that runs no local stratum. hub_rtt_ms (integer milliseconds) is the round trip between the pool and that region\'s server — the minimum of its last 5 TCP connects to the region\'s public stratum port; add it to your own latency to that server for your effective latency to the pool. It is 0 on the is_hub row, and null when that server has not been reached yet (just after a restart, or never). timestamp is ISO 8601.', shape: 'raw' },
     'GET /api/pool/connect/suggest': { desc: 'Which server to point a rig at, for YOU: estimated effective latency per region, from the country your IP resolves to. Effective = your distance to that server + its link to the pool (hub_rtt_ms) — a regional server does not shorten the trip to the pool, so a far one can lose to connecting directly. Returns { basis: "estimate", recommended (region tag, or null), estimates: [{ region, est_ms (integer milliseconds, round trip), via: direct | gateway }] }; direct is preferred unless a gateway is more than 15 ms faster. Regions that are offline, or whose link to the pool has not been measured yet, get no estimate. { basis: "unavailable" } alone when no country can be resolved. An estimate from geography, not a measurement. Your IP and country are used for this one answer and neither stored, logged nor returned; never cached (Cache-Control: private, no-store).', shape: 'raw' },
@@ -1419,7 +1419,7 @@ function setupRoutes() {
     'GET /api/pool/metrics/history': { desc: 'Durable pool trend series: hashrate, miners, workers, blocks found, earnings, payout, network hashrate. Rolled up hourly and never pruned. At day-or-coarser buckets (month/year/all) miner_count/worker_count are the PEAK hour in the bucket, hashrate the average, money the sum. worker_count is null for hours recorded before it existed — draw a null as a GAP, never as 0.', shape: 'raw', params: 'range=day|week|month|year|all (default day)' },
     'GET /api/pool/metrics/history/regions': { desc: 'Per-region miners/hashrate trend series (the "miners by gateway" view). Same k-anonymity floor as /api/pool/stats/regions, applied per point: below the floor miner_count and hashrate_gps are null with below_floor:true. Draw a null as a GAP, never as 0.', shape: 'raw', params: 'range=day|week|month|year|all (default day)' },
     'GET /api/pool/payments/history': { desc: 'Durable payments & transparency series: payouts, reward split, giveaways, donations, fee, plus lifetime totals.', shape: 'raw', params: 'range=day|week|month|year|all (default month)' },
-    'GET /api/pool/payments': { desc: 'Recent confirmed payouts: address, amount, flat fee charged, method, timestamps and has_kernel_proof (true once the payout\'s kernel has been seen mined; stays false on a pool with no Owner API wallet). Addresses are MASKED (grin1qxy…mn4p). The on-chain kernel is NOT published here — pool-wide it would be a public address-to-chain index; it is available per address on /api/account/:addr/withdrawals. Pool-internal payout machinery (slate id, Tor probe result, retry state, cancel reason) is deliberately not published either.', shape: 'array', params: 'limit (≤500, default 100)' },
+    'GET /api/pool/payments': { desc: 'Recent confirmed payouts: address, amount, flat fee charged, method, timestamps and has_kernel_proof (true once the payout\'s kernel has been seen mined; stays false on a pool with no Owner API wallet) and kernel_excess — the payout\'s Tx ID (66 hex chars, lowercase), or null until mined; link it to a chain explorer\'s kernel page to verify the payout on-chain. Addresses are MASKED (grin1qxy…mn4p). Pool-internal payout machinery (slate id, Tor probe result, retry state, cancel reason) is deliberately not published either.', shape: 'array', params: 'limit (≤500, default 100)' },
     'GET /api/pool/miners': { desc: 'Balance distribution across accounts, richest first. Addresses are MASKED (grin1qxy…mn4p) — the distribution is public, the address→balance mapping is not.', shape: 'array', params: 'limit (≤500, default 50)' },
     'GET /api/pool/top-block-finders': { desc: 'Lucky-miner leaderboard: blocks found and total reward per address over a recent window. Orphans do not count as a find. Addresses are MASKED.', shape: 'raw', params: 'days (≤3650, default 30) · limit (≤1000, default 500)' },
     'GET /api/pool/unclaimed': { desc: 'Lost-and-found: masked addresses of long-dormant balances with a per-address disposal countdown, plus the historical disposition ledger (sweeps into the prize pool).', shape: 'raw', params: 'limit (≤200, default 100)' },
@@ -2725,9 +2725,18 @@ function setupRoutes() {
         : db.prepare('SELECT * FROM withdrawals ORDER BY created_at DESC LIMIT ?').all(limit);
       // The signed proof is a ~600-byte blob per row; the list carries a flag and the per-row
       // route below serves the document.
+      // chain_state (paid rows only, else null): 'mined' | 'settling' | 'unmined' | 'cancelled' |
+      // 'absent' | 'unverifiable' — the "marked paid but not mined" watchdog's view
+      // (withdrawal-scheduler chainStateOf). Admin-only: no public route carries it.
+      const now = Math.floor(Date.now() / 1000);
+      const chainState = (r) => (withdrawalScheduler ? withdrawalScheduler.chainStateOf(r, now) : null);
+      // tor_final_slate (stepwise Tor send, design §8.1) is a complete signed transaction held
+      // only so the sweep can post it again — never served. tor_step stays: it tells the
+      // operator where a tor_sending row stopped.
       res.json(rows.map((r) => {
         const { payment_proof, ...rest } = r;
-        return { ...rest, has_payment_proof: !!payment_proof };
+        delete rest.tor_final_slate;
+        return { ...rest, has_payment_proof: !!payment_proof, chain_state: chainState(r) };
       }));
     } catch (err) {
       res.status(500).json({ error: err.message });
@@ -3508,21 +3517,25 @@ function setupRoutes() {
   // the row to /account-settings.html?addr=); it is MASKED now — see the note at the query —
   // and neither consumer links the row any more.
   //
-  // `kernel_excess` was dropped from this feed 2026-09-02 (audit §J11-2). It is the on-chain
-  // payment proof, and pairing it POOL-WIDE with a full recipient address builds a public,
-  // permanent Grin-address <-> on-chain-kernel index — for a chain whose whole product is that
-  // such an index cannot be built. Neither consumer ever rendered it (the homepage teletype
-  // prints amount + a truncated address; payment-history.html prints time/address/amount/status),
-  // so it was published and unused. It stays on /api/account/:addr/withdrawals, where it backs
-  // the account page's Proof column — that surface's own exposure is still an open decision.
-  // Do not re-add it here to "make the feeds consistent".
+  // `kernel_excess` — the payout's Tx ID, i.e. its on-chain kernel excess — was dropped from this
+  // feed 2026-09-02 (audit §J11-2) and RE-PUBLISHED 2026-09-25 by operator decision, so
+  // payment-history.html P-05 can carry a Tx ID column linking each payout to the chain explorer
+  // (the 2miners-style public payments list). The operator accepted the cost: a masked address +
+  // amount + time beside a kernel lets a chain analyst tag that kernel as this pool's payout, and
+  // §J11-1 showed the 9+4 mask is invertible against any feed that still leaks a full address.
+  // The mask below is therefore the ONLY thing standing between this feed and a full
+  // address <-> kernel table — never unmask it. The per-address all-time history
+  // (/api/account/:addr/withdrawals) stays ownership-gated.
+  // The value is emitted only when it has a kernel excess's exact shape (33-byte compressed
+  // commitment = 66 hex chars): it becomes an explorer href on a public page, so a malformed
+  // wallet-log string must reach no one.
+  const KERNEL_EXCESS_RE = /^[0-9a-f]{66}$/i;
   app.get('/api/pool/payments', rateLimiter.middleware('public'), (req, res) => {
     try {
       const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 100, 1), 500);
       const stmt = db.prepare(`
         SELECT id, grin_address, amount, fee_charged, method, status,
-               created_at, confirmed_at,
-               (kernel_excess IS NOT NULL AND kernel_excess != '') AS has_kernel_proof
+               created_at, confirmed_at, kernel_excess
         FROM withdrawals WHERE status = 'confirmed'
         ORDER BY confirmed_at DESC LIMIT ?
       `);
@@ -3530,10 +3543,17 @@ function setupRoutes() {
       // the homepage teletype calls truncAddr(), payment-history.html renders truncAddr() with
       // the full value in a `title` — so nothing on screen changes; what goes away is the
       // machine-readable full-address list behind them.
-      // has_kernel_proof is a yes/no ("seen mined"), never the kernel — see the §J11-2 note above.
-      const payments = stmt.all(limit).map((p) => ({
-        ...p, grin_address: maskAddr(p.grin_address), has_kernel_proof: !!p.has_kernel_proof
-      }));
+      // has_kernel_proof ("seen mined") stays beside the kernel and keeps its old meaning (any
+      // non-empty kernel on record): the homepage teletype and the P-05 status badge read the
+      // boolean, so a shape-rejected value hides the link without un-mining the row.
+      const payments = stmt.all(limit).map((p) => {
+        const kernel = (typeof p.kernel_excess === 'string' && KERNEL_EXCESS_RE.test(p.kernel_excess))
+          ? p.kernel_excess.toLowerCase() : null;
+        return {
+          ...p, grin_address: maskAddr(p.grin_address),
+          kernel_excess: kernel, has_kernel_proof: !!p.kernel_excess
+        };
+      });
       res.json(payments);
     } catch (err) {
       res.status(500).json({ error: err.message });
@@ -6571,6 +6591,25 @@ function setupRoutes() {
         ].filter(Boolean).join(' · ');
       }
     } catch (e) { /* alerts table unreadable — leave the wallet card as measured */ }
+    // Payouts marked paid but not seen mined an hour later (withdrawal-scheduler _watchUnmined):
+    // one rolling 'payout_unmined' alert, resolved by the scheduler as soon as nothing is
+    // overdue, so no time window here. 'warning' = sent but not mined, or unverifiable;
+    // 'critical' = the pool wallet cancelled the tx or has no record of it, i.e. a miner the
+    // ledger shows as paid may not have been. That outranks a merely degraded card but never
+    // masks a wallet that is actually down ('error').
+    try {
+      const unmined = db.prepare(
+        `SELECT level, message FROM alerts
+         WHERE type = 'payout_unmined' AND status = 'active'
+         ORDER BY id DESC LIMIT 1`
+      ).get();
+      if (unmined && services.grin_wallet) {
+        const w = services.grin_wallet;
+        if (unmined.level === 'critical') { if (w.status !== 'error') w.status = 'critical'; }
+        else if (w.status === 'ok') w.status = 'warning';
+        w.message = [w.message, unmined.message].filter(Boolean).join(' · ');
+      }
+    } catch (e) { /* alerts table unreadable — leave the wallet card as measured */ }
 
     // nginx — the request reached us through it, so the reverse proxy is up
     services.nginx = { status: 'ok', message: 'reachable (serving requests)' };
@@ -7322,9 +7361,10 @@ function setupRoutes() {
       const total_paid = db.prepare(
         `SELECT COALESCE(SUM(amount),0) AS t FROM withdrawals WHERE grin_address = ? AND status='confirmed'`
       ).get(addr).t;
+      // Same strip as GET /api/admin/withdrawals: never serve the stepwise send's final slate.
       const pending = db.prepare(
         `SELECT * FROM withdrawals WHERE grin_address = ? AND status IN ('tor_checking','tor_sending','retry_scheduled','slatepack_pending','finalizing') ORDER BY created_at DESC`
-      ).all(addr);
+      ).all(addr).map(({ tor_final_slate, ...rest }) => rest);
       const shareAgg = db.prepare(
         `SELECT COUNT(*) AS count, MAX(created_at) AS last_share_at FROM shares WHERE grin_address = ?`
       ).get(addr);

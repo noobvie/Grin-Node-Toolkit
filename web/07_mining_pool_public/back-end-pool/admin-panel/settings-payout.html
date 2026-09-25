@@ -44,15 +44,6 @@
                 it as a disclosed pool charge.
               </div>
             </div>
-            <div class="form-group">
-              <label for="payout_frequency">Auto Payout Frequency</label>
-              <select id="payout_frequency" name="payout_frequency">
-                <option value="manual">Manual (default)</option>
-                <option value="hourly">Hourly</option>
-                <option value="daily">Daily</option>
-                <option value="weekly">Weekly</option>
-              </select>
-            </div>
           </div>
 
           <div class="form-row">
@@ -69,15 +60,21 @@
           </div>
 
           <div class="checkbox-group">
-            <input type="checkbox" id="auto_payout" name="auto_payout">
-            <label for="auto_payout">Enable automatic payouts</label>
-          </div>
-
-          <div class="checkbox-group">
             <input type="checkbox" id="tor_preflight_gate" name="tor_preflight_gate" checked>
             <label for="tor_preflight_gate">Pre-flight Tor reachability gate</label>
           </div>
           <div class="helper-text">When on, a Tor payout is refused up front if the miner's wallet listener isn't answering over Tor right now (the pool probes the wallet's onion before locking any funds), and the miner is steered to Slatepack. Blocks only on a confident offline — if the pool box can't run the probe (no tor daemon) it falls through and lets grin-wallet decide at send, so it never blocks every payout. Turn off to always attempt Tor and rely on the retry/refund ladder. Applied on backend restart.</div>
+
+          <div class="form-group" style="margin-top:14px;">
+            <label for="tor_send_mode">Tor send method</label>
+            <!-- An enum, validated server-side (lib/pool-settings.js tor_send_mode): keep the two
+                 values in step with it. 'cli' is the shipped default. -->
+            <select id="tor_send_mode" name="tor_send_mode" style="max-width:320px;">
+              <option value="cli">CLI (default)</option>
+              <option value="stepwise">Step-by-step</option>
+            </select>
+            <div class="helper-text">Applied on backend restart. Step-by-step drives the payout through the wallet's Owner API and saves the slate id before anything leaves the server — see the operator docs before enabling it on mainnet.</div>
+          </div>
         </div>
 
         <div class="form-section">

@@ -432,8 +432,9 @@ Several comments in this repo claim "grin-wallet has no stdin or env-var passphr
 piped so we bypass terminal hiding code"* → `stdin.read_line()`. What IS true: there is no
 env-var input (the clap `pass` arg declares no `env`), so stdin is the only argv-free channel.
 The rpassword 7 bump did **not** break this: grin-wallet v5.5.0 pins `rpassword 7.5.4`, which
-branches on `stdin.is_terminal()` and still reads a piped passphrase. The toolkit pin is
-unchanged at v5.4.1, so stdin feeding is safe on both — see memory
+branches on `stdin.is_terminal()` and still reads a piped passphrase. The shared pin
+(`GWI_DEFAULT_TAG`) moved to v5.5.0 on 2026-09-25; Fidelius still pins v5.4.1 on its own.
+Stdin feeding is safe on both — see memory
 `project_grinwallet_stdin_rpassword`.
 - **Feed the passphrase on stdin**: `exec grin-wallet … listen < "$pass_file"` (mode-600 file),
   or `printf '%s\n' "$p" | grin-wallet … info` (printf is a bash *builtin* — no argv at all).

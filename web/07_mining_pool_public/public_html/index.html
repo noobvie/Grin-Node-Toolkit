@@ -171,8 +171,11 @@
                                 <div class="lamp" id="an-wallet">Wallet link<small>…</small></div>
                                 <div class="lamp" id="an-payouts">Payouts<small>…</small></div>
                                 <div class="annun-cat">Integrity</div>
-                                <div class="lamp" id="an-stale">High stale<small>&lt; 5%</small></div>
-                                <div class="lamp" id="an-orphan">Orphan det.<small>none</small></div>
+                                <!-- Both titles are rewritten per state by reactor-dashboard.js
+                                     (Low/High stale, No orphan / Orphan detected) — .lamp-t is
+                                     the hook. Neutral until the first /api/pool/stats lands. -->
+                                <div class="lamp" id="an-stale"><span class="lamp-t">Stale rate</span><small>…</small></div>
+                                <div class="lamp" id="an-orphan"><span class="lamp-t">Orphan check</span><small>…</small></div>
                             </div>
                         </div>
                     </div>

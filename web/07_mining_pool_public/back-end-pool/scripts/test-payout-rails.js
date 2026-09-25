@@ -56,8 +56,8 @@ function harness({ failFirst = null } = {}) {
   const wire = [];
   let inits = 0;
   w.initSession = async () => { inits++; w.token = 'TOKEN-B'; w.sessionOpen = true; };
-  w._encryptedCall = async (method, params) => {
-    wire.push({ method, params: JSON.parse(JSON.stringify(params)) });
+  w._encryptedCall = async (method, params, opts) => {
+    wire.push({ method, params: JSON.parse(JSON.stringify(params)), opts: opts || null });
     if (failFirst && wire.length === 1) throw new Error(failFirst);
     return method === 'create_slatepack_message' ? 'BEGINSLATEPACK. xyz. ENDSLATEPACK.' : 'ok';
   };
@@ -178,8 +178,24 @@ function startFakeSocks(plan) {
           if (head === -1) return;
           const len = Number((/content-length:\s*(\d+)/i.exec(rec.http) || [])[1] || 0);
           if (rec.http.length < head + 4 + len) return;
-          const body = mode.body || '';
-          sock.end(`HTTP/1.1 ${mode.status} X\r\nContent-Type: application/json\r\n` +
+          rec.body = rec.http.slice(head + 4, head + 4 + len);
+          // { reply: fn } (stepwise tests): fn(requestBody) picks the answer per REQUEST —
+          // { status, body } | 'drop' (close without a reply) | { drip: ms } (trickle forever).
+          const out = typeof mode.reply === 'function' ? mode.reply(rec.body) : mode;
+          if (out === 'drop') { sock.destroy(); state = 'done'; return; }
+          if (out && out.drip) {
+            const reply = 'HTTP/1.1 200 OK\r\nX-Pad: ' + 'a'.repeat(4096);
+            let i = 0;
+            const t = setInterval(() => {
+              if (sock.destroyed) { clearInterval(t); drips.delete(t); return; }
+              sock.write(reply[i++ % reply.length]);
+            }, out.drip);
+            drips.add(t);
+            state = 'done';
+            return;
+          }
+          const body = out.body || '';
+          sock.end(`HTTP/1.1 ${out.status} X\r\nContent-Type: application/json\r\n` +
             `Content-Length: ${Buffer.byteLength(body)}\r\nConnection: close\r\n\r\n${body}`);
           state = 'done';
           return;
@@ -447,6 +463,233 @@ async function torProbeSection() {
 // Past 30 s nginx answers the browser 504 ("Withdrawal failed") and closes the upstream socket —
 // but Express keeps running the handler, so the gate used to pass and createWithdrawal LOCKED the
 // balance and queued a payout the miner had just been told failed.
+// ─── Tor rail — what `grin-wallet send` printed, not what it exited with ─────
+// The CLI exits 0 when Tor delivery fails: it locks the outputs, prints a slatepack and stops.
+// The pool used to read that exit 0 as "paid". Fixtures below reproduce the exact println!
+// sequence of upstream controller/src/command.rs `send` / `output_slatepack` (v5.4.1 = v5.5.0).
+const FB_ID = '5c8a4e6b-3f1d-4a92-9b7e-0d2c1f3e4a5b';
+const FALLBACK_OUT = [
+  `/opt/grin/pool-testnet/wallet/slatepack/${FB_ID}.S1.slatepack`,
+  '',
+  'Slatepack data follows. Please provide this output to the other party',
+  '',
+  '--- CUT BELOW THIS LINE ---',
+  '',
+  'BEGINSLATEPACK. 4H1qx1wHe668tFW yC2gfL8PPd8kSgv pcXQhyRkHbyKHZg GN75o7uWoT3dkib R2tj1fFGN2FoRLY GWmtgsneoXf7N4D uVWuyZSamPhfF1u AHRaYWvhF7jQvKx wNJAc7qmVm9JVcm NJLEw4k5BU7jY6S eb. ENDSLATEPACK.',
+  '--- CUT ABOVE THIS LINE ---',
+  '',
+  'Slatepack data was also output to',
+  '',
+  `/opt/grin/pool-testnet/wallet/slatepack/${FB_ID}.S1.slatepack`,
+  '',
+  'The slatepack data is encrypted for the recipient only',
+  '',
+].join('\n');
+const SENT_OUT = 'Tx sent successfully\n';
+
+async function torSendSection() {
+  section('Tor send — classify the CLI output, never trust exit 0');
+  const classify = (s) => (typeof WalletTor.classifySendOutput === 'function'
+    ? WalletTor.classifySendOutput(s) : { outcome: 'classifySendOutput not exported', slateId: null });
+  {
+    const r = classify(SENT_OUT);
+    ok('a. `Tx sent successfully` → sent', r.outcome === 'sent', JSON.stringify(r));
+  }
+  {
+    const r = classify(FALLBACK_OUT);
+    ok('b. slatepack fallback (exit 0) → slatepack_fallback, NOT sent', r.outcome === 'slatepack_fallback', JSON.stringify(r));
+    ok('b. …and the slate id is read from the .S1.slatepack path', r.slateId === FB_ID, JSON.stringify(r));
+  }
+  {
+    // Windows-style separators and an upper-case uuid still parse (the id is normalised).
+    const r = classify(`C:\\grin\\slatepack\\${FB_ID.toUpperCase()}.S1.slatepack\nSlatepack data follows.\n`);
+    ok('c. backslash path + upper-case uuid → same id, lower-cased', r.outcome === 'slatepack_fallback' && r.slateId === FB_ID, JSON.stringify(r));
+  }
+  {
+    const r = classify('Slatepack data follows. Please provide this output to the other party\n');
+    ok('d. fallback with no file path → fallback, slateId null (caller must not guess)', r.outcome === 'slatepack_fallback' && r.slateId === null, JSON.stringify(r));
+  }
+  {
+    const r = classify('');
+    ok('e. empty output → unrecognised, never sent', r.outcome === 'unrecognised', JSON.stringify(r));
+  }
+  {
+    // A log line that merely MENTIONS the phrase is not the println! marker.
+    const r = classify('20260925 10:00:00.000 WARN grin_wallet - Tx sent successfully? retrying\n');
+    ok('f. a timestamped log line containing the phrase is NOT a send', r.outcome !== 'sent', JSON.stringify(r));
+  }
+  {
+    // Ordering: if both markers were ever present, "sent" must win — the caller CANCELS a
+    // fallback, and cancelling a posted tx unlocks outputs it already spent.
+    const r = classify(FALLBACK_OUT + SENT_OUT);
+    ok('g. both markers → sent wins (a posted tx is never treated as cancellable)', r.outcome === 'sent', JSON.stringify(r));
+  }
+
+  section('Tor send — sendToTorAddress maps each outcome (CLI stubbed)');
+  const runSend = async (stdout) => {
+    const t = new WalletTor({ network: 'testnet', wallet_dir: '/nonexistent' });
+    t.execWalletCommand = async () => stdout;
+    return t.sendToTorAddress(TOR_ADDR, 1.5);
+  };
+  {
+    const r = await runSend(SENT_OUT);
+    ok('h. sent → success:true', r.success === true && !r.torFallback, JSON.stringify(r));
+  }
+  {
+    const r = await runSend(FALLBACK_OUT);
+    ok('i. fallback → success:false, torFallback:true, slateId carried',
+      r.success === false && r.torFallback === true && r.slateId === FB_ID, JSON.stringify(r));
+  }
+  {
+    const r = await runSend('some future wording\n');
+    ok('j. unrecognised exit-0 output → success:false, no torFallback (nothing to cancel)',
+      r.success === false && !r.torFallback, JSON.stringify(r));
+  }
+  {
+    const t = new WalletTor({ network: 'testnet', wallet_dir: '/nonexistent' });
+    t.execWalletCommand = async () => { throw new Error('Command failed (code 1): Tx sent fail'); };
+    const r = await t.sendToTorAddress(TOR_ADDR, 1.5);
+    ok('k. non-zero exit → success:false with the CLI error, unchanged', r.success === false && /code 1/.test(r.error), JSON.stringify(r));
+  }
+}
+
+// ─── F5 (Part 6): the step-by-step send's Tor delivery (WalletTor.deliverSlate) ──────────────
+// Real socks5.js + real http over a fake SOCKS5 proxy whose far end plays the MINER's Foreign API
+// (127.0.0.1:0, this process, closed in finally). The request body picks the answer.
+async function stepwiseTransportSection() {
+  section('stepwise-transport');
+  const S1 = JSON.parse(JSON.stringify(SLATE));
+  const S2 = Object.assign({}, S1, { sta: 'S2' });
+  const rpc = (result) => JSON.stringify({ id: 1, jsonrpc: '2.0', result });
+  const CV_OK = { status: 200, body: CHECK_VERSION_OK };
+  const RECV_OK = { status: 200, body: rpc({ Ok: S2 }) };
+  const methodOf = (body) => { try { return JSON.parse(body).method; } catch (_) { return null; } };
+  // A wallet: answer check_version with `cv`, receive_tx with `recv`.
+  const wallet = (cv, recv) => () => ({ reply: (body) => (methodOf(body) === 'check_version' ? cv : recv) });
+  const FAST = { tor_check_timeout_ms: 400, tor_send_connect_timeout_ms: 400, tor_send_receive_timeout_ms: 400 };
+  const mk = (port) => {
+    const t = new WalletTor(Object.assign({ network: 'testnet', tor_socks_port: port }, FAST));
+    t.torSendCheckTimeoutMs = 400;
+    return t;
+  };
+  const deliver = typeof WalletTor.prototype.deliverSlate === 'function'
+    ? (t, ...a) => t.deliverSlate(...a)
+    : async () => ({ ok: 'deliverSlate not implemented' });
+
+  {
+    const px = await startFakeSocks(wallet(CV_OK, RECV_OK));
+    try {
+      const t = mk(px.port);
+      const r = await deliver(t, TOR_ADDR, S1, { attemptTag: '7-1' });
+      ok('T1. happy path → ok, S2 returned', r.ok === true && r.slate && r.slate.id === S1.id && r.slate.sta === 'S2', JSON.stringify(r).slice(0, 200));
+      const reqs = px.seen.map((s) => { try { return JSON.parse(s.body); } catch (_) { return null; } });
+      ok('T1. two requests, check_version THEN receive_tx', reqs.length === 2 && reqs[0] && reqs[0].method === 'check_version' &&
+        reqs[1] && reqs[1].method === 'receive_tx', JSON.stringify(reqs.map((q) => q && q.method)));
+      const body = reqs[1] || {};
+      ok('T1. receive_tx body is exactly {jsonrpc, method, id, params:[S1, null, null]} (positional)',
+        same(Object.keys(body).sort(), ['id', 'jsonrpc', 'method', 'params']) && body.jsonrpc === '2.0' &&
+        Array.isArray(body.params) && body.params.length === 3 && same(body.params[0], S1) &&
+        body.params[1] === null && body.params[2] === null, JSON.stringify(body).slice(0, 200));
+      ok('T1. both connections to <derived onion>:80 on the SAME isolation tag grinpool-send-<attemptTag>',
+        px.seen.every((s) => s.host === t.deriveOnionAddress(TOR_ADDR) + ':80') &&
+        px.seen.every((s) => s.user === 'grinpool-send-7-1'), JSON.stringify(px.seen.map((s) => [s.host, s.user])));
+    } finally { await px.close(); }
+  }
+  {
+    const oldWallet = { status: 200, body: rpc({ Ok: { foreign_api_version: 2, supported_slate_versions: ['V3'] } }) };
+    const px = await startFakeSocks(wallet(oldWallet, RECV_OK));
+    try {
+      const r = await deliver(mk(px.port), TOR_ADDR, S1, { attemptTag: 't2' });
+      ok("T2. no 'V4' in supported_slate_versions → incompatible_wallet", r.ok === false && r.reason === 'incompatible_wallet', JSON.stringify(r));
+      ok('T2. …and no receive_tx request was made', px.seen.every((s) => methodOf(s.body) !== 'receive_tx') && px.seen.length === 1,
+        `connections=${px.seen.length}`);
+    } finally { await px.close(); }
+  }
+  {
+    const px = await startFakeSocks(() => 4);
+    try {
+      const r = await deliver(mk(px.port), TOR_ADDR, S1, { attemptTag: 't3' });
+      ok('T3. SOCKS reply 0x04 → failed, ourSide:false, requestWritten:false',
+        r.ok === false && r.ourSide === false && r.requestWritten === false, JSON.stringify(r));
+      ok('T3. …after exactly one retry on a fresh circuit (different tag)',
+        px.seen.length === 2 && px.seen[0].user !== px.seen[1].user, JSON.stringify(px.seen.map((s) => s.user)));
+    } finally { await px.close(); }
+  }
+  {
+    const px = await startFakeSocks(() => 'silent');
+    const dead = px.port;
+    await px.close();
+    const r = await deliver(mk(dead), TOR_ADDR, S1, { attemptTag: 't4' });
+    ok('T4. ECONNREFUSED on the SOCKS port (our tor is down) → ourSide:true, requestWritten:false',
+      r.ok === false && r.ourSide === true && r.requestWritten === false && r.reason === 'tor_unavailable', JSON.stringify(r));
+  }
+  {
+    const px = await startFakeSocks(wallet(CV_OK, 'drop'));
+    try {
+      const r = await deliver(mk(px.port), TOR_ADDR, S1, { attemptTag: 't5' });
+      ok('T5. connection dropped after the receive_tx write → requestWritten:true, ourSide:false',
+        r.ok === false && r.requestWritten === true && r.ourSide === false, JSON.stringify(r));
+      ok('T5. …and receive_tx was NOT sent a second time',
+        px.seen.filter((s) => methodOf(s.body) === 'receive_tx').length === 1, `receive_tx requests=${px.seen.filter((s) => methodOf(s.body) === 'receive_tx').length}`);
+    } finally { await px.close(); }
+  }
+  {
+    const px = await startFakeSocks(wallet(CV_OK, { drip: 50 }));
+    try {
+      const t0 = Date.now();
+      const CAP_MS = 4000;
+      const r = await Promise.race([
+        deliver(mk(px.port), TOR_ADDR, S1, { attemptTag: 't6' }),
+        new Promise((res) => setTimeout(() => res({ ok: 'STILL PENDING' }), CAP_MS)),
+      ]);
+      const took = Date.now() - t0;
+      ok('T6. a drip-fed receive_tx reply ends by the ABSOLUTE deadline (bounded wall time)',
+        r.ok === false && took < 400 * 3 + 800, `${JSON.stringify(r)} took=${took}ms`);
+      ok('T6. …as requestWritten:true (the miner may hold S1)', r.requestWritten === true, JSON.stringify(r));
+    } finally { await px.close(); }
+  }
+  {
+    const pad = 'a'.repeat(1024 * 1024);
+    const huge = { status: 200, body: rpc({ Ok: Object.assign({}, S2, { pad }) }) };
+    const px = await startFakeSocks(wallet(CV_OK, huge));
+    try {
+      const t = mk(px.port);
+      t.torSendReceiveTimeoutMs = 5000;
+      const r = await deliver(t, TOR_ADDR, S1, { attemptTag: 't7' });
+      ok('T7. a receive_tx reply over 1 MiB → failed (never parsed as S2)', r.ok === false && r.requestWritten === true, JSON.stringify(r).slice(0, 200));
+    } finally { await px.close(); }
+  }
+  {
+    const wrong = { status: 200, body: rpc({ Ok: Object.assign({}, S2, { id: '11111111-2222-3333-4444-555555555555' }) }) };
+    const px = await startFakeSocks(wallet(CV_OK, wrong));
+    try {
+      const r = await deliver(mk(px.port), TOR_ADDR, S1, { attemptTag: 't8' });
+      ok('T8. an S2 whose id ≠ S1.id → failed, bad_reply', r.ok === false && r.reason === 'bad_reply' && r.requestWritten === true, JSON.stringify(r));
+    } finally { await px.close(); }
+  }
+  {
+    // A JSON-RPC error from receive_tx (e.g. TransactionAlreadyReceived) is a refusal, not an S2.
+    const refused = { status: 200, body: rpc({ Err: { TransactionAlreadyReceived: S1.id } }) };
+    const px = await startFakeSocks(wallet(CV_OK, refused));
+    try {
+      const r = await deliver(mk(px.port), TOR_ADDR, S1, { attemptTag: 't8b' });
+      ok('T8. receive_tx answering result.Err → failed, receive_refused', r.ok === false && r.reason === 'receive_refused', JSON.stringify(r));
+    } finally { await px.close(); }
+  }
+  {
+    // T9. The probe's check_version kept its limits through the refactor: 16 KB body cap.
+    const px = await startFakeSocks(() => ({ status: 200, body: '{"result":{"Ok":"' + 'x'.repeat(20000) + '"}}' }));
+    try {
+      const socket = await require(path.join(APP, 'lib/socks5.js')).connect({
+        socksHost: '127.0.0.1', socksPort: px.port, host: 'x.onion', port: 80, timeoutMs: 2000 });
+      const ans = await WalletTor.checkVersionOverSocket(socket, { onion: 'x.onion', port: 80, timeoutMs: 2000 });
+      ok('T9. checkVersionOverSocket still caps the body at 16 KB', ans.body.length === 16 * 1024 && ans.truncated === true,
+        `len=${ans.body.length}`);
+      ok('T9. …and still sends check_version with params []', /"method":"check_version","params":\[\]/.test(px.seen[0].http));
+    } finally { await px.close(); }
+  }
+}
+
 async function preflightRequesterGoneSection() {
   section('Tor pre-flight gate — requester gone during the probe (Part 5)');
   const http = require('http');
@@ -561,17 +804,77 @@ async function preflightRequesterGoneSection() {
       wire[0] && JSON.stringify(wire[0].params));
   }
   {
-    // d (retry). The array path's retry branch still refills params[0].
+    // d (retry). The array path's retry branch still refills params[0]. (This used cancelTx until
+    // F5 moved cancel_tx to named params; retrieve_payment_proof is still positional.)
     const { w, wire } = harness({ failFirst: 'HTTP 401: Unauthorized' });
-    await w.cancelTx(SLATE.id);
+    await w.retrievePaymentProof(SLATE.id);
     ok('d. an array call\'s session retry refills params[0] with the rotated token',
       wire.length === 2 && Array.isArray(wire[1].params) && wire[1].params[0] === 'TOKEN-B' &&
-      same(wire[1].params.slice(1), [null, SLATE.id]), wire[1] && JSON.stringify(wire[1].params));
+      same(wire[1].params.slice(1), [false, null, SLATE.id]), wire[1] && JSON.stringify(wire[1].params));
+  }
+
+  // ─── F5 (Part 6): the send-path Owner v3 calls go out NAMED ───────────────
+  // Names from owner_rpc.rs, identical in v5.4.1 and v5.5.0. A positional call here is how the
+  // slatepack rail was broken for weeks (memory reference_grinwallet_owner_v3_params).
+  section('Owner v3 send path — named params (init / lock / finalize / post / cancel)');
+  {
+    const { w, wire } = harness();
+    await w.initSendTx(1.5, { paymentProofRecipient: TOR_ADDR });
+    await w.txLockOutputs(JSON.parse(JSON.stringify(SLATE)));
+    await w.finalizeTx(JSON.parse(JSON.stringify(SLATE)));
+    await w.postTx(JSON.parse(JSON.stringify(SLATE)), true);
+    await w.cancelTx(SLATE.id);
+    const by = (m) => wire.find((c) => c.method === m) || {};
+    const keys = (m) => (isPlainObject(by(m).params) ? Object.keys(by(m).params).sort().join(',') : 'NOT AN OBJECT');
+    ok('init_send_tx → { token, args }', keys('init_send_tx') === 'args,token', keys('init_send_tx'));
+    const a = (by('init_send_tx').params || {}).args || {};
+    ok('init_send_tx args: amount in nanogrin, payment_proof_recipient_address = the miner address',
+      a.amount === 1500000000 && a.payment_proof_recipient_address === TOR_ADDR, JSON.stringify(a));
+    ok('init_send_tx args: ttl_blocks null and late_lock null (design §8.1.2)', a.ttl_blocks === null && a.late_lock === null);
+    ok('init_send_tx carries a 60 s timeout (v5.5.0 refreshes from the node inside init)',
+      by('init_send_tx').opts && by('init_send_tx').opts.timeoutMs === 60000, JSON.stringify(by('init_send_tx').opts));
+    ok('tx_lock_outputs → { token, slate }', keys('tx_lock_outputs') === 'slate,token' && same(by('tx_lock_outputs').params.slate, SLATE),
+      keys('tx_lock_outputs'));
+    ok('finalize_tx → { token, slate }', keys('finalize_tx') === 'slate,token' && same(by('finalize_tx').params.slate, SLATE),
+      keys('finalize_tx'));
+    ok('post_tx → { token, slate, fluff }', keys('post_tx') === 'fluff,slate,token' && by('post_tx').params.fluff === true,
+      keys('post_tx'));
+    ok('cancel_tx → { token, tx_id: null, tx_slate_id }',
+      keys('cancel_tx') === 'token,tx_id,tx_slate_id' && by('cancel_tx').params.tx_id === null &&
+      by('cancel_tx').params.tx_slate_id === SLATE.id, JSON.stringify(by('cancel_tx').params));
+    ok('every one of them carries the live session token',
+      ['init_send_tx', 'tx_lock_outputs', 'finalize_tx', 'post_tx', 'cancel_tx'].every((m) => by(m).params && by(m).params.token === 'TOKEN-A'));
+    ok('the other calls keep the default timeout (no opts)', ['tx_lock_outputs', 'finalize_tx', 'post_tx', 'cancel_tx'].every((m) => by(m).opts === null));
+  }
+  {
+    // The slatepack rail's init is unchanged apart from the shape: no proof requested.
+    const { w, wire } = harness();
+    await w.initSendTx(2);
+    const a = (wire[0] && wire[0].params && wire[0].params.args) || {};
+    ok('initSendTx with no recipient still sends payment_proof_recipient_address null',
+      Object.prototype.hasOwnProperty.call(a, 'payment_proof_recipient_address') && a.payment_proof_recipient_address === null, JSON.stringify(a));
+  }
+  {
+    // withSendLock: strictly serial, and a throw releases the lock.
+    const { w } = harness();
+    const order = [];
+    const slow = (name, ms, boom) => w.withSendLock(async () => {
+      order.push(name + ':in'); await new Promise((r) => setTimeout(r, ms)); order.push(name + ':out');
+      if (boom) throw new Error('boom');
+      return name;
+    });
+    const results = await Promise.allSettled([slow('A', 40, true), slow('B', 5), slow('C', 1)]);
+    ok('withSendLock runs each fn only after the previous one settles',
+      order.join(' ') === 'A:in A:out B:in B:out C:in C:out', order.join(' '));
+    ok('…a throwing fn rejects its own caller and still releases the lock',
+      results[0].status === 'rejected' && results[1].value === 'B' && results[2].value === 'C');
   }
 
   // ─── Tor rail — the reachability probe (and withdraw pre-flight gate) ─────
   await torProbeSection();
   await preflightRequesterGoneSection();
+  await torSendSection();
+  await stepwiseTransportSection();
 
   console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed\n`);
   process.exit(fail === 0 ? 0 : 1);

@@ -319,6 +319,78 @@ try {
   ok('/api/admin/donors/summary returns pending_requests from the same count',
     /pending_requests:\s*DonorProfiles\.pendingCount\(db\)/.test(handler('get', '/api/admin/donors/summary')));
 
+  console.log('\n[7] F4 — a pool that stored the removed auto-payout keys keeps saving');
+
+  // A pool that ran before the removal may hold these rows. Like D4's transporter_enabled they
+  // stay inert: getSection merges stored rows over the defaults with no membership check, and
+  // the form no longer carries the ids, so a Save never resends them.
+  const up = db.prepare(`INSERT INTO pool_config (section, key, value, value_type) VALUES ('payout', ?, ?, 'string')
+                         ON CONFLICT(section, key) DO UPDATE SET value = excluded.value`);
+  up.run('auto_payout', 'true');
+  up.run('payout_frequency', 'daily');
+  const stale = () => db.prepare("SELECT key, value FROM pool_config WHERE section='payout' AND key IN ('auto_payout','payout_frequency') ORDER BY key").all();
+
+  let payout = null;
+  ok('getSection(payout) still loads with the stale rows present', !throws(() => { payout = ps.getSection('payout'); }) &&
+    payout && payout.min_withdrawal !== undefined);
+
+  // Mimic the page: populateForm fills the fields from getSection, saveSection harvests every id
+  // in the form (checkbox → boolean, textarea → text, empty scalar → dropped).
+  const payoutPage = fs.readFileSync(path.join(APP, 'admin-panel/settings-payout.html'), 'utf8');
+  const body = {};
+  for (const m of payoutPage.matchAll(/<(input|select|textarea)\b([^>]*)>/gi)) {
+    const id = (m[2].match(/\bid="([^"]+)"/) || [])[1];
+    if (!id || /\bsettings-skip\b/.test(m[2]) || !(id in payout)) continue;
+    const v = payout[id];
+    if (/\btype="checkbox"/.test(m[2])) body[id] = v === true || v === 'true';
+    else if (m[1].toLowerCase() === 'textarea') {
+      let arr = v; if (typeof arr === 'string') { try { arr = JSON.parse(arr); } catch (_) { arr = []; } }
+      body[id] = Array.isArray(arr) ? arr.join('\n') : '';
+    } else if (v !== '' && v !== null && v !== undefined) body[id] = String(v);
+  }
+  ok('the harvested Payout body carries neither removed key',
+    !('auto_payout' in body) && !('payout_frequency' in body) && 'min_withdrawal' in body, Object.keys(body).join(','));
+  const auditsBefore = audits().length;
+  let saveErr = null;
+  try { ps.updateSection('payout', body, 7); } catch (e) { saveErr = e.message; }
+  ok('a Payout save of the real form succeeds on a pool that stored the removed keys', saveErr === null, saveErr || '');
+  const newAudit = audits().slice(auditsBefore).map((r) => r.details).join(' ');
+  ok('…and no audit row names a removed key', !/auto_payout|payout_frequency/.test(newAudit), newAudit);
+  ok('…and the stale rows are left untouched (inert, no migration)',
+    JSON.stringify(stale()) === '[{"key":"auto_payout","value":"true"},{"key":"payout_frequency","value":"daily"}]', JSON.stringify(stale()));
+  ok('sending a removed key explicitly is refused as unknown (the keys are really gone)',
+    throws(() => ps.updateSection('payout', { auto_payout: true }, 7)) &&
+    throws(() => ps.updateSection('payout', { payout_frequency: 'manual' }, 7)));
+
+  console.log('\n[8] F5 (Part 6) — tor_send_mode is an enum: cli | stepwise, nothing else');
+
+  // A switch that selects a money path must not treat a stray value as "on": only the two exact
+  // modes pass the validator, and applyToConfig maps anything that is not 'stepwise' to 'cli'.
+  const vMode = V.payout.tor_send_mode;
+  ok('the validator exists', typeof vMode === 'function');
+  if (typeof vMode === 'function') {
+    ok("accepts 'cli' and 'stepwise'", vMode('cli') === 'cli' && vMode('stepwise') === 'stepwise');
+    ok('trims and lower-cases before deciding', vMode('  StepWise ') === 'stepwise' && vMode('CLI') === 'cli');
+    for (const bad of ['', 'true', '1', 'step', 'owner', 'stepwise;', null, undefined, true]) {
+      ok(`rejects ${JSON.stringify(bad)}`, throws(() => vMode(bad)));
+    }
+  }
+  const mapped = (v) => PoolSettings.applyToConfig({}, { pool_info: {}, payout: { tor_send_mode: v } }).tor_send_mode;
+  ok("applyToConfig maps 'stepwise' → config.tor_send_mode 'stepwise'", mapped('stepwise') === 'stepwise', String(mapped('stepwise')));
+  ok("applyToConfig maps 'cli' → 'cli'", mapped('cli') === 'cli', String(mapped('cli')));
+  ok("applyToConfig maps a garbage stored value → 'cli' (fail safe, never stepwise)",
+    mapped('true') === 'cli' && mapped('Stepwise-ish') === 'cli', `${mapped('true')}/${mapped('Stepwise-ish')}`);
+  ok('applyToConfig leaves config alone when the key is absent',
+    PoolSettings.applyToConfig({ tor_send_mode: 'cli' }, { pool_info: {}, payout: {} }).tor_send_mode === 'cli');
+  ok('a Payout save with tor_send_mode=stepwise persists and reads back',
+    ps.updateSection('payout', { tor_send_mode: 'stepwise' }, 7).tor_send_mode === 'stepwise' &&
+    ps.getSection('payout').tor_send_mode === 'stepwise');
+  ok('a Payout save with an unknown mode is refused', throws(() => ps.updateSection('payout', { tor_send_mode: 'fast' }, 7)));
+  const cfgSrc = fs.readFileSync(path.join(APP, 'lib/config.js'), 'utf8');
+  ok("config.js defaults tor_send_mode to 'cli'", /tor_send_mode:\s*config\.tor_send_mode \|\| 'cli'/.test(cfgSrc));
+  ok('config.js defaults the stepwise timeouts to 30000 / 60000',
+    /tor_send_connect_timeout_ms:\s*config\.tor_send_connect_timeout_ms \|\| 30000\b/.test(cfgSrc) &&
+    /tor_send_receive_timeout_ms:\s*config\.tor_send_receive_timeout_ms \|\| 60000\b/.test(cfgSrc));
 
   console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed\n`);
   cleanup();

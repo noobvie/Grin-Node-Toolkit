@@ -546,31 +546,50 @@ body {
 }
 
 /* ── fuel-rod block maturity ────────────────────────────────────────────── */
-.rods { display: flex; gap: 18px; align-items: flex-end; overflow-x: auto; padding: 6px 2px 2px; scrollbar-width: thin; }
-.rods .rods-empty { color: var(--text-mute); font-family: var(--mono); font-size: 12px; letter-spacing: .1em; padding: 30px 0; }
-.rod { display: flex; flex-direction: column; align-items: center; gap: 7px; flex: 0 0 auto; }
+/* A fixed 10-column grid, never a scroller: the columns share the panel width (5 × 2 on a
+   phone, below). Every label on a rod is capped at ~6 mono characters to fit that width —
+   which is why reactor-dashboard.js prints only the height's last 4 digits ("…4,399"). */
+.rods { display: grid; grid-template-columns: repeat(10, minmax(0, 1fr)); gap: 14px 6px; align-items: end; padding: 6px 0 2px; }
+.rods .rods-empty { grid-column: 1 / -1; color: var(--text-mute); font-family: var(--mono); font-size: 12px; letter-spacing: .1em; padding: 30px 0; }
+/* --mat (0–100%, set per rod by JS) = confirmations / 1440. --rod-c walks the theme's own
+   --warn (yellow) to --accent (green); oklab keeps the midpoint from going muddy olive. */
+.rod {
+  --mat: 0%;
+  --rod-c: color-mix(in oklab, var(--accent) var(--mat), var(--warn));
+  display: flex; flex-direction: column; align-items: center; gap: 6px; min-width: 0; text-align: center;
+}
 .rod .tube {
-  width: 26px; height: 120px; border-radius: 6px; position: relative; overflow: hidden;
+  width: min(26px, 100%); height: 120px; border-radius: 6px; position: relative; overflow: hidden;
   background: var(--rx-inset); border: 1px solid var(--rx-line);
   box-shadow: inset 0 2px 10px var(--rx-shade);
 }
+/* Every rod is FULL. An immature rod is yellow with green rising from the bottom, blending
+   over the 12% just below --mat (so 0% = pure yellow, 50% = green to 38%, blend to 50%);
+   a mature rod is solid green, an orphan solid red. A height-proportional fill made a busy
+   hour's rods all ~3% tall and read as nothing happening. */
 .rod .fill {
-  position: absolute; left: 2px; right: 2px; bottom: 2px; border-radius: 4px; min-height: 3px;
-  background: linear-gradient(180deg, var(--warn), color-mix(in srgb, var(--warn) 55%, var(--bg)));
-  box-shadow: 0 0 10px color-mix(in srgb, var(--warn) 35%, transparent);
+  position: absolute; inset: 2px; border-radius: 4px;
+  background: linear-gradient(0deg,
+    var(--accent) calc(var(--mat) - 12%),
+    var(--warn) var(--mat));
+  box-shadow: 0 0 10px color-mix(in srgb, var(--rod-c) 35%, transparent);
 }
 .rod.done .fill {
-  background: linear-gradient(180deg, var(--accent), color-mix(in srgb, var(--accent) 45%, var(--bg)));
+  background: var(--accent);
   box-shadow: 0 0 10px var(--glow);
 }
 .rod.orphan .fill {
-  background: linear-gradient(180deg, var(--danger), color-mix(in srgb, var(--danger) 55%, var(--bg)));
+  background: var(--danger);
   box-shadow: 0 0 10px color-mix(in srgb, var(--danger) 35%, transparent);
 }
-.rod .h { font-family: var(--mono); font-size: 10.5px; color: var(--text); letter-spacing: .03em; font-variant-numeric: tabular-nums; }
-.rod .m { font-family: var(--mono); font-size: 9.5px; color: var(--text-mute); font-variant-numeric: tabular-nums; }
+.rod .h { font-family: var(--mono); font-size: 10.5px; color: var(--text); font-variant-numeric: tabular-nums; white-space: nowrap; max-width: 100%; }
+.rod .m { font-family: var(--mono); font-size: 9.5px; color: var(--text-mute); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.rod .m.pct { color: var(--rod-c); }
 .rod.done .m { color: var(--ok); }
 .rod.orphan .m { color: var(--danger); }
+@media (max-width: 520px) {
+  .rods { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+}
 
 /* ── payout teletype ────────────────────────────────────────────────────── */
 .tty {

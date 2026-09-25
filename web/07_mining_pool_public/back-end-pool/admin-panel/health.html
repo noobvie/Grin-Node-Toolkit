@@ -127,11 +127,15 @@ async function loadHealth() {
       const svc    = d.services && d.services[svcDef.key] ? d.services[svcDef.key] : {};
       const status = svc.status || 'unknown';
       const cls    = statusClass(status);
+      // 'critical' is up but wrong (e.g. a payout marked paid that the wallet cancelled) — red
+      // like Down, but it must not read as an outage.
       const badge  = cls === 'ok'
         ? '<span class="badge badge-ok">OK</span>'
         : cls === 'warn'
           ? '<span class="badge badge-warn">Degraded</span>'
-          : '<span class="badge badge-error">Down</span>';
+          : String(status).toLowerCase() === 'critical'
+            ? '<span class="badge badge-error">Critical</span>'
+            : '<span class="badge badge-error">Down</span>';
       const detail = renderServiceDetail(svc);
       return `
         <div class="health-card ${cls}">

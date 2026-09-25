@@ -7,11 +7,15 @@
 //           publishes one. So it is only a control while no public LIST emits a full address —
 //           the invariant asserted below across all seven feeds that used to. The four
 //           independent copies of the mask must also stay in agreement.
-//   §J11-2  Neither /api/pool/payments (pool-wide) nor /api/account/:addr/withdrawals
-//           (per-address, JSON + CSV) may publish kernel_excess. The kernel names a specific
-//           transaction in the Grin chain forever; published beside an address it is a public
-//           address-to-chain index. It now comes from an ownership-gated POST, on the
-//           `withdraw` bucket — never `public`, because verifyOwnerProof runs scrypt (§F2).
+//   §J11-2  /api/account/:addr/withdrawals (per-address, all-time, JSON + CSV) may not publish
+//           kernel_excess. The kernel names a specific transaction in the Grin chain forever;
+//           published beside a FULL address it is a public address-to-chain index. It comes
+//           from an ownership-gated POST, on the `withdraw` bucket — never `public`, because
+//           verifyOwnerProof runs scrypt (§F2).
+//           The pool-wide /api/pool/payments feed DOES publish it since 2026-09-25 (operator
+//           decision: payment-history.html P-05 Tx ID column). What is pinned there instead is
+//           the two conditions that decision rests on — the address beside it is masked (§J11-1
+//           list below) and only a shape-checked 66-hex value is emitted.
 //   §J11-3  account-settings.html must be noindex, and no page may emit an
 //           /account-settings.html?addr= link — that link was both the full-address source
 //           that inverted the mask and the crawl path into third-party indexes.
@@ -175,19 +179,21 @@ const linkers = PUBLIC_PAGES.filter((n) => {
 ok('§J11-1 no public page builds an /account-settings.html?addr= link', linkers.length === 0,
   linkers.join(', '));
 
-console.log('\n[4] §J11-2 — the on-chain kernel needs an ownership proof\n');
+console.log('\n[4] §J11-2 — the per-address kernel needs an ownership proof; the pool-wide one is shape-gated\n');
 
 const paymentsRoute = routeSrc('get', '/api/pool/payments');
 ok('§J11-2 the /api/pool/payments route exists', paymentsRoute.length > 0);
-// The one permitted mention is the yes/no coercion behind `has_kernel_proof` ("seen mined").
-// Strip exactly that expression first; any OTHER mention of kernel_excess in the SELECT — a bare
-// column, an alias, a substr() — is still the value and still fails.
-const KERNEL_BOOL_SQL = /\(kernel_excess IS NOT NULL AND kernel_excess != ''\) AS has_kernel_proof/g;
-ok('§J11-2 /api/pool/payments does NOT select kernel_excess',
-  !/SELECT[\s\S]*kernel_excess[\s\S]*FROM withdrawals/i.test(paymentsRoute.replace(KERNEL_BOOL_SQL, '')),
-  'a pool-wide address+kernel pair is a public chain-analysis index');
-ok('§J11-2 /api/pool/payments sends has_kernel_proof as a boolean only',
-  /has_kernel_proof: !!p\.has_kernel_proof/.test(paymentsRoute));
+// Published by operator decision (2026-09-25). The SELECT reads the raw column, so the response
+// must overwrite it: `...p` alone would ship whatever the wallet log or a manual record stored.
+ok('§J11-2 /api/pool/payments overwrites kernel_excess with the shape-checked value',
+  /kernel_excess: kernel\b/.test(paymentsRoute) &&
+  /KERNEL_EXCESS_RE\.test\(p\.kernel_excess\)/.test(paymentsRoute));
+const kRe = (indexSrc.match(/const KERNEL_EXCESS_RE = (\/[^\n]+\/[a-z]*);/) || [])[1];
+ok('§J11-2 KERNEL_EXCESS_RE is an anchored 66-hex pattern', kRe === '/^[0-9a-f]{66}$/i', `got ${kRe}`);
+ok('§J11-2 /api/pool/payments still masks the address it pairs the kernel with',
+  /grin_address: maskAddr\(p\.grin_address\)/.test(paymentsRoute));
+ok('§J11-2 /api/pool/payments sends has_kernel_proof as a boolean',
+  /has_kernel_proof: !!p\.kernel_excess/.test(paymentsRoute));
 
 const withdrawalsRoute = routeSrc('get', '/api/account/:addr/withdrawals');
 // Testing that `has_kernel_proof` is PRESENT is not the same as testing that the kernel is
@@ -547,6 +553,32 @@ const SECRET_IDENT = /^(rawPass|pass|rawIp|ip|value|salt|v2|hash|row\.hash|e\.va
 ok('§17.4 owner-proof.js interpolates no proof value, digest or salt into a log line',
   loggedExprs.length > 0 && loggedExprs.every((x) => !SECRET_IDENT.test(x)),
   `logged: ${loggedExprs.join(', ')}`);
+
+// ─── F5 (Part 6): the step-by-step Tor send's two columns ─────────────────────────────────────
+// withdrawals.tor_final_slate holds a complete signed transaction (kept only so the stale sweep can
+// post it again); tor_step is operator state. Neither may reach any non-admin route, and the two
+// admin routes that SELECT * FROM withdrawals and serve the rows must drop the slate.
+console.log('\n[F5] stepwise columns stay off every public route');
+{
+  const routes = [...indexSrc.matchAll(/\bapp\.(get|post|put|delete|patch)\('([^']+)'/g)].map((m) => [m[1], m[2]]);
+  const publicRoutes = routes.filter(([, p]) => !p.startsWith('/api/admin'));
+  const leaks = publicRoutes.filter(([v, p]) => /tor_final_slate|tor_step/.test(routeSrc(v, p)));
+  ok('no non-admin route mentions tor_final_slate or tor_step', publicRoutes.length > 20 && leaks.length === 0,
+    leaks.map(([v, p]) => `${v} ${p}`).join(', '));
+  const starSelect = publicRoutes.filter(([v, p]) =>
+    /SELECT\s+(?:w\.)?\*\s+FROM\s+withdrawals/i.test(routeSrc(v, p).replace(/\/\/[^\n]*/g, '')));
+  ok('no non-admin route does SELECT * FROM withdrawals (the columns would ride along)', starSelect.length === 0,
+    starSelect.map(([v, p]) => `${v} ${p}`).join(', '));
+  const adminList = routeSrc('get', '/api/admin/withdrawals');
+  ok('GET /api/admin/withdrawals drops tor_final_slate from every row', /delete rest\.tor_final_slate;/.test(adminList));
+  const adminMiner = routeSrc('get', '/api/admin/miners/:addr');
+  ok('GET /api/admin/miners/:addr drops tor_final_slate from pending_withdrawals',
+    /\.map\(\(\{ tor_final_slate, \.\.\.rest \}\) => rest\)/.test(adminMiner));
+  ok('every admin route that serves SELECT * FROM withdrawals rows is one of those two',
+    routes.filter(([v, p]) => p.startsWith('/api/admin') &&
+      /SELECT \* FROM withdrawals WHERE (status|grin_address)/.test(routeSrc(v, p)))
+      .every(([v, p]) => (v === 'get' && (p === '/api/admin/withdrawals' || p === '/api/admin/miners/:addr'))));
+}
 
 console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed\n`);
 process.exit(fail === 0 ? 0 : 1);

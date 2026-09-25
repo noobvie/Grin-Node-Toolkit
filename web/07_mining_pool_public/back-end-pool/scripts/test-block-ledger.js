@@ -188,6 +188,10 @@ const detector = new OrphanDetector(config, node);
   ok('§J5-4 confirmed_blocks counts paid + confirmed', stats.confirmed_blocks === 3, JSON.stringify(stats));
   ok('§J5-4 confirmed_reward counts paid + confirmed', Math.abs(stats.confirmed_reward - 180) < 1e-9, JSON.stringify(stats));
   ok('§J5-4 immature_blocks excludes paid AND orphaned', stats.immature_blocks === 1, JSON.stringify(stats));
+  ok('orphans_24h counts only orphans found in the last 24h', stats.orphans_24h === 1, JSON.stringify(stats));
+  db.prepare("UPDATE blocks SET found_at = unixepoch() - 90000 WHERE height = 605").run();
+  ok('orphans_24h drops an orphan found >24h ago', bm.getPoolStats().orphans_24h === 0);
+  db.prepare("UPDATE blocks SET found_at = unixepoch() WHERE height = 605").run();
   const hist = bm.getBlocksHistory('month');
   ok('§J5-4 the history doughnut puts paid under confirmed',
      hist.status.confirmed === 3 && hist.status.immature === 1 && hist.status.orphaned === 1,

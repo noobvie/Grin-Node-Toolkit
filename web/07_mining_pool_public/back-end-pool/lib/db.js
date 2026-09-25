@@ -379,7 +379,11 @@ function migrateWithdrawals() {
       payment_proof: 'TEXT DEFAULT NULL',
       // Why the row is parked in retry_scheduled (see CREATE TABLE). NULL on legacy rows = cause
       // unknown, which the page renders with its generic retry wording, exactly as before.
-      retry_reason: 'TEXT DEFAULT NULL'
+      retry_reason: 'TEXT DEFAULT NULL',
+      // Step-by-step Tor send progress (see CREATE TABLE). NULL on every legacy row, and no
+      // backfill: they are read only under a stepwise claim, which a legacy row never has.
+      tor_step: 'TEXT DEFAULT NULL',
+      tor_final_slate: 'TEXT DEFAULT NULL'
     };
     for (const [name, def] of Object.entries(additions)) {
       if (!have.has(name)) {
@@ -743,7 +747,16 @@ function createSchema() {
       -- when the POOL wallet could not cover the send (outputs tied up in payouts still settling),
       -- NULL for everything else — overwhelmingly the miner's own listener not answering over Tor.
       -- The account page words the two differently; a NULL is never shown as "pool busy".
-      retry_reason TEXT DEFAULT NULL
+      retry_reason TEXT DEFAULT NULL,
+      -- Step-by-step Tor send (tor_send_mode = 'stepwise', design §8.1): the step the current
+      -- attempt last reached — claimed | initiated | locked | delivering | finalizing | posting.
+      -- Read ONLY while the row's newest claim event carries the 'stepwise:' marker, so a value
+      -- left behind by an earlier stepwise attempt can never steer a CLI attempt.
+      tor_step TEXT DEFAULT NULL,
+      -- The finalized S3 slate (JSON), stored in the same write that moves tor_step to 'posting'
+      -- so the stale sweep can post the IDENTICAL tx again. Cleared once the row confirms. Holds
+      -- a complete transaction: admin routes strip it and no public route selects it.
+      tor_final_slate TEXT DEFAULT NULL
     )`,
 
     `CREATE INDEX IF NOT EXISTS idx_withdrawal_address ON withdrawals(grin_address, status)`,

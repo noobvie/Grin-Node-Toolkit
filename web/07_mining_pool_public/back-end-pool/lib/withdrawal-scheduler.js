@@ -31,11 +31,42 @@ const SEND_DEFER_S = 900;
 // parking is still the only safe state — but it stops being quiet about it.
 const MAX_SEND_DEFERRALS = 8;
 
+// A Tor send refused because the POOL wallet is short (grin-wallet NotEnoughFunds — usually
+// outputs tied up by other payouts still settling) re-tries after SHORTFALL_RETRY_S and does NOT
+// consume a rung of the miner-offline ladder (see scheduleRetry). Bounded: after
+// MAX_SHORTFALL_RETRIES (~a day) a shortfall takes the ladder like any failure, so a pool that is
+// simply underfunded cannot hold a miner's balance forever — the last-rung guard decides.
+const SHORTFALL_RETRY_S = 3600;
+const MAX_SHORTFALL_RETRIES = 24;
+
+// Step-by-step Tor send (design §8.1): the POOL's own tor being down says nothing about the
+// miner, so it re-tries after TOR_DOWN_RETRY_S without consuming a rung — the F3 pattern, with
+// its own 'tor-down:' event-note counter and cap. After MAX_TOR_DOWN_RETRIES it takes the ladder.
+const TOR_DOWN_RETRY_S = 900;
+const MAX_TOR_DOWN_RETRIES = 24;
+// A stepwise row whose post_tx failed is COMMITTED: the stale sweep posts the identical stored
+// tx again, at most once per STEPWISE_REPOST_EVERY_S and MAX_STEPWISE_REPOSTS times in all, keyed
+// on 'stepwise: repost' event notes. Past the cap it stays parked behind a critical alert.
+const STEPWISE_REPOST_EVERY_S = 300;
+const MAX_STEPWISE_REPOSTS = 24;
+
 // How long a 'tor_sending' claim may stand before the sweeper resolves it (audit §J4-3). The
 // send itself is bounded by wallet_send_timeout_ms (120 s default) and is followed by two more
 // wallet round-trips before anything is written back, so this must clear all three with room —
 // resolved per-instance in the constructor against the configured timeout, never a bare literal.
 const TOR_SENDING_STALE_FLOOR_S = 600;
+
+// "Marked paid but not mined" watchdog (F2, see _watchUnmined). A payout is 'confirmed' when the
+// send COMMAND succeeds; a Grin tx mines in minutes, so one still without a kernel an hour later
+// is overdue — usually a node restart that dropped its mempool. Deliberately not a setting.
+const UNMINED_ALERT_S = 3600;
+// The one automatic remedy — re-broadcasting the identical stored tx — runs at most once per row
+// per REPOST_EVERY_S, for at most REPOST_MAX_PER_TICK rows per tick (each is a CLI round-trip that
+// holds the scheduler loop), and stops for good after MAX_REPOSTS: a tx that a day of hourly
+// reposts has not mined is not a dropped mempool, and the alert already has the operator's eye.
+const REPOST_EVERY_S = 3600;
+const REPOST_MAX_PER_TICK = 3;
+const MAX_REPOSTS = 24;
 
 // The pseudo-address the flat withdrawal fee is credited to — the SAME bucket the block-reward
 // pool fee lands in, so both show up as one fee-income line on the transparency page.
@@ -112,6 +143,24 @@ class WithdrawalScheduler {
     // guard reject every withdrawal, which looks exactly like a stuck payout queue.
     this.MAX_PENDING_WITHDRAWALS = Math.max(1, parseInt(config.max_pending_withdrawals, 10) || 100);
     this.MAX_USER_PENDING        = Math.max(1, parseInt(config.max_user_pending, 10) || 10);
+    // How a Tor payout is sent (payout.tor_send_mode, design §8.1.6): 'cli' (sendWithdrawal, one
+    // `grin-wallet send -d`) or 'stepwise' (sendWithdrawalStepwise, driven through the Owner
+    // API). Fixed for the life of the process. Stepwise needs the Owner-API wallet; asking for it
+    // without one runs the CLI rail, loudly. Rows already in tor_sending are resolved by how
+    // THEIR attempt was made (the claim-event marker), never by this field.
+    this.torSendMode = 'cli';
+    if (String(config.tor_send_mode || '').trim().toLowerCase() === 'stepwise') {
+      if (this.wallet) this.torSendMode = 'stepwise';
+      else {
+        console.error(
+          `[tor-stepwise] tor_send_mode is 'stepwise' but no Owner-API wallet is configured — ` +
+          `running the CLI Tor rail instead`
+        );
+      }
+    }
+    // Ids of stepwise attempts running in THIS process. The stale sweep never touches one of
+    // them: an attempt can take ~4 min at the worst-case timeouts, and the sweep must not race it.
+    this._liveStepwise = new Set();
   }
 
   start() {
@@ -144,8 +193,10 @@ class WithdrawalScheduler {
           await this.processTorChecks();
           await this.processSlatepackExpiry();
         }
-        // Read-only: attach on-chain kernel proofs to confirmed payouts. Never moves funds, so
-        // it runs regardless of the freeze state. Self-throttled + no-op when nothing's pending.
+        // Read-only: attach on-chain kernel proofs to confirmed payouts, and in the same wallet
+        // read flag the ones marked paid but not mined (F2). Never moves funds, so it runs
+        // regardless of the freeze state — only its repost step checks the freeze itself.
+        // Self-throttled + no-op when nothing's pending.
         await this.backfillKernelProofs();
         await this.backfillPaymentProofs();
       } catch (err) {
@@ -339,10 +390,55 @@ class WithdrawalScheduler {
     // of the send, so it is the authoritative reachability check — we attempt the send directly
     // rather than pre-probing. sendWithdrawal handles the outcome: success → confirmed; failure
     // (recipient offline, etc.) → scheduleRetry, which markFailed()s once retries are exhausted.
+    // tor_send_mode picks the rail (constructor); with 'cli' this is exactly the shipped path.
+    //
+    // The loop checks the freeze once per tick, but a tick runs up to 10 retries and 5 checks back
+    // to back, each a send of up to wallet_send_timeout_ms, and AlertMonitor freezes on its own
+    // timer. So the freeze is re-read per row: one that lands mid-batch stops the NEXT send. The
+    // row stays in tor_checking (still pending, balance still locked) and goes out after a resume.
+    // The stepwise rail re-reads it at its own claim (and again before delivery and before post).
     try {
-      await this.sendWithdrawal(withdrawal.id);
+      if (this.torSendMode === 'stepwise') await this.sendWithdrawalStepwise(withdrawal.id);
+      else if (!this.isFrozen() && this._dropStepwiseSlate(withdrawal.id)) await this.sendWithdrawal(withdrawal.id);
     } catch (err) {
       console.error(`Error sending withdrawal ${withdrawal.id}: ${err.message}`);
+    }
+  }
+
+  // A CLI attempt must not inherit a STEPWISE attempt's slate id (tor_send_mode switched back to
+  // 'cli' while the row was on the ladder). The CLI rail reads a non-null slate_id as THIS payout's
+  // send: its double-send guard, markFailed and the stale sweep look up that one slate exactly, so
+  // a cancelled stepwise slate reads 'absent' and the row is sent again or refunded even when an
+  // earlier CLI attempt landed — and _captureTorSlateId never overwrites it, so the kernel backfill
+  // and the watchdog keep watching a cancelled slate ("NOT paid", critical). Before F5 a CLI row had
+  // no slate_id until it settled; clearing restores exactly that. Only a slate the row's own journal
+  // names as its stepwise slate is cleared, and that journal line stays for _stepwisePriorSlates.
+  // false = could not clear, so the caller must not send on the stale id (next tick tries again).
+  _dropStepwiseSlate(withdrawalId) {
+    try {
+      const w = this.db.prepare(
+        "SELECT slate_id FROM withdrawals WHERE id = ? AND status = 'tor_checking'"
+      ).get(withdrawalId);
+      if (!w || !w.slate_id) return true;
+      const sid = String(w.slate_id);
+      const ours = this.db.prepare(
+        "SELECT 1 FROM withdrawal_events WHERE withdrawal_id = ? AND note LIKE 'slate: ' || ? || ' created (stepwise)%' LIMIT 1"
+      ).get(withdrawalId, sid);
+      if (!ours) return true;
+      this.db.transaction(() => {
+        const r = this.db.prepare(
+          "UPDATE withdrawals SET slate_id = NULL WHERE id = ? AND status = 'tor_checking' AND slate_id = ?"
+        ).run(withdrawalId, w.slate_id);
+        if (r.changes !== 1) return;
+        this.db.prepare(`
+          INSERT INTO withdrawal_events (withdrawal_id, from_status, to_status, triggered_by, note)
+          VALUES (?, 'tor_checking', 'tor_checking', 'scheduler', ?)
+        `).run(withdrawalId, `cli: cleared stepwise slate ${sid} from slate_id before a CLI attempt (its journal line stays)`);
+      })();
+      return true;
+    } catch (e) {
+      console.error(`[tor] withdrawal ${withdrawalId}: could not clear its stepwise slate id (${e.message}) — not sending this tick`);
+      return false;
     }
   }
 
@@ -484,6 +580,7 @@ class WithdrawalScheduler {
         await this.markConfirmed(withdrawalId, 'Successfully sent');
       } else {
         console.error(`Send failed for withdrawal ${withdrawalId}: ${sendResult.error}`);
+        if (sendResult.torFallback) await this._releaseTorFallback(withdrawalId, sendResult.slateId);
         await this.scheduleRetry(withdrawalId, this._retryReasonFor(withdrawal, netSend, sendResult.error));
       }
     } catch (err) {
@@ -491,6 +588,415 @@ class WithdrawalScheduler {
       // `withdrawal` / `netSend` are scoped to the try block, so only the id is known here.
       await this.scheduleRetry(withdrawalId, this._retryReasonFor({ id: withdrawalId, method: 'tor' }, null, err.message));
     }
+  }
+
+  // ─── Step-by-step Tor send (F5, design §8.1) — tor_send_mode = 'stepwise' ────────────────
+  // The same payment the CLI's `send -d` makes, driven by the pool one step at a time through the
+  // Owner API, so the slate id is in OUR database before any coin is locked and before any byte
+  // leaves the box. Every recovery is then an exact slate-id lookup — no amount/time matching.
+  //
+  //   step (tor_step)      durable record written BEFORE it           the step
+  //   0  claimed           claim tor_checking→tor_sending, 'stepwise: claim'
+  //   1                                                              init_send_tx (proof → miner)
+  //   2  initiated         slate_id + fee + 'slate: <uuid> created'   — (one guarded write)
+  //   3  locked                                                      tx_lock_outputs
+  //   4  delivering        freeze check                              check_version → receive_tx
+  //   5  finalizing                                                  finalize_tx (never posts)
+  //   6  posting           freeze check; tor_final_slate = S3        — (one guarded write)
+  //   7                                                              post_tx → confirmed
+  //
+  // THE SAFETY LINE (§8.1.2): nothing reaches the chain except through the pool's own post_tx.
+  // So every step before 6 can be CANCELLED safely, and from step 6 on the tx is COMMITTED — the
+  // only action allowed is to post the identical tx again, never cancel, never rebuild.
+  //
+  // Two rules hold on every path below:
+  //   · a row never leaves tor_sending with a live slate: cancel first, and only after the cancel
+  //     succeeded is the row re-queued or put on the ladder (_stepwiseCancelThen);
+  //   · every tor_step move is guarded on (status='tor_sending', tor_step=<expected>); a lost
+  //     guard stops the attempt and nothing after it assumes anything.
+  // A process that dies mid-attempt leaves tor_step behind; reclaimStaleTorSending's stepwise
+  // branch (_reclaimStaleStepwise) finishes the job by that step.
+  async sendWithdrawalStepwise(withdrawalId) {
+    // Freeze checked at claim (§8.1.7), on top of the scheduler loop's own gate.
+    if (this.isFrozen()) return;
+    const w = this.db.prepare('SELECT * FROM withdrawals WHERE id = ?').get(withdrawalId);
+    if (!w) return;
+
+    // Read BEFORE this attempt's own claim event, exactly as sendWithdrawal does (§J4-2).
+    const priorAttempts = this.db.prepare(
+      "SELECT COUNT(*) AS c FROM withdrawal_events WHERE withdrawal_id = ? AND to_status = 'tor_sending'"
+    ).get(withdrawalId).c;
+
+    // Step 0 — the claim and its 'stepwise:' marker are ONE transaction: the marker is how the
+    // stale sweep knows to resolve this attempt by tor_step (§8.1.4).
+    const claimed = this.db.transaction(() => {
+      const r = this.db.prepare(
+        `UPDATE withdrawals SET status = 'tor_sending', tor_step = 'claimed', tor_final_slate = NULL
+          WHERE id = ? AND status = 'tor_checking'`
+      ).run(withdrawalId);
+      if (r.changes !== 1) return false;
+      this._stepwiseEvent(withdrawalId, 'stepwise: claim', 'tor_checking');
+      return true;
+    })();
+    if (!claimed) return;
+    console.log(`[tor-stepwise] withdrawal ${withdrawalId}: step claimed`);
+
+    this._liveStepwise.add(Number(withdrawalId));
+    try {
+      await this._stepwiseAttempt(w, priorAttempts);
+    } catch (err) {
+      console.error(`⚠️  [tor-stepwise] withdrawal ${withdrawalId}: attempt threw (${err.message})`);
+      const now = this.db.prepare('SELECT status, tor_step FROM withdrawals WHERE id = ?').get(withdrawalId);
+      // Still at 'claimed': no slate was created, nothing is locked — an ordinary counted retry.
+      // Any later step holds a slate, so the row stays in tor_sending for the stale sweep.
+      if (now && now.status === 'tor_sending' && now.tor_step === 'claimed') {
+        await this.scheduleRetry(withdrawalId, null);
+      }
+    } finally {
+      this._liveStepwise.delete(Number(withdrawalId));
+    }
+  }
+
+  async _stepwiseAttempt(w, priorAttempts) {
+    const id = w.id;
+    const netSend = this._netSend(w.amount, w.fee_charged || 0);
+
+    // §8.1.5 — never start a new slate while an earlier one might still land.
+    if (priorAttempts > 0 || w.slate_id) {
+      if (!(await this._stepwiseReattemptGuard(w, netSend))) return;
+    }
+
+    // Steps 1–3 under the wallet's send lock: no other rail may select coins between our init
+    // and our lock (§8.1.1 — lock_output does not check for an existing lock).
+    let slate = null;
+    const r = await this._withSendLock(async () => {
+      try {
+        slate = await this.wallet.initSendTx(netSend, { paymentProofRecipient: w.grin_address });
+      } catch (err) {
+        return { initError: err };
+      }
+      if (!slate || !slate.id) return { initError: new Error('init_send_tx returned no slate id') };
+      const sid = String(slate.id);
+
+      // Step 2 — persist the slate id BEFORE the lock and before any network I/O. init adds no
+      // lock and no tx-log entry, so a crash before this write leaves nothing to recover.
+      const persisted = this.db.transaction(() => {
+        const u = this.db.prepare(
+          `UPDATE withdrawals SET slate_id = ?, fee = COALESCE(?, fee), tor_step = 'initiated'
+            WHERE id = ? AND status = 'tor_sending' AND tor_step = 'claimed'`
+        ).run(sid, this._slateFeeGrin(slate), id);
+        if (u.changes !== 1) return false;
+        this._stepwiseEvent(id, `slate: ${sid} created (stepwise)`);
+        return true;
+      })();
+      if (!persisted) return { lost: 'claimed → initiated' };
+      console.log(`[tor-stepwise] withdrawal ${id}: step initiated — slate ${sid} saved, locking outputs`);
+
+      // Step 3 — lock. TxSent entry + output locks in one wallet batch: both or neither.
+      try {
+        await this.wallet.txLockOutputs(slate);
+      } catch (err) {
+        return { lockError: err };
+      }
+      if (!this._stepMove(id, 'initiated', 'locked')) return { lost: 'initiated → locked' };
+      return { ok: true };
+    });
+
+    if (r.initError) {
+      // Nothing was locked. NotEnoughFunds → the F3 shortfall path (uncounted); anything else
+      // is a counted retry.
+      console.error(`[tor-stepwise] withdrawal ${id}: init_send_tx failed — ${r.initError.message}`);
+      await this.scheduleRetry(id, this._retryReasonFor(w, netSend, r.initError.message));
+      return;
+    }
+    if (r.lost) {
+      console.error(`⚠️  [tor-stepwise] withdrawal ${id}: the row moved during ${r.lost} — attempt stopped`);
+      return;
+    }
+    const sid = String(slate.id);
+    if (r.lockError) {
+      await this._stepwiseCancelThen(id, sid, { retry: null }, `tx_lock_outputs failed: ${r.lockError.message}`);
+      return;
+    }
+
+    // Step 4 — deliver over Tor. Freeze first: a frozen pool sends nothing out.
+    if (this.isFrozen()) {
+      await this._stepwiseCancelThen(id, sid, { requeue: true }, 'payouts frozen before delivery');
+      return;
+    }
+    if (!this._stepMove(id, 'locked', 'delivering')) return;
+    let d;
+    try {
+      d = await this.walletTor.deliverSlate(w.grin_address, slate, { attemptTag: `${id}-${Date.now().toString(36)}` });
+    } catch (err) {
+      // deliverSlate never throws by contract; if it does, assume the worst about the wire.
+      d = { ok: false, ourSide: false, requestWritten: true, reason: 'deliver_threw', detail: err.message };
+    }
+    if (!d || !d.ok) {
+      const why = `delivery failed (${(d && d.reason) || 'unknown'}` +
+        `${d && d.requestWritten ? ', after receive_tx was sent' : ''}): ${(d && d.detail) || ''}`;
+      console.warn(`[tor-stepwise] withdrawal ${id}: ${why}`);
+      // Our own tor down → uncounted; the miner not answering → a counted rung.
+      await this._stepwiseCancelThen(id, sid, { retry: d && d.ourSide ? 'pool_tor_unavailable' : null }, why);
+      return;
+    }
+
+    // Step 5 — finalize. The Owner finalize never posts, so a failure here broadcast nothing.
+    if (!this._stepMove(id, 'delivering', 'finalizing')) return;
+    let finalized = null;
+    try {
+      finalized = await this.wallet.finalizeTx(d.slate);
+    } catch (err) {
+      await this._stepwiseCancelThen(id, sid, { retry: null }, `finalize_tx failed: ${err.message}`);
+      return;
+    }
+    if (!finalized || typeof finalized !== 'object') {
+      await this._stepwiseCancelThen(id, sid, { retry: null }, 'finalize_tx returned no slate');
+      return;
+    }
+
+    // Step 6 — the commit point. Freeze first; then S3 and 'posting' in ONE write, so the sweep
+    // always has the exact tx to post again.
+    if (this.isFrozen()) {
+      await this._stepwiseCancelThen(id, sid, { requeue: true }, 'payouts frozen before post');
+      return;
+    }
+    if (!this._stepMove(id, 'finalizing', 'posting', {
+      finalSlate: JSON.stringify(finalized),
+      note: `stepwise: posting slate ${sid} — committed, from here it is only ever posted again`,
+    })) return;
+
+    // Step 7 — post.
+    try {
+      await this.wallet.postTx(finalized, true);
+    } catch (err) {
+      console.error(
+        `⚠️  [tor-stepwise] withdrawal ${id}: post_tx threw (${err.message}) — the tx is COMMITTED and is ` +
+        `never cancelled; left at 'posting' for the stale sweep to post the same tx again`
+      );
+      return;
+    }
+    if (this._creditConfirm(id, 'tor_sending', 'stepwise: posted')) {
+      this.db.prepare("UPDATE withdrawals SET tor_final_slate = NULL WHERE id = ? AND status = 'confirmed'").run(id);
+      console.log(`[tor-stepwise] withdrawal ${id}: posted — slate ${sid}`);
+    }
+  }
+
+  // Serialise init → lock with every other rail (WalletAPI.withSendLock). A wallet without it
+  // (test doubles) runs fn directly.
+  _withSendLock(fn) {
+    return this.wallet && typeof this.wallet.withSendLock === 'function' ? this.wallet.withSendLock(fn) : fn();
+  }
+
+  // A progress event on a stepwise row. Default from/to tor_sending: only the CLAIM comes from
+  // another status, and _isStepwiseAttempt reads the claim alone.
+  _stepwiseEvent(withdrawalId, note, from = 'tor_sending', to = 'tor_sending') {
+    this.db.prepare(`
+      INSERT INTO withdrawal_events (withdrawal_id, from_status, to_status, triggered_by, note)
+      VALUES (?, ?, ?, 'scheduler', ?)
+    `).run(withdrawalId, from, to, String(note).slice(0, 500));
+  }
+
+  // Guarded tor_step move (+ optional tor_final_slate and journal note, same transaction).
+  _stepMove(withdrawalId, from, to, { finalSlate, note } = {}) {
+    const moved = this.db.transaction(() => {
+      const r = finalSlate !== undefined
+        ? this.db.prepare(
+          `UPDATE withdrawals SET tor_step = ?, tor_final_slate = ?
+            WHERE id = ? AND status = 'tor_sending' AND tor_step = ?`).run(to, finalSlate, withdrawalId, from)
+        : this.db.prepare(
+          `UPDATE withdrawals SET tor_step = ?
+            WHERE id = ? AND status = 'tor_sending' AND tor_step = ?`).run(to, withdrawalId, from);
+      if (r.changes !== 1) return false;
+      if (note) this._stepwiseEvent(withdrawalId, note);
+      return true;
+    })();
+    if (moved) console.log(`[tor-stepwise] withdrawal ${withdrawalId}: step ${to}`);
+    else console.error(`⚠️  [tor-stepwise] withdrawal ${withdrawalId}: lost its step guard (${from} → ${to}) — attempt stopped`);
+    return moved;
+  }
+
+  // Is the row's CURRENT attempt a stepwise one? Its newest CLAIM event (into tor_sending from
+  // another status) carries the 'stepwise:' marker. The CLI claim writes no note. Progress events
+  // (tor_sending → tor_sending) are not claims, so a 'slate: …' note can never hide the marker.
+  _isStepwiseAttempt(withdrawalId) {
+    const row = this.db.prepare(
+      `SELECT note FROM withdrawal_events
+        WHERE withdrawal_id = ? AND to_status = 'tor_sending'
+          AND (from_status IS NULL OR from_status != 'tor_sending')
+        ORDER BY created_at DESC, id DESC LIMIT 1`
+    ).get(withdrawalId);
+    return !!(row && typeof row.note === 'string' && row.note.startsWith('stepwise:'));
+  }
+
+  // Did this row ever have a CLI attempt (a claim without the stepwise marker)?
+  _hasCliAttempt(withdrawalId) {
+    return !!this.db.prepare(
+      `SELECT 1 FROM withdrawal_events
+        WHERE withdrawal_id = ? AND to_status = 'tor_sending'
+          AND (from_status IS NULL OR from_status != 'tor_sending')
+          AND (note IS NULL OR note NOT LIKE 'stepwise:%')
+        LIMIT 1`
+    ).get(withdrawalId);
+  }
+
+  // Cancel the attempt's slate, THEN settle the row per `next`:
+  //   { requeue: true }  → back to tor_checking (not a rung) — freeze, or a crash that was ours
+  //   { retry: reason }  → scheduleRetry(id, reason) — null is a counted rung
+  // The order is the whole point: a row must never reach tor_checking / retry_scheduled while its
+  // slate is alive, because the admin cancel route refunds those two statuses. So a cancel that
+  // fails leaves the row in tor_sending at its step, and the stale sweep tries the cancel again.
+  // TransactionDoesntExist is proof enough only at 'initiated' (the lock never happened).
+  // Never from 'posting': that tx is committed.
+  async _stepwiseCancelThen(withdrawalId, slateId, next, why) {
+    const row = this.db.prepare('SELECT status, tor_step FROM withdrawals WHERE id = ?').get(withdrawalId);
+    if (!row || row.status !== 'tor_sending') {
+      console.warn(`[tor-stepwise] withdrawal ${withdrawalId}: left tor_sending before its cancel — nothing done`);
+      return false;
+    }
+    if (row.tor_step === 'posting') {
+      console.error(`⚠️  [tor-stepwise] withdrawal ${withdrawalId}: refusing to cancel slate ${slateId} — it is committed ('posting')`);
+      return false;
+    }
+    try {
+      await this.wallet.cancelTx(slateId);
+    } catch (err) {
+      const neverLocked = row.tor_step === 'initiated' &&
+        /TransactionDoesntExist|transaction doesn'?t exist/i.test(String(err && err.message));
+      if (!neverLocked) {
+        console.warn(
+          `[tor-stepwise] withdrawal ${withdrawalId}: cancel of slate ${slateId} failed (${err && err.message}) — ` +
+          `left in tor_sending at '${row.tor_step}'; the stale sweep will cancel it before anything else happens`
+        );
+        return false;
+      }
+    }
+    const reason = String(why || '').slice(0, 300);
+    if (next && next.requeue) {
+      const ok = this._stepwiseRequeue(withdrawalId, `stepwise: requeued — slate ${slateId} cancelled (${reason})`);
+      if (ok) console.warn(`[tor-stepwise] withdrawal ${withdrawalId}: slate ${slateId} cancelled, back to tor_checking (${reason})`);
+      return ok;
+    }
+    try { this._stepwiseEvent(withdrawalId, `stepwise: slate ${slateId} cancelled (${reason})`); } catch (_) { /* journal only */ }
+    await this.scheduleRetry(withdrawalId, next ? (next.retry || null) : null);
+    return true;
+  }
+
+  // tor_sending → tor_checking, guarded, with its event. Costs no rung: used only when the
+  // attempt holds no live slate (never created, or proven cancelled).
+  _stepwiseRequeue(withdrawalId, note) {
+    return this.db.transaction(() => {
+      const r = this.db.prepare(
+        "UPDATE withdrawals SET status = 'tor_checking' WHERE id = ? AND status = 'tor_sending'"
+      ).run(withdrawalId);
+      if (r.changes !== 1) return false;
+      this._stepwiseEvent(withdrawalId, note, 'tor_sending', 'tor_checking');
+      return true;
+    })();
+  }
+
+  // §8.1.5 — every slate this row has ever journaled ('slate: <uuid>' notes) plus slate_id, each
+  // looked up EXACTLY in the wallet tx log. { checked, outcome: 'confirmed'|'unconfirmed'|'dead',
+  // tx, journaled }. A confirmed one wins over an unconfirmed one.
+  async _stepwisePriorSlates(w) {
+    const journaled = [];
+    for (const e of this.db.prepare(
+      "SELECT note FROM withdrawal_events WHERE withdrawal_id = ? AND note LIKE 'slate: %' ORDER BY id"
+    ).all(w.id)) {
+      const m = /^slate: ([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b/i.exec(String(e.note));
+      if (m && !journaled.includes(m[1].toLowerCase())) journaled.push(m[1].toLowerCase());
+    }
+    const want = new Set(journaled);
+    if (w.slate_id) want.add(String(w.slate_id).toLowerCase());
+    if (!want.size) return { checked: true, outcome: 'dead', tx: null, journaled };
+    if (!this.wallet || typeof this.wallet.getTransactions !== 'function') {
+      return { checked: false, outcome: 'unknown', tx: null, journaled };
+    }
+    let txs;
+    try { txs = await this.wallet.getTransactions(true); }
+    catch (e) {
+      console.warn(`[tor-stepwise] re-attempt guard: wallet tx log unreadable — ${e.message}`);
+      return { checked: false, outcome: 'unknown', tx: null, journaled };
+    }
+    if (!Array.isArray(txs)) return { checked: false, outcome: 'unknown', tx: null, journaled };
+    let unconfirmed = null;
+    for (const t of txs) {
+      if (!t || !t.tx_slate_id || String(t.tx_type) !== 'TxSent') continue;
+      if (!want.has(String(t.tx_slate_id).toLowerCase())) continue;
+      if (t.confirmed) return { checked: true, outcome: 'confirmed', tx: t, journaled };
+      unconfirmed = unconfirmed || t;
+    }
+    return { checked: true, outcome: unconfirmed ? 'unconfirmed' : 'dead', tx: unconfirmed, journaled };
+  }
+
+  // Before a stepwise RE-attempt creates a new slate. true = go ahead; false = the row was
+  // settled or parked here.
+  async _stepwiseReattemptGuard(w, netSend) {
+    const id = w.id;
+    const prior = await this._stepwisePriorSlates(w);
+    if (!prior.checked) {
+      // Unknown is parked, never guessed (the CLI rail's proceed-loudly exists to keep money
+      // moving through an outage; here init needs the same wallet, so it would fail anyway).
+      this._deferSend(id, null, 'wallet tx log could not be read before a stepwise re-attempt');
+      return false;
+    }
+    if (prior.outcome === 'confirmed') {
+      const sid = String(prior.tx.tx_slate_id);
+      console.warn(`⚠️  [tor-stepwise] withdrawal ${id}: an earlier slate ${sid} is CONFIRMED on chain — confirming, not re-sending`);
+      this.db.prepare('UPDATE withdrawals SET slate_id = ?, fee = COALESCE(?, fee), tor_final_slate = NULL WHERE id = ?')
+        .run(sid, this._txFeeGrin(prior.tx), id);
+      this._creditConfirm(id, 'tor_sending', `recovered: earlier stepwise slate ${sid} confirmed in the wallet tx log`);
+      return false;
+    }
+    if (prior.outcome === 'unconfirmed') {
+      const sid = String(prior.tx.tx_slate_id);
+      console.error(
+        `⚠️  [tor-stepwise] withdrawal ${id}: earlier slate ${sid} is still an UNCONFIRMED TxSent. A stepwise row ` +
+        `only leaves tor_sending with a dead slate, so this breaks the invariant — parking it, not re-sending.`
+      );
+      this._deferSend(id, sid);
+      return false;
+    }
+    // Every stepwise slate is dead. A CLI attempt in the row's history may not have captured its
+    // slate id, so its amount match (_priorSendLanded) runs too, with today's three outcomes. When
+    // slate_id is one of OUR dead slates, hide it so the matcher uses its amount branch.
+    if (this._hasCliAttempt(id)) {
+      const ours = w.slate_id && prior.journaled.includes(String(w.slate_id).toLowerCase());
+      const p = await this._priorSendLanded(ours ? Object.assign({}, w, { slate_id: null }) : w, netSend);
+      if (p.outcome === 'confirmed') {
+        const sid = String(p.tx.tx_slate_id);
+        console.warn(`⚠️  [tor-stepwise] withdrawal ${id}: an earlier CLI attempt (slate ${sid}) is CONFIRMED — confirming, not re-sending`);
+        this.db.prepare('UPDATE withdrawals SET slate_id = ? WHERE id = ?').run(sid, id);
+        await this.recordTorFee(id, netSend);
+        await this.markConfirmed(id, 'recovered: earlier attempt confirmed in the wallet tx log');
+        return false;
+      }
+      if (p.outcome === 'unconfirmed') {
+        this._deferSend(id, p.tx && p.tx.tx_slate_id);
+        return false;
+      }
+      if (!p.checked) {
+        const everDeferred = this.db.prepare(
+          "SELECT 1 FROM withdrawal_events WHERE withdrawal_id = ? AND note LIKE 'deferred:%' LIMIT 1"
+        ).get(id);
+        if (everDeferred) {
+          this._deferSend(id, w.slate_id, 'wallet tx log could not be read after an earlier deferral');
+          return false;
+        }
+        console.error(
+          `⚠️  Withdrawal ${id}: retrying WITHOUT a double-send check — the wallet tx log ` +
+          `could not be read. If this payout later looks duplicated, this is where to look.`
+        );
+      }
+    }
+    return true;
+  }
+
+  // Network fee of a tx-log entry, in GRIN, or null.
+  _txFeeGrin(t) {
+    if (!t) return null;
+    const f = (t.fee && typeof t.fee === 'object') ? Number(t.fee.fee || 0) : Number(t.fee || 0);
+    return Number.isFinite(f) && f > 0 ? parseFloat((f / 1e9).toFixed(9)) : null;
   }
 
   // ─── Double-send guard (audit §E.1) ─────────────────────────────────────────
@@ -554,7 +1060,8 @@ class WithdrawalScheduler {
 
       // `confirmed` is the chain evidence — the same field lib/reconciliation.js:278 and
       // reclaimStaleFinalizing both test on this exact log. kernel_excess is deliberately not
-      // used as a second signal: it can be populated at finalize, i.e. before post_tx.
+      // used as a second signal: grin-wallet writes it at lock and at finalize, i.e. before
+      // post_tx (see backfillKernelProofs).
       const verdict = (tx) =>
         ({ checked: true, outcome: tx ? (tx.confirmed ? 'confirmed' : 'unconfirmed') : 'absent', tx: tx || null });
 
@@ -685,6 +1192,40 @@ class WithdrawalScheduler {
     }
   }
 
+  // A Tor send that fell back to a slatepack (lib/wallet-tor.js classifySendOutput) left a
+  // TxSent entry with the outputs LOCKED and nothing finalized. Left alone, that entry is exactly
+  // what the double-send guard reads as 'unconfirmed' on the retry — so the row would be deferred
+  // over and over until a human cleared it, while the miner waited and the pool's outputs sat
+  // locked. Cancelling it is safe: only the sender finalizes, the pool never did, so no copy of
+  // this transaction can reach the chain. The cancelled entry then reads as 'absent' and the
+  // retry sends a fresh transaction.
+  //
+  // The slate id comes from this send's OWN output (the .S1.slatepack path), never from an
+  // amount match — cancelling someone else's in-flight payout would be the worse bug. No id, or
+  // a failed cancel → leave it; the guard parks the row (defer, no rung) rather than double-pay.
+  async _releaseTorFallback(withdrawalId, slateId) {
+    if (!slateId) {
+      console.error(
+        `⚠️  Withdrawal ${withdrawalId}: Tor send fell back to a slatepack but its slate id could not be ` +
+        `read from the CLI output — the locked outputs stay locked and the retry will be deferred. ` +
+        `Cancel the unfinalized TxSent in the pool wallet by hand.`
+      );
+      return false;
+    }
+    if (!this.wallet || typeof this.wallet.cancelTx !== 'function') return false;
+    try {
+      await this.wallet.cancelTx(slateId);
+      console.warn(`[tor] withdrawal ${withdrawalId}: cancelled fallback slate ${slateId} (never finalized) before retry`);
+      return true;
+    } catch (e) {
+      console.error(
+        `⚠️  Withdrawal ${withdrawalId}: could not cancel fallback slate ${slateId} (${e.message}) — ` +
+        `the retry will be deferred until it is cancelled`
+      );
+      return false;
+    }
+  }
+
   // A failed Tor send: 'pool_wallet_short' when grin-wallet refused for lack of POOL funds (and
   // the health card is told), otherwise null. `error` is the CLI's message.
   _retryReasonFor(withdrawal, netSend, error) {
@@ -704,32 +1245,51 @@ class WithdrawalScheduler {
     const amt = amount == null ? 'an unknown amount of' : amount;
     console.error(`⚠️  Payout ${withdrawalId} (${method}): pool wallet cannot cover ${amt} GRIN — ${error}`);
     try {
-      const now = new Date().toISOString();
-      const dayAgo = new Date(Date.now() - 86400000).toISOString();
       const message = `Pool wallet could not cover ${method} payout #${withdrawalId} (${amt} GRIN): ${String(error).slice(0, 400)}`;
-      const data = JSON.stringify({ withdrawal_id: withdrawalId, method, amount });
-      this.db.transaction(() => {
-        const live = this.db.prepare(
-          `SELECT id FROM alerts WHERE type = 'pool_wallet_short' AND status = 'active' AND last_seen >= ?
-           ORDER BY id DESC LIMIT 1`
-        ).get(dayAgo);
-        if (live) {
-          this.db.prepare(
-            `UPDATE alerts SET occurrence_count = occurrence_count + 1, last_seen = ?, message = ?, data = ?
-             WHERE id = ?`
-          ).run(now, message, data, live.id);
-          return;
-        }
-        this.db.prepare(
-          `UPDATE alerts SET status = 'resolved', resolved_at = ? WHERE type = 'pool_wallet_short' AND status = 'active'`
-        ).run(now);
-        this.db.prepare(
-          `INSERT INTO alerts (type, level, message, data, status, triggered_at, last_seen)
-           VALUES ('pool_wallet_short', 'warning', ?, ?, 'active', ?, ?)`
-        ).run(message, data, now, now);
-      })();
+      this._rollingAlert('pool_wallet_short', 'warning', message, { withdrawal_id: withdrawalId, method, amount });
     } catch (e) {
       console.error(`[payout] failed to record pool_wallet_short alert: ${e.message}`);
+    }
+  }
+
+  // ONE `alerts` row per type, rolled in place: while the active row was last seen under 24h ago
+  // it is updated (count + 1, latest level/message/data) instead of stacking a row per
+  // occurrence; an older one is resolved and a fresh row starts. Written straight to the table —
+  // it shows on the admin Alerts list and wherever /api/admin/health reads it, but is NOT pushed
+  // off-box (that is AlertMonitor.triggerAlert's job). Throws; callers decide how loud to be.
+  _rollingAlert(type, level, message, data) {
+    const now = new Date().toISOString();
+    const dayAgo = new Date(Date.now() - 86400000).toISOString();
+    const json = JSON.stringify(data);
+    this.db.transaction(() => {
+      const live = this.db.prepare(
+        `SELECT id FROM alerts WHERE type = ? AND status = 'active' AND last_seen >= ?
+         ORDER BY id DESC LIMIT 1`
+      ).get(type, dayAgo);
+      if (live) {
+        this.db.prepare(
+          `UPDATE alerts SET occurrence_count = occurrence_count + 1, last_seen = ?, level = ?, message = ?, data = ?
+           WHERE id = ?`
+        ).run(now, level, message, json, live.id);
+        return;
+      }
+      this.db.prepare(
+        `UPDATE alerts SET status = 'resolved', resolved_at = ? WHERE type = ? AND status = 'active'`
+      ).run(now, type);
+      this.db.prepare(
+        `INSERT INTO alerts (type, level, message, data, status, triggered_at, last_seen)
+         VALUES (?, ?, ?, ?, 'active', ?, ?)`
+      ).run(type, level, message, json, now, now);
+    })();
+  }
+
+  _resolveAlert(type) {
+    try {
+      this.db.prepare(
+        `UPDATE alerts SET status = 'resolved', resolved_at = ? WHERE type = ? AND status = 'active'`
+      ).run(new Date().toISOString(), type);
+    } catch (e) {
+      console.error(`[payout] failed to resolve ${type} alert: ${e.message}`);
     }
   }
 
@@ -737,6 +1297,15 @@ class WithdrawalScheduler {
   // parked: 'pool_wallet_short' (the pool's own wallet could not cover it) vs NULL (anything else —
   // almost always the miner's listener not answering over Tor). Every call rewrites it, so a
   // payout that was short once and then hits an offline miner is not left saying "pool busy".
+  //
+  // A 'pool_wallet_short' retry is NOT counted (F3), for the same reason a deferral is not
+  // (_deferSend): the ladder measures the MINER's wallet not answering, and exhausting it ends
+  // in markFailed → refund. A shortfall says nothing about the miner and usually clears within
+  // the hour, so it re-tries after SHORTFALL_RETRY_S with retry_count untouched — checked BEFORE
+  // the exhaustion test, so a shortfall on the last rung does not refund either. The double-send
+  // guard still arms on the re-attempt: it keys on the event log's tor_sending rows, not on
+  // retry_count. Counted from 'shortfall:' event notes (keep the prefix), so after
+  // MAX_SHORTFALL_RETRIES the shortfall falls through to the ladder below like any failure.
   async scheduleRetry(withdrawalId, reason = null) {
     try {
       const withdrawal = this.db.prepare(`
@@ -744,6 +1313,87 @@ class WithdrawalScheduler {
       `).get(withdrawalId);
 
       if (!withdrawal) return;
+
+      // Stepwise Tor send only (design §8.1.3): the POOL's tor daemon was down before any byte
+      // reached the miner. Same shape as the shortfall branch below, with its own 'tor-down:'
+      // counter — a broken pool tor must not walk a miner's payout down the refund ladder, but a
+      // tor that stays broken for ~6 h (24 × 15 min) takes the ladder like any failure.
+      if (reason === 'pool_tor_unavailable') {
+        const priorDown = this.db.prepare(
+          "SELECT COUNT(*) AS c FROM withdrawal_events WHERE withdrawal_id = ? AND note LIKE 'tor-down:%'"
+        ).get(withdrawalId).c;
+        if (priorDown < MAX_TOR_DOWN_RETRIES) {
+          const nextAt = Math.floor(Date.now() / 1000) + TOR_DOWN_RETRY_S;
+          const moved = this.db.transaction(() => {
+            const claimed = this.db.prepare(`
+              UPDATE withdrawals SET status = 'retry_scheduled', next_retry_at = ?, retry_reason = ?
+              WHERE id = ? AND status = ?
+            `).run(nextAt, reason, withdrawalId, withdrawal.status);
+            if (claimed.changes !== 1) return false;
+            this.db.prepare(`
+              INSERT INTO withdrawal_events (withdrawal_id, from_status, to_status, triggered_by, note)
+              VALUES (?, ?, 'retry_scheduled', 'scheduler', ?)
+            `).run(
+              withdrawalId, withdrawal.status,
+              `tor-down: pool tor unavailable, retry ${priorDown + 1}/${MAX_TOR_DOWN_RETRIES} (not counted) at ` +
+                new Date(nextAt * 1000).toISOString()
+            );
+            return true;
+          })();
+          if (!moved) {
+            console.warn(`[retry] withdrawal ${withdrawalId} left ${withdrawal.status} before retry scheduling — skipped`);
+            return;
+          }
+          console.warn(
+            `[${new Date().toISOString()}] Withdrawal ${withdrawalId}: the pool's own tor is unavailable — ` +
+            `retrying in ${TOR_DOWN_RETRY_S}s (tor-down ${priorDown + 1}/${MAX_TOR_DOWN_RETRIES}, not counted)`
+          );
+          return;
+        }
+        console.error(
+          `⚠️  Withdrawal ${withdrawalId}: pool tor-down cap reached (${priorDown}/${MAX_TOR_DOWN_RETRIES} ` +
+          `uncounted retries) — falling back to the normal retry ladder. Check the tor daemon on this box.`
+        );
+      }
+
+      if (reason === 'pool_wallet_short') {
+        const priorShort = this.db.prepare(
+          "SELECT COUNT(*) AS c FROM withdrawal_events WHERE withdrawal_id = ? AND note LIKE 'shortfall:%'"
+        ).get(withdrawalId).c;
+        if (priorShort < MAX_SHORTFALL_RETRIES) {
+          const nextAt = Math.floor(Date.now() / 1000) + SHORTFALL_RETRY_S;
+          const moved = this.db.transaction(() => {
+            const claimed = this.db.prepare(`
+              UPDATE withdrawals SET status = 'retry_scheduled', next_retry_at = ?, retry_reason = ?
+              WHERE id = ? AND status = ?
+            `).run(nextAt, reason, withdrawalId, withdrawal.status);
+            if (claimed.changes !== 1) return false;
+            this.db.prepare(`
+              INSERT INTO withdrawal_events (withdrawal_id, from_status, to_status, triggered_by, note)
+              VALUES (?, ?, 'retry_scheduled', 'scheduler', ?)
+            `).run(
+              withdrawalId, withdrawal.status,
+              `shortfall: pool wallet short, retry ${priorShort + 1}/${MAX_SHORTFALL_RETRIES} (not counted) at ` +
+                new Date(nextAt * 1000).toISOString()
+            );
+            return true;
+          })();
+          if (!moved) {
+            console.warn(`[retry] withdrawal ${withdrawalId} left ${withdrawal.status} before retry scheduling — skipped`);
+            return;
+          }
+          console.log(
+            `[${new Date().toISOString()}] Withdrawal ${withdrawalId}: pool wallet short — retrying in ` +
+            `${SHORTFALL_RETRY_S}s (shortfall ${priorShort + 1}/${MAX_SHORTFALL_RETRIES}, not counted)`
+          );
+          return;
+        }
+        console.error(
+          `⚠️  Withdrawal ${withdrawalId}: pool wallet shortfall cap reached (${priorShort}/${MAX_SHORTFALL_RETRIES} ` +
+          `uncounted retries) — the wallet looks underfunded, not busy. Falling back to the normal retry ` +
+          `ladder; top up the pool wallet.`
+        );
+      }
 
       if (withdrawal.retry_count >= this.retryDelays.length) {
         await this.markFailed(withdrawalId);
@@ -794,34 +1444,53 @@ class WithdrawalScheduler {
   // frozen. Requires the Owner-API wallet (this.wallet): the Tor CLI rail exposes no structured
   // kernel, so a Tor-only deployment without the Owner API simply gets no kernel column.
   //
-  // Matching: the wallet's TxLogEntry carries kernel_excess (populated once the tx mines) and
-  // tx_slate_id. Slatepack/nostr payouts store their slate_id, so they match exactly. Tor rows
-  // get their slate_id captured post-send by _captureTorSlateId(), so they match the same way.
+  // Matching: the wallet's TxLogEntry carries kernel_excess and tx_slate_id. Slatepack/nostr
+  // payouts store their slate_id, so they match exactly. Tor rows get their slate_id captured
+  // post-send by _captureTorSlateId(), so they match the same way.
+  //
+  // Only a CONFIRMED entry counts. kernel_excess is NOT a mined signal: grin-wallet v5.4.1 writes
+  // it at tx_lock_outputs (selection.rs lock_tx_context) and rewrites it at finalize
+  // (tx.rs update_stored_tx), both before post_tx; confirming the tx never touches it. The
+  // kernel column is the "paid · mined" badge and the explorer link, so it must wait for
+  // `confirmed` — the same chain evidence _priorSendLanded and reclaimStaleFinalizing test.
+  //
+  // The same tick runs the "marked paid but not mined" watchdog (_watchUnmined) off the SAME
+  // tx-log read: both ask the wallet the same question about the same rows, and the refresh is
+  // the slow part. Kernels are attached first, so a payout that just mined is never flagged.
   async backfillKernelProofs() {
     if (!this.wallet) return;
     try {
-      const cutoff = Math.floor(Date.now() / 1000) - 30 * 86400; // bound the scan to recent payouts
+      const now = Math.floor(Date.now() / 1000);
+      const cutoff = now - 30 * 86400; // bound the scan to recent payouts
       const pending = this.db.prepare(
         `SELECT id, slate_id FROM withdrawals
          WHERE status = 'confirmed' AND kernel_excess IS NULL AND slate_id IS NOT NULL
            AND created_at >= ?
          ORDER BY created_at DESC LIMIT 200`
       ).all(cutoff);
-      if (!pending.length) return;
+      if (!pending.length && !this._unminedCandidates(now).length) {
+        // Nothing paid is waiting to be seen mined — so nothing is overdue either.
+        this._paidChainState = new Map();
+        this._resolveAlert('payout_unmined');
+        return;
+      }
 
       // The tx scan refreshes from the node (slow); throttle to at most once every 3 min even if
-      // rows linger — a just-broadcast payout's kernel isn't mined for a minute or two anyway.
+      // rows linger — a just-broadcast payout isn't mined for a minute or two anyway.
       if (this._lastKernelScan && (Date.now() - this._lastKernelScan) < 180000) return;
       this._lastKernelScan = Date.now();
 
+      // An unreadable log (throw → catch below) or an empty one leaves the alert exactly as it
+      // was: "could not look" is not "nothing is wrong".
       const txs = await this.wallet.getTransactions(true);
       if (!Array.isArray(txs) || !txs.length) return;
 
       const bySlate = new Map();
       for (const t of txs) {
-        if (t && t.tx_slate_id && t.kernel_excess) bySlate.set(String(t.tx_slate_id), t.kernel_excess);
+        if (t && t.confirmed === true && t.tx_slate_id && t.kernel_excess) {
+          bySlate.set(String(t.tx_slate_id), t.kernel_excess);
+        }
       }
-      if (!bySlate.size) return;
 
       const upd = this.db.prepare(
         'UPDATE withdrawals SET kernel_excess = ? WHERE id = ? AND kernel_excess IS NULL'
@@ -834,9 +1503,224 @@ class WithdrawalScheduler {
       if (filled) {
         console.log(`[${new Date().toISOString()}] kernel-proof backfill: attached ${filled} payout proof(s)`);
       }
+
+      await this._watchUnmined(txs);
     } catch (err) {
       console.warn(`[kernel-proof] backfill skipped: ${err.message}`);
     }
+  }
+
+  // ─── "Marked paid but not mined" watchdog (F2) ──────────────────────────────
+  // A payout turns 'confirmed' when the send COMMAND succeeds (Tor: the CLI returned; slatepack /
+  // Goblin: finalize + post_tx returned). Nothing checked that the tx then MINED, and a Grin node
+  // drops its mempool on restart — so a posted payout can vanish while the miner reads "paid",
+  // and the wallet keeps its inputs locked in an unconfirmed TxSent (which can itself cause the
+  // NotEnoughFunds shortfall). lib/reconciliation.js checks only the opposite direction (a
+  // confirmed wallet send with no pool row).
+  //
+  // Candidates: confirmed, no kernel yet, marked paid over UNMINED_ALERT_S ago, created in the
+  // last 30 days (the kernel backfill's window). Each is classified by its slate in the tx log:
+  //   state          tx log                         alert level   automatic step
+  //   ─────────────  ─────────────────────────────  ────────────  ─────────────────────────────
+  //   'mined'        TxSent, confirmed              —             none (the backfill has it)
+  //   'unmined'      TxSent, not confirmed          warning       repost the stored tx
+  //   'cancelled'    TxSentCancelled                critical      none — the miner was NOT paid
+  //   'absent'       no entry for the slate         critical      none — nothing to repost
+  //   'unverifiable' the row has no slate id        warning       none — nothing to look up
+  //
+  // It moves no money: no status, balance or ledger write, ever. A cancelled / absent row is a
+  // miner debited for a payout that (as far as this wallet knows) never left — but "the wallet
+  // does not know it" is not proof it never landed (a restored or swapped wallet, a mis-captured
+  // slate id), so the remedy is the operator's, by hand, with the runbook in the alert data.
+  async _watchUnmined(txs) {
+    const now = Math.floor(Date.now() / 1000);
+    const rows = this._unminedCandidates(now);
+
+    // Sender-side entries only. A payout slate has exactly one, as TxSent or (after cancel_tx
+    // rewrote it) TxSentCancelled; prefer a confirmed TxSent should the log ever hold two.
+    const sent = new Map();
+    const cancelled = new Set();
+    for (const t of txs) {
+      if (!t || !t.tx_slate_id) continue;
+      const sid = String(t.tx_slate_id);
+      const type = String(t.tx_type || '');
+      if (type === 'TxSent') {
+        const prev = sent.get(sid);
+        if (!prev || (t.confirmed && !prev.confirmed)) sent.set(sid, t);
+      } else if (type === 'TxSentCancelled') {
+        cancelled.add(sid);
+      }
+    }
+
+    const state = new Map();
+    const flagged = [];
+    for (const w of rows) {
+      const sid = w.slate_id ? String(w.slate_id) : null;
+      let s;
+      let t = null;
+      if (!sid) s = 'unverifiable';
+      else if (sent.has(sid)) { t = sent.get(sid); s = t.confirmed ? 'mined' : 'unmined'; }
+      else s = cancelled.has(sid) ? 'cancelled' : 'absent';
+      state.set(Number(w.id), s);
+      if (s !== 'mined') flagged.push({ w, state: s, tx: t });
+    }
+    this._paidChainState = state;
+
+    if (!flagged.length) {
+      this._resolveAlert('payout_unmined');
+      return;
+    }
+    try {
+      this._raiseUnminedAlert(flagged, now);
+    } catch (e) {
+      console.error(`[unmined] failed to record payout_unmined alert: ${e.message}`);
+    }
+
+    // The repost moves no new money — it re-broadcasts a transaction the pool already signed and
+    // debited — but the freeze is the operator's "stop everything outbound" switch, often thrown
+    // because the wallet itself is suspect, so it waits for a resume like every other send path.
+    if (this.isFrozen()) return;
+    await this._repostUnmined(flagged.filter((f) => f.state === 'unmined'), now);
+  }
+
+  _unminedCandidates(now) {
+    return this.db.prepare(
+      `SELECT id, grin_address, amount, method, slate_id, COALESCE(confirmed_at, created_at) AS paid_at
+         FROM withdrawals
+        WHERE status = 'confirmed' AND kernel_excess IS NULL
+          AND COALESCE(confirmed_at, created_at) <= ? AND created_at >= ?
+        ORDER BY id ASC LIMIT 500`
+    ).all(now - UNMINED_ALERT_S, now - 30 * 86400);
+  }
+
+  // ONE rolling 'payout_unmined' alert, rewritten every tick while anything is overdue (see
+  // _rollingAlert) and resolved by the first tick that finds nothing. Critical rows sort first so
+  // the list cap can never hide a miner who was not paid behind a merely slow one.
+  _raiseUnminedAlert(flagged, now) {
+    const SEVERITY = { cancelled: 0, absent: 1, unmined: 2, unverifiable: 3 };
+    const WHAT = {
+      unmined:      'sent, not mined',
+      cancelled:    'CANCELLED in the pool wallet — the miner was NOT paid',
+      absent:       'no record of this slate in the pool wallet',
+      unverifiable: 'cannot verify — no slate id was captured',
+    };
+    const counts = { unmined: 0, cancelled: 0, absent: 0, unverifiable: 0 };
+    for (const f of flagged) counts[f.state]++;
+    const critical = counts.cancelled + counts.absent;
+    const sorted = [...flagged].sort((a, b) => (SEVERITY[a.state] - SEVERITY[b.state]) || (a.w.id - b.w.id));
+    const utc = (s) => `${new Date(s * 1000).toISOString().slice(0, 16).replace('T', ' ')} UTC`;
+    const age = (s) => { const m = Math.max(0, Math.floor(s / 60)); return m >= 60 ? `${Math.floor(m / 60)}h ${m % 60}m` : `${m}m`; };
+
+    const LIST_CAP = 10;
+    const lines = sorted.slice(0, LIST_CAP).map(({ w, state }) =>
+      `#${w.id} ${w.method || 'tor'}: ${WHAT[state]} ` +
+      `(${w.slate_id ? `slate ${w.slate_id}, ` : ''}paid ${utc(w.paid_at)}, ${age(now - w.paid_at)} ago)`);
+    const n = flagged.length;
+    const message =
+      `${n} payout${n === 1 ? '' : 's'} marked paid but not seen mined after ${UNMINED_ALERT_S / 3600} h` +
+      (critical ? ` — ${critical} of them NOT paid as far as the pool wallet knows` : '') +
+      `: ${lines.join(' · ')}${n > LIST_CAP ? ` · …+${n - LIST_CAP} more` : ''}`;
+
+    this._rollingAlert('payout_unmined', critical ? 'critical' : 'warning', message, {
+      total: n,
+      counts,
+      rows: sorted.slice(0, 50).map(({ w, state }) => ({
+        withdrawal_id: w.id, method: w.method, slate_id: w.slate_id || null, state,
+        paid_at: new Date(w.paid_at * 1000).toISOString(),
+      })),
+      runbook: {
+        unmined: 'The pool re-broadcasts the stored transaction itself (at most hourly, ' +
+          `${MAX_REPOSTS} times; see the "repost:" events on the row). If it still does not mine, check ` +
+          'that the node is synced and read the repost note for the node\'s reason. `grin-wallet txs` shows ' +
+          'the entry; `grin-wallet repost -i <id>` is the same step by hand.',
+        cancelled: 'The pool wallet cancelled this transaction, so its inputs were released and the coins ' +
+          'never left — the miner was debited but NOT paid. Confirm with `grin-wallet txs` ' +
+          '(TxSentCancelled) and on the explorer, then settle it by hand: credit the balance back or pay ' +
+          'again. There is no automatic refund.',
+        absent: 'The pool wallet holds no entry for this slate: a restored or replaced wallet, or a slate id ' +
+          'captured wrongly. Look for the payment on the wallet that actually sent it and on the explorer ' +
+          'before doing anything. Never re-pay without proof it did not land.',
+        unverifiable: 'No slate id was captured for this payout, so the wallet cannot be asked about it. ' +
+          'Find it by amount and time in `grin-wallet txs`.',
+      },
+    });
+  }
+
+  // Re-broadcast the stored transaction of each "sent, not mined" payout — the one automatic
+  // step, and it cannot pay twice: it is the SAME transaction (same inputs, same kernel), so the
+  // chain accepts it at most once, and a node that already holds or mined it rejects the copy.
+  // It never builds a new tx, never cancels, never refunds, never changes a status.
+  //
+  // Runs through the CLI's `grin-wallet repost -i <tx log id>` (WalletTor.repostTx), NOT Owner
+  // API v3 get_stored_tx → post_tx. Over JSON-RPC get_stored_tx returns a compact V4 slate with
+  // an empty `sigs` array (api/src/owner_rpc.rs get_stored_tx → VersionedSlate::into_version V4),
+  // and post_tx rebuilds the kernel from `sigs` only (libwallet/src/slate.rs tx_from_slate_v4),
+  // so that round-trip posts a zero kernel the node rejects. The CLI keeps the Slate in-process
+  // and also refuses by itself a tx that is already confirmed or was never finalized
+  // (controller/src/command.rs repost) — two checks that are the wallet's, not ours.
+  //
+  // Rate: once per row per REPOST_EVERY_S, REPOST_MAX_PER_TICK rows per tick, MAX_REPOSTS per row
+  // ever — all keyed on the append-only event log ('repost:' notes), so a restart cannot reset
+  // them. The outcome is journaled but decides nothing: the next tick's `confirmed` does.
+  async _repostUnmined(candidates, now) {
+    if (!candidates.length) return;
+    if (!this.walletTor || typeof this.walletTor.repostTx !== 'function') return;
+    const history = this.db.prepare(
+      `SELECT COUNT(*) AS n, MAX(created_at) AS last FROM withdrawal_events
+        WHERE withdrawal_id = ? AND note LIKE 'repost:%'`
+    );
+    const journal = this.db.prepare(
+      `INSERT INTO withdrawal_events (withdrawal_id, from_status, to_status, triggered_by, note)
+       VALUES (?, 'confirmed', 'confirmed', 'scheduler', ?)`
+    );
+    let done = 0;
+    for (const { w, tx } of candidates) {
+      if (done >= REPOST_MAX_PER_TICK) break;
+      const h = history.get(w.id);
+      if (h.n >= MAX_REPOSTS) {
+        this._repostCapWarned = this._repostCapWarned || new Set();
+        if (!this._repostCapWarned.has(w.id)) {
+          this._repostCapWarned.add(w.id);
+          console.error(
+            `⚠️  [unmined] withdrawal ${w.id}: reposted ${h.n} times and still not mined — no more automatic ` +
+            `reposts; this needs a human (see the payout_unmined alert's runbook)`
+          );
+        }
+        continue;
+      }
+      if (h.last && now - Number(h.last) < REPOST_EVERY_S) continue;
+      const txLogId = Number(tx && tx.id);
+      if (!Number.isInteger(txLogId) || txLogId < 0) continue;
+
+      done++;
+      let outcome;
+      try {
+        const r = await this.walletTor.repostTx(txLogId);
+        outcome = `${r && r.ok ? 'ran' : 'failed'}: ${String((r && r.output) || '').trim().slice(-200) || '(no output)'}`;
+      } catch (e) {
+        outcome = `failed: ${String(e.message || e).slice(0, 200)}`;
+      }
+      const note = `repost: slate ${w.slate_id} (tx log id ${txLogId}) ${h.n + 1}/${MAX_REPOSTS} — ${outcome}`;
+      try { journal.run(w.id, note); } catch (e) { /* journal is best-effort; the rate check re-reads it */ }
+      console.warn(`[unmined] withdrawal ${w.id}: marked paid but not mined — ${note}`);
+    }
+  }
+
+  // Admin payments view: where a PAID row stands on chain. null for any row that is not
+  // 'confirmed'. The kernel column is the proof of 'mined'; the rest comes from the watchdog's
+  // last scan (in memory — empty for up to one tick after a restart, when an overdue row reads
+  // 'unmined', which is still literally true: not yet SEEN mined).
+  //   'mined' | 'settling' (paid < 1 h ago) | 'unmined' | 'cancelled' | 'absent' | 'unverifiable'
+  // Rows older than the 30-day watch window without a kernel return null: nobody looks any more.
+  chainStateOf(w, now = Math.floor(Date.now() / 1000)) {
+    if (!w || w.status !== 'confirmed') return null;
+    if (w.kernel_excess) return 'mined';
+    if (Number(w.created_at) < now - 30 * 86400) return null;
+    const seen = this._paidChainState && this._paidChainState.get(Number(w.id));
+    if (seen) return seen;
+    if (!w.slate_id || !this.wallet) return 'unverifiable';
+    const paidAt = Number(w.confirmed_at || w.created_at) || 0;
+    return now - paidAt < UNMINED_ALERT_S ? 'settling' : 'unmined';
   }
 
   // ─── Signed payment proofs (dispute evidence) ───────────────────────────────
@@ -847,9 +1731,10 @@ class WithdrawalScheduler {
   // IS the miner's grin1 address, so it is third-party-verifiable evidence that this wallet took
   // this amount at this kernel (`grin-wallet verify_proof`, or the explorer's /proof page).
   //
-  // Only the Tor CLI rail has one: `grin-wallet send -d grin1…` requests a proof by default for
-  // a slatepack destination. The Owner-API slatepack/nostr rail passes
-  // payment_proof_recipient_address: null (lib/wallet.js initSendTx) — turning that on changes
+  // Only the Tor rail has one: `grin-wallet send -d grin1…` requests a proof by default for a
+  // slatepack destination, and the step-by-step Tor send (tor_send_mode = 'stepwise') passes the
+  // miner's address as payment_proof_recipient_address itself. The slatepack/nostr rails pass
+  // null (lib/wallet.js initSendTx) — turning that on changes
   // the slate every recipient wallet must sign and is a money-path change, so it is NOT done
   // here; those rows keep '' (none) and the kernel remains their evidence.
   //
@@ -1297,8 +2182,12 @@ class WithdrawalScheduler {
     // pool balance lock so the miner's funds are never stranded.
     let slate = null;
     try {
-      slate = await this.wallet.initSendTx(netSend);
-      await this.wallet.txLockOutputs(slate);
+      // Select + lock under the wallet's send lock (see _withSendLock) so no other rail's init
+      // can pick the same coins between these two calls.
+      await this._withSendLock(async () => {
+        slate = await this.wallet.initSendTx(netSend);
+        await this.wallet.txLockOutputs(slate);
+      });
       const armored = await this.wallet.createSlatepackMessage(slate, [grinAddress]);
       const slateId = slate && slate.id ? slate.id : null;
       // Record the real network fee (sender-pays in Grin: the wallet spends netSend + fee while
@@ -1455,8 +2344,10 @@ class WithdrawalScheduler {
     // failure (wallet OR no relay accepted) reverses the lock — nothing is stranded.
     let slate = null;
     try {
-      slate = await this.wallet.initSendTx(netSend);
-      await this.wallet.txLockOutputs(slate);
+      await this._withSendLock(async () => {
+        slate = await this.wallet.initSendTx(netSend);
+        await this.wallet.txLockOutputs(slate);
+      });
       const armored = await this.wallet.createSlatepackMessage(slate, []); // recipients:[] → plain armor
       const slateId = slate && slate.id ? slate.id : null;
       const feeGrin = this._slateFeeGrin(slate);
@@ -1954,9 +2845,9 @@ class WithdrawalScheduler {
       // and debited miners for coins that never left. The chain evidence is `confirmed`, which is
       // the same field lib/reconciliation.js:278 already tests on this exact log.
       //
-      // kernel_excess is deliberately NOT used as a second signal: it may be populated at
-      // finalize, i.e. BEFORE post_tx, which is precisely the window this sweep exists to judge.
-      // Do not add it without verifying against a live wallet.
+      // kernel_excess is deliberately NOT used as a second signal: grin-wallet v5.4.1 writes it
+      // at tx_lock_outputs and again at finalize, i.e. BEFORE post_tx, which is precisely the
+      // window this sweep exists to judge (source-verified 2026-09-25, see backfillKernelProofs).
       const onChain = new Set();  // proven mined
       const known = new Map();    // slate_id → tx_type, for everything the wallet still holds
       for (const t of txs) {
@@ -2033,15 +2924,24 @@ class WithdrawalScheduler {
       // row that has been through the retry ladder is days earlier. sendWithdrawal writes the
       // tor_sending event in the same breath as the status flip, so its created_at is the age
       // of THIS attempt. Same reasoning as reclaimStaleFinalizing; same COALESCE(...,0) fallback.
+      // Only CLAIM events count (into tor_sending from another status). The CLI rail writes no
+      // other kind, so for it this is the same query as before; a stepwise attempt also journals
+      // progress (tor_sending → tor_sending), and letting those reset the age would make every
+      // 'stepwise: repost' push the next look 10 min out, silently overriding the 5-min re-post rate.
       const staleBatch = Math.max(50, this.MAX_PENDING_WITHDRAWALS);
       const stale = this.db.prepare(
         `SELECT w.* FROM withdrawals w
           WHERE w.status = 'tor_sending'
             AND COALESCE((SELECT MAX(e.created_at) FROM withdrawal_events e
-                           WHERE e.withdrawal_id = w.id AND e.to_status = 'tor_sending'), 0) <= ?
+                           WHERE e.withdrawal_id = w.id AND e.to_status = 'tor_sending'
+                             AND (e.from_status IS NULL OR e.from_status != 'tor_sending')), 0) <= ?
           ORDER BY w.created_at ASC LIMIT ?`
       ).all(cutoff, staleBatch);
-      if (!stale.length) return;
+      if (!stale.length) {
+        // No stale stepwise row is left to report on, so its alert (if any) is over.
+        this._resolveAlert('payout_tor_stepwise');
+        return;
+      }
 
       if (!this.wallet || typeof this.wallet.getTransactions !== 'function') {
         console.error(
@@ -2051,7 +2951,18 @@ class WithdrawalScheduler {
         return;
       }
 
+      // A stepwise attempt (its claim carries the 'stepwise:' marker) is resolved by its own
+      // recorded step (design §8.1.3), never by the CLI matcher below — which is unchanged and
+      // sees only CLI attempts. An attempt still running in this process is never touched.
+      const stepwise = [];
+      const cliRows = [];
       for (const w of stale) {
+        if (this._liveStepwise.has(Number(w.id))) continue;
+        (this._isStepwiseAttempt(w.id) ? stepwise : cliRows).push(w);
+      }
+      await this._reclaimStaleStepwise(stepwise);
+
+      for (const w of cliRows) {
         const netSend = this._netSend(w.amount, w.fee_charged || 0);
         const prior = await this._priorSendLanded(w, netSend);
 
@@ -2094,6 +3005,170 @@ class WithdrawalScheduler {
     } catch (err) {
       console.error(`Error reclaiming stale tor_sending rows: ${err.message}`);
     }
+  }
+
+  // ─── Stale stepwise attempts (design §8.1.3, "process dies" + "contradiction" rows) ────────
+  // ONE tx-log read serves every row. By tor_step:
+  //   claimed                         nothing created, nothing locked → back to tor_checking
+  //   initiated / locked /            confirmed in the log → confirm (chain evidence wins).
+  //   delivering / finalizing         A live TxSent → cancel, then back to tor_checking (a crash
+  //                                   is the pool's fault, so no rung). Already cancelled, or
+  //                                   never locked → back to tor_checking without a cancel.
+  //   posting                         COMMITTED. Confirmed → confirm. A live TxSent → post the
+  //                                   stored S3 again (≤ 1 / STEPWISE_REPOST_EVERY_S, ≤ MAX in
+  //                                   all, never while frozen); an OK post confirms. Cancelled or
+  //                                   absent → park + CRITICAL, never settled in either direction.
+  // An unreadable log resolves only 'claimed' rows this tick. Parked rows raise ONE rolling
+  // 'payout_tor_stepwise' alert (critical for a contradiction, warning while re-posting).
+  async _reclaimStaleStepwise(rows) {
+    if (!rows.length) {
+      this._resolveAlert('payout_tor_stepwise');
+      return;
+    }
+    let txs = null;
+    try {
+      const t = await this.wallet.getTransactions(true);
+      if (Array.isArray(t)) txs = t;
+    } catch (e) {
+      console.warn(`[tor-stepwise] stale sweep: wallet tx log unreadable (${e.message}) — only 'claimed' rows resolve this tick`);
+    }
+    const bySlate = new Map();   // slate → { sent: TxSent entry | null, cancelled: bool }
+    for (const t of txs || []) {
+      if (!t || !t.tx_slate_id) continue;
+      const sid = String(t.tx_slate_id).toLowerCase();
+      const e = bySlate.get(sid) || { sent: null, cancelled: false };
+      if (String(t.tx_type) === 'TxSent') { if (!e.sent || (t.confirmed && !e.sent.confirmed)) e.sent = t; }
+      else if (String(t.tx_type) === 'TxSentCancelled') e.cancelled = true;
+      bySlate.set(sid, e);
+    }
+
+    const now = Math.floor(Date.now() / 1000);
+    const flagged = [];
+    for (const w of rows) {
+      const step = w.tor_step || 'claimed';
+      const sid = w.slate_id ? String(w.slate_id).toLowerCase() : null;
+
+      if (step === 'claimed') {
+        if (this._stepwiseRequeue(w.id, 'stepwise: requeued — the attempt stopped before any slate was created')) {
+          console.warn(`[tor-stepwise] stale withdrawal ${w.id}: stopped at 'claimed' (nothing locked) — back to tor_checking`);
+        }
+        continue;
+      }
+      if (!txs) continue;
+      if (!sid) {
+        flagged.push({ w, level: 'critical', what: `at '${step}' with no slate id — cannot be looked up` });
+        continue;
+      }
+
+      const e = bySlate.get(sid);
+      const sent = e && e.sent;
+      if (sent && sent.confirmed) {
+        console.warn(`[tor-stepwise] stale withdrawal ${w.id}: slate ${sid} is CONFIRMED (was at '${step}') — confirming`);
+        if (this._creditConfirm(w.id, 'tor_sending', `recovered: stepwise slate ${sid} confirmed in the wallet tx log (was at '${step}')`)) {
+          this.db.prepare("UPDATE withdrawals SET tor_final_slate = NULL WHERE id = ? AND status = 'confirmed'").run(w.id);
+        }
+        continue;
+      }
+
+      if (step === 'posting') {
+        if (!sent) {
+          const what = `${e && e.cancelled ? 'CANCELLED' : 'ABSENT'} in the pool wallet after it was committed for posting`;
+          console.error(`⚠️  [CRITICAL] [tor-stepwise] withdrawal ${w.id}: slate ${sid} is ${what} — parked, NOT settled either way`);
+          flagged.push({ w, level: 'critical', what });
+          continue;
+        }
+        await this._stepwiseRepost(w, sid, now, flagged);
+        continue;
+      }
+
+      // A cancellable step (initiated / locked / delivering / finalizing).
+      if (!sent) {
+        // No live copy in the wallet: already cancelled (the process died between the cancel and
+        // the requeue) or never locked. Nothing to undo.
+        if (this._stepwiseRequeue(w.id, `stepwise: requeued — slate ${sid} ${e && e.cancelled ? 'already cancelled' : 'not in the wallet'} (stale at '${step}')`)) {
+          console.warn(`[tor-stepwise] stale withdrawal ${w.id}: slate ${sid} holds nothing (stale at '${step}') — back to tor_checking`);
+        }
+        continue;
+      }
+      await this._stepwiseCancelThen(w.id, sid, { requeue: true }, `stale at '${step}' — the attempt stopped mid-way`);
+    }
+
+    if (!flagged.length) {
+      this._resolveAlert('payout_tor_stepwise');
+      return;
+    }
+    try { this._raiseStepwiseAlert(flagged); }
+    catch (e) { console.error(`[tor-stepwise] failed to record payout_tor_stepwise alert: ${e.message}`); }
+  }
+
+  // Post a committed stepwise tx again — the SAME transaction (same inputs, same kernel), so the
+  // chain takes it at most once. Never cancels, never rebuilds, never refunds. An OK post settles
+  // the row; a failure is journaled and the next sweep looks again.
+  async _stepwiseRepost(w, sid, now, flagged) {
+    const h = this.db.prepare(
+      `SELECT COUNT(*) AS n, MAX(created_at) AS last FROM withdrawal_events
+        WHERE withdrawal_id = ? AND note LIKE 'stepwise: repost%'`
+    ).get(w.id);
+    if (h.n >= MAX_STEPWISE_REPOSTS) {
+      flagged.push({ w, level: 'critical', what: `posted again ${h.n} times and still not confirmed — no more automatic posts` });
+      return;
+    }
+    let slate = null;
+    try { slate = JSON.parse(w.tor_final_slate || ''); } catch (_) { slate = null; }
+    if (!slate || typeof slate !== 'object') {
+      flagged.push({ w, level: 'critical', what: "committed for posting but no stored final slate to post" });
+      return;
+    }
+    const entry = { w, level: 'warning', what: `post_tx failed — posting the stored transaction again (${h.n}/${MAX_STEPWISE_REPOSTS} so far)` };
+    flagged.push(entry);
+    if (this.isFrozen()) return;
+    if (h.last && now - Number(h.last) < STEPWISE_REPOST_EVERY_S) return;
+
+    let posted = false;
+    let outcome;
+    try {
+      await this.wallet.postTx(slate, true);
+      posted = true;
+      outcome = 'accepted';
+    } catch (e) {
+      outcome = `failed: ${String(e.message || e).slice(0, 200)}`;
+    }
+    try { this._stepwiseEvent(w.id, `stepwise: repost slate ${sid} ${h.n + 1}/${MAX_STEPWISE_REPOSTS} — ${outcome}`); }
+    catch (_) { /* journal is best-effort; the rate check re-reads it */ }
+    console.warn(`[tor-stepwise] withdrawal ${w.id}: posted slate ${sid} again (${h.n + 1}/${MAX_STEPWISE_REPOSTS}) — ${outcome}`);
+    if (posted && this._creditConfirm(w.id, 'tor_sending', 'stepwise: posted (by the stale sweep)')) {
+      this.db.prepare("UPDATE withdrawals SET tor_final_slate = NULL WHERE id = ? AND status = 'confirmed'").run(w.id);
+      flagged.splice(flagged.indexOf(entry), 1);
+    }
+  }
+
+  _raiseStepwiseAlert(flagged) {
+    const critical = flagged.filter((f) => f.level === 'critical').length;
+    const sorted = [...flagged].sort((a, b) =>
+      ((a.level === 'critical' ? 0 : 1) - (b.level === 'critical' ? 0 : 1)) || (a.w.id - b.w.id));
+    const LIST_CAP = 10;
+    const lines = sorted.slice(0, LIST_CAP).map(({ w, what }) =>
+      `#${w.id}: ${what} (slate ${w.slate_id || '—'}, step ${w.tor_step || '—'})`);
+    const n = flagged.length;
+    const message =
+      `${n} step-by-step Tor payout${n === 1 ? '' : 's'} parked in tor_sending` +
+      (critical ? ` — ${critical} need a human` : '') +
+      `: ${lines.join(' · ')}${n > LIST_CAP ? ` · …+${n - LIST_CAP} more` : ''}`;
+    this._rollingAlert('payout_tor_stepwise', critical ? 'critical' : 'warning', message, {
+      total: n,
+      critical,
+      rows: sorted.slice(0, 50).map(({ w, level, what }) => ({
+        withdrawal_id: w.id, slate_id: w.slate_id || null, tor_step: w.tor_step || null, level, what,
+      })),
+      runbook: {
+        reposting: 'The transaction is finalized and committed; the pool posts the identical tx again at most ' +
+          `every ${STEPWISE_REPOST_EVERY_S / 60} min, ${MAX_STEPWISE_REPOSTS} times. Check that the node is synced ` +
+          'and read the "stepwise: repost" events for the node\'s reason. It can land only once.',
+        contradiction: 'The wallet no longer holds the committed tx as a live TxSent (cancelled or absent). The row ' +
+          'is deliberately NOT settled: check `grin-wallet txs` and the explorer for the kernel before crediting ' +
+          'the balance back or paying again. Never re-pay without proof it did not land.',
+      },
+    });
   }
 
   // UNUSED — no caller, and deliberately not wired up: its status list predates the slatepack

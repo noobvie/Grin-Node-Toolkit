@@ -403,6 +403,15 @@ const STATUS = {
   slatepack_expired: ['badge-dim',   'Expired'],
   cancelled:         ['badge-dim',   'Cancelled'],
 };
+// Where a PAID row stands on chain (GET /api/admin/withdrawals chain_state, from the scheduler's
+// "marked paid but not mined" watchdog). 'mined' needs no badge; the rest sit beside "Paid".
+const CHAIN = {
+  settling:     ['badge-dim',   'mining…',          'Paid under an hour ago - not seen mined yet, which is normal'],
+  unmined:      ['badge-warn',  'not mined',        'Marked paid over an hour ago but not seen mined. The pool re-broadcasts the stored transaction hourly - see Health / Alerts'],
+  cancelled:    ['badge-error', 'cancelled in wallet', 'The pool wallet CANCELLED this transaction - the miner was debited but NOT paid. Settle it by hand (see the payout_unmined alert)'],
+  absent:       ['badge-error', 'not in wallet',    'The pool wallet has no record of this slate - check the wallet that sent it and the explorer before acting'],
+  unverifiable: ['badge-warn',  'unverifiable',     'No slate id was captured for this payout, so the wallet cannot be asked whether it mined'],
+};
 // Drives the "active" filter chip. Must list every status whose coins are still committed —
 // otherwise filtering to active hides exactly the payouts an operator is looking for.
 const ACTIVE = ['tor_checking', 'tor_sending', 'retry_scheduled', 'slatepack_pending', 'finalizing'];
@@ -429,9 +438,13 @@ const payTable = AdminTable.create({
   empty: 'No withdrawals in this view.',
   note: 'Payout records are kept permanently — this view loads the 100 most recent.',
   text: w => [w.id, w.grin_address, w.status, (STATUS[w.status] || [])[1], w.method,
-              w.cancel_reason].join(' '),
+              w.cancel_reason, (CHAIN[w.chain_state] || [])[1]].join(' '),
   row: w => {
     const [cls, label] = STATUS[w.status] || ['badge-dim', w.status];
+    const chain = CHAIN[w.chain_state];
+    const chainBadge = chain
+      ? ` <span class="badge ${chain[0]}" title="${escHtml(chain[2])}">${escHtml(chain[1])}</span>`
+      : '';
     const canRetry  = w.status === 'retry_scheduled' || w.status === 'tor_failed';
     const canCancel = w.status === 'retry_scheduled' || w.status === 'tor_checking' || w.status === 'tor_failed';
     // Signed payment proof — the dispute document (recipient's own signature over amount +
@@ -450,7 +463,7 @@ const payTable = AdminTable.create({
       <td class="mono">${w.id}</td>
       <td><span class="mono" title="${escHtml(w.grin_address)}">${escHtml(shortAddr(w.grin_address))}</span></td>
       <td class="mono">${fmtGrin(w.amount)}</td>
-      <td><span class="badge ${cls}"${reason}>${escHtml(label)}</span></td>
+      <td><span class="badge ${cls}"${reason}>${escHtml(label)}</span>${chainBadge}</td>
       <td class="mono">${w.retry_count != null ? w.retry_count : 0}</td>
       <td>${fmtTs(w.created_at)}</td>
       <td>${fmtTs(w.confirmed_at)}</td>

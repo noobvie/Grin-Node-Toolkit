@@ -79,8 +79,11 @@ console.log('\n[2] §J14-2 — index.html vs the withdrawals schema');
   ok('control — no status the scheduler never writes is still in the map',
      stale.length === 0, stale.join(', '));
 
-  // The dashboard and the payouts page must not drift apart again (audit §H4).
-  const payStatuses = [...read('payments.html').matchAll(/^ {2}([a-z_]+): +\['badge/gm)]
+  // The dashboard and the payouts page must not drift apart again (audit §H4). Read from the
+  // STATUS block only — payments.html also has a CHAIN badge map (on-chain state of a paid row,
+  // not a withdrawal status), which the dashboard has no reason to know.
+  const payStatusBlock = (read('payments.html').match(/const STATUS = \{([\s\S]*?)\n\};/) || [])[1] || '';
+  const payStatuses = [...payStatusBlock.matchAll(/^ {2}([a-z_]+): +\['badge/gm)]
     .map((x) => x[1]);
   ok('dashboard badge set covers payments.html’s STATUS set',
      payStatuses.length > 0 && payStatuses.every((s) => new RegExp('\\b' + s + ':').test(home)),
@@ -396,6 +399,57 @@ console.log('\n[9] §18.6 — donors.html');
   // and a throw inside it cannot blank the table.
   ok('AdminTable.onRender runs after rows are painted and is try/caught',
      /tbody\.innerHTML = slice\.map[\s\S]{0,120}if \(typeof opts\.onRender === 'function'\) \{\s*try \{ opts\.onRender\(tbody\); \} catch/.test(shell));
+}
+
+// ── F4 — the dead auto-payout settings are gone, and the Payout form ↔ defaults stay in parity ──
+// `payout.auto_payout` + `payout.payout_frequency` had a UI and were read by nothing: payouts are
+// MINER-INITIATED by design (impl doc D10). They were removed the way D4's key was — input and
+// default in ONE change, because the harvester sends every id in `.settings-form` and
+// updateSection throws on an unknown key (memory project_pool_admin_settings_form).
+console.log('\n[10] F4 — settings-payout.html vs PoolSettings.defaults.payout');
+{
+  const PoolSettings = require(path.resolve(__dirname, '../lib/pool-settings.js'));
+  const keys = Object.keys(PoolSettings.defaults.payout);
+  const page = read('settings-payout.html');
+  const form = (page.match(/<div id="payout" class="settings-content[^"]*">([\s\S]*?)<script/) || [])[1] || '';
+  ok('the payout settings form exists on the page', /class="settings-form"/.test(form));
+  const harvested = [];
+  for (const m of form.matchAll(/<(input|select|textarea)\b([^>]*)>/gi)) {
+    const id = (m[2].match(/\bid="([^"]+)"/) || [])[1];
+    if (id && !/\bclass="[^"]*\bsettings-skip\b/.test(m[2])) harvested.push(id);
+  }
+  const stray = harvested.filter((id) => !keys.includes(id));
+  ok('every harvested id on the Payout form is a payout key (one stray fails every save)', stray.length === 0, stray.join(','));
+  // The only defaults with no field, each for a stated reason — a key added to either side
+  // without the other lands here instead of shipping a dead field or an unsaveable form.
+  //   withdrawal_retry_delays      — shadowed, no field (separate audit item, left alone)
+  //   dormancy_policy_effective_at — written by lib/dormancy.js, never by the operator
+  const noField = keys.filter((k) => !harvested.includes(k)).sort();
+  ok('the only payout defaults without a field are the two known non-form keys',
+     JSON.stringify(noField) === JSON.stringify(['dormancy_policy_effective_at', 'withdrawal_retry_delays']), noField.join(','));
+
+  for (const k of ['auto_payout', 'payout_frequency']) {
+    ok(`${k} is no longer a payout default`, !Object.prototype.hasOwnProperty.call(PoolSettings.defaults.payout, k));
+    ok(`${k} has no validator`, !Object.prototype.hasOwnProperty.call(PoolSettings.validators.payout, k));
+    const binders = panelFiles().filter((f) => new RegExp(`id="${k}"`).test(read(f)));
+    ok(`no admin page binds id="${k}"`, binders.length === 0, binders.join(','));
+  }
+  ok('the Payout page no longer promises automatic payouts',
+     !/auto(matic)?[ -]payouts?/i.test(page.replace(/<!--[\s\S]*?-->/g, '')));
+
+  // F5 (Part 6) — the Tor send method switch. An enum on a <select>, so every harvested value is
+  // one the validator accepts; 'cli' first, so a form with no stored value saves the default.
+  ok('tor_send_mode is harvested from the Payout form', harvested.includes('tor_send_mode'));
+  ok("tor_send_mode defaults to 'cli'", PoolSettings.defaults.payout.tor_send_mode === 'cli',
+     String(PoolSettings.defaults.payout.tor_send_mode));
+  const sel = (form.match(/<select id="tor_send_mode"[^>]*>([\s\S]*?)<\/select>/) || [])[1] || '';
+  const opts = [...sel.matchAll(/<option value="([^"]*)"/g)].map((m) => m[1]);
+  ok('its options are exactly cli, stepwise — in that order', JSON.stringify(opts) === '["cli","stepwise"]', opts.join(','));
+  ok('the option labels read "CLI (default)" and "Step-by-step"',
+     />CLI \(default\)</.test(sel) && />Step-by-step</.test(sel));
+  ok('the helper text says it applies on restart and points at the operator docs before mainnet',
+     /tor_send_mode[\s\S]{0,900}Applied on backend restart\. Step-by-step drives the payout through the wallet's Owner API/.test(form) &&
+     /see the operator docs before enabling it on mainnet/.test(form));
 }
 
 console.log('\n' + (fail ? 'FAILURES' : 'ALL PASS') + ` — ${pass} passed, ${fail} failed`);

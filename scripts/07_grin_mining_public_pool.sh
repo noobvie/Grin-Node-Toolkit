@@ -1648,8 +1648,13 @@ $admin_rules
     }
 
 
+    # burst=40, was 10 (2026-09-25). The homepage fires ~13 /api/ reads on load and ~10 on
+    # every 60 s refresh, all at once; burst 10 admits only 11, so the LAST reads of the batch
+    # (payments, both trend charts) drew 429s from ordinary single visitors — confirmed in the
+    # hub's error.log as `excess: 11.000 by zone "…_api"`, which lit "Payouts · feed down".
+    # The sustained rate (the zone's 600r/m) is unchanged; only the instantaneous fan-out grows.
     location /api/ {
-        limit_req zone=${POOL_SERVICE}_api burst=10 nodelay;
+        limit_req zone=${POOL_SERVICE}_api burst=40 nodelay;
         proxy_pass         http://127.0.0.1:$POOL_PORT;
         proxy_set_header   Host \$host;
         proxy_set_header   X-Real-IP \$remote_addr;

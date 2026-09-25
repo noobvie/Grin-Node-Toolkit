@@ -301,16 +301,41 @@
     bar.setAttribute('aria-label', total > 0
       ? 'Share quality: ' + pct(acc) + ' valid, ' + pct(stl) + ' stale, ' + pct(rej) + ' rejected'
       : 'Share quality: no live sessions');
-    // HIGH STALE annunciator: lit when stale+rejected exceed 5% of live shares.
-    var bad = total > 0 && ((stl + rej) / total) > 0.05;
-    setLamp('an-stale', bad ? 'warn' : '', bad ? '> 5%' : '< 5%');
+    // STALE annunciator: stale+rejected as a share of live shares. Green "Low stale" at or
+    // under 5%, red "High stale" above it, unlit with no live sessions (nothing to judge).
+    if (total <= 0) {
+      setLamp('an-stale', '', 'no live shares', 'Stale rate');
+    } else {
+      var badPct = ((stl + rej) / total) * 100;
+      var bad = badPct > 5;
+      setLamp('an-stale', bad ? 'alarm' : 'ok',
+        badPct.toFixed(1) + '% · limit 5%', bad ? 'High stale' : 'Low stale');
+    }
+  }
+
+  // ORPHAN annunciator — orphans FOUND in the last 24 h (orphans_24h from /api/pool/stats),
+  // so the lamp clears on its own a day after the orphaned block. null/absent = unknown
+  // (failed read, or an older backend): stays unlit rather than claiming "no orphans".
+  function renderOrphanLamp(n) {
+    if (typeof n !== 'number' || !isFinite(n)) {
+      setLamp('an-orphan', '', 'no data', 'Orphan check');
+    } else if (n > 0) {
+      setLamp('an-orphan', 'alarm', n + (n === 1 ? ' block' : ' blocks') + ' · last 24 h', 'Orphan detected');
+    } else {
+      setLamp('an-orphan', 'ok', 'last 24 hours', 'No orphan detected');
+    }
   }
 
   // ── annunciator ───────────────────────────────────────────────────────────
-  function setLamp(id, state, subText) {
+  // `title` is optional and only rewrites lamps whose markup carries a .lamp-t span.
+  function setLamp(id, state, subText, title) {
     var el = $(id);
     if (!el) return;
     el.className = 'lamp' + (state ? ' ' + state : '');
+    if (title != null) {
+      var t = el.querySelector('.lamp-t');
+      if (t) t.textContent = title;
+    }
     if (subText != null) {
       var small = el.querySelector('small');
       if (small) small.textContent = subText;
@@ -387,7 +412,8 @@
   async function loadStats() {
     try {
       var s = await Auth.read('/api/pool/stats');
-      if (!s) return;
+      if (!s) { renderOrphanLamp(null); return; }
+      renderOrphanLamp(s.orphans_24h);
       setText('c-miners', String(s.active_miners || 0));
       lastActiveMiners = Number(s.active_miners) || 0;
       applyHashState();
@@ -403,7 +429,7 @@
       setText('mi-miners', (s.active_miners || 0) + ' UNITS');
       var q = s.share_quality || {};
       renderLedbar(Number(q.accepted) || 0, Number(q.stale) || 0, Number(q.rejected) || 0);
-    } catch (e) { /* counters keep placeholders */ }
+    } catch (e) { renderOrphanLamp(null); /* counters keep placeholders */ }
   }
 
   // More decimals for a small share so it isn't rounded to "0%".
@@ -522,12 +548,15 @@
     }
   }
 
-  // Fuel rods: one column per recent block; fill = confirmation depth / 1440.
+  // Fuel rods: one column per recent block; fill = confirmation depth / 1440, and the rod's
+  // colour walks --warn → --accent with the same ratio (CSS reads it from --mat).
+  // Always 10 rods on a fixed grid (reactor.css), so nothing scrolls sideways.
+  var ROD_COUNT = 10;
   async function loadBlocks() {
     var wrap = $('rx-rods');
     if (!wrap) return;
     try {
-      var blocks = await Auth.read('/api/pool/blocks?limit=8');
+      var blocks = await Auth.read('/api/pool/blocks?limit=' + ROD_COUNT);
       wrap.textContent = '';
       // null = the feed did not answer (429, 5xx, network). That is NOT "no blocks yet", and
       // saying so told every visitor a working pool had never found a block (audit §J15-2).
@@ -536,7 +565,6 @@
         u.className = 'rods-empty';
         u.textContent = 'BLOCK FEED UNAVAILABLE';
         wrap.appendChild(u);
-        setLamp('an-orphan', 'warn', 'feed down');
         return;
       }
       if (!Array.isArray(blocks) || blocks.length === 0) {
@@ -544,51 +572,63 @@
         d.className = 'rods-empty';
         d.textContent = 'NO BLOCKS FOUND YET';
         wrap.appendChild(d);
-        setLamp('an-orphan', '', 'none');
         return;
       }
       // Height counter fallback: with the node unreachable, show the newest pool block.
       if (!nodeHeight && blocks[0] && blocks[0].height) {
         setHeightLink('c-height', blocks[0].height);
       }
-      var anyOrphan = false;
-      blocks.forEach(function (b) {
+      // The orphan LAMP is owned by loadStats (24 h window); rods still mark each orphan.
+      blocks.slice(0, ROD_COUNT).forEach(function (b) {
         var height = Number(b.height || 0);
         var conf;
         if (b.status === 'confirmed') conf = 1440;
         else if (nodeHeight && height) conf = Math.max(0, Math.min(1440, nodeHeight - height));
         else conf = Math.max(0, Math.min(1440, Math.floor((Date.now() / 1000 - (b.found_at || b.created_at || 0)) / 60)));
         var orphan = b.status === 'orphaned';
-        if (orphan) anyOrphan = true;
         var mature = b.status === 'confirmed';
+
+        var pct = orphan || mature ? 100 : Math.floor(100 * conf / 1440);
 
         var rod = document.createElement('div');
         rod.className = 'rod' + (mature ? ' done' : '') + (orphan ? ' orphan' : '');
+        rod.style.setProperty('--mat', pct + '%');
         var tube = document.createElement('div');
         tube.className = 'tube';
+        // The fill is always full height; maturity is where green meets yellow (CSS, --mat).
+        // A proportional-height fill left a busy hour's rods all at ~3% and looking dead.
         var fill = document.createElement('div');
         fill.className = 'fill';
-        fill.style.height = Math.max(3, Math.round(100 * (orphan ? 1 : conf) / 1440)) + '%';
-        if (orphan) fill.style.height = '100%';
         tube.appendChild(fill);
+        // Face label = the last 4 digits ("…4,399"): always 6 characters, so a rod never widens
+        // as the chain grows, and it is the part that tells neighbouring blocks apart. Never an
+        // abbreviation like "4M399" — that reads as a different number. Full height is in the
+        // tooltip and the link's aria-label.
+        var full = height.toLocaleString('en-US');
+        var last4 = String(height % 10000).padStart(4, '0');
+        var tail = height >= 10000 ? '…' + last4.charAt(0) + ',' + last4.slice(1) : '#' + full;
         var h = document.createElement('div');
         h.className = 'h';
-        var hLabel = '#' + height.toLocaleString('en-US');
         // Link the block height out to a chain explorer (new tab) as independent proof.
-        if (height && window.Explorer) h.innerHTML = Explorer.link('block', height, hLabel);
-        else h.textContent = hLabel;
+        if (height && window.Explorer) {
+          h.innerHTML = Explorer.link('block', height, tail);
+          if (h.firstElementChild) h.firstElementChild.setAttribute('aria-label', 'Block ' + full + ' on a chain explorer');
+        } else {
+          h.textContent = tail;
+        }
         var m = document.createElement('div');
-        m.className = 'm';
-        m.textContent = orphan ? 'ORPHAN' : (mature ? 'MATURE' : conf + '/1440');
+        m.className = 'm pct';
+        m.textContent = orphan ? 'ORPHAN' : (mature ? 'MATURE' : pct + '%');
         var when = document.createElement('div');
         when.className = 'm';
-        when.textContent = timeAgo(b.found_at || b.created_at) + ' · ' + Number(b.reward || 0).toFixed(1);
+        when.textContent = timeAgo(b.found_at || b.created_at);
         rod.appendChild(tube); rod.appendChild(h); rod.appendChild(m); rod.appendChild(when);
-        rod.title = 'Block ' + height.toLocaleString('en-US') + ' · ' + (b.status || 'immature') +
+        // The reward (60 + fees, so the same "60" on every rod) lives here, not on the face.
+        rod.title = 'Block ' + full + ' · ' + (b.status || 'immature') +
+          (orphan || mature ? '' : ' · ' + conf + '/1440 confirmations') +
           ' · reward ' + Number(b.reward || 0).toFixed(2) + ' GRIN';
         wrap.appendChild(rod);
       });
-      setLamp('an-orphan', anyOrphan ? 'alarm' : '', anyOrphan ? 'detected' : 'none');
     } catch (e) {
       wrap.textContent = '';
       var d2 = document.createElement('div');

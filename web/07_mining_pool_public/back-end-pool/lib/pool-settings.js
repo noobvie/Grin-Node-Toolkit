@@ -213,8 +213,11 @@ class PoolSettings {
       // sender-paid on-chain network fee (~0.023 GRIN typical, weight-based not amount-based).
       // Must stay < min_withdrawal. 0 = the pool absorbs the network fee.
       withdrawal_fee: 0.04,
-      auto_payout: 'false',
-      payout_frequency: 'manual',
+      // `auto_payout` + `payout_frequency` were REMOVED 2026-09-25 (impl doc D10, like D4): an
+      // automatic-payout switch and schedule with a UI, read by nothing. Payouts are
+      // miner-initiated by design — an ungated automatic trigger is what the ownership gate exists
+      // to prevent. A pool that stored them keeps inert pool_config rows: getSection still merges
+      // them in (no membership check) and the form no longer sends them, so no migration is needed.
       confirm_depth_mainnet: 1440,
       confirm_depth_testnet: 100,
       max_pending_withdrawals: 100,
@@ -230,6 +233,11 @@ class PoolSettings {
       // listener isn't answering over Tor now (probe = onion:80 SOCKS5 connect). Fails OPEN if
       // the pool box can't run the probe, so it never blocks every payout. ON by default.
       tor_preflight_gate: 'true',
+      // How a Tor payout is sent (design §8.1). 'cli' = one `grin-wallet send -d` (the shipped
+      // rail). 'stepwise' = the pool drives init → lock → Tor delivery → finalize → post itself
+      // through the Owner API and saves the slate id before anything leaves the box. Applied on
+      // backend restart. Default 'cli' until stepwise has passed its VPS acceptance run.
+      tor_send_mode: 'cli',
       // ── Goblin/Nostr payout rail (design §15). OFF by default. Relays + NIP-05 domains
       // are JSON arrays of strings; the domain list is the SSRF/typo-squat allowlist.
       nostr_payouts_enabled: 'false',
@@ -955,10 +963,6 @@ PASS      any-password-you-choose</code>
         if (n > 1) throw new Error('withdrawal_fee must be <= 1 GRIN (typical network fee is ~0.023)');
         return n;
       },
-      payout_frequency: (val) => {
-        if (!['manual', 'hourly', 'daily', 'weekly'].includes(val)) throw new Error('invalid payout_frequency');
-        return val;
-      },
       withdrawal_cooldown_minutes: (val) => {
         const n = parseInt(val, 10);
         if (isNaN(n) || n < 0 || n > 1440) throw new Error('withdrawal_cooldown_minutes must be 0-1440');
@@ -1006,6 +1010,12 @@ PASS      any-password-you-choose</code>
         const n = parseInt(val, 10);
         if (isNaN(n) || n < 10 || n > 1440) throw new Error('slatepack_ttl_minutes must be 10-1440');
         return n;
+      },
+      tor_send_mode: (val) => {
+        // An enum, not a boolean: a stray value must never select the newer money path.
+        const v = String(val === undefined || val === null ? '' : val).trim().toLowerCase();
+        if (v === 'cli' || v === 'stepwise') return v;
+        throw new Error("tor_send_mode must be 'cli' or 'stepwise'");
       },
       nostr_pending_ttl_minutes: (val) => {
         // Floor of 2: the expiry sweep runs every 60s, so a TTL under ~2 min can't be enforced
@@ -1679,6 +1689,12 @@ PASS      any-password-you-choose</code>
     }
     if (payout.tor_preflight_gate !== undefined) {
       config.tor_preflight_gate = payout.tor_preflight_gate === true || payout.tor_preflight_gate === 'true';
+    }
+    if (payout.tor_send_mode !== undefined) {
+      // Only an exact 'stepwise' selects the step-by-step path; anything else (a row written
+      // before the validator existed, a hand edit) is the shipped CLI rail.
+      config.tor_send_mode =
+        String(payout.tor_send_mode).trim().toLowerCase() === 'stepwise' ? 'stepwise' : 'cli';
     }
     // Nostr payout rail — stored as strings/JSON; coerce to the runtime shapes the bridge
     // expects (boolean, arrays, number). Malformed JSON falls back to the safe default.

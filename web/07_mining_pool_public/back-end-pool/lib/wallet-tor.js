@@ -205,18 +205,45 @@ function readProbeAnswer(status, bodyText) {
 // nothing capping how many. `deadline` is ABSOLUTE: the whole reply must arrive within
 // timeoutMs of the request. (Review fix, payout-rails Part 5; 06d has the same idle-only timer
 // but caps concurrent probes at tor_check_max_inflight, which the pool does not.)
+//
+// Since F5 (design §8.1) this is a thin wrapper over postJsonRpcOverSocket, with the probe's
+// limits unchanged: 16 KB body cap, the caller's timeoutMs as both timers.
 function checkVersionOverSocket(socket, opts) {
   const { onion, port, timeoutMs } = opts;
+  return postJsonRpcOverSocket(socket, {
+    onion, port, method: 'check_version', params: [], timeoutMs, maxBytes: MAX_BODY_BYTES,
+  });
+}
+
+// One JSON-RPC POST to /v2/foreign down an already-tunnelled socket — the generalisation of the
+// probe's check_version, used by the step-by-step Tor send for check_version AND receive_tx.
+// Same agent:null / createConnection / setHost:false / Connection: close, and the same two
+// timers (idle + ABSOLUTE deadline), for the same reason: the far end is the address holder's
+// own onion, and a drip-fed reply must not hold a payout attempt open.
+//
+// Resolves { status, body, wrote: true, complete, truncated }:
+//   complete  — the response ended normally (res.complete), not cut off mid-body
+//   truncated — the body passed maxBytes and was cut (the socket is destroyed at that point)
+// Rejects on a transport error; once req.write() has begun, the error carries
+// requestWritten = true — the far end MAY have acted on the request (for receive_tx: may have
+// stored the slate), which is exactly what the caller must know to choose a recovery.
+function postJsonRpcOverSocket(socket, opts) {
+  const { onion, port, method, params, timeoutMs, maxBytes = MAX_BODY_BYTES } = opts;
   return new Promise((resolve, reject) => {
-    const body = JSON.stringify({ jsonrpc: '2.0', method: 'check_version', params: [], id: 1 });
+    const body = JSON.stringify({ jsonrpc: '2.0', method, params, id: 1 });
     let settled = false;
     let req = null;
     let deadline = null;
+    let written = false;
     const done = (err, value) => {
       if (settled) return;
       settled = true;
       clearTimeout(deadline);
-      if (err) { try { socket.destroy(); } catch (_) { /* best effort */ } reject(err); }
+      if (err) {
+        if (written && err && typeof err === 'object') err.requestWritten = true;
+        try { socket.destroy(); } catch (_) { /* best effort */ }
+        reject(err);
+      }
       else resolve(value);
     };
 
@@ -240,14 +267,17 @@ function checkVersionOverSocket(socket, opts) {
       }, (res) => {
         let data = '';
         let over = false;
+        const answer = () => ({
+          status: res.statusCode, body: data, wrote: true, complete: !over && res.complete === true, truncated: over,
+        });
         res.setEncoding('utf8');
         res.on('data', (c) => {
           if (over) return;
           data += c;
-          if (data.length > MAX_BODY_BYTES) { over = true; data = data.slice(0, MAX_BODY_BYTES); res.destroy(); }
+          if (data.length > maxBytes) { over = true; data = data.slice(0, maxBytes); res.destroy(); }
         });
-        res.on('end', () => done(null, { status: res.statusCode, body: data }));
-        res.on('close', () => done(null, { status: res.statusCode, body: data }));
+        res.on('end', () => done(null, answer()));
+        res.on('close', () => done(null, answer()));
         res.on('error', (e) => done(e));
       });
     } catch (e) {
@@ -258,9 +288,62 @@ function checkVersionOverSocket(socket, opts) {
     req.setTimeout(timeoutMs, () => req.destroy(new Error('no reply within ' + timeoutMs + 'ms')));
     deadline = setTimeout(
       () => req.destroy(new Error('no complete reply within ' + timeoutMs + 'ms')), timeoutMs);
+    written = true;
     req.write(body);
     req.end();
   });
+}
+
+// ─── Step-by-step Tor send: deliver a slate to the miner's wallet (design §8.1.2 step 4) ──────
+const RECEIVE_MAX_BYTES = 1024 * 1024;   // an S2 is a few KB; 1 MiB is a hard stop, not a size guess
+const SEND_CHECK_TIMEOUT_MS = 30000;     // check_version on the send path: 30 s, absolute
+
+// Read a JSON-RPC answer from the MINER's Foreign API. Returns { ok, value } or { ok:false, why }.
+// grin-wallet wraps a Result as result.Ok / result.Err inside the JSON-RPC result.
+function readForeignResult(ans) {
+  if (!ans || ans.truncated) return { ok: false, why: 'reply over the size cap' };
+  if (!ans.complete) return { ok: false, why: 'reply cut off before it ended' };
+  if (!(ans.status >= 200 && ans.status < 300)) return { ok: false, why: `HTTP ${ans.status}` };
+  let data;
+  try { data = JSON.parse(String(ans.body || '')); }
+  catch (_) { return { ok: false, why: 'reply is not JSON' }; }
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return { ok: false, why: 'reply is not a JSON-RPC object' };
+  if (data.error) return { ok: false, why: `JSON-RPC error: ${String(data.error.message || JSON.stringify(data.error)).slice(0, 200)}`, rpcError: true };
+  const r = data.result;
+  if (r && typeof r === 'object' && 'Err' in r) return { ok: false, why: `wallet error: ${JSON.stringify(r.Err).slice(0, 200)}`, rpcError: true };
+  if (!r || typeof r !== 'object' || !('Ok' in r)) return { ok: false, why: 'reply carries no result.Ok' };
+  return { ok: true, value: r.Ok };
+}
+
+// ─── What did `grin-wallet send -d <address>` actually do? ────────────────────
+// The CLI exits 0 on three different outcomes, and only one of them paid anyone. Read against
+// upstream controller/src/command.rs `send` + `output_slatepack` at v5.4.1 and v5.5.0 (same
+// output in both):
+//   'sent'                Tor round-trip, then tx_lock_outputs → finalize_tx → post_tx all
+//                         succeeded, and the CLI printed `Tx sent successfully`. A failing post_tx
+//                         exits NON-zero instead, so it never reaches this function.
+//   'slatepack_fallback'  the Tor delivery failed (miner offline, onion unreachable, timeout), so
+//                         the CLI LOCKED the outputs, wrote <tld>/slatepack/<slate-uuid>.S1.slatepack,
+//                         printed the armored slatepack, and exited 0. Nothing was finalized — only
+//                         the sender can finalize — so nothing can ever post from this state.
+//   'unrecognised'        exit 0 with neither marker. Treated as an unknown outcome, never as sent.
+// `sent` is tested FIRST on purpose: a posted tx must never be classified as a fallback, because
+// the caller cancels a fallback, and cancelling a tx that did post unlocks outputs it already spent.
+// The markers are anchored lines of `println!` output; grin-wallet's own log lines (if the
+// operator enables stdout logging) carry a timestamp prefix and cannot match them.
+const SEND_OK_RE = /^Tx sent successfully\s*$/m;
+const SLATEPACK_FALLBACK_RE = /^Slatepack data follows|BEGINSLATEPACK\./m;
+const FALLBACK_FILE_RE =
+  /[\\/]slatepack[\\/]([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.S1\.slatepack\b/i;
+
+function classifySendOutput(stdout) {
+  const out = String(stdout || '');
+  if (SEND_OK_RE.test(out)) return { outcome: 'sent', slateId: null };
+  if (SLATEPACK_FALLBACK_RE.test(out)) {
+    const m = out.match(FALLBACK_FILE_RE);
+    return { outcome: 'slatepack_fallback', slateId: m ? m[1].toLowerCase() : null };
+  }
+  return { outcome: 'unrecognised', slateId: null };
 }
 
 class WalletTor {
@@ -282,13 +365,129 @@ class WalletTor {
     // Hard ceiling on a single `grin-wallet send` (Tor connect + slate round-trip). Stops a
     // hung wallet or unreachable recipient from stalling the withdrawal scheduler loop.
     this.sendTimeoutMs = config.wallet_send_timeout_ms || 120000;
+    // Step-by-step send (deliverSlate). SOCKS connect to the miner's onion; receive_tx's reply
+    // deadline (absolute); check_version's is fixed at SEND_CHECK_TIMEOUT_MS (instance field so
+    // a test can shorten it).
+    this.torSendConnectTimeoutMs = config.tor_send_connect_timeout_ms || 30000;
+    this.torSendReceiveTimeoutMs = config.tor_send_receive_timeout_ms || 60000;
+    this.torSendCheckTimeoutMs = SEND_CHECK_TIMEOUT_MS;
     this._connect = (deps && deps.connect) || socks5.connect;
     this._checkVersion = (deps && deps.checkVersion) || checkVersionOverSocket;
+    this._post = (deps && deps.post) || postJsonRpcOverSocket;
+  }
+
+  // ── Step-by-step Tor send: hand S1 to the miner's wallet, get S2 back (design §8.1.2, step 4) ──
+  // What the CLI's own Tor sender does (impls/src/adapters/http.rs / tor.rs send_tx), in Node:
+  //   1. SOCKS-connect to <derived onion>:80 with isolation tag 'grinpool-send-<attemptTag>'
+  //      (a fresh circuit for this attempt), POST check_version. Require foreign_api_version ≥ 2
+  //      and 'V4' in supported_slate_versions — the CLI's check_other_version.
+  //   2. Fresh connect on the SAME tag (same circuit), POST receive_tx with params EXACTLY
+  //      [slate, null, null]. POSITIONAL on purpose: this is the MINER's Foreign API, any
+  //      grin-wallet version, and this is what the CLI sends. The 3rd param must stay null — a
+  //      return address would make the receiver call OUR Foreign finalize_tx itself.
+  //   3. result.Ok must be an object whose id equals the slate's id: that is S2.
+  // One retry on a fresh circuit for step 1 only. NEVER a second receive_tx: after its first
+  // byte the receiver may have stored the slate, and a second receive of the same slate id is
+  // refused (TransactionAlreadyReceived) — a retry could only muddy the answer.
+  //
+  // Returns { ok:true, slate:<S2> } or { ok:false, ourSide, requestWritten, reason, detail }:
+  //   ourSide        — OUR tor is down/broken (classifyProbeError → tor_unavailable): the attempt
+  //                    says nothing about the miner. The scheduler retries it uncounted.
+  //   requestWritten — receive_tx bytes left this box: the miner's wallet MAY hold our S1.
+  // Never throws.
+  async deliverSlate(address, slate, { attemptTag = '' } = {}) {
+    const fail = (reason, detail, { ourSide = false, requestWritten = false } = {}) =>
+      ({ ok: false, ourSide, requestWritten, reason, detail: String(detail || reason).slice(0, 300) });
+    if (!slate || typeof slate !== 'object' || !slate.id) return fail('bad_slate', 'no slate id to deliver');
+    if (!this.isPayoutAddress(address)) return fail('invalid_format', 'not a grin1…/tgrin1… payout address');
+    const onion = this.deriveOnionAddress(address);
+    if (!onion) return fail('derivation_failed', 'could not derive the onion from the address');
+
+    const base = 'grinpool-send-' + String(attemptTag);
+    const connect = (isolationTag) => this._connect({
+      socksHost: '127.0.0.1',
+      socksPort: this.torSocksPort,
+      host: onion,
+      port: this.onionVirtualPort,
+      timeoutMs: this.torSendConnectTimeoutMs,
+      isolationTag,
+    });
+
+    // Stage 1 — connect + check_version, one retry on a fresh circuit.
+    let tag = null;
+    let last = fail('probe_failed', 'no attempt made');
+    for (let attempt = 1; attempt <= 2 && !tag; attempt++) {
+      const t = attempt === 1 ? base : base + '-r' + attempt;
+      let socket;
+      try {
+        socket = await connect(t);
+      } catch (err) {
+        const v = classifyProbeError(err);
+        if (v.reason === 'tor_unavailable') return fail('tor_unavailable', err.message, { ourSide: true });
+        last = fail(v.reason, err.message);
+        if (v.online === null) return last;   // could not attribute it — do not spend a retry
+        continue;
+      }
+      try {
+        const ans = await this._post(socket, {
+          onion, port: this.onionVirtualPort, method: 'check_version', params: [],
+          timeoutMs: this.torSendCheckTimeoutMs, maxBytes: MAX_BODY_BYTES,
+        });
+        const r = readForeignResult(ans);
+        if (!r.ok) {
+          // Something answered, and it is not a wallet we can pay: a stable fact, no retry.
+          return fail(r.rpcError ? 'incompatible_wallet' : 'not_wallet', r.why);
+        }
+        const v = r.value || {};
+        const versions = Array.isArray(v.supported_slate_versions) ? v.supported_slate_versions.map(String) : [];
+        if (!(Number(v.foreign_api_version) >= 2) || !versions.includes('V4')) {
+          return fail('incompatible_wallet',
+            `foreign_api_version ${v.foreign_api_version}, slate versions [${versions.join(',')}] — need ≥2 and V4`);
+        }
+        tag = t;
+      } catch (err) {
+        last = fail('no_answer', err.message);   // tunnel built: the far end's failure
+      } finally {
+        try { socket.destroy(); } catch (_) { /* best effort */ }
+      }
+    }
+    if (!tag) return last;
+
+    // Stage 2 — same circuit, receive_tx. No retry, whatever happens.
+    let socket;
+    try {
+      socket = await connect(tag);
+    } catch (err) {
+      const v = classifyProbeError(err);
+      return fail(v.reason, err.message, { ourSide: v.reason === 'tor_unavailable' });
+    }
+    try {
+      const ans = await this._post(socket, {
+        onion, port: this.onionVirtualPort, method: 'receive_tx', params: [slate, null, null],
+        timeoutMs: this.torSendReceiveTimeoutMs, maxBytes: RECEIVE_MAX_BYTES,
+      });
+      const r = readForeignResult(ans);
+      if (!r.ok) return fail(r.rpcError ? 'receive_refused' : 'bad_reply', r.why, { requestWritten: true });
+      const s2 = r.value;
+      if (!s2 || typeof s2 !== 'object' || Array.isArray(s2) || String(s2.id) !== String(slate.id)) {
+        return fail('bad_reply', `S2 id ${s2 && s2.id} does not match S1 id ${slate.id}`, { requestWritten: true });
+      }
+      return { ok: true, slate: s2 };
+    } catch (err) {
+      return fail('no_answer', err.message, { requestWritten: err && err.requestWritten === true });
+    } finally {
+      try { socket.destroy(); } catch (_) { /* best effort */ }
+    }
   }
 
   // Pool payouts go to the miner's Slatepack address (grin1…/tgrin1…) — which IS their mining
   // identity. grin-wallet resolves the Slatepack address to its Tor/onion service and sends
   // over Tor automatically, so we pass the address straight through (no .onion derivation here).
+  //
+  // Exit 0 is NOT "sent" — see classifySendOutput. Only the `Tx sent successfully` line means the
+  // wallet finalized and posted. On a Tor-delivery failure the CLI prints a slatepack instead,
+  // locks the outputs and STILL exits 0; that comes back as success:false with torFallback set
+  // and the slate id, so the caller can cancel the lock before it retries.
   async sendToTorAddress(address, amount) {
     try {
       if (!this.isPayoutAddress(address)) {
@@ -299,6 +498,26 @@ class WalletTor {
         '--top-level-dir', this.walletDir,
         'send', '-d', address, '-a', String(amount)
       ]);
+
+      const verdict = classifySendOutput(result);
+      if (verdict.outcome === 'slatepack_fallback') {
+        return {
+          success: false,
+          torFallback: true,
+          slateId: verdict.slateId,
+          error: 'Tor delivery failed: grin-wallet fell back to printing a slatepack — nothing was posted',
+          address,
+          amount
+        };
+      }
+      if (verdict.outcome !== 'sent') {
+        return {
+          success: false,
+          error: 'grin-wallet send exited 0 without reporting "Tx sent successfully" — outcome unknown',
+          address,
+          amount
+        };
+      }
 
       return {
         success: true,
@@ -314,6 +533,29 @@ class WalletTor {
         address,
         amount
       };
+    }
+  }
+
+  // Re-broadcast a stored, finalized, not-yet-confirmed transaction: `grin-wallet repost -i <id>
+  // -f` (grin-wallet v5.4.1 controller/src/command.rs `repost`), where <id> is the TxLogEntry id
+  // from retrieve_txs. Used only by the scheduler's "marked paid but not mined" watchdog. It is
+  // the SAME transaction the wallet already signed, so it cannot pay twice; the wallet itself
+  // refuses one that is already confirmed or was never finalized. -f fluffs it (skips the
+  // Dandelion stem, one of the ways a tx gets lost). Same invocation, passphrase-on-stdin and
+  // timeout as `send`. NOTE: the CLI logs a refusal or a node rejection and still exits 0, so
+  // `ok` means "the command ran", not "the node accepted it" — the caller journals the output and
+  // lets the next tx-log read decide.
+  async repostTx(txLogId) {
+    const id = Number(txLogId);
+    if (!Number.isInteger(id) || id < 0) return { ok: false, output: `bad tx log id ${txLogId}` };
+    try {
+      const out = await this.execWalletCommand([
+        '--top-level-dir', this.walletDir,
+        'repost', '-i', String(id), '-f'
+      ]);
+      return { ok: true, output: out };
+    } catch (err) {
+      return { ok: false, output: err.message };
     }
   }
 
@@ -481,3 +723,5 @@ module.exports.REASONS = REASONS;
 module.exports.classifyProbeError = classifyProbeError;
 module.exports.readProbeAnswer = readProbeAnswer;
 module.exports.checkVersionOverSocket = checkVersionOverSocket;
+module.exports.postJsonRpcOverSocket = postJsonRpcOverSocket;
+module.exports.classifySendOutput = classifySendOutput;

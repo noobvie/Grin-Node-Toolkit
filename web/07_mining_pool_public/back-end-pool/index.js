@@ -5384,7 +5384,26 @@ function setupRoutes() {
       // countryCentroid() in a form it can't match and drop the marker without a word.
       const hubCc = /^[A-Z]{2}$/.test(String(rawHubCc || '').toUpperCase())
         ? String(rawHubCc).toUpperCase() : null;
-      const hubPos = hubCc ? geoip.countryCentroid(hubCc, nudgeFor(hubCc)) : null;
+      // Hub POSITION. When this box's own region is a published gateway (the hub also takes
+      // stratum directly — e.g. region 'main' labelled "New York"), the hub IS that gateway's
+      // box: it takes that gateway's position (operator pin, or its already-nudged centroid) and
+      // the gateway is flagged `is_hub` so the client draws ONE marker and no hub→itself link.
+      // Before 2026-09-26 the hub took its own centroid-ring slot instead — Kansas for a US box —
+      // 1.6° from its own gateway, and every gateway link converged on a spot where nothing runs.
+      // An unpublished own row still lends its pin. Either applies only when its country agrees
+      // with hubCc: an explicit hub_country_code naming another country wins.
+      const ownGw = gwByRegion[config.region] || null;
+      const agrees = (cc) => !cc || String(cc).toUpperCase() === hubCc;
+      let hubPos = null;
+      if (hubCc && ownGw && ownGw.lat != null && agrees(ownGw.country_code)) {
+        hubPos = { lat: ownGw.lat, lng: ownGw.lng };
+        ownGw.is_hub = true;
+      } else if (hubCc && localRow && Number.isFinite(localRow.lat) && Number.isFinite(localRow.lng)
+                 && agrees(localRow.country_code)) {
+        hubPos = { lat: localRow.lat, lng: localRow.lng };
+      } else if (hubCc) {
+        hubPos = geoip.countryCentroid(hubCc, nudgeFor(hubCc));
+      }
       // Live pool name first: pool_info.pool_name is what the rest of the site renders, and it is
       // editable in admin, whereas pool.json's `pool_name` is frozen at install time ("My Grin
       // Pool") — reading that one labelled the hub marker with a name shown nowhere else.

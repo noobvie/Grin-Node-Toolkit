@@ -1479,6 +1479,22 @@ function seedShippedPages() {
 // unpublished: no connect card, no gateway on the map. The exclusion only sees the CURRENT tag:
 // a hub that moves to a new tag inherits a DB where that tag was seeded inactive while the old
 // one was local — ensureLocalRegion() handles that case (the local-region change rule).
+// The default grinium regional endpoints (see seedDefaultRegions). city = label;
+// country/country_code drive grouping + flag on the dashboard; lat/lng pin the network-map
+// marker on the city. Without a pin a gateway sits on its COUNTRY centroid (+ a ≤1.6° de-stack
+// ring), which put Los Angeles and New York 140 km apart in Kansas and Toronto on Hudson Bay.
+const SEED_REGIONS = [
+  { v: 1, region: 'nyc', label: 'New York',    country: 'United States',  cc: 'US', host: 'nyc.grinium.com', lat: 40.7128, lng: -74.006 },
+  { v: 1, region: 'lax', label: 'Los Angeles', country: 'United States',  cc: 'US', host: 'lax.grinium.com', lat: 34.0522, lng: -118.2437 },
+  { v: 1, region: 'yyz', label: 'Toronto',     country: 'Canada',         cc: 'CA', host: 'yyz.grinium.com', lat: 43.6532, lng: -79.3832 },
+  { v: 1, region: 'ams', label: 'Amsterdam',   country: 'Netherlands',    cc: 'NL', host: 'ams.grinium.com', lat: 52.3676, lng: 4.9041 },
+  { v: 2, region: 'sgn', label: 'Saigon',      country: 'Vietnam',        cc: 'VN', host: 'sgn.grinium.com', lat: 10.8231, lng: 106.6297 },
+  { v: 3, region: 'hkg', label: 'Hong Kong',   country: 'Hong Kong',      cc: 'HK', host: 'hkg.grinium.com', lat: 22.3193, lng: 114.1694 },
+  { v: 3, region: 'sin', label: 'Singapore',   country: 'Singapore',      cc: 'SG', host: 'sin.grinium.com', lat: 1.3521, lng: 103.8198 },
+  // cqf = Calais–Dunkerque, the IATA code of the airport nearest OVH Gravelines (~15 km) — not `gra`/`lil`.
+  { v: 3, region: 'cqf', label: 'Gravelines',  country: 'France',         cc: 'FR', host: 'cqf.grinium.com', lat: 50.9864, lng: 2.1283 }
+];
+
 function seedDefaultRegions(stratumPort, poolDomain, localRegion) {
   try {
     const dom = String(poolDomain || '').toLowerCase();
@@ -1491,6 +1507,26 @@ function seedDefaultRegions(stratumPort, poolDomain, localRegion) {
     // reads back as "v1 applied", so an already-seeded install inserts ONLY the newer
     // additions. Rows the operator deleted from an already-applied version are never
     // re-created (that version doesn't re-run).
+    // One-time pin backfill for rows seeded before the seed carried coordinates. Only a row
+    // still wearing its seed label with no pin at all is touched — a row the operator re-labelled
+    // may now be somewhere else. Once only (own marker): a pin the operator later CLEARS in
+    // admin → Regions must stay cleared.
+    const pinned = db.prepare(
+      "SELECT value FROM pool_config WHERE section = '_migrations' AND key = 'regions_pinned'"
+    ).get();
+    if (!pinned) {
+      const pin = db.prepare(
+        'UPDATE pool_locations SET lat = ?, lng = ? WHERE region = ? AND label = ? AND lat IS NULL AND lng IS NULL'
+      );
+      let n = 0;
+      db.transaction(() => {
+        for (const r of SEED_REGIONS) n += pin.run(r.lat, r.lng, r.region, r.label).changes || 0;
+        db.prepare(
+          "INSERT INTO pool_config (section, key, value, value_type) VALUES ('_migrations', 'regions_pinned', '1', 'string')"
+        ).run();
+      })();
+      if (n) console.warn(`[db] pinned ${n} seeded region(s) to their city coordinates (network map)`);
+    }
     const SEED_VERSION = 3;
     const marker = db.prepare(
       "SELECT value FROM pool_config WHERE section = '_migrations' AND key = 'regions_seeded'"
@@ -1498,18 +1534,7 @@ function seedDefaultRegions(stratumPort, poolDomain, localRegion) {
     const applied = marker ? (parseInt(marker.value, 10) || 1) : 0;
     if (applied >= SEED_VERSION) return;
     const port = stratumPort || 3333;
-    // city = label; country/country_code drive grouping + flag on the dashboard.
-    const REGIONS = [
-      { v: 1, region: 'nyc', label: 'New York',    country: 'United States',  cc: 'US', host: 'nyc.grinium.com' },
-      { v: 1, region: 'lax', label: 'Los Angeles', country: 'United States',  cc: 'US', host: 'lax.grinium.com' },
-      { v: 1, region: 'yyz', label: 'Toronto',     country: 'Canada',         cc: 'CA', host: 'yyz.grinium.com' },
-      { v: 1, region: 'ams', label: 'Amsterdam',   country: 'Netherlands',    cc: 'NL', host: 'ams.grinium.com' },
-      { v: 2, region: 'sgn', label: 'Saigon',      country: 'Vietnam',        cc: 'VN', host: 'sgn.grinium.com' },
-      { v: 3, region: 'hkg', label: 'Hong Kong',   country: 'Hong Kong',      cc: 'HK', host: 'hkg.grinium.com' },
-      { v: 3, region: 'sin', label: 'Singapore',   country: 'Singapore',      cc: 'SG', host: 'sin.grinium.com' },
-      // cqf = Calais–Dunkerque, the IATA code of the airport nearest OVH Gravelines (~15 km) — not `gra`/`lil`.
-      { v: 3, region: 'cqf', label: 'Gravelines',  country: 'France',         cc: 'FR', host: 'cqf.grinium.com' }
-    ];
+    const REGIONS = SEED_REGIONS;
     const local = String(localRegion || '').trim().toLowerCase();
     const pending = REGIONS.filter(r => r.v > applied && r.region !== local);
     // Seeded INACTIVE (is_active = 0), deliberately. A seed row is a PLAN, not a running
@@ -1520,8 +1545,8 @@ function seedDefaultRegions(stratumPort, poolDomain, localRegion) {
     // admin → Regions once its gateway is actually deployed (scripts/lib/07_lib_gateway.sh).
     const insert = db.prepare(`
       INSERT OR IGNORE INTO pool_locations
-        (region, label, country, country_code, stratum_url, is_active)
-      VALUES (?, ?, ?, ?, ?, 0)
+        (region, label, country, country_code, stratum_url, lat, lng, is_active)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 0)
     `);
     const stamp = db.prepare(`
       INSERT INTO pool_config (section, key, value, value_type)
@@ -1530,7 +1555,7 @@ function seedDefaultRegions(stratumPort, poolDomain, localRegion) {
     `);
     const tx = db.transaction(() => {
       for (const r of pending) {
-        insert.run(r.region, r.label, r.country, r.cc, `${r.host}:${port}`);
+        insert.run(r.region, r.label, r.country, r.cc, `${r.host}:${port}`, r.lat, r.lng);
       }
       stamp.run(String(SEED_VERSION)); // seed + "done" marker committed atomically
     });

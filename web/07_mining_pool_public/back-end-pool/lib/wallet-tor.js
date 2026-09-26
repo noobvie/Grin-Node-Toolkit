@@ -352,6 +352,10 @@ class WalletTor {
   constructor(config, deps) {
     this.network = config.network || 'testnet';
     this.walletDir = config.wallet_dir;
+    // The installer puts the binary INSIDE the wallet dir (07_lib_pool_wallet.sh pw_bin) and
+    // never on PATH, and the unit sets no PATH — a bare `grin-wallet` spawn is ENOENT on every
+    // toolkit box (mainnet payout #10, 2026-09-25: the process never started, nothing sent).
+    this.walletBin = path.join(this.walletDir || '', 'grin-wallet');
     this.ownerPort = config.wallet_owner_port || (this.network === 'mainnet' ? 3420 : 13420);
     this.torSocksPort = config.tor_socks_port || 9050;
     // 8 s, matching 06d: a cold onion connect is routinely 5–15 s, and 3 s (the old value)
@@ -646,7 +650,7 @@ class WalletTor {
   // wedge the scheduler.
   async execWalletCommand(args) {
     return new Promise((resolve, reject) => {
-      const proc = spawn('grin-wallet', args);
+      const proc = spawn(this.walletBin, args);
 
       let stdout = '';
       let stderr = '';

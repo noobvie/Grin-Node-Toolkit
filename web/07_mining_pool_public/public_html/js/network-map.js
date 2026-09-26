@@ -16,7 +16,9 @@
  * shape itself states the precision we have and there is no point position to misread; the
  * centroid marker is only a label/hover anchor. A country with no polygon on file, or one
  * too small to read at the current zoom, falls back to a size-scaled dot on its centroid.
- * The hub sits on the country centroid (see back-end lib/geoip.js). A gateway sits on the
+ * The hub sits on its own region's gateway when that region is published (flagged `is_hub`;
+ * folded into the hub marker here), else on its own row's pin, else on the country centroid
+ * (see back-end lib/geoip.js). A gateway sits on the
  * lat/lng the operator declared for it in admin → Regions, else on the centroid: a gateway is
  * the pool's own public server, not a miner, and two US gateways on the centroid drew
  * "Los Angeles" and "New York" 140 km apart in Kansas (2026-09-21) — a bug to any viewer.
@@ -86,7 +88,7 @@
   let seed = 20260718; const rand = () => { seed = (seed*1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
 
   // ── state populated from the API (or fallback) ─────────────────────────────
-  let HUB = null, GATEWAYS = [], gwByRegion = {}, REGIONS = [], PEERS = [], NODES = [], COUNTRIES = [], POLY_BY_NAME = {};
+  let HUB = null, GATEWAYS = [], GW_TOTAL = [], gwByRegion = {}, REGIONS = [], PEERS = [], NODES = [], COUNTRIES = [], POLY_BY_NAME = {};
   let TOTALS = {};
   let LAND = [], MERIDIANS = [], PARALLELS = [];
 
@@ -112,9 +114,15 @@
     // converging on it. `v` keeps a defined vector so the geometry helpers stay simple, but
     // `located` gates the marker and every arc that targets the hub (see draw()).
     const hubLocated = h.lat != null;
-    HUB = { role: 'hub', name: h.label || 'Pool Hub', located: hubLocated,
+    // `is_hub` = the gateway row for the hub box's own stratum (server put the hub on its
+    // position). It folds into the hub marker — one box, one marker, no link to itself — and
+    // the hub's label names its city.
+    const own = hubLocated ? (topo.gateways || []).find(g => g.is_hub && g.lat != null) || null : null;
+    HUB = { role: 'hub', name: (h.label || 'Pool Hub') + (own ? ' · ' + (own.label || own.region) : ''),
+            located: hubLocated, own: own ? { miners: own.miners || 0 } : null,
             v: hubLocated ? toVec(h.lat, h.lng) : toVec(20, 0) };
-    GATEWAYS = (topo.gateways || []).filter(g => g.lat != null).map(g => ({
+    GW_TOTAL = (topo.gateways || []).filter(g => g.lat != null);
+    GATEWAYS = GW_TOTAL.filter(g => g !== own).map(g => ({
       role: 'gw', region: g.region, name: g.label || g.region, status: g.status || 'connected',
       miners: g.miners || 0, _feed: g.miners || 0, v: toVec(g.lat, g.lng)
     }));
@@ -122,6 +130,7 @@
     // inherited function, and `gw.v` on it is undefined → the arc maths throws and takes the
     // whole globe down. Region tags are operator-chosen strings, so treat them as data only.
     gwByRegion = Object.create(null); GATEWAYS.forEach(g => { gwByRegion[g.region] = g; });
+    if (own) gwByRegion[own.region] = { v: HUB.v, status: own.status || 'connected' };
     // Miner countries. `poly` is the country's own outline when we ship one — then the FILLED
     // COUNTRY carries the miner count (drawCountries) and the centroid marker demotes to a
     // small label/hover anchor. Countries with no polygon on file keep the sized dot, which is
@@ -195,7 +204,7 @@
       for (const nd of NODES) { if (!nd || !nd._front) continue; const d=(nd._sx-mx)**2+(nd._sy-my)**2; if (d<bd){ bd=d; best=nd; } }
       hoverNode = best;
       if (best) { tip.style.display="block"; tip.style.left=best._sx+"px"; tip.style.top=best._sy+"px"; let roleTxt, roleCol, val;
-        if (best.role==="hub") { roleTxt="Settlement hub"; roleCol="var(--accent, #5dff73)"; val=(totalMinersNow()+" miners settled"); }
+        if (best.role==="hub") { roleTxt="Settlement hub"; roleCol="var(--accent, #5dff73)"; val=(totalMinersNow()+" miners settled")+(HUB.own?" · "+HUB.own.miners+" connect here":""); }
         else if (best.role==="gw") { const st=best.status; roleTxt = st==="connected"?"Gateway · connected":st==="handshake"?"Gateway · handshaked, idle":st==="checking"?"Gateway · checking":"Gateway · offline"; roleCol = st==="offline"?"#ff5a52":st==="checking"?"#8b98a5":"#ffb63d"; val = st==="connected"?(best._feed+" miners routed"):st==="handshake"?"link up · 0 miners":st==="checking"?"verifying link…":"unreachable"; }
         else { roleTxt="Miner region"; roleCol="#5ad1ff"; val=best.n+" miners"; }
         tip.innerHTML = '<span class="nm-tip-role" style="color:'+roleCol+'">'+roleTxt+'</span><span class="nm-tip-name">'+esc(best.name)+'</span><br><span style="color:'+roleCol+';font-variant-numeric:tabular-nums">'+val+'</span>';
@@ -297,6 +306,10 @@
   // and a blurred glowing head on a 17%-lift arc, which made every hub link look like a rocket
   // launch (2026-09-21); there is deliberately no tail flare and no glow here.
   function drawAnimArc(a, b, rgb, width, lift, now, phase, period, active, opt) {
+    // Endpoints on (nearly) the same spot: slerp returns `a` for every t while the lift still
+    // raises the middle, so the "arc" is a radial spike shooting off the surface — packets
+    // included, the rocket again. Nothing to link; draw nothing.
+    if (a[0]*b[0]+a[1]*b[1]+a[2]*b[2] > 0.99985) return;
     const packets = Math.max(1, (opt && opt.packets) | 0 || 3), dashed = !!(opt && opt.dashed);
     const N=30, pt = t => { const s=slerp(a,b,t); const k=1+lift*Math.sin(Math.PI*t); return project([s[0]*k,s[1]*k,s[2]*k]); };
     ctx.lineWidth=width; if (dashed) ctx.setLineDash([3,5]); let st=false;
@@ -362,7 +375,7 @@
     const set = (id, html) => { const el = document.getElementById(id); if (el) el.innerHTML = html; };
     const t = topo.totals || {};
     set('nm-s-miners', String(totalMinersNow()));
-    set('nm-s-gw', (t.gateways_up != null ? t.gateways_up : GATEWAYS.filter(g=>g.online!==false && g.status!=='offline').length) + '<small>/' + (t.gateways_total != null ? t.gateways_total : GATEWAYS.length) + '</small>');
+    set('nm-s-gw', (t.gateways_up != null ? t.gateways_up : GW_TOTAL.filter(g=>g.online!==false && g.status!=='offline').length) + '<small>/' + (t.gateways_total != null ? t.gateways_total : GW_TOTAL.length) + '</small>');
     // totals.countries is the TRUE distinct-country count; the countries[] array is the
     // publishable subset, where every country under the k-anonymity floor has been folded into
     // a single unnamed "Other" row. Counting rows would report "n named + 1" instead.

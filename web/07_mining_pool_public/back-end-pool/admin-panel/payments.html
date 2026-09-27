@@ -392,8 +392,10 @@ function shortAddr(a) {
 // Every status the scheduler can write. The slatepack and Goblin rails were missing here, so
 // their rows fell through to ['badge-dim', <raw status>] — showing "slatepack_pending" in the
 // same grey the panel uses for CANCELLED, i.e. an in-flight payout reading as a dead one.
+// The labels carry no rail: the badge appends it from w.method (RAIL below), so every row reads
+// "Paid · Tor" / "Failed · Slatepack" the same way instead of only the failed ones naming it.
 const STATUS = {
-  tor_checking:      ['badge-warn',  'Checking (Tor)'],
+  tor_checking:      ['badge-warn',  'Checking'],
   tor_sending:       ['badge-warn',  'Sending'],
   tor_held:          ['badge-warn',  'Held'],
   // LEGACY: no new row lands here since 2026-09-26; the scheduler migrates old ones on its
@@ -402,12 +404,16 @@ const STATUS = {
   slatepack_pending: ['badge-warn',  'Awaiting slate'],
   finalizing:        ['badge-warn',  'Settling'],
   confirmed:         ['badge-ok',    'Paid'],
-  tor_failed:        ['badge-error', 'Failed (Tor)'],
-  slatepack_failed:  ['badge-error', 'Failed (slate)'],
-  nostr_failed:      ['badge-error', 'Failed (Goblin)'],
+  tor_failed:        ['badge-error', 'Failed'],
+  slatepack_failed:  ['badge-error', 'Failed'],
+  nostr_failed:      ['badge-error', 'Failed'],
   slatepack_expired: ['badge-dim',   'Expired'],
   cancelled:         ['badge-dim',   'Cancelled'],
 };
+// The payout's rail (withdrawals.method, NOT NULL DEFAULT 'tor'). 'nostr' is the Goblin rail and
+// 'manual' an admin's out-of-band payout. An unknown value renders raw rather than vanishing.
+const RAIL = { tor: 'Tor', slatepack: 'Slatepack', nostr: 'Goblin', manual: 'Manual' };
+const railOf = (w) => (w.method ? (RAIL[w.method] || w.method) : '');
 // Where a PAID row stands on chain (GET /api/admin/withdrawals chain_state, from the scheduler's
 // "marked paid but not mined" watchdog). 'mined' needs no badge; the rest sit beside "Paid".
 const CHAIN = {
@@ -449,19 +455,25 @@ async function loadQueueSummary() {
 const payTable = AdminTable.create({
   tbody: 'pay-tbody',
   search: 'Filter by address, id or status…',
+  // ?q= prefills this box — miners.html links here as payments.html?q=<address>.
+  urlQuery: true,
   empty: 'No withdrawals in this view.',
   note: 'Payout records are kept permanently — this view loads the 100 most recent.',
-  text: w => [w.id, w.grin_address, w.status, (STATUS[w.status] || [])[1], w.method,
+  text: w => [w.id, w.grin_address, w.status, (STATUS[w.status] || [])[1], w.method, railOf(w),
               w.cancel_reason, w.fail_code, w.fail_detail, (CHAIN[w.chain_state] || [])[1]].join(' '),
   row: w => {
-    const [cls, label] = STATUS[w.status] || ['badge-dim', w.status];
+    const [cls, status] = STATUS[w.status] || ['badge-dim', w.status];
+    const rail = railOf(w);
+    const label = rail ? `${status} · ${rail}` : status;
     const chain = CHAIN[w.chain_state];
     const chainBadge = chain
       ? ` <span class="badge ${chain[0]}" title="${escHtml(chain[2])}">${escHtml(chain[1])}</span>`
       : '';
     // No Retry: a Tor payout is tried once (the route answers 410). Cancel only where the server
-    // allows it — never Held (its send may have landed) and never a legacy retry_scheduled row.
-    const canCancel = w.status === 'tor_checking' || w.status === 'tor_failed';
+    // allows it: a never-sent tor_checking row. Never Held (its send may have landed), never a
+    // legacy retry_scheduled row, and never tor_failed — it was refunded when it failed, so
+    // cancel had nothing to return and only relabelled it (the server answers 409).
+    const canCancel = w.status === 'tor_checking';
     const isHeld    = w.status === 'tor_held';
     // Signed payment proof — the dispute document (recipient's own signature over amount +
     // kernel + sender). Only a confirmed Tor payout can have one; a row whose backfill has not

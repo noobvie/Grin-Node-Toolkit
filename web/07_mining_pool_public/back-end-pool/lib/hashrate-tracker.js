@@ -381,23 +381,32 @@ class HashrateTracker {
   // from the LIVE in-memory stratum sessions. Under Model C every region's miners terminate
   // their session on this box, so reject/stale is complete pool-wide. Workers seen in shares but
   // with no live session show online:false and null reject/stale.
-  getWorkersForAccount(minerAddress, windowMinutes = 10) {
+  // `shortWindowMinutes` (optional, admin Miners page) adds `hashrate_gps_short` over a second,
+  // shorter window from the SAME pass. That is the point: this query SEARCHes idx_share_address,
+  // i.e. it reads every retained share of the address whatever the window, so a second call for
+  // the short window would read them all again. Without it the output is unchanged.
+  getWorkersForAccount(minerAddress, windowMinutes = 10, shortWindowMinutes = null) {
     try {
       const windowSeconds = windowMinutes * 60;
-      const cutoff = Math.floor(Date.now() / 1000) - windowSeconds;
+      const nowS = Math.floor(Date.now() / 1000);
+      const cutoff = nowS - windowSeconds;
       const factor = HashrateTracker.CYCLE_LENGTH / (windowSeconds * HashrateTracker.SOLUTION_RATE);
+      const short = shortWindowMinutes > 0 ? shortWindowMinutes * 60 : null;
+      const shortCutoff = short ? nowS - short : cutoff;
+      const shortFactor = short ? HashrateTracker.CYCLE_LENGTH / (short * HashrateTracker.SOLUTION_RATE) : 0;
 
       // worker_name may be NULL (default worker) — COALESCE so it groups under a stable label.
       const rows = this.db.prepare(`
         SELECT COALESCE(worker_name, 'default') AS worker_name,
                COALESCE(SUM(difficulty), 0) AS sumdiff,
+               COALESCE(SUM(CASE WHEN created_at > ? THEN difficulty ELSE 0 END), 0) AS sumdiff_short,
                COUNT(*) AS share_count,
                MAX(created_at) AS last_share_at
         FROM shares
         WHERE grin_address = ? AND created_at > ?
         GROUP BY COALESCE(worker_name, 'default')
         ORDER BY sumdiff DESC
-      `).all(minerAddress, cutoff);
+      `).all(shortCutoff, minerAddress, cutoff);
 
       // Live session counters keyed by worker name.
       const liveByWorker = new Map();
@@ -433,6 +442,7 @@ class HashrateTracker {
           rejected:     live ? live.rejected : null,
           stale:        live ? live.stale : null
         };
+        if (short) out.hashrate_gps_short = parseFloat((r.sumdiff_short * shortFactor).toFixed(6));
         if (live) {
           const total = live.accepted + live.rejected + live.stale;
           out.reject_pct = total > 0 ? parseFloat(((live.rejected / total) * 100).toFixed(2)) : 0;
@@ -451,6 +461,7 @@ class HashrateTracker {
         workers.push({
           worker_name:  wn,
           hashrate_gps: 0,
+          ...(short ? { hashrate_gps_short: 0 } : {}),
           share_count:  0,
           last_share_at: null,
           online:       true,

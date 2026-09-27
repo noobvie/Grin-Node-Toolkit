@@ -465,8 +465,15 @@ console.log('\n[11] one-attempt Tor payouts — Held, fail_detail, Re-check / fo
   ok('the Retry button and its call are gone (the route answers 410)',
      !/retryWithdrawal/.test(pay) && !/\/retry'/.test(pay));
   const canCancel = (pay.match(/const canCancel = ([^;]+);/) || [])[1] || '';
-  ok('Cancel is offered only where the server allows it (tor_checking, tor_failed)',
-     /tor_checking/.test(canCancel) && /tor_failed/.test(canCancel) && !/retry_scheduled|tor_held/.test(canCancel), canCancel);
+  // tor_failed left the set 2026-09-27: it was refunded when it failed, so cancel only relabelled
+  // it 'cancelled' — which auditWalletSends counts as recorded. The server now answers 409.
+  ok('Cancel is offered only where the server allows it (tor_checking alone)',
+     /tor_checking/.test(canCancel) && !/tor_failed|retry_scheduled|tor_held/.test(canCancel), canCancel);
+  const railMap = (pay.match(/const RAIL = \{([^}]*)\}/) || [])[1] || '';
+  ok('the Status badge names the rail of every row ("Paid · Tor"), from w.method',
+     /tor: 'Tor'/.test(railMap) && /slatepack: 'Slatepack'/.test(railMap) && /nostr: 'Goblin'/.test(railMap) &&
+     /const label = rail \? `\$\{status\} · \$\{rail\}` : status;/.test(pay) &&
+     !/'Failed \(/.test(statusBlock), railMap);
   ok('Held rows get Re-check → POST …/recheck', /w\.status === 'tor_held'/.test(pay) &&
      /adminFetch\('\/api\/admin\/withdrawals\/' \+ id \+ '\/recheck', \{ method: 'POST' \}\)/.test(pay));
   const force = (pay.match(/async function forceRefundHeld\(id[^)]*\) \{([\s\S]*?)\n\}/) || [])[1] || '';
@@ -480,13 +487,65 @@ console.log('\n[11] one-attempt Tor payouts — Held, fail_detail, Re-check / fo
   const home = read('index.html');
   ok('the dashboard labels Held too', /tor_held: +'<span class="badge badge-warn">Held<\/span>'/.test(home));
 
+  // Since 2026-09-27 the Tor state lives in the miner's expanded row (the 🧅 row button and its
+  // separate card are gone); the address travels the same way, via data-addr.
   const miners = read('miners.html');
-  ok('miners.html opens the miner view via data-addr (never a spliced literal)',
-     /onclick="showTorPause\(this\.dataset\.addr\)"/.test(miners));
+  ok('miners.html expands a miner via data-addr (never a spliced literal)',
+     /class="mn-toggle" data-addr="\$\{addr\}"/.test(miners) && /toggleMiner\(tog\.dataset\.addr\)/.test(miners));
   ok('…which reads GET /api/admin/miners/:addr', /API\.get\('\/api\/admin\/miners\/' \+ encodeURIComponent\(addr\)\)/.test(miners));
   ok('the pause is cleared through adminFetch (step-up) on POST …/tor-pause/clear',
-     /adminFetch\('\/api\/admin\/miners\/' \+ encodeURIComponent\(addr\) \+ '\/tor-pause\/clear', \{ method: 'POST' \}\)/.test(miners));
+     /adminFetch\('\/api\/admin\/miners\/' \+ encodeURIComponent\(addr\) \+ '\/tor-pause\/clear', \{ method: 'POST' \}\)/.test(miners) &&
+     /onclick="clearTorPause\(this\.dataset\.addr\)"/.test(miners));
   ok('the miner view shows paused_until in UTC', /paused_until/.test(miners) && /toISOString\(\)/.test(miners));
+}
+
+// ── Miners page (2026-09-27): status dot, expandable rigs, chips, sort, in-page dialogs ──────
+console.log('\n[12] miners.html — status + expandable rigs');
+{
+  const miners = read('miners.html');
+  const script = (miners.match(/<script>\n([\s\S]*?)<\/script>/) || [])[1] || '';
+  const head = (miners.match(/<thead>([\s\S]*?)<\/thead>/) || [])[1] || '';
+  ok('the Online column is gone — the status dot rides in the Miner cell',
+     !/<th[^>]*>\s*Online\s*<\/th>/.test(head) && /class="mn-dot mn-st-\$\{st\}"/.test(script));
+  ok('the dot state comes from the SERVER status (lib/miner-status.js), not a page-side guess',
+     /m\.is_banned \? 'banned' : \(STATE_LABEL\[m\.status\]/.test(script) && !/m\.is_online/.test(script));
+  ok('every live-status window label comes from the API windows object',
+     /if \(data && data\.windows\) _win = data\.windows;/.test(script) && /if \(w && w\.windows\) _win = w\.windows;/.test(script));
+  ok('the rigs come from GET /api/admin/miners/:addr/workers',
+     /API\.get\('\/api\/admin\/miners\/' \+ encodeURIComponent\(addr\) \+ '\/workers'\)/.test(script));
+  ok('the expanded detail is a second <tr> of the same row() — paging still counts miners',
+     /return open \? main \+ detailRow\(m, detailId\) : main;/.test(script));
+  ok('expanded rows survive the 30 s refresh (a Set; the on-screen ones re-fetched, not while hidden)',
+     /const _open = new Set\(\);/.test(script) && /if \(!document\.hidden\) \{\s*document\.querySelectorAll\('#miners-tbody tr\.mn-row\.is-open'\)\.forEach\(tr => fetchDetail\(tr\.dataset\.addr\)\)/.test(script));
+  // GET /api/admin/miners/:addr counts every retained share of the address on the DB the stratum
+  // server shares; it must not ride the 30 s refresh for every open row.
+  ok('account facts are NOT re-read on every refresh (FACTS_MAX_AGE_S gate)',
+     /const FACTS_MAX_AGE_S = \d+;/.test(script) && /wantFacts \? API\.get\('\/api\/admin\/miners\/' \+ encodeURIComponent\(addr\)\) : null/.test(script));
+  ok('one ban/unban dialog at a time — a second open cancels the first (one Submit, one address)',
+     /if \(_dialogClose\) _dialogClose\(null\);/.test(script) && /_dialogClose = close;/.test(script));
+  ok('a timer refresh keeps the page; only a chip or sort change resets it',
+     /applyView\(\);/.test(script) && (script.match(/applyView\(true\)/g) || []).length === 2);
+  ok('the row click ignores buttons, links, copy controls and the detail itself',
+     /t\.closest\('button, a, input, select, textarea, label, \[data-copy\], tr\.mn-detail'\)/.test(script));
+  ok('the address copy survived as its own [data-copy] control',
+     /class="addr-copy mn-copy" data-copy="\$\{addr\}"/.test(script));
+  ok('the old shares_count column is gone (it fell at every retention prune)',
+     !/shares_count/.test(head) && !/m\.shares_count/.test(script));
+  // Native dialogs: a confirm()/prompt() followed by the step-up dialog is the throttled
+  // "successive dialogs" pattern (design §13.12r) — this page uses its own in-page dialog.
+  const code = script.replace(/\/\/[^\n]*/g, '');
+  ok('no window.prompt / confirm on the miners page', !/\bprompt\(/.test(code) && !/\bconfirm\(/.test(code));
+  ok('the dialog writes every value with textContent (no innerHTML in askDialog)',
+     /function askDialog[\s\S]*?\n\}/.test(script) && !/innerHTML/.test((script.match(/function askDialog[\s\S]*?\n\}/) || [''])[0]));
+  ok('ban/unban still go through adminFetch (step-up)',
+     /adminFetch\('\/api\/admin\/miners\/' \+ encodeURIComponent\(addr\) \+ '\/ban'/.test(script) &&
+     /adminFetch\('\/api\/admin\/miners\/' \+ encodeURIComponent\(addr\) \+ '\/unban'/.test(script));
+
+  const shell = read('admin-shell.js');
+  ok('AdminTable urlQuery is opt-in and only ever sets the input VALUE',
+     /if \(input && opts\.urlQuery\)/.test(shell) && /input\.value = q0\.trim\(\);/.test(shell));
+  ok('payments.html opts in, so miners.html → payments.html?q=<address> filters it',
+     /urlQuery: true/.test(read('payments.html')) && /'\/admin\/payments\.html\?q=' \+ encodeURIComponent\(m\.grin_address\)/.test(script));
 }
 
 console.log('\n' + (fail ? 'FAILURES' : 'ALL PASS') + ` — ${pass} passed, ${fail} failed`);

@@ -127,12 +127,13 @@
             </div>
         </div>
 
-        <!-- ═══ Spec placard: compact live tiles (was the 4 stat cards) ═══ -->
-        <div class="placard" aria-label="Live pool figures">
+        <!-- ═══ Figure tiles: live pool figures (reactor.css .placard.figures) ═══ -->
+        <div class="placard figures" aria-label="Live pool figures">
             <span><i>Miners online</i><b id="ms-miners">—</b></span>
-            <span><i>Pool hashrate · 1h</i><b id="ms-hashrate">—</b></span>
-            <span><i>Top miner</i><b id="ms-top">—</b></span>
-            <span><i>Workers</i><b id="ms-connections">—</b></span>
+            <span class="tone-text"><i>Workers</i><b id="ms-connections">—</b></span>
+            <span class="tone-info" title="This pool's average hashrate over the last 24 hours, from accepted shares. Smoother than a 1-hour reading, so a rig restart or an unlucky hour doesn't swing it."><i>Pool hashrate &middot; 24h avg</i><b id="ms-hashrate">—</b></span>
+            <span class="tone-gold" title="Reference yield for one IPOLLO G1 mini (1.2 G/s) at today's network size: 1.2 ÷ network hashrate × 86,400 ツ (60 ツ × 1,440 blocks), using the 24h-average network hashrate. Before the pool fee, and it falls as the network grows."><i>Est. G1 mini / day</i><b id="ms-g1est">—</b><small class="fig-sub">1.2 G/s &middot; 24h avg</small></span>
+            <span class="tone-warn"><i>Top miner &middot; 24h</i><b id="ms-top">—</b></span>
         </div>
 
         <div class="deck">
@@ -257,6 +258,7 @@
     <!-- footer injected by /js/public-shell.js -->
 
     <script src="/js/auth.js"></script>
+    <script src="/js/num-format.js"></script>
     <script src="/js/vendor/chart.umd.min.js"></script>
     <script src="/js/charts-init.js"></script>
     <script>
@@ -272,7 +274,8 @@
         // ═════════════════════════════════════════════════════════════════
         // API Integration — public endpoints only.
         //   /api/pool/stats                 active miners / connections (placard)
-        //   /api/stratum/hashrate           pool GPS 1h (placard)
+        //   /api/stratum/hashrate           pool GPS 24h avg (placard)
+        //   /api/pool/poolstats             24h-avg network GPS → Est. G1 mini / day (placard)
         //   /api/stratum/top-miners         top miners by 24h hashrate (P-04)
         //   /api/pool/top-block-finders     top lucky miners by blocks found, 30d (P-05)
         //   /api/stratum/top-avg-hashrate   top miners by avg hashrate, 30d (P-06)
@@ -285,6 +288,9 @@
             if (gps >= 1e3) return (gps / 1e3).toFixed(2) + ' kG/s';
             return gps.toFixed(2) + ' G/s';
         }
+
+        const G1_MINI_GPS  = 1.2;         // IPOLLO G1 mini, manufacturer spec
+        const DAY_COINBASE = 60 * 1440;   // 86,400 ツ mined network-wide per day
 
         // GRIN amount for the ledger chart y-axis / tooltips (ツ = Grin symbol, matches the tables).
         function fmtGrin(v) {
@@ -498,10 +504,28 @@
                 }
             } catch (e) { /* tiles keep placeholders */ }
 
-            // Pool hashrate tile stays a 1h figure; the P-01 chart shows the selected timeframe.
+            // Pool hashrate tile is the 24h AVERAGE (smooth, like the solo pool's tiles); the
+            // P-01 chart shows the selected timeframe.
             try {
                 const hr = await Auth.read('/api/stratum/hashrate');
-                if (hr) setStat('ms-hashrate', fmtGpsLabel(hr.pool_hashrate_1h_gps || 0));
+                if (hr) setStat('ms-hashrate', fmtGpsLabel(hr.pool_hashrate_24h_gps || 0));
+            } catch (e) { /* tile keeps placeholder */ }
+
+            // Est. G1 mini / day — a fixed yardstick, same formula as the solo pool and
+            // scan.grin.money: 1.2 G/s ÷ network GPS × 86,400 ツ (60 ツ × 1,440 blocks/day).
+            // Denominator is the SMOOTH 24h-average network hashrate from the hourly rollup
+            // (/api/pool/poolstats, served from a 60s cache), so 1/hashrate doesn't inherit
+            // per-block jitter; the live rate is the fallback only until an hour of history
+            // exists (hashrate_gps_24h is null before that).
+            try {
+                const ps = await Auth.read('/api/pool/poolstats');
+                const n = ps && ps.network;
+                if (n) {
+                    const netGps = n.hashrate_gps_24h != null ? n.hashrate_gps_24h : n.hashrate_gps;
+                    const el = document.getElementById('ms-g1est');
+                    if (netGps != null && netGps > 0) PoolFmt.setGrinTile(el, G1_MINI_GPS / netGps * DAY_COINBASE);
+                    else PoolFmt.setGrinTile(el, null);
+                }
             } catch (e) { /* tile keeps placeholder */ }
 
             const hrTbody = document.getElementById('top-hashrate');

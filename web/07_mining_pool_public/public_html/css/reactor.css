@@ -11,6 +11,7 @@
  *
  * Component map (mirrors a reactor operator's panel wall):
  *   .placard        engraved spec strip (pool terms + live network conditions)
+ *   .placard.figures  LARGE toned figure tiles — every public page's headline strip
  *   .panel          bezelled instrument panel with corner screws + title strip
  *   .annun/.lamp    annunciator warning-light grid (service + region health)
  *   .counter        seven-segment style numeric readouts
@@ -88,6 +89,54 @@ body {
 .placard b {
   font-size: 13px; letter-spacing: .04em; color: var(--accent); font-weight: 700;
   text-shadow: 0 0 8px var(--glow); white-space: nowrap;
+}
+
+/* ── figure tiles: the LARGE placard variant (was account-settings' .acct-figures) ──
+   Every public page's headline strip wears this, so a miner reads the same big, toned
+   numbers everywhere. Each tile takes a tone (--tone, set by a .tone-* class): a lit top
+   rail, a faint wash of the same hue, and the value in that hue. Glow goes through
+   var(--glow) so the light themes (which set it to transparent) stay crisp. Values are
+   sized by their OWN tile (cqi = 1% of the tile's width), because the placard is
+   overflow:hidden and the value nowrap — a viewport-sized value clipped at both edges once
+   the tiles got narrower than the vw clamp assumed. The vw declarations stay as the
+   fallback for a browser without container queries. */
+.placard.figures { grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); }
+.placard.figures span {
+  --tone: var(--accent);
+  gap: 8px; padding: 18px 14px 16px;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--tone) 10%, transparent), transparent 75%);
+  box-shadow: inset 0 3px 0 color-mix(in srgb, var(--tone) 75%, transparent);
+}
+.placard.figures i { font-size: 11px; letter-spacing: .14em; color: var(--text-dim); }
+.placard.figures b {
+  font-size: clamp(20px, 2.1vw, 26px); letter-spacing: .02em; color: var(--tone);
+  font-variant-numeric: tabular-nums; text-shadow: 0 0 12px var(--glow);
+}
+/* A tile holding WORDS rather than a number: smaller, and allowed to wrap onto a second
+   line rather than clip. */
+.placard.figures .t-words b { font-size: clamp(14px, 1.4vw, 18px); white-space: normal; line-height: 1.3; }
+@supports (container-type: inline-size) {
+  .placard.figures span { container-type: inline-size; }
+  .placard.figures b { font-size: clamp(15px, 12cqi, 26px); }
+  .placard.figures .t-words b { font-size: clamp(13px, 8.5cqi, 18px); }
+}
+.placard.figures .tone-warn { --tone: var(--warn); }
+.placard.figures .tone-gold { --tone: var(--gold); }
+.placard.figures .tone-info { --tone: var(--info); }
+.placard.figures .tone-ok   { --tone: var(--ok); }
+.placard.figures .tone-text { --tone: var(--text); }
+/* Small print under a value ("1.2 G/s · 24h avg"): engraved like the label, never toned. */
+.placard.figures small.fig-sub {
+  display: block; margin: 0; font-size: 10px; font-weight: 500; letter-spacing: .1em;
+  color: var(--text-mute); text-shadow: none;
+}
+/* Phones: two tiles a row instead of one tall column. auto-fit alone gives ONE column
+   below ~360px (two 170px minimums don't fit), which stacked six tiles into a scroll. An
+   odd tile out spans the full row so the strip never ends on a half-empty line. */
+@media (max-width: 560px) {
+  .placard.figures { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .placard.figures span:last-child:nth-child(odd) { grid-column: 1 / -1; }
+  .placard.figures span { padding: 14px 10px 12px; }
 }
 
 /* ── panel chrome: bezel + corner screws + engraved title strip ─────────── */

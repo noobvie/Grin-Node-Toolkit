@@ -6,6 +6,81 @@
   <title>Miners | Grin Pool ツ</title>
   <link rel="stylesheet" href="/css/pool.css">
   <link rel="stylesheet" href="/admin/styles.css">
+  <style>
+    /* Status dot. Colour is never the only signal: every dot sits inside a control whose
+       aria-label and tooltip spell the state out, and the filter chips double as the legend. */
+    .mn-dot {
+      display: inline-block; flex-shrink: 0;
+      width: .6rem; height: .6rem; border-radius: 50%;
+      background: var(--text-muted);
+    }
+    .mn-st-mining     { background: var(--ok-color); box-shadow: 0 0 4px var(--ok-color); }
+    .mn-st-degraded   { background: var(--warn-color); }
+    .mn-st-connecting { background: transparent; box-shadow: inset 0 0 0 2px var(--warn-color); }
+    .mn-st-offline    { background: var(--text-muted); }
+    .mn-st-banned     { background: var(--error-color); }
+
+    .mn-chips .tab-btn { display: inline-flex; align-items: center; gap: .4rem; }
+    /* An author `display` beats the UA's [hidden] rule, so the Connecting chip needs this. */
+    .mn-chips .tab-btn[hidden] { display: none; }
+    .mn-n { font-family: var(--font-mono); font-size: .78rem; color: var(--text-dim); }
+    .mn-updated { font-size: .8rem; color: var(--text-dim); font-weight: 400; margin-left: .8rem; }
+
+    /* Sortable headers: the button fills the cell so the whole header is the target. */
+    .mn-sort {
+      all: unset; cursor: pointer; display: inline-flex; align-items: center; gap: .25rem;
+      font: inherit; color: inherit; white-space: nowrap;
+    }
+    .mn-sort:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
+    .mn-sort::after { content: '↕'; font-size: .75em; opacity: .35; }
+    th[aria-sort="ascending"]  .mn-sort::after { content: '↑'; opacity: 1; color: var(--accent); }
+    th[aria-sort="descending"] .mn-sort::after { content: '↓'; opacity: 1; color: var(--accent); }
+
+    /* Miner cell: [▸ ● grin1…] [⧉]. The address button expands the row; copying moved to its
+       own icon because one click cannot both copy and expand. */
+    .mn-cell { display: flex; align-items: center; gap: .35rem; white-space: nowrap; }
+    .mn-toggle {
+      display: inline-flex; align-items: center; gap: .45rem;
+      padding: .15rem .3rem; margin: 0; border: 0; border-radius: 6px; background: none;
+      color: inherit; cursor: pointer; font-family: var(--font-mono); font-size: .82rem;
+    }
+    .mn-toggle:hover { color: var(--accent); background: var(--bg-card2); }
+    .mn-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+    .mn-chev { display: inline-block; width: .7rem; color: var(--text-dim); transition: transform .15s ease; }
+    .mn-toggle[aria-expanded="true"] .mn-chev { transform: rotate(90deg); color: var(--accent); }
+    .mn-copy { border-bottom: 0; font-size: .9rem; }
+    tr.mn-row { cursor: pointer; }
+    tr.mn-row.is-open > td { background: var(--bg-card2); }
+
+    .mn-warn { color: var(--warn-color); }
+    .mn-dim  { color: var(--text-dim); }
+
+    /* Expanded row. The inner block is sticky-left so, on a phone where the table scrolls
+       sideways, the details stay in view instead of sliding off with the columns. */
+    tr.mn-detail > td { padding: 0; background: var(--bg-card2); border-top: 0; }
+    .mn-inner {
+      position: sticky; left: 0;
+      max-width: min(100%, calc(100vw - 2rem));
+      padding: .9rem 1rem 1.1rem 2.2rem;
+      box-sizing: border-box;
+    }
+    .mn-facts {
+      display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+      gap: .7rem 1.4rem; margin: 0 0 1rem;
+    }
+    .mn-fact dt { font-size: .72rem; text-transform: uppercase; letter-spacing: .04em; color: var(--text-dim); margin: 0 0 .15rem; }
+    .mn-fact dd { margin: 0; font-size: .88rem; line-height: 1.5; }
+    .mn-fact-wide { grid-column: 1 / -1; }
+    .mn-sub { font-size: .78rem; text-transform: uppercase; letter-spacing: .04em; color: var(--text-dim); margin: 0 0 .4rem; }
+    .mn-rigs-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-card); }
+    .mn-rigs { width: 100%; font-size: .82rem; }
+    .mn-rigs th, .mn-rigs td { padding: .4rem .6rem; white-space: nowrap; }
+    .mn-rig-name { display: inline-flex; align-items: center; gap: .4rem; font-family: var(--font-mono); }
+    .mn-links { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; margin-top: .9rem; }
+    .mn-stale-note { font-size: .8rem; color: var(--warn-color); margin: 0 0 .6rem; }
+
+    #mn-dialog-addr { word-break: break-all; font-family: var(--font-mono); font-size: .8rem; margin: 0 0 1rem; }
+  </style>
 </head>
 <body>
 
@@ -14,32 +89,33 @@
     <section>
       <h2>
         All Miners
-        <span id="miner-summary" style="font-size:.82rem;color:var(--text-dim);font-weight:400;margin-left:.8rem;"></span>
+        <span class="mn-updated" id="miner-updated"></span>
       </h2>
 
-      <!-- The address filter now lives in the AdminTable tools bar directly above the
-           table (with the row count + paging); only the state toggles stay here. -->
-      <div style="display:flex;gap:.6rem;align-items:center;margin-bottom:.8rem;flex-wrap:wrap;">
-        <label style="display:flex;align-items:center;gap:.4rem;font-size:.85rem;margin-bottom:0;">
-          <input type="checkbox" id="online-only" onchange="filterMiners(true)"> Online only
-        </label>
-        <label style="display:flex;align-items:center;gap:.4rem;font-size:.85rem;margin-bottom:0;">
-          <input type="checkbox" id="banned-only" onchange="filterMiners(true)"> Banned only
-        </label>
+      <!-- Status chips = the filter AND the legend for the dots. One at a time; the address
+           filter lives in the AdminTable tools bar directly above the table. -->
+      <div class="tabs mn-chips" id="status-chips" role="group" aria-label="Filter miners by status">
+        <button type="button" class="tab-btn active" data-filter="" aria-pressed="true">All <span class="mn-n" id="n-all">–</span></button>
+        <button type="button" class="tab-btn" data-filter="mining" aria-pressed="false"><span class="mn-dot mn-st-mining" aria-hidden="true"></span>Mining <span class="mn-n" id="n-mining">–</span></button>
+        <button type="button" class="tab-btn" data-filter="degraded" aria-pressed="false"><span class="mn-dot mn-st-degraded" aria-hidden="true"></span>Degraded <span class="mn-n" id="n-degraded">–</span></button>
+        <button type="button" class="tab-btn" data-filter="connecting" aria-pressed="false" id="chip-connecting" hidden><span class="mn-dot mn-st-connecting" aria-hidden="true"></span>Connecting <span class="mn-n" id="n-connecting">–</span></button>
+        <button type="button" class="tab-btn" data-filter="offline" aria-pressed="false"><span class="mn-dot mn-st-offline" aria-hidden="true"></span>Offline <span class="mn-n" id="n-offline">–</span></button>
+        <button type="button" class="tab-btn" data-filter="banned" aria-pressed="false"><span class="mn-dot mn-st-banned" aria-hidden="true"></span>Banned <span class="mn-n" id="n-banned">–</span></button>
       </div>
+      <p class="error-msg" id="miner-msg" role="status" style="display:none;margin:0 0 .8rem;"></p>
 
       <div class="card" style="padding:0;">
         <div class="table-wrap">
-          <table>
+          <table id="miners-table">
             <thead>
               <tr>
-                <th>Address</th>
-                <th>Online</th>
-                <th>Balance ツ</th>
-                <th>Locked ツ</th>
-                <th>Shares</th>
-                <th>Paid ツ</th>
-                <th>Last Share</th>
+                <th aria-sort="none"><button type="button" class="mn-sort" data-sort="status">Miner</button></th>
+                <th aria-sort="none"><button type="button" class="mn-sort" data-sort="workers">Rigs</button></th>
+                <th aria-sort="none"><button type="button" class="mn-sort" data-sort="hashrate">Hashrate · <span id="hr-win">10 min</span></button></th>
+                <th aria-sort="descending"><button type="button" class="mn-sort" data-sort="balance">Balance ツ</button></th>
+                <th aria-sort="none"><button type="button" class="mn-sort" data-sort="locked">Locked ツ</button></th>
+                <th aria-sort="none"><button type="button" class="mn-sort" data-sort="paid">Paid ツ</button></th>
+                <th aria-sort="none"><button type="button" class="mn-sort" data-sort="last">Last Active</button></th>
                 <th>Actions</th>
               </tr>
             </thead>
@@ -49,217 +125,612 @@
           </table>
         </div>
       </div>
-      <p class="error-msg" id="miner-msg" style="display:none;margin-top:.6rem;"></p>
-
-      <!-- Miner view: Tor payouts for ONE address (the 🧅 row button). The Tor pause is
-           anti-abuse — 5 counted failed Tor payouts in 24 h (only "the miner's wallet did not
-           answer" counts) pause Tor for that address for 24 h; Slatepack stays open. Clear it when
-           the failures were the pool's fault: the rows are re-coded, never deleted. Times UTC. -->
-      <div class="card" id="tp-card" style="display:none;padding:1rem;margin-top:1rem;">
-        <div style="display:flex;align-items:center;justify-content:space-between;gap:.6rem;flex-wrap:wrap;">
-          <strong>Tor payouts · <span class="mono" id="tp-addr"></span></strong>
-          <button class="btn btn-sm btn-outline" onclick="closeTorPause()">✕ Close</button>
-        </div>
-        <div id="tp-body" style="margin-top:.6rem;font-size:.9rem;line-height:1.7;"></div>
-        <div style="margin-top:.6rem;display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;">
-          <button class="btn btn-sm" id="tp-clear-btn" onclick="clearTorPause()" disabled>Clear Tor pause</button>
-          <span id="tp-note" style="font-size:.8rem;color:var(--text-dim);"></span>
-        </div>
-      </div>
     </section>
   </div>
 </main>
+
+<!-- One in-page dialog for ban / unban / clear-Tor-pause. Not prompt()/confirm(): the step-up
+     dialog (stepup.js) opens straight after it, from an async continuation, and browsers
+     throttle a native dialog followed by another, so a native prompt could come back null
+     without ever being shown (design §13.12r). Static markup; every value is set with
+     textContent. -->
+<div class="modal-overlay" id="mn-dialog" role="dialog" aria-modal="true" aria-labelledby="mn-dialog-title">
+  <form class="modal" id="mn-dialog-form" novalidate>
+    <h3 id="mn-dialog-title"></h3>
+    <p id="mn-dialog-body" style="margin:0 0 .6rem;color:var(--text-dim);font-size:.9rem;line-height:1.5;"></p>
+    <p id="mn-dialog-addr"></p>
+    <div class="form-group" id="mn-dialog-field">
+      <label for="mn-dialog-input" id="mn-dialog-label"></label>
+      <input type="text" id="mn-dialog-input" maxlength="280" autocomplete="off" spellcheck="false">
+    </div>
+    <div class="modal-actions">
+      <button type="button" class="btn btn-outline" id="mn-dialog-cancel">Cancel</button>
+      <button type="submit" class="btn" id="mn-dialog-ok"></button>
+    </div>
+  </form>
+</div>
 
 <script src="/js/auth.js"></script>
 <script src="/js/api.js"></script>
 <script src="/admin/admin-shell.js"></script>
 <script src="/js/stepup.js"></script>
 <script>
-let _allMiners = [];
-
 // Auth gate (httpOnly-cookie aware): redirects to /login.html if not an admin, else wires
 // up the topbar username + Logout. Pool name + testnet banner are handled by admin-shell.js.
-// stepup.js provides adminFetch() for the step-up-gated ban/unban actions.
+// stepup.js provides adminFetch() for the step-up-gated ban/unban/clear actions.
 API.guardAdminPage();
 
+// ── State ────────────────────────────────────────────────────────────────────
+let _allMiners = [];
+// Status windows (seconds) — replaced by the server's own values on the first load, so the
+// labels below can never describe a window the API is not using (lib/miner-status.js).
+let _win = { hashrate_s: 600, seen_s: 3600, stall_s: 900 };
+let _filter = '';
+let _sort = { key: 'balance', dir: -1 };
+const _open = new Set();       // addresses whose row is expanded (survives the 30 s refresh)
+const _detail = new Map();     // address → { miner, factsAt, workers, at, err }
+const _inflight = new Set();   // addresses with a detail fetch in progress
+const _factsDue = new Set();   // addresses whose account facts must be re-read on the next fetch
+let _loading = false;
+// The account facts (GET /api/admin/miners/:addr) are re-read at most this often by the timer;
+// opening a row or acting on it re-reads them at once. That route counts every retained share of
+// the address, on the DB the stratum server shares, so it must not ride the 30 s refresh.
+const FACTS_MAX_AGE_S = 300;
+
+// ── Formatting ───────────────────────────────────────────────────────────────
 function escHtml(s) {
   return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 function fmtGrin(v) { return (Number(v) || 0).toFixed(4); }
+// G/s → kG/s → MG/s, the toolkit-wide display units (CLAUDE.md, Cuckatoo32 hashrate).
+function fmtGps(v) {
+  v = Number(v) || 0;
+  if (!(v > 0)) return '—';
+  if (v >= 1e6) return (v / 1e6).toFixed(2) + ' MG/s';
+  if (v >= 1e3) return (v / 1e3).toFixed(2) + ' kG/s';
+  return v.toFixed(2) + ' G/s';
+}
 function timeAgo(t) {
   if (!t) return '—';
-  const diff = Math.floor(Date.now() / 1000 - t);
+  const diff = Math.max(0, Math.floor(Date.now() / 1000 - t));
   if (diff < 60)    return diff + 's ago';
   if (diff < 3600)  return Math.floor(diff / 60) + 'm ago';
   if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
   return Math.floor(diff / 86400) + 'd ago';
 }
+function fmtUtc(t) { return t ? new Date(t * 1000).toISOString().slice(0, 16).replace('T', ' ') + ' UTC' : '—'; }
+function fmtClock(t) { return t ? new Date(t * 1000).toISOString().slice(11, 19) + ' UTC' : '—'; }
+function fmtMins(s) { return s >= 3600 && s % 3600 === 0 ? (s / 3600) + ' h' : Math.round(s / 60) + ' min'; }
+function plural(n, one, many) { return n + ' ' + (n === 1 ? one : (many || one + 's')); }
 function shortAddr(a) {
   a = String(a || '');
   return a.length > 22 ? a.slice(0, 12) + '…' + a.slice(-7) : a;
 }
 
-// Address search + 20-per-page paging come from AdminTable (admin-shell.js); the
-// Online/Banned toggles stay page-side and feed it a pre-filtered array. The list can
-// run to 500 accounts, which is exactly the case that used to render in one dump.
+// ── Status ───────────────────────────────────────────────────────────────────
+// A row's state = banned (an account flag) on top of the server's live status
+// (mining | degraded | connecting | offline — rules in lib/miner-status.js).
+const STATE_LABEL = { mining: 'Mining', degraded: 'Degraded', connecting: 'Connecting', offline: 'Offline', banned: 'Banned' };
+// Sort order for the Miner column: what needs attention first.
+const STATE_ORDER = { degraded: 0, connecting: 1, mining: 2, offline: 3, banned: 4 };
+function stateOf(m) { return m.is_banned ? 'banned' : (STATE_LABEL[m.status] ? m.status : 'offline'); }
+function stateText(m) {
+  const st = stateOf(m);
+  if (st === 'banned') return 'Banned' + (m.ban_reason ? ' — ' + m.ban_reason : '');
+  if (st === 'mining') return 'Mining — ' + plural(m.workers_online, 'rig') + ' live';
+  if (st === 'connecting') return 'Connecting — a session is open but no share has been accepted on it yet';
+  if (st === 'degraded') {
+    const why = [];
+    if (m.workers_stalled) why.push(plural(m.workers_stalled, 'live rig') + ' with no accepted share in ' + fmtMins(_win.stall_s));
+    if (m.workers_missing) why.push(plural(m.workers_missing, 'rig') + ' that shared in the last ' + fmtMins(_win.seen_s) + ' ' + (m.workers_missing === 1 ? 'is' : 'are') + ' not connected');
+    return 'Degraded — ' + (why.join('; ') || 'a rig needs attention');
+  }
+  return 'Offline';
+}
+
+// ── Table ────────────────────────────────────────────────────────────────────
+const COLS = document.querySelectorAll('#miners-table thead th').length;
+
+// Address search + paging from AdminTable (admin-shell.js); the status chips and the sort
+// stay page-side and feed it a prepared array. An expanded miner renders as a SECOND <tr>
+// from the same row() call, so paging still counts miners, not table rows.
 const minersTable = AdminTable.create({
   tbody: 'miners-tbody',
   search: 'Filter by address…',
-  empty: 'No miners found.',
+  empty: 'No miners in this view.',
+  urlQuery: true,
   note: 'Miner accounts are kept permanently — the share and hashrate history behind ' +
         'them is pruned per <a href="/admin/settings-database.html">Settings → Database</a>. ' +
         'Top 500 accounts by balance.',
-  text: m => m.grin_address || '',
-  row: m => {
-    const onlineBadge = m.is_online
-      ? '<span class="badge badge-ok">Online</span>'
-      : '<span class="badge badge-dim">Offline</span>';
-    const bannedBadge = m.is_banned
-      ? ` <span class="badge badge-error" title="${escHtml(m.ban_reason || '')}">Banned</span>` : '';
+  text: m => [m.grin_address, m.ban_reason].join(' '),
+  row: (m, i) => {
+    const addr = escHtml(m.grin_address);
+    const st = stateOf(m);
+    const open = _open.has(m.grin_address);
+    const detailId = 'mn-d-' + i;
     // data-addr + this.dataset, NOT a value spliced into a JS string literal. escHtml() is an
     // HTML escaper: inside onclick="…" the parser decodes its &#39; back to a real ' BEFORE the
     // JS is parsed, so an apostrophe in the value closes the string and the rest executes. The
     // bech32 address charset is what stops that today (§J6-6) — a validator on another route, in
     // another file, is not the escaping this needs. Audit §J14.
     const action = m.is_banned
-      ? `<button class="btn-icon" data-addr="${escHtml(m.grin_address)}" onclick="unbanMiner(this.dataset.addr)" data-tip="Unban this miner" aria-label="Unban this miner">✅</button>`
-      : `<button class="btn-icon btn-icon-danger" data-addr="${escHtml(m.grin_address)}" onclick="banMiner(this.dataset.addr)" data-tip="Ban this miner" aria-label="Ban this miner">🚫</button>`;
-    // The truncated address is itself the copy control: click (or Enter/Space) copies the
-    // full address, handled by admin-shell.js via data-copy. The tip shows the full value
-    // (the old title= did that, but a native tooltip can't be selected) above the hint.
-    const addr = escHtml(m.grin_address);
-    const addrCell = `<button type="button" class="addr-copy" data-copy="${addr}" ` +
-      `data-tip="${addr}&#10;Click to copy" aria-label="Copy address ${escHtml(shortAddr(m.grin_address))}">` +
-      `${escHtml(shortAddr(m.grin_address))}</button>`;
-    const torBtn = `<button class="btn-icon" data-addr="${escHtml(m.grin_address)}" onclick="showTorPause(this.dataset.addr)" data-tip="Tor payouts: pause state, counted failures, pending" aria-label="Show Tor payout state">🧅</button>`;
-    return `<tr>
-      <td>${addrCell}${bannedBadge}</td>
-      <td>${onlineBadge}</td>
+      ? `<button class="btn-icon" data-addr="${addr}" onclick="unbanMiner(this.dataset.addr)" data-tip="Unban this miner" aria-label="Unban this miner">✅</button>`
+      : `<button class="btn-icon btn-icon-danger" data-addr="${addr}" onclick="banMiner(this.dataset.addr)" data-tip="Ban this miner" aria-label="Ban this miner">🚫</button>`;
+    // The address expands the row; copying is the ⧉ beside it (admin-shell.js handles
+    // [data-copy]). data-fk lets a repaint put keyboard focus back on the same control.
+    const state = escHtml(stateText(m));
+    const toggle =
+      `<button type="button" class="mn-toggle" data-addr="${addr}" data-fk="t:${addr}" ` +
+      `aria-expanded="${open}" aria-controls="${detailId}" ` +
+      `aria-label="${open ? 'Hide' : 'Show'} rigs and details for ${escHtml(shortAddr(m.grin_address))}. ${state}" ` +
+      `data-tip="${state}&#10;${addr}&#10;Click to ${open ? 'hide' : 'show'} rigs and details">` +
+      `<span class="mn-chev" aria-hidden="true">▸</span>` +
+      `<span class="mn-dot mn-st-${st}" aria-hidden="true"></span>` +
+      `<span>${escHtml(shortAddr(m.grin_address))}</span></button>`;
+    const copy = `<button type="button" class="addr-copy mn-copy" data-copy="${addr}" data-fk="c:${addr}" ` +
+      `data-tip="Copy the full address" aria-label="Copy address ${escHtml(shortAddr(m.grin_address))}"></button>`;
+
+    const main = `<tr class="mn-row${open ? ' is-open' : ''}" data-addr="${addr}">
+      <td><div class="mn-cell">${toggle}${copy}</div></td>
+      <td>${rigsCell(m)}</td>
+      <td class="mono">${fmtGps(m.hashrate_gps)}</td>
       <td class="mono">${fmtGrin(m.balance)}</td>
       <td class="mono">${fmtGrin(m.balance_locked)}</td>
-      <td class="mono">${m.shares_count != null ? m.shares_count : 0}</td>
       <td class="mono">${fmtGrin(m.total_paid)}</td>
-      <td>${timeAgo(m.last_share_at)}</td>
-      <td><div class="row-actions">${torBtn}${action}</div></td>
+      <td>${lastCell(m)}</td>
+      <td><div class="row-actions">${action}</div></td>
     </tr>`;
-  }
+    return open ? main + detailRow(m, detailId) : main;
+  },
+  onRender: restoreFocus
 });
 
-async function loadMiners() {
-  try {
-    const data = await API.get('/api/admin/miners?limit=500');
-    _allMiners = (data && data.miners) || [];
-    const online = _allMiners.filter(m => m.is_online).length;
-    const banned = _allMiners.filter(m => m.is_banned).length;
-    document.getElementById('miner-summary').textContent =
-      `${_allMiners.length} total · ${online} online · ${banned} banned`;
-    filterMiners();
-  } catch (err) {
-    minersTable.setError(err.message);
+function rigsCell(m) {
+  if (!m.workers_total) return '<span class="mn-dim">—</span>';
+  const cls = (m.workers_online < m.workers_total || m.workers_stalled) ? 'mn-warn' : '';
+  const tip = `${m.workers_online} of ${plural(m.workers_total, 'rig')} connected and mining` +
+              (m.workers_stalled ? ` (${m.workers_stalled} stalled)` : '') +
+              ` — counting rigs seen in the last ${fmtMins(_win.seen_s)}`;
+  return `<span class="mono ${cls}" data-tip="${escHtml(tip)}">${m.workers_online}/${m.workers_total}</span>`;
+}
+
+// last_share_at is only known inside the server's seen window (one hour). Past that the
+// column falls back to last_seen_at — the last connect or disconnect — and says so.
+function lastCell(m) {
+  const now = Date.now() / 1000;
+  if (m.last_share_at) {
+    const cls = (now - m.last_share_at) > _win.stall_s ? 'mn-warn' : '';
+    return `<span class="${cls}" data-tip="Last accepted share: ${escHtml(fmtUtc(m.last_share_at))}">${timeAgo(m.last_share_at)}</span>`;
   }
-}
-
-// `reset` is passed only when a toggle changed — the 30s refresh must not yank the
-// operator back to page 1 while they are reading page 4.
-function filterMiners(reset) {
-  const onlineOnly = document.getElementById('online-only').checked;
-  const bannedOnly = document.getElementById('banned-only').checked;
-  let filtered = _allMiners;
-  if (onlineOnly) filtered = filtered.filter(m => m.is_online);
-  if (bannedOnly) filtered = filtered.filter(m => m.is_banned);
-  minersTable.setRows([...filtered].sort((a, b) => (b.balance || 0) - (a.balance || 0)),
-                      { reset: reset === true });
-}
-
-function flash(msg, isErr) {
-  const el = document.getElementById('miner-msg');
-  el.textContent = msg;
-  el.className = isErr ? 'error-msg' : 'success-msg';
-  el.style.display = '';
-  setTimeout(() => { el.style.display = 'none'; }, 5000);
-}
-
-async function banMiner(addr) {
-  const reason = prompt(`Ban ${addr}?\n\nThis blocks new stratum logins (balance is kept and can still be paid out).\n\nOptional reason:`);
-  if (reason === null) return;
-  try {
-    const res = await adminFetch('/api/admin/miners/' + encodeURIComponent(addr) + '/ban', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ reason })
-    });
-    const body = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(body.error || ('HTTP ' + res.status));
-    flash('Miner banned.', false);
-    loadMiners();
-  } catch (err) { flash(err.message, true); }
-}
-
-async function unbanMiner(addr) {
-  if (!confirm(`Unban ${addr}?`)) return;
-  try {
-    const res = await adminFetch('/api/admin/miners/' + encodeURIComponent(addr) + '/unban', { method: 'POST' });
-    const body = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(body.error || ('HTTP ' + res.status));
-    flash('Miner unbanned.', false);
-    loadMiners();
-  } catch (err) { flash(err.message, true); }
-}
-
-// ── Miner view: Tor pause ─────────────────────────────────────────────────────
-// GET /api/admin/miners/:addr carries tor_pause = { failures_24h, max, paused_until|null } (the
-// SAME object the miner's account page shows) and the pending payouts. Nothing here computes a
-// pause: paused ⇔ the server sent paused_until.
-let _tpAddr = null;
-function fmtUtc(t) { return t ? new Date(t * 1000).toISOString().slice(0, 16).replace('T', ' ') + ' UTC' : '—'; }
-async function showTorPause(addr) {
-  _tpAddr = addr;
-  const card = document.getElementById('tp-card');
-  document.getElementById('tp-addr').textContent = addr;
-  document.getElementById('tp-body').textContent = 'Loading…';
-  document.getElementById('tp-note').textContent = '';
-  document.getElementById('tp-clear-btn').disabled = true;
-  card.style.display = '';
-  card.scrollIntoView({ block: 'nearest' });
-  try {
-    const data = await API.get('/api/admin/miners/' + encodeURIComponent(addr));
-    if (_tpAddr !== addr) return;
-    renderTorPause((data && data.miner) || {});
-  } catch (err) {
-    if (_tpAddr === addr) document.getElementById('tp-body').textContent = 'Could not load: ' + err.message;
+  if (m.last_seen_at) {
+    return `<span class="mn-dim" data-tip="${escHtml('No share in the last ' + fmtMins(_win.seen_s) + '. Last connect or disconnect: ' + fmtUtc(m.last_seen_at))}">seen ${timeAgo(m.last_seen_at)}</span>`;
   }
+  return '<span class="mn-dim">—</span>';
 }
-function renderTorPause(m) {
+function lastActiveOf(m) { return m.last_share_at || m.last_seen_at || 0; }
+
+// ── Expanded row ─────────────────────────────────────────────────────────────
+function detailRow(m, id) {
+  const d = _detail.get(m.grin_address);
+  let body;
+  if (!d || (!d.miner && !d.err)) {
+    body = '<span class="spinner"></span>Loading rigs and account details…';
+  } else if (!d.miner) {
+    body = `<p class="error-msg" style="margin:0;">Could not load this miner: ${escHtml(d.err)}</p>`;
+  } else {
+    body = (d.err ? `<p class="mn-stale-note">Refresh failed (${escHtml(d.err)}) — showing data from ${escHtml(fmtUtc(d.at))}.</p>` : '') +
+           factsHtml(m, d.miner) + rigsHtml(d.workers) + linksHtml(m, d);
+  }
+  return `<tr class="mn-detail" id="${id}"><td colspan="${COLS}"><div class="mn-inner">${body}</div></td></tr>`;
+}
+
+function fact(label, html, wide) {
+  return `<div class="mn-fact${wide ? ' mn-fact-wide' : ''}"><dt>${escHtml(label)}</dt><dd>${html}</dd></div>`;
+}
+
+// `m` = the list row (live status, refreshed every 30 s); `d` = GET /api/admin/miners/:addr.
+function factsHtml(m, d) {
+  const out = [];
+  out.push(fact('Status', `<span class="mn-dot mn-st-${stateOf(m)}" aria-hidden="true"></span> ${escHtml(stateText(m))}`, true));
+  out.push(fact('Hashrate · 1 h average', escHtml(fmtGps(d.hashrate_gps))));
+  out.push(fact('Blocks found', escHtml(d.blocks_found != null ? d.blocks_found : 0)));
+  out.push(fact('Shares retained', `<span data-tip="Counts only what share retention has kept (Settings → Database)">${escHtml(d.shares_count != null ? d.shares_count : 0)}</span>`));
+  out.push(fact('First seen', escHtml(fmtUtc(d.created_at))));
+  out.push(fact('Last connect / disconnect', escHtml(fmtUtc(d.last_seen_at))));
+
+  const p = d.proofs;
+  if (p && p.ip && p.pass) {
+    const anchor = (p.ip.anchor_live || p.pass.anchor_live) ? 'original proof on record' : 'original proof no longer on record';
+    const pw = d.pass_proof_state ? ` · rig password check: ${escHtml(d.pass_proof_state)}` : '';
+    out.push(fact('Ownership proofs',
+      `${escHtml(p.ip.live)} IP · ${escHtml(p.pass.live)} password (max ${escHtml(p.max)} each) · ${escHtml(anchor)}${pw}`));
+  }
+  if (d.nostr_username) out.push(fact('Goblin username', escHtml(d.nostr_username)));
+  if (d.is_banned) {
+    out.push(fact('Ban', `<span class="badge badge-error">Banned</span> ${escHtml(fmtUtc(d.banned_at))}` +
+      (d.ban_reason ? ` · ${escHtml(d.ban_reason)}` : ' · no reason given'), true));
+  }
+  out.push(fact('Tor payouts', torPauseHtml(m.grin_address, d), true));
+  out.push(fact('Pending payouts', pendingHtml(d.pending_withdrawals), true));
+  return `<dl class="mn-facts">${out.join('')}</dl>`;
+}
+
+// The Tor pause is anti-abuse: 5 counted failed Tor payouts in 24 h (only "the miner's wallet
+// did not answer" counts) pause Tor for that address for 24 h; Slatepack stays open. Clear it
+// when the failures were the pool's fault — the rows are re-coded, never deleted. Nothing here
+// computes a pause: paused ⇔ the server sent paused_until. Times UTC.
+function torPauseHtml(addr, m) {
   const tp = m.tor_pause;
-  const pending = Array.isArray(m.pending_withdrawals) ? m.pending_withdrawals : [];
   let html;
   if (!tp) {
-    html = 'Tor pause: <span style="color:var(--text-dim)">unavailable (scheduler not running)</span>';
+    html = '<span class="mn-dim">unavailable (scheduler not running)</span>';
   } else if (tp.paused_until) {
     html = `<span class="badge badge-error">Tor paused</span> until <strong>${escHtml(fmtUtc(tp.paused_until))}</strong>` +
            ` · ${escHtml(tp.failures_24h)} of ${escHtml(tp.max)} counted failures in the last 24 h`;
   } else {
     html = `<span class="badge badge-ok">Tor open</span> · ${escHtml(tp.failures_24h)} of ${escHtml(tp.max)} counted failures in the last 24 h`;
   }
-  html += '<br>Pending: ' + (pending.length
-    ? pending.map((w) => `payout ID ${escHtml(w.id)} · ${escHtml(w.method)} · ${escHtml(w.status)} · ${fmtGrin(w.amount)} ツ`).join('; ')
-    : '<span style="color:var(--text-dim)">none</span>');
-  document.getElementById('tp-body').innerHTML = html;
   const n = tp ? Number(tp.failures_24h) || 0 : 0;
-  document.getElementById('tp-clear-btn').disabled = n === 0;
-  document.getElementById('tp-note').textContent = n === 0 ? 'Nothing counted — nothing to clear.' :
-    'Clearing un-counts these failures (history is kept). Use it when they were the pool’s fault.';
+  if (n > 0) {
+    html += ` <button type="button" class="btn btn-sm btn-outline" style="margin-left:.4rem;" data-addr="${escHtml(addr)}" ` +
+            `data-fk="p:${escHtml(addr)}" onclick="clearTorPause(this.dataset.addr)" ` +
+            `data-tip="Un-count these failures (history is kept). Use it when they were the pool’s fault." ` +
+            `aria-label="Clear the Tor pause for this miner">Clear Tor pause</button>`;
+  }
+  return html;
 }
-function closeTorPause() { _tpAddr = null; document.getElementById('tp-card').style.display = 'none'; }
-async function clearTorPause() {
-  const addr = _tpAddr;
+
+function pendingHtml(list) {
+  const pending = Array.isArray(list) ? list : [];
+  if (!pending.length) return '<span class="mn-dim">none</span>';
+  return pending.map(w => `payout ID ${escHtml(w.id)} · ${escHtml(w.method)} · ${escHtml(w.status)} · ${fmtGrin(w.amount)} ツ`).join('<br>');
+}
+
+const RIG_STATUS = {
+  mining:  ['mining',   'Mining'],
+  stalled: ['degraded', 'Stalled'],
+  offline: ['offline',  'Offline']
+};
+function rigsHtml(workers) {
+  const rows = Array.isArray(workers) ? workers : [];
+  const head = `<p class="mn-sub">Rigs — seen in the last ${escHtml(fmtMins(_win.seen_s))}</p>`;
+  if (!rows.length) {
+    return head + `<p class="mn-dim" style="margin:0;font-size:.88rem;">No rig has shared in the last ${escHtml(fmtMins(_win.seen_s))} and none is connected.</p>`;
+  }
+  const pct = v => v == null ? '<span class="mn-dim">—</span>' : escHtml(v) + '%';
+  const body = rows.map(w => {
+    const [dot, label] = RIG_STATUS[w.status] || RIG_STATUS.offline;
+    const tip = w.status === 'stalled'
+      ? `Connected, but no accepted share in ${fmtMins(_win.stall_s)}` : label;
+    const donate = w.donate_percent != null
+      ? ` <span class="badge badge-dim" data-tip="This rig's donateN tag gives ${escHtml(w.donate_percent)}% of what it earns to the prize pool">donates ${escHtml(w.donate_percent)}%</span>` : '';
+    const last = w.last_share_at
+      ? `<span data-tip="${escHtml(fmtUtc(w.last_share_at))}">${timeAgo(w.last_share_at)}</span>`
+      : '<span class="mn-dim">—</span>';
+    return `<tr>
+      <td><span class="mn-rig-name"><span class="mn-dot mn-st-${dot}" aria-hidden="true"></span>${escHtml(w.worker_name)}</span>${donate}</td>
+      <td><span data-tip="${escHtml(tip)}">${escHtml(label)}</span></td>
+      <td class="mono">${fmtGps(w.hashrate_gps_10m)}</td>
+      <td class="mono">${fmtGps(w.hashrate_gps_1h)}</td>
+      <td class="mono">${escHtml(w.share_count != null ? w.share_count : 0)}</td>
+      <td>${last}</td>
+      <td class="mono">${pct(w.reject_pct)}</td>
+      <td class="mono">${pct(w.stale_pct)}</td>
+      <td>${w.regions && w.regions.length ? escHtml(w.regions.join(', ')) : '<span class="mn-dim">—</span>'}</td>
+      <td>${w.connected_since ? `<span data-tip="${escHtml(fmtUtc(w.connected_since))}">${timeAgo(w.connected_since)}</span>` : '<span class="mn-dim">—</span>'}</td>
+    </tr>`;
+  }).join('');
+  // Reject/stale are LIVE session counters: they reset when a rig reconnects and are blank
+  // for an offline rig, so the header says so rather than implying an hour's figure.
+  return head + `<div class="mn-rigs-wrap"><table class="mn-rigs">
+    <thead><tr>
+      <th>Rig</th><th>Status</th>
+      <th>Hashrate · ${escHtml(fmtMins(_win.hashrate_s))}</th><th>Hashrate · ${escHtml(fmtMins(_win.seen_s))}</th>
+      <th>Shares · ${escHtml(fmtMins(_win.seen_s))}</th><th>Last share</th>
+      <th><span data-tip="Since this rig's session started">Reject</span></th>
+      <th><span data-tip="Since this rig's session started">Stale</span></th>
+      <th>Region</th><th>Connected</th>
+    </tr></thead><tbody>${body}</tbody></table></div>`;
+}
+
+// payments.html reads ?q= into its filter box (AdminTable urlQuery). It loads the 100 most
+// recent payouts, so the link says "recent" rather than promising the full history.
+// The two halves refresh on different clocks (see FACTS_MAX_AGE_S), so both times are shown.
+function linksHtml(m, d) {
+  const href = '/admin/payments.html?q=' + encodeURIComponent(m.grin_address);
+  return `<div class="mn-links">
+    <a class="btn btn-sm btn-outline" href="${escHtml(href)}">Recent payouts for this address →</a>
+    <span class="mn-dim" style="font-size:.78rem;">Rigs as of ${escHtml(fmtClock(d.at))} · account details as of ${escHtml(fmtClock(d.factsAt))}</span>
+  </div>`;
+}
+
+// ── Expand / collapse ────────────────────────────────────────────────────────
+function toggleMiner(addr) {
   if (!addr) return;
-  // confirm() only: a suppressed native dialog reads as Cancel, which is harmless here.
-  if (!confirm(`Clear the Tor pause for ${addr}?\n\nIts counted Tor failures in the last 24 h stop counting (they stay in the history). Step-up required.`)) return;
+  if (_open.has(addr)) {
+    _open.delete(addr);
+    // Re-opening later must show a spinner, not minutes-old figures as if they were current.
+    _detail.delete(addr);
+    _factsDue.delete(addr);
+  } else {
+    _open.add(addr);
+    fetchDetail(addr);
+  }
+  repaint();
+}
+
+// The rigs every time; the account facts only on first open, when asked ({ facts: true }, after
+// an action on this miner) or once they are FACTS_MAX_AGE_S old. A failed REFRESH keeps the last
+// good data on screen with a note instead of blanking the row the operator is reading.
+function fetchDetail(addr, opts) {
+  if (opts && opts.facts) _factsDue.add(addr);
+  // Already fetching: a facts request that arrived meanwhile is picked up by the finally below.
+  if (_inflight.has(addr)) return;
+  const prev = _detail.get(addr);
+  const nowS = Math.floor(Date.now() / 1000);
+  const wantFacts = _factsDue.has(addr) || !prev || !prev.miner || !prev.factsAt || prev.factsRetry ||
+                    (nowS - prev.factsAt) >= FACTS_MAX_AGE_S;
+  _factsDue.delete(addr);
+  _inflight.add(addr);
+  Promise.all([
+    wantFacts ? API.get('/api/admin/miners/' + encodeURIComponent(addr)) : null,
+    API.get('/api/admin/miners/' + encodeURIComponent(addr) + '/workers')
+  ]).then(([d, w]) => {
+    if (!_open.has(addr)) return;     // collapsed while in flight: keep nothing
+    if (w && w.windows) _win = w.windows;
+    const at = Math.floor(Date.now() / 1000);
+    const base = _detail.get(addr) || {};
+    _detail.set(addr, {
+      miner: wantFacts ? ((d && d.miner) || {}) : base.miner,
+      factsAt: wantFacts ? at : base.factsAt,
+      workers: (w && w.workers) || [],
+      at, err: null
+    });
+  }).catch(err => {
+    if (!_open.has(addr)) return;
+    const prev = _detail.get(addr) || {};
+    // A failed facts read is retried on the next 30 s refresh (factsRetry), not in 5 min — and
+    // not straight away either, so a down API is not hammered in a loop.
+    _detail.set(addr, { ...prev, factsRetry: !!(wantFacts || prev.factsRetry), err: (err && err.message) || 'request failed' });
+  }).finally(() => {
+    _inflight.delete(addr);
+    if (!_open.has(addr)) { _factsDue.delete(addr); return; }
+    repaint();
+    // _factsDue was cleared when this fetch started, so it is set now only by an action that
+    // asked for fresh facts WHILE this fetch was in flight (possibly one without facts). Honour it.
+    if (_factsDue.has(addr)) fetchDetail(addr);
+  });
+}
+
+// Every repaint rebuilds the tbody, which would drop keyboard focus onto <body>. Controls that
+// can trigger one carry data-fk; the focused one is found again after the paint.
+let _focusKey = null;
+function captureFocus() {
+  const a = document.activeElement;
+  _focusKey = (a && a.getAttribute && document.getElementById('miners-tbody').contains(a)) ? a.getAttribute('data-fk') : null;
+}
+function restoreFocus(tbody) {
+  if (!_focusKey) return;
+  const key = _focusKey;
+  _focusKey = null;
+  // Only when the repaint actually LOST focus. A key left over from a paint that had no rows
+  // (so no onRender) must not later pull focus out of the search box the operator is typing in.
+  const a = document.activeElement;
+  if (a && a !== document.body) return;
+  const el = Array.prototype.find.call(tbody.querySelectorAll('[data-fk]'), e => e.getAttribute('data-fk') === key);
+  if (el) el.focus({ preventScroll: true });
+}
+function repaint() { captureFocus(); minersTable.refresh(); }
+
+document.getElementById('miners-tbody').addEventListener('click', (e) => {
+  const t = e.target;
+  const tog = t.closest('.mn-toggle');
+  if (tog) { toggleMiner(tog.dataset.addr); return; }
+  // Anything interactive keeps its own meaning, and nothing inside the details collapses it.
+  if (t.closest('button, a, input, select, textarea, label, [data-copy], tr.mn-detail')) return;
+  const tr = t.closest('tr.mn-row');
+  if (!tr) return;
+  // Selecting a figure to copy it must not toggle the row.
+  if (window.getSelection && String(window.getSelection())) return;
+  toggleMiner(tr.dataset.addr);
+});
+
+// ── Load, filter, sort ───────────────────────────────────────────────────────
+async function loadMiners() {
+  if (_loading) return;            // a slow server must not stack 30 s refreshes
+  _loading = true;
+  try {
+    const data = await API.get('/api/admin/miners?limit=500');
+    _allMiners = (data && data.miners) || [];
+    if (data && data.windows) _win = data.windows;
+    document.getElementById('hr-win').textContent = fmtMins(_win.hashrate_s);
+    updateCounts();
+    document.getElementById('miner-updated').textContent =
+      'updated ' + new Date().toISOString().slice(11, 19) + ' UTC';
+    applyView();
+    // Keep open rows as fresh as the list, but only the ones on screen (another page or chip
+    // hides the rest; the as-of line tells the operator how old those are when they come back)
+    // and not while the tab is hidden: each refresh reads every retained share of that address.
+    if (!document.hidden) {
+      document.querySelectorAll('#miners-tbody tr.mn-row.is-open').forEach(tr => fetchDetail(tr.dataset.addr));
+    }
+  } catch (err) {
+    minersTable.setError(err.message);
+  } finally {
+    _loading = false;
+  }
+}
+
+function updateCounts() {
+  const n = { mining: 0, degraded: 0, connecting: 0, offline: 0, banned: 0 };
+  for (const m of _allMiners) n[stateOf(m)]++;
+  document.getElementById('n-all').textContent = _allMiners.length;
+  for (const k of Object.keys(n)) document.getElementById('n-' + k).textContent = n[k];
+  // Connecting is brief and usually zero; its chip appears only when it has something (or is
+  // the active filter, so the operator is never left on an invisible chip).
+  document.getElementById('chip-connecting').hidden = !n.connecting && _filter !== 'connecting';
+}
+
+const SORT_VAL = {
+  status:   m => STATE_ORDER[stateOf(m)],
+  workers:  m => m.workers_online || 0,
+  hashrate: m => m.hashrate_gps || 0,
+  balance:  m => m.balance || 0,
+  locked:   m => m.balance_locked || 0,
+  paid:     m => m.total_paid || 0,
+  last:     m => lastActiveOf(m)
+};
+// First click on a column: status ascending (problems first), every number descending.
+const SORT_FIRST_DIR = { status: 1 };
+
+// `reset` is passed only when the operator changed a chip or the sort — the 30 s refresh must
+// not yank them back to page 1 while they are reading page 4.
+function applyView(reset) {
+  let rows = _filter ? _allMiners.filter(m => stateOf(m) === _filter) : _allMiners.slice();
+  const val = SORT_VAL[_sort.key] || SORT_VAL.balance;
+  const dir = _sort.dir;
+  // Ties fall back to balance (the server's order), so equal rows do not shuffle between refreshes.
+  rows.sort((a, b) => ((val(a) - val(b)) * dir) || ((b.balance || 0) - (a.balance || 0)));
+  captureFocus();
+  minersTable.setRows(rows, { reset: reset === true });
+}
+
+document.getElementById('status-chips').addEventListener('click', (e) => {
+  const btn = e.target.closest('.tab-btn');
+  if (!btn) return;
+  _filter = btn.dataset.filter || '';
+  document.querySelectorAll('#status-chips .tab-btn').forEach(b => {
+    const on = b === btn;
+    b.classList.toggle('active', on);
+    b.setAttribute('aria-pressed', String(on));
+  });
+  applyView(true);
+});
+
+document.querySelector('#miners-table thead').addEventListener('click', (e) => {
+  const btn = e.target.closest('.mn-sort');
+  if (!btn) return;
+  const key = btn.dataset.sort;
+  _sort = (_sort.key === key) ? { key, dir: -_sort.dir } : { key, dir: SORT_FIRST_DIR[key] || -1 };
+  document.querySelectorAll('#miners-table thead th').forEach(th => {
+    const b = th.querySelector('.mn-sort');
+    th.setAttribute('aria-sort', b && b.dataset.sort === _sort.key
+      ? (_sort.dir === 1 ? 'ascending' : 'descending') : 'none');
+  });
+  applyView(true);
+});
+
+// ── Messages + dialog ────────────────────────────────────────────────────────
+function flash(msg, isErr) {
+  const el = document.getElementById('miner-msg');
+  el.textContent = msg;
+  el.className = isErr ? 'error-msg' : 'success-msg';
+  el.style.display = '';
+  clearTimeout(flash._t);
+  flash._t = setTimeout(() => { el.style.display = 'none'; }, 6000);
+}
+
+// Resolves { value } on confirm (Enter submits), or null on Cancel, Escape or a click on the
+// backdrop — the only ways to get null, so null really is the operator's decision.
+// ONE dialog at a time. The backdrop stops a second click, but keyboard focus can still Tab out
+// to a row button behind it; a second open would then attach a second submit listener to the
+// same form, and one Submit would resolve BOTH — banning the first address too. So a new open
+// cancels the old one first.
+let _dialogClose = null;
+function askDialog({ title, body, addr, confirmLabel, danger, input }) {
+  if (_dialogClose) _dialogClose(null);
+  return new Promise((resolve) => {
+    const q = id => document.getElementById(id);
+    const overlay = q('mn-dialog'), form = q('mn-dialog-form'), ok = q('mn-dialog-ok'),
+          cancel = q('mn-dialog-cancel'), field = q('mn-dialog-field'), inp = q('mn-dialog-input');
+    const previous = document.activeElement;
+    q('mn-dialog-title').textContent = title;
+    q('mn-dialog-body').textContent = body;
+    q('mn-dialog-addr').textContent = addr || '';
+    ok.textContent = confirmLabel;
+    ok.className = 'btn' + (danger ? ' btn-danger' : '');
+    field.style.display = input ? '' : 'none';
+    q('mn-dialog-label').textContent = input ? input.label : '';
+    inp.value = '';
+    inp.placeholder = input && input.placeholder ? input.placeholder : '';
+
+    function close(result) {
+      _dialogClose = null;
+      overlay.classList.remove('open');
+      form.removeEventListener('submit', onSubmit);
+      cancel.removeEventListener('click', onCancel);
+      overlay.removeEventListener('click', onBackdrop);
+      document.removeEventListener('keydown', onKey);
+      if (previous && typeof previous.focus === 'function' && document.body.contains(previous)) previous.focus();
+      resolve(result);
+    }
+    function onSubmit(e) { e.preventDefault(); close({ value: inp.value.trim() }); }
+    function onCancel() { close(null); }
+    function onBackdrop(e) { if (e.target === overlay) close(null); }
+    function onKey(e) { if (e.key === 'Escape') { e.preventDefault(); close(null); } }
+    form.addEventListener('submit', onSubmit);
+    cancel.addEventListener('click', onCancel);
+    overlay.addEventListener('click', onBackdrop);
+    document.addEventListener('keydown', onKey);
+    _dialogClose = close;
+    overlay.classList.add('open');
+    (input ? inp : ok).focus();
+  });
+}
+
+// ── Actions (all step-up gated server-side: adminFetch opens the password dialog) ──────────
+async function banMiner(addr) {
+  const ans = await askDialog({
+    title: 'Ban this miner?',
+    body: 'Blocks new stratum logins and drops its live sessions. The balance is kept and can still be paid out.',
+    addr, confirmLabel: 'Ban miner', danger: true,
+    input: { label: 'Reason (optional, shown to admins only)', placeholder: 'e.g. share flooding from many IPs' }
+  });
+  if (!ans) return;
+  try {
+    const res = await adminFetch('/api/admin/miners/' + encodeURIComponent(addr) + '/ban', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ reason: ans.value })
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.error || ('HTTP ' + res.status));
+    flash('Miner banned.', false);
+    if (_open.has(addr)) fetchDetail(addr, { facts: true });
+    loadMiners();
+  } catch (err) { flash(err.message, true); }
+}
+
+async function unbanMiner(addr) {
+  const ans = await askDialog({
+    title: 'Unban this miner?',
+    body: 'Its rigs can log in and mine again straight away.',
+    addr, confirmLabel: 'Unban miner'
+  });
+  if (!ans) return;
+  try {
+    const res = await adminFetch('/api/admin/miners/' + encodeURIComponent(addr) + '/unban', { method: 'POST' });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.error || ('HTTP ' + res.status));
+    flash('Miner unbanned.', false);
+    if (_open.has(addr)) fetchDetail(addr, { facts: true });
+    loadMiners();
+  } catch (err) { flash(err.message, true); }
+}
+
+async function clearTorPause(addr) {
+  if (!addr) return;
+  const ans = await askDialog({
+    title: 'Clear the Tor pause?',
+    body: 'Its counted Tor failures in the last 24 h stop counting (they stay in the history). ' +
+          'Use it when the failures were the pool’s fault, not the miner’s wallet.',
+    addr, confirmLabel: 'Clear Tor pause'
+  });
+  if (!ans) return;
   try {
     const res = await adminFetch('/api/admin/miners/' + encodeURIComponent(addr) + '/tor-pause/clear', { method: 'POST' });
     const body = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(body.error || ('HTTP ' + res.status));
     flash(`Tor pause cleared — ${body.cleared} failure(s) un-counted.`, false);
-    if (_tpAddr === addr) showTorPause(addr);
+    if (_open.has(addr)) fetchDetail(addr, { facts: true });
   } catch (err) { flash(err.message, true); }
 }
 

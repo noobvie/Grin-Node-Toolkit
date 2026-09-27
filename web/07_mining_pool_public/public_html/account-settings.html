@@ -76,44 +76,15 @@
     .lookup-row .form-group { flex: 1 1 420px; margin: 0; }
     .lookup-row .btn-save { flex: 0 0 auto; align-self: flex-end; }
 
-    /* ── account figures: a LARGE variant of reactor.css .placard ──────────
-       Scoped to .acct-figures so the shared 13px engraved strip on every other page is
-       untouched. These six numbers are what a miner opens the page for, so each tile gets
-       its own tone (--tone): a lit top rail, a faint wash of the same hue, and the value in
-       that hue. Glow goes through var(--glow) so the light themes (which set it to
-       transparent) stay crisp. clamp() keeps the nowrap values inside a phone-width tile. */
-    .placard.acct-figures { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
-    .placard.acct-figures span {
-      --tone: var(--accent);
-      gap: 8px; padding: 18px 14px 16px;
-      background: linear-gradient(180deg, color-mix(in srgb, var(--tone) 10%, transparent), transparent 75%);
-      box-shadow: inset 0 3px 0 color-mix(in srgb, var(--tone) 75%, transparent);
-    }
-    .placard.acct-figures i { font-size: 11px; letter-spacing: .14em; color: var(--text-dim); }
-    .placard.acct-figures b {
-      font-size: clamp(20px, 2.1vw, 26px); letter-spacing: .02em; color: var(--tone);
-      font-variant-numeric: tabular-nums; text-shadow: 0 0 12px var(--glow);
-    }
+    /* ── account figures: the shared reactor.css .placard.figures tiles ─────
+       The tile look (tone rail, wash, cqi-sized value, the .t-words wrap, the 2-up phone
+       grid) now lives in reactor.css so every public page's strip matches this one. Only
+       the balance is page-specific: it is what a miner opens the page for, so it gets the
+       biggest figure. */
     .placard.acct-figures .t-bal b { font-size: clamp(24px, 2.7vw, 32px); }
-    /* Size each value by its OWN tile, not the viewport. The vw clamp above assumed six tiles
-       share the row evenly, and at ~1400px a 32px "345.9303 ツ" was wider than its ~230px tile
-       and clipped at both edges (the placard is overflow:hidden, the value nowrap). cqi = 1% of
-       the tile's width, so the value shrinks with the tile at every breakpoint. The vw
-       declarations stay as the fallback for a browser without container queries. */
-    /* The pending tile holds words ("Awaiting you · Slatepack"), not a number: smaller, and
-       allowed to wrap onto a second line rather than clip. */
-    .placard.acct-figures .t-pend b { font-size: clamp(14px, 1.4vw, 18px); white-space: normal; line-height: 1.3; }
     @supports (container-type: inline-size) {
-      .placard.acct-figures span { container-type: inline-size; }
-      .placard.acct-figures b { font-size: clamp(15px, 12cqi, 26px); }
       .placard.acct-figures .t-bal b { font-size: clamp(17px, 14cqi, 32px); }
-      .placard.acct-figures .t-pend b { font-size: clamp(13px, 8.5cqi, 18px); }
     }
-    .placard.acct-figures .t-lock { --tone: var(--warn); }
-    .placard.acct-figures .t-paid { --tone: var(--gold); }
-    .placard.acct-figures .t-hash { --tone: var(--info); }
-    .placard.acct-figures .t-work { --tone: var(--ok); }
-    .placard.acct-figures .t-pend { --tone: var(--text); }
 
     /* ── shared timeframe toggle (same pattern as miners-stats) ─────────── */
     .rangebar { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; }
@@ -443,13 +414,13 @@
         <div id="acct-view" style="display:none">
 
             <!-- ═══ Spec placard: live account figures ═══ -->
-            <div class="placard acct-figures" aria-label="Live account figures">
+            <div class="placard figures acct-figures" aria-label="Live account figures">
                 <span class="t-bal"><i>Available balance</i><b id="acct-balance">—</b></span>
-                <span class="t-lock"><i>Locked / immature</i><b id="acct-locked">—</b></span>
-                <span class="t-paid"><i>Total paid out</i><b id="acct-paid">—</b></span>
-                <span class="t-hash"><i>Hashrate &middot; 1h</i><b id="acct-hashrate">—</b></span>
-                <span class="t-work"><i>Workers online</i><b id="pl-workers">—</b></span>
-                <span class="t-pend"><i>Pending payout</i><b id="pl-pending">—</b></span>
+                <span class="tone-warn"><i>Locked / immature</i><b id="acct-locked">—</b></span>
+                <span class="tone-gold"><i>Total paid out</i><b id="acct-paid">—</b></span>
+                <span class="tone-info"><i>Hashrate &middot; 1h</i><b id="acct-hashrate">—</b></span>
+                <span class="tone-ok"><i>Workers online</i><b id="pl-workers">—</b></span>
+                <span class="tone-text t-words"><i>Pending payout</i><b id="pl-pending">—</b></span>
             </div>
 
             <!-- Abandoned-balance countdown for THIS address. Hidden unless the address is idle
@@ -667,7 +638,13 @@
                                      open it — no listener needed, which is why this is the fallback when the Tor
                                      check says no. (Cut from the visible note 2026-09-23.) -->
                                 <div id="acct-pay-slatepack-pane" style="display:none;">
-                                    <p class="note" style="margin-bottom:12px">Generate &rarr; <code>receive</code> it in your wallet &rarr; paste the response below.</p>
+                                    <!-- The -m hint (2026-09-27): without it, `grin-wallet receive` first tries to
+                                         return its reply over Tor to the pool wallet's address inside the slatepack.
+                                         The pool wallet publishes no onion (owner_api only), so that attempt can only
+                                         time out before the reply prints. -m / --manual skips it (grin-wallet v5.5.0
+                                         receive args). Impl §10.11. -->
+                                    <p class="note" style="margin-bottom:12px">Generate &rarr; <code>receive</code> it in your wallet &rarr; paste the response below.
+                                        With the grin-wallet command line, run <code>grin-wallet receive -m</code>: the <code>-m</code> skips a Tor reply that can't reach the pool, so the response prints straight away.</p>
                                     <button class="btn-save" id="acct-sp-create">Generate Slatepack</button>
                                     <div class="acct-msg" id="acct-sp-msg"></div>
                                     <!-- Rebuilt from the account summary on every lookup (spSyncPending), so a
@@ -2516,9 +2493,13 @@
             'reversal/block': 'orphan clawback',
             'reversal/jackpot': 'jackpot clawback'
         };
+        // A payout row names its rail ("payout returned · Tor") from `payout_method`, which the
+        // server sets on withdrawal rows only. The registry words it, and falls back to the raw
+        // method string for a rail the pool has since removed.
         function eventLabel(row) {
-            return EVENT_LABEL[row.event_type + '/' + row.reference_type] ||
+            const base = EVENT_LABEL[row.event_type + '/' + row.reference_type] ||
                    (row.event_type + (row.reference_type ? ' · ' + row.reference_type : ''));
+            return row.payout_method ? base + ' · ' + PayoutMethods.methodLabel(row.payout_method) : base;
         }
         function renderLedger(dir, rows, total) {
             const tbody = $id('log-' + dir);
@@ -3200,10 +3181,10 @@
                 bal = Math.max(0.5, bal - amt);
             }
             const logOut = [
-                { created_at: now - 3 * 86400, event_type: 'lock', reference_type: 'withdrawal', amount: 25.0, balance_after: 21.7245 },
+                { created_at: now - 3 * 86400, event_type: 'lock', reference_type: 'withdrawal', payout_method: 'tor', amount: 25.0, balance_after: 21.7245 },
                 { created_at: now - 4 * 86400, event_type: 'debit', reference_type: 'donation', amount: 0.742, balance_after: 44.9518 },
-                { created_at: now - 8 * 86400, event_type: 'lock', reference_type: 'withdrawal', amount: 25.0, balance_after: 18.3306 },
-                { created_at: now - 15 * 86400, event_type: 'lock', reference_type: 'withdrawal', amount: 30.0, balance_after: 12.7981 }
+                { created_at: now - 8 * 86400, event_type: 'lock', reference_type: 'withdrawal', payout_method: 'slatepack', amount: 25.0, balance_after: 18.3306 },
+                { created_at: now - 15 * 86400, event_type: 'lock', reference_type: 'withdrawal', payout_method: 'tor', amount: 30.0, balance_after: 12.7981 }
             ];
             return {
                 summary: {

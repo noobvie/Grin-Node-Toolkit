@@ -575,6 +575,7 @@
          row:  function (e) { return '<tr>…</tr>'; },
          text: function (e) { return e.grin_address + ' ' + e.action; }, // searchable
          empty: 'No payout requests in this window.',
+         urlQuery: true,                    // optional: prefill the search from ?q=
          onRender: function (tbody) { … }   // optional: after rows are painted
        });
        t.setLoading();  t.setRows(list);  t.setError(err.message);
@@ -799,6 +800,16 @@
       state.page = 1;
       render();
     });
+    // urlQuery: true → start with the search box filled from the page's ?q= (a deep link such as
+    // miners.html → payments.html?q=<address>). Opt-in per table, because a page with several
+    // searchable tables must not filter all of them with one parameter. The value only ever
+    // becomes the input's .value and the lowercase match string; it is never written as markup.
+    if (input && opts.urlQuery) {
+      try {
+        var q0 = new URLSearchParams(window.location.search).get('q');
+        if (q0) { input.value = q0.trim(); state.q = input.value.toLowerCase(); }
+      } catch (e) { /* no URLSearchParams → just start unfiltered */ }
+    }
     if (input) {
       input.addEventListener('input', function () {
         state.q = input.value.trim().toLowerCase();

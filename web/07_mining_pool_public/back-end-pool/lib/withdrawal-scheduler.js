@@ -200,8 +200,9 @@ class WithdrawalScheduler {
 
         if (this.isFrozen()) {
           // Kill-switch engaged (auto by AlertMonitor on a critical money trip, or manual admin).
-          // Skip every OUTBOUND send path; still run slatepack expiry (it only REFUNDS expired
-          // slates back to miners — safe and desirable while frozen).
+          // Skip every OUTBOUND send path; still run slatepack expiry. It never sends: it refunds
+          // an expired slate the wallet shows as never finalized, settles one the chain already
+          // mined, and while frozen WAITS on a slate missing from the wallet (see the gate there).
           await this.processSlatepackExpiry();
         } else {
           await this.processTorChecks();
@@ -2043,31 +2044,221 @@ class WithdrawalScheduler {
   // A cancel that fails (grin-wallet refuses without a reachable node) no longer vanishes into a
   // log line: the refund transaction set slate_cancel_pending, and retryExpiredSlateCancels keeps
   // asking until the wallet's inputs are free.
+  //
+  // ASK THE WALLET BEFORE REFUNDING (expiry gate, 2026-09-27). The pool is not the only thing that
+  // can finalize a slate it issued. Every S1 carries the pool wallet's address (sender_index 0), and
+  // `grin-wallet receive` sends its reply straight back to that address over Tor, calling the
+  // pool wallet's Foreign API finalize_tx, which finalizes AND posts (foreign_rpc.rs finalize_tx →
+  // post_automatically = true; grin-wallet v5.5.0, source-read). That never reaches this backend:
+  // the row stays slatepack_pending, and the old sweep then refunded a payout the chain had
+  // already paid. It cannot happen as the toolkit ships the wallet — `owner_api` never publishes an
+  // onion, only `listen` does — but one `grin-wallet listen` on the pool wallet dir, or a torrc
+  // line pointing at its port, would open it, and so would an operator's hand `grin-wallet
+  // finalize`. So the refund now waits for the wallet's own record of the slate:
+  //
+  //   tx log entry for the row's slate_id        decision
+  //   ─────────────────────────────────────────  ─────────────────────────────────────────────────
+  //   none, or TxSentCancelled                   refund (while FROZEN: wait — after a restore or a
+  //                                              wallet switch an absent slate proves nothing)
+  //   TxSent, confirmed                          PAID: settle as confirmed, never refund
+  //   TxSent, tx_slate_state Standard1           refund: the coins were only reserved, nothing has
+  //                                              finalized the slate (the normal "no reply" case)
+  //   TxSent, any later state (Standard3 …)      HOLD: something finalized it outside this backend,
+  //                                              so it may be posted. Stays pending, critical alert,
+  //                                              re-read every tick — settles itself once mined
+  //   TxSent, state not recorded                 refund + warning: a wallet build that does not
+  //                                              record the state cannot be checked (operator
+  //                                              decision 2026-09-27: keep payouts flowing)
+  //   tx log unreadable                          wait: never refund blind
+  //
+  // Standard1 → Standard3 is grin-wallet's own bookkeeping: lock_tx_context writes the slate's state
+  // (Standard1) at tx_lock_outputs, and finalize_tx — Owner or Foreign, it is one function —
+  // rewrites it to Standard3 before it posts (libwallet foreign.rs finalize_tx). A row held here
+  // can still be finalized by the miner's own paste: re-finalizing a slate spends the same inputs,
+  // so at most one transaction can ever be mined. The only double pay is refund + chain, which is
+  // what this gate refuses.
   async processSlatepackExpiry() {
     try {
       const now = Math.floor(Date.now() / 1000);
       const cutoff = now - this.slatepackTtlSeconds;             // manual slatepack rail (30 min default)
       const nostrCutoff = now - this.nostrPendingTtlSeconds;     // Goblin/Nostr rail (10 min default)
       // Nostr rows expire on the shorter clock; every other pending rail uses the long TTL.
+      // The batch is generous ON PURPOSE (it was LIMIT 10): a row the gate holds stays
+      // slatepack_pending and is re-selected every tick, so ten held rows would starve every newer
+      // expiry behind them — the trap reclaimStaleFinalizing documents. One wallet read serves the
+      // whole batch, and no more rows than the pool-wide pending cap can exist.
       const stale = this.db.prepare(
         `SELECT * FROM withdrawals
           WHERE status = 'slatepack_pending'
             AND ( (method = 'nostr' AND created_at <= ?)
                   OR ((method IS NULL OR method != 'nostr') AND created_at <= ?) )
-          ORDER BY created_at ASC LIMIT 10`
-      ).all(nostrCutoff, cutoff);
+          ORDER BY created_at ASC LIMIT ?`
+      ).all(nostrCutoff, cutoff, Math.max(50, this.MAX_PENDING_WITHDRAWALS));
+
+      // Read the tx log ONCE, refreshed from the node — `confirmed` decides whether a payout is
+      // already paid, so it must be current. Only a row that issued a slate needs it.
+      let bySlate = null;
+      let logErr = null;
+      if (this.wallet && stale.some((w) => w.slate_id)) {
+        try {
+          if (typeof this.wallet.getTransactions !== 'function') throw new Error('this wallet client has no tx log reader');
+          const txs = await this.wallet.getTransactions(true);
+          if (!Array.isArray(txs)) throw new Error('the tx log came back in an unexpected shape');
+          bySlate = new Map();
+          // The SEND side only: the pool never receives its own slate, and a TxReceived with the
+          // same id must not stand in for the pool's own entry.
+          for (const t of txs) {
+            if (t && t.tx_slate_id && /^TxSent/.test(String(t.tx_type || ''))) bySlate.set(String(t.tx_slate_id), t);
+          }
+        } catch (e) {
+          logErr = e.message;
+        }
+      }
+      const frozen = this.isFrozen();
+
+      const held = [];
+      const settled = [];
+      const unverified = [];
       for (const w of stale) {
+        const v = this._expiryVerdict(w, bySlate, logErr, frozen);
+        if (v.action === 'wait') {
+          console.warn(`[slatepack] withdrawal ${w.id} is past its window but NOT refunded this tick — ${v.why}`);
+          continue;
+        }
+        if (v.action === 'settle') {
+          // The chain already paid it. _creditConfirm is guarded on slatepack_pending, so a
+          // finalize that claimed the row after the batch was read keeps it.
+          if (this._creditConfirm(w.id, 'slatepack_pending',
+            `settled at expiry: slate ${w.slate_id} is CONFIRMED on chain per the pool wallet's tx log, ` +
+            'but this backend never finalized it — something else did (a Tor reply to the pool wallet, or a hand finalize)')) {
+            console.error(`⚠️  Slatepack withdrawal ${w.id}: slate ${w.slate_id} was finalized OUTSIDE the pool and is mined — settled as paid, NOT refunded`);
+            settled.push(w);
+          }
+          continue;
+        }
+        if (v.action === 'hold') {
+          held.push({ w, state: v.state });
+          this._journalExpiryHold(w, v.state);
+          continue;
+        }
+
+        // refund
         const owes = !!(this.wallet && w.slate_id);
         const won = this._reverseLock(w.id, 'slatepack_expired', 'slatepack_pending',
-          'slatepack not returned within TTL — reversed', { owesSlateCancel: owes });
+          v.unverified
+            ? 'slatepack not returned within TTL — reversed WITHOUT the finalize check (the wallet does not record the slate state)'
+            : 'slatepack not returned within TTL — reversed', { owesSlateCancel: owes });
         // Lost the claim: a finalize took this row after the batch was selected. Its slate now
         // belongs to that settlement — never cancel it from here.
         if (!won) continue;
+        if (v.unverified) unverified.push(w);
         console.warn(`⚠️  Slatepack withdrawal ${w.id} expired (${w.amount} GRIN reversed to ${w.grin_address})`);
         if (owes) await this._cancelExpiredSlate(w.id, w.slate_id);
       }
+      this._noteExpiryGate(held, settled, unverified);
     } catch (err) {
       console.error(`Error processing slatepack expiry: ${err.message}`);
+    }
+  }
+
+  // One expired row → { action: refund | settle | hold | wait, … }. Pure: reads nothing but its
+  // arguments, so the table above is the whole rule.
+  _expiryVerdict(w, bySlate, logErr, frozen) {
+    // No slate issued (the create died before attaching one), or no Owner API: nothing of this
+    // row is reserved in the wallet, so nothing can have been finalized under it.
+    if (!w.slate_id || !this.wallet) return { action: 'refund' };
+    if (logErr) return { action: 'wait', why: `the pool wallet's tx log is unreadable (${logErr}) — never refund blind` };
+    const t = bySlate.get(String(w.slate_id));
+    if (!t || String(t.tx_type) === 'TxSentCancelled') {
+      return frozen
+        ? { action: 'wait', why: 'payouts are frozen, and while frozen a slate missing from the wallet proves nothing (restore / wallet switch)' }
+        : { action: 'refund' };
+    }
+    if (t.confirmed === true) return { action: 'settle' };
+    const state = t.tx_slate_state == null ? null : String(t.tx_slate_state);
+    if (state === 'Standard1') return { action: 'refund' };
+    if (state === null || state === 'Unknown') return { action: 'refund', unverified: true };
+    return { action: 'hold', state };
+  }
+
+  // One event per held row, not one per tick: the row is re-read every minute and the timeline
+  // must stay readable. The note's prefix is how the next tick knows — grep before renaming it.
+  _journalExpiryHold(w, state) {
+    try {
+      const seen = this.db.prepare(
+        "SELECT 1 FROM withdrawal_events WHERE withdrawal_id = ? AND note LIKE 'expiry-gate: held%' LIMIT 1"
+      ).get(w.id);
+      if (seen) return;
+      this.db.prepare(`
+        INSERT INTO withdrawal_events (withdrawal_id, from_status, to_status, triggered_by, note)
+        VALUES (?, 'slatepack_pending', 'slatepack_pending', 'scheduler', ?)
+      `).run(w.id,
+        `expiry-gate: held — the pool wallet's tx log shows slate ${w.slate_id} as ${state}, i.e. finalized, ` +
+        'but this backend never finalized it. It may be posted, so it is NOT refunded; it settles itself once mined.');
+      console.error(`⚠️  Slatepack withdrawal ${w.id}: slate ${w.slate_id} is ${state} in the pool wallet but was never finalized by the pool — HELD, not refunded`);
+    } catch (e) {
+      console.error(`[slatepack] could not journal the expiry hold on ${w.id}: ${e.message}`);
+    }
+  }
+
+  // The gate's two admin alerts, both folded into the Health page's Grin Wallet card
+  // (AlertMonitor.foldPayoutAlerts):
+  //   slate_finalized_elsewhere — CRITICAL while a row is held; WARNING for a day after a row was
+  //     settled as paid from the wallet's log. Either way something finalized a pool slate outside
+  //     this backend, and the operator has to find out what (Payout settings → Pool wallet safety).
+  //   slate_expiry_unverified   — WARNING for a day after a refund the gate could not check.
+  // A critical line describes rows that are held NOW, so it resolves the tick nothing is held; a
+  // warning describes something that already happened, so it stays up for a day of quiet.
+  _noteExpiryGate(held, settled, unverified) {
+    try {
+      const ids = (rows) => rows.map((w) => `#${w.id} (${w.amount} GRIN, slate ${w.slate_id})`).join(' · ');
+      if (held.length) {
+        this._rollingAlert('slate_finalized_elsewhere', 'critical',
+          `${held.length} expired slatepack payout${held.length === 1 ? ' is' : 's are'} HELD, not refunded: the pool ` +
+          `wallet shows ${held.length === 1 ? 'its slate' : 'their slates'} finalized, but this backend never finalized ` +
+          `${held.length === 1 ? 'it' : 'them'} — ${ids(held.map((h) => h.w))}. Each settles itself once mined. Never ` +
+          'refund one by hand. Find what finalized it: a Tor onion on the pool wallet (`grin-wallet listen`, or a torrc ' +
+          'line pointing at its port) or a hand `grin-wallet finalize`.' +
+          (settled.length ? ` Also settled as paid this tick: ${ids(settled)}.` : ''),
+          { held: held.map((h) => ({ withdrawal_id: h.w.id, slate_id: h.w.slate_id, state: h.state })),
+            settled: settled.map((w) => ({ withdrawal_id: w.id, slate_id: w.slate_id })) });
+      } else if (settled.length) {
+        this._rollingAlert('slate_finalized_elsewhere', 'warning',
+          `Expired slatepack payout${settled.length === 1 ? '' : 's'} ${ids(settled)} ${settled.length === 1 ? 'was' : 'were'} ` +
+          'finalized OUTSIDE the pool and mined — settled as paid, not refunded, so no money was lost. Something can ' +
+          'finalize pool slates without this backend: check for a Tor onion on the pool wallet (`grin-wallet listen`, or a ' +
+          'torrc line pointing at its port) or a hand `grin-wallet finalize`.',
+          { settled: settled.map((w) => ({ withdrawal_id: w.id, slate_id: w.slate_id })) });
+      } else {
+        this._resolveQuietAlert('slate_finalized_elsewhere');
+      }
+
+      if (unverified.length) {
+        this._rollingAlert('slate_expiry_unverified', 'warning',
+          `Expired slatepack payout${unverified.length === 1 ? '' : 's'} ${ids(unverified)} ${unverified.length === 1 ? 'was' : 'were'} ` +
+          'refunded WITHOUT the finalize check: this grin-wallet build does not record the slate state (tx_slate_state), ' +
+          'so the pool cannot tell a slate someone else finalized from one nobody answered. Check the grin-wallet ' +
+          'version on this card against the tested one (Payout settings → Pool wallet safety).',
+          { refunded: unverified.map((w) => ({ withdrawal_id: w.id, slate_id: w.slate_id })) });
+      } else {
+        this._resolveQuietAlert('slate_expiry_unverified');
+      }
+    } catch (e) {
+      console.error(`[slatepack] failed to record an expiry-gate alert: ${e.message}`);
+    }
+  }
+
+  // Resolve `type` now if it is critical, else once it has been quiet for a day (see _noteExpiryGate).
+  _resolveQuietAlert(type) {
+    try {
+      const now = new Date().toISOString();
+      const dayAgo = new Date(Date.now() - 86400000).toISOString();
+      this.db.prepare(
+        `UPDATE alerts SET status = 'resolved', resolved_at = ?
+          WHERE type = ? AND status = 'active' AND (level = 'critical' OR last_seen < ?)`
+      ).run(now, type, dayAgo);
+    } catch (e) {
+      console.error(`[payout] failed to resolve ${type} alert: ${e.message}`);
     }
   }
 

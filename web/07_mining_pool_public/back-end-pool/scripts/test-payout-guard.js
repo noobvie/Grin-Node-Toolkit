@@ -520,7 +520,14 @@ console.log('\n[1] §J4-10 — the matcher has three outcomes, not two');
     const oldId = seedSp(31, 'sp-old');
     const freshId = seedSp(29, 'sp-fresh');
     const cancelled = [];
-    const s = new WithdrawalScheduler(config, { async cancelTx(id) { cancelled.push(id); } });
+    // The expiry gate reads the wallet's tx log before any refund (2026-09-27), so the stub needs
+    // one: grin-wallet v5.5.0 records a locked-but-unanswered slate as TxSent / Standard1.
+    const s = new WithdrawalScheduler(config, {
+      async cancelTx(id) { cancelled.push(id); },
+      async getTransactions() {
+        return ['sp-old', 'sp-fresh'].map((id) => ({ tx_slate_id: id, tx_type: 'TxSent', tx_slate_state: 'Standard1', confirmed: false }));
+      },
+    });
     await s.processSlatepackExpiry();
     ok('31-min-old slatepack expires', rowOf(oldId).status === 'slatepack_expired', rowOf(oldId).status);
     ok('…its pool-wallet tx is cancelled', cancelled.length === 1 && cancelled[0] === 'sp-old', cancelled.join(','));
@@ -851,6 +858,9 @@ console.log('\n[1] §J4-10 — the matcher has three outcomes, not two');
   await guarded(healthCardSection);
   await guarded(reviewFixesSection);
   await guarded(bindingSection);
+  await guarded(expiryGateSection);
+  await guarded(walletVersionSection);
+  await guarded(doublePayCardSection);
 
   console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed\n`);
   cleanup();
@@ -881,7 +891,8 @@ async function slatepackRecoverySection() {
     const w = {
       log: [], cancels: [], recips: [], n: 0,
       async initSendTx(amount) { if (hooks.init) await hooks.init(); w.n++; return { id: `sp-${seq}-${w.n}`, amt: amount, fee: '23500000' }; },
-      async txLockOutputs(slate) { w.log.push({ tx_slate_id: slate.id, tx_type: 'TxSent', confirmed: false }); },
+      // Standard1 is what grin-wallet v5.5.0 writes at lock (selection.rs lock_tx_context).
+      async txLockOutputs(slate) { w.log.push({ tx_slate_id: slate.id, tx_type: 'TxSent', tx_slate_state: 'Standard1', confirmed: false }); },
       async createSlatepackMessage(slate, recips) { w.recips.push(recips); if (hooks.message) await hooks.message(slate); return S1(recips); },
       async cancelTx(id) {
         w.cancels.push(id);
@@ -971,7 +982,7 @@ async function slatepackRecoverySection() {
   {
     reset(); db.exec("DELETE FROM alerts WHERE type IN ('slate_cancel_owed','slate_refunded_but_mined')");
     const w = fakeWallet();
-    w.log.push({ tx_slate_id: 'sp4', tx_type: 'TxSent', confirmed: false });
+    w.log.push({ tx_slate_id: 'sp4', tx_type: 'TxSent', tx_slate_state: 'Standard1', confirmed: false });
     const id = seedPending({ slate: 'sp4' });
     let seenAtCancel = null;
     const s = sched({ ...w, async cancelTx(sid) { seenAtCancel = rowOf(id).status; return w.cancelTx(sid); } });
@@ -991,7 +1002,8 @@ async function slatepackRecoverySection() {
     let s = null;
     let idB = null;
     const w = fakeWallet({ async cancel(sid) { if (sid === 'sp5-a') s._claimForFinalize(idB); } });
-    w.log.push({ tx_slate_id: 'sp5-a', tx_type: 'TxSent', confirmed: false }, { tx_slate_id: 'sp5-b', tx_type: 'TxSent', confirmed: false });
+    w.log.push({ tx_slate_id: 'sp5-a', tx_type: 'TxSent', tx_slate_state: 'Standard1', confirmed: false },
+      { tx_slate_id: 'sp5-b', tx_type: 'TxSent', tx_slate_state: 'Standard1', confirmed: false });
     const idA = seedPending({ slate: 'sp5-a', ageMin: 40 });
     idB = seedPending({ slate: 'sp5-b', ageMin: 35 });
     s = sched(w);
@@ -1007,7 +1019,7 @@ async function slatepackRecoverySection() {
   {
     reset();
     const w = fakeWallet({ async cancel() { throw new Error("Can't contact running Grin node. Not Cancelling."); } });
-    w.log.push({ tx_slate_id: 'sp6', tx_type: 'TxSent', confirmed: false });
+    w.log.push({ tx_slate_id: 'sp6', tx_type: 'TxSent', tx_slate_state: 'Standard1', confirmed: false });
     const id = seedPending({ slate: 'sp6' });
     await quiet(() => sched(w).processSlatepackExpiry());
     ok('SP6. node down at expiry: refunded anyway, slate_cancel_pending = 1',
@@ -2014,6 +2026,45 @@ async function routeSection() {
     ok('RT5. no non-admin route names fail_detail at all', leaks.length === 0, leaks.map((l) => l.join(' ')).join(', '));
   }
 
+  // ── RT5b P-06/P-07 ledger rows name the payout's rail ("payout returned · Tor") ──
+  // Through the real handler AND the real direction SQL, lifted from index.js, so the in/out
+  // split the page reads is the one tested.
+  {
+    reset(); fund(100);
+    const dirSrc = (indexSrc.match(/const LEDGER_DIRECTION_SQL = (\{[\s\S]*?\n  \});/) || [])[1] || 'null';
+    // eslint-disable-next-line no-new-func
+    const LEDGER_DIRECTION_SQL = new Function('return ' + dirSrc)();
+    const OTHER = 'tgrin1zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz';
+    fund(0, OTHER);
+    const sp = Number(db.prepare(`INSERT INTO withdrawals (grin_address, amount, fee_charged, status, method, created_at)
+      VALUES (?, 25, 0.04, 'slatepack_expired', 'slatepack', ?)`).run(ADDR, nowS() - 900).lastInsertRowid);
+    const tor = seedFailed('wallet_offline', 600);
+    const foreign = seedFailed('wallet_offline', 600, OTHER);
+    const log = db.prepare(`INSERT INTO balance_log (grin_address, event_type, amount, balance_before, balance_after,
+      locked_before, locked_after, reference_type, reference_id, created_at) VALUES (?, ?, 25, 0, 0, 0, 0, ?, ?, ?)`);
+    log.run(ADDR, 'lock', 'withdrawal', sp, nowS() - 900);
+    log.run(ADDR, 'reversal', 'withdrawal', sp, nowS() - 800);
+    log.run(ADDR, 'lock', 'withdrawal', tor, nowS() - 700);
+    log.run(ADDR, 'reversal', 'withdrawal', tor, nowS() - 600);
+    log.run(ADDR, 'credit', 'block', sp, nowS() - 500);            // a block height that equals a payout id
+    log.run(ADDR, 'reversal', 'withdrawal', foreign, nowS() - 400); // a payout id owned by another address
+    const h = load('get', '/api/account/:addr/balance/log', { db, rateLimiter, LEDGER_DIRECTION_SQL });
+    const inn = await call(h, { params: { addr: ADDR }, query: { direction: 'in' } });
+    const out = await call(h, { params: { addr: ADDR }, query: { direction: 'out' } });
+    const rail = (res, ev, ref) => ((res.body && res.body.log) || [])
+      .filter((r) => r.event_type === ev && Number(r.reference_id) === ref).map((r) => r.payout_method);
+    ok('RT5b. ledger payout rows carry payout_method — the lock (out) and the reversal (in), per rail',
+      !!LEDGER_DIRECTION_SQL && inn.statusCode === 200 && out.statusCode === 200 &&
+      JSON.stringify(rail(out, 'lock', sp)) === '["slatepack"]' && JSON.stringify(rail(inn, 'reversal', sp)) === '["slatepack"]' &&
+      JSON.stringify(rail(out, 'lock', tor)) === '["tor"]' && JSON.stringify(rail(inn, 'reversal', tor)) === '["tor"]',
+      JSON.stringify({ in: inn.body, out: out.body }));
+    ok('RT5b. …null on a non-payout row whose reference_id equals a payout id, and on another address\'s payout',
+      JSON.stringify(rail(inn, 'credit', sp)) === '[null]' && JSON.stringify(rail(inn, 'reversal', foreign)) === '[null]',
+      JSON.stringify(inn.body && inn.body.log));
+    reset(); // its payout rows first: withdrawals.grin_address references the account
+    db.prepare('DELETE FROM miner_accounts WHERE grin_address = ?').run(OTHER);
+  }
+
   // ── RT6 admin: retry removed, recheck, forced refund, pause clear, cancel ──
   const adminDeps = (s) => ({ db, secureAdmin: null, freshAdmin: null, withdrawalScheduler: s, getPayoutControl: () => ({ frozen: false }),
     hashrateTracker: { getMinerHashrate: () => ({}) }, PROOF_SET_MAX: 10 });
@@ -2081,6 +2132,24 @@ async function routeSection() {
     const q = seedWithdrawal({ status: 'tor_checking', retries: 0, priorAttempt: false });
     const r3 = await call(h, { params: { id: String(q) }, body: {} });
     ok('RT6. …control: a never-sent tor_checking row is still cancellable', r3.statusCode === 200 && rowOf(q).status === 'cancelled', JSON.stringify(r3.body));
+  }
+  {
+    // A tor_failed row was refunded when it failed, so cancel had nothing to return. It only
+    // relabelled the row 'cancelled', and four readers key on 'tor_failed': auditWalletSends
+    // (counts 'cancelled' as recorded, which hides a double pay), the Tor pause count, the
+    // pool-side payout_failed alert and the cooldown exclusion. Operator decision 2026-09-27.
+    reset(); fund(100);
+    const h = load('post', '/api/admin/withdrawals/:id/cancel', adminDeps(sched()));
+    const failed = seedFailed('wallet_offline', 600);
+    const logBefore = db.prepare('SELECT COUNT(*) AS c FROM balance_log WHERE grin_address = ?').get(ADDR).c;
+    const r = await call(h, { params: { id: String(failed) }, body: {} });
+    ok('RT6. admin cancel refuses tor_failed (409): it was refunded when it failed',
+       r.statusCode === 409 && rowOf(failed).status === 'tor_failed' && rowOf(failed).fail_code === 'wallet_offline',
+       JSON.stringify({ code: r.statusCode, body: r.body, status: rowOf(failed).status }));
+    ok('RT6. …and moves no money and writes no ledger row',
+       Math.abs(acct().balance - 100) < 1e-9 && Math.abs(acct().balance_locked) < 1e-9 &&
+       db.prepare('SELECT COUNT(*) AS c FROM balance_log WHERE grin_address = ?').get(ADDR).c === logBefore,
+       JSON.stringify(acct()));
   }
 
   // ── RT9 (Session 4 review, R9) a double-click on "Send as Slatepack instead" cannot make two ──
@@ -2273,7 +2342,7 @@ async function healthCardSection() {
   console.log('\n[health-card] payout alerts on the Grin Wallet card; the unrecorded-send audit ignores refunded Tor rows');
   const AlertMonitor = require(path.join(APP, 'lib/alert-monitor.js'));
   const fold = (card) => (typeof AlertMonitor.foldPayoutAlerts === 'function' ? AlertMonitor.foldPayoutAlerts(db, card) : card);
-  const wipe = () => { reset(); db.exec("DELETE FROM alerts WHERE type IN ('payout_unmined','payout_held','tor_send_path')"); };
+  const wipe = () => { reset(); db.exec("DELETE FROM alerts WHERE type IN ('payout_unmined','payout_held','tor_send_path','slate_finalized_elsewhere','slate_expiry_unverified')"); };
   const s = newScheduler([]);
 
   wipe();
@@ -2936,3 +3005,341 @@ async function bindingSection() {
   reset();
 }
 
+// ═══ [expiry-gate] the slatepack expiry sweep asks the wallet before it refunds (2026-09-27) ═══
+// `grin-wallet receive` sends its reply straight back to the address inside the S1 over Tor, and
+// the pool wallet's Foreign finalize_tx then finalizes AND posts it, never telling this backend
+// (grin-wallet v5.5.0: controller/src/command.rs receive → try_slatepack_sync_workflow →
+// foreign_rpc.rs finalize_tx, post_automatically = true). The old sweep refunded that row at TTL:
+// paid on chain AND refunded. Each G case below states the rule for one row of the gate's table;
+// G2, G4, G6 and G7 fail on the code before the gate (it refunded all four).
+async function expiryGateSection() {
+  console.log('\n[expiry-gate] refund only a slate the wallet shows as never finalized');
+  const now = () => Math.floor(Date.now() / 1000);
+  // The pool wallet as the expiry sweep sees it. `log` is the tx log retrieve_txs returns.
+  const gateWallet = ({ log = [], readable = true } = {}) => {
+    const w = {
+      log, cancels: [], reads: 0,
+      async getTransactions() { w.reads++; if (!readable) throw new Error('owner API down'); return w.log.map((t) => ({ ...t })); },
+      async cancelTx(id) {
+        w.cancels.push(id);
+        const e = w.log.find((t) => t.tx_slate_id === id);
+        if (e) e.tx_type = 'TxSentCancelled';
+      },
+    };
+    return w;
+  };
+  const tx = (id, state, confirmed = false, type = 'TxSent') =>
+    ({ tx_slate_id: id, tx_type: type, tx_slate_state: state, confirmed });
+  const sched = (wallet) => { const s = new WithdrawalScheduler(config, wallet); s.incentives = { maybePayJoinBonus() {} }; return s; };
+  const seedExpired = (slate, { ageMin = 31, amount = 25 } = {}) => {
+    db.prepare('UPDATE miner_accounts SET balance_locked = balance_locked + ? WHERE grin_address = ?').run(amount, ADDR);
+    return Number(db.prepare(
+      `INSERT INTO withdrawals (grin_address, amount, fee, fee_charged, status, method, slate_id, created_at)
+       VALUES (?, ?, 0, 0.04, 'slatepack_pending', 'slatepack', ?, ?)`
+    ).run(ADDR, amount, slate, now() - ageMin * 60).lastInsertRowid);
+  };
+  const GATE_ALERTS = "('slate_finalized_elsewhere','slate_expiry_unverified','slate_cancel_owed','slate_refunded_but_mined')";
+  const wipe = () => {
+    reset(); db.exec(`DELETE FROM alerts WHERE type IN ${GATE_ALERTS}`); db.exec('DELETE FROM payout_control');
+    db.prepare('UPDATE miner_accounts SET balance = 0, balance_locked = 0 WHERE grin_address = ?').run(ADDR);
+  };
+  const freeze = () => db.prepare(`INSERT INTO payout_control (id, frozen, reason, frozen_by, frozen_at, updated_at)
+    VALUES (1, 1, 'test', 'test', ?, ?)`).run(nowS(), nowS());
+  const refunded = (id) => rowOf(id).status === 'slatepack_expired' && !!reversalOf(id);
+  const untouched = (id) => rowOf(id).status === 'slatepack_pending' && !reversalOf(id);
+  const holdEvents = (id) => db.prepare(
+    "SELECT COUNT(*) AS c FROM withdrawal_events WHERE withdrawal_id = ? AND note LIKE 'expiry-gate: held%'").get(id).c;
+  const run = (s) => quiet(() => s.processSlatepackExpiry());
+
+  // ── G1 the normal case: the miner never replied, the slate is only locked (Standard1) ──
+  {
+    wipe();
+    const w = gateWallet({ log: [tx('g1', 'Standard1')] });
+    const id = seedExpired('g1');
+    await run(sched(w));
+    ok('G1. Standard1 (only locked) → refunded and its slate cancelled, exactly as before the gate',
+      refunded(id) && w.cancels.join() === 'g1' && Math.abs(acct().balance - 25) < 1e-9, JSON.stringify({ r: rowOf(id), c: w.cancels }));
+    ok('G1. …and no gate alert', !alertOf('slate_finalized_elsewhere') && !alertOf('slate_expiry_unverified'));
+  }
+
+  // ── G2 a Tor reply finalized it behind the backend's back, not mined yet → HELD ──
+  {
+    wipe();
+    const w = gateWallet({ log: [tx('g2', 'Standard3')] });
+    const id = seedExpired('g2');
+    const s = sched(w);
+    await run(s);
+    ok('G2. Standard3 (finalized outside the pool) → NOT refunded, NOT cancelled, amount still locked',
+      untouched(id) && w.cancels.length === 0 && Math.abs(acct().balance_locked - 25) < 1e-9 && Math.abs(acct().balance) < 1e-9,
+      JSON.stringify({ r: rowOf(id), c: w.cancels, a: acct() }));
+    const al = alertOf('slate_finalized_elsewhere');
+    ok('G2. …one CRITICAL alert naming the payout and what to look for',
+      !!al && al.level === 'critical' && al.message.includes(`#${id}`) && /grin-wallet listen/.test(al.message), JSON.stringify(al));
+    await run(s);
+    ok('G2. …a second tick keeps holding and journals the hold ONCE, not once per minute',
+      untouched(id) && holdEvents(id) === 1 && w.cancels.length === 0, String(holdEvents(id)));
+
+    // ── G3 …the same transaction mines → settled as PAID, never refunded ──
+    w.log[0].confirmed = true;
+    await run(s);
+    const r = rowOf(id);
+    ok('G3. held slate mines → confirmed: lock released and debited, no reversal, nothing cancelled',
+      r.status === 'confirmed' && !reversalOf(id) && Math.abs(acct().balance_locked) < 1e-9 && Math.abs(acct().balance) < 1e-9 &&
+      w.cancels.length === 0, JSON.stringify({ r, a: acct() }));
+    const al2 = alertOf('slate_finalized_elsewhere');
+    ok('G3. …the alert drops to a WARNING that stays up (something can still finalize pool slates)',
+      !!al2 && al2.level === 'warning' && al2.message.includes(`#${id}`), JSON.stringify(al2));
+    await run(s);
+    ok('G3. …and a quiet tick does not clear that warning', !!alertOf('slate_finalized_elsewhere'));
+  }
+
+  // ── G4 already mined at the first expiry read → settled as paid ──
+  {
+    wipe();
+    const w = gateWallet({ log: [tx('g4', 'Standard3', true)] });
+    const id = seedExpired('g4');
+    await run(sched(w));
+    ok('G4. confirmed at expiry → PAID (status confirmed), never refunded, never cancelled',
+      rowOf(id).status === 'confirmed' && !reversalOf(id) && w.cancels.length === 0, JSON.stringify(rowOf(id)));
+    ok('G4. …the settlement names the out-of-band finalize in the payout\'s timeline', !!db.prepare(
+      "SELECT 1 FROM withdrawal_events WHERE withdrawal_id = ? AND to_status = 'confirmed' AND note LIKE 'settled at expiry:%'").get(id));
+  }
+
+  // ── G5 a wallet that does not record the slate state: refund + warning (operator option a) ──
+  {
+    wipe();
+    const w = gateWallet({ log: [tx('g5a', null), tx('g5b', 'Unknown')] });
+    const a = seedExpired('g5a'); const b = seedExpired('g5b', { ageMin: 32 });
+    await run(sched(w));
+    ok('G5. state not recorded (null / Unknown) → refunded, payouts keep flowing', refunded(a) && refunded(b));
+    const al = alertOf('slate_expiry_unverified');
+    ok('G5. …with ONE warning naming both, pointing at the grin-wallet version',
+      !!al && al.level === 'warning' && al.message.includes(`#${a}`) && al.message.includes(`#${b}`) && /version/.test(al.message),
+      JSON.stringify(al));
+    ok('G5. …and the refund event says the check was skipped', /WITHOUT the finalize check/.test(
+      db.prepare("SELECT note FROM withdrawal_events WHERE withdrawal_id = ? AND to_status = 'slatepack_expired'").get(a).note));
+  }
+
+  // ── G6 an unreadable tx log decides nothing — except for a row that never issued a slate ──
+  {
+    wipe();
+    const w = gateWallet({ log: [tx('g6', 'Standard1')], readable: false });
+    const id = seedExpired('g6');
+    const noSlate = seedExpired(null, { ageMin: 33 });
+    await run(sched(w));
+    ok('G6. tx log unreadable → NOT refunded, NOT cancelled (never refund blind)', untouched(id) && w.cancels.length === 0,
+      JSON.stringify({ r: rowOf(id), c: w.cancels }));
+    ok('G6. …a row with no slate on record needs no wallet and is still refunded', refunded(noSlate), JSON.stringify(rowOf(noSlate)));
+  }
+
+  // ── G7 frozen: a missing slate waits, positive wallet evidence still decides ──
+  {
+    wipe(); freeze();
+    const w = gateWallet({ log: [tx('g7-locked', 'Standard1'), tx('g7-mined', 'Standard3', true), tx('g7-cxl', 'Standard1', false, 'TxSentCancelled')] });
+    const absent = seedExpired('g7-absent');
+    const cxl = seedExpired('g7-cxl', { ageMin: 32 });
+    const locked = seedExpired('g7-locked', { ageMin: 33 });
+    const mined = seedExpired('g7-mined', { ageMin: 34 });
+    await run(sched(w));
+    ok('G7. frozen + slate absent / cancelled → WAIT (after a restore an absence proves nothing)', untouched(absent) && untouched(cxl),
+      JSON.stringify([rowOf(absent).status, rowOf(cxl).status]));
+    ok('G7. frozen + Standard1 → still refunded; frozen + confirmed → still settled as paid',
+      refunded(locked) && rowOf(mined).status === 'confirmed' && !reversalOf(mined), JSON.stringify([rowOf(locked).status, rowOf(mined).status]));
+    db.exec('DELETE FROM payout_control');
+  }
+
+  // ── G8 unfrozen, slate absent or cancelled → refunded (unchanged) ──
+  {
+    wipe();
+    const w = gateWallet({ log: [tx('g8-cxl', 'Standard1', false, 'TxSentCancelled')] });
+    const absent = seedExpired('g8-absent'); const cxl = seedExpired('g8-cxl', { ageMin: 32 });
+    await run(sched(w));
+    ok('G8. unfrozen: slate absent / cancelled → refunded as before', refunded(absent) && refunded(cxl));
+  }
+
+  // ── G9 only the pool's SEND entry counts ──
+  {
+    wipe();
+    const w = gateWallet({ log: [tx('g9', 'Standard2', false, 'TxReceived'), tx('g9', 'Standard1')] });
+    const id = seedExpired('g9');
+    await run(sched(w));
+    ok('G9. a TxReceived with the same slate id never stands in for the pool\'s own TxSent', refunded(id), JSON.stringify(rowOf(id)));
+  }
+
+  // ── G10 held rows never starve newer expiries (the batch used to be LIMIT 10) ──
+  {
+    wipe();
+    const log = [];
+    for (let i = 0; i < 12; i++) log.push(tx(`g10-h${i}`, 'Standard3'));
+    log.push(tx('g10-new', 'Standard1'));
+    const w = gateWallet({ log });
+    for (let i = 0; i < 12; i++) seedExpired(`g10-h${i}`, { ageMin: 60 - i });
+    const fresh = seedExpired('g10-new', { ageMin: 31 });
+    await run(sched(w));
+    ok('G10. twelve older held rows ahead of it: the newest expired row is still refunded this tick', refunded(fresh),
+      JSON.stringify(rowOf(fresh)));
+    ok('G10. …with ONE wallet read for the whole batch', w.reads === 1, String(w.reads));
+  }
+
+  // ── G11 a held row still takes the miner's own reply; the critical alert then clears ──
+  {
+    wipe();
+    const w = gateWallet({ log: [tx('g11', 'Standard3')] });
+    Object.assign(w, {
+      async slateFromSlatepackMessage() { return { id: 'g11' }; },
+      async finalizeTx(slate) { return slate; },
+      async postTx() {},
+    });
+    const id = seedExpired('g11');
+    const s = sched(w);
+    await run(s);
+    const r = await quiet(() => s.finalizeSlatepackWithdrawal(ADDR, id, 'BEGINSLATEPACK. s2 . ENDSLATEPACK.'));
+    ok('G11. a held row still finalizes from the miner\'s paste (same inputs: at most one tx can mine)',
+      r && r.status === 'confirmed' && rowOf(id).status === 'confirmed', JSON.stringify(rowOf(id)));
+    await run(s);
+    ok('G11. …and the next tick, with nothing held, resolves the CRITICAL alert', !alertOf('slate_finalized_elsewhere'));
+  }
+
+  // ── G12 the Health page's Grin Wallet card carries both gate alerts ──
+  {
+    const AlertMonitor = require(path.join(APP, 'lib/alert-monitor.js'));
+    wipe();
+    seedExpired('g12');
+    await run(sched(gateWallet({ log: [tx('g12', 'Standard3')] })));
+    const c = AlertMonitor.foldPayoutAlerts(db, { status: 'ok' });
+    ok('G12. a held payout turns the Grin Wallet card CRITICAL', c.status === 'critical' && /HELD/.test(c.message || ''), JSON.stringify(c));
+    wipe();
+    seedExpired('g12b');
+    await run(sched(gateWallet({ log: [tx('g12b', null)] })));
+    const c2 = AlertMonitor.foldPayoutAlerts(db, { status: 'ok' });
+    ok('G12. an unverified refund turns it Degraded (warning)', c2.status === 'warning' && /WITHOUT the finalize check/.test(c2.message || ''),
+      JSON.stringify(c2));
+  }
+  wipe();
+}
+
+// ═══ [wallet-version] the grin-wallet the pool runs vs the version its guards were checked on ═══
+// lib/grin-wallet-version.js TESTED_VERSION is a claim about grin-wallet BEHAVIOUR (no Tor onion
+// from owner_api, the slate state in the tx log, the Foreign finalize posting) that the expiry gate
+// depends on. Three copies of that version exist and must move together, deliberately: the
+// constant, the admin note on the Payout settings page, and the toolkit's install pin. W5/W6 fail
+// the moment one is bumped without the others — which is the point: bump them only after
+// re-reading the three behaviours in the new release's source.
+async function walletVersionSection() {
+  console.log('\n[wallet-version] Health card version check + the tested-version pins');
+  const V = require(path.join(APP, 'lib/grin-wallet-version.js'));
+  const T = V.TESTED_VERSION;
+
+  ok('W1. parses `grin-wallet 5.5.0`, keeps a pre-release suffix, null on junk',
+    V.parseVersion('grin-wallet 5.5.0\n') === '5.5.0' && V.parseVersion('grin-wallet 5.6.0-beta.1') === '5.6.0-beta.1' &&
+    V.parseVersion('error: no such flag') === null);
+
+  const same = V.foldIntoCard({ status: 'ok', spendable_balance: 3 }, { version: T, error: null });
+  ok('W2. the tested version → card unchanged (still OK, no message), version fields set',
+    same.status === 'ok' && !same.message && same.wallet_version === T && same.wallet_version_tested === T, JSON.stringify(same));
+
+  const other = V.foldIntoCard({ status: 'ok' }, { version: '9.9.9', error: null });
+  ok('W3. another version → Degraded, naming both and where to re-check',
+    other.status === 'warning' && other.message.includes('9.9.9') && other.message.includes(T) && /Pool wallet safety/.test(other.message),
+    JSON.stringify(other));
+  const crit = V.foldIntoCard({ status: 'critical', message: 'held' }, { version: '9.9.9', error: null });
+  const down = V.foldIntoCard({ status: 'error' }, { version: '9.9.9', error: null });
+  ok('W3. …and it never softens a critical or a down card', crit.status === 'critical' && crit.message.startsWith('held') && down.status === 'error');
+
+  const unk = V.foldIntoCard({ status: 'ok' }, { version: null, error: 'no binary at /x/grin-wallet' });
+  ok('W4. version unreadable → reported, status left as measured', unk.status === 'ok' && /could not be read/.test(unk.message) &&
+    unk.wallet_version === null, JSON.stringify(unk));
+
+  {
+    let runs = 0;
+    const run = async () => { runs++; return { version: T, error: null }; };
+    await V.detect('/tmp/w-a', { force: true, run });
+    await V.detect('/tmp/w-a', { run });
+    const afterCached = runs;
+    await V.detect('/tmp/w-b', { run });
+    ok('W4b. the probe is cached per binary (one run for two reads), and another wallet dir re-probes',
+      afterCached === 1 && runs === 2, String(runs));
+  }
+
+  const html = fs.readFileSync(path.join(APP, 'admin-panel/settings-payout.html'), 'utf8');
+  const m = /data-tested-grin-wallet>v?([^<]+)</.exec(html);
+  ok('W5. the Payout settings "Pool wallet safety" note states the tested version', !!m && m[1].trim() === T, m ? m[1] : 'not found');
+
+  const sh = fs.readFileSync(path.join(APP, '../../../scripts/lib/grin_wallet_install.sh'), 'utf8');
+  const pin = /GWI_DEFAULT_TAG="\$\{GWI_DEFAULT_TAG:-v?([^}"]+)\}"/.exec(sh);
+  ok('W6. the toolkit\'s install pin (GWI_DEFAULT_TAG) is the tested version — a pin bump must re-check the guards first',
+    !!pin && pin[1] === T, pin ? pin[1] : 'not found');
+}
+
+// ═══ [double-pay-card] the "paid twice?" alarm on the Health card, closed only by hand (2026-09-27) ═══
+// slate_refunded_but_mined (retryExpiredSlateCancels) is raised once per payout and resolved by
+// NOTHING automatic, so until now it sat in the alerts table where no admin page showed it. It now
+// folds into the Grin Wallet card as CRITICAL with its id, and the operator closes it with "Mark
+// reconciled" — a step-up-gated, audited route that refuses every alert type the code resolves itself.
+async function doublePayCardSection() {
+  console.log('\n[double-pay-card] slate_refunded_but_mined on the Health card + the manual resolve');
+  const AlertMonitor = require(path.join(APP, 'lib/alert-monitor.js'));
+  const s = newScheduler([]);
+  const wipe = () => db.exec("DELETE FROM alerts WHERE type IN ('slate_refunded_but_mined','payout_held')");
+  const idOf = (type) => db.prepare("SELECT id FROM alerts WHERE type = ? ORDER BY id DESC LIMIT 1").get(type).id;
+  const statusOf = (id) => db.prepare('SELECT status FROM alerts WHERE id = ?').get(id).status;
+
+  wipe();
+  s._rollingAlert('slate_refunded_but_mined', 'critical', 'Expired slatepack payout #7 was REFUNDED … paid twice', { withdrawal_id: 7 });
+  const id = idOf('slate_refunded_but_mined');
+  const c1 = AlertMonitor.foldPayoutAlerts(db, { status: 'ok' });
+  ok('D1. the alarm turns the Grin Wallet card CRITICAL and carries its id for "Mark reconciled"',
+    c1.status === 'critical' && /paid twice/.test(c1.message) && Array.isArray(c1.manual_alerts) &&
+    c1.manual_alerts.length === 1 && c1.manual_alerts[0].id === id, JSON.stringify(c1));
+  const down = AlertMonitor.foldPayoutAlerts(db, { status: 'error', message: 'owner API down' });
+  ok('D1. …and never masks a wallet that is down', down.status === 'error' && /owner API down/.test(down.message));
+
+  s._rollingAlert('slate_refunded_but_mined', 'critical', 'Expired slatepack payout #9 was REFUNDED … paid twice', { withdrawal_id: 9 });
+  const c2 = AlertMonitor.foldPayoutAlerts(db, { status: 'ok' });
+  ok('D2. a second payout inside the rolling window says there were 2, not just the latest',
+    /#9/.test(c2.message) && /2 occurrences/.test(c2.message), c2.message);
+
+  const other = AlertMonitor.foldPayoutAlerts(db, { status: 'ok' });
+  s._rollingAlert('payout_held', 'critical', 'held test', {});
+  const heldId = idOf('payout_held');
+  const withHeld = AlertMonitor.foldPayoutAlerts(db, { status: 'ok' });
+  ok('D3. only a manual-resolve type gets a button: payout_held folds in with no manual_alerts entry',
+    withHeld.manual_alerts.length === 1 && withHeld.manual_alerts[0].type === 'slate_refunded_but_mined' && !!other,
+    JSON.stringify(withHeld.manual_alerts));
+
+  const refused = AlertMonitor.resolveManual(db, heldId, 1);
+  ok('D4. resolveManual refuses a type the code resolves itself (409), and the alert stays active',
+    !refused.ok && refused.code === 409 && statusOf(heldId) === 'active', JSON.stringify(refused));
+  ok('D4. …and an unknown id is a 404', AlertMonitor.resolveManual(db, 999999, 1).code === 404);
+
+  const done = AlertMonitor.resolveManual(db, id, 42);
+  const row = db.prepare('SELECT status, resolved_at, acknowledged_by FROM alerts WHERE id = ?').get(id);
+  ok('D5. resolveManual closes the alarm and records who', done.ok && row.status === 'resolved' && !!row.resolved_at &&
+    row.acknowledged_by === '42', JSON.stringify(row));
+  const c3 = AlertMonitor.foldPayoutAlerts(db, { status: 'ok' });
+  ok('D5. …the card no longer carries it (payout_held still does)', !c3.manual_alerts && !/paid twice/.test(c3.message) &&
+    /held test/.test(c3.message), JSON.stringify(c3));
+  const again = AlertMonitor.resolveManual(db, id, 42);
+  ok('D5. …and a second close is a 409, not a silent success', !again.ok && again.code === 409);
+
+  s._rollingAlert('slate_refunded_but_mined', 'critical', 'Expired slatepack payout #11 was REFUNDED', { withdrawal_id: 11 });
+  ok('D6. a NEW double pay after the close raises a fresh active alarm', statusOf(idOf('slate_refunded_but_mined')) === 'active' &&
+    idOf('slate_refunded_but_mined') !== id);
+  wipe();
+
+  // The route and the page, read from source (the admin-guards suite reads tiers the same way).
+  const src = fs.readFileSync(path.join(APP, 'index.js'), 'utf8');
+  const decl = /app\.post\('\/api\/admin\/alerts\/:alertId\/resolve',\s*([A-Za-z]+),/.exec(src);
+  ok('D7. POST /api/admin/alerts/:alertId/resolve is freshAdmin (step-up: it silences a money alarm)',
+    !!decl && decl[1] === 'freshAdmin', decl ? decl[1] : 'route not found');
+  const a = src.indexOf("app.post('/api/admin/alerts/:alertId/resolve'");
+  const body = a < 0 ? '' : src.slice(a, src.indexOf('\n  });', a));
+  ok('D7. …it requires a note, goes through resolveManual, and writes an alert_resolve audit row',
+    /if \(!note\)/.test(body) && /AlertMonitor\.resolveManual\(/.test(body) && /'alert_resolve'/.test(body));
+  const html = fs.readFileSync(path.join(APP, 'admin-panel/health.html'), 'utf8');
+  ok('D8. the Health page loads stepup.js and resolves through adminFetch (the step-up retry)',
+    /<script src="\/js\/stepup\.js"><\/script>/.test(html) && /adminFetch\('\/api\/admin\/alerts\/' \+ id \+ '\/resolve'/.test(html));
+  const acct = fs.readFileSync(path.join(APP, '../public_html/account-settings.html'), 'utf8');
+  ok('D9. the account page tells a CLI miner to run `grin-wallet receive -m` (skips the Tor reply that cannot reach the pool)',
+    /<code>grin-wallet receive -m<\/code>/.test(acct));
+}

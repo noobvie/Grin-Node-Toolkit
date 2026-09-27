@@ -20,6 +20,7 @@ const RewardDistributor = require('./lib/rewards');
 const IncentivesManager = require('./lib/incentives');
 const LotteryManager = require('./lib/lottery');
 const WalletTor = require('./lib/wallet-tor');
+const GrinWalletVersion = require('./lib/grin-wallet-version');
 const WithdrawalScheduler = require('./lib/withdrawal-scheduler');
 const NostrPayoutBridge = require('./lib/nostr-payout');
 const AuthManager = require('./lib/auth');
@@ -29,6 +30,7 @@ const Captcha = require('./lib/captcha');
 // auth-middleware.js as the primitive the other two are built on — see §J1/§J2.
 const { requireAdmin, requireFreshAuth } = require('./lib/auth-middleware');
 const HashrateTracker = require('./lib/hashrate-tracker');
+const minerStatus = require('./lib/miner-status');
 const { getHorizon: getLedgerRollupHorizon } = require('./lib/ledger-rollup');
 const { donorSettings } = require('./lib/donor-names');
 const { lastDonatedAt: donorLastDonatedAt, donorLedger, donorScore, loyaltyMultiplier: donorLoyaltyMultiplier,
@@ -1442,7 +1444,7 @@ function setupRoutes() {
     'GET /api/account/:addr/workers': { desc: 'Per-worker (rig) hashrate + share quality over a recent window. `donate_percent` per worker = the % of that rig’s share credit donated to the prize pool, read from its `donateN` name tag (0–100); null when untagged or while the operator has donations switched off.', shape: 'raw', params: 'window minutes (1–1440, default 10)' },
     'GET /api/account/:addr/hashrate/history': { desc: 'Account hashrate time-series, downsampled for charting.', shape: 'raw', params: 'hours (1–720, default 24)' },
     'GET /api/account/:addr/earnings': { desc: 'Credited earnings per period (1h/24h/7d/30d) + 30d in/out totals. Payout reversals count as money-in but never as earnings.', shape: 'raw' },
-    'GET /api/account/:addr/balance/log': { desc: 'Address ledger. direction=in|out splits it by movement of the spendable balance: a payout appears in OUT once, as its lock at request time (gross, fee included), and a payout that fails, expires or is cancelled comes back in IN as a reversal — the confirm-time settlement rows appear only in the unfiltered view. Raw rows prune after ~60 days (the durable record is the withdrawal history below). format=csv streams the filtered window as a download on a tighter rate limit.', shape: 'raw · csv', params: 'direction=in|out · days (≤3650, default all) · limit (≤500, default 50) · offset · format=csv' },
+    'GET /api/account/:addr/balance/log': { desc: 'Address ledger. direction=in|out splits it by movement of the spendable balance: a payout appears in OUT once, as its lock at request time (gross, fee included), and a payout that fails, expires or is cancelled comes back in IN as a reversal — the confirm-time settlement rows appear only in the unfiltered view. Payout rows carry payout_method (tor · slatepack · nostr · manual; null on other rows); the CSV does not. Raw rows prune after ~60 days (the durable record is the withdrawal history below). format=csv streams the filtered window as a download on a tighter rate limit.', shape: 'raw · csv', params: 'direction=in|out · days (≤3650, default all) · limit (≤500, default 50) · offset · format=csv' },
     'GET /api/account/:addr/withdrawals': { desc: 'Payout history for an address — kept forever, so this is the durable record for accounting. Payouts only: no donations or orphan clawbacks. format=csv streams all-time on a tighter rate limit. The on-chain kernel is NOT returned here — rows carry has_kernel_proof and has_payment_proof (booleans) and the proofs themselves need an ownership proof; see POST /api/account/:addr/withdrawals/proofs. A tor_failed row carries fail_code — why the ONE Tor attempt failed (the balance was returned): wallet_offline (your wallet did not answer over Tor), wallet_unreachable (it could not reach your wallet), pool_send_path (the pool could not deliver), pool_busy (the pool wallet could not cover it), unknown (a held payout that did not go out), wallet_offline_cleared (the operator un-counted it); null on every other row.', shape: 'raw · csv', params: 'limit (≤200, default 20) · offset · format=csv' },
     'POST /api/account/:addr/withdrawals/proofs': { desc: 'Payment proofs for your own payouts, two kinds in one call. proofs: { <withdrawal id>: <kernel excess> } - the on-chain kernel of every confirmed payout (proves the tx was mined). payment_proofs: { <withdrawal id>: <PaymentProof> } - the signed proof grin-wallet requested on Tor payouts: { amount (nanogrin), excess, recipient_address, recipient_sig, sender_address, sender_sig }, the same JSON `grin-wallet export_proof` writes; save one as a file and `grin-wallet verify_proof` it. recipient_sig is YOUR wallet\'s signature, so it proves receipt to anyone. Slatepack/nostr payouts carry no signed proof (kernel only). Newest 500 signed proofs. Ownership-gated on purpose: publishing an address next to its kernels would be a public address-to-chain index on a privacy coin. 403 = proof failed, 404 = no such account.', shape: 'raw', auth: 'ownership proof', rate: 'withdraw', body: OWNER_PROOF_BODY },
     'GET /api/account/:addr/tor-check': { desc: 'Is this miner\'s wallet answering over Tor right now? The pool opens a fresh Tor circuit to the onion derived from the address and POSTs check_version to its foreign API; can take up to ~30 s. online is TRI-STATE: true = a grin-wallet answered; false = our Tor works and the wallet did not answer (or something that is not a wallet did); null = this pool could not look (its own Tor is down) — says nothing about the wallet, and a Tor payout is still allowed. reason: reachable · reachable_auth · onion_unreachable · onion_timeout · no_answer · not_wallet · invalid_format · derivation_failed · tor_unavailable · probe_failed. 404 if the address has never mined here — the probe is not offered for arbitrary Grin addresses. Answers are cached 60s per address; fresh=1 re-probes, but only once the cached answer is 10s old (younger answers are served as-is), and joins a probe already running. The payout gate always re-probes fresh.', shape: 'raw', params: 'fresh=1 (re-probe; 10s floor)', rate: 'torcheck' },
@@ -2871,9 +2873,13 @@ function setupRoutes() {
     }
   });
 
-  // Cancel a never-sent or failed withdrawal. tor_held is deliberately NOT cancellable (its one
+  // Cancel a never-sent withdrawal (tor_checking). tor_held is deliberately NOT cancellable (its one
   // send may have landed — see force-refund above), and neither is a legacy retry_scheduled row:
   // cancelling refunded it with no wallet check, and the startup migration settles those.
+  // tor_failed is not cancellable either (2026-09-27, operator decision): it was refunded when it
+  // failed, so there is nothing to return. Cancel only relabelled it 'cancelled', and four readers
+  // key on 'tor_failed' — auditWalletSends (counts 'cancelled' as recorded, hiding a double pay),
+  // the Tor pause, the pool-side payout_failed alert and _assertNoRecentReversal's exclusion.
   app.post('/api/admin/withdrawals/:id/cancel', freshAdmin, (req, res) => {
     try {
       const id = parseInt(req.params.id, 10);
@@ -2884,24 +2890,24 @@ function setupRoutes() {
       if (w.status === 'tor_held') {
         return res.status(409).json({ error: 'a Held payout cannot be cancelled — use Re-check, or a forced refund once the wallet shows no confirmed send' });
       }
-      if (!['tor_checking', 'tor_failed'].includes(w.status)) {
+      if (w.status === 'tor_failed') {
+        return res.status(409).json({ error: 'this payout failed and was already refunded to the miner — there is nothing to cancel' });
+      }
+      if (w.status !== 'tor_checking') {
         return res.status(409).json({ error: `cannot cancel a withdrawal in status '${w.status}'` });
       }
 
       db.transaction(() => {
         // tor_checking still holds the amount in balance_locked → release it.
-        // tor_failed already reversed locked→balance, so the money is back; just record the cancel.
-        if (w.status !== 'tor_failed') {
-          const before = db.prepare('SELECT balance, balance_locked FROM miner_accounts WHERE grin_address = ?').get(w.grin_address);
-          db.prepare(
-            `UPDATE miner_accounts SET balance = balance + ?, balance_locked = CASE WHEN balance_locked >= ? THEN balance_locked - ? ELSE 0 END, updated_at = unixepoch()
-             WHERE grin_address = ?`
-          ).run(w.amount, w.amount, w.amount, w.grin_address);
-          db.prepare(`
-            INSERT INTO balance_log (grin_address, event_type, amount, balance_before, balance_after, locked_before, locked_after, reference_type, reference_id)
-            VALUES (?, 'reversal', ?, ?, ?, ?, ?, 'withdrawal', ?)
-          `).run(w.grin_address, w.amount, before.balance, before.balance + w.amount, before.balance_locked, Math.max(0, before.balance_locked - w.amount), id);
-        }
+        const before = db.prepare('SELECT balance, balance_locked FROM miner_accounts WHERE grin_address = ?').get(w.grin_address);
+        db.prepare(
+          `UPDATE miner_accounts SET balance = balance + ?, balance_locked = CASE WHEN balance_locked >= ? THEN balance_locked - ? ELSE 0 END, updated_at = unixepoch()
+           WHERE grin_address = ?`
+        ).run(w.amount, w.amount, w.amount, w.grin_address);
+        db.prepare(`
+          INSERT INTO balance_log (grin_address, event_type, amount, balance_before, balance_after, locked_before, locked_after, reference_type, reference_id)
+          VALUES (?, 'reversal', ?, ?, ?, ?, ?, 'withdrawal', ?)
+        `).run(w.grin_address, w.amount, before.balance, before.balance + w.amount, before.balance_locked, Math.max(0, before.balance_locked - w.amount), id);
         db.prepare('UPDATE withdrawals SET status = ?, cancelled_by = ?, cancel_reason = ? WHERE id = ?')
           .run('cancelled', req.user.user_id, reason, id);
         db.prepare(`
@@ -2915,7 +2921,7 @@ function setupRoutes() {
         VALUES (?, 'withdrawal_cancel', 'withdrawal', ?, ?, ?)
       `).run(req.user.user_id, String(id), JSON.stringify({ address: w.grin_address, amount: w.amount, from_status: w.status, reason }), req.ip);
 
-      res.json({ success: true, id, refunded: w.status !== 'tor_failed', amount: w.amount });
+      res.json({ success: true, id, refunded: true, amount: w.amount });
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
@@ -4320,9 +4326,17 @@ function setupRoutes() {
       const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 50, 1), 500);
       const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
       const total = db.prepare(`SELECT COUNT(*) AS c FROM balance_log WHERE ${where}`).get(addr, cutoff).c;
+      // payout_method: the rail of a payout row ('tor' | 'slatepack' | 'nostr' | 'manual'), so the
+      // ledger can say "payout returned · Tor". A subquery, not a JOIN: `where` and the direction
+      // SQL name grin_address / created_at unqualified, and withdrawals has both. Public already —
+      // GET …/withdrawals returns the same method per payout.
       const rows = db.prepare(
         `SELECT event_type, amount, balance_before, balance_after, locked_before, locked_after,
-                reference_type, reference_id, created_at
+                reference_type, reference_id, created_at,
+                CASE WHEN reference_type = 'withdrawal' THEN
+                  (SELECT w.method FROM withdrawals w
+                    WHERE w.id = balance_log.reference_id AND w.grin_address = balance_log.grin_address)
+                END AS payout_method
          FROM balance_log WHERE ${where}
          ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?`
       ).all(addr, cutoff, limit, offset);
@@ -6438,6 +6452,29 @@ function setupRoutes() {
     }
   });
 
+  // Close an alert that nothing resolves on its own (AlertMonitor.MANUAL_RESOLVE_TYPES): today only
+  // slate_refunded_but_mined, the "paid twice?" alarm the Health page's Grin Wallet card shows until
+  // the operator has reconciled it by hand. Step-up + audited, and a note is REQUIRED — closing it
+  // silences a money alarm, so the audit row must say what the operator found. Any other type is
+  // refused (409): those are resolved by the code that raised them.
+  app.post('/api/admin/alerts/:alertId/resolve', freshAdmin, (req, res) => {
+    try {
+      const id = parseInt(req.params.alertId, 10);
+      if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'invalid alert id' });
+      const note = String((req.body && req.body.note) || '').trim().slice(0, 500);
+      if (!note) return res.status(400).json({ error: 'say what you found or did — the note goes in the audit log' });
+      const r = AlertMonitor.resolveManual(db, id, req.user.user_id);
+      if (!r.ok) return res.status(r.code).json({ error: r.error });
+      db.prepare(`
+        INSERT INTO admin_audit_log (admin_id, action, target_type, target_id, details, ip)
+        VALUES (?, 'alert_resolve', 'alert', ?, ?, ?)
+      `).run(req.user.user_id, String(id), JSON.stringify({ type: r.alert.type, message: r.alert.message, note }), req.ip);
+      res.json({ success: true, id, type: r.alert.type });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   app.post('/api/admin/alerts/:alertId/snooze', secureAdmin, (req, res) => {
     try {
       const { alertId } = req.params;
@@ -6734,6 +6771,11 @@ function setupRoutes() {
     try {
       AlertMonitor.foldPayoutAlerts(db, services.grin_wallet);
     } catch (e) { /* alerts table unreadable — leave the wallet card as measured */ }
+    // The grin-wallet the pool runs vs the version its payout guards were checked against
+    // (lib/grin-wallet-version.js). Cached 10 min; Degraded when they differ, never worse.
+    try {
+      GrinWalletVersion.foldIntoCard(services.grin_wallet, await GrinWalletVersion.detect(config.wallet_dir));
+    } catch (e) { /* version probe failed — leave the wallet card as measured */ }
 
     // nginx — the request reached us through it, so the reverse proxy is up
     services.nginx = { status: 'ok', message: 'reachable (serving requests)' };
@@ -7409,6 +7451,14 @@ function setupRoutes() {
   // Admin view of miner accounts (address-keyed; miners never have logins). Read access
   // to balances + share/hashrate activity, plus a testnet-only balance injector for
   // exercising the payout pipeline without mining 100 blocks first.
+  //
+  // Live columns (status, workers, hashrate, last_share_at) come from lib/miner-status.js: the
+  // in-memory sessions plus ONE windowed pass over the last hour of shares. The per-row
+  // `shares_count` / `last_share_at` subqueries this replaced walked every retained share twice
+  // per refresh (see RECENT_SQL there). So last_share_at is now null when the address has not
+  // shared inside the hour. The page then falls back to last_seen_at, which the session code
+  // stamps on connect and disconnect and which, unlike shares, is never pruned.
+  // `shares_count` is gone: it counted whatever retention had left, so it fell at every prune.
   app.get('/api/admin/miners', secureAdmin, (req, res) => {
     try {
       const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 50, 1), 500);
@@ -7418,9 +7468,8 @@ function setupRoutes() {
       const where = search ? 'WHERE ma.grin_address LIKE ?' : '';
       const args = search ? [search, limit, offset] : [limit, offset];
       const rows = db.prepare(`
-        SELECT ma.grin_address, ma.balance, ma.balance_locked, ma.is_online, ma.is_banned, ma.ban_reason, ma.last_seen_at, ma.created_at,
-               (SELECT COUNT(*) FROM shares s WHERE s.grin_address = ma.grin_address) AS shares_count,
-               (SELECT MAX(created_at) FROM shares s WHERE s.grin_address = ma.grin_address) AS last_share_at,
+        SELECT ma.grin_address, ma.balance, ma.balance_locked, ma.is_online, ma.is_banned, ma.ban_reason, ma.banned_at,
+               ma.last_seen_at, ma.created_at,
                (SELECT COALESCE(SUM(amount),0) FROM withdrawals w WHERE w.grin_address = ma.grin_address AND w.status='confirmed') AS total_paid
         FROM miner_accounts ma
         ${where}
@@ -7428,7 +7477,15 @@ function setupRoutes() {
         LIMIT ? OFFSET ?
       `).all(...args);
 
-      res.json({ success: true, count: rows.length, miners: rows });
+      const now = Math.floor(Date.now() / 1000);
+      const live = minerStatus.liveRigs(minerManager ? minerManager.getActiveSessions() : []);
+      const recent = minerStatus.recentShares(db, now);
+      const miners = rows.map((m) => ({
+        ...m,
+        ...minerStatus.summarize(live.get(m.grin_address), recent.get(m.grin_address), now)
+      }));
+
+      res.json({ success: true, count: miners.length, windows: minerStatus.WINDOWS, miners });
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
@@ -7516,6 +7573,43 @@ function setupRoutes() {
           proofs: { max: PROOF_SET_MAX, ip: proofSets.ip, pass: proofSets.pass },
           incentives
         }
+      });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Per-rig rows for the expanded view on miners.html. Same data as the public
+  // /api/account/:addr/workers (getWorkersForAccount), taken over the seen_s window so a rig that
+  // dropped inside it is still listed as `offline`, plus a ten-minute hashrate, the region(s) each
+  // live rig is connected through and when that session started. Nothing here the account page
+  // does not already publish, apart from the region, and no rig IP or password: those stay
+  // hashes in miner_proofs (memory project_pool_ip_privacy). Status rules live in
+  // lib/miner-status.js, the same place the list's status dot comes from.
+  app.get('/api/admin/miners/:addr/workers', secureAdmin, (req, res) => {
+    try {
+      const { addr } = req.params;
+      const known = db.prepare('SELECT 1 AS x FROM miner_accounts WHERE grin_address = ?').get(addr);
+      if (!known) return res.status(404).json({ error: 'miner not found' });
+      const W = minerStatus.WINDOWS;
+      // ONE call for both windows: it reads every retained share of this address (idx_share_address)
+      // whatever the window, and the page re-polls this route for each open row.
+      const hour = hashrateTracker.getWorkersForAccount(addr, W.seen_s / 60, W.hashrate_s / 60);
+      const live = minerStatus.liveRigs(minerManager ? minerManager.getSessionsByMiner(addr) : []).get(addr);
+      // A donateN tag moves nothing while the operator has donations off, so it reads null
+      // then, the same rule as the public worker readout.
+      let donationsOn = false;
+      try { donationsOn = !!(incentivesManager && incentivesManager.donationsActive()); } catch (_) { donationsOn = false; }
+      const donateOf = (name) => {
+        const t = donationsOn ? parseDonateToken(name) : null;
+        return t ? t.percent : null;
+      };
+      const now = Math.floor(Date.now() / 1000);
+      res.json({
+        success: true,
+        grin_address: addr,
+        windows: W,
+        workers: minerStatus.workerRows({ hour, live, now, donateOf })
       });
     } catch (err) {
       res.status(500).json({ error: err.message });

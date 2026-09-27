@@ -18,6 +18,38 @@
 
     <div id="payout" class="settings-content active">
       <div class="settings-form">
+        <!-- Operator guidance, not a setting: no input/select/textarea in here, so the save harvester
+             (settings-common.js) never sees it. The version in [data-tested-grin-wallet] is pinned to
+             lib/grin-wallet-version.js TESTED_VERSION by scripts/test-payout-guard.js — bump both. -->
+        <div class="form-section" id="pool-wallet-safety">
+          <h3 class="section-title" data-sec="Wallet safety">Pool wallet safety — read before changing the pool wallet</h3>
+          <ul class="helper-text" style="margin:0;padding-left:1.2rem;line-height:1.55;">
+            <li style="margin-bottom:.55rem;">
+              <b>Never let the pool wallet listen on Tor.</b> The pool runs grin-wallet as <code>owner_api</code>,
+              which never publishes a Tor onion, so a miner's wallet cannot reach it and the miner pastes the
+              reply on the account page. Do not run <code>grin-wallet listen</code> on the pool wallet folder,
+              and do not point a torrc onion at its owner port (3420, testnet 13420). If a miner's wallet
+              <i>could</i> reach it, <code>grin-wallet receive</code> would finalize and post the payout
+              without the pool ever knowing.
+            </li>
+            <li style="margin-bottom:.55rem;">
+              <b>If it happens anyway, the payout is held, never refunded.</b> Before refunding an expired
+              slatepack payout, the pool checks its wallet's transaction log. A payout finalized outside the
+              pool is held (it settles as paid by itself once mined), and the <b>Grin Wallet</b> card on the
+              Health page turns red. Never refund one by hand.
+            </li>
+            <li>
+              <b>Payouts are tested with grin-wallet <span data-tested-grin-wallet>v5.5.0</span>.</b> The Health
+              page shows the version the pool actually runs, and a different one turns the card Degraded.
+              Before moving to another version, re-check in its source that it still (1) never opens a Tor
+              onion from <code>owner_api</code>, (2) records each slate's state in the transaction log
+              (Standard1 when locked, Standard3 once finalized), and (3) posts a Tor reply through the Foreign
+              <code>finalize_tx</code>. Details: the pool's implementation notes, &ldquo;Slatepack expiry
+              gate&rdquo;.
+            </li>
+          </ul>
+        </div>
+
         <div class="form-section">
           <h3 class="section-title" data-sec="Withdrawals">Withdrawal Settings</h3>
           <div class="form-row">
@@ -55,7 +87,7 @@
             <div class="form-group">
               <label for="slatepack_ttl_minutes">Slatepack Response Window (minutes)</label>
               <input type="number" id="slatepack_ttl_minutes" name="slatepack_ttl_minutes" min="10" max="1440" step="1" value="30">
-              <div class="helper-text">How long a manual Slatepack payout waits for the miner's response. After that the pool cancels its wallet transaction and returns the balance; a late response is refused (never a double-pay), and the miner then waits out the cooldown on the left. Miners cannot cancel a payout themselves, so this window is their only way out of an abandoned request — and every pending slatepack locks pool-wallet coins until it ends. 10–1440. Applied on backend restart.</div>
+              <div class="helper-text">How long a manual Slatepack payout waits for the miner's response. After that the pool returns the balance and cancels its wallet transaction, but only once its wallet shows nobody finalized the slate (see <a href="#pool-wallet-safety">Pool wallet safety</a>); a late response is then refused, and the miner waits out the cooldown on the left. Miners cannot cancel a payout themselves, so this window is their only way out of an abandoned request — and every pending slatepack locks pool-wallet coins until it ends. 10–1440. Applied on backend restart.</div>
             </div>
           </div>
 

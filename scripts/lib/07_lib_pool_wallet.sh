@@ -384,6 +384,46 @@ pw_binary_menu() {
         "pw_listener_stop" "pw_listener_start"
 }
 
+# ─── The pool wallet must never be reachable over Tor ───────────────────────
+# Every slatepack payout carries the pool wallet's address, and `grin-wallet
+# receive` on the miner's side sends its reply back to that address over Tor —
+# into the pool wallet's Foreign API finalize_tx, which finalizes AND posts
+# behind the pool backend's back (grin-wallet v5.5.0 source, 2026-09-27). The
+# toolkit never opens that door: `owner_api` publishes no onion, only `listen`
+# does. This warns if something else has: a torrc onion aimed at the owner port
+# (which serves /v2/foreign too, via owner_api_include_foreign), or a `listen`
+# process on this wallet dir. The backend's expiry gate holds such a payout
+# rather than refunding it, but it should never get that far. Read-only and
+# warn-only: always returns 0, so it can never stop the listener or the menu.
+_pw_tor_exposure_check() {
+    local dir port f pid cmd cwd found=0
+    dir=$(pw_wallet_dir); port="$PW_OWNER_PORT"
+    [[ -n "$dir" && -n "$port" ]] || return 0
+    for f in /etc/tor/torrc /etc/tor/torrc.d/*; do
+        [[ -f "$f" ]] || continue
+        # HiddenServicePort VIRTPORT [TARGET] — an explicit target on our port, or no
+        # target at all with VIRTPORT = our port (tor then forwards to that same port).
+        if grep -Eq "^[[:space:]]*HiddenServicePort[[:space:]]+([0-9]+[[:space:]]+((127\.0\.0\.1|localhost|0\.0\.0\.0|\[::1\]):)?${port}|${port})[[:space:]]*$" "$f" 2>/dev/null; then
+            warn "Tor onion aimed at the pool wallet: $f has a HiddenServicePort → port $port."
+            found=1
+        fi
+    done
+    for pid in $(pgrep -f 'grin-wallet' 2>/dev/null); do
+        cmd=$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null) || continue
+        [[ " $cmd " == *" listen "* ]] || continue
+        cwd=$(readlink "/proc/$pid/cwd" 2>/dev/null || true)
+        if [[ "$cmd" == *"--top_level_dir $dir "* || "${cwd%/}" == "${dir%/}" ]]; then
+            warn "A 'grin-wallet listen' (pid $pid) is running on the pool wallet dir $dir — it can publish a Tor onion."
+            found=1
+        fi
+    done
+    if [[ "$found" -eq 1 ]]; then
+        warn "  A miner's 'grin-wallet receive' could then finalize a payout without the pool backend."
+        warn "  Remove it: the pool wallet runs as owner_api ONLY (Admin → Payout settings → Pool wallet safety)."
+    fi
+    return 0
+}
+
 # ─── Listener start / stop / status ─────────────────────────────────────────
 pw_listener_start() {
     [[ -f "$(pw_pass_file)" ]] || { error "No saved wallet password ($(pw_pass_file)) — run Setup wallet first."; return 1; }
@@ -416,6 +456,7 @@ pw_listener_start() {
     info "Unlocking wallet (open_wallet over ECDH; passphrase read from file, not argv)..."
     if pw_unlock; then
         success "Pool wallet UP on $PW_OWNER_PORT and UNLOCKED — coinbase (Foreign) + payouts (Owner) ready."
+        _pw_tor_exposure_check
     else
         error "Listener is up but the wallet could NOT be opened — coinbase will FAIL until it is."
         error "  Verify: node installed, passphrase correct, owner secret readable. tmux attach -t $PW_TMUX_WALLET"
@@ -464,6 +505,7 @@ pw_listener_status() {
     fi
     printf '%s %-22s session=%s port=%s(%s) wallet_open=%s\n' \
         "$tag" "Wallet(Owner+Foreign)" "$up_sess" "$PW_OWNER_PORT" "$up_port" "$open"
+    _pw_tor_exposure_check
 }
 
 pw_show_address() {

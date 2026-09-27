@@ -437,19 +437,14 @@ console.log('\n[10] F4 — settings-payout.html vs PoolSettings.defaults.payout'
   ok('the Payout page no longer promises automatic payouts',
      !/auto(matic)?[ -]payouts?/i.test(page.replace(/<!--[\s\S]*?-->/g, '')));
 
-  // F5 (Part 6) — the Tor send method switch. An enum on a <select>, so every harvested value is
-  // one the validator accepts; 'cli' first, so a form with no stored value saves the default.
-  ok('tor_send_mode is harvested from the Payout form', harvested.includes('tor_send_mode'));
-  ok("tor_send_mode defaults to 'cli'", PoolSettings.defaults.payout.tor_send_mode === 'cli',
-     String(PoolSettings.defaults.payout.tor_send_mode));
-  const sel = (form.match(/<select id="tor_send_mode"[^>]*>([\s\S]*?)<\/select>/) || [])[1] || '';
-  const opts = [...sel.matchAll(/<option value="([^"]*)"/g)].map((m) => m[1]);
-  ok('its options are exactly cli, stepwise — in that order', JSON.stringify(opts) === '["cli","stepwise"]', opts.join(','));
-  ok('the option labels read "CLI (default)" and "Step-by-step"',
-     />CLI \(default\)</.test(sel) && />Step-by-step</.test(sel));
-  ok('the helper text says it applies on restart and points at the operator docs before mainnet',
-     /tor_send_mode[\s\S]{0,900}Applied on backend restart\. Step-by-step drives the payout through the wallet's Owner API/.test(form) &&
-     /see the operator docs before enabling it on mainnet/.test(form));
+  // The Tor send method switch (F5) was removed 2026-09-26 with the step-by-step sender — the same
+  // one-change removal as auto_payout above (the no-field parity check guards the other half).
+  ok('tor_send_mode is no longer a payout default', !Object.prototype.hasOwnProperty.call(PoolSettings.defaults.payout, 'tor_send_mode'));
+  ok('tor_send_mode has no validator', !Object.prototype.hasOwnProperty.call(PoolSettings.validators.payout, 'tor_send_mode'));
+  const modeBinders = panelFiles().filter((f) => /id="tor_send_mode"/.test(read(f)));
+  ok('no admin page binds id="tor_send_mode"', modeBinders.length === 0, modeBinders.join(','));
+  ok('the Payout page no longer offers a step-by-step Tor send',
+     !/step-by-step/i.test(page.replace(/<!--[\s\S]*?-->/g, '')));
 }
 
 console.log('\n' + (fail ? 'FAILURES' : 'ALL PASS') + ` — ${pass} passed, ${fail} failed`);

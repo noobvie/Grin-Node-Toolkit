@@ -86,6 +86,30 @@
       white-space: nowrap;
     }
 
+    /* P-05 on a phone (same treatment as blocks.html P-05): the shared .data-table pads 18px a
+       side, ~216px of a 390px screen across six columns. Tighten it, keep cells on one line and
+       let .table-wrap scroll sideways as a last resort. Below 640px the date drops to the short
+       MM-DD HH:MM form (full timestamp in its title); below 480px the Miner column folds under
+       the date as a second line. Both forms are always rendered and CSS picks one, so a rotate
+       re-flows without a re-render; display:none also keeps the hidden copy out of the AT tree. */
+    .ph-pay-table td, .ph-pay-table th { white-space: nowrap; }
+    .ph-pay-table .dt-short, .ph-pay-table .miner-sub { display: none; }
+    .ph-pay-table .miner-sub { margin-top: 3px; }
+    @media (max-width: 640px) {
+      .ph-pay-table { font-size: 13px; }
+      .ph-pay-table thead th, .ph-pay-table tbody td { padding: 9px 8px; }
+      .ph-pay-table thead th:first-child, .ph-pay-table tbody td:first-child { padding-left: 12px; }
+      .ph-pay-table thead th:last-child,  .ph-pay-table tbody td:last-child  { padding-right: 12px; }
+      .ph-pay-table .status-badge { font-size: 11px; padding: 2px 6px; }
+      .ph-pay-table .dt-long  { display: none; }
+      .ph-pay-table .dt-short { display: inline; }
+    }
+    @media (max-width: 480px) {
+      .ph-pay-table .col-miner { display: none; }
+      .ph-pay-table .miner-sub { display: block; }
+      .ph-pay-table .miner-sub .addr-plain { font-size: 11px; color: var(--text-dim, #9aa4b2); }
+    }
+
     /* Shared timeframe toggle driving the trend recorders (Day/Week/Month/Year/All). */
     .rangebar { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-bottom: 2px; }
     .rangebar .rng-btn {
@@ -215,21 +239,22 @@
             <div class="panel"><span class="screws"></span>
                 <h2 class="panel-title"><span class="tag">P-05</span> Recent payouts <span class="right">latest confirmed withdrawals</span></h2>
                 <div class="panel-body">
-                    <table class="data-table">
+                    <div class="table-wrap">
+                    <table class="data-table ph-pay-table">
                         <thead>
                             <tr>
                                 <th>Date &amp; Time (UTC)</th>
-                                <th>Miner</th>
+                                <th class="col-miner">Miner</th>
                                 <th class="num">Amount (ツ)</th>
-                                <th>Method</th>
-                                <th>Status</th>
+                                <th title="How the payout was delivered · mined = seen on the Grin chain, sent = broadcast, not yet seen mined">Method</th>
                                 <th title="The payout's on-chain kernel excess — opens it on the Grin chain explorer">Tx ID</th>
                             </tr>
                         </thead>
                         <tbody id="payouts">
-                            <tr><td colspan="6">Loading…</td></tr>
+                            <tr><td colspan="5">Loading…</td></tr>
                         </tbody>
                     </table>
+                    </div>
                 </div>
             </div>
 
@@ -456,11 +481,12 @@
             }
         }
 
-        // P-05 method + status. This feed lists CONFIRMED payouts only — the pool has finalized
-        // and broadcast them — so the status splits on whether the tx has been seen MINED:
+        // P-05 method + status, ONE column (2026-09-26, mobile width). This feed lists CONFIRMED
+        // payouts only — the pool has finalized and broadcast them — so "paid" was the same on
+        // every row and the only live bit is whether the tx has been seen MINED:
         // has_kernel_proof turns true once the scheduler's backfill finds the kernel in the pool
         // wallet's tx log (minutes after broadcast; never on a pool with no Owner API wallet,
-        // where the row honestly stays "sent").
+        // where the row honestly stays "sent"). The cell reads "Tor · mined" / "Slatepack · sent".
         //
         // Tx ID = the payout's kernel excess, linked to the operator's chain explorer so anyone
         // can check the payout was mined. Published here since 2026-09-25 by operator decision,
@@ -469,10 +495,19 @@
         // 66-hex value or null; Explorer.link() escapes it and branding.js relinks it once the
         // network + explorer are known.
         const PAY_METHOD = { tor: 'Tor', slatepack: 'Slatepack', nostr: 'Goblin', manual: 'Manual' };
-        function payStatusCell(w) {
+        function payMethodCell(w) {
+            const method = escHtml(PAY_METHOD[w.method] || w.method || 'Tor');
             return w.has_kernel_proof
-                ? '<span class="status-badge status-active" title="Broadcast and seen mined on the Grin chain">paid · mined</span>'
-                : '<span class="status-badge" title="Finalized and broadcast by the pool; not yet seen mined (or this pool cannot read its wallet tx log)">paid · sent</span>';
+                ? '<span class="status-badge status-active" title="Paid — broadcast and seen mined on the Grin chain">' + method + ' · mined</span>'
+                : '<span class="status-badge" title="Paid — finalized and broadcast by the pool; not yet seen mined (or this pool cannot read its wallet tx log)">' + method + ' · sent</span>';
+        }
+        // Long form on desktop, MM-DD HH:MM under 640px (CSS picks one); both UTC.
+        function payWhenCell(ts) {
+            const d = new Date(ts * 1000);
+            const long = d.toLocaleString('en-US', { timeZone: 'UTC' });
+            const short = isNaN(d) ? long : d.toISOString().slice(5, 16).replace('T', ' ');
+            return '<span class="dt-long">' + escHtml(long) + '</span>'
+                + '<span class="dt-short" title="' + escHtml(long) + ' UTC">' + escHtml(short) + '</span>';
         }
         function txIdCell(w) {
             const k = (typeof w.kernel_excess === 'string' && /^[0-9a-f]{66}$/i.test(w.kernel_excess)) ? w.kernel_excess : '';
@@ -488,22 +523,23 @@
                 const when = w => w.confirmed_at || w.created_at || 0;
                 if (tbody) {
                     if (!data.length) {
-                        tbody.innerHTML = '<tr><td colspan="6">No payouts yet</td></tr>';
+                        tbody.innerHTML = '<tr><td colspan="5">No payouts yet</td></tr>';
                     } else {
+                        // The Miner column hides under 480px and .miner-sub (same masked address)
+                        // shows under the date instead — see the .ph-pay-table CSS.
                         tbody.innerHTML = data.slice(0, 25).map(w => `
                             <tr>
-                                <td>${escHtml(new Date(when(w) * 1000).toLocaleString('en-US', { timeZone: 'UTC' }))}</td>
-                                <td>${addrCell(w.grin_address)}</td>
+                                <td>${payWhenCell(when(w))}<div class="miner-sub">${addrCell(w.grin_address)}</div></td>
+                                <td class="col-miner">${addrCell(w.grin_address)}</td>
                                 <td class="num">${Number(w.amount || 0).toFixed(2)}</td>
-                                <td>${escHtml(PAY_METHOD[w.method] || w.method || 'Tor')}</td>
-                                <td>${payStatusCell(w)}</td>
+                                <td>${payMethodCell(w)}</td>
                                 <td>${txIdCell(w)}</td>
                             </tr>
                         `).join('');
                     }
                 }
             } catch (error) {
-                if (tbody) tbody.innerHTML = '<tr><td colspan="6">Payment data unavailable</td></tr>';
+                if (tbody) tbody.innerHTML = '<tr><td colspan="5">Payment data unavailable</td></tr>';
             }
         }
 

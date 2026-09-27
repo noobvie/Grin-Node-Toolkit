@@ -50,6 +50,22 @@
         </div>
       </div>
       <p class="error-msg" id="miner-msg" style="display:none;margin-top:.6rem;"></p>
+
+      <!-- Miner view: Tor payouts for ONE address (the 🧅 row button). The Tor pause is
+           anti-abuse — 5 counted failed Tor payouts in 24 h (only "the miner's wallet did not
+           answer" counts) pause Tor for that address for 24 h; Slatepack stays open. Clear it when
+           the failures were the pool's fault: the rows are re-coded, never deleted. Times UTC. -->
+      <div class="card" id="tp-card" style="display:none;padding:1rem;margin-top:1rem;">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:.6rem;flex-wrap:wrap;">
+          <strong>Tor payouts · <span class="mono" id="tp-addr"></span></strong>
+          <button class="btn btn-sm btn-outline" onclick="closeTorPause()">✕ Close</button>
+        </div>
+        <div id="tp-body" style="margin-top:.6rem;font-size:.9rem;line-height:1.7;"></div>
+        <div style="margin-top:.6rem;display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;">
+          <button class="btn btn-sm" id="tp-clear-btn" onclick="clearTorPause()" disabled>Clear Tor pause</button>
+          <span id="tp-note" style="font-size:.8rem;color:var(--text-dim);"></span>
+        </div>
+      </div>
     </section>
   </div>
 </main>
@@ -115,6 +131,7 @@ const minersTable = AdminTable.create({
     const addrCell = `<button type="button" class="addr-copy" data-copy="${addr}" ` +
       `data-tip="${addr}&#10;Click to copy" aria-label="Copy address ${escHtml(shortAddr(m.grin_address))}">` +
       `${escHtml(shortAddr(m.grin_address))}</button>`;
+    const torBtn = `<button class="btn-icon" data-addr="${escHtml(m.grin_address)}" onclick="showTorPause(this.dataset.addr)" data-tip="Tor payouts: pause state, counted failures, pending" aria-label="Show Tor payout state">🧅</button>`;
     return `<tr>
       <td>${addrCell}${bannedBadge}</td>
       <td>${onlineBadge}</td>
@@ -123,7 +140,7 @@ const minersTable = AdminTable.create({
       <td class="mono">${m.shares_count != null ? m.shares_count : 0}</td>
       <td class="mono">${fmtGrin(m.total_paid)}</td>
       <td>${timeAgo(m.last_share_at)}</td>
-      <td><div class="row-actions">${action}</div></td>
+      <td><div class="row-actions">${torBtn}${action}</div></td>
     </tr>`;
   }
 });
@@ -184,6 +201,65 @@ async function unbanMiner(addr) {
     if (!res.ok) throw new Error(body.error || ('HTTP ' + res.status));
     flash('Miner unbanned.', false);
     loadMiners();
+  } catch (err) { flash(err.message, true); }
+}
+
+// ── Miner view: Tor pause ─────────────────────────────────────────────────────
+// GET /api/admin/miners/:addr carries tor_pause = { failures_24h, max, paused_until|null } (the
+// SAME object the miner's account page shows) and the pending payouts. Nothing here computes a
+// pause: paused ⇔ the server sent paused_until.
+let _tpAddr = null;
+function fmtUtc(t) { return t ? new Date(t * 1000).toISOString().slice(0, 16).replace('T', ' ') + ' UTC' : '—'; }
+async function showTorPause(addr) {
+  _tpAddr = addr;
+  const card = document.getElementById('tp-card');
+  document.getElementById('tp-addr').textContent = addr;
+  document.getElementById('tp-body').textContent = 'Loading…';
+  document.getElementById('tp-note').textContent = '';
+  document.getElementById('tp-clear-btn').disabled = true;
+  card.style.display = '';
+  card.scrollIntoView({ block: 'nearest' });
+  try {
+    const data = await API.get('/api/admin/miners/' + encodeURIComponent(addr));
+    if (_tpAddr !== addr) return;
+    renderTorPause((data && data.miner) || {});
+  } catch (err) {
+    if (_tpAddr === addr) document.getElementById('tp-body').textContent = 'Could not load: ' + err.message;
+  }
+}
+function renderTorPause(m) {
+  const tp = m.tor_pause;
+  const pending = Array.isArray(m.pending_withdrawals) ? m.pending_withdrawals : [];
+  let html;
+  if (!tp) {
+    html = 'Tor pause: <span style="color:var(--text-dim)">unavailable (scheduler not running)</span>';
+  } else if (tp.paused_until) {
+    html = `<span class="badge badge-error">Tor paused</span> until <strong>${escHtml(fmtUtc(tp.paused_until))}</strong>` +
+           ` · ${escHtml(tp.failures_24h)} of ${escHtml(tp.max)} counted failures in the last 24 h`;
+  } else {
+    html = `<span class="badge badge-ok">Tor open</span> · ${escHtml(tp.failures_24h)} of ${escHtml(tp.max)} counted failures in the last 24 h`;
+  }
+  html += '<br>Pending: ' + (pending.length
+    ? pending.map((w) => `payout ID ${escHtml(w.id)} · ${escHtml(w.method)} · ${escHtml(w.status)} · ${fmtGrin(w.amount)} ツ`).join('; ')
+    : '<span style="color:var(--text-dim)">none</span>');
+  document.getElementById('tp-body').innerHTML = html;
+  const n = tp ? Number(tp.failures_24h) || 0 : 0;
+  document.getElementById('tp-clear-btn').disabled = n === 0;
+  document.getElementById('tp-note').textContent = n === 0 ? 'Nothing counted — nothing to clear.' :
+    'Clearing un-counts these failures (history is kept). Use it when they were the pool’s fault.';
+}
+function closeTorPause() { _tpAddr = null; document.getElementById('tp-card').style.display = 'none'; }
+async function clearTorPause() {
+  const addr = _tpAddr;
+  if (!addr) return;
+  // confirm() only: a suppressed native dialog reads as Cancel, which is harmless here.
+  if (!confirm(`Clear the Tor pause for ${addr}?\n\nIts counted Tor failures in the last 24 h stop counting (they stay in the history). Step-up required.`)) return;
+  try {
+    const res = await adminFetch('/api/admin/miners/' + encodeURIComponent(addr) + '/tor-pause/clear', { method: 'POST' });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.error || ('HTTP ' + res.status));
+    flash(`Tor pause cleared — ${body.cleared} failure(s) un-counted.`, false);
+    if (_tpAddr === addr) showTorPause(addr);
   } catch (err) { flash(err.message, true); }
 }
 

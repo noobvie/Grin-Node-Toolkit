@@ -555,9 +555,10 @@ ok('§17.4 owner-proof.js interpolates no proof value, digest or salt into a log
   `logged: ${loggedExprs.join(', ')}`);
 
 // ─── F5 (Part 6): the step-by-step Tor send's two columns ─────────────────────────────────────
-// withdrawals.tor_final_slate holds a complete signed transaction (kept only so the stale sweep can
-// post it again); tor_step is operator state. Neither may reach any non-admin route, and the two
-// admin routes that SELECT * FROM withdrawals and serve the rows must drop the slate.
+// withdrawals.tor_final_slate can hold a complete signed transaction; tor_step is operator state.
+// The sender that wrote them was deleted 2026-09-26 and both columns are inert, but an old row may
+// still carry a value — so neither may reach any non-admin route, and the two admin routes that
+// SELECT * FROM withdrawals and serve the rows must still drop the slate.
 console.log('\n[F5] stepwise columns stay off every public route');
 {
   const routes = [...indexSrc.matchAll(/\bapp\.(get|post|put|delete|patch)\('([^']+)'/g)].map((m) => [m[1], m[2]]);
@@ -612,6 +613,38 @@ console.log('\n[S1] the stored slatepack is served by one gated route only');
   const pageSync = acctPageJs.slice(acctPageJs.indexOf('function spSyncPending('), acctPageJs.indexOf('function spClear('));
   ok('the page restores a pending payout only for the manual rail',
     /p\.status === 'slatepack_pending' && p\.method === 'slatepack'/.test(pageSync));
+}
+
+// ─── One-attempt Tor payouts (2026-09-26): fail_code public, fail_detail admin-only ─────────────
+// withdrawals.fail_detail is the CLI error behind a failed / Held Tor payout. On a pool-wallet
+// shortfall it carries grin-wallet's available/needed figures — wallet figures never reach a miner.
+// fail_code is the public-safe enum the account page words.
+console.log('\n[fail] fail_detail stays admin-only; fail_code and the Tor pause are the public surface');
+{
+  const routes = [...indexSrc.matchAll(/\bapp\.(get|post|put|delete|patch)\('([^']+)'/g)].map((m) => [m[1], m[2]]);
+  const code = (v, p) => routeSrc(v, p).replace(/\/\/[^\n]*/g, '');
+  const leaks = routes.filter(([v, p]) => !p.startsWith('/api/admin') && /fail_detail/.test(code(v, p)));
+  ok('no non-admin route names fail_detail', routes.length > 20 && leaks.length === 0, leaks.map(([v, p]) => `${v} ${p}`).join(', '));
+  const p08 = code('get', '/api/account/:addr/withdrawals');
+  ok('P-08 history selects fail_code by name (an explicit column list, never SELECT *)',
+    /SELECT id, amount, fee, method, status, fail_code, /.test(p08) && !/SELECT\s+\*/.test(p08));
+  const summary = code('get', '/api/account/:addr');
+  ok('the account summary\'s tor_pause is torPauseStatus() — counts and a timestamp — and its window is the scheduler\'s TTL',
+    /withdrawalScheduler\.torPauseStatus\(acct\.grin_address\)/.test(summary) && /tor_pause:\s*torPause,/.test(summary) &&
+    /slatepack_window_minutes:\s*withdrawalScheduler \? Math\.round\(withdrawalScheduler\.slatepackTtlSeconds \/ 60\) : null/.test(summary));
+  const sched = fs.readFileSync(path.join(APP, 'lib/withdrawal-scheduler.js'), 'utf8');
+  const pauseFn = sched.slice(sched.indexOf('  torPauseStatus(grinAddress'), sched.indexOf('  clearTorPause(grinAddress'));
+  ok('torPauseStatus returns exactly { failures_24h, max, paused_until }',
+    pauseFn.length > 100 && /return \{ failures_24h: times\.length, max: TOR_FAIL_MAX, paused_until: pausedUntil \};/.test(pauseFn));
+  ok('the account api-docs row names neither fail_detail nor a wallet figure',
+    !/fail_detail|available_disp|NotEnoughFunds/.test(routeMeta('GET /api/account/:addr') + routeMeta('GET /api/account/:addr/withdrawals')));
+  // The page half (Session 3): it words fail_code and nothing else. A page that read fail_detail
+  // would show it the day a route leaked it, so the page must not even know the name.
+  const pageFiles = ['public_html/account-settings.html', 'public_html/js/payout-methods.js'];
+  const pageSrc = pageFiles.map((f) => fs.readFileSync(path.join(WEB, f), 'utf8')).join('\n');
+  ok('the account page and the rail registry never read fail_detail', !/fail_detail/.test(pageSrc));
+  ok('…and word a failed Tor payout from fail_code', /row\.fail_code/.test(pageSrc));
+  ok('…and name no grin-wallet figure (available / needed / NotEnoughFunds)', !/available_disp|amount_needed|NotEnoughFunds/.test(pageSrc));
 }
 
 console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed\n`);

@@ -222,9 +222,12 @@ class PoolSettings {
       confirm_depth_testnet: 100,
       max_pending_withdrawals: 100,
       max_user_pending: 10,
-      withdrawal_retry_delays: '[21600,43200,86400,172800]',
-      // Minutes a miner must wait after a reversed payout (Tor failure, slatepack expiry,
-      // admin cancel) before requesting another payout on ANY rail. 0 disables.
+      // `withdrawal_retry_delays` was REMOVED 2026-09-26: a Tor payout is tried once, so the retry
+      // ladder it configured is gone (it was also shadowed, audit §J9-8, and had no field). A stored
+      // row stays inert, like auto_payout above.
+      // Minutes a miner must wait after a reversed payout (slatepack expiry, Goblin failure, admin
+      // cancel) before requesting another payout on ANY rail. A failed TOR payout does not start it
+      // (it is refunded only on proof; see the scheduler's _assertNoRecentReversal). 0 disables.
       withdrawal_cooldown_minutes: 30,
       // Minutes an unanswered manual Slatepack payout stays pending before it expires (the
       // pool cancels its wallet tx, the balance returns). See config.js slatepack_ttl_minutes.
@@ -233,11 +236,9 @@ class PoolSettings {
       // listener isn't answering over Tor now (probe = onion:80 SOCKS5 connect). Fails OPEN if
       // the pool box can't run the probe, so it never blocks every payout. ON by default.
       tor_preflight_gate: 'true',
-      // How a Tor payout is sent (design §8.1). 'cli' = one `grin-wallet send -d` (the shipped
-      // rail). 'stepwise' = the pool drives init → lock → Tor delivery → finalize → post itself
-      // through the Owner API and saves the slate id before anything leaves the box. Applied on
-      // backend restart. Default 'cli' until stepwise has passed its VPS acceptance run.
-      tor_send_mode: 'cli',
+      // REMOVED 2026-09-26: tor_send_mode (the step-by-step Tor sender, F5, is deleted). Removed
+      // together with its field and validator, as F4 was; a stored row stays inert — getSection
+      // still merges it, the form never resends it, applyToConfig no longer reads it.
       // ── Goblin/Nostr payout rail (design §15). OFF by default. Relays + NIP-05 domains
       // are JSON arrays of strings; the domain list is the SSRF/typo-squat allowlist.
       nostr_payouts_enabled: 'false',
@@ -968,6 +969,26 @@ PASS      any-password-you-choose</code>
         if (isNaN(n) || n < 0 || n > 1440) throw new Error('withdrawal_cooldown_minutes must be 0-1440');
         return n;
       },
+      // The two pending caps (2026-09-26). They had no validator: the form posts every field as
+      // text, so the first save stored '100' over the numeric default and the audit row named both
+      // keys as changed although nothing moved, and junk was stored as-is (the scheduler then fell
+      // back to its default without a word). Whole numbers only — Number(), not parseInt, so
+      // '12abc' is refused rather than read as 12. max_user_pending is not the per-address rule
+      // (that is the hard one-pending check); it is only read by the unused canInitiateWithdrawal.
+      max_pending_withdrawals: (val) => {
+        const n = Number(String(val == null ? '' : val).trim());
+        if (String(val == null ? '' : val).trim() === '' || !Number.isInteger(n) || n < 1 || n > 10000) {
+          throw new Error('max_pending_withdrawals must be a whole number 1-10000');
+        }
+        return n;
+      },
+      max_user_pending: (val) => {
+        const n = Number(String(val == null ? '' : val).trim());
+        if (String(val == null ? '' : val).trim() === '' || !Number.isInteger(n) || n < 1 || n > 100) {
+          throw new Error('max_user_pending must be a whole number 1-100');
+        }
+        return n;
+      },
       tor_preflight_gate: (val) => {
         if (val === true || val === 'true') return 'true';
         if (val === false || val === 'false' || val === undefined || val === '') return 'false';
@@ -1010,12 +1031,6 @@ PASS      any-password-you-choose</code>
         const n = parseInt(val, 10);
         if (isNaN(n) || n < 10 || n > 1440) throw new Error('slatepack_ttl_minutes must be 10-1440');
         return n;
-      },
-      tor_send_mode: (val) => {
-        // An enum, not a boolean: a stray value must never select the newer money path.
-        const v = String(val === undefined || val === null ? '' : val).trim().toLowerCase();
-        if (v === 'cli' || v === 'stepwise') return v;
-        throw new Error("tor_send_mode must be 'cli' or 'stepwise'");
       },
       nostr_pending_ttl_minutes: (val) => {
         // Floor of 2: the expiry sweep runs every 60s, so a TTL under ~2 min can't be enforced
@@ -1689,12 +1704,6 @@ PASS      any-password-you-choose</code>
     }
     if (payout.tor_preflight_gate !== undefined) {
       config.tor_preflight_gate = payout.tor_preflight_gate === true || payout.tor_preflight_gate === 'true';
-    }
-    if (payout.tor_send_mode !== undefined) {
-      // Only an exact 'stepwise' selects the step-by-step path; anything else (a row written
-      // before the validator existed, a hand edit) is the shipped CLI rail.
-      config.tor_send_mode =
-        String(payout.tor_send_mode).trim().toLowerCase() === 'stepwise' ? 'stepwise' : 'cli';
     }
     // Nostr payout rail — stored as strings/JSON; coerce to the runtime shapes the bridge
     // expects (boolean, arrays, number). Malformed JSON falls back to the safe default.

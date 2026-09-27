@@ -67,7 +67,9 @@ console.log('\n[2] §J14-2 — index.html vs the withdrawals schema');
   // replaced, so a whole-file grep would match the explanation and report the bug as present.
   const badgeMap = (home.match(/const STATUS_BADGE = \{([\s\S]*?)\n\};/) || [])[1] || '';
   const declared = [...badgeMap.matchAll(/^\s*([a-z_]+):/gm)].map((x) => x[1]);
-  const statuses = ['tor_checking', 'tor_sending', 'retry_scheduled', 'slatepack_pending',
+  // tor_held (2026-09-26): a Tor payout whose one attempt has an unknown outcome. retry_scheduled
+  // stays while a legacy row can still exist (the scheduler migrates them at its first pass).
+  const statuses = ['tor_checking', 'tor_sending', 'tor_held', 'retry_scheduled', 'slatepack_pending',
                     'finalizing', 'confirmed', 'tor_failed', 'slatepack_failed',
                     'nostr_failed', 'slatepack_expired', 'cancelled'];
   const missing = statuses.filter((s) => !declared.includes(s));
@@ -422,11 +424,11 @@ console.log('\n[10] F4 — settings-payout.html vs PoolSettings.defaults.payout'
   ok('every harvested id on the Payout form is a payout key (one stray fails every save)', stray.length === 0, stray.join(','));
   // The only defaults with no field, each for a stated reason — a key added to either side
   // without the other lands here instead of shipping a dead field or an unsaveable form.
-  //   withdrawal_retry_delays      — shadowed, no field (separate audit item, left alone)
   //   dormancy_policy_effective_at — written by lib/dormancy.js, never by the operator
+  // (withdrawal_retry_delays, the other one, was removed 2026-09-26 with the Tor retry ladder.)
   const noField = keys.filter((k) => !harvested.includes(k)).sort();
-  ok('the only payout defaults without a field are the two known non-form keys',
-     JSON.stringify(noField) === JSON.stringify(['dormancy_policy_effective_at', 'withdrawal_retry_delays']), noField.join(','));
+  ok('the only payout default without a field is the one known non-form key',
+     JSON.stringify(noField) === JSON.stringify(['dormancy_policy_effective_at']), noField.join(','));
 
   for (const k of ['auto_payout', 'payout_frequency']) {
     ok(`${k} is no longer a payout default`, !Object.prototype.hasOwnProperty.call(PoolSettings.defaults.payout, k));
@@ -445,6 +447,46 @@ console.log('\n[10] F4 — settings-payout.html vs PoolSettings.defaults.payout'
   ok('no admin page binds id="tor_send_mode"', modeBinders.length === 0, modeBinders.join(','));
   ok('the Payout page no longer offers a step-by-step Tor send',
      !/step-by-step/i.test(page.replace(/<!--[\s\S]*?-->/g, '')));
+}
+
+// ── One-attempt Tor payouts (plan Session 3, 2026-09-26) — payments.html + miners.html ──────────
+// Session 2 removed the retry route (410), made tor_held a pending status and added Re-check, a
+// forced refund (step-up + typed id) and the Tor-pause clear. These pin the admin half of that.
+console.log('\n[11] one-attempt Tor payouts — Held, fail_detail, Re-check / forced refund, pause clear');
+{
+  const pay = read('payments.html');
+  const statusBlock = (pay.match(/const STATUS = \{([\s\S]*?)\n\};/) || [])[1] || '';
+  ok('payments.html has a Held badge', /^ {2}tor_held: +\['badge-warn', +'Held'\]/m.test(statusBlock));
+  const active = (pay.match(/const ACTIVE = \[([^\]]*)\]/) || [])[1] || '';
+  ok('Held counts as ACTIVE (its amount is still locked)', /'tor_held'/.test(active));
+  const inflight = (pay.match(/const inflightStatuses = \[([^\]]*)\]/) || [])[1] || '';
+  ok('…and as in flight for the wallet-switch wizard (its send may still be in the wallet)', /'tor_held'/.test(inflight));
+  ok('a Held filter chip exists', /data-filter="tor_held"[^>]*onclick="setFilter\('tor_held', this\)"/.test(pay));
+  ok('the Retry button and its call are gone (the route answers 410)',
+     !/retryWithdrawal/.test(pay) && !/\/retry'/.test(pay));
+  const canCancel = (pay.match(/const canCancel = ([^;]+);/) || [])[1] || '';
+  ok('Cancel is offered only where the server allows it (tor_checking, tor_failed)',
+     /tor_checking/.test(canCancel) && /tor_failed/.test(canCancel) && !/retry_scheduled|tor_held/.test(canCancel), canCancel);
+  ok('Held rows get Re-check → POST …/recheck', /w\.status === 'tor_held'/.test(pay) &&
+     /adminFetch\('\/api\/admin\/withdrawals\/' \+ id \+ '\/recheck', \{ method: 'POST' \}\)/.test(pay));
+  const force = (pay.match(/async function forceRefundHeld\(id[^)]*\) \{([\s\S]*?)\n\}/) || [])[1] || '';
+  ok('the forced refund asks for the payout id typed back and sends it as confirm_id',
+     /prompt\(/.test(force) && /confirm_id: typed/.test(force) && /'\/force-refund'/.test(force));
+  ok('…and stops on a mismatch before any request', force.indexOf('!== String(id)') > 0 &&
+     force.indexOf('!== String(id)') < force.indexOf('adminFetch('));
+  ok('fail_code and fail_detail are shown, escaped', /escHtml\(w\.fail_code\)/.test(pay) && /escHtml\(detail/.test(pay));
+  ok('the queue summary shows the held count', /s\.held_count/.test(pay));
+
+  const home = read('index.html');
+  ok('the dashboard labels Held too', /tor_held: +'<span class="badge badge-warn">Held<\/span>'/.test(home));
+
+  const miners = read('miners.html');
+  ok('miners.html opens the miner view via data-addr (never a spliced literal)',
+     /onclick="showTorPause\(this\.dataset\.addr\)"/.test(miners));
+  ok('…which reads GET /api/admin/miners/:addr', /API\.get\('\/api\/admin\/miners\/' \+ encodeURIComponent\(addr\)\)/.test(miners));
+  ok('the pause is cleared through adminFetch (step-up) on POST …/tor-pause/clear',
+     /adminFetch\('\/api\/admin\/miners\/' \+ encodeURIComponent\(addr\) \+ '\/tor-pause\/clear', \{ method: 'POST' \}\)/.test(miners));
+  ok('the miner view shows paused_until in UTC', /paused_until/.test(miners) && /toISOString\(\)/.test(miners));
 }
 
 console.log('\n' + (fail ? 'FAILURES' : 'ALL PASS') + ` — ${pass} passed, ${fail} failed`);

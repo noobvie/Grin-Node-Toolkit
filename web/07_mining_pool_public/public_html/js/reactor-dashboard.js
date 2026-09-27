@@ -355,7 +355,8 @@
   // public pages use, replacing the old hand-rolled 24h strip chart (2026-07-17). Pool
   // and network hashrate are two ALIGNED single-axis charts, never one dual-axis chart:
   // network GPS runs orders of magnitude above pool GPS and would flatten the pool trace.
-  var chartRange = 'day'; // 24H | 7D | 30D → /api/pool/metrics/history range vocabulary
+  // Opens on 30D (operator request 2026-09-26) — must match the button index.html marks active.
+  var chartRange = 'month'; // 24H | 7D | 30D → /api/pool/metrics/history range vocabulary
 
   function toggleChartEmpty(id, show) {
     var el = $(id);
@@ -552,11 +553,32 @@
   // colour walks --warn → --accent with the same ratio (CSS reads it from --mat).
   // Always 10 rods on a fixed grid (reactor.css), so nothing scrolls sideways.
   var ROD_COUNT = 10;
-  async function loadBlocks() {
+  // Fetched IN PARALLEL with /api/pool/status, not behind it (2026-09-26). The rods used to
+  // wait for the status call because nodeHeight sets their depth — but that call is the one
+  // that touches the node and the wallet, and every other panel queued behind it too. Now the
+  // rods paint as soon as their own feed answers (depth from nodeHeight if an earlier refresh
+  // has one, else estimated from found_at at ~1 block/min) and repaint once status lands with
+  // a height they did not have.
+  async function loadBlocks(statusP) {
     var wrap = $('rx-rods');
     if (!wrap) return;
+    var blocks;
     try {
-      var blocks = await Auth.read('/api/pool/blocks?limit=' + ROD_COUNT);
+      blocks = await Auth.read('/api/pool/blocks?limit=' + ROD_COUNT);
+    } catch (e) {
+      blocks = undefined;
+    }
+    var paintedAt = nodeHeight;
+    paintRods(wrap, blocks);
+    if (!statusP || !Array.isArray(blocks) || blocks.length === 0) return;
+    try { await statusP; } catch (e) { return; }
+    if (nodeHeight && nodeHeight !== paintedAt) paintRods(wrap, blocks);
+  }
+
+  // blocks: array = the feed's answer, null = the feed did not answer, undefined = the read threw.
+  function paintRods(wrap, blocks) {
+    try {
+      if (blocks === undefined) throw new Error('block read failed');
       wrap.textContent = '';
       // null = the feed did not answer (429, 5xx, network). That is NOT "no blocks yet", and
       // saying so told every visitor a working pool had never found a block (audit §J15-2).
@@ -1436,18 +1458,21 @@
 
   // ── refresh cycle ─────────────────────────────────────────────────────────
   async function refresh() {
-    // Kicked BEFORE the awaited loadStatus: the patch bay is the one panel a visitor came
-    // here to act on, and it has no dependency on nodeHeight — queueing it behind the status
-    // round trip only delayed the switches appearing.
+    // Everything fires at once. This used to `await loadStatus()` before the rest, because
+    // nodeHeight feeds the fuel-rod depths — which parked every panel below (blocks, payouts,
+    // charts, gauges) behind the one call that waits on the node AND the wallet (2026-09-26,
+    // operator report: P-06/P-07 sometimes appeared minutes late). Only the rods need the
+    // height, so only they get the status promise; they repaint when it arrives.
     loadRegions();
-    await loadStatus();   // first: nodeHeight feeds the fuel-rod depths
+    var statusP = loadStatus();
     loadPoolInfo();
     loadHashrate();
     loadStats();
     loadShare();
-    loadBlocks();
+    loadBlocks(statusP);
     loadPayments();
     loadTrendCharts();
+    await statusP;
   }
 
   function boot() { refresh(); loadInfoContact(); }

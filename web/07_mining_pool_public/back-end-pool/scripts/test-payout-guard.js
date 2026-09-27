@@ -130,6 +130,20 @@ const tx = ({ slate, net = 99.96, confirmed = false, type = 'TxSent', when = Dat
   fee: '0',
 });
 
+// Silence the scheduler's own log lines inside a case (they are asserted on where they matter).
+const quiet = async (fn) => {
+  const o = [console.log, console.error, console.warn];
+  console.log = console.error = console.warn = () => {};
+  try { return await fn(); } finally { [console.log, console.error, console.warn] = o; }
+};
+// Run fn and hand back what it threw (null if nothing) — a method that does not exist yet must
+// read as a FAILED assertion, not crash the suite.
+const thrown = async (fn) => { try { await fn(); return null; } catch (e) { return e; } };
+const evNote = db.prepare(
+  'INSERT INTO withdrawal_events (withdrawal_id, from_status, to_status, triggered_by, note, created_at) VALUES (?, ?, ?, \'scheduler\', ?, ?)');
+const eventsOf = (id) => db.prepare('SELECT * FROM withdrawal_events WHERE withdrawal_id = ? ORDER BY id').all(id);
+const nowS = () => Math.floor(Date.now() / 1000);
+
 // ═══ 1. _priorSendLanded returns THREE states (§J4-10) ═══════════════════════
 console.log('\n[1] §J4-10 — the matcher has three outcomes, not two');
 (async () => {
@@ -159,7 +173,10 @@ console.log('\n[1] §J4-10 — the matcher has three outcomes, not two');
     ok('slate branch: TxSentCancelled → "absent" (a cancelled tx never reached the chain)',
       r.checked && r.outcome === 'absent', JSON.stringify(r));
   }
+  // (Session 4) The amount branch now counts a same-net Tor row still OPEN in tor_sending as a
+  // possible owner of the tx — so each case below starts from an empty ledger, one row, one log.
   {
+    reset();
     // The §J4-1 premise, stated as a test: a bare TxSent is written at tx_lock_outputs and is
     // NOT evidence of a broadcast. Before §J4-10 this exact input returned "it landed".
     const id = seedWithdrawal({ slate: null });
@@ -169,6 +186,7 @@ console.log('\n[1] §J4-10 — the matcher has three outcomes, not two');
       r.checked && r.outcome === 'unconfirmed', JSON.stringify(r));
   }
   {
+    reset();
     const id = seedWithdrawal({ slate: null });
     const s = newScheduler([tx({ slate: 'AMT-2', confirmed: true })]);
     const r = await s._priorSendLanded(rowOf(id), 99.96);
@@ -176,6 +194,7 @@ console.log('\n[1] §J4-10 — the matcher has three outcomes, not two');
   }
   {
     // Two candidates, one confirmed. Reporting the unconfirmed one would park a settled payout.
+    reset();
     const id = seedWithdrawal({ slate: null });
     const s = newScheduler([tx({ slate: 'A', confirmed: false }), tx({ slate: 'B', confirmed: true })]);
     const r = await s._priorSendLanded(rowOf(id), 99.96);
@@ -183,6 +202,7 @@ console.log('\n[1] §J4-10 — the matcher has three outcomes, not two');
       r.outcome === 'confirmed' && r.tx.tx_slate_id === 'B', JSON.stringify(r));
   }
   {
+    reset();
     const id = seedWithdrawal({ slate: null });
     const s = newScheduler([tx({ slate: 'OLD', confirmed: true, when: Date.now() / 1000 - 86400 * 30 })]);
     const r = await s._priorSendLanded(rowOf(id), 99.96);
@@ -197,44 +217,38 @@ console.log('\n[1] §J4-10 — the matcher has three outcomes, not two');
       r.checked === false && r.outcome === 'unknown', JSON.stringify(r));
   }
 
-  // ═══ 2. sendWithdrawal acts differently on each of the three ════════════════
-  console.log('\n[2] §J4-10 — sendWithdrawal: confirm / defer / send');
-  {
+  // ═══ 2. sendWithdrawal — ONE attempt per payout (2026-09-26) ════════════════
+  // A Tor payout is tried once. A row that has ANY earlier attempt on record is never handed to
+  // the wallet again, whatever the tx log says — it goes to tor_held and the Held resolution
+  // settles it (confirmed / refunded on proof of absence / held). The old code re-sent on 'absent'.
+  console.log('\n[2] sendWithdrawal — a row with an earlier attempt is never sent again');
+  for (const [label, slate, log] of [
+    ['CONFIRMED on chain', 'W-CONF', [tx({ slate: 'W-CONF', confirmed: true })]],
+    ['UNCONFIRMED (outcome unknown)', 'W-UNCONF', [tx({ slate: 'W-UNCONF', confirmed: false })]],
+    ['ABSENT from the wallet', 'W-ABSENT', []],
+  ]) {
     sends = [];
     reset();
-    const id = seedWithdrawal({ status: 'tor_checking', slate: 'W-CONF' });
-    const s = newScheduler([tx({ slate: 'W-CONF', confirmed: true })]);
-    await s.sendWithdrawal(id);
+    const id = seedWithdrawal({ status: 'tor_checking', slate, retries: 1 });
+    const s = newScheduler(log);
+    await quiet(() => s.sendWithdrawal(id));
     const r = rowOf(id);
-    ok('confirmed → the payout is confirmed', r.status === 'confirmed', r.status);
-    ok('confirmed → NOTHING was sent', sends.length === 0, `${sends.length} sends`);
-    ok('confirmed → the locked balance is released, not refunded', acct().balance_locked === 0, JSON.stringify(acct()));
+    ok(`earlier attempt, tx log ${label} → NOTHING is sent`, sends.length === 0, `${sends.length} sends`);
+    ok(`  …the row is tor_held, never back on a retry ladder`, r.status === 'tor_held', r.status);
+    ok('  …the balance stays LOCKED (no refund, no debit)',
+      acct().balance_locked === 100 && acct().balance === 0, JSON.stringify(acct()));
   }
   {
+    // The Held resolution then settles the confirmed one — the old "recover, don't re-send" branch.
     sends = [];
     reset();
-    const id = seedWithdrawal({ status: 'tor_checking', slate: 'W-UNCONF', retries: 2 });
-    const before = rowOf(id).retry_count;
-    const s = newScheduler([tx({ slate: 'W-UNCONF', confirmed: false })]);
-    await s.sendWithdrawal(id);
-    const r = rowOf(id);
-    ok('unconfirmed → DEFERRED, not sent', sends.length === 0, `${sends.length} sends`);
-    ok('unconfirmed → parked on the retry ladder', r.status === 'retry_scheduled', r.status);
-    ok('unconfirmed → the deferral does NOT consume a retry rung', r.retry_count === before,
-      `${before} → ${r.retry_count}`);
-    ok('unconfirmed → the balance stays LOCKED (no refund, no debit)',
-      acct().balance_locked > 0 && acct().balance === 0, JSON.stringify(acct()));
-    ok('unconfirmed → an audit event records why', !!db.prepare(
-      "SELECT 1 FROM withdrawal_events WHERE withdrawal_id = ? AND note LIKE 'deferred:%'").get(id));
-  }
-  {
-    sends = [];
-    reset();
-    const id = seedWithdrawal({ status: 'tor_checking', slate: 'W-ABSENT' });
-    const s = newScheduler([]);
-    await s.sendWithdrawal(id);
-    ok('absent → the send proceeds', sends.length === 1, `${sends.length} sends`);
-    ok('absent → and it settles', rowOf(id).status === 'confirmed', rowOf(id).status);
+    const id = seedWithdrawal({ status: 'tor_checking', slate: 'W-CONF2' });
+    const s = newScheduler([tx({ slate: 'W-CONF2', confirmed: true })]);
+    await quiet(() => s.sendWithdrawal(id));
+    await thrown(() => quiet(() => s.resolveHeldTor()));
+    ok('held, then the Held check sees it CONFIRMED → confirmed, lock released, still no send',
+      rowOf(id).status === 'confirmed' && acct().balance_locked === 0 && acct().balance === 0 && sends.length === 0,
+      JSON.stringify({ row: rowOf(id).status, acct: acct(), sends: sends.length }));
   }
   {
     // §J4-2's regression: a FIRST attempt has no prior event, no retry_count and no slate, so
@@ -249,28 +263,30 @@ console.log('\n[1] §J4-10 — the matcher has three outcomes, not two');
       sends.length === 1 && timeline[0] === 'send', `sends=${sends.length} timeline=${timeline.join(',')}`);
   }
   {
-    // …and the arming itself: retry_count 0 but a prior tor_sending event (exactly what the
-    // admin Retry button leaves behind) must still arm the guard.
+    // …and the arming itself: retry_count 0 but a prior tor_sending event (exactly what the old
+    // admin Retry button left behind) must still count as an earlier attempt.
     sends = [];
     reset();
     const id = seedWithdrawal({ status: 'tor_checking', retries: 0, slate: null, priorAttempt: true });
-    const s = newScheduler([tx({ slate: 'RETRY-1', confirmed: true })]);
-    await s.sendWithdrawal(id);
-    ok('§J4-2 — retry_count=0 with a prior attempt still arms the guard (admin Retry)',
-      sends.length === 0 && rowOf(id).status === 'confirmed', `sends=${sends.length} status=${rowOf(id).status}`);
+    const s = newScheduler([]);
+    await quiet(() => s.sendWithdrawal(id));
+    ok('§J4-2 — retry_count=0 with a prior tor_sending event is still an earlier attempt → held, not sent',
+      sends.length === 0 && rowOf(id).status === 'tor_held', `sends=${sends.length} status=${rowOf(id).status}`);
   }
 
   // ═══ 3. reclaimStaleTorSending (§J4-3) ═════════════════════════════════════
+  // A crash mid-send is outcome D: unless the wallet already shows the send CONFIRMED, the row
+  // goes to tor_held — never back to a queue that would send it again.
   console.log('\n[3] §J4-3 — the stale tor_sending sweep');
   {
     // The premise: before the sweep existed, nothing selected this status at all.
     reset();
     const id = seedWithdrawal({ status: 'tor_sending', slate: 'ST-NONE' });
     const s = newScheduler([]);
-    await s.processRetryQueue();
-    await s.processTorChecks();
-    await s.processSlatepackExpiry();
-    await s.reclaimStaleFinalizing();
+    await quiet(() => s.processTorChecks());
+    await quiet(() => s.processSlatepackExpiry());
+    await quiet(() => s.reclaimStaleFinalizing());
+    if (typeof s.resolveHeldTor === 'function') await quiet(() => s.resolveHeldTor());
     ok('premise — no other recovery pass touches a tor_sending row',
       rowOf(id).status === 'tor_sending', rowOf(id).status);
   }
@@ -279,37 +295,27 @@ console.log('\n[1] §J4-10 — the matcher has three outcomes, not two');
     reset();
     const id = seedWithdrawal({ status: 'tor_sending', slate: 'ST-CONF' });
     const s = newScheduler([tx({ slate: 'ST-CONF', confirmed: true })]);
-    await s.reclaimStaleTorSending();
+    await quiet(() => s.reclaimStaleTorSending());
     const r = rowOf(id);
     ok('confirmed on chain → the abandoned row is confirmed', r.status === 'confirmed', r.status);
     ok('…and nothing was re-sent', sends.length === 0);
     ok('…and the lock is released', acct().balance_locked === 0, JSON.stringify(acct()));
   }
-  {
+  for (const [label, log, opts] of [
+    ['never posted (absent)', [], {}],
+    ['unconfirmed', [tx({ slate: 'ST-UNK', confirmed: false })], {}],
+    ['wallet unreadable', [], { walletReadable: false }],
+  ]) {
     sends = [];
     reset();
-    const id = seedWithdrawal({ status: 'tor_sending', slate: 'ST-GONE', retries: 1 });
-    const s = newScheduler([]);
-    await s.reclaimStaleTorSending();
+    const id = seedWithdrawal({ status: 'tor_sending', slate: label === 'unconfirmed' ? 'ST-UNK' : 'ST-GONE', retries: 1 });
+    const s = newScheduler(log, opts);
+    await quiet(() => s.reclaimStaleTorSending());
     const r = rowOf(id);
-    ok('never posted → returned to the retry queue', r.status === 'retry_scheduled', r.status);
-    ok('…and this one DOES consume a rung (it was a real failed attempt)', r.retry_count === 2, String(r.retry_count));
-    ok('…and the sweep never sends from inside itself', sends.length === 0);
-  }
-  {
-    reset();
-    const id = seedWithdrawal({ status: 'tor_sending', slate: 'ST-UNK' });
-    const s = newScheduler([tx({ slate: 'ST-UNK', confirmed: false })]);
-    await s.reclaimStaleTorSending();
-    ok('unconfirmed → parked in tor_sending, re-asked next tick', rowOf(id).status === 'tor_sending');
-    ok('…with the balance still locked', acct().balance_locked > 0, JSON.stringify(acct()));
-  }
-  {
-    reset();
-    const id = seedWithdrawal({ status: 'tor_sending', slate: 'ST-DOWN' });
-    const s = newScheduler([], { walletReadable: false });
-    await s.reclaimStaleTorSending();
-    ok('wallet unreadable → left alone, never guessed', rowOf(id).status === 'tor_sending');
+    ok(`${label} → tor_held (a crash mid-send is outcome D), never back on a queue`, r.status === 'tor_held', r.status);
+    ok('  …no refund, no rung: balance still LOCKED, retry_count untouched',
+      acct().balance_locked === 100 && acct().balance === 0 && r.retry_count === 1, JSON.stringify({ a: acct(), rc: r.retry_count }));
+    ok('  …and the sweep never sends from inside itself', sends.length === 0);
   }
   {
     // A send that is still legitimately running must NOT be swept out from under itself.
@@ -373,112 +379,11 @@ console.log('\n[1] §J4-10 — the matcher has three outcomes, not two');
       String(rowOf(id).slate_id));
   }
 
-  // ═══ 5. The LAST rung asks the wallet before it refunds ═════════════════════
-  // sendWithdrawal's guard runs BEFORE each re-attempt, so it covers attempts 0..N-1 and never
-  // attempt N: the final send that reported failure used to go straight to markFailed → refund.
-  // A send that reports failure may still have posted (SIGKILLed after the broadcast), and on
-  // the final rung a miner can arrange exactly that on purpose — the ladder is deterministic and
-  // the retry count is on their account page. These drive the REAL path: a row on its last rung,
-  // a send that "fails" but leaves a TxSent in the wallet log, then whatever markFailed decides.
-  console.log('\n[5] last-rung guard — the final failed attempt is checked before the refund');
-  const LAST = new WithdrawalScheduler(config).retryDelays.length;
-  // A wallet whose log the send can append to: the pre-send guard sees it empty (→ absent →
-  // send), the send "fails" but leaves `landed` behind, and markFailed reads it back.
-  function lastRung(landed, { walletReadable = true } = {}) {
-    const log = [];
-    const s = newScheduler(log, { walletReadable });
-    s.walletTor = {
-      async sendToTorAddress(address, amount) {
-        timeline.push('send'); sends.push({ address, amount });
-        if (landed) log.push(landed);
-        return { success: false, error: 'killed at wallet_send_timeout_ms' };
-      },
-      async checkTorReachable() { return { online: true }; },
-    };
-    return s;
-  }
-  {
-    sends = []; reset();
-    const id = seedWithdrawal({ status: 'tor_checking', retries: LAST, slate: null });
-    await lastRung(tx({ slate: 'LAST-CONF', confirmed: true })).sendWithdrawal(id);
-    const r = rowOf(id);
-    ok('final attempt "failed" but is CONFIRMED on chain → the payout is settled, not refunded',
-      r.status === 'confirmed', r.status);
-    ok('  …the miner keeps neither the balance nor a lock (paid once)',
-      acct().balance === 0 && acct().balance_locked === 0, JSON.stringify(acct()));
-    ok('  …and the landed slate is attached as its proof', r.slate_id === 'LAST-CONF', String(r.slate_id));
-    ok('  …and the send really was attempted first (this is the real path, not a stub of it)',
-      sends.length === 1, `${sends.length} sends`);
-  }
-  {
-    sends = []; reset();
-    const id = seedWithdrawal({ status: 'tor_checking', retries: LAST, slate: null });
-    await lastRung(tx({ slate: 'LAST-UNCONF', confirmed: false })).sendWithdrawal(id);
-    const r = rowOf(id);
-    ok('final attempt "failed" but left an UNCONFIRMED send → parked, not refunded',
-      r.status === 'retry_scheduled', r.status);
-    ok('  …the balance stays LOCKED', acct().balance_locked > 0 && acct().balance === 0, JSON.stringify(acct()));
-    ok('  …the deferral does not push retry_count past the ladder', r.retry_count === LAST, String(r.retry_count));
-    ok('  …and the event log says why', !!db.prepare(
-      "SELECT 1 FROM withdrawal_events WHERE withdrawal_id = ? AND note LIKE 'deferred:%'").get(id));
-  }
-  {
-    sends = []; reset();
-    const id = seedWithdrawal({ status: 'tor_checking', retries: LAST, slate: null });
-    await lastRung(null).sendWithdrawal(id);
-    const r = rowOf(id);
-    ok('control — final attempt failed and the wallet holds NO send → refunded as before',
-      r.status === 'tor_failed', r.status);
-    ok('  …balance back, lock released', acct().balance === 100 && acct().balance_locked === 0, JSON.stringify(acct()));
-    ok('  …with the reversal in the ledger', !!db.prepare(
-      "SELECT 1 FROM balance_log WHERE reference_id = ? AND event_type = 'reversal'").get(id));
-  }
-  {
-    // The asymmetry with sendWithdrawal's "proceed loudly": there proceeding moves live money
-    // through a brief wallet outage; here proceeding can only refund, and a refund on top of a
-    // landed send is unrecoverable. Unreadable must therefore park, never refund.
-    sends = []; reset();
-    const id = seedWithdrawal({ status: 'tor_checking', retries: LAST, slate: null });
-    await lastRung(null, { walletReadable: false }).sendWithdrawal(id);
-    const r = rowOf(id);
-    ok('wallet UNREADABLE at the last rung → parked, NOT refunded', r.status === 'retry_scheduled', r.status);
-    ok('  …the balance stays LOCKED', acct().balance_locked > 0 && acct().balance === 0, JSON.stringify(acct()));
-    ok('  …and the event note says the log could not be read, not that a send was found', !!db.prepare(
-      "SELECT 1 FROM withdrawal_events WHERE withdrawal_id = ? AND note LIKE 'deferred:%could not be read%'").get(id));
-
-    // The deferral is a standing statement that the outcome is unknown. Fifteen minutes later
-    // the scheduler picks the row up again through sendWithdrawal — and if the wallet is STILL
-    // unreadable, the ordinary "proceed loudly" branch would send blind, paying twice if the
-    // final attempt had landed. A deferred row must be re-parked instead, on every rung.
-    sends = [];
-    db.prepare("UPDATE withdrawals SET status = 'tor_checking' WHERE id = ?").run(id);
-    await newScheduler([], { walletReadable: false }).sendWithdrawal(id);
-    const r2 = rowOf(id);
-    ok('  …picked up again with the wallet STILL unreadable → re-parked, not sent blind',
-      r2.status === 'retry_scheduled' && sends.length === 0, `${r2.status}, ${sends.length} sends`);
-    ok('  …the balance is still LOCKED', acct().balance_locked > 0 && acct().balance === 0, JSON.stringify(acct()));
-    ok('  …and a second deferral is on record', db.prepare(
-      "SELECT COUNT(*) AS c FROM withdrawal_events WHERE withdrawal_id = ? AND note LIKE 'deferred:%'").get(id).c === 2);
-  }
-  {
-    // Same rule reached from an ORDINARY rung: a row deferred because an unconfirmed send was
-    // seen must not be sent blind when the wallet later goes dark — the unconfirmed send is
-    // still the last thing anyone knew about it.
-    sends = []; reset();
-    const id = seedWithdrawal({ status: 'tor_checking', retries: 1, slate: 'DEF-THEN-DARK' });
-    await newScheduler([tx({ slate: 'DEF-THEN-DARK', confirmed: false })]).sendWithdrawal(id);
-    ok('ordinary rung: unconfirmed send seen → deferred', rowOf(id).status === 'retry_scheduled' && sends.length === 0);
-    db.prepare("UPDATE withdrawals SET status = 'tor_checking' WHERE id = ?").run(id);
-    await newScheduler([], { walletReadable: false }).sendWithdrawal(id);
-    ok('  …then the wallet goes dark → re-parked, NOT sent blind',
-      rowOf(id).status === 'retry_scheduled' && sends.length === 0, `${rowOf(id).status}, ${sends.length} sends`);
-    // Control: a row with NO deferral behind it keeps the documented proceed-loudly behaviour.
-    sends = []; reset();
-    const id2 = seedWithdrawal({ status: 'tor_checking', retries: 1, slate: null });
-    await newScheduler([], { walletReadable: false }).sendWithdrawal(id2);
-    ok('  control — never deferred + wallet unreadable → proceeds loudly (unchanged §J4 policy)',
-      sends.length === 1, `${sends.length} sends`);
-  }
+  // ═══ 5. (removed 2026-09-26) the last-rung guard ═════════════════════════
+  // There is no retry ladder any more, so there is no last rung: a Tor payout is tried ONCE and
+  // its outcome is decided by [one-attempt] (A/B/C/D) and [held] below. Their cases cover what
+  // this section proved — a send that reports failure but CONFIRMED is settled, an unconfirmed
+  // or unreadable one is never refunded — without a ladder to reach it through.
 
   // ═══ 6. Signed payment proofs (§H6) — stored only when they are provably OURS ═══
   // The proof is served to the miner as "your wallet signed for this payment", so a wrong one
@@ -676,160 +581,13 @@ console.log('\n[1] §J4-10 — the matcher has three outcomes, not two');
       e3 && e3.code === 502 && /Bad Gateway/.test(e3.message), e3 && e3.message);
   }
 
-  // ═══ Why a Tor payout is parked: retry_reason + the admin health alert (2026-09-24) ═══
-  // The account page used to say "wallet unreachable" for every retry — to a miner that means
-  // THEIR wallet, which is wrong when the POOL wallet was the one short. The cause is now stored,
-  // and the figures go to one rolling admin alert instead of to the miner.
-  console.log('\n[retry-reason] pool-wallet shortfall vs everything else');
-  {
-    const shortAlert = () => db.prepare(
-      "SELECT * FROM alerts WHERE type = 'pool_wallet_short' AND status = 'active' ORDER BY id DESC LIMIT 1").get();
-    const failingScheduler = (error) => {
-      const s = newScheduler([]);
-      s.walletTor.sendToTorAddress = async () => ({ success: false, error });
-      return s;
-    };
-    const quiet = async (fn) => { const o = console.error; console.error = () => {}; try { await fn(); } finally { console.error = o; } };
-    db.exec("DELETE FROM alerts WHERE type = 'pool_wallet_short'");
-
-    reset();
-    const id = seedWithdrawal({ status: 'tor_checking', retries: 0, priorAttempt: false });
-    const SHORT = 'Wallet command failed: Not enough funds. Required: 99.96, Available: 12.5';
-    await quiet(() => failingScheduler(SHORT).sendWithdrawal(id));
-    ok('pool wallet short → parked with retry_reason = pool_wallet_short',
-      rowOf(id).status === 'retry_scheduled' && rowOf(id).retry_reason === 'pool_wallet_short', JSON.stringify(rowOf(id)));
-    const a1 = shortAlert();
-    ok('…and ONE admin alert carries the real figures', a1 && /Available: 12\.5/.test(a1.message) && a1.occurrence_count === 1,
-      a1 && a1.message);
-
-    // Second shortfall within 24h rolls into the same row rather than stacking a new one.
-    db.prepare("UPDATE withdrawals SET status = 'tor_checking' WHERE id = ?").run(id);
-    await quiet(() => failingScheduler(SHORT.replace('12.5', '7.25')).sendWithdrawal(id));
-    const a2 = shortAlert();
-    const activeCount = db.prepare("SELECT COUNT(*) c FROM alerts WHERE type = 'pool_wallet_short' AND status = 'active'").get().c;
-    ok('a repeat within 24h updates the same alert (count 2, latest figures)',
-      a2 && a2.id === a1.id && a2.occurrence_count === 2 && /Available: 7\.25/.test(a2.message) && activeCount === 1,
-      JSON.stringify({ a2, activeCount }));
-
-    // A later failure with a DIFFERENT cause must clear the reason, or the page keeps blaming the pool.
-    db.prepare("UPDATE withdrawals SET status = 'tor_checking' WHERE id = ?").run(id);
-    await quiet(() => failingScheduler('Tor: recipient onion not reachable').sendWithdrawal(id));
-    ok('a later non-funds failure resets retry_reason to NULL',
-      rowOf(id).status === 'retry_scheduled' && rowOf(id).retry_reason === null, JSON.stringify(rowOf(id)));
-    ok('…and does not touch the alert', shortAlert().occurrence_count === 2);
-
-    // CONTROL: the ordinary case — the miner is offline — never reads as "pool busy".
-    reset();
-    const id2 = seedWithdrawal({ status: 'tor_checking', retries: 0, priorAttempt: false });
-    await quiet(() => failingScheduler('Tor: recipient onion not reachable').sendWithdrawal(id2));
-    ok('CONTROL: miner unreachable → retry_reason stays NULL',
-      rowOf(id2).status === 'retry_scheduled' && rowOf(id2).retry_reason === null, JSON.stringify(rowOf(id2)));
-
-    // An alert older than 24h is resolved and a fresh one starts (the card shows only the last day).
-    db.prepare("UPDATE alerts SET last_seen = ? WHERE id = ?").run(new Date(Date.now() - 2 * 86400000).toISOString(), a1.id);
-    reset();
-    const id3 = seedWithdrawal({ status: 'tor_checking', retries: 0, priorAttempt: false });
-    await quiet(() => failingScheduler(SHORT).sendWithdrawal(id3));
-    const a3 = shortAlert();
-    ok('a shortfall after a quiet day starts a fresh alert and resolves the stale one',
-      a3 && a3.id !== a1.id && a3.occurrence_count === 1 &&
-      db.prepare('SELECT status FROM alerts WHERE id = ?').get(a1.id).status === 'resolved');
-
-    // ── A shortfall retries after ~1 h and does NOT use up a rung (2026-09-25, F3) ──
-    // A NotEnoughFunds usually clears within the hour as other payouts settle, so it is not the
-    // miner-offline ladder's problem: it used to wait 6 h AND consume a rung, so four in a row
-    // reached markFailed and refunded a payout that never reached the miner. Bounded at 24
-    // uncounted retries (~a day) so an underfunded pool cannot hold a balance forever.
-    const SHORT_S = 3600, SHORT_MAX = 24, RUNG0_S = 6 * 3600;
-    const again = async (s, id) => {
-      db.prepare("UPDATE withdrawals SET status = 'tor_checking' WHERE id = ?").run(id);
-      await quiet(() => s.sendWithdrawal(id));
-    };
-    const near = (at, secs) => Math.abs(Number(at) - (Math.floor(Date.now() / 1000) + secs)) <= 5;
-    const lastNote = (id) => db.prepare(
-      'SELECT note FROM withdrawal_events WHERE withdrawal_id = ? ORDER BY id DESC LIMIT 1').get(id).note;
-
-    reset();
-    const f1 = seedWithdrawal({ status: 'tor_checking', retries: 0, priorAttempt: false });
-    await quiet(() => failingScheduler(SHORT).sendWithdrawal(f1));
-    ok('shortfall → retry_scheduled, retry_count NOT incremented',
-      rowOf(f1).status === 'retry_scheduled' && rowOf(f1).retry_count === 0, JSON.stringify(rowOf(f1)));
-    ok('…next attempt ≈ 1 h out, not the 6 h rung', near(rowOf(f1).next_retry_at, SHORT_S), JSON.stringify(rowOf(f1)));
-    ok('…and the event note says so without claiming "Retry n/4"',
-      /^shortfall: /.test(lastNote(f1)) && /1\/24 \(not counted\)/.test(lastNote(f1)) && !/Retry \d+\/\d+/.test(lastNote(f1)),
-      lastNote(f1));
-
-    // The old bug: every shortfall used a rung, so the 5th consecutive one reached markFailed →
-    // _reverseLock → 'tor_failed' with the balance handed back.
-    reset();
-    const f2 = seedWithdrawal({ status: 'tor_checking', retries: 0, priorAttempt: false });
-    const s2 = failingScheduler(SHORT);
-    await quiet(() => s2.sendWithdrawal(f2));
-    for (let i = 0; i < 5; i++) await again(s2, f2);
-    ok('six shortfalls in a row never reach markFailed — still parked, balance still locked',
-      rowOf(f2).status === 'retry_scheduled' && rowOf(f2).retry_count === 0 && Math.abs(acct().balance_locked - 100) < 1e-9,
-      JSON.stringify({ row: rowOf(f2), acct: acct() }));
-
-    // A shortfall retry is still a RE-attempt: retry_count stays 0 and slate_id is NULL, so the
-    // double-send guard must be armed from the event log alone (priorAttempts > 0).
-    reset(); timeline = []; sends = [];
-    const f3 = seedWithdrawal({ status: 'tor_checking', retries: 0, priorAttempt: false });
-    await quiet(() => failingScheduler(SHORT).sendWithdrawal(f3));
-    ok('(precondition) after a shortfall: retry_count 0, no slate id',
-      rowOf(f3).retry_count === 0 && rowOf(f3).slate_id === null, JSON.stringify(rowOf(f3)));
-    db.prepare('UPDATE withdrawals SET next_retry_at = ? WHERE id = ?').run(Math.floor(Date.now() / 1000) - 1, f3);
-    timeline = []; sends = [];
-    const g = newScheduler([tx({ slate: 'SF-UNCONF', confirmed: false })]);
-    await quiet(() => g.processRetryQueue());
-    ok('the uncounted retry still runs _priorSendLanded first — an unconfirmed match parks it, no send',
-      timeline[0] === 'wallet' && sends.length === 0 && rowOf(f3).status === 'retry_scheduled' && /^deferred:/.test(lastNote(f3)),
-      JSON.stringify({ timeline, sends, row: rowOf(f3), note: lastNote(f3) }));
-
-    // The cap: 24 uncounted retries, then the 25th shortfall takes the normal ladder (rung 1, 6 h),
-    // so the last-rung guard eventually decides — loudly.
-    reset();
-    const f4 = seedWithdrawal({ status: 'tor_checking', retries: 0, priorAttempt: false });
-    const s4 = failingScheduler(SHORT);
-    await quiet(() => s4.sendWithdrawal(f4));
-    for (let i = 1; i < SHORT_MAX; i++) await again(s4, f4);
-    const shortEvents = db.prepare(
-      "SELECT COUNT(*) c FROM withdrawal_events WHERE withdrawal_id = ? AND note LIKE 'shortfall:%'").get(f4).c;
-    ok('24 shortfalls → 24 uncounted retries, retry_count still 0',
-      shortEvents === SHORT_MAX && rowOf(f4).retry_count === 0 && near(rowOf(f4).next_retry_at, SHORT_S),
-      JSON.stringify({ shortEvents, row: rowOf(f4) }));
-    const errs = []; const oErr = console.error; console.error = (m) => errs.push(String(m));
-    db.prepare("UPDATE withdrawals SET status = 'tor_checking' WHERE id = ?").run(f4);
-    try { await s4.sendWithdrawal(f4); } finally { console.error = oErr; }
-    ok('the 25th consumes a rung: retry_count 1, next attempt 6 h out, reason still pool_wallet_short',
-      rowOf(f4).status === 'retry_scheduled' && rowOf(f4).retry_count === 1 && near(rowOf(f4).next_retry_at, RUNG0_S) &&
-        rowOf(f4).retry_reason === 'pool_wallet_short',
-      JSON.stringify(rowOf(f4)));
-    ok('…with a counted "Retry 1/4" note and a console.error naming the cap',
-      /^Retry 1\/4 /.test(lastNote(f4)) && errs.some((l) => /shortfall/i.test(l) && /24/.test(l)),
-      JSON.stringify({ note: lastNote(f4), errs }));
-
-    // A shortfall followed by an ordinary failure: the offline one is the ladder's, as before.
-    reset();
-    const f5 = seedWithdrawal({ status: 'tor_checking', retries: 0, priorAttempt: false });
-    await quiet(() => failingScheduler(SHORT).sendWithdrawal(f5));
-    await again(failingScheduler('Tor: recipient onion not reachable'), f5);
-    ok('shortfall then miner-offline → the offline failure consumes a rung, 6 h, retry_reason NULL',
-      rowOf(f5).status === 'retry_scheduled' && rowOf(f5).retry_count === 1 && near(rowOf(f5).next_retry_at, RUNG0_S) &&
-        rowOf(f5).retry_reason === null && /^Retry 1\/4 /.test(lastNote(f5)),
-      JSON.stringify({ row: rowOf(f5), note: lastNote(f5) }));
-
-    // A shortfall on the LAST rung (ladder already spent by offline failures) must not refund
-    // either: it takes an uncounted retry instead of markFailed.
-    reset();
-    const f6 = seedWithdrawal({ status: 'tor_checking', retries: 4, priorAttempt: true });
-    await quiet(() => failingScheduler(SHORT).sendWithdrawal(f6));
-    ok('a shortfall with the ladder exhausted → uncounted retry, not markFailed',
-      rowOf(f6).status === 'retry_scheduled' && rowOf(f6).retry_count === 4 && Math.abs(acct().balance_locked - 100) < 1e-9,
-      JSON.stringify({ row: rowOf(f6), acct: acct() }));
-  }
+  // ═══ (moved 2026-09-26) retry_reason / shortfall retries ═══
+  // A pool-wallet shortfall is outcome C of the one attempt now: refunded at once with
+  // fail_code pool_busy when the tx log proves nothing was sent — see [one-attempt] C1–C3, which
+  // also keep the rolling pool_wallet_short alert cases. The 1 h uncounted retry (F3) is gone.
 
   // ═══ Kernel proof only once MINED (2026-09-25, F1) ═══
-  // withdrawals.kernel_excess drives the public "paid · mined" badge, has_kernel_proof and the
+  // withdrawals.kernel_excess drives the public "<method> · mined" badge (P-05 Method column), has_kernel_proof and the
   // account page's explorer link, so it must mean "seen mined". grin-wallet v5.4.1 writes a tx-log
   // entry's kernel_excess at tx_lock_outputs and again at finalize (update_stored_tx) — both BEFORE
   // post_tx — so the entry's `confirmed` flag is the only chain evidence, never the excess itself.
@@ -1074,114 +832,25 @@ console.log('\n[1] §J4-10 — the matcher has three outcomes, not two');
     ok('…and no other route in index.js emits it (no public route)', hits > 0 && hits === inAdmin, `${hits} vs ${inAdmin}`);
   }
 
-  // ═══ Tor send that fell back to a slatepack (exit 0) is NOT a payout (2026-09-25) ═══
-  // grin-wallet `send -d` exits 0 when Tor delivery fails: outputs LOCKED, slatepack printed,
-  // nothing finalized. The scheduler used to mark that row confirmed. Now it must (1) not confirm,
-  // (2) cancel exactly that slate so the lock is released, and (3) send again on the retry.
-  console.log('\n[tor-fallback] exit-0 slatepack fallback is a failed send, and its lock is released');
-  {
-    const FB = '5c8a4e6b-3f1d-4a92-9b7e-0d2c1f3e4a5b';
-    const quiet = async (fn) => {
-      const o = [console.error, console.warn]; console.error = () => {}; console.warn = () => {};
-      try { await fn(); } finally { [console.error, console.warn] = o; }
-    };
-    // `log` is the wallet tx log the NEXT read returns; `cancels` records cancelTx calls in order.
-    const fbScheduler = ({ result, log = [], cancelThrows = false }) => {
-      const cancels = [];
-      const s = new WithdrawalScheduler(config, {
-        async getTransactions() { timeline.push('wallet'); return log; },
-        async cancelTx(id) {
-          timeline.push('cancel');
-          cancels.push(id);
-          if (cancelThrows) throw new Error('owner API down');
-        },
-      });
-      s.walletTor = {
-        async sendToTorAddress(address, amount) {
-          timeline.push('send'); sends.push({ address, amount });
-          return typeof result === 'function' ? result() : result;
-        },
-        async checkTorReachable() { return { online: true }; },
-      };
-      s.recordTorFee = async () => {};
-      s.incentives = { maybePayJoinBonus() {} };
-      return { s, cancels };
-    };
-    const FALLBACK = { success: false, torFallback: true, slateId: FB, error: 'Tor delivery failed: fell back to a slatepack' };
+  // ═══ (moved 2026-09-26) exit-0 slatepack fallback ═══
+  // classifySendOutput + _releaseTorFallback are unchanged; what happens AFTER the cancel is now
+  // outcome B of the one attempt (refund now, fail_code from a fresh probe) — see [one-attempt] B*.
 
-    // 1. First attempt falls back → not confirmed, cancelled, parked on the ladder, balance still held.
-    reset();
-    sends = []; timeline = [];
-    let id = seedWithdrawal({ status: 'tor_checking', retries: 0, priorAttempt: false });
-    let h = fbScheduler({ result: FALLBACK });
-    await quiet(() => h.s.sendWithdrawal(id));
-    ok('fallback → row is NOT confirmed (it was the bug: exit 0 read as paid)',
-      rowOf(id).status === 'retry_scheduled', JSON.stringify(rowOf(id)));
-    ok('…the fallback slate is cancelled by the id from the CLI output, exactly once',
-      h.cancels.length === 1 && h.cancels[0] === FB, JSON.stringify(h.cancels));
-    ok('…cancel happens after the send and before anything else touches the wallet',
-      timeline.join(',') === 'send,cancel', timeline.join(','));
-    ok('…and the miner\'s balance stays locked for the retry', Math.abs(acct().balance_locked - 100) < 1e-9, JSON.stringify(acct()));
-
-    // 2. The retry: the wallet now shows that slate as TxSentCancelled → guard says 'absent' → send.
-    db.prepare("UPDATE withdrawals SET status = 'tor_checking' WHERE id = ?").run(id);
-    sends = []; timeline = [];
-    h = fbScheduler({ result: { success: true }, log: [tx({ slate: FB, type: 'TxSentCancelled' })] });
-    await quiet(() => h.s.sendWithdrawal(id));
-    ok('retry after the cancel → guard reads "absent" and a fresh send goes out',
-      sends.length === 1 && timeline[0] === 'wallet' && timeline[1] === 'send', timeline.join(','));
-    ok('…and that one confirms', rowOf(id).status === 'confirmed', JSON.stringify(rowOf(id)));
-
-    // CONTROL — why the cancel exists: the SAME retry with the lock left in place is parked, not
-    // sent. This is what every fallback payout would have done forever without step 1's cancel.
-    reset();
-    sends = []; timeline = [];
-    id = seedWithdrawal({ status: 'tor_checking', retries: 1, priorAttempt: true });
-    h = fbScheduler({ result: { success: true }, log: [tx({ slate: FB, confirmed: false })] });
-    await quiet(() => h.s.sendWithdrawal(id));
-    ok('CONTROL: an un-cancelled fallback lock makes the retry DEFER, not send',
-      sends.length === 0 && rowOf(id).status === 'retry_scheduled', JSON.stringify({ sends, row: rowOf(id) }));
-
-    // 3. No slate id in the output → nothing cancelled (never guess by amount), still not confirmed.
-    reset();
-    sends = []; timeline = [];
-    id = seedWithdrawal({ status: 'tor_checking', retries: 0, priorAttempt: false });
-    h = fbScheduler({ result: Object.assign({}, FALLBACK, { slateId: null }) });
-    await quiet(() => h.s.sendWithdrawal(id));
-    ok('fallback without a slate id → no cancel attempted, row parked, not confirmed',
-      h.cancels.length === 0 && rowOf(id).status === 'retry_scheduled', JSON.stringify({ c: h.cancels, row: rowOf(id) }));
-
-    // 4. Cancel fails → still parked and never confirmed; the guard handles the leftover lock.
-    reset();
-    sends = []; timeline = [];
-    id = seedWithdrawal({ status: 'tor_checking', retries: 0, priorAttempt: false });
-    h = fbScheduler({ result: FALLBACK, cancelThrows: true });
-    await quiet(() => h.s.sendWithdrawal(id));
-    ok('cancel throws → row parked on the ladder, not confirmed, not crashed',
-      h.cancels.length === 1 && rowOf(id).status === 'retry_scheduled', JSON.stringify(rowOf(id)));
-
-    // 5. Exit 0 with no recognisable marker → failure, and NOTHING is cancelled (it may have posted).
-    reset();
-    sends = []; timeline = [];
-    id = seedWithdrawal({ status: 'tor_checking', retries: 0, priorAttempt: false });
-    h = fbScheduler({ result: { success: false, error: 'grin-wallet send exited 0 without reporting "Tx sent successfully"' } });
-    await quiet(() => h.s.sendWithdrawal(id));
-    ok('unrecognised exit-0 output → parked, not confirmed, and no cancel',
-      h.cancels.length === 0 && rowOf(id).status === 'retry_scheduled', JSON.stringify({ c: h.cancels, row: rowOf(id) }));
-
-    // CONTROL: a real success never cancels anything.
-    reset();
-    sends = []; timeline = [];
-    id = seedWithdrawal({ status: 'tor_checking', retries: 0, priorAttempt: false });
-    h = fbScheduler({ result: { success: true } });
-    await quiet(() => h.s.sendWithdrawal(id));
-    ok('CONTROL: a real send confirms and cancels nothing',
-      rowOf(id).status === 'confirmed' && h.cancels.length === 0, JSON.stringify({ c: h.cancels, row: rowOf(id) }));
-  }
-
+  await guarded(oneAttemptSection);
+  await guarded(heldSection);
+  await guarded(pauseSection);
+  await guarded(cooldownSection);
+  await guarded(migrationSection);
+  await guarded(pendingListSection);
+  await guarded(routeSection);
+  await guarded(alertNoiseSection);
   await slatepackRecoverySection();
-  await stepwiseSection();
+  await sendLockSection();
   await reviewSection();
+  await guarded(reviewS4Section);
+  await guarded(healthCardSection);
+  await guarded(reviewFixesSection);
+  await guarded(bindingSection);
 
   console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed\n`);
   cleanup();
@@ -1425,539 +1094,67 @@ async function slatepackRecoverySection() {
   db.exec("DELETE FROM alerts WHERE type IN ('slate_cancel_owed','slate_refunded_but_mined')");
 }
 
-// ═══ [stepwise] F5 (Part 6) — step-by-step Tor send, design §8.1 ═════════════════════════════
-// The REAL WalletAPI with only its wire boundary (_encryptedCall) faked, so what is asserted is
-// what goes to grin-wallet: named params, the real send lock. The fake wallet is STATEFUL like the
-// real one: tx_lock_outputs writes a TxSent, cancel_tx rewrites it as TxSentCancelled (and refuses
-// a slate it never locked with TransactionDoesntExist). deliverSlate is faked at the scheduler.
-// One test per row of the failure matrix (§8.1.3); each is shown to fail with its guard removed.
-async function stepwiseSection() {
-  console.log('\n[stepwise] F5 — step-by-step Tor send (design §8.1)');
+// ═══ [send-lock] the slatepack create path selects + locks coins under ONE lock ════════════
+// The step-by-step Tor send (F5) and its [stepwise] S1–S19 cases were DELETED 2026-09-26. Its S14
+// was the only case proving that a create path really runs init → lock inside WalletAPI's
+// withSendLock; it lives on here as L1, rebuilt on two slatepack creates (the Goblin create shares
+// the same _withSendLock call). The REAL WalletAPI with only its wire boundary (_encryptedCall)
+// faked, so the real lock runs. Without it two inits interleave before either lock and can select
+// the SAME coins (design §8.1.1), and one of the two transactions can never mine.
+async function sendLockSection() {
+  console.log('\n[send-lock] two slatepack creates cannot interleave init → lock');
   const WalletAPI = require(path.join(APP, 'lib/wallet.js'));
   const ADDR2 = 'tgrin1zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz';
-  const U = (n) => `0000${String(n).padStart(4, '0')}-0000-4000-8000-000000000000`;
-  const FEE_NANO = '23500000';
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const quiet = async (fn) => {
     const o = [console.log, console.error, console.warn];
-    const errs = [];
-    console.log = () => {}; console.warn = () => {}; console.error = (...a) => errs.push(a.join(' '));
-    try { await fn(); } finally { [console.log, console.error, console.warn] = o; }
-    return errs;
+    console.log = console.error = console.warn = () => {};
+    try { return await fn(); } finally { [console.log, console.error, console.warn] = o; }
   };
-  const MONEY = ['init_send_tx', 'tx_lock_outputs', 'finalize_tx', 'post_tx', 'cancel_tx', 'deliver'];
-  const order = (st) => st.calls.filter((c) => MONEY.includes(c.method)).map((c) => c.method).join(',');
-  const notes = (id) => db.prepare('SELECT note FROM withdrawal_events WHERE withdrawal_id = ? ORDER BY id').all(id).map((e) => e.note || '');
-  const ledger = () => db.prepare('SELECT COUNT(*) c FROM balance_log').get().c;
-  const debits = (id) => db.prepare("SELECT COUNT(*) c FROM balance_log WHERE reference_id = ? AND event_type = 'debit' AND reference_type = 'withdrawal'").get(id).c;
-  const backdate = (id, s = 3600) => db.prepare('UPDATE withdrawal_events SET created_at = created_at - ? WHERE withdrawal_id = ?').run(s, id);
-  const activeAlert = () => db.prepare("SELECT level, message FROM alerts WHERE type = 'payout_tor_stepwise' AND status = 'active'").get() || null;
-  db.exec('DELETE FROM payout_control');
+  const w = new WalletAPI({ network: 'testnet', wallet_dir: '/nonexistent' });
+  w.sessionOpen = true; w.aesKey = Buffer.alloc(32); w.token = 'TOKEN';
+  const calls = [];
   let slateSeq = 0;
-
-  // A wire-level fake grin-wallet. `hooks[method]` may throw, or return a value to override;
-  // `delay[method]` (ms) holds the reply. st.calls records every call with a snapshot of st.id's row.
-  function stepWallet({ log = [], hooks = {}, delay = {} } = {}) {
-    const w = new WalletAPI({ network: 'testnet', wallet_dir: '/nonexistent' });
-    w.sessionOpen = true; w.aesKey = Buffer.alloc(32); w.token = 'TOKEN';
-    const st = { log, calls: [], id: null, w };
-    let logId = 1000;
-    w._encryptedCall = async (method, params) => {
-      const p = JSON.parse(JSON.stringify(params));
-      st.calls.push({ method, params: p, row: st.id ? rowOf(st.id) : null });
-      if (delay[method]) await sleep(delay[method]);
-      if (hooks[method]) {
-        const r = await hooks[method](p, st);
-        if (r !== undefined) return r;
-      }
-      switch (method) {
-        case 'retrieve_txs': return [true, st.log];
-        case 'init_send_tx':
-          return { ver: '4:3', id: U(++slateSeq), sta: 'S1', amt: String(p.args.amount), fee: FEE_NANO,
-                   sigs: [{ xs: '02' + 'aa'.repeat(32), nonce: '02' + 'bb'.repeat(32) }] };
-        case 'tx_lock_outputs':
-          st.log.push({ id: logId++, tx_slate_id: p.slate.id, tx_type: 'TxSent', confirmed: false,
-            creation_ts: new Date().toISOString(), amount_debited: String(Number(p.slate.amt) + Number(FEE_NANO)),
-            amount_credited: '0', fee: FEE_NANO });
-          return null;
-        case 'finalize_tx': return Object.assign({}, p.slate, { sta: 'S3', tx: { kernel: 'k' } });
-        case 'post_tx': return null;
-        case 'cancel_tx': {
-          const e = st.log.find((t) => t.tx_slate_id === p.tx_slate_id && t.tx_type === 'TxSent');
-          if (!e) throw new Error(`Wallet error: {"TransactionDoesntExist":"${p.tx_slate_id}"}`);
-          e.tx_type = 'TxSentCancelled';
-          return null;
-        }
-        case 'create_slatepack_message': return 'BEGINSLATEPACK. x. ENDSLATEPACK.';
-        default: return null;
-      }
-    };
-    return st;
-  }
-  function stepScheduler(st, { deliver = null, mode = 'stepwise', withWallet = true } = {}) {
-    const s = new WithdrawalScheduler(Object.assign({}, config, { tor_send_mode: mode }), withWallet ? st.w : null);
-    s.walletTor = {
-      async deliverSlate(addr, slate, o) {
-        st.calls.push({ method: 'deliver', addr, slate, o, row: st.id ? rowOf(st.id) : null });
-        return deliver ? deliver(slate) : { ok: true, slate: Object.assign({}, slate, { sta: 'S2' }) };
-      },
-      async sendToTorAddress(address, amount) { st.calls.push({ method: 'cli-send' }); sends.push({ address, amount }); return { success: true }; },
-      async checkTorReachable() { return { online: true }; },
-    };
-    s.recordTorFee = async () => {};
-    s.incentives = { maybePayJoinBonus() {} };
-    return s;
-  }
-  // A fresh row in tor_checking with no prior tor_sending event (a first attempt).
-  const fresh = (opts = {}) => {
-    reset(); sends = [];
-    return seedWithdrawal(Object.assign({ status: 'tor_checking', retries: 0, priorAttempt: false }, opts));
-  };
-  const MINER_OFF = { ok: false, ourSide: false, requestWritten: false, reason: 'onion_unreachable', detail: 'host unreachable' };
-
-  // ── S1 happy path ──
-  {
-    const id = fresh();
-    const st = stepWallet(); st.id = id;
-    const s = stepScheduler(st);
-    const froze = [];
-    s.isFrozen = () => { froze.push((rowOf(id) || {}).tor_step || ''); return false; };
-    await quiet(() => s.checkTorAndSend(rowOf(id)));
-    const by = (m) => st.calls.find((c) => c.method === m) || {};
-    ok('S1. call order init → lock → deliver → finalize → post',
-      order(st) === 'init_send_tx,tx_lock_outputs,deliver,finalize_tx,post_tx', order(st));
-    const keys = (m) => Object.keys(by(m).params || {}).sort().join(',');
-    ok('S1. every Owner call is NAMED with exactly its v3 parameter names',
-      keys('init_send_tx') === 'args,token' && keys('tx_lock_outputs') === 'slate,token' &&
-      keys('finalize_tx') === 'slate,token' && keys('post_tx') === 'fluff,slate,token',
-      ['init_send_tx', 'tx_lock_outputs', 'finalize_tx', 'post_tx'].map(keys).join(' | '));
-    const a = (by('init_send_tx').params || {}).args || {};
-    ok('S1. init: payment_proof_recipient_address = the miner address, ttl_blocks null, net amount',
-      a.payment_proof_recipient_address === ADDR && a.ttl_blocks === null && a.amount === 99960000000, JSON.stringify(a));
-    const lockRow = by('tx_lock_outputs').row || {};
-    ok('S1. slate_id is ALREADY in the DB when tx_lock_outputs is called (tor_step initiated)',
-      by('tx_lock_outputs').params && lockRow.slate_id === by('tx_lock_outputs').params.slate.id && lockRow.tor_step === 'initiated',
-      JSON.stringify(lockRow));
-    ok('S1. tor_step walks claimed → initiated → locked → delivering → finalizing → posting',
-      (by('init_send_tx').row || {}).tor_step === 'claimed' && lockRow.tor_step === 'initiated' && froze[1] === 'locked' &&
-      (by('deliver').row || {}).tor_step === 'delivering' && (by('finalize_tx').row || {}).tor_step === 'finalizing' &&
-      (by('post_tx').row || {}).tor_step === 'posting', JSON.stringify(froze));
-    ok('S1. the freeze is checked at claim, before delivery and before post', froze.length === 3 && froze[2] === 'finalizing', JSON.stringify(froze));
-    ok('S1. tor_final_slate held S3 while posting', /"sta":"S3"/.test((by('post_tx').row || {}).tor_final_slate || ''));
-    ok('S1. post_tx got the finalized S3 with fluff true',
-      by('post_tx').params && by('post_tx').params.slate.sta === 'S3' && by('post_tx').params.fluff === true);
-    ok('S1. deliver got the S1 slate and the miner address', by('deliver').addr === ADDR && by('deliver').slate && by('deliver').slate.sta === 'S1');
-    const r = rowOf(id);
-    ok('S1. ends confirmed, fee from the slate, tor_final_slate cleared',
-      r.status === 'confirmed' && Math.abs(r.fee - 0.0235) < 1e-12 && r.tor_final_slate === null, JSON.stringify(r));
-    const n = notes(id);
-    ok('S1. the journal: claim, slate created, posting, posted',
-      n[0] === 'stepwise: claim' && /^slate: [0-9a-f-]{36} created \(stepwise\)$/.test(n[1]) &&
-      /^stepwise: posting slate /.test(n[2]) && n[3] === 'stepwise: posted', JSON.stringify(n));
-    ok('S1. the lock was released and the miner debited once', acct().balance_locked === 0 && debits(id) === 1, JSON.stringify(acct()));
-  }
-
-  // ── S2 NotEnoughFunds at init ──
-  {
-    const id = fresh();
-    const st = stepWallet({ hooks: { init_send_tx: () => { throw new Error('Wallet error: {"NotEnoughFunds":{"available":1,"needed":2}}'); } } });
-    st.id = id;
-    await quiet(() => stepScheduler(st).checkTorAndSend(rowOf(id)));
-    const r = rowOf(id);
-    ok('S2. NotEnoughFunds at init → F3 shortfall: retry_scheduled, retry_count 0, reason pool_wallet_short',
-      r.status === 'retry_scheduled' && r.retry_count === 0 && r.retry_reason === 'pool_wallet_short' &&
-      /^shortfall: /.test(notes(id).slice(-1)[0]), JSON.stringify({ r, n: notes(id) }));
-    ok('S2. …no lock and no cancel', order(st) === 'init_send_tx', order(st));
-  }
-
-  // ── S3 lock throws ──
-  {
-    const id = fresh();
-    const st = stepWallet({ hooks: { tx_lock_outputs: () => { throw new Error('Wallet error: "lmdb busy"'); } } });
-    st.id = id;
-    await quiet(() => stepScheduler(st).checkTorAndSend(rowOf(id)));
-    const r = rowOf(id);
-    const cancel = st.calls.find((c) => c.method === 'cancel_tx');
-    ok('S3. lock throws → cancel(S) is tried with the saved slate id, NAMED',
-      cancel && cancel.params.tx_slate_id === r.slate_id && cancel.params.tx_id === null, JSON.stringify(cancel && cancel.params));
-    ok('S3. …TransactionDoesntExist at "initiated" counts as never-locked → a COUNTED retry',
-      r.status === 'retry_scheduled' && r.retry_count === 1 && r.retry_reason === null, JSON.stringify(r));
-    ok('S3. …and nothing was delivered', !/deliver/.test(order(st)), order(st));
-  }
-
-  // ── S4 delivery fails on the miner's side (either requestWritten) ──
-  for (const written of [false, true]) {
-    const id = fresh();
-    const st = stepWallet(); st.id = id;
-    const s = stepScheduler(st, { deliver: () => Object.assign({}, MINER_OFF, { requestWritten: written }) });
-    await quiet(() => s.checkTorAndSend(rowOf(id)));
-    const r = rowOf(id);
-    ok(`S4. miner-side delivery failure (requestWritten ${written}) → cancel, then a COUNTED retry; no finalize/post`,
-      order(st) === 'init_send_tx,tx_lock_outputs,deliver,cancel_tx' && r.status === 'retry_scheduled' && r.retry_count === 1,
-      `${order(st)} ${JSON.stringify(r)}`);
-    const c = st.calls.find((x) => x.method === 'cancel_tx');
-    ok(`S4. …the cancel ran while the row was still tor_sending`, !!c && (c.row || {}).status === 'tor_sending');
-    ok(`S4. …the wallet's TxSent is now cancelled`, st.log.length === 1 && st.log.every((t) => t.tx_type === 'TxSentCancelled'));
-  }
-
-  // ── S5 our own tor is down ──
-  {
-    const TOR_DOWN = { ok: false, ourSide: true, requestWritten: false, reason: 'tor_unavailable', detail: 'ECONNREFUSED' };
-    let id = fresh();
-    let st = stepWallet(); st.id = id;
-    await quiet(() => stepScheduler(st, { deliver: () => TOR_DOWN }).checkTorAndSend(rowOf(id)));
-    let r = rowOf(id);
-    ok('S5. ourSide → cancel, then UNCOUNTED pool_tor_unavailable (retry_count 0, ~15 min, tor-down: note)',
-      /cancel_tx$/.test(order(st)) && r.status === 'retry_scheduled' && r.retry_count === 0 &&
-      r.retry_reason === 'pool_tor_unavailable' && Math.abs(r.next_retry_at - (Date.now() / 1000 + 900)) < 30 &&
-      /^tor-down: pool tor unavailable, retry 1\/24 \(not counted\)/.test(notes(id).slice(-1)[0]),
-      JSON.stringify({ r, n: notes(id).slice(-1) }));
-    id = fresh();
-    for (let i = 0; i < 24; i++) {
-      db.prepare("INSERT INTO withdrawal_events (withdrawal_id, from_status, to_status, triggered_by, note) VALUES (?, 'tor_sending', 'retry_scheduled', 'scheduler', 'tor-down: x')").run(id);
+  w._encryptedCall = async (method, params) => {
+    const p = JSON.parse(JSON.stringify(params));
+    calls.push({ method, params: p });
+    // Hold both halves of the critical section, so an unlocked second create WOULD get in between.
+    if (method === 'init_send_tx' || method === 'tx_lock_outputs') await sleep(40);
+    switch (method) {
+      case 'init_send_tx':
+        return { ver: '4:3', id: `0000${String(++slateSeq).padStart(4, '0')}-0000-4000-8000-000000000000`,
+                 sta: 'S1', amt: String(p.args.amount), fee: '23500000' };
+      case 'create_slatepack_message': return 'BEGINSLATEPACK. x. ENDSLATEPACK.';
+      default: return null;
     }
-    st = stepWallet(); st.id = id;
-    await quiet(() => stepScheduler(st, { deliver: () => TOR_DOWN }).checkTorAndSend(rowOf(id)));
-    r = rowOf(id);
-    ok('S5. the 25th tor-down takes a rung (retry_count 1, 6 h)',
-      r.status === 'retry_scheduled' && r.retry_count === 1 && Math.abs(r.next_retry_at - (Date.now() / 1000 + 21600)) < 30,
-      JSON.stringify(r));
-  }
-
-  // ── S6 cancel fails (node down) → stays tor_sending; a later sweep cancels and requeues ──
-  {
-    const id = fresh();
-    let nodeDown = true;
-    const st = stepWallet({ hooks: { cancel_tx: () => { if (nodeDown) throw new Error("Wallet error: \"Can't contact running Grin node. Not Cancelling.\""); } } });
-    st.id = id;
-    const s = stepScheduler(st, { deliver: () => MINER_OFF });
-    const bal = JSON.stringify(acct()); const led = ledger();
-    await quiet(() => s.checkTorAndSend(rowOf(id)));
-    let r = rowOf(id);
-    ok('S6. cancel fails → the row STAYS tor_sending at its step, never retry_scheduled',
-      r.status === 'tor_sending' && r.tor_step === 'delivering' && r.retry_count === 0, JSON.stringify(r));
-    ok('S15. …no balance or ledger change while parked', JSON.stringify(acct()) === bal && ledger() === led);
-    ok('S6. …and its TxSent is still live (nothing pretended otherwise)', st.log.some((t) => t.tx_type === 'TxSent'));
-    nodeDown = false;
-    backdate(id);
-    await quiet(() => s.reclaimStaleTorSending());
-    r = rowOf(id);
-    ok("S6. a later sweep cancels it, then requeues to tor_checking (no rung — the pool's fault)",
-      r.status === 'tor_checking' && r.retry_count === 0 && st.log.every((t) => t.tx_type === 'TxSentCancelled') &&
-      /^stepwise: requeued — slate .* cancelled/.test(notes(id).slice(-1)[0]), JSON.stringify({ r, n: notes(id).slice(-1) }));
-  }
-
-  // ── S7 finalize throws ──
-  {
-    const id = fresh();
-    const st = stepWallet({ hooks: { finalize_tx: () => { throw new Error('Wallet error: "payment proof signature invalid"'); } } });
-    st.id = id;
-    await quiet(() => stepScheduler(st).checkTorAndSend(rowOf(id)));
-    const r = rowOf(id);
-    ok('S7. finalize throws → cancel, then a counted retry; post never called',
-      order(st) === 'init_send_tx,tx_lock_outputs,deliver,finalize_tx,cancel_tx' && r.status === 'retry_scheduled' && r.retry_count === 1,
-      `${order(st)} ${JSON.stringify(r)}`);
-  }
-
-  // ── S8 post throws → committed: never cancelled; the sweep posts again, rate-limited, freeze-aware ──
-  {
-    const id = fresh();
-    db.exec("DELETE FROM alerts WHERE type = 'payout_tor_stepwise'");
-    let postFails = true;
-    const st = stepWallet({ hooks: { post_tx: () => { if (postFails) throw new Error('HTTP 500: node refused'); } } });
-    st.id = id;
-    const s = stepScheduler(st);
-    const bal = JSON.stringify(acct()); const led = ledger();
-    await quiet(() => s.checkTorAndSend(rowOf(id)));
-    let r = rowOf(id);
-    ok('S8. post throws → stays tor_sending/posting with the S3 stored, NOT cancelled',
-      r.status === 'tor_sending' && r.tor_step === 'posting' && /"sta":"S3"/.test(r.tor_final_slate || '') &&
-      !/cancel_tx/.test(order(st)), `${order(st)} ${JSON.stringify(r)}`);
-    ok('S15. …no balance or ledger change while committed-but-unposted', JSON.stringify(acct()) === bal && ledger() === led);
-    backdate(id);
-    const posts = () => st.calls.filter((c) => c.method === 'post_tx');
-    await quiet(() => s.reclaimStaleTorSending());
-    ok('S8. the sweep posts the stored S3 again (the identical slate)', posts().length === 2 &&
-      JSON.stringify(posts()[1].params.slate) === r.tor_final_slate, `posts=${posts().length}`);
-    ok('S8. …journaled as "stepwise: repost … failed", row still posting, never cancelled',
-      rowOf(id).status === 'tor_sending' && /^stepwise: repost slate .* 1\/24 — failed/.test(notes(id).slice(-1)[0]) &&
-      !/cancel_tx/.test(order(st)), notes(id).slice(-1)[0]);
-    ok('S8. …and a warning payout_tor_stepwise alert is up', (activeAlert() || {}).level === 'warning', JSON.stringify(activeAlert()));
-    await quiet(() => s.reclaimStaleTorSending());
-    ok('S8. a second sweep inside 5 min does NOT post again (rate)', posts().length === 2, `posts=${posts().length}`);
-    db.prepare("UPDATE withdrawal_events SET created_at = created_at - 600 WHERE withdrawal_id = ? AND note LIKE 'stepwise: repost%'").run(id);
-    s.isFrozen = () => true;
-    await quiet(() => s.reclaimStaleTorSending());
-    ok('S8. while frozen the sweep does not post', posts().length === 2, `posts=${posts().length}`);
-    s.isFrozen = () => false;
-    postFails = false;
-    await quiet(() => s.reclaimStaleTorSending());
-    r = rowOf(id);
-    ok('S8. an OK post settles it: confirmed, S3 cleared', posts().length === 3 && r.status === 'confirmed' && r.tor_final_slate === null, JSON.stringify(r));
-    await quiet(() => s.reclaimStaleTorSending());
-    ok('S8. …exactly once (one debit, no further post)', posts().length === 3 && debits(id) === 1, `posts=${posts().length} debits=${debits(id)}`);
-    ok('S8. …and the alert resolved', !activeAlert(), JSON.stringify(activeAlert()));
-  }
-
-  // ── S9 freeze before delivery / before post → cancel, then requeue (no rung) ──
-  for (const [at, label] of [[2, 'delivery'], [3, 'post']]) {
-    const id = fresh();
-    const st = stepWallet(); st.id = id;
-    const s = stepScheduler(st);
-    let n = 0;
-    s.isFrozen = () => (++n === at);
-    await quiet(() => s.checkTorAndSend(rowOf(id)));
-    const r = rowOf(id);
-    const want = at === 2 ? 'init_send_tx,tx_lock_outputs,cancel_tx' : 'init_send_tx,tx_lock_outputs,deliver,finalize_tx,cancel_tx';
-    ok(`S9. freeze before ${label} → cancel, then back to tor_checking with retry_count unchanged`,
-      order(st) === want && r.status === 'tor_checking' && r.retry_count === 0 &&
-      /^stepwise: requeued — slate .* cancelled \(payouts frozen before /.test(notes(id).slice(-1)[0]),
-      `${order(st)} ${JSON.stringify(r)} ${notes(id).slice(-1)}`);
-  }
-
-  // ── S10 the sweep, per tor_step, plus both contradiction rows and a live row ──
-  {
-    reset();
-    db.exec("DELETE FROM alerts WHERE type = 'payout_tor_stepwise'");
-    const st = stepWallet();
-    const mk = (step, slate, finalSlate = null) => {
-      const id = seedWithdrawal({ status: 'tor_sending', retries: 0, priorAttempt: false, slate });
-      const old = Math.floor(Date.now() / 1000) - 3600;
-      db.prepare("INSERT INTO withdrawal_events (withdrawal_id, from_status, to_status, triggered_by, note, created_at) VALUES (?, 'tor_checking', 'tor_sending', 'scheduler', 'stepwise: claim', ?)").run(id, old);
-      db.prepare('UPDATE withdrawals SET tor_step = ?, tor_final_slate = ? WHERE id = ?').run(step, finalSlate, id);
-      return id;
-    };
-    const log = (slate, type, confirmed = false) => st.log.push({ id: 1, tx_slate_id: slate, tx_type: type, confirmed,
-      creation_ts: new Date().toISOString(), amount_debited: '99983500000', amount_credited: '0', fee: FEE_NANO });
-    const S3 = JSON.stringify({ id: U(9006), sta: 'S3' });
-    const ids = {
-      claimed: mk('claimed', null),
-      initiatedAbsent: mk('initiated', U(9001)),
-      lockedLive: mk('locked', U(9002)),
-      deliveringCancelled: mk('delivering', U(9003)),
-      finalizingMined: mk('finalizing', U(9004)),
-      postingLive: mk('posting', U(9006), S3),
-      postingCancelled: mk('posting', U(9007), S3),
-      postingAbsent: mk('posting', U(9008), S3),
-      live: mk('locked', U(9009)),
-    };
-    log(U(9002), 'TxSent'); log(U(9003), 'TxSentCancelled'); log(U(9004), 'TxSent', true);
-    log(U(9006), 'TxSent'); log(U(9007), 'TxSentCancelled'); log(U(9009), 'TxSent');
-    // A CLI attempt (a claim with no marker) carrying a stale tor_step left by an old stepwise one.
-    const cli = seedWithdrawal({ status: 'tor_sending', retries: 0, priorAttempt: true, slate: U(9010) });
-    db.prepare("UPDATE withdrawals SET tor_step = 'posting', tor_final_slate = ? WHERE id = ?").run(S3, cli);
-    const s = stepScheduler(st);
-    s._liveStepwise.add(Number(ids.live));
-    const ledBefore = {};
-    for (const k of ['postingCancelled', 'postingAbsent', 'live']) ledBefore[k] = db.prepare('SELECT COUNT(*) c FROM balance_log WHERE reference_id = ?').get(ids[k]).c;
-    await quiet(() => s.reclaimStaleTorSending());
-    const stat = (k) => rowOf(ids[k]).status;
-    const cancels = st.calls.filter((c) => c.method === 'cancel_tx').map((c) => c.params.tx_slate_id);
-    const posted = st.calls.filter((c) => c.method === 'post_tx').map((c) => c.params.slate.id);
-    ok('S10. claimed → tor_checking with no cancel', stat('claimed') === 'tor_checking', stat('claimed'));
-    ok('S10. initiated + slate absent (never locked) → tor_checking, no cancel',
-      stat('initiatedAbsent') === 'tor_checking' && !cancels.includes(U(9001)), stat('initiatedAbsent'));
-    ok('S10. locked + live TxSent → cancel, then tor_checking', stat('lockedLive') === 'tor_checking' && cancels.includes(U(9002)), stat('lockedLive'));
-    ok('S10. delivering + already cancelled → tor_checking without another cancel',
-      stat('deliveringCancelled') === 'tor_checking' && !cancels.includes(U(9003)), stat('deliveringCancelled'));
-    ok('S10. finalizing + CONFIRMED in the log → confirmed (chain evidence wins)', stat('finalizingMined') === 'confirmed', stat('finalizingMined'));
-    ok('S10. posting + live TxSent → the stored S3 is posted again → confirmed',
-      stat('postingLive') === 'confirmed' && posted.includes(U(9006)), `${stat('postingLive')} ${posted}`);
-    ok('S10. CONTRADICTION posting + cancelled → parked in tor_sending, never cancelled or posted',
-      stat('postingCancelled') === 'tor_sending' && !cancels.includes(U(9007)) && !posted.includes(U(9007)));
-    ok('S10. CONTRADICTION posting + absent → parked in tor_sending, never posted',
-      stat('postingAbsent') === 'tor_sending' && !posted.includes(U(9008)));
-    const alert = activeAlert() || {};
-    ok('S10. …both raise ONE critical payout_tor_stepwise alert naming them', alert.level === 'critical' &&
-      String(alert.message).includes(`#${ids.postingCancelled}:`) && String(alert.message).includes(`#${ids.postingAbsent}:`), JSON.stringify(alert));
-    ok('S10. a row whose attempt is live in this process is never touched',
-      stat('live') === 'tor_sending' && !cancels.includes(U(9009)), stat('live'));
-    ok('S10. a CLI attempt with a stale tor_step goes to the CLI branch (absent → ladder), never reposted',
-      rowOf(cli).status === 'retry_scheduled' && rowOf(cli).retry_count === 1 && !posted.includes(U(9010)), JSON.stringify(rowOf(cli)));
-    const ledAfter = {};
-    for (const k of ['postingCancelled', 'postingAbsent', 'live']) ledAfter[k] = db.prepare('SELECT COUNT(*) c FROM balance_log WHERE reference_id = ?').get(ids[k]).c;
-    ok('S15. the parked and live rows moved no money', JSON.stringify(ledBefore) === JSON.stringify(ledAfter),
-      `${JSON.stringify(ledBefore)} → ${JSON.stringify(ledAfter)}`);
-  }
-
-  // ── S11 re-attempt guard (§8.1.5) ──
-  {
-    const prior = (entries, { cliHistory = false } = {}) => {
-      const id = fresh({ slate: U(9101) });
-      const ev = db.prepare('INSERT INTO withdrawal_events (withdrawal_id, from_status, to_status, triggered_by, note) VALUES (?, ?, ?, \'scheduler\', ?)');
-      if (cliHistory) ev.run(id, 'tor_checking', 'tor_sending', null);
-      ev.run(id, 'tor_checking', 'tor_sending', 'stepwise: claim');
-      ev.run(id, 'tor_sending', 'tor_sending', `slate: ${U(9101)} created (stepwise)`);
-      ev.run(id, 'tor_sending', 'tor_checking', 'stepwise: requeued — x');
-      const st = stepWallet({ log: entries });
-      st.id = id;
-      return { id, st, s: stepScheduler(st) };
-    };
-    const ent = (slate, type, confirmed = false, net = 99.96) => ({ id: 7, tx_slate_id: slate, tx_type: type, confirmed,
-      creation_ts: new Date().toISOString(), amount_debited: String(Math.round(net * 1e9) + Number(FEE_NANO)),
-      amount_credited: '0', fee: FEE_NANO });
-    let h = prior([ent(U(9101), 'TxSent', false)]);
-    const errs = await quiet(() => h.s.checkTorAndSend(rowOf(h.id)));
-    ok('S11. a journaled slate still an UNCONFIRMED TxSent → deferred, no new init',
-      rowOf(h.id).status === 'retry_scheduled' && rowOf(h.id).retry_count === 0 && /^deferred: /.test(notes(h.id).slice(-1)[0]) &&
-      !/init_send_tx/.test(order(h.st)), `${order(h.st)} ${notes(h.id).slice(-1)}`);
-    ok('S11. …and it says the invariant is broken, loudly', errs.some((e) => /breaks the invariant/.test(e)), errs.join(' | '));
-    h = prior([ent(U(9101), 'TxSent', true)]);
-    await quiet(() => h.s.checkTorAndSend(rowOf(h.id)));
-    ok('S11. a journaled slate CONFIRMED → confirmed, no new init',
-      rowOf(h.id).status === 'confirmed' && !/init_send_tx/.test(order(h.st)), order(h.st));
-    h = prior([ent(U(9101), 'TxSentCancelled')]);
-    await quiet(() => h.s.checkTorAndSend(rowOf(h.id)));
-    ok('S11. every journaled slate cancelled → a NEW slate goes out',
-      rowOf(h.id).status === 'confirmed' && order(h.st).startsWith('init_send_tx') && rowOf(h.id).slate_id !== U(9101),
-      `${order(h.st)} ${rowOf(h.id).slate_id}`);
-    // Mixed history: an earlier CLI attempt never captured its slate id, and the wallet holds an
-    // unconfirmed send of exactly this payout's net. The stepwise slate is dead, but the CLI one
-    // may be live — so _priorSendLanded's amount branch must be asked too.
-    h = prior([ent(U(9101), 'TxSentCancelled'), ent('cli-slate-uncaptured', 'TxSent', false)], { cliHistory: true });
-    await quiet(() => h.s.checkTorAndSend(rowOf(h.id)));
-    ok('S11. mixed CLI history: the CLI amount match is consulted → unconfirmed → deferred, no new init',
-      rowOf(h.id).status === 'retry_scheduled' && !/init_send_tx/.test(order(h.st)), `${order(h.st)} ${JSON.stringify(rowOf(h.id))}`);
-    h = prior([ent(U(9101), 'TxSentCancelled')]);
-    h.st.w._encryptedCall = ((orig) => async (m, p, o) => {
-      if (m === 'retrieve_txs') throw new Error('owner API down');
-      return orig(m, p, o);
-    })(h.st.w._encryptedCall);
-    await quiet(() => h.s.checkTorAndSend(rowOf(h.id)));
-    ok('S11. an unreadable tx log before a re-attempt → parked (deferred), never a blind new slate',
-      rowOf(h.id).status === 'retry_scheduled' && !/init_send_tx/.test(order(h.st)), order(h.st));
-  }
-
-  // ── S12 markFailed (last rung) on a stepwise row ──
-  {
-    const id = fresh({ retries: 4 });
-    const st = stepWallet(); st.id = id;
-    await quiet(() => stepScheduler(st, { deliver: () => MINER_OFF }).checkTorAndSend(rowOf(id)));
-    ok('S12. last rung: the failed delivery is cancelled, markFailed reads it as absent → reversed',
-      rowOf(id).status === 'tor_failed' && acct().balance_locked === 0 && acct().balance === 100,
-      JSON.stringify({ r: rowOf(id), a: acct() }));
-    const id2 = fresh({ retries: 4, slate: U(9201) });
-    const st2 = stepWallet({ log: [{ id: 9, tx_slate_id: U(9201), tx_type: 'TxSent', confirmed: false,
-      creation_ts: new Date().toISOString(), amount_debited: '99983500000', amount_credited: '0', fee: FEE_NANO }] });
-    const s2 = stepScheduler(st2);
-    db.prepare("UPDATE withdrawals SET status = 'tor_sending' WHERE id = ?").run(id2);
-    await quiet(() => s2.markFailed(id2));
-    ok('S12. last rung with the latest slate still an unconfirmed TxSent → deferred, NOT refunded',
-      rowOf(id2).status === 'retry_scheduled' && acct().balance_locked === 100, JSON.stringify({ r: rowOf(id2), a: acct() }));
-  }
-
-  // ── S13 the switch ──
-  {
-    let id = fresh();
-    let st = stepWallet(); st.id = id;
-    const s = stepScheduler(st, { mode: 'cli' });
-    await quiet(() => s.checkTorAndSend(rowOf(id)));
-    ok("S13. mode 'cli' → the CLI send runs and no stepwise code (no init, no marker)",
-      s.torSendMode === 'cli' && order(st) === '' && st.calls.some((c) => c.method === 'cli-send') &&
-      !notes(id).some((x) => /^stepwise:/.test(x)), `${order(st)} ${JSON.stringify(notes(id))}`);
-    id = fresh();
-    st = stepWallet(); st.id = id;
-    let s2 = null;
-    const errs = await quiet(async () => { s2 = stepScheduler(st, { withWallet: false }); });
-    ok("S13. mode 'stepwise' with no Owner-API wallet → runs 'cli' and says so",
-      s2.torSendMode === 'cli' && errs.some((e) => /tor_send_mode is 'stepwise' but no Owner-API wallet/.test(e)), errs.join(' | '));
-    ok("S13. mode 'stepwise' with a wallet → stepwise", stepScheduler(stepWallet()).torSendMode === 'stepwise');
-  }
-
-  // ── S14 withSendLock across rails ──
-  {
-    const id = fresh();
-    db.prepare(`INSERT INTO miner_accounts (grin_address, balance, balance_locked) VALUES (?, 100, 0)
-                ON CONFLICT(grin_address) DO UPDATE SET balance = 100, balance_locked = 0`).run(ADDR2);
-    const st = stepWallet({ delay: { init_send_tx: 40, tx_lock_outputs: 40 } });
-    st.id = id;
-    const s = stepScheduler(st);
-    let spErr = null;
-    await quiet(async () => {
-      const p1 = s.checkTorAndSend(rowOf(id));
-      await sleep(5);
-      const p2 = s.createSlatepackWithdrawal(ADDR2, 30).catch((e) => { spErr = e.message; });
-      await Promise.all([p1, p2]);
-    });
-    const seq2 = st.calls.filter((c) => c.method === 'init_send_tx' || c.method === 'tx_lock_outputs')
-      .map((c) => `${c.method}:${c.method === 'init_send_tx' ? c.params.args.amount : c.params.slate.amt}`);
-    ok('S14. a slatepack create started during the stepwise init waits: its init_send_tx comes AFTER the stepwise lock',
-      seq2.join(' ') === 'init_send_tx:99960000000 tx_lock_outputs:99960000000 init_send_tx:29960000000 tx_lock_outputs:29960000000',
-      `${seq2.join(' ')} ${spErr || ''}`);
-    db.prepare('DELETE FROM withdrawal_events WHERE withdrawal_id IN (SELECT id FROM withdrawals WHERE grin_address = ?)').run(ADDR2);
-    db.prepare('DELETE FROM balance_log WHERE grin_address = ?').run(ADDR2);
-    db.prepare('DELETE FROM withdrawals WHERE grin_address = ?').run(ADDR2);
-    db.prepare('DELETE FROM miner_accounts WHERE grin_address = ?').run(ADDR2);
-  }
-
-  // ── S16 a lost step guard stops the attempt ──
-  {
-    const id = fresh();
-    const st = stepWallet(); st.id = id;
-    // Something else moves the row's step while delivery is in flight.
-    const s = stepScheduler(st, { deliver: (slate) => {
-      db.prepare("UPDATE withdrawals SET tor_step = 'posting' WHERE id = ?").run(id);
-      return { ok: true, slate: Object.assign({}, slate, { sta: 'S2' }) };
-    } });
-    await quiet(() => s.checkTorAndSend(rowOf(id)));
-    ok('S16. the delivering → finalizing guard is lost → no finalize, no post, no settle',
-      order(st) === 'init_send_tx,tx_lock_outputs,deliver' && rowOf(id).status === 'tor_sending', `${order(st)} ${rowOf(id).status}`);
-  }
-
-  // ── S17–S19 (Part 8 review): guards that no earlier case could fail ──
-  // A committed ('posting') row stopped by the sweep, `old` seconds after its claim.
-  const committed = (st, { claimAgo = 3600 } = {}) => {
-    reset();
-    db.exec("DELETE FROM alerts WHERE type = 'payout_tor_stepwise'");
-    const sid = U(9300 + (++slateSeq));
-    const id = seedWithdrawal({ status: 'tor_sending', retries: 0, priorAttempt: false, slate: sid });
-    db.prepare("INSERT INTO withdrawal_events (withdrawal_id, from_status, to_status, triggered_by, note, created_at) VALUES (?, 'tor_checking', 'tor_sending', 'scheduler', 'stepwise: claim', ?)")
-      .run(id, Math.floor(Date.now() / 1000) - claimAgo);
-    db.prepare('UPDATE withdrawals SET tor_step = ?, tor_final_slate = ? WHERE id = ?')
-      .run('posting', JSON.stringify({ id: sid, sta: 'S3' }), id);
-    st.log.push({ id: 1, tx_slate_id: sid, tx_type: 'TxSent', confirmed: false, creation_ts: new Date().toISOString(),
-      amount_debited: '99983500000', amount_credited: '0', fee: FEE_NANO });
-    st.id = id;
-    return { id, sid };
   };
-  const repostEv = (id, n, ago) => {
-    const ins = db.prepare("INSERT INTO withdrawal_events (withdrawal_id, from_status, to_status, triggered_by, note, created_at) VALUES (?, 'tor_sending', 'tor_sending', 'scheduler', 'stepwise: repost slate x — failed: x', ?)");
-    for (let i = 0; i < n; i++) ins.run(id, Math.floor(Date.now() / 1000) - ago);
-  };
-  const postsOf = (st) => st.calls.filter((c) => c.method === 'post_tx').length;
-  {
-    // The safety line itself: nothing is cancelled from 'posting' on. No path reaches the refusal
-    // today, so it is pinned directly — a future caller must not be able to cancel a committed tx.
-    const st = stepWallet();
-    const { id, sid } = committed(st);
-    const s = stepScheduler(st);
-    let r;
-    await quiet(async () => { r = await s._stepwiseCancelThen(id, sid, { requeue: true }, 'test'); });
-    ok('S17. _stepwiseCancelThen on a POSTING row refuses: no cancel_tx, row stays tor_sending/posting',
-      r === false && !/cancel_tx/.test(order(st)) && rowOf(id).status === 'tor_sending' && rowOf(id).tor_step === 'posting',
-      `${r} ${order(st)} ${JSON.stringify(rowOf(id))}`);
-  }
-  for (const [n, want] of [[24, 0], [23, 1]]) {
-    // Bounded: after MAX_STEPWISE_REPOSTS the sweep stops posting (the old repost events are an
-    // hour old, so it is the CAP that stops it, not the 5-min rate). 23 is the control.
-    const st = stepWallet();
-    const { id } = committed(st);
-    repostEv(id, n, 3600);
-    await quiet(() => stepScheduler(st).reclaimStaleTorSending());
-    ok(`S18. ${n} earlier reposts → the sweep posts ${want} more time(s)${n === 24 ? ', and the alert is critical' : ''}`,
-      postsOf(st) === want && (n !== 24 || (activeAlert() || {}).level === 'critical'),
-      `posts=${postsOf(st)} ${JSON.stringify(activeAlert())}`);
-  }
-  {
-    // The stale age counts CLAIM events only: a repost 6 min ago must not push the next look out
-    // to 10 min, or it silently overrides the 5-min re-post rate (Part 6 deviation b).
-    const st = stepWallet({ hooks: { post_tx: () => { throw new Error('HTTP 500: node refused'); } } });
-    const { id } = committed(st);
-    repostEv(id, 1, 360);
-    await quiet(() => stepScheduler(st).reclaimStaleTorSending());
-    ok('S19. claim 1 h old + last repost 6 min ago → the sweep posts again (age is the claim, not the repost)',
-      postsOf(st) === 1, `posts=${postsOf(st)}`);
-  }
+
+  reset(); sends = [];
+  db.exec('DELETE FROM payout_control');
+  const fund = db.prepare(`INSERT INTO miner_accounts (grin_address, balance, balance_locked) VALUES (?, 100, 0)
+                           ON CONFLICT(grin_address) DO UPDATE SET balance = 100, balance_locked = 0`);
+  fund.run(ADDR); fund.run(ADDR2);
+  const s = new WithdrawalScheduler(config, w);
+  s.incentives = { maybePayJoinBonus() {} };
+  const errs = [];
+  await quiet(async () => {
+    const p1 = s.createSlatepackWithdrawal(ADDR, 100).catch((e) => { errs.push(e.message); });
+    await sleep(5);
+    const p2 = s.createSlatepackWithdrawal(ADDR2, 30).catch((e) => { errs.push(e.message); });
+    await Promise.all([p1, p2]);
+  });
+  const seq = calls.filter((c) => c.method === 'init_send_tx' || c.method === 'tx_lock_outputs')
+    .map((c) => `${c.method}:${c.method === 'init_send_tx' ? c.params.args.amount : c.params.slate.amt}`);
+  ok('L1. a second slatepack create started during the first one\'s init waits: its init_send_tx comes AFTER the first lock',
+    errs.length === 0 &&
+    seq.join(' ') === 'init_send_tx:99960000000 tx_lock_outputs:99960000000 init_send_tx:29960000000 tx_lock_outputs:29960000000',
+    `${seq.join(' ')} ${errs.join(' | ')}`);
+
+  db.prepare('DELETE FROM withdrawal_events WHERE withdrawal_id IN (SELECT id FROM withdrawals WHERE grin_address = ?)').run(ADDR2);
+  db.prepare('DELETE FROM balance_log WHERE grin_address = ?').run(ADDR2);
+  db.prepare('DELETE FROM withdrawals WHERE grin_address = ?').run(ADDR2);
+  db.prepare('DELETE FROM miner_accounts WHERE grin_address = ?').run(ADDR2);
+  reset();
 }
 
 // ═══ [review] Part 8 — independent review of Parts 1–6 (2026-09-25) ═════════════════════════
@@ -1973,8 +1170,9 @@ async function reviewSection() {
   const C1 = '0000c001-0000-4000-8000-000000000000';   // a CLI send whose slate was never captured
   const ev = db.prepare(
     'INSERT INTO withdrawal_events (withdrawal_id, from_status, to_status, triggered_by, note, created_at) VALUES (?, ?, ?, \'scheduler\', ?, ?)');
-  // Attempt 1 was STEPWISE (slate SW, cancelled, row back on the ladder), then the operator switched
-  // tor_send_mode back to 'cli'. slate_id still holds SW — the stepwise rail wrote it before its lock.
+  // Attempt 1 was STEPWISE (slate SW, cancelled, row back on the ladder); every later attempt is CLI.
+  // slate_id still holds SW — the stepwise rail wrote it before its lock. That rail was DELETED
+  // 2026-09-26, but a row it touched can still exist, so R1–R3 stay: they pin _dropStepwiseSlate.
   const stepwiseThenCli = ({ retries = 1 } = {}) => {
     reset(); sends = []; timeline = [];
     db.exec('DELETE FROM payout_control');
@@ -1994,47 +1192,45 @@ async function reviewSection() {
     ev.run(id, 'tor_sending', 'retry_scheduled', 'Retry 2/4', t);
   };
 
-  // ── R1 a CLI re-attempt must not trust a dead STEPWISE slate as "this payout's send" ──
+  // ── R1 a stepwise row is never sent again, and its Held check does not trust the dead slate ──
+  // Since 2026-09-26 a row with any earlier attempt is held, never re-sent. _dropStepwiseSlate still
+  // matters: the Held check reads slate_id as THIS payout's send, so a left-over cancelled stepwise
+  // slate reads "absent" and two such reads would REFUND a payout whose CLI send landed.
   for (const mined of [false, true]) {
     const id = stepwiseThenCli();
     addCliAttempt(id);
-    const s = newScheduler([tx({ slate: SW, type: 'TxSentCancelled' }), tx({ slate: C1, confirmed: mined })]);
+    const s = newScheduler([tx({ slate: SW, type: 'TxSentCancelled' }), tx({ slate: C1, confirmed: mined, when: nowS() - 2000 })]);
     await quiet(() => s.checkTorAndSend(rowOf(id)));
-    ok(`R1. stepwise → cli: the earlier CLI send is ${mined ? 'MINED → confirmed' : 'unconfirmed → deferred'}, never sent again`,
-      sends.length === 0 && rowOf(id).status === (mined ? 'confirmed' : 'retry_scheduled'),
-      JSON.stringify({ sends: sends.length, row: rowOf(id) }));
+    const heldFirst = rowOf(id).status === 'tor_held';
+    await thrown(() => quiet(() => s.resolveHeldTor()));
+    ok(`R1. stepwise → cli: never sent again; the earlier CLI send is ${mined ? 'MINED → confirmed' : 'unconfirmed → still held'}`,
+      sends.length === 0 && heldFirst && rowOf(id).status === (mined ? 'confirmed' : 'tor_held'),
+      JSON.stringify({ sends: sends.length, heldFirst, row: rowOf(id) }));
   }
 
-  // ── R2 …nor refund on its last rung ──
-  {
-    const id = stepwiseThenCli({ retries: 4 });
-    const log = [tx({ slate: SW, type: 'TxSentCancelled' })];
-    const s = newScheduler(log);
-    // The final CLI attempt is SIGKILLed after it posted, and the tx mines before the guard asks.
-    s.walletTor.sendToTorAddress = async (address, amount) => {
-      sends.push({ address, amount });
-      log.push(tx({ slate: C1, confirmed: true }));
-      return { success: false, error: 'Command timed out after 120000ms' };
-    };
-    await quiet(() => s.checkTorAndSend(rowOf(id)));
-    ok('R2. stepwise → cli, last rung: the "failed" send is confirmed → settled, NOT refunded',
-      rowOf(id).status === 'confirmed' && acct().balance === 0, JSON.stringify({ row: rowOf(id), acct: acct() }));
-  }
-
-  // ── R3 a successful CLI send records ITS slate, not the dead stepwise one ──
+  // ── R2 …and two absent reads of the DEAD slate never refund it ──
   {
     const id = stepwiseThenCli();
-    const log = [tx({ slate: SW, type: 'TxSentCancelled' })];
-    const s = newScheduler(log);
-    s.walletTor.sendToTorAddress = async (address, amount) => {
-      sends.push({ address, amount });
-      log.push(tx({ slate: C1 }));
-      return { success: true };
-    };
+    addCliAttempt(id);
+    const s = newScheduler([tx({ slate: SW, type: 'TxSentCancelled' }), tx({ slate: C1, confirmed: false, when: nowS() - 2000 })]);
     await quiet(() => s.checkTorAndSend(rowOf(id)));
+    await thrown(() => quiet(() => s.resolveHeldTor()));
+    db.prepare("UPDATE withdrawal_events SET created_at = created_at - 3600 WHERE withdrawal_id = ?").run(id);
+    await thrown(() => quiet(() => s.resolveHeldTor()));
+    ok('R2. stepwise → cli: the unconfirmed CLI send keeps it HELD — never refunded on the cancelled stepwise slate',
+      rowOf(id).status === 'tor_held' && acct().balance === 0 && acct().balance_locked === 100, JSON.stringify({ row: rowOf(id), acct: acct() }));
+  }
+
+  // ── R3 a confirmed CLI send is recorded as ITS slate, not the dead stepwise one ──
+  {
+    const id = stepwiseThenCli();
+    addCliAttempt(id);
+    const s = newScheduler([tx({ slate: SW, type: 'TxSentCancelled' }), tx({ slate: C1, confirmed: true, when: nowS() - 2000 })]);
+    await quiet(() => s.checkTorAndSend(rowOf(id)));
+    await thrown(() => quiet(() => s.resolveHeldTor()));
     // With SW left in place the watchdog reads the paid row as CANCELLED — a false critical alert
     // whose runbook says "credit the balance back or pay again".
-    ok('R3. stepwise → cli success: slate_id is the CLI send\'s slate, so kernel proof + watchdog look at the real tx',
+    ok('R3. stepwise → cli confirmed: slate_id is the CLI send\x27s slate, so kernel proof + watchdog look at the real tx',
       rowOf(id).status === 'confirmed' && rowOf(id).slate_id === C1, JSON.stringify(rowOf(id)));
   }
 
@@ -2042,10 +1238,8 @@ async function reviewSection() {
   {
     reset(); sends = []; timeline = [];
     db.exec('DELETE FROM payout_control');
-    const due = Math.floor(Date.now() / 1000) - 60;
-    const a = seedWithdrawal({ status: 'retry_scheduled', retries: 1, priorAttempt: false });
-    const b = seedWithdrawal({ status: 'retry_scheduled', retries: 1, priorAttempt: false });
-    db.prepare('UPDATE withdrawals SET next_retry_at = ? WHERE id IN (?, ?)').run(due, a, b);
+    const a = seedWithdrawal({ status: 'tor_checking', retries: 0, priorAttempt: false });
+    const b = seedWithdrawal({ status: 'tor_checking', retries: 0, priorAttempt: false });
     const s = newScheduler([]);
     // AlertMonitor runs on its own timer: a critical trip can freeze payouts while one CLI send of
     // the batch is still in flight (up to wallet_send_timeout_ms each).
@@ -2054,9 +1248,9 @@ async function reviewSection() {
       if (sends.length === 1) s.freeze('wallet_drain (test)', 'alert_monitor');
       return { success: true };
     };
-    await quiet(() => s.processRetryQueue());
+    await quiet(() => s.processTorChecks());
     const st = [rowOf(a).status, rowOf(b).status].sort().join(',');
-    ok('R4. a freeze landing mid-batch: exactly one send, the other row waits in the queue unsent',
+    ok('R4. a freeze landing mid-batch: exactly one send, the other row waits in tor_checking unsent',
       sends.length === 1 && st === 'confirmed,tor_checking', `${sends.length} ${st}`);
     await quiet(async () => { s.resume('test'); });
     sends = [];
@@ -2099,3 +1293,1646 @@ async function reviewSection() {
     }
   }
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════════
+// ONE ATTEMPT + HELD + TOR PAUSE (plan script07_tor_one_attempt, Session 2 — 2026-09-26)
+// A Tor payout is tried ONCE. It ends Paid, Failed (balance back now — only on wallet proof that
+// nothing was sent) or Held (outcome unknown: amount stays locked, never re-sent). 5 counted
+// failures in 24 h pause Tor for that address. Every case below failed on the code before it.
+// ═══════════════════════════════════════════════════════════════════════════════════════════════
+
+// A section that throws (e.g. a method that does not exist yet) is ONE failure, and the rest run.
+async function guarded(fn) {
+  try { await fn(); }
+  catch (e) { fail++; console.log(`  FAIL  ${fn.name} crashed: ${e && e.message}`); }
+}
+const reversalOf = (id) => db.prepare("SELECT 1 FROM balance_log WHERE reference_id = ? AND event_type = 'reversal'").get(id);
+// Refunded: tor_failed, the whole 100 back in spendable, nothing locked, a reversal on the ledger.
+const refundedOk = (id) => rowOf(id).status === 'tor_failed' && Math.abs(acct().balance - 100) < 1e-9 &&
+  Math.abs(acct().balance_locked) < 1e-9 && !!reversalOf(id);
+// Held: tor_held, the 100 still locked, no reversal.
+const heldOk = (id) => rowOf(id).status === 'tor_held' && Math.abs(acct().balance) < 1e-9 &&
+  Math.abs(acct().balance_locked - 100) < 1e-9 && !reversalOf(id);
+const alertOf = (type) => db.prepare("SELECT * FROM alerts WHERE type = ? AND status = 'active' ORDER BY id DESC LIMIT 1").get(type);
+const fund = (bal, addr = ADDR) => db.prepare(
+  `INSERT INTO miner_accounts (grin_address, balance, balance_locked) VALUES (?, ?, 0)
+   ON CONFLICT(grin_address) DO UPDATE SET balance = excluded.balance, balance_locked = 0`).run(addr, bal);
+// A settled Tor failure `agoS` seconds ago (the tor_failed EVENT carries the time the pause counts).
+const seedFailed = (code, agoS, addr = ADDR) => {
+  const id = Number(db.prepare(
+    `INSERT INTO withdrawals (grin_address, amount, fee_charged, status, method, fail_code, created_at)
+     VALUES (?, 25, 0.04, 'tor_failed', 'tor', ?, ?)`).run(addr, code, nowS() - agoS - 30).lastInsertRowid);
+  evNote.run(id, 'tor_sending', 'tor_failed', 'test: settled failure', nowS() - agoS);
+  return id;
+};
+// A slatepack-capable fake Owner API (init → lock → message), for the Slatepack-offer cases.
+const spWallet = (extra = {}) => ({
+  n: 0,
+  async initSendTx(a) { this.n++; return { id: `sp-offer-${seq}-${this.n}`, amt: a, fee: '23500000' }; },
+  async txLockOutputs() {},
+  async createSlatepackMessage() { return 'BEGINSLATEPACK. offer . ENDSLATEPACK.'; },
+  async cancelTx() {},
+  async getTransactions() { return []; },
+  ...extra,
+});
+
+async function oneAttemptSection() {
+  console.log('\n[one-attempt] the single Tor send ends A (paid) / B+C (refund on proof) / D (held)');
+  const FB = '5c8a4e6b-3f1d-4a92-9b7e-0d2c1f3e4a5b';
+  const OFFLINE = { online: false, reason: 'onion_unreachable' };
+  const oa = ({ result, log = [], readable = true, cancelThrows = false, probe = OFFLINE } = {}) => {
+    const cancels = []; const probes = [];
+    const s = new WithdrawalScheduler(config, {
+      async getTransactions() { timeline.push('wallet'); if (!readable) throw new Error('owner API down'); return log; },
+      async cancelTx(id) {
+        timeline.push('cancel'); cancels.push(id);
+        if (cancelThrows) throw new Error('owner API down');
+        const e = log.find((t) => t.tx_slate_id === id); if (e) e.tx_type = 'TxSentCancelled';
+      },
+    });
+    s.walletTor = {
+      async sendToTorAddress(address, amount) {
+        timeline.push('send'); sends.push({ address, amount });
+        if (result instanceof Error) throw result;
+        return typeof result === 'function' ? result(log) : result;
+      },
+      async probeToronlineStatus(addr) {
+        timeline.push('probe'); probes.push(addr);
+        if (probe instanceof Error) throw probe;
+        return probe;
+      },
+    };
+    s.recordTorFee = async () => {};
+    s.incentives = { maybePayJoinBonus() {} };
+    return { s, cancels, probes };
+  };
+  const laddered = [];
+  const first = () => {
+    reset(); sends = []; timeline = [];
+    db.exec('DELETE FROM payout_control');
+    return seedWithdrawal({ status: 'tor_checking', retries: 0, priorAttempt: false });
+  };
+  const noLadder = (id, label) => {
+    const ev = db.prepare("SELECT 1 FROM withdrawal_events WHERE withdrawal_id = ? AND to_status = 'retry_scheduled'").get(id);
+    if (rowOf(id).status === 'retry_scheduled' || ev) laddered.push(label);
+  };
+  const FALLBACK = { success: false, torFallback: true, slateId: FB,
+    error: 'Tor delivery failed: grin-wallet fell back to printing a slatepack — nothing was posted' };
+
+  // ── A — sent ──
+  {
+    const id = first();
+    db.exec("DELETE FROM alerts WHERE type = 'tor_send_path'");
+    const t = new Date().toISOString();
+    db.prepare("INSERT INTO alerts (type, level, message, data, status, triggered_at, last_seen) VALUES ('tor_send_path', 'warning', 'x', '{}', 'active', ?, ?)").run(t, t);
+    const h = oa({ result: { success: true } });
+    await quiet(() => h.s.sendWithdrawal(id));
+    ok('A. "Tx sent successfully" → confirmed, ONE send, no probe, no cancel',
+      rowOf(id).status === 'confirmed' && sends.length === 1 && h.probes.length === 0 && h.cancels.length === 0,
+      JSON.stringify({ row: rowOf(id).status, t: timeline }));
+    ok('A. …a delivered Tor send resolves an open tor_send_path alert (the pool\'s own Tor works again)', !alertOf('tor_send_path'));
+    noLadder(id, 'A');
+  }
+
+  // ── B — fell back to a slatepack, its slate cancelled → refund now; ONE fresh probe names why ──
+  for (const [probe, code, label] of [
+    [OFFLINE, 'wallet_offline', 'probe says OFFLINE'],
+    [{ online: true, reason: 'reachable' }, 'pool_send_path', 'probe says the wallet ANSWERS'],
+    [{ online: null, reason: 'tor_unavailable' }, 'wallet_unreachable', 'probe could not look (null)'],
+    [new Error('socks exploded'), 'wallet_unreachable', 'probe THROWS'],
+  ]) {
+    const id = first();
+    db.exec("DELETE FROM alerts WHERE type = 'tor_send_path'");
+    const h = oa({ result: FALLBACK, probe, log: [tx({ slate: FB, confirmed: false })] });
+    await quiet(() => h.s.sendWithdrawal(id));
+    ok(`B. fallback + cancel ok, ${label} → tor_failed, fail_code ${code}, balance back NOW`,
+      refundedOk(id) && rowOf(id).fail_code === code, JSON.stringify({ row: rowOf(id), acct: acct() }));
+    ok(`B. …(${code}) its own slate cancelled first, then the onion probed exactly once — nothing else`,
+      h.cancels.join() === FB && h.probes.length === 1 && h.probes[0] === ADDR && timeline.join(',') === 'send,cancel,probe',
+      timeline.join(','));
+    const sp = alertOf('tor_send_path');
+    ok(`B. …(${code}) tor_send_path alert ${code === 'pool_send_path' ? 'RAISED as a warning naming the payout' : 'not raised'}`,
+      code === 'pool_send_path' ? (!!sp && sp.level === 'warning' && sp.message.includes(`#${id}`)) : !sp, JSON.stringify(sp));
+    const d = rowOf(id).fail_detail;
+    ok(`B. …(${code}) fail_detail keeps the CLI error for the operator, ≤ 500 chars`,
+      typeof d === 'string' && d.length > 0 && d.length <= 500, String(d));
+    noLadder(id, `B ${code}`);
+  }
+  {
+    // A pool_send_path repeat rolls into the SAME alert (one rolling row, not one per payout).
+    const id0 = first();
+    db.exec("DELETE FROM alerts WHERE type = 'tor_send_path'");
+    await quiet(() => oa({ result: FALLBACK, probe: { online: true, reason: 'reachable' }, log: [tx({ slate: FB })] }).s.sendWithdrawal(id0));
+    const t0 = alertOf('tor_send_path');
+    const id = first();
+    await quiet(() => oa({ result: FALLBACK, probe: { online: true, reason: 'reachable' }, log: [tx({ slate: FB })] }).s.sendWithdrawal(id));
+    const t1 = alertOf('tor_send_path');
+    const n = db.prepare("SELECT COUNT(*) c FROM alerts WHERE type = 'tor_send_path' AND status = 'active'").get().c;
+    ok('B. a second pool_send_path within 24 h rolls into the same alert', !!t0 && !!t1 && t1.id === t0.id && t1.occurrence_count === 2 && n === 1,
+      JSON.stringify({ t0: t0 && t0.id, t1 }));
+  }
+
+  // ── C — refused before any tx exists (NotEnoughFunds) ──
+  const SHORT = 'Command failed (code 1): Wallet command failed: Not enough funds. Required: 99.96, Available: 12.5';
+  {
+    const id = first();
+    db.exec("DELETE FROM alerts WHERE type = 'pool_wallet_short'");
+    const h = oa({ result: { success: false, error: SHORT } });
+    await quiet(() => h.s.sendWithdrawal(id));
+    ok('C1. NotEnoughFunds + the tx log shows no match → tor_failed, fail_code pool_busy, balance back NOW',
+      refundedOk(id) && rowOf(id).fail_code === 'pool_busy', JSON.stringify({ row: rowOf(id), acct: acct() }));
+    ok('C1. …the tx log was READ before the refund (proof of absence); nothing cancelled, nothing probed',
+      timeline.join(',') === 'send,wallet' && h.cancels.length === 0 && h.probes.length === 0, timeline.join(','));
+    const a1 = alertOf('pool_wallet_short');
+    ok('C1. …ONE pool_wallet_short alert carries the real wallet figures (operator side)',
+      !!a1 && /Available: 12\.5/.test(a1.message) && a1.occurrence_count === 1, a1 && a1.message);
+    ok('C1. …the public fail_code is the enum only; the figures live in the admin-only fail_detail',
+      rowOf(id).fail_code === 'pool_busy' && /Available: 12\.5/.test(String(rowOf(id).fail_detail)), String(rowOf(id).fail_detail));
+    noLadder(id, 'C1');
+    const id2 = first();
+    await quiet(() => oa({ result: { success: false, error: SHORT.replace('12.5', '7.25') } }).s.sendWithdrawal(id2));
+    const a2 = alertOf('pool_wallet_short');
+    ok('C1. a second shortfall within 24 h rolls into the same alert (count 2, latest figures)',
+      !!a1 && !!a2 && a2.id === a1.id && a2.occurrence_count === 2 && /7\.25/.test(a2.message), JSON.stringify(a2));
+  }
+  {
+    const id = first();
+    const h = oa({ result: (log) => { log.push(tx({ slate: 'C-UNCONF' })); return { success: false, error: SHORT }; } });
+    await quiet(() => h.s.sendWithdrawal(id));
+    ok('C2. NotEnoughFunds but the tx log holds an UNCONFIRMED match → HELD, not refunded', heldOk(id), JSON.stringify({ row: rowOf(id), acct: acct() }));
+    noLadder(id, 'C2');
+  }
+  {
+    const id = first();
+    const h = oa({ result: { success: false, error: SHORT }, readable: false });
+    await quiet(() => h.s.sendWithdrawal(id));
+    ok('C3. NotEnoughFunds but the tx log is UNREADABLE → HELD (no proof of absence → no refund)', heldOk(id), JSON.stringify({ row: rowOf(id), acct: acct() }));
+    noLadder(id, 'C3');
+  }
+
+  // ── D — anything else: the pool cannot tell → Held ──
+  for (const [label, opts] of [
+    ['timeout kill', { result: { success: false, error: 'grin-wallet timed out after 120000ms' } }],
+    ['unrecognised exit-0 output', { result: { success: false, error: 'grin-wallet send exited 0 without reporting "Tx sent successfully" — outcome unknown' } }],
+    ['any other CLI error', { result: { success: false, error: 'Command failed (code 1): LibWallet Error: Unknown' } }],
+    ['fallback with NO slate id', { result: Object.assign({}, FALLBACK, { slateId: null }) }],
+    ['fallback whose cancel FAILS', { result: FALLBACK, cancelThrows: true, log: [tx({ slate: FB })] }],
+    ['the send call itself throws', { result: new Error('spawn grin-wallet ENOENT') }],
+  ]) {
+    const id = first();
+    const h = oa(opts);
+    await quiet(() => h.s.sendWithdrawal(id));
+    ok(`D. ${label} → tor_held: amount stays locked, no refund`, heldOk(id), JSON.stringify({ row: rowOf(id), acct: acct() }));
+    ok(`D. …${label}: never probed, sent exactly once, nothing cancelled but its own fallback slate`,
+      h.probes.length === 0 && sends.length === 1 && h.cancels.every((c) => c === FB), JSON.stringify({ p: h.probes, c: h.cancels, t: timeline }));
+    ok(`D. …${label}: the hold is journaled with a reason`,
+      !!db.prepare("SELECT 1 FROM withdrawal_events WHERE withdrawal_id = ? AND to_status = 'tor_held' AND note LIKE 'held:%'").get(id));
+    if (label === 'fallback whose cancel FAILS') {
+      ok('D. …the un-cancelled fallback slate is recorded as THIS payout\'s slate (the Held check then looks it up exactly)',
+        rowOf(id).slate_id === FB, String(rowOf(id).slate_id));
+    }
+    noLadder(id, `D ${label}`);
+  }
+
+  ok('no outcome of a new Tor payout writes retry_scheduled (row status or event)', laddered.length === 0, laddered.join(', '));
+  const src = fs.readFileSync(path.join(APP, 'lib/withdrawal-scheduler.js'), 'utf8').replace(/^\s*\/\/.*$/gm, '');
+  ok('…and no statement in the scheduler can: no SET status = \'retry_scheduled\', no event INTO it',
+    !/SET\s+status\s*=\s*'retry_scheduled'/.test(src) && !/'retry_scheduled'\s*,\s*'scheduler'/.test(src) &&
+    !/VALUES \(\?, \?, 'retry_scheduled'/.test(src));
+  ok('…and the ladder machinery is gone (processRetryQueue, scheduleRetry, markFailed, _deferSend, retryDelays)',
+    !/\basync processRetryQueue\(|\basync scheduleRetry\(|\basync markFailed\(|\b_deferSend\(|this\.retryDelays\b/.test(src));
+  reset();
+}
+
+async function heldSection() {
+  console.log('\n[held] Held resolution — confirm on proof; refund only on TWO absent reads ≥ 10 min apart; never re-send');
+  // (Session 4) A held row's own send was locked inside its attempt — claimed at now−3600, held at
+  // now−heldAgoS — so a tx that IS this row's is dated inside that span (SENT), never after the hold.
+  const SENT = nowS() - 1800;
+  const seedHeld = ({ slate = null, heldAgoS = 60 } = {}) => {
+    const id = seedWithdrawal({ status: 'tor_held', slate, retries: 0, priorAttempt: true });
+    evNote.run(id, 'tor_sending', 'tor_held', 'held: test', nowS() - heldAgoS);
+    return id;
+  };
+  const absentReads = (id) => db.prepare("SELECT COUNT(*) c FROM withdrawal_events WHERE withdrawal_id = ? AND note LIKE 'held-check: absent%'").get(id).c;
+  const age = (id, secs) => db.prepare("UPDATE withdrawal_events SET created_at = created_at - ? WHERE withdrawal_id = ? AND note LIKE 'held-check: absent%'").run(secs, id);
+  const run = (s) => thrown(() => quiet(() => s.resolveHeldTor()));
+
+  {
+    reset(); sends = [];
+    const id = seedHeld();
+    await run(newScheduler([tx({ slate: 'H-CONF', confirmed: true, when: SENT })]));
+    ok('H1. held + tx log CONFIRMED → confirmed: lock released and debited once, its slate recorded, nothing sent',
+      rowOf(id).status === 'confirmed' && acct().balance === 0 && acct().balance_locked === 0 && rowOf(id).slate_id === 'H-CONF' && sends.length === 0,
+      JSON.stringify({ row: rowOf(id), acct: acct() }));
+  }
+  {
+    reset(); sends = [];
+    const id = seedHeld();
+    const s = newScheduler([]);
+    await run(s);
+    ok('H2. first ABSENT read → still held, still locked, and that read is journaled', heldOk(id) && absentReads(id) === 1,
+      JSON.stringify({ row: rowOf(id).status, reads: absentReads(id) }));
+    await run(s);
+    ok('H3. a second absent read seconds later → STILL held (one read racing a live wallet process must not refund)', heldOk(id));
+    ok('H3. …and the repeat read does not restart the streak', absentReads(id) === 1, String(absentReads(id)));
+    age(id, 9 * 60);
+    await run(s);
+    ok('H3. …9 min apart → still held', heldOk(id));
+    age(id, 65);
+    await run(s);
+    ok('H4. absent again ≥ 10 min after the first read → tor_failed, fail_code unknown, balance back',
+      refundedOk(id) && rowOf(id).fail_code === 'unknown', JSON.stringify({ row: rowOf(id), acct: acct() }));
+    ok('H4. …and nothing was ever re-sent', sends.length === 0);
+    const p = typeof s.torPauseStatus === 'function' ? s.torPauseStatus(ADDR) : null;
+    ok('H4. …a Held refund is NOT counted toward the Tor pause', !!p && p.failures_24h === 0, JSON.stringify(p));
+  }
+  {
+    reset();
+    const id = seedHeld();
+    const log = [];
+    const s = newScheduler(log);
+    await run(s);                          // absent #1
+    age(id, 20 * 60);
+    log.push(tx({ slate: 'H-FLICKER', when: SENT }));  // an unconfirmed match shows up
+    await run(s);
+    log.length = 0;                        // …and is gone again
+    await run(s);
+    ok('H5. absent → UNCONFIRMED → absent: the earlier absent read no longer counts (streak restarts)', heldOk(id),
+      JSON.stringify(eventsOf(id).map((e) => e.note)));
+  }
+  {
+    reset();
+    const id = seedHeld({ slate: 'H-CANC' });
+    const s = newScheduler([tx({ slate: 'H-CANC', type: 'TxSentCancelled' })]);
+    await run(s); age(id, 11 * 60); await run(s);
+    ok('H6. its slate TxSentCancelled on two reads ≥ 10 min apart → refunded (a cancelled tx never reached the chain)',
+      refundedOk(id) && rowOf(id).fail_code === 'unknown', JSON.stringify(rowOf(id)));
+  }
+  {
+    reset();
+    const id = seedHeld();
+    const s = newScheduler([], { walletReadable: false });
+    await run(s); await run(s);
+    ok('H7. wallet unreadable → stays held, and no absent read is journaled from a read that never happened',
+      heldOk(id) && absentReads(id) === 0);
+  }
+  {
+    reset(); sends = [];
+    db.exec("DELETE FROM alerts WHERE type = 'payout_held'");
+    const id = seedHeld({ heldAgoS: 25 * 3600 });
+    const s = newScheduler([tx({ slate: 'H-STUCK', when: SENT })]);
+    await run(s);
+    const al = alertOf('payout_held');
+    ok('H8. held > 24 h and still unconfirmed → ONE rolling CRITICAL payout_held alert naming it',
+      !!al && al.level === 'critical' && al.message.includes(`#${id}`), JSON.stringify(al));
+    ok('H8. …still held, still locked, never sent', heldOk(id) && sends.length === 0);
+    await run(s);
+    ok('H8. …a second tick rolls it, never stacks', db.prepare("SELECT COUNT(*) c FROM alerts WHERE type = 'payout_held' AND status = 'active'").get().c === 1);
+    reset();
+    seedHeld({ heldAgoS: 3600 });
+    await run(newScheduler([tx({ slate: 'H-YOUNG' })]));
+    ok('H8. nothing held past 24 h → the alert is resolved', !alertOf('payout_held'));
+    // Every pass of the loop, many times over: a held row is never handed to the wallet to send.
+    reset(); sends = [];
+    const id2 = seedHeld();
+    const s2 = newScheduler([]);
+    for (let i = 0; i < 3; i++) {
+      await quiet(() => s2.processTorChecks());
+      await quiet(() => s2.reclaimStaleTorSending());
+      await run(s2);
+    }
+    ok('H8. …three full passes over a held row → zero sends', sends.length === 0 && rowOf(id2).status === 'tor_held');
+  }
+  {
+    reset();
+    const id = seedHeld();
+    const s = newScheduler([]);
+    await quiet(async () => s.freeze('test freeze', 'test'));
+    await run(s); age(id, 11 * 60); await run(s);
+    // Changed by the 2026-09-26 /review (#1): restore and Migrate IN freeze payouts precisely so
+    // nothing moves before the operator reconciles, and a refund here is decided by reading a
+    // wallet log that a restore may have replaced. Confirmations still run (see [review-fixes]).
+    ok('H9. payouts FROZEN: the Held check still runs, but it never REFUNDS — that waits for a resume',
+      heldOk(id), JSON.stringify(rowOf(id)));
+    db.exec('DELETE FROM payout_control');
+    const src = fs.readFileSync(path.join(APP, 'lib/withdrawal-scheduler.js'), 'utf8');
+    const loop = src.slice(src.indexOf('async schedulerLoop()'), src.indexOf('isFrozen() {'));
+    ok('H9. the loop runs resolveHeldTor BEFORE the freeze branch', loop.indexOf('await this.resolveHeldTor()') > 0 &&
+      loop.indexOf('await this.resolveHeldTor()') < loop.indexOf('if (this.isFrozen())'));
+  }
+  {
+    reset();
+    const id = seedHeld();
+    // Spendable 50 on top of the held 100: only the one-pending gate can refuse these requests.
+    db.prepare('UPDATE miner_accounts SET balance = 50, balance_locked = 100 WHERE grin_address = ?').run(ADDR);
+    const s = new WithdrawalScheduler(config, spWallet());
+    s.incentives = { maybePayJoinBonus() {} };
+    const e1 = await thrown(() => quiet(async () => s.createWithdrawal(ADDR, 25)));
+    const e2 = await thrown(() => quiet(() => s.createSlatepackWithdrawal(ADDR, 25)));
+    ok('H10. a Held payout keeps the one-pending slot: a new Tor AND a new Slatepack request both 429',
+      !!e1 && e1.code === 429 && !!e2 && e2.code === 429 && rowOf(id).status === 'tor_held',
+      JSON.stringify({ e1: e1 && e1.message, e2: e2 && e2.message }));
+  }
+  {
+    // Operator forced refund: never on a CONFIRMED match, never on an unreadable log.
+    reset();
+    let id = seedHeld();
+    let e = await thrown(() => quiet(() => newScheduler([tx({ slate: 'F-CONF', confirmed: true, when: SENT })]).forceRefundHeld(id, { adminId: 7 })));
+    ok('H11. forced refund REFUSED (409) when the tx log shows a CONFIRMED match — it was paid', !!e && e.code === 409 && heldOk(id),
+      e && e.message);
+    e = await thrown(() => quiet(() => newScheduler([], { walletReadable: false }).forceRefundHeld(id, { adminId: 7 })));
+    ok('H11. forced refund REFUSED (503) when the tx log cannot be read', !!e && e.code === 503 && heldOk(id), e && e.message);
+    // Readable but UNMATCHABLE: no entry carries a creation time, so the amount match has no age
+    // bound and _priorSendLanded reports checked=false (§J4-4). That is not proof of absence either.
+    const noTs = { ...tx({ slate: 'F-NOTS' }) }; delete noTs.creation_ts;
+    e = await thrown(() => quiet(() => newScheduler([noTs]).forceRefundHeld(id, { adminId: 7 })));
+    ok('H11. forced refund REFUSED (503) when the tx log reads but cannot be matched (no creation times)',
+      !!e && e.code === 503 && heldOk(id), e && e.message);
+    reset();
+    id = seedHeld();
+    // (2026-09-26 /review #4) Only a match the wallet records as a bare lock (tx_slate_state
+    // Standard1 — the CLI's slatepack fallback, never finalized) is left to the operator's
+    // judgement; a round-tripped (Standard2) or unlabelled one is refused — see [review-fixes] F4.
+    e = await thrown(() => quiet(() => newScheduler([{ ...tx({ slate: 'F-UNC', when: SENT }), tx_slate_state: 'Standard1' }])
+      .forceRefundHeld(id, { adminId: 7, reason: 'checked the node by hand' })));
+    const ev = db.prepare("SELECT * FROM withdrawal_events WHERE withdrawal_id = ? AND to_status = 'tor_failed'").get(id);
+    ok('H11. an unconfirmed never-finalized match (Standard1: the operator\'s judgement) → refunded, fail_code unknown', !e && refundedOk(id) && rowOf(id).fail_code === 'unknown',
+      JSON.stringify({ e: e && e.message, row: rowOf(id) }));
+    ok('H11. …journaled as the ADMIN\'s act, with their id', !!ev && ev.triggered_by === 'admin' && ev.actor_id === 7, JSON.stringify(ev));
+    reset();
+    id = seedWithdrawal({ status: 'tor_checking', retries: 0, priorAttempt: false });
+    e = await thrown(() => quiet(() => newScheduler([]).forceRefundHeld(id, { adminId: 7 })));
+    ok('H11. a row that is not Held cannot be force-refunded (409)', !!e && e.code === 409 && rowOf(id).status === 'tor_checking');
+  }
+  reset();
+}
+
+async function pauseSection() {
+  console.log('\n[pause] 5 counted Tor failures in 24 h → Tor paused for 24 h from the 5th');
+  const S = new WithdrawalScheduler(config, null);
+  const st = () => (typeof S.torPauseStatus === 'function' ? S.torPauseStatus(ADDR) : null);
+  const H = 3600;
+  {
+    reset();
+    for (let i = 1; i <= 4; i++) seedFailed('wallet_offline', i * H);
+    const p = st();
+    ok('P1. 4 counted failures → "4 of 5", not paused', !!p && p.failures_24h === 4 && p.max === 5 && p.paused_until === null, JSON.stringify(p));
+    seedFailed('wallet_offline', 5 * H);
+    const q = st();
+    const want = nowS() - 5 * H + 86400;
+    ok('P2. the 5th counted failure pauses Tor; paused_until = that 5th failure + 24 h',
+      !!q && q.failures_24h === 5 && Math.abs(Number(q.paused_until) - want) <= 2, JSON.stringify({ q, want }));
+  }
+  {
+    reset();
+    for (let i = 1; i <= 4; i++) seedFailed('wallet_offline', i * H);
+    for (const c of ['pool_send_path', 'wallet_unreachable', 'unknown', 'pool_busy', 'wallet_offline_cleared']) seedFailed(c, H);
+    seedFailed('wallet_offline', H, 'tgrin1someoneelse');
+    const p = st();
+    ok('P3. only wallet_offline counts — pool-side, unknown, cleared codes and ANOTHER address do not',
+      !!p && p.failures_24h === 4 && p.paused_until === null, JSON.stringify(p));
+  }
+  {
+    reset();
+    for (let i = 1; i <= 4; i++) seedFailed('wallet_offline', i * H);
+    seedFailed('wallet_offline', 25 * H);
+    const p = st();
+    ok('P4. a failure older than 24 h has aged out → 4, not paused', !!p && p.failures_24h === 4 && p.paused_until === null, JSON.stringify(p));
+    seedFailed('wallet_offline', 6 * H);
+    seedFailed('wallet_offline', 5 * H);
+    const q = st();
+    ok('P4. six in the window → paused_until comes from the 5th MOST RECENT (5 h ago), not the oldest',
+      !!q && q.failures_24h === 6 && Math.abs(Number(q.paused_until) - (nowS() - 5 * H + 86400)) <= 2, JSON.stringify(q));
+  }
+  {
+    reset(); fund(200);
+    for (let i = 1; i <= 5; i++) seedFailed('wallet_offline', i * H);
+    const s = new WithdrawalScheduler(config, spWallet());
+    s.incentives = { maybePayJoinBonus() {} };
+    const e = await thrown(() => quiet(async () => s.createWithdrawal(ADDR, 25)));
+    ok('P5. createWithdrawal (Tor) refuses a paused address: 429 tor_paused, nothing locked',
+      !!e && e.code === 429 && /tor_paused/.test(e.message) && acct().balance === 200 && acct().balance_locked === 0,
+      JSON.stringify({ e: e && e.message, acct: acct() }));
+    const e2 = await thrown(() => quiet(() => s.createSlatepackWithdrawal(ADDR, 25)));
+    ok('P5. …Slatepack is NOT paused: the same address creates a slatepack payout', !e2 &&
+      !!db.prepare("SELECT 1 FROM withdrawals WHERE grin_address = ? AND status = 'slatepack_pending'").get(ADDR), e2 && e2.message);
+  }
+  {
+    reset();
+    const ids = [];
+    for (let i = 1; i <= 5; i++) ids.push(seedFailed('wallet_offline', i * H));
+    const r = await thrown(() => quiet(async () => S.clearTorPause(ADDR, { adminId: 7 })));
+    const p = st();
+    ok('P6. clearing a pause un-counts the counted rows → not paused, 0 of 5', !r && !!p && p.failures_24h === 0 && p.paused_until === null,
+      JSON.stringify({ r: r && r.message, p }));
+    ok('P6. …history kept: the same five rows, still tor_failed, marked wallet_offline_cleared',
+      ids.every((id) => rowOf(id).status === 'tor_failed' && rowOf(id).fail_code === 'wallet_offline_cleared'),
+      JSON.stringify(ids.map((id) => rowOf(id).fail_code)));
+    ok('P6. …each one journaled as the admin\'s act',
+      ids.every((id) => db.prepare("SELECT 1 FROM withdrawal_events WHERE withdrawal_id = ? AND triggered_by = 'admin' AND actor_id = 7").get(id)));
+  }
+  {
+    const src = fs.readFileSync(path.join(APP, 'lib/withdrawal-scheduler.js'), 'utf8');
+    ok('P7. the thresholds are module constants, not settings (5 / 24 h window / 24 h pause)',
+      WithdrawalScheduler.TOR_FAIL_MAX === 5 && WithdrawalScheduler.TOR_FAIL_WINDOW_S === 86400 && WithdrawalScheduler.TOR_PAUSE_S === 86400 &&
+      /const TOR_FAIL_MAX = 5;/.test(src));
+  }
+  reset();
+}
+
+async function cooldownSection() {
+  console.log('\n[cooldown] no reversal cooldown after a Tor failure — still after a slatepack expiry / Goblin failure / admin cancel');
+  const FB = '0000cd01-0000-4000-8000-000000000000';
+  // One scheduler that can do both: a Tor send that falls back (slate cancelled, probe offline)
+  // and a Slatepack create.
+  const both = () => {
+    const s = new WithdrawalScheduler(config, spWallet({ async cancelTx() {} }));
+    s.walletTor = {
+      async sendToTorAddress() { return { success: false, torFallback: true, slateId: FB, error: 'Tor delivery failed' }; },
+      async probeToronlineStatus() { return { online: false, reason: 'onion_unreachable' }; },
+    };
+    s.recordTorFee = async () => {};
+    s.incentives = { maybePayJoinBonus() {} };
+    return s;
+  };
+  const torRefund = async (s) => {
+    reset(); fund(100); db.exec('DELETE FROM payout_control');
+    const r = await quiet(async () => s.createWithdrawal(ADDR, 100));
+    await quiet(() => s.sendWithdrawal(r.withdrawal_id));
+    return r.withdrawal_id;
+  };
+  {
+    const s = both();
+    const id = await torRefund(s);
+    const refunded = rowOf(id).status === 'tor_failed' && rowOf(id).fail_code === 'wallet_offline' && acct().balance === 100;
+    const e = await thrown(() => quiet(() => s.createSlatepackWithdrawal(ADDR, 50)));
+    ok('CD1. right after a Tor refund (wallet_offline) a Slatepack create for the same address SUCCEEDS — no 429 (the offer depends on it)',
+      refunded && !e && !!db.prepare("SELECT 1 FROM withdrawals WHERE grin_address = ? AND status = 'slatepack_pending'").get(ADDR),
+      JSON.stringify({ refunded, e: e && e.message, row: rowOf(id) }));
+  }
+  {
+    const s = both();
+    await torRefund(s);
+    const e = await thrown(() => quiet(async () => s.createWithdrawal(ADDR, 50)));
+    ok('CD2. …and a NEW Tor request right away is not refused by a cooldown either', !e, e && e.message);
+  }
+  {
+    reset(); fund(0);
+    db.prepare('UPDATE miner_accounts SET balance_locked = 25 WHERE grin_address = ?').run(ADDR);
+    db.prepare(`INSERT INTO withdrawals (grin_address, amount, fee, fee_charged, status, method, slate_id, created_at)
+                VALUES (?, 25, 0, 0.04, 'slatepack_pending', 'slatepack', 'cd-exp', ?)`).run(ADDR, nowS() - 40 * 60);
+    const s = both();
+    await quiet(() => s.processSlatepackExpiry());
+    const e = await thrown(() => quiet(() => s.createSlatepackWithdrawal(ADDR, 25)));
+    ok('CD3. after a Slatepack EXPIRY the 30-min cooldown still applies (429)', !!e && e.code === 429 && /wait \d+ min/.test(e.message), e && e.message);
+  }
+  for (const [label, status, method] of [['a Goblin/Nostr failure', 'nostr_failed', 'nostr'], ['an admin cancel of a Tor row', 'cancelled', 'tor']]) {
+    reset(); fund(100);
+    const id = Number(db.prepare(`INSERT INTO withdrawals (grin_address, amount, fee_charged, status, method) VALUES (?, 25, 0.04, ?, ?)`)
+      .run(ADDR, status, method).lastInsertRowid);
+    db.prepare(`INSERT INTO balance_log (grin_address, event_type, amount, balance_before, balance_after, locked_before, locked_after, reference_type, reference_id)
+                VALUES (?, 'reversal', 25, 75, 100, 25, 0, 'withdrawal', ?)`).run(ADDR, id);
+    const e = await thrown(() => quiet(() => both().createSlatepackWithdrawal(ADDR, 25)));
+    ok(`CD4. after ${label} the cooldown still applies (429)`, !!e && e.code === 429, e && e.message);
+  }
+  reset();
+}
+
+async function migrationSection() {
+  console.log('\n[migration] legacy retry_scheduled Tor rows are resolved once at startup (idempotent)');
+  const run = (s) => thrown(() => quiet(() => s.migrateLegacyTorRetries()));
+  {
+    reset(); sends = [];
+    const conf = seedWithdrawal({ status: 'retry_scheduled', retries: 2, slate: 'MG-CONF' });
+    const gone = seedWithdrawal({ status: 'retry_scheduled', retries: 1, slate: 'MG-GONE' });
+    const unc = seedWithdrawal({ status: 'retry_scheduled', retries: 1, slate: 'MG-UNC' });
+    // seedWithdrawal re-seeds the account each call: three payouts of 100 hold 300 locked.
+    db.prepare('UPDATE miner_accounts SET balance = 0, balance_locked = 300 WHERE grin_address = ?').run(ADDR);
+    const s = newScheduler([tx({ slate: 'MG-CONF', confirmed: true }), tx({ slate: 'MG-UNC' })]);
+    const e = await run(s);
+    ok('M1. confirmed on chain → confirmed (paid once, never re-sent)', !e && rowOf(conf).status === 'confirmed', e ? e.message : rowOf(conf).status);
+    ok('M2. absent → tor_failed, fail_code unknown', rowOf(gone).status === 'tor_failed' && rowOf(gone).fail_code === 'unknown', JSON.stringify(rowOf(gone)));
+    ok('M3. unconfirmed → tor_held', rowOf(unc).status === 'tor_held', rowOf(unc).status);
+    ok('M. ledger: 100 paid, 100 back in spendable, 100 still locked — and nothing sent',
+      Math.abs(acct().balance - 100) < 1e-9 && Math.abs(acct().balance_locked - 100) < 1e-9 && sends.length === 0, JSON.stringify(acct()));
+    const left = db.prepare("SELECT COUNT(*) c FROM withdrawals WHERE status = 'retry_scheduled'").get().c;
+    ok('M. no row is left in retry_scheduled (the idempotency proof)', left === 0, String(left));
+    const snap = () => JSON.stringify([rowOf(conf), rowOf(gone), rowOf(unc), acct(),
+      db.prepare('SELECT COUNT(*) c FROM withdrawal_events').get().c, db.prepare('SELECT COUNT(*) c FROM balance_log').get().c]);
+    const before = snap();
+    await run(s);
+    ok('M. a second run changes nothing (no row, balance, event or ledger write)', snap() === before);
+    const p = typeof s.torPauseStatus === 'function' ? s.torPauseStatus(ADDR) : null;
+    const cd = await thrown(async () => s._assertNoRecentReversal(ADDR));
+    ok('M2. …that refund is not counted toward the pause, and starts no cooldown', !!p && p.failures_24h === 0 && !cd,
+      JSON.stringify({ p, cd: cd && cd.message }));
+  }
+  {
+    reset();
+    const id = seedWithdrawal({ status: 'retry_scheduled', retries: 1, slate: null });
+    await run(newScheduler([], { walletReadable: false }));
+    ok('M4. wallet UNREADABLE at startup → tor_held (never refunded blind, never re-sent)', heldOk(id), JSON.stringify(rowOf(id)));
+  }
+  {
+    const src = fs.readFileSync(path.join(APP, 'lib/withdrawal-scheduler.js'), 'utf8');
+    const loop = src.slice(src.indexOf('async schedulerLoop()'), src.indexOf('isFrozen() {'));
+    ok('M5. the loop runs the migration once, BEFORE its first pass',
+      loop.indexOf('migrateLegacyTorRetries()') > 0 && loop.indexOf('migrateLegacyTorRetries()') < loop.indexOf('while (this.isRunning)'));
+  }
+  reset();
+}
+
+async function pendingListSection() {
+  console.log('\n[pending-lists] tor_held is in EVERY pending-status list');
+  const lists = [];
+  for (const f of ['index.js', 'lib/withdrawal-scheduler.js', 'lib/reconciliation.js', 'lib/alert-monitor.js']) {
+    const src = fs.readFileSync(path.join(APP, f), 'utf8');
+    for (const m of src.matchAll(/status\s+IN\s*\(([^)]*)\)/g)) {
+      if (/'tor_sending'/.test(m[1]) && /'slatepack_pending'/.test(m[1])) lists.push({ f, held: /'tor_held'/.test(m[1]), body: m[1].trim() });
+    }
+  }
+  const missing = lists.filter((l) => !l.held);
+  ok(`every status list naming tor_sending + slatepack_pending also names tor_held (${lists.length} lists)`,
+    lists.length >= 7 && missing.length === 0, missing.map((l) => `${l.f}: ${l.body}`).join(' | '));
+  const recon = fs.readFileSync(path.join(APP, 'lib/reconciliation.js'), 'utf8');
+  const cand = recon.match(/SELECT id, amount, fee,[^;]*?\bFROM withdrawals\s+WHERE status IN \(([^)]*)\)/);
+  ok('reconciliation\'s unrecorded-send audit treats a held row as an ATTEMPTED send (it may have landed)', !!cand && /'tor_held'/.test(cand[1]));
+  reset();
+  seedWithdrawal({ status: 'tor_held', priorAttempt: true });
+  const st = new WithdrawalScheduler(config, null).getStatus();
+  ok('getStatus() counts a held row as pending', st.pending === 1, JSON.stringify(st));
+  reset();
+}
+
+// ─── The real route handlers from index.js, run in-process ───────────────────────────────────
+// index.js starts a server on require, so each handler's source is cut out (from its
+// `app.<verb>('<path>'` to the next route registration, the same slice test-public-leakage.js
+// reads) and evaluated against stubs for everything but the DB and the scheduler.
+async function routeSection() {
+  console.log('\n[routes] withdraw pause gate, pre-flight 409, summary, P-08, admin held/pause routes (real handlers)');
+  const indexSrc = fs.readFileSync(path.join(APP, 'index.js'), 'utf8');
+  const routeSrc = (verb, p) => {
+    const start = indexSrc.indexOf(`app.${verb}('${p}'`);
+    if (start < 0) return '';
+    const next = indexSrc.slice(start + 10).search(/\n\s{0,4}app\.(get|post|put|delete|patch)\(/);
+    return next < 0 ? indexSrc.slice(start) : indexSrc.slice(start, start + 10 + next);
+  };
+  const load = (verb, p, deps) => {
+    // Only the registration itself: index.js routes close with a `});` line at two-space indent,
+    // and top-level code that follows a route (other helpers) must not be evaluated with it.
+    const whole = routeSrc(verb, p);
+    const end = whole.indexOf('\n  });');
+    const src = end < 0 ? whole : whole.slice(0, end + 6);
+    if (!src) return null;
+    let handler = null;
+    const app = { [verb]: (_p, ...fns) => { handler = fns[fns.length - 1]; } };
+    // eslint-disable-next-line no-new-func
+    new Function('__d', `with (__d) {\n${src}\n}`)({ app, ...deps });
+    return handler;
+  };
+  const call = async (h, req) => {
+    const res = {
+      statusCode: 200, body: undefined, destroyed: false, headers: {},
+      status(c) { this.statusCode = c; return this; }, json(b) { this.body = b; return this; },
+      setHeader(k, v) { this.headers[k] = v; }, send(b) { this.body = b; return this; },
+    };
+    if (!h) { res.statusCode = -1; return res; }
+    await quiet(() => h({ ip: '127.0.0.1', params: {}, query: {}, body: {}, user: { user_id: 7 }, ...req }, res));
+    return res;
+  };
+  const rateLimiter = { middleware: () => null, peek: () => ({ allowed: true }), consume() {}, sendLimited() {} };
+  // admin_audit_log.admin_id REFERENCES users(id): the admin routes below act as user 7.
+  db.prepare("INSERT OR IGNORE INTO users (id, username, password_hash, is_admin) VALUES (7, 'route-test-admin', 'x', 1)").run();
+  const probeCalls = [];
+  const withdrawDeps = (s, probe) => ({
+    db, config: { tor_preflight_gate: true }, nostrBridge: null, rateLimiter,
+    normalizeIp: (x) => x,
+    verifyOwnerProof: async () => ({ ok: true, method: 'ip' }),
+    auditOwnerProof: () => {},
+    withdrawalScheduler: s,
+    walletTor: { async probeToronlineStatus(a) { probeCalls.push(a); return probe; } },
+  });
+  const sched = (wallet = null) => { const s = new WithdrawalScheduler(config, wallet); s.incentives = { maybePayJoinBonus() {} }; return s; };
+
+  // ── RT1 the pause is enforced BEFORE the pre-flight probe ──
+  {
+    reset(); fund(100); probeCalls.length = 0;
+    for (let i = 1; i <= 5; i++) seedFailed('wallet_offline', i * 3600);
+    const s = sched();
+    let creates = 0; const orig = s.createWithdrawal.bind(s); s.createWithdrawal = (...a) => { creates++; return orig(...a); };
+    const h = load('post', '/api/account/:addr/withdraw', withdrawDeps(s, { online: true, reason: 'reachable' }));
+    const res = await call(h, { params: { addr: ADDR }, body: { method: 'tor', amount: 25, proof: 'x' } });
+    const p = typeof s.torPauseStatus === 'function' ? s.torPauseStatus(ADDR) : {};
+    ok('RT1. paused address → 429 { error: "tor_paused", paused_until }',
+      res.statusCode === 429 && res.body && res.body.error === 'tor_paused' && res.body.paused_until === p.paused_until && !!p.paused_until,
+      JSON.stringify({ code: res.statusCode, body: res.body }));
+    ok('RT1. …decided BEFORE the probe: the probe was NOT called, nothing created, nothing locked',
+      probeCalls.length === 0 && creates === 0 && acct().balance === 100 && acct().balance_locked === 0,
+      JSON.stringify({ probes: probeCalls.length, creates, acct: acct() }));
+  }
+  {
+    reset(); fund(100); probeCalls.length = 0;
+    for (let i = 1; i <= 4; i++) seedFailed('wallet_offline', i * 3600);
+    const s = sched();
+    const h = load('post', '/api/account/:addr/withdraw', withdrawDeps(s, { online: true, reason: 'reachable' }));
+    const res = await call(h, { params: { addr: ADDR }, body: { method: 'tor', amount: 25, proof: 'x' } });
+    ok('RT1. control — 4 of 5: the probe runs and the payout is created', probeCalls.length === 1 && res.statusCode === 200 && res.body.status === 'tor_checking',
+      JSON.stringify({ probes: probeCalls.length, body: res.body }));
+  }
+
+  // ── RT2 the pre-flight 409 body is exactly what the page keys on ──
+  {
+    reset(); fund(100); probeCalls.length = 0;
+    const s = sched();
+    const h = load('post', '/api/account/:addr/withdraw', withdrawDeps(s, { online: false, reason: 'onion_unreachable' }));
+    const res = await call(h, { params: { addr: ADDR }, body: { method: 'tor', amount: 25, proof: 'x' } });
+    ok('RT2. pre-flight says offline → 409 with tor_online: false and suggest: "slatepack" (unchanged), nothing locked',
+      res.statusCode === 409 && res.body && res.body.tor_online === false && res.body.suggest === 'slatepack' &&
+      acct().balance === 100 && acct().balance_locked === 0, JSON.stringify(res.body));
+  }
+
+  // ── RT3 the Slatepack offer after a Tor refund, through the real route ──
+  {
+    reset(); fund(100); db.exec('DELETE FROM payout_control');
+    const s = sched(spWallet());
+    s.walletTor = {
+      async sendToTorAddress() { return { success: false, torFallback: true, slateId: '0000ab01-0000-4000-8000-000000000000', error: 'Tor delivery failed' }; },
+      async probeToronlineStatus() { return { online: false, reason: 'onion_unreachable' }; },
+    };
+    s.recordTorFee = async () => {};
+    const r = await quiet(async () => s.createWithdrawal(ADDR, 100));
+    await quiet(() => s.sendWithdrawal(r.withdrawal_id));
+    const h = load('post', '/api/account/:addr/withdraw', withdrawDeps(s, { online: true }));
+    const res = await call(h, { params: { addr: ADDR }, body: { method: 'slatepack', amount: 100, proof: 'x' } });
+    ok('RT3. Tor refund (wallet_offline) → the page\'s one-click Slatepack POST succeeds at once (no cooldown 429)',
+      rowOf(r.withdrawal_id).fail_code === 'wallet_offline' && res.statusCode === 200 && res.body.status === 'slatepack_pending' && !!res.body.slatepack,
+      JSON.stringify({ code: res.statusCode, body: res.body, row: rowOf(r.withdrawal_id) }));
+  }
+
+  // ── RT4 the account summary ──
+  const summaryDeps = (s) => ({
+    db, rateLimiter, PROOF_SET_MAX: 10, withdrawalScheduler: s, config: { min_withdrawal: 25, withdrawal_fee: 0.04 },
+    hashrateTracker: { getMinerHashrate: () => ({ avg_hashrate: 0 }) }, minerManager: null, incentivesManager: null,
+    dormancyManager: null, nostrBridge: null,
+  });
+  {
+    reset(); fund(10);
+    for (let i = 1; i <= 5; i++) seedFailed('wallet_offline', i * 3600);
+    const s = new WithdrawalScheduler({ ...config, slatepack_ttl_minutes: 45 }, null);
+    const h = load('get', '/api/account/:addr', summaryDeps(s));
+    const res = await call(h, { params: { addr: ADDR } });
+    const b = res.body || {};
+    ok('RT4. summary carries slatepack_window_minutes = the live slatepack TTL (45 here)',
+      res.statusCode === 200 && b.slatepack_window_minutes === 45 && s.slatepackTtlSeconds === 45 * 60, JSON.stringify({ code: res.statusCode, w: b.slatepack_window_minutes, err: b.error }));
+    ok('RT4. summary carries tor_pause { failures_24h, max, paused_until } — counts and a timestamp only',
+      !!b.tor_pause && b.tor_pause.failures_24h === 5 && b.tor_pause.max === 5 && Number.isInteger(b.tor_pause.paused_until) &&
+      Object.keys(b.tor_pause).sort().join() === 'failures_24h,max,paused_until', JSON.stringify(b.tor_pause));
+    reset(); fund(10);
+    const res2 = await call(load('get', '/api/account/:addr', summaryDeps(new WithdrawalScheduler(config, null))), { params: { addr: ADDR } });
+    ok('RT4. …default TTL → 30; no failures → { 0, 5, null }', res2.body && res2.body.slatepack_window_minutes === 30 &&
+      JSON.stringify(res2.body.tor_pause) === '{"failures_24h":0,"max":5,"paused_until":null}', JSON.stringify(res2.body && res2.body.tor_pause));
+    reset();
+    seedWithdrawal({ status: 'tor_held', priorAttempt: true });
+    const res3 = await call(load('get', '/api/account/:addr', summaryDeps(new WithdrawalScheduler(config, null))), { params: { addr: ADDR } });
+    ok('RT4. a Held payout is the summary\'s pending_withdrawal', res3.body && res3.body.pending_withdrawals === 1 &&
+      res3.body.pending_withdrawal && res3.body.pending_withdrawal.status === 'tor_held', JSON.stringify(res3.body && res3.body.pending_withdrawal));
+  }
+
+  // ── RT5 P-08 history: fail_code yes, fail_detail never ──
+  {
+    reset();
+    const id = seedFailed('pool_send_path', 60);
+    db.prepare("UPDATE withdrawals SET fail_detail = 'SECRET-CLI-OUTPUT' WHERE id = ?").run(id);
+    const h = load('get', '/api/account/:addr/withdrawals', { db, rateLimiter });
+    const res = await call(h, { params: { addr: ADDR } });
+    const row = res.body && res.body.withdrawals && res.body.withdrawals[0];
+    ok('RT5. GET /api/account/:addr/withdrawals rows carry fail_code', !!row && row.fail_code === 'pool_send_path', JSON.stringify(row));
+    ok('RT5. …and never fail_detail', !!row && !('fail_detail' in row) && !JSON.stringify(res.body).includes('SECRET-CLI-OUTPUT'));
+    const routes = [...indexSrc.matchAll(/\bapp\.(get|post|put|delete|patch)\('([^']+)'/g)].map((m) => [m[1], m[2]]);
+    const leaks = routes.filter(([v, p]) => !p.startsWith('/api/admin') && /fail_detail/.test(routeSrc(v, p).replace(/\/\/[^\n]*/g, '')));
+    ok('RT5. no non-admin route names fail_detail at all', leaks.length === 0, leaks.map((l) => l.join(' ')).join(', '));
+  }
+
+  // ── RT6 admin: retry removed, recheck, forced refund, pause clear, cancel ──
+  const adminDeps = (s) => ({ db, secureAdmin: null, freshAdmin: null, withdrawalScheduler: s, getPayoutControl: () => ({ frozen: false }),
+    hashrateTracker: { getMinerHashrate: () => ({}) }, PROOF_SET_MAX: 10 });
+  const audit = (action) => db.prepare('SELECT * FROM admin_audit_log WHERE action = ? ORDER BY id DESC LIMIT 1').get(action);
+  const seedHeld = () => { const id = seedWithdrawal({ status: 'tor_held', priorAttempt: true }); evNote.run(id, 'tor_sending', 'tor_held', 'held: test', nowS() - 60); return id; };
+  {
+    reset();
+    const id = seedWithdrawal({ status: 'tor_failed', priorAttempt: true });
+    const res = await call(load('post', '/api/admin/withdrawals/:id/retry', adminDeps(sched())), { params: { id: String(id) } });
+    ok('RT6. POST /api/admin/withdrawals/:id/retry is gone for Tor → 410, row untouched', res.statusCode === 410 && rowOf(id).status === 'tor_failed',
+      JSON.stringify({ code: res.statusCode, body: res.body }));
+  }
+  {
+    reset();
+    const id = seedHeld();
+    const s = newScheduler([tx({ slate: 'RC-CONF', confirmed: true, when: nowS() - 1800 })]);
+    const res = await call(load('post', '/api/admin/withdrawals/:id/recheck', adminDeps(s)), { params: { id: String(id) } });
+    ok('RT6. recheck of a Held row runs the SAME resolution → confirmed', res.statusCode === 200 && rowOf(id).status === 'confirmed' &&
+      res.body.status === 'confirmed', JSON.stringify({ code: res.statusCode, body: res.body }));
+    ok('RT6. …with an audit row', !!audit('withdrawal_held_recheck'));
+    const res2 = await call(load('post', '/api/admin/withdrawals/:id/recheck', adminDeps(s)), { params: { id: String(id) } });
+    ok('RT6. recheck of a row that is not Held → 409', res2.statusCode === 409, JSON.stringify(res2.body));
+  }
+  {
+    reset();
+    const id = seedHeld();
+    const s = newScheduler([]);
+    const h = load('post', '/api/admin/withdrawals/:id/force-refund', adminDeps(s));
+    const bad = await call(h, { params: { id: String(id) }, body: { confirm_id: String(Number(id) + 1) } });
+    ok('RT6. forced refund with a mistyped payout id → 400, nothing changed', bad.statusCode === 400 && heldOk(id), JSON.stringify(bad.body));
+    const good = await call(h, { params: { id: String(id) }, body: { confirm_id: String(id), reason: 'node checked' } });
+    ok('RT6. forced refund with the typed id and an absent tx → refunded, audit row', good.statusCode === 200 && refundedOk(id) &&
+      !!audit('withdrawal_force_refund'), JSON.stringify({ code: good.statusCode, body: good.body }));
+    ok('RT6. …the route is step-up gated (freshAdmin)', /app\.post\('\/api\/admin\/withdrawals\/:id\/force-refund', freshAdmin,/.test(indexSrc));
+  }
+  {
+    reset();
+    for (let i = 1; i <= 5; i++) seedFailed('wallet_offline', i * 3600);
+    const s = sched();
+    const h = load('post', '/api/admin/miners/:addr/tor-pause/clear', adminDeps(s));
+    const res = await call(h, { params: { addr: ADDR } });
+    ok('RT6. pause clear → 200, 5 rows un-counted, not paused any more, audit row',
+      res.statusCode === 200 && res.body.cleared === 5 && res.body.tor_pause && res.body.tor_pause.paused_until === null && !!audit('miner_tor_pause_clear'),
+      JSON.stringify({ code: res.statusCode, body: res.body }));
+    ok('RT6. …step-up gated (freshAdmin)', /app\.post\('\/api\/admin\/miners\/:addr\/tor-pause\/clear', freshAdmin,/.test(indexSrc));
+    const none = await call(h, { params: { addr: 'tgrin1nobody' } });
+    ok('RT6. pause clear for an unknown address → 404', none.statusCode === 404, JSON.stringify(none.body));
+    for (let i = 1; i <= 5; i++) seedFailed('wallet_offline', i * 3600);
+    const mv = await call(load('get', '/api/admin/miners/:addr', adminDeps(s)), { params: { addr: ADDR } });
+    ok('RT6. the admin miner view shows tor_pause', mv.body && mv.body.miner && mv.body.miner.tor_pause &&
+      mv.body.miner.tor_pause.failures_24h === 5 && !!mv.body.miner.tor_pause.paused_until, JSON.stringify(mv.body && mv.body.miner && mv.body.miner.tor_pause));
+  }
+  {
+    // A Held row, and a legacy retry_scheduled one, are no longer cancellable by hand: cancel
+    // refunded without asking the wallet. The Held path has its own proof-gated forced refund.
+    reset();
+    const h = load('post', '/api/admin/withdrawals/:id/cancel', adminDeps(sched()));
+    const held = seedHeld();
+    const legacy = seedWithdrawal({ status: 'retry_scheduled', priorAttempt: true });
+    const r1 = await call(h, { params: { id: String(held) }, body: {} });
+    const r2 = await call(h, { params: { id: String(legacy) }, body: {} });
+    ok('RT6. admin cancel refuses tor_held and retry_scheduled (409) — no refund without proof',
+      r1.statusCode === 409 && r2.statusCode === 409 && rowOf(held).status === 'tor_held' && rowOf(legacy).status === 'retry_scheduled',
+      JSON.stringify({ r1: r1.statusCode, r2: r2.statusCode }));
+    const q = seedWithdrawal({ status: 'tor_checking', retries: 0, priorAttempt: false });
+    const r3 = await call(h, { params: { id: String(q) }, body: {} });
+    ok('RT6. …control: a never-sent tor_checking row is still cancellable', r3.statusCode === 200 && rowOf(q).status === 'cancelled', JSON.stringify(r3.body));
+  }
+
+  // ── RT9 (Session 4 review, R9) a double-click on "Send as Slatepack instead" cannot make two ──
+  // The page's in-flight flag only spares the second POST; the server must refuse it on its own.
+  // Two POSTs through the REAL handler, concurrently, with the wallet's init held open until both
+  // are in flight — so the second arrives while the first is inside its wallet awaits.
+  {
+    reset(); fund(200); db.exec('DELETE FROM payout_control');
+    let release;
+    const gate = new Promise((r) => { release = r; });
+    const w = spWallet({ async initSendTx(a) { this.n++; await gate; return { id: `rt9-${this.n}`, amt: a, fee: '23500000' }; } });
+    const s = sched(w);
+    const h = load('post', '/api/account/:addr/withdraw', withdrawDeps(s, { online: true }));
+    const mk = () => ({ statusCode: 200, body: undefined, destroyed: false, status(c) { this.statusCode = c; return this; }, json(b) { this.body = b; return this; } });
+    const req = () => ({ ip: '127.0.0.1', params: { addr: ADDR }, query: {}, body: { method: 'slatepack', amount: 100, proof: 'x' } });
+    const a = mk(); const b = mk();
+    await quiet(async () => {
+      const pa = h(req(), a);
+      const pb = h(req(), b);
+      await new Promise((r) => setImmediate(r));
+      release();
+      await Promise.all([pa, pb]);
+    });
+    const rows = db.prepare('SELECT id, status FROM withdrawals WHERE grin_address = ?').all(ADDR);
+    const codes = [a.statusCode, b.statusCode].sort();
+    ok('RT9. two concurrent Slatepack POSTs → ONE payout row, one 200 and one 429 (one-pending gate)',
+      rows.length === 1 && rows[0].status === 'slatepack_pending' && codes[0] === 200 && codes[1] === 429,
+      JSON.stringify({ rows, codes, a: a.body, b: b.body }));
+    ok('RT9. …the wallet built ONE slate, and only 100 of the 200 is locked',
+      w.n === 1 && Math.abs(acct().balance - 100) < 1e-9 && Math.abs(acct().balance_locked - 100) < 1e-9,
+      JSON.stringify({ inits: w.n, acct: acct() }));
+  }
+  reset();
+}
+
+async function alertNoiseSection() {
+  console.log('\n[alert-noise] payout_failed counts only POOL-side Tor failures');
+  const AlertMonitor = require(path.join(APP, 'lib/alert-monitor.js'));
+  const am = new AlertMonitor({}, {}, db);
+  const fired = [];
+  am.triggerAlert = async (t, d) => { fired.push({ t, d }); };
+  am.resolveAlert = async (t) => { fired.push({ t, resolved: true }); };
+  reset();
+  for (let i = 0; i < 3; i++) seedFailed('wallet_offline', 3600);
+  seedFailed('wallet_unreachable', 3600);
+  await quiet(() => am.checkPayoutHealth());
+  ok('AN1. four miner-side failures (wallet_offline / wallet_unreachable) → payout_failed NOT raised',
+    fired.length > 0 && fired.every((f) => f.resolved), JSON.stringify(fired));
+  fired.length = 0;
+  seedFailed('pool_send_path', 3600);
+  // A Held row resolved as refunded today, requested three days ago: counted by when it FAILED.
+  const late = seedFailed('unknown', 600);
+  db.prepare('UPDATE withdrawals SET created_at = ? WHERE id = ?').run(nowS() - 3 * 86400, late);
+  await quiet(() => am.checkPayoutHealth());
+  const hit = fired.find((f) => !f.resolved && f.t === 'payout_failed');
+  ok('AN2. pool-side failures (pool_send_path, unknown) raise it, counted by the failure time', !!hit && hit.d.data.failed_count === 2,
+    JSON.stringify(fired));
+  reset();
+}
+
+// ═══ [review-s4] Session 4 review (2026-09-26): the amount matcher, re-derived ═══════════════
+// grin-wallet v5.5.0 (libwallet selection.rs lock_tx_context) writes the sender's TxSent with
+// amount_debited = Σ inputs, amount_credited = Σ change, fee = the slate's FeeFields — so
+// debited − credited − fee.fee() is the recipient amount. Two things the matcher got wrong:
+//   · it had only a LOWER time bound and a `claimed` set, so one Tor row could take another
+//     Tor row's same-amount tx: the wrong row is marked paid, and the real owner — its tx now
+//     "claimed" — reads absent twice and is REFUNDED on top of a send that landed (R1a–R1c);
+//   · FeeFields serialises as the RAW u64 (fee_shift << 40 | fee) — upstream masks it with
+//     .fee() before the same subtraction ("apply fee mask past HF4"); the pool did not (R1d).
+async function reviewS4Section() {
+  console.log('\n[review-s4] R1 — the amount match is bound to the row\'s OWN send attempts');
+  const ADDR_B = 'tgrin1' + 'p'.repeat(58);
+  const t0 = nowS() - 4 * 3600;
+  const fresh = () => {
+    reset();
+    db.prepare(`INSERT INTO miner_accounts (grin_address, balance, balance_locked) VALUES (?, 0, 0)
+      ON CONFLICT(grin_address) DO UPDATE SET balance = 0, balance_locked = 0`).run(ADDR_B);
+  };
+  const acctOf = (a) => db.prepare('SELECT balance, balance_locked FROM miner_accounts WHERE grin_address = ?').get(a);
+  // A Tor row with ONE attempt: claimed at claimAt, left tor_sending (→ tor_held) at heldAt
+  // (null = still open). Amount 100, fee 0.04 → net 99.96, locked on `addr`.
+  const seedAttempt = (addr, { created, claimAt, heldAt = null, status = 'tor_held', slate = null }) => {
+    db.prepare('UPDATE miner_accounts SET balance_locked = balance_locked + 100 WHERE grin_address = ?').run(addr);
+    const id = Number(db.prepare(
+      `INSERT INTO withdrawals (grin_address, amount, fee_charged, status, method, slate_id, created_at)
+       VALUES (?, 100, 0.04, ?, 'tor', ?, ?)`).run(addr, status, slate, created).lastInsertRowid);
+    evNote.run(id, 'tor_checking', 'tor_sending', null, claimAt);
+    if (heldAt !== null) evNote.run(id, 'tor_sending', status === 'confirmed' ? 'confirmed' : 'tor_held', 'held: test', heldAt);
+    return id;
+  };
+  const ageAbsent = () => db.prepare("UPDATE withdrawal_events SET created_at = created_at - 700 WHERE note LIKE 'held-check: absent%'").run();
+  const twoReads = async (s) => { await quiet(() => s.resolveHeldTor()); ageAbsent(); await quiet(() => s.resolveHeldTor()); };
+  const reversed = (id) => !!db.prepare("SELECT 1 FROM balance_log WHERE reference_id = ? AND event_type = 'reversal'").get(id);
+
+  {
+    // Y (miner B) was sent first and died before any lock; X (miner A) was sent next and its tx
+    // MINED, but the CLI was killed after the post → both Held, same net, no slate id on either.
+    fresh();
+    const Y = seedAttempt(ADDR_B, { created: t0, claimAt: t0 + 10, heldAt: t0 + 130 });
+    const X = seedAttempt(ADDR, { created: t0 + 20, claimAt: t0 + 131, heldAt: t0 + 251 });
+    const s = newScheduler([tx({ slate: 'X-SLATE', confirmed: true, when: t0 + 140 })]);
+    await twoReads(s);
+    ok('R1a. a Held row is never confirmed by ANOTHER row\'s same-amount tx (it was locked after this row\'s attempt ended)',
+      rowOf(Y).status !== 'confirmed' && rowOf(Y).slate_id !== 'X-SLATE', JSON.stringify(rowOf(Y)));
+    ok('R1a. …the tx\'s real owner is confirmed by it, and NEVER refunded (miner A paid once, not twice)',
+      rowOf(X).status === 'confirmed' && rowOf(X).slate_id === 'X-SLATE' && !reversed(X) &&
+      Math.abs(acctOf(ADDR).balance) < 1e-9 && Math.abs(acctOf(ADDR).balance_locked) < 1e-9,
+      JSON.stringify({ X: rowOf(X), A: acctOf(ADDR) }));
+  }
+  {
+    // X's send POSTED (unconfirmed) inside its own attempt, but another Tor row Z carries X's
+    // slate id (a wrong amount-inferred claim). X must never read "absent" off that.
+    fresh();
+    const X = seedAttempt(ADDR, { created: t0, claimAt: t0 + 10, heldAt: t0 + 130 });
+    seedAttempt(ADDR_B, { created: t0 + 20, claimAt: t0 + 200, heldAt: t0 + 260, status: 'confirmed', slate: 'X-POSTED' });
+    const s = newScheduler([tx({ slate: 'X-POSTED', confirmed: false, when: t0 + 60 })]);
+    await twoReads(s);
+    ok('R1b. a posted-but-unmined send inside the row\'s own attempt is never read "absent" because another Tor row claims its slate',
+      heldOk(X), JSON.stringify({ X: rowOf(X), notes: eventsOf(X).map((e) => e.note) }));
+  }
+  {
+    // A crash: Y's attempt never settled until the stale sweep held it (t0+700), and X was sent
+    // inside that span — so ONE confirmed tx lies in both rows' windows. Either could own it.
+    fresh();
+    const Y = seedAttempt(ADDR_B, { created: t0, claimAt: t0 + 10, heldAt: t0 + 700 });
+    const X = seedAttempt(ADDR, { created: t0 + 20, claimAt: t0 + 100, heldAt: t0 + 220 });
+    const s = newScheduler([tx({ slate: 'AMBIG', confirmed: true, when: t0 + 150 })]);
+    await twoReads(s);
+    ok('R1c. one confirmed tx inside TWO rows\' windows → neither is confirmed from it, neither refunded (both stay held)',
+      rowOf(Y).status === 'tor_held' && rowOf(X).status === 'tor_held' && !reversed(X) && !reversed(Y),
+      JSON.stringify({ Y: rowOf(Y), X: rowOf(X) }));
+    const eX = await thrown(() => quiet(() => s.forceRefundHeld(X, { adminId: 7 })));
+    const eY = await thrown(() => quiet(() => s.forceRefundHeld(Y, { adminId: 7 })));
+    ok('R1c. …and the forced refund is REFUSED (409) for both: a confirmed tx that may be theirs is on chain',
+      !!eX && eX.code === 409 && !!eY && eY.code === 409 && rowOf(X).status === 'tor_held' && rowOf(Y).status === 'tor_held',
+      JSON.stringify({ eX: eX && eX.message, eY: eY && eY.message }));
+  }
+  {
+    // FeeFields with fee_shift = 1: the raw u64 is (1 << 40) | fee. The recipient amount uses fee().
+    fresh();
+    const X = seedAttempt(ADDR, { created: t0, claimAt: t0 + 10, heldAt: t0 + 130 });
+    const feeNano = 23500000n;
+    const shifted = { ...tx({ slate: 'SHIFT', confirmed: false, when: t0 + 60 }),
+      amount_debited: String(99960000000n + feeNano), fee: String((1n << 40n) | feeNano) };
+    await twoReads(newScheduler([shifted]));
+    ok('R1d. a TxSent whose FeeFields carries a fee_shift still matches (fee masked to 40 bits) → held, not refunded',
+      heldOk(X), JSON.stringify(rowOf(X)));
+    fresh();
+    const X2 = seedAttempt(ADDR, { created: t0, claimAt: t0 + 10, heldAt: t0 + 130 });
+    await twoReads(newScheduler([{ ...shifted, confirmed: true }]));
+    ok('R1d. …and the same entry CONFIRMED settles the row as paid', rowOf(X2).status === 'confirmed' && rowOf(X2).slate_id === 'SHIFT',
+      JSON.stringify(rowOf(X2)));
+  }
+  fresh();
+  db.prepare('DELETE FROM miner_accounts WHERE grin_address = ?').run(ADDR_B);
+
+  // ── _captureTorSlateId (review finding (c), 2026-09-26): the proof-link slate id is captured by
+  // the same attempt-window rule as the matcher, not by the old "created_at − 60 s" lower bound.
+  // A wrong capture no longer refunds anything, but it puts another payout's kernel link on this one.
+  console.log('\n[review-s4] _captureTorSlateId — only a tx locked inside THIS row\'s own attempt');
+  const capture = async (txs, { claimAt = t0 + 100 } = {}) => {
+    fresh();
+    const id = seedAttempt(ADDR, { created: t0, claimAt, status: 'tor_sending' });
+    await quiet(() => newScheduler(txs)._captureTorSlateId(id, 99.96));
+    return rowOf(id).slate_id;
+  };
+  ok('CT1. a same-net tx locked BEFORE this row\'s attempt began (another payout\'s) is NOT captured',
+    await capture([{ ...tx({ slate: 'BEFORE', when: t0 + 50 }), id: 9 }]) === null);
+  ok('CT1. control: a same-net tx locked inside the open attempt is captured',
+    await capture([{ ...tx({ slate: 'INSIDE', when: t0 + 150 }), id: 9 }]) === 'INSIDE');
+  {
+    // The crash overlap of R1c, from the capture side: the tx fits a second Tor row's attempt too.
+    fresh();
+    seedAttempt(ADDR_B, { created: t0 - 10, claimAt: t0 + 10, heldAt: t0 + 700 });
+    const id = seedAttempt(ADDR, { created: t0, claimAt: t0 + 100, status: 'tor_sending' });
+    await quiet(() => newScheduler([{ ...tx({ slate: 'BOTH', when: t0 + 150 }), id: 9 }])._captureTorSlateId(id, 99.96));
+    ok('CT2. a tx that also fits ANOTHER Tor row\'s attempt is not captured (it may be that payout\'s)', rowOf(id).slate_id === null,
+      JSON.stringify(rowOf(id)));
+  }
+  fresh();
+  db.prepare('DELETE FROM miner_accounts WHERE grin_address = ?').run(ADDR_B);
+}
+
+// ═══ [health-card] the payout alerts reach the admin health page (2026-09-26) ════════════════
+// payout_held (critical: a Tor payout held > 24 h) and tor_send_path (warning: the miner's wallet
+// answers our probe but grin-wallet could not deliver — payout #10's symptom) used to live in the
+// alerts table only. They now fold into the Grin Wallet card beside payout_unmined, through ONE
+// helper the /api/admin/health route calls.
+async function healthCardSection() {
+  console.log('\n[health-card] payout alerts on the Grin Wallet card; the unrecorded-send audit ignores refunded Tor rows');
+  const AlertMonitor = require(path.join(APP, 'lib/alert-monitor.js'));
+  const fold = (card) => (typeof AlertMonitor.foldPayoutAlerts === 'function' ? AlertMonitor.foldPayoutAlerts(db, card) : card);
+  const wipe = () => { reset(); db.exec("DELETE FROM alerts WHERE type IN ('payout_unmined','payout_held','tor_send_path')"); };
+  const s = newScheduler([]);
+
+  wipe();
+  ok('HC0. nothing active → the card is left exactly as measured', JSON.stringify(fold({ status: 'ok', spendable_balance: 5 })) ===
+    JSON.stringify({ status: 'ok', spendable_balance: 5 }));
+
+  wipe();
+  const held = seedWithdrawal({ status: 'tor_held' });
+  evNote.run(held, 'tor_sending', 'tor_held', 'held: test', nowS() - 90000);
+  await quiet(() => s._raiseHeldAlert(nowS()));
+  const c1 = fold({ status: 'ok' });
+  ok('HC1. a payout held > 24 h → the card reads CRITICAL and names it', c1.status === 'critical' && /held over 24 h/.test(c1.message || ''),
+    JSON.stringify(c1));
+
+  wipe();
+  await quiet(() => s._noteTorSendPath({ id: 10 }, 'reachable'));
+  const c2 = fold({ status: 'ok' });
+  ok('HC2. tor_send_path → Degraded (warning) with the "check the pool wallet\'s Tor" message',
+    c2.status === 'warning' && /pool wallet's Tor/.test(c2.message || ''), JSON.stringify(c2));
+
+  wipe();
+  s._rollingAlert('payout_unmined', 'critical', 'unmined test', {});
+  const c3 = fold({ status: 'ok' });
+  ok('HC3. payout_unmined critical still folds as before', c3.status === 'critical' && /unmined test/.test(c3.message || ''), JSON.stringify(c3));
+
+  wipe();
+  await quiet(() => s._noteTorSendPath({ id: 10 }, 'reachable'));
+  s._rollingAlert('payout_held', 'critical', 'held test', {});
+  const c4 = fold({ status: 'error', message: 'owner API down' });
+  ok('HC4. a wallet that is DOWN stays Down (error is never masked), and both messages are appended',
+    c4.status === 'error' && /owner API down/.test(c4.message) && /held test/.test(c4.message) && /pool wallet's Tor/.test(c4.message),
+    JSON.stringify(c4));
+  {
+    // Reconciliation's out-of-band send audit (review finding (b), 2026-09-26). A tor_failed row
+    // is refunded, and since the one-attempt change only on wallet proof that nothing was sent — so
+    // a CONFIRMED send whose only match is such a row is a double pay, not a "recorded" payout.
+    const { auditWalletSends } = require(path.join(APP, 'lib/reconciliation.js'));
+    const sendOf = (slate) => ({ id: 1, tx_type: 'TxSent', confirmed: true, tx_slate_id: slate,
+      creation_ts: new Date().toISOString(), amount_debited: String(99960000000), amount_credited: '0', fee: '0' });
+    const audit = async (status) => {
+      reset();
+      const id = seedWithdrawal({ status, priorAttempt: true });
+      db.prepare("UPDATE withdrawals SET fail_code = CASE WHEN ? = 'tor_failed' THEN 'unknown' ELSE NULL END WHERE id = ?").run(status, id);
+      return auditWalletSends(db, { async getTransactions() { return [sendOf('LANDED')]; } }, {});
+    };
+    const a1 = await audit('tor_failed');
+    ok('HC7. a confirmed wallet send matching only a REFUNDED Tor row (e.g. a forced refund whose tx later mined) is UNRECORDED',
+      a1.reachable && a1.unrecorded.length === 1 && a1.matched === 0, JSON.stringify(a1));
+    const a2 = await audit('confirmed');
+    ok('HC7. control: the same send against a paid row is matched', a2.reachable && a2.matched === 1 && a2.unrecorded.length === 0,
+      JSON.stringify(a2));
+    const a3 = await audit('tor_held');
+    ok('HC7. control: …and against a HELD row it is matched too (its send may have landed)', a3.matched === 1 && a3.unrecorded.length === 0,
+      JSON.stringify(a3));
+    reset();
+  }
+  const c5 = fold({ status: 'warning', message: 'wallet short' });
+  ok('HC5. critical outranks an already-degraded card', c5.status === 'critical', JSON.stringify(c5));
+
+  const src = fs.readFileSync(path.join(APP, 'index.js'), 'utf8');
+  ok('HC6. /api/admin/health folds through AlertMonitor.foldPayoutAlerts (no second hand-written copy of the fold)',
+    /AlertMonitor\.foldPayoutAlerts\(\s*db\s*,\s*services\.grin_wallet\s*\)/.test(src) &&
+    !/WHERE type = 'payout_unmined' AND status = 'active'/.test(src));
+  wipe();
+}
+
+// ═══ [review-fixes] the /review of 2026-09-26, findings #1–#6 ════════════════════════════════
+// Every non-control case below failed on the code the review read, and was seen failing before
+// the fix went in:
+//   #1 a Held refund needs payouts UNFROZEN, two absent reads taken after the last resume, and a
+//      wallet tx log that still carries the history mark taken at the row's first Held check;
+//   #2 the Tor CLI send holds the wallet send lock, so a Slatepack/Goblin create can never select
+//      the coins the CLI picked and has not locked yet (and is refused fast while it runs);
+//   #3 grin-wallet's own STDOUT reaches the settlement (its NotEnoughFunds is outcome C again);
+//   #4 the forced refund reads tx_slate_state; a Held row's own never-finalized fallback slate is
+//      cancelled again; a Held row's own round-tripped (Standard2) send is re-broadcast hourly;
+//   #5 the unrecorded-send audit compares the NET that left (amount − fee_charged);
+//   #6 the default send timeout covers grin-wallet's own waits.
+async function reviewFixesSection() {
+  console.log('\n[review-fixes] /review 2026-09-26 — #1 frozen + history, #2 send lock, #3 CLI stdout, #4 tx state, #5 audit NET, #6 timeout');
+  const WalletTor = require(path.join(APP, 'lib/wallet-tor.js'));
+  const SENT = nowS() - 1800;
+  const seedHeld = ({ slate = null, heldAgoS = 60 } = {}) => {
+    const id = seedWithdrawal({ status: 'tor_held', slate, retries: 0, priorAttempt: true });
+    evNote.run(id, 'tor_sending', 'tor_held', 'held: test', nowS() - heldAgoS);
+    return id;
+  };
+  const absentReads = (id) => db.prepare(
+    "SELECT COUNT(*) c FROM withdrawal_events WHERE withdrawal_id = ? AND note LIKE 'held-check: absent%'").get(id).c;
+  const age = (id, secs) => db.prepare(
+    "UPDATE withdrawal_events SET created_at = created_at - ? WHERE withdrawal_id = ? AND note LIKE 'held-check: %'").run(secs, id);
+  const unfreeze = () => db.exec('DELETE FROM payout_control');
+  const freeze = (s) => quiet(async () => s.freeze('review-fixes test', 'test'));
+  const pass = async (s, opts) => (await quiet(() => s.resolveHeldTor(opts))) || [];
+  const outcome = (r) => (r && r[0] ? r[0].outcome : null);
+  // A tx-log entry the history mark can anchor on (a confirmed coinbase receipt, no slate id).
+  const cb = (id, whenS) => ({ id, tx_type: 'ConfirmedCoinbase', confirmed: true, tx_slate_id: null,
+    creation_ts: new Date(whenS * 1000).toISOString(), amount_credited: '60000000000', amount_debited: '0', fee: null });
+  const st = (slate, state, extra = {}) => ({ ...tx({ slate, confirmed: false, when: SENT }), tx_slate_state: state, ...extra });
+
+  // ── #1 — a Held refund waits for a resume ──
+  {
+    reset(); unfreeze(); sends = [];
+    const id = seedHeld();
+    const s = newScheduler([]);
+    await freeze(s);
+    const r1 = await pass(s); age(id, 11 * 60); const r2 = await pass(s);
+    ok('F1a. FROZEN: an absent Held payout is NOT refunded (a restore / switch freezes; the refund waits for the resume)',
+      heldOk(id), JSON.stringify(rowOf(id)));
+    ok('F1a. …no absent read is journaled while frozen, and the pass says "frozen"',
+      absentReads(id) === 0 && outcome(r1) === 'frozen' && outcome(r2) === 'frozen', JSON.stringify({ r1, r2, reads: absentReads(id) }));
+    unfreeze();
+  }
+  {
+    reset();
+    const id = seedHeld();
+    const s = newScheduler([tx({ slate: 'F1-CONF', confirmed: true, when: SENT })]);
+    await freeze(s);
+    await pass(s);
+    ok('F1a. control: FROZEN still CONFIRMS a Held payout the chain shows paid', rowOf(id).status === 'confirmed', JSON.stringify(rowOf(id)));
+    unfreeze();
+  }
+  {
+    reset(); unfreeze();
+    const id = seedHeld({ heldAgoS: 3600 });
+    const s = newScheduler([]);
+    await pass(s);                                   // absent read 1, unfrozen …
+    age(id, 30 * 60);                                // … 30 min ago
+    db.prepare(`INSERT INTO payout_control (id, frozen, reason, frozen_by, frozen_at, updated_at)
+                VALUES (1, 0, NULL, 'test', NULL, ?)`).run(nowS() - 20 * 60);   // then freeze → RESUME, 20 min ago
+    const r = await pass(s);
+    ok('F1b. an absent read taken BEFORE the last resume does not count → still held, a fresh streak starts',
+      heldOk(id) && outcome(r) === 'absent_first' && absentReads(id) === 2, JSON.stringify({ r, reads: absentReads(id) }));
+    db.prepare(`UPDATE withdrawal_events SET created_at = created_at - 660
+                 WHERE withdrawal_id = ? AND note LIKE 'held-check: absent%' AND created_at >= ?`).run(id, nowS() - 120);
+    await pass(s);
+    ok('F1b. control: two absent reads ≥ 10 min apart, both after the resume → refunded', refundedOk(id), JSON.stringify(rowOf(id)));
+    unfreeze();
+  }
+  {
+    reset(); unfreeze();
+    const id = seedWithdrawal({ status: 'retry_scheduled', retries: 1, slate: null });
+    const s = newScheduler([]);
+    await freeze(s);
+    await quiet(() => s.migrateLegacyTorRetries());
+    ok('F1c. FROZEN at startup: a legacy retry row the log shows absent is HELD, not refunded on one read',
+      heldOk(id), JSON.stringify(rowOf(id)));
+    unfreeze();
+  }
+
+  // ── #1 — the wallet history mark ──
+  {
+    reset(); unfreeze();
+    const id = seedHeld();
+    const history = [cb(40, SENT - 600), cb(41, SENT + 60)];
+    const s = newScheduler(history);
+    await pass(s);
+    const mark = db.prepare("SELECT note FROM withdrawal_events WHERE withdrawal_id = ? AND note LIKE 'held-check: wallet mark%'").get(id);
+    ok('F1d. the first Held check records a wallet history mark (the newest tx-log entry)', !!mark && /"id":41\b/.test(mark.note), mark && mark.note);
+    // The wallet is replaced — a seed recovery, a switch, an older restore: entry 41 is gone.
+    history.length = 0; history.push(cb(1, nowS() - 30), cb(2, nowS() - 20));
+    age(id, 11 * 60);
+    const r = await pass(s);
+    ok('F1d. the log no longer carries that mark → its "absent" is not proof → still held, reported "history_changed"',
+      heldOk(id) && outcome(r) === 'history_changed', JSON.stringify({ r, row: rowOf(id) }));
+    age(id, 3600); await pass(s);
+    ok('F1d. …and it never refunds on that log, however long it waits', heldOk(id));
+  }
+  {
+    reset(); unfreeze();
+    const id = seedHeld();
+    const s = newScheduler([cb(40, SENT - 600), cb(41, SENT + 60)]);
+    await pass(s); age(id, 11 * 60); await pass(s);
+    ok('F1d. control: the mark still in the log → two absent reads ≥ 10 min apart refund as before', refundedOk(id), JSON.stringify(rowOf(id)));
+  }
+  {
+    // A rebuilt log can reuse an id; it cannot reuse the creation time.
+    reset(); unfreeze();
+    const id = seedHeld();
+    const history = [cb(41, SENT + 60)];
+    const s = newScheduler(history);
+    await pass(s);
+    history[0] = cb(41, nowS() - 5);
+    age(id, 11 * 60);
+    const r = await pass(s);
+    ok('F1d. same entry id, different creation time (a rebuilt log) → history_changed, still held',
+      heldOk(id) && outcome(r) === 'history_changed', JSON.stringify(r));
+  }
+  {
+    reset(); unfreeze();
+    const id = seedHeld();
+    const s = newScheduler([cb(41, SENT + 60)]);
+    await freeze(s);
+    await pass(s);
+    const mark = db.prepare("SELECT 1 FROM withdrawal_events WHERE withdrawal_id = ? AND note LIKE 'held-check: wallet mark%'").get(id);
+    ok('F1d. FROZEN: no history mark is taken from a wallet that may be mid-switch', !mark);
+    unfreeze();
+  }
+  {
+    reset(); unfreeze();
+    const id = seedHeld();
+    const history = [cb(41, SENT + 60)];
+    const s = newScheduler(history);
+    await pass(s);
+    history.length = 0; history.push(cb(1, nowS() - 30));
+    let r = null; const e = await thrown(async () => { r = await quiet(() => s.forceRefundHeld(id, { adminId: 7 })); });
+    ok('F1e. the forced refund stays the operator\'s override on a changed history, and says so (wallet_history "changed")',
+      !e && refundedOk(id) && r && r.wallet_history === 'changed', JSON.stringify({ e: e && e.message, r }));
+  }
+
+  // ── #2 — the Tor CLI send holds the wallet send lock ──
+  {
+    const WalletAPI = require(path.join(APP, 'lib/wallet.js'));
+    const ADDR2 = 'tgrin1' + 'z'.repeat(58);
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    const mkWallet = (order) => {
+      const w = new WalletAPI({ network: 'testnet', wallet_dir: '/nonexistent' });
+      w.sessionOpen = true; w.aesKey = Buffer.alloc(32); w.token = 'TOKEN';
+      let n = 0;
+      w._encryptedCall = async (method, params) => {
+        if (method === 'init_send_tx' || method === 'tx_lock_outputs') { order.push(method); await sleep(40); }
+        switch (method) {
+          case 'init_send_tx':
+            return { ver: '4:3', id: `0000${String(++n).padStart(4, '0')}-0000-4000-8000-00000000f2f2`, sta: 'S1',
+                     amt: String(params.args.amount), fee: '23500000' };
+          case 'create_slatepack_message': return 'BEGINSLATEPACK. x. ENDSLATEPACK.';
+          case 'retrieve_txs': return [true, []];
+          default: return null;
+        }
+      };
+      return w;
+    };
+    const mkSched = (order, cliDone) => {
+      const s = new WithdrawalScheduler(config, mkWallet(order));
+      s.incentives = { maybePayJoinBonus() {} };
+      s.recordTorFee = async () => {};
+      s._captureTorSlateId = async () => {};
+      s.walletTor = { async sendToTorAddress() { order.push('cli start'); await cliDone; order.push('cli exit'); return { success: true }; } };
+      return s;
+    };
+    const fund2 = () => db.prepare(`INSERT INTO miner_accounts (grin_address, balance, balance_locked) VALUES (?, 100, 0)
+      ON CONFLICT(grin_address) DO UPDATE SET balance = 100, balance_locked = 0`).run(ADDR2);
+    const wipe2 = () => {
+      db.prepare('DELETE FROM withdrawal_events WHERE withdrawal_id IN (SELECT id FROM withdrawals WHERE grin_address = ?)').run(ADDR2);
+      db.prepare('DELETE FROM balance_log WHERE grin_address = ?').run(ADDR2);
+      db.prepare('DELETE FROM withdrawals WHERE grin_address = ?').run(ADDR2);
+    };
+    {
+      reset(); unfreeze(); wipe2(); fund2();
+      const order = []; let open; const cliDone = new Promise((r) => { open = r; });
+      const s = mkSched(order, cliDone);
+      const id = seedWithdrawal({ status: 'tor_checking', retries: 0, priorAttempt: false });
+      let e = null, after = null, a2 = null, rows2 = -1, rev2 = -1, atRefusal = [];
+      await quiet(async () => {
+        const tor = s.sendWithdrawal(id);
+        for (let i = 0; i < 200 && !order.includes('cli start'); i++) await sleep(5);
+        e = await thrown(() => s.createSlatepackWithdrawal(ADDR2, 30));
+        await sleep(100);   // an unrefused create would have reached init_send_tx by now
+        atRefusal = order.slice();
+        a2 = db.prepare('SELECT balance, balance_locked FROM miner_accounts WHERE grin_address = ?').get(ADDR2);
+        rows2 = db.prepare('SELECT COUNT(*) c FROM withdrawals WHERE grin_address = ?').get(ADDR2).c;
+        rev2 = db.prepare("SELECT COUNT(*) c FROM balance_log WHERE grin_address = ? AND event_type = 'reversal'").get(ADDR2).c;
+        open(); await tor;
+        after = await thrown(() => s.createSlatepackWithdrawal(ADDR2, 30));
+      });
+      ok('F2a. while the Tor CLI runs, a Slatepack create is refused at once (503) — it never selects the CLI\'s coins',
+        !!e && e.code === 503 && atRefusal.join(',') === 'cli start',
+        JSON.stringify({ e: e && `${e.code} ${e.message}`, atRefusal }));
+      ok('F2a. …and nothing was deducted: no row, balance untouched, no reversal (so no cooldown either)',
+        rows2 === 0 && !!a2 && Math.abs(a2.balance - 100) < 1e-9 && a2.balance_locked === 0 && rev2 === 0,
+        JSON.stringify({ a2, rows2, rev2 }));
+      ok('F2a. control: once the Tor send has returned, the same create goes through', !after && rowOf(id).status === 'confirmed',
+        JSON.stringify({ e: after && after.message, row: rowOf(id).status }));
+    }
+    {
+      reset(); unfreeze(); wipe2(); fund2();
+      const order = [];
+      const s = mkSched(order, Promise.resolve());
+      const id = seedWithdrawal({ status: 'tor_checking', retries: 0, priorAttempt: false });
+      await quiet(async () => {
+        const sp = s.createSlatepackWithdrawal(ADDR2, 30).catch(() => {});
+        await s.sendWithdrawal(id);
+        await sp;
+      });
+      ok('F2b. a Slatepack create already selecting coins finishes its lock BEFORE the Tor CLI starts',
+        order.join(',').startsWith('init_send_tx,tx_lock_outputs,cli start'), order.join(','));
+    }
+    {
+      reset(); unfreeze(); wipe2(); fund2();
+      const order = [];
+      const s = mkSched(order, Promise.resolve());
+      const id = seedWithdrawal({ status: 'tor_checking', retries: 0, priorAttempt: false });
+      await quiet(async () => {
+        const sp = s.createSlatepackWithdrawal(ADDR2, 30).catch(() => {});
+        const tor = s.sendWithdrawal(id);
+        s.freeze('lands while the Tor send waits for the lock', 'test');
+        await Promise.all([sp, tor]);
+      });
+      const claim = db.prepare("SELECT 1 FROM withdrawal_events WHERE withdrawal_id = ? AND to_status = 'tor_sending'").get(id);
+      ok('F2c. a freeze landing while the Tor send waits for the lock → no send, no claim, still tor_checking',
+        !order.includes('cli start') && rowOf(id).status === 'tor_checking' && !claim, JSON.stringify({ order, st: rowOf(id).status }));
+      unfreeze();
+    }
+    wipe2(); db.prepare('DELETE FROM miner_accounts WHERE grin_address = ?').run(ADDR2);
+  }
+
+  // ── #3 — grin-wallet's STDOUT reaches the settlement (real execWalletCommand, a node child) ──
+  {
+    reset(); unfreeze(); db.exec("DELETE FROM alerts WHERE type = 'pool_wallet_short'");
+    const id = seedWithdrawal({ status: 'tor_checking', retries: 0, priorAttempt: false });
+    const s = newScheduler([]);
+    const wt = new WalletTor({ network: 'testnet', wallet_dir: os.tmpdir() });
+    wt.walletBin = process.execPath;
+    const script = "console.log('Wallet command failed: Not enough funds. Required: 99.96, Available: 12.5'); process.exit(1)";
+    wt.execWalletCommand = () => WalletTor.prototype.execWalletCommand.call(wt, ['-e', script]);
+    wt.isPayoutAddress = () => true;   // this file's fixture ADDR is 60 chars; the format is not under test here
+    wt.probeToronlineStatus = async () => { throw new Error('outcome C must not probe'); };
+    s.walletTor = wt;
+    await quiet(() => s.sendWithdrawal(id));
+    ok('F3. grin-wallet\'s NotEnoughFunds (STDOUT, exit 1) reaches outcome C → refunded now, fail_code pool_busy',
+      refundedOk(id) && rowOf(id).fail_code === 'pool_busy', JSON.stringify(rowOf(id)));
+    const a = alertOf('pool_wallet_short');
+    ok('F3. …the pool_wallet_short alert fires with the wallet\'s figures, and fail_detail keeps the CLI\'s own line',
+      !!a && /Available: 12\.5/.test(a.message) && /Not enough funds/.test(String(rowOf(id).fail_detail)),
+      JSON.stringify({ a: a && a.message, d: rowOf(id).fail_detail }));
+  }
+
+  // ── #4 — the forced refund reads tx_slate_state ──
+  {
+    reset(); unfreeze();
+    const id = seedHeld();
+    const e = await thrown(() => quiet(() => newScheduler([st('F4-S2', 'Standard2', { id: 60 })]).forceRefundHeld(id, { adminId: 7 })));
+    ok('F4a. forced refund REFUSED (409) when the matching unconfirmed send completed its Tor round trip (Standard2: it may be posted)',
+      !!e && e.code === 409 && heldOk(id), e && e.message);
+    reset();
+    const id2 = seedHeld();
+    const e2 = await thrown(() => quiet(() => newScheduler([tx({ slate: 'F4-NOSTATE', when: SENT })]).forceRefundHeld(id2, { adminId: 7 })));
+    ok('F4a. …and when the wallet does not say (no tx_slate_state): refused too — never guessed', !!e2 && e2.code === 409 && heldOk(id2),
+      e2 && e2.message);
+  }
+  {
+    reset(); unfreeze();
+    const FB1 = 'f4f4f4f4-0000-4000-8000-000000000001';
+    const id = seedHeld({ slate: FB1 });
+    const log = [st(FB1, 'Standard1', { id: 61 })];
+    const cancels = [];
+    const s = newScheduler(log);
+    s.wallet.cancelTx = async (sid) => { cancels.push(sid); log[0].tx_type = 'TxSentCancelled'; };
+    let r = null; const e = await thrown(async () => { r = await quiet(() => s.forceRefundHeld(id, { adminId: 7 })); });
+    ok('F4b. forced refund on the row\'s OWN never-finalized fallback slate (Standard1) → that slate cancelled first, then refunded',
+      !e && refundedOk(id) && cancels.join() === FB1 && !!r && r.cancelled_slate === FB1, JSON.stringify({ e: e && e.message, r, cancels }));
+  }
+  {
+    reset(); unfreeze();
+    const FB2 = 'f4f4f4f4-0000-4000-8000-000000000002';
+    const id = seedHeld({ slate: FB2 });
+    const s = newScheduler([st(FB2, 'Standard1', { id: 62 })]);
+    s.wallet.cancelTx = async () => { throw new Error("Can't contact running Grin node. Not Cancelling."); };
+    const e = await thrown(() => quiet(() => s.forceRefundHeld(id, { adminId: 7 })));
+    ok('F4c. …that cancel fails (no node) → refused (503), still held', !!e && e.code === 503 && heldOk(id), e && e.message);
+  }
+  {
+    reset(); unfreeze();
+    const id = seedHeld();
+    const cancels = [];
+    const s = newScheduler([st('F4-AMT', 'Standard1', { id: 63 })]);
+    s.wallet.cancelTx = async (sid) => { cancels.push(sid); };
+    const e = await thrown(() => quiet(() => s.forceRefundHeld(id, { adminId: 7 })));
+    ok('F4d. control: a Standard1 match found by AMOUNT → refunded, and nothing cancelled (never cancel on an amount match)',
+      !e && refundedOk(id) && cancels.length === 0, JSON.stringify({ e: e && e.message, cancels }));
+  }
+  // ── #4 — the Held check cancels a fallback lock again, and re-broadcasts a round-tripped send ──
+  {
+    reset(); unfreeze();
+    const FB3 = 'f4f4f4f4-0000-4000-8000-000000000003';
+    const id = seedHeld({ slate: FB3 });
+    const log = [st(FB3, 'Standard1', { id: 64 })];
+    const cancels = [];
+    const s = newScheduler(log);
+    s.wallet.cancelTx = async (sid) => { cancels.push(sid); log[0].tx_type = 'TxSentCancelled'; };
+    const r1 = await pass(s);
+    ok('F4e. Held with its OWN fallback slate still locked (Standard1) → the Held check cancels it (the cancel that failed at send time)',
+      cancels.join() === FB3 && outcome(r1) === 'fallback_cancelled' && heldOk(id), JSON.stringify({ r1, cancels }));
+    await pass(s); age(id, 11 * 60); await pass(s);
+    ok('F4e. …then two absent reads ≥ 10 min apart refund it, and it is cancelled only once', refundedOk(id) && cancels.length === 1,
+      JSON.stringify({ row: rowOf(id), cancels }));
+  }
+  {
+    reset(); unfreeze();
+    const cancels = [];
+    const FB4 = 'f4f4f4f4-0000-4000-8000-000000000004';
+    seedHeld({ slate: FB4 });
+    const s = newScheduler([st(FB4, 'Standard2', { id: 65 })]);
+    s.wallet.cancelTx = async (sid) => { cancels.push(sid); };
+    s.walletTor.repostTx = async () => ({ ok: true, output: '' });
+    await pass(s);
+    reset();
+    seedHeld();
+    const s2 = newScheduler([st('F4-AMT1', 'Standard1', { id: 66 })]);
+    s2.wallet.cancelTx = async (sid) => { cancels.push(sid); };
+    await pass(s2);
+    ok('F4f. control: the Held check never cancels a Standard2 send, nor any match found by amount', cancels.length === 0,
+      JSON.stringify(cancels));
+  }
+  {
+    reset(); unfreeze();
+    const reposts = [];
+    const id = seedHeld();
+    const s = newScheduler([st('F4-RP', 'Standard2', { id: 70 })]);
+    s.walletTor.repostTx = async (txId) => { reposts.push(txId); return { ok: true, output: 'Reposted' }; };
+    const r1 = await pass(s);
+    const ev = db.prepare("SELECT from_status, to_status FROM withdrawal_events WHERE withdrawal_id = ? AND note LIKE 'repost:%'").all(id);
+    ok('F4g. Held + its own unconfirmed Standard2 send → re-broadcast by tx-log id (the identical tx), journaled held → held',
+      reposts.join() === '70' && ev.length === 1 && ev[0].from_status === 'tor_held' && ev[0].to_status === 'tor_held' &&
+      outcome(r1) === 'reposted', JSON.stringify({ reposts, ev, r1 }));
+    await pass(s);
+    ok('F4g. …not again within the hour, and the row stays held with its amount locked', reposts.length === 1 && heldOk(id),
+      JSON.stringify(reposts));
+    reset();
+    const id2 = seedHeld();
+    const s2 = newScheduler([st('F4-RP2', 'Standard2', { id: 71 })]);
+    s2.walletTor.repostTx = async (txId) => { reposts.push(txId); return { ok: true, output: '' }; };
+    await freeze(s2);
+    await pass(s2);
+    ok('F4g. …FROZEN: no repost', reposts.length === 1 && heldOk(id2), JSON.stringify(reposts));
+    unfreeze();
+    reset();
+    const id3 = seedHeld();
+    const s3 = newScheduler([st('F4-RP3', 'Standard1', { id: 72 })]);
+    s3.walletTor.repostTx = async (txId) => { reposts.push(txId); return { ok: true, output: '' }; };
+    await pass(s3);
+    ok('F4g. control: a Standard1 lock (never finalized) is never reposted', reposts.length === 1 && heldOk(id3), JSON.stringify(reposts));
+  }
+  {
+    // The guards on both remedies. A LEGACY row with two attempts may own two different finalized
+    // txs; landing one of them could complete a double pay, so it is never re-broadcast. And a
+    // slate another row also carries is never cancelled from this one.
+    reset(); unfreeze();
+    const reposts = [];
+    const id = seedHeld();
+    evNote.run(id, 'tor_checking', 'tor_sending', null, nowS() - 1200);   // a second attempt on record
+    evNote.run(id, 'tor_sending', 'tor_held', 'held: second attempt', nowS() - 1100);
+    const s = newScheduler([st('F4-TWO', 'Standard2', { id: 80, creation_ts: new Date((nowS() - 1150) * 1000).toISOString() })]);
+    s.walletTor.repostTx = async (txId) => { reposts.push(txId); return { ok: true, output: '' }; };
+    await pass(s);
+    ok('F4h. a Held row with TWO attempts on record is never re-broadcast (two finalized txs could exist)',
+      reposts.length === 0 && heldOk(id), JSON.stringify(reposts));
+    reset(); unfreeze();
+    const cancels = [];
+    const FB5 = 'f4f4f4f4-0000-4000-8000-000000000005';
+    const idA = seedHeld({ slate: FB5 });
+    db.prepare(`INSERT INTO withdrawals (grin_address, amount, fee_charged, status, method, slate_id, created_at)
+                VALUES (?, 30, 0.04, 'slatepack_pending', 'slatepack', ?, ?)`).run(ADDR, FB5, nowS() - 100);
+    const s2 = newScheduler([st(FB5, 'Standard1', { id: 81 })]);
+    s2.wallet.cancelTx = async (sid) => { cancels.push(sid); };
+    await pass(s2);
+    ok('F4h. a slate ANOTHER row also carries is never cancelled from a Held row', cancels.length === 0 && heldOk(idA),
+      JSON.stringify(cancels));
+  }
+
+  // ── #5 — the unrecorded-send audit compares the NET that left ──
+  {
+    const { auditWalletSends } = require(path.join(APP, 'lib/reconciliation.js'));
+    const send = (net) => ({ id: 1, tx_type: 'TxSent', confirmed: true, tx_slate_id: `OTHER-${net}`,
+      creation_ts: new Date().toISOString(), amount_debited: String(Math.round((net + 10) * 1e9)), amount_credited: String(10e9), fee: '0' });
+    const row = (amount, feeCharged, status = 'confirmed', method = 'tor') => {
+      reset();
+      db.prepare(`INSERT INTO withdrawals (grin_address, amount, fee_charged, status, method, created_at, confirmed_at)
+                  VALUES (?, ?, ?, ?, ?, ?, ?)`).run(ADDR, amount, feeCharged, status, method, nowS() - 600, nowS() - 590);
+    };
+    const audit = (net) => auditWalletSends(db, { async getTransactions() { return [send(net)]; } }, {});
+    row(50, 0.1);
+    const a1 = await audit(49.9);
+    ok('F5. withdrawal_fee 0.1: the NET that left (amount − fee_charged) is matched — no false "out-of-band send" freeze',
+      a1.matched === 1 && a1.unrecorded.length === 0, JSON.stringify(a1));
+    row(25, 0.04, 'cancelled');
+    const a2 = await audit(24.98);
+    ok('F5. a send 0.02 GRIN off every row\'s net is UNRECORDED (a near-amount row can no longer absorb it)',
+      a2.matched === 0 && a2.unrecorded.length === 1, JSON.stringify(a2));
+    row(12.5, 0, 'confirmed', 'manual');
+    const a3 = await audit(12.49);
+    ok('F5. control: a hand-recorded MANUAL payout keeps the human tolerance (0.05 GRIN)', a3.matched === 1, JSON.stringify(a3));
+    reset();
+  }
+
+  // ── #6 — the send timeout default ──
+  {
+    const s = new WithdrawalScheduler({ network: 'testnet' }, null);
+    ok('F6. with no wallet_send_timeout_ms set, the stale-send sweep waits past the new default (twice it + slack)',
+      !!WalletTor.DEFAULT_SEND_TIMEOUT_MS && s.torSendingStaleSeconds >= Math.ceil(WalletTor.DEFAULT_SEND_TIMEOUT_MS / 1000) * 2 + 120 &&
+      s.torSendingStaleSeconds >= 2 * 360 + 120, String(s.torSendingStaleSeconds));
+  }
+  reset(); unfreeze();
+}
+
+// ═══ [binding] a reply finalizes only the slate its OWN row was issued (2026-09-27) ═══
+// Both finalize paths compared the reply's slate id with the row's only `if (w.slate_id && …)`.
+// A new row sits in slatepack_pending with NO slate id while its create is inside the wallet
+// calls, and a reply that decodes to no id skipped the compare as well. Either way the reply went
+// to finalize_tx whichever slate it belonged to, and grin-wallet finalizes any slate whose context
+// it still holds while its entry is TxSent. An expired row is refunded BEFORE its wallet cancel;
+// with that cancel still owed (node down), its old reply pasted into a new, smaller payout's window
+// posts the OLD amount while the ledger records the new one. Both paths now fail closed. The
+// B-cases failed on the code before the fix; the C-cases are controls and passed on it too.
+async function bindingSection() {
+  console.log('\n[binding] a reply only finalizes the slate its own row was issued');
+  const NPUB = 'cd'.repeat(32);
+  const OLD = 'b0b0b0b0-0000-4000-8000-00000000000a';
+  const reply = (slateId) => `BEGINSLATEPACK. reply:${slateId} . ENDSLATEPACK.`;
+  // The wallet as the attack needs it: it finalizes ANY slate it is handed (the real one does, for
+  // a TxSent entry whose context it still holds). `calls` records what reached it.
+  const bindWallet = (hooks = {}) => {
+    const w = {
+      calls: [], n: 0,
+      async initSendTx(a) { if (hooks.init) await hooks.init(); w.n++; return { id: `bind-${seq}-${w.n}`, amt: a, fee: '23500000' }; },
+      async txLockOutputs() {},
+      async createSlatepackMessage(slate) { return `BEGINSLATEPACK. S1 for ${slate.id} . ENDSLATEPACK.`; },
+      async cancelTx(id) { w.calls.push(`cancel:${id}`); },
+      async getTransactions() { return []; },
+      async slateFromSlatepackMessage(msg) {
+        const m = /reply:(\S*)/.exec(String(msg));
+        return m && m[1] ? { id: m[1] } : { amount: '24960000000' };   // no id at all
+      },
+      async finalizeTx(slate) { w.calls.push(`finalize:${slate && slate.id}`); return slate; },
+      async postTx(slate) { w.calls.push(`post:${slate && slate.id}`); },
+    };
+    return w;
+  };
+  const isSettle = (c) => /^(finalize|post):/.test(c);
+  const sched = (wallet) => {
+    const s = new WithdrawalScheduler(config, wallet);
+    s.incentives = { maybePayJoinBonus() {} };
+    return s;
+  };
+  const pendingId = () => (db.prepare(
+    "SELECT id FROM withdrawals WHERE grin_address = ? AND status = 'slatepack_pending' ORDER BY id DESC LIMIT 1").get(ADDR) || {}).id;
+  const setNpub = (npub) => db.prepare('UPDATE miner_accounts SET nostr_npub = ? WHERE grin_address = ?').run(npub, ADDR);
+  // The refunded row whose wallet cancel is still owed (node down at expiry): its slate is still a
+  // live TxSent in the pool wallet, and its miner kept the reply.
+  const seedOwedOld = () => Number(db.prepare(
+    `INSERT INTO withdrawals (grin_address, amount, fee, fee_charged, status, method, slate_id, slate_cancel_pending, created_at)
+     VALUES (?, 1000, 0, 0.04, 'slatepack_expired', 'slatepack', ?, 1, ?)`).run(ADDR, OLD, nowS() - 7200).lastInsertRowid);
+  const seedRow = ({ slate, method = 'slatepack', amount = 25 }) => {
+    db.prepare('UPDATE miner_accounts SET balance_locked = balance_locked + ? WHERE grin_address = ?').run(amount, ADDR);
+    return Number(db.prepare(
+      `INSERT INTO withdrawals (grin_address, amount, fee, fee_charged, status, method, slate_id, created_at)
+       VALUES (?, ?, 0, 0.04, 'slatepack_pending', ?, ?, ?)`).run(ADDR, amount, method, slate, nowS() - 60).lastInsertRowid);
+  };
+
+  // ── B1 manual rail: the old reply pasted into a NEW payout while its create is in the wallet ──
+  {
+    reset(); fund(1000); seq++;
+    const oldId = seedOwedOld();
+    let s = null;
+    let inWindow = null;
+    const w = bindWallet({
+      async init() {
+        // Inside the create's first wallet call: the row is committed, its slate_id still NULL.
+        const id = pendingId();
+        inWindow = { id, slate: id ? rowOf(id).slate_id : undefined };
+        inWindow.err = await thrown(() => s.finalizeSlatepackWithdrawal(ADDR, id, reply(OLD)));
+      },
+    });
+    s = sched(w);
+    let created = null;
+    const cErr = await thrown(() => quiet(async () => { created = await s.createSlatepackWithdrawal(ADDR, 25); }));
+    const row = inWindow && inWindow.id ? rowOf(inWindow.id) : {};
+    ok('B1. setup: the reply arrived while the new row was pending with NO slate id (the create\'s wallet window)',
+      !!inWindow && !!inWindow.id && inWindow.slate === null, JSON.stringify(inWindow));
+    ok('B1. manual rail: that reply is REFUSED (409), and finalize_tx / post_tx never run',
+      !!inWindow && !!inWindow.err && inWindow.err.code === 409 && !w.calls.some(isSettle),
+      JSON.stringify({ err: inWindow && inWindow.err && inWindow.err.message, calls: w.calls }));
+    ok('B1. …the create is untouched: it attaches ITS OWN slate and hands that S1 out',
+      !cErr && !!created && created.success === true && row.status === 'slatepack_pending' &&
+      row.slate_id === `bind-${seq}-1` && created.slatepack === `BEGINSLATEPACK. S1 for bind-${seq}-1 . ENDSLATEPACK.`,
+      JSON.stringify({ cErr: cErr && cErr.message, created, row }));
+    ok('B1. …ledger: 25 locked for the new payout, 975 spendable, the old row still refunded and unsettled',
+      Math.abs(acct().balance - 975) < 1e-9 && Math.abs(acct().balance_locked - 25) < 1e-9 &&
+      rowOf(oldId).status === 'slatepack_expired', JSON.stringify({ a: acct(), old: rowOf(oldId).status }));
+  }
+
+  // ── B2 manual rail: a reply that decodes to no slate id ──
+  {
+    reset(); fund(0); seq++;
+    const id = seedRow({ slate: 'b2-issued' });
+    const w = bindWallet();
+    const e = await thrown(() => quiet(() => sched(w).finalizeSlatepackWithdrawal(ADDR, id, reply(''))));
+    ok('B2. manual rail: a reply that decodes to NO slate id is refused (400), never finalized',
+      !!e && e.code === 400 && !w.calls.some(isSettle), JSON.stringify({ e: e && e.message, calls: w.calls }));
+    ok('B2. …and the row is handed back to pending, so the right reply can still be pasted',
+      rowOf(id).status === 'slatepack_pending', JSON.stringify(rowOf(id)));
+  }
+
+  // ── C1 controls, manual rail: another slate's reply is refused; the row's own reply settles ──
+  {
+    reset(); fund(0); seq++;
+    const id = seedRow({ slate: 'c1-issued' });
+    const w = bindWallet();
+    const s = sched(w);
+    const e = await thrown(() => quiet(() => s.finalizeSlatepackWithdrawal(ADDR, id, reply('c1-other'))));
+    ok('C1. control: a reply to a DIFFERENT slate is refused (400) and the row goes back to pending',
+      !!e && e.code === 400 && !w.calls.some(isSettle) && rowOf(id).status === 'slatepack_pending',
+      JSON.stringify({ e: e && e.message, calls: w.calls }));
+    const r = await quiet(() => s.finalizeSlatepackWithdrawal(ADDR, id, reply('c1-issued')));
+    ok('C1. control: the reply to the row\'s OWN slate is finalized, posted and confirmed',
+      !!r && r.status === 'confirmed' && rowOf(id).status === 'confirmed' &&
+      w.calls.join(',') === 'finalize:c1-issued,post:c1-issued', JSON.stringify(w.calls));
+  }
+
+  // ── B3 Goblin rail: a DM reply arriving while the new row has no slate id ──
+  // The bridge routes a DM to the sender npub's OLDEST pending Goblin row, not by slate id, so a
+  // reply sent during the create lands on the new row exactly as a pasted one does.
+  {
+    reset(); fund(1000); seq++; setNpub(NPUB);
+    seedOwedOld();
+    let s = null;
+    let inWindow = null;
+    const w = bindWallet({
+      async init() {
+        const id = pendingId();
+        inWindow = { id, slate: id ? rowOf(id).slate_id : undefined };
+        await s.finalizeNostrWithdrawal(id, ADDR, reply(OLD), NPUB);
+        inWindow.status = id ? rowOf(id).status : undefined;
+      },
+    });
+    s = sched(w);
+    const published = [];
+    s.nostrBridge = { isEnabled: () => true, async publishSlatepack(pub, armored) { published.push(armored); } };
+    const cErr = await thrown(() => quiet(() => s.createNostrWithdrawal(ADDR, 25, NPUB, 'test')));
+    const row = inWindow && inWindow.id ? rowOf(inWindow.id) : {};
+    ok('B3. Goblin rail: that reply is ignored: the row is never claimed, and finalize_tx / post_tx never run',
+      !!inWindow && inWindow.slate === null && inWindow.status === 'slatepack_pending' && !w.calls.some(isSettle),
+      JSON.stringify({ inWindow, calls: w.calls }));
+    ok('B3. …the create attaches its own slate and publishes its S1',
+      !cErr && row.status === 'slatepack_pending' && row.slate_id === `bind-${seq}-1` && published.length === 1,
+      JSON.stringify({ cErr: cErr && cErr.message, row, published }));
+  }
+
+  // ── B4 Goblin rail: a reply that decodes to no slate id ──
+  {
+    reset(); fund(0); seq++; setNpub(NPUB);
+    const id = seedRow({ slate: 'b4-issued', method: 'nostr' });
+    const w = bindWallet();
+    await quiet(() => sched(w).finalizeNostrWithdrawal(id, ADDR, reply(''), NPUB));
+    ok('B4. Goblin rail: a reply that decodes to NO slate id is refused, never finalized, the row back to pending',
+      !w.calls.some(isSettle) && rowOf(id).status === 'slatepack_pending', JSON.stringify({ calls: w.calls, row: rowOf(id) }));
+  }
+
+  // ── C2 control, Goblin rail: the row's own reply settles ──
+  {
+    reset(); fund(0); seq++; setNpub(NPUB);
+    const id = seedRow({ slate: 'c2-issued', method: 'nostr' });
+    const w = bindWallet();
+    await quiet(() => sched(w).finalizeNostrWithdrawal(id, ADDR, reply('c2-issued'), NPUB));
+    ok('C2. control: the Goblin reply to the row\'s OWN slate is finalized, posted and confirmed',
+      rowOf(id).status === 'confirmed' && w.calls.join(',') === 'finalize:c2-issued,post:c2-issued',
+      JSON.stringify({ calls: w.calls, row: rowOf(id) }));
+  }
+  setNpub(null);
+  reset();
+}
+

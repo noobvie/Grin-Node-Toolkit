@@ -362,35 +362,84 @@ try {
     throws(() => ps.updateSection('payout', { auto_payout: true }, 7)) &&
     throws(() => ps.updateSection('payout', { payout_frequency: 'manual' }, 7)));
 
-  console.log('\n[8] F5 (Part 6) — tor_send_mode is an enum: cli | stepwise, nothing else');
+  console.log('\n[8] tor_send_mode removed (2026-09-26) — a pool that stored it keeps loading and saving');
 
-  // A switch that selects a money path must not treat a stray value as "on": only the two exact
-  // modes pass the validator, and applyToConfig maps anything that is not 'stepwise' to 'cli'.
-  const vMode = V.payout.tor_send_mode;
-  ok('the validator exists', typeof vMode === 'function');
-  if (typeof vMode === 'function') {
-    ok("accepts 'cli' and 'stepwise'", vMode('cli') === 'cli' && vMode('stepwise') === 'stepwise');
-    ok('trims and lower-cases before deciding', vMode('  StepWise ') === 'stepwise' && vMode('CLI') === 'cli');
-    for (const bad of ['', 'true', '1', 'step', 'owner', 'stepwise;', null, undefined, true]) {
-      ok(`rejects ${JSON.stringify(bad)}`, throws(() => vMode(bad)));
-    }
+  // The step-by-step Tor sender (F5) is deleted, and its switch went the way F4's keys did: field,
+  // default, validator and applyToConfig in ONE change. A pool that ran F5 may hold the row —
+  // possibly 'stepwise'. It must stay inert: load, save, and never reach the runtime config.
+  up.run('tor_send_mode', 'stepwise');
+  const staleMode = () => db.prepare("SELECT value FROM pool_config WHERE section='payout' AND key='tor_send_mode'").get();
+  let payout2 = null;
+  ok('getSection(payout) still loads with a stored tor_send_mode row', !throws(() => { payout2 = ps.getSection('payout'); }) &&
+    payout2 && payout2.min_withdrawal !== undefined);
+  ok('tor_send_mode is no longer a payout default', !Object.prototype.hasOwnProperty.call(PoolSettings.defaults.payout, 'tor_send_mode'));
+  ok('tor_send_mode has no validator', !Object.prototype.hasOwnProperty.call(V.payout, 'tor_send_mode'));
+  const body2 = {};
+  for (const m of payoutPage.matchAll(/<(input|select|textarea)\b([^>]*)>/gi)) {
+    const id = (m[2].match(/\bid="([^"]+)"/) || [])[1];
+    if (!id || /\bsettings-skip\b/.test(m[2]) || !(id in payout2)) continue;
+    const v = payout2[id];
+    if (/\btype="checkbox"/.test(m[2])) body2[id] = v === true || v === 'true';
+    else if (m[1].toLowerCase() === 'textarea') {
+      let arr = v; if (typeof arr === 'string') { try { arr = JSON.parse(arr); } catch (_) { arr = []; } }
+      body2[id] = Array.isArray(arr) ? arr.join('\n') : '';
+    } else if (v !== '' && v !== null && v !== undefined) body2[id] = String(v);
   }
-  const mapped = (v) => PoolSettings.applyToConfig({}, { pool_info: {}, payout: { tor_send_mode: v } }).tor_send_mode;
-  ok("applyToConfig maps 'stepwise' → config.tor_send_mode 'stepwise'", mapped('stepwise') === 'stepwise', String(mapped('stepwise')));
-  ok("applyToConfig maps 'cli' → 'cli'", mapped('cli') === 'cli', String(mapped('cli')));
-  ok("applyToConfig maps a garbage stored value → 'cli' (fail safe, never stepwise)",
-    mapped('true') === 'cli' && mapped('Stepwise-ish') === 'cli', `${mapped('true')}/${mapped('Stepwise-ish')}`);
-  ok('applyToConfig leaves config alone when the key is absent',
-    PoolSettings.applyToConfig({ tor_send_mode: 'cli' }, { pool_info: {}, payout: {} }).tor_send_mode === 'cli');
-  ok('a Payout save with tor_send_mode=stepwise persists and reads back',
-    ps.updateSection('payout', { tor_send_mode: 'stepwise' }, 7).tor_send_mode === 'stepwise' &&
-    ps.getSection('payout').tor_send_mode === 'stepwise');
-  ok('a Payout save with an unknown mode is refused', throws(() => ps.updateSection('payout', { tor_send_mode: 'fast' }, 7)));
-  const cfgSrc = fs.readFileSync(path.join(APP, 'lib/config.js'), 'utf8');
-  ok("config.js defaults tor_send_mode to 'cli'", /tor_send_mode:\s*config\.tor_send_mode \|\| 'cli'/.test(cfgSrc));
-  ok('config.js defaults the stepwise timeouts to 30000 / 60000',
-    /tor_send_connect_timeout_ms:\s*config\.tor_send_connect_timeout_ms \|\| 30000\b/.test(cfgSrc) &&
-    /tor_send_receive_timeout_ms:\s*config\.tor_send_receive_timeout_ms \|\| 60000\b/.test(cfgSrc));
+  ok('the harvested Payout body does not carry tor_send_mode', !('tor_send_mode' in body2) && 'min_withdrawal' in body2,
+    Object.keys(body2).join(','));
+  const auditsBefore2 = audits().length;
+  let saveErr2 = null;
+  try { ps.updateSection('payout', body2, 7); } catch (e) { saveErr2 = e.message; }
+  ok('a Payout save of the real form succeeds on a pool that stored tor_send_mode', saveErr2 === null, saveErr2 || '');
+  ok('…and no audit row names it', !/tor_send_mode/.test(audits().slice(auditsBefore2).map((r) => r.details).join(' ')));
+  ok('…and the stored row is left untouched (inert, no migration)', (staleMode() || {}).value === 'stepwise', JSON.stringify(staleMode()));
+  ok('sending tor_send_mode explicitly is refused as unknown (the key is really gone)',
+    throws(() => ps.updateSection('payout', { tor_send_mode: 'cli' }, 7)));
+  ok('applyToConfig ignores a stored tor_send_mode (nothing reaches the runtime config)',
+    !('tor_send_mode' in PoolSettings.applyToConfig({}, { pool_info: {}, payout: { tor_send_mode: 'stepwise' } })));
+  const cfgSrc = fs.readFileSync(path.join(APP, 'lib/config.js'), 'utf8').replace(/^\s*\/\/.*$/gm, '');
+  ok('config.js no longer sets tor_send_mode or the stepwise timeouts',
+    !/tor_send_mode\s*:|tor_send_connect_timeout_ms\s*:|tor_send_receive_timeout_ms\s*:/.test(cfgSrc));
+
+  console.log('\n[9] withdrawal_retry_delays removed (2026-09-26, one Tor attempt) — a stored row stays inert');
+
+  // It never had a field (shadowed, audit §J9-8), so only the default + config key go. Every pool
+  // stored nothing unless it wrote the row by hand — which is exactly the case to prove.
+  up.run('withdrawal_retry_delays', '[60,60,60,60]');
+  let payout3 = null;
+  ok('getSection(payout) still loads with a stored withdrawal_retry_delays row',
+    !throws(() => { payout3 = ps.getSection('payout'); }) && payout3 && payout3.min_withdrawal !== undefined);
+  ok('withdrawal_retry_delays is no longer a payout default',
+    !Object.prototype.hasOwnProperty.call(PoolSettings.defaults.payout, 'withdrawal_retry_delays'));
+  let saveErr3 = null;
+  try { ps.updateSection('payout', body2, 7); } catch (e) { saveErr3 = e.message; }
+  ok('a Payout save of the real form succeeds on a pool that stored it', saveErr3 === null, saveErr3 || '');
+  ok('config.js no longer sets withdrawal_retry_delays', !/withdrawal_retry_delays\s*:/.test(cfgSrc));
+  const schedSrc = fs.readFileSync(path.join(APP, 'lib/withdrawal-scheduler.js'), 'utf8').replace(/^\s*\/\/.*$/gm, '');
+  ok('the scheduler reads no retry ladder any more', !/withdrawal_retry_delays|retryDelays/.test(schedSrc));
+
+  console.log('\n[10] max_pending_withdrawals / max_user_pending are validated (2026-09-26)');
+
+  // They had no validator: the form posts every field as TEXT, so the first real save stored
+  // '100' over the numeric default 100 and the audit row named both keys as changed while nothing
+  // moved; and junk ('abc', 0, -5) was stored as-is (the scheduler then quietly fell back to 100).
+  db.prepare("DELETE FROM pool_config WHERE section='payout' AND key IN ('max_pending_withdrawals','max_user_pending')").run();
+  const nA = audits().length;
+  ps.updateSection('payout', { max_pending_withdrawals: '100', max_user_pending: '10' }, 7);
+  const firstSave = audits().slice(nA).map((r) => JSON.parse(r.details).changed_keys).flat();
+  ok('a save of the defaults as the form sends them ("100", "10") names NEITHER key as changed',
+    !firstSave.includes('max_pending_withdrawals') && !firstSave.includes('max_user_pending'), JSON.stringify(firstSave));
+  ps.updateSection('payout', { max_pending_withdrawals: ' 250 ', max_user_pending: '3' }, 7);
+  const p10 = ps.getSection('payout');
+  ok('a real change is stored as a NUMBER', p10.max_pending_withdrawals === 250 && p10.max_user_pending === 3,
+    JSON.stringify({ a: p10.max_pending_withdrawals, b: p10.max_user_pending }));
+  for (const bad of ['abc', '0', '-5', '1.5', '', '12abc', '100000']) {
+    ok(`max_pending_withdrawals refuses ${JSON.stringify(bad)}`, throws(() => ps.updateSection('payout', { max_pending_withdrawals: bad }, 7)));
+  }
+  for (const bad of ['abc', '0', '101']) {
+    ok(`max_user_pending refuses ${JSON.stringify(bad)}`, throws(() => ps.updateSection('payout', { max_user_pending: bad }, 7)));
+  }
+  ok('…and a refused save changes nothing', ps.getSection('payout').max_pending_withdrawals === 250);
 
   console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed\n`);
   cleanup();

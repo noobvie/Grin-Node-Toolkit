@@ -1653,8 +1653,34 @@ $admin_rules
     # (payments, both trend charts) drew 429s from ordinary single visitors — confirmed in the
     # hub's error.log as `excess: 11.000 by zone "…_api"`, which lit "Payouts · feed down".
     # The sustained rate (the zone's 600r/m) is unchanged; only the instantaneous fan-out grows.
-    location /api/ {
+    #
+    # burst=100 on the general /api/ block, was 40 (2026-09-26). The live hub was still on 10
+    # (its vhost predated the bump above) and its access log showed the same cut from a single
+    # iPhone: ~11 of ~19 homepage reads admitted per reload, effort/blocks/payments/both trend
+    # reads 429'd, the cards sitting empty until the next 60 s refresh. 40 covers ~2 loads back
+    # to back; a visitor pulling-to-refresh fires more than that. 100 is ~5 loads at once and
+    # still drains in 10 s at the unchanged 600r/m, so it buys no SUSTAINED throughput — and
+    # the app's own `public` bucket (1200/min/IP) sits behind it either way. Per IP, so it is
+    # not a pool-size knob: 1000 miners are 1000 buckets. The withdraw POST keeps 40 — one
+    # money request per click has no fan-out to absorb.
+    #
+    # The withdraw POST alone gets 90 s (2026-09-26). A Tor payout request runs the pre-flight
+    # probe of the miner's onion first, up to ~32 s at the defaults (two attempts, 8 s connect +
+    # 8 s reply each). At the 30 s below nginx answered 504 while the gate was still deciding, and
+    # the miner saw "Withdrawal failed" and had to retry (safe: the app creates nothing once the
+    # client is gone). Same zone, upstream and headers as /api/ - and NO add_header, so the
+    # server-level security headers still apply. Every other /api/ read keeps 30 s.
+    location ~ ^/api/account/[^/]+/withdraw\$ {
         limit_req zone=${POOL_SERVICE}_api burst=40 nodelay;
+        proxy_pass         http://127.0.0.1:$POOL_PORT;
+        proxy_set_header   Host \$host;
+        proxy_set_header   X-Real-IP \$remote_addr;
+        proxy_set_header   X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_read_timeout 90s;
+    }
+
+    location /api/ {
+        limit_req zone=${POOL_SERVICE}_api burst=100 nodelay;
         proxy_pass         http://127.0.0.1:$POOL_PORT;
         proxy_set_header   Host \$host;
         proxy_set_header   X-Real-IP \$remote_addr;

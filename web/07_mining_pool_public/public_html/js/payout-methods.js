@@ -27,6 +27,8 @@
 //   statuses       { withdrawal_status: 'label' } merged into the shared status map
 //   rowStatuses    per-rail OVERRIDE of a shared status, applied only to that rail's rows
 //                  (Goblin parks in slatepack_pending but "awaiting response" is wrong for it)
+//   rowLabel       fn(row) → string|null, wins over rowStatuses/statuses when it returns a
+//                  string (Tor words a tor_failed row from its fail_code)
 //   pendingStatuses{ status: 'label' } for the live pending strip
 //   pendingLabel   fn(p) → string|null, wins over pendingStatuses when it returns a string
 //   isEnabled      fn(summary) → bool; omit for rails that are always available
@@ -45,15 +47,18 @@
   // Keys must be statuses the SCHEDULER actually writes. 'expired' was not one of them — the TTL
   // sweep writes 'slatepack_expired' — so that entry never matched and those rows rendered the raw
   // token. The label now also says what the miner most wants to know: the balance came back.
+  // retry_scheduled is LEGACY since 2026-09-26: a Tor payout is tried once and nothing re-sends it.
+  // A row can still sit there until the scheduler's first pass after an upgrade migrates it
+  // (confirmed / refunded / held), so it reads as being checked — never as "retrying".
   var BASE_STATUS = {
     confirmed: 'paid ✓',
-    retry_scheduled: 'retrying',
+    retry_scheduled: 'being checked',
     finalizing: 'settling',
     cancelled: 'cancelled',
     slatepack_expired: 'expired — balance returned'
   };
   var BASE_PENDING = {
-    retry_scheduled: 'wallet unreachable — parked for retry',
+    retry_scheduled: 'being checked — the pool is confirming whether it went out; your amount stays reserved and nothing is sent twice',
     finalizing: 'broadcasting to the Grin network — almost done'
   };
 
@@ -87,24 +92,21 @@
   function statusLabel(row) {
     if (!row) return '—';
     var d = get(row.method);
+    if (d && typeof d.rowLabel === 'function') {
+      var s = d.rowLabel(row);
+      if (s) return s;
+    }
     if (d && d.rowStatuses && d.rowStatuses[row.status]) return d.rowStatuses[row.status];
     if (d && d.statuses && d.statuses[row.status]) return d.statuses[row.status];
     return BASE_STATUS[row.status] || row.status || '—';
   }
 
   // ── Live pending strip ────────────────────────────────────────────────
-  // A retry caused by the POOL wallet being short (retry_reason, set by the scheduler) must not
-  // read "wallet unreachable" — to a miner that means THEIR wallet. It wins over every rail's own
-  // wording because the cause is the pool, not the transport. Deliberately not the refusal's
-  // "nothing was deducted — try again in about an hour": here the amount IS held and the pool
-  // retries by itself (the strip appends the next attempt time); a miner who tried again would
-  // just hit the one-pending-payout rule. A NULL reason keeps the generic wording.
-  var POOL_SHORT_PENDING =
-    'the pool is processing a lot of payouts right now — your payout is queued and will be retried automatically, nothing to do on your side';
-
+  // (The pool-wallet-short retry wording that lived here went with the retry ladder on 2026-09-26:
+  // nothing re-sends a payout now, so "will be retried automatically" was no longer true. A pool
+  // that cannot cover a Tor payout refunds it at once — fail_code pool_busy, worded by the page.)
   function pendingLabel(p) {
     if (!p) return '';
-    if (p.status === 'retry_scheduled' && p.retry_reason === 'pool_wallet_short') return POOL_SHORT_PENDING;
     var d = get(p.method);
     if (d && typeof d.pendingLabel === 'function') {
       var s = d.pendingLabel(p);

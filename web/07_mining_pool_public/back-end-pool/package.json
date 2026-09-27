@@ -29,7 +29,6 @@
     "ipaddr.js": "^2.1.0",
     "cookie-parser": "^1.4.6",
     "multer": "^2.0.2",
-    "socks": "^2.7.1",
     "nodemailer": "^9.0.3",
     "nostr-tools": "^2.10.4",
     "ws": "^8.18.0"

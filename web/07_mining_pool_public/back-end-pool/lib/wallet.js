@@ -113,16 +113,16 @@ class WalletAPI {
   //     under 2^53 so a JS number is safe). Returns a VersionedSlate. Selects coins and saves the
   //     private context; it writes NO lock and NO tx-log entry (tx_lock_outputs does both).
   //
-  //     paymentProofRecipient: the recipient's grin1…/tgrin1… Slatepack address, as the CLI's
-  //     `send -d` passes by default — the receiver then signs a payment proof at receive_tx. The
-  //     slatepack/Goblin rails leave it null (their anti-theft control is encryption, design §8).
+  //     payment_proof_recipient_address stays null: the slatepack/Goblin rails request no payment
+  //     proof (their anti-theft control is encryption, design §8). The `paymentProofRecipient`
+  //     option existed only for the step-by-step Tor send, deleted 2026-09-26.
   //
   //     ttl_blocks stays null ON PURPOSE (design §8.1.2): on every refresh the wallet cancels any
   //     unconfirmed tx whose ttl_cutoff_height has passed — posted-but-not-mined ones included
   //     (owner.rs update_wallet_state, "Step 5") — which would unlock a payout already on its way.
   //
   //     60 s timeout, not the 10 s default: v5.5.0 refreshes outputs from the node inside init.
-  async initSendTx(amountGrin, { minimumConfirmations = 1, paymentProofRecipient = null } = {}) {
+  async initSendTx(amountGrin, { minimumConfirmations = 1 } = {}) {
     const args = {
       src_acct_name: null,
       amount: Math.round(Number(amountGrin) * 1e9),
@@ -131,7 +131,7 @@ class WalletAPI {
       num_change_outputs: 1,
       selection_strategy_is_use_all: false,
       target_slate_version: null,
-      payment_proof_recipient_address: paymentProofRecipient || null,
+      payment_proof_recipient_address: null,
       ttl_blocks: null,
       estimate_only: null,
       late_lock: null
@@ -148,8 +148,10 @@ class WalletAPI {
   // In-process send lock: serialises "select coins → lock them" across every rail. init_send_tx
   // selects coins without locking them and lock_output does not check for an existing lock
   // (selection.rs lock_tx_context), so two init calls interleaved before either lock can pick the
-  // SAME inputs, and then one of the two transactions can never mine (design §8.1.1). A promise
-  // chain: each fn starts after the previous one settles, whether it resolved or threw.
+  // SAME inputs, and then one of the two transactions can never mine (design §8.1.1). The Slatepack
+  // and Goblin creates hold it around init → lock; the Tor rail holds it for its whole `grin-wallet
+  // send` (a child of this process, which selects at start and locks after the Tor round trip). A
+  // promise chain: each fn starts after the previous one settles, whether it resolved or threw.
   async withSendLock(fn) {
     const prev = this._sendLock || Promise.resolve();
     let release;

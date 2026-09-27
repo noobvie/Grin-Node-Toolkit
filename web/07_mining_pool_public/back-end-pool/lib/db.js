@@ -377,11 +377,16 @@ function migrateWithdrawals() {
       // withdrawal-scheduler.backfillPaymentProofs(); older confirmed Tor rows get theirs too,
       // since the wallet keeps the proof for as long as it keeps the transaction.
       payment_proof: 'TEXT DEFAULT NULL',
-      // Why the row is parked in retry_scheduled (see CREATE TABLE). NULL on legacy rows = cause
-      // unknown, which the page renders with its generic retry wording, exactly as before.
+      // LEGACY: why a row was parked in retry_scheduled (see CREATE TABLE). Nothing writes it
+      // since 2026-09-26 (one Tor attempt, no retry ladder); kept so an old row keeps loading.
       retry_reason: 'TEXT DEFAULT NULL',
-      // Step-by-step Tor send progress (see CREATE TABLE). NULL on every legacy row, and no
-      // backfill: they are read only under a stepwise claim, which a legacy row never has.
+      // Why a Tor payout FAILED (public enum) and the operator-only detail behind it (see
+      // CREATE TABLE). Legacy rows: NULL / NULL — they predate one-attempt Tor payouts.
+      fail_code: 'TEXT DEFAULT NULL',
+      fail_detail: 'TEXT DEFAULT NULL',
+      // INERT since 2026-09-26: the step-by-step Tor sender that wrote these two was deleted and
+      // NOTHING writes them any more (see CREATE TABLE). Kept, not dropped: an old row may hold
+      // a value, and the admin routes still strip tor_final_slate.
       tor_step: 'TEXT DEFAULT NULL',
       tor_final_slate: 'TEXT DEFAULT NULL',
       // Manual slatepack rail: the armored S1 handed to the miner, and the "pool-wallet cancel
@@ -747,19 +752,31 @@ function createSchema() {
       -- NULL = not fetched yet; '' = the wallet holds no proof for this tx (the slatepack/
       -- nostr rail never requests one), so the backfill stops asking.
       payment_proof TEXT DEFAULT NULL,
-      -- Why the latest retry was scheduled, rewritten by every scheduleRetry(): 'pool_wallet_short'
-      -- when the POOL wallet could not cover the send (outputs tied up in payouts still settling),
-      -- NULL for everything else — overwhelmingly the miner's own listener not answering over Tor.
-      -- The account page words the two differently; a NULL is never shown as "pool busy".
+      -- LEGACY since 2026-09-26: why a row was parked in retry_scheduled ('pool_wallet_short' or
+      -- NULL). A Tor payout is now tried ONCE, so there is no retry ladder and nothing writes it;
+      -- a legacy row is resolved out of retry_scheduled at startup (migrateLegacyTorRetries).
       retry_reason TEXT DEFAULT NULL,
-      -- Step-by-step Tor send (tor_send_mode = 'stepwise', design §8.1): the step the current
-      -- attempt last reached — claimed | initiated | locked | delivering | finalizing | posting.
-      -- Read ONLY while the row's newest claim event carries the 'stepwise:' marker, so a value
-      -- left behind by an earlier stepwise attempt can never steer a CLI attempt.
+      -- Why a Tor payout ended tor_failed — a PUBLIC-SAFE enum the account page words:
+      --   wallet_offline     the miner's onion did not answer a fresh probe after the send failed
+      --                      (the ONLY code that counts toward the 5-in-24h Tor pause)
+      --   wallet_unreachable the probe could not tell (our Tor could not look)
+      --   pool_send_path     the miner's wallet answers the probe, yet grin-wallet could not
+      --                      deliver — the pool's side (operator alert tor_send_path)
+      --   pool_busy          the pool wallet could not cover it (NotEnoughFunds), nothing sent
+      --   unknown            a Held payout later proven absent (or refunded by the operator)
+      --   wallet_offline_cleared  a wallet_offline the operator un-counted (pause clear)
+      -- NULL on every non-Tor row and on legacy Tor rows.
+      fail_code TEXT DEFAULT NULL,
+      -- The CLI error / output tail behind fail_code (≤ 500 chars). ADMIN-ONLY: it can carry pool
+      -- wallet figures (NotEnoughFunds) and must never reach a public route.
+      fail_detail TEXT DEFAULT NULL,
+      -- INERT since 2026-09-26 — NOTHING writes tor_step or tor_final_slate any more. They were
+      -- written by the step-by-step Tor send (tor_send_mode = 'stepwise', F5, design §8.1), which
+      -- was deleted that day; the columns stay so an old row keeps loading. tor_step was the step
+      -- that attempt last reached (claimed | initiated | locked | delivering | finalizing | posting).
       tor_step TEXT DEFAULT NULL,
-      -- The finalized S3 slate (JSON), stored in the same write that moves tor_step to 'posting'
-      -- so the stale sweep can post the IDENTICAL tx again. Cleared once the row confirms. Holds
-      -- a complete transaction: admin routes strip it and no public route selects it.
+      -- The finalized S3 slate (JSON) of such an attempt. It can hold a complete transaction, so
+      -- the admin routes still strip it and no public route selects it.
       tor_final_slate TEXT DEFAULT NULL,
       -- Manual slatepack rail only: the armored S1 exactly as first handed to the miner, kept so
       -- a closed tab can fetch it again (POST /api/account/:addr/withdraw/:id/slatepack, which
@@ -775,6 +792,12 @@ function createSchema() {
 
     `CREATE INDEX IF NOT EXISTS idx_withdrawal_address ON withdrawals(grin_address, status)`,
     `CREATE INDEX IF NOT EXISTS idx_withdrawal_retry ON withdrawals(status, next_retry_at)`,
+    // Public payout feed (GET /api/pool/payments: homepage P-07 teletype, every visitor, every
+    // 60 s): WHERE status='confirmed' ORDER BY confirmed_at DESC LIMIT n. Without this index the
+    // plan is idx_withdrawal_retry + USE TEMP B-TREE FOR ORDER BY — every confirmed payout the
+    // pool has EVER made read and sorted per request, on the synchronous DB that also takes
+    // shares. With it the plan is a covering-index walk that stops after n rows.
+    `CREATE INDEX IF NOT EXISTS idx_withdrawal_confirmed ON withdrawals(status, confirmed_at)`,
 
     `CREATE TABLE IF NOT EXISTS balance_log (
       id INTEGER PRIMARY KEY AUTOINCREMENT,

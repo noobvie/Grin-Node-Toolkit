@@ -171,26 +171,15 @@ function mergeEnvVars(config) {
     // SOCKS isolation tag) — dodges a single transient circuit failure wrongly blocking a
     // healthy listener. Worst case ≈ retries × 2 × tor_check_timeout_ms (32 s at the defaults).
     tor_check_retries: config.tor_check_retries || 2,
-    // How a Tor payout is sent (design §8.1): 'cli' (one `grin-wallet send -d`, the shipped rail)
-    // or 'stepwise' (the pool drives the Owner API itself and saves the slate id before anything
-    // leaves the box). Set from admin → Payout; applied at start. 'stepwise' needs the Owner-API
-    // wallet — without it the scheduler logs an error and runs 'cli'.
-    tor_send_mode: config.tor_send_mode || 'cli',
-    // Stepwise delivery timeouts (config-only, not admin settings). The SOCKS connect to the
-    // miner's onion; then receive_tx's reply, an ABSOLUTE deadline (v5.5.0's CLI request_timeout).
-    tor_send_connect_timeout_ms: config.tor_send_connect_timeout_ms || 30000,
-    tor_send_receive_timeout_ms: config.tor_send_receive_timeout_ms || 60000,
+    // tor_send_mode + tor_send_{connect,receive}_timeout_ms were REMOVED 2026-09-26 with the
+    // step-by-step Tor sender (F5). A Tor payout is one `grin-wallet send -d`; a stale key in a
+    // config file is ignored.
 
     alert_large_withdrawal: config.alert_large_withdrawal || 100,
     alert_tor_fails_per_week: config.alert_tor_fails_per_week || 3,
     alert_rapid_creates: config.alert_rapid_creates || 2,
 
-    withdrawal_retry_delays: config.withdrawal_retry_delays || [
-      6 * 3600,
-      12 * 3600,
-      24 * 3600,
-      48 * 3600
-    ],
+    // withdrawal_retry_delays (the Tor retry ladder) was REMOVED 2026-09-26: one Tor attempt.
 
     // ─── Multi-region (Model C: thin stratum gateways) ──────────────────────
     // role: singlebox (default) | hub. Regional GATEWAYS are NOT a pool app role — they

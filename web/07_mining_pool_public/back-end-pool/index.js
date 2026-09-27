@@ -1411,7 +1411,7 @@ function setupRoutes() {
     'GET /api/pool/stats/regions': { desc: 'Per-region stratum endpoints + live status (online | idle | offline | checking — the last only on the first poll after a restart, before the reachability probe has a verdict) and 15-minute regional hashrate, miners (distinct addresses) and workers (distinct address+rig pairs). On a MULTI-region pool a k-anonymity floor applies: a region with 0 < miners < min_bucket reports miners/workers/hashrate_gps/shares_window as null with below_floor:true — that is withheld, not zero (a real zero is still 0). Totals are always exact. Per region, is_hub (boolean) marks this server\'s own region — connecting there is connecting to the pool directly; false on every row of a pool that runs no local stratum. hub_rtt_ms (integer milliseconds) is the round trip between the pool and that region\'s server — the minimum of its last 5 TCP connects to the region\'s public stratum port; add it to your own latency to that server for your effective latency to the pool. It is 0 on the is_hub row, and null when that server has not been reached yet (just after a restart, or never). timestamp is ISO 8601.', shape: 'raw' },
     'GET /api/pool/connect/suggest': { desc: 'Which server to point a rig at, for YOU: estimated effective latency per region, from the country your IP resolves to. Effective = your distance to that server + its link to the pool (hub_rtt_ms) — a regional server does not shorten the trip to the pool, so a far one can lose to connecting directly. Returns { basis: "estimate", recommended (region tag, or null), estimates: [{ region, est_ms (integer milliseconds, round trip), via: direct | gateway }] }; direct is preferred unless a gateway is more than 15 ms faster. Regions that are offline, or whose link to the pool has not been measured yet, get no estimate. { basis: "unavailable" } alone when no country can be resolved. An estimate from geography, not a measurement. Your IP and country are used for this one answer and neither stored, logged nor returned; never cached (Cache-Control: private, no-store).', shape: 'raw' },
     'GET /api/pool/locations': { desc: 'Operator-declared stratum regions that are currently active — region key, label, and the stratum URL to point a rig at.', shape: 'array' },
-    'GET /api/pool/blocks': { desc: 'Pool-found blocks, newest first. A short page (fewer rows than limit) means the last page. found_by is MASKED (grin1qxy…mn4p).', shape: 'array', params: 'limit (≤500, default 50) · offset · status=immature|confirmed|orphaned' },
+    'GET /api/pool/blocks': { desc: 'Pool-found blocks, newest first. A short page (fewer rows than limit) means the last page. found_by is MASKED (grin1qxy…mn4p).', shape: 'array', params: 'limit (≤500, default 50) · offset · status=immature|matured|orphaned (matured = confirmed + paid; confirmed|paid alone also accepted)' },
     'GET /api/pool/blocks/history': { desc: 'Durable block series: luck, per-period counts, status split, cumulative reward. Blocks are never pruned, so any range is meaningful.', shape: 'raw', params: 'range=week|month|year|all (default month)' },
     'GET /api/pool/effort': { desc: 'Pool network share, luck over the last 100 blocks, current round effort, and time since the last block. round_shares is the round\'s SUMMED share difficulty in chain units (the effort numerator — every accepted share weighs job target × 16384), NOT a count; round_share_count is the number of accepted shares. The round window is capped at 7 days (round_window_capped:true when the cap, not the last block, set round_window_from). The whole response is cached 30s; network difficulty ~60s.', shape: 'raw' },
     'GET /api/pool/hashrate/history': { desc: 'Pool hashrate time-series, summed across addresses per bucket.', shape: 'raw', params: 'hours (1–720, default 24)' },
@@ -1437,16 +1437,16 @@ function setupRoutes() {
     'GET /api/network/peers': { desc: 'Distinct Grin nodes the pool box\'s node(s) have handshaked with — live connections plus each node\'s own peer store, NOT a network crawl — aggregated by country over a rolling window (+ mainnet/testnet split, and `sources` = which networks are read). Country-only, no IPs; thin countries merge into one unnamed bucket. timestamp is ISO 8601.', shape: 'raw', params: 'window days (1–90, default 30)', gated: 'the operator publishes the network map (on by default; 404 while switched off in admin → Access)' },
 
     // ── Account (address-as-identity: the address IS the credential to READ) ──
-    'GET /api/account/:addr': { desc: 'Account summary: balance, locked, lifetime paid, pending payout, share/hashrate snapshot, the live donation reading (`donation` = { rigs_donating, rigs_online, pct_min, pct_max, workers: [{ name, percent }] } — a `donateN` tag donates that % of what THAT rig earns; zeros while donations are switched off), the reviewed donor profile (`donor_profile` = { eligible, blocked, refusal: null | donations_off | blocked | not_a_donor, name: { live, state: shown | expired | none, pending_at, rejected: { reason, at } | null, removed: { reason, at } | null }, banner: { live_url, width, height, state, pending_at, rejected, removed, slot_rank, slots, showing } } — `name.live` is the APPROVED name the wall shows; a name or banner waiting for review is reported by its submit time only, never its content; null if it could not be read), and the ownership proofs on record. `proofs` is COUNTS ONLY — { ip, pass, max, anchor, last_added_at }: how many distinct mining IPs and rig passwords the pool currently holds for this address, the per-kind cap, whether the original write-once proof is still on record, and the newest capture time across both kinds (UTC seconds; it does not move when a known rig reconnects). No proof value, hash, salt or per-row timestamp is ever returned, here or anywhere else. 404 if the address has never mined here OR is not a well-formed Grin address.', shape: 'raw' },
+    'GET /api/account/:addr': { desc: 'Account summary: balance, locked, lifetime paid, pending payout, share/hashrate snapshot, the live donation reading (`donation` = { rigs_donating, rigs_online, pct_min, pct_max, workers: [{ name, percent }] } — a `donateN` tag donates that % of what THAT rig earns; zeros while donations are switched off), the reviewed donor profile (`donor_profile` = { eligible, blocked, refusal: null | donations_off | blocked | not_a_donor, name: { live, state: shown | expired | none, pending_at, rejected: { reason, at } | null, removed: { reason, at } | null }, banner: { live_url, width, height, state, pending_at, rejected, removed, slot_rank, slots, showing } } — `name.live` is the APPROVED name the wall shows; a name or banner waiting for review is reported by its submit time only, never its content; null if it could not be read), and the ownership proofs on record. `proofs` is COUNTS ONLY — { ip, pass, max, anchor, last_added_at }: how many distinct mining IPs and rig passwords the pool currently holds for this address, the per-kind cap, whether the original write-once proof is still on record, and the newest capture time across both kinds (UTC seconds; it does not move when a known rig reconnects). No proof value, hash, salt or per-row timestamp is ever returned, here or anywhere else. `tor_pause` = { failures_24h, max, paused_until } — counted failed Tor payouts in the last 24 h (only a wallet that did not answer over Tor counts), the limit (5), and while paused the unix-seconds UTC time Tor payouts reopen for this address (null when not paused); Slatepack is never paused. `slatepack_window_minutes` is how long a Slatepack payout stays answerable before it expires and the balance comes back. `pending_withdrawal.status` can be tor_held: a Tor payout whose outcome the pool is still confirming — the amount stays reserved and it is never sent twice. 404 if the address has never mined here OR is not a well-formed Grin address.', shape: 'raw' },
     'GET /api/account/:addr/shares': { desc: 'Raw accepted shares for an address, newest first. Shares are pruned aggressively — use the hashrate history for anything older than ~a day.', shape: 'raw', params: 'limit (≤500, default 100) · offset' },
     'GET /api/account/:addr/workers': { desc: 'Per-worker (rig) hashrate + share quality over a recent window. `donate_percent` per worker = the % of that rig’s share credit donated to the prize pool, read from its `donateN` name tag (0–100); null when untagged or while the operator has donations switched off.', shape: 'raw', params: 'window minutes (1–1440, default 10)' },
     'GET /api/account/:addr/hashrate/history': { desc: 'Account hashrate time-series, downsampled for charting.', shape: 'raw', params: 'hours (1–720, default 24)' },
     'GET /api/account/:addr/earnings': { desc: 'Credited earnings per period (1h/24h/7d/30d) + 30d in/out totals. Payout reversals count as money-in but never as earnings.', shape: 'raw' },
     'GET /api/account/:addr/balance/log': { desc: 'Address ledger. direction=in|out splits it by movement of the spendable balance: a payout appears in OUT once, as its lock at request time (gross, fee included), and a payout that fails, expires or is cancelled comes back in IN as a reversal — the confirm-time settlement rows appear only in the unfiltered view. Raw rows prune after ~60 days (the durable record is the withdrawal history below). format=csv streams the filtered window as a download on a tighter rate limit.', shape: 'raw · csv', params: 'direction=in|out · days (≤3650, default all) · limit (≤500, default 50) · offset · format=csv' },
-    'GET /api/account/:addr/withdrawals': { desc: 'Payout history for an address — kept forever, so this is the durable record for accounting. Payouts only: no donations or orphan clawbacks. format=csv streams all-time on a tighter rate limit. The on-chain kernel is NOT returned here — rows carry has_kernel_proof and has_payment_proof (booleans) and the proofs themselves need an ownership proof; see POST /api/account/:addr/withdrawals/proofs.', shape: 'raw · csv', params: 'limit (≤200, default 20) · offset · format=csv' },
+    'GET /api/account/:addr/withdrawals': { desc: 'Payout history for an address — kept forever, so this is the durable record for accounting. Payouts only: no donations or orphan clawbacks. format=csv streams all-time on a tighter rate limit. The on-chain kernel is NOT returned here — rows carry has_kernel_proof and has_payment_proof (booleans) and the proofs themselves need an ownership proof; see POST /api/account/:addr/withdrawals/proofs. A tor_failed row carries fail_code — why the ONE Tor attempt failed (the balance was returned): wallet_offline (your wallet did not answer over Tor), wallet_unreachable (it could not reach your wallet), pool_send_path (the pool could not deliver), pool_busy (the pool wallet could not cover it), unknown (a held payout that did not go out), wallet_offline_cleared (the operator un-counted it); null on every other row.', shape: 'raw · csv', params: 'limit (≤200, default 20) · offset · format=csv' },
     'POST /api/account/:addr/withdrawals/proofs': { desc: 'Payment proofs for your own payouts, two kinds in one call. proofs: { <withdrawal id>: <kernel excess> } - the on-chain kernel of every confirmed payout (proves the tx was mined). payment_proofs: { <withdrawal id>: <PaymentProof> } - the signed proof grin-wallet requested on Tor payouts: { amount (nanogrin), excess, recipient_address, recipient_sig, sender_address, sender_sig }, the same JSON `grin-wallet export_proof` writes; save one as a file and `grin-wallet verify_proof` it. recipient_sig is YOUR wallet\'s signature, so it proves receipt to anyone. Slatepack/nostr payouts carry no signed proof (kernel only). Newest 500 signed proofs. Ownership-gated on purpose: publishing an address next to its kernels would be a public address-to-chain index on a privacy coin. 403 = proof failed, 404 = no such account.', shape: 'raw', auth: 'ownership proof', rate: 'withdraw', body: OWNER_PROOF_BODY },
     'GET /api/account/:addr/tor-check': { desc: 'Is this miner\'s wallet answering over Tor right now? The pool opens a fresh Tor circuit to the onion derived from the address and POSTs check_version to its foreign API; can take up to ~30 s. online is TRI-STATE: true = a grin-wallet answered; false = our Tor works and the wallet did not answer (or something that is not a wallet did); null = this pool could not look (its own Tor is down) — says nothing about the wallet, and a Tor payout is still allowed. reason: reachable · reachable_auth · onion_unreachable · onion_timeout · no_answer · not_wallet · invalid_format · derivation_failed · tor_unavailable · probe_failed. 404 if the address has never mined here — the probe is not offered for arbitrary Grin addresses. Answers are cached 60s per address; fresh=1 re-probes, but only once the cached answer is 10s old (younger answers are served as-is), and joins a probe already running. The payout gate always re-probes fresh.', shape: 'raw', params: 'fresh=1 (re-probe; 10s floor)', rate: 'torcheck' },
-    'POST /api/account/:addr/withdraw': { desc: 'Request a payout on one of three rails. amount defaults to the full available balance. 403 = ownership proof failed; 400 = invalid amount, below the minimum, or too small to cover the flat fee; 409 = insufficient balance, or payouts frozen by the operator; 409 (tor) = wallet unreachable, retry or switch to slatepack; 409 (nostr) = destination unregistered, still in cooldown, or its npub changed; 429 = a payout is already pending on ANY rail (one at a time), a recently reversed payout is still in its cooldown, or the pool-wide pending cap is full; 503 = the nostr rail is disabled, or the pool wallet cannot cover the payout right now (funds tied up in payouts still settling — the balance is returned; retry in about an hour). A slatepack request also returns `slatepack` (encrypted to your address) and `expires_at` (unix seconds): return the response before then or the payout expires and the balance comes back.', shape: 'flat', auth: 'ownership proof', rate: 'withdraw', body: `method=tor|slatepack|nostr (default tor) · amount (default: full balance) · ${OWNER_PROOF_BODY}` },
+    'POST /api/account/:addr/withdraw': { desc: 'Request a payout on one of three rails. amount defaults to the full available balance. 403 = ownership proof failed; 400 = invalid amount, below the minimum, or too small to cover the flat fee; 409 = insufficient balance, or payouts frozen by the operator; 409 (tor) = wallet unreachable (nothing locked): the body carries tor_online: false and suggest: "slatepack"; 409 (nostr) = destination unregistered, still in cooldown, or its npub changed; 429 = a payout is already pending on ANY rail (one at a time — a Held Tor payout counts), a recently reversed payout is still in its cooldown (not after a failed Tor payout), or the pool-wide pending cap is full; 429 (tor) with error: "tor_paused" = Tor is paused for this address after 5 failed Tor payouts in 24 h — the body carries paused_until (unix seconds, UTC), failures_24h, max and suggest: "slatepack"; nothing is locked; 503 = the nostr rail is disabled, or the pool wallet cannot cover the payout right now (funds tied up in payouts still settling — the balance is returned; retry in about an hour). A slatepack request also returns `slatepack` (encrypted to your address) and `expires_at` (unix seconds): return the response before then or the payout expires and the balance comes back.', shape: 'flat', auth: 'ownership proof', rate: 'withdraw', body: `method=tor|slatepack|nostr (default tor) · amount (default: full balance) · ${OWNER_PROOF_BODY}` },
     'POST /api/account/:addr/withdraw/:id/finalize': { desc: 'Complete a slatepack payout by posting back the response slatepack your wallet produced with `receive`. The pool finalizes and broadcasts. 404 = no such withdrawal; 409 = not awaiting a slatepack (already settled or expired); 400 = the slatepack does not match this withdrawal.', shape: 'flat', auth: 'ownership proof', rate: 'withdraw', body: `response_slatepack · ${OWNER_PROOF_BODY}` },
     'POST /api/account/:addr/withdraw/:id/slatepack': { desc: 'Fetch a pending slatepack payout\'s slatepack again — for when the tab was closed or it was never copied. Returns the SAME slatepack issued at request time (encrypted to your address), never a new one, plus `expires_at` (unix seconds). Manual slatepack rail only; served only while the payout is still awaiting your response. 403 = ownership proof failed; 404 = no pending slatepack payout with that number for this address (settled, expired, another rail, or not yours).', shape: 'flat', auth: 'ownership proof', rate: 'withdraw', body: OWNER_PROOF_BODY },
     // NOT the shared OWNER_PROOF_BODY: this is the one route that needs the IP and the password
@@ -2615,6 +2615,15 @@ function setupRoutes() {
         .catch(() => _poolStatusCache.body)   // buildPoolStatus swallows its own errors; belt and braces
         .then((body) => { _poolStatusInflight = null; return body; });
     }
+    // Stale-while-revalidate: once ANY answer is cached, an expired one is served at once and
+    // the rebuild above runs in the background. A rebuild is a node call plus a wallet Owner-API
+    // call, each with a 10 s timeout, and grin-wallet serialises owner calls behind its wallet
+    // lock — so during a payout run retrieve_summary_info can sit until it times out. Awaiting
+    // that here made every visitor whose request landed after the TTL wait for it, and the
+    // homepage used to hold its other panels behind this response. Only a cold boot waits now.
+    if (_poolStatusCache.body) {
+      return res.json(_poolStatusCache.body);
+    }
     try {
       const body = await _poolStatusInflight;
       // Last-good on a failed build, so a down node does not turn this back into a per-request
@@ -2633,7 +2642,7 @@ function setupRoutes() {
       const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 50, 1), 500);
       const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
       const status = req.query.status;
-      const valid = ['immature', 'confirmed', 'orphaned'];
+      const valid = ['immature', 'confirmed', 'paid', 'orphaned'];
       // Explicit columns since 2026-07-28 (was `SELECT *`): `nonce` is the winning solution's
       // nonce and `id`/`created_at` are internal row bookkeeping — none of the three is read by
       // blocks.html or the reactor fuel-rods, and publishing the nonce serves no verifier (the
@@ -2642,7 +2651,11 @@ function setupRoutes() {
       let sql = `SELECT height, hash, reward, status, found_by, found_at, confirmed_at,
                         network_difficulty, round_shares FROM blocks`;
       const params = [];
-      if (status && valid.includes(status)) { sql += ' WHERE status = ?'; params.push(status); }
+      // `matured` = confirmed OR paid. rewards.js flips confirmed→paid the moment it credits
+      // the round, so a bare `status=confirmed` filter drops nearly every settled block — the
+      // public explorer's "Matured" chip uses this instead. The raw values stay accepted.
+      if (status === 'matured') sql += " WHERE status IN ('confirmed', 'paid')";
+      else if (status && valid.includes(status)) { sql += ' WHERE status = ?'; params.push(status); }
       sql += ' ORDER BY height DESC LIMIT ? OFFSET ?';
       params.push(limit, offset);
       // found_by MASKED since 2026-09-02 (audit §J11-1). blocks.html already displayed only
@@ -2711,7 +2724,7 @@ function setupRoutes() {
   // REMOVED: /api/test/initiate-withdrawal endpoint
   // Reason: Test endpoint disabled in production. Allowed admin to initiate arbitrary withdrawals.
   // Use /api/admin/withdrawals to view and manage withdrawal scheduler instead.
-  // For testing: use withdrawal_scheduler.initiateWithdrawal() directly in backend tests.
+  // For testing: drive withdrawalScheduler.sendWithdrawal() directly in backend tests.
 
   // `limit` is honoured (1–500, default 100). The dashboard's "Recent Withdrawals" widget
   // asks for 10 and was silently getting the full 100 back — every admin page load shipped
@@ -2731,9 +2744,9 @@ function setupRoutes() {
       // (withdrawal-scheduler chainStateOf). Admin-only: no public route carries it.
       const now = Math.floor(Date.now() / 1000);
       const chainState = (r) => (withdrawalScheduler ? withdrawalScheduler.chainStateOf(r, now) : null);
-      // tor_final_slate (stepwise Tor send, design §8.1) is a complete signed transaction held
-      // only so the sweep can post it again — never served. tor_step stays: it tells the
-      // operator where a tor_sending row stopped. slatepack_s1 (the manual rail's stored S1) is
+      // tor_final_slate (the step-by-step Tor send, deleted 2026-09-26; nothing writes it now) can
+      // hold a complete signed transaction on an old row — never served. tor_step (equally inert)
+      // stays. slatepack_s1 (the manual rail's stored S1) is
       // served by exactly one route — the owner's ownership-gated re-fetch — and not here either.
       res.json(rows.map((r) => {
         const { payment_proof, ...rest } = r;
@@ -2787,65 +2800,80 @@ function setupRoutes() {
     res.json(withdrawalScheduler.getStatus());
   });
 
-  // ─── PAYOUT QUEUE CONTROL (Admin, step-up) ─────────────────────────
-  // The scheduler auto-retries Tor payouts, but a payout can still get stuck
-  // (recipient offline for days) or land in tor_failed after exhausting retries. These two
-  // actions let the operator intervene. Both move money/ledger state → freshAdmin (step-up).
+  // ─── PAYOUT QUEUE CONTROL (Admin) ──────────────────────────────────
+  // Since 2026-09-26 a Tor payout is tried ONCE and ends confirmed, tor_failed (balance already
+  // returned — the miner simply requests again) or tor_held (outcome unknown, amount locked). So
+  // there is nothing to "retry": the operator's tools are Re-check (the Held resolution, now) and
+  // a forced refund of a Held payout (step-up + typed id + audit, refused on a confirmed match).
+  // Cancel stays for a row that was never sent (tor_checking) and for recording a tor_failed one.
   //
-  // Funds model (see withdrawal-scheduler.js): retry_scheduled/tor_checking keep the amount in
-  // balance_locked; tor_failed has already reversed it back to spendable balance. retry/cancel
-  // must honour that so the ledger never drifts.
+  // Funds model (see withdrawal-scheduler.js): tor_checking / tor_held keep the amount in
+  // balance_locked; tor_failed has already reversed it back to spendable balance.
 
-  // Force a stuck/failed withdrawal back into the send queue immediately.
-  app.post('/api/admin/withdrawals/:id/retry', freshAdmin, (req, res) => {
+  // REMOVED 2026-09-26: re-queuing a Tor payout. It re-sent a payout on the operator's click —
+  // for a tor_failed row after re-locking the balance, for a retry_scheduled one as-is — and a
+  // refunded miner now just requests again. Kept as a 410 so a stale admin page says why instead
+  // of failing obscurely; nothing else ever used it (the Slatepack / Goblin rails have no retry).
+  app.post('/api/admin/withdrawals/:id/retry', secureAdmin, (req, res) => {
+    res.status(410).json({
+      error: 'Retry was removed: a Tor payout is tried once. A failed one is already refunded (the miner requests again); ' +
+        'a Held one is settled by Re-check or, with proof, a forced refund.',
+    });
+  });
+
+  // Re-check ONE Held payout now: the scheduler's own Held resolution for that row — confirmed on a
+  // confirmed tx, refunded only on its second absent read ≥ 10 min after the first, otherwise
+  // still held. No force, no send. Audited, because it can settle money.
+  app.post('/api/admin/withdrawals/:id/recheck', secureAdmin, async (req, res) => {
     try {
       const id = parseInt(req.params.id, 10);
-      if (getPayoutControl().frozen) {
-        return res.status(409).json({ error: 'payouts are frozen — resume payouts before retrying' });
-      }
-      const w = db.prepare('SELECT * FROM withdrawals WHERE id = ?').get(id);
+      if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'bad withdrawal id' });
+      if (!withdrawalScheduler) return res.status(503).json({ error: 'withdrawal scheduler not running' });
+      const w = db.prepare('SELECT id, grin_address, amount, status FROM withdrawals WHERE id = ?').get(id);
       if (!w) return res.status(404).json({ error: 'withdrawal not found' });
-      if (!['retry_scheduled', 'tor_failed'].includes(w.status)) {
-        return res.status(409).json({ error: `cannot retry a withdrawal in status '${w.status}'` });
-      }
+      if (w.status !== 'tor_held') return res.status(409).json({ error: `only a Held payout can be re-checked (status: ${w.status})` });
 
-      const result = db.transaction(() => {
-        // tor_failed funds were reversed to spendable balance → re-lock them (CAS) before resending.
-        if (w.status === 'tor_failed') {
-          const before = db.prepare('SELECT balance, balance_locked FROM miner_accounts WHERE grin_address = ?').get(w.grin_address);
-          const locked = db.prepare(
-            `UPDATE miner_accounts SET balance = balance - ?, balance_locked = balance_locked + ?, updated_at = unixepoch()
-             WHERE grin_address = ? AND balance >= ?`
-          ).run(w.amount, w.amount, w.grin_address, w.amount);
-          if (locked.changes !== 1) { const e = new Error('insufficient balance to re-lock for retry'); e.code = 409; throw e; }
-          db.prepare(`
-            INSERT INTO balance_log (grin_address, event_type, amount, balance_before, balance_after, locked_before, locked_after, reference_type, reference_id)
-            VALUES (?, 'lock', ?, ?, ?, ?, ?, 'withdrawal', ?)
-          `).run(w.grin_address, w.amount, before.balance, before.balance - w.amount, before.balance_locked, before.balance_locked + w.amount, id);
-          db.prepare('UPDATE withdrawals SET status = ?, retry_count = 0, next_retry_at = NULL WHERE id = ?').run('tor_checking', id);
-        } else {
-          // retry_scheduled: funds already locked, just move it to the active queue now.
-          db.prepare('UPDATE withdrawals SET status = ?, next_retry_at = NULL WHERE id = ?').run('tor_checking', id);
-        }
-        db.prepare(`
-          INSERT INTO withdrawal_events (withdrawal_id, from_status, to_status, triggered_by, note)
-          VALUES (?, ?, 'tor_checking', 'admin', ?)
-        `).run(id, w.status, 'manual retry by admin');
-        return true;
-      })();
-
+      const r = await withdrawalScheduler.resolveHeldTor({ id });
+      const after = db.prepare('SELECT status, fail_code FROM withdrawals WHERE id = ?').get(id);
+      const outcome = (r[0] && r[0].outcome) || 'unknown';
       db.prepare(`
         INSERT INTO admin_audit_log (admin_id, action, target_type, target_id, details, ip)
-        VALUES (?, 'withdrawal_retry', 'withdrawal', ?, ?, ?)
-      `).run(req.user.user_id, String(id), JSON.stringify({ address: w.grin_address, amount: w.amount, from_status: w.status }), req.ip);
-
-      res.json({ success: true, id, queued: result });
+        VALUES (?, 'withdrawal_held_recheck', 'withdrawal', ?, ?, ?)
+      `).run(req.user.user_id, String(id), JSON.stringify({ address: w.grin_address, amount: w.amount, outcome, status: after.status }), req.ip);
+      res.json({ success: true, id, outcome, status: after.status, fail_code: after.fail_code });
     } catch (err) {
-      res.status(err.code || 500).json({ error: err.message });
+      res.status(500).json({ error: err.message });
     }
   });
 
-  // Cancel a pending/failed withdrawal and return the funds to the miner's spendable balance.
+  // Forced refund of a Held payout — the operator's call when they have proven the send never
+  // reached the chain. Step-up, the payout id typed back (confirm_id), an audit row, and the
+  // scheduler still refuses when the wallet tx log shows a CONFIRMED match or cannot be read.
+  // Never a re-send.
+  app.post('/api/admin/withdrawals/:id/force-refund', freshAdmin, async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'bad withdrawal id' });
+      if (String((req.body && req.body.confirm_id) || '').trim() !== String(id)) {
+        return res.status(400).json({ error: 'type the payout id to confirm a forced refund' });
+      }
+      if (!withdrawalScheduler) return res.status(503).json({ error: 'withdrawal scheduler not running' });
+      const reason = String((req.body && req.body.reason) || '').slice(0, 280) || null;
+      const r = await withdrawalScheduler.forceRefundHeld(id, { adminId: req.user.user_id, reason });
+      db.prepare(`
+        INSERT INTO admin_audit_log (admin_id, action, target_type, target_id, details, ip)
+        VALUES (?, 'withdrawal_force_refund', 'withdrawal', ?, ?, ?)
+      `).run(req.user.user_id, String(id), JSON.stringify({ amount: r.amount, tx_log: r.tx_log, slate_id: r.slate_id,
+        wallet_history: r.wallet_history, cancelled_slate: r.cancelled_slate, reason }), req.ip);
+      res.json(r);
+    } catch (err) {
+      res.status(err.code && err.code >= 400 && err.code < 600 ? err.code : 500).json({ error: err.message });
+    }
+  });
+
+  // Cancel a never-sent or failed withdrawal. tor_held is deliberately NOT cancellable (its one
+  // send may have landed — see force-refund above), and neither is a legacy retry_scheduled row:
+  // cancelling refunded it with no wallet check, and the startup migration settles those.
   app.post('/api/admin/withdrawals/:id/cancel', freshAdmin, (req, res) => {
     try {
       const id = parseInt(req.params.id, 10);
@@ -2853,12 +2881,15 @@ function setupRoutes() {
       const w = db.prepare('SELECT * FROM withdrawals WHERE id = ?').get(id);
       if (!w) return res.status(404).json({ error: 'withdrawal not found' });
       if (w.status === 'tor_sending') return res.status(409).json({ error: 'cannot cancel a withdrawal that is currently sending' });
-      if (!['retry_scheduled', 'tor_checking', 'tor_failed'].includes(w.status)) {
+      if (w.status === 'tor_held') {
+        return res.status(409).json({ error: 'a Held payout cannot be cancelled — use Re-check, or a forced refund once the wallet shows no confirmed send' });
+      }
+      if (!['tor_checking', 'tor_failed'].includes(w.status)) {
         return res.status(409).json({ error: `cannot cancel a withdrawal in status '${w.status}'` });
       }
 
       db.transaction(() => {
-        // retry_scheduled / tor_checking still hold the amount in balance_locked → release it.
+        // tor_checking still holds the amount in balance_locked → release it.
         // tor_failed already reversed locked→balance, so the money is back; just record the cancel.
         if (w.status !== 'tor_failed') {
           const before = db.prepare('SELECT balance, balance_locked FROM miner_accounts WHERE grin_address = ?').get(w.grin_address);
@@ -3634,19 +3665,28 @@ function setupRoutes() {
       const paid = paidAgg.total;
 
       // Pending set must match the scheduler's one-pending-per-address cap (which includes
-      // slatepack_pending) — otherwise the UI shows 0 pending while a new request would 429.
-      // The full row is exposed so the account page can show status/next-retry. (No public
-      // cancel — parked payouts self-recover: Tor reverses after max retries, slatepack on TTL.)
+      // slatepack_pending and tor_held) — otherwise the UI shows 0 pending while a new request
+      // would 429. The full row is exposed so the account page can show its status. (No public
+      // cancel — a Tor payout is tried once and settles or is Held; slatepack expires on TTL.)
+      // retry_count / next_retry_at / retry_reason only mean something on a LEGACY retry_scheduled
+      // row until the startup migration settles it.
       const pendingRow = db.prepare(
         `SELECT id, amount, method, status, retry_count, next_retry_at, retry_reason, created_at
          FROM withdrawals
-         WHERE grin_address = ? AND status IN ('tor_checking','tor_sending','retry_scheduled','slatepack_pending','finalizing')
+         WHERE grin_address = ? AND status IN ('tor_checking','tor_sending','tor_held','retry_scheduled','slatepack_pending','finalizing')
          ORDER BY created_at DESC LIMIT 1`
       ).get(addr);
       const pending = db.prepare(
         `SELECT COUNT(*) AS c FROM withdrawals
-         WHERE grin_address = ? AND status IN ('tor_checking','tor_sending','retry_scheduled','slatepack_pending','finalizing')`
+         WHERE grin_address = ? AND status IN ('tor_checking','tor_sending','tor_held','retry_scheduled','slatepack_pending','finalizing')`
       ).get(addr).c;
+      // The Tor pause for this address (counts and a timestamp only) — the Tor pane shows "N of 5"
+      // and, when paused, the UTC end time. Guarded like the blocks below: a failure degrades one
+      // advisory field, never the money page.
+      const torPause = (() => {
+        try { return withdrawalScheduler ? withdrawalScheduler.torPauseStatus(acct.grin_address) : null; }
+        catch (e) { return null; }
+      })();
       // A slatepack-pending row expires on the scheduler's clock (manual rail vs Goblin differ);
       // tell the page when, so the miner sees a deadline rather than discovering it on a 409.
       if (pendingRow && pendingRow.status === 'slatepack_pending' && withdrawalScheduler) {
@@ -3732,6 +3772,13 @@ function setupRoutes() {
         withdrawal_fee: config.withdrawal_fee || 0,
         // Boolean only — the freeze REASON stays admin-side (it can reveal wallet trouble).
         payouts_frozen: withdrawalScheduler.isFrozen(),
+        // Tor pause: { failures_24h, max, paused_until | null } — 5 counted failed Tor payouts in
+        // 24 h pause Tor for 24 h from the 5th. Slatepack is never paused.
+        tor_pause: torPause,
+        // Minutes a Slatepack payout stays answerable — the terms the page states on its "Send as
+        // Slatepack instead" offer. The ENFORCED value (the scheduler's, which expires_at uses),
+        // a pool setting and not a wallet figure.
+        slatepack_window_minutes: withdrawalScheduler ? Math.round(withdrawalScheduler.slatepackTtlSeconds / 60) : null,
         // Abandoned-balance countdown for THIS address (state: active|idle|counting|eligible|
         // disposed|no_balance). Drives the account-page dormancy notice + reclaim CTA.
         dormancy: dormancyManager ? dormancyManager.statusFor(acct.grin_address) : null,
@@ -4340,8 +4387,10 @@ function setupRoutes() {
       // Same treatment for the signed payment proof: it names the miner's address AND the
       // kernel in one signed document, so it is at least as linking as the kernel. Rows carry
       // has_payment_proof only; the proof itself comes from the ownership-gated route below.
+      // fail_code (a public-safe enum: why a Tor payout failed) is returned; fail_detail — the CLI
+      // error behind it, which can carry pool-wallet figures — is admin-only and never selected here.
       const rows = db.prepare(
-        `SELECT id, amount, fee, method, status, created_at, confirmed_at, kernel_excess, payment_proof
+        `SELECT id, amount, fee, method, status, fail_code, created_at, confirmed_at, kernel_excess, payment_proof
          FROM withdrawals WHERE grin_address = ?
          ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?`
       ).all(addr, limit, offset).map((r) => {
@@ -4572,9 +4621,29 @@ function setupRoutes() {
           return res.status(e.code && e.code < 600 ? e.code : 400).json({ error: e.message });
         }
 
+        // Tor pause (anti-abuse, 2026-09-26): 5 counted failed Tor payouts in 24 h pause Tor for this
+        // address for 24 h from the 5th. Checked BEFORE the pre-flight probe, so a paused address
+        // cannot make the pool build Tor circuits either; nothing is locked. Slatepack is not
+        // paused — the page shows its offer beside the pause line. createWithdrawal checks again.
+        const torPause = withdrawalScheduler.torPauseStatus(addr);
+        if (torPause.paused_until) {
+          auditOwnerProof(db, { action: 'withdraw_tor', grinAddress: addr, ip: reqIp, ok: false, details: { reason: 'tor_paused', paused_until: torPause.paused_until } });
+          return res.status(429).json({
+            error: 'tor_paused',
+            message: `Tor payouts are paused for this address until ${new Date(torPause.paused_until * 1000).toISOString().slice(0, 16).replace('T', ' ')} UTC ` +
+              `after ${torPause.max} failed attempts in 24 h. Slatepack is still available.`,
+            paused_until: torPause.paused_until,
+            failures_24h: torPause.failures_24h,
+            max: torPause.max,
+            suggest: 'slatepack'
+          });
+        }
+
         // Pre-flight reachability gate (operator toggle, default ON). Refuse up front — BEFORE
-        // any balance lock or cooldown — if the miner's wallet listener isn't answering over Tor
-        // right now, so the funds never get locked into a doomed retry ladder. Only a CONFIDENT
+        // any balance lock — if the miner's wallet listener isn't answering over Tor right now,
+        // so the funds are never locked into a send that cannot land. The 409 body's
+        // `tor_online: false` + `suggest: 'slatepack'` are what the page keys its Slatepack offer
+        // on — keep both exactly. A refusal here is not counted toward the Tor pause. Only a CONFIDENT
         // offline (online === false) blocks; online === null (probe couldn't run) falls through
         // and lets grin-wallet be the authority at send, so a pool box without a working probe
         // never blocks every Tor payout.
@@ -6657,24 +6726,13 @@ function setupRoutes() {
         ].filter(Boolean).join(' · ');
       }
     } catch (e) { /* alerts table unreadable — leave the wallet card as measured */ }
-    // Payouts marked paid but not seen mined an hour later (withdrawal-scheduler _watchUnmined):
-    // one rolling 'payout_unmined' alert, resolved by the scheduler as soon as nothing is
-    // overdue, so no time window here. 'warning' = sent but not mined, or unverifiable;
-    // 'critical' = the pool wallet cancelled the tx or has no record of it, i.e. a miner the
-    // ledger shows as paid may not have been. That outranks a merely degraded card but never
-    // masks a wallet that is actually down ('error').
+    // The scheduler's rolling payout alerts — payout_held (a Tor payout held > 24 h), payout_unmined
+    // (paid but not seen mined after 1 h: 'critical' when the wallet cancelled the tx or has no
+    // record of it) and tor_send_path (the pool's own Tor send path is broken). Each is resolved by
+    // the scheduler, so no time window here. 'critical' outranks a merely degraded card but never
+    // masks a wallet that is actually down ('error'). One helper, so the rules live in one place.
     try {
-      const unmined = db.prepare(
-        `SELECT level, message FROM alerts
-         WHERE type = 'payout_unmined' AND status = 'active'
-         ORDER BY id DESC LIMIT 1`
-      ).get();
-      if (unmined && services.grin_wallet) {
-        const w = services.grin_wallet;
-        if (unmined.level === 'critical') { if (w.status !== 'error') w.status = 'critical'; }
-        else if (w.status === 'ok') w.status = 'warning';
-        w.message = [w.message, unmined.message].filter(Boolean).join(' · ');
-      }
+      AlertMonitor.foldPayoutAlerts(db, services.grin_wallet);
     } catch (e) { /* alerts table unreadable — leave the wallet card as measured */ }
 
     // nginx — the request reached us through it, so the reverse proxy is up
@@ -7427,11 +7485,13 @@ function setupRoutes() {
       const total_paid = db.prepare(
         `SELECT COALESCE(SUM(amount),0) AS t FROM withdrawals WHERE grin_address = ? AND status='confirmed'`
       ).get(addr).t;
-      // Same strip as GET /api/admin/withdrawals: never serve the stepwise send's final slate, nor
-      // the manual rail's stored S1.
+      // Same strip as GET /api/admin/withdrawals: never serve an old row's stepwise final slate
+      // (the column is inert since 2026-09-26), nor the manual rail's stored S1.
       const pending = db.prepare(
-        `SELECT * FROM withdrawals WHERE grin_address = ? AND status IN ('tor_checking','tor_sending','retry_scheduled','slatepack_pending','finalizing') ORDER BY created_at DESC`
+        `SELECT * FROM withdrawals WHERE grin_address = ? AND status IN ('tor_checking','tor_sending','tor_held','retry_scheduled','slatepack_pending','finalizing') ORDER BY created_at DESC`
       ).all(addr).map(({ tor_final_slate, slatepack_s1, ...rest }) => rest);
+      // The Tor pause as the miner sees it; the operator clears it with the route below.
+      const tor_pause = withdrawalScheduler ? withdrawalScheduler.torPauseStatus(addr) : null;
       const shareAgg = db.prepare(
         `SELECT COUNT(*) AS count, MAX(created_at) AS last_share_at FROM shares WHERE grin_address = ?`
       ).get(addr);
@@ -7452,6 +7512,7 @@ function setupRoutes() {
           blocks_found,
           hashrate_gps: parseFloat(((hr.avg_hashrate || 0)).toFixed(6)),
           pending_withdrawals: pending,
+          tor_pause,
           proofs: { max: PROOF_SET_MAX, ip: proofSets.ip, pass: proofSets.pass },
           incentives
         }
@@ -7532,6 +7593,29 @@ function setupRoutes() {
         VALUES (?, 'miner_unban', 'miner_account', ?, '{}', ?)
       `).run(req.user.user_id, addr, req.ip);
       res.json({ success: true, grin_address: addr, is_banned: false });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Clear an address's Tor pause — for a pause the operator judges was the pool's fault. The
+  // counted failures are re-coded wallet_offline_cleared (the counter skips them); no history is
+  // deleted. Step-up, like ban/unban: it re-opens a payout rail for someone.
+  app.post('/api/admin/miners/:addr/tor-pause/clear', freshAdmin, (req, res) => {
+    try {
+      const addr = String(req.params.addr || '').trim();
+      if (!addr) return res.status(400).json({ error: 'address required' });
+      if (!withdrawalScheduler) return res.status(503).json({ error: 'withdrawal scheduler not running' });
+      const known = db.prepare('SELECT 1 AS x FROM miner_accounts WHERE grin_address = ?').get(addr);
+      if (!known) return res.status(404).json({ error: 'miner not found' });
+      const before = withdrawalScheduler.torPauseStatus(addr);
+      const cleared = withdrawalScheduler.clearTorPause(addr, { adminId: req.user.user_id });
+      const after = withdrawalScheduler.torPauseStatus(addr);
+      db.prepare(`
+        INSERT INTO admin_audit_log (admin_id, action, target_type, target_id, details, ip)
+        VALUES (?, 'miner_tor_pause_clear', 'miner_account', ?, ?, ?)
+      `).run(req.user.user_id, addr, JSON.stringify({ cleared, before }), req.ip);
+      res.json({ success: true, grin_address: addr, cleared, tor_pause: after });
     } catch (err) {
       res.status(500).json({ error: err.message });
     }

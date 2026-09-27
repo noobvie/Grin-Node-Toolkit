@@ -246,6 +246,19 @@
     /* A finished payout: dashboard.css gives .acct-msg.ok the ACCENT colour (it means "accepted,
        working on it"); a payout that actually went out gets the success green. */
     .acct-msg.good { color: var(--ok, #3fb950); }
+    /* A Held payout: not a failure and not done — the strip's warn colour. */
+    .acct-msg.warn { color: var(--warn, #d29922); }
+    /* Tor pause line: dim while it only counts, warn once Tor is paused for this address. */
+    .tor-pause { margin: 10px 0 0; font-family: var(--mono); font-size: 12.5px; line-height: 1.5; color: var(--text-dim); }
+    .tor-pause:empty { display: none; }
+    .tor-pause.is-paused { color: var(--warn, #d29922); }
+    /* The Slatepack offer after a Tor "no": a quiet framed box, the terms above the buttons. */
+    .sp-offer {
+      margin-top: 12px; padding: 12px 14px; border-radius: 6px;
+      border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+      background: color-mix(in srgb, var(--accent) 5%, transparent);
+    }
+    .sp-offer-terms { margin: 0 0 10px; font-size: 12.5px; line-height: 1.55; color: var(--text-dim); }
 
     /* ── password-proof diagnostics (state chip + cross-rig consistency) ── */
     .pass-diag { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
@@ -629,6 +642,24 @@
                                     </div>
                                     <p class="tor-status" id="acct-tor" aria-live="polite"></p>
                                     <div class="acct-msg" id="acct-withdraw-msg"></div>
+                                    <!-- Tor pause (anti-abuse): "Failed Tor payouts in the last 24 h: N of 5", or
+                                         while paused the UTC end time. Straight from the summary's tor_pause —
+                                         the page never decides a pause itself (renderTorPause). -->
+                                    <p class="tor-pause" id="acct-tor-pause" aria-live="polite"></p>
+                                    <!-- The Slatepack offer: ONE block, shown after a Tor "no" (pre-flight decline,
+                                         a refunded failed send, the pause). Its button switches to the Slatepack
+                                         pane and calls slatepackCreate() with the amount + proof already typed —
+                                         nothing is created until it is clicked. Terms are stated BEFORE the click,
+                                         N from the summary's slatepack_window_minutes. Hidden while any payout is
+                                         pending (Held too), when payouts are frozen, below the minimum, and after
+                                         a pool_busy refund (a Slatepack would be refused the same way). -->
+                                    <div class="sp-offer" id="acct-sp-offer" style="display:none">
+                                        <p class="sp-offer-terms" id="acct-sp-offer-terms"></p>
+                                        <div class="tor-actions">
+                                            <button type="button" class="btn-save" id="acct-sp-offer-btn">Send as Slatepack instead</button>
+                                            <button type="button" class="btn-save btn-quiet" id="acct-sp-offer-check" style="display:none">Check again</button>
+                                        </div>
+                                    </div>
                                 </div>
 
                                 <!-- Slatepack method -->
@@ -1016,8 +1047,9 @@
         //   GET  /api/public/price                     cached GRIN spot price (USD + BTC)
         //   POST /api/account/:addr/withdraw           request a payout (ownership-gated)
         //   POST /api/account/:addr/withdraw/:id/slatepack   the SAME pending S1 again (ownership-gated)
-        // (No public cancel — parked payouts auto-refund: Tor after its final retry,
-        //  slatepack when the expiry window passes. Admin-only cancel exists server-side.)
+        // (No public cancel. A Tor payout is tried ONCE: paid, refunded at once when the pool can
+        //  prove it did not go out, or Held while it confirms; slatepack refunds when its window
+        //  passes. Whenever Tor says no, the Tor pane OFFERS Slatepack — one button, never automatic.)
         // Every payout action sends `proof` — a recent mining IP (v4/v6) or the rig's stratum
         // password — from the single ownership-gate input (one gate, all actions).
         // All DOM writes use textContent or escHtml — addresses/events are external data.
@@ -1043,6 +1075,13 @@
         // withdrawal id -> grin-wallet PaymentProof object (signed by the miner's own wallet),
         // same source, same gate, same lifecycle as revealedProofs.
         let revealedPaymentProofs = {};
+        // The last account summary rendered — the Slatepack offer and the outcome line read the
+        // pause, the window and the pending state from it (never recomputed here).
+        let lastSummary = null;
+        // The last Tor "no" this page saw for the address on screen: 'preflight' (the 409 decline)
+        // or 'failed' (a refunded failed send that allows the offer). null = none. The pause needs
+        // no entry here — it comes from the summary on every render.
+        let torNo = null;
 
         function $id(id) { return document.getElementById(id); }
 
@@ -1138,7 +1177,12 @@
             try {
                 const a = await getJson('/api/account/' + encodeURIComponent(addr));
                 // A different address must not inherit P-09's proofs, file or pending text.
-                if (addr !== currentAddr || wasDemo) dpReset();
+                if (addr !== currentAddr || wasDemo) {
+                    dpReset();
+                    // Another address's Tor answer and offer are not this one's.
+                    torNo = null;
+                    setMsg($id('acct-withdraw-msg'), '', true);
+                }
                 currentAddr = addr;
                 try { localStorage.setItem(ADDR_KEY, addr); } catch (e) {}
 
@@ -1233,7 +1277,11 @@
 
             const canWithdraw = (a.balance || 0) >= (a.min_withdrawal || 0)
                 && !a.pending_withdrawals && !a.payouts_frozen;
-            $id('acct-withdraw').disabled = !canWithdraw;
+            // Tor paused for this address (the server's paused_until, never a count compared
+            // here): Pay to Tor wallet is off; the pause line + Slatepack offer say why.
+            const torPaused = !!(a.tor_pause && a.tor_pause.paused_until);
+            $id('acct-withdraw').disabled = !canWithdraw || torPaused;
+            $id('acct-withdraw').title = torPaused ? 'Tor payouts are paused for this address — see below' : '';
 
             // Sub-threshold escape hatch: a non-zero balance too small to auto-withdraw can still be
             // paid out manually by the operator on request. The mailto is wired by branding.js
@@ -1249,8 +1297,11 @@
 
             // Hands the summary to every registered rail: each one toggles its own radio +
             // destination card and renders its own state. Adding a rail needs no edit here.
+            lastSummary = a;
             PayoutMethods.applySummary(a, { canWithdraw: canWithdraw });
             renderPending(a.pending_withdrawal);
+            renderTorPause(a.tor_pause);
+            renderSlatepackOffer(a);
             renderDormancy(a.dormancy);
         }
 
@@ -1933,10 +1984,17 @@
             // Tor qualifies because it has no isEnabled — it ships with every pool and pays
             // only this address's own wallet, so it can never be switched off underneath us.
             fallback: true,
-            statuses: { tor_checking: 'sending (Tor)', tor_sending: 'sending (Tor)', tor_failed: 'failed' },
+            statuses: { tor_checking: 'sending (Tor)', tor_sending: 'sending (Tor)', tor_held: 'held — confirming',
+                        tor_failed: 'failed — balance returned' },
+            // A failed Tor payout is always refunded; P-08 says why, from the public fail_code.
+            rowLabel: function (row) {
+                return row && row.status === 'tor_failed' ? (TOR_FAIL_SHORT[row.fail_code] || null) : null;
+            },
             // tor_checking is the queue: the scheduler picks a new payout up on its next pass
-            // (every 60 s), so "sending now" was not yet true for up to a minute.
-            pendingStatuses: { tor_checking: 'queued — sending starts within a minute', tor_sending: 'sending over Tor now…' }
+            // (every 60 s), so "sending now" was not yet true for up to a minute. tor_held: the one
+            // attempt's outcome is unknown, so the pool reads its wallet until it can tell.
+            pendingStatuses: { tor_checking: 'queued — sending starts within a minute', tor_sending: 'sending over Tor now…',
+                               tor_held: 'held — the pool is confirming whether it went out; your amount stays reserved and nothing is sent twice' }
         });
         PayoutMethods.register({
             key: 'slatepack',
@@ -1951,15 +2009,22 @@
 
         // ── Pending payout strip (one-pending-per-address slot) ────────────
         // Statuses the scheduler moves on by itself within minutes — the page polls while one is
-        // showing (watchPending). Parked states (retry_scheduled, slatepack_pending) wait on a
-        // clock or on the miner, so polling them would only spend requests.
+        // showing (watchPending). A Held payout (and a legacy retry_scheduled row, which the
+        // scheduler migrates on its first pass) settles on the pool's own wallet reads: confirmed
+        // on the next pass that sees it mined, refunded only after two "absent" reads ≥ 10 min
+        // apart. So it is followed SLOWLY — every 60 s for 30 min, which covers that two-read
+        // refund with room to spare — rather than not at all: an unwatched Held row would leave
+        // the miner staring at "held" until they thought to reload. Past 30 min it is an
+        // operator case (alerted at 24 h) and a reload restarts the watch.
+        // slatepack_pending waits on the miner, so polling it would only spend requests.
         const PENDING_IN_FLIGHT = ['tor_checking', 'tor_sending', 'finalizing'];
+        const PENDING_SLOW = ['tor_held', 'retry_scheduled'];
         // One word for the placard tile. The tile used to print "#10 · tor", which reads as a
         // queue position ("10th in line"), not as the payout's id. The id stays on the strip,
         // labelled, because it is what the operator asks for.
         const PENDING_TILE = {
             tor_checking: 'Queued', tor_sending: 'Sending', finalizing: 'Settling',
-            retry_scheduled: 'Retrying', slatepack_pending: 'Awaiting you'
+            tor_held: 'Held', retry_scheduled: 'Checking', slatepack_pending: 'Awaiting you'
         };
         function renderPending(p) {
             const strip = $id('acct-pending-strip');
@@ -1972,10 +2037,9 @@
             // Rail-specific wording comes from the registry — this page holds no method names.
             let label = PayoutMethods.pendingLabel(p);
             const railName = PayoutMethods.methodLabel(p.method || 'tor');
+            // (No "next attempt" any more: nothing re-sends a Tor payout since 2026-09-26, so a
+            // legacy retry_scheduled row's next_retry_at is a time at which nothing happens.)
             let text = 'Pending payout · ' + fmtGrin(p.amount) + ' via ' + railName + ' — ' + label;
-            if (p.status === 'retry_scheduled' && p.next_retry_at) {
-                text += ' · next attempt ' + fmtWhen(p.next_retry_at) + ' — the amount stays reserved until then';
-            }
             // The time a miner is actually waiting for: the next scheduler pass (≤ 60 s) plus the
             // send itself (the CLI is killed at wallet_send_timeout_ms, 120 s by default).
             if (p.status === 'tor_checking' || p.status === 'tor_sending') {
@@ -2017,13 +2081,17 @@
         // A Tor payout is queued by the request and SENT by the scheduler a minute or two later,
         // so the request's own answer can only ever say "queued". Without this the strip kept
         // saying "sending over Tor now…" until the miner thought to reload, and the result —
-        // paid, parked, returned — was never announced at all. Polls the account summary (one
+        // paid, held, returned — was never announced at all. Polls the account summary (one
         // cheap GET on the `public` bucket) every 15 s while the pending row is in flight, and
         // reports the outcome once it moves on. Stops after 15 min: past that the strip's own
-        // "unusually long" line takes over, and a reload restarts the watch.
+        // "unusually long" line takes over, and a reload restarts the watch. A Held row is
+        // followed at the slow rate above (PENDING_SLOW): sending → held is announced once, and
+        // held → paid / refunded is announced like any other outcome.
         const PENDING_POLL_MS = 15000;
+        const PENDING_SLOW_POLL_MS = 60000;
         const PENDING_WATCH_MAX_MS = 15 * 60 * 1000;
-        let pendingWatch = null; // { id, addr, method, amount, until, timer }
+        const PENDING_SLOW_WATCH_MAX_MS = 30 * 60 * 1000;
+        let pendingWatch = null; // { id, addr, method, amount, status, until, timer }
 
         function stopPendingWatch() {
             if (pendingWatch && pendingWatch.timer) clearTimeout(pendingWatch.timer);
@@ -2032,76 +2100,72 @@
 
         function watchPending(p) {
             if (isDemo) { stopPendingWatch(); return; }
-            const w = pendingWatch;
             // A different address on screen: its payout is none of our business now.
-            if (w && w.addr !== currentAddr) stopPendingWatch();
-            const inFlight = !!(p && PENDING_IN_FLIGHT.indexOf(p.status) !== -1);
-            if (pendingWatch && (!p || p.id !== pendingWatch.id || !inFlight)) {
-                const done = pendingWatch;
+            if (pendingWatch && pendingWatch.addr !== currentAddr) stopPendingWatch();
+            const fast = !!(p && PENDING_IN_FLIGHT.indexOf(p.status) !== -1);
+            const slow = !!(p && PENDING_SLOW.indexOf(p.status) !== -1);
+            const w = pendingWatch;
+            if (w && (!p || p.id !== w.id)) {
+                // It left the pending slot: the history row says how it ended.
                 stopPendingWatch();
-                announcePayoutOutcome(done, p && p.id === done.id ? p : null);
+                announcePayoutOutcome(w, null);
+            } else if (w && p.status !== w.status) {
+                if (!fast && !slow) {
+                    // Parked somewhere this page does not follow.
+                    stopPendingWatch();
+                    announcePayoutOutcome(w, p);
+                } else {
+                    // Same payout, new state: sending → held is said once and still followed.
+                    if (slow) announcePayoutOutcome(w, p);
+                    w.status = p.status;
+                    w.until = Date.now() + (slow ? PENDING_SLOW_WATCH_MAX_MS : PENDING_WATCH_MAX_MS);
+                }
             }
-            if (!inFlight) return;
+            if (!fast && !slow) return;
             if (!pendingWatch) {
-                pendingWatch = { id: p.id, addr: currentAddr, method: p.method || 'tor', amount: p.amount,
-                                 until: Date.now() + PENDING_WATCH_MAX_MS, timer: null };
+                pendingWatch = { id: p.id, addr: currentAddr, method: p.method || 'tor', amount: p.amount, status: p.status,
+                                 until: Date.now() + (slow ? PENDING_SLOW_WATCH_MAX_MS : PENDING_WATCH_MAX_MS), timer: null };
             }
             if (pendingWatch.timer) clearTimeout(pendingWatch.timer);
             if (Date.now() > pendingWatch.until) return; // leave the watch object: no announce spam
-            pendingWatch.timer = setTimeout(pollPending, PENDING_POLL_MS);
+            pendingWatch.timer = setTimeout(pollPending, slow ? PENDING_SLOW_POLL_MS : PENDING_POLL_MS);
         }
 
         async function pollPending() {
             const w = pendingWatch;
             if (!w || w.addr !== currentAddr || isDemo) return;
             w.timer = null;
+            const slow = PENDING_SLOW.indexOf(w.status) !== -1;
             let a;
             try {
                 a = await getJson('/api/account/' + encodeURIComponent(w.addr));
             } catch (e) {
                 // A blip must not end the watch — try again on the next beat.
-                if (pendingWatch === w) w.timer = setTimeout(pollPending, PENDING_POLL_MS);
+                if (pendingWatch === w) w.timer = setTimeout(pollPending, slow ? PENDING_SLOW_POLL_MS : PENDING_POLL_MS);
                 return;
             }
             if (pendingWatch !== w || w.addr !== currentAddr) return;
             const p = a.pending_withdrawal || null;
-            const same = p && p.id === w.id && PENDING_IN_FLIGHT.indexOf(p.status) !== -1;
+            const same = p && p.id === w.id && p.status === w.status;
             if (same) {
                 renderPending(p); // refresh the label + elapsed time; re-arms the timer
                 return;
             }
-            // It moved on: repaint the whole account once (balances, ledgers, history), and let
-            // renderSummary → renderPending → watchPending announce the outcome.
+            // It moved on: repaint the whole account once (balances, ledgers, history, the Tor
+            // pause), and let renderSummary → renderPending → watchPending announce the outcome.
             renderSummary(a);
             loadLedger('in');
             loadLedger('out');
             loadWithdrawals();
         }
 
-        // Outcome of a watched payout. `stillPending` is its row when it is parked (retry /
-        // slatepack), else null and the history's newest row says what happened.
+        // Outcome of a watched payout. `stillPending` is its row when it is still pending in a
+        // state worth saying (Held), else null and the history row with its id says what happened.
         async function announcePayoutOutcome(w, stillPending) {
             // Only the Tor pane has a message line for this; the Slatepack rail reports its own
             // finalize result in its own panel.
             if (w.method !== 'tor') return;
-            const msg = $id('acct-withdraw-msg');
-            if (!msg) return;
-            const say = function (text, tone) {
-                msg.textContent = text;
-                msg.className = 'acct-msg ' + tone;
-            };
-            if (stillPending) {
-                if (stillPending.status === 'retry_scheduled') {
-                    if (stillPending.retry_reason === 'pool_wallet_short') {
-                        say('The pool could not send this payout yet — it is queued and will be retried automatically.', 'err');
-                    } else {
-                        say('✗ Your wallet did not take the payout over Tor. It is parked and will be retried'
-                            + (stillPending.next_retry_at ? ' at ' + fmtWhen(stillPending.next_retry_at) + ' UTC' : '')
-                            + ' — keep your wallet listener running.', 'err');
-                    }
-                }
-                return;
-            }
+            if (stillPending) { sayPayoutOutcome(w, null, stillPending); return; }
             let row = null;
             try {
                 const data = await getJson('/api/account/' + encodeURIComponent(w.addr) + '/withdrawals?limit=5&offset=0');
@@ -2109,15 +2173,134 @@
                 for (let i = 0; i < rows.length; i++) if (rows[i].id === w.id) { row = rows[i]; break; }
             } catch (e) { /* fall through to the neutral line */ }
             if (w.addr !== currentAddr) return;
+            sayPayoutOutcome(w, row, null);
+        }
+
+        // ── Tor outcome wording, keyed on the public fail_code ───────────────
+        // The plan's miner-facing copy. `offer` = whether the Slatepack offer follows: never for
+        // pool_busy (the pool wallet cannot cover a payout right now, so a Slatepack would be
+        // refused the same way — 503) and never for a code this page does not know. The "N of 5"
+        // count is not repeated here: the Tor pause line directly below says it (renderTorPause).
+        // wallet_offline_cleared is an operator's un-count; the miner's wording does not change.
+        const TOR_FAIL_OUTCOME = {
+            wallet_offline: { offer: true, text: '✗ Your wallet did not answer over Tor — your balance is back. Start your wallet listener and try again, or get it as a Slatepack now.' },
+            wallet_offline_cleared: { offer: true, text: '✗ Your wallet did not answer over Tor — your balance is back. Start your wallet listener and try again, or get it as a Slatepack now.' },
+            wallet_unreachable: { offer: true, text: '✗ The payout could not reach your wallet over Tor — your balance is back. Try again, or get it as a Slatepack now.' },
+            pool_send_path: { offer: true, text: '✗ The pool could not deliver over Tor — your balance is back. Please use Slatepack; the operator has been alerted.' },
+            pool_busy: { offer: false, tone: '', text: 'The pool could not send this payout right now — your balance is back. Try again later.' },
+            unknown: { offer: true, text: '✗ This payout did not go out — your balance is back.' }
+        };
+        const TOR_FAIL_GENERIC = { offer: false, text: '✗ Payout failed — the full amount is back in your balance.' };
+        function torFailOutcome(code) {
+            return Object.prototype.hasOwnProperty.call(TOR_FAIL_OUTCOME, code) ? TOR_FAIL_OUTCOME[code] : TOR_FAIL_GENERIC;
+        }
+        // P-08's short form of the same reasons (the rail's rowLabel). Every one was refunded.
+        // Kept to two or three words: the Status column is narrow at phone width.
+        const TOR_FAIL_SHORT = {
+            wallet_offline: 'refunded — wallet offline',
+            wallet_offline_cleared: 'refunded — wallet offline',
+            wallet_unreachable: 'refunded — unreachable',
+            pool_send_path: 'refunded — pool side',
+            pool_busy: 'refunded — pool busy',
+            unknown: 'refunded — not sent'
+        };
+
+        function sayPayoutOutcome(w, row, stillPending) {
+            const msg = $id('acct-withdraw-msg');
+            if (!msg) return;
+            const say = function (text, tone) {
+                msg.textContent = text;
+                msg.className = 'acct-msg' + (tone ? ' ' + tone : '');
+            };
+            if (stillPending) {
+                // A legacy retry_scheduled row is settled by the same wallet reads (startup migration).
+                if (stillPending.status === 'tor_held' || stillPending.status === 'retry_scheduled') {
+                    say('Payout held — the pool is confirming whether it went out. Your amount stays reserved; nothing is sent twice. Payout ID ' + stillPending.id + '.', 'warn');
+                }
+                return;
+            }
             if (row && row.status === 'confirmed') {
                 // row.amount is the GROSS the balance was charged, not what arrived (the flat
                 // withdrawal fee stays behind), so it is named as the payout, not as "received".
                 say('✓ Payout of ' + fmtGrin(row.amount) + ' sent to your wallet over Tor.', 'good');
+            } else if (row && row.status === 'tor_failed') {
+                const o = torFailOutcome(row.fail_code);
+                say(o.text, o.tone === undefined ? 'err' : o.tone);
+                torNo = o.offer ? 'failed' : null;
+                renderSlatepackOffer(lastSummary);
             } else if (row && /_failed$/.test(String(row.status))) {
                 say('✗ Payout failed — the full amount is back in your balance.', 'err');
             } else {
                 say('Your payout has finished processing — see Withdrawal history below for the result.', 'ok');
             }
+        }
+
+        // ── Tor pause line (anti-abuse; the server decides, this page only words it) ──
+        // tor_pause = { failures_24h, max, paused_until|null } from the summary. Paused ⇔ the
+        // server sent paused_until; a count that reached the max without it is NOT a pause here.
+        function torPauseLine(tp) {
+            if (!tp) return null;
+            if (tp.paused_until) {
+                return { paused: true, text: 'Tor payouts are paused for this address until ' + fmtWhen(tp.paused_until) +
+                         ' UTC after ' + tp.max + ' failed attempts in 24 h.' };
+            }
+            const n = Number(tp.failures_24h) || 0;
+            if (n < 1) return null;
+            return { paused: false, text: 'Failed Tor payouts in the last 24 h: ' + n + ' of ' + tp.max };
+        }
+        function renderTorPause(tp) {
+            const el = $id('acct-tor-pause');
+            if (!el) return;
+            const line = torPauseLine(tp);
+            el.textContent = line ? line.text : '';
+            el.className = 'tor-pause' + (line && line.paused ? ' is-paused' : '');
+        }
+
+        // ── The Slatepack offer after a Tor "no" ─────────────────────────────
+        // Which offer to show, if any — from the summary and the last Tor "no" on this page. The
+        // pause wins (it is in the summary). A pending payout (Held included), a freeze or a
+        // balance below the minimum hide it: the create would only be refused, and a button that
+        // is guaranteed to fail is never shown.
+        function slatepackOfferMode(a, reason) {
+            if (!a) return null;
+            if (a.pending_withdrawals || a.pending_withdrawal) return null;
+            if (a.payouts_frozen) return null;
+            if (!((Number(a.balance) || 0) >= (Number(a.min_withdrawal) || 0))) return null;
+            if (a.tor_pause && a.tor_pause.paused_until) return 'paused';
+            return (reason === 'preflight' || reason === 'failed') ? reason : null;
+        }
+        // The terms, before the click. N is the pool's live window from the summary; with none,
+        // no number is invented.
+        function slatepackOfferTerms(mins) {
+            const n = Number(mins);
+            const span = (mins != null && Number.isFinite(n) && n > 0) ? n + (n === 1 ? ' minute' : ' minutes') : 'a limited time';
+            return 'You\'ll get a slatepack to paste into your wallet (grin-wallet receive); you then have ' + span +
+                   ' to paste its reply here. It can\'t be cancelled — if the time runs out, the amount comes back.';
+        }
+        function renderSlatepackOffer(a) {
+            const box = $id('acct-sp-offer');
+            if (!box) return;
+            // A new pending payout ends the "no" it answered: the offer does not come back when
+            // that payout settles, only on the next "no".
+            if (a && (a.pending_withdrawals || a.pending_withdrawal)) torNo = null;
+            const mode = slatepackOfferMode(a, torNo);
+            if (!mode) { box.style.display = 'none'; return; }
+            $id('acct-sp-offer-terms').textContent = slatepackOfferTerms(a.slatepack_window_minutes);
+            $id('acct-sp-offer-check').style.display = mode === 'preflight' ? '' : 'none';
+            box.style.display = '';
+        }
+        // The one button. Switches the pane to Slatepack (so the S1 box, the copy button and the
+        // response field are in view) and runs the EXISTING create — the same POST, the amount and
+        // proof already typed, every server gate. Hidden first, so a double click cannot reach it
+        // twice; the pause brings it back on the next summary if the create is refused.
+        function sendAsSlatepack() {
+            const box = $id('acct-sp-offer');
+            if (box) box.style.display = 'none';
+            torNo = null;
+            const radio = $id('acct-pay-slatepack');
+            if (radio) radio.checked = true;
+            PayoutMethods.sync();
+            slatepackCreate();
         }
 
         // ── P-01 hashrate chart (Day/Week/Month; retention caps at 100 days) ──
@@ -2723,6 +2906,7 @@
             // The pre-flight gate probes the wallet INSIDE this request (fresh, up to ~30 s), so
             // say what the wait is rather than a bare "Submitting…".
             setMsg(msg, 'Checking your wallet over Tor, then sending… (up to 30 s)', true);
+            msg.title = '';
             try {
                 const r = await fetch('/api/account/' + encodeURIComponent(currentAddr) + '/withdraw', {
                     method: 'POST',
@@ -2739,14 +2923,14 @@
                     lookup(); // refresh balances + pending strip (and start following it)
                 } else if (json && json.tor_online === false) {
                     // Pre-flight gate declined it (409). The gate runs BEFORE the balance lock, so
-                    // nothing was deducted; the status line carries the ✗ + Slatepack pointer, so
-                    // the message stays short rather than repeat the server's sentence.
-                    // resetTorStatus first: a Check still in flight must not overwrite this fresher
-                    // answer, and its button must come back (its own finally no longer will).
-                    resetTorStatus();
-                    setTorStatus(false, json.reason);
-                    setMsg(msg, 'Not sent — nothing was deducted.', false);
+                    // nothing was deducted — and nothing is counted toward the Tor pause.
+                    showTorDecline(json);
                     btn.disabled = false;
+                } else if (r.status === 429 && json && json.error === 'tor_paused') {
+                    // Paused since this page last read the summary. Nothing was locked; re-read it
+                    // so the pause line (the server's end time) and the Slatepack offer appear.
+                    setMsg(msg, 'Not sent — nothing was deducted.', false);
+                    lookup();
                 } else {
                     setMsg(msg, apiErr(json, 'Withdrawal failed'), false);
                     btn.disabled = false;
@@ -2757,14 +2941,31 @@
             }
         }
 
+        // The pre-flight decline (409 tor_online: false): the plan's wording, then the Slatepack
+        // offer with Check again. resetTorStatus first: a Check still in flight must not overwrite
+        // this fresher answer, and its button must come back (its own finally no longer will).
+        function showTorDecline(json) {
+            resetTorStatus();
+            const msg = $id('acct-withdraw-msg');
+            setMsg(msg, '✗ Your wallet didn\'t answer over Tor — nothing was deducted. Start your wallet listener and check again, or get it as a Slatepack now.', false);
+            msg.title = json && json.reason ? 'reason: ' + json.reason : '';
+            torNo = 'preflight';
+            renderSlatepackOffer(lastSummary);
+        }
+
+        // One create at a time from this tab: the Generate button and the Slatepack offer both land
+        // here. The server's one-pending rule is still the guard; this only spares the second POST.
+        let spCreating = false;
         async function slatepackCreate() {
             if (!currentAddr) return;
+            if (spCreating) return;
             const msg = $id('acct-sp-msg');
             if (demoBlock(msg)) return;
             const proof = getProof(msg);
             if (!proof) return;
             const amount = amountValue(msg);
             if (amount === null) return;
+            spCreating = true;
             setMsg(msg, 'Generating encrypted slatepack…', true);
             try {
                 const r = await fetch('/api/account/' + encodeURIComponent(currentAddr) + '/withdraw', {
@@ -2788,6 +2989,7 @@
                     setMsg(msg, apiErr(json, 'Failed'), false);
                 }
             } catch (e) { setMsg(msg, 'Failed: ' + e.message, false); }
+            finally { spCreating = false; }
         }
 
         // Copy the armored slatepack. The Clipboard API needs a secure context (the pool is served
@@ -3011,6 +3213,9 @@
                     is_online: true, last_seen_at: now - 40, created_at: now - 75 * 86400,
                     shares: { count: 184207, last_share_at: now - 40 }, blocks_found: 3,
                     hashrate_gps: 4.82, min_withdrawal: 25.0, withdrawal_fee: 0.04, payouts_frozen: false,
+                    // No counted Tor failure in the last 24 h (the 16-day-old one below is outside
+                    // the window), and the pool's Slatepack window for the offer's terms.
+                    tor_pause: { failures_24h: 0, max: 5, paused_until: null }, slatepack_window_minutes: 30,
                     has_recorded_ip: true, has_recorded_pass: true,
                     // Two rigs online on two DIFFERENT compliant passwords — an ordinary
                     // multi-site setup. Renders the "On record" line, not a warning: that is
@@ -3046,7 +3251,7 @@
                 withdrawals: [
                     { created_at: now - 2 * 86400,  confirmed_at: now - 2 * 86400 + 900,  method: 'tor',       status: 'confirmed', amount: 25.0, fee: 0.008, kernel_excess: '08b1f6d2c4a3e5079b8c1d2e3f405162738495a6b7c8d9e0f1a2b3c4d5e6f70819' },
                     { created_at: now - 9 * 86400,  confirmed_at: now - 9 * 86400 + 1200, method: 'slatepack', status: 'confirmed', amount: 25.0, fee: 0.008, kernel_excess: '09a2e7c3d5b40618ac9d0e1f2031425364758697a8b9cadbecfd0e1f203142536' },
-                    { created_at: now - 16 * 86400, confirmed_at: null,                   method: 'tor',       status: 'tor_failed', amount: 20.0, fee: 0.0 },
+                    { created_at: now - 16 * 86400, confirmed_at: null,                   method: 'tor',       status: 'tor_failed', fail_code: 'wallet_offline', amount: 20.0, fee: 0.0 },
                     { created_at: now - 23 * 86400, confirmed_at: now - 23 * 86400 + 800,  method: 'tor',       status: 'confirmed', amount: 30.0, fee: 0.008, kernel_excess: '08c3d8e4f60517b2ad0e1f2031425364758697a8b9cadbecfd0e1f2031425364a' },
                     { created_at: now - 38 * 86400, confirmed_at: now - 38 * 86400 + 600,  method: 'nostr',     status: 'confirmed', amount: 28.5, fee: 0.008, kernel_excess: '09d4e9f5071628c3be1f20314253647586a7b8c9daebfc0d1e2f3041526374859' },
                     { created_at: now - 52 * 86400, confirmed_at: now - 52 * 86400 + 700,  method: 'tor',       status: 'confirmed', amount: 40.0, fee: 0.008, kernel_excess: '08e5f0061728d3c4af203142536475869708b9cadbecfd0e1f2031425364758a6' },
@@ -3056,7 +3261,7 @@
         })();
 
         function renderDemo() {
-            if (currentAddr !== DEMO_ADDR) dpReset();
+            if (currentAddr !== DEMO_ADDR) { dpReset(); torNo = null; setMsg($id('acct-withdraw-msg'), '', true); }
             isDemo = true;
             currentAddr = DEMO_ADDR;   // demo is never saved to localStorage
             renderSummary(DEMO.summary);
@@ -3070,9 +3275,9 @@
             loadLedger('out');
             loadWithdrawals();
             // Status stays empty until "Check Tor wallet" is pressed, same as a real account;
-            // torCheck answers ✓ (demo) without a request.
+            // torCheck answers ✓ (demo) without a request. (renderSummary already set Pay from the
+            // demo summary — forcing it on here would un-disable a paused demo.)
             resetTorStatus();
-            $id('acct-withdraw').disabled = false;
         }
 
         // ── Wiring ─────────────────────────────────────────────────────────
@@ -3083,6 +3288,11 @@
             $id('acct-tor-check').addEventListener('click', function () {
                 // The ONLY thing that probes for display — there is no check on page load.
                 // No-op until an address is loaded; the demo answers locally.
+                if (currentAddr) torCheck(currentAddr);
+            });
+            // The Slatepack offer (after a Tor "no") and its pre-flight "Check again".
+            $id('acct-sp-offer-btn').addEventListener('click', sendAsSlatepack);
+            $id('acct-sp-offer-check').addEventListener('click', function () {
                 if (currentAddr) torCheck(currentAddr);
             });
             // Decimal-only amount: strip any non-digit/dot and collapse to a single decimal point.

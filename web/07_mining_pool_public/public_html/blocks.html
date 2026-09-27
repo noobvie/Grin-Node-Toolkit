@@ -63,6 +63,18 @@
       border-color: var(--accent, #7cb342); font-weight: 600;
     }
     .rangebar .rng-spacer { margin-left: auto; }
+
+    /* P-05 on a phone: the shared .data-table pads 18px a side, which alone ate ~180px of a
+       390px screen across five columns. Tighten it, keep cells on one line, and let the
+       .table-wrap scroll sideways as a last resort instead of the whole page. */
+    .bk-table td, .bk-table th { white-space: nowrap; }
+    @media (max-width: 640px) {
+      .bk-table { font-size: 13px; }
+      .bk-table thead th, .bk-table tbody td { padding: 9px 8px; }
+      .bk-table thead th:first-child, .bk-table tbody td:first-child { padding-left: 12px; }
+      .bk-table thead th:last-child,  .bk-table tbody td:last-child  { padding-right: 12px; }
+      .bk-table .badge { font-size: 11px; padding: 2px 6px; }
+    }
     .rangebar .rng-note {
       color: var(--text-mute, #6b7480); font-family: var(--mono, monospace);
       font-size: 11px; letter-spacing: .1em;
@@ -102,7 +114,7 @@
         <!-- ═══ Spec placard: compact live tiles ═══ -->
         <div class="placard" aria-label="Live block figures">
             <span><i>Blocks found</i><b id="kpi-total">—</b></span>
-            <span><i>Confirmed</i><b id="kpi-confirmed">—</b></span>
+            <span><i>Matured</i><b id="kpi-confirmed">—</b></span>
             <span><i>Maturing</i><b id="kpi-immature">—</b></span>
             <span><i>Found · 24h / 7d</i><b id="kpi-recent">—</b></span>
         </div>
@@ -143,7 +155,7 @@
                 <div class="panel"><span class="screws"></span>
                     <h2 class="panel-title"><span class="tag">P-03</span> Status breakdown</h2>
                     <div class="panel-body chart-wrap">
-                        <canvas id="bk-chart-status" aria-label="Confirmed, maturing and orphaned block split" role="img"></canvas>
+                        <canvas id="bk-chart-status" aria-label="Matured, maturing and orphaned block split" role="img"></canvas>
                         <div class="chart-empty" id="bk-empty-status">NO BLOCKS IN RANGE</div>
                     </div>
                 </div>
@@ -166,26 +178,29 @@
                     <div class="filter-chips" id="filter-chips" style="display:flex;gap:8px;flex-wrap:wrap;margin:0 0 14px;">
                         <button class="btn sm chip active" data-filter="">All</button>
                         <button class="btn sm chip" data-filter="immature">Maturing</button>
-                        <button class="btn sm chip" data-filter="confirmed">Confirmed</button>
+                        <button class="btn sm chip" data-filter="matured">Matured</button>
                         <button class="btn sm chip" data-filter="orphaned">Orphaned</button>
                     </div>
 
-                    <table class="data-table" aria-label="Found blocks">
+                    <!-- No Reward column (the 60 ツ coinbase + fees repeated near-identically on
+                         every row; P-04 carries the totals) and no Chain column (the Height cell
+                         already links the same explorer page). Both were dropped to fit a phone. -->
+                    <div class="table-wrap">
+                    <table class="data-table bk-table" aria-label="Found blocks">
                         <thead>
                             <tr>
                                 <th>Height</th>
                                 <th>Status</th>
                                 <th class="num" title="Round shares ÷ network difficulty. Under 100% = lucky.">Luck</th>
-                                <th class="num">Reward</th>
                                 <th>Found by</th>
                                 <th class="num">Age</th>
-                                <th>Chain</th>
                             </tr>
                         </thead>
                         <tbody id="blocks-tbody">
-                            <tr><td colspan="7">Loading…</td></tr>
+                            <tr><td colspan="5">Loading…</td></tr>
                         </tbody>
                     </table>
+                    </div>
 
                     <div class="pager" id="pager" style="display:flex;align-items:center;justify-content:center;gap:14px;margin-top:16px;">
                         <button class="btn sm" id="prev-btn" disabled>‹ Newer</button>
@@ -241,10 +256,15 @@
             return Number(v || 0).toLocaleString('en-US', { maximumFractionDigits: 3 }) + ' ツ';
         }
 
+        // Two success labels only: Maturing → Matured. 'paid' is a pool-internal step
+        // (rewards.js flips confirmed→paid once the round is credited to miner balances); it
+        // says nothing about the block itself, and read as "the miners were paid out", which
+        // is a separate withdrawal. Both render as Matured.
         const STATUS = {
-            immature:  ['Maturing',  '#d29922'],
-            confirmed: ['Confirmed', '#3fb950'],
-            orphaned:  ['Orphaned',  '#f85149'],
+            immature:  ['Maturing', '#d29922'],
+            confirmed: ['Matured',  '#3fb950'],
+            paid:      ['Matured',  '#3fb950'],
+            orphaned:  ['Orphaned', '#f85149'],
         };
         function statusCell(st) {
             const [label, color] = STATUS[st] || [st || 'unknown', 'var(--dark-dim)'];
@@ -281,7 +301,7 @@
 
         async function loadBlocks() {
             const tbody = document.getElementById('blocks-tbody');
-            tbody.innerHTML = '<tr><td colspan="7">Loading…</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="5">Loading…</td></tr>';
             try {
                 const q = '?limit=' + PAGE_SIZE + '&offset=' + (_page * PAGE_SIZE) +
                           (_filter ? '&status=' + encodeURIComponent(_filter) : '');
@@ -289,7 +309,7 @@
                 const rows = Array.isArray(blocks) ? blocks : [];
                 _lastFull = rows.length === PAGE_SIZE;
                 if (!rows.length) {
-                    tbody.innerHTML = '<tr><td colspan="7">' +
+                    tbody.innerHTML = '<tr><td colspan="5">' +
                         (_page === 0 ? 'No blocks found yet — the pool is still searching.' : 'No more blocks.') +
                         '</td></tr>';
                 } else {
@@ -299,7 +319,6 @@
                             '<td>' + Explorer.link('block', h, h.toLocaleString('en-US')) + '</td>' +
                             '<td>' + statusCell(b.status) + '</td>' +
                             luckCell(b) +
-                            '<td class="num">' + (Number(b.reward) || 0).toFixed(2) + ' ツ</td>' +
                             // No `title` tooltip (audit §J11-1): /api/pool/blocks masks found_by
                             // now, so the tooltip would only repeat the visible text — but the
                             // old one carried the FULL address on every row of an offset-paged,
@@ -307,12 +326,11 @@
                             // was. shortAddr() stays as a guard; it is a no-op on a masked value.
                             '<td>' + escHtml(shortAddr(b.found_by)) + '</td>' +
                             '<td class="num" title="' + escHtml(fmtTs(b.found_at)) + '">' + escHtml(timeAgo(b.found_at)) + '</td>' +
-                            '<td>' + Explorer.link('block', h, 'view ↗') + '</td>' +
                             '</tr>';
                     }).join('');
                 }
             } catch (e) {
-                tbody.innerHTML = '<tr><td colspan="7">Block data unavailable</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="5">Block data unavailable</td></tr>';
                 _lastFull = false;
             }
             updatePager();
@@ -378,7 +396,7 @@
                 // P-03 · status breakdown doughnut (window totals; true orphaned count).
                 toggleEmpty('bk-empty-status', statusTotal === 0);
                 PoolCharts.renderDoughnutChart('bk-chart-status',
-                    ['Confirmed', 'Maturing', 'Orphaned'],
+                    ['Matured', 'Maturing', 'Orphaned'],
                     [status.confirmed || 0, status.immature || 0, status.orphaned || 0],
                     { colors: ['#3fb950', '#d29922', '#f85149'] });
 

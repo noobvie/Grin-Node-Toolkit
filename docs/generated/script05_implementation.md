@@ -1,7 +1,7 @@
 # Script 05 — Wallet & Payment Services Hub — implementation record
 
 > **Covers code as of:** 2026-08-04 (the doc: "current as of 2026-08-04") · **Last verified:** never systematically verified
-> **Product code last changed:** 2026-09-25 — `scripts/05_grin_wallet_service.sh` (CMD wallet Nuke + Re-initialize fix; the section for it is current, the rest of the doc is still as of 2026-08-04)
+> **Product code last changed:** 2026-09-27 — `scripts/05_grin_wallet_service.sh` (CMD wallet `L) Listener` screen; that section and the 2026-09-25 Nuke section are current, the rest of the doc is still as of 2026-08-04)
 
 **Status: current as of 2026-08-04.** Two changes landed the same day and this document covers
 both: the **05x renumber + rename** (Grin Drop `052 → 059`, Fidelius/Accio codenames) and,
@@ -268,6 +268,26 @@ commands for a mainnet archive. Setup re-registers on its next run.
 
 Also fixed: the summary's "Listener started" line always printed the Foreign port; it now prints
 the active mode and its port.
+
+### CMD wallet (05C) — `L) Listener` screen, 2026-09-27
+
+⚠ Exercised locally against stubbed `tmux` / port helpers only — **not run on a VPS**.
+
+Setup (1/2) used to be the only way to (re)start a listener, and it walks every prompt (binary,
+init, passphrase, mode) before reaching it. `L` opens a per-network screen — straight in when only
+one network has a wallet — with a status block (state, PID, uptime, mode, whether the passphrase is
+saved) and four actions. It changes **no config**; mode, ports and the toml stay setup's job.
+
+| Action | Calls | Note |
+|---|---|---|
+| Start | `_cmd_start_listener` | Refuses when already running (points at Restart) or when a `grin-wallet` with this cwd runs outside tmux. |
+| Stop | `_cmd_stop_wallet` | Session + every `grin-wallet` whose cwd is the wallet dir; a foreign port holder is never touched. |
+| Restart | `_cmd_stop_wallet` → `_cmd_start_listener` | Deliberately **not** the setup flow's kill-session-and-wait: stopping by cwd waits on the wallet's own PIDs. Without a saved passphrase it is asked *after* the stop. |
+| Recent output | `tail` of `log_file_path` + `tmux capture-pane` | No attach needed — attaching and pressing Ctrl-C kills the listener. |
+
+The status block adds the one state the 05C screen cannot show: a `grin-wallet` started by hand
+from `listen.sh`, outside tmux. Start would otherwise fail the port guard ("held by ANOTHER
+process") with no hint that the holder is this very wallet.
 
 ---
 

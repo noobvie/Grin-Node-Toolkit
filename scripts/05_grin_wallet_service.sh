@@ -1400,6 +1400,7 @@ _cmd_wallet_setup_for_net() {
     if [[ "$_saved_pass" == "yes" ]]; then
         echo -e "  ${DIM}  restart listener:  tmux new -d -s $tmux_name $(_cmd_launcher "$net")${RESET}"
     fi
+    echo -e "  ${DIM}  or: L) Listener on the CMD Wallet screen — start · stop · restart${RESET}"
     echo ""
     echo -ne "  ${DIM}Press Enter to return to menu...${RESET}"
     read -r || true
@@ -1604,6 +1605,151 @@ _cmd_nuke_menu() {
     return 0
 }
 
+# ─── L) Listener — start · stop · restart without the setup flow ─────────────
+# Setup (1/2) was the only way to (re)start a listener, and it walks binary,
+# init, passphrase, mode and toml prompts before it gets there — a dozen keys per
+# restart in a test loop. This screen adds no second way to do anything; it calls
+# the same primitives:
+#   Start    _cmd_start_listener  (same passphrase source, port guard, launcher)
+#   Stop     _cmd_stop_wallet     (the session + every grin-wallet whose cwd is
+#                                  the wallet dir; a foreign port holder is never
+#                                  touched)
+#   Restart  Stop, then Start — NOT the setup flow's kill-session-and-wait. Stop
+#            waits on the wallet's own PIDs, so the new listener never races the
+#            dying one for the wallet's LMDB lock.
+# It changes no config: mode, ports and the toml stay setup's job.
+
+# grin-wallet init writes an absolute log_file_path into [logging]; fall back to
+# its default location if the toml was hand-edited.
+_cmd_log_path() {
+    local p
+    p=$(sed -nE 's/^[[:space:]]*log_file_path[[:space:]]*=[[:space:]]*"?([^"]*)"?[[:space:]]*$/\1/p' \
+            "$(_cmd_toml "$1")" 2>/dev/null | head -1 || true)
+    echo "${p:-$(_cmd_dir "$1")/grin-wallet.log}"
+}
+
+# One status line. Same port-verified logic as the 05C screen, plus the case that
+# screen cannot see: a grin-wallet started by hand from listen.sh, outside tmux.
+# Start would then fail the port guard ("held by ANOTHER process") with no hint
+# that the holder is this very wallet — Stop clears it.
+_cmd_listener_state() {
+    local net="$1" tmux_name port pid up pids
+    tmux_name=$(_cmd_tmux_name "$net"); port=$(_cmd_mode_port "$net")
+    if tmux has-session -t "$tmux_name" 2>/dev/null; then
+        if pid=$(gnc_get_pid_on_port "$port" 2>/dev/null); then
+            up=$(ps -o etime= -p "$pid" 2>/dev/null | tr -d ' ' || true)
+            echo -e "${GREEN}● listening${RESET}  ${DIM}:$port · PID $pid · up ${up:-?}${RESET}"
+        else
+            echo -e "${YELLOW}▲ session up, port $port not bound${RESET}  ${DIM}— still starting, crashed, or the old mode — Restart${RESET}"
+        fi
+        return 0
+    fi
+    pids=$(_cmd_wallet_pids "$net")
+    if [[ -n "$pids" ]]; then
+        echo -e "${YELLOW}▲ grin-wallet running outside tmux${RESET}  ${DIM}(PID ${pids//$'\n'/ }) — Stop clears it${RESET}"
+    else
+        echo -e "${DIM}○ not running${RESET}"
+    fi
+}
+
+_cmd_listener_running() {
+    tmux has-session -t "$(_cmd_tmux_name "$1")" 2>/dev/null || [[ -n "$(_cmd_wallet_pids "$1")" ]]
+}
+
+_cmd_listener_menu() {
+    local net="$1" dir tmux_name pass_file log sel
+    dir=$(_cmd_dir "$net"); tmux_name=$(_cmd_tmux_name "$net")
+    pass_file=$(_cmd_pass_file "$net")
+
+    while true; do
+        clear
+        echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+        echo -e "${BOLD}${CYAN} CMD Wallet — Listener · $(_cmd_net_label "$net")${RESET}"
+        echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+        echo ""
+        echo -e "  Listener   : $(_cmd_listener_state "$net")"
+        echo -e "  Mode       : ${DIM}$(_cmd_mode_label "$net")${RESET}"
+        if [[ -f "$pass_file" ]]; then
+            echo -e "  Passphrase : ${DIM}saved — starts unattended${RESET}"
+        else
+            echo -e "  Passphrase : ${YELLOW}not saved${RESET}  ${DIM}— asked at every start${RESET}"
+        fi
+        echo -e "  tmux       : ${DIM}$tmux_name${RESET}"
+        if ! _cmd_has_seed "$net"; then
+            echo ""
+            warn "No wallet in $dir — run setup ($([[ "$net" == "mainnet" ]] && echo 1 || echo 2) on the previous screen) first."
+        fi
+        echo ""
+        echo -e "  ${GREEN}1${RESET}) Start"
+        echo -e "  ${GREEN}2${RESET}) Stop"
+        echo -e "  ${GREEN}3${RESET}) Restart"
+        echo -e "  ${GREEN}4${RESET}) Recent output  ${DIM}(log + tmux pane, without attaching)${RESET}"
+        echo -e "  ${RED}0${RESET}) Back"
+        echo ""
+        echo -ne "${BOLD}Select [1-4/0]: ${RESET}"
+        read -r sel || true
+        echo ""
+
+        case "$sel" in
+            1)
+                if ! _cmd_has_seed "$net"; then
+                    error "No wallet to listen for — run setup first."
+                elif tmux has-session -t "$tmux_name" 2>/dev/null; then
+                    info "Already running — use 3) Restart to cycle it."
+                elif _cmd_listener_running "$net"; then
+                    warn "grin-wallet is already running in $dir outside tmux — 2) Stop clears it."
+                else
+                    _cmd_start_listener "$net" || true
+                fi
+                ;;
+            2)
+                if ! _cmd_listener_running "$net"; then
+                    info "Not running."
+                elif _cmd_stop_wallet "$net"; then
+                    success "Listener stopped."
+                fi
+                ;;
+            3)
+                if ! _cmd_has_seed "$net"; then
+                    error "No wallet to listen for — run setup first."
+                else
+                    _cmd_listener_running "$net" || info "Not running — starting it."
+                    # rc 1 = a process survived TERM and KILL; starting now would
+                    # only fail on the port or the wallet lock.
+                    if _cmd_stop_wallet "$net"; then
+                        _cmd_start_listener "$net" || true
+                    fi
+                fi
+                ;;
+            4)
+                log=$(_cmd_log_path "$net")
+                echo -e "  ${DIM}─── $log  (last 25 lines) ───${RESET}"
+                if [[ -f "$log" ]]; then
+                    tail -n 25 "$log" 2>/dev/null | sed 's/^/  /' || true
+                else
+                    echo -e "  ${DIM}(no log file yet)${RESET}"
+                fi
+                # The pane is what grin-wallet printed to its terminal — stdout
+                # and the file have separate log levels, so it is not a subset
+                # of the log. -S -200, then drop the blank rows below the
+                # cursor, which a fresh pane is mostly made of.
+                if tmux has-session -t "$tmux_name" 2>/dev/null; then
+                    echo ""
+                    echo -e "  ${DIM}─── tmux pane $tmux_name  (last 15 lines) ───${RESET}"
+                    tmux capture-pane -p -t "$tmux_name" -S -200 2>/dev/null \
+                        | sed '/^[[:space:]]*$/d' | tail -n 15 | sed 's/^/  /' || true
+                fi
+                echo ""
+                echo -e "  ${DIM}Live : tmux attach -t $tmux_name   (detach Ctrl-b d — Ctrl-C STOPS the listener)${RESET}"
+                echo -e "  ${DIM}Log  : tail -f $log${RESET}"
+                ;;
+            0|"") return 0 ;;
+            *) echo -e "  ${RED}Invalid option.${RESET}"; sleep 1; continue ;;
+        esac
+        echo -ne "\n  Press Enter to continue..."; read -r || true
+    done
+}
+
 cmd_wallet_run() {
     while true; do
         clear
@@ -1657,10 +1803,11 @@ cmd_wallet_run() {
         echo -e "  ${GREEN}3${RESET}) Both"
         echo ""
         echo -e "  ${GREEN}B${RESET}) grin-wallet binary  ${DIM}(update · roll back · verify)${RESET}"
+        echo -e "  ${GREEN}L${RESET}) Listener            ${DIM}(start · stop · restart · recent output)${RESET}"
         echo -e "  ${RED}N${RESET}) Nuke wallet         ${DIM}(stop + remove one network's wallet, for a fresh test)${RESET}"
         echo -e "  ${RED}0${RESET}) Back"
         echo ""
-        echo -ne "${BOLD}Select [1/2/3/B/N/0]: ${RESET}"
+        echo -ne "${BOLD}Select [1/2/3/B/L/N/0]: ${RESET}"
 
         local sel; read -r sel || true
         case "$sel" in
@@ -1675,6 +1822,32 @@ cmd_wallet_run() {
                     2) _cmd_binary_menu "testnet" || true ;;
                     *) : ;;
                 esac
+                ;;
+            l|L)
+                # Straight in when only one network has a wallet: this screen is
+                # for quick test loops, where the extra key is pure friction.
+                local _lnet="" _has_m=0 _has_t=0
+                [[ -f "$(_cmd_toml mainnet)" ]] && _has_m=1
+                [[ -f "$(_cmd_toml testnet)" ]] && _has_t=1
+                if [[ $_has_m -eq 0 && $_has_t -eq 0 ]]; then
+                    echo ""
+                    info "No CMD wallet yet — set one up with 1 or 2 first."
+                    sleep 2
+                elif [[ $_has_m -eq 1 && $_has_t -eq 0 ]]; then
+                    _lnet="mainnet"
+                elif [[ $_has_t -eq 1 && $_has_m -eq 0 ]]; then
+                    _lnet="testnet"
+                else
+                    echo ""
+                    echo -ne "  Which network? [1 mainnet / 2 testnet / 0 cancel]: "
+                    local _lsel; read -r _lsel || true
+                    case "$_lsel" in
+                        1) _lnet="mainnet" ;;
+                        2) _lnet="testnet" ;;
+                        *) : ;;
+                    esac
+                fi
+                if [[ -n "$_lnet" ]]; then _cmd_listener_menu "$_lnet" || true; fi
                 ;;
             n|N) _cmd_nuke_menu || true ;;
             3)

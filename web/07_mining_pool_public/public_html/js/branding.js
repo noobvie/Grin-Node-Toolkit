@@ -734,6 +734,7 @@
     injectHeaderStyles();
     enhanceBrand(cfg);
     applyIncentivesNav(cfg);
+    applyGamesNav(cfg);
   }
 
   function injectHeaderStyles() {
@@ -812,6 +813,18 @@
     var off = !!(cfg.incentives && cfg.incentives.enabled === false);
     document.querySelectorAll('[data-incentives]').forEach(function (el) {
       el.style.display = off ? 'none' : '';
+    });
+  }
+
+  // Show the games link (header "Play" + its footer copy, marked data-games by public-shell.js)
+  // ONLY on an explicit games.mode === 'on' — the OPPOSITE default of applyIncentivesNav, on
+  // purpose (design §19 D12): the pool is live, 'preview' must keep /play/ unannounced while
+  // the operator tests it, and the server already reports 'off' while the games service is
+  // down. So a missing field, a failed fetch, 'preview' or 'off' all leave the link hidden.
+  function applyGamesNav(cfg) {
+    var on = !!(cfg.games && cfg.games.mode === 'on');
+    document.querySelectorAll('[data-games]').forEach(function (el) {
+      el.style.display = on ? '' : 'none';
     });
   }
 

@@ -31,6 +31,16 @@
         { file: 'regions.html',  title: 'Regions' },
         { file: 'health.html',   title: 'System Health' }
       ] },
+    // Games (design §19.11): the /play/ games' own pages, all through the admin proxy to the
+    // games service. Shown whatever the games mode is — the operator prepares before opening.
+    // The pool-owned on/off + chat switches stay under Settings → Games.
+    { file: 'games.html', title: 'Games', ico: '🎮', children: [
+        { file: 'games.html',         title: 'Overview & settings' },
+        { file: 'games-chat.html',    title: 'Chat & moderation' },
+        { file: 'games-players.html', title: 'Players' },
+        { file: 'games-events.html',  title: 'Events' },
+        { file: 'games-names.html',   title: 'Nicknames' }
+      ] },
     // Settings was split into one file per section (2026-06). A `children` array with `file`
     // entries renders an always-expanded group of real pages (no more #hash tabs); the parent
     // is active whenever you're on the parent OR any child page. Ads lives here too (it's
@@ -46,6 +56,7 @@
         { file: 'ads.html',                    title: 'Ads' },
         { file: 'settings-payout.html',        title: 'Payout' },
         { file: 'settings-incentives.html',    title: 'Incentives' },
+        { file: 'settings-games.html',         title: 'Games' },       // /play/ master + chat switch (design §19.11)
         { file: 'settings-access.html',        title: 'Access Control' },
         { file: 'settings-database.html',      title: 'Database' }
       ] }
@@ -576,6 +587,7 @@
          text: function (e) { return e.grin_address + ' ' + e.action; }, // searchable
          empty: 'No payout requests in this window.',
          urlQuery: true,                    // optional: prefill the search from ?q=
+         onSearch: function (q) { … },      // optional: after each keystroke in the search box
          onRender: function (tbody) { … }   // optional: after rows are painted
        });
        t.setLoading();  t.setRows(list);  t.setError(err.message);
@@ -592,7 +604,11 @@
      • onRender(tbody) runs after every paint of real rows (a page change, a search
        keystroke, setRows) — for work that must follow the markup, such as the Donors
        queue filling each banner <img> from an authenticated blob. Never for the
-       loading/error/empty rows. A throw in it is caught: it must not blank the table. */
+       loading/error/empty rows. A throw in it is caught: it must not blank the table.
+     • onSearch(q) runs after each keystroke's local filter, with the trimmed text as typed
+       (not lowercased) — for a page whose rows are a CAPPED subset of the server's, to look
+       the query up server-side and add what it finds (miners.html). Not called for a ?q=
+       prefill: the page reads `.query` itself once its first load says whether it needs to. */
 
   var _dbSettings = null;
   function databaseSettings() {
@@ -815,6 +831,9 @@
         state.q = input.value.trim().toLowerCase();
         state.page = 1;              // a new query always starts at the top
         render();
+        if (typeof opts.onSearch === 'function') {
+          try { opts.onSearch(input.value.trim()); } catch (e) { /* the local filter already ran */ }
+        }
       });
     }
 

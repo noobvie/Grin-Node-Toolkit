@@ -58,12 +58,17 @@ class HashrateTracker {
   recordHashrates() {
     try {
       const windowSeconds = this.samplingInterval / 1000;
-      const cutoff = Math.floor(Date.now() / 1000) - windowSeconds;
+      const nowS = Math.floor(Date.now() / 1000);
+      const cutoff = nowS - windowSeconds;
 
+      // ⚠ The upper bound is load-bearing (scripts/test-shares-plans.js): `created_at > ?` alone
+      // plans as a full SCAN of idx_share_address_created — walking the address-leading index
+      // saves the GROUP BY sort — i.e. the whole retained table every minute on the DB the
+      // stratum server shares. Two-sided, it SEARCHes idx_share_created for the minute only.
       const rows = this.db.prepare(`
         SELECT grin_address, COALESCE(SUM(difficulty), 0) AS sumdiff
-        FROM shares WHERE created_at > ? GROUP BY grin_address
-      `).all(cutoff);
+        FROM shares WHERE created_at > ? AND created_at <= ? GROUP BY grin_address
+      `).all(cutoff, nowS);
 
       const stmt = this.db.prepare(`
         INSERT INTO hashrate_history (grin_address, hashrate_gps, window_seconds)
@@ -132,16 +137,18 @@ class HashrateTracker {
   getTopMiners(limit = 10, windowMinutes = 1) {
     try {
       const windowSeconds = windowMinutes * 60;
-      const cutoffTime = Math.floor(Date.now() / 1000) - windowSeconds;
+      const nowS = Math.floor(Date.now() / 1000);
+      const cutoffTime = nowS - windowSeconds;
       const factor = HashrateTracker.CYCLE_LENGTH / (windowSeconds * HashrateTracker.SOLUTION_RATE);
 
+      // Upper bound load-bearing, as in recordHashrates: one-sided, this was a full SCAN.
       const rows = this.db.prepare(`
         SELECT grin_address, COALESCE(SUM(difficulty), 0) AS sumdiff
-        FROM shares WHERE created_at > ?
+        FROM shares WHERE created_at > ? AND created_at <= ?
         GROUP BY grin_address
         ORDER BY sumdiff DESC
         LIMIT ?
-      `).all(cutoffTime, limit);
+      `).all(cutoffTime, nowS, limit);
 
       return rows.map(r => ({
         grin_address: r.grin_address,
@@ -382,9 +389,9 @@ class HashrateTracker {
   // their session on this box, so reject/stale is complete pool-wide. Workers seen in shares but
   // with no live session show online:false and null reject/stale.
   // `shortWindowMinutes` (optional, admin Miners page) adds `hashrate_gps_short` over a second,
-  // shorter window from the SAME pass. That is the point: this query SEARCHes idx_share_address,
-  // i.e. it reads every retained share of the address whatever the window, so a second call for
-  // the short window would read them all again. Without it the output is unchanged.
+  // shorter window from the SAME pass: the short window is a subset of the long one, so a second
+  // call would only re-read the same rows. Without it the output is unchanged. The query SEARCHes
+  // idx_share_address_created (grin_address=? AND created_at>?), so it reads the window's rows only.
   getWorkersForAccount(minerAddress, windowMinutes = 10, shortWindowMinutes = null) {
     try {
       const windowSeconds = windowMinutes * 60;

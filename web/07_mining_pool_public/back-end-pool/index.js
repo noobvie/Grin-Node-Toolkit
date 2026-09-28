@@ -53,6 +53,7 @@ const DormancyManager = require('./lib/dormancy');
 const AdsManager = require('./lib/ads');
 const PagesManager = require('./lib/pages');
 const PostsManager = require('./lib/posts');
+const { createGamesLink } = require('./lib/games-link');
 const multer = require('multer');
 const cookieParser = require('cookie-parser');
 const crypto = require('crypto');
@@ -288,6 +289,12 @@ app.set('trust proxy', 'loopback');
 // pool's vhost is the one toolkit vhost that does not also set `server_tokens off` — the
 // nginx half of that pair is §J16's.
 app.disable('x-powered-by');
+// Games platform internal routes (/internal/games/*, design §19.3) — all logic in
+// lib/games-link.js. Mounted BEFORE express.json() and every rate limiter on purpose: the link
+// secret is checked before any body is parsed, and every games call comes from 127.0.0.1, so a
+// per-IP bucket would be one bucket for every player (D7). attach() in setupRoutes wires it up.
+const gamesLink = createGamesLink();
+app.use(gamesLink.internal);
 app.use(express.json());
 app.use(cookieParser());
 
@@ -1276,6 +1283,9 @@ function setupRoutes() {
         } catch (e) {
           cfg.incentives = { enabled: false };
         }
+        // Games nav flag (design §19 D12): { mode, chat }. mode is 'off' whenever the games
+        // service fails its health probe, and a probe flip invalidates this memo (attach below).
+        cfg.games = gamesLink.publicFlag();
         // Bound the key space: hostname is attacker-chosen (any Host header nginx passes
         // through), so this is a cache, not a registry. Drop the oldest insert past the cap.
         if (_brandingCache.size >= 32) {
@@ -1290,6 +1300,13 @@ function setupRoutes() {
       }
     }
   );
+
+  // ─── Games platform link (design §19.3) — all logic in lib/games-link.js ──────
+  // The three internal routes are already mounted (top of file); this gives them the DB, starts
+  // the 60 s health probe and mounts the admin proxy (/api/admin/games/*) behind secureAdmin,
+  // with step-up enforced in the lib for the §19.11 paths.
+  gamesLink.attach({ db, config, poolSettings, verifyOwnerProof, auditOwnerProof, onHealthChange: invalidateBranding });
+  gamesLink.mountAdmin(app, { secureAdmin, stepUpRefused });
 
   // ─── Public GRIN price (footer ticker) — cached external lookup ────────────────
   // The pool box has a node + wallet but no market data, so price comes from a public
@@ -1392,7 +1409,7 @@ function setupRoutes() {
   const OWNER_PROOF_BODY = 'proof (recent mining IP or the rig\'s stratum password; legacy alias ip_proof)';
   const API_DOC_META = {
     // ── Public ────────────────────────────────────────────────────────────────
-    'GET /api/public/branding': { desc: 'White-label config (name, theme, SEO, social, footer links). connection.latency tells the connect page where it may measure latency from your browser: probe_domain (regional servers under https://*.<probe_domain> answer GET /ping with an empty 204; null = none), hub_url (where the pool itself answers /ping; null when it sits behind a CDN proxy, which would time the CDN instead) and direct_bias_ms (integer milliseconds: connecting directly is preferred unless a regional server is more than this much faster — the same rule as /api/pool/connect/suggest). connection.explorer is the chain explorer this pool links blocks, kernels and outputs to — one of grincoin (grincoin.org), tiny (scan.grin.money), grinscan (grinscan.org) on mainnet, as the operator chose; always grinscan_testnet (test.grinscan.org) on testnet. branding.explorer_mainnet is the mainnet choice the operator made, shown even on a testnet pool; links should follow connection.explorer.', shape: 'envelope' },
+    'GET /api/public/branding': { desc: 'White-label config (name, theme, SEO, social, footer links). connection.latency tells the connect page where it may measure latency from your browser: probe_domain (regional servers under https://*.<probe_domain> answer GET /ping with an empty 204; null = none), hub_url (where the pool itself answers /ping; null when it sits behind a CDN proxy, which would time the CDN instead) and direct_bias_ms (integer milliseconds: connecting directly is preferred unless a regional server is more than this much faster — the same rule as /api/pool/connect/suggest). connection.explorer is the chain explorer this pool links blocks, kernels and outputs to — one of grincoin (grincoin.org), tiny (scan.grin.money), grinscan (grinscan.org) on mainnet, as the operator chose; always grinscan_testnet (test.grinscan.org) on testnet. branding.explorer_mainnet is the mainnet choice the operator made, shown even on a testnet pool; links should follow connection.explorer. games = { mode, chat } for the /play/ games platform: mode is off, preview or on, and reads off whenever the games service is not answering; the nav shows Play only on on.', shape: 'envelope' },
     'GET /api/public/price': { desc: 'Cached GRIN price (USD + BTC) from CoinGecko. Serves the last good value on upstream failure; { available: false } if never fetched. updated_at is UNIX MILLISECONDS (the one such field on this API).', shape: 'envelope' },
     'GET /api/public/endpoints': { desc: 'This API reference (machine-readable).', shape: 'envelope' },
     'GET /api/public/ads': { desc: 'Active operator ads by placement (+ rotation interval). Cached 60s, so ad edits take up to a minute to appear.', shape: 'raw', params: 'placement (omit for every slot keyed by placement)' },
@@ -5307,11 +5324,14 @@ function setupRoutes() {
       ).all();
       const locations = locationsAll.filter(l => l.is_active === 1 || l.is_active === true);
       const locAllByRegion = new Map(locationsAll.map(l => [l.region, l]));
+      // Upper bound load-bearing: one-sided, `GROUP BY region` walked all of idx_share_region
+      // (region, created_at) — a range on its SECOND column cannot seek — i.e. the whole retained
+      // table per call of a PUBLIC route. scripts/test-shares-plans.js.
       const agg = db.prepare(
         `SELECT region, COUNT(DISTINCT grin_address) AS miners, COALESCE(SUM(difficulty),0) AS sumdiff,
                 MAX(created_at) AS last_share
-         FROM shares WHERE created_at > ? GROUP BY region`
-      ).all(cutoff);
+         FROM shares WHERE created_at > ? AND created_at <= ? GROUP BY region`
+      ).all(cutoff, nowS);
       const byRegion = new Map(agg.map(r => [r.region, r]));
 
       const wgSnapshot = cachedGatewayStatus();
@@ -5635,8 +5655,8 @@ function setupRoutes() {
                 COUNT(DISTINCT grin_address || '|' || COALESCE(worker_name, 'default')) AS workers,
                 COALESCE(SUM(difficulty), 0) AS sumdiff,
                 MAX(created_at) AS last_share
-         FROM shares WHERE created_at > ? GROUP BY region`
-      ).all(cutoff);
+         FROM shares WHERE created_at > ? AND created_at <= ? GROUP BY region`
+      ).all(cutoff, nowS);   // upper bound load-bearing — see /api/pool/topology
       const byRegion = new Map(agg.map(r => [r.region, r]));
 
       const locations = db.prepare(
@@ -5812,8 +5832,8 @@ function setupRoutes() {
       ).all().filter((l) => l.stratum_url && (l.is_active === 1 || l.is_active === true));
       // Fresh shares are the strongest liveness signal (precedence ①); only the newest time is needed.
       const lastShare = new Map(db.prepare(
-        `SELECT region, MAX(created_at) AS last_share FROM shares WHERE created_at > ? GROUP BY region`
-      ).all(nowS - OFFLINE_S).map((r) => [r.region, r.last_share]));
+        `SELECT region, MAX(created_at) AS last_share FROM shares WHERE created_at > ? AND created_at <= ? GROUP BY region`
+      ).all(nowS - OFFLINE_S, nowS).map((r) => [r.region, r.last_share]));   // upper bound load-bearing — see /api/pool/topology
 
       refreshStratumProbes(locations);
       const localRegion = (config && config.role === 'singlebox') ? config.region : null;
@@ -7054,8 +7074,8 @@ function setupRoutes() {
       shareRows = db.prepare(
         `SELECT region, COUNT(*) AS shares, MAX(created_at) AS last_share,
                 MAX(block_height) AS last_height, COUNT(DISTINCT grin_address) AS miners
-         FROM shares WHERE created_at > ? GROUP BY region`
-      ).all(now - 900);
+         FROM shares WHERE created_at > ? AND created_at <= ? GROUP BY region`
+      ).all(now - 900, now);   // upper bound load-bearing — see /api/pool/topology
     } catch (e) { /* table may be empty */ }
     const byRegion = new Map(shareRows.map(r => [r.region, r]));
 
@@ -7459,33 +7479,69 @@ function setupRoutes() {
   // shared inside the hour. The page then falls back to last_seen_at, which the session code
   // stamps on connect and disconnect and which, unlike shares, is never pruned.
   // `shares_count` is gone: it counted whatever retention had left, so it fell at every prune.
+  //
+  // WHICH accounts (the list is capped at `limit`, max 1000):
+  //   ?search=  substring of the address, by balance, with `offset` — the page's server-side
+  //             lookup for an account the capped list does not hold.
+  //   otherwise every account that MINED inside seen_s (biggest first), then admin-banned ones,
+  //             then share-less sessions, then the rest by balance (minerStatus.listPriority says
+  //             why share-less sessions go last). `offset` does not apply: a page offset into a
+  //             priority list that re-orders every refresh would skip and repeat rows.
+  // `total_accounts` / `mined_accounts` / `truncated` let the page say how much it is showing.
   app.get('/api/admin/miners', secureAdmin, (req, res) => {
     try {
-      const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 50, 1), 500);
+      const ADMIN_MINER_COLS = `
+        ma.grin_address, ma.balance, ma.balance_locked, ma.is_online, ma.is_banned, ma.ban_reason, ma.banned_at,
+        ma.last_seen_at, ma.created_at,
+        (SELECT COALESCE(SUM(amount),0) FROM withdrawals w WHERE w.grin_address = ma.grin_address AND w.status='confirmed') AS total_paid`;
+      const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 50, 1), 1000);
       const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
-      const search = req.query.search ? `%${req.query.search}%` : null;
-
-      const where = search ? 'WHERE ma.grin_address LIKE ?' : '';
-      const args = search ? [search, limit, offset] : [limit, offset];
-      const rows = db.prepare(`
-        SELECT ma.grin_address, ma.balance, ma.balance_locked, ma.is_online, ma.is_banned, ma.ban_reason, ma.banned_at,
-               ma.last_seen_at, ma.created_at,
-               (SELECT COALESCE(SUM(amount),0) FROM withdrawals w WHERE w.grin_address = ma.grin_address AND w.status='confirmed') AS total_paid
-        FROM miner_accounts ma
-        ${where}
-        ORDER BY ma.balance DESC
-        LIMIT ? OFFSET ?
-      `).all(...args);
+      // One string, bounded, and LIKE's own wildcards escaped so `_` in a query matches a literal
+      // underscore rather than any character.
+      const q = typeof req.query.search === 'string' ? req.query.search.trim().slice(0, 100) : '';
+      const search = q ? '%' + q.replace(/[\\%_]/g, (c) => '\\' + c) + '%' : null;
 
       const now = Math.floor(Date.now() / 1000);
       const live = minerStatus.liveRigs(minerManager ? minerManager.getActiveSessions() : []);
       const recent = minerStatus.recentShares(db, now);
+      const { mined, connecting } = minerStatus.listPriority(live, recent);
+
+      let rows;
+      if (search) {
+        rows = db.prepare(`SELECT ${ADMIN_MINER_COLS} FROM miner_accounts ma
+                            WHERE ma.grin_address LIKE ? ESCAPE '\\'
+                            ORDER BY ma.balance DESC LIMIT ? OFFSET ?`).all(search, limit, offset);
+      } else {
+        const banned = db.prepare('SELECT grin_address FROM miner_accounts WHERE is_banned = 1 ORDER BY balance DESC LIMIT ?')
+          .all(limit).map((r) => r.grin_address);
+        const want = [...new Set([...mined, ...banned, ...connecting])].slice(0, limit);
+        const wantJson = JSON.stringify(want);
+        const picked = want.length
+          ? db.prepare(`SELECT ${ADMIN_MINER_COLS} FROM miner_accounts ma
+                         WHERE ma.grin_address IN (SELECT value FROM json_each(?))`).all(wantJson)
+          : [];
+        const room = limit - picked.length;
+        const rest = room > 0
+          ? db.prepare(`SELECT ${ADMIN_MINER_COLS} FROM miner_accounts ma
+                         WHERE ma.grin_address NOT IN (SELECT value FROM json_each(?))
+                         ORDER BY ma.balance DESC LIMIT ?`).all(wantJson, room)
+          : [];
+        // Balance order for the page's default view; the priority only decided who is IN.
+        rows = picked.concat(rest).sort((a, b) => (b.balance || 0) - (a.balance || 0));
+      }
+
       const miners = rows.map((m) => ({
         ...m,
         ...minerStatus.summarize(live.get(m.grin_address), recent.get(m.grin_address), now)
       }));
+      const total_accounts = db.prepare('SELECT COUNT(*) AS n FROM miner_accounts').get().n;
 
-      res.json({ success: true, count: miners.length, windows: minerStatus.WINDOWS, miners });
+      res.json({
+        success: true, count: miners.length, windows: minerStatus.WINDOWS,
+        total_accounts, mined_accounts: mined.length,
+        truncated: !search && total_accounts > miners.length,
+        miners
+      });
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
@@ -7592,8 +7648,8 @@ function setupRoutes() {
       const known = db.prepare('SELECT 1 AS x FROM miner_accounts WHERE grin_address = ?').get(addr);
       if (!known) return res.status(404).json({ error: 'miner not found' });
       const W = minerStatus.WINDOWS;
-      // ONE call for both windows: it reads every retained share of this address (idx_share_address)
-      // whatever the window, and the page re-polls this route for each open row.
+      // ONE call for both windows (the short one is a subset of the long one): the page re-polls
+      // this route for each open row, so it reads the address's last hour of shares once, not twice.
       const hour = hashrateTracker.getWorkersForAccount(addr, W.seen_s / 60, W.hashrate_s / 60);
       const live = minerStatus.liveRigs(minerManager ? minerManager.getSessionsByMiner(addr) : []).get(addr);
       // A donateN tag moves nothing while the operator has donations off, so it reads null
@@ -8063,7 +8119,9 @@ function setupRoutes() {
   //               bonus, streak, lottery pots, the % of pool fee diverted to the prize pool)
   //   database    retention windows that DELETE the money trail — balance_log_keep_days and
   //               audit_log_keep_days prune the ledger and the admin audit log
-  const STEP_UP_SETTINGS_SECTIONS = new Set(['payout', 'access', 'incentives', 'database']);
+  //   games       turns a public feature and a public CHAT on for the live pool (design §19.11:
+  //               every games-settings write is step-up)
+  const STEP_UP_SETTINGS_SECTIONS = new Set(['payout', 'access', 'incentives', 'database', 'games']);
 
   // Individually critical keys that live in an otherwise cosmetic section. pool_info is mostly
   // name/tagline/description, but it also carries the pool's cut and who may mine at all.

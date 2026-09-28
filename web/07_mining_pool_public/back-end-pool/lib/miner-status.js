@@ -58,8 +58,9 @@ function liveRigs(sessions) {
 // refresh of a 500-row page, on the synchronous DB the stratum server shares (memory
 // project_pool_db_capacity: a scan there stalls share submission for every miner).
 // ⚠ The UPPER bound is load-bearing, not tidiness. With `created_at > ?` alone SQLite plans
-// `SCAN shares USING INDEX idx_share_address` (it prefers that index to skip nothing); with both
-// bounds it is `SEARCH shares USING INDEX idx_share_created (created_at>? AND created_at<?)`.
+// `SCAN shares USING INDEX idx_share_address_created` (walking the address-leading index saves it
+// the GROUP BY sort, so it reads the whole table to skip a small temp b-tree); with both bounds it
+// is `SEARCH shares USING INDEX idx_share_created (created_at>? AND created_at<?)`.
 // The GROUP BY temp b-tree that remains covers one hour of rows, not the table.
 // scripts/test-admin-miners.js pins that plan.
 const RECENT_SQL = `
@@ -119,10 +120,38 @@ function summarize(live, recent, now) {
   };
 }
 
+// Which accounts the admin list must show whatever their balance. The list is capped, and it used
+// to be simply the top N by balance — so a new miner (balance 0 until a block matures) could be
+// mining right now and not appear, and the status chips undercounted exactly the rows they exist
+// for. Priority, highest first:
+//   mined       PoW-backed: shared inside seen_s, or holds a MINING session. Ordered by Σdiff in the
+//               window, so if even these overflow the cap the biggest contributors stay listed.
+//   connecting  a session with no accepted share. LAST, and never above a balance row's slot by
+//               right: stratum login is unauthenticated AND creates the miner_accounts row
+//               (stratum-server ensureMinerExists), so anyone can mint these by the thousand, and
+//               they must not be able to push a real miner off the page.
+// The route slots admin-banned addresses (operator-created, so bounded) between the two, then
+// fills what is left by balance.
+function listPriority(live, recent) {
+  const weight = new Map();
+  for (const [addr, rigs] of recent || []) {
+    let s = 0;
+    for (const v of rigs.values()) s += v.sumdiff;
+    weight.set(addr, s);
+  }
+  for (const [addr, a] of live || []) {
+    if (a.mining.size && !weight.has(addr)) weight.set(addr, 0);
+  }
+  const mined = [...weight.keys()].sort((x, y) => weight.get(y) - weight.get(x));
+  const connecting = [...(live || new Map()).keys()].filter((a) => !weight.has(a));
+  return { mined, connecting };
+}
+
 // Rows for the expanded view. `hour` = getWorkersForAccount(addr, seen_s/60, hashrate_s/60): ONE
 // call supplies the rig list, share counts, live reject/stale, `online` and both hashrates (the
-// short one as hashrate_gps_short). One call, not one per window: that query reads every retained
-// share of the address whatever its window, and this route is re-polled while a row is open.
+// short one as hashrate_gps_short). One call, not one per window: the short window is a subset of
+// the long one, so a second call would only re-read the same rows, on a route re-polled while a
+// row is open.
 // `donateOf(name)` → percent | null.
 // Status per rig: mining | stalled (live, no share inside stall_s) | offline (no live session).
 const RIG_ORDER = { stalled: 0, offline: 1, mining: 2 };
@@ -147,4 +176,4 @@ function workerRows({ hour, live, now, donateOf }) {
   return rows;
 }
 
-module.exports = { WINDOWS, RECENT_SQL, gps, liveRigs, recentShares, summarize, workerRows };
+module.exports = { WINDOWS, RECENT_SQL, gps, liveRigs, recentShares, summarize, listPriority, workerRows };

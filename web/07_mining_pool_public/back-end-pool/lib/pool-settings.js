@@ -673,6 +673,21 @@ PASS      any-password-you-choose</code>
         { name: 'Grin Genesis Day', date: '01-15', pot_grin: 0, enabled: false },
       ]),
     },
+    // Games platform master switches (design §19 D12, §19.3), read by lib/games-link.js.
+    //   mode   off     = /play/ answers 404 everywhere except its health check
+    //          preview = /play/ works by direct URL, the public nav link stays HIDDEN
+    //          on      = /play/ is live and the nav shows it (while the games service is up)
+    //   OFF by default — the opposite of `incentives`: the pool is live, and a fresh deploy
+    //   must not announce a feature the operator has not accepted yet. Do not set `on` before
+    //   the chat moderation tools exist (§19.14: moderation ships before anyone can post).
+    // Typed values only: chat_enabled is a real boolean, and the reader accepts nothing but
+    // true / 'true', so a quoted "false" can never switch chat on (memory
+    // project_config_loader_type_traps). The games port and link-secret path are pool.json
+    // keys, not settings — see lib/config.js.
+    games: {
+      mode: 'off',
+      chat_enabled: false,
+    },
     // Site-wide maintenance mode + announcement banners.
     notices: {
       maintenance_mode: 'false',
@@ -742,6 +757,9 @@ PASS      any-password-you-choose</code>
     'winter', 'spring', 'summer', 'autumn', 'halloween', 'christmas',
     'galaxy', 'winxp', 'aqua', 'comic',
   ];
+
+  // games.mode's allowed values (design §19 D12). lib/games-link.js reads the same list.
+  static GAMES_MODES = ['off', 'preview', 'on'];
 
   // Validation rules per section
   static validators = {
@@ -909,6 +927,23 @@ PASS      any-password-you-choose</code>
       matomo_url: (val) => {
         if (val) { try { new URL(val); } catch (err) { throw new Error('matomo_url must be a valid URL'); } }
         return val;
+      },
+    },
+    // Strict on purpose: no trimming, no case folding, no truthiness. Anything else throws, so
+    // a bad write is refused instead of stored and later read as some other value.
+    games: {
+      mode: (val) => {
+        if (typeof val !== 'string' || !PoolSettings.GAMES_MODES.includes(val)) {
+          throw new Error('mode must be one of: off, preview, on');
+        }
+        return val;
+      },
+      // The form harvester sends a real boolean; accept the two exact strings too (a bash
+      // writer, a hand-made request) and store a BOOLEAN either way (value_type 'boolean').
+      chat_enabled: (val) => {
+        if (val === true || val === 'true') return true;
+        if (val === false || val === 'false') return false;
+        throw new Error('chat_enabled must be true or false');
       },
     },
     notices: {

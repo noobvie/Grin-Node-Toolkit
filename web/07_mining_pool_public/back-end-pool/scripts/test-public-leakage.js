@@ -647,5 +647,29 @@ console.log('\n[fail] fail_detail stays admin-only; fail_code and the Tor pause 
   ok('…and name no grin-wallet figure (available / needed / NotEnoughFunds)', !/available_disp|amount_needed|NotEnoughFunds/.test(pageSrc));
 }
 
+// ─── Games platform link (design §19.3, plan Part 2) ─────────────────────────────────────────
+// The games service's three routes live under /internal/, which nginx never proxies — putting one
+// under /api/ would publish it through the vhost's /api/ location. And the branding payload is
+// the most-fetched public document: it may carry the games nav flag, never where the games
+// service listens or how the link is authenticated. (Full coverage: scripts/test-games-link.js.)
+console.log('\n[games] /internal stays off /api/; branding carries only { mode, chat }');
+{
+  const gamesSrc = fs.readFileSync(path.join(APP, 'lib/games-link.js'), 'utf8');
+  const apiRoutes = [...indexSrc.matchAll(/\bapp\.(get|post|put|delete|patch|all|use)\('([^']+)'/g)].map((m) => m[2]);
+  ok('no index.js route under /api/ names "internal"', apiRoutes.length > 20 && !apiRoutes.some((p) => p.startsWith('/api/') && /internal/i.test(p)));
+  ok('the lib answers its internal routes only under /internal/games/',
+    /'POST \/internal\/games\/verify-proof'/.test(gamesSrc) && /'GET \/internal\/games\/activity'/.test(gamesSrc) &&
+    /'GET \/internal\/games\/config'/.test(gamesSrc) && !/'(GET|POST) \/api\//.test(gamesSrc));
+  ok('the lib registers no public (non-admin) /api/ route', ![...gamesSrc.matchAll(/app\.(get|post|put|delete|patch|all|use)\('([^']+)'/g)]
+    .some((m) => !m[2].startsWith('/api/admin/')));
+  const flag = gamesSrc.slice(gamesSrc.indexOf('  function publicFlag()'), gamesSrc.indexOf('  // ── Health probe'));
+  ok('publicFlag returns only { mode, chat } — no port, file path or secret',
+    flag.length > 100 && (flag.match(/return \{[^}]*\}/g) || []).every((r) => /^return \{ mode: [^,]+, chat: [^,}]+ \}$/.test(r)) &&
+    !/games_port|gamesPort|linkFile|linkSecret|secret/.test(flag));
+  ok('the branding route sets cfg.games from publicFlag() and nothing else games-related',
+    /cfg\.games = gamesLink\.publicFlag\(\);/.test(routeSrc('get', '/api/public/branding')) &&
+    !/games_port|games_link_secret_file|linkSecret/.test(routeSrc('get', '/api/public/branding')));
+}
+
 console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed\n`);
 process.exit(fail === 0 ? 0 : 1);

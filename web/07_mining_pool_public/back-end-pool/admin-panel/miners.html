@@ -25,6 +25,8 @@
     .mn-chips .tab-btn[hidden] { display: none; }
     .mn-n { font-family: var(--font-mono); font-size: .78rem; color: var(--text-dim); }
     .mn-updated { font-size: .8rem; color: var(--text-dim); font-weight: 400; margin-left: .8rem; }
+    .mn-scope { font-size: .82rem; color: var(--text-dim); margin: 0 0 .7rem; line-height: 1.5; }
+    .mn-scope:empty { display: none; }
 
     /* Sortable headers: the button fills the cell so the whole header is the target. */
     .mn-sort {
@@ -102,6 +104,8 @@
         <button type="button" class="tab-btn" data-filter="offline" aria-pressed="false"><span class="mn-dot mn-st-offline" aria-hidden="true"></span>Offline <span class="mn-n" id="n-offline">–</span></button>
         <button type="button" class="tab-btn" data-filter="banned" aria-pressed="false"><span class="mn-dot mn-st-banned" aria-hidden="true"></span>Banned <span class="mn-n" id="n-banned">–</span></button>
       </div>
+      <!-- What the list holds (it is capped). Written with textContent from the API's counts. -->
+      <p class="mn-scope" id="miner-scope"></p>
       <p class="error-msg" id="miner-msg" role="status" style="display:none;margin:0 0 .8rem;"></p>
 
       <div class="card" style="padding:0;">
@@ -176,6 +180,18 @@ let _loading = false;
 // opening a row or acting on it re-reads them at once. That route counts every retained share of
 // the address, on the DB the stratum server shares, so it must not ride the 30 s refresh.
 const FACTS_MAX_AGE_S = 300;
+// The list is capped (LIST_LIMIT, the route's maximum): every account that mined recently, banned
+// ones, then the rest by balance. `_scope` is what the server said about the cut. When it cut
+// something, the address filter ALSO asks the server (?search=), and the accounts it finds that
+// the list lacks sit in `_found` for as long as that query stays in the box. They are listed,
+// but not counted in the chips, which describe the list the server chose.
+const LIST_LIMIT = 1000;
+const SEARCH_MIN = 8;          // below this a substring matches half the pool ("grin1…" is 5)
+let _scope = null;             // { total_accounts, mined_accounts, truncated, count }
+let _found = new Map();        // address → row, for the query in _foundQ
+let _foundQ = '';
+let _searchSeq = 0;            // drops a slower, older search response
+let _searchTimer = null;
 
 // ── Formatting ───────────────────────────────────────────────────────────────
 function escHtml(s) {
@@ -240,9 +256,12 @@ const minersTable = AdminTable.create({
   empty: 'No miners in this view.',
   urlQuery: true,
   note: 'Miner accounts are kept permanently — the share and hashrate history behind ' +
-        'them is pruned per <a href="/admin/settings-database.html">Settings → Database</a>. ' +
-        'Top 500 accounts by balance.',
+        'them is pruned per <a href="/admin/settings-database.html">Settings → Database</a>.',
   text: m => [m.grin_address, m.ban_reason].join(' '),
+  onSearch: q => {
+    clearTimeout(_searchTimer);
+    _searchTimer = setTimeout(() => searchServer(q), 300);
+  },
   row: (m, i) => {
     const addr = escHtml(m.grin_address);
     const st = stateOf(m);
@@ -540,11 +559,20 @@ async function loadMiners() {
   if (_loading) return;            // a slow server must not stack 30 s refreshes
   _loading = true;
   try {
-    const data = await API.get('/api/admin/miners?limit=500');
+    const data = await API.get('/api/admin/miners?limit=' + LIST_LIMIT);
     _allMiners = (data && data.miners) || [];
     if (data && data.windows) _win = data.windows;
+    _scope = {
+      total_accounts: Number(data && data.total_accounts) || _allMiners.length,
+      mined_accounts: Number(data && data.mined_accounts) || 0,
+      truncated: !!(data && data.truncated),
+      count: _allMiners.length
+    };
     document.getElementById('hr-win').textContent = fmtMins(_win.hashrate_s);
     updateCounts();
+    updateScope();
+    // Keep an active server-side lookup (typed, or a ?q= deep link) as fresh as the list.
+    if (minersTable.query) searchServer(minersTable.query);
     document.getElementById('miner-updated').textContent =
       'updated ' + new Date().toISOString().slice(11, 19) + ' UTC';
     applyView();
@@ -571,6 +599,50 @@ function updateCounts() {
   document.getElementById('chip-connecting').hidden = !n.connecting && _filter !== 'connecting';
 }
 
+function updateScope() {
+  const el = document.getElementById('miner-scope');
+  const s = _scope;
+  if (!s) { el.textContent = ''; return; }
+  let t;
+  if (!s.truncated) {
+    t = `All ${plural(s.total_accounts, 'account')}.`;
+  } else if (s.mined_accounts > s.count) {
+    t = `Showing ${s.count} of ${s.total_accounts} accounts: the ${s.count} biggest of the ` +
+        `${s.mined_accounts} that mined in the last ${fmtMins(_win.seen_s)}. The rest are not listed.`;
+  } else {
+    t = `Showing ${s.count} of ${s.total_accounts} accounts: every one that mined in the last ` +
+        `${fmtMins(_win.seen_s)} (${s.mined_accounts}), banned ones, then the rest by balance.`;
+  }
+  if (s.truncated) t += ` The address filter also searches every account (${SEARCH_MIN}+ characters).`;
+  if (_found.size) t += ` ${plural(_found.size, 'account')} found by that search ${_found.size === 1 ? 'is' : 'are'} added below.`;
+  el.textContent = t;
+}
+
+// Server-side lookup for an address the capped list does not hold. Only when the list IS capped
+// and the query is long enough to mean one account; otherwise it just drops earlier finds.
+async function searchServer(q) {
+  q = String(q || '').trim().toLowerCase();
+  const seq = ++_searchSeq;
+  if (!_scope || !_scope.truncated || q.length < SEARCH_MIN) {
+    if (_found.size || _foundQ) { _found = new Map(); _foundQ = ''; updateScope(); applyView(); }
+    return;
+  }
+  try {
+    const data = await API.get('/api/admin/miners?limit=50&search=' + encodeURIComponent(q));
+    if (seq !== _searchSeq) return;               // a newer keystroke or refresh owns the result
+    const listed = new Set(_allMiners.map(m => m.grin_address));
+    _found = new Map(((data && data.miners) || [])
+      .filter(m => !listed.has(m.grin_address))
+      .map(m => [m.grin_address, m]));
+    _foundQ = q;
+  } catch (err) {
+    if (seq !== _searchSeq) return;
+    _found = new Map(); _foundQ = '';
+  }
+  updateScope();
+  applyView();
+}
+
 const SORT_VAL = {
   status:   m => STATE_ORDER[stateOf(m)],
   workers:  m => m.workers_online || 0,
@@ -586,7 +658,14 @@ const SORT_FIRST_DIR = { status: 1 };
 // `reset` is passed only when the operator changed a chip or the sort — the 30 s refresh must
 // not yank them back to page 1 while they are reading page 4.
 function applyView(reset) {
-  let rows = _filter ? _allMiners.filter(m => stateOf(m) === _filter) : _allMiners.slice();
+  // Search finds are added only where the list lacks them: a refresh can pull a found account
+  // into the list before the refreshed search answers, and it must not show twice meanwhile.
+  let pool = _allMiners;
+  if (_found.size) {
+    const listed = new Set(_allMiners.map(m => m.grin_address));
+    pool = _allMiners.concat([..._found.values()].filter(m => !listed.has(m.grin_address)));
+  }
+  let rows = _filter ? pool.filter(m => stateOf(m) === _filter) : pool.slice();
   const val = SORT_VAL[_sort.key] || SORT_VAL.balance;
   const dir = _sort.dir;
   // Ties fall back to balance (the server's order), so equal rows do not shuffle between refreshes.

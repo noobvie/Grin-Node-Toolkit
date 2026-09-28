@@ -1,0 +1,14 @@
+{
+  "id": "chess",
+  "title": "Chess",
+  "kind": "match",
+  "version": "1.0.0",
+  "seats": 2,
+  "modes": ["bot", "pvp"],
+  "bot_levels": [1, 2, 3],
+  "move_pattern": "^[a-h][1-8][a-h][1-8][qrbn]?$",
+  "move_seconds_options": [86400, 259200, 604800],
+  "default_move_seconds": 259200,
+  "max_plies": 600,
+  "points": { "bot": { "1": 1, "2": 2, "3": 3 }, "pvp_win": 10, "pvp_draw": 5 }
+}

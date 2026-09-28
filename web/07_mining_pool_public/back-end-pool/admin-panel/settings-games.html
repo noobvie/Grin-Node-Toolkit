@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Games · Settings | Grin Pool</title>
+  <link rel="stylesheet" href="/css/pool.css">
+  <link rel="stylesheet" href="/admin/styles.css">
+  <link rel="stylesheet" href="/admin/settings.css">
+</head>
+<body>
+  <main>
+  <div class="settings-container">
+    <div class="page-head">
+      <h1>Games</h1>
+      <p class="page-sub">The /play/ games platform: master switch and chat switch</p>
+    </div>
+
+    <!-- The pool-owned half of the games settings (design §19.11). The games service owns
+         everything else (plays, points, chess, chat rules), edited through the admin proxy on
+         its own pages once they exist. Every id inside .settings-form is a `games` key:
+         the harvester posts each one and an unknown key fails the whole save. -->
+    <div id="games" class="settings-content active">
+      <div class="settings-form">
+        <div class="form-section">
+          <h3 class="section-title">Master switch</h3>
+          <div class="form-group">
+            <label for="mode">Games mode</label>
+            <select id="mode" name="mode">
+              <option value="off">Off: /play/ is closed</option>
+              <option value="preview">Preview: /play/ works by direct link, hidden from the menu</option>
+              <option value="on">On: /play/ is live and shown in the menu</option>
+            </select>
+            <div class="helper-text">
+              Use <strong>Preview</strong> to test /play/ on the live pool without announcing it.
+              The public <em>Play</em> menu link appears only when this is <strong>On</strong>
+              <em>and</em> the games service is answering. If the service stops, the link hides
+              by itself within about a minute. Nothing here touches mining: the games run as a
+              separate service with their own database.
+            </div>
+          </div>
+        </div>
+
+        <div class="form-section">
+          <h3 class="section-title">Chat</h3>
+          <div class="checkbox-group">
+            <input type="checkbox" id="chat_enabled" name="chat_enabled">
+            <label for="chat_enabled">Enable the public chat on /play/</label>
+          </div>
+          <div class="helper-text">
+            Only has an effect while games are on or in preview. Players can post only after
+            their ownership proof has aged (24 hours by default), so a stranger who mines a few
+            shares to someone else's address cannot speak as them straight away.
+          </div>
+        </div>
+
+        <div class="form-section">
+          <h3 class="section-title">Games service</h3>
+          <div id="games-link-status" class="helper-text">Loading…</div>
+          <div class="form-actions" style="margin-top:.75rem;">
+            <button type="button" class="btn btn-secondary" onclick="loadGamesLinkStatus()">Refresh</button>
+          </div>
+          <div class="helper-text">
+            The pool checks the games service once a minute. Install, update or remove the
+            service from the Script 07 pool menu; the pool never needs a restart for it.
+          </div>
+        </div>
+
+        <div class="form-actions">
+          <button class="btn btn-primary" onclick="saveSection('games')">Save Changes</button>
+          <button class="btn btn-secondary" onclick="restoreSection('games')">Restore Defaults</button>
+        </div>
+      </div>
+    </div>
+  </div>
+  </main>
+
+  <script src="/js/auth.js"></script>
+  <script src="/js/api.js"></script>
+  <script src="/js/stepup.js"></script>
+  <script src="/admin/admin-shell.js"></script>
+  <script>window.SETTINGS_SECTION = "games";</script>
+  <script src="/admin/settings-common.js"></script>
+</body>
+</html>

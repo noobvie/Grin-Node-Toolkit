@@ -204,6 +204,16 @@ function mergeEnvVars(config) {
     // never exposes them publicly. The Script 07 installer sets this to the wg server IP.
     region_listen_host: config.region_listen_host || process.env.REGION_LISTEN_HOST || '127.0.0.1',
 
+    // ─── Games platform link (design §19.3) ─────────────────────────────────
+    // Where the games service listens (the admin proxy + health probe target) and the path of
+    // the shared link secret (never the secret itself). Installer-owned pool.json keys, NOT
+    // admin-panel settings: the proxy sends the secret to this port, so an admin-editable port
+    // would let a stolen admin session aim the secret at any localhost service. lib/games-link.js
+    // validates both and disables the link on a bad value — it never refuses the pool's boot.
+    games_port: config.games_port || (isMain ? 8081 : 8091),
+    games_link_secret_file: config.games_link_secret_file ||
+      `/opt/grin/conf/grin_pubgames_link_${isMain ? 'mainnet' : 'testnet'}`,
+
     // Public web/stratum hostname (e.g. grinium.com). Used to derive the local
     // region's connect address (subdomain:stratum_port) in db.ensureLocalRegion.
     subdomain: config.subdomain || process.env.POOL_SUBDOMAIN || ''

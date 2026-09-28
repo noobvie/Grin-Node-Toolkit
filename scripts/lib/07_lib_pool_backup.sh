@@ -21,6 +21,11 @@
 #                        on the hub's public IP — see the runbook below.
 #   · nginx vhost        $POOL_NGINX_CONF (cert itself is NOT included — certbot
 #                        re-issues once DNS points at the new box)
+#   · games DB           $PGS_DB (grinium-games.db, design §19 D18) when the /play/
+#                        service is installed — snapshotted like pool.db, BEST EFFORT:
+#                        a missing or unreadable games DB is a warning, never a failed
+#                        backup. It is NOT extracted with the rest: restore asks about it
+#                        separately (pgs_restore_db_from_archive, 07_lib_pool_games.sh).
 #   · TLS cert           ONLY in a Migrate OUT archive (07_lib_pool_migrate.sh sets
 #                        PBK_INCLUDE_CERTS=1 for that one call): live/archive/renewal
 #                        for the vhost's lineage(s) + accounts/. Daily and "Backup now"
@@ -210,6 +215,18 @@ _pbk_make_tar() {
         fi
     fi
 
+    # Games DB (design §19 D18) — same two-phase snapshot, but best effort: any problem is a
+    # warning and the archive simply carries no games data. Never rc 2, never fatal.
+    local gdbrel=""
+    if [[ -n "${PGS_DB:-}" && -f "$PGS_DB" ]] && declare -F pgs_snapshot_db >/dev/null 2>&1; then
+        if [[ -z "$stage" ]]; then stage=$(mktemp -d /tmp/grin_pubpool_dbsnap_XXXXXX 2>/dev/null) || stage=""; fi
+        if [[ -n "$stage" ]] && pgs_snapshot_db "$stage/${PGS_DB#/}"; then
+            gdbrel="${PGS_DB#/}"
+        else
+            warn "Could not snapshot the games DB ($PGS_DB) — this archive carries no games data."
+        fi
+    fi
+
     local -a live_rels=(); local s
     while IFS= read -r s; do live_rels+=("${s#/}"); done < <(_pbk_sources)
 
@@ -242,6 +259,10 @@ _pbk_make_tar() {
             error "Could not append the pool.db snapshot to the archive."
             return 2
         fi
+    fi
+    if [[ -n "$gdbrel" && -f "$work" ]]; then
+        tar -rf "$work" -C "$stage" "$gdbrel" 2>/dev/null \
+            || warn "Could not append the games DB snapshot — this archive carries no games data."
     fi
     [[ -n "$stage" ]] && rm -rf "$stage"
 
@@ -327,6 +348,10 @@ _pbk_restore_extract() {
     if declare -F pw_listener_stop >/dev/null 2>&1; then pw_listener_stop 2>/dev/null || true; fi
 
     while IFS= read -r x; do ex+=("$x"); done < <(_pbk_code_excludes)
+    # The games DB is never extracted here: the games service may be running on it, and
+    # the operator is asked separately (D18) — pgs_restore_db_from_archive, called by both
+    # callers after this, stops the games, moves stale sidecars aside and places it.
+    [[ -n "${PGS_DB:-}" ]] && ex+=("--exclude=${PGS_DB#/}")
     if ! tar -xzf "$clear" -C / "${ex[@]}" --preserve-permissions 2>/dev/null; then
         # A FAILED extraction is a partial one: the wallet dir may already be the archive's
         # while pool.db (appended LAST, so usually the last member written) is still the old
@@ -426,6 +451,11 @@ pbk_restore() {
     _pbk_restore_extract "$tmp_clear" \
         'ledger restored from backup — reconcile before resuming' 'restore'
     xrc=$?
+    # Games DB: its own question, default Y (D18). Skipped after a failed extraction — the
+    # operator restores again cleanly anyway. Whatever happens, the pool restore goes on.
+    if [[ "$xrc" -ne 1 ]] && declare -F pgs_restore_db_from_archive >/dev/null 2>&1; then
+        pgs_restore_db_from_archive "$tmp_clear" || warn "Games database not restored — the pool restore continues."
+    fi
     rm -f "$tmp_clear"
     case "$xrc" in
         0) warn "Payouts FROZEN on the restored ledger — the wallet has spent money this DB no longer knows about." ;;
@@ -526,6 +556,25 @@ if [[ -f "\$DB" ]]; then
         "\$DB" "\$STAGE/\$DBREL" 2>/dev/null || cp -p "\$DB" "\$STAGE/\$DBREL" || dbfail "could not snapshot pool.db"
     [[ -s "\$STAGE/\$DBREL" ]] || dbfail "the pool.db snapshot is empty"
 fi
+# Games DB (design §19 D18): best effort — a failure here is a WARN line, never a lost
+# archive. Backup API only (no cp fallback: a raw copy of a live WAL database is not a
+# snapshot). The -wal/-shm a root open may create are handed back to the service.
+GAMES_DB="${PGS_DB:-}"
+GDBREL=""
+if [[ -n "\$GAMES_DB" && -f "\$GAMES_DB" ]]; then
+    [[ -n "\$STAGE" ]] || STAGE=\$(mktemp -d /tmp/grin_pubpool_cronsnap_XXXXXX 2>/dev/null) || STAGE=""
+    if [[ -n "\$STAGE" ]] && mkdir -p "\$STAGE/\$(dirname "\${GAMES_DB#/}")" \
+       && python3 -c 'import sqlite3,sys; s=sqlite3.connect(sys.argv[1]); d=sqlite3.connect(sys.argv[2]); s.backup(d); d.close(); s.close()' \
+            "\$GAMES_DB" "\$STAGE/\${GAMES_DB#/}" 2>/dev/null \
+       && [[ -s "\$STAGE/\${GAMES_DB#/}" ]]; then
+        GDBREL="\${GAMES_DB#/}"
+    else
+        echo "[\$TS] WARN: games DB not snapshotted — this archive carries no games data" >> "\$LOG"
+    fi
+    if id ${PGS_USER:-grinplay} >/dev/null 2>&1; then
+        chown ${PGS_USER:-grinplay}:${PGS_USER:-grinplay} "\$GAMES_DB-wal" "\$GAMES_DB-shm" 2>/dev/null || true
+    fi
+fi
 EX=( --exclude="\${WALLET_DIR#/}/grin-wallet" --exclude="*/node_modules" \
      --exclude="\${APP_DIR#/}/lib" --exclude="\${APP_DIR#/}/admin-panel" --exclude="\${APP_DIR#/}/scripts" \
      --exclude="\${APP_DIR#/}/index.js" --exclude="\${APP_DIR#/}/package.json" --exclude="\${APP_DIR#/}/package-lock.json" \
@@ -533,6 +582,10 @@ EX=( --exclude="\${WALLET_DIR#/}/grin-wallet" --exclude="*/node_modules" \
 tar -cf "\$WORK" "\${EX[@]}" -C / "\${LIVE[@]}" 2>/dev/null || true
 if [[ -n "\$STAGE" && -n "\$DBREL" ]]; then
     [[ -f "\$WORK" ]] && tar -rf "\$WORK" -C "\$STAGE" "\$DBREL" 2>/dev/null || dbfail "could not append pool.db to the archive"
+fi
+if [[ -n "\$GDBREL" && -f "\$WORK" ]]; then
+    tar -rf "\$WORK" -C "\$STAGE" "\$GDBREL" 2>/dev/null \
+        || echo "[\$TS] WARN: could not append the games DB — this archive carries no games data" >> "\$LOG"
 fi
 [[ -n "\$STAGE" ]] && rm -rf "\$STAGE"
 TMP=\$(mktemp /tmp/grin_pubpool_cronbak_XXXXXX.tar.gz) || { rm -f "\$WORK"; exit 1; }
@@ -659,7 +712,8 @@ pool_backup_menu() {
         local push_state="${DIM}off${RESET}"; gbp_configured && push_state="${GREEN}on${RESET}"
         echo -e "  ${DIM}Dir: $PBK_BACKUP_DIR · key: ${RESET}$key_state${DIM} · schedule: ${RESET}$sched${DIM} · offsite: ${RESET}$push_state"
         echo -e "  ${DIM}Covers: pool.db (balances) · pool.json · wallet seed · WG identity (no gateway${RESET}"
-        echo -e "  ${DIM}re-pairing; a new hub IP may need a step on each gateway) · nginx vhost.${RESET}"
+        echo -e "  ${DIM}re-pairing; a new hub IP may need a step on each gateway) · nginx vhost${RESET}"
+        echo -e "  ${DIM}· games DB when /play/ is installed (restore asks about it separately).${RESET}"
         echo ""
         echo -e "  ${GREEN}1${RESET}) Backup now            ${DIM}(encrypted archive)${RESET}"
         echo -e "  ${GREEN}2${RESET}) Restore from backup   ${DIM}(one-shot extract to original paths + runbook)${RESET}"

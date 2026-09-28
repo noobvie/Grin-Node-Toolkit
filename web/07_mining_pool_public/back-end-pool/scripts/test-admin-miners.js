@@ -9,6 +9,9 @@
 //   3. The real route handlers, run in-process against a throwaway DB (index.js starts a server
 //      on require, so each handler is cut out of the source — the same loader
 //      test-payout-guard.js uses).
+//   4. The shares(grin_address, created_at) index that bounds every per-address read by its window.
+//   5. Which accounts the capped list holds: miners active now first, whatever their balance, and
+//      share-less sessions (mintable by anyone) last.
 // Never touches the pool DB.
 // Run: node scripts/test-admin-miners.js
 const path = require('path');
@@ -190,9 +193,8 @@ const call = (h, req) => {
     ok('unknown address → 404', none.statusCode === 404, JSON.stringify(none.body));
   }
   {
-    // The per-address share query SEARCHes idx_share_address — it reads every retained share of
-    // the address whatever its window — and the page re-polls this route for each open row. So
-    // both windows must come from ONE pass, not one call per window.
+    // The page re-polls this route for each open row, so both windows must come from ONE pass
+    // (the short window is a subset of the long one), not one call per window.
     const src = routeSrc('get', '/api/admin/miners/:addr/workers');
     ok('the workers route reads the shares ONCE (both windows from one getWorkersForAccount call)',
        (src.match(/getWorkersForAccount\(/g) || []).length === 1, src.match(/getWorkersForAccount\([^)]*\)/g));
@@ -203,6 +205,59 @@ const call = (h, req) => {
     const pub = hashrateTracker.getWorkersForAccount(A, 10);
     ok('the public two-argument call is unchanged (no hashrate_gps_short key)',
        pub.length > 0 && pub.every((w) => !('hashrate_gps_short' in w)), JSON.stringify(pub[0]));
+  }
+
+  // ── 4. idx_share_address_created: per-address reads bounded by their window ─────────────────
+  console.log('\n[4] shares(grin_address, created_at) index');
+  {
+    const plan = (sql, n) => db.prepare('EXPLAIN QUERY PLAN ' + sql).all(...Array(n).fill(1)).map((x) => x.detail).join(' | ');
+    const idx = db.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'shares'").all().map((r) => r.name);
+    ok('the composite exists and the single-column idx_share_address is gone (a 3rd write per share for nothing)',
+       idx.includes('idx_share_address_created') && !idx.includes('idx_share_address'), JSON.stringify(idx));
+    const w = plan("SELECT COALESCE(worker_name,'default'), SUM(difficulty), COUNT(*), MAX(created_at) FROM shares WHERE grin_address = ? AND created_at > ? GROUP BY 1", 2);
+    ok('getWorkersForAccount\'s shape seeks the address AND the window', /idx_share_address_created \(grin_address=\? AND created_at>\?\)/.test(w), w);
+    const c = plan('SELECT COUNT(*), MAX(created_at) FROM shares WHERE grin_address = ?', 1);
+    ok('the detail route\'s count/max by address is index-only', /COVERING INDEX idx_share_address_created/.test(c), c);
+  }
+
+  // ── 5. Which accounts the capped list holds ──────────────────────────────────────────────────
+  console.log('\n[5] list priority (the cap)');
+  {
+    const D = 'tgrin1dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd';
+    const E = 'tgrin1eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee';
+    const F = 'tgrin1ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff';
+    const add = db.prepare('INSERT INTO miner_accounts (grin_address, balance, balance_locked, is_banned) VALUES (?, ?, 0, ?)');
+    add.run(D, 0, 0);     // brand new: mining NOW, nothing matured yet
+    add.run(E, 100, 0);   // rich and idle
+    add.run(F, 50, 1);    // banned, idle
+    db.prepare("INSERT INTO shares (grin_address, worker_name, difficulty, block_height, share_hash, region, created_at) VALUES (?, 'r', 1, 1, 'hd', 'eu', ?)").run(D, now - 60);
+
+    const pr = minerStatus.listPriority(minerStatus.liveRigs(sessions), minerStatus.recentShares(db, now));
+    ok('listPriority: PoW-backed biggest first, share-less sessions separately', pr.mined.join() === [A, D].join() && pr.connecting.join() === B, JSON.stringify(pr));
+
+    const list = load('get', '/api/admin/miners', deps);
+    const r3 = call(list, { query: { limit: '3' } }).body;
+    const got3 = (r3 && r3.miners || []).map((m) => m.grin_address);
+    ok('cap 3: the zero-balance miner mining NOW is listed, over the richest idle account',
+       got3.includes(D) && got3.includes(A) && !got3.includes(E), JSON.stringify(got3));
+    ok('cap 3: banned outranks a share-less session (which anyone can mint by logging in)', got3.includes(F) && !got3.includes(B), JSON.stringify(got3));
+    ok('cap 3: returned in balance order, with honest totals', got3.join() === [F, A, D].join() &&
+       r3.total_accounts === 6 && r3.mined_accounts === 2 && r3.truncated === true, JSON.stringify({ got3, t: r3.total_accounts, m: r3.mined_accounts, tr: r3.truncated }));
+    const r5 = call(list, { query: { limit: '5' } }).body;
+    const got5 = r5.miners.map((m) => m.grin_address);
+    ok('cap 5: the connecting session, then the rest by balance fill the room', got5.includes(B) && got5.includes(E) && !got5.includes(C) && r5.truncated === true, JSON.stringify(got5));
+    const r50 = call(list, { query: { limit: '50' } }).body;
+    ok('no cap hit → every account, truncated false', r50.miners.length === 6 && r50.truncated === false);
+    ok('limit is clamped to 1000', /Math\.min\(Math\.max\(parseInt\(req\.query\.limit, 10\) \|\| 50, 1\), 1000\)/.test(routeSrc('get', '/api/admin/miners')));
+
+    const s1 = call(list, { query: { search: 'eeeeeeee', limit: '50' } }).body;
+    ok('?search finds an account by substring', s1.miners.length === 1 && s1.miners[0].grin_address === E && s1.truncated === false, JSON.stringify(s1.miners.map((m) => m.grin_address)));
+    const s2 = call(list, { query: { search: '_', limit: '50' } }).body;
+    ok('?search escapes LIKE wildcards (`_` is a literal, not "any character")', s2.miners.length === 0, JSON.stringify(s2.miners.length));
+    const s3 = call(list, { query: { search: ['aaa', 'bbb'], limit: '50' } });
+    ok('?search given twice (an array) is ignored, not stringified into the pattern', s3.statusCode === 200 && s3.body.miners.length === 6);
+    const pIn = db.prepare('EXPLAIN QUERY PLAN SELECT 1 FROM miner_accounts ma WHERE ma.grin_address IN (SELECT value FROM json_each(?))').all('[]').map((x) => x.detail).join(' | ');
+    ok('the priority read SEARCHes miner_accounts by address (no table scan)', /SEARCH ma USING (COVERING )?INDEX/.test(pIn) && !/SCAN ma\b/.test(pIn), pIn);
   }
 })().catch((e) => { fail++; console.log('  FAIL  unexpected throw ' + (e && e.stack)); })
   .finally(() => {

@@ -1409,6 +1409,11 @@ _pmg_in_restore() {
            return 1 ;;
     esac
     _pbk_restore_perms
+    # Games DB (design §19 D18): never part of the extraction above; asked separately, and
+    # a problem with it never fails the move.
+    if declare -F pgs_restore_db_from_archive >/dev/null 2>&1; then
+        pgs_restore_db_from_archive "$PMG_IN_CLEAR" || warn "Games database not restored — the move continues."
+    fi
     success "Restored: pool.db, pool.json, wallet, WG identity${PMG_MF_CERTS:+, TLS cert ($PMG_MF_CERTS)}."
     _pmg_log "restored $(basename "$PMG_IN_ARCHIVE") — payouts frozen"
 }

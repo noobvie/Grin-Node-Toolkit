@@ -627,7 +627,20 @@ function createSchema() {
       created_at INTEGER NOT NULL DEFAULT (unixepoch())
     )`,
 
-    `CREATE INDEX IF NOT EXISTS idx_share_address ON shares(grin_address)`,
+    // Address + TIME, replacing the old single-column idx_share_address (2026-09-27). With only
+    // (grin_address), `WHERE grin_address = ? AND created_at > ?` could seek the address but not
+    // the window, so every per-address read — the account page's worker breakdown and hashrate,
+    // the admin Miners page's rig rows and its "Shares retained" count — walked that miner's whole
+    // retained history (~31 h) with a table lookup per share, whatever window it asked for. With
+    // the time column it is `SEARCH (grin_address=? AND created_at>?)`: rows in the window only;
+    // COUNT/MAX by address become index-only; `ORDER BY created_at` by address needs no temp b-tree.
+    // The old index is DROPPED, not kept beside it: EXPLAIN gives identical plans for every shares
+    // query with or without it (the composite's leading column serves the equality alone), so
+    // keeping it would only add a third index write to every accepted share.
+    // ⚠ Built on the first boot after upgrade over the retained ~31 h of shares — a one-off,
+    // proportional to the table, before the stratum server starts taking shares.
+    `CREATE INDEX IF NOT EXISTS idx_share_address_created ON shares(grin_address, created_at)`,
+    `DROP INDEX IF EXISTS idx_share_address`,
     `CREATE INDEX IF NOT EXISTS idx_share_block_height ON shares(block_height)`,
     `CREATE INDEX IF NOT EXISTS idx_share_created ON shares(created_at)`,
     `CREATE INDEX IF NOT EXISTS idx_share_region ON shares(region, created_at)`,

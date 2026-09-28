@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Games · Nicknames | Grin Pool</title>
+  <link rel="stylesheet" href="/css/pool.css">
+  <link rel="stylesheet" href="/admin/styles.css">
+  <link rel="stylesheet" href="/admin/settings.css">
+  <style>
+    .gn-name { font-weight: 600; overflow-wrap: anywhere; }
+    .gn-sub { font-size: .75rem; color: var(--text-dim); margin-top: .2rem; overflow-wrap: anywhere; }
+    .gn-flags { display: flex; flex-wrap: wrap; gap: .3rem; }
+    #confirm-dialog .modal { max-width: 480px; }
+  </style>
+</head>
+<body>
+
+<main>
+  <div class="container">
+    <section>
+      <h2>Games · Nicknames</h2>
+      <p class="helper-text" style="margin:0 0 .8rem;">
+        Players on <a href="/play/" target="_blank" rel="noopener">/play/</a> can ask for a nickname. Nothing a player
+        types is shown to anyone else until you approve it here, and an approved nickname is <strong>always</strong>
+        shown together with the masked address — <code>Night Shift (grin1abcd…wxyz)</code> — never on its own, so
+        copying someone's nickname does not make you them. Names that contain "operator", "admin" or "moderator",
+        look like an address, or match another player's live nickname are refused before they reach this queue.
+        Every action here asks for your admin password again. Switch nicknames off under
+        <a href="games.html">Overview &amp; settings</a>.
+      </p>
+      <p class="error-msg" id="gn-offline" style="display:none;"></p>
+      <p class="helper-text" id="gn-off" style="display:none;">Nicknames are switched <strong>off</strong>: players cannot ask for one, and every page shows masked addresses only. Approved names are kept and come back when you switch it on.</p>
+
+      <div class="tabs" id="gn-tabs">
+        <button class="tab-btn active" data-state="pending">Waiting for review <span id="gn-count-pending"></span></button>
+        <button class="tab-btn" data-state="approved">Live <span id="gn-count-approved"></span></button>
+        <button class="tab-btn" data-state="rejected">Rejected</button>
+      </div>
+      <div class="card" style="padding:0;">
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Nickname</th><th>Address</th><th id="gn-col-time">Sent (UTC)</th><th>Flags / reason</th><th>Actions</th></tr></thead>
+            <tbody id="gn-tbody"><tr class="loading-row"><td colspan="5"><span class="spinner"></span>Loading…</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="form-actions" style="margin-top:.5rem;">
+        <button type="button" class="btn btn-secondary btn-sm" id="gn-refresh">Refresh</button>
+      </div>
+      <p id="gn-msg" style="display:none;"></p>
+
+      <div class="card" style="margin-top:1rem;">
+        <h3 class="sub-title" style="margin-top:0;">What the flags mean</h3>
+        <ul class="helper-text" style="margin:0;padding-left:1.1rem;">
+          <li><strong>Reserved word</strong> — pool, grinium, official, support, staff, prize, jackpot, winner, mod or bot: it could read as speaking for the pool.</li>
+          <li><strong>Word list</strong> — it contains an entry of the chat word list (<a href="games-chat.html">Chat &amp; moderation</a>).</li>
+          <li><strong>Same as a live name</strong> — another player already has a nickname that reads the same (case, spaces, <code>-</code> <code>_</code> and look-alike digits ignored). It cannot be approved.</li>
+          <li><strong>Same as a waiting name</strong> — another request reads the same. Only the first one you approve can go live.</li>
+        </ul>
+        <p class="helper-text" style="margin:.6rem 0 0;">Flags are hints, never decisions. A rejection reason is <strong>shown to the player</strong> on /play/.</p>
+      </div>
+    </section>
+  </div>
+</main>
+
+<div class="modal-overlay" id="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
+  <form class="modal" id="confirm-form" novalidate>
+    <h3 id="confirm-title">Confirm</h3>
+    <p class="helper-text dim" id="confirm-body" style="margin:0 0 1rem;white-space:pre-line;overflow-wrap:anywhere;"></p>
+    <div class="form-group" id="confirm-reason-group">
+      <label for="confirm-reason">Reason (optional — the player sees it on /play/; it is kept in the moderation log)</label>
+      <input type="text" id="confirm-reason" class="settings-skip" maxlength="200" autocomplete="off">
+    </div>
+    <div class="modal-actions">
+      <button type="button" class="btn btn-outline" id="confirm-cancel">Back</button>
+      <button type="submit" class="btn" id="confirm-submit">Confirm</button>
+    </div>
+  </form>
+</div>
+
+<script src="/js/auth.js"></script>
+<script src="/js/api.js"></script>
+<script src="/js/stepup.js"></script>
+<script src="/admin/admin-shell.js"></script>
+<script src="/admin/games-admin.js"></script>
+<script>
+// Games → Nicknames (design §19.16; games Part 12). Every call goes through GamesAdmin.call
+// (the admin proxy, adminFetch — never API.*); every write is step-up (none is in the pool's
+// FAST_WRITES). A nickname and a rejection reason are PLAYER/ADMIN TEXT: every row here is
+// built with GamesAdmin.el (textContent), never as an HTML string.
+API.guardAdminPage();
+const G = window.GamesAdmin;
+const { el } = G;
+
+let _state = 'pending';
+
+const FLAG_TEXT = {
+  reserved: f => ['badge-warn', 'Reserved word: ' + f.word],
+  word: f => ['badge-warn', 'Word list: ' + f.word],
+  same_as: () => ['badge-error', 'Same as a live name'],
+  pending_same: () => ['badge-dim', 'Same as a waiting name'],
+};
+
+function flagsCell(n) {
+  const td = el('td');
+  if (n.state === 'pending') {
+    const box = el('div', 'gn-flags');
+    (n.flags || []).forEach(f => {
+      const make = FLAG_TEXT[f.type];
+      if (!make) return;
+      const [cls, label] = make(f);
+      box.appendChild(el('span', 'badge ' + cls, label));
+    });
+    if (!box.firstChild) box.appendChild(el('span', 'gn-sub', 'none'));
+    td.appendChild(box);
+    (n.flags || []).filter(f => Array.isArray(f.addresses)).forEach(f => {
+      const sub = el('div', 'gn-sub');
+      sub.appendChild(document.createTextNode(f.type === 'same_as' ? 'held by ' : 'also asked by '));
+      f.addresses.forEach(a => { sub.appendChild(G.addrChip(a)); sub.appendChild(document.createTextNode(' ')); });
+      td.appendChild(sub);
+    });
+  } else if (n.reason) {
+    td.appendChild(el('span', null, '“' + n.reason + '”'));
+  } else {
+    td.appendChild(el('span', 'gn-sub', '—'));
+  }
+  return td;
+}
+
+function actionsCell(n) {
+  const td = el('td');
+  const box = el('div', 'row-actions');
+  if (n.state === 'pending') {
+    const blocked = (n.flags || []).some(f => f.type === 'same_as');
+    const ok = G.btn('Approve', 'btn-secondary', () => act(n, 'approve'));
+    if (blocked) { ok.disabled = true; ok.title = 'Another player already has a nickname that reads the same.'; }
+    box.appendChild(ok);
+    box.appendChild(G.btn('Reject', 'btn-danger', () => act(n, 'reject')));
+  } else if (n.state === 'approved') {
+    box.appendChild(G.btn('Remove', 'btn-danger', () => act(n, 'remove')));
+  }
+  box.appendChild(G.playerLink(n.address));
+  td.appendChild(box);
+  return td;
+}
+
+function row(n) {
+  const tr = el('tr');
+  const name = el('td');
+  name.appendChild(el('div', 'gn-name', n.name));                 // player text: textContent only
+  name.appendChild(el('div', 'gn-sub', 'shows as ' + n.shown_as));
+  tr.appendChild(name);
+  const who = el('td');
+  who.appendChild(G.addrChip(n.address));
+  tr.appendChild(who);
+  const t = el('td', 'mono', G.fmtUtc(n.state === 'pending' ? n.submitted_at : n.decided_at));
+  if (n.state !== 'pending' && n.decided_by) {
+    const sub = el('div', 'gn-sub');
+    sub.appendChild(document.createTextNode('by '));
+    sub.appendChild(G.actorNode(n.decided_by));
+    t.appendChild(sub);
+  }
+  tr.appendChild(t);
+  tr.appendChild(flagsCell(n));
+  tr.appendChild(actionsCell(n));
+  return tr;
+}
+
+async function load() {
+  const tb = document.getElementById('gn-tbody');
+  document.getElementById('gn-col-time').textContent = _state === 'pending' ? 'Sent (UTC)' : 'Decided (UTC)';
+  try {
+    const r = await G.call('GET', 'nicknames?state=' + _state);
+    document.getElementById('gn-offline').style.display = 'none';
+    document.getElementById('gn-off').style.display = r.enabled ? 'none' : '';
+    document.getElementById('gn-count-pending').textContent = r.counts.pending ? '(' + r.counts.pending + ')' : '';
+    document.getElementById('gn-count-approved').textContent = '(' + r.counts.approved + ')';
+    G.clear(tb);
+    if (!r.nicknames.length) {
+      const tr = el('tr');
+      const td = el('td', 'empty-row', { pending: 'Nothing is waiting for review.', approved: 'No live nicknames.', rejected: 'Nothing rejected.' }[_state]);
+      td.colSpan = 5;
+      tr.appendChild(td);
+      tb.appendChild(tr);
+      return;
+    }
+    r.nicknames.forEach(n => tb.appendChild(row(n)));
+  } catch (e) {
+    G.clear(tb);
+    const off = document.getElementById('gn-offline');
+    off.textContent = e.message;
+    off.style.display = '';
+  }
+}
+
+async function act(n, action) {
+  const who = G.short(n.address);
+  const spec = {
+    approve: { title: 'Approve “' + n.name + '”?', body: 'It shows at once on chat, the boards and games as:\n' + n.shown_as, withReason: false, confirmText: 'Approve' },
+    reject: { title: 'Reject “' + n.name + '”?', body: 'The player ' + who + ' sees the rejection and your reason on /play/, and can ask again.', withReason: true, confirmText: 'Reject', danger: true },
+    remove: { title: 'Remove “' + n.name + '”?', body: 'Every page shows ' + who + ' as the masked address again. The player sees your reason and can ask for a new nickname, which is reviewed again.', withReason: true, confirmText: 'Remove', danger: true },
+  }[action];
+  const ok = await G.askConfirm(spec);
+  if (!ok) return;
+  const body = spec.withReason && ok.reason ? { reason: ok.reason } : {};
+  try {
+    await G.call('POST', 'nicknames/' + n.id + '/' + action, body);
+    G.flash('gn-msg', { approve: 'Approved.', reject: 'Rejected.', remove: 'Removed.' }[action]);
+  } catch (e) {
+    G.flash('gn-msg', e.code === 'nickname_taken' ? 'Another player already has a nickname that reads the same — it cannot go live.' : e.message, true);
+  }
+  await load();
+}
+
+document.querySelectorAll('#gn-tabs .tab-btn').forEach(b => b.addEventListener('click', () => {
+  document.querySelectorAll('#gn-tabs .tab-btn').forEach(x => x.classList.toggle('active', x === b));
+  _state = b.getAttribute('data-state');
+  load();
+}));
+document.getElementById('gn-refresh').addEventListener('click', load);
+load();
+</script>
+</body>
+</html>

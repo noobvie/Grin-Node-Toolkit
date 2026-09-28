@@ -546,6 +546,142 @@ console.log('\n[12] miners.html — status + expandable rigs');
      /if \(input && opts\.urlQuery\)/.test(shell) && /input\.value = q0\.trim\(\);/.test(shell));
   ok('payments.html opts in, so miners.html → payments.html?q=<address> filters it',
      /urlQuery: true/.test(read('payments.html')) && /'\/admin\/payments\.html\?q=' \+ encodeURIComponent\(m\.grin_address\)/.test(script));
+
+  // The capped list (route priority in test-admin-miners.js §5): the page must ask for the route's
+  // maximum, say what it is showing, and reach accounts the cap left out through ?search=.
+  ok('asks for the route maximum and no longer claims "Top 500 by balance"',
+     /const LIST_LIMIT = 1000;/.test(script) && /'\/api\/admin\/miners\?limit=' \+ LIST_LIMIT/.test(script) && !/Top 500/.test(script));
+  ok('the scope line is written with textContent from the API counts',
+     /function updateScope\(\)[\s\S]*?el\.textContent = t;/.test(script) && /data\.truncated/.test(script));
+  ok('the address filter also searches the server, only when the list is capped, URL-encoded, stale replies dropped',
+     /onSearch: q =>/.test(script) &&
+     /if \(!_scope \|\| !_scope\.truncated \|\| q\.length < SEARCH_MIN\)/.test(script) &&
+     /'\/api\/admin\/miners\?limit=50&search=' \+ encodeURIComponent\(q\)/.test(script) &&
+     /if \(seq !== _searchSeq\) return;/.test(script));
+  ok('AdminTable onSearch is optional and cannot break the local filter',
+     /if \(typeof opts\.onSearch === 'function'\) \{\s*try \{ opts\.onSearch\(input\.value\.trim\(\)\); \} catch/.test(shell));
+}
+
+// ── Games → Events (design §19.9, §19.11 — games Part 7) ─────────────────────────────
+console.log('\n[13] games-events.html — the admin proxy, step-up and the nav');
+{
+  const exists = fs.existsSync(path.join(PANEL, 'games-events.html'));
+  ok('games-events.html exists', exists);
+  const page = exists ? read('games-events.html') : '';
+  const script = (page.match(/<script>\n([\s\S]*?)<\/script>/) || [])[1] || '';
+  const code = script.replace(/\/\/[^\n]*/g, '');
+  const shell = read('admin-shell.js');
+  const navBlock = (shell.match(/var NAV = \[([\s\S]*?)\n  \];/) || [])[1] || '';
+  ok('NAV has a Games group holding games-events.html', /title: 'Games', ico: '🎮', children: \[[\s\S]*?\{ file: 'games-events\.html',\s+title: 'Events' \}/.test(navBlock));
+
+  // Every call goes through the proxy prefix via games(); the paths it builds, checked against the
+  // pool's OWN step-up rule (lib/games-link.js requiresStepUp — the enforcer, §19.11).
+  const { requiresStepUp } = require('../lib/games-link');
+  ok('all proxied calls go through games() → adminFetch(\'/api/admin/games/\' + rel)',
+    /const res = await adminFetch\('\/api\/admin\/games\/' \+ rel, opts\);/.test(script) && !/API\.(get|post|put|del)\(/.test(code));
+  ok('create + update are FAST writes (plain admin), cancel + finalise are step-up — per the pool\'s rule',
+    /games\('POST', 'events', body\)/.test(script) && /games\('POST', 'events\/' \+ _editing\.id, body\)/.test(script)
+    && /games\('POST', 'events\/' \+ ev\.id \+ '\/cancel'/.test(script) && /games\('POST', 'events\/' \+ ev\.id \+ '\/finalise'/.test(script)
+    && !requiresStepUp('POST', 'events') && !requiresStepUp('POST', 'events/7')
+    && requiresStepUp('POST', 'events/7/cancel') && requiresStepUp('POST', 'events/7/finalise') && !requiresStepUp('GET', 'events/7'));
+  // Auth.fetch (API.*) redirects to /login.html on ANY 401 — and the proxy passes the games
+  // service's own 401 (link secret mismatch) through. The page must tell the two apart.
+  ok('a games 401 (ok:false) is shown as a link problem; only the pool\'s own 401 goes to login',
+    /if \(res\.status === 401 && !\(data && data\.ok === false\)\)/.test(script) && /unauthorised: 'The pool and the games service disagree on the link secret/.test(script));
+  ok('row buttons pass the id via data-id and one delegated listener (no inline on* on rows)',
+    /data-act="cancel" data-id="\$\{id\}"/.test(script) && /btn\.dataset\.id/.test(script) && !/onclick=/.test(page));
+  ok('no window.prompt / confirm (the in-page dialog, then stepup.js)', !/\bprompt\(/.test(code) && !/\bconfirm\(/.test(code));
+  ok('the confirm dialog writes the operator\'s title with textContent',
+    /document\.getElementById\('confirm-body'\)\.textContent = body;/.test(script) && !/confirm-body'\)\.innerHTML/.test(script));
+  ok('every row value is escaped (title, kind, days, state, counts)',
+    /\$\{escHtml\(e\.title\)\}/.test(script) && /title="\$\{escHtml\(e\.description\)\}"/.test(script) && !/\$\{e\.(title|kind_label|first_day|state)\}/.test(script));
+  ok('days are UTC date inputs and the last day is INCLUDED (ends_at = last day + 1 day)',
+    /type="date" id="ge-first"/.test(page) && /type="date" id="ge-last"/.test(page)
+    && /Date\.parse\(v \+ 'T00:00:00Z'\)/.test(script) && /ends_at: lastDay \+ DAY,/.test(script));
+  ok('loads stepup.js (adminFetch)', /<script src="\/js\/stepup\.js"><\/script>/.test(page));
+}
+
+// ── Games → Overview, Chat, Players (design §19.10, §19.11, D21 — games Part 9) ─────────
+console.log('\n[14] games.html / games-chat.html / games-players.html — proxy, step-up, text-only chat');
+{
+  const pages = ['games.html', 'games-chat.html', 'games-players.html'];
+  const exist = pages.every((p) => fs.existsSync(path.join(PANEL, p))) && fs.existsSync(path.join(PANEL, 'games-admin.js'));
+  ok('the three pages and games-admin.js exist', exist);
+  const shell = read('admin-shell.js');
+  const navBlock = (shell.match(/var NAV = \[([\s\S]*?)\n  \];/) || [])[1] || '';
+  ok('NAV: Games parent is games.html, children Overview → Chat → Players → Events',
+    /\{ file: 'games\.html', title: 'Games', ico: '🎮', children: \[\s*\{ file: 'games\.html',\s+title: 'Overview & settings' \},\s*\{ file: 'games-chat\.html',\s+title: 'Chat & moderation' \},\s*\{ file: 'games-players\.html', title: 'Players' \},\s*\{ file: 'games-events\.html',\s+title: 'Events' \}/.test(navBlock));
+  const helper = exist ? read('games-admin.js') : '';
+  const helperCode = helper.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+  ok('games-admin.js: every call goes through adminFetch(\'/api/admin/games/\' + rel) and tells a games 401 from the pool\'s',
+    /var res = await adminFetch\('\/api\/admin\/games\/' \+ rel, opts\);/.test(helper)
+    && /if \(res\.status === 401 && !\(data && data\.ok === false\)\)/.test(helper) && !/API\.(get|post|put|del)\(/.test(helperCode));
+  ok('games-admin.js: no HTML sink at all (el() sets textContent)',
+    !/\b(innerHTML|outerHTML|insertAdjacentHTML)\b|document\.write/.test(helperCode) && /if \(text !== undefined && text !== null\) e\.textContent = String\(text\);/.test(helper));
+  for (const p of pages) {
+    const page = exist ? read(p) : '';
+    const script = (page.match(/<script>\n([\s\S]*?)<\/script>/) || [])[1] || '';
+    const code = script.replace(/\/\/[^\n]*/g, '');
+    ok(`${p}: loads stepup.js, admin-shell.js, then games-admin.js`,
+      /<script src="\/js\/stepup\.js"><\/script>\s*<script src="\/admin\/admin-shell\.js"><\/script>\s*<script src="\/admin\/games-admin\.js"><\/script>/.test(page));
+    ok(`${p}: proxied calls only through GamesAdmin.call (no API.*, no raw fetch)`, !/API\.(get|post|put|del)\(/.test(code) && !/\bfetch\(/.test(code) && /G\.call\(/.test(code));
+    ok(`${p}: no HTML sink in the page script (chat bodies, reasons and names are text)`, !/\b(innerHTML|outerHTML|insertAdjacentHTML)\b|document\.write/.test(code));
+    ok(`${p}: no inline on* handler, no native prompt/confirm/alert`, !/\son[a-z]+="/i.test(page) && !/\b(prompt|confirm|alert)\(/.test(code));
+  }
+  const chat = exist ? read('games-chat.html') : '';
+  const players = exist ? read('games-players.html') : '';
+  ok('games-chat.html: the message body and report reasons are built with el() (textContent)',
+    /body\.appendChild\(el\('div', 'gc-body', m\.body\)\);/.test(chat) && /el\('span', null, '“' \+ r\.reason \+ '”'\)/.test(chat));
+  ok('games-players.html: the message body is built with el() (textContent)', /el\('div', 'gp-body', m\.body\)/.test(players));
+
+  // The paths these pages write, checked against the POOL's own step-up rule (the enforcer).
+  const { requiresStepUp } = require('../lib/games-link');
+  const A = 'grin1' + 'q'.repeat(58);
+  const fast = [['POST', 'chat/messages/7/delete'], ['POST', 'chat/held/7/approve'], ['POST', 'chat/post'], ['POST', `players/${A}/mute`]];
+  const stepUp = [['POST', 'chat/messages/7/restore'], ['POST', `players/${A}/unmute`], ['POST', `players/${A}/ban`], ['POST', `players/${A}/unban`],
+    ['POST', `players/${A}/purge`], ['POST', `players/${A}/adjust`], ['POST', `moderators/${A}`], ['POST', `moderators/${A}/remove`],
+    ['POST', 'chat/words'], ['POST', 'settings']];
+  ok('delete / approve / operator post / mute are FAST (live moderation); everything else these pages write is step-up',
+    fast.every(([m, p]) => !requiresStepUp(m, p)) && stepUp.every(([m, p]) => requiresStepUp(m, p)),
+    JSON.stringify([...fast.filter(([m, p]) => requiresStepUp(m, p)), ...stepUp.filter(([m, p]) => !requiresStepUp(m, p))]));
+  ok('the pages build exactly those write paths',
+    /'chat\/held\/' \+ m\.id \+ '\/approve'/.test(chat) && /'chat\/messages\/' \+ m\.id \+ '\/' \+ action/.test(chat)
+    && /G\.call\('POST', 'chat\/post'/.test(chat) && /'players\/' \+ address \+ '\/mute'/.test(chat)
+    && /G\.call\('POST', 'chat\/words', body\)/.test(chat) && /'moderators\/' \+ address \+ '\/remove'/.test(chat)
+    && /write\('\/ban'/.test(players) && /write\('\/purge'/.test(players) && /write\('\/adjust'/.test(players));
+  ok('games.html shows the fixed floors (the 1 h proof-age floor, §19.11) and saves only changed keys',
+    /chat_min_proof_age: s => 'A proof is always at least '/.test(read('games.html')) && /G\.call\('POST', 'settings', \{ values \}\)/.test(read('games.html')));
+}
+
+// ── Games → Nicknames (design §19.16 — games Part 12) ───────────────────────────────────
+console.log('[15] games-names.html — the nickname queue: proxy, step-up, text-only names');
+{
+  const exists = fs.existsSync(path.join(PANEL, 'games-names.html'));
+  ok('games-names.html exists', exists);
+  const page = exists ? read('games-names.html') : '';
+  const script = (page.match(/<script>\n([\s\S]*?)<\/script>/) || [])[1] || '';
+  const code = script.replace(/\/\/[^\n]*/g, '');
+  const shell = read('admin-shell.js');
+  const navBlock = (shell.match(/var NAV = \[([\s\S]*?)\n  \];/) || [])[1] || '';
+  ok('NAV: Nicknames sits in the Games group, after Events',
+    /\{ file: 'games-events\.html',\s+title: 'Events' \},\s*\{ file: 'games-names\.html',\s+title: 'Nicknames' \}\s*\]/.test(navBlock));
+  ok('loads stepup.js, admin-shell.js, then games-admin.js',
+    /<script src="\/js\/stepup\.js"><\/script>\s*<script src="\/admin\/admin-shell\.js"><\/script>\s*<script src="\/admin\/games-admin\.js"><\/script>/.test(page));
+  ok('proxied calls only through GamesAdmin.call (no API.*, no raw fetch)', !/API\.(get|post|put|del)\(/.test(code) && !/\bfetch\(/.test(code) && /G\.call\(/.test(code));
+  ok('no HTML sink: the nickname, its shown_as and the reason are text (el() → textContent)',
+    !/\b(innerHTML|outerHTML|insertAdjacentHTML)\b|document\.write/.test(code)
+    && /el\('div', 'gn-name', n\.name\)/.test(script) && /el\('span', null, '“' \+ n\.reason \+ '”'\)/.test(script));
+  ok('no inline on* handler, no native prompt/confirm/alert', !/\son[a-z]+="/i.test(page) && !/\b(prompt|confirm|alert)\(/.test(code));
+  ok('the page builds exactly the three write paths', /G\.call\('POST', 'nicknames\/' \+ n\.id \+ '\/' \+ action, body\)/.test(script)
+    && /approve:/.test(script) && /reject:/.test(script) && /remove:/.test(script));
+  // The POOL is the enforcer (§19.11): every nickname write must be step-up there. The games
+  // side's own copy is checked in play/server/scripts/test-names.js (it may not load pool code).
+  const { requiresStepUp } = require('../lib/games-link');
+  ok('every nickname write is STEP-UP at the pool (none is in FAST_WRITES); the list read is not',
+    ['nicknames/7/approve', 'nicknames/7/reject', 'nicknames/7/remove'].every((p) => requiresStepUp('POST', p)) && !requiresStepUp('GET', 'nicknames'));
+  ok('the reason field says the player sees it', /Reason \(optional — the player sees it on \/play\/; it is kept in the moderation log\)/.test(page));
+  ok('games.html links the page and labels the switch', /href="games-names\.html">Nicknames</.test(read('games.html')) && /nicknames_enabled: 'Players may ask for a nickname/.test(read('games.html')));
+  ok('games-players.html shows the nickname as text', /document\.getElementById\('gp-nick-state'\)\.textContent = /.test(read('games-players.html')));
 }
 
 console.log('\n' + (fail ? 'FAILURES' : 'ALL PASS') + ` — ${pass} passed, ${fail} failed`);

@@ -32,6 +32,8 @@
 #   9) Deploy new code       (refresh backend+frontend from checkout, then restart)
 #   A) Admin recovery        (locked out: clear 2FA / reset password — break-glass)
 #   W) Multi-region          (WireGuard server + add regional gateways)
+#   P) Play & chat (games)   (/play/ games service — lib/07_lib_pool_games.sh; never
+#                             restarts the pool; design §19)
 #   B) Backup & Restore      (encrypted: DB + wallet + WG identity · offsite push)
 #   C) Cron schedules        (daily backup, weekly VACUUM)
 #   L) View logs             (tail -50 | less)
@@ -149,6 +151,10 @@ source "$SCRIPT_DIR/lib/07_lib_gwctl.sh"
 # Hub backup/restore on the shared engine (pool.db + config + wallet + WG identity).
 # shellcheck source=lib/07_lib_pool_backup.sh
 source "$SCRIPT_DIR/lib/07_lib_pool_backup.sh"
+# /play/ games service (menu P, design §19): its own unit, user and DB beside the pool.
+# The backup lib above calls its pgs_* hooks at call time (games DB snapshot + restore).
+# shellcheck source=lib/07_lib_pool_games.sh
+source "$SCRIPT_DIR/lib/07_lib_pool_games.sh"
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # EXCLUSIVITY GUARD — one mining type per server (public XOR solo private)
@@ -221,7 +227,7 @@ const fs = require('fs');
 const path = process.argv[1];
 const key  = process.argv[2];
 const val  = process.argv[3];
-const NUMS = new Set(['stratum_port','node_api_port','pool_fee_percent','min_withdrawal','withdrawal_fee','service_port','node_stratum_port','fail2ban_maxretry','fail2ban_findtime','fail2ban_bantime']);
+const NUMS = new Set(['stratum_port','node_api_port','pool_fee_percent','min_withdrawal','withdrawal_fee','service_port','node_stratum_port','fail2ban_maxretry','fail2ban_findtime','fail2ban_bantime','games_port']);
 let d = {};
 try { d = JSON.parse(fs.readFileSync(path, 'utf8')); } catch(e) {}
 d[key] = NUMS.has(key) ? parseFloat(val) : val;
@@ -1011,6 +1017,12 @@ pool_deploy_code() {
         info "$POOL_SERVICE is not running — start it via 6) Service control to load the new code."
     fi
 
+    # The /play/ games service rides along when it is installed (design §19.12). It
+    # restarts only itself; a games failure never fails the pool deploy above.
+    if pgs_installed; then
+        pgs_deploy_code || warn "Games deploy reported a problem — the pool deploy above is complete; see P → 5."
+    fi
+
     echo ""
     success "Deploy new code complete."
 }
@@ -1651,7 +1663,7 @@ $admin_rules
     # burst=40, was 10 (2026-09-25). The homepage fires ~13 /api/ reads on load and ~10 on
     # every 60 s refresh, all at once; burst 10 admits only 11, so the LAST reads of the batch
     # (payments, both trend charts) drew 429s from ordinary single visitors — confirmed in the
-    # hub's error.log as `excess: 11.000 by zone "…_api"`, which lit "Payouts · feed down".
+    # hub's error.log as 'excess: 11.000 by zone "…_api"', which lit "Payouts · feed down".
     # The sustained rate (the zone's 600r/m) is unchanged; only the instantaneous fan-out grows.
     #
     # burst=100 on the general /api/ block, was 40 (2026-09-26). The live hub was still on 10
@@ -1660,7 +1672,7 @@ $admin_rules
     # reads 429'd, the cards sitting empty until the next 60 s refresh. 40 covers ~2 loads back
     # to back; a visitor pulling-to-refresh fires more than that. 100 is ~5 loads at once and
     # still drains in 10 s at the unchanged 600r/m, so it buys no SUSTAINED throughput — and
-    # the app's own `public` bucket (1200/min/IP) sits behind it either way. Per IP, so it is
+    # the app's own 'public' bucket (1200/min/IP) sits behind it either way. Per IP, so it is
     # not a pool-size knob: 1000 miners are 1000 buckets. The withdraw POST keeps 40 — one
     # money request per click has no fan-out to absorb.
     #
@@ -1795,6 +1807,16 @@ $admin_rules
     }
 
 ${ping_block}
+
+    # ── /play/ games platform (design §19.12) ────────────────────────────────────
+    # The pool's internal games routes (/internal/games/*, secret-guarded, loopback only)
+    # are NEVER reachable through nginx: no location here proxies them, and this explicit
+    # 404 is the second control (the app's own guard is the third).
+    location ^~ /internal/ { return 404; }
+    # The /play/ locations live in a snippet written by menu P → 3 (07_lib_pool_games.sh).
+    # A GLOB include that matches no file is not an error in nginx, so this line is safe
+    # on a box where the games were never installed — verified at VPS checkpoint A.
+    include /etc/nginx/snippets/script07-${POOL_SERVICE}-games-*.conf;
 
     location / {
         # Generous burst: a single page load pulls the HTML + ~a dozen assets (CSS, JS
@@ -2463,10 +2485,18 @@ pool_cron_schedules() {
     [[ -f "$cron_vacuum" ]] \
         && echo -e "  Weekly VACUUM : ${GREEN}enabled${RESET}  ($cron_vacuum)" \
         || echo -e "  Weekly VACUUM : ${DIM}disabled${RESET}"
+    if pgs_installed; then
+        [[ -f "$PGS_CRON_VACUUM" ]] \
+            && echo -e "  Games VACUUM  : ${GREEN}enabled${RESET}  ($PGS_CRON_VACUUM)" \
+            || echo -e "  Games VACUUM  : ${DIM}disabled${RESET}"
+    fi
 
     echo ""
     echo -e "  ${GREEN}1${RESET}) Toggle daily backup (02:00 UTC)"
     echo -e "  ${GREEN}2${RESET}) Toggle weekly SQLite VACUUM (Sunday 03:00 UTC)"
+    if pgs_installed; then
+        echo -e "  ${GREEN}3${RESET}) Toggle weekly games VACUUM (Sunday 03:30 UTC — stops the games only)"
+    fi
     echo -e "  ${DIM}0) Back${RESET}"
     echo -ne "Choice: "
     read -r cc
@@ -2509,6 +2539,9 @@ EOF
                 echo -e "    ${CYAN}$vacuum_script${RESET}"
             fi
             _pool_pause
+            ;;
+        3)
+            if pgs_installed; then pgs_vacuum_toggle || true; _pool_pause; fi
             ;;
     esac
 }
@@ -3240,6 +3273,7 @@ show_menu() {
     echo -e "  ${GREEN}9${RESET}) Deploy new code       ${DIM}(refresh js/html/media from checkout + restart)${RESET}"
     echo -e "  ${GREEN}A${RESET}) Admin recovery        ${DIM}(locked out: clear 2FA / reset password — break-glass)${RESET}"
     echo -e "  ${GREEN}W${RESET}) Multi-region          ${DIM}(WireGuard server + add regional gateways)${RESET}"
+    echo -e "  ${GREEN}P${RESET}) Play & chat (games)   ${DIM}(/play/ service: $(_pgs_menu_state)${DIM} · never restarts the pool)${RESET}"
     echo -e "  ${GREEN}B${RESET}) Backup & Restore      ${DIM}(encrypted: DB + wallet + WG identity · offsite push)${RESET}"
     echo -e "  ${GREEN}C${RESET}) Cron tasks            ${DIM}(backup schedule, VACUUM)${RESET}"
     echo -e "  ${GREEN}L${RESET}) View logs             ${DIM}(tail -50 | less)${RESET}"
@@ -3274,6 +3308,7 @@ pool_singlebox_loop() {
             9)     pool_deploy_code || true ;;
             a)     pool_admin_recovery_menu || true ;;
             w)     pool_wireguard_menu || true ;;
+            p)     pool_games_menu || true ;;
             b)     pool_backup_menu || true ;;
             c)     pool_cron_schedules || true ;;
             l)     pool_view_logs || true ;;
@@ -3285,11 +3320,11 @@ pool_singlebox_loop() {
 
         # Pause so action output stays readable before the menu redraws.
         # Skipped for: l (pager) / s (editor) — they hold their own screen — and
-        # the submenus 5/6/b/c/w, which self-manage feedback and return on their own
+        # the submenus 5/6/b/c/p/w, which self-manage feedback and return on their own
         # 0) Back. Without this, picking 0 inside a submenu would trigger a second,
         # redundant "Press Enter" here even though nothing new was shown.
         case "${choice,,}" in
-            l|s|5|6|a|b|c|w) ;;
+            l|s|5|6|a|b|c|p|w) ;;
             *) echo ""; echo "Press Enter to continue..."; read -r ;;
         esac
     done
@@ -3364,6 +3399,7 @@ pool_cleanup() {
     echo -e "    Pool service unit           $(_pool_cleanup_mark "$pool_unit")"
     echo -e "    Gateway service unit        $(_pool_cleanup_mark "$gw_unit")"
     echo -e "    Legacy satellite unit       $(_pool_cleanup_mark "$sat_unit")"
+    pgs_cleanup_marks
     echo -e "    Pool app + DB               $(_pool_cleanup_mark "$POOL_APP_DIR")"
     echo -e "    Gateway app + wg tunnel     $(_pool_cleanup_mark "$GW_DIR")"
     echo -e "    Legacy satellite app dir    $(_pool_cleanup_mark "$SAT_APP_DIR")"
@@ -3401,6 +3437,12 @@ pool_cleanup() {
         log "Cleanup: removed $POOL_SERVICE + $SAT_SERVICE + $GW_SERVICE services"
     fi
     echo ""
+
+    # 1b) /play/ games service (07_lib_pool_games.sh): service, unit, nginx snippet + zones,
+    #     web + code dirs, logrotate, VACUUM cron, link secret. Its database sits behind its
+    #     own [y/N] (1c), default KEEP — it is player history, not rebuildable state.
+    #     Runs before 4) so its nginx test still sees the pool vhost it was included from.
+    pgs_cleanup_group "1b" "1c" || true
 
     # 2) Pool app dir — includes pool.db (miner balances!) and .wallet_pass.
     # legacy_app: pre-rename installs used /opt/grin/pool — sweep it too.

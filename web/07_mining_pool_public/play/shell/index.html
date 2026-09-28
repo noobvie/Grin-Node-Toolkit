@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<!-- The /play/ shell (design §19, Part 6). Served by nginx from /var/www/grin-play[-testnet]
+     under a CSP with script-src 'self' and NO 'unsafe-inline': this file must never carry an
+     inline <script> or an on* attribute. Every script is a file.
+
+     data-untrusted-html="exempt": a rig password is typed on this page (the login card), so
+     branding.js skips the operator's analytics + raw custom HTML here and public-shell.js
+     renders no ad slots (audit §J1-1) — the same rule as the admin login page.
+
+     __GRIN_PLAY_VERSION__ is replaced at deploy (07_lib_pool_games.sh _pgs_stage_trees) with
+     the same stamp version.js carries, so a changed asset gets a new URL through any cache. -->
+<html lang="en" data-page="play" data-untrusted-html="exempt">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!-- noindex: the page is behind a mining-address login, and in `preview` mode it must stay
+         unannounced (D12). -->
+    <meta name="robots" content="noindex, nofollow">
+    <title>Play — Chess | GRINIUM Mining Pool</title>
+    <meta name="description" content="Games for the pool's miners: chess against the pool's bot or another miner, played with plays earned from mining minutes. Points are for fun and never GRIN.">
+    <link rel="icon" type="image/svg+xml" href="/images/favicon.svg">
+    <link rel="stylesheet" href="/css/dashboard.css">
+    <link rel="stylesheet" href="/css/themes.css">
+    <link rel="stylesheet" href="/css/reactor.css">
+    <link rel="stylesheet" href="/play/css/play.css?v=__GRIN_PLAY_VERSION__">
+    <script src="/play/version.js?v=__GRIN_PLAY_VERSION__"></script>
+</head>
+<body>
+  <noscript>
+    <div class="noscript-note">
+      <b>JavaScript is required.</b> The games run in the browser, so with scripts blocked this
+      page stays empty.
+    </div>
+  </noscript>
+
+    <!-- header injected by /js/public-shell.js -->
+
+    <main class="wrap" id="main" tabindex="-1">
+        <div class="deck-head">
+            <div>
+                <h1>🎮 Play</h1>
+                <div class="sub">Chess against the pool's bot or another miner &middot; plays come from your mining minutes &middot; points are for fun, never GRIN <span class="dim">(all times UTC)</span></div>
+            </div>
+        </div>
+
+        <p class="play-loading" id="play-loading" role="status">Loading the games…</p>
+
+        <!-- ═══ Offline / closed ═══ Shown for any non-JSON answer (a stopped service is nginx's
+             502 page), a network error, or mode `off` (the API answers 404). -->
+        <section class="panel play-offline" id="play-offline" hidden>
+            <span class="screws"></span>
+            <h2 class="panel-title"><span class="tag">G-00</span> <span id="play-offline-title">Games are offline</span></h2>
+            <div class="panel-body">
+                <p id="play-offline-text">The games could not be reached. Mining is not affected.</p>
+                <button type="button" class="btn sm" id="play-retry">Try again</button>
+            </div>
+        </section>
+
+        <!-- ═══ Sign in ═══ -->
+        <section class="panel" id="play-login" hidden>
+            <span class="screws"></span>
+            <h2 class="panel-title"><span class="tag">G-01</span> Sign in with your mining address</h2>
+            <div class="panel-body">
+                <!-- The inputs carry no `name`: if a script ever failed to intercept the submit,
+                     the browser would send nothing, never the proof. -->
+                <form id="login-form" class="play-login-form" novalidate autocomplete="off">
+                    <div class="field">
+                        <label for="login-address">The GRIN address your rigs mine to</label>
+                        <input class="input" type="text" id="login-address" maxlength="80" spellcheck="false" autocapitalize="off" autocomplete="off" placeholder="grin1…">
+                    </div>
+                    <div class="field">
+                        <label for="login-proof">A recent mining IP <b>or</b> your rig's stratum password</label>
+                        <span class="play-proof-wrap">
+                            <input class="input" type="password" id="login-proof" maxlength="128" spellcheck="false" autocapitalize="off" autocomplete="off" placeholder="e.g. 203.0.113.42, or your rig password">
+                            <button type="button" class="btn sm" id="login-reveal" aria-pressed="false" aria-controls="login-proof">Show</button>
+                        </span>
+                    </div>
+                    <ul class="play-hints">
+                        <li><b>IP:</b> sign in from the network your rigs mine from — any IP they sent accepted shares from recently counts.</li>
+                        <li><b>Password:</b> the password in your rig's pool config. Common ones (<code>x</code>, <code>123</code>, <code>d=…</code>) and anything under 8 characters are <b>never</b> recorded as proof, so with one of those you can sign in by IP only.</li>
+                        <li>The pool checks the proof and tells the games yes or no. The games never store it.</li>
+                        <li><b>Good to know:</b> anyone who can give one of these proofs signs in as the address — someone who mined a few shares to it, or who shares your public IP. They could spend your plays or play games in your name. Plays and points are worth nothing outside the games, so this is accepted; chat asks for an older proof.</li>
+                    </ul>
+                    <div class="play-actions">
+                        <button type="submit" class="btn primary" id="login-submit">Sign in</button>
+                        <a href="/#rx-miner-guide">Set a rig password → Miner setup</a>
+                    </div>
+                    <div class="acct-msg" id="login-msg" role="alert"></div>
+                </form>
+            </div>
+        </section>
+
+        <!-- ═══ Signed in: the account strip ═══ -->
+        <section id="play-account" hidden aria-label="Your games account">
+            <div class="placard figures">
+                <span class="tone-ok"><i>Plays</i><b id="acct-plays">—</b></span>
+                <span class="tone-gold"><i>Points</i><b id="acct-points">—</b></span>
+                <span class="tone-info t-words"><i>Signed in as</i><b id="acct-addr">—</b></span>
+            </div>
+            <p class="play-badges" id="acct-badges" hidden></p>
+            <!-- Nickname (design §19.16): play-names.js fills this from /me. Every name is
+                 reviewed before anyone else sees it, and is always shown WITH the mask. -->
+            <details class="play-fold play-nick" id="nick-fold" hidden>
+                <summary>Nickname: <span id="nick-state">none</span></summary>
+                <p class="play-nick-line">Others see you as <b id="nick-shown">—</b></p>
+                <p class="play-nick-line" id="nick-pending" hidden></p>
+                <p class="play-nick-line play-nick-refused" id="nick-refused" hidden></p>
+                <form id="nick-form" class="play-nick-form" novalidate autocomplete="off">
+                    <label for="nick-input" class="play-chat-label">Ask for a nickname</label>
+                    <div class="play-chat-compose">
+                        <input class="input" type="text" id="nick-input" maxlength="20" spellcheck="false" autocapitalize="off" autocomplete="off" placeholder="e.g. Night Shift">
+                        <button type="submit" class="btn primary sm" id="nick-submit">Send for review</button>
+                    </div>
+                </form>
+                <p class="hint" id="nick-rule"><span id="nick-rule-text">2–20 characters: letters, digits, spaces and - _ &amp; ' only, with at least one letter</span>. The pool reviews every nickname before anyone else sees it, and it always shows with your masked address — e.g. <code>Night Shift (grin1abcd…wxyz)</code> — so nobody can pass as you by copying it.</p>
+                <p class="play-chat-gate" id="nick-gate" hidden></p>
+                <span class="play-account-btns">
+                    <button type="button" class="btn sm" id="nick-withdraw" hidden>Withdraw request</button>
+                    <button type="button" class="btn sm" id="nick-remove" hidden>Remove my nickname</button>
+                </span>
+                <div class="acct-msg" id="nick-msg" role="alert"></div>
+            </details>
+            <div class="play-account-bar">
+                <details class="play-fold" id="sessions-fold">
+                    <summary><span id="acct-sessions">Signed-in devices</span></summary>
+                    <ul class="play-sessions" id="sessions-list"></ul>
+                </details>
+                <span class="play-account-btns">
+                    <button type="button" class="btn sm" id="btn-logout">Log out</button>
+                    <button type="button" class="btn sm" id="btn-logout-all">Log out everywhere</button>
+                </span>
+            </div>
+            <div class="acct-msg" id="account-msg" role="alert"></div>
+        </section>
+
+        <!-- ═══ The board + the side column ═══ -->
+        <div class="play-grid" id="play-game-area" hidden>
+            <section class="panel play-board-panel">
+                <span class="screws"></span>
+                <h2 class="panel-title"><span class="tag">G-02</span> <span id="board-title">Board</span> <span class="right" id="board-sub"></span></h2>
+                <div class="panel-body">
+                    <div class="play-status" id="board-status" role="status" aria-live="polite"></div>
+                    <div class="play-frame-slot" id="frame-slot">
+                        <p class="play-frame-empty" id="frame-empty">Start a game, or open one of yours.</p>
+                    </div>
+                    <!-- Which buttons show is the server's call: the match view's `actions` list. -->
+                    <div class="play-board-actions">
+                        <button type="button" class="btn sm primary" id="btn-accept" hidden>Accept</button>
+                        <button type="button" class="btn sm" id="btn-decline" hidden>Decline</button>
+                        <button type="button" class="btn sm" id="btn-cancel" hidden>Cancel seek</button>
+                        <button type="button" class="btn sm primary" id="btn-draw-accept" hidden>Accept draw</button>
+                        <button type="button" class="btn sm" id="btn-draw-decline" hidden>Decline draw</button>
+                        <button type="button" class="btn sm" id="btn-draw-offer" hidden>Offer a draw</button>
+                        <button type="button" class="btn sm" id="btn-abort" hidden>Abort</button>
+                        <button type="button" class="btn sm" id="btn-resign" hidden>Resign</button>
+                        <span class="dim" id="board-deadline"></span>
+                    </div>
+                    <div class="acct-msg" id="board-msg" role="alert"></div>
+                </div>
+            </section>
+
+            <div class="play-side">
+                <section class="panel" id="new-panel">
+                    <span class="screws"></span>
+                    <h2 class="panel-title"><span class="tag">G-03</span> New game vs the bot</h2>
+                    <div class="panel-body">
+                        <form id="new-form" novalidate>
+                            <!-- Shown only when more than one game offers bot play. -->
+                            <div class="field" id="new-game-field" hidden>
+                                <label for="new-game">Game</label>
+                                <select class="input" id="new-game"></select>
+                            </div>
+                            <div class="field">
+                                <label for="new-level">Bot level</label>
+                                <select class="input" id="new-level"></select>
+                            </div>
+                            <div class="field">
+                                <label for="new-colour">You play</label>
+                                <select class="input" id="new-colour">
+                                    <option value="random">Either colour (random)</option>
+                                    <option value="seat1">White (you move first)</option>
+                                    <option value="seat2">Black</option>
+                                </select>
+                            </div>
+                            <p class="hint">A game costs a play. Winning pays points by level; a draw pays half.</p>
+                            <button type="submit" class="btn primary" id="new-submit">Start game</button>
+                            <div class="acct-msg" id="new-msg" role="alert"></div>
+                        </form>
+                    </div>
+                </section>
+
+                <!-- ═══ Play a person ═══ (design §19.8, Part 10) Correspondence pace: days per move,
+                     no need to be online together. play-lobby.js drives it; names are masks. -->
+                <section class="panel" id="lobby-panel">
+                    <span class="screws"></span>
+                    <h2 class="panel-title"><span class="tag">G-08</span> Play a person</h2>
+                    <div class="panel-body">
+                        <form id="pvp-form" novalidate autocomplete="off">
+                            <!-- Shown only when more than one game offers play between people. -->
+                            <div class="field" id="pvp-game-field" hidden>
+                                <label for="pvp-game">Game</label>
+                                <select class="input" id="pvp-game"></select>
+                            </div>
+                            <div class="field">
+                                <label for="pvp-target">Opponent's GRIN address <span class="dim">(optional)</span></label>
+                                <input class="input" type="text" id="pvp-target" maxlength="80" spellcheck="false" autocapitalize="off" autocomplete="off" placeholder="leave empty for an open seek">
+                            </div>
+                            <div class="field">
+                                <label for="pvp-colour">You play</label>
+                                <select class="input" id="pvp-colour">
+                                    <option value="random">Either colour (random)</option>
+                                    <option value="seat1">White (you move first)</option>
+                                    <option value="seat2">Black</option>
+                                </select>
+                            </div>
+                            <div class="field">
+                                <label for="pvp-time">Time per move</label>
+                                <select class="input" id="pvp-time"></select>
+                            </div>
+                            <p class="hint" id="pvp-hint">Empty address = an open seek anyone can take. Each side pays a play; it comes back if nobody accepts within 3 days, or if the game is aborted before both sides have moved.</p>
+                            <button type="submit" class="btn primary" id="pvp-submit">Post the game</button>
+                            <div class="acct-msg" id="pvp-msg" role="alert"></div>
+                        </form>
+
+                        <h3 class="play-sub">Challenges for you</h3>
+                        <ul class="play-mine" id="lobby-challenges"></ul>
+                        <p class="dim" id="lobby-challenges-empty">None right now.</p>
+
+                        <h3 class="play-sub">Open seeks</h3>
+                        <ul class="play-mine" id="lobby-seeks"></ul>
+                        <p class="dim" id="lobby-seeks-empty">No open seeks. Post one above.</p>
+                        <button type="button" class="btn sm" id="lobby-refresh">Refresh</button>
+                        <div class="acct-msg" id="lobby-msg" role="alert"></div>
+                    </div>
+                </section>
+
+                <section class="panel" id="mine-panel">
+                    <span class="screws"></span>
+                    <h2 class="panel-title"><span class="tag">G-04</span> My games <span class="right play-turns" id="mine-turns"></span></h2>
+                    <div class="panel-body">
+                        <ul class="play-mine" id="mine-list"></ul>
+                        <p class="dim" id="mine-empty" hidden>No games yet.</p>
+                        <button type="button" class="btn sm" id="mine-more" hidden>Older games</button>
+                    </div>
+                </section>
+            </div>
+        </div>
+
+        <!-- ═══ Leaderboards + events ═══ (design §19.9) Public while the games are open, so it
+             shows signed in or out; play-boards.js drives it. Names are the pool mask only. -->
+        <section class="panel" id="play-boards" hidden>
+            <span class="screws"></span>
+            <h2 class="panel-title"><span class="tag">G-06</span> Leaderboards &amp; events</h2>
+            <div class="panel-body">
+                <div class="play-tabs" role="tablist" aria-label="Leaderboards and events">
+                    <button type="button" class="play-tab" role="tab" id="tab-boards" aria-selected="true" aria-controls="pane-boards">Leaderboards</button>
+                    <button type="button" class="play-tab" role="tab" id="tab-events" aria-selected="false" aria-controls="pane-events" tabindex="-1">Events</button>
+                </div>
+
+                <div id="pane-boards" role="tabpanel" aria-labelledby="tab-boards">
+                    <div class="play-board-controls">
+                        <div class="field">
+                            <label for="lb-board">Board</label>
+                            <select class="input" id="lb-board"><option value="points">Points held — all time</option></select>
+                        </div>
+                        <div class="field">
+                            <label for="lb-period">Period</label>
+                            <select class="input" id="lb-period">
+                                <option value="day">Today</option>
+                                <option value="week">This week</option>
+                                <option value="month">This month</option>
+                                <option value="all" selected>All time</option>
+                            </select>
+                        </div>
+                        <button type="button" class="btn sm" id="lb-refresh">Refresh</button>
+                    </div>
+                    <p class="dim play-board-note" id="lb-note"></p>
+                    <div class="play-rank-wrap">
+                        <table class="play-rank">
+                            <thead><tr><th scope="col">#</th><th scope="col">Player</th><th scope="col" id="lb-unit">Points</th></tr></thead>
+                            <tbody id="lb-rows"></tbody>
+                        </table>
+                    </div>
+                    <p class="dim" id="lb-empty" hidden>Nobody is on this board yet.</p>
+                    <p class="play-you" id="lb-you" hidden></p>
+                    <div class="acct-msg" id="lb-msg" role="alert"></div>
+                </div>
+
+                <div id="pane-events" role="tabpanel" aria-labelledby="tab-events" hidden>
+                    <ul class="play-events" id="ev-list"></ul>
+                    <p class="dim" id="ev-empty" hidden>No events right now. When the pool runs a competition it appears here.</p>
+                    <div class="play-event-detail" id="ev-detail" hidden>
+                        <h3 class="play-event-title"><span id="ev-title"></span> <span id="ev-state"></span></h3>
+                        <p class="dim" id="ev-desc"></p>
+                        <p class="play-event-when" id="ev-when"></p>
+                        <ul class="play-hints" id="ev-rewards"></ul>
+                        <div class="play-rank-wrap">
+                            <table class="play-rank">
+                                <thead><tr><th scope="col">#</th><th scope="col">Player</th><th scope="col" id="ev-unit">Value</th><th scope="col">Reward</th></tr></thead>
+                                <tbody id="ev-rows"></tbody>
+                            </table>
+                        </div>
+                        <p class="dim" id="ev-rows-empty" hidden></p>
+                        <p class="dim play-board-note" id="ev-note"></p>
+                        <p class="play-you" id="ev-you" hidden></p>
+                        <button type="button" class="btn sm" id="ev-back">← All events</button>
+                    </div>
+                    <div class="acct-msg" id="ev-msg" role="alert"></div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ═══ Chat ═══ (design §19.10, Part 9) Public to read while the games are open and the
+             pool's chat switch is on; posting needs a chat-capable session. play-chat.js drives
+             it. Every message is written with textContent — a body is plain text, a link in it
+             is inert text, and the only badges (Operator, Mod) come from the server's role. -->
+        <section class="panel" id="play-chat" hidden>
+            <span class="screws"></span>
+            <h2 class="panel-title"><span class="tag">G-07</span> Chat <span class="right dim" id="chat-sub"></span></h2>
+            <div class="panel-body">
+                <p class="play-chat-warn"><b>The operator will never ask you for funds, keys or seeds in chat.</b> Names are masked addresses, and a mask can be imitated: only the <span class="play-chat-badge is-operator">Operator</span> badge is proof.</p>
+                <p class="dim" id="chat-closed" hidden>Chat is closed right now.</p>
+                <ol class="play-chat-list" id="chat-list" aria-label="Chat messages"></ol>
+                <p class="dim" id="chat-empty" hidden>No messages yet. Say hello.</p>
+                <form id="chat-form" class="play-chat-form" novalidate hidden>
+                    <label for="chat-input" class="play-chat-label">Your message <span class="dim" id="chat-count">0 / 280</span></label>
+                    <div class="play-chat-compose">
+                        <input class="input" type="text" id="chat-input" maxlength="280" autocomplete="off" spellcheck="true">
+                        <button type="submit" class="btn primary sm" id="chat-send">Send</button>
+                    </div>
+                </form>
+                <p class="play-chat-gate" id="chat-gate" hidden></p>
+                <div class="acct-msg" id="chat-msg" role="alert"></div>
+
+                <!-- Moderators (D21): addresses the operator appointed. Shown only to them. -->
+                <details class="play-fold play-mod" id="mod-fold" hidden>
+                    <summary>Moderator queue <span id="mod-count"></span></summary>
+                    <p class="dim" id="mod-note">Held and reported messages. Approve keeps a message; Delete removes it for everyone; Mute silences its author for an hour. Everything you do is logged for the operator.</p>
+                    <ul class="play-mod-list" id="mod-list"></ul>
+                    <p class="dim" id="mod-empty" hidden>Nothing is waiting.</p>
+                    <button type="button" class="btn sm" id="mod-refresh">Refresh</button>
+                    <div class="acct-msg" id="mod-msg" role="alert"></div>
+                </details>
+            </div>
+        </section>
+
+        <!-- ═══ How it works ═══ The numbers in the HTML are the DEFAULTS; play-chat.js replaces
+             the #rule-* spans with the live values from GET /play/api/rules. -->
+        <section class="panel" id="play-how">
+            <span class="screws"></span>
+            <h2 class="panel-title"><span class="tag">G-05</span> How plays are earned</h2>
+            <div class="panel-body">
+                <details class="play-fold">
+                    <summary>Plays, points and fair play</summary>
+                    <ul class="play-hints">
+                        <li><b>Plays come from mining minutes, not hashrate.</b> Every minute your address has an active miner at this pool counts. <span id="rule-plays">By default 10 active minutes earn 1 play, up to 24 plays a UTC day and 100 held at once</span> — the same for a small miner and a large one. New plays appear within about 5 minutes.</li>
+                        <li><b>A game costs a play.</b> <span id="rule-cost">By default one game against the bot costs 1 play.</span> <span id="rule-pvp-cost">A game against another miner costs each side a play;</span> it is refunded if nobody accepts within 3 days, or if the game is aborted before both sides have moved.</li>
+                        <li><b>Games against people are rated.</b> <span id="rule-pvp">By default the first 3 games a UTC day between the same two addresses are rated: they move the Elo rating and pay 10 points for a win, 5 for a draw.</span> Further games that day still count as games, not as points, ratings or leaderboard wins. The engine cannot tell whether someone had help; points are for fun.</li>
+                        <li><b>Points are for fun.</b> A win against the bot pays 1, 2 or 3 points by level; a draw pays half, rounded down. Points are capped per day, and they are <b>never</b> GRIN: they cannot be paid out, sold or moved to another address.</li>
+                        <li><b>The server keeps the board.</b> Every move is checked by the pool's games service; the board in your browser only draws it. You have a few days per move — run out and the game is lost.</li>
+                        <li><b>Events</b> are competitions between addresses — most mining minutes, most active days, most wins against the bot. They run on whole UTC days, and the rewards are points and badges, never GRIN.</li>
+                        <li><b>Chat</b> is for the pool's active miners. <span id="rule-chat">By default you need an hour of mining in the last 7 days, and a sign-in proof at least a day old, so someone who only just mined to your address cannot post as you.</span> Links are held for review and never clickable.</li>
+                        <li>Your address is shown to others masked, the way the pool's own pages show it (<code>grin1abcd…wxyz</code>). You can ask for a <b>nickname</b>: the pool reviews it first, and it always shows together with the mask (<code>Night Shift (grin1abcd…wxyz)</code>), never on its own.</li>
+                    </ul>
+                </details>
+            </div>
+        </section>
+    </main>
+
+    <!-- footer injected by /js/public-shell.js -->
+
+    <script src="/js/public-shell.js"></script>
+    <script src="/js/public-theme.js"></script>
+    <script src="/js/branding.js"></script>
+    <script src="/play/js/play-api.js?v=__GRIN_PLAY_VERSION__"></script>
+    <script src="/play/js/frame-host.js?v=__GRIN_PLAY_VERSION__"></script>
+    <script src="/play/js/play-shell.js?v=__GRIN_PLAY_VERSION__"></script>
+    <script src="/play/js/play-boards.js?v=__GRIN_PLAY_VERSION__"></script>
+    <script src="/play/js/play-chat.js?v=__GRIN_PLAY_VERSION__"></script>
+    <script src="/play/js/play-lobby.js?v=__GRIN_PLAY_VERSION__"></script>
+    <script src="/play/js/play-names.js?v=__GRIN_PLAY_VERSION__"></script>
+</body>
+</html>

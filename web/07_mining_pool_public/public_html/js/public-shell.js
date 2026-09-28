@@ -57,7 +57,12 @@
     { label: 'Prize Pool', icon: '🎁', incentives: true, children: [
       { href: 'fortune-board.html',  label: 'Fortune Board', icon: '🏆' },
       { href: 'donate.html',         label: 'Contribute',    icon: '💚' }
-    ] }
+    ] },
+    // The /play/ games platform (design §19). `games: true` renders it HIDDEN, with
+    // data-games, and branding.js applyGamesNav shows it only when the branding payload says
+    // games.mode === 'on' — the opposite default of `incentives`. Absolute href: /play/ is
+    // served from its own docroot, not this one.
+    { href: '/play/',                label: 'Play',          icon: '🎮', games: true }
   ];
   // "Account", not "My Stats": the page's <title> and <h1> both say Account, and it is
   // where withdrawals happen. Rendered as a chip in .nav-right, not in NAV: it is the only
@@ -67,12 +72,18 @@
   // Blog is intentionally NOT in NAV (header) — it lives in the footer "Resources"
   // column only, to keep the header focused on critical mining/stats links.
 
-  function currentFile() {
-    var f = (location.pathname || '/').split('/').pop();
-    return f ? f.replace(/[?#].*$/, '') : 'index.html';
+  // Every link this script renders is SITE-ABSOLUTE ('/blog.html', never 'blog.html'). The
+  // header is mounted on pages that do not live at the docroot: blog permalinks are served
+  // at /blog/<slug> and the games shell at /play/ (design §19). A relative href resolved
+  // under those paths — /blog/index.html, /play/donate.html — so until 2026-09-27 every
+  // header and footer link on a blog permalink was a 404.
+  function abs(href) { return /^\//.test(href) ? href : '/' + href; }
+  function currentPath() {
+    var p = location.pathname || '/';
+    return p === '/' ? '/index.html' : p;
   }
-  // The href's file part (strip any #anchor) for active-link comparison.
-  function fileOf(href) { return String(href).replace(/[?#].*$/, ''); }
+  // The href's site path (strip any ?query/#anchor) for active-link comparison.
+  function fileOf(href) { return abs(String(href).replace(/[?#].*$/, '')); }
 
   function esc(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
@@ -80,13 +91,19 @@
     });
   }
 
-  var here = currentFile();
+  var here = currentPath();
+
+  // A games-gated link starts hidden (inline display:none — .nav-link sets its own display in
+  // CSS, which beats the UA [hidden] rule) so it never flashes before the branding fetch.
+  function gamesAttrs(l) {
+    return l.games ? ' data-games="1" style="display:none"' : '';
+  }
 
   // Render one leaf link (also used for the items inside a group dropdown).
   function leafLink(l, extraClass) {
     var active = fileOf(l.href) === here ? ' active' : '';
     var cls = 'nav-link' + (extraClass ? ' ' + extraClass : '') + active;
-    return '<a href="' + l.href + '" class="' + cls + '" title="' + esc(l.label) + '">' +
+    return '<a href="' + abs(l.href) + '" class="' + cls + '" title="' + esc(l.label) + '"' + gamesAttrs(l) + '>' +
       '<span class="nav-ico" aria-hidden="true">' + (l.icon || '') + '</span>' +
       '<span class="nav-label">' + esc(l.label) + '</span>' +
     '</a>';
@@ -147,10 +164,10 @@
   // the Resources column's "Get Started" was dropped, but a footer row reading just
   // "Home" is a weak link — every page already carries the 🏠 Home item in the header
   // nav, which is where people look for it.
-  var POOL_COL_SKIP = { 'blog.html': 1, 'index.html': 1, 'fortune-board.html': 1, 'donate.html': 1 };
+  var POOL_COL_SKIP = { '/blog.html': 1, '/index.html': 1, '/fortune-board.html': 1, '/donate.html': 1 };
   var poolCol = poolLeaves.filter(function (l) { return !POOL_COL_SKIP[fileOf(l.href)]; })
     .map(function (l) {
-      return '<a href="' + l.href + '">' + esc(l.label) + '</a>';
+      return '<a href="' + abs(l.href) + '"' + gamesAttrs(l) + '>' + esc(l.label) + '</a>';
     }).join('');
 
   var footer = document.createElement('footer');
@@ -175,10 +192,10 @@
         // right below it (moved out of the Pool column to keep the columns balanced).
         // Both carry data-incentives: hidden with the header's Prize Pool group when the
         // operator has incentives off (branding.js applyIncentivesNav).
-        '<a class="footer-donate" href="donate.html" data-incentives="1">' +
+        '<a class="footer-donate" href="/donate.html" data-incentives="1">' +
           '<span class="footer-donate-ico" aria-hidden="true">❤</span> Donate' +
         '</a>' +
-        '<a class="footer-fortune" href="fortune-board.html" data-incentives="1">' +
+        '<a class="footer-fortune" href="/fortune-board.html" data-incentives="1">' +
           '<span class="footer-fortune-ico" aria-hidden="true">🎁</span> Fortune Board' +
         '</a>' +
       '</div>' +
@@ -194,8 +211,8 @@
       // resource — operators who want credit have the "Powered by" attribution setting).
       '<div class="footer-col">' +
         '<h4>Resources</h4>' +
-        '<a href="blog.html">Blog</a>' +
-        '<a href="api-docs.html">API Docs</a>' +
+        '<a href="/blog.html">Blog</a>' +
+        '<a href="/api-docs.html">API Docs</a>' +
         '<div data-brand="page-links-info"></div>' +
       '</div>' +
       // Legal + contact (page-links injected by branding.js from the CMS)
@@ -353,17 +370,23 @@
     document.querySelectorAll('body > header, body > footer').forEach(function (el) { el.remove(); });
     document.body.insertBefore(header, document.body.firstChild);
     document.body.insertBefore(skipLink(), header);
+    // No ads where a credential is typed. A `code` ad is operator HTML/JS that ads.js
+    // re-creates as executing <script> nodes — the same sink branding.js keeps off these
+    // pages for custom_head_html (audit §J1-1), under the same opt-out attribute. The games
+    // shell (/play/, a rig password in its login card) sets it; its CSP would also refuse
+    // an ad network's script, as a console full of violations.
+    var noAds = document.documentElement.getAttribute('data-untrusted-html') === 'exempt';
     // Header ad slot directly after the header.
-    header.insertAdjacentElement('afterend', adSlot('header'));
+    if (!noAds) header.insertAdjacentElement('afterend', adSlot('header'));
     // Footer ad slot directly before the footer.
-    document.body.appendChild(adSlot('footer'));
+    if (!noAds) document.body.appendChild(adSlot('footer'));
     document.body.appendChild(footer);
     startBrandSwing();
     wireNavGroups();
     enhanceFooter();
 
     // Load the ad renderer once (it fills every [data-ad-slot] on the page).
-    if (!document.getElementById('ads-js')) {
+    if (!noAds && !document.getElementById('ads-js')) {
       var s = document.createElement('script');
       s.id = 'ads-js';
       s.src = '/js/ads.js';

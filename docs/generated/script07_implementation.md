@@ -1,13 +1,13 @@
 # Script 07 — Public Mining Pool (Implementation)
 
-> **Covers code as of:** 2026-09-07, except §8.7 and the §4/§8.2/§11 rows that point at it (2026-09-23, the uncommitted hub-move + latency working tree) and §10.6 (2026-09-24, the uncommitted §18 Parts 1–6 working tree) and §10.7 (2026-09-24, the uncommitted explorer-setting working tree) and §10.8 plus the §2 auto-payout / chain-watch / Tor-send rows, D10 and the §3 scheduler rows (2026-09-25, the uncommitted Tor-payout-hardening working tree) and §10.9 (2026-09-25, the uncommitted account-page payout-feedback working tree) and §10.10 plus the §2 "Tor send method" / "Auto-payout" rows, the two §3 withdrawal rows and the dated notes heading §10.5, §10.8 and closing §10.9 (2026-09-26, the uncommitted one-attempt Tor payout working tree) and §10.10 *Review fixes* plus the §3 scheduler-loop row (2026-09-27, the uncommitted /review-fix working tree) and §10.10 *Slatepack finalize binding* (2026-09-27, the uncommitted binding-fix working tree) and §10.11 plus the §3 scheduler-loop row (2026-09-27, the uncommitted expiry-gate working tree) and §10.12 (2026-09-27, the uncommitted admin-Miners-page working tree) · **Last verified:** 2026-09-27, PARTIAL — **§10.12 only, by the session that built it**: written against the code as edited that session (`lib/miner-status.js` in full, the two `index.js` routes, `miners.html`, the `admin-shell.js` `urlQuery` option); the query plans run with `EXPLAIN QUERY PLAN` on the real schema; `npm test` exit 0 with `test-admin-miners.js` 36/36 and `test-admin-panel.js` 138/138; two one-shot jsdom renders of `miners.html` against stubbed API data (expand, refresh, chips, sort, ban dialog, `?q=`; then the per-row fetch cadence and one-Submit-one-ban), after a same-day review pass that re-read every file and rationed the per-row refresh; nothing run on a VPS or in a real browser. Before that: 2026-09-27, PARTIAL — **§10.11 and the §3 scheduler-loop row only, by the session that built them**: written against the code as edited that session (`processSlatepackExpiry` / `_expiryVerdict` / `_journalExpiryHold` / `_noteExpiryGate` / `_resolveQuietAlert`, `foldPayoutAlerts`, NEW `lib/grin-wallet-version.js`, the `index.js` health fold, `health.html`, `settings-payout.html`, `_pw_tor_exposure_check`); the grin-wallet v5.5.0 facts read in a local clone of tag `v5.5.0` (`ffcdf78`) that session; the G checks seen failing on the pre-gate scheduler (16 failed, section crashed); the torrc pattern run against ten sample lines; `bash -n` on the lib. `npm test` exit 0 (syntax check + every unit suite), 2041 PASS/ok lines, a total that also counts the concurrent admin-cancel change's checks; then, for §10.11 *Follow-ups*, the D checks seen failing on the committed `alert-monitor.js` and `npm test` exit 0 at 2055; nothing run on a VPS. Before that: 2026-09-27, PARTIAL — **§10.10 *Admin cancel on `tor_failed`* only, by the session that made it**: the cancel route, the `/balance/log` handler, `payments.html` and the account ledger's `eventLabel` read after the edit; the four `tor_failed` readers it names read in `lib/reconciliation.js`, `lib/withdrawal-scheduler.js` and `lib/alert-monitor.js`. Same day, PARTIAL — **§10.10 *Slatepack finalize binding* only, by the session that found and fixed it**: both finalize paths read in `lib/withdrawal-scheduler.js` after the edit, and in the committed `HEAD` for the old version; grin-wallet v5.5.0 `libwallet/src/internal/updater.rs` `cancel_tx_and_outputs`, `libwallet/src/api_impl/foreign.rs` `finalize_tx` and `libwallet/src/internal/tx.rs` `cancel_tx` / `update_stored_tx` read in the upstream source that session; the 8 B checks seen failing on the old code; `npm test` exit 0, PASS/ok lines 1991 → 2003. Same day, PARTIAL — **§10.10 *Review fixes* and the §3 scheduler-loop row only, by the session that made those fixes**: each rule read in `lib/withdrawal-scheduler.js`, `lib/wallet-tor.js` and `lib/reconciliation.js` after the edit; the grin-wallet v5.5.0 facts it rests on (`src/cmd/wallet.rs`, `controller/src/command.rs` `send` / `output_slatepack`, `api/src/owner.rs` `try_slatepack_sync_workflow`, `libwallet/src/internal/selection.rs` `select_coins` / `lock_tx_context`, `libwallet/src/api_impl/owner.rs` `cancel_tx`, `libwallet/src/api_impl/types.rs` `update_tx_slate_state`, `config/src/types.rs` timeouts) and grin v5.4.0 `util/src/logger.rs` fetched raw from GitHub that session; every new non-control check seen failing on the old code, the two F4h guard checks by mutation; `npm test` exit 0, PASS/ok lines 1943 → 1991. 2026-09-26, PARTIAL — **§10.10 *Pre-test review fix* and the *Still open* items it added only, by the pre-test review session**: the argv read in `lib/wallet-tor.js` after the edit; the v5.5.0 `grin-wallet.yml` (clap 2.34 per `Cargo.lock`), `controller/src/command.rs` `send` / `output_slatepack`, `config/src/types.rs` `TorConfig`, `config/src/config.rs`, `impls/src/adapters/tor.rs` and `impls/src/tor/process.rs` fetched raw from GitHub that session; the new argv checks seen failing on the old code (8) with both controls passing; `npm test` exit 0, 21 suites, 1942 checks. Same day, PARTIAL — **§10.10 *Follow-up fixes* and its *Still open* list only, by the session that made those fixes**: each fix written against its own test, seen failing before and passing after; `npm test` exit 0, 21 suites, 1932 checks; the nginx heredoc rendered with dummy values; the grin-wallet v5.5.0 `StoredProofInfo` / `dalek_pubkey_serde` / `lock_tx_context` facts read in the upstream source that session. Same day, PARTIAL — **§10.10 and the edits listed above only, by the one-attempt docs-fold session**. Read in the working tree that session: the scheduler constants; `sendWithdrawal`, `_settleFailedTorSend`, `_holdTor`, `_priorSendLanded`, `_txRecipientNano`, `_torAttemptWindows`, `_otherTorAttemptAt`, `reclaimStaleTorSending`, `resolveHeldTor`, `_heldAbsentSince`, `_raiseHeldAlert`, `forceRefundHeld`, `migrateLegacyTorRetries`, `torPauseStatus`, `clearTorPause`, `_assertNoRecentReversal` and `createWithdrawal`'s pause copy; the `index.js` 410 retry stub, recheck, force-refund, cancel, pause 429 and pause-clear routes and the `tor_held` status lists; `walletBin` and the 300-char stdout tail in `lib/wallet-tor.js`; the `lib/db.js` columns; the `payout_failed` codes in `lib/alert-monitor.js`; reconciliation's two lists; and the pool unit (no `KillMode`, `Restart=on-failure`). The front-end claims were **grepped** (the ids, functions and admin routes exist), not re-run. `npm test` re-run: exit 0, 21 suites, 1900 checks, with the five touched suites at the counts in §10.10. **Taken from the build and review sessions' reports, not re-checked:** the grin-wallet v5.5.0 source facts (`lock_tx_context`, `FeeFields`, `StoredProofInfo`), the R1 reproduction, every revert and mutation count, the headless probe, and the per-session suite counts before this one. 2026-09-25, PARTIAL — **§10.9 only, by the session that built it**: written against the code as edited that session, `npm test` re-run (exit 0), the four pages' inline scripts parsed, headless-Chrome screenshots at 1392 px and 390/760 px iframes; the polling path NOT run against a live backend. 2026-09-25, PARTIAL — **§10.8 *Independent review* only, by the Part 8 review session**: its two fixes read in `lib/withdrawal-scheduler.js` after the edit; the two bugs' cases (R1–R4) seen failing before the fix, and every new case seen failing with its guard removed in a scratch copy; `npm test` re-run, exit 0. Same day, PARTIAL — **§10.8, the three §2 rows, D10 and the two §3 rows only, by the Tor-payout-hardening docs-fold session**: the constants, alert types, event-note prefixes, journal strings, `chain_state` classes, the `repost -i <id> -f` argv, the `method = 'tor'` proof-backfill filter, the settings key/validator/`applyToConfig`, the two `lib/db.js` columns, the `index.js` health fold and admin-row strip, the `health.html` Critical badge and the `payments.html` `CHAIN` map were read in the working tree that session, and `withdrawal_retry_delays` was grepped absent from every admin page; `npm test` re-run, exit 0, with the five touched suites at the counts quoted in §10.8. **Taken from the build sessions' reports, not re-checked:** the grin-wallet source citations (v5.4.1 / v5.5.0), the revert-proofs and mutation counts, and deviations (a)–(f). 2026-09-24, PARTIAL — **§10.7 only, by the explorer-setting docs-fold session**: written against the code as read that session (`lib/explorers.js` in full, the `index.js` resolve helper + the three publishing routes + `/api/admin/blocks`, `lib/pool-settings.js` default/validator/`buildPublicConfig`, the `window.Explorer` block and primer in `branding.js` and `admin-shell.js`, the `blocks.html` primer, the Branding select + its testnet script, and every `Explorer.link` call site grepped); `npm test` re-run, exit 0, `test-explorers.js` 198/198. The Part 3 relink finding and the audit-row correction are taken from the code comments and the plan, not from a review report. Same day, PARTIAL — **§10.6 *Part 6* only, by the §18 Part 6 review session**: its fix read in `index.js` and the page, its two new checks seen failing before the edit and passing after, `npm test` re-run (1345/1345, 20 suites); the same session re-ran `npm test` before any edit and found every §10.6 Part 1–5 total and per-suite count exact (1343), but did **not** re-verify the rest of those Part notes' prose. Same day, PARTIAL — **§10.6 *Part 5* only, by the §18 Part 5 build session**: written against the code as edited that session, with `npm test` re-run (1343/1343, 20 suites) and a one-shot 390 px headless-Edge probe of `account-settings.html` in both themes (0 overflow, four fixtures). Same day, PARTIAL — **§10.6 *Part 4* only, by the §18 Part 4 build session**: written against the code as edited that session, with `npm test` re-run (1331/1331, 20 suites) and a one-shot 390 px + 1280 px headless-Edge probe of `donate.html` in both themes (0 overflow, five fixtures). Same day, PARTIAL — **§10.6 *Part 3* only, by the §18 Part 3 build session**: written against the code as edited that session, with `npm test` re-run (1310/1310, 20 suites, after the same-day switch to a plain-`src` preview), the cookie attributes behind that switch read in `index.js`, and a one-shot jsdom render of `donors.html` (26/26). Same day, PARTIAL — **§10.6 *Part 2* only, by the §18 Part 2 build session**: written against the code as edited that session, with `npm test` re-run (1298/1298, 20 suites), the multer size boundary measured with a one-shot fake-stream run, and the `/uploads/` nginx/rsync/backup claim grepped in the pool script. Same day, PARTIAL — **§10.6 *Part 1* only, by the §18 Part 1 build session**: written against the code as edited that session, with `npm test` re-run (1145/1145, 19 suites). 2026-09-23, PARTIAL — **§8.7 *Part 9 review fixes* only, by the review session**: each fix read in the code it wrote and its harness result as run that session. Also 2026-09-23, PARTIAL — **§8.7 only, by the doc-fold session**: its file list, menu keys, config keys, endpoint shapes and on-box paths grepped/read in the code (`07_lib_pool_backup.sh` menu dispatch, the `pmg_*` function list and manifest name in `07_lib_pool_migrate.sh`, the `GW_*` paths + `maxconn` in `07_lib_gateway.sh`, the latency keys + page CSP in the pool script, the suggest route in full in `index.js`, `lib/connect-suggest.js` constants, the three new suites in `package.json`) and `npm test` re-run, 1133/1133 across 19 suites; the step order of Migrate OUT/IN, the manifest's field list and the harness results are **taken from the build sessions' reports, not re-checked**. Before that: 2026-09-07 — §§1–8 and §11 re-derived from
+> **Covers code as of:** 2026-09-07, except §8.7 and the §4/§8.2/§11 rows that point at it (2026-09-23, the uncommitted hub-move + latency working tree) and §10.6 (2026-09-24, the uncommitted §18 Parts 1–6 working tree) and §10.7 (2026-09-24, the uncommitted explorer-setting working tree) and §10.8 plus the §2 auto-payout / chain-watch / Tor-send rows, D10 and the §3 scheduler rows (2026-09-25, the uncommitted Tor-payout-hardening working tree) and §10.9 (2026-09-25, the uncommitted account-page payout-feedback working tree) and §10.10 plus the §2 "Tor send method" / "Auto-payout" rows, the two §3 withdrawal rows and the dated notes heading §10.5, §10.8 and closing §10.9 (2026-09-26, the uncommitted one-attempt Tor payout working tree) and §10.10 *Review fixes* plus the §3 scheduler-loop row (2026-09-27, the uncommitted /review-fix working tree) and §10.10 *Slatepack finalize binding* (2026-09-27, the uncommitted binding-fix working tree) and §10.11 plus the §3 scheduler-loop row (2026-09-27, the uncommitted expiry-gate working tree) and §10.12 (2026-09-27, the uncommitted admin-Miners-page working tree) and §10.13 (2026-09-27, the uncommitted games-platform Part 2, Part 3, Part 4, Part 5 and Part 6 working trees; *Part 7*, *Part 8*, *Part 9*, *Part 10*, *Part 11* and *Part 12* 2026-09-28, the uncommitted Part 7–12 working trees) · **Last verified:** 2026-09-28, PARTIAL — **§10.13 *Part 12* only, by the session that built it**: its file table, the operator steps and the counts read against `play/server/lib/{names,auth,chat,leaderboard,events,matches,moderation,app,db,settings}.js`, `play/shell/js/play-names.js`, `admin-panel/games-names.html` as written; games `npm test` 1010/1010, pool 2341/2341; no browser probe. Before that, 2026-09-28, PARTIAL — **§10.13 *Part 11* only, by the Part 11 review session**: its file table and counts read against the edited files; games `npm test` 921/921, pool 2330/2330. Before that, 2026-09-28, PARTIAL — **§10.13 *Part 10* only, by the session that built it**: its file table, the void rules and the test counts read against `play/server/lib/{matches,ratings,settings,app,moderation}.js`, `play/shell/js/{play-lobby,play-shell,play-boards,frame-host}.js`, `admin-panel/games{,-players}.html` as written; games `npm test` 918/918, pool 2322/2322, a one-shot headless-Edge probe (dark only, admin pages not opened) · earlier the same day, **§10.13 *Part 8* + *Part 9* only, by the session that built them**: their file tables, the moderator set-up steps and the test counts read against `play/server/lib/{chat,moderation,auth,settings,db,app}.js`, `play/shell/js/play-chat.js`, `admin-panel/games{,-chat,-players}.html` + `games-admin.js` as written; games `npm test` 815/815, pool 2322/2322, the headless-Edge probe 58/58 · earlier the same day, **§10.13 *Part 7* only, by the session that built it**: its file table, finalise order and test list read against `play/server/lib/{leaderboard,events,admin,badges}.js`, `lib/events/*`, `play/shell/js/play-boards.js`, `admin-panel/games-events.html` and `admin-shell.js` as written; games `npm test` 630/630, pool `npm test` 2301/2301, a headless-Edge probe 58/58 of the /play/ panel; `games-events.html` checked statically only. Before that, 2026-09-27, PARTIAL — **§10.13 *Part 6* only, by the session that built it**: its file table and test list read against `play/shell/`, `play/games/chess/frame/`, `public_html/js/public-shell.js` and `_pgs_stage_trees` as written; games `npm test` 519/519, pool `npm test` 2290/2290, the headless-Edge probe 48/48 against the staged tree. Before that, 2026-09-27, PARTIAL — **§10.13 *Part 5* only, by the session that built it**: its file table, move order and test list read against `play/server/lib/{registry,matches}.js` and `play/games/chess/` as written, games `npm test` 451/451. Before that, 2026-09-27, PARTIAL — **§10.13 *Part 4* only, by the session that built it**: its file table and rules read against `play/server/lib/` and `index.js` as edited that session; games `npm test` 318/318 on Windows (`test-auth.js` 163, `test-skeleton.js` 155), four mutations each seen turning `test-auth.js` red; nothing run on a VPS. Before that: 2026-09-27, PARTIAL — **§10.13 *Part 3* only, by the session that built it**: written against `07_lib_pool_games.sh` and the pool/backup/migrate hooks as edited that session; `bash -n` on all four files; the nginx snippet heredoc rendered with the mainnet constants and read; `_pgs_stage_trees` run once against the checkout; no shellcheck on the box; nothing run on a VPS (the toolkit cannot run on Windows). Before that: 2026-09-27, PARTIAL — **§10.12 only, by the session that built it**: written against the code as edited that session (`lib/miner-status.js` in full, the two `index.js` routes, `miners.html`, the `admin-shell.js` `urlQuery` option); the query plans run with `EXPLAIN QUERY PLAN` on the real schema; `npm test` exit 0 with `test-admin-miners.js` 50/50, `test-admin-panel.js` 142/142 and NEW `test-shares-plans.js` 28/28 (which also FAILS 7 against the committed pre-fix code, i.e. it catches what it claims to); three one-shot jsdom renders of `miners.html` against stubbed API data (expand, refresh, chips, sort, ban dialog, `?q=`; the per-row fetch cadence and one-Submit-one-ban; the capped-list server lookup), after a same-day review pass that re-read every file, rationed the per-row refresh, added the `shares(grin_address, created_at)` index and replaced the top-500-by-balance cap, then closed seven pre-existing one-sided-range full scans of `shares`; nothing run on a VPS or in a real browser. Before that: 2026-09-27, PARTIAL — **§10.11 and the §3 scheduler-loop row only, by the session that built them**: written against the code as edited that session (`processSlatepackExpiry` / `_expiryVerdict` / `_journalExpiryHold` / `_noteExpiryGate` / `_resolveQuietAlert`, `foldPayoutAlerts`, NEW `lib/grin-wallet-version.js`, the `index.js` health fold, `health.html`, `settings-payout.html`, `_pw_tor_exposure_check`); the grin-wallet v5.5.0 facts read in a local clone of tag `v5.5.0` (`ffcdf78`) that session; the G checks seen failing on the pre-gate scheduler (16 failed, section crashed); the torrc pattern run against ten sample lines; `bash -n` on the lib. `npm test` exit 0 (syntax check + every unit suite), 2041 PASS/ok lines, a total that also counts the concurrent admin-cancel change's checks; then, for §10.11 *Follow-ups*, the D checks seen failing on the committed `alert-monitor.js` and `npm test` exit 0 at 2055; nothing run on a VPS. Before that: 2026-09-27, PARTIAL — **§10.10 *Admin cancel on `tor_failed`* only, by the session that made it**: the cancel route, the `/balance/log` handler, `payments.html` and the account ledger's `eventLabel` read after the edit; the four `tor_failed` readers it names read in `lib/reconciliation.js`, `lib/withdrawal-scheduler.js` and `lib/alert-monitor.js`. Same day, PARTIAL — **§10.10 *Slatepack finalize binding* only, by the session that found and fixed it**: both finalize paths read in `lib/withdrawal-scheduler.js` after the edit, and in the committed `HEAD` for the old version; grin-wallet v5.5.0 `libwallet/src/internal/updater.rs` `cancel_tx_and_outputs`, `libwallet/src/api_impl/foreign.rs` `finalize_tx` and `libwallet/src/internal/tx.rs` `cancel_tx` / `update_stored_tx` read in the upstream source that session; the 8 B checks seen failing on the old code; `npm test` exit 0, PASS/ok lines 1991 → 2003. Same day, PARTIAL — **§10.10 *Review fixes* and the §3 scheduler-loop row only, by the session that made those fixes**: each rule read in `lib/withdrawal-scheduler.js`, `lib/wallet-tor.js` and `lib/reconciliation.js` after the edit; the grin-wallet v5.5.0 facts it rests on (`src/cmd/wallet.rs`, `controller/src/command.rs` `send` / `output_slatepack`, `api/src/owner.rs` `try_slatepack_sync_workflow`, `libwallet/src/internal/selection.rs` `select_coins` / `lock_tx_context`, `libwallet/src/api_impl/owner.rs` `cancel_tx`, `libwallet/src/api_impl/types.rs` `update_tx_slate_state`, `config/src/types.rs` timeouts) and grin v5.4.0 `util/src/logger.rs` fetched raw from GitHub that session; every new non-control check seen failing on the old code, the two F4h guard checks by mutation; `npm test` exit 0, PASS/ok lines 1943 → 1991. 2026-09-26, PARTIAL — **§10.10 *Pre-test review fix* and the *Still open* items it added only, by the pre-test review session**: the argv read in `lib/wallet-tor.js` after the edit; the v5.5.0 `grin-wallet.yml` (clap 2.34 per `Cargo.lock`), `controller/src/command.rs` `send` / `output_slatepack`, `config/src/types.rs` `TorConfig`, `config/src/config.rs`, `impls/src/adapters/tor.rs` and `impls/src/tor/process.rs` fetched raw from GitHub that session; the new argv checks seen failing on the old code (8) with both controls passing; `npm test` exit 0, 21 suites, 1942 checks. Same day, PARTIAL — **§10.10 *Follow-up fixes* and its *Still open* list only, by the session that made those fixes**: each fix written against its own test, seen failing before and passing after; `npm test` exit 0, 21 suites, 1932 checks; the nginx heredoc rendered with dummy values; the grin-wallet v5.5.0 `StoredProofInfo` / `dalek_pubkey_serde` / `lock_tx_context` facts read in the upstream source that session. Same day, PARTIAL — **§10.10 and the edits listed above only, by the one-attempt docs-fold session**. Read in the working tree that session: the scheduler constants; `sendWithdrawal`, `_settleFailedTorSend`, `_holdTor`, `_priorSendLanded`, `_txRecipientNano`, `_torAttemptWindows`, `_otherTorAttemptAt`, `reclaimStaleTorSending`, `resolveHeldTor`, `_heldAbsentSince`, `_raiseHeldAlert`, `forceRefundHeld`, `migrateLegacyTorRetries`, `torPauseStatus`, `clearTorPause`, `_assertNoRecentReversal` and `createWithdrawal`'s pause copy; the `index.js` 410 retry stub, recheck, force-refund, cancel, pause 429 and pause-clear routes and the `tor_held` status lists; `walletBin` and the 300-char stdout tail in `lib/wallet-tor.js`; the `lib/db.js` columns; the `payout_failed` codes in `lib/alert-monitor.js`; reconciliation's two lists; and the pool unit (no `KillMode`, `Restart=on-failure`). The front-end claims were **grepped** (the ids, functions and admin routes exist), not re-run. `npm test` re-run: exit 0, 21 suites, 1900 checks, with the five touched suites at the counts in §10.10. **Taken from the build and review sessions' reports, not re-checked:** the grin-wallet v5.5.0 source facts (`lock_tx_context`, `FeeFields`, `StoredProofInfo`), the R1 reproduction, every revert and mutation count, the headless probe, and the per-session suite counts before this one. 2026-09-25, PARTIAL — **§10.9 only, by the session that built it**: written against the code as edited that session, `npm test` re-run (exit 0), the four pages' inline scripts parsed, headless-Chrome screenshots at 1392 px and 390/760 px iframes; the polling path NOT run against a live backend. 2026-09-25, PARTIAL — **§10.8 *Independent review* only, by the Part 8 review session**: its two fixes read in `lib/withdrawal-scheduler.js` after the edit; the two bugs' cases (R1–R4) seen failing before the fix, and every new case seen failing with its guard removed in a scratch copy; `npm test` re-run, exit 0. Same day, PARTIAL — **§10.8, the three §2 rows, D10 and the two §3 rows only, by the Tor-payout-hardening docs-fold session**: the constants, alert types, event-note prefixes, journal strings, `chain_state` classes, the `repost -i <id> -f` argv, the `method = 'tor'` proof-backfill filter, the settings key/validator/`applyToConfig`, the two `lib/db.js` columns, the `index.js` health fold and admin-row strip, the `health.html` Critical badge and the `payments.html` `CHAIN` map were read in the working tree that session, and `withdrawal_retry_delays` was grepped absent from every admin page; `npm test` re-run, exit 0, with the five touched suites at the counts quoted in §10.8. **Taken from the build sessions' reports, not re-checked:** the grin-wallet source citations (v5.4.1 / v5.5.0), the revert-proofs and mutation counts, and deviations (a)–(f). 2026-09-24, PARTIAL — **§10.7 only, by the explorer-setting docs-fold session**: written against the code as read that session (`lib/explorers.js` in full, the `index.js` resolve helper + the three publishing routes + `/api/admin/blocks`, `lib/pool-settings.js` default/validator/`buildPublicConfig`, the `window.Explorer` block and primer in `branding.js` and `admin-shell.js`, the `blocks.html` primer, the Branding select + its testnet script, and every `Explorer.link` call site grepped); `npm test` re-run, exit 0, `test-explorers.js` 198/198. The Part 3 relink finding and the audit-row correction are taken from the code comments and the plan, not from a review report. Same day, PARTIAL — **§10.6 *Part 6* only, by the §18 Part 6 review session**: its fix read in `index.js` and the page, its two new checks seen failing before the edit and passing after, `npm test` re-run (1345/1345, 20 suites); the same session re-ran `npm test` before any edit and found every §10.6 Part 1–5 total and per-suite count exact (1343), but did **not** re-verify the rest of those Part notes' prose. Same day, PARTIAL — **§10.6 *Part 5* only, by the §18 Part 5 build session**: written against the code as edited that session, with `npm test` re-run (1343/1343, 20 suites) and a one-shot 390 px headless-Edge probe of `account-settings.html` in both themes (0 overflow, four fixtures). Same day, PARTIAL — **§10.6 *Part 4* only, by the §18 Part 4 build session**: written against the code as edited that session, with `npm test` re-run (1331/1331, 20 suites) and a one-shot 390 px + 1280 px headless-Edge probe of `donate.html` in both themes (0 overflow, five fixtures). Same day, PARTIAL — **§10.6 *Part 3* only, by the §18 Part 3 build session**: written against the code as edited that session, with `npm test` re-run (1310/1310, 20 suites, after the same-day switch to a plain-`src` preview), the cookie attributes behind that switch read in `index.js`, and a one-shot jsdom render of `donors.html` (26/26). Same day, PARTIAL — **§10.6 *Part 2* only, by the §18 Part 2 build session**: written against the code as edited that session, with `npm test` re-run (1298/1298, 20 suites), the multer size boundary measured with a one-shot fake-stream run, and the `/uploads/` nginx/rsync/backup claim grepped in the pool script. Same day, PARTIAL — **§10.6 *Part 1* only, by the §18 Part 1 build session**: written against the code as edited that session, with `npm test` re-run (1145/1145, 19 suites). 2026-09-23, PARTIAL — **§8.7 *Part 9 review fixes* only, by the review session**: each fix read in the code it wrote and its harness result as run that session. Also 2026-09-23, PARTIAL — **§8.7 only, by the doc-fold session**: its file list, menu keys, config keys, endpoint shapes and on-box paths grepped/read in the code (`07_lib_pool_backup.sh` menu dispatch, the `pmg_*` function list and manifest name in `07_lib_pool_migrate.sh`, the `GW_*` paths + `maxconn` in `07_lib_gateway.sh`, the latency keys + page CSP in the pool script, the suggest route in full in `index.js`, `lib/connect-suggest.js` constants, the three new suites in `package.json`) and `npm test` re-run, 1133/1133 across 19 suites; the step order of Migrate OUT/IN, the manifest's field list and the harness results are **taken from the build sessions' reports, not re-checked**. Before that: 2026-09-07 — §§1–8 and §11 re-derived from
 > `scripts/07_grin_mining_public_pool.sh`, `scripts/lib/07_lib_{gateway,gwctl,hub,pool_backup,pool_wallet}.sh`
 > and `web/07_mining_pool_public/back-end-pool/`. §§9–10 are as-written add-on notes, not re-verified — except §10.4, written against the
 > code it describes on 2026-09-22 (Part 1 backend and Part 2 account page, both re-read after the
 > edits) and 2026-09-23 (Part 3: every surface in its table re-read after the edit, and the CMS
 > seed-once claim read in `lib/db.js`) and again by the Part 4 review (2026-09-23: §10.4's capture/verify, cost, migration and test paragraphs re-read against `lib/owner-proof.js`, `index.js` and `test-owner-gate.js`; four statements corrected in place, KDF counts measured), backed by the suite counts quoted in it. And §10.5 (payout-rails fix), written 2026-09-23 against the uncommitted diff of its three code parts — `lib/wallet.js`, `lib/wallet-tor.js` in full, `lib/socks5.js` header, `lib/config.js`, the `index.js` tor-check/pre-flight hunks, `account-settings.html` — with `npm test` re-run that session (945/945, 16 suites) and the `proxy_read_timeout` values read in `07_grin_mining_public_pool.sh`. **Taken from the build sessions' own reports, not re-checked:** the revert-proofs, the P-04 word counts, the headless-Chrome probe, and the audit of the other ten Owner calls against `owner_rpc.rs`. §10.5 then re-read by the Part 5 review (2026-09-23, PARTIAL — Parts 1–3 bullets against `lib/wallet.js`, `lib/wallet-tor.js`, `lib/socks5.js` (diffed against 06d), the `index.js` route + gate and `account-settings.html`; the ten Owner-call orders and `create_slatepack_message`/`tx_lock_outputs` re-checked against v5.4.1 `owner_rpc.rs` upstream; one claim corrected — a misspelt named key is rejected, not ignored; Part 5 fixes written against their own code, suite 960/960). The word counts and headless probe are still taken from Part 3's report.
 > §1b re-verified 2026-09-21: all 49 `API_DOC_META` rows read against their handlers (static, no VPS).
-> **Product code last changed:** 2026-09-27 (admin Miners page — status dot + expandable per-rig rows, NEW `lib/miner-status.js` and `GET /api/admin/miners/:addr/workers`, the list's per-row share subqueries replaced by one windowed query, `AdminTable` `urlQuery`, `getWorkersForAccount` optional short window, NEW `scripts/test-admin-miners.js` — §10.12; **uncommitted, not VPS-tested**). Same day (slatepack expiry gate — refund only on wallet evidence, settle a mined slate, hold one finalized outside the backend; grin-wallet version on the Health card; the *Pool wallet safety* note on Payout settings; the toolkit's Tor-exposure warning; then the account page's `grin-wallet receive -m` hint and the "paid twice?" alarm on the Health card with a step-up **Mark reconciled** (NEW `POST /api/admin/alerts/:alertId/resolve`) — §10.11; **uncommitted, not VPS-tested**). Same day (admin cancel refuses `tor_failed`; payout rows name their rail in the account ledger and the admin payments badge — §10.10 *Admin cancel on `tor_failed`*; **uncommitted, not VPS-tested**). Same day (Slatepack finalize binding: both finalize paths refuse a reply when the row has no slate id yet or the reply has none — §10.10 *Slatepack finalize binding*; **uncommitted, not VPS-tested**). Same day (/review fixes #1–#6 — Held refunds wait for a resume and an intact wallet history, the Tor CLI holds the send lock, the CLI's stdout reaches the settlement, the forced refund reads `tx_slate_state`, the unrecorded-send audit compares NET, the send timeout is 360 s — §10.10 *Review fixes*; **uncommitted, not VPS-tested**). 2026-09-26 (homepage P-04 default 30D, un-serialised refresh, status stale-while-revalidate, `idx_withdrawal_confirmed` — §9 P-04 bullet). Same day (pre-test review — the grin-wallet argv in `lib/wallet-tor.js`: `--top_level_dir`, and `send`'s amount as its positional arg instead of `-a`; `repost` likewise; payout-rails 150 → 160; §10.10 *Pre-test review fix*; **uncommitted, not VPS-tested**). Same day (follow-up fixes — `AlertMonitor.foldPayoutAlerts` + the health route, `auditWalletSends` without `tor_failed`, `_captureTorSlateId` on attempt windows, two payout validators + form bounds, a 90 s nginx block for the withdraw POST in `07_grin_mining_public_pool.sh`, `socks` removed from `package.json` + lockfile; §10.10 *Follow-up fixes*; **uncommitted, not VPS-tested**). Same day (Tor payouts: one attempt, then an answer — `lib/withdrawal-scheduler.js`, `lib/wallet-tor.js` (the `walletBin` fix for mainnet payout #10, and stepwise delivery deleted), `lib/wallet.js`, `lib/db.js`, `lib/pool-settings.js`, `lib/config.js`, `lib/alert-monitor.js`, `lib/reconciliation.js`, `index.js`, `public_html/account-settings.html`, `public_html/js/payout-methods.js`, `public_html/index.html`, admin `payments.html` / `index.html` / `miners.html` / `settings-payout.html`, five test suites; stepwise F5 and the retry ladder deleted; §10.10; **uncommitted, not VPS-tested**). 2026-09-25 (account-page payout feedback + placard number rule — `public_html/account-settings.html`, NEW `public_html/js/num-format.js`, `payment-history.html`, `donate.html`, `fortune-board.html`, `js/branding.js`; front end only; §10.9; **uncommitted, not VPS-tested**). Same day 2026-09-25 (Tor payout hardening, Part 8 review fixes — the per-row freeze re-check and `_dropStepwiseSlate` in `checkTorAndSend`, `lib/withdrawal-scheduler.js`; `test-payout-guard.js` 220 → 233; §10.8 *Independent review*; **uncommitted, not VPS-tested**). Same day (Tor payout hardening F1–F5 + the exit-0 slatepack fallback — `lib/withdrawal-scheduler.js`, `lib/wallet.js`, `lib/wallet-tor.js`, `lib/db.js`, `lib/pool-settings.js`, `lib/config.js`, `index.js`, `admin-panel/health.html` / `payments.html` / `settings-payout.html`, five test suites; §10.8; **uncommitted, not VPS-tested**). 2026-09-24 (operator-selectable mainnet explorer — NEW `lib/explorers.js`, `branding.explorer_mainnet` in `lib/pool-settings.js`, `explorer` published on three routes in `index.js`, `window.Explorer` + relink in `branding.js`/`admin-shell.js`, the `blocks.html` primer, the Branding select, NEW `test-explorers.js`; §10.7; **uncommitted, not VPS-tested**). Same day (hub move, review P1 — Migrate OUT removes the weekly VACUUM cron and refuses while a vacuum runs, §8.7 *Part 9 review fixes*). Same day (donations v2, design §18 Part 6 review fix — `index.js` `requireBothProofs` refusal code `match` → `wrong_kind`, `account-settings.html` `DP_REASONS` key; suite 1343 → 1345; **uncommitted, not VPS-tested** — §10.6 *Part 6*). Same day (donations v2, design §18 Part 5 — account page: `public_html/account-settings.html` P-05 donation row from `donation`, P-03 per-rig badge, NEW P-09 Donor profile panel; `index.js` drops the v1 account aliases `donation_percent` / `donor_name` / `donor_name_state` + api-docs row; suite 1331 → 1343; **uncommitted, not VPS-tested** — §10.6 *Part 5*). Same day (donations v2, design §18 Part 4 — public wall: `lib/donor-ledger.js donorWall()` card `banner` under the Top-N slot rule + `ranking.banner_slots`, `current_percent` dropped; `bannerSlots` exported from `lib/donor-profiles.js`; `index.js` donors route comment + `API_DOC_META` row v3; `public_html/donate.html` D-01 rewrite, new D-01b, D-03 Top-N spotlight + §18.3 card copy; suite 1310 → 1331; **uncommitted, not VPS-tested** — §10.6 *Part 4*). Same day (donations v2, design §18 Part 3 — admin review queue: `index.js` donor admin routes rewritten (queue, image, approve/reject/remove/block/unblock, summary + dashboard pending count; censor/uncensor + the settings-save rescan removed; wall + account names from approved profiles only), `lib/donor-names.js` reduced to words + flags + settings, `lib/donor-profiles.js` admin reads, `lib/donor-ledger.js` names via `publicProfiles`, `donor_censored_display` removed from `lib/pool-settings.js`, `admin-panel/donors.html` rewritten, `admin-shell.js` badge + `AdminTable.onRender`, `admin-panel/index.html` tile, banner previews from a plain same-origin `src` (admin CSP unchanged — a comment only in `07_grin_mining_public_pool.sh`); suite 1298 → 1310; **uncommitted, not VPS-tested** — §10.6 *Part 3*). Same day (donations v2, design §18 Part 2 — donor-profile backend: `donor_requests` + `donor_blocks` in `lib/db.js`, NEW `lib/donor-profiles.js` (name rules, banner sniff + header dims, the request state machine, approved files under `uploads/donors/`, `profileFor` / `publicProfiles`), `leagueRank()` in `lib/donor-ledger.js`, `SNIFFERS` exported from `lib/asset-manager.js`, `donor_banner_slots` in `lib/pool-settings.js` + `lib/donor-names.js`, `index.js` `requireBothProofs` purpose wording + three `/api/account/:addr/donor-profile` routes + account `donor_profile`; NEW `scripts/test-donor-profiles.js`, suite 1145 → 1298; **uncommitted, not VPS-tested** — §10.6 *Part 2*). Same day (donations v2, design §18 Part 1 — the donation is per SHARE: `lib/rewards.js` `donateMap`, `lib/incentives.js` `applyToDistribution(…, donateMap)`, stored-% machinery removed from `incentives.js` / `stratum-server.js` / `miners.js` / `stratum-protocol.js` (`donor_label`), NEW `liveDonations()` in `lib/donor-ledger.js`, additive `donation` / `donate_percent` / `rigs_donating` / `pct_min` / `pct_max` fields on four routes in `index.js`; suite 1134 → 1145; **uncommitted, not VPS-tested** — §10.6). 2026-09-23 (Part 9 review fixes C1–C6 in `07_lib_pool_migrate.sh` + `07_lib_pool_backup.sh`, §8.7 *Part 9 review fixes*). Same day (hub move + connect-page latency, §8.7: NEW `07_lib_pool_migrate.sh` (`B → 6/7`), shared freeze/archive/restore cores in `07_lib_pool_backup.sh`, gateway re-resolve timer + `6) Latency probe` in `07_lib_gateway.sh`, hub `/ping` + CSP + pairing warning in the pool script; backend seeds v3 + local-region stamp, NEW `lib/region-rtt.js` / `lib/connect-suggest.js` / `lib/latency-probe.js`, `/api/pool/connect/suggest`, `hub_rtt_ms`/`is_hub`, `connection.latency`; connect-page measurement in `reactor-dashboard.js`; suite 960 → 1133, 16 → 19 suites; **uncommitted, not VPS-tested**). Same day (payout-rails fix, §10.5: `create_slatepack_message` named params in `lib/wallet.js`; Tor probe ported from 06d — `lib/wallet-tor.js`, new `lib/socks5.js`, `lib/config.js` 8 s default, `index.js` `?fresh=1`; P-04 slimmed in `account-settings.html`; new `scripts/test-payout-rails.js`, suite 881 → 945; then the Part 5 review's three fixes — an absolute reply deadline and proxy-protocol errors → null in `lib/wallet-tor.js`, a `res.destroyed` guard in the `index.js` pre-flight gate — suite 945 → 960; **not VPS-tested**). Same day (ownership-proof SET, design §17 Part 4 review — three fixes: `migrateProofSet` now runs before `stratumServer.start()`, `_captureProof` re-locates a racing duplicate by its digest instead of evicting a second proof, a returning evicted anchor restarts `first_seen_at`; plus the `proof_too_recent` text; `test-owner-gate.js` 36 → 42, suite 875 → 881 — §10.4 "Part 4"). Same day (design §17 Part 3 — copy and comments only: `public_html/index.html` setup-guide PIN line, the Terms/Privacy/FAQ defaults in `lib/pool-settings.js`, `index.js` (`anchor_not_accepted_here` text, one `API_DOC_META` row, one comment), `lib/stratum-server.js` / `lib/owner-proof.js` / `lib/db.js` comments; suite unchanged at 875/875 — §10.4 "Part 3"). 2026-09-22 (ownership-proof SET, design §17 Part 2 — account page: `public_html/account-settings.html` only — `proofHintText()` renders `a.proofs` as counts + last-added instead of two booleans, the "Evidence changed" banner and the `evidence` argument deleted, `renderPasswordProof(pp, proofs)` warns only past `proofs.max` ("Too many passwords") with several passwords inside the cap now an OK line, `PASS_STATE_TEXT.ok` reworded, the `Accepted:` line and three fold paragraphs restated for a set of ten, DEMO dataset reshaped; suite unchanged at 875/875 — §10.4 "Part 2". Same day, Part 1 — backend: `miner_proofs` table + `miner_accounts.proof_salt`, per-address scrypt salt, set capture/verify with LRU eviction and a flagged-not-deleted anchor, `migrateProofSet()` replacing `migrateOwnerProofHashes`+`backfillProofAnchors`, `proofs` on the account and admin miner views, `test-owner-gate.js` 19 → 36 and `test-public-leakage.js` 77 → 86 — §10.4. 2026-09-21 (donor names, design §16 Part 5 — the independent review: two fixes in `lib/donor-names.js` (rescan parses the list once per walk; a separators-only label is no label), `test-donor-names.js` 148 → 156, design §16.12 written — §10.3 "Part 5". Same day, Part 4: `/api/pool/donors` v2 — league/past/totals/ranking via `lib/donor-ledger.js donorWall()`, `donate.html` D-03 league + past strip + ranking sentence + not-verified line, D-01 `yourbrandname-donate10`, api-docs row, `test-donor-league.js` 68/68, leakage §9 — §10.3 "Part 4". Same day, Part 3: admin → Donors page, `GET /api/admin/donors` + `/summary`, `POST …/censor|uncensor` audited, rescan on list/pool-name change, dashboard `new_donor_names_7d` + nav badge, `allow_miner_donations`/`donation_address` moved off `settings-incentives.html`, `parseDonateToken` export, `check-syntax.js` type-sniff fix — §10.3 "Part 3". Same day, Part 2: six `donor_*` columns, `lib/donor-names.js` + `lib/donor-ledger.js`, six `incentives` settings keys, capture on the from-zero set only, `/api/account/:addr` `donor_name` + state, account-page row — §10.3 "Part 2". Same day, Part 1: worker part case-folded, label cap 25 → 32, raw 40 → 48, `donor_label` — §10.3 "Part 1". Same day: api-docs audit: 9 meta rows corrected, the drift-check
+> **Product code last changed:** 2026-09-28 (games platform Part 12, approved nicknames: NEW `play/server/lib/names.js`, schema v3, `play/shell/js/play-names.js`, pool `admin-panel/games-names.html` — §10.13 *Part 12*; no pool backend code) · 2026-09-28 (games platform Part 11 review fixes: global caps in `back-end-pool/lib/games-link.js`, free matches out of `results_daily` in `play/server/lib/matches.js`, the sign-in hint, the pool menu's B row — §10.13 *Part 11*) · 2026-09-28 (games platform Part 10: PvP in `play/server/lib/matches.js`, NEW `lib/ratings.js` + `scripts/test-pvp.js`, four PvP settings; NEW `play/shell/js/play-lobby.js` + the G-08 panel, the board buttons and polls in `play-shell.js`, PvP boards; pool admin `games-players.html` void + `games.html` PvP group; no pool backend code — §10.13 *Part 10*) · earlier 2026-09-28 (games platform Parts 8–9: NEW `play/server/lib/{chat,moderation}.js` + `scripts/test-chat.js`, migration v2, `play/shell/js/play-chat.js`, pool admin NEW `games.html` / `games-chat.html` / `games-players.html` / `games-admin.js` + NAV — §10.13 *Part 8* / *Part 9*; **uncommitted, not VPS-tested**). Earlier that day (games platform Part 7: NEW `play/server/lib/{leaderboard,events,admin,badges}.js` + `lib/events/` + games `scripts/test-events.js`; `app.js` / `http.js` / `pool-link.js` / `auth.js` wiring; NEW `play/shell/js/play-boards.js` + the G-06 panel; pool NEW `admin-panel/games-events.html` + the Games NAV group in `admin-shell.js`, `test-admin-panel.js` 142 → 153 — §10.13 *Part 7*; **uncommitted, not VPS-tested**). 2026-09-27 (games platform Part 6: NEW `play/shell/**` + `play/games/chess/frame/**` + games `scripts/test-shell.js`; pool `public_html/js/public-shell.js` absolute hrefs + no ads on exempt pages; the `__GRIN_PLAY_VERSION__` stamp in `07_lib_pool_games.sh` — §10.13 *Part 6*; **uncommitted, not VPS-tested**). Same day (games platform Part 5, the games service only: NEW `play/server/lib/{registry,matches}.js`, `play/games/chess/`, `scripts/test-matches.js`; uncommitted). Same day (games platform Part 4, the games service only: NEW `play/server/lib/{pool-link,ratelimit,ledger,plays,sessions,auth,mode,settings,mask}.js` + `scripts/test-auth.js`, wiring in `lib/app.js` / `index.js` / `lib/http.js`; games suite 155 → 318 — §10.13 *Part 4*; **uncommitted, not VPS-tested**). Same day (games platform Part 3, the operator side: NEW `scripts/lib/07_lib_pool_games.sh` (menu `P`: install, deploy, nginx snippet, service, status, logs, link-secret rotation, uninstall; games VACUUM; backup/restore + cleanup hooks), hooks in `07_grin_mining_public_pool.sh` (menu row, deploy tail, `/internal/` 404 + glob include in the vhost, cron option 3, cleanup group 1b/1c, `games_port` numeric), games-DB snapshot + separate restore in `07_lib_pool_backup.sh` and `07_lib_pool_migrate.sh` — §10.13 *Part 3*; **uncommitted, not VPS-tested**). Same day (games platform Part 2, the pool link: NEW `lib/games-link.js` (three `/internal/games/*` routes above `express.json()`, the `/api/admin/games/*` proxy with step-up, the 60 s health probe, the branding `games` flag), the `games` settings section in `lib/pool-settings.js`, `games_port` + `games_link_secret_file` defaults in `lib/config.js`, mount lines + `'games'` step-up section in `index.js`, the Play nav item in `public-shell.js` + `branding.js applyGamesNav`, NEW `admin-panel/settings-games.html`, NEW `scripts/test-games-link.js`; suite 2108 → 2282 — §10.13; **uncommitted, not VPS-tested**). Same day (admin Miners page — status dot + expandable per-rig rows, NEW `lib/miner-status.js` and `GET /api/admin/miners/:addr/workers`, the list's per-row share subqueries replaced by one windowed query, `AdminTable` `urlQuery`, `getWorkersForAccount` optional short window, `shares(grin_address, created_at)` index replacing `idx_share_address`, the capped list now miners-active-first + `?search=` lookup, `AdminTable` `onSearch`, NEW `scripts/test-admin-miners.js`; upper time bounds on seven `shares` queries (`recordHashrates`, `getTopMiners`, `updateStreaks`, four `GROUP BY region` routes) + NEW `scripts/test-shares-plans.js` — §10.12; **uncommitted, not VPS-tested**). Same day (slatepack expiry gate — refund only on wallet evidence, settle a mined slate, hold one finalized outside the backend; grin-wallet version on the Health card; the *Pool wallet safety* note on Payout settings; the toolkit's Tor-exposure warning; then the account page's `grin-wallet receive -m` hint and the "paid twice?" alarm on the Health card with a step-up **Mark reconciled** (NEW `POST /api/admin/alerts/:alertId/resolve`) — §10.11; **uncommitted, not VPS-tested**). Same day (admin cancel refuses `tor_failed`; payout rows name their rail in the account ledger and the admin payments badge — §10.10 *Admin cancel on `tor_failed`*; **uncommitted, not VPS-tested**). Same day (Slatepack finalize binding: both finalize paths refuse a reply when the row has no slate id yet or the reply has none — §10.10 *Slatepack finalize binding*; **uncommitted, not VPS-tested**). Same day (/review fixes #1–#6 — Held refunds wait for a resume and an intact wallet history, the Tor CLI holds the send lock, the CLI's stdout reaches the settlement, the forced refund reads `tx_slate_state`, the unrecorded-send audit compares NET, the send timeout is 360 s — §10.10 *Review fixes*; **uncommitted, not VPS-tested**). 2026-09-26 (homepage P-04 default 30D, un-serialised refresh, status stale-while-revalidate, `idx_withdrawal_confirmed` — §9 P-04 bullet). Same day (pre-test review — the grin-wallet argv in `lib/wallet-tor.js`: `--top_level_dir`, and `send`'s amount as its positional arg instead of `-a`; `repost` likewise; payout-rails 150 → 160; §10.10 *Pre-test review fix*; **uncommitted, not VPS-tested**). Same day (follow-up fixes — `AlertMonitor.foldPayoutAlerts` + the health route, `auditWalletSends` without `tor_failed`, `_captureTorSlateId` on attempt windows, two payout validators + form bounds, a 90 s nginx block for the withdraw POST in `07_grin_mining_public_pool.sh`, `socks` removed from `package.json` + lockfile; §10.10 *Follow-up fixes*; **uncommitted, not VPS-tested**). Same day (Tor payouts: one attempt, then an answer — `lib/withdrawal-scheduler.js`, `lib/wallet-tor.js` (the `walletBin` fix for mainnet payout #10, and stepwise delivery deleted), `lib/wallet.js`, `lib/db.js`, `lib/pool-settings.js`, `lib/config.js`, `lib/alert-monitor.js`, `lib/reconciliation.js`, `index.js`, `public_html/account-settings.html`, `public_html/js/payout-methods.js`, `public_html/index.html`, admin `payments.html` / `index.html` / `miners.html` / `settings-payout.html`, five test suites; stepwise F5 and the retry ladder deleted; §10.10; **uncommitted, not VPS-tested**). 2026-09-25 (account-page payout feedback + placard number rule — `public_html/account-settings.html`, NEW `public_html/js/num-format.js`, `payment-history.html`, `donate.html`, `fortune-board.html`, `js/branding.js`; front end only; §10.9; **uncommitted, not VPS-tested**). Same day 2026-09-25 (Tor payout hardening, Part 8 review fixes — the per-row freeze re-check and `_dropStepwiseSlate` in `checkTorAndSend`, `lib/withdrawal-scheduler.js`; `test-payout-guard.js` 220 → 233; §10.8 *Independent review*; **uncommitted, not VPS-tested**). Same day (Tor payout hardening F1–F5 + the exit-0 slatepack fallback — `lib/withdrawal-scheduler.js`, `lib/wallet.js`, `lib/wallet-tor.js`, `lib/db.js`, `lib/pool-settings.js`, `lib/config.js`, `index.js`, `admin-panel/health.html` / `payments.html` / `settings-payout.html`, five test suites; §10.8; **uncommitted, not VPS-tested**). 2026-09-24 (operator-selectable mainnet explorer — NEW `lib/explorers.js`, `branding.explorer_mainnet` in `lib/pool-settings.js`, `explorer` published on three routes in `index.js`, `window.Explorer` + relink in `branding.js`/`admin-shell.js`, the `blocks.html` primer, the Branding select, NEW `test-explorers.js`; §10.7; **uncommitted, not VPS-tested**). Same day (hub move, review P1 — Migrate OUT removes the weekly VACUUM cron and refuses while a vacuum runs, §8.7 *Part 9 review fixes*). Same day (donations v2, design §18 Part 6 review fix — `index.js` `requireBothProofs` refusal code `match` → `wrong_kind`, `account-settings.html` `DP_REASONS` key; suite 1343 → 1345; **uncommitted, not VPS-tested** — §10.6 *Part 6*). Same day (donations v2, design §18 Part 5 — account page: `public_html/account-settings.html` P-05 donation row from `donation`, P-03 per-rig badge, NEW P-09 Donor profile panel; `index.js` drops the v1 account aliases `donation_percent` / `donor_name` / `donor_name_state` + api-docs row; suite 1331 → 1343; **uncommitted, not VPS-tested** — §10.6 *Part 5*). Same day (donations v2, design §18 Part 4 — public wall: `lib/donor-ledger.js donorWall()` card `banner` under the Top-N slot rule + `ranking.banner_slots`, `current_percent` dropped; `bannerSlots` exported from `lib/donor-profiles.js`; `index.js` donors route comment + `API_DOC_META` row v3; `public_html/donate.html` D-01 rewrite, new D-01b, D-03 Top-N spotlight + §18.3 card copy; suite 1310 → 1331; **uncommitted, not VPS-tested** — §10.6 *Part 4*). Same day (donations v2, design §18 Part 3 — admin review queue: `index.js` donor admin routes rewritten (queue, image, approve/reject/remove/block/unblock, summary + dashboard pending count; censor/uncensor + the settings-save rescan removed; wall + account names from approved profiles only), `lib/donor-names.js` reduced to words + flags + settings, `lib/donor-profiles.js` admin reads, `lib/donor-ledger.js` names via `publicProfiles`, `donor_censored_display` removed from `lib/pool-settings.js`, `admin-panel/donors.html` rewritten, `admin-shell.js` badge + `AdminTable.onRender`, `admin-panel/index.html` tile, banner previews from a plain same-origin `src` (admin CSP unchanged — a comment only in `07_grin_mining_public_pool.sh`); suite 1298 → 1310; **uncommitted, not VPS-tested** — §10.6 *Part 3*). Same day (donations v2, design §18 Part 2 — donor-profile backend: `donor_requests` + `donor_blocks` in `lib/db.js`, NEW `lib/donor-profiles.js` (name rules, banner sniff + header dims, the request state machine, approved files under `uploads/donors/`, `profileFor` / `publicProfiles`), `leagueRank()` in `lib/donor-ledger.js`, `SNIFFERS` exported from `lib/asset-manager.js`, `donor_banner_slots` in `lib/pool-settings.js` + `lib/donor-names.js`, `index.js` `requireBothProofs` purpose wording + three `/api/account/:addr/donor-profile` routes + account `donor_profile`; NEW `scripts/test-donor-profiles.js`, suite 1145 → 1298; **uncommitted, not VPS-tested** — §10.6 *Part 2*). Same day (donations v2, design §18 Part 1 — the donation is per SHARE: `lib/rewards.js` `donateMap`, `lib/incentives.js` `applyToDistribution(…, donateMap)`, stored-% machinery removed from `incentives.js` / `stratum-server.js` / `miners.js` / `stratum-protocol.js` (`donor_label`), NEW `liveDonations()` in `lib/donor-ledger.js`, additive `donation` / `donate_percent` / `rigs_donating` / `pct_min` / `pct_max` fields on four routes in `index.js`; suite 1134 → 1145; **uncommitted, not VPS-tested** — §10.6). 2026-09-23 (Part 9 review fixes C1–C6 in `07_lib_pool_migrate.sh` + `07_lib_pool_backup.sh`, §8.7 *Part 9 review fixes*). Same day (hub move + connect-page latency, §8.7: NEW `07_lib_pool_migrate.sh` (`B → 6/7`), shared freeze/archive/restore cores in `07_lib_pool_backup.sh`, gateway re-resolve timer + `6) Latency probe` in `07_lib_gateway.sh`, hub `/ping` + CSP + pairing warning in the pool script; backend seeds v3 + local-region stamp, NEW `lib/region-rtt.js` / `lib/connect-suggest.js` / `lib/latency-probe.js`, `/api/pool/connect/suggest`, `hub_rtt_ms`/`is_hub`, `connection.latency`; connect-page measurement in `reactor-dashboard.js`; suite 960 → 1133, 16 → 19 suites; **uncommitted, not VPS-tested**). Same day (payout-rails fix, §10.5: `create_slatepack_message` named params in `lib/wallet.js`; Tor probe ported from 06d — `lib/wallet-tor.js`, new `lib/socks5.js`, `lib/config.js` 8 s default, `index.js` `?fresh=1`; P-04 slimmed in `account-settings.html`; new `scripts/test-payout-rails.js`, suite 881 → 945; then the Part 5 review's three fixes — an absolute reply deadline and proxy-protocol errors → null in `lib/wallet-tor.js`, a `res.destroyed` guard in the `index.js` pre-flight gate — suite 945 → 960; **not VPS-tested**). Same day (ownership-proof SET, design §17 Part 4 review — three fixes: `migrateProofSet` now runs before `stratumServer.start()`, `_captureProof` re-locates a racing duplicate by its digest instead of evicting a second proof, a returning evicted anchor restarts `first_seen_at`; plus the `proof_too_recent` text; `test-owner-gate.js` 36 → 42, suite 875 → 881 — §10.4 "Part 4"). Same day (design §17 Part 3 — copy and comments only: `public_html/index.html` setup-guide PIN line, the Terms/Privacy/FAQ defaults in `lib/pool-settings.js`, `index.js` (`anchor_not_accepted_here` text, one `API_DOC_META` row, one comment), `lib/stratum-server.js` / `lib/owner-proof.js` / `lib/db.js` comments; suite unchanged at 875/875 — §10.4 "Part 3"). 2026-09-22 (ownership-proof SET, design §17 Part 2 — account page: `public_html/account-settings.html` only — `proofHintText()` renders `a.proofs` as counts + last-added instead of two booleans, the "Evidence changed" banner and the `evidence` argument deleted, `renderPasswordProof(pp, proofs)` warns only past `proofs.max` ("Too many passwords") with several passwords inside the cap now an OK line, `PASS_STATE_TEXT.ok` reworded, the `Accepted:` line and three fold paragraphs restated for a set of ten, DEMO dataset reshaped; suite unchanged at 875/875 — §10.4 "Part 2". Same day, Part 1 — backend: `miner_proofs` table + `miner_accounts.proof_salt`, per-address scrypt salt, set capture/verify with LRU eviction and a flagged-not-deleted anchor, `migrateProofSet()` replacing `migrateOwnerProofHashes`+`backfillProofAnchors`, `proofs` on the account and admin miner views, `test-owner-gate.js` 19 → 36 and `test-public-leakage.js` 77 → 86 — §10.4. 2026-09-21 (donor names, design §16 Part 5 — the independent review: two fixes in `lib/donor-names.js` (rescan parses the list once per walk; a separators-only label is no label), `test-donor-names.js` 148 → 156, design §16.12 written — §10.3 "Part 5". Same day, Part 4: `/api/pool/donors` v2 — league/past/totals/ranking via `lib/donor-ledger.js donorWall()`, `donate.html` D-03 league + past strip + ranking sentence + not-verified line, D-01 `yourbrandname-donate10`, api-docs row, `test-donor-league.js` 68/68, leakage §9 — §10.3 "Part 4". Same day, Part 3: admin → Donors page, `GET /api/admin/donors` + `/summary`, `POST …/censor|uncensor` audited, rescan on list/pool-name change, dashboard `new_donor_names_7d` + nav badge, `allow_miner_donations`/`donation_address` moved off `settings-incentives.html`, `parseDonateToken` export, `check-syntax.js` type-sniff fix — §10.3 "Part 3". Same day, Part 2: six `donor_*` columns, `lib/donor-names.js` + `lib/donor-ledger.js`, six `incentives` settings keys, capture on the from-zero set only, `/api/account/:addr` `donor_name` + state, account-page row — §10.3 "Part 2". Same day, Part 1: worker part case-folded, label cap 25 → 32, raw 40 → 48, `donor_label` — §10.3 "Part 1". Same day: api-docs audit: 9 meta rows corrected, the drift-check
 > regex line-anchored, and `GET /api/account/:addr/shares` un-broken — it had answered `{}` since it
 > was written because `getSharesForMiner` was `async` and never awaited. Same day: P-02b lamps show workers; P-03 prints the share COUNT, not the summed difficulty; P-04 24H trace gap-filled with zeros — §7 row 4, §9. Same day: account `is_online` per rig, not per address; donor-wall totals over every donor and `active_donors` from live tags — §10.3. 2026-09-20: share credit unit + one shared `MinerManager` — first live-miner test found every hashrate at 0.00 G/s and MINERS ONLINE 0; §7 rows 3 and 5. Earlier the same day: pairing string carries the public port; gateway Status boot line, design §13.12s) — `scripts/07_grin_mining_*.sh`, `scripts/lib/07_lib_*.sh`, `web/07_mining_pool_public/`
 
@@ -3721,19 +3721,16 @@ Shares count and a separate 🧅 card for Tor state. It is now a miner console:
   live-session reject/stale %, region(s), connected since, `donateN` %. Open rows are kept in a
   Set; focus is restored after each repaint (`data-fk`). Copying the address moved to its own ⧉
   `[data-copy]` button.
-- **Per-row refresh is rationed, because every per-address share query reads the address's whole
-  retained history.** `WHERE grin_address = ? AND created_at > ?` plans as
-  `SEARCH … idx_share_address (grin_address=?)` whatever the window, so each call walks ~31 h of
-  that miner's shares on the synchronous DB. The 30 s refresh therefore re-reads only the RIGS
-  (one pass: `getWorkersForAccount` takes an optional short window and returns both hashrates),
-  only for open rows actually on screen, and not while the tab is hidden. The account facts
-  (`GET /api/admin/miners/:addr`, which also counts every retained share) are read on open, after
-  an action on that miner, and otherwise at most every `FACTS_MAX_AGE_S` (5 min); a failed read is
-  retried on the next refresh, never in a loop. The row prints both "as of" times. Collapsing a
-  row drops its cached data. (The review pass that found this: the first build re-read both
-  routes — three full-history walks — for every open row, on-screen or not, every 30 s.) A
-  `(grin_address, created_at)` index would make these reads proportional to the window instead;
-  that is a schema change on the live mainnet DB and was left out.
+- **Per-row refresh is rationed.** The review pass found the first build re-reading both detail
+  routes — three per-address share reads — for every open row, on-screen or not, every 30 s, and
+  with only the single-column `idx_share_address` each of those walked ~31 h of that miner's
+  shares (`WHERE grin_address = ? AND created_at > ?` could seek the address but not the window).
+  Two fixes, both kept: (1) the 30 s refresh re-reads only the RIGS (one pass:
+  `getWorkersForAccount` takes an optional short window and returns both hashrates), only for open
+  rows actually on screen, and not while the tab is hidden; the account facts are read on open,
+  after an action on that miner, and otherwise at most every `FACTS_MAX_AGE_S` (5 min); a failed
+  read is retried on the next refresh, never in a loop; the row prints both "as of" times;
+  collapsing a row drops its cached data. (2) The index itself — see *Backend*.
 - **One dialog at a time.** The backdrop blocks a second click, but keyboard focus can Tab out to a
   row button behind it, and a second open used to add a second submit listener to the same form,
   so one Submit banned BOTH addresses. `askDialog` now cancels an open dialog before opening.
@@ -3757,7 +3754,41 @@ Shares count and a separate 🧅 card for Tor state. It is now a miner console:
   the last `seen_s`, grouped by (address, rig), plus the in-memory sessions.
   ⚠ Its upper bound `created_at <= ?` is load-bearing: with it the plan is
   `SEARCH shares USING INDEX idx_share_created (created_at>? AND created_at<?)`, and without it
-  `SCAN shares USING INDEX idx_share_address`. The test pins both.
+  `SCAN shares USING INDEX idx_share_address_created`. The test pins both.
+- **`shares(grin_address, created_at)` index** (`idx_share_address_created`, `lib/db.js`) REPLACES
+  the single-column `idx_share_address` (dropped by the same schema list, so an upgraded DB loses
+  it on the next boot). Every per-address shares read is now bounded by its window:
+  `SEARCH (grin_address=? AND created_at>?)` for the worker breakdown and hashrate (the admin rig
+  rows AND the public account page), index-only for the detail route's COUNT/MAX, and no temp
+  b-tree for `shares.js` per-address `ORDER BY created_at`. `EXPLAIN` over every shares query
+  shape gave identical plans with or without the old index, so keeping it would only have added
+  a third index write per accepted share. It is built once, on the first boot after upgrade, over
+  the retained ~31 h, inside `initDb` — before `stratumServer.start()`.
+- **The list is capped at `limit` (max 1000, up from 500), and it is no longer "top N by
+  balance".** That cut a brand-new miner (balance 0 until a block matures) off the page while it
+  was mining, and the chips undercounted exactly the rows they exist for. Now
+  (`minerStatus.listPriority`): every account that MINED inside `seen_s` (biggest Σdiff first),
+  then admin-banned ones, then share-less sessions, then the rest by balance; the result is
+  returned in balance order. Share-less sessions go LAST because stratum login is unauthenticated
+  and creates the `miner_accounts` row (`stratum-server.js` `ensureMinerExists`), so anyone can
+  mint them. The response adds `total_accounts`, `mined_accounts` and `truncated`. `?search=`
+  keeps the old by-balance behaviour with `offset`, now as ONE string (an array is ignored),
+  bounded to 100 chars, with LIKE's `%`/`_` escaped; `offset` does not apply without it.
+- **Seven pre-existing full scans of `shares` closed** (outside this page; found by the plan sweep
+  for the index). All had a ONE-SIDED time range grouped by a column that leads another index, so
+  SQLite walked that whole index — the entire ~31 h table — to skip a small sort:
+  `created_at > ? GROUP BY grin_address` in `recordHashrates` (**every 60 s**) and `getTopMiners`;
+  `SELECT DISTINCT grin_address … created_at >= ?` in `updateStreaks` (daily); and
+  `created_at > ? GROUP BY region` (a range on `idx_share_region`'s SECOND column cannot seek) in
+  `/api/pool/topology`, `/api/pool/stats/regions`, `/api/pool/connect/suggest` (all PUBLIC) and
+  `/api/admin/health/gateways`. Each now carries an upper bound (`AND created_at <= now`, or the
+  day's end for the streak), which flips the plan to `SEARCH … idx_share_created` over the window;
+  results are unchanged (no share is stamped in the future). **NEW `scripts/test-shares-plans.js`**
+  (in `npm test`) guards the whole class rather than a hand list: it pulls EVERY SQL literal that
+  names `shares` out of `index.js` and `lib/*.js` (25 today, floors per file so a broken extractor
+  fails loudly), plans each on the real schema without ANALYZE, and fails on any `SCAN shares`
+  not in its allowlist (one entry: the one-off difficulty-unit migration). Run against the
+  committed pre-fix code it fails on exactly these seven.
 - New list fields: `status`, `workers_online`, `workers_total`, `workers_missing`,
   `workers_stalled`, `hashrate_gps`, `last_share_at` (now null past `seen_s`; the page then shows
   "seen …" from `last_seen_at`) and `banned_at`, plus top-level `windows`. **`shares_count` was
@@ -3769,21 +3800,556 @@ Shares count and a separate 🧅 card for Tor state. It is now a miner console:
   unchanged), plus region and connected-since from the live sessions, problem rigs first. It
   carries no rig IP or password.
 - Admin routes are not in `API_DOC_META`, so the public API reference is unchanged.
+- **Page side of the cap:** it asks for the maximum, prints a scope line ("Showing N of T
+  accounts: every one that mined in the last 1 h (M), banned ones, then the rest by balance", or
+  "All T accounts"), and when the list IS capped the address filter also asks the server
+  (`?search=`, 8+ characters, 300 ms debounce, stale replies dropped by a sequence number). Found
+  accounts the list lacks are added to the view — not to the chip counts, which describe the
+  server's list — and re-looked-up on each refresh; a `?q=` deep link does the same after the
+  first load. NEW `AdminTable` option `onSearch(q)` (after each keystroke; a throw is caught).
 
-**Tests.** NEW `scripts/test-admin-miners.js` (36) covers the status rules, the windowed query's
+**Tests.** NEW `scripts/test-admin-miners.js` (50) covers the status rules, the windowed query's
 results and plan (with a control showing the one-sided form SCANs), both real route handlers
-against a throwaway DB, the workers route's single share pass and the unchanged public output.
-`test-admin-panel.js` §11 was updated (the 🧅 button is gone) and gained §12 (17 checks) for the
-page, including the facts gate and the one-dialog guard. `npm test` exit 0. Two one-shot jsdom
-renders against stubbed data exercised expand, refresh, chips, sort, the ban dialog and `?q=`,
-then the fetch cadence (open → facts + rigs; refresh → rigs only; off-screen or hidden → none;
-facts at 5 min, after an action, and after a failure) and one-Submit-one-ban.
+against a throwaway DB, the workers route's single share pass and the unchanged public output,
+the composite index (present, old index gone, the per-address plans), and the capped list (a
+zero-balance miner mining now beats the richest idle account; banned beats a share-less session;
+totals; `?search=` escaping and array input; the priority read SEARCHes `miner_accounts`).
+`test-admin-panel.js` §11 was updated (the 🧅 button is gone) and gained §12 (21 checks) for the
+page, including the facts gate, the one-dialog guard and the cap handling. `npm test` exit 0.
+Three one-shot jsdom renders against stubbed data exercised expand, refresh, chips, sort, the ban
+dialog and `?q=`; the fetch cadence (open → facts + rigs; refresh → rigs only; off-screen or
+hidden → none; facts at 5 min, after an action, and after a failure) and one-Submit-one-ban; and
+the capped-list lookup (no call under 8 characters or on an uncapped list, one debounced call,
+found row listed but not counted, re-looked-up on refresh without doubling, `?q=` deep link).
 
 **Not done / open.**
 - Nothing has run against a live pool or in a real browser, and nothing on a VPS.
 - `connecting` is also what a stranger opening a session under someone's address looks like. It is
   shown amber-hollow and never counted as a rig. Whether to tell it apart from a slow first share
   is left open.
+
+### 10.13 Games platform (design §19; 2026-09-27, add-ons — NOT VPS-tested)
+
+The contract is design §19; the per-part deltas are in §19.15. This section records what each part
+built in the pool and what a reader of the pool code needs to know.
+
+#### Part 2: pool link (the only pool-side change)
+
+**All logic lives in NEW `lib/games-link.js`** (`createGamesLink()`). `index.js` gained the
+require, `const gamesLink = createGamesLink()` + `app.use(gamesLink.internal)` **above
+`express.json()`**, `gamesLink.attach({...})` + `gamesLink.mountAdmin(app, {...})` right after the
+branding route, `cfg.games = gamesLink.publicFlag()` in the branding builder, `'games'` in
+`STEP_UP_SETTINGS_SECTIONS`, and one clause in the branding row of `API_DOC_META`. Nothing touches
+the stratum, share, block, reward or payout paths.
+
+- **Why two phases.** The internal routes must see the request before `express.json()` (the secret
+  is checked before any body is read, and the verify cap is 2 KB, not express.json's 100 KB), but
+  the DB and settings only exist inside `initializePool`. So the middleware is mounted at the top of
+  the file and gets its dependencies from `attach()`, which runs before `app.listen`.
+- **`/internal/*` guards, in order:** (1) a forwarding header (`X-Forwarded-For` / `X-Real-IP`) or a
+  non-loopback socket → 404; (2) link file missing/short → 503 `link_not_configured`; (3) wrong or
+  missing `X-Games-Link` → 401 `unauthorised` (one `timingSafeEqual`); (4) exact route match, else
+  404. So a request that came through nginx cannot even learn whether the secret is configured.
+- **Link secret:** path from pool.json `games_link_secret_file` (default
+  `/opt/grin/conf/grin_pubgames_link_<net>`, `lib/config.js`). It is re-stat'ed at most once a
+  second and re-read when its mtime or size changes, with surrounding whitespace trimmed. The games
+  side must trim the same way (Part 4).
+- **verify-proof** requires `client_ip` and refuses a loopback/unspecified one (a broken X-Real-IP
+  chain would put every player in one throttle bucket). It calls the real `verifyOwnerProof` with
+  that IP, audits `owner_proof:games_login:ok|deny`, and answers **200** with either
+  `{ok:true, method, slot, age_seconds}` or `{ok:false, reason}`. Errors carry `error`, never
+  `reason`.
+- **activity** is one statement with `INDEXED BY idx_hashrate_time`. The planner already picks that
+  index without the pin (`SEARCH … (recorded_at>? AND recorded_at<?)` + a temp b-tree for the
+  GROUP BY). The pin makes a dropped index a loud error instead of a scan on the stratum process.
+- **config** answers 503 `settings_unavailable` rather than a guessed `off`, so the games service can
+  keep its last known mode (§19.2).
+- **Admin proxy** `ALL /api/admin/games/*` → games `/internal/admin/*`. Step-up is decided by
+  `requiresStepUp()`: GET never; the six §19.11 fast writes (fixed POST paths, see §19.11) never;
+  **every other write always, so a games admin route added later is step-up until it is listed**.
+  Paths are charset-checked raw (no `%`, no dot-segments), bodies are re-serialised JSON ≤ 64 KB,
+  2 s budget. Games down → 503 `games_offline`, non-JSON → 502. Each step-up call writes one
+  `games_admin` audit row. `GET /api/admin/games-link` (not proxied) feeds the Settings → Games
+  health line.
+- **Probe:** `GET 127.0.0.1:<games_port>/play/api/health` at attach, then every 60 s (unref'd, 1 s
+  hard timeout, `agent:false`). Healthy = 200 + `ok:true` + the pool's own network. A flip calls
+  `invalidateBranding`, so the nav reacts on the next branding fetch rather than after the 60 s memo.
+- **Settings:** new `games` section `{ mode:'off', chat_enabled:false }` with strict validators
+  (exact enum; booleans or the exact strings `'true'`/`'false'`, stored as `value_type 'boolean'`).
+  The reader treats anything unexpected as off. `games_port` / `games_link_secret_file` are
+  **pool.json keys, not settings** (§19.15 *Part 2*). A bad value in pool.json disables the link and
+  logs one line; it never blocks the pool's boot.
+- **Nav:** `public-shell.js` NAV gained `{ href:'/play/', label:'Play', icon:'🎮', games:true }`,
+  rendered with `data-games="1" style="display:none"` in the header and the footer Pool column.
+  `branding.js applyGamesNav` shows it only on `cfg.games.mode === 'on'`.
+- **Admin page:** NEW `admin-panel/settings-games.html` (a `<select id="mode">`, because the
+  harvester does not handle radios, plus `#chat_enabled` and the health line), linked under
+  Settings in `admin-shell.js`. `settings-common.js` gained `loadGamesLinkStatus()` (textContent
+  only).
+
+**Tests.** NEW `scripts/test-games-link.js` (169), wired into `test:unit`. It runs the real lib on
+a throwaway DB behind an express app mounted in index.js's order, with a fake games server on
+`127.0.0.1:0`. `test-public-leakage.js` gained `[games]` (5). Pool `npm test`: **2108 → 2282
+passed, 0 failed** (22 → 23 files).
+
+**Deploy note.** This is the one planned pool restart of the whole games build (§19.2 impact budget
+#1). With mode `off` (the default) and no games service installed, the only runtime change is one
+refused localhost connection a minute from the probe.
+
+**Not done / open.** Nothing ran against a live pool or on a VPS. The nginx
+`location ^~ /internal/ { return 404; }`, the link file itself and `id grinpool` are Part 3's.
+
+#### Part 3: operator side (bash, menu `P`)
+
+**All of it lives in NEW `scripts/lib/07_lib_pool_games.sh`** (prefix `pgs_`, plus the menu
+`pool_games_menu`), sourced by the pool script right after the backup lib. The pool script gained
+only hooks: the header menu comment, the `P` row + dispatch + no-pause entry, `games_port` in
+`pool_write_conf_key`'s numeric set, `pgs_deploy_code` at the end of `pool_deploy_code`, two lines
+in the vhost's `:443` block, a third `C) Cron` toggle, and a cleanup group. The backup lib and the
+migrate lib gained the games-DB hooks below.
+
+**The rule of the file: nothing under `P` restarts, stops or reloads `grin-pool-manager`.** Every
+state-changing `systemctl` call names `$PGS_SERVICE`; the pool unit is only read (`systemctl show`
+for its `NRestarts`, printed by P → 5 so the operator can prove the rule). nginx is reloaded, never
+restarted. `P → 3` may call `pool_setup_nginx` to add the include to an older vhost, which is itself
+a reload only.
+
+| Key | Function | What it does |
+|---|---|---|
+| 1 | `pgs_install` | Refuses without the pool unit, `grinpool` or Node ≥ 24. Creates `grinplay` (nologin, own group; removed from `grinpool`/`grinsecret` if found there), checks `id -gn grinpool` = `grinpool`, creates the dirs (code `root:grinplay 750`, data `grinplay 700`, `o+x` on `/opt/grin` + `/opt/grin/conf` for traverse), the link secret **once**, the two pool.json keys **only if absent**, deploys code, pre-creates the log, writes the unit + logrotate, enables and (re)starts the games only, waits ≤ 15 s for `/play/api/health`. Refreshes the daily backup wrapper when a schedule is on, so it starts archiving the games DB. |
+| 2 | `pgs_deploy_code` | Stages `server/**` + each game's `manifest.json`/`rules.js` (code) and `shell/**` + each game's `frame/**`/`rules.js` (web) in a temp dir, writes `version.js`, then ONE `rsync -a --delete` per tree, then re-applies owners/modes. Restarts only the games service, only if it is running. Also runs at the end of the pool's `9) Deploy new code` when games is installed; a games failure there is a warning, never a failed pool deploy. |
+| 3 | `pgs_setup_nginx` | Zones via `nginx_ensure_rate_limit_zones`, the snippet (temp file + rename, the previous copy kept in `/tmp` for rollback), the vhost include check, `nginx -t` + reload (rollback + reload on failure), then the route check. |
+| 4 | `pgs_service_menu` | Start / stop / restart the games unit. |
+| 5 | `pgs_status` | Unit state + `NRestarts` + last exit (78 named), listener (red unless `127.0.0.1` only), health JSON, DB size + `schema_version`, link file owner/mode, mode + chat from the pool, "401 without the secret", snippet + include present, the pool's own `NRestarts` / `ActiveEnterTimestamp`. |
+| 6 | `pgs_view_logs` | The last 50 lines, paged. |
+| 7 | `pgs_rotate_secret` | `[y/N]`, new secret via temp file + rename, then one probe with the new secret. No restarts. |
+| 8 | `pgs_uninstall` | Service, unit, snippet + zones (then test + reload), web + code dirs, logrotate, VACUUM cron, link file. The DB only on a second `[y/N]`. Keeps the `grinplay` user and the pool.json keys. |
+
+**How the secret is kept out of sight.** It goes `openssl rand -base64 48 > tmpfile` (a redirect,
+not argv) in a `umask 077` subshell, is `chown grinplay:grinpool` + `chmod 0440` **before** the
+rename, and is never read into a shell variable. P → 5 and P → 7 read it inside `node`, which is
+given the file PATH, and print one word. The unit carries only `GAMES_LINK_SECRET_FILE`.
+
+**Unit** (`/etc/systemd/system/grin-games[-testnet].service`): `User=grinplay`, the six variables
+`lib/config.js` knows (`GAMES_NET`, `GAMES_PORT`, `GAMES_DB`, `GAMES_LINK_SECRET_FILE`,
+`GAMES_GAMES_DIR`, `POOL_INTERNAL_URL` from pool.json `service_port`) + `NODE_ENV`, `ExecStart=node
+--disable-warning=ExperimentalWarning index.js`, `Restart=on-failure`, `RestartPreventExitStatus=78`,
+`StandardOutput/StandardError=append:` the log, every D16 limit, plus `PrivateDevices`,
+`ProtectKernelTunables`, `ProtectKernelModules`, `ProtectControlGroups`, `RestrictSUIDSGID`,
+`LockPersonality`. `ReadWritePaths=-<data dir>` only. No `Requires=`/`BindsTo=` in either direction.
+Logrotate uses `copytruncate` (no reopen signal exists; systemd holds the descriptor).
+
+**nginx.** Zones `<svc>_games` 600 r/m and `<svc>_gamelogin` 20 r/m in
+`/etc/nginx/conf.d/script07-<svc>-games.conf`. Snippet
+`/etc/nginx/snippets/script07-<svc>-games-locations.conf`: `= /play` (301), `^~ /play/api/login`
+(4 KB), `^~ /play/api/` (64 KB), `^~ /play/games/` (frames: no common snippet, own nosniff /
+Referrer-Policy / HSTS + the frame CSP), `^~ /play/` (shell: common snippet + shell CSP). The two
+static locations use the pool's `<svc>_static` zone. In `pool_setup_nginx`'s `:443` block, before
+`location /`: `location ^~ /internal/ { return 404; }` and `include
+/etc/nginx/snippets/script07-<svc>-games-*.conf;`. **The route check** runs `curl --resolve
+<domain>:443:127.0.0.1`, so a CDN cannot answer for the origin: `/play/` (200, or 403/404 = no shell
+yet), `/play/api/health` (200, or 502 = games stopped), `/internal/x` and `/internal/games/config`
+(both must be 404, else it is an error).
+
+**Backup / restore (D18).** `_pbk_make_tar` adds a snapshot of `$PGS_DB` through the SQLite backup
+API, in the same stage dir, appended after `pool.db`. It is best effort: a failure is a warning and
+never rc 2. No `cp` fallback, unlike `gbe_snapshot_db`: a raw copy of a live WAL DB is not a
+snapshot. `-wal`/`-shm` a root open may create are chowned back to `grinplay`. The daily cron
+wrapper does the same, logging `WARN` lines. `_pbk_restore_extract` **excludes** the games DB, and
+both `pbk_restore` and Migrate IN then call `pgs_restore_db_from_archive`: `[Y/n]` (EOF declines),
+stop games, move the old DB **with its sidecars** aside to `grinium-games.db.pre-restore[-wal|-shm]`,
+place the restored file, `chown grinplay` 600, start games again if it was running. On a box without
+the games yet, the file lands root-owned and P → 1 takes ownership.
+
+**Cron.** `C) Cron` → 3 (shown only when games is installed): weekly games VACUUM, Sunday **03:30**
+UTC (the pool's is 03:00), stops the games only, runs the VACUUM **as `grinplay`** via `runuser` from
+`/`, restarts from a trap.
+
+**Cleanup.** `Z) Cleanup` shows two presence marks and runs group **1b** (everything but the DB,
+`[Y/n]`) and **1c** (the DB, `[y/N]`, default KEEP) right after the services group, while the pool
+vhost that includes the snippet still exists.
+
+**Verified locally:** `bash -n` on the pool script and the three touched libs; the snippet heredoc
+rendered with the mainnet constants and read; `_pgs_stage_trees` run against the checkout (stage
+layout + `version.js`). **Owed on the VPS (checkpoint A):** everything else, including that the
+glob include matching nothing passes `nginx -t`, `MemoryMax` on the box's cgroup, `runuser` present,
+and the frame CSP's `sandbox` directive not breaking the chess frame (Part 6).
+
+#### Part 4: login, sessions, activity sync, plays ledger (games service only)
+
+**VPS checkpoint A was skipped by the operator** (2026-09-27: installs later), so Part 4 was built
+on top of Parts 1–3 with none of them run on a box. **No pool code changed in this part.** Everything
+is in `web/07_mining_pool_public/play/server/`:
+
+| File | What |
+|---|---|
+| `lib/pool-link.js` (NEW) | client for the three `/internal/games/*` routes: secret file trimmed, 32 B–4 KB, re-stat'ed ≤ 1/s; **no** `X-Forwarded-For` / `X-Real-IP`; 2 s whole-exchange timeout; typed `PoolLinkError` codes `link_not_configured` / `link_down` / `link_unauthorised` / `link_rejected` (+`field`) / `pool_error` / `bad_response`; every response shape-checked (activity rows with a bad address, the other network's prefix, a duplicate or a non-integer count are dropped and counted) |
+| `lib/ratelimit.js` (NEW) | LRU-bounded token buckets; a failure backoff whose record survives expiry (so escalation is reachable) and whose overflow never evicts a live lockout |
+| `lib/ledger.js` (NEW) | `post()` — the only writer of `players.plays` / `points`, balance + ledger row in one transaction, no overdraft (`LedgerError no_plays`), exactly-once by `uq_ledger_ref`; `verify()` reports drift, never fixes it |
+| `lib/plays.js` (NEW) | the activity sync (§19.6): hour-aligned contiguous windows from the watermark to now − 120 s, one transaction per window, `UNIQUE(window_from)`, ≤ 24 pool calls per tick, > 7 d behind = one skipped row, seconds clamped to the window |
+| `lib/sessions.js` (NEW) | sessions (§19.5): sha256-hex token hash, 14 d hard, `last_seen` ≤ 1 per 5 min, 20 live per address, `chat_ok_after` with the 1 h floor, `ip_coarse` /24 · /48, `ua_hint` "Browser on OS" (raw UA never stored), purge after 30 d |
+| `lib/auth.js` (NEW) | routes `POST /play/api/login` · `logout` · `logout-all`, `GET /play/api/me` · `sessions`; the login limiter chain; chat status |
+| `lib/mode.js` (NEW) | the pool's `games.mode` cache: off until the first answer, last known ≤ 10 min, single-flight, 60 s unref'd timer, transitions logged once |
+| `lib/settings.js` (NEW) | games-owned settings (`settings` table) with a typed spec; Part 4 keys: `minutes_per_play`, `plays_daily_cap`, `plays_balance_cap`, `chat_min_proof_age`, `chat_requires_password` |
+| `lib/mask.js` (NEW) | the pool's `maskAddr`, copied |
+| `lib/app.js` | builds the services; `publicRoute()` = mode gate (off → 404) + CSRF layer 3 for every public route except health; `registerJobs()`; `start()`/`stop()` for the mode timer |
+| `lib/http.js` | `sameOriginOk()`; `HttpError` carries response headers (`Retry-After`); five new message codes |
+| `index.js` | registers the jobs, starts the mode cache after `listen` |
+
+**Login, in order** (each step before anything dearer): body shape (`GRIN_ADDR_RE` + this network's
+prefix, proof 1–256 chars, no other keys) → a loopback client IP is refused (400 `client_ip`, pool not
+called) → per-IP and per-(address, IP) failure lockouts → per-IP bucket (10, refilling 1/min) →
+per-address failure budget (20, refilling 1 per 3 min; a /24 · /48 with a session for that address in
+the last 30 d passes when it is spent) → ban → **one** pool verify with the real IP. Only `no_match`
+counts as a failure. Failure answers: 401 `login_failed` + `reason` + `hint` (the account page's own
+sentence), 429 for `too_many_attempts` and every local limit (with `Retry-After`), 503
+`pool_unavailable` for `lookup_failed` and any link error, 403 `banned`.
+
+**Chat status** in `/me` (`auth.chatStatus`): `chat_off` · `muted` · `anchor_proof` ·
+`password_required` · `proof_too_new` (+ `available_at`). Part 8 adds the recent-mining gate there.
+
+**Maintenance jobs:** 5 m `activity_sync` (budget 15 s); 1 h `session_purge`, `limiter_sweep`,
+`ledger_verify` (logs at most 20 drift lines).
+
+**Tests.** NEW `scripts/test-auth.js` (163): the real pool-link against a stub pool on `127.0.0.1:0`
+(headers sent, secret trim / rotation / short / missing / oversized, every error code, the 2 s
+bound), the limiters (escalation after expiry, overflow), the ledger (1000 seeded random ops keep the
+invariant; a tampered balance is reported and left alone), the sync (window shape, idempotence, two
+concurrent syncs, UTC midnight, clamp, both caps, catch-up bound, the 7-day skip, link failures),
+login / sessions / `/me` over a loopback server with a stubbed pool (mode gate, cookie attributes,
+hashed token, every limiter, ban, CSRF, D9 variants, the 30-day known-IP window), the mode cache,
+and log hygiene. Four mutations (no clamp, no Origin check, backoff record deleted at expiry,
+`trivial_password` counted) each turned the suite red. Games `npm test`: **155 → 318 passed, 0
+failed** (1 → 2 suites). The `test-skeleton.js` calls to `buildApp` now pass a full config
+(`appConfig()`), since the app builds the pool link at construction.
+
+**Owed on the VPS** (with checkpoint A, whenever the operator installs): a real login through nginx
+(X-Real-IP reaching the service, the Origin check against the real Host), the pool's `games_login`
+audit rows, the first sync's pool cost (≤ 24 activity calls, then one per 5 min), and the mode
+following the admin switch within ~60 s.
+
+#### Part 5: match platform, chess, bot (games service only)
+
+Built on Parts 1–4 with nothing run on a box (checkpoint A skipped). **No pool code changed.**
+Contract: design §19.7–§19.8; deltas: §19.15 *Part 5*.
+
+| File | What |
+|---|---|
+| `play/games/chess/manifest.json` (NEW) | `kind: match`, modes bot + pvp, bot levels 1–3, UCI `move_pattern`, move times 1 / 3 / 7 days (default 3), `max_plies` 600, points bot 1/2/3, PvP 10/5 |
+| `play/games/chess/rules.js` (NEW) | our own rules on a 0x88 board, UMD (global `GrinChessRules` in the frame): FEN in/out, UCI moves, `initial` · `toMove` · `legal` · `apply` · `status` (checkmate, stalemate, automatic threefold with FIDE en passant identity, automatic fifty-move, dead material, 600 plies) · `bot`. The bot is seeded splitmix32 over FNV-1a of (seed, ply, FEN, level): level 1 random, level 2 greedy material with mate-in-1, level 3 2-ply alpha-beta over material + Michniewski piece-square tables, `BOT_NODE_BUDGET` 20 000 |
+| `server/lib/registry.js` (NEW) | `loadGames()`: real-path containment, size caps (manifest 16 KB, rules 512 KB), a strict manifest validator (unknown keys refused; `skill` / `chance` refused as reserved), rules.js evaluated in a sandboxed `vm` context, a smoke test on the start position; a bad game is skipped with one `[games] skipped …` line |
+| `server/lib/matches.js` (NEW) | routes `GET /play/api/games`, `POST /play/api/matches`, `GET …/matches/mine`, `GET …/matches/:id`, `POST …/:id/move`, `POST …/:id/resign`; the replay + integrity check, `advance()` (settle, or bot replies until a human is to move), `settle` / `abort` (`UPDATE … WHERE state='active'` must change exactly one row), the points cap, timeouts, the purge |
+| `server/lib/app.js` | builds the registry (injectable for tests) and matches; the match routes go through `publicRoute()`; jobs `match_timeouts` (5 m), `bot_moves_purge` (1 h) |
+| `server/lib/settings.js` | `bot_play_cost` (1, 0–10), `points_daily_cap` (100, 0–100 000) |
+| `server/lib/http.js` | ten message codes (`unknown_game` … `game_error`) |
+
+**A move, in order** (one `BEGIN IMMEDIATE`): the match exists (404) → the caller holds a seat (403
+`not_your_match`) → it is active (409 `not_active`) → a passed deadline is finalised and committed
+(409 `timeout`) → the game is loaded (503 `unknown_game`) → it is the caller's turn (403) → `ply`
+equals the stored ply (409 `stale`) → `move_pattern` → replay of the move list (must reach the stored
+position) → `rules.apply` (400 `illegal_move`) → status → settle, or the bot's reply → status → … A
+throw or a malformed return from any rules call answers 500 `game_error` and rolls the whole
+transaction back.
+
+**Tests.** NEW `scripts/test-matches.js` (133):
+- **Perft:** start d1–4, Kiwipete d1–3, and three more reference positions (en passant pins, promotion
+  and castling).
+- **Rules cases:** castling through and out of check, a rook captured at home, en passant and its
+  rank-pin, under-promotion, a pinned piece, every automatic game end, and repetition identity with an
+  unusable en passant square.
+- **Bot:** determinism across calls and separate sandbox loads, legality over 18 self-play games, mate
+  in 1 found at levels 2–3, level 3 never allowing a mate in 1, and the budget cut-off.
+- **Registry:** 15 planted folders, each good or bad for one reason, including a junction pointing
+  outside the games dir.
+- **Match API** over a loopback server with a stubbed pool: create validation, CSRF, `no_plays` with
+  nothing left behind, two racing moves (exactly one wins), stale / illegal / forged / another
+  address's match, the rate limit, public masking with no seed, resign exactly once, both timeout
+  paths (sweep and lazy), win / draw / `max_plies` points with the daily cap and its UTC reset, free
+  games, a throwing rules.js, a tampered position, `/mine` paging, mode off, the retention watermark,
+  the ledger invariant and `EXPLAIN` on the hot reads.
+
+Games `npm test`: **318 → 451 passed, 0 failed** (2 → 3 suites).
+
+**Owed on the VPS** (with checkpoint A, whenever the operator installs): the registry's boot line on
+the box (`[games] loaded chess 1.0.0 …` from `/opt/grin/pubgames/<net>/games/`); a bot game at each
+level through nginx once Part 6's shell exists; the `[matches] slow bot move` warning never
+appearing on the real CPU.
+
+#### Part 6: the `/play/` shell + the chess frame (one pool static file, one bash hunk)
+
+Built on Parts 1–5 with nothing run on a box. Contract: design §19.7 + D4 + D13; deltas: §19.15
+*Part 6*. **No pool backend code changed** — the one pool file is a static script served by nginx,
+live with the pool's web deploy and no restart.
+
+| File | What |
+|---|---|
+| `play/shell/index.html` (NEW) | the page: pool header/footer (`public-shell.js` → `public-theme.js` → `branding.js`), states loading · offline/closed · sign-in · signed in, the Plays/Points/Signed-in-as placard, devices fold + log out / log out everywhere, the board panel (G-02), new game vs the bot (G-03), My games (G-04), "How plays are earned" (G-05). `<html data-untrusted-html="exempt">`; no inline script; own assets stamped `?v=__GRIN_PLAY_VERSION__` |
+| `play/shell/js/play-api.js` (NEW) | `PlayApi.get/post` under `/play/api/`: same-origin, `no-store`, `redirect:'error'`, JSON content type on writes, 20 s abort. Offline = network error, non-JSON content type, a body without `ok`, 503 `shutting_down`/`db_unavailable` |
+| `play/shell/js/frame-host.js` (NEW) | `FrameHost.create`: `<iframe sandbox="allow-scripts" allow="" referrerpolicy="no-referrer">` at `/play/games/<id>/frame/?v=<version.js>`; inbound only from `contentWindow`, exact-key schemas, move checked against the manifest `move_pattern`; `sendState` rebuilds §19.7's fields so nothing else can ride along; state/theme held until `ready` |
+| `play/shell/js/play-shell.js` (NEW) | the controller: `/me` → signed in (401 → sign-in, 404 → "Games are closed", offline → retry), `/games`, `/matches/mine` (paged), opens the active bot game or `#m=<id>`, create / move / resign, two-click confirms, `/me` every 5 min while visible. No `innerHTML` |
+| `play/shell/css/play.css` (NEW) | layout only, pool tokens only; `[hidden]` wins on this page; board 8:9 capped at 560 px; one column under 900 px |
+| `play/games/chess/frame/{index.html,game.js,game.css}` (NEW) | 64 button squares (roving tabindex, arrows, Enter/Space), click-click + pointer drag, promotion picker, legal-target dots/rings, last-move tint, check marker (`rules.inCheck`), orientation from `you`, a provisional board from `rules.apply` while a move is in flight, input locked until the next `state`. Classic scripts; own dark/light palette |
+| `public_html/js/public-shell.js` (pool) | every rendered href is site-absolute via `abs()`, active item compared by path; no ad slots / `ads.js` on a `data-untrusted-html="exempt"` page |
+| `scripts/lib/07_lib_pool_games.sh` | `_pgs_stage_trees` replaces `__GRIN_PLAY_VERSION__` in every staged `*.html` after the hash; the "no shell" notice is a warning now |
+
+**The blog permalink bug this fixed.** `post.html` is served at `/blog/<slug>` with no `<base>`, so
+every header and footer link on a blog post resolved under `/blog/` (`/blog/index.html` …) and 404'd.
+The same links would have broken on `/play/`. Absolute hrefs fix both.
+
+**Tests.**
+- NEW games `scripts/test-shell.js` (68): static rules on both HTML pages and all shell/frame JS (no
+  inline script, no `on*`, no module script, no HTML sink, no eval, never `allow-same-origin`, every own
+  asset stamped, the untrusted-HTML opt-out, load order, no `name=` on the login inputs); `FrameHost`
+  in a `vm` with a fake DOM (ready gating, source check, exact schemas, a foreign-realm object dropped,
+  extra state fields dropped, destroy); `PlayApi` with a fake fetch (every offline rule, incl. a body
+  that parses but is not served as JSON); the nginx snippet's frame CSP. Mutation-checked: removing
+  the move schema, the source check, the content-type rule, the sandbox value or a `textContent`
+  each turns it red.
+- Pool `test-games-link.js` 169 → 173: hrefs through `abs()`, no relative literal, `abs()` itself, the
+  ad gating.
+- A one-shot headless-Edge probe over CDP (127.0.0.1 server with the real nginx headers and the
+  STAGED tree, stubbed `/play/api`, killed after): 48/48 — 1280 and 390 px in dark and light (0
+  console errors or CSP violations, no horizontal overflow, square board, frame theme follows), a move
+  through the frame (POST body exactly `{ply, move}`, bot reply drawn), junk and foreign messages
+  dropped, the frame cannot read `document.cookie`, the parent, storage or `/play/api/` (origin
+  `null`), login refusals, links absolute + Play active, no ads, 502 HTML → offline, 404 → closed, a
+  direct frame visit sandboxed.
+
+Games `npm test`: **451 → 519 passed, 0 failed** (3 → 4 suites).
+
+**Owed on the VPS** (with checkpoint A): `P → 2` deploy shows the stamped URLs in
+`/var/www/grin-play/index.html`; a bot game at each level through nginx and Cloudflare in preview;
+the real CSP headers on `/play/` and `/play/games/` (`curl -sI`); a blog permalink's header links.
+
+#### Part 7: leaderboards, events, the admin Events page
+
+Built on Parts 1–6 with nothing run on a box. Contract: design §19.9 + §19.11 + D15 + D17; deltas:
+§19.15 *Part 7*. **No pool backend code changed** — two admin-panel static files (a new page and a
+nav entry), live with the pool's web deploy and no restart. The pool-side step-up rule the page
+relies on (`FAST_WRITES` in `lib/games-link.js`) was written in Part 2 and already names these routes.
+
+| File | What |
+|---|---|
+| `play/server/lib/leaderboard.js` (NEW) | `GET /play/api/leaderboard?board=&game=&mode=&period=`: points held (`players`), rating (`ratings`, ≥ 5 rated games), wins / match points per game + mode over the current UTC day, ISO week, month or all time (`results_daily`). Masked names, `own` flag + `you` rank for the caller, 60 s cache over a closed key space |
+| `play/server/lib/events.js` (NEW) | the platform: validation, lifecycle (`tick()`), `finalise()`, public routes `GET /play/api/events` + `/:id`, admin routes under `/internal/admin/` (`event-kinds`, `events` list / create, `events/:id` get / update, `…/cancel`, `…/finalise`) |
+| `play/server/lib/events/{game_results,mining_minutes,active_days}.js` (NEW) | one module per kind: `validate` · `compute` · `describe` · `gameId` (+ `fields` for the admin form). Reads `results_daily` / `activity_daily` only |
+| `play/server/lib/events/index.js`, `_rules.js` (NEW) | the explicit kind list (a new kind = a module + one line here); the rules helpers (`RulesError`, strict keys, typed ints / enums) |
+| `play/server/lib/admin.js` (NEW) | the `/internal/admin/*` guard, run before the body is read: forwarding headers or a non-loopback peer → 404; link secret → 401 / 503; `X-Admin-User` → 400; `X-Admin-Stepup: 1` on every non-FAST write → 403 `step_up_required`. `audit()` writes the `mod_actions` row |
+| `play/server/lib/badges.js` (NEW) | the eight badge ids + labels; parsing of `players.badges_json` |
+| `play/server/lib/app.js` | builds admin / leaderboard / events; public routes through `publicRoute()`, admin routes straight on the router; jobs `event_transitions` (5 m, after `activity_sync`) and `mod_actions_purge` (1 h, 365 days) |
+| `play/server/lib/http.js` | a route `guard` option (runs before the body is read); five message codes |
+| `play/server/lib/pool-link.js` | `checkSecret(given)` → `ok` / `wrong` / `not_configured`: the admin guard gets a verdict, never the secret |
+| `play/server/lib/auth.js` | `/me` gains `badges` `[{ id, label, event_id }]` |
+| `play/shell/js/play-boards.js` (NEW) | the G-06 panel: Leaderboards / Events tabs (ARIA tablist, arrow keys), board + period pickers, ranked tables, the event list, detail with rewards and standings. Follows the page state from `play-shell.js`'s `play:view` event; shown signed in or out; no polling; no `innerHTML` |
+| `play/shell/index.html`, `js/play-shell.js`, `css/play.css` | the G-06 section, a badges line on the account strip, a sentence on events in G-05; `setView()` sets `body[data-play-view]` and fires `play:view`; tab / table / chip styles from the pool tokens |
+| `back-end-pool/admin-panel/games-events.html` (NEW) | event form (kind → rule fields from `event-kinds`, title, first / last UTC day as date inputs, reward tiers, participation), the list (AdminTable, state chips, Edit / Results / Finalise now / Cancel), the results table with full addresses, an in-page confirm dialog; every call through `adminFetch('/api/admin/games/…')` |
+| `back-end-pool/admin-panel/admin-shell.js` | NAV: a **Games** group (🎮) holding Events, between Dashboard and Settings |
+
+**Finalising an event, in order** (one `BEGIN IMMEDIATE`): the event is `finalising` (else nothing is
+written) → the kind computes over the window's UTC days → addresses with a zero value, or banned at
+that moment, drop out → sort by value DESC, address ASC; rank = position → the state flips to `done`
+(an `UPDATE … WHERE state = 'finalising'` that must change one row) → per ranked address: an
+`event_results` row, the reward (the first tier holding the rank, else participation if the value
+reaches it) as a `('points', +n, 'event', 'e:<id>')` ledger row, the badge appended to
+`badges_json`. A throw anywhere rolls all of it back and leaves the event `finalising` for the next tick.
+
+**A link-secret 401 is not a logout.** `API.get` / `Auth.fetch` send the admin to `/login.html` on
+ANY 401, and the proxy passes the games service's own 401 (pool and games disagree on the link
+secret) through unchanged. So `games-events.html` does not use `API.*`: it reads the body, and a 401
+whose body has `ok: false` is shown as "rotate the link secret (P → 7)"; only the pool's own 401
+(which never carries `ok`) goes to the login page. Parts 9's games pages need the same.
+
+**Tests.**
+- NEW games `scripts/test-events.js` (101): UTC periods (ISO week across a year end, leap February);
+  ranking and its tie-breaks; kind rules; every board over a loopback server (periods, modes, the
+  provisional rating rule, masking, `own` / `you`, parameter refusals, the 60 s cache, mode off);
+  the admin guard (forwarding headers, missing / wrong / absent secret, the guard before the body,
+  admin user, step-up, `FAST_WRITES` compared as text with the pool's); event validation; the whole
+  lifecycle through `tick()`; `mining_minutes` equal to the `activity_daily` sums over exactly the
+  window over randomised data; `active_days`; `game_results` with `min_games`, a banned address and
+  another mode; exactly-once (a second tick, a direct finalise, a forced replay that must fail whole,
+  a duplicate ledger ref); cancel from running and from finalising paying nothing; finalise-now;
+  public visibility of cancelled events; every public response scanned for a full address; `EXPLAIN`
+  on every board and kind query, and a source check that none reads `matches` or `ledger`; the
+  ledger invariant; the `mod_actions` purge.
+- Games `test-shell.js` 68 → 78: the panel markup, load order, the `play:view` hook, no polling, the
+  only API paths used, badges via `textContent`.
+- Pool `test-admin-panel.js` 142 → 153 (section [13]): the NAV group, all calls through the proxy
+  prefix, create / update FAST and cancel / finalise step-up per the pool's own `requiresStepUp`, the
+  401 split, delegated row buttons, no native dialogs, escaped rows, date inputs with the last day
+  included.
+- A one-shot headless-Edge probe over CDP (127.0.0.1 server serving the real shell under the real
+  shell CSP header, stubbed `/play/api/`, Edge killed with its process tree after): 58/58 at 1280 and
+  390 px, dark and light, signed in and out — 0 script errors and 0 CSP violations, no horizontal
+  overflow, own row + "you" line, the week range, an event title of `<b>…<img onerror>` rendered as
+  text in the list and the detail, provisional / final / scheduled detail states, the Reward column
+  hidden until final. `games-events.html` was checked statically only (its inline script parses);
+  it has not been opened in a browser.
+
+Games `npm test`: **519 → 630 passed, 0 failed** (4 → 5 suites). Pool `npm test`: **2290 → 2301**,
+exit 0.
+
+**Owed on the VPS** (with checkpoint A): the Games → Events page through the real proxy (create,
+edit, cancel with the step-up dialog, finalise now); one event from schedule to rewards on the live
+activity sync (Part 13's list already has it); the boards and events through nginx in preview.
+
+#### Part 8: chat backend, moderation, and moderators (games service only)
+
+Built on Parts 1–7 with nothing run on a box. Contract: design §19.10 + §19.11 + D9 + **D21 (new:
+moderators)**; deltas: §19.15 *Part 8*. **No pool code changed** — the pool's `FAST_WRITES` already
+names the four fast chat routes, and every new admin write is step-up by its fail-closed rule.
+
+| File | What |
+|---|---|
+| `play/server/lib/chat.js` (NEW) | `GET /play/api/chat` (page, or `after` + `rev` + `epoch` → new messages + `changes`), `POST /play/api/chat`, `POST /play/api/chat/:id/report`; body normalisation, the hold rules (word list, links, Grin addresses, reports), the per-address (DB) and per-IP (memory) limits, the in-memory change log, the state helpers moderation uses (`remove` / `approve` / `restore` / `operatorPost`), hourly retention |
+| `play/server/lib/moderation.js` (NEW) | the operator's routes under `/internal/admin/` (messages, reports, delete / approve / restore / post, word list, players + mute / unmute / ban / unban / purge / adjust, moderators, settings, mod log) and the moderators' `/play/api/mod/{queue, messages/:id/delete, …/approve, …/mute}` |
+| `play/server/lib/db.js` | migration **v2**: `moderators`, `chat_words` (new tables only) |
+| `play/server/lib/auth.js` | the recent-mining gate in `chatStatus` (reason `no_recent_mining`); `modStatus` → `/me.moderator` |
+| `play/server/lib/settings.js` | nine chat / moderator keys; `setMany` (validate all, write in one transaction) and `meta` |
+| `play/server/lib/app.js`, `http.js` | wiring, `GET /play/api/rules`, the `chat_retention` job; the new error messages |
+| `play/server/scripts/test-chat.js` (NEW) | 171 checks: normalisation units, every gate and limit, holds, reports, the change feed, the operator routes + step-up, bans revoking sessions, purge, adjust, settings, moderators and every limit on them, retention, no full address in any public answer, `EXPLAIN` on every read |
+
+**How a moderator is set up** (operator): Games → Chat & moderation → *Moderators* → paste the
+helper's mining address → *Appoint* (asks for your password). Tell them to sign in to /play/ with their
+**rig password** (not an IP) — by default the tools stay off for an IP sign-in — and to have mined
+recently enough to chat. They then see a *Moderator queue* under the chat. To stop it: *Remove*, or ban
+the address. What they did is in the moderation log as "Moderator grin1…".
+
+Games `npm test`: **630 → 803 passed, 0 failed** (5 → 6 suites; `test-skeleton.js` +2 for the v1 → v2
+upgrade, `test-auth.js` pins `chat_min_minutes` 0 where it tests the proof gate alone).
+
+#### Part 9: the chat UI and the admin pages
+
+| File | What |
+|---|---|
+| `play/shell/js/play-chat.js` (NEW) | the G-07 panel: polling with the change feed, textContent-only rows, Operator / Mod badges from `role`, the author's own held messages, Report, the gate sentence per reason, the moderator queue + Delete / Mute 1 h, the live rules in the "How plays are earned" fold |
+| `play/shell/index.html`, `css/play.css` | the G-07 section (anti-scam line first), `#rule-*` spans in the fold, the script tag; chat styles on the theme tokens only |
+| `play/shell/js/play-shell.js` | `announceMe()` → the `play:me` event on every `/me` render and on sign-out; the login path passes `moderator` through |
+| `back-end-pool/admin-panel/games-admin.js` (NEW) | shared by the three pages: the proxy `call()` (Part 7's 401 rule), `el()` (textContent builder), the confirm dialog, address chips, the mod-log actor ("Moderator grin1…") |
+| `back-end-pool/admin-panel/games.html` (NEW) | the Games NAV parent: links + the games-owned settings form built from the service's spec, the fixed floors listed |
+| `back-end-pool/admin-panel/games-chat.html` (NEW) | tabs Held / Reports / Visible / Deleted / All with row actions; operator post; moderators; word list; moderation log |
+| `back-end-pool/admin-panel/games-players.html` (NEW) | lookup (also `?address=`), Muted / Banned / Moderators lists, mute / unmute, ban / unban, delete recent messages, adjust plays or points, appoint / remove moderator; recent messages, matches, 14 days of activity |
+| `back-end-pool/admin-panel/admin-shell.js` | NAV: Games → Overview & settings, Chat & moderation, Players, Events |
+| tests | `test-shell.js` +12 (the panel, `play:me`, text-only rendering, API paths, polling, no native dialogs); `test-admin-panel.js` [14] +21 (proxy-only calls, no HTML sink, fast vs step-up paths against the pool's own `requiresStepUp`, NAV); Part 7's NAV pin loosened for the new parent |
+
+**Verified locally:** a one-shot headless-Edge probe over CDP (127.0.0.1 server with the real shell under
+the real `/play/` CSP header, stubbed `/play/api/`, Edge killed with its tree after; the script lived in
+the session scratchpad only): **58/58** at 1280 and 390 px, dark and light, signed out and as a
+moderator — 0 CSP violations, 0 console errors, no horizontal overflow; an `<img onerror>` body, a
+`<script>` post and a `<b>` report reason all rendered as text with no element created; badges, the held
+flag, the Report / Delete placement, the moderator queue, the live rules, a post appended once across the
+next poll. The three admin pages were checked **statically only** (their scripts parse, the test rules
+above); they have not been opened in a browser.
+
+Games `npm test`: **803 → 815 passed, 0 failed**. Pool `npm test`: **2301 → 2322**, exit 0.
+
+**Owed on the VPS** (with checkpoint A, in `preview` with `chat_enabled` on): post / hold / report /
+approve / delete from the admin panel and see it leave an open /play/ page within one poll; mute and ban
+(sessions signed out); appoint a moderator, act from /play/ with a password sign-in, and confirm the IP
+sign-in is refused; the three admin pages through the real proxy, including every step-up dialog.
+
+#### Part 10: PvP correspondence chess + the "add a game" checklist
+
+Built on Parts 1–9 with nothing run on a box (2026-09-28). Contract: design §19.6 + §19.8 + §19.9 + D20;
+deltas: §19.15 *Part 10*. **No pool backend code** — match void is one more `/internal/admin/*` write,
+step-up by the proxy's fail-closed rule; `FAST_WRITES` is unchanged. **No schema change** — PvP uses the
+v1 columns (`target`, `draw_offer_by`, `rated`, `idx_matches_pair` …) Part 0 already put in §19.4.
+
+| File | What |
+|---|---|
+| `play/server/lib/matches.js` | PvP create (seek = no target, challenge = a full target address) with the open / active caps; `accept` / `decline` / `cancel`; `draw` (offer / accept / decline — an offer meeting the other side's accepts, a move clears one); `abort` (ply < 2, both refunded); a PvP resign at ply < 2 becomes an abort; the 72 h seek/challenge expiry on `turn_deadline` (lazy + the sweep, now per state); the rated rule at settle + Elo; `GET /play/api/lobby`, `GET /play/api/matches/turns`; `actions` / `open_seat` / `invited` / `target_label` / `rated` / `draw_offer_by` / `expires_at` on every view; admin `POST matches/:id/void` |
+| `play/server/lib/ratings.js` (NEW) | Elo K = 24 from 1200, integer and zero-sum; `apply` at settle, `recompute(game)` after a void |
+| `play/server/lib/settings.js` | `pvp_play_cost` 1, `pvp_active_max` 10, `pvp_open_max` 5, `pair_rated_daily` 3 |
+| `play/server/lib/app.js`, `http.js`, `moderation.js` | admin built before matches (void registers through it); `/play/api/rules` gains the PvP numbers; ten error messages; the admin player view's match list carries `rated` + `ply` |
+| `play/shell/js/play-lobby.js` (NEW) | the G-08 "Play a person" panel: post a seek or challenge (game / colour / time per move from the manifest), open seeks, challenges for you, Accept / Decline / Cancel as two-click buttons; talks to the shell only through `play:open` / `play:changed` / `play:me` / `play:turns` |
+| `play/shell/js/play-shell.js` | board buttons shown from the view's `actions`; open-seek / challenge / draw-offer status lines; the board poll (5 s, visible, opponent to move, `since_ply`) and the turns poll (15 s / 60 s) with the "N to move" badge; seek / challenge rows in My games; a Game picker on the bot form (hidden while one game offers bot play) |
+| `play/shell/js/play-boards.js` | rating, PvP wins and PvP points boards per game with a `pvp` mode |
+| `play/shell/js/frame-host.js` | an empty seat's label is "Open seat" |
+| `play/shell/index.html`, `css/play.css` | the G-08 panel, eight board buttons, the My games badge, the PvP lines in the fold, the script tag |
+| `back-end-pool/admin-panel/games-players.html` | a Void button per voidable match (step-up, confirm with reason), the rated flag |
+| `back-end-pool/admin-panel/games.html` | a "Games between players (PvP)" group for the four new settings |
+| `play/README.md` | the layout table brought up to date + the **"Add a game" checklist** |
+| tests | NEW `test-pvp.js` (90); `test-shell.js` +13 (the lobby panel, its API paths, body-only target, no polling, the event contract, every action button, both polls, since_ply, the PvP boards); `test-matches.js` one check replaced (PvP is no longer refused) |
+
+**The void, for an operator** (Games → Players → look the address up → Matches → *Void*): an active game
+ends without a result and every seat gets its play back; an open seek or challenge closes and its creator
+gets the play back; a finished game keeps its result on record but loses the points it paid (taken back
+with `admin_void` rows, never below 0), leaves `results_daily`, and — if it was rated — every rating in
+that game is recomputed without it. Event rewards already paid are not clawed back (as a `done` event's
+cancel). Aborted / declined / expired / void matches answer 409 `not_voidable`.
+
+**Verified locally:** a one-shot headless-Edge probe (127.0.0.1 stub server, the real shell and chess
+frame under the real `/play/` and frame CSP headers, stubbed `/play/api/`, the server closed and Edge
+gone after — the script lived in the session scratchpad only): signed in on an active PvP game with the
+opponent's draw offer and on the player's own open seek — 0 page console errors, 0 CSP violations; the
+board showed exactly Accept draw / Decline draw / Abort, then exactly Cancel seek; the "1 to move" badge,
+the live PvP cost and pair cap in the fold and the form hint; an `<img onerror>` seek name rendered as
+text with no element created; at 390 px (the iframe probe) every panel fits with no horizontal overflow.
+Dark theme only; the admin pages were checked **statically only** (their scripts parse, the pool tests).
+
+Games `npm test`: **815 → 918 passed, 0 failed** (6 → 7 suites). Pool `npm test`: **2322/2322**, exit 0 (no pool test added: the void is a proxied step-up write the existing `test-admin-panel.js` rules already cover).
+
+**Owed on the VPS** (Part 13): one PvP correspondence game between two addresses (one IP-proof, one
+password-proof) with a draw offer, a decline and an accept; a timeout; a seek that expires and refunds;
+a challenge declined; the pair cap on a 4th game the same UTC day; the rating board after 5 rated games;
+a void of a finished rated game from the admin panel (step-up dialog), with the points and the rating
+seen to change back.
+
+#### Part 11: independent review — the fixes as built (2026-09-28)
+
+The review record (all 20 threat notes, the six probes, the open items) is design §19.15 *Part 11
+review*; the audit roll-up rows are P11-1 … P11-5 in `script07_security_audit.md`. What changed in code:
+
+| File | Change | Test |
+|---|---|---|
+| `back-end-pool/lib/games-link.js` | Global caps, keyed on nothing a caller controls: verify-proof ≤ `VERIFY_INFLIGHT_MAX` 4 in flight and `VERIFY_PER_MIN` 120 / min; activity `ACTIVITY_PER_5MIN` 60 per 5 min. Checked after validation; over → 429 `busy`, logged at most once a minute. **Pool backend code — it ships with the pool deploy (one pool restart), which Part 2's code needs anyway.** | `test-games-link.js` [14], 8 checks |
+| `play/server/lib/matches.js` | `settle` writes no `results_daily` row for a free match (cost 0); admin void takes counts off only for a match `settle` counted | `test-matches.js` (d) +1, `test-pvp.js` (e) +2 |
+| `play/server/lib/plays.js` | Comment only: a settings change re-rates the current UTC day | — |
+| `play/shell/index.html` | Sign-in card: the "someone else can sign in as you" hint | `test-shell.js` unchanged, passes |
+| `scripts/07_grin_mining_public_pool.sh` | The `B) Backup & Restore` menu row re-aligned | `bash -n` |
+
+Games `npm test`: **918 → 921 passed, 0 failed**. Pool `npm test`: **2322 → 2330**, exit 0.
+
+**For the operator:** when the pool answers `busy` (429), a games login shows "the pool is
+unreachable" and the plays sync retries on its next tick — an honest games service never reaches the caps,
+so a `[games-link] … over its global cap` line in the pool log means the games process is misbehaving or
+compromised: stop it (`P → 4`) and read its log. Two decisions are yours (design §19.15 *Part 11 review*
+O1, O2): opting the account page out of analytics / custom HTML / code ads, and accepting D21's
+moderator-inheritance limit.
+
+
+#### Part 12: approved nicknames (2026-09-28)
+
+The contract is design §19.16; the departures from the plan are §19.15 *Part 12*. No pool backend code:
+the three admin writes are step-up by the existing `FAST_WRITES` rule, so the pool's admin proxy carries
+them unchanged — this part ships with the games deploy (`P → 2`) plus the pool's static admin files.
+
+| File | Change | Test |
+|---|---|---|
+| `play/server/lib/names.js` | NEW. The name rule, the request lifecycle, `label()` (the ONE public name: the mask or `Nick (mask)`), `meView` for `/me`, the admin queue + flags, `removeLiveOf` for a ban, the 180-day purge | `test-names.js` (NEW, 78) |
+| `play/server/lib/db.js` | Migration **v3**: `nicknames` + three partial unique indexes + three indexes | `test-skeleton.js` (v1 → v3, v2 → v3, §19.4 == schema) |
+| `play/server/lib/settings.js` | `nicknames_enabled` (bool, default on) | `test-names.js` (b, d) |
+| `play/server/lib/auth.js` | `chatStatus(s, { ignoreChatSwitch })`; `/me` carries `nickname` | `test-names.js` (b) |
+| `play/server/lib/{chat,leaderboard,events,matches}.js` | Every public name through `names.label` (fallback: the mask, so a module built without names behaves as before) | `test-names.js` (d, e) |
+| `play/server/lib/moderation.js` | A ban removes the live nickname and refuses a pending one; the Players view carries `nickname` | `test-names.js` (c, d) |
+| `play/server/lib/app.js` | Builds `names` before the modules that display names; routes; the hourly `nickname_purge` job | all suites |
+| `play/shell/index.html`, `css/play.css`, NEW `js/play-names.js` | The Nickname fold in the account strip (state, "others see you as", pending / refused lines, the request form, withdraw / remove); the "How plays are earned" line on names | `test-shell.js` +9 |
+| `back-end-pool/admin-panel/games-names.html` | NEW. Games → Nicknames: queue / Live / Rejected, approve / reject / remove (step-up), flags, text-only rendering | `test-admin-panel.js` [15] |
+| `admin-panel/admin-shell.js`, `games.html`, `games-players.html`, `games-admin.js` | NAV entry; the page link + the switch's label; the nickname line on a player; three error texts | `test-admin-panel.js` [15] |
+
+Games `npm test`: **921 → 1010 passed, 0 failed** (8 suites). Pool `npm test`: **2330 → 2341**, exit 0.
+Mutation-checked: showing a nickname without its mask, removing the gate, and removing the approve-time
+"taken" check each turn `test-names.js` red (the last is still refused by the unique index, as a 500).
+**Not done:** no browser probe of the fold or of `games-names.html` (static checks only); nothing on a VPS.
+
+**For the operator:**
+- Nothing to install: the next `9) Deploy new code` (which ends with the games deploy) migrates the games DB
+  to v3 on the service's restart. Nicknames are **on** by default; switch them off under Games → Overview &
+  settings → Nicknames.
+- Requests arrive in **Games → Nicknames**. Approve, reject (the reason is shown to the player on /play/)
+  or remove; each asks for your admin password. A red "Same as a live name" flag means approve will be
+  refused. A ban also ends the address's nickname; an unban does not bring it back.
+- What players see: `Night Shift (grin1abcd…wxyz)` — the nickname never appears without the mask.
 
 ---
 

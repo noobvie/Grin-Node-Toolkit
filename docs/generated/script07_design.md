@@ -1,9 +1,9 @@
 # Script 07 — Public Mining Pool (Design)
 
-> **Covers code as of:** 2026-09-27 for §8's "Why this is safe", "One send at a time", "Held resolves itself" and "The operator" bullets (the uncommitted /review-fix working tree), and for §15.5's "Response binding" bullet (the uncommitted binding-fix working tree) · 2026-09-26 for §6's four admin withdrawal / Tor-pause rows and §8's opening line, Tor row, no-auto-payout paragraph, balance-model table, the NEW "One Tor attempt, then an answer" section (which replaced "What moves a Tor payout on"), the pre-flight paragraph's two additions, and the §8.1 heading + status note (the uncommitted one-attempt Tor payout working tree) · 2026-09-25 for §6's `/withdraw/:id/slatepack` row (written with the code) · 2026-09-25 for §8's Tor-row note, the no-auto-payout paragraph, the two new paragraphs after the balance model, and the §8.1 heading + status note + §8.1.1 annotation (the uncommitted Tor-payout-hardening working tree, F1–F5 built); the body of §8.1 is the DESIGN as written that day against the Tor rail after F1–F4, before F5 was built — as-built deltas live in impl §10.8 · 2026-09-24 for §18.10 Parts 1–6 + §18.11 (per-share donation, the donor-profile backend, the admin review queue, the public wall and the account page, written against the uncommitted working tree) · 2026-09-23 for §4's effective-latency note, §11's gateway :443 note and §13.13 (hub move + connect-page latency, written against the uncommitted working tree) · 2026-09-07 for the multi-region surface (§2–§7, §11–§12, rewritten against the live code) · 2026-06-08 for the rest of the §6 endpoint table
-> **Last verified:** 2026-09-27, PARTIAL — **§15.5's "Response binding" bullet only, by the session that made the binding fix**: both finalize paths read in `lib/withdrawal-scheduler.js` after the edit; `npm test` exit 0 (impl §10.10 *Slatepack finalize binding*). Same day, PARTIAL — **the four §8 bullets listed under *Covers code as of* for that date only, by the session that made the /review fixes**: each rule read in `lib/withdrawal-scheduler.js` and `lib/wallet-tor.js` after the edit; the grin-wallet v5.5.0 behaviour behind them (the CLI's coin selection and late lock, `tx_slate_state` never updated on the sender, `cancel_tx` needing a node) read in the upstream source that session; `npm test` exit 0 (impl §10.10 *Review fixes*). 2026-09-26, PARTIAL — **the 2026-09-26 §6 / §8 / §8.1 edits listed under *Covers code as of* only, by the one-attempt docs-fold session**: the outcomes, the Held two-read rule and 24 h alert, the forced-refund refusals, the post-failure probe codes, the pause constants and its place before the probe, the Tor-only cooldown exemption, the `walletBin` fix and the deleted stepwise settings were read in the working tree (`lib/withdrawal-scheduler.js`, `index.js`, `lib/wallet-tor.js`); the offer's hide rules were grepped in `account-settings.html`, not re-run; `npm test` exit 0 (21 suites, 1900). The lock-before-broadcast fact comes from the Session 4 review's v5.5.0 source read and was **not re-checked**. The four rejection reasons are the operator's, recorded as given. 2026-09-25, PARTIAL — **§8's four edits listed under *Covers code as of* only, by the Tor-payout-hardening docs-fold session**: `SHORTFALL_RETRY_S`/`TOR_DOWN_RETRY_S` and both caps, `UNMINED_ALERT_S`, the repost limits, the `confirmed`-only kernel backfill, the `payout_unmined` levels and the settings removal read in the working tree; the "kernel written at lock, rewritten at finalize" fact is the F1 build session's source read, not re-checked. Same day, PARTIAL — **§8.1 only, by the F5 design session**: every grin-wallet claim was read in the v5.5.0 and v5.4.1 source (both tags cloned; file + function cited in place), and every pool claim was read in the working tree. §8.1.1's "exits 0 on a failed Tor delivery" comes from the source, not from running the binary; no test ran and nothing was built. The rest of §8 was not re-checked, and its "Auto-payout" paragraph is known stale (F4 deleted the keys; Part 7 of that plan folds it). 2026-09-24, PARTIAL — **§18.9 → §18.11 *Part 6* only, by the §18 Part 6 review session (cold, separate from the builders)**: each §18.9 point answered against the code diff, not the build notes — the greps, a stub-DB distribution + `computeReconciliation` run, a 60,043-input banner-parser fuzz and the public-route inventory are that session's own; `npm test` 1343/1343 before the fix and 1345/1345 after. The 390 px probe claims of Parts 4–5 were **not** re-run. Same day, PARTIAL — **§18.10 Part 5 row + §18.11 *Part 5* only, by the §18 Part 5 build session**: each delta read in the code it describes; `npm test` 1343/1343; the panel's states and layout measured with a one-shot 390 px headless-Edge probe (four fixtures, both themes). Same day, PARTIAL — **§18.10 Part 4 row + §18.11 *Part 4* only, by the §18 Part 4 build session**: each delta read in the code it describes; `npm test` 1331/1331; the page's layout claims measured with a one-shot 390/1280 px headless-Edge probe in both themes. Same day, PARTIAL — **§18.10 Part 3 row + §18.11 *Part 3* only, by the §18 Part 3 build session**: each delta read in the code it describes; `npm test` 1310/1310; the cookie attributes behind delta 1 read in `index.js`; the admin CSP line checked to be byte-identical to before the build. Same day, PARTIAL — **§18.10 Part 2 row + §18.11 *Part 2* only, by the §18 Part 2 build session**: each delta read in the code it describes; `npm test` 1298/1298; the multer boundary measured with a one-shot fake-stream run; §18.4's "no deploy-script change" claim grepped in the pool script. Same day, PARTIAL — **§18.10 Part 1 row + §18.11 *Part 1* only, by the §18 Part 1 build session**: each delta read in the code it describes; `npm test` 1145/1145. The rest of §18 is design, not a claim about code. 2026-09-23, PARTIAL — **§13.13's dark-gate / restored-pool bullets and §13.13.6 only, by the Part 9 review session**, read against the code it changed. Also 2026-09-23, PARTIAL — **§13.13 (hub move + latency), by the fold session only**: the names, keys and menu keys it cites grepped in the code (`B → 6/7` dispatch in `07_lib_pool_backup.sh`, the `pmg_*` function list, `probe_host`/`probe_enabled`/`grin-gateway-probe`/`maxconn 2000` in `07_lib_gateway.sh`, `latency_probe_domain`/`latency_hub_url`/the page `connect-src` in the pool script, `SEED_VERSION = 3` and the `_state`/`local_region` stamp in `lib/db.js`, `payout_control.before` in the manifest), the suggest route read in full in `index.js` (privacy + cache claims) and the header + `pickRecommended` of `lib/connect-suggest.js`; `npm test` re-run that session, 1133/1133 across 19 suites. **Taken from the seven build sessions' own reports, not re-checked:** the step order inside Migrate OUT/IN, the harness counts, the nginx/haproxy runtime measurements (incl. the 40-request `limit_req` figure), the Globalping numbers and the downtime estimate. Also 2026-09-23, PARTIAL — **§8's new Tor pre-flight paragraph only**, read against `lib/wallet-tor.js` (`REASONS`, `classifyProbeError`, `probeToronlineStatus`) and the `index.js` withdraw-route gate (null → allow + warn, false → 409, runs before `createWithdrawal`). The rest of §8 was not re-checked. Also 2026-09-23, PARTIAL — **§17 (all of it), by the Part 4 review**: every §17.2 decision and §17.4 threat note read against `lib/owner-proof.js` in full, the `miner_proofs` readers in `index.js` and `lib/db.js`, `requireBothProofs` + every `verifyOwnerProof` call site, the startup order, the two work guards in `lib/stratum-server.js`, `scripts/test-owner-gate.js` and the page's two renderers; KDF counts measured by a scratch harness, not reasoned. Three places were WRONG and are annotated in place (§17.2 #2/#3/#9, §17.4) with §17.7 holding the detail. Earlier the same day: **§17.6's Part 3 entry only**, read against the code that session: `migratePagesFromConfig` in `lib/db.js` (seed-once marker) and the `/restore` route in `index.js`. Before that: 2026-09-07, PARTIAL — **the multi-region surface only**, read against the code: the mode selector + `pool_mode_conflict_check` in `scripts/07_grin_mining_public_pool.sh`, `role`/`region`/`region_ports` in `back-end-pool/lib/config.js`, listener-port region stamping in `lib/stratum-server.js`, `shares.region` + `pool_locations` + `pool_region_metrics_hourly` in `lib/db.js`, the ingestion/health/region routes in `index.js`, and the WireGuard + region-port derivation in `scripts/lib/07_lib_gwctl.sh`. Everything outside that surface — the rest of §6, and §7–§10, §13–§15 — still rests on the 2026-06-08 pass (account + payout routes re-verified 2026-07-13) and was **not** re-checked, with one line-scoped exception: the admin-surface note in the §6 not-built list was corrected 2026-09-07 against `back-end-pool/admin-panel/` and `admin-shell.js`.
-> **Product code last changed:** 2026-09-27 (§15.5 Slatepack finalize binding: both finalize paths fail closed when the row or the reply has no slate id — scheduler only; impl §10.10 *Slatepack finalize binding*; **uncommitted, not VPS-tested**). Same day (§8 /review fixes #1–#6 — Held refunds wait for a resume and an intact wallet history, the Tor send holds the wallet send lock, grin-wallet's stdout reaches the settlement, the forced refund reads `tx_slate_state`, the send audit compares NET, a 360 s send timeout — scheduler, `lib/wallet-tor.js`, `lib/wallet.js` comment, `lib/reconciliation.js`, `index.js` audit row, admin `payments.html`; impl §10.10 *Review fixes*; **uncommitted, not VPS-tested**). 2026-09-26 (§8 Tor payouts: one attempt, Held, Tor pause, Slatepack offer; stepwise F5 and the retry ladder deleted; the `walletBin` fix for mainnet payout #10 — scheduler, `lib/wallet-tor.js`, `lib/wallet.js`, `lib/db.js`, settings, `lib/alert-monitor.js`, `lib/reconciliation.js`, `index.js`, the account page, four admin pages; impl §10.10; **uncommitted, not VPS-tested**). 2026-09-25 (slatepack rail: stored encrypted S1 + the §6 re-fetch route, refund-before-cancel expiry, `slate_cancel_pending` retry — security audit roll-up note "Slatepack rail: a lost tab…"; **uncommitted, not VPS-tested**). Same day (§8 / §8.1 Tor payout hardening F1–F5 + the CLI rail's exit-0 fallback fix — scheduler, `lib/wallet.js`, `lib/wallet-tor.js`, `lib/db.js`, settings, `index.js`, three admin pages; impl §10.8; **uncommitted, not VPS-tested**). 2026-09-24 (§13.13 hub move, review P1 — Migrate OUT removes the weekly VACUUM cron and refuses while a vacuum runs; `07_lib_pool_migrate.sh`). Same day (§18 Part 6 review fix R6-1 — `index.js` `requireBothProofs` refuses a proof verified as the other kind with `wrong_kind` instead of the verifier's success code `match`; the account page's `DP_REASONS` key follows; suite 1343 → 1345; **uncommitted, not VPS-tested**). Same day (§18 Part 5 — account page: P-05 donation row from `donation`, P-03 per-rig badge, NEW P-09 Donor profile panel in `account-settings.html`; the v1 aliases `donation_percent` / `donor_name` / `donor_name_state` dropped from `/api/account/:addr` and its api-docs row; suite 1331 → 1343; **uncommitted, not VPS-tested**). Same day (§18 Part 4 — `/api/pool/donors` v3: card `banner` under the Top-N slot rule, `ranking.banner_slots`, `current_percent` dropped; `donate.html` D-01 rewrite, D-01b, D-03 spotlight; api-docs row; suite 1310 → 1331; **uncommitted, not VPS-tested**). Same day (§18 Part 3 — admin review queue, image route, approve/reject/remove/block/unblock, `donors.html` rewrite, v1 censor/rescan/marker removed, wall + account names from approved profiles only, banner previews from a plain same-origin `src` (admin CSP unchanged); suite 1298 → 1310; **uncommitted, not VPS-tested**). Same day (§18 Part 2 — `donor_requests` + `donor_blocks`, NEW `lib/donor-profiles.js`, `leagueRank()`, `donor_banner_slots`, `requireBothProofs` purpose wording, three `/api/account/:addr/donor-profile` routes + account `donor_profile` in `index.js`; suite 1145 → 1298; **uncommitted, not VPS-tested**). Same day (§18 Part 1 — per-share donation in `lib/rewards.js` + `lib/incentives.js`, stored-% machinery removed, `liveDonations()` in `lib/donor-ledger.js`, additive fields on four `index.js` routes; suite 1134 → 1145; **uncommitted, not VPS-tested**). 2026-09-23 (Part 9 review fixes C1–C6 — dark gate, unit disabled across Migrate IN, code never archived/extracted, freeze on a failed extraction, no archive without pool.db, midnight-safe OUT; `07_lib_pool_migrate.sh`, `07_lib_pool_backup.sh`). Same day (hub move + connect-page latency, §13.13 — seeds v3 + local-region stamp in `lib/db.js`; NEW `lib/region-rtt.js`, `lib/connect-suggest.js`, `lib/latency-probe.js`; `/api/pool/connect/suggest`, `hub_rtt_ms`/`is_hub`, `connection.latency` on branding in `index.js`; `reactor-dashboard.js` + `reactor.css` measurement; gateway re-resolve timer + `6) Latency probe` in `07_lib_gateway.sh`; NEW `07_lib_pool_migrate.sh` + shared freeze/archive/restore cores in `07_lib_pool_backup.sh`; hub `/ping` + CSP in the pool script; suite 960 → 1133, 16 → 19 suites; **uncommitted, not VPS-tested**). Same day (payout-rails fix — `lib/wallet.js` `create_slatepack_message` named params; Tor probe ported from 06d in `lib/wallet-tor.js` + new `lib/socks5.js`, 8 s default, `?fresh=1` on tor-check; P-04 slimmed and the §17.2 #8 fold removed; suite 881 → 945; impl §10.5; **not VPS-tested**). Same day (§17 Part 4 review — `index.js`: `migrateProofSet` moved ahead of `stratumServer.start()`, `proof_too_recent`/`anchor_not_accepted_here` texts; `lib/owner-proof.js`: racing duplicate capture no longer evicts a second proof, a returning evicted anchor restarts `first_seen_at`; `test-owner-gate.js` 36 → 42, suite 875 → 881; **not VPS-tested**, §17.7). Same day (§17 Part 3 — copy sweep, no logic: the homepage setup guide, the shipped Terms/Privacy/FAQ defaults in `lib/pool-settings.js`, the `anchor_not_accepted_here` error text + two `index.js` doc/comment sites, and stratum/owner-proof/db comments restated for a set of ten; suite unchanged at 875/875; §17.6 Part 3). 2026-09-22 (§17 Part 2 built — the account page: `public_html/account-settings.html` renders `proofs` as counts, drops the "Evidence changed" banner, warns only past the cap and restates the gate copy for a set of ten; **not VPS-tested**, impl §10.4 "Part 2", §17.6 records the deltas). Same day (§17 Part 1 built — the ownership-proof SET backend: `miner_proofs` + `miner_accounts.proof_salt`, per-address scrypt salt, set capture/verify with LRU eviction and a flagged-not-deleted anchor, `migrateProofSet()` replacing `migrateOwnerProofHashes` and `backfillProofAnchors`, `proofs` on the account and admin miner views, suite 849 → 875; **not VPS-tested**, impl §10.4, §17.6 records the deltas). 2026-09-21 (§16 Part 5 review: two fixes in `lib/donor-names.js` — the rescan parses the list once per walk, not per name, and a separators-only label is no label — §16.12; the same day Parts 1–4 were built in order: login grammar → storage + capture + account view → admin moderation → the public league, impl §10.3 "Part 1"–"Part 4", every part **not VPS-tested**; earlier the same day: `/api/pool/donors` totals over every donor + `active_donors` from live tags, account `is_online` per rig — impl §10.3). 2026-09-20: pairing string carries the public port; gateway Status boot line, §13.12s; anchored ufw test + unmanaged-firewall readout, §13.12t — `scripts/07_grin_mining_*.sh`, `scripts/lib/07_lib_*.sh`, `web/07_mining_pool_public/`
-> Prose last edited 2026-09-27 (admin route catalog: `GET /api/admin/miners/:addr/workers` added — impl §10.12). Same day (binding fix: §15.5's "Response binding" bullet says the bind fails closed). Same day (/review fixes: §8's "Why this is safe" gains the wallet-history proviso, NEW "One send at a time" bullet, "Held resolves itself" and "The operator" amended). 2026-09-26 (one-attempt Tor payout fold: §8's opening line, Tor row and no-auto-payout paragraph; the balance table gains Held; the ladder sentence and "What moves a Tor payout on" replaced by "One Tor attempt, then an answer" with the rejected auto-Slatepack alternative; two sentences on the pre-flight probe; §8.1 heading → DELETED + a new status note). 2026-09-25 (Tor payout hardening fold: §8's Tor row, the stale Auto-payout paragraph replaced by "There is no auto-payout", NEW paragraphs on uncounted retries and "paid is not mined", §8.1 heading → BUILT behind the switch + a status note, §8.1.1's bug annotated as fixed on the CLI rail). Earlier the same day (§8.1 added — step-by-step Tor send design, F5, NOT built; it also records that today's CLI rail marks an undelivered Tor send as paid). 2026-09-24 (§18 Part 6 review: §18 heading, §18.10 Part 6 row, NEW §18.11 *Part 6*, Part 5 #10 annotated). Same day (§18 Part 5 built: §18 heading, §18.10 Part 5 row, §18.11 *Part 5*). Same day (§18 Part 4 built: §18 heading, §18.10 Part 4 row, §18.11 *Part 4*). Same day (§18 Part 3 built: §18 heading, §18.10 Part 3 row, §18.11 *Part 3*). Same day (§18 Part 2 built: §18 heading, §18.10 Part 2 row, §18.11 *Part 2*). Same day (§18 Part 1 built: §18 heading, §18.10 Part 1 row, NEW §18.11 build deltas). 2026-09-23 (§13.13 added — hub move + connect-page latency; §4 gained the effective-latency rule; §11 the gateway :443 probe note; §13.10b/c annotated where a hub IP change was said to need no gateway action). Earlier the same day (§18 added — donations v2: per-share donation, reviewed donor profiles with nickname + top-5 banner; design only, NOT built; §16 marked superseded in part and its Part 6 replaced by §18.10 Part 7). Earlier the same day (payout-rails fix: §8 gained the Tor pre-flight probe paragraph, replacing a "no TCP port-probe before send" claim that had been false since 2026-07-19; §17.2 #8 annotated where the operator reversed the fold placement). Earlier the same day (§17.7 added — the Part 4 review's ten answers and three fixes; §17.2 #2/#3/#9, §17.3 and §17.4 annotated where the review found them wrong; §17.6 Part 4 done). Earlier the same day (§17 intro + §17.6 — Part 3 done, with its three deltas, incl. that already-installed pools keep the old CMS page text; §6's slatepack note pointed at §17). 2026-09-22 (§17.6 updated — Parts 1 (backend) and 2 (account page) are built, with each part's deltas from §17 recorded there; Parts 3–5 unrun. Earlier the same day: §17 added — ownership-proof SET of 10 per kind with a per-address salt, replacing the 2-slot window). 2026-09-21 (§16 added — donor names + donor league; §16.11 tracks the build, Parts 1–5 done, Part 6 = VPS acceptance still owed; §16.12 records what building changed against the design and the Part 5 review's findings).
+> **Covers code as of:** 2026-09-28 for §19.16, §19.15 *Part 12*, the §19.4 v3 block, D19's amendment, the §19.10 name line, the §19.11 `games-names.html` row, §19.13 #21 and the §19.14 Part 12 row (approved nicknames: `play/server/lib/names.js` + its wiring, `play/shell/js/play-names.js`, `admin-panel/games-names.html`, written against the uncommitted working tree) · 2026-09-28 for §19.15 *Part 11 review*, the §19.14 Part 11 row, the §19.6 settings paragraph and the §19.8 free-match sentence (the whole games platform as reviewed — `play/**`, `back-end-pool/lib/games-link.js`, `scripts/lib/07_lib_pool_games.sh` + hooks — plus the review's own fixes, written against the uncommitted working tree) · 2026-09-28 for the §19.6 / §19.8 / §19.11 Part 10 edits, the §19.14 Part 10 row and §19.15 *Part 10* (PvP in `play/server/lib/{matches,ratings}.js`, `play/shell/js/play-lobby.js` + the board in `play-shell.js`, `admin-panel/games{,-players}.html`, written against the uncommitted working tree) · 2026-09-28 for D21, the §19.4 v2 tables, the §19.10 report / change-feed / moderator paragraphs, the §19.11 edits, the §19.14 Part 8–9 rows and §19.15 *Part 8* + *Part 9* (the chat + moderation code in `play/server/lib/`, the G-07 panel in `play/shell/`, `admin-panel/games{,-chat,-players}.html` + `games-admin.js`, written against the uncommitted working tree) · 2026-09-28 for the §19.14 Part 7 row, §19.15 *Part 7*, §19.9's `reward_json` line, §19.11's `games-events.html` row and the §19 heading (leaderboards, events and the admin guard in `play/server/lib/`, the G-06 panel in `play/shell/`, `admin-panel/games-events.html` + the Games NAV group, written against the uncommitted working tree) · 2026-09-27 for the §19.14 Part 6 row, §19.15 *Part 6* and §19 heading (the shell + chess frame in `play/shell/` + `play/games/chess/frame/`, `public_html/js/public-shell.js` and `_pgs_stage_trees`, written against the uncommitted working tree) · 2026-09-27 for the §19.14 Part 5 row, §19.6's points note and §19.15 *Part 5* (registry, matches and chess in `play/server/lib/` + `play/games/chess/`, written against the uncommitted working tree) · 2026-09-27 for the §19.14 Part 4 + checkpoint A rows and §19.15 *Part 4* (login, sessions, activity sync and ledger in `play/server/lib/`, written against the uncommitted working tree) · 2026-09-27 for §19.12's *As built* note, the §19.14 Part 3 row and §19.15 *Part 3* (the operator side, `scripts/lib/07_lib_pool_games.sh` + its hooks in the pool, backup and migrate scripts, written against the uncommitted working tree) · 2026-09-27 for §19's heading, the §19.3 common-rules bullet + settings note, the §19.11 fast-write table, the §19.14 Part 2 row and §19.15 *Part 2* (the pool link, `back-end-pool/lib/games-link.js` + its mount lines, written against the uncommitted working tree) · 2026-09-27 for the §19.14 Part 1 row and §19.15 *Part 1* (the games service skeleton in `play/server/`, written against the uncommitted working tree) · design only, 2026-09-27, for the rest of §19 (games platform — Parts 5–13 have no code yet; the pool facts it cites were read in the working tree that day: `GRIN_ADDR_RE`, `secureAdmin`/`freshAdmin`, `maskAddr`, `verifyOwnerProof`'s return contract, `hashrate_history` + `idx_hashrate_time`, `HashrateTracker.recordHashrates`, `RESERVED_ADDRESSES`) · 2026-09-27 for §8's "Why this is safe", "One send at a time", "Held resolves itself" and "The operator" bullets (the uncommitted /review-fix working tree), and for §15.5's "Response binding" bullet (the uncommitted binding-fix working tree) · 2026-09-26 for §6's four admin withdrawal / Tor-pause rows and §8's opening line, Tor row, no-auto-payout paragraph, balance-model table, the NEW "One Tor attempt, then an answer" section (which replaced "What moves a Tor payout on"), the pre-flight paragraph's two additions, and the §8.1 heading + status note (the uncommitted one-attempt Tor payout working tree) · 2026-09-25 for §6's `/withdraw/:id/slatepack` row (written with the code) · 2026-09-25 for §8's Tor-row note, the no-auto-payout paragraph, the two new paragraphs after the balance model, and the §8.1 heading + status note + §8.1.1 annotation (the uncommitted Tor-payout-hardening working tree, F1–F5 built); the body of §8.1 is the DESIGN as written that day against the Tor rail after F1–F4, before F5 was built — as-built deltas live in impl §10.8 · 2026-09-24 for §18.10 Parts 1–6 + §18.11 (per-share donation, the donor-profile backend, the admin review queue, the public wall and the account page, written against the uncommitted working tree) · 2026-09-23 for §4's effective-latency note, §11's gateway :443 note and §13.13 (hub move + connect-page latency, written against the uncommitted working tree) · 2026-09-07 for the multi-region surface (§2–§7, §11–§12, rewritten against the live code) · 2026-06-08 for the rest of the §6 endpoint table
+> **Last verified:** 2026-09-28, PARTIAL — **§19.16, §19.15 *Part 12*, the §19.4 v3 block and the Part 12 line edits only, by the Part 12 build session**: each statement read against `play/server/lib/{names,auth,chat,leaderboard,events,matches,moderation,app,db,settings}.js`, `play/shell/js/play-names.js` and `admin-panel/games-names.html` as written that session; §19.4 is test-bound (`test-skeleton.js`); games `npm test` 1010/1010, pool 2341/2341; no browser probe, nothing run on a VPS. · 2026-09-28, PARTIAL — **§19.13's threat notes and §19.15 *Part 11 review* only, by the Part 11 review session** (a session that built none of Parts 1–10): each answer read against the code it cites; games `npm test` 921/921, pool 2330/2330; nothing run on a VPS. The rest of §19 was NOT re-verified line by line. · 2026-09-28, PARTIAL — **§19.14's Part 10 row, §19.15 *Part 10* and the §19.6 / §19.8 / §19.11 edits only, by the Part 10 build session**: each delta read against `play/server/lib/{matches,ratings,settings}.js`, `play/shell/js/{play-lobby,play-shell,play-boards}.js` and `games-players.html` as written that session; games `npm test` 918/918 (NEW `test-pvp.js` 90), pool `npm test` 2322/2322, a headless-Edge probe of the PvP board + lobby (dark only). · Earlier: 2026-09-28, PARTIAL — **D21, §19.4's v2 block, the §19.10 / §19.11 edits, §19.14's Part 8–9 rows and §19.15 *Part 8* + *Part 9* only, by the Part 8–9 build session**: each delta read against `play/server/lib/{chat,moderation,auth,settings,db,app}.js`, `play/shell/js/play-chat.js` and the three admin pages as written that session; §19.4's block is test-bound (games `npm test` 815/815, NEW `test-chat.js` 171), pool `npm test` 2322/2322, a headless-Edge probe 58/58. · Earlier: 2026-09-28, PARTIAL — **§19.14's Part 7 row, §19.15 *Part 7* and the §19.9 / §19.11 line edits only, by the Part 7 build session**: each delta read against `play/server/lib/{leaderboard,events,admin,badges}.js`, `lib/events/*`, `play/shell/js/play-boards.js` and `games-events.html` as written that session; games `npm test` 630/630 (NEW `test-events.js` 101), pool `npm test` 2301/2301 (`test-admin-panel.js` [13]), a one-shot headless-Edge probe 58/58 of the /play/ panel under the real shell CSP; `games-events.html` not opened in a browser; nothing run on a VPS. Before that: 2026-09-27, PARTIAL — **§19.14's Part 6 row and §19.15 *Part 6* only, by the Part 6 build session**: each delta read against `play/shell/**`, `play/games/chess/frame/**`, `public-shell.js` and `_pgs_stage_trees` as written that session; games `npm test` 519/519 (NEW `test-shell.js` 68, five mutations each turning it red), pool `npm test` 2290/2290, a one-shot headless-Edge probe 48/48 against the staged tree with the real nginx headers; nothing run on a VPS. The same session also REPAIRED this file: the Part 5 session's write of §19.15 *Part 5* #1 had expanded a literal `$` + backtick as a perl pre-match, pasting a second copy of lines 1–4377 mid-sentence (9 314 lines); the duplicate was checked byte-identical to the file's own prefix before it was cut, so nothing unique was lost. Before that: 2026-09-27, PARTIAL — **§19.14's Part 5 row and §19.15 *Part 5* only, by the Part 5 build session**: each delta read against `play/server/lib/{registry,matches,settings,app,http}.js` and `play/games/chess/` as written that session; games `npm test` 451/451 on Windows (NEW `test-matches.js` 133, with perft exact on five reference positions); nothing run on a VPS. Before that: 2026-09-27, PARTIAL — **§19.14's Part 4 row and §19.15 *Part 4* only, by the Part 4 build session**: each delta read against `play/server/lib/{pool-link,ratelimit,ledger,plays,sessions,auth,mode,settings}.js` and `app.js` as written that session; games `npm test` 318/318 on Windows, with four mutations each turning `test-auth.js` red; nothing run on a VPS. Before that: 2026-09-27, PARTIAL — **§19.12's *As built* note, §19.14's Part 3 row and §19.15 *Part 3* only, by the Part 3 build session**: each delta was read in `07_lib_pool_games.sh` and the hooks as written that session; `bash -n` on the pool script and the three touched libs; the nginx snippet heredoc rendered with the mainnet constants and read; the deploy staging run once against the checkout. Nothing ran on a VPS. Same day, PARTIAL — **§19.3's common-rules bullet and settings note, §19.11's fast-write table, §19.14's Part 2 row and §19.15 *Part 2* only, by the Part 2 build session**: each statement was checked against `lib/games-link.js`, `lib/pool-settings.js`, `lib/config.js` and the `index.js` mount lines as written that session; the activity plan was run with `EXPLAIN QUERY PLAN` on the real schema, with and without the `INDEXED BY` pin; pool `npm test` exit 0, 2282 passed / 0 failed. Nothing was run against a live pool or on a VPS. Same day, PARTIAL — **§19.14's Part 1 row and §19.15 *Part 1* only, by the Part 1 build session**: each delta was read in the code it describes; the games `npm test` passed 155/155 on Windows (the 0600 mode and SIGTERM checks are POSIX-only and were skipped); §19.4's SQL block was compared with the v1 migration mechanically by that suite (35 objects), and that comparison was mutation-checked to fail on a changed default, CHECK or partial index. Nothing was run on a VPS. Same day, PARTIAL — **§15.5's "Response binding" bullet only, by the session that made the binding fix**: both finalize paths read in `lib/withdrawal-scheduler.js` after the edit; `npm test` exit 0 (impl §10.10 *Slatepack finalize binding*). Same day, PARTIAL — **the four §8 bullets listed under *Covers code as of* for that date only, by the session that made the /review fixes**: each rule read in `lib/withdrawal-scheduler.js` and `lib/wallet-tor.js` after the edit; the grin-wallet v5.5.0 behaviour behind them (the CLI's coin selection and late lock, `tx_slate_state` never updated on the sender, `cancel_tx` needing a node) read in the upstream source that session; `npm test` exit 0 (impl §10.10 *Review fixes*). 2026-09-26, PARTIAL — **the 2026-09-26 §6 / §8 / §8.1 edits listed under *Covers code as of* only, by the one-attempt docs-fold session**: the outcomes, the Held two-read rule and 24 h alert, the forced-refund refusals, the post-failure probe codes, the pause constants and its place before the probe, the Tor-only cooldown exemption, the `walletBin` fix and the deleted stepwise settings were read in the working tree (`lib/withdrawal-scheduler.js`, `index.js`, `lib/wallet-tor.js`); the offer's hide rules were grepped in `account-settings.html`, not re-run; `npm test` exit 0 (21 suites, 1900). The lock-before-broadcast fact comes from the Session 4 review's v5.5.0 source read and was **not re-checked**. The four rejection reasons are the operator's, recorded as given. 2026-09-25, PARTIAL — **§8's four edits listed under *Covers code as of* only, by the Tor-payout-hardening docs-fold session**: `SHORTFALL_RETRY_S`/`TOR_DOWN_RETRY_S` and both caps, `UNMINED_ALERT_S`, the repost limits, the `confirmed`-only kernel backfill, the `payout_unmined` levels and the settings removal read in the working tree; the "kernel written at lock, rewritten at finalize" fact is the F1 build session's source read, not re-checked. Same day, PARTIAL — **§8.1 only, by the F5 design session**: every grin-wallet claim was read in the v5.5.0 and v5.4.1 source (both tags cloned; file + function cited in place), and every pool claim was read in the working tree. §8.1.1's "exits 0 on a failed Tor delivery" comes from the source, not from running the binary; no test ran and nothing was built. The rest of §8 was not re-checked, and its "Auto-payout" paragraph is known stale (F4 deleted the keys; Part 7 of that plan folds it). 2026-09-24, PARTIAL — **§18.9 → §18.11 *Part 6* only, by the §18 Part 6 review session (cold, separate from the builders)**: each §18.9 point answered against the code diff, not the build notes — the greps, a stub-DB distribution + `computeReconciliation` run, a 60,043-input banner-parser fuzz and the public-route inventory are that session's own; `npm test` 1343/1343 before the fix and 1345/1345 after. The 390 px probe claims of Parts 4–5 were **not** re-run. Same day, PARTIAL — **§18.10 Part 5 row + §18.11 *Part 5* only, by the §18 Part 5 build session**: each delta read in the code it describes; `npm test` 1343/1343; the panel's states and layout measured with a one-shot 390 px headless-Edge probe (four fixtures, both themes). Same day, PARTIAL — **§18.10 Part 4 row + §18.11 *Part 4* only, by the §18 Part 4 build session**: each delta read in the code it describes; `npm test` 1331/1331; the page's layout claims measured with a one-shot 390/1280 px headless-Edge probe in both themes. Same day, PARTIAL — **§18.10 Part 3 row + §18.11 *Part 3* only, by the §18 Part 3 build session**: each delta read in the code it describes; `npm test` 1310/1310; the cookie attributes behind delta 1 read in `index.js`; the admin CSP line checked to be byte-identical to before the build. Same day, PARTIAL — **§18.10 Part 2 row + §18.11 *Part 2* only, by the §18 Part 2 build session**: each delta read in the code it describes; `npm test` 1298/1298; the multer boundary measured with a one-shot fake-stream run; §18.4's "no deploy-script change" claim grepped in the pool script. Same day, PARTIAL — **§18.10 Part 1 row + §18.11 *Part 1* only, by the §18 Part 1 build session**: each delta read in the code it describes; `npm test` 1145/1145. The rest of §18 is design, not a claim about code. 2026-09-23, PARTIAL — **§13.13's dark-gate / restored-pool bullets and §13.13.6 only, by the Part 9 review session**, read against the code it changed. Also 2026-09-23, PARTIAL — **§13.13 (hub move + latency), by the fold session only**: the names, keys and menu keys it cites grepped in the code (`B → 6/7` dispatch in `07_lib_pool_backup.sh`, the `pmg_*` function list, `probe_host`/`probe_enabled`/`grin-gateway-probe`/`maxconn 2000` in `07_lib_gateway.sh`, `latency_probe_domain`/`latency_hub_url`/the page `connect-src` in the pool script, `SEED_VERSION = 3` and the `_state`/`local_region` stamp in `lib/db.js`, `payout_control.before` in the manifest), the suggest route read in full in `index.js` (privacy + cache claims) and the header + `pickRecommended` of `lib/connect-suggest.js`; `npm test` re-run that session, 1133/1133 across 19 suites. **Taken from the seven build sessions' own reports, not re-checked:** the step order inside Migrate OUT/IN, the harness counts, the nginx/haproxy runtime measurements (incl. the 40-request `limit_req` figure), the Globalping numbers and the downtime estimate. Also 2026-09-23, PARTIAL — **§8's new Tor pre-flight paragraph only**, read against `lib/wallet-tor.js` (`REASONS`, `classifyProbeError`, `probeToronlineStatus`) and the `index.js` withdraw-route gate (null → allow + warn, false → 409, runs before `createWithdrawal`). The rest of §8 was not re-checked. Also 2026-09-23, PARTIAL — **§17 (all of it), by the Part 4 review**: every §17.2 decision and §17.4 threat note read against `lib/owner-proof.js` in full, the `miner_proofs` readers in `index.js` and `lib/db.js`, `requireBothProofs` + every `verifyOwnerProof` call site, the startup order, the two work guards in `lib/stratum-server.js`, `scripts/test-owner-gate.js` and the page's two renderers; KDF counts measured by a scratch harness, not reasoned. Three places were WRONG and are annotated in place (§17.2 #2/#3/#9, §17.4) with §17.7 holding the detail. Earlier the same day: **§17.6's Part 3 entry only**, read against the code that session: `migratePagesFromConfig` in `lib/db.js` (seed-once marker) and the `/restore` route in `index.js`. Before that: 2026-09-07, PARTIAL — **the multi-region surface only**, read against the code: the mode selector + `pool_mode_conflict_check` in `scripts/07_grin_mining_public_pool.sh`, `role`/`region`/`region_ports` in `back-end-pool/lib/config.js`, listener-port region stamping in `lib/stratum-server.js`, `shares.region` + `pool_locations` + `pool_region_metrics_hourly` in `lib/db.js`, the ingestion/health/region routes in `index.js`, and the WireGuard + region-port derivation in `scripts/lib/07_lib_gwctl.sh`. Everything outside that surface — the rest of §6, and §7–§10, §13–§15 — still rests on the 2026-06-08 pass (account + payout routes re-verified 2026-07-13) and was **not** re-checked, with one line-scoped exception: the admin-surface note in the §6 not-built list was corrected 2026-09-07 against `back-end-pool/admin-panel/` and `admin-shell.js`.
+> **Product code last changed:** 2026-09-28 (§19 Part 12 approved nicknames: NEW `play/server/lib/names.js` + `scripts/test-names.js`, migration v3 in `lib/db.js`, `nicknames_enabled` in `lib/settings.js`, `chatStatus` option + `/me` nickname in `auth.js`, `names.label` in `chat.js` / `leaderboard.js` / `events.js` / `matches.js`, ban ends the nickname in `moderation.js`, wiring + purge job in `app.js`; NEW `play/shell/js/play-names.js` + the Nickname fold; pool NEW `admin-panel/games-names.html`, the NAV entry, `games.html` / `games-players.html` / `games-admin.js` lines, `test-admin-panel.js` [15]; no pool backend code; **uncommitted, not VPS-tested**) · 2026-09-28 (§19 Part 11 review fixes: a free match writes no `results_daily` row + the matching void guard in `play/server/lib/matches.js`; global caps on the internal routes in `back-end-pool/lib/games-link.js`; the sign-in card's "someone else can sign in as you" line; the `plays.js` settings comment; the pool menu's B row; uncommitted, not VPS-tested) · 2026-09-28 (§19 Part 10: PvP seeks / challenges / draw / abort / timeout / rated pair cap / void in `play/server/lib/matches.js`, NEW `lib/ratings.js` + `scripts/test-pvp.js`, four PvP settings; NEW `play/shell/js/play-lobby.js` + the G-08 panel, PvP board buttons + polls, PvP boards; pool `games-players.html` void + `games.html` PvP group; no pool backend code; **uncommitted, not VPS-tested**) · earlier 2026-09-28 (§19 Parts 8–9: NEW `play/server/lib/{chat,moderation}.js` + `scripts/test-chat.js`, migration v2 in `lib/db.js`, the mining gate + `modStatus` in `auth.js`, chat settings, `/play/api/rules`; NEW `play/shell/js/play-chat.js` + the G-07 panel, `play:me` in `play-shell.js`; pool NEW `admin-panel/games.html`, `games-chat.html`, `games-players.html`, `games-admin.js` + the Games NAV group; no pool backend code) · earlier 2026-09-28 (§19 Part 7: NEW `play/server/lib/{leaderboard,events,admin,badges}.js` + `lib/events/{index,_rules,game_results,mining_minutes,active_days}.js` + `scripts/test-events.js`; `app.js` wiring + two jobs, a route `guard` in `http.js`, `checkSecret` in `pool-link.js`, `badges` on `/me`; NEW `play/shell/js/play-boards.js` + the G-06 panel; pool NEW `admin-panel/games-events.html` + the Games NAV group, `test-admin-panel.js` +11; no pool backend code; **uncommitted, not VPS-tested**). Same day as the next entry: 2026-09-27 (§19 Part 6: NEW `play/shell/**` (page, `play-api.js`, `frame-host.js`, `play-shell.js`, `play.css`) + `play/games/chess/frame/**` + games `scripts/test-shell.js`; pool `public_html/js/public-shell.js` site-absolute hrefs + no ads on exempt pages, `test-games-link.js` +4; `07_lib_pool_games.sh` stamps `__GRIN_PLAY_VERSION__`; **uncommitted, not VPS-tested**). Same day (§19 Part 5: NEW `play/server/lib/{registry,matches}.js`, `play/games/chess/{manifest.json,rules.js}` and `scripts/test-matches.js`; wiring in `lib/app.js`, two settings keys, ten message codes in `lib/http.js`; no pool code; **uncommitted, not VPS-tested**). Same day (§19 Part 4: NEW `play/server/lib/{pool-link,ratelimit,ledger,plays,sessions,auth,mode,settings,mask}.js` + `scripts/test-auth.js`, wiring in `lib/app.js` / `index.js`, `sameOriginOk` + error headers in `lib/http.js`; no pool code; **uncommitted, not VPS-tested**). Same day (§19 Part 3: the operator side — NEW `scripts/lib/07_lib_pool_games.sh` (menu `P`), the vhost's `/internal/` 404 + games glob include, games deploy in `9)`, games VACUUM in `C)`, cleanup group 1b/1c in the pool script; the games DB snapshot + separate restore in `07_lib_pool_backup.sh` / `07_lib_pool_migrate.sh`; impl §10.13 *Part 3*; **uncommitted, not VPS-tested**). Same day (§19 Part 2: the pool link — NEW `back-end-pool/lib/games-link.js` (three `/internal/games/*` routes, the `/api/admin/games/*` proxy, the 60 s probe), the `games` settings section, `games_port` / `games_link_secret_file` config defaults, `index.js` mount lines + the `games` step-up section + the branding `games` flag, the hidden Play nav item, NEW `admin-panel/settings-games.html`, NEW `scripts/test-games-link.js`; impl §10.13; **uncommitted, not VPS-tested**). Same day (§19 Part 1: the games service skeleton, NEW `web/07_mining_pool_public/play/` (`server/` + `README.md`), zero npm dependencies, nothing deploys it yet, the pool untouched; **uncommitted, not VPS-tested**). Same day (§15.5 Slatepack finalize binding: both finalize paths fail closed when the row or the reply has no slate id — scheduler only; impl §10.10 *Slatepack finalize binding*; **uncommitted, not VPS-tested**). Same day (§8 /review fixes #1–#6 — Held refunds wait for a resume and an intact wallet history, the Tor send holds the wallet send lock, grin-wallet's stdout reaches the settlement, the forced refund reads `tx_slate_state`, the send audit compares NET, a 360 s send timeout — scheduler, `lib/wallet-tor.js`, `lib/wallet.js` comment, `lib/reconciliation.js`, `index.js` audit row, admin `payments.html`; impl §10.10 *Review fixes*; **uncommitted, not VPS-tested**). 2026-09-26 (§8 Tor payouts: one attempt, Held, Tor pause, Slatepack offer; stepwise F5 and the retry ladder deleted; the `walletBin` fix for mainnet payout #10 — scheduler, `lib/wallet-tor.js`, `lib/wallet.js`, `lib/db.js`, settings, `lib/alert-monitor.js`, `lib/reconciliation.js`, `index.js`, the account page, four admin pages; impl §10.10; **uncommitted, not VPS-tested**). 2026-09-25 (slatepack rail: stored encrypted S1 + the §6 re-fetch route, refund-before-cancel expiry, `slate_cancel_pending` retry — security audit roll-up note "Slatepack rail: a lost tab…"; **uncommitted, not VPS-tested**). Same day (§8 / §8.1 Tor payout hardening F1–F5 + the CLI rail's exit-0 fallback fix — scheduler, `lib/wallet.js`, `lib/wallet-tor.js`, `lib/db.js`, settings, `index.js`, three admin pages; impl §10.8; **uncommitted, not VPS-tested**). 2026-09-24 (§13.13 hub move, review P1 — Migrate OUT removes the weekly VACUUM cron and refuses while a vacuum runs; `07_lib_pool_migrate.sh`). Same day (§18 Part 6 review fix R6-1 — `index.js` `requireBothProofs` refuses a proof verified as the other kind with `wrong_kind` instead of the verifier's success code `match`; the account page's `DP_REASONS` key follows; suite 1343 → 1345; **uncommitted, not VPS-tested**). Same day (§18 Part 5 — account page: P-05 donation row from `donation`, P-03 per-rig badge, NEW P-09 Donor profile panel in `account-settings.html`; the v1 aliases `donation_percent` / `donor_name` / `donor_name_state` dropped from `/api/account/:addr` and its api-docs row; suite 1331 → 1343; **uncommitted, not VPS-tested**). Same day (§18 Part 4 — `/api/pool/donors` v3: card `banner` under the Top-N slot rule, `ranking.banner_slots`, `current_percent` dropped; `donate.html` D-01 rewrite, D-01b, D-03 spotlight; api-docs row; suite 1310 → 1331; **uncommitted, not VPS-tested**). Same day (§18 Part 3 — admin review queue, image route, approve/reject/remove/block/unblock, `donors.html` rewrite, v1 censor/rescan/marker removed, wall + account names from approved profiles only, banner previews from a plain same-origin `src` (admin CSP unchanged); suite 1298 → 1310; **uncommitted, not VPS-tested**). Same day (§18 Part 2 — `donor_requests` + `donor_blocks`, NEW `lib/donor-profiles.js`, `leagueRank()`, `donor_banner_slots`, `requireBothProofs` purpose wording, three `/api/account/:addr/donor-profile` routes + account `donor_profile` in `index.js`; suite 1145 → 1298; **uncommitted, not VPS-tested**). Same day (§18 Part 1 — per-share donation in `lib/rewards.js` + `lib/incentives.js`, stored-% machinery removed, `liveDonations()` in `lib/donor-ledger.js`, additive fields on four `index.js` routes; suite 1134 → 1145; **uncommitted, not VPS-tested**). 2026-09-23 (Part 9 review fixes C1–C6 — dark gate, unit disabled across Migrate IN, code never archived/extracted, freeze on a failed extraction, no archive without pool.db, midnight-safe OUT; `07_lib_pool_migrate.sh`, `07_lib_pool_backup.sh`). Same day (hub move + connect-page latency, §13.13 — seeds v3 + local-region stamp in `lib/db.js`; NEW `lib/region-rtt.js`, `lib/connect-suggest.js`, `lib/latency-probe.js`; `/api/pool/connect/suggest`, `hub_rtt_ms`/`is_hub`, `connection.latency` on branding in `index.js`; `reactor-dashboard.js` + `reactor.css` measurement; gateway re-resolve timer + `6) Latency probe` in `07_lib_gateway.sh`; NEW `07_lib_pool_migrate.sh` + shared freeze/archive/restore cores in `07_lib_pool_backup.sh`; hub `/ping` + CSP in the pool script; suite 960 → 1133, 16 → 19 suites; **uncommitted, not VPS-tested**). Same day (payout-rails fix — `lib/wallet.js` `create_slatepack_message` named params; Tor probe ported from 06d in `lib/wallet-tor.js` + new `lib/socks5.js`, 8 s default, `?fresh=1` on tor-check; P-04 slimmed and the §17.2 #8 fold removed; suite 881 → 945; impl §10.5; **not VPS-tested**). Same day (§17 Part 4 review — `index.js`: `migrateProofSet` moved ahead of `stratumServer.start()`, `proof_too_recent`/`anchor_not_accepted_here` texts; `lib/owner-proof.js`: racing duplicate capture no longer evicts a second proof, a returning evicted anchor restarts `first_seen_at`; `test-owner-gate.js` 36 → 42, suite 875 → 881; **not VPS-tested**, §17.7). Same day (§17 Part 3 — copy sweep, no logic: the homepage setup guide, the shipped Terms/Privacy/FAQ defaults in `lib/pool-settings.js`, the `anchor_not_accepted_here` error text + two `index.js` doc/comment sites, and stratum/owner-proof/db comments restated for a set of ten; suite unchanged at 875/875; §17.6 Part 3). 2026-09-22 (§17 Part 2 built — the account page: `public_html/account-settings.html` renders `proofs` as counts, drops the "Evidence changed" banner, warns only past the cap and restates the gate copy for a set of ten; **not VPS-tested**, impl §10.4 "Part 2", §17.6 records the deltas). Same day (§17 Part 1 built — the ownership-proof SET backend: `miner_proofs` + `miner_accounts.proof_salt`, per-address scrypt salt, set capture/verify with LRU eviction and a flagged-not-deleted anchor, `migrateProofSet()` replacing `migrateOwnerProofHashes` and `backfillProofAnchors`, `proofs` on the account and admin miner views, suite 849 → 875; **not VPS-tested**, impl §10.4, §17.6 records the deltas). 2026-09-21 (§16 Part 5 review: two fixes in `lib/donor-names.js` — the rescan parses the list once per walk, not per name, and a separators-only label is no label — §16.12; the same day Parts 1–4 were built in order: login grammar → storage + capture + account view → admin moderation → the public league, impl §10.3 "Part 1"–"Part 4", every part **not VPS-tested**; earlier the same day: `/api/pool/donors` totals over every donor + `active_donors` from live tags, account `is_online` per rig — impl §10.3). 2026-09-20: pairing string carries the public port; gateway Status boot line, §13.12s; anchored ufw test + unmanaged-firewall readout, §13.12t — `scripts/07_grin_mining_*.sh`, `scripts/lib/07_lib_*.sh`, `web/07_mining_pool_public/`
+> Prose last edited 2026-09-28 (§19 Part 11 review: §19 heading, §19.6 settings paragraph, §19.8 free-match sentence, §19.14 Part 11 row + closing line, §19.15 *Part 11 review*). 2026-09-28 (§19 Part 10 built: §19 heading, §19.6 PvP cost, §19.8 resign/abort + rated scope + routes, §19.11 rows, §19.14 Part 10 row + closing line, §19.15 *Part 10*). 2026-09-28 (§19 Parts 8–9 built: §19 heading, D21, §19.4 v2 tables, §19.10 report + change feed + moderators, §19.11 rows + FAST-list note, §19.14 Part 8–9 rows + closing line, §19.15 *Part 8* (15 deltas) and *Part 9* (10 deltas)). 2026-09-28 (§19 Part 7 built: §19 heading, §19.9 `reward_json` line, §19.11 `games-events.html` row, §19.14 Part 7 row + closing line, §19.15 *Part 7* with 15 deltas). 2026-09-27 (§19 Part 6 built: §19 heading, §19.14 Part 6 row + closing line, §19.15 *Part 6* with 14 deltas; the file de-duplicated, see *Last verified*). Same day (§19 Part 5 built: §19 heading, §19.6 points note, §19.14 Part 5 row + closing line, §19.15 *Part 5* with 13 deltas). Same day (§19 Part 4 built: §19 heading, §19.14 Part 4 + checkpoint A rows + closing line, §19.15 *Part 4* with 14 deltas). Same day (§19 Part 3 built: §19 heading, §19.12 *As built* note, §19.14 Part 3 row + closing line, §19.15 *Part 3* with 13 deltas). Same day (§19 Part 1 built: §19 heading, §19.14 Part 1 row + closing line, §19.15 *Part 1* with 12 deltas). Same day (§19 added — games platform `/play/`: separate `grin-games` service + `grinium-games.db`, the pool link contract, chess vs bot then PvP correspondence, events, moderated chat; design only, NOT built; D18–D20 answered by the operator that day). Same day (admin route catalog: `GET /api/admin/miners/:addr/workers` added — impl §10.12). Same day (binding fix: §15.5's "Response binding" bullet says the bind fails closed). Same day (/review fixes: §8's "Why this is safe" gains the wallet-history proviso, NEW "One send at a time" bullet, "Held resolves itself" and "The operator" amended). 2026-09-26 (one-attempt Tor payout fold: §8's opening line, Tor row and no-auto-payout paragraph; the balance table gains Held; the ladder sentence and "What moves a Tor payout on" replaced by "One Tor attempt, then an answer" with the rejected auto-Slatepack alternative; two sentences on the pre-flight probe; §8.1 heading → DELETED + a new status note). 2026-09-25 (Tor payout hardening fold: §8's Tor row, the stale Auto-payout paragraph replaced by "There is no auto-payout", NEW paragraphs on uncounted retries and "paid is not mined", §8.1 heading → BUILT behind the switch + a status note, §8.1.1's bug annotated as fixed on the CLI rail). Earlier the same day (§8.1 added — step-by-step Tor send design, F5, NOT built; it also records that today's CLI rail marks an undelivered Tor send as paid). 2026-09-24 (§18 Part 6 review: §18 heading, §18.10 Part 6 row, NEW §18.11 *Part 6*, Part 5 #10 annotated). Same day (§18 Part 5 built: §18 heading, §18.10 Part 5 row, §18.11 *Part 5*). Same day (§18 Part 4 built: §18 heading, §18.10 Part 4 row, §18.11 *Part 4*). Same day (§18 Part 3 built: §18 heading, §18.10 Part 3 row, §18.11 *Part 3*). Same day (§18 Part 2 built: §18 heading, §18.10 Part 2 row, §18.11 *Part 2*). Same day (§18 Part 1 built: §18 heading, §18.10 Part 1 row, NEW §18.11 build deltas). 2026-09-23 (§13.13 added — hub move + connect-page latency; §4 gained the effective-latency rule; §11 the gateway :443 probe note; §13.10b/c annotated where a hub IP change was said to need no gateway action). Earlier the same day (§18 added — donations v2: per-share donation, reviewed donor profiles with nickname + top-5 banner; design only, NOT built; §16 marked superseded in part and its Part 6 replaced by §18.10 Part 7). Earlier the same day (payout-rails fix: §8 gained the Tor pre-flight probe paragraph, replacing a "no TCP port-probe before send" claim that had been false since 2026-07-19; §17.2 #8 annotated where the operator reversed the fold placement). Earlier the same day (§17.7 added — the Part 4 review's ten answers and three fixes; §17.2 #2/#3/#9, §17.3 and §17.4 annotated where the review found them wrong; §17.6 Part 4 done). Earlier the same day (§17 intro + §17.6 — Part 3 done, with its three deltas, incl. that already-installed pools keep the old CMS page text; §6's slatepack note pointed at §17). 2026-09-22 (§17.6 updated — Parts 1 (backend) and 2 (account page) are built, with each part's deltas from §17 recorded there; Parts 3–5 unrun. Earlier the same day: §17 added — ownership-proof SET of 10 per kind with a per-address salt, replacing the 2-slot window). 2026-09-21 (§16 added — donor names + donor league; §16.11 tracks the build, Parts 1–5 done, Part 6 = VPS acceptance still owed; §16.12 records what building changed against the design and the Part 5 review's findings).
 
 **Product:** `scripts/07_grin_mining_public_pool.sh` + web app under `web/07_mining_pool_public/`.
 **Scope:** the complete public-pool design — architecture, deployment modes, multi-region
@@ -3204,6 +3204,1872 @@ as of this review.
   exact `FILE_RE` shape.
 - There is no v1 copy on either page.
 - `bash -n scripts/07_grin_mining_public_pool.sh` passes.
+
+## 19. Games platform (/play/) — games, events, chat (DESIGN 2026-09-27; Parts 1–6 built 2026-09-27, Parts 7–10 2026-09-28, independently reviewed (Part 11) 2026-09-28, approved nicknames (Part 12) 2026-09-28, NOT VPS-tested)
+
+Operator discussion 2026-09-26; the three open questions (D18–D20) answered 2026-09-27. GRINIUM
+runs **live on mainnet** with a small group of miners, and the operator wants something that makes
+them a community: games, competitions **between addresses**, and a moderated public chat. One
+constraint sits above every decision here: **nothing in this section may slow down, restart or
+endanger mining.**
+
+The build is broken into 14 sessions (0–13) plus one operator VPS checkpoint. The per-session plan
+is kept outside the repo, as for §16–§18. **This section is the contract those sessions build
+against.** When a build finds this section wrong, it records the change in §19.15 and does not
+diverge silently.
+
+### 19.1 Decisions (operator, 2026-09-26/27 — FINAL unless a build finds a hard reason)
+
+| # | Decision | Why |
+|---|---|---|
+| D1 | **Points and plays are worthless outside the games.** They are never GRIN, never transferable between addresses, never tradable, and there is no shop in v1. No games code path may write a pool money table, and D5 makes that structurally impossible. A future "spend points" feature may only buy things *inside* the games (cosmetics, themes) and must never convert, transfer or pay out. | Once a point can move between addresses or turn into GRIN it has a price. A price invites farming, Sybil addresses and support disputes. Worthless points keep every cheat below the effort line, so the fairness rules below only have to be *fair*, not bank-grade. |
+| D2 | **A separate service**: `grin-games` (mainnet) / `grin-games-testnet`, OS user **`grinplay`**, **zero npm dependencies** (`node:http` + `node:sqlite`, Node ≥ 24, already on the box for the pool). It binds `127.0.0.1:8081` (mainnet) / `127.0.0.1:8091` (testnet); both ports were checked free in `scripts/` on 2026-09-26. | The pool's stratum server shares **one** Node process and **one** synchronous `DatabaseSync` connection with the API (`lib/db.js`, the `busy_timeout` comment). Any slow statement in that process stalls share submission for every miner, **whatever file it touches**. So a separate DB file is necessary but not enough; the games need a separate process. Zero dependencies means no lockfile, no `npm audit` and nothing to vendor. |
+| D3 | **DB = `grinium-games.db`** in a DATA dir outside the code dir. Code is `/opt/grin/pubgames/<net>/`; data is `/opt/grin/pubgames-data/<net>/grinium-games.db`. Pragmas: WAL, `synchronous=NORMAL`, `busy_timeout=2000`, `foreign_keys=ON`; file mode 0600. | The code dir is `rsync --delete`d on every deploy. The pool learned this the hard way: `uploads/` was pruned on every deploy until it was excluded by name (the comment above `pool_deploy_code`). With the data outside the code dir, that trap cannot happen. |
+| D4 | **Same domain, path `/play/`.** The static shell is served by nginx from `/var/www/grin-play` (testnet `/var/www/grin-play-testnet`), OUTSIDE the pool docroot. The API is at `/play/api/`, proxied to the games service. Move to a subdomain only if a game ever needs a third-party engine, WASM or a looser CSP. | One origin, one certificate and one nav. `pool_deploy_web` `rsync --delete`s `$POOL_WEB_DIR`, which would prune a `/play/` living inside it. Loosening the CSP on a shared origin would also weaken the admin panel's, which is why anything that needs it moves to its own host. |
+| D5 | **The pool owns proofs and mining data. The games service never reads `pool.db`**, not even read-only. It reaches the pool only through THREE internal routes on the pool's own `127.0.0.1` listener (§19.3), and the pool reaches it through ONE admin proxy (D11). `grinplay` is not in the `grinpool` or `grinsecret` groups, so file permissions enforce this. | A second reader on `pool.db` holds WAL read snapshots that can stall checkpoints, and it would need the pool's file permissions, which open everything else too. One narrow route with a bounded query is something we can measure and cap. |
+| D6 | **Internal-route auth = a shared link secret** in `/opt/grin/conf/grin_pubgames_link_<net>`, owner **`grinplay`**, group **`grinpool`**, mode **0440**. The games service reads it as owner; the pool reads it through its primary group. It travels as the header `X-Games-Link` and is compared with `crypto.timingSafeEqual`. Internal routes live **outside `/api/`** (nginx only proxies `/api/…` and a few exact files to the pool), **and** the vhost gains an explicit `location ^~ /internal/ { return 404; }`. | Two independent controls, because either one alone is one typo away from open. *Refined from the first sketch*, which had a new group `grinlink` joined by both users: a running process keeps the groups it started with, so that design cost the pool one restart after install. Owner + primary group needs no group change, so it needs **no pool restart**. Part 3 verifies with `id grinpool` that `grinpool` is the pool unit's primary group. |
+| D7 | **The real client IP travels with every verify call.** The games service passes the player's IP in the request body. The pool's verify route feeds **that** IP to `verifyOwnerProof(db, addr, proof, clientIp)`, and the route is NOT behind the pool's generic per-IP limiter. The games service rate-limits per IP itself before it calls. | Every games call arrives at the pool from `127.0.0.1`. One throttle bucket for everyone means one attacker locks every player out. The pool's own per-(address, IP) and per-IP proof throttles only work when they see the real IP. |
+| D8 | **Login = address + one proof (mining IP or rig password), verified by the pool once.** The games service then issues its OWN session (§19.5): cookie `grin_play`, `HttpOnly; Secure; SameSite=Strict; Path=/play/`, 14 days, stored as `sha256(token)`. /play/ has a session list and "log out everywhere". Proof hashes and salts never leave the pool. | Miners have no pool session: every money action sends a per-request proof. A game needs a session, or the player would retype a proof on every move. Rigs with trivial passwords (`x`, `123`, `d=…`) never record a password proof (§17), so those miners can log in by IP only, from the rig's network. /play/ says so. |
+| D9 | **Posting in chat needs an AGED, non-anchor proof.** `verifyOwnerProof` already returns `slot` (`set` \| `anchor`) and `age_seconds` (null = old). The session stores `chat_ok_after = login_at + max(0, min_age − age)`, so a session opened with a fresh proof can chat once that proof would have aged. `slot === 'anchor'` never gets chat. The default minimum age is 24 h, with a **floor of 1 h**: the floor is a module constant a setting may raise but never remove. An optional operator switch requires the PASSWORD proof for chat. | A stranger who mines a few shares to your address joins your proof set (§17). For payouts that is harmless, because the money goes to you. In chat it is impersonation. An anchor is an evicted credential that cannot be revoked. The floor and the setting are two controls, so they must not share one number. |
+| D10 | **Plays come from active mining MINUTES, not hashrate.** A minute is 60 s of `hashrate_history` window in which the address had accepted shares (the tracker writes one row per address per 60 s sampling window, and only for addresses with shares, per `lib/hashrate-tracker.js recordHashrates`). Defaults: 10 active minutes = 1 play, at most 24 plays earned per UTC day, the same for every address. | A whale and a small miner get the same number of plays, so skill decides the score, not hashrate. Plays lag mining by up to one sync interval (5 min). |
+| D11 | **The admin UI lives in the POOL admin panel**, which has the one admin auth system (JWT + IP allowlist + 2FA + step-up). The pool route `/api/admin/games/*` proxies to games `/internal/admin/*`, adding the link secret and `X-Admin-User`. Destructive actions (§19.11) require step-up, exactly like the pool's own. | The games service contains **zero** admin-auth code. A second login system would be a second thing to attack and a second thing to keep in step. |
+| D12 | **Master switch `games.mode` = `off` \| `preview` \| `on`**, a POOL setting, default `off`. In `preview`, /play/ works by direct URL but the nav link stays hidden, which allows acceptance on the live mainnet pool without announcing it. The branding payload gains `games: { mode, chat }`; the nav item carries `data-games` and shows ONLY when `mode === 'on'`. That is the opposite default of `data-incentives`, which ship visible. Chat has its own switch, `games.chat_enabled`. | The pool is live. The feature must be switchable off from the one panel the operator already uses, and it must be testable in production without being visible. |
+| D13 | **Every game runs in a sandboxed iframe** `sandbox="allow-scripts"`, NEVER with `allow-same-origin`, served from `/play/games/<id>/frame/`. Its origin is opaque, so the frame gets no cookies and cannot call `/play/api/`. The parent shell makes every API call and talks to the frame by `postMessage` (§19.7). | `allow-scripts allow-same-origin` on a same-origin document is no sandbox at all: the frame can remove its own sandbox. A commercial arcade reviewed during the discussion shipped exactly that, and its SDK also posted to `'*'`. |
+| D14 | **The browser never sends a score or a result, for any kind of game.** Each game declares a fairness kind in its manifest. **v1 builds `match`**: turn-based, where the server holds the only game state and validates each move as it arrives, and the opponent is a bot or another address. Event metrics use the `mining` kind (§19.9), computed from synced activity, which is cheat-proof because the pool already verified the PoW. `skill` (server seed + input-log replay) and `chance` (commit-reveal) are **reserved**: specified in §19.8, built with their first game, refused by the v1 registry. | *Amended by D20* (the first sketch had chance + skill games). A game where the server computes the outcome from moves it validated itself cannot be forged by the client. |
+| D15 | **Events live in the games service, NOT in pool campaigns.** v1 event kinds are `game_results`, `mining_minutes` and `active_days` (§19.9). Rewards are points + a badge, never GRIN. | This reverses earlier advice in the discussion. Pool campaigns are GRIN lottery draws in `pool.db`, and games points are worthless and live in `grinium-games.db`. Coupling the two would put games writes back on the pool's DB. |
+| D16 | **Resource isolation at the OS level.** Games unit: `MemoryMax=384M`, `CPUWeight=20`, `IOWeight=20`, `Nice=10`, `TasksMax=64`, `NoNewPrivileges=yes`, `ProtectSystem=strict`, `ProtectHome=yes`, `PrivateTmp=yes`, `RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX`, `ReadWritePaths=` the data dir + log dir only. | If games crashes, is OOM-killed or is stopped, nothing changes for miners, and /play/ shows "games are offline". The kernel enforces this; we are not relying on the code being well-behaved. |
+| D17 | **Extension points, so a new game or event never touches platform code.** A game = one folder `play/games/<id>/` (manifest + `rules.js` + `frame/`), loaded by a registry at startup. An event kind = one module `play/server/lib/events/<kind>.js`. Chat messages carry a `room` column, and v1 uses only `global`. Team events arrive later as one more event kind. | The platform is built once and reviewed once. A game that needs a platform edit is a platform bug, and it is fixed generically. |
+| D18 | **Backup: YES.** The pool's `B) Backup` archive includes a `sqlite3 .backup` snapshot of `grinium-games.db` when it exists. Restore asks about it separately (`[Y/n]`). A missing or broken games DB NEVER fails a pool backup or a pool restore. | The file is small, and it holds exactly what players would lose on a rebuild: ratings, finished games, event results and points. |
+| D19 | **Names in v1 = the masked address only**: the pool's public mask, `index.js maskAddr`, 9 leading + 4 trailing characters. Approved nicknames are the *optional* Part 12: pre-moderated, games-owned, always shown with the masked suffix and never alone. | The public-list invariant (`maskAddr`'s comment: no public route emits a full address in a LIST) carries over unchanged. Nicknames need a review queue of their own, so they wait until the core platform has been reviewed. **Amended 2026-09-28 (Part 12):** the operator chose nicknames; built as §19.16 — pre-moderated, and composed on the server into the one public `name` as `Nick (grin1abcd…wxyz)`, so no response carries a nickname without its mask. |
+| D20 | **The v1 game is CHESS, as one `match` game with two modes.** First **vs a built-in bot** (Parts 5–6, the operator's solo test path), then **player vs player between two addresses, correspondence pace** (Part 10): hours to days per move, with the page polling while it is open. Live timed games come later. **No team games in v1.** Block Hunt and Grin 2048, the first sketch's defaults, are dropped from v1; either can come back later as a game folder once its kind is built. | Chess is turn-based and its rules are deterministic, so the server can validate every move and a forged move is impossible. **A bot game is a match with the bot in one seat, played move by move on the server**, not a client-side game replayed afterwards: with a deterministic bot running in the browser, a player could try lines and undo them before submitting, which is unlimited takebacks. Move-by-move also reuses one engine for both modes. The bot is small, deterministic and budgeted, and runs in the games process. Stockfish was rejected: it is GPL, needs WASM (a CSP loosening, see D4), and on the server it would burn CPU on the pool's box. Correspondence first because the community is small and two players are rarely online together; it also needs no push connection. **Accepted limit:** engine-assisted play cannot be detected. Points are worthless (D1), so this is recorded, not fought. |
+| D21 | **Chat moderators are miner addresses the operator appoints** (added 2026-09-28 by the Part 8 build, answering the operator's question "can I add a moderator to help me?"; **confirm at acceptance**). A moderator acts from /play/ with their own games session, never from the pool admin panel. They can delete or approve a chat message and mute its author for ≤ 24 h. They cannot act on operator messages or on other moderators, and have no ban, purge, word list, settings, points, events or full addresses. Acting needs a chat-capable session and, by default (`mod_requires_password`), one opened with the rig **password**. Every action is a `mod_actions` row as `mod:<address>`. A ban ends the appointment; removal takes effect on the next request. Their messages show a "Mod" badge, computed at read time. Appointing and removing are step-up admin writes (§19.11). | The pool has exactly **one** admin account (registration closes after the first), behind the nginx IP allowlist + 2FA. Making a helper a second pool admin would open the pool's security core — money, settings, wallets — to give someone chat buttons, and would mean allowlisting their IP. Player-session *authorization* adds no second login system, so D11 still holds: the games service has no admin *authentication*. Every power given is reversible and logged. The password default exists because an IP proof can be a CGNAT neighbour (§19.13 #7). |
+
+### 19.2 Architecture + impact isolation
+
+```
+ browser ──HTTPS──► nginx :443 (the pool vhost)
+                     ├─ /  /api/…        → pool 127.0.0.1:8080          (unchanged)
+                     ├─ ^~ /internal/    → return 404                   (NEW, explicit)
+                     ├─ ^~ /play/api/    → games 127.0.0.1:8081         (own zones, own body caps)
+                     ├─ ^~ /play/games/  → alias /var/www/grin-play/games/  (sandboxed frames, frame CSP)
+                     └─ ^~ /play/        → alias /var/www/grin-play/        (the shell, shell CSP)
+
+  games service  grin-games · user grinplay          pool  grin-pool-manager · user grinpool
+  ┌───────────────────────────────┐                  ┌──────────────────────────────────┐
+  │ node:http, zero deps          │  POST /internal/games/verify-proof ──►                │
+  │ grinium-games.db (own conn)   │  GET  /internal/games/activity    ──►  pool.db       │
+  │                               │  GET  /internal/games/config      ──►  (stratum +    │
+  │                               │      header X-Games-Link, direct to    API, one      │
+  │                               │      127.0.0.1:8080, never via nginx   process)      │
+  │ /internal/admin/*  ◄──────────┼── admin proxy ◄── /api/admin/games/* (JWT+allowlist+2FA)
+  │ /play/api/health   ◄──────────┼── health probe, every 60 s, 1 s timeout, async       │
+  └───────────────────────────────┘                  └──────────────────────────────────┘
+```
+
+| Layer | Isolation | What it prevents |
+|---|---|---|
+| Process | Own systemd unit, own Node process, own event loop | A slow games statement or a CPU-heavy bot move stalling share submission |
+| OS user | `grinplay`; not in `grinpool`/`grinsecret`; can read the link file only | Games reading `pool.db`, the pool config, wallet or node secrets |
+| DB | `grinium-games.db`, own connection, own VACUUM | Games writes contending with pool writes for one WAL |
+| nginx | Separate locations and rate-limit zones; `/internal/` answers 404 | Players reaching the internal routes; games traffic eating the pool's zones |
+| systemd | D16 limits | A leak or runaway loop taking memory or CPU from the pool |
+
+**What the pool does because of the games, and nothing else:** it answers the three internal
+routes, forwards admin-initiated proxy calls, runs one unref'd probe timer, and adds one field to the
+branding payload. **Nothing** runs on the stratum, share, block, reward or payout paths, and there is
+no pool-side cron. Worst-case pool DB cost:
+
+- **activity:** at most one window of ≤ 3600 s per 5-min tick in steady state (≤ 24 in a
+  bounded catch-up). The query SEARCHes `idx_hashrate_time` (§19.3); the index is not covering
+  for `grin_address`/`window_seconds`, so the row lookups equal the active miner-minutes in the
+  window (50 miners ≈ 3 000).
+- **verify-proof:** the same cost as one account-page proof check, 1 to 8 async scrypts (§17.7).
+  It is gated by the games service's per-IP limit, then by the pool's per-(address, IP) and per-IP
+  throttles keyed on the real IP (D7).
+- **config:** one settings read every 60 s.
+
+**Failure behaviour.**
+- *Games down:* the pool is unaffected. Branding reports `games.mode = 'off'` while the probe is
+  unhealthy, so the nav link hides. /play/ shows the offline state.
+- *Pool down or restarting:* login fails with "the pool is unreachable" and activity sync pauses,
+  then catches up within the bound. Games that are already running go on, because chess never
+  needs the pool.
+- *Mode unknown:* the games service keeps the last known mode for ≤ 10 min, then treats it as
+  `off`. This refines the sketch's "link down = off", which would have taken /play/ offline for
+  every pool restart.
+
+**Impact budget — both VPS runs (checkpoint A, Part 13) MUST prove all five on the live box:**
+1. Installing, deploying, restarting, stopping or crashing games never restarts
+   `grin-pool-manager` (`systemctl show grin-pool-manager -p NRestarts -p ActiveEnterTimestamp`
+   before/after). The ONE planned pool restart is Part 2's code deploy.
+2. `/internal/games/*` answers 404 through nginx from outside, and 401 locally without the secret.
+3. The activity query plan uses an index (no `SCAN hashrate_history`), and a 1-hour window returns
+   in < 50 ms on the live DB.
+4. `systemctl stop grin-games` leaves every pool page and stratum unaffected; /play/ shows the
+   offline state; the nav is unchanged.
+5. Games memory is capped: a stress loop in preview mode kills and restarts only games.
+
+### 19.3 Pool ↔ games contract
+
+**Link secret.** `/opt/grin/conf/grin_pubgames_link_<net>`, 48 random bytes, base64 (64 chars),
+`grinplay:grinpool 0440`. Both sides re-read it when its mtime changes, and both treat a missing or
+short file (< 32 bytes) as "not configured". The secret is never passed in argv, a systemd
+`Environment=` line (visible in `systemctl show`), a log line or a response. Only the **path**
+is configured. **Rotation** writes a temp file with the same owner and mode and `mv`s it over the
+old one. Both sides pick up the new mtime on their next call, so rotation restarts **nothing**; calls
+in flight during the swap may get one 401.
+
+**Common rules for `/internal/games/*`** (pool side, all in `lib/games-link.js`):
+- Mounted on the pool's existing listener (`config.host:config.port`, `127.0.0.1:8080` mainnet /
+  `8090` testnet), **before** `express.json()` and any generic rate limiter.
+- A request carrying `X-Forwarded-For` or `X-Real-IP`, or arriving on a non-loopback socket, gets
+  404 before the secret is looked at (a third guard beside nginx and the secret; §19.15 *Part 2*).
+- The **first** middleware checks the secret, before body parsing beyond the size cap and before
+  any DB read or scrypt. A wrong secret costs one comparison.
+- Errors are JSON `{ ok:false, error:'<code>' }`: `link_not_configured` 503 · `unauthorised` 401
+  (missing and wrong secret return the same code) · `bad_request` 400 with `field` · unknown path
+  404. Every response carries `Cache-Control: no-store`.
+
+| Route | Request | Response | Bounds / notes |
+|---|---|---|---|
+| `POST /internal/games/verify-proof` | JSON ≤ 2 KB: `{ address, proof, client_ip }` | `{ ok:true, method:'ip'\|'password', slot:'set'\|'anchor', age_seconds:int\|null }` or `{ ok:false, reason }`, where `reason` is exactly what `verifyOwnerProof` returned (incl. `too_many_attempts`) | `address` passes the same `GRIN_ADDR_RE` as `/api/account` **and** the pool network's prefix. `proof` is a string of 1–256 chars. `client_ip` is required and must pass `net.isIP`: **never** fall back to `req.ip` (always `127.0.0.1`). The route calls `verifyOwnerProof(db, address, proof, client_ip)` and audits via `auditOwnerProof` with action `games_login`. It never returns a hash, salt, row or the proof. |
+| `GET /internal/games/activity?from=&to=` | unix seconds | `{ from, to, rows:[{ address, seconds, minutes }] }` | Both integers; `0 < to − from ≤ 3600`; `to ≤ now`; `from ≥ now − 7 d`; else 400. ONE statement: `SELECT grin_address, COUNT(*) AS minutes, SUM(window_seconds) AS seconds FROM hashrate_history WHERE recorded_at > ? AND recorded_at <= ? AND hashrate_gps > 0 AND grin_address NOT IN (?, ?) GROUP BY grin_address`, with the two placeholders bound from `RESERVED_ADDRESSES` (`pool_fee`, `prize_pool`). `EXPLAIN QUERY PLAN` (no `ANALYZE`) must show `SEARCH … idx_hashrate_time`, never `SCAN hashrate_history`. Full addresses are fine here: the route is internal and secret-guarded, not public. |
+| `GET /internal/games/config` | — | `{ mode:'off'\|'preview'\|'on', chat_enabled:bool, net }` | From the pool-settings `games` section. Typed values: a quoted `"false"` must never read as true. |
+
+**Admin proxy (pool → games).** `/api/admin/games/*` on the pool forwards to
+`http://127.0.0.1:<games_port>/internal/admin/*`.
+- **Pool-side guards:** reads (`GET`) go through `secureAdmin`. Writes go through `secureAdmin`,
+  plus `freshAdmin` (step-up) for the paths in the §19.11 list, enforced **before** proxying.
+- **Headers added:** `X-Games-Link`, `X-Admin-User` (the JWT user's name), `X-Admin-Stepup: 1|0`,
+  `X-Request-Id`.
+- **Transport:** JSON body ≤ 64 KB; 2 s timeout. Status and JSON body pass through. Games
+  unreachable → 503 `{ error:'games_offline' }`; non-JSON from games → 502 `{ error:'games_bad_response' }`.
+- **Audit:** step-up paths also write one pool `admin_audit_log` row (`games_admin`, method + path).
+- **Games side:** `/internal/admin/*` requires the link secret, a non-empty printable
+  `X-Admin-User` ≤ 64 chars, and `X-Admin-Stepup: 1` on step-up paths. That last check is defence
+  in depth; the pool is the enforcer. Every write adds a `mod_actions` row. The games service never
+  decodes `%2F` in a path and matches routes exactly, so an encoded `..` cannot move a request between
+  prefixes.
+
+**Health probe (pool → games):** every 60 s, `GET http://127.0.0.1:<games_port>/play/api/health`
+(1 s timeout), on an unref'd timer. The pool caches `{ healthy, checked_at }` and **never awaits it
+from a request handler**. Games answers `{ ok, net, schema, uptime_s }`: no secrets, no counts.
+
+**Pool settings section `games`:**
+
+| Key | Type | Default | Rule |
+|---|---|---|---|
+| `mode` | enum `off`\|`preview`\|`on` | `off` | — |
+| `chat_enabled` | bool | `false` | — |
+
+`games_port` (8081 mainnet / 8091 testnet) and `games_link_secret_file`
+(`/opt/grin/conf/grin_pubgames_link_<net>`) are **pool.json keys** (`lib/config.js` defaults), not
+settings, and the installer writes them only if absent. The admin proxy sends the secret to that port,
+so an admin-editable port would let a stolen admin session aim it at any localhost service. A bad
+value disables the link and never blocks the pool's boot (§19.15 *Part 2*).
+
+### 19.4 `grinium-games.db` schema v1
+
+The rules that apply to every table:
+- Times are unix seconds (INTEGER).
+- A day is a UTC `YYYY-MM-DD` TEXT.
+- No column may hold an integer that could pass 2^53, because `node:sqlite` throws on read past
+  that. Seeds and hashes are hex TEXT.
+- Migrations are numbered and recorded in `meta.schema_version`. Each runs in one transaction and
+  is idempotent.
+- `meta.net` is checked at boot, so a mainnet DB never opens as testnet.
+
+```sql
+CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);      -- schema_version, created_at, net
+
+CREATE TABLE players (
+  address       TEXT PRIMARY KEY,
+  first_seen    INTEGER NOT NULL,
+  last_seen     INTEGER NOT NULL,
+  plays         INTEGER NOT NULL DEFAULT 0 CHECK (plays  >= 0),     -- = Σ ledger(kind='plays')
+  points        INTEGER NOT NULL DEFAULT 0 CHECK (points >= 0),     -- = Σ ledger(kind='points')
+  points_day    TEXT,                                               -- UTC day points_today counts
+  points_today  INTEGER NOT NULL DEFAULT 0,
+  banned_until  INTEGER,                                            -- NULL = not banned; 253402300799 = forever
+  muted_until   INTEGER,
+  badges_json   TEXT NOT NULL DEFAULT '[]'                          -- badge ids from a server-side list
+);
+CREATE INDEX idx_players_points ON players(points DESC);
+
+CREATE TABLE sessions (
+  token_hash    TEXT PRIMARY KEY,                                   -- hex sha256(token); the token is never stored
+  address       TEXT NOT NULL REFERENCES players(address),
+  created_at    INTEGER NOT NULL,
+  expires_at    INTEGER NOT NULL,                                   -- created_at + 14 d, never extended
+  last_seen     INTEGER NOT NULL,
+  ip_coarse     TEXT,                                               -- /24 (v4) or /48 (v6): display only
+  ua_hint       TEXT,                                               -- ≤ 64 chars, display only
+  proof_kind    TEXT NOT NULL CHECK (proof_kind IN ('ip','password')),
+  proof_slot    TEXT NOT NULL CHECK (proof_slot IN ('set','anchor')),
+  chat_ok_after INTEGER,                                            -- NULL = never (anchor, or password-only chat with an IP proof)
+  revoked_at    INTEGER
+);
+CREATE INDEX idx_sessions_address ON sessions(address, revoked_at);
+CREATE INDEX idx_sessions_expiry  ON sessions(expires_at);
+
+CREATE TABLE activity_sync (                                        -- one row per synced window = the watermark
+  id INTEGER PRIMARY KEY, window_from INTEGER NOT NULL UNIQUE, window_to INTEGER NOT NULL,
+  rows INTEGER NOT NULL, synced_at INTEGER NOT NULL
+);
+CREATE TABLE activity_daily (
+  address TEXT NOT NULL, day TEXT NOT NULL,
+  seconds INTEGER NOT NULL DEFAULT 0,                               -- Σ window_seconds; minutes = seconds / 60
+  plays_awarded INTEGER NOT NULL DEFAULT 0,                         -- plays already credited for this day
+  PRIMARY KEY (address, day)
+);
+CREATE INDEX idx_activity_day ON activity_daily(day);
+
+CREATE TABLE ledger (
+  id INTEGER PRIMARY KEY, address TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('plays','points')),
+  delta INTEGER NOT NULL CHECK (delta <> 0),
+  reason TEXT NOT NULL,        -- mining_minutes | match_cost | match_refund | match_result | event | admin_adjust | admin_void
+  ref TEXT,                    -- 'w:<window_from>' | 'm:<match_id>:<seat>' | 'e:<event_id>' …
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX idx_ledger_address ON ledger(address, kind, id);
+CREATE UNIQUE INDEX uq_ledger_ref ON ledger(address, kind, reason, ref) WHERE ref IS NOT NULL;  -- exactly-once credits
+
+CREATE TABLE matches (
+  id            INTEGER PRIMARY KEY,
+  game_id       TEXT NOT NULL,
+  game_version  TEXT NOT NULL,
+  mode          TEXT NOT NULL CHECK (mode IN ('bot','pvp')),
+  state         TEXT NOT NULL CHECK (state IN ('seek','challenge','active','finished','aborted','declined','expired','void')),
+  seat1         TEXT,                        -- address | 'bot:<level>' | NULL (open seat). Chess: seat1 = white, moves first
+  seat2         TEXT,
+  created_by    TEXT NOT NULL,
+  target        TEXT,                        -- direct challenge only: the invited address
+  params_json   TEXT NOT NULL,               -- { move_seconds, colour:'seat1'|'seat2'|'random', bot_level }
+  seed          TEXT,                        -- hex; bot tie-breaks + random colour
+  position      TEXT NOT NULL,               -- game-defined (chess: FEN)
+  ply           INTEGER NOT NULL DEFAULT 0,
+  turn_deadline INTEGER,
+  draw_offer_by INTEGER CHECK (draw_offer_by IN (1,2)),
+  result        TEXT CHECK (result IN ('seat1','seat2','draw')),
+  reason        TEXT,                        -- checkmate|resign|timeout|stalemate|repetition|fifty|material|max_plies|agreement|abort|void
+  rated         INTEGER NOT NULL DEFAULT 0,
+  created_at    INTEGER NOT NULL, started_at INTEGER, finished_at INTEGER, last_move_at INTEGER
+);
+CREATE INDEX idx_matches_seat1  ON matches(seat1, state);
+CREATE INDEX idx_matches_seat2  ON matches(seat2, state);
+CREATE INDEX idx_matches_target ON matches(target, state);
+CREATE INDEX idx_matches_state  ON matches(state, turn_deadline);            -- timeout sweep, lobby, expiry
+CREATE INDEX idx_matches_pair   ON matches(game_id, seat1, seat2, finished_at); -- per-pair rated cap
+CREATE UNIQUE INDEX uq_matches_one_bot ON matches(game_id, created_by) WHERE mode = 'bot' AND state = 'active';
+
+CREATE TABLE match_moves (
+  match_id INTEGER NOT NULL REFERENCES matches(id), ply INTEGER NOT NULL,
+  seat INTEGER NOT NULL CHECK (seat IN (1,2)), move TEXT NOT NULL, at INTEGER NOT NULL,
+  PRIMARY KEY (match_id, ply)
+) WITHOUT ROWID;
+
+CREATE TABLE ratings (                                              -- DERIVED: recomputable from finished rated matches
+  game_id TEXT NOT NULL, address TEXT NOT NULL,
+  rating INTEGER NOT NULL DEFAULT 1200, games INTEGER NOT NULL DEFAULT 0,
+  wins INTEGER NOT NULL DEFAULT 0, draws INTEGER NOT NULL DEFAULT 0, losses INTEGER NOT NULL DEFAULT 0,
+  updated_at INTEGER NOT NULL, PRIMARY KEY (game_id, address)
+);
+CREATE INDEX idx_ratings_board ON ratings(game_id, rating DESC);
+
+CREATE TABLE results_daily (                                        -- rollup for leaderboards + events
+  address TEXT NOT NULL, game_id TEXT NOT NULL, mode TEXT NOT NULL, day TEXT NOT NULL,
+  games INTEGER NOT NULL DEFAULT 0, wins INTEGER NOT NULL DEFAULT 0, draws INTEGER NOT NULL DEFAULT 0,
+  losses INTEGER NOT NULL DEFAULT 0, points INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (address, game_id, mode, day)
+);
+CREATE INDEX idx_results_board ON results_daily(game_id, mode, day);
+
+CREATE TABLE events (
+  id INTEGER PRIMARY KEY, kind TEXT NOT NULL, title TEXT NOT NULL, game_id TEXT,
+  starts_at INTEGER NOT NULL, ends_at INTEGER NOT NULL,              -- whole UTC days (§19.9)
+  rules_json TEXT NOT NULL, reward_json TEXT NOT NULL,
+  state TEXT NOT NULL CHECK (state IN ('scheduled','running','finalising','done','cancelled')),
+  created_by TEXT NOT NULL, created_at INTEGER NOT NULL
+);
+CREATE INDEX idx_events_state ON events(state, ends_at);
+CREATE TABLE event_results (
+  event_id INTEGER NOT NULL REFERENCES events(id), address TEXT NOT NULL,
+  value INTEGER NOT NULL, rank INTEGER NOT NULL, reward_points INTEGER NOT NULL DEFAULT 0, badge TEXT,
+  PRIMARY KEY (event_id, address)
+);
+
+CREATE TABLE chat_messages (
+  id INTEGER PRIMARY KEY, room TEXT NOT NULL DEFAULT 'global',
+  role TEXT NOT NULL CHECK (role IN ('player','operator')),
+  address TEXT,                                -- NULL for operator posts
+  admin_user TEXT,                             -- operator posts only
+  body TEXT NOT NULL,                          -- plain text, normalised (§19.10); never HTML
+  state TEXT NOT NULL CHECK (state IN ('visible','held','deleted')),
+  hold_reason TEXT, created_at INTEGER NOT NULL, deleted_by TEXT, reason TEXT
+);
+CREATE INDEX idx_chat_room    ON chat_messages(room, state, id);
+CREATE INDEX idx_chat_address ON chat_messages(address, created_at);
+CREATE TABLE chat_reports (
+  id INTEGER PRIMARY KEY, message_id INTEGER NOT NULL REFERENCES chat_messages(id),
+  reporter TEXT NOT NULL, reason TEXT, created_at INTEGER NOT NULL, resolved_at INTEGER, resolved_by TEXT,
+  UNIQUE (message_id, reporter)
+);
+CREATE INDEX idx_reports_open ON chat_reports(resolved_at, id);
+
+CREATE TABLE mod_actions (
+  id INTEGER PRIMARY KEY, admin_user TEXT NOT NULL, action TEXT NOT NULL, target TEXT,
+  details_json TEXT, created_at INTEGER NOT NULL
+);
+CREATE INDEX idx_mod_actions_time ON mod_actions(created_at);
+
+CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER NOT NULL, updated_by TEXT);
+
+-- v2 (Part 8, D21): chat moderators appointed by the operator, and the chat word list
+CREATE TABLE moderators (
+  address  TEXT PRIMARY KEY REFERENCES players(address),
+  added_by TEXT NOT NULL, added_at INTEGER NOT NULL, note TEXT
+);
+CREATE TABLE chat_words (
+  word TEXT PRIMARY KEY, added_by TEXT NOT NULL, added_at INTEGER NOT NULL
+);
+
+-- v3 (Part 12, §19.16): approved nicknames — a request log; the partial unique indexes make
+-- "one pending + one live per address" and "no two live nicknames alike" database facts
+CREATE TABLE nicknames (
+  id           INTEGER PRIMARY KEY,
+  address      TEXT NOT NULL REFERENCES players(address),
+  name         TEXT NOT NULL,                -- as typed, after normalise (§19.16)
+  norm         TEXT NOT NULL,                -- the matching form: lower-case, separators out, leet folded
+  state        TEXT NOT NULL CHECK (state IN ('pending','approved','rejected','replaced','withdrawn','removed')),
+  submitted_at INTEGER NOT NULL,
+  decided_at   INTEGER, decided_by TEXT, reason TEXT   -- decided_by = admin name | 'self'; reason shown to the player
+);
+CREATE UNIQUE INDEX uq_nick_pending  ON nicknames(address) WHERE state = 'pending';
+CREATE UNIQUE INDEX uq_nick_live     ON nicknames(address) WHERE state = 'approved';
+CREATE UNIQUE INDEX uq_nick_norm     ON nicknames(norm) WHERE state = 'approved';
+CREATE INDEX idx_nick_state ON nicknames(state, id);
+CREATE INDEX idx_nick_address ON nicknames(address, submitted_at);
+CREATE INDEX idx_nick_norm ON nicknames(norm, state);
+```
+
+*Against the first sketch:* `rounds` / `rounds_daily` became `matches` + `match_moves` /
+`results_daily` (D20: v1 has no round-based game). The materialised `leaderboard` table was dropped
+because `ratings` **is** the rating board and `results_daily` serves the period boards with an
+index. `activity_daily` stores `seconds` instead of `minutes`, so a change to the pool's sampling
+interval cannot miscount, and it stores `plays_awarded`, which makes the sync idempotent without a
+per-player daily counter. The reserved `skill`/`chance` kinds will add a `rounds` table by migration
+(§19.8).
+
+### 19.5 Auth + sessions
+
+**`POST /play/api/login` `{ address, proof }`** (body ≤ 4 KB; nginx zone `…_gamelogin` 20 r/m, then
+the service's own limits). Steps, in this order:
+1. Shape-check the address: `GRIN_ADDR_RE` plus this network's prefix (`grin1` mainnet,
+   `tgrin1` testnet).
+2. Apply the per-IP and per-address token buckets. Failure history survives the window, so backoff
+   keeps growing. **This happens before any pool call.**
+3. If `players.banned_until > now`, refuse with 403 `banned`. This is also before the pool call, so
+   a banned address costs the pool nothing.
+4. `pool-link.verifyProof(address, proof, clientIp)`. `clientIp` is `X-Real-IP` only when the
+   socket peer is loopback, otherwise the socket address.
+5. On `ok`, create the session:
+   - The token is 32 random bytes, base64url. The response sets
+     `Set-Cookie: grin_play=<token>; Path=/play/; HttpOnly; Secure; SameSite=Strict; Max-Age=1209600`.
+   - Store `sha256(token)` as hex, with `proof_kind = method` and `proof_slot = slot`.
+   - `chat_ok_after`:
+     - `slot === 'anchor'` → NULL (never).
+     - The `chat_requires_password` setting is on and `method === 'ip'` → NULL.
+     - Otherwise → `now + max(0, minAge − (age_seconds ?? Infinity))`, where
+       `minAge = max(CHAT_MIN_AGE_FLOOR = 3600, setting chat_min_proof_age, default 86400)`.
+   - Upsert `players`. If the address already has 20 live sessions, the oldest is revoked.
+6. On failure, map the pool's `reason` to the **same wording the account page uses** for it
+   (`account-settings.html`). The login must reveal nothing the account page does not already show.
+
+**Using a session.** Every authenticated route looks up `sha256(cookie)`. The session must be
+unrevoked and unexpired, and the player unbanned. `last_seen` is written at most once per 5 min,
+not on every request. Expiry is a hard 14 days from creation; activity does not extend it.
+
+**CSRF.** Three layers:
+- `SameSite=Strict`.
+- Every POST must be `Content-Type: application/json`. A cross-site form cannot send that without a
+  preflight, and nothing answers a preflight.
+- If an `Origin` header is present, it must equal the pool's origin.
+
+| Route | Returns |
+|---|---|
+| `GET /play/api/me` | `{ address, address_masked, plays, points, chat:{ enabled, can_post, available_at, reason }, sessions:n }`. `address` is the caller's own and is not a list. |
+| `GET /play/api/sessions` | the caller's sessions: `created_at, last_seen, ip_coarse, ua_hint, current` |
+| `POST /play/api/logout` · `POST /play/api/logout-all` | revoke this session · revoke every session of the address |
+
+A ban revokes every session of the address when it is applied.
+
+### 19.6 Plays + points ledger
+
+**Earning (activity sync, every 5 min).**
+- **Windows.** The sync walks forward from the watermark (the last `activity_sync.window_to`) to
+  `now − 120 s`, which gives the pool's minute rows time to land. A window never crosses a
+  whole-hour boundary: `to = min(next hour boundary, now − 120)`. So a window is ≤ 3600 s, never
+  spans UTC midnight, and belongs to exactly one day.
+- **Catch-up.** At most 24 windows per tick. Windows older than 7 days are recorded as skipped
+  (`rows = -1`) and not credited: after a long outage, older minutes are lost, not flooded in.
+- **Crediting one window.** The work below is one transaction; the `UNIQUE(window_from)` insert
+  makes a repeated window a no-op. For each row:
+  1. `activity_daily.seconds += seconds`.
+  2. `due = min(plays_daily_cap, floor(seconds_day / 60 / minutes_per_play))`.
+  3. `delta = due − plays_awarded`, clamped so `plays` never passes `plays_balance_cap`.
+  4. Write a ledger row `(plays, delta, 'mining_minutes', 'w:<window_from>')`.
+  5. `players.plays += delta` (the `players` row is created if missing: miners collect plays before
+     their first login).
+  6. `plays_awarded = due`.
+
+  Minutes cut by the balance cap are lost, not deferred.
+- **Settings.** `minutes_per_play` (default 10, 1–1440), `plays_daily_cap` (24, 1–1440),
+  `plays_balance_cap` (100, 1–10000). A change applies from the next window and never recomputes
+  an earlier UTC day. Because `due` is taken from the day's running total, it does re-rate the
+  **current** day: lowering `minutes_per_play` or raising the cap mid-day credits the difference at
+  the next window, and the opposite change credits nothing more that day (§19.15 *Part 11* #3).
+
+**Spending.**
+- **Bot game:** `bot_play_cost` plays (default 1; 0 is allowed, handy for free testing in preview).
+- **PvP:** `pvp_play_cost` plays per side (setting, default 1, range 0–10; a free match pays no
+  points, as a free bot game). The creator of a seek or challenge pays at creation; the acceptor pays
+  at acceptance — the cost recorded in the match at creation, so both pay the same.
+- **Refunds** (reason `match_refund`, ref `m:<id>:<seat>`, so exactly once):
+  - to the creator, when a seek or challenge is declined, expires or is cancelled before anyone
+    accepts;
+  - to both sides, when a match is aborted before each side has moved once.
+
+**Points (reason `match_result`, ref `m:<id>:<seat>`).**
+- **Bot game:** a win earns `bot_points[level]` (default 1 / 2 / 3); a draw earns half, rounded down.
+  These are the game manifest's `points.bot` values, and a free game (`bot_play_cost` 0) pays none
+  (§19.15 *Part 5* #2–#3).
+- **PvP:** only when the match is **rated** (§19.8). A win earns `pvp_win_points` (default 10); a
+  draw earns `pvp_draw_points` (5).
+- **Daily cap:** `points_daily_cap` per address per UTC day (default 100). Points above the cap are
+  not credited.
+- **Cap exemptions:** event rewards (bounded by the event's own config) and `admin_adjust`.
+
+**Invariant:** `players.plays = Σ ledger.delta (kind='plays')` and
+`players.points = Σ ledger.delta (kind='points')`.
+- Every change to either column is in the same transaction as its ledger row.
+- A debit never takes a balance below 0: the `CHECK` constraint enforces it, and the debit refuses
+  with 409 `no_plays`.
+- `ledger.verify()` runs in tests and in the hourly tick. It **logs** drift and never fixes it
+  automatically.
+- The day boundary is UTC everywhere.
+
+Nothing in this ledger is money, and nothing reads it outside `grinium-games.db` (D1, D5).
+
+### 19.7 Game module contract
+
+**Folder `play/games/<id>/`:**
+
+- **`manifest.json`** fields:
+
+  | Field | Rule |
+  |---|---|
+  | `id` | `^[a-z0-9-]{2,32}$`, equal to the folder name |
+  | `title` | ≤ 40 chars |
+  | `kind` | `match` in v1; `skill` \| `chance` are reserved, and the registry refuses them |
+  | `version` | ≤ 16 chars |
+  | `seats` | 2 |
+  | `modes` | ⊆ `['bot','pvp']` |
+  | `bot_levels` | e.g. `[1,2,3]` |
+  | `move_pattern` | a regex source string; the server and the shell both check a move against it |
+  | `move_seconds_options` | integers, e.g. `[86400, 259200, 604800]` |
+  | `default_move_seconds` | — |
+  | `max_plies` | — |
+  | `points` | the defaults behind the §19.6 settings |
+
+  The registry validates every field. A bad game is skipped with a log line and never crashes
+  boot.
+- **`rules.js`**: UMD, **pure and deterministic**. No I/O, no `Date`, no `Math.random`, no globals.
+  The server loads it from the configured games dir only (path containment is checked), and the
+  frame loads a copy, used for UI hints only. The `match` API:
+
+  | Function | Returns |
+  |---|---|
+  | `initial(params)` | `position` (string) |
+  | `toMove(position)` | `1 \| 2` |
+  | `legal(position)` | `move[]` |
+  | `apply(position, move)` | `position \| null` (null = illegal) |
+  | `status(position, history)` | `{ over:false }` or `{ over:true, result:'seat1'\|'seat2'\|'draw', reason }`. `history` = the prior positions, for repetition. |
+  | `bot(position, level, seed, ply)` | a legal `move`. Optional; required when `modes` includes `bot`. Deterministic, and must respect a node budget (`BOT_NODE_BUDGET`). |
+
+  Every call is wrapped in try/catch. A throw leaves the match unchanged, answers 500 and is
+  logged.
+- **`frame/`**: `index.html`, `game.js`, `game.css`. It renders and captures input; it is never an
+  authority.
+
+**Chess (`play/games/chess/`).**
+- **Notation.** A position is a FEN; a move is UCI (`e2e4`, `e7e8q`),
+  `move_pattern ^[a-h][1-8][a-h][1-8][qrbn]?$`.
+- **Game end.** `status` covers checkmate, stalemate, **automatic** threefold repetition, the
+  **automatic** fifty-move rule, insufficient material, and `max_plies` = 600, which is a draw.
+  There are no draw *claims*: the server applies them.
+- **Rules code.** Our own implementation, proved by **perft**:
+  - start position, depth 1–4 = 20 / 400 / 8 902 / 197 281;
+  - "Kiwipete", depth 1–3 = 48 / 2 039 / 97 862;
+  - plus castling-through-check, en passant, under-promotion and pinned-piece cases.
+
+  Vendoring chess.js (BSD-2-Clause) instead is allowed only under `games/chess/vendor/` with its
+  licence and a pinned SHA-256, recorded in §19.15.
+- **Bot.** All levels are deterministic given `(FEN, seed, ply)`, and the node budget is 20 000
+  per move:
+  - level 1: a seeded random legal move;
+  - level 2: greedy 1-ply by material, with a seeded tie-break;
+  - level 3: 2-ply alpha-beta over material + piece-square tables.
+
+  No opening book, no engine, no WASM.
+
+**Frame ↔ shell protocol (`postMessage`, `protocol: 1`).**
+- The frame is `<iframe sandbox="allow-scripts" src="/play/games/<id>/frame/?v=<version>">`.
+  **Never** `allow-same-origin`. Its origin is opaque, and its CSP has `connect-src 'none'`, so it
+  can reach nothing.
+- The shell accepts a message only when `event.source === frame.contentWindow` and `event.data`
+  is a plain object whose `type` is in the table below and whose fields match that type's schema
+  (types, lengths, `move_pattern`). Anything else is dropped. Origins are never compared: a
+  sandboxed frame's origin is `"null"`.
+- The shell posts to the frame with target `'*'`, the only target an opaque origin allows.
+  **Therefore no message to a frame ever carries a token, a cookie, a full address or anything
+  not already on screen.**
+
+| Direction | `type` | Fields |
+|---|---|---|
+| frame → shell | `ready` | `protocol` |
+| shell → frame | `state` | `position`, `last_move` \| null, `you` (1 \| 2 \| null for a spectator), `to_move`, `legal` (only when it is `you`'s turn), `status`, `labels` `{1,2}` (masked address or "Bot level N") |
+| frame → shell | `move` | `move` (≤ 16 chars, must match `move_pattern`) |
+| shell → frame | `theme` | `mode` (`dark` \| `light`) |
+
+The shell sends the move to the API and then posts a fresh `state` either way, so a rejected move
+simply redraws. Resign, draw and abort are **shell** buttons, never frame messages.
+
+### 19.8 Matches (the v1 `match` kind) + the reserved kinds
+
+**Lifecycle.**
+
+| Mode | Path |
+|---|---|
+| bot | create → `active` immediately (play debited, seed drawn, colour per params) → `finished` |
+| pvp seek | open lobby entry, one empty seat → another address takes it → `active` |
+| pvp challenge | direct to a `target` address typed by the challenger (they already know it) → target accepts → `active` · declines → `declined` |
+
+- **Unaccepted seeks and challenges** expire after 72 h (`expired`, with a refund).
+- **Abort:** `aborted` is possible only while `ply < 2`, and both sides are refunded.
+- **Void:** `void` is an admin action (§19.11).
+  - *On an active match:* it ends without a result, and both sides get their plays back.
+  - *On a finished one:* compensating `admin_void` ledger rows reverse its points, and the game's
+    `ratings` are **recomputed** from all finished, rated, non-void matches in `finished_at`
+    order. Ratings are a derived table; the recompute is O(matches of that game), fine well past
+    this community's size.
+
+**The move — `POST /play/api/matches/:id/move {ply, move}`** (session required; ≤ 1 move/s per
+session). The steps below run in ONE `BEGIN IMMEDIATE` transaction:
+1. Re-read the match. It must be `active`, and the caller must hold the seat that is to move
+   (else 403 `not_your_turn`).
+2. `ply` must equal `matches.ply`. A stale tab or a double submit gets 409 `stale`, so exactly one
+   of two racing moves wins.
+3. If `turn_deadline` has passed, finalise the timeout and answer 409 `timeout`.
+4. Check `move` against `move_pattern`, then `rules.apply`. `null` → 400 `illegal_move`.
+5. Insert `match_moves` and update `position`, `ply`, `last_move_at` and
+   `turn_deadline = now + move_seconds`. Clear `draw_offer_by`: a move declines an offer.
+6. Run `rules.status`. If the game is over, **settle** in this same transaction.
+7. **Bot mode:** if the game is not over, compute `rules.bot(...)` within the node budget, then
+   apply, insert and check status in the same transaction. One request carries the human move and
+   the bot's reply.
+
+The response is the match view. The client never sends a position, a result, a score or a ply
+other than the current one.
+
+**Other actions:**
+- `POST /:id/resign`. In PvP while `ply < 2` it is an **abort** (both refunded): a result at ply 0
+  would be a rated win handed over without a game.
+- `POST /:id/draw {action:'offer'|'accept'|'decline'}`, PvP only. An offer while the other side's
+  offer stands accepts it.
+- `POST /:id/abort`, PvP only, while `ply < 2`.
+- `POST /play/api/matches` to create a bot game, seek (no `target`) or challenge (`target` = a full
+  address of this network).
+- `POST /:id/accept` and `POST /:id/decline`; `POST /:id/cancel` (the creator, before anyone
+  accepts → `aborted`, reason `cancelled`, refunded).
+- Every match view carries `actions` — what THIS viewer may do next (`accept`, `decline`,
+  `cancel`, `abort`, `resign`, `draw_offer`, `draw_accept`, `draw_decline`) — so the shell never
+  re-derives the rules (§19.15 *Part 10*).
+
+**Timeouts:** when `turn_deadline` passes, the side to move loses (`timeout`); if `ply < 2`, the
+match is aborted and refunded instead. This is applied lazily on every read or move of that match,
+and by the 5-min sweep over `idx_matches_state`.
+
+**Settling** runs inside the transaction that ends the match:
+1. Set `result`, `reason` and `finished_at`.
+2. Upsert `results_daily` for each human seat.
+3. Write the points ledger rows (unique `ref`, so exactly once).
+4. **Rated rule (PvP only):** the match is rated if the unordered pair has finished fewer than
+   `pair_rated_daily` (default 3) rated matches this UTC day, counted on `idx_matches_pair` in both
+   seat orders. Only a rated match moves `ratings`, pays PvP points **and enters `results_daily`**
+   (so the pair cap also bounds every board and event built on it). Elo, K = 24, start 1200,
+   integers, zero-sum. `pair_rated_daily` 0 = no PvP match is rated.
+   A **free** match (cost 0, bot or PvP) pays no points and enters no `results_daily` row either,
+   so a free bot cannot feed a wins board or a `game_results` event (§19.15 *Part 11* #1).
+5. A self-match (`seat1 = seat2`) is refused at creation.
+
+**Caps** (settings; defaults):
+
+| Cap | Default |
+|---|---|
+| Active PvP matches per address (`pvp_active_max`; checked for both sides at accept) | 10 |
+| Open seeks + challenges created per address (`pvp_open_max`) | 5 |
+| Active bot game per address per game | 1 (a partial unique index) |
+| Lobby list | the 50 newest seeks |
+
+**Reads** (every one an indexed lookup):
+
+| Route | Access | Returns |
+|---|---|---|
+| `GET /play/api/matches/:id?since_ply=` | public while mode ≠ off; seats shown masked | the match view |
+| `GET /play/api/matches/mine?state=&before=` | session | paged, 20 per page |
+| `GET /play/api/matches/turns` | session | the count of matches where it is the caller's move, + max `last_move_at`: the cheap poll |
+| `GET /play/api/lobby` | public while mode ≠ off | open seeks |
+
+**Polling (correspondence pace):**
+- `turns`: every 15 s while the page is visible, every 60 s while it is hidden.
+- An open PvP board polls its match every 5 s while it is the opponent's move.
+- There is no push connection in v1. Live timed games will need SSE, an nginx location with
+  buffering off and connection caps, and that is a later design.
+
+**Retention.** Finished PvP matches and their moves are kept: they are small (≈ 30 B per move row)
+and players value their history. For finished **bot** matches, `match_moves` is deleted after 60
+days and the match row is kept.
+
+**Reserved kinds (built with their first game; the v1 registry refuses them):**
+- `skill`: the server issues a seed; the browser returns the INPUT LOG; the server replays it with
+  `rules.replay(seed, inputs) → { score, valid }` under `min_seconds`/`max_seconds` and an input
+  cap.
+- `chance`: the server draws the outcome when the round starts, commits
+  `sha256(seed ‖ JSON(outcome))`, and reveals both at settle.
+
+Both add, by migration, `rounds(id, address, game_id, game_version, state 'started'|'settled'|'expired',
+seed, commit, outcome_json, inputs_json, score, points, started_at, settled_at, expires_at)`, with a
+partial unique index allowing one open round per address per game. Settle is idempotent.
+
+### 19.9 Leaderboards + events
+
+**Leaderboards** (public while mode ≠ off, addresses masked with `maskAddr` semantics exactly):
+
+| Board | Source | Query |
+|---|---|---|
+| Rating, per game | `ratings` | `ORDER BY rating DESC`; hidden until 5 rated games (provisional) |
+| Wins / points, per game + mode, per day / ISO week / month (UTC) | `results_daily` | `WHERE game_id=? AND mode=? AND day BETWEEN ? AND ? GROUP BY address` on `idx_results_board` |
+| Points, all-time | `players` | `idx_players_points` |
+
+- **Tie-break,** always deterministic: value DESC, then games DESC (rating board), then address
+  ASC.
+- The computed board is cached in memory for 60 s.
+- **No read scans `matches` or `ledger`.**
+
+**Events (D15).** Event windows are **whole UTC days**, validated at create, because results and
+activity are rolled up per UTC day. The kinds, one module each under `lib/events/`, each exporting
+`validate(rules)`, `compute(db, event) → [{address, value}]` and `describe(rules)`:
+
+| Kind | Rules | Value |
+|---|---|---|
+| `game_results` | `{ game_id, mode:'pvp'\|'bot', metric:'wins'\|'points', min_games }` | Σ over `results_daily` in the window |
+| `mining_minutes` | `{}` | Σ `activity_daily.seconds / 60` in the window |
+| `active_days` | `{ min_minutes }` (default 10) | days in the window with ≥ `min_minutes` |
+
+**Lifecycle**, driven by the 5-min tick:
+1. `scheduled` → `running` at `starts_at`.
+2. → `finalising` at `ends_at + 10 min`, which gives the last activity sync time to land.
+3. → `done`: compute, rank (the deterministic tie-break above), write `event_results`, pay the
+   rewards.
+4. `cancelled` from any state before `done`: no rewards. Cancelling a `done` event claws nothing
+   back; use `admin_adjust`.
+
+`reward_json` = `{ tiers:[{ rank_from, rank_to, points, badge }], participation:{ min_value, points, badge } }`
+(the participation `badge` was added in Part 7, §19.15 *Part 7* #7).
+Rewards are ledger rows `('points', …, 'event', 'e:<id>')`, so they are unique and paid once. A
+badge is appended to `players.badges_json` in the same transaction as the `done` transition. Badge
+ids come from a server-side list of ≤ 24-char ids and are never free text.
+
+**Team events** are not in v1. They arrive as one more event kind, plus a `teams` table by
+migration (D17).
+
+**Routes:**
+- Public: `GET /play/api/leaderboard?game=&board=rating|wins|points&mode=&period=day|week|month|all`,
+  `GET /play/api/events`, and `GET /play/api/events/:id` (top 50, masked, plus the caller's own rank
+  when logged in).
+- Admin (§19.11): `/internal/admin/events` CRUD, cancel, finalise-now.
+
+### 19.10 Chat + moderation
+
+**Reading** is public while mode ≠ off and `chat_enabled`, and needs no session.
+`GET /play/api/chat?room=global&after=<id>` returns ≤ 100 `visible` messages, ascending. With a
+session, it also returns the caller's own `held` messages, flagged `held:true`. The fields are
+`id, created_at, name, role, body, own`. `name` is the masked address — `Nick (masked address)` once the
+player has an approved nickname (§19.16) — or "Operator" for `role='operator'`. The response never carries a full address or an IP.
+
+**Posting** (`POST /play/api/chat {body}`, body ≤ 4 KB) requires **every** one of these:
+- the pool's `chat_enabled`;
+- mode `preview` or `on`;
+- a valid session with `chat_ok_after` not NULL and ≤ now (D9);
+- with `chat_requires_password` on, a password-proof session;
+- the player is not muted or banned;
+- ≥ `chat_min_minutes` (default 60) of mining in `activity_daily` over the last `chat_recent_days`
+  (7);
+- the rate limits: 1 per 5 s and 30 per hour per address, 60 per hour per IP, plus the slow mode
+  (`chat_slow_seconds`, 0 = off);
+- no identical body from the same address in the last 10 min.
+
+A refusal returns a reason code, and `available_at` when the reason is time-based.
+
+**The body is normalised on the server:**
+1. NFC.
+2. Newlines become spaces.
+3. Remove C0/C1 control characters, the bidi overrides U+202A–U+202E and U+2066–U+2069, and the
+   zero-width characters U+200B–U+200D, U+2060 and U+FEFF. Write these as escape sequences in the
+   code, never as raw bytes.
+4. Collapse whitespace and trim.
+5. The result must be 1–280 chars.
+
+The body is stored as **plain text**, and rendering is the client's job.
+
+**Auto-hold** (the message is `held`: visible to its author and queued for review):
+- a word-list hit (admin-edited, normalised substring);
+- a link-like body (`://`, `www.`, or a `name.tld` pattern) while `chat_hold_links` is on, which is
+  the default, because scam links are the main risk;
+- `chat_report_threshold` reports (default 3) from distinct addresses on a visible message.
+
+Links are never made clickable.
+
+**Report:** `POST /play/api/chat/:id/report {reason ≤ 200}` needs a **chat-capable** session (the
+posting gate above, built in Part 8: "distinct reporters" must mean distinct aged, mining addresses)
+and is unique per (message, reporter). Operator messages and your own cannot be reported.
+
+**Keeping open pages current (built in Part 8).** A poll asks only for ids after the newest it has,
+so a message deleted, held or approved later would never reach a page that already drew it. Every
+state change goes into an in-memory log with a revision number; a poll sends `after`, `rev` and
+`epoch` and gets `changes: { removed, held, shown }` too. An unknown epoch (a restart) or a revision
+the bounded log has dropped answers `reset: true` with a fresh page (§19.15 *Part 8* #3).
+
+**Rendering:** `textContent` only, **never `innerHTML`**, in the shell and the admin pages alike.
+The chat panel always carries the line *"The operator will never ask you for funds, keys or seeds
+in chat."*
+
+**The operator badge** exists only on messages posted through `/internal/admin/chat/post`, which
+sets `role='operator'` and `address` NULL. `role` is not an input to the public route.
+
+**Moderation** (admin, §19.11):
+- list, filtered by state;
+- approve a held message; delete one (with a reason);
+- mute an address for ≤ 30 days;
+- ban an address until a date or forever. A ban revokes its sessions and blocks login, games and
+  chat. Unban reverses it;
+- purge: delete every message of an address from the last N days;
+- word-list edit, operator post, the report queue, and the mod log.
+
+Every action writes `mod_actions` with `X-Admin-User`.
+
+**Moderators (D21, built in Part 8).** From /play/, on the public API with their own session:
+`GET /play/api/mod/queue` (held + reported messages, masked names), and `POST
+/play/api/mod/messages/:id/{delete,approve,mute}` — mute silences the message's **author** for ≤ 24 h
+and never shortens a longer mute. None of it reaches an operator message or another moderator.
+`/me` carries `moderator: null | { can_act, reason }`.
+
+**Retention** (hourly tick): messages older than 7 days, or past the newest 2 000 in a room, are
+hard-deleted, together with their reports. `mod_actions` is kept 365 days.
+
+### 19.11 Admin surface
+
+**Pages** in the pool admin panel, in a "Games" nav group that shows whatever the mode is (the
+operator configures before enabling):
+
+| Page | Contents |
+|---|---|
+| Settings → **Games** (a pool-owned section, Part 2) | `mode`, `chat_enabled`, and a read-only games-service health line from the probe |
+| `games.html` | games-owned settings via the proxy: plays (§19.6), points, chess (bot play cost; PvP play cost, `pair_rated_daily`, the active / open caps — the move-time options stay manifest values), chat (min proof age with the **1 h floor shown**, password-only switch, recent-mining minutes/days, rate limits, slow mode, hold links, report threshold, word list), retention. It links to the pool-owned switches and does not duplicate them. *As built (Part 9):* the Games NAV parent; the form is built from the service's own setting spec, so a new key needs no page edit; the word list lives on `games-chat.html`; the PvP group arrived with Part 10; `mod_requires_password` (D21) is here. |
+| `games-chat.html` | the live list, held queue, reports, message actions, operator post box, mod log; **moderators** (D21: list, appoint, remove) |
+| `games-players.html` | address lookup (full address, admin only): player row, session count, plays/points, mute/ban/unban, purge, match list with **Void** per voidable match (Part 10, step-up), `admin_adjust`, appoint/remove as moderator |
+| `games-events.html` | event CRUD, results, cancel, finalise-now. The window is picked as whole UTC days with **date** inputs, the last day included (built in Part 7: a `datetime-local` snapped to days would show a time that means nothing, §19.15 *Part 7* #12). |
+| `games-names.html` | *(Part 12, §19.16)* the nickname queue (oldest first, with flags), the live and rejected lists; approve / reject (the reason is shown to the player) / remove — all step-up |
+
+The pages follow the pool's admin conventions (AdminTable, the settings-form harvester rules) and
+leave the admin CSP unchanged.
+
+**Step-up (`freshAdmin`) is enforced POOL-side before proxying** for: ban, unban, purge, match
+void, `admin_adjust`, event cancel, and every games-settings write. Delete-one-message, mute,
+approve-held, operator post and event create/update are `secureAdmin` only, so live moderation is
+fast. The list lives in `lib/games-link.js`, and the games side re-checks `X-Admin-Stepup`.
+
+**The list is of the FAST writes, and it binds the games admin paths (built in Part 2).** GET is
+never step-up; every other write is step-up **unless** it is exactly one of these (paths relative
+to `/internal/admin/`, `:id` = one path segment):
+
+| Fast write (`secureAdmin` only) | Method + path |
+|---|---|
+| delete one message | `POST chat/messages/:id/delete` |
+| mute | `POST players/:addr/mute` |
+| approve a held message | `POST chat/held/:id/approve` |
+| operator post | `POST chat/post` |
+| event create | `POST events` |
+| event update | `POST events/:id` |
+
+So Parts 7–9 must name those six routes exactly that. Any other write, including one added later
+without updating `FAST_WRITES`, defaults to step-up (fail closed). Consequences: unmute and
+finalise-now are step-up, and a fast action sent as PUT or DELETE is step-up. Part 8 added restore,
+purge, the word list, settings and moderator appoint/remove, all step-up by this rule — `FAST_WRITES`
+did not change. A moderator's own actions (D21) use the public API, not this proxy. The pool-owned
+**Settings → Games** save is step-up too (`'games'` is in `STEP_UP_SETTINGS_SECTIONS`).
+
+### 19.12 Deploy + operations
+
+| | Mainnet | Testnet |
+|---|---|---|
+| Service / user | `grin-games` / `grinplay` | `grin-games-testnet` / `grinplay` |
+| Code | `/opt/grin/pubgames/mainnet/` (root:grinplay, 750/640) | `/opt/grin/pubgames/testnet/` |
+| Data | `/opt/grin/pubgames-data/mainnet/grinium-games.db` (grinplay, 700/600) | `…/testnet/…` |
+| Web | `/var/www/grin-play` (www-data perms like `pool_fix_web_perms`) | `/var/www/grin-play-testnet` |
+| Port | `127.0.0.1:8081` | `127.0.0.1:8091` |
+| Link secret | `/opt/grin/conf/grin_pubgames_link_mainnet` (grinplay:grinpool 0440) | `…_testnet` |
+| Log | `/opt/grin/logs/grin-games.log` (logrotate `copytruncate`) | `…/grin-games-testnet.log` |
+| Bash lib | `scripts/lib/07_lib_pool_games.sh`, prefix `pgs_` | same |
+
+**Menu `P) Play & chat (games)`** in the pool script's Administration group:
+
+| Key | Action |
+|---|---|
+| 1 | Install / repair |
+| 2 | Deploy games code |
+| 3 | Nginx (write + reload) |
+| 4 | Service control |
+| 5 | Status: unit state, `NRestarts`, the port listener, DB size, `meta.schema_version`, the mode from `/internal/games/config` (secret read from the file, never printed) |
+| 6 | Logs |
+| 7 | Rotate the link secret: atomic replace, **no restarts** (§19.3) |
+| 8 | Uninstall: keeps the DB unless a second confirmation; `nginx -t` + reload |
+| 0 | Back |
+
+**Nothing under `P` restarts `grin-pool-manager`.**
+
+**Deploy.** `pgs_deploy_code`:
+- `rsync --delete`s `server/` and each game's `manifest.json` + `rules.js` into the code dir, which
+  holds nothing at runtime, by D3;
+- `rsync --delete`s the shell and each game's `frame/` + `rules.js` into the web dir;
+- re-applies owners and modes, since `rsync -a` carries the checkout's owner;
+- writes a `version.js` asset stamp (a short hash of the deployed tree) so Cloudflare-cached assets
+  bust;
+- restarts **only** the games service.
+
+`pool_deploy_code` ends with `pgs_deploy_code` when games is installed.
+
+**nginx.** A snippet `/etc/nginx/snippets/script07-<svc>-games-locations.conf` holds the `/play`
+locations. The rate-limit zones `…_games` 600 r/m and `…_gamelogin` 20 r/m come through
+`nginx_ensure_rate_limit_zones`. The locations:
+
+| Location | Serves | Headers / notes |
+|---|---|---|
+| `= /play` | 301 → `/play/` | — |
+| `^~ /play/api/login` | the games service | 4 KB body cap; `X-Real-IP` |
+| `^~ /play/api/` | the games service | 64 KB body cap |
+| `^~ /play/games/` | frames | own frame CSP: `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'none'; frame-ancestors 'self'; base-uri 'none'; form-action 'none'; object-src 'none'`. It does NOT include the pool's common header snippet, whose `X-Frame-Options DENY` would block our own frame, so nosniff, Referrer-Policy and HSTS are written out here with a comment naming the snippet they mirror. |
+| `^~ /play/` | the shell | the common snippet + the shell CSP (`script-src 'self'`, no inline script, `frame-src 'self'`, `connect-src 'self'`); `Cache-Control: no-cache` on `*.html` |
+
+The pool vhost's `:443` block gains two lines, once:
+- `location ^~ /internal/ { return 404; }`
+- a **glob** include of `script07-<svc>-games-*.conf`. A glob that matches nothing is not an
+  nginx error; checkpoint A verifies that with the snippet absent.
+
+After `nginx -t` + reload, **verify the routes**: `/play/` 200, `/play/api/health` 200 JSON,
+`/internal/x` 404. If `nginx -t` fails, remove the snippet and reload, so the vhost is never left
+broken. `/play/api/` responses are `Cache-Control: no-store`, so Cloudflare never caches a session
+answer.
+
+**Backup (D18).** `B) Backup` adds a `sqlite3 .backup` snapshot of the games DB when present,
+using the same two-phase pattern as `pool.db`. Restore asks separately with default Y. A missing
+games DB never fails either one.
+
+**Cleanup.** `Z) Cleanup` gains a games group: service, unit, snippet, zone conf, web dir, app dir,
+logrotate and link file. The DB sits behind its own confirmation.
+
+**Maintenance**, inside the service:
+- **every 5 min:** activity sync, match timeouts and expiry, event transitions;
+- **hourly:** session purge, chat retention, bot-match move purge, `ledger.verify()` (log only).
+  Each job logs its elapsed time.
+
+The weekly `VACUUM` runs from the pool's `C) Cron` through a wrapper that stops **only**
+`grin-games`.
+
+**As built (Part 3, 2026-09-27, not VPS-tested).** Everything above is in
+`scripts/lib/07_lib_pool_games.sh`; the pool script carries only hooks. Where the build refined
+this section (the unit's write paths, the deploy staging, the `version.js` name, the frame CSP's
+`sandbox`, `no-cache` on the whole shell, the restore flow, the cron time, the cleanup prompts),
+the change and its reason are in §19.15 *Part 3*. The operator-facing walkthrough is impl §10.13
+*Part 3*.
+
+### 19.13 Threat notes for the review pass (Part 11 answers each against the code)
+
+1. **Forged move / result.** Can any request set `position`, `result`, `ply`, points or rating
+   directly? Is every move checked by `rules.apply` on the server?
+2. **Races.** Two tabs moving the same match at once: does exactly one win (`BEGIN IMMEDIATE` +
+   the ply check)? Can a match settle twice, or be refunded and settled both? (`uq_ledger_ref`.)
+3. **Plays farming.** Can plays appear without pool-seen minutes? Does a repeated or overlapping
+   window double-credit? Is a settings change retroactive? Is the balance cap honoured?
+4. **Pair farming / collusion.** Is the per-pair rated cap enforced in both seat orders? Two
+   addresses owned by one person remain an **accepted limit**: points are worthless.
+5. **Bot abuse.** Can a player take a move back against the bot? Can bot CPU be driven, given the
+   node budget, one active bot game and the per-session move rate? Does a throwing `rules.js` leave
+   the service up?
+6. **Session theft / CSRF.** Cookie attributes exact; token stored hashed; logout-all and ban
+   revoke; `SameSite=Strict` + the JSON content type + the `Origin` check on every POST.
+7. **Login as someone else.** Games login is exactly as strong as the account page's proof. A
+   stranger who mines to your address, or a CGNAT neighbour, can log in as you and spend your
+   plays or play rated games in your name. The chat gate is aged (D9); the games actions are not.
+   Is that acceptable as written, and is it stated on /play/?
+8. **Frame escape.** Is the sandbox attribute exactly `allow-scripts`? Frame CSP `connect-src
+   'none'`? Does the shell check `event.source` and each schema? Does any message to a frame carry
+   anything secret?
+9. **Chat XSS.** Every sink in the shell, the frames and the admin pages: `textContent` only,
+   quotes included.
+10. **Impersonation.** Can a public request create an operator message? **Masked names can be
+    ground:** matching another address's 9…4 mask takes about 2^40 key generations (4 free bech32
+    characters in front, 4 at the back), which is hours on a GPU. So a masked name is not an
+    identity. The operator badge is the only trusted marker, and the anti-scam line says so.
+11. **Chat flood.** Rate limits per address and IP, slow mode, the 4 KB cap, a muted user using a
+    second session, and the cost of a 1 000-client poll storm (each GET must be an indexed range
+    read).
+12. **Pool stall via the internal routes.** Is the secret checked before any parse, DB read or
+    scrypt? Is activity bounded and EXPLAIN-checked? Is verify-proof throttled on the real IP? Can
+    the games service make the pool run scrypt without limit?
+13. **Secret leak.** Is the secret ever in argv, env, a log, a response or an error? File modes;
+    rotation.
+14. **`/internal` via nginx.** Check every `proxy_pass` location in the vhost, the `^~ /internal/`
+    404, encoded-path tricks, and the games' own `/internal/admin/` requiring the secret anyway.
+15. **Cloudflare caching.** Shell HTML `no-cache`, API `no-store`, the version stamp.
+16. **Mode switch.** Does `off` 404 every public route? Does `preview` hide the nav? Does games
+    being down hide the nav?
+17. **Numbers.** Is every integer parameter bounded and NaN/Infinity-safe? The 2^53 rule on every
+    column?
+18. **Public lists.** No public list emits a full address; a test mirrors `test-public-leakage.js`.
+19. **Growth.** Does every table have a retention rule or a bound?
+20. **Moderators (D21).** Can a moderator act on an operator message or another moderator, approve or
+    unmute themselves, shorten a mute, reach any `/internal/admin/` route, or learn a full address? Is
+    removal (and a ban) effective on their next request? Is the password rule re-read per request? Can a
+    stranger who mines to a moderator's address inherit the role (the aged-proof + password gates)?
+21. **Nicknames (§19.16, Part 12).** Can any public response carry a nickname without its mask, or a
+    pending / rejected one at all? Can a nickname imitate a badge ("Operator", "Mod"), an address, or
+    another player's live name (case, separators, leet)? Can two live names share a matching form under
+    a race? Can a stranger who mined briefly to an address name it (the aged-proof gate)? Is every admin
+    write step-up at the pool? Does a ban end the name? Is the table bounded?
+
+### 19.14 Status
+
+Broken into 14 sessions (0–13) plus operator checkpoint A. The per-session plan is kept outside the
+repo.
+
+| Part | Scope | State |
+|---|---|---|
+| 0 | This section: decisions D1–D20, contract, schema, threat notes | **done 2026-09-27** (design only, no code). D18–D20 were asked and answered the same day. D20 replaced the first sketch's Block Hunt + Grin 2048 with chess (bot, then PvP correspondence), which reshaped §19.4, §19.7 and §19.8. |
+| 1 | Games service skeleton + schema v1 (`play/server/`) | **done 2026-09-27, not VPS-tested.** Boots, validates its env, opens + migrates `grinium-games.db` to v1, serves `/play/api/health`, drains on SIGTERM. Nothing deploys it yet (Part 3). Games `npm test` 155/155 on Windows (2 skips: the 0600 file mode and SIGTERM, both POSIX-only). Deltas → §19.15 *Part 1*. |
+| 2 | Pool link: `lib/games-link.js`, the `games` settings section, the branding flag, nav, tests (the only pool-side change; one pool restart at deploy) | **done 2026-09-27, not VPS-tested.** Three internal routes (above `express.json()`), the admin proxy with pool-side step-up, the 60 s probe, `games: {mode, chat}` in branding, the hidden Play nav item, Settings → Games. Pool `npm test` 2108 → 2282, 0 failed (NEW `test-games-link.js` 169, `test-public-leakage.js` +5). Deltas → §19.15 *Part 2*; as-built → impl §10.13. |
+| 3 | Bash: `07_lib_pool_games.sh`, menu `P`, nginx snippet + glob include, backup, cleanup | **done 2026-09-27, not VPS-tested.** Menu `P` 1–8 as §19.12, the vhost's `/internal/` 404 + glob include, the games DB in `B) Backup` (separate restore question, also in Migrate IN) and in the daily cron wrapper, a games VACUUM under `C) Cron`, cleanup group 1b/1c, games deploy at the end of `9) Deploy new code`. `bash -n` clean; nothing can run on Windows, so every runtime claim is owed to checkpoint A. Deltas → §19.15 *Part 3*; as-built → impl §10.13 *Part 3*. |
+| A | VPS checkpoint A (operator, mainnet, mode `off` → `preview`, impact budget 1–5) | **skipped by the operator 2026-09-27** (installs later). Part 4 was built without it, so nothing in Parts 1–4 has run on a box; the impact-budget checks are owed at that install. |
+| 4 | Auth + sessions + activity sync + plays ledger | **done 2026-09-27, not VPS-tested.** Login (one pool proof on the real IP, a limiter chain before the pool), sessions (hashed token, 14 d hard, 20 per address), `/me` + `/sessions` + logout / logout-all, CSRF layer 3, the mode gate, the activity sync → plays, the ledger + hourly `verify()`. No pool code changed. Games `npm test` 155 → 318 (NEW `test-auth.js` 163), 0 failed. Deltas → §19.15 *Part 4*; as-built → impl §10.13 *Part 4*. |
+| 5 | Match platform (registry, matches, bot mode) + chess `rules.js` (perft) + bot | **done 2026-09-27, not VPS-tested.** The registry (strict manifest, rules.js evaluated in a sandboxed `vm` context, smoke-tested at boot, reserved kinds refused), bot-mode matches (create / move with the bot's reply in the same transaction / resign / views / `mine`), settle + points under the daily cap, timeouts (lazy + a 5-min sweep), the 60-day bot-move purge; chess rules proved by perft, a seeded 3-level bot. PvP answers `mode_unavailable` until Part 10. Games `npm test` 318 → 451 (NEW `test-matches.js` 133), 0 failed. Deltas → §19.15 *Part 5*; as-built → impl §10.13 *Part 5*. |
+| 6 | Shell `/play/` + chess frame: bot games playable in preview | **done 2026-09-27, not VPS-tested.** The page (pool header/footer, sign-in, Plays/Points placard, devices + log out everywhere, new bot game, My games, resign, offline/closed states), the sandboxed frame host and the chess frame (click-click + drag, promotion, keyboard). No inline script; no `innerHTML`. Pool: `public-shell.js` hrefs made site-absolute (a live bug on blog permalinks) and no ads on the games login. Deploy stamps the asset URLs. Games `npm test` 451 → 519 (NEW `test-shell.js` 68), pool 2290/2290; a headless-Edge probe 48/48 against the staged tree. Deltas → §19.15 *Part 6*; as-built → impl §10.13 *Part 6*. |
+| 7 | Leaderboards + events + admin Events page | **done 2026-09-28, not VPS-tested.** Boards (points held, rating, wins / points per game + mode over the UTC day / ISO week / month / all), the three event kinds, the lifecycle with finalise-exactly-once, points + badge rewards, the `/internal/admin/*` guard (the first admin routes), the /play/ G-06 panel, the pool's Games → Events page. No pool backend code. Games `npm test` 519 → 630 (NEW `test-events.js` 101), pool 2290 → 2301; a headless-Edge probe 58/58 of the panel. Deltas → §19.15 *Part 7*; as-built → impl §10.13 *Part 7*. |
+| 8 | Chat backend + moderation engine | **done 2026-09-28, not VPS-tested.** Read / post / report with every §19.10 gate (the recent-mining gate added to `auth.chatStatus`), body normalisation, auto-hold (words, links, addresses, reports), the change feed that keeps open pages current, retention, the operator's admin routes (messages, word list, mute / ban / purge / adjust, settings, mod log), ban revoking sessions, and **moderators (D21, new)**: schema v2 (`moderators`, `chat_words`) + `/play/api/mod/*`. No pool code; `FAST_WRITES` unchanged. Games `npm test` 630 → 803 (NEW `test-chat.js` 171). Deltas → §19.15 *Part 8*; as-built → impl §10.13 *Part 8*. |
+| 9 | Chat UI + admin `games.html` / `games-chat.html` / `games-players.html` | **done 2026-09-28, not VPS-tested.** The /play/ G-07 chat panel (textContent only, the change feed, report, the moderator queue), live rules in the "How plays are earned" fold, and three admin pages + a shared `games-admin.js`; `games.html` is now the Games NAV parent. Games `npm test` 803 → 815, pool 2301 → 2322; a headless-Edge probe 58/58 of the chat panel. Deltas → §19.15 *Part 9*; as-built → impl §10.13 *Part 9*. |
+| 10 | PvP correspondence chess: seeks, challenges, accept/decline, draw/abort/timeout, ratings, turn polling; the "add a game" checklist | **done 2026-09-28, not VPS-tested.** Seeks and direct challenges (72 h expiry, refunds exactly once), accept / decline / cancel with both-side caps, draw offer / accept / decline, abort + the ply < 2 resign-as-abort, timeouts, the rated pair cap + Elo (`lib/ratings.js`), admin void with the ratings recompute, `/lobby` + `/matches/turns`; the G-08 "Play a person" panel, board buttons from the view's `actions`, the 5 s board + 15/60 s turns polls, PvP boards; the Players page Void. No pool backend code, no schema change. Games `npm test` 815 → 918 (NEW `test-pvp.js` 90), pool 2322/2322; a headless-Edge probe of the PvP board + lobby. Deltas → §19.15 *Part 10*; as-built → impl §10.13 *Part 10*; the checklist → `play/README.md`. |
+| 11 | Independent review of 1–10 against §19.13 (a separate, cold session) | **done 2026-09-28** (code review on Windows; nothing run on a VPS). All 20 threat notes answered against the code, the six mandatory probes run. Five findings fixed: a free bot game fed the wins boards and events (games), no global cap on the pool's internal routes against a compromised games process (pool, `games-link.js`), the login card never stated the "someone else can sign in as you" limit, a doc/code mismatch on mid-day settings changes, a menu misalignment. Two open for the operator: the rig password typed on the pool's account page (Part 6 #3) and the moderator-inheritance limit (#20). Games `npm test` 918 → 921, pool 2322 → 2330. Answers → §19.15 *Part 11 review*. |
+| 12 | *(optional)* Approved nicknames (D19) | **done 2026-09-28, not VPS-tested.** Chosen by the operator. `lib/names.js` + schema v3 (`nicknames`): pre-moderated requests, one pending + one live per address, no two live names alike (a partial unique index), the chat gate minus the chat switch, 5 a day, 180-day retention; every public name through `names.label` → `Nick (mask)`; a ban ends the name; the `nicknames_enabled` switch; the /play/ Nickname fold (`play-names.js`) and the pool's Games → Nicknames page (all step-up, `FAST_WRITES` unchanged, no pool backend code). Games `npm test` 921 → 1010 (NEW `test-names.js` 78), pool 2330 → 2341. Contract → §19.16; deltas → §19.15 *Part 12*; as-built → impl §10.13 *Part 12*. |
+| 13 | VPS acceptance B: mainnet `preview` → `on`; docs + memory fold | not run |
+
+**Parts 1–10 are built and Part 11 has reviewed them; Part 12 was built after the review (so it has had only its own self-review, §19.15 *Part 12*); nothing in §19 is VPS-verified.** Checkpoint A was skipped by the operator (installs later). Part 12 (nicknames) is built too (2026-09-28); Part 13 (the VPS acceptance run) is next. The moderation tools exist, so chat
+may be switched on in `preview` for acceptance; mode `on` still waits for Part 13's acceptance run.
+
+### 19.15 Build deltas
+
+Recorded by the build session of each part, against the section it changes. Part 11's review
+answers go here too.
+
+**Part 1 — games service skeleton (2026-09-27, not VPS-tested).** Code in
+`web/07_mining_pool_public/play/server/` (+ `play/README.md`). No §19.4 schema change: the
+suite runs §19.4's SQL block on its own and requires the migration to produce exactly the same
+35 tables and indexes. **So §19.4's SQL block is now test-bound.** A schema change is a new
+migration *and* an edit to that block, in the same change.
+
+1. **Layout (§19 Layout / plan).** Two files beyond the plan's list: `lib/app.js` (routes, the
+   server, `listen`, `shutdown`), so tests use the real pieces without booting, and `lib/log.js`
+   (one-line records; newlines in a message are flattened so no message can forge a second log
+   record). `index.js` only wires them to the process.
+2. **Exit code 78 (EX_CONFIG) on a bad config**, 1 on any other boot failure. Part 3's unit
+   should set `RestartPreventExitStatus=78`: a restart cannot fix a config, and without it
+   systemd loops on one.
+3. **Config is stricter than §19.12 implied** (`lib/config.js`):
+   - `GAMES_NET` has **no default**.
+   - An unknown `GAMES_*` variable refuses the start, so a typo cannot quietly leave a
+     default in force. A later part that adds a variable adds it to `KNOWN_GAMES_KEYS`, and
+     Part 3's unit must set only known keys.
+   - `POOL_INTERNAL_URL` must be `http://127.0.0.1:<port>` or `http://[::1]:<port>`, with an
+     explicit port and nothing after it. `localhost` is refused because it is a name, and the
+     link secret will be sent to this URL (Part 4).
+   - `GAMES_DB` must end in `.db` and must not resolve inside the code dir or the games dir.
+     That turns D3's rsync trap into a start refusal.
+   - `GAMES_PORT` must differ from the pool's port.
+   - The listen host is not configurable at all.
+4. **DB file modes (D3).** The file is created 0600 *before* SQLite opens it (SQLite gives
+   `-wal`/`-shm` the main file's mode), and then chmod'ed as the pool does. That closes the
+   create-then-chmod window. The mode check is skipped on Windows, where chmod does nothing,
+   and is owed on the VPS.
+5. **Migrations (§19.4 rules).** Idempotence comes from the version gate plus one transaction
+   per migration. The SQL is plain `CREATE`, not `IF NOT EXISTS`, so a leftover table with the
+   wrong shape fails loudly instead of being adopted. A DB whose `schema_version` is newer than
+   the build is refused (no silent downgrade). `meta.net` is checked **before** migrating, so
+   a future migration never runs against the other network's file.
+6. **`transaction()`** starts the outermost level with `BEGIN IMMEDIATE` (§19.8 needs this for
+   every write), nests as `SAVEPOINT`, and **refuses an async callback**. With one
+   `DatabaseSync` connection, an `await` inside a transaction would pull other requests'
+   statements into it.
+7. **HTTP rules for every route (`lib/http.js`).**
+   - **Paths:** matched on the raw path, with no percent-decoding and no dot-segment
+     resolution. A `:param` segment is `[A-Za-z0-9_.~-]` and never starts with a dot.
+   - **Bodies:** **every non-GET request needs `Content-Type: application/json`**, including
+     `logout`, whose client must send `{}` (the CSRF layer of §19.5). The body is capped at
+     16 KB unless the route sets its own cap. `Content-Length` over the cap gets 413 before a
+     byte is read. A streamed overflow gets 413 + `Connection: close`, and the rest of that
+     body is drained, not left unread: closing a socket with unread input can reset the
+     connection before the client sees the 413. nginx's body cap bounds the drain.
+   - **Headers:** JSON responses also carry `Content-Security-Policy: default-src 'none';
+     frame-ancestors 'none'`, beside nosniff + no-store.
+   - **HEAD** is answered on GET routes, for Part 3's `curl -sI` checks.
+   - **Request ids:** a well-formed incoming `X-Request-Id` (the admin proxy's) is kept;
+     anything else is replaced.
+8. **Client IP.** `X-Real-IP` is trusted only from exactly `127.0.0.1`, `::1` or
+   `::ffff:127.0.0.1`, not from all of 127/8. A malformed header from loopback falls back to
+   the peer address.
+9. **Cookies (for Part 4).** A cookie name sent twice parses as `null`, which means no
+   session. The reason is cookie tossing: a sibling subdomain can plant a second `grin_play`,
+   and "first one wins" would let it choose the session. The `__Host-` prefix cannot be used,
+   because it requires `Path=/` and §19.5 uses `Path=/play/`.
+10. **Health (§19.3).** It reads `schema_version` live, so a DB that stopped answering returns
+    503 `db_unavailable` instead of a cached "fine".
+11. **Maintenance (§19.12).** Both tiers (5 min and hourly) already exist, not just the hourly
+    scaffold. Every job runs through one serial queue, so two tiers never interleave at an
+    `await`, and a tier that comes due while already queued is coalesced. Timers are unref'd.
+    No jobs are registered yet.
+12. **Node 24 prints `ExperimentalWarning: SQLite …` once at boot.** It is harmless. The test
+    runner suppresses it with `--disable-warning=ExperimentalWarning`; Part 3 decides whether
+    the unit does too.
+
+**Part 2 — pool link (2026-09-27, not VPS-tested).** Code in NEW `back-end-pool/lib/games-link.js`
+plus mount lines in `index.js`; as-built notes in impl §10.13. What changed against §19.3, §19.11
+and the plan:
+
+1. **`games_port` and `games_link_secret_file` are pool.json keys, not pool settings** (§19.3
+   table edited). The admin proxy sends the link secret and admin headers to `games_port`. As a
+   panel setting, a stolen admin session could have pointed that at any localhost service (the
+   wallet owner API on 3420, say), and an admin-editable file path would make the pool read any
+   file it can. `lib/config.js` supplies the per-network defaults. Part 3 writes them with
+   `pool_write_conf_key` only if absent. **A bad value disables the link and logs one line; it never
+   fails the pool's boot**, because nothing about the games may endanger mining.
+2. **Mounted before `express.json()`, not just before the rate limiters.** Otherwise express.json
+   would parse up to 100 KB for an unauthenticated caller before the secret check, against §19.3's
+   "secret first". The lib reads its own body with the 2 KB cap. The setup therefore has two phases:
+   `createGamesLink()` + `app.use()` at the top of `index.js`, `attach()` in `setupRoutes`.
+3. **A third guard on `/internal/*`:** any `X-Forwarded-For` / `X-Real-IP`, or a non-loopback
+   socket, gets 404 before the secret is looked at. nginx always adds XFF, so a request that
+   reached `/internal/` through any proxy location cannot even learn whether the link is configured.
+   **Part 4's `pool-link.js` must send neither header to the pool.**
+4. **verify-proof refuses a loopback or unspecified `client_ip`** (400 `client_ip`). If games ever
+   forwards `127.0.0.1`, its X-Real-IP chain is broken and every player would share one throttle
+   bucket (D7); refusing makes that loud. It also refuses **unknown body keys** (400 naming the
+   key). Proof results are **HTTP 200** either way: `{ok:true, method, slot, age_seconds}` or
+   `{ok:false, reason}`. Transport and shape errors carry `error` (plus `field`), never `reason`,
+   so Part 4 can tell "the proof failed" from "the call failed". 413 `payload_too_large` and 415
+   `unsupported_media_type` join §19.3's error codes.
+5. **Success envelopes carry `ok:true`** on config and activity too (§19.3 listed bare fields).
+   Activity 400s name `field`: `from` / `to` / `window` or the unknown key. Repeated params,
+   signs, decimals, `1e3` and `0x…` are refused.
+6. **Activity SQL is pinned with `INDEXED BY idx_hashrate_time`.** The planner already chooses that
+   index without stats (checked 2026-09-27: `SEARCH … (recorded_at>? AND recorded_at<?)` + a temp
+   b-tree for the GROUP BY). The pin turns a future dropped or renamed index into an error instead
+   of a silent scan on the stratum process.
+7. **Link secret file format:** surrounding whitespace is trimmed (a trailing newline is not part
+   of it), files over 4 KB are ignored, and the file is re-stat'ed at most once a second. So a
+   rotation is picked up within about 1 s, not strictly "on the next call". **Part 4 must trim the
+   same way.**
+8. **`config` answers 503 `settings_unavailable`** when the settings cannot be read, never a
+   guessed `off`, so the games service's "keep the last known mode ≤ 10 min" (§19.2) can work.
+9. **The step-up list is written as the FAST list, fail-closed** (§19.11 now lists the six exact
+   paths). Games-side route names in Parts 7–9 are bound by it. The pool-owned Settings → Games save
+   is step-up (`'games'` added to `STEP_UP_SETTINGS_SECTIONS`, per §19.11's "every games-settings
+   write"). Admin proxy methods are GET/POST/PUT/PATCH/DELETE (others 405). The proxied path is
+   checked raw: games' `:param` charset per segment, no `%`, no dot-leading segment, ≤ 256 chars.
+   Upstream responses are capped at 2 MB.
+10. **Probe health also requires `net` to equal the pool's network**, so a testnet games service
+    answering on the mainnet port is unhealthy. A health flip calls `invalidateBranding`, so the nav
+    follows within one branding fetch instead of the 60 s memo. The pool reads mode `off` until the
+    first probe answers (it runs at attach, before `listen`).
+11. **Branding `games.chat`** is `false` whenever the published mode is `off`, whatever
+    `chat_enabled` says.
+12. **Admin UI:** mode is a `<select>`, not radios, because the settings harvester sends every
+    input's `id` and has no radio handling (memory `project_pool_admin_settings_form`). The health
+    line reads a new pool-only route, `GET /api/admin/games-link` (secureAdmin, not proxied). It
+    returns the switch state, `public_mode`, the port, the link file path, `link_configured` and the
+    probe, never the secret.
+13. **Implementation doc section is §10.13**, not the plan's §10.10 (§10.10–§10.12 were taken by
+    then).
+
+**Part 3 — operator side (2026-09-27, not VPS-tested).** NEW `scripts/lib/07_lib_pool_games.sh`
+plus hooks in the pool script, `07_lib_pool_backup.sh` and `07_lib_pool_migrate.sh`; as built in
+impl §10.13 *Part 3*. What changed against §19.3, §19.12, D16 and D18:
+
+1. **The unit writes to the data dir only.** D16 said "the data dir + log dir". stdout/stderr go to
+   the log through `StandardOutput=append:`, which systemd opens as root before dropping to
+   `grinplay`, so the service never needs write access to `/opt/grin/logs`, and does not get it.
+2. **Hardening beyond D16:** `PrivateDevices`, `ProtectKernelTunables`, `ProtectKernelModules`,
+   `ProtectControlGroups`, `RestrictSUIDSGID`, `LockPersonality`. All are safe for Node. Not
+   `MemoryDenyWriteExecute`, which breaks V8's JIT. No `Requires=`/`BindsTo=` on the pool unit in
+   either direction. Part 1's open items are closed here: `RestartPreventExitStatus=78` (#2), only
+   known `GAMES_*` keys are set (#3), and `--disable-warning=ExperimentalWarning` on `ExecStart`
+   (#12).
+3. **pool.json is the source of truth for the port and the link path.** The installer writes
+   `games_port` / `games_link_secret_file` only if absent (as §19.3 says), and when they ARE present
+   the unit follows them rather than the lib's defaults. A value the pool would reject (Part 2 #1)
+   stops the install with the reason. `games_port` joined `pool_write_conf_key`'s numeric set, so it
+   is stored as a JSON number.
+4. **Link secret: temp file + rename, not `install`.** `openssl rand -base64 48` is redirected into
+   a `mktemp` file in the same directory under `umask 077`, which gets `grinplay:grinpool 0440`
+   before the rename. The secret never enters argv or a shell variable. P → 5 and P → 7 read it
+   inside `node`, given only the path. The installer also adds `o+x` to `/opt/grin/conf`: `grinplay`
+   must traverse it to reach its file. `mkdir`'s default 755 usually gives that already, but nothing
+   in the toolkit guaranteed it.
+5. **Deploy stages both trees, then one `rsync --delete` each.** A second rsync into
+   `<code>/games/` after the first would have deleted and recreated it on every deploy. Game folder
+   names must match `^[a-z0-9][a-z0-9_-]{0,31}$`, or they are skipped. A stray `node_modules` in
+   `server/` is dropped. `pgs_deploy_code` refuses outright if the data dir ever sits inside a deploy
+   target, which is D3 enforced where it could break.
+6. **`version.js` is `window.GRIN_PLAY_VERSION = "<12 hex>"`**, a sha256 over both staged trees.
+   **Part 6 must load `/play/version.js` and use it as its cache-bust query.**
+7. **nginx, three refinements.**
+   - The frame CSP ends with `sandbox allow-scripts`. That repeats the iframe attribute for a frame
+     opened directly in a tab, where no attribute applies.
+   - `Cache-Control: no-cache` is on every file under `/play/` and `/play/games/`, not only
+     `*.html`, the same as the pool's own `location /`. It covers `version.js` itself.
+   - The shell CSP keeps the page CSP's Google Fonts hosts, so the pool's fonts render. It drops
+     every analytics host and `'unsafe-inline'`.
+   Both static locations use the pool's `<svc>_static` zone. **Frames must use classic scripts**:
+   a module script fetched from an opaque origin needs CORS, and this location sends none (Part 6).
+8. **The route check goes through the local listener** (`curl --resolve <domain>:443:127.0.0.1`), so
+   Cloudflare cannot answer in the origin's place. It also checks `/internal/games/config`, the
+   exact path a leak would expose, not only `/internal/x`.
+9. **A vhost written before Part 3 has no include.** P → 3 detects that and offers to regenerate
+   it through `4) Setup nginx`, which is an nginx reload, not a pool restart. If the operator
+   declines, the snippet stays on disk, unused and harmless.
+10. **Restore (D18) happens after the main extraction, never inside it.** `_pbk_restore_extract`
+    excludes the games DB. Both `pbk_restore` and Migrate IN then call
+    `pgs_restore_db_from_archive`. A plain extraction would have written under a running games
+    service and next to a stale `-wal`, which SQLite would then replay onto the restored file. The
+    function stops games, moves the old DB and its sidecars aside as
+    `grinium-games.db.pre-restore[-wal|-shm]` (one generation kept), and places the file. An EOF on
+    the `[Y/n]` declines. The question is skipped after a failed pool extraction.
+11. **Snapshots use the backup API with no `cp` fallback**, unlike `gbe_snapshot_db` for `pool.db`.
+    For a best-effort extra, "no games data" is better than "maybe-torn games data". `-wal`/`-shm`
+    created by the root-side open are chowned back to `grinplay`. **The daily cron wrapper includes
+    the games DB too**, and P → 1 regenerates the wrapper when a schedule is on, because the wrapper
+    is written once and would otherwise never learn about the games.
+12. **Weekly games VACUUM: Sunday 03:30 UTC**, half an hour after the pool's, run as `grinplay` via
+    `runuser`, so the rewritten file and any sidecar stay the service's. `pgs_status` reads
+    `schema_version` the same way, as `grinplay`, for the same reason (the pool's §J16-8 trap).
+13. **Cleanup prompts:** group 1b (everything but the DB) is `[Y/n]` like its neighbours. 1c (the DB)
+    is **`[y/N]`, default keep**: it is player history, not rebuildable state. Uninstall (P → 8)
+    likewise keeps the DB unless confirmed, and keeps the `grinplay` user and the pool.json keys.
+    Both remove the link file; the pool then answers `link_not_configured` and the probe hides the
+    nav.
+
+**Part 4 — login, sessions, activity sync, plays ledger (2026-09-27, not VPS-tested).** Games service
+only (`play/server/lib/`); no pool code changed. Built with checkpoint A **skipped by the operator**.
+As built in impl §10.13 *Part 4*. What changed against §19.2, §19.5, §19.6 and the plan:
+
+1. **Mode `off` answers 404 to login too.** The plan's Part 4 said "every public route except
+   health/login"; D12 says every public route except health, and §19 wins. A login that works while
+   the operator believes the games are off would be a proof oracle nobody is watching.
+2. **Modules beyond the plan's list:** `settings.js` (the games-owned `settings` table behind a typed
+   spec; a stored value that no longer validates reads as the default with one warning; Part 9 writes
+   through it), `mode.js` (the mode cache), `auth.js` (the routes), `mask.js` (the pool's `maskAddr`,
+   copied). `app.js publicRoute()` applies the mode gate and CSRF layer 3 to every public route.
+   **Admin routes (Parts 7–9) must not use it:** they are secret-gated and must work while the games
+   are off, so the operator can prepare them.
+3. **The per-address limit counts FAILURES only, and a known IP passes it.** A limit on every attempt
+   at an address is a switch any stranger can flip to lock the owner out (the pool's §J3-3 lesson).
+   So: a per-IP bucket (10 attempts, refilling 1/min); per-IP (10) and per-(address, IP) (5) failure
+   lockouts, 5 min doubling to 6 h, set below the pool's 20 / 8 so ours trip first; a per-address
+   **failure** budget (20, refilling 1 per 3 min) that an IP whose /24 (/48) had a session for that
+   address in the last 30 days skips. Only `no_match` counts, exactly as in the pool: every other
+   reason is decided before any scrypt. All of it is in memory and forgotten on restart; the pool's
+   own throttles, keyed on the real IP, are the real stop.
+4. **Dead sessions are kept 30 days**, not purged sooner, because the known-IP check reads them.
+5. **Login answers.** 401 `login_failed` with `reason` and `hint` (the account page's sentence for
+   it); `too_many_attempts` and every local limit → 429 with `Retry-After`; `lookup_failed` and any
+   link error → 503 `pool_unavailable`; an unknown reason is shown as `no_match`. A loopback client
+   IP (no `X-Real-IP`) → 400 `client_ip` without calling the pool, the same refusal the pool makes.
+6. **CSRF layer 3, exactly:** the expected origin is `https://` + the `Host` nginx forwards
+   (`X-Forwarded-Proto` believed from a loopback peer only). `Origin: null` is refused, and so is any
+   `Sec-Fetch-Site` other than `same-origin` / `none`, which also refuses a sibling subdomain. An
+   absent `Origin` passes: curl and the admin proxy send none, and a browser always sends one on a
+   cross-origin POST.
+7. **Chat status.** `chat_ok_after` is fixed at login, but the password-only switch is **re-read on
+   every `/me`**, so turning it on mid-incident closes chat to IP-proof sessions already open. A later
+   raise of `chat_min_proof_age` is not retroactive. Reason codes: `chat_off`, `muted`,
+   `anchor_proof`, `password_required`, `proof_too_new` (+ `available_at`). Part 8 adds the
+   recent-mining gate in `auth.chatStatus`.
+8. **Session metadata.** `ua_hint` is a coarse "Browser on OS" parsed from the User-Agent; the raw UA
+   is never stored (attacker-chosen text, and a fingerprint).
+9. **Activity sync.** The first sync starts at the current UTC midnight, so today's minutes count at
+   launch (≤ 24 windows, one tick). An outage past 7 days is **one** skipped row, not one per hour. A
+   pool 400 on `from` (clock skew at the lookback edge) skips that window instead of retrying it
+   forever. Per-address seconds are clamped to the window length. The sync runs in every mode,
+   `off` included (one indexed pool query per 5 min, and plays exist when the games switch on); with
+   no link secret it is a no-op.
+10. **"A change never recomputes the past", made precise.** `due` uses the whole current UTC day's
+    seconds (§19.6's formula), so a lower `minutes_per_play` set at noon also re-rates the morning's
+    minutes from the next window on. Nothing is ever clawed back, credited windows are never
+    rewritten, and earlier days are untouched.
+11. **Ledger.** `post()` is the only writer of `players.plays` / `points`. `reason` must be one of
+    §19.4's list; `ref` matches `[A-Za-z0-9:_.-]{1,64}`; `|delta| ≤ 10^9`. `verify()` also reports
+    ledger sums for an address with no `players` row.
+12. **Jobs registered:** 5 m `activity_sync`; 1 h `session_purge`, `limiter_sweep`, `ledger_verify`.
+13. **Growth (§19.13 #19): the ledger has no retention yet.** About 24 rows per active address per day
+    from mining, plus match rows from Part 5, and `verify()` sums the whole table hourly. That is fine at
+    this community's size; Part 11 must decide on a rollup before it matters.
+14. **Ban revocation at the moment a ban is applied is Part 8/9's.** Until then, a session lookup
+    already refuses a banned player, so a ban takes effect on the next request.
+
+**Part 5 — match platform, chess, bot (2026-09-27, not VPS-tested).** Games service only: NEW
+`play/server/lib/{registry,matches}.js`, NEW `play/games/chess/{manifest.json,rules.js}`, wiring in
+`lib/app.js`; no pool code. As built in impl §10.13 *Part 5*. What changed against §19.4, §19.6–§19.8
+and the plan:
+
+1. **rules.js is evaluated, not `require()`d.** The registry runs it in its own `vm` context: no
+   `require`, `process`, `console` or timers, no `Date`, a `Math.random` that throws, string eval and
+   WASM codegen refused, and a 1 s limit on the load. That turns §19.7's "pure, no I/O, no `Date`, no
+   `Math.random`" from a convention into a check. It is **not** a security boundary: rules.js is our own
+   reviewed code. The registry also smoke-tests each game on its start position (`initial`, `toMove`,
+   `legal` against `move_pattern`, `status`, one `apply`), so a broken game is skipped at boot, not
+   found by the first player. The folder rule is §19.7's `^[a-z0-9-]{2,32}$`, stricter than Part 3's
+   deploy regex (which also takes `_` and one-character names). A folder the deploy copies but the
+   registry refuses is skipped with a log line.
+2. **A free bot game pays no points** (the plan's self-review question b). With `bot_play_cost` 0 a
+   level-1 bot would be a points tap that needs no mining at all, which bypasses D10. The cost is
+   recorded in the match (`params_json.cost`, a key §19.4's comment did not list), so a later settings
+   change never alters what an existing match refunds or pays.
+3. **Point values are manifest values, not settings.** §19.6's `bot_points[level]`, `pvp_win_points`
+   and `pvp_draw_points` are the game's `points.bot`, `points.pvp_win` and `points.pvp_draw`. A game
+   defines what its own levels are worth, so changing them is a deploy. The games-owned settings added
+   are `bot_play_cost` (1, range 0–10) and `points_daily_cap` (100, range 0–100 000). Part 9 may add
+   per-game overrides if the operator wants them in the panel.
+4. **Unknown body keys are REFUSED** (400, `field: 'body'`), not ignored as the plan's test list said.
+   That matches login and the pool's verify-proof, and a forged `position`, `result`, `score` or
+   `points` can never be half-accepted.
+5. **The move rate is per ADDRESS** (burst 3, 1/s), not per session. With 20 sessions per address, a
+   per-session limit would allow 20 bot searches a second.
+6. **The deadline check comes before the turn and ply checks** (§19.8 listed it third). A timed-out
+   match is finalised whoever asks, and the finalisation is committed before the 409 `timeout`.
+   Timeouts apply to bot matches too: the human is always the side to move, and `ply < 2` aborts and
+   refunds. Creating a bot game over an expired active one finalises the old one first, so an
+   abandoned game never blocks the slot.
+7. **The platform enforces `max_plies` for every game** (a draw with reason `max_plies`), on top of
+   chess's own check in `rules.status`. A game whose rules forget it still ends.
+8. **Every move replays the match.** The repetition history is rebuilt from `match_moves` through
+   `rules.apply` on each move. The replay doubles as an integrity check: it must land exactly on the
+   stored position, or the request answers 500 `game_error` and the match is left alone. Chess's
+   `apply` makes only the one matching pseudo-legal move for this reason, not the whole legal list.
+   **Worst-case CPU of one move request** (self-review c): a 409-ply replay plus a level-3 reply took
+   about 13 ms on the Windows dev box.
+9. **The bot's node budget is a backstop.** 2-ply alpha-beta never came near 20 000 nodes in testing:
+   1 051 at most, a 32-queen position included. The cut-off is proved with a tests-only budget
+   argument (`botStats`'s fifth argument; `bot()` always uses the constant). Level 3 scores a leaf
+   that is in check with no legal move as mate, so it never walks into a mate in 1. **The match seed is
+   never sent to a client**: with it, a player could replay the bot's tie-breaks offline.
+10. **`game_version` is recorded, not enforced.** A deploy that bumps a game's version continues active
+    matches under the new rules; a version check would strand every one of them. If a game's folder
+    disappears, move and resign answer 503 `unknown_game`, and its timeouts abort and refund, because
+    only the rules know whose turn it was.
+11. **Retention (§19.8).** The hourly bot-move purge walks match ids upward from a watermark in `meta`
+    (`bot_moves_purged_through`). The watermark stops at the first bot match that is not yet eligible,
+    so none is ever skipped: a long-running bot game only delays the purge of later ones. A purged match
+    still reads, with `moves: []`.
+12. **Routes and shapes for Part 6.**
+    - A new route, `GET /play/api/games`: the registry's public summary.
+    - `GET /matches/:id` needs no session. A spectator gets `you: null` and no `legal` list.
+    - `colour` is `'seat1'` | `'seat2'` | `'random'`; for chess, seat1 is white.
+    - Error codes: `unknown_game` 404 · `mode_unavailable` 400 (PvP, until Part 10) · `active_match`
+      409 (+ `match_id`) · `not_your_match` 403 · `not_your_turn` 403 · `not_active` 409 · `stale`
+      409 · `timeout` 409 · `illegal_move` 400 · `game_error` 500 · `no_plays` 409.
+    - The match view: `{ id, game_id, game_version, mode, state, labels{1,2}, you, to_move, your_turn,
+      ply, position, last_move, legal, status{over,result,reason}, bot_level, move_seconds,
+      turn_deadline, created_at, started_at, finished_at, last_move_at, since_ply, moves }`.
+13. **Jobs registered:** 5 m `match_timeouts` (at most 200 per tick, oldest deadline first); 1 h
+    `bot_moves_purge` (at most 500 match rows per run).
+
+**Part 6 — the `/play/` shell + the chess frame (2026-09-27, not VPS-tested).** NEW `play/shell/**` and
+`play/games/chess/frame/**`; one pool static file (`public_html/js/public-shell.js`) and one hunk of
+`07_lib_pool_games.sh`; no games-service or pool-backend code. As built in impl §10.13 *Part 6*. What
+changed against §19.7, D4, D13, §19.15 *Part 3* #6 and the plan:
+
+1. **Cache-bust = a deploy-time stamp, not a JS loader.** Every own `<script>`/`<link>` in the shell
+   and in a frame is written `?v=__GRIN_PLAY_VERSION__`; `_pgs_stage_trees` replaces it in every staged
+   `*.html` with the version.js stamp, after the hash. A static tag stays parser-inserted — ordered, and
+   render-blocking for CSS — which a loader reading `version.js` at runtime could not give. The shell
+   still loads `/play/version.js` (Part 3 #6): `frame-host.js` reads `GRIN_PLAY_VERSION` for the frame
+   `src`. The pool's own `/css` + `/js` stay unversioned, as on every pool page.
+2. **The pool chrome runs on `/play/` unchanged in behaviour:** `public-shell.js` → `public-theme.js` →
+   `branding.js`, all under the shell CSP. `branding.js` is clean there because the page sets
+   `<html data-untrusted-html="exempt">` — a rig password is typed in the login card, so the §J1-1
+   rule applies: no analytics, no operator raw HTML. Its `<style>` injections are covered by the CSP's
+   `style-src 'unsafe-inline'`, its JSON-LD block is data, not script.
+3. **Pool change 1: no ads on an exempt page.** A `code` ad is operator HTML/JS that `ads.js` re-creates
+   as executing scripts — the same sink. `public-shell.js` now renders no ad slot and never loads
+   `ads.js` when the page opts out. *Noticed, not changed:* `account-settings.html` takes the same rig
+   password and does NOT opt out, so it still runs analytics, custom HTML and code ads. Pool
+   `CREDENTIAL_PAGES` is `['login']`. For Part 11 / the security audit to decide.
+4. **Pool change 2: every chrome href is site-absolute** (`abs()`), and the active item is compared by
+   path. A relative `index.html` resolved to `/play/index.html` here — and to `/blog/index.html` on every
+   blog permalink (`post.html` is served at `/blog/<slug>` with no `<base>`), where the header and
+   footer links have been 404s since the permalinks shipped. A `<base href="/">` was rejected: it turns
+   the skip link's `#main` into a navigation to the home page.
+5. **In-flight moves are the frame's job, not a protocol message.** After posting a `move` the frame
+   draws it provisionally (its copy of `rules.apply`) and takes no input until the next `state`, which
+   is the server's board either way. The shell drops a move that arrives while a request is in flight;
+   no "busy" state is ever posted (a state for the old position would snap the piece back).
+6. **No reset on the iframe's `load` event.** The frame's `ready` is posted while its scripts run and
+   can be handled before the parent sees `load`; a reset there would strand the frame. A reloaded frame
+   just sends `ready` again, which re-sends the held theme + state.
+7. **What counts as "offline"** (`play-api.js`): a network error or 20 s timeout, any response whose
+   Content-Type is not JSON (a 200 included), a body with no boolean `ok`, and 503
+   `shutting_down`/`db_unavailable`. A 404 `not_found` on `/me` is mode `off` → "Games are closed"; 401 →
+   sign in; 403 `banned` → signed out with the server's sentence. A background `/me` refresh ignores an
+   offline blip rather than blanking the page.
+8. **Frame messages are exact-key.** Inbound to the shell: `ready {protocol:1}` and `move {move}` with no
+   other keys, a same-realm plain object, from the frame's `contentWindow` only. `sendState` rebuilds
+   §19.7's fields from the match view, so a token, full address or seed cannot ride along by accident;
+   `legal` is omitted, not `null`, when it is not the viewer's turn. The frame validates `state` the same
+   way (FEN shape, move pattern, ≤ 512 legal moves, labels ≤ 64 chars).
+9. **Sign-in copy and form.** IP *or* rig password; common passwords and anything under 8 characters are
+   never proof, so those miners sign in by IP; the pool checks and the games never store the proof; a
+   link to `/#rx-miner-guide`. The inputs carry no `name` (a fallback submit sends nothing), the proof box
+   is `type=password` with a Show toggle, and the address shape is checked before any call. Refusals show
+   the server's own `hint`.
+10. **The "How plays are earned" fold states DEFAULTS** ("by default 10 minutes = 1 play, 24 a day, 100
+    held"). No public route reports the live settings; if the operator changes them the page is wrong
+    until Part 9 surfaces them (a `GET /play/api/rules`, or fields on `/me`).
+11. **Confirmations are two-click in-page** (Resign, Log out everywhere: the button arms for 5 s). No
+    native dialog anywhere on the page.
+12. **`#m=<id>`** reopens a match after a reload. Signed-in only in v1: the API already serves a
+    spectator view (`you: null`) and the frame draws one, but a public spectator page is Part 10's call.
+    No `turns` polling yet — a bot game answers in the same request; `/me` refreshes every 5 min while
+    the page is visible and on returning to the tab.
+13. **The frame keeps its own two palettes** (it is a separate, opaque-origin document; the pool tokens
+    cannot reach it), chosen by the `theme` message the shell sends from `GriniumTheme.isLight()` and on
+    every body-class change. Its dark squares were lightened after the probe screenshots showed black
+    pieces barely reading on them. A `data:` favicon keeps a direct visit from requesting
+    `/favicon.ico`.
+14. **Self-review (the plan's three questions).** (a) API data never reaches `innerHTML`: the shell and
+    frame JS contain no HTML sink at all (`test-shell.js` enforces it), and the pool chrome's own
+    `innerHTML` renders only its static NAV through `esc()`; the probe planted
+    `<img src=x onerror=…>` in a label and it rendered as text. (b) No inline script or handler in
+    either page (enforced; 0 CSP violations under the real header). (c) A 502 HTML page → the offline
+    panel (probe + test).
+
+**Part 7 — leaderboards, events, the admin Events page (2026-09-28, not VPS-tested).** Games service:
+NEW `play/server/lib/{leaderboard,events,admin,badges}.js` + `lib/events/`; the /play/ G-06 panel
+(`play/shell/js/play-boards.js`); pool: NEW `admin-panel/games-events.html` + a NAV group, **no
+backend code**. As built in impl §10.13 *Part 7*. What changed against §19.3, §19.9, §19.11 and the plan:
+
+1. **Modules beyond the plan's list.** `admin.js` is the games side of the admin proxy (every
+   `/internal/admin/*` route goes through it; Parts 8–9 add theirs with `admin.add()`); `badges.js`
+   holds the badge list; `events/_rules.js` the kind helpers; `events/index.js` the kind LIST.
+   **Kinds are listed, not discovered:** the service never `require()`s a computed path
+   (test-skeleton [h]), so a directory scan was refused. D17 still holds — a new kind is a module plus
+   one line in `events/index.js`; `events.js` is not touched.
+2. **The admin guard runs before the body is read** (a new route `guard` option in `http.js`), so a
+   caller without the secret never gets 16 KB parsed — §19.3's "secret first" mirrored on this side.
+   Order: `X-Forwarded-For` / `X-Real-IP` or a non-loopback peer → 404 (the pool's third guard,
+   copied); secret → 503 `link_not_configured` / 401 `unauthorised`; `X-Admin-User` (printable
+   ASCII, 1–64) → 400; `X-Admin-Stepup: 1` on every non-FAST write → 403 `step_up_required`. The
+   secret is compared **inside** `pool-link.js` (`checkSecret` returns a verdict), so it never leaves
+   that module. `FAST_WRITES` is copied verbatim from the pool, and `test-events.js` compares the two
+   lists as text.
+3. **Leaderboard parameters, exactly.** `board` = `points` (default) | `rating` | `wins`.
+   `board=points` with no `game` is **points held** (`players.points`, so event rewards and
+   `admin_adjust` count), all time only. `rating` needs a game with `pvp` and is all time only.
+   `wins` / `points` with a game need `mode`; `period` = the CURRENT UTC day, ISO week (Monday–
+   Sunday) or month, or `all` — there is no date parameter (past periods live on in events). An
+   unknown or repeated parameter, or an unknown game, is 400 with `field`. Response:
+   `{ board, game, mode, period, from, to, unit, computed_at, total, rows:[{ rank, name, value, games?, own? }], you }`.
+4. **What is not ranked:** a zero value (a wins board of people with no wins is noise) and a banned
+   address, on every board and in every event. The rank is the position after the §19.9 tie-break, so
+   two equal values never share a rank. The 60 s cache also expires when the UTC day rolls over, and
+   its key space is closed (a validated game × fixed enums), so requests cannot grow it.
+5. **Rating and PvP boards are API-only until Part 10.** The shell offers points held plus wins and
+   points against the bot; Part 10 adds the rating board and the `pvp` options when PvP ships.
+6. **Event validation.** Windows are whole UTC days, at most 366 long, starting today or later and at
+   most 366 days ahead (no backdated events). An event starting today is created `running`, not
+   `scheduled`-then-flipped. The title is NFC, 1–60 chars, and a control, bidi-override/isolate or
+   zero-width character **refuses** the save (not stripped: the operator should see why). Unknown
+   keys anywhere are refused, as in every other games body.
+7. **Rewards.** Up to 10 tiers, ranks 1–1000, in rank order and non-overlapping (so "the first tier
+   holding the rank" is also the only one), 0–10 000 points each. **Participation gained an optional
+   `badge`** (§19.9 edited): without it the "Took part" badge could not exist. A tier winner does not
+   also get the participation reward. Badge ids: `gold`, `silver`, `bronze`, `top10`, `champion`,
+   `marathon`, `regular`, `took_part`.
+8. **Editing.** `scheduled`: every field. `running`: title, last day and rewards only — kind, rules
+   and first day are what players are competing on (re-sending them unchanged is fine; the form posts
+   every field). The last day may be moved earlier, but not to a day already over. Later states:
+   409 `not_editable`.
+9. **Finalise-now** (`POST events/:id/finalise`, step-up) needs the window to be over (409
+   `not_ended`): it skips the 10-min grace and retries a stuck `finalising` event; it never ends a
+   competition early. Cancel is `POST events/:id/cancel {reason?}` (step-up). `GET event-kinds` (kinds
+   with their form fields, the badge list, the games, the limits) was added for the admin form.
+10. **Exactly once, three guards:** the state flip `finalising → done` must change one row; the ledger
+    ref `e:<id>` is unique per address (`uq_ledger_ref`); `event_results`' primary key refuses a
+    second row. The test forces an event back to `finalising` and checks the re-finalise fails
+    whole and pays nothing. A compute that throws leaves the event `finalising`; every 5-min tick
+    retries it (20 per tick).
+11. **Badges** are stored as `badges_json = [{ id, event }]`: one per event per address, at most 500
+    per address (past that, the event's results still record it). `/me` gains
+    `badges: [{ id, label, event_id }]`; the shell shows them on the account strip.
+12. **Admin page.** Date inputs, not `datetime-local` (§19.11 edited): the window IS whole days, so a
+    time field would show something that means nothing. The last day is inclusive and is sent as the
+    next midnight. **Every proxied call uses `adminFetch`, not `API.*`:** `Auth.fetch` sends the
+    admin to the login page on any 401, and the proxy passes the games service's own 401 (a
+    link-secret mismatch) through. A 401 whose body has `ok: false` is shown as "rotate the link
+    secret"; only the pool's own 401 (never carries `ok`) goes to login. **Part 9's games pages need
+    the same.** NAV: a Games group between Dashboard and Settings, parent `games-events.html` until
+    Part 9's `games.html` exists.
+13. **Public visibility.** The list is every scheduled / running / finalising event plus done or
+    cancelled ones that ended in the last 90 days (older ones stay readable by id). A cancelled event
+    that never started was never shown as running, so it is hidden from the list AND the detail.
+    Running standings are cached 60 s; the admin detail computes fresh (full addresses, ≤ 1 000), so an
+    operator read neither sees nor pins a stale board.
+14. **`mod_actions` retention is built here** (hourly, 365 days, §19.10) because this part writes the
+    first rows; each admin write adds its row inside the write's own transaction. Part 8 need not add
+    it. Jobs: `event_transitions` (5 m, registered after `activity_sync`), `mod_actions_purge` (1 h).
+15. **Self-review (the plan's questions).** (a) *Can an event reward be paid twice?* No — #10, tested
+    with a second tick, a direct call, a forced replay and a duplicate ledger ref. (b) *Can a cancelled
+    event pay?* No: cancel and finalise both flip the state under the write lock, and finalise acts only
+    on `finalising`; tested for a cancel after the window ended and a cancel from `finalising`.
+    (c) *Does any leaderboard query scan `matches`?* No: every board and kind reads `players`,
+    `ratings`, `results_daily` or `activity_daily` on its index (`EXPLAIN`-tested), and a source
+    check forbids `FROM matches|match_moves|ledger` in these modules. **For Part 11 (§19.13 #19):**
+    `event_results` is kept forever — one row per ranked address per event, bounded by the addresses
+    that mined or played in the window.
+
+**Part 8 — chat backend + moderation, and moderators (2026-09-28, not VPS-tested).** Games service only:
+NEW `play/server/lib/{chat,moderation}.js`, migration v2 in `lib/db.js`, the mining gate + `modStatus` in
+`auth.js`, settings in `settings.js`, wiring in `app.js`; **no pool code**. As built in impl §10.13 *Part 8*.
+What changed against §19.4, §19.10, §19.11 and the plan:
+
+1. **Schema v2 = migration 2, new tables only** (`moderators`, `chat_words`; §19.4's block edited in the
+   same change, as Part 1 requires). No `ALTER`, so the stored text of every v1 table is unchanged. A DB
+   left at v1 upgrades in place (tested). The word list is a table, not a setting: it is edited a word
+   at a time and has its own bound (500 entries, 1–40 characters).
+2. **Moderators (D21)** — the operator's question during this session; the whole feature is D21 plus
+   the routes in §19.10 and the admin routes below.
+3. **The change feed** (§19.10 edited). Without it, a scam message the operator deletes stays on every
+   page that already drew it until a reload. The log is per process and bounded (1 000 entries); a poll
+   with an unknown `epoch` or an out-of-range `rev` gets `reset: true` and a fresh page. A message
+   approved or restored arrives in `changes.shown` if it is older than the client's `after`, and as an
+   ordinary new message if it is newer, so it is delivered exactly once.
+4. **Normalisation, refined.** Control characters (Cc) and line/paragraph separators become a **space**,
+   not nothing, so a control between two words cannot glue them into one. Every format character (Cf)
+   is removed through a Unicode property escape: that covers §19.10's list plus LRM/RLM, U+061C and the
+   soft hyphen. Hangul fillers (letters that render as nothing) are removed. A run of more than 3
+   combining marks is cut to 3 ("Zalgo"). The hold checks compare an NFKC-folded, lower-cased copy, so
+   fullwidth `ｗｗｗ．` is caught; the stored body stays NFC.
+5. **A Grin address is held with links** (under `chat_hold_links`): "send 5 GRIN to grin1…" is this
+   chain's scam link.
+6. **Limits.** Per address: the 5 s floor, `chat_posts_per_hour` (default 30, max 60), slow mode — all
+   read from the DB, so they hold across restarts and every session of an address. Per IP: 60 an hour,
+   in memory. Moderators skip slow mode only. The recent-mining gate comes **before** the proof wait in
+   `chatStatus` (reason `no_recent_mining` + `mining: { have_minutes, need_minutes, days }`), because it
+   is the one the player can act on; its window is today plus `chat_recent_days − 1` days before.
+7. **Reports need a chat-capable session**, not just a session (§19.10 edited): 3 "distinct reporters"
+   must be 3 aged, mining addresses, or one fresh proof per address could hide anyone. 20 reports an hour
+   per reporter; operator and own messages are not reportable.
+8. **Reading with chat off** answers `200 { enabled: false, messages: [] }`, not an error, so the page
+   can show "closed" without treating it as an outage.
+9. **Admin routes added** (all step-up by the fail-closed rule; `FAST_WRITES` unchanged): message
+   restore, unmute, ban / unban, purge, `admin_adjust`, the word list, settings, moderator appoint /
+   remove. Reads: messages by state or address, the report queue, players (one, or muted / banned /
+   moderators), moderators, settings, the mod log. **Approve doubles as "keep"** for a visible,
+   reported message: it resolves the reports and changes nothing else — no new fast route was needed.
+10. **Ban** revokes every session at once (closes §19.15 *Part 4* #14), blocks login before the pool
+    call, and ends a moderator appointment. An operator mute is set exactly (it may shorten one); a
+    moderator's never shortens a mute already in place.
+11. **Settings** (`lib/settings.js SPEC`): `chat_min_minutes` 60, `chat_recent_days` 7,
+    `chat_posts_per_hour` 30, `chat_slow_seconds` 0, `chat_hold_links` true, `chat_report_threshold` 3,
+    `chat_retention_days` 7, `chat_retention_max` 2000, `mod_requires_password` true. A save validates
+    every key first and writes them in one transaction (a quoted `"false"` for a bool refuses the whole
+    save). The floors are constants shown by the admin page, never settings.
+12. **`GET /play/api/rules`** — the live plays, points and chat rules, nothing per player. Closes
+    §19.15 *Part 6* #10.
+13. **Jobs:** `chat_retention` (1 h, batched 5 000 rows a run, reports deleted before their message).
+14. **Accepted, recorded:** the admin message list filtered by address pages approximately (the
+    `before` filter applies after the address read's limit); the players lists scan `players`
+    (admin-only, at most 200 rows returned).
+15. **Self-review (the plan's questions).** (a) *Can a public request create an operator message?* No:
+    `role` is not an input (a body carrying it is refused), the operator role is set only by
+    `chat/post` behind the link secret, and the moderator badge is computed from the moderators table
+    (tested). (b) *Can a muted user post from a second session?* No: `muted_until` is on `players`,
+    joined into every session lookup, and the per-address limits count rows in the DB (tested with two
+    sessions). (c) *What does a 1 000-client poll storm cost?* One bounded index range read per request
+    (`EXPLAIN`-tested on `idx_chat_room` / `idx_chat_address` / the `activity_daily` key), a scan of the
+    ≤ 1 000-entry change log in memory, and no write except the 5-minute session touch.
+
+**Part 9 — the chat UI and the admin pages (2026-09-28, not VPS-tested).** NEW
+`play/shell/js/play-chat.js` + the G-07 panel in `shell/index.html` + chat styles; one hunk in
+`play-shell.js`; pool admin: NEW `games.html`, `games-chat.html`, `games-players.html`,
+`games-admin.js`, the NAV group in `admin-shell.js`. **No pool backend code.** As built in impl §10.13
+*Part 9*. What changed against §19.10, §19.11 and the plan:
+
+1. **`play:me`.** `play-shell.js` announces every rendered `/me` (and `null` on sign-out) as a DOM
+   event, the same pattern as Part 7's `play:view`; the chat panel follows it, so the shell never has
+   to know the panel exists.
+2. **Polling:** 4 s signed in and visible, 15 s signed out (reading is public, §19.10), 30 s while the
+   tab is hidden, 60 s while chat is closed; `setTimeout`, one request in flight. "Stop on logout" in the
+   plan became "reset on logout": the panel keeps showing the public room.
+3. **Rendering:** every message node is built with `createElement` + `textContent`; no `<a>` is ever
+   created, so a link is inert text. The badges come from `role`. The panel says a masked name can be
+   imitated and only the Operator badge is proof (§19.13 #10). Report and the moderator buttons are
+   two-click in-page confirms, as everywhere on /play/.
+4. **Moderators in the shell (D21):** a "Moderator queue" fold for an appointed address, plus Delete and
+   Mute 1 h on ordinary players' messages; the server re-checks everything.
+5. **Live rules:** the "How plays are earned" fold now shows the live settings from `/play/api/rules`
+   (the HTML keeps the defaults for a failed fetch), plus a chat line.
+6. **Admin text rule.** §19.10 says chat bodies are never `innerHTML` on the admin pages either. The pool
+   panel's `AdminTable` renders rows from HTML strings, so these pages build every row that carries
+   player or moderator text (bodies, report reasons, mod-log details) with DOM calls through
+   `games-admin.js el()` and do not use `AdminTable`. `test-admin-panel.js` [14] fails on any HTML sink
+   in the helper or the three page scripts.
+7. **`games-admin.js`** carries the proxy call (with Part 7's 401 rule), the confirm dialog and the DOM
+   builders for the three new pages. `games-events.html` keeps its own copy of `call()` (unchanged).
+8. **`games.html` builds its form from the service's setting spec** (labels and groups on the page), so a
+   key added later still gets a field. The proof age is shown in hours and stored in seconds.
+9. **Match void** is not on the Players page: it arrives with PvP (Part 10), which owns `void`.
+10. **Self-review.** (a) *Any path rendering a chat body as HTML?* No: shell — `play-chat.js` has no HTML
+    sink (`test-shell.js`), and the probe planted `<img src=x onerror=…>` and `<script>` in bodies and a
+    report reason: they showed as text, the handler never ran, no `<img>`/`<a>`/`<script>` element was
+    created. Admin — no HTML sink in `games-admin.js` or the three page scripts (tested). (b) *Does the
+    admin CSP stay unchanged?* Yes: the pages use only inline script, already allowed there, and no new
+    origin. The probe ran the shell under the real `/play/` CSP header: 0 violations, 0 console errors,
+    at 1280 and 390 px, dark and light, signed out and as a moderator.
+
+**Part 10 — PvP correspondence chess + the "add a game" checklist (2026-09-28, not VPS-tested).** Games
+service: `play/server/lib/matches.js` (PvP), NEW `lib/ratings.js`, four settings; shell: NEW
+`play/shell/js/play-lobby.js` + the G-08 panel, the board in `play-shell.js`, PvP boards in `play-boards.js`;
+pool admin: the Void button on `games-players.html`, a PvP group on `games.html`; **no pool backend code and
+no schema change**. As built in impl §10.13 *Part 10*. What changed against §19.4, §19.6, §19.8, §19.9,
+§19.11 and the plan:
+
+0. **Scope question, recorded.** The operator opened this session asking for "Grin 2048 (a skill game, the
+   server replays the moves), proving a new game needs no platform code". That contradicts D20 (2048 dropped
+   from v1) and §19.8 (the `skill` kind is reserved and is built WITH its first game: migration 3 `rounds`,
+   a registry kind, round routes, a score board) — so a 2048 folder cannot prove "no platform code". Asked;
+   the operator chose to run Part 10 as planned. The "add a game" checklist in `play/README.md` now says
+   exactly this: a new `match` game is one folder; a `skill`/`chance` game is a design + build session first.
+1. **No schema change.** PvP uses the v1 columns Part 0 designed in. A PvP `params_json` is
+   `{ move_seconds, colour, cost }` (no `bot_level`); `target` stays set after acceptance. `reason` gains the
+   values `cancelled`, `declined`, `expired`, `abort`, `agreement` and `void` (the column is free text; §19.4's
+   comment lists the common ones and is left alone because the block is test-bound).
+2. **A seek/challenge's `turn_deadline` is its 72 h expiry.** One index (`idx_matches_state`) and one sweep
+   cover move clocks and expiries; the sweep now walks each of `active`, `seek`, `challenge` with its own
+   batch. Lazy expiry: any write on an open match (accept / decline / cancel) finalises it first and answers
+   409 `expired`; the lobby and turns reads are read-only and just filter past deadlines out.
+3. **Rated also gates `results_daily`.** An unrated PvP result writes no points, no rating AND no
+   `results_daily` row, so a pair past `pair_rated_daily` cannot farm the wins boards or a `game_results`
+   event either (the plan's self-review c). The match row keeps the full history. `pair_rated_daily` 0 = no
+   PvP match is rated.
+4. **A PvP resign at `ply < 2` is an abort** (both refunded, no result) — a result at ply 0 would hand over
+   a rated win without a game. `POST /abort` itself answers 409 `too_late` from ply 2.
+5. **Draws.** Offering while the opponent's offer stands accepts it (a draw by `agreement`). A move by
+   either side clears an offer (§19.8 step 5 — also the offerer's own move). Draw actions share the move
+   limiter (burst 3, 1/s per address), which bounds offer spam.
+6. **Caps.** The open cap counts on the seat indexes (a creator always holds a seat). The active cap is
+   checked at create AND for both sides at accept: a full acceptor → 409 `too_many_matches`, a full creator
+   → 409 `opponent_busy`. The caller's own lapsed matches are finalised first (creator at create, acceptor
+   at accept), so a dead game never counts. A challenge target is shape-checked only (this network's
+   prefix, not the challenger's own address → 400 `self_match`) — never looked up: a "banned" or "unknown"
+   answer would be an oracle on other addresses. A challenge to an address that never plays expires and
+   refunds.
+7. **Shapes for the shell.** Every view and summary gains `actions` (what THIS viewer may do next),
+   `open_seat`, `invited`, `target_label` (the target MASKED, and only to the challenger and the target),
+   `expires_at`, `rated`, `draw_offer_by`. `GET /play/api/lobby` → `{ seeks, challenges }`, rows
+   `{ id, game_id, name (masked), you_play, move_seconds, created_at, expires_at, own }`, no query
+   parameters; `GET /play/api/matches/turns` → `{ your_turn, active, draw_offers, challenges,
+   last_move_at }`. New error codes: `self_match` 400, `not_invited` 403, `not_open` 409, `expired` 409,
+   `too_many_open` 409, `too_many_matches` 409, `opponent_busy` 409, `no_draw_offer` 409, `too_late` 409,
+   `not_voidable` 409.
+8. **Query plans.** The incoming-challenge reads name their index (`INDEXED BY idx_matches_target`, then
+   `ORDER BY id DESC`, no sort): with no table statistics the planner chose `idx_matches_state`, which walks
+   every open challenge in the pool to find one address's. `INDEXED BY` also fails the prepare loudly if the
+   index is ever dropped. The lobby orders by `turn_deadline DESC` (= newest, with no sort). All `EXPLAIN`-tested.
+9. **Ratings** (`lib/ratings.js`) are zero-sum by construction (seat 2 moves by the negation of seat 1's
+   rounded change). `recompute(game)` replays finished, rated, non-void matches in `(finished_at, id)` order
+   and lands on the incremental result (tested), with one recorded exception: two rated matches of one game
+   that share a player and settle in the same second, the later-settled having the smaller id, replay in the
+   other order — a point or two for those players; ratings are derived and never money.
+10. **Void** (`POST /internal/admin/matches/:id/void {reason?}`, step-up by the fail-closed rule): active →
+    `void` with every seat refunded; seek/challenge → `void` with the creator refunded; finished → `void`
+    **keeping** its result and reason for the record, the points it paid reversed with `admin_void` rows
+    (the amount credited, clamped to the current balance — the ledger refuses an overdraft), its
+    `results_daily` counts removed, and the game's ratings recomputed if it was rated. Event rewards already
+    paid are not clawed back (as cancelling a `done` event). One `mod_actions` row, action `match_void`,
+    target `m:<id>`. Anything else → 409 `not_voidable`.
+11. **Settings** (`lib/settings.js`): `pvp_play_cost` 1 (0–10), `pvp_active_max` 10 (1–50), `pvp_open_max`
+    5 (1–20), `pair_rated_daily` 3 (0–20); `/play/api/rules` reports them. The move-time options stay
+    manifest values (a game defines its own pace), so §19.11's "chess move-time options" setting was not
+    built. PvP point values stay manifest values (§19.15 *Part 5* #3).
+12. **Shell.** The lobby is its own file and talks to the page only through events (`play:open`,
+    `play:changed`, and it listens to `play:me` / `play:turns`), as the boards and chat panels do. The board
+    shows exactly the view's `actions`. Polls: the open board every 5 s while the opponent is to move (or
+    one's own seek/challenge waits), visible tabs only, with `since_ply`; turns every 15 s visible / 60 s
+    hidden, reloading My games only when its signature changes. **Both forms gained a Game picker, hidden
+    while one game offers that mode** — without it the checklist's "a new game needs no shell change" was
+    false (the forms took the first game). A public spectator page (Part 6 #12) was NOT added: the board is
+    still signed-in only; the API serves spectators masked views, for Part 11 to weigh.
+13. **Self-review (the plan's questions).** (a) *Can a player move in a match that has timed out?* No: the
+    deadline check runs first for every action on an active match (move, resign, draw, abort), finalises it
+    in that transaction and answers 409 `timeout`; a second try is 409 `not_active` (tested). (b) *Can a
+    refund and a settle both happen for one match?* No: settle and abort/void both move a row out of
+    `active` with `WHERE state = 'active'` that must change one row, open matches leave through `WHERE state
+    IN ('seek','challenge')`, and every ledger row carries a unique `m:<id>:<seat>` ref — tested with a
+    join (no seat has both a refund and points) and "no seat refunded more than it paid". (c) *Paid for a
+    match against yourself or beyond the pair cap?* The same address is refused at create and at accept.
+    Two addresses of one person cannot be told apart; what bounds it: both sides pay a play per game (from
+    mining minutes), 3 rated games per pair per UTC day, `points_daily_cap` per address, and unrated games
+    counting nowhere (#3). Resigning right after ply 2 to feed a partner is within those bounds — accepted,
+    recorded. (d) *Engine assistance* is undetectable — accepted (D20); the "How plays are earned" fold now
+    says so to players.
+
+**Part 11 review — independent review of Parts 1–10 (2026-09-28, a session that built none of it; code
+review on Windows, nothing run on a VPS).** Read: all of §19, then the code: `play/server/**`,
+`play/shell/**`, `play/games/chess/**`, `back-end-pool/lib/games-link.js` + its `index.js` mount lines,
+`scripts/lib/07_lib_pool_games.sh`, the pool script's menu / vhost / deploy / cron hooks, the backup and
+migrate hooks, and the five games admin pages + `games-admin.js`. Games `npm test` 918 → **921/921**, pool
+`npm test` 2322 → **2330/2330**; `bash -n` clean on the four touched shell files.
+
+*Fixed (smallest change at the source, each with a test where code changed):*
+
+1. **A free bot game fed the wins boards and events.** Part 5 #2 stopped a free game (`bot_play_cost` 0)
+   paying points, but `settle` still wrote its win to `results_daily`, the source of the bot wins board and
+   of `game_results` events, whose rewards are exempt from `points_daily_cap`. With the operator's "free for
+   testing" setting left on, a level-1 bot was an unlimited win tap needing no mining — the D10 bypass Part 5
+   closed, one table over. Now a match with cost 0 (bot or PvP) enters no `results_daily` row
+   (`matches.js` `settle`, the `params.cost > 0` guard), and admin void takes counts off only for matches
+   `settle` counted — without that second guard, voiding a free match would have decremented a **paid**
+   match's row of the same day. Tests: `test-matches.js` (d), `test-pvp.js` (e) — free rated PvP + its void.
+2. **The pool had no cap of its own on the internal routes (§19.13 #12).** The games service's limiter chain
+   stops an HONEST caller, but a compromised `grinplay` process holds the secret and chooses `client_ip`
+   (D7 trusts it), so the pool's per-IP proof throttles saw a fresh IP per call: unbounded 16 MB scrypts and
+   unbounded activity queries on the process that serves stratum. `games-link.js` now caps, keyed on nothing a
+   caller controls: verify-proof ≤ 4 in flight and 120 / min, activity 60 per 5 min (an honest sync makes
+   ≤ 24 per 5-min tick) → 429 `busy`, which the games side already reads as "pool unavailable". Checked after
+   input validation, so a malformed call spends nothing. Test: `test-games-link.js` [14]. This is pool
+   backend code: it ships with the pool deploy that Part 2's code already needs (checkpoint A was skipped, so
+   nothing is deployed yet).
+3. **§19.6 and `plays.js` said a settings change "never recomputes the past".** `due` is taken from the
+   day's running total, so a change re-rates the CURRENT UTC day (lower `minutes_per_play` mid-day → the
+   difference is credited at the next window). Harmless, operator-only, never an earlier day — the text was
+   wrong, not the code. Both now say so.
+4. **§19.13 #7 was not stated on /play/.** The sign-in card now says that anyone who can give a proof — a
+   stranger who mined a few shares to the address, or a CGNAT neighbour — signs in as it and can spend its
+   plays or play in its name, and why that is accepted (`shell/index.html`, the G-01 hints).
+5. **Pool menu:** the `B) Backup & Restore` row lost a column when `P` was inserted (cosmetic).
+
+*Open — for the operator (not changed here):*
+
+- **O1 (Part 6 #3, pool-side).** `account-settings.html` takes the rig **password** — the same credential
+  /play/ takes, which since D21 also carries moderator power — yet does not opt out of untrusted HTML
+  (`CREDENTIAL_PAGES` is `['login']`), so operator analytics, custom HTML and `code` ads run beside that
+  input. Recommendation: treat it as a credential page, exactly as /play/ does (`data-untrusted-html="exempt"`).
+  Not changed: it removes the operator's analytics and ads from a public page, which is their call. Logged in
+  `script07_security_audit.md`.
+- **O2 (#20, D21).** The aged-proof + password gates **delay** a stranger who mines to a moderator's address
+  with their OWN non-trivial rig password; they do not stop one. After `chat_min_proof_age` that stranger
+  opens a password-proof session and holds the moderator's powers (the recent-mining gate counts the
+  address's minutes, not the stranger's), logged as `mod:<the moderator's address>` — indistinguishable from
+  the real moderator in the mod log. Bounded: chat only, mutes ≤ 24 h, every action reversible and logged,
+  no full addresses. Recommendation: accept for v1 and confirm together with D21 at acceptance; if not, the
+  small next step is to record the acting session's `ip_coarse` / `ua_hint` in the mod-log row so the
+  operator can tell two actors apart.
+
+*Decided here (the questions earlier parts left to this review):*
+
+- **Ledger retention (Part 4 #13): keep, no rollup in v1.** Rows: ≤ 24 `mining_minutes` per address per day
+  (the daily cap) + 1–3 per match — about 0.5 M a year at 50 active miners. `verify()` is one hourly
+  `GROUP BY` in the games process only (never the pool), with a 5 s budget whose overrun the maintenance
+  tier logs (`over budget`): that warning is the trigger to build a checkpoint rollup. Exactly-once does not
+  need old `w:` refs — `activity_sync.window_from UNIQUE` is the primary guard.
+- **Part 10 #9 (same-second recompute order), #10 (void keeps the result, clamps the reversal), #13(c)
+  (multi-address farming bounds): accepted as recorded.** #6 confirmed: `createPvp` never reads the target
+  (no oracle). **#12:** `GET /play/api/matches/:id` is public and ids are sequential, so every match is
+  enumerable; accepted — the view carries masked labels only, never `seed`, `created_by` or a full `target`
+  (the target is masked, and shown only to the two parties). A public read also finalises a passed deadline
+  (one match, idempotent) — accepted.
+
+*The §19.13 threat notes, answered against the code (✓ = confirmed safe):*
+
+| # | Verdict | Evidence |
+|---|---|---|
+| 1 Forged move / result | ✓ | Bodies are exact-key (`matches.js body()`, an unknown key → 400); a move is `{ply, move}` only and goes through `move_pattern` + `rules.apply` inside the transaction (`move()` → `playOne`); position, result, points and rating are written only by `settle`/`abort`. |
+| 2 Races | ✓ | One `BEGIN IMMEDIATE` per action (`db.js` transaction); `ply !== m.ply` → 409 `stale`; every exit from `active` / open is `UPDATE … WHERE state = …` that must change one row; `uq_ledger_ref` makes each `m:<id>:<seat>` credit or refund exactly-once. |
+| 3 Plays farming | ✓ (+ fix 3) | Credits come only from pool activity rows; windows contiguous from the watermark, `window_from UNIQUE`, the ledger ref a second guard; seconds clamped to the window; balance cap clamps `delta`. Retroactivity = the current UTC day only (fix 3). |
+| 4 Pair farming | ✓ | `isRated` counts both seat orders on `idx_matches_pair`, inside the settle transaction; unrated and (fix 1) free matches count nowhere. Multi-address: accepted (D1). |
+| 5 Bot abuse | ✓ | No takeback: the bot replies in the same transaction; `abort` is PvP-only. CPU: `BOT_NODE_BUDGET` 20 000, one active bot game per game (partial unique index), 1 move/s per address (`rateMove`); a throwing `rules.js` → 500 `game_error` + rollback (`call()`). |
+| 6 Session / CSRF | ✓ | Cookie exactly `HttpOnly; Secure; SameSite=Strict; Path=/play/; Max-Age=1209600`; only `sha256(token)` stored; logout-all and ban revoke every session; POST needs the JSON content type (`http.js readJson`) and passes `sameOriginOk` (Origin + `Sec-Fetch-Site`) in `publicRoute`. |
+| 7 Login as someone else | accepted, now stated (fix 4) | Exactly as strong as the account page's proof (one pool verify on the real IP). Chat is aged (D9); games actions are not; worthless points (D1). |
+| 8 Frame escape | ✓ | `sandbox="allow-scripts"` exactly (`frame-host.js`), frame CSP `connect-src 'none'` + `sandbox allow-scripts` (the nginx snippet), `event.source` check + exact-key schemas both ways; `state` carries only on-screen data. |
+| 9 Chat XSS | ✓ | Shell, chess frame and the chat/players/settings admin pages: no `innerHTML`/`insertAdjacentHTML` sink at all. `games-events.html` builds rows as HTML strings through `escHtml`, which escapes `& < > " '`. |
+| 10 Impersonation | ✓ | `role` is never an input; only `/internal/admin/chat/post` → `operatorPost` writes `role='operator'`. The Mod badge is computed from the real address at read time, so a ground 9…4 mask never inherits it. |
+| 11 Chat flood | ✓ | Per-address limits read the DB (a second session shares them, `addressLimits`); 60/h per IP; slow mode; 4 KB body; mute is on the player row. Every read is an index range (`idx_chat_room`, `idx_chat_address`, PK). |
+| 12 Pool stall | ✓ (+ fix 2) | Secret before any body, DB read or scrypt (`games-link.js internal()`); activity bounded ≤ 3600 s and pinned `INDEXED BY idx_hashrate_time`; verify on the real IP; now a global cap too. |
+| 13 Secret leak | ✓ | openssl → temp file (`umask 077`) → chown/chmod 0440 → `mv`; never argv, env, echo or a response; the unit carries only the path; the P → 5 probe reads it inside `node`; logs carry codes only. |
+| 14 `/internal` via nginx | ✓ | No pool location proxies it + `location ^~ /internal/ { return 404; }`; nginx decodes and resolves `..` BEFORE matching, so `/play/api/%2e%2e/…` cannot land in `/play/api/`; the pool and games guards both 404 anything carrying `X-Forwarded-For`/`X-Real-IP` (nginx always adds them); the games router matches raw paths, never decoded. |
+| 15 Cloudflare | ✓ | `/play/` and frames `no-cache`, API `no-store` + nosniff (`http.js JSON_HEADERS`), assets `?v=` stamped at deploy. |
+| 16 Mode switch | ✓ | `off` → 404 on every public route (`publicRoute`, health excepted); nav shows only on `on` (`data-games`); `publicFlag()` reads off while the probe is unhealthy, and a flip flushes the branding memo. |
+| 17 Numbers | ✓ | `parseIntStrict` everywhere a number is read; ledger `DELTA_MAX` 1e9; ban `FOREVER` 253402300799 < 2^53; settings bounded in `SPEC`. |
+| 18 Public lists | ✓ | Boards, events, lobby, chat and match views emit `maskAddr` only; the games suites carry the leak check. |
+| 19 Growth | ✓ (ledger: decided above) | sessions 30 d after death, chat 7 d / 2 000, `mod_actions` 365 d, bot moves 60 d, rate-limit maps bounded (`maxKeys`); `activity_*`, `results_daily`, `matches`, PvP moves and events are small and kept. |
+| 20 Moderators | ✓ except O2 | Operator posts and other moderators are protected (`protectedFrom`); no self-approve, self-mute or self-unmute (a muted moderator cannot act); a mute never shortens; no `/internal/admin` reach; masked names only; `modStatus` re-reads the table and the password setting on every request; a ban revokes sessions and ends the appointment. |
+
+*The six mandatory probes:*
+
+1. **Impact — every pool path the games can trigger, worst-case DB time.** verify-proof: the account page's
+   own proof check (indexed proof-set reads, ONE async scrypt — up to 8 for unmigrated v1 rows — and one
+   audit INSERT), now ≤ 4 in flight. activity: one indexed range read; row lookups = active miner-minutes in
+   the window (≈ 3 000 at 50 miners) — the < 50 ms bound is owed to the live-box run (impact budget 3). config:
+   one settings read / 60 s. Admin proxy: admin-initiated; one `admin_audit_log` INSERT on step-up paths.
+   Health probe and branding flag: no DB beyond the memoised branding read. Nothing on the share, block,
+   reward or payout paths.
+2. **Games never opens `pool.db`:** every `require` under `play/server` is local or `node:*`; no path to
+   `pool.db` or `back-end-pool/` anywhere.
+3. **nginx:** every `proxy_pass` in the pool vhost sits in a location for `/api/…`, the admin auth check,
+   a few exact files (`robots.txt`, `sitemap.xml`, `manifest.json`, the RSS feed, `page.html`) or the blog
+   permalink regex — none can match `/internal/`; the games snippet proxies only `/play/api/login` and `/play/api/`, both setting `X-Real-IP`
+   and `X-Forwarded-For`; the frame location omits the common snippet (no `X-Frame-Options DENY`) and writes
+   nosniff / Referrer-Policy / HSTS itself; the glob include is safe when empty (owed to checkpoint A).
+4. **Money:** `games-link.js` writes one table, `admin_audit_log`; `auditOwnerProof` writes the audit log.
+   No pool money table is touched.
+5. **XSS:** see #9.
+6. **Suites:** games 921/921, pool 2330/2330 (before this review: 918 and 2322).
+
+**Part 12 — approved nicknames (2026-09-28; not VPS-tested).** The contract is §19.16; these are the
+places the build departs from the plan's one-paragraph prompt ("reuse §18.5 … display nickname + masked
+suffix … admin queue"), and why.
+
+1. **The display is composed on the SERVER, into the one `name` field.** `names.label(address)` returns the
+   mask, or `Nick (grin1abcd…wxyz)`, and every public surface — chat, the three boards, event standings,
+   the lobby, a match's seat labels and a challenge's target — calls it. No response carries a nickname
+   without its mask, so no client can drop the mask (§19.13 #10: a mask costs ~2^40 key generations, a
+   nickname nothing). The full 9…4 mask is kept rather than a shorter suffix: four characters would cost
+   2^20. The shell never composes a name either (`test-shell.js` pins it).
+2. **The rule is §18.5's, copied (D5: games never load pool code), with four changes.** 2–**20** characters,
+   not 32 (a chat line and a board row have less room); **no dot** — a nickname sits beside chat, and
+   `free-grin.io` as a name would be the scam link the chat's link hold exists to stop; **at least one
+   letter**, not letter-or-digit; and two refusals before the queue: an **address-like** name (`grin1…` /
+   `tgrin1…`, separators ignored, checked before the leet fold) and the **role words** `operator`, `admin`,
+   `moderator` (leet + separators folded) — the words the page's own badges say.
+3. **"No two live nicknames alike" is a database fact.** The matching form (lower-case, separators out,
+   six leet digits folded — `donor-names.js normalise`, copied) is stored as `norm`, and `uq_nick_norm` is
+   a partial unique index over the live rows. Submit and approve both check first (409 `nickname_taken`),
+   and the index is the backstop a race cannot slip past (mutation-checked: with the approve check deleted
+   the index still refuses, as a 500).
+4. **The gate is the chat gate minus the chat switch.** `auth.chatStatus(s, { ignoreChatSwitch: true })`:
+   an aged, non-anchor, recently-mining, unmuted session (and the password rule when it is on). The switch
+   is ignored because nicknames show on the boards too, so closing chat must not freeze everyone's name.
+5. **A games-owned switch `nicknames_enabled` (default on).** Off = no new requests AND every surface
+   shows the bare mask; nothing is deleted, so on brings the approved names back. It is in `SPEC`, so
+   `games.html` shows it (its own group, "Nicknames").
+6. **Every admin write is STEP-UP; `FAST_WRITES` is unchanged, so there is no pool backend change.** The
+   three writes are not in the fast list, so the pool asks for the password — the same as its own donor
+   queue (§18.6 `freshAdmin`). Moderators (D21) have no nickname powers.
+7. **A ban ends the nickname** (and refuses a pending one), inside the ban's own transaction; the ban's
+   `mod_actions` row names it. An unban does not restore it: the player asks again and it is reviewed again.
+8. **Bounds.** 5 submissions per address per 24 h, counted from the table (a restart does not reset it);
+   one pending + one live per address (partial unique indexes); decided rows (`rejected` / `replaced` /
+   `withdrawn` / `removed`) are purged after 180 days by an hourly job (`nickname_purge`) — §19.13 #19.
+9. **Schema v3** (§19.4): one table, five indexes, no `ALTER` — the v1/v2 `CREATE` text is unchanged.
+   `test-skeleton.js` compares §19.4 with the migration, and upgrades a v1 and a v2 DB in place.
+10. **The pending text is shown to its author only.** `/me` is session-bound, so unlike the pool's account
+    page (public to anyone holding the address, §18.6) it can show the pending name back. It never reaches
+    any other response (`test-names.js` scans every public response for it).
+11. **Verified:** games `npm test` 921 → 1010 (NEW `test-names.js` 78; `test-skeleton.js` +2, the v2 → v3 upgrade;
+    `test-shell.js` +9: six for the fold and the three per-file checks on the new script), pool 2330 → 2341
+    (`test-admin-panel.js` [15], +11). Three mutations each turned `test-names.js` red (nickname shown
+    without its mask; the gate removed; the approve-time taken check removed). **Not done:** no browser
+    probe of the fold or the admin page (both were checked statically only), and nothing ran on a VPS.
+12. **Part 13 must:** submit a nickname from a password-proof session, approve it in the panel, and see
+    `Nick (mask)` in chat, on a board and in the lobby; reject one with a reason and see it on /play/; ban a
+    named test address and see the name gone.
+
+### 19.16 Approved nicknames (Part 12, built 2026-09-28, NOT VPS-tested)
+
+D19 made the masked address the only name in v1 and left nicknames as an optional Part 12; the operator
+chose them on 2026-09-28. This is the contract as built; the departures from the plan's prompt are
+§19.15 *Part 12*.
+
+**The rule that matters: a nickname is never shown alone.** Every public name comes from one server
+function, `names.label(address)`, which returns the mask (`grin1abcd…wxyz`) or `Nick (grin1abcd…wxyz)`.
+Chat, the boards, event standings, the lobby, match seat labels and a challenge's target all call it, into
+the same `name` field they always had. A mask costs ~2^40 key generations to grind (§19.13 #10); a nickname
+costs nothing to copy — so the nickname adds a readable handle and the mask stays the identity. The
+**Operator** and **Mod** badges remain the only trusted markers.
+
+**Pre-moderated.** Nothing a player types is shown to anyone else until the operator approves it. The
+pending text is shown back to its author on `/me` (session-bound) and in the admin queue, nowhere else.
+
+**The name rule** (the pool's §18.5 donor-name rule, copied — D5 — with the changes in §19.15 *Part 12* #2):
+trim and collapse ASCII whitespace; 2–20 characters of `A–Z a–z 0–9 space - _ & '`; at least one letter;
+refused outright when it looks like an address (`grin1` / `tgrin1`, separators ignored) or contains
+`operator`, `admin` or `moderator` in its matching form. The **matching form** is lower-case, separators
+removed, the leet digits `0 1 3 4 5 7` folded to `o i e a s t` (`0per4tor` → `operator`, `B-o-b` → `bob`).
+
+**Who may ask:** a signed-in player passing the chat gate minus the pool's chat switch
+(`auth.chatStatus(s, { ignoreChatSwitch: true })`: an aged, non-anchor proof, recent mining, not muted, and
+the password rule when it is on), while the games-owned setting `nicknames_enabled` (default on) is on.
+5 requests per address per 24 h.
+
+**Lifecycle** (per address; one row per request, `nicknames`, §19.4 v3):
+
+| From | Action | To |
+|---|---|---|
+| — | player submits | `pending` (a previous pending → `replaced`) |
+| `pending` | player withdraws | `withdrawn` |
+| `pending` | operator approves | `approved` (the previous live one → `replaced`) — refused `nickname_taken` when another address's live name has the same matching form |
+| `pending` | operator rejects `{reason?}` | `rejected` — the reason is shown to the player |
+| `approved` | player removes · operator removes `{reason?}` | `removed` |
+| `approved` / `pending` | the address is banned | `removed` / `rejected` (reason `ban`); an unban restores nothing |
+
+One pending and one live per address, and no two live names with the same matching form, are partial
+unique indexes. Decided rows are purged after 180 days (hourly job `nickname_purge`).
+
+**Routes.**
+
+| Route | Does |
+|---|---|
+| `POST /play/api/nickname {name}` | submit (400 `name_*` with a `hint`; 403 `nickname_refused` + `reason`/`available_at`; 403 `nicknames_off`; 409 `unchanged` / `nickname_taken`; 429) |
+| `POST /play/api/nickname/withdraw {}` · `POST /play/api/nickname/remove {}` | the player's own pending / live one |
+| `GET /play/api/me` → `nickname` | `{ enabled, live, shown_as, pending:{name,at}\|null, refused:{name,state,reason,at}\|null, can_submit, reason, available_at, rule }` |
+| `GET /internal/admin/nicknames?state=pending\|approved\|rejected` | the queue (oldest first) or the lists (newest first), full addresses, `shown_as`, and on pending rows the **flags** |
+| `POST /internal/admin/nicknames/:id/{approve,reject,remove}` | step-up (not in `FAST_WRITES`); each writes a `mod_actions` row |
+
+**Flags** on a queued name — hints beside it, never decisions: `reserved` (pool, grinium, official,
+support, staff, prize, jackpot, winner, mod, bot — the pool's reserved words plus this page's own two
+labels), `word` (a chat word-list entry), `same_as` (another address's live name matches; approve is
+refused), `pending_same` (another request matches).
+
+**Admin:** Games → **Nicknames** (`games-names.html`: the queue, Live, Rejected; approve / reject / remove,
+all step-up; every name and reason rendered as text). The Players page shows an address's live and
+pending nickname; `games.html` carries the `nicknames_enabled` switch.
 
 ## Appendix — Solo private pool flowchart, merged from flowcharts/script07_mining_solo_flow_chart.txt 2026-07-09
 

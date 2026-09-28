@@ -330,7 +330,10 @@ class IncentivesManager {
   updateStreaks() {
     const today = Math.floor(Date.now() / 1000 / SECONDS_PER_DAY);
     const dayStart = today * SECONDS_PER_DAY;
-    const active = this.db.prepare('SELECT DISTINCT grin_address FROM shares WHERE created_at >= ?').all(dayStart);
+    // Bounded to the day on BOTH sides: a one-sided range let SQLite walk the whole
+    // address-leading index to get DISTINCT for free (scripts/test-shares-plans.js).
+    const active = this.db.prepare('SELECT DISTINCT grin_address FROM shares WHERE created_at >= ? AND created_at < ?')
+      .all(dayStart, dayStart + SECONDS_PER_DAY);
     let updated = 0;
     const tx = this.db.transaction(() => {
       for (const { grin_address } of active) {

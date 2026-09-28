@@ -26,6 +26,7 @@
       if (btn) btn.classList.add('active');
       if (tabName === 'database') loadDbStatus();
       if (tabName === 'access') { loadIpFilter(); load2fa(); }
+      if (tabName === 'games') loadGamesLinkStatus();
     }
 
     window.addEventListener('hashchange', () => switchTab(tabFromHash()));
@@ -272,6 +273,40 @@
           `<strong>last cleanup:</strong> ${last}`;
       } catch (err) {
         if (box) box.textContent = 'Failed to load DB status: ' + err.message;
+      }
+    }
+
+    // ─── Games service health line (settings-games.html) ──────────────
+    // Read-only: the pool's cached probe of the games service (lib/games-link.js), plus what the
+    // public nav is being told. textContent only — the values are ours, but the rule is the rule.
+    async function loadGamesLinkStatus() {
+      const box = document.getElementById('games-link-status');
+      if (!box) return;
+      box.textContent = 'Loading…';
+      try {
+        const r = await fetch('/api/admin/games-link', { credentials: 'include', cache: 'no-store' });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const d = (await r.json()).data || {};
+        const p = d.probe || {};
+        const REASONS = {
+          ok: 'answering', not_checked: 'not checked yet', unreachable: 'not running (nothing answers on its port)',
+          timeout: 'not answering in time', unhealthy: 'answering, but reports a problem',
+          wrong_network: 'answering, but it is the other network\'s service', bad_response: 'answering with an unexpected reply'
+        };
+        const checked = p.checked_at ? new Date(p.checked_at * 1000).toLocaleString() : 'never';
+        const parts = [
+          'Service: ' + (p.healthy ? '● ' : '○ ') + (REASONS[p.reason] || String(p.reason || 'unknown')),
+          'port ' + (d.games_port == null ? 'invalid in pool config' : d.games_port),
+          'link secret: ' + (d.link_configured ? 'configured' : 'NOT configured'),
+          'last check: ' + checked,
+          'public menu sees: ' + (d.public_mode || 'off')
+        ];
+        if (p.healthy && p.schema != null) parts.splice(1, 0, 'schema v' + p.schema);
+        box.textContent = parts.join(' · ');
+        box.style.color = p.healthy ? 'var(--success, #3fb950)' : '';
+      } catch (err) {
+        box.textContent = 'Failed to load the games service status: ' + err.message;
+        box.style.color = '';
       }
     }
 

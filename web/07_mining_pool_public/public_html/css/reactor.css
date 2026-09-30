@@ -650,6 +650,9 @@ body {
 }
 .tty div b { color: var(--accent); font-weight: 600; }
 .tty div .via { color: var(--info); }
+/* Elapsed-time column: fixed width so PAID / amounts line up down the log
+   ("12 months ago" is the widest value at 13ch). */
+.tty div .ago { display: inline-block; min-width: 13ch; }
 .tty::after {
   content: ""; position: absolute; left: 0; right: 0; top: 0; height: 34px;
   background: linear-gradient(var(--rx-inset), transparent); pointer-events: none;

@@ -1426,7 +1426,7 @@ function setupRoutes() {
 
     // ── Pool ──────────────────────────────────────────────────────────────────
     'GET /api/pool/stats': { desc: 'Live pool stats: block totals (found / confirmed / immature counts, confirmed + immature reward; orphans_24h = blocks found in the last 24 h that were later orphaned, null if unreadable), active miners (distinct addresses), active workers (logged-in rigs), raw connections, and share quality (accepted/stale/rejected). Share quality is LIVE in-memory only — it is empty with no connected sessions and resets on disconnect. Also network (mainnet or testnet) and explorer, the chain explorer key this pool links to (grincoin, tiny or grinscan on mainnet; grinscan_testnet on testnet).', shape: 'raw' },
-    'GET /api/pool/status': { desc: 'Coarse service health for the status strip: pool up, node reachable/synced/peers/height, wallet reachable. Never exposes balances or addresses.', shape: 'raw' },
+    'GET /api/pool/status': { desc: 'Coarse service health for the status strip: pool up, node reachable/state/synced/peers/height, wallet reachable. node.state is ok | starting (API port closed, node process running) | busy (API timed out) | offline; reachable is true only for ok. Never exposes balances or addresses.', shape: 'raw' },
     'GET /api/pool/stats/regions': { desc: 'Per-region stratum endpoints + live status (online | idle | offline | checking — the last only on the first poll after a restart, before the reachability probe has a verdict) and 15-minute regional hashrate, miners (distinct addresses) and workers (distinct address+rig pairs). On a MULTI-region pool a k-anonymity floor applies: a region with 0 < miners < min_bucket reports miners/workers/hashrate_gps/shares_window as null with below_floor:true — that is withheld, not zero (a real zero is still 0). Totals are always exact. Per region, is_hub (boolean) marks this server\'s own region — connecting there is connecting to the pool directly; false on every row of a pool that runs no local stratum. hub_rtt_ms (integer milliseconds) is the round trip between the pool and that region\'s server — the minimum of its last 5 TCP connects to the region\'s public stratum port; add it to your own latency to that server for your effective latency to the pool. It is 0 on the is_hub row, and null when that server has not been reached yet (just after a restart, or never). timestamp is ISO 8601.', shape: 'raw' },
     'GET /api/pool/connect/suggest': { desc: 'Which server to point a rig at, for YOU: estimated effective latency per region, from the country your IP resolves to. Effective = your distance to that server + its link to the pool (hub_rtt_ms) — a regional server does not shorten the trip to the pool, so a far one can lose to connecting directly. Returns { basis: "estimate", recommended (region tag, or null), estimates: [{ region, est_ms (integer milliseconds, round trip), via: direct | gateway }] }; direct is preferred unless a gateway is more than 15 ms faster. Regions that are offline, or whose link to the pool has not been measured yet, get no estimate. { basis: "unavailable" } alone when no country can be resolved. An estimate from geography, not a measurement. Your IP and country are used for this one answer and neither stored, logged nor returned; never cached (Cache-Control: private, no-store).', shape: 'raw' },
     'GET /api/pool/locations': { desc: 'Operator-declared stratum regions that are currently active — region key, label, and the stratum URL to point a rig at.', shape: 'array' },
@@ -2592,7 +2592,7 @@ function setupRoutes() {
   const buildPoolStatus = async () => {
     const out = {
       pool: { ok: true },
-      node: { reachable: false, synced: false, peers: 0, height: 0 },
+      node: { reachable: false, state: 'offline', synced: false, peers: 0, height: 0 },
       wallet: { reachable: false },
     };
     try {
@@ -2602,12 +2602,19 @@ function setupRoutes() {
       if (status && status.ok) {
         out.node = {
           reachable: true,
+          state: 'ok',
           synced: status.synced === true,
           peers: status.peer_count || 0,
           height: status.header_height || 0,
         };
+      } else {
+        // 'starting' | 'busy' | 'offline'. A node opening a rebuilt chain_data refuses the API
+        // port for minutes, then times out while it catches up; both used to paint the lamp
+        // red as "offline" while the process was healthy. reachable stays false either way —
+        // this only chooses the colour, it never claims the node answered.
+        out.node.state = await blockMonitor.grinNode.downState(status);
       }
-    } catch (e) { /* node down → reachable stays false */ }
+    } catch (e) { /* node down → reachable stays false, state stays 'offline' */ }
 
     try {
       if (wallet && wallet.getBalance) {
@@ -2647,7 +2654,7 @@ function setupRoutes() {
       const body = await _poolStatusInflight;
       // Last-good on a failed build, so a down node does not turn this back into a per-request
       // prober. `pool.ok` stays true either way — the pool API answered, which is what it means.
-      res.json(body || { pool: { ok: true }, node: { reachable: false, synced: false, peers: 0, height: 0 }, wallet: { reachable: false } });
+      res.json(body || { pool: { ok: true }, node: { reachable: false, state: 'offline', synced: false, peers: 0, height: 0 }, wallet: { reachable: false } });
     } catch (err) {
       res.status(500).json({ error: 'status unavailable' });
     }

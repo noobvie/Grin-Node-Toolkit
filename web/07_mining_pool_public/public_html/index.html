@@ -101,12 +101,12 @@
         <!-- ═══ Spec placard: live pool terms + network conditions (engraved plate) ═══
              Pool terms from /api/config/pool-info; network facts refresh with the poll.
              Static "scheme / payout-via / registration" facts intentionally live in the
-             hero subheading + P-03 mimic instead of being engraved a third time here. -->
+             hero subheading + P-03 mimic instead of being engraved a third time here.
+             Four tiles (was six): Fee + Min payout share one "A / B" tile, and the Network
+             tile went — its warning survives as the hashrate label ("Testnet hashrate"). -->
         <div class="placard figures" aria-label="Pool specifications">
-            <span><i>Fee</i><b id="pl-fee">—</b></span>
-            <span class="tone-gold"><i>Min payout</i><b id="pl-min">—</b></span>
-            <span class="tone-text"><i>Network</i><b id="pl-net">—</b></span>
-            <span class="tone-info"><i>Net hashrate</i><b id="pl-nethash">—</b></span>
+            <span class="tone-gold"><i>Fee / Min payout</i><b id="pl-terms">—</b></span>
+            <span class="tone-info"><i id="pl-nethash-k">Network hashrate</i><b id="pl-nethash">—</b></span>
             <span class="tone-warn"><i>Net difficulty</i><b id="pl-netdiff">—</b></span>
             <span class="tone-ok"><i>Active regions</i><b id="pl-regions">—</b></span>
         </div>
@@ -134,12 +134,14 @@
                                 <!-- Four readouts (2×2), one big figure + one small qualifier each.
                                      Was six: Last block and Blocks found had tiles of their own and are
                                      now the Blocks · 24h sub-line; the 7-day count lives on the blocks
-                                     page only; Confirmed gained the still-maturing GRIN. -->
+                                     page only; Confirmed gained the still-maturing GRIN.
+                                     A paired tile reads "A / B" in the label and "a / b" in the
+                                     value, so the slash is never read as "a out of b". -->
                                 <div class="counters">
                                     <div class="counter"><div class="k">Block height</div><div class="v num" id="c-height">—</div></div>
-                                    <div class="counter alt"><div class="k">Miners online</div><div class="v num"><span id="c-miners">—</span> <small id="c-miners-sub"></small></div></div>
-                                    <div class="counter"><div class="k">Blocks · 24h</div><div class="v num"><span id="c-blocks24">—</span> <small><span id="c-last">—</span> · <span id="c-total">—</span> total</small></div></div>
-                                    <div class="counter alt"><div class="k">Confirmed</div><div class="v num"><span id="c-reward">—</span> <small>GRIN · <span id="c-immature">—</span> immature</small></div></div>
+                                    <div class="counter alt"><div class="k">Miners / Workers</div><div class="v num"><span id="c-miners">—</span> / <span id="c-workers">—</span></div></div>
+                                    <div class="counter"><div class="k">Blocks · 24h / All time</div><div class="v num"><span id="c-blocks24">—</span> / <span id="c-total">—</span> <small id="c-last">—</small></div></div>
+                                    <div class="counter alt"><div class="k">Confirmed / Immature</div><div class="v num"><span id="c-reward">—</span> / <span id="c-immature">—</span> <small>GRIN</small></div></div>
                                 </div>
                                 <div class="ledbar-wrap">
                                     <div class="ledbar-title">Share quality — live sessions <span id="led-note"></span></div>

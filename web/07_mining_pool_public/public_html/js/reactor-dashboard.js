@@ -100,6 +100,16 @@
     if (s < 86400) return (s / 3600).toFixed(1) + 'h';
     return (s / 86400).toFixed(1) + 'd';
   }
+  // Long form for the payout teletype: "just now", "1 min ago", "3 hours ago", "2 months ago".
+  function timeAgoWords(unixSeconds) {
+    var s = Math.max(0, Math.floor(Date.now() / 1000) - unixSeconds);
+    var units = [[31536000, 'year'], [2592000, 'month'], [86400, 'day'], [3600, 'hour'], [60, 'min']];
+    for (var i = 0; i < units.length; i++) {
+      var n = Math.floor(s / units[i][0]);
+      if (n >= 1) return n + ' ' + units[i][1] + (n === 1 ? '' : 's') + ' ago';
+    }
+    return 'just now';
+  }
   function truncAddr(addr) {
     addr = String(addr || '');
     return addr.length > 16 ? addr.slice(0, 9) + '…' + addr.slice(-4) : addr;
@@ -373,9 +383,15 @@
     try {
       var info = await Auth.read('/api/config/pool-info');
       if (!info) return;
-      setText('pl-fee', (info.pool_fee_percent != null ? info.pool_fee_percent : 0).toFixed(1) + '%');
-      setText('pl-min', (info.min_withdrawal != null ? info.min_withdrawal : 0).toFixed(1) + ' GRIN');
-      setText('pl-net', String(info.network || '—').toUpperCase());
+      // "1% / 25 GRIN" — trailing zeros dropped (Number(x.toFixed(n)) does that), so a
+      // 0.5% fee still prints as 0.5%.
+      var fee = Number(Number(info.pool_fee_percent || 0).toFixed(2));
+      var min = Number(Number(info.min_withdrawal || 0).toFixed(2));
+      setText('pl-terms', fee + '% / ' + min + ' GRIN');
+      // The Network tile is gone; the network now names the hashrate tile, so a testnet pool
+      // still says so up front ("Testnet hashrate").
+      var net = String(info.network || '').toLowerCase();
+      if (net) setText('pl-nethash-k', net.charAt(0).toUpperCase() + net.slice(1) + ' hashrate');
     } catch (e) { /* placard keeps placeholders */ }
   }
 
@@ -421,12 +437,12 @@
       // Logged-in rigs. Older backends only carry the raw socket count, which is the same
       // number once every connection has logged in.
       var workers = Number(s.active_workers != null ? s.active_workers : s.active_connections) || 0;
-      setText('c-miners-sub', workers + (workers === 1 ? ' worker' : ' workers'));
+      setText('c-workers', String(workers));
       setText('c-blocks24', String(s.blocks_24h || 0));
       setText('c-total', Number(s.total_blocks_found || 0).toLocaleString('en-US'));
-      setText('c-reward', Number(s.confirmed_reward || 0).toFixed(0));
+      setGrinCompact('c-reward', s.confirmed_reward);
       // Still maturing (1,440 confirmations); older backends don't send it.
-      setText('c-immature', Number(s.immature_reward || 0).toFixed(0));
+      setGrinCompact('c-immature', s.immature_reward);
       setText('mi-miners', (s.active_miners || 0) + ' UNITS');
       var q = s.share_quality || {};
       renderLedbar(Number(q.accepted) || 0, Number(q.stale) || 0, Number(q.rejected) || 0);
@@ -443,6 +459,21 @@
     if (n >= 1e6) return (n / 1e6).toFixed(2) + ' M';
     if (n >= 1e3) return (n / 1e3).toFixed(1) + ' K';
     return String(Math.round(n));
+  }
+
+  // GRIN amounts for the counters: exact below 10,000 ("1,500" is no wider than "1.5k"),
+  // then 12.3k / 1.5M. Not fmtCompact — its ' G' for billions would read "1.2 G GRIN".
+  // These are money figures, so the exact amount always rides on hover.
+  function setGrinCompact(id, amount) {
+    var el = $(id);
+    if (!el) return;
+    var n = Number(amount) || 0;
+    // 999,950 rounds to "1000.0k", so the M band starts there.
+    var s = n >= 999950 ? Number((n / 1e6).toFixed(1)) + 'M'
+      : n >= 1e4 ? Number((n / 1e3).toFixed(1)) + 'k'
+      : Math.round(n).toLocaleString('en-US');
+    el.textContent = s;
+    el.title = n.toLocaleString('en-US', { maximumFractionDigits: 9 }) + ' GRIN';
   }
 
   async function loadShare() {
@@ -485,7 +516,7 @@
           [[0, 100, C.accent], [100, 150, C.warn], [150, emax, C.danger]], 8);
         gaugeShare.setValue(Math.min(effort, emax));
       }
-      setText('c-last', e.last_block_at ? timeAgo(e.last_block_at) + ' ago' : 'none yet');
+      setText('c-last', e.last_block_at ? 'last ' + timeAgo(e.last_block_at) + ' ago' : 'none yet');
       setText('mi-core-share', 'NET-SHARE ' + (share != null ? fmtShare(share) : '—'));
       // `round_shares` is the round's SUMMED share difficulty in chain units (each accepted
       // share weighs job target × 16384 — the effort numerator), so printing it as "SHARES"
@@ -511,6 +542,10 @@
       var poolOk = !!(s.pool && s.pool.ok);
       var nodeOk = !!(s.node && s.node.reachable);
       var nodeSynced = nodeOk && s.node.synced === true;
+      // Not answering, but not down either: 'starting' (API port not open yet, node process
+      // running) or 'busy' (API timed out). Amber, like a sync — red is for a node that is gone.
+      var nodeState = !nodeOk && s.node ? s.node.state : null;
+      var nodePending = nodeState === 'starting' || nodeState === 'busy';
       var walletOk = !!(s.wallet && s.wallet.reachable);
       nodeHeight = (nodeOk && s.node.height) || nodeHeight;
 
@@ -518,6 +553,8 @@
       if (nodeOk) {
         setLamp('an-node', nodeSynced ? 'ok' : 'warn',
           (s.node.peers || 0) + ' peers' + (nodeSynced ? '' : ' · sync'));
+      } else if (nodePending) {
+        setLamp('an-node', 'warn', nodeState);
       } else {
         setLamp('an-node', 'alarm', 'offline');
       }
@@ -526,8 +563,10 @@
       if (nodeHeight) setHeightLink('c-height', nodeHeight);
       var nodeVal = $('mi-node');
       if (nodeVal) {
-        nodeVal.textContent = nodeOk ? (nodeSynced ? 'SYNCED' : 'SYNCING') : 'OFFLINE';
-        nodeVal.setAttribute('class', nodeOk ? (nodeSynced ? 'val cy' : 'val') : 'val bad');
+        nodeVal.textContent = nodeOk ? (nodeSynced ? 'SYNCED' : 'SYNCING')
+          : (nodePending ? nodeState.toUpperCase() : 'OFFLINE');
+        nodeVal.setAttribute('class', nodeOk ? (nodeSynced ? 'val cy' : 'val')
+          : (nodePending ? 'val' : 'val bad'));
       }
 
       if (!poolOk) {
@@ -536,7 +575,7 @@
         setMaster('ok', 'All systems nominal');
       } else {
         var issues = [];
-        if (!nodeOk) issues.push('node offline');
+        if (!nodeOk) issues.push(nodePending ? 'node ' + nodeState : 'node offline');
         else if (!nodeSynced) issues.push('node syncing');
         if (!walletOk) issues.push('wallet offline');
         setMaster('warn', 'Degraded · ' + issues.join(', '));
@@ -703,11 +742,17 @@
       setLamp('an-payouts', newestPay ? 'ok' : '', newestPay ? timeAgo(newestPay) + ' ago' : 'none yet');
       // Print oldest → newest so the freshest line sits at the bottom (printer style).
       payments.slice().reverse().forEach(function (p) {
+        // Elapsed time, not a clock time: the old "HH:MM UTC" carried no date, so a payout
+        // from three days ago read as today's. The exact UTC stamp rides on hover.
         var ts = p.confirmed_at || p.created_at || 0;
-        var dte = new Date(ts * 1000);
         var line = document.createElement('div');
-        line.appendChild(document.createTextNode(
-          pad2(dte.getUTCHours()) + ':' + pad2(dte.getUTCMinutes()) + ' UTC  PAID '));
+        var ago = document.createElement('span');
+        ago.className = 'ago';
+        ago.textContent = ts ? timeAgoWords(ts) : '—';
+        if (ts) ago.title = new Date(ts * 1000).toLocaleString('en-GB',
+          { timeZone: 'UTC', dateStyle: 'medium', timeStyle: 'short' }) + ' UTC';
+        line.appendChild(ago);
+        line.appendChild(document.createTextNode(' PAID '));
         var b = document.createElement('b');
         b.textContent = Number(p.amount || 0).toFixed(2) + ' GRIN';
         line.appendChild(b);

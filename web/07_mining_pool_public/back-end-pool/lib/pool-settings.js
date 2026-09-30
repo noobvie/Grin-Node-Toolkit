@@ -1150,7 +1150,7 @@ PASS      any-password-you-choose</code>
       },
       // Blank (= derive) or exactly two letters, stored uppercase — this catches the shape
       // mistakes ('VNM', 'Vietnam', 'vn '), which is as far as the check can honestly go: the
-      // map's centroid table (lib/geoip.js COUNTRIES) is a curated ~54-country list, so
+      // map's centroid table (lib/geoip.js COUNTRIES) is a curated ~100-country list, so
       // validating membership here would reject a real ISO code just because we hold no
       // position for that country yet. A well-formed code we can't place draws no hub marker
       // (never a wrong one) — see the note in the admin helper text.

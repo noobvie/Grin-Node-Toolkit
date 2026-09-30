@@ -392,7 +392,8 @@
     const netWord = both ? 'this pool\'s <b>mainnet</b> and <b>testnet</b> nodes have' : (src.test && !src.main ? 'this pool\'s <b>testnet</b> node has' : 'this pool\'s <b>mainnet</b> node has');
     const split = both ? ' — <b>' + nMain + '</b> mainnet · <b>' + nTest + '</b> testnet' : '';
     set('nm-nodes-note', 'Distinct <b>Grin nodes</b> ' + netWord + ' handshaked with over the last ' + days + ' days, by country' + split +
-      '. Live connections plus each node\'s own peer store (the node probes the network in the background) — not a full crawl, so nodes that never accept inbound connections are missing.');
+      '. Live connections plus each node\'s own peer store (the node probes the network in the background) — not a full crawl, so nodes that never accept inbound connections are missing. ' +
+      'Other maps (world.grin.money included) count from their own nodes, so their totals and ranking differ.');
   }
 
   function utcClock() {

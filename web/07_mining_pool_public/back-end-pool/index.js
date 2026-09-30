@@ -5418,7 +5418,7 @@ function setupRoutes() {
       for (const [addr, region] of addrRegion) {
         let cc = null, name = null;
         const g = geoByAddr.get(addr);
-        if (g && g.country_code) { cc = g.country_code; name = g.country || geoip.countryName(cc); geoHits++; }
+        if (g && g.country_code) { cc = g.country_code; name = geoip.countryName(cc); geoHits++; }
         // Fallback from locationsAll, NOT from the published gateway list: a miner connected
         // through a region the operator has since unpublished still mines from the country that
         // region is in, and dropping them here would quietly shrink the miner total.
@@ -5580,8 +5580,11 @@ function setupRoutes() {
       // means many nodes. Scatter half-extents are per-country (geoip COUNTRIES[].s).
       const countries = rows.map(r => {
         const pos = geoip.countryCentroid(r.country_code);
+        // Name from the code, never the stored `country` column: that was written by an older
+        // table and holds the bare code ("BY") for every country it lacked, for as long as the
+        // row lives. Same for miner_geo in /api/pool/topology.
         return {
-          country_code: r.country_code, country: r.country || geoip.countryName(r.country_code),
+          country_code: r.country_code, country: geoip.countryName(r.country_code),
           peers: r.peers, main: r.main, test: r.test,
           lat: pos ? pos.lat : null, lng: pos ? pos.lng : null
         };

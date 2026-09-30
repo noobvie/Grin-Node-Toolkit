@@ -1,7 +1,7 @@
 # Script 07 — Public Mining Pool (Security Audit)
 
-> **Covers code as of:** 2026-09-06 · **Last verified:** never verified as a whole — individual findings carry their own dates in the Status roll-up. One scoped exception: **2026-09-07, PARTIAL — §B's two satellite claims only**, read against the code (`requireSatellite` exists nowhere in `back-end-pool/`; `validateConfig()` in `lib/config.js` throws on a missing `jwt_secret` unconditionally, with no role gate). Nothing else in §B, and no §J finding, was re-checked.
-> **Product code last changed:** 2026-09-20 (share credit unit; one shared `MinerManager` — §J6 addendum) — `scripts/07_grin_mining_*.sh`, `scripts/lib/07_lib_*.sh`, `web/07_mining_pool_public/`
+> **Covers code as of:** 2026-09-06 · **Last verified:** never verified as a whole — individual findings carry their own dates in the Status roll-up. One scoped exception: **2026-09-07, PARTIAL — §B's two satellite claims only**, read against the code (`requireSatellite` exists nowhere in `back-end-pool/`; `validateConfig()` in `lib/config.js` throws on a missing `jwt_secret` unconditionally, with no role gate). Nothing else in §B, and no §J finding, was re-checked. A second: **2026-09-23, PARTIAL — the three "still true" claims in the §17 pointer notes only** (Status roll-up + head of the §J3 resolution pass), read against `lib/owner-proof.js` (`first_seen_at` is only ever INSERTed — true that day, amended by Part 4 the same evening: a returning evicted anchor now UPDATEs it to `now`, see design §17.7 #3; `_makeRoom` flags an anchor, never deletes it; the lockout counters are keyed per (address, origin)) and `index.js` `requireBothProofs` (refuses `slot === 'anchor'` and any leg younger than the floor). The findings themselves were not re-checked. A third: **2026-09-23, PARTIAL — the five *Superseded* notes of the payout-rails fix only** (§H3, §J3-9, §J4-7, §J12-12, §J13 row 3), each read against `lib/wallet-tor.js` (defaults, `REASONS`, `classifyProbeError`) and the `index.js` tor-check route and withdraw gate as of that day's uncommitted diff. The findings underneath were not re-checked. A fourth: **2026-09-23, PARTIAL — the new Status roll-up note "hub move + connect-page latency" only, and only the claims read in code that session**: the suggest route in full (`index.js` — no logging, `private, no-store`, public limiter, `basis: 'unavailable'`), the probe `maxconn 2000` and file paths in `07_lib_gateway.sh`, the page and admin `connect-src` lines in the pool script, and `PBK_INCLUDE_CERTS` being raised only in the migrate path. The migration guards' order, the cert-archive checks and the re-resolve unit hardening are **the build sessions' own claims**, and the note says so; nothing in it is a review finding. A fifth: **2026-09-23, PARTIAL — the "Part 9 review" block under that note only**: its C1–C6 each reproduced by a failing local harness scenario before the fix and passing after (Git-bash, fakes for systemd/tar/curl/probes, real `node:sqlite`; nothing on a VPS), its P-items and "checked and holds" lines read in the code that session; its P1 row re-verified 2026-09-24 the same way (failing Migrate OUT scenarios first, passing after). The note's other bullets were not re-verified. A seventh: **2026-09-24, PARTIAL — the "§18 Part 6 review" block only**, written by that review session against the code (R6-1 seen failing in a test before the fix and passing after; R6-2's cache header read in the pool script's `/uploads/` block and the Express fallback; the fuzz and stub-DB runs are that session's own, one-shot, outside the repo). A sixth: **2026-09-24, PARTIAL — the Status roll-up note "Donations v2 replaced that surface" only**, written by the §18 Part 3 build session against the code it describes (the nine admin route guards and the image route's headers read in `index.js`, the admin snippet's `img-src` in the pool script — unchanged, `'self' data:` — and `npm test` 1310/1310). Nothing in it is an audit finding. An eighth: **2026-09-25, PARTIAL — the Status roll-up note "Payout path changed after §J closed — Tor payout hardening F1–F5" and the dated update under §J9-8 only, by the Tor-payout-hardening docs-fold session**: each claim read in the working tree that session (the kernel backfill's `confirmed` test, the watchdog constants and repost argv, the shortfall/tor-down constants, `STEP_UP_SETTINGS_SECTIONS` holding `payout`, the admin-row strip, the live `PoolSettings.defaults.payout` key list against `applyToConfig` + `lib/dormancy.js`, and `withdrawal_retry_delays` grepped absent from every admin page); `npm test` exit 0. The grin-wallet source facts (kernel written at lock, `get_stored_tx`'s empty `sigs`) are the build sessions' reads, not re-checked. The note is a change record, **not** an audit. A ninth: **2026-09-25, PARTIAL — the Status roll-up note "Slatepack rail: a lost tab, and the expiry sweep's wallet cancel" only**, written by the session that built it, against that code: `test-payout-guard.js` 256/256 and `test-public-leakage.js` 116/116, every `scripts/test-*.js` passing, and 6 of the new cases seen failing against the reverted scheduler. It is a change record, not an audit; nothing else in this file was re-checked. An eleventh: **2026-09-26, PARTIAL — the "Session 4's open items, as of the operator-approved follow-up fixes" list only, by the session that made those fixes**: each FIXED item seen failing in its own test before the fix and passing after, `npm test` exit 0 (21 suites, 1932 checks). A change record, not an audit. A twelfth: **2026-09-26, PARTIAL — the "Pre-test review, same day" bullet of that list only, by the pre-test review session**: the argv read in `lib/wallet-tor.js` after the edit, and the v5.5.0 `src/bin/grin-wallet.yml` + `Cargo.lock` (clap 2.34.0) fetched raw from GitHub that session; the new argv checks seen failing on the old code with both controls passing; `npm test` exit 0 (21 suites, 1942 checks). A change record, not an audit. A tenth: **2026-09-26, PARTIAL — the Status roll-up note "Payout path changed again — Tor payouts: one attempt" and the one-line dated addition to the F1–F5 note only, by the one-attempt docs-fold session**: each claim about the code was read in the working tree that session (`walletBin`; the earlier-attempt hold in `sendWithdrawal`; outcomes B/C/D; `resolveHeldTor` and the 600 s gap; `migrateLegacyTorRetries`; `forceRefundHeld`'s refusals and the route's `freshAdmin` + `confirm_id`; the admin cancel refusals; the retry 410; the pause 429's place before the probe; `_assertNoRecentReversal`'s Tor exemption; `_torAttemptWindows`, `_otherTorAttemptAt` and `FEE_MOD`; the unit's missing `KillMode`), and `npm test` was re-run (exit 0, 21 suites, 1900 checks). The R1 reproduction, the R2–R9 verdicts and every grin-wallet source fact are **the review session's own claims, not re-checked**. It is a change record, not an audit. A thirteenth: **2026-09-27, PARTIAL — the Status roll-up note "Independent /review of the payout path" only, by the session that ran the review and made the fixes**: the findings read in the working tree and five reproduced by a one-shot harness against the real scheduler; the grin-wallet v5.5.0 facts read in the upstream source fetched that session; each fix's non-control checks seen failing on the old code, `npm test` exit 0 afterwards. A fourteenth: **2026-09-27, PARTIAL — the Status roll-up note "Slatepack finalize binding" and its two in-place annotations (§E.3 item 5, §J4 *Verified correct*) only, by the session that found and fixed it**: both finalize paths read in the working tree after the edit and in the committed `HEAD` before it; the attack reproduced in `test-payout-guard.js` against the real scheduler with only the wallet faked (8 checks failing on the old code); grin-wallet v5.5.0 `cancel_tx_and_outputs`, the foreign `finalize_tx` and `update_stored_tx` read in the upstream source that session; `npm test` exit 0 afterwards. A fifteenth: **2026-09-28, PARTIAL — the Status roll-up note "Surface added after §J closed — the /play/ games platform" only, by the design §19 Part 11 review session** (which built none of the games code): each finding and "holds" claim read in the working tree; P11-1 and P11-2 each covered by new tests of the fixed path (not run against the pre-fix code); games `npm test` 921/921, pool 2330/2330; nothing run on a VPS. Nothing else in this file was re-checked.
+> **Product code last changed:** 2026-09-28 (games platform, design §19 Parts 7–10 and the Part 11 review's fixes — `play/**`, `back-end-pool/lib/games-link.js`'s global caps, the pool menu; reviewed in the Status roll-up note "Surface added after §J closed — the /play/ games platform"; uncommitted, not VPS-tested). 2026-09-27 (admin cancel refuses `tor_failed` — closes the /review's Low item "admin cancel on `tor_failed`"; payout rows name their rail on the account ledger and admin payments page; impl §10.10; **not audited here**, uncommitted, not VPS-tested). Same day (Slatepack finalize binding — both finalize paths fail closed when the row or the reply has no slate id; see the roll-up note "Slatepack finalize binding"; uncommitted, not VPS-tested). Same day (the /review fixes #1–#6 — Held refunds, the Tor send lock, CLI stdout, `tx_slate_state` in the forced refund, the audit's NET compare, the 360 s timeout; see the roll-up note "Independent /review of the payout path"; uncommitted, not VPS-tested). 2026-09-26 (pre-test review: the Tor send / repost argv in `lib/wallet-tor.js` fixed for grin-wallet v5.5.0's CLI spec; see the last bullet of the roll-up list "Session 4's open items…"; **not audited here**, uncommitted, not VPS-tested). Same day (follow-up fixes: payout alerts on the health card, `auditWalletSends` without `tor_failed`, capture on attempt windows, two pending-cap validators, 90 s nginx timeout for the withdraw POST, `socks` removed; see the roll-up list "Session 4's open items…"; **not audited here**, uncommitted, not VPS-tested). Same day (Tor payouts: one attempt, Held, Tor pause, Slatepack offer; stepwise F5 and the retry ladder deleted; `walletBin` fix for mainnet payout #10; the Session 4 review's attempt-window matcher fix; see the roll-up note "Payout path changed again"; **not audited here**, uncommitted, not VPS-tested). 2026-09-25 (slatepack rail: stored encrypted S1 + ownership-gated re-fetch route, expiry refunds before it cancels, `slate_cancel_pending` retry sweep, guarded `slate_id` attach on both Owner-API create paths; see the roll-up note "Slatepack rail: a lost tab…"; **not audited here**, uncommitted, not VPS-tested). Same day (Tor payout hardening F1–F5 — kernel only once confirmed, the `payout_unmined` watchdog + CLI repost, uncounted shortfall retry, `auto_payout`/`payout_frequency` deleted, step-by-step Tor send behind `tor_send_mode`; see the roll-up note "Payout path changed after §J closed"; **not audited here**, uncommitted, not VPS-tested). Same day (Tor rail: an exit-0 slatepack fallback is no longer marked paid — see the roll-up note. Also: §J11-2 pool-wide half reversed — `/api/pool/payments` publishes a shape-checked `kernel_excess` for the P-05 Tx ID column; see the note under J11-2). 2026-09-24 (hub move, Part 9 P1 — Migrate OUT removes the weekly VACUUM cron and refuses while a vacuum runs; `07_lib_pool_migrate.sh`; see the "Part 9 review" block). Same day (donations v2, §18 Part 6 review fix R6-1 — `requireBothProofs` refusal code `match` → `wrong_kind`; see the "§18 Part 6 review" block). Same day (donations v2, design §18 Parts 1–3 — per-share donation, donor-profile backend + uploads, admin review queue + image route, v1 censor/rescan removed, admin CSP unchanged; see the Status roll-up note "Donations v2 replaced that surface"; **not audited here**, uncommitted, not VPS-tested). 2026-09-23 (Part 9 review fixes C1–C6 — `07_lib_pool_migrate.sh`, `07_lib_pool_backup.sh`; see the "Part 9 review" block). Same day (hub move + connect-page latency — `07_lib_pool_migrate.sh` NEW, `07_lib_pool_backup.sh`, `07_lib_gateway.sh`, the pool script, `lib/db.js`, `index.js`, three new pure libs, `reactor-dashboard.js`; design §13.13, impl §8.7; see the Status roll-up note; **not audited here**, uncommitted, not VPS-tested). Same day (payout-rails fix, impl §10.5: `create_slatepack_message` named params; Tor probe ported from 06d — 8 s, fresh circuit per attempt, real `check_version`, proxy-silent timeout → `null`; tor-check `?fresh=1`; no probe on account-page load — see the Status roll-up note; the changed surface is **not audited here**, and not VPS-tested). Same day (ownership-proof SET, `script07_design.md` §17 Parts 1–3, built 2026-09-22/23, and the Part 4 review's three fixes the same day (design §17.7): the 2-slot proof window this file's §E/§F/§J3 reason about is replaced by a set of up to 10 per kind with a per-address salt — see the Status roll-up note; **not audited here**, and not VPS-tested). 2026-09-21 (donor names + donor league, design §16 Parts 1–5: Part 1 login grammar — worker part case-folded, label cap 25 → 32, raw 40 → 48, `donor_label` field; the five limit statements in §J6-1, §J6-9, §J6-13 and the §J6 Handoffs updated in place. **Parts 2–4 added surface this file has NOT audited** — a public free-text name on `/api/pool/donors` + `/api/account/:addr`, two `freshAdmin` write routes, six settings incl. an operator word list, a rescan hook — see the Status roll-up note "Surface added after §J closed"; Part 5's review of it lives in design §16.12). 2026-09-20 (share credit unit; one shared `MinerManager` — §J6 addendum) — `scripts/07_grin_mining_*.sh`, `scripts/lib/07_lib_*.sh`, `web/07_mining_pool_public/`
 
 Security model, verified upload/XSS fixes, and the hardening requirements for
 `web/07_mining_pool_public/`. Design: [`script07_design.md`](script07_design.md);
@@ -42,13 +42,519 @@ applies: none of this has ever been VPS-tested.
 | J8 | Secrets & key management | 2026-09-01 | 7 (1 High, 3 Med, 1 Low, 2 Info) · **3 fixed, 3 open**; J8-1 shell half done in J16 | ☑ done |
 | J9 | Settings & config integrity | 2026-09-02 | 9 (1 High, 3 Med, 4 Low, 1 Info) · **6 fixed** (J9-1 by deletion), 3 open | ☑ done |
 | J10 | Uploads, assets, CMS & ads | 2026-09-02 | 6 (4 Med, 1 Low, 1 Info) · **3 fixed, 2 open** (J10-2, J10-3; J10-3 partly taken by J14-9) | ☑ done |
-| J11 | Public API leakage & privacy | 2026-09-02 | 9 (1 High, 4 Med, 1 Low, 3 Info) · **all fixed**; J11-6 nginx half taken by J16 | ☑ done |
+| J11 | Public API leakage & privacy | 2026-09-02 | 9 (1 High, 4 Med, 1 Low, 3 Info) · **all fixed**; J11-6 nginx half taken by J16; **J11-2 pool-wide half reversed 2026-09-25 by operator decision** (public Tx ID column) | ☑ done |
 | J12 | Rate limiting & exhaustion | 2026-09-02 | 12 + 2 Info · **all 14 closed** | ☑ done |
 | J13 | Outbound, SSRF & deps | 2026-09-03 | 10 (1 High ruling, 4 Med, 3 Low, 2 Info) · **4 fixed, 6 open/partial**; J13-2 is a standing ruling, not a bug | ☑ done |
 | J14 | Admin panel front-end | 2026-09-03 | 11 (2 Med observability, 1 Med CSP, 6 Low, 2 Info) · **9 fixed, 0 open** (7 in-session + J14-4/-9 in a same-day follow-up) | ☑ done |
 | J15 | Public front-end | 2026-09-03 | 12 (3 Med, 7 Low, 2 Info) · **10 fixed**; J15-3's static-HTML half + J15-10's third-party link left as product decisions | ☑ done |
 | J16 | Deployment & infra | 2026-09-03 | 14 (1 High, 3 Med, 7 Low, 3 Info) · **9 fixed, 2 open**; J16-2 (hostile gateway holds both ownership-proof legs) and J16-4 (three disconnected admin allowlists) are dispositions for the operator. §J8-1 items 1+3 applied, **item 2 refused with reason (J16-12)** | ☑ done |
 | J17 | Pre-mainnet operational gate | 2026-09-04 | 8 (2 High, 3 Med, 1 Low, 2 Info) · **7 fixed, 1 open** (J17-5, procedure). **VERDICT: NO-GO on desk audit**, then a resolution pass closed 10 findings across §J1/§J4/§J7/§J8/§J9/§J13/§J17 — including all three single-box High blockers. No code blocker remains; what is left is the runbook on a real box | ☑ done |
+
+**Surface added after §J closed — donor names + donor league (design §16, built 2026-09-21).**
+Four build parts added, in one day: a public **free-text field** on the wall and the account API
+(a donor's opt-in name — the label of a `<label>-donateN` login, charset `[a-z0-9_-]{1,32}`),
+six `donor_*` columns, two admin **write** routes (`POST /api/admin/donors/:addr/censor|uncensor`,
+`freshAdmin`, audited), an admin read route + summary, six `incentives` settings incl. an
+operator-editable word list, and a rescan hook on the settings save. **None of it has had a
+§J-style session.** Its only review so far is the design's own Part 5 pass, recorded in
+**`script07_design.md` §16.12** (2026-09-21): stranger-write trace, public leakage field list,
+censor state table, ranking recompute, type traps, `EXPLAIN QUERY PLAN` on every new query,
+panel + public-page rules — two findings (a per-name list re-parse that cost ~1 s of the shared
+synchronous connection per list save at the validator's ceiling; a separators-only name shown as
+`-`), both fixed. That pass is a review against the design's own security notes, not an
+adversarial audit: the next §J-style session should take §16 as its scope. Not VPS-tested.
+
+**Donations v2 replaced that surface (design §18, Parts 1–3 built 2026-09-24).** Donor names
+are **pre-moderated** now. The §16 note above is history for the donor-name half: the censor
+routes, the rescan hook, the censored marker and the `donor_censored_display` setting are
+deleted, and the six v1 columns are unread. The new surface:
+- donor-profile uploads: PNG/JPEG/GIF sniffed from bytes, header-parsed dims, 300 KB multer cap;
+- three ownership-gated miner routes;
+- nine admin routes: four `secureAdmin` reads, including an image route that serves pending
+  bytes with the stored mime + `nosniff` + `default-src 'none'; sandbox` + `no-store`, and five
+  `freshAdmin` writes audited in-transaction.
+
+**No header change.** The admin CSP stays `img-src 'self' data:`, and `test-admin-panel.js` pins
+the absence of `blob:`. The review queue shows banners from a plain same-origin `<img src>` on the
+admin image route. The `SameSite=strict` session cookie carries auth there, so the route's
+headers (stored mime, `nosniff`, `default-src 'none'; sandbox`) govern every way the image is
+viewed, including opening it in a new tab. A first cut used `adminFetch` → blob → object URL
+with `blob:` added to the CSP. It was reverted the same day, because an object URL copy loses
+those headers (design §18.11 Part 3 #1).
+
+**None of §18 has had a §J-style session.** Its security notes are design §18.9, and the Part 6
+review answers them in §18.11. `test-public-leakage.js` §9 pins an inventory of every route that
+touches `donor_requests`. Not VPS-tested.
+
+**§18 Part 6 review (2026-09-24, a cold session separate from the builders).** Design §18.11
+*Part 6* holds the evidence.
+- **Fixed — R6-1.** `requireBothProofs` refused a proof that verified as the *other* kind with the
+  verifier's success code, so responses and `auditOwnerProof` rows read
+  `ok:false, reason:'match'`. It is `wrong_kind` now, on the Goblin route too, with the refusal
+  text unchanged. Tested first.
+- **CLOSED 2026-09-24, accepted (operator: won't fix) — R6-2.** Not a vulnerability: banners are
+  pre-moderated, the wall drops a removed one at once, and the file name is unguessable. It is a
+  takedown-latency cost, kept knowingly. The original finding: `/uploads/` is served `public, max-age=604800,
+  immutable`, so a removed or replaced donor banner stays retrievable from browser caches for up
+  to 7 days. On a `cloudflare_proxy` pool it also stays retrievable from the CDN edge. The fix
+  is a nginx change (a short-cache `/uploads/donors/` block, or a purge on remove) and needs a
+  **Setup nginx** re-run.
+- **Accepted — R6-3.** GIF per-frame size and frame count are not parsed. The canvas is
+  bounded, and every banner is pre-moderated.
+- **Notes — R6-4, R6-5.** The admin miner view still ships the dead v1 columns. A donor's public
+  account read now runs a full donor-ledger scan, like the wall does.
+- **Answered with evidence, found holding:** the money invariants (a stub-DB distribution with
+  reconciliation drift 0), the parser (60,043 fuzz inputs, 0 throws, nothing out of bounds), and
+  the public field inventory.
+
+**Ownership-proof storage replaced after §J3 closed — the 2-slot window is gone (2026-09-22).**
+§E, §F and §J3 reason about a proof store of two slots per kind (`last_*`/`prev_*`) plus a
+write-once anchor. On 2026-09-22 that store was replaced by a **set of up to 10 per kind with a
+per-address salt** (table `miner_proofs`) — see **`script07_design.md` §17** and impl §10.4. Those
+findings are left as written: they record what was true when they ran. Still true: the write-once
+**anchor** (J3-4, now an `is_anchor` row flagged `evicted_at`, never deleted), the **AND + AGE**
+destination gate (J3-1 — `requireBothProofs` is unchanged, and a refresh never moves
+`first_seen_at`, so reconnect churn can no longer reset a leg's age), and the **(address,
+origin)-keyed lockout** (J3-3). Superseded: J3-4's two-slot eviction arithmetic ("two accepted
+shares evict both slots"), and §F2's per-verify KDF count — now 1 scrypt on a v2-only set (2 for a
+non-canonical, password-shaped IP), rising to a transitional ceiling of 8 on a migrated account
+while its v1 rows survive (design §17.7 #5; the window's was 6). **Design §17 Part 4 — the
+independent review — ran 2026-09-23** and fixed three defects, one of which reaches back into
+§J3: the resolution pass's "`backfillProofAnchors` MUST run ahead of the stratum listener" was
+never true in the code — it ran after `stratumServer.start()`, behind `await nostrBridge.start()`,
+and `migrateProofSet` inherited the spot. It now runs first (design §17.7 #1). The other two: a
+racing duplicate capture evicted a second proof (#2), and a returning evicted anchor kept its old
+age and so passed as an aged destination leg (#3). Not VPS-tested.
+
+**Payout rails changed after §J closed: the Tor probe and the Slatepack call (2026-09-23).**
+An operator test found both miner rails broken, and neither break was in any §J finding.
+(1) **Every Slatepack and Goblin payout failed.** `create_slatepack_message` was called with its
+positional params in the wrong order, so the wallet refused it. It is now called with named
+params. The failure path reversed the lock, so no funds were stranded.
+(2) **The Tor probe read a timeout as a confident "offline"**, and the withdraw pre-flight gate
+refuses on `false`. So a live wallet's Tor payout could be refused by a pool whose own tor was
+merely slow. §J4-7 only covers the `null` case, so no finding here caught it. The probe is now
+ported from 06d. It POSTs a real `check_version` over a fresh circuit per attempt, with an 8 s
+timeout (was 3 s), and a timeout with no reply from the local proxy is `null`, not `false`. The
+tor-check route gained `?fresh=1`, and the account page no longer probes on load.
+Findings **§H3, §J3-9, §J4-7, §J12-12 and the §J13 outbound table** state the old timings, reason
+codes or probe trigger. They carry a *Superseded* note in place and are otherwise left as written.
+Full as-built → impl §10.5. **Not audited here:** whether `?fresh=1` (a 10 s floor, under the
+unchanged `torcheck` 10/min bucket) sharpens the wallet-uptime signal §J3-9 accepted, and whether
+the ~32 s worst-case probe, against the `/api/` vhost's 30 s `proxy_read_timeout`, can leave a
+payout the miner saw fail at nginx. Both are open for the fix's own review. `socks` stays in
+`package.json` with nothing requiring it (§J13-8's version list). Not VPS-tested.
+
+**Tor rail marked a failed send "paid" (found and fixed 2026-09-25, not in any §J finding).**
+The pool pays out over Tor by running `grin-wallet send -d <addr> -a <amt>`, and it treated
+exit 0 as sent. Upstream's `send` (`controller/src/command.rs`, the same in v5.4.1 and v5.5.0)
+also exits 0 when Tor delivery fails. In that case it locks the outputs, writes
+`slatepack/<slate-uuid>.S1.slatepack` and prints the slatepack. Nothing is finalized, so nothing
+posts, yet the row went to `confirmed` with the miner debited. The "paid but not mined" watchdog
+could not recover it, because `repost` refuses a tx that was never finalized. The pre-flight probe
+made this rare but not impossible: it fails open on `null`, and a wallet can drop between the
+probe and the send.
+**Fix:** `lib/wallet-tor.js` `classifySendOutput` now counts only the anchored
+`Tx sent successfully` line as sent. It tests that line first, so a posted tx is never cancelled.
+A fallback returns `success:false` and the slate id parsed from the `.S1.slatepack` path. The
+scheduler's `_releaseTorFallback` cancels exactly that slate before `scheduleRetry`. Cancelling is
+safe because only the sender finalizes. Without the cancel, the retry's double-send guard reads
+the locked `TxSent` as `unconfirmed` and defers the payout indefinitely. That is pinned as a
+CONTROL case. With no parsable id, or a failed cancel, nothing is guessed: the row parks and the
+guard defers. Unrecognised exit-0 output is a failure and is never cancelled.
+Tests: `test-payout-rails.js` (+12) and `test-payout-guard.js` (+11). Both were run against a
+copy with the fix reverted, and 5 of the new cases failed there. `npm test` exit 0. Not VPS-tested.
+
+**Payout path changed after §J closed — Tor payout hardening F1–F5 (built 2026-09-25, NOT
+AUDITED here, NOT VPS-tested).** A read-only review of the Tor rail on 2026-09-24 found five gaps.
+The operator approved all five, and they were built the next day. The full as-built account is
+impl §10.8, and the F5 design is design §8.1. This note records only what changed on the money
+path, so that the §J findings below are read with it:
+- **F1 — the kernel means mined.** `backfillKernelProofs` now stores a kernel only from a
+  `confirmed` tx-log entry. It used to take any entry, and the tx log writes `kernel_excess` at
+  `tx_lock_outputs`, as the sender's partial excess, and again at finalize. So a public "paid ·
+  mined" badge and kernel link could name a tx that never mined. The §J4 and §J11 findings that
+  speak of the kernel as proof assumed it was already confirmed-only. Rows written before the fix
+  were not re-checked, and on this pool that is testnet only.
+- **F2 — the opposite direction of `auditWalletSends`.** A paid row not seen mined after 1 h
+  raises one rolling `payout_unmined` alert. It is critical when the wallet cancelled the tx or
+  has no record of it. The row gets an hourly `grin-wallet repost -i <id> -f` of the identical
+  stored tx: at most 3 rows a tick and 24 per row, never while frozen, and never a new tx, a
+  cancel, a refund or a status change. The admin withdrawal list gains `chain_state`, which is on
+  no public route. The alert is **not pushed off-box** (§J8-3 still open). Finding: Owner v3
+  `get_stored_tx → post_tx` would post a **zero kernel**, because the V4 slate comes back with
+  `sigs: []`. That is why the repost goes through the CLI.
+- **F3 — a shortfall uses no rung.** `pool_wallet_short` retries in 1 h, uncounted, and after 24
+  it takes the ladder. It is checked before the ladder-exhausted test. The double-send guard still
+  runs on every re-attempt, and a test pins that. The admin retry route resets `retry_count` but
+  not the shortfall count, by design.
+- **F4 — §J9-8's `auto_payout` + `payout_frequency` are DELETED** (see the update under §J9-8).
+- **F5 — step-by-step Tor send**, behind `payout.tor_send_mode` (default `cli`, step-up gated
+  like the rest of `payout`). New money-path surface:
+  - Owner v3 init/lock/finalize/post/cancel with **named** params, shared with the Slatepack and
+    Goblin rails.
+  - An in-process `withSendLock` around init → lock on all three Owner-API rails.
+  - Two `withdrawals` columns. `tor_final_slate` is a complete signed tx, stripped from both admin
+    row routes and asserted absent from every public route.
+  - A `receive_tx` POST to the miner's onion through the system tor, 1 MiB reply cap, absolute
+    deadlines.
+  - A second uncounted reason, `pool_tor_unavailable` (15 min, cap 24).
+  - A stale-sweep branch that re-posts a committed tx at most every 5 min and parks a
+    contradiction behind a critical `payout_tor_stepwise` alert.
+  - The rule the design proves: nothing is cancelled from `posting` on, and nothing moves to
+    `tor_checking` / `retry_scheduled` with a live slate. So the admin cancel route can never
+    refund one.
+  - Invariant the design adds: the pool wallet's Foreign `finalize_tx` posts on its own, so that
+    listener must **stay localhost-only**. Never publish it over an onion or nginx.
+
+**Still owed:** the plan's independent review (it re-reads `_stepwiseCancelThen`,
+`_reclaimStaleStepwise`, `_stepwiseReattemptGuard` and the changed stale-age subquery) and VPS
+acceptance, testnet first. The next §J-style session on the payout path should take impl §10.8 as
+its scope. Two gaps found and left open, both in impl §10.8 *Still open*: the watchdog has no
+class for a pre-fix exit-0 row (it reads `unmined` and its repost fails hourly), and
+`max_pending_withdrawals` / `max_user_pending` still have no validator.
+*(2026-09-26: F3 and F5 are gone, and so are the review items for them above — see the next
+note.)*
+
+**Payout path changed again — Tor payouts: one attempt, then an answer (built and reviewed
+2026-09-26, NOT a §J session, NOT VPS-tested).** It came from mainnet payout #10. As-built → impl
+§10.10; design → §8 "One Tor attempt, then an answer". This note records what changed on the
+money path, so that the §J findings are read with it:
+- **Payout #10's cause.** `lib/wallet-tor.js` spawned a bare `grin-wallet`. The binary lives only
+  in the wallet dir and the unit sets no `PATH`, so every Tor send and every F2 repost was
+  `spawn ENOENT`. Nothing was locked or sent. It is spawned from `<wallet_dir>/grin-wallet` now.
+- **No automatic re-send exists anywhere.** A Tor payout is sent once. A row with any earlier
+  attempt on record (an event, `retry_count` or `slate_id`) is Held and never sent again. The
+  ladder, the shortfall and tor-down retries, `scheduleRetry`, `markFailed`, `processRetryQueue`,
+  `_deferSend` and the admin retry route (now a 410) are deleted. So is the whole stepwise sender
+  (§10.8 F5). This retires the retry half of §J4's re-attempt findings: the matcher no longer
+  gates a re-send, it gates a refund or a confirm.
+- **Every refund needs proof.** A refund happens on one of these:
+  - outcome B: the send's own fallback slate was cancelled;
+  - outcome C: `NotEnoughFunds`, and one tx-log read shows no match;
+  - Held: absent on two reads ≥ 600 s apart;
+  - the startup migration of legacy `retry_scheduled` rows: one read, before any send starts;
+  - the operator's forced refund: `freshAdmin`, the id typed back as `confirm_id`, an audit row,
+    and a refusal on a confirmed or ambiguous match.
+
+  Unknown → `tor_held`, with the amount locked. The admin cancel route now **refuses** `tor_held`
+  and `retry_scheduled`. Before, it refunded a parked Tor row with no wallet check.
+- **A double pay found and fixed in review (Session 4, R1).** The amount matcher had only a lower
+  time bound. A miner's mined tx could confirm another miner's same-amount Held row. The first
+  miner's row then read absent twice and was **refunded on top of a landed send**. This was
+  reproduced against the real scheduler before the fix. Fix: a tx counts only inside one of the
+  row's own attempt windows (claim → exit, ± 5 s). A tx two Tor rows could own is ambiguous and
+  decides nothing. Also fixed, and latent at v5.5.0: the tx-log `fee` is `FeeFields` as a raw
+  u64, so it is masked to 40 bits.
+- **New surface.**
+  - Public, on the account summary: `fail_code` (an enum) and `tor_pause` (counts and one
+    timestamp).
+  - Public, on the withdraw route: a 429 `tor_paused`, checked before the probe, so a paused
+    address builds no circuits.
+  - Admin-only: `fail_detail` (the CLI output tail, ≤ 500 chars). `test-public-leakage.js`
+    asserts it is on no public route and never named by the account page.
+  - Three admin routes: Re-check (`secureAdmin`), force-refund (`freshAdmin`) and pause clear
+    (`freshAdmin`). All three are audited.
+  - Two alert types, `payout_held` (critical) and `tor_send_path` (warning). Since the follow-up
+    fixes they show on the health page's Grin Wallet card. They are still not pushed off-box
+    (§J8-3).
+- **The cooldown changed.** The 30 min reversal cooldown (§E.2) no longer follows a Tor
+  `tor_failed` refund. That refund now needs proof, which is what the cooldown stood in for. Rapid
+  Tor retries are bounded by the pause instead: 5 counted `wallet_offline` failures in 24 h
+  pause Tor for that address for 24 h.
+- **Checked by the review and holding** (Session 4, R2–R9):
+  - the only send path is `tor_checking → sendWithdrawal`, and only create writes `tor_checking`;
+  - every live pending list has `tor_held`;
+  - the gate order is proof → precheck → pause → probe → create, so a stranger without the
+    owner's proof cannot trigger a pause;
+  - public routes use explicit columns;
+  - the unit's default `KillMode=control-group` kills an orphan CLI with the backend;
+  - two concurrent Slatepack POSTs create one row.
+
+**Session 4's open items, as of the operator-approved follow-up fixes (same day; impl §10.10
+*Follow-up fixes*):**
+- **(a) An ambiguous pair (crash mid-send + same net) has no operator exit.** The forced refund
+  refuses, and there is no forced confirm. The fix binds a match by the tx's
+  `payment_proof.receiver_address`, matched positively only. **Approved, but the build was
+  BLOCKED** by the session's permission classifier. It is reverted, still open.
+- **(b) FIXED.** `auditWalletSends` no longer counts `tor_failed` as recorded. A confirmed send
+  whose only match is a refunded Tor row now trips `unrecorded_wallet_send` and the freeze.
+- **(c) FIXED.** `_captureTorSlateId` uses the attempt windows and skips a tx another Tor row's
+  attempt also fits.
+- **(d) ACCEPTED.** The Re-check and forced-refund audit rows are written after the money move,
+  outside its transaction.
+- **(e) ACCEPTED.** An IP-proof co-tenant (§J3) can spend the owner's 5 counted failures, but only
+  while the owner's wallet really is offline.
+- **New, not fixed:** `auditWalletSends`'s `feeNano` subtracts the RAW `FeeFields` u64, R1d's
+  latent bug. It cannot bite at v5.5.0, which always writes shift 0.
+- Also fixed in the same pass: the two pending-cap validators, and a 90 s nginx read timeout for
+  the withdraw POST (its pre-flight probe could outlast `/api/`'s 30 s). `socks` was removed as
+  well (§J13-8's list).
+- **Pre-test review, same day — FIXED: the Tor send's argv could never have run.** The command
+  was `grin-wallet --top-level-dir <dir> send -d <addr> -a <amt>`. grin-wallet v5.5.0 uses
+  clap 2.34, which matches long flags exactly: the real flag is `top_level_dir`, and `-a` is the
+  top-level `account` flag, invalid after `send`, where the amount is positional. Both are exit-1
+  errors before anything is built. It was fail-safe (Held, then a refund on proof), but no Tor
+  payout could go out. `repost` shared the bad flag. The code is fixed, and a spec-driven argv
+  test was seen failing first. Impl §10.10 *Pre-test review fix*. That session also left four
+  PLAUSIBLE items open, listed under impl §10.10 *Still open*: a 120 s send timeout under
+  grin-wallet's 180 s worst case (fixed 2026-09-27, below), admin cancel on `tor_failed` (fixed
+  2026-09-27, below), ENOENT
+  treated as unknown, and no stdin `error` handler.
+
+**Independent /review of the payout path (2026-09-26), and its six fixes (2026-09-27; impl §10.10
+*Review fixes*; uncommitted, NOT VPS-tested).** A read-only review of every payout file, with each
+grin-wallet behaviour it relies on read in the v5.5.0 source and five findings reproduced by a
+scratch harness against the real scheduler. It is not a §J-style session. **Verdict:** no path sends
+a Tor payout twice or refunds or debits one twice. Every settle or refund is a status-guarded claim
+in one transaction, and the output markers the classifier keys on match the upstream `println!`s.
+It found six issues, and the operator had all six fixed. Each non-control check was seen failing
+first:
+- **High — a Held payout was refunded while payouts were FROZEN**, judged against whatever wallet
+  answers the Owner API. A seed recovery, an older wallet backup or a switched wallet reads
+  "absent" for a send that landed, so this was a double pay after exactly the events that freeze.
+  **Fixed:** no refund while frozen, streaks count only after the last resume, and a history mark
+  must still be in the log.
+- **High — the Tor CLI ran outside `withSendLock`**, so a Slatepack or Goblin create selected the
+  same coins (smallest first, and `lock_output` checks nothing). Two txs spent the same inputs, and
+  the losing payout stuck. **Fixed:** the CLI holds the lock for its whole run, and a create during
+  it is refused with nothing deducted.
+- **Medium — grin-wallet's stdout was dropped on failure.** The CLI prints its errors there, so
+  NotEnoughFunds could never reach outcome C and `fail_detail` was always empty. **Fixed.**
+- **Medium — the forced refund accepted any unconfirmed match**, including a `Standard2` send that
+  may have been posted. **Fixed:** only a `Standard1` bare lock is refunded, and its own fallback
+  slate is cancelled first. A failed fallback cancel is now retried, and a Held round-tripped send
+  is re-broadcast hourly (one attempt only).
+- **Medium — the unrecorded-send audit compared GROSS to NET at ±0.05 GRIN**: a false critical
+  alert plus auto-freeze once `withdrawal_fee` > 0.05. **Fixed:** it compares the NET within 1 µGRIN;
+  manual rows keep ±0.05.
+- **Medium — a 120 s send timeout under grin-wallet's six 60 s waits.** **Fixed:** 360 s.
+
+Still open from that review (Low, impl §10.10 *Still open*):
+- admin cancel of a legacy `tor_checking` row with an earlier attempt, reachable only while frozen;
+- ~~admin cancel on `tor_failed` hiding a double pay from the audit~~ — **FIXED 2026-09-27**
+  (operator request; uncommitted, not VPS-tested): the route answers 409 and the page no longer
+  offers it. Test RT6 in `test-payout-guard.js`. Impl §10.10 *Admin cancel on `tor_failed`*;
+  **not audited here**;
+- `recordTorFee` with no attempt window;
+- `isNaN` amount parsing;
+- the stdin `error` handler;
+- a restore to a point before a send, which no pool record can see.
+
+The next §J-style session on the payout path should take impl §10.10 as its scope.
+
+**Slatepack expiry refunded without asking the wallet (found and fixed 2026-09-27, operator
+question; NOT VPS-tested).** A miner's `grin-wallet receive` replies over Tor to the address
+inside our S1, calling the pool wallet's Foreign `finalize_tx`, which finalizes **and posts**
+(grin-wallet v5.5.0 `foreign_rpc.rs`, `post_automatically = true`) without the backend knowing. The
+row stayed `slatepack_pending`, and `processSlatepackExpiry` refunded it at TTL: paid on chain
+AND refunded. The expiry `cancel_tx` succeeds on an unconfirmed `TxSent` even after it was posted,
+so `slate_refunded_but_mined` never fired. **Not reachable as shipped:** the pool runs `owner_api`,
+which publishes no onion (only `listen` does). It would open with one `grin-wallet listen` on the
+pool wallet dir, a torrc onion aimed at its owner port, or a hand `grin-wallet finalize`.
+- **Fix:** expiry reads the tx log first.
+  - `Standard1` → refund.
+  - Confirmed → settle as paid.
+  - Any later state → hold, with a critical `slate_finalized_elsewhere` alert.
+  - Unreadable log → wait.
+  - Frozen and absent → wait.
+  - State not recorded → refund with a `slate_expiry_unverified` warning (operator's option (a)).
+- **Also built:** a grin-wallet version check on the Health card, a *Pool wallet safety* note on
+  Payout settings, and a toolkit warning for a Tor path into the pool wallet.
+- **Tests:** `test-payout-guard.js` +33 (G1–G12, W1–W6); 16 of the G checks fail against the
+  pre-gate scheduler.
+
+Same day, also built: the `slate_refunded_but_mined` "paid twice?" alarm now shows on the Health
+card, where before no admin page showed it. It stays there until an admin closes it with **Mark
+reconciled** (step-up, a required note, `alert_resolve` audit row). Only that one type can be
+closed by hand. The account page tells CLI miners to run `grin-wallet receive -m`, which removes
+the Tor reply path entirely. Tests +14 (D1–D9).
+
+Full record: implementation §10.11. **Still open:** a held row that never mines stays locked until
+an operator acts, because there is no forced refund for slatepack rows.
+
+**Slatepack finalize binding: a refunded payout could be paid again (found and fixed 2026-09-27,
+impl §10.10 *Slatepack finalize binding*; uncommitted, NOT VPS-tested).** Found by a short look
+from a cheating miner's side after the /review above, which had asked only about failures. Both
+finalize paths compared the reply's slate id with the row's only `if (w.slate_id && …)`, so the
+check was skipped in two cases:
+- **A new row, mid-create.** A row sits in `slatepack_pending` with no `slate_id` while its create
+  is inside three wallet calls. The finalize route takes the withdrawal id from the URL, and the
+  Goblin bridge routes a DM to the sender npub's oldest pending row, so a reply can reach the row
+  in that window.
+- **A reply with no id.** A reply the wallet decodes to no id skipped the compare as well.
+
+Either way the reply went to `finalize_tx`, whichever slate it belonged to. In grin-wallet v5.5.0,
+read in source, `cancel_tx` keeps a slate's private context, and finalize refuses only a cancelled
+entry (`update_stored_tx` matches `TxSent`). Any slate still locked in the pool wallet can therefore
+be finalized.
+
+**The attack.** Expiry refunds first and cancels second (see the 2026-09-25 note below), and
+grin-wallet cannot cancel without a node. A miner keeps the reply to their 1000 GRIN Slatepack and
+lets it expire while the node is down: the refund lands, and the cancel stays owed. After the
+30-minute reversal cooldown, once the node is back and before the retry sweep cancels, the miner
+requests 25 GRIN and puts the old reply into the new row's window. The pool posts the old slate:
+1000 GRIN leaves the wallet, and the ledger records 25. Only `slate_refunded_but_mined` notices, and
+only afterwards. **Likelihood low** (a node outage past the cooldown, then a won race); **impact
+high** (theft from the hot wallet, i.e. other miners' balances). The committed code has it too.
+
+**Fixed:** both paths fail closed. A row with no `slate_id` refuses any reply before the claim, so
+the create still attaches as normal, and a reply with no id is refused like a mismatch. An honest
+miner cannot hit either: both creates attach the id before they return or publish the S1.
+`test-payout-guard.js` `[binding]` drives the attack through the real create window on both rails.
+All 8 B checks failed on the old code, where the new row confirmed as paid while the old slate was
+posted; the controls passed on both versions. **The Tor rail is not exposed:** it refunds only once
+the wallet shows the send cancelled or never locked. This note corrects two earlier "verified"
+statements that the bind held, §E.3 item 5 and §J4's *Verified correct*; both are annotated in
+place.
+
+**Slatepack rail: a lost tab, and the expiry sweep's wallet cancel (found and fixed 2026-09-25,
+not in any §J finding; NOT VPS-tested).** Three issues, one surface:
+- **A closed tab stranded the payout.** The S1 existed only in the create response. After a
+  reload, the page had lost the withdrawal id, so Finalize refused even a valid response the wallet
+  already held. The miner could only wait out the TTL (30 min) and then the reversal cooldown
+  (30 min). **Fix:** the manual rail stores its S1 in `withdrawals.slatepack_s1`. That S1 is
+  **encrypted to the payout address**; the Goblin rail's plain-armor S1 is never stored, and a
+  test pins it. One new route, `POST /api/account/:addr/withdraw/:id/slatepack`, returns the
+  **same** stored S1, never a new slate. It runs on the `withdraw` bucket, checks the ownership
+  proof before the read, and its SQL is narrowed to (this address, `method='slatepack'`,
+  `slatepack_pending`). The response is `no-store`. Any other case is one 404, so the page cannot
+  tell "not yours" from "gone". Audited as `owner_proof:slatepack_reshow`; the admin payments audit
+  view's prefix widened to `slatepack\_%` to include it. Both admin row routes strip the column,
+  and `test-public-leakage.js` asserts that only the re-fetch route reads it. `_creditConfirm`
+  and `_reverseLock` null the column in their claim. The page rebuilds the pane from the
+  summary's pending payout, manual rail only.
+- **Expiry cancelled before it claimed.** `processSlatepackExpiry` selected a batch, then per row
+  awaited `cancel_tx` **before** the guarded refund. A finalize that claimed row N while rows
+  before it were being cancelled broadcast its tx, and the sweep then cancelled that posted tx.
+  The ledger stayed right (the refund's CAS lost), but the pool wallet unlocked inputs already
+  spent in the mempool. **Fix:** refund first (the claim), and cancel only a row this sweep won.
+- **A failed expiry cancel was forgotten.** `cancel_tx` needs a reachable node. A failure was
+  logged, the refund went ahead, and the slate's inputs and change stayed locked until a human
+  cancelled them. **Fix:** the refund transaction sets `slate_cancel_pending`, and the new
+  `retryExpiredSlateCancels` decides each flagged row from the wallet's local tx log:
+  - absent or cancelled → clear the flag; there is no second `cancel_tx`;
+  - confirmed → never cancel, and raise a critical `slate_refunded_but_mined` alert (a double-pay
+    detector for an invariant that should not break);
+  - otherwise → `cancel_tx`.
+  Each tick stops at the first failure. After 5 failing ticks it raises a rolling
+  `slate_cancel_owed` warning, resolved once the flagged set is empty. The sweep runs while frozen.
+- **Found on the way:** both Owner-API create paths attached `slate_id` without a status guard. A
+  wallet slower than the TTL let expiry refund the row first, and then the slate was attached to a
+  refunded row, and on the Goblin rail it was also published. Both writes are now guarded on
+  `slatepack_pending`, and a lost guard cancels the slate.
+Tests: `test-payout-guard.js` +23 (SP1–SP10); 6 of them fail against the reverted scheduler.
+`test-public-leakage.js` +8. Every `scripts/test-*.js` passes. **Still open:** a crash between the
+create transaction and the `slate_id` write still leaves a locked slate that no sweep can name;
+that was already true before this change.
+
+**Surface added after §J closed — hub move + connect-page latency (2026-09-23). REVIEWED
+2026-09-23 (Part 9): 6 CONFIRMED and fixed, 12 PLAUSIBLE reported, of which P1 was fixed too on
+2026-09-24 at the operator's request — see "Part 9 review" right after this note.** Seven build parts in one day (design §13.13, impl §8.7). The bullets below are
+the build's own description of its guards, kept as written; where the review changed a guard, the
+review block says so. Not VPS-tested.
+- **Migration money path (F4 — two live pools on one wallet seed must never happen).** Guards as
+  built: payouts frozen *before* the old hub stops; the wallet listener's watchdog and `@reboot`
+  paths removed before the listener stops; pool service and hub WireGuard stopped **and
+  disabled**; the final snapshot taken after the stop; Migrate IN restores still frozen, refuses
+  while the old hub answers (TCP dial of its stratum + a parsed `status: ok` from its pinned
+  `/api/health`; a timeout is *unknown* and needs a typed `OLD HUB IS DARK`), probes again just
+  before start, refuses to overwrite a newer ledger without `OVERWRITE LEDGER`, rejects an archive
+  whose manifest names a different archive, and compares 18 ledger figures + per-row sha256 digests
+  + the wallet identity before starting. Unfreezing is never automatic. **For the review:** a
+  Migrate OUT failure between stop and disable; the old box rebooting mid-move; a firewall that
+  drops rather than refuses (the dark probe proves "unreachable from here" only); a gateway still
+  attached to the old hub; the daily cron overwriting the same-day archive between OUT and IN (OUT
+  removes it; confirm nothing re-adds it); a digest that errors on the old box being `null` → `skip`.
+- **Certificates in the migration archive (D4).** Only Migrate OUT raises `PBK_INCLUDE_CERTS`;
+  the daily cron has its own list and never reads it. `live/` symlinks are stored as symlinks
+  (verify rejects a dereferenced `tar -h` archive); `privkey` stays 0600; `accounts/` travels.
+  The whole archive is AES-256-CBC under the personal key. The old box's certbot keeps (failing)
+  renewal attempts until it is wiped.
+- **Gateway re-resolve timer.** Root oneshot every 60 s with `CAP_NET_ADMIN` only,
+  `ProtectSystem=strict`, no `PrivateNetwork` (would make it a silent no-op). A hostile DNS answer
+  cannot impersonate the hub — WireGuard's key authentication still holds — so the risk is
+  availability (the tunnel does not come up), not interception. It never adds a peer whose key is
+  not already on the interface.
+- **New gateway surface.** `:443` — a separate HAProxy (`grin-gateway-probe`), one `GET /ping` →
+  204 route, 404 otherwise, no backend, no logs, 30 req / 10 s per IP, `maxconn 2000`, TLS ≥ 1.2;
+  its pem is `0600 root`. A missing/bad pem stops only the probe, never the stratum forwarder (the
+  reason it is a separate instance). `:80` is opened in the firewall for certbot standalone but
+  bound only during an issue/renewal. The certbot deploy hook acts on its own lineage only.
+- **New hub surface.** `/ping` in the main vhost (204, rate-limited by the `_static` zone via a
+  named location — a bare `return` would bypass `limit_req`), and an optional `latency_hub_url`
+  server block that serves `/ping` and 404s everything else.
+- **Widened public CSP.** The public page's `connect-src` gains `https://*.<probe_domain>`, where
+  `probe_domain` is the pool's own subdomain and never derived wider (an override may only name the
+  subdomain or a parent of it). The admin CSP is unchanged (`connect-src 'self'`). **For the
+  review:** whether operator- or miner-influenced content can use a `*.domain` host to exfiltrate
+  — compare §J15-6's reasoning for dropping jsdelivr.
+- **Suggest endpoint privacy** (`GET /api/pool/connect/suggest`). The IP is resolved to a country
+  for one computation and dropped — not stored, logged or echoed, nor is the country; the response
+  carries per-region milliseconds only; `Cache-Control: private, no-store`; public rate limiter.
+  Known and accepted by the build: the pool's public CORS `*` applies to this per-viewer route, so a
+  third-party page could read a visitor's estimates (it already has their IP). **For the review:**
+  any logger that captures the route, and timing side channels.
+Not VPS-tested.
+
+**Part 9 review of the note above (2026-09-23) — adversarial, money path first.** Method: code read
+of `07_lib_pool_migrate.sh`, `07_lib_pool_backup.sh`, `grin_backup_engine.sh`, the re-resolve and
+probe halves of `07_lib_gateway.sh`, the suggest route + request middlewares in `index.js`,
+`ensureLocalRegion`, the withdrawal-scheduler freeze paths (read only), and every other path that
+could start a pool or unfreeze payouts. Each CONFIRMED item got a failing scenario FIRST in a local
+Git-bash harness (the Part 4 harness extended: real OUT → wipe → real IN, real `node:sqlite`,
+fakes for systemd/tar/curl/probes), then the fix; results in impl §8.7 "Part 9 review fixes".
+
+| # | Verdict | Finding | Fix |
+|---|---|---|---|
+| C1 | CONFIRMED, fixed | A Migrate OUT straddling local **midnight** named the manifest's `archive_name` by the step-5 date and the archive by the step-6 date; Migrate IN rightly refuses a manifest naming another archive, so the move's OWN archive was unusable — discovered inside the downtime window. (Part 3 had asked Part 4 to tolerate ±1 day; it became a hard refusal.) | OUT checks the built name against the manifest; on a mismatch it rewrites the manifest under the new date and rebuilds once (same file name — nothing orphaned). The ledger cannot move: everything is stopped. |
+| C2 | CONFIRMED, fixed | Migrate IN restored the old hub's seed + ledger onto a box whose pool unit **1) Install had enabled**. Any failure before step 7 (continuity ✗, node restart needed, …) followed by a reboot started that pool unattended — frozen, no wallet listener, but a pool process on the seed the design says must never run twice. The "every failure leaves this box's pool stopped" claim held only until a reboot. | IN step 3 disables the unit before extracting (refuses if it cannot); only step 7 enables it again. |
+| C3 | CONFIRMED, fixed | Archives carried the backend **code** at the top of the app dir (`index.js`, `package.json`, `package-lock.json`) while `lib/`, `admin-panel/`, `scripts/`, `node_modules/` were excluded. Any restore — an older daily after a deploy, or Migrate IN onto a box installed from a different checkout — put one version's `index.js` beside another's `lib/`, silently. | The three names are excluded when an archive is made (Backup now, Migrate OUT, the daily cron wrapper) **and** when one is extracted, so archives made before the fix cannot bring code back either. |
+| C4 | CONFIRMED, fixed | Plain `2) Restore` froze nothing when the extraction **failed** — a partial restore (wallet dir already the archive's, pool.db the old or half-written one) with the service stopped, one "Start" away from live payouts on a mixed state. Migrate IN froze in that case, but inline — the shared core that exists so the two "can never disagree on the freeze" disagreed. | `_pbk_restore_extract` freezes whatever pool.db is in place on rc 1 too and reports it in `PBK_EXTRACT_FROZEN`; `2) Restore` says frozen / NOT frozen and sweeps ownership; IN's inline copy removed. |
+| C5 | CONFIRMED, fixed | When the pool.db snapshot could not be staged (`mktemp`/snapshot failure), **Backup now** returned success with no pool.db in the archive, and the **daily cron** did the same (`\|\| true`). An archive that restores no balances looked like a backup. (Found by Part 3 for Backup now; the cron path is the same defect.) | `_pbk_make_tar` rc 2 = pool.db could not go in → fatal in lenient mode too, nothing encrypted; the cron wrapper logs `ERROR … no archive written` and exits 1. |
+| C6 | CONFIRMED, fixed | The dark gate counted a **firewall's** answer as the old box's: `No route to host` (firewalld's default reject) and "could not connect" on 443 were both "a definite no", so a live old hub whose ports are filtered FROM the new box read as **dark** and the restore went ahead. (§ above: "proves 'unreachable from here' only".) | Only a TCP RST counts as a stratum "no", and only an HTTP answer that is not the pool (Migrate OUT leaves nginx up, so a dark hub answers 502) counts as an API "no"; dark needs both. Anything else is *unknown* → the typed `OLD HUB IS DARK`. Side effect: an egress IP that is not the web ingress (P4) now lands on *unknown* too, unless nginx also answers there. |
+| P1 | PLAUSIBLE → **fixed 2026-09-24** (operator's call, test-first) | **Weekly VACUUM race.** The vacuum script restarts the pool from an EXIT trap when it was active at its start. If Migrate OUT runs while a Sunday 03:00 UTC vacuum is mid-way, the trap starts the pool again after OUT verified it stopped (disabled at boot, but running). Frozen and without a wallet listener (no coinbase → no jobs); IN's two dark probes catch it if it lands before IN step 7. | OUT step 4 now removes `/etc/cron.d/<service>-vacuum` FIRST (no new vacuum can begin), then refuses while the vacuum script runs (`pgrep -f`), before its own stop; the state screen shows the cron and the rollback names `c) Cron schedules → 2)`. A vacuum started by hand after the stop finds the pool inactive and never restarts it. |
+| P2 | PLAUSIBLE | **Stale-but-consistent archive.** After a rollback (old hub served again), an operator who copies the EARLIER migration archive to the new box passes every IN check — the archive matches its own manifest, the gate sees a dark hub. The wallet-total check catches payouts made since; shares/blocks credited since are lost silently until reconciliation. | Recommended: the rollback screen tells the operator to delete any archive already copied to the new box. |
+| P3 | PLAUSIBLE | OUT's in-flight list (the PROCEED screen) is read BEFORE the freeze; a send the scheduler starts in that gap is not shown. The manifest is written after the stop, so IN compares the right figures. | None needed beyond awareness. |
+| P4 | PLAUSIBLE | The dark gate probes the old hub's **egress** IP (ipify). A box whose miners' ingress IP differs, or two boxes behind one NAT egress (read as "rebuild in place" → gate skipped), is not probed where it serves. C6 narrows the first case. | Recommended: also probe the stratum host's current A record when it is not this box. |
+| P5 | PLAUSIBLE | Plain `2) Restore` on a live hub (and an IN re-run after a successful IN) leaves the wallet's */5 watchdog in place, which may relaunch the listener while tar rewrites the wallet's lmdb. | Recommended: remove watchdog + @reboot before extraction, as Migrate OUT does. |
+| P6 | PLAUSIBLE | A digest that errors is `null` → `skip` (symmetric — same file on both sides — so the table falls back to count/sum); the manifest stays on the old box after a rollback (later archives carry it; `archive_name` + sidecar + continuity reject them); the old box's certbot and nginx keep running until the wipe. | None. |
+| P7 | PLAUSIBLE | After the move the old `nyc` row stays active with the pool's own stratum host (now the NEW hub): the connect page can present it as a nearby gateway with `hub_rtt_ms` ≈ 0 and recommend it. Mining is unaffected (it reaches the hub). | Runbook step 9 (deactivate/re-point `nyc`) — already there. |
+| P8 | PLAUSIBLE | Re-resolve: a hostile DNS answer costs availability only (WireGuard key authentication holds), and because it re-resolves only a STALE handshake it can never pull a healthy tunnel away. The unit sandbox was read against what `wg show`/`wg set`, the resolver and `logger` need and holds — but has never run under a real systemd. | None; the VPS re-resolve drill (plan Part 10) proves it. |
+| P9 | PLAUSIBLE | Probe surface: `return`-only (no backend → no smuggling surface), no access log, 30/10 s per IP, pem `0600 root`, a separate instance so a bad pem cannot stop stratum. `:80` stays open in the firewall and answers RST between renewals. | Accepted. |
+| P10 | PLAUSIBLE | Suggest route: the app neither logs nor caches the IP or the country (no request logger exists; `geoip.lookupCountry` keeps no cache). The one IP line the app writes is the global rate limiter's `Rate limit exceeded: <ip>`, on every public route — pre-existing, not this route's. The lookup is constant-time, so no useful timing channel. | None. |
+| P11 | PLAUSIBLE | CSP `connect-src https://*.<probe_domain>`: an injected script could POST to any host under the pool's own domain (e.g. a taken-over dangling subdomain). It adds no capability such a script lacks — the same `connect-src` already allows Google Analytics / Plausible / Umami collectors, which accept arbitrary data under any site id, and nothing restricts top-level navigation. Unlike §J15-6 (a `script-src` source anyone could publish to), `connect-src` executes nothing. | No change. |
+| P12 | PLAUSIBLE | The connect page can rank a measured hub against an estimated gateway (or the reverse) — two instruments; the estimate's ±25 % can flip a near tie (Part 7's note). | None. |
+
+**Checked and holds:** nothing auto-unfreezes (the only `resume()` caller is the admin route);
+nothing re-adds the daily backup cron, the wallet watchdog or its `@reboot` line except an
+operator's menu choice; `grin-secret-sync` restarts only GrinScan and the tiny explorer, never the
+pool or its wallet; the VACUUM script restarts the pool only if it was running when it began (hence
+P1 was a race, not a standing restart path); the cert archive keeps `live/` symlinks and `privkey` 0600 (Part 3's WSL run);
+Migrate OUT's recorded effect order is byte-identical before and after the fixes.
+
+**Surface added after §J closed — the /play/ games platform (design §19, Parts 1–10 built
+2026-09-27/28). REVIEWED 2026-09-28 by design §19 Part 11, NOT VPS-tested.** A separate service
+(`grin-games`, user `grinplay`, own DB), reached by the pool through three secret-guarded internal routes
+on the pool's own listener (`back-end-pool/lib/games-link.js`), an admin proxy under `/api/admin/games/*`,
+a health probe and one branding flag; public `/play/` pages, a public chat and player moderators (D21).
+**None of it has had a §J-style session**; its review is the Part 11 pass, a session that built none of it,
+which answered all 20 of design §19.13's threat notes against the code — the full record, with evidence,
+is **design §19.15 *Part 11 review***. Findings:
+
+| # | Finding | Severity | Status |
+|---|---|---|---|
+| P11-1 | No pool-side cap on `/internal/games/verify-proof` or `/activity`: a compromised games process holds the secret and chooses `client_ip`, so it could drive unbounded scrypts and activity queries on the stratum process | Med | **fixed** — global caps in `games-link.js` (≤ 4 in flight + 120/min; 60 per 5 min), `test-games-link.js` [14] |
+| P11-2 | A free bot game (`bot_play_cost` 0) still wrote `results_daily`, feeding wins boards and `game_results` events whose rewards skip the daily points cap — worthless points, but the D10 "no mining, no reward" rule broken | Low | **fixed** — `matches.js` settle + the void guard, tests in `test-matches.js` / `test-pvp.js` |
+| P11-3 | /play/ never told players that a stranger mining to their address, or a CGNAT neighbour, can sign in as them (§19.13 #7) | Low | **fixed** — sign-in card copy |
+| P11-4 | The pool's `account-settings.html` takes the rig password (now also a games / moderator credential) but runs operator analytics, custom HTML and `code` ads (`CREDENTIAL_PAGES` is `['login']`) | Low | **open — operator decision** (recommended: opt the page out, as /play/ does) |
+| P11-5 | A stranger mining to a MODERATOR's address with their own password inherits moderator powers once the proof ages; the mod log cannot tell them apart | Low | **open — accept with D21 at acceptance**, or log `ip_coarse` per mod action |
+
+Everything else checked and holds, including: the secret is compared before any body, DB read or scrypt,
+and never reaches argv, env, a log or a response; `/internal/` is unreachable through nginx three ways;
+the games service never opens `pool.db` and writes no pool table beyond `admin_audit_log`; the frame
+sandbox is exactly `allow-scripts`; no chat body reaches an HTML sink. Suites after the fixes: games
+921/921, pool 2330/2330.
 
 **Reading the §J record — the retired "satellite" role.** §J and the pre-§J sections mention a
 **satellite** role. It does not exist: it was deleted from the code on 2026-06-22 (`f2ebade`),
@@ -501,7 +1007,9 @@ authorize an arbitrary-destination payout. Layered defenses (all implemented):
 5. **Response (S2) binding, defense in depth.** The bridge routes an incoming gift-wrapped S2
    to a pending row only when the seal-verified sender pubkey equals the registered `nostr_npub`;
    the scheduler then re-checks that equality AND binds `slate.id` to the issued slate before
-   finalizing. A forged/mismatched S2 is dropped without any on-chain action. Incoming events
+   finalizing. A forged/mismatched S2 is dropped without any on-chain action. *(2026-09-27: the
+   bind was skipped while the row had no `slate_id` yet or the reply had no id; fixed to fail
+   closed. See the roll-up note "Slatepack finalize binding".)* Incoming events
    are size-capped (wrap/rumor/slatepack) and deduped (`nostr_seen_events`) before any parsing.
 6. **Inherits every existing money guard.** `method='nostr'` rows park in `slatepack_pending`,
    so they are inside `PENDING_SQL` (one-pending-per-address across all rails), the freeze
@@ -900,6 +1408,13 @@ Secondarily an amplification lever — one cheap HTTP request became a Tor circu
 anything and its job is to tell them which rail to pick, so gating it removes the hint exactly
 when it is useful — and a proof would not stop amplification anyway, since a miner holding a valid
 proof can still hammer it. Three changes instead:
+
+> **Superseded 2026-09-23 (payout-rails fix, impl §10.5):** the probe no longer runs on page load.
+> It runs only when the miner presses *Check Tor wallet*, which sends `?fresh=1`. That re-probes
+> once the cached answer is 10 s old; younger answers come from the cache. Each probe is now a
+> `check_version` POST over a fresh circuit per attempt, with an 8 s timeout, so it takes up to
+> ~32 s. The three changes below are all still in place. The reasoning above ("runs before the
+> miner has typed anything") describes the page as it was.
 
 - **Account-existence check** → 404 for an address that never mined here. This is the one that
   matters; it closes the arbitrary-address oracle at no UX cost. Same 404 shape as
@@ -3624,7 +4139,12 @@ Re-read in full:
 microseconds and a miss takes a Tor circuit build, so an attacker on the `torcheck` bucket
 (10/min) can learn whether a given address was probed in the last 60 s — in practice, whether that
 miner just opened the payout page. It is a low-rate presence signal about an imminent withdrawal,
-not a wallet-uptime oracle, and removing it would mean removing the cache that §H3 added. **No
+not a wallet-uptime oracle, and removing it would mean removing the cache that §H3 added.
+*(Superseded 2026-09-23: the page no longer probes on load, so a cache hit now means the miner
+pressed Check, not that they opened the page. `?fresh=1` lets any caller force a re-probe once the
+cached answer is 10 s old, where the cache used to hold it for 60 s. The existence check, the
+bucket and the dedup are unchanged. Whether the shorter floor matters is open; see the Status
+roll-up.)* **No
 action recommended.**
 
 ---
@@ -3772,6 +4292,13 @@ operator would notice, and J3-6/7/8 are small but belong with the pass that appl
 ---
 
 ### §J3 — resolution pass, 2026-08-26 (same day, add-ons, NOT VPS-TESTED)
+
+> **Superseded storage, 2026-09-22.** The `last`/`prev` slots, the rotation and the "last-2 window
+> doing the job it was built for" below describe the store as it was on 2026-08-26. It is now a set
+> of up to 10 per kind with a per-address salt — **`script07_design.md` §17**. What this pass
+> established still holds: the anchor (J3-4), AND + AGE on a destination change (J3-1; `slot` is
+> now `set` | `anchor`, and `anchor` means an EVICTED anchor), and the pair-keyed lockout (J3-3).
+> The two-slot eviction arithmetic in J3-4 no longer applies. Text below left as written.
 
 The operator authorised fixing **all eight** open findings (J3-9 was Info / no action). Everything
 below is applied on `add-ons` and covered by a new suite,
@@ -4410,6 +4937,13 @@ nothing. The operator learns from the retry/refund cycles the gate exists to pre
 line naming the reason and stating that the send is being allowed. Behaviour is unchanged — still
 fail-open, still no block, still `grin-wallet` as the authority at send.
 
+> **Superseded 2026-09-23 (payout-rails fix, impl §10.5):** the probe no longer uses the `socks` lib,
+> so `socks_unavailable` is gone. The null reasons are now `tor_unavailable`, `derivation_failed`
+> and `probe_failed`. This finding assumed that a *slow* tor produced `null`, but it did not. The
+> old probe scored a proxy timeout (`'Proxy connection timed out'`) as a confident `false`, so the
+> gate **blocked** instead of failing open, and the new warning never fired for that case. A
+> timeout with no reply from the local proxy is now `null`. The fix above is unchanged.
+
 ---
 
 ### J4-8 — [Low] `nostr_seen_events` grows without bound, and a row is written before the wrap is decrypted — **OPEN**
@@ -4506,7 +5040,9 @@ money route whose record cannot be checked against the chain.
   ([nostr-payout.js:409–414](../../web/07_mining_pool_public/back-end-pool/lib/nostr-payout.js#L409));
   `finalizeNostrWithdrawal` then re-checks method, status, address and the registered npub before
   claiming ([:987–994](../../web/07_mining_pool_public/back-end-pool/lib/withdrawal-scheduler.js#L987)),
-  and binds `slate.id` to the issued slate. A late or replayed S2 is a no-op.
+  and binds `slate.id` to the issued slate. A late or replayed S2 is a no-op. *(2026-09-27: not
+  while the row had no `slate_id` yet. A late S2 routed to a NEW row mid-create was finalized, and
+  so was one with no id. Fixed to fail closed; see the roll-up note "Slatepack finalize binding".)*
 - **`_priorSendLanded`'s cross-miner false positive is genuinely closed.** The `claimed` set excludes
   any slate already recorded against a *different* withdrawal
   ([:444](../../web/07_mining_pool_public/back-end-pool/lib/withdrawal-scheduler.js#L444)), so two
@@ -5579,7 +6115,7 @@ and [shares.js:83–86](../../web/07_mining_pool_public/back-end-pool/lib/shares
 is the 2026-07-17 fix and it is correct. `session.workerName` is not: it comes from
 `validateUsername`'s `.worker_name` suffix
 ([stratum-protocol.js:61–92](../../web/07_mining_pool_public/back-end-pool/lib/stratum-protocol.js#L61)),
-i.e. **whatever the miner typed after the dot**, up to 25 characters of `[a-z0-9_-]`. Change the
+i.e. **whatever the miner typed after the dot**, up to 32 characters of `[a-z0-9_-]` (25 until 2026-09-21; the worker part is now case-folded before the charset check, the address is not). Change the
 label, change the hash, and the same `(pre_pow, nonce, pow)` inserts again.
 
 Measured end to end through the real handlers — one socket, one solved share, eight labels:
@@ -5993,7 +6529,7 @@ This is the sibling of §J3-2, which added exactly that filter to `getPasswordCo
 (!(s.acceptedShares > 0)) continue;`) for the same reason: a stratum session exists from *login*,
 and login is unauthenticated. `getWorkersForAccount` was not given the same treatment.
 
-Impact is bounded — the label is `[a-z0-9_-]{1,25}`, so nothing escapes into markup, and no money
+Impact is bounded — the label is `[a-z0-9_-]{1,32}` (`{1,25}` until 2026-09-21), so nothing escapes into markup, and no money
 moves. What it costs is the diagnostic: a miner reading their own workers list sees rigs they do not
 own, and the injected rows carry `accepted`/`rejected`/`stale` counters that skew the `reject_pct`
 the page exists to show. The same sessions also surface on the public `/api/stratum/stats`
@@ -6157,13 +6693,13 @@ Checked and found sound — recorded so a later pass does not re-derive them.
   three that remain are `ensureMinerExists` (J6-6), `createSession` (J6-4) and `updateMinerOnline`,
   all reported above; there are no others.
 - **Injection surface is clean at the source.** The address is charset- and length-anchored and the
-  worker label is `[a-z0-9_-]{1,25}` after truncation
+  worker label is `[a-z0-9_-]{1,32}` after truncation (`{1,25}` until 2026-09-21; the case-fold runs BEFORE the charset regex, so it adds nothing to the charset)
   ([stratum-protocol.js:59–86](../../web/07_mining_pool_public/back-end-pool/lib/stratum-protocol.js#L59)),
   so neither can carry markup, quotes, control characters or a newline into a log line, a DB column
   or a JSON body. Every statement in `shares.js` and `hashrate-tracker.js` is parameterised; the only
   template interpolations in the latter's SQL are the two frozen literal tuples at
   [hashrate-tracker.js:589–590](../../web/07_mining_pool_public/back-end-pool/lib/hashrate-tracker.js#L589).
-  The `donateN` and worker-label regexes are bounded (`{1,3}`, input ≤ 40 chars) — no ReDoS.
+  The `donateN` and worker-label regexes are bounded (`{1,3}`, input ≤ 48 chars — 40 until 2026-09-21) — no ReDoS.
 - **`getPoolHistory`'s cache is the right shape** — keyed on `hours|maxPoints` with a 64-entry
   ceiling and a TTL equal to the sampling interval
   ([hashrate-tracker.js:11–18](../../web/07_mining_pool_public/back-end-pool/lib/hashrate-tracker.js#L11)),
@@ -6191,7 +6727,7 @@ Checked and found sound — recorded so a later pass does not re-derive them.
   25,000-socket global ceiling is exhaustible with one byte per socket per nine minutes (J6-8).
   (3) Leaked sessions (J6-4) make two anonymous public GETs O(n) in the leak.
 - **§J14 / §J15 (front ends)** — the render half of the worker-name trace. The label is safe at the
-  source (charset-limited, 25 chars) and reaches the browser via `/api/account/:addr` workers and
+  source (charset-limited, 32 chars — 25 until 2026-09-21) and reaches the browser via `/api/account/:addr` workers and
   `/api/stratum/stats`; both surfaces can carry an attacker-chosen label for an address the attacker
   does not own (J6-9), so the question for J14/J15 is whether either page presents a worker row as
   something the account holder configured.
@@ -8495,6 +9031,20 @@ New in this pass, beyond J9-1 and the two already-open items:
   gated-membership idea as the whitelist keys, so they belonged to that decision, not to §J1-5's
   IP-allowlist one.
 
+> **Update 2026-09-25 (Tor payout hardening F4, impl §10.8 / D10). The table and bullets above
+> are left as this session found them.** `payout.auto_payout` and `payout.payout_frequency` are
+> **DELETED**. Their inputs, defaults and the `payout_frequency` validator went in one change.
+> Stored rows stay inert, and `test-admin-guards.js` `[7]` proves such a pool still loads and
+> saves. Recounted 2026-09-25 against the live `PoolSettings.defaults.payout`: the `payout` row
+> now reads **20 keys, 19 reached, 1 shadowed**. Sixteen are reached through `applyToConfig`,
+> including the new `tor_send_mode`. The four `dormancy_*` keys are read directly by
+> `lib/dormancy.js`. The key count is 20 again only by coincidence: keys added since this session
+> ran (`slatepack_ttl_minutes`, `tor_send_mode` and others) replaced the ones deleted.
+> **`withdrawal_retry_delays` stays OPEN**, with one correction to its bullet: it is **not**
+> editable in the panel. No admin page carries that id (grepped 2026-09-25), so it is reachable
+> only by a raw `PUT` of the payout section. The bullet's substance stands: it is validated by
+> nobody and applied by nobody.
+
 **No length cap anywhere.** This answers §J7-10's question. `updateSection` bounds *count* in three
 places (`extra_banned_passwords` 500, `nostr_relays` 6, `nostr_nip05_domains` 20) and *length* in
 two (`title_template`, `home_title`, 120 chars). Every other value — `custom_css`,
@@ -9278,7 +9828,22 @@ seventh the table missed — `/api/stratum/hashrate`'s `top_miners` — and the 
 did), the four account-page deep-links are gone, and the invariant is asserted per route by the
 test suite. Detail, and what it costs a miner, in the resolution pass below.
 
-### J11-2 — [High] Every confirmed payout is published with the miner's full address beside its on-chain kernel excess — a permanent, public address↔chain linkage table for a privacy coin, on a feed where nothing renders the field — **FULLY FIXED 2026-09-02 (pool-wide feed dropped it; the per-address feed is now ownership-gated — see the §J11 resolution pass)**
+### J11-2 — [High] Every confirmed payout is published with the miner's full address beside its on-chain kernel excess — a permanent, public address↔chain linkage table for a privacy coin, on a feed where nothing renders the field — **FIXED 2026-09-02; pool-wide half REVERSED 2026-09-25 by operator decision (see the note below) — the per-address feed stays ownership-gated**
+
+> **2026-09-25 — pool-wide half reversed (operator decision, add-ons, NOT VPS-tested).** The operator
+> asked for a public **Tx ID** column on `payment-history.html` P-05, linking each payout's kernel to the
+> chain explorer as public pool payment pages do (2miners' Tx ID column was the reference), and chose it
+> knowingly over an off-by-default setting after the cost below was put to them.
+> `GET /api/pool/payments` now emits `kernel_excess` again (last ≤500 confirmed payouts). What still
+> holds, and is asserted by `test-public-leakage.js` §J11-2 (both mutation-checked): the address beside
+> it is **masked**, and the value is emitted only when it matches `^[0-9a-f]{66}$` (else `null`; the
+> `has_kernel_proof` boolean keeps its old meaning). **Cost accepted:** a chain analyst can tag every
+> listed kernel as this pool's payout, with its amount and time; and because the 9+4 mask is a unique
+> key (§J11-1), any other feed that ever leaks a full address re-attaches the row — the mask on this
+> route is now the only thing between it and the full table this finding described. Once a mainnet
+> kernel is published it cannot be unpublished. **Unchanged:** `/api/account/:addr/withdrawals` (all-time,
+> full address) still sends only `has_kernel_proof`; the kernel comes from the ownership-gated POST.
+> The account page's P-08 Proof column now labels its link with the truncated Tx ID (was `proof ↗`).
 
 **Threat actor: chain analyst.** No attack on the pool is involved. This is the pool
 publishing the join key.
@@ -9779,7 +10344,7 @@ and what each choice costs.
 | Finding | Decision | Cost accepted |
 |---|---|---|
 | **J11-1** | Option **(b)** — mask every public list, break the deep-link | A miner pastes their address instead of clicking their leaderboard row |
-| **J11-2** | Ownership-gate the kernel | The Proof column needs one click and the page's existing proof box |
+| **J11-2** | Ownership-gate the kernel *(pool-wide half reversed 2026-09-25 — see the note under J11-2)* | The Proof column needs one click and the page's existing proof box |
 | **J11-3** | `noindex, follow` | The account page leaves search results (it was never a useful landing page) |
 | **J11-5** | Option **(a)** — floor the region counts | A thin gateway shows `<3 miners` instead of an exact number |
 
@@ -10530,6 +11095,12 @@ each ([wallet-tor.js:92-95](../../web/07_mining_pool_public/back-end-pool/lib/wa
 [:162-167](../../web/07_mining_pool_public/back-end-pool/lib/wallet-tor.js#L162)) — up to **6 s of
 tor descriptor lookup per request**, at the `withdraw` bucket's 20/min.
 
+> **Superseded 2026-09-23 (payout-rails fix, impl §10.5):** the timeout is now **8000 ms**, and an
+> attempt covers the SOCKS connect plus a `check_version` reply, each with its own timeout. The
+> worst case is therefore ≈ **32 s** per request, not 6 s. The ordering fix below still keeps a
+> request that is going to be refused from paying for a probe. The 32 s against the `/api/` 30 s
+> `proxy_read_timeout` is an open question; see the Status roll-up.
+
 The `tor-check` route's excellent cache is **deliberately not used here**, and the reason is sound
 and money-shaped:
 
@@ -10984,7 +11555,7 @@ question that decides whether a finding exists.
 |---|---|---|---|---|---|---|
 | 1 | Node JSON-RPC (`/v2/owner`, `/v2/foreign`) | `node-fetch@2` | `config.node_api_url` — **pool.json / `NODE_API_URL` only**, absent from `pool-settings.js` ([config.js:115](../../web/07_mining_pool_public/back-end-pool/lib/config.js#L115)) | follows, but `authorization` is stripped cross-host (J13-9) | 10 s, covers the body | none (loopback) |
 | 2 | Wallet Owner API v3 | `node-fetch@2` | **hardcoded** `http://127.0.0.1:<owner_port>/v3/owner` ([wallet.js:24](../../web/07_mining_pool_public/back-end-pool/lib/wallet.js#L24)) | n/a | 10 s | none (loopback) |
-| 3 | Tor pre-flight probe | SOCKS5 → `127.0.0.1:<tor_socks_port>` | onion **derived** from the miner's bech32 address; proxy is loopback | n/a | 3 s × 2 | n/a |
+| 3 | Tor pre-flight probe | SOCKS5 → `127.0.0.1:<tor_socks_port>` | onion **derived** from the miner's bech32 address; proxy is loopback | n/a | 3 s × 2 *(2026-09-23: 8 s per step, connect + `check_version` reply, × 2 attempts ≈ 32 s; now zero-dep `lib/socks5.js` + `http` over the tunnel, reply capped at 16 KB — impl §10.5)* | n/a |
 | 4 | `grin-wallet send` | `spawn`, argv array | address regex-gated before it reaches `-d` | n/a | 120 s hard kill | unbounded stdout/stderr (Info) |
 | 5 | Node stratum upstream | raw TCP | `node_stratum_host/port` — **pool.json only** | n/a | reconnect loop | n/a |
 | 6 | Poolstats push | `https.request` | `poolstats_endpoint` — **pool.json only**, absent from `pool-settings.js` | none (raw `https`) | 10 s **inactivity** | **was none** → J13-3 |

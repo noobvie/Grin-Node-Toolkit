@@ -209,6 +209,237 @@ try {
     V.branding.custom_theme('{"accent":"#ff0000","bg-card":"#111111"}')
       === '{"accent":"#ff0000","bg-card":"#111111"}');
 
+  console.log('\n[6] design §18.6 — donor review routes sit on the right guard tier');
+
+  // Read the route DECLARATIONS from index.js: the guard array is the first argument after
+  // the path, so a tier downgrade (freshAdmin → secureAdmin) is a one-word edit this catches.
+  const routeGuard = (method, route) => {
+    const re = new RegExp("app\\." + method + "\\('" + route.replace(/[.*+?^${}()|[\]\\\/]/g, '\\$&') + "',\\s*([A-Za-z]+),");
+    const m = src.match(re);
+    return m ? m[1] : null;
+  };
+  // One handler's source: from its declaration to its own closing `  });`.
+  const handler = (method, route) => {
+    const a = src.indexOf("app." + method + "('" + route + "'");
+    if (a < 0) return '';
+    const b = src.indexOf('\n  });', a);
+    return (b < 0 ? src.slice(a) : src.slice(a, b)).replace(/\/\/[^\n]*/g, '');
+  };
+  const READS = [
+    ['get', '/api/admin/donors'],
+    ['get', '/api/admin/donors/summary'],
+    ['get', '/api/admin/donors/requests'],
+    ['get', '/api/admin/donors/requests/:id/image'],
+  ];
+  const WRITES = [
+    ['post', '/api/admin/donors/requests/:id/approve'],
+    ['post', '/api/admin/donors/requests/:id/reject'],
+    ['post', '/api/admin/donors/:addr/remove'],
+    ['post', '/api/admin/donors/:addr/block'],
+    ['post', '/api/admin/donors/:addr/unblock'],
+  ];
+  for (const [m, r] of READS) ok(`${m.toUpperCase()} ${r} is secureAdmin (read)`, routeGuard(m, r) === 'secureAdmin');
+  for (const [m, r] of WRITES) {
+    ok(`${m.toUpperCase()} ${r} is freshAdmin (a decision = step-up tier, like ban)`, routeGuard(m, r) === 'freshAdmin');
+  }
+  // Control: the sweep must be able to see a tier at all.
+  ok('control — the same reader sees ban as freshAdmin and miners as secureAdmin',
+    routeGuard('post', '/api/admin/miners/:addr/ban') === 'freshAdmin' && routeGuard('get', '/api/admin/miners') === 'secureAdmin');
+
+  // Removed in §18 Part 3: v1's censor/uncensor. Express answers 404 for a path no route
+  // declares, so "the declaration is gone" IS "the route 404s" — and no other handler may be
+  // left calling the deleted lib functions.
+  ok('POST /api/admin/donors/:addr/censor no longer exists (→ 404)', !/app\.post\('\/api\/admin\/donors\/:addr\/censor'/.test(src));
+  ok('POST /api/admin/donors/:addr/uncensor no longer exists (→ 404)', !/app\.post\('\/api\/admin\/donors\/:addr\/uncensor'/.test(src));
+  ok('no :addr catch-all could answer the removed paths instead',
+    !/app\.post\('\/api\/admin\/donors\/:addr\/:[a-z]+'/.test(src) && !/app\.all\('\/api\/admin\/donors/.test(src));
+  ok('nothing in index.js calls the deleted v1 moderation functions',
+    !/donorAdminCensor|donorRescanAll|donorCountNewNames|donorDisplayState|adminCensor\(|rescanAll\(|countNewNames\(|captureDonorName\(/.test(src.replace(/\/\/[^\n]*/g, '')));
+
+  // Every write delegates state + audit to lib/donor-profiles.js (tested with the real schema,
+  // audit row inside the transaction, in test-donor-profiles.js) — no inline SQL write here.
+  const LIB_CALL = {
+    '/api/admin/donors/requests/:id/approve': /DonorProfiles\.approve\(db, req\.params\.id, \{ adminId: req\.user\.user_id, ip: req\.ip/,
+    '/api/admin/donors/requests/:id/reject':  /DonorProfiles\.reject\(db, req\.params\.id, \{ adminId: req\.user\.user_id, ip: req\.ip/,
+    '/api/admin/donors/:addr/remove':         /DonorProfiles\.removeLive\(db, addr, kind, \{ adminId: req\.user\.user_id, ip: req\.ip/,
+    '/api/admin/donors/:addr/block':          /DonorProfiles\.block\(db, addr, \{ adminId: req\.user\.user_id, ip: req\.ip/,
+    '/api/admin/donors/:addr/unblock':        /DonorProfiles\.unblock\(db, addr, \{ adminId: req\.user\.user_id, ip: req\.ip/,
+  };
+  for (const [, r] of WRITES) {
+    const h = handler('post', r);
+    ok(`${r} delegates to the lib with the admin id + ip (audited in-transaction there)`, LIB_CALL[r].test(h));
+    ok(`${r} carries no inline INSERT/UPDATE/DELETE`, !/\b(INSERT|UPDATE|DELETE)\b/.test(h));
+  }
+  ok('the three :addr routes validate the address with GRIN_ADDR_RE',
+    ['/api/admin/donors/:addr/remove', '/api/admin/donors/:addr/block', '/api/admin/donors/:addr/unblock']
+      .every((r) => /GRIN_ADDR_RE\.test\(addr\)/.test(handler('post', r))));
+  ok('remove takes a closed kind enum (DonorProfiles.KINDS) before touching the lib',
+    /DonorProfiles\.KINDS\.includes\(kind\)/.test(handler('post', '/api/admin/donors/:addr/remove')));
+  ok('a banner decision without an uploads dir is a clean 503, not a lib throw',
+    /!uploadsDir && donorRequestKind\(req\.params\.id\) === 'banner'[\s\S]{0,40}status\(503\)/.test(handler('post', '/api/admin/donors/requests/:id/approve')) &&
+    /kind === 'banner' && !uploadsDir\) return res\.status\(503\)/.test(handler('post', '/api/admin/donors/:addr/remove')));
+  ok('the queue status is a closed enum checked by the lib (bad_status → 400)',
+    /DonorProfiles\.adminQueue\(db, \{/.test(handler('get', '/api/admin/donors/requests')) &&
+    /bad_status:\s*\[400,/.test(src));
+
+  // The image route (§18.6): the STORED sniffed mime, nosniff, a sandbox CSP with nothing
+  // allowed, no-store — and a 404 (via the lib's no_image/not_found) when there are no bytes.
+  const img = handler('get', '/api/admin/donors/requests/:id/image');
+  ok('image route: Content-Type is the stored mime from the lib, never a request value',
+    /setHeader\('Content-Type', r\.mime\)/.test(img) && !/req\.(query|body|headers)/.test(img));
+  ok("image route: nosniff + CSP \"default-src 'none'; sandbox\" + Cache-Control no-store",
+    /'X-Content-Type-Options', 'nosniff'/.test(img) && /"default-src 'none'; sandbox"/.test(img) && /'Cache-Control', 'no-store'/.test(img));
+  ok('image route: a request with no bytes is a 404 (no_image / not_found), a bad id a 400',
+    /if \(!r\.ok\) return donorAdminRefuse\(res, r\)/.test(img) &&
+    /no_image:\s*\[404,/.test(src) && /not_found:\s*\[404,/.test(src) && /bad_id:\s*\[400,/.test(src));
+
+  // The rescan hook is gone from the settings save (names are pre-moderated; flags are
+  // computed at queue-read time), and the save is back to its plain shape.
+  const saveBlock = src.slice(src.indexOf("app.post('/api/admin/settings/:section'"), src.indexOf("app.post('/api/admin/settings/:section/restore'"))
+    .replace(/\/\/[^\n]*/g, '');
+  ok('the settings save no longer rescans donor names', !/rescan/i.test(saveBlock));
+  ok('the settings save still writes through updateSection and invalidates branding',
+    /poolSettings\.updateSection\(req\.params\.section, req\.body, req\.user\.user_id\)/.test(saveBlock) && /invalidateBranding\(\)/.test(saveBlock));
+
+  // The public donor list must not have grown a moderation field or a full address by
+  // accident. The route delegates to lib/donor-ledger.js donorWall() and hands it the mask as
+  // an argument (the lib throws without one); the full public contract is pinned in
+  // test-public-leakage.js §9 and test-donor-league.js.
+  const pubBlock = src.slice(src.indexOf("app.get('/api/pool/donors'"), src.indexOf("app.get('/api/pool/prize-pool'"));
+  ok('public /api/pool/donors emits no v1 donor_* field and calls no admin reader',
+    !/donor_censor|donor_name/.test(pubBlock) && !/adminQueue|requestImage|adminProfiles/.test(pubBlock));
+  ok('public /api/pool/donors still masks the address', /mask:\s*\(a\)\s*=>\s*maskAddr\(a\)/.test(pubBlock));
+
+  // The dashboard carries the pending count (the Overview tile) from the same lib count the
+  // nav badge's summary route reads.
+  const dashBlock = src.slice(src.indexOf("app.get('/api/admin/dashboard'"), src.indexOf("// REMOVED (2026-07-28): GET /api/miners/top"));
+  ok('/api/admin/dashboard emits pending_donor_requests from DonorProfiles.pendingCount',
+    /pending_donor_requests:\s*pendingDonorRequests/.test(dashBlock) && /DonorProfiles\.pendingCount\(db\)/.test(dashBlock) &&
+    !/new_donor_names_7d/.test(dashBlock));
+  ok('/api/admin/donors/summary returns pending_requests from the same count',
+    /pending_requests:\s*DonorProfiles\.pendingCount\(db\)/.test(handler('get', '/api/admin/donors/summary')));
+
+  console.log('\n[7] F4 — a pool that stored the removed auto-payout keys keeps saving');
+
+  // A pool that ran before the removal may hold these rows. Like D4's transporter_enabled they
+  // stay inert: getSection merges stored rows over the defaults with no membership check, and
+  // the form no longer carries the ids, so a Save never resends them.
+  const up = db.prepare(`INSERT INTO pool_config (section, key, value, value_type) VALUES ('payout', ?, ?, 'string')
+                         ON CONFLICT(section, key) DO UPDATE SET value = excluded.value`);
+  up.run('auto_payout', 'true');
+  up.run('payout_frequency', 'daily');
+  const stale = () => db.prepare("SELECT key, value FROM pool_config WHERE section='payout' AND key IN ('auto_payout','payout_frequency') ORDER BY key").all();
+
+  let payout = null;
+  ok('getSection(payout) still loads with the stale rows present', !throws(() => { payout = ps.getSection('payout'); }) &&
+    payout && payout.min_withdrawal !== undefined);
+
+  // Mimic the page: populateForm fills the fields from getSection, saveSection harvests every id
+  // in the form (checkbox → boolean, textarea → text, empty scalar → dropped).
+  const payoutPage = fs.readFileSync(path.join(APP, 'admin-panel/settings-payout.html'), 'utf8');
+  const body = {};
+  for (const m of payoutPage.matchAll(/<(input|select|textarea)\b([^>]*)>/gi)) {
+    const id = (m[2].match(/\bid="([^"]+)"/) || [])[1];
+    if (!id || /\bsettings-skip\b/.test(m[2]) || !(id in payout)) continue;
+    const v = payout[id];
+    if (/\btype="checkbox"/.test(m[2])) body[id] = v === true || v === 'true';
+    else if (m[1].toLowerCase() === 'textarea') {
+      let arr = v; if (typeof arr === 'string') { try { arr = JSON.parse(arr); } catch (_) { arr = []; } }
+      body[id] = Array.isArray(arr) ? arr.join('\n') : '';
+    } else if (v !== '' && v !== null && v !== undefined) body[id] = String(v);
+  }
+  ok('the harvested Payout body carries neither removed key',
+    !('auto_payout' in body) && !('payout_frequency' in body) && 'min_withdrawal' in body, Object.keys(body).join(','));
+  const auditsBefore = audits().length;
+  let saveErr = null;
+  try { ps.updateSection('payout', body, 7); } catch (e) { saveErr = e.message; }
+  ok('a Payout save of the real form succeeds on a pool that stored the removed keys', saveErr === null, saveErr || '');
+  const newAudit = audits().slice(auditsBefore).map((r) => r.details).join(' ');
+  ok('…and no audit row names a removed key', !/auto_payout|payout_frequency/.test(newAudit), newAudit);
+  ok('…and the stale rows are left untouched (inert, no migration)',
+    JSON.stringify(stale()) === '[{"key":"auto_payout","value":"true"},{"key":"payout_frequency","value":"daily"}]', JSON.stringify(stale()));
+  ok('sending a removed key explicitly is refused as unknown (the keys are really gone)',
+    throws(() => ps.updateSection('payout', { auto_payout: true }, 7)) &&
+    throws(() => ps.updateSection('payout', { payout_frequency: 'manual' }, 7)));
+
+  console.log('\n[8] tor_send_mode removed (2026-09-26) — a pool that stored it keeps loading and saving');
+
+  // The step-by-step Tor sender (F5) is deleted, and its switch went the way F4's keys did: field,
+  // default, validator and applyToConfig in ONE change. A pool that ran F5 may hold the row —
+  // possibly 'stepwise'. It must stay inert: load, save, and never reach the runtime config.
+  up.run('tor_send_mode', 'stepwise');
+  const staleMode = () => db.prepare("SELECT value FROM pool_config WHERE section='payout' AND key='tor_send_mode'").get();
+  let payout2 = null;
+  ok('getSection(payout) still loads with a stored tor_send_mode row', !throws(() => { payout2 = ps.getSection('payout'); }) &&
+    payout2 && payout2.min_withdrawal !== undefined);
+  ok('tor_send_mode is no longer a payout default', !Object.prototype.hasOwnProperty.call(PoolSettings.defaults.payout, 'tor_send_mode'));
+  ok('tor_send_mode has no validator', !Object.prototype.hasOwnProperty.call(V.payout, 'tor_send_mode'));
+  const body2 = {};
+  for (const m of payoutPage.matchAll(/<(input|select|textarea)\b([^>]*)>/gi)) {
+    const id = (m[2].match(/\bid="([^"]+)"/) || [])[1];
+    if (!id || /\bsettings-skip\b/.test(m[2]) || !(id in payout2)) continue;
+    const v = payout2[id];
+    if (/\btype="checkbox"/.test(m[2])) body2[id] = v === true || v === 'true';
+    else if (m[1].toLowerCase() === 'textarea') {
+      let arr = v; if (typeof arr === 'string') { try { arr = JSON.parse(arr); } catch (_) { arr = []; } }
+      body2[id] = Array.isArray(arr) ? arr.join('\n') : '';
+    } else if (v !== '' && v !== null && v !== undefined) body2[id] = String(v);
+  }
+  ok('the harvested Payout body does not carry tor_send_mode', !('tor_send_mode' in body2) && 'min_withdrawal' in body2,
+    Object.keys(body2).join(','));
+  const auditsBefore2 = audits().length;
+  let saveErr2 = null;
+  try { ps.updateSection('payout', body2, 7); } catch (e) { saveErr2 = e.message; }
+  ok('a Payout save of the real form succeeds on a pool that stored tor_send_mode', saveErr2 === null, saveErr2 || '');
+  ok('…and no audit row names it', !/tor_send_mode/.test(audits().slice(auditsBefore2).map((r) => r.details).join(' ')));
+  ok('…and the stored row is left untouched (inert, no migration)', (staleMode() || {}).value === 'stepwise', JSON.stringify(staleMode()));
+  ok('sending tor_send_mode explicitly is refused as unknown (the key is really gone)',
+    throws(() => ps.updateSection('payout', { tor_send_mode: 'cli' }, 7)));
+  ok('applyToConfig ignores a stored tor_send_mode (nothing reaches the runtime config)',
+    !('tor_send_mode' in PoolSettings.applyToConfig({}, { pool_info: {}, payout: { tor_send_mode: 'stepwise' } })));
+  const cfgSrc = fs.readFileSync(path.join(APP, 'lib/config.js'), 'utf8').replace(/^\s*\/\/.*$/gm, '');
+  ok('config.js no longer sets tor_send_mode or the stepwise timeouts',
+    !/tor_send_mode\s*:|tor_send_connect_timeout_ms\s*:|tor_send_receive_timeout_ms\s*:/.test(cfgSrc));
+
+  console.log('\n[9] withdrawal_retry_delays removed (2026-09-26, one Tor attempt) — a stored row stays inert');
+
+  // It never had a field (shadowed, audit §J9-8), so only the default + config key go. Every pool
+  // stored nothing unless it wrote the row by hand — which is exactly the case to prove.
+  up.run('withdrawal_retry_delays', '[60,60,60,60]');
+  let payout3 = null;
+  ok('getSection(payout) still loads with a stored withdrawal_retry_delays row',
+    !throws(() => { payout3 = ps.getSection('payout'); }) && payout3 && payout3.min_withdrawal !== undefined);
+  ok('withdrawal_retry_delays is no longer a payout default',
+    !Object.prototype.hasOwnProperty.call(PoolSettings.defaults.payout, 'withdrawal_retry_delays'));
+  let saveErr3 = null;
+  try { ps.updateSection('payout', body2, 7); } catch (e) { saveErr3 = e.message; }
+  ok('a Payout save of the real form succeeds on a pool that stored it', saveErr3 === null, saveErr3 || '');
+  ok('config.js no longer sets withdrawal_retry_delays', !/withdrawal_retry_delays\s*:/.test(cfgSrc));
+  const schedSrc = fs.readFileSync(path.join(APP, 'lib/withdrawal-scheduler.js'), 'utf8').replace(/^\s*\/\/.*$/gm, '');
+  ok('the scheduler reads no retry ladder any more', !/withdrawal_retry_delays|retryDelays/.test(schedSrc));
+
+  console.log('\n[10] max_pending_withdrawals / max_user_pending are validated (2026-09-26)');
+
+  // They had no validator: the form posts every field as TEXT, so the first real save stored
+  // '100' over the numeric default 100 and the audit row named both keys as changed while nothing
+  // moved; and junk ('abc', 0, -5) was stored as-is (the scheduler then quietly fell back to 100).
+  db.prepare("DELETE FROM pool_config WHERE section='payout' AND key IN ('max_pending_withdrawals','max_user_pending')").run();
+  const nA = audits().length;
+  ps.updateSection('payout', { max_pending_withdrawals: '100', max_user_pending: '10' }, 7);
+  const firstSave = audits().slice(nA).map((r) => JSON.parse(r.details).changed_keys).flat();
+  ok('a save of the defaults as the form sends them ("100", "10") names NEITHER key as changed',
+    !firstSave.includes('max_pending_withdrawals') && !firstSave.includes('max_user_pending'), JSON.stringify(firstSave));
+  ps.updateSection('payout', { max_pending_withdrawals: ' 250 ', max_user_pending: '3' }, 7);
+  const p10 = ps.getSection('payout');
+  ok('a real change is stored as a NUMBER', p10.max_pending_withdrawals === 250 && p10.max_user_pending === 3,
+    JSON.stringify({ a: p10.max_pending_withdrawals, b: p10.max_user_pending }));
+  for (const bad of ['abc', '0', '-5', '1.5', '', '12abc', '100000']) {
+    ok(`max_pending_withdrawals refuses ${JSON.stringify(bad)}`, throws(() => ps.updateSection('payout', { max_pending_withdrawals: bad }, 7)));
+  }
+  for (const bad of ['abc', '0', '101']) {
+    ok(`max_user_pending refuses ${JSON.stringify(bad)}`, throws(() => ps.updateSection('payout', { max_user_pending: bad }, 7)));
+  }
+  ok('…and a refused save changes nothing', ps.getSection('payout').max_pending_withdrawals === 250);
 
   console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed\n`);
   cleanup();

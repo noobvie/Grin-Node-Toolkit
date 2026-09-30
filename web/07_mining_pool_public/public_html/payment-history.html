@@ -79,6 +79,36 @@
       word-break: break-all;
       color: inherit;
     }
+    /* P-05 Tx ID: a truncated kernel that DOES link out (branding.js styles a.xplink). */
+    a.xplink.tx-id {
+      font-family: var(--mono, ui-monospace, monospace);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    /* P-05 on a phone (same treatment as blocks.html P-05): the shared .data-table pads 18px a
+       side, ~216px of a 390px screen across six columns. Tighten it, keep cells on one line and
+       let .table-wrap scroll sideways as a last resort. Below 640px the date drops to the short
+       MM-DD HH:MM form (full timestamp in its title); below 480px the Miner column folds under
+       the date as a second line. Both forms are always rendered and CSS picks one, so a rotate
+       re-flows without a re-render; display:none also keeps the hidden copy out of the AT tree. */
+    .ph-pay-table td, .ph-pay-table th { white-space: nowrap; }
+    .ph-pay-table .dt-short, .ph-pay-table .miner-sub { display: none; }
+    .ph-pay-table .miner-sub { margin-top: 3px; }
+    @media (max-width: 640px) {
+      .ph-pay-table { font-size: 13px; }
+      .ph-pay-table thead th, .ph-pay-table tbody td { padding: 9px 8px; }
+      .ph-pay-table thead th:first-child, .ph-pay-table tbody td:first-child { padding-left: 12px; }
+      .ph-pay-table thead th:last-child,  .ph-pay-table tbody td:last-child  { padding-right: 12px; }
+      .ph-pay-table .status-badge { font-size: 11px; padding: 2px 6px; }
+      .ph-pay-table .dt-long  { display: none; }
+      .ph-pay-table .dt-short { display: inline; }
+    }
+    @media (max-width: 480px) {
+      .ph-pay-table .col-miner { display: none; }
+      .ph-pay-table .miner-sub { display: block; }
+      .ph-pay-table .miner-sub .addr-plain { font-size: 11px; color: var(--text-dim, #9aa4b2); }
+    }
 
     /* Shared timeframe toggle driving the trend recorders (Day/Week/Month/Year/All). */
     .rangebar { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-bottom: 2px; }
@@ -143,13 +173,13 @@
         </div>
 
         <!-- ═══ Spec placard: lifetime transparency figures ═══ -->
-        <div class="placard" aria-label="Lifetime payment figures">
-            <span><i>Total paid all-time</i><b id="ph-paid-all">—</b></span>
+        <div class="placard figures" aria-label="Lifetime payment figures">
+            <span class="tone-gold"><i>Total paid all-time</i><b id="ph-paid-all">—</b></span>
             <span><i>Payouts all-time</i><b id="ph-count-all">—</b></span>
-            <span><i>Avg payout</i><b id="ph-avg">—</b></span>
-            <span><i>Effective pool fee</i><b id="ph-fee-pct">—</b></span>
-            <span><i>Given away</i><b id="ph-giveaways">—</b></span>
-            <span><i>Donations received</i><b id="ph-donations">—</b></span>
+            <span class="tone-info"><i>Avg payout</i><b id="ph-avg">—</b></span>
+            <span class="tone-text"><i>Effective pool fee</i><b id="ph-fee-pct">—</b></span>
+            <span class="tone-ok"><i>Given away</i><b id="ph-giveaways">—</b></span>
+            <span class="tone-warn"><i>Donations received</i><b id="ph-donations">—</b></span>
         </div>
 
         <div class="deck">
@@ -209,19 +239,22 @@
             <div class="panel"><span class="screws"></span>
                 <h2 class="panel-title"><span class="tag">P-05</span> Recent payouts <span class="right">latest confirmed withdrawals</span></h2>
                 <div class="panel-body">
-                    <table class="data-table">
+                    <div class="table-wrap">
+                    <table class="data-table ph-pay-table">
                         <thead>
                             <tr>
                                 <th>Date &amp; Time (UTC)</th>
-                                <th>Miner</th>
+                                <th class="col-miner">Miner</th>
                                 <th class="num">Amount (ツ)</th>
-                                <th>Status</th>
+                                <th title="How the payout was delivered · mined = seen on the Grin chain, sent = broadcast, not yet seen mined">Method</th>
+                                <th title="The payout's on-chain kernel excess — opens it on the Grin chain explorer">Tx ID</th>
                             </tr>
                         </thead>
                         <tbody id="payouts">
-                            <tr><td colspan="4">Loading…</td></tr>
+                            <tr><td colspan="5">Loading…</td></tr>
                         </tbody>
                     </table>
+                    </div>
                 </div>
             </div>
 
@@ -246,11 +279,11 @@
                 </div>
 
                 <!-- U-01 · aggregate figures -->
-                <div class="placard" aria-label="Unclaimed balance figures">
-                    <span><i>Unclaimed balance</i><b id="uc-total">—</b></span>
-                    <span><i>Dormant addresses</i><b id="uc-count">—</b></span>
-                    <span><i>Oldest idle</i><b id="uc-oldest">—</b></span>
-                    <span><i>Swept to prizes all-time</i><b id="uc-disposed">—</b></span>
+                <div class="placard figures" aria-label="Unclaimed balance figures">
+                    <span class="tone-warn"><i>Unclaimed balance</i><b id="uc-total">—</b></span>
+                    <span class="tone-text"><i>Dormant addresses</i><b id="uc-count">—</b></span>
+                    <span class="tone-info"><i>Oldest idle</i><b id="uc-oldest">—</b></span>
+                    <span class="tone-gold"><i>Swept to prizes all-time</i><b id="uc-disposed">—</b></span>
                 </div>
 
                 <div class="deck-row half">
@@ -306,6 +339,7 @@
     <!-- footer injected by /js/public-shell.js -->
 
     <script src="/js/auth.js"></script>
+    <script src="/js/num-format.js"></script>
     <script src="/js/vendor/chart.umd.min.js"></script>
     <script src="/js/charts-init.js"></script>
     <script>
@@ -343,6 +377,9 @@
             const el = document.getElementById(id);
             if (el) el.textContent = text;
         }
+        // Placard GRIN tiles: short figure + exact tooltip, the one rule in js/num-format.js.
+        // Tables below keep fmtGrin's exact figures.
+        function setGrinStat(id, v) { PoolFmt.setGrinTile(document.getElementById(id), Number(v || 0)); }
         function toggleEmpty(emptyId, show, text) {
             const el = document.getElementById(emptyId);
             if (!el) return;
@@ -389,14 +426,14 @@
                 const bucket = data.bucket_seconds;
 
                 // ── Lifetime transparency tiles (range-independent) ──
-                setStat('ph-paid-all',  fmtGrin(totals.paid_all || 0));
+                setGrinStat('ph-paid-all', totals.paid_all);
                 setStat('ph-count-all', fmtInt(totals.payout_count || 0));
-                setStat('ph-avg',       totals.payout_count ? fmtGrin(totals.avg_payout || 0) : '—');
+                if (totals.payout_count) setGrinStat('ph-avg', totals.avg_payout); else setStat('ph-avg', '—');
                 setStat('ph-fee-pct',   (totals.to_miners_all || totals.fee_all)
                                           ? (Number(totals.fee_percent || 0).toFixed(2) + ' %')
                                           : '0 %');
-                setStat('ph-giveaways', fmtGrin(totals.giveaways_all || 0));
-                setStat('ph-donations', fmtGrin(totals.donations_all || 0));
+                setGrinStat('ph-giveaways', totals.giveaways_all);
+                setGrinStat('ph-donations', totals.donations_all);
 
                 // ── P-01 · cumulative GRIN paid (running sum of per-bucket payouts) ──
                 let run = 0;
@@ -444,6 +481,40 @@
             }
         }
 
+        // P-05 method + status, ONE column (2026-09-26, mobile width). This feed lists CONFIRMED
+        // payouts only — the pool has finalized and broadcast them — so "paid" was the same on
+        // every row and the only live bit is whether the tx has been seen MINED:
+        // has_kernel_proof turns true once the scheduler's backfill finds the kernel in the pool
+        // wallet's tx log (minutes after broadcast; never on a pool with no Owner API wallet,
+        // where the row honestly stays "sent"). The cell reads "Tor · mined" / "Slatepack · sent".
+        //
+        // Tx ID = the payout's kernel excess, linked to the operator's chain explorer so anyone
+        // can check the payout was mined. Published here since 2026-09-25 by operator decision,
+        // reversing the pool-wide half of audit §J11-2 — the address beside it MUST stay masked
+        // (see the note on GET /api/pool/payments). The server sends only a shape-checked
+        // 66-hex value or null; Explorer.link() escapes it and branding.js relinks it once the
+        // network + explorer are known.
+        const PAY_METHOD = { tor: 'Tor', slatepack: 'Slatepack', nostr: 'Goblin', manual: 'Manual' };
+        function payMethodCell(w) {
+            const method = escHtml(PAY_METHOD[w.method] || w.method || 'Tor');
+            return w.has_kernel_proof
+                ? '<span class="status-badge status-active" title="Paid — broadcast and seen mined on the Grin chain">' + method + ' · mined</span>'
+                : '<span class="status-badge" title="Paid — finalized and broadcast by the pool; not yet seen mined (or this pool cannot read its wallet tx log)">' + method + ' · sent</span>';
+        }
+        // Long form on desktop, MM-DD HH:MM under 640px (CSS picks one); both UTC.
+        function payWhenCell(ts) {
+            const d = new Date(ts * 1000);
+            const long = d.toLocaleString('en-US', { timeZone: 'UTC' });
+            const short = isNaN(d) ? long : d.toISOString().slice(5, 16).replace('T', ' ');
+            return '<span class="dt-long">' + escHtml(long) + '</span>'
+                + '<span class="dt-short" title="' + escHtml(long) + ' UTC">' + escHtml(short) + '</span>';
+        }
+        function txIdCell(w) {
+            const k = (typeof w.kernel_excess === 'string' && /^[0-9a-f]{66}$/i.test(w.kernel_excess)) ? w.kernel_excess : '';
+            if (!k || !window.Explorer) return '<span class="dim">—</span>';
+            return window.Explorer.link('kernel', k, k.slice(0, 8) + '…' + k.slice(-6) + ' ↗', 'tx-id');
+        }
+
         async function loadRecentPayouts() {
             const tbody = document.getElementById('payouts');
             try {
@@ -452,20 +523,23 @@
                 const when = w => w.confirmed_at || w.created_at || 0;
                 if (tbody) {
                     if (!data.length) {
-                        tbody.innerHTML = '<tr><td colspan="4">No payouts yet</td></tr>';
+                        tbody.innerHTML = '<tr><td colspan="5">No payouts yet</td></tr>';
                     } else {
+                        // The Miner column hides under 480px and .miner-sub (same masked address)
+                        // shows under the date instead — see the .ph-pay-table CSS.
                         tbody.innerHTML = data.slice(0, 25).map(w => `
                             <tr>
-                                <td>${escHtml(new Date(when(w) * 1000).toLocaleString('en-US', { timeZone: 'UTC' }))}</td>
-                                <td>${addrCell(w.grin_address)}</td>
+                                <td>${payWhenCell(when(w))}<div class="miner-sub">${addrCell(w.grin_address)}</div></td>
+                                <td class="col-miner">${addrCell(w.grin_address)}</td>
                                 <td class="num">${Number(w.amount || 0).toFixed(2)}</td>
-                                <td><span class="status-badge status-active">confirmed</span></td>
+                                <td>${payMethodCell(w)}</td>
+                                <td>${txIdCell(w)}</td>
                             </tr>
                         `).join('');
                     }
                 }
             } catch (error) {
-                if (tbody) tbody.innerHTML = '<tr><td colspan="4">Payment data unavailable</td></tr>';
+                if (tbody) tbody.innerHTML = '<tr><td colspan="5">Payment data unavailable</td></tr>';
             }
         }
 
@@ -504,10 +578,10 @@
                             + 'Automatic sweeping is not currently active.');
                 }
 
-                setStat('uc-total',    fmtGrin(totals.amount || 0));
+                setGrinStat('uc-total', totals.amount);
                 setStat('uc-count',    fmtInt(totals.count || 0));
                 setStat('uc-oldest',   daysAgoLabel(totals.oldest_activity_at));
-                setStat('uc-disposed', fmtGrin(dispTotals.total_disposed || 0));
+                setGrinStat('uc-disposed', dispTotals.total_disposed);
 
                 // U-02 · dormant list (addresses already masked server-side)
                 const dt = document.getElementById('uc-dormant');

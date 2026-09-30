@@ -4,7 +4,7 @@
 ╚══════════════════════════════════════════════════════════════════════════╝
 
 > **Covers code as of:** n/a — planning only, never implemented · **Last verified:** never systematically verified
-> **Product code last changed:** 2026-08-18 — `scripts/01_build_new_grin_node.sh`, `scripts/lib/01_lib_source_build.sh`
+> **Product code last changed:** 2026-09-25 — `scripts/lib/01_lib_source_build.sh` + new `scripts/patches/grin/` (key G offers toolkit grin patches after checkout; not described here); 2026-08-18 — `scripts/01_build_new_grin_node.sh`, `scripts/lib/01_lib_source_build.sh`
 > Last substantive edit 2026-05-14. The "not yet implemented" claim is itself unchecked since then.
 
 STATUS: Planning only — not yet implemented in 01_build_new_grin_node.sh

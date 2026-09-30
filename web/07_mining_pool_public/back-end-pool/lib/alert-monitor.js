@@ -244,7 +244,7 @@ class AlertMonitor {
         ).get(this.prevWalletCheckAt).s;
         const inFlight = this.db.prepare(
           `SELECT COALESCE(SUM(amount + COALESCE(fee,0)),0) AS s FROM withdrawals
-           WHERE status IN ('tor_sending','tor_checking','retry_scheduled','slatepack_pending','finalizing')`
+           WHERE status IN ('tor_sending','tor_checking','tor_held','retry_scheduled','slatepack_pending','finalizing')`
         ).get().s;
         const drop = this.prevWalletTotal - recon.wallet.total;
         const unexplained = drop - paid - inFlight;
@@ -543,19 +543,27 @@ class AlertMonitor {
    */
   async checkPayoutHealth() {
     try {
-      // withdrawals.status uses 'tor_failed' for an exhausted/failed payout, and created_at
-      // is an INTEGER unixepoch (compare with unixepoch() arithmetic, not datetime('now')).
+      // Pool-side Tor failures only (2026-09-26). A Tor payout is now tried ONCE, so every miner
+      // whose wallet was offline leaves a tor_failed row — counting those would keep this alert
+      // permanently on and train the operator to ignore it. Counted: pool_send_path (the miner's
+      // wallet answers but our send could not deliver), pool_busy (pool wallet short) and unknown
+      // (a Held payout proven absent, i.e. a send that died on our side). Not counted:
+      // wallet_offline / wallet_unreachable (the miner's side, bounded by the Tor pause), the
+      // cleared variant, and legacy NULL rows. Timed by the tor_failed EVENT — a Held payout can
+      // resolve days after it was requested. Times are INTEGER unixepoch.
       const stmt = this.db.prepare(`
-        SELECT COUNT(*) as failed_count, MAX(created_at) as last_failure
-        FROM withdrawals
-        WHERE status = 'tor_failed' AND created_at > unixepoch() - 86400
+        SELECT COUNT(DISTINCT w.id) as failed_count, MAX(e.created_at) as last_failure
+        FROM withdrawals w
+        JOIN withdrawal_events e ON e.withdrawal_id = w.id AND e.to_status = 'tor_failed'
+        WHERE w.status = 'tor_failed' AND w.fail_code IN ('pool_send_path', 'pool_busy', 'unknown')
+          AND e.created_at > unixepoch() - 86400
       `);
       const result = stmt.get();
 
       if (result.failed_count > 0) {
         await this.triggerAlert('payout_failed', {
           level: 'warning',
-          message: `${result.failed_count} failed withdrawals in last 24 hours`,
+          message: `${result.failed_count} Tor payout${result.failed_count === 1 ? '' : 's'} failed on the POOL's side in the last 24 hours (pool_send_path / pool_busy / unknown)`,
           data: { failed_count: result.failed_count, last_failure: result.last_failure }
         });
       } else {
@@ -863,6 +871,71 @@ class AlertMonitor {
     const timestamp = new Date().toISOString();
     console.error(`[${timestamp}] [AlertMonitor] ERROR: ${msg}`);
   }
+
+  // The rolling payout alerts the withdrawal scheduler raises, folded into the admin health page's
+  // Grin Wallet card (/api/admin/health) — until 2026-09-26 only payout_unmined was, and the other
+  // two lived in the alerts table where no admin page showed them. All but the last are resolved
+  // by the scheduler itself, so there is no time window here:
+  //   payout_held   (critical) — a Tor payout held > 24 h with an unknown outcome
+  //   payout_unmined (warning | critical) — paid but not seen mined after 1 h
+  //   tor_send_path (warning) — the miner's wallet answers our probe, grin-wallet could not deliver
+  //   slate_finalized_elsewhere (critical | warning) — the slatepack expiry gate found a pool slate
+  //     finalized outside the backend: critical while a payout is held, warning for a day after one
+  //     settled as paid (2026-09-27)
+  //   slate_expiry_unverified (warning) — an expired slatepack was refunded without that check,
+  //     because the grin-wallet build does not record the slate state
+  //   slate_refunded_but_mined (critical) — an expired slatepack was refunded AND its slate is
+  //     confirmed on chain: the miner may have been paid twice (retryExpiredSlateCancels). Raised
+  //     once per payout and resolved by NOTHING automatic — only the operator knows when it has
+  //     been reconciled — so it is a MANUAL_RESOLVE_TYPES alert: the card carries its id in
+  //     `manual_alerts`, and the page's "Mark reconciled" closes it (resolveManual). Added 2026-09-27.
+  // 'critical' = up but wrong: it outranks a degraded card, but never masks a wallet that is
+  // actually down ('error'). Admin-only surface — never call this for a public route.
+  static foldPayoutAlerts(db, card) {
+    if (!card) return card;
+    for (const type of ['payout_held', 'payout_unmined', 'tor_send_path', 'slate_finalized_elsewhere',
+      'slate_expiry_unverified', 'slate_refunded_but_mined']) {
+      const a = db.prepare(
+        `SELECT id, level, message, occurrence_count FROM alerts WHERE type = ? AND status = 'active' ORDER BY id DESC LIMIT 1`
+      ).get(type);
+      if (!a) continue;
+      if (a.level === 'critical') { if (card.status !== 'error') card.status = 'critical'; }
+      else if (card.status === 'ok') card.status = 'warning';
+      let msg = a.message;
+      if (MANUAL_RESOLVE_TYPES.includes(type)) {
+        // A rolling alert keeps only the LATEST message; say so, or a second payout reads as one.
+        const n = Number(a.occurrence_count) || 1;
+        if (n > 1) msg += ` (${n} occurrences — this shows the latest; the pool log has each one)`;
+        (card.manual_alerts = card.manual_alerts || []).push({ id: a.id, type });
+      }
+      card.message = [card.message, msg].filter(Boolean).join(' · ');
+    }
+    return card;
+  }
+
+  // Close an alert of a MANUAL_RESOLVE_TYPES type (POST /api/admin/alerts/:alertId/resolve, step-up
+  // gated + audited). Any other type is refused: those are resolved by the code that raised them,
+  // and closing one by hand would only hide a condition that is still true until the next tick.
+  // Returns { ok, alert } or { ok: false, code, error }.
+  static resolveManual(db, alertId, actor) {
+    const a = db.prepare('SELECT id, type, status, message FROM alerts WHERE id = ?').get(alertId);
+    if (!a) return { ok: false, code: 404, error: 'alert not found' };
+    if (!MANUAL_RESOLVE_TYPES.includes(a.type)) {
+      return { ok: false, code: 409, error: `a ${a.type} alert resolves by itself once its cause is gone — it cannot be closed by hand` };
+    }
+    if (a.status !== 'active') return { ok: false, code: 409, error: 'this alert is already resolved' };
+    const r = db.prepare(
+      `UPDATE alerts SET status = 'resolved', resolved_at = ?, acknowledged_at = datetime('now'), acknowledged_by = ?
+        WHERE id = ? AND status = 'active'`
+    ).run(new Date().toISOString(), actor == null ? 'admin' : String(actor), a.id);
+    if (r.changes !== 1) return { ok: false, code: 409, error: 'this alert is already resolved' };
+    return { ok: true, alert: a };
+  }
 }
+
+// Alerts nothing resolves automatically: the operator closes them after acting (see resolveManual).
+// Keep this list short — every entry is an alarm a click can silence.
+const MANUAL_RESOLVE_TYPES = ['slate_refunded_but_mined'];
+AlertMonitor.MANUAL_RESOLVE_TYPES = MANUAL_RESOLVE_TYPES;
 
 module.exports = AlertMonitor;

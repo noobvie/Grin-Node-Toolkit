@@ -24,11 +24,22 @@
     // Dashboard is the overview group: all the live data pages + System Health hang off it.
     { file: 'index.html', title: 'Dashboard', ico: '📊', children: [
         { file: 'miners.html',   title: 'Miners' },
+        { file: 'donors.html',   title: 'Donors' },     // donor-profile review queue + donors + donation settings (design §18.6)
         { file: 'payments.html', title: 'Payouts' },
         { file: 'blocks.html',   title: 'Blocks' },
         { file: 'users.html',    title: 'Sessions' },
         { file: 'regions.html',  title: 'Regions' },
         { file: 'health.html',   title: 'System Health' }
+      ] },
+    // Games (design §19.11): the /play/ games' own pages, all through the admin proxy to the
+    // games service. Shown whatever the games mode is — the operator prepares before opening.
+    // The pool-owned on/off + chat switches stay under Settings → Games.
+    { file: 'games.html', title: 'Games', ico: '🎮', children: [
+        { file: 'games.html',         title: 'Overview & settings' },
+        { file: 'games-chat.html',    title: 'Chat & moderation' },
+        { file: 'games-players.html', title: 'Players' },
+        { file: 'games-events.html',  title: 'Events' },
+        { file: 'games-names.html',   title: 'Nicknames' }
       ] },
     // Settings was split into one file per section (2026-06). A `children` array with `file`
     // entries renders an always-expanded group of real pages (no more #hash tabs); the parent
@@ -45,6 +56,7 @@
         { file: 'ads.html',                    title: 'Ads' },
         { file: 'settings-payout.html',        title: 'Payout' },
         { file: 'settings-incentives.html',    title: 'Incentives' },
+        { file: 'settings-games.html',         title: 'Games' },       // /play/ master + chat switch (design §19.11)
         { file: 'settings-access.html',        title: 'Access Control' },
         { file: 'settings-database.html',      title: 'Database' }
       ] }
@@ -69,42 +81,62 @@
   // ONE deterministic explorer per network — deliberately NOT randomized across two. The
   // earlier 50/50 rotation assumed the two explorers shared a path scheme; they do not
   // (verified live 2026-07-25), so every link that landed on grinscan.org 404'd, and the
-  // rotation is what hid it — half the clicks worked. The two schemes:
+  // rotation is what hid it — half the clicks worked. The schemes:
+  //   grincoin.org       /block/<h>  (hash → /hash/<hash>)  /kernel/<excess>  /output/<commit>
   //   scan.grin.money    /block/<h>           /kernel/<excess>          /output/<commit>
   //   *.grinscan.org     /block.html?h=<h>    /kernel.html?ex=<excess>  /output.html?c=<commit>
-  // Both accept a height OR a 64-hex block hash in the block slot.
+  // grincoin.org takes DIGITS ONLY in /block/, hence its separate `blockHash` segment.
   //
-  // Default: mainnet → scan.grin.money (06d Tiny Explorer), testnet → test.grinscan.org
-  // (06b GrinScan's testnet sibling). NOTE the testnet host is `test.` —
-  // `testnet.grinscan.org` does NOT resolve (that typo made every testnet link dead).
-  // Keep this block in sync with the identical one in /js/branding.js.
+  // WHICH explorer is an ADMIN SETTING (Settings → Branding, `branding.explorer_mainnet`):
+  // mainnet picks grincoin (default) | tiny | grinscan; testnet is FIXED on test.grinscan.org
+  // (NOTE the host is `test.` — `testnet.grinscan.org` does NOT resolve). The server publishes
+  // the RESOLVED key as `explorer` beside `network`; it is mapped through the registry below,
+  // never used as a URL. Full rationale lives in /js/branding.js.
+  // ⚠ EXPLORERS / EXPLORER_STYLES / MAINNET_CHOICES MIRROR lib/explorers.js and /js/branding.js;
+  // scripts/test-explorers.js fails if they drift.
   //
-  // Network is resolved once by decoratePoolIdentity() (below) and cached in
-  // sessionStorage; until then we assume mainnet (the common deployment).
+  // Network + key are resolved once by decoratePoolIdentity() (below, from /api/pool/stats)
+  // and cached in sessionStorage; until then we assume mainnet + grincoin.
   var NETWORK_KEY = 'pool-network';
+  var EXPLORER_KEY = 'pool-explorer';
   function explorerNetwork() {
     try { var n = sessionStorage.getItem(NETWORK_KEY); if (n) return n; } catch (e) {}
     return 'mainnet';
   }
   var EXPLORER_STYLES = {
-    path:  { block: 'block/',        kernel: 'kernel/',         output: 'output/' },
-    query: { block: 'block.html?h=', kernel: 'kernel.html?ex=', output: 'output.html?c=' }
+    path:     { block: 'block/',        kernel: 'kernel/',        output: 'output/' },
+    grincoin: { block: 'block/', blockHash: 'hash/', kernel: 'kernel/', output: 'output/' },
+    query:    { block: 'block.html?h=', kernel: 'kernel.html?ex=', output: 'output.html?c=' }
   };
   var EXPLORERS = {
-    tiny:             { base: 'https://scan.grin.money',  style: 'path'  }, // 06d, mainnet only
-    grinscan:         { base: 'https://grinscan.org',      style: 'query' }, // 06b mainnet
-    grinscan_testnet: { base: 'https://test.grinscan.org', style: 'query' }  // 06b testnet sibling
+    grincoin:         { base: 'https://grincoin.org',      style: 'grincoin' }, // aglkm full archive, mainnet
+    tiny:             { base: 'https://scan.grin.money',   style: 'path'     }, // 06d, mainnet only
+    grinscan:         { base: 'https://grinscan.org',      style: 'query'    }, // 06b mainnet
+    grinscan_testnet: { base: 'https://test.grinscan.org', style: 'query'    }  // 06b testnet sibling
   };
-  var DEFAULT_EXPLORER = { mainnet: 'tiny', testnet: 'grinscan_testnet' };
+  var MAINNET_CHOICES = ['grincoin', 'tiny', 'grinscan'];
+  var DEFAULT_MAINNET = 'grincoin';
+  var TESTNET_EXPLORER = 'grinscan_testnet';
+  // resolveExplorerKey() re-applied to the cached key: testnet always test.grinscan.org (a stale
+  // mainnet key can't leak onto a testnet pool); mainnet takes it only if it is one of the three
+  // choices AND an own registry entry, else grincoin.
+  function explorerKey() {
+    if (explorerNetwork() === 'testnet') return TESTNET_EXPLORER;
+    var k = null;
+    try { k = sessionStorage.getItem(EXPLORER_KEY); } catch (e) {}
+    return (typeof k === 'string' && MAINNET_CHOICES.indexOf(k) !== -1 &&
+      Object.prototype.hasOwnProperty.call(EXPLORERS, k)) ? k : DEFAULT_MAINNET;
+  }
   function explorerPick() {
-    var net = explorerNetwork() === 'testnet' ? 'testnet' : 'mainnet';
-    return EXPLORERS[DEFAULT_EXPLORER[net]] || EXPLORERS.tiny;
+    return EXPLORERS[explorerKey()];
   }
   function explorerUrl(kind, value) {
     var ex = explorerPick();
     var style = EXPLORER_STYLES[ex.style] || EXPLORER_STYLES.path;
-    var seg = (kind === 'kernel') ? style.kernel : (kind === 'output') ? style.output : style.block;
-    return ex.base.replace(/\/+$/, '') + '/' + seg + encodeURIComponent(String(value));
+    var v = String(value);
+    var seg = (kind === 'kernel') ? style.kernel : (kind === 'output') ? style.output
+      : (style.blockHash && !/^\d+$/.test(v)) ? style.blockHash : style.block;
+    return ex.base.replace(/\/+$/, '') + '/' + seg + encodeURIComponent(v);
   }
   // Returns an <a> that opens the explorer in a new tab. `label` defaults to `value`.
   // Both URL and label are HTML-escaped — safe to embed untrusted chain strings.
@@ -112,10 +144,22 @@
     if (value == null || value === '') return esc(label == null ? '' : label);
     return '<a href="' + esc(explorerUrl(kind, value)) + '" target="_blank" rel="noopener"' +
       (cls ? ' class="' + esc(cls) + '"' : '') +
-      ' title="Open on Grin chain explorer ↗">' +
+      ' title="Open on Grin chain explorer ↗"' +
+      ' data-xp-kind="' + esc(kind) + '" data-xp-ref="' + esc(value) + '">' +
       esc(label == null ? value : label) + '</a>';
   }
-  window.Explorer = { url: explorerUrl, link: explorerLink, network: explorerNetwork };
+  // A page's own fetch can render links before decoratePoolIdentity() caches network + explorer
+  // (sessionStorage is per tab, so every new tab starts empty) — those took the mainnet/grincoin
+  // fallback, a MAINNET explorer on a testnet pool. Re-point every tagged anchor: the host comes
+  // from the registry and the ref is re-encoded, so an attribute value never becomes the URL.
+  function explorerRelink() {
+    var list = document.querySelectorAll('a[data-xp-kind]');
+    for (var i = 0; i < list.length; i++) {
+      var a = list[i], ref = a.getAttribute('data-xp-ref');
+      if (ref) a.setAttribute('href', explorerUrl(a.getAttribute('data-xp-kind'), ref));
+    }
+  }
+  window.Explorer = { url: explorerUrl, link: explorerLink, network: explorerNetwork, key: explorerKey, relink: explorerRelink };
 
   // ── Theme (Dark default, Light) ─────────────────────────────────────────
   // Own key, and deliberately not 'admin-theme'. branding.js used to write the
@@ -292,6 +336,33 @@
 
     // Page title in the browser tab + topbar pool name
     decoratePoolIdentity();
+
+    // "N donor requests waiting for review" on the Donors nav row (design §18.6)
+    decorateDonorBadge();
+  }
+
+  // ── Donors nav badge ─────────────────────────────────────────────────────
+  // One cheap secureAdmin COUNT per page load (/api/admin/donors/summary — not the dashboard
+  // route, which runs a dozen queries). Silent on any failure: before the page's own
+  // API.guardAdminPage() has redirected a logged-out visitor, this may 401, and a badge is
+  // not worth a toast. Rendered only when the count is a positive number, so a stale or
+  // malformed body (a rate-limit 429 is JSON too) can never paint "undefined".
+  function decorateDonorBadge() {
+    var link = sidebar.querySelector('.admin-subnav a[href="donors.html"]');
+    if (!link) return;
+    fetch('/api/admin/donors/summary', { credentials: 'include', cache: 'no-store' })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (d) {
+        var n = d && typeof d.pending_requests === 'number' ? d.pending_requests : 0;
+        if (!(n > 0)) return;
+        var b = document.createElement('span');
+        b.className = 'nav-count';
+        b.textContent = String(n);
+        b.title = n + ' donor request' + (n === 1 ? '' : 's') + ' waiting for review';
+        b.setAttribute('aria-label', b.title);
+        link.appendChild(b);
+      })
+      .catch(function () {});
   }
 
   /* ── In-page section rail ─────────────────────────────────────────────────
@@ -470,8 +541,20 @@
   function decoratePoolIdentity() {
     fetch('/api/pool/stats').then(function (r) { return r.json(); }).then(function (d) {
       if (!d) return;
-      // Cache the chain so window.Explorer builds testnet-correct deep-links.
-      if (d.network) { try { sessionStorage.setItem(NETWORK_KEY, d.network); } catch (e) {} }
+      // Cache the chain + the operator's (server-resolved) explorer so window.Explorer builds
+      // the right deep-links; explorerKey() re-validates it. No key → clear a stale one.
+      try {
+        if (d.network) sessionStorage.setItem(NETWORK_KEY, d.network);
+        if (typeof d.explorer === 'string' && d.explorer) sessionStorage.setItem(EXPLORER_KEY, d.explorer);
+        else sessionStorage.removeItem(EXPLORER_KEY);
+      } catch (e) {}
+      try { explorerRelink(); } catch (e) {}   // links a page rendered before this landed
+      // Pages that depend on the chain (Settings → Branding greys out the explorer select on
+      // testnet) read the attribute if they load late, or the event if they are listening.
+      if (d.network) {
+        document.documentElement.setAttribute('data-pool-network', d.network);
+        try { document.dispatchEvent(new CustomEvent('admin:pool-network', { detail: { network: d.network } })); } catch (e) {}
+      }
       if (d.pool_name) {
         var bn = sidebar.querySelector('.brand-name');
         if (bn) bn.textContent = d.pool_name;
@@ -502,7 +585,10 @@
          retentionKey: 'audit_log_keep_days',
          row:  function (e) { return '<tr>…</tr>'; },
          text: function (e) { return e.grin_address + ' ' + e.action; }, // searchable
-         empty: 'No payout requests in this window.'
+         empty: 'No payout requests in this window.',
+         urlQuery: true,                    // optional: prefill the search from ?q=
+         onSearch: function (q) { … },      // optional: after each keystroke in the search box
+         onRender: function (tbody) { … }   // optional: after rows are painted
        });
        t.setLoading();  t.setRows(list);  t.setError(err.message);
 
@@ -514,7 +600,15 @@
        address (full value parked in the title) findable by its full string.
      • setRows() keeps the current query and page — these pages re-poll on a
        timer, and resetting to page 1 mid-read (or wiping what was typed) would
-       make the table unusable while it refreshes. */
+       make the table unusable while it refreshes.
+     • onRender(tbody) runs after every paint of real rows (a page change, a search
+       keystroke, setRows) — for work that must follow the markup, such as the Donors
+       queue filling each banner <img> from an authenticated blob. Never for the
+       loading/error/empty rows. A throw in it is caught: it must not blank the table.
+     • onSearch(q) runs after each keystroke's local filter, with the trimmed text as typed
+       (not lowercased) — for a page whose rows are a CAPPED subset of the server's, to look
+       the query up server-side and add what it finds (miners.html). Not called for a ?q=
+       prefill: the page reads `.query` itself once its first load says whether it needs to. */
 
   var _dbSettings = null;
   function databaseSettings() {
@@ -690,6 +784,9 @@
         fillRow(esc(state.q ? 'No rows match “' + state.q + '”.' : (opts.empty || 'Nothing to show.')), 'empty-row');
       } else {
         tbody.innerHTML = slice.map(function (item, i) { return opts.row(item, start + i); }).join('');
+        if (typeof opts.onRender === 'function') {
+          try { opts.onRender(tbody); } catch (e) { /* the rows are already painted */ }
+        }
       }
 
       if (!total) {
@@ -719,11 +816,24 @@
       state.page = 1;
       render();
     });
+    // urlQuery: true → start with the search box filled from the page's ?q= (a deep link such as
+    // miners.html → payments.html?q=<address>). Opt-in per table, because a page with several
+    // searchable tables must not filter all of them with one parameter. The value only ever
+    // becomes the input's .value and the lowercase match string; it is never written as markup.
+    if (input && opts.urlQuery) {
+      try {
+        var q0 = new URLSearchParams(window.location.search).get('q');
+        if (q0) { input.value = q0.trim(); state.q = input.value.toLowerCase(); }
+      } catch (e) { /* no URLSearchParams → just start unfiltered */ }
+    }
     if (input) {
       input.addEventListener('input', function () {
         state.q = input.value.trim().toLowerCase();
         state.page = 1;              // a new query always starts at the top
         render();
+        if (typeof opts.onSearch === 'function') {
+          try { opts.onSearch(input.value.trim()); } catch (e) { /* the local filter already ran */ }
+        }
       });
     }
 

@@ -1,0 +1,17 @@
+{
+  "name": "grinium-games",
+  "version": "0.1.0",
+  "private": true,
+  "description": "GRINIUM pool games service (/play/): games, events, chat. Zero npm dependencies.",
+  "main": "index.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node index.js",
+    "test": "node scripts/check-syntax.js && node scripts/run-tests.js",
+    "check-syntax": "node scripts/check-syntax.js"
+  },
+  "license": "MIT",
+  "engines": {
+    "node": ">=24.0.0"
+  }
+}

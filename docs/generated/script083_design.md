@@ -76,6 +76,10 @@ Folding SSH into 083 freed key `5` and made the mapping work again:
 
 Four numbered scripts on their own digits, four inline features in the gaps — the rule holds.
 
+> **Later change (2026-09-25):** key `6` now opens **086 Diagnostics & Support Bundle**; Top 20
+> Bandwidth Consumers moved into 084 as its option `5`. The table above is the menu as 083 left it.
+> See [script086_design.md](script086_design.md).
+
 **Two keys changed hands: `3` (was Node Status) and `5` (was SSH).** Per the repo-wide rule a
 reassigned key gets **no alias `case` arm** — bash takes the first match, so an alias would
 silently open the wrong product instead of erroring. The per-screen banner is the mis-key

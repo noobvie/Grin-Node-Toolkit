@@ -25,8 +25,10 @@
         <div class="tabs" id="filter-chips" style="margin:0;">
           <button class="tab-btn active" data-filter="all"             onclick="setFilter('all', this)">All</button>
           <button class="tab-btn"        data-filter="active"          onclick="setFilter('active', this)">Active</button>
-          <button class="tab-btn"        data-filter="retry_scheduled" onclick="setFilter('retry_scheduled', this)">Retry queued</button>
-          <button class="tab-btn"        data-filter="tor_failed"      onclick="setFilter('tor_failed', this)">Stuck / Failed</button>
+          <!-- "Retry queued" went with the Tor retry ladder (2026-09-26): nothing re-sends a payout.
+               Held is its successor — a Tor payout whose one attempt has an unknown outcome. -->
+          <button class="tab-btn"        data-filter="tor_held"        onclick="setFilter('tor_held', this)">Held</button>
+          <button class="tab-btn"        data-filter="tor_failed"      onclick="setFilter('tor_failed', this)">Failed (refunded)</button>
           <button class="tab-btn"        data-filter="confirmed"       onclick="setFilter('confirmed', this)">Paid</button>
           <button class="tab-btn"        data-filter="cancelled"       onclick="setFilter('cancelled', this)">Cancelled</button>
         </div>
@@ -45,7 +47,7 @@
                 <th>Address</th>
                 <th>Amount ツ</th>
                 <th>Status</th>
-                <th>Retries</th>
+                <th>Reason</th>
                 <th>Created</th>
                 <th>Confirmed</th>
                 <th>Actions</th>
@@ -374,7 +376,7 @@ let _filter = 'all';
 
 // Auth gate (httpOnly-cookie aware): redirects to /login.html if not an admin, else wires
 // up the topbar username + Logout. Pool name + testnet banner are handled by admin-shell.js.
-// stepup.js provides adminFetch() for the step-up-gated retry/cancel actions.
+// stepup.js provides adminFetch() for the step-up-gated cancel / Held re-check / forced-refund actions.
 API.guardAdminPage();
 
 function escHtml(s) {
@@ -390,22 +392,49 @@ function shortAddr(a) {
 // Every status the scheduler can write. The slatepack and Goblin rails were missing here, so
 // their rows fell through to ['badge-dim', <raw status>] — showing "slatepack_pending" in the
 // same grey the panel uses for CANCELLED, i.e. an in-flight payout reading as a dead one.
+// The labels carry no rail: the badge appends it from w.method (RAIL below), so every row reads
+// "Paid · Tor" / "Failed · Slatepack" the same way instead of only the failed ones naming it.
 const STATUS = {
-  tor_checking:      ['badge-warn',  'Checking (Tor)'],
+  tor_checking:      ['badge-warn',  'Checking'],
   tor_sending:       ['badge-warn',  'Sending'],
-  retry_scheduled:   ['badge-warn',  'Retry scheduled'],
+  tor_held:          ['badge-warn',  'Held'],
+  // LEGACY: no new row lands here since 2026-09-26; the scheduler migrates old ones on its
+  // first pass (confirmed / refunded / Held). Kept so such a row never renders raw.
+  retry_scheduled:   ['badge-warn',  'Legacy retry'],
   slatepack_pending: ['badge-warn',  'Awaiting slate'],
   finalizing:        ['badge-warn',  'Settling'],
   confirmed:         ['badge-ok',    'Paid'],
-  tor_failed:        ['badge-error', 'Failed (Tor)'],
-  slatepack_failed:  ['badge-error', 'Failed (slate)'],
-  nostr_failed:      ['badge-error', 'Failed (Goblin)'],
+  tor_failed:        ['badge-error', 'Failed'],
+  slatepack_failed:  ['badge-error', 'Failed'],
+  nostr_failed:      ['badge-error', 'Failed'],
   slatepack_expired: ['badge-dim',   'Expired'],
   cancelled:         ['badge-dim',   'Cancelled'],
 };
+// The payout's rail (withdrawals.method, NOT NULL DEFAULT 'tor'). 'nostr' is the Goblin rail and
+// 'manual' an admin's out-of-band payout. An unknown value renders raw rather than vanishing.
+const RAIL = { tor: 'Tor', slatepack: 'Slatepack', nostr: 'Goblin', manual: 'Manual' };
+const railOf = (w) => (w.method ? (RAIL[w.method] || w.method) : '');
+// Where a PAID row stands on chain (GET /api/admin/withdrawals chain_state, from the scheduler's
+// "marked paid but not mined" watchdog). 'mined' needs no badge; the rest sit beside "Paid".
+const CHAIN = {
+  settling:     ['badge-dim',   'mining…',          'Paid under an hour ago - not seen mined yet, which is normal'],
+  unmined:      ['badge-warn',  'not mined',        'Marked paid over an hour ago but not seen mined. The pool re-broadcasts the stored transaction hourly - see Health / Alerts'],
+  cancelled:    ['badge-error', 'cancelled in wallet', 'The pool wallet CANCELLED this transaction - the miner was debited but NOT paid. Settle it by hand (see the payout_unmined alert)'],
+  absent:       ['badge-error', 'not in wallet',    'The pool wallet has no record of this slate - check the wallet that sent it and the explorer before acting'],
+  unverifiable: ['badge-warn',  'unverifiable',     'No slate id was captured for this payout, so the wallet cannot be asked whether it mined'],
+};
 // Drives the "active" filter chip. Must list every status whose coins are still committed —
 // otherwise filtering to active hides exactly the payouts an operator is looking for.
-const ACTIVE = ['tor_checking', 'tor_sending', 'retry_scheduled', 'slatepack_pending', 'finalizing'];
+const ACTIVE = ['tor_checking', 'tor_sending', 'tor_held', 'retry_scheduled', 'slatepack_pending', 'finalizing'];
+// Why a Tor payout failed (fail_code, public-safe) — the operator reads fail_detail beside it.
+const FAIL_CODE = {
+  wallet_offline:         'miner wallet offline (counted)',
+  wallet_offline_cleared: 'miner wallet offline (un-counted by an admin)',
+  wallet_unreachable:     'miner wallet unreachable (probe could not look)',
+  pool_send_path:         'POOL send path — the wallet answered our probe',
+  pool_busy:              'POOL wallet could not cover it',
+  unknown:                'Held, then proven not sent',
+};
 
 function matchesFilter(w) {
   if (_filter === 'all') return true;
@@ -417,7 +446,7 @@ async function loadQueueSummary() {
   try {
     const s = await API.get('/api/admin/withdrawal-scheduler');
     document.getElementById('queue-summary').textContent =
-      `${s.pending || 0} pending · ${s.failed || 0} failed · ${fmtGrin(s.total_paid_24h)} ツ paid (24h)`;
+      `${s.pending || 0} pending · ${s.held_count || 0} held · ${s.failed || 0} failed · ${fmtGrin(s.total_paid_24h)} ツ paid (24h)`;
   } catch (e) {}
 }
 
@@ -426,32 +455,58 @@ async function loadQueueSummary() {
 const payTable = AdminTable.create({
   tbody: 'pay-tbody',
   search: 'Filter by address, id or status…',
+  // ?q= prefills this box — miners.html links here as payments.html?q=<address>.
+  urlQuery: true,
   empty: 'No withdrawals in this view.',
   note: 'Payout records are kept permanently — this view loads the 100 most recent.',
-  text: w => [w.id, w.grin_address, w.status, (STATUS[w.status] || [])[1], w.method,
-              w.cancel_reason].join(' '),
+  text: w => [w.id, w.grin_address, w.status, (STATUS[w.status] || [])[1], w.method, railOf(w),
+              w.cancel_reason, w.fail_code, w.fail_detail, (CHAIN[w.chain_state] || [])[1]].join(' '),
   row: w => {
-    const [cls, label] = STATUS[w.status] || ['badge-dim', w.status];
-    const canRetry  = w.status === 'retry_scheduled' || w.status === 'tor_failed';
-    const canCancel = w.status === 'retry_scheduled' || w.status === 'tor_checking' || w.status === 'tor_failed';
+    const [cls, status] = STATUS[w.status] || ['badge-dim', w.status];
+    const rail = railOf(w);
+    const label = rail ? `${status} · ${rail}` : status;
+    const chain = CHAIN[w.chain_state];
+    const chainBadge = chain
+      ? ` <span class="badge ${chain[0]}" title="${escHtml(chain[2])}">${escHtml(chain[1])}</span>`
+      : '';
+    // No Retry: a Tor payout is tried once (the route answers 410). Cancel only where the server
+    // allows it: a never-sent tor_checking row. Never Held (its send may have landed), never a
+    // legacy retry_scheduled row, and never tor_failed — it was refunded when it failed, so
+    // cancel had nothing to return and only relabelled it (the server answers 409).
+    const canCancel = w.status === 'tor_checking';
+    const isHeld    = w.status === 'tor_held';
     // Signed payment proof — the dispute document (recipient's own signature over amount +
     // kernel + sender). Only a confirmed Tor payout can have one; a row whose backfill has not
     // stored it yet still gets the button, because the route fetches it from the wallet on demand.
     const canProof = w.status === 'confirmed' && w.method === 'tor' && w.slate_id && w.kernel_excess;
     let actions = '';
     if (canProof)  actions += `<button class="btn-icon" onclick="downloadProof(${w.id})" data-tip="${w.has_payment_proof ? 'Download the signed payment proof' : 'Fetch the signed payment proof from the wallet and download it'}" aria-label="Download the signed payment proof">🧾</button>`;
-    if (canRetry)  actions += `<button class="btn-icon" onclick="retryWithdrawal(${w.id})" data-tip="Retry this payout now" aria-label="Retry this payout now">🔁</button>`;
+    if (isHeld) {
+      actions += `<button class="btn-icon" onclick="recheckHeld(${w.id})" data-tip="Re-check now: read the wallet's tx log for this payout (no send)" aria-label="Re-check this held payout">🔎</button>`;
+      actions += `<button class="btn-icon btn-icon-danger" onclick="forceRefundHeld(${w.id}, ${fmtGrin(w.amount)})" data-tip="Forced refund: only once you have proven it never reached the chain (step-up, typed payout ID)" aria-label="Force-refund this held payout">↩</button>`;
+    }
     if (canCancel) actions += `<button class="btn-icon btn-icon-danger" onclick="cancelWithdrawal(${w.id}, ${fmtGrin(w.amount)})" data-tip="Cancel this payout (refunds the balance)" aria-label="Cancel this payout">❌</button>`;
     actions = actions
       ? `<div class="row-actions">${actions}</div>`
       : '<span style="color:var(--text-dim)">—</span>';
     const reason = w.cancel_reason ? ` title="${escHtml(w.cancel_reason)}"` : '';
+    // Reason column: why a Tor payout failed or is held (fail_code + the CLI's own fail_detail,
+    // admin-only), else the cancel reason. The first 140 chars show; the full text is the tip.
+    let why = '<span style="color:var(--text-dim)">—</span>';
+    if (w.fail_code || w.fail_detail) {
+      const detail = String(w.fail_detail || '');
+      const short = detail.length > 140 ? detail.slice(0, 140) + '…' : detail;
+      why = (w.fail_code ? `<span class="mono" title="${escHtml(FAIL_CODE[w.fail_code] || '')}">${escHtml(w.fail_code)}</span>` : '')
+          + (detail ? `<div class="mono" style="font-size:.75rem;color:var(--text-dim);white-space:normal;word-break:break-word;max-width:28rem;" title="${escHtml(detail)}">${escHtml(short)}</div>` : '');
+    } else if (w.cancel_reason) {
+      why = `<span style="font-size:.8rem;">${escHtml(w.cancel_reason)}</span>`;
+    }
     return `<tr>
       <td class="mono">${w.id}</td>
       <td><span class="mono" title="${escHtml(w.grin_address)}">${escHtml(shortAddr(w.grin_address))}</span></td>
       <td class="mono">${fmtGrin(w.amount)}</td>
-      <td><span class="badge ${cls}"${reason}>${escHtml(label)}</span></td>
-      <td class="mono">${w.retry_count != null ? w.retry_count : 0}</td>
+      <td><span class="badge ${cls}"${reason}>${escHtml(label)}</span>${chainBadge}</td>
+      <td>${why}</td>
       <td>${fmtTs(w.created_at)}</td>
       <td>${fmtTs(w.confirmed_at)}</td>
       <td>${actions}</td>
@@ -510,13 +565,54 @@ async function downloadProof(id) {
   } catch (err) { flash(err.message, true); }
 }
 
-async function retryWithdrawal(id) {
-  if (!confirm(`Force withdrawal #${id} back into the send queue now?`)) return;
+// Held (tor_held): the one Tor attempt's outcome is unknown and the amount stays locked. The
+// scheduler re-reads the wallet every pass by itself; Re-check runs that same resolution now —
+// confirmed on a confirmed tx, refunded only on a second "absent" read ≥ 10 min after the first,
+// otherwise still Held. It never sends.
+const HELD_OUTCOME = {
+  confirmed: 'confirmed — it went out, marked paid',
+  refunded: 'refunded — proven absent on two reads',
+  absent_first: 'absent on this read — a second read ≥ 10 min later decides the refund',
+  absent_wait: 'absent again, but under 10 min since the first absent read — still Held',
+  held: 'the wallet holds an UNCONFIRMED matching send — still Held',
+  unknown: 'the wallet log could not be read or matched — still Held',
+  frozen: 'absent on this read, but payouts are FROZEN — a Held payout is refunded only after a resume (a confirmation still settles it)',
+  history_changed: 'absent, but the wallet no longer carries the history it had when this payout was first checked (a restore, a seed recovery or a different wallet) — still Held; find the send on the wallet that made it',
+  fallback_cancelled: 'its never-finalized slatepack fallback was still locked and has been cancelled — the next reads decide the refund',
+  reposted: 'its send got past the Tor round trip but has not mined — re-broadcast (the identical transaction), still Held',
+};
+async function recheckHeld(id) {
   try {
-    const res = await adminFetch('/api/admin/withdrawals/' + id + '/retry', { method: 'POST' });
+    const res = await adminFetch('/api/admin/withdrawals/' + id + '/recheck', { method: 'POST' });
     const body = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(body.error || ('HTTP ' + res.status));
-    flash(`Withdrawal #${id} re-queued.`, false);
+    flash(`Payout ID ${id}: ${HELD_OUTCOME[body.outcome] || body.outcome} (status ${body.status}).`, false);
+    refresh();
+  } catch (err) { flash(err.message, true); }
+}
+
+// Forced refund of a Held payout: the operator's call once they have proven the send never reached
+// the chain. The payout ID is typed back (the server checks it as confirm_id), then step-up; the
+// server still refuses on a confirmed match in the wallet log, or a log it cannot read. ONE native
+// prompt only: a second one chained after it can be suppressed by the browser and read as a cancel
+// (memory: admin login security). The audit row records the typed id, amount and wallet read.
+async function forceRefundHeld(id, amount) {
+  const typed = prompt(`FORCED REFUND of held payout ID ${id} (${amount} ツ) back to the miner's balance.\n\n` +
+    `Only if you have proven it never reached the chain — if it did, the miner is paid twice.\n\n` +
+    `Type the payout ID (${id}) to confirm:`);
+  if (typed === null) return;
+  if (String(typed).trim() !== String(id)) { flash(`Not refunded — the typed ID did not match payout ID ${id}.`, true); return; }
+  try {
+    const res = await adminFetch('/api/admin/withdrawals/' + id + '/force-refund', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ confirm_id: typed.trim() })
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.error || ('HTTP ' + res.status));
+    flash(`Payout ID ${id} force-refunded (${fmtGrin(body.amount)} ツ back to the miner).` +
+      (body.cancelled_slate ? ` Its never-finalized fallback slate was cancelled first.` : '') +
+      (body.wallet_history === 'changed' ? ' Note: the wallet history had CHANGED since this payout was first checked — the refund rests on your own proof.' : ''),
+      false);
     refresh();
   } catch (err) { flash(err.message, true); }
 }
@@ -884,7 +980,7 @@ function wizRefreshState() {
   s1.textContent = _frozen ? 'frozen ✓' : 'not frozen';
   s1.className = 'badge ' + (_frozen ? 'badge-success' : 'badge-warning');
   document.getElementById('sw-freeze-btn').disabled = _frozen;
-  const inflightStatuses = ['tor_sending', 'tor_checking', 'retry_scheduled', 'slatepack_pending', 'finalizing'];
+  const inflightStatuses = ['tor_sending', 'tor_checking', 'tor_held', 'retry_scheduled', 'slatepack_pending', 'finalizing'];
   const n = (_withdrawals || []).filter(w => inflightStatuses.includes(w.status)).length;
   const el = document.getElementById('sw-inflight');
   el.innerHTML = n === 0

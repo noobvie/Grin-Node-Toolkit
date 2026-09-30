@@ -131,12 +131,18 @@ function migrateUsers() {
 }
 
 // Additive, non-destructive: add the ownership-gate proof columns to an existing
-// miner_accounts table (older DBs predate them). last_ip/prev_ip + last_pass_hash/
-// prev_pass_hash back the address-as-identity ownership gate (lib/owner-proof.js): the
-// last-2 mining source IPs and last-2 stratum passwords, all stored as salted scrypt
-// hashes (`v1$…`) — the *_ip names are kept for schema continuity but no longer hold raw
-// IPs after migrateOwnerProofHashes() runs. min_payout is a legacy column from the retired
-// per-account payout threshold (2026-07-17) — kept in the schema, read by nothing.
+// miner_accounts table (older DBs predate them). proof_salt is the per-address scrypt salt
+// for the ownership-proof SET (design §17, table `miner_proofs` below) — minted lazily on
+// an address's first v2 hash, never returned to any client. min_payout is a legacy column
+// from the retired per-account payout threshold (2026-07-17) — kept in the schema, read by
+// nothing.
+//
+// The ten last_*/prev_*/anchor_* proof columns below are LEGACY as of design §17: they held
+// the old 2-slot proof window, and owner-proof.migrateProofSet() copies them into
+// `miner_proofs` once at startup and then NULLs them (that NULL is the migration's
+// idempotency proof). They stay in the schema — never DROP COLUMN — so a rollback to the
+// previous release still finds its columns, and so the migration has somewhere to read from
+// on a DB that upgrades late. Nothing writes them any more.
 function migrateMinerAccounts() {
   try {
     const cols = db.prepare("PRAGMA table_info(miner_accounts)").all();
@@ -144,6 +150,11 @@ function migrateMinerAccounts() {
     const have = new Set(cols.map(c => c.name));
     const additions = {
       min_payout: 'REAL DEFAULT NULL',
+      // Per-address scrypt salt for the proof set (design §17.2 #3). One salt per address so
+      // a verify costs ONE scrypt whatever the set size; minted by owner-proof.getOrCreateSalt
+      // with `UPDATE … WHERE proof_salt IS NULL` + re-read, so two rigs' first shares landing
+      // together can only ever agree on one value. Never leaves the process.
+      proof_salt: 'TEXT DEFAULT NULL',
       last_ip: 'TEXT DEFAULT NULL',
       prev_ip: 'TEXT DEFAULT NULL',
       last_pass_hash: 'TEXT DEFAULT NULL',
@@ -173,7 +184,7 @@ function migrateMinerAccounts() {
       // READS the row into `prev` first, so the alert still goes out (see the DELETE route).
       nostr_prev_username: 'TEXT DEFAULT NULL',
       nostr_prev_npub: 'TEXT DEFAULT NULL',
-      // Capture time of each proof-window slot (audit §J3-1). The AND-gate on
+      // LEGACY (design §17) — capture time of each proof-window slot (audit §J3-1). The AND-gate on
       // nostr-destination — the only miner-reachable route that can REDIRECT money — now
       // refuses a leg younger than the destination cooldown, because both legs are written by
       // one call on one accepted share, so a stranger who mines one share to this address
@@ -183,12 +194,14 @@ function migrateMinerAccounts() {
       prev_ip_at: 'INTEGER DEFAULT NULL',
       last_pass_at: 'INTEGER DEFAULT NULL',
       prev_pass_at: 'INTEGER DEFAULT NULL',
-      // Anchor slot — the address's FIRST-EVER captured proof of each kind (audit §J3-4).
-      // The last-2 window is only two deep and anyone may mine to any address, so two hostile
-      // sessions evict both slots and a miner who has since stopped mining can never
+      // LEGACY (design §17) — anchor slot, the address's FIRST-EVER captured proof of each
+      // kind (audit §J3-4). The anchor SURVIVES §17 as `miner_proofs.is_anchor`; only its
+      // storage moved.
+      // The last-2 window was only two deep and anyone may mine to any address, so two hostile
+      // sessions evicted both slots and a miner who had since stopped mining could never
       // re-capture. The anchor is write-once at first capture and is never rotated, so that
-      // miner always retains a way to reach their own money. It is deliberately NOT accepted
-      // by requireBothProofs: it can never be revoked, so it must not be able to change where
+      // miner always retains a way to reach their own money. Once EVICTED from the set it is
+      // deliberately NOT accepted by requireBothProofs: it can never be revoked, so it must not be able to change where
       // money goes — only to move money to the address's own wallet.
       anchor_ip: 'TEXT DEFAULT NULL',
       anchor_pass_hash: 'TEXT DEFAULT NULL',
@@ -363,7 +376,23 @@ function migrateWithdrawals() {
       // Signed payment proof JSON (see CREATE TABLE). Backfilled by
       // withdrawal-scheduler.backfillPaymentProofs(); older confirmed Tor rows get theirs too,
       // since the wallet keeps the proof for as long as it keeps the transaction.
-      payment_proof: 'TEXT DEFAULT NULL'
+      payment_proof: 'TEXT DEFAULT NULL',
+      // LEGACY: why a row was parked in retry_scheduled (see CREATE TABLE). Nothing writes it
+      // since 2026-09-26 (one Tor attempt, no retry ladder); kept so an old row keeps loading.
+      retry_reason: 'TEXT DEFAULT NULL',
+      // Why a Tor payout FAILED (public enum) and the operator-only detail behind it (see
+      // CREATE TABLE). Legacy rows: NULL / NULL — they predate one-attempt Tor payouts.
+      fail_code: 'TEXT DEFAULT NULL',
+      fail_detail: 'TEXT DEFAULT NULL',
+      // INERT since 2026-09-26: the step-by-step Tor sender that wrote these two was deleted and
+      // NOTHING writes them any more (see CREATE TABLE). Kept, not dropped: an old row may hold
+      // a value, and the admin routes still strip tor_final_slate.
+      tor_step: 'TEXT DEFAULT NULL',
+      tor_final_slate: 'TEXT DEFAULT NULL',
+      // Manual slatepack rail: the armored S1 handed to the miner, and the "pool-wallet cancel
+      // still owed" flag (see CREATE TABLE). Legacy rows: NULL / 0 — nothing to re-show or cancel.
+      slatepack_s1: 'TEXT DEFAULT NULL',
+      slate_cancel_pending: 'INTEGER NOT NULL DEFAULT 0'
     };
     for (const [name, def] of Object.entries(additions)) {
       if (!have.has(name)) {
@@ -498,6 +527,7 @@ function createSchema() {
       is_online INTEGER NOT NULL DEFAULT 0,
       last_seen_at INTEGER DEFAULT NULL,
       min_payout REAL DEFAULT NULL,
+      proof_salt TEXT DEFAULT NULL,
       last_ip TEXT DEFAULT NULL,
       prev_ip TEXT DEFAULT NULL,
       last_pass_hash TEXT DEFAULT NULL,
@@ -524,6 +554,36 @@ function createSchema() {
 
     `CREATE INDEX IF NOT EXISTS idx_miner_address ON miner_accounts(grin_address)`,
     `CREATE INDEX IF NOT EXISTS idx_miner_online ON miner_accounts(is_online)`,
+
+    // Ownership-proof SET (design §17.3) — replaces the 2-slot window that lived in
+    // miner_accounts. Up to PROOF_SET_MAX live rows per (address, kind); see
+    // lib/owner-proof.js for the capture, verify and eviction rules.
+    //   hash          'v2$<b64>' (scrypt under the address's proof_salt) or a legacy
+    //                 'v1$<salt>$<b64>' row carried over by migrateProofSet().
+    //   first_seen_at never updated on a LIVE row. It is what the destination age gate (§J3-1)
+    //                 reads, so a refresh that moved it would defeat that gate exactly as window
+    //                 rotation did. The one write: an evicted anchor returning restarts it (= now),
+    //                 or it would come back as an aged leg nobody earned (design §17.7).
+    //                 NULL = migrated without a known timestamp = treated as OLD.
+    //   last_seen_at  refreshed whenever a capture matches this row; the LRU eviction key.
+    //   is_anchor     the address's first-ever value of this kind (§J3-4). NEVER deleted —
+    //                 when it is the LRU pick of a full set it is flagged evicted_at instead,
+    //                 so a miner who has stopped mining keeps a route to their own wallet.
+    //   evicted_at    NULL = live. Counts, the cap and the LRU pick range over live rows only.
+    //                 Only an anchor row is ever non-live; any other evicted row is deleted.
+    `CREATE TABLE IF NOT EXISTS miner_proofs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      grin_address TEXT NOT NULL,
+      kind TEXT NOT NULL CHECK (kind IN ('ip','pass')),
+      hash TEXT NOT NULL,
+      first_seen_at INTEGER DEFAULT NULL,
+      last_seen_at INTEGER NOT NULL,
+      is_anchor INTEGER NOT NULL DEFAULT 0,
+      evicted_at INTEGER DEFAULT NULL,
+      UNIQUE (grin_address, kind, hash)
+    )`,
+
+    `CREATE INDEX IF NOT EXISTS idx_miner_proofs_lru ON miner_proofs (grin_address, kind, evicted_at, last_seen_at)`,
 
     `CREATE TABLE IF NOT EXISTS blocks (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -567,7 +627,20 @@ function createSchema() {
       created_at INTEGER NOT NULL DEFAULT (unixepoch())
     )`,
 
-    `CREATE INDEX IF NOT EXISTS idx_share_address ON shares(grin_address)`,
+    // Address + TIME, replacing the old single-column idx_share_address (2026-09-27). With only
+    // (grin_address), `WHERE grin_address = ? AND created_at > ?` could seek the address but not
+    // the window, so every per-address read — the account page's worker breakdown and hashrate,
+    // the admin Miners page's rig rows and its "Shares retained" count — walked that miner's whole
+    // retained history (~31 h) with a table lookup per share, whatever window it asked for. With
+    // the time column it is `SEARCH (grin_address=? AND created_at>?)`: rows in the window only;
+    // COUNT/MAX by address become index-only; `ORDER BY created_at` by address needs no temp b-tree.
+    // The old index is DROPPED, not kept beside it: EXPLAIN gives identical plans for every shares
+    // query with or without it (the composite's leading column serves the equality alone), so
+    // keeping it would only add a third index write to every accepted share.
+    // ⚠ Built on the first boot after upgrade over the retained ~31 h of shares — a one-off,
+    // proportional to the table, before the stratum server starts taking shares.
+    `CREATE INDEX IF NOT EXISTS idx_share_address_created ON shares(grin_address, created_at)`,
+    `DROP INDEX IF EXISTS idx_share_address`,
     `CREATE INDEX IF NOT EXISTS idx_share_block_height ON shares(block_height)`,
     `CREATE INDEX IF NOT EXISTS idx_share_created ON shares(created_at)`,
     `CREATE INDEX IF NOT EXISTS idx_share_region ON shares(region, created_at)`,
@@ -691,11 +764,53 @@ function createSchema() {
       -- sender_address, sender_sig), fetched from the Owner API once the payout is confirmed.
       -- NULL = not fetched yet; '' = the wallet holds no proof for this tx (the slatepack/
       -- nostr rail never requests one), so the backfill stops asking.
-      payment_proof TEXT DEFAULT NULL
+      payment_proof TEXT DEFAULT NULL,
+      -- LEGACY since 2026-09-26: why a row was parked in retry_scheduled ('pool_wallet_short' or
+      -- NULL). A Tor payout is now tried ONCE, so there is no retry ladder and nothing writes it;
+      -- a legacy row is resolved out of retry_scheduled at startup (migrateLegacyTorRetries).
+      retry_reason TEXT DEFAULT NULL,
+      -- Why a Tor payout ended tor_failed — a PUBLIC-SAFE enum the account page words:
+      --   wallet_offline     the miner's onion did not answer a fresh probe after the send failed
+      --                      (the ONLY code that counts toward the 5-in-24h Tor pause)
+      --   wallet_unreachable the probe could not tell (our Tor could not look)
+      --   pool_send_path     the miner's wallet answers the probe, yet grin-wallet could not
+      --                      deliver — the pool's side (operator alert tor_send_path)
+      --   pool_busy          the pool wallet could not cover it (NotEnoughFunds), nothing sent
+      --   unknown            a Held payout later proven absent (or refunded by the operator)
+      --   wallet_offline_cleared  a wallet_offline the operator un-counted (pause clear)
+      -- NULL on every non-Tor row and on legacy Tor rows.
+      fail_code TEXT DEFAULT NULL,
+      -- The CLI error / output tail behind fail_code (≤ 500 chars). ADMIN-ONLY: it can carry pool
+      -- wallet figures (NotEnoughFunds) and must never reach a public route.
+      fail_detail TEXT DEFAULT NULL,
+      -- INERT since 2026-09-26 — NOTHING writes tor_step or tor_final_slate any more. They were
+      -- written by the step-by-step Tor send (tor_send_mode = 'stepwise', F5, design §8.1), which
+      -- was deleted that day; the columns stay so an old row keeps loading. tor_step was the step
+      -- that attempt last reached (claimed | initiated | locked | delivering | finalizing | posting).
+      tor_step TEXT DEFAULT NULL,
+      -- The finalized S3 slate (JSON) of such an attempt. It can hold a complete transaction, so
+      -- the admin routes still strip it and no public route selects it.
+      tor_final_slate TEXT DEFAULT NULL,
+      -- Manual slatepack rail only: the armored S1 exactly as first handed to the miner, kept so
+      -- a closed tab can fetch it again (POST /api/account/:addr/withdraw/:id/slatepack, which
+      -- is ownership-gated and serves it only while the row is slatepack_pending). It is
+      -- ENCRYPTED to the miner's own address — only their wallet can open it — and the Goblin
+      -- rail's PLAIN-armor S1 is never written here. Cleared when the row confirms or reverses.
+      slatepack_s1 TEXT DEFAULT NULL,
+      -- 1 = this row was refunded but grin-wallet's cancel_tx for its slate has not succeeded
+      -- yet, so the pool wallet may still hold the slate's inputs locked. Set in the SAME
+      -- transaction as the expiry refund; cleared once the cancel lands (retryExpiredSlateCancels).
+      slate_cancel_pending INTEGER NOT NULL DEFAULT 0
     )`,
 
     `CREATE INDEX IF NOT EXISTS idx_withdrawal_address ON withdrawals(grin_address, status)`,
     `CREATE INDEX IF NOT EXISTS idx_withdrawal_retry ON withdrawals(status, next_retry_at)`,
+    // Public payout feed (GET /api/pool/payments: homepage P-07 teletype, every visitor, every
+    // 60 s): WHERE status='confirmed' ORDER BY confirmed_at DESC LIMIT n. Without this index the
+    // plan is idx_withdrawal_retry + USE TEMP B-TREE FOR ORDER BY — every confirmed payout the
+    // pool has EVER made read and sorted per request, on the synchronous DB that also takes
+    // shares. With it the plan is a covering-index walk that stops after n rows.
+    `CREATE INDEX IF NOT EXISTS idx_withdrawal_confirmed ON withdrawals(status, confirmed_at)`,
 
     `CREATE TABLE IF NOT EXISTS balance_log (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -909,13 +1024,58 @@ function createSchema() {
     // ─── Incentives (Script 07 incentive features) ────────────────────────────
     // Per-address incentive state. Identity-ready (address-keyed) but register-free —
     // there is no account, the grin_address IS the identity.
+    // The donor_* columns (design §16.3, 2026-09-21) held v1's donor name (captured from a
+    // `<name>-donateN` login) and its censor state. UNREAD since design §18 Part 3 — donor
+    // names are pre-moderated donor_requests rows now — and kept only because dropping a
+    // column is a later cleanup. donation_percent is dead too (§18.2). migrateMinerIncentives()
+    // still adds them to older DBs so both schemas stay identical.
     `CREATE TABLE IF NOT EXISTS miner_incentives (
       grin_address TEXT PRIMARY KEY REFERENCES miner_accounts(grin_address),
       join_bonus_paid INTEGER NOT NULL DEFAULT 0,
       donation_percent REAL NOT NULL DEFAULT 0,
       streak_days INTEGER NOT NULL DEFAULT 0,
       last_active_day INTEGER DEFAULT NULL,
-      updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+      updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+      donor_name TEXT DEFAULT NULL,
+      donor_name_set_at INTEGER DEFAULT NULL,
+      donor_censor TEXT DEFAULT NULL,
+      donor_censor_word TEXT DEFAULT NULL,
+      donor_censor_at INTEGER DEFAULT NULL,
+      donor_censor_by INTEGER DEFAULT NULL
+    )`,
+
+    // ─── Donor profiles (design §18.4, 2026-09-24) — pre-moderated name + banner ────────
+    // A request LOG, not columns: every submission is a row and every decision a status change,
+    // so history and audit come free. The two PARTIAL unique indexes are the "one pending + one
+    // approved per (address, kind)" rule as a database fact — lib/donor-profiles.js relies on
+    // them and turns a constraint hit into a clean 409. `image` holds a banner's bytes while it
+    // is PENDING only (never web-reachable, backed up with pool.db) and is NULLed by every
+    // decision; an approved banner lives on disk as uploads/donors/<file>. `reason` is shown to
+    // the donor on their own account page. The v1 donor_* columns above are left alone.
+    `CREATE TABLE IF NOT EXISTS donor_requests (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      grin_address TEXT NOT NULL REFERENCES miner_accounts(grin_address),
+      kind         TEXT NOT NULL CHECK (kind IN ('name','banner')),
+      status       TEXT NOT NULL CHECK (status IN ('pending','approved','rejected','replaced','withdrawn','removed')),
+      name         TEXT,
+      image        BLOB,
+      file         TEXT,
+      mime TEXT, width INTEGER, height INTEGER, bytes INTEGER, sha256 TEXT,
+      submitted_at INTEGER NOT NULL DEFAULT (unixepoch()),
+      decided_at   INTEGER, decided_by INTEGER REFERENCES users(id),
+      reason       TEXT
+    )`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS uq_donor_req_pending  ON donor_requests(grin_address, kind) WHERE status = 'pending'`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS uq_donor_req_approved ON donor_requests(grin_address, kind) WHERE status = 'approved'`,
+    `CREATE INDEX        IF NOT EXISTS idx_donor_req_status  ON donor_requests(status, submitted_at)`,
+
+    // Addresses the operator has barred from SUBMITTING (§18.6). Blocking also withdraws the
+    // address's pending requests; it does not touch a live name/banner (that is a separate remove).
+    `CREATE TABLE IF NOT EXISTS donor_blocks (
+      grin_address TEXT PRIMARY KEY REFERENCES miner_accounts(grin_address),
+      blocked_at INTEGER NOT NULL DEFAULT (unixepoch()),
+      blocked_by INTEGER REFERENCES users(id),
+      reason TEXT
     )`,
 
     // One row per lottery draw. seed_height/seed_hash make the draw publicly verifiable:
@@ -1018,9 +1178,16 @@ function createSchema() {
       api_url TEXT DEFAULT NULL,
       stratum_url TEXT DEFAULT NULL,
       is_active INTEGER NOT NULL DEFAULT 1,
+      lat REAL DEFAULT NULL,
+      lng REAL DEFAULT NULL,
       created_at INTEGER NOT NULL DEFAULT (unixepoch()),
       updated_at INTEGER NOT NULL DEFAULT (unixepoch())
     )`,
+    // lat/lng: OPERATOR-DECLARED position of the gateway box for the public network map
+    // (both set, or both NULL). Typed in by the operator in admin → Regions, never resolved
+    // from an IP — a gateway is the pool's own published server (its stratum hostname is on
+    // the connect grid), so its city is public already. NULL → the map falls back to the
+    // country centroid, which put "Los Angeles" and "New York" 140 km apart in Kansas.
 
     `CREATE INDEX IF NOT EXISTS idx_pool_locations_active ON pool_locations(is_active)`,
 
@@ -1148,6 +1315,7 @@ function createSchema() {
   migratePoolMetricsHourly();
   migrateShareCreditUnit(); // after migrateShares/migrateBlocks: it touches columns they add
   migrateLocations();
+  migrateMinerIncentives();
   migrateAds();
   migratePagesFromConfig();
   seedShippedPages();   // must follow the legacy migration: same table, own markers
@@ -1157,9 +1325,10 @@ function createSchema() {
   // regional gateways the operator declares in admin → Regions.
 }
 
-// Additive, non-destructive: add the country grouping columns to an existing
-// pool_locations table (older DBs predate them). Lets the public connect grid group
-// regional cards under country headings + show a flag.
+// Additive, non-destructive: add the country grouping columns (and the optional
+// operator-declared map position, 2026-09-21) to an existing pool_locations table (older
+// DBs predate them). Lets the public connect grid group regional cards under country
+// headings + show a flag, and the network map pin a gateway on its real city.
 function migrateLocations() {
   try {
     const cols = db.prepare("PRAGMA table_info(pool_locations)").all();
@@ -1167,7 +1336,9 @@ function migrateLocations() {
     const have = new Set(cols.map(c => c.name));
     const additions = {
       country: 'TEXT DEFAULT NULL',
-      country_code: 'TEXT DEFAULT NULL'
+      country_code: 'TEXT DEFAULT NULL',
+      lat: 'REAL DEFAULT NULL',
+      lng: 'REAL DEFAULT NULL'
     };
     for (const [name, def] of Object.entries(additions)) {
       if (!have.has(name)) {
@@ -1177,6 +1348,36 @@ function migrateLocations() {
     }
   } catch (e) {
     console.error(`[db] pool_locations migration check failed: ${e.message}`);
+  }
+}
+
+// Additive, non-destructive: add the donor-name columns (design §16.3, 2026-09-21) to an
+// existing miner_incentives table (older DBs predate them). All six default to NULL, which
+// is the "no name, no censor" state — so every existing donor row reads as a plain donateN
+// donor (masked address on the wall). Since design §18 nothing writes them, and since §18
+// Part 3 nothing reads them either (names are pre-moderated donor_requests rows); they stay in
+// the schema until a later cleanup drops them.
+function migrateMinerIncentives() {
+  try {
+    const cols = db.prepare("PRAGMA table_info(miner_incentives)").all();
+    if (cols.length === 0) return; // fresh DB: CREATE TABLE above has the columns
+    const have = new Set(cols.map(c => c.name));
+    const additions = {
+      donor_name: 'TEXT DEFAULT NULL',
+      donor_name_set_at: 'INTEGER DEFAULT NULL',
+      donor_censor: 'TEXT DEFAULT NULL',
+      donor_censor_word: 'TEXT DEFAULT NULL',
+      donor_censor_at: 'INTEGER DEFAULT NULL',
+      donor_censor_by: 'INTEGER DEFAULT NULL'
+    };
+    for (const [name, def] of Object.entries(additions)) {
+      if (!have.has(name)) {
+        db.exec(`ALTER TABLE miner_incentives ADD COLUMN ${name} ${def}`);
+        console.warn(`[db] miner_incentives: added missing column ${name}`);
+      }
+    }
+  } catch (e) {
+    console.error(`[db] miner_incentives migration check failed: ${e.message}`);
   }
 }
 
@@ -1311,34 +1512,65 @@ function seedShippedPages() {
 // box whose region tag matches a seed tag (e.g. 'sgn') got an INACTIVE row created here first,
 // and ensureLocalRegion only backfills empty columns — it deliberately never re-activates a row,
 // so as not to override an operator who switched a region off — leaving the pool's own region
-// unpublished: no connect card, no gateway on the map.
+// unpublished: no connect card, no gateway on the map. The exclusion only sees the CURRENT tag:
+// a hub that moves to a new tag inherits a DB where that tag was seeded inactive while the old
+// one was local — ensureLocalRegion() handles that case (the local-region change rule).
+// The default grinium regional endpoints (see seedDefaultRegions). city = label;
+// country/country_code drive grouping + flag on the dashboard; lat/lng pin the network-map
+// marker on the city. Without a pin a gateway sits on its COUNTRY centroid (+ a ≤1.6° de-stack
+// ring), which put Los Angeles and New York 140 km apart in Kansas and Toronto on Hudson Bay.
+const SEED_REGIONS = [
+  { v: 1, region: 'nyc', label: 'New York',    country: 'United States',  cc: 'US', host: 'nyc.grinium.com', lat: 40.7128, lng: -74.006 },
+  { v: 1, region: 'lax', label: 'Los Angeles', country: 'United States',  cc: 'US', host: 'lax.grinium.com', lat: 34.0522, lng: -118.2437 },
+  { v: 1, region: 'yyz', label: 'Toronto',     country: 'Canada',         cc: 'CA', host: 'yyz.grinium.com', lat: 43.6532, lng: -79.3832 },
+  { v: 1, region: 'ams', label: 'Amsterdam',   country: 'Netherlands',    cc: 'NL', host: 'ams.grinium.com', lat: 52.3676, lng: 4.9041 },
+  { v: 2, region: 'sgn', label: 'Saigon',      country: 'Vietnam',        cc: 'VN', host: 'sgn.grinium.com', lat: 10.8231, lng: 106.6297 },
+  { v: 3, region: 'hkg', label: 'Hong Kong',   country: 'Hong Kong',      cc: 'HK', host: 'hkg.grinium.com', lat: 22.3193, lng: 114.1694 },
+  { v: 3, region: 'sin', label: 'Singapore',   country: 'Singapore',      cc: 'SG', host: 'sin.grinium.com', lat: 1.3521, lng: 103.8198 },
+  // cqf = Calais–Dunkerque, the IATA code of the airport nearest OVH Gravelines (~15 km) — not `gra`/`lil`.
+  { v: 3, region: 'cqf', label: 'Gravelines',  country: 'France',         cc: 'FR', host: 'cqf.grinium.com', lat: 50.9864, lng: 2.1283 }
+];
+
 function seedDefaultRegions(stratumPort, poolDomain, localRegion) {
   try {
     const dom = String(poolDomain || '').toLowerCase();
     if (!(dom === 'grinium.com' || dom.endsWith('.grinium.com'))) return;
     // Versioned seed: v1 (2026-06) originally shipped han/nyc/lax/yyz/ams; v2 adds sgn
-    // (Saigon). The 'han' (Hanoi) row was later dropped from the seed — fresh installs no
-    // longer get it; already-seeded installs keep any han row until the operator removes it
+    // (Saigon); v3 adds hkg/sin/cqf, 2026-09-23. The 'han' (Hanoi) row was later dropped from
+    // the seed — fresh installs no longer get it; already-seeded installs keep any han row until the operator removes it
     // via the admin Regions page (the seed never retroactively deletes).
     // The marker value stores the applied version — the legacy marker wrote '1', which
     // reads back as "v1 applied", so an already-seeded install inserts ONLY the newer
     // additions. Rows the operator deleted from an already-applied version are never
     // re-created (that version doesn't re-run).
-    const SEED_VERSION = 2;
+    // One-time pin backfill for rows seeded before the seed carried coordinates. Only a row
+    // still wearing its seed label with no pin at all is touched — a row the operator re-labelled
+    // may now be somewhere else. Once only (own marker): a pin the operator later CLEARS in
+    // admin → Regions must stay cleared.
+    const pinned = db.prepare(
+      "SELECT value FROM pool_config WHERE section = '_migrations' AND key = 'regions_pinned'"
+    ).get();
+    if (!pinned) {
+      const pin = db.prepare(
+        'UPDATE pool_locations SET lat = ?, lng = ? WHERE region = ? AND label = ? AND lat IS NULL AND lng IS NULL'
+      );
+      let n = 0;
+      db.transaction(() => {
+        for (const r of SEED_REGIONS) n += pin.run(r.lat, r.lng, r.region, r.label).changes || 0;
+        db.prepare(
+          "INSERT INTO pool_config (section, key, value, value_type) VALUES ('_migrations', 'regions_pinned', '1', 'string')"
+        ).run();
+      })();
+      if (n) console.warn(`[db] pinned ${n} seeded region(s) to their city coordinates (network map)`);
+    }
+    const SEED_VERSION = 3;
     const marker = db.prepare(
       "SELECT value FROM pool_config WHERE section = '_migrations' AND key = 'regions_seeded'"
     ).get();
     const applied = marker ? (parseInt(marker.value, 10) || 1) : 0;
     if (applied >= SEED_VERSION) return;
     const port = stratumPort || 3333;
-    // city = label; country/country_code drive grouping + flag on the dashboard.
-    const REGIONS = [
-      { v: 1, region: 'nyc', label: 'New York',    country: 'United States',  cc: 'US', host: 'nyc.grinium.com' },
-      { v: 1, region: 'lax', label: 'Los Angeles', country: 'United States',  cc: 'US', host: 'lax.grinium.com' },
-      { v: 1, region: 'yyz', label: 'Toronto',     country: 'Canada',         cc: 'CA', host: 'yyz.grinium.com' },
-      { v: 1, region: 'ams', label: 'Amsterdam',   country: 'Netherlands',    cc: 'NL', host: 'ams.grinium.com' },
-      { v: 2, region: 'sgn', label: 'Saigon',      country: 'Vietnam',        cc: 'VN', host: 'sgn.grinium.com' }
-    ];
+    const REGIONS = SEED_REGIONS;
     const local = String(localRegion || '').trim().toLowerCase();
     const pending = REGIONS.filter(r => r.v > applied && r.region !== local);
     // Seeded INACTIVE (is_active = 0), deliberately. A seed row is a PLAN, not a running
@@ -1349,8 +1581,8 @@ function seedDefaultRegions(stratumPort, poolDomain, localRegion) {
     // admin → Regions once its gateway is actually deployed (scripts/lib/07_lib_gateway.sh).
     const insert = db.prepare(`
       INSERT OR IGNORE INTO pool_locations
-        (region, label, country, country_code, stratum_url, is_active)
-      VALUES (?, ?, ?, ?, ?, 0)
+        (region, label, country, country_code, stratum_url, lat, lng, is_active)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 0)
     `);
     const stamp = db.prepare(`
       INSERT INTO pool_config (section, key, value, value_type)
@@ -1359,7 +1591,7 @@ function seedDefaultRegions(stratumPort, poolDomain, localRegion) {
     `);
     const tx = db.transaction(() => {
       for (const r of pending) {
-        insert.run(r.region, r.label, r.country, r.cc, `${r.host}:${port}`);
+        insert.run(r.region, r.label, r.country, r.cc, `${r.host}:${port}`, r.lat, r.lng);
       }
       stamp.run(String(SEED_VERSION)); // seed + "done" marker committed atomically
     });
@@ -1376,21 +1608,60 @@ function seedDefaultRegions(stratumPort, poolDomain, localRegion) {
 //   { label, country, country_code }
 // Backfilling rule mirrors stratum_url: only fill a field that is still empty/NULL, so a
 // fresh config edit applies on the next restart but admin → Regions edits are never clobbered.
+//
+// is_active is NEVER re-asserted on an unchanged region: an operator who switched this box's
+// own region off in admin → Regions meant it, and a restart must not undo that. The ONE
+// exception is a MOVE — the configured region differs from the last local region this DB saw
+// (pool_config `_state`/`local_region`, stamped on every boot that reaches here). A moved hub
+// restores the old hub's DB, where its new tag (e.g. 'cqf') was seeded INACTIVE as a plan while
+// 'nyc' was local; without this it would come up with no connect card and no map marker. So on a
+// change the new local row is activated ONCE and the new tag stamped in the same transaction —
+// the next restart sees an unchanged region and the rule above holds again. The OLD local row is
+// left as it is: that box may be rebuilt as a gateway for the region it used to be.
+// No stamp yet (a DB from before 2026-09-23, or a wiped pool_config) = previous region unknown:
+// stamp only, never activate, because an inactive row there is indistinguishable from one the
+// operator switched off. A move therefore needs the OLD hub to have run this code once.
 function ensureLocalRegion(region, stratumUrl, opts = {}) {
   if (!region || region === 'default') return;
   const label = opts.label || (region.charAt(0).toUpperCase() + region.slice(1));
   const country = opts.country || null;
   const cc = opts.country_code ? String(opts.country_code).toUpperCase() : null;
   try {
+    const seen = db.prepare(
+      "SELECT value FROM pool_config WHERE section = '_state' AND key = 'local_region'"
+    ).get();
+    const prev = seen ? String(seen.value || '') : '';
+    const moved = prev !== '' && prev !== region;
+    const stampLocal = db.prepare(`
+      INSERT INTO pool_config (section, key, value, value_type)
+      VALUES ('_state', 'local_region', ?, 'string')
+      ON CONFLICT(section, key) DO UPDATE SET value = excluded.value
+    `);
     const row = db.prepare(
-      'SELECT region, label, country, country_code, stratum_url FROM pool_locations WHERE region = ?'
+      'SELECT region, label, country, country_code, stratum_url, is_active FROM pool_locations WHERE region = ?'
     ).get(region);
     if (!row) {
-      db.prepare(
-        'INSERT INTO pool_locations (region, label, country, country_code, stratum_url, is_active) VALUES (?, ?, ?, ?, ?, 1)'
-      ).run(region, label, country, cc, stratumUrl || null);
-      console.warn(`[db] registered local region '${region}'${stratumUrl ? ' (' + stratumUrl + ')' : ''}`);
+      db.transaction(() => {
+        db.prepare(
+          'INSERT INTO pool_locations (region, label, country, country_code, stratum_url, is_active) VALUES (?, ?, ?, ?, ?, 1)'
+        ).run(region, label, country, cc, stratumUrl || null);
+        if (prev !== region) stampLocal.run(region);
+      })();
+      console.warn(`[db] registered local region '${region}'${stratumUrl ? ' (' + stratumUrl + ')' : ''}` +
+        (moved ? ` — local region changed from '${prev}'` : ''));
       return;
+    }
+    if (prev !== region) {
+      const activate = moved && !row.is_active;
+      db.transaction(() => {
+        if (activate) db.prepare('UPDATE pool_locations SET is_active = 1 WHERE region = ?').run(region);
+        stampLocal.run(region);
+      })();
+      if (moved) {
+        console.warn(`[db] local region changed '${prev}' → '${region}': ` +
+          (activate ? `activated '${region}' (it was inactive)` : `'${region}' already active`) +
+          `; '${prev}' left as it is — deactivate or re-point it in admin → Regions`);
+      }
     }
     // Backfill only empty fields (the row may predate these columns, or have been created
     // on a pre-nginx first boot when subdomain/location were still blank).

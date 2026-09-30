@@ -18,6 +18,10 @@
         <span id="last-refresh" style="font-size:.75rem;color:var(--text-dim);font-weight:400;margin-left:.8rem;"></span>
       </h2>
 
+      <!-- Result of a card action (Mark reconciled). Inline, never window.alert(): it follows an
+           async step-up, exactly where browsers suppress native dialogs. -->
+      <p id="health-msg" role="status" aria-live="polite" style="display:none;margin:0 0 .8rem;font-size:.9rem;"></p>
+
       <!-- Services grid -->
       <div class="health-grid" id="health-grid">
         <div class="health-card"><div class="health-name"><span class="spinner"></span>Loading…</div></div>
@@ -72,6 +76,7 @@
 <script src="/js/auth.js"></script>
 <script src="/js/api.js"></script>
 <script src="/admin/admin-shell.js"></script>
+<script src="/js/stepup.js"></script>
 <script>
 // Auth gate (httpOnly-cookie aware): redirects to /login.html if not an admin, else wires
 // up the topbar username + Logout. Pool name + testnet banner are handled by admin-shell.js.
@@ -112,6 +117,13 @@ function renderServiceDetail(svc) {
   if (svc.port      != null) parts.push('Port: ' + escHtml(svc.port));
   if (svc.miners_connected != null) parts.push('Miners: ' + escHtml(svc.miners_connected));
   if (svc.spendable_balance != null) parts.push('Spendable: ' + parseFloat(svc.spendable_balance).toFixed(4) + ' GRIN');
+  // Grin Wallet card only: the binary the pool runs vs the version its payout guards were checked
+  // against (lib/grin-wallet-version.js). A mismatch also Degrades the card, with the reason below.
+  if (svc.wallet_version_tested != null) {
+    const v = svc.wallet_version;
+    parts.push('grin-wallet: ' + (v ? 'v' + escHtml(v) : 'unknown') +
+      (v === svc.wallet_version_tested ? ' (tested)' : ' — payouts tested with v' + escHtml(svc.wallet_version_tested)));
+  }
   if (svc.size_mb   != null) parts.push('Size: ' + escHtml(svc.size_mb) + ' MB');
   if (svc.wal_mode  != null) parts.push('WAL: ' + escHtml(svc.wal_mode));
   if (svc.message   != null) parts.push(escHtml(svc.message));
@@ -127,16 +139,26 @@ async function loadHealth() {
       const svc    = d.services && d.services[svcDef.key] ? d.services[svcDef.key] : {};
       const status = svc.status || 'unknown';
       const cls    = statusClass(status);
+      // 'critical' is up but wrong (e.g. a payout marked paid that the wallet cancelled) — red
+      // like Down, but it must not read as an outage.
       const badge  = cls === 'ok'
         ? '<span class="badge badge-ok">OK</span>'
         : cls === 'warn'
           ? '<span class="badge badge-warn">Degraded</span>'
-          : '<span class="badge badge-error">Down</span>';
+          : String(status).toLowerCase() === 'critical'
+            ? '<span class="badge badge-error">Critical</span>'
+            : '<span class="badge badge-error">Down</span>';
       const detail = renderServiceDetail(svc);
+      // An alert nothing resolves automatically (the "paid twice?" alarm) carries its id here; the
+      // operator closes it after reconciling by hand (AlertMonitor.resolveManual, step-up gated).
+      const manual = (Array.isArray(svc.manual_alerts) ? svc.manual_alerts : [])
+        .map(a => `<button type="button" class="btn btn-outline btn-sm" data-resolve-alert="${Number(a.id)}"
+          style="margin-top:.6rem;">Mark reconciled</button>`).join(' ');
       return `
         <div class="health-card ${cls}">
           <div class="health-name">${escHtml(svcDef.name)} ${badge}</div>
           <div class="health-detail" style="margin-top:.4rem;">${detail || 'No data'}</div>
+          ${manual}
         </div>
       `;
     }).join('');
@@ -189,6 +211,40 @@ async function loadReconciliation() {
       `<div class="health-card error" style="margin-bottom:.8rem;"><div class="health-detail">Error: ${escHtml(err.message)}</div></div>`;
   }
 }
+
+// ── Mark reconciled ─────────────────────────────────────────────────────────
+// Closes the "paid twice?" alarm (slate_refunded_but_mined) once the operator has checked it by
+// hand. ONE native prompt (the note), then the in-page step-up — a second native dialog chained
+// after the first can be suppressed by the browser and read as a cancel.
+function showHealthMsg(text, isError) {
+  const el = document.getElementById('health-msg');
+  if (!el) return;
+  el.textContent = text;
+  el.style.color = isError ? 'var(--danger)' : 'var(--text-dim)';
+  el.style.display = '';
+}
+async function resolveAlert(id) {
+  const note = prompt('Mark the "paid twice?" alarm as reconciled.\n\n' +
+    'Only after you have checked it by hand: the payout it names was refunded to the miner AND ' +
+    'its transaction is on chain. Recover the amount or accept the loss first — this only closes the alarm.\n\n' +
+    'What did you find or do? (goes in the audit log)');
+  if (note === null) return;
+  if (!note.trim()) { showHealthMsg('Not closed — a note is required.', true); return; }
+  try {
+    const res = await adminFetch('/api/admin/alerts/' + id + '/resolve', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ note: note.trim() })
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.error || ('HTTP ' + res.status));
+    showHealthMsg('Alarm closed and recorded in the audit log.', false);
+    loadHealth();
+  } catch (err) { showHealthMsg('Not closed: ' + err.message, true); }
+}
+document.getElementById('health-grid').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-resolve-alert]');
+  if (b) resolveAlert(b.getAttribute('data-resolve-alert'));
+});
 
 // Initial paint: load everything once.
 document.addEventListener('DOMContentLoaded', () => { loadHealth(); loadReconciliation(); });

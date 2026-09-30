@@ -7,11 +7,15 @@
 //           publishes one. So it is only a control while no public LIST emits a full address —
 //           the invariant asserted below across all seven feeds that used to. The four
 //           independent copies of the mask must also stay in agreement.
-//   §J11-2  Neither /api/pool/payments (pool-wide) nor /api/account/:addr/withdrawals
-//           (per-address, JSON + CSV) may publish kernel_excess. The kernel names a specific
-//           transaction in the Grin chain forever; published beside an address it is a public
-//           address-to-chain index. It now comes from an ownership-gated POST, on the
-//           `withdraw` bucket — never `public`, because verifyOwnerProof runs scrypt (§F2).
+//   §J11-2  /api/account/:addr/withdrawals (per-address, all-time, JSON + CSV) may not publish
+//           kernel_excess. The kernel names a specific transaction in the Grin chain forever;
+//           published beside a FULL address it is a public address-to-chain index. It comes
+//           from an ownership-gated POST, on the `withdraw` bucket — never `public`, because
+//           verifyOwnerProof runs scrypt (§F2).
+//           The pool-wide /api/pool/payments feed DOES publish it since 2026-09-25 (operator
+//           decision: payment-history.html P-05 Tx ID column). What is pinned there instead is
+//           the two conditions that decision rests on — the address beside it is masked (§J11-1
+//           list below) and only a shape-checked 66-hex value is emitted.
 //   §J11-3  account-settings.html must be noindex, and no page may emit an
 //           /account-settings.html?addr= link — that link was both the full-address source
 //           that inverted the mask and the crawl path into third-party indexes.
@@ -28,6 +32,21 @@
 //           Math.min/Math.max — and because both consumers swallow it, the miner gets a
 //           plausible EMPTY answer rather than an error.
 //   §J11-8  coarsenIp() and the geo resolver must hold at the WRITE side.
+//   §17.4   Ownership proofs (design §17): NOTHING that reaches a browser may carry a proof
+//           hash, the per-address `proof_salt`, or a per-row capture time. The public account
+//           summary emits `proofs` as COUNTS ONLY, and the admin miner view — which §C3's
+//           unrevocable access token makes a near-public surface — emits counts and set-level
+//           timestamps. Both routes SELECT an explicit column list; the SELECT is the control,
+//           because both spread their row into the response.
+//   §16.10  Donor names (design §16, reworked by §18.9): /api/pool/donors and /api/account/:addr
+//   §18.9   may emit a donor's APPROVED `name` and its state — never a pending name, image
+//           bytes, a decider, or anything from the six v1 donor_* columns (unread since §18
+//           Part 3, when the censor + marker machinery was deleted). Every route that touches
+//           donor_requests is enumerated and pinned: the public ones use only the public-safe
+//           readers, the admin readers sit behind secureAdmin/freshAdmin. The address on the
+//           wall stays masked; the mask is a REQUIRED argument of the lib builder. A card's
+//           approved `banner` is built only under the Top-N slot guard (§18 Part 4), and
+//           donate.html keeps its own exact-shape fence on the banner URL.
 //
 // Pure in-process assertions against the real modules — no server, no DB, nothing left
 // running. Run: node scripts/test-public-leakage.js
@@ -43,6 +62,8 @@ const geoip = require(path.join(APP, 'lib/geoip.js'));
 const indexSrc = fs.readFileSync(path.join(APP, 'index.js'), 'utf8');
 const brandingSrc = fs.readFileSync(path.join(WEB, 'public_html/js/branding.js'), 'utf8');
 const dormancySrc = fs.readFileSync(path.join(APP, 'lib/dormancy.js'), 'utf8');
+const donorLedgerSrc = fs.readFileSync(path.join(APP, 'lib/donor-ledger.js'), 'utf8');
+const donorNamesSrc = fs.readFileSync(path.join(APP, 'lib/donor-names.js'), 'utf8');
 const chartsSrc = fs.readFileSync(path.join(WEB, 'public_html/js/charts-init.js'), 'utf8');
 const PUBLIC_PAGES = fs.readdirSync(path.join(WEB, 'public_html')).filter((n) => n.endsWith('.html'));
 
@@ -54,6 +75,13 @@ function routeSrc(verb, routePath) {
   if (start < 0) return '';
   const next = indexSrc.slice(start + 10).search(/\n\s{0,4}app\.(get|post|put|delete|patch)\(/);
   return next < 0 ? indexSrc.slice(start) : indexSrc.slice(start, start + 10 + next);
+}
+
+// One API_DOC_META row's source line, by its `'VERB /path':` key (line-anchored, like §1b).
+function routeMeta(key) {
+  const lines = indexSrc.split('\n');
+  const hit = lines.find((l) => l.trimStart().startsWith(`'${key}':`));
+  return hit || '';
 }
 
 let pass = 0, fail = 0;
@@ -151,13 +179,21 @@ const linkers = PUBLIC_PAGES.filter((n) => {
 ok('§J11-1 no public page builds an /account-settings.html?addr= link', linkers.length === 0,
   linkers.join(', '));
 
-console.log('\n[4] §J11-2 — the on-chain kernel needs an ownership proof\n');
+console.log('\n[4] §J11-2 — the per-address kernel needs an ownership proof; the pool-wide one is shape-gated\n');
 
 const paymentsRoute = routeSrc('get', '/api/pool/payments');
 ok('§J11-2 the /api/pool/payments route exists', paymentsRoute.length > 0);
-ok('§J11-2 /api/pool/payments does NOT select kernel_excess',
-  !/SELECT[\s\S]*kernel_excess[\s\S]*FROM withdrawals/i.test(paymentsRoute),
-  'a pool-wide address+kernel pair is a public chain-analysis index');
+// Published by operator decision (2026-09-25). The SELECT reads the raw column, so the response
+// must overwrite it: `...p` alone would ship whatever the wallet log or a manual record stored.
+ok('§J11-2 /api/pool/payments overwrites kernel_excess with the shape-checked value',
+  /kernel_excess: kernel\b/.test(paymentsRoute) &&
+  /KERNEL_EXCESS_RE\.test\(p\.kernel_excess\)/.test(paymentsRoute));
+const kRe = (indexSrc.match(/const KERNEL_EXCESS_RE = (\/[^\n]+\/[a-z]*);/) || [])[1];
+ok('§J11-2 KERNEL_EXCESS_RE is an anchored 66-hex pattern', kRe === '/^[0-9a-f]{66}$/i', `got ${kRe}`);
+ok('§J11-2 /api/pool/payments still masks the address it pairs the kernel with',
+  /grin_address: maskAddr\(p\.grin_address\)/.test(paymentsRoute));
+ok('§J11-2 /api/pool/payments sends has_kernel_proof as a boolean',
+  /has_kernel_proof: !!p\.kernel_excess/.test(paymentsRoute));
 
 const withdrawalsRoute = routeSrc('get', '/api/account/:addr/withdrawals');
 // Testing that `has_kernel_proof` is PRESENT is not the same as testing that the kernel is
@@ -305,6 +341,335 @@ ok('§J11-8 coarsenIp returns null for a non-IP rather than storing junk',
 ok('§J11-8 geoip never hands an IP back to a caller',
   (() => { const r = geoip.lookupCountry('8.8.8.8'); return r === null || (!('ip' in r) && Object.keys(r).sort().join(',') === 'cc,name'); })(),
   JSON.stringify(geoip.lookupCountry('8.8.8.8')));
+
+
+console.log('\n[9] §16.10 / §18.9 — donor names: only the APPROVED `name` + `name_state` leave the public routes\n');
+
+// The wall. The response is built in lib/donor-ledger.js donorWall() (index.js cannot be
+// required, so the behavioural sweep — 102 donors, every non-approved profile state — lives in
+// scripts/test-donor-league.js). Here: the route hands the lib the mask and nothing it must not,
+// and the lib's card builder cannot emit a donor_* column by construction.
+const donorsRoute = routeSrc('get', '/api/pool/donors');
+const donorsJs = donorsRoute.replace(/\/\/[^\n]*/g, '');
+ok('§16.10 /api/pool/donors delegates to donorWall() with the mask as an argument',
+  /donorWall\(db,\s*\{[\s\S]*?mask:\s*\(a\)\s*=>\s*maskAddr\(a\)/.test(donorsJs));
+ok('§16.10 /api/pool/donors reads no donor_* column itself (the lib does, and never emits it)',
+  !/donor_censor|donor_name|balance_log/.test(donorsJs),
+  'the route used to carry the ledger SQL inline; the v2 shape is the lib\'s');
+// Since design §18.3 the count lives in lib/donor-ledger.js liveDonations() (shared with the
+// account page + admin list), so the bar is asserted THERE and the route must go through it.
+const liveFn = donorLedgerSrc.slice(donorLedgerSrc.indexOf('function liveDonations('),
+                                    donorLedgerSrc.indexOf('const NO_LIVE'));
+ok('§16.10 /api/pool/donors counts rigs from MINING sessions only (acceptedShares > 0, §J6-9)',
+  /donorLiveDonations\(minerManager \? minerManager\.getActiveSessions\(\) : \[\]\)/.test(donorsJs) &&
+  /live,/.test(donorsJs) && /acceptedShares > 0/.test(liveFn.replace(/\/\/[^\n]*/g, '')),
+  'a login is unauthenticated — without the share bar anyone can put rigs on someone else\'s card');
+
+const wallFn = donorLedgerSrc.slice(donorLedgerSrc.indexOf('function donorWall('),
+                                    donorLedgerSrc.indexOf('module.exports'));
+ok('§18.3 the wall never reads the dead v1 donation_percent column',
+  !/donation_percent/.test(wallFn.replace(/\/\/[^\n]*/g, '')) && !/donation_percent/.test(donorsJs));
+ok('§16.10 donorWall THROWS when no mask function is passed (fail closed)',
+  /typeof opts\.mask !== 'function'\)\s*throw/.test(wallFn));
+const cardBlock = (() => {
+  const a = wallFn.indexOf('const card = (r, rank) => {');
+  const b = wallFn.indexOf('\n  };', a);
+  return a < 0 || b < 0 ? '' : wallFn.slice(a, b);
+})();
+// `rank,` is shorthand — a key is followed by `:` OR `,`.
+const cardKeys = [...cardBlock.replace(/\/\/[^\n]*/g, '').matchAll(/^\s{6}([a-z_]+)[:,]/gm)].map((m) => m[1]);
+ok('§16.10 the card builder was found', cardBlock.length > 0 && cardKeys.length >= 14, `${cardKeys.length} keys`);
+ok('§16.10 no card key starts with donor_ (word / by / at / raw censor state stay admin-side)',
+  cardKeys.length > 0 && !cardKeys.some((k) => /^donor_/.test(k)), cardKeys.join(','));
+ok('§16.10 the card address goes through the mask, and only the mask',
+  /address:\s*opts\.mask\(r\.address\)/.test(cardBlock) && !/address:\s*r\.address/.test(cardBlock));
+// Names (design §18.7, since §18 Part 3): the card's name comes from publicProfiles() — the
+// APPROVED, unexpired donor_requests row, nothing else. The v1 displayState/censor/marker
+// machinery is deleted, and the lib must not read the v1 donor_* columns for the wall.
+ok('§18.7 name + name_state come from publicProfiles (approved rows only), not a v1 column',
+  /publicProfiles\(db,/.test(wallFn) && /name:\s*st\.name,/.test(cardBlock) && /name_state:\s*st\.name_state/.test(cardBlock));
+// Banners (design §18.7/§18.9, §18 Part 4). Behaviour (rank N has one, N+1 and the past strip
+// never, slots 0 = none, non-approved rows never) is swept in scripts/test-donor-league.js;
+// here, the card builder's guard itself: the banner is built only under the slot test, the
+// slot count is the bounded helper's, and past cards reach the builder with rank null.
+const cardJs = cardBlock.replace(/\/\/[^\n]*/g, '');
+ok('§18.9 the card banner exists only under inSlot (a safe-integer rank ≥ 1 and ≤ slots)',
+  /const inSlot = Number\.isSafeInteger\(rank\) && rank >= 1 && rank <= slots;/.test(cardJs) &&
+  /const banner = inSlot && b && /.test(cardJs) && /^\s{6}banner,/m.test(cardJs));
+ok('§18.9 slots come from donor-profiles bannerSlots() (bounded 0–10), past cards get rank null',
+  /const slots = bannerSlots\(ds\);/.test(wallFn) && /past\.map\(\(r\) => card\(r, null\)\)/.test(wallFn));
+ok('§18.7 current_percent is gone from the card (Part 4 drops the v1 alias of pct_max)',
+  !/current_percent/.test(cardJs));
+
+// The page. donate.html is the wall's only renderer: no v1 copy may survive the §18.7
+// rewrite, it must not read the dropped field, and it keeps its own fence on the banner URL.
+const donateHtml = fs.readFileSync(path.join(WEB, 'public_html/donate.html'), 'utf8');
+ok('§18.7 donate.html carries no v1 copy (yourbrandname / ceremony / donate0-first / censored)',
+  !/yourbrandname|ceremony|go through <code>donate0|censored/i.test(donateHtml));
+ok('§18.7 donate.html no longer reads current_percent', !/current_percent/.test(donateHtml));
+ok('§18.9 donate.html renders a banner only through bannerOf() and its exact-shape URL regex',
+  donateHtml.includes('var BANNER_URL_RE = /^\\/uploads\\/donors\\/[0-9a-f]{16}\\.(png|jpg|gif)$/;') &&
+  /var b = bannerOf\(d\);/.test(donateHtml) &&
+  (donateHtml.match(/<img /g) || []).length === 1 && /<img src="' \+ escHtml\(b\.url\) \+/.test(donateHtml));
+ok('§18.9 donate.html escapes every name it renders (nameCell + the banner alt)',
+  /'<span class="donor-name">' \+ escHtml\(d\.name\)/.test(donateHtml) && /alt="' \+ escHtml\(alt\)/.test(donateHtml));
+
+ok('§18.7 the wall reads no v1 donor_* column and no miner_incentives row at all',
+  !/donor_name|donor_censor|miner_incentives/.test(wallFn.replace(/\/\/[^\n]*/g, '')));
+ok('§18.6 the censored marker is gone from every source (lib, index incl. api-docs, donor-names)',
+  !/censored-donor|CENSORED_MARKER|censored_display/.test(donorLedgerSrc.replace(/\/\/[^\n]*/g, '')) &&
+  !/censored-donor|CENSORED_MARKER|censored_display|donorDisplayState/.test(indexSrc.replace(/\/\/[^\n]*/g, '')) &&
+  !/censored-donor|CENSORED_MARKER|displayState/.test(donorNamesSrc.replace(/\/\/[^\n]*/g, '')));
+ok('§18.7 the api-docs row says names are APPROVED and addresses MASKED',
+  /APPROVED/.test(routeMeta('GET /api/pool/donors')) && /MASKED/.test(routeMeta('GET /api/pool/donors')));
+
+// The two public readers in lib/donor-profiles.js. publicProfiles selects APPROVED rows only;
+// profileFor's column list never names `image`, and it reads `name` only through the
+// CASE WHEN status = 'approved' expression — the pending text cannot come back from either.
+const profilesSrc = fs.readFileSync(path.join(APP, 'lib/donor-profiles.js'), 'utf8');
+const fnSrc = (name) => {
+  const a = profilesSrc.indexOf(`function ${name}(`);
+  return a < 0 ? '' : profilesSrc.slice(a, profilesSrc.indexOf('\nfunction ', a + 1)).replace(/\/\/[^\n]*/g, '');
+};
+const readCols = (profilesSrc.match(/const READ_COLS = '([^']*)'/) || [])[1] || '';
+ok('§18.9 publicProfiles selects status = approved only, and never `image`',
+  /WHERE status = 'approved'/.test(fnSrc('publicProfiles')) && !/\bimage\b/.test(fnSrc('publicProfiles')));
+ok('§18.9 profileFor reads READ_COLS (no image, no name) + the name of APPROVED rows only',
+  readCols !== '' && !/\bimage\b|\bname\b/.test(readCols) &&
+  /CASE WHEN status = 'approved' THEN name END AS live_name/.test(fnSrc('profileFor')) &&
+  !/\bimage\b/.test(fnSrc('profileFor')));
+
+// Every route that touches donor_requests, directly (SQL) or through the profile/wall libs,
+// enumerated from the route declarations. A public route on this list reads only the
+// public-safe readers (profileFor / publicProfiles via donorWall) or the donor's own writes; the
+// admin readers (adminQueue, requestImage, adminProfiles — full addresses, pending text, bytes)
+// may appear under /api/admin/ only, behind secureAdmin/freshAdmin. A NEW public route here
+// fails this test on purpose: read what it emits (§18.9), then add it.
+const routeDecls = [...indexSrc.matchAll(/\n\s{2}app\.(get|post|put|delete|patch)\('([^']+)',\s*([A-Za-z]+)?/g)]
+  .map((m) => ({ verb: m[1], path: m[2], guard: m[3] || '' }));
+// The handler only: routeSrc runs to the NEXT app.* call, so a route followed by a block of
+// shared setup (the donor-profile multer config follows the Goblin DELETE) would otherwise be
+// charged with that setup. Cut at the handler's own closing `  });` (2-space indent).
+const handlerSrc = (verb, p) => {
+  const s = routeSrc(verb, p);
+  const e = s.indexOf('\n  });');
+  return (e < 0 ? s : s.slice(0, e)).replace(/\/\/[^\n]*/g, '');
+};
+const touching = routeDecls.filter((r) => /donor_requests|DonorProfiles\.|donorWall\(/.test(handlerSrc(r.verb, r.path)));
+const ADMIN_READERS = /DonorProfiles\.(adminQueue|requestImage|adminProfiles)\(/;
+const publicTouching = touching.filter((r) => !r.path.startsWith('/api/admin/'))
+  .map((r) => `${r.verb.toUpperCase()} ${r.path}`).sort();
+ok('§18.9 the public routes that touch donor_requests are exactly the reviewed five',
+  publicTouching.join(' | ') === [
+    'DELETE /api/account/:addr/donor-profile/:kind',
+    'GET /api/account/:addr',
+    'GET /api/pool/donors',
+    'POST /api/account/:addr/donor-profile/banner',
+    'POST /api/account/:addr/donor-profile/name'
+  ].join(' | '), publicTouching.join(' | '));
+ok('§18.9 no public route calls an admin reader (adminQueue / requestImage / adminProfiles)',
+  touching.filter((r) => !r.path.startsWith('/api/admin/'))
+    .every((r) => !ADMIN_READERS.test(handlerSrc(r.verb, r.path))));
+ok('§18.9 every admin route that touches donor_requests is secureAdmin or freshAdmin',
+  touching.filter((r) => r.path.startsWith('/api/admin/')).length >= 8 &&
+  touching.filter((r) => r.path.startsWith('/api/admin/')).every((r) => r.guard === 'secureAdmin' || r.guard === 'freshAdmin'),
+  touching.filter((r) => r.path.startsWith('/api/admin/')).map((r) => `${r.path}:${r.guard}`).join(', '));
+
+// The miner's own view. The account route reads no v1 column, and since §18 Part 5 it no
+// longer sends the v1 aliases either: `donation_percent` (= pct_max) and the donor_name /
+// donor_name_state pair (derived from donor_profile) went once the page read `donation` and
+// `donor_profile` directly (§18.3 "then dropped").
+const acctRoute = routeSrc('get', '/api/account/:addr');
+const acctJs = acctRoute.replace(/\/\/[^\n]*/g, '');
+ok('§18.7 /api/account/:addr reads no v1 donor_* column',
+  !/SELECT[^`]*donor_(name|censor)[^`]*FROM miner_incentives/.test(acctJs) && !/donor_censor/.test(acctJs));
+ok('§18.3 /api/account/:addr sends donation + donor_profile (profileFor), and none of the v1 aliases',
+  /donation:\s*donation,/.test(acctJs) && /donor_profile:\s*donorProfile,/.test(acctJs) &&
+  /DonorProfiles\.profileFor\(db,/.test(acctJs) &&
+  !/donation_percent|donor_name_state|donor_name:/.test(acctJs));
+ok('§18.3 the account api-docs row no longer documents the dropped aliases',
+  !/donation_percent|donor_name_state/.test(routeMeta('GET /api/account/:addr')));
+
+// The page (design §18.8, §18 Part 5). account-settings.html renders the donor's own view:
+// no v1 copy, no dropped alias read, a live banner only through the exact-shape URL fence,
+// previews from data: URLs (the public CSP's img-src has no blob:), and the two proof boxes
+// cleared after every change that went through.
+const acctHtml5 = fs.readFileSync(path.join(WEB, 'public_html/account-settings.html'), 'utf8');
+const acctPageJs = acctHtml5.replace(/<!--[\s\S]*?-->/g, '').replace(/^\s*\/\/[^\n]*$/gm, '');
+ok('§18.8 account-settings.html carries no v1 donation copy (ceremony / yourbrand / donate0-first / censored)',
+  !/yourbrand|ceremony|go through donate0|donate0 first|censored/i.test(acctPageJs));
+ok('§18.8 account-settings.html reads no dropped alias (donation_percent / donor_name / donor_name_state)',
+  !/donation_percent|donor_name/.test(acctPageJs));
+ok('§18.9 the page shows a live banner only through DP_BANNER_URL_RE, the server\'s exact file shape',
+  acctHtml5.includes('const DP_BANNER_URL_RE = /^\\/uploads\\/donors\\/[0-9a-f]{16}\\.(png|jpg|gif)$/;') &&
+  /DP_BANNER_URL_RE\.test\(b\.live_url\)/.test(acctPageJs));
+ok('§18.8 banner previews are data: URLs — createObjectURL appears only in the proof-file download',
+  /readAsDataURL/.test(acctPageJs) && (acctPageJs.match(/createObjectURL/g) || []).length === 1 &&
+  /function downloadPaymentProof[\s\S]*?createObjectURL/.test(acctPageJs));
+ok('§18.8 every donor-profile success clears both proof boxes (name, banner, delete)',
+  (acctPageJs.match(/dpClearProofs\(\);/g) || []).length === 3 &&
+  /function dpClearProofs\(\) \{ \$id\('dp-ip-proof'\)\.value = ''; \$id\('dp-pass-proof'\)\.value = ''; \}/.test(acctPageJs));
+ok('§18.6 the page never reads a pending name or image from the API (only its own POST response)',
+  !/pending_name|pending_image|\.pending\.name|name\.pending\b/.test(acctPageJs) &&
+  /text: String\(json\.name \|\| v\.name\)/.test(acctPageJs));
+
+// ── §17.4 — the ownership-proof set must never reach a browser ───────────────────────────
+const acctProofJs = routeSrc('get', '/api/account/:addr').replace(/\/\/[^\n]*/g, '');
+const adminMinerJs = routeSrc('get', '/api/admin/miners/:addr').replace(/\/\/[^\n]*/g, '');
+
+ok('§17.4 /api/account/:addr never selects proof_salt or any legacy proof column',
+  !/proof_salt/.test(acctProofJs) &&
+  !/\b(last_ip|prev_ip|anchor_ip|last_pass_hash|prev_pass_hash|anchor_pass_hash)\b/.test(acctProofJs));
+ok('§17.4 /api/account/:addr never selects a proof HASH from miner_proofs',
+  !/SELECT[^`]*\bhash\b[^`]*FROM miner_proofs/i.test(acctProofJs),
+  'the summary reads counts and MAX(first_seen_at) only');
+ok('§17.4 the public `proofs` object is counts, the cap, a boolean and one timestamp',
+  /ip:\s*ipSet\.live/.test(acctProofJs) && /pass:\s*passSet\.live/.test(acctProofJs) &&
+  /max:\s*PROOF_SET_MAX/.test(acctProofJs) && /anchor:\s*!!\(/.test(acctProofJs) &&
+  /last_added_at:/.test(acctProofJs));
+ok('§17.4 the retired `evidence` object is gone from the summary',
+  !/evidence:\s*\{/.test(acctProofJs),
+  'it reported per-row capture times, which is the (address, origin, time) linkage hashing removes');
+ok('§17.4 /api/admin/miners/:addr does not select proof_salt or a legacy proof column',
+  !/proof_salt/.test(adminMinerJs) &&
+  !/\b(last_ip|prev_ip|anchor_ip|last_pass_hash|prev_pass_hash|anchor_pass_hash)\b/.test(adminMinerJs));
+ok('§17.4 the admin miner view still uses an explicit column list, not SELECT *',
+  /SELECT id, grin_address, balance/.test(adminMinerJs) && !/SELECT \* FROM miner_accounts/.test(adminMinerJs),
+  'audit §J8-2 — `...acct` spreads whatever the SELECT names');
+ok('§17.4 the admin proof view is per-kind counts and set-level timestamps only',
+  !/\bhash\b/.test(adminMinerJs.slice(adminMinerJs.indexOf('miner_proofs'))) &&
+  /anchor_live/.test(adminMinerJs) && /oldest_first_seen/.test(adminMinerJs));
+ok('§17.4 no CODE path in index.js touches proof_salt',
+  !/proof_salt/.test(indexSrc.replace(/\/\/[^\n]*/g, '')),
+  'the salt is minted and read inside lib/owner-proof.js and nowhere else');
+
+// Every `${…}` interpolated into a console line in owner-proof.js, checked against the
+// identifiers that HOLD a secret. A password or a digest in a service log is exactly the leak
+// the hashing exists to prevent, and journald keeps it far longer than the row would.
+const ownerProofSrc = fs.readFileSync(path.join(APP, 'lib/owner-proof.js'), 'utf8');
+const loggedExprs = (ownerProofSrc.match(/console\.(?:warn|error|log)\(`[^`]*`/g) || [])
+  .flatMap((l) => (l.match(/\$\{([^}]*)\}/g) || []).map((x) => x.slice(2, -1).trim()));
+const SECRET_IDENT = /^(rawPass|pass|rawIp|ip|value|salt|v2|hash|row\.hash|e\.value)$/;
+ok('§17.4 owner-proof.js interpolates no proof value, digest or salt into a log line',
+  loggedExprs.length > 0 && loggedExprs.every((x) => !SECRET_IDENT.test(x)),
+  `logged: ${loggedExprs.join(', ')}`);
+
+// ─── F5 (Part 6): the step-by-step Tor send's two columns ─────────────────────────────────────
+// withdrawals.tor_final_slate can hold a complete signed transaction; tor_step is operator state.
+// The sender that wrote them was deleted 2026-09-26 and both columns are inert, but an old row may
+// still carry a value — so neither may reach any non-admin route, and the two admin routes that
+// SELECT * FROM withdrawals and serve the rows must still drop the slate.
+console.log('\n[F5] stepwise columns stay off every public route');
+{
+  const routes = [...indexSrc.matchAll(/\bapp\.(get|post|put|delete|patch)\('([^']+)'/g)].map((m) => [m[1], m[2]]);
+  const publicRoutes = routes.filter(([, p]) => !p.startsWith('/api/admin'));
+  const leaks = publicRoutes.filter(([v, p]) => /tor_final_slate|tor_step/.test(routeSrc(v, p)));
+  ok('no non-admin route mentions tor_final_slate or tor_step', publicRoutes.length > 20 && leaks.length === 0,
+    leaks.map(([v, p]) => `${v} ${p}`).join(', '));
+  const starSelect = publicRoutes.filter(([v, p]) =>
+    /SELECT\s+(?:w\.)?\*\s+FROM\s+withdrawals/i.test(routeSrc(v, p).replace(/\/\/[^\n]*/g, '')));
+  ok('no non-admin route does SELECT * FROM withdrawals (the columns would ride along)', starSelect.length === 0,
+    starSelect.map(([v, p]) => `${v} ${p}`).join(', '));
+  const adminList = routeSrc('get', '/api/admin/withdrawals');
+  ok('GET /api/admin/withdrawals drops tor_final_slate from every row', /delete rest\.tor_final_slate;/.test(adminList));
+  const adminMiner = routeSrc('get', '/api/admin/miners/:addr');
+  ok('GET /api/admin/miners/:addr drops tor_final_slate from pending_withdrawals',
+    /\.map\(\(\{ tor_final_slate, (?:[a-z_0-9]+, )*\.\.\.rest \}\) => rest\)/.test(adminMiner));
+  ok('every admin route that serves SELECT * FROM withdrawals rows is one of those two',
+    routes.filter(([v, p]) => p.startsWith('/api/admin') &&
+      /SELECT \* FROM withdrawals WHERE (status|grin_address)/.test(routeSrc(v, p)))
+      .every(([v, p]) => (v === 'get' && (p === '/api/admin/withdrawals' || p === '/api/admin/miners/:addr'))));
+}
+
+// ─── Stored manual-rail S1 (2026-09-25) ───────────────────────────────────────────────────────
+// withdrawals.slatepack_s1 is served by exactly ONE route: the owner's ownership-gated re-fetch,
+// narrowed in its SQL to their own pending manual-rail payout. Encrypted to the owner, so a leak
+// would not steal — but a Goblin row must never carry one (plain armor), and a second route
+// serving it would quietly drop the proof gate the payout surface is built on.
+console.log('\n[S1] the stored slatepack is served by one gated route only');
+{
+  const RESHOW = ['post', '/api/account/:addr/withdraw/:id/slatepack'];
+  const routes = [...indexSrc.matchAll(/\bapp\.(get|post|put|delete|patch)\('([^']+)'/g)].map((m) => [m[1], m[2]]);
+  const mentions = routes.filter(([v, p]) => /slatepack_s1/.test(routeSrc(v, p).replace(/\/\/[^\n]*/g, '')));
+  ok('only the re-fetch route reads slatepack_s1 (admin routes only strip it)',
+    mentions.every(([v, p]) => (v === RESHOW[0] && p === RESHOW[1]) ||
+      (v === 'get' && (p === '/api/admin/withdrawals' || p === '/api/admin/miners/:addr'))) &&
+    mentions.some(([v, p]) => v === RESHOW[0] && p === RESHOW[1]),
+    mentions.map(([v, p]) => `${v} ${p}`).join(', '));
+  const src = routeSrc(...RESHOW).replace(/\/\/[^\n]*/g, '');
+  const proofAt = src.indexOf('verifyOwnerProof(');
+  const selectAt = src.indexOf('slatepack_s1 FROM withdrawals');
+  ok('re-fetch: the ownership proof is checked BEFORE the row is read', proofAt > 0 && selectAt > proofAt && /if \(!proof\.ok\)/.test(src));
+  ok('re-fetch: the SELECT is narrowed to this address, the manual rail and a still-pending row',
+    /WHERE id = \? AND grin_address = \? AND method = 'slatepack' AND status = 'slatepack_pending'/.test(src));
+  ok('re-fetch: rate-limited on the withdraw bucket, answered no-store',
+    /rateLimiter\.middleware\('withdraw'\)/.test(src) && /Cache-Control', 'no-store'/.test(src));
+  ok('GET /api/admin/withdrawals drops slatepack_s1', /delete rest\.slatepack_s1;/.test(routeSrc('get', '/api/admin/withdrawals')));
+  ok('GET /api/admin/miners/:addr drops slatepack_s1',
+    /\(\{ tor_final_slate, slatepack_s1, \.\.\.rest \}\) => rest/.test(routeSrc('get', '/api/admin/miners/:addr')));
+  const sched = fs.readFileSync(path.join(APP, 'lib/withdrawal-scheduler.js'), 'utf8');
+  const nostrCreate = sched.slice(sched.indexOf('async createNostrWithdrawal('), sched.indexOf('async finalizeNostrWithdrawal('));
+  ok('the Goblin rail (plain-armor S1) never writes slatepack_s1', nostrCreate.length > 500 && !/slatepack_s1/.test(nostrCreate));
+  const pageSync = acctPageJs.slice(acctPageJs.indexOf('function spSyncPending('), acctPageJs.indexOf('function spClear('));
+  ok('the page restores a pending payout only for the manual rail',
+    /p\.status === 'slatepack_pending' && p\.method === 'slatepack'/.test(pageSync));
+}
+
+// ─── One-attempt Tor payouts (2026-09-26): fail_code public, fail_detail admin-only ─────────────
+// withdrawals.fail_detail is the CLI error behind a failed / Held Tor payout. On a pool-wallet
+// shortfall it carries grin-wallet's available/needed figures — wallet figures never reach a miner.
+// fail_code is the public-safe enum the account page words.
+console.log('\n[fail] fail_detail stays admin-only; fail_code and the Tor pause are the public surface');
+{
+  const routes = [...indexSrc.matchAll(/\bapp\.(get|post|put|delete|patch)\('([^']+)'/g)].map((m) => [m[1], m[2]]);
+  const code = (v, p) => routeSrc(v, p).replace(/\/\/[^\n]*/g, '');
+  const leaks = routes.filter(([v, p]) => !p.startsWith('/api/admin') && /fail_detail/.test(code(v, p)));
+  ok('no non-admin route names fail_detail', routes.length > 20 && leaks.length === 0, leaks.map(([v, p]) => `${v} ${p}`).join(', '));
+  const p08 = code('get', '/api/account/:addr/withdrawals');
+  ok('P-08 history selects fail_code by name (an explicit column list, never SELECT *)',
+    /SELECT id, amount, fee, method, status, fail_code, /.test(p08) && !/SELECT\s+\*/.test(p08));
+  const summary = code('get', '/api/account/:addr');
+  ok('the account summary\'s tor_pause is torPauseStatus() — counts and a timestamp — and its window is the scheduler\'s TTL',
+    /withdrawalScheduler\.torPauseStatus\(acct\.grin_address\)/.test(summary) && /tor_pause:\s*torPause,/.test(summary) &&
+    /slatepack_window_minutes:\s*withdrawalScheduler \? Math\.round\(withdrawalScheduler\.slatepackTtlSeconds \/ 60\) : null/.test(summary));
+  const sched = fs.readFileSync(path.join(APP, 'lib/withdrawal-scheduler.js'), 'utf8');
+  const pauseFn = sched.slice(sched.indexOf('  torPauseStatus(grinAddress'), sched.indexOf('  clearTorPause(grinAddress'));
+  ok('torPauseStatus returns exactly { failures_24h, max, paused_until }',
+    pauseFn.length > 100 && /return \{ failures_24h: times\.length, max: TOR_FAIL_MAX, paused_until: pausedUntil \};/.test(pauseFn));
+  ok('the account api-docs row names neither fail_detail nor a wallet figure',
+    !/fail_detail|available_disp|NotEnoughFunds/.test(routeMeta('GET /api/account/:addr') + routeMeta('GET /api/account/:addr/withdrawals')));
+  // The page half (Session 3): it words fail_code and nothing else. A page that read fail_detail
+  // would show it the day a route leaked it, so the page must not even know the name.
+  const pageFiles = ['public_html/account-settings.html', 'public_html/js/payout-methods.js'];
+  const pageSrc = pageFiles.map((f) => fs.readFileSync(path.join(WEB, f), 'utf8')).join('\n');
+  ok('the account page and the rail registry never read fail_detail', !/fail_detail/.test(pageSrc));
+  ok('…and word a failed Tor payout from fail_code', /row\.fail_code/.test(pageSrc));
+  ok('…and name no grin-wallet figure (available / needed / NotEnoughFunds)', !/available_disp|amount_needed|NotEnoughFunds/.test(pageSrc));
+}
+
+// ─── Games platform link (design §19.3, plan Part 2) ─────────────────────────────────────────
+// The games service's three routes live under /internal/, which nginx never proxies — putting one
+// under /api/ would publish it through the vhost's /api/ location. And the branding payload is
+// the most-fetched public document: it may carry the games nav flag, never where the games
+// service listens or how the link is authenticated. (Full coverage: scripts/test-games-link.js.)
+console.log('\n[games] /internal stays off /api/; branding carries only { mode, chat }');
+{
+  const gamesSrc = fs.readFileSync(path.join(APP, 'lib/games-link.js'), 'utf8');
+  const apiRoutes = [...indexSrc.matchAll(/\bapp\.(get|post|put|delete|patch|all|use)\('([^']+)'/g)].map((m) => m[2]);
+  ok('no index.js route under /api/ names "internal"', apiRoutes.length > 20 && !apiRoutes.some((p) => p.startsWith('/api/') && /internal/i.test(p)));
+  ok('the lib answers its internal routes only under /internal/games/',
+    /'POST \/internal\/games\/verify-proof'/.test(gamesSrc) && /'GET \/internal\/games\/activity'/.test(gamesSrc) &&
+    /'GET \/internal\/games\/config'/.test(gamesSrc) && !/'(GET|POST) \/api\//.test(gamesSrc));
+  ok('the lib registers no public (non-admin) /api/ route', ![...gamesSrc.matchAll(/app\.(get|post|put|delete|patch|all|use)\('([^']+)'/g)]
+    .some((m) => !m[2].startsWith('/api/admin/')));
+  const flag = gamesSrc.slice(gamesSrc.indexOf('  function publicFlag()'), gamesSrc.indexOf('  // ── Health probe'));
+  ok('publicFlag returns only { mode, chat } — no port, file path or secret',
+    flag.length > 100 && (flag.match(/return \{[^}]*\}/g) || []).every((r) => /^return \{ mode: [^,]+, chat: [^,}]+ \}$/.test(r)) &&
+    !/games_port|gamesPort|linkFile|linkSecret|secret/.test(flag));
+  ok('the branding route sets cfg.games from publicFlag() and nothing else games-related',
+    /cfg\.games = gamesLink\.publicFlag\(\);/.test(routeSrc('get', '/api/public/branding')) &&
+    !/games_port|games_link_secret_file|linkSecret/.test(routeSrc('get', '/api/public/branding')));
+}
 
 console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed\n`);
 process.exit(fail === 0 ? 0 : 1);

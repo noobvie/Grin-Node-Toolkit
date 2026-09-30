@@ -71,6 +71,12 @@ function mergeEnvVars(config) {
     withdrawal_fee: config.withdrawal_fee !== undefined ? config.withdrawal_fee : 0.04,
     // Cross-rail wait after a reversed payout before the miner can request another (0 disables).
     withdrawal_cooldown_minutes: config.withdrawal_cooldown_minutes !== undefined ? config.withdrawal_cooldown_minutes : 30,
+    // Minutes a manual Slatepack payout waits for the miner's response before it expires: the
+    // pool cancels its wallet tx and returns the locked balance. Was a hardcoded 24h until
+    // 2026-09-24 (scheduler read a `slatepack_ttl_hours` nothing ever set). 30 min: a miner who
+    // is at their wallet needs a few; a long window only keeps pool-wallet coins locked for a
+    // request nobody is finishing — and miners have no cancel, so expiry is the only way out.
+    slatepack_ttl_minutes: config.slatepack_ttl_minutes !== undefined ? config.slatepack_ttl_minutes : 30,
 
     // ── Goblin/Nostr payout rail (design §15; OFF by default — needs `npm install`
     // for nostr-tools + ws and a VPS E2E test with a real Goblin wallet). Pays a THIRD
@@ -83,7 +89,7 @@ function mergeEnvVars(config) {
     // Hours a registered destination must age before it can receive a payout.
     nostr_destination_cooldown_hours: config.nostr_destination_cooldown_hours !== undefined ? config.nostr_destination_cooldown_hours : 48,
     // Minutes a DELIVERED-but-unanswered Goblin payout stays locked before it auto-refunds.
-    // Separate from the manual slatepack rail's 24h (slatepack_ttl_hours): Goblin AutoReceives
+    // Separate from the manual slatepack rail's slatepack_ttl_minutes (30): Goblin AutoReceives
     // automatically, so if the miner has the wallet open the S2 comes back in seconds — a short
     // window bounds a stranded lock without hurting the human paste-back flow. Too tight only
     // risks a harmless false refund (retry), never a double-pay. Tune from a real pilot round-trip.
@@ -147,30 +153,33 @@ function mergeEnvVars(config) {
 
     tor_enabled: config.tor_enabled !== undefined ? config.tor_enabled : true,
     tor_socks_port: config.tor_socks_port || 9050,
-    tor_check_timeout_ms: config.tor_check_timeout_ms || 3000,
+    // Per-step inactivity timeout of the Tor reachability probe (SOCKS connect, then the
+    // check_version reply). 8 s matches 06d; the old 3 s timed out healthy wallets, because a
+    // cold onion connect routinely takes 5–15 s.
+    tor_check_timeout_ms: config.tor_check_timeout_ms || 8000,
     // Pre-flight Tor reachability gate: when ON, a Tor withdrawal is refused up front if the
     // miner's wallet listener isn't answering over Tor RIGHT NOW (probe = derive the v3 onion
-    // from the grin address, SOCKS5-connect to onion:80 via the tor daemon). Blocks only on a
-    // CONFIDENT offline signal — if the pool box can't run the probe at all (no tor daemon /
-    // socks lib), it fails OPEN and lets grin-wallet be the authority at send time, so a
-    // misconfigured box never bricks every Tor payout. grin-wallet maps the onion HS to
-    // virtual port 80 (impls/src/tor/config.rs: `HiddenServicePort 80 <listener>`).
+    // from the grin address, SOCKS5-tunnel to onion:80 via the tor daemon, POST check_version
+    // to the wallet's foreign API — lib/wallet-tor.js). Blocks only on a CONFIDENT offline
+    // signal — if the pool box can't run the probe at all (tor daemon down or silent), it
+    // fails OPEN and lets grin-wallet be the authority at send time, so a misconfigured box
+    // never bricks every Tor payout. grin-wallet maps the onion HS to virtual port 80
+    // (impls/src/tor/config.rs: `HiddenServicePort 80 <listener>`).
     tor_preflight_gate: config.tor_preflight_gate !== undefined ? config.tor_preflight_gate : true,
     tor_onion_virtual_port: config.tor_onion_virtual_port || 80,
-    // Fresh-circuit retries before the probe declares a wallet offline — dodges a single
-    // transient Tor circuit failure wrongly blocking a healthy listener.
+    // Attempts before the probe declares a wallet offline, each on a FRESH circuit (per-attempt
+    // SOCKS isolation tag) — dodges a single transient circuit failure wrongly blocking a
+    // healthy listener. Worst case ≈ retries × 2 × tor_check_timeout_ms (32 s at the defaults).
     tor_check_retries: config.tor_check_retries || 2,
+    // tor_send_mode + tor_send_{connect,receive}_timeout_ms were REMOVED 2026-09-26 with the
+    // step-by-step Tor sender (F5). A Tor payout is one `grin-wallet send -d`; a stale key in a
+    // config file is ignored.
 
     alert_large_withdrawal: config.alert_large_withdrawal || 100,
     alert_tor_fails_per_week: config.alert_tor_fails_per_week || 3,
     alert_rapid_creates: config.alert_rapid_creates || 2,
 
-    withdrawal_retry_delays: config.withdrawal_retry_delays || [
-      6 * 3600,
-      12 * 3600,
-      24 * 3600,
-      48 * 3600
-    ],
+    // withdrawal_retry_delays (the Tor retry ladder) was REMOVED 2026-09-26: one Tor attempt.
 
     // ─── Multi-region (Model C: thin stratum gateways) ──────────────────────
     // role: singlebox (default) | hub. Regional GATEWAYS are NOT a pool app role — they
@@ -194,6 +203,16 @@ function mergeEnvVars(config) {
     // only tunnelled gateways can reach them; defaults to loopback so a misconfigured box
     // never exposes them publicly. The Script 07 installer sets this to the wg server IP.
     region_listen_host: config.region_listen_host || process.env.REGION_LISTEN_HOST || '127.0.0.1',
+
+    // ─── Games platform link (design §19.3) ─────────────────────────────────
+    // Where the games service listens (the admin proxy + health probe target) and the path of
+    // the shared link secret (never the secret itself). Installer-owned pool.json keys, NOT
+    // admin-panel settings: the proxy sends the secret to this port, so an admin-editable port
+    // would let a stolen admin session aim the secret at any localhost service. lib/games-link.js
+    // validates both and disables the link on a bad value — it never refuses the pool's boot.
+    games_port: config.games_port || (isMain ? 8081 : 8091),
+    games_link_secret_file: config.games_link_secret_file ||
+      `/opt/grin/conf/grin_pubgames_link_${isMain ? 'mainnet' : 'testnet'}`,
 
     // Public web/stratum hostname (e.g. grinium.com). Used to derive the local
     // region's connect address (subdomain:stratum_port) in db.ensureLocalRegion.

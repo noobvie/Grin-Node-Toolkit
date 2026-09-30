@@ -23,7 +23,6 @@ const {
 } = require('./stratum-protocol');
 const ShareValidator = require('./shares');
 const MinerManager = require('./miners');
-const IncentivesManager = require('./incentives');
 // Shared with the public feeds so the journal masks addresses the same way they do —
 // one shape (grin1qxy…mn4p) rather than a second, divergent redaction (audit §J8-5).
 const { maskAddress } = require('./dormancy');
@@ -177,7 +176,6 @@ class StratumServer {
     this.boundPorts = new Set();
     this.shareValidator = new ShareValidator(config);
     this.minerManager = minerManager || new MinerManager(config);
-    this.incentives = new IncentivesManager(config);
     // Map<socket, sessionId|null> — authoritative socket registry for broadcasting
     this.sockets = new Map();
     // Current job pushed by NodeStratumClient via setNewJob()
@@ -556,7 +554,7 @@ class StratumServer {
       ? (params.login || (Array.isArray(params) ? params[0] : null))
       : null);
     // Stratum password — kept in the in-memory session only, and hashed into the address's
-    // ownership-proof window on the session's first ACCEPTED share (owner-proof.js decides
+    // ownership-proof set on the session's first ACCEPTED share (owner-proof.js decides
     // whether it is usable; factory defaults like "x" are never captured). Never logged.
     //
     // Retention cap: ASIC firmware password fields are often unbounded (a G1 Mini accepts 54k+
@@ -579,7 +577,7 @@ class StratumServer {
       socket.write(JSON.stringify(
         createLoginResponse(id, { code: -1, message:
           `Invalid login. Use a ${isMain ? 'mainnet grin1…' : 'testnet tgrin1…'} Slatepack address, ` +
-          `optionally as address.worker_name (worker name auto-shortens to 25 chars; keep it under 40)` })
+          `optionally as address.worker_name (worker name auto-shortens to 32 chars; keep it within 48)` })
       ) + '\n');
       socket.destroy();
       return;
@@ -616,26 +614,17 @@ class StratumServer {
 
     // NOTE: the miner's source IP / password are deliberately NOT recorded here. Stratum login
     // is unauthenticated (the address IS the username), so recording at login let anyone with a
-    // TCP socket log in under a victim's address and poison its ownership-proof windows
-    // (evicting the real owner's proofs / passing the gate). Both are recorded on the session's
+    // TCP socket log in under a victim's address and poison its ownership-proof set
+    // (adding its own entries / passing the gate). Both are recorded on the session's
     // first ACCEPTED share instead (see handleSubmit) — evidence requires actual PoW.
 
     const sessionId = this.minerManager.createSession(parsed.grin_address, parsed.worker_name, ip, region, pass);
     setSession(sessionId);
 
-    // Optional `donateN` worker tag → the miner's voluntary donation %. PARKED on the session
-    // here and applied on the first accepted share (audit §J3-5), for exactly the reason the
-    // note below gives about proof capture: this handler is unauthenticated, so applying it at
-    // login let ANY TCP client send `{"login":"<victim>.x-donate100"}` and permanently divert
-    // up to 100% of that address's future PPLNS credit into the prize pool — persistently (a
-    // normal login carries no donate tag, so the victim's own rig never clears it) and
-    // irreversibly (the prize pool pays out to other people). Donations are on by default, so
-    // this needed no operator misconfiguration. The tag is a convenience, not an instruction
-    // from someone who has proved anything.
-    if (parsed.donation_percent !== null && parsed.donation_percent !== undefined) {
-      const s = this.minerManager.getSession(sessionId);
-      if (s) s.donationPercent = parsed.donation_percent;
-    }
+    // A `donateN` worker tag needs nothing here (design §18.2): it stays in the worker name,
+    // every share is stored under that name, and rewards.js reads the % per SHARE when a block
+    // matures. Nothing is written per address, so a stranger's login under someone else's
+    // address can only ever donate the credit of that stranger's own shares.
 
     socket.write(JSON.stringify(createLoginResponse(id)) + '\n');
 
@@ -653,7 +642,7 @@ class StratumServer {
     // Address MASKED, IP in full (audit §J8-5). This one line is the only place the pool ever
     // writes a miner's full address next to their real MINING ip — nginx never sees stratum, so
     // there is no second copy — and it is exactly the pairing owner-proof.js spends a 16 MB
-    // scrypt per capture to avoid storing in `miner_accounts.last_ip`. journald keeps it for
+    // scrypt per capture to avoid storing a raw IP in `miner_proofs`. journald keeps it for
     // whatever SystemMaxUse/MaxRetentionSec say, which on an untuned box is months.
     //
     // The IP is kept whole on purpose, and the address is masked instead: the full IP is how an
@@ -814,7 +803,7 @@ class StratumServer {
       session.acceptedShares = (session.acceptedShares || 0) + 1;
 
       // Ownership-gate evidence: record the miner's source IP + stratum password into the
-      // address's proof windows only after the node ACCEPTED a share on this session — a login
+      // address's proof set only after the node ACCEPTED a share on this session — a login
       // alone must not count (see handleLogin). Once per session; session.ip is the real miner
       // IP (direct socket, or PROXY-protocol v2 value on a Model C gateway listener). Async
       // (scrypt hashing) — fire and forget, never blocks the share path.
@@ -826,45 +815,19 @@ class StratumServer {
 
       }
 
-      // Voluntary donation tag, parked at login and applied here. §J3-5 moved it off the
-      // unauthenticated login handler and onto the first accepted share; §J6-7 adds the two
-      // conditions that make the cost match what it moves:
-      //
-      //   · PROOF_MIN_SHARES, not one share — the same bar as ROTATING an ownership proof this
-      //     address already has. Redirecting up to 100% of an address's future PPLNS credit must
-      //     not be cheaper than rotating its identity, and it was: one share, and the share the
-      //     attacker had to produce was itself credited to the victim.
-      //   · A RAISE needs the slot to be empty; a LOWER is always honoured. So a stranger can
-      //     only ever reduce someone's donation (harmless), the victim can always clear a tag
-      //     someone else set by logging in once with `.donate0`, and the first value an address
-      //     ever sets still works with no ceremony. This matters because the proceeds go to the
-      //     prize pool, which pays out to OTHER people — the diversion is irreversible once made.
-      if (session.donationPercent !== null && session.donationPercent !== undefined &&
-          !session.donationDone && session.acceptedShares >= PROOF_MIN_SHARES) {
-        session.donationDone = true;
-        try {
-          const current = this.incentives.donationPercent(session.grinAddress) || 0;
-          if (session.donationPercent <= current || current === 0) {
-            this.incentives.setDonation(session.grinAddress, session.donationPercent);
-          } else {
-            console.warn(`[${new Date().toISOString()}] Donation raise ${current}%→${session.donationPercent}% ` +
-                         `refused for ${session.grinAddress}: a stored donation may only be LOWERED from stratum (§J6-7)`);
-          }
-        } catch (e) {
-          console.error(`Error setting donation for ${session.grinAddress}: ${e.message}`);
-        }
-      }
-
       // Ownership-proof capture runs at most twice per session, and the second pass is the
-      // point of it (audit §J3-4). The window is only two slots deep and anyone may mine to
-      // anyone's address, so two hostile sessions used to evict both of a miner's proofs — and
-      // a miner who had since stopped mining could never re-capture, leaving their balance
-      // unreachable. DISPLACING a stored value now costs sustained work, not one share:
-      //   · first accepted share  → capture, but only into EMPTY slots (mayDisplace false).
+      // point of it (audit §J3-4). Anyone may mine to anyone's address, so ADDING a proof
+      // beside the ones an address already holds costs sustained work, not one share:
+      //   · first accepted share  → capture, but only into an EMPTY set (mayDisplace false).
       //     A brand-new address has nothing to protect, and gating first capture would strand
       //     a rig that reconnects too often to ever reach the threshold.
-      //   · PROOF_MIN_SHARES-th   → capture again, now permitted to rotate an existing value.
-      // recordOwnerEvidence is a no-op when nothing changed, so a normal rig writes once.
+      //   · PROOF_MIN_SHARES-th   → capture again, now permitted to add to a non-empty set.
+      // A value already on record only refreshes its last-seen stamp (design §17), so a rig
+      // reconnecting from a known IP costs one UPDATE and writes no audit row — that path is
+      // why honest multi-site churn is now silent where the old 2-slot window raised an alarm
+      // for it. `session.acceptedShares`, never `shareCount`: the latter counts the whole
+      // address, so a bare-login attacker would ride the victim's own mining to the threshold
+      // (§J3 self-review).
       if (!session.evidenceDone &&
           (session.acceptedShares === 1 || session.acceptedShares >= PROOF_MIN_SHARES)) {
         const mayDisplace = session.acceptedShares >= PROOF_MIN_SHARES;

@@ -65,6 +65,21 @@
 # branch is upstream's choice and not a guarantee.
 # A product may override with GWI_PIN_TAG (set it to "latest" to track head).
 #
+# Pin moved v5.4.1 → v5.5.0 on 2026-09-25, read against upstream v5.4.1..v5.5.0:
+#  - Tor: v5.5.0 adds an in-process Arti client, chosen by `[tor] use_integrated`.
+#    A toml with a [tor] section but no such key (every toml a 5.4.1 `init`
+#    wrote) reads it as FALSE and keeps spawning the external `tor` binary as
+#    before; a toml written by a 5.5.0 `init` carries `use_integrated = true`.
+#    Arti keeps its state under <send_config_dir>/arti/. The listener onion is
+#    still derived from the wallet seed, so that keystore is rebuildable, not a
+#    new identity to back up.
+#  - Owner API `set_tor_config` now REWRITES grin-wallet.toml on disk (5.4.1
+#    only changed the running instance). No product calls it today; keep it
+#    that way unless persisting is actually wanted.
+#  - Owner v3 and CLI shapes the toolkit uses are unchanged (`send -d/-a`,
+#    `repost -i -f`, init_send_tx / tx_lock_outputs / finalize_tx / post_tx);
+#    TxLogEntry only gained an optional `tx_slate_state`.
+#
 # Convention: sourced lib → NO shebang / NO `set -e`.
 # =============================================================================
 
@@ -78,7 +93,7 @@ GWI_GITHUB_API_BASE="${GWI_GITHUB_API_BASE:-https://api.github.com/repos/${GWI_G
 GWI_GITHUB_API="${GWI_GITHUB_API:-${GWI_GITHUB_API_BASE}/latest}"
 
 GWI_STORE_DIR="${GWI_STORE_DIR:-/opt/grin/wallet-bin}"
-GWI_DEFAULT_TAG="${GWI_DEFAULT_TAG:-v5.4.1}"
+GWI_DEFAULT_TAG="${GWI_DEFAULT_TAG:-v5.5.0}"
 
 GWI_WALLET_BIN=""
 GWI_INSTALLED_VERSION=""
@@ -737,10 +752,10 @@ gwi_update_screen() {
                 fi
                 echo ""
                 warn "Moving OFF the pin ($pin → $latest)."
-                warn "This toolkit feeds wallet passphrases on STDIN, which works only"
-                warn "because grin-wallet 5.4.1 pins rpassword 4.x. rpassword 7 reads"
-                warn "/dev/tty instead — on such a release every unattended listener"
-                warn "unlock breaks. Verify the new release before you keep it."
+                warn "This release has not been reviewed for this toolkit. Every"
+                warn "unattended unlock feeds the passphrase on STDIN — if a release"
+                warn "stops reading a piped passphrase, every listener stops unlocking."
+                warn "Check that a piped passphrase still unlocks it before you keep it."
                 if [[ -n "$cur" ]]; then
                     info "Rollback to $cur stays one keypress away once this is applied."
                 else

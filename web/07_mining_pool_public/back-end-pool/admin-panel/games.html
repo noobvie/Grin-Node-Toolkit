@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Games · Overview &amp; settings | Grin Pool</title>
+  <link rel="stylesheet" href="/css/pool.css">
+  <link rel="stylesheet" href="/admin/styles.css">
+  <link rel="stylesheet" href="/admin/settings.css">
+  <style>
+    .gs-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: .7rem 1.2rem; }
+    .gs-floor { font-size: .8rem; color: var(--text-dim); margin-top: .2rem; }
+    .gs-links { display: flex; flex-wrap: wrap; gap: .5rem; margin: .4rem 0 0; }
+    .gs-changed input, .gs-changed select { border-color: var(--warn-color); }
+    .gs-meta { font-size: .75rem; color: var(--text-dim); }
+  </style>
+</head>
+<body>
+
+<main>
+  <div class="container">
+    <section>
+      <h2>Games · Overview &amp; settings</h2>
+      <p class="helper-text" style="margin:0 0 .8rem;">
+        The games on <a href="/play/" target="_blank" rel="noopener">/play/</a> run as their own service
+        with their own database; nothing here touches mining. The <strong>master switch</strong> and the
+        <strong>chat switch</strong> belong to the pool and live in
+        <a href="settings-games.html">Settings → Games</a>. The settings below belong to the games service.
+        Saving them asks for your admin password again.
+      </p>
+      <p class="error-msg" id="gs-offline" style="display:none;"></p>
+
+      <div class="card">
+        <h3 class="sub-title" style="margin-top:0;">Pages</h3>
+        <div class="gs-links">
+          <a class="btn btn-secondary btn-sm" href="games-chat.html">Chat &amp; moderation</a>
+          <a class="btn btn-secondary btn-sm" href="games-players.html">Players</a>
+          <a class="btn btn-secondary btn-sm" href="games-events.html">Events</a>
+          <a class="btn btn-secondary btn-sm" href="games-names.html">Nicknames</a>
+          <a class="btn btn-secondary btn-sm" href="settings-games.html">Settings → Games (on / off, chat)</a>
+        </div>
+      </div>
+
+      <!-- Built from GET settings: the spec (type, default, bounds) comes from the games service,
+           the labels and grouping from GROUPS below. Every input is .settings-skip: this page does
+           not use the settings-common.js harvester. -->
+      <div id="gs-form"></div>
+      <div class="card" id="gs-floors-card">
+        <h3 class="sub-title" style="margin-top:0;">Fixed floors (not settings)</h3>
+        <ul class="helper-text" id="gs-floors" style="margin:0;padding-left:1.2rem;"></ul>
+      </div>
+      <div class="form-actions">
+        <button type="button" class="btn btn-primary" id="gs-save" disabled>Save changes</button>
+        <button type="button" class="btn btn-secondary" id="gs-reload">Discard changes</button>
+      </div>
+      <p id="gs-msg" style="display:none;"></p>
+    </section>
+  </div>
+</main>
+
+<script src="/js/auth.js"></script>
+<script src="/js/api.js"></script>
+<script src="/js/stepup.js"></script>
+<script src="/admin/admin-shell.js"></script>
+<script src="/admin/games-admin.js"></script>
+<script>
+// Games → Overview & settings (design §19.6, §19.10, §19.11; games Part 9). Every call goes
+// through GamesAdmin.call (the admin proxy, adminFetch — never API.*). A settings save is
+// step-up: the POOL asks for the password before it proxies (lib/games-link.js).
+API.guardAdminPage();
+const G = window.GamesAdmin;
+
+// Labels + grouping. `scale` shows a seconds value in hours (stored as seconds).
+const GROUPS = [
+  { title: 'Plays (earned from mining minutes)', keys: {
+    minutes_per_play: 'Active mining minutes per play',
+    plays_daily_cap: 'Plays earned per UTC day, at most',
+    plays_balance_cap: 'Plays held at once, at most (minutes over the cap are lost)',
+  } },
+  { title: 'Bot games & points', keys: {
+    bot_play_cost: 'Plays one game against the bot costs (0 = free — and a free game pays no points)',
+    points_daily_cap: 'Points earned per UTC day, at most (event rewards and adjustments are exempt)',
+  } },
+  { title: 'Games between players (PvP)', keys: {
+    pvp_play_cost: 'Plays each side pays for a game against a person (0 = free — and a free game pays no points)',
+    pair_rated_daily: 'Rated games per UTC day between the same two addresses (0 = none rated: no rating moves, no PvP points)',
+    pvp_active_max: 'Games in progress per address, at most',
+    pvp_open_max: 'Open seeks + challenges per address, at most',
+  } },
+  { title: 'Chat — who may post', keys: {
+    chat_min_proof_age: { label: 'The sign-in proof must be at least this old (hours)', scale: 3600, floor: 'chat_min_proof_age' },
+    chat_requires_password: 'Chat needs a sign-in with the rig PASSWORD (IP sign-ins can read but not post)',
+    chat_min_minutes: 'Mining minutes needed in the recent window (0 = no mining gate)',
+    chat_recent_days: 'The recent window, in days (today counts)',
+  } },
+  { title: 'Chat — pace & review', keys: {
+    chat_posts_per_hour: 'Posts per address per hour, at most',
+    chat_slow_seconds: 'Slow mode: seconds between one address\'s posts (0 = off; moderators exempt)',
+    chat_hold_links: 'Hold messages with a link or a GRIN address for review',
+    chat_report_threshold: 'Reports from different addresses that hold a message',
+  } },
+  { title: 'Chat — retention', keys: {
+    chat_retention_days: 'Keep messages this many days',
+    chat_retention_max: 'Keep at most this many messages',
+  } },
+  { title: 'Moderators', keys: {
+    mod_requires_password: 'Moderators act only from a sign-in with their rig PASSWORD (recommended: an IP proof can be a neighbour on the same network)',
+  } },
+  { title: 'Nicknames', keys: {
+    nicknames_enabled: 'Players may ask for a nickname (off = no new requests, and every page shows the masked address only; approved names come back when it is on again)',
+  } },
+];
+const FLOOR_TEXT = {
+  chat_min_proof_age: s => 'A proof is always at least ' + (s / 3600) + ' h old before chat, whatever the setting says.',
+  chat_min_interval_s: s => 'One address can post at most once every ' + s + ' s.',
+  chat_ip_posts_per_hour: n => 'One IP can post at most ' + n + ' times an hour, across all addresses.',
+  mod_mute_max_minutes: m => 'A moderator can mute for at most ' + (m / 60) + ' h; only you can mute for longer (up to 30 days).',
+};
+
+let _data = null;
+
+function inputFor(spec, cfg, value) {
+  const scale = cfg.scale || 1;
+  let input;
+  if (spec.type === 'bool') {
+    input = G.el('input');
+    input.type = 'checkbox';
+    input.checked = value === true;
+  } else {
+    input = G.el('input');
+    input.type = 'number';
+    input.step = scale === 1 ? '1' : 'any';
+    input.min = String(spec.min / scale);
+    input.max = String(spec.max / scale);
+    input.value = String(value / scale);
+  }
+  input.id = 'gs-' + spec.key;
+  input.className = 'settings-skip';
+  input.dataset.key = spec.key;
+  input.dataset.scale = String(scale);
+  input.addEventListener('input', markChanged);
+  input.addEventListener('change', markChanged);
+  return input;
+}
+
+function readValue(input) {
+  if (input.type === 'checkbox') return input.checked;
+  const n = Number(input.value) * Number(input.dataset.scale || 1);
+  return Number.isFinite(n) ? Math.round(n) : NaN;
+}
+
+function changedValues() {
+  const out = {};
+  document.querySelectorAll('#gs-form [data-key]').forEach(i => {
+    const v = readValue(i);
+    if (v !== _data.values[i.dataset.key]) out[i.dataset.key] = v;
+  });
+  return out;
+}
+
+function markChanged() {
+  document.querySelectorAll('#gs-form [data-key]').forEach(i => {
+    i.closest('.form-group').classList.toggle('gs-changed', readValue(i) !== _data.values[i.dataset.key]);
+  });
+  document.getElementById('gs-save').disabled = Object.keys(changedValues()).length === 0;
+}
+
+function render() {
+  const box = document.getElementById('gs-form');
+  G.clear(box);
+  const specs = Object.fromEntries(_data.spec.map(s => [s.key, s]));
+  const used = new Set();
+  const groups = GROUPS.map(g => ({ title: g.title, keys: Object.entries(g.keys) }));
+  // A key the games service has that this page does not know yet still gets a field.
+  const extra = _data.spec.filter(s => !GROUPS.some(g => s.key in g.keys)).map(s => [s.key, s.key.replace(/_/g, ' ')]);
+  if (extra.length) groups.push({ title: 'Other', keys: extra });
+  groups.forEach(g => {
+    const card = G.el('div', 'card');
+    card.appendChild(G.el('h3', 'sub-title', g.title));
+    card.firstChild.style.marginTop = '0';
+    const grid = G.el('div', 'gs-grid');
+    g.keys.forEach(([key, raw]) => {
+      const spec = specs[key];
+      if (!spec || used.has(key)) return;
+      used.add(key);
+      const cfg = typeof raw === 'string' ? { label: raw } : raw;
+      const fg = G.el('div', spec.type === 'bool' ? 'form-group checkbox-group' : 'form-group');
+      const input = inputFor(spec, cfg, _data.values[key]);
+      const lab = G.el('label', null, cfg.label);
+      lab.htmlFor = input.id;
+      if (spec.type === 'bool') { fg.appendChild(input); fg.appendChild(lab); }
+      else { fg.appendChild(lab); fg.appendChild(input); }
+      const scale = cfg.scale || 1;
+      const def = spec.type === 'bool' ? (spec.def ? 'on' : 'off') : String(spec.def / scale);
+      const range = spec.type === 'int' ? ' · range ' + (spec.min / scale) + '–' + (spec.max / scale) : '';
+      fg.appendChild(G.el('div', 'gs-floor', 'Default ' + def + range));
+      if (cfg.floor && _data.floors[cfg.floor] !== undefined) fg.appendChild(G.el('div', 'gs-floor', FLOOR_TEXT[cfg.floor](_data.floors[cfg.floor])));
+      const m = _data.meta[key];
+      if (m) fg.appendChild(G.el('div', 'gs-meta', 'Changed ' + G.fmtUtc(m.updated_at) + (m.updated_by ? ' by ' + m.updated_by : '')));
+      grid.appendChild(fg);
+    });
+    card.appendChild(grid);
+    box.appendChild(card);
+  });
+  const fl = document.getElementById('gs-floors');
+  G.clear(fl);
+  Object.entries(_data.floors || {}).forEach(([k, v]) => { if (FLOOR_TEXT[k]) fl.appendChild(G.el('li', null, FLOOR_TEXT[k](v))); });
+  markChanged();
+}
+
+async function load() {
+  try {
+    _data = await G.call('GET', 'settings');
+    document.getElementById('gs-offline').style.display = 'none';
+    render();
+  } catch (err) {
+    const el = document.getElementById('gs-offline');
+    el.textContent = err.message;
+    el.style.display = '';
+  }
+}
+
+document.getElementById('gs-save').addEventListener('click', async () => {
+  const values = changedValues();
+  const bad = Object.entries(values).find(([, v]) => typeof v === 'number' && !Number.isFinite(v));
+  if (bad) { G.flash('gs-msg', 'Check: ' + bad[0].replace(/_/g, ' '), true); return; }
+  if (!Object.keys(values).length) return;
+  try {
+    const r = await G.call('POST', 'settings', { values });
+    _data = r;
+    render();
+    G.flash('gs-msg', r.changed.length ? 'Saved: ' + r.changed.join(', ') + '. They apply from the next request (within 30 s).' : 'Nothing changed.', false);
+  } catch (err) {
+    G.flash('gs-msg', err.message, true);
+  }
+});
+document.getElementById('gs-reload').addEventListener('click', load);
+document.addEventListener('DOMContentLoaded', load);
+</script>
+</body>
+</html>

@@ -1,6 +1,10 @@
 # Script 06 — Global Grin Health (design notes)
 
-> **Covers code as of:** 2026-09-18 · **Last verified:** 2026-09-18, PARTIAL — the slatepack
+> **Covers code as of:** 2026-09-26 · **Last verified:** 2026-09-26, PARTIAL — *Peer counts* only,
+> written against `scripts/lib/06_collector.py` the day of the fix, repair + fetch filter run in a
+> scratch SQLite test, the bug's numbers read from a live `get_peers` on the NY node; 2026-09-25, PARTIAL — *When the node
+> stops answering* only, written against `tiny-explorer-server.js` + `public/js/tiny-explorer.js`
+> the day it landed, behaviour run in a scratch e2e (20 checks); 2026-09-18, PARTIAL — the slatepack
 > "two facts" item 1 was re-read against grin-wallet v5.4.1 `controller/src/command.rs` and
 > confirmed by a live plaintext-S1 / sealed-S2 test the same day; 2026-09-10, PARTIAL — three sections
 > only: *Tool 3 — Node Reachability Checker* was rewritten against `lib/node-check.js`,
@@ -22,7 +26,7 @@
 > `scripts/lib/06d_tiny_explorer.sh` — the sitemap, robots and JSON-LD output in it were
 > read from the handlers ACTUALLY RUN, not from the source.
 > The rest of this doc is still never systematically verified.
-> **Product code last changed:** 2026-09-18 — `web/06d_tiny_explorer/public/` (Slate Inspector: per-role next-move guides with wallet commands, encryption rule corrected — every grin-wallet reply is sealed; Proof Verifier: proof is automatic with `send -d`, standard flow only, "not on chain" no longer reads as "never confirmed"); 2026-09-10 — `web/06d_tiny_explorer/` (**crawl surface**: generated `/sitemap.xml` + `/robots.txt` routes, `noindex, follow` on block/kernel/output and the 404, `WebApplication` JSON-LD for the six tools, homepage `<h1>`, duplicate `<h1>` removed from the three entity shells, analytics on the 404, `/mining` description updated for payback); 2026-09-10 — `web/06d_tiny_explorer/` (mining calculator: **capital payback card + hardware-cost input**, setup form rebuilt as two columns, break-even sub-label explains its scale invariance); 2026-09-10 — `scripts/lib/06d_tiny_explorer.sh` + `web/06d_tiny_explorer/` (**Wallet Checker Tor liveness probe now ON by default for a new install**: two-sided config read-back, `(installs tor)` prompt warning, config-neutral baseline page copy; **prompt catch-all now keeps the default instead of naming `false`, and `read` at EOF declines** — both latent until the flip); 2026-09-10 — `web/06d_tiny_explorer/` (node-check second leg: P2P 3414/13414 TCP probe, composed two-leg verdict, network picker; **assumed API endpoint flipped from 3413 to https/443 for host names**, retry inverted); 2026-09-09 — `web/06d_tiny_explorer/` (mining calculator: number-of-units multiplier, `/api/price` fallback, blocker copy, first test suite for the money maths); 2026-09-09 — `web/06_stats_map/stats/index.html` (antimeridian seam repair, land+mesh basemap, city-label cull, trimmed maxBounds, Vietnam flag fill + East Sea islands + Saigon relabel); 2026-09-09 — `scripts/lib/06d_tiny_explorer.sh` (tor install + probe status row) and `web/06d_tiny_explorer/` (probe-aware page copy); 2026-09-09 — `web/06d_tiny_explorer/` (node-check assumed-port retry); 2026-09-08 — `web/06d_tiny_explorer/public/` (mining calculator presets); 2026-09-07 — `scripts/lib/06d_tiny_explorer.sh` (deploy/restart lifecycle); 2026-09-06 — `scripts/06_global_grin_health.sh`, `scripts/lib/06*`, `web/06_stats_map/`, `web/06d_tiny_explorer/`
+> **Product code last changed:** 2026-09-26 — `scripts/lib/06_collector.py` (**peer counts windowed by `last_connected`**: the collector read a nonexistent `last_seen` and stamped every stored Healthy peer "now", inflating every week/month/year node count; one-off stamp repair); 2026-09-25 — `web/06d_tiny_explorer/` (**node circuit breaker + serve-stale** for archive-node compaction stalls; busy node → 503 not 404; `getLatest` no longer caches `[]`); 2026-09-18 — `web/06d_tiny_explorer/public/` (Slate Inspector: per-role next-move guides with wallet commands, encryption rule corrected — every grin-wallet reply is sealed; Proof Verifier: proof is automatic with `send -d`, standard flow only, "not on chain" no longer reads as "never confirmed"); 2026-09-10 — `web/06d_tiny_explorer/` (**crawl surface**: generated `/sitemap.xml` + `/robots.txt` routes, `noindex, follow` on block/kernel/output and the 404, `WebApplication` JSON-LD for the six tools, homepage `<h1>`, duplicate `<h1>` removed from the three entity shells, analytics on the 404, `/mining` description updated for payback); 2026-09-10 — `web/06d_tiny_explorer/` (mining calculator: **capital payback card + hardware-cost input**, setup form rebuilt as two columns, break-even sub-label explains its scale invariance); 2026-09-10 — `scripts/lib/06d_tiny_explorer.sh` + `web/06d_tiny_explorer/` (**Wallet Checker Tor liveness probe now ON by default for a new install**: two-sided config read-back, `(installs tor)` prompt warning, config-neutral baseline page copy; **prompt catch-all now keeps the default instead of naming `false`, and `read` at EOF declines** — both latent until the flip); 2026-09-10 — `web/06d_tiny_explorer/` (node-check second leg: P2P 3414/13414 TCP probe, composed two-leg verdict, network picker; **assumed API endpoint flipped from 3413 to https/443 for host names**, retry inverted); 2026-09-09 — `web/06d_tiny_explorer/` (mining calculator: number-of-units multiplier, `/api/price` fallback, blocker copy, first test suite for the money maths); 2026-09-09 — `web/06_stats_map/stats/index.html` (antimeridian seam repair, land+mesh basemap, city-label cull, trimmed maxBounds, Vietnam flag fill + East Sea islands + Saigon relabel); 2026-09-09 — `scripts/lib/06d_tiny_explorer.sh` (tor install + probe status row) and `web/06d_tiny_explorer/` (probe-aware page copy); 2026-09-09 — `web/06d_tiny_explorer/` (node-check assumed-port retry); 2026-09-08 — `web/06d_tiny_explorer/public/` (mining calculator presets); 2026-09-07 — `scripts/lib/06d_tiny_explorer.sh` (deploy/restart lifecycle); 2026-09-06 — `scripts/06_global_grin_health.sh`, `scripts/lib/06*`, `web/06_stats_map/`, `web/06d_tiny_explorer/`
 > 06d has a test suite (`web/06d_tiny_explorer/test/`, 232 assertions across 6 suites — count read from `node test/run-all.js` on 2026-09-10), but it tests the code, not this doc.
 
 Only sections that need durable prose live here; the menu/wiring lives in
@@ -91,6 +95,55 @@ dedicated high-contrast `--label` token (bright/glow on dark, heavy/dark on ligh
 headlines read clearly on either ground. Footer carries the Saigon ❤ + yellow-flag SVG.
 Full kernel/input/output detail on the block page (kernel excess framed as the txid
 equivalent) + collapsible raw `get_block` JSON.
+
+### When the node stops answering — circuit breaker + serve-stale (2026-09-25)
+
+**Why:** an archive node on a small box can hold its API shut for **hours** while grin runs
+chain compaction. Compaction holds the txhashset write lock, and on archive it used to walk every
+header since genesis. That walk is the upstream bug `scripts/patches/grin/0001` fixes (see
+`scripts/patches/grin/README.md`). Diagnosed on scan.grin.money 2026-09-25: 8–10 h episodes,
+roughly daily. Before this change every page view opened fresh node connections that each waited
+out the full 10 s timeout, ~90 sockets piled up in CLOSE-WAIT on :3413, and visitors got 502s the
+whole time. The explorer can't fix the stall. It can stop making it worse and stay readable.
+
+**Circuit breaker** (one choke point: `nodeRpc`, under `foreignApi`/`ownerApi`):
+- The first **transport** failure (timeout, refused, reset, hang-up) opens it. For
+  `node_busy_backoff_ms` (default 30 s) every node call fails fast with code `NODE_BUSY` and
+  opens no connection.
+- After the backoff exactly **one** real request goes through as a probe. Success closes the
+  breaker, failure re-opens it. So a stalled node sees at most one connection per ~40 s from us.
+- An RPC-level answer (`Err`, JSON-RPC error, unparseable body) is still an answer and never
+  trips it. A `NotFound` must keep meaning "not found".
+- Identical calls already in flight share one connection (key = url + method + params).
+
+**Serve-stale** (bounded by `stale_max_ms`, default 24 h):
+- `/api/stats` replays its last good body with `stale: true`, `as_of`, `busy_since`. The price
+  is refreshed (it needs no node), and `mempool` is nulled because it is live-only.
+- `/api/latest` returns the last good table with an `X-Tinyx-Stale: <iso>` header. The body
+  stays a plain array because every client reads it as one.
+- `/api/tip` returns the last tip with `stale`/`as_of`. The block page **does not compute
+  confirmations from a stale tip**, since a frozen tip under-counts them. Kernel and output
+  confirmations come from a fresh `getTip()` only and are omitted while the node is busy.
+- `/api/sync` compares the stale tip. That is honest: a node stuck in compaction applies no
+  blocks, so its frozen height is its height.
+- `/api/block|kernel|output` answer **503 `{error:'node busy'}` + `Retry-After`**. A busy node
+  used to make `fetchBlockLive` return null → **404**, which sent valid pool permalinks to the
+  404 page. The body is what separates this 503 from nginx's `tinyx_api` limiter 503.
+- `getLatest` no longer caches `[]` when every block fetch failed. That wiped the table
+  serve-stale needs.
+
+**Page:** Tip-height sub-line reads `node busy · as of HH:MM` (tooltip has `busy_since`). The
+table footer reads `Node busy · blocks as of HH:MM`. Block/kernel/output pages say the node is
+busy instead of "Server error 503".
+
+**Known edge:** the first response after recovery is the probe's, so its `mempool` is blank for
+one poll (`get_pool_size` failed fast while the probe was in flight).
+
+**Verified 2026-09-25** by a scratch e2e (not committed — it opens sockets, which
+`test/run-all.js` promises not to): the real server against a fake node switched to "stalled".
+20 checks: 0 node requests during an open-breaker burst of 19 API calls answered in ~115 ms; one
+probe per backoff; 503 not 404 for a block; recovery; 8 identical block requests → one
+`get_block` + one `get_header`. **NOT VPS-tested.**
 
 ---
 
@@ -329,6 +382,49 @@ there next. `FeatureGroup.bringToFront()` delegates via `invoke()`, which skips 
 the method, so the mixed canvas/DOM marker set is safe.
 
 ---
+
+## Peer counts — windowed by the node's own handshake time (`scripts/lib/06_collector.py`, 2026-09-26)
+
+### The bug
+The collector read `last_seen` from each `get_peers` row. grin's `PeerData` has **no such
+field** — the handshake time is `last_connected` — so it was always 0, and the "0 → `ts − 60`"
+fallback stamped **every Healthy peer in the node's store as seen a minute ago, on every run**.
+grin never expires Healthy rows (only Defunct ones), so a long-lived node's store holds every
+node it has reached since it was built. Every windowed figure counted all of them as current:
+week/month node counts and Top-10 countries, the map, `peer_count_history`, the version mix, and
+(via the MAX-upsert into `seen_peers`) the Year ranking. Only *All Time* was right, because it
+ignores `last_seen` and every Healthy row did handshake at least once.
+
+Measured on the NY box (2026-09-26, `get_peers` read directly): **1,085** Healthy+UA rows (what
+"month" showed) against **183** with `last_connected` in the last 30 d (28 in 1 d, 99 in 7 d,
+302 in 90 d). Same node, same store — the gap is the counting rule, not server capacity. It
+surfaced because the pool's network map (N-04), which already used `last_connected`, read about
+a sixth of world.grin.money.
+
+### The fix
+- `_fetch_all_peers_from_node` carries `last_connected` as `last_seen` and skips rows with none.
+- `_update_peers` windows the store to `PEER_HISTORY_DAYS` **before** anything consumes it — map
+  upsert and the version snapshot alike (`stat_all` = whole store, `stat_peers` = windowed).
+  The version snapshot also unions in every **connected** peer: `last_connected` is set once, at
+  the handshake, so a weeks-long session has an old stamp and the windowed store alone would
+  drop exactly the most stable nodes (caught by an old-vs-new end-to-end run, 2026-09-26).
+- **One-off repair** `_repair_inflated_peer_stamps` (per network, meta flag
+  `peer_stamp_repair_v1_<net>`): clamps `known_peers` / `seen_peers` `last_seen` down to the
+  store's `last_connected`, because MAX-upserts can never lower an inflated stamp — without it
+  week/month would stay wrong for 30 days and Year for a year. Runs before the connected-peer
+  upsert, so a peer connected now is re-raised in the same run. Skipped (retried next run) for a
+  network whose store read returned nothing. Accepted costs: a peer that was continuously
+  connected earlier and has since dropped is clamped to its older handshake time — an undercount
+  on a few rows, never an inflation; and a row whose IP is no longer Healthy in the store has
+  nothing to repair against, so it keeps its old stamp and ages out (≤30 d for week/month,
+  ≤365 d for Year). Month may therefore read slightly high for its first 30 days.
+
+### What the operator sees
+Week/month counts drop to (about) the real figure on the first run after deploy; Year settles as the
+repaired rows age out. `peer_count_history` keeps its inflated past samples (not rewritten), so
+the history chart shows a one-time cliff at the deploy. 06d's "Node peers · 30d" card reads
+`timeframes.month` from world.grin.money and drops with it. The version chart now reflects nodes
+reached in the last 30 d, not every version the node ever met.
 
 ## Peer map — self-hosted basemap, no third-party tiles (plan, rev. 2026-09-02)
 

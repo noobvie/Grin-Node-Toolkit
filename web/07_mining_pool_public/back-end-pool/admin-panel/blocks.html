@@ -46,11 +46,10 @@
                 <th>Reward ツ</th>
                 <th>Found by</th>
                 <th>Found at</th>
-                <th>Chain</th>
               </tr>
             </thead>
             <tbody id="blocks-tbody">
-              <tr class="loading-row"><td colspan="8"><span class="spinner"></span>Loading…</td></tr>
+              <tr class="loading-row"><td colspan="7"><span class="spinner"></span>Loading…</td></tr>
             </tbody>
           </table>
         </div>
@@ -58,7 +57,7 @@
       <p style="font-size:.8rem;color:var(--text-dim);margin-top:.6rem;">
         Pool-found blocks only. "Maturity" counts down the
         <span id="depth-note">—</span>-block coinbase maturity before a block pays out;
-        orphaned blocks have their payouts reversed. The Chain link opens the block on GrinScan.
+        orphaned blocks have their payouts reversed. The height links to the block on the explorer.
       </p>
     </section>
   </div>
@@ -131,7 +130,6 @@ const blocksTable = AdminTable.create({
       <td class="mono">${(Number(b.reward) || 0).toFixed(2)}</td>
       <td><span class="mono" title="${escHtml(b.found_by)}">${escHtml(shortAddr(b.found_by))}</span></td>
       <td>${fmtTs(b.found_at)}</td>
-      <td>${Explorer.link('block', b.height, 'view ↗')}</td>
     </tr>`;
   }
 });

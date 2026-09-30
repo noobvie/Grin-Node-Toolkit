@@ -32,6 +32,8 @@
 #   9) Deploy new code       (refresh backend+frontend from checkout, then restart)
 #   A) Admin recovery        (locked out: clear 2FA / reset password — break-glass)
 #   W) Multi-region          (WireGuard server + add regional gateways)
+#   P) Play & chat (games)   (/play/ games service — lib/07_lib_pool_games.sh; never
+#                             restarts the pool; design §19)
 #   B) Backup & Restore      (encrypted: DB + wallet + WG identity · offsite push)
 #   C) Cron schedules        (daily backup, weekly VACUUM)
 #   L) View logs             (tail -50 | less)
@@ -149,6 +151,10 @@ source "$SCRIPT_DIR/lib/07_lib_gwctl.sh"
 # Hub backup/restore on the shared engine (pool.db + config + wallet + WG identity).
 # shellcheck source=lib/07_lib_pool_backup.sh
 source "$SCRIPT_DIR/lib/07_lib_pool_backup.sh"
+# /play/ games service (menu P, design §19): its own unit, user and DB beside the pool.
+# The backup lib above calls its pgs_* hooks at call time (games DB snapshot + restore).
+# shellcheck source=lib/07_lib_pool_games.sh
+source "$SCRIPT_DIR/lib/07_lib_pool_games.sh"
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # EXCLUSIVITY GUARD — one mining type per server (public XOR solo private)
@@ -221,7 +227,7 @@ const fs = require('fs');
 const path = process.argv[1];
 const key  = process.argv[2];
 const val  = process.argv[3];
-const NUMS = new Set(['stratum_port','node_api_port','pool_fee_percent','min_withdrawal','withdrawal_fee','service_port','node_stratum_port','fail2ban_maxretry','fail2ban_findtime','fail2ban_bantime']);
+const NUMS = new Set(['stratum_port','node_api_port','pool_fee_percent','min_withdrawal','withdrawal_fee','service_port','node_stratum_port','fail2ban_maxretry','fail2ban_findtime','fail2ban_bantime','games_port']);
 let d = {};
 try { d = JSON.parse(fs.readFileSync(path, 'utf8')); } catch(e) {}
 d[key] = NUMS.has(key) ? parseFloat(val) : val;
@@ -1011,6 +1017,12 @@ pool_deploy_code() {
         info "$POOL_SERVICE is not running — start it via 6) Service control to load the new code."
     fi
 
+    # The /play/ games service rides along when it is installed (design §19.12). It
+    # restarts only itself; a games failure never fails the pool deploy above.
+    if pgs_installed; then
+        pgs_deploy_code || warn "Games deploy reported a problem — the pool deploy above is complete; see P → 5."
+    fi
+
     echo ""
     success "Deploy new code complete."
 }
@@ -1018,6 +1030,90 @@ pool_deploy_code() {
 # ═══════════════════════════════════════════════════════════════════════════════
 # 4) SETUP NGINX
 # ═══════════════════════════════════════════════════════════════════════════════
+
+# ─── Latency probes for the connect page ────────────────────────────────────────
+# The connect page times https://<gateway stratum host>/ping on each gateway (gateway menu
+# 6) and a /ping on this hub, from the visitor's browser. Two optional pool.json keys steer
+# it. lib/latency-probe.js applies the SAME two rules on the app side (it publishes them to
+# the page on /api/public/branding → connection.latency), so change both or neither.
+_POOL_HOST_RE='^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$'
+
+# latency_probe_domain: the domain whose subdomains the public page may fetch (page CSP
+# connect-src https://*.<it>). Default: the pool's own subdomain, and never anything wider.
+# Deriving a parent automatically needs the Public Suffix List. Without it, "pool.example.co.uk"
+# would widen to "co.uk", and "mypool.duckdns.org" to "duckdns.org". Either would let script
+# injected into the withdrawal page post to ANY host under a public suffix. That is the
+# §J15-6 argument that removed jsdelivr. So widening is the operator's explicit call: set it
+# to a PARENT of subdomain that they own (subdomain pool.example.com, gateways
+# hkg.example.com → latency_probe_domain example.com). A value that is neither the subdomain
+# nor a parent of it is ignored.
+_pool_latency_probe_domain() {
+    local sub ovr
+    sub=$(pool_read_conf "subdomain" ""); sub="${sub,,}"; sub="${sub%.}"
+    [[ "$sub" =~ $_POOL_HOST_RE ]] || return 0
+    ovr=$(pool_read_conf "latency_probe_domain" ""); ovr="${ovr,,}"; ovr="${ovr%.}"
+    if [[ -n "$ovr" && "$ovr" =~ $_POOL_HOST_RE && ( "$sub" == "$ovr" || "$sub" == *".$ovr" ) ]]; then
+        echo "$ovr"
+    else
+        echo "$sub"
+    fi
+}
+
+# latency_hub_url: where the page times THIS hub (the "direct" row). Unset means same-origin
+# /ping. But behind a CDN proxy (cloudflare_proxy) the CDN's EDGE answers that request, a few
+# ms from every visitor, so "direct" would win everywhere. So with the proxy on and this key
+# unset, the app publishes NO hub URL and the page keeps its estimate for direct.
+# Accepted form: https://<host>/ping (or https://<host>), where <host> is a DNS-only name
+# for this box under latency_probe_domain, so the CSP allows it. That is normally the hub
+# region's stratum host. For such a host, pool_setup_nginx issues a certificate and adds a
+# server block that answers /ping and nothing else.
+# Prints that host when it needs its own server block, else nothing: unset, invalid,
+# outside the probe domain, or the site's own name or www alias, which the main vhost serves.
+_pool_latency_hub_host() {
+    local url host dom sub
+    url=$(pool_read_conf "latency_hub_url" ""); url="${url,,}"
+    [[ "$url" =~ ^https://([a-z0-9.-]+)(/ping)?/?$ ]] || return 0
+    host="${BASH_REMATCH[1]}"; host="${host%.}"
+    [[ "$host" =~ $_POOL_HOST_RE ]] || return 0
+    sub=$(pool_read_conf "subdomain" ""); sub="${sub,,}"; sub="${sub%.}"
+    dom=$(_pool_latency_probe_domain)
+    [[ -n "$dom" && "$host" == *".$dom" ]] || return 0
+    [[ "$host" != "$sub" && "$host" != "www.$sub" ]] || return 0
+    echo "$host"
+}
+
+# The /ping locations, emitted into the main vhost and into the latency_hub_url block.
+#   $1 = the header snippet the ANSWERING location must include (it adds headers of its own).
+# Why a named location instead of a bare 'return 204': return runs in nginx's REWRITE phase,
+# before the preaccess phase where limit_req lives, so the rate limit would be silently
+# skipped. Measured with nginx 1.24: 40 rapid requests gave 40 × 204 with a bare return, and
+# 20 × 204 + 20 × 429 this way. (limit_except is NOT affected: a non-GET request switches to
+# the limit_except block's own config, which does not inherit the return, so its deny still
+# answers 403 either way.) try_files runs in precontent, after both, then hands over to
+# @pool_ping. = /ping itself adds no header, so its 403/429 inherit the server's full set.
+_pool_nginx_ping_block() {
+    local hdr="$1"
+    cat << EOF
+    # Latency probe for the connect page: an empty 204, never cached. The CORS and
+    # Timing-Allow-Origin headers matter only when the page reaches this through
+    # latency_hub_url on another name, and they are harmless same-origin. No access log: a
+    # probe's visitor IPs are not worth keeping.
+    location = /ping {
+        limit_req zone=${POOL_SERVICE}_static burst=20 nodelay;
+        limit_except GET { deny all; }
+        access_log off;
+        try_files /.pool-ping-no-such-file @pool_ping;
+    }
+    location @pool_ping {
+        access_log off;
+        include ${hdr};
+        add_header Cache-Control "no-store" always;
+        add_header Access-Control-Allow-Origin "*" always;
+        add_header Timing-Allow-Origin "*" always;
+        return 204;
+    }
+EOF
+}
 
 pool_setup_nginx() {
     local subdomain; subdomain=$(pool_read_conf "subdomain" "")
@@ -1259,6 +1355,43 @@ EOF
     [[ -f /etc/letsencrypt/options-ssl-nginx.conf ]] \
         && ssl_extra="include /etc/letsencrypt/options-ssl-nginx.conf;"
 
+    # ── Latency probes (connect page) — see _pool_latency_probe_domain / _pool_latency_hub_host.
+    local probe_domain probe_hub_host probe_csp="" probe_hub_block=""
+    probe_domain=$(_pool_latency_probe_domain)
+    [[ -n "$probe_domain" ]] && probe_csp=" https://*.${probe_domain}"
+    probe_hub_host=$(_pool_latency_hub_host)
+    if [[ -n "$probe_hub_host" ]]; then
+        # Its own certificate, never a SAN on the site's: this name is DNS-only and its cert
+        # fails independently (DNS not moved yet during a migration, say) without touching
+        # the main site's. Non-fatal on purpose: Migrate IN runs this step before DNS moves.
+        if [[ ! -f "/etc/letsencrypt/live/$probe_hub_host/fullchain.pem" ]]; then
+            info "latency_hub_url: requesting a certificate for $probe_hub_host..."
+            certbot certonly --nginx -d "$probe_hub_host" --cert-name "$probe_hub_host" \
+                --non-interactive --agree-tos -m "admin@$subdomain" 2>&1 | tail -3 || true
+        fi
+        if [[ -f "/etc/letsencrypt/live/$probe_hub_host/fullchain.pem" ]]; then
+            probe_hub_block="# Hub latency probe on a DNS-only name (pool.json latency_hub_url): /ping and nothing else.
+server {
+    listen 443 ssl http2;
+    server_name $probe_hub_host;
+    server_tokens off;
+    limit_req_status 429;
+    ssl_certificate     /etc/letsencrypt/live/$probe_hub_host/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/$probe_hub_host/privkey.pem;
+    $ssl_extra
+    access_log off;
+    include $hdr_common;
+$(_pool_nginx_ping_block "$hdr_common")
+    location / { return 404; }
+}
+
+"
+        else
+            warn "No certificate for $probe_hub_host (latency_hub_url), so this hub's /ping is not served there yet."
+            warn "  Point $probe_hub_host at this box (DNS-only, no CDN proxy) and re-run 4) Setup nginx."
+        fi
+    fi
+
     # www → apex redirect on HTTPS. Only emitted when the cert covers www.<domain>
     # (otherwise serving www on :443 presents a name-mismatched cert). The :80 block
     # below normalises http://www regardless.
@@ -1353,8 +1486,14 @@ HDREOF
 # \$hdr_common, and unlike XFO it is honoured for nested frames. All four are verified
 # compatible: no public page frames another, declares a <base>, posts a form cross-origin,
 # or embeds an <object>/<embed> — the pages talk to same-origin /api/ over fetch only.
+#
+# connect-src also carries https://*.${probe_domain:-<none>} (added 2026-09-23): the connect page times
+# https://<gateway>/ping on each regional gateway. It is the pool's OWN domain, derived from
+# pool.json subdomain, or the parent in latency_probe_domain that the operator explicitly
+# declared. It is never computed wider, because a wildcard over a public suffix would give
+# injected script a destination on any host under it. HTTPS only, default port only.
 include $hdr_common;
-add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' https://www.googletagmanager.com https://plausible.io https://cloud.umami.is; connect-src 'self' https://*.google-analytics.com https://*.analytics.google.com https://*.googletagmanager.com https://plausible.io https://cloud.umami.is; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https://*.google-analytics.com https://*.googletagmanager.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none';" always;
+add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' https://www.googletagmanager.com https://plausible.io https://cloud.umami.is; connect-src 'self'${probe_csp} https://*.google-analytics.com https://*.analytics.google.com https://*.googletagmanager.com https://plausible.io https://cloud.umami.is; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https://*.google-analytics.com https://*.googletagmanager.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none';" always;
 HDREOF
 
     # Third snippet: the ADMIN panel CSP (audit §J14-4). /admin/ is served as STATIC files by
@@ -1370,6 +1509,8 @@ HDREOF
     # under /js/vendor/), so nothing here needs widening. Two directives are load-bearing:
     #   'unsafe-inline' in script-src — the panel is inline blocks; removing it blanks it.
     #   data: in img-src            — the 2FA enrolment QR is generated client-side.
+    # Deliberately NOT blob: — the Donors review queue (design 18.11 Part 3 #1) loads banner
+    # previews from a plain same-origin src, which keeps the image route's sandbox headers.
     cat > "$hdr_admin" << HDREOF || { error "could not write $hdr_admin"; return 1; }
 # Generated by Script 07 (pool_setup_nginx) — DO NOT EDIT, re-run "Setup nginx" instead.
 # Common headers + the ADMIN CSP. Include this from /admin/ ONLY. Do not use it for public
@@ -1380,6 +1521,7 @@ add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsaf
 HDREOF
 
     info "Writing nginx vhost (${POOL_NET_LABEL}): $POOL_NGINX_CONF"
+    local ping_block; ping_block=$(_pool_nginx_ping_block "$hdr_page")
     # UNQUOTED heredoc (it needs the ${…} expansions), so a backtick anywhere in the next
     # ~270 lines — nginx comments included — is a command substitution: three comments here
     # once ran 'trust', 'public' and 'try_files' as shell commands on every 4) Setup nginx.
@@ -1395,7 +1537,7 @@ server {
     return 301 https://$subdomain\$request_uri;
 }
 
-${www_https_block}server {
+${www_https_block}${probe_hub_block}server {
     listen 443 ssl http2;
     server_name $subdomain;
 $cf_realip_include
@@ -1518,8 +1660,39 @@ $admin_rules
     }
 
 
+    # burst=40, was 10 (2026-09-25). The homepage fires ~13 /api/ reads on load and ~10 on
+    # every 60 s refresh, all at once; burst 10 admits only 11, so the LAST reads of the batch
+    # (payments, both trend charts) drew 429s from ordinary single visitors — confirmed in the
+    # hub's error.log as 'excess: 11.000 by zone "…_api"', which lit "Payouts · feed down".
+    # The sustained rate (the zone's 600r/m) is unchanged; only the instantaneous fan-out grows.
+    #
+    # burst=100 on the general /api/ block, was 40 (2026-09-26). The live hub was still on 10
+    # (its vhost predated the bump above) and its access log showed the same cut from a single
+    # iPhone: ~11 of ~19 homepage reads admitted per reload, effort/blocks/payments/both trend
+    # reads 429'd, the cards sitting empty until the next 60 s refresh. 40 covers ~2 loads back
+    # to back; a visitor pulling-to-refresh fires more than that. 100 is ~5 loads at once and
+    # still drains in 10 s at the unchanged 600r/m, so it buys no SUSTAINED throughput — and
+    # the app's own 'public' bucket (1200/min/IP) sits behind it either way. Per IP, so it is
+    # not a pool-size knob: 1000 miners are 1000 buckets. The withdraw POST keeps 40 — one
+    # money request per click has no fan-out to absorb.
+    #
+    # The withdraw POST alone gets 90 s (2026-09-26). A Tor payout request runs the pre-flight
+    # probe of the miner's onion first, up to ~32 s at the defaults (two attempts, 8 s connect +
+    # 8 s reply each). At the 30 s below nginx answered 504 while the gate was still deciding, and
+    # the miner saw "Withdrawal failed" and had to retry (safe: the app creates nothing once the
+    # client is gone). Same zone, upstream and headers as /api/ - and NO add_header, so the
+    # server-level security headers still apply. Every other /api/ read keeps 30 s.
+    location ~ ^/api/account/[^/]+/withdraw\$ {
+        limit_req zone=${POOL_SERVICE}_api burst=40 nodelay;
+        proxy_pass         http://127.0.0.1:$POOL_PORT;
+        proxy_set_header   Host \$host;
+        proxy_set_header   X-Real-IP \$remote_addr;
+        proxy_set_header   X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_read_timeout 90s;
+    }
+
     location /api/ {
-        limit_req zone=${POOL_SERVICE}_api burst=10 nodelay;
+        limit_req zone=${POOL_SERVICE}_api burst=100 nodelay;
         proxy_pass         http://127.0.0.1:$POOL_PORT;
         proxy_set_header   Host \$host;
         proxy_set_header   X-Real-IP \$remote_addr;
@@ -1633,6 +1806,18 @@ $admin_rules
         proxy_set_header   X-Forwarded-Proto \$scheme;
     }
 
+${ping_block}
+
+    # ── /play/ games platform (design §19.12) ────────────────────────────────────
+    # The pool's internal games routes (/internal/games/*, secret-guarded, loopback only)
+    # are NEVER reachable through nginx: no location here proxies them, and this explicit
+    # 404 is the second control (the app's own guard is the third).
+    location ^~ /internal/ { return 404; }
+    # The /play/ locations live in a snippet written by menu P → 3 (07_lib_pool_games.sh).
+    # A GLOB include that matches no file is not an error in nginx, so this line is safe
+    # on a box where the games were never installed — verified at VPS checkpoint A.
+    include /etc/nginx/snippets/script07-${POOL_SERVICE}-games-*.conf;
+
     location / {
         # Generous burst: a single page load pulls the HTML + ~a dozen assets (CSS, JS
         # incl. public-shell.js which injects the header/nav, fonts, images), and with
@@ -1686,6 +1871,22 @@ EOF
             warn "  cannot take every site on this box down with it. Fix and re-run 4)."
         fi
         return 1
+    fi
+
+    # What the connect page may time (lib/latency-probe.js publishes the same answer).
+    if [[ -n "$probe_domain" ]]; then
+        info "Latency probes: the connect page may time https://*.${probe_domain}/ping (gateway menu 6)."
+    fi
+    if [[ -z "$probe_hub_host" && -n "$(pool_read_conf "latency_hub_url" "")" ]]; then
+        warn "latency_hub_url is ignored: it must be https://<name under ${probe_domain:-the pool domain}>/ping,"
+        warn "  and not the site's own name (that one is already served at /ping)."
+    fi
+    if [[ -n "$probe_hub_block" ]]; then
+        info "  This hub (direct) is timed at https://${probe_hub_host}/ping."
+    elif [[ "$cf_proxy" == "true" ]]; then
+        echo -e "  ${DIM}This hub (direct) is not timed: behind the CDN proxy, /ping would time the CDN's edge.${RESET}"
+        echo -e "  ${DIM}Set latency_hub_url in $POOL_CONF to https://<a DNS-only name for this box>/ping${RESET}"
+        echo -e "  ${DIM}(e.g. this hub region's stratum host) and re-run 4). The page estimates direct until then.${RESET}"
     fi
 
     if [[ "$cf_proxy" == "true" ]]; then
@@ -2284,10 +2485,18 @@ pool_cron_schedules() {
     [[ -f "$cron_vacuum" ]] \
         && echo -e "  Weekly VACUUM : ${GREEN}enabled${RESET}  ($cron_vacuum)" \
         || echo -e "  Weekly VACUUM : ${DIM}disabled${RESET}"
+    if pgs_installed; then
+        [[ -f "$PGS_CRON_VACUUM" ]] \
+            && echo -e "  Games VACUUM  : ${GREEN}enabled${RESET}  ($PGS_CRON_VACUUM)" \
+            || echo -e "  Games VACUUM  : ${DIM}disabled${RESET}"
+    fi
 
     echo ""
     echo -e "  ${GREEN}1${RESET}) Toggle daily backup (02:00 UTC)"
     echo -e "  ${GREEN}2${RESET}) Toggle weekly SQLite VACUUM (Sunday 03:00 UTC)"
+    if pgs_installed; then
+        echo -e "  ${GREEN}3${RESET}) Toggle weekly games VACUUM (Sunday 03:30 UTC — stops the games only)"
+    fi
     echo -e "  ${DIM}0) Back${RESET}"
     echo -ne "Choice: "
     read -r cc
@@ -2330,6 +2539,9 @@ EOF
                 echo -e "    ${CYAN}$vacuum_script${RESET}"
             fi
             _pool_pause
+            ;;
+        3)
+            if pgs_installed; then pgs_vacuum_toggle || true; _pool_pause; fi
             ;;
     esac
 }
@@ -2570,6 +2782,14 @@ _pool_wg_endpoint() {
     echo "$(curl -s --max-time 4 https://api.ipify.org 2>/dev/null || echo '<server-public-ip>'):${WG_LISTEN_PORT}"
 }
 
+# Printed under every GRINGW1 line when no wg_endpoint_host is set. A gateway paired to
+# a raw IP cannot follow a hub move: its re-resolve timer only re-reads DNS names.
+# Informational only — pairing still proceeds. $1 = indent.
+_pool_pairing_ip_warning() {
+    [[ -n "$(pool_read_conf "wg_endpoint_host" "")" ]] && return 0
+    echo -e "${1:-    }${DIM}⚠ This pairing carries a raw IP: a future hub move will need a manual edit on the gateway. Set W → 5 first.${RESET}"
+}
+
 # Parse one grin-gateway-ctl JSON reply. Prints "ERR <msg>" or
 # "OK <existing> <replaced> <region> <peer_ip> <port> <synced>" + pairing on line 2.
 _pool_gwctl_parse() {
@@ -2680,6 +2900,7 @@ pool_wg_add_peer() {
         warn "This public key is ALREADY a gateway peer — keeping its existing tunnel IP/port."
         echo -e "  ${BOLD}Existing pairing string for this key (region '${reg}'):${RESET}"
         echo -e "    ${GREEN}${pairing}${RESET}"
+        _pool_pairing_ip_warning "    "
         info "To re-pair from scratch, remove the peer first (4) — then add it again."
         return 0
     fi
@@ -2767,6 +2988,7 @@ try {
     echo -e "  ${BOLD}ONE-LINE pairing string${RESET} ${DIM}(paste it at the gateway's 2) Configure to fill every${RESET}"
     echo -e "  ${DIM}tunnel field at once; re-printable via 3) List gateways or the admin panel):${RESET}"
     echo -e "    ${GREEN}${pairing}${RESET}"
+    _pool_pairing_ip_warning "    "
     echo ""
     if [[ "$rep" == "1" ]]; then
         # Replacement: everything below is already done for this region — the only
@@ -2821,6 +3043,7 @@ if (!gws.length) console.log("    (no gateway peers yet — add one with option 
 for (const g of gws) console.log("    " + g.pairing);
 ' "$list_json" "$status_json" "${WG_TUNNEL_NET}.1" 2>/dev/null \
         || echo "    (could not read gateway list — is the helper installed and node present?)"
+    _pool_pairing_ip_warning "    "
 
     # UX guard: a region wired here (region_ports) but NOT declared in admin → Regions
     # (pool_locations) still mines + credits fine — but shows on the public connect grid
@@ -2955,14 +3178,15 @@ try {
 }
 
 # §13.10b — carry a DNS name (not the raw IP) in pairing strings, so a hub
-# provider/IP change becomes: update the DNS A record → each gateway restarts
-# wg-quick. Existing IP-paired gateways: one-field edit in their 2) Configure.
+# provider/IP change becomes: update the DNS A record → each gateway's re-resolve
+# timer (07_lib_gateway.sh gw_install_reresolve, installed by its 3) Bring up tunnel)
+# follows within ~2-3 min. Existing IP-paired gateways: one-field edit in their 2) Configure.
 pool_wg_endpoint_host() {
     local cur host
     cur=$(pool_read_conf "wg_endpoint_host" "")
     echo -e "\n${BOLD}Hub endpoint DNS name${RESET} ${DIM}(carried in pairing strings instead of the raw IP)${RESET}"
-    echo -e "  ${DIM}WireGuard resolves the name at wg-quick up — after a provider/IP change,${RESET}"
-    echo -e "  ${DIM}update the A record and each gateway just restarts its tunnel (no re-pair).${RESET}"
+    echo -e "  ${DIM}After a provider/IP change, update the A record: each gateway follows within${RESET}"
+    echo -e "  ${DIM}~2-3 min on its own (re-resolve timer, installed by its 3) Bring up tunnel) — no re-pair.${RESET}"
     echo -e "  Current: ${GREEN}${cur:-"(unset — pairing strings carry the public IP)"}${RESET}"
     echo -ne "New DNS name (e.g. hub.example.com; '-' to clear, Enter to keep): "
     read -r host
@@ -3049,6 +3273,7 @@ show_menu() {
     echo -e "  ${GREEN}9${RESET}) Deploy new code       ${DIM}(refresh js/html/media from checkout + restart)${RESET}"
     echo -e "  ${GREEN}A${RESET}) Admin recovery        ${DIM}(locked out: clear 2FA / reset password — break-glass)${RESET}"
     echo -e "  ${GREEN}W${RESET}) Multi-region          ${DIM}(WireGuard server + add regional gateways)${RESET}"
+    echo -e "  ${GREEN}P${RESET}) Play & chat (games)   ${DIM}(/play/ service: $(_pgs_menu_state)${DIM} · never restarts the pool)${RESET}"
     echo -e "  ${GREEN}B${RESET}) Backup & Restore      ${DIM}(encrypted: DB + wallet + WG identity · offsite push)${RESET}"
     echo -e "  ${GREEN}C${RESET}) Cron tasks            ${DIM}(backup schedule, VACUUM)${RESET}"
     echo -e "  ${GREEN}L${RESET}) View logs             ${DIM}(tail -50 | less)${RESET}"
@@ -3083,6 +3308,7 @@ pool_singlebox_loop() {
             9)     pool_deploy_code || true ;;
             a)     pool_admin_recovery_menu || true ;;
             w)     pool_wireguard_menu || true ;;
+            p)     pool_games_menu || true ;;
             b)     pool_backup_menu || true ;;
             c)     pool_cron_schedules || true ;;
             l)     pool_view_logs || true ;;
@@ -3094,11 +3320,11 @@ pool_singlebox_loop() {
 
         # Pause so action output stays readable before the menu redraws.
         # Skipped for: l (pager) / s (editor) — they hold their own screen — and
-        # the submenus 5/6/b/c/w, which self-manage feedback and return on their own
+        # the submenus 5/6/b/c/p/w, which self-manage feedback and return on their own
         # 0) Back. Without this, picking 0 inside a submenu would trigger a second,
         # redundant "Press Enter" here even though nothing new was shown.
         case "${choice,,}" in
-            l|s|5|6|a|b|c|w) ;;
+            l|s|5|6|a|b|c|p|w) ;;
             *) echo ""; echo "Press Enter to continue..."; read -r ;;
         esac
     done
@@ -3173,6 +3399,7 @@ pool_cleanup() {
     echo -e "    Pool service unit           $(_pool_cleanup_mark "$pool_unit")"
     echo -e "    Gateway service unit        $(_pool_cleanup_mark "$gw_unit")"
     echo -e "    Legacy satellite unit       $(_pool_cleanup_mark "$sat_unit")"
+    pgs_cleanup_marks
     echo -e "    Pool app + DB               $(_pool_cleanup_mark "$POOL_APP_DIR")"
     echo -e "    Gateway app + wg tunnel     $(_pool_cleanup_mark "$GW_DIR")"
     echo -e "    Legacy satellite app dir    $(_pool_cleanup_mark "$SAT_APP_DIR")"
@@ -3210,6 +3437,12 @@ pool_cleanup() {
         log "Cleanup: removed $POOL_SERVICE + $SAT_SERVICE + $GW_SERVICE services"
     fi
     echo ""
+
+    # 1b) /play/ games service (07_lib_pool_games.sh): service, unit, nginx snippet + zones,
+    #     web + code dirs, logrotate, VACUUM cron, link secret. Its database sits behind its
+    #     own [y/N] (1c), default KEEP — it is player history, not rebuildable state.
+    #     Runs before 4) so its nginx test still sees the pool vhost it was included from.
+    pgs_cleanup_group "1b" "1c" || true
 
     # 2) Pool app dir — includes pool.db (miner balances!) and .wallet_pass.
     # legacy_app: pre-rename installs used /opt/grin/pool — sweep it too.
@@ -3252,6 +3485,12 @@ pool_cleanup() {
                 wg-quick down "$ifc" 2>/dev/null || true
                 systemctl disable "wg-quick@${ifc}" 2>/dev/null || true
             done
+            # The gateway's re-resolve timer would otherwise keep firing every 60 s
+            # against a conf that no longer exists.
+            if declare -F gw_remove_reresolve >/dev/null 2>&1; then gw_remove_reresolve || true; fi
+            # Same for the latency probe: its unit, certbot hook and certificate live outside
+            # GW_DIR, and certbot would keep binding :80 to renew the cert every ~60 days.
+            if declare -F gw_probe_remove >/dev/null 2>&1; then gw_probe_remove || true; fi
             rm -f "$GW_WG_CONF" "$WG_CONF"
             rm -rf "${GW_DIR:?}" "$WG_DIR_CONF"
             success "Gateway app + WireGuard tunnels removed."

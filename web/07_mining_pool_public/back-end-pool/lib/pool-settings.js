@@ -46,6 +46,11 @@ function parseJsonArray(val, fallback) {
   return fallback;
 }
 
+// The shipped donor-name starter list (design §16) is the DEFAULT of a setting, so it lives
+// with the rest of the name logic and is imported here — never the other way round.
+const { STARTER_BLOCKLIST } = require('./donor-names');
+const explorers = require('./explorers');
+
 // Own-property membership tests for the settings schema. `defaults[section]` and
 // `key in defaults[section]` both walk Object.prototype, so `constructor`, `toString`,
 // `valueOf` and `__proto__` passed the section gate and `name`/`length`/`call` passed the
@@ -140,6 +145,10 @@ class PoolSettings {
       nostr_link: '',
       website_link: 'https://grinium.com',
       footer_text: '',
+      // Mainnet chain explorer every block / kernel / proof link opens (lib/explorers.js):
+      // grincoin | tiny | grinscan — an enum, never a URL. Testnet ignores it (always
+      // test.grinscan.org); an unknown stored value resolves to grincoin.
+      explorer_mainnet: explorers.DEFAULT_MAINNET,
     },
     seo: {
       meta_description: 'GRINIUM is a low-fee Grin (GRIN) mining pool — PPLNS rewards, anonymous Tor payouts, prize draws and bonuses. No sign-up; point your miner and start earning.',
@@ -204,20 +213,32 @@ class PoolSettings {
       // sender-paid on-chain network fee (~0.023 GRIN typical, weight-based not amount-based).
       // Must stay < min_withdrawal. 0 = the pool absorbs the network fee.
       withdrawal_fee: 0.04,
-      auto_payout: 'false',
-      payout_frequency: 'manual',
+      // `auto_payout` + `payout_frequency` were REMOVED 2026-09-25 (impl doc D10, like D4): an
+      // automatic-payout switch and schedule with a UI, read by nothing. Payouts are
+      // miner-initiated by design — an ungated automatic trigger is what the ownership gate exists
+      // to prevent. A pool that stored them keeps inert pool_config rows: getSection still merges
+      // them in (no membership check) and the form no longer sends them, so no migration is needed.
       confirm_depth_mainnet: 1440,
       confirm_depth_testnet: 100,
       max_pending_withdrawals: 100,
       max_user_pending: 10,
-      withdrawal_retry_delays: '[21600,43200,86400,172800]',
-      // Minutes a miner must wait after a reversed payout (Tor failure, slatepack expiry,
-      // admin cancel) before requesting another payout on ANY rail. 0 disables.
+      // `withdrawal_retry_delays` was REMOVED 2026-09-26: a Tor payout is tried once, so the retry
+      // ladder it configured is gone (it was also shadowed, audit §J9-8, and had no field). A stored
+      // row stays inert, like auto_payout above.
+      // Minutes a miner must wait after a reversed payout (slatepack expiry, Goblin failure, admin
+      // cancel) before requesting another payout on ANY rail. A failed TOR payout does not start it
+      // (it is refunded only on proof; see the scheduler's _assertNoRecentReversal). 0 disables.
       withdrawal_cooldown_minutes: 30,
+      // Minutes an unanswered manual Slatepack payout stays pending before it expires (the
+      // pool cancels its wallet tx, the balance returns). See config.js slatepack_ttl_minutes.
+      slatepack_ttl_minutes: 30,
       // Pre-flight Tor reachability gate: refuse a Tor payout up front when the miner's wallet
       // listener isn't answering over Tor now (probe = onion:80 SOCKS5 connect). Fails OPEN if
       // the pool box can't run the probe, so it never blocks every payout. ON by default.
       tor_preflight_gate: 'true',
+      // REMOVED 2026-09-26: tor_send_mode (the step-by-step Tor sender, F5, is deleted). Removed
+      // together with its field and validator, as F4 was; a stored row stays inert — getSection
+      // still merges it, the form never resends it, applyToConfig no longer reads it.
       // ── Goblin/Nostr payout rail (design §15). OFF by default. Relays + NIP-05 domains
       // are JSON arrays of strings; the domain list is the SSRF/typo-squat allowlist.
       nostr_payouts_enabled: 'false',
@@ -273,7 +294,8 @@ class PoolSettings {
       // nav and sitemap, and with the feeds closed it rendered nothing useful — worse, until
       // that date it rendered a SAMPLE globe that operators took for real data. Neither endpoint
       // has ever returned an IP — no coordinate is resolved at all (an aggregate sits on its
-      // country's centroid, and that country is published beside it) and peer IPs never leave
+      // country's centroid, and that country is published beside it; the one typed-in position
+      // is a gateway's own, operator-declared on the Regions page) and peer IPs never leave
       // the DB — but both publish a per-country breakdown of who connects to this pool, so an
       // operator who considers that too much can switch it off (→ 404, bare globe).
       // NOTE: getSection() layers stored rows over these defaults, so an existing install that
@@ -441,7 +463,7 @@ PASS      any-password-you-choose</code>
 
 <p>Ready to start? See the <a href="/">homepage</a> for connection details, or read the <a href="/page.html?p=faq">FAQ</a>.</p>`,
 
-      terms: `<p class="muted">Last updated: July 2026</p>
+      terms: `<p class="muted">Last updated: September 2026</p>
 <p>These Terms of Service ("Terms") govern your use of the GRINIUM mining pool and its website (the "Service"). By connecting a miner or using the website you agree to these Terms. If you do not agree, do not use the Service.</p>
 
 <h2>1. The Service</h2>
@@ -449,7 +471,7 @@ PASS      any-password-you-choose</code>
 
 <h2>2. Identity and accounts</h2>
 <p>The Service does not use registered miner accounts. Your Grin address is your identity: rewards earned by hashpower submitted under an address are credited to, and payable only to, that address. You are solely responsible for the security and correctness of the address you mine to. <strong>Rewards paid to an address you do not control cannot be recovered.</strong></p>
-<p>Because there is no login, self-service money actions (requesting a payout, creating or finalising a Slatepack, registering a payout destination) require a lightweight ownership check: either one of the last two source IP addresses your address has mined from, or the stratum password configured on your rig. Both are stored only as salted hashes. This is an anti-abuse gate, not authentication — it exists so that a stranger reading the public leaderboard cannot move coins you did not ask to move.</p>
+<p>Because there is no login, self-service money actions (requesting a payout, creating or finalising a Slatepack, registering a payout destination) require a lightweight ownership check: either a source IP address your address has recently mined from, or the stratum password configured on one of your rigs. The pool keeps up to ten of each per address, stored only as salted hashes. This is an anti-abuse gate, not authentication — it exists so that a stranger reading the public leaderboard cannot move coins you did not ask to move.</p>
 
 <h2>3. Fees and payouts</h2>
 <ul>
@@ -490,13 +512,13 @@ PASS      any-password-you-choose</code>
 <h2>10. Contact</h2>
 <p>Questions about these Terms can be directed to the pool operator using the contact links in the website footer, or via the Grin forum (<a href="https://forum.grin.mw/u/hellogrin" target="_blank" rel="noopener">hellogrin on forum.grin.mw</a>).</p>`,
 
-      privacy: `<p class="muted">Last updated: July 2026</p>
+      privacy: `<p class="muted">Last updated: September 2026</p>
 <p>This Privacy Policy explains what information the GRINIUM mining pool processes when you mine with us or visit our website. Grin is a privacy-focused cryptocurrency, and we keep data collection to the minimum needed to run the pool.</p>
 
 <h2>What we collect</h2>
 <ul>
   <li><strong>Your Grin address.</strong> Submitted as your stratum username; it is your public mining identity and the destination for your payouts.</li>
-  <li><strong>Proof of ownership — stored hashed, never in the clear.</strong> So that only you can move your balance, we keep the last two source IP addresses and the last two stratum passwords your address has mined with. Both are stored as <strong>salted scrypt hashes</strong>: the database holds no readable mining IP and no readable password, and a value can only be checked against a hash you supply yourself. Trivial or factory-default passwords are never recorded.</li>
+  <li><strong>Proof of ownership — stored hashed, never in the clear.</strong> So that only you can move your balance, we keep up to ten source IP addresses and up to ten stratum passwords your address has mined with; past ten, the least recently used one is dropped. Both are stored as <strong>salted scrypt hashes</strong>: the database holds no readable mining IP and no readable password, and a value can only be checked against a hash you supply yourself. Trivial or factory-default passwords are never recorded.</li>
   <li><strong>Country, not location.</strong> Where a connecting IP is geolocated at all it is resolved to a <strong>country only</strong> — no city, no coordinates. Country counts feed the public statistics and the network map; the map's data feeds are off unless the operator enables them, and even then a country is only named once enough peers share it.</li>
   <li><strong>Mining metrics.</strong> Shares, hashrate samples, worker names, and reject/stale counts — used to calculate rewards and display statistics.</li>
   <li><strong>Administrative audit log.</strong> Security-relevant events (admin logins, payout approvals, ownership checks — both accepted and refused) are logged. Any IP recorded there is <strong>truncated to its network block</strong> (/24 for IPv4, /48 for IPv6) rather than stored in full.</li>
@@ -522,7 +544,7 @@ PASS      any-password-you-choose</code>
 <h2>Your control</h2>
 <p>Because mining is address-based and pseudonymous, you can stop participating at any time by disconnecting your miner. To ask about data tied to your address, contact the operator via the footer contact links or the Grin forum (<a href="https://forum.grin.mw/u/hellogrin" target="_blank" rel="noopener">hellogrin on forum.grin.mw</a>).</p>`,
 
-      faq: `<p class="muted">Last updated: July 2026</p>
+      faq: `<p class="muted">Last updated: September 2026</p>
 
 <h2>What is GRINIUM?</h2>
 <p>GRINIUM is a mining pool for Grin (GRIN). We combine many miners' hashpower to find blocks more steadily and share the rewards.</p>
@@ -534,13 +556,13 @@ PASS      any-password-you-choose</code>
 <p>Point your miner at the nearest region's stratum endpoint (shown on the homepage), using:</p>
 <ul>
   <li><strong>Username:</strong> <code>your_grin_address.worker_name</code> (e.g. <code>grin1abc….rig1</code>)</li>
-  <li><strong>Password:</strong> a private string of <strong>at least 8 characters</strong> — use the <em>same</em> one on every rig. It is not a login, but it is one of the two ways you can later prove the address is yours, so don't leave it as <code>x</code> or <code>123</code>.</li>
+  <li><strong>Password:</strong> a private string of <strong>at least 8 characters</strong> — one per rig is fine, and using the same one everywhere is simply easier to remember. It is not a login, but it is one of the two ways you can later prove the address is yours, so don't leave it as <code>x</code> or <code>123</code>.</li>
   <li><strong>Port:</strong> the stratum port on the homepage (default 3333), the same across all regions.</li>
 </ul>
 <p>Grin-capable ASICs (the iPollo G1 and G1 mini) are configured in their own web interface; GPU miners need a Cuckatoo32-capable miner and a card with at least 11&nbsp;GB of VRAM.</p>
 
 <h2>Isn't the stratum password ignored?</h2>
-<p>It used to be. It is still never a login — you cannot use it to sign in anywhere, and no account exists — but the pool now records it (as a salted hash) alongside your recent mining IP addresses, and accepts either one as proof that you control the address when you ask to move your coins. That matters because IP addresses change: a router reboot, an ISP re-lease, switching to mobile data or moving the rig all give you a new one, and only your last two are kept. A password you chose survives all of that.</p>
+<p>It used to be. It is still never a login — you cannot use it to sign in anywhere, and no account exists — but the pool now records it (as a salted hash) alongside your recent mining IP addresses, and accepts either one as proof that you control the address when you ask to move your coins. That matters because IP addresses change: a router reboot, an ISP re-lease, switching to mobile data or moving the rig all give you a new one. The pool keeps up to ten of each and drops the least recently used past that, but a password you chose survives all of that.</p>
 
 <h2>What makes a valid rig password?</h2>
 <p>Any private string of <strong>8 to 128 characters</strong>. A password that breaks these rules is <strong>silently not recorded</strong> — mining still works normally and you keep earning, but that address is left relying on IP proof alone, which you will only notice on the day you try to withdraw. Refused values:</p>
@@ -550,7 +572,7 @@ PASS      any-password-you-choose</code>
   <li><strong>Known factory defaults</strong> such as <code>123456</code> or <code>password</code>. Thousands of rigs ship with the same value, so accepting one would hand a single skeleton key to every address using it.</li>
   <li>Anything starting with <code>d=</code> — some miners put a difficulty request like <code>d=32</code> in the password field. That is a mining instruction, not a secret, so it is never treated as one.</li>
 </ul>
-<p>Use the same password on every rig, and check the ownership section of your <a href="/account-settings.html">Account</a> page — it shows whether your current password was accepted and recorded. Changing it is safe: the last two are both accepted, so a rotation never locks you out.</p>
+<p>Different rigs may use different passwords — every one of them is kept (up to ten per address) and each works as proof on its own; one password everywhere is a convenience, not a requirement. Check the ownership section of your <a href="/account-settings.html">Account</a> page — it shows whether your current password was accepted and recorded. Changing it is safe: the old password stays on record beside the new one, so a rotation never locks you out.</p>
 
 <h2>What does it cost?</h2>
 <p>Two charges, both published on the site and neither hidden:</p>
@@ -607,6 +629,18 @@ PASS      any-password-you-choose</code>
       // Published pool Slatepack address for community donations (shown on the fortune board).
       // External donations land in the wallet; the operator reflects them via a manual top-up.
       donation_address: '',
+      // Donor profiles + donor league (design §16 ranking, §18 reviewed profiles). Read ONLY
+      // through donorSettings() in lib/donor-names.js, which bounds every value on read.
+      // `donor_censored_display` was REMOVED 2026-09-24 (§18 Part 3): names are pre-moderated,
+      // so there is no censored name to display. A row still stored for it is inert.
+      donor_name_blocklist: STARTER_BLOCKLIST.join('\n'),  // FLAG words, one per line: a substring hit on the
+                                                           // normalised name is highlighted in the review queue
+      donor_rank_window_days: 365,           // league window; 0 = lifetime
+      donor_loyalty_percent_per_month: 10,   // +% per distinct month with a donation debit
+      donor_loyalty_cap: 3,                  // multiplier ceiling (×3)
+      donor_name_expiry_months: 12,          // masked again this long after the last debit; 0 = never
+      donor_banner_slots: 5,                 // design §18: top N league donors show their approved
+                                             // banner; 0 = banners off (int 0-10)
       // Join bonus — paid once per address, only after its first successful withdrawal
       join_bonus_enabled: 'false',
       join_bonus_amount: 0.1,                // GRIN
@@ -639,6 +673,21 @@ PASS      any-password-you-choose</code>
         { name: 'Grin Genesis Day', date: '01-15', pot_grin: 0, enabled: false },
       ]),
     },
+    // Games platform master switches (design §19 D12, §19.3), read by lib/games-link.js.
+    //   mode   off     = /play/ answers 404 everywhere except its health check
+    //          preview = /play/ works by direct URL, the public nav link stays HIDDEN
+    //          on      = /play/ is live and the nav shows it (while the games service is up)
+    //   OFF by default — the opposite of `incentives`: the pool is live, and a fresh deploy
+    //   must not announce a feature the operator has not accepted yet. Do not set `on` before
+    //   the chat moderation tools exist (§19.14: moderation ships before anyone can post).
+    // Typed values only: chat_enabled is a real boolean, and the reader accepts nothing but
+    // true / 'true', so a quoted "false" can never switch chat on (memory
+    // project_config_loader_type_traps). The games port and link-secret path are pool.json
+    // keys, not settings — see lib/config.js.
+    games: {
+      mode: 'off',
+      chat_enabled: false,
+    },
     // Site-wide maintenance mode + announcement banners.
     notices: {
       maintenance_mode: 'false',
@@ -651,7 +700,7 @@ PASS      any-password-you-choose</code>
       // Announcements the moment the pool goes live (a saved row overrides this default, so
       // a box whose Announcements section was ever saved keeps ITS text, not this one).
       // The contact link is the operator's forum profile, same as support_forum_url above.
-      banners: '[{"id":"under-dev","type":"warning","message":"Testing phase in progress — feel free to join! Please note that data can be lost or reset without notice while we test. Interested?","link":"https://forum.grin.mw/u/hellogrin","link_text":"Contact hellogrin on the Grin Forum","dismissible":false,"enabled":true}]',
+      banners: '[{"id":"under-dev","type":"warning","message":"Testing phase in progress — interested in joining as a tester?","link":"https://forum.grin.mw/u/hellogrin","link_text":"Contact hellogrin on the Grin Forum","dismissible":false,"enabled":true}]',
     },
     // Database retention / cleanup. Keeps the SQLite file bounded WITHOUT ever
     // deleting shares still needed for PPLNS distribution or orphan reversal:
@@ -708,6 +757,9 @@ PASS      any-password-you-choose</code>
     'winter', 'spring', 'summer', 'autumn', 'halloween', 'christmas',
     'galaxy', 'winxp', 'aqua', 'comic',
   ];
+
+  // games.mode's allowed values (design §19 D12). lib/games-link.js reads the same list.
+  static GAMES_MODES = ['off', 'preview', 'on'];
 
   // Validation rules per section
   static validators = {
@@ -807,6 +859,8 @@ PASS      any-password-you-choose</code>
         }
         return val;
       },
+      // Exactly one of the three registry keys — see lib/explorers.js for why it is not a URL.
+      explorer_mainnet: explorers.validateMainnetChoice,
     },
     seo: {
       title_template: (val) => {
@@ -875,6 +929,23 @@ PASS      any-password-you-choose</code>
         return val;
       },
     },
+    // Strict on purpose: no trimming, no case folding, no truthiness. Anything else throws, so
+    // a bad write is refused instead of stored and later read as some other value.
+    games: {
+      mode: (val) => {
+        if (typeof val !== 'string' || !PoolSettings.GAMES_MODES.includes(val)) {
+          throw new Error('mode must be one of: off, preview, on');
+        }
+        return val;
+      },
+      // The form harvester sends a real boolean; accept the two exact strings too (a bash
+      // writer, a hand-made request) and store a BOOLEAN either way (value_type 'boolean').
+      chat_enabled: (val) => {
+        if (val === true || val === 'true') return true;
+        if (val === false || val === 'false') return false;
+        throw new Error('chat_enabled must be true or false');
+      },
+    },
     notices: {
       banners: (val) => {
         let arr = val;
@@ -928,13 +999,29 @@ PASS      any-password-you-choose</code>
         if (n > 1) throw new Error('withdrawal_fee must be <= 1 GRIN (typical network fee is ~0.023)');
         return n;
       },
-      payout_frequency: (val) => {
-        if (!['manual', 'hourly', 'daily', 'weekly'].includes(val)) throw new Error('invalid payout_frequency');
-        return val;
-      },
       withdrawal_cooldown_minutes: (val) => {
         const n = parseInt(val, 10);
         if (isNaN(n) || n < 0 || n > 1440) throw new Error('withdrawal_cooldown_minutes must be 0-1440');
+        return n;
+      },
+      // The two pending caps (2026-09-26). They had no validator: the form posts every field as
+      // text, so the first save stored '100' over the numeric default and the audit row named both
+      // keys as changed although nothing moved, and junk was stored as-is (the scheduler then fell
+      // back to its default without a word). Whole numbers only — Number(), not parseInt, so
+      // '12abc' is refused rather than read as 12. max_user_pending is not the per-address rule
+      // (that is the hard one-pending check); it is only read by the unused canInitiateWithdrawal.
+      max_pending_withdrawals: (val) => {
+        const n = Number(String(val == null ? '' : val).trim());
+        if (String(val == null ? '' : val).trim() === '' || !Number.isInteger(n) || n < 1 || n > 10000) {
+          throw new Error('max_pending_withdrawals must be a whole number 1-10000');
+        }
+        return n;
+      },
+      max_user_pending: (val) => {
+        const n = Number(String(val == null ? '' : val).trim());
+        if (String(val == null ? '' : val).trim() === '' || !Number.isInteger(n) || n < 1 || n > 100) {
+          throw new Error('max_user_pending must be a whole number 1-100');
+        }
         return n;
       },
       tor_preflight_gate: (val) => {
@@ -972,9 +1059,17 @@ PASS      any-password-you-choose</code>
         if (isNaN(n) || n < 0 || n > 720) throw new Error('nostr_destination_cooldown_hours must be 0-720');
         return n;
       },
+      slatepack_ttl_minutes: (val) => {
+        // Floor of 10: a human has to copy the slatepack into a wallet, run receive and paste
+        // the reply back, and the expiry sweep runs only every 60s. Cap of 1440 (24h), the old
+        // hardcoded value — anything longer just keeps pool-wallet outputs locked.
+        const n = parseInt(val, 10);
+        if (isNaN(n) || n < 10 || n > 1440) throw new Error('slatepack_ttl_minutes must be 10-1440');
+        return n;
+      },
       nostr_pending_ttl_minutes: (val) => {
         // Floor of 2: the expiry sweep runs every 60s, so a TTL under ~2 min can't be enforced
-        // accurately. Cap of 1440 (24h) keeps it at or below the manual slatepack rail.
+        // accurately. Cap of 1440 (24h).
         const n = parseInt(val, 10);
         if (isNaN(n) || n < 2 || n > 1440) throw new Error('nostr_pending_ttl_minutes must be 2-1440');
         return n;
@@ -1055,7 +1150,7 @@ PASS      any-password-you-choose</code>
       },
       // Blank (= derive) or exactly two letters, stored uppercase — this catches the shape
       // mistakes ('VNM', 'Vietnam', 'vn '), which is as far as the check can honestly go: the
-      // map's centroid table (lib/geoip.js COUNTRIES) is a curated ~54-country list, so
+      // map's centroid table (lib/geoip.js COUNTRIES) is a curated ~100-country list, so
       // validating membership here would reject a real ISO code just because we hold no
       // position for that country yet. A well-formed code we can't place draws no hub marker
       // (never a wrong one) — see the note in the admin helper text.
@@ -1097,6 +1192,26 @@ PASS      any-password-you-choose</code>
           }
           return v;
         },
+        // Flag words (design §16.10 / §18.9 type traps): the list is stored as cleaned text — one
+        // trimmed entry per line, empties dropped, size-capped — and is only ever SPLIT by the
+        // matcher, never compiled. Bounded so a pasted novel cannot make every review-queue read
+        // slow. The numbers carry the same bounds donorSettings() re-applies on read.
+        donor_name_blocklist: (val) => {
+          const text = val == null ? '' : String(val);
+          if (text.length > 65536) throw new Error('donor_name_blocklist must be under 64 KB');
+          const lines = text.split(/\r?\n/).map((l) => l.trim()).filter((l) => l !== '');
+          if (lines.length > 4000) throw new Error('donor_name_blocklist must have at most 4000 entries');
+          return lines.join('\n');
+        },
+        donor_rank_window_days: intRange('donor_rank_window_days', 0, 3650),
+        donor_loyalty_percent_per_month: percent('donor_loyalty_percent_per_month'),
+        donor_loyalty_cap: (val) => {
+          const n = parseFloat(val);
+          if (!Number.isFinite(n) || n < 1 || n > 100) throw new Error('donor_loyalty_cap must be 1-100');
+          return n;
+        },
+        donor_name_expiry_months: intRange('donor_name_expiry_months', 0, 120),
+        donor_banner_slots: intRange('donor_banner_slots', 0, 10),
         join_bonus_amount: nonNeg('join_bonus_amount'),
         jackpot_amount: nonNeg('jackpot_amount'),
         streak_bonus_per_week_percent: percent('streak_bonus_per_week_percent'),
@@ -1261,6 +1376,10 @@ PASS      any-password-you-choose</code>
         cta_text: b.cta_text || '',
         cta_link: b.cta_link || '',
         footer_text: b.footer_text || '',
+        // The operator's MAINNET choice, resolved (a corrupt row publishes as grincoin, never
+        // raw). Links must follow connection.explorer instead — index.js adds it — which is the
+        // network-aware key; on a testnet pool the two differ.
+        explorer_mainnet: explorers.resolveExplorerKey('mainnet', b.explorer_mainnet),
         social: {
           discord: b.discord_link || '',
           telegram: b.telegram_link || '',
@@ -1614,6 +1733,9 @@ PASS      any-password-you-choose</code>
     }
     if (payout.withdrawal_cooldown_minutes !== undefined) {
       config.withdrawal_cooldown_minutes = payout.withdrawal_cooldown_minutes;
+    }
+    if (payout.slatepack_ttl_minutes !== undefined) {
+      config.slatepack_ttl_minutes = payout.slatepack_ttl_minutes;
     }
     if (payout.tor_preflight_gate !== undefined) {
       config.tor_preflight_gate = payout.tor_preflight_gate === true || payout.tor_preflight_gate === 'true';

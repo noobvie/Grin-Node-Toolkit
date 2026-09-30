@@ -1,6 +1,7 @@
 const { getDb } = require('./db');
 const IncentivesManager = require('./incentives');
 const { compareBlockToHeader } = require('./block-identity');
+const { parseDonateToken } = require('./stratum-protocol');
 
 class RewardDistributor {
   // grinNode: a GrinNodeAPI. REQUIRED for the pre-credit chain re-verification below — it was
@@ -117,7 +118,12 @@ class RewardDistributor {
         distribution.push({
           grin_address: share.grin_address,
           amount: minerPayout,
-          share_difficulty: share.difficulty
+          share_difficulty: share.difficulty,
+          // Donation is per SHARE (design §18.2): the `donateN` token on the worker name this
+          // share was mined under, 0 when untagged. The worker name is the only input — nothing
+          // is stored per address — so a stranger tagging an address donates only the credit
+          // their OWN shares earn, never the owner's.
+          donate_pct: (parseDonateToken(share.worker_name) || { percent: 0 }).percent
         });
       }
 
@@ -199,12 +205,20 @@ class RewardDistributor {
   creditBalances(blockHeight, distribution, minerReward, poolFee) {
     try {
       const minerMap = new Map();
+      // address → Σ (share credit × that share's donate %/100), same order as minerMap so a
+      // donate100-only address sums to exactly its gross. Only addresses with a tagged share
+      // appear; applyToDistribution clamps each to the address's gross (design §18.2).
+      const donateMap = new Map();
 
       for (const entry of distribution) {
         if (!minerMap.has(entry.grin_address)) {
           minerMap.set(entry.grin_address, 0);
         }
         minerMap.set(entry.grin_address, minerMap.get(entry.grin_address) + entry.amount);
+        if (entry.donate_pct > 0) {
+          donateMap.set(entry.grin_address,
+            (donateMap.get(entry.grin_address) || 0) + entry.amount * (entry.donate_pct / 100));
+        }
       }
 
       const results = [];
@@ -277,7 +291,7 @@ class RewardDistributor {
       // top-ups. Called directly — the caller's transaction already covers it, and wrapping it
       // again would only open a savepoint (see the note at the top of this method).
       if (this.incentives && this.incentives.enabled()) {
-        this.incentives.applyToDistribution(blockHeight, minerMap, poolFee);
+        this.incentives.applyToDistribution(blockHeight, minerMap, poolFee, donateMap);
       }
 
       return results;

@@ -1,7 +1,10 @@
 const { spawn } = require('child_process');
 const crypto = require('crypto');
 const fs = require('fs');
+const http = require('http');
 const path = require('path');
+
+const socks5 = require('./socks5');
 
 // ─── Bech32 + v3-onion derivation (no external deps) ─────────────────────────
 // A Grin Slatepack address (grin1…/tgrin1…) IS the recipient's 32-byte ed25519 public key,
@@ -83,44 +86,325 @@ function onionV3FromPubkey(pubkey) {
   return base32LowerNoPad(Buffer.concat([pubkey, checksum, version])) + '.onion';
 }
 
+// ─── Tor reachability probe — PORTED from web/06d_tiny_explorer/lib/wallet-tor.js ──────────
+// Ported 2026-09-23: 06d's probe answered correctly for a live wallet that this pool's old
+// probe called "not reachable". It is a COPY, not a require (the two products deploy
+// separately); keep the classification in step with 06d and diverge only deliberately.
+// Deliberate divergences, all listed here:
+//   · a non-Slatepack address is `invalid_format` → online FALSE (06d: invalid_address → null).
+//     The pool is gating a payout, and "nothing can ever be sent there" is a decision.
+//   · no visitor-facing message text in REASONS — the pool page words its own outcomes.
+//   · probe_disabled / probe_busy are 06d server states the pool does not have.
+//   · the probe lives on the WalletTor class (probeToronlineStatus is the pool's public
+//     contract) with `deps` passed to the constructor instead of per call.
+//   · the User-Agent is `GrinPool` and the isolation-tag prefix `grinpool-` (06d: tinyexp).
+//   · `deps` may also replace checkVersion (06d injects connect only).
+//   · (Part 5 review) the check_version reply has an ABSOLUTE deadline as well as 06d's idle
+//     timer — the pool has no in-flight cap, so a drip-fed reply was unbounded here.
+//   · (Part 5 review) a proxy that answers but not as SOCKS5 (wrong version, auth refused) is
+//     tor_unavailable → null; 06d scores it false. Here a false refuses payouts.
+//
+// What the old probe got wrong, so nobody walks back into it:
+//   1. a 3000 ms SOCKS timeout — a cold onion connect routinely takes 5–15 s;
+//   2. the `socks` npm lib reports a timeout as 'Proxy connection timed out', which matched
+//      neither of the old error patterns, so "we heard nothing back" was scored as a CONFIDENT
+//      offline — and that same false `false` is what the withdraw pre-flight gate refuses on;
+//   3. retries reused one circuit, so retry 2 re-ran retry 1's failure;
+//   4. a bare SOCKS CONNECT proves a stream opened, not that a grin-wallet is there.
+
+const FOREIGN_PATH = '/v2/foreign';
+const MAX_BODY_BYTES = 16 * 1024;   // a check_version answer is ~120 bytes
+const USER_AGENT = 'GrinPool';
+
+// Reason → tri-state. The ONE map for what a probe reason means; the tor-check route returns
+// these codes verbatim and the account page maps them to its own words.
+const REASONS = {
+  reachable:         true,    // a grin-wallet answered check_version over Tor
+  reachable_auth:    true,    // HTTP 401 — a wallet that asks for credentials is still running
+  onion_unreachable: false,   // tor is up here; it could not reach that wallet's onion
+  onion_timeout:     false,   // tor is up here; that onion did not answer in time
+  no_answer:         false,   // tunnel built, but no HTTP reply came back
+  not_wallet:        false,   // something answered, and it is not a grin-wallet foreign API
+  invalid_format:    false,   // not a payout address — nothing can ever be sent there
+  derivation_failed: null,    // could not derive the onion, so no probe was made
+  tor_unavailable:   null,    // OUR tor daemon did not answer — says nothing about the wallet
+  probe_failed:      null,    // the probe broke in a way we cannot attribute
+};
+
+function verdict(reason) {
+  const known = Object.prototype.hasOwnProperty.call(REASONS, reason);
+  return known ? { online: REASONS[reason], reason } : { online: null, reason: 'probe_failed' };
+}
+
+// ── Failure classification — the false/null split ─────────────────────────────────────────
+// Pure, and the only place the split is decided. Three signals, in order of how much they
+// prove:
+//   1. a SOCKS reply BYTE — the proxy spoke the protocol at us, so tor is up and the failure
+//      is downstream of it;
+//   2. `proxyResponded` from ./socks5.js — same conclusion, for failures after the greeting
+//      but before a reply byte;
+//   3. the error STRING — the fallback for any other SOCKS client, and what the tests drive.
+// "rejected" is tested BEFORE the errno set on purpose: a SOCKS-level rejection can carry
+// ECONNREFUSED in its text while still meaning "tor answered".
+function classifyProbeError(err) {
+  const reply = (err && typeof err.code === 'number') ? err.code : null;
+  const responded = Boolean(err && err.proxyResponded === true);
+  const msg = String((err && err.message) || err || '');
+
+  if (reply !== null && reply !== 0) return verdict('onion_unreachable');
+  // The proxy answered, but not as a working SOCKS5 proxy: wrong protocol version, or it
+  // refused the auth methods / isolation credential that tor always accepts. That is OUR side
+  // broken (tor_socks_port pointing at the ControlPort, an HTTP proxy, …) — we could not look.
+  // `responded` below would score it a confident offline, and the gate would then refuse EVERY
+  // Tor payout: the misconfigured-box brick the fail-open contract exists to prevent. The
+  // strings are lib/socks5.js's own. (Review fix, payout-rails Part 5; 06d scores these false.)
+  if (/answered version|reply had version|rejected every authentication method|rejected the isolation credential|selected unsupported method/i.test(msg)) {
+    return verdict('tor_unavailable');
+  }
+  if (responded) return verdict(/timed out|timeout/i.test(msg) ? 'onion_timeout' : 'onion_unreachable');
+  if (/rejected|host unreachable|onion descriptor/i.test(msg)) return verdict('onion_unreachable');
+  if (/ECONNREFUSED|ETIMEDOUT|EHOSTUNREACH|ENETUNREACH|ENOTFOUND|EAI_AGAIN|ECONNRESET|EPIPE|EACCES/i.test(msg)) {
+    return verdict('tor_unavailable');
+  }
+  // A timeout with not one byte back from the proxy is a stuck tor, not a stuck wallet — we
+  // never got far enough to have an opinion about the wallet. THIS is the line the old probe
+  // lacked: it scored 'Proxy connection timed out' as a confident offline.
+  if (/timed out|timeout/i.test(msg)) return verdict('tor_unavailable');
+  return verdict('probe_failed');
+}
+
+// ── Reading the answer ────────────────────────────────────────────────────────────────────
+// Pure. An accepted TCP connection proves nothing (CLAUDE.md: reachability needs a parsed
+// result), hence a real check_version POST. The one exception is 401: a wallet that demands
+// credentials has still identified itself as a running wallet.
+function readProbeAnswer(status, bodyText) {
+  if (status === 401) return verdict('reachable_auth');
+  if (status < 200 || status >= 300) return verdict('not_wallet');
+  let data;
+  try { data = JSON.parse(String(bodyText || '')); }
+  catch (_) { return verdict('not_wallet'); }
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return verdict('not_wallet');
+  // A JSON-RPC error is still a wallet answering — an older build that does not know
+  // check_version is running, which is the question asked.
+  if (!('result' in data) && !('error' in data)) return verdict('not_wallet');
+  return verdict('reachable');
+}
+
+// One check_version POST down an already-tunnelled socket.
+//
+// `agent: null`, NOT `agent: false`. In Node, `false` means "build me a fresh default Agent" —
+// one that dials the destination itself — and http.request only consults createConnection when
+// there is NO agent. With `false` the SOCKS tunnel is built, handed back, and silently ignored
+// while Node opens its own direct socket to the .onion, which cannot resolve. (Same trap, same
+// wording, as 06d and web/052_accio/gateway/tor_route.js.)
+//
+// Two timers, and the second is the one that matters. req.setTimeout is an INACTIVITY timer —
+// every byte resets it — and the far end of this socket is the address holder's own onion, so
+// a reply fed one byte every few seconds held the probe open until Node's 16 KB header cap
+// (~a day). In the withdraw gate that is a held request plus a held pool socket per POST, with
+// nothing capping how many. `deadline` is ABSOLUTE: the whole reply must arrive within
+// timeoutMs of the request. (Review fix, payout-rails Part 5; 06d has the same idle-only timer
+// but caps concurrent probes at tor_check_max_inflight, which the pool does not.)
+//
+// A thin wrapper over postJsonRpcOverSocket: 16 KB body cap, the caller's timeoutMs as both timers.
+function checkVersionOverSocket(socket, opts) {
+  const { onion, port, timeoutMs } = opts;
+  return postJsonRpcOverSocket(socket, {
+    onion, port, method: 'check_version', params: [], timeoutMs, maxBytes: MAX_BODY_BYTES,
+  });
+}
+
+// One JSON-RPC POST to /v2/foreign down an already-tunnelled socket (the probe's check_version).
+// Written in F5 for the step-by-step Tor send too; that sender was deleted 2026-09-26 and the
+// probe is now its only caller. agent:null / createConnection / setHost:false / Connection: close,
+// and two timers (idle + ABSOLUTE deadline): the far end is the address holder's own onion.
+//
+// Resolves { status, body, wrote: true, complete, truncated }:
+//   complete  — the response ended normally (res.complete), not cut off mid-body
+//   truncated — the body passed maxBytes and was cut (the socket is destroyed at that point)
+// Rejects on a transport error; once req.write() has begun, the error carries requestWritten = true.
+function postJsonRpcOverSocket(socket, opts) {
+  const { onion, port, method, params, timeoutMs, maxBytes = MAX_BODY_BYTES } = opts;
+  return new Promise((resolve, reject) => {
+    const body = JSON.stringify({ jsonrpc: '2.0', method, params, id: 1 });
+    let settled = false;
+    let req = null;
+    let deadline = null;
+    let written = false;
+    const done = (err, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(deadline);
+      if (err) {
+        if (written && err && typeof err === 'object') err.requestWritten = true;
+        try { socket.destroy(); } catch (_) { /* best effort */ }
+        reject(err);
+      }
+      else resolve(value);
+    };
+
+    try {
+      req = http.request({
+        method: 'POST',
+        path: FOREIGN_PATH,
+        headers: {
+          'Host': port === 80 ? onion : onion + ':' + port,
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(body),
+          'Accept': 'application/json',
+          'Connection': 'close',
+          'User-Agent': USER_AGENT,
+        },
+        agent: null,
+        createConnection: () => socket,
+        // setHost would append a second Host header derived from host/port options we are not
+        // passing; ours is already in the header set.
+        setHost: false,
+      }, (res) => {
+        let data = '';
+        let over = false;
+        const answer = () => ({
+          status: res.statusCode, body: data, wrote: true, complete: !over && res.complete === true, truncated: over,
+        });
+        res.setEncoding('utf8');
+        res.on('data', (c) => {
+          if (over) return;
+          data += c;
+          if (data.length > maxBytes) { over = true; data = data.slice(0, maxBytes); res.destroy(); }
+        });
+        res.on('end', () => done(null, answer()));
+        res.on('close', () => done(null, answer()));
+        res.on('error', (e) => done(e));
+      });
+    } catch (e) {
+      return done(e);
+    }
+
+    req.on('error', (e) => done(e));
+    req.setTimeout(timeoutMs, () => req.destroy(new Error('no reply within ' + timeoutMs + 'ms')));
+    deadline = setTimeout(
+      () => req.destroy(new Error('no complete reply within ' + timeoutMs + 'ms')), timeoutMs);
+    written = true;
+    req.write(body);
+    req.end();
+  });
+}
+
+// ─── What did `grin-wallet send -d <address>` actually do? ────────────────────
+// The CLI exits 0 on three different outcomes, and only one of them paid anyone. Read against
+// upstream controller/src/command.rs `send` + `output_slatepack` at v5.4.1 and v5.5.0 (same
+// output in both):
+//   'sent'                Tor round-trip, then tx_lock_outputs → finalize_tx → post_tx all
+//                         succeeded, and the CLI printed `Tx sent successfully`. A failing post_tx
+//                         exits NON-zero instead, so it never reaches this function.
+//   'slatepack_fallback'  the Tor delivery failed (miner offline, onion unreachable, timeout), so
+//                         the CLI LOCKED the outputs, wrote <tld>/slatepack/<slate-uuid>.S1.slatepack,
+//                         printed the armored slatepack, and exited 0. Nothing was finalized — only
+//                         the sender can finalize — so nothing can ever post from this state.
+//   'unrecognised'        exit 0 with neither marker. Treated as an unknown outcome, never as sent.
+// `sent` is tested FIRST on purpose: a posted tx must never be classified as a fallback, because
+// the caller cancels a fallback, and cancelling a tx that did post unlocks outputs it already spent.
+// The markers are anchored lines of `println!` output; grin-wallet's own log lines (if the
+// operator enables stdout logging) carry a timestamp prefix and cannot match them.
+const SEND_OK_RE = /^Tx sent successfully\s*$/m;
+const SLATEPACK_FALLBACK_RE = /^Slatepack data follows|BEGINSLATEPACK\./m;
+const FALLBACK_FILE_RE =
+  /[\\/]slatepack[\\/]([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.S1\.slatepack\b/i;
+
+function classifySendOutput(stdout) {
+  const out = String(stdout || '');
+  if (SEND_OK_RE.test(out)) return { outcome: 'sent', slateId: null };
+  if (SLATEPACK_FALLBACK_RE.test(out)) {
+    const m = out.match(FALLBACK_FILE_RE);
+    return { outcome: 'slatepack_fallback', slateId: m ? m[1].toLowerCase() : null };
+  }
+  return { outcome: 'unrecognised', slateId: null };
+}
+
+// ─── What the CLI printed, when it failed ─────────────────────────────────────
+// grin-wallet v5.5.0 prints every error on STDOUT (src/cmd/wallet.rs: `println!("Wallet command
+// failed: {}")`, exit 1) and log4rs writes its console log there too; stderr carries only clap's
+// usage errors and a panic. Until 2026-09-26 a failure kept stderr alone, so every real one reached
+// the scheduler as "Command failed (code 1): " — its NotEnoughFunds branch could never match, and
+// the operator's fail_detail was always empty. The tail is kept short enough that the scheduler's
+// 500-char fail_detail and 400-char alert message hold it whole.
+const OUTPUT_TAIL_CHARS = 300;
+function outputTail(stdout, stderr) {
+  const parts = [stderr, stdout].map((s) => String(s || '').replace(/\s+/g, ' ').trim()).filter(Boolean);
+  return parts.join(' | ').slice(-OUTPUT_TAIL_CHARS);
+}
+
+// One `grin-wallet send` can wait up to 60 s at each of its steps (v5.5.0: the node version check,
+// the wallet refresh, the Tor bootstrap, check_version, receive_tx and post_tx — config/src/types.rs
+// NODE_API_REQUEST_TIMEOUT_SECS, REQUEST_TIMEOUT_SECS, BOOTSTRAP_TIMEOUT_SECS are all 60). The old
+// 120 s ceiling killed sends that would have answered, and a kill is the one outcome the pool can
+// only Hold. Six such waits = 360 s. The scheduler's stale-send sweep derives its window from this.
+const DEFAULT_SEND_TIMEOUT_MS = 360000;
+
 class WalletTor {
-  constructor(config) {
+  // `deps` is for tests only: { connect, checkVersion } replace socks5.connect and
+  // checkVersionOverSocket so the tri-state can be driven with no tor and no network.
+  constructor(config, deps) {
     this.network = config.network || 'testnet';
     this.walletDir = config.wallet_dir;
+    // The installer puts the binary INSIDE the wallet dir (07_lib_pool_wallet.sh pw_bin) and
+    // never on PATH, and the unit sets no PATH — a bare `grin-wallet` spawn is ENOENT on every
+    // toolkit box (mainnet payout #10, 2026-09-25: the process never started, nothing sent).
+    this.walletBin = path.join(this.walletDir || '', 'grin-wallet');
     this.ownerPort = config.wallet_owner_port || (this.network === 'mainnet' ? 3420 : 13420);
     this.torSocksPort = config.tor_socks_port || 9050;
-    this.torCheckTimeoutMs = config.tor_check_timeout_ms || 3000;
+    // 8 s, matching 06d: a cold onion connect is routinely 5–15 s, and 3 s (the old value)
+    // timed out healthy wallets. Applies to the SOCKS connect AND the check_version reply,
+    // each an inactivity timeout, so one attempt can take up to ~2× this.
+    this.torCheckTimeoutMs = config.tor_check_timeout_ms || 8000;
     // grin-wallet publishes the wallet's foreign API onion at virtual port 80.
     this.onionVirtualPort = config.tor_onion_virtual_port || 80;
     this.torCheckRetries = Math.max(1, config.tor_check_retries || 2);
     this.walletPassFile = config.wallet_pass_file || '';
-    // Hard ceiling on a single `grin-wallet send` (Tor connect + slate round-trip). Stops a
-    // hung wallet or unreachable recipient from stalling the withdrawal scheduler loop.
-    this.sendTimeoutMs = config.wallet_send_timeout_ms || 120000;
+    // Hard ceiling on a single `grin-wallet send` (node checks + Tor round trip + post). Stops a
+    // hung wallet from stalling the withdrawal scheduler loop. See DEFAULT_SEND_TIMEOUT_MS.
+    this.sendTimeoutMs = config.wallet_send_timeout_ms || DEFAULT_SEND_TIMEOUT_MS;
+    this._connect = (deps && deps.connect) || socks5.connect;
+    this._checkVersion = (deps && deps.checkVersion) || checkVersionOverSocket;
   }
 
   // Pool payouts go to the miner's Slatepack address (grin1…/tgrin1…) — which IS their mining
   // identity. grin-wallet resolves the Slatepack address to its Tor/onion service and sends
   // over Tor automatically, so we pass the address straight through (no .onion derivation here).
+  //
+  // Exit 0 is NOT "sent" — see classifySendOutput. Only the `Tx sent successfully` line means the
+  // wallet finalized and posted. On a Tor-delivery failure the CLI prints a slatepack instead,
+  // locks the outputs and STILL exits 0; that comes back as success:false with torFallback set
+  // and the slate id, so the caller can cancel the lock before it retries.
   async sendToTorAddress(address, amount) {
     try {
       if (!this.isPayoutAddress(address)) {
         throw new Error('Invalid Grin payout address (expected a grin1…/tgrin1… Slatepack address)');
       }
 
+      // Argv per grin-wallet v5.5.0 src/bin/grin-wallet.yml (clap 2 — long flags match EXACTLY):
+      // the top-level flag is `--top_level_dir` (underscores, as every toolkit shell caller spells
+      // it), and `amount` is send's POSITIONAL arg. `-a` is the top-level `account` flag and is
+      // refused after `send`. Until 2026-09-26 this read `--top-level-dir … -a <amount>` — two
+      // clap errors, so every real send exited 1 before building anything. Pinned by
+      // scripts/test-payout-rails.js against the upstream spec.
       const result = await this.execWalletCommand([
-        '--top-level-dir', this.walletDir,
-        'send', '-d', address, '-a', String(amount)
+        '--top_level_dir', this.walletDir,
+        'send', '-d', address, String(amount)
       ]);
 
-      return {
-        success: true,
-        address,
-        amount,
-        timestamp: new Date().toISOString(),
-        output: result
-      };
+      return this._sendResult(classifySendOutput(result), result, address, amount);
     } catch (err) {
+      // A CLI killed by the timeout may already have printed its outcome and hung afterwards (on
+      // shutdown, say). What it printed is what it did — "Tx sent successfully" means it posted; a
+      // slatepack fallback means it locked, wrote the S1 and finalized nothing — so neither may be
+      // turned into an unknown (review 2026-09-26). Only a timeout carries err.stdout.
+      if (err && typeof err.stdout === 'string') {
+        const verdict = classifySendOutput(err.stdout);
+        if (verdict.outcome !== 'unrecognised') {
+          return this._sendResult(verdict, err.stdout, address, amount, ' (the CLI then hung until the timeout killed it)');
+        }
+      }
       return {
         success: false,
         error: err.message,
@@ -130,43 +414,128 @@ class WalletTor {
     }
   }
 
-  // Real Tor reachability probe. Derives the wallet's v3 onion from the Slatepack address and
-  // SOCKS5-connects to onion:80 through the local tor daemon; a successful CONNECT means tor
-  // found the hidden-service descriptor AND the wallet's foreign-API listener accepted the
-  // stream — i.e. the wallet is up right now. Tri-state:
-  //   online:true  — reachable (connect succeeded)
-  //   online:false — CONFIDENT offline: tor is up but the HS didn't answer across all retries
-  //   online:null  — INDETERMINATE: couldn't run the probe (onion derivation failed / no socks
-  //                  lib / tor daemon unreachable). Callers must fail OPEN on null so a
-  //                  misconfigured pool box never blocks every payout — grin-wallet stays the
-  //                  authority at send.
-  // An address that isn't a payout address at all returns FALSE, not null: nothing can ever be
-  // sent to it, so that is a decision, not a missing observation.
-  // Retries across fresh circuits so one flaky circuit doesn't wrongly flag a healthy listener.
-  async probeToronlineStatus(address) {
-    if (!this.isPayoutAddress(address)) {
-      return { online: false, reason: 'invalid_format' };
+  // The result object for a classified `send` output (see classifySendOutput).
+  _sendResult(verdict, stdout, address, amount, suffix = '') {
+    if (verdict.outcome === 'slatepack_fallback') {
+      return {
+        success: false,
+        torFallback: true,
+        slateId: verdict.slateId,
+        error: 'Tor delivery failed: grin-wallet fell back to printing a slatepack — nothing was posted' + suffix,
+        address,
+        amount
+      };
     }
-    const onion = this.deriveOnionAddress(address);
-    if (!onion) {
-      return { online: null, reason: 'derivation_failed' };
+    if (verdict.outcome !== 'sent') {
+      // The output tail goes into the error so the scheduler's admin-only fail_detail shows what
+      // the CLI actually printed (this is a Held payout — the operator has to read it). A fallback
+      // is classified above, so this is never a slatepack.
+      const tail = String(stdout || '').trim().slice(-OUTPUT_TAIL_CHARS);
+      return {
+        success: false,
+        error: 'grin-wallet send exited 0 without reporting "Tx sent successfully" — outcome unknown' +
+          (tail ? `; output tail: ${tail}` : ''),
+        address,
+        amount
+      };
     }
-    let SocksClient;
+    return {
+      success: true,
+      address,
+      amount,
+      timestamp: new Date().toISOString(),
+      output: stdout
+    };
+  }
+
+  // Re-broadcast a stored, finalized, not-yet-confirmed transaction: `grin-wallet repost -i <id>
+  // -f` (grin-wallet v5.4.1 controller/src/command.rs `repost`), where <id> is the TxLogEntry id
+  // from retrieve_txs. Used only by the scheduler's "marked paid but not mined" watchdog. It is
+  // the SAME transaction the wallet already signed, so it cannot pay twice; the wallet itself
+  // refuses one that is already confirmed or was never finalized. -f fluffs it (skips the
+  // Dandelion stem, one of the ways a tx gets lost). Same invocation, passphrase-on-stdin and
+  // timeout as `send`. NOTE: the CLI logs a refusal or a node rejection and still exits 0, so
+  // `ok` means "the command ran", not "the node accepted it" — the caller journals the output and
+  // lets the next tx-log read decide.
+  async repostTx(txLogId) {
+    const id = Number(txLogId);
+    if (!Number.isInteger(id) || id < 0) return { ok: false, output: `bad tx log id ${txLogId}` };
     try {
-      ({ SocksClient } = require('socks'));
-    } catch (_) {
-      return { online: null, reason: 'socks_unavailable' };
+      const out = await this.execWalletCommand([
+        '--top_level_dir', this.walletDir,   // underscores — see sendToTorAddress
+        'repost', '-i', String(id), '-f'
+      ]);
+      return { ok: true, output: out };
+    } catch (err) {
+      return { ok: false, output: err.message };
+    }
+  }
+
+  // Tor reachability probe: does a grin-wallet foreign API answer at this address's onion right
+  // now? Derives the wallet's v3 onion from the Slatepack address, opens a SOCKS5 tunnel to
+  // onion:80 through the local tor daemon, and POSTs a real check_version to /v2/foreign down
+  // it. A parsed JSON-RPC answer (or an HTTP 401) is the proof — an opened stream alone is not.
+  // Tri-state { online, reason } (reason codes: REASONS above):
+  //   online:true  — a grin-wallet answered
+  //   online:false — CONFIDENT offline: our tor spoke to us and that wallet did not answer, on
+  //                  every attempt; or something answered that is not a wallet; or the address
+  //                  is not a payout address at all (a decision, not a missing observation)
+  //   online:null  — INDETERMINATE: we could not look. Above all: a timeout with ZERO bytes
+  //                  back from 127.0.0.1:<socks> is null, not false — it means OUR tor is stuck
+  //                  or down and says nothing about the miner's wallet. Callers must fail OPEN
+  //                  on null (the withdraw pre-flight gate does) so a pool box with a broken tor
+  //                  never refuses every Tor payout; grin-wallet stays the authority at send.
+  // Each attempt uses its own SOCKS isolation tag, so tor builds it a FRESH circuit — a retry on
+  // the same circuit is a re-run of the same failure. Stops early on true, on any null (our side
+  // is broken; retrying only spends time) and on not_wallet (a stable fact about the far end).
+  // Worst case ≈ tor_check_retries × 2 × tor_check_timeout_ms (connect + reply, each an
+  // inactivity timeout): 2 × 2 × 8 s = 32 s at the defaults.
+  async probeToronlineStatus(address) {
+    if (!this.isPayoutAddress(address)) return verdict('invalid_format');
+    const onion = this.deriveOnionAddress(address);
+    if (!onion) return verdict('derivation_failed');
+
+    let last = verdict('probe_failed');
+    for (let attempt = 1; attempt <= this.torCheckRetries; attempt++) {
+      const r = await this._probeOnce(onion, attempt);
+      if (r.online === true || r.online === null || r.reason === 'not_wallet') return r;
+      last = r;
+    }
+    return last;
+  }
+
+  // One attempt: tunnel, then ask. Never throws — every failure is classified.
+  async _probeOnce(onion, attempt) {
+    let socket;
+    try {
+      socket = await this._connect({
+        socksHost: '127.0.0.1',
+        socksPort: this.torSocksPort,
+        host: onion,
+        port: this.onionVirtualPort,
+        timeoutMs: this.torCheckTimeoutMs,
+        // Per-ATTEMPT tag → a fresh circuit per retry (tor's SocksPort isolates by SOCKS auth
+        // by default). Not a secret; a circuit selector.
+        isolationTag: 'grinpool-' + attempt,
+      });
+    } catch (err) {
+      return classifyProbeError(err);
     }
 
-    let lastReason = 'unreachable';
-    for (let i = 0; i < this.torCheckRetries; i++) {
-      const r = await this._torConnectOnce(SocksClient, onion);
-      if (r.online === true) return { online: true, reason: 'reachable' };
-      // Can't reach the tor daemon itself → we cannot judge the wallet → indeterminate (fail-open).
-      if (r.online === null) return { online: null, reason: r.reason };
-      lastReason = r.reason;
+    try {
+      const answer = await this._checkVersion(socket, {
+        onion,
+        port: this.onionVirtualPort,
+        timeoutMs: this.torCheckTimeoutMs,
+      });
+      return readProbeAnswer(answer.status, answer.body);
+    } catch (_) {
+      // The tunnel was BUILT, so tor is unambiguously up and reached the hidden service — this
+      // failure is the far end's, never ours. Confident offline.
+      return verdict('no_answer');
+    } finally {
+      try { socket.destroy(); } catch (_) { /* best effort */ }
     }
-    return { online: false, reason: lastReason };
   }
 
   // Derive the wallet's v3 onion from its grin1…/tgrin1… Slatepack address. Returns null on any
@@ -179,30 +548,6 @@ class WalletTor {
     return onionV3FromPubkey(Buffer.from(bytes));
   }
 
-  // One SOCKS5 connect attempt. Separates "tor daemon unreachable" (→ null, fail-open) from
-  // "tor rejected/timed out the onion stream" (→ false, a real offline signal).
-  async _torConnectOnce(SocksClient, onion) {
-    try {
-      const info = await SocksClient.createConnection({
-        proxy: { host: '127.0.0.1', port: this.torSocksPort, type: 5 },
-        command: 'connect',
-        destination: { host: onion, port: this.onionVirtualPort },
-        timeout: this.torCheckTimeoutMs
-      });
-      try { info.socket.destroy(); } catch (_) { /* best-effort close */ }
-      return { online: true };
-    } catch (err) {
-      const msg = String((err && err.message) || err || '');
-      // A SOCKS-level "rejected connection" means the tor daemon answered — so the failure is the
-      // hidden service, not the proxy → confident offline. A raw socket error to 127.0.0.1:<socks>
-      // (ECONNREFUSED/ETIMEDOUT/EHOSTUNREACH/ENOTFOUND) means we never reached tor → indeterminate.
-      if (!/rejected/i.test(msg) && /ECONNREFUSED|ETIMEDOUT|EHOSTUNREACH|ENOTFOUND|ECONNRESET|EPIPE/i.test(msg)) {
-        return { online: null, reason: 'tor_unavailable' };
-      }
-      return { online: false, reason: 'unreachable' };
-    }
-  }
-
   isPayoutAddress(address) {
     return /^(grin1|tgrin1)[ac-hj-np-z02-9]{58}$/i.test(String(address || ''));
   }
@@ -213,7 +558,7 @@ class WalletTor {
   // wedge the scheduler.
   async execWalletCommand(args) {
     return new Promise((resolve, reject) => {
-      const proc = spawn('grin-wallet', args);
+      const proc = spawn(this.walletBin, args);
 
       let stdout = '';
       let stderr = '';
@@ -228,7 +573,10 @@ class WalletTor {
 
       const timer = setTimeout(() => {
         proc.kill('SIGKILL');
-        finish(reject, new Error(`grin-wallet timed out after ${this.sendTimeoutMs}ms`));
+        const tail = outputTail(stdout, stderr);
+        const err = new Error(`grin-wallet timed out after ${this.sendTimeoutMs}ms` + (tail ? `; output tail: ${tail}` : ''));
+        err.stdout = stdout;   // what it printed before the kill — sendToTorAddress reads its outcome markers
+        finish(reject, err);
       }, this.sendTimeoutMs);
 
       proc.stdout.on('data', (data) => { stdout += data.toString(); });
@@ -236,7 +584,7 @@ class WalletTor {
 
       proc.on('close', (code) => {
         if (code === 0) finish(resolve, stdout);
-        else finish(reject, new Error(`Command failed (code ${code}): ${stderr}`));
+        else finish(reject, new Error(`Command failed (code ${code}): ${outputTail(stdout, stderr)}`));
       });
 
       proc.on('error', (err) => finish(reject, err));
@@ -285,3 +633,10 @@ class WalletTor {
 }
 
 module.exports = WalletTor;
+// Pure helpers, exported for scripts/test-payout-rails.js.
+module.exports.REASONS = REASONS;
+module.exports.classifyProbeError = classifyProbeError;
+module.exports.readProbeAnswer = readProbeAnswer;
+module.exports.checkVersionOverSocket = checkVersionOverSocket;
+module.exports.classifySendOutput = classifySendOutput;
+module.exports.DEFAULT_SEND_TIMEOUT_MS = DEFAULT_SEND_TIMEOUT_MS;

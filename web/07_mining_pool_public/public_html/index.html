@@ -101,14 +101,14 @@
         <!-- ═══ Spec placard: live pool terms + network conditions (engraved plate) ═══
              Pool terms from /api/config/pool-info; network facts refresh with the poll.
              Static "scheme / payout-via / registration" facts intentionally live in the
-             hero subheading + P-03 mimic instead of being engraved a third time here. -->
-        <div class="placard" aria-label="Pool specifications">
-            <span><i>Fee</i><b id="pl-fee">—</b></span>
-            <span><i>Min payout</i><b id="pl-min">—</b></span>
-            <span><i>Network</i><b id="pl-net">—</b></span>
-            <span><i>Net hashrate</i><b id="pl-nethash">—</b></span>
-            <span><i>Net difficulty</i><b id="pl-netdiff">—</b></span>
-            <span><i>Active regions</i><b id="pl-regions">—</b></span>
+             hero subheading + P-03 mimic instead of being engraved a third time here.
+             Four tiles (was six): Fee + Min payout share one "A / B" tile, and the Network
+             tile went — its warning survives as the hashrate label ("Testnet hashrate"). -->
+        <div class="placard figures" aria-label="Pool specifications">
+            <span class="tone-gold"><i>Fee / Min payout</i><b id="pl-terms">—</b></span>
+            <span class="tone-info"><i id="pl-nethash-k">Network hashrate</i><b id="pl-nethash">—</b></span>
+            <span class="tone-warn"><i>Net difficulty</i><b id="pl-netdiff">—</b></span>
+            <span class="tone-ok"><i>Active regions</i><b id="pl-regions">—</b></span>
         </div>
 
         <div class="deck">
@@ -134,12 +134,14 @@
                                 <!-- Four readouts (2×2), one big figure + one small qualifier each.
                                      Was six: Last block and Blocks found had tiles of their own and are
                                      now the Blocks · 24h sub-line; the 7-day count lives on the blocks
-                                     page only; Confirmed gained the still-maturing GRIN. -->
+                                     page only; Confirmed gained the still-maturing GRIN.
+                                     A paired tile reads "A / B" in the label and "a / b" in the
+                                     value, so the slash is never read as "a out of b". -->
                                 <div class="counters">
                                     <div class="counter"><div class="k">Block height</div><div class="v num" id="c-height">—</div></div>
-                                    <div class="counter alt"><div class="k">Miners online</div><div class="v num"><span id="c-miners">—</span> <small id="c-miners-sub"></small></div></div>
-                                    <div class="counter"><div class="k">Blocks · 24h</div><div class="v num"><span id="c-blocks24">—</span> <small><span id="c-last">—</span> · <span id="c-total">—</span> total</small></div></div>
-                                    <div class="counter alt"><div class="k">Confirmed</div><div class="v num"><span id="c-reward">—</span> <small>GRIN · <span id="c-immature">—</span> immature</small></div></div>
+                                    <div class="counter alt"><div class="k">Miners / Workers</div><div class="v num"><span id="c-miners">—</span> / <span id="c-workers">—</span></div></div>
+                                    <div class="counter"><div class="k">Blocks · 24h / All time</div><div class="v num"><span id="c-blocks24">—</span> / <span id="c-total">—</span> <small id="c-last">—</small></div></div>
+                                    <div class="counter alt"><div class="k">Confirmed / Immature</div><div class="v num"><span id="c-reward">—</span> / <span id="c-immature">—</span> <small>GRIN</small></div></div>
                                 </div>
                                 <div class="ledbar-wrap">
                                     <div class="ledbar-title">Share quality — live sessions <span id="led-note"></span></div>
@@ -171,8 +173,11 @@
                                 <div class="lamp" id="an-wallet">Wallet link<small>…</small></div>
                                 <div class="lamp" id="an-payouts">Payouts<small>…</small></div>
                                 <div class="annun-cat">Integrity</div>
-                                <div class="lamp" id="an-stale">High stale<small>&lt; 5%</small></div>
-                                <div class="lamp" id="an-orphan">Orphan det.<small>none</small></div>
+                                <!-- Both titles are rewritten per state by reactor-dashboard.js
+                                     (Low/High stale, No orphan / Orphan detected) — .lamp-t is
+                                     the hook. Neutral until the first /api/pool/stats lands. -->
+                                <div class="lamp" id="an-stale"><span class="lamp-t">Stale rate</span><small>…</small></div>
+                                <div class="lamp" id="an-orphan"><span class="lamp-t">Orphan check</span><small>…</small></div>
                             </div>
                         </div>
                     </div>
@@ -249,9 +254,9 @@
                 <div class="panel"><span class="screws"></span>
                     <h2 class="panel-title"><span class="tag">P-04</span> Chart recorder — hashrate
                         <span class="right"><span class="chart-range" id="rx-range" role="tablist" aria-label="Hashrate chart timeframe">
-                            <button type="button" data-range="day" class="active" role="tab" aria-selected="true">24H</button>
+                            <button type="button" data-range="day" role="tab" aria-selected="false">24H</button>
                             <button type="button" data-range="week" role="tab" aria-selected="false">7D</button>
-                            <button type="button" data-range="month" role="tab" aria-selected="false">30D</button>
+                            <button type="button" data-range="month" class="active" role="tab" aria-selected="true">30D</button>
                         </span></span></h2>
                     <div class="panel-body">
                         <div class="chart-sub">Pool hashrate</div>
@@ -362,14 +367,14 @@
                                     region). Algorithm: <b>Cuckatoo32</b> (GRIN). If your firmware rejects a bare
                                     <code>host:port</code>, prefix it with <code>stratum+tcp://</code>.</li>
                                 <li><b>Worker</b> — your Grin address; it <b>is</b> your login, no signup. Optionally
-                                    add <code>.rig1</code> to name the machine (lowercase letters/digits/<code>-</code>/<code>_</code>,
-                                    max 25 chars — longer names are trimmed, never rejected).</li>
+                                    add <code>.rig1</code> to name the machine (letters/digits/<code>-</code>/<code>_</code>, folded to lowercase,
+                                    max 32 chars — longer names are trimmed, never rejected).</li>
                                 <li><b>Password</b> — <b>choose a PIN of 8 or more digits</b> you will remember
                                     (not <code>12345678</code>, not one repeated digit, not the firmware default such as
                                     <code>x</code> or <code>123</code>). It is your <b>ownership proof</b> on the account
                                     page, and it stays readable in the rig&rsquo;s own panel, so you can always look it up.
-                                    <b>Use the same PIN on every rig</b> under this address — any of them can then
-                                    prove ownership, and it keeps working when your IP changes. Plain letters work
+                                    Each rig under this address may have its own PIN — the pool keeps up to 10 and any of
+                                    them proves ownership, even after your IP changes; one PIN everywhere is just easier to remember. Plain letters work
                                     too; avoid accented or non-Latin characters, which some firmware cannot send.</li>
                             </ol>
                             <!-- Also unnumbered: this happens after the form is filled in. -->
@@ -411,7 +416,7 @@
                         <li><b>PPLNS</b> (Pay Per Last N Shares) — rewards follow your recent contributed work</li>
                         <li>No account, email, or registration — your Grin address <b>is</b> your identity</li>
                         <li>Payouts are <b>requested by you</b> (account page) and delivered over <b>Tor</b> or as an encrypted <b>slatepack</b> — nothing is sent unless you ask</li>
-                        <li>An unreachable Tor wallet is retried automatically (6h → 48h back-off); undeliverable or unclaimed payouts are returned to your balance</li>
+                        <li>A Tor payout is tried once and never sent twice — if your wallet doesn't answer, the amount returns to your balance and you can take it as a slatepack instead; unclaimed slatepacks are returned too</li>
                         <li>Block rewards mature after <b>1,440 confirmations</b> (~24h) before they are credited</li>
                         <li>Orphaned blocks are detected automatically and their rewards reversed fairly</li>
                         <li style="display:none" id="info-email">Email: <span data-brand="contact_email"></span></li>

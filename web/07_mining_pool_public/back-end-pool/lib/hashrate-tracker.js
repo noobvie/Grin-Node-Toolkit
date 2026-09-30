@@ -58,12 +58,17 @@ class HashrateTracker {
   recordHashrates() {
     try {
       const windowSeconds = this.samplingInterval / 1000;
-      const cutoff = Math.floor(Date.now() / 1000) - windowSeconds;
+      const nowS = Math.floor(Date.now() / 1000);
+      const cutoff = nowS - windowSeconds;
 
+      // ⚠ The upper bound is load-bearing (scripts/test-shares-plans.js): `created_at > ?` alone
+      // plans as a full SCAN of idx_share_address_created — walking the address-leading index
+      // saves the GROUP BY sort — i.e. the whole retained table every minute on the DB the
+      // stratum server shares. Two-sided, it SEARCHes idx_share_created for the minute only.
       const rows = this.db.prepare(`
         SELECT grin_address, COALESCE(SUM(difficulty), 0) AS sumdiff
-        FROM shares WHERE created_at > ? GROUP BY grin_address
-      `).all(cutoff);
+        FROM shares WHERE created_at > ? AND created_at <= ? GROUP BY grin_address
+      `).all(cutoff, nowS);
 
       const stmt = this.db.prepare(`
         INSERT INTO hashrate_history (grin_address, hashrate_gps, window_seconds)
@@ -132,16 +137,18 @@ class HashrateTracker {
   getTopMiners(limit = 10, windowMinutes = 1) {
     try {
       const windowSeconds = windowMinutes * 60;
-      const cutoffTime = Math.floor(Date.now() / 1000) - windowSeconds;
+      const nowS = Math.floor(Date.now() / 1000);
+      const cutoffTime = nowS - windowSeconds;
       const factor = HashrateTracker.CYCLE_LENGTH / (windowSeconds * HashrateTracker.SOLUTION_RATE);
 
+      // Upper bound load-bearing, as in recordHashrates: one-sided, this was a full SCAN.
       const rows = this.db.prepare(`
         SELECT grin_address, COALESCE(SUM(difficulty), 0) AS sumdiff
-        FROM shares WHERE created_at > ?
+        FROM shares WHERE created_at > ? AND created_at <= ?
         GROUP BY grin_address
         ORDER BY sumdiff DESC
         LIMIT ?
-      `).all(cutoffTime, limit);
+      `).all(cutoffTime, nowS, limit);
 
       return rows.map(r => ({
         grin_address: r.grin_address,
@@ -381,23 +388,32 @@ class HashrateTracker {
   // from the LIVE in-memory stratum sessions. Under Model C every region's miners terminate
   // their session on this box, so reject/stale is complete pool-wide. Workers seen in shares but
   // with no live session show online:false and null reject/stale.
-  getWorkersForAccount(minerAddress, windowMinutes = 10) {
+  // `shortWindowMinutes` (optional, admin Miners page) adds `hashrate_gps_short` over a second,
+  // shorter window from the SAME pass: the short window is a subset of the long one, so a second
+  // call would only re-read the same rows. Without it the output is unchanged. The query SEARCHes
+  // idx_share_address_created (grin_address=? AND created_at>?), so it reads the window's rows only.
+  getWorkersForAccount(minerAddress, windowMinutes = 10, shortWindowMinutes = null) {
     try {
       const windowSeconds = windowMinutes * 60;
-      const cutoff = Math.floor(Date.now() / 1000) - windowSeconds;
+      const nowS = Math.floor(Date.now() / 1000);
+      const cutoff = nowS - windowSeconds;
       const factor = HashrateTracker.CYCLE_LENGTH / (windowSeconds * HashrateTracker.SOLUTION_RATE);
+      const short = shortWindowMinutes > 0 ? shortWindowMinutes * 60 : null;
+      const shortCutoff = short ? nowS - short : cutoff;
+      const shortFactor = short ? HashrateTracker.CYCLE_LENGTH / (short * HashrateTracker.SOLUTION_RATE) : 0;
 
       // worker_name may be NULL (default worker) — COALESCE so it groups under a stable label.
       const rows = this.db.prepare(`
         SELECT COALESCE(worker_name, 'default') AS worker_name,
                COALESCE(SUM(difficulty), 0) AS sumdiff,
+               COALESCE(SUM(CASE WHEN created_at > ? THEN difficulty ELSE 0 END), 0) AS sumdiff_short,
                COUNT(*) AS share_count,
                MAX(created_at) AS last_share_at
         FROM shares
         WHERE grin_address = ? AND created_at > ?
         GROUP BY COALESCE(worker_name, 'default')
         ORDER BY sumdiff DESC
-      `).all(minerAddress, cutoff);
+      `).all(shortCutoff, minerAddress, cutoff);
 
       // Live session counters keyed by worker name.
       const liveByWorker = new Map();
@@ -433,6 +449,7 @@ class HashrateTracker {
           rejected:     live ? live.rejected : null,
           stale:        live ? live.stale : null
         };
+        if (short) out.hashrate_gps_short = parseFloat((r.sumdiff_short * shortFactor).toFixed(6));
         if (live) {
           const total = live.accepted + live.rejected + live.stale;
           out.reject_pct = total > 0 ? parseFloat(((live.rejected / total) * 100).toFixed(2)) : 0;
@@ -451,6 +468,7 @@ class HashrateTracker {
         workers.push({
           worker_name:  wn,
           hashrate_gps: 0,
+          ...(short ? { hashrate_gps_short: 0 } : {}),
           share_count:  0,
           last_share_at: null,
           online:       true,
@@ -513,7 +531,17 @@ class HashrateTracker {
         GROUP BY recorded_at
         ORDER BY recorded_at ASC
       `).all(cutoff);
-      const series = HashrateTracker._thin(rows, maxPoints);
+      // recordHashrates() writes a row per address that had a share in the minute — a minute
+      // with none writes NOTHING, so a pause (or the process being down, which is the same
+      // thing for "shares accepted") leaves a hole in TIME, not a zero. The chart labels are
+      // categorical, so two samples hours apart sit one step apart and the pause vanishes
+      // entirely: the trace just continues. Regularize onto the sampling grid first, so an
+      // absent minute is the 0 GPS it was. This is a known zero, not a withheld value — the
+      // "draw a null as a GAP" rule (metrics/history) is for numbers the server chose not to
+      // publish, and does not apply here.
+      const stepS = this.samplingInterval / 1000;
+      const series = HashrateTracker._thin(
+        HashrateTracker._fillGaps(rows, Math.floor(now / 1000), stepS), maxPoints);
       // `hours` is clamped 1–720 at the route, so the key space is bounded — but never trust a
       // caller's clamp to bound server memory. Drop the oldest entry past the cap.
       if (this._poolHistoryCache.size >= HashrateTracker.POOL_HISTORY_CACHE_MAX) {
@@ -997,6 +1025,25 @@ class HashrateTracker {
   }
 
   // Evenly downsample a dense oldest→newest series to at most maxPoints (keeps the last point).
+  // Insert { t, gps: 0 } for every sampling slot with no row, between the FIRST sample and
+  // `nowS` (rows oldest→newest, on a ~stepS cadence with a little jitter, so a gap only counts
+  // once it reaches two steps). Leading absence is left alone: before the first sample the pool
+  // may simply not have existed, and zeros there would squash a young pool's real trace into
+  // the right edge. Trailing absence IS filled — the process answering this request is the
+  // one that would have sampled, so nothing recorded means nothing accepted.
+  static _fillGaps(rows, nowS, stepS) {
+    if (!rows.length || !(stepS > 0)) return rows;
+    const out = [];
+    let prev = rows[0].t;
+    for (const r of rows) {
+      while (r.t - prev >= 2 * stepS) { prev += stepS; out.push({ t: prev, gps: 0 }); }
+      out.push(r);
+      prev = r.t;
+    }
+    while (nowS - prev >= 2 * stepS) { prev += stepS; out.push({ t: prev, gps: 0 }); }
+    return out;
+  }
+
   static _thin(rows, maxPoints) {
     if (rows.length <= maxPoints) {
       return rows.map(r => ({ t: r.t, gps: parseFloat((r.gps || 0).toFixed(6)) }));

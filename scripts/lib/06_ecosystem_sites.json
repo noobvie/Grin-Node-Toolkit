@@ -38,6 +38,7 @@
   {"category": "Mining Pool", "name": "Always Pool",                "url": "https://pool.always.vip/",                           "since": null},
   {"category": "Mining Pool", "name": "NTMiner Pool",               "url": "https://ntminerpool.com/",                           "since": null},
   {"category": "Mining Pool", "name": "Gaea Pool",                  "url": "https://gaeapool.com/",                              "since": null},
+  {"category": "Mining Pool", "name": "Grinium Pool",               "url": "https://grinium.com",                                "since": null},
   {"category": "Mining Pool", "name": "Pool Stats",                 "url": "https://miningpoolstats.stream/grin",                "since": null},
 
   {"category": "Grin API — Mainnet", "name": "api.grin.money",        "url": "https://api.grin.money",        "since": 2026},

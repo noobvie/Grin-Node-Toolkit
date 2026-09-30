@@ -1129,6 +1129,8 @@ def _fetch_all_peers_from_node(owner_url, secret, network_label):
     """
     Query the owner API get_peers filtered to Healthy flag only.
     Returns a larger set than get_connected_peers — used for version stats.
+    Each row's `last_seen` is the node's `last_connected` (real handshake time), NOT
+    now: the store keeps Healthy peers indefinitely, so callers must window by it.
     Mainnet: no port filter (nodes run on various ports); user-agent is the gate.
     Testnet: standard port 13414 filter kept.
     """
@@ -1157,9 +1159,19 @@ def _fetch_all_peers_from_node(owner_url, secret, network_label):
                 if not ua:
                     skipped_blank += 1
                     continue
-                # Capture last_seen from the routing table (Unix timestamp)
-                last_seen_raw = p.get("last_seen", 0)
-                last_seen_ts  = int(last_seen_raw) if last_seen_raw else 0
+                # The node's own handshake time. grin's PeerData has NO `last_seen` field —
+                # reading it returned 0 for every row, and the old "0 → now" fallback then
+                # stamped every Healthy peer in the store as seen a minute ago. Healthy rows
+                # never expire from the store, so a node reached once a year ago counted as
+                # active in every week/month window (1,085 "30-day" nodes vs 183 real, NY
+                # 2026-09-26). No handshake time = no evidence of when it was alive → skip.
+                try:
+                    last_seen_ts = int(p.get("last_connected") or 0)
+                except (TypeError, ValueError):
+                    last_seen_ts = 0
+                if last_seen_ts <= 0:
+                    skipped_blank += 1
+                    continue
                 peer_list.append({
                     "ip":         ip,
                     "port":       port,
@@ -1171,7 +1183,7 @@ def _fetch_all_peers_from_node(owner_url, secret, network_label):
             port_skipped = f", {skipped_port} wrong-port" if network_label == "testnet" else ""
             print(f"[INFO] {network_label}: {len(peer_list)} healthy peers for stats "
                   f"(skipped {skipped_flag} non-Healthy{port_skipped}, "
-                  f"{skipped_blank} blank-agent).")
+                  f"{skipped_blank} blank-agent/never-connected).")
     except Exception as exc:
         print(f"[WARN] {network_label} owner API get_peers failed: {exc}", file=sys.stderr)
     return peer_list
@@ -1215,6 +1227,49 @@ def _upsert_peers(conn, enriched, first_seen_ts, use_max_last_seen=False,
     ])
 
 
+def _repair_inflated_peer_stamps(conn, store_peers):
+    """One-off per network: pull known_peers / seen_peers stamps back to the node's real
+    handshake time (`last_connected`, carried as `last_seen` in store_peers).
+
+    Before the last_connected fix every Healthy store peer was re-stamped "now" on every
+    run, so both tables hold current-looking last_seen values for nodes the node last
+    reached months ago. MAX-upserts can never lower them, so without this the week/month
+    counts stay inflated for 30 days and the year count for up to a year.
+
+    Runs once per network (meta flag), only for a network whose store read returned rows —
+    a failed read retries next run instead of marking the repair done. It must run before
+    the connected-peer upsert: a peer connected right now is clamped here and re-raised
+    to `ts` there. Known cost: a peer that was continuously connected earlier and has
+    since dropped is clamped to its older handshake time — an undercount on a handful of
+    rows, never an inflation. Rows whose IP is no longer Healthy in the store (gone, or
+    now Defunct) have no handshake time to repair against and keep their old stamp: they
+    leave known_peers within PEER_RETENTION_DAYS and the Year window within 365 days, and
+    are never re-raised because nothing re-stamps them. All-time counts ignore last_seen, so they are
+    unaffected either way (every stored Healthy peer did handshake at least once)."""
+    by_net = {}
+    for p in store_peers:
+        by_net.setdefault(p["network"], []).append(p)
+    for net, peers in by_net.items():
+        flag = f"peer_stamp_repair_v1_{net}"
+        if get_meta(conn, flag):
+            continue
+        # (last_seen, first_seen cap, ip, network, only-if-later-than)
+        params = [(p["last_seen"], p["last_seen"], p["ip"], net, p["last_seen"]) for p in peers]
+        fixed = 0
+        for table in ("known_peers", "seen_peers"):
+            before = conn.total_changes
+            conn.executemany(f"""
+                UPDATE {table}
+                SET last_seen  = ?,
+                    first_seen = MIN(first_seen, ?)
+                WHERE ip = ? AND network = ? AND last_seen > ?
+            """, params)
+            fixed += conn.total_changes - before
+        set_meta(conn, flag, str(now_ts()))   # set_meta commits the UPDATEs too
+        print(f"[INFO] {net}: one-off peer stamp repair — {fixed} inflated "
+              f"last_seen value(s) pulled back to the node's last_connected.")
+
+
 def _is_node_running(port):
     """Quick check if a node is listening on the given port."""
     import socket
@@ -1244,12 +1299,17 @@ def _update_peers():
 
     # ── 2. All healthy known peers — for version stats only ───────────────────
     # get_peers (Healthy flag) gives a larger sample for the version distribution
-    # chart. These are NOT stored in known_peers and NOT exported to peers.json.
-    stat_peers = []
+    # chart; the windowed subset is also stored in known_peers by step 5b.
+    stat_all = []
     if _is_node_running(3413):
-        stat_peers.extend(_fetch_all_peers_from_node(MAINNET_OWNER_URL, API_SECRET, "mainnet"))
+        stat_all.extend(_fetch_all_peers_from_node(MAINNET_OWNER_URL, API_SECRET, "mainnet"))
     if _is_node_running(13413):
-        stat_peers.extend(_fetch_all_peers_from_node(TESTNET_OWNER_URL, TESTNET_API_SECRET, "testnet"))
+        stat_all.extend(_fetch_all_peers_from_node(TESTNET_OWNER_URL, TESTNET_API_SECRET, "testnet"))
+    # Window by the node's real handshake time. The store holds every Healthy peer the
+    # node EVER reached (a year of them on a long-lived node), so the whole list would
+    # count long-gone nodes as current in the map, counts and version mix alike.
+    history_cutoff = now_ts() - PEER_HISTORY_DAYS * 86400
+    stat_peers = [p for p in stat_all if p["last_seen"] >= history_cutoff]
 
     if not map_peers:
         print("[WARN] No connected peers found from any node.", file=sys.stderr)
@@ -1305,20 +1365,20 @@ def _update_peers():
 
     conn = open_db()
 
+    # ── 4b. One-off repair of stamps written before the last_connected fix ────
+    # Must run BEFORE step 5, so peers connected right now are re-raised to `ts`.
+    _repair_inflated_peer_stamps(conn, stat_all)
+
     # ── 5. Upsert connected peers into known_peers ────────────────────────────
     # Preserve existing geo if the new lookup returned zeros (geo API miss).
     _upsert_peers(conn, enriched, ts)
 
     # ── 5b. Also store routing-table peers (Healthy, port 3414) ─────────────
-    # These extend the map beyond directly connected peers.
-    # Grin's get_peers API returns last_seen=0 for routing-table entries, so we
-    # fall back to (ts - 60s) — slightly older than live peers but within the
-    # 48h frontend filter.  Connected peers always win because their last_seen=ts.
-    history_cutoff = ts - PEER_HISTORY_DAYS * 86400
-    for p in stat_peers:
-        if not p.get("last_seen"):
-            p["last_seen"] = ts - 60  # mark as "routing table" (1 min behind live)
-    recent_stat = [p for p in stat_peers if p["last_seen"] >= history_cutoff]
+    # These extend the map beyond directly connected peers. Each carries the node's
+    # real `last_connected` (already windowed to PEER_HISTORY_DAYS in step 2), so a
+    # peer ages out of the map when the node stops reaching it. Connected peers
+    # always win because their last_seen=ts and the upsert keeps the MAX.
+    recent_stat = stat_peers
     if recent_stat:
         connected_ips = {p["ip"] for p in map_peers}
         new_ips       = list({p["ip"] for p in recent_stat if p["ip"] not in connected_ips})
@@ -1366,8 +1426,13 @@ def _update_peers():
     if purged:
         print(f"[INFO] Purged {purged} peers with blank/unknown agent names.")
 
-    # ── 7. Version snapshot — use stat_peers if available, else map_peers ─────
-    version_source = stat_peers if stat_peers else map_peers
+    # ── 7. Version snapshot — windowed store peers + everyone connected now ───
+    # A connected peer is current even when its last_connected (set once, at the
+    # handshake) is older than the window — a weeks-long session — so the windowed
+    # store set alone would drop exactly the most stable nodes from the version mix.
+    _in_stat = {(p["ip"], p["network"]) for p in stat_peers}
+    version_source = stat_peers + [p for p in map_peers
+                                   if (p["ip"], p["network"]) not in _in_stat]
     mainnet_only   = [p for p in version_source if p["network"] == "mainnet"]
     version_counts = Counter(p["user_agent"] for p in mainnet_only)
     if version_counts:

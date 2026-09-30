@@ -1,0 +1,134 @@
+/* game.css — the chess frame. The frame is a separate (opaque-origin) document, so the
+ * pool's theme tokens do not reach it; the shell sends only `theme: dark|light` and this
+ * file keeps one small palette for each. The frame is laid out at 8:9 by the shell: a
+ * square board with a player strip above and below it. */
+
+.theme-dark {
+    --ink: #cfd8d3; --ink-dim: #8a978f; --accent: #5dff73;
+    --sq-light: #a7b5ac; --sq-dark: #5e7066;   /* a black piece must read on the dark square */
+    --pc-w: #f4f7f5; --pc-w-edge: #1b211e; --pc-b: #121614; --pc-b-edge: #c9d3cd;
+    --last: rgba(255, 182, 61, .42); --sel: rgba(93, 255, 115, .55);
+    --dot: rgba(10, 14, 12, .45); --check: rgba(255, 90, 82, .85);
+    --panel: #10141a; --panel-edge: #2a3a32;
+}
+.theme-light {
+    --ink: #1f2a24; --ink-dim: #5b6b62; --accent: #1ba673;
+    --sq-light: #eeeed2; --sq-dark: #769656;
+    --pc-w: #ffffff; --pc-w-edge: #2b2b2b; --pc-b: #1d1d1d; --pc-b-edge: #f2f2f2;
+    --last: rgba(246, 200, 60, .55); --sel: rgba(27, 166, 115, .55);
+    --dot: rgba(0, 0, 0, .25); --check: rgba(220, 40, 30, .8);
+    --panel: #ffffff; --panel-edge: #c9d2cc;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: transparent; }
+body {
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    overflow: hidden; color: var(--ink);
+    font: 12px/1.3 ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+    -webkit-user-select: none; user-select: none;
+}
+
+/* ── Player strips ── */
+.strip {
+    flex: 1 1 0; min-height: 0; width: min(100vw, calc(100vh * 8 / 9));
+    display: flex; align-items: center; gap: 8px; padding: 0 2px;
+    color: var(--ink-dim); white-space: nowrap; overflow: hidden;
+}
+.strip .name { overflow: hidden; text-overflow: ellipsis; }
+.strip .turn {
+    flex: 0 0 auto; width: 10px; height: 10px; border-radius: 50%;
+    border: 1px solid var(--ink-dim); background: transparent;
+}
+.strip.side-w .turn { background: var(--pc-w); }
+.strip.side-b .turn { background: var(--pc-b); }
+.strip.to-move { color: var(--ink); font-weight: 700; }
+.strip.to-move .turn { box-shadow: 0 0 0 2px var(--accent); }
+
+/* ── Board ── */
+.board-wrap { position: relative; flex: 0 0 auto; width: min(100vw, calc(100vh * 8 / 9)); aspect-ratio: 1; }
+.board {
+    width: 100%; height: 100%; display: grid; grid-template-rows: repeat(8, 1fr);
+    border-radius: 4px; overflow: hidden; container-type: inline-size;
+}
+.rank { display: grid; grid-template-columns: repeat(8, 1fr); }
+
+.sq {
+    position: relative; display: flex; align-items: center; justify-content: center;
+    margin: 0; padding: 0; border: 0; border-radius: 0; min-width: 0; min-height: 0;
+    font: inherit; color: inherit; cursor: default; background: var(--sq-dark);
+}
+.sq.light { background: var(--sq-light); }
+.sq.last { background-image: linear-gradient(var(--last), var(--last)); }
+.sq.sel { box-shadow: inset 0 0 0 3px var(--sel); }
+.sq.check { background-image: radial-gradient(circle, var(--check) 0 35%, transparent 72%); }
+.sq:focus { outline: none; }
+.sq:focus-visible { box-shadow: inset 0 0 0 3px var(--accent); z-index: 1; }
+.board:not(.locked) .sq.movable,
+.board:not(.locked) .sq.target { cursor: pointer; }
+/* Only a movable piece captures touch, so a finger on the rest of the board still
+   scrolls the page. */
+.sq.movable { touch-action: none; }
+
+/* legal destinations: a dot on an empty square, a ring on a capture */
+.sq.target::after {
+    content: ""; position: absolute; width: 30%; height: 30%; border-radius: 50%;
+    background: var(--dot); pointer-events: none;
+}
+.sq.target.capture::after {
+    width: 88%; height: 88%; background: transparent;
+    box-shadow: inset 0 0 0 5px var(--dot);
+}
+
+/* coordinates on the edge squares (spans added by game.js; ink = the other square colour) */
+.coord {
+    position: absolute; font-size: 10px; font-weight: 700; line-height: 1; pointer-events: none;
+}
+.coord.file { right: 3px; bottom: 2px; }
+.coord.rank { left: 3px; top: 2px; }
+.sq.light .coord { color: var(--sq-dark); }
+.sq.dark .coord { color: var(--sq-light); }
+
+/* pieces */
+.pc {
+    font-family: 'Segoe UI Symbol', 'Noto Sans Symbols 2', 'DejaVu Sans', 'Arial Unicode MS', serif;
+    font-size: 9vw; line-height: 1; pointer-events: none;
+}
+@supports (container-type: inline-size) { .pc { font-size: 10.5cqw; } }
+.pc.w { color: var(--pc-w); text-shadow: 0 0 1px var(--pc-w-edge), 0 0 1px var(--pc-w-edge), 0 1px 1px var(--pc-w-edge); }
+.pc.b { color: var(--pc-b); text-shadow: 0 0 1px var(--pc-b-edge), 0 1px 0 var(--pc-b-edge); }
+.sq.dragging .pc { opacity: .3; }
+.ghost {
+    position: fixed; z-index: 10; pointer-events: none; transform: translate(-50%, -55%);
+    line-height: 1;
+}
+.board.over { filter: saturate(.75); }
+
+/* ── Promotion picker ── */
+.promo {
+    position: absolute; inset: 20% 8%; z-index: 5;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px;
+    background: var(--panel); border: 1px solid var(--panel-edge); border-radius: 8px;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, .45);
+}
+.promo[hidden] { display: none; }
+.promo-title { margin: 0; font-weight: 700; }
+.promo-row { display: flex; gap: 6px; }
+.promo-pc {
+    width: 17cqw; height: 17cqw; min-width: 44px; min-height: 44px;
+    display: flex; align-items: center; justify-content: center;
+    border: 1px solid var(--panel-edge); border-radius: 6px; background: var(--sq-light);
+    cursor: pointer; padding: 0;
+    font-family: 'Segoe UI Symbol', 'Noto Sans Symbols 2', 'DejaVu Sans', 'Arial Unicode MS', serif;
+    font-size: 11cqw; line-height: 1;
+}
+.promo-pc:focus-visible, .promo-cancel:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.promo-cancel {
+    border: 1px solid var(--panel-edge); border-radius: 6px; background: transparent; color: var(--ink);
+    font: inherit; padding: 6px 14px; cursor: pointer;
+}
+
+.sr-only {
+    position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+    overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+}

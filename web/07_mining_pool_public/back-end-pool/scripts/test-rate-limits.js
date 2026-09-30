@@ -371,5 +371,34 @@ console.log('\n[8] §J12-3 / -5 / -9 / -11 / -12 — the remaining resolution pa
     /await walletTor\.probeToronlineStatus\(addr\)/.test(indexSrc));
 }
 
+console.log('\n[9] the withdraw POST outlives the Tor pre-flight probe at nginx (2026-09-26)\n');
+
+{
+  // The probe can take ~32 s at the defaults (two attempts × 8 s connect + 8 s reply); the /api/
+  // block's proxy_read_timeout is 30 s, so nginx 504'd the miner ("Withdrawal failed") while the
+  // gate was still deciding. Safe since §10.5's res.destroyed check (nothing is created), but the
+  // miner had to retry. ONE exact regex block for the withdraw POST gets a longer read timeout;
+  // every other /api/ read keeps 30 s.
+  const vhost = fs.readFileSync(path.resolve(APP, '../../../scripts/07_grin_mining_public_pool.sh'), 'utf8');
+  const i = vhost.indexOf('location ~ ^/api/account/[^/]+/withdraw\\$ {');
+  const block = i < 0 ? '' : vhost.slice(i, vhost.indexOf('\n    }', i));
+  const t = Number((block.match(/proxy_read_timeout (\d+)s;/) || [])[1]);
+  ok('a regex location for exactly /api/account/<addr>/withdraw exists in the SSL vhost', i > 0, '');
+  ok('…its read timeout covers the worst-case probe with room (≥ 60 s) but stays bounded (≤ 120 s)', t >= 60 && t <= 120, String(t));
+  ok('…it keeps the /api/ zone, the upstream and the client-IP headers (a lost X-Forwarded-For collapses every miner into one bucket)',
+    /limit_req zone=\$\{POOL_SERVICE\}_api burst=40 nodelay;/.test(block) && /proxy_pass\s+http:\/\/127\.0\.0\.1:\$POOL_PORT;/.test(block) &&
+    /proxy_set_header\s+X-Real-IP \\\$remote_addr;/.test(block) && /proxy_set_header\s+X-Forwarded-For \\\$proxy_add_x_forwarded_for;/.test(block) &&
+    /proxy_set_header\s+Host \\\$host;/.test(block));
+  ok('…it adds no header of its own (an add_header here would drop the server-level security headers)', block && !/add_header/.test(block));
+  ok('…the anchor is escaped for the unquoted heredoc (a bare $ would be expanded by bash)', /withdraw\\\$ \{/.test(block.slice(0, 60)));
+  const api = vhost.slice(vhost.indexOf('    location /api/ {\n        limit_req zone=${POOL_SERVICE}_api'));
+  ok('…and the general /api/ block still reads 30 s', /^[\s\S]{0,400}?proxy_read_timeout 30s;/.test(api));
+  // A homepage load fires ~19 /api/ reads at once. At burst 10 (the live hub, 2026-09-26) the
+  // tail of every reload — blocks, payments, both trend reads — drew nginx 429s and the cards
+  // sat empty until the next 60 s refresh. The burst must absorb several loads back to back.
+  const apiBurst = Number((api.match(/^\s*location \/api\/ \{\n\s*limit_req zone=\$\{POOL_SERVICE\}_api burst=(\d+) nodelay;/) || [])[1]);
+  ok('…and the general /api/ burst absorbs several homepage loads at once (≥ 80)', apiBurst >= 80, String(apiBurst));
+}
+
 console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed\n`);
 process.exit(fail === 0 ? 0 : 1);

@@ -11,6 +11,7 @@
  *
  * Component map (mirrors a reactor operator's panel wall):
  *   .placard        engraved spec strip (pool terms + live network conditions)
+ *   .placard.figures  LARGE toned figure tiles — every public page's headline strip
  *   .panel          bezelled instrument panel with corner screws + title strip
  *   .annun/.lamp    annunciator warning-light grid (service + region health)
  *   .counter        seven-segment style numeric readouts
@@ -88,6 +89,54 @@ body {
 .placard b {
   font-size: 13px; letter-spacing: .04em; color: var(--accent); font-weight: 700;
   text-shadow: 0 0 8px var(--glow); white-space: nowrap;
+}
+
+/* ── figure tiles: the LARGE placard variant (was account-settings' .acct-figures) ──
+   Every public page's headline strip wears this, so a miner reads the same big, toned
+   numbers everywhere. Each tile takes a tone (--tone, set by a .tone-* class): a lit top
+   rail, a faint wash of the same hue, and the value in that hue. Glow goes through
+   var(--glow) so the light themes (which set it to transparent) stay crisp. Values are
+   sized by their OWN tile (cqi = 1% of the tile's width), because the placard is
+   overflow:hidden and the value nowrap — a viewport-sized value clipped at both edges once
+   the tiles got narrower than the vw clamp assumed. The vw declarations stay as the
+   fallback for a browser without container queries. */
+.placard.figures { grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); }
+.placard.figures span {
+  --tone: var(--accent);
+  gap: 8px; padding: 18px 14px 16px;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--tone) 10%, transparent), transparent 75%);
+  box-shadow: inset 0 3px 0 color-mix(in srgb, var(--tone) 75%, transparent);
+}
+.placard.figures i { font-size: 11px; letter-spacing: .14em; color: var(--text-dim); }
+.placard.figures b {
+  font-size: clamp(20px, 2.1vw, 26px); letter-spacing: .02em; color: var(--tone);
+  font-variant-numeric: tabular-nums; text-shadow: 0 0 12px var(--glow);
+}
+/* A tile holding WORDS rather than a number: smaller, and allowed to wrap onto a second
+   line rather than clip. */
+.placard.figures .t-words b { font-size: clamp(14px, 1.4vw, 18px); white-space: normal; line-height: 1.3; }
+@supports (container-type: inline-size) {
+  .placard.figures span { container-type: inline-size; }
+  .placard.figures b { font-size: clamp(15px, 12cqi, 26px); }
+  .placard.figures .t-words b { font-size: clamp(13px, 8.5cqi, 18px); }
+}
+.placard.figures .tone-warn { --tone: var(--warn); }
+.placard.figures .tone-gold { --tone: var(--gold); }
+.placard.figures .tone-info { --tone: var(--info); }
+.placard.figures .tone-ok   { --tone: var(--ok); }
+.placard.figures .tone-text { --tone: var(--text); }
+/* Small print under a value ("1.2 G/s · 24h avg"): engraved like the label, never toned. */
+.placard.figures small.fig-sub {
+  display: block; margin: 0; font-size: 10px; font-weight: 500; letter-spacing: .1em;
+  color: var(--text-mute); text-shadow: none;
+}
+/* Phones: two tiles a row instead of one tall column. auto-fit alone gives ONE column
+   below ~360px (two 170px minimums don't fit), which stacked six tiles into a scroll. An
+   odd tile out spans the full row so the strip never ends on a half-empty line. */
+@media (max-width: 560px) {
+  .placard.figures { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .placard.figures span:last-child:nth-child(odd) { grid-column: 1 / -1; }
+  .placard.figures span { padding: 14px 10px 12px; }
 }
 
 /* ── panel chrome: bezel + corner screws + engraved title strip ─────────── */
@@ -405,6 +454,28 @@ body {
 @media (prefers-reduced-motion: reduce) { .rgn.s-checking .rgn-led { animation: none; opacity: .6; } }
 .rgn .rgn-name { font-size: 11.5px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; }
 .rgn .rgn-pin  { font-size: 11px; margin-left: -2px; }
+/* Latency beside the tag: small and dim — a hint, not a readout. `is-est` = the server's
+   geographic estimate (shown with "~"); a browser measurement drops the class. */
+.rgn .rgn-ms   { font-size: 10.5px; letter-spacing: .02em; color: var(--text-mute); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.rgn .rgn-ms.is-est { font-style: italic; }
+/* "Recommended" — accent2 outline so it reads apart from both the status LED and the
+   selection outline (--accent). No fill, so there is no ink-on-accent pairing to get wrong. */
+.rgn .rgn-rec  {
+  font-size: 9.5px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; line-height: 1.4;
+  padding: 1px 5px; border-radius: 4px; white-space: nowrap;
+  color: var(--accent2); border: 1px solid color-mix(in srgb, var(--accent2) 55%, transparent);
+}
+/* "Re-test latency" — a quiet text control under the switch bank, styled like the legend's
+   summary. No `display` here: the element relies on [hidden] until there is a server to time.
+   The negative margin pulls it back toward the chips it belongs to (.patchbay gap is 22px). */
+.rgn-retest {
+  align-self: flex-start; margin-top: -14px; padding: 2px 0; cursor: pointer;
+  background: none; border: 0; font-family: var(--mono);
+  font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase; color: var(--text-mute);
+}
+.rgn-retest::before { content: "↻ "; color: var(--accent2); }
+.rgn-retest:hover:not(:disabled) { color: var(--text); }
+.rgn-retest:disabled { cursor: default; opacity: .55; }
 /* selected — accent outline, deliberately NOT the LED colour */
 .rgn.sel {
   border-color: var(--accent); color: var(--text);
@@ -524,31 +595,50 @@ body {
 }
 
 /* ── fuel-rod block maturity ────────────────────────────────────────────── */
-.rods { display: flex; gap: 18px; align-items: flex-end; overflow-x: auto; padding: 6px 2px 2px; scrollbar-width: thin; }
-.rods .rods-empty { color: var(--text-mute); font-family: var(--mono); font-size: 12px; letter-spacing: .1em; padding: 30px 0; }
-.rod { display: flex; flex-direction: column; align-items: center; gap: 7px; flex: 0 0 auto; }
+/* A fixed 10-column grid, never a scroller: the columns share the panel width (5 × 2 on a
+   phone, below). Every label on a rod is capped at ~6 mono characters to fit that width —
+   which is why reactor-dashboard.js prints only the height's last 4 digits ("…4,399"). */
+.rods { display: grid; grid-template-columns: repeat(10, minmax(0, 1fr)); gap: 14px 6px; align-items: end; padding: 6px 0 2px; }
+.rods .rods-empty { grid-column: 1 / -1; color: var(--text-mute); font-family: var(--mono); font-size: 12px; letter-spacing: .1em; padding: 30px 0; }
+/* --mat (0–100%, set per rod by JS) = confirmations / 1440. --rod-c walks the theme's own
+   --warn (yellow) to --accent (green); oklab keeps the midpoint from going muddy olive. */
+.rod {
+  --mat: 0%;
+  --rod-c: color-mix(in oklab, var(--accent) var(--mat), var(--warn));
+  display: flex; flex-direction: column; align-items: center; gap: 6px; min-width: 0; text-align: center;
+}
 .rod .tube {
-  width: 26px; height: 120px; border-radius: 6px; position: relative; overflow: hidden;
+  width: min(26px, 100%); height: 120px; border-radius: 6px; position: relative; overflow: hidden;
   background: var(--rx-inset); border: 1px solid var(--rx-line);
   box-shadow: inset 0 2px 10px var(--rx-shade);
 }
+/* Every rod is FULL. An immature rod is yellow with green rising from the bottom, blending
+   over the 12% just below --mat (so 0% = pure yellow, 50% = green to 38%, blend to 50%);
+   a mature rod is solid green, an orphan solid red. A height-proportional fill made a busy
+   hour's rods all ~3% tall and read as nothing happening. */
 .rod .fill {
-  position: absolute; left: 2px; right: 2px; bottom: 2px; border-radius: 4px; min-height: 3px;
-  background: linear-gradient(180deg, var(--warn), color-mix(in srgb, var(--warn) 55%, var(--bg)));
-  box-shadow: 0 0 10px color-mix(in srgb, var(--warn) 35%, transparent);
+  position: absolute; inset: 2px; border-radius: 4px;
+  background: linear-gradient(0deg,
+    var(--accent) calc(var(--mat) - 12%),
+    var(--warn) var(--mat));
+  box-shadow: 0 0 10px color-mix(in srgb, var(--rod-c) 35%, transparent);
 }
 .rod.done .fill {
-  background: linear-gradient(180deg, var(--accent), color-mix(in srgb, var(--accent) 45%, var(--bg)));
+  background: var(--accent);
   box-shadow: 0 0 10px var(--glow);
 }
 .rod.orphan .fill {
-  background: linear-gradient(180deg, var(--danger), color-mix(in srgb, var(--danger) 55%, var(--bg)));
+  background: var(--danger);
   box-shadow: 0 0 10px color-mix(in srgb, var(--danger) 35%, transparent);
 }
-.rod .h { font-family: var(--mono); font-size: 10.5px; color: var(--text); letter-spacing: .03em; font-variant-numeric: tabular-nums; }
-.rod .m { font-family: var(--mono); font-size: 9.5px; color: var(--text-mute); font-variant-numeric: tabular-nums; }
+.rod .h { font-family: var(--mono); font-size: 10.5px; color: var(--text); font-variant-numeric: tabular-nums; white-space: nowrap; max-width: 100%; }
+.rod .m { font-family: var(--mono); font-size: 9.5px; color: var(--text-mute); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.rod .m.pct { color: var(--rod-c); }
 .rod.done .m { color: var(--ok); }
 .rod.orphan .m { color: var(--danger); }
+@media (max-width: 520px) {
+  .rods { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+}
 
 /* ── payout teletype ────────────────────────────────────────────────────── */
 .tty {
@@ -560,6 +650,9 @@ body {
 }
 .tty div b { color: var(--accent); font-weight: 600; }
 .tty div .via { color: var(--info); }
+/* Elapsed-time column: fixed width so PAID / amounts line up down the log
+   ("12 months ago" is the widest value at 13ch). */
+.tty div .ago { display: inline-block; min-width: 13ch; }
 .tty::after {
   content: ""; position: absolute; left: 0; right: 0; top: 0; height: 34px;
   background: linear-gradient(var(--rx-inset), transparent); pointer-events: none;

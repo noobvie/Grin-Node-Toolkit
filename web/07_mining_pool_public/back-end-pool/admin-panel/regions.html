@@ -121,7 +121,7 @@
             the next step is back here.<br>
             <span class="dim">Result: one 44-character key ending in <code>=</code>.</span></li>
         <li><strong>STEP 3 — Create the region + pair the key (on this page).</strong><br>
-            Click ➕ New region: fill region key, city, country, the stratum hostname miners will use
+            Click ➕ New region: fill region key, city, country (and, optionally, its map position), the stratum hostname miners will use
             (e.g. <code>sgn.grinium.com</code>), and paste the gateway's public key into the
             <strong>Gateway WireGuard public key</strong> field. Save.<br>
             <span class="dim">Result: the page shows a one-line <code>GRINGW1|…</code> pairing string with a copy button.
@@ -238,6 +238,13 @@
           <dt>Country &amp; country code</dt>
           <dd>Group regions by country on the dashboard (two US regions appear under one heading). The ISO-2 code
               (<code>US</code>, <code>NL</code>) draws the flag emoji. Leave the code blank for no flag.</dd>
+          <dt>Map position (lat / lng) <span class="step">— optional</span></dt>
+          <dd>Where the public network map pins this gateway, in decimal degrees (Los Angeles <code>34.05</code> /
+              <code>-118.24</code>, New York <code>40.71</code> / <code>-74.01</code>). Leave both blank and the marker
+              sits on the country's centre — fine for one region per country, but two US gateways then land 140 km
+              apart in Kansas, which looks like a bug. This is the gateway <em>box</em>, a public server whose hostname
+              is already on the connect grid — it says nothing about any miner. Miners are always drawn as a shaded
+              country, never a point.</dd>
           <dt>Stratum host</dt>
           <dd>The hostname miners point their rigs at for this region (e.g. <code>nyc.grinium.com</code>). Create a DNS
               A-record for it that resolves to the <strong>gateway box's</strong> public IP. Enter the host only — the
@@ -285,6 +292,21 @@
           <label for="r-cc">Country code (ISO-2)</label>
           <input type="text" id="r-cc" placeholder="US" maxlength="2" style="text-transform:uppercase;" oninput="syncFlag()">
           <div class="helper-text">Two letters → flag on the dashboard. Preview: <span id="flag-preview" style="font-size:1.2em;">—</span></div>
+        </div>
+      </div>
+
+      <div class="form-row">
+        <div class="form-group">
+          <label for="r-lat">Map latitude <span class="dim">(optional)</span></label>
+          <!-- No inputmode="decimal": the iOS decimal keypad has no minus key, and every
+               western-hemisphere longitude is negative. The plain keyboard has one. -->
+          <input type="text" id="r-lat" placeholder="e.g. 40.71" autocomplete="off">
+        </div>
+        <div class="form-group">
+          <label for="r-lng">Map longitude <span class="dim">(optional)</span></label>
+          <input type="text" id="r-lng" placeholder="e.g. -74.01" autocomplete="off">
+          <div class="helper-text">Pins this gateway on the public network map at its real city (decimal degrees, both
+            or neither). Blank → the country's centre, where two gateways in one country overlap.</div>
         </div>
       </div>
 
@@ -581,6 +603,8 @@ function resetForm() {
   document.getElementById('r-label').value = '';
   document.getElementById('r-country').value = '';
   document.getElementById('r-cc').value = '';
+  document.getElementById('r-lat').value = '';
+  document.getElementById('r-lng').value = '';
   document.getElementById('r-host').value = '';
   document.getElementById('r-wgkey').value = '';
   document.getElementById('r-active').checked = true;
@@ -646,6 +670,11 @@ async function loadRegions(silent) {
       const hb = _hb[r.region];
       const flag = flagHtml(r.country_code);
       const country = r.country ? `${flag ? flag + ' ' : ''}${escHtml(r.country)}` : '<span class="dim">—</span>';
+      // Where the network map pins this gateway. No pin = country centre; two regions in one
+      // country then overlap there, so the hint names the fix.
+      const pin = (r.lat != null && r.lng != null)
+        ? ` <span class="dim" title="Network map pin: ${escHtml(String(r.lat))}, ${escHtml(String(r.lng))} (edit to change)">📍</span>`
+        : ` <span class="dim" title="No map position set — the network map puts this marker on the country centre. Edit → Map latitude/longitude to pin it on its city.">○</span>`;
       const url = r.stratum_url ? `stratum+tcp://${escHtml(r.stratum_url)}` : '<span class="dim">—</span>';
       const minersShares = hb
         ? `${(hb.miners || 0).toLocaleString()} <span class="dim">/ ${(hb.shares_window || 0).toLocaleString()} sh</span>`
@@ -675,7 +704,7 @@ async function loadRegions(silent) {
       return `
         <tr>
           <td><strong>${escHtml(r.label || r.region)}</strong>${hiddenTag}<br><span class="dim mono">${escHtml(r.region)}</span></td>
-          <td>${country}</td>
+          <td>${country}${pin}</td>
           <td class="mono" style="word-break:break-all;">${url}</td>
           <td>${portCheck}</td>
           <td>${tunnelChip(r.region)}</td>
@@ -706,6 +735,9 @@ function editRegion(id) {
   document.getElementById('r-label').value = r.label || '';
   document.getElementById('r-country').value = r.country || '';
   document.getElementById('r-cc').value = r.country_code || '';
+  // Strict null test: 0 is a real coordinate (the equator / Greenwich), `|| ''` would blank it.
+  document.getElementById('r-lat').value = r.lat != null ? String(r.lat) : '';
+  document.getElementById('r-lng').value = r.lng != null ? String(r.lng) : '';
   document.getElementById('r-host').value = hostOf(r.stratum_url);
   // Keys are never stored/echoed back — leave empty; pasting one here (re-)pairs
   // the gateway on save (same region = keeps its tunnel IP + port).
@@ -730,11 +762,28 @@ async function submitRegion() {
     flash('A gateway region key must be 2–12 lowercase letters/digits/dashes (it becomes the wg peer tag).', true);
     return;
   }
+  // Map pin: both or neither, numeric, in range. Same rule as the server (which is the real
+  // gate); checking here just saves a round-trip and names the field in the message.
+  const latS = document.getElementById('r-lat').value.trim();
+  const lngS = document.getElementById('r-lng').value.trim();
+  if ((latS === '') !== (lngS === '')) {
+    flash('Map latitude and longitude must be given together (or both left blank).', true);
+    return;
+  }
+  if (latS !== '') {
+    const la = Number(latS), lo = Number(lngS);
+    if (!Number.isFinite(la) || !Number.isFinite(lo) || la < -90 || la > 90 || lo < -180 || lo > 180) {
+      flash('Map position must be decimal degrees: latitude -90..90, longitude -180..180 (e.g. 40.71 / -74.01).', true);
+      return;
+    }
+  }
   const body = {
     region,
     label: document.getElementById('r-label').value.trim(),
     country: document.getElementById('r-country').value.trim(),
     country_code: document.getElementById('r-cc').value.trim().toUpperCase(),
+    lat: latS,
+    lng: lngS,
     stratum_url: host ? `${host}:${STRATUM_PORT}` : '',
     is_active: document.getElementById('r-active').checked
   };

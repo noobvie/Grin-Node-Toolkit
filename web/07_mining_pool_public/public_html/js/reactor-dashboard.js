@@ -12,7 +12,9 @@
  *   /api/pool/stats/regions    patch-bay switches + region lamps
  *   /api/pool/hashrate/history fine 24h pool trace + gauge 24h-peak marker
  *   /api/pool/metrics/history  P-04 trend recorders (pool/network hashrate, miners online)
- *   /api/public/branding       default stratum host/port fallback
+ *   /api/public/branding       default stratum host/port fallback + where latency may be timed
+ *   /api/pool/connect/suggest  estimated latency per region + Recommended
+ *   <hub or gateway>/ping      the browser's own RTT, replacing the estimate (empty 204s)
  *
  * All canvas instruments read their colors from the theme token bridge on <body>
  * (--accent/--gold/--warn/--danger/--info/--text-*) and re-render when the theme
@@ -97,6 +99,16 @@
     if (s < 3600) return Math.floor(s / 60) + 'm';
     if (s < 86400) return (s / 3600).toFixed(1) + 'h';
     return (s / 86400).toFixed(1) + 'd';
+  }
+  // Long form for the payout teletype: "just now", "1 min ago", "3 hours ago", "2 months ago".
+  function timeAgoWords(unixSeconds) {
+    var s = Math.max(0, Math.floor(Date.now() / 1000) - unixSeconds);
+    var units = [[31536000, 'year'], [2592000, 'month'], [86400, 'day'], [3600, 'hour'], [60, 'min']];
+    for (var i = 0; i < units.length; i++) {
+      var n = Math.floor(s / units[i][0]);
+      if (n >= 1) return n + ' ' + units[i][1] + (n === 1 ? '' : 's') + ' ago';
+    }
+    return 'just now';
   }
   function truncAddr(addr) {
     addr = String(addr || '');
@@ -299,16 +311,41 @@
     bar.setAttribute('aria-label', total > 0
       ? 'Share quality: ' + pct(acc) + ' valid, ' + pct(stl) + ' stale, ' + pct(rej) + ' rejected'
       : 'Share quality: no live sessions');
-    // HIGH STALE annunciator: lit when stale+rejected exceed 5% of live shares.
-    var bad = total > 0 && ((stl + rej) / total) > 0.05;
-    setLamp('an-stale', bad ? 'warn' : '', bad ? '> 5%' : '< 5%');
+    // STALE annunciator: stale+rejected as a share of live shares. Green "Low stale" at or
+    // under 5%, red "High stale" above it, unlit with no live sessions (nothing to judge).
+    if (total <= 0) {
+      setLamp('an-stale', '', 'no live shares', 'Stale rate');
+    } else {
+      var badPct = ((stl + rej) / total) * 100;
+      var bad = badPct > 5;
+      setLamp('an-stale', bad ? 'alarm' : 'ok',
+        badPct.toFixed(1) + '% · limit 5%', bad ? 'High stale' : 'Low stale');
+    }
+  }
+
+  // ORPHAN annunciator — orphans FOUND in the last 24 h (orphans_24h from /api/pool/stats),
+  // so the lamp clears on its own a day after the orphaned block. null/absent = unknown
+  // (failed read, or an older backend): stays unlit rather than claiming "no orphans".
+  function renderOrphanLamp(n) {
+    if (typeof n !== 'number' || !isFinite(n)) {
+      setLamp('an-orphan', '', 'no data', 'Orphan check');
+    } else if (n > 0) {
+      setLamp('an-orphan', 'alarm', n + (n === 1 ? ' block' : ' blocks') + ' · last 24 h', 'Orphan detected');
+    } else {
+      setLamp('an-orphan', 'ok', 'last 24 hours', 'No orphan detected');
+    }
   }
 
   // ── annunciator ───────────────────────────────────────────────────────────
-  function setLamp(id, state, subText) {
+  // `title` is optional and only rewrites lamps whose markup carries a .lamp-t span.
+  function setLamp(id, state, subText, title) {
     var el = $(id);
     if (!el) return;
     el.className = 'lamp' + (state ? ' ' + state : '');
+    if (title != null) {
+      var t = el.querySelector('.lamp-t');
+      if (t) t.textContent = title;
+    }
     if (subText != null) {
       var small = el.querySelector('small');
       if (small) small.textContent = subText;
@@ -328,7 +365,8 @@
   // public pages use, replacing the old hand-rolled 24h strip chart (2026-07-17). Pool
   // and network hashrate are two ALIGNED single-axis charts, never one dual-axis chart:
   // network GPS runs orders of magnitude above pool GPS and would flatten the pool trace.
-  var chartRange = 'day'; // 24H | 7D | 30D → /api/pool/metrics/history range vocabulary
+  // Opens on 30D (operator request 2026-09-26) — must match the button index.html marks active.
+  var chartRange = 'month'; // 24H | 7D | 30D → /api/pool/metrics/history range vocabulary
 
   function toggleChartEmpty(id, show) {
     var el = $(id);
@@ -345,9 +383,15 @@
     try {
       var info = await Auth.read('/api/config/pool-info');
       if (!info) return;
-      setText('pl-fee', (info.pool_fee_percent != null ? info.pool_fee_percent : 0).toFixed(1) + '%');
-      setText('pl-min', (info.min_withdrawal != null ? info.min_withdrawal : 0).toFixed(1) + ' GRIN');
-      setText('pl-net', String(info.network || '—').toUpperCase());
+      // "1% / 25 GRIN" — trailing zeros dropped (Number(x.toFixed(n)) does that), so a
+      // 0.5% fee still prints as 0.5%.
+      var fee = Number(Number(info.pool_fee_percent || 0).toFixed(2));
+      var min = Number(Number(info.min_withdrawal || 0).toFixed(2));
+      setText('pl-terms', fee + '% / ' + min + ' GRIN');
+      // The Network tile is gone; the network now names the hashrate tile, so a testnet pool
+      // still says so up front ("Testnet hashrate").
+      var net = String(info.network || '').toLowerCase();
+      if (net) setText('pl-nethash-k', net.charAt(0).toUpperCase() + net.slice(1) + ' hashrate');
     } catch (e) { /* placard keeps placeholders */ }
   }
 
@@ -385,23 +429,24 @@
   async function loadStats() {
     try {
       var s = await Auth.read('/api/pool/stats');
-      if (!s) return;
+      if (!s) { renderOrphanLamp(null); return; }
+      renderOrphanLamp(s.orphans_24h);
       setText('c-miners', String(s.active_miners || 0));
       lastActiveMiners = Number(s.active_miners) || 0;
       applyHashState();
       // Logged-in rigs. Older backends only carry the raw socket count, which is the same
       // number once every connection has logged in.
       var workers = Number(s.active_workers != null ? s.active_workers : s.active_connections) || 0;
-      setText('c-miners-sub', workers + (workers === 1 ? ' worker' : ' workers'));
+      setText('c-workers', String(workers));
       setText('c-blocks24', String(s.blocks_24h || 0));
       setText('c-total', Number(s.total_blocks_found || 0).toLocaleString('en-US'));
-      setText('c-reward', Number(s.confirmed_reward || 0).toFixed(0));
+      setGrinCompact('c-reward', s.confirmed_reward);
       // Still maturing (1,440 confirmations); older backends don't send it.
-      setText('c-immature', Number(s.immature_reward || 0).toFixed(0));
+      setGrinCompact('c-immature', s.immature_reward);
       setText('mi-miners', (s.active_miners || 0) + ' UNITS');
       var q = s.share_quality || {};
       renderLedbar(Number(q.accepted) || 0, Number(q.stale) || 0, Number(q.rejected) || 0);
-    } catch (e) { /* counters keep placeholders */ }
+    } catch (e) { renderOrphanLamp(null); /* counters keep placeholders */ }
   }
 
   // More decimals for a small share so it isn't rounded to "0%".
@@ -414,6 +459,21 @@
     if (n >= 1e6) return (n / 1e6).toFixed(2) + ' M';
     if (n >= 1e3) return (n / 1e3).toFixed(1) + ' K';
     return String(Math.round(n));
+  }
+
+  // GRIN amounts for the counters: exact below 10,000 ("1,500" is no wider than "1.5k"),
+  // then 12.3k / 1.5M. Not fmtCompact — its ' G' for billions would read "1.2 G GRIN".
+  // These are money figures, so the exact amount always rides on hover.
+  function setGrinCompact(id, amount) {
+    var el = $(id);
+    if (!el) return;
+    var n = Number(amount) || 0;
+    // 999,950 rounds to "1000.0k", so the M band starts there.
+    var s = n >= 999950 ? Number((n / 1e6).toFixed(1)) + 'M'
+      : n >= 1e4 ? Number((n / 1e3).toFixed(1)) + 'k'
+      : Math.round(n).toLocaleString('en-US');
+    el.textContent = s;
+    el.title = n.toLocaleString('en-US', { maximumFractionDigits: 9 }) + ' GRIN';
   }
 
   async function loadShare() {
@@ -456,11 +516,22 @@
           [[0, 100, C.accent], [100, 150, C.warn], [150, emax, C.danger]], 8);
         gaugeShare.setValue(Math.min(effort, emax));
       }
-      setText('c-last', e.last_block_at ? timeAgo(e.last_block_at) + ' ago' : 'none yet');
+      setText('c-last', e.last_block_at ? 'last ' + timeAgo(e.last_block_at) + ' ago' : 'none yet');
       setText('mi-core-share', 'NET-SHARE ' + (share != null ? fmtShare(share) : '—'));
-      setText('mi-core-shares', e.round_shares != null
-        ? Number(e.round_shares).toLocaleString('en-US', { maximumFractionDigits: 0 }) + ' SHARES'
-        : '— SHARES');
+      // `round_shares` is the round's SUMMED share difficulty in chain units (each accepted
+      // share weighs job target × 16384 — the effort numerator), so printing it as "SHARES"
+      // showed 21.5 M for ~1,300 real shares. `round_share_count` is the count a miner can
+      // check against their rig's accepted tally; the sum stays on hover for the curious.
+      var sharesEl = $('mi-core-shares');
+      if (e.round_share_count != null) {
+        setText('mi-core-shares', fmtCompact(e.round_share_count) + ' SHARES');
+        if (sharesEl) sharesEl.title = Number(e.round_share_count).toLocaleString('en-US') +
+          ' accepted shares this round · summed difficulty ' +
+          fmtCompact(e.round_shares) + ' (chain units, the round-effort numerator)';
+      } else {
+        setText('mi-core-shares', '— SHARES');
+        if (sharesEl) sharesEl.removeAttribute('title');
+      }
     } catch (err) { /* gauge keeps last position */ }
   }
 
@@ -471,6 +542,10 @@
       var poolOk = !!(s.pool && s.pool.ok);
       var nodeOk = !!(s.node && s.node.reachable);
       var nodeSynced = nodeOk && s.node.synced === true;
+      // Not answering, but not down either: 'starting' (API port not open yet, node process
+      // running) or 'busy' (API timed out). Amber, like a sync — red is for a node that is gone.
+      var nodeState = !nodeOk && s.node ? s.node.state : null;
+      var nodePending = nodeState === 'starting' || nodeState === 'busy';
       var walletOk = !!(s.wallet && s.wallet.reachable);
       nodeHeight = (nodeOk && s.node.height) || nodeHeight;
 
@@ -478,6 +553,8 @@
       if (nodeOk) {
         setLamp('an-node', nodeSynced ? 'ok' : 'warn',
           (s.node.peers || 0) + ' peers' + (nodeSynced ? '' : ' · sync'));
+      } else if (nodePending) {
+        setLamp('an-node', 'warn', nodeState);
       } else {
         setLamp('an-node', 'alarm', 'offline');
       }
@@ -486,8 +563,10 @@
       if (nodeHeight) setHeightLink('c-height', nodeHeight);
       var nodeVal = $('mi-node');
       if (nodeVal) {
-        nodeVal.textContent = nodeOk ? (nodeSynced ? 'SYNCED' : 'SYNCING') : 'OFFLINE';
-        nodeVal.setAttribute('class', nodeOk ? (nodeSynced ? 'val cy' : 'val') : 'val bad');
+        nodeVal.textContent = nodeOk ? (nodeSynced ? 'SYNCED' : 'SYNCING')
+          : (nodePending ? nodeState.toUpperCase() : 'OFFLINE');
+        nodeVal.setAttribute('class', nodeOk ? (nodeSynced ? 'val cy' : 'val')
+          : (nodePending ? 'val' : 'val bad'));
       }
 
       if (!poolOk) {
@@ -496,7 +575,7 @@
         setMaster('ok', 'All systems nominal');
       } else {
         var issues = [];
-        if (!nodeOk) issues.push('node offline');
+        if (!nodeOk) issues.push(nodePending ? 'node ' + nodeState : 'node offline');
         else if (!nodeSynced) issues.push('node syncing');
         if (!walletOk) issues.push('wallet offline');
         setMaster('warn', 'Degraded · ' + issues.join(', '));
@@ -509,12 +588,36 @@
     }
   }
 
-  // Fuel rods: one column per recent block; fill = confirmation depth / 1440.
-  async function loadBlocks() {
+  // Fuel rods: one column per recent block; fill = confirmation depth / 1440, and the rod's
+  // colour walks --warn → --accent with the same ratio (CSS reads it from --mat).
+  // Always 10 rods on a fixed grid (reactor.css), so nothing scrolls sideways.
+  var ROD_COUNT = 10;
+  // Fetched IN PARALLEL with /api/pool/status, not behind it (2026-09-26). The rods used to
+  // wait for the status call because nodeHeight sets their depth — but that call is the one
+  // that touches the node and the wallet, and every other panel queued behind it too. Now the
+  // rods paint as soon as their own feed answers (depth from nodeHeight if an earlier refresh
+  // has one, else estimated from found_at at ~1 block/min) and repaint once status lands with
+  // a height they did not have.
+  async function loadBlocks(statusP) {
     var wrap = $('rx-rods');
     if (!wrap) return;
+    var blocks;
     try {
-      var blocks = await Auth.read('/api/pool/blocks?limit=8');
+      blocks = await Auth.read('/api/pool/blocks?limit=' + ROD_COUNT);
+    } catch (e) {
+      blocks = undefined;
+    }
+    var paintedAt = nodeHeight;
+    paintRods(wrap, blocks);
+    if (!statusP || !Array.isArray(blocks) || blocks.length === 0) return;
+    try { await statusP; } catch (e) { return; }
+    if (nodeHeight && nodeHeight !== paintedAt) paintRods(wrap, blocks);
+  }
+
+  // blocks: array = the feed's answer, null = the feed did not answer, undefined = the read threw.
+  function paintRods(wrap, blocks) {
+    try {
+      if (blocks === undefined) throw new Error('block read failed');
       wrap.textContent = '';
       // null = the feed did not answer (429, 5xx, network). That is NOT "no blocks yet", and
       // saying so told every visitor a working pool had never found a block (audit §J15-2).
@@ -523,7 +626,6 @@
         u.className = 'rods-empty';
         u.textContent = 'BLOCK FEED UNAVAILABLE';
         wrap.appendChild(u);
-        setLamp('an-orphan', 'warn', 'feed down');
         return;
       }
       if (!Array.isArray(blocks) || blocks.length === 0) {
@@ -531,51 +633,63 @@
         d.className = 'rods-empty';
         d.textContent = 'NO BLOCKS FOUND YET';
         wrap.appendChild(d);
-        setLamp('an-orphan', '', 'none');
         return;
       }
       // Height counter fallback: with the node unreachable, show the newest pool block.
       if (!nodeHeight && blocks[0] && blocks[0].height) {
         setHeightLink('c-height', blocks[0].height);
       }
-      var anyOrphan = false;
-      blocks.forEach(function (b) {
+      // The orphan LAMP is owned by loadStats (24 h window); rods still mark each orphan.
+      blocks.slice(0, ROD_COUNT).forEach(function (b) {
         var height = Number(b.height || 0);
         var conf;
         if (b.status === 'confirmed') conf = 1440;
         else if (nodeHeight && height) conf = Math.max(0, Math.min(1440, nodeHeight - height));
         else conf = Math.max(0, Math.min(1440, Math.floor((Date.now() / 1000 - (b.found_at || b.created_at || 0)) / 60)));
         var orphan = b.status === 'orphaned';
-        if (orphan) anyOrphan = true;
         var mature = b.status === 'confirmed';
+
+        var pct = orphan || mature ? 100 : Math.floor(100 * conf / 1440);
 
         var rod = document.createElement('div');
         rod.className = 'rod' + (mature ? ' done' : '') + (orphan ? ' orphan' : '');
+        rod.style.setProperty('--mat', pct + '%');
         var tube = document.createElement('div');
         tube.className = 'tube';
+        // The fill is always full height; maturity is where green meets yellow (CSS, --mat).
+        // A proportional-height fill left a busy hour's rods all at ~3% and looking dead.
         var fill = document.createElement('div');
         fill.className = 'fill';
-        fill.style.height = Math.max(3, Math.round(100 * (orphan ? 1 : conf) / 1440)) + '%';
-        if (orphan) fill.style.height = '100%';
         tube.appendChild(fill);
+        // Face label = the last 4 digits ("…4,399"): always 6 characters, so a rod never widens
+        // as the chain grows, and it is the part that tells neighbouring blocks apart. Never an
+        // abbreviation like "4M399" — that reads as a different number. Full height is in the
+        // tooltip and the link's aria-label.
+        var full = height.toLocaleString('en-US');
+        var last4 = String(height % 10000).padStart(4, '0');
+        var tail = height >= 10000 ? '…' + last4.charAt(0) + ',' + last4.slice(1) : '#' + full;
         var h = document.createElement('div');
         h.className = 'h';
-        var hLabel = '#' + height.toLocaleString('en-US');
         // Link the block height out to a chain explorer (new tab) as independent proof.
-        if (height && window.Explorer) h.innerHTML = Explorer.link('block', height, hLabel);
-        else h.textContent = hLabel;
+        if (height && window.Explorer) {
+          h.innerHTML = Explorer.link('block', height, tail);
+          if (h.firstElementChild) h.firstElementChild.setAttribute('aria-label', 'Block ' + full + ' on a chain explorer');
+        } else {
+          h.textContent = tail;
+        }
         var m = document.createElement('div');
-        m.className = 'm';
-        m.textContent = orphan ? 'ORPHAN' : (mature ? 'MATURE' : conf + '/1440');
+        m.className = 'm pct';
+        m.textContent = orphan ? 'ORPHAN' : (mature ? 'MATURE' : pct + '%');
         var when = document.createElement('div');
         when.className = 'm';
-        when.textContent = timeAgo(b.found_at || b.created_at) + ' · ' + Number(b.reward || 0).toFixed(1);
+        when.textContent = timeAgo(b.found_at || b.created_at);
         rod.appendChild(tube); rod.appendChild(h); rod.appendChild(m); rod.appendChild(when);
-        rod.title = 'Block ' + height.toLocaleString('en-US') + ' · ' + (b.status || 'immature') +
+        // The reward (60 + fees, so the same "60" on every rod) lives here, not on the face.
+        rod.title = 'Block ' + full + ' · ' + (b.status || 'immature') +
+          (orphan || mature ? '' : ' · ' + conf + '/1440 confirmations') +
           ' · reward ' + Number(b.reward || 0).toFixed(2) + ' GRIN';
         wrap.appendChild(rod);
       });
-      setLamp('an-orphan', anyOrphan ? 'alarm' : '', anyOrphan ? 'detected' : 'none');
     } catch (e) {
       wrap.textContent = '';
       var d2 = document.createElement('div');
@@ -583,6 +697,17 @@
       d2.textContent = 'BLOCK DATA UNAVAILABLE';
       wrap.appendChild(d2);
     }
+  }
+
+  // Rail tag for a teletype line, from withdrawals.method. This used to be a hard-coded
+  // '[TOR OK]', so a Slatepack or Goblin payout printed as Tor. The column is
+  // `NOT NULL DEFAULT 'tor'` (db.js — the Tor rail's INSERT relies on that default), so a
+  // missing value can only mean an older API response and still reads as Tor. Any other
+  // unknown rail prints its own name rather than being passed off as one we know.
+  var PAY_RAIL_TAG = { tor: 'TOR', slatepack: 'SLATEPACK', nostr: 'GOBLIN', manual: 'MANUAL' };
+  function payRailTag(method) {
+    var m = String(method || 'tor').toLowerCase();
+    return '[' + (PAY_RAIL_TAG[m] || m.toUpperCase()) + ' OK]';
   }
 
   // Payout teletype (addresses are miner-supplied → textContent only).
@@ -617,18 +742,24 @@
       setLamp('an-payouts', newestPay ? 'ok' : '', newestPay ? timeAgo(newestPay) + ' ago' : 'none yet');
       // Print oldest → newest so the freshest line sits at the bottom (printer style).
       payments.slice().reverse().forEach(function (p) {
+        // Elapsed time, not a clock time: the old "HH:MM UTC" carried no date, so a payout
+        // from three days ago read as today's. The exact UTC stamp rides on hover.
         var ts = p.confirmed_at || p.created_at || 0;
-        var dte = new Date(ts * 1000);
         var line = document.createElement('div');
-        line.appendChild(document.createTextNode(
-          pad2(dte.getUTCHours()) + ':' + pad2(dte.getUTCMinutes()) + ' UTC  PAID '));
+        var ago = document.createElement('span');
+        ago.className = 'ago';
+        ago.textContent = ts ? timeAgoWords(ts) : '—';
+        if (ts) ago.title = new Date(ts * 1000).toLocaleString('en-GB',
+          { timeZone: 'UTC', dateStyle: 'medium', timeStyle: 'short' }) + ' UTC';
+        line.appendChild(ago);
+        line.appendChild(document.createTextNode(' PAID '));
         var b = document.createElement('b');
         b.textContent = Number(p.amount || 0).toFixed(2) + ' GRIN';
         line.appendChild(b);
         line.appendChild(document.createTextNode(' → ' + truncAddr(p.grin_address) + '  '));
         var via = document.createElement('span');
         via.className = 'via';
-        via.textContent = '[TOR OK]';
+        via.textContent = payRailTag(p.method);
         line.appendChild(via);
         tty.appendChild(line);
       });
@@ -779,29 +910,348 @@
       : 'idle — reachable, no recent miners';
   }
 
-  // Best-effort nearest region from the browser IANA timezone (no geo-IP; same
-  // heuristic the previous dashboard used).
-  function detectNearestRegion(keys) {
+  // FALLBACK only — used when /api/pool/connect/suggest has no answer (no geo-IP on the server,
+  // an unknown country). A gateway does not shorten the trip to the pool, so the honest default
+  // is the pool's own region (is_hub). The one exception is mainland China / HK / Taiwan / Macau,
+  // where the cross-border route is the problem a Hong Kong gateway exists for. No per-region
+  // timezone table: that went stale every time the region list changed.
+  function detectNearestRegion(regions) {
     var tz = '';
-    try { tz = (Intl.DateTimeFormat().resolvedOptions().timeZone) || ''; } catch (e) { return null; }
-    if (!tz) return null;
-    var has = function (k) { return keys.indexOf(k) !== -1 ? k : null; };
-    var exact = {
-      'Asia/Ho_Chi_Minh': 'sgn', 'America/New_York': 'nyc',
-      'America/Los_Angeles': 'lax', 'America/Toronto': 'yyz',
-      'Europe/Amsterdam': 'ams'
+    try { tz = (Intl.DateTimeFormat().resolvedOptions().timeZone) || ''; } catch (e) { tz = ''; }
+    var usable = function (k) {
+      return regions.some(function (r) { return r.region === k && r.status !== 'offline'; }) ? k : null;
     };
-    if (exact[tz] && has(exact[tz])) return exact[tz];
-    if (tz === 'Asia/Ho_Chi_Minh' && has('han')) return 'han';
-    var area = tz.split('/')[0];
-    if (area === 'America') {
-      if (/Los_Angeles|Vancouver|Tijuana|Phoenix|Denver|Edmonton|Boise|Anchorage|Whitehorse|Dawson|Mazatlan/.test(tz)) return has('lax') || has('nyc') || has('yyz');
-      if (/Toronto|Montreal|Halifax|Winnipeg|Regina|St_Johns/.test(tz)) return has('yyz') || has('nyc');
-      return has('nyc') || has('yyz') || has('lax');
+    if (/^Asia\/(Shanghai|Hong_Kong|Taipei|Macau|Macao|Urumqi)$/.test(tz) && usable('hkg')) return 'hkg';
+    var hub = regions.filter(function (r) { return r.is_hub === true; })[0];
+    return hub ? usable(hub.region) : null;
+  }
+
+  // ── connect suggestion: "~NN ms" per chip + a "Recommended" badge ─────────
+  // Server-side ESTIMATE (effective latency = your distance to a server + its link to the pool,
+  // lib/connect-suggest.js). Fetched ONCE per page load, in parallel with the region list and
+  // never awaited by it: the patch bay paints from /stats/regions alone, then re-renders when
+  // this lands. `suggestion` = { recommended: tag|null, byRegion: { tag: { est_ms, via } } }.
+  var suggestion = null;
+  var suggestionP = null;
+  var userPickedRegion = false;  // a chip was clicked this page load → the selection is theirs
+  var lastRegionsData = null;    // last /stats/regions payload, so the suggestion can re-render it
+
+  function loadSuggestion() {
+    if (suggestionP) return suggestionP;
+    suggestionP = Auth.read('/api/pool/connect/suggest').then(function (d) {
+      if (!d || d.basis !== 'estimate' || !Array.isArray(d.estimates)) return;
+      var by = {};
+      d.estimates.forEach(function (e) {
+        if (e && e.region && e.est_ms > 0) by[e.region] = { est_ms: Math.round(e.est_ms), via: e.via };
+      });
+      suggestion = { recommended: (d.recommended && by[d.recommended]) ? d.recommended : null, byRegion: by };
+      if (lastRegionsData) renderRegions(lastRegionsData);
+    });
+    return suggestionP;
+  }
+
+  // ── connect measurement: the browser times each server itself ─────────────
+  // Replaces the estimate above wherever it succeeds; a server it cannot time keeps its estimate.
+  // Where it may time (lib/latency-probe.js → /api/public/branding connection.latency):
+  //   · the hub (the is_hub "direct" row) at hub_url: '/ping' same-origin, an un-proxied
+  //     https://<host>/ping, or null behind a CDN (the edge would answer, a few ms from everyone);
+  //   · a gateway at https://<its stratum host>/ping, and ONLY under probe_domain. The page CSP's
+  //     connect-src carries https://*.<probe_domain> and nothing wider, so any other host would be
+  //     a CSP violation, not a measurement.
+  // That is viewer→server. A gateway does not shorten the trip to the pool, so its figure is that
+  // PLUS its hub_rtt_ms; direct is viewer→hub alone. The pick re-runs through pickRecommended()
+  // with the server's own bias (direct_bias_ms). No latency config = no measurement at all.
+  // Budget: a gateway answers 30 req / 10 s per IP, the hub a burst of 20. One run is 4 requests
+  // per host, and re-test is held off RETEST_HOLD_MS after every run.
+  var RTT_TIMEOUT_MS = 2500;   // per request; a gateway without the probe may DROP, not refuse
+  var RTT_SAMPLES = 3;         // after one warm-up that pays DNS + TLS
+  var RTT_CACHE_KEY = 'pool.rtt.v1';
+  var RTT_CACHE_MS = 10 * 60 * 1000;
+  var RETEST_HOLD_MS = 15000;
+  var latencyCfg = null;       // { probe_domain, hub_url, direct_bias_ms } once branding answers
+  var latencyCfgP = null;
+  var measuredByUrl = {};      // probe URL → viewer→server ms, or null (tried and failed)
+  var measuredAt = {};         // probe URL → when (ms epoch), for the session cache
+  var measuring = false;
+  var bayVisible = false;      // the connect panel has been on screen (IntersectionObserver)
+  var retestBtn = null;
+  var retestHeldUntil = 0;
+  var retestTimer = null;
+
+  // ⚠ A copy of pickRecommended() in back-end-pool/lib/connect-suggest.js — this file deploys
+  // to the web root, apart from the app, so it cannot load that one. test-connect-suggest.js [h]
+  // runs both on the same inputs: change both or neither. Keep it self-contained (the test
+  // lifts it out by its text). rows: [{ region, ms, direct }] → tag | null.
+  function pickRecommended(rows, bias) {
+    var list = [];
+    for (var i = 0; i < rows.length; i++) {
+      var r = rows[i];
+      if (r && r.region && typeof r.ms === 'number' && isFinite(r.ms)) list.push(r);
     }
-    if (area === 'Asia' || area === 'Australia' || area === 'Indian') return has('han') || has('sgn');
-    var pref = { Pacific: 'lax', Europe: 'ams', Africa: 'ams', Atlantic: 'ams', Antarctica: 'lax' };
-    return pref[area] ? has(pref[area]) : null;
+    if (!list.length) return null;
+    list.sort(function (a, b) {
+      return (a.ms - b.ms) || (a.region < b.region ? -1 : a.region > b.region ? 1 : 0);
+    });
+    var best = list[0];
+    var direct = null;
+    for (var j = 0; j < list.length; j++) { if (list[j].direct === true) { direct = list[j]; break; } }
+    return (direct && best.direct !== true && direct.ms - best.ms <= bias) ? direct.region : best.region;
+  }
+
+  // Branding is read once and shared with loadRegions' port/host fallback. A failed read is
+  // forgotten so the next caller retries; an answer is kept for the page's life.
+  var brandingP = null;
+  function readBranding() {
+    if (!brandingP) {
+      brandingP = Auth.read('/api/public/branding').catch(function () { return null; }).then(function (b) {
+        if (!b) brandingP = null;
+        return b;
+      });
+    }
+    return brandingP;
+  }
+
+  function loadLatencyConfig() {
+    if (latencyCfg || latencyCfgP) return;
+    latencyCfgP = readBranding().then(function (b) {
+      latencyCfgP = null;
+      var l = b && b.data && b.data.connection && b.data.connection.latency;
+      if (!l || !(typeof l.direct_bias_ms === 'number' && isFinite(l.direct_bias_ms) && l.direct_bias_ms >= 0)) return;
+      latencyCfg = {
+        probe_domain: (typeof l.probe_domain === 'string' && /^[a-z0-9.-]+$/.test(l.probe_domain)) ? l.probe_domain : null,
+        hub_url: (l.hub_url === '/ping' ||
+          (typeof l.hub_url === 'string' && /^https:\/\/[a-z0-9.-]+\/ping$/.test(l.hub_url))) ? l.hub_url : null,
+        direct_bias_ms: l.direct_bias_ms,
+      };
+      if (lastRegionsData) renderRegions(lastRegionsData);
+    });
+  }
+
+  function publishedRegions(data) {
+    var regions = (data && Array.isArray(data.regions)) ? data.regions : [];
+    return regions.filter(function (r) { return r.stratum_url && r.is_active !== false; });
+  }
+
+  // The /ping URL this page may time for a region, or null.
+  function probeUrlFor(r) {
+    if (!latencyCfg) return null;
+    if (r.is_hub === true) return latencyCfg.hub_url;
+    var dom = latencyCfg.probe_domain;
+    var host = String(r.stratum_url || '').split(':')[0].toLowerCase();
+    if (!dom || !/^[a-z0-9.-]+$/.test(host)) return null;
+    if (host.slice(-(dom.length + 1)) !== '.' + dom) return null;  // the CSP wildcard skips the apex
+    return 'https://' + host + '/ping';
+  }
+
+  // One timed GET. RTT = responseStart − requestStart from Resource Timing when it is readable
+  // (both probes send Timing-Allow-Origin: *), else the fetch's wall time. Only an empty 204 counts
+  // — a redirect, an error page or a 429 is not this probe.
+  function pingOnce(url) {
+    var ctl = (typeof AbortController === 'function') ? new AbortController() : null;
+    var timer = ctl ? setTimeout(function () { ctl.abort(); }, RTT_TIMEOUT_MS) : null;
+    var u = url + '?r=' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+    var t0 = performance.now();
+    return fetch(u, { cache: 'no-store', credentials: 'omit', redirect: 'error', signal: ctl ? ctl.signal : undefined })
+      .then(function (res) {
+        var wall = performance.now() - t0;
+        if (res.status !== 204) return null;
+        var e = null;
+        try {
+          var list = performance.getEntriesByName(new URL(u, location.href).href, 'resource');
+          e = list[list.length - 1] || null;
+        } catch (err) { e = null; }
+        return (e && e.requestStart > 0 && e.responseStart > e.requestStart) ? e.responseStart - e.requestStart : wall;
+      })
+      .catch(function () { return null; })
+      .then(function (ms) { if (timer) clearTimeout(timer); return ms; });
+  }
+
+  // Warm-up, then RTT_SAMPLES in sequence on the same (kept-alive) connection → the fastest, or
+  // null. A failed warm-up ends it: a host that is not answering would otherwise cost 4 timeouts.
+  function measureRtt(url) {
+    return pingOnce(url).then(function (warm) {
+      if (warm == null) return null;
+      var best = null;
+      var n = 0;
+      function next() {
+        if (n++ >= RTT_SAMPLES) return best;
+        return pingOnce(url).then(function (ms) {
+          if (ms != null && (best == null || ms < best)) best = ms;
+          return next();
+        });
+      }
+      return next();
+    });
+  }
+
+  // sessionStorage, 10 min per URL. Every access guarded: a private window or blocked storage
+  // throws, and the page must measure as if the cache were empty.
+  function readRttCache() {
+    try {
+      var c = JSON.parse(sessionStorage.getItem(RTT_CACHE_KEY) || 'null');
+      var out = {};
+      var now = Date.now();
+      if (!c || typeof c !== 'object') return out;
+      Object.keys(c).forEach(function (url) {
+        var v = c[url];
+        if (!v || typeof v.at !== 'number' || v.at > now || now - v.at > RTT_CACHE_MS) return;
+        if (v.ms === null || (typeof v.ms === 'number' && isFinite(v.ms) && v.ms > 0 && v.ms < 60000)) out[url] = v;
+      });
+      return out;
+    } catch (e) { return {}; }
+  }
+  function writeRttCache() {
+    try {
+      var c = {};
+      Object.keys(measuredByUrl).forEach(function (url) { c[url] = { ms: measuredByUrl[url], at: measuredAt[url] }; });
+      sessionStorage.setItem(RTT_CACHE_KEY, JSON.stringify(c));
+    } catch (e) { /* no storage — measure again next load */ }
+  }
+
+  // Time every region's probe that has not been tried this page load (force: all of them again).
+  // Runs only once the connect panel has been on screen. Hosts run in parallel, samples within a
+  // host in sequence. The bay re-renders ONCE, when every host has answered or timed out, so the
+  // Recommended badge does not hop between chips as results trickle in.
+  function maybeMeasure(force) {
+    if (measuring || !bayVisible || !latencyCfg || !lastRegionsData) return;
+    if (force && Date.now() < retestHeldUntil) return;
+    var cached = force ? {} : readRttCache();
+    var fromCache = false;
+    var todo = [];
+    publishedRegions(lastRegionsData).forEach(function (r) {
+      if (r.status === 'offline') return;
+      var url = probeUrlFor(r);
+      if (!url || todo.indexOf(url) >= 0) return;
+      if (!force && url in measuredByUrl) return;
+      if (!force && cached[url]) {
+        measuredByUrl[url] = cached[url].ms;
+        measuredAt[url] = cached[url].at;
+        fromCache = true;
+        return;
+      }
+      todo.push(url);
+    });
+    if (!todo.length) {
+      if (fromCache) renderRegions(lastRegionsData);
+      return;
+    }
+    measuring = true;
+    updateRetest();
+    Promise.all(todo.map(function (url) {
+      return measureRtt(url).then(function (ms) { return [url, ms]; }, function () { return [url, null]; });
+    })).then(function (pairs) {
+      var now = Date.now();
+      pairs.forEach(function (p) { measuredByUrl[p[0]] = p[1]; measuredAt[p[0]] = now; });
+      writeRttCache();
+    }).catch(function () { /* keep the estimates */ }).then(function () {
+      measuring = false;
+      retestHeldUntil = Date.now() + RETEST_HOLD_MS;
+      renderRegions(lastRegionsData);
+    });
+  }
+
+  // "Re-test latency" — below the switch bank, shown only when there is something to time.
+  function updateRetest() {
+    var bank = $('rx-switches');
+    if (!bank) return;
+    if (!retestBtn) {
+      retestBtn = document.createElement('button');
+      retestBtn.type = 'button';
+      retestBtn.className = 'rgn-retest';
+      retestBtn.id = 'rx-retest';
+      retestBtn.hidden = true;
+      retestBtn.addEventListener('click', function () { maybeMeasure(true); });
+      bank.insertAdjacentElement('afterend', retestBtn);
+    }
+    var any = bank.style.display !== 'none' && publishedRegions(lastRegionsData).some(function (r) {
+      return r.status !== 'offline' && !!probeUrlFor(r);
+    });
+    var wait = retestHeldUntil - Date.now();
+    retestBtn.hidden = !any || !bayVisible;
+    retestBtn.disabled = measuring || wait > 0;
+    retestBtn.textContent = measuring ? 'Testing latency…' : 'Re-test latency';
+    if (!measuring && wait > 0 && !retestTimer) {
+      retestTimer = setTimeout(function () { retestTimer = null; updateRetest(); }, wait + 50);
+    }
+  }
+
+  // Measurement starts the first time the connect panel scrolls into view: a visitor who never
+  // reaches it costs no probe traffic. No IntersectionObserver → treat it as visible.
+  (function watchConnectPanel() {
+    var panel = $('connect');
+    var seen = function () { bayVisible = true; loadLatencyConfig(); maybeMeasure(false); };
+    if (!panel || typeof IntersectionObserver !== 'function') { seen(); return; }
+    var io = new IntersectionObserver(function (entries) {
+      if (entries.some(function (e) { return e.isIntersecting; })) { io.disconnect(); seen(); }
+    });
+    io.observe(panel);
+  })();
+
+  // The figure a chip shows: the browser's measurement when there is one, else the server's
+  // estimate, else null. { ms, via, measured, leg (viewer→server, measured only) }.
+  function latencyFor(r) {
+    if (r.status === 'offline') return null;
+    var url = probeUrlFor(r);
+    var leg = url ? measuredByUrl[url] : null;
+    if (typeof leg === 'number') {
+      if (r.is_hub === true) return { ms: leg, via: 'direct', measured: true, leg: leg };
+      // Without its link home a gateway's figure is the misleading viewer→gateway-only number.
+      if (typeof r.hub_rtt_ms === 'number' && isFinite(r.hub_rtt_ms) && r.hub_rtt_ms >= 0) {
+        return { ms: leg + r.hub_rtt_ms, via: 'gateway', measured: true, leg: leg };
+      }
+    }
+    var s = suggestion && suggestion.byRegion[r.region];
+    return s ? { ms: s.est_ms, via: s.via, measured: false } : null;
+  }
+
+  // Recommended region for this payload. With at least one measurement: re-rank everything shown
+  // (measured where possible, estimated elsewhere) by the shared rule. Estimates only: the
+  // server's pick, while it is still published and not offline.
+  function recommendedKey(regions) {
+    var rows = [];
+    var measured = false;
+    regions.forEach(function (r) {
+      var l = latencyFor(r);
+      if (!l) return;
+      rows.push({ region: r.region, ms: l.ms, direct: r.is_hub === true });
+      if (l.measured) measured = true;
+    });
+    if (measured) return pickRecommended(rows, latencyCfg.direct_bias_ms);
+    return (suggestion && suggestion.recommended &&
+      regions.some(function (r) { return r.region === suggestion.recommended && r.status !== 'offline'; }))
+      ? suggestion.recommended : null;
+  }
+
+  // Latency figure + badge on one chip — the ONE place that writes them.
+  function decorateRegionChip(sw, r, recKey, nearestKey) {
+    var l = latencyFor(r);
+    if (l) {
+      var shown = Math.max(1, Math.round(l.ms));
+      var ms = document.createElement('span');
+      ms.className = l.measured ? 'rgn-ms' : 'rgn-ms is-est';
+      ms.textContent = (l.measured ? '' : '~') + shown + ' ms';
+      sw.appendChild(ms);
+      sw.title += l.measured
+        ? '\n' + shown + ' ms measured: ' + (l.via === 'direct'
+          ? 'your browser to the pool'
+          : 'your browser to this server (' + Math.max(1, Math.round(l.leg)) + ') + its link to the pool (' +
+            Math.round(r.hub_rtt_ms) + ')')
+        : '\n~' + shown + ' ms estimated: ' + (l.via === 'direct'
+          ? 'your distance to the pool'
+          : 'your distance to this server + its link to the pool');
+    }
+    if (r.region === recKey) {
+      var rec = document.createElement('span');
+      rec.className = 'rgn-rec';
+      rec.textContent = 'Recommended';
+      sw.appendChild(rec);
+    } else if (r.region === nearestKey) {
+      var pin = document.createElement('span');
+      pin.className = 'rgn-pin';
+      pin.title = 'Suggested for you';
+      pin.textContent = '📍';
+      sw.appendChild(pin);
+    }
   }
 
   function selectRegion(regions, key) {
@@ -832,24 +1282,21 @@
   var checkingTimer = null;
 
   async function loadRegions() {
-    var bank = $('rx-switches');
     try {
       // Region list and branding are fetched CONCURRENTLY: branding only supplies the fallback
       // port/host, so making the patch bay wait on it just delayed first paint. The regions
       // endpoint itself never blocks on a liveness read server-side (handshake + stratum dial
       // are cached out of the request path), so this resolves as fast as the DB query.
-      var brandingP = (!BASE_PORT || !DEFAULT_URI)
-        ? Auth.read('/api/public/branding').catch(function () { return null; })
-        : Promise.resolve(null);
+      var fallbackP = (!BASE_PORT || !DEFAULT_URI) ? readBranding() : Promise.resolve(null);
       var regionsP = Auth.read('/api/pool/stats/regions');
-      var b = await brandingP;
+      loadSuggestion();  // once per page load; re-renders the bay itself when it lands
+      var b = await fallbackP;
       var conn = b && b.data && b.data.connection;
       if (conn) {
         BASE_PORT = conn.stratum_port || BASE_PORT;
         if (conn.stratum_host) DEFAULT_URI = conn.stratum_host + ':' + (conn.stratum_port || '3333');
       }
       var data = await regionsP;
-      var regions = (data && Array.isArray(data.regions)) ? data.regions : [];
 
       // Verdict still pending → re-poll in 4s (up to 5 times ≈ the server's 60s probe TTL).
       if (checkingTimer) { clearTimeout(checkingTimer); checkingTimer = null; }
@@ -859,7 +1306,25 @@
       } else if (!data || !data.checking) {
         checkingRetries = 0;
       }
-      regions = regions.filter(function (r) { return r.stratum_url && r.is_active !== false; });
+      if (data) lastRegionsData = data;
+      renderRegions(data);
+    } catch (e) { /* keep whatever the patch bay currently shows */ }
+  }
+
+  // Paint the gateway lamps + patch bay from one /stats/regions payload. Called by loadRegions
+  // and again when the connect suggestion or a measurement lands — idempotent, keeps the
+  // selection. Then time any server not yet tried (a no-op until the panel has been seen).
+  function renderRegions(data) {
+    paintRegions(data);
+    updateRetest();
+    if (bayVisible) loadLatencyConfig();  // retries a failed branding read; a no-op once known
+    maybeMeasure(false);
+  }
+
+  function paintRegions(data) {
+    var bank = $('rx-switches');
+    try {
+      var regions = publishedRegions(data);
 
       // Gateway array (P-02b): one lamp per region, rebuilt each poll (capped at 8).
       var lampHost = $('an-regions');
@@ -880,11 +1345,16 @@
           // `miners` is null when the server withheld it under the k-anonymity floor
           // (audit §J11-5) — that is NOT zero, and rendering it as 'idle' would contradict
           // the 'online' lamp beside it and re-create §J5-4's suppressed-reads-as-real bug.
-          // "<N miners" states exactly what the null already discloses (0 < n < N) and no more.
+          // "<N miners" states exactly what the null already discloses (0 < n < N) and no more
+          // — `workers` is withheld with it (one person's rig count), so no worker figure there.
+          // "2 miners / 5 workers": miners = distinct addresses, workers = distinct rigs.
           small.textContent = r.status === 'offline' ? 'offline'
             : r.status === 'checking' ? 'checking'
             : r.below_floor ? '<' + (data.min_bucket || 3) + ' miners'
-            : (r.miners > 0 ? r.miners + (r.miners === 1 ? ' miner' : ' miners') : 'idle');
+            : (r.miners > 0
+                ? r.miners + (r.miners === 1 ? ' miner' : ' miners') +
+                  (r.workers > 0 ? ' / ' + r.workers + (r.workers === 1 ? ' worker' : ' workers') : '')
+                : 'idle');
           lamp.appendChild(small);
           lampHost.appendChild(lamp);
         });
@@ -914,11 +1384,17 @@
       bank.style.display = '';
       if (help) help.hidden = false;
 
-      // Nearest region first, then most miners, then name — same order as before.
-      var nearestKey = detectNearestRegion(regions.map(function (r) { return r.region; }));
+      // The Recommended region (measured, else estimated — recommendedKey) when there is one, else
+      // the timezone fallback — which gets the 📍 pin, never the badge: it is a guess, not an
+      // estimate. Judged against THIS payload: a region that has since gone offline (or been
+      // withdrawn) loses the badge rather than steering a rig at it.
+      var recKey = recommendedKey(regions);
+      var nearestKey = recKey ? null : detectNearestRegion(regions);
+      var firstKey = recKey || nearestKey;
+      // Suggested region first, then most miners, then name.
       regions.sort(function (a, b2) {
-        if (a.region === nearestKey) return -1;
-        if (b2.region === nearestKey) return 1;
+        if (a.region === firstKey) return -1;
+        if (b2.region === firstKey) return 1;
         // A floor-suppressed region (§J11-5) has 1-2 miners, not 0 — count it as 1 so it does
         // not sort below a genuinely empty gateway.
         var mA = a.miners != null ? a.miners : (a.below_floor ? 1 : 0);
@@ -927,9 +1403,11 @@
         return (a.label || a.region).localeCompare(b2.label || b2.region);
       });
 
-      // Preserve the visitor's current selection across the 60s refresh.
+      // Preserve the current selection across the 60s refresh. Until the visitor clicks a chip,
+      // the Recommended region takes it (it may land after the first paint).
       var prev = bank.querySelector('.rgn.sel');
       var selectedKey = prev ? prev.dataset.region : null;
+      if (recKey && !userPickedRegion) selectedKey = recKey;
       if (!selectedKey || !regions.some(function (r) { return r.region === selectedKey; })) {
         selectedKey = regions[0].region;
       }
@@ -951,14 +1429,11 @@
         name.textContent = String(r.region || '').toUpperCase();
         sw.appendChild(led);
         sw.appendChild(name);
-        if (r.region === nearestKey) {
-          var pin = document.createElement('span');
-          pin.className = 'rgn-pin';
-          pin.title = 'Nearest to you';
-          pin.textContent = '📍';
-          sw.appendChild(pin);
-        }
-        sw.addEventListener('click', function () { selectRegion(regions, r.region); });
+        decorateRegionChip(sw, r, recKey, nearestKey);
+        sw.addEventListener('click', function () {
+          userPickedRegion = true;
+          selectRegion(regions, r.region);
+        });
         bank.appendChild(sw);
       });
       selectRegion(regions, selectedKey);
@@ -1028,18 +1503,21 @@
 
   // ── refresh cycle ─────────────────────────────────────────────────────────
   async function refresh() {
-    // Kicked BEFORE the awaited loadStatus: the patch bay is the one panel a visitor came
-    // here to act on, and it has no dependency on nodeHeight — queueing it behind the status
-    // round trip only delayed the switches appearing.
+    // Everything fires at once. This used to `await loadStatus()` before the rest, because
+    // nodeHeight feeds the fuel-rod depths — which parked every panel below (blocks, payouts,
+    // charts, gauges) behind the one call that waits on the node AND the wallet (2026-09-26,
+    // operator report: P-06/P-07 sometimes appeared minutes late). Only the rods need the
+    // height, so only they get the status promise; they repaint when it arrives.
     loadRegions();
-    await loadStatus();   // first: nodeHeight feeds the fuel-rod depths
+    var statusP = loadStatus();
     loadPoolInfo();
     loadHashrate();
     loadStats();
     loadShare();
-    loadBlocks();
+    loadBlocks(statusP);
     loadPayments();
     loadTrendCharts();
+    await statusP;
   }
 
   function boot() { refresh(); loadInfoContact(); }

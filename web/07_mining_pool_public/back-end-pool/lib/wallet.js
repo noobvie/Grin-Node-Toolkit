@@ -97,13 +97,31 @@ class WalletAPI {
   // address's private key can decrypt + `receive`, so a non-owner who triggers the payout gets
   // an undecryptable blob → no theft. The IP gate (owner-proof.js) only throttles who can trigger.
   //
-  // Param order matches grin-wallet Owner API v3 (docs.rs grin_wallet_api::Owner / owner_rpc).
-  // Every method's first param is the keychain-mask token from open_wallet; call sites leave
-  // it null and _call() substitutes the live session token (same as 059 Drop's ownerApiSession —
+  // Every method's first param is the keychain-mask token from open_wallet (params[0], or
+  // `token` for a named-params call); call sites leave it null and _call() substitutes the
+  // live session token (same as 059 Drop's ownerApiSession —
   // passing an actual null gets "Supplied keychain mask is invalid" from the LMDB backend).
+  //
+  // The five send-path calls — init_send_tx, tx_lock_outputs, finalize_tx, post_tx, cancel_tx —
+  // go out with NAMED params. The names are the Rust parameter names in owner_rpc.rs, identical
+  // in v5.4.1 and v5.5.0 (their doctests): init_send_tx {token,args}, tx_lock_outputs /
+  // finalize_tx {token,slate}, post_tx {token,slate,fluff}, cancel_tx {token,tx_id,tx_slate_id}.
+  // Named params cannot be misordered; create_slatepack_message's positional order was wrong
+  // once and broke every slatepack payout (memory reference_grinwallet_owner_v3_params).
 
   // 1a. Build an unconfirmed send slate. amountGrin → nanoGRIN (u64; pool payouts stay well
-  //     under 2^53 so a JS number is safe). Returns a VersionedSlate.
+  //     under 2^53 so a JS number is safe). Returns a VersionedSlate. Selects coins and saves the
+  //     private context; it writes NO lock and NO tx-log entry (tx_lock_outputs does both).
+  //
+  //     payment_proof_recipient_address stays null: the slatepack/Goblin rails request no payment
+  //     proof (their anti-theft control is encryption, design §8). The `paymentProofRecipient`
+  //     option existed only for the step-by-step Tor send, deleted 2026-09-26.
+  //
+  //     ttl_blocks stays null ON PURPOSE (design §8.1.2): on every refresh the wallet cancels any
+  //     unconfirmed tx whose ttl_cutoff_height has passed — posted-but-not-mined ones included
+  //     (owner.rs update_wallet_state, "Step 5") — which would unlock a payout already on its way.
+  //
+  //     60 s timeout, not the 10 s default: v5.5.0 refreshes outputs from the node inside init.
   async initSendTx(amountGrin, { minimumConfirmations = 1 } = {}) {
     const args = {
       src_acct_name: null,
@@ -118,19 +136,49 @@ class WalletAPI {
       estimate_only: null,
       late_lock: null
     };
-    return this._call('init_send_tx', [null, args]);
+    return this._call('init_send_tx', { token: null, args }, { timeoutMs: 60000 });
   }
 
-  // 1b. Lock the inputs the slate spends (must run before sharing the slate).
+  // 1b. Lock the inputs the slate spends (must run before sharing the slate). Writes the TxSent
+  //     entry and the output locks in one batch commit, so either both happen or neither.
   async txLockOutputs(slate) {
-    return this._call('tx_lock_outputs', [null, slate]);
+    return this._call('tx_lock_outputs', { token: null, slate });
+  }
+
+  // In-process send lock: serialises "select coins → lock them" across every rail. init_send_tx
+  // selects coins without locking them and lock_output does not check for an existing lock
+  // (selection.rs lock_tx_context), so two init calls interleaved before either lock can pick the
+  // SAME inputs, and then one of the two transactions can never mine (design §8.1.1). The Slatepack
+  // and Goblin creates hold it around init → lock; the Tor rail holds it for its whole `grin-wallet
+  // send` (a child of this process, which selects at start and locks after the Tor round trip). A
+  // promise chain: each fn starts after the previous one settles, whether it resolved or threw.
+  async withSendLock(fn) {
+    const prev = this._sendLock || Promise.resolve();
+    let release;
+    const mine = new Promise((r) => { release = r; });
+    this._sendLock = prev.then(() => mine);
+    await prev;
+    try {
+      return await fn();
+    } finally {
+      release();
+    }
   }
 
   // 1c. Armor + ENCRYPT the slate to the recipient address(es). recipients = [SlatepackAddress];
-  //     a non-empty recipients list is what triggers age-encryption to those keys. Returns the
-  //     `BEGINSLATEPACK…ENDSLATEPACK` string to hand to the miner.
+  //     a non-empty recipients list is what triggers age-encryption to those keys; [] gives plain
+  //     armor (the Goblin/Nostr rail). Returns the `BEGINSLATEPACK…ENDSLATEPACK` string.
+  //     Owner v3 signature: create_slatepack_message(token, slate, sender_index: Option<u32>,
+  //     recipients: Vec<SlatepackAddress>). This call used to go out POSITIONAL as
+  //     [token, sender_index, recipients, slate] — the wallet read the number 0 as the slate and
+  //     every slatepack and Goblin payout failed with `InvalidArgStructure "slate" at position 1`.
+  //     It now sends NAMED params (as 051 Fidelius and the 053 bridge do), which cannot be
+  //     misordered. The key names must match the Rust parameter names exactly.
+  //     sender_index stays 0, not null: the miner's response slatepack is then encrypted back to
+  //     the pool's index-0 address, which finalize decodes with secret_indices [0].
   async createSlatepackMessage(slate, recipients, senderIndex = 0) {
-    return this._call('create_slatepack_message', [null, senderIndex, recipients, slate]);
+    return this._call('create_slatepack_message',
+      { token: null, slate, sender_index: senderIndex, recipients });
   }
 
   // 2. Decode the miner's returned (response) slatepack back into a slate.
@@ -138,21 +186,22 @@ class WalletAPI {
     return this._call('slate_from_slatepack_message', [null, message, secretIndices]);
   }
 
-  // 3a. Finalize the round-tripped slate (adds the sender's partial signature).
+  // 3a. Finalize the round-tripped slate (adds the sender's partial signature). The Owner
+  //     finalize NEVER posts (owner.rs finalize_tx → foreign_finalize(…, false)); post_tx does.
   async finalizeTx(slate) {
-    return this._call('finalize_tx', [null, slate]);
+    return this._call('finalize_tx', { token: null, slate });
   }
 
   // 3b. Broadcast the finalized tx to the node (fluff = don't wait for dandelion aggregation).
   async postTx(slate, fluff = false) {
-    return this._call('post_tx', [null, slate, fluff]);
+    return this._call('post_tx', { token: null, slate, fluff });
   }
 
   // Cancel a pending tx by its slate UUID and release the wallet-side output locks taken by
-  // tx_lock_outputs. Used when a slatepack payout expires unfinalized. params: [token, tx_id,
-  // tx_slate_id] — pass tx_id null and match on the slate UUID.
+  // tx_lock_outputs. Used when a slatepack payout expires unfinalized. tx_id null, matched on
+  // the slate UUID. Needs a reachable node ("Can't contact running Grin node. Not Cancelling.").
   async cancelTx(slateId) {
-    return this._call('cancel_tx', [null, null, slateId]);
+    return this._call('cancel_tx', { token: null, tx_id: null, tx_slate_id: slateId });
   }
 
   // Bech32 charset: lowercase except b, i, o, 1 → [ac-hj-np-z02-9]
@@ -204,15 +253,21 @@ class WalletAPI {
   }
 
   // Ensure session is open before making a call; re-init if it was dropped.
-  // params[0] is always the keychain-mask slot in Owner API v3 — filled with the
-  // live open_wallet token here (and re-filled on retry, since re-init rotates it).
-  async _call(method, params) {
+  // The keychain mask is always the `token` param in Owner API v3 — filled with the live
+  // open_wallet token here (and re-filled on retry, since re-init rotates it). Two param
+  // shapes are accepted: a positional array (token is params[0]) or a named object (token is
+  // params.token). Named params are order-proof; create_slatepack_message uses them because
+  // its positional order was wrong once and broke every slatepack payout.
+  // `timeoutMs` is the HTTP timeout of this one call (default 10 s, _plainCall's); only a call
+  // that is known to be slow (init_send_tx's node refresh) raises it.
+  async _call(method, params, { timeoutMs } = {}) {
     if (!this.sessionOpen) {
       await this.initSession();
     }
-    params[0] = this.token;
+    this._fillToken(params);
+    const opts = timeoutMs ? { timeoutMs } : undefined;
     try {
-      return await this._encryptedCall(method, params);
+      return await this._encryptedCall(method, params, opts);
     } catch (err) {
       // Session may have expired (wallet restarted) — invalidate and retry once. Match
       // case-insensitively: node-fetch surfaces a 401 as "HTTP 401: Unauthorized" (capital
@@ -225,17 +280,23 @@ class WalletAPI {
         this.aesKey      = null;
         this.sessionOpen = false;
         await this.initSession();
-        params[0] = this.token;
-        return this._encryptedCall(method, params);
+        this._fillToken(params);
+        return this._encryptedCall(method, params, opts);
       }
       throw err;
     }
   }
 
+  // Write the live token into either param shape _call accepts (see above).
+  _fillToken(params) {
+    if (Array.isArray(params)) params[0] = this.token;
+    else params.token = this.token;
+  }
+
   // --- Wire-level helpers ---------------------------------------------------
 
   // Plaintext JSON-RPC call to /v3/owner (used only for init_secure_api).
-  async _plainCall(method, params) {
+  async _plainCall(method, params, { timeoutMs = 10000 } = {}) {
     const headers = { 'Content-Type': 'application/json' };
     if (fs.existsSync(this.ownerSecretPath)) {
       const secret = fs.readFileSync(this.ownerSecretPath, 'utf-8').trim();
@@ -246,7 +307,7 @@ class WalletAPI {
       method:  'POST',
       headers,
       body:    JSON.stringify({ jsonrpc: '2.0', method, params, id: 1 }),
-      timeout: 10000
+      timeout: timeoutMs
     });
 
     if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`);
@@ -257,7 +318,7 @@ class WalletAPI {
   }
 
   // Encrypt a JSON-RPC call, send it, decrypt the response.
-  async _encryptedCall(method, params) {
+  async _encryptedCall(method, params, opts) {
     if (!this.aesKey) throw new Error('No ECDH session — call initSession() first');
 
     // Build and encrypt the inner payload
@@ -272,7 +333,7 @@ class WalletAPI {
     const envResult = await this._plainCall('encrypted_request_v3', {
       nonce:    nonce.toString('hex'),
       body_enc: bodyEnc
-    });
+    }, opts);
 
     // Decrypt response envelope
     if (!envResult || !envResult.nonce || !envResult.body_enc) {

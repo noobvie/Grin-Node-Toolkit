@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<!-- Chess frame (design §19.7, D13). Loaded ONLY inside <iframe sandbox="allow-scripts"> by
+     the /play/ shell; its CSP repeats `sandbox allow-scripts` for a direct visit. Opaque
+     origin, connect-src 'none': it cannot call the API, read a cookie or store anything. It
+     draws the board it is sent and posts back the move the player picks — nothing else.
+     CLASSIC scripts only: a module script fetched from an opaque origin needs CORS, which
+     this location does not send (§19.15 Part 3 #7). No inline script, no on* attributes.
+     __GRIN_PLAY_VERSION__ is replaced at deploy with the version.js stamp. -->
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="robots" content="noindex, nofollow">
+    <title>Chess board</title>
+    <!-- An empty icon: a frame opened directly in a tab would otherwise request /favicon.ico. -->
+    <link rel="icon" href="data:,">
+    <link rel="stylesheet" href="game.css?v=__GRIN_PLAY_VERSION__">
+</head>
+<body class="theme-dark">
+    <div class="strip" id="strip-top"><span class="turn" aria-hidden="true"></span><span class="name" id="name-top"></span></div>
+    <div class="board-wrap" id="board-wrap">
+        <div class="board" id="board" role="grid" aria-label="Chess board"></div>
+        <div class="promo" id="promo" hidden>
+            <p class="promo-title">Promote to</p>
+            <div class="promo-row" id="promo-row"></div>
+            <button type="button" class="promo-cancel" id="promo-cancel">Cancel</button>
+        </div>
+    </div>
+    <div class="strip" id="strip-bottom"><span class="turn" aria-hidden="true"></span><span class="name" id="name-bottom"></span></div>
+    <p class="sr-only" id="live" aria-live="polite"></p>
+
+    <script src="../rules.js?v=__GRIN_PLAY_VERSION__"></script>
+    <script src="game.js?v=__GRIN_PLAY_VERSION__"></script>
+</body>
+</html>

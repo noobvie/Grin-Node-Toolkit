@@ -16,10 +16,68 @@ const path = require('path');
 // "height_not_found" and orphaned live blocks, reversing miner payouts.
 
 // We never reached a Grin JSON-RPC answer. Says NOTHING about the chain.
-function transportFailure(message) {
+//
+// `transport` narrows WHY, from the underlying node-fetch 2 error (shapes verified against
+// node-fetch 2.7.0, not assumed):
+//   'refused' — FetchError type 'system', code ECONNREFUSED: nothing listens on the API port.
+//               A dead node AND a node still opening its chain_data look exactly like this;
+//               downState() tells them apart.
+//   'timeout' — FetchError type 'request-timeout': the port accepted the connection but the
+//               node did not answer in time. Something IS running there — typically a node
+//               catching up after a start, or compacting.
+//   'other'   — everything else, including a 401/403 from a wrong or unreadable secret. That
+//               one is a real fault, never "busy", so it must not be folded into the two above.
+function transportFailure(message, cause) {
   const err = new Error(message);
   err.nodeReplied = false;
+  err.transport = classifyTransport(cause);
   return err;
+}
+
+function classifyTransport(cause) {
+  if (!cause) return 'other';
+  if (cause.type === 'request-timeout') return 'timeout';
+  if (cause.code === 'ECONNREFUSED') return 'refused';
+  return 'other';
+}
+
+// Is argv the command line of a grin NODE for `network`? Deliberately narrow:
+//   • the executable must be named `grin` and run the node — `grin server …`, or no
+//     subcommand at all (the TUI). `grin client …` is a short-lived query, not a node;
+//   • the network must be PROVABLE from argv: `--testnet`, or an absolute path under a
+//     `mainnet-*`/`testnet-*` node dir. The toolkit launcher (gnc_launch_node_session)
+//     always runs `<node_dir>/grin server run` by absolute path, so its nodes qualify.
+//     A hand-started `./grin` does not — its cwd (/proc/<pid>/cwd) is unreadable across
+//     users — and returns false: an unprovable match must never turn a dead mainnet node
+//     amber because a testnet node happens to be booting on the same box.
+function isNodeCmdline(argv, network) {
+  if (!Array.isArray(argv) || argv.length === 0) return false;
+  const exe = String(argv[0]);
+  if (path.basename(exe) !== 'grin') return false;
+  const rest = argv.slice(1).map(String);
+  const sub = rest.find((a) => !a.startsWith('-'));
+  if (sub !== undefined && sub !== 'server') return false;
+  const flagTestnet = rest.includes('--testnet');
+  const m = /\/(mainnet|testnet)-[^/]+\/grin$/.exec(exe);
+  if (!flagTestnet && !m) return false;
+  const procTestnet = flagTestnet || m[1] === 'testnet';
+  return procTestnet === !/^main/i.test(String(network || ''));
+}
+
+// Any grin node process for `network` in `procRoot`? Read-only /proc scan; the pool unit
+// runs as grinpool with no ProtectProc=, so other users' /proc/<pid>/cmdline is readable.
+// On a box mounting /proc with hidepid, other users' PIDs are simply absent — this then
+// finds nothing and the caller falls back to 'offline', which is the pre-existing answer.
+async function nodeProcessRunning(network, procRoot = '/proc') {
+  let entries;
+  try { entries = await fs.promises.readdir(procRoot); } catch (_) { return false; }
+  const reads = entries.filter((e) => /^\d+$/.test(e)).map((pid) =>
+    fs.promises.readFile(path.join(procRoot, pid, 'cmdline'), 'utf8').then(
+      (raw) => isNodeCmdline(raw.split('\0').filter((a) => a !== ''), network),
+      () => false            // process exited mid-scan, or unreadable → not evidence
+    )
+  );
+  return (await Promise.all(reads)).some(Boolean);
 }
 
 // The node answered and reported an error. `payload` is the node's own Err/error object.
@@ -55,6 +113,7 @@ class GrinNodeAPI {
   constructor(config) {
     this.nodeUrl = config.node_api_url || 'http://127.0.0.1:13413';
     this.network = config.network || 'testnet';
+    this.procRoot = '/proc';   // overridable by tests only
 
     // The Grin node secures BOTH its Owner (/v2/owner, .api_secret) and Foreign
     // (/v2/foreign, .foreign_api_secret) endpoints with HTTP Basic Auth (grin:<secret>).
@@ -166,9 +225,24 @@ class GrinNodeAPI {
       return {
         ok: false,
         error: err.message,
+        transport: err.transport || 'other',
         timestamp: Date.now()
       };
     }
+  }
+
+  // Why a failed getStatus() failed, as a DISPLAY state for the public status strip:
+  //   'busy'     — the API port answered TCP but the node did not reply in time;
+  //   'starting' — nothing on the API port yet, but a grin node process for this network is
+  //                running: it is still opening its chain_data (minutes after a rebuild);
+  //   'offline'  — no node process, or any other failure (a 401 from a bad secret included).
+  // Display only. Nothing that moves money may read this — a 'busy' node is still a node the
+  // pool cannot query, and every money path already treats it as unreachable.
+  async downState(status) {
+    const t = status && status.transport;
+    if (t === 'timeout') return 'busy';
+    if (t === 'refused' && await nodeProcessRunning(this.network, this.procRoot)) return 'starting';
+    return 'offline';
   }
 
   // Re-wrap a failure with a friendlier message WITHOUT losing the classification set by
@@ -336,7 +410,7 @@ class GrinNodeAPI {
 
       data = await response.json();
     } catch (err) {
-      throw transportFailure(`RPC call ${method} failed: ${err.message}`);
+      throw transportFailure(`RPC call ${method} failed: ${err.message}`, err);
     }
 
     // Phase 2 — the node answered. Its Err payload IS a statement about the chain,
@@ -365,3 +439,7 @@ class GrinNodeAPI {
 }
 
 module.exports = GrinNodeAPI;
+// Exposed for scripts/test-node-state.js.
+module.exports.isNodeCmdline = isNodeCmdline;
+module.exports.nodeProcessRunning = nodeProcessRunning;
+module.exports.classifyTransport = classifyTransport;

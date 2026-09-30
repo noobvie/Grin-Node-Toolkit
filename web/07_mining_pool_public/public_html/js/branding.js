@@ -109,46 +109,75 @@
   // ONE deterministic explorer per network — deliberately NOT randomized across two. The
   // earlier 50/50 rotation assumed the two explorers shared a path scheme; they do not
   // (verified live 2026-07-25), so every link that landed on grinscan.org 404'd, and the
-  // rotation is what hid it — half the clicks worked. The two schemes:
+  // rotation is what hid it — half the clicks worked. The schemes:
+  //   grincoin.org       /block/<h>  (hash → /hash/<hash>)  /kernel/<excess>  /output/<commit>
   //   scan.grin.money    /block/<h>           /kernel/<excess>          /output/<commit>
   //   *.grinscan.org     /block.html?h=<h>    /kernel.html?ex=<excess>  /output.html?c=<commit>
-  // Both accept a height OR a 64-hex block hash in the block slot.
+  // grincoin.org (aglkm/grin-explorer) takes DIGITS ONLY in /block/ — a 64-hex hash there
+  // renders its error page — so its style carries a separate `blockHash` segment. It also
+  // answers HTTP 200 for every path, error page included: a status code proves nothing about
+  // a link, compare page content (verified live 2026-09-23). /output/ finds UNSPENT outputs only.
   //
-  // Default: mainnet → scan.grin.money (06d Tiny Explorer), testnet → test.grinscan.org
-  // (06b GrinScan's testnet sibling). scan.grin.money is mainnet-only and test.grinscan.org
-  // is testnet-only, so the pair covers both networks with no overlap. NOTE the testnet host
-  // is `test.` — `testnet.grinscan.org` does NOT resolve (that typo made every testnet link
-  // dead). To switch explorer, change DEFAULT_EXPLORER below — the style travels with the
-  // entry, so a swap can never resurrect the mismatched-scheme bug.
+  // WHICH explorer is an ADMIN SETTING (Settings → Branding, `branding.explorer_mainnet`), not a
+  // code edit: mainnet picks one of grincoin (default) | tiny | grinscan; testnet is FIXED on
+  // test.grinscan.org (testnet.grincoin.org is PRUNED, so it cannot open old testnet blocks;
+  // NOTE the host is `test.` — `testnet.grinscan.org` does NOT resolve). The server resolves
+  // the setting (lib/explorers.js resolveExplorerKey) and publishes only the resulting KEY as
+  // `explorer` beside `network` (cfg.connection.explorer here). A key is mapped through the
+  // registry below and never used as a URL, so a style always travels with its host and a
+  // swap can never resurrect the mismatched-scheme bug.
   //
-  // Network is resolved from the branding fetch (cfg.connection.network) and cached in
-  // sessionStorage; until then we assume mainnet (the common deployment).
+  // ⚠ EXPLORERS / EXPLORER_STYLES / MAINNET_CHOICES MIRROR back-end-pool/lib/explorers.js (and
+  // the copy in admin-panel/admin-shell.js). scripts/test-explorers.js fails if they drift.
+  //
+  // Network + key are resolved from the branding fetch (cfg.connection) and cached in
+  // sessionStorage; until then we assume mainnet + grincoin (a valid explorer, never a dead
+  // link). blocks.html primes the same two keys before its first render.
   var NETWORK_KEY = 'pool-network';
+  var EXPLORER_KEY = 'pool-explorer';
   function explorerNetwork() {
     try { var n = sessionStorage.getItem(NETWORK_KEY); if (n) return n; } catch (e) {}
     return 'mainnet';
   }
   // Path styles, keyed by explorer product. The value is the segment placed between the base
-  // URL and the encoded reference.
+  // URL and the encoded reference. `blockHash`, when present, replaces `block` for a
+  // non-numeric block reference (a hash).
   var EXPLORER_STYLES = {
-    path:  { block: 'block/',            kernel: 'kernel/',             output: 'output/' },
-    query: { block: 'block.html?h=',     kernel: 'kernel.html?ex=',     output: 'output.html?c=' }
+    path:     { block: 'block/',        kernel: 'kernel/',        output: 'output/' },
+    grincoin: { block: 'block/', blockHash: 'hash/', kernel: 'kernel/', output: 'output/' },
+    query:    { block: 'block.html?h=', kernel: 'kernel.html?ex=', output: 'output.html?c=' }
   };
   var EXPLORERS = {
-    tiny:             { base: 'https://scan.grin.money',  style: 'path'  }, // 06d, mainnet only
-    grinscan:         { base: 'https://grinscan.org',      style: 'query' }, // 06b mainnet
-    grinscan_testnet: { base: 'https://test.grinscan.org', style: 'query' }  // 06b testnet sibling
+    grincoin:         { base: 'https://grincoin.org',      style: 'grincoin' }, // aglkm full archive, mainnet
+    tiny:             { base: 'https://scan.grin.money',   style: 'path'     }, // 06d, mainnet only
+    grinscan:         { base: 'https://grinscan.org',      style: 'query'    }, // 06b mainnet
+    grinscan_testnet: { base: 'https://test.grinscan.org', style: 'query'    }  // 06b testnet sibling
   };
-  var DEFAULT_EXPLORER = { mainnet: 'tiny', testnet: 'grinscan_testnet' };
+  var MAINNET_CHOICES = ['grincoin', 'tiny', 'grinscan'];
+  var DEFAULT_MAINNET = 'grincoin';
+  var TESTNET_EXPLORER = 'grinscan_testnet';
+  // Same rule as resolveExplorerKey() on the server, re-applied to the cached key: testnet is
+  // always test.grinscan.org (so a stale mainnet key cached by an earlier response can never
+  // send a testnet pool's links to a mainnet explorer); mainnet takes the cached key only if it
+  // is one of the three choices AND an own registry entry (never `in` — 'constructor' would
+  // pass), else grincoin.
+  function explorerKey() {
+    if (explorerNetwork() === 'testnet') return TESTNET_EXPLORER;
+    var k = null;
+    try { k = sessionStorage.getItem(EXPLORER_KEY); } catch (e) {}
+    return (typeof k === 'string' && MAINNET_CHOICES.indexOf(k) !== -1 &&
+      Object.prototype.hasOwnProperty.call(EXPLORERS, k)) ? k : DEFAULT_MAINNET;
+  }
   function explorerPick() {
-    var net = explorerNetwork() === 'testnet' ? 'testnet' : 'mainnet';
-    return EXPLORERS[DEFAULT_EXPLORER[net]] || EXPLORERS.tiny;
+    return EXPLORERS[explorerKey()];
   }
   function explorerUrl(kind, value) {
     var ex = explorerPick();
     var style = EXPLORER_STYLES[ex.style] || EXPLORER_STYLES.path;
-    var seg = (kind === 'kernel') ? style.kernel : (kind === 'output') ? style.output : style.block;
-    return ex.base.replace(/\/+$/, '') + '/' + seg + encodeURIComponent(String(value));
+    var v = String(value);
+    var seg = (kind === 'kernel') ? style.kernel : (kind === 'output') ? style.output
+      : (style.blockHash && !/^\d+$/.test(v)) ? style.blockHash : style.block;
+    return ex.base.replace(/\/+$/, '') + '/' + seg + encodeURIComponent(v);
   }
   function xEsc(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
@@ -157,12 +186,26 @@
   }
   // Returns an <a> (HTML string) that opens the explorer in a new tab. `label` defaults to
   // `value`. Both URL and label are HTML-escaped — safe for untrusted chain strings. A missing
-  // value returns just the escaped label (no dead link).
+  // value returns just the escaped label (no dead link). data-xp-kind/-ref let relink() below
+  // re-point the anchor once the network + explorer are known.
   function explorerLink(kind, value, label, cls) {
     if (value == null || value === '') return xEsc(label == null ? '' : label);
     return '<a href="' + xEsc(explorerUrl(kind, value)) + '" target="_blank" rel="noopener" ' +
-      'class="xplink' + (cls ? ' ' + xEsc(cls) : '') + '" title="Open on Grin chain explorer ↗">' +
+      'class="xplink' + (cls ? ' ' + xEsc(cls) : '') + '" title="Open on Grin chain explorer ↗" ' +
+      'data-xp-kind="' + xEsc(kind) + '" data-xp-ref="' + xEsc(value) + '">' +
       xEsc(label == null ? value : label) + '</a>';
+  }
+  // A page may render links BEFORE apply() caches network + explorer (its own fetch can beat the
+  // branding fetch, and sessionStorage is per tab, so every new tab starts empty) — those links
+  // took the mainnet/grincoin fallback, i.e. a MAINNET explorer on a testnet pool. Re-point every
+  // tagged anchor through explorerUrl(): the ref is re-encoded and the host comes from the
+  // registry, so an attribute value can never become the URL.
+  function explorerRelink() {
+    var list = document.querySelectorAll('a[data-xp-kind]');
+    for (var i = 0; i < list.length; i++) {
+      var a = list[i], ref = a.getAttribute('data-xp-ref');
+      if (ref) a.setAttribute('href', explorerUrl(a.getAttribute('data-xp-kind'), ref));
+    }
   }
   function injectExplorerCss() {
     if (document.getElementById('xplink-css')) return;
@@ -175,7 +218,7 @@
       'a.xplink:hover{text-decoration-style:solid;opacity:.82;}';
     head().appendChild(s);
   }
-  window.Explorer = { url: explorerUrl, link: explorerLink, network: explorerNetwork };
+  window.Explorer = { url: explorerUrl, link: explorerLink, network: explorerNetwork, key: explorerKey, relink: explorerRelink };
 
   // ── 1. SEO / meta tags ─────────────────────────────────────────────────────
   function applySeo(cfg) {
@@ -684,13 +727,14 @@
     } catch (e) { /* logo just stays on the main variant */ }
   }
 
-  // ── 3b. Site-wide header: swinging logo + slogan, Rewards link, miner auth ──
+  // ── 3b. Site-wide header: swinging logo + slogan, prize-pool links, miner auth ──
   // Applied on every public page so headers stay consistent without editing each file.
   // Acts only when a .brand element exists (skips login/admin pages that have none).
   function enhanceHeader(cfg) {
     injectHeaderStyles();
     enhanceBrand(cfg);
-    injectRewardsLink(cfg);
+    applyIncentivesNav(cfg);
+    applyGamesNav(cfg);
   }
 
   function injectHeaderStyles() {
@@ -759,17 +803,29 @@
     applyLogoVariant();
   }
 
-  // Add a "Rewards" nav link to the incentive/contest page when incentives are live.
-  function injectRewardsLink(cfg) {
-    if (!cfg.incentives || !cfg.incentives.enabled) return;
-    var nav = document.querySelector('.header-nav');
-    if (!nav || nav.querySelector('a[href$="fortune-board.html"]')) return;
-    var a = document.createElement('a');
-    a.className = 'nav-link';
-    a.href = 'fortune-board.html';
-    a.textContent = '🎁 Rewards';
-    var account = nav.querySelector('a[href$="account-settings.html"]');
-    if (account) nav.insertBefore(a, account); else nav.appendChild(a);
+  // Hide the prize-pool chrome (header "Prize Pool" group + footer Donate / Fortune Board,
+  // all marked data-incentives by public-shell.js) when the operator has incentives off.
+  // Shown by default and hidden only on an explicit `enabled: false`: incentives ship ON,
+  // and a failed/partial config fetch should not strip working links off the page.
+  // style.display, not the `hidden` attribute — .nav-group / .footer-donate set their own
+  // display in CSS, which beats the UA [hidden] rule.
+  function applyIncentivesNav(cfg) {
+    var off = !!(cfg.incentives && cfg.incentives.enabled === false);
+    document.querySelectorAll('[data-incentives]').forEach(function (el) {
+      el.style.display = off ? 'none' : '';
+    });
+  }
+
+  // Show the games link (header "Play" + its footer copy, marked data-games by public-shell.js)
+  // ONLY on an explicit games.mode === 'on' — the OPPOSITE default of applyIncentivesNav, on
+  // purpose (design §19 D12): the pool is live, 'preview' must keep /play/ unannounced while
+  // the operator tests it, and the server already reports 'off' while the games service is
+  // down. So a missing field, a failed fetch, 'preview' or 'off' all leave the link hidden.
+  function applyGamesNav(cfg) {
+    var on = !!(cfg.games && cfg.games.mode === 'on');
+    document.querySelectorAll('[data-games]').forEach(function (el) {
+      el.style.display = on ? '' : 'none';
+    });
   }
 
   // ── 4. Analytics + custom head HTML ────────────────────────────────────────
@@ -950,11 +1006,17 @@
 
   // ── bootstrap ──────────────────────────────────────────────────────────────
   function apply(cfg) {
-    // Cache the chain so window.Explorer builds testnet-correct deep-links.
+    // Cache the chain + the operator's explorer so window.Explorer builds the right deep-links.
+    // The explorer key is the server-RESOLVED one; explorerKey() still re-validates it. A
+    // response without one clears any stale key, so the network default applies.
     try {
       var net = cfg.connection && cfg.connection.network;
       if (net) sessionStorage.setItem(NETWORK_KEY, net);
+      var xk = cfg.connection && cfg.connection.explorer;
+      if (typeof xk === 'string' && xk) sessionStorage.setItem(EXPLORER_KEY, xk);
+      else sessionStorage.removeItem(EXPLORER_KEY);
     } catch (e) {}
+    try { explorerRelink(); } catch (e) {}   // links a page rendered before this landed
 
     try { applyTheme(cfg); } catch (e) {}
 
@@ -1003,7 +1065,12 @@
     // Prize-pool size hook.
     document.querySelectorAll('[data-brand="prize-pool"]').forEach(function (el) {
       if (inc.enabled && typeof inc.prize_pool_grin === 'number') {
-        el.textContent = inc.prize_pool_grin.toFixed(4) + ' GRIN';
+        // Every current hook is a placard tile (donate, fortune-board), so it takes the tile
+        // rule from js/num-format.js — short figure, exact tooltip, the ツ unit the tiles beside
+        // it use (this one alone said "GRIN"). A page that does not load num-format keeps the
+        // exact figure.
+        if (window.PoolFmt) window.PoolFmt.setGrinTile(el, inc.prize_pool_grin);
+        else el.textContent = inc.prize_pool_grin.toFixed(4) + ' ツ';
       }
     });
 
@@ -1158,7 +1225,7 @@
     try { injectExplorerCss(); } catch (e) {}
     // The header/footer + base nav are now injected synchronously by public-shell.js
     // (single source of truth, no flash). branding.js only ENHANCES that chrome:
-    // logo/slogan, [data-brand] hooks, and the incentives-gated 🎁 Rewards link.
+    // logo/slogan, [data-brand] hooks, and the incentives-gated prize-pool links.
     fetch(ENDPOINT, { credentials: 'same-origin' })
       .then(function (r) { return r.ok ? r.json() : null; })
       .then(function (json) { if (json && json.data) apply(json.data); })

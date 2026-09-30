@@ -220,7 +220,11 @@
         bits.push('Rate limits per IP, per minute: ' +
           escHtml(String(n.rate_limits.public)) + ' for reads, ' +
           escHtml(String(n.rate_limits.withdraw)) + ' for payout actions, ' +
-          escHtml(String(n.rate_limits.export)) + ' for CSV exports. Over the limit returns 429.');
+          escHtml(String(n.rate_limits.export)) + ' for CSV exports' +
+          // Distinct addresses per minute, effectively: repeat probes of one address are served
+          // from a 60 s cache. Printed here because the row carries the bucket NAME only.
+          (n.rate_limits.torcheck != null ? ', ' + escHtml(String(n.rate_limits.torcheck)) + ' for Tor reachability probes' : '') +
+          '. Over the limit returns 429.');
       }
       if (n.cors) bits.push(escHtml(n.cors));
       document.getElementById('api-notes').innerHTML = bits.join(' ');

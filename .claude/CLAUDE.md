@@ -57,7 +57,8 @@ scripts/
        THREE ports — tor → ACC_TOR_FRONT_PORT (nginx block) → ACC_TOR_PORT
        (gateway), beside ACC_PORT (gateway ← :443). Collapsing two roles onto one
        port is a bind collision, not a saving, and NOTHING on this box reports one:
-       `nginx -t` parses and never binds, `systemctl reload` returns 0 before the
+       `nginx -t` ignores a port someone else holds (EADDRINUSE is not an error
+       in test mode — it does try the bind), `systemctl reload` returns 0 before the
        master binds, and a status line that greps `ss` for a port two roles share
        goes green whichever won. Verify the listener after the reload. ⚠ Its
        /opt/grin/accio-<net>/gateway-state/ is DURABLE STATE, not a cache: losing it
@@ -127,7 +128,9 @@ scripts/
        07_grin_mining_public_pool.sh (GRINIUM public pool; libs 07_lib_hub.sh central hub /
        07_lib_gateway.sh thin regional stratum forwarder / 07_lib_gwctl.sh the single
        WireGuard-mutation binary / 07_lib_pool_wallet.sh / 07_lib_pool_backup.sh; app code in
-       web/07_mining_pool_public/). ⚠ The old SATELLITE role is GONE — deleted 2026-06-22
+       web/07_mining_pool_public/). The pool's /play/ games service is menu P (07_lib_pool_games.sh,
+       web/07_mining_pool_public/play/): its own unit/user/DB, and nothing under P restarts the pool.
+       ⚠ The old SATELLITE role is GONE — deleted 2026-06-22
        (f2ebade) together with 07_lib_satellite.sh, back-end-pool/satellite.js and
        lib/share-relay.js. A region is a THIN stratum gateway under Model C: no node, no
        wallet, no DB, no Node app. It carries **no HTTP ingestion API**, so there is no
@@ -205,8 +208,8 @@ curl -s "https://api.nonlogs.io/api/markets/GRIN-BTC" | python3 -m json.tool
   Hub 05 assigns every category a contiguous block of keys ending in a spare (wallets
   1-4, payments 5-8, giveaways 9); a row owns its key permanently, and planned/spare rows
   own theirs from the start. Hub 08 instead keys each row that HAS a sub-script to that
-  script's last digit — 081→`1`, 082→`2`, 084→`4`, 085→`5`, 089→`9` — and fills the gaps
-  (`3`,`6`,`7`,`8`) with its un-numbered inline features. Other hubs (07, 09) still assign
+  script's last digit — 081→`1`, 082→`2`, 083→`3`, 084→`4`, 086→`6`, 089→`9` — and fills the
+  gaps (`5`,`7`,`8`) with its un-numbered inline features (085 SSH is reached from inside 083). Other hubs (07, 09) still assign
   the key positionally at render. **Outside hub 08 the key is NOT the script number** — in
   05, key 5 is WooCommerce (053) and key 9 is Drop (059); they coincide only by accident.
   - Hub 08's rule (adopted 2026-08-05, when Provider Access Watch sat on key 7 and Backup
@@ -431,8 +434,9 @@ Several comments in this repo claim "grin-wallet has no stdin or env-var passphr
 piped so we bypass terminal hiding code"* → `stdin.read_line()`. What IS true: there is no
 env-var input (the clap `pass` arg declares no `env`), so stdin is the only argv-free channel.
 The rpassword 7 bump did **not** break this: grin-wallet v5.5.0 pins `rpassword 7.5.4`, which
-branches on `stdin.is_terminal()` and still reads a piped passphrase. The toolkit pin is
-unchanged at v5.4.1, so stdin feeding is safe on both — see memory
+branches on `stdin.is_terminal()` and still reads a piped passphrase. The shared pin
+(`GWI_DEFAULT_TAG`) moved to v5.5.0 on 2026-09-25; Fidelius still pins v5.4.1 on its own.
+Stdin feeding is safe on both — see memory
 `project_grinwallet_stdin_rpassword`.
 - **Feed the passphrase on stdin**: `exec grin-wallet … listen < "$pass_file"` (mode-600 file),
   or `printf '%s\n' "$p" | grin-wallet … info` (printf is a bash *builtin* — no argv at all).

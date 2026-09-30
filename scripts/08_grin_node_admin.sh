@@ -8,15 +8,15 @@
 #   8.3  Host Optimization & Hard. — 083_host_optimization.sh (profile CPU/RAM/IO → advice)
 #   8.4  Nginx Extended Features   — 084_nginx_extended_features.sh (audit · proxy · security)
 #   8.5  Node Status & Sync        — local PIDs, ports, tmux, binary versions + chain tip
-#   8.6  Top 20 Bandwidth Consumers— parse nginx logs, block/limit from menu
+#   8.6  Diagnostics & Support     — 086_grin_diagnostics.sh (health check, support bundle)
 #   8.7  Disk Cleanup              — tar archives + OS temp/logs + nginx web dirs + swap manager
 #   8.8  Self-Update               — download latest from GitHub
 #   8.9  Backup & Restore          — 089_backup_restore.sh
 #   DEL  Full Grin Cleanup         — 08del_clean_all_grin_things.sh
 #
 # Key = sub-script number. Every numbered sub-script sits on its own digit
-# (081→1, 082→2, 083→3, 084→4, 089→9); un-numbered inline features fill the
-# rest (5, 6, 7, 8). Re-sorted 2026-08-05 — Provider Access Watch was on key 7
+# (081→1, 082→2, 083→3, 084→4, 086→6, 089→9); un-numbered inline features fill
+# the rest (5, 7, 8). Re-sorted 2026-08-05 — Provider Access Watch was on key 7
 # and Backup on key 10, so neither key matched its script. Keeping that mapping
 # is why Service & Port Dashboard and Chain Sync Status were merged into one
 # "Node Status & Sync" screen: 10 rows do not fit 9 digits.
@@ -30,6 +30,11 @@
 # first match, so an alias would silently open the wrong product. The per-screen
 # banner is the mis-key safety net. 085 itself is unchanged and still numbered
 # 085; only its route into the menu moved.
+#
+# 2026-09-25 — 086 Diagnostics & Support Bundle added on key 6, per the digit
+# rule. Top 20 Bandwidth Consumers (inline, was key 6) moved into 084 Nginx
+# Extended Features as its option 5: it parses nginx access logs, which is
+# 084's remit. KEY 6 CHANGED HANDS, so again NO alias arm for the old meaning.
 # =============================================================================
 
 set -euo pipefail
@@ -416,151 +421,18 @@ _ns_chain_sync() {
 }
 
 # =============================================================================
-# 8.6  Top 20 Bandwidth Consumers
+# 8.6  Diagnostics & Support Bundle  (086_grin_diagnostics.sh)
 # =============================================================================
-show_bandwidth_consumers() {
-    clear
-    echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo -e "${BOLD}${CYAN}  6  Top 20 Bandwidth Consumers${RESET}"
-    echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo ""
-
-    # Collect nginx access logs
-    local -a log_paths=()
-    [[ -f /var/log/nginx/access.log ]] && log_paths+=("/var/log/nginx/access.log")
-    while IFS= read -r f; do
-        [[ "$f" != "/var/log/nginx/access.log" ]] && log_paths+=("$f")
-    done < <(find /var/log/nginx -name '*.log' 2>/dev/null | grep -i access | head -10 || true)
-
-    if [[ ${#log_paths[@]} -eq 0 ]]; then
-        warn "No nginx access logs found in /var/log/nginx/."
-        echo -e "  ${DIM}Ensure nginx is installed and access logging is enabled.${RESET}"
+# Quick health check, support bundle, API timings, log triage and a consumer
+# load test — evidence for "is it our code, this host, or upstream grin?".
+# Read-only except its explicitly confirmed consumer load test.
+menu_diagnostics() {
+    local diag_script="$SCRIPT_DIR/086_grin_diagnostics.sh"
+    if [[ ! -f "$diag_script" ]]; then
+        error "086_grin_diagnostics.sh not found in $SCRIPT_DIR"
         pause; return
     fi
-
-    info "Parsing ${#log_paths[@]} log file(s)..."
-    echo ""
-
-    local tmp
-    tmp=$(mktemp)
-
-    # Parse nginx combined log format using " as field separator.
-    # With FS='"':  $1="IP - - [date time] "  $2="METHOD /path HTTP/x"  $3=" status bytes "
-    # This is robust against URL paths containing spaces (which shift $10-based parsing).
-    awk -F'"' '{
-        split($1, a, " "); ip = a[1]
-        split($3, b, " "); bytes = b[3]
-        if (ip != "" && bytes ~ /^[0-9]+$/) tot[ip] += bytes
-    }
-    END { for (ip in tot) printf "%012d %s\n", tot[ip], ip }' \
-        "${log_paths[@]}" 2>/dev/null \
-        | sort -rn \
-        | head -20 \
-        | awk '{print $2, $1+0}' > "$tmp"
-
-    if [[ ! -s "$tmp" ]]; then
-        warn "No parseable data found in nginx access logs."
-        echo ""
-        info "Sample log lines (check format matches nginx combined):"
-        head -3 "${log_paths[0]}" 2>/dev/null \
-            | while IFS= read -r line; do echo -e "  ${DIM}$line${RESET}"; done \
-            || true
-        echo ""
-        echo -e "  ${DIM}Expected format: \$remote_addr - \$remote_user [\$time_local] \"\$request\" \$status \$body_bytes_sent \"...\" \"...\"${RESET}"
-        rm -f "$tmp"
-        pause; return
-    fi
-
-    printf "  ${BOLD}%-6s  %-18s  %15s${RESET}\n" "Rank" "IP Address" "Data Served"
-    printf "  %-6s  %-18s  %15s\n" "──────" "──────────────────" "───────────────"
-
-    local rank=1
-    local -a ip_list=()
-    while IFS=' ' read -r ip bytes; do
-        local human
-        if   (( bytes >= 1073741824 )); then
-            human=$(awk "BEGIN{printf \"%.2f GB\", $bytes/1073741824}")
-        elif (( bytes >= 1048576 ));    then
-            human=$(awk "BEGIN{printf \"%.2f MB\", $bytes/1048576}")
-        elif (( bytes >= 1024 ));       then
-            human=$(awk "BEGIN{printf \"%.2f KB\", $bytes/1024}")
-        else
-            human="${bytes} B"
-        fi
-        printf "  %-6s  %-18s  %15s\n" "$rank" "$ip" "$human"
-        ip_list+=("$ip")
-        rank=$((rank + 1))
-    done < "$tmp"
-    rm -f "$tmp"
-
-    echo ""
-    echo -e "  ${YELLOW}1${RESET}) Block or rate-limit a specific IP"
-    echo -e "  ${DIM}0${RESET}) Return"
-    echo ""
-    echo -ne "${BOLD}Select [0-1]: ${RESET}"
-    read -r choice
-
-    if [[ "$choice" == "1" ]]; then
-        echo ""
-        local target_ip
-        if ! ui_ask target_ip "Enter IP address to act on"; then
-            info "Cancelled — nothing was blocked or rate-limited."
-            pause; return
-        fi
-
-        echo ""
-        echo -e "  ${RED}1${RESET}) Block all traffic from $target_ip"
-        echo -e "  ${YELLOW}2${RESET}) Rate-limit with iptables hashlimit (25 conn/min)"
-        echo -e "  ${DIM}0${RESET}) Cancel"
-        echo ""
-        echo -ne "${BOLD}Select [0-2]: ${RESET}"
-        read -r action
-
-        case "$action" in
-            1)
-                if command -v ufw &>/dev/null; then
-                    echo -ne "${RED}Block ALL traffic from $target_ip? [y/N]: ${RESET}"
-                    read -r c
-                    if [[ "${c,,}" == "y" ]]; then
-                        ufw deny from "$target_ip" to any \
-                            && success "UFW rule added: deny from $target_ip" \
-                            && log "[8.6] UFW BLOCKED: $target_ip"
-                    else
-                        info "Cancelled."
-                    fi
-                else
-                    warn "ufw not available."
-                    info "Equivalent iptables command:"
-                    echo -e "  ${YELLOW}iptables -I INPUT -s $target_ip -j DROP${RESET}"
-                fi
-                ;;
-            2)
-                if ! command -v iptables &>/dev/null; then
-                    warn "iptables not available."
-                else
-                    echo -ne "${YELLOW}Add hashlimit rate-limit for $target_ip? [y/N]: ${RESET}"
-                    read -r c
-                    if [[ "${c,,}" == "y" ]]; then
-                        # Allow up to 25 connections/min, burst 100
-                        iptables -I INPUT -s "$target_ip" \
-                            -m hashlimit \
-                            --hashlimit-name "rl_${target_ip//\./_}" \
-                            --hashlimit-above 25/min \
-                            --hashlimit-burst 100 \
-                            --hashlimit-mode srcip \
-                            -j DROP \
-                            && success "Rate-limit rule added for $target_ip (>25 conn/min → DROP)" \
-                            && log "[8.6] RATE-LIMITED via iptables hashlimit: $target_ip"
-                    else
-                        info "Cancelled."
-                    fi
-                fi
-                ;;
-            0|*) info "Cancelled." ;;
-        esac
-    fi
-
-    pause
+    bash "$diag_script"
 }
 
 # =============================================================================
@@ -1426,10 +1298,10 @@ show_menu() {
     echo -e "  ${GREEN}2${RESET})   Provider Access Watch     ${DIM}host-tamper detection + off-box alerts${RESET}"
     echo -e "  ${GREEN}3${RESET})   Host Optimization & Hard. ${DIM}profile CPU/RAM/IO → tuning advice${RESET}"
     echo ""
-    echo -e "${BOLD}  Network & Status${RESET}"
-    echo -e "  ${CYAN}4${RESET})   Nginx Extended Features   ${DIM}audit · reverse proxy · security · logs${RESET}"
+    echo -e "${BOLD}  Network, Status & Diagnostics${RESET}"
+    echo -e "  ${CYAN}4${RESET})   Nginx Extended Features   ${DIM}audit · proxy · security · bandwidth${RESET}"
     echo -e "  ${CYAN}5${RESET})   Node Status & Sync        ${DIM}ports, tmux, versions + chain tip${RESET}"
-    echo -e "  ${CYAN}6${RESET})   Top 20 Bandwidth Consumers${DIM} parse nginx logs, block/limit IP${RESET}"
+    echo -e "  ${CYAN}6${RESET})   Diagnostics & Support     ${DIM}health check · support bundle · log triage${RESET}"
     echo ""
     echo -e "${BOLD}  Maintenance${RESET}"
     echo -e "  ${YELLOW}7${RESET})   Disk Cleanup              ${DIM}tar archives + OS temp/logs + nginx dirs${RESET}"
@@ -1464,7 +1336,9 @@ main() {
             "3")   menu_host_optimization   || true ;;
             "4")   menu_nginx_extended      || true ;;
             "5")   show_node_status_sync    || true ;;
-            "6")   show_bandwidth_consumers || true ;;
+            # Key 6 changed hands on 2026-09-25: it was Top 20 Bandwidth
+            # Consumers, now inside 084 (key 4 → 5). No alias arm, as above.
+            "6")   menu_diagnostics         || true ;;
             "7")   clean_maintenance        || true ;;
             "8")   self_update              || true ;;
             "9")   backup                   || true ;;

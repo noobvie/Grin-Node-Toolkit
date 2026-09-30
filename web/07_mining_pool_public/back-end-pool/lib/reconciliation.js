@@ -82,9 +82,11 @@ async function computeReconciliation(db, wallet, forceRefresh = true) {
   const minerSpendable = db.prepare(
     `SELECT COALESCE(SUM(balance),0) AS s FROM miner_accounts WHERE grin_address NOT IN ('pool_fee','prize_pool')`
   ).get().s;
+  // tor_held (2026-09-26) counts like tor_sending: its amount is still locked, and its one send
+  // may have left the wallet — so it explains a wallet drop exactly as an in-flight send does.
   const pending = db.prepare(
     `SELECT COALESCE(SUM(amount),0) AS amt, COUNT(*) AS cnt FROM withdrawals
-     WHERE status IN ('tor_checking','tor_sending','retry_scheduled','slatepack_pending','finalizing')`
+     WHERE status IN ('tor_checking','tor_sending','tor_held','retry_scheduled','slatepack_pending','finalizing')`
   ).get();
 
   // Bucket detail (donation + fee → contest budget). Lifetime per-address sums —
@@ -236,16 +238,26 @@ async function computeReconciliation(db, wallet, forceRefresh = true) {
  * table. Any confirmed send that matches no pool withdrawal is an out-of-band `grin-wallet send`
  * (operator sweep, or theft) — invisible to the SQLite ledger and to the integrity invariant.
  *
- * Matching is deliberately GENEROUS (bias toward NOT flagging legit payouts as unrecorded):
- *   - slate_id exact match first (slatepack payouts store it),
- *   - else amount≈ (within amount_tol) + created/confirmed within window_days.
+ * Matching (bias toward NOT flagging legit payouts as unrecorded):
+ *   - slate_id exact match first (Slatepack/Goblin store it; a Tor row carries it once
+ *     _captureTorSlateId or the Held check found it),
+ *   - else the NET that left (amount − fee_charged) + created/confirmed within window_days.
  * Each pool withdrawal is consumed by at most one wallet tx, so N identical payouts need N rows.
- * Tor payouts DON'T store a slate_id, so amount+time is the primary path for them — that's why
- * the tolerance is loose rather than exact. Self-spends/consolidations net ~0 and are skipped.
+ * Self-spends/consolidations net ~0 and are skipped.
+ *
+ * NET, not gross (review 2026-09-26, #5): the pool sends amount − fee_charged — the flat
+ * withdrawal fee stays behind — and the wallet's entry records exactly that (debited − credited −
+ * fee). This compared the GROSS row amount at ±0.05 GRIN, which only worked while the fee was under
+ * 0.05: withdrawal_fee accepts up to 1 GRIN, and at 0.1 every Tor payout without a captured slate
+ * read as an out-of-band send — a critical alert and a pool-wide auto-freeze. A pool-built payout
+ * is exact to the nanogrin, so 1 µGRIN absorbs float rounding and a near-amount row can no longer
+ * absorb a real unrecorded send. A MANUAL row (lib/dormancy.js manualPayout) is the amount the
+ * operator TYPED, so it keeps the old human tolerance.
  */
 async function auditWalletSends(db, wallet, opts = {}) {
   const window_days = opts.window_days || 30;
-  const amount_tol = opts.amount_tol != null ? opts.amount_tol : 0.05; // GRIN
+  const amount_tol = opts.amount_tol != null ? opts.amount_tol : 0.000001; // GRIN — pool-built rows
+  const manual_tol = opts.manual_tol != null ? opts.manual_tol : 0.05;     // GRIN — hand-recorded rows
   const min_grin = opts.min_grin != null ? opts.min_grin : 0.001;      // ignore dust/self-spends
   if (!wallet || typeof wallet.getTransactions !== 'function') {
     return { reachable: false, matched: 0, unrecorded: [], total_unrecorded: 0 };
@@ -284,12 +296,19 @@ async function auditWalletSends(db, wallet, opts = {}) {
   }
 
   // Candidate pool withdrawals: any row whose send was actually attempted, within the window.
+  // tor_held is exactly such a row — its one send has an unknown outcome and may have landed.
+  // tor_failed is NOT (2026-09-26): since the one-attempt change a Tor row is failed only on wallet
+  // proof that nothing was sent, and its balance is returned. A confirmed send whose only match is
+  // such a row — say a forced refund whose unconfirmed tx later mined — paid a miner twice, and
+  // counting it as "recorded" hid exactly that.
   const rows = db.prepare(`
-    SELECT id, amount, fee, slate_id, created_at, confirmed_at, status FROM withdrawals
-    WHERE status IN ('confirmed','tor_sending','tor_failed','cancelled','slatepack_pending','finalizing')
+    SELECT id, amount, fee, fee_charged, method, slate_id, created_at, confirmed_at, status FROM withdrawals
+    WHERE status IN ('confirmed','tor_sending','tor_held','cancelled','slatepack_pending','finalizing')
       AND (created_at >= ? OR COALESCE(confirmed_at,0) >= ?)
   `).all(cutoff, cutoff);
   const consumed = new Set();
+  const netOf = (r) => Number(r.amount) - (Number(r.fee_charged) || 0);
+  const tolOf = (r) => (r.method === 'manual' ? manual_tol : amount_tol);
 
   const matchOne = (send) => {
     // 1) slate_id exact (slatepack).
@@ -297,11 +316,11 @@ async function auditWalletSends(db, wallet, opts = {}) {
       const bySlate = rows.find((r) => !consumed.has(r.id) && r.slate_id && r.slate_id === send.slate_id);
       if (bySlate) { consumed.add(bySlate.id); return true; }
     }
-    // 2) amount within tolerance, nearest in time. Generous ±window on either side.
+    // 2) the row's NET within its tolerance, nearest in time. Generous ±window on either side.
     let best = null, bestDt = Infinity;
     for (const r of rows) {
       if (consumed.has(r.id)) continue;
-      if (Math.abs(r.amount - send.amount) > amount_tol) continue;
+      if (Math.abs(netOf(r) - send.amount) > tolOf(r)) continue;
       const rt = r.confirmed_at || r.created_at || send.when;
       const dt = Math.abs(rt - send.when);
       if (dt < bestDt) { best = r; bestDt = dt; }

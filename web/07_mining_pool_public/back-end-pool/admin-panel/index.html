@@ -44,6 +44,13 @@
         <div class="kpi-label">Pending Withdrawals</div>
         <div class="kpi-value" id="kpi-pending">—</div>
       </div>
+      <!-- Donor names + banners waiting for review (design §18.6) — the moderation inbox. -->
+      <div class="kpi-card">
+        <div class="kpi-ico">🏷</div>
+        <div class="kpi-label">Donor Requests <span style="font-weight:400;">(to review)</span></div>
+        <div class="kpi-value" id="kpi-donor-requests">—</div>
+        <a href="donors.html" style="font-size:.78rem;">Review on Donors →</a>
+      </div>
     </div>
 
     <!-- 30-day pool hashrate -->
@@ -123,7 +130,9 @@ function shortAddr(a) {
 const STATUS_BADGE = {
   tor_checking:      '<span class="badge badge-warn">Checking (Tor)</span>',
   tor_sending:       '<span class="badge badge-warn">Sending</span>',
-  retry_scheduled:   '<span class="badge badge-warn">Retry scheduled</span>',
+  tor_held:          '<span class="badge badge-warn">Held</span>',
+  // LEGACY since 2026-09-26 (no new row; migrated on the scheduler's first pass).
+  retry_scheduled:   '<span class="badge badge-warn">Legacy retry</span>',
   slatepack_pending: '<span class="badge badge-warn">Awaiting slate</span>',
   finalizing:        '<span class="badge badge-warn">Settling</span>',
   confirmed:         '<span class="badge badge-ok">Paid</span>',
@@ -142,6 +151,7 @@ async function loadAdminDashboard() {
     document.getElementById('kpi-hashrate').textContent = fmtHashrate(d.pool_hashrate_gps);
     document.getElementById('kpi-unclaimed').textContent = fmtGrin(d.unclaimed_balance);
     document.getElementById('kpi-pending').textContent  = d.pending_withdrawals ?? '—';
+    document.getElementById('kpi-donor-requests').textContent = d.pending_donor_requests ?? '—';
   } catch (e) {}
 
   loadHashrateChart();

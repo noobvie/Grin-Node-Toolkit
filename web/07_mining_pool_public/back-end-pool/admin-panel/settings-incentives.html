@@ -29,25 +29,21 @@
 
         <div class="form-section">
           <h3 class="section-title">Prize Pool Funding</h3>
-          <div class="form-row">
-            <div class="form-group">
-              <label for="prize_fee_cut_percent">Fee cut into prize pool (%)</label>
-              <input type="number" id="prize_fee_cut_percent" name="prize_fee_cut_percent" min="0" max="100" step="1" value="0">
-              <div class="helper-text">% of the collected pool fee diverted to the prize pool.</div>
-            </div>
-            <div class="checkbox-group" style="align-self:end;padding-bottom:.75rem;">
-              <input type="checkbox" id="allow_miner_donations" name="allow_miner_donations">
-              <label for="allow_miner_donations">Allow miner donations (<code>donateN</code> worker tag)</label>
-            </div>
-          </div>
-          <div class="helper-text">
-            Miners donate N% of their payout by naming a worker <code>donate10</code> (10%) or
-            <code>rig01-donate10</code>. N is clamped 0–100; <code>donate0</code> opts out.
-          </div>
           <div class="form-group">
-            <label for="donation_address">Public donation address (Slatepack)</label>
-            <input type="text" id="donation_address" name="donation_address" placeholder="grin1… (your pool donation receiving address)">
-            <div class="helper-text">Shown on the fortune board so anyone can donate. Reflect received donations into the prize pool with a manual top-up above.</div>
+            <label for="prize_fee_cut_percent">Fee cut into prize pool (%)</label>
+            <input type="number" id="prize_fee_cut_percent" name="prize_fee_cut_percent" min="0" max="100" step="1" value="0">
+            <div class="helper-text">% of the collected pool fee diverted to the prize pool.</div>
+          </div>
+          <!-- allow_miner_donations + donation_address MOVED to donors.html (design §16.8) on
+               2026-09-21: they sit beside the donor list and the name/ranking settings, which is
+               where an operator adjusting donations actually is. They must not be duplicated
+               here — two forms saving the same keys is how one page silently overwrites the
+               other's edit. -->
+          <div class="helper-text">
+            Miner donations (the <code>donateN</code> worker tag) and the public donation address
+            are configured on <a href="donors.html">Dashboard → Donors</a>, beside the donor wall's
+            names and ranking. Reflect donations received at that address into the prize pool
+            with a manual top-up below.
           </div>
           <div class="form-section" style="background:rgba(0,0,0,.03);">
             <div class="helper-text">

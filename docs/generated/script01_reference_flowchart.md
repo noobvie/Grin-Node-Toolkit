@@ -3,7 +3,7 @@
 ╚══════════════════════════════════════════════════════════════════════════╝
 
 > **Covers code as of:** 2026-07-01 · **Last verified:** never systematically verified
-> **Product code last changed:** 2026-08-18 — `scripts/01_build_new_grin_node.sh`, `scripts/lib/01_lib_source_build.sh`
+> **Product code last changed:** 2026-09-25 — `scripts/lib/01_lib_source_build.sh` + new `scripts/patches/grin/` (key G offers toolkit grin patches after checkout; not described here); 2026-08-18 — `scripts/01_build_new_grin_node.sh`, `scripts/lib/01_lib_source_build.sh`
 
                                     │
                     ┌───────────────▼───────────────┐

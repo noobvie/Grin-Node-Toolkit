@@ -140,7 +140,7 @@
       <section class="panel">
         <span class="screws"></span>
         <h2 class="panel-title"><span class="tag">N-01</span> Global routing
-          <span class="nm-info" tabindex="0">i<span class="tip"><b>Privacy.</b> Country is the finest location this map holds — <b>no coordinate, city or IP is ever resolved or stored</b>. Miners show as a <b>shaded country</b>, not a point, so nothing implies a spot inside it, and countries with too few miners to name are merged into an unlabelled bucket with no position at all. Gateway markers sit on the country centroid and show live edge status.</span></span>
+          <span class="nm-info" tabindex="0">i<span class="tip"><b>Privacy.</b> Country is the finest location this map holds — <b>no coordinate, city or IP is ever resolved or stored</b>. Miners show as a <b>shaded country</b>, not a point, so nothing implies a spot inside it, and countries with too few miners to name are merged into an unlabelled bucket with no position at all. Gateway markers are the pool's own public servers (their hostnames are on the connect page): each sits where the operator placed it, or on the country centroid if unplaced, and shows live edge status.</span></span>
           <!-- The panel codes (N-01…N-04) were added 2026-07-26. Every other page uses
                .tag for the panel's code — this page was using the same chip for flavour
                ("☢ ORTHO") and for a timeframe ("30d"), so the one visual token meant three
@@ -196,20 +196,20 @@
         </section>
         <section class="panel">
           <span class="screws"></span>
-          <h2 class="panel-title"><span class="tag">N-04</span> Grin nodes by country <span class="right">30d · top 10 · <a class="tlink" href="https://world.grin.money/" target="_blank" rel="noopener">see details ↗</a></span></h2>
+          <h2 class="panel-title"><span class="tag">N-04</span> Grin nodes by country · as seen by this pool <span class="right">30d · top 10 · <a class="tlink" href="https://world.grin.money/" target="_blank" rel="noopener">see details ↗</a></span></h2>
           <div class="panel-body">
             <div class="nm-donut-wrap"><svg class="nm-donut" id="nm-donut-nodes" viewBox="0 0 200 200" role="img" aria-label="Grin node distribution by country"></svg><div class="nm-dlegend" id="nm-legend-nodes"></div></div>
-            <p class="nm-chart-note" id="nm-nodes-note">Distinct <b>Grin nodes</b> this pool's node has handshaked with over the last 30 days, by country.</p>
+            <p class="nm-chart-note" id="nm-nodes-note">Distinct <b>Grin nodes</b> this pool's node has handshaked with over the last 30 days, by country. Other maps count from their own nodes, so their totals and ranking differ.</p>
           </div>
         </section>
       </div>
 
-      <!-- stats placard (reactor.css .placard) -->
-      <div class="placard">
+      <!-- stats placard (reactor.css .placard.figures) -->
+      <div class="placard figures">
         <span><i>Miners online</i><b id="nm-s-miners">—</b></span>
-        <span><i>Gateways up</i><b id="nm-s-gw">—</b></span>
-        <span><i>Countries</i><b id="nm-s-reg">—</b></span>
-        <span><i>Grin nodes · 30d</i><b id="nm-s-nodes">—</b></span>
+        <span class="tone-ok"><i>Gateways up</i><b id="nm-s-gw">—</b></span>
+        <span class="tone-info"><i>Countries</i><b id="nm-s-reg">—</b></span>
+        <span class="tone-gold"><i>Grin nodes · 30d</i><b id="nm-s-nodes">—</b></span>
       </div>
     </div>
   </main>

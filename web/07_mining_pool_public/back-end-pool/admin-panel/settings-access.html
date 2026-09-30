@@ -119,10 +119,12 @@
           <div class="helper-text">
             Controls the two feeds behind <code>/network-map.html</code>
             (<code>/api/pool/topology</code> and <code>/api/network/peers</code>).
-            Neither ever returns an IP address, and no coordinate is ever resolved: a miner or
-            gateway is located to its <strong>country only</strong>, drawn as the filled country
-            itself, with the marker on that country's exact centroid — so the shape states
-            exactly the precision we hold. Together they still publish <strong>which countries
+            Neither ever returns an IP address, and no coordinate is ever resolved: a miner is
+            located to its <strong>country only</strong>, drawn as the filled country itself,
+            with the marker on that country's exact centroid — so the shape states exactly the
+            precision we hold. (A <em>gateway</em> marker is different: it is your own public
+            server, pinned where you placed it on the Regions page, or on the country centroid
+            if you left that blank.) Together they still publish <strong>which countries
             mine here and which countries this node peers with</strong>. On by default. While
             off, both endpoints return 404 and the page shows an empty globe with a notice that
             the pool has not published its network map (there is no sample data).

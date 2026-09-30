@@ -268,6 +268,12 @@ class BlockManager {
       const blocks7d = this.db.prepare(
         "SELECT COUNT(*) as count FROM blocks WHERE status != 'orphaned' AND created_at > unixepoch() - 7 * 86400"
       ).get();
+      // Orphans FOUND in the last 24h — the homepage Integrity lamp's window. Same predicate as
+      // AlertMonitor.checkOrphanedBlocks, so the lamp and the operator alert agree. The lamp
+      // used to scan only the newest 8 blocks, which on a slow pool kept one orphan lit for weeks.
+      const orphans24h = this.db.prepare(
+        "SELECT COUNT(*) as count FROM blocks WHERE status = 'orphaned' AND found_at > unixepoch() - 86400"
+      ).get();
 
       return {
         total_blocks_found: totalBlocks.count,
@@ -277,7 +283,8 @@ class BlockManager {
         immature_blocks: immatureCount.count,
         immature_reward: immatureReward.total,
         blocks_24h: blocks24h.count,
-        blocks_7d: blocks7d.count
+        blocks_7d: blocks7d.count,
+        orphans_24h: orphans24h.count
       };
     } catch (err) {
       console.error(`Error fetching pool stats: ${err.message}`);
@@ -289,7 +296,9 @@ class BlockManager {
         immature_blocks: 0,
         immature_reward: 0,
         blocks_24h: 0,
-        blocks_7d: 0
+        blocks_7d: 0,
+        // null, not 0: a failed read must not light the lamp green ("no orphans").
+        orphans_24h: null
       };
     }
   }

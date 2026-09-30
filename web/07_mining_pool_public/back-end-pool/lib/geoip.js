@@ -7,7 +7,10 @@
 // the 2-letter country code + a display name — no city, no coordinates, no IP.
 //
 // Map positions therefore carry NO information beyond the country, and the two helpers
-// below say which is which. countryCentroid() is for AGGREGATE markers (hub, gateway,
+// below say which is which. (The one marker that can carry more is a GATEWAY with an
+// operator-declared lat/lng on its pool_locations row — that is the pool's own public server,
+// typed in by the operator, and index.js uses it instead of calling in here.)
+// countryCentroid() is for AGGREGATE markers (hub, gateway without a declared position,
 // miners-of-a-country): the exact centroid, because the country is published in the same
 // payload — scattering the point would hide nothing it doesn't already say, and could only
 // land the marker in a neighbouring country. placeInCountry() is for the one layer that
@@ -46,15 +49,26 @@ function lookupCountry(ip) {
     const r = lib.lookup(String(ip).trim());
     if (!r || !r.country) return null;
     const cc = String(r.country).toUpperCase();
-    const c = COUNTRIES[cc];
-    return { cc, name: c ? c.n : cc };
+    return { cc, name: countryName(cc) };
   } catch (_) { return null; }
 }
 
-// Country display name for a code (falls back to the code itself).
+// Country display name for a code: our table first (its short forms — 'Turkey', 'Hong Kong'),
+// then the runtime's ICU region names, so a country we hold no position for still reads
+// "Belarus" rather than "BY" (it only lacks a globe dot). The bare code is the last resort.
+let _regionNames;
+try { _regionNames = new Intl.DisplayNames(['en'], { type: 'region' }); } catch (_) { _regionNames = null; }
 function countryName(cc) {
-  const c = COUNTRIES[String(cc || '').toUpperCase()];
-  return c ? c.n : String(cc || '').toUpperCase();
+  const code = String(cc || '').toUpperCase();
+  const c = COUNTRIES[code];
+  if (c) return c.n;
+  if (_regionNames && /^[A-Z]{2}$/.test(code)) {
+    try {
+      const n = _regionNames.of(code);
+      if (n && n !== code && n !== 'Unknown Region') return n;   // ICU's answer for an unassigned code
+    } catch (_) { /* unknown code */ }
+  }
+  return code;
 }
 
 // Exact country centroid — { lat, lng }, no jitter. This is the honest position for any
@@ -111,60 +125,109 @@ function placeInCountry(cc, key = '') {
 const DEFAULT_SPREAD = 1.5;
 
 // cc → { n: name, lat, lng, s?: scatter half-extent in degrees, sized to the country }.
-// Approximate population/land centroids — plenty for a country-level marker.
+// Approximate population/land centroids — plenty for a country-level marker. A country
+// missing here gets a name (countryName falls back to ICU) but no globe dots, so add any code
+// the live /api/network/peers feed shows without one. Keep it sorted.
 const COUNTRIES = {
   AE: { n: 'United Arab Emirates', lat: 24.0, lng: 54.0, s: 1 },
+  AL: { n: 'Albania', lat: 41.1, lng: 20.0, s: 0.6 },
+  AM: { n: 'Armenia', lat: 40.2, lng: 44.9, s: 0.5 },
   AR: { n: 'Argentina', lat: -35, lng: -64, s: 7 },
   AT: { n: 'Austria', lat: 47.6, lng: 14.1, s: 1.5 },
   AU: { n: 'Australia', lat: -25, lng: 134, s: 8 },
+  AZ: { n: 'Azerbaijan', lat: 40.3, lng: 47.7, s: 1 },
+  BA: { n: 'Bosnia and Herzegovina', lat: 44.2, lng: 17.8, s: 0.8 },
   BD: { n: 'Bangladesh', lat: 23.7, lng: 90.4, s: 1.2 },
   BE: { n: 'Belgium', lat: 50.6, lng: 4.6, s: 0.7 },
   BG: { n: 'Bulgaria', lat: 42.7, lng: 25.3, s: 1.5 },
+  BH: { n: 'Bahrain', lat: 26.07, lng: 50.55, s: 0.08 },
   BR: { n: 'Brazil', lat: -10, lng: -52, s: 9 },
+  BY: { n: 'Belarus', lat: 53.7, lng: 28.0, s: 2 },
   CA: { n: 'Canada', lat: 58, lng: -100, s: 10 },
   CH: { n: 'Switzerland', lat: 46.8, lng: 8.2, s: 0.8 },
   CL: { n: 'Chile', lat: -35, lng: -71, s: 6 },
   CN: { n: 'China', lat: 35, lng: 104, s: 8 },
   CO: { n: 'Colombia', lat: 4.6, lng: -74, s: 2.5 },
+  CR: { n: 'Costa Rica', lat: 9.9, lng: -84.1, s: 0.6 },
+  CY: { n: 'Cyprus', lat: 35.0, lng: 33.2, s: 0.3 },
   CZ: { n: 'Czechia', lat: 49.8, lng: 15.5, s: 1.5 },
   DE: { n: 'Germany', lat: 51, lng: 10, s: 3 },
   DK: { n: 'Denmark', lat: 56, lng: 9.5, s: 0.8 },
+  DO: { n: 'Dominican Republic', lat: 18.8, lng: -70.3, s: 0.6 },
+  DZ: { n: 'Algeria', lat: 34.5, lng: 3.0, s: 2 },
+  EC: { n: 'Ecuador', lat: -1.5, lng: -78.4, s: 1 },
+  EE: { n: 'Estonia', lat: 58.7, lng: 25.5, s: 0.8 },
   EG: { n: 'Egypt', lat: 26.8, lng: 30.8, s: 2.5 },
   ES: { n: 'Spain', lat: 40, lng: -4, s: 4 },
   FI: { n: 'Finland', lat: 64, lng: 26, s: 5 },
   FR: { n: 'France', lat: 47, lng: 2, s: 4 },
   GB: { n: 'United Kingdom', lat: 54, lng: -2, s: 4 },
+  GE: { n: 'Georgia', lat: 42.2, lng: 43.5, s: 0.8 },
   GR: { n: 'Greece', lat: 39, lng: 22, s: 1.5 },
+  GT: { n: 'Guatemala', lat: 15.6, lng: -90.3, s: 0.8 },
   HK: { n: 'Hong Kong', lat: 22.3, lng: 114.2, s: 0.3 },
+  HR: { n: 'Croatia', lat: 45.3, lng: 16.0, s: 0.6 },
   HU: { n: 'Hungary', lat: 47.2, lng: 19.5, s: 1.5 },
   ID: { n: 'Indonesia', lat: -2, lng: 118, s: 8 },
   IE: { n: 'Ireland', lat: 53.2, lng: -8, s: 1 },
   IL: { n: 'Israel', lat: 31.5, lng: 34.9, s: 0.6 },
   IN: { n: 'India', lat: 22, lng: 79, s: 7 },
   IR: { n: 'Iran', lat: 32, lng: 53, s: 5 },
+  IS: { n: 'Iceland', lat: 64.9, lng: -18.6, s: 1.5 },
   IT: { n: 'Italy', lat: 42.8, lng: 12.8, s: 4 },
+  JO: { n: 'Jordan', lat: 31.2, lng: 36.5, s: 0.7 },
   JP: { n: 'Japan', lat: 36, lng: 138, s: 3 },
+  KE: { n: 'Kenya', lat: 0.2, lng: 37.9, s: 2 },
+  KG: { n: 'Kyrgyzstan', lat: 41.4, lng: 74.6, s: 1.2 },
   KR: { n: 'South Korea', lat: 36.5, lng: 128, s: 1.2 },
+  KW: { n: 'Kuwait', lat: 29.3, lng: 47.6, s: 0.3 },
   KZ: { n: 'Kazakhstan', lat: 48, lng: 68, s: 7 },
+  LB: { n: 'Lebanon', lat: 33.9, lng: 35.8, s: 0.25 },
+  LI: { n: 'Liechtenstein', lat: 47.15, lng: 9.55, s: 0.05 },
+  LK: { n: 'Sri Lanka', lat: 7.8, lng: 80.7, s: 0.6 },
+  LT: { n: 'Lithuania', lat: 55.3, lng: 23.9, s: 0.9 },
+  LU: { n: 'Luxembourg', lat: 49.75, lng: 6.1, s: 0.12 },
+  LV: { n: 'Latvia', lat: 56.9, lng: 24.6, s: 0.9 },
+  MA: { n: 'Morocco', lat: 32.0, lng: -6.5, s: 1.5 },
+  MC: { n: 'Monaco', lat: 43.74, lng: 7.42, s: 0.01 },
+  MD: { n: 'Moldova', lat: 47.2, lng: 28.5, s: 0.6 },
+  MK: { n: 'North Macedonia', lat: 41.6, lng: 21.7, s: 0.5 },
+  MN: { n: 'Mongolia', lat: 47.0, lng: 104.0, s: 4 },
+  MT: { n: 'Malta', lat: 35.9, lng: 14.4, s: 0.05 },
   MX: { n: 'Mexico', lat: 23, lng: -102, s: 5 },
   MY: { n: 'Malaysia', lat: 4, lng: 102, s: 4 },
+  NG: { n: 'Nigeria', lat: 9.0, lng: 8.0, s: 2.5 },
   NL: { n: 'Netherlands', lat: 52.2, lng: 5.3, s: 2 },
   NO: { n: 'Norway', lat: 62, lng: 10, s: 5 },
+  NP: { n: 'Nepal', lat: 28.2, lng: 84.1, s: 1 },
   NZ: { n: 'New Zealand', lat: -41, lng: 173, s: 3 },
+  PA: { n: 'Panama', lat: 8.6, lng: -80.1, s: 0.5 },
+  PE: { n: 'Peru', lat: -9.5, lng: -75.0, s: 2.5 },
   PH: { n: 'Philippines', lat: 12.9, lng: 122, s: 4 },
+  PK: { n: 'Pakistan', lat: 30.0, lng: 70.0, s: 3 },
   PL: { n: 'Poland', lat: 52, lng: 19, s: 3 },
+  PR: { n: 'Puerto Rico', lat: 18.22, lng: -66.5, s: 0.25 },
   PT: { n: 'Portugal', lat: 39.6, lng: -8, s: 1.2 },
+  QA: { n: 'Qatar', lat: 25.3, lng: 51.2, s: 0.25 },
   RO: { n: 'Romania', lat: 45.9, lng: 25, s: 1.8 },
   RS: { n: 'Serbia', lat: 44, lng: 21, s: 1 },
   RU: { n: 'Russia', lat: 60, lng: 90, s: 12 },
+  RW: { n: 'Rwanda', lat: -2.0, lng: 29.9, s: 0.35 },
   SA: { n: 'Saudi Arabia', lat: 24, lng: 45, s: 5 },
   SE: { n: 'Sweden', lat: 62, lng: 15, s: 5 },
   SG: { n: 'Singapore', lat: 1.35, lng: 103.82, s: 0.2 },
+  SI: { n: 'Slovenia', lat: 46.1, lng: 14.8, s: 0.4 },
+  SK: { n: 'Slovakia', lat: 48.7, lng: 19.5, s: 0.9 },
   TH: { n: 'Thailand', lat: 15, lng: 101, s: 4 },
+  TN: { n: 'Tunisia', lat: 34.0, lng: 9.5, s: 1 },
   TR: { n: 'Turkey', lat: 39, lng: 35, s: 4 },
+  TT: { n: 'Trinidad and Tobago', lat: 10.45, lng: -61.25, s: 0.15 },
   TW: { n: 'Taiwan', lat: 24, lng: 121, s: 1 },
   UA: { n: 'Ukraine', lat: 49, lng: 32, s: 4 },
   US: { n: 'United States', lat: 39, lng: -98, s: 9 },
+  UY: { n: 'Uruguay', lat: -32.8, lng: -56.0, s: 1 },
+  UZ: { n: 'Uzbekistan', lat: 41.4, lng: 64.6, s: 2.5 },
+  VE: { n: 'Venezuela', lat: 7.5, lng: -66.5, s: 2.5 },
   VN: { n: 'Vietnam', lat: 16, lng: 108, s: 4 },
   ZA: { n: 'South Africa', lat: -29, lng: 24, s: 5 }
 };

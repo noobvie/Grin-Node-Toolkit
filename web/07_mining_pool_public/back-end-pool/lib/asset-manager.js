@@ -202,3 +202,6 @@ module.exports = AssetManager;
 // at all and derived the stored extension from the client-declared MIME — audit §J10-1.
 module.exports.detectImage = detectImage;
 module.exports.WEBP_SNIFFER = WEBP_SNIFFER;
+// The binary signatures alone, for lib/donor-profiles.js (design §18.5): a donor banner must be
+// PNG/JPEG/GIF, and detectImage() would also hand back 'svg' for an XML head.
+module.exports.SNIFFERS = SNIFFERS;

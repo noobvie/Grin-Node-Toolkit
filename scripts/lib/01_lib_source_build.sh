@@ -17,9 +17,16 @@
 #                              (all-numeric keys: 1 build, 2 install, 3 use for
 #                              this session's build, 4 roll back, 5 purge, 0 back)
 #
+#   TOOLKIT PATCHES
+#     scripts/patches/grin/*.patch are offered after the checkout ([Y/n]) and
+#     applied in name order, all-or-nothing (_gsb_apply_patches). They are
+#     workarounds carried until upstream ships a fix — README.md in that dir says
+#     which ref each targets and why. A patched build is named ...-tkp<N>-<sha>
+#     and its .info lists every patch with its sha256.
+#
 #   ARTIFACTS + STATE
 #     /opt/grin/src/grin                         git checkout (kept — fast rebuilds)
-#     /opt/grin/bin/grin-<ver>-<ref>-<sha>       built binaries, never auto-deleted
+#     /opt/grin/bin/grin-<ver>-<ref>[-tkp<N>]-<sha>  built binaries, never auto-deleted
 #     /opt/grin/bin/grin-<ver>-replaced-<sha8>   archived copy of a binary that was
 #                                                overwritten (usually the release)
 #     /opt/grin/bin/grin-<...>.info              provenance sidecar for each of the above
@@ -57,9 +64,15 @@ GSB_REPO="${GSB_REPO:-https://github.com/mimblewimble/grin.git}"
 GSB_SRC_DIR="${GSB_SRC_DIR:-/opt/grin/src/grin}"
 GSB_BIN_DIR="${GSB_BIN_DIR:-/opt/grin/bin}"
 GSB_DEFAULT_REF="${GSB_DEFAULT_REF:-staging}"
+# Toolkit-carried grin patches (scripts/patches/grin/*.patch) — resolved from this
+# file's own location at source time, so it works wherever the toolkit is cloned.
+GSB_PATCH_DIR="${GSB_PATCH_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." 2>/dev/null && pwd)/patches/grin}"
 
 # Last artifact produced/selected in this session (path to a grin binary).
 GSB_ARTIFACT=""
+
+# Basenames of the toolkit patches applied to the current checkout (reset per build).
+GSB_APPLIED_PATCHES=()
 
 # Filled by _gsb_collect_instances.
 GSB_INST_DIRS=()
@@ -266,8 +279,11 @@ _gsb_fetch_source() {
             || { error "git clone failed. Check internet access."; return 1; }
     fi
 
-    # Discard local modifications so a checkout can never fail on a dirty tree.
+    # Discard local modifications so a checkout can never fail on a dirty tree —
+    # including the toolkit patches applied by the previous build. `clean` without
+    # -x leaves ignored paths alone, so the target/ build cache survives.
     git -C "$GSB_SRC_DIR" reset --hard --quiet HEAD 2>/dev/null || true
+    git -C "$GSB_SRC_DIR" clean -fdq 2>/dev/null || true
 
     if git -C "$GSB_SRC_DIR" rev-parse --verify -q "origin/$ref^{commit}" >/dev/null 2>&1; then
         info "Checking out branch '$ref' (tracking origin/$ref)..."
@@ -286,6 +302,68 @@ _gsb_fetch_source() {
     fi
 
     git -C "$GSB_SRC_DIR" submodule update --init --recursive --quiet 2>/dev/null || true
+    return 0
+}
+
+# -----------------------------------------------------------------------------
+# _gsb_list_patches — toolkit grin patches, one path per line, in apply order.
+# -----------------------------------------------------------------------------
+_gsb_list_patches() {
+    [[ -d "$GSB_PATCH_DIR" ]] || return 0
+    find "$GSB_PATCH_DIR" -maxdepth 1 -type f -name '*.patch' 2>/dev/null | sort || true
+}
+
+# -----------------------------------------------------------------------------
+# _gsb_apply_patches — offer the toolkit's grin patches and apply them to the
+# fresh checkout. Fills GSB_APPLIED_PATCHES. Returns 1 only when the operator
+# cancels the build.
+#
+# One patch at a time, check then apply: a series that touches the same file
+# cannot be checked in a single `git apply --check a b` (git checks every patch
+# against the ORIGINAL tree, so the second one's context never matches).
+# All-or-nothing: if any patch fails, the tree is reset so the build is either
+# the full set or plain upstream — never a half-patched binary.
+# -----------------------------------------------------------------------------
+_gsb_apply_patches() {
+    GSB_APPLIED_PATCHES=()
+    local -a patches=()
+    local p
+    while IFS= read -r p; do
+        [[ -n "$p" ]] && patches+=("$p")
+    done < <(_gsb_list_patches)
+    [[ ${#patches[@]} -eq 0 ]] && return 0
+
+    echo ""
+    echo -e "  ${BOLD}Toolkit patches available${RESET} ${DIM}($GSB_PATCH_DIR)${RESET}"
+    for p in "${patches[@]}"; do
+        echo -e "    ${CYAN}·${RESET} $(basename "$p")"
+    done
+    echo -e "  ${DIM}Workarounds carried until upstream ships a fix — see README.md there.${RESET}"
+    echo ""
+    if ! _gsb_confirm "Apply them to this build?" y; then
+        info "Building plain upstream — no toolkit patches."
+        return 0
+    fi
+
+    for p in "${patches[@]}"; do
+        if git -C "$GSB_SRC_DIR" apply --check "$p" 2>/dev/null \
+            && git -C "$GSB_SRC_DIR" apply "$p" 2>/dev/null; then
+            success "Applied $(basename "$p")"
+            GSB_APPLIED_PATCHES+=("$(basename "$p")")
+            continue
+        fi
+        error "$(basename "$p") does not apply to this ref."
+        info  "It was written against the ref named in $GSB_PATCH_DIR/README.md."
+        git -C "$GSB_SRC_DIR" reset --hard --quiet HEAD 2>/dev/null || true
+        git -C "$GSB_SRC_DIR" clean -fdq 2>/dev/null || true
+        GSB_APPLIED_PATCHES=()
+        warn "All toolkit patches were removed again — the tree is plain upstream."
+        if _gsb_confirm "Build WITHOUT the toolkit patches?" n; then
+            return 0
+        fi
+        info "Build cancelled."
+        return 1
+    done
     return 0
 }
 
@@ -358,7 +436,11 @@ _gsb_stash_artifact() {
     head_ref=$(git -C "$GSB_SRC_DIR" log -1 --format='%s' 2>/dev/null || true)
 
     mkdir -p "$GSB_BIN_DIR"
-    local name="grin-${ver}-$(_gsb_slug "$ref")-${sha}"
+    # A patched build must never share a name with the plain build of the same
+    # commit — the name is how option 2 and the archive tell them apart.
+    local tkp=""
+    [[ ${#GSB_APPLIED_PATCHES[@]} -gt 0 ]] && tkp="-tkp${#GSB_APPLIED_PATCHES[@]}"
+    local name="grin-${ver}-$(_gsb_slug "$ref")${tkp}-${sha}"
     local dest="$GSB_BIN_DIR/$name"
 
     install -m 755 "$built" "$dest" || { error "Could not copy binary to $dest."; return 1; }
@@ -375,6 +457,13 @@ version_str = $ver_line
 built_on    = $(uname -srm 2>/dev/null || echo unknown) / $(hostname 2>/dev/null || echo unknown)
 source_dir  = $GSB_SRC_DIR
 EOF
+    # One line per applied patch, with its hash — the provenance of what was
+    # changed on top of the commit above.
+    local p
+    for p in ${GSB_APPLIED_PATCHES[@]+"${GSB_APPLIED_PATCHES[@]}"}; do
+        echo "toolkit_patch = $p sha256:$(sha256sum "$GSB_PATCH_DIR/$p" 2>/dev/null | cut -c1-64 || echo unknown)" >> "$dest.info" \
+            || warn "Could not record $p in $dest.info."
+    done
 
     GSB_ARTIFACT="$dest"
     echo ""
@@ -645,6 +734,10 @@ _gsb_install_to_instances() {
     # for them is what stops the menu labelling a release "(source build: ...)".
     if [[ -f "$art.info" ]]; then
         art_ref=$(grep -m1 '^ref[[:space:]]*=' "$art.info" 2>/dev/null | cut -d= -f2- | tr -d ' ' || true)
+        # Flag a patched build in the menus ("source build: v5.5.1+2patches").
+        local n_patch=0
+        n_patch=$(grep -c '^toolkit_patch[[:space:]]*=' "$art.info" 2>/dev/null || true)
+        [[ -n "$art_ref" && "${n_patch:-0}" -gt 0 ]] && art_ref="${art_ref}+${n_patch}patches"
     fi
 
     for i in "${!GSB_INST_DIRS[@]}"; do
@@ -803,6 +896,10 @@ _gsb_build() {
     echo -e "    ${DIM}master${RESET}       — upstream stable branch"
     echo -e "    ${DIM}v5.5.1${RESET}       — a tag, when no linux binary was published for it"
     echo -e "    ${DIM}<commit sha>${RESET} — an exact commit"
+    if [[ -n "$(_gsb_list_patches)" ]]; then
+        echo -e "  ${DIM}Toolkit patches are offered after the checkout; the ref they target is${RESET}"
+        echo -e "  ${DIM}listed in $GSB_PATCH_DIR/README.md.${RESET}"
+    fi
     echo ""
     echo -ne "${BOLD}Ref [${GSB_DEFAULT_REF}]: ${RESET}"
     local ref=""
@@ -821,12 +918,18 @@ _gsb_build() {
     _gsb_check_resources     || return 1
     _gsb_install_build_deps  || return 1
     _gsb_ensure_rust         || return 1
+    GSB_APPLIED_PATCHES=()
     _gsb_fetch_source "$ref" || return 1
 
     local sha="" cver=""
     sha=$(git -C "$GSB_SRC_DIR" rev-parse --short HEAD 2>/dev/null || echo "?")
     cver=$(grep -m1 '^version' "$GSB_SRC_DIR/Cargo.toml" 2>/dev/null | cut -d'"' -f2 || true)
     info "At commit $sha — Cargo.toml declares version ${cver:-unknown}."
+
+    _gsb_apply_patches || return 1
+    if [[ ${#GSB_APPLIED_PATCHES[@]} -gt 0 ]]; then
+        info "Building $ref + ${#GSB_APPLIED_PATCHES[@]} toolkit patch(es)."
+    fi
 
     _gsb_compile             || return 1
     _gsb_stash_artifact "$ref" || return 1

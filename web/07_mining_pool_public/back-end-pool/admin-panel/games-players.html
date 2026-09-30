@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Games · Players | Grin Pool</title>
+  <link rel="stylesheet" href="/css/pool.css">
+  <link rel="stylesheet" href="/admin/styles.css">
+  <link rel="stylesheet" href="/admin/settings.css">
+  <style>
+    .gp-row { display: flex; flex-wrap: wrap; gap: .5rem; align-items: flex-end; }
+    .gp-row .form-group { margin: 0; }
+    .gp-row .grow { flex: 1 1 320px; }
+    .gp-head { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
+    .gp-figs { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: .5rem 1rem; margin: .8rem 0; }
+    .gp-fig { font-size: .8rem; color: var(--text-dim); }
+    .gp-fig b { display: block; font-size: 1.05rem; color: var(--text); font-family: var(--mono, monospace); }
+    .gp-actions { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: .8rem 1.2rem; }
+    .gp-actions .card { margin: 0; }
+    .gp-body { white-space: pre-wrap; overflow-wrap: anywhere; max-width: 46ch; }
+    .gp-sub { font-size: .75rem; color: var(--text-dim); }
+    #confirm-dialog .modal { max-width: 480px; }
+  </style>
+</head>
+<body>
+
+<main>
+  <div class="container">
+    <section>
+      <h2>Games · Players</h2>
+      <p class="helper-text" style="margin:0 0 .8rem;">
+        One address's games account: plays and points, sign-ins, chat and matches. Full addresses are shown here
+        only — /play/ always masks them. A <strong>mute</strong> stops chat only; a <strong>ban</strong> signs the
+        address out everywhere and blocks sign-in, games and chat. Bans, unmutes, purges, point adjustments and
+        moderator changes ask for your admin password again.
+      </p>
+      <p class="error-msg" id="gp-offline" style="display:none;"></p>
+
+      <div class="card">
+        <div class="gp-row">
+          <div class="form-group grow">
+            <label for="gp-address">Miner address</label>
+            <input type="text" id="gp-address" class="settings-skip" maxlength="80" spellcheck="false" autocomplete="off" placeholder="grin1…">
+          </div>
+          <button type="button" class="btn btn-primary btn-sm" id="gp-lookup">Look up</button>
+        </div>
+      </div>
+
+      <div class="tabs" id="gp-lists">
+        <button class="tab-btn" data-filter="muted">Muted now</button>
+        <button class="tab-btn" data-filter="banned">Banned now</button>
+        <button class="tab-btn" data-filter="moderators">Moderators</button>
+      </div>
+      <div class="card" style="padding:0;" id="gp-list-card" hidden>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Address</th><th id="gp-list-col">Until</th><th></th></tr></thead>
+            <tbody id="gp-list"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- ═══ One player ═══ -->
+      <div id="gp-card" hidden>
+        <div class="card">
+          <div class="gp-head" id="gp-head"></div>
+          <div class="gp-figs" id="gp-figs"></div>
+          <p class="helper-text" id="gp-note" style="margin:0;"></p>
+        </div>
+
+        <div class="gp-actions">
+          <div class="card">
+            <h3 class="sub-title" style="margin-top:0;">Chat mute</h3>
+            <div class="gp-row">
+              <div class="form-group"><label for="gp-mute-min">For</label>
+                <select id="gp-mute-min" class="settings-skip">
+                  <option value="10">10 minutes</option><option value="60" selected>1 hour</option><option value="1440">24 hours</option>
+                  <option value="10080">7 days</option><option value="43200">30 days</option>
+                </select></div>
+              <button type="button" class="btn btn-secondary btn-sm" id="gp-mute">Mute</button>
+              <button type="button" class="btn btn-outline btn-sm" id="gp-unmute">Unmute</button>
+            </div>
+            <p class="gp-sub">Your mute replaces any mute in place, shorter or longer. A moderator's never shortens yours.</p>
+          </div>
+          <div class="card">
+            <h3 class="sub-title" style="margin-top:0;">Ban</h3>
+            <div class="gp-row">
+              <div class="form-group"><label for="gp-ban-days">For</label>
+                <select id="gp-ban-days" class="settings-skip">
+                  <option value="1">1 day</option><option value="7" selected>7 days</option><option value="30">30 days</option>
+                  <option value="365">1 year</option><option value="forever">Forever</option>
+                </select></div>
+              <button type="button" class="btn btn-danger btn-sm" id="gp-ban">Ban</button>
+              <button type="button" class="btn btn-outline btn-sm" id="gp-unban">Unban</button>
+            </div>
+            <p class="gp-sub">Signs the address out on every device at once and ends a moderator appointment. Mining and payouts are not affected.</p>
+          </div>
+          <div class="card">
+            <h3 class="sub-title" style="margin-top:0;">Delete recent messages</h3>
+            <div class="gp-row">
+              <div class="form-group"><label for="gp-purge-days">From the last</label>
+                <select id="gp-purge-days" class="settings-skip"><option value="1">1 day</option><option value="7" selected>7 days</option><option value="30">30 days</option></select></div>
+              <button type="button" class="btn btn-danger btn-sm" id="gp-purge">Delete</button>
+            </div>
+            <p class="gp-sub">Every message of this address in that window, removed from every open page.</p>
+          </div>
+          <div class="card">
+            <h3 class="sub-title" style="margin-top:0;">Adjust plays or points</h3>
+            <div class="gp-row">
+              <div class="form-group"><label for="gp-adj-kind">What</label>
+                <select id="gp-adj-kind" class="settings-skip"><option value="points">Points</option><option value="plays">Plays</option></select></div>
+              <div class="form-group"><label for="gp-adj-delta">Amount (+/−)</label><input type="number" id="gp-adj-delta" class="settings-skip" step="1" style="width:7rem;"></div>
+              <div class="form-group grow"><label for="gp-adj-note">Note</label><input type="text" id="gp-adj-note" class="settings-skip" maxlength="200" autocomplete="off"></div>
+              <button type="button" class="btn btn-secondary btn-sm" id="gp-adjust">Apply</button>
+            </div>
+            <p class="gp-sub">A ledger row (admin_adjust), never GRIN. Balances cannot go below zero.</p>
+          </div>
+          <div class="card">
+            <h3 class="sub-title" style="margin-top:0;">Chat moderator</h3>
+            <p class="gp-sub" id="gp-mod-state"></p>
+            <div class="gp-row">
+              <button type="button" class="btn btn-secondary btn-sm" id="gp-mod-add">Appoint as moderator</button>
+              <button type="button" class="btn btn-outline btn-sm" id="gp-mod-remove">Remove as moderator</button>
+            </div>
+            <p class="gp-sub">What moderators can do → <a href="games-chat.html">Chat &amp; moderation</a>.</p>
+          </div>
+          <div class="card">
+            <h3 class="sub-title" style="margin-top:0;">Nickname</h3>
+            <p class="gp-sub" id="gp-nick-state"></p>
+            <p class="gp-sub">Review, approve and remove nicknames → <a href="games-names.html">Nicknames</a>. A ban removes the nickname.</p>
+          </div>
+        </div>
+        <p id="gp-msg" style="display:none;"></p>
+
+        <h3 class="sub-title">Recent messages</h3>
+        <div class="card" style="padding:0;"><div class="table-wrap"><table>
+          <thead><tr><th>#</th><th>Time (UTC)</th><th>Message</th><th>State</th></tr></thead>
+          <tbody id="gp-msgs"></tbody>
+        </table></div></div>
+
+        <h3 class="sub-title">Matches</h3>
+        <div class="card" style="padding:0;"><div class="table-wrap"><table>
+          <thead><tr><th>#</th><th>Game</th><th>Opponent</th><th>State</th><th>Result</th><th>Started (UTC)</th><th></th></tr></thead>
+          <tbody id="gp-matches"></tbody>
+        </table></div></div>
+
+        <h3 class="sub-title">Mining activity (last 14 UTC days)</h3>
+        <div class="card" style="padding:0;"><div class="table-wrap"><table>
+          <thead><tr><th>Day</th><th>Active minutes</th><th>Plays earned</th></tr></thead>
+          <tbody id="gp-activity"></tbody>
+        </table></div></div>
+      </div>
+    </section>
+  </div>
+</main>
+
+<div class="modal-overlay" id="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
+  <form class="modal" id="confirm-form" novalidate>
+    <h3 id="confirm-title">Confirm</h3>
+    <p class="helper-text dim" id="confirm-body" style="margin:0 0 1rem;white-space:pre-line;overflow-wrap:anywhere;"></p>
+    <div class="form-group" id="confirm-reason-group">
+      <label for="confirm-reason">Reason (optional, kept in the moderation log)</label>
+      <input type="text" id="confirm-reason" class="settings-skip" maxlength="200" autocomplete="off">
+    </div>
+    <div class="modal-actions">
+      <button type="button" class="btn btn-outline" id="confirm-cancel">Back</button>
+      <button type="submit" class="btn" id="confirm-submit">Confirm</button>
+    </div>
+  </form>
+</div>
+
+<script src="/js/auth.js"></script>
+<script src="/js/api.js"></script>
+<script src="/js/stepup.js"></script>
+<script src="/admin/admin-shell.js"></script>
+<script src="/admin/games-admin.js"></script>
+<script>
+// Games → Players (design §19.10, §19.11, D21; games Part 9). Every call goes through
+// GamesAdmin.call (the admin proxy, adminFetch — never API.*); step-up is the pool's rule.
+// Chat bodies are player text: built with GamesAdmin.el (textContent), never HTML strings.
+// Match void (§19.8, games Part 10): step-up, like ban — the pool asks for the password before
+// proxying. The answer carries the match, not the player, so the page re-reads the player.
+API.guardAdminPage();
+const G = window.GamesAdmin;
+const { el } = G;
+
+let _addr = null;
+let _p = null;
+
+function fig(label, value) {
+  const d = el('div', 'gp-fig', label);
+  d.appendChild(el('b', null, value));
+  return d;
+}
+function emptyRow(tb, cols, text) {
+  const tr = el('tr'); const td = el('td', 'empty-row', text); td.colSpan = cols; tr.appendChild(td); tb.appendChild(tr);
+}
+
+function render() {
+  const p = _p;
+  document.getElementById('gp-card').hidden = false;
+  const head = document.getElementById('gp-head');
+  G.clear(head);
+  head.appendChild(G.addrChip(p.address));
+  if (p.moderator) head.appendChild(el('span', 'badge badge-warn', 'Moderator'));
+  if (p.player && p.player.banned) head.appendChild(el('span', 'badge badge-error', p.player.banned_until >= 253402300799 ? 'Banned forever' : 'Banned until ' + G.fmtUtc(p.player.banned_until)));
+  if (p.player && p.player.muted) head.appendChild(el('span', 'badge badge-warn', 'Muted until ' + G.fmtUtc(p.player.muted_until)));
+  if (!p.known) head.appendChild(el('span', 'badge badge-dim', 'Never seen by the games'));
+
+  const figs = document.getElementById('gp-figs');
+  G.clear(figs);
+  const pl = p.player;
+  figs.appendChild(fig('Plays', pl ? pl.plays : 0));
+  figs.appendChild(fig('Points', pl ? pl.points : 0));
+  figs.appendChild(fig('Signed in now (IP / password)', p.sessions.ip + ' / ' + p.sessions.password));
+  figs.appendChild(fig('First seen', pl ? G.fmtUtc(pl.first_seen) : '—'));
+  figs.appendChild(fig('Last seen', pl ? G.fmtUtc(pl.last_seen) : '—'));
+  figs.appendChild(fig('Badges', pl && pl.badges.length ? pl.badges.map(b => b.label).join(', ') : '—'));
+  document.getElementById('gp-note').textContent = p.known ? '' : 'This address has never mined minutes the games synced, nor signed in. You can still mute, ban or appoint it.';
+
+  document.getElementById('gp-unmute').disabled = !(pl && pl.muted);
+  document.getElementById('gp-unban').disabled = !(pl && pl.banned);
+  document.getElementById('gp-mod-add').disabled = !!p.moderator || !!(pl && pl.banned);
+  document.getElementById('gp-mod-remove').disabled = !p.moderator;
+  document.getElementById('gp-mod-state').textContent = p.moderator
+    ? 'Moderator since ' + G.fmtUtc(p.moderator.added_at) + ' (appointed by ' + p.moderator.added_by + ')' + (p.moderator.note ? ' — ' + p.moderator.note : '') + '.'
+    : 'Not a moderator.';
+  // Nickname (design §19.16) — player text, so textContent only.
+  const nk = p.nickname || {};
+  const parts = [];
+  if (nk.live) parts.push('Shown as “' + nk.live.shown_as + '” since ' + G.fmtUtc(nk.live.decided_at) + '.');
+  if (nk.pending) parts.push('“' + nk.pending.name + '” is waiting for review (sent ' + G.fmtUtc(nk.pending.submitted_at) + ').');
+  document.getElementById('gp-nick-state').textContent = parts.length ? parts.join(' ') : 'No nickname: shown as the masked address.';
+
+  const msgs = document.getElementById('gp-msgs');
+  G.clear(msgs);
+  if (!p.messages.length) emptyRow(msgs, 4, 'No messages kept.');
+  p.messages.forEach(m => {
+    const tr = el('tr');
+    tr.appendChild(el('td', 'mono', m.id));
+    tr.appendChild(el('td', 'mono', G.fmtUtc(m.created_at)));
+    const b = el('td'); b.appendChild(el('div', 'gp-body', m.body)); tr.appendChild(b);    // player text: textContent only
+    const st = el('td', null, m.state + (m.state === 'held' && m.hold_reason ? ' (' + m.hold_reason + ')' : '') + (m.open_reports ? ' · ' + m.open_reports + ' report(s)' : ''));
+    tr.appendChild(st);
+    msgs.appendChild(tr);
+  });
+
+  const mt = document.getElementById('gp-matches');
+  G.clear(mt);
+  if (!p.matches.length) emptyRow(mt, 7, 'No matches.');
+  p.matches.forEach(m => {
+    const tr = el('tr');
+    tr.appendChild(el('td', 'mono', m.id));
+    tr.appendChild(el('td', null, m.game_id + ' · ' + m.mode + (m.rated ? ' · rated' : '')));
+    const opp = el('td');
+    if (m.opponent && G.ADDR_RE.test(m.opponent)) opp.appendChild(G.addrChip(m.opponent));
+    else opp.textContent = m.opponent && m.opponent.indexOf('bot:') === 0 ? 'Bot level ' + m.opponent.slice(4) : (m.opponent || 'open seat');
+    tr.appendChild(opp);
+    tr.appendChild(el('td', null, m.state));
+    const res = m.result ? (m.result === 'draw' ? 'Draw' : (Number(m.result.slice(4)) === m.seat ? 'Won' : 'Lost')) + (m.reason ? ' · ' + m.reason : '') : '—';
+    tr.appendChild(el('td', null, res));
+    tr.appendChild(el('td', 'mono', G.fmtUtc(m.created_at)));
+    const act = el('td');
+    if (VOIDABLE.has(m.state)) act.appendChild(G.btn('Void', 'btn-outline', () => voidMatch(m)));
+    tr.appendChild(act);
+    mt.appendChild(tr);
+  });
+
+  const ac = document.getElementById('gp-activity');
+  G.clear(ac);
+  if (!p.activity.length) emptyRow(ac, 3, 'No mining minutes synced in the last 14 days.');
+  p.activity.forEach(a => {
+    const tr = el('tr');
+    tr.appendChild(el('td', 'mono', a.day));
+    tr.appendChild(el('td', 'mono', a.minutes));
+    tr.appendChild(el('td', 'mono', a.plays_awarded));
+    ac.appendChild(tr);
+  });
+}
+
+async function lookup(address) {
+  if (!G.ADDR_RE.test(address)) { G.flash('gp-msg', 'Enter a full GRIN address.', true); return; }
+  try {
+    _p = await G.call('GET', 'players/' + address);
+    _addr = address;
+    document.getElementById('gp-address').value = address;
+    document.getElementById('gp-offline').style.display = 'none';
+    history.replaceState(null, '', 'games-players.html?address=' + encodeURIComponent(address));
+    render();
+  } catch (err) {
+    const e = document.getElementById('gp-offline');
+    e.textContent = err.message;
+    e.style.display = '';
+  }
+}
+document.getElementById('gp-lookup').addEventListener('click', () => lookup(document.getElementById('gp-address').value.trim()));
+document.getElementById('gp-address').addEventListener('keydown', e => { if (e.key === 'Enter') lookup(e.target.value.trim()); });
+
+const VOIDABLE = new Set(['active', 'seek', 'challenge', 'finished']);
+const VOID_TEXT = {
+  active: 'The game ends with no result and every seat gets its play back.',
+  seek: 'The open seek closes and its creator gets the play back.',
+  challenge: 'The challenge closes and its creator gets the play back.',
+  finished: 'The result stays on record, but the points it paid are taken back (never below 0), it leaves the daily results, and if it was rated every rating in the game is recomputed without it. Event rewards already paid are not clawed back.',
+};
+async function voidMatch(m) {
+  const ok = await G.askConfirm({ title: 'Void match #' + m.id + '?', body: VOID_TEXT[m.state] + '\nPlays and points are never GRIN.',
+    withReason: true, confirmText: 'Void it', danger: true });
+  if (!ok) return;
+  try {
+    const r = await G.call('POST', 'matches/' + m.id + '/void', ok.reason ? { reason: ok.reason } : {});
+    await lookup(_addr);
+    const v = r.voided || {};
+    G.flash('gp-msg', 'Match #' + m.id + ' voided' + (v.refunded ? '; ' + v.refunded + ' play refund(s)' : '')
+      + (v.reversed && v.reversed.length ? '; points taken back: ' + v.reversed.map(x => x.points).join(' + ') : '')
+      + (v.ratings ? '; ratings recomputed from ' + v.ratings.matches + ' rated game(s)' : '') + '.', false);
+  } catch (err) {
+    G.flash('gp-msg', err.message, true);
+  }
+}
+
+// One write: confirm (optional), call, re-render from the answer (every write returns the player view).
+async function write(rel, body, confirm, done) {
+  if (!_addr) return;
+  if (confirm) {
+    const ok = await G.askConfirm(confirm);
+    if (!ok) return;
+    if (confirm.withReason && ok.reason) body = Object.assign({}, body, { reason: ok.reason });
+  }
+  try {
+    const r = await G.call('POST', 'players/' + _addr + rel, body);
+    if (r.address) { _p = r; render(); } else { await lookup(_addr); }
+    G.flash('gp-msg', typeof done === 'function' ? done(r) : done, false);
+  } catch (err) {
+    G.flash('gp-msg', err.message, true);
+  }
+}
+
+document.getElementById('gp-mute').addEventListener('click', () => {
+  const minutes = Number(document.getElementById('gp-mute-min').value);
+  write('/mute', { minutes }, { title: 'Mute ' + G.short(_addr) + '?', body: 'They can still read and play, but cannot post or report until the mute ends.', withReason: true, confirmText: 'Mute' }, 'Muted.');
+});
+document.getElementById('gp-unmute').addEventListener('click', () => write('/unmute', {}, null, 'Unmuted.'));
+document.getElementById('gp-ban').addEventListener('click', () => {
+  const v = document.getElementById('gp-ban-days').value;
+  const body = v === 'forever' ? { forever: true } : { days: Number(v) };
+  write('/ban', body, { title: 'Ban ' + G.short(_addr) + (v === 'forever' ? ' forever' : ' for ' + v + ' day(s)') + '?',
+    body: 'Signs the address out on every device now and blocks sign-in, games and chat. Mining and payouts are not affected. If it is a moderator, the appointment ends. A nickname is removed (an unban does not bring it back).',
+    withReason: true, confirmText: 'Ban', danger: true }, r => 'Banned; ' + r.sessions_revoked + ' session(s) signed out' + (r.moderator_removed ? ', moderator appointment ended.' : '.'));
+});
+document.getElementById('gp-unban').addEventListener('click', () => write('/unban', {}, null, 'Unbanned.'));
+document.getElementById('gp-purge').addEventListener('click', () => {
+  const days = Number(document.getElementById('gp-purge-days').value);
+  write('/purge', { days }, { title: 'Delete every message of ' + G.short(_addr) + ' from the last ' + days + ' day(s)?', body: 'They disappear from every open /play/ page. Each one can still be restored from Chat & moderation while it is kept.', withReason: true, confirmText: 'Delete them', danger: true },
+    r => r.deleted + ' message(s) deleted.');
+});
+document.getElementById('gp-adjust').addEventListener('click', () => {
+  const kind = document.getElementById('gp-adj-kind').value;
+  const delta = Number(document.getElementById('gp-adj-delta').value);
+  const note = document.getElementById('gp-adj-note').value.trim();
+  if (!Number.isInteger(delta) || delta === 0) { G.flash('gp-msg', 'Enter a whole number, positive or negative, not 0.', true); return; }
+  write('/adjust', note ? { kind, delta, note } : { kind, delta },
+    { title: (delta > 0 ? 'Add ' : 'Remove ') + Math.abs(delta) + ' ' + kind + (delta > 0 ? ' to ' : ' from ') + G.short(_addr) + '?', body: 'Written to the games ledger as an admin adjustment. Points and plays are never GRIN.', withReason: false, confirmText: 'Apply' },
+    'Adjusted.').then(() => { document.getElementById('gp-adj-delta').value = ''; document.getElementById('gp-adj-note').value = ''; });
+});
+
+async function modChange(add) {
+  if (!_addr) return;
+  const ok = await G.askConfirm(add
+    ? { title: 'Appoint ' + G.short(_addr) + ' as a chat moderator?', body: 'They will be able to delete and approve chat messages and mute authors for up to 24 hours, from /play/. Every action is logged under their address.', withReason: false, confirmText: 'Appoint' }
+    : { title: 'Remove ' + G.short(_addr) + ' as a moderator?', body: 'Their next moderator request is refused. Nothing they did is undone.', withReason: false, confirmText: 'Remove', danger: true });
+  if (!ok) return;
+  try {
+    await G.call('POST', add ? 'moderators/' + _addr : 'moderators/' + _addr + '/remove', {});
+    G.flash('gp-msg', add ? 'Appointed.' : 'Removed.', false);
+  } catch (err) { G.flash('gp-msg', err.message, true); }
+  lookup(_addr);
+}
+document.getElementById('gp-mod-add').addEventListener('click', () => modChange(true));
+document.getElementById('gp-mod-remove').addEventListener('click', () => modChange(false));
+
+// ── Lists ──────────────────────────────────────────────────────────────────────────────
+document.querySelectorAll('#gp-lists .tab-btn').forEach(b => b.addEventListener('click', async () => {
+  document.querySelectorAll('#gp-lists .tab-btn').forEach(x => x.classList.toggle('active', x === b));
+  const f = b.dataset.filter;
+  const tb = document.getElementById('gp-list');
+  document.getElementById('gp-list-card').hidden = false;
+  document.getElementById('gp-list-col').textContent = f === 'moderators' ? 'Appointed' : 'Until';
+  G.clear(tb);
+  try {
+    const r = await G.call('GET', 'players?filter=' + f);
+    if (!r.players.length) emptyRow(tb, 3, { muted: 'Nobody is muted.', banned: 'Nobody is banned.', moderators: 'No moderators.' }[f]);
+    r.players.forEach(x => {
+      const tr = el('tr');
+      const a = el('td'); a.appendChild(G.addrChip(x.address)); tr.appendChild(a);
+      tr.appendChild(el('td', 'mono', f === 'moderators' ? G.fmtUtc(x.added_at) : (x.until >= 253402300799 ? 'forever' : G.fmtUtc(x.until))));
+      const o = el('td'); o.appendChild(G.btn('Open', 'btn-secondary', () => lookup(x.address))); tr.appendChild(o);
+      tb.appendChild(tr);
+    });
+  } catch (err) { emptyRow(tb, 3, err.message); }
+}));
+
+document.addEventListener('DOMContentLoaded', () => {
+  const q = new URLSearchParams(location.search).get('address');
+  if (q && G.ADDR_RE.test(q)) lookup(q);
+});
+</script>
+</body>
+</html>

@@ -41,7 +41,17 @@ CONF_DIR="/opt/grin/conf"
 BACKUP_DIR="$CONF_DIR/ssh_backups"
 SSHD_CONFIG="/etc/ssh/sshd_config"
 DROPIN_DIR="/etc/ssh/sshd_config.d"
-HARDENING_DROPIN="$DROPIN_DIR/99-grin-hardening.conf"
+# ⚠ The NUMBER matters, and it is the opposite of the usual convention.
+# sshd uses the FIRST value it obtains for a keyword, and Include expands its
+# glob in LEXICAL order — so a drop-in must sort EARLY to win, not late. The
+# original 99- name lost to Ubuntu's own /etc/ssh/sshd_config.d/50-cloud-init.conf
+# (`PasswordAuthentication yes`), which is read first: the file was written, the
+# directive was ignored, and `sshd -t` was perfectly happy about it.
+HARDENING_DROPIN="$DROPIN_DIR/00-grin-hardening.conf"
+LEGACY_DROPIN="$DROPIN_DIR/99-grin-hardening.conf"
+# Prefix used to park a conflicting directive in someone else's file so it can be
+# put back verbatim on revert. Break-glass MUST undo these too.
+DISABLED_MARK="#GRIN-DISABLED# "
 AUTH_KEYS="/root/.ssh/authorized_keys"
 POLICY_CONF="$CONF_DIR/ssh_hardening_policy.conf"
 AUTOREVERT_PID="$CONF_DIR/ssh_autorevert.pid"
@@ -130,7 +140,12 @@ _ssh_remove_managed_block() {
 
 _ssh_remove_hardening() {
     rm -f "$HARDENING_DROPIN" 2>/dev/null || true
+    # Pre-2026-09-30 installs used a 99- name that lost the precedence fight.
+    rm -f "$LEGACY_DROPIN" 2>/dev/null || true
     _ssh_remove_managed_block
+    # Anything we commented out in someone else's file is part of the change and
+    # must come back, or a rollback would leave passwords off.
+    _ssh_restore_disabled_lines || true
 }
 
 # =============================================================================
@@ -624,6 +639,143 @@ verify_key_login() {
 }
 
 # =============================================================================
+# Conflicting-directive detection and (reversible) resolution
+# =============================================================================
+# sshd keeps the FIRST value it obtains for a keyword. Include expands in
+# lexical order, so /etc/ssh/sshd_config.d/50-cloud-init.conf beats a 99- file
+# — and `sshd -t` passes, `systemctl reload` returns 0, and the directive is
+# simply ignored. Writing the file is not applying the setting.
+#
+# Rather than model sshd's precedence, these helpers LIST every place a keyword
+# is set, let the operator park the ones that are not ours, and then re-ask
+# `sshd -T` — which is the only authority on what actually took effect.
+#
+# Parking is reversible by design: the line keeps its text behind
+# $DISABLED_MARK, and _ssh_restore_disabled_lines puts it back verbatim. The
+# dead-man timer and break-glass both call that, because a password directive
+# left commented out in someone else's file would defeat the rollback.
+# =============================================================================
+
+# Every file sshd reads, in the order it reads them (main config first: the
+# Include line is at the top on Debian/Ubuntu/Rocky, which is the case that
+# matters here).
+_ssh_config_files() {
+    echo "$SSHD_CONFIG"
+    [[ -d "$DROPIN_DIR" ]] || return 0
+    local f
+    while IFS= read -r f; do
+        [[ -n "$f" ]] && echo "$f"
+    done < <(find "$DROPIN_DIR" -maxdepth 1 -name '*.conf' -type f 2>/dev/null | LC_ALL=C sort)
+}
+
+# Active (uncommented) settings of a keyword: "file:line:text" per match.
+# Lines inside a Match block are skipped — they are conditional, not the global
+# value, and treating one as the culprit would send the operator after the wrong
+# line entirely.
+_ssh_keyword_sites() {
+    local kw="$1" f
+    while IFS= read -r f; do
+        [[ -r "$f" ]] || continue
+        awk -v kw="$(tr '[:upper:]' '[:lower:]' <<<"$kw")" -v file="$f" '
+            { line=$0 }
+            tolower($1)=="match" { inmatch=1; next }
+            inmatch { next }
+            tolower($1)==kw { printf "%s:%d:%s\n", file, NR, line }
+        ' "$f" 2>/dev/null
+    done < <(_ssh_config_files)
+}
+
+# Park one line (by number) behind the marker. The text is preserved exactly.
+_ssh_disable_line() {
+    local f="$1" n="$2"
+    [[ -w "$f" ]] || { error "Not writable: $f"; return 1; }
+    cp -a "$f" "$BACKUP_DIR/$(basename "$f").$(date +%Y%m%d_%H%M%S).bak" \
+        || { error "Could not back up $f — refusing to edit it"; return 1; }
+    sed -i "${n}s|^|${DISABLED_MARK}|" "$f" \
+        || { error "Could not edit $f:$n"; return 1; }
+    log "Parked $f:$n behind $DISABLED_MARK"
+    return 0
+}
+
+# Put every parked line back, everywhere. Safe to call when there are none.
+_ssh_restore_disabled_lines() {
+    local f n=0
+    while IFS= read -r f; do
+        [[ -w "$f" ]] || continue
+        if grep -q "^${DISABLED_MARK}" "$f" 2>/dev/null; then
+            sed -i "s|^${DISABLED_MARK}||" "$f" || { error "Could not un-park lines in $f"; return 1; }
+            n=$((n + 1))
+            log "Restored parked lines in $f"
+        fi
+    done < <(_ssh_config_files)
+    [[ $n -gt 0 ]] && info "Restored original directives in $n file(s)."
+    return 0
+}
+
+# Show every setting of $1 and offer to park the ones that are not ours.
+# Returns 0 if something was changed (worth re-verifying), 1 if not.
+_ssh_resolve_conflicts() {
+    local kw="$1" sites site f n txt changed=1
+    sites="$(_ssh_keyword_sites "$kw")"
+    if [[ -z "$sites" ]]; then
+        info "No file sets $kw at all — nothing to resolve."
+        return 1
+    fi
+
+    echo ""
+    echo -e "${BOLD}Every active '$kw' setting sshd can see, in read order:${RESET}"
+    echo ""
+    while IFS= read -r site; do
+        [[ -z "$site" ]] && continue
+        f="${site%%:*}"; n="${site#*:}"; n="${n%%:*}"; txt="${site#*:*:}"
+        if [[ "$f" == "$HARDENING_DROPIN" ]]; then
+            echo -e "   ${GREEN}OURS${RESET}  $f:$n"
+            echo -e "         ${DIM}$txt${RESET}"
+        else
+            echo -e "   ${YELLOW}OTHER${RESET} $f:$n"
+            echo -e "         ${DIM}$txt${RESET}"
+        fi
+    done <<<"$sites"
+    echo ""
+    echo -e "${DIM}sshd uses the FIRST of these it reads — the main config first, then${RESET}"
+    echo -e "${DIM}$DROPIN_DIR/*.conf in filename order. Ours is named${RESET}"
+    echo -e "${DIM}$(basename "$HARDENING_DROPIN") so it sorts early, but a file in the main${RESET}"
+    echo -e "${DIM}config above the Include line still wins.${RESET}"
+    echo ""
+    echo -e "The fix is to comment the OTHER lines out. The toolkit does it"
+    echo -e "reversibly: the text is kept behind ${BOLD}${DISABLED_MARK}${RESET} and put back"
+    echo -e "whenever hardening is rolled back (timer, break-glass, or option 6)."
+    echo ""
+    if ! confirm "Comment out the OTHER '$kw' line(s) and re-check?"; then
+        info "Left them alone — nothing changed."
+        return 1
+    fi
+
+    while IFS= read -r site; do
+        [[ -z "$site" ]] && continue
+        f="${site%%:*}"; n="${site#*:}"; n="${n%%:*}"
+        [[ "$f" == "$HARDENING_DROPIN" ]] && continue
+        if _ssh_disable_line "$f" "$n"; then
+            success "Commented out $f:$n"
+            changed=0
+        fi
+    done <<<"$sites"
+
+    if [[ $changed -ne 0 ]]; then
+        error "Nothing could be changed."
+        return 1
+    fi
+    if ! sshd -t 2>/tmp/grin_sshd_err; then
+        error "sshd config is now INVALID — undoing those edits:"
+        sed 's/^/    /' /tmp/grin_sshd_err
+        _ssh_restore_disabled_lines
+        return 1
+    fi
+    _ssh_service_reload || { error "ssh reload failed after the edit."; return 1; }
+    return 0
+}
+
+# =============================================================================
 # Apply / revert the password-off hardening
 # =============================================================================
 # Build the directive list ONCE, from the policy file, so the drop-in, the
@@ -647,6 +799,9 @@ _ssh_hardening_directives() {
 
 _ssh_apply_hardening() {
     _ssh_backup_config >/dev/null
+    # A leftover 99- file from an older toolkit would sit AFTER ours and shadow
+    # nothing, but it is still a second managed file saying the same thing.
+    rm -f "$LEGACY_DROPIN" 2>/dev/null || true
     if _ssh_dropin_supported; then
         {
             echo "# Managed by Grin Node Toolkit (085_ssh_hardening.sh) — do not edit by hand."
@@ -685,17 +840,26 @@ _ssh_apply_hardening() {
 # passes either way and `systemctl reload` returns 0, so the only honest check is
 # to ask the running config what it resolved to. $1 = expected PermitRootLogin,
 # $2 = admin user ("" to skip the allow-list check).
+_SSH_FAILED_KEYS=()
+
 _ssh_verify_effective() {
     local want_rl="$1" admin="${2:-}" ok=0
     local pw rl
+    _SSH_FAILED_KEYS=()
     pw="$(_ssh_effective passwordauthentication)"
     rl="$(_ssh_effective permitrootlogin)"
 
     if [[ "$pw" == "no" ]]; then success "Effective PasswordAuthentication: no"
-    else error "Effective PasswordAuthentication: ${pw:-unknown} — the setting did NOT take"; ok=1; fi
+    else
+        error "Effective PasswordAuthentication: ${pw:-unknown} — the setting did NOT take"
+        _SSH_FAILED_KEYS+=("PasswordAuthentication"); ok=1
+    fi
 
     if [[ "$rl" == "$want_rl" ]]; then success "Effective PermitRootLogin: $rl"
-    else error "Effective PermitRootLogin: ${rl:-unknown} (wanted $want_rl) — did NOT take"; ok=1; fi
+    else
+        error "Effective PermitRootLogin: ${rl:-unknown} (wanted $want_rl) — did NOT take"
+        _SSH_FAILED_KEYS+=("PermitRootLogin"); ok=1
+    fi
 
     if [[ -n "$admin" ]]; then
         # Ask sshd what it resolves FOR THAT USER — this honours AllowUsers,
@@ -709,13 +873,65 @@ _ssh_verify_effective() {
 
     if [[ $ok -ne 0 ]]; then
         echo ""
-        warn "Your directives are in $HARDENING_DROPIN but something earlier in"
-        warn "$SSHD_CONFIG is overriding them (sshd keeps the FIRST value it reads)."
-        warn "Fix: move the 'Include /etc/ssh/sshd_config.d/*.conf' line to the TOP"
-        warn "of $SSHD_CONFIG, or delete the conflicting directive there."
+        warn "The directive IS in $HARDENING_DROPIN, but sshd kept an earlier value."
+        warn "sshd uses the FIRST value it obtains, and Include reads"
+        warn "$DROPIN_DIR/*.conf in FILENAME order — so a lower-numbered"
+        warn "file wins. On Ubuntu that is usually 50-cloud-init.conf."
+        local k
+        if [[ ${#_SSH_FAILED_KEYS[@]} -gt 0 ]]; then
+            for k in "${_SSH_FAILED_KEYS[@]}"; do
+                echo ""
+                warn "Every active '$k' line sshd can see:"
+                _ssh_keyword_sites "$k" | sed 's/^/      /'
+            done
+        fi
         return 1
     fi
     return 0
+}
+
+# Post-apply gate: verify, and when a directive did not take, show exactly which
+# file beat it and offer the reversible fix, then verify again. Loops until the
+# config is right, the operator stops, or there is nothing left to try.
+# Returns 0 only when everything resolved. $1 = expected PermitRootLogin,
+# $2 = admin user ("" to skip the per-user check).
+_ssh_postapply_gate() {
+    local want_rl="$1" admin="${2:-}" k
+    while true; do
+        if _ssh_verify_effective "$want_rl" "$admin"; then
+            return 0
+        fi
+        if [[ ${#_SSH_FAILED_KEYS[@]} -eq 0 ]]; then
+            # Failed for a reason conflict-resolution cannot fix (e.g. the user
+            # is blocked by an allow/deny rule we did not write).
+            return 1
+        fi
+        echo ""
+        echo -e "${BOLD}This is fixable${RESET} — the directive is written, but another file sets the"
+        echo -e "same keyword earlier, and sshd keeps the first value it reads."
+        echo ""
+        echo -e "  ${BOLD}f${RESET}) show the conflicting lines and comment them out (reversible)"
+        echo -e "  ${BOLD}q${RESET}) stop and roll the hardening back"
+        echo -ne "${BOLD}Choose [f/q]: ${RESET}"
+        local c
+        if ! read -r c; then
+            echo ""
+            warn "No input available — rolling back."
+            return 1
+        fi
+        [[ "${c,,}" != "f" ]] && return 1
+
+        local progressed=1
+        for k in "${_SSH_FAILED_KEYS[@]}"; do
+            if _ssh_resolve_conflicts "$k"; then progressed=0; fi
+        done
+        if [[ $progressed -ne 0 ]]; then
+            warn "Nothing was changed, so the result would be the same."
+            return 1
+        fi
+        echo ""
+        info "Re-checking what sshd resolves now ..."
+    done
 }
 
 _ssh_revert_hardening() {
@@ -739,14 +955,22 @@ _ssh_autorevert_active() {
 
 _ssh_schedule_autorevert() {
     local mins="$1"
+    # Standalone by design: this must undo the change with no help from the
+    # toolkit, so it repeats the removal inline rather than sourcing anything.
+    # It has to undo ALL THREE parts of an apply — our drop-in, the in-place
+    # marked block, and any directive we parked in another file — or the
+    # "passwords come back on their own" promise is false.
     cat > "$AUTOREVERT_SH" <<EOF
 #!/bin/bash
 sleep $((mins * 60))
-rm -f "$HARDENING_DROPIN" 2>/dev/null
+rm -f "$HARDENING_DROPIN" "$LEGACY_DROPIN" 2>/dev/null
 sed -i "/$MARK_BEGIN/,/$MARK_END/d" "$SSHD_CONFIG" 2>/dev/null
+for f in "$SSHD_CONFIG" "$DROPIN_DIR"/*.conf; do
+    [ -f "\$f" ] || continue
+    sed -i "s|^${DISABLED_MARK}||" "\$f" 2>/dev/null
+done
 if sshd -t 2>/dev/null; then
-    systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || \
-    service ssh reload 2>/dev/null || service sshd reload 2>/dev/null
+    systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || service ssh reload 2>/dev/null || service sshd reload 2>/dev/null
 fi
 rm -f "$AUTOREVERT_PID" "$AUTOREVERT_SH" 2>/dev/null
 EOF
@@ -829,8 +1053,16 @@ disable_password_auth() {
             info "Aborted — nothing changed."; pause; return 0
         fi
         if _ssh_apply_hardening; then
-            _ssh_cancel_autorevert
-            success "Password authentication DISABLED. Root login is key-only now."
+            echo ""
+            info "Checking what sshd actually resolved (not just what we wrote) ..."
+            if _ssh_postapply_gate "$(_ssh_policy_get ROOT_LOGIN || echo prohibit-password)" ""; then
+                _ssh_cancel_autorevert
+                success "Password authentication DISABLED. Login is key-only now."
+            else
+                warn "The change did not take effect — rolling it back rather than"
+                warn "leaving you in a half-applied state."
+                _ssh_revert_hardening || error "Rollback FAILED — fix $SSHD_CONFIG by hand NOW, in this session."
+            fi
         else
             error "Hardening not applied (see above). Passwords remain enabled."
         fi
@@ -848,6 +1080,14 @@ disable_password_auth() {
     fi
 
     if _ssh_apply_hardening; then
+        echo ""
+        info "Checking what sshd actually resolved (not just what we wrote) ..."
+        if ! _ssh_postapply_gate "$(_ssh_policy_get ROOT_LOGIN || echo prohibit-password)" ""; then
+            warn "The change did not take effect — rolling it back. Nothing is half-applied,"
+            warn "and no timer was armed."
+            _ssh_revert_hardening || error "Rollback FAILED — fix $SSHD_CONFIG by hand NOW, in this session."
+            pause; return 0
+        fi
         _ssh_cancel_autorevert      # clear any previous timer
         _ssh_schedule_autorevert "$mins"
         echo ""
@@ -977,6 +1217,19 @@ ssh_status() {
         printf "  ${BOLD}%-26s${RESET} %s\n" "Config method:" "drop-in ($DROPIN_DIR)"
     else
         printf "  ${BOLD}%-26s${RESET} %s\n" "Config method:" "managed block in $SSHD_CONFIG"
+    fi
+
+    # Duplicate definitions are the trap that makes a written directive silently
+    # not apply, so name them here too — this screen is the "check your work" step.
+    local dup_kw dup_n dup_txt=""
+    for dup_kw in PasswordAuthentication PermitRootLogin; do
+        dup_n="$(_ssh_keyword_sites "$dup_kw" | wc -l | tr -d ' ')"
+        [[ "${dup_n:-0}" -gt 1 ]] && dup_txt+="$dup_kw ($dup_n files) "
+    done
+    if [[ -n "$dup_txt" ]]; then
+        printf "  ${BOLD}%-26s${RESET} %b\n" "Duplicate directives:" "${YELLOW}${dup_txt}${RESET}"
+        echo -e "  ${DIM}   sshd keeps the FIRST it reads — run option 4 or the wizard to see${RESET}"
+        echo -e "  ${DIM}   which file wins and comment the loser out.${RESET}"
     fi
 
     if _ssh_autorevert_active; then
@@ -1205,6 +1458,13 @@ wizard_admin_user() {
         if [[ "$user" == "root" ]]; then
             warn "That is root — the point of this wizard is to stop using it over SSH."; continue
         fi
+        local prev
+        if prev="$(_ssh_policy_get ADMIN_USER)" && [[ " $prev " != *" $user "* ]]; then
+            echo ""
+            warn "A stored policy already names: $prev"
+            warn "Finishing this run REPLACES it with '$user'. Step 7 will ask whether"
+            warn "$prev keeps SSH access."
+        fi
         if id -u "$user" &>/dev/null; then
             info "User '$user' already exists — the wizard will adopt it, not recreate it."
             confirm "Use the existing account '$user'?" && break
@@ -1280,12 +1540,20 @@ wizard_admin_user() {
     ukeys="$uhome/.ssh/authorized_keys"
     echo -e "Keys go to ${BOLD}$ukeys${RESET} — root's own keys are left alone."
     echo ""
+    local have_keys=0
     if [[ -s "$ukeys" ]]; then
-        info "'$user' already has $(grep -cvE '^[[:space:]]*($|#)' "$ukeys" 2>/dev/null || echo 0) key(s) installed."
+        have_keys="$(grep -cvE '^[[:space:]]*($|#)' "$ukeys" 2>/dev/null || echo 0)"
+        info "'$user' already has $have_keys key(s) installed."
     fi
-    # Point the shared key-installer at this account for the duration of the call.
-    SSH_KEYS_OWNER="$user" SSH_KEYS_TARGET="$ukeys" menu_add_key || true
-    unset SSH_KEYS_OWNER SSH_KEYS_TARGET
+    # Re-running the wizard on an already-set-up account is the normal path after
+    # a rolled-back step 7, so don't force a trip through the add-key menu.
+    if [[ "${have_keys:-0}" -gt 0 ]] && confirm "Keep those and skip to the next step?"; then
+        info "Keeping the existing key(s)."
+    else
+        # Point the shared key-installer at this account for the duration of the call.
+        SSH_KEYS_OWNER="$user" SSH_KEYS_TARGET="$ukeys" menu_add_key || true
+        unset SSH_KEYS_OWNER SSH_KEYS_TARGET
+    fi
     if [[ ! -s "$ukeys" ]]; then
         error "No key was installed for '$user' — cannot continue."
         error "Nothing was changed in sshd; root access is untouched."
@@ -1392,19 +1660,31 @@ wizard_admin_user() {
     local allow="$user"
     if [[ -n "$others" ]]; then
         echo -e "${YELLOW}Other human accounts exist on this box:${RESET}"
-        local o
+        local o keyed="" keyed_n=0
         while IFS= read -r o; do
             [[ -z "$o" ]] && continue
-            local oh ok_keys="no keys"
+            local oh
             oh="$(_ssh_user_home "$o" 2>/dev/null || echo "")"
-            [[ -n "$oh" && -s "$oh/.ssh/authorized_keys" ]] && ok_keys="HAS ssh keys"
-            echo -e "   • $o   ${DIM}($ok_keys)${RESET}"
+            if [[ -n "$oh" && -s "$oh/.ssh/authorized_keys" ]]; then
+                echo -e "   • $o   ${YELLOW}HAS ssh keys — can log in today${RESET}"
+                keyed+="$o "
+                keyed_n=$((keyed_n + 1))
+            else
+                echo -e "   • $o   ${DIM}no keys — cannot log in once passwords are off anyway${RESET}"
+            fi
             others_list+="$o "
         done <<<"$others"
         echo ""
-        echo -e "An ${BOLD}AllowUsers${RESET} allow-list is the strongest form of this, but it would"
-        echo -e "lock those accounts out of SSH."
+        echo -e "An ${BOLD}AllowUsers${RESET} allow-list is the strongest form of this: SSH accepts"
+        echo -e "the listed names and refuses every other account at the door."
         echo ""
+        if [[ $keyed_n -gt 0 ]]; then
+            echo -e "${BOLD}${YELLOW}  Restricting to '$user' alone WILL lock out: $(echo "$keyed" | xargs)${RESET}"
+            echo -e "  ${DIM}Their accounts, passwords, sudo rights and keys all stay — they simply${RESET}"
+            echo -e "  ${DIM}cannot connect over SSH. Reachable again via 'sudo -u <name> -i' from${RESET}"
+            echo -e "  ${DIM}'$user', or by re-running this wizard and allowing them.${RESET}"
+            echo ""
+        fi
         if confirm "Restrict SSH to '$user' ONLY (add AllowUsers)?"; then
             allow="$user"
         elif confirm "Allow '$user' plus the accounts listed above?"; then
@@ -1444,7 +1724,7 @@ wizard_admin_user() {
     echo ""
     info "Checking what sshd actually resolved (not just what we wrote) ..."
     local eff_ok=0
-    _ssh_verify_effective "no" "$user" || eff_ok=1
+    _ssh_postapply_gate "no" "$user" || eff_ok=1
     if [[ $eff_ok -ne 0 ]]; then
         echo ""
         warn "The hardening did not fully take. Rolling it back so you are not left"

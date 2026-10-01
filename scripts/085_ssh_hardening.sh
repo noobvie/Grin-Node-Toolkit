@@ -7,9 +7,11 @@
 # only — with a guaranteed rollback / break-glass path so you can never lock
 # yourself out.
 #
-# Scope: root account only (the toolkit already runs as root on the VPS).
+# Scope: root, plus an optional non-root admin account created by the guided
+# setup (W) for the "key ▸ user ▸ sudo ▸ root" model. The toolkit itself
+# still needs root, reached with `sudo -i` once that model is in place.
 #
-# Key handling (3 methods, in order):
+# Key handling (3 alternative methods — pick one, not a sequence):
 #   1) Paste manually          — paste the public key from your laptop
 #   2) Generate on server      — ssh-keygen here; private key shown ONCE to save
 #   3) Fetch from URL          — github username, or any raw URL serving a
@@ -41,6 +43,7 @@ SSHD_CONFIG="/etc/ssh/sshd_config"
 DROPIN_DIR="/etc/ssh/sshd_config.d"
 HARDENING_DROPIN="$DROPIN_DIR/99-grin-hardening.conf"
 AUTH_KEYS="/root/.ssh/authorized_keys"
+POLICY_CONF="$CONF_DIR/ssh_hardening_policy.conf"
 AUTOREVERT_PID="$CONF_DIR/ssh_autorevert.pid"
 AUTOREVERT_SH="$CONF_DIR/ssh_autorevert.sh"
 MARK_BEGIN="# >>> grin-toolkit ssh hardening >>>"
@@ -96,6 +99,12 @@ _ssh_effective() {
     sshd -T 2>/dev/null | awk -v k="${key,,}" 'tolower($1)==k {print $2; exit}'
 }
 
+# Same, but for list-valued keywords (AllowUsers, AllowGroups): every field.
+_ssh_effective_all() {
+    local key="$1"
+    sshd -T 2>/dev/null | awk -v k="${key,,}"         'tolower($1)==k {for(i=2;i<=NF;i++) printf "%s%s", $i, (i<NF?" ":""); print ""; exit}'
+}
+
 _ssh_port() {
     local p; p="$(_ssh_effective port)"
     echo "${p:-22}"
@@ -125,17 +134,109 @@ _ssh_remove_hardening() {
 }
 
 # =============================================================================
+# Which account are we installing keys FOR?
+# Defaults to root, so every existing caller is unchanged; the admin-user wizard
+# points these at the new account for the duration of one call.
+# =============================================================================
+_ssh_user_home() {
+    local u="$1" h
+    h="$(getent passwd "$u" 2>/dev/null | cut -d: -f6)"
+    [[ -n "$h" ]] && { echo "$h"; return 0; }
+    return 1
+}
+_ssh_keys_owner() { echo "${SSH_KEYS_OWNER:-root}"; }
+_ssh_keys_file()  {
+    if [[ -n "${SSH_KEYS_TARGET:-}" ]]; then echo "$SSH_KEYS_TARGET"; else echo "$AUTH_KEYS"; fi
+}
+
+# The sudo-capable group differs by distro family: Debian/Ubuntu `sudo`,
+# Rocky/Alma `wheel`. Echo whichever exists (preferring one the box really has).
+_ssh_sudo_group() {
+    local g
+    for g in sudo wheel; do
+        getent group "$g" >/dev/null 2>&1 && { echo "$g"; return 0; }
+    done
+    return 1
+}
+
+# Read one key out of the policy file (ADMIN_USER / ROOT_LOGIN).
+_ssh_policy_get() {
+    [[ -r "$POLICY_CONF" ]] || return 1
+    local v
+    v="$(awk -F= -v k="$1" '$1==k{sub(/^[^=]*=/,""); gsub(/^"|"$/,""); print; exit}' "$POLICY_CONF" 2>/dev/null)"
+    [[ -n "$v" ]] && { echo "$v"; return 0; }
+    return 1
+}
+_ssh_policy_set() {
+    local user="$1" rootlogin="$2"
+    cat > "$POLICY_CONF" <<EOF
+# Managed by Grin Node Toolkit (085_ssh_hardening.sh).
+# Consumed by _ssh_apply_hardening to build the sshd drop-in. Editing this file
+# changes nothing until hardening is re-applied.
+ADMIN_USER=$user
+ROOT_LOGIN=$rootlogin
+EOF
+    chmod 600 "$POLICY_CONF"
+    log "Policy set: ADMIN_USER=$user ROOT_LOGIN=$rootlogin"
+}
+
+# =============================================================================
+# Why did this line fail validation?  Echoes a human explanation + the fix.
+# A bare "not a valid public key" leaves the operator with nowhere to go — and
+# the single most common paste is the FINGERPRINT that ssh-keygen prints at the
+# end of key generation, which looks key-shaped but is a hash, not a key.
+# Sets _SSH_REJECT_SAFE=0 when the line must NOT be echoed back (private key).
+# =============================================================================
+_ssh_pubkey_reject_reason() {
+    local line="$1"
+    _SSH_REJECT_SAFE=1
+    case "$line" in
+        SHA256:*|MD5:*|[0-9]*" SHA256:"*|[0-9]*" MD5:"*)
+            echo "that is the key FINGERPRINT (a hash), not the key. ssh-keygen prints it after generating — the key itself is in the .pub FILE." ;;
+        *-----BEGIN*PRIVATE*KEY*|*"PuTTY-User-Key-File"*)
+            _SSH_REJECT_SAFE=0
+            echo "that is a PRIVATE key — never paste it anywhere. The public half is the matching .pub file (PuTTY: PuTTYgen ▸ 'Public key for pasting')." ;;
+        *-----BEGIN*|*"BEGIN SSH2 PUBLIC KEY"*|*"Comment:"*)
+            echo "that is a multi-line/RFC4716 key block. Convert it first: ssh-keygen -i -f key.pub" ;;
+        ssh-*|ecdsa-*|sk-ssh-*|sk-ecdsa-*)
+            echo "the type prefix is right but the body is malformed — the paste was probably truncated or line-wrapped. A public key is ONE single line." ;;
+        AAAA*)
+            echo "the base64 body is there but the leading type word is missing — the line must start with 'ssh-ed25519 ' (or 'ssh-rsa ')." ;;
+        *)
+            echo "no recognised key type at the start of the line. It must begin with ssh-ed25519, ssh-rsa, ecdsa-sha2-* or sk-*." ;;
+    esac
+}
+
+# =============================================================================
 # Key installation (shared by all 3 add methods)
 # Reads candidate public-key lines from stdin; validates + dedupes into
 # /root/.ssh/authorized_keys.
 # =============================================================================
 _ssh_install_keys() {
-    mkdir -p /root/.ssh
-    chmod 700 /root/.ssh
-    touch "$AUTH_KEYS"
-    chmod 600 "$AUTH_KEYS"
+    local owner keyfile sshdir home
+    owner="$(_ssh_keys_owner)"
+    keyfile="$(_ssh_keys_file)"
+    sshdir="$(dirname "$keyfile")"
 
-    local installed=0 skipped=0 invalid=0 line tmp fp
+    # StrictModes (sshd default) REFUSES a key when the home dir or ~/.ssh is
+    # group/other-writable — a silent "key rejected" that looks like a bad key.
+    if home="$(_ssh_user_home "$owner")"; then
+        chmod go-w "$home" 2>/dev/null || true
+    fi
+    mkdir -p "$sshdir"   || { error "Cannot create $sshdir"; return 1; }
+    touch "$keyfile"     || { error "Cannot write $keyfile"; return 1; }
+    # Only reassign ownership for a NON-root target: /root/.ssh is already
+    # root-owned, and a blanket -R there could touch a file we did not create.
+    if [[ "$owner" != "root" ]]; then
+        chown -R "$owner:$(id -gn "$owner" 2>/dev/null || echo "$owner")" "$sshdir"             || { error "Could not chown $sshdir to $owner"; return 1; }
+    fi
+    chmod 700 "$sshdir"
+    chmod 600 "$keyfile"
+    # SELinux (Rocky/Alma): a hand-made ~/.ssh has the wrong label and sshd
+    # cannot read it. Relabel if the tooling is present.
+    command -v restorecon &>/dev/null && restorecon -R "$sshdir" 2>/dev/null || true
+
+    local installed=0 skipped=0 invalid=0 line tmp fp why
     while IFS= read -r line; do
         line="$(printf '%s' "$line" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
         [[ -z "$line" || "$line" == \#* ]] && continue
@@ -143,23 +244,36 @@ _ssh_install_keys() {
         tmp="$(mktemp)"
         printf '%s\n' "$line" > "$tmp"
         if fp="$(ssh-keygen -l -f "$tmp" 2>/dev/null)"; then
-            if grep -qxF "$line" "$AUTH_KEYS"; then
+            if grep -qxF "$line" "$keyfile"; then
                 skipped=$((skipped + 1))
                 info "Already present: $fp"
             else
-                printf '%s\n' "$line" >> "$AUTH_KEYS"
+                printf '%s\n' "$line" >> "$keyfile"
                 installed=$((installed + 1))
                 success "Installed: $fp"
             fi
         else
             invalid=$((invalid + 1))
-            warn "Not a valid public key, skipped: ${line:0:42}..."
+            why="$(_ssh_pubkey_reject_reason "$line")"
+            if [[ "${_SSH_REJECT_SAFE:-1}" -eq 1 ]]; then
+                warn "Skipped — ${line:0:28}… : $why"
+            else
+                warn "Skipped one line (not echoed) — $why"
+            fi
         fi
         rm -f "$tmp"
     done
 
     echo ""
-    info "Summary — installed: $installed, already-present: $skipped, invalid: $invalid"
+    info "Summary for ${owner} — installed: $installed, already-present: $skipped, invalid: $invalid"
+    if [[ $invalid -gt 0 && $installed -eq 0 && $skipped -eq 0 ]]; then
+        echo ""
+        echo -e "${BOLD}A valid line looks exactly like this${RESET} ${DIM}(one line, 3 fields, ~80 chars):${RESET}"
+        echo -e "  ${DIM}ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIO8k…q2Zr user@laptop${RESET}"
+        echo -e "Print yours on the laptop and copy the ${BOLD}whole line${RESET}:"
+        echo -e "  ${DIM}PowerShell : cat \$env:USERPROFILE\\.ssh\\id_ed25519.pub${RESET}"
+        echo -e "  ${DIM}Linux/macOS: cat ~/.ssh/id_ed25519.pub${RESET}"
+    fi
     [[ $installed -gt 0 || $skipped -gt 0 ]]
 }
 
@@ -168,20 +282,20 @@ _ssh_install_keys() {
 # =============================================================================
 add_key_paste() {
     clear
-    echo -e "${BOLD}${CYAN}  Add public key — paste manually${RESET}"
+    echo -e "${BOLD}${CYAN}  Add public key — paste manually${RESET}  ${DIM}(account: $(_ssh_keys_owner))${RESET}"
     echo ""
-    echo -e "On your laptop the public key is usually in ${BOLD}~/.ssh/id_ed25519.pub${RESET}"
-    echo -e "(or ${BOLD}id_rsa.pub${RESET}). Print it with: ${DIM}cat ~/.ssh/id_ed25519.pub${RESET}"
+    echo -e "${BOLD}Step 1 — on your laptop, PRINT the public key${RESET} ${DIM}(it is a file; ssh-keygen${RESET}"
+    echo -e "${DIM}does not show it when it generates the pair):${RESET}"
+    echo -e "  ${BOLD}Windows PowerShell:${RESET} ${DIM}cat \$env:USERPROFILE\\.ssh\\id_ed25519.pub${RESET}"
+    echo -e "  ${BOLD}Windows CMD:${RESET}        ${DIM}type %USERPROFILE%\\.ssh\\id_ed25519.pub${RESET}"
+    echo -e "  ${BOLD}Linux / macOS:${RESET}      ${DIM}cat ~/.ssh/id_ed25519.pub${RESET}"
+    echo -e "  ${DIM}No key yet? Run ${RESET}${DIM}ssh-keygen -t ed25519${RESET}${DIM} first (Enter at every prompt;${RESET}"
+    echo -e "  ${DIM}a passphrase is optional), then print the .pub file as above.${RESET}"
     echo ""
-    echo -e "${DIM}No key yet? Generate one natively (OpenSSH ships with both OSes):${RESET}"
-    echo -e "  ${BOLD}Windows${RESET} ${DIM}(PowerShell / CMD):${RESET}"
-    echo -e "    ${DIM}ssh-keygen -t ed25519${RESET}"
-    echo -e "    ${DIM}type %USERPROFILE%\\.ssh\\id_ed25519.pub${RESET}   ${DIM}# PowerShell: cat \$env:USERPROFILE\\.ssh\\id_ed25519.pub${RESET}"
-    echo -e "  ${BOLD}Linux / macOS:${RESET}"
-    echo -e "    ${DIM}ssh-keygen -t ed25519${RESET}"
-    echo -e "    ${DIM}cat ~/.ssh/id_ed25519.pub${RESET}"
-    echo -e "  ${DIM}Press Enter at every prompt (a passphrase is optional). Copy ONLY the${RESET}"
-    echo -e "  ${DIM}.pub line (starts with 'ssh-ed25519') — never the private key.${RESET}"
+    echo -e "${BOLD}Step 2 — copy the WHOLE single line.${RESET} It looks like this:"
+    echo -e "  ${DIM}ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIO8k…q2Zr user@laptop${RESET}"
+    echo -e "  ${YELLOW}NOT${RESET} the fingerprint ${DIM}SHA256:zrWgcir+…${RESET} that ssh-keygen printed — that is a"
+    echo -e "  hash, not a key. ${YELLOW}NOT${RESET} the private key (the file with ${BOLD}no${RESET} .pub)."
     echo ""
     echo -e "Paste one or more PUBLIC key lines below. Finish with an ${BOLD}empty line${RESET}:"
     echo ""
@@ -215,10 +329,12 @@ add_key_generate() {
         info "Cancelled."; pause; return 0
     fi
 
-    local ts kf
+    local ts kf owner ohome
     ts="$(date +%Y%m%d_%H%M%S)"
-    kf="/root/.ssh/grin_ed25519_$ts"
-    mkdir -p /root/.ssh; chmod 700 /root/.ssh
+    owner="$(_ssh_keys_owner)"
+    ohome="$(_ssh_user_home "$owner")" || ohome="/root"
+    kf="$ohome/.ssh/grin_ed25519_$ts"
+    mkdir -p "$ohome/.ssh"; chmod 700 "$ohome/.ssh"
     if ! ssh-keygen -t ed25519 -N "" -C "grin-toolkit-$ts" -f "$kf" >/dev/null 2>&1; then
         error "ssh-keygen failed."; pause; return 0
     fi
@@ -235,7 +351,7 @@ add_key_generate() {
     echo ""
     cat "$kf"
     echo ""
-    echo -e "${BOLD}Connect with:${RESET} ${DIM}ssh -i ~/.ssh/grin_ed25519 root@<server-ip> -p $(_ssh_port)${RESET}"
+    echo -e "${BOLD}Connect with:${RESET} ${DIM}ssh -i ~/.ssh/grin_ed25519 ${owner}@<server-ip> -p $(_ssh_port)${RESET}"
     echo ""
 
     if confirm "Have you saved the private key? Delete the server's private-key copy now (recommended)?"; then
@@ -289,12 +405,19 @@ menu_add_key() {
     while true; do
         clear
         echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-        echo -e "${BOLD}${CYAN}  Add a public key to root${RESET}"
+        echo -e "${BOLD}${CYAN}  Add a public key to $(_ssh_keys_owner)${RESET}"
         echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
         echo ""
+        echo -e "  ${DIM}Three independent ways to do the same thing — pick ONE, in any order.${RESET}"
+        echo -e "  ${DIM}They are alternatives, not steps.${RESET}"
+        echo ""
         echo -e "  ${GREEN}1${RESET})  Paste manually        ${DIM}paste your laptop's *.pub line${RESET}"
+        echo -e "      ${DIM}Pick this if you already ran ssh-keygen on your laptop. ← usual choice${RESET}"
         echo -e "  ${GREEN}2${RESET})  Generate on server    ${DIM}ssh-keygen here, private key shown once${RESET}"
+        echo -e "      ${DIM}Pick this only if you cannot run ssh-keygen locally; you must copy${RESET}"
+        echo -e "      ${DIM}the private key off this box immediately (shown once, then deleted).${RESET}"
         echo -e "  ${GREEN}3${RESET})  Fetch from URL        ${DIM}github username or raw pubkey URL${RESET}"
+        echo -e "      ${DIM}Pick this if your public key is already published (github.com/<user>.keys).${RESET}"
         echo ""
         echo -e "  ${DIM}0${RESET})  Back"
         echo ""
@@ -369,9 +492,9 @@ _ssh_current_session_auth() {
 # Real end-to-end key-auth probe: SSH to ourselves using a PRIVATE key, with
 # passwords forced off. Returns 0 only if the key alone authenticates.
 # Needs the private key on disk (generate-on-server case, or a path the operator
-# supplies for a one-off test). $1 = private key path.
+# supplies for a one-off test). $1 = private key path, $2 = user (default root).
 _ssh_loopback_test() {
-    local key="$1" port host
+    local key="$1" user="${2:-root}" port host
     [[ -r "$key" ]] || return 2
     command -v ssh &>/dev/null || return 2
     port="$(_ssh_port)"
@@ -383,7 +506,7 @@ _ssh_loopback_test() {
                 -o PreferredAuthentications=publickey \
                 -o PasswordAuthentication=no \
                 -o ConnectTimeout=8 \
-                "root@${host}" true 2>/dev/null; then
+                "${user}@${host}" true 2>/dev/null; then
             return 0
         fi
     done
@@ -503,16 +626,32 @@ verify_key_login() {
 # =============================================================================
 # Apply / revert the password-off hardening
 # =============================================================================
+# Build the directive list ONCE, from the policy file, so the drop-in, the
+# in-place block, the dead-man revert and break-glass all agree. With no policy
+# file the output is byte-identical to the pre-wizard behaviour (root by key).
+_ssh_hardening_directives() {
+    local rl admin
+    rl="$(_ssh_policy_get ROOT_LOGIN || echo prohibit-password)"
+    admin="$(_ssh_policy_get ADMIN_USER || true)"
+    echo "PubkeyAuthentication yes"
+    echo "PasswordAuthentication no"
+    echo "KbdInteractiveAuthentication no"
+    echo "PermitRootLogin $rl"
+    # AllowUsers is only written when an admin user exists AND root is shut out;
+    # otherwise an allow-list would be the one thing standing between the
+    # operator and their own root session.
+    if [[ -n "$admin" && "$rl" == "no" ]]; then
+        echo "AllowUsers $admin"
+    fi
+}
+
 _ssh_apply_hardening() {
     _ssh_backup_config >/dev/null
     if _ssh_dropin_supported; then
-        cat > "$HARDENING_DROPIN" <<EOF
-# Managed by Grin Node Toolkit (085_ssh_hardening.sh) — do not edit by hand.
-PubkeyAuthentication yes
-PasswordAuthentication no
-KbdInteractiveAuthentication no
-PermitRootLogin prohibit-password
-EOF
+        {
+            echo "# Managed by Grin Node Toolkit (085_ssh_hardening.sh) — do not edit by hand."
+            _ssh_hardening_directives
+        } > "$HARDENING_DROPIN" || { error "Cannot write $HARDENING_DROPIN"; return 1; }
         chmod 644 "$HARDENING_DROPIN"
         log "Wrote drop-in $HARDENING_DROPIN"
     else
@@ -520,10 +659,7 @@ EOF
         {
             echo ""
             echo "$MARK_BEGIN"
-            echo "PubkeyAuthentication yes"
-            echo "PasswordAuthentication no"
-            echo "KbdInteractiveAuthentication no"
-            echo "PermitRootLogin prohibit-password"
+            _ssh_hardening_directives
             echo "$MARK_END"
         } >> "$SSHD_CONFIG"
         log "Appended managed block to $SSHD_CONFIG"
@@ -538,6 +674,45 @@ EOF
     if ! _ssh_service_reload; then
         error "Could not reload the ssh service — reverting to be safe."
         _ssh_remove_hardening
+        return 1
+    fi
+    return 0
+}
+
+# Did the drop-in actually TAKE?  sshd uses the FIRST value it obtains for most
+# keywords, and some distros place `Include sshd_config.d/*.conf` at the BOTTOM
+# of sshd_config — a drop-in there loses to anything set above it. `sshd -t`
+# passes either way and `systemctl reload` returns 0, so the only honest check is
+# to ask the running config what it resolved to. $1 = expected PermitRootLogin,
+# $2 = admin user ("" to skip the allow-list check).
+_ssh_verify_effective() {
+    local want_rl="$1" admin="${2:-}" ok=0
+    local pw rl
+    pw="$(_ssh_effective passwordauthentication)"
+    rl="$(_ssh_effective permitrootlogin)"
+
+    if [[ "$pw" == "no" ]]; then success "Effective PasswordAuthentication: no"
+    else error "Effective PasswordAuthentication: ${pw:-unknown} — the setting did NOT take"; ok=1; fi
+
+    if [[ "$rl" == "$want_rl" ]]; then success "Effective PermitRootLogin: $rl"
+    else error "Effective PermitRootLogin: ${rl:-unknown} (wanted $want_rl) — did NOT take"; ok=1; fi
+
+    if [[ -n "$admin" ]]; then
+        # Ask sshd what it resolves FOR THAT USER — this honours AllowUsers,
+        # AllowGroups, DenyUsers and any Match block at once.
+        if sshd -T -C "user=$admin" >/dev/null 2>&1; then
+            success "sshd resolves a config for '$admin' (not blocked by an allow/deny rule)"
+        else
+            error "sshd -T -C user=$admin FAILED — '$admin' may be blocked from logging in"; ok=1
+        fi
+    fi
+
+    if [[ $ok -ne 0 ]]; then
+        echo ""
+        warn "Your directives are in $HARDENING_DROPIN but something earlier in"
+        warn "$SSHD_CONFIG is overriding them (sshd keeps the FIRST value it reads)."
+        warn "Fix: move the 'Include /etc/ssh/sshd_config.d/*.conf' line to the TOP"
+        warn "of $SSHD_CONFIG, or delete the conflicting directive there."
         return 1
     fi
     return 0
@@ -605,6 +780,15 @@ disable_password_auth() {
     local kcount
     kcount="$(grep -cvE '^[[:space:]]*($|#)' "$AUTH_KEYS" 2>/dev/null || echo 0)"
     info "$kcount key(s) currently authorized for root."
+
+    # A policy left by the guided setup makes this option do MORE than its name
+    # says — surface it rather than silently shutting root out of SSH.
+    if [[ "$(_ssh_policy_get ROOT_LOGIN || echo prohibit-password)" == "no" ]]; then
+        echo ""
+        warn "A stored policy from the guided setup is in effect: applying here will"
+        warn "ALSO set PermitRootLogin no (admin user: $(_ssh_policy_get ADMIN_USER || echo none))."
+        warn "Prefer the wizard (W) for its proof gates; option 6 can clear the policy."
+    fi
 
     # Anti-lockout pre-flight — surface the verdict before any change.
     if verify_key_login quiet; then
@@ -717,6 +901,20 @@ enable_password_auth() {
     if _ssh_revert_hardening; then
         success "Password authentication RE-ENABLED (toolkit hardening removed)."
         info "Distro defaults now apply. Your installed keys still work too."
+        # The whole drop-in went, so PermitRootLogin/AllowUsers are back to the
+        # distro default too — but the POLICY file survives and option 4 would
+        # re-apply it. Say so: a silent re-lock is the surprise here.
+        if [[ "$(_ssh_policy_get ROOT_LOGIN || echo prohibit-password)" == "no" ]]; then
+            echo ""
+            warn "Direct root SSH is available again — but the stored policy still says"
+            warn "ROOT_LOGIN=no, ADMIN_USER=$(_ssh_policy_get ADMIN_USER || echo '(none)')."
+            warn "Option 4 (or the wizard) would re-apply it."
+            if confirm "Forget the stored policy, so future hardening only turns passwords off?"; then
+                rm -f "$POLICY_CONF" && success "Policy cleared."
+            else
+                info "Policy kept."
+            fi
+        fi
     else
         error "Revert ran into a problem — check $SSHD_CONFIG and run 'sshd -t' manually."
     fi
@@ -756,6 +954,24 @@ ssh_status() {
     local kcount=0
     [[ -s "$AUTH_KEYS" ]] && kcount="$(grep -cvE '^[[:space:]]*($|#)' "$AUTH_KEYS" 2>/dev/null || echo 0)"
     printf "  ${BOLD}%-26s${RESET} %s\n" "Authorized keys (root):" "$kcount"
+    printf "  ${BOLD}%-26s${RESET} %s\n" "AllowUsers (effective):" "$(_ssh_effective_all allowusers || true)"
+
+    # Admin accounts from the guided setup: key count + whether sudo really
+    # grants root (asked of sudo itself, not guessed from group membership).
+    local pol_users pu ph pk sudo_txt
+    if pol_users="$(_ssh_policy_get ADMIN_USER)"; then
+        for pu in $pol_users; do
+            pk=0
+            if ph="$(_ssh_user_home "$pu" 2>/dev/null)"; then
+                if [[ -s "$ph/.ssh/authorized_keys" ]]; then
+                    pk="$(grep -cvE '^[[:space:]]*($|#)' "$ph/.ssh/authorized_keys" 2>/dev/null || echo 0)"
+                fi
+            fi
+            if _wz_sudo_ok "$pu"; then sudo_txt="${GREEN}sudo→root OK${RESET}"
+            else sudo_txt="${RED}NO sudo→root${RESET}"; fi
+            printf "  ${BOLD}%-26s${RESET} %b\n" "Admin user '$pu':" "$pk key(s), $sudo_txt"
+        done
+    fi
 
     if _ssh_dropin_supported; then
         printf "  ${BOLD}%-26s${RESET} %s\n" "Config method:" "drop-in ($DROPIN_DIR)"
@@ -844,15 +1060,455 @@ connect_help() {
 }
 
 # =============================================================================
+# GUIDED SETUP WIZARD — "log in as a normal user, sudo to root"
+# =============================================================================
+# The end state:
+#     laptop key ──ssh──▶ user x  ──sudo -i──▶ root
+#     root is NOT reachable over SSH; passwords are NOT accepted over SSH.
+#
+# The order below is the whole point of the wizard: every step that could lock
+# you out is gated on PROOF that the next way in already works. Nothing touches
+# sshd until the new account has been shown to log in by key AND to reach root.
+#
+# Two proofs are deliberately evidence-based, not self-declared:
+#   · key login  — an "Accepted publickey for <user>" line in the SSH log, or a
+#                  real loopback SSH using a private key we hold
+#   · sudo       — `sudo -l -U <user>` (root can ask this without the password)
+# A wizard that accepts "yes I tested it" is how people lock themselves out.
+# =============================================================================
+
+_wz_step() {
+    echo ""
+    echo -e "${BOLD}${CYAN}━━━ Step $1/$2 — $3 ${RESET}"
+    echo ""
+}
+
+_wz_valid_username() {
+    # Conservative: POSIX portable set, must start with a letter, <=32 chars.
+    [[ "$1" =~ ^[a-z][a-z0-9_-]{0,31}$ ]]
+}
+
+# Human (non-system) accounts with a real login shell.
+_wz_human_users() {
+    getent passwd | awk -F: '$3>=1000 && $3<65534 && $7 !~ /(nologin|false)$/ {print $1}'
+}
+
+# Evidence of a successful PUBLIC-KEY login by $1, ever, from the SSH log.
+# Echoes the matching line; returns 1 when there is none.
+_wz_key_login_seen() {
+    local u="$1" line="" f
+    if command -v journalctl &>/dev/null; then
+        line="$(journalctl _COMM=sshd --no-pager 2>/dev/null \
+                | grep -E "Accepted publickey for ${u} " | tail -1 || true)"
+    fi
+    if [[ -z "$line" ]]; then
+        for f in /var/log/auth.log /var/log/secure; do
+            [[ -r "$f" ]] || continue
+            line="$(grep -E "Accepted publickey for ${u} " "$f" 2>/dev/null | tail -1 || true)"
+            [[ -n "$line" ]] && break
+        done
+    fi
+    [[ -n "$line" ]] || return 1
+    echo "$line"
+}
+
+# Can $1 reach root through sudo?  `sudo -l -U <user>` answers as root, with no
+# knowledge of the user's password, and honours the real sudoers rules (group
+# membership, NOPASSWD, per-command limits) instead of guessing from groups.
+_wz_sudo_ok() {
+    local u="$1" out
+    command -v sudo &>/dev/null || return 2
+    out="$(sudo -l -U "$u" 2>/dev/null)" || return 1
+    grep -qE '\(ALL(\s*:\s*ALL)?\)\s+(NOPASSWD:\s*)?ALL' <<<"$out"
+}
+
+# A usable password is REQUIRED: sudo asks for the *user's own* password, so an
+# account created with no password (or a locked one) can log in by key and then
+# be unable to become root at all. `passwd -S` field 2: P usable, NP none, L locked.
+_wz_password_state() {
+    local st
+    st="$(passwd -S "$1" 2>/dev/null | awk '{print $2}')"
+    echo "${st:-unknown}"
+}
+
+_wz_set_password() {
+    local u="$1" tries=0
+    while [[ $tries -lt 3 ]]; do
+        tries=$((tries + 1))
+        echo -e "${DIM}  (typed straight into passwd — the toolkit never sees or logs it)${RESET}"
+        if passwd "$u"; then
+            [[ "$(_wz_password_state "$u")" == "P" ]] && { success "Password set for $u."; return 0; }
+            warn "Password still not usable for $u — the account may be locked."
+            usermod -U "$u" 2>/dev/null || true
+            [[ "$(_wz_password_state "$u")" == "P" ]] && { success "Account unlocked; password usable."; return 0; }
+        fi
+        warn "passwd did not complete (attempt $tries of 3)."
+    done
+    return 1
+}
+
+# Optional convenience step: a group that owns the backup dir, so files move in
+# and out with plain scp/sftp and NO sudo in the transfer path.
+_wz_transfer_group() {
+    local u="$1" grp="grinops" dir="/opt/grin/backups"
+    groupadd -f "$grp" || { error "groupadd $grp failed"; return 1; }
+    usermod -aG "$grp" "$u" || { error "Could not add $u to $grp"; return 1; }
+    if [[ -d "$dir" ]]; then
+        chgrp -R "$grp" "$dir" || { error "chgrp on $dir failed"; return 1; }
+        chmod -R g+rX "$dir"   || { error "chmod on $dir failed"; return 1; }
+        chmod g+s "$dir"       || { error "setgid on $dir failed"; return 1; }
+        success "$dir is now group-readable by '$grp' (setgid: new files inherit it)."
+        echo -e "  ${DIM}Pull a backup from your laptop with no sudo at all:${RESET}"
+        echo -e "    ${DIM}scp ${u}@<server-ip>:$dir/'*.tar.gz*' .${RESET}"
+    else
+        info "$dir does not exist yet (089 Backup creates it) — group '$grp' is ready for when it does."
+    fi
+    warn "Group membership applies at NEXT login: $u must log out and back in."
+    return 0
+}
+
+wizard_admin_user() {
+    local TOTAL=7
+    clear
+    echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+    echo -e "${BOLD}${CYAN}  GUIDED SETUP — key ▸ normal user ▸ sudo ▸ root${RESET}"
+    echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+    echo ""
+    echo -e "  This walks the whole job in the only safe order. At the end:"
+    echo ""
+    echo -e "    ${BOLD}your laptop key${RESET} ──ssh──▶ ${BOLD}user you name${RESET} ──${BOLD}sudo -i${RESET}──▶ ${BOLD}root${RESET}"
+    echo ""
+    echo -e "    • SSH passwords: ${BOLD}off${RESET}          • direct root SSH: ${BOLD}off${RESET}"
+    echo -e "    • the new user's own password is kept — ${BOLD}sudo needs it${RESET}"
+    echo ""
+    echo -e "  ${DIM}Steps 1–5 change users and keys but NOT sshd, so they cannot lock${RESET}"
+    echo -e "  ${DIM}you out. Step 7 is the only one that touches SSH, and it refuses to${RESET}"
+    echo -e "  ${DIM}run until step 6 has PROVEN the new way in works.${RESET}"
+    echo ""
+    echo -e "  ${YELLOW}Keep this session open until the very end.${RESET} It is your fallback."
+    echo ""
+    if ! confirm "Start the guided setup?"; then info "Cancelled — nothing changed."; pause; return 0; fi
+
+    # ── Step 1 — name the account ────────────────────────────────────────────
+    local user
+    while true; do
+        _wz_step 1 $TOTAL "Name the admin user"
+        echo -e "Lowercase letters, digits, - and _ ; must start with a letter."
+        echo -e "${DIM}Avoid 'admin' and 'grin' — pick something not in a bot's word list.${RESET}"
+        echo ""
+        echo -ne "${BOLD}Username (blank to cancel): ${RESET}"
+        read -r user
+        [[ -z "$user" ]] && { info "Cancelled — nothing changed."; pause; return 0; }
+        if ! _wz_valid_username "$user"; then
+            warn "'$user' is not a valid Linux username."; continue
+        fi
+        if [[ "$user" == "root" ]]; then
+            warn "That is root — the point of this wizard is to stop using it over SSH."; continue
+        fi
+        if id -u "$user" &>/dev/null; then
+            info "User '$user' already exists — the wizard will adopt it, not recreate it."
+            confirm "Use the existing account '$user'?" && break
+            continue
+        fi
+        if ! confirm "Create new user '$user'?"; then continue; fi
+        if useradd -m -s /bin/bash "$user"; then
+            success "Created '$user' with home $(_ssh_user_home "$user")."
+            break
+        else
+            error "useradd failed for '$user'."; pause; return 1
+        fi
+    done
+
+    # ── Step 2 — password (for sudo, not for SSH) ─────────────────────────────
+    _wz_step 2 $TOTAL "Set the account password (this is what sudo will ask for)"
+    local pstate; pstate="$(_wz_password_state "$user")"
+    echo -e "SSH will not accept this password — passwords get turned off in step 7."
+    echo -e "It exists so ${BOLD}sudo${RESET} can ask for it. ${BOLD}An account with no password"
+    echo -e "cannot sudo at all${RESET}, which is the classic way this setup half-works."
+    echo -e "  ${DIM}Current state of '$user': $pstate  (P=usable, NP=none, L=locked)${RESET}"
+    echo ""
+    if [[ "$pstate" == "P" ]]; then
+        if confirm "'$user' already has a usable password. Change it anyway?"; then
+            _wz_set_password "$user" || { error "Could not set a password — stopping here."; pause; return 1; }
+        else
+            info "Keeping the existing password."
+        fi
+    else
+        if ! _wz_set_password "$user"; then
+            error "Could not set a usable password for '$user' — stopping."
+            error "Without one, '$user' could not reach root. Nothing was changed in sshd."
+            pause; return 1
+        fi
+    fi
+
+    # ── Step 3 — sudo ────────────────────────────────────────────────────────
+    _wz_step 3 $TOTAL "Give '$user' the right to become root"
+    if ! command -v sudo &>/dev/null; then
+        warn "sudo is not installed (minimal images often ship without it)."
+        if confirm "Install sudo now?"; then
+            if command -v apt-get &>/dev/null; then
+                DEBIAN_FRONTEND=noninteractive apt-get install -y sudo || { error "apt-get install sudo failed"; pause; return 1; }
+            elif command -v dnf &>/dev/null; then
+                dnf install -y sudo || { error "dnf install sudo failed"; pause; return 1; }
+            else
+                error "No apt-get or dnf found — install sudo manually, then re-run."; pause; return 1
+            fi
+            success "sudo installed."
+        else
+            error "sudo is required for this model — stopping. Nothing was changed in sshd."
+            pause; return 1
+        fi
+    fi
+    local sgrp
+    if ! sgrp="$(_ssh_sudo_group)"; then
+        error "Neither a 'sudo' nor a 'wheel' group exists — cannot grant root rights safely."
+        pause; return 1
+    fi
+    if id -nG "$user" 2>/dev/null | tr ' ' '\n' | grep -qx "$sgrp"; then
+        success "'$user' is already in group '$sgrp'."
+    else
+        usermod -aG "$sgrp" "$user" || { error "usermod -aG $sgrp $user failed"; pause; return 1; }
+        success "Added '$user' to group '$sgrp'."
+    fi
+    echo -e "  ${DIM}Group membership is read at LOGIN — a session '$user' already has open${RESET}"
+    echo -e "  ${DIM}will not see it. That is why step 6 asks for a fresh login.${RESET}"
+
+    # ── Step 4 — the public key ──────────────────────────────────────────────
+    _wz_step 4 $TOTAL "Install your laptop's public key for '$user'"
+    local uhome ukeys
+    uhome="$(_ssh_user_home "$user")" || { error "No home directory for '$user'."; pause; return 1; }
+    ukeys="$uhome/.ssh/authorized_keys"
+    echo -e "Keys go to ${BOLD}$ukeys${RESET} — root's own keys are left alone."
+    echo ""
+    if [[ -s "$ukeys" ]]; then
+        info "'$user' already has $(grep -cvE '^[[:space:]]*($|#)' "$ukeys" 2>/dev/null || echo 0) key(s) installed."
+    fi
+    # Point the shared key-installer at this account for the duration of the call.
+    SSH_KEYS_OWNER="$user" SSH_KEYS_TARGET="$ukeys" menu_add_key || true
+    unset SSH_KEYS_OWNER SSH_KEYS_TARGET
+    if [[ ! -s "$ukeys" ]]; then
+        error "No key was installed for '$user' — cannot continue."
+        error "Nothing was changed in sshd; root access is untouched."
+        pause; return 1
+    fi
+    success "'$user' has $(grep -cvE '^[[:space:]]*($|#)' "$ukeys" 2>/dev/null || echo 0) authorized key(s)."
+
+    # ── Step 5 — optional file-transfer group ────────────────────────────────
+    _wz_step 5 $TOTAL "File transfer without sudo (optional)"
+    echo -e "With root SSH off, ${BOLD}scp root@host:...${RESET} stops working. The clean fix is a"
+    echo -e "group that owns the backup directory, so '$user' reads and writes it"
+    echo -e "directly — no sudo anywhere in the transfer path."
+    echo ""
+    echo -e "  ${DIM}Alternative, NOT done here: passwordless 'sudo rsync'. That grants${RESET}"
+    echo -e "  ${DIM}write access to every file on the box, which is root by another name.${RESET}"
+    echo ""
+    if confirm "Create group 'grinops' and give '$user' access to /opt/grin/backups?"; then
+        _wz_transfer_group "$user" || warn "Transfer group setup did not complete — SSH hardening can still continue."
+    else
+        info "Skipped — you can run this later from the wizard again."
+    fi
+
+    # ── Step 6 — PROVE the new way in works ──────────────────────────────────
+    local port sip
+    port="$(_ssh_port)"
+    sip="$(awk '{print $3}' <<<"${SSH_CONNECTION:-}")"
+    local key_ok=0 sudo_ok=0
+    while true; do
+        _wz_step 6 $TOTAL "Prove it works — BEFORE anything is locked down"
+        echo -e "In a ${BOLD}second terminal${RESET} (keep this one open), run:"
+        echo ""
+        echo -e "   ${BOLD}ssh ${user}@${sip:-<server-ip>} -p ${port}${RESET}"
+        echo -e "   ${BOLD}sudo -i${RESET}     ${DIM}← asks for ${user}'s password, gives you a root shell${RESET}"
+        echo ""
+        echo -e "${DIM}Then come back here and re-check. Both lines must go green.${RESET}"
+        echo ""
+
+        local ev
+        if ev="$(_wz_key_login_seen "$user")"; then
+            key_ok=1
+            success "Key login by '$user': PROVEN in the SSH log — check the date:"
+            echo -e "    ${DIM}${ev: -110}${RESET}"
+        else
+            key_ok=0
+            local priv
+            priv="$(ls -1t "$uhome"/.ssh/grin_ed25519_* 2>/dev/null | grep -v '\.pub$' | head -1 || true)"
+            if [[ -n "$priv" ]] && _ssh_loopback_test "$priv" "$user"; then
+                key_ok=1
+                success "Key login by '$user': PROVEN by loopback SSH using $priv"
+            else
+                error "Key login by '$user': no successful publickey login found in the log yet"
+            fi
+        fi
+
+        local src=0
+        _wz_sudo_ok "$user" || src=$?
+        case "$src" in
+            0) sudo_ok=1; success "Root via sudo for '$user': CONFIRMED (sudo -l -U $user grants ALL)" ;;
+            2) sudo_ok=0; error "sudo is not installed — cannot confirm root access" ;;
+            *) sudo_ok=0; error "Root via sudo for '$user': NOT granted (check group '$sgrp' / sudoers)" ;;
+        esac
+
+        echo ""
+        if [[ $key_ok -eq 1 && $sudo_ok -eq 1 ]]; then
+            echo -e "${BOLD}${GREEN}  Both proofs are green — safe to lock down.${RESET}"
+            echo ""
+            echo -ne "${BOLD}Continue to step 7 (change sshd)? [Y/n]: ${RESET}"
+            local go
+            if ! read -r go; then
+                echo ""
+                warn "No input available — declining the sshd change."
+                return 0
+            fi
+            if [[ -z "$go" || "${go,,}" == "y" ]]; then
+                break
+            fi
+            info "Stopped before any sshd change. Re-run the wizard when ready."
+            pause; return 0
+        fi
+        echo -e "${BOLD}${YELLOW}  Not proven yet — sshd has NOT been touched.${RESET}"
+        echo ""
+        echo -e "  ${BOLD}r${RESET}) re-check   ${BOLD}q${RESET}) stop here (nothing changed)"
+        echo -ne "${BOLD}Choose [r/q]: ${RESET}"
+        local c
+        if ! read -r c; then
+            echo ""
+            warn "No input available — stopping. No SSH changes were made."
+            return 0
+        fi
+        if [[ "${c,,}" == "q" ]]; then
+            info "Stopped. No SSH changes were made."
+            pause; return 0
+        fi
+    done
+
+    # ── Step 7 — apply, with a dead-man timer ────────────────────────────────
+    _wz_step 7 $TOTAL "Lock it down"
+    local others others_list=""
+    others="$(_wz_human_users | grep -vx "$user" || true)"
+    echo -e "About to apply:"
+    echo -e "  ${BOLD}PasswordAuthentication no${RESET}   ${DIM}keys only${RESET}"
+    echo -e "  ${BOLD}PermitRootLogin no${RESET}          ${DIM}no direct root SSH, key or not${RESET}"
+    echo ""
+    local allow="$user"
+    if [[ -n "$others" ]]; then
+        echo -e "${YELLOW}Other human accounts exist on this box:${RESET}"
+        local o
+        while IFS= read -r o; do
+            [[ -z "$o" ]] && continue
+            local oh ok_keys="no keys"
+            oh="$(_ssh_user_home "$o" 2>/dev/null || echo "")"
+            [[ -n "$oh" && -s "$oh/.ssh/authorized_keys" ]] && ok_keys="HAS ssh keys"
+            echo -e "   • $o   ${DIM}($ok_keys)${RESET}"
+            others_list+="$o "
+        done <<<"$others"
+        echo ""
+        echo -e "An ${BOLD}AllowUsers${RESET} allow-list is the strongest form of this, but it would"
+        echo -e "lock those accounts out of SSH."
+        echo ""
+        if confirm "Restrict SSH to '$user' ONLY (add AllowUsers)?"; then
+            allow="$user"
+        elif confirm "Allow '$user' plus the accounts listed above?"; then
+            allow="$user $(echo "$others_list" | xargs)"
+        else
+            allow=""
+            info "No AllowUsers rule — any account with a key may log in (root still cannot)."
+        fi
+    else
+        if ! confirm "Also add 'AllowUsers $user' (recommended — blocks every other account)?"; then
+            allow=""
+        fi
+    fi
+
+    _ssh_policy_set "$allow" "no"
+    echo ""
+    echo -e "${BOLD}A safety timer is strongly recommended:${RESET} the change is applied now and"
+    echo -e "automatically undone in N minutes ${BOLD}unless${RESET} you confirm you can still get"
+    echo -e "in. If anything is wrong, you wait it out and nothing is lost."
+    echo ""
+    echo -ne "${BOLD}Auto-undo after how many minutes? [10, 0 = no timer]: ${RESET}"
+    local mins; read -r mins
+    mins="${mins:-10}"
+    [[ "$mins" =~ ^[0-9]+$ ]] || mins=10
+
+    if ! confirm "Apply now?"; then
+        info "Not applied. The user, key, sudo and group setup all remain in place."
+        pause; return 0
+    fi
+
+    if ! _ssh_apply_hardening; then
+        error "sshd would not accept the change — nothing was applied."
+        error "Password login and root access are exactly as they were."
+        pause; return 1
+    fi
+
+    echo ""
+    info "Checking what sshd actually resolved (not just what we wrote) ..."
+    local eff_ok=0
+    _ssh_verify_effective "no" "$user" || eff_ok=1
+    if [[ $eff_ok -ne 0 ]]; then
+        echo ""
+        warn "The hardening did not fully take. Rolling it back so you are not left"
+        warn "in a half-applied state."
+        _ssh_revert_hardening || error "Rollback ALSO failed — fix $SSHD_CONFIG by hand NOW, in this session."
+        pause; return 1
+    fi
+
+    _ssh_cancel_autorevert
+    if [[ "$mins" -gt 0 ]]; then
+        _ssh_schedule_autorevert "$mins"
+        success "Applied, with a ${mins}-minute auto-undo."
+    else
+        success "Applied permanently (no timer)."
+    fi
+
+    # ── Closing instructions ─────────────────────────────────────────────────
+    echo ""
+    echo -e "${BOLD}${CYAN}━━━ From now on ━━━${RESET}"
+    echo ""
+    echo -e "  ${BOLD}ssh ${user}@${sip:-<server-ip>} -p ${port}${RESET}"
+    echo -e "  ${BOLD}sudo -i${RESET}                 ${DIM}← root shell; run the toolkit from here${RESET}"
+    echo ""
+    echo -e "  ${YELLOW}Use 'sudo -i', not 'sudo ./grin-node-toolkit.sh'.${RESET} Bare sudo keeps"
+    echo -e "  HOME=$uhome, and parts of the toolkit read \$HOME/.grin — plus you"
+    echo -e "  need a root shell to see the node's tmux sessions."
+    echo ""
+    echo -e "  ${BOLD}Put this in your laptop's ~/.ssh/config${RESET} ${DIM}(then it is just 'ssh grinvps')${RESET}"
+    echo -e "  ${DIM}Windows: %USERPROFILE%\\.ssh\\config${RESET}"
+    echo ""
+    echo -e "    ${DIM}Host grinvps${RESET}"
+    echo -e "    ${DIM}    HostName ${sip:-<server-ip>}${RESET}"
+    echo -e "    ${DIM}    User ${user}${RESET}"
+    echo -e "    ${DIM}    Port ${port}${RESET}"
+    echo -e "    ${DIM}    IdentityFile ~/.ssh/id_ed25519${RESET}"
+    echo ""
+    echo -e "  Then: ${DIM}ssh grinvps${RESET} · ${DIM}scp grinvps:/opt/grin/backups/x.tar.gz .${RESET}"
+    echo ""
+    if [[ "$mins" -gt 0 ]]; then
+        echo -e "${BOLD}${YELLOW}  NOT FINISHED — the timer is running.${RESET}"
+        echo -e "  Log in as ${BOLD}${user}${RESET} in a new terminal right now."
+        echo -e "   • it works  → come back and run ${BOLD}option 5${RESET} (make permanent)"
+        echo -e "   • it fails  → do nothing; everything reverts in ${mins} min"
+    else
+        echo -e "  ${DIM}Break-glass: option 6 re-enables password login and root SSH.${RESET}"
+    fi
+    pause
+}
+
+# =============================================================================
 # Main menu
 # =============================================================================
 show_menu() {
     clear
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo -e "${BOLD}${CYAN} 085)  SSH Key Hardening  ${DIM}(root login by key, not password)${RESET}"
+    echo -e "${BOLD}${CYAN} 085)  SSH Key Hardening  ${DIM}(login by key, not password)${RESET}"
     echo -e "${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
     echo ""
-    echo -e "${BOLD}  Keys${RESET}"
+    echo -e "${BOLD}  Start here${RESET}"
+    echo -e "  ${BOLD}${GREEN}W${RESET})  GUIDED SETUP →          ${DIM}key ▸ normal user ▸ sudo ▸ root, in order${RESET}"
+    echo -e "      ${DIM}Creates the user, installs the key, proves both work, THEN locks${RESET}"
+    echo -e "      ${DIM}SSH down. Does every step below in the safe sequence.${RESET}"
+    echo ""
+    echo -e "${BOLD}  Keys${RESET}   ${DIM}individual actions — to adjust, not to set up${RESET}"
     echo -e "  ${GREEN}1${RESET})  Add a public key          ${DIM}paste · generate on server · fetch URL${RESET}"
     echo -e "  ${GREEN}2${RESET})  List installed keys       ${DIM}fingerprints in /root/.ssh/authorized_keys${RESET}"
     echo ""
@@ -869,14 +1525,15 @@ show_menu() {
     echo -e "  ${DIM}0${RESET})  Return to admin menu"
     echo ""
     echo -e "${DIM}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo -ne "${BOLD}Select [0-8]: ${RESET}"
+    echo -ne "${BOLD}Select [W / 1-8 / 0]: ${RESET}"
 }
 
 main() {
     while true; do
         show_menu
         local choice; read -r choice
-        case "$choice" in
+        case "${choice,,}" in
+            w) wizard_admin_user     || true ;;
             1) menu_add_key          || true ;;
             2) list_keys             || true ;;
             3) verify_key_login      || true ;;

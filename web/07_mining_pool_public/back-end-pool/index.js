@@ -2979,7 +2979,7 @@ function setupRoutes() {
   // ─── PAYOUT KILL-SWITCH (Admin) ────────────────────────────────────
   // Emergency freeze of the withdrawal scheduler. Set automatically by AlertMonitor on a critical
   // money trip (coverage shortfall / integrity drift / wallet drain) and manually here. Reading is
-  // secureAdmin (surfaced on the Payments page); mutating is freshAdmin (step-up — it's money-control).
+  // secureAdmin (surfaced on every admin Payouts page); mutating is freshAdmin (step-up — it's money-control).
   app.get('/api/admin/payouts/control', secureAdmin, (req, res) => {
     try { res.json({ success: true, ...getPayoutControl() }); }
     catch (err) { res.status(500).json({ error: err.message }); }
@@ -3129,7 +3129,7 @@ function setupRoutes() {
 
   // Wallet-send audit — matches the wallet's OWN confirmed outbound sends against the pool's
   // withdrawals. Any unmatched send is an out-of-band `grin-wallet send` (invisible to the
-  // ledger). Forces a fresh wallet scan (slow) → the Payments page polls on the 3-min cadence.
+  // ledger). Forces a fresh wallet scan (slow) → the admin Treasury page polls on the 3-min cadence.
   app.get('/api/admin/payouts/wallet-audit', secureAdmin, async (req, res) => {
     try {
       const audit = await auditWalletSends(db, wallet, {});

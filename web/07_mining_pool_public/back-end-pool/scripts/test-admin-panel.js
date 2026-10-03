@@ -457,10 +457,28 @@ console.log('\n[11] one-attempt Tor payouts — Held, fail_detail, Re-check / fo
   const pay = read('payments.html');
   const statusBlock = (pay.match(/const STATUS = \{([\s\S]*?)\n\};/) || [])[1] || '';
   ok('payments.html has a Held badge', /^ {2}tor_held: +\['badge-warn', +'Held'\]/m.test(statusBlock));
-  const active = (pay.match(/const ACTIVE = \[([^\]]*)\]/) || [])[1] || '';
-  ok('Held counts as ACTIVE (its amount is still locked)', /'tor_held'/.test(active));
-  const inflight = (pay.match(/const inflightStatuses = \[([^\]]*)\]/) || [])[1] || '';
-  ok('…and as in flight for the wallet-switch wizard (its send may still be in the wallet)', /'tor_held'/.test(inflight));
+  // One list since the payouts split (2026-10): the queue's Active chip and the wallet-switch
+  // wizard's in-flight count used to carry their own copies, and once they sit on different
+  // pages a drifted wizard list lets an operator swap wallets under a live send.
+  const common = read('payouts-common.js');
+  const active = (common.match(/const PAYOUT_ACTIVE_STATUSES = Object\.freeze\(\[([^\]]*)\]\)/) || [])[1] || '';
+  ok('Held counts as ACTIVE (its amount is still locked)', /'tor_held'/.test(active), active);
+  const wizFile = panelFiles().find((f) => /function wizRefreshState\(/.test(read(f))) || '';
+  const wiz = wizFile ? (read(wizFile).match(/function wizRefreshState\(\) \{([\s\S]*?)\n\}/) || [])[1] || '' : '';
+  ok('…and as in flight for the wallet-switch wizard (its send may still be in the wallet)',
+     /PAYOUT_ACTIVE_STATUSES\.includes\(w\.status\)/.test(wiz) &&
+     /_filter === 'active'\) return PAYOUT_ACTIVE_STATUSES\.includes\(w\.status\)/.test(pay), wizFile);
+  ok('payments.html loads payouts-common.js (else every shared call is a ReferenceError)',
+     /<script src="\/admin\/payouts-common\.js"><\/script>/.test(pay));
+  const DRIFT = /\bconst (ACTIVE|inflightStatuses) =|\bconst PAYOUT_ACTIVE_STATUSES\b/g;
+  const redeclared = [];
+  for (const f of panelFiles().filter((x) => x !== 'payouts-common.js')) {
+    for (const m of read(f).matchAll(DRIFT)) redeclared.push(f + ': ' + m[0]);
+  }
+  ok('no admin page re-declares the in-flight status list (ACTIVE / inflightStatuses / a 2nd PAYOUT_ACTIVE_STATUSES)',
+     redeclared.length === 0, '\n      ' + redeclared.join('\n      '));
+  ok('control — the drift sweep detects a re-declared list',
+     new RegExp(DRIFT.source).test("const inflightStatuses = ['tor_sending'];"));
   ok('a Held filter chip exists', /data-filter="tor_held"[^>]*onclick="setFilter\('tor_held', this\)"/.test(pay));
   ok('the Retry button and its call are gone (the route answers 410)',
      !/retryWithdrawal/.test(pay) && !/\/retry'/.test(pay));

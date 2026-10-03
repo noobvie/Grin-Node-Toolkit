@@ -25,11 +25,18 @@
     { file: 'index.html', title: 'Dashboard', ico: '📊', children: [
         { file: 'miners.html',   title: 'Miners' },
         { file: 'donors.html',   title: 'Donors' },     // donor-profile review queue + donors + donation settings (design §18.6)
-        { file: 'payments.html', title: 'Payouts' },
         { file: 'blocks.html',   title: 'Blocks' },
-        { file: 'users.html',    title: 'Sessions' },
+        { file: 'users.html',    title: 'Security' },   // login security, admin sessions, payout request audit
         { file: 'regions.html',  title: 'Regions' },
         { file: 'health.html',   title: 'System Health' }
+      ] },
+    // Payouts (2026-10): the old single payments page, split by SUBJECT — each page pairs a
+    // reading with the action that changes it. The queue keeps payments.html (bookmarks,
+    // miners.html's ?q= link); like Settings, the parent's file is also its first child.
+    { file: 'payments.html', title: 'Payouts', ico: '💸', children: [
+        { file: 'payments.html', title: 'Queue' },
+        { file: 'treasury.html', title: 'Treasury' },    // reconciliation, wallet-send audit, wallet identity + switch wizard
+        { file: 'dormant.html',  title: 'Dormant balances' }   // abandoned-balance policy, sweep, sweep history
       ] },
     // Games (design §19.11): the /play/ games' own pages, all through the admin proxy to the
     // games service. Shown whatever the games mode is — the operator prepares before opening.
@@ -331,7 +338,7 @@
     // Settings sub-links are now real pages (not hash tabs), so the active sub-link is
     // baked in at render time — no hashchange sync needed.
 
-    // In-page section navigation for the long pages (payments, ads, settings-*)
+    // In-page section navigation for the long pages (treasury, ads, settings-*)
     buildSectionRail(wrap, main);
 
     // Page title in the browser tab + topbar pool name
@@ -366,7 +373,7 @@
   }
 
   /* ── In-page section rail ─────────────────────────────────────────────────
-     Several admin pages (payments, ads, health, the bigger settings pages) are
+     Several admin pages (treasury, ads, health, the bigger settings pages) are
      several screens tall, so once you scroll there is nothing left on screen
      saying which part you're in. This builds a sticky strip of section chips
      directly under the topbar: scroll-spy marks the current one, clicking jumps.

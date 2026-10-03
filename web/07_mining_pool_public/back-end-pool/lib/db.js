@@ -968,8 +968,8 @@ function createSchema() {
 
     // Single-row (id=1) payout kill-switch. When frozen=1 the withdrawal scheduler skips all
     // outbound send paths. Set automatically by AlertMonitor on a critical money trip
-    // (coverage shortfall / integrity drift / wallet drain) and manually from the admin
-    // Payments page. A missing row means "not frozen" (scheduler treats absence as unfrozen).
+    // (coverage shortfall / integrity drift / wallet drain) and manually from any admin
+    // Payouts page. A missing row means "not frozen" (scheduler treats absence as unfrozen).
     `CREATE TABLE IF NOT EXISTS payout_control (
       id INTEGER PRIMARY KEY CHECK (id = 1),
       frozen INTEGER NOT NULL DEFAULT 0,

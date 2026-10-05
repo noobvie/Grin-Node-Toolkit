@@ -76,9 +76,19 @@ fi
 # =============================================================================
 # Worker installer — writes the self-contained /opt/grin/access-watch.sh.
 # Refreshed on every launch so the deployed worker always matches the toolkit.
+#
+# Alert delivery lives in lib/grin_alert_send.sh (shared with the node event
+# recorder, 086 design §8.10). It is INLINED between the two quoted heredocs
+# below, never sourced at run time, so the worker stays one self-contained file
+# that works even if the toolkit checkout is gone. Built in a temp file and
+# moved into place: a failed refresh keeps the installed worker untouched.
 # =============================================================================
 _aw_install_worker() {
-    cat > "$WORKER" <<'AW_WORKER_EOF'
+    local lib="$SCRIPT_DIR/lib/grin_alert_send.sh" tmp
+    [[ -r "$lib" ]] || { error "Missing $lib — worker not refreshed."; return 1; }
+    tmp="$(mktemp "$WORKER.XXXXXX")" || { error "Cannot write next to $WORKER — worker not refreshed."; return 1; }
+    {
+    cat <<'AW_WORKER_EOF'
 #!/bin/bash
 # Grin Node Toolkit — provider/host access tamper watcher (worker).
 # Installed by scripts/082_provider_access_watch.sh — do NOT edit by hand.
@@ -155,64 +165,19 @@ _recent_accepted() {
     fi
 }
 
+# ── lib/grin_alert_send.sh, inlined at install (edit the lib, not this copy) ─
+AW_WORKER_EOF
+    cat "$lib"
+    cat <<'AW_WORKER_EOF'
+# ── end of inlined lib/grin_alert_send.sh ────────────────────────────────────
+
 # ── Alert delivery — every configured channel, one failing never blocks others ─
+GAS_TITLE_PREFIX="Grin VPS access-watch"
+GAS_NTFY_TAGS="rotating_light"
+GAS_LOG_FN=note
 notify() {
-    local severity="$1" subject="$2" body="$3"
-    local host stamp full prio
-    host="$(hostname 2>/dev/null || echo vps)"
-    stamp="$(date -u '+%Y-%m-%d %H:%M:%S UTC')"
-    full="[$severity] $subject
-host: $host
-time: $stamp
-
-$body"
     [[ -f "$ALERT_CONF" ]] && { set -a; . "$ALERT_CONF"; set +a; }
-    prio="default"; [[ "$severity" == "HIGH" ]] && prio="urgent"
-
-    if [[ -n "${NTFY_URL:-}" ]]; then
-        curl -fs --max-time 15 -H "Title: Grin VPS access-watch: $subject" \
-             -H "Priority: $prio" -H "Tags: rotating_light" \
-             -d "$full" "$NTFY_URL" >/dev/null 2>&1 && note "sent: ntfy" || note "FAILED: ntfy"
-    fi
-    if [[ -n "${TG_BOT_TOKEN:-}" && -n "${TG_CHAT_ID:-}" ]]; then
-        curl -fs --max-time 15 \
-             --data-urlencode "chat_id=${TG_CHAT_ID}" \
-             --data-urlencode "text=$full" \
-             "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" >/dev/null 2>&1 \
-             && note "sent: telegram" || note "FAILED: telegram"
-    fi
-    if [[ -n "${MAIL_TO:-}" ]]; then
-        _send_email "Grin VPS access-watch: $subject" "$full" && note "sent: email" || note "FAILED: email"
-    fi
-    if [[ -n "${NOSTR_SK:-}" && -n "${NOSTR_RELAY:-}" ]]; then
-        _send_nostr "$full" && note "sent: nostr" || note "FAILED/skipped: nostr"
-    fi
-}
-
-_send_email() {
-    local subj="$1" body="$2"
-    if command -v sendmail &>/dev/null; then
-        printf 'To: %s\nSubject: %s\nContent-Type: text/plain; charset=UTF-8\n\n%s\n' \
-            "$MAIL_TO" "$subj" "$body" | sendmail -t 2>/dev/null
-    elif command -v mail &>/dev/null; then
-        printf '%s\n' "$body" | mail -s "$subj" "$MAIL_TO" 2>/dev/null
-    elif command -v msmtp &>/dev/null; then
-        printf 'To: %s\nSubject: %s\n\n%s\n' "$MAIL_TO" "$subj" "$body" | msmtp "$MAIL_TO" 2>/dev/null
-    else
-        note "email: no sendmail/mail/msmtp binary found"; return 1
-    fi
-}
-
-# Nostr needs a signer (schnorr/secp256k1) — we shell out to nak or nostril.
-_send_nostr() {
-    local body="$1"
-    if command -v nak &>/dev/null; then
-        nak event --sec "$NOSTR_SK" -c "$body" "$NOSTR_RELAY" >/dev/null 2>&1
-    elif command -v nostril &>/dev/null && command -v websocat &>/dev/null; then
-        nostril --sec "$NOSTR_SK" --content "$body" 2>/dev/null | websocat -n1 "$NOSTR_RELAY" >/dev/null 2>&1
-    else
-        note "nostr: needs 'nak' (or 'nostril'+'websocat') installed — skipped"; return 1
-    fi
+    gas_send "$1" "$2" "$3"
 }
 
 # ── Actions ──────────────────────────────────────────────────────────────────
@@ -387,7 +352,9 @@ case "${1:-check}" in
     *)        echo "usage: $0 {baseline|check|test}"; exit 1 ;;
 esac
 AW_WORKER_EOF
-    chmod 755 "$WORKER"
+    } > "$tmp" || { rm -f "$tmp"; error "Cannot write $tmp — worker not refreshed."; return 1; }
+    chmod 755 "$tmp" || { rm -f "$tmp"; error "Cannot chmod $tmp — worker not refreshed."; return 1; }
+    mv -f "$tmp" "$WORKER" || { rm -f "$tmp"; error "Cannot install $WORKER — worker not refreshed."; return 1; }
     log "worker installed/refreshed at $WORKER"
 }
 
@@ -723,7 +690,9 @@ show_menu() {
 }
 
 main() {
-    _aw_install_worker
+    # Unguarded, a failed refresh would exit the menu under `set -e`. The
+    # installed worker (if any) still runs from the timer; say so and go on.
+    _aw_install_worker || warn "Using the previously installed worker, if there is one."
     while true; do
         show_menu
         local choice; read -r choice

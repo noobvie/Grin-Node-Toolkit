@@ -3,7 +3,8 @@
      under a CSP with script-src 'self' and NO 'unsafe-inline': this file must never carry an
      inline <script> or an on* attribute. Every script is a file.
 
-     data-untrusted-html="exempt": a rig password is typed on this page (the login card), so
+     data-untrusted-html="exempt": a rig password, a guest password and a new guest's password
+     are typed on this page (the sign-in card, the guest account box), so
      branding.js skips the operator's analytics + raw custom HTML here and public-shell.js
      renders no ad slots (audit §J1-1) — the same rule as the admin login page.
 
@@ -13,11 +14,11 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <!-- noindex: the page is behind a mining-address login, and in `preview` mode it must stay
+    <!-- noindex: the page is behind a sign-in (a miner or a guest account), and in `preview` mode it must stay
          unannounced (D12). -->
     <meta name="robots" content="noindex, nofollow">
     <title>Play — Chess | GRINIUM Mining Pool</title>
-    <meta name="description" content="Games for the pool's miners: chess against the pool's bot or another miner, played with plays earned from mining minutes. Points are for fun and never GRIN.">
+    <meta name="description" content="Chess at the pool: against the pool's bot or another player. Miners play with tickets earned from mining minutes; anyone else can create a free guest account. Points are for fun and never GRIN.">
     <link rel="icon" type="image/svg+xml" href="/images/favicon.svg">
     <link rel="stylesheet" href="/css/dashboard.css">
     <link rel="stylesheet" href="/css/themes.css">
@@ -39,7 +40,7 @@
         <div class="deck-head">
             <div>
                 <h1>🎮 Play</h1>
-                <div class="sub">Chess against the pool's bot or another miner &middot; plays come from your mining minutes &middot; points are for fun, never GRIN <span class="dim">(all times UTC)</span></div>
+                <div class="sub">Chess against the pool's bot or another player &middot; miners earn tickets by mining, anyone else can join with a free guest account &middot; points are for fun, never GRIN <span class="dim">(all times UTC)</span></div>
             </div>
         </div>
 
@@ -56,13 +57,25 @@
             </div>
         </section>
 
-        <!-- ═══ Sign in ═══ -->
+        <!-- ═══ Sign in ═══ Two kinds of account (design §19.17.3): a MINER signs in with the address
+             their rigs mine to + a proof; a GUEST with a name + password. Sign-up (guests only — it
+             needs the proof-of-work) sits inside the Guest tab, and /play/#signup opens it.
+             play-shell.js drives the miner form; play-guest.js the tabs, guest sign-in and sign-up.
+             No input on this card carries a `name`: if a script ever failed to intercept a submit,
+             the browser would send nothing, never a proof or a password. -->
         <section class="panel" id="play-login" hidden>
             <span class="screws"></span>
-            <h2 class="panel-title"><span class="tag">G-01</span> Sign in with your mining address</h2>
+            <h2 class="panel-title"><span class="tag">G-01</span> Sign in</h2>
             <div class="panel-body">
-                <!-- The inputs carry no `name`: if a script ever failed to intercept the submit,
-                     the browser would send nothing, never the proof. -->
+                <!-- Why the card is showing (signed out, session ended, account deleted): above the
+                     tabs, so it reads the same whichever tab is open. -->
+                <div class="acct-msg" id="login-note" role="status"></div>
+                <div class="play-tabs" role="tablist" aria-label="How you sign in">
+                    <button type="button" class="play-tab" role="tab" id="login-tab-miner" aria-selected="true" aria-controls="login-pane-miner">Miner</button>
+                    <button type="button" class="play-tab" role="tab" id="login-tab-guest" aria-selected="false" aria-controls="login-pane-guest" tabindex="-1">Guest</button>
+                </div>
+
+                <div id="login-pane-miner" role="tabpanel" aria-labelledby="login-tab-miner">
                 <form id="login-form" class="play-login-form" novalidate autocomplete="off">
                     <div class="field">
                         <label for="login-address">The GRIN address your rigs mine to</label>
@@ -79,7 +92,7 @@
                         <li><b>IP:</b> sign in from the network your rigs mine from — any IP they sent accepted shares from recently counts.</li>
                         <li><b>Password:</b> the password in your rig's pool config. Common ones (<code>x</code>, <code>123</code>, <code>d=…</code>) and anything under 8 characters are <b>never</b> recorded as proof, so with one of those you can sign in by IP only.</li>
                         <li>The pool checks the proof and tells the games yes or no. The games never store it.</li>
-                        <li><b>Good to know:</b> anyone who can give one of these proofs signs in as the address — someone who mined a few shares to it, or who shares your public IP. They could spend your plays or play games in your name. Plays and points are worth nothing outside the games, so this is accepted; chat asks for an older proof.</li>
+                        <li><b>Good to know:</b> anyone who can give one of these proofs signs in as the address — someone who mined a few shares to it, or who shares your public IP. They could spend your tickets or play games in your name. Tickets and points are worth nothing outside the games, so this is accepted; chat asks for an older proof.</li>
                     </ul>
                     <div class="play-actions">
                         <button type="submit" class="btn primary" id="login-submit">Sign in</button>
@@ -87,38 +100,137 @@
                     </div>
                     <div class="acct-msg" id="login-msg" role="alert"></div>
                 </form>
+                <p class="play-switch" id="miner-signup-offer">Don't mine here? <button type="button" class="play-link" id="miner-to-signup">Create a free guest account</button> — just a name and a password.</p>
+                </div>
+
+                <div id="login-pane-guest" role="tabpanel" aria-labelledby="login-tab-guest" hidden>
+                    <form id="guest-login-form" class="play-login-form" novalidate autocomplete="on">
+                        <p class="play-lead">Sign in with the name and password you chose when you created your guest account.</p>
+                        <div class="field">
+                            <label for="guest-name">Guest name</label>
+                            <input class="input" type="text" id="guest-name" maxlength="40" spellcheck="false" autocapitalize="off" autocomplete="username">
+                        </div>
+                        <div class="field">
+                            <label for="guest-password">Password</label>
+                            <span class="play-proof-wrap">
+                                <input class="input" type="password" id="guest-password" maxlength="128" spellcheck="false" autocapitalize="off" autocomplete="current-password">
+                                <button type="button" class="btn sm play-reveal" id="guest-reveal" aria-pressed="false" aria-controls="guest-password">Show</button>
+                            </span>
+                        </div>
+                        <div class="play-actions">
+                            <button type="submit" class="btn primary" id="guest-submit">Sign in</button>
+                        </div>
+                        <div class="acct-msg" id="guest-msg" role="alert"></div>
+                        <p class="play-switch" id="guest-signup-offer">New here? <button type="button" class="play-link" id="guest-to-signup">Create a guest account</button></p>
+                    </form>
+
+                    <!-- Sign-up (design §19.17.3). The name is checked here for its shape only; the
+                         server decides whether it is allowed and free. Then a short proof-of-work
+                         (play-pow.js) runs before the account is made. -->
+                    <form id="signup-form" class="play-login-form" novalidate autocomplete="on" hidden>
+                        <h3 class="play-sub">Create a guest account</h3>
+                        <p class="play-lead">Play chess against the pool's bot or other players without mining. A guest account is a name and a password — <b>no email</b>, nothing else about you. <span id="signup-tickets">You get a few tickets to play with every day.</span></p>
+                        <div class="field">
+                            <label for="signup-name">Choose a name</label>
+                            <input class="input" type="text" id="signup-name" maxlength="20" spellcheck="false" autocapitalize="off" autocomplete="username" aria-describedby="signup-name-hint">
+                            <p class="hint play-name-hint" id="signup-name-hint">3–20 letters and digits (A–Z, 0–9), at least one letter, no spaces. You sign in with it, and it is also the name others see until you pick a nickname.</p>
+                        </div>
+                        <div class="field">
+                            <label for="signup-password">Choose a password <span class="dim">(at least 10 characters)</span></label>
+                            <span class="play-proof-wrap">
+                                <input class="input" type="password" id="signup-password" maxlength="128" spellcheck="false" autocapitalize="off" autocomplete="new-password">
+                                <button type="button" class="btn sm play-reveal" id="signup-reveal" aria-pressed="false" aria-controls="signup-password signup-password2">Show</button>
+                            </span>
+                        </div>
+                        <div class="field">
+                            <label for="signup-password2">The same password again</label>
+                            <input class="input" type="password" id="signup-password2" maxlength="128" spellcheck="false" autocapitalize="off" autocomplete="new-password">
+                        </div>
+                        <p class="play-warn"><b>Write the password down or save it in your password manager.</b> There is no email, so a forgotten password cannot be reset — you would have to make a new account.</p>
+                        <div class="play-actions">
+                            <button type="submit" class="btn primary" id="signup-submit">Create account</button>
+                            <button type="button" class="play-link" id="signup-back">I already have a guest account</button>
+                        </div>
+                        <p class="play-progress" id="signup-progress" role="status" aria-live="polite" hidden></p>
+                        <div class="acct-msg" id="signup-msg" role="alert"></div>
+                    </form>
+                    <p class="play-chat-gate" id="signup-closed" hidden>New guest accounts are closed right now. Existing guests can still sign in.</p>
+                </div>
             </div>
         </section>
 
         <!-- ═══ Signed in: the account strip ═══ -->
         <section id="play-account" hidden aria-label="Your games account">
+            <!-- "Tickets" is the VISIBLE word (operator, C0); the API, the ledger and the admin pages
+                 keep the internal name `plays`. -->
             <div class="placard figures">
-                <span class="tone-ok"><i>Plays</i><b id="acct-plays">—</b></span>
+                <span class="tone-ok"><i>Tickets</i><b id="acct-plays">—</b></span>
                 <span class="tone-gold"><i>Points</i><b id="acct-points">—</b></span>
                 <span class="tone-info t-words"><i>Signed in as</i><b id="acct-addr">—</b></span>
             </div>
+            <p class="play-guest-line" id="acct-guest-line" hidden></p>
             <p class="play-badges" id="acct-badges" hidden></p>
-            <!-- Nickname (design §19.16): play-names.js fills this from /me. Every name is
-                 reviewed before anyone else sees it, and is always shown WITH the mask. -->
+            <!-- Nickname (design §19.17.5): play-names.js fills this from /me. A name is checked
+                 by the server and live at once, and is always shown WITH the mask. -->
             <details class="play-fold play-nick" id="nick-fold" hidden>
                 <summary>Nickname: <span id="nick-state">none</span></summary>
                 <p class="play-nick-line">Others see you as <b id="nick-shown">—</b></p>
-                <p class="play-nick-line" id="nick-pending" hidden></p>
                 <p class="play-nick-line play-nick-refused" id="nick-refused" hidden></p>
                 <form id="nick-form" class="play-nick-form" novalidate autocomplete="off">
-                    <label for="nick-input" class="play-chat-label">Ask for a nickname</label>
+                    <label for="nick-input" class="play-chat-label">Choose a nickname</label>
                     <div class="play-chat-compose">
-                        <input class="input" type="text" id="nick-input" maxlength="20" spellcheck="false" autocapitalize="off" autocomplete="off" placeholder="e.g. Night Shift">
-                        <button type="submit" class="btn primary sm" id="nick-submit">Send for review</button>
+                        <input class="input" type="text" id="nick-input" maxlength="20" spellcheck="false" autocapitalize="off" autocomplete="off" placeholder="e.g. NightShift">
+                        <button type="submit" class="btn primary sm" id="nick-submit">Set</button>
                     </div>
                 </form>
-                <p class="hint" id="nick-rule"><span id="nick-rule-text">2–20 characters: letters, digits, spaces and - _ &amp; ' only, with at least one letter</span>. The pool reviews every nickname before anyone else sees it, and it always shows with your masked address — e.g. <code>Night Shift (grin1abcd…wxyz)</code> — so nobody can pass as you by copying it.</p>
+                <p class="hint" id="nick-rule"><span id="nick-rule-text">3–20 characters: letters A–Z and digits 0–9 only (no spaces), with at least one letter</span>. <span id="nick-example-miner">It goes live at once and always shows with your masked address — e.g. <code>NightShift (grin1abcd…wxyz)</code> — so nobody can pass as you by copying it.</span><span id="nick-example-guest" hidden>It goes live at once and shows as <code>NightShift · guest</code>. Your sign-up name counted as your first nickname, and changing it never changes the name you sign in with.</span> The pool and its moderators can remove a name that breaks the rules.</p>
+                <p class="hint" id="nick-cooldown" hidden></p>
                 <p class="play-chat-gate" id="nick-gate" hidden></p>
                 <span class="play-account-btns">
-                    <button type="button" class="btn sm" id="nick-withdraw" hidden>Withdraw request</button>
                     <button type="button" class="btn sm" id="nick-remove" hidden>Remove my nickname</button>
                 </span>
                 <div class="acct-msg" id="nick-msg" role="alert"></div>
+            </details>
+            <!-- Guest account box (design §19.17.3): shown to a guest only. The sign-in name comes
+                 from /me — the only response that carries it, and only to its owner. -->
+            <details class="play-fold play-guest" id="guest-fold" hidden>
+                <summary>Guest account: password and delete</summary>
+                <p class="play-nick-line">You sign in as <b id="guest-login-name">—</b> <span class="dim" id="guest-created"></span></p>
+                <p class="hint">Your sign-in name never changes and nobody is shown it as a sign-in name. It was also your first nickname — pick a different nickname above to change what others see.</p>
+
+                <form id="pw-form" class="play-account-form" novalidate autocomplete="on">
+                    <h3 class="play-sub">Change password</h3>
+                    <div class="field">
+                        <label for="pw-current">Current password</label>
+                        <input class="input" type="password" id="pw-current" maxlength="128" spellcheck="false" autocapitalize="off" autocomplete="current-password">
+                    </div>
+                    <div class="field">
+                        <label for="pw-next">New password <span class="dim">(at least 10 characters)</span></label>
+                        <input class="input" type="password" id="pw-next" maxlength="128" spellcheck="false" autocapitalize="off" autocomplete="new-password">
+                    </div>
+                    <div class="field">
+                        <label for="pw-next2">The new password again</label>
+                        <input class="input" type="password" id="pw-next2" maxlength="128" spellcheck="false" autocapitalize="off" autocomplete="new-password">
+                    </div>
+                    <p class="hint">Your other devices are signed out when you change it; this one stays signed in.</p>
+                    <button type="submit" class="btn sm primary" id="pw-submit">Change password</button>
+                    <div class="acct-msg" id="pw-msg" role="alert"></div>
+                </form>
+
+                <form id="del-form" class="play-account-form" novalidate autocomplete="off">
+                    <h3 class="play-sub">Delete this account</h3>
+                    <p class="hint">This is permanent. Your tickets, points and nickname are gone, your sign-in name becomes free for someone else, and your past games show as “deleted guest”. There is no undo.</p>
+                    <div class="field">
+                        <label for="del-password">Your password</label>
+                        <input class="input" type="password" id="del-password" maxlength="128" spellcheck="false" autocapitalize="off" autocomplete="current-password">
+                    </div>
+                    <div class="field">
+                        <label for="del-confirm">Type <b>DELETE</b> to confirm</label>
+                        <input class="input" type="text" id="del-confirm" maxlength="10" spellcheck="false" autocapitalize="characters" autocomplete="off">
+                    </div>
+                    <button type="submit" class="btn sm" id="del-submit" disabled>Delete my account</button>
+                    <div class="acct-msg" id="del-msg" role="alert"></div>
+                </form>
             </details>
             <div class="play-account-bar">
                 <details class="play-fold" id="sessions-fold">
@@ -182,7 +294,7 @@
                                     <option value="seat2">Black</option>
                                 </select>
                             </div>
-                            <p class="hint">A game costs a play. Winning pays points by level; a draw pays half.</p>
+                            <p class="hint">A game costs a ticket. Winning pays points by level; a draw pays half.</p>
                             <button type="submit" class="btn primary" id="new-submit">Start game</button>
                             <div class="acct-msg" id="new-msg" role="alert"></div>
                         </form>
@@ -217,7 +329,8 @@
                                 <label for="pvp-time">Time per move</label>
                                 <select class="input" id="pvp-time"></select>
                             </div>
-                            <p class="hint" id="pvp-hint">Empty address = an open seek anyone can take. Each side pays a play; it comes back if nobody accepts within 3 days, or if the game is aborted before both sides have moved.</p>
+                            <p class="hint" id="pvp-hint">Empty address = an open seek anyone can take. Each side pays a ticket; it comes back if nobody accepts within 3 days, or if the game is aborted before both sides have moved.</p>
+                            <p class="hint" id="pvp-guest-note" hidden>A guest has no address to be challenged at, so other players find you through open seeks. You can still challenge a miner by their address.</p>
                             <button type="submit" class="btn primary" id="pvp-submit">Post the game</button>
                             <div class="acct-msg" id="pvp-msg" role="alert"></div>
                         </form>
@@ -318,7 +431,7 @@
             <span class="screws"></span>
             <h2 class="panel-title"><span class="tag">G-07</span> Chat <span class="right dim" id="chat-sub"></span></h2>
             <div class="panel-body">
-                <p class="play-chat-warn"><b>The operator will never ask you for funds, keys or seeds in chat.</b> Names are masked addresses, and a mask can be imitated: only the <span class="play-chat-badge is-operator">Operator</span> badge is proof.</p>
+                <p class="play-chat-warn"><b>The operator will never ask you for funds, keys or seeds in chat.</b> Names are masked addresses or guest names, and either can be imitated: only the <span class="play-chat-badge is-operator">Operator</span> badge is proof.</p>
                 <p class="dim" id="chat-closed" hidden>Chat is closed right now.</p>
                 <ol class="play-chat-list" id="chat-list" aria-label="Chat messages"></ol>
                 <p class="dim" id="chat-empty" hidden>No messages yet. Say hello.</p>
@@ -329,6 +442,7 @@
                         <button type="submit" class="btn primary sm" id="chat-send">Send</button>
                     </div>
                 </form>
+                <p class="dim play-chat-note" id="chat-guest-note" hidden>As a guest, a message with a link in it waits for a moderator before others see it.</p>
                 <p class="play-chat-gate" id="chat-gate" hidden></p>
                 <div class="acct-msg" id="chat-msg" role="alert"></div>
 
@@ -344,23 +458,25 @@
             </div>
         </section>
 
-        <!-- ═══ How it works ═══ The numbers in the HTML are the DEFAULTS; play-chat.js replaces
-             the #rule-* spans with the live values from GET /play/api/rules. -->
+        <!-- ═══ How it works ═══ The numbers in the HTML are the DEFAULTS; the #rule-* spans are
+             replaced with the live values from GET /play/api/rules — play-chat.js fills the miner,
+             cost and chat lines, play-lobby.js the PvP lines, play-guest.js the guest lines. -->
         <section class="panel" id="play-how">
             <span class="screws"></span>
-            <h2 class="panel-title"><span class="tag">G-05</span> How plays are earned</h2>
+            <h2 class="panel-title"><span class="tag">G-05</span> How tickets are earned</h2>
             <div class="panel-body">
                 <details class="play-fold">
-                    <summary>Plays, points and fair play</summary>
+                    <summary>Tickets, points and fair play</summary>
                     <ul class="play-hints">
-                        <li><b>Plays come from mining minutes, not hashrate.</b> Every minute your address has an active miner at this pool counts. <span id="rule-plays">By default 10 active minutes earn 1 play, up to 24 plays a UTC day and 100 held at once</span> — the same for a small miner and a large one. New plays appear within about 5 minutes.</li>
-                        <li><b>A game costs a play.</b> <span id="rule-cost">By default one game against the bot costs 1 play.</span> <span id="rule-pvp-cost">A game against another miner costs each side a play;</span> it is refunded if nobody accepts within 3 days, or if the game is aborted before both sides have moved.</li>
-                        <li><b>Games against people are rated.</b> <span id="rule-pvp">By default the first 3 games a UTC day between the same two addresses are rated: they move the Elo rating and pay 10 points for a win, 5 for a draw.</span> Further games that day still count as games, not as points, ratings or leaderboard wins. The engine cannot tell whether someone had help; points are for fun.</li>
-                        <li><b>Points are for fun.</b> A win against the bot pays 1, 2 or 3 points by level; a draw pays half, rounded down. Points are capped per day, and they are <b>never</b> GRIN: they cannot be paid out, sold or moved to another address.</li>
+                        <li><b>A game costs a ticket.</b> <span id="rule-cost">By default one game against the bot costs 1 ticket.</span> <span id="rule-pvp-cost">A game against another player costs each side a ticket;</span> it is refunded if nobody accepts within 3 days, or if the game is aborted before both sides have moved.</li>
+                        <li><b>Miners earn tickets from mining minutes, not hashrate.</b> Every minute your address has an active miner at this pool counts. <span id="rule-plays">By default 10 active minutes earn 1 ticket, up to 24 tickets a UTC day and 999 held at once</span> — the same for a small miner and a large one. New tickets appear within about 5 minutes.</li>
+                        <li><b>Everyone else can make a free guest account</b> — a name and a password, no email, no mining. <span id="rule-guest">By default a guest has 5 tickets every UTC day: at 00:00 UTC the count goes back to 5, so unused tickets are not saved up.</span> There is no way to recover a forgotten password. <span id="rule-guest-idle">A guest account nobody signs in to for 180 days is deleted.</span></li>
+                        <li><b>Games against people are rated.</b> <span id="rule-pvp">By default the first 3 games a UTC day between the same two players are rated: they move the Elo rating and pay 10 points for a win, 5 for a draw.</span> Further games that day still count as games, not as points, ratings or leaderboard wins. The engine cannot tell whether someone had help; points are for fun.</li>
+                        <li><b>Points are for fun.</b> A win against the bot pays 1, 2 or 3 points by level; a draw pays half, rounded down. Points are capped per day, and they are <b>never</b> GRIN: they cannot be paid out, sold or moved to another account.</li>
                         <li><b>The server keeps the board.</b> Every move is checked by the pool's games service; the board in your browser only draws it. You have a few days per move — run out and the game is lost.</li>
-                        <li><b>Events</b> are competitions between addresses — most mining minutes, most active days, most wins against the bot. They run on whole UTC days, and the rewards are points and badges, never GRIN.</li>
-                        <li><b>Chat</b> is for the pool's active miners. <span id="rule-chat">By default you need an hour of mining in the last 7 days, and a sign-in proof at least a day old, so someone who only just mined to your address cannot post as you.</span> Links are held for review and never clickable.</li>
-                        <li>Your address is shown to others masked, the way the pool's own pages show it (<code>grin1abcd…wxyz</code>). You can ask for a <b>nickname</b>: the pool reviews it first, and it always shows together with the mask (<code>Night Shift (grin1abcd…wxyz)</code>), never on its own.</li>
+                        <li><b>Events</b> are competitions — most mining minutes, most active days, most wins against the bot. They run on whole UTC days, and the rewards are points and badges, never GRIN. The mining ones are for miners only.</li>
+                        <li><b>Chat.</b> <span id="rule-chat">Miners need an hour of mining in the last 7 days, and a sign-in proof at least a day old, so someone who only just mined to your address cannot post as you.</span> <span id="rule-guest-chat">Guests can post once their account is a day old, at most one message every 15 seconds and 10 an hour.</span> Links are held for review and never clickable.</li>
+                        <li><b>Names.</b> A miner is shown by their address, masked the way the pool's own pages show it (<code>grin1abcd…wxyz</code>); a guest by their name with a guest tag (<code>NightShift · guest</code>). A miner can add a <b>nickname</b> (letters and digits), which always shows together with the mask (<code>NightShift (grin1abcd…wxyz)</code>), never on its own; a guest can change theirs. Every name is checked automatically and goes live at once; the pool and its moderators can remove one that breaks the rules.</li>
                     </ul>
                 </details>
             </div>
@@ -376,8 +492,11 @@
     <script src="/play/js/frame-host.js?v=__GRIN_PLAY_VERSION__"></script>
     <script src="/play/js/play-shell.js?v=__GRIN_PLAY_VERSION__"></script>
     <script src="/play/js/play-boards.js?v=__GRIN_PLAY_VERSION__"></script>
+    <script src="/play/js/play-chat-core.js?v=__GRIN_PLAY_VERSION__"></script>
     <script src="/play/js/play-chat.js?v=__GRIN_PLAY_VERSION__"></script>
     <script src="/play/js/play-lobby.js?v=__GRIN_PLAY_VERSION__"></script>
     <script src="/play/js/play-names.js?v=__GRIN_PLAY_VERSION__"></script>
+    <script src="/play/js/play-pow.js?v=__GRIN_PLAY_VERSION__"></script>
+    <script src="/play/js/play-guest.js?v=__GRIN_PLAY_VERSION__"></script>
 </body>
 </html>

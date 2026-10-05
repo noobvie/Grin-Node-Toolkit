@@ -310,7 +310,7 @@
             <!-- ═══ D-01b · DONOR NAME & BANNER (design §18.7) ═══ -->
             <div class="panel"><span class="screws"></span>
                 <h2 class="panel-title"><span class="tag">D-01b</span> Your donor name &amp; banner
-                    <span class="right">optional, reviewed before it appears</span></h2>
+                    <span class="right">optional — names checked at once, banners reviewed</span></h2>
                 <div class="panel-body">
                     <p>The wall below shows your masked address until you choose a name.</p>
                     <ul class="fund-list">
@@ -320,8 +320,12 @@
                             your tagged rig mined for matures.</li>
                         <li>🔐 <strong>Proof</strong>: a recent mining IP <em>and</em> your rig's stratum
                             password, both. Someone who only mines to your address cannot set a name for you.</li>
-                        <li>👀 <strong>Reviewed first</strong>: the pool checks every name and banner before it
-                            appears. Nothing you submit is public until it is approved.</li>
+                        <li>✅ <strong>Names go live at once</strong> if they pass an automatic check: no
+                            reserved or blocked words, nothing that looks like a GRIN address, and not a name
+                            another donor already uses. You can change it once every 7 days. The pool can still
+                            take a name down.</li>
+                        <li>👀 <strong>Banners are reviewed first</strong>: nothing you upload is public until
+                            the pool approves it.</li>
                         <li id="dn-banner-li">🖼️ <strong>Banner</strong>: <span id="dn-banner-top">the top donors in
                             the league</span> also show a banner. 800 × 200 px is recommended; PNG, JPG or GIF
                             (animation allowed), up to 300 KB.</li>
@@ -367,7 +371,7 @@
                         <ul class="donor-past-list" id="donor-past-list"></ul>
                         <div class="donor-past-more" id="donor-past-more" style="display:none;"></div>
                     </div>
-                    <p class="panel-note donor-disclaimer">Names and banners are chosen by donors and reviewed by the pool before they appear.</p>
+                    <p class="panel-note donor-disclaimer">Names and banners are chosen by donors. Names are checked automatically; banners are reviewed by the pool before they appear.</p>
                 </div>
             </div>
 
@@ -620,7 +624,7 @@
                 if (isFinite(exp) && exp >= 0) {
                     set('dn-expiry', exp > 0
                         ? 'A name and banner stop showing ' + exp + ' ' + plural(exp, 'month', 'months') + ' after your last donation, and come back when you donate again.'
-                        : 'An approved name and banner stay up for as long as the pool keeps them approved.');
+                        : 'A name and banner stay up for as long as the pool keeps them up.');
                 }
 
                 var grid = document.getElementById('donor-grid');

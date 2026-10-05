@@ -13,7 +13,7 @@
 //   - A body is stored as PLAIN TEXT, normalised on the server (normaliseBody below).
 //     Rendering is the client's job, with textContent only; nothing here produces HTML.
 //   - The public read never carries a full address, an IP or an admin's name: `name` is the
-//     masked address (with an approved nickname in front, §19.16 — never the nickname
+//     masked address (with a live nickname in front, §19.17.5 — never the nickname
 //     alone), or "Operator" for an operator post.
 //   - `role` is never an input. The operator badge comes only from the admin route
 //     (role='operator' in the row); the moderator badge is computed at READ time from the
@@ -32,7 +32,7 @@
 
 const crypto = require('node:crypto');
 const { HttpError, parseIntStrict } = require('./http');
-const { maskAddr } = require('./mask');
+const { maskAddr, isGuestId } = require('./mask');
 // names.js requires this file (normaliseBody), so its mask-only fallback is inlined here
 // rather than imported: the same shape as names.js MASK_ONLY.
 const MASK_ONLY = Object.freeze({ label: maskAddr });
@@ -47,6 +47,10 @@ const IP_PER_HOUR = 60;               // §19.10; per IP, all addresses together
 const DUP_WINDOW_S = 600;             // the same body from the same address is refused this long
 const REPORT_REASON_MAX = 200;
 const REPORTS_PER_HOUR = 20;          // per reporting address
+// Guests (D26, §19.17.3): stricter per-ACCOUNT rates, on top of the per-IP 60/h. Constants, not
+// settings — slow mode and chat_posts_per_hour can only tighten them further.
+const GUEST_MIN_INTERVAL_S = 15;
+const GUEST_POSTS_PER_HOUR = 10;
 const CHANGE_LOG_MAX = 1000;
 const OPERATOR_NAME = 'Operator';
 const WORD_MAX = 40;
@@ -133,6 +137,9 @@ function createChat({ db, sessions, settings, auth, mode, log, names = MASK_ONLY
     report: raw.prepare(
       'INSERT INTO chat_reports (message_id, reporter, reason, created_at) VALUES (?, ?, ?, ?) ON CONFLICT(message_id, reporter) DO NOTHING'),
     openReports: raw.prepare('SELECT COUNT(*) AS n FROM chat_reports WHERE message_id = ? AND resolved_at IS NULL'),
+    // The auto-hold count (D26): reports by guests reach the queue but never hold a message —
+    // guest accounts are cheap, and three of them must not be able to hide anyone.
+    countedReports: raw.prepare("SELECT COUNT(*) AS n FROM chat_reports WHERE message_id = ? AND resolved_at IS NULL AND reporter NOT LIKE 'g:%'"),
     resolveReports: raw.prepare('UPDATE chat_reports SET resolved_at = ?, resolved_by = ? WHERE message_id = ? AND resolved_at IS NULL'),
     moderators: raw.prepare('SELECT address FROM moderators'),
     words: raw.prepare('SELECT word FROM chat_words ORDER BY word'),
@@ -264,11 +271,12 @@ function createChat({ db, sessions, settings, auth, mode, log, names = MASK_ONLY
   // The per-ADDRESS limits read the DB, not memory: they survive a restart, and a second
   // session (or twenty) of the same address shares them (§19.13 #11).
   function addressLimits(address, t, isModerator) {
+    const guest = isGuestId(address);
     const slow = isModerator ? 0 : settings.get('chat_slow_seconds');
-    const gap = Math.max(MIN_INTERVAL_S, slow);
+    const gap = Math.max(guest ? GUEST_MIN_INTERVAL_S : MIN_INTERVAL_S, slow);
     const last = stmts.lastPost.get(address).t;
     if (last !== null && t - last < gap) return gap - (t - last);
-    const perHour = settings.get('chat_posts_per_hour');
+    const perHour = guest ? Math.min(GUEST_POSTS_PER_HOUR, settings.get('chat_posts_per_hour')) : settings.get('chat_posts_per_hour');
     if (stmts.postsSince.get(address, t - 3600).n >= perHour) return 60;
     return 0;
   }
@@ -299,7 +307,8 @@ function createChat({ db, sessions, settings, auth, mode, log, names = MASK_ONLY
     if (stmts.dup.get(s.address, t - DUP_WINDOW_S, body)) throw new HttpError(409, 'duplicate');
     const ipTake = ipBucket.take(ctx.ip);
     if (!ipTake.ok) throw tooMany(ipTake.retryAfter);
-    const hold = holdReason(body, { words: words(), holdLinks: settings.get('chat_hold_links') });
+    // A guest's link-like body is ALWAYS held (D26), whatever chat_hold_links says.
+    const hold = holdReason(body, { words: words(), holdLinks: isGuestId(s.address) || settings.get('chat_hold_links') });
     const id = Number(stmts.insert.run(room, 'player', s.address, null, body, hold ? 'held' : 'visible', hold, t).lastInsertRowid);
     return { ok: true, message: view(stmts.byId.get(id), s.address), held: hold !== null };
   }
@@ -337,7 +346,7 @@ function createChat({ db, sessions, settings, auth, mode, log, names = MASK_ONLY
       if (r.changes === 0) return { duplicate: true, held: m.state === 'held' };
       reportBucket.take(s.address);
       let held = m.state === 'held';
-      if (m.state === 'visible' && stmts.openReports.get(id).n >= settings.get('chat_report_threshold')) {
+      if (m.state === 'visible' && stmts.countedReports.get(id).n >= settings.get('chat_report_threshold')) {
         if (stmts.setState.run('held', 'reports', null, null, id, 'visible').changes === 1) {
           logChange(id, m.room, 'held');
           held = true;
@@ -426,5 +435,5 @@ function createChat({ db, sessions, settings, auth, mode, log, names = MASK_ONLY
 
 module.exports = {
   createChat, normaliseBody, normaliseText, normaliseWord, holdReason, folded,
-  ROOMS, BODY_MAX, PAGE, MIN_INTERVAL_S, IP_PER_HOUR, DUP_WINDOW_S, CHANGE_LOG_MAX, WORD_MAX, WORDS_MAX, OPERATOR_NAME,
+  ROOMS, BODY_MAX, PAGE, MIN_INTERVAL_S, IP_PER_HOUR, GUEST_MIN_INTERVAL_S, GUEST_POSTS_PER_HOUR, DUP_WINDOW_S, CHANGE_LOG_MAX, WORD_MAX, WORDS_MAX, OPERATOR_NAME,
 };

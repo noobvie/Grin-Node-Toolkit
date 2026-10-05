@@ -2,11 +2,16 @@
    ads.js — render operator-managed ads into public placement slots  [2026-06]
    ----------------------------------------------------------------------------
    Fetches GET /api/public/ads (active, in-window ads grouped by placement) and
-   fills every [data-ad-slot="<placement>"] element on the page. Three ad kinds:
+   fills every [data-ad-slot="<placement>"] element on the page. Two ad kinds:
      · banner — <img> (optionally wrapped in a sponsored link)
      · text   — a native card composed from headline + body_text + cta_label, no image
-     · code   — operator-trusted HTML/JS snippet (ad-network zone). innerHTML does
-                NOT run <script> tags, so we re-create them so network tags execute.
+   There is NO third kind. The `code` type (an ad-network HTML/JS snippet this file
+   re-created as executing <script> nodes) was deleted in design §19.17 D22 (Option B,
+   Part C1): one origin is one trust zone, and a sign-in form is on every page. The
+   server no longer serves a stored code ad; renderAd() below would draw nothing for one
+   anyway. Every value that reaches the markup is attribute-escaped, and a URL must be a
+   site path or http(s) — so nothing an ad carries can become a script, a handler or a
+   javascript: link.
    Placements: header, sidebar, in-content, footer. Header/footer slots are
    injected site-wide by public-shell.js; sidebar/in-content are per-page anchors.
    ========================================================================== */
@@ -19,12 +24,22 @@
       .replace(/</g, '&lt;').replace(/>/g, '&gt;');
   }
 
-  // A real click-through target (anything but empty or the '#' starter placeholder).
-  function hasLink(url) { return !!url && url !== '#'; }
+  // The only URL shapes an ad may carry: a site path ('/x', never the protocol-relative
+  // '//host') or an absolute http(s) URL. lib/ads.js refuses anything else on write; this
+  // re-check covers a row stored before that rule existed, where a `javascript:` link_url
+  // would have become a live href. Anything else reads as "no URL" — which is also how the
+  // '#' starter placeholder and an empty link come out: display-only, nothing to click.
+  function safeUrl(url) {
+    if (typeof url !== 'string') return '';
+    var u = url.trim();
+    // '/\host' is protocol-relative to a browser too (it reads '\' as '/'), so refuse both.
+    if (/^\/(?![\/\\])[^\s"'<>]*$/.test(u)) return u;
+    return /^https?:\/\/[^\s"'<>]+$/i.test(u) ? u : '';
+  }
   // Site paths (start with a single '/') open in the SAME tab; external URLs open in a new
   // tab with the usual sponsored-link rels. Self-promo CTAs are internal, so they navigate
   // in place rather than spawning a tab back to our own site.
-  function isInternal(url) { return /^\/(?!\/)/.test(url); }
+  function isInternal(url) { return /^\/(?![\/\\])/.test(url); }
   function linkOpen(url) {
     return isInternal(url) ? '' : ' target="_blank" rel="noopener nofollow sponsored"';
   }
@@ -46,31 +61,32 @@
 
   function renderAd(ad) {
     var idAttr = ' data-ad-id="' + (parseInt(ad.id, 10) || 0) + '"';
-    if (ad.ad_type === 'code' && ad.html_code) {
-      return '<div class="ad-unit ad-unit--code"' + idAttr + '>' + ad.html_code + '</div>';
-    }
+    var link = safeUrl(ad.link_url);
     if (ad.ad_type === 'text' && ad.headline) {
       // No link → the CTA must not keep its button fill: a pill that looks pressable but
       // does nothing is worse than no pill. The operator's copy is still shown, flat.
-      var ctaCls = 'ad-text-cta' + (hasLink(ad.link_url) ? '' : ' ad-text-cta--flat');
+      var ctaCls = 'ad-text-cta' + (link ? '' : ' ad-text-cta--flat');
       var card = '<span class="ad-text-head">' + attr(ad.headline) + '</span>' +
         (ad.body_text ? '<span class="ad-text-body">' + attr(ad.body_text) + '</span>' : '') +
         (ad.cta_label ? '<span class="' + ctaCls + '">' + attr(ad.cta_label) + '</span>' : '');
-      var body = hasLink(ad.link_url)
-        ? '<a class="ad-text-card" href="' + attr(ad.link_url) + '"' + linkOpen(ad.link_url) +
+      var body = link
+        ? '<a class="ad-text-card" href="' + attr(link) + '"' + linkOpen(link) +
           (ad.headline ? ' title="' + attr(ad.headline) + '"' : '') + '>' + card + '</a>'
         : '<div class="ad-text-card">' + card + '</div>';
       return '<div class="ad-unit ad-unit--text"' + idAttr + '>' + body + '</div>';
     }
-    if (ad.ad_type === 'banner' && ad.image_url) {
-      var img = '<img src="' + attr(ad.image_url) + '" alt="' + attr(ad.alt_text || '') + '" loading="lazy">';
+    var src = safeUrl(ad.image_url);
+    if (ad.ad_type === 'banner' && src) {
+      var img = '<img src="' + attr(src) + '" alt="' + attr(ad.alt_text || '') + '" loading="lazy">';
       // '#' is the shipped starter placeholder — render it as a plain image rather than
       // a link that opens an empty tab. Clicks are still counted on the unit itself.
-      if (!hasLink(ad.link_url)) return '<div class="ad-unit ad-unit--banner"' + idAttr + '>' + img + '</div>';
-      var inner = '<a href="' + attr(ad.link_url) + '"' + linkOpen(ad.link_url) +
+      if (!link) return '<div class="ad-unit ad-unit--banner"' + idAttr + '>' + img + '</div>';
+      var inner = '<a href="' + attr(link) + '"' + linkOpen(link) +
         (ad.alt_text ? ' title="' + attr(ad.alt_text) + '"' : '') + '>' + img + '</a>';
       return '<div class="ad-unit ad-unit--banner"' + idAttr + '>' + inner + '</div>';
     }
+    // Any other ad_type — including a legacy `code` row, should one ever be served — draws
+    // nothing (design §19.17 D22).
     return '';
   }
 
@@ -111,19 +127,6 @@
       var ids = _pendingImpr.splice(0);
       if (ids.length) sendEvent({ impressions: ids });
     }, 1500);
-  }
-
-  // innerHTML-inserted <script> tags never execute; re-create them so ad-network
-  // snippets (e.g. Coinzilla/A-ADS zones) actually run.
-  function activateScripts(container) {
-    container.querySelectorAll('script').forEach(function (old) {
-      var s = document.createElement('script');
-      for (var i = 0; i < old.attributes.length; i++) {
-        s.setAttribute(old.attributes[i].name, old.attributes[i].value);
-      }
-      s.text = old.textContent || '';
-      old.parentNode.replaceChild(s, old);
-    });
   }
 
   // ── Render settings (admin-set; defaults used if the API is unreachable) ──
@@ -168,8 +171,7 @@
 
   // When one placement holds several active ads, show ONE at a time and cycle through
   // them (weight order from the API = cycle order; random entry point so different
-  // pageloads lead with different ads). Code-ad scripts were already activated at
-  // insert time — cycling only toggles visibility, it never re-runs snippets.
+  // pageloads lead with different ads). Cycling only toggles visibility.
   function makeRotor(el) {
     var units = [].slice.call(el.querySelectorAll('.ad-unit'));
     if (!units.length) return null;
@@ -309,7 +311,6 @@
         var html = list.map(renderAd).filter(Boolean).join('');
         if (!html) { el.style.display = 'none'; return; }
         el.innerHTML = chromeHtml() + html;
-        activateScripts(el);
         el.style.display = '';
 
         if (isInContent) {

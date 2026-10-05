@@ -254,6 +254,33 @@ console.log('\n[8] §J14-9 — ad counters are labelled unverified');
   // Control: that predicate is only meaningful if it matches the one the renderer uses.
   ok('control — publicByPlacement still uses the same serving predicate',
      /is_active = 1\s*\n\s*AND \(start_at IS NULL OR start_at <= \?\)\s*\n\s*AND \(end_at IS NULL OR end_at >= \?\)/.test(adsLib));
+  // Design §19.17 D22: the ad TYPE is part of the serving predicate now (a legacy `code` row is
+  // never served), so it must be in BOTH statements, through the one shared constant.
+  ok("D22: SERVABLE admits banner + text only", /const SERVABLE = "ad_type IN \('banner', 'text'\)";/.test(adsLib));
+  ok('D22: publicByPlacement AND recordEvents both splice in SERVABLE',
+     (adsLib.match(/AND \$\{SERVABLE\}/g) || []).length === 2);
+  ok('D22: the public SELECT no longer reads html_code',
+     !/SELECT id, placement, ad_type[^`]*html_code/.test(adsLib));
+}
+
+// ── design §19.17 D22 — the code-ad type is gone from the admin page ───────────
+console.log('\n[8b] D22 — ads.html offers no code ad; a legacy one is delete-only');
+{
+  const ads = read('ads.html');
+  ok('the Type select has no "code" option', !/<option value="code">/.test(ads));
+  ok('no snippet textarea and no html_code in the submit body',
+     !/id="ad-code"/.test(ads) && !/html_code/.test(ads));
+  ok('the Type field says why code ads went', /Code-snippet ads were removed for security — design §19\.17 D22/.test(ads));
+  ok('a removed row shows "Unsupported (removed)"', /if \(a\.removed\) return \['Unsupported \(removed\)'/.test(ads));
+  ok('a removed row renders only Delete (edit/duplicate/toggle are skipped)',
+     /\$\{a\.removed \? '' : `<button class="btn-icon" onclick="editAd/.test(ads) &&
+     /if \(!a \|\| a\.removed\) return;[\s\S]*if \(!a \|\| a\.removed\) return;/.test(ads));
+
+  const an = read('settings-analytics.html');
+  ok('settings-analytics.html has no custom HTML fields',
+     !/id="custom_head_html"/.test(an) && !/id="custom_body_html"/.test(an));
+  ok('settings-analytics.html says why, in one line',
+     /Custom HTML was removed for security — design §19\.17 D22\./.test(an));
 }
 // ── design §18.6 — admin → Donors page (review queue + donors list + donation settings) ──
 console.log('\n[9] §18.6 — donors.html');
@@ -294,13 +321,13 @@ console.log('\n[9] §18.6 — donors.html');
     if (keys.has(id)) present.add(id); else stray.push(id);
   }
   ok('no input id in the form that is not an incentives key (or settings-skip)', stray.length === 0, stray.join(','));
-  for (const k of ['allow_miner_donations', 'donation_address', 'donor_name_blocklist', 'donor_banner_slots',
+  for (const k of ['allow_miner_donations', 'donation_address', 'donor_banner_slots',
                    'donor_rank_window_days', 'donor_loyalty_percent_per_month', 'donor_loyalty_cap', 'donor_name_expiry_months']) {
     ok(`form carries ${k}`, present.has(k));
   }
   ok('the removed donor_censored_display is on no admin page', !panelFiles().some((f) => /donor_censored_display/.test(read(f))));
-  ok('the word list is relabelled as FLAG words for the review queue',
-     /<label for="donor_name_blocklist">Flag words — highlighted in the review queue<\/label>/.test(form));
+  ok('C4: the retired flag-word list is on no admin page (its words moved to Settings → Names)',
+     !panelFiles().some((f) => /id="donor_name_blocklist"/.test(read(f))));
   ok('banner slots carries the validator bounds (0–10)', /id="donor_banner_slots"[^>]*min="0" max="10"/.test(form));
   ok('donation_address may be saved EMPTY (settings-allow-empty) — "leave blank" must be able to persist',
      /id="donation_address"[^>]*class="[^"]*settings-allow-empty/.test(form));
@@ -386,9 +413,25 @@ console.log('\n[9] §18.6 — donors.html');
      /_reasons\.set\(inp\.dataset\.reasonFor, inp\.value\)/.test(donors) && /_reasons\.get\(String\(r\.id\)\)/.test(donors));
 
   // Escaping — AdminTable inserts row() output raw, so every server string passes escHtml.
-  ok('every requested name, flag word, reason, current name and worker name is escaped',
-     /escHtml\(r\.name\)/.test(donors) && /escHtml\(f\.word\)/.test(donors) && /escHtml\(r\.reason\)/.test(donors) &&
-     /escHtml\(r\.current\.name\)/.test(donors) && /escHtml\(w\.name\)/.test(donors) && /escHtml\(d\.name\.text\)/.test(donors));
+  ok('every requested name, reason, current name, worker name and donor-name field is escaped',
+     /escHtml\(r\.name\)/.test(donors) && /escHtml\(r\.reason\)/.test(donors) &&
+     /escHtml\(r\.current\.name\)/.test(donors) && /escHtml\(w\.name\)/.test(donors) && /escHtml\(d\.name\.text\)/.test(donors) &&
+     /escHtml\(n\.name\)/.test(donors) && /escHtml\(n\.reason\)/.test(donors) && /escHtml\(n\.norm\)/.test(donors) && /escHtml\(what\)/.test(donors));
+  // Part C4 (§19.17.6): names are auto-checked — the queue holds banners, names are a list.
+  ok('C4: the queue asks for BANNERS only and has no Flags column',
+     /\/api\/admin\/donors\/requests\?kind=banner&status=/.test(donors) && !/flagBadges|r\.flags/.test(donors) && !/<th>Flags<\/th>/.test(donors));
+  const namesAt = donors.indexOf('id="names-tbody"');
+  ok('C4: the Donor names section sits between the queue and the donors list',
+     namesAt > donors.indexOf('id="queue-tbody"') && namesAt < donors.indexOf('id="donors-tbody"'));
+  ok('C4: live / removed / banned views read the three admin routes',
+     /'\/api\/admin\/donors\/banned-names'/.test(donors) && /'\/api\/admin\/donors\/names\?state=' \+ encodeURIComponent\(_namesView\)/.test(donors));
+  ok('C4: ban / unban go through postAction (adminFetch, step-up aware) and pass values via this.dataset',
+     /postAction\('\/api\/admin\/donors\/banned-names', \{ name, reason \}/.test(donors) &&
+     /postAction\('\/api\/admin\/donors\/banned-names\/' \+ encodeURIComponent\(norm\) \+ '\/unban'/.test(donors) &&
+     /onclick="banName\(this\.dataset\.name\)"/.test(donors) && /onclick="unbanName\(this\.dataset\.norm\)"/.test(donors));
+  ok('C4: the page points the operator at Settings → Names for the words', /href="settings-names\.html"/.test(donors));
+  ok('C4: the names table headers change by textContent, never innerHTML',
+     /document\.getElementById\('names-h' \+ \(i \+ 1\)\)\.textContent = t/.test(donors));
   ok('no v1 moderation left on the page (censor / uncensor / rescan / marker)',
      !/censorDonor|uncensorDonor|\/censor'|\/uncensor'|body\.rescan|Rescanned|censored-donor|donor_censor/.test(donors));
   ok('UTC is stated on the page', (donors.match(/UTC/g) || []).length >= 1);
@@ -664,9 +707,26 @@ console.log('\n[14] games.html / games-chat.html / games-players.html — proxy,
     JSON.stringify([...fast.filter(([m, p]) => requiresStepUp(m, p)), ...stepUp.filter(([m, p]) => !requiresStepUp(m, p))]));
   ok('the pages build exactly those write paths',
     /'chat\/held\/' \+ m\.id \+ '\/approve'/.test(chat) && /'chat\/messages\/' \+ m\.id \+ '\/' \+ action/.test(chat)
-    && /G\.call\('POST', 'chat\/post'/.test(chat) && /'players\/' \+ address \+ '\/mute'/.test(chat)
+    && /G\.call\('POST', 'chat\/post'/.test(chat) && /'players\/' \+ G\.playerSeg\(address\) \+ '\/mute'/.test(chat)
     && /G\.call\('POST', 'chat\/words', body\)/.test(chat) && /'moderators\/' \+ address \+ '\/remove'/.test(chat)
     && /write\('\/ban'/.test(players) && /write\('\/purge'/.test(players) && /write\('\/adjust'/.test(players));
+  // Guests (games Part C5, §19.17.3): a guest id cannot sit in a path (':' — PROXY_PATH_RE refuses
+  // it), so every player path goes through GamesAdmin.playerSeg ('g:<16>' → 'g.<16>'), and the
+  // guest-only write (delete) is step-up while muting a guest stays FAST like any mute.
+  const gadmin = read('games-admin.js');
+  const GS = 'g.' + 'a'.repeat(16);
+  // The proxy's own path check, read from its source (it is not exported): the enforcer, not a copy.
+  const proxySrc = /const PROXY_PATH_RE = \/(.+)\/;\n/.exec(fs.readFileSync(path.join(__dirname, '..', 'lib', 'games-link.js'), 'utf8'));
+  const PROXY_PATH_OK = (p) => !!proxySrc && new RegExp(proxySrc[1]).test(p);
+  ok('guests: playerSeg maps g:<16> to g.<16>; every player path on the three pages uses it',
+    /function playerSeg\(a\) \{ return GUEST_RE\.test\(a\) \? 'g\.' \+ a\.slice\(2\) : a; \}/.test(gadmin)
+      && /'players\/' \+ G\.playerSeg\(_addr\) \+ rel/.test(players) && /'players\/' \+ G\.playerSeg\(address\)\)/.test(players)
+      && /write\('players\/' \+ G\.playerSeg\(address\) \+ '\/nick-block'/.test(read('games-names.html'))
+      && !/'players\/' \+ (address|_addr) \+/.test(chat + players + read('games-names.html')));
+  ok('guests: the proxy accepts the g.<16> form; delete is step-up, mute stays FAST',
+    PROXY_PATH_OK(`players/${GS}/mute`) && PROXY_PATH_OK(`guests/${GS}/delete`) && !PROXY_PATH_OK('players/g:' + 'a'.repeat(16) + '/mute')
+      && requiresStepUp('POST', `guests/${GS}/delete`) && !requiresStepUp('POST', `players/${GS}/mute`)
+      && /G\.call\('POST', 'guests\/' \+ G\.playerSeg\(_addr\) \+ '\/delete'/.test(players));
   ok('games.html shows the fixed floors (the 1 h proof-age floor, §19.11) and saves only changed keys',
     /chat_min_proof_age: s => 'A proof is always at least '/.test(read('games.html')) && /G\.call\('POST', 'settings', \{ values \}\)/.test(read('games.html')));
 }
@@ -690,16 +750,162 @@ console.log('[15] games-names.html — the nickname queue: proxy, step-up, text-
     !/\b(innerHTML|outerHTML|insertAdjacentHTML)\b|document\.write/.test(code)
     && /el\('div', 'gn-name', n\.name\)/.test(script) && /el\('span', null, '“' \+ n\.reason \+ '”'\)/.test(script));
   ok('no inline on* handler, no native prompt/confirm/alert', !/\son[a-z]+="/i.test(page) && !/\b(prompt|confirm|alert)\(/.test(code));
-  ok('the page builds exactly the three write paths', /G\.call\('POST', 'nicknames\/' \+ n\.id \+ '\/' \+ action, body\)/.test(script)
-    && /approve:/.test(script) && /reject:/.test(script) && /remove:/.test(script));
+  // Part C3 (§19.17.5): no queue — the five writes are remove, ban name, unban, block, unblock.
+  const writes = [...script.matchAll(/write\('([^']*)'( \+ [^,]+)?/g)].map((m) => m[1] + (m[2] ? '…' : ''));
+  ok('the page builds exactly the five v2 write paths, all through write() → G.call(POST)',
+    JSON.stringify(writes.sort()) === JSON.stringify(['banned-names', 'banned-names/…', 'nicknames/…', 'players/…', 'players/…'].sort())
+    && /await G\.call\('POST', rel, body\)/.test(script) && !/\/approve'|\/reject'|state=pending/.test(code), writes.join(' | '));
+  ok('a rule hint on a live row and a banned name are rendered as text',
+    /el\('span', 'badge badge-warn', 'Now refused by '/.test(script) && /el\('td', 'gn-name', b\.name\)/.test(script));
   // The POOL is the enforcer (§19.11): every nickname write must be step-up there. The games
   // side's own copy is checked in play/server/scripts/test-names.js (it may not load pool code).
   const { requiresStepUp } = require('../lib/games-link');
-  ok('every nickname write is STEP-UP at the pool (none is in FAST_WRITES); the list read is not',
-    ['nicknames/7/approve', 'nicknames/7/reject', 'nicknames/7/remove'].every((p) => requiresStepUp('POST', p)) && !requiresStepUp('GET', 'nicknames'));
+  const addr = 'grin1' + 'q'.repeat(58);
+  ok('every nickname write is STEP-UP at the pool (none is in FAST_WRITES); the reads are not',
+    ['nicknames/7/remove', 'banned-names', 'banned-names/sparky/unban', `players/${addr}/nick-block`, `players/${addr}/nick-unblock`].every((p) => requiresStepUp('POST', p))
+      && !requiresStepUp('GET', 'nicknames') && !requiresStepUp('GET', 'banned-names') && !requiresStepUp('GET', 'nick-blocked'));
   ok('the reason field says the player sees it', /Reason \(optional — the player sees it on \/play\/; it is kept in the moderation log\)/.test(page));
-  ok('games.html links the page and labels the switch', /href="games-names\.html">Nicknames</.test(read('games.html')) && /nicknames_enabled: 'Players may ask for a nickname/.test(read('games.html')));
+  ok('games.html links the page and labels both nickname settings', /href="games-names\.html">Nicknames</.test(read('games.html'))
+    && /nicknames_enabled: 'Players may set a nickname \(checked automatically, live at once/.test(read('games.html'))
+    && /nickname_change_days: 'A player may change their nickname once every this many days/.test(read('games.html')));
+  ok('the page links Settings → Names (the blocked-word list lives in the pool)', /href="settings-names\.html">blocked words</.test(page));
   ok('games-players.html shows the nickname as text', /document\.getElementById\('gp-nick-state'\)\.textContent = /.test(read('games-players.html')));
+}
+
+// ── [16] node-availability.html — two observers side by side (design §20.4/§20.6) ─────────────
+// No jsdom in this project (test-branding-sinks.js), so the page keeps its view logic in a pure
+// block between NA-VIEW markers and this runs that block on its own in a vm. A missing marker is
+// a FAIL, never a skip. The DOM wiring below the block only hands these functions' output over.
+console.log('\n[16] node-availability.html — empty state, both sources, filters');
+{
+  const vm = require('vm');
+  const page = read('node-availability.html');
+  const shell = read('admin-shell.js');
+  const m = page.match(/\/\/ ── NA-VIEW BEGIN ──[^\n]*\n([\s\S]*?)\/\/ ── NA-VIEW END ──/);
+  ok('the page carries the NA-VIEW block', !!m);
+  const block = m ? m[1] : '';
+  ok('the view block touches no DOM (document/window) — it must run headless',
+     !!block && !/\b(document|window)\b/.test(block.replace(/\/\/[^\n]*/g, '')));
+  const ctx = vm.createContext({});
+  try { vm.runInContext(block, ctx); } catch (e) { ok('the view block runs in a vm', false, e.message); }
+  const V = ctx;
+
+  // Nav + page shell.
+  const dash = (shell.match(/\{ file: 'index\.html', title: 'Dashboard'[\s\S]*?\] \}/) || [''])[0];
+  ok('nav: the page sits in the Dashboard group, right after System Health',
+     /file: 'health\.html',\s*title: 'System Health' \},\s*\{ file: 'node-availability\.html', title: 'Node Availability' \}/.test(dash));
+  ok('page loads auth.js → api.js → admin-shell.js and guards the page',
+     /\/js\/auth\.js[\s\S]*\/js\/api\.js[\s\S]*\/admin\/admin-shell\.js/.test(page) && /API\.guardAdminPage\(\)/.test(page));
+  const visible = page.replace(/<script[\s\S]*?<\/script>/g, '').replace(/<style[\s\S]*?<\/style>/g, '').replace(/<!--[\s\S]*?-->/g, '');
+  ok('UTC is stated ONCE on the page (memory feedback_pool_utc_display)', (visible.match(/All times UTC/g) || []).length === 1);
+  ok('no local-time formatter anywhere in the page', !/toLocale(String|TimeString|DateString)\(/.test(page));
+  const css = (page.match(/<style>([\s\S]*?)<\/style>/) || ['', ''])[1].replace(/\/\*[\s\S]*?\*\//g, '');   // its comment names display:none on purpose
+  ok('no class rule hides anything (initial hidden states are inline)', !/display:\s*none/.test(css));
+  ok('day states do not rely on colour alone: outage is HATCHED, not-watched is a dashed hollow',
+     /\.na-st-out\s*\{[^}]*repeating-linear-gradient/.test(css) && /\.na-st-none\s*\{[^}]*dashed/.test(css));
+  ok('both themes are tokenised (dark default + light override)',
+     /:root, :root\[data-theme="dark"\] \{[^}]*--na-ok/.test(css) && /:root\[data-theme="light"\] \{[^}]*--na-hatch/.test(css));
+  ok('no inline on* handler', !/\son[a-z]+="/i.test(page.replace(/<script[\s\S]*?<\/script>/g, '')));
+  ok('the events table goes through AdminTable', /AdminTable\.create\(\{\s*tbody: 'na-events-tbody'/.test(page));
+
+  const T = 1759500000;                       // a fixed "now" (server clock, data.to)
+  const day = (d, o) => Object.assign({ day: d, up_s: 0, down_s: 0, planned_s: 0, fault_s: 0, unobserved_s: 0, uptime_pct: null }, o);
+  const src = (o) => Object.assign({ uptime_pct: 100, outages: 0, by_class: {}, mtbf_s: null, longest_outage_s: null,
+    open_outage: false, planned_stops: 0, up_since: T - 3 * 86400, daily: [] }, o);
+
+  // Empty state — no recorder on the box.
+  if (typeof V.naRecorderNotice === 'function') {
+    const absent = { network: 'mainnet', to: T, recorder: { ledger: 'absent', status: null },
+      sources: { pool: src({ uptime_pct: 99.5 }), recorder: src({ uptime_pct: null, up_since: null }) } };
+    const n = V.naRecorderNotice(absent);
+    ok('empty state: an absent ledger says so and names hub 08 → Diagnostics',
+       n.kind === 'absent' && /hub 08 → Diagnostics → Node event recorder/.test(n.html));
+    const k = V.naKpis(absent);
+    ok('empty state: node-box KPIs are blank and "not installed", the pool view still shows',
+       k.recorder.up === '—' && k.recorder.now.text === 'not installed' && k.pool.up === '99.50%');
+    ok('empty state: the node-box class card says no recorder', /No recorder installed/.test(V.naClassCardHtml(absent, 'recorder')));
+    const unread = V.naRecorderNotice({ network: 'mainnet', recorder: { ledger: 'unreadable' }, sources: {} });
+    ok('unreadable ledger names the modes to fix', unread.kind === 'unreadable' && /0755/.test(unread.html) && /0644/.test(unread.html));
+    const stale = V.naRecorderNotice({ network: 'mainnet', recorder: { ledger: 'ok', status: { state: 'up', stale: true, updated: T - 900 } }, sources: {} });
+    ok('a stale recorder status is called out', stale.kind === 'stale' && /stopped updating/.test(stale.html));
+    // Control: an installed, fresh recorder must produce NO notice, or the empty-state check above
+    // would pass on a page that shows the banner unconditionally.
+    const fine = V.naRecorderNotice({ network: 'mainnet', recorder: { ledger: 'ok', status: { state: 'up', stale: false, updated: T } }, sources: {} });
+    ok('control — a working recorder produces no notice', fine.kind === 'ok' && fine.html === '');
+    ok('the other network is explained, not shown as empty data',
+       V.naRecorderNotice({ network: 'testnet', other_network: true, events: [], sources: {} }).kind === 'other');
+    ok('the network name is escaped / allow-listed in the notice',
+       !/<script>/.test(V.naRecorderNotice({ network: '<script>', recorder: { ledger: 'absent' }, sources: {} }).html));
+  } else ok('naRecorderNotice is defined in the view block', false);
+
+  // Both sources — separate figures, separate lanes, rows from each.
+  if (typeof V.naKpis === 'function') {
+    const both = { network: 'mainnet', to: T,
+      recorder: { ledger: 'ok', status: { state: 'up', stale: false, updated: T - 20, up_since: T - 2 * 86400 } },
+      sources: {
+        pool: src({ uptime_pct: 99.31, outages: 2, by_class: { timeout: 1, refused: 1 }, mtbf_s: 7200, longest_outage_s: 600,
+          daily: [day('2026-10-01', { up_s: 86400, uptime_pct: 100 }), day('2026-10-02', { up_s: 85800, down_s: 600, uptime_pct: 99.3 }),
+                  day('2026-10-03', { unobserved_s: 3600 })] }),
+        recorder: src({ uptime_pct: 100, outages: 0, planned_stops: 1,
+          daily: [day('2026-10-01', { up_s: 86400, uptime_pct: 100 }), day('2026-10-02', { up_s: 85800, planned_s: 600, uptime_pct: 100 }),
+                  day('2026-10-03', { up_s: 3600, uptime_pct: 100 })] }) } };
+    const k = V.naKpis(both);
+    ok('both sources: each has its OWN uptime — never merged (pool 99.31%, node box 100%)',
+       k.pool.up === '99.31%' && k.recorder.up === '100%');
+    ok('both sources: outage counts stay per observer', k.pool.outages === '2' && k.recorder.outages === '0');
+    ok('both sources: "right now" reads each observer', /^up 3 d/.test(k.pool.now.text) && /^up 2 d/.test(k.recorder.now.text));
+    const pd = V.naStripDays(both, 'pool', 90), rd = V.naStripDays(both, 'recorder', 90);
+    ok('strip: pool lane is ok / outage / not-watched', pd.map((x) => x.state).join() === 'ok,out,none');
+    ok('strip: a planned-only day is NOT an outage on the node-box lane', rd.map((x) => x.state).join() === 'ok,ok,ok');
+    const lane = V.naLaneHtml(pd, 'pool');
+    ok('strip: lane cells carry the state class and a spoken summary',
+       /na-st-out/.test(lane) && /aria-label="Pool view, last 3 days: 1 up, 1 with a counted outage, 1 with no counted time\."/.test(lane));
+    // R2: a day the pool WAS watching but saw only an auth fault (or a node-box day that was all
+    // planned stop) has no counted time — it must not be labelled "not watched".
+    const faultDay = day('2026-10-04', { fault_s: 86400 });
+    const faultTip = V.naTipHtml({ day: faultDay.day, state: V.naDayState(faultDay), d: faultDay }, 'pool');
+    ok('strip: an auth-fault-only day reads "no counted time" and shows its fault time, never "not watched"',
+       V.naDayState(faultDay) === 'none' && /no counted time/.test(faultTip) && /Auth fault/.test(faultTip) && !/not watched/i.test(faultTip));
+    ok('strip: the downtime table lists both observers\' days (down AND planned)',
+       V.naDowntimeDays(both).map((r) => r.src + ':' + r.day).join() === 'pool:2026-10-02,recorder:2026-10-02');
+    ok('classes: the planned stop is listed as not counted', /1 planned stop .*not counted/.test(V.naClassCardHtml(both, 'recorder')));
+
+    const events = [
+      { id: 1, source: 'pool', started_at: T - 7000, ended_at: T - 6400, duration_s: 600, state: 'down', class: 'refused', origin: 'transport', detail: 'API port refused; no node process seen' },
+      { id: 2, source: 'recorder', started_at: T - 7100, ended_at: T - 6300, duration_s: 800, state: 'planned', class: null, origin: null, detail: 'toolkit stop · by=01_build_new_grin_node.sh' },
+      { id: 3, source: 'recorder', started_at: T - 6300, ended_at: T - 6300, duration_s: 0, state: 'info', class: null, origin: null, detail: 'up' },
+      { id: 4, source: 'pool', started_at: T - 300, ended_at: null, duration_s: null, state: 'down', class: 'timeout', origin: 'transport', detail: '<img src=x onerror=alert(1)>' },
+      { id: 5, source: 'recorder', started_at: T - 290, ended_at: null, duration_s: null, state: 'down', class: 'hung', origin: null, detail: 'hung' },
+    ];
+    const ann = V.naAnnotate(events, T);
+    ok('annotate: a pool outage overlapping a node-box planned stop gets a note', /planned toolkit stop/.test(ann[0].note || ''));
+    ok('annotate: a pool outage with no planned stop under it gets none', !ann[3].note);
+    ok('annotate: never changes the row itself (state/class/duration)',
+       ann[0].state === 'down' && ann[0].class === 'refused' && ann[0].duration_s === 600 && events[0].note === undefined);
+    const poolRow = V.naRow(ann[0], T), recRow = V.naRow(ann[4], T);
+    ok('rows: both observers render, labelled', /<td>Pool view<\/td>/.test(poolRow) && /<td>Node box<\/td>/.test(recRow));
+    ok('rows: start is UTC and the open row reads "ongoing"',
+       poolRow.includes(new Date((T - 7000) * 1000).toISOString().slice(0, 19).replace('T', ' ')) && /5 min · ongoing/.test(V.naRow(ann[3], T)));
+    ok('rows: detail text is escaped', !/<img/.test(V.naRow(ann[3], T)) && /&lt;img/.test(V.naRow(ann[3], T)));
+    ok('rows: a point event shows no duration', /<td>—<\/td>/.test(V.naRow(ann[2], T)));
+
+    // Filters.
+    const ids = (rows) => rows.map((e) => e.id).join();
+    ok('filter: default hides only the info lines', ids(V.naFilter(ann, {})) === '1,2,4,5');
+    ok('filter: observer = pool', ids(V.naFilter(ann, { source: 'pool', show: 'all' })) === '1,4');
+    ok('filter: observer = node box', ids(V.naFilter(ann, { source: 'recorder', show: 'all' })) === '2,3,5');
+    ok('filter: class', ids(V.naFilter(ann, { cls: 'hung' })) === '5');
+    ok('filter: counted outages only', ids(V.naFilter(ann, { show: 'outages' })) === '1,4,5');
+    ok('filter: everything includes the info lines', ids(V.naFilter(ann, { show: 'all' })) === '1,2,3,4,5');
+    ok('filter: class options come from the rows', V.naClassOptions(ann).join() === 'hung,refused,timeout');
+  } else ok('naKpis is defined in the view block', false);
+
+  // Formatters.
+  if (typeof V.naDur === 'function') {
+    ok('durations: s / min / h min / d h', V.naDur(45) === '45 s' && V.naDur(720) === '12 min' &&
+       V.naDur(3 * 3600 + 300) === '3 h 05 min' && V.naDur(2 * 86400 + 4 * 3600) === '2 d 4 h');
+    ok('percent: null is a dash, never 0%', V.naPct(null) === '—' && V.naPct(100) === '100%' && V.naPct(99.5) === '99.50%');
+  }
 }
 
 console.log('\n' + (fail ? 'FAILURES' : 'ALL PASS') + ` — ${pass} passed, ${fail} failed`);

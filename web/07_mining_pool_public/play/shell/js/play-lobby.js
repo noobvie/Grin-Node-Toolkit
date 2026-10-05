@@ -50,23 +50,30 @@
   var EL = {};
   ['lobby-panel', 'pvp-form', 'pvp-game-field', 'pvp-game', 'pvp-target', 'pvp-colour', 'pvp-time', 'pvp-hint', 'pvp-submit', 'pvp-msg',
    'lobby-challenges', 'lobby-challenges-empty', 'lobby-seeks', 'lobby-seeks-empty', 'lobby-refresh', 'lobby-msg',
-   'rule-pvp', 'rule-pvp-cost'].forEach(function (id) { EL[id] = $(id); });
+   'rule-pvp', 'rule-pvp-cost', 'pvp-guest-note'].forEach(function (id) { EL[id] = $(id); });
   if (!EL['lobby-panel']) return;
 
   var S = { me: null, games: [], game: null, busy: false, challenges: null, seq: 0, rules: null };
 
   // Errors the player can act on, in their words. Anything else: the server's own sentence.
+  // The visible word is "tickets" (operator, C0); the API keeps `plays`.
   var ERROR_TEXT = {
-    no_plays: 'You have no plays left. Plays come from your mining minutes.',
     too_many_open: 'You already have the most open seeks and challenges allowed. Cancel one first.',
     too_many_matches: 'You already have the most games in progress allowed. Finish one first.',
     opponent_busy: 'That player already has the most games in progress allowed. Try again later.',
     self_match: 'That is your own address.',
     not_open: 'Someone else took that game first, or it was withdrawn.',
-    expired: 'That game expired — the play was refunded to whoever posted it.'
+    expired: 'That game expired — the ticket was refunded to whoever posted it.'
   };
+  // Out of tickets: a guest waits for 00:00 UTC, a miner mines (§19.17.4).
+  function noTickets() {
+    var g = S.me && S.me.kind === 'guest' && S.me.guest;
+    return g ? 'You have no tickets left today. You get ' + int(g.daily_tickets) + ' new ones at 00:00 UTC.'
+      : 'You have no tickets left. Miners earn them from mining minutes.';
+  }
   function errText(e) {
     if (e && e.kind === 'offline') return e.message;
+    if (e && e.code === 'no_plays') return noTickets();
     if (e && e.code === 'bad_request' && e.body && e.body.field === 'target') return 'That is not a GRIN address for this pool\'s network.';
     return (e && ERROR_TEXT[e.code]) || (e && e.message) || 'Something went wrong.';
   }
@@ -120,17 +127,17 @@
     if (typeof p.pvp_play_cost === 'number') {
       text(EL['pvp-hint'], 'Empty address = an open seek anyone can take. ' + (p.pvp_play_cost === 0
         ? 'Games against people are free right now, and a free game pays no points.'
-        : 'Each side pays ' + int(p.pvp_play_cost) + (p.pvp_play_cost === 1 ? ' play' : ' plays') +
+        : 'Each side pays ' + int(p.pvp_play_cost) + (p.pvp_play_cost === 1 ? ' ticket' : ' tickets') +
           '; it comes back if nobody accepts within 3 days, or if the game is aborted before both sides have moved.'));
       text(EL['rule-pvp-cost'], p.pvp_play_cost === 0
-        ? 'Games against other miners are free right now — and a free game pays no points;'
-        : 'A game against another miner costs each side ' + int(p.pvp_play_cost) + (p.pvp_play_cost === 1 ? ' play;' : ' plays;'));
+        ? 'Games against other players are free right now — and a free game pays no points;'
+        : 'A game against another player costs each side ' + int(p.pvp_play_cost) + (p.pvp_play_cost === 1 ? ' ticket;' : ' tickets;'));
     }
     if (typeof v.pair_rated_daily === 'number') {
       text(EL['rule-pvp'], v.pair_rated_daily === 0
         ? 'Right now no game against a person is rated: none moves the rating or pays points.'
         : 'The first ' + int(v.pair_rated_daily) + ' game' + (v.pair_rated_daily === 1 ? '' : 's') +
-          ' a UTC day between the same two addresses ' + (v.pair_rated_daily === 1 ? 'is' : 'are') +
+          ' a UTC day between the same two players ' + (v.pair_rated_daily === 1 ? 'is' : 'are') +
           ' rated: ' + (v.pair_rated_daily === 1 ? 'it moves' : 'they move') + ' the Elo rating and pay points for a win or a draw.');
     }
   }
@@ -167,7 +174,7 @@
 
   function costWord() {
     var c = S.rules && S.rules.plays && typeof S.rules.plays.pvp_play_cost === 'number' ? S.rules.plays.pvp_play_cost : 1;
-    return c === 0 ? 'free' : c + (c === 1 ? ' play' : ' plays');
+    return c === 0 ? 'free' : c + (c === 1 ? ' ticket' : ' tickets');
   }
 
   // row = a lobby entry: { id, game_id, name, you_play, move_seconds, expires_at, own }
@@ -191,7 +198,7 @@
     view.addEventListener('click', function () { emit('play:open', { id: row.id }); });
     btns.appendChild(view);
     if (row.own) {
-      btns.appendChild(armed(button(''), 'Cancel', 'Confirm cancel', function () { act(row.id, 'cancel', 'Seek withdrawn; your play is back.'); }));
+      btns.appendChild(armed(button(''), 'Cancel', 'Confirm cancel', function () { act(row.id, 'cancel', 'Seek withdrawn; your ticket is back.'); }));
     } else {
       btns.appendChild(armed(button(''), 'Accept', 'Accept · ' + costWord(), function () { act(row.id, 'accept', null); }));
       if (kind === 'challenge') btns.appendChild(armed(button(''), 'Decline', 'Confirm decline', function () { act(row.id, 'decline', 'Challenge declined.'); }));
@@ -280,6 +287,8 @@
     var me = e && e.detail ? e.detail.me : null;
     var was = S.me;
     S.me = me && typeof me === 'object' ? me : null;
+    // A guest has no address anyone could type into a challenge (§19.15 Part C5 #12).
+    show(EL['pvp-guest-note'], !!S.me && S.me.kind === 'guest');
     if (!S.me) {
       S.challenges = null;
       clear(EL['lobby-challenges']);
@@ -293,7 +302,7 @@
       fillGames(Array.isArray(r.games) ? r.games : []);
     }, function (e2) { msg(EL['pvp-msg'], errText(e2)); });
     if (!S.rules) {
-      Api.get('rules').then(function (r) { S.rules = r; applyRules(r); }, function () { /* the defaults stay */ });
+      Api.rules().then(function (r) { S.rules = r; applyRules(r); }, function () { /* the defaults stay */ });
     }
     load();
   });

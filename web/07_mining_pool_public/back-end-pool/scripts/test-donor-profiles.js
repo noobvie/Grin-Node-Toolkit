@@ -1,8 +1,11 @@
 'use strict';
 
-// Donor profiles (design §18.4–§18.6, §18 Part 2) — lib/donor-profiles.js against an in-memory
-// copy of the real schema. Covers: the name rules (length, charset, whitespace collapse, case
-// kept, homoglyph / bidi / NBSP / zero-width refused); the banner sniff + header-parsed
+// Donor profiles (design §18.4–§18.6, §18 Part 2; names §19.17.6, Part C4) — lib/donor-profiles.js
+// against an in-memory copy of the real schema. Covers: the name shape (length, charset,
+// whitespace collapse, case kept, homoglyph / bidi / NBSP / zero-width refused); names v2 (C4 —
+// live at once, unchanged, the 7-day limit, the generic refusals, taken in any spelling, nothing
+// stored on a refusal, a real conflict on the approved index, ban / unban, the startup migration
+// and the Live / Removed names list); the banner sniff + header-parsed
 // dimensions on hand-built minimal PNG / GIF / JPEG buffers, truncated and lying headers, SVG,
 // WEBP, over-size and wrong-aspect images, and a fuzz pass that must never throw; every state
 // transition, including both partial unique indexes and a real constraint hit mapped to
@@ -10,7 +13,7 @@
 // first, a failed write leaves the request pending); the donor's own view never carrying the
 // pending name, image bytes or the deciding admin; the public view excluding pending / rejected /
 // expired; the donor_banner_slots setting bounded on read and write; leagueRank(); and (§18
-// Part 3) the admin reads: the review queue with its flags, the image-bytes read and its
+// Part 3) the admin reads: the review queue, the image-bytes read and its
 // refusals, the per-address admin view, the pending count, and a block emptying the queue.
 // Run: node scripts/test-donor-profiles.js   (no server; temp dirs under the OS temp dir, removed)
 
@@ -78,6 +81,12 @@ const rowsOf = (a, kind) => db.prepare('SELECT * FROM donor_requests WHERE grin_
 const byStatus = (a, kind, st) => rowsOf(a, kind).filter((r) => r.status === st);
 const auditOf = (a) => db.prepare("SELECT admin_id, action, details FROM admin_audit_log WHERE target_type = 'donor' AND target_id = ? ORDER BY id").all(a);
 const DONOR = { isDonor: true, now: NOW };
+// A PENDING name as only a pre-C4 pool could write it (since §19.17.6 a submit goes live or is
+// refused; nothing writes `pending` for a name). The generic admin transitions still have to
+// handle one — the startup migration and approve/reject/block see them on an upgraded box.
+const legacyPending = (a, name, at = NOW) => Number(db.prepare(
+  "INSERT INTO donor_requests (grin_address, kind, status, name, submitted_at) VALUES (?, 'name', 'pending', ?, ?)"
+).run(a, name, at).lastInsertRowid);
 
 // Walk any value; true when a Buffer / typed array appears anywhere in it.
 const hasBytes = (v) => {
@@ -113,7 +122,8 @@ try {
   check('name: < > " refused (no markup survives even if a renderer forgets to escape)',
         vn('<b>x</b>').code === 'name_charset' && vn('a"b').code === 'name_charset');
   check('name: a non-string is refused, not coerced', vn(12345).code === 'name_invalid' && vn({ a: 1 }).code === 'name_invalid' && vn(['ab']).code === 'name_invalid');
-  check('name: null / undefined / empty → name_length', vn(null).code === 'name_length' && vn(undefined).code === 'name_length' && vn('   ').code === 'name_length');
+  // C4: the shape is the name rule's (one definition), which refuses a non-string as name_invalid.
+  check('name: null / undefined → name_invalid; blank → name_length', vn(null).code === 'name_invalid' && vn(undefined).code === 'name_invalid' && vn('   ').code === 'name_length');
   check('name: every refusal carries the rule in its message', ['a', CYR_A + 'cme', '--'].every((s) => /2–32 characters/.test(vn(s).error)));
 
   // ══ 2. Sniff + dimensions (§18.5) ══════════════════════════════════════════════════════
@@ -212,13 +222,104 @@ try {
   check('submit: isDonor truthy-but-not-true → not_a_donor', DP.submitName(db, A, 'Acme', { isDonor: 1, now: NOW }).code === 'not_a_donor');
   check('submit: an invalid name is refused before any write', DP.submitName(db, A, 'x', DONOR).code === 'name_length' && rowsOf(A, 'name').length === 0);
 
-  const s1 = DP.submitName(db, A, '  Acme   Pool Fans ', DONOR);
-  check('submit: → pending, normalised name returned to the submitter', s1.ok && s1.name === 'Acme Pool Fans' && s1.replaced === false && s1.submitted_at === NOW);
-  const s2 = DP.submitName(db, A, 'Acme Fans', DONOR);
-  check('submit again: the old pending → replaced, the new one pending', s2.ok && s2.replaced === true &&
-        byStatus(A, 'name', 'pending').length === 1 && byStatus(A, 'name', 'replaced').length === 1 &&
-        byStatus(A, 'name', 'pending')[0].name === 'Acme Fans');
+  // ── names v2 (§19.17.6, Part C4): checked automatically, live at once ──────────────────
+  {
+    const N1 = ADDR('s'); mkAcct(N1);
+    const N2 = ADDR('t'); mkAcct(N2);
+    const RULE = DP.nameRuleContext('*crap\nmoon', 'Zephyr Pool');
+    const ND = (now) => ({ isDonor: true, rule: RULE, now });
+    const DAY = 86400;
+    const s1 = DP.submitName(db, N1, '  Acme   Fans ', ND(NOW));
+    check('C4 submit: → APPROVED at once, normalised name returned, decided_by NULL (the automatic check)',
+          s1.ok && s1.name === 'Acme Fans' && s1.replaced_id === null && s1.submitted_at === NOW &&
+          byStatus(N1, 'name', 'approved').length === 1 && byStatus(N1, 'name', 'approved')[0].decided_by === null &&
+          byStatus(N1, 'name', 'approved')[0].decided_at === NOW);
+    check('C4 submit: no pending name row is ever written', byStatus(N1, 'name', 'pending').length === 0);
+    check('C4 submit: the live name is on the wall at once', DP.publicProfiles(db, [N1], { now: NOW, lastDonatedAt: () => NOW }).get(N1).name === 'Acme Fans');
+    check('C4 unchanged: the same name again → unchanged (no cooldown spent)', DP.submitName(db, N1, 'Acme Fans', ND(NOW + 10)).code === 'unchanged');
+    const cd = DP.submitName(db, N1, 'Acme Two', ND(NOW + DAY));
+    check('C4 cooldown: a change inside 7 days → name_cooldown + available_at = the last change + 7 days',
+          cd.code === 'name_cooldown' && cd.available_at === NOW + 7 * DAY && /once every 7 days/.test(cd.error));
+    check('C4 cooldown: namePrecheck (run BEFORE the proofs) gives the same answer',
+          DP.namePrecheck(db, N1, 'Acme Two', { now: NOW + DAY }).code === 'name_cooldown' && DP.namePrecheck(db, N1, 'Acme Two', { now: NOW + 7 * DAY }) === null);
+    check('C4 cooldown: the account view says when', DP.profileFor(db, N1, { active: true, lastDonatedAt: NOW, now: NOW + DAY }).name.change_available_at === NOW + 7 * DAY &&
+          DP.profileFor(db, N1, { active: true, lastDonatedAt: NOW, now: NOW + 8 * DAY }).name.change_available_at === null);
+    const s2 = DP.submitName(db, N1, 'Acme Two', ND(NOW + 7 * DAY));
+    check('C4: after 7 days the change goes live and the previous name → replaced',
+          s2.ok && s2.replaced_id === s1.id && byStatus(N1, 'name', 'approved')[0].name === 'Acme Two' && byStatus(N1, 'name', 'replaced').length === 1);
+    check('C4: a case change of your own name is a change, never "taken"', DP.submitName(db, N1, 'ACME TWO', ND(NOW + 14 * DAY)).ok);
+    check('C4: the BANNER path is untouched — a banner still lands PENDING and reaches no public view', (() => {
+      const r = DP.submitBanner(db, N1, png(800, 200), DONOR);
+      const pending = byStatus(N1, 'banner', 'pending');
+      const pub = DP.publicProfiles(db, [N1], { now: NOW, lastDonatedAt: () => NOW }).get(N1);
+      const ok = r.ok && pending.length === 1 && pending[0].image !== null && pending[0].file === null && pub.banner === null;
+      DP.withdraw(db, N1, 'banner');
+      return ok;
+    })());
 
+    const T = NOW + 30 * DAY;
+    const nr = DP.submitName(db, N2, 'Grin Support', ND(T));
+    check('C4: a reserved word → name_not_allowed with the GENERIC text; `hit` names the list for the server only',
+          nr.code === 'name_not_allowed' && nr.error === DP.NAME_TEXT.name_not_allowed && nr.hit && nr.hit.list === 'reserved');
+    check('C4: the pool name, a seed word, an operator word and an operator * word → the SAME answer',
+          ['Zephyr Pool', 'Big Ass Rigs', 'Moon Boys', 'Scrap Heap'].every((n) => {
+            const r = DP.submitName(db, N2, n, ND(T));
+            return r.code === 'name_not_allowed' && r.error === DP.NAME_TEXT.name_not_allowed;
+          }));
+    check('C4: an address-like name → name_address, which explains itself', DP.submitName(db, N2, 'grin1 mine', ND(T)).code === 'name_address');
+    check('C4: an empty rule context still applies the code seed + reserved words',
+          DP.submitName(db, N2, 'Sh1t Happens', { isDonor: true, now: T }).code === 'name_not_allowed' &&
+          DP.submitName(db, N2, 'Jackpot Joe', { isDonor: true, now: T }).code === 'name_not_allowed');
+    check('C4: taken — another address\'s live name in ANY spelling → name_unavailable',
+          ['acme two', 'ACME-TWO', '4cm3 tw0', 'Acme.Two'].every((n) => DP.submitName(db, N2, n, ND(T)).code === 'name_unavailable'));
+    check('C4: refused names are stored nowhere (no row, and the text in no column)',
+          rowsOf(N2, 'name').length === 0 && !/Moon Boys|Grin Support|Scrap Heap/.test(JSON.stringify(db.prepare('SELECT * FROM donor_requests').all())));
+
+    // A REAL constraint hit on the APPROVED index: a temp trigger inserts a competing approved
+    // row the moment the old one is marked replaced, so the lib's own INSERT hits uq_donor_req_approved.
+    db.exec(`CREATE TEMP TRIGGER t_race AFTER UPDATE OF status ON donor_requests
+             WHEN NEW.status = 'replaced' AND NEW.kind = 'name'
+             BEGIN INSERT INTO donor_requests (grin_address, kind, status, name) VALUES (NEW.grin_address, 'name', 'approved', 'racer'); END`);
+    const race = DP.submitName(db, N1, 'Loser', ND(NOW + 60 * DAY));
+    db.exec('DROP TRIGGER t_race');
+    check('C4 conflict: a unique-index hit comes back as code conflict, not a throw', race.ok === false && race.code === 'conflict');
+    check('C4 conflict: the transaction rolled back (the previous name is still the live one)',
+          byStatus(N1, 'name', 'approved').length === 1 && byStatus(N1, 'name', 'approved')[0].name === 'ACME TWO' &&
+          !rowsOf(N1, 'name').some((r) => r.name === 'racer' || r.name === 'Loser'));
+
+    // Bans: the matching form, every spelling, every holder.
+    const bn = DP.banName(db, 'Acme-Tw0', { adminId, reason: 'impersonation', ip: '198.51.100.9', now: T });
+    check('ban: bans the matching form and REMOVES the live holder in the same transaction, with the reason shown to them',
+          bn.ok && bn.norm === 'acmetwo' && bn.removed.length === 1 && bn.removed[0].address === N1 &&
+          byStatus(N1, 'name', 'approved').length === 0 && byStatus(N1, 'name', 'removed').slice(-1)[0].reason === 'impersonation' &&
+          byStatus(N1, 'name', 'removed').slice(-1)[0].decided_by === adminId &&
+          DP.profileFor(db, N1, { active: true, lastDonatedAt: NOW, now: T }).name.removed.reason === 'impersonation');
+    const banAudit = db.prepare("SELECT * FROM admin_audit_log WHERE action = 'donor_name_ban'").all();
+    check('ban: exactly ONE audit row, target donor_name / the form, holders listed',
+          banAudit.length === 1 && banAudit[0].target_type === 'donor_name' && banAudit[0].target_id === 'acmetwo' &&
+          JSON.parse(banAudit[0].details).removed[0].address === N1 && banAudit[0].admin_id === adminId);
+    check('ban: every spelling is refused for everyone, with the SAME answer as "taken"',
+          ['Acme Two', 'ACME TWO', '4cme_tw0'].every((n) => DP.submitName(db, N2, n, ND(T)).code === 'name_unavailable'));
+    check('ban: the holder cannot re-take it either', DP.submitName(db, N1, 'acme two', ND(T + 30 * DAY)).code === 'name_unavailable');
+    check('ban: twice (any spelling) → already_banned; junk → bad_name',
+          DP.banName(db, 'acme two', { adminId }).code === 'already_banned' && DP.banName(db, '- _ .', { adminId }).code === 'bad_name' &&
+          DP.banName(db, 'x'.repeat(40), { adminId }).code === 'bad_name' && DP.banName(db, null, { adminId }).code === 'bad_name');
+    check('ban: listed with the spelling the admin typed', DP.bannedNames(db).some((r) => r.norm === 'acmetwo' && r.name === 'Acme-Tw0' && r.reason === 'impersonation'));
+    check('unban: junk → bad_name; unknown → not_banned',
+          DP.unbanName(db, "acme'; --", { adminId }).code === 'bad_name' && DP.unbanName(db, 'nosuch', { adminId }).code === 'not_banned');
+    const ubn = DP.unbanName(db, 'acmetwo', { adminId, now: T });
+    check('unban: lifted, audited, and NOTHING restored', ubn.ok && DP.bannedNames(db).length === 0 &&
+          db.prepare("SELECT COUNT(*) AS n FROM admin_audit_log WHERE action = 'donor_name_unban' AND target_id = 'acmetwo'").get().n === 1 &&
+          byStatus(N1, 'name', 'approved').length === 0);
+    check('unban: the name can be taken again', DP.submitName(db, N2, 'Acme Two', ND(T)).ok);
+    check('ban: a ban with no holder removes nothing and still lands', (() => {
+      const r = DP.banName(db, 'Nobody Has This', { adminId, now: T });
+      DP.unbanName(db, r.norm, { adminId });
+      return r.ok && r.removed.length === 0;
+    })());
+  }
+
+  legacyPending(A, 'Acme Fans');
   check('unique index: a second PENDING row for the same (address, kind) is refused by the DB',
         throws(() => db.prepare("INSERT INTO donor_requests (grin_address, kind, status, name) VALUES (?, 'name', 'pending', 'dup')").run(A)));
   check('unique index: pending name + pending banner may coexist (per KIND)', (() => {
@@ -236,17 +337,17 @@ try {
   })());
   check('banner submit: an SVG never reaches the table', DP.submitBanner(db, A, SVG, DONOR).code === 'banner_type' && rowsOf(A, 'banner').length === 2);
 
-  // A REAL constraint hit, not a fake one: a temp trigger inserts a competing pending row the
-  // moment the old one is marked replaced, so the lib's own INSERT hits uq_donor_req_pending.
+  // A REAL constraint hit on the PENDING index (the banner path, unchanged by C4): a temp trigger
+  // inserts a competing pending banner the moment the old one is marked replaced.
   db.exec(`CREATE TEMP TRIGGER t_race AFTER UPDATE OF status ON donor_requests
-           WHEN NEW.status = 'replaced' AND NEW.kind = 'name'
-           BEGIN INSERT INTO donor_requests (grin_address, kind, status, name) VALUES (NEW.grin_address, 'name', 'pending', 'racer'); END`);
-  const race = DP.submitName(db, A, 'Loser', DONOR);
+           WHEN NEW.status = 'replaced' AND NEW.kind = 'banner'
+           BEGIN INSERT INTO donor_requests (grin_address, kind, status, mime) VALUES (NEW.grin_address, 'banner', 'pending', 'racer'); END`);
+  const race = DP.submitBanner(db, A, png(900, 200), DONOR);
   db.exec('DROP TRIGGER t_race');
   check('conflict: a unique-index hit comes back as code conflict, not a throw', race.ok === false && race.code === 'conflict');
   check('conflict: the transaction rolled back (the previous pending is still the pending one)',
-        byStatus(A, 'name', 'pending').length === 1 && byStatus(A, 'name', 'pending')[0].name === 'Acme Fans' &&
-        !rowsOf(A, 'name').some((r) => r.name === 'racer' || r.name === 'Loser'));
+        byStatus(A, 'banner', 'pending').length === 1 && byStatus(A, 'banner', 'pending')[0].mime === 'image/gif' &&
+        !rowsOf(A, 'banner').some((r) => r.mime === 'racer' || r.width === 900));
 
   // withdraw
   check('withdraw: bad kind', DP.withdraw(db, A, 'avatar').code === 'bad_kind');
@@ -269,7 +370,7 @@ try {
   check('approve name: audit row written in the same transaction', auditOf(A).some((r) => r.action === 'donor_request_approve' && r.admin_id === adminId));
   check('unique index: a second APPROVED row for the same (address, kind) is refused by the DB',
         throws(() => db.prepare("INSERT INTO donor_requests (grin_address, kind, status, name) VALUES (?, 'name', 'approved', 'dup')").run(A)));
-  DP.submitName(db, A, 'Acme Two', DONOR);
+  legacyPending(A, 'Acme Two');
   const ap2 = DP.approve(db, byStatus(A, 'name', 'pending')[0].id, { adminId, now: NOW + 20 });
   check('approve a second name: the previous approved → replaced, one approved remains',
         ap2.ok && ap2.replaced_id === pendName.id && byStatus(A, 'name', 'approved').length === 1 &&
@@ -316,7 +417,7 @@ try {
   check('reject: the reason is one line, control chars stripped, ≤ 200 chars',
         rjRow.reason.startsWith('Too bright, please tone it down') && rjRow.reason.length === 200 && !/[\u0000-\u001f]/.test(rjRow.reason));
   check('reject: empty reason stored as NULL', (() => {
-    DP.submitName(db, B, 'Bee Name', DONOR);
+    legacyPending(B, 'Bee Name');
     const r = DP.reject(db, byStatus(B, 'name', 'pending')[0].id, { adminId, reason: '   ' });
     return r.ok && rowsOf(B, 'name').slice(-1)[0].reason === null;
   })());
@@ -333,7 +434,7 @@ try {
   check('removeLive: nothing live → nothing_live', DP.removeLive(db, A, 'banner', { uploadsDir: UP }).code === 'nothing_live');
 
   // block / unblock
-  DP.submitName(db, A, 'Acme Three', DONOR);
+  legacyPending(A, 'Acme Three');
   DP.submitBanner(db, A, png(800, 200), DONOR);
   const bl = DP.block(db, A, { adminId, reason: 'spam', now: NOW + 70 });
   check('block: withdraws EVERY pending request of the address', bl.ok && bl.withdrawn === 2 &&
@@ -353,7 +454,9 @@ try {
     return r.code === 'blocked';
   })());
   const ub = DP.unblock(db, A, { adminId });
-  check('unblock: → submits accepted again, audited', ub.ok && DP.submitName(db, A, 'Acme Four', DONOR).ok && auditOf(A).some((r) => r.action === 'donor_unblock'));
+  check('unblock: → submits accepted again, audited', ub.ok && DP.submitBanner(db, A, png(800, 200), DONOR).ok && DP.withdraw(db, A, 'banner').ok &&
+        auditOf(A).some((r) => r.action === 'donor_unblock'));
+  legacyPending(A, 'Acme Four');
   check('unblock: not blocked → not_blocked', DP.unblock(db, A, { adminId }).code === 'not_blocked');
 
   // admin remove with a reason
@@ -365,9 +468,9 @@ try {
   // ══ 4. profileFor — the donor's own (public) view ════════════════════════════════════
   console.log('\n[4] profileFor\n');
   const C = ADDR('c'); mkAcct(C);
-  DP.submitName(db, C, 'Live Name', DONOR);
+  legacyPending(C, 'Live Name');
   DP.approve(db, byStatus(C, 'name', 'pending')[0].id, { adminId, now: NOW });
-  DP.submitName(db, C, 'Secret Pending', DONOR);
+  legacyPending(C, 'Secret Pending');
   DP.submitBanner(db, C, png(800, 200), DONOR);
   DP.approve(db, byStatus(C, 'banner', 'pending')[0].id, { adminId, uploadsDir: UP, now: NOW });
   DP.submitBanner(db, C, gif(800, 200), { isDonor: true, now: NOW + 100 });
@@ -404,7 +507,7 @@ try {
     return p.name.rejected && p.name.rejected.reason === 'reserved word' && p.name.rejected.at === NOW + 200 && p.name.live === 'Live Name';
   })());
   check('profileFor: a newer submission supersedes the rejection', (() => {
-    DP.submitName(db, C, 'Another Try', DONOR);
+    legacyPending(C, 'Another Try');
     return DP.profileFor(db, C, { active: true, lastDonatedAt: NOW, ds }).name.rejected === null;
   })());
   check('profileFor: an ADMIN removal is reported with its reason; the donor\'s own is not', (() => {
@@ -435,11 +538,11 @@ try {
   const E = ADDR('e'); mkAcct(E);   // pending only
   const F = ADDR('f'); mkAcct(F);   // rejected only
   const G = ADDR('g'); mkAcct(G);   // approved, will be expired
-  DP.submitName(db, E, 'Pending Only', DONOR);
+  legacyPending(E, 'Pending Only');
   DP.submitBanner(db, E, png(800, 200), DONOR);
-  DP.submitName(db, F, 'Rejected Only', DONOR);
+  legacyPending(F, 'Rejected Only');
   DP.reject(db, byStatus(F, 'name', 'pending')[0].id, { adminId, reason: 'no' });
-  DP.submitName(db, G, 'Old Name', DONOR);
+  legacyPending(G, 'Old Name');
   DP.approve(db, byStatus(G, 'name', 'pending')[0].id, { adminId, now: NOW - 800 * 86400 });
   const last = new Map([[C, NOW], [G, NOW - 800 * 86400]]);
   const pp = DP.publicProfiles(db, [C, E, F, G, 'grin1unknown', C], { ds, now: NOW + 3600, lastDonatedAt: last });
@@ -530,6 +633,20 @@ try {
   check('routes: the submits validate the input BEFORE spending a proof attempt',
         rName.indexOf('validateName') > 0 && rName.indexOf('validateName') < rName.indexOf('requireBothProofs') &&
         rBan.indexOf('validateBanner') > 0 && rBan.indexOf('validateBanner') < rBan.indexOf('requireBothProofs'));
+  // C4 (§19.17.6): the checks that read no word list run before the proofs; the lists, banned
+  // and taken only after them, so a stranger holding the address cannot probe the operator's list.
+  check('routes: C4 — namePrecheck BEFORE the proofs, submitName (with the rule context) AFTER',
+        rName.indexOf('DonorProfiles.namePrecheck(') > 0 && rName.indexOf('DonorProfiles.namePrecheck(') < rName.indexOf('requireBothProofs') &&
+        rName.indexOf('DonorProfiles.submitName(db, addr, v.name, { isDonor: true, rule: donorNameRule() })') > rName.indexOf('requireBothProofs'));
+  check('routes: C4 — the name route answers status approved, and never sends `hit` (which list matched)',
+        rName.includes("status: 'approved'") && !/hit/.test(rName.replace(/\/\/[^\n]*/g, '').replace(/r\.hit|`hit`/g, '')));
+  check('routes: C4 — the generic answers are 400 not_allowed / 409 unavailable, one text each',
+        /name_not_allowed: \[400, DonorProfiles\.NAME_TEXT\.name_not_allowed\]/.test(src) &&
+        /name_unavailable: \[409, DonorProfiles\.NAME_TEXT\.name_unavailable\]/.test(src));
+  check('startup: C4 — the blocklist carry-over runs BEFORE the pending-name migration, and neither is fatal',
+        src.indexOf('poolSettings.retireDonorNameBlocklist()') > 0 &&
+        src.indexOf('poolSettings.retireDonorNameBlocklist()') < src.indexOf('DonorProfiles.migratePendingNames(db, { rule: donorNameRule() })') &&
+        /Donor-name migration \(C4\) failed — retried at the next start/.test(src));
   const acct = route('get', '/api/account/:addr');
   check('account: donor_profile comes from profileFor, and the route never names donor_requests itself',
         acct.includes('donor_profile: donorProfile') && acct.includes('DonorProfiles.profileFor(') && !acct.includes('donor_requests'));
@@ -550,20 +667,21 @@ try {
     const M = ADDR('m'), N = ADDR('n'), P = ADDR('p'), Q = ADDR('r');
     [M, N, P, Q].forEach(mkAcct);
     const mine = new Set([M, N, P, Q]);
-    const dsQ = DN.donorSettings({ donor_name_blocklist: 'sh1t\nmoon' }, 'Zephyr');
+    const dsQ = DN.donorSettings({}, 'Zephyr');
     const pend0 = DP.pendingCount(db);
 
     // P already has an approved name "Acme Inc." (the impersonation target) and an approved banner.
-    DP.submitName(db, P, 'Acme Inc.', { isDonor: true, now: NOW - 500 });
+    // The names are PRE-C4 rows (pending, then approved by hand) — what an upgraded box holds.
+    legacyPending(P, 'Acme Inc.', NOW - 500);
     DP.approve(db, rowsOf(P, 'name').find((r) => r.status === 'pending').id, { adminId, now: NOW - 400 });
     DP.submitBanner(db, P, png(800, 200), { isDonor: true, now: NOW - 500 });
     const pBan = DP.approve(db, rowsOf(P, 'banner').find((r) => r.status === 'pending').id, { adminId, uploadsDir: UP, now: NOW - 400 });
-    // The queue: M asks for a flagged name (oldest), N for a copy of P's name, M for a banner.
-    DP.submitName(db, M, 'Official Sh1t Co', { isDonor: true, now: NOW - 300 });
-    DP.submitName(db, N, 'acme inc', { isDonor: true, now: NOW - 200 });
+    // The queue: M's pre-C4 name request (oldest), N's copy of P's name, M's banner.
+    legacyPending(M, 'Official Sh1t Co', NOW - 300);
+    legacyPending(N, 'acme inc', NOW - 200);
     DP.submitBanner(db, M, png(1200, 300), { isDonor: true, now: NOW - 100 });
     // P asks to replace its live name.
-    DP.submitName(db, P, 'Acme Incorporated', { isDonor: true, now: NOW - 50 });
+    legacyPending(P, 'Acme Incorporated', NOW - 50);
 
     const q = DP.adminQueue(db, { ds: dsQ });
     const qm = q.rows.filter((r) => mine.has(r.address));
@@ -575,15 +693,20 @@ try {
           qm.every((r) => !('image' in r) && !Object.values(r).some((v) => Buffer.isBuffer(v))));
     check('queue: the admin DOES see the pending name text and the FULL address',
           qm[0].name === 'Official Sh1t Co' && qm[0].address === M);
-    check('queue: flags on the first name — reserved "official" then flag word "sh1t"',
-          JSON.stringify(qm[0].flags) === JSON.stringify([{ type: 'reserved', word: 'official' }, { type: 'word', word: 'sh1t' }]));
-    check('queue: "acme inc" from ANOTHER address is flagged same_as_donor → P',
-          qm[1].flags.length === 1 && qm[1].flags[0].type === 'same_as_donor' && qm[1].flags[0].addresses.join() === P);
-    check('queue: the banner row has dims/bytes/mime/sha256, has_image, no name, no flags',
+    check('queue: C4 — no row carries the retired `flags` hints', qm.every((r) => !('flags' in r)));
+    check('queue: ?kind=banner holds BANNERS only (the admin page\'s view since C4)', (() => {
+      const b = DP.adminQueue(db, { kind: 'banner' });
+      return b.ok && b.rows.length >= 1 && b.rows.every((r) => r.kind === 'banner') && b.total === b.rows.length &&
+             b.rows.some((r) => r.address === M);
+    })());
+    check('queue: kind is a closed enum — junk → bad_kind', ['avatar', ['banner'], "banner' OR 1=1"].every((k) => DP.adminQueue(db, { kind: k }).code === 'bad_kind'));
+    check('queue: the banner row has dims/bytes/mime/sha256, has_image, no name',
           qm[2].kind === 'banner' && qm[2].width === 1200 && qm[2].height === 300 && qm[2].mime === 'image/png' &&
-          qm[2].bytes > 0 && /^[0-9a-f]{64}$/.test(qm[2].sha256) && qm[2].has_image === true && qm[2].name === null && qm[2].flags.length === 0);
-    check('queue: a rename shows the CURRENT approved name; its own approved name is not "impersonation"',
-          qm[3].current && qm[3].current.name === 'Acme Inc.' && qm[3].flags.length === 0);
+          qm[2].bytes > 0 && /^[0-9a-f]{64}$/.test(qm[2].sha256) && qm[2].has_image === true && qm[2].name === null);
+    check('queue: a rename shows the CURRENT approved name',
+          qm[3].current && qm[3].current.name === 'Acme Inc.');
+    check('queue: an APPROVED row in the history is not shown as replacing itself (C4 fix: `id` selected)',
+          DP.adminQueue(db, { status: 'approved' }).rows.filter((r) => r.address === P).every((r) => r.current === null));
     check('queue: limit caps the rows but not the total', (() => {
       const l = DP.adminQueue(db, { ds: dsQ, limit: 1 });
       return l.rows.length === 1 && l.total === q.total;
@@ -660,6 +783,66 @@ try {
       return x.name.state === 'expired' && own.name.state === 'expired' && x.banner.state === 'expired';
     })());
     check('adminProfiles: never carries image bytes', [...prof.values()].every((v) => !JSON.stringify(v).includes('"type":"Buffer"')));
+
+    // ── C4: the startup migration — pending names through the automatic check ──────────────
+    // Left pending at this point: N's "acme inc" (a copy of P's live name), P's rename
+    // "Acme Incorporated", and the pre-C4 rows of the earlier sections. Q gets one that fails.
+    legacyPending(Q, 'Moon Pool', NOW - 10);
+    const RULE9 = DP.nameRuleContext('moon', 'Zephyr');
+    const pendingBefore = db.prepare("SELECT COUNT(*) AS n FROM donor_requests WHERE kind = 'name' AND status = 'pending'").get().n;
+    const mig = DP.migratePendingNames(db, { rule: RULE9, now: NOW + 5 });
+    check('migrate: every pending name is decided (approved + rejected = what was pending), none left',
+          mig.approved + mig.rejected === pendingBefore && pendingBefore >= 3 &&
+          db.prepare("SELECT COUNT(*) AS n FROM donor_requests WHERE kind = 'name' AND status = 'pending'").get().n === 0);
+    check('migrate: a copy of another address\'s approved name → rejected, with a reason the donor can read',
+          byStatus(N, 'name', 'rejected').length === 1 && /not available/.test(byStatus(N, 'name', 'rejected')[0].reason) &&
+          byStatus(N, 'name', 'rejected')[0].decided_by === null);
+    check('migrate: a name that fails the rule → rejected, reason says it did not pass',
+          byStatus(Q, 'name', 'rejected').length === 1 && /did not pass/.test(byStatus(Q, 'name', 'rejected')[0].reason));
+    check('migrate: a passing rename → approved by the system (decided_by NULL), the old approved → replaced',
+          byStatus(P, 'name', 'approved').length === 1 && byStatus(P, 'name', 'approved')[0].name === 'Acme Incorporated' &&
+          byStatus(P, 'name', 'approved')[0].decided_by === null && byStatus(P, 'name', 'replaced').some((r) => r.name === 'Acme Inc.'));
+    check('migrate: one system audit row per decision', db.prepare("SELECT COUNT(*) AS n FROM admin_audit_log WHERE action = 'donor_name_auto_v2' AND admin_id IS NULL").get().n === pendingBefore);
+    check('migrate: a second run finds nothing (idempotent)', (() => { const r = DP.migratePendingNames(db, { rule: RULE9 }); return r.approved === 0 && r.rejected === 0; })());
+    check('migrate: approved names are KEPT, even one the rule would refuse today', (() => {
+      const X = ADDR('u'); mkAcct(X);
+      db.prepare("INSERT INTO donor_requests (grin_address, kind, status, name, submitted_at, decided_at, decided_by) VALUES (?, 'name', 'approved', 'Moon Rigs', ?, ?, ?)")
+        .run(X, NOW - 9, NOW - 9, adminId);
+      DP.migratePendingNames(db, { rule: RULE9 });
+      return byStatus(X, 'name', 'approved').length === 1;
+    })());
+
+    // ── C4: the donor-names admin list ──────────────────────────────────────────────────────
+    const T1 = ADDR('v'), T2 = ADDR('w');
+    [T1, T2].forEach(mkAcct);
+    // Two pre-C4 approvals that collide on the matching form.
+    db.prepare("INSERT INTO donor_requests (grin_address, kind, status, name, submitted_at, decided_at, decided_by) VALUES (?, 'name', 'approved', 'Twin Co', ?, ?, ?)").run(T1, NOW - 8, NOW - 8, adminId);
+    db.prepare("INSERT INTO donor_requests (grin_address, kind, status, name, submitted_at, decided_at, decided_by) VALUES (?, 'name', 'approved', 'twin-c0', ?, ?, ?)").run(T2, NOW - 7, NOW - 7, adminId);
+    const live = DP.adminNames(db, { rule: RULE9 });
+    const lr = (a) => live.rows.find((r) => r.address === a);
+    check('names: live list, newest first, FULL addresses', live.ok && live.state === 'live' && live.rows.length === live.total &&
+          live.rows.every((r, i) => i === 0 || live.rows[i - 1].set_at >= r.set_at) && lr(T2).address === T2 && lr(P).name === 'Acme Incorporated');
+    check('names: approved_by tells the system (null) from a human', lr(P).approved_by === null && lr(T1).approved_by === adminId);
+    check('names: a word the rule refuses TODAY is a hint (hit), never applied by itself',
+          JSON.stringify(lr(ADDR('u')).hit) === JSON.stringify({ code: 'name_blocked', list: 'operator', entry: 'moon' }) && lr(P).hit === null);
+    check('names: a pre-C4 collision is flagged both ways (same_as)', lr(T1).same_as.join() === T2 && lr(T2).same_as.join() === T1);
+    check('names: q finds a name by its matching form, or an address start',
+          DP.adminNames(db, { q: 'm00n', rule: RULE9 }).rows.map((r) => r.name).join() === 'Moon Rigs' &&
+          DP.adminNames(db, { q: T1.slice(0, 12), rule: RULE9 }).rows.every((r) => r.address.startsWith(T1.slice(0, 12))));
+    check('names: a banned form on a live row is flagged (only a hand edit can do that)', (() => {
+      db.prepare("INSERT INTO banned_donor_names (norm, name) VALUES ('twinco', 'x')").run();
+      const b = DP.adminNames(db, { rule: RULE9 }).rows.find((r) => r.address === T1).banned;
+      db.prepare("DELETE FROM banned_donor_names WHERE norm = 'twinco'").run();
+      return b === true;
+    })());
+    check('names: state is a closed enum', ['pending', 'all', ['live']].every((s) => DP.adminNames(db, { state: s }).code === 'bad_state'));
+    DP.removeLive(db, T1, 'name', { adminId, reason: 'collides', now: NOW + 6 });
+    DP.removeLive(db, T2, 'name', { now: NOW + 7 });
+    const rem = DP.adminNames(db, { state: 'removed' });
+    check('names: the removed list says who (admin id; null = the donor) and why',
+          rem.ok && rem.rows.find((r) => r.address === T1).removed_by === adminId && rem.rows.find((r) => r.address === T1).reason === 'collides' &&
+          rem.rows.find((r) => r.address === T2).removed_by === null && !('hit' in rem.rows[0]));
+    check('names: rows never carry bytes', !hasBytes(live.rows) && !hasBytes(rem.rows));
   }
 
 } finally {
@@ -684,9 +867,10 @@ try {
     // eslint-disable-next-line no-new-func
     page = new Function(`${nameLit}\n${banLit}\n${fnSrc}\nreturn { DP_NAME, DP_BANNER, dpCheckName };`)();
   } catch (e) { page = null; }
-  const libSrc = fs.readFileSync(path.join(APP, 'lib', 'donor-profiles.js'), 'utf8');
-  const libCharset = (libSrc.match(/const NAME_CHARSET_RE = (\/[^\n]*\/);/) || [])[1] || '';
-  check('page: DP_NAME min/max/charset = lib NAME_MIN / NAME_MAX / NAME_CHARSET_RE',
+  // Since C4 the shape is defined once, in the name rule (the donor shape).
+  const libSrc = fs.readFileSync(path.join(APP, 'lib', 'name-rule.js'), 'utf8');
+  const libCharset = (libSrc.match(/const DONOR_RE = (\/[^\n]*\/);/) || [])[1] || '';
+  check('page: DP_NAME min/max/charset = the rule\'s DONOR_MIN / DONOR_MAX / DONOR_RE',
     !!page && page.DP_NAME.min === DP.NAME_MIN && page.DP_NAME.max === DP.NAME_MAX &&
     libCharset !== '' && String(page.DP_NAME.re) === libCharset, `${page && page.DP_NAME.re} vs ${libCharset}`);
   check('page: DP_BANNER = lib BANNER + MAX_BANNER_BYTES',

@@ -20,6 +20,13 @@
   'use strict';
 
   var ADDR_RE = /^t?grin1[ac-hj-np-z02-9]{58}$/;
+  // A guest (design §19.17.3, games Part C5) is 'g:' + 16 base32 — not an address. A URL path
+  // segment cannot carry ':' (the proxy's path check refuses it), so a guest travels as
+  // 'g.<16>' in a path; the games service turns it back into the id. Build every player path
+  // with playerSeg(), never by pasting the id.
+  var GUEST_RE = /^g:[a-z2-7]{16}$/;
+  function isPlayer(a) { return typeof a === 'string' && (ADDR_RE.test(a) || GUEST_RE.test(a)); }
+  function playerSeg(a) { return GUEST_RE.test(a) ? 'g.' + a.slice(2) : a; }
 
   var ERROR_TEXT = {
     games_offline: 'The games service is not answering. Mining is unaffected; check the service under P) Play & chat in the Script 07 pool menu.',
@@ -31,8 +38,6 @@
     no_points: 'That would take the points below zero.',
     banned: 'That address is banned.',
     too_many_moderators: 'The moderator list is full (50). Remove one first.',
-    nickname_taken: 'Another player already has a nickname that reads the same.',
-    not_pending: 'That request was already decided — refresh the list.',
     not_live: 'That nickname is no longer live — refresh the list.',
   };
   var FIELD_TEXT = {
@@ -46,6 +51,7 @@
     kind: 'Kind', delta: 'Amount (a whole number, not 0, at most 1 000 000 either way)',
     add: 'Words to add (1–40 characters each, at most 500 words in the list)', remove: 'Words to remove',
     values: 'Settings', state: 'State', before: 'Paging', limit: 'Page size', filter: 'Filter',
+    name: 'Name (1–32 letters or digits once spaces and punctuation are ignored)', q: 'Search (up to 64 characters)',
   };
 
   async function call(method, rel, body) {
@@ -172,5 +178,6 @@
   window.GamesAdmin = Object.freeze({
     call: call, el: el, clear: clear, fmtUtc: fmtUtc, short: short, addrChip: addrChip, playerLink: playerLink,
     btn: btn, flash: flash, askConfirm: askConfirm, actorNode: actorNode, ADDR_RE: ADDR_RE,
+    GUEST_RE: GUEST_RE, isPlayer: isPlayer, playerSeg: playerSeg,
   });
 })();

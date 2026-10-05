@@ -1078,6 +1078,19 @@ function createSchema() {
       reason TEXT
     )`,
 
+    // Banned donor NAMES (design §19.17.6, Part C4): keyed on the name rule's matching form
+    // (lib/name-rule.js matchForm — lower-case, separators out, leet folded), so one ban covers
+    // every spelling. `name` is the spelling the admin typed, for the list. The pool's own table
+    // rather than one banned-names table with a scope column: game nicknames are banned in the
+    // games' database (D5), so the pool has exactly one name namespace.
+    `CREATE TABLE IF NOT EXISTS banned_donor_names (
+      norm      TEXT PRIMARY KEY,
+      name      TEXT NOT NULL,
+      banned_at INTEGER NOT NULL DEFAULT (unixepoch()),
+      banned_by INTEGER REFERENCES users(id),
+      reason    TEXT
+    )`,
+
     // One row per lottery draw. seed_height/seed_hash make the draw publicly verifiable:
     // anyone can recompute the winners from the node block hash + public share data.
     `CREATE TABLE IF NOT EXISTS lottery_draws (
@@ -1294,7 +1307,40 @@ function createSchema() {
       updated_at INTEGER NOT NULL DEFAULT (unixepoch())
     )`,
 
-    `CREATE INDEX IF NOT EXISTS idx_posts_published ON posts(status, published_at DESC)`
+    `CREATE INDEX IF NOT EXISTS idx_posts_published ON posts(status, published_at DESC)`,
+
+    // ─── Node availability (design §20; lib/node-availability.js) ──────────────
+    // Two observers of the same node, kept side by side and NEVER merged into one row:
+    // source 'pool' = the pool's own 30 s probe, source 'recorder' = lines ingested from the
+    // node box's event recorder (/opt/grin/node-events/<net>/ledger.jsonl). Only state 'down'
+    // counts against an uptime %. `detail` is built from tags and our own words, never from an
+    // error message, ≤ 300 chars, IPs masked. recorder_event_id is the recorder's line id: the
+    // UNIQUE key is what makes a re-read or a post-truncation replay a no-op (several pool rows
+    // share NULL, which SQLite's UNIQUE allows). Pruned after 2 years by lib/retention.js.
+    `CREATE TABLE IF NOT EXISTS node_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      network TEXT NOT NULL,
+      source TEXT NOT NULL CHECK (source IN ('pool', 'recorder')),
+      started_at INTEGER NOT NULL,
+      ended_at INTEGER DEFAULT NULL,
+      duration_s INTEGER DEFAULT NULL,
+      state TEXT NOT NULL,
+      class TEXT DEFAULT NULL,
+      origin TEXT DEFAULT NULL CHECK (origin IS NULL OR origin IN ('transport', 'node_reply', 'auth')),
+      detail TEXT DEFAULT NULL,
+      recorder_event_id TEXT DEFAULT NULL UNIQUE
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_node_events_net_start ON node_events(network, started_at)`,
+
+    // Small per-network key/value state for the same module: the ledger read cursor
+    // (rec_inode, rec_offset, rec_last_ts) and the pool probe's first-probe / heartbeat stamps.
+    // Its own table rather than pool_config, so the admin settings loader never meets these keys.
+    `CREATE TABLE IF NOT EXISTS node_availability_meta (
+      network TEXT NOT NULL,
+      key TEXT NOT NULL,
+      value TEXT,
+      PRIMARY KEY (network, key)
+    )`
   ];
 
   const transaction = db.transaction(() => {

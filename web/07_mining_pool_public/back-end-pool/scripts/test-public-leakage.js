@@ -470,6 +470,22 @@ ok('§18.9 the public routes that touch donor_requests are exactly the reviewed 
 ok('§18.9 no public route calls an admin reader (adminQueue / requestImage / adminProfiles)',
   touching.filter((r) => !r.path.startsWith('/api/admin/'))
     .every((r) => !ADMIN_READERS.test(handlerSrc(r.verb, r.path))));
+// Part C4 (§19.17.6): the donor-names admin surface — full addresses and which list a live name
+// hits — is admin-only: reads secureAdmin, the ban writes step-up. And the public name route
+// never sends `hit` (which list matched) or tells a banned name from a taken one.
+const C4_ADMIN = { 'get /api/admin/donors/names': 'secureAdmin', 'get /api/admin/donors/banned-names': 'secureAdmin',
+                   'post /api/admin/donors/banned-names': 'freshAdmin', 'post /api/admin/donors/banned-names/:norm/unban': 'freshAdmin' };
+ok('C4: the four donor-name admin routes exist with the right guard (reads secureAdmin, ban/unban step-up)',
+  Object.entries(C4_ADMIN).every(([k, g]) => routeDecls.some((r) => `${r.verb} ${r.path}` === k && r.guard === g)));
+ok('C4: adminNames / bannedNames are called from /api/admin/ routes only',
+  routeDecls.filter((r) => /DonorProfiles\.(adminNames|bannedNames)\(/.test(handlerSrc(r.verb, r.path))).every((r) => r.path.startsWith('/api/admin/')) &&
+  routeDecls.some((r) => /DonorProfiles\.adminNames\(/.test(handlerSrc(r.verb, r.path))));
+{
+  const nameRoute = handlerSrc('post', '/api/account/:addr/donor-profile/name');
+  ok('C4: the public name route never puts `hit` in a response, and maps banned AND taken to one code',
+    !/\bhit\b/.test(nameRoute.replace(/r\.hit/g, '')) && !/res\.[a-z]+\([^)]*r\.hit/.test(nameRoute) &&
+    /name_unavailable: \[409, DonorProfiles\.NAME_TEXT\.name_unavailable\]/.test(indexSrc));
+}
 ok('§18.9 every admin route that touches donor_requests is secureAdmin or freshAdmin',
   touching.filter((r) => r.path.startsWith('/api/admin/')).length >= 8 &&
   touching.filter((r) => r.path.startsWith('/api/admin/')).every((r) => r.guard === 'secureAdmin' || r.guard === 'freshAdmin'),
@@ -509,9 +525,11 @@ ok('§18.8 banner previews are data: URLs — createObjectURL appears only in th
 ok('§18.8 every donor-profile success clears both proof boxes (name, banner, delete)',
   (acctPageJs.match(/dpClearProofs\(\);/g) || []).length === 3 &&
   /function dpClearProofs\(\) \{ \$id\('dp-ip-proof'\)\.value = ''; \$id\('dp-pass-proof'\)\.value = ''; \}/.test(acctPageJs));
+// Since C4 (§19.17.6) a name is live at once, so the page names it only in its own POST answer
+// ("Done — “X” is on the donor wall now") and otherwise reads the LIVE name from the summary.
 ok('§18.6 the page never reads a pending name or image from the API (only its own POST response)',
   !/pending_name|pending_image|\.pending\.name|name\.pending\b/.test(acctPageJs) &&
-  /text: String\(json\.name \|\| v\.name\)/.test(acctPageJs));
+  /'Done — “' \+ String\(json\.name \|\| v\.name\)/.test(acctPageJs));
 
 // ── §17.4 — the ownership-proof set must never reach a browser ───────────────────────────
 const acctProofJs = routeSrc('get', '/api/account/:addr').replace(/\/\/[^\n]*/g, '');
@@ -664,7 +682,7 @@ console.log('\n[games] /internal stays off /api/; branding carries only { mode, 
     .some((m) => !m[2].startsWith('/api/admin/')));
   const flag = gamesSrc.slice(gamesSrc.indexOf('  function publicFlag()'), gamesSrc.indexOf('  // ── Health probe'));
   ok('publicFlag returns only { mode, chat } — no port, file path or secret',
-    flag.length > 100 && (flag.match(/return \{[^}]*\}/g) || []).every((r) => /^return \{ mode: [^,]+, chat: [^,}]+ \}$/.test(r)) &&
+    flag.length > 100 && (flag.match(/return \{[^}]*\}/g) || []).every((r) => /^return \{ mode(: [^,]+)?, chat: [^,}]+ \}$/.test(r)) &&
     !/games_port|gamesPort|linkFile|linkSecret|secret/.test(flag));
   ok('the branding route sets cfg.games from publicFlag() and nothing else games-related',
     /cfg\.games = gamesLink\.publicFlag\(\);/.test(routeSrc('get', '/api/public/branding')) &&

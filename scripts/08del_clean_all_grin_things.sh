@@ -9,6 +9,8 @@
 #   · Grin binary install directories (/grin*, /usr/local/bin/grin*)
 #   · Chain data and wallet files ($HOME/.grin/)
 #   · Grin toolkit log files
+#   · The node event recorder — its evidence bundles only after a separate
+#     question (No = moved to /root/grin-node-events-saved_<UTC>/ first)
 #
 # Each step requires individual confirmation before executing.
 # This script CANNOT be undone. Back up wallet seeds before running.
@@ -125,6 +127,17 @@ step_stop_processes() {
 
     if confirm_step "Kill all Grin processes and close Grin tmux sessions?"; then
         local stop_timeout=30
+
+        # ── Planned-stop markers for the node event recorder ──────────────────
+        # Written BEFORE any signal (a marker must name the live pid), so the
+        # recorder, if installed, logs this wipe as planned and not an outage.
+        # Best-effort: the stop proceeds whatever happens here.
+        if [[ -f "$SCRIPT_DIR/lib/grin_node_control.sh" ]]; then
+            # shellcheck source=lib/grin_node_control.sh
+            if source "$SCRIPT_DIR/lib/grin_node_control.sh"; then
+                gnc_mark_all_planned_stops "full cleanup" || true
+            fi
+        fi
 
         # ── Graceful SIGTERM → SIGKILL on port-bound processes ────────────────
         for entry in "${found_ports[@]}"; do
@@ -472,6 +485,113 @@ step_remove_systemd_services() {
         info "Skipped — systemd units kept."
         log "[STEP 3b] SKIPPED by user."
     fi
+}
+
+# =============================================================================
+# STEP 3c — Node event recorder (086 design §8.12)
+# =============================================================================
+# 3b already took its units if confirmed (grin-node-events.* match grin-*).
+# This step removes the rest — worker, logrotate stanza, lib copies, config —
+# and its state dir. The EVIDENCE BUNDLES are the one part an operator may still
+# want (an upstream grin report), and step 4 deletes them with /opt/grin, so the
+# question is asked HERE: keeping them means moving them out of /opt/grin first.
+# Every test is in if-form: main() calls the steps unguarded, so errexit is live
+# and a false `[[ … ]] && x` ending a loop would abort the whole cleanup.
+step_remove_event_recorder() {
+    section "STEP 3c: Remove the Node Event Recorder"
+
+    local ev_root="/opt/grin/node-events" conf_dir="/opt/grin/conf/node-events"
+    local -a files=(
+        /usr/local/bin/grin-node-events
+        /etc/systemd/system/grin-node-events.service
+        /etc/systemd/system/grin-node-events.timer
+        /etc/logrotate.d/grin-node-events
+        # lib copies only the recorder runs from (grin_node_control.sh is
+        # shared with other installs; step 4 takes it with /opt/grin).
+        /opt/grin/lib/grin_node_events.sh
+        /opt/grin/lib/grin_log_signatures.sh
+        /opt/grin/lib/grin_alert_send.sh
+    )
+    local -a found=() bundles=()
+    local f kb keep_dir="" net ok=1
+
+    for f in "${files[@]}" "$conf_dir" "$ev_root"; do
+        if [[ -e "$f" ]]; then found+=("$f"); fi
+    done
+    if [[ ${#found[@]} -eq 0 ]]; then
+        info "Node event recorder not installed. Skipping."
+        log "[STEP 3c] Nothing found."
+        return 0
+    fi
+    for f in "$ev_root"/*/evidence/*; do
+        if [[ -d "$f" && ! -L "$f" ]]; then bundles+=("$f"); fi
+    done
+
+    info "Found the node event recorder:"
+    for f in "${found[@]}"; do echo -e "  ${YELLOW}→${RESET} $f"; done
+    if [[ ${#bundles[@]} -gt 0 ]]; then
+        kb=$(du -sk "$ev_root" 2>/dev/null | cut -f1 || true)
+        echo ""
+        echo -e "  ${BOLD}${#bundles[@]} evidence bundle(s)${RESET} ${DIM}(${kb:-?} KB)${RESET} — the node console, logs and kernel"
+        echo -e "  lines saved at past failures. You may want them for an upstream grin report."
+    fi
+
+    if ! confirm_step "Remove the node event recorder (timer, worker, config, ledger, status)?"; then
+        info "Skipped — recorder kept."
+        if [[ ${#bundles[@]} -gt 0 ]]; then
+            warn "STEP 4 removes /opt/grin, which holds $ev_root — decline STEP 4 to keep the evidence."
+        fi
+        log "[STEP 3c] SKIPPED by user."
+        return 0
+    fi
+
+    if [[ ${#bundles[@]} -gt 0 ]]; then
+        if confirm_step "Delete the ${#bundles[@]} evidence bundle(s) too? (No = move them, with the ledger, out of /opt/grin)"; then
+            log "[STEP 3c] evidence: delete"
+        else
+            keep_dir="/root/grin-node-events-saved_$(date -u +%Y%m%dT%H%M%SZ)"
+            if mkdir -m 700 "$keep_dir" 2>/dev/null; then
+                for net in mainnet testnet; do
+                    [[ -d "$ev_root/$net" ]] || continue
+                    if ! mkdir -m 700 "$keep_dir/$net" 2>/dev/null; then ok=0; continue; fi
+                    if [[ -d "$ev_root/$net/evidence" ]]; then
+                        mv -- "$ev_root/$net/evidence" "$keep_dir/$net/evidence" 2>/dev/null || ok=0
+                    fi
+                    for f in "$ev_root/$net"/ledger.jsonl* "$ev_root/$net/status.json"; do
+                        if [[ -f "$f" ]]; then cp -p -- "$f" "$keep_dir/$net/" 2>/dev/null || ok=0; fi
+                    done
+                done
+            else
+                ok=0
+            fi
+            if [[ $ok -eq 1 ]]; then
+                success "Evidence + ledger moved to $keep_dir (root-only; RAW — IPs and hostnames are not masked)."
+                log "[STEP 3c] evidence moved to $keep_dir"
+            else
+                error "Could not move every bundle to ${keep_dir:-/root}. $ev_root is KEPT for now —"
+                error "decline STEP 4 (it removes /opt/grin), copy what you need, then delete it by hand."
+                log "[STEP 3c] evidence move FAILED — $ev_root kept"
+            fi
+        fi
+    fi
+
+    systemctl disable --now grin-node-events.timer >/dev/null 2>&1 || true
+    systemctl stop grin-node-events.service >/dev/null 2>&1 || true
+    for f in "${files[@]}"; do
+        if [[ -e "$f" ]]; then
+            if rm -f -- "$f"; then log "[STEP 3c] DELETED: $f"; else warn "Could not remove $f"; fi
+        fi
+    done
+    systemctl daemon-reload 2>/dev/null || true
+    # recorder.conf holds the alert channel tokens — never left behind.
+    if [[ -d "$conf_dir" ]]; then
+        if rm -rf -- "$conf_dir"; then log "[STEP 3c] DELETED: $conf_dir"; else warn "Could not remove $conf_dir"; fi
+    fi
+    if [[ $ok -eq 1 && -d "$ev_root" ]]; then
+        if rm -rf -- "$ev_root"; then log "[STEP 3c] DELETED: $ev_root"; else warn "Could not remove $ev_root"; fi
+    fi
+    success "Node event recorder removed."
+    return 0
 }
 
 step_remove_install_dirs() {
@@ -859,6 +979,7 @@ main() {
     echo -e "${BOLD}${RED}║    2.  Grin directories in /var/www/ and /var/lib/                  ║${RESET}"
     echo -e "${BOLD}${RED}║    3.  All Grin nginx configs + rate-limit zone files               ║${RESET}"
     echo -e "${BOLD}${RED}║   3b.  Grin systemd units (transporter, floonet, grinscan, …)       ║${RESET}"
+    echo -e "${BOLD}${RED}║   3c.  Node event recorder  (asks before deleting its evidence)     ║${RESET}"
     echo -e "${BOLD}${RED}║    4.  Grin binary and install directories (/grin*, /opt/grin*)     ║${RESET}"
     echo -e "${BOLD}${RED}║    5.  Chain data and wallet files  (\$HOME/.grin/)                  ║${RESET}"
     echo -e "${BOLD}${RED}║    6.  Grin toolkit log files                                       ║${RESET}"
@@ -886,6 +1007,7 @@ main() {
     step_remove_web_dirs
     step_remove_nginx_configs
     step_remove_systemd_services
+    step_remove_event_recorder
     step_remove_install_dirs
     step_remove_home_grin
     step_remove_logs

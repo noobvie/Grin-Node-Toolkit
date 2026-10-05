@@ -23,7 +23,8 @@ const SPEC = Object.freeze({
   // §19.6 plays
   minutes_per_play:       { type: 'int', def: 10,  min: 1, max: 1440 },
   plays_daily_cap:        { type: 'int', def: 24,  min: 1, max: 1440 },
-  plays_balance_cap:      { type: 'int', def: 100, min: 1, max: 10000 },
+  // D25: miners may bank up to 999 (was 100); guests are SET to guest_daily_plays each UTC day.
+  plays_balance_cap:      { type: 'int', def: 999, min: 1, max: 10000 },
   // §19.5 / D9 chat gate. The 1 h FLOOR is not this setting: it is CHAT_MIN_AGE_FLOOR in
   // sessions.js, applied on top, so lowering this setting can never remove it.
   chat_min_proof_age:     { type: 'int', def: DAY, min: 0, max: 30 * DAY },
@@ -52,9 +53,23 @@ const SPEC = Object.freeze({
   // D21: a moderator acts only from a session opened with the rig PASSWORD proof (an IP
   // proof can be a CGNAT neighbour, §19.13 #7), unless the operator turns this off.
   mod_requires_password:  { type: 'bool', def: true },
-  // §19.16 (Part 12) approved nicknames. Off = no new submissions AND every surface shows the
-  // bare mask again (nothing is deleted; turning it back on restores the approved names).
+  // §19.17.5 (Part C3) nicknames, checked automatically and live at once. Off = no new names
+  // AND every surface shows the bare mask again (nothing is deleted; on restores the live names).
   nicknames_enabled:      { type: 'bool', def: true },
+  // One own change per this many days (0 = no cooldown). Removing your own name is always allowed.
+  nickname_change_days:   { type: 'int', def: 7,   min: 0, max: 90 },
+  // §19.17.3/§19.17.4 (Part C5) guest accounts. Sign-up's switch is smaller than the whole games
+  // mode: under a sign-up flood the operator closes the door and existing guests keep signing in.
+  guest_signup_enabled:   { type: 'bool', def: true },
+  guest_signups_per_ip:   { type: 'int', def: 3,   min: 1, max: 10 },        // per /24 (/48) per 24 h
+  // The PoW floor (14) is POW_BITS_FLOOR in guests.js too, applied on top: a setting may raise
+  // the cost, never remove it (the D9 pattern).
+  signup_pow_bits:        { type: 'int', def: 18,  min: 14, max: 26 },
+  guest_daily_plays:      { type: 'int', def: 5,   min: 0, max: 100 },
+  chat_guests_enabled:    { type: 'bool', def: true },
+  // The 1 h FLOOR (CHAT_MIN_AGE_FLOOR in sessions.js) is applied on top, as for miners.
+  guest_chat_min_age:     { type: 'int', def: DAY, min: 3600, max: 30 * DAY },
+  guest_idle_days:        { type: 'int', def: 180, min: 30, max: 3650 },
 });
 
 const MEMO_MS = 30 * 1000;

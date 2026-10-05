@@ -352,6 +352,27 @@
     }
   }
 
+  // Node uptime for the P-02 lamp, from /api/pool/status → node.up_days (design §20.5): an
+  // integer of whole UTC days, or null when nobody knows. Returns null for anything that is not
+  // a non-negative integer, so "unknown" prints NOTHING — never "up 0 d". 0 is real: the node
+  // came up today or yesterday (the server floors to UTC midnight, so a value can understate by
+  // up to a day, never overstate). `short` keeps its inner spaces non-breaking, so the lamp's
+  // narrow uptime line never splits "up 12.3 y" across two rows.
+  function fmtUpDays(days) {
+    if (typeof days !== 'number' || !isFinite(days) || days < 0 || Math.floor(days) !== days) return null;
+    var nb = '\u00a0', s;
+    if (days === 0) s = '<1' + nb + 'd';
+    else if (days < 60) s = days + nb + 'd';
+    else if (days < 730) s = Math.floor(days / 30.44) + nb + 'mo';
+    else s = (Math.floor(days / 365.25 * 10) / 10).toFixed(1) + nb + 'y';
+    return {
+      short: 'up' + nb + s,
+      long: days === 0 ? 'Node continuously available since yesterday or today (UTC)'
+        : 'Node continuously available for at least ' + days + (days === 1 ? ' day' : ' days') +
+          ' (counted in whole UTC days)'
+    };
+  }
+
   // ── master lamp (composite pool + node + wallet health) ──────────────────
   function setMaster(state, label) {
     var el = $('rx-master');
@@ -550,9 +571,32 @@
       nodeHeight = (nodeOk && s.node.height) || nodeHeight;
 
       setLamp('an-pool', poolOk ? 'ok' : 'alarm', poolOk ? 'online' : 'offline');
+      // Uptime only on a synced node: while syncing, "· sync" already takes the lamp's second
+      // line. It is its OWN line (.lamp-up, display:block), not an inline " · up 12 d": just
+      // above the 900px breakpoint the lamp is ~75px wide, and "123 peers · up 12.3 y" inline
+      // wrapped to three lines there (measured headless). As a block it is always exactly two.
+      // The hover carries the long form; every other branch (and the catch below) clears it so
+      // a stale "available for N days" never lingers on an offline lamp. "N peers" is joined by
+      // a no-break space for the same width: with a wider Mac mono font "123 peers" alone split
+      // in two at 901–940px, which made even the old "123 peers · sync" three lines.
+      var nodeUp = nodeSynced ? fmtUpDays(s.node.up_days) : null;
+      var nodeLampEl = $('an-node');
+      if (nodeLampEl) {
+        if (nodeUp) nodeLampEl.title = nodeUp.long;
+        else nodeLampEl.removeAttribute('title');
+      }
       if (nodeOk) {
         setLamp('an-node', nodeSynced ? 'ok' : 'warn',
-          (s.node.peers || 0) + ' peers' + (nodeSynced ? '' : ' · sync'));
+          (s.node.peers || 0) + '\u00a0peers' + (nodeSynced ? '' : ' · sync'));
+        var nodeSmall = nodeUp && nodeLampEl && nodeLampEl.querySelector('small');
+        if (nodeSmall) {
+          var upLine = document.createElement('span');
+          upLine.className = 'lamp-up';
+          // The leading space collapses away at the start of the block row; it is there so a
+          // browser still holding a pre-.lamp-up reactor.css reads "41 peers up 12 d", not "peersup".
+          upLine.textContent = ' ' + nodeUp.short;
+          nodeSmall.appendChild(upLine);
+        }
       } else if (nodePending) {
         setLamp('an-node', 'warn', nodeState);
       } else {
@@ -583,6 +627,8 @@
     } catch (e) {
       setLamp('an-pool', 'alarm', 'offline');
       setLamp('an-node', 'alarm', 'offline');
+      var nodeLampErr = $('an-node');
+      if (nodeLampErr) nodeLampErr.removeAttribute('title');
       setLamp('an-wallet', 'alarm', 'offline');
       setMaster('bad', 'Pool unreachable');
     }

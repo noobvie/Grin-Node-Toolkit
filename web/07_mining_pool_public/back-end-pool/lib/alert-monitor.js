@@ -29,6 +29,7 @@ class AlertMonitor {
     if (this.stratumServer) this.stratumServer.alertMonitor = this;
     this.withdrawalScheduler = modules.withdrawalScheduler;
     this.alertDelivery = modules.alertDelivery; // wired so alerts are actually delivered
+    this.nodeAvailability = modules.nodeAvailability || null;  // shares its fresh node probe
     this.db = db;
 
     this.monitorInterval = null;
@@ -421,7 +422,10 @@ class AlertMonitor {
   async checkNodeHealth() {
     try {
       // getStatus() resolves (it doesn't throw) with { ok, synced, peer_count, ... }.
-      const status = await this.blockMonitor.grinNode.getStatus();
+      // lib/node-availability.js probes the same node every 30 s whatever this alert's toggle
+      // says; reuse its result while fresh rather than send a second call (index.js wires it).
+      const recent = this.nodeAvailability && this.nodeAvailability.recentStatus();
+      const status = recent || await this.blockMonitor.grinNode.getStatus();
 
       if (!status.ok) {
         // Node API unreachable / errored — critical.

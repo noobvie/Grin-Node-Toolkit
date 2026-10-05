@@ -24,11 +24,12 @@
     // Dashboard is the overview group: all the live data pages + System Health hang off it.
     { file: 'index.html', title: 'Dashboard', ico: '📊', children: [
         { file: 'miners.html',   title: 'Miners' },
-        { file: 'donors.html',   title: 'Donors' },     // donor-profile review queue + donors + donation settings (design §18.6)
+        { file: 'donors.html',   title: 'Donors' },     // banner review queue + donor names + donors + donation settings (design §18.6, §19.17.6)
         { file: 'blocks.html',   title: 'Blocks' },
         { file: 'users.html',    title: 'Security' },   // login security, admin sessions, payout request audit
         { file: 'regions.html',  title: 'Regions' },
-        { file: 'health.html',   title: 'System Health' }
+        { file: 'health.html',   title: 'System Health' },
+        { file: 'node-availability.html', title: 'Node Availability' }   // pool view + node-box recorder, side by side (design §20.6)
       ] },
     // Payouts (2026-10): the old single payments page, split by SUBJECT — each page pairs a
     // reading with the action that changes it. The queue keeps payments.html (bookmarks,
@@ -64,6 +65,7 @@
         { file: 'settings-payout.html',        title: 'Payout' },
         { file: 'settings-incentives.html',    title: 'Incentives' },
         { file: 'settings-games.html',         title: 'Games' },       // /play/ master + chat switch (design §19.11)
+        { file: 'settings-names.html',         title: 'Names' },       // the blocked-word list for player names (design §19.17.5)
         { file: 'settings-access.html',        title: 'Access Control' },
         { file: 'settings-database.html',      title: 'Database' }
       ] }
@@ -365,7 +367,7 @@
         var b = document.createElement('span');
         b.className = 'nav-count';
         b.textContent = String(n);
-        b.title = n + ' donor request' + (n === 1 ? '' : 's') + ' waiting for review';
+        b.title = n + ' donor banner' + (n === 1 ? '' : 's') + ' waiting for review';
         b.setAttribute('aria-label', b.title);
         link.appendChild(b);
       })

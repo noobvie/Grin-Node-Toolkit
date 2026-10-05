@@ -14,10 +14,15 @@
 #   gnc_wait_for_port <port> [to] [iv]   block until a port listens (or timeout)
 #   gnc_grin_tmux_socket              grin user's tmux socket path (rc 1 if absent)
 #   gnc_has_grin_session <sess>       session exists on EITHER tmux server
-#   gnc_kill_grin_session <sess>      kill named session on BOTH tmux servers
-#   gnc_kill_all_grin_sessions        kill every grin_* session on BOTH servers
+#   gnc_grin_pids_for_dir <dir>       grin node pids whose BINARY is <dir>/grin
+#   gnc_session_of_pid <pid>          toolkit session name for a grin node pid
+#   gnc_mark_planned_stop <sess> [reason]   planned-stop marker for the recorder
+#   gnc_mark_all_planned_stops [reason]     …for every running node / grin_* session
+#   gnc_kill_grin_session <sess> [reason]   kill named session on BOTH tmux servers
+#   gnc_kill_all_grin_sessions [reason]     kill every grin_* session on BOTH servers
 #   gnc_kill_grin_procs [dir] [grace] TERM→wait→KILL grin server processes
 #   _gnc_heal_grin_socket_dir         reclaim /tmp/tmux-<grin uid> from a foreign owner
+#   _gnc_node_run_cmd <dir> <bin> [cron]   the command a node's tmux pane runs
 #   gnc_launch_node_session <dir> <bin> <sess>   THE ONLY sanctioned node launcher
 #   gnc_start_node_tmux <network>     conf-resolved wrapper around the launcher
 #   gnc_owner_get_status <network>    raw get_status JSON (Owner API, localhost)
@@ -34,6 +39,10 @@
 #   · START nodes only via gnc_launch_node_session → always grin-owned, always
 #     on grin's socket, always visible via `gtmux` (never plain root `tmux ls`).
 #   · STOP/CHECK sessions only via the gnc_* helpers below → both servers.
+#   · A stop path that signals grin ITSELF before reaching gnc_kill_* (a
+#     graceful SIGTERM by port) must call gnc_mark_planned_stop FIRST — once
+#     the pid is gone the marker can no longer name it, and the node event
+#     recorder (086 design §8.5) then logs the stop as an outage.
 #
 # Conventions (see .claude/CLAUDE.md):
 #   · Lib file — sourced, never executed → NO shebang, NO `set -euo pipefail`.
@@ -51,6 +60,10 @@ _GRIN_NODE_CONTROL_SH_LOADED=1
 
 # Authoritative node registry (written by Script 01).
 GNC_INSTANCES_CONF="${GNC_INSTANCES_CONF:-/opt/grin/conf/grin_instances_location.conf}"
+
+# Node event recorder state root (086 design §8.7). Markers are written only
+# when it exists, i.e. once the recorder has been installed.
+GNC_EVENTS_DIR="${GNC_EVENTS_DIR:-/opt/grin/node-events}"
 
 # Lightweight logging fallbacks — only defined if the caller hasn't already.
 # A cron watchdog wrapper sources this with no logging helpers in scope; an
@@ -184,12 +197,174 @@ gnc_has_grin_session() {
 }
 
 # -----------------------------------------------------------------------------
-# gnc_kill_grin_session <sess>  — kill the named session on BOTH tmux servers
-# (root leftovers from before the gtmux unification included). Never fails.
+# _gnc_exe_path <pid>   → the process's resolved binary path, rc 1 if unreadable.
+# A binary replaced on disk under a running node reads "<path> (deleted)"; the
+# suffix is stripped so a rebuild's leftover process still matches its dir.
+# -----------------------------------------------------------------------------
+_gnc_exe_path() {
+    local exe
+    exe=$(readlink -f "/proc/${1:-0}/exe" 2>/dev/null) || return 1
+    exe="${exe% (deleted)}"
+    [[ -n "$exe" ]] || return 1
+    echo "$exe"
+}
+
+# -----------------------------------------------------------------------------
+# gnc_grin_pids_for_dir <dir>   → one pid per line: `grin server run` processes
+# whose BINARY is <dir>/grin. Always rc 0 (no output = none running).
+# Matched on the exe, NEVER on cwd or argv: both nodes share ONE tmux server on
+# grin's socket, whose cwd is the first-launched node's dir and whose argv
+# contains `… grin server run`. A cwd/argv match selects that server, and
+# signalling it kills the OTHER network's node too (086 design §8.13 F-7).
+# -----------------------------------------------------------------------------
+gnc_grin_pids_for_dir() {
+    local dir="${1:-}" real pid exe
+    dir="${dir%/}"
+    [[ -n "$dir" ]] || return 0
+    real=$(readlink -f "$dir/grin" 2>/dev/null || true)
+    while IFS= read -r pid; do
+        [[ -n "$pid" ]] || continue
+        exe=$(_gnc_exe_path "$pid") || continue
+        if [[ "$exe" == "$dir/grin" || ( -n "$real" && "$exe" == "$real" ) ]]; then
+            echo "$pid"
+        fi
+    done < <(pgrep -f 'grin server run' 2>/dev/null || true)
+    return 0
+}
+
+# -----------------------------------------------------------------------------
+# gnc_session_of_pid <pid>   → the toolkit session name for a grin node process
+# (from its binary's dir, via _grin_session_name); rc 1 if <pid> is not a grin
+# binary. Exe-based for the same reason as gnc_grin_pids_for_dir.
+# -----------------------------------------------------------------------------
+gnc_session_of_pid() {
+    local exe
+    exe=$(_gnc_exe_path "${1:-}") || return 1
+    [[ "$(basename "$exe")" == "grin" ]] || return 1
+    _grin_session_name "$(dirname "$exe")"
+}
+
+# _gnc_net_of_session <sess>   → mainnet | testnet, rc 1 if the name has neither.
+_gnc_net_of_session() {
+    case "${1:-}" in
+        *testnet*) echo testnet ;;
+        *mainnet*) echo mainnet ;;
+        *)         return 1 ;;
+    esac
+}
+
+# -----------------------------------------------------------------------------
+# gnc_mark_planned_stop <sess> [reason]
+# Writes the planned-stop marker read by the node event recorder (086 design
+# §8.5), one line, atomically (temp + mv):
+#   $GNC_EVENTS_DIR/<net>/planned_stop
+#   ts=<epoch> by=<script basename> pid=<grin pid, or 0> reason=<≤80 chars>
+# Call it BEFORE anything signals the node: the marker must name the live pid.
+#   · Inert until the recorder is installed — no GNC_EVENTS_DIR, no marker.
+#   · Written only when there is something to stop: a live grin pid for <sess>,
+#     or else the session itself (pid=0). The launcher kills on every start, so
+#     an unconditional write would leave a marker on every start (F-2). A pid=0
+#     marker explains nothing, by design: tidying up a crashed node's held pane
+#     must not turn the crash into a planned stop.
+#   · by = the running script's basename (GNC_STOP_BY overrides). Watchdog
+#     restarts thus say by=grin-node-sync-watchdog, never counted as planned.
+#   · A pid=0 marker never replaces one that names a pid (see the body), and
+#     a marker for the same live pid, < 120 s old, is kept when no reason is
+#     given, so gnc_kill_grin_procs' own call can't blank the caller's reason.
+#   · Best-effort: a failed write warns and returns 0. It never blocks a stop.
+# -----------------------------------------------------------------------------
+gnc_mark_planned_stop() {
+    local sess="${1:-}" reason="${2:-}" net pid="" p s by now dir tmp old old_ts old_pid saved_sock
+    [[ -n "$sess" && -d "$GNC_EVENTS_DIR" ]] || return 0
+    net=$(_gnc_net_of_session "$sess") || return 0
+
+    while IFS= read -r p; do
+        [[ -n "$p" ]] || continue
+        s=$(gnc_session_of_pid "$p") || continue
+        if [[ "$s" == "$sess" ]]; then pid="$p"; break; fi
+    done < <(pgrep -f 'grin server run' 2>/dev/null || true)
+    if [[ -z "$pid" ]]; then
+        # gnc_has_grin_session sets GNC_SESSION_SOCKET — don't leak that to the caller.
+        saved_sock="${GNC_SESSION_SOCKET:-}"
+        if ! gnc_has_grin_session "$sess"; then GNC_SESSION_SOCKET="$saved_sock"; return 0; fi
+        GNC_SESSION_SOCKET="$saved_sock"
+        pid=0
+    fi
+
+    now=$(date -u +%s)
+    dir="$GNC_EVENTS_DIR/$net"
+    if [[ -f "$dir/planned_stop" ]]; then
+        old=$(head -n 1 "$dir/planned_stop" 2>/dev/null | head -c 512 || true)
+        old_ts=$(printf '%s\n' "$old" | sed -n 's/^ts=\([0-9][0-9]*\) .*/\1/p')
+        old_pid=$(printf '%s\n' "$old" | sed -n 's/.* pid=\([0-9][0-9]*\) .*/\1/p')
+        # Never downgrade. A stop path that SIGTERMs first (Script 01/03) marks
+        # the live pid, then its relaunch's gnc_kill_grin_session finds only the
+        # held pane (pid=0). Overwriting would lose the pid, and the recorder
+        # would count a quick toolkit restart as an outage.
+        if [[ "$pid" == 0 && "$old_pid" =~ ^[1-9][0-9]*$ ]]; then return 0; fi
+        if [[ -z "$reason" && "$pid" != 0 && "$old_pid" == "$pid" && "$old_ts" =~ ^[0-9]+$ ]] \
+            && (( now - old_ts < 120 )); then
+            return 0
+        fi
+    fi
+
+    by="${GNC_STOP_BY:-$(basename "${BASH_SOURCE[${#BASH_SOURCE[@]}-1]:-$0}")}"
+    by=$(printf '%s' "$by" | tr -c 'A-Za-z0-9_.-' '_' | cut -c1-40)
+    [[ -n "$by" ]] || by=unknown
+    reason=$(printf '%s' "$reason" | tr -c '[:print:]' ' ' | cut -c1-80)
+
+    if ! mkdir -p -m 755 "$dir" 2>/dev/null; then
+        warn "Planned-stop marker: cannot create $dir — the node event recorder may log this stop as an outage."
+        return 0
+    fi
+    if ! tmp=$(mktemp "$dir/.planned_stop.XXXXXX" 2>/dev/null); then
+        warn "Planned-stop marker: cannot write in $dir — the node event recorder may log this stop as an outage."
+        return 0
+    fi
+    if printf 'ts=%s by=%s pid=%s reason=%s\n' "$now" "$by" "$pid" "$reason" > "$tmp" 2>/dev/null \
+        && chmod 644 "$tmp" 2>/dev/null \
+        && mv -f "$tmp" "$dir/planned_stop" 2>/dev/null; then
+        return 0
+    fi
+    rm -f "$tmp" 2>/dev/null || true
+    warn "Planned-stop marker: write to $dir/planned_stop failed — the node event recorder may log this stop as an outage."
+    return 0
+}
+
+# -----------------------------------------------------------------------------
+# gnc_mark_all_planned_stops [reason]  — gnc_mark_planned_stop for every running
+# grin node and every grin_* session on BOTH tmux servers. For full-stop paths.
+# -----------------------------------------------------------------------------
+gnc_mark_all_planned_stops() {
+    local reason="${1:-}" pid sess sock
+    [[ -d "$GNC_EVENTS_DIR" ]] || return 0
+    while IFS= read -r sess; do
+        [[ -n "$sess" ]] || continue
+        gnc_mark_planned_stop "$sess" "$reason"
+    done < <(
+        {
+            while IFS= read -r pid; do
+                [[ -n "$pid" ]] || continue
+                gnc_session_of_pid "$pid" || true
+            done < <(pgrep -f 'grin server run' 2>/dev/null || true)
+            tmux ls -F '#{session_name}' 2>/dev/null || true
+            if sock=$(gnc_grin_tmux_socket); then
+                tmux -S "$sock" ls -F '#{session_name}' 2>/dev/null || true
+            fi
+        } | grep '^grin_' | sort -u || true
+    )
+    return 0
+}
+
+# -----------------------------------------------------------------------------
+# gnc_kill_grin_session <sess> [reason]  — kill the named session on BOTH tmux
+# servers (root leftovers from before the gtmux unification included). Writes
+# the planned-stop marker first (gnc_mark_planned_stop). Never fails.
 # -----------------------------------------------------------------------------
 gnc_kill_grin_session() {
-    local sess="${1:-}" sock
+    local sess="${1:-}" reason="${2:-}" sock
     [[ -n "$sess" ]] || return 0
+    gnc_mark_planned_stop "$sess" "$reason"
     tmux kill-session -t "$sess" 2>/dev/null || true
     if sock=$(gnc_grin_tmux_socket); then
         tmux -S "$sock" kill-session -t "$sess" 2>/dev/null || true
@@ -198,10 +373,12 @@ gnc_kill_grin_session() {
 }
 
 # -----------------------------------------------------------------------------
-# gnc_kill_all_grin_sessions  — kill every grin_* session on BOTH tmux servers.
+# gnc_kill_all_grin_sessions [reason]  — kill every grin_* session on BOTH tmux
+# servers, after writing a planned-stop marker for each node.
 # -----------------------------------------------------------------------------
 gnc_kill_all_grin_sessions() {
-    local sess sock
+    local reason="${1:-}" sess sock
+    gnc_mark_all_planned_stops "$reason"
     while IFS= read -r sess; do
         [[ -n "$sess" ]] || continue
         tmux kill-session -t "$sess" 2>/dev/null && info "Tmux session '$sess' closed (root socket)." || true
@@ -217,28 +394,38 @@ gnc_kill_all_grin_sessions() {
 
 # -----------------------------------------------------------------------------
 # gnc_kill_grin_procs [dir] [grace=30]
-# TERM→wait→KILL every `grin server run` process on the OS — regardless of
-# which tmux server (or none) hosts it. With <dir>, only processes whose
-# cwd or binary dir matches (so mainnet/testnet never kill each other);
-# without, ALL grin server processes (full-stop paths only). A survivor here
-# is exactly what holds the LMDB/grin lock and breaks the next start.
+# TERM→wait→KILL every grin node process on the OS — regardless of which tmux
+# server (or none) hosts it. With <dir>, only processes whose BINARY is
+# <dir>/grin (gnc_grin_pids_for_dir — so mainnet/testnet never kill each
+# other); without, every `grin server run` process whose binary is named grin
+# (full-stop paths only). Exe-matched in both modes: the shared tmux server's
+# argv also contains `grin server run` (F-7). A survivor here is exactly what
+# holds the LMDB/grin lock and breaks the next start.
 # -----------------------------------------------------------------------------
 gnc_kill_grin_procs() {
     local dir="${1:-}" grace="${2:-30}"
     local -a pids=()
-    local pid cwd exe
-    while IFS= read -r pid; do
-        [[ -n "$pid" ]] || continue
-        if [[ -n "$dir" ]]; then
-            cwd=$(readlink "/proc/$pid/cwd" 2>/dev/null || true)
-            exe=$(readlink -f "/proc/$pid/exe" 2>/dev/null || true)
-            [[ "$cwd" == "$dir" || "$exe" == "$dir/grin" ]] || continue
-        fi
-        pids+=("$pid")
-    done < <(pgrep -f 'grin server run' 2>/dev/null || true)
+    local pid exe sess
+    if [[ -n "$dir" ]]; then
+        while IFS= read -r pid; do
+            if [[ -n "$pid" ]]; then pids+=("$pid"); fi
+        done < <(gnc_grin_pids_for_dir "$dir")
+    else
+        while IFS= read -r pid; do
+            [[ -n "$pid" ]] || continue
+            exe=$(_gnc_exe_path "$pid") || continue
+            if [[ "$(basename "$exe")" == "grin" ]]; then pids+=("$pid"); fi
+        done < <(pgrep -f 'grin server run' 2>/dev/null || true)
+    fi
     # if-form throughout: a false `[[ ... ]] && cmd` returns 1, which aborts the
     # caller whenever errexit IS live in this frame (see CLAUDE.md).
     if [[ ${#pids[@]} -eq 0 ]]; then return 0; fi
+
+    # Marker before the signal. A no-op when the caller's gnc_kill_* already
+    # wrote one for this pid; the marker for a node with no session otherwise.
+    for pid in "${pids[@]}"; do
+        if sess=$(gnc_session_of_pid "$pid"); then gnc_mark_planned_stop "$sess"; fi
+    done
 
     info "Stopping leftover grin process(es): ${pids[*]} (SIGTERM, up to ${grace}s)..."
     kill -TERM "${pids[@]}" 2>/dev/null || true
@@ -291,6 +478,36 @@ _gnc_heal_grin_socket_dir() {
 }
 
 # -----------------------------------------------------------------------------
+# _gnc_node_run_cmd <node_dir> <binary> [cron]   → the command a node's tmux
+# pane runs. ONE copy, shared by the launcher (both branches) and the @reboot
+# autostart lines (gnk_autostart_enable, Script 03 → G), so a boot-started
+# node records its exit too (086 design §8.13 F-1). The pane:
+#   1. writes <dir>/.grin_last_start  "ts=<epoch>"            just before grin
+#   2. runs grin with HOME=<dir> (launch contract #2)
+#   3. writes <dir>/.grin_last_exit   "ts=<epoch> rc=<status>" the moment it exits
+#   4. stays open on `read`, so a panic is readable until the session is killed.
+# The pane runs as grin, so both files are grin-owned. The node event recorder
+# reads them; .grin_last_exit counts only if its ts ≥ .grin_last_start's.
+# A killed SESSION writes no exit line (the pane shell dies with grin); that
+# path always goes through gnc_kill_grin_session and its planned-stop marker.
+# The output is LITERAL: $? and $(…) expand only in the pane's shell. Callers
+# put it inside a single-quoted tmux argument, so it holds no ' " or backtick
+# and paths are unquoted (node dirs never contain spaces — $binary was already
+# unquoted there). "cron" backslash-escapes $ and %: in a crontab line the
+# command sits in a double-quoted `su -c "…"` run by /bin/sh, and cron turns a
+# bare % into a newline (it strips the backslash from \%).
+# -----------------------------------------------------------------------------
+_gnc_node_run_cmd() {
+    local dir="${1:-}" binary="${2:-}" mode="${3:-}" cmd
+    cmd="echo Starting Grin node...; cd $dir; echo ts=\$(date -u +%s) 2>/dev/null >$dir/.grin_last_start; HOME=$dir $binary server run; rc=\$?; echo ts=\$(date -u +%s) rc=\$rc 2>/dev/null >$dir/.grin_last_exit; echo; echo Grin process exited with status \$rc. Press Enter to close.; read"
+    if [[ "$mode" == "cron" ]]; then
+        printf '%s' "$cmd" | sed -e 's/[$%]/\\&/g'
+    else
+        printf '%s' "$cmd"
+    fi
+}
+
+# -----------------------------------------------------------------------------
 # gnc_launch_node_session <node_dir> <binary> <session>
 # THE ONLY sanctioned node launcher (launch contract, .claude/CLAUDE.md):
 #   1. Kills the named session on BOTH tmux servers.
@@ -300,6 +517,8 @@ _gnc_heal_grin_socket_dir() {
 #   3. Starts the node AS the grin user (su) with HOME=$dir, so the tmux
 #      SERVER itself runs on grin's per-user socket → view via `gtmux`
 #      (a plain root `tmux ls` will NOT show it — by design).
+#   4. The pane stamps .grin_last_start / .grin_last_exit in $dir and holds
+#      open after grin exits (_gnc_node_run_cmd).
 # 9>&- closes Script 01's flock fd so the long-lived tmux server never
 # inherits it (harmless no-op when fd 9 is not open).
 # -----------------------------------------------------------------------------
@@ -308,8 +527,11 @@ gnc_launch_node_session() {
     [[ -n "$dir" && -n "$binary" && -n "$sess" ]] || { error "gnc_launch_node_session: dir/binary/session required."; return 1; }
     command -v tmux &>/dev/null || { error "tmux not installed — cannot start node."; return 1; }
 
-    gnc_kill_grin_session "$sess"
+    gnc_kill_grin_session "$sess" "relaunch"
     gnc_kill_grin_procs "$dir"
+
+    local run_cmd
+    run_cmd=$(_gnc_node_run_cmd "$dir" "$binary")
 
     if id grin &>/dev/null; then
         # chown first reclaims any root-owned leftovers from an earlier root-run
@@ -324,7 +546,10 @@ gnc_launch_node_session() {
         # makes grin's tmux client connect to ROOT's socket
         # (/tmp/tmux-0/default → Permission denied) instead of starting its
         # own server on grin's per-user socket.
-        su -s /bin/bash grin -c "cd '$dir' && env -u TMUX -u TMUX_PANE -u TMUX_TMPDIR HOME='$dir' SHELL=/bin/bash tmux new-session -d -s '$sess' 'echo Starting Grin node...; $binary server run; echo; echo Grin process exited. Press Enter to close.; read'" 9>&- \
+        # $run_cmd (_gnc_node_run_cmd) holds a LITERAL $? — it is not re-expanded
+        # here, and su's shell sees it inside single quotes, so only the pane's
+        # shell expands it.
+        su -s /bin/bash grin -c "cd '$dir' && env -u TMUX -u TMUX_PANE -u TMUX_TMPDIR HOME='$dir' SHELL=/bin/bash tmux new-session -d -s '$sess' '$run_cmd'" 9>&- \
             || {
                 error "Failed to create grin-owned tmux session '$sess'."
                 # Dump the socket-path state — wrong ownership here is the usual cause.
@@ -337,8 +562,7 @@ gnc_launch_node_session() {
             }
     else
         warn "User 'grin' not found — running node as current user. Re-run Script 01 to create it."
-        SHELL=/bin/bash tmux new-session -d -s "$sess" -c "$dir" \
-            "echo 'Starting Grin node...'; cd '$dir' && HOME='$dir' '$binary' server run; echo ''; echo 'Grin process exited. Press Enter to close.'; read" 9>&- \
+        SHELL=/bin/bash tmux new-session -d -s "$sess" -c "$dir" "$run_cmd" 9>&- \
             || { error "Failed to create tmux session '$sess'. Start manually: cd $dir && ./grin server run"; return 1; }
     fi
 

@@ -483,7 +483,11 @@ The launcher enforces:
 
 Stop paths must use `gnc_kill_grin_session` / `gnc_kill_all_grin_sessions` (both sockets) and
 end with a `gnc_kill_grin_procs` sweep. Session checks use `gnc_has_grin_session` (sets
-`GNC_SESSION_SOCKET` = grin|root for the right attach hint). Reboot autostart defaults
+`GNC_SESSION_SOCKET` = grin|root for the right attach hint). **Every stop path goes through
+`gnc_kill_grin_session`** (one that SIGTERMs grin by port first calls `gnc_mark_planned_stop`
+before it): that writes the planned-stop marker the node event recorder (086 key 7) needs to tell a
+toolkit stop from an outage. The pane command `_gnc_node_run_cmd`, used by the launcher and both
+`@reboot` writers, stamps `.grin_last_start` / `.grin_last_exit` in the node dir. Reboot autostart defaults
 (`gnk_autostart_enable`, Script 01 Super Auto + Script 03 G): **mainnet 5 s, testnet 1000 s**
 (grin v5.5 boot is heavy — a slow VPS cannot start two nodes together).
 

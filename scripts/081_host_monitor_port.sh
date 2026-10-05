@@ -1199,13 +1199,31 @@ mass_deploy_run() {
 #   · leftover `grin server run` processes are cleared before any start and
 #     swept after a stop, so no stale process ever holds the LMDB lock
 #     ("lock file is held by another grin process").
+#   · a stop first leaves the planned-stop marker the node event recorder
+#     reads (086 design §8.5) — the same line gnc_mark_planned_stop writes,
+#     inlined, and only if the recorder is installed on the remote box;
+#   · leftover processes are matched by BINARY, never cwd: the tmux server
+#     both nodes share has the first node's dir as cwd (086 design F-7).
 # Callers append their own `echo __OK__` terminator.
 # -----------------------------------------------------------------------------
 _MD_NODE_STOP_SNIPPET='
 PIDS=""
+EVD=/opt/grin/node-events
 for port in 3414 13414; do
     pid=$(ss -tlnp 2>/dev/null | grep ":${port} " | grep -oE "pid=[0-9]+" | head -1 | cut -d= -f2 || true)
     [[ -z "$pid" ]] && continue
+    if [[ -d "$EVD" ]]; then
+        exe=$(readlink -f "/proc/$pid/exe" 2>/dev/null || true); exe="${exe% (deleted)}"
+        case "$(basename "$(dirname "$exe")")" in
+            *testnet*) net=testnet ;; *mainnet*) net=mainnet ;; *) net="" ;;
+        esac
+        if [[ -n "$net" && "$(basename "$exe")" == grin ]] && mkdir -p "$EVD/$net" 2>/dev/null; then
+            mk="$EVD/$net/.planned_stop.$$"
+            { printf "ts=%s by=081_host_monitor_port.sh pid=%s reason=remote stop\n" "$(date -u +%s)" "$pid" > "$mk" \
+                && chmod 644 "$mk" && mv -f "$mk" "$EVD/$net/planned_stop"; } 2>/dev/null \
+                || { rm -f "$mk" 2>/dev/null; echo "  WARN: planned-stop marker not written ($net)"; }
+        fi
+    fi
     kill -TERM "$pid" 2>/dev/null && { echo "  SIGTERM pid $pid (port $port)"; PIDS="$PIDS $pid"; } || true
 done
 n=0
@@ -1245,7 +1263,8 @@ for dir in /opt/grin/node/mainnet-prune /opt/grin/node/mainnet-full /opt/grin/no
     fi
     L=""
     for p in $(pgrep -f "grin server run" 2>/dev/null); do
-        [[ "$(readlink /proc/$p/cwd 2>/dev/null)" == "$dir" ]] && L="$L $p"
+        e=$(readlink -f /proc/$p/exe 2>/dev/null || true)
+        [[ "${e% (deleted)}" == "$dir/grin" ]] && L="$L $p"
     done
     if [[ -n "$L" ]]; then
         echo "  clearing leftover grin process(es):$L"

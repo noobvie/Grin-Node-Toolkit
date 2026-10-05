@@ -298,7 +298,7 @@ async function mute(address, minutes) {
     withReason: true, confirmText: 'Mute' });
   if (!ok) return;
   try {
-    await G.call('POST', 'players/' + address + '/mute', ok.reason ? { minutes, reason: ok.reason } : { minutes });
+    await G.call('POST', 'players/' + G.playerSeg(address) + '/mute', ok.reason ? { minutes, reason: ok.reason } : { minutes });
     G.flash('gc-list-msg', 'Muted until ' + G.fmtUtc(Math.floor(Date.now() / 1000) + minutes * 60) + '.', false);
   } catch (err) {
     G.flash('gc-list-msg', err.message, true);

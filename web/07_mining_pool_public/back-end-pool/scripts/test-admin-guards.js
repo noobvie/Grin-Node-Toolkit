@@ -4,8 +4,9 @@
 //   §J1-1  the analytics/branding script + CSS sinks must stay in STEP_UP_SETTINGS_KEYS.
 //          They look like cosmetic branding fields, so the risk is a future tidy-up dropping
 //          them — which would silently re-open a secureAdmin → freshAdmin escalation
-//          (public_html/login.html loads branding.js, so custom_head_html can keylog the
-//          admin login form and harvest the password + a live TOTP code).
+//          (public_html/login.html loads branding.js). The worst of them, custom_head_html /
+//          custom_body_html, were deleted outright in design §19.17 D22; this file now pins
+//          that they stay gone.
 //   §J1-2  updateSection must write an admin_audit_log row naming the changed keys, must NOT
 //          write one for a no-op save, must roll the row back with a rejected update, and must
 //          never put a VALUE in the row (the alerts section holds live webhook URLs and a
@@ -117,8 +118,6 @@ try {
   const gated = [...block.matchAll(/^\s*'([a-z_]+)',/gm)].map(m => m[1]);
 
   for (const key of [
-    'custom_head_html',   // branding.js re-creates <script> nodes out of this so they RUN
-    'custom_body_html',
     'plausible_src', 'umami_src', 'matomo_url',  // third-party <script src> origins
     'custom_css', 'font_url', 'font_family',     // CSS injection sinks
     'custom_theme',       // §J9-3: setProperty() onto <html>+<body> on EVERY page
@@ -140,6 +139,18 @@ try {
       !Object.keys(PoolSettings.defaults).some(sec =>
         Object.prototype.hasOwnProperty.call(PoolSettings.defaults[sec], key)));
     ok(`${key} is gone from STEP_UP_SETTINGS_KEYS`, !gated.includes(key));
+  }
+
+  // Design §19.17 D22 (Option B, Part C1): the two raw-HTML sinks that §J1-1 put behind
+  // step-up are DELETED, not gated. Re-adding either to defaults brings back operator script
+  // on an origin that has a sign-in form on every page; re-adding it to the step-up set would
+  // make a dead key look guarded. (Their write refusal and the hidden legacy row are pinned in
+  // test-operator-code-sinks.js.)
+  for (const key of ['custom_head_html', 'custom_body_html']) {
+    ok(`D22: ${key} is gone from PoolSettings.defaults`,
+      !Object.keys(PoolSettings.defaults).some(sec =>
+        Object.prototype.hasOwnProperty.call(PoolSettings.defaults[sec], key)));
+    ok(`D22: ${key} is gone from STEP_UP_SETTINGS_KEYS`, !gated.includes(key));
   }
 
   // A gated key that exists in no section is a typo, and a typo makes the gate decorative.

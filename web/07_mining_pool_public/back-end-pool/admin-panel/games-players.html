@@ -40,7 +40,7 @@
         <div class="gp-row">
           <div class="form-group grow">
             <label for="gp-address">Miner address</label>
-            <input type="text" id="gp-address" class="settings-skip" maxlength="80" spellcheck="false" autocomplete="off" placeholder="grin1…">
+            <input type="text" id="gp-address" class="settings-skip" maxlength="80" spellcheck="false" autocomplete="off" placeholder="grin1… or a guest id g:…">
           </div>
           <button type="button" class="btn btn-primary btn-sm" id="gp-lookup">Look up</button>
         </div>
@@ -127,7 +127,7 @@
           <div class="card">
             <h3 class="sub-title" style="margin-top:0;">Nickname</h3>
             <p class="gp-sub" id="gp-nick-state"></p>
-            <p class="gp-sub">Review, approve and remove nicknames → <a href="games-names.html">Nicknames</a>. A ban removes the nickname.</p>
+            <p class="gp-sub">Remove names, ban a name, block a player from nicknames → <a href="games-names.html">Nicknames</a>. A ban removes the nickname.</p>
           </div>
         </div>
         <p id="gp-msg" style="display:none;"></p>
@@ -206,13 +206,22 @@ function render() {
   if (p.player && p.player.banned) head.appendChild(el('span', 'badge badge-error', p.player.banned_until >= 253402300799 ? 'Banned forever' : 'Banned until ' + G.fmtUtc(p.player.banned_until)));
   if (p.player && p.player.muted) head.appendChild(el('span', 'badge badge-warn', 'Muted until ' + G.fmtUtc(p.player.muted_until)));
   if (!p.known) head.appendChild(el('span', 'badge badge-dim', 'Never seen by the games'));
+  // A guest (§19.17.3): no mining, never a moderator (D32), deletable. Its login name is never
+  // shown here — only its dates (§19.13 #29).
+  const isGuest = p.kind === 'guest';
+  if (isGuest) head.appendChild(el('span', 'badge badge-dim', p.deleted_at ? 'Deleted guest (' + G.fmtUtc(p.deleted_at) + ')' : 'Guest account'));
+  if (isGuest && !p.deleted_at && p.guest) head.appendChild(G.btn('Delete guest account', 'btn-danger', deleteGuest));
 
   const figs = document.getElementById('gp-figs');
   G.clear(figs);
   const pl = p.player;
   figs.appendChild(fig('Plays', pl ? pl.plays : 0));
   figs.appendChild(fig('Points', pl ? pl.points : 0));
-  figs.appendChild(fig('Signed in now (IP / password)', p.sessions.ip + ' / ' + p.sessions.password));
+  figs.appendChild(isGuest ? fig('Signed in now', p.sessions.guest || 0) : fig('Signed in now (IP / password)', p.sessions.ip + ' / ' + p.sessions.password));
+  if (isGuest && p.guest) {
+    figs.appendChild(fig('Account created', G.fmtUtc(p.guest.created_at)));
+    figs.appendChild(fig('Last sign-in', G.fmtUtc(p.guest.last_login_at)));
+  }
   figs.appendChild(fig('First seen', pl ? G.fmtUtc(pl.first_seen) : '—'));
   figs.appendChild(fig('Last seen', pl ? G.fmtUtc(pl.last_seen) : '—'));
   figs.appendChild(fig('Badges', pl && pl.badges.length ? pl.badges.map(b => b.label).join(', ') : '—'));
@@ -220,16 +229,16 @@ function render() {
 
   document.getElementById('gp-unmute').disabled = !(pl && pl.muted);
   document.getElementById('gp-unban').disabled = !(pl && pl.banned);
-  document.getElementById('gp-mod-add').disabled = !!p.moderator || !!(pl && pl.banned);
+  document.getElementById('gp-mod-add').disabled = isGuest || !!p.moderator || !!(pl && pl.banned);
   document.getElementById('gp-mod-remove').disabled = !p.moderator;
   document.getElementById('gp-mod-state').textContent = p.moderator
     ? 'Moderator since ' + G.fmtUtc(p.moderator.added_at) + ' (appointed by ' + p.moderator.added_by + ')' + (p.moderator.note ? ' — ' + p.moderator.note : '') + '.'
     : 'Not a moderator.';
-  // Nickname (design §19.16) — player text, so textContent only.
+  // Nickname (design §19.17.5) — player text, so textContent only.
   const nk = p.nickname || {};
   const parts = [];
   if (nk.live) parts.push('Shown as “' + nk.live.shown_as + '” since ' + G.fmtUtc(nk.live.decided_at) + '.');
-  if (nk.pending) parts.push('“' + nk.pending.name + '” is waiting for review (sent ' + G.fmtUtc(nk.pending.submitted_at) + ').');
+  if (nk.blocked) parts.push('Blocked from nicknames.');
   document.getElementById('gp-nick-state').textContent = parts.length ? parts.join(' ') : 'No nickname: shown as the masked address.';
 
   const msgs = document.getElementById('gp-msgs');
@@ -279,9 +288,9 @@ function render() {
 }
 
 async function lookup(address) {
-  if (!G.ADDR_RE.test(address)) { G.flash('gp-msg', 'Enter a full GRIN address.', true); return; }
+  if (!G.isPlayer(address)) { G.flash('gp-msg', 'Enter a full GRIN address, or a guest id (g:…).', true); return; }
   try {
-    _p = await G.call('GET', 'players/' + address);
+    _p = await G.call('GET', 'players/' + G.playerSeg(address));
     _addr = address;
     document.getElementById('gp-address').value = address;
     document.getElementById('gp-offline').style.display = 'none';
@@ -328,7 +337,7 @@ async function write(rel, body, confirm, done) {
     if (confirm.withReason && ok.reason) body = Object.assign({}, body, { reason: ok.reason });
   }
   try {
-    const r = await G.call('POST', 'players/' + _addr + rel, body);
+    const r = await G.call('POST', 'players/' + G.playerSeg(_addr) + rel, body);
     if (r.address) { _p = r; render(); } else { await lookup(_addr); }
     G.flash('gp-msg', typeof done === 'function' ? done(r) : done, false);
   } catch (err) {
@@ -377,6 +386,20 @@ async function modChange(add) {
   lookup(_addr);
 }
 document.getElementById('gp-mod-add').addEventListener('click', () => modChange(true));
+
+// Guest accounts (§19.17.3): step-up, like ban — the pool asks for the password before proxying.
+async function deleteGuest() {
+  if (!_addr || !G.GUEST_RE.test(_addr)) return;
+  const ok = await G.askConfirm({ title: 'Delete this guest account?',
+    body: 'Signs it out everywhere, removes its nickname, cancels its open seeks and frees its login name. Its old games and messages stay, shown as "deleted guest". This cannot be undone.',
+    withReason: true, confirmText: 'Delete account', danger: true });
+  if (!ok) return;
+  try {
+    await G.call('POST', 'guests/' + G.playerSeg(_addr) + '/delete', ok.reason ? { reason: ok.reason } : {});
+    G.flash('gp-msg', 'Guest account deleted.', false);
+  } catch (err) { G.flash('gp-msg', err.message, true); }
+  lookup(_addr);
+}
 document.getElementById('gp-mod-remove').addEventListener('click', () => modChange(false));
 
 // ── Lists ──────────────────────────────────────────────────────────────────────────────
@@ -402,7 +425,7 @@ document.querySelectorAll('#gp-lists .tab-btn').forEach(b => b.addEventListener(
 
 document.addEventListener('DOMContentLoaded', () => {
   const q = new URLSearchParams(location.search).get('address');
-  if (q && G.ADDR_RE.test(q)) lookup(q);
+  if (q && G.isPlayer(q)) lookup(q);
 });
 </script>
 </body>

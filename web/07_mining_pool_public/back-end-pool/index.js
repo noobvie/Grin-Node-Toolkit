@@ -49,6 +49,7 @@ const IpFilter = require('./lib/ip-filter');
 const AlertMonitor = require('./lib/alert-monitor');
 const AlertDelivery = require('./lib/alert-delivery');
 const RetentionManager = require('./lib/retention');
+const NodeAvailability = require('./lib/node-availability');
 const DormancyManager = require('./lib/dormancy');
 const AdsManager = require('./lib/ads');
 const PagesManager = require('./lib/pages');
@@ -490,6 +491,7 @@ let alertDelivery = null;
 let poolSettings = null;
 let assetManager = null;
 let retentionManager = null;
+let nodeAvailability = null;
 let dormancyManager = null;
 let adsManager = null;
 let pagesManager = null;
@@ -499,6 +501,18 @@ let mediaUpload = null;      // configured multer instance for image uploads
 // Which Grin networks the network-map peer sensor reads (set once the collector is wired,
 // reported by /api/network/peers so the page can say "mainnet + testnet" vs "mainnet only").
 let _peerSensorNets = { main: false, test: false };
+
+// The name rule's context for a donor name (design §19.17.6, Part C4): the operator's
+// `names.blocked_words` and the pool's name, read per call so a Settings → Names save applies
+// to the next submit. Unreadable → '' and the code seed in lib/name-rule.js still applies
+// (fail open to the seed, as the games side does with its last good copy).
+function donorNameRule() {
+  let words = '';
+  let poolName = '';
+  try { words = poolSettings.getSection('names').blocked_words; } catch (_) { words = ''; }
+  try { poolName = poolSettings.getSection('pool_info').pool_name; } catch (_) { poolName = ''; }
+  return DonorProfiles.nameRuleContext(words, poolName);
+}
 
 async function initializePool() {
   try {
@@ -601,6 +615,30 @@ async function initializePool() {
     assetManager = new AssetManager(config, db);
     console.log(`[${new Date().toISOString()}] Pool settings and asset managers initialized`);
 
+    // Part C4 (design §19.17.6): donor names are auto-checked. Both steps are idempotent and run
+    // at every start, in this order — the carried words must apply to the pending names:
+    //   1. the retired `donor_name_blocklist` → `names.blocked_words` (the operator's own
+    //      entries, once; the old row's deletion is the marker);
+    //   2. every PENDING donor name through the check → approved or rejected (nothing writes a
+    //      pending name any more, so after the first start there are none). Approved names stay.
+    // A failure is logged, never fatal: mining does not wait for donor names. Pending names left
+    // by a failed run stay pending and are retried at the next start.
+    try {
+      const carry = poolSettings.retireDonorNameBlocklist();
+      if (carry) {
+        console.log(`[${new Date().toISOString()}] Donor flag words retired into Settings → Names: ` +
+          `${carry.carried.length} carried over` +
+          (carry.skipped.length ? `, ${carry.skipped.length} skipped (cannot match a name: ${carry.skipped.join(', ')})` : '') +
+          (carry.over_cap.length ? `, ${carry.over_cap.length} over the 500-entry cap (${carry.over_cap.join(', ')})` : ''));
+      }
+      const moved = DonorProfiles.migratePendingNames(db, { rule: donorNameRule() });
+      if (moved.approved || moved.rejected) {
+        console.log(`[${new Date().toISOString()}] Pending donor names checked automatically: ${moved.approved} approved, ${moved.rejected} rejected`);
+      }
+    } catch (err) {
+      console.error(`[${new Date().toISOString()}] Donor-name migration (C4) failed — retried at the next start:`, err.message);
+    }
+
     wallet = new WalletAPI(config);
     console.log(`[${new Date().toISOString()}] Wallet API initialized (${config.network})`);
 
@@ -636,6 +674,18 @@ async function initializePool() {
 
     blockMonitor = new BlockMonitor(config);
     blockMonitor.start();
+
+    // Node availability (design §20): the pool's own 30 s node probe + the node box's recorder
+    // ledger, recorded side by side for admin → Node availability and the homepage `up_days`.
+    // It calls the same GrinNodeAPI object but runs its OWN loop — never block-monitor's timing,
+    // which sits on the money path. A failure here must not stop the pool.
+    try {
+      nodeAvailability = new NodeAvailability(config, db, blockMonitor.grinNode).start();
+      nodeStratumClient.onLinkChange = (up) => nodeAvailability.noteStratumLink(up);
+    } catch (e) {
+      nodeAvailability = null;
+      console.error(`[${new Date().toISOString()}] [node-availability] not started: ${e.message}`);
+    }
 
     // Let BlockManager capture per-block network difficulty (for round effort / luck) by reusing
     // the block monitor's node client. Optional — creditBlock leaves it NULL if unavailable.
@@ -935,7 +985,8 @@ async function initializePool() {
       wallet,
       stratumServer,
       withdrawalScheduler,
-      alertDelivery
+      alertDelivery,
+      nodeAvailability
     }, db);
     alertMonitor.start();
     console.log(`[${new Date().toISOString()}] Alert monitor started`);
@@ -1426,7 +1477,7 @@ function setupRoutes() {
 
     // ── Pool ──────────────────────────────────────────────────────────────────
     'GET /api/pool/stats': { desc: 'Live pool stats: block totals (found / confirmed / immature counts, confirmed + immature reward; orphans_24h = blocks found in the last 24 h that were later orphaned, null if unreadable), active miners (distinct addresses), active workers (logged-in rigs), raw connections, and share quality (accepted/stale/rejected). Share quality is LIVE in-memory only — it is empty with no connected sessions and resets on disconnect. Also network (mainnet or testnet) and explorer, the chain explorer key this pool links to (grincoin, tiny or grinscan on mainnet; grinscan_testnet on testnet).', shape: 'raw' },
-    'GET /api/pool/status': { desc: 'Coarse service health for the status strip: pool up, node reachable/state/synced/peers/height, wallet reachable. node.state is ok | starting (API port closed, node process running) | busy (API timed out) | offline; reachable is true only for ok. Never exposes balances or addresses.', shape: 'raw' },
+    'GET /api/pool/status': { desc: 'Coarse service health for the status strip: pool up, node reachable/state/synced/peers/height/up_days, wallet reachable. node.state is ok | starting (API port closed, node process running) | busy (API timed out) | offline; reachable is true only for ok. node.up_days is how long the node has been continuously available, as an integer of WHOLE UTC DAYS counted to the most recent 00:00 UTC — so it changes only at midnight UTC and can understate by up to a day, never overstate (0 = came up today or yesterday). It is null when unknown, including whenever reachable is false, and null must never be read as 0. Its source is the node box\'s own event recorder when that is installed and fresh, else the pool\'s own probe history. It is the only uptime field: no restart time, timestamp or uptime in seconds is published. Cached 15 s. Never exposes balances or addresses.', shape: 'raw' },
     'GET /api/pool/stats/regions': { desc: 'Per-region stratum endpoints + live status (online | idle | offline | checking — the last only on the first poll after a restart, before the reachability probe has a verdict) and 15-minute regional hashrate, miners (distinct addresses) and workers (distinct address+rig pairs). On a MULTI-region pool a k-anonymity floor applies: a region with 0 < miners < min_bucket reports miners/workers/hashrate_gps/shares_window as null with below_floor:true — that is withheld, not zero (a real zero is still 0). Totals are always exact. Per region, is_hub (boolean) marks this server\'s own region — connecting there is connecting to the pool directly; false on every row of a pool that runs no local stratum. hub_rtt_ms (integer milliseconds) is the round trip between the pool and that region\'s server — the minimum of its last 5 TCP connects to the region\'s public stratum port; add it to your own latency to that server for your effective latency to the pool. It is 0 on the is_hub row, and null when that server has not been reached yet (just after a restart, or never). timestamp is ISO 8601.', shape: 'raw' },
     'GET /api/pool/connect/suggest': { desc: 'Which server to point a rig at, for YOU: estimated effective latency per region, from the country your IP resolves to. Effective = your distance to that server + its link to the pool (hub_rtt_ms) — a regional server does not shorten the trip to the pool, so a far one can lose to connecting directly. Returns { basis: "estimate", recommended (region tag, or null), estimates: [{ region, est_ms (integer milliseconds, round trip), via: direct | gateway }] }; direct is preferred unless a gateway is more than 15 ms faster. Regions that are offline, or whose link to the pool has not been measured yet, get no estimate. { basis: "unavailable" } alone when no country can be resolved. An estimate from geography, not a measurement. Your IP and country are used for this one answer and neither stored, logged nor returned; never cached (Cache-Control: private, no-store).', shape: 'raw' },
     'GET /api/pool/locations': { desc: 'Operator-declared stratum regions that are currently active — region key, label, and the stratum URL to point a rig at.', shape: 'array' },
@@ -1442,7 +1493,7 @@ function setupRoutes() {
     'GET /api/pool/miners': { desc: 'Balance distribution across accounts, richest first. Addresses are MASKED (grin1qxy…mn4p) — the distribution is public, the address→balance mapping is not.', shape: 'array', params: 'limit (≤500, default 50)' },
     'GET /api/pool/top-block-finders': { desc: 'Lucky-miner leaderboard: blocks found and total reward per address over a recent window. Orphans do not count as a find. Addresses are MASKED.', shape: 'raw', params: 'days (≤3650, default 30) · limit (≤1000, default 500)' },
     'GET /api/pool/unclaimed': { desc: 'Lost-and-found: masked addresses of long-dormant balances with a per-address disposal countdown, plus the historical disposition ledger (sweeps into the prize pool).', shape: 'raw', params: 'limit (≤200, default 100)' },
-    'GET /api/pool/donors': { desc: 'Donor league + past donors. `league` = addresses with a donation debit inside the ranking window, ranked by score = GRIN in window × loyalty multiplier (min(1 + loyalty_percent_per_month/100 × active_months, loyalty_cap); active_months = distinct UTC months with a debit, lifetime), ties by months then first donation; top 100 with `rank` 1..N. `past.donors` = up to 20 addresses with a lifetime total but nothing in the window, newest last donation first, plus `past.more` for the rest. Both arrays share one card shape: rank (null on past), name, name_state, banner, address, in_window_donated, total_donated, active_months, multiplier, score, first_donated_at, last_donated_at, donation_count, rigs_online, rigs_donating, pct_min, pct_max (live, display only, never ranked). A donation is per RIG: rigs_online = distinct rigs mining to the address now, rigs_donating = how many carry a `donateN` tag with N > 0, pct_min/pct_max = the range of those tags (0 when none). `name` is the donor\'s own nickname, set on their account page and shown only after the pool APPROVED it (2–32 chars: letters, digits, space and - _ . & \', case kept); it is null for every name_state but `shown` (masked = no approved name, expired = the approval aged out). Escape before rendering. `banner` = {url, width, height} (url always /uploads/donors/<file>, a PNG, JPEG or GIF the pool APPROVED, 320–1600 × 80–400 px, 2:1 to 8:1) only on league cards with rank ≤ ranking.banner_slots whose banner has not expired; null on every other card and always null on past. Addresses are MASKED. `totals` are LIFETIME over EVERY donor, not the cards (donor_count, total_donated) and `totals.active_donors` counts addresses with a tagged rig mining right now (a tag shows there before its first slice is taken — that only happens when a block matures). `ranking` = {window_days (0 = all-time), loyalty_percent_per_month, loyalty_cap, name_expiry_months, banner_slots (0–10; 0 = no banners)} for the page\'s ranking sentence and its Top-N spotlight. rigs_donating, pct_min, pct_max and active_donors read 0 while the operator has donations switched off. Window edge: a day already rolled into the daily ledger counts WHOLE when its UTC midnight is ≥ now − window.', shape: 'raw' },
+    'GET /api/pool/donors': { desc: 'Donor league + past donors. `league` = addresses with a donation debit inside the ranking window, ranked by score = GRIN in window × loyalty multiplier (min(1 + loyalty_percent_per_month/100 × active_months, loyalty_cap); active_months = distinct UTC months with a debit, lifetime), ties by months then first donation; top 100 with `rank` 1..N. `past.donors` = up to 20 addresses with a lifetime total but nothing in the window, newest last donation first, plus `past.more` for the rest. Both arrays share one card shape: rank (null on past), name, name_state, banner, address, in_window_donated, total_donated, active_months, multiplier, score, first_donated_at, last_donated_at, donation_count, rigs_online, rigs_donating, pct_min, pct_max (live, display only, never ranked). A donation is per RIG: rigs_online = distinct rigs mining to the address now, rigs_donating = how many carry a `donateN` tag with N > 0, pct_min/pct_max = the range of those tags (0 when none). `name` is the donor\'s own nickname, set on their account page; the pool APPROVED it by an automatic check (reserved words, a blocked-word list, banned and taken names — live at once) or, before that check existed, by hand, and can take it down (2–32 chars: letters, digits, space and - _ . & \', case kept); it is null for every name_state but `shown` (masked = no approved name, expired = the approval aged out). Escape before rendering. `banner` = {url, width, height} (url always /uploads/donors/<file>, a PNG, JPEG or GIF the pool APPROVED, 320–1600 × 80–400 px, 2:1 to 8:1) only on league cards with rank ≤ ranking.banner_slots whose banner has not expired; null on every other card and always null on past. Addresses are MASKED. `totals` are LIFETIME over EVERY donor, not the cards (donor_count, total_donated) and `totals.active_donors` counts addresses with a tagged rig mining right now (a tag shows there before its first slice is taken — that only happens when a block matures). `ranking` = {window_days (0 = all-time), loyalty_percent_per_month, loyalty_cap, name_expiry_months, banner_slots (0–10; 0 = no banners)} for the page\'s ranking sentence and its Top-N spotlight. rigs_donating, pct_min, pct_max and active_donors read 0 while the operator has donations switched off. Window edge: a day already rolled into the daily ledger counts WHOLE when its UTC midnight is ≥ now − window.', shape: 'raw' },
     'GET /api/pool/prize-pool': { desc: 'Prize-pool transparency report: current balance + LIFETIME in/out totals by source (fee-cut, donations, operator top-ups, abandoned balances, orphan clawbacks). Per-event rows are deliberately withheld — their timestamps would expose the cadence of discretionary operator top-ups.', shape: 'raw' },
     'GET /api/pool/topology': { desc: 'Network map: hub → gateways → miners aggregated BY COUNTRY. Country-only geolocation; no per-miner coordinate is ever resolved or stored, and countries under the k-anonymity floor merge into one unnamed bucket. Gateway lat/lng is the operator-declared position of that public server (admin → Regions), or the country centroid when none was declared. timestamp is ISO 8601.', shape: 'raw', gated: 'the operator publishes the network map (on by default; 404 while switched off in admin → Access)' },
 
@@ -1456,7 +1507,7 @@ function setupRoutes() {
     'GET /api/network/peers': { desc: 'Distinct Grin nodes the pool box\'s node(s) have handshaked with — live connections plus each node\'s own peer store, NOT a network crawl — aggregated by country over a rolling window (+ mainnet/testnet split, and `sources` = which networks are read). Country-only, no IPs; thin countries merge into one unnamed bucket. timestamp is ISO 8601.', shape: 'raw', params: 'window days (1–90, default 30)', gated: 'the operator publishes the network map (on by default; 404 while switched off in admin → Access)' },
 
     // ── Account (address-as-identity: the address IS the credential to READ) ──
-    'GET /api/account/:addr': { desc: 'Account summary: balance, locked, lifetime paid, pending payout, share/hashrate snapshot, the live donation reading (`donation` = { rigs_donating, rigs_online, pct_min, pct_max, workers: [{ name, percent }] } — a `donateN` tag donates that % of what THAT rig earns; zeros while donations are switched off), the reviewed donor profile (`donor_profile` = { eligible, blocked, refusal: null | donations_off | blocked | not_a_donor, name: { live, state: shown | expired | none, pending_at, rejected: { reason, at } | null, removed: { reason, at } | null }, banner: { live_url, width, height, state, pending_at, rejected, removed, slot_rank, slots, showing } } — `name.live` is the APPROVED name the wall shows; a name or banner waiting for review is reported by its submit time only, never its content; null if it could not be read), and the ownership proofs on record. `proofs` is COUNTS ONLY — { ip, pass, max, anchor, last_added_at }: how many distinct mining IPs and rig passwords the pool currently holds for this address, the per-kind cap, whether the original write-once proof is still on record, and the newest capture time across both kinds (UTC seconds; it does not move when a known rig reconnects). No proof value, hash, salt or per-row timestamp is ever returned, here or anywhere else. `tor_pause` = { failures_24h, max, paused_until } — counted failed Tor payouts in the last 24 h (only a wallet that did not answer over Tor counts), the limit (5), and while paused the unix-seconds UTC time Tor payouts reopen for this address (null when not paused); Slatepack is never paused. `slatepack_window_minutes` is how long a Slatepack payout stays answerable before it expires and the balance comes back. `pending_withdrawal.status` can be tor_held: a Tor payout whose outcome the pool is still confirming — the amount stays reserved and it is never sent twice. 404 if the address has never mined here OR is not a well-formed Grin address.', shape: 'raw' },
+    'GET /api/account/:addr': { desc: 'Account summary: balance, locked, lifetime paid, pending payout, share/hashrate snapshot, the live donation reading (`donation` = { rigs_donating, rigs_online, pct_min, pct_max, workers: [{ name, percent }] } — a `donateN` tag donates that % of what THAT rig earns; zeros while donations are switched off), the donor profile (`donor_profile` = { eligible, blocked, refusal: null | donations_off | blocked | not_a_donor, name: { live, state: shown | expired | none, pending_at (always null: a name is checked automatically and goes live at once), rejected: { reason, at } | null, removed: { reason, at } | null, change_available_at (unix UTC when the 7-day name-change limit allows the next change; null = now) }, banner: { live_url, width, height, state, pending_at, rejected, removed, slot_rank, slots, showing } } — `name.live` is the APPROVED name the wall shows; a banner waiting for review is reported by its submit time only, never its content; null if it could not be read), and the ownership proofs on record. `proofs` is COUNTS ONLY — { ip, pass, max, anchor, last_added_at }: how many distinct mining IPs and rig passwords the pool currently holds for this address, the per-kind cap, whether the original write-once proof is still on record, and the newest capture time across both kinds (UTC seconds; it does not move when a known rig reconnects). No proof value, hash, salt or per-row timestamp is ever returned, here or anywhere else. `tor_pause` = { failures_24h, max, paused_until } — counted failed Tor payouts in the last 24 h (only a wallet that did not answer over Tor counts), the limit (5), and while paused the unix-seconds UTC time Tor payouts reopen for this address (null when not paused); Slatepack is never paused. `slatepack_window_minutes` is how long a Slatepack payout stays answerable before it expires and the balance comes back. `pending_withdrawal.status` can be tor_held: a Tor payout whose outcome the pool is still confirming — the amount stays reserved and it is never sent twice. 404 if the address has never mined here OR is not a well-formed Grin address.', shape: 'raw' },
     'GET /api/account/:addr/shares': { desc: 'Raw accepted shares for an address, newest first. Shares are pruned aggressively — use the hashrate history for anything older than ~a day.', shape: 'raw', params: 'limit (≤500, default 100) · offset' },
     'GET /api/account/:addr/workers': { desc: 'Per-worker (rig) hashrate + share quality over a recent window. `donate_percent` per worker = the % of that rig’s share credit donated to the prize pool, read from its `donateN` name tag (0–100); null when untagged or while the operator has donations switched off.', shape: 'raw', params: 'window minutes (1–1440, default 10)' },
     'GET /api/account/:addr/hashrate/history': { desc: 'Account hashrate time-series, downsampled for charting.', shape: 'raw', params: 'hours (1–720, default 24)' },
@@ -1472,9 +1523,9 @@ function setupRoutes() {
     // as two separate fields (either alone is a 400 both_proofs_required), so the "IP or
     // password" wording every other money route carries would be wrong here.
     'POST /api/account/:addr/nostr-destination': { desc: 'Register/replace the Goblin username for Nostr payouts. Does NOT move funds — it pins the destination and (re)starts a security cooldown, during which the nostr rail refuses to pay. Needs BOTH proofs as separate fields (400 both_proofs_required otherwise), and each must have been on record for at least the cooldown period — a 409 reason of proof_too_recent means the evidence is newer than that, and anchor_not_accepted_here means the proof matched only the original write-once record after it had dropped out of the live set of 10 (it can withdraw, but not redirect; while it is still live it counts as an ordinary proof). Replacing an existing destination is refused with 409 confirm_replace_required (the response echoes `replacing`) until the call carries confirm_replace = the username being replaced. 503 when the rail is disabled.', shape: 'flat', auth: 'ownership proof (BOTH kinds)', rate: 'withdraw', body: 'username (Goblin/NIP-05) · proof (recent mining IP; legacy alias ip_proof) · password_proof (the rig\'s stratum password) · confirm_replace (current username, only when replacing)' },
-    'POST /api/account/:addr/donor-profile/name': { desc: 'Submit a donor name for review. Nothing public shows it until the pool approves it; a second submission replaces the one waiting. Rules: 2-32 characters, letters, digits, spaces and - _ . & \' only, at least one letter or digit, case kept. Needs BOTH proofs, each on record for at least the security floor (same gate as a Goblin destination change: 400 both_proofs_required, 409 proof_too_recent / anchor_not_accepted_here, 403 a proof that does not match). 409 not_a_donor = no donation debit yet; 403 blocked; 503 donations_off; 400 name_* = the name broke a rule. The typed name is returned here, and only here.', shape: 'flat', auth: 'ownership proof (BOTH kinds)', rate: 'withdraw', body: `name · proof (recent mining IP; legacy alias ip_proof) · password_proof (the rig\'s stratum password)` },
+    'POST /api/account/:addr/donor-profile/name': { desc: 'Set your donor name. It is checked automatically and, if it passes, shown on the donor wall AT ONCE (status approved), replacing your previous name. Rules: 2-32 characters, letters, digits, spaces and - _ . & \' only, at least one letter or digit, case kept, not like a GRIN address; one change per 7 days. Answered BEFORE the proofs are checked: 400 name_length / name_charset / name_no_alnum / name_invalid / name_address (the rule, explained), 409 unchanged, 429 name_cooldown + available_at (unix UTC). Answered only AFTER both proofs: 400 name_not_allowed (a reserved or blocked word — the answer never says which), 409 name_unavailable (another donor has it, or it is banned — the answer never says which). Needs BOTH proofs, each on record for at least the security floor (same gate as a Goblin destination change: 400 both_proofs_required, 409 proof_too_recent / anchor_not_accepted_here, 403 a proof that does not match). 409 not_a_donor = no donation debit yet; 403 blocked; 503 donations_off. A refused name is stored nowhere. The pool can still take a live name down (the reason is shown on your account page).', shape: 'flat', auth: 'ownership proof (BOTH kinds)', rate: 'withdraw', body: `name · proof (recent mining IP; legacy alias ip_proof) · password_proof (the rig\'s stratum password)` },
     'POST /api/account/:addr/donor-profile/banner': { desc: 'Submit a donor banner for review (multipart/form-data). Shown only after approval, and only while the address ranks in the top donor_banner_slots of the donor league. PNG, JPG or GIF (animation allowed), identified from the bytes: SVG and WEBP are refused. 320-1600 x 80-400 px, 2:1 to 8:1 wide, at most 300 KB, 800 x 200 recommended. 413 banner_too_large; 400 banner_type / banner_unreadable / banner_dimensions / banner_aspect. Same proofs and refusals as the name route.', shape: 'flat', auth: 'ownership proof (BOTH kinds)', rate: 'withdraw', body: `file (the image) · proof (recent mining IP; legacy alias ip_proof) · password_proof (the rig\'s stratum password)` },
-    'DELETE /api/account/:addr/donor-profile/:kind': { desc: 'kind = name | banner. which=pending withdraws the submission waiting for review; which=live takes the approved one off the wall. Same BOTH-proofs gate as a submit, but works with donations off and on a blocked address: removing your own data is always allowed. 404 nothing_pending / nothing_live.', shape: 'flat', auth: 'ownership proof (BOTH kinds)', rate: 'withdraw', body: `which=pending|live · proof (recent mining IP; legacy alias ip_proof) · password_proof (the rig\'s stratum password)` },
+    'DELETE /api/account/:addr/donor-profile/:kind': { desc: 'kind = name | banner. which=pending withdraws the banner waiting for review (a name is never pending: it goes live at once); which=live takes the approved one off the wall. Same BOTH-proofs gate as a submit, but works with donations off and on a blocked address: removing your own data is always allowed. 404 nothing_pending / nothing_live.', shape: 'flat', auth: 'ownership proof (BOTH kinds)', rate: 'withdraw', body: `which=pending|live · proof (recent mining IP; legacy alias ip_proof) · password_proof (the rig\'s stratum password)` },
     'DELETE /api/account/:addr/nostr-destination': { desc: 'Remove the registered Goblin payout destination, clearing the pin and cooldown.', shape: 'flat', auth: 'ownership proof', rate: 'withdraw', body: OWNER_PROOF_BODY },
   };
   app.get('/api/public/endpoints',
@@ -2592,7 +2643,7 @@ function setupRoutes() {
   const buildPoolStatus = async () => {
     const out = {
       pool: { ok: true },
-      node: { reachable: false, state: 'offline', synced: false, peers: 0, height: 0 },
+      node: { reachable: false, state: 'offline', synced: false, peers: 0, height: 0, up_days: null },
       wallet: { reachable: false },
     };
     try {
@@ -2606,6 +2657,9 @@ function setupRoutes() {
           synced: status.synced === true,
           peers: status.peer_count || 0,
           height: status.header_height || 0,
+          // Coarse uptime, an integer of whole UTC days or null — the ONLY uptime field in any
+          // public response (design §20.5). No timestamp, no seconds, no class, no error text.
+          up_days: nodeAvailability ? nodeAvailability.upDaysPublic(true) : null,
         };
       } else {
         // 'starting' | 'busy' | 'offline'. A node opening a rebuilt chain_data refuses the API
@@ -2654,7 +2708,7 @@ function setupRoutes() {
       const body = await _poolStatusInflight;
       // Last-good on a failed build, so a down node does not turn this back into a per-request
       // prober. `pool.ok` stays true either way — the pool API answered, which is what it means.
-      res.json(body || { pool: { ok: true }, node: { reachable: false, state: 'offline', synced: false, peers: 0, height: 0 }, wallet: { reachable: false } });
+      res.json(body || { pool: { ok: true }, node: { reachable: false, state: 'offline', synced: false, peers: 0, height: 0, up_days: null }, wallet: { reachable: false } });
     } catch (err) {
       res.status(500).json({ error: 'status unavailable' });
     }
@@ -2733,6 +2787,47 @@ function setupRoutes() {
     blockMonitor.grinNode.getStatus()
       .then(status => res.json(status))
       .catch(err => res.status(500).json({ error: err.message }));
+  });
+
+  // Node availability (design §20.6) — both observers' rows, never merged: source 'pool' (this
+  // pool's own probe) and source 'recorder' (the node box's event recorder ledger). Admin only;
+  // these carry exact timestamps, classes and details that the public surface never may.
+  // `network` defaults to (and can only usefully be) the pool's own network.
+  const nodeAvailParams = (req, res) => {
+    if (!nodeAvailability) { res.status(503).json({ error: 'node availability is not running' }); return null; }
+    const range = NodeAvailability.parseRange(req.query.range);
+    if (!range) { res.status(400).json({ error: 'range must be one of 7d, 30d, 90d, 1y' }); return null; }
+    const network = req.query.network;
+    if (network !== undefined && network !== '' && network !== 'mainnet' && network !== 'testnet') {
+      res.status(400).json({ error: 'network must be mainnet or testnet' }); return null;
+    }
+    if (network && network !== nodeAvailability.net) {
+      // This pool watches one node; the other network has no rows here.
+      res.json({ network, range: range.key, other_network: true, events: [], sources: {} }); return null;
+    }
+    return range;
+  };
+
+  app.get('/api/admin/node-events', secureAdmin, (req, res) => {
+    try {
+      const range = nodeAvailParams(req, res);
+      if (!range) return;
+      res.json(Object.assign({ range: range.key }, nodeAvailability.events(range.secs)));
+    } catch (err) {
+      console.error(`[node-availability] /api/admin/node-events: ${err.message}`);
+      res.status(500).json({ error: 'node events unavailable' });
+    }
+  });
+
+  app.get('/api/admin/node-availability', secureAdmin, (req, res) => {
+    try {
+      const range = nodeAvailParams(req, res);
+      if (!range) return;
+      res.json(Object.assign({ range: range.key }, nodeAvailability.availability(range.secs)));
+    } catch (err) {
+      console.error(`[node-availability] /api/admin/node-availability: ${err.message}`);
+      res.status(500).json({ error: 'node availability unavailable' });
+    }
   });
 
   app.get('/api/admin/block-monitor', secureAdmin, (req, res) => {
@@ -3173,8 +3268,11 @@ function setupRoutes() {
   });
 
   // ─── ADS (Admin CRUD) ──────────────────────────────────────────────
-  // Operator-managed promotions (banner image OR ad-network code snippet) bound to a public
-  // placement. secureAdmin (not freshAdmin) — ads are not money/destructive of funds.
+  // Operator-managed promotions (a banner image or a native text card) bound to a public
+  // placement. secureAdmin (not freshAdmin) — ads are not money/destructive of funds, and
+  // since design §19.17 D22 removed the `code` type an ad can no longer carry script, so
+  // secureAdmin is no longer a route to code on the public origin. An attempt to create a
+  // code ad, or to edit a legacy one, is a 400 that says why (lib/ads.js).
   app.get('/api/admin/ads', secureAdmin, (req, res) => {
     try {
       res.json({
@@ -5076,10 +5174,11 @@ function setupRoutes() {
     }
   });
 
-  // ─── Donor profile — nickname + banner (design §18.4–§18.6) ─────────────────────────────
+  // ─── Donor profile — nickname + banner (design §18.4–§18.6, names §19.17.6) ──────────────
   // A donor sets a public name and a banner (the banner shows only for the top N of the league).
-  // Every submission is PRE-MODERATED: it becomes a pending donor_requests row that nothing
-  // public reads until an admin approves it (§18 Part 3 wires the queue).
+  // A NAME is checked automatically and goes live at once (Part C4): the name rule with the donor
+  // shape, banned names, "taken", one change per 7 days. A BANNER is still PRE-MODERATED: it
+  // becomes a pending donor_requests row that nothing public reads until an admin approves it.
   //
   // The writes are gated like a payout-destination change, BOTH proofs each aged past the same
   // floor (requireBothProofs, audit §J3-1), because a profile speaks for the address on a public
@@ -5109,10 +5208,16 @@ function setupRoutes() {
     not_a_donor: [409, "A donor profile unlocks after your first donation. Add a donateN tag to a rig's worker name (for example rig01-donate10); once that rig has earned a share of a matured block, you can set your name and banner here."],
     conflict: [409, 'Another change to this profile was saved at the same moment. Reload the page and try again.'],
     donations_off: [503, 'Donations are switched off on this pool, so donor profiles cannot be changed right now.'],
+    // Part C4 — the name answers. not_allowed (a reserved or blocked word) and unavailable (banned
+    // OR taken) are generic on purpose: which list hit, and banned vs taken, is the admin's.
+    name_not_allowed: [400, DonorProfiles.NAME_TEXT.name_not_allowed],
+    name_unavailable: [409, DonorProfiles.NAME_TEXT.name_unavailable],
+    unchanged: [409, DonorProfiles.NAME_TEXT.unchanged],
+    name_cooldown: [429, `A donor name can be changed once every ${DonorProfiles.NAME_CHANGE_DAYS} days.`],
   };
-  const donorRefuse = (res, code, error) => {
+  const donorRefuse = (res, code, error, extra) => {
     const [status, text] = DONOR_REFUSAL[code] || [code === 'banner_too_large' ? 413 : 400, 'Refused'];
-    return res.status(status).json({ error: error || text, reason: code });
+    return res.status(status).json(Object.assign({ error: error || text, reason: code }, extra || {}));
   };
   // null, or the refusal code for a submit that must not go further (the shared precheck).
   const donorSubmitRefusal = (addr) => {
@@ -5133,14 +5238,25 @@ function setupRoutes() {
       if (bad) return donorRefuse(res, bad);
       const v = DonorProfiles.validateName(req.body ? req.body.name : undefined);
       if (!v.ok) return donorRefuse(res, v.code, v.error);
+      // Before the proofs: unchanged, the 7-day limit, address-like. None reads a word list, and
+      // the account page already shows the live name and when it can change.
+      const pre = DonorProfiles.namePrecheck(db, addr, v.name);
+      if (pre) return donorRefuse(res, pre.code, pre.error, pre.available_at ? { available_at: pre.available_at } : null);
+      // The word lists, banned names and "taken" are checked only AFTER both proofs: a stranger
+      // holding the address must not be able to probe the operator's list (the owner can, at the
+      // `withdraw` rate — and every answer from a list is the same generic sentence).
       const proof = await requireBothProofs(addr, req.body, reqIp, 'donor_profile_submit', 'donor_profile');
       if (!proof.ok) return res.status(proof.code).json({ error: proof.error, reason: proof.reason });
-      const r = DonorProfiles.submitName(db, addr, v.name, { isDonor: true });
-      if (!r.ok) return donorRefuse(res, r.code, r.error);
-      auditOwnerProof(db, { action: 'donor_profile_submit', grinAddress: addr, ip: reqIp, ok: true, details: { kind: 'name', request_id: r.id, replaced_pending: r.replaced, proof_method: proof.method } });
-      // The typed name comes back to the submitter ONLY here. GET /api/account/:addr never carries
-      // a pending name (anyone may read it), so the account page shows this from memory.
-      res.json({ success: true, kind: 'name', status: 'pending', name: r.name, submitted_at: r.submitted_at, replaced_pending: r.replaced });
+      const r = DonorProfiles.submitName(db, addr, v.name, { isDonor: true, rule: donorNameRule() });
+      if (!r.ok) {
+        // The row is about the PROOF, which passed (`ok`); the name was refused. The refused text
+        // is stored nowhere and `hit` (which list) never leaves the server.
+        auditOwnerProof(db, { action: 'donor_profile_submit', grinAddress: addr, ip: reqIp, ok: true, details: { kind: 'name', refused: r.code, proof_method: proof.method } });
+        return donorRefuse(res, r.code, r.error, r.available_at ? { available_at: r.available_at } : null);
+      }
+      auditOwnerProof(db, { action: 'donor_profile_submit', grinAddress: addr, ip: reqIp, ok: true, details: { kind: 'name', request_id: r.id, replaced_id: r.replaced_id, proof_method: proof.method } });
+      // Live at once: the wall and the account page show it from the next read.
+      res.json({ success: true, kind: 'name', status: 'approved', name: r.name, submitted_at: r.submitted_at, replaced_id: r.replaced_id });
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
@@ -7808,6 +7924,11 @@ function setupRoutes() {
     nothing_live:  [404, 'There is no live item of that kind to remove'],
     already:       [409, 'This address is already blocked'],
     not_blocked:   [409, 'This address is not blocked'],
+    // Part C4 — donor names
+    bad_state:      [400, 'state must be "live" or "removed"'],
+    bad_name:       [400, 'Give a name that folds to 1–32 letters and digits (spaces and - _ . & \' are ignored)'],
+    already_banned: [409, 'That name (in some spelling) is already banned'],
+    not_banned:     [404, 'That name is not on the ban list'],
   };
   const donorAdminRefuse = (res, r) => {
     const [status, text] = DONOR_ADMIN_CODES[r.code] || [400, 'Refused'];
@@ -7927,15 +8048,16 @@ function setupRoutes() {
   });
 
   // The review queue (§18.6). ?status= is a closed enum (default pending — oldest first);
-  // the decided statuses are the history. Each row carries the flags (reserved word / pool name,
-  // flag word, "same as an approved donor"), the address's current approved item of that kind,
-  // and the donor's league rank + lifetime so the reviewer knows who is asking. Never the bytes.
+  // the decided statuses are the history. ?kind= (name | banner, optional) narrows it: since
+  // Part C4 names are auto-checked, so the admin page asks for banners. Each row carries the
+  // address's current approved item of that kind and the donor's league rank + lifetime so the
+  // reviewer knows who is asking. Never the bytes.
   app.get('/api/admin/donors/requests', secureAdmin, (req, res) => {
     try {
       const ds = donorAdminSettings();
       const limit = parseInt(req.query.limit, 10);
       const q = DonorProfiles.adminQueue(db, {
-        status: req.query.status, limit: Number.isSafeInteger(limit) ? limit : undefined, ds
+        status: req.query.status, kind: req.query.kind, limit: Number.isSafeInteger(limit) ? limit : undefined
       });
       if (!q.ok) return donorAdminRefuse(res, q);
       const ledgerByAddr = donorLedgerRanked(ds, Math.floor(Date.now() / 1000), getLedgerRollupHorizon(db));
@@ -8055,6 +8177,62 @@ function setupRoutes() {
     }
   });
 
+  // ─── Donor NAMES (design §19.17.6, Part C4) ─────────────────────────────────────────────────
+  // Names are checked automatically and live at once, so the operator's surface is a LIST with
+  // post-moderation, not a queue: remove (POST /api/admin/donors/:addr/remove {kind:'name'},
+  // above), ban a name (every spelling, every holder), block a donor (above). Same tiers as the
+  // rest of the donor admin: secureAdmin reads, freshAdmin (step-up) writes, each write's audit
+  // row inside its transaction in the lib.
+
+  // ?state=live (default) | removed, ?q= an address start or a name fragment (matched on the
+  // matching form, so `sh1t` finds "Shit"). Live rows carry `hit` — what the rule says TODAY, so
+  // a word added after a name went live shows as a hint — `banned`, `same_as` (pre-C4 approved
+  // names may collide) and `blocked`.
+  app.get('/api/admin/donors/names', secureAdmin, (req, res) => {
+    try {
+      const r = DonorProfiles.adminNames(db, {
+        state: req.query.state, q: typeof req.query.q === 'string' ? req.query.q : '', rule: donorNameRule()
+      });
+      if (!r.ok) return donorAdminRefuse(res, r);
+      res.json({ success: true, state: r.state, total: r.total, names: r.rows, change_days: DonorProfiles.NAME_CHANGE_DAYS });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.get('/api/admin/donors/banned-names', secureAdmin, (req, res) => {
+    try {
+      res.json({ success: true, banned: DonorProfiles.bannedNames(db) });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Ban a name: its matching form goes on the list (no spelling of it can be set again) and every
+  // live holder loses it now — the reason is shown to them, as for a remove.
+  app.post('/api/admin/donors/banned-names', freshAdmin, (req, res) => {
+    try {
+      const body = req.body || {};
+      if (typeof body.name !== 'string') return donorAdminRefuse(res, { code: 'bad_name' });
+      const r = DonorProfiles.banName(db, body.name, { adminId: req.user.user_id, ip: req.ip, reason: body.reason });
+      if (!r.ok) return donorAdminRefuse(res, r);
+      res.json({ success: true, norm: r.norm, removed: r.removed.length });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Lift a ban. Nothing comes back: a removed name stays removed.
+  app.post('/api/admin/donors/banned-names/:norm/unban', freshAdmin, (req, res) => {
+    try {
+      const r = DonorProfiles.unbanName(db, req.params.norm, { adminId: req.user.user_id, ip: req.ip });
+      if (!r.ok) return donorAdminRefuse(res, r);
+      res.json({ success: true, norm: r.norm });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // Award a contest/incentive prize directly to a miner's address (address-as-identity —
   // no account needed). Funded from the prize_pool bucket by default so it's backed by real
   // GRIN already in the wallet; the prize pays out to the address via the normal Tor flow.
@@ -8131,7 +8309,9 @@ function setupRoutes() {
   //               audit_log_keep_days prune the ledger and the admin audit log
   //   games       turns a public feature and a public CHAT on for the live pool (design §19.11:
   //               every games-settings write is step-up)
-  const STEP_UP_SETTINGS_SECTIONS = new Set(['payout', 'access', 'incentives', 'database', 'games']);
+  //   names       the blocked-word list every public name is checked against (design §19.17.5):
+  //               emptying it is how a stolen session would let offensive names go live unseen
+  const STEP_UP_SETTINGS_SECTIONS = new Set(['payout', 'access', 'incentives', 'database', 'games', 'names']);
 
   // Individually critical keys that live in an otherwise cosmetic section. pool_info is mostly
   // name/tagline/description, but it also carries the pool's cut and who may mine at all.
@@ -8153,10 +8333,10 @@ function setupRoutes() {
     // 'address_whitelist' / 'max_miners' / 'pool_visibility' were gated here until 2026-09-02.
     // The keys are gone (audit §J9-1): nothing enforced them, and the step-up gate on a key no
     // consumer reads is the strongest signal the surface can give that a control is real.
-    // analytics — raw HTML injected into every public page; branding.js re-creates <script>
-    // nodes out of it via cloneScript() specifically so they execute.
-    'custom_head_html',
-    'custom_body_html',
+    // 'custom_head_html' / 'custom_body_html' (raw HTML whose <script> nodes branding.js
+    // re-created so they ran) were gated here until 2026-10-03. They are not merely un-gated:
+    // the keys are DELETED (design §19.17 D22, Option B) and updateSection() refuses a write
+    // to either, so there is nothing left for step-up to protect.
     // analytics — third-party script ORIGINS, loaded as <script src> by the matching provider.
     'plausible_src',
     'umami_src',

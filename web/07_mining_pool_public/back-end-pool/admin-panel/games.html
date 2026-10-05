@@ -13,6 +13,9 @@
     .gs-links { display: flex; flex-wrap: wrap; gap: .5rem; margin: .4rem 0 0; }
     .gs-changed input, .gs-changed select { border-color: var(--warn-color); }
     .gs-meta { font-size: .75rem; color: var(--text-dim); }
+    .gl-row { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem 1rem; margin: .2rem 0 .6rem; }
+    .gl-row .badge { font-size: .8rem; }
+    #confirm-dialog .modal { max-width: 480px; }
   </style>
 </head>
 <body>
@@ -29,6 +32,23 @@
         Saving them asks for your admin password again.
       </p>
       <p class="error-msg" id="gs-offline" style="display:none;"></p>
+
+      <!-- Launch state (design §19.17.2, D30). The games' own switch; the public pages follow
+           the LOWER of it and the pool's master switch. Filled by loadLaunch() with textContent. -->
+      <div class="card" id="gl-card">
+        <h3 class="sub-title" style="margin-top:0;">Launch</h3>
+        <div class="gl-row" id="gl-state">Loading…</div>
+        <p class="helper-text" id="gl-explain" style="margin:0 0 .6rem;"></p>
+        <div class="gl-row" id="gl-actions"></div>
+        <p id="gl-msg" style="display:none;"></p>
+        <p class="helper-text" style="margin:.4rem 0 0;">
+          A fresh install starts in <strong>preview</strong>: /play/ works for anyone who has the link,
+          and nothing on the pool's pages points to it. <strong>Go live</strong> puts <em>Play</em> under
+          <em>Community</em> in the menu. <strong>Off</strong> in
+          <a href="settings-games.html">Settings → Games</a> still closes /play/ whatever this says.
+          Both buttons ask for your admin password again and are kept in the moderation log.
+        </p>
+      </div>
 
       <div class="card">
         <h3 class="sub-title" style="margin-top:0;">Pages</h3>
@@ -58,6 +78,21 @@
   </div>
 </main>
 
+<div class="modal-overlay" id="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
+  <form class="modal" id="confirm-form" novalidate>
+    <h3 id="confirm-title">Confirm</h3>
+    <p class="helper-text dim" id="confirm-body" style="margin:0 0 1rem;white-space:pre-line;overflow-wrap:anywhere;"></p>
+    <div class="form-group" id="confirm-reason-group">
+      <label for="confirm-reason">Reason (optional, kept in the moderation log)</label>
+      <input type="text" id="confirm-reason" class="settings-skip" maxlength="200" autocomplete="off">
+    </div>
+    <div class="modal-actions">
+      <button type="button" class="btn btn-outline" id="confirm-cancel">Back</button>
+      <button type="submit" class="btn" id="confirm-submit">Confirm</button>
+    </div>
+  </form>
+</div>
+
 <script src="/js/auth.js"></script>
 <script src="/js/api.js"></script>
 <script src="/js/stepup.js"></script>
@@ -75,7 +110,7 @@ const GROUPS = [
   { title: 'Plays (earned from mining minutes)', keys: {
     minutes_per_play: 'Active mining minutes per play',
     plays_daily_cap: 'Plays earned per UTC day, at most',
-    plays_balance_cap: 'Plays held at once, at most (minutes over the cap are lost)',
+    plays_balance_cap: 'Plays (tickets) a miner may bank, at most (minutes over the cap are lost)',
   } },
   { title: 'Bot games & points', keys: {
     bot_play_cost: 'Plays one game against the bot costs (0 = free — and a free game pays no points)',
@@ -106,14 +141,27 @@ const GROUPS = [
   { title: 'Moderators', keys: {
     mod_requires_password: 'Moderators act only from a sign-in with their rig PASSWORD (recommended: an IP proof can be a neighbour on the same network)',
   } },
+  { title: 'Guest accounts (players who do not mine)', keys: {
+    guest_signup_enabled: 'New guests may sign up on /play/ (off = existing guests still sign in)',
+    guest_signups_per_ip: 'Sign-ups per network (/24, or /48 for IPv6) per 24 hours, at most',
+    signup_pow_bits: { label: 'Sign-up proof-of-work difficulty, in bits (each +1 doubles the work; at 18 a desktop browser needs about half a second)', floor: 'signup_pow_bits' },
+    guest_daily_plays: 'Tickets a guest gets each UTC day (topped back up at 00:00 UTC, never saved up)',
+    chat_guests_enabled: 'Guests may post in chat',
+    guest_chat_min_age: { label: 'A guest account must be at least this old before it can post (hours)', scale: 3600, floor: 'guest_chat_min_age' },
+    guest_idle_days: 'Delete a guest account after this many days with no sign-in',
+  } },
   { title: 'Nicknames', keys: {
-    nicknames_enabled: 'Players may ask for a nickname (off = no new requests, and every page shows the masked address only; approved names come back when it is on again)',
+    nicknames_enabled: 'Players may set a nickname (checked automatically, live at once; off = no new names, and every page shows the masked address only; live names come back when it is on again)',
+    nickname_change_days: 'A player may change their nickname once every this many days (0 = any time; removing their own is always allowed)',
   } },
 ];
 const FLOOR_TEXT = {
   chat_min_proof_age: s => 'A proof is always at least ' + (s / 3600) + ' h old before chat, whatever the setting says.',
   chat_min_interval_s: s => 'One address can post at most once every ' + s + ' s.',
   chat_ip_posts_per_hour: n => 'One IP can post at most ' + n + ' times an hour, across all addresses.',
+  signup_pow_bits: b => 'The sign-up proof-of-work is never below ' + b + ' bits, whatever the setting says.',
+  guest_chat_min_age: s => 'A guest account is always at least ' + (s / 3600) + ' h old before it can post.',
+  guest_chat_pace: g => 'A guest can post at most once every ' + g.min_interval_s + ' s and ' + g.posts_per_hour + ' times an hour; a link from a guest is always held.',
   mod_mute_max_minutes: m => 'A moderator can mute for at most ' + (m / 60) + ' h; only you can mute for longer (up to 30 days).',
 };
 
@@ -235,7 +283,66 @@ document.getElementById('gs-save').addEventListener('click', async () => {
   }
 });
 document.getElementById('gs-reload').addEventListener('click', load);
-document.addEventListener('DOMContentLoaded', load);
+
+// ── Launch (§19.17.2) ─────────────────────────────────────────────────────────────────
+const MODE_TEXT = { off: 'off', preview: 'preview', on: 'live' };
+const MODE_BADGE = { off: 'badge badge-dim', preview: 'badge badge-warn', on: 'badge badge-ok' };
+function modeBadge(label, mode) {
+  const span = G.el('span');
+  span.appendChild(document.createTextNode(label + ' '));
+  span.appendChild(G.el('span', MODE_BADGE[mode] || 'badge badge-dim', MODE_TEXT[mode] || String(mode)));
+  return span;
+}
+function renderLaunch(d) {
+  const st = document.getElementById('gl-state');
+  G.clear(st);
+  st.appendChild(modeBadge('Players see:', d.effective));
+  st.appendChild(modeBadge('Launch state:', d.launch));
+  st.appendChild(modeBadge('Pool master switch:', d.pool_mode));
+  const ex = document.getElementById('gl-explain');
+  ex.textContent =
+    d.effective === 'on' ? 'The games are live: Play is in the Community menu (while the service answers).'
+    : d.pool_mode === 'off' ? "The pool's master switch is off (or the pool has not answered this service for 10 minutes), so /play/ is closed whatever the launch state says."
+    : d.launch === 'preview' ? 'Preview: /play/ works by direct link and the menu does not show it. Try a game and the chat, then go live.'
+    : "Launched, but the pool's master switch is on preview, so the menu does not show Play yet.";
+  const act = document.getElementById('gl-actions');
+  G.clear(act);
+  if (d.launch === 'preview') {
+    act.appendChild(G.btn('Go live', 'btn-primary', () => setLaunch('on')));
+  } else {
+    act.appendChild(G.btn('Back to preview', 'btn-secondary', () => setLaunch('preview')));
+  }
+}
+async function loadLaunch() {
+  try {
+    renderLaunch(await G.call('GET', 'launch'));
+  } catch (err) {
+    const st = document.getElementById('gl-state');
+    G.clear(st);
+    st.textContent = err.message;
+    G.clear(document.getElementById('gl-actions'));
+  }
+}
+async function setLaunch(state) {
+  const live = state === 'on';
+  const ok = await G.askConfirm({
+    title: live ? 'Go live?' : 'Back to preview?',
+    body: live
+      ? "Play appears under Community on every pool page (when the pool's master switch is on), and the games are announced. You can go back to preview at any time."
+      : 'Play leaves the menu at once. /play/ keeps working for anyone who has the link; nothing a player has is lost.',
+    confirmText: live ? 'Go live' : 'Back to preview',
+  });
+  if (!ok) return;
+  try {
+    const r = await G.call('POST', 'launch', { state });
+    renderLaunch(r);
+    G.flash('gl-msg', r.changed ? (live ? 'Live. The menu follows within a few seconds.' : 'Back in preview. The menu follows within a few seconds.') : 'Nothing changed — it was already ' + MODE_TEXT[r.launch] + '.', false);
+  } catch (err) {
+    G.flash('gl-msg', err.message, true);
+  }
+}
+
+document.addEventListener('DOMContentLoaded', () => { loadLaunch(); load(); });
 </script>
 </body>
 </html>

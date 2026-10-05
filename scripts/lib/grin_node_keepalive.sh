@@ -104,7 +104,11 @@ gnk_autostart_enable() {
     #  - HOME=$dir gives grin a writable home (it creates .grin/<chain> even with a cwd
     #    config); without it grin EACCES-panics on the root-owned /opt/grin/.grin.
     #  - SHELL=/bin/bash is mandatory for cron-launched tmux (cron sets SHELL=/bin/sh).
-    line="@reboot sleep $delay && chown -R grin:grin '$dir' 2>/dev/null; su -s /bin/bash grin -c \"cd '$dir' && env HOME='$dir' SHELL=/bin/bash tmux new-session -d -s $sess '$binary server run'\" $tag"
+    #  - The pane command is the launcher's own (_gnc_node_run_cmd, cron-escaped):
+    #    exit-code capture + a `read` tail, so a crash after a reboot keeps its panic.
+    local run_cmd
+    run_cmd=$(_gnc_node_run_cmd "$dir" "$binary" cron)
+    line="@reboot sleep $delay && chown -R grin:grin '$dir' 2>/dev/null; su -s /bin/bash grin -c \"cd '$dir' && env HOME='$dir' SHELL=/bin/bash tmux new-session -d -s $sess '$run_cmd'\" $tag"
 
     cron=$(crontab -l 2>/dev/null || true)
     if echo "$cron" | grep -qF "$tag"; then
@@ -345,6 +349,10 @@ do_restart() { # <network> <reason>
         return 0
     fi
     wlog "$net RESTART ($reason)"
+    # Node event recorder (086 design §8.9): save the pane + log BEFORE the restart
+    # kills the session that holds the panic text. Bounded, never fatal, skipped
+    # when the recorder is not installed. The watchdog's ONLY recorder coupling.
+    [ -x /usr/local/bin/grin-node-events ] && timeout 20 /usr/local/bin/grin-node-events capture "$net" watchdog_restart "$reason" >/dev/null 2>&1 || true
     if gnc_start_node_tmux "$net" 120 >>"$LOG_FILE" 2>&1; then
         wlog "$net restart OK."
     else

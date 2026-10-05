@@ -2,7 +2,7 @@
 
 // Event kind `active_days` (design §19.9): on how many UTC days of the window an address
 // mined at least `min_minutes`. It rewards turning up every day rather than hashrate, so a
-// small miner can top it. Source: activity_daily, like mining_minutes.
+// small miner can top it. Source: activity_daily, like mining_minutes; guests excluded the same way.
 
 const { plainRules, intField } = require('./_rules');
 
@@ -25,8 +25,8 @@ module.exports = {
   compute(db, event, { fromDay, toDay }) {
     const minSeconds = event.rules.min_minutes * 60;
     return db.raw.prepare(
-      'SELECT address, COUNT(*) AS n FROM activity_daily WHERE day BETWEEN ? AND ? AND seconds >= ? GROUP BY address'
-    ).all(fromDay, toDay, minSeconds).map((r) => ({ address: r.address, value: r.n }));
+      'SELECT address, COUNT(*) AS n FROM activity_daily WHERE day BETWEEN ? AND ? AND address NOT LIKE ? AND seconds >= ? GROUP BY address'
+    ).all(fromDay, toDay, 'g:%', minSeconds).map((r) => ({ address: r.address, value: r.n }));
   },
 
   describe(rules) {

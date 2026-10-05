@@ -1,15 +1,43 @@
 const { getDb } = require('./db');
 
-// Operator-managed ads shown on public pages. Three kinds:
+// Operator-managed ads shown on public pages. Two kinds:
 //   · banner — self-hosted image (image_url) linking to link_url
 //   · text   — a native card composed from headline + body_text + cta_label (+ link_url);
 //              no image or HTML needed, so the operator writes/edits copy in plain fields
-//   · code   — a raw HTML/JS snippet from an ad network (operator-trusted, like the
-//              analytics snippet the operator already pastes)
 // Each ad is bound to one placement and an optional active window. Admin CRUD is
 // secureAdmin-gated; the public read endpoint returns only active, in-window ads.
+//
+// The third kind, `code` (a raw ad-network HTML/JS snippet the public renderer re-created as
+// executing <script> nodes), was DELETED in design §19.17 D22 (Option B, Part C1). One origin
+// is one trust zone: with a sign-in form on every page, a snippet on any page can read a
+// password typed on any other and ride its session. So:
+//   · create/update refuse ad_type 'code' with a message that says why;
+//   · an existing code row is never served (SERVABLE below is part of the serving predicate)
+//     and cannot be edited — the admin page lists it as "unsupported (removed)", delete only;
+//   · html_code is never written and never leaves this module (the column stays in the
+//     schema, as SQLite columns do, so an old row is still there to be deleted).
 const PLACEMENTS = ['header', 'sidebar', 'in-content', 'footer'];
-const AD_TYPES = ['banner', 'text', 'code'];
+const AD_TYPES = ['banner', 'text'];
+const REMOVED_AD_TYPES = ['code'];
+const REMOVED_MSG = "code ads were removed for security (design §19.17 D22) — use a banner or text ad";
+// The SQL half of the serving predicate. publicByPlacement() and recordEvents() both splice
+// it in: "served" and "countable" must never drift apart (audit §J14-9).
+const SERVABLE = "ad_type IN ('banner', 'text')";
+
+// A URL an ad may carry: '' (none), the '#' starter placeholder, a site path ('/x' — never
+// '//host' or '/\host', which a browser reads as another origin) or an absolute http(s) URL.
+// Anything else — javascript:, data:, a bare word — is refused, because link_url lands in an
+// <a href> and image_url in an <img src> on every public page.
+function checkUrl(field, v) {
+  if (v === null || v === undefined) return v;
+  const u = String(v).trim();
+  if (u === '' || u === '#') return u;
+  if (/^\/(?![\/\\])[^\s"'<>]*$/.test(u)) return u;
+  if (/^https?:\/\/[^\s"'<>]+$/i.test(u)) {
+    try { const p = new URL(u); if (p.hostname && !p.username && !p.password) return u; } catch (e) { /* fall through */ }
+  }
+  throw new Error(`${field} must be a site path (/…) or an http(s) URL`);
+}
 
 const num = (v) => {
   if (v === null || v === undefined || v === '') return null;
@@ -41,13 +69,15 @@ class AdsManager {
     }
     if (!partial || data.ad_type !== undefined) {
       const t = str(data.ad_type) || 'banner';
+      if (REMOVED_AD_TYPES.includes(t)) throw new Error(REMOVED_MSG);
       if (!AD_TYPES.includes(t)) throw new Error('invalid ad_type');
       out.ad_type = t;
     }
-    if (!partial || data.image_url !== undefined) out.image_url = str(data.image_url);
-    if (!partial || data.link_url !== undefined)  out.link_url = str(data.link_url);
+    if (!partial || data.image_url !== undefined) out.image_url = checkUrl('image_url', str(data.image_url));
+    if (!partial || data.link_url !== undefined)  out.link_url = checkUrl('link_url', str(data.link_url));
     if (!partial || data.alt_text !== undefined)  out.alt_text = str(data.alt_text);
-    if (!partial || data.html_code !== undefined) out.html_code = str(data.html_code);
+    // html_code is deliberately NOT read: a body that still carries it (an old admin page in a
+    // cached tab) stores nothing (design §19.17 D22).
     // Native text-ad fields (used when ad_type === 'text').
     if (!partial || data.headline !== undefined)  out.headline = str(data.headline);
     if (!partial || data.body_text !== undefined) out.body_text = str(data.body_text);
@@ -65,10 +95,19 @@ class AdsManager {
     const finalType = out.ad_type || (partial ? this._existingType(data._id) : 'banner');
     if (!partial) {
       if (finalType === 'banner' && !out.image_url) throw new Error('banner ads need an image_url');
-      if (finalType === 'code' && !out.html_code) throw new Error('code ads need html_code');
       if (finalType === 'text' && !(out.headline && out.headline.trim())) throw new Error('text ads need a headline');
     }
     return out;
+  }
+
+  // Admin view of a row: html_code never leaves this module, even to the panel (threat note
+  // #22: a stored legacy code ad never reaches a browser). `removed` tells the admin page to
+  // list the row as unsupported, with delete as its only action.
+  _adminRow(r) {
+    if (!r) return r;
+    const { html_code, ...rest } = r; // eslint-disable-line no-unused-vars
+    rest.removed = REMOVED_AD_TYPES.includes(rest.ad_type);
+    return rest;
   }
 
   _existingType(id) {
@@ -79,28 +118,26 @@ class AdsManager {
 
   // Admin: every ad, newest first (optionally filtered by placement).
   list(placement) {
-    if (placement && PLACEMENTS.includes(placement)) {
-      return this.db.prepare(
-        'SELECT * FROM ads WHERE placement = ? ORDER BY weight DESC, id DESC'
-      ).all(placement);
-    }
-    return this.db.prepare('SELECT * FROM ads ORDER BY placement, weight DESC, id DESC').all();
+    const rows = (placement && PLACEMENTS.includes(placement))
+      ? this.db.prepare('SELECT * FROM ads WHERE placement = ? ORDER BY weight DESC, id DESC').all(placement)
+      : this.db.prepare('SELECT * FROM ads ORDER BY placement, weight DESC, id DESC').all();
+    return rows.map((r) => this._adminRow(r));
   }
 
   get(id) {
-    return this.db.prepare('SELECT * FROM ads WHERE id = ?').get(id) || null;
+    return this._adminRow(this.db.prepare('SELECT * FROM ads WHERE id = ?').get(id)) || null;
   }
 
   create(data) {
     const c = this._clean(data);
     const r = this.db.prepare(`
-      INSERT INTO ads (name, placement, ad_type, image_url, link_url, alt_text, html_code,
+      INSERT INTO ads (name, placement, ad_type, image_url, link_url, alt_text,
                        headline, body_text, cta_label,
                        notes, is_active, weight, start_at, end_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       c.name, c.placement, c.ad_type,
-      c.image_url || null, c.link_url || null, c.alt_text || null, c.html_code || null,
+      c.image_url || null, c.link_url || null, c.alt_text || null,
       c.headline || null, c.body_text || null, c.cta_label || null,
       c.notes || null,
       c.is_active === undefined ? 1 : c.is_active,
@@ -110,7 +147,11 @@ class AdsManager {
   }
 
   update(id, data) {
-    if (!this.get(id)) throw new Error('not found');
+    const existing = this.get(id);
+    if (!existing) throw new Error('not found');
+    // A legacy code row can only be deleted. Editing it — even just switching it on — would
+    // dress a dead row up as a live ad that the public site then silently refuses to show.
+    if (existing.removed) throw new Error(`${REMOVED_MSG}; this ad can only be deleted`);
     const c = this._clean({ ...data, _id: id }, { partial: true });
     delete c._id;
     const keys = Object.keys(c);
@@ -128,17 +169,19 @@ class AdsManager {
   }
 
   // Public: active, in-window ads for one placement, ordered by weight. Only the fields
-  // the frontend renders are returned (no internal timestamps/weights leaked).
+  // the frontend renders are returned (no internal timestamps/weights leaked). A legacy
+  // `code` row is excluded by SERVABLE, and html_code is not selected at all.
   publicByPlacement(placement) {
     if (!PLACEMENTS.includes(placement)) return [];
     const now = Math.floor(Date.now() / 1000);
     const rows = this.db.prepare(`
-      SELECT id, placement, ad_type, image_url, link_url, alt_text, html_code,
+      SELECT id, placement, ad_type, image_url, link_url, alt_text,
              headline, body_text, cta_label
       FROM ads
       WHERE placement = ? AND is_active = 1
         AND (start_at IS NULL OR start_at <= ?)
         AND (end_at IS NULL OR end_at >= ?)
+        AND ${SERVABLE}
       ORDER BY weight DESC, id DESC
     `).all(placement, now, now);
     return rows;
@@ -182,7 +225,8 @@ class AdsManager {
           WHERE id IN (${list.map(() => '?').join(',')})
             AND is_active = 1
             AND (start_at IS NULL OR start_at <= ?)
-            AND (end_at   IS NULL OR end_at   >= ?)`
+            AND (end_at   IS NULL OR end_at   >= ?)
+            AND ${SERVABLE}`
       ).run(...list, now, now);
       return info && typeof info.changes === 'number' ? info.changes : 0;
     };

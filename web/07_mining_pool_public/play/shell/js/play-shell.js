@@ -4,7 +4,9 @@
  * strip, the new-game form, "My games", the board (through FrameHost) and its buttons, and
  * the two PvP polls (§19.8): the open board every 5 s while the opponent is to move, and
  * the cheap "turns" poll (15 s visible / 60 s hidden) that keeps My games current. The
- * lobby ("Play a person") is play-lobby.js, reached through play:open / play:changed. All data comes
+ * lobby ("Play a person") is play-lobby.js, reached through play:open / play:changed; guest sign-in,
+ * sign-up and the guest account box are play-guest.js, which hands a new session over through
+ * play:signed-in and an ended one through play:signed-out. All data comes
  * from PlayApi; every value from the API reaches the DOM through textContent or a value
  * property — this file has NO innerHTML. The page runs under script-src 'self' with no
  * 'unsafe-inline', so every handler is attached here, never as an attribute.
@@ -19,7 +21,7 @@
   var FH = window.FrameHost;
   if (!Api || !FH) return;
 
-  var ME_REFRESH_MS = 5 * 60 * 1000;   // plays arrive with the 5-min activity sync (§19.6)
+  var ME_REFRESH_MS = 5 * 60 * 1000;   // tickets arrive with the 5-min activity sync (§19.6)
   var CONFIRM_MS = 5000;               // two-click confirm window (resign, log out everywhere)
   // §19.8 polling, correspondence pace. setTimeout, one request in flight, never setInterval.
   var BOARD_POLL_MS = 5000;            // an open PvP board while the opponent is to move
@@ -71,8 +73,8 @@
 
   var EL = {};
   ['play-loading', 'play-offline', 'play-offline-title', 'play-offline-text', 'play-retry',
-   'play-login', 'login-form', 'login-address', 'login-proof', 'login-reveal', 'login-submit', 'login-msg',
-   'play-account', 'acct-plays', 'acct-points', 'acct-addr', 'acct-badges', 'acct-sessions', 'sessions-fold',
+   'play-login', 'login-note', 'login-form', 'login-address', 'login-proof', 'login-reveal', 'login-submit', 'login-msg',
+   'play-account', 'acct-plays', 'acct-points', 'acct-addr', 'acct-guest-line', 'acct-badges', 'acct-sessions', 'sessions-fold',
    'sessions-list', 'btn-logout', 'btn-logout-all', 'account-msg',
    'play-game-area', 'board-title', 'board-sub', 'board-status', 'frame-slot', 'frame-empty',
    'btn-resign', 'btn-abort', 'btn-draw-offer', 'btn-draw-accept', 'btn-draw-decline',
@@ -158,9 +160,31 @@
     new MutationObserver(pushTheme).observe(document.body, { attributes: true, attributeFilter: ['class'] });
   } catch (e) { /* the frame just keeps its first theme */ }
 
+  // ── The bubble's two hints (design §19.17.7, Part C7) ───────────────────────────────
+  // The floating chat bubble on the pool's other pages (chat-bubble.js) cannot see the session
+  // cookie (HttpOnly), so this page leaves it two localStorage hints. Neither holds a token or
+  // a name — a stale one costs the bubble one request:
+  //   grin_play_signed_in  '1' while this browser has a games session — a closed bubble polls
+  //                        the change feed (60 s) only then; cleared on sign-out and on a 401;
+  //   grin_play_preview    '1' once this page has loaded in PREVIEW — the pool's loader shows the
+  //                        bubble in preview only to a browser that has been here; removed when
+  //                        the games are fully on (the nav shows /play/ to everyone then).
+  // Every access is in try/catch: storage off means no hint, never a broken page.
+  var HINT_SIGNED = 'grin_play_signed_in', HINT_PREVIEW = 'grin_play_preview';
+  function hint(key, on) {
+    try { if (on) localStorage.setItem(key, '1'); else localStorage.removeItem(key); } catch (e) { /* no hint, no harm */ }
+  }
+  function notePreview() {
+    Api.rules().then(function (r) {
+      if (r.mode === 'preview') hint(HINT_PREVIEW, true);
+      else if (r.mode === 'on') hint(HINT_PREVIEW, false);
+    }, function () { /* leave the hint as it was */ });
+  }
+
   // ── Boot ────────────────────────────────────────────────────────────────────────────
   function boot() {
     setView('loading');
+    notePreview();
     Api.get('me').then(function (me) {
       signedIn(me);
     }, function (e) {
@@ -177,15 +201,18 @@
     client_ip: 'The games could not see your IP address. Try again in a minute.'
   };
 
-  function signedOut(note) {
+  // kind: 'ok' for a sign-out the player asked for, an error style otherwise.
+  function signedOut(note, kind) {
     S.me = null;
+    hint(HINT_SIGNED, false);
     announceMe(null);
     closeBoard();
     stopMeTimer();
     stopTurns();
     EL['login-proof'].value = '';
     setView('login');
-    msg(EL['login-msg'], note || '', 'err');
+    msg(EL['login-msg'], '');
+    msg(EL['login-note'], note || '', kind === 'ok' ? 'ok' : 'err');
   }
 
   EL['login-reveal'].addEventListener('click', function () {
@@ -207,8 +234,8 @@
     Api.post('login', { address: address, proof: proof }).then(function (r) {
       EL['login-proof'].value = '';
       msg(EL['login-msg'], '');
-      signedIn({ ok: true, address: r.me.address, address_masked: r.me.address_masked,
-        plays: r.me.plays, points: r.me.points, badges: r.me.badges, chat: r.me.chat, moderator: r.me.moderator, sessions: r.me.sessions });
+      msg(EL['login-note'], '');
+      signedIn(r.me);
     }, function (e) {
       if (!(e instanceof Api.Error) || e.kind === 'offline') { pageLevel(e); return; }
       if (e.status === 404 && e.code === 'not_found') { pageLevel(e); return; }
@@ -229,17 +256,34 @@
   });
 
   EL['btn-logout'].addEventListener('click', function () {
-    Api.post('logout', {}).then(function () { signedOut('You are signed out.'); }, function (e) {
+    Api.post('logout', {}).then(function () { signedOut('You are signed out.', 'ok'); }, function (e) {
       if (!pageLevel(e)) msg(EL['account-msg'], e.message);
     });
   });
   confirmButton(EL['btn-logout-all'], 'Log out everywhere', 'Confirm: every device', function () {
     Api.post('logout-all', {}).then(function (r) {
-      signedOut('Signed out on ' + int(r.revoked) + ' device(s).');
+      signedOut('Signed out on ' + int(r.revoked) + ' device(s).', 'ok');
     }, function (e) {
       if (!pageLevel(e)) msg(EL['account-msg'], e.message);
     });
   });
+
+  // play-guest.js: a guest signed in or signed up (the body's `me` is /me's shape), or the
+  // guest's account or session ended.
+  document.addEventListener('play:signed-in', function (e) {
+    var d = e && e.detail;
+    if (!d || !d.me || typeof d.me !== 'object') return;
+    msg(EL['login-msg'], '');
+    msg(EL['login-note'], '');
+    signedIn(d.me);
+    if (typeof d.note === 'string' && d.note) msg(EL['account-msg'], d.note, 'ok');
+  });
+  document.addEventListener('play:signed-out', function (e) {
+    var d = e && e.detail;
+    signedOut(d && typeof d.note === 'string' ? d.note : '', d && d.kind === 'ok' ? 'ok' : 'err');
+  });
+  // play-chat.js asks for a fresh /me when a chat wait (account age, proof age) runs out.
+  document.addEventListener('play:refresh-me', function () { if (S.me) refreshMe(); });
 
   // ── Signed in ───────────────────────────────────────────────────────────────────────
   // The chat panel (play-chat.js, Part 9) follows the caller's chat + moderator status from
@@ -248,13 +292,28 @@
     try { document.dispatchEvent(new CustomEvent('play:me', { detail: { me: me } })); } catch (e) { /* no chat panel then */ }
   }
 
+  // A guest's day (§19.17.4): the count is SET back to the daily number at 00:00 UTC.
+  function guestLine(me) {
+    var g = me.guest;
+    if (!g || typeof g.daily_tickets !== 'number') return '';
+    var left = typeof g.resets_at === 'number' ? g.resets_at - nowS() : 0;
+    return 'Guest account · ' + int(g.daily_tickets) + (g.daily_tickets === 1 ? ' ticket' : ' tickets') +
+      ' a day — the count goes back to ' + int(g.daily_tickets) + ' at 00:00 UTC' +
+      (left > 0 ? ' (' + fmtLeft(left).replace(' left', '') + ' from now)' : '') + '.';
+  }
+
   function renderMe(me) {
     S.me = me;
     announceMe(me);
+    var guest = me.kind === 'guest' && !!me.guest && typeof me.guest.login_name === 'string';
     text(EL['acct-plays'], int(me.plays));
     text(EL['acct-points'], int(me.points));
-    text(EL['acct-addr'], me.address_masked);
-    EL['acct-addr'].title = me.address_masked;
+    // A guest signs in with a NAME, so that is who they are here; /me shows it to its owner only.
+    var who = guest ? me.guest.login_name + ' · guest' : me.address_masked;
+    text(EL['acct-addr'], who);
+    EL['acct-addr'].title = who;
+    text(EL['acct-guest-line'], guest ? guestLine(me) : '');
+    show(EL['acct-guest-line'], guest);
     // Event badges (§19.9): ids from the server's list, labels from the server — text only.
     var badges = Array.isArray(me.badges) ? me.badges.filter(function (b) { return b && typeof b.label === 'string'; }) : [];
     text(EL['acct-badges'], badges.length ? 'Badges: ' + badges.map(function (b) { return b.label; }).join(' · ') : '');
@@ -276,6 +335,7 @@
   });
 
   function signedIn(me) {
+    hint(HINT_SIGNED, true);
     renderMe(me);
     setView('in');
     msg(EL['account-msg'], '');
@@ -388,10 +448,10 @@
 
   // The outcome from the viewer's side. `result` is 'seat1' | 'seat2' | 'draw'.
   function outcome(state, result, reason, you) {
-    if (state === 'aborted' && reason === 'cancelled') return 'Withdrawn before anyone accepted, play refunded';
-    if (state === 'aborted') return 'Aborted' + (reason === 'timeout' ? ' — no move in time, plays refunded' : ', plays refunded');
-    if (state === 'declined') return 'Challenge declined, play refunded';
-    if (state === 'expired') return 'Nobody accepted within 3 days, play refunded';
+    if (state === 'aborted' && reason === 'cancelled') return 'Withdrawn before anyone accepted, ticket refunded';
+    if (state === 'aborted') return 'Aborted' + (reason === 'timeout' ? ' — no move in time, tickets refunded' : ', tickets refunded');
+    if (state === 'declined') return 'Challenge declined, ticket refunded';
+    if (state === 'expired') return 'Nobody accepted within 3 days, ticket refunded';
     if (state === 'void') return 'Voided by the pool';
     if (state !== 'finished') return null;
     var why = reasonText(reason);
@@ -478,7 +538,7 @@
         openMatch(e.body.match_id);
         return;
       }
-      msg(EL['new-msg'], e.message);
+      msg(EL['new-msg'], boardErrText(e));
     }).then(function () {
       S.busy = false;
       EL['new-submit'].disabled = false;
@@ -682,11 +742,22 @@
     too_late: 'Both sides have moved, so the game can no longer be aborted. Resign instead.',
     no_draw_offer: 'The draw offer is no longer there.',
     not_open: 'Someone else took that game first, or it was withdrawn.',
-    expired: 'That game expired — the play was refunded to whoever posted it.',
-    no_plays: 'You have no plays left. Plays come from your mining minutes.',
+    expired: 'That game expired — the ticket was refunded to whoever posted it.',
     too_many_matches: 'You already have the most games in progress allowed. Finish one first.',
     opponent_busy: 'That player already has the most games in progress allowed.'
   };
+
+  // Out of tickets: a guest waits for 00:00 UTC, a miner mines (§19.17.4).
+  function noTicketsText() {
+    var g = S.me && S.me.kind === 'guest' && S.me.guest;
+    if (g && typeof g.resets_at === 'number') {
+      var left = g.resets_at - nowS();
+      return 'You have no tickets left today. You get ' + int(g.daily_tickets) + ' new ones at 00:00 UTC' +
+        (left > 0 ? ' (' + fmtLeft(left).replace(' left', '') + ' from now)' : '') + '.';
+    }
+    return 'You have no tickets left. Miners earn them from mining minutes — see "How tickets are earned" below.';
+  }
+  function boardErrText(e) { return e.code === 'no_plays' ? noTicketsText() : (MOVE_ERROR_TEXT[e.code] || e.message); }
 
   function onFrameMove(move) {
     var v = S.current;
@@ -705,7 +776,7 @@
       S.busy = false;
       if (pageLevel(e)) return;
       if (e.status === 429) msg(EL['board-msg'], 'Slow down a little — one move a second.');
-      else msg(EL['board-msg'], MOVE_ERROR_TEXT[e.code] || e.message);
+      else msg(EL['board-msg'], boardErrText(e));
       // Whatever went wrong, draw the server's board again (§19.7: a rejected move redraws).
       reloadCurrent();
     });
@@ -734,7 +805,7 @@
       S.busy = false;
       if (pageLevel(e)) return;
       if (e.status === 429) msg(EL['board-msg'], 'Slow down a little — one action a second.');
-      else msg(EL['board-msg'], MOVE_ERROR_TEXT[e.code] || e.message);
+      else msg(EL['board-msg'], boardErrText(e));
       reloadCurrent();
     });
   }
@@ -750,7 +821,7 @@
   EL['btn-draw-offer'].addEventListener('click', function () { boardAct('draw', { action: 'offer' }); });
   confirmButton(EL['btn-draw-accept'], 'Accept draw', 'Confirm draw', function () { boardAct('draw', { action: 'accept' }); });
   EL['btn-draw-decline'].addEventListener('click', function () { boardAct('draw', { action: 'decline' }); });
-  confirmButton(EL['btn-accept'], 'Accept', 'Confirm — costs a play', function () { boardAct('accept', {}, changed); });
+  confirmButton(EL['btn-accept'], 'Accept', 'Confirm — costs a ticket', function () { boardAct('accept', {}, changed); });
   confirmButton(EL['btn-decline'], 'Decline', 'Confirm decline', function () { boardAct('decline', {}, changed); });
   confirmButton(EL['btn-cancel'], 'Cancel seek', 'Confirm cancel', function () { boardAct('cancel', {}, changed); });
 

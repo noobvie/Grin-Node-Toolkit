@@ -94,8 +94,8 @@ resolver, the allowlist rules, and what is still open.
 
 | Doc | What it covers |
 |---|---|
-| [script07_design.md](script07_design.md) | Public mining pool architecture — PPLNS, address-as-identity, Model C regional gateways, hub move + connect-page latency (§13.13), games platform `/play/` (§19; Parts 1–10 built, not VPS-tested) |
-| [script07_implementation.md](script07_implementation.md) | Pool deploy + runbook, incl. the hub-move runbook (§8.7) |
+| [script07_design.md](script07_design.md) | Public mining pool architecture — PPLNS, address-as-identity, Model C regional gateways, hub move + connect-page latency (§13.13), games platform `/play/` (§19; Parts 1–10 built, not VPS-tested), node availability beside the event recorder (§20; Parts 6–8 built, not VPS-tested) |
+| [script07_implementation.md](script07_implementation.md) | Pool deploy + runbook, incl. the hub-move runbook (§8.7); node availability as built (§10.15) |
 | [script07_security_audit.md](script07_security_audit.md) | Pool security record, §A–§J17. **Start at the Status roll-up** — 14 k lines, and the roll-up is the whole of it in one table |
 
 ## Admin & host (Script 08 band)
@@ -104,7 +104,8 @@ resolver, the allowlist rules, and what is still open.
 |---|---|
 | [script082_design.md](script082_design.md) | Provider Access Watch — VPS host-tamper detection |
 | [script083_design.md](script083_design.md) | Host Optimization advisor (read-only) |
-| [script086_design.md](script086_design.md) | Diagnostics & Support Bundle — health check, support bundle, log triage |
+| [script086_design.md](script086_design.md) | Diagnostics & Support Bundle — health check, support bundle, log triage; §8 node event recorder design (built, never run) |
+| [script086_implementation.md](script086_implementation.md) | Node event recorder as built — files, installed footprint, Part 2–5 deltas, the R1 review, classification order, acceptance (§8.15–§8.22; never run) |
 
 ## Connectivity (Script 09)
 

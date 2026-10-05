@@ -56,6 +56,7 @@
 
   <!-- footer injected by /js/public-shell.js -->
 
+  <script src="/js/cms-frame.js"></script>
   <script>
     (function () {
       // Slug from the clean permalink /blog/<slug>; fall back to the legacy ?slug= form.
@@ -105,12 +106,23 @@
             document.getElementById('post-cover').innerHTML =
               '<img class="cover" src="' + esc(p.cover_image) + '" alt="">';
           }
-          document.getElementById('post-body').innerHTML = p.body_html; // operator-authored
+          // Operator-authored HTML: rendered in a sandboxed frame, never on this origin (D22-4).
+          showBody(document.getElementById('post-body'), p.body_html, 'post-body', p.title);
           var tags = (p.tags || []).map(function (tg) { return '<span class="tag">' + esc(tg) + '</span>'; }).join('');
           document.getElementById('post-tags').innerHTML = tags;
           document.documentElement.setAttribute('data-page', 'post-' + slug);
         })
         .catch(renderMissing);
+
+      // The body goes into a frame with no allow-scripts (js/cms-frame.js). If that script did
+      // not load, the body is NOT shown — falling back to innerHTML would undo the fix.
+      function showBody(host, html, wrapClass, title) {
+        if (window.CmsFrame) { window.CmsFrame.mount(host, html, { wrapClass: wrapClass, title: title }); return; }
+        var q = document.createElement('p');
+        q.className = 'muted';
+        q.textContent = 'This post could not be shown. Reload to try again.';
+        host.appendChild(q);
+      }
 
       function renderMissing() {
         document.title = 'Post not found';

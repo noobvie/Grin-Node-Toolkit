@@ -49,6 +49,7 @@ function parseJsonArray(val, fallback) {
 // The shipped donor-name starter list (design §16) is the DEFAULT of a setting, so it lives
 // with the rest of the name logic and is imported here — never the other way round.
 const { STARTER_BLOCKLIST } = require('./donor-names');
+const NameRule = require('./name-rule');
 const explorers = require('./explorers');
 
 // Own-property membership tests for the settings schema. `defaults[section]` and
@@ -62,6 +63,53 @@ const hasSection = (section) =>
   PoolSettings.defaults[section] !== null && typeof PoolSettings.defaults[section] === 'object';
 const hasKey = (section, key) =>
   Object.prototype.hasOwnProperty.call(PoolSettings.defaults[section], key);
+
+// Keys deleted for a SECURITY reason whose stored rows must never be read back. An ordinary
+// retired key just goes inert (getSection layers every stored row, but no consumer asks for
+// it); these are hidden outright, because "inert" still meant shipping the value to the admin
+// panel, and threat note #22 (design §19.13) says a stored legacy value never reaches a
+// browser. Rows are left in pool_config, not deleted: nothing reads them, and an operator who
+// needs the old verification tag can still recover it from a backup of the DB.
+const RETIRED_KEYS = {
+  incentives: {
+    donor_name_blocklist: 'Donor names are checked automatically since design §19.17.6 (Part C4): add words on Settings → Names',
+  },
+  analytics: {
+    custom_head_html: 'Custom HTML was removed for security (design §19.17 D22)',
+    custom_body_html: 'Custom HTML was removed for security (design §19.17 D22)',
+  },
+};
+const retiredReason = (section, key) =>
+  (Object.prototype.hasOwnProperty.call(RETIRED_KEYS, section) &&
+   Object.prototype.hasOwnProperty.call(RETIRED_KEYS[section], key))
+    ? RETIRED_KEYS[section][key] : null;
+
+// Analytics provider fields — the ONLY values that reach a <script> on a public page
+// (design §19.17 D22: provider-ID loaders only). Each is a strict pattern, never free text.
+// public_html/js/branding.js carries the same patterns and re-checks before loading.
+const ANALYTICS_PATTERNS = {
+  ga_tracking_id: /^G-[A-Z0-9]{1,32}$/,
+  plausible_domain: /^[A-Za-z0-9.-]{1,253}(,[A-Za-z0-9.-]{1,253}){0,9}$/,
+  umami_website_id: /^[A-Za-z0-9-]{1,64}$/,
+  matomo_site_id: /^[0-9]{1,9}$/,
+};
+// An https URL with a host and no credentials. http: is mixed content on an https pool, and
+// javascript:/data: — both of which `new URL()` happily parses — would run as the script.
+const isHttpsScriptUrl = (v) => {
+  if (typeof v !== 'string' || v === '') return false;
+  try {
+    const u = new URL(v);
+    return u.protocol === 'https:' && !!u.hostname && !u.username && !u.password;
+  } catch (e) { return false; }
+};
+// The publish-side twin of the validators: a value stored before they were tightened is
+// published as '' (so its loader stays silent), never passed through.
+const publishAnalytics = (key, v) => {
+  if (v === undefined || v === null || v === '') return '';
+  const s = String(v);
+  if (ANALYTICS_PATTERNS[key]) return ANALYTICS_PATTERNS[key].test(s) ? s : '';
+  return isHttpsScriptUrl(s) ? s : '';
+};
 
 class PoolSettings {
   constructor(db) {
@@ -200,10 +248,14 @@ class PoolSettings {
       umami_src: 'https://cloud.umami.is/script.js',
       matomo_url: '',
       matomo_site_id: '',
-      // custom_head_html: raw HTML injected into <head> on every public page
-      custom_head_html: '',
-      // custom_body_html: raw HTML injected before </body> (chat widgets, etc.)
-      custom_body_html: '',
+      // custom_head_html / custom_body_html (raw HTML whose <script> nodes branding.js
+      // re-created so they ran, on every public page) were REMOVED 2026-10-03 — design
+      // §19.17 D22, Option B, Part C1. Not filtered: deleted. `<img onerror>` runs code, so a
+      // sanitiser would be a second thing to get right forever, and with a sign-in form on
+      // every page there is no page left that may carry operator script. A row already stored
+      // on a deployed pool is inert: RETIRED_KEYS below keeps it out of getSection() — so out
+      // of the admin GET and the public branding payload — and updateSection() refuses a write
+      // to either key with a message that says why.
       cookie_consent_enabled: 'false',
       cookie_consent_text: 'We use analytics cookies to improve your experience.',
     },
@@ -633,8 +685,9 @@ PASS      any-password-you-choose</code>
       // through donorSettings() in lib/donor-names.js, which bounds every value on read.
       // `donor_censored_display` was REMOVED 2026-09-24 (§18 Part 3): names are pre-moderated,
       // so there is no censored name to display. A row still stored for it is inert.
-      donor_name_blocklist: STARTER_BLOCKLIST.join('\n'),  // FLAG words, one per line: a substring hit on the
-                                                           // normalised name is highlighted in the review queue
+      // `donor_name_blocklist` (the review queue's flag words) was RETIRED by Part C4 (§19.17.6):
+      // donor names are checked by the name rule against `names.blocked_words`, and the
+      // operator's own entries were carried over once (retireDonorNameBlocklist below).
       donor_rank_window_days: 365,           // league window; 0 = lifetime
       donor_loyalty_percent_per_month: 10,   // +% per distinct month with a donation debit
       donor_loyalty_cap: 3,                  // multiplier ceiling (×3)
@@ -677,16 +730,28 @@ PASS      any-password-you-choose</code>
     //   mode   off     = /play/ answers 404 everywhere except its health check
     //          preview = /play/ works by direct URL, the public nav link stays HIDDEN
     //          on      = /play/ is live and the nav shows it (while the games service is up)
-    //   OFF by default — the opposite of `incentives`: the pool is live, and a fresh deploy
-    //   must not announce a feature the operator has not accepted yet. Do not set `on` before
-    //   the chat moderation tools exist (§19.14: moderation ships before anyone can post).
+    //   ON by default since Part C2 (§19.17.2, D30) — and still safe for a live pool, because
+    //   this is only HALF the switch: what the pages see is the EFFECTIVE mode, the lower of
+    //   this value and the games service's own launch state, which starts at `preview` on a
+    //   fresh games DB and moves to `on` only from the games admin's Go live. So installing
+    //   the games never announces them, yet no operator has to find a hidden switch to turn
+    //   them on; `off` here still closes /play/ whatever the launch state says. A SAVED
+    //   Settings → Games row overrides these defaults (the live pool may have saved `off`).
     // Typed values only: chat_enabled is a real boolean, and the reader accepts nothing but
     // true / 'true', so a quoted "false" can never switch chat on (memory
     // project_config_loader_type_traps). The games port and link-secret path are pool.json
     // keys, not settings — see lib/config.js.
     games: {
-      mode: 'off',
-      chat_enabled: false,
+      mode: 'on',
+      chat_enabled: true,
+    },
+    // Names (design §19.17.5, D28): the ONE blocked-word list for every public name a player
+    // types. Empty by default because the code seed (lib/name-rule.js SEED) always applies on
+    // top; these are the operator's ADDITIONS, one per line, stored in the matching form, with an
+    // optional `*` (match anywhere) or `=` (whole name only) prefix. Sent to the games service
+    // in /internal/games/config (nicknames), and read by the pool itself for donor names (C4).
+    names: {
+      blocked_words: '',
     },
     // Site-wide maintenance mode + announcement banners.
     notices: {
@@ -908,24 +973,35 @@ PASS      any-password-you-choose</code>
         }
         return val;
       },
+      // Every value below ends up building a <script> on every public page, so each is a
+      // strict pattern (design §19.17 D22). The script URLs used to accept anything
+      // `new URL()` parses — javascript: and data: included.
       ga_tracking_id: (val) => {
-        if (val && !/^G-[A-Z0-9]+$/.test(val)) throw new Error('invalid GA tracking ID format');
+        if (val && !ANALYTICS_PATTERNS.ga_tracking_id.test(String(val))) throw new Error('invalid GA tracking ID format (G- then letters/digits)');
+        return val;
+      },
+      plausible_domain: (val) => {
+        if (val && !ANALYTICS_PATTERNS.plausible_domain.test(String(val))) throw new Error('plausible_domain must be a domain name (comma-separate several)');
+        return val;
+      },
+      umami_website_id: (val) => {
+        if (val && !ANALYTICS_PATTERNS.umami_website_id.test(String(val))) throw new Error('umami_website_id must be letters, digits and hyphens');
         return val;
       },
       matomo_site_id: (val) => {
-        if (val && !/^\d+$/.test(String(val))) throw new Error('matomo_site_id must be numeric');
+        if (val && !ANALYTICS_PATTERNS.matomo_site_id.test(String(val))) throw new Error('matomo_site_id must be numeric');
         return val;
       },
       plausible_src: (val) => {
-        if (val) { try { new URL(val); } catch (err) { throw new Error('plausible_src must be a valid URL'); } }
+        if (val && !isHttpsScriptUrl(val)) throw new Error('plausible_src must be an https:// URL');
         return val;
       },
       umami_src: (val) => {
-        if (val) { try { new URL(val); } catch (err) { throw new Error('umami_src must be a valid URL'); } }
+        if (val && !isHttpsScriptUrl(val)) throw new Error('umami_src must be an https:// URL');
         return val;
       },
       matomo_url: (val) => {
-        if (val) { try { new URL(val); } catch (err) { throw new Error('matomo_url must be a valid URL'); } }
+        if (val && !isHttpsScriptUrl(val)) throw new Error('matomo_url must be an https:// URL');
         return val;
       },
     },
@@ -944,6 +1020,35 @@ PASS      any-password-you-choose</code>
         if (val === true || val === 'true') return true;
         if (val === false || val === 'false') return false;
         throw new Error('chat_enabled must be true or false');
+      },
+    },
+    names: {
+      // A textarea (one entry per line) or an array. Each entry is folded to the name rule's
+      // matching form (lower-case, separators out, leet digits back) so what is stored is what is
+      // compared, keeping a leading `*` / `=`; duplicates go. An entry that cannot match a name
+      // is REFUSED with its line, not dropped: the operator should learn that `café` does nothing.
+      blocked_words: (val) => {
+        const lines = Array.isArray(val) ? val : String(val == null ? '' : val).split(/\r?\n/);
+        if (lines.length > 2000) throw new Error('blocked_words: too many lines');
+        const out = [];
+        const seen = new Set();
+        lines.forEach((raw, i) => {
+          if (typeof raw !== 'string') throw new Error(`blocked_words line ${i + 1} is not text`);
+          let s = raw.trim();
+          if (s === '') return;
+          let pre = '';
+          if (s[0] === '*' || s[0] === '=') { pre = s[0]; s = s.slice(1).trim(); }
+          const norm = NameRule.matchForm(s);
+          if (!/^[a-z0-9]{1,32}$/.test(norm)) {
+            throw new Error(`blocked_words line ${i + 1} ("${raw.trim().slice(0, 40)}"): use 1–32 letters A–Z / digits (spaces, - _ . & ' are ignored), with an optional leading * or =`);
+          }
+          const entry = pre + norm;
+          if (seen.has(entry)) return;
+          seen.add(entry);
+          out.push(entry);
+        });
+        if (out.length > 500) throw new Error('blocked_words: at most 500 entries');
+        return out.join('\n');
       },
     },
     notices: {
@@ -1192,17 +1297,7 @@ PASS      any-password-you-choose</code>
           }
           return v;
         },
-        // Flag words (design §16.10 / §18.9 type traps): the list is stored as cleaned text — one
-        // trimmed entry per line, empties dropped, size-capped — and is only ever SPLIT by the
-        // matcher, never compiled. Bounded so a pasted novel cannot make every review-queue read
-        // slow. The numbers carry the same bounds donorSettings() re-applies on read.
-        donor_name_blocklist: (val) => {
-          const text = val == null ? '' : String(val);
-          if (text.length > 65536) throw new Error('donor_name_blocklist must be under 64 KB');
-          const lines = text.split(/\r?\n/).map((l) => l.trim()).filter((l) => l !== '');
-          if (lines.length > 4000) throw new Error('donor_name_blocklist must have at most 4000 entries');
-          return lines.join('\n');
-        },
+        // The numbers carry the same bounds donorSettings() re-applies on read (§18.9 type traps).
         donor_rank_window_days: intRange('donor_rank_window_days', 0, 3650),
         donor_loyalty_percent_per_month: percent('donor_loyalty_percent_per_month'),
         donor_loyalty_cap: (val) => {
@@ -1290,6 +1385,7 @@ PASS      any-password-you-choose</code>
     const rows = stmt.all(section);
 
     for (const row of rows) {
+      if (retiredReason(section, row.key)) continue; // RETIRED_KEYS: never read back
       if (row.value_type === 'number') {
         defaults[row.key] = parseFloat(row.value);
       } else if (row.value_type === 'boolean') {
@@ -1338,8 +1434,11 @@ PASS      any-password-you-choose</code>
     // Light obfuscation for contact emails in the public payload (base64, not encryption).
     const b64 = (v) => (v ? Buffer.from(String(v), 'utf8').toString('base64') : '');
 
-    // GA id can live in analytics (new) or seo (legacy leftover) — prefer analytics.
-    const gaId = a.ga_tracking_id || seo.ga_tracking_id || '';
+    // GA id can live in analytics (new) or seo (legacy leftover) — prefer analytics. The seo
+    // copy has no validator at all (no seo key by that name exists any more), so both go
+    // through publishAnalytics(): a value that is not a strict G- id publishes as ''.
+    const gaId = publishAnalytics('ga_tracking_id', a.ga_tracking_id) ||
+      publishAnalytics('ga_tracking_id', seo.ga_tracking_id);
 
     return {
       pool: {
@@ -1411,17 +1510,17 @@ PASS      any-password-you-choose</code>
         structured_data_enabled: seo.structured_data_enabled === true || seo.structured_data_enabled === 'true',
         robots_noindex: seo.robots_noindex === true || seo.robots_noindex === 'true',
       },
+      // Provider-ID loaders only (design §19.17 D22): every field that reaches a <script> is
+      // re-checked against its strict pattern here, and the two custom-HTML keys are gone.
       analytics: {
         provider: a.provider || 'none',
         ga_tracking_id: gaId,
-        plausible_domain: a.plausible_domain || '',
-        plausible_src: a.plausible_src || '',
-        umami_website_id: a.umami_website_id || '',
-        umami_src: a.umami_src || '',
-        matomo_url: a.matomo_url || '',
-        matomo_site_id: a.matomo_site_id || '',
-        custom_head_html: a.custom_head_html || '',
-        custom_body_html: a.custom_body_html || '',
+        plausible_domain: publishAnalytics('plausible_domain', a.plausible_domain),
+        plausible_src: publishAnalytics('plausible_src', a.plausible_src),
+        umami_website_id: publishAnalytics('umami_website_id', a.umami_website_id),
+        umami_src: publishAnalytics('umami_src', a.umami_src),
+        matomo_url: publishAnalytics('matomo_url', a.matomo_url),
+        matomo_site_id: publishAnalytics('matomo_site_id', a.matomo_site_id),
         cookie_consent_enabled: a.cookie_consent_enabled === true || a.cookie_consent_enabled === 'true',
         cookie_consent_text: a.cookie_consent_text || '',
       },
@@ -1540,6 +1639,8 @@ PASS      any-password-you-choose</code>
       const beforeState = this.getSection(section);
 
       for (const [key, value] of Object.entries(values)) {
+        const retired = retiredReason(section, key);
+        if (retired) throw new Error(`'${key}': ${retired}`);
         if (!hasKey(section, key)) {
           throw new Error(`Unknown key '${key}' in section '${section}'`);
         }
@@ -1670,6 +1771,46 @@ PASS      any-password-you-choose</code>
     auditStmt.run(userId, JSON.stringify({ timestamp: new Date().toISOString() }));
 
     return this.getAll();
+  }
+
+  // Part C4 (design §19.17.6): `incentives.donor_name_blocklist` is retired into
+  // `names.blocked_words`. The entries the operator added BEYOND the v1 starter list are carried
+  // over ONCE: the old row is deleted in the same transaction as the merge, so its absence is the
+  // "done" marker — a word the operator later deletes from Settings → Names never comes back.
+  // Called at every start (index.js); a pool that never saved the old key has no row → null.
+  // Each entry goes through the names validator on its own; one that can never match a name (an
+  // accent, > 32 characters) is skipped and reported, never fatal to the boot. A carried entry
+  // gets the DEFAULT matching (≤ 4 characters → the whole name or one of its words): v1 matched
+  // substrings only to FLAG a name for a human, and an automatic refusal needs the Scunthorpe
+  // rule — the operator can add a `*` on the Names page.
+  // → null | { carried: [entry], skipped: [line], over_cap: [entry] }
+  retireDonorNameBlocklist() {
+    const row = this.db.prepare(
+      "SELECT value FROM pool_config WHERE section = 'incentives' AND key = 'donor_name_blocklist'"
+    ).get();
+    if (!row) return null;
+    const V = PoolSettings.validators.names.blocked_words;
+    const starter = new Set(STARTER_BLOCKLIST.map((w) => NameRule.matchForm(w)));
+    const current = String(this.getSection('names').blocked_words || '').split('\n').filter((l) => l !== '');
+    const have = new Set(current);
+    const carried = [];
+    const skipped = [];
+    const overCap = [];
+    for (const raw of String(row.value == null ? '' : row.value).split(/\r?\n/)) {
+      const line = raw.trim();
+      if (line === '') continue;
+      let entry;
+      try { entry = V(line); } catch (_) { skipped.push(line.slice(0, 40)); continue; }
+      if (entry === '' || have.has(entry) || starter.has(entry.replace(/^[*=]/, ''))) continue;
+      if (current.length + carried.length >= 500) { overCap.push(entry); continue; }
+      have.add(entry);
+      carried.push(entry);
+    }
+    this.db.transaction(() => {
+      if (carried.length) this.updateSection('names', { blocked_words: current.concat(carried).join('\n') }, null);
+      this.db.prepare("DELETE FROM pool_config WHERE section = 'incentives' AND key = 'donor_name_blocklist'").run();
+    })();
+    return { carried, skipped, over_cap: overCap };
   }
 
   // Merge DB settings into a config object (called at startup)

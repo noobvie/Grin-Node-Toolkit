@@ -316,8 +316,12 @@ const L = (extra) => ({ 'X-Games-Link': SECRET, ...(extra || {}) });
     console.log('\n[7] GET /internal/games/config + the typed settings');
     {
       let r = await call(port, { p: '/internal/games/config', headers: L() });
-      ok('defaults: off / chat false / mainnet', r.json.mode === 'off' && r.json.chat_enabled === false && r.json.net === 'mainnet', r.text);
-      ok('the shipped default is OFF (D12 — the opposite of incentives)', PoolSettings.defaults.games.mode === 'off' && PoolSettings.defaults.games.chat_enabled === false);
+      ok('defaults: on / chat true / mainnet (§19.17.2, D30)', r.json.mode === 'on' && r.json.chat_enabled === true && r.json.net === 'mainnet', r.text);
+      ok('the shipped default is ON + chat on — the games\' launch state is what keeps a fresh install hidden (D30)',
+         PoolSettings.defaults.games.mode === 'on' && PoolSettings.defaults.games.chat_enabled === true);
+      settings.updateSection('games', { mode: 'off', chat_enabled: false }, adminId);
+      r = await call(port, { p: '/internal/games/config', headers: L() });
+      ok('a SAVED row overrides the default (the live pool may have saved off)', r.json.mode === 'off' && r.json.chat_enabled === false, r.text);
 
       settings.updateSection('games', { mode: 'preview', chat_enabled: true }, adminId);
       r = await call(port, { p: '/internal/games/config', headers: L() });
@@ -349,31 +353,63 @@ const L = (extra) => ({ 'X-Games-Link': SECRET, ...(extra || {}) });
       ok("chat_enabled 'false' (exact string) is accepted and stored as boolean false", g.chat_enabled === false && g.mode === 'on', JSON.stringify(g));
       const auditRow = db.prepare("SELECT details FROM admin_audit_log WHERE action = 'update_settings' AND target_id = 'games' ORDER BY id DESC LIMIT 1").get();
       ok('a games settings write leaves an update_settings audit row', !!auditRow);
+
+      // The name lists ride on the same answer (§19.17.5, D28) — no second route.
+      r = await call(port, { p: '/internal/games/config', headers: L() });
+      ok('config carries blocked_words (empty by default — the seed is the games\' own) and pool_name',
+        Array.isArray(r.json.blocked_words) && r.json.blocked_words.length === 0 && r.json.pool_name === settings.getSection('pool_info').pool_name, r.text);
+      settings.updateSection('names', { blocked_words: 'Rug Pull\n*cr4p\n=Scammer\nrugpull' }, adminId);
+      r = await call(port, { p: '/internal/games/config', headers: L() });
+      ok('…the operator list arrives folded, prefixes kept, duplicates gone', JSON.stringify(r.json.blocked_words) === '["rugpull","*crap","=scammer"]', r.text);
+      const putName = db.prepare("INSERT INTO pool_config (section, key, value, value_type) VALUES ('names', 'blocked_words', ?, 'string') ON CONFLICT(section, key) DO UPDATE SET value = excluded.value");
+      putName.run('ok\nNOT FOLDED\n<script>\n**x\ngood2');
+      r = await call(port, { p: '/internal/games/config', headers: L() });
+      ok('…a hand-edited row is re-filtered on read (only validator-shaped entries leave the pool)', JSON.stringify(r.json.blocked_words) === '["ok","good2"]', r.text);
+      putName.run(Array.from({ length: 600 }, (_, i) => `w${i}`).join('\n'));
+      r = await call(port, { p: '/internal/games/config', headers: L() });
+      ok('…and capped at 500 entries', r.json.blocked_words.length === 500);
+      settings.updateSection('names', { blocked_words: '' }, adminId);
     }
 
-    console.log('\n[8] health probe → the public nav flag');
+    console.log('\n[8] health probe → the public nav flag (effective mode, §19.17.2)');
     {
       // mode is 'on' from [7]; the probe has not run (startProbe:false).
       ok("before any probe: publicFlag is off even with mode 'on'", link.publicFlag().mode === 'off');
       healthFlips = [];
+      // The fake's first answer has no `launch` — an older games build, or a typo: preview.
       let p = await link.probeOnce();
       ok('healthy games service → probe healthy, schema/uptime recorded', p.healthy === true && p.schema === 1 && p.uptime_s === 42, JSON.stringify(p));
-      ok("…publicFlag reports the configured mode ('on')", link.publicFlag().mode === 'on' && link.publicFlag().chat === false);
+      ok('…a health answer with NO launch field reads as preview', p.launch === 'preview');
+      ok("…so pool 'on' + launch preview → publicFlag 'preview' (the nav stays hidden)", link.publicFlag().mode === 'preview' && link.publicFlag().chat === false);
       ok('…and the flip fired onHealthChange (branding memo flush)', healthFlips.length === 1 && healthFlips[0] === true);
-      ok('publicFlag carries exactly {mode, chat} — no port, no path, no secret',
+      ok('publicFlag carries exactly {mode, chat} — no port, no path, no secret, no launch',
          JSON.stringify(Object.keys(link.publicFlag()).sort()) === '["chat","mode"]');
-
-      gamesHealth = { status: 200, body: { ok: true, net: 'testnet', schema: 1, uptime_s: 1 } };
+      gamesHealth = { status: 200, body: { ok: true, net: 'mainnet', schema: 1, launch: 'on', uptime_s: 42 } };
       p = await link.probeOnce();
-      ok('the OTHER network answering on the port → unhealthy (wrong_network), flag off',
-         p.healthy === false && p.reason === 'wrong_network' && link.publicFlag().mode === 'off', JSON.stringify(p));
+      ok("launch 'on' → publicFlag reports 'on'", p.launch === 'on' && link.publicFlag().mode === 'on');
+      ok('…and the LAUNCH flip (healthy both times) also flushed the branding memo', healthFlips.length === 2 && healthFlips[1] === true);
+      await link.probeOnce();
+      ok('…an unchanged answer flushes nothing', healthFlips.length === 2);
+      for (const junk of ['ON', ' on', 'live', true, 1, null]) {
+        gamesHealth = { status: 200, body: { ok: true, net: 'mainnet', schema: 1, launch: junk, uptime_s: 42 } };
+        await link.probeOnce();
+        if (link.publicFlag().mode !== 'preview') { ok(`launch ${JSON.stringify(junk)} reads as preview`, false, link.publicFlag().mode); }
+      }
+      ok('any launch value but the exact "on" reads as preview (ON, " on", live, true, 1, null)', link.publicFlag().mode === 'preview');
+      gamesHealth = { status: 200, body: { ok: true, net: 'mainnet', schema: 1, launch: 'on', uptime_s: 42 } };
+      await link.probeOnce();
+
+      gamesHealth = { status: 200, body: { ok: true, net: 'testnet', schema: 1, launch: 'on', uptime_s: 1 } };
+      p = await link.probeOnce();
+      ok('the OTHER network answering on the port → unhealthy (wrong_network), flag off, launch forgotten',
+         p.healthy === false && p.reason === 'wrong_network' && p.launch === null && link.publicFlag().mode === 'off', JSON.stringify(p));
       gamesHealth = { status: 503, body: { ok: false, error: 'db_unavailable' } };
       await link.probeOnce();
       ok('games answering 503 → flag off', link.publicFlag().mode === 'off');
       gamesHealth = { status: 200, body: '<html>' };
       await link.probeOnce();
       ok('non-JSON health → flag off', link.publicFlag().mode === 'off');
-      gamesHealth = { status: 200, body: { ok: true, net: 'mainnet', schema: 1, uptime_s: 43 } };
+      gamesHealth = { status: 200, body: { ok: true, net: 'mainnet', schema: 1, launch: 'on', uptime_s: 43 } };
       await link.probeOnce();
       ok('back to healthy → flag on again', link.publicFlag().mode === 'on');
 
@@ -389,7 +425,30 @@ const L = (extra) => ({ 'X-Games-Link': SECRET, ...(extra || {}) });
       settings.updateSection('games', { mode: 'off' }, adminId);
       ok('mode off → chat reported false even with chat_enabled on', link.publicFlag().mode === 'off' && link.publicFlag().chat === false);
       settings.updateSection('games', { mode: 'preview' }, adminId);
-      ok("preview → the payload says 'preview' (branding.js shows the link only on 'on')", link.publicFlag().mode === 'preview');
+      ok("preview → the payload says 'preview' (branding.js shows the link only on 'on')", link.publicFlag().mode === 'preview' && link.publicFlag().chat === true);
+
+      // §19.17.2's whole table, through the real publicFlag(): pool mode ↓ × launch →.
+      const TABLE = [['off', 'preview', 'off'], ['off', 'on', 'off'], ['preview', 'preview', 'preview'],
+        ['preview', 'on', 'preview'], ['on', 'preview', 'preview'], ['on', 'on', 'on']];
+      const got = [];
+      for (const [m, l, want] of TABLE) {
+        settings.updateSection('games', { mode: m }, adminId);
+        gamesHealth = { status: 200, body: { ok: true, net: 'mainnet', schema: 1, launch: l, uptime_s: 44 } };
+        await link.probeOnce();
+        const f = link.publicFlag();
+        got.push(`${m}×${l}=${f.mode}`);
+        if (f.mode !== want || f.chat !== (want !== 'off')) got.push('WRONG');
+      }
+      ok('the truth table: effective = min(pool mode, launch), chat only when not off', !got.includes('WRONG'), got.join(' '));
+      // D5: the two sides keep their own copy of the rule — they must agree on every input.
+      const gm = require(path.join(WEB, 'play/server/lib/mode.js'));
+      const inputs = ['off', 'preview', 'on', 'ON', '', null, undefined, 'constructor', true];
+      const disagree = [];
+      for (const a of inputs) for (const b of inputs) {
+        if (gl.effectiveMode(a, b) !== gm.effectiveMode(a, b)) disagree.push(`${a}×${b}`);
+      }
+      ok('the pool and the games copies of effectiveMode agree on every input (incl. junk)', disagree.length === 0, disagree.join(', '));
+      settings.updateSection('games', { mode: 'preview' }, adminId);
     }
 
     console.log('\n[9] admin proxy: step-up, headers, transport');
@@ -426,6 +485,38 @@ const L = (extra) => ({ 'X-Games-Link': SECRET, ...(extra || {}) });
       ok('…and one pool audit row games_admin (admin, method, path, status)',
          gaudit && gaudit.admin_id === adminId && gaudit.target_id === 'players/grin1abc/ban' && /"method":"POST"/.test(gaudit.details) && /"status":200/.test(gaudit.details), JSON.stringify(gaudit));
       stepUpFresh = false;
+
+      // Go live / Back to preview (§19.17.2): step-up like every non-FAST write, and a 200
+      // re-probes at once so the nav follows without waiting for the 60 s tick.
+      ok('POST launch is step-up pool-side (not a FAST write)', gl.requiresStepUp('POST', 'launch') === true);
+      gamesSeen = [];
+      r = await A('launch', { method: 'POST', headers: J, body: { state: 'on' } });
+      ok('POST launch without step-up → 403 challenge, nothing sent to games', r.status === 403 && r.json.challenge_required === true && gamesSeen.length === 0, `${r.status}`);
+      gamesSeen = [];
+      stepUpFresh = true;
+      settings.updateSection('games', { mode: 'on' }, adminId);
+      gamesHealth = { status: 200, body: { ok: true, net: 'mainnet', schema: 1, launch: 'preview', uptime_s: 45 } };
+      await link.probeOnce();
+      ok('(setup) pool on + launch preview → flag preview', link.publicFlag().mode === 'preview');
+      gamesSeen = [];
+      gamesHealth = { status: 200, body: { ok: true, net: 'mainnet', schema: 1, launch: 'on', uptime_s: 46 } };
+      r = await A('launch', { method: 'POST', headers: J, body: { state: 'on' } });
+      for (let i = 0; i < 40 && link.publicFlag().mode !== 'on'; i++) await new Promise((res) => setTimeout(res, 25));
+      ok('…with step-up → proxied with X-Admin-Stepup: 1', r.status === 200 && gamesSeen[0] && gamesSeen[0].url === '/internal/admin/launch' && gamesSeen[0].headers['x-admin-stepup'] === '1', `${r.status}`);
+      ok('…then the pool re-probes health at once and the flag follows (no 60 s wait)',
+         gamesSeen.some((g) => g.url === '/play/api/health') && link.publicFlag().mode === 'on', JSON.stringify(gamesSeen.map((g) => g.url)));
+      gamesSeen = [];
+      r = await A('launch');
+      await new Promise((res) => setTimeout(res, 50));
+      ok('a GET launch re-probes nothing', r.status === 200 && !gamesSeen.some((g) => g.url === '/play/api/health'));
+      gamesSeen = [];
+      gamesAdmin = (req, body, res) => { res.writeHead(400, { 'Content-Type': 'application/json' }); res.end('{"ok":false,"error":"bad_request","field":"state"}'); };
+      r = await A('launch', { method: 'POST', headers: J, body: { state: 'nope' } });
+      await new Promise((res) => setTimeout(res, 50));
+      ok('a refused POST launch (400) re-probes nothing', r.status === 400 && !gamesSeen.some((g) => g.url === '/play/api/health'));
+      gamesAdmin = (req, body, res) => { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ ok: true, echo: body })); };
+      stepUpFresh = false;
+      settings.updateSection('games', { mode: 'preview' }, adminId);
 
       for (const p of ['chat/messages/991/delete', 'players/grin1abc/mute', 'chat/held/5/approve', 'chat/post', 'events', 'events/3']) {
         gamesSeen = [];
@@ -554,9 +645,91 @@ const L = (extra) => ({ 'X-Games-Link': SECRET, ...(extra || {}) });
     {
       const shell = fs.readFileSync(path.join(WEB, 'public_html/js/public-shell.js'), 'utf8');
       const brand = fs.readFileSync(path.join(WEB, 'public_html/js/branding.js'), 'utf8');
-      ok("NAV has the Play item, marked games: true", /\{ href: '\/play\/',\s*label: 'Play',\s*icon: '🎮', games: true \}/.test(shell));
-      ok('a games item renders HIDDEN with data-games (no flash before the fetch)', /l\.games \? ' data-games="1" style="display:none"' : ''/.test(shell));
-      ok('…in the header and in the footer copy', (shell.match(/\+ gamesAttrs\(l\) \+/g) || []).length === 2);
+      // §19.17.8 (D31, Part C2): Play lives INSIDE the Community group, beside Fortune Board +
+      // Contribute; each child keeps its own gate and the group follows its children.
+      const navSrc = (shell.match(/var NAV = \[[\s\S]*?\n  \];/) || [''])[0];
+      ok('NAV: no standalone Play item any more (it moved into the group)', !/^    \{ href: '\/play\/'/m.test(navSrc));
+      ok("NAV: the group is 'Community' and carries no gate of its own", /\{ label: 'Community', icon: '[^']+', children: \[/.test(navSrc) && !/label: 'Prize Pool'/.test(navSrc));
+      ok("NAV: Play is the group's third child, marked games: true", /\{ href: 'fortune-board\.html',[^\n]*incentives: true \},\s*\n\s*\{ href: 'donate\.html',[^\n]*incentives: true \},\s*\n\s*\{ href: '\/play\/',\s*label: 'Play',\s*icon: '🎮', games: true \}/.test(navSrc), navSrc);
+      ok('a games item renders HIDDEN with data-games (no flash before the fetch)', /if \(l\.games\) return ' data-games="1" style="display:none"';/.test(shell));
+      ok('…in the header and in the footer copy', (shell.match(/\+ gateAttrs\(l\) \+/g) || []).length === 2 && !/gamesAttrs/.test(shell));
+
+      // Behaviour, not text: run the real NAV + gate helpers (public-shell.js) and the real
+      // apply* functions (branding.js) on a tiny fake DOM, over the whole matrix.
+      const fnSrc = (src, name) => (src.match(new RegExp(`function ${name}\\([^)]*\\) \\{[\\s\\S]*?\\n  \\}`)) || [''])[0];
+      const build = new Function(`${navSrc}\n${fnSrc(shell, 'gateAttrs')}\n${fnSrc(shell, 'groupAttrs')}\nreturn { NAV: NAV, gateAttrs: gateAttrs, groupAttrs: groupAttrs };`)();
+      const applyFns = new Function('document', `${fnSrc(brand, 'applyIncentivesNav')}\n${fnSrc(brand, 'applyGamesNav')}\n${fnSrc(brand, 'applyNavGroups')}\n` +
+        'return { applyIncentivesNav: applyIncentivesNav, applyGamesNav: applyGamesNav, applyNavGroups: applyNavGroups };');
+      const initDisplay = (attrs) => (/style="display:none"/.test(attrs) ? 'none' : '');
+      function fakeDom(nav) {
+        const els = [];
+        const groups = [];
+        for (const item of nav) {
+          if (!item.children) continue;
+          const ga = build.groupAttrs(item);
+          const g = { label: item.label, gated: /data-nav-gated/.test(ga), style: { display: initDisplay(ga) }, kids: [] };
+          for (const c of item.children) {
+            const a = build.gateAttrs(c);
+            const el = { label: c.label, inc: /data-incentives/.test(a), games: /data-games/.test(a), style: { display: initDisplay(a) } };
+            g.kids.push(el);
+            els.push(el);
+          }
+          g.querySelectorAll = (sel) => (sel === '.nav-dropdown a' ? g.kids : []);
+          groups.push(g);
+        }
+        const document = { querySelectorAll(sel) {
+          if (sel === '[data-incentives]') return els.filter((e) => e.inc);
+          if (sel === '[data-games]') return els.filter((e) => e.games);
+          if (sel === '.nav-group[data-nav-gated]') return groups.filter((x) => x.gated);
+          throw new Error(`unexpected selector ${sel}`);
+        } };
+        return { document, groups };
+      }
+      const shown = (g) => g.kids.filter((k) => k.style.display !== 'none').map((k) => k.label);
+      {
+        const { groups } = fakeDom(build.NAV);
+        const c = groups.find((g) => g.label === 'Community');
+        ok('before the branding fetch: Community shown with Fortune Board + Contribute, Play hidden',
+           c && c.gated && c.style.display === '' && JSON.stringify(shown(c)) === '["Fortune Board","Contribute"]', c && JSON.stringify(shown(c)));
+        const s = groups.find((g) => g.label === 'Stats');
+        ok('…and an ungated group (Stats) is never touched by the gates', s && !s.gated);
+        const onlyGames = fakeDom([{ label: 'X', children: [{ href: '/play/', label: 'Play', games: true }] }]).groups[0];
+        ok('a group whose every child starts hidden starts hidden itself (no empty dropdown before the fetch)', onlyGames.style.display === 'none');
+      }
+      // §19.17.8's table: incentives × games (effective) → group shown?, which children.
+      const MATRIX = [
+        [true, 'on', true, ['Fortune Board', 'Contribute', 'Play']],
+        [true, 'preview', true, ['Fortune Board', 'Contribute']],
+        [true, 'off', true, ['Fortune Board', 'Contribute']],
+        [false, 'on', true, ['Play']],
+        [false, 'preview', false, []],
+        [false, 'off', false, []],
+      ];
+      for (const [inc, mode, wantGroup, wantKids] of MATRIX) {
+        const { document, groups } = fakeDom(build.NAV);
+        const fns = applyFns(document);
+        const cfg = { incentives: { enabled: inc }, games: { mode, chat: mode !== 'off' } };
+        fns.applyIncentivesNav(cfg); fns.applyGamesNav(cfg); fns.applyNavGroups();
+        const c = groups.find((g) => g.label === 'Community');
+        ok(`incentives ${inc ? 'on' : 'off'} × games ${mode} → group ${wantGroup ? 'shown' : 'HIDDEN'}${wantKids.length ? ': ' + wantKids.join(', ') : ''}`,
+           (c.style.display === '') === wantGroup && JSON.stringify(shown(c)) === JSON.stringify(wantKids), `${c.style.display} ${JSON.stringify(shown(c))}`);
+      }
+      {
+        // Flags flip both ways on one page (the branding payload can be re-applied).
+        const { document, groups } = fakeDom(build.NAV);
+        const fns = applyFns(document);
+        const run = (cfg) => { fns.applyIncentivesNav(cfg); fns.applyGamesNav(cfg); fns.applyNavGroups(); return groups.find((g) => g.label === 'Community'); };
+        run({ incentives: { enabled: false }, games: { mode: 'off' } });
+        const c = run({ incentives: { enabled: false }, games: { mode: 'on' } });
+        ok('hidden → shown again when a child comes back (the gate is re-evaluated, not latched)', c.style.display === '' && JSON.stringify(shown(c)) === '["Play"]');
+        const d = run({});
+        ok('a payload with neither field: incentives links shown (ship ON), Play hidden (ships hidden)', d.style.display === '' && JSON.stringify(shown(d)) === '["Fortune Board","Contribute"]');
+      }
+      ok('applyNavGroups runs AFTER both gates', /applyIncentivesNav\(cfg\);\s*\n\s*applyGamesNav\(cfg\);\s*\n\s*applyNavGroups\(\);/.test(brand));
+      ok('a group never carries data-incentives / data-games itself (one child\'s flag must not hide the others)',
+         !/nav-group[^\n]*\(l\.incentives \?/.test(shell) && !/nav-group[^\n]*\(l\.games \?/.test(shell));
+      ok('the group still lights as active on a child page (/play/ included — fileOf("/play/") === "/play/")',
+         /var childActive = l\.children\.some\(function \(c\) \{ return fileOf\(c\.href\) === here; \}\);/.test(shell));
       // The header is mounted on /play/ and on /blog/<slug>: a relative href resolves under
       // those paths (§19.15 Part 6). Every rendered href goes through abs() or is literal '/…'.
       ok('nav + footer hrefs are rendered through abs()', (shell.match(/'<a href="' \+ abs\(l\.href\) \+ '"/g) || []).length === 2 &&

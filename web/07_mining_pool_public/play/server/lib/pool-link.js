@@ -33,6 +33,10 @@ const LINK_MAX_BYTES = 4096;
 const STAT_MEMO_MS = 1000;
 const GRIN_ADDR_RE = /^t?grin1[ac-hj-np-z02-9]{58}$/;
 const MODES = ['off', 'preview', 'on'];
+// names.blocked_words as the pool sends it: matching forms, an optional * / = prefix (§19.17.5).
+const BLOCKED_MAX = 500;
+const BLOCKED_ENTRY_RE = /^[*=]?[a-z0-9]{1,32}$/;
+const POOL_NAME_MAX = 64;
 
 // Codes:
 //   link_not_configured  our secret file is missing/short, or the pool says the same of its own
@@ -41,6 +45,9 @@ const MODES = ['off', 'preview', 'on'];
 //   link_rejected        the pool refused the request shape (400) — a bug on this side; `field` says which
 //   pool_error           any other non-200 (500, 503 settings_unavailable, …)
 //   bad_response         an answer that is not the documented shape
+//   not_pool_address     the CALLER passed something that is not a pool address — a guest id
+//                        ('g:…', §19.17.3) above all. Refused before anything is sent: a guest
+//                        never reaches the pool (D32, §19.13 #29). A bug on this side, never input.
 class PoolLinkError extends Error {
   constructor(code, extra) {
     super(code);
@@ -140,6 +147,9 @@ function createPoolLink({ config: cfg, clock = () => Date.now(), timeoutMs = TIM
 
   // → { ok:true, method, slot, age_seconds } | { ok:false, reason }
   async function verifyProof(address, proof, clientIp) {
+    if (typeof address !== 'string' || !GRIN_ADDR_RE.test(address) || !address.startsWith(expectPrefix)) {
+      throw new PoolLinkError('not_pool_address');
+    }
     const obj = expectOk(await call('POST', '/internal/games/verify-proof', { address, proof, client_ip: clientIp }));
     if (obj.ok === true) {
       if (obj.method !== 'ip' && obj.method !== 'password') throw new PoolLinkError('bad_response', { why: 'method' });
@@ -179,14 +189,22 @@ function createPoolLink({ config: cfg, clock = () => Date.now(), timeoutMs = TIM
     return { from, to, rows, dropped };
   }
 
-  // → { mode, chat_enabled }. A pool answering for the OTHER network is not our pool.
+  // → { mode, chat_enabled, blocked_words?, pool_name? }. A pool answering for the OTHER
+  // network is not our pool. The two name fields (§19.17.5, C3) are optional: a pool built
+  // before C3 sends neither, and a malformed one is DROPPED (the caller keeps its last copy)
+  // rather than failing the fetch — the mode must never go stale over a word list.
   async function config() {
     const obj = expectOk(await call('GET', '/internal/games/config'));
     if (obj.ok !== true || !MODES.includes(obj.mode) || typeof obj.chat_enabled !== 'boolean') {
       throw new PoolLinkError('bad_response', { why: 'config_shape' });
     }
     if (obj.net !== cfg.net) throw new PoolLinkError('bad_response', { why: 'wrong_network' });
-    return { mode: obj.mode, chat_enabled: obj.chat_enabled };
+    const out = { mode: obj.mode, chat_enabled: obj.chat_enabled };
+    if (Array.isArray(obj.blocked_words) && obj.blocked_words.length <= BLOCKED_MAX) {
+      out.blocked_words = obj.blocked_words.filter((w) => typeof w === 'string' && BLOCKED_ENTRY_RE.test(w));
+    }
+    if (typeof obj.pool_name === 'string' && obj.pool_name.length <= POOL_NAME_MAX) out.pool_name = obj.pool_name;
+    return out;
   }
 
   // The pool → games direction (the admin proxy, §19.3) is authenticated with the SAME file.

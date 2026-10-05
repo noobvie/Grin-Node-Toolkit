@@ -96,6 +96,7 @@ function parseJsonArray(val, fallback) {
 const { STARTER_BLOCKLIST } = require('./donor-names');
 const NameRule = require('./name-rule');
 const explorers = require('./explorers');
+const { MIN_WITHDRAWAL_FEE } = require('./config');
 
 // Own-property membership tests for the settings schema. `defaults[section]` and
 // `key in defaults[section]` both walk Object.prototype, so `constructor`, `toString`,
@@ -308,7 +309,8 @@ class PoolSettings {
       min_withdrawal: 25.0,
       // Flat withdrawal fee (GRIN) deducted from every payout on every rail — recovers the
       // sender-paid on-chain network fee (~0.023 GRIN typical, weight-based not amount-based).
-      // Must stay < min_withdrawal. 0 = the pool absorbs the network fee.
+      // Must stay < min_withdrawal, and is never below MIN_WITHDRAWAL_FEE (0.04) — there is no
+      // "pool absorbs the fee" setting any more (2026-10-05).
       withdrawal_fee: 0.04,
       // `auto_payout` + `payout_frequency` were REMOVED 2026-09-25 (impl doc D10, like D4): an
       // automatic-payout switch and schedule with a UI, read by nothing. Payouts are
@@ -1135,9 +1137,11 @@ PASS      any-password-you-choose</code>
       // a `number` row of +Inf that applyToConfig copied into config.min_withdrawal, where every
       // rail's `amount < minW` test refused forever. It survived restart and rendered as an EMPTY
       // field in the panel (JSON.stringify(Infinity) === 'null'), so it did not even look wrong.
+      // At least 1 GRIN (2026-10-05): it must stay above the withdrawal fee, which is now never
+      // below MIN_WITHDRAWAL_FEE — a floor at or under the fee makes every payout at it unpayable.
       min_withdrawal: (val) => {
         const n = parseFloat(val);
-        if (!Number.isFinite(n) || n <= 0) throw new Error('min_withdrawal must be a finite number > 0');
+        if (!Number.isFinite(n) || n < 1) throw new Error('min_withdrawal must be a finite number >= 1 GRIN');
         return n;
       },
       // Blocks a found block must be buried under before its reward is credited and becomes
@@ -1165,9 +1169,13 @@ PASS      any-password-you-choose</code>
       // Upper bound is a sanity rail, not a policy: a fat-fingered 40 instead of 0.04 would
       // silently swallow a whole payout. The hard invariant (fee < min_withdrawal) is enforced
       // in validateConfig, which sees BOTH values — a per-field validator only sees its own.
+      // Floor = MIN_WITHDRAWAL_FEE (operator decision 2026-10-05: the fee is always charged; a
+      // promotion runs at pool_fee_percent 0 instead). Number.isFinite, like min_withdrawal.
       withdrawal_fee: (val) => {
         const n = parseFloat(val);
-        if (isNaN(n) || n < 0) throw new Error('withdrawal_fee must be >= 0');
+        if (!Number.isFinite(n) || n < MIN_WITHDRAWAL_FEE) {
+          throw new Error(`withdrawal_fee must be at least ${MIN_WITHDRAWAL_FEE} GRIN`);
+        }
         if (n > 1) throw new Error('withdrawal_fee must be <= 1 GRIN (typical network fee is ~0.023)');
         return n;
       },
@@ -1926,16 +1934,26 @@ PASS      any-password-you-choose</code>
     if (payout.withdrawal_fee !== undefined) {
       config.withdrawal_fee = payout.withdrawal_fee;
     }
+    // Floor first: a row stored before the 0.04 minimum (2026-10-05) may hold 0 or 0.02, and
+    // applyToConfig runs on values the validator never saw. Raised, never rejected.
+    if (!(Number(config.withdrawal_fee) >= MIN_WITHDRAWAL_FEE)) {
+      console.warn(
+        `[settings] withdrawal_fee ${JSON.stringify(config.withdrawal_fee)} is below the ` +
+        `${MIN_WITHDRAWAL_FEE} GRIN minimum — using ${MIN_WITHDRAWAL_FEE}`
+      );
+      config.withdrawal_fee = MIN_WITHDRAWAL_FEE;
+    }
     // Cross-field guard, applied AFTER both are merged. The per-field validator can't see the
     // other value, and lowering min_withdrawal on its own can strand an already-stored fee above
-    // the new floor. A fee >= the floor makes an at-minimum payout net <= 0, so fall back to
-    // absorbing it rather than letting the scheduler reject every threshold withdrawal.
-    if (!(config.withdrawal_fee >= 0) || config.withdrawal_fee >= config.min_withdrawal) {
+    // the new floor. A fee >= the floor makes an at-minimum payout net <= 0. The old fallback was
+    // 0 ("the pool absorbs it"), which no longer exists, so fall back to the minimum fee — the
+    // min_withdrawal validator keeps the floor above it, so that is always payable.
+    if (config.withdrawal_fee >= config.min_withdrawal) {
       console.warn(
         `[settings] withdrawal_fee ${config.withdrawal_fee} is invalid against min_withdrawal ` +
-        `${config.min_withdrawal} — falling back to 0 (pool absorbs the network fee)`
+        `${config.min_withdrawal} — falling back to the ${MIN_WITHDRAWAL_FEE} GRIN minimum`
       );
-      config.withdrawal_fee = 0;
+      config.withdrawal_fee = MIN_WITHDRAWAL_FEE;
     }
     // §J5-9: these were readable and writable in the admin panel and applied by NOBODY, so
     // every consumer kept reading pool.json's default. Coerced defensively — the validator is

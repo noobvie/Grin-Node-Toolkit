@@ -78,12 +78,80 @@
       </div>
       <p class="error-msg" id="pay-msg" data-payout-msg style="display:none;margin-top:.6rem;"></p>
 
+    </section>
+
+    <!-- ── Manual payouts (2026-10-05) ─────────────────────────────────────────
+         The two payouts an operator starts by hand. Both go through the same locked Tor flow as a
+         miner's own payout and appear in the queue above. Always OPEN (operator decision
+         2026-10-05): this used to be a collapsed <details>, which hid the one tool a support
+         ticket needs behind a click. -->
+    <section>
+      <h2 data-sec="Manual payouts">Manual payouts</h2>
+      <p style="font-size:.82rem;color:var(--text-dim);margin:-.4rem 0 .8rem;">
+        Payouts you start by hand. Whatever the pool sends goes through the normal locked Tor flow —
+        sent once, recorded automatically, listed in the queue above — and nothing here runs while
+        payouts are frozen.
+      </p>
+
+      <!-- Operator revenue: the pool_fee bucket → the operator's own wallet. -->
+      <h3 class="sub-title">Operator revenue → your wallet</h3>
+      <div class="card" style="padding:1rem;" id="rv-card">
+        <div class="kpi-grid" style="margin-bottom:.8rem;">
+          <div class="kpi-card"><div class="kpi-label" title="The pool_fee bucket: block-reward fee + flat withdrawal fees, minus prize diversions and earlier withdrawals">Pool fee balance</div><div class="kpi-value" id="rv-balance">—</div></div>
+          <div class="kpi-card"><div class="kpi-label" title="Real Grin network fees the pool wallet already paid on payouts, not yet deducted from the pool fee. They are deducted the moment you withdraw.">Network fees not yet booked</div><div class="kpi-value" id="rv-unbooked">—</div></div>
+          <div class="kpi-card"><div class="kpi-label">Available to withdraw</div><div class="kpi-value" id="rv-available">—</div></div>
+        </div>
+        <div id="rv-alert"></div>
+        <div id="rv-channels"></div>
+        <div style="font-size:.88rem;margin-bottom:.7rem;">
+          Revenue address: <span class="mono" id="rv-addr" style="word-break:break-all;">—</span>
+          <span id="rv-hold" style="margin-left:.4rem;"></span>
+        </div>
+        <div id="rv-pending" style="font-size:.85rem;margin-bottom:.6rem;display:none;"></div>
+        <div style="display:flex;gap:.5rem;align-items:flex-end;flex-wrap:wrap;max-width:640px;">
+          <label style="flex:1 1 160px;">Amount ツ
+            <input type="number" id="rv-amount" class="input" step="0.000000001" min="0" placeholder="0.0">
+          </label>
+          <button class="btn btn-sm btn-outline" onclick="fillRevenueMax()" title="Available minus one withdrawal fee, kept back for this withdrawal's own network fee">Max</button>
+          <button class="btn btn-sm" id="rv-withdraw-btn" onclick="withdrawRevenue()" disabled>⚡ Withdraw to revenue address</button>
+        </div>
+        <div id="rv-result" style="font-size:.85rem;margin-top:.5rem;"></div>
+
+        <div style="border-top:1px solid var(--border);margin:.9rem 0 .2rem;padding-top:.8rem;">
+          <div style="font-size:.8rem;color:var(--text-dim);margin-bottom:.5rem;">
+            Change the revenue address. Needs a fresh sign-in check, raises a <strong>critical alert</strong>, and
+            blocks withdrawals to the new address for <strong>24 hours</strong> — so a stolen admin session
+            cannot repoint and empty it in one go.
+          </div>
+          <div style="display:flex;gap:.5rem;align-items:flex-end;flex-wrap:wrap;max-width:640px;">
+            <label style="flex:1 1 320px;">New revenue address
+              <input type="text" id="rv-new-addr" class="input" placeholder="grin1…" autocomplete="off">
+            </label>
+            <button class="btn btn-sm btn-outline" id="rv-save-btn" onclick="saveRevenueAddress()">Save address</button>
+          </div>
+          <div id="rv-save-result" style="font-size:.85rem;margin-top:.4rem;"></div>
+        </div>
+
+        <p style="font-size:.8rem;color:var(--text-dim);margin:.8rem 0 .5rem;">
+          Your wallet must be <strong>listening over Tor</strong> (<code>grin-wallet listen</code>) when the pool
+          sends, exactly like a miner's. Each withdrawal is recorded with its kernel and signed payment proof,
+          and is shown on the public Payments page as <em>Pool operator</em> (never your address).
+          For your records: <a href="/api/admin/export/operator-revenue.csv">⤓ Operator revenue CSV</a>
+          (per UTC day: fee income, prize diversions, network fees, net revenue, withdrawn).
+        </p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>ID</th><th>Requested</th><th>Amount ツ</th><th>Status</th><th>Confirmed</th><th>To</th><th>Kernel</th></tr></thead>
+            <tbody id="rv-tbody"><tr class="loading-row"><td colspan="7"><span class="spinner"></span>Loading…</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+
       <!-- Sub-threshold ("email support to withdraw") payout for a below-minimum miner. It lives
            with the queue because it creates a row in it; its /api/admin/dormancy/* endpoints are
-           a backend naming accident. Collapsed by default — a per-ticket tool, not a daily one. -->
-      <details id="mp-details" style="margin-top:1.2rem;">
-        <summary style="cursor:pointer;font-weight:600;">Manual payout — support request (below-minimum miner)</summary>
-      <p style="font-size:.82rem;color:var(--text-dim);margin:.6rem 0 .7rem;">
+           a backend naming accident. -->
+      <h3 class="sub-title" style="margin-top:1.4rem;">Miner below minimum — support request</h3>
+      <p style="font-size:.82rem;color:var(--text-dim);margin:.2rem 0 .7rem;">
         For a miner below the minimum who emails to withdraw. First <strong>verify they own the address</strong>
         (type the mining IP or rig password they gave you → match/no-match, nothing is revealed). Then either:
         <br>• <strong>Send Tor payout now</strong> — the pool sends it over Tor through the normal locked flow
@@ -140,7 +208,6 @@
           </div>
         </div>
       </div>
-      </details>
     </section>
   </div>
 </main>
@@ -207,6 +274,16 @@ const FAIL_CODE = {
   unknown:                'Held, then proven not sent',
 };
 
+// An operator revenue withdrawal leaves the 'pool_fee' bucket for the operator's own wallet
+// (dest_address). Shown as such — 'pool_fee' alone reads as a payout to nobody.
+const isRevenue = (w) => w.grin_address === 'pool_fee';
+function addrCell(w) {
+  if (isRevenue(w)) {
+    return `<span class="badge badge-ok">Operator revenue</span> → <span class="mono" title="${escHtml(w.dest_address || '')}">${escHtml(shortAddr(w.dest_address || '—'))}</span>`;
+  }
+  return `<span class="mono" title="${escHtml(w.grin_address)}">${escHtml(shortAddr(w.grin_address))}</span>`;
+}
+
 function matchesFilter(w) {
   if (_filter === 'all') return true;
   if (_filter === 'active') return PAYOUT_ACTIVE_STATUSES.includes(w.status);
@@ -230,7 +307,8 @@ const payTable = AdminTable.create({
   urlQuery: true,
   empty: 'No withdrawals in this view.',
   note: 'Payout records are kept permanently — this view loads the 100 most recent.',
-  text: w => [w.id, w.grin_address, w.status, (STATUS[w.status] || [])[1], w.method, railOf(w),
+  text: w => [w.id, w.grin_address, w.dest_address, isRevenue(w) ? 'operator revenue' : '', w.status,
+              (STATUS[w.status] || [])[1], w.method, railOf(w),
               w.cancel_reason, w.fail_code, w.fail_detail, (CHAIN[w.chain_state] || [])[1]].join(' '),
   row: w => {
     const [cls, status] = STATUS[w.status] || ['badge-dim', w.status];
@@ -274,7 +352,7 @@ const payTable = AdminTable.create({
     }
     return `<tr>
       <td class="mono">${w.id}</td>
-      <td><span class="mono" title="${escHtml(w.grin_address)}">${escHtml(shortAddr(w.grin_address))}</span></td>
+      <td>${addrCell(w)}</td>
       <td class="mono">${fmtGrin(w.amount)}</td>
       <td><span class="badge ${cls}"${reason}>${escHtml(label)}</span>${chainBadge}</td>
       <td>${why}</td>
@@ -397,10 +475,175 @@ async function cancelWithdrawal(id, amount) {
 }
 
 // The payout kill-switch (renderFreeze / loadPayoutControl / togglePayouts) is in payouts-common.js.
-function refresh() { loadQueueSummary(); loadWithdrawals(); loadPayoutControl(); }
+function refresh() { loadQueueSummary(); loadWithdrawals(); loadPayoutControl(); loadRevenue(); }
+
+// ── Operator revenue (pool_fee bucket → the operator's saved address) ─────────
+// GET /api/admin/revenue is SQL only (no wallet call), so it rides the 30 s refresh. The
+// withdraw form never takes an address: the server sends to the SAVED one and checks that the
+// address this page shows is still the saved one (it echoes it back) — see index.js.
+let _rev = null;
+function holdText(s) {
+  const h = Math.floor(s / 3600), m = Math.ceil((s % 3600) / 60);
+  return h ? `${h} h ${m} min` : `${m} min`;
+}
+async function loadRevenue() {
+  try {
+    _rev = await API.get('/api/admin/revenue');
+    renderRevenue(_rev);
+  } catch (err) {
+    document.getElementById('rv-tbody').innerHTML = `<tr><td colspan="7">${escHtml(err.message)}</td></tr>`;
+  }
+}
+function renderRevenue(d) {
+  document.getElementById('rv-balance').textContent = fmtGrin(d.balance) + ' ツ';
+  document.getElementById('rv-unbooked').textContent = fmtGrin(d.unbooked_network_fees) + ' ツ';
+  document.getElementById('rv-available').textContent = fmtGrin(d.available) + ' ツ';
+
+  document.getElementById('rv-addr').textContent = d.address || 'not set';
+  const hold = document.getElementById('rv-hold');
+  if (!d.address) {
+    hold.innerHTML = '<span class="badge badge-warn">set one below to withdraw</span>';
+  } else if (d.hold_remaining_s > 0) {
+    hold.innerHTML = `<span class="badge badge-warn" title="Unlocks ${escHtml(fmtTs(d.usable_at))}">24 h hold — ${escHtml(holdText(d.hold_remaining_s))} left</span>`;
+  } else {
+    hold.innerHTML = '<span class="badge badge-ok">ready</span>';
+  }
+
+  // The address-change alarm cannot be closed until the 24 h hold ends (server-enforced:
+  // AlertMonitor.closeLockedUntil) — so whoever changed the address cannot also silence it.
+  const alertBox = document.getElementById('rv-alert');
+  const lockedUntil = Number(d.address_alert_locked_until) || 0;
+  alertBox.innerHTML = d.address_alert
+    ? `<div class="health-card warn" style="margin-bottom:.8rem;">
+         <div class="health-detail">⚠ ${escHtml(d.address_alert.message)}</div>
+         ${lockedUntil
+           ? `<div class="health-detail" style="margin-top:.4rem;">This alert stays up until the hold ends (${escHtml(fmtTs(lockedUntil))}). If you did not make this change, set the address back now.</div>`
+           : `<button class="btn btn-sm btn-outline" style="margin-top:.5rem;" onclick="closeAddressAlert(${Number(d.address_alert.id)})">It was me — close this alert</button>`}
+       </div>`
+    : '';
+
+  // The hold only protects revenue if someone hears about a change within 24 h. Off-box channels
+  // come from pool.json (not editable from this panel), so a stolen session cannot switch them off.
+  const ch = d.alert_channels || {};
+  const on = Object.keys(ch).filter((k) => ch[k]);
+  document.getElementById('rv-channels').innerHTML = on.length
+    ? `<div style="font-size:.8rem;color:var(--text-dim);margin-bottom:.6rem;">Address changes are pushed to: ${escHtml(on.join(', '))}.</div>`
+    : `<div class="health-card warn" style="margin-bottom:.8rem;"><div class="health-detail">⚠ No off-box alert channel (Telegram, email, Discord, Slack) is configured, so an address change is announced only inside this panel. Set one up in pool.json — the 24 h hold protects your revenue only if you hear about a change in time.</div></div>`;
+
+  const pend = document.getElementById('rv-pending');
+  if (d.pending) {
+    const label = (STATUS[d.pending.status] || [])[1] || d.pending.status;
+    pend.style.display = '';
+    pend.textContent = `Withdrawal #${d.pending.id} (${fmtGrin(d.pending.amount)} ツ) is in progress — ${label}. The next one can start when it settles.`;
+  } else {
+    pend.style.display = 'none';
+  }
+
+  document.getElementById('rv-withdraw-btn').disabled =
+    !d.address || d.hold_remaining_s > 0 || !!d.pending || !!d.frozen || !(d.available > 0);
+
+  const rows = Array.isArray(d.history) ? d.history : [];
+  document.getElementById('rv-tbody').innerHTML = rows.length
+    ? rows.map((w) => {
+        const [cls, status] = STATUS[w.status] || ['badge-dim', w.status];
+        const k = String(w.kernel_excess || '');
+        return `<tr>
+          <td class="mono">${w.id}</td>
+          <td>${fmtTs(w.created_at)}</td>
+          <td class="mono">${fmtGrin(w.amount)}</td>
+          <td><span class="badge ${cls}">${escHtml(status)}</span></td>
+          <td>${fmtTs(w.confirmed_at)}</td>
+          <td><span class="mono" title="${escHtml(w.dest_address || '')}">${escHtml(shortAddr(w.dest_address || '—'))}</span></td>
+          <td>${k ? `<span class="mono" title="${escHtml(k)}">${escHtml(k.slice(0, 8) + '…' + k.slice(-6))}</span>` : '<span style="color:var(--text-dim)">—</span>'}</td>
+        </tr>`;
+      }).join('')
+    : '<tr><td colspan="7" style="color:var(--text-dim)">No revenue withdrawals yet.</td></tr>';
+}
+// Max keeps one withdrawal fee back. The revenue withdrawal pays its OWN network fee (~0.023), and
+// that fee is booked to the pool fee at the NEXT withdrawal — sending every last nanogrin would
+// leave the bucket briefly negative by it. The flat fee (≥ 0.04) always covers one plain payout.
+function fillRevenueMax() {
+  if (!_rev) return;
+  const reserve = Math.max(Number(_rev.withdrawal_fee) || 0, 0.04);
+  const max = Math.floor((Number(_rev.available) - reserve) * 1e9) / 1e9;
+  document.getElementById('rv-amount').value = max > 0 ? max.toFixed(9).replace(/.?0+$/, '') : '';
+  const out = document.getElementById('rv-result');
+  out.textContent = max > 0
+    ? `Max keeps ${fmtGrin(reserve)} ツ back for this withdrawal's own network fee.`
+    : 'Not enough revenue to cover a withdrawal and its network fee yet.';
+  out.style.color = 'var(--text-dim)';
+}
+async function withdrawRevenue() {
+  const out = document.getElementById('rv-result');
+  const btn = document.getElementById('rv-withdraw-btn');
+  const amount = parseFloat(document.getElementById('rv-amount').value);
+  if (!_rev || !_rev.address) { out.textContent = 'set a revenue address first'; out.style.color = 'var(--warn)'; return; }
+  if (!(amount > 0)) { out.textContent = 'enter a positive amount'; out.style.color = 'var(--warn)'; return; }
+  const fees = Number(_rev.unbooked_network_fees) || 0;
+  const feeLine = fees > 0
+    ? `\n\nFirst, ${fmtGrin(fees)} ツ of payout network fees the pool wallet already paid is deducted from the pool fee.`
+    : '';
+  if (!confirm(`Send ${amount} ツ of operator revenue over Tor to\n${_rev.address}?${feeLine}\n\nYour wallet must be listening over Tor.`)) return;
+  btn.disabled = true;
+  out.textContent = 'sending…'; out.style.color = 'var(--text-dim)';
+  try {
+    const res = await adminFetch('/api/admin/revenue/withdraw', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ amount, address: _rev.address })
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.error || ('HTTP ' + res.status));
+    out.textContent = `✓ queued (#${body.withdrawal_id}, ${fmtGrin(body.amount)} ツ) — sending over Tor` +
+      (body.network_fees_booked > 0 ? `; ${fmtGrin(body.network_fees_booked)} ツ of network fees booked` : '');
+    out.style.color = 'var(--ok)';
+    document.getElementById('rv-amount').value = '';
+    refresh();
+  } catch (err) {
+    out.textContent = err.message; out.style.color = 'var(--danger)';
+    if (_rev) renderRevenue(_rev);   // re-derive the button state the click disabled
+  }
+}
+async function saveRevenueAddress() {
+  const out = document.getElementById('rv-save-result');
+  const btn = document.getElementById('rv-save-btn');
+  const address = document.getElementById('rv-new-addr').value.trim();
+  if (!address) { out.textContent = 'enter an address'; out.style.color = 'var(--warn)'; return; }
+  if (!confirm(`Set the operator revenue address to\n${address}?\n\nWithdrawals to it stay blocked for 24 hours, and a critical alert is raised.`)) return;
+  btn.disabled = true;
+  out.textContent = 'saving…'; out.style.color = 'var(--text-dim)';
+  try {
+    const res = await adminFetch('/api/admin/revenue/address', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ address })
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.error || ('HTTP ' + res.status));
+    out.textContent = `✓ saved — withdrawals to it unlock ${fmtTs(body.usable_at)}`;
+    out.style.color = 'var(--ok)';
+    document.getElementById('rv-new-addr').value = '';
+    loadRevenue();
+  } catch (err) { out.textContent = err.message; out.style.color = 'var(--danger)'; }
+  finally { btn.disabled = false; }
+}
+// Closes the address-change alarm once the operator has confirmed the change was theirs. Uses the
+// shared manual-resolve route (step-up, audited, note REQUIRED) — the same one health.html uses.
+async function closeAddressAlert(id) {
+  const note = prompt('Confirm this revenue address change was yours. The note goes in the audit log:', 'revenue address change was mine');
+  if (note === null) return;
+  try {
+    const res = await adminFetch('/api/admin/alerts/' + id + '/resolve', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ note })
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.error || ('HTTP ' + res.status));
+    flash('Address-change alert closed.', false);
+    loadRevenue();
+  } catch (err) { flash(err.message, true); }
+}
 
 // ── Manual payout (below-minimum support request) ─────────────────────────────
-// The collapsed card under the queue. Its endpoints sit under /api/admin/dormancy/* for
+// The card in Manual payouts, under the revenue card. Its endpoints sit under /api/admin/dormancy/* for
 // historical reasons only — it pays a miner who asked, it does not touch the dormancy sweep
 // (that is dormant.html). Every payout it makes appears in the queue above.
 async function verifyOwner() {

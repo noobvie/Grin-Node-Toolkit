@@ -55,19 +55,21 @@
           <div class="form-row">
             <div class="form-group">
               <label for="min_withdrawal">Minimum Withdrawal (GRIN)</label>
-              <input type="number" id="min_withdrawal" name="min_withdrawal" min="0.01" step="0.01" value="25">
+              <input type="number" id="min_withdrawal" name="min_withdrawal" min="1" step="0.01" value="25">
               <div class="helper-text">Miners must accumulate at least this much to withdraw</div>
             </div>
             <div class="form-group">
               <label for="withdrawal_fee">Withdrawal Fee (GRIN)</label>
-              <input type="number" id="withdrawal_fee" name="withdrawal_fee" min="0" max="1" step="0.001" value="0.04">
+              <input type="number" id="withdrawal_fee" name="withdrawal_fee" min="0.04" max="1" step="0.001" value="0.04">
               <div class="helper-text">
                 Flat fee deducted from every payout, on every rail. Recovers the Grin
                 <b>blockchain</b> transaction fee, which the <b>sender</b> pays and which is charged
                 by transaction size, not amount — so a payout costs the pool roughly the same
-                whether it's 25 or 2500 GRIN (typically ~0.023). Must be less than the minimum
-                withdrawal. Set <b>0</b> to have the pool absorb it. Miners see the fee and their
-                net amount before they submit.
+                whether it's 25 or 2500 GRIN (typically ~0.023). <b>At least 0.04</b> and less than
+                the minimum withdrawal — it is always charged (run a promotion with a 0% pool fee
+                instead). It is a fixed price you set here; the pool never changes it on its own,
+                but it warns you (alert <i>network_fee_cost</i>) if recent payouts start costing
+                more on chain than this. Miners see the fee and their net amount before they submit.
                 <br><br>
                 Shown to miners as <b>&ldquo;withdrawal fee&rdquo;</b>, not &ldquo;blockchain
                 fee&rdquo;, on purpose: it is a flat rate, while the payments page publishes the

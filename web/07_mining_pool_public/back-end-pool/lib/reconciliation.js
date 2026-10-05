@@ -6,8 +6,9 @@
  *   1. Coverage — does the on-chain wallet hold at least what the ledger owes? LIQUID (spendable
  *      coins vs currently-withdrawable balances = can we pay now) vs FULL (HELD = total + locked,
  *      incl. maturing coinbase and in-flight payouts' inputs, vs everything owed = long-run
- *      solvency). Both gaps are net of recorded payout
- *      network fees (withdrawals.fee) — a sender-paid cost the ledger never debits.
+ *      solvency). Both gaps are net of payout network fees (withdrawals.fee) the ledger has
+ *      not booked yet — a sender-paid cost booked to the pool_fee bucket only when the operator
+ *      withdraws revenue (fee_booked tracks how much of each row is booked).
  *   2. Flow statement — external money IN (block rewards, fee, top-ups, admin injects) vs OUT
  *      (confirmed payouts, orphan clawbacks) over lifetime / 7d / 24h.
  *   3. Integrity invariant — SUM(balance+locked) across ALL accounts must equal the net of the
@@ -41,6 +42,7 @@ async function computeReconciliation(db, wallet, forceRefresh = true) {
       COALESCE(SUM(CASE WHEN event_type='credit'   AND reference_type='admin_inject' THEN ${amt} END),0) AS in_inject,
       COALESCE(SUM(CASE WHEN event_type='credit'   AND reference_type='topup'        THEN ${amt} END),0) AS in_topup,
       COALESCE(SUM(CASE WHEN event_type='debit'    AND reference_type='withdrawal'   THEN ${amt} END),0) AS out_payout,
+      COALESCE(SUM(CASE WHEN event_type='debit'    AND reference_type='operator_withdrawal' THEN ${amt} END),0) AS out_operator,
       COALESCE(SUM(CASE WHEN event_type='reversal' AND reference_type='block'        THEN ${amt} END),0) AS out_orphan`;
   const flowStmt = db.prepare(
     `SELECT ${FLOW_CASES('amount')} FROM balance_log WHERE created_at >= ?`
@@ -65,11 +67,14 @@ async function computeReconciliation(db, wallet, forceRefresh = true) {
     }
     const fees = payoutFeeStmt.get(cutoff).fees;
     const inTotal = f.in_block + f.in_fee + f.in_inject + f.in_topup;
-    const outTotal = f.out_payout + f.out_orphan;
+    // Operator revenue withdrawals are real coins leaving the wallet, so they are OUT — but on
+    // their own line: `payouts` means paid to miners, and the payments page reads it that way.
+    const outTotal = f.out_payout + f.out_operator + f.out_orphan;
     return {
       in: { block_rewards: r9(f.in_block), pool_fee: r9(f.in_fee), admin_inject: r9(f.in_inject),
             prize_topup: r9(f.in_topup), total: r9(inTotal) },
-      out: { payouts: r9(f.out_payout), payout_network_fees: r9(fees), orphan_clawback: r9(f.out_orphan),
+      out: { payouts: r9(f.out_payout), operator_withdrawals: r9(f.out_operator),
+             payout_network_fees: r9(fees), orphan_clawback: r9(f.out_orphan),
              total: r9(outTotal) },
       net: r9(inTotal - outTotal),
     };
@@ -105,9 +110,13 @@ async function computeReconciliation(db, wallet, forceRefresh = true) {
   // Both land in the same pseudo-account and are both fee income, so `collected` counts both.
   // Neither is external money IN (see FLOW_CASES) — they are internal transfers of GRIN the
   // pool already held, so they are intentionally absent from the flow statement's in/out.
+  // 'network_fee' = payout chain fees booked against the bucket (WithdrawalScheduler
+  // _bookNetworkFees, in each revenue withdrawal); 'operator_withdrawal' = revenue sent out.
   const FEE_CASES = (amt) => `
     SELECT COALESCE(SUM(CASE WHEN event_type='credit' AND reference_type IN ('pool_fee','withdrawal_fee') THEN ${amt} END),0) AS collected,
-           COALESCE(SUM(CASE WHEN event_type='debit'  AND reference_type='fee_cut'  THEN ${amt} END),0) AS diverted`;
+           COALESCE(SUM(CASE WHEN event_type='debit'  AND reference_type='fee_cut'  THEN ${amt} END),0) AS diverted,
+           COALESCE(SUM(CASE WHEN event_type='debit'  AND reference_type='network_fee' THEN ${amt} END),0) AS network_booked,
+           COALESCE(SUM(CASE WHEN event_type='debit'  AND reference_type='operator_withdrawal' THEN ${amt} END),0) AS withdrawn`;
   const feeAgg = composite(
     `${FEE_CASES('amount')} FROM balance_log WHERE grin_address='pool_fee' AND created_at >= ?`,
     `${FEE_CASES('total_amount')} FROM balance_log_daily WHERE grin_address='pool_fee' AND day < ?`,
@@ -193,13 +202,19 @@ async function computeReconciliation(db, wallet, forceRefresh = true) {
   // fees) less than raw owed. Add them back so the gap measures only the UNEXPLAINED shortfall
   // — otherwise accumulated fees slowly drag the gap negative and false-trip the
   // coverage_shortfall auto-freeze (or mask a small real shortfall of the same size).
+  // Only the fees NOT yet booked (fee − fee_booked): a booked fee has already been debited from
+  // the pool_fee bucket (a 'network_fee' ledger row), so `owed` already fell by it — adding it
+  // back too would count it twice and hide a real shortfall of the same size.
   const network_fees_paid = payoutFeeStmt.get(0).fees;
+  const network_fees_unbooked = db.prepare(
+    `SELECT COALESCE(SUM(fee - fee_booked),0) AS s FROM withdrawals WHERE status='confirmed' AND fee > fee_booked`
+  ).get().s;
   const spendableOwed = ledger.sum_balance;   // withdrawable now (incl. operator buckets)
   const totalOwed = ledgerTotal;
-  const coverage_liquid_gap = r9(walletBalance.spendable - spendableOwed + network_fees_paid);
+  const coverage_liquid_gap = r9(walletBalance.spendable - spendableOwed + network_fees_unbooked);
   // HELD, not `total` — see walletBalance.held above: `total` drops by a payout's whole inputs
   // while it is in flight, which read every concurrent payout as an under-funded pool.
-  const coverage_full_gap = r9(walletBalance.held - totalOwed + network_fees_paid);
+  const coverage_full_gap = r9(walletBalance.held - totalOwed + network_fees_unbooked);
   const locked_drift = r9(ledger.sum_locked - pending.amt);
 
   return {
@@ -217,7 +232,15 @@ async function computeReconciliation(db, wallet, forceRefresh = true) {
           balance: r9(feeBalance),
           collected: r9(feeAgg.collected),
           diverted_to_prizes: r9(feeAgg.diverted),
-          operator_realized: r9(feeAgg.collected - feeAgg.diverted - feeBalance),
+          // Payout chain fees: already debited from the bucket, and still waiting to be.
+          network_fees_booked: r9(feeAgg.network_booked),
+          network_fees_unbooked: r9(network_fees_unbooked),
+          // What the operator could withdraw now (the bucket net of the unbooked fees).
+          available: r9(Math.max(0, feeBalance - network_fees_unbooked)),
+          // Revenue actually sent to the operator's wallet ('operator_withdrawal' debits). Was
+          // derived as collected − diverted − balance, which also counted any other debit (and,
+          // from 2026-10-05, booked network fees) as "realized" — it is read directly now.
+          operator_realized: r9(feeAgg.withdrawn),
         },
         prize_pool: {
           balance: r9(prizeBalance),
@@ -235,6 +258,7 @@ async function computeReconciliation(db, wallet, forceRefresh = true) {
     flows: { lifetime: flow(0), d7: flow(now - 7 * 86400), d1: flow(now - 86400) },
     checks: {
       network_fees_paid: r9(network_fees_paid),
+      network_fees_unbooked: r9(network_fees_unbooked),
       coverage_liquid_gap,
       coverage_liquid_ok: !walletReachable ? null : coverage_liquid_gap >= -TOL,
       coverage_full_gap,

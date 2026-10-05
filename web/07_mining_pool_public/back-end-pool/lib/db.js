@@ -392,7 +392,12 @@ function migrateWithdrawals() {
       // Manual slatepack rail: the armored S1 handed to the miner, and the "pool-wallet cancel
       // still owed" flag (see CREATE TABLE). Legacy rows: NULL / 0 — nothing to re-show or cancel.
       slatepack_s1: 'TEXT DEFAULT NULL',
-      slate_cancel_pending: 'INTEGER NOT NULL DEFAULT 0'
+      slate_cancel_pending: 'INTEGER NOT NULL DEFAULT 0',
+      // Operator revenue withdrawals (see CREATE TABLE). Legacy rows: NULL / 0 — no row was an
+      // operator withdrawal, and NO network fee was ever booked to the ledger before this column,
+      // so 0 is the correct value: the first revenue withdrawal books the whole history at once.
+      dest_address: 'TEXT DEFAULT NULL',
+      fee_booked: 'REAL NOT NULL DEFAULT 0.0'
     };
     for (const [name, def] of Object.entries(additions)) {
       if (!have.has(name)) {
@@ -800,7 +805,17 @@ function createSchema() {
       -- 1 = this row was refunded but grin-wallet's cancel_tx for its slate has not succeeded
       -- yet, so the pool wallet may still hold the slate's inputs locked. Set in the SAME
       -- transaction as the expiry refund; cleared once the cancel lands (retryExpiredSlateCancels).
-      slate_cancel_pending INTEGER NOT NULL DEFAULT 0
+      slate_cancel_pending INTEGER NOT NULL DEFAULT 0,
+      -- Operator revenue withdrawals only (grin_address = 'pool_fee', which is a ledger bucket,
+      -- not a wallet): the grin1 address the coins are SENT to — the operator's saved revenue
+      -- address at request time. NULL on every miner row, where grin_address is the destination.
+      dest_address TEXT DEFAULT NULL,
+      -- How much of this row's REAL network fee (fee) has been debited from the pool_fee bucket
+      -- as a 'network_fee' ledger row. The pool wallet pays every payout's chain fee, but the
+      -- ledger books those costs in one batch each time the operator withdraws revenue
+      -- (WithdrawalScheduler._bookNetworkFees). fee − fee_booked on confirmed rows = fees the
+      -- ledger has not booked yet; reconciliation adds exactly that back to its coverage gaps.
+      fee_booked REAL NOT NULL DEFAULT 0.0
     )`,
 
     `CREATE INDEX IF NOT EXISTS idx_withdrawal_address ON withdrawals(grin_address, status)`,
@@ -1014,6 +1029,19 @@ function createSchema() {
       slatepack_address TEXT NOT NULL,
       adopted_at INTEGER NOT NULL DEFAULT (unixepoch()),
       adopted_by TEXT DEFAULT NULL
+    )`,
+
+    // Operator revenue address (single row, id=1): where "Withdraw operator revenue" sends the
+    // pool_fee bucket. Its own table, not a pool_config key, because changing it is a money
+    // event, not a setting: step-up, audit row, critical alert, and a 24 h hold (set_at) before
+    // a withdrawal may go to the NEW address — a stolen admin session must not be able to repoint
+    // and drain in one sitting. prev_address is kept only to name both ends in the alert/audit.
+    `CREATE TABLE IF NOT EXISTS operator_revenue (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      address TEXT NOT NULL,
+      set_at INTEGER NOT NULL DEFAULT (unixepoch()),
+      set_by INTEGER DEFAULT NULL,
+      prev_address TEXT DEFAULT NULL
     )`,
 
     `CREATE TABLE IF NOT EXISTS pool_config (

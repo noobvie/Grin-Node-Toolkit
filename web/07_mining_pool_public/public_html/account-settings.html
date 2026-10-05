@@ -882,8 +882,8 @@
                             </div>
                             <div class="table-scroll">
                                 <table class="data-table" aria-label="Withdrawal history">
-                                    <thead><tr><th>Requested</th><th>Method</th><th>Status</th><th class="num">Amount</th><th class="num">Fee</th><th>Confirmed</th><th>Proof</th></tr></thead>
-                                    <tbody id="log-wd"><tr><td colspan="7">—</td></tr></tbody>
+                                    <thead><tr><th>Requested</th><th>Method</th><th>Status</th><th class="num">Amount</th><th class="num" title="The flat withdrawal fee charged on this payout. It covers the Grin network fee, which the pool wallet pays.">Withdrawal fee</th><th class="num" title="What reached your wallet: the amount minus the withdrawal fee">You received</th><th>Confirmed</th><th>Proof</th></tr></thead>
+                                    <tbody id="log-wd"><tr><td colspan="8">—</td></tr></tbody>
                                 </table>
                             </div>
                             <div class="pager-row">
@@ -2578,23 +2578,35 @@
             tbody.textContent = '';
             if (!rows.length) {
                 const tr = document.createElement('tr'), td = document.createElement('td');
-                td.colSpan = 7; td.textContent = wd.page > 0 ? 'No more entries' : 'No payouts yet';
+                td.colSpan = 8; td.textContent = wd.page > 0 ? 'No more entries' : 'No payouts yet';
                 tr.appendChild(td); tbody.appendChild(tr);
             }
             rows.forEach(row => {
                 const tr = document.createElement('tr');
+                // The fee shown is the FLAT withdrawal fee the miner was charged (fee_charged),
+                // never row.fee — that is the real chain fee the POOL wallet paid (~0.02), and
+                // showing it here contradicted the 0.04 the request form quoted (2026-10-05).
+                // The fee is taken only when a payout is paid: a pending one shows the fee it
+                // WILL take (received follows once it lands), a failed / cancelled / expired one
+                // returned the whole amount, so it shows neither. Payouts from before the flat
+                // fee carry fee_charged 0, which is what they were charged.
+                const fee = Number(row.fee_charged || 0);
+                const paid = row.status === 'confirmed';
+                const pending = PENDING_IN_FLIGHT.indexOf(row.status) !== -1 ||
+                                PENDING_SLOW.indexOf(row.status) !== -1 || row.status === 'slatepack_pending';
                 const cells = [
                     fmtShort(row.created_at),
                     PayoutMethods.methodLabel(row.method),
                     PayoutMethods.statusLabel(row),
                     '−' + Number(row.amount || 0).toFixed(4),
-                    Number(row.fee || 0).toFixed(4),
+                    (paid || pending) ? fee.toFixed(4) : '—',
+                    paid ? (Number(row.amount || 0) - fee).toFixed(4) : '—',
                     row.confirmed_at ? fmtShort(row.confirmed_at) : '—'
                 ];
                 cells.forEach((text, i) => {
                     const td = document.createElement('td');
                     if (i === 3) td.className = 'num amt-out';
-                    else if (i === 4) td.className = 'num';
+                    else if (i === 4 || i === 5) td.className = 'num';
                     td.textContent = text;
                     tr.appendChild(td);
                 });
@@ -2670,13 +2682,13 @@
                 return;
             }
             const tbody = $id('log-wd');
-            tbody.innerHTML = '<tr><td colspan="7">Loading…</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="8">Loading…</td></tr>';
             try {
                 const data = await getJson('/api/account/' + encodeURIComponent(currentAddr) +
                     '/withdrawals?limit=' + PAGE_SIZE + '&offset=' + (wd.page * PAGE_SIZE));
                 renderWithdrawals((data && data.withdrawals) || [], (data && data.total) || 0);
             } catch (e) {
-                tbody.innerHTML = '<tr><td colspan="7">History unavailable</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="8">History unavailable</td></tr>';
             }
         }
 
@@ -3233,13 +3245,13 @@
                 price: { data: { usd: 0.0181, btc: 0.00000028 } },
                 ledger: { in: logIn, out: logOut },
                 withdrawals: [
-                    { created_at: now - 2 * 86400,  confirmed_at: now - 2 * 86400 + 900,  method: 'tor',       status: 'confirmed', amount: 25.0, fee: 0.008, kernel_excess: '08b1f6d2c4a3e5079b8c1d2e3f405162738495a6b7c8d9e0f1a2b3c4d5e6f70819' },
-                    { created_at: now - 9 * 86400,  confirmed_at: now - 9 * 86400 + 1200, method: 'slatepack', status: 'confirmed', amount: 25.0, fee: 0.008, kernel_excess: '09a2e7c3d5b40618ac9d0e1f2031425364758697a8b9cadbecfd0e1f203142536' },
-                    { created_at: now - 16 * 86400, confirmed_at: null,                   method: 'tor',       status: 'tor_failed', fail_code: 'wallet_offline', amount: 20.0, fee: 0.0 },
-                    { created_at: now - 23 * 86400, confirmed_at: now - 23 * 86400 + 800,  method: 'tor',       status: 'confirmed', amount: 30.0, fee: 0.008, kernel_excess: '08c3d8e4f60517b2ad0e1f2031425364758697a8b9cadbecfd0e1f2031425364a' },
-                    { created_at: now - 38 * 86400, confirmed_at: now - 38 * 86400 + 600,  method: 'nostr',     status: 'confirmed', amount: 28.5, fee: 0.008, kernel_excess: '09d4e9f5071628c3be1f20314253647586a7b8c9daebfc0d1e2f3041526374859' },
-                    { created_at: now - 52 * 86400, confirmed_at: now - 52 * 86400 + 700,  method: 'tor',       status: 'confirmed', amount: 40.0, fee: 0.008, kernel_excess: '08e5f0061728d3c4af203142536475869708b9cadbecfd0e1f2031425364758a6' },
-                    { created_at: now - 70 * 86400, confirmed_at: now - 70 * 86400 + 900,  method: 'tor',       status: 'confirmed', amount: 35.0, fee: 0.008, kernel_excess: '09f6010728e3d4b5c02031425364758697a8b9c0d1e2f30415263748596a7b8c9' }
+                    { created_at: now - 2 * 86400,  confirmed_at: now - 2 * 86400 + 900,  method: 'tor',       status: 'confirmed', amount: 25.0, fee: 0.008, fee_charged: 0.04, kernel_excess: '08b1f6d2c4a3e5079b8c1d2e3f405162738495a6b7c8d9e0f1a2b3c4d5e6f70819' },
+                    { created_at: now - 9 * 86400,  confirmed_at: now - 9 * 86400 + 1200, method: 'slatepack', status: 'confirmed', amount: 25.0, fee: 0.008, fee_charged: 0.04, kernel_excess: '09a2e7c3d5b40618ac9d0e1f2031425364758697a8b9cadbecfd0e1f203142536' },
+                    { created_at: now - 16 * 86400, confirmed_at: null,                   method: 'tor',       status: 'tor_failed', fail_code: 'wallet_offline', amount: 20.0, fee: 0.0, fee_charged: 0.04 },
+                    { created_at: now - 23 * 86400, confirmed_at: now - 23 * 86400 + 800,  method: 'tor',       status: 'confirmed', amount: 30.0, fee: 0.008, fee_charged: 0.04, kernel_excess: '08c3d8e4f60517b2ad0e1f2031425364758697a8b9cadbecfd0e1f2031425364a' },
+                    { created_at: now - 38 * 86400, confirmed_at: now - 38 * 86400 + 600,  method: 'nostr',     status: 'confirmed', amount: 28.5, fee: 0.008, fee_charged: 0.04, kernel_excess: '09d4e9f5071628c3be1f20314253647586a7b8c9daebfc0d1e2f3041526374859' },
+                    { created_at: now - 52 * 86400, confirmed_at: now - 52 * 86400 + 700,  method: 'tor',       status: 'confirmed', amount: 40.0, fee: 0.008, fee_charged: 0.04, kernel_excess: '08e5f0061728d3c4af203142536475869708b9cadbecfd0e1f2031425364758a6' },
+                    { created_at: now - 70 * 86400, confirmed_at: now - 70 * 86400 + 900,  method: 'tor',       status: 'confirmed', amount: 35.0, fee: 0.008, fee_charged: 0.04, kernel_excess: '09f6010728e3d4b5c02031425364758697a8b9c0d1e2f30415263748596a7b8c9' }
                 ]
             };
         })();

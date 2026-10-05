@@ -3,7 +3,7 @@
 const express = require('express');
 const path = require('path');
 const { initDb, getDb, ensureLocalRegion, seedDefaultRegions } = require('./lib/db');
-const { loadConfig, mergeDbSettings } = require('./lib/config');
+const { loadConfig, mergeDbSettings, REVENUE_ADDRESS_HOLD_S } = require('./lib/config');
 const { computeReconciliation, auditWalletSends, probeWalletIdentity, adoptWalletIdentity } = require('./lib/reconciliation');
 const { pushRttSample, hubRttMs } = require('./lib/region-rtt');
 const PoolSettings = require('./lib/pool-settings');
@@ -1512,8 +1512,8 @@ function setupRoutes() {
     'GET /api/pool/poolstats': { desc: 'Listing feed for pool directories — this is the URL to hand to miningpoolstats.stream (they poll it; nothing is pushed). Pool + network aggregates in the same field layout as the toolkit\'s solo-mining poolstats_<net>.json, so an importer written for that needs no changes. Recomputed at most once every 60s and served from cache in between, so polling faster than 1/min returns identical bytes — 1–5 min is the sensible range. Every value is an aggregate already shown on the homepage; no address or per-miner row is included, so it needs no auth. The ts field is the generation time: if it stops advancing, the feed is stale. ts and pool.last_block.ts are ISO 8601 strings, not UNIX seconds — the solo feed layout this mirrors uses them. Fields are null (not 0) when the node is unreachable, and network.hashrate_gps_24h is null until the pool has an hour of history.', shape: 'raw' },
     'GET /api/pool/metrics/history': { desc: 'Durable pool trend series: hashrate, miners, workers, blocks found, earnings, payout, network hashrate. Rolled up hourly and never pruned. At day-or-coarser buckets (month/year/all) miner_count/worker_count are the PEAK hour in the bucket, hashrate the average, money the sum. worker_count is null for hours recorded before it existed — draw a null as a GAP, never as 0.', shape: 'raw', params: 'range=day|week|month|year|all (default day)' },
     'GET /api/pool/metrics/history/regions': { desc: 'Per-region miners/hashrate trend series (the "miners by gateway" view). Same k-anonymity floor as /api/pool/stats/regions, applied per point: below the floor miner_count and hashrate_gps are null with below_floor:true. Draw a null as a GAP, never as 0.', shape: 'raw', params: 'range=day|week|month|year|all (default day)' },
-    'GET /api/pool/payments/history': { desc: 'Durable payments & transparency series: payouts, reward split, giveaways, donations, fee, plus lifetime totals.', shape: 'raw', params: 'range=day|week|month|year|all (default month)' },
-    'GET /api/pool/payments': { desc: 'Recent confirmed payouts: address, amount, flat fee charged, method, timestamps and has_kernel_proof (true once the payout\'s kernel has been seen mined; stays false on a pool with no Owner API wallet) and kernel_excess — the payout\'s Tx ID (66 hex chars, lowercase), or null until mined; link it to a chain explorer\'s kernel page to verify the payout on-chain. Addresses are MASKED (grin1qxy…mn4p). Pool-internal payout machinery (slate id, Tor probe result, retry state, cancel reason) is deliberately not published either.', shape: 'array', params: 'limit (≤500, default 100)' },
+    'GET /api/pool/payments/history': { desc: 'Durable payments & transparency series: payouts, reward split, giveaways, donations, fee, plus lifetime totals. Payout figures are miners only; revenue withdrawals by the pool operator are reported separately as totals.operator_withdrawn_all / operator_withdrawal_count.', shape: 'raw', params: 'range=day|week|month|year|all (default month)' },
+    'GET /api/pool/payments': { desc: 'Recent confirmed payouts: address, amount, flat fee charged, method, timestamps and has_kernel_proof (true once the payout\'s kernel has been seen mined; stays false on a pool with no Owner API wallet) and kernel_excess — the payout\'s Tx ID (66 hex chars, lowercase), or null until mined; link it to a chain explorer\'s kernel page to verify the payout on-chain. Addresses are MASKED (grin1qxy…mn4p). Revenue withdrawals by the pool operator are listed too, with operator: true and the fixed label "Pool operator" in place of an address (never the wallet they went to). Pool-internal payout machinery (slate id, Tor probe result, retry state, cancel reason) is deliberately not published either.', shape: 'array', params: 'limit (≤500, default 100)' },
     'GET /api/pool/miners': { desc: 'Balance distribution across accounts, richest first. Addresses are MASKED (grin1qxy…mn4p) — the distribution is public, the address→balance mapping is not.', shape: 'array', params: 'limit (≤500, default 50)' },
     'GET /api/pool/top-block-finders': { desc: 'Lucky-miner leaderboard: blocks found and total reward per address over a recent window. Orphans do not count as a find. Addresses are MASKED.', shape: 'raw', params: 'days (≤3650, default 30) · limit (≤1000, default 500)' },
     'GET /api/pool/unclaimed': { desc: 'Lost-and-found: masked addresses of long-dormant balances with a per-address disposal countdown, plus the historical disposition ledger (sweeps into the prize pool).', shape: 'raw', params: 'limit (≤200, default 100)' },
@@ -1537,7 +1537,7 @@ function setupRoutes() {
     'GET /api/account/:addr/hashrate/history': { desc: 'Account hashrate time-series, downsampled for charting.', shape: 'raw', params: 'hours (1–720, default 24)' },
     'GET /api/account/:addr/earnings': { desc: 'Credited earnings per period (1h/24h/7d/30d) + 30d in/out totals. Payout reversals count as money-in but never as earnings.', shape: 'raw' },
     'GET /api/account/:addr/balance/log': { desc: 'Address ledger. direction=in|out splits it by movement of the spendable balance: a payout appears in OUT once, as its lock at request time (gross, fee included), and a payout that fails, expires or is cancelled comes back in IN as a reversal — the confirm-time settlement rows appear only in the unfiltered view. Payout rows carry payout_method (tor · slatepack · nostr · manual; null on other rows); the CSV does not. Raw rows prune after ~60 days (the durable record is the withdrawal history below). format=csv streams the filtered window as a download on a tighter rate limit.', shape: 'raw · csv', params: 'direction=in|out · days (≤3650, default all) · limit (≤500, default 50) · offset · format=csv' },
-    'GET /api/account/:addr/withdrawals': { desc: 'Payout history for an address — kept forever, so this is the durable record for accounting. Payouts only: no donations or orphan clawbacks. format=csv streams all-time on a tighter rate limit. The on-chain kernel is NOT returned here — rows carry has_kernel_proof and has_payment_proof (booleans) and the proofs themselves need an ownership proof; see POST /api/account/:addr/withdrawals/proofs. A tor_failed row carries fail_code — why the ONE Tor attempt failed (the balance was returned): wallet_offline (your wallet did not answer over Tor), wallet_unreachable (it could not reach your wallet), pool_send_path (the pool could not deliver), pool_busy (the pool wallet could not cover it), unknown (a held payout that did not go out), wallet_offline_cleared (the operator un-counted it); null on every other row.', shape: 'raw · csv', params: 'limit (≤200, default 20) · offset · format=csv' },
+    'GET /api/account/:addr/withdrawals': { desc: 'Payout history for an address — kept forever, so this is the durable record for accounting. Payouts only: no donations or orphan clawbacks. fee_charged is the flat withdrawal fee you were charged (you received amount − fee_charged); fee is the real network fee the POOL wallet paid, not a charge to you. The CSV carries withdrawal_fee and received instead, filled only for paid rows. format=csv streams all-time on a tighter rate limit. The on-chain kernel is NOT returned here — rows carry has_kernel_proof and has_payment_proof (booleans) and the proofs themselves need an ownership proof; see POST /api/account/:addr/withdrawals/proofs. A tor_failed row carries fail_code — why the ONE Tor attempt failed (the balance was returned): wallet_offline (your wallet did not answer over Tor), wallet_unreachable (it could not reach your wallet), pool_send_path (the pool could not deliver), pool_busy (the pool wallet could not cover it), unknown (a held payout that did not go out), wallet_offline_cleared (the operator un-counted it); null on every other row.', shape: 'raw · csv', params: 'limit (≤200, default 20) · offset · format=csv' },
     'POST /api/account/:addr/withdrawals/proofs': { desc: 'Payment proofs for your own payouts, two kinds in one call. proofs: { <withdrawal id>: <kernel excess> } - the on-chain kernel of every confirmed payout (proves the tx was mined). payment_proofs: { <withdrawal id>: <PaymentProof> } - the signed proof grin-wallet requested on Tor payouts: { amount (nanogrin), excess, recipient_address, recipient_sig, sender_address, sender_sig }, the same JSON `grin-wallet export_proof` writes; save one as a file and `grin-wallet verify_proof` it. recipient_sig is YOUR wallet\'s signature, so it proves receipt to anyone. Slatepack/nostr payouts carry no signed proof (kernel only). Newest 500 signed proofs. Ownership-gated on purpose: publishing an address next to its kernels would be a public address-to-chain index on a privacy coin. 403 = proof failed, 404 = no such account.', shape: 'raw', auth: 'ownership proof', rate: 'withdraw', body: OWNER_PROOF_BODY },
     'GET /api/account/:addr/tor-check': { desc: 'Is this miner\'s wallet answering over Tor right now? The pool opens a fresh Tor circuit to the onion derived from the address and POSTs check_version to its foreign API; can take up to ~30 s. online is TRI-STATE: true = a grin-wallet answered; false = our Tor works and the wallet did not answer (or something that is not a wallet did); null = this pool could not look (its own Tor is down) — says nothing about the wallet, and a Tor payout is still allowed. reason: reachable · reachable_auth · onion_unreachable · onion_timeout · no_answer · not_wallet · invalid_format · derivation_failed · tor_unavailable · probe_failed. 404 if the address has never mined here — the probe is not offered for arbitrary Grin addresses. Answers are cached 60s per address; fresh=1 re-probes, but only once the cached answer is 10s old (younger answers are served as-is), and joins a probe already running. The payout gate always re-probes fresh.', shape: 'raw', params: 'fresh=1 (re-probe; 10s floor)', rate: 'torcheck' },
     'POST /api/account/:addr/withdraw': { desc: 'Request a payout on one of three rails. amount defaults to the full available balance. 403 = ownership proof failed; 400 = invalid amount, below the minimum, or too small to cover the flat fee; 409 = insufficient balance, or payouts frozen by the operator; 409 (tor) = wallet unreachable (nothing locked): the body carries tor_online: false and suggest: "slatepack"; 409 (nostr) = destination unregistered, still in cooldown, or its npub changed; 429 = a payout is already pending on ANY rail (one at a time — a Held Tor payout counts), a recently reversed payout is still in its cooldown (not after a failed Tor payout), or the pool-wide pending cap is full; 429 (tor) with error: "tor_paused" = Tor is paused for this address after 5 failed Tor payouts in 24 h — the body carries paused_until (unix seconds, UTC), failures_24h, max and suggest: "slatepack"; nothing is locked; 503 = the nostr rail is disabled, or the pool wallet cannot cover the payout right now (funds tied up in payouts still settling — the balance is returned; retry in about an hour). A slatepack request also returns `slatepack` (encrypted to your address) and `expires_at` (unix seconds): return the response before then or the payout expires and the balance comes back.', shape: 'flat', auth: 'ownership proof', rate: 'withdraw', body: `method=tor|slatepack|nostr (default tor) · amount (default: full balance) · ${OWNER_PROOF_BODY}` },
@@ -3328,6 +3328,144 @@ function setupRoutes() {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
+  // ─── Operator revenue (2026-10-05) ──────────────────────────────────────────
+  // The pool_fee bucket had no way out: the account page refuses the pseudo-address, no admin
+  // route debited it, and a raw `grin-wallet send` from the pool wallet drops the wallet without
+  // touching the ledger — reconciliation then reads a coverage shortfall and freezes every miner
+  // payout. These routes send it through the normal locked Tor flow instead
+  // (WithdrawalScheduler.createRevenueWithdrawal), to ONE saved address:
+  //   · the address is never typed into the withdraw form — the route reads the saved one;
+  //   · changing it needs step-up, writes an audit row, raises a critical alert, and starts a
+  //     24 h hold before any withdrawal may go to it. A stolen admin session can repoint it, but
+  //     cannot drain in the same sitting, and the operator hears about it at once.
+  const REVENUE_HOLD_S = REVENUE_ADDRESS_HOLD_S;
+  const revenueAddressRow = () =>
+    db.prepare('SELECT address, set_at, set_by, prev_address FROM operator_revenue WHERE id = 1').get() || null;
+  // The network's own prefix: a mainnet pool paying a tgrin1 address (or the reverse) would hand
+  // grin-wallet a destination it cannot reach, and the payout would end Held or failed.
+  const revenueAddrOk = (a) => GRIN_ADDR_RE.test(a) &&
+    (config.network === 'testnet' ? a.startsWith('tgrin1') : a.startsWith('grin1'));
+
+  app.get('/api/admin/revenue', secureAdmin, (req, res) => {
+    try {
+      const now = Math.floor(Date.now() / 1000);
+      const row = revenueAddressRow();
+      const usableAt = row ? Number(row.set_at) + REVENUE_HOLD_S : null;
+      const status = withdrawalScheduler ? withdrawalScheduler.revenueStatus() : null;
+      const history = db.prepare(`
+        SELECT id, amount, fee, status, dest_address, created_at, confirmed_at, kernel_excess
+        FROM withdrawals WHERE grin_address = 'pool_fee' ORDER BY id DESC LIMIT 10
+      `).all();
+      const addressAlert = db.prepare(`
+        SELECT id, message, triggered_at FROM alerts
+        WHERE type = 'operator_revenue_address_changed' AND status = 'active' ORDER BY id DESC LIMIT 1
+      `).get() || null;
+      res.json({
+        success: true,
+        address: row ? row.address : null,
+        prev_address: row ? row.prev_address : null,
+        set_at: row ? row.set_at : null,
+        usable_at: usableAt,
+        hold_remaining_s: usableAt ? Math.max(0, usableAt - now) : 0,
+        network: config.network === 'testnet' ? 'testnet' : 'mainnet',
+        withdrawal_fee: Number(config.withdrawal_fee) || 0,
+        frozen: !!getPayoutControl().frozen,
+        // Which off-box channels the address-change alarm is pushed to. None = the hold only
+        // helps if someone opens this panel within 24 h; the page says so in red.
+        alert_channels: alertDelivery && typeof alertDelivery.configuredChannels === 'function'
+          ? alertDelivery.configuredChannels() : {},
+        address_alert_locked_until: AlertMonitor.closeLockedUntil(db, 'operator_revenue_address_changed') || null,
+        ...(status || {}),
+        history,
+        address_alert: addressAlert,
+      });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.post('/api/admin/revenue/address', freshAdmin, async (req, res) => {
+    try {
+      const addr = String((req.body && req.body.address) || '').trim();
+      const net = config.network === 'testnet' ? 'testnet (tgrin1…)' : 'mainnet (grin1…)';
+      if (!revenueAddrOk(addr)) {
+        return res.status(400).json({ error: `not a valid ${net} Grin address` });
+      }
+      const prev = revenueAddressRow();
+      if (prev && prev.address === addr) {
+        // Re-saving the same address must not restart the hold (or raise a second alarm).
+        return res.status(409).json({ error: 'that is already the revenue address — nothing changed' });
+      }
+      const now = Math.floor(Date.now() / 1000);
+      db.prepare(`
+        INSERT INTO operator_revenue (id, address, set_at, set_by, prev_address) VALUES (1, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET address = excluded.address, set_at = excluded.set_at,
+          set_by = excluded.set_by, prev_address = excluded.prev_address
+      `).run(addr, now, req.user.user_id, prev ? prev.address : null);
+      db.prepare(`INSERT INTO admin_audit_log (admin_id, action, target_type, target_id, details, ip)
+                  VALUES (?, 'revenue_address_set', 'operator_revenue', '1', ?, ?)`)
+        .run(req.user.user_id, JSON.stringify({ from: prev ? prev.address : null, to: addr }), req.ip);
+      const usableAt = now + REVENUE_HOLD_S;
+      // One alert per change: close the previous change's alarm first, so this one is delivered
+      // (triggerAlert only bumps a counter on an alert type that is already active).
+      if (alertMonitor && typeof alertMonitor.triggerAlert === 'function') {
+        try {
+          await alertMonitor.resolveAlert('operator_revenue_address_changed');
+          await alertMonitor.triggerAlert('operator_revenue_address_changed', {
+            level: 'critical',
+            message: `Operator revenue address ${prev ? `changed from ${prev.address} to ${addr}` : `set to ${addr}`} ` +
+                     `by admin ${req.user.username}. Revenue withdrawals to it are blocked until ` +
+                     `${new Date(usableAt * 1000).toISOString()}. If this was not you, set it back at once and ` +
+                     `change every admin password.`,
+            data: { from: prev ? prev.address : null, to: addr, by: req.user.username, usable_at: usableAt }
+          });
+        } catch (e) { console.error(`[revenue] address-change alert failed: ${e.message}`); }
+      }
+      res.json({ success: true, address: addr, usable_at: usableAt });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.post('/api/admin/revenue/withdraw', freshAdmin, async (req, res) => {
+    try {
+      if (!withdrawalScheduler) return res.status(503).json({ error: 'withdrawal scheduler not ready' });
+      if (getPayoutControl().frozen) {
+        return res.status(409).json({ error: 'payouts are frozen — resume payouts before withdrawing revenue' });
+      }
+      const row = revenueAddressRow();
+      if (!row) return res.status(400).json({ error: 'set an operator revenue address first' });
+      if (!revenueAddrOk(row.address)) {
+        return res.status(400).json({ error: 'the saved revenue address is not valid for this network — set it again' });
+      }
+      // The page echoes the address it showed. A mismatch means it changed since that page loaded
+      // (another admin, or another tab) — never send to an address the operator did not just see.
+      const shown = String((req.body && req.body.address) || '').trim();
+      if (shown !== row.address) {
+        return res.status(409).json({ error: 'the revenue address changed since this page loaded — reload and check it' });
+      }
+      const usableAt = Number(row.set_at) + REVENUE_HOLD_S;
+      const now = Math.floor(Date.now() / 1000);
+      if (now < usableAt) {
+        return res.status(409).json({
+          error: `the revenue address was set less than 24 hours ago — withdrawals to it unlock at ${new Date(usableAt * 1000).toISOString()}`,
+          reason: 'address_hold', usable_at: usableAt
+        });
+      }
+      const amount = parseFloat(req.body && req.body.amount);
+      if (!Number.isFinite(amount) || amount <= 0) return res.status(400).json({ error: 'enter a positive amount' });
+      try { await withdrawalScheduler._assertWalletCanCover(amount, 'tor'); }
+      catch (e) { return res.status(e.code || 503).json({ error: e.message }); }
+      let result;
+      try {
+        result = withdrawalScheduler.createRevenueWithdrawal(amount, row.address);
+      } catch (e) {
+        return res.status(e.code && e.code >= 400 && e.code < 500 ? e.code : 500).json({ error: e.message });
+      }
+      db.prepare(`INSERT INTO admin_audit_log (admin_id, action, target_type, target_id, details, ip)
+                  VALUES (?, 'revenue_withdraw', 'withdrawal', ?, ?, ?)`)
+        .run(req.user.user_id, String(result.withdrawal_id),
+             JSON.stringify({ amount: result.amount, to: row.address, network_fees_booked: result.network_fees_booked }), req.ip);
+      res.json({ ...result, to: row.address });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
   // Wallet-send audit — matches the wallet's OWN confirmed outbound sends against the pool's
   // withdrawals. Any unmatched send is an out-of-band `grin-wallet send` (invisible to the
   // ledger). Forces a fresh wallet scan (slow) → the admin Treasury page polls on the 3-min cadence.
@@ -3675,18 +3813,20 @@ function setupRoutes() {
       // never tell "exactly a full page" from "there is more after this".
       const rows = before === null
         ? db.prepare(
-            `SELECT id, grin_address, amount, fee, status, created_at, confirmed_at
+            `SELECT id, grin_address, dest_address, amount, fee, status, created_at, confirmed_at
              FROM withdrawals WHERE status = 'confirmed'
              ORDER BY confirmed_at DESC, id DESC LIMIT ?`).all(ADMIN_CSV_MAX_ROWS + 1)
         : db.prepare(
-            `SELECT id, grin_address, amount, fee, status, created_at, confirmed_at
+            `SELECT id, grin_address, dest_address, amount, fee, status, created_at, confirmed_at
              FROM withdrawals WHERE status = 'confirmed' AND confirmed_at <= ?
              ORDER BY confirmed_at DESC, id DESC LIMIT ?`).all(before, ADMIN_CSV_MAX_ROWS + 1);
       const { page, note } = adminCsvPage(res, rows, (last) => last.confirmed_at);
       const iso = (t) => (t ? new Date(t * 1000).toISOString() : '');
       sendCsv(res, `payouts-${config.network}.csv`,
-        ['id', 'grin_address', 'amount_grin', 'fee_grin', 'status', 'created_at', 'confirmed_at'],
-        page.map((r) => [r.id, r.grin_address, r.amount, r.fee, r.status, iso(r.created_at), iso(r.confirmed_at)]),
+        // dest_address: where an operator revenue withdrawal went (its grin_address is the
+        // 'pool_fee' bucket); blank on every miner payout, whose grin_address IS the destination.
+        ['id', 'grin_address', 'dest_address', 'amount_grin', 'fee_grin', 'status', 'created_at', 'confirmed_at'],
+        page.map((r) => [r.id, r.grin_address, r.dest_address || '', r.amount, r.fee, r.status, iso(r.created_at), iso(r.confirmed_at)]),
         note);
     } catch (err) {
       res.status(500).json({ error: err.message });
@@ -3714,6 +3854,61 @@ function setupRoutes() {
         page.map((r) => [r.height, r.hash, r.reward, feePct,
           parseFloat((r.reward * feePct / 100).toFixed(9)), r.status, iso(r.found_at)]),
         note);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Operator revenue statement, one row per UTC day (2026-10-05) — the export an accountant asks
+  // for. fee-revenue.csv above is per BLOCK and multiplies by TODAY's fee %, so it is an estimate;
+  // this one reads what was actually booked:
+  //   income      pool_fee credits from block rewards + flat withdrawal fees (the ledger)
+  //   diverted    fee cut moved to the prize pool (not the operator's)
+  //   network     real chain fees the pool wallet paid on that day's payouts (withdrawals.fee,
+  //               by confirm day — when the cost was INCURRED, not when it was booked)
+  //   withdrawn   revenue sent to the operator's wallet that day (confirmed revenue withdrawals)
+  // Ledger rows older than the rollup horizon live in balance_log_daily, which keeps the day and
+  // reference_type, so the daily figures stay exact after pruning. Withdrawals are never pruned.
+  app.get('/api/admin/export/operator-revenue.csv', secureAdmin, (req, res) => {
+    try {
+      if (!adminCsvGate(req, res)) return;
+      const DAY = 86400;
+      const H = getLedgerRollupHorizon(db);
+      const byDay = new Map();
+      const slot = (d) => {
+        let s = byDay.get(d);
+        if (!s) { s = { block: 0, wfee: 0, diverted: 0, network: 0, withdrawn: 0, n: 0 }; byDay.set(d, s); }
+        return s;
+      };
+      const LED = (amt) => `
+        COALESCE(SUM(CASE WHEN event_type='credit' AND reference_type='pool_fee'       THEN ${amt} END),0) AS block,
+        COALESCE(SUM(CASE WHEN event_type='credit' AND reference_type='withdrawal_fee' THEN ${amt} END),0) AS wfee,
+        COALESCE(SUM(CASE WHEN event_type='debit'  AND reference_type='fee_cut'        THEN ${amt} END),0) AS diverted`;
+      const add = (r) => { const s = slot(r.d); s.block += r.block; s.wfee += r.wfee; s.diverted += r.diverted; };
+      if (H > 0) {
+        db.prepare(`SELECT day AS d, ${LED('total_amount')} FROM balance_log_daily
+                    WHERE grin_address = 'pool_fee' AND day < ? GROUP BY day`).all(H).forEach(add);
+      }
+      db.prepare(`SELECT CAST(created_at / ${DAY} AS INTEGER) * ${DAY} AS d, ${LED('amount')} FROM balance_log
+                  WHERE grin_address = 'pool_fee' AND created_at >= ? GROUP BY d`).all(H).forEach(add);
+      db.prepare(`
+        SELECT CAST(confirmed_at / ${DAY} AS INTEGER) * ${DAY} AS d,
+               COALESCE(SUM(fee),0) AS network,
+               COALESCE(SUM(CASE WHEN grin_address = 'pool_fee' THEN amount END),0) AS withdrawn,
+               COUNT(CASE WHEN grin_address = 'pool_fee' THEN 1 END) AS n
+        FROM withdrawals WHERE status = 'confirmed' AND confirmed_at IS NOT NULL GROUP BY d
+      `).all().forEach((r) => { const s = slot(r.d); s.network += r.network; s.withdrawn += r.withdrawn; s.n += r.n; });
+      const r9 = (v) => parseFloat((Number(v) || 0).toFixed(9));
+      const rows = Array.from(byDay.entries()).sort((a, b) => b[0] - a[0]).map(([d, s]) => [
+        new Date(d * 1000).toISOString().slice(0, 10),
+        r9(s.block), r9(s.wfee), r9(s.diverted), r9(s.network),
+        r9(s.block + s.wfee - s.diverted - s.network),
+        r9(s.withdrawn), s.n,
+      ]);
+      sendCsv(res, `operator-revenue-${config.network}.csv`,
+        ['day_utc', 'pool_fee_from_blocks_grin', 'withdrawal_fees_grin', 'diverted_to_prizes_grin',
+         'network_fees_paid_grin', 'net_revenue_grin', 'withdrawn_to_operator_grin', 'operator_withdrawals'],
+        rows);
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
@@ -3814,11 +4009,16 @@ function setupRoutes() {
       // has_kernel_proof ("seen mined") stays beside the kernel and keeps its old meaning (any
       // non-empty kernel on record): the homepage teletype and the P-05 status badge read the
       // boolean, so a shape-rejected value hides the link without un-mining the row.
+      // Operator revenue withdrawals are listed too (operator decision 2026-10-05: the pool's own
+      // take is published beside the miners' payouts). Their grin_address is the 'pool_fee'
+      // bucket, which masks to nonsense, and their destination is the operator's private wallet —
+      // so neither is emitted: the row says `operator: true` and a fixed label instead.
       const payments = stmt.all(limit).map((p) => {
         const kernel = (typeof p.kernel_excess === 'string' && KERNEL_EXCESS_RE.test(p.kernel_excess))
           ? p.kernel_excess.toLowerCase() : null;
+        const operator = p.grin_address === 'pool_fee';
         return {
-          ...p, grin_address: maskAddr(p.grin_address),
+          ...p, grin_address: operator ? 'Pool operator' : maskAddr(p.grin_address), operator,
           kernel_excess: kernel, has_kernel_proof: !!p.kernel_excess
         };
       });
@@ -4592,7 +4792,7 @@ function setupRoutes() {
 
         const CSV_MAX_ROWS = 50000;
         const rows = db.prepare(
-          `SELECT id, amount, fee, method, status, created_at, confirmed_at, kernel_excess
+          `SELECT id, amount, fee_charged, method, status, created_at, confirmed_at, kernel_excess
            FROM withdrawals WHERE grin_address = ?
            ORDER BY created_at DESC, id DESC LIMIT ${CSV_MAX_ROWS}`
         ).all(addr);
@@ -4603,13 +4803,22 @@ function setupRoutes() {
         // now come from POST /api/account/:addr/withdrawals/proofs, behind the same ownership
         // proof a withdrawal needs. The flag stays so an accounting export still says which
         // payouts HAVE a proof to fetch.
-        const lines = ['id,requested_at_utc,confirmed_at_utc,method,status,amount,fee,has_kernel_proof'];
+        // The miner's own terms, not the pool's costs (2026-10-05): `withdrawal_fee` is the flat
+        // fee they were charged and `received` what reached their wallet. The REAL on-chain fee
+        // (withdrawals.fee) is the pool's expense, paid from the pool wallet — it used to sit in
+        // a `fee` column here and read as a second, smaller fee contradicting the one charged.
+        // Both are blank unless the payout was paid: a failed or expired one charged nothing.
+        const lines = ['id,requested_at_utc,confirmed_at_utc,method,status,amount,withdrawal_fee,received,has_kernel_proof'];
         for (const r of rows) {
+          const paid = r.status === 'confirmed';
+          const feeC = Number(r.fee_charged) || 0;
           lines.push([
             r.id,
             new Date(r.created_at * 1000).toISOString(),
             r.confirmed_at ? new Date(r.confirmed_at * 1000).toISOString() : '',
-            esc(r.method), esc(r.status), r.amount, r.fee, r.kernel_excess ? 'yes' : 'no'
+            esc(r.method), esc(r.status), r.amount,
+            paid ? feeC : '', paid ? parseFloat((Number(r.amount) - feeC).toFixed(9)) : '',
+            r.kernel_excess ? 'yes' : 'no'
           ].join(','));
         }
         res.setHeader('Content-Type', 'text/csv; charset=utf-8');
@@ -4631,8 +4840,11 @@ function setupRoutes() {
       // has_payment_proof only; the proof itself comes from the ownership-gated route below.
       // fail_code (a public-safe enum: why a Tor payout failed) is returned; fail_detail — the CLI
       // error behind it, which can carry pool-wallet figures — is admin-only and never selected here.
+      // fee_charged = the flat withdrawal fee the miner pays (the account page's "Withdrawal fee"
+      // column); fee = the REAL on-chain fee the pool wallet paid, kept for API compatibility but
+      // no longer shown to the miner — it is the pool's cost, not theirs.
       const rows = db.prepare(
-        `SELECT id, amount, fee, method, status, fail_code, created_at, confirmed_at, kernel_excess, payment_proof
+        `SELECT id, amount, fee, fee_charged, method, status, fail_code, created_at, confirmed_at, kernel_excess, payment_proof
          FROM withdrawals WHERE grin_address = ?
          ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?`
       ).all(addr, limit, offset).map((r) => {
@@ -6743,6 +6955,11 @@ function setupRoutes() {
       const { alertId } = req.params;
       const { minutes } = req.body;
       const snoozeMinutes = minutes || 60;
+      // The revenue-address alarm cannot be hidden during its hold (AlertMonitor.closeLockedUntil).
+      const target = db.prepare('SELECT type FROM alerts WHERE id = ?').get(parseInt(alertId, 10));
+      if (target && AlertMonitor.closeLockedUntil(db, target.type)) {
+        return res.status(409).json({ error: 'this alert cannot be snoozed until the 24 h revenue-address hold ends' });
+      }
 
       const success = alertMonitor.snoozeAlert(parseInt(alertId, 10), snoozeMinutes);
       if (success) {

@@ -190,8 +190,12 @@ ok('§J11-2 /api/pool/payments overwrites kernel_excess with the shape-checked v
   /KERNEL_EXCESS_RE\.test\(p\.kernel_excess\)/.test(paymentsRoute));
 const kRe = (indexSrc.match(/const KERNEL_EXCESS_RE = (\/[^\n]+\/[a-z]*);/) || [])[1];
 ok('§J11-2 KERNEL_EXCESS_RE is an anchored 66-hex pattern', kRe === '/^[0-9a-f]{66}$/i', `got ${kRe}`);
+// Operator revenue withdrawals (2026-10-05) are listed under a fixed label — every OTHER row is
+// still masked, and the operator's destination wallet is never even selected.
 ok('§J11-2 /api/pool/payments still masks the address it pairs the kernel with',
-  /grin_address: maskAddr\(p\.grin_address\)/.test(paymentsRoute));
+  /grin_address: operator \? 'Pool operator' : maskAddr\(p\.grin_address\)/.test(paymentsRoute));
+ok('/api/pool/payments never selects dest_address (the operator revenue wallet)',
+  paymentsRoute.length > 0 && !/dest_address/.test(paymentsRoute.replace(/\/\/[^\n]*/g, '')));
 ok('§J11-2 /api/pool/payments sends has_kernel_proof as a boolean',
   /has_kernel_proof: !!p\.kernel_excess/.test(paymentsRoute));
 
@@ -645,7 +649,7 @@ console.log('\n[fail] fail_detail stays admin-only; fail_code and the Tor pause 
   ok('no non-admin route names fail_detail', routes.length > 20 && leaks.length === 0, leaks.map(([v, p]) => `${v} ${p}`).join(', '));
   const p08 = code('get', '/api/account/:addr/withdrawals');
   ok('P-08 history selects fail_code by name (an explicit column list, never SELECT *)',
-    /SELECT id, amount, fee, method, status, fail_code, /.test(p08) && !/SELECT\s+\*/.test(p08));
+    /SELECT id, amount, fee, fee_charged, method, status, fail_code, /.test(p08) && !/SELECT\s+\*/.test(p08));
   const summary = code('get', '/api/account/:addr');
   ok('the account summary\'s tor_pause is torPauseStatus() — counts and a timestamp — and its window is the scheduler\'s TTL',
     /withdrawalScheduler\.torPauseStatus\(acct\.grin_address\)/.test(summary) && /tor_pause:\s*torPause,/.test(summary) &&

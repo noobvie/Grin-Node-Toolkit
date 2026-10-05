@@ -237,6 +237,7 @@ async function loadReconciliation() {
       flowRow('in',  'Admin injections',       'admin_inject') +
       flowRow('in',  'Total IN',               'total', true) +
       flowRow('out', 'Payouts confirmed',      'payouts') +
+      flowRow('out', 'Operator revenue withdrawn', 'operator_withdrawals') +
       flowRow('out', 'Orphan clawbacks',       'orphan_clawback') +
       flowRow('out', '(of which network fees)', 'payout_network_fees') +
       flowRow('out', 'Total OUT',              'total', true) +
@@ -248,8 +249,8 @@ async function loadReconciliation() {
     document.getElementById('recon-bucket-tbody').innerHTML = `
       <tr>
         <td><strong>Pool fee</strong><br><span style="color:var(--text-dim);font-size:.8rem;">operator revenue</span></td>
-        <td class="mono">${fmtGrin(fee.balance)} ツ</td>
-        <td style="font-size:.85rem;">Collected ${fmtGrin(fee.collected)} · diverted to prizes ${fmtGrin(fee.diverted_to_prizes)} · realized ${fmtGrin(fee.operator_realized)}</td>
+        <td class="mono">${fmtGrin(fee.balance)} ツ<br><span style="color:var(--text-dim);font-size:.8rem;" title="The balance minus payout network fees the ledger has not booked yet — what you can actually withdraw">available ${fmtGrin(fee.available)} ツ</span></td>
+        <td style="font-size:.85rem;">Collected ${fmtGrin(fee.collected)} · diverted to prizes ${fmtGrin(fee.diverted_to_prizes)} · network fees booked ${fmtGrin(fee.network_fees_booked)} (${fmtGrin(fee.network_fees_unbooked)} not yet) · withdrawn ${fmtGrin(fee.operator_realized)} · <a href="payments.html#sec-manual-payouts">withdraw revenue</a></td>
       </tr>
       <tr>
         <td><strong>Prize pool</strong><br><span style="color:var(--text-dim);font-size:.8rem;">contest budget available</span></td>

@@ -13,9 +13,15 @@
  */
 
 const { computeReconciliation, auditWalletSends, probeWalletIdentity } = require('./reconciliation');
+const { REVENUE_ADDRESS_HOLD_S } = require('./config');
 
 // How long a confirmed payout keeps explaining a wallet drop (see checkMoneyIntegrity).
 const DRAIN_SETTLE_SECS = 6 * 3600;
+
+// checkNetworkFeeCost: how many recent miner payouts the average real fee is taken over, and the
+// fewest it will judge on (a new pool's first two payouts are not a trend).
+const NETWORK_FEE_SAMPLE = 20;
+const NETWORK_FEE_MIN_SAMPLE = 5;
 
 class AlertMonitor {
   constructor(config, modules, db) {
@@ -116,7 +122,15 @@ class AlertMonitor {
       stratum_bind_failed: true,
       // §21.5. The pause row could not be read at boot, so stratum started PAUSED (fail closed)
       // for up to 2 h. An event, like block_record_failed — a human clears it.
-      stratum_state_unreadable: true
+      stratum_state_unreadable: true,
+      // The flat withdrawal fee no longer covers what payouts really cost on chain (the average
+      // REAL network fee of recent payouts has reached it). Warning only: the operator raises
+      // withdrawal_fee in admin → Payout settings; nothing is wrong with anyone's money.
+      network_fee_cost: true,
+      // An operator revenue address was set or changed. Pushed by the admin route, not polled —
+      // an EVENT a human clears, like block_record_failed. Critical on purpose: repointing where
+      // revenue goes is the first thing a stolen admin session would do.
+      operator_revenue_address_changed: true
     };
     this.enabledAlerts = Object.assign({}, DEFAULT_ENABLED, config.alert_types_enabled || {});
 
@@ -191,6 +205,9 @@ class AlertMonitor {
         if (this.enabledAlerts.wallet_identity_changed) {
           await this.checkWalletIdentity();
         }
+        if (this.enabledAlerts.network_fee_cost) {
+          await this.checkNetworkFeeCost();
+        }
       }
 
     } catch (err) {
@@ -217,8 +234,8 @@ class AlertMonitor {
       if (c.coverage_full_ok === false) {
         await this.triggerAlert('coverage_shortfall', {
           level: 'critical',
-          message: `Pool under-funded: wallet held (total + locked) ${recon.wallet.held} GRIN vs owed ${recon.ledger.total_owed} GRIN (unexplained gap ${c.coverage_full_gap} after ${c.network_fees_paid} GRIN recorded network fees).`,
-          data: { coverage_full_gap: c.coverage_full_gap, network_fees_paid: c.network_fees_paid, wallet_total: recon.wallet.total, wallet_held: recon.wallet.held, total_owed: recon.ledger.total_owed }
+          message: `Pool under-funded: wallet held (total + locked) ${recon.wallet.held} GRIN vs owed ${recon.ledger.total_owed} GRIN (unexplained gap ${c.coverage_full_gap} after ${c.network_fees_unbooked} GRIN of network fees not yet booked to the pool fee).`,
+          data: { coverage_full_gap: c.coverage_full_gap, network_fees_paid: c.network_fees_paid, network_fees_unbooked: c.network_fees_unbooked, wallet_total: recon.wallet.total, wallet_held: recon.wallet.held, total_owed: recon.ledger.total_owed }
         });
         await this._maybeFreeze(`coverage shortfall ${c.coverage_full_gap} GRIN`);
       } else if (c.coverage_full_ok === true) {
@@ -352,14 +369,17 @@ class AlertMonitor {
         const pct = smallPool ? 0 : totalOwed * (this.thresholds.large_withdrawal_percent / 100);
         const trip = pct > 0 ? Math.min(fixed, pct) : fixed; // whichever bound is hit first
         const big = this.db.prepare(
-          `SELECT id, grin_address, amount FROM withdrawals
+          `SELECT id, grin_address, dest_address, amount FROM withdrawals
            WHERE created_at >= ? AND amount >= ? ORDER BY amount DESC LIMIT 1`
         ).get(windowStart, trip);
         if (big) {
           const extreme = big.amount >= Math.max(fixed, pct); // exceeds BOTH bounds → critical
+          // An operator revenue withdrawal's grin_address is the 'pool_fee' bucket; name where the
+          // coins actually go, or the alert reads as a payout to nobody.
+          const to = big.dest_address ? `operator revenue → ${big.dest_address}` : big.grin_address;
           await this.triggerAlert('large_withdrawal', {
             level: extreme ? 'critical' : 'warning',
-            message: `Large withdrawal: ${big.amount.toFixed(4)} GRIN (#${big.id}) to ${big.grin_address}.`,
+            message: `Large withdrawal: ${big.amount.toFixed(4)} GRIN (#${big.id}) to ${to}.`,
             data: { withdrawal_id: big.id, amount: big.amount, address: big.grin_address, fixed_threshold: fixed, percent_threshold: pct }
           });
         } else {
@@ -386,6 +406,43 @@ class AlertMonitor {
       }
     } catch (err) {
       this.error(`Withdrawal anomaly check failed: ${err.message}`);
+    }
+  }
+
+  /**
+   * The flat withdrawal fee vs what payouts really cost. Miners pay a FLAT fee (operator decision
+   * 2026-10-05: never tracked to the chain automatically), and the pool wallet pays the real,
+   * weight-based network fee. If Grin's fees rise, every payout starts costing the operator money
+   * — silently, because nothing else compares the two. This compares the average real fee of the
+   * last NETWORK_FEE_SAMPLE miner payouts with the current flat fee and warns when it has reached
+   * it. Read-only, one indexed query; it never changes the fee itself.
+   */
+  async checkNetworkFeeCost() {
+    try {
+      const flat = Number(this.config.withdrawal_fee);
+      if (!(flat > 0)) return;
+      const r = this.db.prepare(`
+        SELECT COUNT(*) AS n, COALESCE(AVG(fee),0) AS avg, COALESCE(MAX(fee),0) AS max FROM (
+          SELECT fee FROM withdrawals
+          WHERE status = 'confirmed' AND fee > 0 AND grin_address != 'pool_fee'
+          ORDER BY confirmed_at DESC LIMIT ${NETWORK_FEE_SAMPLE}
+        )`).get();
+      // Too few payouts to call it a trend: one odd multi-input sweep must not page anyone.
+      if (r.n < NETWORK_FEE_MIN_SAMPLE) return;
+      if (r.avg >= flat) {
+        await this.triggerAlert('network_fee_cost', {
+          level: 'warning',
+          message: `Payouts now cost more than the withdrawal fee: the last ${r.n} payouts paid ` +
+                   `${r.avg.toFixed(4)} GRIN network fee on average (max ${r.max.toFixed(4)}) against a flat ` +
+                   `${flat} GRIN withdrawal fee, so each payout is paid partly out of the pool fee. ` +
+                   `Raise the Withdrawal Fee in admin → Settings → Payout.`,
+          data: { sample: r.n, avg_network_fee: r.avg, max_network_fee: r.max, withdrawal_fee: flat }
+        });
+      } else {
+        await this.resolveAlert('network_fee_cost');
+      }
+    } catch (err) {
+      this.error(`Network-fee cost check failed: ${err.message}`);
     }
   }
 
@@ -936,6 +993,19 @@ class AlertMonitor {
     return card;
   }
 
+  // The address-change alarm is the operator's only warning that a revenue address they did not
+  // set is about to become usable, and the 24 h hold exists so they have time to see it. A stolen
+  // admin session that could close (or snooze) it right after making the change would turn the
+  // hold into a wait with nobody watching. So for the whole hold it can be neither closed nor
+  // snoozed. Returns the unix time the lock ends, or 0 when the type is not locked now.
+  static closeLockedUntil(db, alertType) {
+    if (alertType !== 'operator_revenue_address_changed') return 0;
+    const row = db.prepare('SELECT set_at FROM operator_revenue WHERE id = 1').get();
+    if (!row) return 0;
+    const until = Number(row.set_at) + REVENUE_ADDRESS_HOLD_S;
+    return Math.floor(Date.now() / 1000) < until ? until : 0;
+  }
+
   // Close an alert of a MANUAL_RESOLVE_TYPES type (POST /api/admin/alerts/:alertId/resolve, step-up
   // gated + audited). Any other type is refused: those are resolved by the code that raised them,
   // and closing one by hand would only hide a condition that is still true until the next tick.
@@ -947,6 +1017,10 @@ class AlertMonitor {
       return { ok: false, code: 409, error: `a ${a.type} alert resolves by itself once its cause is gone — it cannot be closed by hand` };
     }
     if (a.status !== 'active') return { ok: false, code: 409, error: 'this alert is already resolved' };
+    const lockedUntil = AlertMonitor.closeLockedUntil(db, a.type);
+    if (lockedUntil) {
+      return { ok: false, code: 409, error: `this alert stays up until the 24 h revenue-address hold ends (${new Date(lockedUntil * 1000).toISOString()}) — so whoever changed the address cannot also silence the alarm` };
+    }
     const r = db.prepare(
       `UPDATE alerts SET status = 'resolved', resolved_at = ?, acknowledged_at = datetime('now'), acknowledged_by = ?
         WHERE id = ? AND status = 'active'`
@@ -958,7 +1032,8 @@ class AlertMonitor {
 
 // Alerts nothing resolves automatically: the operator closes them after acting (see resolveManual).
 // Keep this list short — every entry is an alarm a click can silence.
-const MANUAL_RESOLVE_TYPES = ['slate_refunded_but_mined'];
+// operator_revenue_address_changed: the operator confirms the change was theirs, then closes it.
+const MANUAL_RESOLVE_TYPES = ['slate_refunded_but_mined', 'operator_revenue_address_changed'];
 AlertMonitor.MANUAL_RESOLVE_TYPES = MANUAL_RESOLVE_TYPES;
 
 module.exports = AlertMonitor;

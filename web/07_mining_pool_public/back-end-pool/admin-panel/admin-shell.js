@@ -835,7 +835,8 @@
   function stSummaryHtml(c, now) {
     var k = stClassify(c, now);
     var by = c && c.paused_by ? ' by ' + stEsc(c.paused_by) : '';
-    var planned = c && c.source === 'planned' ? ' (planned window)' : '';
+    var planned = c && c.source === 'planned' ? ' (planned window)'
+      : c && c.source === 'restore' ? ' (after a restore — check the pool, then resume)' : '';
     switch (k.level) {
       case 'pausing':
         return '<strong>Stratum PAUSING</strong> — listeners closed, waiting for in-flight shares to settle (up to 30 s).';

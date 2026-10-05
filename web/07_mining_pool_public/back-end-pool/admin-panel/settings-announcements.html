@@ -128,9 +128,9 @@
               <li><strong>Old hub:</strong> <code>B → 6</code> Migrate OUT straight away. Payouts freeze as
                 part of it.</li>
               <li><strong>New box:</strong> <code>B → 7 → MIGRATE</code>. The pool comes up
-                <strong>paused</strong> only while the pause from step 2 is still running &mdash; it
-                travels inside the database. If the move took longer than that pause, the pool comes
-                up <strong>accepting</strong>: check the strip at once, and pause it again before you
+                <strong>paused</strong> for up to 2&nbsp;hours from its start, however long the move
+                took &mdash; Migrate IN writes the pause into the restored database right before it
+                starts the service. If the strip is not red once it is up, pause it here before you
                 do anything else.</li>
               <li>Change exactly the DNS records Migrate IN lists.</li>
               <li><strong>New hub, here:</strong> once its continuity checks are all ✓, press
@@ -145,9 +145,10 @@
               <strong>Never resume the old hub after Migrate OUT</strong> &mdash; two live pools on one
               wallet seed. A <strong>rollback</strong> (valid only until the new hub has accepted a share)
               brings the old hub back still paused until its resume time; resume it here once it is up.
-              A <strong>plain restore</strong> (<code>B</code> menu restore) brings back whatever pause
-              state the backup held &mdash; usually <strong>accepting</strong>. Pause as soon as the
-              pool is up, check it, then follow step 6.
+              A <strong>plain restore</strong> (<code>B</code> menu restore) pauses it too, for
+              2&nbsp;hours from the <em>restore</em> &mdash; the menu prints the resume time. Start
+              the pool within that, check it, then follow step 6; a pool started after it comes up
+              <strong>accepting</strong>, so pause it here first.
             </p>
           </details>
         </div>

@@ -1394,7 +1394,13 @@ _pmg_in_restore() {
     rc=$?
     case "$rc" in
         0) PMG_IN_STAGE="restored"
-           warn "Payouts FROZEN on the restored ledger (reason: $PMG_IN_FREEZE_REASON)." ;;
+           warn "Payouts FROZEN on the restored ledger (reason: $PMG_IN_FREEZE_REASON)."
+           # Stratum is paused by the same core; step 7 re-stamps it so its 2 h count from the start.
+           if [[ "$PBK_EXTRACT_PAUSED" == "1" ]]; then
+               success "Stratum PAUSED on the restored pool.db (the pool will start not accepting miners)."
+           else
+               warn "Could not pause stratum on the restored pool.db yet — step 7 tries again before the start."
+           fi ;;
         1) PMG_IN_STAGE="restored"
            # The core froze whatever pool.db a partial extraction left in place.
            [[ "$PBK_EXTRACT_FROZEN" == "1" ]] || error "Payouts could NOT be frozen on the pool.db now in place."
@@ -1700,6 +1706,22 @@ _pmg_in_start() {
     declare -F pw_listener_start >/dev/null 2>&1 || { _pmg_in_fail 7 "wallet helpers are not loaded"; return 1; }
     pw_listener_start || { _pmg_in_fail 7 "the wallet listener did not start or unlock (above)"; return 1; }
 
+    # Stratum pause (design §21.13 Q1), re-stamped HERE so its 2 h run from the start, not from
+    # step 3 — bring-up + continuity can eat most of them, and a pause that expired before the
+    # start boots ACCEPTING. Also the retry if step 3's write failed. The service is still
+    # stopped (required: a running pool would overwrite the row); rechown, because this root
+    # open can leave WAL sidecars the de-rooted service could not write.
+    local pu=""
+    if pu=$(pbk_pause_stratum "$(_pmg_db)" \
+            'hub moved here (Migrate IN) — check the pool, then Resume' 'system:restore') \
+            && [[ "$pu" =~ ^[0-9]+$ ]]; then
+        PBK_EXTRACT_PAUSED=1; PBK_EXTRACT_PAUSE_UNTIL="$pu"
+    else
+        PBK_EXTRACT_PAUSED=0; PBK_EXTRACT_PAUSE_UNTIL=""
+    fi
+    _pmg_rechown_db
+    _pbk_report_stratum_pause
+
     systemctl enable "$POOL_SERVICE" >/dev/null 2>&1 || true
     systemctl start "$POOL_SERVICE" 2>/dev/null || { PMG_IN_STAGE="started"; _pmg_in_fail 7 "systemctl start $POOL_SERVICE failed — journalctl -u $POOL_SERVICE -n 50"; return 1; }
     PMG_IN_STAGE="started"
@@ -1715,15 +1737,31 @@ _pmg_in_start() {
     [[ "$ok" -eq 1 ]] || { _pmg_in_fail 7 "the pool service runs but /api/health does not answer ($POOL_NET) on :$port — journalctl -u $POOL_SERVICE -n 50"; return 1; }
     success "Pool API answers on :$port ($POOL_NET)."
 
+    # A PAUSED pool binds no stratum listener at all (design §21.5) — that is the intended state
+    # after the restore above, so "nothing listens" is then the PASS, and a listener is the fault.
+    # The pool says which it is in /api/health's `stratum` (paused | accepting).
+    local stst
+    stst=$(node -e 'let s="";process.stdin.on("data",c=>s+=c).on("end",()=>{try{process.stdout.write(String(JSON.parse(s).stratum||""));}catch(e){}})' <<< "$body" 2>/dev/null)
     role=$(_pmg_conf role singlebox)
     if [[ "$role" == "singlebox" ]]; then
         sp=$(_pmg_conf stratum_port "")
-        n=0
-        while [[ -n "$sp" ]] && ! _pmg_port_listening "$sp" && (( n < 10 )); do sleep 1; n=$((n + 1)); done
-        if [[ -n "$sp" ]] && ! _pmg_port_listening "$sp"; then
-            _pmg_in_fail 7 "nothing listens on the public stratum :$sp"; return 1
+        if [[ "$stst" == "paused" ]]; then
+            if [[ -n "$sp" ]] && _pmg_port_listening "$sp"; then
+                warn "The pool reports stratum PAUSED, yet something listens on :$sp — check: ss -ltnp | grep ':$sp '"
+            else
+                success "Stratum PAUSED — nothing listens on${sp:+ :$sp}, as intended. Resume it in admin once checked."
+            fi
+        else
+            n=0
+            while [[ -n "$sp" ]] && ! _pmg_port_listening "$sp" && (( n < 10 )); do sleep 1; n=$((n + 1)); done
+            if [[ -n "$sp" ]] && ! _pmg_port_listening "$sp"; then
+                _pmg_in_fail 7 "nothing listens on the public stratum :$sp"; return 1
+            fi
+            success "Stratum listening on :$sp."
+            if [[ "$PBK_EXTRACT_PAUSED" == "1" ]]; then
+                warn "Stratum was paused on pool.db, yet the pool came up ACCEPTING — pause it in admin → Announcements → Stratum."
+            fi
         fi
-        success "Stratum listening on :$sp."
     fi
 
     prc=0; pw_coinbase_probe || prc=$?
@@ -1862,6 +1900,11 @@ _pmg_in_final() {
     else
         echo -e "    2. HTTPS is up with the old hub's cert; certbot renews it here from now on."
     fi
+    if [[ "${PBK_EXTRACT_PAUSED:-0}" == "1" ]]; then
+        echo -e "    ${BOLD}Stratum is PAUSED${RESET} until $(_pbk_utc "$PBK_EXTRACT_PAUSE_UNTIL") — resume it in admin → Announcements →"
+        echo -e "       Stratum as soon as the pool checks out; every minute until then is downtime."
+        echo -e "       ${DIM}EADDRNOTAVAIL on a region = its WireGuard address is not up yet: tunnel up, then Re-bind.${RESET}"
+    fi
     echo -e "    3. Reconcile: admin → Health → Reconciliation must report clean."
     echo -e "    4. THEN resume payouts in admin → Payouts. Nothing here unfreezes them."
     echo -e "    5. B → 3 turns the daily backup back on (B → 4 → 1 first if this box has no key yet)."
@@ -1891,7 +1934,8 @@ _pmg_in_intro() {
     echo -e "    4. Bring-up: node secrets, wallet binary, ownership, web files, WireGuard, nginx."
     echo -e "    5. Continuity: every balance, count and max id must EQUAL the manifest, and the wallet"
     echo -e "       must open against this node. Any ✗ stops here — nothing has started."
-    echo -e "    6. Wallet listener + pool start; then the DNS records to change."
+    echo -e "    6. Wallet listener + pool start, stratum PAUSED (no miner accepted until you resume it,"
+    echo -e "       at most 2 h); then the DNS records to change."
     echo ""
     echo -e "  ${YELLOW}Run CHECK first, BEFORE Migrate OUT on the old hub — what it finds is then fixed while${RESET}"
     echo -e "  ${YELLOW}the old hub still serves, not inside the downtime window.${RESET}"

@@ -319,6 +319,10 @@ class PoolSettings {
       confirm_depth_testnet: 100,
       max_pending_withdrawals: 100,
       max_user_pending: 10,
+      // Change splitting (2026-10-05, impl doc §10.18): while the pool wallet holds fewer than this
+      // many spendable outputs, a payout's change is split into 2–3 outputs so the next payouts
+      // find coins of their own instead of "another payment is ahead". 0 disables.
+      payout_target_outputs: 8,
       // `withdrawal_retry_delays` was REMOVED 2026-09-26: a Tor payout is tried once, so the retry
       // ladder it configured is gone (it was also shadowed, audit §J9-8, and had no field). A stored
       // row stays inert, like auto_payout above.
@@ -1185,6 +1189,15 @@ PASS      any-password-you-choose</code>
         }
         return n;
       },
+      // Same whole-number rule as the caps above. 0 is valid (splitting off); the ceiling keeps a
+      // typo from turning every payout into a 3-way split for the life of the pool.
+      payout_target_outputs: (val) => {
+        const n = Number(String(val == null ? '' : val).trim());
+        if (String(val == null ? '' : val).trim() === '' || !Number.isInteger(n) || n < 0 || n > 50) {
+          throw new Error('payout_target_outputs must be a whole number 0-50');
+        }
+        return n;
+      },
       max_user_pending: (val) => {
         const n = Number(String(val == null ? '' : val).trim());
         if (String(val == null ? '' : val).trim() === '' || !Number.isInteger(n) || n < 1 || n > 100) {
@@ -1958,6 +1971,9 @@ PASS      any-password-you-choose</code>
     }
     if (payout.max_user_pending !== undefined) {
       config.max_user_pending = payout.max_user_pending;
+    }
+    if (payout.payout_target_outputs !== undefined) {
+      config.payout_target_outputs = payout.payout_target_outputs;
     }
     if (payout.withdrawal_cooldown_minutes !== undefined) {
       config.withdrawal_cooldown_minutes = payout.withdrawal_cooldown_minutes;

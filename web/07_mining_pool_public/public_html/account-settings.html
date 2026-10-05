@@ -2166,7 +2166,7 @@
             wallet_offline_cleared: { offer: true, text: '✗ Your wallet did not answer over Tor — your balance is back. Start your wallet listener and try again, or get it as a Slatepack now.' },
             wallet_unreachable: { offer: true, text: '✗ The payout could not reach your wallet over Tor — your balance is back. Try again, or get it as a Slatepack now.' },
             pool_send_path: { offer: true, text: '✗ The pool could not deliver over Tor — your balance is back. Please use Slatepack; the operator has been alerted.' },
-            pool_busy: { offer: false, tone: '', text: 'The pool could not send this payout right now — your balance is back. Try again later.' },
+            pool_busy: { offer: false, tone: '', text: 'Another payment was ahead of yours, so this one could not be sent — your balance is back. Please try again in about 15 minutes.' },
             unknown: { offer: true, text: '✗ This payout did not go out — your balance is back.' }
         };
         const TOR_FAIL_GENERIC = { offer: false, text: '✗ Payout failed — the full amount is back in your balance.' };

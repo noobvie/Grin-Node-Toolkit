@@ -14,6 +14,9 @@
 
 const { computeReconciliation, auditWalletSends, probeWalletIdentity } = require('./reconciliation');
 
+// How long a confirmed payout keeps explaining a wallet drop (see checkMoneyIntegrity).
+const DRAIN_SETTLE_SECS = 6 * 3600;
+
 class AlertMonitor {
   constructor(config, modules, db) {
     this.config = config;
@@ -39,7 +42,9 @@ class AlertMonitor {
     // run on a slower cadence than the 60s liveness loop.
     this.moneyCheckIntervalMs = (config.alert_money_check_interval_secs || 300) * 1000;
     this.lastMoneyCheckAt = 0;
-    // Snapshot of wallet total between money checks — the basis for the drain detector.
+    // Snapshot of the wallet's HELD amount (total + locked, see lib/reconciliation.js) between
+    // money checks — the basis for the drain detector. `total` alone fell by a payout's whole
+    // inputs while it was in flight, so every payout from a big output read as a drain.
     this.prevWalletTotal = null;
     this.prevWalletCheckAt = null;
 
@@ -212,8 +217,8 @@ class AlertMonitor {
       if (c.coverage_full_ok === false) {
         await this.triggerAlert('coverage_shortfall', {
           level: 'critical',
-          message: `Pool under-funded: wallet total ${recon.wallet.total} GRIN vs owed ${recon.ledger.total_owed} GRIN (unexplained gap ${c.coverage_full_gap} after ${c.network_fees_paid} GRIN recorded network fees).`,
-          data: { coverage_full_gap: c.coverage_full_gap, network_fees_paid: c.network_fees_paid, wallet_total: recon.wallet.total, total_owed: recon.ledger.total_owed }
+          message: `Pool under-funded: wallet held (total + locked) ${recon.wallet.held} GRIN vs owed ${recon.ledger.total_owed} GRIN (unexplained gap ${c.coverage_full_gap} after ${c.network_fees_paid} GRIN recorded network fees).`,
+          data: { coverage_full_gap: c.coverage_full_gap, network_fees_paid: c.network_fees_paid, wallet_total: recon.wallet.total, wallet_held: recon.wallet.held, total_owed: recon.ledger.total_owed }
         });
         await this._maybeFreeze(`coverage shortfall ${c.coverage_full_gap} GRIN`);
       } else if (c.coverage_full_ok === true) {
@@ -247,14 +252,21 @@ class AlertMonitor {
         // legit big payout mid-flight is never mistaken for a drain (biased against false freeze).
         // amount + fee: the wallet spends both on a payout (sender-pays), so the fee is part
         // of the EXPLAINED outflow — without it every payout leaves a small "unexplained" residue.
+        // HELD (total + locked) only falls when a send is MINED, which can be minutes after the
+        // scheduler marked it confirmed (a Tor payout is confirmed at send) — or hours, for one the
+        // payout_unmined watchdog is reposting. So a payout keeps explaining a drop for
+        // DRAIN_SETTLE_SECS after its confirmed_at, not only in the window it was confirmed in;
+        // without that, a payout confirmed before the last snapshot and mined after it read as an
+        // unexplained drain of its full amount. Cost: a theft can hide behind the payouts of the
+        // last few hours — the unrecorded_wallet_send audit below is the exact detector for that.
         const paid = this.db.prepare(
           `SELECT COALESCE(SUM(amount + COALESCE(fee,0)),0) AS s FROM withdrawals WHERE status='confirmed' AND confirmed_at > ?`
-        ).get(this.prevWalletCheckAt).s;
+        ).get(this.prevWalletCheckAt - DRAIN_SETTLE_SECS).s;
         const inFlight = this.db.prepare(
           `SELECT COALESCE(SUM(amount + COALESCE(fee,0)),0) AS s FROM withdrawals
            WHERE status IN ('tor_sending','tor_checking','tor_held','retry_scheduled','slatepack_pending','finalizing')`
         ).get().s;
-        const drop = this.prevWalletTotal - recon.wallet.total;
+        const drop = this.prevWalletTotal - recon.wallet.held;
         const unexplained = drop - paid - inFlight;
         const threshold = Math.max(
           this.thresholds.wallet_drain_grin,
@@ -279,7 +291,7 @@ class AlertMonitor {
         }
       }
       // Advance the snapshot only when the wallet was reachable (else we'd compare against stale zero).
-      this.prevWalletTotal = recon.wallet.total;
+      this.prevWalletTotal = recon.wallet.held;
       this.prevWalletCheckAt = nowSec;
     }
 

@@ -37,11 +37,13 @@ class WalletAPI {
   // wallet→node output scan (slow; can exceed the 10s node-fetch timeout on a fresh/busy
   // wallet → false "Down") — reserve it for the custodial reconciliation check.
   // (Mirrors the Grin Drop pattern in 059_drop/server/app.js.)
-  async getBalance(refresh = false) {
+  // `minConf` sets what counts as spendable: 1 for the Owner-API rails, 10 to see what the Tor
+  // rail's CLI `send` (default --min_conf 10) can actually select.
+  async getBalance(refresh = false, minConf = 1) {
     try {
       // retrieve_summary_info params: [keychain_mask, refresh_from_node, min_confirmations]
       // (the mask slot is filled in by _call from the open_wallet token)
-      const result = await this._call('retrieve_summary_info', [null, !!refresh, 1]);
+      const result = await this._call('retrieve_summary_info', [null, !!refresh, minConf]);
       return result;
     } catch (err) {
       console.error(`[Wallet] Balance error: ${err.message}`);
@@ -122,13 +124,18 @@ class WalletAPI {
   //     (owner.rs update_wallet_state, "Step 5") — which would unlock a payout already on its way.
   //
   //     60 s timeout, not the 10 s default: v5.5.0 refreshes outputs from the node inside init.
-  async initSendTx(amountGrin, { minimumConfirmations = 1 } = {}) {
+  //
+  //     `changeOutputs` (1–3) splits the change into that many equal outputs — the scheduler asks
+  //     for more while the wallet holds few spendable outputs, so concurrent payouts stop
+  //     queueing behind one locked coin (WithdrawalScheduler._changeOutputCount).
+  async initSendTx(amountGrin, { minimumConfirmations = 1, changeOutputs = 1 } = {}) {
+    const n = Number(changeOutputs);
     const args = {
       src_acct_name: null,
       amount: Math.round(Number(amountGrin) * 1e9),
       minimum_confirmations: minimumConfirmations,
       max_outputs: 500,
-      num_change_outputs: 1,
+      num_change_outputs: Number.isInteger(n) && n >= 1 && n <= 3 ? n : 1,
       selection_strategy_is_use_all: false,
       target_slate_version: null,
       payment_proof_recipient_address: null,
@@ -137,6 +144,28 @@ class WalletAPI {
       late_lock: null
     };
     return this._call('init_send_tx', { token: null, args }, { timeoutMs: 60000 });
+  }
+
+  // How many outputs a send at `minConf` could select right now: Unspent, not an immature
+  // coinbase, at least `minConf` deep (grin's num_confirmations = 1 + tip − height). Both reads use
+  // the wallet's CACHED view (refresh=false) — this is a hint for how to split change, so a stale
+  // count costs nothing. retrieve_outputs takes NAMED params (v5.5.0 owner_rpc.rs doctest).
+  async countSpendableOutputs(minConf = 1) {
+    const summary = await this.getBalance(false, minConf);
+    const info = Array.isArray(summary) ? summary[1] : (summary || {});
+    const tip = Number(info.last_confirmed_height);
+    const res = await this._call('retrieve_outputs', { token: null, include_spent: false, refresh_from_node: false, tx_id: null });
+    const list = Array.isArray(res) ? res[1] : null;
+    if (!Number.isFinite(tip) || !Array.isArray(list)) throw new Error('unexpected retrieve_outputs shape');
+    let n = 0;
+    for (const m of list) {
+      const o = (m && m.output) || {};
+      if (o.status !== 'Unspent') continue;
+      if (o.is_coinbase && Number(o.lock_height) > tip) continue;
+      if (1 + tip - Number(o.height) < minConf) continue;
+      n++;
+    }
+    return n;
   }
 
   // 1b. Lock the inputs the slate spends (must run before sharing the slate). Writes the TxSent

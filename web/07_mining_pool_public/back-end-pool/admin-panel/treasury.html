@@ -41,7 +41,7 @@
         <div class="kpi-card"><div class="kpi-label">Wallet Spendable</div><div class="kpi-value" id="rc-w-spend">—</div></div>
         <div class="kpi-card"><div class="kpi-label">Owed (withdrawable now)</div><div class="kpi-value" id="rc-owed-spend">—</div></div>
         <div class="kpi-card"><div class="kpi-label">Liquid Gap (pay-now)</div><div class="kpi-value" id="rc-gap-liquid">—</div></div>
-        <div class="kpi-card"><div class="kpi-label">Wallet Total</div><div class="kpi-value" id="rc-w-total">—</div></div>
+        <div class="kpi-card"><div class="kpi-label" title="Wallet total + locked: includes the inputs of payouts still in flight, which grin-wallet leaves out of its total until they are mined">Wallet Held (total + locked)</div><div class="kpi-value" id="rc-w-total">—</div></div>
         <div class="kpi-card"><div class="kpi-label">Owed (all)</div><div class="kpi-value" id="rc-owed-total">—</div></div>
         <div class="kpi-card"><div class="kpi-label">Full Gap (solvency)</div><div class="kpi-value" id="rc-gap-full">—</div></div>
       </div>
@@ -198,7 +198,7 @@ async function loadReconciliation() {
     set('rc-w-spend',    w.reachable ? fmtGrin(w.spendable) + ' ツ' : 'unreachable');
     set('rc-owed-spend', fmtGrin(d.ledger.spendable_owed) + ' ツ');
     setGap('rc-gap-liquid', c.coverage_liquid_gap, c.coverage_liquid_ok);
-    set('rc-w-total',    w.reachable ? fmtGrin(w.total) + ' ツ' : 'unreachable');
+    set('rc-w-total',    w.reachable ? fmtGrin(w.held) + ' ツ' : 'unreachable');
     set('rc-owed-total', fmtGrin(d.ledger.total_owed) + ' ツ');
     setGap('rc-gap-full', c.coverage_full_gap, c.coverage_full_ok);
 
@@ -261,7 +261,7 @@ async function loadReconciliation() {
     const banner = document.getElementById('recon-banner');
     const problems = [];
     if (c.coverage_liquid_ok === false) problems.push('⚠ Wallet spendable does NOT cover currently-withdrawable balances (cannot pay out now).');
-    if (c.coverage_full_ok === false) problems.push('⚠ Wallet total does NOT cover everything owed (under-funded).');
+    if (c.coverage_full_ok === false) problems.push('⚠ Wallet held (total + locked) does NOT cover everything owed (under-funded).');
     if (c.locked_ok === false) problems.push('⚠ Locked-balance ledger does not match in-flight withdrawals.');
     if (c.integrity_ok === false) problems.push(`⚠ INTEGRITY DRIFT ${fmtSigned(c.integrity_drift)} ツ — a balance moved without a ledger row (bug or tampering).`);
     if (((F.lifetime || {}).net || 0) < 0) problems.push('⚠ Lifetime OUT exceeds IN — impossible under correct accounting.');
@@ -455,7 +455,7 @@ async function wizVerify() {
     else if (id.firstRun) lines.push('New wallet detected — no prior identity was pinned.');
     else if (id.match) lines.push('Live wallet matches the CURRENTLY-adopted identity (no change detected).');
     else lines.push('New wallet differs from the adopted one — adopting will re-pin to it.');
-    if (w.reachable) lines.push(`Coverage: wallet total ${Number(w.total).toFixed(4)} ツ vs owed ${Number(recon.ledger.total_owed).toFixed(4)} ツ → ${c.coverage_full_ok === false ? '⚠ UNDER-FUNDED' : 'covered ✓'}`);
+    if (w.reachable) lines.push(`Coverage: wallet held ${Number(w.held).toFixed(4)} ツ vs owed ${Number(recon.ledger.total_owed).toFixed(4)} ツ → ${c.coverage_full_ok === false ? '⚠ UNDER-FUNDED' : 'covered ✓'}`);
     document.getElementById('sw-verify').innerHTML = lines.map(escHtml).join('<br>');
     _wizVerified = !!id.reachable;
     document.getElementById('sw-adopt-btn').disabled = !_wizVerified;

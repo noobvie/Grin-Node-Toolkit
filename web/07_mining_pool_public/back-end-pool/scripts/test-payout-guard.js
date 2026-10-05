@@ -861,6 +861,8 @@ console.log('\n[1] §J4-10 — the matcher has three outcomes, not two');
   await guarded(expiryGateSection);
   await guarded(walletVersionSection);
   await guarded(doublePayCardSection);
+  await guarded(inFlightCoverageSection);
+  await guarded(paymentQueueSection);
 
   console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed\n`);
   cleanup();
@@ -2624,6 +2626,8 @@ async function reviewFixesSection() {
       const id = seedWithdrawal({ status: 'tor_checking', retries: 0, priorAttempt: false });
       await quiet(async () => {
         const sp = s.createSlatepackWithdrawal(ADDR2, 30).catch(() => {});
+        // "Already selecting coins" = past the pre-lock wallet read (2026-10-05), which yields once.
+        await new Promise((r) => setImmediate(r));
         await s.sendWithdrawal(id);
         await sp;
       });
@@ -3342,4 +3346,253 @@ async function doublePayCardSection() {
   const acct = fs.readFileSync(path.join(APP, '../public_html/account-settings.html'), 'utf8');
   ok('D9. the account page tells a CLI miner to run `grin-wallet receive -m` (skips the Tor reply that cannot reach the pool)',
     /<code>grin-wallet receive -m<\/code>/.test(acct));
+}
+
+// ═══ [in-flight] payouts in flight never read as a shortfall or a drain (2026-10-05) ═══════════
+// grin-wallet v5.5.0 retrieve_info (min_conf 1): a payout's inputs go to amount_locked, its change
+// to amount_awaiting_finalization, and `total` counts NEITHER until the tx is mined. Coverage and
+// the drain detector compared `total`, so two miners withdrawing their full balances from one big
+// output read as a 1000-GRIN shortfall and AUTO-FROZE payouts. Both now compare HELD
+// (total + locked). Every case below fails against the old `total` formula.
+async function inFlightCoverageSection() {
+  console.log('\n[in-flight] concurrent payouts are not a shortfall, and not a drain');
+  const { computeReconciliation } = require(path.join(APP, 'lib/reconciliation.js'));
+  const AlertMonitor = require(path.join(APP, 'lib/alert-monitor.js'));
+  const X = 'tgrin1' + 'x'.repeat(58), Y = 'tgrin1' + 'y'.repeat(58);
+  const wipe = () => {
+    db.exec('DELETE FROM withdrawal_events; DELETE FROM withdrawals; DELETE FROM balance_log;');
+    db.exec('UPDATE miner_accounts SET balance = 0, balance_locked = 0');
+  };
+  const setAcct = (addr, balance, locked) => db.prepare(
+    `INSERT INTO miner_accounts (grin_address, balance, balance_locked) VALUES (?, ?, ?)
+     ON CONFLICT(grin_address) DO UPDATE SET balance = excluded.balance, balance_locked = excluded.balance_locked`
+  ).run(addr, balance, locked);
+  // Wallet summary in nanoGRIN, the shape retrieve_summary_info returns.
+  const n = (g) => String(Math.round(g * 1e9));
+  const walletOf = (w) => ({ async getBalance() { return [true, {
+    total: n(w.total), amount_currently_spendable: n(w.spendable || 0), amount_locked: n(w.locked || 0),
+    amount_immature: '0', amount_awaiting_confirmation: '0', amount_awaiting_finalization: n(w.af || 0) }]; } });
+  const recon = async (w) => (await computeReconciliation(db, walletOf(w), true)).checks;
+
+  wipe();
+  // One 1000-GRIN output; X is owed 600, Y 400.
+  setAcct(X, 600, 0); setAcct(Y, 400, 0);
+  let c = await recon({ total: 1000, spendable: 1000 });
+  ok('IF1. baseline: one 1000 output covers 600 + 400 owed', c.coverage_full_ok === true, JSON.stringify(c));
+
+  // Both withdraw everything. The wallet locks the whole output; total counts nothing.
+  setAcct(X, 0, 600); setAcct(Y, 0, 400);
+  const ins = db.prepare(`INSERT INTO withdrawals (grin_address, amount, fee, status, method, created_at, confirmed_at)
+                          VALUES (?, ?, ?, ?, ?, ?, ?)`);
+  const wx = ins.run(X, 600, 0, 'slatepack_pending', 'slatepack', nowS(), null).lastInsertRowid;
+  ins.run(Y, 400, 0, 'tor_sending', 'tor', nowS(), null);
+  c = await recon({ total: 0, locked: 1000, af: 0 });
+  ok('IF2. two full-balance payouts in flight (total 0, locked 1000) are NOT a shortfall',
+    c.coverage_full_ok === true && Math.abs(c.coverage_full_gap) < 1e-6, JSON.stringify(c));
+
+  // X's payout is confirmed in the ledger (debited, fee recorded) but not yet mined.
+  db.prepare("UPDATE withdrawals SET status = 'confirmed', confirmed_at = ?, fee = 0.02 WHERE id = ?").run(nowS(), wx);
+  setAcct(X, 0, 0);
+  c = await recon({ total: 0, locked: 1000, af: 399.98 });
+  ok('IF3. confirmed-but-unmined over-reads (safe side), never a shortfall', c.coverage_full_ok === true && c.coverage_full_gap > 0,
+    JSON.stringify(c));
+  // Y refunded (pool_busy) and X mined: only X's change is left.
+  db.prepare("UPDATE withdrawals SET status = 'tor_failed' WHERE grin_address = ?").run(Y);
+  setAcct(Y, 400, 0);
+  c = await recon({ total: 399.98, spendable: 399.98 });
+  ok('IF4. after X mines, the change + recorded fee balance exactly', c.coverage_full_ok === true && Math.abs(c.coverage_full_gap) < 1e-6,
+    JSON.stringify(c));
+  c = await recon({ total: 200, spendable: 200 });
+  ok('IF5. a REAL shortfall (nothing locked, 200 vs 400 owed) is still caught', c.coverage_full_ok === false, JSON.stringify(c));
+
+  // ── The drain detector across the same sequence, at the 5-min money cadence ──
+  wipe();
+  setAcct(X, 600, 0); setAcct(Y, 400, 0);
+  const freezes = [];
+  let w = { total: 1000, spendable: 1000 };
+  const am = new AlertMonitor({}, {
+    wallet: { async getBalance() { return walletOf(w).getBalance(); } },
+    withdrawalScheduler: { isFrozen: () => false, freeze: (reason) => freezes.push(reason) },
+  }, db);
+  am.triggerAlert = async () => {}; am.resolveAlert = async () => {};
+  am.checkUnrecordedSends = async () => {};
+  const drainFreezes = () => freezes.filter((r) => /drain|coverage/.test(r));
+  // Integrity drift is expected here (balances are set without ledger rows) — only drain and
+  // coverage freezes are under test.
+  await quiet(() => am.checkMoneyIntegrity());                       // snapshot: held 1000
+  setAcct(X, 0, 600);
+  const wx2 = ins.run(X, 600, 0, 'tor_sending', 'tor', nowS(), null).lastInsertRowid;
+  w = { total: 0, locked: 1000, af: 399.98 };
+  await quiet(() => am.checkMoneyIntegrity());                       // in flight
+  db.prepare("UPDATE withdrawals SET status = 'confirmed', confirmed_at = ?, fee = 0.02 WHERE id = ?").run(nowS() - 60, wx2);
+  setAcct(X, 0, 0);
+  // Next check is AFTER the confirm: the payout is older than the last snapshot when it mines.
+  am.prevWalletCheckAt = nowS();
+  w = { total: 399.98, spendable: 399.98 };
+  await quiet(() => am.checkMoneyIntegrity());                       // mined
+  ok('IF6. a 600-GRIN payout locked, confirmed, then mined across three checks: no drain or coverage freeze',
+    drainFreezes().length === 0, JSON.stringify(freezes));
+  // 299.98 vanishes. Inside the settle window the recent 600 payout masks it from the DRAIN
+  // check (the documented cost) — but coverage compares against what is OWED and catches it.
+  w = { total: 100, spendable: 100 };
+  await quiet(() => am.checkMoneyIntegrity());
+  ok('IF7. …an unexplained 300-GRIN drop right after it is caught by COVERAGE at once',
+    drainFreezes().some((r) => /coverage shortfall/.test(r)), JSON.stringify(freezes));
+  // Once the payout is older than the settle window it no longer explains anything.
+  freezes.length = 0;
+  db.prepare('UPDATE withdrawals SET confirmed_at = ? WHERE id = ?').run(nowS() - 7 * 3600, wx2);
+  am.prevWalletTotal = 399.98;
+  await quiet(() => am.checkMoneyIntegrity());
+  ok('IF8. …and as a DRAIN once the payout is past the settle window',
+    drainFreezes().some((r) => /drain/.test(r)), JSON.stringify(freezes));
+  wipe();
+}
+
+// ═══ [queue] "Another payment is ahead" — refused before the lock, with an honest wait (2026-10-05) ═══
+// A payout locks whole outputs; their change is not spendable until mined (1 conf) or 10 deep (Tor
+// CLI). A second miner right behind the first used to get NotEnoughFunds — after their balance was
+// locked, so the reversal also started the 30-min cooldown. The wallet is now read BEFORE the lock,
+// and the wait is the LATEST release among the payouts ahead, never their sum.
+async function paymentQueueSection() {
+  console.log('\n[queue] payments ahead: wait = the slowest one, refused before any lock');
+  const now = nowS();
+  const ins = db.prepare(`INSERT INTO withdrawals (grin_address, amount, status, method, created_at, confirmed_at)
+                          VALUES (?, ?, ?, ?, ?, ?)`);
+  const OTHER = 'tgrin1' + 'q'.repeat(58);
+  db.prepare(`INSERT INTO miner_accounts (grin_address, balance, balance_locked) VALUES (?, 0, 0)
+    ON CONFLICT(grin_address) DO NOTHING`).run(OTHER);
+  const minConfs = [];
+  let spendable = 0, initErr = null, inits = 0;
+  const wallet = {
+    async getBalance(refresh, minConf) {
+      minConfs.push(minConf);
+      if (spendable === 'throw') throw new Error('owner API down');
+      return [true, { amount_currently_spendable: String(Math.round(spendable * 1e9)) }];
+    },
+    async initSendTx() { inits++; if (initErr) throw initErr; return { id: 'slate-q' }; },
+    async txLockOutputs() {},
+    async createSlatepackMessage() { return 'BEGINSLATEPACK. x. ENDSLATEPACK.'; },
+    async cancelTx() {},
+  };
+  const s = new WithdrawalScheduler({ ...config, slatepack_ttl_minutes: 30 }, wallet);
+  const fresh = () => { reset(); db.prepare('UPDATE miner_accounts SET balance = 100 WHERE grin_address = ?').run(ADDR); };
+
+  fresh();
+  let q = s._paymentQueueWait();
+  ok('Q1. nothing in flight → nothing ahead', q.ahead === 0 && q.waitSecs === 0, JSON.stringify(q));
+
+  ins.run(OTHER, 50, 'tor_sending', 'tor', now, null);
+  q = s._paymentQueueWait();
+  ok('Q2. one Tor payout in flight → 1 ahead, up to 15 min', q.ahead === 1 && Math.abs(q.waitSecs - 900) <= 2, JSON.stringify(q));
+  ok('Q2. …worded "Another payment is ahead of yours — … up to 15 minutes. Nothing was deducted"',
+    /^Another payment is ahead of yours — please try again in up to 15 minutes\. Nothing was deducted/.test(s._queueMessage(q)),
+    s._queueMessage(q));
+
+  // Five mixed payouts: the wait is the slowest (a slatepack just created: its 30-min expiry), not 5×.
+  ins.run(OTHER, 50, 'tor_checking', 'tor', now, null);
+  ins.run(OTHER, 50, 'tor_held', 'tor', now - 600, null);
+  ins.run(OTHER, 50, 'slatepack_pending', 'slatepack', now - 60, null);
+  ins.run(OTHER, 50, 'slatepack_pending', 'nostr', now, null);
+  q = s._paymentQueueWait();
+  ok('Q3. 5 mixed Tor/Slatepack/Goblin payouts → 5 ahead, wait = the slowest (≈29 min), not the sum',
+    q.ahead === 5 && q.waitSecs > 28 * 60 && q.waitSecs <= 30 * 60, JSON.stringify(q));
+  ok('Q3. …"5 other payments are ahead of yours — … up to 30 minutes"',
+    /^5 other payments are ahead of yours — please try again in up to 30 minutes\./.test(s._queueMessage(q)), s._queueMessage(q));
+
+  // A Tor payout confirmed 5 min ago still holds its change (10 confirmations); one 20 min ago does not.
+  fresh();
+  ins.run(OTHER, 50, 'confirmed', 'tor', now - 900, now - 300);
+  ins.run(OTHER, 50, 'confirmed', 'tor', now - 1500, now - 1200);
+  q = s._paymentQueueWait();
+  ok('Q4. a Tor payout confirmed 5 min ago counts (≈10 min left); one confirmed 20 min ago does not',
+    q.ahead === 1 && q.waitSecs > 590 && q.waitSecs <= 600, JSON.stringify(q));
+
+  // ── the pre-check ──
+  fresh();
+  ins.run(OTHER, 50, 'tor_sending', 'tor', now, null);
+  spendable = 10; minConfs.length = 0;
+  let e = await thrown(() => s.precheckWalletCover(ADDR, 60));
+  ok('Q5. Tor request the wallet cannot cover while a payout is ahead → 503 "Another payment is ahead"',
+    !!e && e.code === 503 && /^Another payment is ahead/.test(e.message) && e.retry_after >= 300, e && e.message);
+  ok('Q5. …read at the Tor CLI\'s min_conf (10), from the CACHED summary', minConfs[0] === 10, JSON.stringify(minConfs));
+  spendable = 100;
+  ok('Q6. …and the same request passes once the wallet can cover it', (await thrown(() => s.precheckWalletCover(ADDR, 60))) === null);
+  spendable = 'throw';
+  ok('Q7. an unreadable wallet FAILS OPEN (grin-wallet stays the authority)', (await thrown(() => s.precheckWalletCover(ADDR, 60))) === null);
+  db.exec('DELETE FROM withdrawal_events; DELETE FROM withdrawals;');
+  spendable = 10;
+  ok('Q8. short with NOTHING ahead is not a queue — left to the authoritative path (operator alert)',
+    (await thrown(() => s.precheckWalletCover(ADDR, 60))) === null);
+
+  // Slatepack: refused BEFORE the lock → no reversal → no cooldown on the retry.
+  fresh();
+  ins.run(OTHER, 50, 'tor_sending', 'tor', now, null);
+  spendable = 10; inits = 0; minConfs.length = 0;
+  e = await thrown(() => quiet(() => s.createSlatepackWithdrawal(ADDR, 60)));
+  ok('Q9. slatepack request behind a payout → 503 queue message, read at min_conf 1',
+    !!e && e.code === 503 && /^Another payment is ahead/.test(e.message) && minConfs[0] === 1, e && e.message);
+  const logRows = db.prepare('SELECT COUNT(*) AS c FROM balance_log WHERE grin_address = ?').get(ADDR).c;
+  ok('Q9. …nothing locked, no ledger row, no slate built', Math.abs(acct().balance - 100) < 1e-9 && acct().balance_locked === 0 &&
+    logRows === 0 && inits === 0, JSON.stringify({ acct: acct(), logRows, inits }));
+  ok('Q9. …so the retry is NOT blocked by the reversal cooldown', (await thrown(() => s._assertNoRecentReversal(ADDR))) === null);
+
+  // The pre-check raced: wallet looked fine, init said NotEnoughFunds after the lock. The reversal
+  // has started the 30-min cooldown, so the wait shown must not be shorter than it.
+  spendable = 100; initErr = new Error('NotEnoughFunds { available: 1, needed: 59 }');
+  e = await thrown(() => quiet(() => s.createSlatepackWithdrawal(ADDR, 60)));
+  ok('Q10. post-lock NotEnoughFunds with a payout ahead → queue message, wait ≥ the 30-min cooldown',
+    !!e && e.code === 503 && /ahead of yours — please try again in up to 30 minutes/.test(e.message), e && e.message);
+  ok('Q10. …and the wallet\'s figures never reach the miner', !!e && !/available|needed|NotEnoughFunds/.test(e.message));
+  reset(); db.prepare('UPDATE miner_accounts SET balance = 100 WHERE grin_address = ?').run(ADDR);
+  e = await thrown(() => quiet(() => s.createSlatepackWithdrawal(ADDR, 60)));
+  ok('Q11. post-lock NotEnoughFunds with NOTHING ahead keeps the "contact the pool operator" line',
+    !!e && e.code === 503 && /contact the pool operator/.test(e.message), e && e.message);
+  initErr = null;
+
+  // ── change splitting: how many change outputs a payout asks for ──
+  const mkSplit = (have, target) => {
+    const sc = new WithdrawalScheduler({ ...config, payout_target_outputs: target },
+      { async countSpendableOutputs() { if (have === 'throw') throw new Error('down'); return have; } });
+    return sc._changeOutputCount(1);
+  };
+  const splits = [await mkSplit(1, undefined), await mkSplit(6, undefined), await mkSplit(7, undefined),
+                  await mkSplit(8, undefined), await mkSplit(1, 0), await mkSplit('throw', undefined), await mkSplit(1, 'x')];
+  ok('Q13. change outputs: 1 of 8 → 3, 6 → 2, 7 → 2, ≥8 → 1, target 0 → off (1), wallet error → 1, bad target → default 8',
+    JSON.stringify(splits) === '[3,2,2,1,1,1,3]', JSON.stringify(splits));
+  {
+    let seen = null;
+    const sc = new WithdrawalScheduler({ ...config }, Object.assign({}, wallet, {
+      async countSpendableOutputs() { return 1; },
+      async initSendTx(amt, opts) { seen = opts; return { id: 'slate-split' }; },
+    }));
+    reset(); db.prepare('UPDATE miner_accounts SET balance = 100 WHERE grin_address = ?').run(ADDR);
+    spendable = 100;
+    await thrown(() => quiet(() => sc.createSlatepackWithdrawal(ADDR, 60)));
+    ok('Q14. a slatepack payout from a 1-output wallet asks init_send_tx for 3 change outputs',
+      !!seen && seen.changeOutputs === 3, JSON.stringify(seen));
+  }
+  {
+    reset();
+    const st = newScheduler([]);
+    st.wallet.countSpendableOutputs = async (minConf) => { st._splitMinConf = minConf; return 1; };
+    let opts = null;
+    st.walletTor.sendToTorAddress = async (a, amt, o) => { opts = o; return { success: true }; };
+    const id = seedWithdrawal({ status: 'tor_checking', retries: 0, priorAttempt: false });
+    await quiet(() => st.sendWithdrawal(id));
+    ok('Q15. a Tor payout from a 1-output wallet sends with changeOutputs 3, counted at the CLI min_conf 10',
+      !!opts && opts.changeOutputs === 3 && st._splitMinConf === 10, JSON.stringify({ opts, minConf: st._splitMinConf }));
+  }
+
+  // The wallet read yields: a Tor CLI send that takes the send lock DURING it must still refuse the
+  // create at once (503, before the lock) — never leave it waiting out the CLI inside the request.
+  reset(); db.prepare('UPDATE miner_accounts SET balance = 100 WHERE grin_address = ?').run(ADDR);
+  spendable = 100; inits = 0;
+  const realGet = wallet.getBalance;
+  wallet.getBalance = async (...a) => { s._torSendBusy = true; return realGet(...a); };
+  e = await thrown(() => quiet(() => s.createSlatepackWithdrawal(ADDR, 60)));
+  wallet.getBalance = realGet; s._torSendBusy = false;
+  ok('Q12. a Tor send starting during the pre-lock wallet read → the create is refused (503), nothing locked',
+    !!e && e.code === 503 && /sending another payout/.test(e.message) && inits === 0 &&
+    Math.abs(acct().balance - 100) < 1e-9 && acct().balance_locked === 0, e && e.message);
+  reset();
 }

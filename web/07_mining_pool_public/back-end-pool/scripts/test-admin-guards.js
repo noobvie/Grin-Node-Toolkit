@@ -452,6 +452,23 @@ try {
   }
   ok('…and a refused save changes nothing', ps.getSection('payout').max_pending_withdrawals === 250);
 
+  console.log('\n[11] payout_target_outputs — validated, mapped to config, on the Payout page (2026-10-05)');
+  ps.updateSection('payout', { payout_target_outputs: ' 12 ' }, 7);
+  ok('a save is stored as a NUMBER', ps.getSection('payout').payout_target_outputs === 12);
+  ps.updateSection('payout', { payout_target_outputs: '0' }, 7);
+  ok('0 (splitting off) is accepted', ps.getSection('payout').payout_target_outputs === 0);
+  for (const bad of ['abc', '-1', '1.5', '', '51']) {
+    ok(`payout_target_outputs refuses ${JSON.stringify(bad)}`, throws(() => ps.updateSection('payout', { payout_target_outputs: bad }, 7)));
+  }
+  {
+    const cfg = PoolSettings.applyToConfig({}, { pool_info: {}, payout: { payout_target_outputs: 5 } });
+    ok('applyToConfig copies it to config.payout_target_outputs (what the scheduler reads)', cfg.payout_target_outputs === 5,
+      JSON.stringify(cfg));
+  }
+  const payoutHtml = fs.readFileSync(path.join(APP, 'admin-panel/settings-payout.html'), 'utf8');
+  ok('the Payout page has an input with id="payout_target_outputs" (binding is by id)',
+    /<input[^>]*id="payout_target_outputs"/.test(payoutHtml));
+
   console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed\n`);
   cleanup();
   process.exit(fail === 0 ? 0 : 1);

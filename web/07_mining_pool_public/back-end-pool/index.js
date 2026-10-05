@@ -4881,6 +4881,17 @@ function setupRoutes() {
           });
         }
 
+        // "Another payment is ahead" (2026-10-05): other payouts hold the wallet's spendable coins,
+        // so this one would fail at send. Refused here, before the probe and before any lock —
+        // nothing is deducted, and the miner is told how many payments are ahead and how long.
+        // Fails open on an unreadable wallet; the send-time NotEnoughFunds path stays the authority.
+        try {
+          await withdrawalScheduler.precheckWalletCover(addr, req.body && req.body.amount);
+        } catch (e) {
+          if (e.retry_after) res.set('Retry-After', String(e.retry_after));
+          return res.status(e.code && e.code < 600 ? e.code : 503).json({ error: e.message, retry_after: e.retry_after || null });
+        }
+
         // Pre-flight reachability gate (operator toggle, default ON). Refuse up front — BEFORE
         // any balance lock — if the miner's wallet listener isn't answering over Tor right now,
         // so the funds are never locked into a send that cannot land. The 409 body's

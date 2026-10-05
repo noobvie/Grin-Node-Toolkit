@@ -4,8 +4,9 @@
  *
  * Three layers:
  *   1. Coverage — does the on-chain wallet hold at least what the ledger owes? LIQUID (spendable
- *      coins vs currently-withdrawable balances = can we pay now) vs FULL (total incl. maturing
- *      coinbase vs everything owed = long-run solvency). Both gaps are net of recorded payout
+ *      coins vs currently-withdrawable balances = can we pay now) vs FULL (HELD = total + locked,
+ *      incl. maturing coinbase and in-flight payouts' inputs, vs everything owed = long-run
+ *      solvency). Both gaps are net of recorded payout
  *      network fees (withdrawals.fee) — a sender-paid cost the ledger never debits.
  *   2. Flow statement — external money IN (block rewards, fee, top-ups, admin injects) vs OUT
  *      (confirmed payouts, orphan clawbacks) over lifetime / 7d / 24h.
@@ -140,7 +141,7 @@ async function computeReconciliation(db, wallet, forceRefresh = true) {
 
   // ── Wallet side (on-chain = source of truth for coins) ──
   let walletReachable = false;
-  let walletBalance = { total: 0, spendable: 0, locked: 0, immature: 0,
+  let walletBalance = { total: 0, held: 0, spendable: 0, locked: 0, immature: 0,
                         awaiting_confirmation: 0, awaiting_finalization: 0 };
   if (wallet && typeof wallet.getBalance === 'function') {
     try {
@@ -154,6 +155,18 @@ async function computeReconciliation(db, wallet, forceRefresh = true) {
         awaiting_confirmation: Number(info.amount_awaiting_confirmation || 0) / 1e9,
         awaiting_finalization: Number(info.amount_awaiting_finalization || 0) / 1e9,
       };
+      // HELD = total + locked: every coin this wallet has not yet seen leave on chain.
+      // grin-wallet v5.5.0 `retrieve_info` (min_conf 1, as getBalance passes) puts a payout's
+      // inputs in `amount_locked` and its change in `amount_awaiting_finalization`, and `total`
+      // counts NEITHER — so from the moment a payout locks its inputs until it is mined, `total`
+      // falls by the WHOLE input value (amount + fee + change), not by what was sent. The ledger
+      // still owes that amount (balance_locked), so comparing `total` read every in-flight
+      // payout as a shortfall and auto-froze the pool (two miners withdrawing their full balance
+      // at once was enough). Change is NOT added: it is part of the locked inputs.
+      // Residual, on the SAFE side: a Tor payout the ledger already debited (confirmed at send)
+      // but the chain has not mined still counts in `locked`, so HELD over-reads by amount + fee
+      // until it mines — a brief over-coverage, never a false freeze.
+      walletBalance.held = walletBalance.total + walletBalance.locked;
       walletReachable = true;
     } catch (e) { walletReachable = false; }
   }
@@ -184,7 +197,9 @@ async function computeReconciliation(db, wallet, forceRefresh = true) {
   const spendableOwed = ledger.sum_balance;   // withdrawable now (incl. operator buckets)
   const totalOwed = ledgerTotal;
   const coverage_liquid_gap = r9(walletBalance.spendable - spendableOwed + network_fees_paid);
-  const coverage_full_gap = r9(walletBalance.total - totalOwed + network_fees_paid);
+  // HELD, not `total` — see walletBalance.held above: `total` drops by a payout's whole inputs
+  // while it is in flight, which read every concurrent payout as an under-funded pool.
+  const coverage_full_gap = r9(walletBalance.held - totalOwed + network_fees_paid);
   const locked_drift = r9(ledger.sum_locked - pending.amt);
 
   return {

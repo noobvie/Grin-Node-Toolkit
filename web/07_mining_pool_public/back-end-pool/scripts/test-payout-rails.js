@@ -619,6 +619,22 @@ async function torSendSection() {
     ok('m. …repost -i <id> -f in the wallet dir', p.ok && p.name === 'repost' && p.sub.id === '7' && p.sub.fluff === true &&
       p.top.top_level_dir === '/opt/grin/pubpool/mainnet/wallet', JSON.stringify(p));
   }
+  {
+    // Change splitting (2026-10-05): `-o N` = send's change_outputs, only for N in 2..3.
+    const argvFor = async (opts) => {
+      let argv = null;
+      const t = new WalletTor({ network: 'mainnet', wallet_dir: '/w' });
+      t.execWalletCommand = async (a) => { argv = a; return SENT_OUT; };
+      await t.sendToTorAddress(TOR_ADDR, 1.5, opts);
+      return parseGw(argv || []);
+    };
+    const p3 = await argvFor({ changeOutputs: 3 });
+    ok('l2. changeOutputs 3 → `-o 3` parses under the v5.5.0 spec as change_outputs, amount still the one positional',
+      p3.ok && p3.sub.change_outputs === '3' && p3.pos.length === 1 && p3.pos[0] === '1.5' && p3.sub.dest === TOR_ADDR, JSON.stringify(p3));
+    const p1 = await argvFor({ changeOutputs: 1 }), p0 = await argvFor(undefined), p9 = await argvFor({ changeOutputs: 9 });
+    ok('l2. …1, absent or out-of-range (9) → no -o at all (the CLI default, 1)',
+      [p1, p0, p9].every((p) => p.ok && !('change_outputs' in p.sub)), JSON.stringify([p1.sub, p0.sub, p9.sub]));
+  }
 }
 
 // ─── The CLI's own output reaches the error (review 2026-09-26, #3 and #6) ─────────────────
@@ -831,8 +847,9 @@ function accountOfferSection() {
   const OFFER = ['wallet_offline', 'wallet_unreachable', 'pool_send_path', 'unknown'];
   ok('O12. wallet_offline / wallet_unreachable / pool_send_path / unknown offer Slatepack',
     OFFER.every((c) => out(c).offer === true), OFFER.map((c) => c + '=' + out(c).offer).join(' '));
-  ok('O13. pool_busy offers nothing and says try again later (a Slatepack would fail the same way)',
-    out('pool_busy').offer === false && /Try again later\./.test(out('pool_busy').text || '') && !/✗/.test(out('pool_busy').text || ''));
+  ok('O13. pool_busy offers nothing and says another payment was ahead + when to retry (a Slatepack would fail the same way)',
+    out('pool_busy').offer === false && /^Another payment was ahead of yours/.test(out('pool_busy').text || '') &&
+    /try again in about 15 minutes\./.test(out('pool_busy').text || '') && !/✗/.test(out('pool_busy').text || ''));
   ok('O14. an unrecognised code offers nothing (never a button that may be refused)', out('some_new_code').offer === false && out(null).offer === false);
   ok('O15. every refunded outcome says the balance is back',
     OFFER.concat('pool_busy').every((c) => /your balance is back/.test(out(c).text || '')));
@@ -1073,8 +1090,47 @@ function accountOfferSection() {
   await preflightRequesterGoneSection();
   await torSendSection();
   await cliOutputSection();
+  await changeSplitWalletSection();
   await probeTransportSection();
 
   console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed\n`);
   process.exit(fail === 0 ? 0 : 1);
 })().catch((e) => { console.error(e); process.exit(1); });
+
+// ─── Change splitting — the Owner-API side (2026-10-05) ─────────────────────────
+async function changeSplitWalletSection() {
+  section('Change splitting — init_send_tx num_change_outputs + countSpendableOutputs');
+  {
+    const { w, wire } = harness();
+    await w.initSendTx(10);
+    await w.initSendTx(10, { changeOutputs: 3 });
+    await w.initSendTx(10, { changeOutputs: 9 });
+    const n = wire.map((c) => c.params.args && c.params.args.num_change_outputs);
+    ok('s1. num_change_outputs: default 1, 3 when asked, out-of-range (9) → 1', JSON.stringify(n) === '[1,3,1]', JSON.stringify(n));
+  }
+  {
+    const { w, wire } = harness();
+    const out = (o) => ({ commit: 'c', output: Object.assign({ is_coinbase: false, lock_height: '0' }, o) });
+    w._encryptedCall = async (method, params) => {
+      wire.push({ method, params: JSON.parse(JSON.stringify(params)) });
+      if (method === 'retrieve_summary_info') return [true, { last_confirmed_height: '100' }];
+      if (method === 'retrieve_outputs') return [true, [
+        out({ status: 'Unspent', height: '100' }),                                  // 1 conf
+        out({ status: 'Unspent', height: '95' }),                                   // 6 confs
+        out({ status: 'Unspent', height: '50', is_coinbase: true, lock_height: '90' }),  // mature coinbase, 51 confs
+        out({ status: 'Unspent', height: '99', is_coinbase: true, lock_height: '200' }), // immature coinbase
+        out({ status: 'Locked', height: '40' }),
+        out({ status: 'Unconfirmed', height: '0' }),
+      ]];
+      return 'ok';
+    };
+    const c1 = await w.countSpendableOutputs(1);
+    const c10 = await w.countSpendableOutputs(10);
+    ok('s2. countSpendableOutputs: min_conf 1 → 3 (no Locked / Unconfirmed / immature coinbase), min_conf 10 → 1',
+      c1 === 3 && c10 === 1, JSON.stringify({ c1, c10 }));
+    const ro = wire.find((c) => c.method === 'retrieve_outputs');
+    ok('s2. …retrieve_outputs is called with NAMED params and no node refresh',
+      !!ro && ro.params.include_spent === false && ro.params.refresh_from_node === false && ro.params.tx_id === null &&
+      'token' in ro.params, JSON.stringify(ro && ro.params));
+  }
+}

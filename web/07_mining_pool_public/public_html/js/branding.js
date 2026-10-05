@@ -1210,12 +1210,28 @@
     // safeHref() the way renderBanners() does — never by widening this back to raw HTML.
     inner += '<div style="max-width:600px;color:var(--text-dim,#a0aec0);line-height:1.6;">' +
       escapeText(maint.message || '') + '</div>';
+    // A stratum pause (design §21.8) carries its auto-resume time; say it in UTC, from the UTC
+    // fields — never the visitor's locale (all public-pool times are UTC).
+    var back = maint.until ? utcLabel(maint.until) : '';
+    if (back) {
+      inner += '<div style="margin-top:1rem;font-weight:600;">Expected back at about ' + escapeText(back) + '</div>';
+    }
     overlay.innerHTML = inner;
     document.body.appendChild(overlay);
   }
 
   function escapeText(s) {
     return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+
+  // '2026-10-05T14:00:00Z' → '05 Oct 14:00 UTC'; '' for anything unparseable.
+  function utcLabel(iso) {
+    var t = Date.parse(iso);
+    if (!isFinite(t)) return '';
+    var d = new Date(t);
+    var p2 = function (n) { return (n < 10 ? '0' : '') + n; };
+    var mon = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][d.getUTCMonth()];
+    return p2(d.getUTCDate()) + ' ' + mon + ' ' + p2(d.getUTCHours()) + ':' + p2(d.getUTCMinutes()) + ' UTC';
   }
 
   // ── Announcement banners ───────────────────────────────────────────────────

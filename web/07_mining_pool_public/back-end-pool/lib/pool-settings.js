@@ -9,6 +9,51 @@ function hashStr(s) {
   return h;
 }
 
+// Stratum pause (design §21.8/§21.9). The overlay text defaults, used both as the `notices`
+// defaults and as the fallback for a value the operator saved EMPTY (an empty title would put a
+// bare icon on every public page).
+const STRATUM_PAUSE_TITLE_DEFAULT = 'Mining paused';
+const STRATUM_PAUSE_MESSAGE_DEFAULT = 'Mining on this pool is paused for maintenance and will resume automatically. ' +
+  'Your balance is safe. Keep a backup pool configured in your miner — it switches back here on its own.';
+// Q5: a planned window is announced from this long before its start.
+const STRATUM_WINDOW_NOTICE_MS = 24 * 3600 * 1000;
+
+// '2026-10-05T14:00:00Z' → '05 Oct 14:00 UTC'. Built from the UTC fields, never the server's
+// locale, so the banner reads the same on every box (memory: all public-pool times are UTC).
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+function utcLabel(isoStr, withDate = true) {
+  const t = Date.parse(isoStr);
+  if (!Number.isFinite(t)) return '';
+  const d = new Date(t);
+  const p2 = (n) => String(n).padStart(2, '0');
+  const hm = `${p2(d.getUTCHours())}:${p2(d.getUTCMinutes())}`;
+  return withDate ? `${p2(d.getUTCDate())} ${MONTHS[d.getUTCMonth()]} ${hm} UTC` : `${hm} UTC`;
+}
+
+// The non-dismissible banner a stratum pause adds to `announcements` (§21.9, Q5): while paused,
+// and from 24 h before a planned window's start. It is what an EXEMPT page (the account page,
+// login) shows, since the overlay does not run there. `stratum` is StratumPause.publicStatus().
+function stratumPauseBanners(stratum, nowMs = Date.now()) {
+  if (!stratum) return [];
+  const base = { type: 'maintenance', link: '', link_text: '', dismissible: false };
+  if (stratum.accepting === false) {
+    const back = stratum.resumes_at ? utcLabel(stratum.resumes_at) : '';
+    return [Object.assign({ id: 'stratum-pause', message:
+      `Mining is paused${back ? ` until about ${back}` : ''}. Balances are safe; keep a backup pool configured in your miner.` }, base)];
+  }
+  const w = stratum.planned;
+  if (w && w.start && w.end) {
+    const start = Date.parse(w.start), end = Date.parse(w.end);
+    if (Number.isFinite(start) && Number.isFinite(end) && nowMs < end && start - nowMs <= STRATUM_WINDOW_NOTICE_MS) {
+      const sameDay = w.start.slice(0, 10) === w.end.slice(0, 10);
+      return [Object.assign({ id: `stratum-window-${Math.floor(start / 1000)}`, message:
+        `Mining will pause ${utcLabel(w.start)}–${utcLabel(w.end, !sameDay)} for planned maintenance. ` +
+        'Keep a backup pool configured in your miner.' }, base)];
+    }
+  }
+  return [];
+}
+
 // Normalise a settings value (JSON array OR comma/newline-separated string) into a
 // deduped JSON-array string. `each(s)` validates+transforms one entry (return null to
 // drop it); an empty result falls back to `opts.fallback`. Throws on malformed JSON.
@@ -758,6 +803,12 @@ PASS      any-password-you-choose</code>
       maintenance_mode: 'false',
       maintenance_title: 'Under Maintenance',
       maintenance_message: 'We are performing scheduled maintenance and will be back shortly.',
+      // The overlay shown while STRATUM is paused and the operator's own maintenance_mode is off
+      // (design §21.8, Q4). Text only — these keys cannot flip the pause: its state is the
+      // stratum_control table, never a setting (§21.1). The "back at about … UTC" line is added
+      // by the page from the live resume time, so it is not part of this text.
+      stratum_pause_title: STRATUM_PAUSE_TITLE_DEFAULT,
+      stratum_pause_message: STRATUM_PAUSE_MESSAGE_DEFAULT,
       // banners: JSON array of {id,type,message,link,link_text,dismissible,enabled,start,end}
       // Seeded ON by default: a fresh pool is pre-launch, so every new operator wants the
       // testing-phase notice up from day one. It renders site-wide via branding.js
@@ -1060,6 +1111,18 @@ PASS      any-password-you-choose</code>
         }
         if (!Array.isArray(arr)) throw new Error('banners must be a JSON array');
         return JSON.stringify(arr);
+      },
+      // Plain text, rendered escaped on every public page that is not exempt (branding.js
+      // showMaintenance). Bounded here because the payload is memoised and served on every page.
+      stratum_pause_title: (val) => {
+        const s = String(val == null ? '' : val).replace(/\s+/g, ' ').trim();
+        if (s.length > 120) throw new Error('stratum_pause_title: at most 120 characters');
+        return s;
+      },
+      stratum_pause_message: (val) => {
+        const s = String(val == null ? '' : val).trim();
+        if (s.length > 1000) throw new Error('stratum_pause_message: at most 1000 characters');
+        return s;
       },
     },
     payout: {
@@ -1419,7 +1482,10 @@ PASS      any-password-you-choose</code>
   // Build the curated, public-safe white-label payload served at /api/public/branding.
   // assetUrlFor(type) -> URL string (or '') for an active uploaded asset; injected so this
   // module stays free of the AssetManager dependency.
-  buildPublicConfig(assetUrlFor = () => '') {
+  // `stratum` is StratumPause.publicStatus() (design §21.9) — null/omitted reads as accepting.
+  // It drives the COMPUTED maintenance overlay (§21.8): the pause never writes maintenance_mode,
+  // so a resume can neither switch off an overlay the operator set nor leave one on they didn't.
+  buildPublicConfig(assetUrlFor = () => '', stratum = null) {
     const pool = this.getSection('pool_info');
     const b = this.getSection('branding');
     const seo = this.getSection('seo');
@@ -1526,14 +1592,35 @@ PASS      any-password-you-choose</code>
       },
       // Footer link list: content pages that have been authored (content present).
       pages: this.listEnabledPages(),
-      // Maintenance mode (rendered as a full-page overlay by branding.js).
-      maintenance: {
-        enabled: n.maintenance_mode === true || n.maintenance_mode === 'true',
-        title: n.maintenance_title || 'Under Maintenance',
-        message: n.maintenance_message || '',
-      },
-      // Currently-active announcement banners (enabled + within date window).
-      announcements: this.getActiveBanners(),
+      // Maintenance mode (rendered as a full-page overlay by branding.js). `source` says who
+      // turned it on: 'operator' (their own flag — wins, exactly as before §21) or 'stratum'
+      // (computed from a stratum pause; `until` is when it auto-resumes, ISO-8601 Z).
+      maintenance: this._maintenanceBlock(n, stratum),
+      // Live stratum intake, for any page that wants it (§21.9). reason is never in here.
+      stratum: stratum || { accepting: true, paused_since: null, resumes_at: null, planned: null },
+      // Currently-active announcement banners (enabled + within date window), led by the
+      // synthetic non-dismissible stratum-pause banner when one applies (§21.9, Q5).
+      announcements: stratumPauseBanners(stratum).concat(this.getActiveBanners()),
+    };
+  }
+
+  _maintenanceBlock(n, stratum) {
+    const operatorOn = n.maintenance_mode === true || n.maintenance_mode === 'true';
+    if (!operatorOn && stratum && stratum.accepting === false) {
+      return {
+        enabled: true,
+        source: 'stratum',
+        title: String(n.stratum_pause_title || '').trim() || STRATUM_PAUSE_TITLE_DEFAULT,
+        message: String(n.stratum_pause_message || '').trim() || STRATUM_PAUSE_MESSAGE_DEFAULT,
+        until: stratum.resumes_at || null,
+      };
+    }
+    return {
+      enabled: operatorOn,
+      source: operatorOn ? 'operator' : null,
+      title: n.maintenance_title || 'Under Maintenance',
+      message: n.maintenance_message || '',
+      until: null,
     };
   }
 
@@ -1907,3 +1994,4 @@ PASS      any-password-you-choose</code>
 }
 
 module.exports = PoolSettings;
+module.exports.stratumPauseBanners = stratumPauseBanners;

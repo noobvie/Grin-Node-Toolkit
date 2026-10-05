@@ -22,6 +22,13 @@
            async step-up, exactly where browsers suppress native dialogs. -->
       <p id="health-msg" role="status" aria-live="polite" style="display:none;margin:0 0 .8rem;font-size:.9rem;"></p>
 
+      <!-- Stratum intake (design §21). The Stratum Server card below reports the PROCESS, which
+           stays up during a pause; this line reports whether miners are being accepted. Fed by
+           admin-shell's shared poll (AdminStratum), not a second fetch. -->
+      <div id="stratum-line" class="health-card" style="margin-bottom:.8rem;">
+        <div class="health-detail"><span class="spinner"></span>Stratum intake…</div>
+      </div>
+
       <!-- Services grid -->
       <div class="health-grid" id="health-grid">
         <div class="health-card"><div class="health-name"><span class="spinner"></span>Loading…</div></div>
@@ -245,6 +252,33 @@ document.getElementById('health-grid').addEventListener('click', (e) => {
   const b = e.target.closest('[data-resolve-alert]');
   if (b) resolveAlert(b.getAttribute('data-resolve-alert'));
 });
+
+// ── Stratum intake line ──────────────────────────────────────────────────────
+// One line from the shared poll; the controls live on Settings → Announcements → Stratum.
+function renderStratumLine(c) {
+  const el = document.getElementById('stratum-line');
+  const S = window.AdminStratum;
+  if (!el || !S) return;
+  const k = S.classify(c);
+  const cls = k.level === 'ok' ? 'ok' : (k.tone === 'red' ? 'error' : 'warn');
+  const live = (c.listeners || []).filter(l => l && l.listening).length;
+  const extra = k.level === 'ok' || k.level === 'scheduled'
+    ? ' ' + live + ' listener(s) up · ' + escHtml(c.connections) + ' connection(s).'
+    : (k.level === 'paused' || k.level === 'pausing')
+      ? ' The Stratum Server card below shows the process, which stays up; region status on Regions reflects the tunnel, not intake.'
+      : '';
+  el.className = 'health-card ' + cls;
+  el.style.marginBottom = '.8rem';
+  el.innerHTML = '<div class="health-detail">' + S.summaryHtml(c) + extra +
+    ' <a href="settings-announcements.html?findh=Stratum">Stratum controls →</a></div>';
+}
+function renderStratumError(err) {
+  const el = document.getElementById('stratum-line');
+  if (!el) return;
+  el.className = 'health-card warn';
+  el.innerHTML = '<div class="health-detail">Stratum intake unknown — ' + escHtml(err.message) + '.</div>';
+}
+if (window.AdminStratum) AdminStratum.subscribe(renderStratumLine, renderStratumError);
 
 // Initial paint: load everything once.
 document.addEventListener('DOMContentLoaded', () => { loadHealth(); loadReconciliation(); });

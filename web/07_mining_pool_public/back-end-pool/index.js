@@ -10,6 +10,7 @@ const PoolSettings = require('./lib/pool-settings');
 const AssetManager = require('./lib/asset-manager');
 const WalletAPI = require('./lib/wallet');
 const StratumServer = require('./lib/stratum-server');
+const StratumPause = require('./lib/stratum-pause');
 const NodeStratumClient = require('./lib/node-stratum-client');
 const BlockManager = require('./lib/blocks');
 const ShareValidator = require('./lib/shares');
@@ -438,6 +439,7 @@ let config = null;
 let db = null;
 let wallet = null;
 let stratumServer = null;
+let stratumPause = null;
 let nodeStratumClient = null;
 let blockManager = null;
 let shareValidator = null;
@@ -662,7 +664,13 @@ async function initializePool() {
     // tracker). Two instances = an API that never sees a miner. See the StratumServer ctor note.
     stratumServer = new StratumServer(config, minerManager);
     stratumServer.setBlockManager(blockManager);
-    stratumServer.start();
+    // Stratum pause (design §21.5): read the persisted pause BEFORE any bind. Binding first and
+    // closing after would reopen intake for a moment at every restart of a paused pool, and the
+    // gateways' HAProxy would push waiting miners straight in. A missing row = accepting; a row
+    // that cannot be read fails CLOSED (paused ≤ 2 h).
+    stratumPause = new StratumPause({ db, stratumServer });
+    const stratumBootPaused = stratumPause.load();
+    stratumServer.start({ paused: stratumBootPaused });
 
     // Wire upstream node stratum → pool stratum server.
     // NodeStratumClient receives job notifications from the Grin node and calls
@@ -671,6 +679,14 @@ async function initializePool() {
     nodeStratumClient = new NodeStratumClient(config, stratumServer);
     stratumServer.setNodeStratumClient(nodeStratumClient);
     nodeStratumClient.start();
+
+    // Arm the pause tick (15 s) and run the boot re-derive: an expired pause resumes now, a planned
+    // window that started while the process was down converts to a pause, one wholly missed is
+    // dropped. After the node client is wired, so a boot resume opens intake onto a pool that can
+    // forward submits. Never fatal — a failure leaves the boot state in place for the next tick.
+    stratumPause.start().catch((err) => {
+      console.error(`[${new Date().toISOString()}] [stratum-pause] boot evaluate failed: ${err.message}`);
+    });
 
     blockMonitor = new BlockMonitor(config);
     blockMonitor.start();
@@ -1223,8 +1239,11 @@ function setupRoutes() {
     rateLimiter.middleware('public'),
     (req, res) => {
       res.json({
+        // `status` reports the HTTP backend, which is fine during a stratum pause (§21.9);
+        // `stratum` says whether miners are being accepted.
         status: 'ok',
         network: config.network,
+        stratum: stratumPause && stratumPause.isPaused() ? 'paused' : 'accepting',
         timestamp: new Date().toISOString()
       });
     }
@@ -1260,6 +1279,9 @@ function setupRoutes() {
   const BRANDING_TTL_MS = 60000;
   let _brandingCache = new Map();   // hostname -> { at, payload }
   const invalidateBranding = () => { _brandingCache = new Map(); };
+  // Every stratum pause transition — the 15 s timer's auto-resume and window start included —
+  // drops the memo, so the computed maintenance overlay follows the pause (design §21.8).
+  if (stratumPause) stratumPause.onChange = invalidateBranding;
   // The explorer key this pool's links use (lib/explorers.js), resolved from the network + the
   // `branding.explorer_mainnet` setting. Published RESOLVED beside `network` on the three routes
   // that prime a page's sessionStorage network cache (branding, /api/pool/stats, pool-info), so
@@ -1284,7 +1306,9 @@ function setupRoutes() {
           const asset = assetManager.getActiveAsset(type);
           return asset ? assetManager.getAssetUrl(asset.filename) : '';
         };
-        const cfg = poolSettings.buildPublicConfig(assetUrlFor);
+        // The stratum pause (design §21.8/§21.9) feeds the COMPUTED overlay, the `stratum`
+        // block and the synthetic banner. Every pause transition drops this memo (onChange).
+        const cfg = poolSettings.buildPublicConfig(assetUrlFor, stratumPause ? stratumPause.publicStatus() : null);
         // Same derivation siteOrigin() uses, so branding.js's client-side canonical / og:url /
         // JSON-LD agree with the server-rendered ones on the two SSR routes. Without this the
         // blanked site_url default (§J10-4) would simply drop the canonical off every page that
@@ -1460,7 +1484,7 @@ function setupRoutes() {
   const OWNER_PROOF_BODY = 'proof (recent mining IP or the rig\'s stratum password; legacy alias ip_proof)';
   const API_DOC_META = {
     // ── Public ────────────────────────────────────────────────────────────────
-    'GET /api/public/branding': { desc: 'White-label config (name, theme, SEO, social, footer links). connection.latency tells the connect page where it may measure latency from your browser: probe_domain (regional servers under https://*.<probe_domain> answer GET /ping with an empty 204; null = none), hub_url (where the pool itself answers /ping; null when it sits behind a CDN proxy, which would time the CDN instead) and direct_bias_ms (integer milliseconds: connecting directly is preferred unless a regional server is more than this much faster — the same rule as /api/pool/connect/suggest). connection.explorer is the chain explorer this pool links blocks, kernels and outputs to — one of grincoin (grincoin.org), tiny (scan.grin.money), grinscan (grinscan.org) on mainnet, as the operator chose; always grinscan_testnet (test.grinscan.org) on testnet. branding.explorer_mainnet is the mainnet choice the operator made, shown even on a testnet pool; links should follow connection.explorer. games = { mode, chat } for the /play/ games platform: mode is off, preview or on, and reads off whenever the games service is not answering; the nav shows Play only on on.', shape: 'envelope' },
+    'GET /api/public/branding': { desc: 'White-label config (name, theme, SEO, social, footer links). connection.latency tells the connect page where it may measure latency from your browser: probe_domain (regional servers under https://*.<probe_domain> answer GET /ping with an empty 204; null = none), hub_url (where the pool itself answers /ping; null when it sits behind a CDN proxy, which would time the CDN instead) and direct_bias_ms (integer milliseconds: connecting directly is preferred unless a regional server is more than this much faster — the same rule as /api/pool/connect/suggest). connection.explorer is the chain explorer this pool links blocks, kernels and outputs to — one of grincoin (grincoin.org), tiny (scan.grin.money), grinscan (grinscan.org) on mainnet, as the operator chose; always grinscan_testnet (test.grinscan.org) on testnet. branding.explorer_mainnet is the mainnet choice the operator made, shown even on a testnet pool; links should follow connection.explorer. games = { mode, chat } for the /play/ games platform: mode is off, preview or on, and reads off whenever the games service is not answering; the nav shows Play only on on. stratum = { accepting, paused_since, resumes_at, planned: { start, end } | null } (ISO-8601 UTC, null when not applicable): whether the pool is accepting miners right now, and any planned pause. While stratum is paused and the operator has not set maintenance mode, maintenance is on with source stratum and until = the automatic resume time (source operator = the maintenance mode the operator set themselves, which always wins), and announcements leads with a non-dismissible maintenance banner — also shown from 24 h before a planned pause.', shape: 'envelope' },
     'GET /api/public/price': { desc: 'Cached GRIN price (USD + BTC) from CoinGecko. Serves the last good value on upstream failure; { available: false } if never fetched. updated_at is UNIX MILLISECONDS (the one such field on this API).', shape: 'envelope' },
     'GET /api/public/endpoints': { desc: 'This API reference (machine-readable).', shape: 'envelope' },
     'GET /api/public/ads': { desc: 'Active operator ads by placement (+ rotation interval). Cached 60s, so ad edits take up to a minute to appear.', shape: 'raw', params: 'placement (omit for every slot keyed by placement)' },
@@ -1476,7 +1500,7 @@ function setupRoutes() {
     'GET /api/config/pool-info': { desc: 'Pool terms: network, pool fee %, minimum withdrawal, the flat per-payout withdrawal fee (0 = the pool absorbs the network fee), address format, which listener a miner needs, and explorer — the chain explorer key this pool links to (grincoin, tiny or grinscan on mainnet; grinscan_testnet on testnet).', shape: 'raw' },
 
     // ── Pool ──────────────────────────────────────────────────────────────────
-    'GET /api/pool/stats': { desc: 'Live pool stats: block totals (found / confirmed / immature counts, confirmed + immature reward; orphans_24h = blocks found in the last 24 h that were later orphaned, null if unreadable), active miners (distinct addresses), active workers (logged-in rigs), raw connections, and share quality (accepted/stale/rejected). Share quality is LIVE in-memory only — it is empty with no connected sessions and resets on disconnect. Also network (mainnet or testnet) and explorer, the chain explorer key this pool links to (grincoin, tiny or grinscan on mainnet; grinscan_testnet on testnet).', shape: 'raw' },
+    'GET /api/pool/stats': { desc: 'Live pool stats: block totals (found / confirmed / immature counts, confirmed + immature reward; orphans_24h = blocks found in the last 24 h that were later orphaned, null if unreadable), active miners (distinct addresses), active workers (logged-in rigs), raw connections, and share quality (accepted/stale/rejected). Share quality is LIVE in-memory only — it is empty with no connected sessions and resets on disconnect. Also network (mainnet or testnet) and explorer, the chain explorer key this pool links to (grincoin, tiny or grinscan on mainnet; grinscan_testnet on testnet). stratum = { accepting, paused_since, resumes_at, planned } as on /api/public/branding — while the pool is paused hashrate drops, and this says why.', shape: 'raw' },
     'GET /api/pool/status': { desc: 'Coarse service health for the status strip: pool up, node reachable/state/synced/peers/height/up_days, wallet reachable. node.state is ok | starting (API port closed, node process running) | busy (API timed out) | offline; reachable is true only for ok. node.up_days is how long the node has been continuously available, as an integer of WHOLE UTC DAYS counted to the most recent 00:00 UTC — so it changes only at midnight UTC and can understate by up to a day, never overstate (0 = came up today or yesterday). It is null when unknown, including whenever reachable is false, and null must never be read as 0. Its source is the node box\'s own event recorder when that is installed and fresh, else the pool\'s own probe history. It is the only uptime field: no restart time, timestamp or uptime in seconds is published. Cached 15 s. Never exposes balances or addresses.', shape: 'raw' },
     'GET /api/pool/stats/regions': { desc: 'Per-region stratum endpoints + live status (online | idle | offline | checking — the last only on the first poll after a restart, before the reachability probe has a verdict) and 15-minute regional hashrate, miners (distinct addresses) and workers (distinct address+rig pairs). On a MULTI-region pool a k-anonymity floor applies: a region with 0 < miners < min_bucket reports miners/workers/hashrate_gps/shares_window as null with below_floor:true — that is withheld, not zero (a real zero is still 0). Totals are always exact. Per region, is_hub (boolean) marks this server\'s own region — connecting there is connecting to the pool directly; false on every row of a pool that runs no local stratum. hub_rtt_ms (integer milliseconds) is the round trip between the pool and that region\'s server — the minimum of its last 5 TCP connects to the region\'s public stratum port; add it to your own latency to that server for your effective latency to the pool. It is 0 on the is_hub row, and null when that server has not been reached yet (just after a restart, or never). timestamp is ISO 8601.', shape: 'raw' },
     'GET /api/pool/connect/suggest': { desc: 'Which server to point a rig at, for YOU: estimated effective latency per region, from the country your IP resolves to. Effective = your distance to that server + its link to the pool (hub_rtt_ms) — a regional server does not shorten the trip to the pool, so a far one can lose to connecting directly. Returns { basis: "estimate", recommended (region tag, or null), estimates: [{ region, est_ms (integer milliseconds, round trip), via: direct | gateway }] }; direct is preferred unless a gateway is more than 15 ms faster. Regions that are offline, or whose link to the pool has not been measured yet, get no estimate. { basis: "unavailable" } alone when no country can be resolved. An estimate from geography, not a measurement. Your IP and country are used for this one answer and neither stored, logged nor returned; never cached (Cache-Control: private, no-store).', shape: 'raw' },
@@ -2617,7 +2641,10 @@ function setupRoutes() {
         // the testnet pill. `network` was read there but never sent until 2026-09-24, so the
         // admin panel assumed mainnet on every pool. Both are already public (pool-info).
         network: config.network || 'mainnet',
-        explorer: currentExplorerKey()
+        explorer: currentExplorerKey(),
+        // Stratum intake (design §21.9): { accepting, paused_since, resumes_at, planned }, ISO Z.
+        // While paused, hashrate simply drops — this says why.
+        stratum: stratumPause ? stratumPause.publicStatus() : null
       });
     } catch (err) {
       res.status(500).json({ error: err.message });
@@ -3099,6 +3126,85 @@ function setupRoutes() {
         .run(req.user.user_id, JSON.stringify({}), req.ip);
       res.json({ success: true, ...getPayoutControl() });
     } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  // ─── STRATUM PAUSE (Admin) — design §21.10 ─────────────────────────
+  // Stop / start miner intake on EVERY stratum listener (public + each region). The policy, the
+  // caps (§21.7), the transition guard, the audit rows and the 15 s tick all live in
+  // lib/stratum-pause.js; these handlers only parse the request and map the answer.
+  // Reading is secureAdmin. EVERY mutation is freshAdmin — resume included (Q3): an early resume
+  // during a restore acks shares into a DB about to be replaced, which is the one outcome this
+  // feature exists to prevent. The state is the stratum_control table, never a pool_config key,
+  // so no settings route (Save, section restore, resetAll) can reach it (§21.1).
+  app.get('/api/admin/stratum/control', secureAdmin, (req, res) => {
+    try {
+      const st = stratumPause.status();
+      // Every region recorded in config.region_ports, beside whether this process holds its
+      // listener. While paused nothing is held, so EVERY region shows as `deferred` (one paired
+      // during the pause included) — it opens on resume (§21.4). While accepting, a region not listening is a
+      // failed bind, and Resume re-binds it.
+      const held = new Map(st.listeners.map((l) => [Number(l.port), l]));
+      const regions = Object.entries(config.region_ports || {}).map(([region, port]) => {
+        const l = held.get(Number(port));
+        return { region, port: Number(port) || null, listening: !!(l && l.listening), deferred: st.paused && !l };
+      });
+      res.json({ success: true, ...st, public_port: config.stratum_port || null, regions,
+        limits: StratumPause.LIMITS, now: Math.floor(Date.now() / 1000) });
+    } catch (err) { StratumPause.sendError(res, err, null); }
+  });
+
+  // { reason, duration_min } → the §21.2 report (settled, inflight_left, blocks_in_flight, …).
+  // 409 while already paused (use extend). Can take up to ~35 s: it waits for in-flight submits.
+  app.post('/api/admin/stratum/pause', freshAdmin, async (req, res) => {
+    try {
+      const b = req.body || {};
+      const out = await stratumPause.pause({
+        reason: b.reason, durationMin: StratumPause.parseDurationMin(b.duration_min), ...StratumPause.actorOf(req),
+      });
+      res.json({ success: true, ...out });
+    } catch (err) { StratumPause.sendError(res, err, stratumPause); }
+  });
+
+  // { duration_min } → a new `until` = now + duration (never beyond now + 2 h). Only while paused.
+  app.post('/api/admin/stratum/extend', freshAdmin, async (req, res) => {
+    try {
+      const b = req.body || {};
+      const out = await stratumPause.extend({
+        durationMin: StratumPause.parseDurationMin(b.duration_min), ...StratumPause.actorOf(req),
+      });
+      res.json({ success: true, ...out });
+    } catch (err) { StratumPause.sendError(res, err, stratumPause); }
+  });
+
+  // While paused: re-bind everything and accept again (§21.3). While accepting: re-bind only what
+  // is missing — the retry button for a failed bind. `failed` > 0 = some listener is still down.
+  app.post('/api/admin/stratum/resume', freshAdmin, async (req, res) => {
+    try {
+      const out = await stratumPause.resume(StratumPause.actorOf(req));
+      res.json({ success: true, ...out });
+    } catch (err) { StratumPause.sendError(res, err, stratumPause); }
+  });
+
+  // { start, end, reason } — ZONE-QUALIFIED ISO-8601 only (…Z or ±hh:mm); a zone-less time is a
+  // 400, since Date.parse would read it as the server's local time. Replaces any scheduled window.
+  app.post('/api/admin/stratum/window', freshAdmin, async (req, res) => {
+    try {
+      const b = req.body || {};
+      const out = await stratumPause.scheduleWindow({
+        start: StratumPause.parseZonedIso(b.start, 'start'),
+        end: StratumPause.parseZonedIso(b.end, 'end'),
+        reason: b.reason, ...StratumPause.actorOf(req),
+      });
+      res.json({ success: true, ...out });
+    } catch (err) { StratumPause.sendError(res, err, stratumPause); }
+  });
+
+  // Cancel the SCHEDULED window. A window that has started is an ordinary pause → 409, use resume.
+  app.delete('/api/admin/stratum/window', freshAdmin, async (req, res) => {
+    try {
+      const out = await stratumPause.cancelWindow(StratumPause.actorOf(req));
+      res.json({ success: true, ...out });
+    } catch (err) { StratumPause.sendError(res, err, stratumPause); }
   });
 
   // ─── ABANDONED-BALANCE DISPOSITION (Admin) ─────────────────────────
@@ -7410,6 +7516,7 @@ function setupRoutes() {
       // listener is rebuilt from pool.json anyway. `existing` (dup pubkey) and
       // `replaced` (new box, same region) keep their port, so bind is a no-op then.
       let bindError = null;
+      let bindDeferred = false;
       if (pair.region_port) {
         config.region_ports = config.region_ports || {};
         config.region_ports[pair.region] = pair.region_port;
@@ -7424,6 +7531,10 @@ function setupRoutes() {
           try {
             const r = await stratumServer.bindRegionListener(pair.region, pair.region_port);
             if (r && r.error) bindError = r.error;
+            // Stratum is PAUSED (design §21.4): nothing was bound, and that is correct — the
+            // port is already in config.region_ports above, which is what resume binds. "No
+            // error" must not read as "listening", so say so.
+            if (r && r.deferred) bindDeferred = true;
           } catch (e) {
             bindError = e.message;
             console.error(`[ERROR] hot-bind region listener ${pair.region}: ${e.message}`);
@@ -7448,6 +7559,9 @@ function setupRoutes() {
         // Non-fatal but load-bearing: the region exists and the peer is configured, yet its
         // stratum listener did not come up, so nothing in that region can connect (§J6-12).
         stratum_bind_error: bindError,
+        stratum_bind_deferred: bindDeferred,
+        stratum_bind_note: bindDeferred
+          ? 'Region saved — stratum is paused, so its listener opens when stratum resumes.' : null,
         pairing: pair.pairing, peer_ip: pair.peer_ip, region_port: pair.region_port,
         existing: !!pair.existing, replaced: !!pair.replaced,
         synced: pair.synced !== false,

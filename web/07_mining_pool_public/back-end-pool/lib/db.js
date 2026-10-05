@@ -979,6 +979,30 @@ function createSchema() {
       updated_at INTEGER NOT NULL DEFAULT (unixepoch())
     )`,
 
+    // Single-row (id=1) stratum pause state (design §21.1), owned by lib/stratum-pause.js. NOT a
+    // pool_config key on purpose: the section Save, the section restore and resetAll all write
+    // pool_config wholesale, and none of them may ever flip intake. A missing row = accepting.
+    // All times are unix seconds (UTC by construction). `until` is NOT NULL whenever paused=1 —
+    // every pause auto-resumes. `reason` is admin-only and never published.
+    // ⚠ scripts/lib/07_lib_pool_backup.sh (pbk_pause_stratum) repeats this DDL VERBATIM so a
+    // restored pool.db boots paused — change one, change both.
+    `CREATE TABLE IF NOT EXISTS stratum_control (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      paused INTEGER NOT NULL DEFAULT 0,
+      source TEXT DEFAULT NULL,
+      reason TEXT DEFAULT NULL,
+      paused_by TEXT DEFAULT NULL,
+      since INTEGER DEFAULT NULL,
+      settled_at INTEGER DEFAULT NULL,
+      until INTEGER DEFAULT NULL,
+      planned_start INTEGER DEFAULT NULL,
+      planned_end INTEGER DEFAULT NULL,
+      planned_reason TEXT DEFAULT NULL,
+      planned_by TEXT DEFAULT NULL,
+      last_result TEXT DEFAULT NULL,
+      updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+    )`,
+
     // Wallet-identity anchor (single row, id=1). Stores the pool wallet's slatepack address at
     // derivation index 0 — deterministic from the seed, so a stable per-wallet fingerprint. The
     // AlertMonitor compares the live wallet's address against this; a mismatch means the wallet at

@@ -594,7 +594,8 @@ const backdate = (db, a, secs) => db.prepare(
     // Anchored on the STATEMENTS, not the names — comments mention both.
     const at = (re) => { const m = re.exec(src); return m ? m.index : -1; };
     const mig = at(/^[ \t]*migrateProofSet\(db\);/m);
-    const start = at(/^[ \t]*stratumServer\.start\(\);/m);
+    // `start(` not `start();` — since design §21.5 it takes `{ paused }` (the boot pause state).
+    const start = at(/^[ \t]*stratumServer\.start\(/m);
     assert.ok(mig > 0 && start > 0, 'both call sites exist');
     assert.ok(mig < start, 'migrateProofSet(db) must come before stratumServer.start()');
     const between = src.slice(mig, start);

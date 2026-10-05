@@ -104,7 +104,14 @@ class AlertMonitor {
       // cannot be written to the DB. It has no `resolveAlert` on purpose: unlike every check
       // above, this is an EVENT, not a condition, and there is no later observation that could
       // say "the block that was lost is fine now". The row stays active until a human clears it.
-      block_record_failed: true
+      block_record_failed: true,
+      // §21.11. Pushed by lib/stratum-pause.js, not polled: a resume / re-bind left a stratum
+      // listener down (EADDRINUSE, wg0 gone → EADDRNOTAVAIL). Resolved by the next re-bind that
+      // brings every listener up.
+      stratum_bind_failed: true,
+      // §21.5. The pause row could not be read at boot, so stratum started PAUSED (fail closed)
+      // for up to 2 h. An event, like block_record_failed — a human clears it.
+      stratum_state_unreadable: true
     };
     this.enabledAlerts = Object.assign({}, DEFAULT_ENABLED, config.alert_types_enabled || {});
 

@@ -908,5 +908,143 @@ console.log('\n[16] node-availability.html — empty state, both sources, filter
   }
 }
 
+// ── [17] Stratum pause — strip, Announcements controls, Health line (design §21, Part 3) ──────
+// The classification is shared by three readers, so it lives once, in admin-shell.js between
+// STRATUM-VIEW markers, and runs here headless in a vm (no jsdom). The page wiring is pinned
+// statically: the controls must never be reachable through the settings form's Save.
+console.log('\n[17] Stratum pause — strip, Announcements controls, Health line');
+{
+  const vm = require('vm');
+  const shell = read('admin-shell.js');
+  const ann = read('settings-announcements.html');
+  const health = read('health.html');
+  const css = read('styles.css');
+  const m = shell.match(/\/\/ ── STRATUM-VIEW BEGIN ──[^\n]*\n([\s\S]*?)\/\/ ── STRATUM-VIEW END ──/);
+  ok('admin-shell.js carries the STRATUM-VIEW block', !!m);
+  const block = m ? m[1] : '';
+  // Matches a property access (document.x / window.x), not the word — "planned window" is UI text.
+  ok('the view block touches no DOM (document/window) — it must run headless',
+     !!block && !/\b(document|window)\s*[.[]/.test(block.replace(/\/\/[^\n]*/g, '')));
+  const V = vm.createContext({});
+  try { vm.runInContext(block, V); } catch (e) { ok('the view block runs in a vm', false, e.message); }
+
+  if (typeof V.stClassify === 'function') {
+    const T = Date.UTC(2026, 9, 5, 12, 0, 0) / 1000;           // 05 Oct 2026 12:00 UTC
+    const L = (port, listening = true) => ({ port, host: 'x', region: 'r', listening });
+    const base = { paused: false, accept_state: 'accepting', public_port: 3333,
+      listeners: [L(3333), L(3391)], regions: [{ region: 'eu', port: 3391 }], planned: null,
+      connections: 4, inflight: 0, persisted: true };
+    const lv = (c) => V.stClassify(c, T).level;
+    ok('classify: all listeners up → ok, no strip', lv(base) === 'ok' && V.stClassify(base, T).tone === null);
+    ok('classify: null / not an object → unknown (never "accepting")', lv(null) === 'unknown' && lv('x') === 'unknown');
+    const paused = Object.assign({}, base, { paused: true, accept_state: 'paused', listeners: [],
+      source: 'manual', paused_by: 'admin:<img src=x>', since: T - 600, until: T + 3000, settled_at: T - 590 });
+    ok('classify: paused → red', lv(paused) === 'paused' && V.stClassify(paused, T).tone === 'red');
+    ok('classify: pausing (row paused, still settling) → red',
+       lv(Object.assign({}, paused, { accept_state: 'pausing' })) === 'pausing');
+    ok('classify: resuming → amber', V.stClassify(Object.assign({}, base, { accept_state: 'resuming' }), T).tone === 'amber');
+    ok('down: nothing is "down" while paused (nothing should be up) — deferred regions are not failures',
+       V.stDown(paused).length === 0);
+    const deg = Object.assign({}, base, { listeners: [L(3333)],
+      last_result: { results: [{ port: 3391, region: 'eu', bound: false, already: false, code: 'EADDRNOTAVAIL' }] } });
+    ok('classify: a region not listening while accepting → DEGRADED, red', lv(deg) === 'degraded' && V.stClassify(deg, T).tone === 'red');
+    ok('down: carries the bind error from the last resume',
+       V.stDown(deg).length === 1 && V.stDown(deg)[0].port === 3391 && V.stDown(deg)[0].error === 'EADDRNOTAVAIL');
+    ok('classify: the public port not listening is DEGRADED too', lv(Object.assign({}, base, { listeners: [L(3391)] })) === 'degraded');
+    ok('down: a listener that is up is not down even if an old result failed it',
+       V.stDown(Object.assign({}, deg, { listeners: [L(3333), L(3391)] })).length === 0);
+    const soon = Object.assign({}, base, { planned: { start: T + 5 * 3600, end: T + 7 * 3600, reason: 'r' } });
+    ok('classify: a window starting within 24 h → scheduled, amber', lv(soon) === 'scheduled' && V.stClassify(soon, T).tone === 'amber');
+    ok('classify: a window 30 h out → no strip yet',
+       lv(Object.assign({}, base, { planned: { start: T + 30 * 3600, end: T + 31 * 3600 } })) === 'ok');
+
+    const sum = V.stSummaryHtml(paused, T);
+    ok('summary: paused_by is escaped', /admin:&lt;img src=x&gt;/.test(sum) && !/<img/.test(sum));
+    ok('summary: times are UTC and the zone is stated once',
+       /since 05 Oct 11:50/.test(sum) && /resumes on its own 05 Oct 12:50 UTC/.test(sum) && (sum.match(/UTC/g) || []).length === 1);
+    ok('summary: an unpersisted pause says a restart will reopen stratum',
+       /NOT persisted — a restart will reopen stratum/.test(V.stSummaryHtml(Object.assign({}, paused, { persisted: false }), T)));
+    ok('summary: an unsettled pause says so', /not settled yet/.test(V.stSummaryHtml(Object.assign({}, paused, { settled_at: null }), T)));
+    ok('summary: degraded names the port and the error', /:3391 \(eu\) — EADDRNOTAVAIL/.test(V.stSummaryHtml(deg, T)));
+    ok('summary: a scheduled window shows its range in UTC', /05 Oct 17:00–19:00 UTC/.test(V.stSummaryHtml(soon, T)));
+    ok('time: a window crossing midnight repeats the end date',
+       V.stRange(T + 11 * 3600, T + 13 * 3600) === '05 Oct 23:00 – 06 Oct 01:00');
+    ok('time: null is a dash, never 01 Jan 1970', V.stTime(null) === '—' && V.stTime('') === '—');
+    ok('dur: minutes / hours', V.stDur(240) === '4 min' && V.stDur(3900) === '1 h 05 min' && V.stDur(10) === '<1 min');
+  } else ok('stClassify is defined in the view block', false);
+
+  // Shell wiring.
+  ok('mount() starts the strip on every admin page', /startStratumStrip\(wrap, main\);/.test(shell));
+  ok('every admin page loads admin-shell.js (the strip is on every page) — settings.html is the redirect stub',
+     panelFiles().filter((f) => /\.html$/.test(f) && f !== 'settings.html').every((f) => /\/admin\/admin-shell\.js/.test(read(f))));
+  ok('the strip links with ?findh=Stratum, never a #hash (a hashchange "switches tab" on settings pages)',
+     /\?findh=Stratum/.test(shell) && !/settings-announcements\.html#/.test(shell));
+  ok('one shared poll: 15 s on the controls page, 60 s elsewhere, paused while the tab is hidden',
+     /here === STRATUM_PAGE \? 15000 : 60000/.test(shell) && /if \(!document\.hidden\) stFetch\(\)/.test(shell));
+  ok('the strip rule carries no display:none (created and removed by script, never hidden by class)',
+     !/\.admin-stratum-strip[^{]*\{[^}]*display:\s*none/.test(css));
+  ok('the strip uses literal fills with white ink (theme --danger under white is ~3:1)',
+     /\.admin-stratum-strip \{[^}]*background: #9b1c1c;[^}]*color: #fff;/.test(css));
+
+  // Announcements page: placement and the settings-form boundary.
+  const mAt = ann.indexOf('>Maintenance Mode<'), sAt = ann.indexOf('>Stratum <span'), bAt = ann.indexOf('>Announcement Banners<');
+  ok('the Stratum section sits directly BELOW Maintenance Mode, above the banners', mAt > 0 && mAt < sAt && sAt < bAt);
+  const PoolSettings = require(path.resolve(__dirname, '../lib/pool-settings.js'));
+  const keys = new Set(Object.keys(PoolSettings.defaults.notices));
+  const form = (ann.match(/<div id="notices" class="settings-content active">([\s\S]*?)<\/main>/) || [])[1] || '';
+  const stray = [];
+  for (const mm of form.matchAll(/<(input|select|textarea)\b([^>]*)>/gi)) {
+    const id = (mm[2].match(/\bid="([^"]+)"/) || [])[1];
+    if (!id || /\bclass="[^"]*\bsettings-skip\b/.test(mm[2])) continue;
+    if (!keys.has(id)) stray.push(id);
+  }
+  ok('every harvested id in the notices form is a notices key — the stratum inputs are all settings-skip',
+     form.length > 0 && stray.length === 0, stray.join(','));
+  const sect = (ann.match(/<div class="form-section" id="stratum-section">([\s\S]*?)<\/details>/) || [])[1] || '';
+  const sectInputs = [...sect.matchAll(/<(input|select|textarea)\b([^>]*)>/gi)];
+  ok('every input in the Stratum section is settings-skip', sectInputs.length >= 3 && sectInputs.every((x) => /settings-skip/.test(x[2])));
+  ok('the Stratum section buttons are type="button" (never a submit of anything)',
+     [...sect.matchAll(/<button\b([^>]*)>/g)].every((x) => /type="button"/.test(x[1])));
+  ok('Q4: both overlay-text keys are on the form, bound by id', /id="stratum_pause_title"/.test(form) && /id="stratum_pause_message"/.test(form)
+     && keys.has('stratum_pause_title') && keys.has('stratum_pause_message'));
+  ok('Q4: the title can be saved EMPTY (settings-allow-empty) to fall back to the default',
+     /id="stratum_pause_title"[^>]*class="[^"]*settings-allow-empty/.test(form));
+  ok('the maintenance message is no longer labelled "HTML allowed" (escaped since §J15-1)', !/HTML allowed/.test(ann));
+  ok('the Maintenance helper no longer says stratum is unaffected — it points at the Stratum section',
+     !/stratum is unaffected/.test(ann) && /To stop miner intake use <strong>Stratum<\/strong> below/.test(ann));
+  ok('the dialog is outside <main> (and so outside the settings form)', ann.indexOf('id="stratum-dialog"') > ann.indexOf('</main>'));
+
+  // Actions: the five routes, all through adminFetch (step-up aware), no native dialogs.
+  const script = (ann.match(/\/\/ ── Stratum section \(design §21\)[\s\S]*?<\/script>/) || [''])[0];
+  ok('the page script exists', script.length > 0);
+  for (const [meth, route] of [['POST', 'pause'], ['POST', 'extend'], ['POST', 'resume'], ['POST', 'window'], ['DELETE', 'window']]) {
+    ok(`${meth} /api/admin/stratum/${route} is wired`, new RegExp(`call\\('${meth}', '/api/admin/stratum/${route}'`).test(script));
+  }
+  ok('every mutation goes through adminFetch', /await adminFetch\(url,/.test(script) && !/\bfetch\(/.test(script.replace(/adminFetch\(/g, '')));
+  ok('no confirm() / prompt() / alert() — the step-up dialog follows, browsers suppress a chained native one',
+     !/\b(confirm|prompt|alert)\(/.test(script));
+  ok('a 409 re-renders from the state it carries', /if \(data && data\.state\) S\.set\(data\.state\);/.test(script));
+  const zm = script.match(/function zoned\(v\) \{[\s\S]*?\n    \}/);
+  ok('zoned() exists', !!zm);
+  if (zm) {
+    const Z = vm.createContext({});
+    vm.runInContext(zm[0], Z);
+    ok('window times: a datetime-local value is sent as UTC (…Z), never re-read in the browser zone',
+       Z.zoned('2026-10-05T09:00') === '2026-10-05T09:00:00Z' && Z.zoned('2026-10-05T09:00:30') === '2026-10-05T09:00:30Z' &&
+       Z.zoned('') === null && Z.zoned('05/10/2026 09:00') === null);
+  }
+  ok('no new Date(<input value>) anywhere in the page script', !/new Date\((startV|endV|v)\)/.test(script));
+  ok('"settled — safe to proceed" is only said for a settled pause', /d\.settled\s*\?\s*'Paused · settled — safe to proceed/.test(script));
+  ok('the page states UTC in the section text', /All times UTC\./.test(sect));
+  ok('the hub-move guide names Migrate OUT (B → 6) and IN (B → 7) and the resume-on-the-new-hub step',
+     /B → 6<\/code> Migrate OUT/.test(sect) && /B → 7 → MIGRATE/.test(sect) && /Never resume the old hub after Migrate OUT/.test(sect));
+
+  // Health page.
+  ok('health.html renders the stratum line from the shared poll (no second fetch)',
+     /AdminStratum\.subscribe\(renderStratumLine, renderStratumError\)/.test(health) && !/\/api\/admin\/stratum\/control/.test(health));
+  ok('health.html says the Stratum Server card is the process, not intake', /shows the process, which stays up/.test(health));
+  ok('health.html links the controls with ?findh=Stratum', /settings-announcements\.html\?findh=Stratum/.test(health));
+}
+
 console.log('\n' + (fail ? 'FAILURES' : 'ALL PASS') + ` — ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

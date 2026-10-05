@@ -254,7 +254,13 @@
       '<span><span class="brand-name">Grin Pool</span><br>' +
       '<span class="brand-sub">Admin</span></span>' +
     '</a>' +
+    '<div class="admin-search" role="search">' +
+      '<input type="search" id="admin-search-input" placeholder="Search settings…  ( / )"' +
+        ' aria-label="Search admin pages and settings" autocomplete="off" spellcheck="false"' +
+        ' aria-controls="admin-search-results">' +
+    '</div>' +
     '<nav class="admin-nav">' + navHtml + '</nav>' +
+    '<div class="admin-search-results" id="admin-search-results" role="listbox" hidden></div>' +
     '<div class="admin-sidebar-foot">' +
       '<a href="/" target="_blank" rel="noopener"><span class="nav-ico">↗</span> Public site</a>' +
       '<button type="button" id="admin-theme-toggle"></button>' +
@@ -348,6 +354,364 @@
 
     // "N donor requests waiting for review" on the Donors nav row (design §18.6)
     decorateDonorBadge();
+
+    // Red "Stratum PAUSED" strip under the topbar, on every page (design §21.0 #6)
+    startStratumStrip(wrap, main);
+
+    // Sidebar search box + ?find= landing (a search result opened from another page)
+    wireSidebarSearch();
+    landOnFind();
+  }
+
+  /* ── Sidebar search ───────────────────────────────────────────────────────
+     One box above the nav that finds a page, a section or a single setting by its label,
+     so reaching e.g. "Slatepack Response Window" is one keystroke-search away instead of
+     a guess at which of the 14 settings pages holds it.
+
+     The index is BUILT FROM THE PAGES THEMSELVES — no hand-kept list to drift. Nav titles
+     match instantly; on first use each NAV file is fetched once and parsed (DOMParser, so no
+     page script runs) for section headings (h2, h3, .section-title) and label[for] fields,
+     each field tagged with its nearest heading and its .helper-text (searchable, not shown).
+     Labels inside a .modal-overlay are skipped — a dialog's field is not reachable by
+     scrolling to it.
+
+     ⚠ PACED, one page at a time with a gap, never fired all at once: /admin/ sits behind its
+     own nginx limit_req zone (120r/m, burst 40 nodelay). ~30 parallel fetches would spend the
+     whole burst, and the NEXT page load's own assets would then 503 — the blank-sidebar bug
+     that zone was sized to end. The result is cached in localStorage for INDEX_TTL_MS, so
+     this happens about once per working session, not once per page.
+
+     Results link with ?find=<field id> or ?findh=<heading text>, NEVER a #hash: on the
+     settings pages settings-common.js listens for hashchange and would "switch tab" to any
+     element whose id matched — hiding the whole form behind the field we meant to show. */
+  var INDEX_KEY = 'admin-search-index-v1';
+  var INDEX_TTL_MS = 6 * 3600 * 1000;
+  var INDEX_GAP_MS = 350;          // ≈3 req/s for a few seconds — well inside the burst
+  var SEARCH_MAX = 14;
+
+  // Every distinct NAV file, with the trail shown under its results ("Settings › Payout").
+  function navPages() {
+    var out = [], seen = {};
+    NAV.forEach(function (n) {
+      function add(file, trail, ico) {
+        if (seen[file]) return;
+        seen[file] = true;
+        out.push({ file: file, trail: trail, ico: ico });
+      }
+      if (!n.children) { add(n.file, n.title, n.ico); return; }
+      // A parent whose file is also its first child (Payouts → Queue) takes the child's trail.
+      if (!n.children.some(function (c) { return c.file === n.file; })) add(n.file, n.title, n.ico);
+      n.children.forEach(function (c) { add(c.file, n.title + ' › ' + c.title, n.ico); });
+    });
+    return out;
+  }
+
+  function cleanText(s) { return String(s == null ? '' : s).replace(/\s+/g, ' ').trim(); }
+
+  // Parse one page's static HTML into section + field entries.
+  function indexPageHtml(html) {
+    var doc;
+    try { doc = new DOMParser().parseFromString(html, 'text/html'); } catch (e) { return []; }
+    var root = doc.querySelector('main') || doc.body;
+    if (!root) return [];
+    var out = [], section = '';
+    root.querySelectorAll('h2, h3, .section-title, label[for]').forEach(function (el) {
+      if (el.closest('.modal-overlay') || el.hasAttribute('data-nosearch')) return;
+      if (el.tagName === 'LABEL') {
+        var id = el.getAttribute('for');
+        var label = cleanText(el.textContent);
+        if (!id || !label || !doc.getElementById(id)) return;
+        var grp = el.closest('.form-group');
+        var help = grp ? grp.querySelector('.helper-text') : null;
+        if (!help) {
+          // Checkbox rows keep their helper as the NEXT sibling of .checkbox-group.
+          var box = el.closest('.checkbox-group');
+          var nx = box && box.nextElementSibling;
+          if (nx && nx.classList.contains('helper-text')) help = nx;
+        }
+        out.push({ k: 'f', t: label, id: id, s: section,
+                   h: help ? cleanText(help.textContent).slice(0, 400) : '' });
+        return;
+      }
+      var head = headingLabel(el);
+      if (!head) return;
+      section = head;
+      out.push({ k: 's', t: head, s: '' });
+    });
+    return out;
+  }
+
+  var SI = { pages: null, entries: {}, at: 0, started: false, building: false,
+             done: 0, total: 0, onProgress: null };
+
+  // The cache is saved after EVERY page, not only at the end: the first pass takes ~12 s, and
+  // an operator who clicks a result before it finishes navigates away mid-build. The next page
+  // resumes from what is stored instead of starting over. A page whose fetch failed is simply
+  // absent, so it is retried on the next page load rather than staying unsearchable for the
+  // whole TTL. `at` is when the oldest entry was taken, so the TTL can't be renewed by resuming.
+  function loadIndexCache() {
+    try {
+      var c = JSON.parse(localStorage.getItem(INDEX_KEY) || 'null');
+      if (c && c.at && (Date.now() - c.at) < INDEX_TTL_MS && c.pages && typeof c.pages === 'object') return c;
+    } catch (e) {}
+    return null;
+  }
+  function saveIndexCache() {
+    try { localStorage.setItem(INDEX_KEY, JSON.stringify({ at: SI.at, pages: SI.entries })); } catch (e) {}
+  }
+
+  function buildIndex() {
+    if (SI.started) return;          // once per page load; focus + every keystroke call this
+    SI.started = true;
+    SI.pages = navPages();
+    var cached = loadIndexCache();
+    SI.entries = cached ? cached.pages : {};
+    SI.at = cached ? cached.at : Date.now();
+    // Missing pages only; the page you're on first — its fields are the likeliest next pick.
+    var queue = SI.pages.map(function (p) { return p.file; })
+      .filter(function (f) { return !Object.prototype.hasOwnProperty.call(SI.entries, f); })
+      .sort(function (a, b) { return (b === here) - (a === here); });
+    SI.total = SI.pages.length;
+    SI.done = SI.total - queue.length;
+    if (!queue.length) return;
+    SI.building = true;
+    (function next() {
+      var file = queue.shift();
+      if (!file) {
+        SI.building = false;
+        if (SI.onProgress) SI.onProgress();
+        return;
+      }
+      fetch(file, { credentials: 'same-origin' })
+        .then(function (r) {
+          // A dead session lands on /login.html via nginx's error_page — not this page.
+          if (!r.ok || (r.redirected && !/\/admin\//.test(r.url))) return null;
+          return r.text();
+        })
+        .then(function (html) {
+          if (!html) return;
+          SI.entries[file] = indexPageHtml(html);
+          saveIndexCache();
+        })
+        .catch(function () {})
+        .then(function () {
+          SI.done++;
+          if (SI.onProgress) SI.onProgress();
+          setTimeout(next, INDEX_GAP_MS);
+        });
+    })();
+  }
+
+  // Score an entry against ANDed terms; 0 = no match. Label hits beat section/page hits,
+  // which beat helper-text-only hits, and a word-start beats a mid-word hit.
+  function scoreEntry(terms, label, ctx, help) {
+    var L = label.toLowerCase(), C = ctx.toLowerCase(), H = help.toLowerCase(), score = 0;
+    for (var i = 0; i < terms.length; i++) {
+      var t = terms[i], at = L.indexOf(t);
+      if (at === 0) score += 12;
+      else if (at > 0) score += /[\s(\-\/·›]/.test(L.charAt(at - 1)) ? 9 : 6;
+      else if (C.indexOf(t) !== -1) score += 3;
+      else if (H.indexOf(t) !== -1) score += 1;
+      else return 0;
+    }
+    return score;
+  }
+
+  function searchIndex(q) {
+    var terms = q.toLowerCase().split(/\s+/).filter(Boolean);
+    if (!terms.length) return [];
+    var hits = [];
+    (SI.pages || navPages()).forEach(function (p, order) {
+      var title = p.trail.split(' › ').pop();
+      var ps = scoreEntry(terms, title, p.trail, '');
+      if (ps) hits.push({ score: ps + 4, order: order, kind: 'page', label: title, ctx: p.trail,
+                          ico: p.ico, href: p.file, file: p.file });
+      (SI.entries[p.file] || []).forEach(function (e, j) {
+        var ctx = p.trail + (e.s ? ' · ' + e.s : '');
+        var s = scoreEntry(terms, e.t, ctx, e.h || '');
+        if (!s) return;
+        hits.push({
+          score: s + (e.k === 's' ? 1 : 0), order: order + j / 1000,
+          kind: e.k === 's' ? 'section' : 'field', label: e.t, ctx: ctx, file: p.file,
+          href: p.file + (e.k === 'f' ? '?find=' + encodeURIComponent(e.id)
+                                      : '?findh=' + encodeURIComponent(e.t)),
+          id: e.id, head: e.k === 's' ? e.t : null
+        });
+      });
+    });
+    hits.sort(function (a, b) { return (b.score - a.score) || (a.order - b.order); });
+    return hits.slice(0, SEARCH_MAX);
+  }
+
+  // Wrap each term's occurrences in <mark>, escaping every segment (never the raw string).
+  function highlight(text, terms) {
+    var low = text.toLowerCase(), marks = [];
+    terms.forEach(function (t) {
+      for (var at = low.indexOf(t); t && at !== -1; at = low.indexOf(t, at + t.length)) marks.push([at, at + t.length]);
+    });
+    if (!marks.length) return esc(text);
+    marks.sort(function (a, b) { return a[0] - b[0]; });
+    var out = '', pos = 0;
+    marks.forEach(function (m) {
+      if (m[1] <= pos) return;
+      var s = Math.max(m[0], pos);
+      out += esc(text.slice(pos, s)) + '<mark>' + esc(text.slice(s, m[1])) + '</mark>';
+      pos = m[1];
+    });
+    return out + esc(text.slice(pos));
+  }
+
+  function wireSidebarSearch() {
+    var input = document.getElementById('admin-search-input');
+    var box = document.getElementById('admin-search-results');
+    var navEl = sidebar.querySelector('.admin-nav');
+    if (!input || !box || !navEl) return;
+    var results = [], sel = 0;
+
+    function render() {
+      var q = input.value.trim();
+      var open = q.length > 0;
+      box.hidden = !open;
+      navEl.hidden = open;
+      if (!open) { box.innerHTML = ''; results = []; return; }
+      var terms = q.toLowerCase().split(/\s+/).filter(Boolean);
+      results = searchIndex(q);
+      if (sel >= results.length) sel = 0;
+      var html = results.map(function (r, i) {
+        var tag = r.kind === 'page' ? 'Page' : r.kind === 'section' ? 'Section' : 'Setting';
+        return '<a href="' + esc(r.href) + '" class="srch-item' + (i === sel ? ' is-sel' : '') +
+                 '" role="option" data-i="' + i + '"' + (i === sel ? ' aria-selected="true"' : '') + '>' +
+                 '<span class="srch-label">' + highlight(r.label, terms) + '</span>' +
+                 '<span class="srch-ctx"><span class="srch-tag">' + tag + '</span>' + esc(r.ctx) + '</span>' +
+               '</a>';
+      }).join('');
+      if (!results.length) {
+        html = '<div class="srch-empty">' + (SI.building ? 'No match yet…' : 'No page or setting matches “' + esc(q) + '”.') + '</div>';
+      }
+      if (SI.building) {
+        html += '<div class="srch-status">Indexing pages… ' + SI.done + ' / ' + SI.total + '</div>';
+      }
+      box.innerHTML = html;
+    }
+
+    function move(d) {
+      if (!results.length) return;
+      sel = (sel + d + results.length) % results.length;
+      render();
+      var cur = box.querySelector('.srch-item.is-sel');
+      if (cur && cur.scrollIntoView) cur.scrollIntoView({ block: 'nearest' });
+    }
+
+    // A result on the page you're already on scrolls in place — no reload, no lost edits.
+    function open(r, e) {
+      if (!r) return;
+      if (r.file === here && r.kind !== 'page') {
+        if (e) e.preventDefault();
+        document.body.classList.remove('admin-drawer-open');
+        findTarget(r.id || null, r.head || null);
+        return;
+      }
+      if (!e) location.href = r.href;
+    }
+
+    SI.onProgress = function () { if (input.value.trim()) render(); };
+    input.addEventListener('focus', buildIndex);
+    input.addEventListener('input', function () { sel = 0; buildIndex(); render(); });
+    input.addEventListener('keydown', function (e) {
+      if (e.key === 'ArrowDown') { e.preventDefault(); move(1); }
+      else if (e.key === 'ArrowUp') { e.preventDefault(); move(-1); }
+      else if (e.key === 'Enter') { e.preventDefault(); open(results[sel], null); }
+      else if (e.key === 'Escape') {
+        if (input.value) { input.value = ''; render(); } else input.blur();
+      }
+    });
+    box.addEventListener('click', function (e) {
+      var a = e.target.closest && e.target.closest('.srch-item');
+      if (!a) return;
+      open(results[parseInt(a.getAttribute('data-i'), 10)], e);
+    });
+    // "/" or Ctrl/Cmd+K from anywhere that isn't already a text field.
+    document.addEventListener('keydown', function (e) {
+      var t = e.target, typing = t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName));
+      var k = (e.key === '/' && !typing && !e.ctrlKey && !e.metaKey && !e.altKey) ||
+              ((e.ctrlKey || e.metaKey) && (e.key === 'k' || e.key === 'K'));
+      if (!k) return;
+      e.preventDefault();
+      // Phones/narrow (styles.css: max-width 900px): the box lives in the off-canvas drawer.
+      if (window.matchMedia && window.matchMedia('(max-width: 900px)').matches) {
+        document.body.classList.add('admin-drawer-open');
+      }
+      input.focus();
+      input.select();
+    });
+  }
+
+  // Scroll a field (by id) or a heading (by its label) into view below the sticky chrome
+  // and flash it (unless `quiet`: the re-aim pass after late content). False = no match.
+  function findTarget(id, head, quiet) {
+    var main = document.querySelector('.admin-main > main') || document.querySelector('main');
+    if (!main) return false;
+    var el = null;
+    if (id) el = document.getElementById(id);
+    else if (head) {
+      var want = head.toLowerCase();
+      var list = main.querySelectorAll('h2, h3, .section-title');
+      for (var i = 0; i < list.length && !el; i++) {
+        if (headingLabel(list[i]).toLowerCase() === want) el = list[i];
+      }
+    }
+    if (!el || !main.contains(el)) return false;
+    var flash = id ? (el.closest('.form-group, .checkbox-group') || el)
+                   : (el.closest('.form-section') || el);
+    // A setting inside a block that is hidden right now (a feature switched off) has no box —
+    // scrolling to it would mean scrolling to the top. Aim at the nearest visible ancestor.
+    while (flash && flash !== main && !flash.getClientRects().length) flash = flash.parentElement;
+    if (!flash || flash === main) return false;
+    var rail = document.querySelector('.admin-rail');
+    var y = window.pageYOffset + flash.getBoundingClientRect().top -
+            (topbar.offsetHeight + (rail ? rail.offsetHeight : 0) + 18);
+    window.scrollTo({ top: Math.max(0, y) });
+    if (quiet) return true;
+    flash.classList.remove('admin-find-flash');
+    void flash.offsetWidth;                       // restart the animation on a repeat find
+    flash.classList.add('admin-find-flash');
+    setTimeout(function () { flash.classList.remove('admin-find-flash'); }, 2600);
+    if (id && el.focus && !el.disabled && el.type !== 'hidden') {
+      try { el.focus({ preventScroll: true }); } catch (e) {}
+    }
+    return true;
+  }
+
+  // Landing from another page: ?find= / ?findh=. Waits for DOMContentLoaded — settings pages
+  // reveal their form there (switchTab), so before it the target has no box to scroll to —
+  // and runs once more shortly after, since lists loading above can push the target down.
+  // The second pass is skipped once the operator has scrolled or clicked themselves.
+  function landOnFind() {
+    var id = null, head = null;
+    try {
+      var sp = new URLSearchParams(location.search);
+      id = sp.get('find'); head = sp.get('findh');
+    } catch (e) { return; }
+    if (!id && !head) return;
+    var touched = false;
+    ['wheel', 'pointerdown', 'keydown', 'touchstart'].forEach(function (ev) {
+      window.addEventListener(ev, function () { touched = true; }, { once: true, passive: true });
+    });
+    function go() {
+      setTimeout(function () {
+        findTarget(id, head);
+        setTimeout(function () { if (!touched) findTarget(id, head, true); }, 700);
+      }, 30);
+      // Drop the find params so a reload doesn't yank the page back; any other (?q=) stays.
+      try {
+        var sp2 = new URLSearchParams(location.search);
+        sp2.delete('find'); sp2.delete('findh');
+        var qs = sp2.toString();
+        history.replaceState(null, '', location.pathname + (qs ? '?' + qs : '') + location.hash);
+      } catch (e) {}
+    }
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', go);
+    else go();
   }
 
   // ── Donors nav badge ─────────────────────────────────────────────────────
@@ -373,6 +737,213 @@
       })
       .catch(function () {});
   }
+
+  /* ── Stratum pause: strip + shared view (window.AdminStratum) — design §21 ──
+     One poll of GET /api/admin/stratum/control per admin page (60 s; 15 s on the page that
+     holds the controls), shared by three readers: the strip below the topbar, the status
+     line on health.html and the Stratum section on settings-announcements.html. Pages
+     subscribe instead of polling a second time.
+
+     The strip shows while stratum is paused / pausing / resuming, while a listener that
+     should be up is not (DEGRADED — the failed re-bind of §21.11), and from 24 h before a
+     planned window. It links to the controls with ?findh=, never a #hash — on the settings
+     pages a hashchange "switches tab" to any element whose id matches.
+
+     Silent on every failure: before guardAdminPage has redirected a logged-out visitor this
+     may 401, and an older backend has no such route (404). A missing strip must never read
+     as "accepting" anywhere else, so health.html says "unknown" for it. */
+
+  // ── STRATUM-VIEW BEGIN ── pure helpers: no DOM, no fetch. scripts/test-admin-panel.js runs this
+  // block on its own in a vm, so it must stay free of document/window.
+  var ST_MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  var ST_NOTICE_S = 24 * 3600;     // a planned window is flagged this long before it starts (Q5)
+
+  function stEsc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+  function stPad(n) { return (n < 10 ? '0' : '') + n; }
+
+  // unix seconds → "05 Oct 14:30" in UTC, with NO zone suffix: the caller states UTC once.
+  function stTime(sec) {
+    var n = Number(sec);
+    if (sec == null || sec === '' || !isFinite(n)) return '—';
+    var d = new Date(n * 1000);
+    return stPad(d.getUTCDate()) + ' ' + ST_MON[d.getUTCMonth()] + ' ' +
+      stPad(d.getUTCHours()) + ':' + stPad(d.getUTCMinutes());
+  }
+  // "05 Oct 09:00–11:00", the end date repeated only when the window crosses midnight.
+  function stRange(a, b) {
+    var A = stTime(a), B = stTime(b);
+    return A.slice(0, 6) === B.slice(0, 6) ? A + '–' + B.slice(7) : A + ' – ' + B;
+  }
+  // Seconds → "1 h 05 min" / "4 min" / "<1 min".
+  function stDur(s) {
+    s = Math.max(0, Math.round(Number(s) || 0));
+    if (s < 60) return '<1 min';
+    var m = Math.floor(s / 60), h = Math.floor(m / 60);
+    if (h >= 24) return Math.floor(h / 24) + ' d ' + (h % 24) + ' h';
+    return h ? h + ' h ' + stPad(m % 60) + ' min' : m + ' min';
+  }
+
+  // Listeners that SHOULD be up and are not, while intake is on: the public port and every
+  // region in config.region_ports. The error comes from the last resume's per-port result,
+  // when it has one for that port. Empty while paused/transitioning — nothing should be up.
+  function stDown(c) {
+    if (!c || c.paused || c.accept_state !== 'accepting') return [];
+    var live = {}, errs = {};
+    (c.listeners || []).forEach(function (l) { if (l && l.listening) live[Number(l.port)] = true; });
+    var lr = c.last_result && c.last_result.results;
+    (Array.isArray(lr) ? lr : []).forEach(function (r) {
+      if (r && !r.bound && !r.already) errs[Number(r.port)] = r.code || r.error || null;
+    });
+    var out = [];
+    var pub = Number(c.public_port);
+    if (pub && !live[pub]) out.push({ port: pub, region: 'public', error: errs[pub] || null });
+    (c.regions || []).forEach(function (r) {
+      var p = Number(r && r.port);
+      if (p && p !== pub && !live[p]) out.push({ port: p, region: r.region, error: errs[p] || null });
+    });
+    return out;
+  }
+
+  // The one classification every reader uses. level ∈ ok | scheduled | pausing | paused |
+  // resuming | degraded | unknown; tone 'red' | 'amber' | null (null = no strip).
+  function stClassify(c, now) {
+    if (!c || typeof c !== 'object') return { level: 'unknown', tone: null, down: [] };
+    var down = stDown(c);
+    var p = c.planned;
+    if (c.paused && c.accept_state === 'pausing') return { level: 'pausing', tone: 'red', down: down };
+    if (c.paused) return { level: 'paused', tone: 'red', down: down };
+    if (c.accept_state === 'resuming') return { level: 'resuming', tone: 'amber', down: down };
+    if (down.length) return { level: 'degraded', tone: 'red', down: down };
+    if (p && Number(p.start) > now && Number(p.start) - now <= ST_NOTICE_S) {
+      return { level: 'scheduled', tone: 'amber', down: down };
+    }
+    return { level: 'ok', tone: null, down: down };
+  }
+
+  function stDownText(down) {
+    return down.map(function (d) {
+      return ':' + d.port + ' (' + d.region + ')' + (d.error ? ' — ' + d.error : '');
+    }).join(', ');
+  }
+
+  // One-line summary as HTML (every API value escaped). "UTC" follows the LAST time shown,
+  // so a line states the zone once.
+  function stSummaryHtml(c, now) {
+    var k = stClassify(c, now);
+    var by = c && c.paused_by ? ' by ' + stEsc(c.paused_by) : '';
+    var planned = c && c.source === 'planned' ? ' (planned window)' : '';
+    switch (k.level) {
+      case 'pausing':
+        return '<strong>Stratum PAUSING</strong> — listeners closed, waiting for in-flight shares to settle (up to 30 s).';
+      case 'paused':
+        return '<strong>Stratum PAUSED</strong>' + planned + by + ' · since ' + stTime(c.since) +
+          ' · resumes on its own ' + stTime(c.until) + ' UTC (in ' + stDur(Number(c.until) - now) + ')' +
+          (c.settled_at ? '' : ' · <strong>not settled yet</strong>') +
+          (c.persisted === false ? ' · <strong>NOT persisted — a restart will reopen stratum</strong>' : '') +
+          ' · every miner is refused.';
+      case 'resuming':
+        return '<strong>Stratum RESUMING</strong> — re-binding the listeners.';
+      case 'degraded':
+        return '<strong>Stratum DEGRADED</strong> — not listening: ' + stEsc(stDownText(k.down)) +
+          '. Miners on that port fail over. Re-bind it from the Stratum controls.';
+      case 'scheduled':
+        return '<strong>Stratum pause scheduled</strong> ' + stRange(c.planned.start, c.planned.end) +
+          ' UTC (starts in ' + stDur(Number(c.planned.start) - now) + ').';
+      case 'ok':
+        return 'Stratum accepting.';
+      default:
+        return 'Stratum state unknown.';
+    }
+  }
+  // ── STRATUM-VIEW END ──
+
+  var STRATUM_PAGE = 'settings-announcements.html';
+  var ST = { last: null, subs: [], errSubs: [], timer: null, strip: null, wrap: null, main: null, inflight: false };
+
+  function stNow() { return Math.floor(Date.now() / 1000); }
+
+  function stPublish(c) {
+    ST.last = c;
+    renderStratumStrip();
+    ST.subs.slice().forEach(function (fn) { try { fn(c); } catch (e) { /* one reader must not stop the rest */ } });
+  }
+
+  // The strip stays silent on a failed poll; a page that shows the state itself subscribes an
+  // onError so it can say "unknown" instead of leaving the last answer up as if it were fresh.
+  function stFetch() {
+    if (ST.inflight) return;
+    ST.inflight = true;
+    fetch('/api/admin/stratum/control', { credentials: 'include', cache: 'no-store' })
+      .then(function (r) {
+        return r.json().catch(function () { return {}; }).then(function (d) {
+          if (!r.ok || !d || !d.success) throw new Error((d && d.error) || ('HTTP ' + r.status));
+          return d;
+        });
+      })
+      .then(function (d) { ST.lastErr = null; stPublish(d); }, function (err) {
+        ST.lastErr = err;
+        ST.errSubs.slice().forEach(function (fn) { try { fn(err); } catch (e) {} });
+      })
+      .then(function () { ST.inflight = false; });
+  }
+
+  function renderStratumStrip() {
+    var c = ST.last, k = stClassify(c, stNow());
+    if (!k.tone) {
+      if (ST.strip && ST.strip.parentNode) ST.strip.parentNode.removeChild(ST.strip);
+      ST.strip = null;
+      return;
+    }
+    if (!ST.strip) {
+      ST.strip = document.createElement('div');
+      ST.strip.className = 'admin-stratum-strip';
+      ST.strip.setAttribute('role', 'status');
+      ST.wrap.insertBefore(ST.strip, ST.wrap.querySelector('.admin-rail') || ST.main);
+    }
+    ST.strip.classList.toggle('tone-amber', k.tone === 'amber');
+    // Region health (Regions page, the Health link to it) is read from the WireGuard handshake
+    // and a TCP probe that hits the gateway's HAProxy — both stay green during a pause.
+    var tunnelNote = (k.level === 'paused' || k.level === 'pausing') &&
+      (here === 'regions.html' || here === 'health.html')
+      ? ' <span class="strip-note">Region status here reflects the tunnel, not intake.</span>' : '';
+    ST.strip.innerHTML = '<span class="strip-text">' + stSummaryHtml(c, stNow()) + tunnelNote + '</span>' +
+      (here === STRATUM_PAGE ? '<a href="#" data-stratum-jump>Stratum controls ↓</a>'
+                             : '<a href="' + STRATUM_PAGE + '?findh=Stratum">Stratum controls →</a>');
+    var jump = ST.strip.querySelector('[data-stratum-jump]');
+    if (jump) jump.addEventListener('click', function (e) { e.preventDefault(); findTarget(null, 'Stratum'); });
+  }
+
+  function startStratumStrip(wrap, main) {
+    ST.wrap = wrap;
+    ST.main = main;
+    stFetch();
+    // The countdown in the strip goes stale between polls; re-render it every 30 s for free.
+    setInterval(function () { if (ST.last) renderStratumStrip(); }, 30000);
+    ST.timer = setInterval(function () { if (!document.hidden) stFetch(); }, here === STRATUM_PAGE ? 15000 : 60000);
+    document.addEventListener('visibilitychange', function () { if (!document.hidden) stFetch(); });
+  }
+
+  window.AdminStratum = {
+    // fn(control) on every poll answer — called at once if one already arrived; onErr(Error)
+    // on every failed poll.
+    subscribe: function (fn, onErr) {
+      ST.subs.push(fn);
+      if (typeof onErr === 'function') ST.errSubs.push(onErr);
+      if (ST.last) { try { fn(ST.last); } catch (e) {} }
+      else if (ST.lastErr && typeof onErr === 'function') { try { onErr(ST.lastErr); } catch (e) {} }
+    },
+    refresh: stFetch,
+    // A page that just acted hands over the state its POST returned — no extra round trip.
+    set: function (c) { if (c && typeof c === 'object') stPublish(Object.assign({}, ST.last || {}, c)); },
+    last: function () { return ST.last; },
+    classify: function (c) { return stClassify(c, stNow()); },
+    summaryHtml: function (c) { return stSummaryHtml(c, stNow()); },
+    down: stDown, time: stTime, range: stRange, dur: stDur, now: stNow
+  };
 
   /* ── In-page section rail ─────────────────────────────────────────────────
      Several admin pages (treasury, ads, health, the bigger settings pages) are
